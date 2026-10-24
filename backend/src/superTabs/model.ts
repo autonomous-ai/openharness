@@ -46,7 +46,7 @@ export interface Agent {
   /** A usage limit seen on its terminal; routing skips the agent until then. Shown as null once passed (terminal.ts). */
   limitedUntil?: string | null
   /** Terminal alert episodes in progress, so each one posts a single row (terminal.ts). */
-  alerting?: Array<'prompt' | 'limit'>
+  alerting?: Array<'prompt' | 'limit' | 'model'>
 }
 export type AgentRole = 'builder' | 'reviewer'
 export const agentRole = (agent: Pick<Agent, 'role'>): AgentRole => agent.role ?? 'builder'
@@ -193,6 +193,17 @@ export interface SuperTabState {
   machineCleanups?: import('./machines.js').MachineCleanup[]
   /** Conversations of a kind a later release added, set aside unchanged by a release that does not know it (parkLaterConversations). */
   parkedConversations?: Conversation[]
+  /** The Local models add-on (docs/plans/2026-10-23-swarm-local-models.md): off until the owner turns it on, and only
+   * then does anything call grid. The grid is kept when it is turned off, so turning it on again is instant. */
+  localModels?: SwarmLocalModels
+}
+export interface SwarmLocalModels {
+  /** The Swarm's own grid, minted on first turn-on and never renamed. */
+  grid: string
+  enabled: boolean
+  /** What the owner's host last reported: the grid created and its members in step, or why not. */
+  ready?: boolean
+  error?: string
 }
 export interface OtherProjectWork {
   conversationId: string
@@ -218,6 +229,8 @@ export interface MessageDraft {
   /** Structured row kind for clients; `native` is written by native.ts, `route`/`route-override` by commands. */
   source?: Record<string, unknown>
   attachments?: import('./attachments.js').Attachment[]
+  /** People a Lead tagged (mentions.ts). */
+  mentions?: string[]
 }
 export interface CommandEffects {
   state: SuperTabState

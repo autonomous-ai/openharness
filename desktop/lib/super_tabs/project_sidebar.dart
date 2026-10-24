@@ -9,6 +9,7 @@ import '../state/app_state.dart';
 import '../terminal/terminal_theme_store.dart';
 import '../widgets/desktop_chrome.dart';
 import 'controller.dart';
+import 'local_models.dart';
 import 'machines.dart';
 import 'model.dart';
 import 'section_heading.dart';
@@ -365,6 +366,16 @@ class ProjectSidebar extends StatelessWidget {
               icon: AppIcons.plus,
               onTap: controller.canWrite ? onNewProject : null,
             ),
+          // The Swarm's models (docs/plans/2026-10-23-swarm-local-models.md), for everyone: the owner sets them up here,
+          // and everyone runs and shares models here once they are. What each machine offers is on the machine.
+          if (snapshot != null)
+            _navigationRow(
+              key: 'super-local-models',
+              label: 'Manage models',
+              icon: AppIcons.cpu,
+              onTap: () =>
+                  showSwarmLocalModels(context, controller, app: app, now: now),
+            ),
           if (onYourDevices != null)
             _navigationRow(
               key: 'super-your-devices',
@@ -373,7 +384,10 @@ class ProjectSidebar extends StatelessWidget {
               onTap: onYourDevices,
               selected: devicesSelected,
             ),
-          if (onNewProject != null || onYourDevices != null)
+          if (onNewProject != null ||
+              onYourDevices != null ||
+              controller.isOwner ||
+              snapshot?.localModels?.enabled == true)
             const SizedBox(height: 20),
           // Every person in the Swarm reads where the Product Managers talk.
           if (snapshot?.conversation(snapshot.leadsConversationId ?? '')

@@ -40,6 +40,7 @@ const deliveryAction = z.discriminatedUnion('type', [
   z.object({ type: z.literal('ack'), claimId: id, receipt: z.string().min(1).max(2000), uncertain: z.boolean() }).strict(),
   z.object({ type: z.literal('hold'), claimId: id, reason: holdReason }).strict(),
 ])
+const mentionQuery = z.object({ state: z.enum(['waiting', 'earlier']) }).strict()
 const savePolicy = z.object({ revision: z.number().int().nonnegative().safe(), policy: routingPolicySchema }).strict()
 const stop = z.object({ assignmentId: id, receipt: z.string().min(1).max(2000) }).strict()
 
@@ -54,6 +55,7 @@ async function respond(reply: FastifyReply, action: () => Promise<unknown>) {
 /** Uses the normal authenticated control API. It never accepts caller-provided host/contributor identities. */
 export async function superTabRoutes(app: FastifyInstance, options: { store?: SuperTabStore } = {}) {
   const store = options.store ?? new SuperTabStore(prisma, Date.now, attachmentsFromEnv(env))
+  app.get('/api/super-tabs/grids', (req, reply) => respond(reply, () => store.hostGrids(req.user!)))
   app.get<{ Params: z.infer<typeof hostParams> }>('/api/super-tabs/hosts/:machineId/pools', { preHandler: validateParams(hostParams) },
     (req, reply) => respond(reply, () => store.hostPools(req.user!, req.params.machineId)))
   app.get<{ Params: z.infer<typeof hostStartParams> }>('/api/super-tabs/hosts/:machineId/starts/:tabId/:startId', { preHandler: validateParams(hostStartParams) },
@@ -150,6 +152,9 @@ export async function superTabRoutes(app: FastifyInstance, options: { store?: Su
         return uploaded ?? fail('INVALID_ATTACHMENT', 'Attach one file.', 400)
       }))
   })
+  app.get<{ Params: z.infer<typeof tabParams>; Querystring: z.infer<typeof mentionQuery> }>('/api/super-tabs/:tabId/mentions',
+    { preHandler: [validateParams(tabParams), validateQuery(mentionQuery)] },
+    (req, reply) => respond(reply, () => store.mentions(req.user!, req.params.tabId, req.query.state)))
   app.get<{ Params: z.infer<typeof startParams>; Querystring: z.infer<typeof agentQuery> }>('/api/super-tabs/:tabId/starts/:startId',
     { preHandler: [validateParams(startParams), validateQuery(agentQuery)] },
     (req, reply) => respond(reply, () => store.start(req.user!, req.params.tabId, req.params.startId, req.query.asAgentId)))

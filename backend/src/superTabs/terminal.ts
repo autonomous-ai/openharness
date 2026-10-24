@@ -84,7 +84,7 @@ export function terminalResult(state: SuperTabState, actor: Actor, request: Term
 /** One row per episode: a repeated observation adds nothing, and `active: false` ends the episode. No screen text goes in the row.
  * It is delivered to the agent's project Lead, in the agent's group when the Lead is there, else by a second row in the Lead's chat. */
 export function terminalAlert(state: SuperTabState, actor: Actor, sender: Author, id: string, now: number,
-  command: { agentId: string; alert: 'prompt' | 'limit'; active: boolean; resetAt?: string }): MessageDraft[] {
+  command: { agentId: string; alert: 'prompt' | 'limit' | 'model'; active: boolean; resetAt?: string }): MessageDraft[] {
   const target = agent(state, command.agentId)
   if (actor.kind !== 'agent' || actor.agentId !== target.id) fail('HOST_REQUIRED', 'Only the host of this agent’s terminal reports its alerts.', 403)
   const alerting = target.alerting ?? []
@@ -104,6 +104,9 @@ export function terminalAlert(state: SuperTabState, actor: Actor, sender: Author
     target.limitedUntil = source.limitedUntil = new Date(reset).toISOString()
     text = `${nameOf(target)} hit a usage limit. Routing skips it until ${target.limitedUntil.slice(11, 16)} UTC.`
   }
+  // Its engine has been retrying its model for 10 minutes (2026-10-24: a Builder on a small local model retried for an
+  // hour while its Lead waited on it).
+  if (command.alert === 'model') text = `${nameOf(target)} can't get answers from its model: its requests keep failing. Stop it, or give the work to another model.`
   const here = !!lead && group.agentIds.includes(lead)
   const row = { id, conversationId: group.id, author: sender, replyTo: null, recipients: here ? [lead] : [], text, source }
   return here || !lead || !chat.agentIds.includes(lead) ? [row] : [row, { ...row, id: stableId(id, 'lead'), conversationId: chat.id, recipients: [lead] }]

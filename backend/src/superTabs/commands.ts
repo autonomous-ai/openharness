@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import { admitMachineStart, expireRemovals, machineContribution, ownedMachine, type ContributedMachine } from './machines.js'
 import { assignAgentDisplayNames } from './agentNames.js'
 import { z } from 'zod'
@@ -10,6 +11,7 @@ import { routeRecordSchema, routeTitle, startedAs, type RouteCandidate, type Rou
 import { routingOverrideSchema } from './routingPolicy.js'
 import { agentTarget, askedInSchema, broken, MAX_RULES, RULE_MESSAGE_MS, ruleSchema, ruleTextSchema, startTarget, type RunTarget } from './rules.js'
 import { MAX_ATTACHMENTS, type Attachment } from './attachments.js'
+import { checkMentions, MAX_MENTIONS, type MentionTarget } from './mentions.js'
 import { TERMINAL_KEYS, terminalAlert, terminalRequest, terminalResult, type TerminalRequest } from './terminal.js'
 import { agentKind, agentProjectId, agentSetRole, deleteProject, groupProject, inviteLanding, ledProject, manageProject, MAX_ROLES, mutableProjects, placeRules, projectMembers, projectOf, projectRules, projectsOf, readAgent, readConversation, readProject, roleVersion, sameProject, sharedWithLeads, SKILL_SET_NAMES, skillSetOf, type ProjectRole, type RoleKind, type SwarmProject } from './projects.js'
 
@@ -64,6 +66,8 @@ export const commandSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('machine.pause'), machineId: id, paused: z.boolean() }).strict(),
   z.object({ type: z.literal('machine.remove'), machineId: id }).strict(),
   z.object({ type: z.literal('machine.cleaned'), machineId: id, removalId: id }).strict(),
+  z.object({ type: z.literal('localModels.set'), enabled: z.boolean() }).strict(),
+  z.object({ type: z.literal('localModels.status'), grid: z.string().min(1).max(160), ready: z.boolean(), error: z.string().trim().max(500).optional() }).strict(),
   z.object({ type: z.literal('tab.rename'), name: title }).strict(),
   z.object({ type: z.literal('tab.project'), machineId: id, project }).strict(),
   z.object({ type: z.literal('tab.pause'), paused: z.boolean() }).strict(),
@@ -109,7 +113,8 @@ export const commandSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('member.remove'), userId: id }).strict(),
   // Text may be empty when the message carries files; applyCommand checks that one of them is there.
   z.object({ type: z.literal('message.send'), conversationId: id, text: z.string().trim().max(32_000), replyTo: id.nullable(), recipientIds: z.array(id).max(16),
-    attachmentIds: z.array(id).max(MAX_ATTACHMENTS).optional() }).strict(),
+    attachmentIds: z.array(id).max(MAX_ATTACHMENTS).optional(), mentions: z.array(id).max(MAX_MENTIONS).optional() }).strict(),
+  z.object({ type: z.literal('mention.done'), mentionId: id }).strict(),
   z.object({ type: z.literal('delivery.resolve'), deliveryId: id, resolution: z.enum(['received', 'resend', 'cancel']) }).strict(),
   z.object({ type: z.literal('work.define'), conversationId: id, brief: text.optional(), task: task.optional(), checks: z.array(check).min(1).max(40) }).strict()
     .refine(c => c.task !== undefined || c.brief !== undefined, 'Provide a task or brief.')
@@ -128,7 +133,7 @@ export const commandSchema = z.discriminatedUnion('type', [
   ...(['agent.screenResult', 'agent.inputResult'] as const).map(type => z.object({ type: z.literal(type), requestId: id, ok: z.boolean(),
     text: z.string().refine(value => Buffer.byteLength(value) <= 65_536, 'A screen is at most 64 KB.').optional(),
     error: z.string().trim().min(1).max(500).optional() }).strict().refine(c => c.ok || c.error !== undefined, 'Say why the request failed.')),
-  z.object({ type: z.literal('agent.alert'), agentId: id, alert: z.enum(['prompt', 'limit']), active: z.boolean(), resetAt: z.iso.datetime().optional() }).strict(),
+  z.object({ type: z.literal('agent.alert'), agentId: id, alert: z.enum(['prompt', 'limit', 'model']), active: z.boolean(), resetAt: z.iso.datetime().optional() }).strict(),
   z.object({ type: z.literal('work.check'), conversationId: id, assignmentId: id, checkId: id, passed: z.boolean(), evidence: text }).strict(),
 ])
 export type Command = z.infer<typeof commandSchema>
@@ -160,6 +165,8 @@ export interface CommandContext {
   abandonedStartIds?: string[]
   /** The request an `agent.screenResult` / `agent.inputResult` answers, read from SuperTabTerminalRequest by the store. */
   terminalRequest?: TerminalRequest
+  /** The mention `mention.done` names, read from SuperTabMention by the store. */
+  mention?: MentionTarget
 }
 
 /** Messages in a row between the Lead and its worker after which the Lead's message is no longer delivered automatically. */
@@ -266,6 +273,8 @@ function dropClosing(state: SuperTabState, keep: (request: NonNullable<SuperTabS
  * access after the person has been removed from a private project. */
 export function authorizeCommandAccess(state: SuperTabState, actor: Actor, command: Command, context: Partial<CommandContext> = {}) {
   if (command.type === 'invite.accept' || command.type === 'agent.sessionClosed' || command.type === 'machine.cleaned') return
+  // Marking one's own tag done changes only one's own list, so a viewer may do it too.
+  if (command.type === 'mention.done') return void author(state, actor)
   const leaving = command.type === 'member.remove' && actor.kind === 'person' && command.userId === actor.userId
   author(state, actor, !leaving)
   // An invitation's group is only where the person lands, and invite.create replaces a deleted one (inviteLanding).
@@ -354,6 +363,15 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
     return effects
   }
 
+  if (command.type === 'mention.done') {
+    author(state, actor)
+    if (actor.kind !== 'person' || context.mention?.id !== command.mentionId || context.mention.personId !== actor.userId) {
+      fail('NOT_FOUND', 'This mention is unavailable.', 404)
+    }
+    result.mentionId = command.mentionId
+    return effects
+  }
+
   const leaving = command.type === 'member.remove' && actor.kind === 'person' && command.userId === actor.userId
   const sender = author(state, actor, !leaving)
   authorizeCommandAccess(state, actor, command, context)
@@ -362,9 +380,9 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       brief: group.brief, checks: group.checks, assignment: group.assignment }))
   }
   const message = (conversationId: string, body: string, recipients: string[] = [], replyTo: string | null = null, source?: Record<string, unknown>,
-    attachments?: Attachment[]) => {
+    attachments?: Attachment[], mentions?: string[]) => {
     effects.messages.push({ id: operationId, conversationId, author: sender, text: body, replyTo, recipients, ...(source ? { source } : {}),
-      ...(attachments?.length ? { attachments } : {}) })
+      ...(attachments?.length ? { attachments } : {}), ...(mentions?.length ? { mentions } : {}) })
     result.messageId = operationId
   }
   /** An agent starts or assigns only what the route chose; a person may still do either by hand. */
@@ -744,6 +762,27 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       result.removedAgents = [...removed]
       break
     }
+    case 'localModels.set': {
+      // An add-on the owner turns on: its grid is theirs, and nothing calls grid until they do.
+      if (actor.kind !== 'person' || actor.userId !== state.ownerId) fail('OWNER_REQUIRED', 'Only the Swarm owner turns Local models on or off.', 403)
+      const current = state.localModels
+      state.localModels = current
+        ? { ...current, enabled: command.enabled }
+        : { grid: swarmGridName(state.id), enabled: command.enabled }
+      if (command.enabled && !current?.ready) { delete state.localModels.ready; delete state.localModels.error }
+      result.grid = state.localModels.grid
+      break
+    }
+    case 'localModels.status': {
+      // The owner's host reports the grid it created and keeps in step with the Swarm's people.
+      if (actor.kind !== 'person' || actor.userId !== state.ownerId) fail('OWNER_REQUIRED', 'Only the Swarm owner\'s computer reports its grid.', 403)
+      const current = state.localModels
+      if (!current || current.grid !== command.grid) fail('NOT_FOUND', 'This Swarm has no such grid.', 404)
+      current.ready = command.ready
+      if (command.error) current.error = command.error
+      else delete current.error
+      break
+    }
     case 'tab.rename':
       // Writable people manage the swarm even when its original project is
       // gone. Agents retain the existing Lead-conversation authority.
@@ -909,8 +948,10 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
         const r = command.request
         const model = r.model ?? 'default', effort = r.effort ?? 'default'
         const { decision, expected, override } = linkDecision(r.conversationId,
-          c => c.kind === 'new' && c.machineId === r.machineId && c.engine === r.engine && c.model === model && c.effort === effort,
-          () => ({ kind: 'new', startId: operationId, machineId: r.machineId, engine: r.engine, model, effort }), command.overrideReason)
+          c => c.kind === 'new' && c.machineId === r.machineId && c.engine === r.engine && c.model === model && c.effort === effort
+            && (c.gridModel ?? null) === (r.gridModel ?? null) && (c.gridName ?? null) === (r.gridName ?? null),
+          () => ({ kind: 'new', startId: operationId, machineId: r.machineId, engine: r.engine, model, effort,
+            ...(r.gridModel && r.gridName ? { gridModel: r.gridModel, gridName: r.gridName } : {}) }), command.overrideReason)
         if (override) message(r.conversationId, `Lead started ${r.name} instead of ${expected.title}. Reason: ${override.reason}`, [], null,
           { kind: 'route-override', decisionId: decision.id, by: 'lead' })
         personChose = !override && decision.override?.by === 'person'
@@ -1150,6 +1191,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       const ids = [...new Set(command.attachmentIds ?? [])]
       const attachments = ids.map(id => context.attachments?.find(a => a.id === id) ?? fail('ATTACHMENT_UNAVAILABLE', 'Upload this file again before sending it.', 400))
       if (!command.text && !attachments.length) fail('TEXT_REQUIRED', 'Write a message or attach a file.', 400)
+      const mentions = checkMentions(state, actor, group, command.mentions ?? [])
       if (command.replyTo && (!context.reply || context.reply.id !== command.replyTo || context.reply.conversationId !== group.id)) {
         fail('INVALID_REPLY', 'Reply to a message in this conversation.', 400)
       }
@@ -1175,7 +1217,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
         if (!group.agentIds.includes(id)) fail('INVALID_RECIPIENT', 'Choose an agent in this conversation.', 400)
       }
       // The transcript still accepts a human message while the lead is unavailable. The UI can say why no delivery was created.
-      message(group.id, command.text, recipients, command.replyTo, undefined, attachments)
+      message(group.id, command.text, recipients, command.replyTo, undefined, attachments, mentions)
       break
     }
     case 'delivery.resolve': {
@@ -1393,6 +1435,12 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
 }
 
 /** A contribution owns capacity independently of membership. Reuse invalidates every prior stop proof. */
+/** The Swarm's grid name: `swarm-` and 12 hex of sha256(tab id). Derived so it is reproducible when supported; the
+ * stored value is authoritative and never renamed. */
+export function swarmGridName(tabId: string): string {
+  return `swarm-${createHash('sha256').update(tabId).digest('hex').slice(0, 12)}`
+}
+
 function reserveHarnessSlot(state: SuperTabState, machineId: string, harnessId: string, generation: string) {
   const observation = state.machines?.find(m => m.machineId === machineId)?.observation
   const renewed = !!(state.harnessReservations?.some(r => r.machineId === machineId && r.harnessId === harnessId)

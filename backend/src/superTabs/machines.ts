@@ -50,6 +50,17 @@ export const machineObservationSchema = z.object({ generation: z.string().max(16
   quotas: z.array(quota).max(32), runningHarnessIds: z.array(z.string().max(160)).max(1000),
   stoppedHarnessIds: z.array(z.string().max(160)).max(1000),
   stoppedReservations: z.array(z.object({ harnessId: z.string().min(1).max(160), generation: z.string().min(1).max(160) }).strict()).max(1000).optional(),
+  /** The Local models add-on (docs/plans/2026-10-23-swarm-local-models.md); absent from hosts before it. On the Swarm's
+   *  grid: what this machine serves there (`local` an engine of its own, `api` a saved API it shares), usable by agents on
+   *  any machine. On any other grid: a model its owner may use there (`shared`, shared with them), usable only by agents
+   *  on this machine, since only its sign-in reaches that grid. */
+  localModels: z.array(z.object({ grid: z.string().min(1).max(160), model: z.string().min(1).max(200),
+    name: z.string().max(200).optional(), contextWindow: z.number().int().positive().nullable().optional(),
+    kind: z.enum(['local', 'api', 'shared']).optional() }).strict()).max(64).optional(),
+  /** Models this machine serves on the Swarm's grid that Builders are not offered, too small or too slow to drive a coding
+   *  agent (cli/src/lib/codingModel.ts), with why: so the route can tell a Lead asked for one why it is not offered. */
+  refusedModels: z.array(z.object({ grid: z.string().min(1).max(160), model: z.string().min(1).max(200),
+    name: z.string().max(200).optional(), why: z.string().min(1).max(300) }).strict()).max(16).optional(),
 }).strict()
 export type MachineObservation = z.infer<typeof machineObservationSchema>
 
@@ -144,6 +155,38 @@ export function machineSlots(state: SuperTabState, pool: ContributedMachine) {
   return running.size + pending
 }
 
+/** Machines of the Swarm serving models on its grid now, by model: only fresh readings count. */
+/** What a Swarm's owner's computer keeps on grid for it (docs/plans/2026-10-23-swarm-local-models.md): the grid, and as its
+ *  members the people who may act in the Swarm. A viewer is not one, and the owner is the grid's admin already. */
+export function swarmGridRow(tabId: string, state: SuperTabState) {
+  const local = state.localModels
+  if (!local) return null
+  return { tabId, grid: local.grid, enabled: local.enabled, ready: local.ready ?? null,
+    members: state.people.filter(p => p.role !== 'viewer' && p.id !== state.ownerId).map(p => p.email) }
+}
+
+/** The grid a contributed machine reports served models on: only while the add-on is on, so the host asks grid nothing otherwise. */
+export const hostLocalGrid = (state: SuperTabState) => state.localModels?.enabled ? { localGrid: state.localModels.grid } : {}
+
+export function servedLocalModels(state: SuperTabState, now: number) {
+  const grid = state.localModels?.enabled ? state.localModels.grid : null
+  if (!grid) return []
+  return (state.machines ?? []).flatMap(m => !m.observation || now - m.observation.receivedAt > MACHINE_FRESH_MS ? []
+    : (m.observation.localModels ?? []).filter(l => l.grid === grid).map(l => ({ ...l, machineId: m.machineId })))
+}
+
+/** Whether a start names a model it may run on now: one the Swarm's grid serves, from any machine; or one on another grid
+ *  that the start's own machine reads it can use (shared with its owner, owner 2026-10-23). Grid models carry no
+ *  subscription model or effort. */
+export function localModelAllowed(state: SuperTabState, request: AgentStartRequest, now: number): boolean {
+  const grid = state.localModels?.enabled ? state.localModels.grid : null
+  if (!grid || !request.gridModel || !request.gridName || request.model || request.effort) return false
+  if (request.gridName === grid) return servedLocalModels(state, now).some(l => l.model === request.gridModel)
+  const pool = (state.machines ?? []).find(m => m.machineId === request.machineId)
+  return !!pool?.observation && now - pool.observation.receivedAt <= MACHINE_FRESH_MS
+    && (pool.observation.localModels ?? []).some(l => l.grid === request.gridName && l.model === request.gridModel)
+}
+
 export function admitMachineStart(state: SuperTabState, request: AgentStartRequest, now: number, start?: AgentStart) {
   const pool = machineContribution(state, request.machineId)
   if (!pool) return null
@@ -161,7 +204,10 @@ export function admitMachineStart(state: SuperTabState, request: AgentStartReque
   if (request.cwd !== cwd) refused.push(`cwd (this project uses ${cwd} on it)`)
   const engines = contributedEngines(pool)
   if (!engines.includes(request.engine)) refused.push(`engine (it contributes ${engines.join(', ') || 'no engines'})`)
-  const settings = (['codexHome', 'gridModel', 'gridName'] as const).filter(key => request[key])
+  // A model served on the Swarm's own grid is the one exception to "default account settings": the owner turned the
+  // add-on on, and some machine of the Swarm serves it now.
+  const local = localModelAllowed(state, request, now)
+  const settings = (['codexHome', 'gridModel', 'gridName'] as const).filter(key => request[key] && !(local && key !== 'codexHome'))
   if (settings.length) refused.push(`${settings.join(', ')} (it runs with its own default account settings, so leave ${settings.length > 1 ? 'them' : 'it'} out)`)
   if (request.permissionMode !== undefined && request.permissionMode !== 'full') {
     refused.push('permissionMode (only full is accepted; leave it out to use the machine’s default)')

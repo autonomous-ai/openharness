@@ -280,6 +280,27 @@ describe('local model discovery and lifecycle', () => {
     expect((await service.list('home')).models[0].state).toBe('running')
   })
 
+  it('lets a model start beside the APIs a Swarm shares, which run nothing here, and not beside another engine', async () => {
+    const share = (port: number) => ({ endpoint_url: `http://127.0.0.1:${port}/${'a'.repeat(36)}/v1`, models: ['deepseek/x'] })
+    await writeFile(join(records, 'shared.json'), JSON.stringify({ node_id: 'local-node', engines: [share(41001), share(41002)] }))
+    await writeFile(join(records, 'shared.heartbeat'), '')
+    await service.act('home', 'org/Small-GGUF', 'start'); await service.settled()
+    expect((await service.list('home', true)).models.find(m => m.id === 'org/Small-GGUF')!.operation).toMatchObject({ phase: 'done' })
+    await service.act('home', 'org/Small-GGUF', 'stop'); await service.settled()
+    // One that is not a share's endpoint is an engine like any other.
+    await writeFile(join(records, 'shared.json'), JSON.stringify({ node_id: 'local-node', engines: [share(41001), { endpoint_url: 'http://127.0.0.1:41003/v1', models: ['y'] }] }))
+    await service.act('home', 'org/Small-GGUF', 'start'); await service.settled()
+    expect((await service.list('home', true)).models.find(m => m.id === 'org/Small-GGUF')!.operation)
+      .toMatchObject({ phase: 'failed', error: 'Open Model Manager to add a model alongside those already running.' })
+    // An app's engine this daemon joined there is named, so the person knows what to stop.
+    await mkdir(stateDir, { recursive: true })
+    await writeFile(join(stateDir, 'app-engines.json'), JSON.stringify([{ spec: 1, modelId: 'app:ollama:llama3.2:3b', grid: 'home',
+      name: 'llama3.2:3b', engine: 'ollama', served: 'llama3.2:3b', alias: 'llama3.2:3b', port: 41003, binary: '/usr/local/bin/ollama' }]))
+    await service.act('home', 'org/Small-GGUF', 'start'); await service.settled()
+    expect((await service.list('home', true)).models.find(m => m.id === 'org/Small-GGUF')!.operation)
+      .toMatchObject({ phase: 'failed', error: 'Stop llama3.2:3b first to start another local model.' })
+  })
+
   it('never offers Stop for an external endpoint or another machine', async () => {
     serving = true
     await writeFile(join(records, 'remote.json'), JSON.stringify({ node_id: 'local-node', engines: [{ endpoint_url: 'http://localhost:1234', models: ['Small-Q4.gguf'] }] }))
@@ -1662,6 +1683,56 @@ describe('models other apps downloaded, started in their own app', () => {
     row = (await models.list('home', true)).models.find(m => m.id === ollama.id)!
     expect(row).toMatchObject({ state: 'downloaded', canStart: true, canStop: false })
     expect(JSON.parse(await readFile(join(stateDir, 'app-engines.json'), 'utf8'))).toEqual([])
+  })
+
+  it('says a model is served on a Swarm\'s grid while its engine runs there, and keeps it from starting twice', async () => {
+    const swarm = 'swarm-0123456789ab'
+    const models = appService()
+    await models.act(swarm, ollama.id, 'start'); await models.settled()
+    let row = (await models.list('home', true)).models.find(m => m.id === ollama.id)!
+    expect(row).toMatchObject({ state: 'downloaded', canStart: false, servedOn: [{ grid: swarm, servedAs: ['llama3.2:3b'] }] })
+    // Its engine gone: nothing is served there, and it starts again.
+    up.clear()
+    row = (await models.list('home', true)).models.find(m => m.id === ollama.id)!
+    expect(row).toMatchObject({ canStart: true })
+    expect(row).not.toHaveProperty('servedOn')
+  })
+
+  it('names the live engines it joined to a grid, and joins the first again as it was started', async () => {
+    const swarm = 'swarm-0123456789ab'
+    const record = (grid: string, modelId = ollama.id) => ({ spec: 1, modelId, grid, name: 'llama3.2:3b', engine: 'ollama', served: 'llama3.2:3b',
+      alias: 'llama3.2:3b', port: 41000, binary: '/usr/local/bin/ollama', pid: 4242 })
+    await mkdir(stateDir, { recursive: true })
+    await writeFile(join(stateDir, 'app-engines.json'), JSON.stringify([record('home'), record(swarm, 'app:gone'), record(swarm)]))
+    up.add(ollama.id)
+    const models = appService({ machineName: () => 'Studio Mac' })
+    expect(await models.servedApps(swarm)).toEqual(['llama3.2:3b'])
+    expect(await models.rejoinApp(swarm)).toBe(true)
+    expect(calls.at(-1)).toEqual(['--remote', 'join', swarm, '--at', 'http://127.0.0.1:41000/v1', '-m', 'llama3.2:3b',
+      '--advertise-as', 'llama3.2:3b', '--max-concurrency', '1', '--name', 'Studio Mac'])
+    // No name, or none an argument can carry: joined without one. Nothing alive there: nothing joined.
+    expect(await appService({ machineName: () => '-x' }).rejoinApp(swarm)).toBe(true)
+    expect(calls.at(-1)).not.toContain('--name')
+    // An engine that cannot be checked is not served.
+    ops.alive.mockRejectedValueOnce(new Error('ps')).mockRejectedValueOnce(new Error('ps'))
+    expect(await models.servedApps(swarm)).toEqual([])
+    ops.alive.mockRejectedValueOnce(new Error('ps')).mockRejectedValueOnce(new Error('ps'))
+    expect(await models.rejoinApp(swarm)).toBe(false)
+    up.clear()
+    expect(await models.servedApps(swarm)).toEqual([])
+    expect(await models.rejoinApp(swarm)).toBe(false)
+    expect(await appService({ appEngines: undefined }).servedApps(swarm)).toEqual([])
+  })
+
+  it('lists the own grid beside a Swarm\'s when one model is served on both, and reads none without its app\'s engines', async () => {
+    const record = (grid: string) => ({ spec: 1, modelId: ollama.id, grid, name: 'llama3.2:3b', engine: 'ollama', served: 'llama3.2:3b',
+      alias: 'llama3.2:3b', port: 41000, binary: '/usr/local/bin/ollama', pid: 4242 })
+    await mkdir(stateDir, { recursive: true })
+    await writeFile(join(stateDir, 'app-engines.json'), JSON.stringify([record('home'), record('swarm-0123456789ab')]))
+    up.add(ollama.id); joinedAliases.add('llama3.2:3b')
+    const row = (await appService().list('home', true)).models.find(m => m.id === ollama.id)!
+    expect(row.servedOn).toEqual([{ grid: 'home', servedAs: ['llama3.2:3b'] }, { grid: 'swarm-0123456789ab', servedAs: ['llama3.2:3b'] }])
+    expect((await appService({ appEngines: undefined }).list('home', true)).models.find(m => m.id === ollama.id)).not.toHaveProperty('servedOn')
   })
 
   it('keeps an engine it started stoppable when a later scan reads the model differently', async () => {

@@ -1,5 +1,6 @@
 import { OBSERVER_VALID_MS, publishObservers } from './observers.js'
 import { ContributedMachines } from './machines.js'
+import { SwarmGrids } from './swarmGrids.js'
 import { retainContributions } from './retention.js'
 import { configurationObservation } from './configuration.js'
 import { NativeRecorder, nativeJournalFile } from './native.js'
@@ -198,6 +199,7 @@ export class SuperTabHost {
   private timer: ReturnType<typeof setTimeout> | null = null
   private native: NativeRecorder | null = null
   private machines: ContributedMachines | null = null
+  private grids: SwarmGrids | null = null
   /** The waits last handed to the core (superTabs/attention.ts); null until the first roster, which is always handed
    *  over whole, so a restarted service closes what its predecessor raised and no longer holds. */
   private attention: string | null = null
@@ -307,6 +309,8 @@ export class SuperTabHost {
   private pollMachines() {
     this.machines ??= new ContributedMachines(this.core, this.machineId)
     void this.machines.tick().catch(error => this.log(error instanceof Error ? error.message : String(error)))
+    this.grids ??= new SwarmGrids(this.core, this.machineId)
+    void this.grids.tick().catch(error => this.log(`Swarm grid: ${error instanceof Error ? error.message : String(error)}`))
   }
   private recordNative(): void {
     if (!this.native?.hasWork || this.stopped) return

@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { CoreApi, SuperTabScreen } from '../core/api.js'
 import { fakeCore } from '../testing/fakeCore.js'
-import { capScreen, limitOf, TerminalHost, typedKeys } from './terminal.js'
+import { capScreen, limitOf, modelFailing, TerminalHost, typedKeys } from './terminal.js'
 
 const row = (agentId = 'a1', harnessId = 'h1', over: Record<string, unknown> = {}) => ({ tabId: 'tab', agent: { id: agentId, harnessId, machineId: 'm1' }, ...over })
 type Sent = { path: string; body: Record<string, any> }
@@ -180,6 +180,34 @@ describe('the stuck and usage-limit alerts', () => {
     expect(t.alerts()[1]).toEqual({ type: 'agent.alert', agentId: 'a1', alert: 'limit', active: false })
   })
 
+  it('alerts once its model has failed for 10 minutes, and ends it when answers come again', async () => {
+    const failing = (): SuperTabScreen => ({ ok: true, text: '✻ Waiting for API response · will retry in 2m 38s · check your network\n❯ ', hold: null })
+    const t = setup({ screen: failing })
+    await t.host.tick([row()])
+    t.wait(540_000); await t.host.tick([row()])
+    expect(t.alerts()).toEqual([])
+    t.wait(60_000); await t.host.tick([row()])
+    expect(t.alerts()).toEqual([{ type: 'agent.alert', agentId: 'a1', alert: 'model', active: true }])
+    // Answers coming again end it only once no retry has shown for ten minutes.
+    t.showing(idle); t.wait(15_000); await t.host.tick([row()])
+    expect(t.alerts()).toHaveLength(1)
+    t.wait(585_000); await t.host.tick([row()])
+    expect(t.alerts()[1]).toEqual({ type: 'agent.alert', agentId: 'a1', alert: 'model', active: false })
+  })
+
+  it('counts retries with fresh attempts between them as one failing stretch', async () => {
+    // Claude Code shows its countdown, then a plain spinner for the minutes each new attempt takes.
+    const failing = (): SuperTabScreen => ({ ok: true, text: '✻ Waiting for API response · will retry in 1m 18s · check your network\n❯ ', hold: null })
+    const attempt = (): SuperTabScreen => ({ ok: true, text: '✻ Thinking… (4m 12s · esc to interrupt)\n❯ ', hold: null })
+    const t = setup({ screen: failing })
+    await t.host.tick([row()])
+    for (let minute = 0; minute < 10; minute += 2) {
+      t.showing(attempt); t.wait(60_000); await t.host.tick([row()])
+      t.showing(failing); t.wait(60_000); await t.host.tick([row()])
+    }
+    expect(t.alerts()).toEqual([{ type: 'agent.alert', agentId: 'a1', alert: 'model', active: true }])
+  })
+
   it('tries an alert the backend did not take again on the next read', async () => {
     const t = setup({ screen: () => ({ ok: true, text: 'Claude usage limit reached. Your limit will reset at 3pm.', hold: null }) })
     const real = vi.mocked(t.backend).getMockImplementation()!
@@ -215,5 +243,16 @@ describe('reading a usage limit off a screen', () => {
     expect(limitOf('I will add a check for when the usage limit reached message shows.\n> ', now)).toBeNull()
     expect(limitOf(`5-hour limit reached ∙ resets 3pm\n${'line\n'.repeat(30)}> `, now)).toBeNull()
     expect(limitOf('> ', now)).toBeNull()
+  })
+})
+
+describe('reading a model that keeps failing off a screen', () => {
+  it('knows the engines\' retry lines near the prompt, and nothing far up or in the agent\'s own words', () => {
+    for (const line of ['✻ Waiting for API response · will retry in 2m 38s · check your network', '  ⎿  API Error: 503 upstream unavailable',
+      'API Error: Request timed out.', 'API Error: Connection error.', '⚠ stream disconnected - retrying turn (3/5 in 1.2s)…', 'Reconnecting... 2/5']) {
+      expect(modelFailing(`work\n${line}\n> `)).toBe(true)
+    }
+    expect(modelFailing('I will handle the case where the API response is slow.\n> ')).toBe(false)
+    expect(modelFailing(`Waiting for API response\n${'line\n'.repeat(30)}> `)).toBe(false)
   })
 })

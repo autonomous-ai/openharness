@@ -515,7 +515,10 @@ export class LocalModels {
     grids ??= rows(await this.json(['--remote', 'ls', '--json']))
     const gridId = str(grids.find(g => g.grid === grid)?.id)
     const { owned, blocker } = await this.engineRecords(gridId)
-    if (blocker) this.blockers.set(grid, blocker)
+    // An app's engine this daemon joined there is named, as the list names it: read again before a start, the grid's
+    // record alone said only to open Model Manager, with llama3.2:3b from Ollama running for a Swarm (2026-10-24).
+    const app = blocker ? (await this.records()).find(record => record.grid === grid) : undefined
+    if (blocker) this.blockers.set(grid, app ? `Stop ${cleanName(app.name)} first to start another local model.` : blocker)
     return owned
   }
 
@@ -540,7 +543,10 @@ export class LocalModels {
       const pid = recordPid(record)
       const pidAlive = pid !== null && processExists(pid)
       const dead = pid !== null && !pidAlive
-      if ((specs.length || record.media) && !dead) blocker = 'Open Model Manager to add a model alongside those already running.'
+      // An API a Swarm shares (`swarmApiShares.ts`) is joined as an engine too, but runs nothing here: it never stands in
+      // a local model's way (owner, 2026-10-23: two shared APIs kept a model from running for the same Swarm).
+      const sharedApis = specs.length > 0 && !record.media && specs.every(spec => SWARM_API_SHARE.test(str(spec.endpoint_url)))
+      if ((specs.length || record.media) && !dead && !sharedApis) blocker = 'Open Model Manager to add a model alongside those already running.'
       for (const spec of specs) {
         if (spec.endpoint_url || spec.api_kind || !Array.isArray(spec.models) || spec.models.length !== 1) continue
         const file = str(spec.models[0])
@@ -762,6 +768,30 @@ export class LocalModels {
     return kept
   }
 
+  /** The names this computer's app engines are joined to [grid] under (`swarmHeal.ts` compares them with what the grid
+   *  lists). An engine whose process is gone is not served by anything here. */
+  async servedApps(grid: string): Promise<string[]> {
+    const served: string[] = []
+    for (const record of (await this.records()).filter(r => r.grid === grid)) {
+      if (await this.options.appEngines?.alive(record).catch(() => false)) served.push(record.alias)
+    }
+    return served
+  }
+
+  /** Joins this computer's first live app engine on [grid] again, as it was started: grid restarts its one engine
+   *  process for the grid with every model this computer joined there, so this also brings back an API shared beside it
+   *  (2026-10-24: after a daemon restart the grid listed nothing this Mac served). Whether grid took it. */
+  async rejoinApp(grid: string): Promise<boolean> {
+    for (const record of (await this.records()).filter(r => r.grid === grid)) {
+      if (!await this.options.appEngines?.alive(record).catch(() => false)) continue
+      const named = this.options.machineName?.()?.trim()
+      return (await this.run(['--remote', 'join', grid, '--at', `http://127.0.0.1:${record.port}/v1`, '-m', record.served,
+        '--advertise-as', record.alias, '--max-concurrency', String(NODE_CONCURRENCY),
+        ...(named && validArg(named) ? ['--name', named] : [])], undefined, 10 * 60_000)).ok
+    }
+    return false
+  }
+
   /** A Jev engine still running: stopped, and off its grid (best effort — its record is already gone). */
   private async retire(record: AppEngineRecord): Promise<void> {
     try {
@@ -809,7 +839,11 @@ export class LocalModels {
     const elsewhere = this.elsewhere?.grid !== grid ? this.elsewhere?.operation : undefined
     const operation = this.active?.operation ?? elsewhere ?? (this.receipt?.grid === grid ? this.receipt.operation : undefined)
     const apps = await this.apps(force)
-    const records = (await this.records()).filter(record => record.grid === grid)
+    const allRecords = await this.records()
+    const records = allRecords.filter(record => record.grid === grid)
+    // An app's engine this daemon started on another grid — a Swarm's (docs/plans/2026-10-23-swarm-local-models.md):
+    // its model is served there, so the row says so and cannot start a second engine beside it.
+    const away = allRecords.filter(record => record.grid !== grid)
     // An engine this daemon started is read from its record, whatever a later scan makes of the model: a
     // scan that missed the person's llama-server (busy serving, it answered `--version` late) once listed
     // a running engine as Grid's, and Stop then had nothing to stop.
@@ -877,8 +911,13 @@ export class LocalModels {
       const alive = record && this.options.appEngines ? await this.options.appEngines.alive(record) : false
       const listed = !!record && listedHere(record.alias)
       const running = alive && (listed || asleep)
+      const elsewhere: ServedOn[] = []
+      for (const there of away.filter(r => r.modelId === id)) {
+        if (this.options.appEngines && await this.options.appEngines.alive(there)) elsewhere.push({ grid: there.grid, servedAs: [there.alias] })
+      }
       return { id, name, app: APP_LABEL[app], state: running ? 'running' : 'downloaded', ...extra, ...(record ? { servedAs: [record.alias] } : {}),
-        canStart: !inventoryError && !record, canStop: !inventoryError && !!record,
+        ...(elsewhere.length ? { servedOn: [...(running && record ? [{ grid, servedAs: [record.alias] }] : []), ...elsewhere] } : {}),
+        canStart: !inventoryError && !record && !elsewhere.length, canStop: !inventoryError && !!record,
         operation: operation?.modelId === id ? operation : undefined, ...(running && !listed ? { gridAsleep: true } : {}) }
     }
     for (const app of apps.filter(a => a.engine !== 'grid' || recorded(a.id))) {
@@ -1281,6 +1320,9 @@ function communityOf(grids: Record<string, any>[]): { osGrid?: string } {
 
 /** The one online node in [nodes] that is [instance]'s engine — its record's node id (or, with no ids,
  * its name) and every name it serves under; none while its heartbeat is stale or two nodes would match. */
+/** The endpoint a Swarm's shared API is joined at (`swarmApiShares.ts`): this computer, a port, and its secret path. */
+const SWARM_API_SHARE = /^http:\/\/127\.0\.0\.1:\d+\/[0-9a-f]{36}\/v1\/?$/
+
 function nodeServing(nodes: Record<string, any>[], instance?: Owned): Record<string, any> | undefined {
   const matches = instance?.live ? nodes.filter(n => n.online === true &&
     (str(n.node_id || n.id) ? str(n.node_id || n.id) === instance.nodeId :
