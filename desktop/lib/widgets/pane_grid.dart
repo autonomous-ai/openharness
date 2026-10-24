@@ -15,7 +15,7 @@ import 'window_chrome.dart';
 
 import '../clipboard/image_bytes.dart';
 import '../core/dsh_catalog.dart' show DshEntry;
-import '../core/models.dart' show Agent, kUntitledPane;
+import '../core/models.dart' show Agent, ConnectionStatus, kUntitledPane;
 import '../clipboard/native_clipboard.dart';
 import '../shared/theme/app_theme.dart' as grid;
 import '../shared/theme/appearance_prefs_store.dart';
@@ -507,6 +507,8 @@ class _SwarmCanvasState extends State<_SwarmCanvas> {
       machine: machine?.machine,
       local: machine?.isLocalMachine,
       online: machine?.nodeOnline,
+      // The web words a computer on its way back; the pane follows it.
+      connection: machine?.connectionStatus,
       needsLink: machine?.needsLink,
       localTransport: machine?.usesLocalTransport,
       agent: agent,
@@ -1745,6 +1747,14 @@ class _PaneContent extends StatelessWidget {
         machine != null &&
         (machine.nodeOnline == false ||
             (machine.isLocalMachine && !machine.usesLocalTransport));
+    // On its way back rather than gone: worded where the host labels pane
+    // states (the web), and not typed into until it is back.
+    final dialing =
+        WorkspaceChrome.of(context).labelsPaneStatus &&
+        machine != null &&
+        !machine.machine.isShared &&
+        (machine.connectionStatus == ConnectionStatus.connecting ||
+            machine.connectionStatus == ConnectionStatus.reconnecting);
 
     // Availability changes the header and input permission, never the renderer's
     // ancestry. Retained output, selection, scroll and Find stay in this view.
@@ -1838,6 +1848,15 @@ class _PaneContent extends StatelessWidget {
           icon: AppIcons.cloudOff,
           detail:
               '${machine.machine.displayName} is offline. Retained output is read only.',
+        );
+      } else if (dialing) {
+        final again = machine.connectionStatus == ConnectionStatus.reconnecting;
+        notice = terminalNotice(
+          label: again ? 'Reconnecting…' : 'Connecting…',
+          icon: AppIcons.refreshCw,
+          detail:
+              '${again ? 'Reconnecting' : 'Connecting'} to ${machine.machine.displayName}. Keys typed now are not sent.',
+          dimsScreen: true,
         );
       } else if (agent?.isStopped == true) {
         final opening = notifier.pendingAgentRestart(
@@ -1958,6 +1977,7 @@ class _PaneContent extends StatelessWidget {
               machine == null ||
               needsLink ||
               offline ||
+              dialing ||
               agent == null ||
               !agent.terminalAvailable,
           notice: notice,

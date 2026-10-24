@@ -17,6 +17,7 @@ import '../clipboard/native_clipboard.dart';
 import '../core/models.dart';
 import '../core/runtime_platform.dart';
 import '../state/app_state.dart';
+import '../state/workspace_chrome.dart';
 import '../state/harness_activity.dart';
 import '../state/model_start_watch.dart';
 import '../super_tabs/pane.dart';
@@ -84,6 +85,11 @@ typedef TerminalNotice = ({
   /// An offline machine is neither confusing nor rare, and a band on every one
   /// of those would cost rows in every tile.
   bool banner,
+
+  /// Whether the output underneath is not live: it is veiled, and this
+  /// notice's band lies over it rather than taking rows from it — a computer
+  /// on its way back, whose terminal comes back the size it was.
+  bool dimsScreen,
 });
 
 /// A [TerminalNotice] without spelling out the fields it does not have.
@@ -100,6 +106,7 @@ TerminalNotice terminalNotice({
   String? secondaryLabel,
   VoidCallback? onSecondary,
   bool banner = false,
+  bool dimsScreen = false,
 }) => (
   label: label,
   detail: detail,
@@ -109,6 +116,7 @@ TerminalNotice terminalNotice({
   secondaryLabel: secondaryLabel,
   onSecondary: onSecondary,
   banner: banner,
+  dimsScreen: dimsScreen,
 );
 
 /// A browser on a phone or tablet, typing through its on-screen keyboard.
@@ -1874,6 +1882,17 @@ class _TerminalPanelState extends State<TerminalPanel>
       return KeyEventResult.handled;
     }
     final keyboard = HardwareKeyboard.instance;
+    // A computer on its way back ([TerminalNotice.dimsScreen]): what is typed
+    // now is dropped, as its band says, rather than sent to a link that is
+    // down. ⌘ chords are still the app's.
+    if (widget.notice?.dimsScreen == true &&
+        event is! KeyUpEvent &&
+        !keyboard.isMetaPressed &&
+        (_isTypingKey(event) ||
+            event.logicalKey == LogicalKeyboardKey.enter ||
+            event.logicalKey == LogicalKeyboardKey.numpadEnter)) {
+      return KeyEventResult.handled;
+    }
     // A pane that lost control still gets the keys (xterm's read-only mode
     // keeps the focus node, it only stops opening an input connection), and
     // dropping them silently is how people sit typing into a frozen pane. ⏎
@@ -2438,6 +2457,25 @@ class _TerminalPanelState extends State<TerminalPanel>
                           ],
                         ),
                       ),
+                    // Last, so nothing above moves when it comes and goes.
+                    if (widget.notice case final notice?
+                        when notice.dimsScreen) ...[
+                      Positioned.fill(
+                        child: IgnorePointer(
+                          child: ColoredBox(
+                            color: grid.AppPalette.windowBg.withValues(
+                              alpha: .55,
+                            ),
+                          ),
+                        ),
+                      ),
+                      Positioned(
+                        top: 0,
+                        left: 0,
+                        right: 0,
+                        child: _ControlBanner.notice(notice),
+                      ),
+                    ],
                   ],
                 ),
               ),
@@ -2772,7 +2810,16 @@ class _TerminalHeader extends StatelessWidget {
                 session.errorCode ??
                 'This stream is closed. Retained output is read only.',
           ),
-        };
+        } ??
+        // Watched, not controlled: said in words where the host labels pane
+        // states (the web), where it was only a greyed model name.
+        (session.readOnly && WorkspaceChrome.of(context).labelsPaneStatus
+            ? terminalNotice(
+                label: 'View only',
+                icon: AppIcons.lock,
+                detail: 'You can watch this terminal. Typing is off.',
+              )
+            : null);
     // A notice that carries its own way out owns the button — a machine that
     // needs linking asks for its password there. Otherwise the button is the
     // session's own reconnect, which a notice has always suppressed.
