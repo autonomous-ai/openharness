@@ -237,6 +237,113 @@ describe('core runtime profile authority', () => {
     expect(t.sessions.getState(t.s.agentId)).toEqual(before)
   })
 
+  it('answers an initial models read from the same agent after its conversation binds', async () => {
+    const t = setup(), entered = deferred<void>(), resume = deferred<void>()
+    t.s.sessionId = ''
+    t.read.mockImplementationOnce(async (_e, context, operation) => {
+      entered.resolve(); await resume.promise; return result(context, operation)
+    })
+    const models = t.sessions.read(t.s, { kind: 'models' })
+    await entered.promise
+    t.s.sessionId = 'agent-conversation'
+    resume.resolve()
+    await expect(models).resolves.toMatchObject({ state: blankRuntimeState() })
+    expect(t.read).toHaveBeenCalledTimes(2)
+    expect(t.read.mock.calls[1]![1].session.sessionId).toBe('agent-conversation')
+  })
+
+  it('answers an initial models read after the first profile stage commits', async () => {
+    const t = setup(), staged = t.sessions.stage(t.s, false, true)
+    await staged.config()
+    const entered = deferred<void>(), resume = deferred<void>()
+    t.read.mockImplementationOnce(async (_e, context, operation) => {
+      entered.resolve(); await resume.promise; return result(context, operation)
+    })
+    const models = t.sessions.read(t.s, { kind: 'models' })
+    await entered.promise
+    expect(staged.commit()).toBe(true)
+    resume.resolve()
+    await expect(models).resolves.toMatchObject({ state: { effort: 'auto' } })
+    expect(t.read.mock.calls.filter(call => call[2].kind === 'models')).toHaveLength(2)
+  })
+
+  it('answers a first bound models read after the same conversation gains native identity', async () => {
+    const t = setup(), entered = deferred<void>(), resume = deferred<void>()
+    t.read.mockImplementationOnce(async (_e, context, operation) => {
+      entered.resolve(); await resume.promise; return result(context, operation)
+    })
+    const models = t.sessions.read(t.s, { kind: 'models' })
+    await entered.promise
+    t.s.boundAt = 2
+    resume.resolve()
+    await expect(models).resolves.toMatchObject({ state: blankRuntimeState() })
+    expect(t.read).toHaveBeenCalledTimes(2)
+    expect(t.read.mock.calls[1]![1].session.sessionId).toBe(t.s.sessionId)
+  })
+
+  it('waits a bounded time for the first conversation binding after an early models read', async () => {
+    const t = setup(), entered = deferred<void>(), resume = deferred<void>()
+    t.s.sessionId = ''
+    t.read.mockImplementationOnce(async (_e, context, operation) => {
+      entered.resolve(); await resume.promise; return result(context, operation)
+    })
+    const models = t.sessions.read(t.s, { kind: 'models' })
+    await entered.promise
+    t.s.boundAt = 2
+    resume.resolve()
+    setTimeout(() => { t.s.sessionId = 'agent-conversation' }, 30)
+    await expect(models).resolves.toMatchObject({ state: blankRuntimeState() })
+    expect(t.read.mock.calls[1]![1].session.sessionId).toBe('agent-conversation')
+  })
+
+  it('does not replay models reads for worker failures or unrelated changes', async () => {
+    const unavailable = setup()
+    unavailable.read.mockRejectedValueOnce(new EngineReadError('ENGINE_UNAVAILABLE'))
+    await expect(unavailable.sessions.read(unavailable.s, { kind: 'models' })).rejects.toThrow('ENGINE_UNAVAILABLE')
+    expect(unavailable.read).toHaveBeenCalledOnce()
+
+    const changed = setup(), entered = deferred<void>(), resume = deferred<void>()
+    changed.read.mockImplementationOnce(async (_e, context, operation) => {
+      entered.resolve(); await resume.promise; return result(context, operation)
+    })
+    const models = changed.sessions.read(changed.s, { kind: 'models' })
+    await entered.promise
+    changed.sessions.confirmEffort(changed.s.agentId, 'high')
+    resume.resolve()
+    await expect(models).rejects.toThrow('ENGINE_STALE_REPLY')
+    expect(changed.read).toHaveBeenCalledOnce()
+  })
+
+  it.each(['bound', 'unbound'] as const)('does not replay an initial %s models read into another workspace', async state => {
+    const t = setup(), entered = deferred<void>(), resume = deferred<void>()
+    if (state === 'unbound') t.s.sessionId = ''
+    t.read.mockImplementationOnce(async (_e, context, operation) => {
+      entered.resolve(); await resume.promise; return result(context, operation)
+    })
+    const models = t.sessions.read(t.s, { kind: 'models' })
+    const rejected = expect(models).rejects.toThrow('ENGINE_STALE_REPLY')
+    await entered.promise
+    t.bindings.set(t.s.agentId, { ...t.s, cwd: '/other-workspace' })
+    resume.resolve()
+    await rejected
+    expect(t.read).toHaveBeenCalledOnce()
+  })
+
+  it('refuses an early models read when the initial conversation never binds', async () => {
+    const t = setup(), entered = deferred<void>(), resume = deferred<void>()
+    t.s.sessionId = ''
+    t.read.mockImplementationOnce(async (_e, context, operation) => {
+      entered.resolve(); await resume.promise; return result(context, operation)
+    })
+    const models = t.sessions.read(t.s, { kind: 'models' })
+    const rejected = expect(models).rejects.toThrow('ENGINE_STALE_REPLY')
+    await entered.promise
+    t.s.boundAt = 2
+    resume.resolve()
+    await rejected
+    expect(t.read).toHaveBeenCalledOnce()
+  })
+
   it('bounds queued work and rejects queued calls for a forgotten session', async () => {
     const t = setup(), entered = deferred<void>(), resume = deferred<void>()
     t.read.mockImplementationOnce(async (_e, c, o) => { entered.resolve(); await resume.promise; return result(c, o) })

@@ -253,7 +253,12 @@ export function createServiceLinks(options: ServiceLinksOptions) {
             const query = typeof payload.query === 'string' ? payload.query : ''
             void Promise.resolve()
               .then(() => links.get(service) === connected ? options.answer(service, query, payload, authority) : unavailable(service))
-              .catch(() => ({ error: 'QUERY_FAILED' }))
+              .catch((error: unknown) => {
+                const name = error instanceof Error ? error.name : 'NonError'
+                const message = error instanceof Error ? error.message : typeof error === 'string' ? error : ''
+                log(`[services] ${service} query ${JSON.stringify(query.slice(0, 64))} failed: ${JSON.stringify(name.slice(0, 80))}: ${JSON.stringify(message.slice(0, 240))}`)
+                return { error: 'QUERY_FAILED' }
+              })
               .then((result) => { sink.sendFrame({ type: 'service_query_result', payload: { ...result, requestId } }) })
             return
           }
