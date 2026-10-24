@@ -135,6 +135,63 @@ void main() {
     expect(find.byKey(const Key('new-device-notice')), findsNothing);
   });
 
+  group('on a phone the sentence wraps above its buttons (S11)', () {
+    void jamie() => app.newDevices.add(
+      const model.NewDeviceNotice(
+        pub: 'p1',
+        label: "Jamie's iPhone",
+        kind: 'phone',
+      ),
+    );
+    final sentence = find.byKey(const Key('new-device-notice'));
+    final review = find.byKey(const Key('new-device-review'));
+    final mine = find.byKey(const Key('new-device-dismiss'));
+
+    for (final width in [360.0, 390.0]) {
+      testWidgets('at $width the whole sentence shows, above the buttons', (
+        tester,
+      ) async {
+        jamie();
+        await mount(tester, width: width);
+        final paragraph = tester.renderObject<RenderParagraph>(
+          find.descendant(of: sentence, matching: find.byType(RichText)),
+        );
+        expect(paragraph.didExceedMaxLines, isFalse);
+        expect(
+          tester.getBottomLeft(sentence).dy,
+          lessThanOrEqualTo(tester.getTopLeft(review).dy),
+        );
+        expect(
+          tester.getBottomLeft(sentence).dy,
+          lessThanOrEqualTo(tester.getTopLeft(mine).dy),
+        );
+        expect(tester.takeException(), isNull);
+      });
+    }
+
+    testWidgets('a Desktop window, at least 880 wide, keeps one line', (
+      tester,
+    ) async {
+      jamie();
+      await mount(tester, width: 880);
+      expect(
+        tester
+            .widget<Text>(find.byKey(const Key('new-device-notice')))
+            .maxLines,
+        1,
+      );
+      // Beside the buttons, on their row.
+      expect(
+        tester.getCenter(sentence).dy,
+        closeTo(tester.getCenter(review).dy, 1),
+      );
+      expect(
+        tester.getTopRight(sentence).dx,
+        lessThan(tester.getTopLeft(mine).dx),
+      );
+    });
+  });
+
   testWidgets(
     'two new devices: Review devices opens Machines on the first of them',
     (tester) async {
