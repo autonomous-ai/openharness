@@ -10,6 +10,7 @@ import 'package:harness/state/app_state.dart';
 import 'package:harness/state/workspace_chrome.dart';
 import 'package:harness/terminal/terminal_session.dart';
 import 'package:harness/web/shell/web_chrome.dart';
+import 'package:harness/widgets/box_chrome.dart' show kWorkspaceInset;
 import 'package:harness/widgets/pane_grid.dart';
 
 import 'support/real_fonts.dart';
@@ -73,11 +74,17 @@ Future<void> _mount(
     swarmMode: true,
     onOpenModels: onOpenModels ?? (_, _, _) {},
   );
+  // Inset as the workspace insets its grid, so the pane is as wide as a
+  // phone's.
+  final inset = Padding(
+    padding: const EdgeInsets.symmetric(horizontal: kWorkspaceInset),
+    child: grid,
+  );
   await tester.pumpWidget(
     MaterialApp(
       home: chrome == null
-          ? grid
-          : WorkspaceChromeScope(chrome: chrome, child: grid),
+          ? inset
+          : WorkspaceChromeScope(chrome: chrome, child: inset),
     ),
   );
   await tester.pump();
@@ -188,6 +195,19 @@ void main() {
     }
     await tester.pumpWidget(const SizedBox());
     semantics.dispose();
+  });
+
+  testWidgets('a status that can be pressed is a finger tall', (tester) async {
+    final app = _app(status: TerminalSessionStatus.takenOver);
+
+    await _mount(tester, app, chrome: webWorkspaceChrome(app));
+
+    final chip = find.descendant(
+      of: find.byKey(const ValueKey('pane-header-status')),
+      matching: find.byType(TextButton),
+    );
+    expect(tester.getSize(chip).height, greaterThanOrEqualTo(44));
+    await tester.pumpWidget(const SizedBox());
   });
 
   testWidgets('a 390 px Desktop window keeps today\'s header', (tester) async {

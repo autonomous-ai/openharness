@@ -2887,10 +2887,15 @@ class _TerminalHeader extends StatelessWidget {
                   constraints: BoxConstraints(
                     maxWidth: constraints.maxWidth * .45,
                   ),
-                  child: _PaneStatusChip(
-                    status: status,
-                    color: statusColor,
-                    onPressed: statusAction,
+                  // Pressable (Take control, Reconnect): a finger's height.
+                  child: fingerTarget(
+                    enabled: statusAction != null,
+                    _PaneStatusChip(
+                      status: status,
+                      color: statusColor,
+                      onPressed: statusAction,
+                      showsIcon: false,
+                    ),
                   ),
                 )
               else if (starting != null)
@@ -3563,11 +3568,15 @@ class _PaneStatusChip extends StatelessWidget {
     required this.status,
     required this.color,
     required this.onPressed,
+    this.showsIcon = true,
   });
 
   final TerminalNotice status;
   final Color color;
   final VoidCallback? onPressed;
+
+  /// False on a phone, where the word is what the room is for.
+  final bool showsIcon;
 
   @override
   Widget build(BuildContext context) => Tooltip(
@@ -3584,8 +3593,10 @@ class _PaneStatusChip extends StatelessWidget {
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(status.icon, size: 14),
-          const SizedBox(width: 6),
+          if (showsIcon) ...[
+            Icon(status.icon, size: 14),
+            const SizedBox(width: 6),
+          ],
           Flexible(
             child: Text(
               // The chip names the STATE; what pressing it does is in the
