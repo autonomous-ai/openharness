@@ -189,7 +189,8 @@ class SuperTabSnapshot {
         (row) => Map<String, dynamic>.unmodifiable(row),
       ),
       leadsConversationId = row['leadsConversationId'] as String?,
-      localModels = SuperTabLocalModels.read(row['localModels']) {
+      localModels = SuperTabLocalModels.read(row['localModels']),
+      mentionsWaiting = (row['mentionsWaiting'] as num?)?.toInt() ?? 0 {
     if (row['version'] != 1) {
       throw const FormatException('Update Harness to open this Swarm.');
     }
@@ -226,6 +227,10 @@ class SuperTabSnapshot {
 
   /// The Local models add-on, once the owner has turned it on; null before.
   final SuperTabLocalModels? localModels;
+
+  /// The reader's tags still waiting for them, Swarm-wide; 0 from a backend
+  /// before tags (spec 2026-10-24-lead-mentions.md).
+  final int mentionsWaiting;
   SuperTabConversation? conversation(String id) =>
       conversations.where((c) => c.id == id).firstOrNull;
   SuperTabAgent? agent(String id) =>
@@ -531,6 +536,9 @@ class SuperTabMessage {
       source = Map.unmodifiable(superTabMap(row['source'] ?? const {})),
       createdAt = DateTime.tryParse(row['createdAt'] as String? ?? ''),
       attachments = _attachments(row['attachments']),
+      mentions = List.unmodifiable(
+        (row['mentions'] as List?)?.whereType<String>() ?? const <String>[],
+      ),
       deliveries = _list(
         row['deliveries'] ?? const [],
         (d) => Map<String, dynamic>.unmodifiable(d),
@@ -542,6 +550,9 @@ class SuperTabMessage {
   final Map<String, dynamic> source;
   final DateTime? createdAt;
   final List<SuperTabAttachment> attachments;
+
+  /// The people a Lead tagged in this message, by person id.
+  final List<String> mentions;
   final List<Map<String, dynamic>> deliveries;
   // Preserve the recorded identity for history and for removed agents. Views
   // with a current roster resolve the visible name through Snapshot.authorName.

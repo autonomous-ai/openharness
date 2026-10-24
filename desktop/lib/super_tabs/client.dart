@@ -5,6 +5,7 @@ import '../core/local_key_value_store.dart';
 import 'attachment_upload.dart';
 import 'controller.dart';
 import 'model.dart';
+import 'notifications.dart';
 
 typedef SuperTabTransport = Future<Object?> Function(
   String method,
@@ -23,6 +24,8 @@ class SuperTabClient {
     this.onSnapshot,
     this.onTabs,
     this.onSelection,
+    this.onMention,
+    this.onTagCounts,
     this.upload = refuseUpload,
     this.discoveryInterval = const Duration(seconds: 15),
   });
@@ -33,6 +36,19 @@ class SuperTabClient {
 
   /// A tab's selected conversation changed, by a click here or by a device.
   final void Function(SuperTabController)? onSelection;
+
+  /// A Lead tagged this account in one of its Swarms while the app was open.
+  final void Function(SuperTabMention)? onMention;
+
+  /// The waiting tags of a Swarm that is not open changed ([waitingTags]).
+  final void Function()? onTagCounts;
+  final _tagCounts = <String, int>{};
+  final _tagsSeen = <String, Set<String>>{};
+
+  /// The tags waiting for this account in a Swarm: its own state once open,
+  /// else what discovery last read, so a tab not opened yet still shows them.
+  int waitingTags(String id) =>
+      _loaded[id]?.snapshot?.mentionsWaiting ?? _tagCounts[id] ?? 0;
   final SuperTabUpload upload;
   final Duration discoveryInterval;
   String? _account;
@@ -80,6 +96,8 @@ class SuperTabClient {
     _hidden = {};
     _creating.clear();
     _visibility.clear();
+    _tagCounts.clear();
+    _tagsSeen.clear();
     discoveryError = null;
     for (final controller in _loaded.values) {
       controller.revokeAccess('The account changed. Open this Swarm again.');
@@ -187,10 +205,12 @@ class SuperTabClient {
           }
         } while (after != null);
         discoveryError = null;
-        onTabs!(
-          tabs.values.toList(),
-          Set.unmodifiable({..._hidden, ..._creating}),
-        );
+        final hidden = Set<String>.unmodifiable({..._hidden, ..._creating});
+        onTabs!(tabs.values.toList(), hidden);
+        await _readTags([
+          for (final id in tabs.keys)
+            if (!hidden.contains(id) && !_loaded.containsKey(id)) id,
+        ], generation);
       } catch (error) {
         if (generation == _generation) {
           discoveryError = error;
@@ -277,9 +297,46 @@ class SuperTabClient {
         onSnapshot?.call(controller);
       }
     });
+    // What discovery already announced is not news when the Swarm opens.
+    SuperTabMentions.of(controller)
+      ..seen(_tagsSeen.remove(id))
+      ..onArrived = onMention;
+    _tagCounts.remove(id);
     _loaded[id] = controller;
     controller.start();
     return controller;
+  }
+
+  /// One light read per Swarm tab that is not open: its waiting tags. A
+  /// failed read, a backend before tags included, changes nothing and is
+  /// tried again on the next round.
+  Future<void> _readTags(List<String> ids, int generation) async {
+    var changed = false;
+    for (final id in ids) {
+      try {
+        final answer = await map(
+          'GET',
+          '/api/super-tabs/${Uri.encodeComponent(id)}/mentions?state=waiting',
+        );
+        if (generation != _generation || _loaded.containsKey(id)) continue;
+        final waiting = [
+          for (final row in answer['mentions'] as List)
+            SuperTabMention.fromJson(superTabMap(row)),
+        ];
+        final seen = _tagsSeen[id];
+        if (seen != null) {
+          for (final mention in waiting.reversed) {
+            if (!seen.contains(mention.id)) onMention?.call(mention);
+          }
+        }
+        _tagsSeen[id] = {...?seen, for (final m in waiting) m.id};
+        if (_tagCounts[id] != waiting.length) {
+          _tagCounts[id] = waiting.length;
+          changed = true;
+        }
+      } catch (_) {}
+    }
+    if (changed && generation == _generation) onTagCounts?.call();
   }
 
   void dispose() => bind(null);

@@ -46,6 +46,14 @@ class ConversationServer {
   final messages = <Map<String, dynamic>>[];
   // Route decisions by id, answered by GET .../route-decisions/:id.
   final routeDecisions = <String, Map<String, dynamic>>{};
+  // The reader's tags, newest last, answered by GET .../mentions?state=.
+  final mentions = <Map<String, dynamic>>[];
+  // How many times the mentions list was read.
+  int mentionReads = 0;
+  // A backend from before tags: it has no list route.
+  bool mentionsMissing = false;
+  // While set, every read of the mentions list waits for it.
+  Completer<void>? holdMentions;
   // The effective routing policy answered by GET .../routing-policy.
   Map<String, dynamic>? routingPolicy;
   final state = <String, dynamic>{
@@ -172,6 +180,12 @@ class ConversationServer {
         );
         messages.last['replyTo'] = command['replyTo'];
         output['messageId'] = 'message-$revision';
+      } else if (command['type'] == 'mention.done') {
+        mentions.firstWhere((m) => m['id'] == command['mentionId'])
+          ..['resolvedAt'] = '2026-10-24T06:00:00Z'
+          ..['resolvedBy'] = 'done';
+        state['mentionsWaiting'] = (state['mentionsWaiting'] as int) - 1;
+        revision++;
       } else if (command['type'] == 'conversation.create') {
         revision++;
         final id = 'group-$revision';
@@ -260,6 +274,21 @@ class ConversationServer {
     if (holdReads case final hold?) await hold.future;
     if (failReads) throw StateError('Offline');
     final uri = Uri.parse(path);
+    if (uri.pathSegments.last == 'mentions') {
+      mentionReads++;
+      if (mentionsMissing) {
+        throw const SuperTabFailure('NOT_FOUND', 'Not found.', statusCode: 404);
+      }
+      if (holdMentions case final hold?) await hold.future;
+      final waiting = uri.queryParameters['state'] == 'waiting';
+      return jsonDecode(
+        jsonEncode({
+          'mentions': mentions.reversed
+              .where((m) => (m['resolvedAt'] == null) == waiting)
+              .toList(),
+        }),
+      ) as Map<String, dynamic>;
+    }
     if (uri.pathSegments.last == 'routing-policy') {
       final policy = routingPolicy;
       if (policy == null) {
@@ -300,6 +329,30 @@ class ConversationServer {
     }
     return jsonDecode(jsonEncode({'revision': revision, 'state': state}))
         as Map<String, dynamic>;
+  }
+
+  /// The Lead tags the reader in [conversationId], as the backend records it.
+  void tag(
+    String messageId, {
+    String conversationId = 'lead',
+    String text = 'Please confirm the release.',
+    String createdAt = '2026-10-24T05:00:00Z',
+  }) {
+    mentions.add({
+      'id': 'mention-${mentions.length + 1}',
+      'projectId': 'lead',
+      'projectName': 'web-project',
+      'conversationId': conversationId,
+      'conversationTitle': 'Lead',
+      'messageId': messageId,
+      'leadName': 'Wren',
+      'text': text,
+      'createdAt': createdAt,
+      'resolvedAt': null,
+      'resolvedBy': null,
+    });
+    state['mentionsWaiting'] = ((state['mentionsWaiting'] as int?) ?? 0) + 1;
+    revision++;
   }
 
   SuperTabController controller({

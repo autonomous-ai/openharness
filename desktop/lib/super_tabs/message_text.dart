@@ -15,10 +15,15 @@ class SuperTabMessageText extends StatelessWidget {
     super.key,
     this.references = const {},
     this.onOpenGroup,
+    this.mentions = const [],
   });
   final String text;
   final Map<int, String> references;
   final ValueChanged<String>? onOpenGroup;
+
+  /// The names a Lead tagged in this message. Each reads highlighted where
+  /// the text says it; one the text does not say is shown before it.
+  final List<String> mentions;
 
   static Uri? webLink(String? href) {
     final uri = href == null ? null : Uri.tryParse(href);
@@ -32,12 +37,21 @@ class SuperTabMessageText extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     grid.AppTheme.watch(context);
+    final unsaid = [
+      for (final name in mentions)
+        if (!_Mention.tag.allMatches(text).any((m) => _Mention.names(m, name)))
+          '@$name',
+    ];
     return MarkdownBody(
-      data: text,
+      data: unsaid.isEmpty ? text : '${unsaid.join(' ')}\n\n$text',
       selectable: false,
       softLineBreak: true,
-      inlineSyntaxes: [_WebAutolink(), _WorkgroupReference(references)],
-      builders: {'pre': _WrappedCode()},
+      inlineSyntaxes: [
+        _WebAutolink(),
+        _WorkgroupReference(references),
+        if (mentions.isNotEmpty) _Mention(mentions),
+      ],
+      builders: {'pre': _WrappedCode(), 'mention': _MentionName()},
       paddingBuilders: {'a': _CompactLinkLabel()},
       styleSheet: desktopMarkdownStyleSheet(context),
       onTapLink: (_, href, _) {
@@ -134,6 +148,47 @@ class _WorkgroupReference extends md.InlineSyntax {
     );
     return true;
   }
+}
+
+/// `@name` or `@name@domain` for a tagged person; any other `@` stays text.
+/// Parsed as inline Markdown, so code and fenced blocks remain literal.
+class _Mention extends md.InlineSyntax {
+  _Mention(this.mentions) : super(tag.pattern);
+  // A name never ends in a dot: `@dee.` closes a sentence.
+  static final tag = RegExp(
+    r'(?<![\w@])@([\w+-]+(?:\.[\w+-]+)*)(@[\w-]+(?:\.[\w-]+)+)?',
+  );
+  static bool names(Match match, String name) =>
+      match[1]!.toLowerCase() == name.toLowerCase();
+  final List<String> mentions;
+  @override
+  bool onMatch(md.InlineParser parser, Match match) {
+    parser.addNode(
+      mentions.any((name) => names(match, name))
+          ? md.Element.text('mention', match[0]!)
+          : md.Text(match[0]!),
+    );
+    return true;
+  }
+}
+
+class _MentionName extends MarkdownElementBuilder {
+  @override
+  Widget? visitElementAfterWithContext(
+    BuildContext context,
+    md.Element element,
+    TextStyle? preferredStyle,
+    TextStyle? parentStyle,
+  ) => Text.rich(
+    TextSpan(
+      text: element.textContent,
+      style: (parentStyle ?? const TextStyle()).copyWith(
+        color: grid.AppPalette.accentOnSurface,
+        backgroundColor: grid.AppSurface.accentWash,
+        fontWeight: FontWeight.w600,
+      ),
+    ),
+  );
 }
 
 class _WrappedCode extends MarkdownElementBuilder {
