@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { applyCommand, type Command, type CommandContext } from './commands.js'
 import { admitMachineStart, machineObservationSchema, observedPrivacy, PRIVACY_FRESH_MS, teamWorkRefusal, type ContributedMachine, type MachinePrivacy } from './machines.js'
 import { createSuperTab, SuperTabError, visibleState, type Actor, type AgentConfiguration, type AgentStart, type SuperTabState } from './model.js'
@@ -7,6 +7,11 @@ import type { RouteDecision } from './routeRecord.js'
 // Teammates' work runs only on Team machines (docs/plans/2026-10-24-swarm-team-account.md, Task 3): a start or an
 // assignment for a project whose owner did not contribute the machine needs a Harness Team account whose privacy check
 // passed, or a machine used only for agents. A person's own projects on their own machine are unchanged.
+//
+// Everything below runs with the rule required everywhere (SWARM_TEAM_ACCOUNT_REQUIRED=1), except the last block: until
+// then, a machine without a team account takes a teammate's work as it did before.
+beforeEach(() => { process.env.SWARM_TEAM_ACCOUNT_REQUIRED = '1' })
+afterEach(() => { delete process.env.SWARM_TEAM_ACCOUNT_REQUIRED })
 
 const NOW = 50_000_000
 const MINUTE = 60_000
@@ -325,5 +330,42 @@ describe('agents already working on a personal machine', () => {
     expect(f.state.conversations.find(c => c.id === group)!.assignment).toMatchObject({ id: 'before-release', status: 'blocked' })
     f.run({ type: 'work.cancel', conversationId: group, assignmentId: 'before-release', reason: 'Moving it.' })
     expect(refusal(() => f.run({ type: 'work.assign', conversationId: group, agentId: old }))?.code).toBe('TEAM_ACCOUNT_REQUIRED')
+  })
+})
+
+describe('until a team account is required everywhere', () => {
+  beforeEach(() => { delete process.env.SWARM_TEAM_ACCOUNT_REQUIRED })
+  const pool = (observation?: Reading) => ({ machineId: 'mac', name: 'MacBook Pro', contributorId: 'mate', membershipGeneration: 'g', generation: 'g1',
+    cwd: '/swarm', engines: ['codex'], maxAgents: 2, paused: false, ...(observation ? { observation } : {}) }) as ContributedMachine
+
+  it('a machine without a team account takes a teammate\'s project as before, online or not', () => {
+    expect(teamWorkRefusal(pool(reading('computer')), NOW)).toBeNull()
+    expect(teamWorkRefusal(pool(reading('computer', undefined, NOW - 60 * MINUTE)), NOW)).toBeNull()
+    expect(teamWorkRefusal(pool(), NOW)).toBeNull()
+  })
+
+  it('a machine with one already follows the rule, by its reading or its account row', () => {
+    expect(teamWorkRefusal(pool(reading('team', FAILED)), NOW)?.code).toBe('PRIVACY_CHECK_FAILED')
+    expect(teamWorkRefusal(pool(reading('team', PASSED, NOW, NOW - 20 * MINUTE)), NOW)?.code).toBe('PRIVACY_CHECK_STALE')
+    expect(teamWorkRefusal(pool(reading('computer')), NOW, true)?.code).toBe('PRIVACY_UNCHECKED')
+    expect(teamWorkRefusal(pool(reading('team', PASSED)), NOW)).toBeNull()
+  })
+
+  it('starts, assignments and Reviewers on a personal machine or off the Machines list are admitted as before', () => {
+    const f = swarm(), group = f.group()
+    f.run({ type: 'agent.start', request: f.request(group, 'mate-mac') }, owner, f.pooled('mate-mac'))
+    f.run({ type: 'agent.start', request: { ...f.request(group, 'mate-laptop'), cwd: '/work' } }, mate, { contribution: { machineOwnerId: 'mate', contributorId: 'mate' } })
+    expect(f.state.starts).toHaveLength(2)
+    const personal = f.member('personal', 'mate-mac', 'mate')
+    f.run({ type: 'work.assign', conversationId: group, agentId: personal })
+    expect(f.state.conversations.find(c => c.id === group)!.assignment).toMatchObject({ agentId: personal, status: 'working' })
+    const reviewer = f.member('reviewer', 'mate-mac', 'mate', 'lead', { role: 'reviewer' })
+    f.run({ type: 'conversation.agent', conversationId: f.group(), agentId: reviewer, present: true, lead: false })
+  })
+
+  it('a Team machine whose check fails still refuses it', () => {
+    const f = swarm(), group = f.group()
+    f.machine('mate-team').observation = reading('team', FAILED)
+    expect(refusal(() => f.run({ type: 'agent.start', request: f.request(group, 'mate-team') }, owner, f.pooled('mate-team')))?.code).toBe('PRIVACY_CHECK_FAILED')
   })
 })

@@ -274,6 +274,9 @@ describe('a team session speaking in a Swarm', () => {
 // Teammates' work runs only on Team machines (Task 3): the owner's project on the person's machines needs the person's
 // Harness Team account with its privacy check passed. The person's own projects run on the person's machines as before.
 describe('a teammate\'s work and the machines that take it', () => {
+  // With the rule required everywhere, as it will be once team accounts can be made (machines.ts teamAccountRequired).
+  beforeAll(() => { process.env.SWARM_TEAM_ACCOUNT_REQUIRED = '1' })
+  afterAll(() => { delete process.env.SWARM_TEAM_ACCOUNT_REQUIRED })
   /** The person's personal MacBook, contributed for every project, reporting from the person's own sign-in. */
   async function personalMac(f: Awaited<ReturnType<typeof fixture>>) {
     await run(f.tab, { type: 'machine.contribute', machineId: 'personal-mac', name: 'MacBook Pro', cwd: '/work', scope: 'swarm', engines: ['codex'], maxAgents: 2 }, person)

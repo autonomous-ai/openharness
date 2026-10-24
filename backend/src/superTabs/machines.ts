@@ -95,6 +95,7 @@ export const MACHINE_FRESH_MS = 45_000
 // work. It would run as that machine's owner, with their files, logins and subscriptions, so it is admitted only on a
 // Team machine — the Mac's Harness Team account, or a machine used only for agents — that shows its privacy now.
 // Everything else refuses it and says why; a person's own projects on their own machines are unchanged.
+// Until that is required everywhere (teamAccountRequired), it holds only on machines that have a team account.
 
 /** How long a passed privacy check counts, from when this server first received it. The team account checks again
  *  every 5 minutes (cli/src/team/privacy.ts PRIVACY_RECHECK_MS) and reports within a 15-second beat, so a healthy
@@ -129,10 +130,20 @@ const PRIVACY_ITEMS: Record<string, string> = {
 }
 const ONLY_OWN = 'so it runs only its owner\'s projects'
 
+/**
+ * Whether a teammate's work needs a Harness Team account on every machine (`SWARM_TEAM_ACCOUNT_REQUIRED=1`). Until the
+ * CLI that makes team accounts is released, it does not: a machine without one takes a teammate's work as it did before
+ * team accounts, while a machine with one already follows the rule. Read on every call, so a test can set it.
+ */
+export function teamAccountRequired(): boolean {
+  return process.env.SWARM_TEAM_ACCOUNT_REQUIRED === '1'
+}
+
 /** Why this contributed machine may not run a teammate's project now, or null when it may. `teamRow`: its account row
  *  says it is signed in as a team account (`Machine.sessionKind`), read by the store. */
 export function teamWorkRefusal(pool: ContributedMachine, now: number, teamRow = false): TeamWorkRefusal | null {
   const reading = pool.observation, name = pool.name
+  if (!teamRow && reading?.sessionKind !== 'team' && !teamAccountRequired()) return null
   if (!reading || now - reading.receivedAt > MACHINE_FRESH_MS) {
     return { code: 'MACHINE_OFFLINE', reason: `${name} is offline, so it cannot show that its Harness Team account is private.` }
   }
@@ -162,7 +173,11 @@ export function teamWorkCheck(state: SuperTabState, machineId: string, contribut
   teamMachines: readonly string[] = []): TeamWorkRefusal | null {
   if (project.ownerId === contributorId) return null
   const pool = state.machines?.find(m => m.machineId === machineId)
-  if (!pool) return { code: 'TEAM_ACCOUNT_REQUIRED', reason: `This machine is not a Team machine of this Swarm, ${ONLY_OWN}.` }
+  if (!pool) {
+    // Off the Machines list nothing reports a team account (store.ts teamMachines), so this is the switch alone.
+    if (!teamAccountRequired()) return null
+    return { code: 'TEAM_ACCOUNT_REQUIRED', reason: `This machine is not a Team machine of this Swarm, ${ONLY_OWN}.` }
+  }
   return teamWorkRefusal(pool, now, teamMachines.includes(machineId))
 }
 
