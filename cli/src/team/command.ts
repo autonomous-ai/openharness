@@ -339,6 +339,9 @@ function refusedLines(deps: TeamCommandDeps, inTerminal: boolean): string[] {
 
 interface MachineRow { machineId: string; computerId?: string | null; sessionKind?: string | null }
 
+/** A computer id as the backend keeps it (backend lib/deviceAuth.ts `normalizeComputerId`): lower case, no dashes. */
+const computerKey = (id: string | null | undefined): string => (id ?? '').trim().toLowerCase().replace(/-/g, '')
+
 /**
  * The team account's computer, off the owner's Harness account: the backend ends the team sign-in bound to it with it.
  * Only after the account is gone: a removal macOS refuses must leave the account signed in and running. Only a team
@@ -349,7 +352,8 @@ async function forgetTeamComputer(deps: TeamCommandDeps, computerId: string): Pr
   try {
     const { session, headers } = await deps.auth()
     const { machines = [] } = await deps.get<{ machines?: MachineRow[] }>('/api/machines', headers)
-    const ours = machines.filter((m) => m.computerId === computerId && m.sessionKind === 'team' && m.machineId !== session.machineId)
+    const key = computerKey(computerId)
+    const ours = machines.filter((m) => key !== '' && computerKey(m.computerId) === key && m.sessionKind === 'team' && m.machineId !== session.machineId)
     for (const machine of ours) await deps.delete(`/api/machines/${encodeURIComponent(machine.machineId)}`, headers)
     return { removed: ours.length }
   } catch (error) {

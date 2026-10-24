@@ -66,11 +66,13 @@ function fake(over: Partial<TeamCommandDeps> & { adminResult?: Awaited<ReturnTyp
   return { deps, out, err, built, prompts, vias, post, admin, status, session: () => session, setSession: (s: AuthSession | null) => { session = s } }
 }
 
-/** The owner's machines as the backend lists them: this computer, the team account's, and a dedicated Mac mini's. */
+/** The owner's machines as the backend lists them, computer ids lower case without dashes: this computer, the team
+ *  account's, and a dedicated Mac mini's. */
+const TEAM_COMPUTER = 'ebe7fc88-cd44-491f-aa61-9963fa0dfd82'
 const MACHINES = [
   { machineId: 'm1', computerId: 'c'.repeat(32), sessionKind: 'computer' },
-  { machineId: 'm-team', computerId: 'team-computer-1', sessionKind: 'team' },
-  { machineId: 'm-mini', computerId: 'mini-computer-1', sessionKind: 'team' },
+  { machineId: 'm-team', computerId: TEAM_COMPUTER.replace(/-/g, ''), sessionKind: 'team' },
+  { machineId: 'm-mini', computerId: 'a'.repeat(32), sessionKind: 'team' },
 ]
 
 const reported = (startedAt: number): TeamStatus => ({ version: 1, signIn: { state: 'signed-in', at: startedAt + 3_000 }, privacy: { passed: true, checkedAt: startedAt + 3_000 } })
@@ -271,7 +273,8 @@ describe('harness team status', () => {
 })
 
 describe('harness team remove', () => {
-  const removed = { ok: true as const, stdout: 'harness: deleted the account harnessteam\nharness: team computer team-computer-1\nharness: removed the Harness Team account, its home folder and its daemon\n' }
+  // The team daemon's computer id as its file holds it, with dashes; the backend lists it without (MACHINES).
+  const removed = { ok: true as const, stdout: `harness: deleted the account harnessteam\nharness: team computer ${TEAM_COMPUTER}\nharness: removed the Harness Team account, its home folder and its daemon\n` }
   const refused = { ok: false as const, code: 'FAILED' as const, status: 9,
     message: 'could not delete the account harnessteam: macOS did not allow it (eDSPermissionError). Nothing was removed: the Harness Team account and its daemon run as before' }
 
