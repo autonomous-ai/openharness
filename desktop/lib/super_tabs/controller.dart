@@ -151,7 +151,7 @@ class SuperTabController extends ChangeNotifier {
   int _uploadRun = 0;
   final _messages = <String, List<SuperTabMessage>>{};
   final _before = <String, int?>{};
-  final _reading = <String>{};
+  final _reading = <String, Future<void>>{};
   final expandedProjects = <String>{};
   final expandedMachines = <String>{};
   bool devicesSelected = false;
@@ -548,15 +548,18 @@ class SuperTabController extends ChangeNotifier {
     }
   }
 
-  Future<void> loadMessages(String id, {bool older = false}) async {
-    if (_disposed ||
-        accessRevoked ||
-        _reading.contains(id) ||
-        snapshot?.conversation(id) == null) {
+  /// Joins a read of [id] already under way, so a caller can wait for it.
+  Future<void> loadMessages(String id, {bool older = false}) =>
+      _reading[id] ??= _loadMessages(id, older: older).whenComplete(() {
+        // A block: whenComplete would wait on the removed future, itself.
+        _reading.remove(id);
+      });
+
+  Future<void> _loadMessages(String id, {required bool older}) async {
+    if (_disposed || accessRevoked || snapshot?.conversation(id) == null) {
       return;
     }
     if (older && !hasOlder(id)) return;
-    _reading.add(id);
     try {
       final known = _messages[id];
       final tail = known != null && known.isNotEmpty
@@ -650,8 +653,6 @@ class SuperTabController extends ChangeNotifier {
         unawaited(refresh());
       }
       _changed();
-    } finally {
-      _reading.remove(id);
     }
   }
 
