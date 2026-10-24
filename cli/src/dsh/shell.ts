@@ -5,8 +5,11 @@
  * same shell selection) `engineLaunch.ts` uses to exec an engine in a pane.
  */
 import { spawn, type ChildProcess } from 'node:child_process'
+import { existsSync } from 'node:fs'
+import { win32 } from 'node:path'
 import { harnessNodePrelude, interactiveEngineShell } from '../lib/engineLaunch.js'
 import { managedNodePath } from '../lib/nodeRuntime.js'
+import { shellSingleQuote } from '../lib/shellQuote.js'
 
 export interface DshCommandOptions {
   cwd: string
@@ -49,7 +52,8 @@ export function isKilledJobReport(line: string): boolean {
 }
 
 /**
- * `[path, ...args]` that runs `script` through the user's shell, or `/bin/sh -c` when none is known.
+ * `[path, ...args]` through Git Bash on Windows, or the user's shell on POSIX
+ * (with `/bin/sh -c` as the POSIX fallback).
  *
  * AS A LOGIN SHELL, whatever the shell. interactiveEngineShell gives bash `-ic` on purpose for a pane
  * (see tmuxOnPath.ts on why), but a bash user's PATH conventionally lives in `.bash_profile`, which
@@ -60,13 +64,56 @@ export function isKilledJobReport(line: string): boolean {
  * `-l` (a PATH built in .bashrc compounding across subshells) does not apply here.
  */
 export function dshShellArgv(script: string): { path: string; args: string[] } {
-  const shell = interactiveEngineShell()
   const body = `${dshNodeFallback()}\n${script}`
+  // The pane selector deliberately returns null on Windows. DSH hooks still need
+  // POSIX syntax, so use Git Bash rather than Windows' cmd/PowerShell or WSL bash.
+
+if (process.platform === 'win32') {
+  const bash = windowsBashPath()
+
+  if (!bash) {
+    throw new Error(
+      'DSH commands require Git Bash on Windows; install Git for Windows or set SHELL to its bash.exe'
+    )
+  }
+
+  // Git Bash may define node='winpty node.exe'.
+  // winpty cannot run without a terminal (DSH uses pipes).
+  // Remove the alias before checking Node and executing DSH hooks.
+  const windowsBody = [
+    'unalias node 2>/dev/null || true',
+    dshNodeFallback(),
+    script,
+  ].join('\n')
+
+  return { path: bash, args: ['-lic', windowsBody] }
+}
+
+  const shell = interactiveEngineShell()
   if (shell) {
     const args = shell.args.map((a) => (a === '-ic' ? '-lic' : a))
     return { path: shell.path, args: [...args, body] }
   }
   return { path: '/bin/sh', args: ['-c', body] }
+}
+
+function windowsBashPath(): string | null {
+  const configured = process.env.SHELL
+  const roots = [
+    process.env.ProgramFiles,
+    process.env['ProgramFiles(x86)'],
+    'C:\\Program Files',
+  ].filter((root): root is string => Boolean(root))
+  if (process.env.LOCALAPPDATA) roots.push(win32.join(process.env.LOCALAPPDATA, 'Programs'))
+  const candidates = roots.flatMap((root) => [win32.join(root, 'Git', 'bin', 'bash.exe'), win32.join(root, 'Git', 'usr', 'bin', 'bash.exe')])
+  // Accept an explicit native Bash path, never /bin/bash or System32's WSL launcher.
+  if (configured && /^[A-Za-z]:[\\/]/.test(configured) && /^bash(?:\.exe)?$/i.test(win32.basename(configured))) candidates.unshift(configured)
+  for (const dir of (process.env.PATH ?? '').split(';').filter(Boolean)) {
+    if (existsSync(win32.join(dir, 'git.exe'))) {
+      candidates.push(win32.resolve(dir, '..', 'bin', 'bash.exe'), win32.resolve(dir, '..', 'usr', 'bin', 'bash.exe'))
+    }
+  }
+  return candidates.find((candidate) => !/[\\/]Windows[\\/]System32[\\/]/i.test(candidate) && existsSync(candidate)) ?? null
 }
 
 /**
@@ -78,6 +125,11 @@ export function dshShellArgv(script: string): { path: string; args: string[] } {
  * files, so a profile that assigns PATH outright cannot drop it.
  */
 export function dshNodeFallback(): string {
+  if (process.platform === 'win32') {
+    // A native C:\\... path contains a PATH separator in Bash. cygpath also
+    // handles spaces, non-system drives and UNC paths in Git for Windows.
+    return `if ! command -v node >/dev/null 2>&1; then PATH="\${PATH:+$PATH:}$(cygpath -u -- ${shellSingleQuote(win32.dirname(managedNodePath()))})"; export PATH; fi`
+  }
   return harnessNodePrelude(managedNodePath()).trimEnd()
 }
 
@@ -102,7 +154,7 @@ export function runDshCommand(script: string, opts: DshCommandOptions): Promise<
     try {
       child = spawnDshCommand(script, { cwd: opts.cwd, env: opts.env })
     } catch (error) {
-      // spawn throws only Errors (an invalid argument: a NUL in the cwd, say).
+      // Shell resolution and invalid spawn arguments both use the same failure contract.
       const line = `could not start: ${(error as Error).message}`
       opts.onLine?.(line)
       resolve({ code: 127, signal: null, lines: [line], timedOut: false })
@@ -149,7 +201,10 @@ export function runDshCommand(script: string, opts: DshCommandOptions): Promise<
   })
 }
 
-/** SIGTERM the child's whole group, then SIGKILL what is left a moment later. */
+/** SIGTERM the child's whole group, then SIGKILL what is left a moment later.
+ * Windows has no POSIX process groups: the pid fallback stops the shell, but
+ * cannot guarantee termination of descendants. Tree termination needs a Job Object.
+ */
 export function killProcessGroup(child: ChildProcess, graceMs = 3_000): void {
   const pid = child.pid
   if (!pid) return
