@@ -72,9 +72,17 @@ class _UsageSubscriptionsState extends State<UsageSubscriptions> {
   );
 
   /// The tooltip's lines under its title: account, computers, status, resets. Not its last line,
-  /// which points at the footer's own details.
+  /// which points at the footer's own details, and not the figure the row already shows at its
+  /// end: "62% remaining · Running low" keeps only "Running low".
   static String _detail(WorkspaceSubscriptionAccount account) {
     final lines = account.detail.split('\n');
-    return lines.skip(1).take(lines.length - 2).join('\n');
+    final left = '${account.figure} remaining';
+    return [
+      for (final line in lines.skip(1).take(lines.length - 2))
+        if (!line.startsWith(left))
+          line
+        else if (line.startsWith('$left · '))
+          line.substring('$left · '.length),
+    ].join('\n');
   }
 }

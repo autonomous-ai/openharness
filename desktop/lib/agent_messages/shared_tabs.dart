@@ -11,7 +11,6 @@ typedef SharedTabsRequest = Future<Map<String, dynamic>> Function(
   Map<String, dynamic> payload,
 );
 
-/// A refused `share_*` action, with the daemon's code and a sentence to read.
 /// The line for a computer that holds the shared tabs and did not answer. On Desktop that is this
 /// computer's daemon. A browser runs none: it asks one of the account's computers, so it names
 /// none as "this computer".
@@ -21,6 +20,7 @@ String unreachableComputerFor({required bool viewer}) =>
 /// [unreachableComputerFor] for this build.
 final String unreachableComputer = unreachableComputerFor(viewer: kViewerMode);
 
+/// A refused `share_*` action, with the daemon's code and a sentence to read.
 class SharedTabsFailure implements Exception {
   const SharedTabsFailure(this.code, this.message);
 

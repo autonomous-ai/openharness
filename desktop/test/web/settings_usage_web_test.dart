@@ -60,10 +60,20 @@ void main() {
     final subscriptions = await mount(tester, [_claude(left: 62)]);
     expect(subscriptions.refreshes, 1);
     expect(find.text('Claude Code'), findsOneWidget);
+    // The figure once, at the row's end; the detail keeps only what it adds.
+    expect(find.textContaining('62%'), findsOneWidget);
     expect(find.text('62%'), findsOneWidget);
     expect(find.textContaining('Studio Mac'), findsOneWidget);
     expect(find.textContaining('sam@example.com'), findsOneWidget);
     expect(find.textContaining('Start your first harness'), findsNothing);
+  });
+
+  testWidgets('running low says so beside the figure, without repeating it', (
+    tester,
+  ) async {
+    await mount(tester, [_claude(left: 14)]);
+    expect(find.textContaining('14%'), findsOneWidget);
+    expect(find.textContaining('Running low'), findsOneWidget);
   });
 
   testWidgets('with none yet, says so instead of an empty box', (
