@@ -1661,6 +1661,26 @@ describe('machine.remove', () => {
       expect(f.state.machines).toEqual([])
     })
 
+  it('hands its cleanup to its host once when it comes back, and a second acknowledgement changes nothing', () => {
+    const f = fixture()
+    contribute(f, 'owner', 'host', null)
+    const removalId = f.run({ type: 'machine.remove', machineId: 'host' }).result.removalId as string
+    // While its host is away, more reads and changes never queue the cleanup twice.
+    const away = 1000 + 45_001
+    expect(visibleState(f.state, owner, away).machines).toEqual([])
+    f.run({ type: 'tab.rename', name: 'Still away' }, owner, { now: away })
+    f.run({ type: 'tab.rename', name: 'Away a day' }, owner, { now: 1000 + 86_400_000 })
+    expect(f.state.machineCleanups).toEqual([{ machineId: 'host', removalId, machineOwnerId: 'owner' }])
+    // It comes back, is handed that one cleanup, and acknowledges it: nothing comes back to life.
+    f.run(cleaned(removalId))
+    expect(f.state.machineCleanups).toBeUndefined()
+    expect(f.state.machines).toEqual([])
+    // A late second acknowledgement finds nothing left to undo.
+    expect(() => f.run(cleaned(removalId))).toThrow(expect.objectContaining({ code: 'NOT_FOUND' }))
+    expect(f.state.machines).toEqual([])
+    expect(f.state.machineCleanups).toBeUndefined()
+  })
+
   it('drops a machine already cleaning once it is offline, on the next read and on the next change', () => {
     const { f, removalId } = cleaning()
     const later = 1000 + 45_001
