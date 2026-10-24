@@ -5,11 +5,13 @@ import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/screens/login_screen.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/state/app_state.dart';
 import 'package:harness/widgets/login_fleet_map.dart';
+import 'package:harness/widgets/web_download_button.dart';
 
 import '../support/web_ux_app.dart';
 
@@ -137,5 +139,27 @@ void main() {
       tester.widget<LoginFleetMap>(find.byType(LoginFleetMap)).pinDetails,
       isTrue,
     );
+  });
+
+  // Found in review: Tab never reached Download app at the top.
+  testWidgets('Tab reaches Download app at the top', (tester) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.macOS;
+    await _open(tester);
+    bool focused() => Focus.of(
+      tester.element(
+        find.descendant(
+          of: find.byType(WebDownloadButton),
+          matching: find.byType(Text),
+        ),
+      ),
+    ).hasFocus;
+    var reached = false;
+    for (var i = 0; i < 20 && !reached; i++) {
+      await tester.sendKeyEvent(LogicalKeyboardKey.tab);
+      await tester.pump();
+      reached = focused();
+    }
+    expect(reached, isTrue);
+    debugDefaultTargetPlatformOverride = null;
   });
 }

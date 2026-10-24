@@ -64,27 +64,31 @@ class WebDownloadButton extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     grid.AppTheme.watch(context);
-    return Semantics(
-      link: true,
-      linkUrl: uri,
-      child: WorkspaceBarControl(
-        label: 'Download app',
-        onPressed: () => open(uri),
-        // Hover lifts the fill; the label keeps its weight. Turning bold under
-        // the pointer reflowed the word and read as a glitch, not a response.
-        builder: (context, hovered) => ColoredBox(
-          color: backgroundFor(prominent: prominent, hovered: hovered),
-          child: SizedBox(
-            width: widthOf(context),
-            height: workspaceBarControlHeight(context),
-            child: Center(
-              child: Text(
-                _text,
-                style: workspaceBarTextStyle(
-                  color: prominent
-                      ? WorkspaceShareButton.foregroundFor(true)
-                      : grid.AppPalette.textPrimary,
-                  emphasized: prominent,
+    // One node: the control's focus would otherwise be a nameless child of
+    // its label, and Tab would land on a "button" with no name.
+    return MergeSemantics(
+      child: Semantics(
+        link: true,
+        linkUrl: uri,
+        child: WorkspaceBarControl(
+          label: 'Download app',
+          onPressed: () => open(uri),
+          // Hover lifts the fill; the label keeps its weight. Turning bold under
+          // the pointer reflowed the word and read as a glitch, not a response.
+          builder: (context, hovered) => ColoredBox(
+            color: backgroundFor(prominent: prominent, hovered: hovered),
+            child: SizedBox(
+              width: widthOf(context),
+              height: workspaceBarControlHeight(context),
+              child: Center(
+                child: Text(
+                  _text,
+                  style: workspaceBarTextStyle(
+                    color: prominent
+                        ? WorkspaceShareButton.foregroundFor(true)
+                        : grid.AppPalette.textPrimary,
+                    emphasized: prominent,
+                  ),
                 ),
               ),
             ),
