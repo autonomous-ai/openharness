@@ -56,13 +56,14 @@ describe('canonical engine CLI commands', () => {
     expect(snapshot.engineFileKeys?.get('opencode')?.has(bash.fileKey)).toBe(false)
   })
 
-  it('keeps the user-facing 14-engine command contract exact and ordered', () => {
+  it('keeps the user-facing 15-engine command contract exact and ordered', () => {
     expect(PROCESS_ENGINES.map((engine) => [engine, ENGINE_CLI_COMMANDS[engine]])).toEqual([
       ['claude', 'claude'],
       ['codex', 'codex'],
       ['cursor', 'cursor-agent'],
       ['opencode', 'opencode'],
       ['pi', 'pi'],
+      ['omp', 'omp'],
       ['hermes', 'hermes'],
       ['commandcode', 'cmd'],
       ['devin', 'devin'],

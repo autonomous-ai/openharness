@@ -1048,7 +1048,9 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     const titles = await terminals.titles()
     // The machine's name now, beside every name it has had: a title that is one of them is refused.
     machineNames.observe()
-    if (titles.size === 0) return
+    // omp titles also come from its session file (sessionTitle.ts ompSessionTitle), so no terminal
+    // titles at all is not a reason to skip an omp session.
+    if (titles.size === 0 && !registry.list().some((session) => session.engine === 'omp')) return
     for (const session of registry.list()) {
       // Codex's own thread name when it has one; otherwise what the engine put on its terminal.
       const title = engineSessionTitle(session, terminals.titleFor(session, titles))

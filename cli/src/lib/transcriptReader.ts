@@ -20,6 +20,7 @@ import { CursorNormalizer } from '../engines/cursor/normalizer.js'
 import { GrokNormalizer } from '../engines/grok/normalizer.js'
 import { MuseNormalizer } from '../engines/muse/normalizer.js'
 import { PiNormalizer } from '../engines/pi/normalizer.js'
+import { OmpNormalizer } from '../engines/omp/normalizer.js'
 
 export type LineNormalizer = (line: string) => LiveEvent[]
 
@@ -55,6 +56,7 @@ export function lineNormalizer(engine: string, sessionId: string): LineNormalize
     // A Copilot session file holds its sub-agents' events too, and prompts nobody typed.
     case 'copilot': return kept(ingestWith(new CopilotNormalizer()), copilotOwnLine)
     case 'pi': return ingestWith(new PiNormalizer('live'))
+    case 'omp': return ingestWith(new OmpNormalizer('live'))
     case 'commandcode': return ingestWith(new CommandCodeNormalizer('live'))
     default: return null
   }

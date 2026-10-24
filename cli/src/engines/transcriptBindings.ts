@@ -1,4 +1,5 @@
 /** Eager native transcript authority shared by binding, Stop and resume preflight. */
+import { homedir } from 'node:os'
 import { basename, dirname, isAbsolute, join, relative } from 'node:path'
 import { env } from '../config/env.js'
 import { engineHomeSnapshot, sessionRoots, type EngineHomeSnapshot } from '../lib/engineHomes.js'
@@ -22,6 +23,7 @@ export const transcriptRoot: Readonly<Record<AgentEngine, (() => string) | 'stor
   copilot: () => join(env.COPILOT_HOME, 'session-state'),
   cursor: () => join(cursorDataDir(), 'projects'),
   pi: () => join(env.PI_HOME, 'agent', 'sessions'),
+  omp: () => join(homedir(), '.omp', 'agent', 'sessions'),
   commandcode: () => join(env.COMMANDCODE_HOME, 'projects'),
   claude: 'store',
   opencode: null, kilo: null, hermes: null, devin: null, terminal: null,

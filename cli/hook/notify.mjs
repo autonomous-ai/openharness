@@ -1392,7 +1392,7 @@ function mergeRuntimes(current, observed) {
 // as damaged, and a hook while the daemon was down then registered nothing at all: `terminal` was
 // missing, so one terminal open on the machine was enough (e2e/hookclient.e2e.ts).
 const REGISTRY_ENGINES = new Set([
-  'claude', 'codex', 'cursor', 'opencode', 'pi', 'hermes', 'commandcode', 'devin', 'muse', 'amp', 'kilo', 'grok',
+  'claude', 'codex', 'cursor', 'opencode', 'pi', 'omp', 'hermes', 'commandcode', 'devin', 'muse', 'amp', 'kilo', 'grok',
   'agy', 'copilot', 'terminal',
 ])
 

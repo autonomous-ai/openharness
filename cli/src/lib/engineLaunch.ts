@@ -44,6 +44,7 @@ export const BYPASS_PERMISSION_FLAGS: Readonly<Record<AgentEngine, string[] | nu
   opencode: ['--auto'],
   // No permission-prompt system to bypass (pi), or config-file based rather than a flag (hermes).
   pi: null,
+  omp: null,
   hermes: null,
   // Unconfirmed — do not guess a flag for a CLI we haven't verified.
   commandcode: null,
@@ -103,6 +104,8 @@ export const FIRST_PROMPT_ARGS: Readonly<Record<AgentEngine, readonly string[] |
   // No documented first-prompt argument for an interactive launch. Not guessed.
   cursor: null,
   pi: null,
+  // `omp --help`: ARGUMENTS MESSAGES. A bare positional starts the turn.
+  omp: [],
   // `hermes chat --help`: "-q, --query QUERY  Query to run. On a real TTY the prompt seeds an
   // interactive session (first turn)". Measured on a live pane: the prompt is answered and the TUI
   // stays open for the next turn, which is also what lets a fork of a Hermes agent hand off.
@@ -161,6 +164,7 @@ export const NAMED_AGENT_ARGS: Readonly<Record<AgentEngine, readonly string[] | 
   codex: null,
   cursor: null,
   pi: null,
+  omp: null,
   hermes: null,
   commandcode: null,
   devin: null,
