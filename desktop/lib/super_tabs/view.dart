@@ -742,25 +742,37 @@ class _SuperTabViewState extends State<SuperTabView>
       _showNotifications && !_devicesVisible && !c.accessRevoked;
 
   /// Opens the conversation a tag is in, at its message, replying to it. Older
-  /// pages are read until the message is among them.
+  /// pages are read first, until the message is among them; one that is not
+  /// found says so, and the list stays.
   Future<void> _openMention(SuperTabMention mention) async {
     final id = mention.conversationId;
     if (c.snapshot?.conversation(id) == null) return;
-    setState(() => _showNotifications = false);
-    c.select(id);
     SuperTabMessage? message;
-    // ponytail: up to 50 pages (5,000 messages) back; a deeper tag opens the
-    // conversation at its end.
+    // Up to 50 pages (5,000 messages) back.
     for (var page = 0; page < 50; page++) {
       await c.loadMessages(id, older: c.messages(id).isNotEmpty);
-      if (!mounted || c.selectedId != id) return;
+      if (!mounted) return;
       message = c
           .messages(id)
           .where((m) => m.id == mention.messageId)
           .firstOrNull;
       if (message != null || !c.hasOlder(id)) break;
     }
-    if (message == null) return;
+    if (message == null) {
+      ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+        SnackBar(
+          content: Text(
+            c.hasOlder(id)
+                ? 'This message is too far back to open.'
+                : 'This message is no longer in the conversation.',
+          ),
+        ),
+      );
+      return;
+    }
+    if (!_showNotifications) return;
+    _showNotifications = false;
+    c.select(id);
     setState(() {
       if (c.canWrite && c.selected?.archived == false) _replies[id] = message!;
       _target = message!.id;

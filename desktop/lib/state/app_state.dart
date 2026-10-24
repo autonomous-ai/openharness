@@ -1717,6 +1717,7 @@ class AppNotifier extends ChangeNotifier {
     storage: localStore ?? HarnessFileStore.shared,
     upload: uploadWith(() => api),
     onMention: superTabMentionNotice(systemNotifications),
+    onTagCounts: notifyListeners,
     discoveryInterval: kUnderTest ? Duration.zero : const Duration(seconds: 15),
     onTabs: (tabs, hidden) {
       // Discovery can finish while an already signed-in machine is re-seating

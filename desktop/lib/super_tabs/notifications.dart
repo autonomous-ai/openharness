@@ -49,7 +49,8 @@ void Function(SuperTabMention)? superTabMentionNotice(
       );
 
 /// The reader's tags in one Swarm: Waiting and Earlier, read from the backend
-/// whenever the Swarm's waiting count moves. One per controller.
+/// whenever the Swarm changes while a tag waits or the count moves. One per
+/// controller.
 class SuperTabMentions extends ChangeNotifier {
   SuperTabMentions._(this.controller) {
     controller.addListener(_changed);
@@ -68,33 +69,61 @@ class SuperTabMentions extends ChangeNotifier {
   List<SuperTabMention> waiting = const [], earlier = const [];
   String? error;
   int? _count;
+  int _revision = -1;
   // Null until the first read: tags waiting then are not news.
   Set<String>? _seen;
   Future<void>? _loading;
+  // Something changed while a read was under way: read once more after it.
+  bool _dirty = false;
+
+  /// Starts from tags already announced elsewhere, so they are not news here.
+  void seen(Set<String>? ids) {
+    if (ids != null) _seen = {...?_seen, ...ids};
+  }
 
   String get _path =>
       '/api/super-tabs/${Uri.encodeComponent(controller.tabId)}';
 
+  /// A tag can arrive while another is answered, leaving the count as it was,
+  /// so any change of the Swarm is read while a tag waits. With none waiting
+  /// and none answered (an idle Swarm, or a backend before tags) nothing is.
   void _changed() {
-    final count = controller.snapshot?.mentionsWaiting;
-    if (count == null || count == _count) return;
+    final snapshot = controller.snapshot;
+    if (snapshot == null || controller.revision == _revision) return;
+    _revision = controller.revision;
+    final count = snapshot.mentionsWaiting;
+    final moved = count != _count;
     _count = count;
-    if (count == 0 && _seen == null) {
-      // Nothing waits: an older backend, or no tags yet. Nothing to read.
-      _seen = {};
+    if (count == 0 && (!moved || _seen == null)) {
+      _seen ??= {};
       return;
     }
     unawaited(load());
   }
 
-  Future<void> load() =>
-      _loading ??= _read().whenComplete(() => _loading = null);
+  /// Joins a read under way, and has it read once more when asked again.
+  Future<void> load() {
+    if (_loading case final running?) {
+      _dirty = true;
+      return running;
+    }
+    return _loading = () async {
+      do {
+        _dirty = false;
+        await _read();
+      } while (_dirty);
+    }().whenComplete(() => _loading = null);
+  }
 
   Future<List<SuperTabMention>> _list(String state) async {
-    final answer = await controller.request(
-      'GET',
-      '$_path/mentions?state=$state',
-    );
+    final Map<String, dynamic> answer;
+    try {
+      answer = await controller.request('GET', '$_path/mentions?state=$state');
+    } on SuperTabFailure catch (failure) {
+      // A backend from before tags has no list: there is nothing to show.
+      if (failure.statusCode == 404) return const [];
+      rethrow;
+    }
     return List.unmodifiable([
       for (final row in answer['mentions'] as List)
         SuperTabMention.fromJson(superTabMap(row)),
