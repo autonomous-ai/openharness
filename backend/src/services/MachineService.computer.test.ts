@@ -12,12 +12,16 @@ const create = vi.hoisted(() => vi.fn())
 const planFindFirst = vi.hoisted(() => vi.fn())
 const redisSet = vi.hoisted(() => vi.fn())
 const consumeNewIdQuota = vi.hoisted(() => vi.fn())
+const findUnique = vi.hoisted(() => vi.fn())
+const update = vi.hoisted(() => vi.fn())
+const sessionUpdateMany = vi.hoisted(() => vi.fn())
 
 vi.mock('../lib/prisma.js', () => ({
   machineAlive: {},
   prisma: {
-    machine: { findMany, count, create, findUnique: vi.fn() },
+    machine: { findMany, count, create, findUnique, update },
     subscriptionPlan: { findFirst: planFindFirst },
+    harnessSession: { updateMany: sessionUpdateMany },
   },
 }))
 vi.mock('../lib/bus.js', () => ({
@@ -76,5 +80,79 @@ describe('resolveOrCreateForComputer', () => {
     count.mockResolvedValue(20)
     await expect(resolve()).rejects.toMatchObject({ statusCode: 409, code: 'TOO_MANY_MACHINES' })
     expect(consumeNewIdQuota).not.toHaveBeenCalled()
+  })
+})
+
+// A Mac's team account (lib/teamSession.ts): its daemon becomes its own computer's machine, marked `team`, and never
+// one of the person's machines.
+describe('resolveForTeamComputer', () => {
+  const TEAM = 'b'.repeat(32)
+  const team = { sub: 'u1', email: 'u1@example.com', role: 'user', autonomousEnv: 'prod' as const,
+    harnessSessionId: 'team-session', harnessSessionKind: 'team' as const, harnessComputerId: TEAM }
+
+  it('creates its computer\'s machine as a team machine', async () => {
+    const out = await machineService.resolveForTeamComputer(team, TEAM, 'MacBook Pro · Team')
+    expect(out.created).toBe(true)
+    expect(create).toHaveBeenCalledWith({ data: expect.objectContaining({ userId: 'u1', computerId: TEAM, sessionKind: 'team' }) })
+  })
+
+  it('reuses its team machine', async () => {
+    findMany.mockResolvedValue([{ machineId: 'm1', billingStatus: 'not_required', sessionKind: 'team' }])
+    expect(await machineService.resolveForTeamComputer(team, TEAM, 'x')).toMatchObject({ created: false, machine: { machineId: 'm1' } })
+  })
+
+  it('refuses any other computer, and any session that is not a team one, before looking anything up', async () => {
+    await expect(machineService.resolveForTeamComputer(team, COMPUTER, 'x')).rejects.toMatchObject({ statusCode: 403, code: 'TEAM_SESSION_LIMITED' })
+    const { harnessSessionKind: _kind, ...computer } = team
+    await expect(machineService.resolveForTeamComputer(computer, TEAM, 'x')).rejects.toMatchObject({ statusCode: 403 })
+    expect(findMany).not.toHaveBeenCalled()
+  })
+
+  it('refuses a computer the account runs under a normal sign-in, rows from before the kind was kept included', async () => {
+    for (const sessionKind of ['computer', null, undefined]) {
+      findMany.mockResolvedValue([{ machineId: 'm1', billingStatus: 'not_required', sessionKind }])
+      await expect(machineService.resolveForTeamComputer(team, TEAM, 'x')).rejects.toMatchObject({ statusCode: 403, code: 'TEAM_SESSION_LIMITED' })
+    }
+    expect(create).not.toHaveBeenCalled()
+  })
+})
+
+describe('destroying a team machine', () => {
+  beforeEach(async () => {
+    const bus = await import('../lib/bus.js')
+    vi.mocked(bus.publishDown).mockResolvedValue(1 as never)
+    vi.mocked(bus.clearAgentPresence).mockResolvedValue(undefined as never)
+  })
+
+  it('signs its team account out with it, so it cannot come back as a new machine', async () => {
+    findUnique.mockResolvedValue({ machineId: 'm1', userId: 'u1', managerId: '', authMode: 'remote', billingStatus: 'not_required',
+      autonomousEnv: 'prod', computerId: 'b'.repeat(32), sessionKind: 'team' })
+    update.mockResolvedValue({})
+    sessionUpdateMany.mockResolvedValue({ count: 1 })
+    await machineService.destroy('a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4', { sub: 'u1', role: 'user', autonomousEnv: 'prod' })
+    expect(sessionUpdateMany).toHaveBeenCalledWith({
+      where: { userId: 'u1', kind: 'team', computerId: 'b'.repeat(32), OR: [{ revokedAt: null }, { revokedAt: { isSet: false } }] },
+      data: { revokedAt: expect.any(Date) },
+    })
+  })
+
+  it('signs its computer\'s team account out even when a normal sign-in served the row last', async () => {
+    findUnique.mockResolvedValue({ machineId: 'm1', userId: 'u1', managerId: '', authMode: 'remote', billingStatus: 'not_required',
+      autonomousEnv: 'prod', computerId: 'a'.repeat(32), sessionKind: 'computer' })
+    update.mockResolvedValue({})
+    sessionUpdateMany.mockResolvedValue({ count: 0 })
+    await machineService.destroy('a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4', { sub: 'u1', role: 'user', autonomousEnv: 'prod' })
+    // Only team sessions bound to that computer: a computer's or a phone's own sign-in is not touched.
+    expect(sessionUpdateMany).toHaveBeenCalledWith({
+      where: { userId: 'u1', kind: 'team', computerId: 'a'.repeat(32), OR: [{ revokedAt: null }, { revokedAt: { isSet: false } }] },
+      data: { revokedAt: expect.any(Date) },
+    })
+  })
+
+  it('touches no session for a machine with no computer', async () => {
+    findUnique.mockResolvedValue({ machineId: 'm1', userId: 'u1', managerId: '', authMode: 'remote', billingStatus: 'not_required', autonomousEnv: 'prod' })
+    update.mockResolvedValue({})
+    await machineService.destroy('a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4', { sub: 'u1', role: 'user', autonomousEnv: 'prod' })
+    expect(sessionUpdateMany).not.toHaveBeenCalled()
   })
 })

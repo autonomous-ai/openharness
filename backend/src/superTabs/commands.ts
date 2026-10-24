@@ -1161,7 +1161,11 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
         if (state.conversations.some(c => activeWork(c) && c.assignment?.agentId === target.id)) fail('WORK_ACTIVE', 'Finish active work before stopping this worker.')
         // Administrative withdrawal never attests physical stopping or releases native capacity.
         if (hostStop) releaseHarness(state, target.machineId, target.harnessId)
-        if (actor.kind === 'agent') result.releasedBy = actor.machineOwnerId
+        if (actor.kind === 'agent') {
+          result.releasedBy = actor.machineOwnerId
+          // Which machine confirmed it: a team session's retry is answered only for its own (store.ts).
+          result.releasedMachineId = target.machineId
+        }
         if (forceStop) result.forceReleased = target.id
       } else if (target.workDecision === 'stop') {
         fail('FORBIDDEN', 'Only its contributor or tab owner can force-withdraw a stopping worker.', 403)

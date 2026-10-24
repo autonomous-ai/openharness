@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto'
 import type { Prisma, PrismaClient, SuperTab, SuperTabDelivery, SuperTabMessage } from '@prisma/client'
 import type { AuthUser } from '../lib/ssoAuth.js'
 import { machineAlive } from '../lib/prisma.js'
+import { isTeamSession, teamMachine, TEAM_SESSION_LIMITED, TEAM_SESSION_MESSAGE } from '../lib/teamSession.js'
 import { machineShareGrant, sharedVia } from '../lib/machineSharePolicy.js'
 import { machineBillingAllowsDataPlane } from '../lib/billingState.js'
 import { applyCommand, authorizeCommandAccess, operationSchema, PAIR_CHAIN_LIMIT, postable, type Command, type CommandContext } from './commands.js'
@@ -119,12 +120,68 @@ export class SuperTabStore {
       row: async (tx, user, tabId) => { const row = await this.row(tx, user, tabId); return { row, state: stateOf(row) } },
       agentGrant: (tx, state, target) => this.agentGrant(tx, state, target),
       contribution: (tx, state, actor, command) => this.contribution(tx, state, actor, command),
+      teamHost: (tx, user) => this.teamHost(tx, user),
     })
+  }
+
+  // ── A Mac's team account (lib/teamSession.ts) ────────────────────────────────────────────────────
+  // Its daemon is signed in as the person, so `user.sub` alone would let it speak for the person and for every machine
+  // of theirs. It may host only its own machine and speak only as the agents running there.
+
+  /** The one machine a team session hosts for; null for any other sign-in. One with no machine to act for does nothing. */
+  private async teamHost(tx: Transaction, user: AuthUser): Promise<string | null> {
+    if (!isTeamSession(user)) return null
+    return (await teamMachine(user, tx))?.machineId ?? fail(TEAM_SESSION_LIMITED, TEAM_SESSION_MESSAGE, 403)
+  }
+
+  /** A host route of a team session must name its own machine. */
+  private async hostFor(tx: Transaction, user: AuthUser, machineId: string): Promise<void> {
+    const team = await this.teamHost(tx, user)
+    if (team !== null && team !== machineId) fail(TEAM_SESSION_LIMITED, TEAM_SESSION_MESSAGE, 403)
+  }
+
+  /** What only the person does: a team session has no person to be. */
+  private personOnly(user: AuthUser): void {
+    if (isTeamSession(user)) fail(TEAM_SESSION_LIMITED, TEAM_SESSION_MESSAGE, 403)
+  }
+
+  /**
+   * What a team session's agent may command beyond the Swarm's own rules for that agent: a machine is the person's to
+   * contribute, pause or remove, and nothing may start, add, move or drive an agent on another machine. Messages and
+   * work reports go to the Swarm as from any agent. An agent that is gone is left to the command's own answer.
+   */
+  private teamCommand(state: SuperTabState, team: string, user: AuthUser, command: Command): void {
+    const refuse = () => fail(TEAM_SESSION_LIMITED, TEAM_SESSION_MESSAGE, 403)
+    const onTeam = (agentId: string) => {
+      const target = state.agents.find(a => a.id === agentId)
+      if (target && target.machineId !== team) refuse()
+    }
+    switch (command.type) {
+      case 'machine.contribute': case 'machine.pause': case 'machine.remove': return refuse()
+      case 'machine.cleaned': case 'tab.project': case 'agent.add':
+        if (command.machineId !== team) refuse()
+        return
+      case 'agent.rebind':
+        if (command.machineId !== team) refuse()
+        return onTeam(command.agentId)
+      case 'agent.start':
+        if (command.request.machineId !== team) refuse()
+        return
+      case 'agent.screen': case 'agent.input': case 'work.assign': case 'conversation.agent':
+      case 'agent.release': case 'agent.stopLease': case 'agent.remove':
+        return onTeam(command.agentId)
+      case 'agent.sessionClosed': {
+        const closing = state.closingSessions?.find(c => c.agentId === command.agentId && c.harnessId === command.harnessId && c.machineOwnerId === user.sub)
+        if (closing && closing.machineId !== team) refuse()
+        return
+      }
+    }
   }
 
   private policyId(user: AuthUser) { return stableId('routing-policy', user.sub, user.autonomousEnv) }
 
   async accountPolicy(user: AuthUser) {
+    this.personOnly(user)
     const row = await this.db.routingPolicy.findUnique({ where: { id: this.policyId(user) } })
     if (!row) return { policy: DEFAULT_ROUTING_POLICY, revision: 0, isDefault: true }
     const { policy } = effectivePolicy(row.policy, null)
@@ -132,6 +189,7 @@ export class SuperTabStore {
   }
 
   async saveAccountPolicy(user: AuthUser, revision: number, input: RoutingPolicy) {
+    this.personOnly(user)
     const policy = routingPolicySchema.parse(input)
     return transaction(this.db, async tx => {
       const id = this.policyId(user)
@@ -163,9 +221,16 @@ export class SuperTabStore {
   }
 
   private async actor(tx: Transaction, user: AuthUser, state: SuperTabState, agentId?: string): Promise<Actor> {
-    if (!agentId) return { kind: 'person', userId: user.sub, email: user.email }
+    const team = await this.teamHost(tx, user)
+    if (!agentId) {
+      // A team session never speaks or reads as the person.
+      if (team !== null) fail(TEAM_SESSION_LIMITED, TEAM_SESSION_MESSAGE, 403)
+      return { kind: 'person', userId: user.sub, email: user.email }
+    }
     const target = agent(state, agentId)
     if (target.machineOwnerId !== user.sub) fail('FORBIDDEN', 'Only the execution host can speak as this agent.', 403)
+    // ...and as an agent only one running on its own machine, never the person's agents elsewhere.
+    if (team !== null && target.machineId !== team) fail(TEAM_SESSION_LIMITED, TEAM_SESSION_MESSAGE, 403)
     await this.agentGrant(tx, state, target)
     return { kind: 'agent', agentId, machineOwnerId: user.sub }
   }
@@ -213,6 +278,7 @@ export class SuperTabStore {
   }
 
   async create(user: AuthUser, operationId: string, name: string, projectVisibility?: ProjectVisibility) {
+    this.personOnly(user)
     const id = stableId('super-tab', user.autonomousEnv, user.sub, operationId)
     const requestHash = hash({ name, ...(projectVisibility ? { projectVisibility } : {}) })
     return transaction(this.db, async tx => {
@@ -229,6 +295,7 @@ export class SuperTabStore {
   }
 
   async list(user: AuthUser, after?: string) {
+    this.personOnly(user)
     const rows = await this.db.superTab.findMany({ where: { autonomousEnv: user.autonomousEnv, memberIds: { has: user.sub },
       ...(after ? { id: { gt: after } } : {}) }, orderBy: { id: 'asc' }, take: 101 })
     return { tabs: rows.slice(0, 100).map(row => {
@@ -238,6 +305,7 @@ export class SuperTabStore {
   }
 
   async invitations(user: AuthUser) {
+    this.personOnly(user)
     const email = user.email.trim().toLowerCase()
     const rows = await this.db.superTab.findMany({ where: { autonomousEnv: user.autonomousEnv, invitedEmails: { has: email } }, take: 100 })
     return rows.flatMap(row => {
@@ -248,6 +316,7 @@ export class SuperTabStore {
   }
 
   async sharing(user: AuthUser, tabId: string) {
+    this.personOnly(user)
     return transaction(this.db, async tx => {
       const state = stateOf(await this.row(tx, user, tabId))
       requireSharingOwner(state, user.sub)
@@ -256,6 +325,7 @@ export class SuperTabStore {
   }
 
   async saveSharing(user: AuthUser, tabId: string, input: SaveSharing) {
+    this.personOnly(user)
     const request = saveSharingSchema.parse(input)
     return transaction(this.db, async tx => {
       const row = await this.row(tx, user, tabId), state = stateOf(row)
@@ -280,6 +350,7 @@ export class SuperTabStore {
 
   /** A signed-in preview contains no projects, people, machines, or conversation data. It never joins. */
   async previewJoin(user: AuthUser, tabId: string, token?: string) {
+    this.personOnly(user)
     return transaction(this.db, async tx => {
       const state = stateOf(await this.row(tx, user, tabId))
       const sharing = authorizeSwarmJoin(state, user.email, token)
@@ -289,6 +360,7 @@ export class SuperTabStore {
   }
 
   async join(user: AuthUser, tabId: string, input: JoinSwarm) {
+    this.personOnly(user)
     const request = joinSwarmSchema.parse(input)
     return transaction(this.db, async tx => {
       const row = await this.row(tx, user, tabId), state = stateOf(row)
@@ -366,15 +438,19 @@ export class SuperTabStore {
     return transaction(this.db, async tx => {
       const row = await this.row(tx, user, tabId)
       const original = stateOf(row)
+      const team = await this.teamHost(tx, user)
       // Removal retries can arrive after the actor itself left. Return only this host's exact prior receipt.
       if (command.type === 'agent.remove' && asAgentId === command.agentId && !original.agents.some(a => a.id === asAgentId)) {
         const prior = await tx.superTabOperation.findUnique({ where: { id: stableId(tabId, `agent:${asAgentId}`, operationId) } })
-        if (prior && prior.requestHash === hash(command) && (prior.result as Record<string, unknown>).releasedBy === user.sub) {
+        const result = prior?.result as Record<string, unknown> | undefined
+        // A team session's only if the removed agent ran on its machine; a receipt from before that was recorded is not.
+        if (prior && prior.requestHash === hash(command) && result?.releasedBy === user.sub && (team === null || result.releasedMachineId === team)) {
           return { revision: prior.revision, result: prior.result }
         }
         fail('FORBIDDEN', 'Only the execution host can confirm this removal.', 403)
       }
       if (hostMachineId && !['agent.startDispatch', 'agent.started', 'agent.startFailed', 'agent.startSettled', 'route.modelResult'].includes(command.type)) fail('FORBIDDEN', 'A host can only settle its queued starts.', 403)
+      if (team !== null && !hostMachineId) this.teamCommand(original, team, user, command)
       // A removed agent's or machine's host confirms its close or cleanup as the machine owner, who may have left the Swarm with it.
       const actor: Actor = command.type === 'agent.sessionClosed' || command.type === 'machine.cleaned' ? { kind: 'person', userId: user.sub, email: user.email }
         : hostMachineId && 'startId' in command
@@ -758,9 +834,13 @@ export class SuperTabStore {
       const unavailable = () => fail('NOT_FOUND', 'This role is unavailable.', 404)
       const project = projectsOf(state).find(p => p.id === projectId) ?? unavailable()
       const role = project.roles?.find(r => r.id === roleId) ?? unavailable()
+      const team = await this.teamHost(tx, user)
       if (asAgentId) {
         await this.actor(tx, user, state, asAgentId)
         if (ledProject(state, asAgentId)?.id !== project.id) unavailable()
+      } else if (team !== null) {
+        // A team session is never the project's owner: it reads a text only for an agent its own machine hosts.
+        if (!await this.hostsProject(tx, state, user, project.id, team)) unavailable()
       } else if (!(user.sub === project.ownerId && state.people.some(p => p.id === user.sub)) && !await this.hostsProject(tx, state, user, project.id)) {
         unavailable()
       }
@@ -770,9 +850,11 @@ export class SuperTabStore {
     })
   }
 
-  /** Whether this account could host one of the project's agents now, by the same live grant as its host reads. */
-  private async hostsProject(tx: Transaction, state: SuperTabState, user: AuthUser, projectId: string): Promise<boolean> {
-    for (const target of state.agents.filter(a => a.machineOwnerId === user.sub && agentProjectId(state, a) === projectId)) {
+  /** Whether this account could host one of the project's agents now, by the same live grant as its host reads; on
+   *  [machineId] alone when given. */
+  private async hostsProject(tx: Transaction, state: SuperTabState, user: AuthUser, projectId: string, machineId?: string): Promise<boolean> {
+    for (const target of state.agents.filter(a => a.machineOwnerId === user.sub && (!machineId || a.machineId === machineId)
+      && agentProjectId(state, a) === projectId)) {
       try { agent(state, target.id); await this.agentGrant(tx, state, target); return true }
       catch (error) { if (!(error instanceof SuperTabError)) throw error }
     }
@@ -823,6 +905,7 @@ export class SuperTabStore {
    * requester changed, is answered with the reason instead, so input is never typed late or into another pane. */
   async hostTerminal(user: AuthUser, machineId: string) {
     return transaction(this.db, async tx => {
+      await this.hostFor(tx, user, machineId)
       const owned = await tx.machine.findFirst({ where: { machineId, userId: user.sub, autonomousEnv: user.autonomousEnv, ...machineAlive } })
       if (!owned || !machineBillingAllowsDataPlane(owned)) fail('HOST_UNAVAILABLE', 'This execution host is unavailable.', 403)
       const now = this.now()
@@ -921,6 +1004,7 @@ export class SuperTabStore {
 
   /** The caller's own tags in this Swarm, newest first: still waiting, or answered and marked done. */
   async mentions(user: AuthUser, tabId: string, state: 'waiting' | 'earlier') {
+    this.personOnly(user)
     return transaction(this.db, async tx => {
       const row = await this.row(tx, user, tabId)
       return { mentions: await listMentions(tx, tabId, stateOf(row), { kind: 'person', userId: user.sub, email: user.email }, this.now(), state === 'waiting') }
@@ -969,6 +1053,7 @@ export class SuperTabStore {
   /** Narrow authority: the machine owner can finish a specific queued start,
    * never submit arbitrary commands as its initiating person or lead. */
   private async poolHostActor(tx: Transaction, user: AuthUser, state: SuperTabState, machineId: string, startId: string): Promise<Actor> {
+    await this.hostFor(tx, user, machineId)
     const start = state.starts?.find(s => s.id === startId) ?? fail('NOT_FOUND', 'This start is unavailable.', 404)
     const pool = machineContribution(state, machineId)
     if (!pool || pool.contributorId !== user.sub || pool.generation !== start.poolGeneration || start.request.machineId !== machineId || start.machineOwnerId !== user.sub) {
@@ -991,6 +1076,7 @@ export class SuperTabStore {
 
   async hostPools(user: AuthUser, machineId: string) {
     return transaction(this.db, async tx => {
+      await this.hostFor(tx, user, machineId)
       const owned = await tx.machine.findFirst({ where: { machineId, userId: user.sub, autonomousEnv: user.autonomousEnv, ...machineAlive } })
       if (!owned || !machineBillingAllowsDataPlane(owned)) fail('HOST_UNAVAILABLE', 'This execution host is unavailable.', 403)
       const rows = await tx.superTab.findMany({ where: { autonomousEnv: user.autonomousEnv, machineIds: { has: machineId } }, ...HOST_TABS })
@@ -1026,6 +1112,7 @@ export class SuperTabStore {
 
   /** The owner's Swarms with the Local models add-on: what the owner's computer creates on grid and keeps in step. */
   async hostGrids(user: AuthUser) {
+    this.personOnly(user)
     const rows = await this.db.superTab.findMany({ where: { autonomousEnv: user.autonomousEnv, ownerId: user.sub }, take: 100 })
     return rows.flatMap(row => swarmGridRow(row.id, stateOf(row)) ?? [])
   }
@@ -1033,6 +1120,7 @@ export class SuperTabStore {
   async observeMachine(user: AuthUser, tabId: string, machineId: string, input: MachineObservation) {
     const observation = machineObservationSchema.parse(input)
     return transaction(this.db, async tx => {
+      await this.hostFor(tx, user, machineId)
       const row = await this.row(tx, user, tabId), state = structuredClone(stateOf(row))
       const pool = machineContribution(state, machineId)
       if (!pool || pool.contributorId !== user.sub || pool.generation !== observation.generation) fail('CONTRIBUTION_REVOKED', 'Read the current machine contribution.', 403)
@@ -1049,7 +1137,9 @@ export class SuperTabStore {
         return { revision: row.revision + 1 }
       }
       recordAgentPresence(state, machineId, observation.runningHarnessIds, now)
-      pool.observation = { ...observation, quotas: observation.quotas.filter(q => contributedEngines(pool, observation).includes(q.engine)), receivedAt: now }
+      pool.observation = { ...observation, quotas: observation.quotas.filter(q => contributedEngines(pool, observation).includes(q.engine)), receivedAt: now,
+        // How the machine is signed in, from the session that reported and never from the report (lib/teamSession.ts).
+        sessionKind: isTeamSession(user) ? 'team' : 'computer' }
       // Current-generation physical stop proof also finishes a close whose membership was already withdrawn.
       for (const proof of observation.stoppedReservations ?? []) {
         if (!observation.stoppedHarnessIds.includes(proof.harnessId)) continue
@@ -1069,6 +1159,7 @@ export class SuperTabStore {
 
   async hostTabs(user: AuthUser, machineId: string) {
     return transaction(this.db, async tx => {
+      await this.hostFor(tx, user, machineId)
       const owned = await tx.machine.findFirst({ where: { machineId, userId: user.sub, autonomousEnv: user.autonomousEnv, ...machineAlive } })
       if (!owned || !machineBillingAllowsDataPlane(owned)) fail('HOST_UNAVAILABLE', 'This execution host is unavailable.', 403)
       const rows = await tx.superTab.findMany({ where: { autonomousEnv: user.autonomousEnv, machineIds: { has: machineId } }, ...HOST_TABS })
@@ -1121,6 +1212,8 @@ export class SuperTabStore {
   }
 
   async mayObserve(user: AuthUser, tabId: string, machineId: string, harnessId: string, machineOwnerId: string): Promise<boolean> {
+    // Watching is a person's: a team session has no person to watch as.
+    if (isTeamSession(user)) return false
     try {
       return await transaction(this.db, async tx => {
         const state = stateOf(await this.row(tx, user, tabId))
@@ -1139,6 +1232,7 @@ export class SuperTabStore {
    * its outstanding native sessions, without regaining conversation access. */
   async hostAssignments(user: AuthUser, machineId: string) {
     return transaction(this.db, async tx => {
+      await this.hostFor(tx, user, machineId)
       const owned = await tx.machine.findFirst({ where: { machineId, userId: user.sub, autonomousEnv: user.autonomousEnv, ...machineAlive } })
       if (!owned || !machineBillingAllowsDataPlane(owned)) fail('HOST_UNAVAILABLE', 'This execution host is unavailable.', 403)
       const rows = await tx.superTab.findMany({ where: { autonomousEnv: user.autonomousEnv, machineIds: { has: machineId } }, ...HOST_TABS })
@@ -1223,6 +1317,7 @@ export class SuperTabStore {
       const previous = state.agents.find(a => a.id === agentId && a.membershipGeneration === row.membershipGeneration)
       const owner = row.machineOwnerId ?? previous?.machineOwnerId
       if (owner !== user.sub) fail('FORBIDDEN', 'Only the recorded execution host can read this receipt.', 403)
+      await this.hostFor(tx, user, row.machineId)
       const machine = await tx.machine.findFirst({ where: { machineId: row.machineId, userId: owner,
         autonomousEnv: user.autonomousEnv, ...machineAlive } })
       if (!machine || !machineBillingAllowsDataPlane(machine)) fail('HOST_UNAVAILABLE', 'This execution host is unavailable.', 403)
@@ -1306,6 +1401,7 @@ export class SuperTabStore {
       const assignment = group?.assignment
       if (!assignment || assignment.execution.machineOwnerId !== user.sub) fail('FORBIDDEN', 'Only the execution host can confirm this stop.', 403)
       const execution = assignment.execution
+      await this.hostFor(tx, user, execution.machineId)
       const machine = await tx.machine.findFirst({ where: { machineId: execution.machineId, userId: user.sub, autonomousEnv: user.autonomousEnv, ...machineAlive } })
       if (!machine) fail('HOST_UNAVAILABLE', 'This execution host is unavailable.', 403)
       const id = stableId('stop', tabId, assignmentId)

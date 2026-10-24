@@ -15,7 +15,9 @@ export interface ContributedMachine {
   engines: string[]
   maxAgents: number
   paused: boolean
-  observation?: MachineObservation & { receivedAt: number }
+  /** `sessionKind` is how the reporting machine is signed in, stamped from its session by the store, never taken from
+   *  the report: `team` for a Mac's team account (lib/teamSession.ts), `computer` for any other. Absent on older readings. */
+  observation?: MachineObservation & { receivedAt: number; sessionKind?: 'team' | 'computer' }
   /** Set by machine.remove: an online machine stays listed, paused, while its host deletes the Swarm's folders there, until
    *  the host says it cleaned up (machine.cleaned) or REMOVAL_FALLBACK_MS passes. An offline one leaves the list at once and
    *  its cleanup waits for its host (expireRemovals). */

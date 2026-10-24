@@ -14,6 +14,8 @@ import { env } from '../config/env.js'
 import { encryptMachineCredential } from '../lib/machineCredential.js'
 import { machineBillingService } from './MachineBillingService.js'
 import { storedAutonomousEnvironment, type AutonomousEnvironment } from '../lib/autonomousEnvironment.js'
+import { TEAM_SESSION_LIMITED, TEAM_SESSION_MESSAGE } from '../lib/teamSession.js'
+import type { AuthUser } from '../lib/ssoAuth.js'
 
 /** The agent's tier / how it runs Claude, resolved through its plan.
  *  'self' | 'managed' = a docker agent-node on a manager host; 'remote' = the user's own computer
@@ -55,6 +57,9 @@ export interface OwnerMachine {
   // Hostname of the COMPUTER on its last connect (remote machines) — secondary detail on the card,
   // never the name. Null if no computer has ever connected.
   hostname: string | null
+  // How that computer signed in on its last connect: `team` for a Mac's team account (lib/teamSession.ts),
+  // `computer` for any other sign-in, null before it was recorded.
+  sessionKind: 'team' | 'computer' | null
 }
 
 interface PlanInfo {
@@ -90,6 +95,7 @@ function toOwner(b: Machine, status = 'unknown', agentCount = 0, plan?: PlanInfo
     engine: normalizeEngine(engine),
     name: b.name ?? null,
     hostname: b.hostname ?? null,
+    sessionKind: b.sessionKind === 'team' || b.sessionKind === 'computer' ? b.sessionKind : null,
   }
 }
 
@@ -419,6 +425,8 @@ export const machineService = {
     computerId: string,
     label: string,
     claimedMachineId?: string,
+    /** How the computer is signing in, recorded on a machine created now (`Machine.sessionKind`). */
+    sessionKind?: 'team' | 'computer',
   ): Promise<{ machine: Machine; created: boolean }> {
     // A caller that still holds a machine id we have DELETED must be told so, never quietly given a
     // new machine. Deletion is soft, so `machineAlive` below simply does not find the old row — and
@@ -491,12 +499,34 @@ export const machineService = {
           // Seeded from the computer's hostname so the card is never a bare id. The owner can rename it;
           // a later connect only ever refreshes `hostname`, never this.
           name: label.trim().slice(0, 120) || null,
+          ...(sessionKind ? { sessionKind } : {}),
         },
       })
       await publishDeviceMachineListChanged(userId, { reason: 'created' }).catch(() => { /* best effort */ })
       logger.info('remote machine created for computer', { userId, machineId, computerId })
       return { machine, created: true }
     })
+  },
+
+  /**
+   * The machine a team session (lib/teamSession.ts) is: its own computer's, created on first sight as a team machine.
+   * Refused (403, which the CLI takes as signed out) for any other computer, and for a computer the account runs under
+   * a normal sign-in — a team session must never become one of the person's machines.
+   */
+  async resolveForTeamComputer(
+    user: AuthUser,
+    computerId: string,
+    label: string,
+    claimedMachineId?: string,
+  ): Promise<{ machine: Machine; created: boolean }> {
+    const refuse = (): AppError => new AppError(TEAM_SESSION_MESSAGE, 403, TEAM_SESSION_LIMITED)
+    if (user.harnessSessionKind !== 'team' || !user.harnessComputerId || computerId !== user.harnessComputerId) throw refuse()
+    const held = await prisma.machine.findMany({ where: { userId: user.sub, computerId, ...machineAlive }, select: { sessionKind: true } })
+    if (held.some((row) => row.sessionKind !== 'team')) throw refuse()
+    const resolved = await machineService.resolveOrCreateForComputer(user.sub, user.autonomousEnv, computerId, label, claimedMachineId, 'team')
+    // Another sign-in took the row between the check and here: still not this session's machine.
+    if (resolved.machine.sessionKind !== 'team') throw refuse()
+    return resolved
   },
 
   /** List a user's agents (with best-effort live status). Includes the api key (owner only). */
@@ -632,6 +662,14 @@ export const machineService = {
       // down-frames to the adapter socket; connId '' = not client-scoped.
       await publishDown(machineId, { connId: '', frame: { type: 'machine_revoked' } }).catch(() => { /* best effort */ })
       await clearAgentPresence(machineId).catch(() => { /* best effort */ })
+      // A team sign-in bound to this computer ends with it (lib/teamSession.ts), whatever kind of sign-in served the row
+      // last: a team daemon must not come back as a new machine for the same computer.
+      if (binding.computerId) {
+        await prisma.harnessSession.updateMany({
+          where: { userId: binding.userId, kind: 'team', computerId: binding.computerId, OR: [{ revokedAt: null }, { revokedAt: { isSet: false } }] },
+          data: { revokedAt: new Date() },
+        }).catch((err: unknown) => logger.warn('team session revoke failed', { machineId, error: String(err) }))
+      }
     } else {
       // Managed: reap the container + node row in the background (idempotent on the manager → retryable).
       void destroyNodeWithRetry(machineId, binding.managerId)
