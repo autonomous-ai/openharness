@@ -24,6 +24,17 @@ export function peekIdentityPub(): string | null {
   } catch { return null }
 }
 
+/** This computer's identity keypair as already on disk, or null. Like `peekIdentityPub` it never creates one: a key
+ *  made by a command that only needs to sign with the existing one would be on no device key log. */
+export function peekIdentity(): Identity | null {
+  try {
+    const raw = JSON.parse(readFileSync(IDENTITY_FILE, 'utf-8')) as { priv?: unknown; pub?: unknown }
+    if (typeof raw.priv !== 'string' || typeof raw.pub !== 'string' || !raw.priv || !raw.pub) return null
+    const identity = { priv: b64d(raw.priv), pub: b64d(raw.pub) }
+    return identity.priv.length === 32 && identity.pub.length === 32 ? identity : null
+  } catch { return null }
+}
+
 /** Whether an identity was retired here (`identity.json.removed-*`, left by signing this device out of
  *  the account), so "no identity" can be told apart from "never had one". */
 export function identitySpent(): boolean {

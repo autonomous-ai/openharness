@@ -45,6 +45,7 @@ function fake(over: Partial<TeamCommandDeps> & { adminResult?: Awaited<ReturnTyp
     env: {}, interactive: false, ask: vi.fn(async () => 'y'), now: () => now, sleep: vi.fn(async (ms: number) => { now += ms }),
     session: () => session, writeSession: vi.fn((s: AuthSession) => { session = s }), clearSession: vi.fn(() => { session = null }),
     auth: vi.fn(async () => ({ session: session!, headers: { authorization: 'Bearer x' } })), post: post as never,
+    get: vi.fn(async () => ({ user: { id: 'user-placeholder-1' } })) as never, machineKey: () => ({ priv: new Uint8Array(32).fill(9) }),
     computerId: () => 't'.repeat(32), autonomousEnv: 'prod',
     installed: () => ({ cliDir: `${OWNER_HOME}/.harness/cli`, cliJs: `${OWNER_HOME}/.harness/cli/cli.js`,
       node: `${OWNER_HOME}/.harness/runtime/node-v1/bin/node`, nodeRuntimeDir: `${OWNER_HOME}/.harness/runtime/node-v1`, tmuxRuntimeDir: null }),
@@ -214,15 +215,59 @@ describe('harness team remove', () => {
 })
 
 describe('harness team on and off', () => {
-  it('on: mints a team sign-in with this computer\'s, redeems it here, and swaps the daemon onto it', async () => {
-    const f = fake({ platform: 'linux' })
+  it('on: mints a code that converts this very computer, with its machine key\'s proof, redeems it here, and swaps the daemon onto it', async () => {
+    const f = fake({ platform: 'linux', now: () => 1761300000000 })
+    const order: string[] = []
+    f.post.mockImplementation(async (path: string) => {
+      order.push(path)
+      if (path === '/api/auth/handoff') return { code: CODE, expiresIn: 90, kind: 'team' }
+      if (path === '/api/auth/handoff/redeem') return { token: 'hta_team', refreshToken: 'htr_team', expiresIn: 3600, kind: 'team' }
+      return {}
+    })
+    ;(f.deps.stopDaemon as ReturnType<typeof vi.fn>).mockImplementation(async () => { order.push('stop'); return true })
     expect(await teamCommand(['on', '--yes'], f.deps)).toBe(0)
-    expect(f.post).toHaveBeenCalledWith('/api/auth/handoff', { kind: 'team' }, { authorization: 'Bearer x' })
+    expect(f.post).toHaveBeenCalledWith('/api/auth/handoff', { kind: 'team', computerId: 'c'.repeat(32),
+      proof: { machineId: 'm1', at: 1761300000000, sig: expect.any(String) } }, { authorization: 'Bearer x' })
     expect(f.post).toHaveBeenCalledWith('/api/auth/handoff/redeem', { code: CODE, label: 'Mac-placeholder · Team', computerId: computer.computerId })
-    expect(f.session()).toMatchObject({ kind: 'team', accessToken: 'hna_team', computerId: computer.computerId, machineId: 'm1' })
+    // The daemon stops before the redeem: a daemon still on the old sign-in would make this an ordinary machine again.
+    expect(order.slice(0, 3)).toEqual(['/api/auth/handoff', 'stop', '/api/auth/handoff/redeem'])
+    // The team sign-in replaces the previous one in the session file; that one is signed out where it can be.
+    expect(f.session()).toEqual(expect.objectContaining({ kind: 'team', accessToken: 'hta_team', refreshToken: 'htr_team', computerId: computer.computerId, machineId: 'm1' }))
     expect(f.post).toHaveBeenCalledWith('/api/auth/revoke', { refreshToken: 'hnr_old' })
+    expect(f.out.join('\n')).toContain('previous sign-in was discarded')
+    expect(f.deps.startDaemon).toHaveBeenCalled()
+  })
+
+  it('on: an Autonomous sign-in is discarded too, and one this computer cannot prove changes nothing', async () => {
+    const sso: AuthSession = { ...computer, accessToken: 'eyJ.sso-placeholder', refreshToken: 'sso-refresh-placeholder' }
+    const f = fake({ platform: 'linux' })
+    f.setSession(sso)
+    expect(await teamCommand(['on', '--yes'], f.deps)).toBe(0)
+    expect(f.session()).toMatchObject({ kind: 'team', accessToken: 'hna_team' })
+    expect(JSON.stringify(f.session())).not.toContain('sso')
+    expect(f.post).not.toHaveBeenCalledWith('/api/auth/revoke', expect.anything())
+    const nokey = fake({ platform: 'linux', machineKey: () => null })
+    nokey.setSession(sso)
+    expect(await teamCommand(['on', '--yes'], nokey.deps)).toBe(1)
+    expect(nokey.err[0]).toContain('no device key yet')
+    expect(nokey.err[0]).toContain('Nothing was changed on this computer.')
+    expect(nokey.post).not.toHaveBeenCalled()
+    expect(nokey.deps.stopDaemon).not.toHaveBeenCalled()
+    expect(nokey.session()).toBe(sso)
+  })
+
+  it('on: a refused redeem starts the daemon again on the sign-in it had, and changes nothing', async () => {
+    const f = fake({ platform: 'linux' })
+    f.post.mockImplementation(async (path: string) => {
+      if (path === '/api/auth/handoff') return { code: CODE, expiresIn: 90, kind: 'team' }
+      throw Object.assign(new Error('That code has expired.'), { status: 401 })
+    })
+    expect(await teamCommand(['on', '--yes', '--json'], f.deps)).toBe(1)
+    expect(JSON.parse(f.out.at(-1)!)).toMatchObject({ ok: false, code: 'EXPIRED', message: expect.stringContaining('Nothing was changed on this computer.') })
+    expect(f.session()).toBe(computer)
     expect(f.deps.stopDaemon).toHaveBeenCalled()
     expect(f.deps.startDaemon).toHaveBeenCalled()
+    expect(f.deps.writeSession).not.toHaveBeenCalled()
   })
 
   it('on: asks first at a terminal, needs --yes otherwise, and leaves a Mac with a team account alone', async () => {
@@ -255,15 +300,16 @@ describe('harness team on and off', () => {
     expect(JSON.parse(old.out.at(-1)!)).toMatchObject({ ok: false, code: 'NOT_TEAM' })
     expect(old.post).toHaveBeenCalledWith('/api/auth/revoke', { refreshToken: 'hnr_phone' })
     expect(old.session()).toBe(computer)
-    expect(old.deps.stopDaemon).not.toHaveBeenCalled()
+    // Stopped for the redeem, and started again on the sign-in it had.
+    expect(old.deps.startDaemon).toHaveBeenCalled()
   })
 
   it('off: signs the team session out, then the ordinary sign-in at a terminal, or says how', async () => {
     const signIn = vi.fn(async () => {})
     const f = fake({ interactive: true, signIn })
-    f.setSession({ ...computer, kind: 'team', refreshToken: 'hnr_team' })
+    f.setSession({ ...computer, kind: 'team', refreshToken: 'htr_team' })
     expect(await teamCommand(['off'], f.deps)).toBe(0)
-    expect(f.post).toHaveBeenCalledWith('/api/auth/revoke', { refreshToken: 'hnr_team' })
+    expect(f.post).toHaveBeenCalledWith('/api/auth/revoke', { refreshToken: 'htr_team' })
     expect(f.session()).toBeNull()
     expect(signIn).toHaveBeenCalledWith(true)
     const quiet = fake()

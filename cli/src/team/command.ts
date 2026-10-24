@@ -16,7 +16,7 @@
 import type { AuthSession } from '../lib/authSession.js'
 import type { RunAdmin } from './admin.js'
 import { teamConfigJson, type TeamConfig } from './config.js'
-import { mintTeamHandoff, redeemTeamHandoff, revokeHarnessRefresh, teamSession, TeamSignInError, type Post } from './handoff.js'
+import { mintTeamConversion, mintTeamHandoff, redeemTeamHandoff, revokeHarnessRefresh, teamSession, TeamSignInError, type Get, type Post } from './handoff.js'
 import {
   SENTINEL_NAME, TEAM_CONFIG_FILE, TEAM_HOME, TEAM_LABEL, TEAM_PLIST, TEAM_PORT, TEAM_REAL_NAME, TEAM_STATUS_DIR, TEAM_STATUS_FILE,
   TEAM_USER, TeamInputError, carriedBackendEnv, checkPath, checkUser, teamPaths,
@@ -76,6 +76,10 @@ export interface TeamCommandDeps {
   /** Bearer headers for this computer's sign-in, refreshed when stale (lib/controlPlane.ts). */
   auth(): Promise<{ session: AuthSession; headers: Record<string, string> }>
   post: Post
+  get: Get
+  /** This computer's machine key on the account's device key log (lib/e2ee/store.ts), never made here; null when it has
+   *  none. `team on` signs with it to show the backend it is this computer. */
+  machineKey(): { priv: Uint8Array } | null
   computerId(): string
   autonomousEnv: 'prod' | 'stag'
 
@@ -332,22 +336,30 @@ async function teamOn(deps: TeamCommandDeps, json: boolean, yes: boolean): Promi
     if (!/^y(es)?$/i.test(answer)) return fail(deps, json, 'CANCELLED', 'Nothing was changed.')
   }
   const label = `${deps.hostname().slice(0, 60)} · Team`
+  const unchanged = (error: unknown) => error instanceof TeamSignInError
+    ? new TeamSignInError(`${error.message} Nothing was changed on this computer.`, error.code) : error
+  // A code that turns this very computer into a team machine, keeping its computer id (./handoff.ts).
+  let code: string
+  try {
+    ({ code } = await mintTeamConversion({ auth: () => deps.auth(), post: deps.post, get: deps.get, machineKey: deps.machineKey, now: deps.now }))
+  } catch (error) { throw unchanged(error) }
+  // Stopped before the code is redeemed: redeeming ends this computer's ordinary sign-in on the backend, and a daemon still
+  // running on it, an Autonomous one above all, would connect again under it and make this an ordinary machine again.
+  const wasRunning = await deps.stopDaemon()
   let tokens: Awaited<ReturnType<typeof redeemTeamHandoff>>
   try {
-    const { code } = await mintTeamHandoff(() => deps.auth(), deps.post)
     tokens = await redeemTeamHandoff(code, label, session.computerId, { post: deps.post, sleep: deps.sleep, now: deps.now })
   } catch (error) {
-    if (error instanceof TeamSignInError) throw new TeamSignInError(`${error.message} Nothing was changed on this computer.`, error.code)
-    throw error
+    if (wasRunning) await deps.startDaemon()
+    throw unchanged(error)
   }
-  // The daemon holds the computer's sign-in in memory: it stops before the file changes, and comes back on the new one.
-  const wasRunning = await deps.stopDaemon()
+  // The team sign-in takes the previous one's place in the session file, so nothing here can sign in with that one again.
   const previous = deps.session() ?? session
   deps.writeSession(teamSession(tokens, session.computerId, deps.autonomousEnv, deps.now(),
     session.machineId ? { machineId: session.machineId } : {}))
   await revokeHarnessRefresh(deps.post, previous.refreshToken)
   if (json) deps.out(JSON.stringify({ ok: true, changed: true }))
-  else deps.out('✓ This computer now runs team work only. undo: harness team off')
+  else deps.out('✓ This computer now runs team work only. Its previous sign-in was discarded. undo: harness team off')
   if (wasRunning) await deps.startDaemon()
   return 0
 }

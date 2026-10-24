@@ -5,8 +5,9 @@ import { dirname, join } from 'node:path'
 import { createInterface } from 'node:readline'
 import { env } from '../config/env.js'
 import { clearAuthSession, readAuthSession, writeAuthSession } from '../lib/authSession.js'
-import { controlPlaneAuth, postJson } from '../lib/controlPlane.js'
+import { controlPlaneAuth, postJson, requestJson } from '../lib/controlPlane.js'
 import { computerId } from '../lib/daemonState.js'
+import { peekIdentity } from '../lib/e2ee/store.js'
 import { runGuestCommand, type GuestRunner } from '../lib/guestAccounts.js'
 import { managedNodeRuntimeDir } from '../lib/guestHelperInstall.js'
 import { managedNodePath } from '../lib/nodeRuntime.js'
@@ -53,6 +54,8 @@ export function teamCommandDeps(options: {
     clearSession: clearAuthSession,
     auth: controlPlaneAuth,
     post: (path, body, headers) => postJson(path, body, headers ?? {}),
+    get: (path, headers) => requestJson('GET', path, undefined, headers ?? {}),
+    machineKey: () => peekIdentity(),
     computerId,
     autonomousEnv: env.AUTONOMOUS_ENV,
     installed: () => {
