@@ -2906,6 +2906,7 @@ class _TerminalHeader extends StatelessWidget {
                       color: statusColor,
                       onPressed: statusAction,
                       showsIcon: false,
+                      labelWhenInert: true,
                     ),
                   ),
                 )
@@ -3541,19 +3542,6 @@ class _TerminalHeader extends StatelessWidget {
   }
 }
 
-/// A domain harness's verdict on the agent's workspace, in one word or one count.
-///
-/// Green "Ready" is the harness's one machine fact — fab-ready, every gate passed. Red carries the
-/// error count, amber the warning count when nothing blocks, grey "Checked" a clean run that the
-/// harness still would not call ready. The summary rides in the tooltip; the findings themselves
-/// live in the harness's own viewer, which is the pane beside this one.
-/// The pane header's transport badge: a compact topology for the path carrying terminal bytes.
-///
-/// The three shapes describe one hop, an intermediate hop, and a central server respectively. That
-/// makes the modes distinguishable without colour while keeping the badge small enough for a four-pane
-/// layout. The wire name `relay` still means the backend WebSocket; only its human-facing label is WS.
-/// Underlines the link under the pointer, in each span's own text colour —
-/// the terminal's cells carry no underline for it, so this paints on top.
 /// A pane's state as a chip: its icon and its word, the detail in the tooltip,
 /// pressed for the way out it offers when it offers one.
 class _PaneStatusChip extends StatelessWidget {
@@ -3562,6 +3550,7 @@ class _PaneStatusChip extends StatelessWidget {
     required this.color,
     required this.onPressed,
     this.showsIcon = true,
+    this.labelWhenInert = false,
   });
 
   final TerminalNotice status;
@@ -3571,41 +3560,61 @@ class _PaneStatusChip extends StatelessWidget {
   /// False on a phone, where the word is what the room is for.
   final bool showsIcon;
 
+  /// True on a phone: a state with nothing to press is drawn as words, not
+  /// as a disabled button a finger would try.
+  final bool labelWhenInert;
+
+  static const _padding = EdgeInsets.symmetric(horizontal: 6, vertical: 4);
+
   @override
-  Widget build(BuildContext context) => Tooltip(
-    message: status.detail,
-    child: TextButton(
-      onPressed: onPressed,
-      style: TextButton.styleFrom(
-        foregroundColor: color,
-        disabledForegroundColor: AppColors.textSoft,
-        minimumSize: Size.zero,
-        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          if (showsIcon) ...[
-            Icon(status.icon, size: 14),
-            const SizedBox(width: 6),
-          ],
-          Flexible(
-            child: Text(
-              // The chip names the STATE; what pressing it does is in the
-              // tooltip and in `actionLabel`. "Link required" that can be
-              // pressed reads better than a bare verb where every neighbour is
-              // a status.
-              status.label,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: grid.AppType.monoLabel(fontWeight: FontWeight.w400),
-            ),
-          ),
+  Widget build(BuildContext context) {
+    final content = Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        if (showsIcon) ...[
+          Icon(status.icon, size: 14),
+          const SizedBox(width: 6),
         ],
-      ),
-    ),
-  );
+        Flexible(
+          child: Text(
+            // The chip names the STATE; what pressing it does is in the
+            // tooltip and in `actionLabel`. "Link required" that can be
+            // pressed reads better than a bare verb where every neighbour is
+            // a status.
+            status.label,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: grid.AppType.monoLabel(fontWeight: FontWeight.w400),
+          ),
+        ),
+      ],
+    );
+    return Tooltip(
+      message: status.detail,
+      child: labelWhenInert && onPressed == null
+          ? Padding(
+              padding: _padding,
+              child: IconTheme.merge(
+                data: IconThemeData(color: AppColors.textSoft),
+                child: DefaultTextStyle.merge(
+                  style: TextStyle(color: AppColors.textSoft),
+                  child: content,
+                ),
+              ),
+            )
+          : TextButton(
+              onPressed: onPressed,
+              style: TextButton.styleFrom(
+                foregroundColor: color,
+                disabledForegroundColor: AppColors.textSoft,
+                minimumSize: Size.zero,
+                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                padding: _padding,
+              ),
+              child: content,
+            ),
+    );
+  }
 }
 
 /// Agent and model behind one control, for a phone's header: the engine's
@@ -3763,6 +3772,19 @@ class _TerminalChanges implements Listenable {
       terminal.removeListener(listener);
 }
 
+/// A domain harness's verdict on the agent's workspace, in one word or one count.
+///
+/// Green "Ready" is the harness's one machine fact — fab-ready, every gate passed. Red carries the
+/// error count, amber the warning count when nothing blocks, grey "Checked" a clean run that the
+/// harness still would not call ready. The summary rides in the tooltip; the findings themselves
+/// live in the harness's own viewer, which is the pane beside this one.
+/// The pane header's transport badge: a compact topology for the path carrying terminal bytes.
+///
+/// The three shapes describe one hop, an intermediate hop, and a central server respectively. That
+/// makes the modes distinguishable without colour while keeping the badge small enough for a four-pane
+/// layout. The wire name `relay` still means the backend WebSocket; only its human-facing label is WS.
+/// Underlines the link under the pointer, in each span's own text colour —
+/// the terminal's cells carry no underline for it, so this paints on top.
 class _LinkUnderlinePainter extends CustomPainter {
   _LinkUnderlinePainter({
     required this.spans,

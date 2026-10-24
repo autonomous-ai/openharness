@@ -127,6 +127,39 @@ void main() {
     ('Reconnecting…', () => _app(connection: ConnectionStatus.reconnecting)),
     ('Offline', () => _app(online: false)..let(_withSecondComputer)),
     ('View only', () => _app(viewOnly: true)),
+  ]) {
+    testWidgets('at 390 "$word", which nothing here fixes, is a label', (
+      tester,
+    ) async {
+      final semantics = tester.ensureSemantics();
+      final notifier = app();
+
+      await _mount(tester, notifier, chrome: webWorkspaceChrome(notifier));
+
+      final status = find.byKey(const ValueKey('pane-header-status'));
+      expect(
+        find.descendant(of: status, matching: find.byType(ButtonStyleButton)),
+        findsNothing,
+      );
+      expect(
+        tester
+            .getSemantics(
+              find.descendant(of: status, matching: find.text(word)),
+            )
+            .flagsCollection
+            .isButton,
+        isFalse,
+      );
+      await tester.pumpWidget(const SizedBox());
+      semantics.dispose();
+    });
+  }
+
+  for (final (word, app) in <(String, AppNotifier Function())>[
+    ('Connecting', () => _app(status: TerminalSessionStatus.opening)),
+    ('Reconnecting…', () => _app(connection: ConnectionStatus.reconnecting)),
+    ('Offline', () => _app(online: false)..let(_withSecondComputer)),
+    ('View only', () => _app(viewOnly: true)),
     ('Take control', () => _app(status: TerminalSessionStatus.takenOver)),
   ]) {
     testWidgets('at 390 the header says "$word" in words', (tester) async {
