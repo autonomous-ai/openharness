@@ -32,6 +32,7 @@ import { b64d, b64e, fingerprint } from '../lib/e2ee/core.js'
 import { DeviceLogStore } from '../lib/e2ee/deviceLogStore.js'
 import { DeviceLogSyncer, type DeviceKeysSeen, type DeviceLogFetched, type DeviceLogTrustOutcome } from '../lib/e2ee/deviceLogSyncer.js'
 import { GroupSyncer, relayRequester, SELF_STAMP } from '../lib/e2ee/groupSyncer.js'
+import { MachineKinds } from '../lib/e2ee/machineKinds.js'
 import { MachinePeerStore } from '../lib/e2ee/machinePeers.js'
 import { applySharedTrust, isSharedKey } from './sharedTrust.js'
 import { E2eeStore } from '../lib/e2ee/store.js'
@@ -131,11 +132,19 @@ const PAIR_STATUS: Record<string, number> = {
 export function startGateway(host: GatewayHost): StartedGateway {
   let account = host.account
   let reachable: Set<string> | null = null
+  // Which of the account's machines are team machines, whose rosters the trust group never takes (lib/e2ee/machineKinds.ts).
+  const machineKinds = new MachineKinds({
+    read: async () => {
+      const answer = await accountHttp.machines()
+      return answer.status === 200 && account.machineId ? answer.body : null
+    },
+  })
   const accountHttp = createAccountHttp({
     tokens: host.tokens, account: () => account,
     computer: { id: host.computerId, name: host.machineName, hostname: host.hostname }, environment: host.autonomousEnv,
     changed: host.machines,
     reachable: (ids) => { reachable = ids ? new Set(ids) : null },
+    listed: (body) => { if (body) machineKinds.adopt(body); else machineKinds.clear() },
     log: (line) => console.log(`[gateway] ${line}`),
   })
   const gateway = new RelayGateway({
@@ -232,6 +241,7 @@ export function startGateway(host: GatewayHost): StartedGateway {
     // Only a list the backend answered says who is offline; otherwise try every member.
     reachable: () => reachable,
     shared: (pub) => isSharedKey(gateway.pairedPeers(), pub),
+    machineKinds,
     ready: () => devLogSyncer?.current() ?? false,
     log: (line) => console.log(line),
   })
@@ -519,6 +529,8 @@ export function startGateway(host: GatewayHost): StartedGateway {
       // under a new sign-in, even when both accounts happen to have the same preference revision.
       if (next.machineId !== account.machineId || next.autonomousEnv !== account.autonomousEnv
           || next.signIn?.epoch !== account.signIn?.epoch || next.signIn?.acct !== account.signIn?.acct) void usage?.stop(true)
+      // Another account's machine list says nothing of this one's machines.
+      if (next.machineId !== account.machineId || next.autonomousEnv !== account.autonomousEnv) machineKinds.clear()
       account = next
       startGroup()
       registerAndSweep()

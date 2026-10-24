@@ -15,6 +15,9 @@ interface AccountHttpDeps {
   base?: () => string
   changed?(state: GatewayMachines): void
   reachable?(machineIds: string[] | null): void
+  /** Every machine list the backend answered (its body), and null on a sign-out: the trust group reads which of the
+   *  account's machines are team machines from it (lib/e2ee/machineKinds.ts). */
+  listed?(body: Record<string, unknown> | null): void
   log?(line: string): void
 }
 
@@ -75,6 +78,7 @@ export function createAccountHttp(deps: AccountHttpDeps) {
   cache.listen((body) => {
     const { machines, source } = cache.list()
     deps.reachable?.(source !== 'backend' ? null : machines.filter(m => m.state !== 'offline').map(m => m.machineId))
+    deps.listed?.(source === 'backend' ? body : null)
     deps.changed?.({ owner: deps.account().machineId, body, fetchedAt: cache.lastResponse()?.fetchedAt ?? Date.now() })
   })
   const restored = cache.lastResponse()

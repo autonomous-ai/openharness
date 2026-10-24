@@ -13,9 +13,16 @@
  * of this: rosters are not exchanged with it, it is not seeded from its pin or its trust, and a
  * `group_sync` from it is refused. Otherwise sharing one machine would make the colleague's other
  * machines trusted here, and this account's trusted by theirs.
+ *
+ * Nor is one of the account's team machines (machineKinds.ts): a Harness Team account's daemon, or a computer
+ * that runs team work only, runs teammates' agents, so a hostile one could otherwise add or drop the keys this
+ * machine trusts. It stays pinned and trusted, so the person's apps still reach it, but its roster is never
+ * merged and this one is never sent to it. A machine whose kind the account's machine list cannot say is
+ * treated the same way.
  */
 import type { Frame, LocalClientSink } from '../../backendSocket.js'
 import type { RelaySession } from '../remoteRelay.js'
+import type { MachineKind } from './machineKinds.js'
 import type { MachinePeerStore } from './machinePeers.js'
 import type { LinkedPeer } from './manager.js'
 import type { PairedClient } from './store.js'
@@ -66,6 +73,9 @@ export interface GroupSyncerDeps {
   /** Whether `pub` is a machine of another account trusted only because it is shared with this one (or this
    *  one with it): it never takes part in the group. */
   shared?: (pub: string) => boolean
+  /** What the account's machine list says a machine is (machineKinds.ts): only `computer`, one of the person's own,
+   *  takes part in the group. `team` and unknown (null) never do. `fresh` reads the list again when it is old. */
+  machineKinds: { kind: (machineId: string) => MachineKind | null; fresh?: () => Promise<void> }
   /** Whether the roster here is the account's this machine is signed in to (deviceLogSyncer `current`).
    *  While not, nothing is swapped: a daemon started after a switch of accounts read the new account's
    *  log only after its first rounds, and handed the roster of the account it left to the new one's
@@ -208,6 +218,8 @@ export class GroupSyncer {
   /** Responder side of `group_sync`, for a sealed request from the session identity `peerPub`. */
   handle(peerPub: string, payload: Record<string, unknown>): Record<string, unknown> {
     if (this.deps.shared?.(peerPub)) return { error: 'SHARED' }
+    const refused = this.machinePeerRefusal(peerPub, payload.self)
+    if (refused) return { error: refused }
     if (this.deps.ready?.() === false) {
       const none: Roster = { members: [], removed: [] }
       return { ...none, digest: rosterDigest(none) }
@@ -240,6 +252,7 @@ export class GroupSyncer {
   /** Every reachable machine member (and every machine pinned outside the roster), one at a time. */
   async syncAll(): Promise<void> {
     if (this.deps.ready?.() === false) { this.retryLater(); return }
+    await this.deps.machineKinds.fresh?.().catch(() => { /* an old list ages out on its own */ })
     // Put back any pin the relay dropped. A member can hear of another before that one hears of it,
     // and its first dial is then refused — remoteRelay.ts unlinks a peer that answers e2e_denied. The
     // roster still says they belong together, so they are re-pinned and tried again on this round.
@@ -251,6 +264,8 @@ export class GroupSyncer {
     for (const m of this.deps.store.read().members) if (m.kind === 'machine' && m.machineId && !suspended.has(m.pub)) targets.add(m.machineId)
     for (const p of this.deps.peers.list()) if (!suspended.has(p.pub) && !p.shared) targets.add(p.machineId)
     if (self) targets.delete(self)
+    // A team machine, or one the account's list cannot place, is not dialed: not a member that missed this round.
+    for (const machineId of targets) if (!this.ordinary(machineId)) targets.delete(machineId)
     // All at once: one machine that never answers (offline, or too old to know the frame) must not
     // hold up the rest for its whole timeout.
     const due = [...targets].filter((machineId) => !reachable || reachable.has(machineId))
@@ -269,9 +284,12 @@ export class GroupSyncer {
   }
 
   private async exchange(machineId: string): Promise<boolean> {
-    const pin = this.deps.peers.get(machineId)
-    if (!pin || pin.shared || this.deps.ready?.() === false) return false
+    if (!this.deps.peers.get(machineId) || this.deps.ready?.() === false) return false
     const generation = this.generation
+    await this.deps.machineKinds.fresh?.().catch(() => { /* an old list ages out on its own */ })
+    const pin = this.deps.peers.get(machineId)
+    // Nothing is sent to a team machine, or to one the account's list cannot place: this roster is not theirs to read.
+    if (!pin || pin.shared || this.deps.ready?.() === false || generation !== this.generation || !this.ordinary(machineId)) return false
     const local = this.deps.store.read()
     const devlog = this.devlog?.gossip()
     const reply = await this.deps.request(machineId, {
@@ -317,6 +335,42 @@ export class GroupSyncer {
   }
 
   private selfPub(): string { return this.deps.self().pub }
+
+  /** Whether the account's machine list says [machineId] is one of the person's own machines. */
+  private ordinary(machineId: string): boolean {
+    return this.deps.machineKinds.kind(machineId) === 'computer'
+  }
+
+  /**
+   * Why a `group_sync` from `peerPub` is refused, or null when it may go on. A machine is known by every machine id
+   * this one holds for its key (its pin, its roster entry, its pairing) and by the one it gives for itself, and each
+   * must be one of the person's own: a team machine cannot get in by describing itself as an app, or as another
+   * machine. A peer no record or word of its own makes a machine (a phone, a desktop app) is not a machine at all.
+   */
+  private machinePeerRefusal(peerPub: string, claimedSelf: unknown): 'TEAM_MACHINE' | 'MACHINE_UNKNOWN' | null {
+    const ids = new Set<string>()
+    let machine = false
+    for (const p of this.deps.peers.list()) if (p.pub === peerPub) { ids.add(p.machineId); machine = true }
+    for (const m of this.deps.store.read().members) {
+      if (m.pub !== peerPub) continue
+      if (m.kind === 'machine') machine = true
+      if (m.machineId) ids.add(m.machineId)
+    }
+    for (const p of this.deps.paired()) {
+      if (p.identityPub !== peerPub) continue
+      if (p.kind === 'machine') machine = true
+      if (p.machineId) ids.add(p.machineId)
+    }
+    const self = claimedSelf && typeof claimedSelf === 'object' ? claimedSelf as Record<string, unknown> : null
+    if (self?.pub === peerPub) {
+      if (self.kind === 'machine') machine = true
+      if (typeof self.machineId === 'string' && self.machineId) ids.add(self.machineId)
+    }
+    if (ids.size === 0) return machine ? 'MACHINE_UNKNOWN' : null
+    const kinds = [...ids].map((id) => this.deps.machineKinds.kind(id))
+    if (kinds.includes('team')) return 'TEAM_MACHINE'
+    return kinds.every((kind) => kind === 'computer') ? null : 'MACHINE_UNKNOWN'
+  }
 
   /** Links made before the group existed: every pinned machine and every paired peer that said what it is. */
   private seedFromExistingLinks(): void {
