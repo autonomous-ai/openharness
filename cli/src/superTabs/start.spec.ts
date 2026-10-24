@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { inspectCapacity, startAgent } from './start.js'
 import { buildEngineCommandArgv } from '../lib/engineLaunch.js'
 const where = { port: 14001, machineId: 'lead-machine', dataDir: '/fixture' }
-function fixture(options: { state?: Record<string, unknown> | Error; refuse?: string; loseCancel?: boolean; loseFailure?: boolean; launchModel?: string[]; acceptedLaunchModel?: { model: string | null; effort: string | null }; refuseModel?: string; frame?: string; guest?: boolean; identity?: { sessionId: string; createdAt: string } } = {}) {
+function fixture(options: { state?: Record<string, unknown> | Error; githubApp?: boolean; refuse?: string; loseCancel?: boolean; loseFailure?: boolean; launchModel?: string[]; acceptedLaunchModel?: { model: string | null; effort: string | null }; refuseModel?: string; frame?: string; guest?: boolean; identity?: { sessionId: string; createdAt: string } } = {}) {
   const start = { creationId: 'super-native-receipt', error: null as string | null, request: { machineId: 'target', conversationId: 'group', engine: 'claude', name: 'Builder', cwd: '/repo', worktree: true,
     requirements: { memoryBytes: 100, diskBytes: 200, maxCpuPercent: 80, tools: ['git'], devices: [], quotaRequired: false } }, dispatched: false }
   let nativeState = 'missing', lostJoin = false
@@ -10,7 +10,7 @@ function fixture(options: { state?: Record<string, unknown> | Error; refuse?: st
     if (payload.action === 'startStatus') return { ok: true, value: structuredClone(start) }
     if (payload.action === 'status') {
       if (options.state instanceof Error) throw options.state
-      return { ok: true, value: { revision: 1, state: options.state ?? { conversations: [{ id: 'group' }] } } }
+      return { ok: true, value: { revision: 1, state: options.state ?? { conversations: [{ id: 'group' }] }, ...(options.githubApp ? { githubApp: true } : {}) } }
     }
     const cmd = payload.command as Record<string, unknown>
     if (cmd.type === 'agent.startDispatch') start.dispatched = true
@@ -808,4 +808,35 @@ it('waits for the initial engine binding before recording a timed launch identit
   const f = fixture({ identity: { sessionId: '', createdAt: '2026-10-22T00:00:00.000Z' } })
   expect(await startAgent({ action: 'start', tabId: 'tab', operationId: 'binding-start', request: f.start.request }, f.scoped, where, f.open)).toMatchObject({ error: 'START_PENDING' })
   expect(f.scoped.mock.calls.map(c => c[0].command as Record<string, unknown>).some(c => c?.type === 'agent.started')).toBe(false)
+})
+
+describe('Swarm starts for another person\'s project', () => {
+  const state = { ownerId: 'owner-1', people: [{ id: 'owner-1', email: 'owner@example.com' }, { id: 'host-1', email: 'host@example.com' }],
+    projects: [{ id: 'lead', ownerId: 'host-1' }, { id: 'p1', ownerId: 'owner-1', skillMode: 'default' }], conversations: [{ id: 'group', projectId: 'p1' }] }
+  const started = async (options: Parameters<typeof fixture>[0], machineOwnerId = 'host-1') => {
+    const f = fixture(options)
+    Object.assign(f.start, { machineOwnerId })
+    expect(await startAgent({ action: 'resume', tabId: 'tab', startId: 'start' }, f.scoped, where, f.open)).toMatchObject({ ok: true })
+    return f.request.mock.calls.find(c => c[0] === 'agent_create')![1]!
+  }
+
+  it('wires the Harness GitHub App and says whom the work is for when the project\'s owner is not the machine\'s', async () => {
+    const payload = await started({ state, githubApp: true })
+    expect(payload).toMatchObject({ swarmRole: 'dev', swarmSkillMode: 'default', swarmGitHub: true })
+    expect(String(payload.prompt)).toMatch(/not this computer's own GitHub login\. Start each pull request body with: Requested by owner@example\.com through Harness\.$/)
+  })
+
+  it('reads a Swarm from before projects as its owner\'s', async () => {
+    const legacy = { ownerId: 'owner-1', people: state.people, conversations: [{ id: 'group' }] }
+    expect(await started({ state: legacy, githubApp: true })).toMatchObject({ swarmGitHub: true })
+  })
+
+  it('launches as before for the machine owner\'s own project, on a server without the app, or when the Swarm cannot be read', async () => {
+    for (const [options, owner] of [[{ state, githubApp: true }, 'owner-1'], [{ state }, 'host-1'], [{ state: new Error('offline'), githubApp: true }, 'host-1'],
+      [{ state: { ...state, conversations: [{ id: 'other' }] }, githubApp: true }, 'host-1'], [{ state: { ...state, people: [] }, githubApp: true }, 'host-1']] as const) {
+      const payload = await started(options, owner)
+      expect(payload).not.toHaveProperty('swarmGitHub')
+      expect(String(payload.prompt)).not.toContain('GitHub App')
+    }
+  })
 })

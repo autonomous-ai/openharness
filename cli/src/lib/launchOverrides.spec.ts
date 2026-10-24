@@ -1,4 +1,6 @@
-import { rmSync } from 'node:fs'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { env } from '../config/env.js'
 import { agentSettingsPath } from './agentSettings.js'
@@ -437,5 +439,39 @@ describe('buildLaunchOverrides — what the app is told about web search', () =>
     expect(own.ok && own.overrides).not.toHaveProperty('gridLaunchRecord')
     const profile = await buildLaunchOverrides(deps().d, 'codex', { codexHome: '/Users/x/.codex-work' }, 'a')
     expect(profile.ok && profile.overrides).not.toHaveProperty('gridLaunchRecord')
+  })
+})
+
+describe('buildLaunchOverrides — a Swarm session on the Harness GitHub App', () => {
+  const skill = { role: 'dev' as const, key: 'harness-claude-github-fixture', github: true as const }
+  const workspace = () => mkdtempSync(join(tmpdir(), 'overrides-github-'))
+
+  it('relaunches with the app\'s git and gh, and clears inherited GitHub token variables', async () => {
+    const { d } = deps()
+    const result = await buildLaunchOverrides(d, 'claude', { cwd: workspace(), swarmSkill: skill }, 'agent-1', () => true)
+    if (!result.ok) throw new Error(result.error)
+    const session = join(env.ADAPTER_DATA_DIR, 'swarm-github', 'sessions', skill.key)
+    expect(result.overrides.env).toMatchObject({ GH_CONFIG_DIR: join(session, 'gh'), HARNESS_SWARM_GITHUB_DIR: session, GIT_TERMINAL_PROMPT: '0' })
+    expect(result.overrides.env.GIT_CONFIG_PARAMETERS).toContain(`'core.hookspath'='${join(env.ADAPTER_DATA_DIR, 'swarm-github', 'hooks')}'`)
+    expect(result.overrides.clearEnv).toEqual(expect.arrayContaining(['GH_TOKEN', 'GITHUB_TOKEN']))
+  })
+
+  it('relaunches a session without the flag exactly as before', async () => {
+    const { d } = deps()
+    const result = await buildLaunchOverrides(d, 'claude', { cwd: workspace(), swarmSkill: { role: 'dev', key: 'harness-claude-plain' } }, 'agent-1', () => true)
+    if (!result.ok) throw new Error(result.error)
+    expect(result.overrides.env).not.toHaveProperty('GIT_CONFIG_PARAMETERS')
+    expect(result.overrides.clearEnv).not.toContain('GH_TOKEN')
+  })
+
+  it('refuses the relaunch when the app\'s files cannot be written', async () => {
+    const root = join(env.ADAPTER_DATA_DIR, 'swarm-github')
+    rmSync(root, { recursive: true, force: true })
+    writeFileSync(root, 'not a folder')
+    try {
+      const { d } = deps()
+      expect(await buildLaunchOverrides(d, 'claude', { cwd: workspace(), swarmSkill: skill }, 'agent-1', () => true))
+        .toMatchObject({ ok: false, error: 'SWARM_SKILL_FAILED' })
+    } finally { rmSync(root, { force: true }) }
   })
 })

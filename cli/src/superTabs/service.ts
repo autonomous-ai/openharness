@@ -10,6 +10,7 @@ import { CapacityReservations, type ReservationBook } from './reservations.js'
 import { ContributionPreparations, prepareContribution } from './contribution.js'
 import { messageIdOf } from './attach.js'
 import { cardId, SwarmCards } from './cards.js'
+import { GitHubTokenRefresher, githubToken } from './github.js'
 
 const HELP = {
   status: 'Read the shared tab roster and work. Its rules are the project owners\' routing rules, each in the owner\'s own words; each binds only the agents of its projectId. A Lead\'s status also lists otherProjectsWork: the active work of the Swarm\'s other projects (group, project, title, owned code, status, Engineer, PR), read only. A project on Custom skills lists its roles (id, name, kind) in status.',
@@ -110,6 +111,8 @@ export interface SuperTabServiceOptions {
   reservations?: (core: CoreApi, machineId: string) => ReservationBook
   /** The Swarm cards' reader (superTabs/cards.ts), for a spec. */
   cards?: (core: CoreApi, machineId: string) => SwarmCards
+  /** What keeps Swarm sessions' GitHub tokens fresh (superTabs/github.ts), for a spec. */
+  githubTokens?: (core: CoreApi) => Pick<GitHubTokenRefresher, 'start' | 'stop'>
 }
 export function superTabService(core: CoreApi, options: SuperTabServiceOptions = {}): { requests: ServiceRequests; port: SuperTabsPort } {
   const preparations = new ContributionPreparations(input => (options.prepareContribution ?? prepareContribution)(core, input))
@@ -141,9 +144,12 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
     }
     return swarmCards
   }
-  const disconnect = () => { preparations.clear(); host?.stop(); host = null; book?.stop(); book = null; bookMachine = null; swarmCards?.want(false); swarmCards = null; cardsMachine = null }
+  // Sessions doing another person's project work keep a live GitHub App token while their task lasts, and none after.
+  const tokens = (options.githubTokens ?? (api => new GitHubTokenRefresher(api)))(core)
+  const disconnect = () => { preparations.clear(); host?.stop(); host = null; book?.stop(); book = null; bookMachine = null; swarmCards?.want(false); swarmCards = null; cardsMachine = null; tokens.stop() }
   const port = {
     connected: () => {
+      tokens.start()
       if (identifier(core.daemon.machineId()) && existsSync(hostJournalFile(core.dataDir, core.daemon.machineId()))) wake()
     },
     disconnected: disconnect,
@@ -167,6 +173,12 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
           return await wake().prepareNative(payload.tabId, payload.contextId, payload.action === 'renewNative', closed)
         }
         if (!asker.owner || (!asker.local && asker.accountOwner !== true)) return { error: 'OWNER_REQUIRED' }
+        // `harness git-credential` in a local agent's shell (superTabs/gitCredential.ts): the token of that agent's task,
+        // which goes to this computer's own processes alone, never to another machine through the relay.
+        if (payload.action === 'githubToken') {
+          if (!asker.local) return { error: 'OWNER_REQUIRED' }
+          return await githubToken(core, String(payload.harnessId ?? ''))
+        }
         if (payload.action === 'swarmRole') {
           const grant = await port.swarmRole(String(payload.harnessId ?? ''))
           return { ok: true, role: grant ? grant.role : grant, ...(grant ? { mode: grant.mode } : {}) }

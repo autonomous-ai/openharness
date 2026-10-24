@@ -19,6 +19,8 @@ import {
   SuperTabError, isLeads, parkLaterConversations, syncLeads, type Actor, type Agent, type Assignment, type Author, type MessageDraft, type SuperTabState,
 } from './model.js'
 import { holdNoticeText, type HoldReason } from './holdNotice.js'
+import { agentDisplayName } from './agentNames.js'
+import { endedHolds, HOLDING, type WorkHold } from '../github/holds.js'
 import { mayDrive, TERMINAL_ANSWER_MS, TERMINAL_EXPIRY_MS, TERMINAL_PICKUP_MS, type TerminalEffect } from './terminal.js'
 import { closeAssignment, closeUnassignedStart, readDecision, recentRoutes, timedDecisionOf, writeRouteEffects } from './routeDecisions.js'
 import { DEFAULT_ROUTING_POLICY, effectivePolicy, routingPolicySchema, type RoutingPolicy } from './routingPolicy.js'
@@ -107,11 +109,17 @@ async function abandonedStarts(tx: Transaction, tabId: string, state: SuperTabSt
   return candidates.filter(s => (recorded.get(stableId(tabId, s.actorKey, s.id)) ?? 0) <= now - ABANDONED_START_MS).map(s => s.id)
 }
 
+export interface SuperTabStoreHooks {
+  /** Tasks that stopped being in an agent's hands with this write (github/holds.ts): done, cancelled, stopped, given to
+   *  another attempt, or their agent removed. Called after the write commits; it must not throw. */
+  workEnded?: (tabId: string, ended: WorkHold[]) => void
+}
+
 /** Persistent coordination. Host adapters own execution and must confirm their local session grants. */
 export class SuperTabStore {
   readonly native: SuperTabNativeStore
   constructor(private readonly db: PrismaClient, private readonly now: () => number = Date.now,
-    private readonly attachments: Attachments | null = null) {
+    private readonly attachments: Attachments | null = null, private readonly hooks: SuperTabStoreHooks = {}) {
     this.native = new SuperTabNativeStore({
       transaction: body => transaction(db, body),
       row: async (tx, user, tabId) => { const row = await this.row(tx, user, tabId); return { row, state: stateOf(row) } },
@@ -360,7 +368,10 @@ export class SuperTabStore {
 
   async execute(user: AuthUser, tabId: string, input: { operationId: string; command: Command }, asAgentId?: string, hostMachineId?: string) {
     const { operationId, command } = operationSchema.parse(input)
-    return transaction(this.db, async tx => {
+    let ended: WorkHold[] = []
+    const done = await transaction(this.db, async tx => {
+      // A retried attempt starts again: only the attempt that commits says which tasks ended.
+      ended = []
       const row = await this.row(tx, user, tabId)
       const original = stateOf(row)
       // Removal retries can arrive after the actor itself left. Return only this host's exact prior receipt.
@@ -601,6 +612,7 @@ export class SuperTabStore {
       await tx.superTab.update({ where: { id: tabId, revision: row.revision }, data: {
         revision, state: json(effects.state), ...indexes(effects.state),
       } })
+      ended = endedHolds(original, effects.state)
       await writeRouteEffects(tx, tabId, effects.routeDecisions, context.now)
       if (command.type === 'agent.startFailed') {
         const start = original.starts?.find(s => s.id === command.startId)
@@ -667,6 +679,43 @@ export class SuperTabStore {
       await tx.superTabOperation.create({ data: { id: receiptId, tabId, actorKey: actorKey(actor), requestHash,
         revision, result: json(effects.result) } })
       return { revision, result: effects.result }
+    })
+    this.endWork(tabId, ended)
+    return done
+  }
+
+  private endWork(tabId: string, ended: WorkHold[]): void {
+    if (!ended.length || !this.hooks.workEnded) return
+    try { this.hooks.workEnded(tabId, ended) } catch (error) {
+      logger.warn('[super-tab] work-ended hook failed', { tabId, error: error instanceof Error ? error.message : String(error) })
+    }
+  }
+
+  /** What the Harness GitHub App may mint a token for (routes/superTabs.ts `github-token`): the calling host's own agent, on
+   *  the machine its host names, with a task in its hands. Who the work is for, and the agent's and machine's names, go
+   *  into its commits (github/attribution.ts). The caller checks that the repository is on GitHub. */
+  async githubAssignment(user: AuthUser, tabId: string, asAgentId: string | undefined, machineId: string) {
+    if (!asAgentId) fail('AGENT_REQUIRED', 'Ask for a GitHub token as the agent doing the work (asAgentId).', 400)
+    return transaction(this.db, async tx => {
+      const state = stateOf(await this.row(tx, user, tabId))
+      const actor = await this.actor(tx, user, state, asAgentId)
+      // A read-only contribution reads; it does not push.
+      author(state, actor, true)
+      const target = agent(state, asAgentId)
+      if (target.machineId !== machineId) fail('FORBIDDEN', 'Only the machine running this agent can ask for its GitHub token.', 403)
+      const group = state.conversations.find(c => !isLeads(c) && c.assignment?.agentId === target.id && HOLDING.has(c.assignment.status)
+        && c.assignment.execution.machineId === target.machineId && c.assignment.execution.machineOwnerId === target.machineOwnerId)
+        ?? fail('NO_ASSIGNMENT', 'This agent has no task in progress. A GitHub token is only for an agent working on a task.')
+      const project = groupProject(state, group)
+      const owner = await tx.user.findUnique({ where: { id: project.ownerId }, select: { name: true, email: true } })
+      const requester = owner ?? { name: null, email: state.people.find(p => p.id === project.ownerId)?.email ?? '' }
+      if (!requester.email) fail('NOT_FOUND', 'This project\'s owner is unavailable.', 404)
+      const contributed = state.machines?.find(m => m.machineId === target.machineId)?.name
+      const machineName = contributed ?? await tx.machine.findFirst({ where: { machineId: target.machineId, userId: target.machineOwnerId },
+        select: { name: true, hostname: true } }).then(m => m?.name ?? m?.hostname ?? null)
+      return { tabId, agentId: target.id, assignmentId: group.assignment!.id, repositoryUrl: project.repository?.repositoryUrl ?? null,
+        requester: { name: requester.name?.trim() || null, email: requester.email },
+        agentName: agentDisplayName(state.agents, target.id) ?? target.displayName ?? target.name, machineName: machineName?.trim() || null }
     })
   }
 
@@ -1261,9 +1310,12 @@ export class SuperTabStore {
 
   /** Only the recorded execution host may attest that the actual session/attempt has stopped. */
   async stopped(user: AuthUser, tabId: string, assignmentId: string, receipt: string) {
-    return transaction(this.db, async tx => {
+    let ended: WorkHold[] = []
+    const done = await transaction(this.db, async tx => {
+      ended = []
       const row = await this.row(tx, user, tabId)
       const state = stateOf(row)
+      const before = { agents: state.agents, conversations: structuredClone(state.conversations) }
       const group = state.conversations.find(c => c.assignment?.id === assignmentId)
       const assignment = group?.assignment
       if (!assignment || assignment.execution.machineOwnerId !== user.sub) fail('FORBIDDEN', 'Only the execution host can confirm this stop.', 403)
@@ -1302,7 +1354,10 @@ export class SuperTabStore {
       } })
       await this.writeMessages(tx, tabId, state, notices, revision)
       if (!prior) await tx.superTabStopReceipt.create({ data: { id, tabId, assignmentId, ...execution, receipt } })
+      ended = endedHolds(before, state)
       return { confirmed: true }
     })
+    this.endWork(tabId, ended)
+    return done
   }
 }
