@@ -32,17 +32,19 @@ export function parseSuperTabArgs(argv: readonly string[], where: Where) {
   }
   else if (action === 'post' && identifier(first) && typeof second === 'string' && identifier(third)) {
     let replyTo: string | null = null
-    const attach: string[] = []
+    const attach: string[] = [], mentions: string[] = []
     for (let i = 4; i < positional.length; i += 2) {
       const [flag, value] = [positional[i], positional[i + 1]]
       if (flag === '--reply-to' && identifier(value) && replyTo === null) replyTo = value
       else if (flag === '--attach' && value && attach.length < 10) attach.push(resolve(value))
+      // A person's id or email, as written; the service maps it to the person (spec 2026-10-24-lead-mentions).
+      else if (flag === '--mention' && value?.trim()) mentions.push(value.trim())
       else throw new Error(USAGE)
     }
     // A screenshot or a log may go without words.
     if (!second.trim() && !attach.length) throw new Error(USAGE)
     Object.assign(payload, { action: 'command', operationId: third, ...(attach.length ? { attach } : {}),
-      command: { type: 'message.send', conversationId: first, text: second, replyTo, recipientIds: [] } })
+      command: { type: 'message.send', conversationId: first, text: second, replyTo, recipientIds: [], ...(mentions.length ? { mentions } : {}) } })
   } else if (action === 'command' && identifier(first) && second && positional.length === 3) {
     Object.assign(payload, { operationId: first, command: JSON.parse(second) })
   } else if (action === 'start' && identifier(first) && second && positional.length === 3) {
@@ -100,12 +102,14 @@ export async function superTabCommand(argv: readonly string[], deps: {
         throw new Error('Remove a machine from your own terminal or from Desktop, not from an agent.')
       }
     }
-    if (!['help', 'backend'].includes(String(request.payload.action)) && !request.payload.agentId) {
+    // Help names the caller when it can, so a Lead also reads its own options; outside a harness it is the plain help.
+    const help = request.payload.action === 'help'
+    if (request.payload.action !== 'backend' && !request.payload.agentId && (!help || request.payload.tabId)) {
       const listed = await daemon.request('agents_list')
       const frames = Array.isArray(listed.agents) ? listed.agents as Frame[] : []
       const caller = callerOf(frames, deps.pane ?? process.env.TMUX_PANE, request.where.machineId)
-      if (!caller) throw new Error('Run this command inside the participating harness, or supply its --agent ID.')
-      request.payload.harnessId = caller.agentId
+      if (caller) request.payload.harnessId = caller.agentId
+      else if (!help) throw new Error('Run this command inside the participating harness, or supply its --agent ID.')
     }
     const source = daemon
     const scoped = (payload: Record<string, unknown>) => source.request('super_tabs', {
