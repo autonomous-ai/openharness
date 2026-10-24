@@ -39,6 +39,7 @@ class SuperTabFixtureConnection extends WsConn {
   bool failResume = false;
   bool nativeSurface = false;
   bool failFiles = false, failCreation = false, changeAccountOnUpload = false;
+  bool holdPrepareContribution = false;
   late AppNotifier app;
   final sentFiles = <Uint8List>[];
   final terminalCalls = <(String, Map<String, dynamic>)>[];
@@ -124,7 +125,14 @@ class SuperTabFixtureConnection extends WsConn {
     if (type == 'super_tabs') {
       if (payload['action'] == 'wake') return {'ok': true};
       if (payload['action'] == 'prepareContribution') {
-        return {'ok': true, 'state': 'ready', 'cwd': '/work/project', 'engines': ['claude', 'codex', 'pi'], 'maxAgents': 4};
+        if (holdPrepareContribution) return {'ok': true, 'state': 'preparing'};
+        return {
+          'ok': true,
+          'state': 'ready',
+          'cwd': '/work/project',
+          'engines': ['claude', 'codex', 'pi'],
+          'maxAgents': 4,
+        };
       }
       if (payload['action'] == 'prepareNative' ||
           payload['action'] == 'renewNative') {

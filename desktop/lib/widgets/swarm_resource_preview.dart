@@ -206,7 +206,7 @@ class _SwarmResourcePreviewState extends State<SwarmResourcePreview> {
     });
   }
 
-  /// Add a machine shared with this account's domain, from Add machine. A machine shared with this
+  /// Add a machine shared with this account's domain, from Connect a computer. A machine shared with this
   /// account, by its domain or by email alike, is never taken back off its list from here.
   void _addSharedMachine(Machine machine) =>
       unawaited(_run(() => app.addSharedMachine(machine.machineId)));

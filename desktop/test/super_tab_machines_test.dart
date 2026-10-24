@@ -436,6 +436,154 @@ void main() {
   );
 
   testWidgets(
+    'Add: Cancel is disabled and the button shows Preparing… while the dialog is busy',
+    (tester) async {
+      final f = SuperTabLaunchFixture();
+      f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Pilot');
+      f.connection.server.state['project'] = {
+        'machineId': 'm',
+        'cwd': '/work/project',
+        'repositoryUrl': null,
+      };
+      final c = await f.app.superTabs.open(tabId);
+      await c.refresh();
+      await _openAddMachineDialog(tester, f, c);
+
+      f.connection.holdPrepareContribution = true;
+      await tester.tap(find.widgetWithText(FilledButton, 'Add machine'));
+      await tester.pump();
+
+      expect(
+        tester
+            .widget<TextButton>(find.widgetWithText(TextButton, 'Cancel'))
+            .onPressed,
+        isNull,
+      );
+      expect(find.text('Preparing…'), findsOneWidget);
+      expect(find.widgetWithText(FilledButton, 'Add machine'), findsNothing);
+
+      f.connection.holdPrepareContribution = false;
+      await tester.pump(const Duration(seconds: 2));
+      await tester.pumpAndSettle();
+      expect(find.byType(AlertDialog), findsNothing);
+      expect(tester.takeException(), isNull);
+
+      await tester.pumpWidget(const SizedBox());
+      await c.flush();
+      f.app.superTabs.dispose();
+      await tester.pump();
+    },
+  );
+
+  testWidgets(
+    'Configure: Cancel is disabled and the button shows Updating… while the dialog is busy',
+    (tester) async {
+      final f = SuperTabLaunchFixture();
+      f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Pilot');
+      f.connection.server.state['machines'] = [
+        {'machineId': 'm', 'contributorId': 'owner'},
+      ];
+      f.connection.server.state['project'] = {
+        'machineId': 'm',
+        'cwd': '/work/project',
+        'repositoryUrl': null,
+      };
+      final c = await f.app.superTabs.open(tabId);
+      await c.refresh();
+      await _openConfigureDialog(tester, f, c);
+
+      f.connection.holdPrepareContribution = true;
+      await tester.tap(find.widgetWithText(FilledButton, 'Update'));
+      await tester.pump();
+
+      expect(
+        tester
+            .widget<TextButton>(find.widgetWithText(TextButton, 'Cancel'))
+            .onPressed,
+        isNull,
+      );
+      expect(find.text('Updating…'), findsOneWidget);
+      expect(find.widgetWithText(FilledButton, 'Update'), findsNothing);
+
+      f.connection.holdPrepareContribution = false;
+      await tester.pump(const Duration(seconds: 2));
+      await tester.pumpAndSettle();
+      expect(find.byType(AlertDialog), findsNothing);
+      expect(tester.takeException(), isNull);
+
+      await tester.pumpWidget(const SizedBox());
+      await c.flush();
+      f.app.superTabs.dispose();
+      await tester.pump();
+    },
+  );
+
+  testWidgets('Configure on a contributed machine missing from machineStates, or offline, falls back to '
+      'a sensible name with no picker', (tester) async {
+    final f = SuperTabLaunchFixture();
+    f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Pilot');
+    const offline = Machine(
+      machineId: 'm3',
+      authMode: MachineAuthMode.remote,
+      name: 'Offline Contributed',
+    );
+    f.app.machines = [...f.app.machines, offline];
+    f.app.machineStates['m3'] = MachineState(offline)
+      ..nodeOnline = false
+      ..connectionStatus = ConnectionStatus.disconnected
+      ..agentLoadStatus = AgentLoadStatus.loaded;
+    f.connection.server.state['machines'] = [
+      {'machineId': 'm2', 'contributorId': 'owner', 'name': 'Ghost Box'},
+      {
+        'machineId': 'm3',
+        'contributorId': 'owner',
+        'name': 'Offline Contributed',
+      },
+    ];
+    final c = await f.app.superTabs.open(tabId);
+    await c.refresh();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: SizedBox(
+            width: 300,
+            height: 400,
+            child: SuperTabMachines(
+              controller: c,
+              app: f.app,
+              onAddAgent: (_) {},
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    Future<void> checkConfigure(String id, String expectedLabel) async {
+      await tester.tap(find.byKey(ValueKey('super-machine-$id')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.widgetWithText(TextButton, 'Configure'));
+      await tester.pumpAndSettle();
+      expect(find.text('Configure machine'), findsOneWidget);
+      expect(find.byType(AppSelectField<String>), findsNothing);
+      expect(find.text(expectedLabel), findsOneWidget);
+      expect(find.widgetWithText(TextButton, 'Cancel'), findsOneWidget);
+      expect(find.widgetWithText(FilledButton, 'Update'), findsOneWidget);
+      await tester.tap(find.widgetWithText(TextButton, 'Cancel'));
+      await tester.pumpAndSettle();
+    }
+
+    await checkConfigure('m2', 'Ghost Box');
+    await checkConfigure('m3', 'Offline Contributed');
+
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox());
+    await c.flush();
+    f.app.superTabs.dispose();
+    await tester.pump();
+  });
+
+  testWidgets(
     'Configure updates the project folder and installed engines for the existing machine',
     (tester) async {
       final f = SuperTabLaunchFixture();
