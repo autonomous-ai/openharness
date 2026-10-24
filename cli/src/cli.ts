@@ -157,6 +157,11 @@ Machine:
   harness service uninstall    undo that: the daemon goes back to \`harness start\`
   harness service status       what launchd, systemd or Task Scheduler has registered, and whether it runs (--json)
   harness logs export          zip the last 7 days of logs (app, CLI, dial, daemon) to the Desktop
+  harness team setup           on a Mac: a separate account, Harness Team, whose own daemon runs teammates' Swarm
+                               agents so they cannot read your files (one administrator password; again repairs it)
+  harness team status          whether that account exists and runs, its sign-in and privacy check, and what it made
+  harness team remove          delete that account, its home folder and its daemon
+  harness team on|off          a computer used only for agents: sign it in for team work only, or back as your own
   harness tui                  all of Harness in this terminal: swarms, panes, every machine (⌥O ⌥P ⌥N)
   harness new [agent] [--machine <name>] [folder|name] [-- task]
                                make a harness from a shell: \`harness new\` is claude here; see \`harness new -h\`
@@ -365,12 +370,14 @@ async function authStatusCommand(json: boolean): Promise<void> {
     autonomousEnv: latest?.autonomousEnv,
     expiresAt: latest?.expiresAt,
     method: latest?.method ?? 'sso',
+    // A Harness Team sign-in (team/): this computer runs its own Swarm agents and reaches no other computer.
+    ...(latest?.kind ? { kind: latest.kind } : {}),
     // Read-only: a machine that has not signed in yet has no key, and asking must not make one.
     ...(fingerprintNow ? { fingerprint: fingerprintNow } : {}),
   }
   if (json) console.log(JSON.stringify(payload))
   else {
-    console.log(`\n  ${payload.loggedIn ? '✓ Signed in' : '✗ Not signed in'}${payload.machineId ? ` (machine ${payload.machineId})` : ''}${payload.loggedIn && payload.method === 'qr' ? ' — by your phone' : ''}\n`)
+    console.log(`\n  ${payload.loggedIn ? '✓ Signed in' : '✗ Not signed in'}${payload.machineId ? ` (machine ${payload.machineId})` : ''}${payload.loggedIn && payload.kind === 'team' ? ' — for team work only (harness team off undoes it)' : payload.loggedIn && payload.method === 'qr' ? ' — by your phone' : ''}\n`)
     // A session a phone approved is Harness's own, and billing's Autonomous service does not take it.
     // Say so where the person looks, not only when billing refuses. Grid is not named: it learns who
     // holds a Harness-issued sign-in from the Harness backend (autonomous-grid ADR 0046), and naming
@@ -2933,6 +2940,21 @@ switch (cmd) {
     break
   case 'service':
     serviceCommand(rest, serviceCommandDeps({ relaunch: () => launch(false), tildify }))
+      .then((code) => { process.exitCode = code }).catch(onError)
+    break
+  case 'team':
+    // Loaded only here (team/deps.ts). The daemon is stopped before a sign-in changes under it and started again on the
+    // new one; `launch` prints its status block and exits, so it is always the last step.
+    Promise.all([import('./team/command.js'), import('./team/deps.js')])
+      .then(([{ teamCommand }, { teamCommandDeps }]) => teamCommand(rest, teamCommandDeps({
+        stopDaemon: async () => (await stopDaemonOrExit()).pid !== null,
+        startDaemon: () => launch(false),
+        signIn: async (restart) => {
+          const outcome = await loginCommand(false, false, false, { method: 'ask' })
+          if (outcome.signedIn) await restartDaemonForIdentity(restart)
+          else if (restart) await launch(false)
+        },
+      })))
       .then((code) => { process.exitCode = code }).catch(onError)
     break
   case 'reset':
