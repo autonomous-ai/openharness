@@ -52,6 +52,14 @@ describe('adminRunner', () => {
       .toEqual({ ok: false, code: 'FAILED', message: 'The script stopped (exit 2).' })
   })
 
+  it('finds the script\'s reason after earlier lines, which osascript ends with CR', async () => {
+    // As macOS returned it in the VM rig (24 Oct 2026): the owner's CLI said why first, then the script died.
+    const stderr = '0:296: execution error: ✗ Harness would not give a team sign-in code: Invalid or expired token\r'
+      + 'harness: could not get a sign-in code from your Harness sign-in (7)\n'
+    expect(await fixture({ code: 1, stderr }).run(() => ({ script: '' }), 'p'))
+      .toEqual({ ok: false, code: 'FAILED', message: 'could not get a sign-in code from your Harness sign-in' })
+  })
+
   it('removes the stage when building the script throws', async () => {
     const f = fixture({ code: 0 })
     await expect(f.run(() => { throw new Error('bad input') }, 'p')).rejects.toThrow('bad input')

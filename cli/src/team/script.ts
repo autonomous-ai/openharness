@@ -163,6 +163,10 @@ export const TEAM_COPY = [
   'put_dir() { rm -rf "$2.next"; cp -R "$1" "$2.next"; rm -rf "$2"; mv "$2.next" "$2"; }',
   'put_dir "$stage/node" "$rt/$node_name"',
   `printf '%s\\n' "$rt/$node_name/bin/node" > "$rt/current-node.next" && mv -f "$rt/current-node.next" "$rt/current-node"`,
+  // Its Node on its own PATH, as tmux is: Codex's launcher is `#!/usr/bin/env node`, and the account has no other Node, so
+  // `codex login` in a terminal on its machine would not start. ~/.local/bin is last on a login shell's PATH: a Node the
+  // system has wins.
+  'ln -sfn "$rt/$node_name/bin/node" "$bin/node"',
   'if [ -n "$tmux_name" ]; then',
   '  put_dir "$stage/tmux" "$rt/$tmux_name"',
   `  printf '%s\\n' "$rt/$tmux_name/bin/tmux" > "$rt/current-tmux.next" && mv -f "$rt/current-tmux.next" "$rt/current-tmux"`,
@@ -349,15 +353,23 @@ export function buildSetupScript(input: SetupScriptInput): string {
     '',
     '# 7. Sign-in: a single-use code minted from the owner\'s own sign-in now, so its 90 seconds start here, and',
     '#    written where only the team account can read it. The team daemon redeems it as it starts and deletes it.',
+    '#    A code that cannot be had is reported after step 8: step 4 stopped the daemon, and it must start again,',
+    '#    with the sign-in it had or none, rather than stay stopped until the next successful setup or restart.',
+    'no_sign_in=',
     'if [ "$SIGN_IN" = always ] || [ ! -s "$TEAM_SESSION" ]; then',
-    `  minted=$(as_owner /usr/bin/env ${mintEnv ? `${mintEnv} ` : ''}"$OWNER_NODE" "$OWNER_CLI" team __handoff) || die "could not get a sign-in code from your Harness sign-in" 7`,
+    `  if minted=$(as_owner /usr/bin/env ${mintEnv ? `${mintEnv} ` : ''}"$OWNER_NODE" "$OWNER_CLI" team __handoff); then`,
     // Its last line: a warning the CLI printed first must not become part of the code.
-    '  code=$(printf \'%s\\n\' "$minted" | tail -n 1)',
+    '    code=$(printf \'%s\\n\' "$minted" | tail -n 1)',
     // The shell's own check of what ./layout.ts HANDOFF_CODE allows: token characters, 16 to 256 of them.
-    '  case $code in \'\'|*[!A-Za-z0-9_-]*) die "the sign-in code was not in the form Harness expects" 7 ;; esac',
-    '  [ "${#code}" -ge 16 ] && [ "${#code}" -le 256 ] || die "the sign-in code was not in the form Harness expects" 7',
-    `  printf '%s\\n' "$code" | as_team /bin/sh -c ${sh(WRITE_PRIVATE)} sh "$HANDOFF"`,
-    '  say "handed a sign-in to the team account"',
+    '    case $code in \'\'|*[!A-Za-z0-9_-]*) no_sign_in="the sign-in code was not in the form Harness expects" ;; esac',
+    '    [ -n "$no_sign_in" ] || { [ "${#code}" -ge 16 ] && [ "${#code}" -le 256 ]; } || no_sign_in="the sign-in code was not in the form Harness expects"',
+    '  else',
+    '    no_sign_in="could not get a sign-in code from your Harness sign-in"',
+    '  fi',
+    '  if [ -z "$no_sign_in" ]; then',
+    `    printf '%s\\n' "$code" | as_team /bin/sh -c ${sh(WRITE_PRIVATE)} sh "$HANDOFF"`,
+    '    say "handed a sign-in to the team account"',
+    '  fi',
     'fi',
     '',
     '# 8. The LaunchDaemon, root\'s, which runs the team daemon as the team account from boot.',
@@ -372,6 +384,7 @@ export function buildSetupScript(input: SetupScriptInput): string {
     '  sleep 1',
     'done',
     'say "the team daemon runs as $TEAM ($LABEL)"',
+    '[ -z "$no_sign_in" ] || die "$no_sign_in; the team daemon runs without a new sign-in" 7',
     '',
   ]
   return lines.join('\n')

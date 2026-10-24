@@ -172,6 +172,9 @@ function byHandLines(ownerHome: string): string[] {
 
 const notMac = 'The Harness Team account is made on a Mac. On a computer used only for agents, run `harness team on`.'
 
+/** A script's reason as a sentence, so the one after it does not run on: the scripts' own reasons end without a stop. */
+const sentence = (text: string): string => /[.!?]$/.test(text) ? text : `${text}.`
+
 async function setup(deps: TeamCommandDeps, json: boolean, signInAgain: boolean): Promise<number> {
   if (deps.platform !== 'darwin') return fail(deps, json, 'UNSUPPORTED', notMac)
   if (deps.uid() === 0) return fail(deps, json, 'RUN_AS_YOURSELF', 'Run this as yourself, not with sudo: macOS asks for an administrator password itself.')
@@ -213,7 +216,7 @@ async function setup(deps: TeamCommandDeps, json: boolean, signInAgain: boolean)
   }), SETUP_PROMPT)
   if (!result.ok) {
     if (result.code === 'CANCELLED') return fail(deps, json, 'CANCELLED', 'Nothing was changed: the administrator prompt was cancelled.')
-    return fail(deps, json, 'SETUP_FAILED', `The Harness Team account was not finished: ${result.message} Run \`harness team setup\` again; it repairs what is there.`)
+    return fail(deps, json, 'SETUP_FAILED', `The Harness Team account was not finished: ${sentence(result.message)} Run \`harness team setup\` again; it repairs what is there.`)
   }
   try { deps.setupDecision?.clear() } catch { /* only Desktop's offer reads it */ }
   const handedOver = /handed a sign-in to the team account/.test(result.stdout)
@@ -319,7 +322,7 @@ async function remove(deps: TeamCommandDeps, json: boolean): Promise<number> {
   }), REMOVE_PROMPT)
   if (!result.ok) {
     if (result.code === 'CANCELLED') return fail(deps, json, 'CANCELLED', 'Nothing was removed: the administrator prompt was cancelled.')
-    return fail(deps, json, 'REMOVE_FAILED', `The Harness Team account was not fully removed: ${result.message} Run \`harness team remove\` again.`)
+    return fail(deps, json, 'REMOVE_FAILED', `The Harness Team account was not fully removed: ${sentence(result.message)} Run \`harness team remove\` again.`)
   }
   try { deps.setupDecision?.decline() } catch { /* only Desktop's offer reads it */ }
   if (json) deps.out(JSON.stringify({ ok: true, removed: true }))

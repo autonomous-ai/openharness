@@ -112,6 +112,21 @@ describe('setup script', () => {
     expect(buildSetupScript(input())).toContain('if [ "$SIGN_IN" = always ] || [ ! -s "$TEAM_SESSION" ]; then')
   })
 
+  it('starts the daemon it stopped again when no sign-in code can be had, then says why', () => {
+    // In the VM rig (24 Oct 2026) a repair run whose mint was refused died at step 7, after step 4 had stopped the daemon:
+    // the team machine stayed down until the Mac restarted.
+    const script = buildSetupScript(input())
+    expect(script).not.toMatch(/team __handoff\)[^\n]*\|\| die/)
+    expect(script).not.toMatch(/die "the sign-in code was not in the form/)
+    const bootstrap = at(script, 'launchctl bootstrap system "$PLIST"')
+    expect(at(script, 'no_sign_in="could not get a sign-in code from your Harness sign-in"')).toBeLessThan(bootstrap)
+    expect(at(script, 'no_sign_in="the sign-in code was not in the form Harness expects"')).toBeLessThan(bootstrap)
+    expect(at(script, '[ -z "$no_sign_in" ] || die "$no_sign_in; the team daemon runs without a new sign-in" 7')).toBeGreaterThan(bootstrap)
+    // Nothing is handed over without a code.
+    expect(at(script, 'if [ -z "$no_sign_in" ]; then')).toBeLessThan(at(script, 'printf \'%s\\n\' "$code" | as_team'))
+    parses(script)
+  })
+
   it('copies a managed tmux only when there is one', () => {
     expect(buildSetupScript(input())).toContain("TMUX_NAME=''")
     const script = buildSetupScript(input({ tmuxRuntimeDir: `${OWNER_HOME}/.harness/runtime/tmux-3.5a-darwin-arm64` }))
@@ -178,6 +193,8 @@ describe('the team account\'s copy of the runtime', () => {
     const runtime = join(home, '.harness', 'runtime')
     expect(readFileSync(join(runtime, 'current-node'), 'utf8')).toBe(`${runtime}/node-v1/bin/node\n`)
     expect(existsSync(join(runtime, 'node-v1.next'))).toBe(false)
+    // On the account's PATH, so Codex's `#!/usr/bin/env node` launcher starts in its terminals.
+    expect(readlinkSync(join(home, '.local', 'bin', 'node'))).toBe(`${runtime}/node-v1/bin/node`)
     expect(readFileSync(join(home, '.harness', 'cli', 'cli.js'), 'utf8')).toBe('// cli')
     expect(existsSync(join(home, '.harness', 'cli', 'notify.mjs'))).toBe(false)
     expect(statSync(join(home, '.harness')).mode & 0o777).toBe(0o700)

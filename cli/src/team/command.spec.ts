@@ -157,6 +157,14 @@ describe('harness team setup', () => {
     const stopped = fake({ adminResult: { ok: false, code: 'FAILED', message: 'launchd would not start the team daemon' } })
     expect(await teamCommand(['setup', '--json'], stopped.deps)).toBe(1)
     expect(JSON.parse(stopped.out.at(-1)!)).toMatchObject({ ok: false, code: 'SETUP_FAILED' })
+    // The script's reason has no full stop of its own; the sentence after it must not run on.
+    const unsigned = fake({ adminResult: { ok: false, code: 'FAILED', message: 'could not get a sign-in code from your Harness sign-in; the team daemon runs without a new sign-in' } })
+    expect(await teamCommand(['setup'], unsigned.deps)).toBe(1)
+    expect(unsigned.err[0]).toBe('✗ The Harness Team account was not finished: could not get a sign-in code from your Harness sign-in; '
+      + 'the team daemon runs without a new sign-in. Run `harness team setup` again; it repairs what is there.')
+    const failedRemove = fake({ readConfig: () => config, adminResult: { ok: false, code: 'FAILED', message: 'The script stopped (exit 2).' } })
+    expect(await teamCommand(['remove'], failedRemove.deps)).toBe(1)
+    expect(failedRemove.err[0]).toBe('✗ The Harness Team account was not fully removed: The script stopped (exit 2). Run `harness team remove` again.')
   })
 
   it('refuses where it cannot help, before any prompt', async () => {

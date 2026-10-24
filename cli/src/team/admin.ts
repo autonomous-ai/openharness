@@ -48,7 +48,9 @@ export function adminRunner(deps: AdminDeps = {}): RunAdmin {
         return { ok: false, code: 'CANCELLED', message: 'The administrator prompt was cancelled.' }
       }
       if (result.code !== 0) {
-        const said = result.stderr.trim().split('\n').pop()?.replace(/^.*harness: /, '').replace(/\s*\(\d+\)$/, '') ?? ''
+        // `do shell script` hands the script's stderr back with its lines ended by CR, not LF: split on both, or a reason
+        // after an earlier line is never found, and the CR left in it makes a terminal print the line over itself.
+        const said = result.stderr.trim().split(/[\r\n]+/).pop()?.replace(/^.*harness: /, '').replace(/\s*\(\d+\)$/, '') ?? ''
         return { ok: false, code: 'FAILED', message: said || `The script stopped (exit ${result.code}).` }
       }
       return { ok: true, stdout: result.stdout }
