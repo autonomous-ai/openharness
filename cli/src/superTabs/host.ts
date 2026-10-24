@@ -730,11 +730,17 @@ export class SuperTabHost {
       .filter(group => group.archived !== true && identifier(group.id) && Array.isArray(group.agentIds) && group.agentIds.includes(id))
     const group = groups.find(g => g.leadId === id) ?? groups.find(g => object(g.assignment).agentId === id) ?? groups[0]
     if (!group || !current()) return false
+    const send = (agentOnly: boolean) => backend(this.core, 'POST', `/api/super-tabs/${target.tabId}/commands`, {
+      // A switch back to an earlier mode's text is a new rewrite, so its count keeps it from reusing that text's id.
+      operationId: `skill-${id}-${refresh.version.slice(0, 32)}${refresh.change ? `-${refresh.change}` : ''}`, asAgentId: id,
+      command: { type: 'message.send', conversationId: group.id, replyTo: null, recipientIds: [id], text: refresh.notice, ...(agentOnly ? { agentOnly } : {}) },
+    })
     try {
-      await backend(this.core, 'POST', `/api/super-tabs/${target.tabId}/commands`, {
-        // A switch back to an earlier mode's text is a new rewrite, so its count keeps it from reusing that text's id.
-        operationId: `skill-${id}-${refresh.version.slice(0, 32)}${refresh.change ? `-${refresh.change}` : ''}`, asAgentId: id,
-        command: { type: 'message.send', conversationId: group.id, replyTo: null, recipientIds: [id], text: refresh.notice },
+      // Only the agent sees its notice. A backend from before the mark refuses it before recording anything, so the same
+      // id sends it the old way, visible in the group (2026-10-24: the owner found it confusing in the project chat).
+      await send(true).catch(error => {
+        if (error instanceof SuperTabHostError && error.code === 'VALIDATION_ERROR' && error.message.includes('"agentOnly"')) return send(false)
+        throw error
       })
     } catch (error) {
       // The notice was sent, but its record was lost (a crash, a restart, another daemon) and its group has changed since:
@@ -940,6 +946,8 @@ export class SuperTabHost {
       ? `In reply to message ${message.replyTo}. Read it before interpreting the answer: ${command} message ${shellQuote(group)} ${shellQuote(message.replyTo)}\n\n`
       : ''
     const source = object(message.source)
+    // A notice for this agent alone (a skill update): nobody else sees it, so nothing invites a reply in the conversation.
+    if (source.kind === 'agent-only') return String(message.text)
     const native = source.kind === 'native'
       ? `This is an observed native ${String(source.phase)} in ${String(object(message.author).name ?? 'an agent')}’s terminal, opened by ${String(object(source.operator).name ?? 'a collaborator')}. The input already reached that agent. Keep the shared work coordinated; do not replay the same instruction.\n\n`
       : ''
