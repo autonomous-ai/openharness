@@ -2547,6 +2547,12 @@ describe('machine removal', () => {
     const invitation = await run(tab, { type: 'invite.create', email: host.email, role: 'collaborator', conversationId: 'lead' })
     await run(tab, { type: 'invite.accept', inviteId: invitation.result.inviteId as string }, host)
     await run(tab, { type: 'machine.contribute', machineId: 'test-host', name: 'Host', cwd: '/fixture/repo', engines: ['codex'], maxAgents: 4 }, host)
+    // Its host is here and reporting, so removing it waits for that host to acknowledge.
+    const machine = (await store.hostPools(host, 'test-host')).find(pool => pool.tabId === tab)!.machine
+    await store.observeMachine(host, tab, 'test-host', { generation: machine.generation,
+      resources: { cpuPercent: 10, memoryTotalBytes: 32e9, memoryUsedBytes: 4e9, diskFreeBytes: 120e9, diskTotalBytes: 500e9,
+        projectDiskFreeBytes: 120e9, deviceType: 'Laptop', chip: 'Fixture', os: 'macOS', gpuPercent: null },
+      quotas: [], tools: {}, runningHarnessIds: [], stoppedHarnessIds: [] })
     return tab
   }
   const cleanups = async (tab: string, from = store) => (await from.hostTabs(host, 'test-host')).filter(r => r.tabId === tab && 'cleanup' in r)
@@ -2576,6 +2582,34 @@ describe('machine removal', () => {
     expect(ack.statusCode, ack.body).toBe(200)
     expect(await cleanups(tab)).toEqual([])
     expect((await store.read(owner, tab)).state.machines).toEqual([])
+  })
+
+  it('drops a machine that went silent while cleaning, and a reconnecting host gets that cleanup once before its ack', async () => {
+    const tab = await contributed()
+    const generation = (await store.hostPools(host, 'test-host')).find(pool => pool.tabId === tab)!.machine.generation
+    const removalId = (await run(tab, { type: 'machine.remove', machineId: 'test-host' }, host)).result.removalId as string
+    // Its host goes silent for longer than three beats: a read leaves the machine out, but its stored removal is still there.
+    const later = new SuperTabStore(db, () => Date.now() + 60_000)
+    const stored = async () => (await db.superTab.findUniqueOrThrow({ where: { id: tab } })).state as unknown as SuperTabState
+    expect((await later.read(owner, tab)).state.machines).toEqual([])
+    expect((await stored()).machines!.map(m => m.removal?.id)).toEqual([removalId])
+    // It reconnects and reports before acknowledging: that reading must not bring the machine back as cleaning.
+    await later.observeMachine(host, tab, 'test-host', { generation,
+      resources: { cpuPercent: 10, memoryTotalBytes: 32e9, memoryUsedBytes: 4e9, diskFreeBytes: 120e9, diskTotalBytes: 500e9,
+        projectDiskFreeBytes: 120e9, deviceType: 'Laptop', chip: 'Fixture', os: 'macOS', gpuPercent: null },
+      quotas: [], tools: {}, runningHarnessIds: [], stoppedHarnessIds: [] })
+    expect((await later.read(owner, tab)).state.machines).toEqual([])
+    expect((await stored()).machines).toEqual([])
+    // One cleanup, not one per poll.
+    expect(await cleanups(tab, later)).toEqual([{ tabId: tab, cleanup: { machineId: 'test-host', removalId } }])
+    expect(await cleanups(tab, later)).toEqual([{ tabId: tab, cleanup: { machineId: 'test-host', removalId } }])
+    // A delayed acknowledgement closes it; a second, late one finds nothing left to undo.
+    await later.execute(host, tab, { operationId: randomUUID(), command: { type: 'machine.cleaned', machineId: 'test-host', removalId } })
+    expect(await cleanups(tab, later)).toEqual([])
+    expect((await stored()).machineCleanups).toBeUndefined()
+    const late = await app.inject({ method: 'POST', url: `/api/super-tabs/${tab}/commands`, headers: { authorization: `Bearer ${host.sub}` },
+      payload: { operationId: randomUUID(), command: { type: 'machine.cleaned', machineId: 'test-host', removalId } } })
+    expect(late.statusCode).toBe(404)
   })
 
   it('lists a pending cleanup to its host even when the machine is in more than the 100 Swarms a host poll reads', async () => {
