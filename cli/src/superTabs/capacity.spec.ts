@@ -15,6 +15,18 @@ it('uses the destination filesystem and reports missing tools/devices without ex
   expect(await readCapabilities({ cwd: '/fixture', tools: ['git; whoami'] }, deps)).toMatchObject({ error: 'INVALID_REQUEST' })
   expect(deps.tool).toHaveBeenCalledTimes(1)
 })
+it('names a Codex window by its length, so an account with only its weekly window reads as weekly', () => {
+  const reading = (rate_limit: unknown) => ({ providers: [{ provider: 'codex', outcome: 'answered', httpStatus: 200, body: { rate_limit } }] })
+  expect(quotaOf(reading({ primary_window: { used_percent: 19, reset_at: 9, limit_window_seconds: 604800 }, secondary_window: null }), 'codex', false).windows)
+    .toEqual([{ usedPercent: 19, resetsAt: 9, name: 'weekly' }])
+  expect(quotaOf(reading({ primary_window: { used_percent: 5, reset_at: 1, limit_window_seconds: 18000 }, secondary_window: { used_percent: 9, reset_at: 2, limit_window_seconds: 604800 } }), 'codex', false).windows)
+    .toEqual([{ usedPercent: 5, resetsAt: 1, name: '5-hour' }, { usedPercent: 9, resetsAt: 2, name: 'weekly' }])
+  // Two windows of one length keep the first; a length that is not a number falls back to the position.
+  expect(quotaOf(reading({ primary_window: { used_percent: 5, limit_window_seconds: 604800 }, secondary_window: { used_percent: 9, limit_window_seconds: 604800 } }), 'codex', false).windows)
+    .toEqual([{ usedPercent: 5, resetsAt: null, name: 'weekly' }])
+  expect(quotaOf(reading({ primary_window: { used_percent: 5, limit_window_seconds: 'x' } }), 'codex', false).windows)
+    .toEqual([{ usedPercent: 5, resetsAt: null, name: '5-hour' }])
+})
 it('keeps unknown quota distinct from unused quota and honors all limiting windows', () => {
   const input = { providers: [{ provider: 'codex', account: 'opaque', email: 'private@example.com', outcome: 'answered', httpStatus: 200,
     body: { rate_limit: { primary_window: { used_percent: 10, reset_at: 1000 }, secondary_window: { used_percent: 100, reset_at: 2000 } } } }] }

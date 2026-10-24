@@ -275,7 +275,10 @@ function sizeUp(p: Probe, policy: Policy, a: Assessment, now: number, open: Comm
     return [{ name, usable: w.leftPercent - policy.quotaReserve - committed(name), resetsIn,
       needed: resetsIn !== null && resetsIn < runMs ? spend[name] * resetsIn / runMs : spend[name] }]
   })
-  const status = windows.some(w => w.usable < w.needed) ? 'short' : windows.length === WINDOWS.length ? 'fits' : 'unknown'
+  // Every account has a weekly window; a Codex account may have no 5-hour one at all, reporting its weekly alone (2026-10-24),
+  // and that reading is complete.
+  const complete = windows.length === WINDOWS.length || (p.engine === 'codex' && windows.length === 1 && windows[0]!.name === 'weekly')
+  const status = windows.some(w => w.usable < w.needed) ? 'short' : complete ? 'fits' : 'unknown'
   const tight = windows.length ? windows.reduce((x, y) => y.usable / y.needed < x.usable / x.needed ? y : x) : null
   const five = windows.find(w => w.name === '5-hour'), week = windows.find(w => w.name === 'weekly')
   // A 5-hour window that resets before the task ends, or soon after, loses what is left of it: spending it costs nothing.
