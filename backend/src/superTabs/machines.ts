@@ -208,7 +208,9 @@ export function teamPoolOf(state: SuperTabState, pool: ContributedMachine): Cont
 
 /** Where a new agent for [project] runs when a start names [machineId]: the Mac's team account when the project is not
  *  its contributor's own and the Mac has one in this Swarm, else the machine named. */
-export function teamMachineFor(state: SuperTabState, machineId: string, project: SwarmProject): string {
+export function teamMachineFor(state: SuperTabState, machineId: string, project: SwarmProject, idle = false): string {
+  // With no GitHub App on this server a team account cannot fetch or push, so the work stays on the Mac, as before.
+  if (idle) return machineId
   const pool = state.machines?.find(m => m.machineId === machineId)
   if (!pool || project.ownerId === pool.contributorId) return machineId
   return teamPoolOf(state, pool)?.machineId ?? machineId
@@ -226,8 +228,8 @@ export function projectFolder(pool: ContributedMachine, project: SwarmProject): 
  * place of the Mac's own for that project. Every other start is returned as it is, so the Mac's owner's own projects
  * stay with the owner's daemon, and a Mac without a team account here refuses it as before (teamWorkCheck).
  */
-export function teamStartRequest(state: SuperTabState, request: AgentStartRequest, project: SwarmProject): AgentStartRequest {
-  const machineId = teamMachineFor(state, request.machineId, project)
+export function teamStartRequest(state: SuperTabState, request: AgentStartRequest, project: SwarmProject, idle = false): AgentStartRequest {
+  const machineId = teamMachineFor(state, request.machineId, project, idle)
   if (machineId === request.machineId) return request
   const pool = state.machines!.find(m => m.machineId === request.machineId)!, team = state.machines!.find(m => m.machineId === machineId)!
   return { ...request, machineId, cwd: request.cwd === projectFolder(pool, project) ? projectFolder(team, project) : request.cwd }

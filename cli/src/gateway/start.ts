@@ -32,7 +32,7 @@ import { b64d, b64e, fingerprint } from '../lib/e2ee/core.js'
 import { DeviceLogStore } from '../lib/e2ee/deviceLogStore.js'
 import { DeviceLogSyncer, type DeviceKeysSeen, type DeviceLogFetched, type DeviceLogTrustOutcome } from '../lib/e2ee/deviceLogSyncer.js'
 import { GroupSyncer, relayRequester, SELF_STAMP } from '../lib/e2ee/groupSyncer.js'
-import { MachineKinds } from '../lib/e2ee/machineKinds.js'
+import { MACHINE_KINDS_READ_TIMEOUT_MS, MachineKinds } from '../lib/e2ee/machineKinds.js'
 import { MachinePeerStore } from '../lib/e2ee/machinePeers.js'
 import { applySharedTrust, isSharedKey } from './sharedTrust.js'
 import { E2eeStore } from '../lib/e2ee/store.js'
@@ -133,9 +133,11 @@ export function startGateway(host: GatewayHost): StartedGateway {
   let account = host.account
   let reachable: Set<string> | null = null
   // Which of the account's machines are team machines, whose rosters the trust group never takes (lib/e2ee/machineKinds.ts).
+  // Its own read, apart from the machine list the apps get: it changes neither that list nor which machines are reachable,
+  // and a backend that hangs holds a roster round up for seconds, not the proxy's whole bound.
   const machineKinds = new MachineKinds({
     read: async () => {
-      const answer = await accountHttp.machines()
+      const answer = await accountHttp.backend('GET', '/api/machines', undefined, MACHINE_KINDS_READ_TIMEOUT_MS)
       return answer.status === 200 && account.machineId ? answer.body : null
     },
   })

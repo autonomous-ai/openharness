@@ -119,6 +119,9 @@ export interface SuperTabStoreHooks {
   /** Tasks that stopped being in an agent's hands with this write (github/holds.ts): done, cancelled, stopped, given to
    *  another attempt, or their agent removed. Called after the write commits; it must not throw. */
   workEnded?: (tabId: string, ended: WorkHold[]) => void
+  /** No Harness GitHub App on this server: a Mac's Harness Team account joins no Swarm and takes no teammates' work, since
+   *  it has no git login to fetch or push with (commands.ts `teamAccountsIdle`). */
+  teamAccountsIdle?: boolean
 }
 
 /** Persistent coordination. Host adapters own execution and must confirm their local session grants. */
@@ -599,7 +602,10 @@ export class SuperTabStore {
       if (command.type === 'mention.done') context.mention = await readMention(tx, tabId, command.mentionId)
       if (command.type === 'message.send' && command.attachmentIds?.length) context.attachments = await this.sendable(tx, tabId, actor, command)
       if (command.type === 'route.record') context.recentRoutes = await recentRoutes(tx, tabId, context.now)
-      if (TEAM_WORK_COMMANDS.has(command.type)) context.teamMachines = await this.teamMachines(tx, original)
+      if (TEAM_WORK_COMMANDS.has(command.type)) {
+        context.teamMachines = await this.teamMachines(tx, original)
+        if (this.hooks.teamAccountsIdle) context.teamAccountsIdle = true
+      }
       if (command.type === 'agent.screen' || command.type === 'agent.input') {
         // A machine that is gone or no longer shared refuses at once instead of leaving the request to time out.
         await this.agentGrant(tx, original, agent(original, command.agentId))
@@ -1290,7 +1296,7 @@ export class SuperTabStore {
       const cleaning = await tx.superTab.findMany({ where: { autonomousEnv: user.autonomousEnv, cleanupMachineIds: { has: machineId },
         id: { notIn: rows.map(r => r.id) } } })
       // This Mac's Harness Team account, which joins wherever this Mac is added (machines.ts): asked of the owner's own daemon only.
-      const teams = isTeamSession(user) ? [] : await tx.machine.findMany({ where: { userId: user.sub, hostMachineId: machineId, sessionKind: 'team',
+      const teams = isTeamSession(user) || this.hooks.teamAccountsIdle ? [] : await tx.machine.findMany({ where: { userId: user.sub, hostMachineId: machineId, sessionKind: 'team',
         autonomousEnv: user.autonomousEnv, ...machineAlive }, select: { machineId: true } })
       const result = []
       for (const row of rows) {

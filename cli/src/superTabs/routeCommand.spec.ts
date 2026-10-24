@@ -833,6 +833,12 @@ describe('routing contributed capacity', () => {
       expect(excluded.some(e => e.reason === NO_ACCOUNT)).toBe(false)
     })
 
+    it('offers a team account whose Mac is not in the Swarm as itself, folded into nothing', async () => {
+      // Probed for new agents under its own name (here outranked on quota by the Lead's own machine), not left out as folded.
+      const { excluded } = await route('owner', [{ ...team(), hostMachineId: 'm-elsewhere' }])
+      expect(excluded).toEqual(expect.arrayContaining([expect.objectContaining({ title: 'New agent · Claude opus high · MacBook Pro' })]))
+    })
+
     it('a machines rule naming the Mac allows its team account', async () => {
       const rules = [{ id: 'r1', projectId: 'lead', rule: { kind: 'machines', machineIds: ['m1'] }, text: 'Only the MacBook Pro.' }]
       expect((await route('owner', undefined, rules)).answer).toMatchObject({ ok: true, pick: { machineId: 'm1-team' } })
