@@ -14,8 +14,8 @@ function fixture(answer: { code: number | null; stdout?: string; stderr?: string
   const stage = join(parent, 'stage')
   const seen: { script?: string; files: Record<string, { text: string; mode: number }> } = { files: {} }
   // Never osascript: the fake reads what was staged, as root would, and answers.
-  const runner = vi.fn<GuestRunner>(async (_command, args) => {
-    const path = /quoted form of "([^"]+)"/.exec(args[1]!)![1]!
+  const runner = vi.fn<GuestRunner>(async (command, args) => {
+    const path = command === 'sudo' ? args.at(-1)! : /quoted form of "([^"]+)"/.exec(args[1]!)![1]!
     seen.script = readFileSync(path, 'utf8')
     for (const name of ['team.json', 'team.plist']) {
       const file = join(stage, name)
@@ -47,7 +47,7 @@ describe('adminRunner', () => {
     expect(await fixture({ code: 1, stderr: '0:180: execution error: User canceled. (-128)' }).run(() => ({ script: '' }), 'p'))
       .toEqual({ ok: false, code: 'CANCELLED', message: 'The administrator prompt was cancelled.' })
     expect(await fixture({ code: 1, stderr: '0:180: execution error: harness: launchd would not start the team daemon (8)' }).run(() => ({ script: '' }), 'p'))
-      .toEqual({ ok: false, code: 'FAILED', message: 'launchd would not start the team daemon' })
+      .toEqual({ ok: false, code: 'FAILED', message: 'launchd would not start the team daemon', status: 8 })
     expect(await fixture({ code: 2, stderr: '' }).run(() => ({ script: '' }), 'p'))
       .toEqual({ ok: false, code: 'FAILED', message: 'The script stopped (exit 2).' })
   })
@@ -57,7 +57,27 @@ describe('adminRunner', () => {
     const stderr = '0:296: execution error: ✗ Harness would not give a team sign-in code: Invalid or expired token\r'
       + 'harness: could not get a sign-in code from your Harness sign-in (7)\n'
     expect(await fixture({ code: 1, stderr }).run(() => ({ script: '' }), 'p'))
-      .toEqual({ ok: false, code: 'FAILED', message: 'could not get a sign-in code from your Harness sign-in' })
+      .toEqual({ ok: false, code: 'FAILED', message: 'could not get a sign-in code from your Harness sign-in', status: 7 })
+  })
+
+  it('runs the script with sudo in the terminal when asked, with the prompt\'s sentence, and the password every time', async () => {
+    const f = fixture({ code: 0, stdout: 'harness: team computer abc\n' })
+    expect(await f.run((dir) => ({ script: `#!/bin/sh\necho ${dir}\n` }), 'Harness wants to remove 100% of it.', 'sudo'))
+      .toEqual({ ok: true, stdout: 'harness: team computer abc\n' })
+    const [command, args] = f.runner.mock.calls[0]!
+    expect(command).toBe('sudo')
+    expect(args).toEqual(['-k', '-p', 'Harness wants to remove 100%% of it.\nPassword for %u: ', '/bin/sh', join(f.stage, 'run.sh')])
+    expect(existsSync(f.stage)).toBe(false)
+  })
+
+  it('with sudo, tells a password sudo never got from a script that stopped, and keeps the script\'s exit status', async () => {
+    expect(await fixture({ code: 1, stderr: 'Sorry, try again.\nsudo: 3 incorrect password attempts\n' }).run(() => ({ script: '' }), 'p', 'sudo'))
+      .toEqual({ ok: false, code: 'CANCELLED', message: 'sudo did not get an administrator password.' })
+    const refused = fixture({ code: 9, stderr: 'harness: could not delete the account harnessteam: macOS did not allow it (eDSPermissionError). Nothing was removed\n' })
+    expect(await refused.run(() => ({ script: '' }), 'p', 'sudo')).toEqual({ ok: false, code: 'FAILED', status: 9,
+      message: 'could not delete the account harnessteam: macOS did not allow it (eDSPermissionError). Nothing was removed' })
+    expect(await fixture({ code: 3, stderr: '' }).run(() => ({ script: '' }), 'p', 'sudo'))
+      .toEqual({ ok: false, code: 'FAILED', message: 'The script stopped (exit 3).', status: 3 })
   })
 
   it('removes the stage when building the script throws', async () => {

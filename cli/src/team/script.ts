@@ -14,7 +14,7 @@
  */
 import { TEAM_ENGINES } from './engines.js'
 import {
-  SENTINEL_NAME, TEAM_CONFIG_FILE, TEAM_LABEL, TEAM_PLIST, TEAM_SHARED_DIR, TEAM_STATUS_DIR,
+  SENTINEL_NAME, TEAM_CONFIG_FILE, TEAM_LABEL, TEAM_PLIST, TEAM_SHARED_DIR, TEAM_SHARED_MARK, TEAM_STATUS_DIR,
   checkName, checkPath, checkPort, checkUser, teamPaths,
 } from './layout.js'
 
@@ -201,6 +201,24 @@ export const TEAM_ENGINES_INSTALL = [
   'done',
 ].join('\n')
 
+/**
+ * The team account's password. macOS lists only an account with one: macOS 26 hides an account whose password is `*`
+ * from Users & Groups. A random one, made here and forgotten: never printed, logged or stored, and never a process's
+ * argument, where `ps` shows it to every account. `printf` is the shell's own, and dscl reads the command from its
+ * input. Once: a repair run keeps the password there, and gives one to an account made before this (`*`). Set by root,
+ * so the account gets no secure token. Run inside the setup script, with $TEAM and die().
+ */
+export const TEAM_PASSWORD = [
+  'if ! dscl . -read "/Users/$TEAM" AuthenticationAuthority 2>/dev/null | grep -q ";ShadowHash;"; then',
+  `  pw=$(LC_ALL=C tr -dc 'A-Za-z0-9' </dev/urandom | head -c 40)`,
+  '  [ "${#pw}" -eq 40 ] || die "could not make a password for the account $TEAM" 4',
+  `  printf 'passwd /Users/%s %s\\n' "$TEAM" "$pw" | dscl . >/dev/null 2>&1 || true`,
+  '  pw=',
+  '  dscl . -read "/Users/$TEAM" AuthenticationAuthority 2>/dev/null | grep -q ";ShadowHash;" \\',
+  '    || die "macOS did not take a password for the account $TEAM, so Users & Groups would not list it" 4',
+  'fi',
+].join('\n')
+
 /** Stdin to a file, as whoever runs it: the next name first, then a rename, so a reader never sees half of it. */
 export const WRITE_PRIVATE = 'umask 077 && cat > "$1.next" && mv -f "$1.next" "$1"'
 export const WRITE_PUBLIC = 'umask 022 && cat > "$1.next" && chmod 644 "$1.next" && mv -f "$1.next" "$1"'
@@ -249,6 +267,7 @@ export function buildSetupScript(input: SetupScriptInput): string {
     `OWNER_NODE=${sh(ownerNode)}`,
     `OWNER_CLI=${sh(ownerCli)}`,
     `SHARED=${sh(TEAM_SHARED_DIR)}`,
+    `SHARED_MARK=${sh(TEAM_SHARED_MARK)}`,
     `CONFIG=${sh(TEAM_CONFIG_FILE)}`,
     `STATUS_DIR=${sh(TEAM_STATUS_DIR)}`,
     `LABEL=${sh(TEAM_LABEL)}`,
@@ -285,8 +304,8 @@ export function buildSetupScript(input: SetupScriptInput): string {
     '[ -f "$CLI_SRC/cli.js" ] || die "no installed Harness CLI at $CLI_SRC"',
     '[ -x "$NODE_SRC/bin/node" ] || die "no Harness Node runtime at $NODE_SRC"',
     '',
-    '# 1. The account: a standard user named Harness Team, visible in System Settings > Users & Groups, whose',
-    '#    password is unusable, so nobody can sign in to it. An account by this name that is not ours is left alone.',
+    '# 1. The account: a standard user named Harness Team, listed in System Settings > Users & Groups. Its password is',
+    '#    random and nobody knows it, so nobody can sign in to it. An account by this name that is not ours is left alone.',
     'if dscl . -read "/Users/$TEAM" UniqueID >/dev/null 2>&1; then',
     "  existing=$(dscl . -read \"/Users/$TEAM\" NFSHomeDirectory 2>/dev/null | awk '{print $2}')",
     '  [ "$existing" = "$TEAM_HOME" ] || die "an account named $TEAM already exists and is not the Harness Team account; nothing was changed" 4',
@@ -294,13 +313,15 @@ export function buildSetupScript(input: SetupScriptInput): string {
     '  say "creating the account $TEAM_NAME ($TEAM)"',
     '  uid=$(free_id)',
     '  dscl . -create "/Users/$TEAM"',
+    // No way in while the record is being made: the random password below replaces this.
+    "  dscl . -create \"/Users/$TEAM\" Password '*'",
     '  dscl . -create "/Users/$TEAM" UniqueID "$uid"',
     '  dscl . -create "/Users/$TEAM" NFSHomeDirectory "$TEAM_HOME"',
     'fi',
     'dscl . -create "/Users/$TEAM" RealName "$TEAM_NAME"',
     'dscl . -create "/Users/$TEAM" PrimaryGroupID 20',
     'dscl . -create "/Users/$TEAM" UserShell /bin/zsh',
-    "dscl . -create \"/Users/$TEAM\" Password '*'",
+    TEAM_PASSWORD,
     // Visible on purpose (see layout.ts): an earlier hidden setup is made visible again.
     'dscl . -delete "/Users/$TEAM" IsHidden >/dev/null 2>&1 || true',
     'if dseditgroup -o checkmember -m "$TEAM" admin >/dev/null 2>&1; then dseditgroup -o edit -d "$TEAM" -t user admin; fi',
@@ -343,8 +364,11 @@ export function buildSetupScript(input: SetupScriptInput): string {
     `as_team /bin/sh -c ${sh(TEAM_ENGINES_INSTALL)} sh "$TEAM_HOME" "$NODE_NAME" ${TEAM_ENGINES.map((e) => sh(e.packageName)).join(' ')} || true`,
     '',
     '# 6. What setup made (root\'s), and the team account\'s status folder, which the owner can read.',
-    'if [ ! -d "$SHARED" ]; then mkdir -p "$SHARED"; chown 0:0 "$SHARED"; chmod 755 "$SHARED"; fi',
+    // A folder setup made says so, so that removal takes it away again once it is empty, and never one made by anything else.
+    'made_shared=',
+    'if [ ! -d "$SHARED" ]; then mkdir "$SHARED"; chown 0:0 "$SHARED"; chmod 755 "$SHARED"; made_shared=1; fi',
     'owned_by_root "$SHARED"',
+    '[ -z "$made_shared" ] || : > "$SHARED_MARK"',
     'install -o 0 -g 0 -m 0644 "$STAGE/team.json" "$CONFIG"',
     '[ ! -L "$STATUS_DIR" ] || die "$STATUS_DIR is a symbolic link" 6',
     '[ -d "$STATUS_DIR" ] || mkdir "$STATUS_DIR"',
@@ -394,24 +418,29 @@ export interface RemoveScriptInput {
   user: string
   home: string
   ownerHome: string
-  /** The team account's Node and CLI (from its config), run as that account to sign it out; null when unknown. */
-  teamNode: string | null
-  teamCli: string | null
-  /** The backend settings the team daemon runs with, for that sign-out. */
-  env?: Record<string, string>
 }
+
+/** The exit status of a removal that deleted nothing because macOS kept the account: the team daemon runs again. */
+export const REMOVE_REFUSED = 9
+
+/** What the removal says last on success when it read the team account's computer id: `harness team remove` then takes
+ *  that computer off the owner's Harness account, which ends its team sign-in (./command.ts). */
+export const TEAM_COMPUTER_LINE = /^harness: team computer ([A-Za-z0-9_-]{1,128})$/m
 
 export function buildRemoveScript(input: RemoveScriptInput): string {
   const user = checkUser(input.user, 'team account')
   const home = checkPath(input.home, 'team home')
   const ownerHome = checkPath(input.ownerHome, 'owner home')
-  const teamNode = input.teamNode === null ? '' : checkPath(input.teamNode, 'team Node')
-  const teamCli = input.teamCli === null ? '' : checkPath(input.teamCli, 'team CLI')
-  const env = Object.entries(checkEnv(input.env ?? {})).map(([name, value]) => sh(`${name}=${value}`)).join(' ')
+  const paths = teamPaths(home)
   return [
     '#!/bin/sh',
-    '# Harness Team account removal (cli/src/team/script.ts), run once as root behind the macOS administrator prompt.',
-    '# It leaves the owner\'s home folder private, as setup made it.',
+    '# Harness Team account removal (cli/src/team/script.ts), run once as root: behind the macOS administrator prompt, or',
+    '# with sudo in a terminal. It leaves the owner\'s home folder private, as setup made it.',
+    '#',
+    '# The account goes first, before anything that cannot be undone. macOS 26 deletes an account only for an app the',
+    '# person allowed to administer the computer (Privacy & Security\'s "administer your computer"). It cannot ask that',
+    '# for the administrator prompt\'s own process, or for a LaunchDaemon, and refuses them (eDSPermissionError); it',
+    '# asks it for a terminal app. When it refuses, the team daemon runs again and nothing else has changed.',
     'set -eu',
     'cd /',
     `die() { printf 'harness: %s\\n' "$1" >&2; exit "\${2:-1}"; }`,
@@ -422,38 +451,90 @@ export function buildRemoveScript(input: RemoveScriptInput): string {
     `PLIST=${sh(TEAM_PLIST)}`,
     `CONFIG=${sh(TEAM_CONFIG_FILE)}`,
     `STATUS_DIR=${sh(TEAM_STATUS_DIR)}`,
+    `SHARED=${sh(TEAM_SHARED_DIR)}`,
+    `SHARED_MARK=${sh(TEAM_SHARED_MARK)}`,
     `SENTINEL=${sh(`${ownerHome}/${SENTINEL_NAME}`)}`,
-    `TEAM_NODE=${sh(teamNode)}`,
-    `TEAM_CLI=${sh(teamCli)}`,
+    `COMPUTER_ID=${sh(paths.computerId)}`,
+    // What Users & Groups leaves when the account is deleted there with "Don't change the home folder".
+    `DELETED_HOME=${sh(`${home} (Deleted)`)}`,
     '[ "$(id -u)" = 0 ] || die "run as root"',
     'exists=',
+    'team_uid=',
     'if dscl . -read "/Users/$TEAM" UniqueID >/dev/null 2>&1; then',
     '  exists=1',
     "  existing=$(dscl . -read \"/Users/$TEAM\" NFSHomeDirectory 2>/dev/null | awk '{print $2}')",
     '  [ "$existing" = "$TEAM_HOME" ] || die "the account $TEAM is not the Harness Team account (its home is $existing); nothing was removed" 4',
+    '  team_uid=$(id -u "$TEAM")',
     'fi',
-    'if [ -e "$TEAM_HOME" ] && [ ! -L "$TEAM_HOME" ]; then',
-    // A home left by a team account deleted earlier is owned by a bare user id; anyone else's is not ours to delete.
-    '  holder=$(stat -f %Su "$TEAM_HOME")',
+    // A home left by a team account deleted earlier (in Users & Groups, say) is owned by a bare user id; anyone else's is
+    // not ours to delete. That id has no account, so whatever still runs under it was the team account's. By number:
+    // `stat -f %Su` prints such an owner as "(600)" on macOS 26.
+    'for left in "$TEAM_HOME" "$DELETED_HOME"; do',
+    '  [ -e "$left" ] && [ ! -L "$left" ] || continue',
+    '  holder_uid=$(stat -f %u "$left")',
+    '  holder=$(id -un "$holder_uid" 2>/dev/null) || holder=',
     '  case $holder in',
     '    "$TEAM"|root) ;;',
-    '    *[!0-9]*) die "$TEAM_HOME belongs to $holder; nothing was removed" 4 ;;',
+    '    \'\') [ -n "$team_uid" ] || team_uid=$holder_uid ;;',
+    '    *) die "$left belongs to $holder; nothing was removed" 4 ;;',
     '  esac',
-    'fi',
-    '# Sign the team account out of Harness while it still can, as that account and with its own CLI.',
-    'if [ -n "$exists" ] && [ -n "$TEAM_NODE" ] && [ -x "$TEAM_NODE" ] && [ -f "$TEAM_CLI" ]; then',
-    `  /usr/bin/sudo -n -H -u "$TEAM" /usr/bin/env ${env ? `${env} ` : ''}"$TEAM_NODE" "$TEAM_CLI" team __signout >/dev/null 2>&1 \\`,
-    '    || say "could not sign the team account out of Harness; that sign-in lapses after 90 days unused"',
-    'fi',
-    'launchctl bootout "system/$LABEL" >/dev/null 2>&1 || true',
-    'rm -f "$PLIST"',
+    'done',
+    // Read as the team account, never followed as root, and only in the form a computer id has.
+    'computer=',
     'if [ -n "$exists" ]; then',
-    '  pkill -KILL -u "$TEAM" >/dev/null 2>&1 || true',
-    '  sleep 1',
-    '  dscl . -delete "/Users/$TEAM"',
+    '  computer=$(/usr/bin/sudo -n -u "$TEAM" /bin/cat "$COMPUTER_ID" 2>/dev/null | head -n 1) || computer=',
+    '  case $computer in \'\'|*[!A-Za-z0-9_-]*) computer= ;; esac',
+    '  [ "${#computer}" -le 128 ] || computer=',
     'fi',
+    '',
+    '# 1. The team daemon stops, so it starts nothing while the account goes. Its agents keep running in tmux.',
+    'launchctl bootout "system/$LABEL" >/dev/null 2>&1 || true',
+    '',
+    '# 2. The account. When macOS keeps it, the daemon starts again, as setup starts it, and nothing else was changed.',
+    'if [ -n "$exists" ]; then',
+    '  if ! why=$(dscl . -delete "/Users/$TEAM" 2>&1); then',
+    '    why=$(printf \'%s\\n\' "$why" | tail -n 1)',
+    '    again=no',
+    '    if [ -f "$PLIST" ]; then',
+    '      tries=0',
+    '      until launchctl bootstrap system "$PLIST" >/dev/null 2>&1; do',
+    '        tries=$((tries + 1)); [ "$tries" -lt 5 ] || break',
+    '        launchctl bootout "system/$LABEL" >/dev/null 2>&1 || true; sleep 1',
+    '      done',
+    '      launchctl print "system/$LABEL" >/dev/null 2>&1 && again=yes',
+    '    fi',
+    '    case $why in *eDSPermissionError*) why="macOS did not allow it (eDSPermissionError)" ;; esac',
+    `    [ "$again" = yes ] || die "could not delete the account $TEAM: $why. Nothing was removed, but the team daemon did not start again: harness team setup starts it" ${REMOVE_REFUSED}`,
+    `    die "could not delete the account $TEAM: $why. Nothing was removed: the Harness Team account and its daemon run as before" ${REMOVE_REFUSED}`,
+    '  fi',
+    '  say "deleted the account $TEAM"',
+    'fi',
+    '',
+    '# 3. What it left: its processes, its daemon\'s definition, its home, what setup made and the privacy sentinel.',
+    'if [ -n "$team_uid" ] && [ "$team_uid" -gt 500 ]; then pkill -KILL -u "$team_uid" >/dev/null 2>&1 || true; sleep 1; fi',
+    // An account deleted elsewhere cannot be asked for its computer id: read it from the home it left, now that nothing
+    // runs under its id, only from a plain file that id owns, never through a link.
+    'if [ -z "$exists" ] && [ -n "$team_uid" ]; then',
+    '  for left in "$TEAM_HOME" "$DELETED_HOME"; do',
+    '    f="$left/.harness/computer-id"',
+    '    [ ! -L "$left" ] && [ ! -L "$left/.harness" ] && [ ! -L "$f" ] && [ -f "$f" ] || continue',
+    '    [ "$(stat -f %u "$f")" = "$team_uid" ] || continue',
+    '    computer=$(head -n 1 "$f") || computer=',
+    '    case $computer in \'\'|*[!A-Za-z0-9_-]*) computer= ;; esac',
+    '    [ "${#computer}" -le 128 ] || computer=',
+    '    [ -z "$computer" ] || break',
+    '  done',
+    'fi',
+    'rm -f "$PLIST"',
     'rm -rf "$TEAM_HOME" "$STATUS_DIR"',
+    '[ ! -e "$DELETED_HOME" ] || [ -L "$DELETED_HOME" ] || rm -rf "$DELETED_HOME"',
     'rm -f "$CONFIG" "$SENTINEL"',
+    // The shared folder, only when setup made it and nothing else has been put in it since.
+    `if [ -f "$SHARED_MARK" ] && [ ! -L "$SHARED" ] && [ -z "$(ls -A "$SHARED" | grep -vx ${sh(basename(TEAM_SHARED_MARK))} || true)" ]; then`,
+    '  rm -f "$SHARED_MARK"',
+    '  rmdir "$SHARED" 2>/dev/null || true',
+    'fi',
+    '[ -z "$computer" ] || say "team computer $computer"',
     'say "removed the Harness Team account, its home folder and its daemon"',
     '',
   ].join('\n')

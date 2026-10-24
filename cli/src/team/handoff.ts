@@ -21,6 +21,7 @@ import { HANDOFF_CODE } from './layout.js'
 
 export type Post = <T>(path: string, body: unknown, headers?: Record<string, string>) => Promise<T>
 export type Get = <T>(path: string, headers?: Record<string, string>) => Promise<T>
+export type Delete = <T>(path: string, headers?: Record<string, string>) => Promise<T>
 type SignedIn = { session: AuthSession; headers: Record<string, string> }
 
 export class TeamSignInError extends Error {

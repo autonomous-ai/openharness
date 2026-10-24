@@ -3,9 +3,10 @@
  * privileged script (docs/plans/2026-10-24-swarm-team-account.md, Task 2).
  *
  * The team account is a separate, standard macOS user that runs a second Harness daemon for Swarm work, so a
- * teammate's agent on this Mac cannot read the owner's files. It is visible in System Settings > Users & Groups
+ * teammate's agent on this Mac cannot read the owner's files. It is listed in System Settings > Users & Groups
  * and named "Harness Team" on purpose: a hidden user with a LaunchDaemon is the persistence pattern endpoint
  * security tools and careful engineers treat as malware, and anyone auditing the Mac should find it at a glance.
+ * macOS lists an account only when it has a password, so it gets a random one that nobody knows (./script.ts).
  */
 import { isAbsolute, normalize } from 'node:path'
 
@@ -20,6 +21,9 @@ export const TEAM_PLIST = `/Library/LaunchDaemons/${TEAM_LABEL}.plist`
 /** Root-owned: what setup made, read by the team daemon. Root's so a process in the team account cannot point its
  *  own privacy check somewhere else. */
 export const TEAM_SHARED_DIR = '/Library/Application Support/Harness'
+/** Left in that folder by a setup that made it, so removal takes the folder away once it is empty, and never one made
+ *  by anything else. */
+export const TEAM_SHARED_MARK = `${TEAM_SHARED_DIR}/.made-by-harness-team-setup`
 export const TEAM_CONFIG_FILE = `${TEAM_SHARED_DIR}/team.json`
 /** The team account's: where its daemon reports sign-in and the privacy check, for the owner's `harness team status`. */
 export const TEAM_STATUS_DIR = `${TEAM_SHARED_DIR}/Team`
@@ -44,6 +48,8 @@ export function teamPaths(home: string = TEAM_HOME) {
     runtime: `${harness}/runtime`,
     auth: `${harness}/auth`,
     session: `${harness}/auth/session.json`,
+    /** Its daemon's computer id, at the product root as every daemon keeps it (config/env.ts). */
+    computerId: `${harness}/computer-id`,
     bin: `${home}/.local/bin`,
     /** The single-use sign-in code setup hands over; the team daemon redeems it on its next start and deletes it. */
     handoff: `${harness}/team-handoff`,

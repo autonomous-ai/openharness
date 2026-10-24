@@ -4,7 +4,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { AuthSession } from '../lib/authSession.js'
 import type { AdminScript, RunAdmin } from './admin.js'
-import { teamCommand, type TeamCommandDeps } from './command.js'
+import { REPAIR_PROMPT, SETUP_PROMPT, teamCommand, type TeamCommandDeps } from './command.js'
 import type { TeamConfig } from './config.js'
 import type { PrivacyResult, TeamStatus } from './privacy.js'
 import type { TeamEngines } from './engines.js'
@@ -27,10 +27,12 @@ function fake(over: Partial<TeamCommandDeps> & { adminResult?: Awaited<ReturnTyp
   const out: string[] = [], err: string[] = []
   const built: AdminScript[] = []
   const prompts: string[] = []
+  const vias: Array<string | undefined> = []
   const status = new Map<string, TeamStatus>()
-  const admin = vi.fn<RunAdmin>(async (build, prompt) => {
+  const admin = vi.fn<RunAdmin>(async (build, prompt, via) => {
     built.push(build('/private/var/folders/aa/T/harness-team-stage'))
     prompts.push(prompt)
+    vias.push(via)
     return over.adminResult ?? { ok: true, stdout: 'harness: handed a sign-in to the team account\n' }
   })
   const startedAt = now
@@ -46,7 +48,8 @@ function fake(over: Partial<TeamCommandDeps> & { adminResult?: Awaited<ReturnTyp
     env: {}, interactive: false, ask: vi.fn(async () => 'y'), now: () => now, sleep: vi.fn(async (ms: number) => { now += ms }),
     session: () => session, writeSession: vi.fn((s: AuthSession) => { session = s }), clearSession: vi.fn(() => { session = null }),
     auth: vi.fn(async () => ({ session: session!, headers: { authorization: 'Bearer x' } })), post: post as never,
-    get: vi.fn(async () => ({ user: { id: 'user-placeholder-1' } })) as never, machineKey: () => ({ priv: new Uint8Array(32).fill(9) }),
+    get: vi.fn(async (path: string) => path === '/api/machines' ? { machines: MACHINES } : { user: { id: 'user-placeholder-1' } }) as never,
+    delete: vi.fn(async () => ({ deleted: true })) as never, machineKey: () => ({ priv: new Uint8Array(32).fill(9) }),
     computerId: () => 't'.repeat(32), autonomousEnv: 'prod',
     installed: () => ({ cliDir: `${OWNER_HOME}/.harness/cli`, cliJs: `${OWNER_HOME}/.harness/cli/cli.js`,
       node: `${OWNER_HOME}/.harness/runtime/node-v1/bin/node`, nodeRuntimeDir: `${OWNER_HOME}/.harness/runtime/node-v1`, tmuxRuntimeDir: null }),
@@ -60,8 +63,15 @@ function fake(over: Partial<TeamCommandDeps> & { adminResult?: Awaited<ReturnTyp
     stopDaemon: vi.fn(async () => true), startDaemon: vi.fn(async () => {}),
     ...over,
   }
-  return { deps, out, err, built, prompts, post, admin, status, session: () => session, setSession: (s: AuthSession | null) => { session = s } }
+  return { deps, out, err, built, prompts, vias, post, admin, status, session: () => session, setSession: (s: AuthSession | null) => { session = s } }
 }
+
+/** The owner's machines as the backend lists them: this computer, the team account's, and a dedicated Mac mini's. */
+const MACHINES = [
+  { machineId: 'm1', computerId: 'c'.repeat(32), sessionKind: 'computer' },
+  { machineId: 'm-team', computerId: 'team-computer-1', sessionKind: 'team' },
+  { machineId: 'm-mini', computerId: 'mini-computer-1', sessionKind: 'team' },
+]
 
 const reported = (startedAt: number): TeamStatus => ({ version: 1, signIn: { state: 'signed-in', at: startedAt + 3_000 }, privacy: { passed: true, checkedAt: startedAt + 3_000 } })
 
@@ -96,6 +106,22 @@ describe('harness team setup', () => {
     expect(text).toContain('✓ Private')
     // The engines setup installed in the team account, and how to sign them in (none were reported in this run).
     expect(text).toContain('engines     ? not reported yet')
+  })
+
+  it('asks to create the account on a Mac without one, and to repair it on a Mac that has it', async () => {
+    const first = fake({ statusAfter: reported })
+    await teamCommand(['setup'], first.deps)
+    expect(first.prompts[0]).toBe(SETUP_PROMPT)
+    expect(first.out[0]).toContain('Harness will set up a separate account')
+    for (const over of [{ readConfig: () => config }, { accountExists: vi.fn(async () => true) }]) {
+      const again = fake({ statusAfter: reported, ...over })
+      await teamCommand(['setup'], again.deps)
+      expect(again.prompts[0]).toBe(REPAIR_PROMPT)
+      expect(again.prompts[0]).toContain('repair the Harness Team account')
+      expect(again.out[0]).toContain('Harness will repair the Harness Team account')
+    }
+    // What setup says it made is what it makes now: a password nobody knows, and listed.
+    expect(first.out.join('\n')).toContain('a standard user with a random password nobody knows, listed in Users & Groups')
   })
 
   it('shows the team account\'s engines as its daemon reported them in this run, and how to sign them in', async () => {
@@ -245,13 +271,86 @@ describe('harness team status', () => {
 })
 
 describe('harness team remove', () => {
-  it('runs one privileged removal with what the config names', async () => {
-    const f = fake({ readConfig: () => ({ ...config, env: { AUTONOMOUS_ENV: 'stag' } }) })
+  const removed = { ok: true as const, stdout: 'harness: deleted the account harnessteam\nharness: team computer team-computer-1\nharness: removed the Harness Team account, its home folder and its daemon\n' }
+  const refused = { ok: false as const, code: 'FAILED' as const, status: 9,
+    message: 'could not delete the account harnessteam: macOS did not allow it (eDSPermissionError). Nothing was removed: the Harness Team account and its daemon run as before' }
+
+  it('runs one privileged removal with what the config names, behind the prompt when not in a terminal', async () => {
+    const f = fake({ readConfig: () => ({ ...config, env: { AUTONOMOUS_ENV: 'stag' } }), adminResult: removed })
     expect(await teamCommand(['remove'], f.deps)).toBe(0)
     expect(f.prompts[0]).toContain('remove the Harness Team account')
-    expect(f.built[0]!.script).toContain(`TEAM_CLI='${config.cli}'`)
-    expect(f.built[0]!.script).toContain("'AUTONOMOUS_ENV=stag'")
+    expect(f.vias[0]).toBe('prompt')
+    expect(f.built[0]!.script).toContain("TEAM_HOME='/Users/harnessteam'")
+    expect(f.built[0]!.script).toContain(`SENTINEL='${OWNER_HOME}/.harness-team-privacy'`)
     expect(f.out.join('\n')).toContain('Your home folder stays private')
+  })
+
+  it('in a terminal, runs it with sudo there, so macOS can ask to let the terminal administer the Mac', async () => {
+    const f = fake({ readConfig: () => config, interactive: true, adminResult: removed })
+    expect(await teamCommand(['remove'], f.deps)).toBe(0)
+    expect(f.vias[0]).toBe('sudo')
+    expect(f.out[0]).toContain('sudo asks for your password here; macOS may then ask to let this terminal administer your computer')
+    const cancelled = fake({ readConfig: () => config, interactive: true, adminResult: { ok: false, code: 'CANCELLED', message: '' } })
+    expect(await teamCommand(['remove'], cancelled.deps)).toBe(1)
+    expect(cancelled.err[0]).toBe('✗ Nothing was removed: sudo did not get an administrator password.')
+  })
+
+  it('takes the team account\'s computer off the owner\'s account once the account is gone, which signs it out', async () => {
+    const f = fake({ readConfig: () => config, adminResult: removed })
+    expect(await teamCommand(['remove'], f.deps)).toBe(0)
+    // Only the team machine with that computer id: not this computer's, not another team machine.
+    expect(f.deps.delete).toHaveBeenCalledTimes(1)
+    expect(f.deps.delete).toHaveBeenCalledWith('/api/machines/m-team', { authorization: 'Bearer x' })
+    expect(f.out.join('\n')).toContain('✓ Took its computer off your Harness account, which signs it out.')
+    expect(f.post).not.toHaveBeenCalled()
+    const json = fake({ readConfig: () => config, adminResult: removed })
+    await teamCommand(['remove', '--json'], json.deps)
+    expect(JSON.parse(json.out.at(-1)!)).toEqual({ ok: true, removed: true, computer: { removed: 1 } })
+  })
+
+  it('never takes off this computer\'s own machine, or anything when no computer was named', async () => {
+    const own = fake({ readConfig: () => config, adminResult: { ok: true, stdout: `harness: team computer ${'c'.repeat(32)}\n` } })
+    expect(await teamCommand(['remove'], own.deps)).toBe(0)
+    expect(own.deps.delete).not.toHaveBeenCalled()
+    const unnamed = fake({ readConfig: () => config, adminResult: { ok: true, stdout: 'harness: removed the Harness Team account, its home folder and its daemon\n' } })
+    expect(await teamCommand(['remove'], unnamed.deps)).toBe(0)
+    expect(unnamed.deps.get).not.toHaveBeenCalled()
+    expect(unnamed.deps.delete).not.toHaveBeenCalled()
+    expect(unnamed.out.join('\n')).toContain('If its computer, "Mac-placeholder · Team", is still on your Harness account, remove it there: harness machines')
+  })
+
+  it('says how to finish when the computer cannot be taken off: signed out here, or the backend failing', async () => {
+    const signedOut = fake({ readConfig: () => config, adminResult: removed, session: () => null })
+    expect(await teamCommand(['remove'], signedOut.deps)).toBe(0)
+    expect(signedOut.out.join('\n')).toContain('! Its computer is still on your Harness account (this computer is not signed in to Harness). '
+      + 'Remove "Mac-placeholder · Team": harness machines')
+    const failing = fake({ readConfig: () => config, adminResult: removed, delete: vi.fn(async () => { throw new Error('backend unavailable') }) as never })
+    expect(await teamCommand(['remove'], failing.deps)).toBe(0)
+    expect(failing.out.join('\n')).toContain('(backend unavailable)')
+  })
+
+  it('when macOS keeps the account, says that nothing was removed and exactly what to do', async () => {
+    const f = fake({ readConfig: () => config, adminResult: refused })
+    expect(await teamCommand(['remove'], f.deps)).toBe(1)
+    const text = f.err.join('\n')
+    expect(f.err[0]).toBe('✗ macOS kept the Harness Team account: could not delete the account harnessteam: macOS did not allow it (eDSPermissionError). '
+      + 'Nothing was removed: the Harness Team account and its daemon run as before.')
+    expect(text).toContain('run harness team remove in Terminal')
+    expect(text).toContain('macOS asks to let Terminal')
+    expect(text).toContain('delete "Harness Team" in System Settings > Users & Groups (ⓘ, Delete User…, Delete the home folder)')
+    // Nothing on the backend: the account still runs, signed in.
+    expect(f.deps.get).not.toHaveBeenCalled()
+    expect(f.deps.delete).not.toHaveBeenCalled()
+    expect(f.post).not.toHaveBeenCalled()
+    const terminal = fake({ readConfig: () => config, interactive: true, adminResult: refused, env: { __CFBundleIdentifier: 'com.apple.Terminal' } })
+    expect(await teamCommand(['remove'], terminal.deps)).toBe(1)
+    expect(terminal.err.join('\n')).toContain('it asks again after: tccutil reset SystemPolicySysAdminFiles com.apple.Terminal')
+    const odd = fake({ readConfig: () => config, interactive: true, adminResult: refused, env: { __CFBundleIdentifier: 'x; rm -rf ~' } })
+    await teamCommand(['remove'], odd.deps)
+    expect(odd.err.join('\n')).toContain('it asks again after: tccutil reset SystemPolicySysAdminFiles\n')
+    const json = fake({ readConfig: () => config, adminResult: refused })
+    await teamCommand(['remove', '--json'], json.deps)
+    expect(JSON.parse(json.out[0]!)).toMatchObject({ ok: false, code: 'DELETE_REFUSED', next: expect.arrayContaining([expect.stringContaining('Users & Groups')]) })
   })
 
   it('has nothing to do without an account, and refuses off a Mac or as root', async () => {
@@ -263,6 +362,7 @@ describe('harness team remove', () => {
     expect(await teamCommand(['remove'], fake({ uid: () => 0 }).deps)).toBe(1)
     const cancelled = fake({ adminResult: { ok: false, code: 'CANCELLED', message: '' } })
     expect(await teamCommand(['remove'], cancelled.deps)).toBe(1)
+    expect(cancelled.err[0]).toBe('✗ Nothing was removed: the administrator prompt was cancelled.')
     const failed = fake({ adminResult: { ok: false, code: 'FAILED', message: 'dscl refused' } })
     expect(await teamCommand(['remove'], failed.deps)).toBe(1)
     expect(failed.err[0]).toContain('dscl refused')
@@ -446,15 +546,6 @@ describe('internal verbs', () => {
     await teamCommand(['__start'], owner.deps)
     expect(owner.deps.writeStatus).not.toHaveBeenCalled()
     expect(owner.deps.privacy).not.toHaveBeenCalled()
-  })
-
-  it('__signout revokes and clears the team account\'s session', async () => {
-    const f = inTeam()
-    f.setSession({ ...computer, kind: 'team', refreshToken: 'hnr_team' })
-    expect(await teamCommand(['__signout'], f.deps)).toBe(0)
-    expect(f.post).toHaveBeenCalledWith('/api/auth/revoke', { refreshToken: 'hnr_team' })
-    expect(f.session()).toBeNull()
-    expect(f.status.get(STATUS)?.signIn).toMatchObject({ state: 'signed-out' })
   })
 })
 

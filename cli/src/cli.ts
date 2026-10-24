@@ -160,7 +160,8 @@ Machine:
   harness team setup           on a Mac: a separate account, Harness Team, whose own daemon runs teammates' Swarm
                                agents so they cannot read your files (one administrator password; again repairs it)
   harness team status          whether that account exists and runs, its sign-in and privacy check, and what it made
-  harness team remove          delete that account, its home folder and its daemon
+  harness team remove          delete that account, its home folder and its daemon (in Terminal: sudo, then macOS
+                               asks to let Terminal administer your computer)
   harness team on|off          a computer used only for agents: sign it in for team work only, or back as your own
   harness tui                  all of Harness in this terminal: swarms, panes, every machine (⌥O ⌥P ⌥N)
   harness new [agent] [--machine <name>] [folder|name] [-- task]

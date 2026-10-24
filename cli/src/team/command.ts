@@ -8,7 +8,6 @@
  * Internal verbs, run by the scripts and the team daemon's job, not by people:
  *   __handoff          (as the owner, from setup's script) print a fresh team sign-in code
  *   __start <file>     (as the team account, before its daemon) redeem a handed-over code, run the privacy check
- *   __signout          (as the team account, from remove's script) sign its session out of Harness
  *
  * Nothing here falls back to the owner: a team account that is missing, signed out or not private is reported, and
  * team work does not run as the owner instead.
@@ -17,13 +16,14 @@ import type { AuthSession } from '../lib/authSession.js'
 import type { RunAdmin } from './admin.js'
 import { teamConfigJson, type TeamConfig } from './config.js'
 import { engineLines, type TeamEngines } from './engines.js'
-import { mintTeamConversion, mintTeamHandoff, redeemTeamHandoff, revokeHarnessRefresh, teamSession, TeamSignInError, type Get, type Post } from './handoff.js'
+import { mintTeamConversion, mintTeamHandoff, redeemTeamHandoff, revokeHarnessRefresh, teamSession, TeamSignInError, type Delete, type Get, type Post } from './handoff.js'
 import {
-  SENTINEL_NAME, TEAM_CONFIG_FILE, TEAM_HOME, TEAM_LABEL, TEAM_PLIST, TEAM_PORT, TEAM_REAL_NAME, TEAM_STATUS_DIR, TEAM_STATUS_FILE,
+  SENTINEL_NAME, TEAM_CONFIG_FILE, TEAM_HOME, TEAM_LABEL, TEAM_PLIST, TEAM_PORT, TEAM_REAL_NAME, TEAM_SHARED_DIR, TEAM_SHARED_MARK,
+  TEAM_STATUS_DIR, TEAM_STATUS_FILE,
   TEAM_USER, TeamInputError, carriedBackendEnv, checkPath, checkUser, teamPaths,
 } from './layout.js'
 import type { PrivacyResult, TeamStatus } from './privacy.js'
-import { buildRemoveScript, buildSetupScript, teamLaunchdPlist } from './script.js'
+import { REMOVE_REFUSED, TEAM_COMPUTER_LINE, buildRemoveScript, buildSetupScript, teamLaunchdPlist } from './script.js'
 
 export const TEAM_USAGE = [
   'Usage: harness team <setup | status | remove | on | off> [--json]',
@@ -33,13 +33,17 @@ export const TEAM_USAGE = [
   '            for an administrator password once. It installs the account\'s own Claude Code and Codex, which you sign in',
   '            once in a terminal on its machine. Running it again repairs it (--sign-in-again: a new sign-in for it)',
   '  status    whether the account exists and runs, its sign-in, privacy check and engines, and everything setup made',
-  '  remove    delete the account, its home folder and its daemon (administrator password); your home stays private',
+  '  remove    delete the account, its home folder and its daemon; your home stays private. Run it in Terminal: sudo',
+  '            asks for your password, and macOS asks once to let Terminal administer your computer, which it needs',
   '  on        for a computer used only for agents (a Mac mini, a Linux or Windows box): sign it in for team work',
   '            only. It then runs Swarm agents and reaches none of your other computers (--yes skips the question)',
   '  off       sign this computer out of team work, then sign it in as your own computer again',
 ].join('\n')
 
 export const SETUP_PROMPT = 'Harness wants to create a separate account, Harness Team, for Swarm work on this Mac, so teammates\' agents cannot read your files.'
+/** The same script on a Mac that has the account: it repairs what is there. (The dialog's title, "osascript", is the
+ *  process that asks, and osascript cannot change it.) */
+export const REPAIR_PROMPT = 'Harness wants to repair the Harness Team account, which runs Swarm work on this Mac so teammates\' agents cannot read your files.'
 export const REMOVE_PROMPT = 'Harness wants to remove the Harness Team account, its home folder and its daemon from this Mac.'
 
 /** How long setup waits for the team daemon to sign in and report its privacy check. */
@@ -79,6 +83,7 @@ export interface TeamCommandDeps {
   auth(): Promise<{ session: AuthSession; headers: Record<string, string> }>
   post: Post
   get: Get
+  delete: Delete
   /** This computer's machine key on the account's device key log (lib/e2ee/store.ts), never made here; null when it has
    *  none. `team on` signs with it to show the backend it is this computer. */
   machineKey(): { priv: Uint8Array } | null
@@ -129,7 +134,6 @@ export async function teamCommand(argv: string[], deps: TeamCommandDeps): Promis
       case 'off': return await teamOff(deps, json)
       case '__handoff': return await handoff(deps)
       case '__start': return await jobStart(deps, words[1])
-      case '__signout': return await signOut(deps)
       default:
         deps.err(`Unknown command: harness team ${verb}\n\n${TEAM_USAGE}`)
         return 2
@@ -150,7 +154,7 @@ function fail(deps: TeamCommandDeps, json: boolean, code: string, message: strin
 function madeLines(ownerHome: string): string[] {
   const team = teamPaths()
   return [
-    `  account   ${TEAM_REAL_NAME} (${TEAM_USER}): a standard user with no usable password, shown in Users & Groups`,
+    `  account   ${TEAM_REAL_NAME} (${TEAM_USER}): a standard user with a random password nobody knows, listed in Users & Groups`,
     `  home      ${TEAM_HOME}`,
     `  daemon    ${TEAM_LABEL}, a LaunchDaemon at ${TEAM_PLIST}, running as ${TEAM_USER} on port ${TEAM_PORT}`,
     `  log       ${team.log} (inside the account's home)`,
@@ -163,10 +167,11 @@ function madeLines(ownerHome: string): string[] {
 
 function byHandLines(ownerHome: string): string[] {
   return [
-    '  To remove it by hand:',
-    `    sudo launchctl bootout system/${TEAM_LABEL}; sudo rm ${TEAM_PLIST}`,
-    `    sudo dscl . -delete /Users/${TEAM_USER}; sudo rm -rf ${TEAM_HOME}`,
-    `    sudo rm -rf '${TEAM_CONFIG_FILE}' '${TEAM_STATUS_DIR}'; rm ${ownerHome}/${SENTINEL_NAME}`,
+    '  To remove it by hand, in Terminal (macOS asks to let Terminal administer your computer for the first line):',
+    `    sudo dscl . -delete /Users/${TEAM_USER}`,
+    `    sudo launchctl bootout system/${TEAM_LABEL}; sudo rm ${TEAM_PLIST}; sudo rm -rf ${TEAM_HOME}`,
+    `    sudo rm -rf '${TEAM_CONFIG_FILE}' '${TEAM_STATUS_DIR}' '${TEAM_SHARED_MARK}'; rm ${ownerHome}/${SENTINEL_NAME}`,
+    `    sudo rmdir '${TEAM_SHARED_DIR}'   (only when it is empty)`,
   ]
 }
 
@@ -201,8 +206,11 @@ async function setup(deps: TeamCommandDeps, json: boolean, signInAgain: boolean)
     statusFile: TEAM_STATUS_FILE, node: teamNode, cli: team.cliJs, env: carried, createdAt: new Date(deps.now()).toISOString(),
   }
   const plist = teamLaunchdPlist({ user: TEAM_USER, home: TEAM_HOME, node: teamNode, cli: team.cliJs, port: TEAM_PORT, env: carried })
+  const repair = deps.readConfig() !== null || await deps.accountExists(TEAM_USER)
   if (!json) {
-    deps.out('Harness will set up a separate account for Swarm work on this Mac. macOS asks for an administrator password once.')
+    deps.out(repair
+      ? 'Harness will repair the Harness Team account on this Mac. macOS asks for an administrator password once.'
+      : 'Harness will set up a separate account for Swarm work on this Mac. macOS asks for an administrator password once.')
     for (const line of madeLines(ownerHome)) deps.out(line)
   }
   const startedAt = deps.now()
@@ -213,7 +221,7 @@ async function setup(deps: TeamCommandDeps, json: boolean, signInAgain: boolean)
       ownerNode: installed.node, ownerCli: installed.cliJs, mintEnv, signIn: signInAgain ? 'always' : 'missing',
     }),
     files: { 'team.json': teamConfigJson(config), 'team.plist': plist },
-  }), SETUP_PROMPT)
+  }), repair ? REPAIR_PROMPT : SETUP_PROMPT)
   if (!result.ok) {
     if (result.code === 'CANCELLED') return fail(deps, json, 'CANCELLED', 'Nothing was changed: the administrator prompt was cancelled.')
     return fail(deps, json, 'SETUP_FAILED', `The Harness Team account was not finished: ${sentence(result.message)} Run \`harness team setup\` again; it repairs what is there.`)
@@ -306,9 +314,52 @@ async function status(deps: TeamCommandDeps, json: boolean): Promise<number> {
   return 0
 }
 
+/** A terminal app's bundle id as macOS gives it to what the app starts, for the one command that asks again. */
+const BUNDLE_ID = /^[A-Za-z0-9][A-Za-z0-9.-]{0,127}$/
+
+/** What to do when macOS keeps the account ([REMOVE_REFUSED]): nothing was removed, and the account runs as before. */
+function refusedLines(deps: TeamCommandDeps, inTerminal: boolean): string[] {
+  const usersAndGroups = `delete "${TEAM_REAL_NAME}" in System Settings > Users & Groups (ⓘ, Delete User…, Delete the home folder), then run harness team remove again for the rest`
+  if (!inTerminal) {
+    return [
+      '  macOS 26 deletes an account only for an app you allow to administer this Mac, and it cannot ask that for this prompt. Either:',
+      '    · run harness team remove in Terminal: it asks for your password there, then macOS asks to let Terminal',
+      '      administer your computer. Choose Allow.',
+      `    · or ${usersAndGroups}.`,
+    ]
+  }
+  const app = deps.env.__CFBundleIdentifier?.trim()
+  const reset = `tccutil reset SystemPolicySysAdminFiles${app && BUNDLE_ID.test(app) ? ` ${app}` : ''}`
+  return [
+    '  macOS deletes an account only for an app you allow to administer this Mac. If you chose Don\'t Allow when it asked,',
+    `  it asks again after: ${reset}`,
+    `  Or ${usersAndGroups}.`,
+  ]
+}
+
+interface MachineRow { machineId: string; computerId?: string | null; sessionKind?: string | null }
+
+/**
+ * The team account's computer, off the owner's Harness account: the backend ends the team sign-in bound to it with it.
+ * Only after the account is gone: a removal macOS refuses must leave the account signed in and running. Only a team
+ * machine with that computer id, never this computer's own.
+ */
+async function forgetTeamComputer(deps: TeamCommandDeps, computerId: string): Promise<{ removed: number } | { error: string }> {
+  if (!deps.session()) return { error: 'this computer is not signed in to Harness' }
+  try {
+    const { session, headers } = await deps.auth()
+    const { machines = [] } = await deps.get<{ machines?: MachineRow[] }>('/api/machines', headers)
+    const ours = machines.filter((m) => m.computerId === computerId && m.sessionKind === 'team' && m.machineId !== session.machineId)
+    for (const machine of ours) await deps.delete(`/api/machines/${encodeURIComponent(machine.machineId)}`, headers)
+    return { removed: ours.length }
+  } catch (error) {
+    return { error: (error as Error).message }
+  }
+}
+
 async function remove(deps: TeamCommandDeps, json: boolean): Promise<number> {
   if (deps.platform !== 'darwin') return fail(deps, json, 'UNSUPPORTED', 'The Harness Team account is made on a Mac; this computer has none. To stop team work here: harness team off.')
-  if (deps.uid() === 0) return fail(deps, json, 'RUN_AS_YOURSELF', 'Run this as yourself, not with sudo: macOS asks for an administrator password itself.')
+  if (deps.uid() === 0) return fail(deps, json, 'RUN_AS_YOURSELF', 'Run this as yourself, not with sudo: Harness asks for an administrator password itself.')
   const config = deps.readConfig()
   const ownerHome = checkPath(config?.ownerHome ?? deps.home(), 'home folder')
   if (!config && !await deps.accountExists(TEAM_USER) && !deps.exists(TEAM_PLIST) && !deps.exists(TEAM_HOME)) {
@@ -316,21 +367,40 @@ async function remove(deps: TeamCommandDeps, json: boolean): Promise<number> {
     else deps.out('No Harness Team account on this Mac; nothing to remove.')
     return 0
   }
+  // In a terminal, with sudo there: macOS then asks to let the terminal app administer the Mac, which deleting an account
+  // needs (./admin.ts). Elsewhere (Desktop, a script), the administrator prompt, which macOS 26 refuses it.
+  const inTerminal = deps.interactive
+  if (inTerminal && !json) deps.out('Harness will remove the Harness Team account. sudo asks for your password here; macOS may then ask to let this terminal administer your computer.')
   const result = await deps.admin(() => ({
-    script: buildRemoveScript({ user: config?.user ?? TEAM_USER, home: config?.home ?? TEAM_HOME, ownerHome,
-      teamNode: config?.node ?? null, teamCli: config?.cli ?? null, env: config?.env ?? {} }),
-  }), REMOVE_PROMPT)
+    script: buildRemoveScript({ user: config?.user ?? TEAM_USER, home: config?.home ?? TEAM_HOME, ownerHome }),
+  }), REMOVE_PROMPT, inTerminal ? 'sudo' : 'prompt')
   if (!result.ok) {
-    if (result.code === 'CANCELLED') return fail(deps, json, 'CANCELLED', 'Nothing was removed: the administrator prompt was cancelled.')
+    if (result.code === 'CANCELLED') {
+      return fail(deps, json, 'CANCELLED', `Nothing was removed: ${inTerminal ? 'sudo did not get an administrator password' : 'the administrator prompt was cancelled'}.`)
+    }
+    if (result.status === REMOVE_REFUSED) {
+      const next = refusedLines(deps, inTerminal)
+      if (json) return fail(deps, json, 'DELETE_REFUSED', sentence(result.message), { next: next.map((line) => line.trim()) })
+      fail(deps, json, 'DELETE_REFUSED', `macOS kept the Harness Team account: ${sentence(result.message)}`)
+      for (const line of next) deps.err(line)
+      return 1
+    }
     return fail(deps, json, 'REMOVE_FAILED', `The Harness Team account was not fully removed: ${sentence(result.message)} Run \`harness team remove\` again.`)
   }
   try { deps.setupDecision?.decline() } catch { /* only Desktop's offer reads it */ }
-  if (json) deps.out(JSON.stringify({ ok: true, removed: true }))
-  else {
-    deps.out(`✓ Removed the Harness Team account (${TEAM_USER}), ${TEAM_HOME} and the daemon ${TEAM_LABEL}.`)
-    deps.out(`  Your home folder stays private (mode 700). Its computer stays in your list until you remove it: harness machines`)
-    deps.out('  Harness will not make it again on its own when you join a Swarm; harness team setup makes it again.')
+  const computerId = TEAM_COMPUTER_LINE.exec(result.stdout)?.[1] ?? null
+  const forgotten = computerId ? await forgetTeamComputer(deps, computerId) : null
+  if (json) {
+    deps.out(JSON.stringify({ ok: true, removed: true, computer: forgotten }))
+    return 0
   }
+  deps.out(`✓ Removed the Harness Team account (${TEAM_USER}), ${TEAM_HOME} and the daemon ${TEAM_LABEL}.`)
+  const teamMachine = `"${deps.hostname().slice(0, 60)} · Team"`
+  if (forgotten && 'removed' in forgotten && forgotten.removed > 0) deps.out('✓ Took its computer off your Harness account, which signs it out.')
+  else if (forgotten && 'error' in forgotten) deps.out(`! Its computer is still on your Harness account (${forgotten.error}). Remove ${teamMachine}: harness machines`)
+  else if (!computerId) deps.out(`  If its computer, ${teamMachine}, is still on your Harness account, remove it there: harness machines`)
+  deps.out('  Your home folder stays private (mode 700).')
+  deps.out('  Harness will not make it again on its own when you join a Swarm; harness team setup makes it again.')
   return 0
 }
 
@@ -462,18 +532,6 @@ async function jobStart(deps: TeamCommandDeps, file: string | undefined): Promis
       log(`engines: ${(['claude', 'codex'] as const).map((e) => `${e} ${engines[e].installed ? engines[e].signedIn === true ? 'signed in' : 'installed' : 'missing'}`).join(', ')}`)
       report({ engines })
     } catch (error) { log(`could not check the engines: ${(error as Error).message}`) }
-  }
-  return 0
-}
-
-/** `team __signout`: run as the team account by remove's script, before the account is deleted. */
-async function signOut(deps: TeamCommandDeps): Promise<number> {
-  const session = deps.session()
-  if (session) await revokeHarnessRefresh(deps.post, session.refreshToken)
-  deps.clearSession()
-  const config = deps.readConfig()
-  if (config && config.user === deps.user()) {
-    try { deps.writeStatus(config.statusFile, { signIn: { state: 'signed-out', at: deps.now() } }) } catch { /* removed next */ }
   }
   return 0
 }

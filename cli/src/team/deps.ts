@@ -57,6 +57,7 @@ export function teamCommandDeps(options: {
     auth: controlPlaneAuth,
     post: (path, body, headers) => postJson(path, body, headers ?? {}),
     get: (path, headers) => requestJson('GET', path, undefined, headers ?? {}),
+    delete: (path, headers) => requestJson('DELETE', path, undefined, headers ?? {}),
     machineKey: () => peekIdentity(),
     computerId,
     autonomousEnv: env.AUTONOMOUS_ENV,

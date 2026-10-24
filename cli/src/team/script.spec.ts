@@ -9,8 +9,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import {
-  SENTINEL_TEXT, TEAM_COPY, TEAM_ENGINES_INSTALL, TEAM_JOB_WRAPPER, WRITE_PRIVATE, WRITE_PUBLIC, buildRemoveScript, buildSetupScript, sh, teamLaunchdPlist,
-  type SetupScriptInput,
+  REMOVE_REFUSED, SENTINEL_TEXT, TEAM_COMPUTER_LINE, TEAM_COPY, TEAM_ENGINES_INSTALL, TEAM_JOB_WRAPPER, TEAM_PASSWORD, WRITE_PRIVATE, WRITE_PUBLIC,
+  buildRemoveScript, buildSetupScript, sh, teamLaunchdPlist, type SetupScriptInput,
 } from './script.js'
 
 const OWNER_HOME = '/Users/owner-placeholder'
@@ -71,10 +71,15 @@ describe('setup script', () => {
     expect(script.split(OWNER_HOME).length - 1).toBe(6)
   })
 
-  it('makes a visible, standard account with an unusable password, and never an administrator', () => {
+  it('makes a listed, standard account with a random password, and never an administrator', () => {
     const script = buildSetupScript(input())
     expect(script).toContain('dscl . -create "/Users/$TEAM" RealName "$TEAM_NAME"')
-    expect(script).toContain("dscl . -create \"/Users/$TEAM\" Password '*'")
+    // `*` only while a new record is made, before its UniqueID: the random password replaces it at once.
+    expect(script.split("dscl . -create \"/Users/$TEAM\" Password '*'")).toHaveLength(2)
+    expect(at(script, "  dscl . -create \"/Users/$TEAM\" Password '*'")).toBeLessThan(at(script, '  dscl . -create "/Users/$TEAM" UniqueID "$uid"'))
+    expect(at(script, TEAM_PASSWORD)).toBeLessThan(at(script, 'team_uid=$(id -u "$TEAM")'))
+    // Never on a command line: no `dscl . -passwd`, no sysadminctl, no password argument.
+    expect(script).not.toMatch(/-passwd|sysadminctl|-password/)
     expect(script).toContain('dscl . -create "/Users/$TEAM" PrimaryGroupID 20')
     expect(script).not.toMatch(/IsHidden 1/)
     expect(script).toContain('dscl . -delete "/Users/$TEAM" IsHidden')
@@ -125,6 +130,13 @@ describe('setup script', () => {
     // Nothing is handed over without a code.
     expect(at(script, 'if [ -z "$no_sign_in" ]; then')).toBeLessThan(at(script, 'printf \'%s\\n\' "$code" | as_team'))
     parses(script)
+  })
+
+  it('marks the shared folder as its own only when it made it', () => {
+    const script = buildSetupScript(input())
+    expect(script).toContain('if [ ! -d "$SHARED" ]; then mkdir "$SHARED"; chown 0:0 "$SHARED"; chmod 755 "$SHARED"; made_shared=1; fi')
+    expect(at(script, 'owned_by_root "$SHARED"')).toBeLessThan(at(script, '[ -z "$made_shared" ] || : > "$SHARED_MARK"'))
+    expect(script).toContain("SHARED_MARK='/Library/Application Support/Harness/.made-by-harness-team-setup'")
   })
 
   it('copies a managed tmux only when there is one', () => {
@@ -229,6 +241,58 @@ describe('the team account\'s copy of the runtime', () => {
   })
 })
 
+describe('the team account\'s password', () => {
+  /** TEAM_PASSWORD with a stand-in dscl on PATH that records every call (its arguments, and what it read) and keeps the
+   *  account's state in a folder. Nothing touches a real account. */
+  function run(state: { password?: boolean; refuses?: boolean } = {}) {
+    const root = temp()
+    const bin = join(root, 'bin'), log = join(root, 'calls')
+    mkdirSync(bin)
+    if (state.password) writeFileSync(join(root, 'has-password'), '')
+    writeFileSync(join(bin, 'dscl'), [
+      '#!/bin/sh',
+      `printf 'argv:%s\\n' "$*" >> '${log}'`,
+      'if [ "$#" = 1 ]; then',
+      `  input=$(cat); printf 'stdin:%s\\n' "$input" >> '${log}'`,
+      `  ${state.refuses ? 'exit 0' : `case $input in "passwd /Users/harnessteam "*) : > '${root}/has-password' ;; esac`}`,
+      '  exit 0',
+      'fi',
+      `[ -e '${root}/has-password' ] && echo 'AuthenticationAuthority: ;ShadowHash;HASHLIST:<SALTED-SHA512-PBKDF2>'`,
+      'exit 0',
+    ].join('\n'), { mode: 0o755 })
+    const result = spawnSync('/bin/sh', ['-c', `set -eu\ndie() { printf 'harness: %s\\n' "$1" >&2; exit "$2"; }\nTEAM=harnessteam\n${TEAM_PASSWORD}\necho done`],
+      { encoding: 'utf8', env: { PATH: `${bin}:/usr/bin:/bin` } })
+    const calls = existsSync(log) ? readFileSync(log, 'utf8').trim().split('\n') : []
+    return { result, calls }
+  }
+
+  it('is random, 40 letters and digits, and reaches dscl only on its input, never as an argument', () => {
+    const { result, calls } = run()
+    expect(result.stderr).toBe('')
+    expect(result.stdout).toBe('done\n')
+    const stdin = calls.filter((c) => c.startsWith('stdin:'))
+    expect(stdin).toHaveLength(1)
+    const password = /^stdin:passwd \/Users\/harnessteam ([A-Za-z0-9]{40})$/.exec(stdin[0]!)?.[1]
+    expect(password).toBeDefined()
+    // What `ps` would show: the arguments of every call. The password is in none of them.
+    for (const call of calls.filter((c) => c.startsWith('argv:'))) expect(call).not.toContain(password)
+    expect(calls).toContain('argv:.')
+    expect(run().calls.find((c) => c.startsWith('stdin:'))).not.toBe(stdin[0])
+  })
+
+  it('is left as it is on a repair run', () => {
+    const { result, calls } = run({ password: true })
+    expect(result.stdout).toBe('done\n')
+    expect(calls).toEqual(['argv:. -read /Users/harnessteam AuthenticationAuthority'])
+  })
+
+  it('stops setup, saying why, when macOS does not take it', () => {
+    const { result } = run({ refuses: true })
+    expect(result.status).toBe(4)
+    expect(result.stderr).toBe('harness: macOS did not take a password for the account harnessteam, so Users & Groups would not list it\n')
+  })
+})
+
 describe('the team daemon\'s job', () => {
   const plistInput = { user: 'harnessteam', home: '/Users/harnessteam', node: '/Users/harnessteam/.harness/runtime/node-v1/bin/node',
     cli: '/Users/harnessteam/.harness/cli/cli.js', port: 18493, env: { BACKEND_WS_URL: 'wss://backend.example.test/a&b' } }
@@ -281,19 +345,20 @@ describe('the team daemon\'s job', () => {
 })
 
 describe('remove script', () => {
-  const removeInput = { user: 'harnessteam', home: '/Users/harnessteam', ownerHome: OWNER_HOME,
-    teamNode: '/Users/harnessteam/.harness/runtime/node-v1/bin/node', teamCli: '/Users/harnessteam/.harness/cli/cli.js',
-    env: { AUTONOMOUS_ENV: 'stag' } }
+  const removeInput = { user: 'harnessteam', home: '/Users/harnessteam', ownerHome: OWNER_HOME }
 
-  it('parses, signs the account out as itself first, then removes the job, the account and its files', () => {
+  it('parses, and deletes the account before anything it cannot undo', () => {
     const script = buildRemoveScript(removeInput)
     parses(script)
+    // Where every daemon keeps its computer id (config/env.ts): the product root, not the data folder.
+    expect(script).toContain("COMPUTER_ID='/Users/harnessteam/.harness/computer-id'")
     const order = [
-      'team __signout', 'launchctl bootout "system/$LABEL"', 'rm -f "$PLIST"', 'pkill -KILL -u "$TEAM"', 'dscl . -delete "/Users/$TEAM"',
-      'rm -rf "$TEAM_HOME" "$STATUS_DIR"', 'rm -f "$CONFIG" "$SENTINEL"',
+      'launchctl bootout "system/$LABEL"', 'dscl . -delete "/Users/$TEAM"', 'pkill -KILL -u "$team_uid"', 'rm -f "$PLIST"',
+      'rm -rf "$TEAM_HOME" "$STATUS_DIR"', 'rm -f "$CONFIG" "$SENTINEL"', 'rmdir "$SHARED"',
     ].map((needle) => at(script, needle))
     expect([...order].sort((a, b) => a - b)).toEqual(order)
-    expect(script).toContain('/usr/bin/sudo -n -H -u "$TEAM" /usr/bin/env \'AUTONOMOUS_ENV=stag\' "$TEAM_NODE" "$TEAM_CLI" team __signout')
+    // The team account is no longer signed out from here: that cannot be undone, and the deletion may yet be refused.
+    expect(script).not.toContain('__signout')
     // The owner's home folder stays private: nothing here changes its mode.
     expect(script).not.toMatch(/chmod/)
   })
@@ -302,14 +367,175 @@ describe('remove script', () => {
     const script = buildRemoveScript(removeInput)
     expect(script).toContain('is not the Harness Team account (its home is $existing); nothing was removed')
     expect(script).toContain('belongs to $holder; nothing was removed')
-  })
-
-  it('skips the sign-out when the config does not name the team account\'s CLI', () => {
-    const script = buildRemoveScript({ ...removeInput, teamNode: null, teamCli: null, env: {} })
-    expect(script).toContain("TEAM_NODE=''")
-    parses(script)
     expect(() => buildRemoveScript({ ...removeInput, user: 'root' })).toThrow()
     expect(() => buildRemoveScript({ ...removeInput, home: '/Users/a b/../c' })).toThrow()
+  })
+
+  /**
+   * The whole removal script, run for real against a temporary folder: every path it names is moved into it, and every
+   * system command it calls (dscl, launchctl, pkill, id, stat, sudo, sleep) is a stand-in shell function, defined before
+   * the script's first line runs, that records the call and keeps the account's state in files. Nothing touches a real
+   * account, job or folder outside the temporary one.
+   */
+  function sandbox(over: { account?: boolean; refuse?: boolean; bootstrapFails?: boolean; mark?: boolean; otherShared?: boolean; keptHome?: boolean
+    otherOwner?: boolean } = {}) {
+    const root = temp()
+    const state = join(root, 'state'), log = join(root, 'calls')
+    mkdirSync(state)
+    const p = {
+      TEAM_HOME: join(root, 'Users', 'harnessteam'), PLIST: join(root, 'LaunchDaemons', 'ai.autonomous.harness.team.plist'),
+      SHARED: join(root, 'Application Support', 'Harness'), SENTINEL: join(root, 'Users', 'owner', '.harness-team-privacy'),
+    }
+    const paths = { ...p, CONFIG: join(p.SHARED, 'team.json'), STATUS_DIR: join(p.SHARED, 'Team'),
+      SHARED_MARK: join(p.SHARED, '.made-by-harness-team-setup'), COMPUTER_ID: join(p.TEAM_HOME, '.harness', 'computer-id'),
+      DELETED_HOME: `${p.TEAM_HOME} (Deleted)` }
+    // Users & Groups, told to keep the home folder of an account it deletes, renames it.
+    mkdirSync(over.keptHome ? join(paths.DELETED_HOME, '.harness') : join(p.TEAM_HOME, '.harness', 'cli', 'data'), { recursive: true })
+    if (over.keptHome) mkdirSync(join(p.TEAM_HOME, '.harness', 'cli', 'data'), { recursive: true })
+    mkdirSync(join(root, 'LaunchDaemons'))
+    mkdirSync(paths.STATUS_DIR, { recursive: true })
+    mkdirSync(join(root, 'Users', 'owner'))
+    writeFileSync(over.keptHome ? join(paths.DELETED_HOME, '.harness', 'computer-id') : paths.COMPUTER_ID, 'team-computer-1\n')
+    writeFileSync(p.PLIST, '<plist/>')
+    writeFileSync(paths.CONFIG, '{}')
+    writeFileSync(join(paths.STATUS_DIR, 'status.json'), '{}')
+    writeFileSync(p.SENTINEL, 'x')
+    if (over.mark !== false) writeFileSync(paths.SHARED_MARK, '')
+    if (over.otherShared) writeFileSync(join(p.SHARED, 'other.json'), '{}')
+    if (over.account !== false) writeFileSync(join(state, 'account'), '')
+    writeFileSync(join(state, 'loaded'), '')
+    const stub = (name: string, body: string) => `${name}() { printf '%s %s\\n' ${name} "$*" >> ${sh(log)}; ${body}\n}`
+    const prelude = [
+      // The home's owner by number, and that number's name: the team account's, nobody's once it is deleted, or someone else's.
+      stub('id', [
+        'case "$*" in',
+        "  '-u') echo 0 ;;",
+        "  '-u harnessteam') echo 600 ;;",
+        `  '-un 600') if [ -e ${sh(`${state}/account`)} ]; then echo harnessteam; else return 1; fi ;;`,
+        "  '-un 701') echo someone ;;",
+        '  *) return 1 ;;',
+        'esac',
+      ].join('\n')),
+      stub('stat', `[ "$1 $2" = '-f %u' ] && echo ${over.otherOwner ? 701 : 600}`),
+      stub('head', 'command head "$@"'),
+      stub('dscl', [
+        'case "$*" in',
+        `  *-read*UniqueID*) [ -e ${sh(`${state}/account`)} ] && echo 'UniqueID: 600' ;;`,
+        `  *-read*NFSHomeDirectory*) [ -e ${sh(`${state}/account`)} ] && echo ${sh(`NFSHomeDirectory: ${p.TEAM_HOME}`)} ;;`,
+        `  *-delete*) ${over.refuse
+          ? "echo '<main> delete status: eDSPermissionError' >&2; echo '<dscl_cmd> DS Error: -14120 (eDSPermissionError)' >&2; return 40"
+          : `rm ${sh(`${state}/account`)}`} ;;`,
+        'esac',
+      ].join('\n')),
+      stub('launchctl', [
+        'case "$1" in',
+        `  bootout) rm -f ${sh(`${state}/loaded`)} ;;`,
+        `  bootstrap) ${over.bootstrapFails ? 'return 5' : `: > ${sh(`${state}/loaded`)}`} ;;`,
+        `  print) [ -e ${sh(`${state}/loaded`)} ] ;;`,
+        'esac',
+      ].join('\n')),
+      stub('sudo', 'while [ "$#" -gt 0 ]; do case "$1" in -n) shift ;; -u) shift 2 ;; *) break ;; esac; done; "$@"'),
+      stub('pkill', ':'),
+      stub('sleep', ':'),
+    ].join('\n')
+    let script = buildRemoveScript(removeInput)
+    for (const [name, value] of Object.entries(paths)) {
+      expect(script, name).toMatch(new RegExp(`^${name}=`, 'm'))
+      script = script.replace(new RegExp(`^${name}=.*$`, 'm'), `${name}=${sh(value)}`)
+    }
+    // The stand-ins are found by name: the script's absolute /usr/bin/sudo and /bin/cat would pass them by.
+    script = script.replaceAll('/usr/bin/sudo', 'sudo').replaceAll('/bin/cat', 'cat').replace('\ncd /\n', `\ncd /\n${prelude}\n`)
+    // Nothing left that names a real place: every path is in the temporary folder.
+    expect(script).not.toMatch(/'\/(Users|Library)\//)
+    const file = join(root, 'remove.sh')
+    writeFileSync(file, script)
+    const result = spawnSync('/bin/sh', [file], { encoding: 'utf8', env: { PATH: '/usr/bin:/bin' } })
+    const calls = existsSync(log) ? readFileSync(log, 'utf8').trim().split('\n') : []
+    return { result, calls, paths, state, gone: (path: string) => !existsSync(path) }
+  }
+
+  it('removes the account, its daemon and everything setup made, and names its computer for the owner to take off', () => {
+    const s = sandbox()
+    expect(s.result.stderr).toBe('')
+    expect(s.result.status).toBe(0)
+    expect(TEAM_COMPUTER_LINE.exec(s.result.stdout)?.[1]).toBe('team-computer-1')
+    expect(s.result.stdout).toContain('harness: removed the Harness Team account, its home folder and its daemon')
+    for (const path of [s.paths.TEAM_HOME, s.paths.PLIST, s.paths.CONFIG, s.paths.STATUS_DIR, s.paths.SENTINEL, s.paths.SHARED]) expect(s.gone(path), path).toBe(true)
+    const deleted = s.calls.indexOf('dscl . -delete /Users/harnessteam')
+    expect(deleted).toBeGreaterThan(s.calls.indexOf('launchctl bootout system/ai.autonomous.harness.team'))
+    expect(s.calls.indexOf('pkill -KILL -u 600')).toBeGreaterThan(deleted)
+    expect(s.calls.some((c) => c.startsWith('launchctl bootstrap'))).toBe(false)
+    // Its computer id was read as the team account, not by root.
+    expect(s.calls).toContain(`sudo -n -u harnessteam cat ${s.paths.COMPUTER_ID}`)
+  })
+
+  it('when macOS refuses the deletion, changes nothing and starts the team daemon again', () => {
+    const s = sandbox({ refuse: true })
+    expect(s.result.status).toBe(REMOVE_REFUSED)
+    expect(s.result.stderr).toBe('harness: could not delete the account harnessteam: macOS did not allow it (eDSPermissionError). '
+      + 'Nothing was removed: the Harness Team account and its daemon run as before\n')
+    for (const path of [s.paths.TEAM_HOME, s.paths.PLIST, s.paths.CONFIG, s.paths.STATUS_DIR, s.paths.SENTINEL, s.paths.SHARED_MARK, s.paths.COMPUTER_ID]) {
+      expect(s.gone(path), path).toBe(false)
+    }
+    expect(s.calls).toContain(`launchctl bootstrap system ${s.paths.PLIST}`)
+    expect(existsSync(join(s.state, 'loaded'))).toBe(true)
+    expect(existsSync(join(s.state, 'account'))).toBe(true)
+    expect(s.calls.some((c) => c.startsWith('pkill'))).toBe(false)
+    expect(s.result.stdout).not.toMatch(TEAM_COMPUTER_LINE)
+  })
+
+  it('says so when the team daemon does not start again after a refusal', () => {
+    const s = sandbox({ refuse: true, bootstrapFails: true })
+    expect(s.result.status).toBe(REMOVE_REFUSED)
+    expect(s.result.stderr).toContain('Nothing was removed, but the team daemon did not start again: harness team setup starts it')
+    expect(s.gone(s.paths.PLIST)).toBe(false)
+  })
+
+  it('finishes after the account was deleted elsewhere (Users & Groups), stopping what still runs under its old id', () => {
+    const s = sandbox({ account: false })
+    expect(s.result.status).toBe(0)
+    expect(s.calls.some((c) => c.startsWith('dscl . -delete'))).toBe(false)
+    expect(s.calls).toContain('pkill -KILL -u 600')
+    for (const path of [s.paths.TEAM_HOME, s.paths.PLIST, s.paths.CONFIG, s.paths.SHARED]) expect(s.gone(path), path).toBe(true)
+    // Its computer id, from the home it left, owned by its old id.
+    expect(TEAM_COMPUTER_LINE.exec(s.result.stdout)?.[1]).toBe('team-computer-1')
+  })
+
+  it('never reads a computer id through a link, or from a file its old id does not own', () => {
+    const script = buildRemoveScript(removeInput)
+    expect(script).toContain('[ ! -L "$left" ] && [ ! -L "$left/.harness" ] && [ ! -L "$f" ] && [ -f "$f" ] || continue')
+    expect(script).toContain('[ "$(stat -f %u "$f")" = "$team_uid" ] || continue')
+  })
+
+  it('also removes the home folder Users & Groups kept, renamed, when the account was deleted there, and names its computer', () => {
+    const s = sandbox({ account: false, keptHome: true })
+    expect(s.result.status).toBe(0)
+    expect(s.gone(s.paths.DELETED_HOME)).toBe(true)
+    expect(s.gone(s.paths.TEAM_HOME)).toBe(true)
+    expect(s.calls).toContain('pkill -KILL -u 600')
+    // Read from the home it left, after its processes were stopped.
+    expect(TEAM_COMPUTER_LINE.exec(s.result.stdout)?.[1]).toBe('team-computer-1')
+    expect(s.calls.indexOf(`head -n 1 ${s.paths.DELETED_HOME}/.harness/computer-id`)).toBeGreaterThan(s.calls.indexOf('pkill -KILL -u 600'))
+    expect(buildRemoveScript(removeInput)).toContain("DELETED_HOME='/Users/harnessteam (Deleted)'")
+  })
+
+  it('leaves a home folder that belongs to another account, and everything else, alone', () => {
+    const s = sandbox({ account: false, otherOwner: true })
+    expect(s.result.status).toBe(4)
+    expect(s.result.stderr).toBe(`harness: ${s.paths.TEAM_HOME} belongs to someone; nothing was removed\n`)
+    for (const path of [s.paths.TEAM_HOME, s.paths.PLIST, s.paths.CONFIG]) expect(s.gone(path), path).toBe(false)
+    expect(s.calls.some((c) => c.startsWith('launchctl') || c.startsWith('pkill'))).toBe(false)
+  })
+
+  it('removes the shared folder only when setup made it and nothing else is in it', () => {
+    const notMade = sandbox({ mark: false })
+    expect(notMade.result.status).toBe(0)
+    expect(notMade.gone(notMade.paths.SHARED)).toBe(false)
+    const shared = sandbox({ otherShared: true })
+    expect(shared.result.status).toBe(0)
+    expect(shared.gone(shared.paths.SHARED)).toBe(false)
+    expect(shared.gone(shared.paths.SHARED_MARK)).toBe(false)
+    expect(shared.gone(shared.paths.CONFIG)).toBe(true)
   })
 })
 
