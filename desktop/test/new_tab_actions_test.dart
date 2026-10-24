@@ -47,6 +47,7 @@ Future<void> _welcome(
   WidgetTester tester, {
   WorkspaceChrome? chrome,
   required List<String> ran,
+  bool swarmDraft = false,
 }) => tester.pumpWidget(
   MaterialApp(
     theme: grid.buildAppTheme(brightness: Brightness.dark),
@@ -54,6 +55,7 @@ Future<void> _welcome(
       chrome: chrome,
       child: WorkspaceWelcome(
         onCommand: ran.add,
+        swarmDraft: swarmDraft,
         composerBuilder: (recent) =>
             Column(children: [const Text('the box'), ?recent]),
       ),
@@ -116,6 +118,17 @@ void main() {
     }
   });
 
+  testWidgets('a Swarm draft leaves out New Swarm, the thing it starts', (
+    tester,
+  ) async {
+    final ran = <String>[];
+    await _welcome(tester, chrome: _web, ran: ran, swarmDraft: true);
+    expect(find.text('New Swarm'), findsNothing);
+    for (final label in ['Open Harness', 'Machines', 'Store']) {
+      expect(find.text(label), findsOneWidget, reason: label);
+    }
+  });
+
   testWidgets('Desktop keeps the box alone', (tester) async {
     await _welcome(tester, ran: []);
     expect(find.text('the box'), findsOneWidget);
@@ -162,6 +175,15 @@ void main() {
         await tester.pump(const Duration(milliseconds: 200));
         expect(app.swarms, hasLength(tabs + 1));
         expect(app.activeSwarm.isSuperTab, isTrue);
+        // The draft's own page offers the other three, not New Swarm again.
+        Finder onPage(String label) => find.descendant(
+          of: find.byType(WorkspaceWelcome),
+          matching: find.text(label),
+        );
+        expect(onPage('New Swarm'), findsNothing);
+        for (final label in ['Open Harness', 'Machines', 'Store']) {
+          expect(onPage(label), findsOneWidget, reason: label);
+        }
         expect(tester.takeException(), isNull);
         await tester.pumpWidget(const SizedBox.shrink());
       });

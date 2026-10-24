@@ -44,6 +44,7 @@ class WorkspaceWelcome extends StatefulWidget {
     this.composerBuilder,
     this.closedSuperTabs = const [],
     this.onOpenSuperTab,
+    this.swarmDraft = false,
     this.now = DateTime.now,
   });
 
@@ -57,6 +58,10 @@ class WorkspaceWelcome extends StatefulWidget {
   /// on the page a person lands on, not only in the command palette.
   final List<({String id, String name})> closedSuperTabs;
   final ValueChanged<String>? onOpenSuperTab;
+
+  /// True on a Swarm draft: its box starts a Swarm, so the plain buttons
+  /// leave New Swarm out rather than start the thing already on screen.
+  final bool swarmDraft;
 
   /// Embedded creation and the popup supply the exact same form. Welcome
   /// only contributes its existing recent-session data beneath that form.
@@ -402,7 +407,7 @@ class _WorkspaceWelcomeState extends State<WorkspaceWelcome> {
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        NewTabActions(onCommand: onCommand),
+        NewTabActions(onCommand: onCommand, offersNewSwarm: !widget.swarmDraft),
         if (recent != null) ...[const SizedBox(height: 32), recent],
       ],
     );
