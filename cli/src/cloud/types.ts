@@ -3,7 +3,7 @@
  * translates between Harness and one maker's API. The service (cloud/service.ts) does the rest: the
  * harnesses and their transcripts, how often to look, the questions, and what the core is told.
  */
-import type { CloudAgentId, CloudState } from '../lib/cloudAgents.js'
+import type { CloudAgentId, CloudProviderStatus, CloudState } from '../lib/cloudAgents.js'
 
 export interface CloudLink { label: string; url: string }
 
@@ -25,6 +25,8 @@ export interface CloudUpdate {
   messages: CloudMessage[]
   state?: CloudState
   activity?: string | null
+  /** The maker's own status and detail, when this look read them. A null field is a reading, not "leave the old one". */
+  providerStatus?: CloudProviderStatus
   /** The agent waits on the person: what it asks, with the choices it offers. Absent: the question already asked stands. */
   question?: { text: string; choices: string[] } | null
   branch?: string | null
