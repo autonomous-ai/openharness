@@ -121,7 +121,7 @@ void main() {
     );
     expect(
       tester.getSemantics(find.byType(WebDownloadButton)),
-      containsSemantics(
+      isSemantics(
         label: 'Download app',
         isFocusable: true,
         isButton: true,
