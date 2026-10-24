@@ -118,6 +118,9 @@ activity summaries or infer a work timer from the session's age. Engine names be
 Chat headings and quoted replies use the same current agent identity as the roster, including
 older messages. When an agent has left, its recorded author name remains available in history.
 Machine rows show a computer icon, name, owner avatar, status and right-hand disclosure.
+A Mac and its Harness Team account are one row, and agents in that account read as on the Mac.
+When teammates' agents cannot run on a machine, its row adds one line, such as
+**Teammates' agents paused: privacy check failed**. There is no badge.
 Clicking the name opens labeled details; disclosure shows agents with their names, role badges
 and status, followed by known resources and model allowances. Offline machines stay in the
 same list and omit stale readings. Rows share the projects' alignment and full-width highlight.

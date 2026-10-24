@@ -11,7 +11,7 @@
 ## The experience
 
 1. A person's Mac joins a Swarm. macOS asks once for an administrator password. There is no Harness setup screen.
-2. Harness creates a hidden standard user, makes the owner's home folder private, and runs a second Harness daemon as that user. It appears as its own machine, e.g. "MacBook Pro · Team", marked **Private ✓** once the privacy check passes.
+2. Harness creates a hidden standard user, makes the owner's home folder private, and runs a second Harness daemon as that user. It is not shown as a machine of its own: the Mac stays one machine everywhere (see **One machine**).
 3. Teammates' work only runs on Team machines. The owner's own agents keep running as the owner, as today.
 4. The owner approves Claude Code and Codex for team work once, in the browser. That is an explicit choice to share that subscription.
 5. Agents push and open PRs with a Harness GitHub App token for that one repository. The machine owner's GitHub login is never used.
@@ -101,6 +101,16 @@ Files: `backend/src/superTabs/commands.ts` (`message.send`), a small detector mo
 
 - [ ] Tests for JWTs, GitHub tokens, OpenAI and Anthropic keys, AWS keys, Slack tokens and private key blocks; ordinary hashes and commit ids pass.
 - [ ] Redact before storing, keep the rest of the message, and tell the sender what was removed and that the credential should be revoked.
+
+## One machine
+
+Owner, 24 Oct 2026: "The isolated team account is just an under-the-scenes mechanism." A Mac with a Harness Team account is one machine in every list: the owner's machine lists in Desktop, the Swarm's machines and people views (for the owner and for teammates), `harness machines` and hn.
+
+- **The link.** The team machine records the Mac it lives on, `Machine.hostMachineId`. `POST /api/auth/handoff` with `{ "kind": "team" }` records the Mac in the code. From a Harness computer session, that is the computer's own machine, and naming another is refused. Any other sign-in passes `hostMachineId`: one of the account's ordinary machines (not a team one), in the same environment. Otherwise the answer is 403 `HANDOFF_NOT_ALLOWED`, and nothing is minted. `harness team setup` sends its own machine id. The team session keeps the Mac (`HarnessSession.hostMachineId`), and its machine copies it each time it registers. A repair run also updates a team machine that already exists. Nothing a team session sends sets or changes it. A dedicated machine (`harness team on`) has no Mac and stays its own row.
+- **Both rows stay in the API.** `GET /api/machines` returns `hostMachineId` on a team machine that lives on a Mac, and null on every other machine. The team account's daemon still reads the account's machines with `sessionKind`, so roster sync keeps leaving team machines out (`machineKinds.ts`). Clients fold: a row whose `hostMachineId` names another listed row is shown inside that row. Connections to it stay, so its harnesses still open.
+- **In a Swarm.** The team machine's pool carries `hostMachineId` too, stamped by the store from the account row. Wherever its owner adds the Mac, the Mac's own daemon adds the team account: the roster names it (`joinTeam`), the team account prepares its own folder and engines through the relay, and the Mac's daemon contributes it as the person (`ifMissing`). The pool takes the Mac's name, agent slots and pause. Pausing, reconfiguring or removing the Mac does the same to it. Desktop shows one row per Mac. Agents in the team account read as on the Mac. Teammates see the team account's status (it runs while the owner is logged out of macOS); the owner sees their own daemon's.
+- **Routing.** A start on the Mac for a project its contributor does not own goes to the Mac's team account, in that account's folder, if `teamWorkCheck` passes. Otherwise it is refused with the team account's reason, and it never falls back to the owner. The owner's own projects stay with the owner's daemon. A start that names the team machine still works. The Lead's route offers the Mac once: the team account for a teammate's project, the owner's daemon for the owner's own. A machines rule naming the Mac allows its team account.
+- **The only new copy** is a line on a Swarm machine row, shown only when teammates' agents cannot run there: `Teammates' agents paused: privacy check failed`. The other endings are `Harness Team account offline`, `not set up`, `privacy not checked yet` and `privacy check out of date`, one for each `teamWorkRefusal` code. There is no badge, setup button or setting.
 
 ## Out of scope
 
