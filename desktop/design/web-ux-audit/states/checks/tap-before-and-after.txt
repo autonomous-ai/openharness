@@ -1,0 +1,38 @@
+== before
+360 new-device ["It’s mine 69x32@76","Review 69x32@76","Menu 31x28@121"," 31x28@121","Tabs: 1:code · 2/2 123x28@121"," 123x28@121","New Tab 23x28@121"," 23x28@121","Open Harness 31x28@121"," 31x28@121","Notifications 31x28@121"," 31x28@121","Agent: Codex 55x28@171"," 55x28@171","Model: OpenAI 63x28@171"," 63x28@171","Close Pane 28x28@171"," 28x28@171","Status: Studio Mac 108x28@707"," 108x28@707",
+360 viewer-incomplete []
+360 viewer-page ["Retry 54x32@405"]
+360 settings-account ["Sign out 280x32@305"]
+360 settings-usage []
+360 settings-tab-invites ["Retry 280x32@324","Try again 73x32@406"]
+360 settings-usage-subscriptions []
+390 new-device ["It’s mine 69x32@63","Review 69x32@63","Menu 31x28@108"," 31x28@108","Tabs: 1:code · 2/2 123x28@108"," 123x28@108","New Tab 23x28@108"," 23x28@108","Open Harness 31x28@108"," 31x28@108","Notifications 31x28@108"," 31x28@108","Agent: Codex 55x28@158"," 55x28@158","Model: OpenAI 63x28@158"," 63x28@158","Close Pane 28x28@158"," 28x28@158","Status: Studio Mac 108x28@811"," 108x28@811",
+390 viewer-incomplete []
+390 viewer-page ["Retry 54x32@450"]
+390 settings-account ["Sign out 310x32@292"]
+390 settings-usage []
+390 settings-tab-invites ["Retry 310x32@311","Try again 73x32@393"]
+390 settings-usage-subscriptions []
+360 super-tab-empty ["Conversations 32x32@10","Members and machines 32x32@10"]
+360 super-tab-offline ["Conversations 32x32@10","Members and machines 32x32@10","Retry 50x32@60","Attach files 32x32@682","Send message 32x32@682"]
+390 super-tab-empty ["Conversations 32x32@10","Members and machines 32x32@10"]
+390 super-tab-offline ["Conversations 32x32@10","Members and machines 32x32@10","Retry 50x32@60","Attach files 32x32@786","Send message 32x32@786"]
+== after
+360 new-device ["It’s mine 69x32@120","Review 69x32@120","Menu 31x28@165"," 31x28@165","Tabs: 1:code · 2/2 123x28@165"," 123x28@165","New Tab 23x28@165"," 23x28@165","Open Harness 31x28@165"," 31x28@165","Notifications 31x28@165"," 31x28@165","Agent: Codex 55x28@215"," 55x28@215","Model: OpenAI 63x28@215"," 63x28@215","Close Pane 28x28@215"," 28x28@215","Status: Studio Mac 108x28@707"," 108x28@707
+360 viewer-incomplete ["Open Harness 110x32@451"]
+360 viewer-page ["Retry 58x32@433"]
+360 settings-account ["Sign out 280x32@305"]
+360 settings-usage []
+360 settings-tab-invites ["Retry 280x32@324","Try again 73x32@406"]
+360 settings-usage-subscriptions []
+390 new-device ["It’s mine 69x32@107","Review 69x32@107","Menu 31x28@152"," 31x28@152","Tabs: 1:code · 2/2 123x28@152"," 123x28@152","New Tab 23x28@152"," 23x28@152","Open Harness 31x28@152"," 31x28@152","Notifications 31x28@152"," 31x28@152","Agent: Codex 55x28@202"," 55x28@202","Model: OpenAI 63x28@202"," 63x28@202","Close Pane 28x28@202"," 28x28@202","Status: Studio Mac 108x28@811"," 108x28@811
+390 viewer-incomplete ["Open Harness 110x32@497"]
+390 viewer-page ["Retry 58x32@478"]
+390 settings-account ["Sign out 310x32@292"]
+390 settings-usage []
+390 settings-tab-invites ["Retry 310x32@311","Try again 73x32@393"]
+390 settings-usage-subscriptions []
+360 super-tab-empty ["Conversations 32x32@10","Members and machines 32x32@10","New project 98x32@396"]
+360 super-tab-offline ["Conversations 32x32@10","Members and machines 32x32@10","Retry 50x32@356","Attach files 32x32@682","Send message 32x32@682"]
+390 super-tab-empty ["Conversations 32x32@10","Members and machines 32x32@10","New project 98x32@448"]
+390 super-tab-offline ["Conversations 32x32@10","Members and machines 32x32@10","Retry 50x32@408","Attach files 32x32@786","Send message 32x32@786"]
