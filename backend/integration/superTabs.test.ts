@@ -1117,6 +1117,83 @@ describe('Super Tabs on a real Mongo replica set', () => {
     expect(text).not.toMatch(/Only|@/)
   })
 
+  it('delivers a Lead\'s agent-only notice to the Lead once and shows it to no person in the project chat', async () => {
+    const { tab, lead } = await fixture()
+    await invite(tab)
+    const before = (await store.read(owner, tab)).state.conversations.find(c => c.id === 'lead')!.lastMessageSequence
+    const notice: Command = { type: 'message.send', conversationId: 'lead', text: 'Harness updated your built-in swarm-lead skill.',
+      replyTo: null, recipientIds: [lead], agentOnly: true }
+    const sent = await run(tab, notice, host, lead, 'skill-notice')
+    await run(tab, notice, host, lead, 'skill-notice')
+    const deliveries = (await store.deliveries(host, tab, lead)).filter(d => d.messageId === sent.result.messageId)
+    expect(deliveries).toHaveLength(1)
+    for (const person of [owner, peer]) {
+      expect((await store.messages(person, tab, 'lead', {})).messages).toEqual([])
+      expect((await store.messages(person, tab, 'lead', { messageId: sent.result.messageId as string })).messages).toEqual([])
+    }
+    expect((await store.read(owner, tab)).state.conversations.find(c => c.id === 'lead')!.lastMessageSequence).toBe(before)
+    expect((await store.messages(host, tab, 'lead', {}, lead)).messages.map(m => m.text)).toEqual(['Harness updated your built-in swarm-lead skill.'])
+    // Typed through the normal claim; a hold while the input box is busy writes no row people would see.
+    const claimed = await store.delivery(host, tab, lead, deliveries[0]!.id, { type: 'claim', claimId: 'claim' })
+    expect(claimed.message).toMatchObject({ text: 'Harness updated your built-in swarm-lead skill.', source: { kind: 'agent-only' } })
+    expect(await store.delivery(host, tab, lead, deliveries[0]!.id, { type: 'hold', claimId: 'claim', reason: 'team_waiting_draft' })).toEqual({ noticed: false })
+    expect((await store.messages(owner, tab, 'lead', {})).messages).toEqual([])
+  })
+
+  it('delivers a worker\'s agent-only notice once in its group and lists it for no person and not for its Lead', async () => {
+    const { tab, lead } = await fixture()
+    const group = (await run(tab, { type: 'conversation.create', title: 'Worker task', brief: 'Work', checks: [{ description: 'Done', independent: false }] })).result.conversationId as string
+    const worker = (await run(tab, { type: 'agent.add', conversationId: group, machineId: 'test-host', harnessId: randomUUID(), name: 'Worker', configuration: config, lead: false })).result.agentId as string
+    await run(tab, { type: 'work.assign', conversationId: group, agentId: worker })
+    const before = (await store.read(owner, tab)).state.conversations.find(c => c.id === group)!.lastMessageSequence
+    const notice: Command = { type: 'message.send', conversationId: group, text: 'Harness updated your built-in swarm-dev skill.',
+      replyTo: null, recipientIds: [worker], agentOnly: true }
+    const sent = await run(tab, notice, host, worker, 'worker-notice')
+    await run(tab, notice, host, worker, 'worker-notice')
+    expect((await store.deliveries(host, tab, worker)).filter(d => d.messageId === sent.result.messageId)).toHaveLength(1)
+    expect((await store.deliveries(host, tab, lead)).filter(d => d.messageId === sent.result.messageId)).toEqual([])
+    expect((await store.messages(owner, tab, group, {})).messages.map(m => m.id)).not.toContain(sent.result.messageId)
+    expect((await store.messages(host, tab, group, {}, lead)).messages.map(m => m.id)).not.toContain(sent.result.messageId)
+    expect((await store.messages(host, tab, group, {}, worker)).messages.map(m => m.id)).toContain(sent.result.messageId)
+    expect((await store.read(owner, tab)).state.conversations.find(c => c.id === group)!.lastMessageSequence).toBe(before)
+  })
+
+  it('reads past more than a page of hidden notices so a person still reaches every later message', async () => {
+    const { tab, lead } = await fixture()
+    const first = (await run(tab, message('Before the notices.'))).result.messageId as string
+    for (let i = 0; i < 120; i++) {
+      await run(tab, { type: 'message.send', conversationId: 'lead', text: `Notice ${i}.`, replyTo: null, recipientIds: [lead], agentOnly: true }, host, lead)
+    }
+    const last = (await run(tab, message('After the notices.'))).result.messageId as string
+    // Desktop's first read, then its next read after the last row it shows (desktop/lib/super_tabs/controller.dart).
+    const opened = await store.messages(owner, tab, 'lead', {})
+    expect(opened.messages.map(m => m.id)).toEqual([first, last])
+    expect(opened.next).toBeNull()
+    const tail = opened.messages[0]!.sequence
+    expect((await store.messages(owner, tab, 'lead', { after: tail })).messages.map(m => m.id)).toEqual([last])
+    expect((await store.messages(owner, tab, 'lead', { before: opened.messages[1]!.sequence })).messages.map(m => m.id)).toEqual([first])
+    // The Lead pages through all of its own notices, a full page then the rest.
+    const page = await store.messages(host, tab, 'lead', {}, lead)
+    expect(page.messages).toHaveLength(100)
+    const rest = await store.messages(host, tab, 'lead', { before: page.next! }, lead)
+    expect([...rest.messages, ...page.messages].map(m => m.text)).toEqual(['Before the notices.', ...Array.from({ length: 120 }, (_, i) => `Notice ${i}.`), 'After the notices.'])
+    expect(rest.next).toBeNull()
+  })
+
+  it('accepts an agent-only notice only from an agent to itself alone', async () => {
+    const { tab, lead } = await fixture()
+    const worker = (await run(tab, { type: 'agent.add', conversationId: 'lead', machineId: 'test-host', harnessId: randomUUID(), name: 'Worker', configuration: config, lead: false })).result.agentId as string
+    const notice = (recipientIds: string[]): Command => ({ type: 'message.send', conversationId: 'lead', text: 'Skill changed.', replyTo: null, recipientIds, agentOnly: true })
+    await expect(run(tab, notice([lead]))).rejects.toMatchObject({ code: 'INVALID_RECIPIENT' })
+    await expect(run(tab, notice([worker]), host, lead)).rejects.toMatchObject({ code: 'INVALID_RECIPIENT' })
+    await expect(run(tab, notice([lead, worker]), host, lead)).rejects.toMatchObject({ code: 'INVALID_RECIPIENT' })
+    await expect(run(tab, notice([]), host, lead)).rejects.toMatchObject({ code: 'INVALID_RECIPIENT' })
+    // A tag would tell a person about a notice they cannot see.
+    await invite(tab)
+    await expect(run(tab, { ...notice([lead]), mentions: [peer.sub] } as Command, host, lead)).rejects.toMatchObject({ code: 'INVALID_RECIPIENT' })
+    expect((await store.messages(owner, tab, 'lead', {})).messages).toEqual([])
+  })
+
   it('stores the current delivery hold and its first time even after the compatibility notice exists', async () => {
     const { tab, lead } = await fixture()
     let now = Date.now()

@@ -218,6 +218,12 @@ describe('Super Tab native delivery handoff', () => {
     expect(vi.mocked(t.core.turns.deliver).mock.calls[0]?.[1]).toContain('Leads coordinate: assign multi-part or 15+ minute work to Swarm agent groups; do only answers, lookups and work under 15 minutes yourself; your subagents only read/look up.')
   })
 
+  it('types only the notice for an agent-only delivery, with no invitation to reply in the conversation', async () => {
+    const t = setup({ text: 'Harness updated your built-in swarm-lead skill.', source: { kind: 'agent-only' } })
+    await t.open().tick()
+    expect(t.core.turns.deliver).toHaveBeenCalledWith('harness', 'Harness updated your built-in swarm-lead skill.', 'team:service:superTabs:delivery')
+  })
+
   it('keeps a slow configuration observation out of the native delivery and lease path', async () => {
     const t = setup(), host = t.open()
     vi.mocked(t.core.agents.byAgent).mockReturnValue({ agentId: 'harness', engine: 'claude' } as never)
@@ -1144,6 +1150,9 @@ describe('built-in skill text after a CLI update', () => {
     /** Backend calls held until the test releases them: the roster may change while the refresh waits on one. */
     const holds: Array<{ match: (path: string, body: any) => boolean; until: Promise<void> }> = []
     let inFlight = 0
+    /** A notice the backend refuses (an older backend, an outage), and every refused request. */
+    let refuse: ((request: any) => { status: number; body: Record<string, unknown> } | undefined) | undefined
+    const refused: Array<{ operationId: string; command: Record<string, any> }> = []
     t.core.agents.byAgent = vi.fn(id => sessions[id] as never)
     t.core.agents.terminalAvailable = vi.fn(() => true)
     t.core.account.backend = vi.fn(async (method, path, body) => {
@@ -1161,6 +1170,8 @@ describe('built-in skill text after a CLI update', () => {
         return texts[role] ? { status: 200, body: { data: texts[role] } } : { status: 404, body: { success: false, error: { code: 'NOT_FOUND', message: 'This role is unavailable.' } } }
       }
       if (path.endsWith('/deliveries')) return { status: 200, body: { data: [] } }
+      const refusal = request?.command?.type === 'message.send' ? refuse?.(request) : undefined
+      if (refusal) { refused.push(request); return refusal }
       if (request?.command?.type === 'message.send') {
         // As the backend does: a repeated operation gets its first receipt; the same id for a different request is refused.
         const prior = receipts.get(request.operationId), same = JSON.stringify(request.command)
@@ -1181,7 +1192,7 @@ describe('built-in skill text after a CLI update', () => {
       holds.push({ match, until: new Promise<void>(resolve => { release = resolve }) })
       return release
     }
-    return { t, files, sent, pass, rowRoles, texts, fetched, holdNext, setGroups: (next: typeof groups) => { groups = next }, setMode: (next: typeof mode) => { skillMode = next } }
+    return { t, files, sent, refused, pass, rowRoles, texts, fetched, holdNext, setRefuse: (next: typeof refuse) => { refuse = next }, setGroups: (next: typeof groups) => { groups = next }, setMode: (next: typeof mode) => { skillMode = next } }
   }
 
   // Custom roles and skills per project (spec 2026-10-23): on Custom the roster names each agent's role and its text's
@@ -1303,11 +1314,41 @@ describe('built-in skill text after a CLI update', () => {
     expect(f.sent.map(s => [s.asAgentId, s.command.recipientIds, s.command.conversationId]).sort()).toEqual([
       ['a-builder', ['a-builder'], 'work'], ['a-lead', ['a-lead'], 'lead-group'], ['a-reviewer', ['a-reviewer'], 'lead-group']])
     for (const s of f.sent) expect(s.command.text).toContain(f.files[s.asAgentId.slice(2)]!)
+    // Only the agent sees its notice; no person reads it in a chat.
+    for (const s of f.sent) expect(s.command.agentOnly).toBe(true)
     expect(f.sent.find(s => s.asAgentId === 'a-reviewer')!.command.text).toContain('swarm-review skill')
     // A second pass and a restarted host find the files current and say nothing more.
     await f.pass(host, 5_000)
     await f.pass()
     expect(f.sent).toHaveLength(3)
+  })
+
+  it('sends each notice the old way, once, when an older backend refuses the agent-only mark', async () => {
+    const f = syncFixture()
+    f.setRefuse(request => request.command.agentOnly ? { status: 400, body: { success: false,
+      error: { code: 'VALIDATION_ERROR', message: 'command: Unrecognized key: "agentOnly"' } } } : undefined)
+    const host = await f.pass()
+    expect(f.refused.map(r => r.operationId).sort()).toEqual(f.sent.map(s => s.operationId).sort())
+    expect(f.sent.map(s => [s.asAgentId, s.command.recipientIds, 'agentOnly' in s.command]).sort()).toEqual([
+      ['a-builder', ['a-builder'], false], ['a-lead', ['a-lead'], false], ['a-reviewer', ['a-reviewer'], false]])
+    await f.pass(host, 120_000)
+    expect(f.sent).toHaveLength(3)
+    expect(f.refused).toHaveLength(3)
+  })
+
+  it('never falls back to a visible notice on any other refusal, and retries later as before', async () => {
+    const f = syncFixture()
+    let reply = { status: 400, body: { success: false, error: { code: 'VALIDATION_ERROR', message: 'command.text: Too big' } } }
+    f.setRefuse(() => reply)
+    const host = await f.pass()
+    reply = { status: 503, body: { success: false, error: { code: 'BACKEND_UNAVAILABLE', message: 'agentOnly notice could not be stored' } } }
+    await f.pass(host, 60_000)
+    expect(f.sent).toEqual([])
+    expect(f.refused).toHaveLength(6)
+    expect(f.refused.every(r => r.command.agentOnly === true)).toBe(true)
+    f.setRefuse(undefined)
+    await f.pass(host, 60_000)
+    expect(f.sent.map(s => s.command.agentOnly)).toEqual([true, true, true])
   })
 
   it('records a notice that was sent before its record was lost, even after its group changed', async () => {

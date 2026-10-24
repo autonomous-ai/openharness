@@ -232,6 +232,9 @@ export interface MessageDraft {
   /** People a Lead tagged (mentions.ts). */
   mentions?: string[]
 }
+/** A notice for one agent alone (a skill update): delivered to it like any message, never shown to people or other agents. */
+export const AGENT_ONLY = { kind: 'agent-only' }
+export const agentOnly = (source: unknown): boolean => (source as { kind?: unknown } | null | undefined)?.kind === AGENT_ONLY.kind
 export interface CommandEffects {
   state: SuperTabState
   messages: MessageDraft[]
