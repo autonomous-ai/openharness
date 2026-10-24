@@ -13,6 +13,7 @@ import { agentTarget, askedInSchema, broken, MAX_RULES, RULE_MESSAGE_MS, ruleSch
 import { MAX_ATTACHMENTS, type Attachment } from './attachments.js'
 import { checkMentions, MAX_MENTIONS, type MentionTarget } from './mentions.js'
 import { TERMINAL_KEYS, terminalAlert, terminalRequest, terminalResult, type TerminalRequest } from './terminal.js'
+import { credentialResult, redactCredentials, type CredentialKind } from './credentials.js'
 import { agentKind, agentProjectId, agentSetRole, deleteProject, groupProject, inviteLanding, ledProject, manageProject, MAX_ROLES, mutableProjects, placeRules, projectMembers, projectOf, projectRules, projectsOf, readAgent, readConversation, readProject, roleVersion, sameProject, sharedWithLeads, SKILL_SET_NAMES, skillSetOf, type ProjectRole, type RoleKind, type SwarmProject } from './projects.js'
 
 const id = z.string().min(1).max(160).regex(/^[A-Za-z0-9_-]+$/)
@@ -138,6 +139,57 @@ export const commandSchema = z.discriminatedUnion('type', [
 ])
 export type Command = z.infer<typeof commandSchema>
 export const operationSchema = z.object({ operationId: id, command: commandSchema }).strict()
+
+/** The words in each command that people and agents read in the Swarm: messages, briefs and tasks, results, evidence,
+ *  reasons, errors and names. `[]` is each item of a list. Not `agent.input`: its host types the exact text, and only its
+ *  chat row is redacted (terminal.ts). Not a role's skill text, which only its project's owner, Lead and hosts read. */
+const WORDS: Partial<Record<Command['type'], readonly string[]>> = {
+  'message.send': ['text'],
+  'agent.add': ['name', 'initialMessage'],
+  'agent.start': ['request.name', 'overrideReason'],
+  'agent.startFailed': ['error'],
+  'agent.startSettled': ['warning'],
+  'conversation.create': ['title', 'brief', 'task.goal', 'task.changes', 'task.constraints', 'task.owns[]', 'checks[].description'],
+  'conversation.rename': ['title'],
+  'work.define': ['brief', 'task.goal', 'task.changes', 'task.constraints', 'task.owns[]', 'checks[].description'],
+  'work.assign': ['overrideReason'],
+  'work.status': ['result'],
+  'work.cancel': ['reason'],
+  'work.check': ['evidence'],
+  'project.create': ['name', 'brief'],
+  'project.rename': ['name'],
+  'project.report': ['text'],
+  'rule.set': ['text'],
+  'route.record': ['decision.assessment.why', 'decision.why', 'decision.excluded[].title', 'decision.excluded[].reason',
+    'decision.candidates[].title', 'decision.candidates[].label'],
+  'route.override': ['reason'],
+  'tab.rename': ['name'],
+  'machine.contribute': ['name'],
+  'localModels.status': ['error'],
+}
+
+/** The command with every credential in its words replaced (credentials.ts), adding what went to `removed`. */
+export function withoutCredentials(command: Command, removed: CredentialKind[]): Command {
+  const paths = WORDS[command.type]
+  if (!paths) return command
+  const copy = structuredClone(command)
+  const visit = (holder: Record<string, unknown>, [head, ...rest]: string[]) => {
+    const many = head!.endsWith('[]'), key = many ? head!.slice(0, -2) : head!
+    const redact = (value: unknown, put: (text: string) => void) => {
+      if (rest.length) {
+        if (value && typeof value === 'object') visit(value as Record<string, unknown>, rest)
+      } else if (typeof value === 'string') {
+        const clean = redactCredentials(value)
+        if (clean.removed.length) { put(clean.text); removed.push(...clean.removed) }
+      }
+    }
+    const value = holder[key]
+    if (many && Array.isArray(value)) value.forEach((item, i) => redact(item, text => { value[i] = text }))
+    else if (!many) redact(value, text => { holder[key] = text })
+  }
+  for (const path of paths) visit(copy as Record<string, unknown>, path.split('.'))
+  return copy
+}
 
 export interface CommandContext {
   operationId: string
@@ -317,7 +369,10 @@ function open(state: SuperTabState, conversationId: string) {
 
 /** Pure policy/state transition. The store commits its state, messages and delivery records in one transaction. */
 export function applyCommand(original: SuperTabState, actor: Actor, input: Command, context: CommandContext): CommandEffects {
-  const command = commandSchema.parse(input)
+  // A credential someone pasted, or an agent echoed from its terminal, is gone before anything is stored or delivered
+  // (Oct 2026: a Harness access token in a shared Lead chat). The sender's result says what went.
+  const removed: CredentialKind[] = []
+  const command = withoutCredentials(commandSchema.parse(input), removed)
   const state = structuredClone(original)
   syncLeads(state)
   numberConversations(state)
@@ -547,10 +602,11 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
   switch (command.type) {
     case 'agent.screen':
     case 'agent.input': {
-      const { effect, message } = terminalRequest(state, actor, sender, operationId, context.now, command)
+      const { effect, message, removed: typed } = terminalRequest(state, actor, sender, operationId, context.now, command)
       effects.terminal = effect
       result.requestId = operationId
       if (message) effects.messages.push(message)
+      removed.push(...typed)
       break
     }
     case 'agent.screenResult':
@@ -1431,6 +1487,12 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
   // MongoDB limits a document to 16 MiB. Leave room for indexes and metadata, and refuse before losing state.
   assignAgentDisplayNames(state.agents)
   if (Buffer.byteLength(JSON.stringify(state)) > 8 * 1024 * 1024) fail('TAB_TOO_LARGE', 'This Super Tab has reached its metadata limit.', 413)
+  // Every row this command writes, whatever its words came from: an older message resent, a rule written before this check.
+  for (const draft of effects.messages) {
+    const clean = redactCredentials(draft.text)
+    if (clean.removed.length) { draft.text = clean.text; removed.push(...clean.removed) }
+  }
+  if (removed.length) Object.assign(result, credentialResult(removed))
   return effects
 }
 

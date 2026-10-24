@@ -1369,6 +1369,15 @@ class _SuperTabViewState extends State<SuperTabView>
                   ),
               ],
             ),
+          )
+        else if (c.operationNotice != null)
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 24),
+            child: Text(
+              c.operationNotice!,
+              key: const ValueKey('super-operation-notice'),
+              style: DesktopChrome.control(),
+            ),
           ),
         if (reply != null)
           Padding(

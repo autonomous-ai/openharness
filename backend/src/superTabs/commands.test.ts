@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { applyCommand, commandSchema, PAIR_CHAIN_LIMIT, type Command, type CommandContext } from './commands.js'
+import { applyCommand, commandSchema, PAIR_CHAIN_LIMIT, withoutCredentials, type Command, type CommandContext } from './commands.js'
+import { CREDENTIAL_MARKER, type CredentialKind } from './credentials.js'
 import { hostLocalGrid, machineSlots, removalPreview, swarmGridRow } from './machines.js'
 import { activeWork, agentRole, createSuperTab, visibleState, type Actor, type AgentConfiguration } from './model.js'
 import type { RouteDecision } from './routeRecord.js'
@@ -2102,5 +2103,90 @@ describe('Lead mentions', () => {
     expect(() => f.run(done, owner, { mention })).toThrow('This mention is unavailable.')
     expect(() => f.run(done, peer)).toThrow('This mention is unavailable.')
     expect(() => f.run(done, as(lead), { mention })).toThrow('This mention is unavailable.')
+  })
+})
+
+describe('credentials in Swarm chat', () => {
+  // Assembled at run time from obviously fake parts, never a credential-shaped literal.
+  const jwt = [{ alg: 'HS256', typ: 'JWT' }, { sub: 'fixture-user' }].map(part => Buffer.from(JSON.stringify(part)).toString('base64url'))
+    .concat('Fixture0Signature1Not2Real3Value4abcdefgh').join('.')
+  const github = ['ghp', 'Fixture0Token1Not2Real3Value4abcdefgh'].join('_')
+  const notice = 'Removed 2 credentials (JWT, GitHub token) before saving. Revoke or rotate them.'
+  const pasted = `Here is my login: ${jwt}\nand the deploy token ${github} for the release.`
+  const kept = `Here is my login: ${CREDENTIAL_MARKER}\nand the deploy token ${CREDENTIAL_MARKER} for the release.`
+  const send = (text: string, conversationId = 'lead'): Command => ({ type: 'message.send', conversationId, text, replyTo: null, recipientIds: [] })
+
+  it('stores a person\'s message without the credentials, keeps the rest and tells the sender what went', () => {
+    const f = fixture(), lead = f.add('lead', 'owner', 'lead', true)
+    const input = send(pasted)
+    const sent = f.run(input)
+    expect(sent.messages).toEqual([expect.objectContaining({ text: kept, recipients: [lead] })])
+    expect(sent.result).toEqual({ messageId: sent.messages[0]!.id, credentialNotice: notice,
+      credentialsRemoved: [{ kind: 'jwt', label: 'JWT', count: 1 }, { kind: 'github', label: 'GitHub token', count: 1 }] })
+    expect(JSON.stringify([sent.messages, f.state])).not.toContain(github)
+    expect(JSON.stringify([sent.messages, f.state])).not.toContain(jwt)
+    // The caller's command is left as it was; only what is stored changes.
+    expect(input).toEqual(send(pasted))
+  })
+
+  it('treats an agent\'s post the same: agents echo credentials from their terminals', () => {
+    const f = fixture(), lead = f.add('lead', 'owner', 'lead', true), group = f.group(), worker = f.add('worker', 'owner', group)
+    f.run({ type: 'conversation.agent', conversationId: group, agentId: lead, present: true, lead: true })
+    f.run({ type: 'work.assign', conversationId: group, agentId: worker })
+    const posted = f.run(send(`npm publish failed: //registry.npmjs.org/:_authToken=${github}`, group), { kind: 'agent', agentId: worker, machineOwnerId: 'host-owner' })
+    expect(posted.messages).toEqual([expect.objectContaining({ text: `npm publish failed: //registry.npmjs.org/:_authToken=${CREDENTIAL_MARKER}`, recipients: [lead] })])
+    expect(posted.result.credentialNotice).toBe('Removed a credential (GitHub token) before saving. Revoke or rotate it.')
+  })
+
+  it('leaves a message without credentials, and its result, exactly as before', () => {
+    const f = fixture()
+    const text = 'Merged a3f1c9e27b5d4f80916e2c3b7a8d9e0f1a2b3c4d; id 123e4567-e89b-12d3-a456-426614174000, see https://github.com/example/project/pull/1680'
+    const sent = f.run(send(text))
+    expect(sent.messages[0]!.text).toBe(text)
+    expect(sent.result).toEqual({ messageId: sent.messages[0]!.id })
+  })
+
+  it('removes credentials from task words, results, evidence and reports before they reach the state or a row', () => {
+    const f = fixture(), lead = f.add('lead', 'owner', 'lead', true)
+    const created = f.run({ type: 'conversation.create', title: 'Deploy', checks: [{ description: `Login works with ${github}`, independent: false }],
+      task: { goal: 'Deploy', changes: `Use ${jwt} to call the API`, constraints: 'None', owns: ['backend'] } })
+    expect(created.result.credentialNotice).toBe(notice)
+    const group = f.state.conversations.find(c => c.id === created.result.conversationId)!
+    expect(group.task!.changes).toBe(`Use ${CREDENTIAL_MARKER} to call the API`)
+    expect(group.brief).toContain(`Use ${CREDENTIAL_MARKER} to call the API`)
+    expect(group.checks[0]!.description).toBe(`Login works with ${CREDENTIAL_MARKER}`)
+    const worker = f.add('worker', 'owner', group.id)
+    const assignmentId = f.run({ type: 'work.assign', conversationId: group.id, agentId: worker }).result.assignmentId as string
+    const as: Actor = { kind: 'agent', agentId: worker, machineOwnerId: 'host-owner' }
+    const blocked = f.run({ type: 'work.status', conversationId: group.id, assignmentId, status: 'blocked', result: `Rejected ${github}` }, as)
+    expect(blocked.messages[0]!.text).toBe(`Stuck\n\nRejected ${CREDENTIAL_MARKER}`)
+    f.run({ type: 'work.check', conversationId: group.id, assignmentId, checkId: group.checks[0]!.id, passed: true, evidence: `Signed in as ${jwt}` },
+      { kind: 'agent', agentId: lead, machineOwnerId: 'host-owner' })
+    const stored = f.state.conversations.find(c => c.id === group.id)!
+    expect([stored.assignment!.result, stored.checks[0]!.evidence]).toEqual([`Rejected ${CREDENTIAL_MARKER}`, `Signed in as ${CREDENTIAL_MARKER}`])
+    expect(JSON.stringify(f.state)).not.toMatch(new RegExp(`${github}|${jwt.replaceAll('.', '\\.')}`))
+  })
+
+  it('removes a credential from an older message when a person resends it', () => {
+    const f = fixture(), lead = f.add('lead', 'owner', 'lead', true)
+    const resent = f.run({ type: 'delivery.resolve', deliveryId: 'd', resolution: 'resend' }, owner,
+      { delivery: { id: 'd', conversationId: 'lead', agentId: lead, messageId: 'm', text: pasted } })
+    expect(resent.messages[0]).toMatchObject({ text: kept, recipients: [lead] })
+    expect(resent.result.credentialNotice).toBe(notice)
+  })
+
+  it('finds the words of every kind of command, nested and in lists', () => {
+    const removed: CredentialKind[] = []
+    const start = withoutCredentials({ type: 'agent.start', overrideReason: `faster with ${github}`, request: { name: `Builder ${github}` } } as Command, removed)
+    expect(start).toMatchObject({ overrideReason: `faster with ${CREDENTIAL_MARKER}`, request: { name: `Builder ${CREDENTIAL_MARKER}` } })
+    const route = withoutCredentials({ type: 'route.record', conversationId: 'lead', decision: { assessment: { why: `needs ${jwt}` }, why: 'ok',
+      excluded: [{ title: 'Mini', reason: `asked for ${github}` }], candidates: [{ title: 'New agent', label: 'plain' }] } } as unknown as Command, removed)
+    expect(route).toMatchObject({ decision: { assessment: { why: `needs ${CREDENTIAL_MARKER}` }, excluded: [{ reason: `asked for ${CREDENTIAL_MARKER}` }] } })
+    const owns = withoutCredentials({ type: 'work.define', conversationId: 'g', checks: [], task: { goal: 'g', changes: 'c', constraints: 'n', owns: ['src', github] } } as unknown as Command, removed)
+    expect(owns).toMatchObject({ task: { owns: ['src', CREDENTIAL_MARKER] } })
+    expect(removed).toEqual(['github', 'github', 'jwt', 'github', 'github'])
+    // Commands with no words of their own are passed through untouched.
+    const pause: Command = { type: 'tab.pause', paused: true }
+    expect(withoutCredentials(pause, removed)).toBe(pause)
   })
 })
