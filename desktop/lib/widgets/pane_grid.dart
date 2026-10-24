@@ -29,6 +29,7 @@ import '../state/pane_preset.dart';
 import '../state/pane_arrangement.dart';
 import 'pane_fixed_width.dart';
 import '../state/terminal_pane.dart';
+import '../state/workspace_chrome.dart';
 import '../terminal/terminal_binary.dart';
 import '../terminal/terminal_text.dart';
 import '../terminal/terminal_session.dart';
@@ -315,6 +316,9 @@ class _SwarmCanvasState extends State<_SwarmCanvas> {
   Size? _viewportSize;
   bool _focusRevealPending = false;
 
+  /// The most columns the host draws at this window's width, read at build.
+  int? _maxColumns;
+
   /// The view drawn alone: the real zoom, or [soloPaneId] when solo.
   int? get _shownZoom => widget.soloFocused
       ? soloPaneId(widget.notifier)
@@ -430,7 +434,7 @@ class _SwarmCanvasState extends State<_SwarmCanvas> {
       preset: app.presetFor(panes.length),
       minimum: _MinTile.of(),
       sizes: app.activeSwarm.paneSizes,
-    );
+    ).within(_maxColumns, viewport: viewport, minimum: _MinTile.of());
     final rect = geometry.rectangles[index];
     void reveal(
       ScrollController scroll,
@@ -576,16 +580,23 @@ class _SwarmCanvasState extends State<_SwarmCanvas> {
           );
         }
         if (layout.columns != null) app.gridColumns = layout.columns;
+        _maxColumns = WorkspaceChrome.of(context)
+            .maxPaneColumnsAt(MediaQuery.sizeOf(context).width);
+        final drawn = layout.within(
+          _maxColumns,
+          viewport: constraints.biggest,
+          minimum: _MinTile.of(),
+        );
         // A tile that asks for its own width (a Finder showing only its
         // files) takes it; its divider is not dragged while it does.
         final pinned = pinFixedColumn(
-          layout.rectangles,
+          drawn.rectangles,
           [for (final pane in visible) pane.fixedWidth],
-          Size(layout.width, layout.height),
+          Size(drawn.width, drawn.height),
           gap: kPaneGap,
           minOther: _MinTile.of().width,
         );
-        final tiles = pinned ?? layout.rectangles;
+        final tiles = pinned ?? drawn.rectangles;
         final rectangles = {
           for (var i = 0; i < visible.length; i++) visible[i].id: tiles[i],
         };
@@ -600,7 +611,7 @@ class _SwarmCanvasState extends State<_SwarmCanvas> {
           child: Scrollbar(
             key: const ValueKey('swarm-horizontal-scrollbar'),
             controller: _horizontalScroll,
-            thumbVisibility: layout.width > constraints.maxWidth,
+            thumbVisibility: drawn.width > constraints.maxWidth,
             scrollbarOrientation: ScrollbarOrientation.bottom,
             notificationPredicate: (notification) =>
                 notification.depth == 1 &&
@@ -617,8 +628,8 @@ class _SwarmCanvasState extends State<_SwarmCanvas> {
                   child: ScrollConfiguration(
                     behavior: scrollBehavior,
                     child: SizedBox(
-                      width: layout.width,
-                      height: layout.height,
+                      width: drawn.width,
+                      height: drawn.height,
                       child: Stack(
                         children: [
                           if (visible.isEmpty)
@@ -663,8 +674,11 @@ class _SwarmCanvasState extends State<_SwarmCanvas> {
                                   ),
                                 ),
                               ),
+                          // Dividers resize the recorded layout, so none
+                          // while a narrower drawing stands in for it.
                           if (_shownZoom == null &&
                               pinned == null &&
+                              identical(drawn, layout) &&
                               layout.arrangement?.dividers.isNotEmpty == true)
                             Positioned.fill(child: _resizeLayer(layout)),
                         ],
@@ -851,22 +865,67 @@ class _SwarmGeometry {
         double.infinity,
       );
     }
-    rectangles = [
-      for (final tile in arrangement!.tiles)
-        Rect.fromLTWH(
-          tile.left * (width + kPaneGap),
-          tile.top * (height + kPaneGap),
-          (tile.width * (width + kPaneGap) - kPaneGap).clamp(
-            0,
-            double.infinity,
-          ),
-          (tile.height * (height + kPaneGap) - kPaneGap).clamp(
-            0,
-            double.infinity,
-          ),
-        ),
-    ];
+    rectangles = _pixels(arrangement!.tiles, width, height);
   }
+
+  /// [tiles] across [viewport]'s width, each row at least [minimum] tall:
+  /// taller than the viewport, and scrolled, when the rows need it.
+  _SwarmGeometry._balanced(
+    List<Rect> tiles, {
+    required Size viewport,
+    required Size minimum,
+  }) : width = viewport.width,
+       height = viewport.height {
+    final rows = {for (final tile in tiles) tile.top}.length;
+    height = (rows * minimum.height + kPaneGap * (rows - 1)).clamp(
+      viewport.height,
+      double.infinity,
+    );
+    arrangement = PaneArrangement(tiles);
+    rectangles = _pixels(tiles, width, height);
+  }
+
+  /// This layout drawn at most [maxColumns] wide, the tiles in balanced rows:
+  /// a tablet browser's grid ([WorkspaceChrome.maxPaneColumnsAt]). Only the
+  /// drawing — what the tab records stays this layout, so the same desk keeps
+  /// its grid on a computer. Itself when it is no wider than that.
+  _SwarmGeometry within(
+    int? maxColumns, {
+    required Size viewport,
+    required Size minimum,
+  }) {
+    final tiles = arrangement?.tiles;
+    if (maxColumns == null || tiles == null) return this;
+    final columns = {for (final tile in tiles) tile.left}.length;
+    if (columns <= maxColumns) return this;
+    final shape = switch (maxColumns) {
+      <= 2 => PanePreset.balanced2,
+      3 => PanePreset.balanced3,
+      4 => PanePreset.balanced4,
+      _ => PanePreset.balanced5,
+    };
+    return _SwarmGeometry._balanced(
+      shape.tilesFor(tiles.length),
+      viewport: viewport,
+      minimum: minimum,
+    );
+  }
+
+  /// Unit [tiles] in pixels on a [width] by [height] canvas. A boundary at
+  /// fraction f lands at f * (extent + gap), less one gap per tile.
+  static List<Rect> _pixels(List<Rect> tiles, double width, double height) => [
+    for (final tile in tiles)
+      Rect.fromLTWH(
+        tile.left * (width + kPaneGap),
+        tile.top * (height + kPaneGap),
+        (tile.width * (width + kPaneGap) - kPaneGap).clamp(0, double.infinity),
+        (tile.height * (height + kPaneGap) - kPaneGap).clamp(
+          0,
+          double.infinity,
+        ),
+      ),
+  ];
+
   String? key;
   PaneArrangement? arrangement;
   double width, height;
