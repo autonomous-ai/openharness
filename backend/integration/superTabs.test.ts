@@ -2610,9 +2610,9 @@ describe('machine removal', () => {
 
 describe('Lead mentions', () => {
   const DAY = 24 * 60 * 60_000
-  async function tagged() {
+  async function tagged(role: 'collaborator' | 'viewer' = 'collaborator') {
     const { tab, lead } = await fixture()
-    await invite(tab)
+    await invite(tab, role)
     const group = (await run(tab, { type: 'conversation.create', title: 'Copy review', brief: '', checks: [] })).result.conversationId as string
     await run(tab, { type: 'conversation.agent', conversationId: group, agentId: lead, present: true, lead: true })
     const text = `Please confirm the welcome copy. ${'x'.repeat(300)}`
@@ -2650,6 +2650,21 @@ describe('Lead mentions', () => {
     await run(tab, { type: 'message.send', conversationId: group, text: 'Looks good.', replyTo: null, recipientIds: [] }, peer)
     expect(await list(tab, peer, 'waiting')).toEqual([])
     expect(await list(tab, peer, 'earlier')).toEqual([expect.objectContaining({ resolvedBy: 'reply', resolvedAt: expect.any(String) })])
+    expect((await waiting(tab, peer)).mentionsWaiting).toBe(0)
+  })
+
+  it('resolves on the person’s reply inside a thread', async () => {
+    const { tab, group, messageId } = await tagged()
+    await run(tab, { type: 'message.send', conversationId: group, text: 'Confirmed.', replyTo: messageId, recipientIds: [] }, peer)
+    expect(await list(tab, peer, 'waiting')).toEqual([])
+    expect(await list(tab, peer, 'earlier')).toEqual([expect.objectContaining({ messageId, resolvedBy: 'reply' })])
+  })
+
+  it('lets a tagged viewer mark it done', async () => {
+    const { tab } = await tagged('viewer')
+    const [mention] = await list(tab, peer, 'waiting')
+    await run(tab, { type: 'mention.done', mentionId: mention!.id as string }, peer)
+    expect(await list(tab, peer, 'earlier')).toEqual([expect.objectContaining({ id: mention!.id, resolvedBy: 'done' })])
     expect((await waiting(tab, peer)).mentionsWaiting).toBe(0)
   })
 
