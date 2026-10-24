@@ -5,6 +5,7 @@ import 'package:harness/auth/auth_session.dart';
 import 'package:harness/core/config.dart';
 import 'package:harness/core/models.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
+import 'package:harness/shared/widgets/empty_state.dart';
 import 'package:harness/state/app_state.dart';
 import 'package:harness/state/pane_layout_store.dart';
 import 'package:harness/state/swarm.dart';
@@ -266,4 +267,34 @@ void main() {
       expect(tester.takeException(), isNull);
     },
   );
+
+  // Audit finding P2: the page stayed black in Paper, its message small terminal text.
+  for (final brightness in Brightness.values) {
+    testWidgets(
+      'a message sits on the ${brightness.name} theme page, in the empty-state style',
+      (tester) async {
+        final app = _App()..inventoryLoaded = false;
+        addTearDown(app.dispose);
+        final theme = grid.buildAppTheme(brightness: brightness);
+        await tester.pumpWidget(
+          MaterialApp(
+            theme: theme,
+            home: ViewerPage(
+              app: app,
+              location: const ViewerLocation('m', 'a'),
+            ),
+          ),
+        );
+        final message = find.text('Finding this machine…');
+        expect(
+          find.ancestor(of: message, matching: find.byType(EmptyState)),
+          findsOneWidget,
+        );
+        final page = tester.widget<Material>(
+          find.ancestor(of: message, matching: find.byType(Material)).first,
+        );
+        expect(page.color, theme.scaffoldBackgroundColor);
+      },
+    );
+  }
 }
