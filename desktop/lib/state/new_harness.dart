@@ -3698,6 +3698,7 @@ class NewHarnessController extends ChangeNotifier {
   bool get checking =>
       _attempt?.awaitingConfirmation == true || integration?.pending == true;
   bool get canCancelPending => _attempt?.canCancelPending == true;
+  bool get canFollowPending => _attempt?.canFollowPending == true;
 
   /// The folder a new project's typed name found already there
   /// (`PROJECT_EXISTS`), with the project and machine it was refused for.
@@ -3732,7 +3733,7 @@ class NewHarnessController extends ChangeNotifier {
   /// nothing until it has an answer.
   Future<NewHarnessOutcome>? _following;
 
-  /// Asks after a request the machine holds, without the person pressing
+  /// Asks after a request the machine holds or is starting, without pressing
   /// Check status. The machine starts a held harness by itself (an agent it is
   /// installing, a model waking). The line said "Installing Kilo. The harness
   /// starts once it is installed." and stayed after Kilo had started, with no
@@ -3741,7 +3742,7 @@ class NewHarnessController extends ChangeNotifier {
   /// or when it was refused, which the line then says.
   Future<NewHarnessOutcome> followHeld() {
     if (_following case final check?) return check;
-    if (_disposed || busy || !canCancelPending) {
+    if (_disposed || busy || !canFollowPending) {
       return Future.value(NewHarnessOutcome.failed);
     }
     final check = create(quiet: true);
