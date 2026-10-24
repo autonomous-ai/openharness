@@ -9046,6 +9046,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
                       final swarm = shown[index];
                       final selected = app.activeSwarmId == swarm.id;
                       final activity = activities[index];
+                      final tags = tabMentionsWaiting(app, swarm);
                       // A status cell animates only while its tab is in view.
                       Widget tabStatus(Widget Function(bool visible) mark) =>
                           ListenableBuilder(
@@ -9131,7 +9132,9 @@ class _SwarmScreenState extends State<SwarmScreen> {
                                 label: labels[index],
                                 selected: selected,
                                 tooltip: tabHint.isEmpty ? null : tabHint,
-                                activityLabel: activity?.label,
+                                activityLabel: tags > 0
+                                    ? tabMentionsLabel(tags)
+                                    : activity?.label,
                                 sharedCount: share.count,
                                 onInvitePeople: menus && share.invite
                                     ? () => unawaited(_invitePeople(swarm.id))
@@ -9159,8 +9162,15 @@ class _SwarmScreenState extends State<SwarmScreen> {
                                         app.requestCloseSwarm(swarm.id),
                                       )
                                     : null,
-                                activity:
-                                    activity == null || activity.mark.isEmpty
+                                activity: tags > 0
+                                    ? Text(
+                                        '$tags',
+                                        key: ValueKey('tab-tags:${swarm.id}'),
+                                        style: DesktopChrome.metadata(
+                                          color: grid.AppPalette.warn,
+                                        ).copyWith(fontWeight: FontWeight.w600),
+                                      )
+                                    : activity == null || activity.mark.isEmpty
                                     ? null
                                     : tabStatus(
                                         (visible) => ActivityMark(

@@ -1,8 +1,10 @@
+import 'dart:async';
 import 'dart:io';
 import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/notify/system_notifications.dart';
 import 'package:harness/state/harness_activity.dart';
@@ -17,6 +19,7 @@ import 'package:harness/super_tabs/view.dart';
 import 'support/super_tab_fixture.dart';
 import 'box_render_preview_test.dart' show loadPreviewFonts;
 import 'super_tab_launch_test.dart' show SuperTabLaunchFixture, tabId;
+import 'swarm_screen_test.dart' show mount;
 import 'swarm_state_test.dart' show MemoryStore;
 
 /// What would have reached the operating system.
@@ -209,6 +212,64 @@ void main() {
       controller.dispose();
     });
 
+    test('a new tag is read even when the count stays the same', () async {
+      final server = ConversationServer()..tag('m1', text: 'First');
+      final controller = server.controller();
+      final mentions = SuperTabMentions.of(controller);
+      final arrived = <String>[];
+      mentions.onArrived = (m) => arrived.add(m.text);
+      await controller.refresh();
+      await pumpEventQueue();
+      // The first is answered and a second arrives between two reads: 1 → 1.
+      server.mentions.single
+        ..['resolvedAt'] = '2026-10-24T05:10:00Z'
+        ..['resolvedBy'] = 'reply';
+      server.tag('m2', text: 'Second');
+      server.state['mentionsWaiting'] = 1;
+      await controller.refresh();
+      await pumpEventQueue();
+      expect(arrived, ['Second']);
+      expect(mentions.waiting.map((m) => m.text), ['Second']);
+      expect(mentions.earlier.map((m) => m.text), ['First']);
+      controller.dispose();
+    });
+
+    test('a change during a read is read once more after it', () async {
+      final server = ConversationServer()..tag('m1', text: 'First');
+      final controller = server.controller();
+      final mentions = SuperTabMentions.of(controller);
+      final hold = server.holdMentions = Completer<void>();
+      await controller.refresh();
+      await pumpEventQueue();
+      final reads = server.mentionReads;
+      server.tag('m2', text: 'Second');
+      await controller.refresh();
+      server.revision++;
+      await controller.refresh();
+      server.holdMentions = null;
+      hold.complete();
+      await pumpEventQueue();
+      // The held read, then exactly one more (both lists each time).
+      expect(server.mentionReads - reads, 2);
+      expect(mentions.waiting.map((m) => m.text), ['Second', 'First']);
+      controller.dispose();
+    });
+
+    test(
+      'a backend without the list shows an empty list, not an error',
+      () async {
+        final server = ConversationServer()..mentionsMissing = true;
+        final controller = server.controller();
+        final mentions = SuperTabMentions.of(controller);
+        await controller.refresh();
+        await mentions.load();
+        expect(mentions.error, isNull);
+        expect(mentions.waiting, isEmpty);
+        expect(mentions.earlier, isEmpty);
+        controller.dispose();
+      },
+    );
+
     test('a backend without tags is never asked for them', () async {
       final server = ConversationServer();
       final controller = server.controller();
@@ -303,6 +364,32 @@ void main() {
         find.descendant(of: notificationsEntry(), matching: find.text('1')),
         findsNothing,
       );
+    });
+
+    testWidgets('a tag too far back says so and stays on the list', (
+      tester,
+    ) async {
+      final server = ConversationServer();
+      server.state['conversations'] = [
+        ...server.state['conversations'] as List,
+        conversationFixture('group', 'Release'),
+      ];
+      // More than the 50 pages opening a tag reads back.
+      for (var i = 1; i <= 5050; i++) {
+        server.append('Note $i', conversationId: 'group');
+      }
+      server.tag('message-1', conversationId: 'group', text: 'Note 1');
+      final c = await showView(tester, server);
+      await tester.tap(notificationsEntry());
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('super-mention-mention-1')));
+      await tester.pumpAndSettle();
+      expect(
+        find.text('This message is too far back to open.'),
+        findsOneWidget,
+      );
+      expect(find.text('Waiting'), findsOneWidget);
+      expect(c.selectedId, isNot('group'));
     });
 
     testWidgets('opening a tag shows its message with the reply box on it', (
@@ -435,6 +522,46 @@ void main() {
       expect(arrived, ['New']);
     });
 
+    test('a Swarm tab not opened yet counts and announces new tags', () async {
+      final server = ConversationServer()..tag('message-1', text: 'Old');
+      final arrived = <String>[];
+      var counted = 0;
+      final client = SuperTabClient(
+        storage: MemoryStore(),
+        transport: (method, path, {body}) async => path == '/api/super-tabs'
+            ? {
+                'tabs': [
+                  {'id': 'tab', 'name': 'Pilot'},
+                ],
+                'next': null,
+              }
+            : server.request(method, path, body: body),
+        discoveryInterval: Duration.zero,
+        onTabs: (_, _) {},
+        onMention: (mention) => arrived.add(mention.text),
+        onTagCounts: () => counted++,
+      );
+      addTearDown(client.dispose);
+      client.bind('owner');
+      await client.refreshTabs();
+      expect(client.waitingTags('tab'), 1);
+      expect(arrived, isEmpty);
+      expect(counted, 1);
+      server.tag('message-2', text: 'New');
+      await client.refreshTabs();
+      expect(client.waitingTags('tab'), 2);
+      expect(arrived, ['New']);
+      // Opened, the Swarm's own state counts, and nothing is announced twice.
+      final c = await client.open('tab');
+      await c.refresh();
+      await pumpEventQueue();
+      final reads = server.mentionReads;
+      await client.refreshTabs();
+      expect(server.mentionReads, reads);
+      expect(client.waitingTags('tab'), 2);
+      expect(arrived, ['New']);
+    });
+
     test('a Swarm tab with waiting tags asks for its person', () async {
       final f = SuperTabLaunchFixture(local: true);
       f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Pilot');
@@ -514,4 +641,53 @@ void main() {
     expect(find.text('Replying to Wren'), findsOneWidget);
     await shot(tester, 'opened-at-message');
   }, skip: shots == null);
+
+  for (final native in [false, true]) {
+    testWidgets('a Swarm tab behind another counts its waiting tags '
+        '(native=$native)', (tester) async {
+      final updates = <Map>[];
+      const channel = MethodChannel('harness/swarm_tabs');
+      tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(channel, (
+        call,
+      ) async {
+        if (call.method == 'update') updates.add(call.arguments as Map);
+        return true;
+      });
+      addTearDown(
+        () => tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+          channel,
+          null,
+        ),
+      );
+      final f = SuperTabLaunchFixture(local: true);
+      f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Pilot');
+      final swarm = f.app.activeSwarm;
+      final c = await f.app.superTabs.open(tabId);
+      await c.refresh();
+      f.connection.server
+        ..tag('message-1')
+        ..tag('message-2');
+      await c.refresh();
+      f.app.newSwarm(name: 'other');
+      await mount(tester, f.app, nativeTabs: native);
+      await tester.pump(const Duration(milliseconds: 100));
+      if (native) {
+        final tab = (updates.last['tabs'] as List).cast<Map>().singleWhere(
+          (t) => t['id'] == swarm.id,
+        );
+        expect(tab['attention'], 2);
+      } else {
+        expect(
+          tester
+              .widget<Text>(find.byKey(ValueKey('tab-tags:${swarm.id}')))
+              .data,
+          '2',
+        );
+      }
+      await tester.pumpWidget(const SizedBox());
+      await c.flush();
+      f.app.superTabs.dispose();
+      f.dispose();
+    });
+  }
 }

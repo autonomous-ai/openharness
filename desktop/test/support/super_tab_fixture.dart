@@ -50,6 +50,10 @@ class ConversationServer {
   final mentions = <Map<String, dynamic>>[];
   // How many times the mentions list was read.
   int mentionReads = 0;
+  // A backend from before tags: it has no list route.
+  bool mentionsMissing = false;
+  // While set, every read of the mentions list waits for it.
+  Completer<void>? holdMentions;
   // The effective routing policy answered by GET .../routing-policy.
   Map<String, dynamic>? routingPolicy;
   final state = <String, dynamic>{
@@ -272,6 +276,10 @@ class ConversationServer {
     final uri = Uri.parse(path);
     if (uri.pathSegments.last == 'mentions') {
       mentionReads++;
+      if (mentionsMissing) {
+        throw const SuperTabFailure('NOT_FOUND', 'Not found.', statusCode: 404);
+      }
+      if (holdMentions case final hold?) await hold.future;
       final waiting = uri.queryParameters['state'] == 'waiting';
       return jsonDecode(
         jsonEncode({
