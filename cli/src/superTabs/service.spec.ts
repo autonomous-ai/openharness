@@ -717,7 +717,9 @@ describe('mentions on a post', () => {
   it('answers help without --mention outside a tab, or when the caller cannot be read', async () => {
     const t = setup()
     swarm(t, t.agentId)
-    expect(String((await help(t, {})).post)).not.toContain('--mention')
+    const plain = await help(t, {})
+    expect(String(plain.post)).not.toContain('--mention')
+    expect(plain.leadOptions).toBe('Leads: run help with --tab ID for options only a Lead has.')
     expect(String((await help(t, { tabId: 'tab' })).post)).not.toContain('--mention')
     t.call.mockRejectedValue(new Error('Offline'))
     expect(String((await help(t, { tabId: 'tab', agentId: t.agentId })).post)).not.toContain('--mention')
