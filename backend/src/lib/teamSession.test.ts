@@ -75,7 +75,14 @@ function recorder() {
   const calls: Array<{ method: string; args: unknown[] }> = []
   const methods = (prefix = ''): Record<string, unknown> => new Proxy({}, { get: (_t, name: string) => name === 'then' ? undefined
     : name === 'native' && !prefix ? methods('native.')
-      : async (...args: unknown[]) => { calls.push({ method: `${prefix}${name}`, args }); return { ok: true } } })
+      : async (...args: unknown[]) => {
+        calls.push({ method: `${prefix}${name}`, args })
+        // What the GitHub token route goes on to use from a grant (routes/superTabs.ts `github-token`).
+        return name === 'githubAssignment'
+          ? { tabId: 'tab-1', agentId: 'agent-1', assignmentId: 'assignment-1', repositoryUrl: 'https://github.com/example/project',
+            requester: { name: 'Owner', email: 'owner@example.com' }, agentName: 'Builder', machineName: 'MacBook Pro · Team' }
+          : { ok: true }
+      } })
   return { store: methods() as unknown as SuperTabStore, calls }
 }
 
@@ -95,11 +102,9 @@ beforeEach(async () => {
   app = Fastify()
   app.setErrorHandler(errorHandler)
   registerAuthMiddleware(app, authenticate as never)
-  await app.register(superTabRoutes, { store: store.store })
-  // Task 4's route (#1690, not merged here), as it calls the store: the gate covers it by its path from the moment it lands.
-  app.post<{ Params: { tabId: string }; Querystring: { asAgentId?: string }; Body: { machineId: string } }>('/api/super-tabs/:tabId/github-token',
-    async req => ({ success: true, data: await (store.store as unknown as Record<string, (...args: unknown[]) => Promise<unknown>>)
-      .githubAssignment(req.user!, req.params.tabId, req.query.asAgentId, req.body.machineId) }))
+  // A GitHub App that hands out a fixed token: the route's own checks are the store's (githubAssignment).
+  const github = { issue: vi.fn(async () => ({ token: 'fixture-token', expiresAt: new Date(0).toISOString() })), release: vi.fn(async () => {}) }
+  await app.register(superTabRoutes, { store: store.store, github: github as never })
   await app.register(harnessShareRoutes)
   await app.register(deviceKeyRoutes)
   await app.register(machineRoutes)
@@ -326,8 +331,7 @@ describe('the allowlist', () => {
     await probe.ready()
     const named = TEAM_ROUTES.map(r => `${r.method} ${r.url}`)
     expect(new Set(named).size).toBe(named.length)
-    // A route another pull request adds is listed ahead of it (`pending`), so the gate covers it the moment it lands.
-    for (const route of TEAM_ROUTES.filter(r => !r.pending)) expect(seen, route.url).toContain(`${route.method} ${route.url}`)
+    for (const route of named) expect(seen, route).toContain(route)
     await probe.close()
   })
 

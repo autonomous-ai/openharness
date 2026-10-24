@@ -39,6 +39,8 @@ describe('findCredentials: every kind it removes', () => {
     ['jwt', 'an encrypted JWT (five segments)', fake.jwe()],
     ['harness', 'a Harness access token', fake.harness('hna')],
     ['harness', 'a Harness refresh token', fake.harness('hnr')],
+    ['harness', 'a Harness team access token', fake.harness('hta')],
+    ['harness', 'a Harness team refresh token', fake.harness('htr')],
     ['harness', 'a Harness handoff code', fake.harness('hnh')],
     ['harness', 'a Harness sign-in QR code', fake.harness('hnq')],
     ['harness', 'a Harness QR poll token', fake.harness('hnp')],

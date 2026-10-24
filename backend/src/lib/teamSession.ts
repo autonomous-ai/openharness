@@ -94,8 +94,6 @@ export interface TeamRoute {
   scope: TeamRouteScope
   /** The body names a machine (`machineId`): it must name this session's own, checked once the body is read. */
   bodyMachine?: true
-  /** Added by a pull request not merged yet: listed ahead of it, so the gate covers it the moment it lands. */
-  pending?: string
 }
 
 /** Everything a team daemon may call over REST: what it needs to run its own machine and host Swarm agents there. Sign-in
@@ -124,7 +122,7 @@ export const TEAM_ROUTES: readonly TeamRoute[] = [
   { method: 'GET', url: '/api/super-tabs/:tabId/terminal/:requestId', scope: 'agent' },
   { method: 'POST', url: '/api/super-tabs/:tabId/attachments', scope: 'agent' },
   // Its agent's one-hour GitHub token for the repository of its task (Task 4); the body's machine must be its own.
-  { method: 'POST', url: '/api/super-tabs/:tabId/github-token', scope: 'agent', bodyMachine: true, pending: '#1690' },
+  { method: 'POST', url: '/api/super-tabs/:tabId/github-token', scope: 'agent', bodyMachine: true },
   // Commands as one of its agents, its agents' deliveries, stops and native terminals, its agents' role texts.
   { method: 'POST', url: '/api/super-tabs/:tabId/commands', scope: 'bound' },
   { method: 'GET', url: '/api/super-tabs/:tabId/agents/:agentId/deliveries', scope: 'bound' },

@@ -1,5 +1,6 @@
 import {
   HARNESS_ACCESS_PREFIX, HARNESS_HANDOFF_PREFIX, HARNESS_QR_POLL_PREFIX, HARNESS_QR_PREFIX, HARNESS_REFRESH_PREFIX,
+  HARNESS_TEAM_ACCESS_PREFIX, HARNESS_TEAM_REFRESH_PREFIX,
 } from '../lib/harnessTokenFormat.js'
 
 /**
@@ -78,7 +79,9 @@ interface Rule {
   accept: (secret: string) => boolean | number
 }
 
-const HARNESS_PREFIXES = [HARNESS_ACCESS_PREFIX, HARNESS_REFRESH_PREFIX, HARNESS_HANDOFF_PREFIX, HARNESS_QR_PREFIX, HARNESS_QR_POLL_PREFIX]
+// A team session's tokens (lib/teamSession.ts) have their own prefixes; pasted, they are as live as any other sign-in.
+const HARNESS_PREFIXES = [HARNESS_ACCESS_PREFIX, HARNESS_REFRESH_PREFIX, HARNESS_TEAM_ACCESS_PREFIX, HARNESS_TEAM_REFRESH_PREFIX,
+  HARNESS_HANDOFF_PREFIX, HARNESS_QR_PREFIX, HARNESS_QR_POLL_PREFIX]
 // Keys whose value is the secret: DB_PASSWORD, x-api-key, client_secret, access_token, "token": … Not `pwd` (a folder), and
 // nothing public (.NET's publicKeyToken).
 const KEY = String.raw`(?![\w.-]*public)[A-Za-z0-9_.-]*?(?:password|passwd|passphrase|secret|token|api[_-]?key|apikey|access[_-]?key|private[_-]?key|credentials?)`
