@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 
+import '../core/viewer_mode.dart';
 import '../state/app_state.dart';
 import '../update/desktop_updater.dart' show semverGt;
 import '../widgets/desktop_chrome.dart';
@@ -62,6 +63,19 @@ DaemonVersionReader daemonVersionReader = readDaemonVersion;
 HarnessUpdateRunner harnessUpdateRunner = runHarnessUpdate;
 
 bool isDevelopmentBuild(String version) => version.contains('-dev');
+
+/// Why shared tabs are off: the Harness that holds them, at [current] (null when it did not say),
+/// is too old. On Desktop that is this computer's; a browser ([viewer]) runs none of its own and
+/// asks one of the account's computers.
+String harnessTooOldLine(String? current, {required bool viewer}) {
+  final computer = viewer ? 'your computer' : 'this computer';
+  final runs = viewer ? 'Your computer runs' : 'This computer runs';
+  if (current == null) return 'Update Harness on $computer to share tabs.';
+  if (isDevelopmentBuild(current)) {
+    return "$runs a development build of Harness ($current), which doesn't update itself.";
+  }
+  return '$runs Harness $current; shared tabs need $kAgentMessagesMinimumCli or newer.';
+}
 
 Future<bool> _confirmReplace(BuildContext context) async =>
     await showDialog<bool>(
@@ -178,11 +192,7 @@ class _UpdateHarnessLineState extends State<UpdateHarnessLine> {
   @override
   Widget build(BuildContext context) {
     final current = _version;
-    final line = current == null
-        ? 'Update Harness on this computer to share tabs.'
-        : isDevelopmentBuild(current)
-        ? "This computer runs a development build of Harness ($current), which doesn't update itself."
-        : 'This computer runs Harness $current; shared tabs need $kAgentMessagesMinimumCli or newer.';
+    final line = harnessTooOldLine(current, viewer: kViewerMode);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
