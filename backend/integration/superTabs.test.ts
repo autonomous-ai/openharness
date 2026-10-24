@@ -2064,6 +2064,16 @@ describe('Super Tab chat attachments', () => {
     attaching.execute(user, tab, { operationId, command: { type: 'message.send', conversationId: 'lead', text, replyTo: null, recipientIds: [], attachmentIds } }, asAgentId)
   const objectKey = (url: string) => url.slice('https://cdn.example.test/'.length)
 
+  it('keeps a credential out of a file\'s name, which the chat shows like the message', async () => {
+    const { tab } = await fixture()
+    const token = ['ghp', 'Fixture0Token1Not2Real3Value4abcdefgh'].join('_')
+    const { status, attachment } = await file(tab, `deploy-${token}.txt`, new Uint8Array([1, 2, 3]), 'text/plain')
+    expect(status).toBe(200)
+    expect(attachment.name).toBe('deploy-[credential removed].txt')
+    expect(attachment.url).not.toContain(token)
+    expect(JSON.stringify(await db.superTabAttachment.findMany({ where: { tabId: tab } }))).not.toContain(token)
+  })
+
   it('streams one file into the bucket under a random key and answers its metadata', async () => {
     const { tab } = await fixture()
     const bytes = new Uint8Array(2 * 1024 * 1024).map((_, i) => i % 251)
@@ -2816,5 +2826,88 @@ describe('Lead mentions', () => {
     const rows = (await store.messages(owner, tab, group, {})).messages
     expect(rows.find(m => m.id === 'old-backend-row')!.mentions).toEqual([])
     expect(rows.at(-1)!.mentions).toEqual([])
+  })
+})
+
+describe('credentials in Swarm chat', () => {
+  // Assembled at run time from obviously fake parts, never a credential-shaped literal.
+  const jwt = [{ alg: 'HS256', typ: 'JWT' }, { sub: 'fixture-user' }].map(part => Buffer.from(JSON.stringify(part)).toString('base64url'))
+    .concat('Fixture0Signature1Not2Real3Value4abcdefgh').join('.')
+  const github = ['ghp', 'Fixture0Token1Not2Real3Value4abcdefgh'].join('_')
+  const pasted = `My Harness login: ${jwt} and the deploy token ${github}. Can the Lead use them?`
+  const kept = `My Harness login: [credential removed] and the deploy token [credential removed]. Can the Lead use them?`
+  const notice = 'Removed 2 credentials (JWT, GitHub token) before saving. Revoke or rotate them.'
+  /** Everything stored for the tab, besides a terminal request (whose host must type exactly what was sent). */
+  const stored = async (tab: string) => JSON.stringify(await Promise.all([
+    db.superTab.findMany({ where: { id: tab } }), db.superTabMessage.findMany({ where: { tabId: tab } }),
+    db.superTabOperation.findMany({ where: { tabId: tab } }), db.superTabDelivery.findMany({ where: { tabId: tab } }),
+    db.superTabAttempt.findMany({ where: { tabId: tab } }), db.superTabRouteDecision.findMany({ where: { tabId: tab } }),
+  ]))
+  /** Every line the process writes while `body` runs: console and the raw streams the logger could reach. */
+  async function written(body: () => Promise<void>): Promise<string> {
+    const lines: string[] = []
+    const keep = (...args: unknown[]) => { lines.push(args.map(arg => typeof arg === 'string' ? arg : JSON.stringify(arg)).join(' ')) }
+    const spies = [...(['log', 'info', 'warn', 'error', 'debug'] as const).map(method => vi.spyOn(console, method).mockImplementation(keep)),
+      vi.spyOn(process.stdout, 'write').mockImplementation(chunk => { keep(String(chunk)); return true }),
+      vi.spyOn(process.stderr, 'write').mockImplementation(chunk => { keep(String(chunk)); return true })]
+    try { await body() } finally { for (const spy of spies) spy.mockRestore() }
+    return lines.join('\n')
+  }
+
+  it('stores and delivers a person\'s message without the credentials, tells the sender, logs neither, and replays the same receipt', async () => {
+    const { tab, lead } = await fixture()
+    const operationId = randomUUID()
+    const post = (text: string) => app.inject({ method: 'POST', url: `/api/super-tabs/${tab}/commands`,
+      headers: { authorization: `Bearer ${owner.sub}` }, payload: { operationId, command: message(text) } })
+    let answer: { revision: number; result: Record<string, unknown> } | undefined
+    const output = await written(async () => {
+      const first = await post(pasted)
+      expect(first.statusCode, first.body).toBe(200)
+      answer = first.json().data
+      expect(answer!.result).toEqual({ messageId: expect.any(String), credentialNotice: notice,
+        credentialsRemoved: [{ kind: 'jwt', label: 'JWT', count: 1 }, { kind: 'github', label: 'GitHub token', count: 1 }] })
+      // A retry of the same operation answers its receipt, notice included, and writes nothing more.
+      const before = (await store.messages(owner, tab, 'lead', {})).messages.length
+      const again = await post(pasted)
+      expect(again.statusCode, again.body).toBe(200)
+      expect(again.json().data).toEqual(answer)
+      expect((await store.messages(owner, tab, 'lead', {})).messages).toHaveLength(before)
+      // The receipt is still bound to what was sent: other words under the same operation are refused, as before.
+      const reused = await post('Something else entirely.')
+      expect([reused.statusCode, reused.json().error.code]).toEqual([409, 'OPERATION_REUSED'])
+    })
+    const row = (await store.messages(owner, tab, 'lead', { messageId: answer!.result.messageId as string })).messages[0]!
+    expect(row.text).toBe(kept)
+    const deliveries = await db.superTabDelivery.findMany({ where: { tabId: tab, messageId: row.id } })
+    expect(deliveries.map(d => d.agentId)).toEqual([lead])
+    const everything = await stored(tab)
+    for (const secret of [jwt, github]) {
+      expect(everything).not.toContain(secret)
+      expect(output).not.toContain(secret)
+    }
+  })
+
+  it('treats an agent\'s post the same, and a native terminal transcript too', async () => {
+    const { tab, lead } = await fixture()
+    const posted = await run(tab, message(`gh auth status printed ${github}`), host, lead)
+    expect(posted.result.credentialNotice).toBe('Removed a credential (GitHub token) before saving. Revoke or rotate it.')
+    expect((await store.messages(owner, tab, 'lead', { messageId: posted.result.messageId as string })).messages[0]!.text)
+      .toBe('gh auth status printed [credential removed]')
+    const group = (await run(tab, { type: 'conversation.create', title: 'Release', brief: 'Ship it',
+      checks: [{ description: 'Shipped', independent: false }] })).result.conversationId as string
+    const worker = (await run(tab, { type: 'agent.add', conversationId: group, machineId: 'test-host', harnessId: randomUUID(),
+      name: 'Release Engineer', configuration: config, lead: false })).result.agentId as string
+    const { contextId } = await store.native.open(owner, tab, { operationId: randomUUID(), conversationId: group, agentId: worker })
+    const prompt = { turnId: 'pasted_turn', kind: 'prompt' as const, previousEventId: null, text: `use this: ${jwt}`, truncated: false, interrupted: false }
+    const output = await written(async () => {
+      const recorded = await store.native.append(host, tab, contextId, prompt) as { eventId: string }
+      expect((await db.superTabMessage.findUniqueOrThrow({ where: { id: recorded.eventId } })).text).toBe('use this: [credential removed]')
+      expect(await store.native.append(host, tab, contextId, prompt)).toEqual(recorded)
+    })
+    const everything = await stored(tab)
+    for (const secret of [jwt, github]) {
+      expect(everything).not.toContain(secret)
+      expect(output).not.toContain(secret)
+    }
   })
 })

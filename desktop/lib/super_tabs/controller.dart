@@ -117,6 +117,10 @@ class SuperTabController extends ChangeNotifier {
   String selectedId = 'lead';
   int revision = -1;
   String? error, operationError, operationErrorCode;
+
+  /// One line for the sender after a command succeeds, from the backend: that a
+  /// credential was removed from what they sent and should be revoked.
+  String? operationNotice;
   bool loading = false, saving = false, uploading = false;
   bool accessRevoked = false;
   bool _disposed = false;
@@ -433,6 +437,7 @@ class SuperTabController extends ChangeNotifier {
       if (group.archived) closedOpenProjects.add(group.projectId);
     }
     selectedId = id;
+    operationNotice = null;
     _saveSoon();
     _changed();
     unawaited(loadMessages(id));
@@ -678,6 +683,7 @@ class SuperTabController extends ChangeNotifier {
     saving = true;
     operationError = null;
     operationErrorCode = null;
+    operationNotice = null;
     _changed();
     try {
       // The receipt ID reaches durable local storage before the request can reach the server.
@@ -687,6 +693,8 @@ class SuperTabController extends ChangeNotifier {
       if (_disposed) return null;
       final result = superTabMap(answer['result']);
       final command = superTabMap(pending['command']);
+      final notice = result['credentialNotice'];
+      operationNotice = notice is String && notice.isNotEmpty ? notice : null;
       if (command['type'] == 'message.send') {
         final id = command['conversationId'] as String;
         if (_drafts[id]?.trim() == command['text']) {

@@ -6,6 +6,7 @@ import { activeWork, agent, appendPullRequestUrls, author, conversation, fail, i
   type Actor, type Agent, type Author, type Conversation, type SuperTabState } from './model.js'
 import { canReadProject, groupProject, readConversation } from './projects.js'
 import { noteProjectReports } from './projectUpdates.js'
+import { redactCredentials } from './credentials.js'
 
 const id = z.string().min(1).max(160).regex(/^[A-Za-z0-9_-]+$/)
 export const openNativeSchema = z.object({ operationId: id, conversationId: id, agentId: id }).strict()
@@ -186,8 +187,9 @@ export class SuperTabNativeStore {
       const recovery = await this.recovery(tx, tabId, group, target, record, event, eventId, revision)
       group.lastMessageSequence = revision
       const observedBy = author(state, { kind: 'agent', agentId: target.id, machineOwnerId: user.sub }, true)
+      // What a person typed in the terminal, or the agent answered, is recorded without any credential in it.
       const text = recovery?.source.required ? recovery.text : event.kind === 'gap'
-        ? 'Some terminal activity could not be recorded. Check the native session for the full conversation.' : event.text
+        ? 'Some terminal activity could not be recorded. Check the native session for the full conversation.' : redactCredentials(event.text).text
       // Leave a legacy group's list absent so the next read can recover its older links too.
       if (group.pullRequestUrls !== undefined) appendPullRequestUrls(group, [text])
       // Inform the coordinating lead without replaying this input into the agent

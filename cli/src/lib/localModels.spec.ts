@@ -412,6 +412,26 @@ describe('local model discovery and lifecycle', () => {
     expect((await fresh.list('home')).models[0].operation?.phase).toBe('done')
   })
 
+  it('lists a model this computer served on one grid on every other grid too', async () => {
+    catalogCards = []; serving = true
+    await writeFile(join(home, 'models', 'Small-Q4.gguf'), Buffer.alloc(64))
+    await writeFile(join(records, 'remote.json'), JSON.stringify({ node_id: 'local-node', engines: [{ models: ['Small-Q4.gguf'] }] }))
+    await writeFile(join(records, 'remote.heartbeat'), '')
+    const id = (await service.list('home')).models[0].id
+    await service.act('home', id, 'stop'); await service.settled()
+    // Another Swarm's grid, read by a fresh process: the file is known there as well, and a broken file beside it
+    // reads as nothing.
+    await writeFile(join(stateDir, 'broken.known.json'), '{')
+    // Known on two grids, it is listed once.
+    const known = (await readdir(stateDir)).find(name => name.endsWith('.known.json') && name !== 'broken.known.json')!
+    await writeFile(join(stateDir, 'copy.known.json'), await readFile(join(stateDir, known)))
+    const fresh = modelFixture({ stateDir, processEnv: { GRID_HOME: home }, run, request: request as typeof fetch, inventory })
+    expect((await fresh.list('swarm-0123456789ab')).models.map(m => m.id)).toEqual([id])
+    // With no state folder yet, nothing is known.
+    const blank = modelFixture({ stateDir: join(stateDir, 'none'), processEnv: { GRID_HOME: home }, run, request: request as typeof fetch, inventory })
+    expect((await blank.list('swarm-0123456789ab')).models.map(m => m.id)).toEqual([])
+  })
+
   it('reuses an already downloaded fitting quant of the same model', async () => {
     catalogCards[0].versions.push({ version: 'Q3', size_bytes: 48, pull_spec: 'org/Small-GGUF:Small-Q3.gguf', urls: ['https://example.test/Small-Q3.gguf'] })
     await writeFile(join(home, 'models', 'Small-Q3.gguf'), Buffer.alloc(48))

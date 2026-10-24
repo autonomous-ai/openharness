@@ -3,6 +3,7 @@ import { activeWork, actorKey, agent, author, conversation, fail, isLeads, stabl
   type SuperTabState } from './model.js'
 import { downSince } from './machines.js'
 import { agentProjectId, projectOf, readAgent } from './projects.js'
+import { redactCredentials } from './credentials.js'
 
 /** The Lead reads and types in an agent's terminal through the host of the agent's machine (spec/2026-10-23-lead-sees-agent-terminal.md).
  * The request and its answer live in SuperTabTerminalRequest, never in the tab state or group history, because a screen can show secrets. */
@@ -58,13 +59,15 @@ export function terminalRequest(state: SuperTabState, actor: Actor, sender: Auth
   const { type: _type, agentId: _agentId, ...detail } = command
   const effect: TerminalEffect = { op: 'request', id, kind: command.type === 'agent.screen' ? 'screen' : 'input', agentId: target.id,
     machineId: target.machineId, machineOwnerId: target.machineOwnerId, harnessId: target.harnessId, requesterKey: actorKey(actor), ...detail }
-  if (command.type === 'agent.screen') return { effect, message: null }
-  const text = command.text && `\`${command.text.length > 200 ? `${command.text.slice(0, 199)}…` : command.text}\``
-  const typed = [text, ...command.keys ?? []].filter(Boolean).join(' + ')
+  if (command.type === 'agent.screen') return { effect, message: null, removed: [] }
+  // The host types the exact text; the group's row never shows a credential in it, even one the cut at 200 would split.
+  const typed = redactCredentials(command.text ?? '')
+  const text = command.text && `\`${typed.text.length > 200 ? `${typed.text.slice(0, 199)}…` : typed.text}\``
+  const shown = [text, ...command.keys ?? []].filter(Boolean).join(' + ')
   const who = sender.displayName ?? (sender.kind === 'person' ? sender.name.split('@')[0]! : sender.name)
   const message: MessageDraft = { id, conversationId: currentGroup(state, target).id, author: sender, replyTo: null, recipients: [],
-    text: `${who} typed ${typed} in ${nameOf(target)}'s terminal`, source: { kind: 'terminal-input', agentId: target.id, requestId: id } }
-  return { effect, message }
+    text: `${who} typed ${shown} in ${nameOf(target)}'s terminal`, source: { kind: 'terminal-input', agentId: target.id, requestId: id } }
+  return { effect, message, removed: typed.removed }
 }
 
 /** Only the host of the agent's current terminal answers, once, a request it claimed. */

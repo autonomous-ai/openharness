@@ -41,6 +41,9 @@ class ConversationServer {
   Completer<void>? holdReads;
   // Makes every command answer with this refusal: {code, message}.
   Map<String, String>? refuse;
+  // Added to every successful command's result, as a newer backend adds
+  // fields such as `credentialNotice`.
+  final commandResult = <String, dynamic>{};
   final posts = <Map<String, dynamic>>[];
   final receipts = <String, Map<String, dynamic>>{};
   final messages = <Map<String, dynamic>>[];
@@ -263,6 +266,7 @@ class ConversationServer {
           revision++;
         }
       }
+      output.addAll(commandResult);
       final result = {'revision': revision, 'result': output};
       receipts[operationId] = result;
       if (loseReply) {

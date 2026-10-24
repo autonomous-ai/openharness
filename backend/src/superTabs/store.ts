@@ -6,6 +6,7 @@ import { machineAlive } from '../lib/prisma.js'
 import { machineShareGrant, sharedVia } from '../lib/machineSharePolicy.js'
 import { machineBillingAllowsDataPlane } from '../lib/billingState.js'
 import { applyCommand, authorizeCommandAccess, operationSchema, PAIR_CHAIN_LIMIT, postable, type Command, type CommandContext } from './commands.js'
+import { redactCredentials } from './credentials.js'
 import { attachmentMime, attachmentName, AttachmentTooLarge, checkedType, MAX_ATTACHMENT_BYTES, objectKeyFor, publicUrl, type Attachment, type Attachments } from './attachments.js'
 import { randomBytes } from 'node:crypto'
 import type { Readable } from 'node:stream'
@@ -682,7 +683,8 @@ export class SuperTabStore {
    * checked before a byte is stored; the row that makes it sendable is written only once the whole file is. */
   async upload(user: AuthUser, tabId: string, conversationId: string, file: { name: string; mime: string; body: Readable }, asAgentId?: string) {
     const attachments = this.attachments ?? fail('ATTACHMENTS_UNAVAILABLE', 'File attachments are not available on this server.', 503)
-    const name = attachmentName.safeParse(file.name), mime = attachmentMime.safeParse(file.mime)
+    // A file's name is shown in the chat like its message, so it never keeps a credential either.
+    const name = attachmentName.transform(value => redactCredentials(value).text).safeParse(file.name), mime = attachmentMime.safeParse(file.mime)
     if (!name.success || !mime.success) fail('INVALID_ATTACHMENT', 'Attach a file with a printable name and a content type.', 400)
     const key = await transaction(this.db, async tx => {
       const { actor } = await this.poster(tx, user, tabId, conversationId, asAgentId)
