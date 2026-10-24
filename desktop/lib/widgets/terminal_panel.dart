@@ -1012,13 +1012,18 @@ class _TerminalPanelState extends State<TerminalPanel>
   /// Follows [_cursorLocked] to what the session is now; read in build, where
   /// the host's chrome can be.
   void _syncCursorLock(bool locked) {
-    if (locked == _cursorLocked) return;
-    _cursorLocked = locked;
     if (locked) {
+      _cursorLocked = true;
       _stopCursorBlink();
-    } else {
-      _setCursorBlinkVisible(true);
+      // On every build, not only when the lock comes: a keyframe (a reopen or
+      // a resync) brings a new emulator and resets the session's blink phase,
+      // which would show the cursor again under the lock.
+      if (widget.session.setCursorBlinkPhase(false)) _repaintTerminalCursor();
+      return;
     }
+    if (!_cursorLocked) return;
+    _cursorLocked = false;
+    _setCursorBlinkVisible(true);
   }
 
   void _setCursorBlinkVisible(bool visible) {
@@ -2484,7 +2489,13 @@ class _TerminalPanelState extends State<TerminalPanel>
                       ),
                     // Last, so nothing above moves when they come and go.
                     if (_cursorLocked)
-                      Positioned.fill(
+                      ValueListenableBuilder<bool>(
+                        // A cursor the program hid (ESC[?25l) gets no lock
+                        // either, rather than one in a stray cell.
+                        valueListenable: session.remoteCursorVisibility,
+                        builder: (context, shown, lock) => Positioned.fill(
+                          child: shown ? lock! : const SizedBox.shrink(),
+                        ),
                         child: IgnorePointer(
                           child: KeyedSubtree(
                             key: const ValueKey('terminal-cursor-lock'),

@@ -246,4 +246,52 @@ void main() {
     expect(_terminal(app).cursorVisibleMode, isTrue);
     await _unmount(tester, app);
   });
+
+  testWidgets('a new keyframe does not bring the cursor back under the lock', (
+    tester,
+  ) async {
+    final app = await _app(tester, [], viewOnly: true);
+    await _mount(tester, app, chrome: webWorkspaceChrome(app));
+    expect(_terminal(app).cursorVisibleMode, isFalse);
+
+    // A resync: the whole screen again, on a new emulator.
+    await app.panes.single.session!.handleBinary(_frame(1, r'$ ls'));
+    await tester.pump();
+
+    expect(find.byKey(_cursorLock), findsOneWidget);
+    expect(_terminal(app).cursorVisibleMode, isFalse);
+    await _unmount(tester, app);
+  });
+
+  testWidgets('no lock where the program has hidden its cursor', (
+    tester,
+  ) async {
+    final app = await _app(tester, [], viewOnly: true);
+    await _mount(tester, app, chrome: webWorkspaceChrome(app));
+    expect(find.byKey(_cursorLock), findsOneWidget);
+
+    await app.panes.single.session!.handleBinary(
+      _frame(1, '\x1b[?25l', kind: TerminalBinaryKind.output),
+    );
+    await tester.pump();
+
+    expect(find.byKey(_cursorLock), findsNothing);
+    await _unmount(tester, app);
+  });
 }
+
+/// A frame of agent a0's stream: a whole screen ([TerminalBinaryKind.keyframe])
+/// or more output.
+TerminalBinaryFrame _frame(
+  int seq,
+  String text, {
+  TerminalBinaryKind kind = TerminalBinaryKind.keyframe,
+}) => TerminalBinaryFrame(
+  kind: kind,
+  streamId: _streamId,
+  seq: seq,
+  bytes: Uint8List.fromList(utf8.encode(text)),
+  compressed: false,
+  cols: 80,
+  rows: 24,
+);
