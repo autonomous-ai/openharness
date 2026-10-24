@@ -9,8 +9,10 @@ import '../state/app_state.dart';
 import '../state/swarm_catalog.dart';
 import '../state/swarm_navigation.dart';
 import '../state/welcome_sessions.dart';
+import '../state/workspace_chrome.dart';
 import '../state/session_activity.dart';
 import 'engine_identity.dart';
+import 'new_tab_actions.dart';
 import 'desktop_chrome.dart';
 import 'session_activity_label.dart';
 import '../shared/theme/appearance_prefs_store.dart';
@@ -201,7 +203,9 @@ class _WorkspaceWelcomeState extends State<WorkspaceWelcome> {
       return Material(
         key: const ValueKey('workspace-welcome'),
         color: grid.AppPalette.windowBg,
-        child: composer(_withClosedSuperTabs(_desktopSessions())),
+        child: composer(
+          _withNewTabActions(_withClosedSuperTabs(_desktopSessions())),
+        ),
       );
     }
     final palette = grid.AppTheme.surfacePalette;
@@ -387,6 +391,20 @@ class _WorkspaceWelcomeState extends State<WorkspaceWelcome> {
           ],
         ),
       ),
+    );
+  }
+
+  /// [recent] under the plain buttons a host without key hints (the web)
+  /// shows in place of chords; [recent] alone on Desktop.
+  Widget? _withNewTabActions(Widget? recent) {
+    if (WorkspaceChrome.of(context).showsKeyHints) return recent;
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        NewTabActions(onCommand: onCommand),
+        if (recent != null) ...[const SizedBox(height: 32), recent],
+      ],
     );
   }
 

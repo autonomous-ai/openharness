@@ -193,11 +193,10 @@ void main() {
         find.byKey(const ValueKey('workspace-subscription-usage')),
         findsNothing,
       );
-      // Beside it, Download app alone: Share is off until asked for.
-      expect(
-        tester.getRect(find.byKey(footer)).right,
-        lessThanOrEqualTo(tester.getRect(find.byType(WebDownloadButton)).left),
-      );
+      // Nothing beside it: a test runs as Android, a phone, whose download
+      // is the store bar's (a computer's footer: web_footer_bar_test), and
+      // Share is off until asked for.
+      expect(find.byType(WebDownloadButton), findsNothing);
       expect(
         find.byKey(const ValueKey('workspace-share-button')),
         findsNothing,
