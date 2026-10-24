@@ -50,6 +50,7 @@ import 'widgets/update_notice.dart';
 import 'widgets/window_chrome.dart';
 import 'sharing/shared_agent_location.dart';
 import 'sharing/shared_agent_page.dart';
+import 'viewer/viewer_link_incomplete.dart';
 import 'viewer/viewer_location.dart';
 import 'viewer/viewer_page.dart';
 
@@ -382,11 +383,7 @@ class _RootShellState extends ConsumerState<RootShell>
             screen = viewerLocation != null
                 ? ViewerPage(app: app, location: viewerLocation)
                 : kIsWeb && ViewerLocation.isRoute(Uri.base)
-                ? const Center(
-                    child: Text(
-                      'This viewer link is incomplete. Run hn view again.',
-                    ),
-                  )
+                ? ViewerLinkIncomplete(location: Uri.base)
                 : widget.authenticatedScreen(app);
         }
         // A fresh computer's unattended install runs under the welcome tour,
