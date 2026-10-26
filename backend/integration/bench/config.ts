@@ -83,7 +83,7 @@ function pairs<T extends object>(flag: string, text: string, known: T): Partial<
 
 export function parseArgs(argv: readonly string[]): Args {
   const config: BenchConfig = structuredClone(DEFAULT_CONFIG)
-  let out: string | null = null, driver = 'legacy'
+  let out: string | null = null, driver = 'parts'
   for (let i = 0; i < argv.length; i += 2) {
     const flag = argv[i]!, value = argv[i + 1]
     if (value === undefined) throw new Error(`${flag} needs a value`)

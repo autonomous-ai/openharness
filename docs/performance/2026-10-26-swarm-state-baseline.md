@@ -13,7 +13,9 @@ same seeds and lanes, on the finished branch for the "after" numbers.
   clean tree. `backend/src` and `backend/prisma` there are identical to main (`git diff --quiet origin/main HEAD --
   backend/src backend/prisma`), and main has had no change under `backend/` through `c84d2bc2e`. The commits after
   `b71522ab6` on the branch add only this document, the result files and a docs-only merge of `feat/swarm-state-parts`
-  (the design document), so the reviewed head's `backend/` tree is identical to `b71522ab6`'s.
+  (the design document). So the reviewed head, `1231be129`, has the same executable sources as `b71522ab6`: every
+  file outside `docs/` and `backend/integration/bench/results/` is identical (`git diff --name-only b71522ab6 1231be129
+  -- . ':!docs' ':!backend/integration/bench/results'` lists nothing).
 - **Machine:** Apple M1 Max, 10 cores, 64 GB, macOS (Darwin 25.6.0, arm64), Node 24.18.0, MongoDB 7.0.24 as a local
   single-node replica set (mongodb-memory-server, the same set-up as `backend/integration/superTabs.test.ts`). The routes
   run in process through Fastify `inject`, so there is no network in the latencies.

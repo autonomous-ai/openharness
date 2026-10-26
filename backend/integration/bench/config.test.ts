@@ -9,6 +9,10 @@ describe('parseArgs', () => {
     expect(config.every).toMatchObject({ observeMs: 15_000, desktopPollMs: 3_000, hostTickMs: 1_000, deliveryPassMs: 3_000 })
   })
 
+  it('runs the store by parts unless told otherwise: on this branch the old full reads answer 426', () => {
+    expect(parseArgs([]).driver).toBe('parts')
+  })
+
   it('reads sizes, seconds, the mix and cadences', () => {
     const { config, out, driver } = parseArgs(['--seed', '9', '--groups', '50', '--done-share', '0', '--workers', '5', '--lane', 'cross-group', '--duration', '30',
       '--mix', 'message.send=1,work.status=0,work.check=3', '--every', 'workerPostMs=500,hostTickMs=2000', '--out', '/tmp/x', '--driver', 'legacy'])
