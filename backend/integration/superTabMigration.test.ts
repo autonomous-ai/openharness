@@ -39,7 +39,7 @@ afterAll(async () => {
 })
 
 /** A legacy Swarm at revision R: a finished group quiet for two days, a link only its history holds, some messages. */
-async function legacySwarm(edit: (state: SuperTabState) => void = () => {}) {
+async function legacySwarm(edit: (state: SuperTabState, s: ReturnType<typeof richSwarm>) => void = () => {}) {
   const s = richSwarm()
   const tabId = `tab-${randomUUID()}`
   const state = structuredClone(s.state)
@@ -49,7 +49,7 @@ async function legacySwarm(edit: (state: SuperTabState) => void = () => {}) {
   delete web.pullRequestUrls
   web.lastMessageSequence = 30
   state.conversations.find(c => c.id === 'lead')!.lastMessageSequence = 40
-  edit(state)
+  edit(state, s)
   const author: Author = { kind: 'person', id: 'owner', name: 'owner@example.com', membershipGeneration: 'tab' }
   const message = (conversationId: string, sequence: number, text: string, at: number): LegacyMessage =>
     ({ id: `${tabId}-${sequence}`, conversationId, sequence, text, author, createdAt: new Date(at) })
@@ -109,6 +109,42 @@ describe('migrating one Swarm to parts (design 6.1.2)', () => {
     expect(report).toMatchObject({ ok: false })
     expect(report.error).toContain('1 message in a conversation it does not have: gone')
     expect(await partCount(tabId)).toBe(0)
+  })
+})
+
+describe('link lists rebuilt from history (moved from the store, design R8)', () => {
+  const link = (n: number) => `https://github.com/autonomous-ai/openharness/pull/${n}`
+  const links = async (tabId: string, group: string) => (await db.$transaction(tx => parts.loadAll(tx, tabId))).groups.find(g => g.key === group)!.data!.pullRequestUrls
+
+  /** The done group from before link lists. */
+  const legacyDone = (state: SuperTabState, s: ReturnType<typeof richSwarm>) => { delete state.conversations.find(c => c.id === s.done)!.pullRequestUrls }
+
+  it('finds a link in a message older than the latest page of 100', async () => {
+    const { s, tabId } = await legacySwarm(legacyDone)
+    const author: Author = { kind: 'person', id: 'owner', name: 'owner@example.com', membershipGeneration: 'tab' }
+    await db.superTabMessage.createMany({ data: Array.from({ length: 150 }, (_, i) => ({ id: `${tabId}-page-${i}`, tabId, conversationId: s.done,
+      sequence: 100 + i, author: author as never, text: i === 0 ? `First PR ${link(11)}` : `Update ${i}`, recipientIds: [], mentions: [] })) })
+    await migrateSwarm(db, tabId, { now: () => NOW })
+    expect(await links(tabId, s.done)).toEqual([link(11)])
+  })
+
+  it('finds links in check evidence and in a work result', async () => {
+    const { s, tabId } = await legacySwarm((state, s) => {
+      legacyDone(state, s)
+      const done = state.conversations.find(c => c.id === s.done)!
+      done.checks = [{ id: 'c1', description: 'Works', independent: false, evidence: `Ran it in ${link(21)}`, passedBy: 'agent' }]
+      done.assignment = { ...state.conversations.find(c => c.id === s.web)!.assignment!, id: 'w2', status: 'done', result: `Merged ${link(22)}` }
+    })
+    await migrateSwarm(db, tabId, { now: () => NOW })
+    expect(await links(tabId, s.done)).toEqual([link(21), link(22)])
+  })
+
+  it('finds links in earlier attempts of the group', async () => {
+    const { s, tabId } = await legacySwarm(legacyDone)
+    await db.superTabAttempt.create({ data: { id: `${tabId}-attempt`, tabId, conversationId: s.done,
+      snapshot: { checks: [{ evidence: `Tried ${link(31)}` }], assignment: { result: `Abandoned ${link(32)}` } } } })
+    await migrateSwarm(db, tabId, { now: () => NOW })
+    expect(await links(tabId, s.done)).toEqual([link(31), link(32)])
   })
 })
 
