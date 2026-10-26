@@ -305,7 +305,13 @@ export class AgentTokenUsageCache {
       const read = this.options.readSqlite ?? sqliteReadAll
       const database = this.options.opencodeDb ?? join(env.OPENCODE_DATA_DIR, 'opencode.db')
       const limits = { busyTimeoutMs: 20, cliTimeoutMs: 1000, maxBuffer: 4096 }
+      // OpenCode 2 keeps the session in `session_v2` and no longer writes `session`, which holds only what v1
+      // wrote (and nothing of a session v2 began). Its own row is the one to read, then v1's, then v1's before
+      // it counted cache writes.
       let result = await read(database,
+        'SELECT tokens_input, tokens_output, tokens_reasoning, tokens_cache_read, tokens_cache_write FROM session_v2 WHERE id = ?',
+        [entry.target.sessionId], limits)
+      if (!result.ok || result.rows.length === 0) result = await read(database,
         'SELECT tokens_input, tokens_output, tokens_reasoning, tokens_cache_read, tokens_cache_write FROM session WHERE id = ?',
         [entry.target.sessionId], limits)
       if (!result.ok) result = await read(database,
