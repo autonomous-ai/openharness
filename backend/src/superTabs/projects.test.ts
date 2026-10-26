@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
 import { applyCommand, commandSchema, type Command, type CommandContext } from './commands.js'
 import { createSuperTab, visibleState, type Actor, type MessageDraft } from './model.js'
-import { canReadAgent, canWatchAgent, projectOf, projectsOf, readConversation, skillModeOf, skillSetOf } from './projects.js'
+import { canReadAgent, canWatchAgent, markConfidential, projectOf, projectsOf, readConversation, skillModeOf, skillSetOf } from './projects.js'
 
 const owner: Actor = { kind: 'person', userId: 'owner', email: 'owner@example.com' }
 const peer: Actor = { kind: 'person', userId: 'peer', email: 'peer@example.com' }
@@ -531,5 +531,20 @@ describe('who may watch an agent\'s terminal (final review, Critical 1)', () => 
       expect(canWatchAgent(f.state, reader, target(builder))).toBe(true)
     }
     expect(canWatchAgent(f.state, host, target(former))).toBe(true)
+  })
+
+  it('keeps a session confidential once marked, after its private membership ends, until it leaves', () => {
+    const f = setup()
+    const former = f.add('lead', 'former', false)
+    f.state.conversations.push({ id: 'chat', title: 'Chat with PM', leadId: null, agentIds: [former], archived: false, brief: '', checks: [],
+      assignment: null, lastMessageSequence: 0, audience: { people: [{ id: 'peer', generation: 'first' }] } })
+    markConfidential(f.state)
+    f.state.conversations = f.state.conversations.filter(c => c.id !== 'chat')
+    expect(canWatchAgent(f.state, peer, f.state.agents.find(a => a.id === former)!)).toBe(false)
+    // Every command marks: a Lead stored before the mark is marked by the next one.
+    const lead = f.add('lead', 'pm', true)
+    delete f.state.agents.find(a => a.id === lead)!.confidential
+    f.run({ type: 'conversation.create', title: 'Next', brief: '', checks: [] })
+    expect(f.state.agents.find(a => a.id === lead)!.confidential).toBe(true)
   })
 })

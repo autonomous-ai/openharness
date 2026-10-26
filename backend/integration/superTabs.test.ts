@@ -22,6 +22,7 @@ import * as parts from '../src/superTabs/parts/index.js'
 import { guardedWrite, PartConflict } from '../src/superTabs/parts/write.js'
 import { ensurePartExpiry, sweepSwarms } from '../src/superTabs/sweeps.js'
 import { assignmentRows, poolRows, rosterRows } from './hostRows.test-support.js'
+import { recipientShare } from '../src/routes/harnessShares.js'
 
 // A fresh loopback replica set, created here. This suite never reads DATABASE_URL or an existing database.
 let replica: MongoMemoryReplSet
@@ -2976,6 +2977,8 @@ describe('private conversations through the store', () => {
 
 describe('the PM\'s terminal after a private chat (final review, Critical 1)', () => {
   const bob: AuthUser = { sub: '100000000000000000000004', email: 'bob@example.com', autonomousEnv: 'prod', role: 'user' }
+  /** Someone the machine's owner shared the PM's terminal with the ordinary way, outside any Swarm. */
+  const carol: AuthUser = { sub: '100000000000000000000005', email: 'carol@example.com', autonomousEnv: 'prod', role: 'user' }
   /** Alice (peer) and Bob read a public project whose machine neither owns; Alice has a private chat with its PM, and Bob held
    *  a share of the PM's terminal from before that chat. */
   async function privateChat() {
@@ -2990,14 +2993,21 @@ describe('the PM\'s terminal after a private chat (final review, Critical 1)', (
     const invitation = await run(tab, { type: 'invite.create', email: bob.email, role: 'collaborator', conversationId: 'lead' })
     await run(tab, { type: 'invite.accept', inviteId: invitation.result.inviteId as string }, bob)
     const harnessId = (await store.read(owner, tab)).state.agents.find(a => a.id === lead)!.harnessId
-    await db.harnessShare.create({ data: { id: randomUUID(), superTabId: tab, ownerId: host.sub, machineId: 'test-host', agentId: harnessId,
-      recipientEmail: bob.email, autonomousEnv: 'prod', name: 'Lead', ownerPublicKey: 'fixture-key', expiresAt: new Date(Date.now() + 86_400_000) } })
+    // Shares of the PM's session from before the chat: Bob's, which this Swarm made, and Carol's, made outside any Swarm.
+    const share = (superTabId: string | null, recipient: AuthUser, agentId = harnessId) => db.harnessShare.create({ data: { id: randomUUID(), superTabId,
+      ownerId: host.sub, machineId: 'test-host', agentId, recipientEmail: recipient.email, autonomousEnv: 'prod', name: 'Lead', ownerPublicKey: 'fixture-key',
+      expiresAt: new Date(Date.now() + 86_400_000), revokedAt: null } }).then(row => row.id)
+    const swarmShare = await share(tab, bob), ordinaryShare = await share(null, carol)
     const chat = String((await run(tab, { type: 'conversation.create', title: 'Chat with PM', brief: '', checks: [], audience: { personIds: [peer.sub] } }, peer))
       .result.conversationId)
     const secret = await run(tab, { type: 'message.send', conversationId: chat, text: 'Only for the PM: the launch slips a week.', replyTo: null, recipientIds: [] }, peer)
-    // The PM's session receives it: it is in that terminal now.
-    expect((await store.deliveries(host, tab, lead)).map(d => d.messageId)).toContain(secret.result.messageId)
-    return { tab, lead, harnessId }
+    // The PM's host types it into the PM's terminal and confirms it.
+    const delivery = (await store.deliveries(host, tab, lead)).find(d => d.messageId === secret.result.messageId)!
+    const claimId = randomUUID()
+    await store.delivery(host, tab, lead, delivery.id, { type: 'claim', claimId })
+    await store.delivery(host, tab, lead, delivery.id, { type: 'ack', claimId, receipt: 'Typed into the PM terminal', uncertain: false })
+    expect((await db.superTabDelivery.findUniqueOrThrow({ where: { id: delivery.id } })).status).toBe('delivered')
+    return { tab, lead, harnessId, swarmShare, ordinaryShare, share }
   }
   const observers = async (agentId: string) => (await rosterRows(store, host, 'test-host')).find(t => t.agent?.id === agentId)!.observers.map(p => p.userId)
 
@@ -3011,6 +3021,31 @@ describe('the PM\'s terminal after a private chat (final review, Critical 1)', (
       name: 'Worker', configuration: config, lead: false })).result.agentId)
     expect(await observers(worker)).toEqual(expect.arrayContaining([bob.sub, owner.sub, peer.sub]))
     expect(await store.mayObserve(bob, tab, 'test-host', workerHarness, host.sub)).toBe(true)
+  })
+
+  it('keeps that session closed everywhere: as a Builder in another Swarm, through an earlier ordinary share, and in the machine\'s roster', async () => {
+    const { lead, harnessId, swarmShare, ordinaryShare, share } = await privateChat()
+    // Swarm B, where Bob reads a public project and the same session works as a Builder.
+    const other = (await store.create(owner, randomUUID(), 'Other Swarm', 'public')).id
+    const invitation = await run(other, { type: 'invite.create', email: bob.email, role: 'collaborator', conversationId: 'lead' })
+    await run(other, { type: 'invite.accept', inviteId: invitation.result.inviteId as string }, bob)
+    const asBuilder = String((await run(other, { type: 'agent.add', conversationId: 'lead', machineId: 'test-host', harnessId,
+      name: 'Builder elsewhere', configuration: config, lead: false })).result.agentId)
+    expect(asBuilder).toBe(lead)
+    const row = (await rosterRows(store, host, 'test-host')).find(t => t.tabId === other && t.agent?.id === asBuilder)!
+    expect(row).toMatchObject({ observers: [], confidential: true })
+    expect(await store.mayObserve(bob, other, 'test-host', harnessId, host.sub)).toBe(false)
+    await expect(run(other, { type: 'agent.screen', agentId: asBuilder }, bob)).rejects.toMatchObject({ code: 'TERMINAL_PRIVATE' })
+    // Shares made before the chat, opened as the observer relay opens them.
+    expect(await recipientShare(swarmShare, bob, db)).toBeNull()
+    expect(await recipientShare(ordinaryShare, carol, db)).toBeNull()
+    // Bob's share as Swarm B would have made it, for the same session.
+    await db.harnessShare.update({ where: { id: swarmShare }, data: { superTabId: other } })
+    expect(await recipientShare(swarmShare, bob, db)).toBeNull()
+    // A Builder's session shared the ordinary way still opens.
+    const builderHarness = randomUUID()
+    await run(other, { type: 'agent.add', conversationId: 'lead', machineId: 'test-host', harnessId: builderHarness, name: 'Plain builder', configuration: config, lead: false })
+    expect(await recipientShare(await share(null, carol, builderHarness), carol, db)).not.toBeNull()
   })
 
   it('lets nobody but its machine\'s owner read or type in it through the terminal requests', async () => {

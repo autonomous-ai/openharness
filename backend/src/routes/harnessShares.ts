@@ -1,4 +1,5 @@
 import type { FastifyInstance } from 'fastify'
+import type { PrismaClient } from '@prisma/client'
 import { z } from 'zod'
 import { SuperTabStore } from '../superTabs/store.js'
 import { prisma, machineAlive } from '../lib/prisma.js'
@@ -40,17 +41,17 @@ async function tellRecipient(shareId: string): Promise<void> {
   } catch { /* best effort */ }
 }
 
-export async function recipientShare(id: string, user: AuthUser) {
-  const share = await prisma.harnessShare.findFirst({ where: {
+export async function recipientShare(id: string, user: AuthUser, db: PrismaClient = prisma) {
+  const share = await db.harnessShare.findFirst({ where: {
     id, recipientEmail: user.email.trim().toLowerCase(), autonomousEnv: user.autonomousEnv,
     revokedAt: null, expiresAt: { gt: new Date() },
   } })
   if (!share) return null
-  const machine = await prisma.machine.findFirst({ where: {
+  const machine = await db.machine.findFirst({ where: {
     machineId: share.machineId, userId: share.ownerId, autonomousEnv: user.autonomousEnv, ...machineAlive,
   } })
   if (!machine || !machineBillingAllowsDataPlane(machine)) return null
-  if (share.superTabId && !await new SuperTabStore(prisma).mayObserve(user, share.superTabId, share.machineId, share.agentId, share.ownerId)) return null
+  if (!await new SuperTabStore(db).mayOpenShare(user, share)) return null
   return share
 }
 
@@ -62,7 +63,7 @@ export async function harnessShareRoutes(app: FastifyInstance): Promise<void> {
     }, orderBy: { createdAt: 'asc' }, take: 1000 })
     const visible: typeof shares = []
     for (const share of shares) {
-      if (!share.superTabId || await new SuperTabStore(prisma).mayObserve(req.user!, share.superTabId, share.machineId, share.agentId, share.ownerId)) visible.push(share)
+      if (await new SuperTabStore(prisma).mayOpenShare(req.user!, share)) visible.push(share)
     }
     const machines = await prisma.machine.findMany({ where: {
       machineId: { in: [...new Set(visible.map(s => s.machineId))] },

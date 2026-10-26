@@ -20,12 +20,27 @@ export const OBSERVER_VALID_MS = OBSERVER_REFRESH_MS + OBSERVER_SLOW_READ_MS
 export function observerSnapshotFile(dataDir: string, machineId: string) {
   return join(dataDir, 'super-tabs', `observers-${machineId}.json`)
 }
+/** The sessions the last snapshot recorded as confidential (a Lead, or in a private chat, in some Swarm). */
+function savedConfidential(file: string, machineId: string): string[] {
+  try {
+    const saved = object(JSON.parse(readFileSync(file, 'utf8')))
+    return saved.machineId === machineId && Array.isArray(saved.confidential) ? saved.confidential.filter(identifier) : []
+  } catch { return [] }
+}
+
 /** Ephemeral authorization, not a durable grant. A stalled or dead producer's
- * snapshot expires; restarting Share never extends it from the clock alone. */
+ * snapshot expires; restarting Share never extends it from the clock alone.
+ * Confidential sessions are the exception: a session a roster marked confidential keeps refusing every share, ordinary ones
+ * too, through an empty or lapsed roster, until a roster lists it as not confidential (final review, Critical 1). */
 export function publishObservers(dataDir: string, machineId: string, rows: unknown[], until: number) {
   const wanted: Wanted[] = []
+  const dir = join(dataDir, 'super-tabs'), file = observerSnapshotFile(dataDir, machineId)
+  const confidential = new Set(savedConfidential(file, machineId)), marked = new Set<string>(), cleared = new Set<string>()
   for (const value of rows) {
     const row = object(value), agent = object(row.agent)
+    if (identifier(agent.harnessId) && agent.machineId === machineId && typeof row.confidential === 'boolean') {
+      (row.confidential ? marked : cleared).add(agent.harnessId)
+    }
     if (!identifier(row.tabId) || !identifier(agent.harnessId) || agent.machineId !== machineId || !Array.isArray(row.observers)) continue
     for (const observer of row.observers.map(object)) {
       if (typeof observer.email !== 'string') continue
@@ -33,13 +48,14 @@ export function publishObservers(dataDir: string, machineId: string, rows: unkno
         name: typeof agent.name === 'string' ? agent.name : 'Agent', engine: typeof object(agent.configuration).engine === 'string' ? String(object(agent.configuration).engine) : null })
     }
   }
-  const dir = join(dataDir, 'super-tabs'), file = observerSnapshotFile(dataDir, machineId)
+  for (const id of cleared) if (!marked.has(id)) confidential.delete(id)
+  for (const id of marked) confidential.add(id)
   mkdirSync(dir, { recursive: true, mode: 0o700 })
-  writeFileSync(`${file}.next`, JSON.stringify({ machineId, until, wanted }), { mode: 0o600 })
+  writeFileSync(`${file}.next`, JSON.stringify({ machineId, until, wanted, confidential: [...confidential] }), { mode: 0o600 })
   renameSync(`${file}.next`, file)
 }
 export function observerSource(dataDir: string, machine: () => string, now = Date.now) {
-  let readAt = -Infinity, id = '', until = 0, wanted: Wanted[] = []
+  let readAt = -Infinity, id = '', until = 0, wanted: Wanted[] = [], confidential: string[] = []
   const read = (): Wanted[] => {
     const machineId = machine(), time = now()
     if (time - readAt >= 200 || machineId !== id) {
@@ -48,6 +64,8 @@ export function observerSource(dataDir: string, machine: () => string, now = Dat
         const raw = readFileSync(observerSnapshotFile(dataDir, machineId), 'utf8')
         if (raw.length <= 4 * 1024 * 1024) {
           const saved = object(JSON.parse(raw))
+          // Kept whatever the snapshot's age: a lapsed roster must not reopen a confidential session.
+          confidential = saved.machineId === machineId && Array.isArray(saved.confidential) ? saved.confidential.filter(identifier) : confidential
           if (saved.machineId === machineId && typeof saved.until === 'number' && saved.until <= time + OBSERVER_VALID_MS + 500 && Array.isArray(saved.wanted)) {
             until = saved.until
             wanted = saved.wanted.filter(w => {
@@ -70,7 +88,8 @@ export function observerSource(dataDir: string, machine: () => string, now = Dat
      *  and sending them all again. Viewing is still withheld meanwhile (`allows`). A host that stops publishes an
      *  empty roster that is in force, which does withdraw them. */
     known: (): Wanted[] | null => { const rows = read(); return live() ? rows : null },
-    allows: (grant: HarnessGrant): boolean => !superTabOf(grant) || current().some(w =>
-      w.tab === grant.tab && w.agentId === grant.agentId && w.email === grant.recipientEmail),
+    /** A confidential session refuses every share, Swarm or ordinary; another Swarm share needs the roster in force. */
+    allows: (grant: HarnessGrant): boolean => { read(); return !confidential.includes(grant.agentId) && (!superTabOf(grant) || current().some(w =>
+      w.tab === grant.tab && w.agentId === grant.agentId && w.email === grant.recipientEmail)) },
   }
 }

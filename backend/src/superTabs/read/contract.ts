@@ -191,6 +191,8 @@ export interface HostAgentRow {
   leadsConversationId: string | null
   stopRequested: boolean
   observers: Array<{ email: string; userId: string }>
+  /** Its session is confidential in some Swarm: the host refuses every share of it, ordinary ones too (Critical 1). */
+  confidential: boolean
 }
 export interface HostPool {
   tabId: string
