@@ -125,10 +125,10 @@ void main() {
         of: project,
         matching: find.text('Lamp OS'),
       );
+      // Workgroups share the project name column in the compact sidebar.
       expect(
-        tester.getTopLeft(find.text('#12 Offline editing')).dx -
-            tester.getTopLeft(projectName).dx,
-        0,
+        tester.getTopLeft(find.text('#12 Offline editing')).dx,
+        tester.getTopLeft(projectName).dx,
       );
 
       // A child row's formerly empty inset is part of its one click target.

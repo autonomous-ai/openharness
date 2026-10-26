@@ -16,15 +16,31 @@ import 'package:harness/widgets/link_another_machine_dialog.dart'
     show kLinkServerInstallCommand, kLinkServerLoginCommand;
 import 'package:harness/widgets/web_download_button.dart';
 
-/// A password link under way, at its first stage.
-class _Linking extends AppNotifier {
-  _Linking()
+/// An account whose machine list has answered, unless a test says otherwise.
+class _Account extends AppNotifier {
+  _Account()
     : super(
         config: AppConfig.dev,
         authSession: AuthSession(),
         configStore: null,
       );
 
+  bool loaded = true;
+  String? listError;
+  var retries = 0;
+
+  @override
+  bool get machineInventoryLoaded => loaded;
+
+  @override
+  String? get machineListError => listError;
+
+  @override
+  Future<void> retryMachines() async => retries++;
+}
+
+/// A password link under way, at its first stage.
+class _Linking extends _Account {
   @override
   Future<String?>? pendingMachineLink(String machineId) =>
       Completer<String?>().future;
@@ -33,29 +49,9 @@ class _Linking extends AppNotifier {
   String? machineLinkStage(String machineId) => 'deriving_key';
 }
 
-/// Counts the quiet machine-list reads the page makes while it waits.
-class _Watching extends AppNotifier {
-  _Watching()
-    : super(
-        config: AppConfig.dev,
-        authSession: AuthSession(),
-        configStore: null,
-      );
-
-  var reads = 0;
-
-  @override
-  Future<void> rereadMachines() async => reads++;
-}
-
 /// Dialing with no password: [trusted] says how the computer answers.
-class _Dialing extends AppNotifier {
-  _Dialing({required this.trusted})
-    : super(
-        config: AppConfig.dev,
-        authSession: AuthSession(),
-        configStore: null,
-      );
+class _Dialing extends _Account {
+  _Dialing({required this.trusted});
 
   final bool trusted;
   final dialed = <String>[];
@@ -72,11 +68,8 @@ void main() {
   late List<Uri> opened;
 
   setUp(() {
-    app = AppNotifier(
-      config: AppConfig.dev,
-      authSession: AuthSession(),
-      configStore: null,
-    )..currentUser = const CurrentUserProfile(email: 'new@example.test');
+    app = _Account()
+      ..currentUser = const CurrentUserProfile(email: 'new@example.test');
     opened = [];
   });
 
@@ -192,21 +185,6 @@ void main() {
     expect((app as _Dialing).dialed, ['mac', 'mac']);
   });
 
-  testWidgets('keeps asking for the machine list while it waits', (
-    tester,
-  ) async {
-    app.dispose();
-    app = _Watching();
-    await mount(tester);
-
-    await tester.pump(WebFirstMachine.watchEvery * 3);
-
-    expect((app as _Watching).reads, 3);
-    await tester.pumpWidget(const SizedBox.shrink());
-    await tester.pump(WebFirstMachine.watchEvery * 2);
-    expect((app as _Watching).reads, 3, reason: 'stops with the page');
-  });
-
   void addComputer(String id, {bool online = false}) {
     final machine = Machine(
       machineId: id,
@@ -301,5 +279,64 @@ void main() {
     final app = tester.getTopLeft(find.text('Desktop app'));
     final cli = tester.getTopLeft(find.text('Command line'));
     expect(cli.dy, greaterThan(app.dy));
+  });
+
+  testWidgets('before the machine list answers: finding, not the steps', (
+    tester,
+  ) async {
+    app = _Account()..loaded = false;
+
+    await mount(tester);
+
+    expect(find.text('Finding your computers…'), findsOneWidget);
+    expect(find.text('Connect a computer'), findsNothing);
+    expect(find.text(kLinkServerInstallCommand), findsNothing);
+  });
+
+  testWidgets('a list that keeps failing says so, and Retry asks again', (
+    tester,
+  ) async {
+    final account = _Account()
+      ..loaded = false
+      ..listError = 'Could not load machines: the server did not answer.';
+    app = account;
+
+    await mount(tester);
+    expect(
+      find.text('Could not load machines: the server did not answer.'),
+      findsOneWidget,
+    );
+    expect(find.text('Finding your computers…'), findsNothing);
+
+    await tester.tap(find.widgetWithText(FilledButton, 'Retry'));
+    await tester.pump();
+
+    expect(account.retries, 1);
+    expect(find.widgetWithText(FilledButton, 'Retry'), findsOneWidget);
+    expect(find.text('Finding your computers…'), findsNothing);
+  });
+
+  group('on a phone, every button takes a 44 px tap', () {
+    double tapHeight(WidgetTester tester, String label) =>
+        tester.getSize(find.widgetWithText(FilledButton, label)).height;
+
+    testWidgets('Download app and Connect', (tester) async {
+      addComputer('mac', online: true);
+
+      await mount(tester, width: 390);
+
+      expect(tapHeight(tester, 'Download app'), greaterThanOrEqualTo(44));
+      expect(tapHeight(tester, 'Connect'), greaterThanOrEqualTo(44));
+    });
+
+    testWidgets('Retry', (tester) async {
+      app = _Account()
+        ..loaded = false
+        ..listError = 'Could not load machines: the server did not answer.';
+
+      await mount(tester, width: 390);
+
+      expect(tapHeight(tester, 'Retry'), greaterThanOrEqualTo(44));
+    });
   });
 }

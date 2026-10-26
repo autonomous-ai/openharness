@@ -20,7 +20,9 @@ enum { PH_HOME_BG = 0x151413,
        PH_LETTER = 0xF4EEE3, PH_LETTER_MID = 0xD9CFBF, PH_LETTER_BACK = 0xBFB3A1, PH_LETTER_INK = 0x1F1A14, PH_LETTER_RULE = 0xE2D8C8,   // the Notices card: a letter
        PH_LETTER_WHO = 0x9A5A2E, PH_LETTER_MORE = 0x9A8A76, PH_LETTER_MARK = 0xD9622B, PH_LETTER_BADGE = 0xFF7A2F,
        PH_TOAST_FILL = 0x1B2A3D, PH_TOAST_EDGE = 0x2A3D55, PH_TOAST_NAME = 0xFFB36B, PH_TOAST_INK = 0xF2F7FC, PH_TOAST_BAR = 0xFF8A3D,   // the notice toast
-       PH_CARD_INK = 0xFFFFFF, PH_PILL_WORK = 0x9DFFC0, PH_PILL_ASK = 0xFFC796 };
+       PH_CARD_INK = 0xFFFFFF, PH_PILL_WORK = 0x9DFFC0, PH_PILL_ASK = 0xFFC796,
+       PH_SWARM1 = 0x6B4FA3, PH_SWARM2 = 0x231A3B,   // the Swarm card's gradient (the Super Tab purple of Notices, darkened toward the ground)
+       PH_LEAD_WORK = 0x3EE05B, PH_LEAD_ASK = 0xFFC796, PH_LEAD_STUCK = 0xFFB0B0 };   // a Lead's status line: working, needs you, stuck (done is white at 60 %)
 
 // Home's equaliser: four 8 px bars 5 px apart (47 wide) in a 36 px box at (x, y), PH_ROOM_GREEN, a triangle wave between 40 % and 100 %, 900 ms.
 void ph_working_mark_big(ht_scene_t *, int x, int y, uint32_t now_ms);
@@ -56,6 +58,10 @@ pod_scene_t ph_card_scene(const pod_model_t *, const pod_agent_t *);
 void ph_engine_logo(ht_scene_t *, int x, int y, int size, const char *engine, unsigned fill);
 // Home's Notices card (ph_overview.c header): while pod_notice_count > 0 it is the page before tab 0; the TABS frame's scroll is the tab index, POD_HOME_NOTICES (-2) the Notices card.
 // A tap on it is one POD_A_INBOX hit.
+// Home's Swarm card (ph_overview.c header): the pet scene a Lead plays, WORK while it works, ASK when it needs you or is stuck, else REST.
+pod_scene_t ph_lead_scene(pod_lead_state_t);
+// A Lead's status line and its colour (PH_LEAD_*; `dim`, the caller's, for "done"): "working · m:ss" (a remote Lead without a clock: "working"), "needs you", "stuck", "done".
+unsigned ph_lead_status(const pod_lead_t *, uint32_t now_ms, char *line, size_t n, unsigned dim);
 // Home's Working card: the working agents newest turn first (the least pod_agent_secs, ties in model order); returns how many are listed (at most cap).
 int ph_working_list(const pod_model_t *, const pod_agent_t **out, int cap, uint32_t now_ms);
 // The card colours of an engine (the tab cards' mapping; NULL or an unknown engine: the grey pair), and the Working card's: Codex's blue.
@@ -92,6 +98,16 @@ int ph_inbox_max_row(const pod_model_t *);
 // off the roster) and the one-line text (an entry's first sentence, "Done" / "Failed" without one; an asking agent's question). Returns how many were filled.
 typedef struct { const char *engine, *name; char text[160]; } ph_notice_line_t;   // name: the agent's, "" when unknown
 int ph_notices_top(const pod_model_t *, int max, ph_notice_line_t *out);
+
+// ---- The Lead view (ph_lead.c): a Swarm card's Lead, its last message in a paper bubble (see the file's header) ----
+// The top frame's Lead (pod_nav_lead): the Swarm's name and the project on top, the bubble (loaded text, "..." loading, no bubble and "No message yet" when empty; an orange
+// inner left edge for a Lead that needs you, red for stuck), the Lead's pet signing it with "Lead" and its status line. No hit. Draws nothing while the model does not hold the Lead.
+void ph_view_lead(pod_out_frame_t *, const pod_nav_t *, pod_model_t *, uint32_t now_ms);
+// A long message scrolls by rows: 46 px a row, the last valid offset (rows past the 7 shown), 0 for any other state.
+int ph_lead_pitch(void);
+int ph_lead_max_row(const pod_nav_t *, const pod_model_t *);
+// Ms to its next change: the pet's next step (no sooner than the Pets beat) and the status line's seconds.
+uint32_t ph_lead_next_ms(const pod_nav_t *, const pod_model_t *, uint32_t now_ms);
 
 // ---- The notice toast (ph_toast.c) ----
 // The toast for unread entry `u` over whatever the frame holds (call it last, as the glue draws it): see the file's header. shown_ms: when it appeared; it

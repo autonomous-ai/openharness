@@ -34,6 +34,7 @@ void main() {
     Size size = const Size(1280, 800),
     Brightness brightness = Brightness.dark,
     double scale = 1,
+    List<Agent> extraLocalAgents = const [],
   }) async {
     final oldEntry = newHarnessOpensInBox;
     newHarnessOpensInBox = true;
@@ -69,10 +70,13 @@ void main() {
         engine: 'terminal',
         terminalAvailable: true,
       ),
+      ...extraLocalAgents,
     ];
     final c = await f.app.superTabs.open(tabId);
     await c.refresh();
     c.select('offline');
+    // The teammate's machine has no reading, so it sits under the closed "Offline" disclosure.
+    c.offlineMachinesOpen = true;
     await f.app.agentPreference.remember('codex');
     await f.app.projectHistory.select('m', '/work/project');
     final map = MemoryKeymap();
@@ -114,10 +118,19 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
-    final machine = find.byKey(const ValueKey('super-machine-teammate-machine'));
+    final machine = find.byKey(
+      const ValueKey('super-machine-teammate-machine'),
+    );
     if (machine.evaluate().isEmpty &&
         find.byTooltip('Conversations').evaluate().isNotEmpty) {
       await tester.tap(find.byTooltip('Conversations'));
+      await tester.pumpAndSettle();
+    }
+    // The teammate's machine is not online here, so it sits under the closed "Offline" disclosure.
+    final offline = find.byKey(const ValueKey('super-machines-offline'));
+    if (machine.evaluate().isEmpty && offline.evaluate().isNotEmpty) {
+      await tester.ensureVisible(offline);
+      await tester.tap(offline);
       await tester.pumpAndSettle();
     }
     await tester.ensureVisible(machine);
@@ -235,6 +248,49 @@ void main() {
       expect(ordinary.harnessContext, isNull);
       expect(ordinary.placement, HarnessPlacement.newTab);
       expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox());
+      await f.app.superTabs.peek(tabId)!.flush();
+      f.app.superTabs.dispose();
+    },
+  );
+
+  testWidgets(
+    'Add agent disables running engines outside Claude Code and Codex',
+    (tester) async {
+      final f = await open(
+        tester,
+        extraLocalAgents: const [
+          Agent(
+            id: 'open-code',
+            name: 'OpenCode builder',
+            engine: 'opencode',
+            terminalAvailable: true,
+          ),
+          Agent(
+            id: 'pi-agent',
+            name: 'Pi builder',
+            engine: 'pi',
+            terminalAvailable: true,
+          ),
+        ],
+      );
+      final search = tester
+          .widget<SwarmSearchResults>(find.byType(SwarmSearchResults))
+          .search;
+      for (final id in ['open-code', 'pi-agent']) {
+        final row = search.rows.singleWhere((row) => row.agentId == id);
+        expect(
+          search.sessionUnavailable(row),
+          'Only Claude Code or Codex can join this Swarm.',
+        );
+        expect(search.canSubmit(row), isFalse);
+      }
+      expect(
+        search.canSubmit(
+          search.rows.singleWhere((row) => row.agentId == 'local-agent'),
+        ),
+        isTrue,
+      );
       await tester.pumpWidget(const SizedBox());
       await f.app.superTabs.peek(tabId)!.flush();
       f.app.superTabs.dispose();

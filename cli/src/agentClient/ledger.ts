@@ -42,6 +42,18 @@ export interface Closed {
   closed: LedgerMember
 }
 
+/**
+ * [by] gave [told] more work with `harness tell`, at [at]; [probe] is the start of those words. `harness wait` reads it:
+ * until a turn asked with those words has been seen, the harness's last answer is to the work before, and an idle
+ * harness has not taken the new work yet. Older readers skip the line.
+ */
+export interface Told {
+  at: number
+  by: LedgerMember
+  told: LedgerMember
+  probe: string
+}
+
 /** How long a pending line is asked after. An install ends within twenty minutes (engines/kit/nativeInstall.ts). */
 export const PENDING_WITHIN_MS = 30 * 60_000
 
@@ -94,10 +106,18 @@ export function parseClosed(line: string): Closed | null {
   return { at: v.at, by: { machineId: by.machineId, agentId: by.agentId }, closed: { machineId: closed.machineId, agentId: closed.agentId } }
 }
 
+export function parseTold(line: string): Told | null {
+  let v: Record<string, unknown>
+  try { v = JSON.parse(line) } catch { return null }
+  if (!v || typeof v !== 'object' || typeof v.at !== 'number' || !member(v.by) || !member(v.told) || typeof v.probe !== 'string') return null
+  const by = v.by as unknown as LedgerMember, told = v.told as unknown as LedgerMember
+  return { at: v.at, by: { machineId: by.machineId, agentId: by.agentId }, told: { machineId: told.machineId, agentId: told.agentId }, probe: v.probe }
+}
+
 const same = (a: LedgerMember, b: LedgerMember): boolean => a.machineId === b.machineId && a.agentId === b.agentId
 
 export class Ledger {
-  private cache: { key: string; rows: Started[]; pending: Pending[]; closed: Closed[] } | null = null
+  private cache: { key: string; rows: Started[]; pending: Pending[]; closed: Closed[]; told: Told[] } | null = null
   constructor(readonly path: string) {}
 
   /** Where the older lines went when the file passed its size. */
@@ -107,11 +127,11 @@ export class Ledger {
    *  only when either changed. */
   all(): Started[] { return this.read().rows }
 
-  private read(): { rows: Started[]; pending: Pending[]; closed: Closed[] } {
+  private read(): { rows: Started[]; pending: Pending[]; closed: Closed[]; told: Told[] } {
     const files = [this.previous, this.path].map((path) => { try { const st = statSync(path); return { path, key: `${st.mtimeMs}:${st.size}` } } catch { return null } })
     const key = files.map((f) => f?.key ?? '-').join('|')
     if (this.cache?.key === key) return this.cache
-    const rows: Started[] = [], pending: Pending[] = [], closed: Closed[] = []
+    const rows: Started[] = [], pending: Pending[] = [], closed: Closed[] = [], told: Told[] = []
     for (const file of files) {
       if (!file) continue
       let text = ''
@@ -123,14 +143,16 @@ export class Ledger {
         const asked = parsePending(line)
         if (asked) { pending.push(asked); continue }
         const close = parseClosed(line)
-        if (close) closed.push(close)
+        if (close) { closed.push(close); continue }
+        const tell = parseTold(line)
+        if (tell) told.push(tell)
       }
     }
-    this.cache = { key, rows, pending, closed }
+    this.cache = { key, rows, pending, closed, told }
     return this.cache
   }
 
-  append(row: Started | Pending | Closed): void {
+  append(row: Started | Pending | Closed | Told): void {
     mkdirSync(dirname(this.path), { recursive: true })
     // One short line with O_APPEND: two agents starting harnesses at once never interleave.
     appendFileSync(this.path, `${JSON.stringify(row)}\n`, { mode: 0o600 })
@@ -161,6 +183,11 @@ export class Ledger {
   /** When [by] last closed [m] with `harness close`, or null when it did not. */
   closedBy(by: LedgerMember, m: LedgerMember): number | null {
     return this.read().closed.findLast((row) => same(row.by, by) && same(row.closed, m))?.at ?? null
+  }
+
+  /** What [by] last told [m] with `harness tell`, or null when it never did. */
+  toldBy(by: LedgerMember, m: LedgerMember): Told | null {
+    return this.read().told.findLast((row) => same(row.by, by) && same(row.told, m)) ?? null
   }
 
   /** 0 for a harness the person started. */

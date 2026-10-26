@@ -18,6 +18,9 @@ const fields = {
   floor: z.object({ low: quality, medium: quality, high: quality }).strict(),
   quotaReserve: z.number().int().min(0).max(90),
   notes: z.string().trim().max(500),
+  /** How strong a model served on the Swarm's grid counts (the Local models add-on). Optional: policies saved before it
+   * still parse, and read the default. */
+  localModels: z.object({ quality, enabled: z.boolean() }).strict().optional(),
 }
 export const routingPolicySchema = z.object({ version: z.literal(1), ...fields }).strict()
 export const routingOverrideSchema = z.object(fields).partial().strict()
@@ -36,6 +39,8 @@ export const DEFAULT_ROUTING_POLICY: RoutingPolicy = {
   floor: { low: 1, medium: 2, high: 3 },
   quotaReserve: 10,
   notes: '',
+  // Local models are free but weaker: low-difficulty, well-specified work unless the owner says otherwise.
+  localModels: { quality: 1, enabled: true },
 }
 
 export function effectivePolicy(account: unknown, override: unknown) {
@@ -55,5 +60,6 @@ export function effectivePolicy(account: unknown, override: unknown) {
       overridden.push(...(Object.keys(parsed.data) as Array<keyof RoutingOverride>))
     }
   }
+  policy = { ...policy, localModels: policy.localModels ?? DEFAULT_ROUTING_POLICY.localModels }
   return { policy, warnings, overridden }
 }

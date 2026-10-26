@@ -44,6 +44,7 @@ export const BYPASS_PERMISSION_FLAGS: Readonly<Record<AgentEngine, string[] | nu
   opencode: ['--auto'],
   // No permission-prompt system to bypass (pi), or config-file based rather than a flag (hermes).
   pi: null,
+  omp: null,
   hermes: null,
   // Unconfirmed — do not guess a flag for a CLI we haven't verified.
   commandcode: null,
@@ -103,6 +104,8 @@ export const FIRST_PROMPT_ARGS: Readonly<Record<AgentEngine, readonly string[] |
   // No documented first-prompt argument for an interactive launch. Not guessed.
   cursor: null,
   pi: null,
+  // `omp --help`: ARGUMENTS MESSAGES. A bare positional starts the turn.
+  omp: [],
   // `hermes chat --help`: "-q, --query QUERY  Query to run. On a real TTY the prompt seeds an
   // interactive session (first turn)". Measured on a live pane: the prompt is answered and the TUI
   // stays open for the next turn, which is also what lets a fork of a Hermes agent hand off.
@@ -161,6 +164,7 @@ export const NAMED_AGENT_ARGS: Readonly<Record<AgentEngine, readonly string[] | 
   codex: null,
   cursor: null,
   pi: null,
+  omp: null,
   hermes: null,
   commandcode: null,
   devin: null,
@@ -1335,35 +1339,46 @@ function availabilityScript(recipe: EngineInstallRecipe | undefined): string {
       `  for bin in ${names}; do [ -f "$npm_prefix/bin/$bin" ] && [ -x "$npm_prefix/bin/$bin" ] && exit 0; done`,
       'fi',
     ] : []),
-    'exit 1',
+    // An ordinary shell/profile failure may also exit 1. Only this value proves the probe ran to completion and found nothing.
+    'exit 42',
   ].join('\n')
 }
 
+export type CommandAvailability = { status: 'available' | 'missing' | 'unverified'; detail?: string }
 /**
  * Does the same interactive shell that launches a new agent resolve this CLI?
  *
  * The fallback is intentionally the daemon PATH: without a usable absolute
  * SHELL there is no safer context to consult and direct launch is used too.
  */
+export function commandAvailableInInteractiveShell(command: string, shell: string | undefined, recipe: EngineInstallRecipe | undefined, detailed: true): Promise<CommandAvailability>
+export function commandAvailableInInteractiveShell(command: string, shell?: string, recipe?: EngineInstallRecipe): Promise<boolean>
 export async function commandAvailableInInteractiveShell(
   command: string,
   shell: string | undefined = undefined,
   recipe: EngineInstallRecipe | undefined = undefined,
-): Promise<boolean> {
+  detailed = false,
+): Promise<boolean | CommandAvailability> {
   const interactive = interactiveEngineShell(shell)
   if (!interactive) {
-    return binaryOnPath(command)
-      || (recipe ? engineInstallPaths(recipe).some((candidate) => binaryOnPath(candidate)) : false)
+    const found = binaryOnPath(command) || (recipe ? engineInstallPaths(recipe).some((candidate) => binaryOnPath(candidate)) : false)
+    return detailed ? { status: found ? 'available' : 'missing' } : found
   }
   const [file, ...args] = engineShellArgv(interactive, [availabilityScript(recipe), 'harness-engine-probe', command])
-  return await new Promise((resolve) => {
+  const result = await new Promise<CommandAvailability>((resolve) => {
     execFile(
       file,
       args,
       { timeout: 5_000 },
-      (error) => resolve(!error),
+      (error) => {
+        if (!error) return resolve({ status: 'available' })
+        if (Number(error.code) === 42) return resolve({ status: 'missing' })
+        if (error.killed) return resolve({ status: 'unverified', detail: 'Interactive shell tool probe timed out after 5 seconds.' })
+        resolve({ status: 'unverified', detail: `Interactive shell tool probe failed (${String(error.code ?? error.signal ?? 'unknown error')}).` })
+      },
     )
   })
+  return detailed ? result : result.status === 'available'
 }
 
 export type CommandFlagSupport = 'supported' | 'unsupported' | 'unknown'

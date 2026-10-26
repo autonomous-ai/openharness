@@ -76,6 +76,7 @@ export interface HandoffServiceOptions {
 export function runHandoffService(options: HandoffServiceOptions): ServiceProcess {
   let connection: CoreConnection | null = null
   const core = handoffCoreApi(options.dataDir, (query, payload) => connection?.query(query, payload) ?? Promise.resolve({ error: 'SERVICE_UNAVAILABLE' }))
+  core.daemon = { ...core.daemon, machineId: () => options.machineId }
   return (options.run ?? runServiceProcess)({
     name: 'handoff', socketPath: options.socketPath, machineId: options.machineId, token: options.token,
     requests: (options.start ?? startHandoff)(core),

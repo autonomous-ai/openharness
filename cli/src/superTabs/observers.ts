@@ -8,6 +8,15 @@ const PREFIX = 'super:'
 export function superTabOf(grant: Pick<HarnessGrant, 'tab'>): string | null {
   return grant.tab?.startsWith(PREFIX) ? grant.tab.slice(PREFIX.length) : null
 }
+/** How long a published roster authorizes its observers, counted from the roster read that answered: the host's
+ *  refresh cadence (superTabs/host.ts reads the roster each second) plus a margin for a slow read. It was 2.5 s from
+ *  the moment a read was ASKED, while the roster read took 1 to 2.8 s: measured 2026-10-23 on MacBookPro2021, the
+ *  snapshot lapsed 4 times in 30 s, every lapse closed each member's view ("Reconnecting · View only", reloading
+ *  forever) and withdrew and sent again every invitation, which told each member's apps to read their machine lists
+ *  again about 1.5 times a second. A removed member still loses the view at the next answer, which no longer lists
+ *  them, and the backend checks membership again for every observer connection (routes/harnessShares.ts). */
+export const OBSERVER_REFRESH_MS = 1_000, OBSERVER_SLOW_READ_MS = 10_000
+export const OBSERVER_VALID_MS = OBSERVER_REFRESH_MS + OBSERVER_SLOW_READ_MS
 export function observerSnapshotFile(dataDir: string, machineId: string) {
   return join(dataDir, 'super-tabs', `observers-${machineId}.json`)
 }
@@ -31,7 +40,7 @@ export function publishObservers(dataDir: string, machineId: string, rows: unkno
 }
 export function observerSource(dataDir: string, machine: () => string, now = Date.now) {
   let readAt = -Infinity, id = '', until = 0, wanted: Wanted[] = []
-  const current = (): Wanted[] => {
+  const read = (): Wanted[] => {
     const machineId = machine(), time = now()
     if (time - readAt >= 200 || machineId !== id) {
       id = machineId; readAt = time; until = 0; wanted = []
@@ -39,7 +48,7 @@ export function observerSource(dataDir: string, machine: () => string, now = Dat
         const raw = readFileSync(observerSnapshotFile(dataDir, machineId), 'utf8')
         if (raw.length <= 4 * 1024 * 1024) {
           const saved = object(JSON.parse(raw))
-          if (saved.machineId === machineId && typeof saved.until === 'number' && saved.until <= time + 3000 && Array.isArray(saved.wanted)) {
+          if (saved.machineId === machineId && typeof saved.until === 'number' && saved.until <= time + OBSERVER_VALID_MS + 500 && Array.isArray(saved.wanted)) {
             until = saved.until
             wanted = saved.wanted.filter(w => {
               const value = object(w)
@@ -50,10 +59,17 @@ export function observerSource(dataDir: string, machine: () => string, now = Dat
         }
       } catch { /* An unavailable or partially replaced authority file withholds viewing. */ }
     }
-    return time < until ? wanted : []
+    return wanted
   }
+  const live = () => now() < until
+  const current = (): Wanted[] => { const rows = read(); return live() ? rows : [] }
   return {
     current,
+    /** What the host's last roster wants, or null when no roster is in force (its host stalled, or the file cannot be
+     *  read): that says nothing about who is a member, so Share keeps the invitations it holds rather than withdrawing
+     *  and sending them all again. Viewing is still withheld meanwhile (`allows`). A host that stops publishes an
+     *  empty roster that is in force, which does withdraw them. */
+    known: (): Wanted[] | null => { const rows = read(); return live() ? rows : null },
     allows: (grant: HarnessGrant): boolean => !superTabOf(grant) || current().some(w =>
       w.tab === grant.tab && w.agentId === grant.agentId && w.email === grant.recipientEmail),
   }

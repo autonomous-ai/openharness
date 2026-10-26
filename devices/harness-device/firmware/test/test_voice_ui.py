@@ -10,7 +10,7 @@ import subprocess
 import tempfile
 
 native = Path(__file__).resolve().parent / '../main/ui/habitat'
-source = (native / 'ui_habitat.c').read_text()
+source = Path(os.environ.get('UI_SOURCE', native / 'ui_habitat.c')).read_text()
 
 
 def function(name):
@@ -35,6 +35,8 @@ static bool cable_client_supports(uint32_t features) { return (host_features & f
 #include "form.h"
 #include "draft.h"
 #include "workspace.h"
+#include "supertab.h"
+#define EXT_RAM_BSS_ATTR
 enum { HOME, AGENTS, AGENT, COMPANION, VOICE, MESSAGE, SELECTION, FORM, QUESTION, CHOICE, ANSWER_REVIEW, DRAFT, DRAFT_OPTIONS, INBOX };
 enum { A_VOICE, A_VOICE_STOP, A_VOICE_ABORT };
 enum { VOICE_CMD_NONE, VOICE_CMD_GOAL };
@@ -88,8 +90,9 @@ void audio_client_stop(void) { stops++; }
 void audio_client_request_review(void) { reviews++; }
 void audio_client_abort(void) { aborts++; abort_requested = true; }
 void audio_client_copy_upload_id(char *dst, size_t cap) { snprintf(dst, cap, "capture-%d", starts); }
+static char started_for[64];
 void audio_client_start_cable(const char *id, int cmd) {
-    (void)id; (void)cmd; starts++; audio_active = recording = true; abort_requested = false;
+    (void)cmd; snprintf(started_for, sizeof started_for, "%s", id ? id : ""); starts++; audio_active = recording = true; abort_requested = false;
 }
 void audio_client_start_search(const char *id, const char *selected, unsigned revision) {
     assert(!strcmp(selected,"search-test") && revision==3); audio_client_start_cable(id,VOICE_CMD_NONE);
@@ -116,6 +119,9 @@ bool is_question(const char *id) { (void)id; return false; }
 void open_question(void) { assert(false); }
 bool queue(action_t action) { if (queue_full) return false; queued = action; return true; }
 '''
+# The Swarm's data and lookups, for the Lead a face voice turn goes to.
+harness += source[source.index('enum { SUPERTAB_RECAP_GET'):source.index('static const char *swarm_fixed_text(')]
+harness += function('voice_lead')
 harness += function('question_view') + function('copy') + function('input_cancel') + function('view') + function('voice_close') + function('workspace_failed')
 dispatch = source.split('case A_VOICE:\n', 1)[1].split('case A_PET:', 1)[0]
 harness += 'static void dispatch(action_t a) { switch (a.kind) { case A_VOICE:\n' + dispatch + '} }\n'
@@ -142,6 +148,28 @@ static void begin(void) { speak(); work(queued); assert(recording && s.view == V
 int main(void) {
     // The listening scene follows whom the turn is for: an agent's engine, nothing for a draft.
     reset(); strcpy(s.agents[0].engine, "claude"); begin(); assert(!strcmp(s.voice_engine, "claude"));
+    // In a Swarm the face's turn goes to the Lead's harness on this computer, never the Lead id, with the Lead's
+    // engine and project; it comes back to the Swarm's face.
+    {
+        static ht_supertab_t card; static ht_lead_event_t ev[4];
+        assert(ht_supertab_init(&card, "s1", "", "openharness", 2));
+        ht_lead_in_t mobile = {.id = "L1", .project = "mobile", .engine = "codex", .local = "h1", .state = "work", .order = 0, .since = 5};
+        ht_lead_in_t web = {.id = "L2", .project = "web", .engine = "claude", .local = "", .state = "work", .order = 1, .since = -1};
+        assert(ht_supertab_lead_add(&card, &mobile) && ht_supertab_lead_add(&card, &web));
+        const char ids[1][ID_MAX] = {"s1"};
+        reset(); ht_supertabs_reset(&swarm); memset(&sw, 0, sizeof sw);
+        ht_supertabs_ids(&swarm, ids, 1, ev, 4); ht_supertabs_put(&swarm, &card, now, ev, 4);
+        strcpy(sw.tab, "s1"); strcpy(sw.lead, "L1");
+        dispatch((action_t){.kind = A_VOICE, .id = "h1"}); work(queued);
+        assert(recording && s.view == VOICE && !strcmp(started_for, "h1"));
+        assert(!strcmp(s.voice_engine, "codex") && !strcmp(s.voice_target, "mobile"));
+        done(); finish_audio(); ui_voice_routed(true, false, "", "h1", "mobile", 1);
+        assert(s.view == AGENT && !s.voice_open && !strcmp(sw.tab, "s1") && !strcmp(sw.lead, "L1"));
+        // A desk pane's id while a Lead is on the face is no Lead's harness: the pane's own engine.
+        strcpy(s.agents[0].engine, "claude"); begin();
+        assert(!strcmp(started_for, "agent") && !strcmp(s.voice_engine, "claude"));
+        ht_supertabs_reset(&swarm); memset(&sw, 0, sizeof sw);
+    }
     reset(); host_features=0; begin(); dispatch((action_t){.kind=A_VOICE_STOP,.value=1});
     assert(!reviews && !s.voice_review && s.voice_waiting);
     reset(); begin(); dispatch((action_t){.kind=A_VOICE_STOP,.value=1});
@@ -295,6 +323,6 @@ with tempfile.TemporaryDirectory(prefix='harness-voice-ui-') as directory:
     (root / 'voice_ui.c').write_text(harness)
     subprocess.run(['cc', '-std=c11', '-D_POSIX_C_SOURCE=200809L', '-Wall', '-Wextra', '-Werror', '-O1', '-g',
                     '-fsanitize=' + os.environ.get('SANITIZERS', 'undefined,bounds'),
-                    '-I', str(native), str(root / 'voice_ui.c'), str(native / 'selection.c'), str(native / 'carry.c'), str(native / 'visit.c'), str(native / 'form.c'), str(native / 'draft.c'), str(native / 'workspace.c'),
+                    '-I', str(native), str(root / 'voice_ui.c'), str(native / 'selection.c'), str(native / 'carry.c'), str(native / 'visit.c'), str(native / 'form.c'), str(native / 'draft.c'), str(native / 'workspace.c'), str(native / 'supertab.c'),
                     '-o', str(root / 'voice_ui')], check=True)
     subprocess.run([str(root / 'voice_ui')], check=True)

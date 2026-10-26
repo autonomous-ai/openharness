@@ -13,8 +13,8 @@ the browser renders managed viewers on their connected machine.
 `hn view` can open a viewer companion at `/?viewer=1&machine=<id>&agent=<id>`.
 This owner-only destination uses normal sign-in and machine linking. It does not restore or
 save the workspace, join the shared desk, or attach a terminal. OAuth returns to the same
-viewer after sign-in. The website root serves it while `machine` is in the query; any other
-visit to `/` redirects to the Hub, and the hosted workspace is at `/web`, where sign-in returns.
+viewer after sign-in. The website root serves it while `machine` is in the query; otherwise
+the root is the hosted workspace, where sign-in returns (`/web` redirects there).
 Publish the browser build before the corresponding native hn release so the entry point
 recognizes the viewer destination.
 

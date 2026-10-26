@@ -15,10 +15,10 @@ function setup() {
   let account: GatewayAccount = { machineId: 'account-a', signIn: null, autonomousEnv: 'test' }
   const request = vi.fn<typeof fetch>(async () => response(body))
   const tokens = { accessToken: vi.fn(async () => 'token') }
-  const changed = vi.fn(), reachable = vi.fn()
+  const changed = vi.fn(), reachable = vi.fn(), listed = vi.fn()
   const deps = { dataDir, account: () => account, tokens, request, base: () => 'https://backend.invalid',
-    computer: { id: 'computer', name: 'Laptop', hostname: 'host' }, environment: 'prod', changed, reachable, log: vi.fn() }
-  return { api: createAccountHttp(deps), deps, dataDir, request, tokens, changed, reachable,
+    computer: { id: 'computer', name: 'Laptop', hostname: 'host' }, environment: 'prod', changed, reachable, listed, log: vi.fn() }
+  return { api: createAccountHttp(deps), deps, dataDir, request, tokens, changed, reachable, listed,
     account: (next: GatewayAccount) => { account = next } }
 }
 
@@ -91,9 +91,16 @@ describe('account HTTP in the gateway', () => {
   })
 
   it('owns persistence, reports fresh lists, and uses stale rows during an outage after a restart', async () => {
-    const { api, deps, dataDir, request, changed, reachable } = setup()
+    const { api, deps, dataDir, request, changed, reachable, listed } = setup()
     expect(await api.machines()).toEqual({ status: 200, body })
     expect(reachable).toHaveBeenLastCalledWith(['remote'])
+    // The body as the backend answered it, for the trust group's team machines (lib/e2ee/machineKinds.ts); null once signed out.
+    expect(listed).toHaveBeenLastCalledWith(body)
+    request.mockResolvedValueOnce(response({}, 401))
+    await api.machines()
+    expect(listed).toHaveBeenLastCalledWith(null)
+    request.mockResolvedValueOnce(response(body))
+    await api.machines()
     expect(JSON.parse(readFileSync(join(dataDir, 'machines.json'), 'utf8')).bodyOwner).toBe('account-a')
     changed.mockClear()
     const restarted = createAccountHttp(deps)

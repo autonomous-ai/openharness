@@ -7,6 +7,7 @@ import '../../state/workspace_chrome.dart';
 import '../../terminal/terminal_theme.dart';
 import '../../terminal/terminal_theme_store.dart';
 import '../../widgets/box_chrome.dart' show kWorkspaceInset;
+import '../../widgets/finger_target.dart';
 import '../../widgets/pane_menu.dart';
 import '../../widgets/web_download_button.dart';
 import '../../widgets/workspace_bar_control.dart';
@@ -56,8 +57,10 @@ class WebFooterBar extends StatelessWidget {
                     ),
                   ),
                 ),
-                // One filled action in the bar: Share when it is on.
-                WebDownloadButton(prominent: share == null),
+                // One filled action in the bar: Share when it is on. A phone's
+                // download is the store bar's.
+                if (!browserHasAppStore())
+                  WebDownloadButton(prominent: share == null),
                 if (share != null) ...[
                   SizedBox(width: workspaceBarCellSizeOf(context).width),
                   _WebShareIconButton(share: share),
@@ -86,10 +89,14 @@ class WebFooterBar extends StatelessWidget {
             onTap: () => close(item),
             child: KeyedSubtree(
               key: ValueKey('web-footer:${item.title}'),
-              child: PaneMenuRow(
-                selected: false,
-                title: item.title,
-                status: item.detail.isEmpty ? null : item.detail,
+              // The footer is a phone's: its rows are a finger's size.
+              child: fingerTarget(
+                enabled: true,
+                PaneMenuRow(
+                  selected: false,
+                  title: item.title,
+                  status: item.detail.isEmpty ? null : item.detail,
+                ),
               ),
             ),
           ),

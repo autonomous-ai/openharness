@@ -39,6 +39,9 @@ export interface SessionStoreContract {
    *  depth, at most `walk` entries looked at, for an id `id` accepts. `projects`: `<id><suffix>` in any one folder
    *  directly below a sessions folder. */
   byId: { layout: 'walk'; suffix: string; id: RegExp; walk: number } | { layout: 'projects'; suffix: string }
+  /** Cold histories keep their logical path while the engine replaces the file with this archive.
+   * Opening a stopped harness materializes only that history before earning control identity. */
+  compression?: { suffix: string; format: 'zstd' }
   /**
    * What a session file's first record says about it, read within `maxBytes`: its `type`, and where it keeps
    * the id, the folder, the field whose presence marks a session another one delegated to, and that one's parent.

@@ -55,6 +55,32 @@ describe('a plugin in a Harness pty host pane (Windows)', () => {
     expect(posted()).toMatchObject({ sessionId: 'pi-1', runtimeHints: PTY_HINT })
   })
 
+  it.each([
+    [KILO_PLUGIN, 'kilo-v.mjs', 'p2-0.4.21-dev.win1'], [OPENCODE_LEGACY_PLUGIN, 'opencode-v.mjs', 'p2-h0123456789ab'],
+  ] as const)('posts a versioned pty host\'s pane by HARNESS_PANE: %#', async (rule, name, instance) => {
+    vi.stubEnv('HARNESS_PANE', `${instance}:%7`)
+    const plugin = await load(rule, name)
+    const hooks = await plugin.MachineRegister({ directory: '/work' })
+    await hooks.event({ event: { type: 'session.created', properties: { info: { id: 'ses_v' } } } })
+    expect(posted()).toMatchObject({ sessionId: 'ses_v', runtimeHints: [{ backend: 'ptyhost', instance, paneId: '%7' }] })
+  })
+
+  it('posts the OpenCode 2 TUI and Pi sessions of a versioned pty host\'s pane', async () => {
+    vi.stubEnv('HARNESS_PANE', 'p2-0.4.21-dev.win1:%7')
+    const hint = [{ backend: 'ptyhost', instance: 'p2-0.4.21-dev.win1', paneId: '%7' }]
+    const tui = await load(OPENCODE_TUI_PLUGIN, 'tui-v.mjs')
+    const stop = tui.default.setup({ ui: { router: { current: () => ({ type: 'session', sessionID: 'ses_4' }) } }, data: { session: { get: async () => ({}) } } })
+    await vi.waitFor(() => expect(fetch).toHaveBeenCalled())
+    stop?.()
+    expect(posted()).toMatchObject({ sessionId: 'ses_4', runtimeHints: hint })
+    fetch.mockClear()
+    const pi = await load(PI_EXTENSION, 'pi-v.ts')
+    const handlers: Record<string, (event: unknown, ctx: unknown) => Promise<void>> = {}
+    pi.default({ on: (event: string, run: (event: unknown, ctx: unknown) => Promise<void>) => { handlers[event] = run } })
+    await handlers.session_start({}, { sessionManager: { getSessionFile: () => null, getSessionId: () => 'pi-2' }, cwd: '/work' })
+    expect(posted()).toMatchObject({ sessionId: 'pi-2', runtimeHints: hint })
+  })
+
   it('still posts a tmux pane by TMUX_PANE alone', async () => {
     vi.stubEnv('TMUX_PANE', '%7')
     const plugin = await load(KILO_PLUGIN, 'kilo-tmux.mjs')

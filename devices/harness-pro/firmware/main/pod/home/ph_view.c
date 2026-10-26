@@ -13,4 +13,5 @@ void ph_render(pod_out_frame_t *f, const pod_nav_t *nav, pod_model_t *m, uint32_
     else if (top->view == POD_V_RECAP) ph_view_recap(f, nav, m, now_ms);
     else if (top->view == POD_V_TALK) ph_view_talk(f, nav, m, now_ms);
     else if (top->view == POD_V_INBOX) ph_view_inbox(f, nav, m, now_ms);
+    else if (top->view == POD_V_LEAD) ph_view_lead(f, nav, m, now_ms);
 }

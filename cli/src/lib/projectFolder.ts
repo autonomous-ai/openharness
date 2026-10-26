@@ -12,7 +12,9 @@ import type { ScmLaunchRecord } from '../scm/types.js'
  *  harness and the time. `suggested` marks a name the app made up (from the first task — the phone has
  *  no name field), which is numbered past a folder that exists rather than refused. */
 export type ProjectFolder = { source: 'new'; name?: string; suggested?: boolean } | { source: 'remote'; repositoryUrl: string; name: string }
-  | { source: 'worktree'; gitSource: string; branchRef?: string; branchName?: string; existingBranch?: boolean; placeholder?: boolean; fromDefaultBranch?: boolean }
+  | { source: 'worktree'; gitSource: string; branchRef?: string; branchName?: string; existingBranch?: boolean; placeholder?: boolean; fromDefaultBranch?: boolean
+    /** Fetch nothing (gitProject.ts `offline`): set by the daemon for a Swarm start doing another person's work, never by a client. */
+    offline?: boolean }
   | { source: 'branch'; gitSource: string; branchRef?: string; branchName?: string }
 
 /** Where this daemon and the desktop app put the workspaces they make. A folder directly inside it is
@@ -155,7 +157,10 @@ export async function prepareProjectFolder(
   project: ProjectFolder,
   options: {
     root?: string
-    clone?: (url: string, destination: string) => Promise<void>
+    clone?: (url: string, destination: string, env?: NodeJS.ProcessEnv) => Promise<void>
+    /** The environment a clone's git runs in instead of the daemon's own: a Swarm host's, with the Harness GitHub App's
+     *  token for the project (lib/swarmGitHub.ts `swarmGitPrepareEnv`). */
+    gitEnv?: NodeJS.ProcessEnv
     /** Who the harness is ("Codex", "Blender"): a new project folder is named after it and the time. */
     label?: string | null
     now?: () => Date
@@ -173,7 +178,7 @@ export async function prepareProjectFolder(
       // The isolated-workspace path, through the SCM seam. The git implementation makes exactly the
       // prepareGitProject call this used to make.
       const { cwd, launchRecord } = await scmByKind('git')!.prepareIsolated(project.gitSource, {
-        root, base: project.branchRef, ...(project.fromDefaultBranch ? { fromDefaultBranch: true } : {}),
+        root, base: project.branchRef, ...(project.fromDefaultBranch ? { fromDefaultBranch: true } : {}), ...(project.offline ? { offline: true } : {}),
         ...(project.branchName ? { name: project.branchName, existing: project.existingBranch === true, placeholder: project.placeholder === true } : {}),
       })
       options.onPrepared?.({ cwd, scmLaunchRecord: launchRecord })
@@ -233,7 +238,7 @@ export async function prepareProjectFolder(
     }
     staging = await mkdtemp(join(root, '.harness-clone-'))
     const checkout = join(staging, 'checkout')
-    await (options.clone ?? cloneRepository)(project.repositoryUrl, checkout)
+    await (options.clone ?? cloneRepository)(project.repositoryUrl, checkout, options.gitEnv)
     if (await exists(destination)) {
       // Another start cloned the same repository meanwhile: that one is kept and this staging goes (below).
       if (await holdsRepository(destination, project.repositoryUrl)) return destination
@@ -252,12 +257,13 @@ export async function prepareProjectFolder(
 
 /** No shell interpolation or interactive password prompt. Diagnostics stay
  * bounded and private; only actionable, credential-free messages reach the UI. */
-function cloneRepository(url: string, destination: string): Promise<void> {
+function cloneRepository(url: string, destination: string, gitEnv?: NodeJS.ProcessEnv): Promise<void> {
   return new Promise((resolve, reject) => {
+    const base = gitEnv ?? process.env
     const child = spawn('git', ['clone', '--', url, destination], {
       stdio: ['ignore', 'ignore', 'pipe'],
-      env: { ...process.env, GIT_TERMINAL_PROMPT: '0', GCM_INTERACTIVE: 'Never',
-        GIT_SSH_COMMAND: process.env.GIT_SSH_COMMAND ?? 'ssh -oBatchMode=yes -oConnectTimeout=20' },
+      env: { ...base, GIT_TERMINAL_PROMPT: '0', GCM_INTERACTIVE: 'Never',
+        GIT_SSH_COMMAND: base.GIT_SSH_COMMAND ?? 'ssh -oBatchMode=yes -oConnectTimeout=20' },
     })
     let diagnostic = '', timedOut = false
     let forceKill: ReturnType<typeof setTimeout> | undefined

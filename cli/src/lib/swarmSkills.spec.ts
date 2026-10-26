@@ -1,9 +1,10 @@
 import { execFileSync } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import { mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { prepareSwarmSkill, parseSwarmSkill } from './swarmSkills.js'
+import { prepareSwarmSkill, parseSwarmSkill, recordSwarmSkillNotice, refreshSwarmSkill } from './swarmSkills.js'
 import { agentLaunchArgs } from './agentAttribution.js'
 import { buildLaunchOverrides } from './launchOverrides.js'
 import { gridLaunchInProcess } from '../testing/gridLaunchInProcess.js'
@@ -22,7 +23,7 @@ describe('built-in Swarm skills', () => {
       expect(prepared.file.startsWith(join(realpathSync(workspace), '.harness', 'runtime'))).toBe(true)
       const text = readFileSync(prepared.file, 'utf8')
       expect(text).toContain(`name: swarm-${role}`)
-      if (role === 'lead') expect(text).toContain('goal, changes, constraints, owned code and acceptance checks')
+      if (role === 'lead') expect(text).toContain('Route every new agent and every assignment')
       else {
         expect(text).toContain('Needs:')
         expect(text).toContain("Do not touch other groups' code.")
@@ -36,6 +37,229 @@ describe('built-in Swarm skills', () => {
     expect(readFileSync(join(workspace, 'AGENTS.md'), 'utf8')).toBe('Project rules\n')
     expect(readdirSync(workspace).sort()).toEqual(['.harness', 'AGENTS.md'])
     expect(readdirSync(data)).toEqual([])
+  })
+
+  // The owner's approved text (2026-10-22, with the Lead recovery guidance of 2026-10-23), byte for byte; the Lead's gains only the approved 2-hour line (2026-10-23).
+  const sha = (text: string) => createHash('sha256').update(text).digest('hex')
+  // The approved terminal line (spec/2026-10-23-lead-sees-agent-terminal.md), the Lead's alone, in both modes.
+  const terminal = '- When a worker seems stuck, read its terminal; answer prompts within its task; ask the owner before approving anything risky.\n'
+  // The approved overlap line (spec/2026-10-23-leads-see-and-talk.md, call 6), the Lead's alone, in both modes.
+  const overlap = '- Before assigning, look at other projects\' active work; if your task touches the same code, say so in the Leads conversation and agree an order first.\n'
+  // The Local models line (owner, 2026-10-23: the Lead considers Builders on local models; docs/plans/2026-10-23-swarm-local-models.md).
+  const local = '- Local models: when the Swarm serves one (a member\'s model, a shared API, a model shared with a member), the route may pick it for low-difficulty, well-specified work; it costs no subscription. Set "local":true in the route only when a person asks for a local model. When a person names a model, set "model" to their words ("deepseek 4.1 flash"): the route then offers that model alone. Start the pick with the gridModel and gridName the route gives, never a model or effort.\n'
+  const localDefault = '- Local models: the route may pick one for low-difficulty, well-specified work; set "local":true only when a person asks for one, set "model" to a model a person names, and start it with the route\'s gridModel and gridName.\n'
+  // The approved mention line (spec/2026-10-24-lead-mentions.md, call 5), the Lead's alone, in both modes.
+  const mention = '- When you need a person to act or decide, tag them in the message.\n'
+  const twoHours = '- A Builder or Reviewer that has been down for 2 hours (machine offline, session gone or stopped): cancel its task with the reason, route it, and assign it to another agent with what the first one left (branch, last revision, last report).\n'
+  it.each([
+    ['lead', '5fc83d8c43b66b44cdab27b48235dbc86b7ab11a57153edc1ae7e92831642a8e'],
+    ['dev', '86caf697c83365f000317845b0aaa929947a9591d637ab2bd0f8536da8e86763'],
+    ['review', '424dc9db5642ed7093128525f30877ffc301eb6957b33e8234916de0f0eaa208'],
+  ] as const)('writes the owner\'s Harness orchestration %s skill byte for byte', (role, sha256) => {
+    expect(parseSwarmSkill({ role, key: 'session' })).toEqual({ role, key: 'session' })
+    for (const mode of [undefined, 'orchestration'] as const) {
+      const prepared = prepareSwarmSkill(fixture(), { role, key: 'session', ...(mode ? { mode } : {}) })
+      expect(prepared.instructions).toBe(`Use the built-in swarm-${role} skill for this session. Before working, read ${JSON.stringify(prepared.file)} with your file or shell tool.`)
+      const text = readFileSync(prepared.file, 'utf8')
+      expect(text.startsWith(`---\nname: swarm-${role}\n`)).toBe(true)
+      expect(text.split(twoHours)).toHaveLength(role === 'lead' ? 2 : 1)
+      expect(text.split(terminal)).toHaveLength(role === 'lead' ? 2 : 1)
+      expect(text.split(overlap)).toHaveLength(role === 'lead' ? 2 : 1)
+      expect(text.split(local)).toHaveLength(role === 'lead' ? 2 : 1)
+      expect(text.split(mention)).toHaveLength(role === 'lead' ? 2 : 1)
+      expect(sha(text.replace(twoHours, '').replace(terminal, '').replace(overlap, '').replace(local, '').replace(mention, ''))).toBe(sha256)
+    }
+  })
+  it('adds the 2-hour line to section 7 right after the 6-hour rule', () => {
+    const text = readFileSync(prepareSwarmSkill(fixture(), { role: 'lead', key: 'session' }).file, 'utf8')
+    expect(text).toContain(`reassign work that has not moved for 6 hours; report on-screen trust, sign-in or permission questions in chat, naming the machine owner who can answer.\n${twoHours}`)
+  })
+  it('adds the terminal line where each Lead skill keeps work moving, right after the silent-worker rule', () => {
+    const orchestration = readFileSync(prepareSwarmSkill(fixture(), { role: 'lead', key: 'session' }).file, 'utf8')
+    expect(orchestration).toContain(`naming the machine owner who can answer.\n${twoHours}${terminal}- Keep each worker supplied`)
+    const plain = readFileSync(prepareSwarmSkill(fixture(), { role: 'lead', key: 'session', mode: 'default' }).file, 'utf8')
+    expect(plain).toContain(`- A worker with active work that has said nothing for 20 minutes: ask it.\n${terminal}- A Builder or Reviewer`)
+  })
+  it('adds the overlap line last in each Lead skill\'s "Route, start, assign"', () => {
+    const orchestration = readFileSync(prepareSwarmSkill(fixture(), { role: 'lead', key: 'session' }).file, 'utf8')
+    expect(orchestration).toContain(`Never pass your chat history; put everything needed in the brief.\n${overlap}\n## 7. Run the work`)
+    const plain = readFileSync(prepareSwarmSkill(fixture(), { role: 'lead', key: 'session', mode: 'default' }).file, 'utf8')
+    expect(plain).toContain(`- The brief is all a Builder gets; never rely on chat history.\n${overlap}\n## 4. Keep work moving`)
+  })
+  it('adds the mention line right after each Lead skill\'s needs-a-person rule', () => {
+    const orchestration = readFileSync(prepareSwarmSkill(fixture(), { role: 'lead', key: 'session' }).file, 'utf8')
+    expect(orchestration).toContain(`- Needs-human: get the person's decision now.\n${mention}- Blocked: change something.`)
+    const plain = readFileSync(prepareSwarmSkill(fixture(), { role: 'lead', key: 'session', mode: 'default' }).file, 'utf8')
+    expect(plain).toContain(`- Needs a person: get the decision now. Blocked: change something (context, model, size or plan); never resend the same thing.\n${mention}- Settle ambiguities`)
+  })
+  // The owner's approved Default texts (attached to the spec, 2026-10-23), byte for byte.
+  it.each([
+    ['lead', 'a7b8aed240f38edda8a461d87ce83499696588b2da41ed261821985caa63e415'],
+    ['dev', '9294ae0dfe48a5c9185638ecb8f7cb2c2903253e5e823eb69592f3eb85455f12'],
+    ['review', '56c1a9bfbe7cf2ff9ded4c83cebe9e801f8846250ec80849aa6afe41685db7d9'],
+  ] as const)('writes the owner\'s Default %s skill byte for byte, with a prompt line that fits it', (role, sha256) => {
+    expect(parseSwarmSkill({ role, key: 'session', mode: 'default' })).toEqual({ role, key: 'session', mode: 'default' })
+    const prepared = prepareSwarmSkill(fixture(), { role, key: 'session', mode: 'default' })
+    const text = readFileSync(prepared.file, 'utf8')
+    expect(text.split(terminal)).toHaveLength(role === 'lead' ? 2 : 1)
+    expect(text.split(overlap)).toHaveLength(role === 'lead' ? 2 : 1)
+    expect(text.split(localDefault)).toHaveLength(role === 'lead' ? 2 : 1)
+    expect(text.split(mention)).toHaveLength(role === 'lead' ? 2 : 1)
+    expect(sha(text.replace(terminal, '').replace(overlap, '').replace(localDefault, '').replace(mention, ''))).toBe(sha256)
+    expect(prepared.instructions).toBe(`Use the swarm-${role} skill for this session: the team process; otherwise work your usual way. Before working, read ${JSON.stringify(prepared.file)} with your file or shell tool.`)
+  })
+
+  // Custom roles and skills per project (spec 2026-10-23, call 14): a custom role's text is installed as the skill of its
+  // kind, under that kind's name, with the one front matter block Harness writes. Owners' texts may bring their own block.
+  describe('a project on its Custom skills', () => {
+    const skill = { role: 'lead' as const, key: 'custom' }
+    const head = (name: string) => `---\nname: swarm-lead\ndescription: ${JSON.stringify(`The ${name} role of this project's Custom skills.`)}\n---\n`
+    const shipped = () => readFileSync(prepareSwarmSkill(fixture(), { ...skill, mode: 'default' }).file, 'utf8')
+    it.each([
+      ['the shipped Default text', () => shipped(), () => shipped().replace(/^---\n[\s\S]*?\n---\n/, '')],
+      ['a text with its own front matter', () => '---\nname: my-pm\ntitle: Ours\n---\n# Our way\nShip small.\n', () => '# Our way\nShip small.\n'],
+      ['a text without front matter', () => '# Our way\n---\nShip small.\n', () => '# Our way\n---\nShip small.\n'],
+    ])('installs %s under the kind\'s skill name with one front matter block', (_case, text, body) => {
+      const workspace = fixture(), { file } = prepareSwarmSkill(workspace, { ...skill, mode: 'default' })
+      expect(refreshSwarmSkill(workspace, skill, 'default', { name: 'Planner', text: text() })).toMatchObject({ file, owed: true })
+      expect(file.endsWith(join('swarm', 'skills', 'swarm-lead', 'SKILL.md'))).toBe(true)
+      expect(readFileSync(file, 'utf8')).toBe(head('Planner') + body())
+    })
+    it('tells the agent its role\'s text once, then each time the owner changes it, overwriting its own edits', () => {
+      const workspace = fixture(), { file } = prepareSwarmSkill(workspace, { ...skill, mode: 'default' })
+      const reread = `Before your next step, read ${JSON.stringify(file)} again with your file or shell tool and follow`
+      const first = refreshSwarmSkill(workspace, skill, 'default', { name: 'Planner', text: 'Plan.\n' })!
+      expect(first).toMatchObject({ owed: true, change: 1,
+        notice: `This project now uses its Custom skills, as Planner. ${reread} it in place of your earlier swarm-lead skill.` })
+      recordSwarmSkillNotice(workspace, skill, first)
+      expect(refreshSwarmSkill(workspace, skill, 'default', { name: 'Planner', text: 'Plan.\n' })).toMatchObject({ owed: false, change: 1 })
+      writeFileSync(file, 'edited')
+      const edit = refreshSwarmSkill(workspace, skill, 'default', { name: 'Planner', text: 'Plan, then ship.\n' })!
+      expect(edit).toMatchObject({ owed: true, change: 2,
+        notice: `The project owner updated your Planner role. ${reread} the new version.` })
+      expect(readFileSync(file, 'utf8')).toBe(head('Planner') + 'Plan, then ship.\n')
+      recordSwarmSkillNotice(workspace, skill, edit)
+      // Back to a built-in set: told as a switch, not as an update.
+      expect(refreshSwarmSkill(workspace, skill, 'default')).toMatchObject({ owed: true, change: 3,
+        notice: `This project now uses the Default skills. ${reread} it in place of your earlier swarm-lead skill.` })
+      expect(readFileSync(file, 'utf8')).toBe(shipped())
+    })
+  })
+
+  describe('a running session after a CLI update', () => {
+    const skill = { role: 'dev' as const, key: 'running' }
+    // What an older CLI left: its own text, and either no record (before records) or a record of that text.
+    const older = (workspace: string, recorded: boolean) => {
+      const { file } = prepareSwarmSkill(workspace, skill)
+      const text = '---\nname: swarm-dev\n---\nAn older release of this skill.\n', version = createHash('sha256').update(text).digest('hex')
+      writeFileSync(file, text)
+      if (recorded) writeFileSync(join(dirname(file), 'version.json'), JSON.stringify({ text: version, notified: version }))
+      else rmSync(join(dirname(file), 'version.json'))
+      return file
+    }
+    it.each([false, true])('rewrites an older skill file and owes one notice until it is recorded (recorded before: %s)', recorded => {
+      const workspace = fixture(), file = older(workspace, recorded)
+      const sync = refreshSwarmSkill(workspace, skill, 'orchestration')!
+      expect(sync).toMatchObject({ file, owed: true })
+      expect(readFileSync(file, 'utf8')).toBe(readFileSync(prepareSwarmSkill(fixture(), skill).file, 'utf8'))
+      // Not yet recorded: a later pass, or another daemon, still owes the same notice for the same text.
+      expect(refreshSwarmSkill(workspace, skill, 'orchestration')).toEqual(sync)
+      recordSwarmSkillNotice(workspace, skill, sync)
+      expect(refreshSwarmSkill(workspace, skill, 'orchestration')).toMatchObject({ file, owed: false })
+      // The agent's own edits after the update are its own: the record says the file already holds this text.
+      writeFileSync(file, 'edited')
+      expect(refreshSwarmSkill(workspace, skill, 'orchestration')).toMatchObject({ owed: false })
+      expect(readFileSync(file, 'utf8')).toBe('edited')
+    })
+    it('owes nothing for a file already on the built-in text, new or from before records', () => {
+      const fresh = fixture()
+      prepareSwarmSkill(fresh, skill)
+      expect(refreshSwarmSkill(fresh, skill, 'orchestration')).toMatchObject({ owed: false })
+      const legacy = fixture(), { file } = prepareSwarmSkill(legacy, skill)
+      rmSync(join(dirname(file), 'version.json'))
+      expect(refreshSwarmSkill(legacy, skill, 'orchestration')).toMatchObject({ owed: false })
+    })
+    it('tells the agent what changed: a new release of its skill, in the words of its mode', () => {
+      const workspace = fixture(), file = older(workspace, true)
+      expect(refreshSwarmSkill(workspace, skill, 'orchestration')).toMatchObject({ owed: true, change: 1,
+        notice: `Harness updated your built-in swarm-dev skill. Before your next step, read ${JSON.stringify(file)} again with your file or shell tool and follow the new version.` })
+      const other = fixture(), { file: mine } = prepareSwarmSkill(other, { ...skill, mode: 'default' })
+      writeFileSync(mine, 'An older release of the Default skill.')
+      writeFileSync(join(dirname(mine), 'version.json'), JSON.stringify({ text: 'older', notified: 'older', mode: 'default', told: 'default' }))
+      expect(refreshSwarmSkill(other, skill, 'default')).toMatchObject({ owed: true,
+        notice: `Harness updated your swarm-dev skill. Before your next step, read ${JSON.stringify(mine)} again with your file or shell tool and follow the new version.` })
+    })
+    it('moves a running session to the project\'s new mode, and owes a new notice each time, also when it switches back', () => {
+      const workspace = fixture(), { file } = prepareSwarmSkill(workspace, { ...skill, mode: 'default' })
+      const defaultText = readFileSync(file, 'utf8')
+      expect(refreshSwarmSkill(workspace, skill, 'default')).toMatchObject({ owed: false })
+      const toOrchestration = refreshSwarmSkill(workspace, skill, 'orchestration')!
+      expect(toOrchestration).toMatchObject({ file, owed: true, change: 1,
+        notice: `This project now uses the Harness orchestration skills. Before your next step, read ${JSON.stringify(file)} again with your file or shell tool and follow it in place of your earlier swarm-dev skill.` })
+      expect(readFileSync(file, 'utf8')).toBe(readFileSync(prepareSwarmSkill(fixture(), skill).file, 'utf8'))
+      recordSwarmSkillNotice(workspace, skill, toOrchestration)
+      expect(refreshSwarmSkill(workspace, skill, 'orchestration')).toMatchObject({ owed: false, change: 1 })
+      const back = refreshSwarmSkill(workspace, skill, 'default')!
+      expect(back).toMatchObject({ owed: true, change: 2,
+        notice: `This project now uses the Default skills. Before your next step, read ${JSON.stringify(file)} again with your file or shell tool and follow it in place of your earlier swarm-dev skill.` })
+      expect(readFileSync(file, 'utf8')).toBe(defaultText)
+      // The same text as at launch, but a new change: its notice is not the launch's (there was none) nor a retry of another.
+      recordSwarmSkillNotice(workspace, skill, back)
+      expect(refreshSwarmSkill(workspace, skill, 'default')).toMatchObject({ owed: false, change: 2 })
+      // A relaunch keeps the file and says what it holds, whatever mode the session was first started in.
+      refreshSwarmSkill(workspace, skill, 'orchestration')
+      expect(prepareSwarmSkill(workspace, { ...skill, mode: 'default' }).instructions)
+        .toBe(`Use the built-in swarm-dev skill for this session. Before working, read ${JSON.stringify(file)} with your file or shell tool.`)
+    })
+    it('puts back the mode\'s text when a switch was cut off after its file and before its record', () => {
+      const workspace = fixture(), { file } = prepareSwarmSkill(workspace, { ...skill, mode: 'default' })
+      const defaultText = readFileSync(file, 'utf8'), record = join(dirname(file), 'version.json'), before = readFileSync(record, 'utf8')
+      refreshSwarmSkill(workspace, skill, 'orchestration')
+      // The pass stopped after replacing SKILL.md: the record still says Default, the file holds orchestration.
+      writeFileSync(record, before)
+      expect(readFileSync(file, 'utf8')).not.toBe(defaultText)
+      // The project switched back before the retry: the file is Default again, and the agent, never told, owes nothing.
+      expect(refreshSwarmSkill(workspace, skill, 'default')).toMatchObject({ owed: false })
+      expect(readFileSync(file, 'utf8')).toBe(defaultText)
+      // The same retry without a switch back finishes the switch and owes its notice.
+      refreshSwarmSkill(workspace, skill, 'orchestration'); writeFileSync(record, before)
+      expect(refreshSwarmSkill(workspace, skill, 'orchestration')).toMatchObject({ owed: true,
+        notice: expect.stringMatching(/^This project now uses the Harness orchestration skills\./) })
+    })
+    it('tells the agent again when it switches back after a notice that was sent but never recorded', () => {
+      const workspace = fixture(), { file } = prepareSwarmSkill(workspace, { ...skill, mode: 'default' })
+      // Sent, then the daemon stopped before recordSwarmSkillNotice: the agent may be following the orchestration text.
+      expect(refreshSwarmSkill(workspace, skill, 'orchestration')).toMatchObject({ owed: true, change: 1 })
+      const back = refreshSwarmSkill(workspace, skill, 'default')!
+      expect(back).toMatchObject({ owed: true, change: 2,
+        notice: `This project now uses the Default skills. Before your next step, read ${JSON.stringify(file)} again with your file or shell tool and follow it in place of your earlier swarm-dev skill.` })
+      // Recording an earlier rewrite's notice does not cover this one.
+      recordSwarmSkillNotice(workspace, skill, { version: 'any', change: 1 })
+      expect(refreshSwarmSkill(workspace, skill, 'default')).toMatchObject({ owed: true, change: 2 })
+      recordSwarmSkillNotice(workspace, skill, back)
+      expect(refreshSwarmSkill(workspace, skill, 'default')).toMatchObject({ owed: false, change: 2 })
+    })
+    it('tells an agent with a record from before modes again when it switches back after an unrecorded notice', () => {
+      const workspace = fixture(), { file } = prepareSwarmSkill(workspace, skill), text = readFileSync(file, 'utf8')
+      // What #1585 left: the orchestration text, told, with no rewrite count.
+      writeFileSync(join(dirname(file), 'version.json'), JSON.stringify({ text: sha(text), notified: sha(text) }))
+      // Switched to Default and its notice sent, then the daemon stopped before recording it.
+      expect(refreshSwarmSkill(workspace, skill, 'default')).toMatchObject({ owed: true })
+      expect(refreshSwarmSkill(workspace, skill, 'orchestration')).toMatchObject({ owed: true,
+        notice: expect.stringMatching(/^This project now uses the Harness orchestration skills\./) })
+      expect(readFileSync(file, 'utf8')).toBe(text)
+    })
+    it('does nothing for a session whose skill was never prepared in this workspace', () => {
+      expect(refreshSwarmSkill(fixture(), skill, 'orchestration')).toBeNull()
+      expect(refreshSwarmSkill(join(fixture(), 'removed-worktree'), skill, 'orchestration')).toBeNull()
+    })
+    it('never writes through a redirected skill file', () => {
+      const workspace = fixture(), file = older(workspace, false), target = join(fixture(), 'elsewhere.md')
+      writeFileSync(target, 'kept')
+      rmSync(file); symlinkSync(target, file)
+      expect(() => refreshSwarmSkill(workspace, skill, 'orchestration')).toThrow('plain file')
+      expect(readFileSync(target, 'utf8')).toBe('kept')
+    })
   })
 
   it('keeps standalone session skills out of Git, including git add -A', () => {
@@ -90,8 +314,14 @@ describe('built-in Swarm skills', () => {
   })
 
   it('validates persisted role metadata and refuses an empty key', () => {
-    for (const value of [null, undefined, {}, { role: 'reviewer', key: 'x' }, { role: 'dev', key: '' }, { role: 'lead', key: 7 }]) expect(parseSwarmSkill(value)).toBeUndefined()
+    for (const value of [null, undefined, {}, { role: 'builder', key: 'x' }, { role: 'dev', key: '' }, { role: 'lead', key: 7 }]) expect(parseSwarmSkill(value)).toBeUndefined()
     expect(parseSwarmSkill({ role: 'dev', key: 'x' })).toEqual({ role: 'dev', key: 'x' })
+    // An unknown mode is dropped, not refused: the session keeps its role and launches as before modes.
+    expect(parseSwarmSkill({ role: 'dev', key: 'x', mode: 'light' })).toEqual({ role: 'dev', key: 'x' })
+    expect(parseSwarmSkill({ role: 'dev', key: 'x', mode: 'orchestration' })).toEqual({ role: 'dev', key: 'x', mode: 'orchestration' })
+    // The Harness GitHub App's flag is kept for relaunches, and only as true.
+    expect(parseSwarmSkill({ role: 'dev', key: 'x', github: true })).toEqual({ role: 'dev', key: 'x', github: true })
+    expect(parseSwarmSkill({ role: 'dev', key: 'x', github: 'yes' })).toEqual({ role: 'dev', key: 'x' })
     expect(() => prepareSwarmSkill(fixture(), { role: 'lead', key: '' })).toThrow()
   })
 

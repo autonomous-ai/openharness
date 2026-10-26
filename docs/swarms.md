@@ -24,7 +24,15 @@ through the project lead.
 The center toolbar switches between chat, terminals and pull requests. The
 project's vertical menu contains rename, details, sharing, update cadence and
 Swarm routing. A workgroup keeps its own details, rename and archive actions.
-Pull requests in a project lead view include that project's workgroups.
+Pull requests in a project lead view include that project's workgroups. Linked
+GitHub pull requests are read by your computer with its own `gh` login, even after
+an agent stops or changes branches. The pane groups PRs under Needs you, Open,
+Merged, Closed and Status unknown. It refreshes open PRs every minute while
+visible, keeps the last answer when GitHub is unavailable, and shows a single
+banner if `gh` needs installing or signing in. Merged shows the five newest PRs
+with an option to show more; Closed starts collapsed. Clicking a row opens GitHub.
+An older CLI keeps the previous branch-based status display; update the CLI before
+Desktop to enable direct lookups.
 
 ## People, agents and machines
 
@@ -88,23 +96,37 @@ machine is therefore picked up within about 5 seconds. When nothing changes it s
 a report every 15 seconds, so that a silent machine can be told from a quiet one; a pass
 that fails waits a whole 15 seconds before the next.
 
-Each machine in the sidebar has a status dot before its name, and the age of its reading
-at the end of its metrics line ("4s ago"):
+Each machine in the sidebar is one line, at a project row's height and on its columns: a
+status dot where the project chevrons sit, the name where project names start (a computer's
+real hostname without `.local`, such as `MacBookPro2021`, or the name a person gave it), then three
+columns every row shares, so their figures line up down the list: Claude's allowance, Codex's,
+and the agents, whose avatars stand 16 points clear of the figures. An allowance is the engine's mark and the share left of its tightest window,
+each figure right after its mark, so the figures start at one x down the list; only a known, unexpired allowance shows, and a machine
+without one, or an offline or unreachable machine, leaves its slot blank. The share is amber
+below 20% and red below 10%, and hovering it shows its windows ("5-hour: 48% remaining ·
+resets in 1h 59m"). The agents column shows up to three overlapping avatars, then +N, and
+ends half an avatar past the heading's +. The list decides its columns once, never row by row:
+when the names would have less than about 48 points, the agents become a count, then the
+Codex column goes, then Claude's. Online machines come first, by name; offline ones follow
+under "Offline · N", closed until opened, which the Desktop remembers like the groups
+themselves. Clicking a machine opens its details.
 
-| State | When | Dot | Age |
+| State | When | Dot | Hover begins |
 | --- | --- | --- | --- |
-| Live | reading under 20 s old | green, with one short ping as each new reading arrives | `4s ago` |
-| Late | 20 s to 35 s | amber | `28s ago`, in amber |
-| Offline | 35 s or more (one named constant) | hollow grey ring; the name is muted | `3 min ago` |
-| Unknown | the Desktop cannot read the Swarm (contributing machines only) | dashed grey ring; the name is muted; not offline | `1 min ago` |
-| Refreshing | back from the background, no new reading yet | grey, breathing | `refreshing…` |
+| Live | reading under 20 s old | green, with one short ping as each new reading arrives | the owner |
+| Late | 20 s to 35 s | amber | the owner |
+| Offline | 35 s or more (one named constant) | hollow grey ring; the name is muted | `Offline` |
+| Unknown | the Desktop cannot read the Swarm (contributing machines only) | dashed grey ring; the name is muted; not offline | `Can't reach Harness` |
+| Refreshing | back from the background, no new reading yet | grey, breathing | `Refreshing…` |
 
-Hovering or focusing a row says it in words ("Updated 4s ago", "Offline · last seen 3 min
-ago", "Can't reach Harness · data from 1 min ago", "Refreshing…"), and the row's screen-reader
-label is the machine's name, its state and that text, so colour is never the only signal.
-Old numbers are always kept, dimmed, for offline, unknown and refreshing machines, never
-blanked. The Machines heading carries a pill, "Live" or "Reconnecting · 1m" while the Swarm
-cannot be read. The pings and the breathing stop when the platform asks for reduced motion.
+Hovering or focusing a row says the rest in words: its state when it is not online, whose
+machine it is, and its hardware ("Owned by diego · CPU 37% free · GPU 4% free · RAM 18 GB
+free · SSD 208 GB free"), never how old the reading is. The row's screen-reader label is
+the machine's name, its state and that text, then each allowance in words, so colour is
+never the only signal. Old numbers are always kept there for offline, unknown and
+refreshing machines, never blanked. While the Swarm cannot be read, the Machines heading
+carries a pill, "Reconnecting · 1m"; a live Swarm shows none. The pings and the breathing
+stop when the platform asks for reduced motion.
 A machine reports every 15 s, so 35 s is two missed reports plus a margin.
 
 This computer is read directly by the Desktop, every 15 seconds, so it stays live while the
@@ -174,3 +196,8 @@ Use the matching backend, CLI and Desktop versions together for this feature:
 A signed internal Desktop artifact alone does not update the backend or host
 CLI. Validate the coordinated versions in an internal environment before a
 public Desktop release.
+
+When the server has the Harness GitHub App, an agent working on another person's
+project pushes and opens pull requests with a one-hour token for that project's
+repository, instead of its computer's own GitHub login. See
+[Swarm GitHub App](swarm-github-app.md) for setup.

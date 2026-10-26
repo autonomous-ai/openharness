@@ -7,6 +7,7 @@ import { isTerminalEngine } from '../engines/types.js'
 import { atomicWriteJson, projectDisplayName, strictPersistedRow, type RegisteredSession } from './registry.js'
 import { readPrivateStateFile, secureStateDirectory, syncStateDirectory } from './secureState.js'
 import { sameProcessIdentity } from './terminalRuntime.js'
+import { conversationKey } from './conversationIdentity.js'
 
 const SAFE_ID = /^[a-zA-Z0-9_-]{1,128}$/
 const CATALOG_CACHE_RECORDS = 2048
@@ -256,10 +257,11 @@ export class StoppedAgentStore {
   /** Suppress archives whose identity or conversation is already running. */
   available(live: readonly RegisteredSession[]): RegisteredSession[] {
     const ids = new Set(live.map(session => session.agentId))
-    const conversations = new Set(live.filter(session => session.sessionId).map(session =>
-      `${session.engine}\0${session.codexHome ?? ''}\0${session.sessionId}`))
-    return this.list().filter(session => !ids.has(session.agentId)
-      && (!session.sessionId || !conversations.has(`${session.engine}\0${session.codexHome ?? ''}\0${session.sessionId}`)))
+    const conversations = new Set(live.map(conversationKey))
+    return this.list().filter(session => {
+      const key = conversationKey(session)
+      return !ids.has(session.agentId) && (key === null || !conversations.has(key))
+    })
   }
 }
 

@@ -12,13 +12,14 @@ import '../terminal/terminal_theme_store.dart';
 import '../widgets/desktop_chrome.dart';
 import '../widgets/engine_identity.dart';
 import '../widgets/harness_activity_mark.dart';
+import 'agent_details.dart';
 import 'controller.dart';
 import 'dialog_scope.dart';
 import 'identity.dart';
 import 'model.dart';
 import 'section_heading.dart';
 
-/// Tab-wide people and capacity, with agents from the selected project.
+/// The current Swarm's authorized people, with agents from the selected project.
 class SuperTabRoster extends StatefulWidget {
   const SuperTabRoster({
     super.key,
@@ -38,6 +39,8 @@ class SuperTabRoster extends StatefulWidget {
 }
 
 class _SuperTabRosterState extends State<SuperTabRoster> {
+  static const _peopleShown = 5;
+  bool _allPeople = false;
   SuperTabController get c => widget.controller;
 
   String? _agentProjectId(SuperTabAgent agent) => agent.hasProjectId
@@ -50,21 +53,20 @@ class _SuperTabRosterState extends State<SuperTabRoster> {
             .firstOrNull
             ?.projectId;
 
-  String _role(SuperTabAgent agent) =>
-      c.snapshot!.isLead(agent.id) ? 'Product Manager' : 'Engineer';
-
   bool _canRemove(SuperTabAgent agent) =>
       c.canWrite && (c.isOwner || agent.contributorId == c.accountId);
+
+  String? _removeReason(SuperTabAgent agent) =>
+      c.snapshot?.leadProtectionReason(agent.id);
 
   Future<void> _remove(SuperTabAgent agent) async {
     var busy = false, attempted = false;
     final name = c.snapshot!.agentName(agent.id);
+    // The Mac, for an agent in that Mac's Harness Team account.
+    final place = c.snapshot?.placeOf(agent.machineId) ?? agent.machineId;
     final machine =
-        widget.app?.stateOf(agent.machineId)?.machine.displayName ??
-        c.snapshot?.machines
-                .where((m) => m['machineId'] == agent.machineId)
-                .firstOrNull?['name']
-            as String? ??
+        widget.app?.stateOf(place)?.machine.displayName ??
+        c.snapshot?.pool(place)?['name'] as String? ??
         'its computer';
     await showAppDialog<void>(
       context: context,
@@ -81,8 +83,10 @@ class _SuperTabRosterState extends State<SuperTabRoster> {
                   pending?['agentId'] == agent.id;
               final available = current != null || checking || busy;
               final permitted = _canRemove(current ?? agent);
+              final reason = _removeReason(current ?? agent);
               final enabled =
                   permitted &&
+                  reason == null &&
                   !busy &&
                   !c.saving &&
                   (checking || !c.hasPendingAction);
@@ -102,9 +106,10 @@ class _SuperTabRosterState extends State<SuperTabRoster> {
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           Text(
-                            available && permitted
-                                ? 'Any open task needs to be assigned again or closed. Its session on $machine is left to its owner.'
-                                : 'This action is no longer available.',
+                            reason ??
+                                (available && permitted
+                                    ? 'Any open task needs to be assigned again or closed. Its session on $machine will stop.'
+                                    : 'This action is no longer available.'),
                           ),
                           if (attempted && c.operationError != null) ...[
                             const SizedBox(height: 12),
@@ -185,202 +190,225 @@ class _SuperTabRosterState extends State<SuperTabRoster> {
     return native ?? HarnessActivity.unknown;
   }
 
-  Future<void> _details(SuperTabAgent agent) => showAppDialog<void>(
-    context: context,
-    builder: (context) => AlertDialog(
-      title: Text(c.snapshot!.agentName(agent.id)),
-      content: SizedBox(
-        width: 320,
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(_role(agent)),
-            Text(engineIdentity(agent.engine).label),
-            if (agent.name != c.snapshot!.agentName(agent.id))
-              Padding(
-                padding: const EdgeInsets.only(top: 8),
-                child: Text('Harness: ${agent.name}'),
-              ),
-            for (final field in [
-              ('Model', 'model'),
-              ('Effort', 'effort'),
-              ('Context', 'contextWindow'),
-              ('Version', 'engineVersion'),
-            ])
-              if (agent.configuration[field.$2] case final value?)
-                Padding(
-                  padding: const EdgeInsets.only(top: 8),
-                  child: Text('${field.$1}: $value'),
-                ),
-            Padding(
-              padding: const EdgeInsets.only(top: 8),
-              child: Text(
-                widget.app?.stateOf(agent.machineId)?.machine.displayName ??
-                    'Machine unavailable',
-              ),
-            ),
-          ],
-        ),
-      ),
-      actions: [
-        TextButton(
-          onPressed: () => Navigator.pop(context),
-          child: const Text('Close'),
-        ),
-        FilledButton(
-          onPressed: () {
-            Navigator.pop(context);
-            widget.onOpenAgent(agent);
-          },
-          child: const Text('Open terminal'),
-        ),
-      ],
-    ),
+  Future<void> _details(SuperTabAgent agent) => showSuperTabAgentDetails(
+    context,
+    c,
+    widget.app,
+    agent,
+    widget.onOpenAgent,
   );
+
+  Widget _agentIdentity(String name, String role, String badge) =>
+      LayoutBuilder(
+        builder: (context, constraints) {
+          final nameStyle = DesktopChrome.control();
+          final tagStyle = DesktopChrome.metadata();
+          final scale = MediaQuery.textScalerOf(context);
+          double measure(String text, TextStyle style) {
+            final painter = TextPainter(
+              text: TextSpan(text: text, style: style),
+              textDirection: Directionality.of(context),
+              textScaler: scale,
+              maxLines: 1,
+            )..layout();
+            final width = painter.width;
+            painter.dispose();
+            return width;
+          }
+
+          final badgeWidth = (measure(badge, tagStyle) + 10).clamp(
+            0.0,
+            constraints.maxWidth,
+          );
+          final nameWidth = measure(name, nameStyle).clamp(
+            0.0,
+            (constraints.maxWidth - badgeWidth - 6).clamp(0.0, double.infinity),
+          );
+          Widget tag(String text) => Container(
+            padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+            decoration: BoxDecoration(
+              color: grid.AppSurface.hoverFill,
+              borderRadius: BorderRadius.circular(4),
+            ),
+            child: Text(
+              text,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: tagStyle,
+            ),
+          );
+          return Row(
+            children: [
+              if (nameWidth > 0) ...[
+                SizedBox(
+                  width: nameWidth,
+                  child: Text(
+                    name,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: nameStyle,
+                  ),
+                ),
+                const SizedBox(width: 6),
+              ],
+              Semantics(
+                label: role,
+                excludeSemantics: true,
+                child: SizedBox(width: badgeWidth, child: tag(badge)),
+              ),
+            ],
+          );
+        },
+      );
 
   Widget _agent(SuperTabAgent agent) {
     final name = c.snapshot!.agentName(agent.id), activity = _activity(agent);
+    final info = SuperTabAgentInfo(c, widget.app, agent, activity: activity);
     final project = c.snapshot!.projects
         .where((p) => p.id == _agentProjectId(agent))
         .firstOrNull;
+    final customRole = c.snapshot!.activeRoleForAgent(agent);
+    final role = customRole?.name ?? (c.snapshot!.isLead(agent.id)
+        ? 'Product Manager'
+        : agent.isReviewer
+        ? 'Reviewer'
+        : 'Engineer');
+    final badge = customRole?.name ?? (c.snapshot!.isLead(agent.id)
+        ? 'PM'
+        : agent.isReviewer
+        ? 'Rev'
+        : 'Dev');
+    final status = info.status ?? 'Status unavailable';
+    final tooltip = [
+      [name, role, ?project?.name].join(' · '),
+      if (info.tooltip.isNotEmpty) info.tooltip,
+      if (!info.tooltip.contains(status)) status,
+    ].join('\n');
     final theme = terminalThemeFor(
       grid.AppTheme.surfacePalette,
       terminalThemeStore.value,
     );
-    return GestureDetector(
-      onSecondaryTapUp: (event) async {
-        final choice = await showMenu<String>(
-          context: context,
-          position: RelativeRect.fromLTRB(
-            event.globalPosition.dx,
-            event.globalPosition.dy,
-            event.globalPosition.dx,
-            event.globalPosition.dy,
-          ),
-          items: [
-            const PopupMenuItem(value: 'details', child: Text('Details')),
-            if (_canRemove(c.snapshot?.agent(agent.id) ?? agent))
-              const PopupMenuItem(
-                value: 'remove',
-                child: Text('Remove from Swarm'),
-              ),
-          ],
-        );
-        if (choice == 'details' && mounted) await _details(agent);
-        if (choice == 'remove' && mounted) {
-          final current = c.snapshot?.agent(agent.id);
-          if (current != null && _canRemove(current)) await _remove(current);
-        }
-      },
-      child: ListTile(
-        key: ValueKey('super-member-${agent.id}'),
-        dense: true,
-        minTileHeight: 48,
-        minVerticalPadding: 6,
-        contentPadding: const EdgeInsets.symmetric(horizontal: 16),
-        title: Row(
-          children: [
-            Tooltip(
-              message: engineIdentity(agent.engine).label,
-              child: SuperTabAvatar(
+    return Tooltip(
+      message: tooltip,
+      constraints: const BoxConstraints(maxWidth: 820),
+      child: GestureDetector(
+        onSecondaryTapUp: (event) async {
+          final choice = await showMenu<String>(
+            context: context,
+            position: RelativeRect.fromLTRB(
+              event.globalPosition.dx,
+              event.globalPosition.dy,
+              event.globalPosition.dx,
+              event.globalPosition.dy,
+            ),
+            items: [
+              const PopupMenuItem(value: 'details', child: Text('Details')),
+              if (_canRemove(c.snapshot?.agent(agent.id) ?? agent))
+                PopupMenuItem(
+                  value: 'remove',
+                  enabled: _removeReason(agent) == null,
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text('Remove from Swarm'),
+                      if (_removeReason(agent) case final reason?) Text(reason),
+                    ],
+                  ),
+                ),
+            ],
+          );
+          if (choice == 'details' && mounted) await _details(agent);
+          if (choice == 'remove' && mounted) {
+            final current = c.snapshot?.agent(agent.id);
+            if (current != null &&
+                _canRemove(current) &&
+                _removeReason(current) == null) {
+              await _remove(current);
+            }
+          }
+        },
+        child: ListTile(
+          key: ValueKey('super-member-${agent.id}'),
+          dense: true,
+          minTileHeight: 48,
+          minVerticalPadding: 6,
+          contentPadding: const EdgeInsets.symmetric(horizontal: 16),
+          title: Row(
+            children: [
+              SuperTabAvatar(
                 identity: 'agent:${agent.id}',
                 name: name,
                 size: 24,
               ),
-            ),
-            const SizedBox(width: 8),
-            Expanded(
-              child: Row(
-                children: [
-                  Flexible(
-                    child: Tooltip(
-                      message: name,
-                      child: Text(
-                        name,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: DesktopChrome.control(),
-                      ),
-                    ),
+              const SizedBox(width: 8),
+              Expanded(child: _agentIdentity(name, role, badge)),
+              const SizedBox(width: 8),
+              EngineMark(engine: agent.engine, size: 14),
+            ],
+          ),
+          subtitle: Padding(
+            padding: const EdgeInsets.only(left: 32),
+            child: Row(
+              children: [
+                ActivityMark(
+                  activity: activity,
+                  tooltip: false,
+                  showIdle: true,
+                  color: activityColor(
+                    activity,
+                    theme,
+                    color: appearancePrefsStore.value.prompt.color,
                   ),
-                  const SizedBox(width: 6),
-                  Tooltip(
-                    message: _role(agent),
-                    child: Semantics(
-                      label: _role(agent),
-                      excludeSemantics: true,
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 5,
-                          vertical: 1,
-                        ),
-                        decoration: BoxDecoration(
-                          color: grid.AppSurface.hoverFill,
-                          borderRadius: BorderRadius.circular(4),
-                        ),
-                        child: Text(
-                          c.snapshot!.isLead(agent.id) ? 'PM' : 'Dev',
-                          style: DesktopChrome.metadata(),
-                        ),
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(width: 8),
-            ActivityMark(
-              activity: activity,
-              color: activityColor(
-                activity,
-                theme,
-                color: appearancePrefsStore.value.prompt.color,
-              ),
-            ),
-          ],
-        ),
-        subtitle: project == null
-            ? null
-            : Padding(
-                padding: const EdgeInsets.only(left: 32),
-                child: Tooltip(
-                  message: project.name,
+                ),
+                const SizedBox(width: 6),
+                Expanded(
                   child: Text(
-                    project.name,
+                    status,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: DesktopChrome.metadata(),
                   ),
                 ),
-              ),
-        onTap: () => widget.onOpenAgent(agent),
-        onLongPress: () => unawaited(_details(agent)),
+              ],
+            ),
+          ),
+          onTap: () => unawaited(_details(agent)),
+          onLongPress: () => unawaited(_details(agent)),
+        ),
       ),
     );
   }
 
   List<Widget> _members() {
     final state = c.snapshot;
-    final projectId = c.selected?.projectId;
+    // The backend already scopes this snapshot to projects the person can
+    // access. The roster follows the selected project; without one it keeps
+    // the full directory, as the Product Managers' conversation, which belongs
+    // to no project, does. Local machine inventory is not membership here.
+    final projectId = c.selected?.projectId == ''
+        ? null
+        : c.selected?.projectId;
     final members =
         state?.agents
             .where(
               (agent) =>
-                  projectId != null && _agentProjectId(agent) == projectId,
+                  projectId == null || _agentProjectId(agent) == projectId,
             )
             .toList() ??
         const <SuperTabAgent>[];
     final leads = members.where((a) => state!.isLead(a.id)).toList();
     final agents = members.where((a) => !state!.isLead(a.id)).toList();
+    final people = state?.people ?? const <SuperTabPerson>[];
+    final shownPeople = _allPeople ? people : people.take(_peopleShown);
     return [
       SuperTabSectionHeading(
         'Humans',
         onAdd: c.isOwner ? widget.onInvite : null,
         addTooltip: 'Invite people',
       ),
-      for (final person in state?.people ?? const <SuperTabPerson>[])
+      for (final person in shownPeople)
         ListTile(
+          key: ValueKey('super-person-${person.id}'),
           dense: true,
           minTileHeight: 36,
           minVerticalPadding: 6,
@@ -422,10 +450,27 @@ class _SuperTabRosterState extends State<SuperTabRoster> {
             ),
           ),
         ),
+      if (people.length > _peopleShown)
+        ListTile(
+          dense: true,
+          minTileHeight: 36,
+          contentPadding: const EdgeInsets.symmetric(horizontal: 16),
+          title: Text(
+            _allPeople
+                ? 'Show less'
+                : 'Show ${people.length - _peopleShown} more',
+            style: DesktopChrome.metadata(),
+          ),
+          onTap: () => setState(() => _allPeople = !_allPeople),
+        ),
       const SizedBox(height: 16),
       SuperTabSectionHeading(
         'Agents',
-        onAdd: c.canWrite && c.selected != null
+        // An agent joins the Product Managers' conversation by leading a project.
+        onAdd:
+            c.canWrite &&
+                c.selected != null &&
+                c.selected!.id != c.snapshot?.leadsConversationId
             ? () => widget.onAddAgent(c.selected!)
             : null,
         addTooltip: 'Add agent',

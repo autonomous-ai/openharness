@@ -1,11 +1,41 @@
 import { describe, expect, it } from 'vitest'
 import { createSuperTab, SuperTabError, type AgentStart, type AgentStartRequest, type SuperTabState } from './model.js'
-import { admitMachineStart, machineSlots, type ContributedMachine } from './machines.js'
+import { admitMachineStart, machineSlots, machineObservationSchema, servedLocalModels, type ContributedMachine } from './machines.js'
 
 const NOW = 1_000_000
 const requirements = { memoryBytes: 1, diskBytes: 1, maxCpuPercent: 50, tools: ['git'], devices: [], quotaRequired: false }
 const observation = { generation: 'o', receivedAt: NOW, resources: { cpuPercent: 1, memoryTotalBytes: 1, memoryUsedBytes: 1, diskFreeBytes: 1, diskTotalBytes: 1,
   projectDiskFreeBytes: 1, deviceType: null, chip: null, os: null, gpuPercent: null }, tools: {}, quotas: [], runningHarnessIds: [], stoppedHarnessIds: [] }
+
+it('accepts optional tool probe failures while preserving older observations', () => {
+  const { receivedAt: _receivedAt, ...sent } = observation
+  expect(machineObservationSchema.safeParse(sent).success).toBe(true)
+  expect(machineObservationSchema.safeParse({ ...sent, tools: { git: true }, toolProbeErrors: { flutter: 'interactive shell timed out' } }).success).toBe(true)
+})
+
+it('takes a model that is starting, and never counts it as served for a Builder', () => {
+  const { receivedAt: _receivedAt, ...sent } = observation
+  const model = { grid: 'swarm-0123456789ab', model: 'qwen3', kind: 'local' as const }
+  expect(machineObservationSchema.safeParse({ ...sent, localModels: [{ ...model, starting: true }] }).success).toBe(true)
+  const state: SuperTabState = createSuperTab('tab', 'Team', { id: 'owner', email: 'owner@example.com' }, 'test')
+  state.localModels = { grid: model.grid, enabled: true }
+  const pool = (starting: boolean) => [{ machineId: 'host', name: 'Mac', contributorId: 'owner', membershipGeneration: 'tab', generation: 'g1',
+    cwd: '/x', scope: 'swarm' as const, engines: ['claude'], maxAgents: 2, paused: false,
+    observation: { ...observation, localModels: [{ ...model, ...(starting ? { starting } : {}) }] } }]
+  state.machines = pool(true) as never
+  expect(servedLocalModels(state, NOW)).toEqual([])
+  state.machines = pool(false) as never
+  expect(servedLocalModels(state, NOW).map(l => l.model)).toEqual(['qwen3'])
+})
+
+it('accepts the served models Builders are not offered, with why', () => {
+  const { receivedAt: _receivedAt, ...sent } = observation
+  const refused = { grid: 'swarm-0123456789ab', model: 'llama3.2:3b', name: 'llama3.2:3b', why: 'llama3.2:3b is too small for a coding agent.' }
+  expect(machineObservationSchema.safeParse({ ...sent, refusedModels: [refused] }).success).toBe(true)
+  expect(machineObservationSchema.safeParse({ ...sent, refusedModels: [{ ...refused, why: '' }] }).success).toBe(false)
+  expect(machineObservationSchema.safeParse({ ...sent, refusedModels: [{ ...refused, extra: 1 }] }).success).toBe(false)
+  expect(machineObservationSchema.safeParse({ ...sent, refusedModels: Array(17).fill(refused) }).success).toBe(false)
+})
 
 function setup(machine: Partial<ContributedMachine> = {}) {
   const state: SuperTabState = createSuperTab('tab', 'Team', { id: 'owner', email: 'owner@example.com' }, 'test')
@@ -56,6 +86,7 @@ describe('a start on a contributed machine', () => {
 
   it('names the project\'s own checkout when the lead\'s machine is the one contributed', () => {
     const f = setup()
+    delete f.state.projects
     f.state.project = { machineId: 'host', cwd: '/Users/lead/work/repo', repositoryUrl: null }
     expect(refusal(f.state, f.request({ cwd: '/data/swarm-projects/tab/lead' }))!.message).toContain('this project uses /Users/lead/work/repo on it')
     expect(refusal(f.state, f.request({ cwd: '/Users/lead/work/repo' }))).toBeNull()
@@ -70,6 +101,16 @@ describe('a start on a contributed machine', () => {
     expect(error.message).not.toContain('opencode')
     f.state.machines![0]!.engines = []
     expect(refusal(f.state, f.request())!.message).toContain('it contributes no engines')
+  })
+
+  it('uses only installed Claude or Codex from an older contribution with unsupported engines', () => {
+    const f = setup()
+    const pool = f.state.machines![0]!
+    pool.engines = ['opencode', 'kilo']
+    pool.observation = { ...observation, quotas: [{ engine: 'claude', known: false, windows: [] }] }
+    expect(refusal(f.state, f.request({ engine: 'claude' }))).toBeNull()
+    expect(refusal(f.state, f.request({ engine: 'codex' }))).toMatchObject({ code: 'OUTSIDE_CONTRIBUTION' })
+    expect(refusal(f.state, f.request({ engine: 'opencode' }))).toMatchObject({ code: 'OUTSIDE_CONTRIBUTION' })
   })
 
   it.each(['codexHome', 'gridModel', 'gridName'] as const)('names %s as the refused account setting, and not its value', field => {

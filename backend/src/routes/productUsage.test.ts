@@ -319,3 +319,18 @@ it('feedback reduces a voluntary fixed choice to one unlinked, retry-safe count'
   expect((await app.inject(request)).statusCode).toBe(409)
   expect(methods.ingestProductUsage).not.toHaveBeenCalled()
 })
+
+it('accepts every returning-offer skip and pairing-source counter', async () => {
+  const metrics = [
+    ...['started', 'ok', 'cancelled', 'unknown'].map(x => `ui_desktop_phone_offer_returning_${x}`),
+    ...['has_phone', 'no_device_list', 'already_shown', 'stopped', 'cap_reached', 'not_signed_in',
+      'viewer', 'card_showing', 'no_storage', 'account_changed', 'read_limit'].map(x => `ui_desktop_phone_offer_skipped_${x}`),
+    ...['offer', 'titlebar', 'menu', 'account', 'machines', 'command'].map(x => `ui_desktop_add_phone_paired_${x}`),
+  ]
+  for (const metric of metrics) {
+    const report = { ...good, context: { surface: 'desktop', release: '1.3.0', platform: 'macos', channel: 'production' },
+      counters: { [metric]: 1 } }
+    expect((await submit(report)).statusCode, metric).toBe(200)
+    expect(methods.ingestProductUsage).toHaveBeenLastCalledWith('account', report)
+  }
+})

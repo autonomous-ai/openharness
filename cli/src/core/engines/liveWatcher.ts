@@ -5,19 +5,41 @@ import { createLiveSessions, type LiveSessionDeps } from './liveSessions.js'
 /** The core watches file names and asks workers to read. Only legacy engines use the local tailer. */
 export function createLiveWatcher(local: Watcher, deps: Omit<LiveSessionDeps, 'watch' | 'unwatch'>) {
   const paths = new Set<string>()
+  const followUps = new Map<string, ReturnType<typeof setTimeout>>()
   let signals: FSWatcher | null = null
+  const change = (path: string): void => {
+    live.changed(path)
+    // Chokidar suppresses a second change to the same file within 50 ms. A Codex turn can finish
+    // and its transcript be shortened before that window closes, after the first read already ran.
+    // Read once more after the window so that rewrite cannot remain invisible until reconciliation.
+    clearTimeout(followUps.get(path))
+    followUps.set(path, setTimeout(() => {
+      followUps.delete(path)
+      live.changed(path)
+    }, 60))
+  }
   const live = createLiveSessions({ ...deps,
     watch(path) { paths.add(path); signals?.add(path) },
-    unwatch(path) { paths.delete(path); void signals?.unwatch(path) },
+    unwatch(path) {
+      paths.delete(path)
+      clearTimeout(followUps.get(path))
+      followUps.delete(path)
+      void signals?.unwatch(path)
+    },
   })
   const watcher: Pick<Watcher, 'on' | 'start' | 'stop' | 'addSession' | 'removeSession' | 'hold' | 'tails' | 'setTail' | 'pollSession' | 'pollAll'> = {
     on: local.on.bind(local),
     start() {
       local.start()
       signals ??= chokidar.watch([...paths], { ignoreInitial: true })
-        .on('add', path => live.changed(path)).on('change', path => live.changed(path)).on('unlink', path => live.changed(path))
+        .on('add', path => live.changed(path)).on('change', change).on('unlink', path => live.changed(path))
     },
-    async stop() { await Promise.all([local.stop(), live.stop(), signals?.close()]); signals = null },
+    async stop() {
+      for (const timer of followUps.values()) clearTimeout(timer)
+      followUps.clear()
+      await Promise.all([local.stop(), live.stop(), signals?.close()])
+      signals = null
+    },
     async addSession(session, options) {
       if (!deps.handles(session.engine)) return local.addSession(session, options)
       await local.removeSession(session.sessionId)

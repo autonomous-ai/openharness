@@ -47,8 +47,15 @@ describe('the spawn channel protocol', () => {
 
   it.each([
     [{ type: 'harnessd:staged', version: '1.2.3' }, true],
+    [{ type: 'harnessd:staged', ptyVersion: '0.11.0' }, true],
+    [{ type: 'harnessd:staged', version: '1.2.3', ptyVersion: '0.11.0' }, true],
+    [{ type: 'harnessd:staged', version: '', ptyVersion: '0.11.0' }, true],
+    [{ type: 'harnessd:staged' }, false],
+    [{ type: 'harnessd:staged', version: '', ptyVersion: '' }, false],
     [{ type: 'harnessd:staged', version: '' }, false],
     [{ type: 'harnessd:staged', version: 3 }, false],
+    [{ type: 'harnessd:staged', ptyVersion: 3 }, false],
+    [{ type: 'harnessd:staged', version: 3, ptyVersion: '0.11.0' }, false],
     [{ type: 'harnessd:heartbeat', rssBytes: 1, heapUsedBytes: 1 }, false],
     [null, false],
     ['harnessd:staged', false],

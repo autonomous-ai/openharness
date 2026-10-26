@@ -48,16 +48,15 @@ export async function renameReplacing(from: string, to: string, deps: RenameDeps
 const POSIX_READ = constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK
 
 /**
- * The flags to reopen an unchanged settings file for its flush. On Windows it is opened read-write, which neither
- * writes nor truncates it. A read-only file there is not reopened (null): it is not one Harness can write, and its
- * bytes are already what Harness wants.
+ * POSIX reopens an unchanged settings file read-only for its flush. On Windows, a read-write open changes ctime even
+ * without a write (measured on NTFS with Node 22.23.2), invalidating the file proof. The staged writer already
+ * flushed before rename, and Windows directory handles cannot be flushed, so do not reopen the unchanged file.
  */
-export function unchangedFlushFlags(mode: number, platform: NodeJS.Platform = hostPlatform()): number | null {
-  if (platform !== 'win32') return POSIX_READ
-  return (mode & 0o200) === 0 ? null : constants.O_RDWR
+export function unchangedFlushFlags(_mode: number, platform: NodeJS.Platform = hostPlatform()): number | null {
+  return platform === 'win32' ? null : POSIX_READ
 }
 
-/** The flags to reopen a journal record Harness wrote itself, for its flush: read-write on Windows. */
-export function journalFlushFlags(platform: NodeJS.Platform = hostPlatform()): number {
-  return platform === 'win32' ? constants.O_RDWR : POSIX_READ
+/** Reopen a journal record only on POSIX. A Windows O_RDWR open would change its reviewed ctime. */
+export function journalFlushFlags(platform: NodeJS.Platform = hostPlatform()): number | null {
+  return platform === 'win32' ? null : POSIX_READ
 }

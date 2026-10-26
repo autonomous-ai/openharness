@@ -15,8 +15,10 @@ import type { CommandCodeNormalizer } from '../engines/commandcode/normalizer.js
 import { deviceErrorText } from './cardText.js'
 import { adaptSlashCommand } from '../lib/goalCommand.js'
 import { sid } from '../lib/log.js'
+import { redactSecretsInText } from '../lib/logBundle.js'
 import type { LiveEvent } from '../engines/kit/events.js'
 import type { RegisteredSession } from '../lib/registry.js'
+import type { MoveGate } from '../lib/hostMove/gate.js'
 import { SessionInputController, type MessageReceipt, type SessionInputDelivery, type SessionInputDeps } from '../lib/sessionInput.js'
 import { passingHold } from '../lib/messageHolds.js'
 import type { ScreenReader } from '../lib/screenReader.js'
@@ -58,6 +60,9 @@ export interface InputDeps {
   /** The person sent text to an agent from a window or the phone (a `message` frame, by agent or session id): one
    *  another agent started is theirs from then on (services/agentCleanup.ts). */
   typed?: (id: string) => void
+  /** While an agent changes host, its messages wait here and go to the pane it ends on (hostMove/gate.ts): the one
+   *  gate the terminal streams hold its keystrokes in too. */
+  moveGate?: MoveGate
 }
 
 /**
@@ -99,10 +104,17 @@ export function messageWriter({ readScreen, resolve, terminal: { captureTerminal
           // Read under the record as it now stands when it is the launch typed into, bound to its first
           // conversation since (sessionBinding.ts `launchBound`); under any other change, as typed, which
           // the reading's fence refuses.
-          const next = await readScreen(launchBound(session, resolve(id)), await captureTerminal(id))
+          const capture = await captureTerminal(id)
+          const next = await readScreen(launchBound(session, resolve(id)), capture)
           const before = next ? next.messageHold : 'screen_unreadable'
           if (before === 'popup_open') return null
-          if (!before || !passingHold(before) || tries >= ENTER_CHECK_TRIES) return before
+          if (!before) return null
+          if (!passingHold(before) || tries >= ENTER_CHECK_TRIES) {
+            // The screen itself, as read: DESKTOP-0TFH0OJ (2026-10-25) held three Swarm messages' Enter as
+            // `prompt_hidden` while the same pane, read by hand a minute later, showed Claude Code's composer.
+            console.warn(`[inject] ${sid(id)} Enter held · ${before} · screen ${heldScreen(capture)}`)
+            return before
+          }
           await new Promise((settle) => setTimeout(settle, ENTER_CHECK_RETRY_MS))
         }
       },
@@ -113,6 +125,17 @@ export function messageWriter({ readScreen, resolve, terminal: { captureTerminal
 /** How long the check before a message's Enter asks again after a read that says nothing: 3 s. */
 const ENTER_CHECK_TRIES = 12
 const ENTER_CHECK_RETRY_MS = 250
+
+/** The bottom of a capture for the log: escape sequences and odd spaces kept visible (JSON), secrets redacted,
+ *  each row cut, so a composer the reader missed can be read back from the log. */
+export function heldScreen(capture: string | null): string {
+  if (capture === null) return 'unread'
+  const rows = capture.split('\n')
+  while (rows.length && !rows.at(-1)!.trim()) rows.pop()
+  return JSON.stringify(rows.slice(-HELD_SCREEN_ROWS).map((row) => redactSecretsInText(row).slice(0, HELD_SCREEN_ROW_CHARS)))
+}
+const HELD_SCREEN_ROWS = 15
+const HELD_SCREEN_ROW_CHARS = 400
 
 /** What `SessionInputController` is given: every write takes the device's pane lock first. */
 export function sessionInputDeps(
@@ -130,6 +153,7 @@ export function sessionInputDeps(
       ? teamHold(session.engine, capture ?? '', screen.pane, screen.question, true) : screen.teamHold
   }
   return {
+    ...(deps.moveGate ? { moveGate: deps.moveGate } : {}),
     readScreen: deps.readScreen,
     submission: deps.submission,
     getSession: (id) => resolve(id),

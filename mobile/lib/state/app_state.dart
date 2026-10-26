@@ -1,4 +1,5 @@
 import '../core/app_version.dart';
+import '../core/client_build.dart';
 import '../core/install_source.dart';
 import '../core/test_run.dart';
 import '../measurement/launch_measurement.dart';
@@ -9,6 +10,7 @@ import '../measurement/product_resumes.dart';
 import '../measurement/setup_transport.dart';
 
 import 'dart:async';
+import 'dart:convert' show jsonDecode, jsonEncode;
 import 'dart:math' show Random;
 
 import 'package:dio/dio.dart';
@@ -1409,6 +1411,18 @@ class AppNotifier extends ChangeNotifier {
     }
   }
 
+  /// The app went to the background with dials or a launch still open. Every dial ends `cancelled` —
+  /// `remote_connect`'s ([_cancelMeasurementConnections]) and `connect_user`/`connect_auto`'s
+  /// ([ProductConnections.cancelOpen]) — and the launch, if no computer has answered, `unknown`
+  /// ([LaunchMeasurement.foreground]), as it does when the app is hidden. Only the background ends them: a
+  /// system sheet or the app switcher (`inactive`) is not leaving, and a dial after the app is back is a
+  /// new count.
+  void _endOpenMeasurementsForBackground() {
+    _cancelMeasurementConnections();
+    productConnections.cancelOpen();
+    launchMeasurement?.foreground(false);
+  }
+
   /// Ends every dial still going as `cancelled`: the person left the screen before it had an answer,
   /// which is neither a success nor a failure of the socket. Each count is dropped from
   /// [_measurementConnections] as it ends, so the socket's own answer later finds none to end again
@@ -1783,6 +1797,7 @@ class AppNotifier extends ChangeNotifier {
     // Which computer's tabs to show (Settings ▸ Profile). Queued behind the record above on
     // purpose, and not awaited: nothing picks a tab before the desk's network read lands.
     unawaited(_loadMachineProfile());
+    unawaited(_loadHarnessOsComputers());
     // No screen from the last run: the agent that record names is drawn as the skeleton until its
     // keyframe lands — see [KeptScreenStore]. What an earlier build kept of it on disk goes. Only in
     // the app, on the store's terms: a test never reaches the real cache directory.
@@ -2542,6 +2557,9 @@ class AppNotifier extends ChangeNotifier {
       wsBaseUrl: config.wsBaseUrl,
       autonomousEnv: _autonomousEnv,
       accessTokenProvider: _socketToken,
+      // Which release, and whether a debug or simulator build, goes in the socket's query. A test dials
+      // as itself, with a fake channel, and says neither.
+      clientBuild: kIsWeb || kUnderTest ? null : runningClientBuild,
       relayCodecs: viewer.relayCodecs,
       transportPlugins: viewer.transportPlugins,
       onAuthFailure: _signedOutAtRuntime,
@@ -6141,9 +6159,122 @@ class AppNotifier extends ChangeNotifier {
   bool runsHarnessOs(String machineId) =>
       osStatus[machineId]?['harnessOs'] == true;
 
+  /// What a Harness OS computer's daemon does for a phone beyond its update and Wi-Fi, as its status
+  /// says (CLI osDevice.ts `features`): `sign_out`, `password`, `ssh`. An older one says none.
+  bool osFeature(String machineId, String feature) {
+    final features = osStatus[machineId]?['features'];
+    return features is List && features.contains(feature);
+  }
+
   bool updateAvailable(String machineId) {
     final update = osStatus[machineId]?['update'];
-    return update is Map && update['available'] == true;
+    if (update is! Map || update['available'] != true) return false;
+    final parts = osParts(machineId);
+    // Named part by part: only what changes. A computer that does not name its parts says it whole.
+    if (parts.isEmpty) return true;
+    return osNewRelease(machineId) ||
+        parts['hn']?['available'] == true ||
+        parts['cli']?['available'] == true;
+  }
+
+  /// A Harness OS release newer than the one running — 0.1.9 after 0.1.8, not a later build of
+  /// 0.1.8, which a computer on 0.1.8 still offers (os/release_update.py compared whole packages).
+  bool osNewRelease(String machineId) {
+    final os = osParts(machineId)['os'];
+    if (os?['available'] != true) return false;
+    final next = os?['next'] as String?, running = os?['running'] as String?;
+    return next == null ||
+        running == null ||
+        releaseOf(next) != releaseOf(running);
+  }
+
+  /// A package version as its release: `0.1.8.r1792577066.g8df82cc2bc-1` is `0.1.8`.
+  static String releaseOf(String version) =>
+      RegExp(r'^\d+\.\d+\.\d+').firstMatch(version)?.group(0) ?? version;
+
+  /// Each part of a Harness OS computer, as its last status said (CLI osDevice.ts `update.parts`):
+  /// `os`, `hn`, `cli`, each `{running, available, next}`. Empty from a computer that does not say.
+  Map<String, Map<String, dynamic>> osParts(String machineId) {
+    final update = osStatus[machineId]?['update'];
+    final parts = update is Map ? update['parts'] : null;
+    if (parts is! Map) return const {};
+    return {
+      for (final entry in parts.entries)
+        if (entry.key is String && entry.value is Map)
+          entry.key as String: Map<String, dynamic>.from(entry.value as Map),
+    };
+  }
+
+  /// The update waiting needs the computer restarted: a new OS package, or one applied already that
+  /// is waiting for its restart. hn and the CLI alone do not.
+  bool updateRestarts(String machineId) {
+    final update = osStatus[machineId]?['update'];
+    if (update is! Map) return false;
+    if (update['restartRequired'] == true) return true;
+    return osNewRelease(machineId);
+  }
+
+  static const _harnessOsKey = 'harness_os_computers';
+
+  /// The Harness OS computers this phone has seen, kept between launches: the hotspot each opens and
+  /// whether its disk is encrypted. A computer switched off and on again is offline to the account,
+  /// waiting at its password; this is how the phone still knows to offer Unlock there.
+  final Map<String, ({String hotspot, bool encrypted})> harnessOsComputers = {};
+
+  Future<void> _loadHarnessOsComputers() async {
+    try {
+      final stored = await _paneLayout?.storage.read(_harnessOsKey);
+      if (stored == null || _disposed) return;
+      final decoded = jsonDecode(stored);
+      if (decoded is! Map) return;
+      for (final entry in decoded.entries) {
+        final value = entry.value;
+        if (entry.key is! String ||
+            value is! Map ||
+            value['hotspot'] is! String) {
+          continue;
+        }
+        harnessOsComputers[entry.key as String] = (
+          hotspot: value['hotspot'] as String,
+          encrypted: value['encrypted'] == true,
+        );
+      }
+      notifyListeners();
+    } catch (_) {
+      // Unreadable: learned again from each computer's next status.
+    }
+  }
+
+  void _rememberHarnessOs(String machineId, Map<String, dynamic> status) {
+    final hotspot = status['hotspot'];
+    if (status['harnessOs'] != true || hotspot is! String || hotspot.isEmpty) {
+      return;
+    }
+    final next = (hotspot: hotspot, encrypted: status['encrypted'] == true);
+    if (harnessOsComputers[machineId] == next) return;
+    harnessOsComputers[machineId] = next;
+    _saveHarnessOs();
+  }
+
+  /// Signed out from here: no Unlock for it any more. Its unlock would open the disk of a computer
+  /// that is set up again — with a sign-in, Set up a device — before it is online anywhere.
+  void forgetHarnessOs(String machineId) {
+    if (harnessOsComputers.remove(machineId) == null) return;
+    _saveHarnessOs();
+    notifyListeners();
+  }
+
+  void _saveHarnessOs() {
+    final json = jsonEncode({
+      for (final entry in harnessOsComputers.entries)
+        entry.key: {
+          'hotspot': entry.value.hotspot,
+          'encrypted': entry.value.encrypted,
+        },
+    });
+    unawaited(
+      _paneLayout?.storage.write(_harnessOsKey, json).catchError((_) {}),
+    );
   }
 
   /// Asks [machineId] what it is and whether it has an update, unless asked lately ([force] asks now).
@@ -6162,6 +6293,7 @@ class AppNotifier extends ChangeNotifier {
       return;
     }
     osStatus[machineId] = status;
+    _rememberHarnessOs(machineId, status);
     notifyListeners();
   }
 
@@ -10639,9 +10771,9 @@ class AppNotifier extends ChangeNotifier {
   /// And write the machine cache now ([_keepMachineCache]): this is the last moment the app is sure
   /// to run, since closing it from the app switcher starts by sending it here.
   ///
-  /// A dial still going ends `cancelled` ([_cancelMeasurementConnections]) before the counts are
-  /// sent: an app the OS suspends in its first seconds away never hears the socket's answer, and
-  /// the dial would stay without an outcome.
+  /// What the phone was still waiting on has no one to wait for it now, and ends before the counts are
+  /// sent ([_endOpenMeasurementsForBackground]): an app the OS suspends in its first seconds away never
+  /// hears the socket's answer, and the dial or launch would stay without an outcome.
   void handleAppPaused() {
     // The first pause of this time away: a second without a resume between (the OS repeating
     // itself) does not move the moment the phone actually left.
@@ -10656,7 +10788,7 @@ class AppNotifier extends ChangeNotifier {
     }
     // The agents this run learned between lists, for the next launch — see [_keepMachineCache].
     _keepMachineCache();
-    _cancelMeasurementConnections();
+    _endOpenMeasurementsForBackground();
     _sendMeasurementBeforeBackground();
   }
 

@@ -9,7 +9,7 @@ import type { RegisteredSession } from '../lib/registry.js'
  * to the union without being added here fails to compile.
  */
 export const ENGINES = [
-  'claude', 'codex', 'cursor', 'opencode', 'pi', 'hermes',
+  'claude', 'codex', 'cursor', 'opencode', 'pi', 'omp', 'hermes',
   'commandcode', 'devin', 'muse', 'amp', 'kilo', 'grok', 'agy', 'copilot',
   'terminal',
 ] as const

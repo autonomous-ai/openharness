@@ -27,11 +27,8 @@ export const WIRE_NAME_MAX = 64
 const SENDER_MAX = 200
 const ENGINE_MAX = 40
 
-/** Another machine's or account's words as a person or an agent reads them: no control or format character (an escape
- *  sequence, a bidi override), cut to `max`; empty for anything that is not a string. */
-export function cleanText(value: unknown, max: number): string {
-  return typeof value === 'string' ? cleanName(value).slice(0, max) : ''
-}
+import { cleanText } from '../lib/cleanText.js'
+export { cleanText } from '../lib/cleanText.js'
 /** A field the receiver requires to be there: cleaned, and `?` where nothing is left of it. */
 const shown = (value: string, max: number): string => cleanText(value, max) || '?'
 

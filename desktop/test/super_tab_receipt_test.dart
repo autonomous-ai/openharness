@@ -231,6 +231,35 @@ void main() {
     },
   );
 
+  for (final (direct, shown) in [
+    (true, "Lead is busy"),
+    (false, "Lead's computer is offline"),
+  ]) {
+    testWidgets(
+      'receipt: a held message to a computer with no Swarm reading ${direct ? 'connected directly shows why' : 'read through the Swarm says offline'}',
+      (tester) async {
+        final app = createApp(connected: true);
+        addTearDown(app.dispose);
+        app.stateOf('m')!.localOnly = direct;
+        final f = ReceiptFixture(tester);
+        await f.show(
+          app: app,
+          prepare: () {
+            final machines = f.server.state['machines'] as List;
+            direct ? machines.clear() : machines.first.remove('observation');
+            f.delivery['holdReason'] = 'team_waiting_idle';
+          },
+        );
+        expect(find.textContaining(shown), findsOneWidget);
+        expect(
+          find.textContaining('offline'),
+          direct ? findsNothing : findsWidgets,
+        );
+        await f.close();
+      },
+    );
+  }
+
   for (final (label, resolution) in [
     ('Open terminal', null),
     ('Send again', 'resend'),

@@ -137,3 +137,21 @@ describe('listForUser — a remote machine\'s presence', () => {
     expect(await statusOf()).toEqual({ up: 'running', down: 'offline', unreadable: 'unknown' })
   })
 })
+
+// One machine (docs/plans/2026-10-24-swarm-team-account.md): a Mac's team machine names the Mac it lives on, so a list
+// can show that Mac once. Only a team machine names one; a row that is no longer a team machine names none.
+describe('listForUser — the Mac a team machine lives on', () => {
+  beforeEach(() => {
+    findMany.mockImplementation(async ({ where }: { where: Where }) => [
+      { ...base, machineId: 'laptop', userId: 'u1', sessionKind: 'computer' },
+      { ...base, machineId: 'laptop-team', userId: 'u1', sessionKind: 'team', hostMachineId: 'laptop' },
+      { ...base, machineId: 'mini', userId: 'u1', sessionKind: 'team' },
+      { ...base, machineId: 'taken-over', userId: 'u1', sessionKind: 'computer', hostMachineId: 'laptop' },
+    ].filter((r) => matches(r, where)))
+  })
+
+  it('is returned for a team machine on a Mac, and null for every other machine', async () => {
+    const hosts = Object.fromEntries((await machineService.listForUser('u1')).map((m) => [m.machineId, m.hostMachineId]))
+    expect(hosts).toEqual({ laptop: null, 'laptop-team': 'laptop', mini: null, 'taken-over': null })
+  })
+})

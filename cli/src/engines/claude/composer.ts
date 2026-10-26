@@ -1,12 +1,15 @@
 import type { ComposerState } from '../facets/screen.js'
 import { screenLines, typedToken } from '../kit/composer.js'
+import { claudeWindowsComposer } from '../kit/pane.js'
 
 /** A row of Claude Code's rule: all `─`, or `─` at both ends with text set in it. */
 const CLAUDE_RULE = /^─{3,}$|^─{3,}.*─{3,}$/
 
 export function composerState(capture: string): ComposerState {
   const { lines } = screenLines(capture)
-  let prompt = lines.findLastIndex((line) => /^❯(?:\s|$)/.test(line))
+  // On Windows its marker can be `>` (kit/pane.ts `claudeWindowsComposer`): a resent Super Tab message was refused as
+  // `prompt_hidden` there (DESKTOP-0TFH0OJ, 2026-10-23).
+  let prompt = Math.max(lines.findLastIndex((line) => /^❯(?:\s|$)/.test(line)), claudeWindowsComposer(lines))
   let bottom = lines.findIndex((line, index) => index > prompt && CLAUDE_RULE.test(line.trim()))
   if (prompt < 1 || !CLAUDE_RULE.test(lines[prompt - 1].trim()) || bottom < 0) {
     // A draft taller than the pane: Claude Code does not cap the prompt's height outside its fullscreen
@@ -21,7 +24,7 @@ export function composerState(capture: string): ComposerState {
   const below = lines.slice(bottom + 1)
   // Nothing ruled under the box: a dialog of Claude Code's own is drawn ruled, in its place.
   if (below.some((line) => CLAUDE_RULE.test(line.trim()))) return 'absent'
-  const draft = [prompt < 0 ? '' : lines[prompt].replace(/^❯\s?/, ''), ...lines.slice(prompt + 1, bottom).map((line) => line.trim())].join(' ').trim()
+  const draft = [prompt < 0 ? '' : lines[prompt].replace(/^[❯>]\s?/, ''), ...lines.slice(prompt + 1, bottom).map((line) => line.trim())].join(' ').trim()
   const token = typedToken(draft)
   const rows = below.map((line) => line.trim()).filter(Boolean)
   if (token.startsWith('/') && rows.some((row) => /^\/[\w:.-]/.test(row))) return 'popup'

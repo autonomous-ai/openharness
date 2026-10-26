@@ -3,6 +3,7 @@
 import argparse
 from concurrent.futures import ThreadPoolExecutor
 import hashlib
+import io
 import json
 from pathlib import Path
 import re
@@ -41,6 +42,21 @@ def digest(path):
 
 def gh(*args):
     return subprocess.check_output(['gh', *map(str, args)], text=True, timeout=120).strip()
+
+
+def download_latest(repo, run, name, folder):
+    """The newest artifact named [name] in [run], into [folder]. A job run again keeps the first
+    attempt's artifact beside its own under the same name, and `gh run download --name` took the
+    first: 0.1.10's publication read the failed attempt's hardware receipt after a passing rerun."""
+    listing = json.loads(gh('api', f'repos/{repo}/actions/runs/{run}/artifacts?per_page=100&name={name}'))
+    found = [a for a in listing.get('artifacts', []) if a.get('name') == name and not a.get('expired')]
+    if not found:
+        raise ValueError(f'The image build has no {name} artifact.')
+    newest = max(found, key=lambda artifact: artifact['created_at'])
+    data = subprocess.check_output(['gh', 'api', f'repos/{repo}/actions/artifacts/{newest["id"]}/zip'], timeout=600)
+    folder.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(io.BytesIO(data)) as archive:
+        archive.extractall(folder)
 
 
 def read(path):
@@ -264,14 +280,14 @@ def main():
     if 'broadcom-offline' in manifest.get('capabilities', []):
         if not any(j['name'] == 'hardware' and j['conclusion'] == 'success' for j in jobs['jobs']):
             raise ValueError('The image build has no successful hardware installation job.')
-        gh('run', 'download', args.image, '--repo', args.repo, '--name', 'harness-os-hardware', '--dir', root / 'hardware')
+        download_latest(args.repo, args.image, 'harness-os-hardware', root / 'hardware')
         hardware = read(root / 'hardware/receipt.json')
         validate_hardware(manifest, hardware)
     nvidia = None
     if 'nvidia-offline' in manifest.get('capabilities', []):
         if not any(j['name'] == 'nvidia' and j['conclusion'] == 'success' for j in jobs['jobs']):
             raise ValueError('The image build has no successful NVIDIA installation job.')
-        gh('run', 'download', args.image, '--repo', args.repo, '--name', 'harness-os-nvidia-install', '--dir', root / 'nvidia')
+        download_latest(args.repo, args.image, 'harness-os-nvidia-install', root / 'nvidia')
         nvidia = read(root / 'nvidia/receipt.json')
         validate_nvidia(manifest, nvidia)
     examples = {}

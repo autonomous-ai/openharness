@@ -119,6 +119,7 @@ const int frameBudgetMicros = 16667;
 Map<String, Object?> frameStats(
   List<ui.FrameTiming> frames, {
   required int windowMicros,
+  int budgetMicros = frameBudgetMicros,
 }) {
   List<int> pick(int Function(ui.FrameTiming) f) => [
     for (final t in frames) f(t),
@@ -127,8 +128,7 @@ Map<String, Object?> frameStats(
   final raster = pick((t) => t.rasterDuration.inMicroseconds);
   final vsync = pick((t) => t.vsyncOverhead.inMicroseconds);
   final total = pick((t) => t.totalSpan.inMicroseconds);
-  int over(List<int> values) =>
-      values.where((v) => v > frameBudgetMicros).length;
+  int over(List<int> values) => values.where((v) => v > budgetMicros).length;
   return {
     'frames': frames.length,
     'windowMs': windowMicros / 1000,
@@ -138,7 +138,7 @@ Map<String, Object?> frameStats(
     'vsyncOverheadMs': distribution(vsync),
     'totalSpanMs': distribution(total),
     'framesOverBudget': {
-      'budgetMs': frameBudgetMicros / 1000,
+      'budgetMs': budgetMicros / 1000,
       'build': over(build),
       'raster': over(raster),
       'totalSpan': over(total),

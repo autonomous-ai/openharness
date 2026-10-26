@@ -347,11 +347,11 @@ describe('runMaster', { timeout: 60_000 }, () => {
       exit: (code) => exits.push(code), onSignal: (signal, listener) => signals.set(signal, listener),
     })
     await until('the core and a service to be running', () => supervisor.status().state === 'running' && existsSync(ran) && existsSync(`${ran}search`))
-    await until('the devices\' process the core asked for', () => existsSync(`${ran}devices,wifi`))
+    await until('the devices\' process the core asked for', () => existsSync(`${ran}devices,wifi,machineAddons`))
     const libexec = join(realpathSync(runtime), 'node-v1', 'libexec', 'harnessd')
     expect(readFileSync(ran, 'utf8')).toBe(join(libexec, 'harnessd-core'))
     expect(readFileSync(`${ran}search`, 'utf8')).toBe(join(libexec, 'harnessd-search'))
-    expect(readFileSync(`${ran}devices,wifi`, 'utf8')).toBe(join(libexec, 'harnessd-devices'))
+    expect(readFileSync(`${ran}devices,wifi,machineAddons`, 'utf8')).toBe(join(libexec, 'harnessd-devices'))
     signals.get('SIGTERM')!()
     await until('the master to finish', () => exits.length > 0)
   })
@@ -531,6 +531,7 @@ describe('runMaster', { timeout: 60_000 }, () => {
         process.send({ type: 'harnessd:bound', protocol: 3, port: 1 }); process.send({ type: 'harnessd:ready' })
         process.on('message', (message) => { if (message.type === 'harnessd:update') { say('asked for ' + message.version); process.exit(75) } })
       }
+      if (role === 'service:updater') say('judges pty ' + process.env.HARNESSD_JUDGES_PTY)
       if (role === 'service:updater' && process.env.HARNESSD_RESTARTS === '0') setTimeout(() => process.send({ type: 'harnessd:staged', version: '9.9.9' }), 100)
       setInterval(() => process.send({ type: 'harnessd:heartbeat', rssBytes: 1, heapUsedBytes: 1, loopDelayMs: 0 }), 50)
       process.on('SIGTERM', () => process.exit(0))
@@ -548,8 +549,10 @@ describe('runMaster', { timeout: 60_000 }, () => {
       })
       const said = (): Array<Record<string, string>> => jsonLines(seen)
       await until('the core to hand over and a new one to start', () => said().filter((line) => line.role === '__run' && line.what === 'started').length === 2)
-      expect(said().filter((line) => line.role.startsWith('service:')).map((line) => line.role)).toEqual(['service:updater'])
+      expect(said().filter((line) => line.role.startsWith('service:') && line.what === 'started').map((line) => line.role)).toEqual(['service:updater'])
       expect(said()).toContainEqual({ role: '__run', what: 'asked for 9.9.9', restarts: '0' })
+      // The updater hears that this master judges a terminal host it stages (Windows).
+      expect(said()).toContainEqual({ role: 'service:updater', what: 'judges pty 1', restarts: '0' })
       expect(lines.some((line) => line.endsWith('[harnessd] the updater staged 9.9.9 — asking the core to hand over'))).toBe(true)
       expect(lines.some((line) => line.endsWith('[harnessd] core exited (code 75) for an update — restarting'))).toBe(true)
       signals.get('SIGTERM')!()

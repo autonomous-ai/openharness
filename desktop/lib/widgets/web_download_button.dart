@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart' show defaultTargetPlatform;
 import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
 
@@ -12,6 +13,16 @@ import 'workspace_share_button.dart';
 /// block as a popup or open as a separate window.
 Future<bool> openInNewTab(Uri uri) =>
     launchUrl(uri, webOnlyWindowName: '_blank');
+
+/// Whether a browser on [platform] (this one when absent) is a phone's or a
+/// tablet's, iOS or Android, where the store bar offers the Harness app
+/// (`web/shell/web_store_banner.dart`): a computer's download is no use there,
+/// so [WebDownloadButton] is left out (audit finding S9).
+bool browserHasAppStore([TargetPlatform? platform]) =>
+    switch (platform ?? defaultTargetPlatform) {
+      TargetPlatform.iOS || TargetPlatform.android => true,
+      _ => false,
+    };
 
 /// The Harness product page.
 final harnessAppPage = Uri.parse('https://www.autonomous.ai/harness-app');
@@ -53,27 +64,31 @@ class WebDownloadButton extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     grid.AppTheme.watch(context);
-    return Semantics(
-      link: true,
-      linkUrl: uri,
-      child: WorkspaceBarControl(
-        label: 'Download app',
-        onPressed: () => open(uri),
-        // Hover lifts the fill; the label keeps its weight. Turning bold under
-        // the pointer reflowed the word and read as a glitch, not a response.
-        builder: (context, hovered) => ColoredBox(
-          color: backgroundFor(prominent: prominent, hovered: hovered),
-          child: SizedBox(
-            width: widthOf(context),
-            height: workspaceBarControlHeight(context),
-            child: Center(
-              child: Text(
-                _text,
-                style: workspaceBarTextStyle(
-                  color: prominent
-                      ? WorkspaceShareButton.foregroundFor(true)
-                      : grid.AppPalette.textPrimary,
-                  emphasized: prominent,
+    // One node: the control's focus would otherwise be a nameless child of
+    // its label, and Tab would land on a "button" with no name.
+    return MergeSemantics(
+      child: Semantics(
+        link: true,
+        linkUrl: uri,
+        child: WorkspaceBarControl(
+          label: 'Download app',
+          onPressed: () => open(uri),
+          // Hover lifts the fill; the label keeps its weight. Turning bold under
+          // the pointer reflowed the word and read as a glitch, not a response.
+          builder: (context, hovered) => ColoredBox(
+            color: backgroundFor(prominent: prominent, hovered: hovered),
+            child: SizedBox(
+              width: widthOf(context),
+              height: workspaceBarControlHeight(context),
+              child: Center(
+                child: Text(
+                  _text,
+                  style: workspaceBarTextStyle(
+                    color: prominent
+                        ? WorkspaceShareButton.foregroundFor(true)
+                        : grid.AppPalette.textPrimary,
+                    emphasized: prominent,
+                  ),
                 ),
               ),
             ),

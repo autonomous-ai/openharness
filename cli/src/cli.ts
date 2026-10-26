@@ -77,6 +77,10 @@ import { startServiceProcess } from './serviceProcess.js'
 import { askDataFolderServer, isLocalSocketName, localSocketPath, refuseServedDataFolder, servedFolderDeps } from './lib/localSocket.js'
 import { legacyDaemonStatus, localDaemonCall, localDaemonStatus } from './lib/daemonEndpoint.js'
 import { PipeUnproven } from './lib/windows/pipeClient.js'
+import { ptyManifestUrl, ptyPlatformKey, type PtyEntry } from './lib/windows/ptyPayload.js'
+import { newerPtyForUpdate } from './lib/windows/ptyUpdateCommand.js'
+import { runUpdateSteps } from './lib/updateCommand.js'
+import { PTY_PROTOCOL } from './lib/ptyHost/protocol.js'
 import { runAutonomousDeviceCommand } from './lib/autonomous-device/command.js'
 import { E2eeStore, identitySpent, peekIdentityPub } from './lib/e2ee/store.js'
 import { confirmsRemoval, deviceRegistration, deviceStatusValue, formatDeviceDetail, formatDeviceHistory, formatDeviceList, logOrder, removeConfirmation } from './lib/e2ee/deviceDisplay.js'
@@ -86,7 +90,7 @@ import { connectWithPassword, type PwConnectProgress } from './lib/e2ee/relayCli
 import type { LinkedPeer } from './lib/e2ee/manager.js'
 import { DeviceLogStore } from './lib/e2ee/deviceLogStore.js'
 import { TrustGroupStore } from './lib/e2ee/trustGroup.js'
-import { confirm as confirmUpdate, fetchManifest, downloadVerified, canary, stage, semverGt, isLocalDevBuild, type UpdateEntry } from './lib/selfUpdate.js'
+import { fetchManifest, semverGt, isLocalDevBuild, type UpdateEntry } from './lib/selfUpdate.js'
 import { managedNodePath } from './lib/nodeRuntime.js'
 import { updateManagedTui } from './tui/manage.js'
 import { ensureHnLauncher, ensureLauncher } from './lib/launchers.js'
@@ -166,12 +170,13 @@ Machine:
   harness show <name>          a harness's state and last turn: what it was asked and what it answered
   harness wait <name>[,<name>] wait until they stop working (--any, --timeout 30m); exit 3 = needs the person
   harness close <name> [--now] save a harness's screen and stop it; an agent closes only what it started
+  harness tell <name> -- <w>   from an agent's pane: more work for a harness it started (agents-tell-agents)
   harness reply <name> -- <w>  say words to a cloud harness (Devin Cloud, Cursor Cloud, Fo): its answer or what next
-                               new, ps, show, wait, reply and close take --machine <name> for another of your
+                               new, ps, show, wait, tell, reply and close take --machine <name> for another of your
                                machines: \`harness show --machine office x\`
   harness mcp                  the agent verbs as an MCP server on stdin/stdout, for agents that use MCP
   harness help agents          the agent commands, states, exit codes and rules on one screen
-  harness settings [<name> on|off]  what agents may do (agents-start-agents, pull-request-line, agent-messages): your account's experiments in Settings ▸ Experimental, each off by default
+  harness settings [<name> on|off]  what agents may do (agents-start-agents, agents-tell-agents, pull-request-line, agent-messages): your account's experiments in Settings ▸ Experimental, each off by default
   harness machines delete <id> remove ANOTHER machine (refuses this one; use \`harness logout\`)
   harness e2e plan             which coding tools have a new version out (the grid-switch e2e trigger)
   harness e2e grid-switch      move a fresh agent subscription -> grid -> back home with its tool + MCP; leaves a review bundle
@@ -361,12 +366,14 @@ async function authStatusCommand(json: boolean): Promise<void> {
     autonomousEnv: latest?.autonomousEnv,
     expiresAt: latest?.expiresAt,
     method: latest?.method ?? 'sso',
+    // A Harness Team sign-in (team/): this computer runs its own Swarm agents and reaches no other computer.
+    ...(latest?.kind ? { kind: latest.kind } : {}),
     // Read-only: a machine that has not signed in yet has no key, and asking must not make one.
     ...(fingerprintNow ? { fingerprint: fingerprintNow } : {}),
   }
   if (json) console.log(JSON.stringify(payload))
   else {
-    console.log(`\n  ${payload.loggedIn ? '✓ Signed in' : '✗ Not signed in'}${payload.machineId ? ` (machine ${payload.machineId})` : ''}${payload.loggedIn && payload.method === 'qr' ? ' — by your phone' : ''}\n`)
+    console.log(`\n  ${payload.loggedIn ? '✓ Signed in' : '✗ Not signed in'}${payload.machineId ? ` (machine ${payload.machineId})` : ''}${payload.loggedIn && payload.kind === 'team' ? ' — for team work only (harness team off undoes it)' : payload.loggedIn && payload.method === 'qr' ? ' — by your phone' : ''}\n`)
     // A session a phone approved is Harness's own, and billing's Autonomous service does not take it.
     // Say so where the person looks, not only when billing refuses. Grid is not named: it learns who
     // holds a Harness-issued sign-in from the Harness backend (autonomous-grid ADR 0046), and naming
@@ -1186,18 +1193,13 @@ async function resolveMachineIfUnknown(session: AuthSession): Promise<void> {
 }
 const RESOLVE_ON_START_TIMEOUT_MS = 10_000
 
-/** Download + sha256-verify + canary the manifest's cli.js/notify.mjs, then atomically swap them into
- *  the installed CLI dir (dropping the .prev backups on success). The freshly-written cli.js is what the
- *  NEXT spawned daemon (`node cli.js __run`) executes — so staging here = "update, then run the new build".
- *  Runs in the short-lived CLI process, distinct from the daemon's own background `startSelfUpdater`. */
-async function downloadCanaryStage(entry: UpdateEntry, dir: string, log: (m: string) => void): Promise<boolean> {
-  const cliBuf = await downloadVerified(entry.cli)
-  const notifyBuf = await downloadVerified(entry.notify)
-  if (!await canary(cliBuf, dir, entry.version)) { log(`  ✗ the new build failed its self-check — keeping v${VERSION}`); return false }
-  // Asked for by name, so a version this machine once rolled back is installed and no longer rejected.
-  stage(dir, cliBuf, notifyBuf, entry.version)
-  confirmUpdate(dir) // canary passed + bytes already verified ⇒ drop the .prev backups
-  return true
+/** The terminal host payload newer than the one installed under [rootDir], or null (also when this platform or the
+ *  update URL has none: the CLI's update goes on). */
+async function newerPtyFor(rootDir: string): Promise<PtyEntry | null> {
+  const key = ptyPlatformKey()
+  let url: string
+  try { url = ptyManifestUrl(env.ADAPTER_UPDATE_URL) } catch { return null }
+  return key === null ? null : newerPtyForUpdate({ url, key, rootDir })
 }
 
 /** An explicit hn update manages only the installed bundle, never a checkout or a canary. */
@@ -1214,6 +1216,10 @@ function isInstalledCli(): boolean {
  *  background poll. Checks the manifest; if a newer build exists it stops any running daemon first (so
  *  its poller can't race our staging), swaps in the new bytes, then relaunches on them. No-op on a
  *  dev/repo build, and leaves the daemon running-on-the-old-build untouched when already up to date.
+ *
+ *  On Windows the terminal host's promoted payload counts too (lib/windows/ptyUpdateCommand.ts): a newer one is
+ *  installed under the same lock, before the CLI, and with the CLI current it is installed alone and the daemon
+ *  restarted. As for the CLI, a version this machine rolled back is installed anyway.
  *
  *  On a LOCAL build (`install-cli.sh`) it stops and says so: the automatic paths leave those alone
  *  (see {@link shouldAutoUpdate}), and a command that silently did the opposite would be the same
@@ -1245,18 +1251,21 @@ async function updateCommand(force: boolean): Promise<void> {
   // level with — the check that keeps a release from stomping the build is also the check that would
   // make the deliberate swap a no-op.
   const replacingLocalBuild = force && isLocalDevBuild(VERSION)
-  if (!entry || !(semverGt(entry.version, VERSION) || replacingLocalBuild)) {
+  const cliEntry = entry && (semverGt(entry.version, VERSION) || replacingLocalBuild) ? entry : null
+  // Asked before anything stops: a host that is current must not cost the daemon a restart.
+  const ptyRoot = process.platform === 'win32' ? dirname(resolve(env.ADAPTER_CLI_DIR)) : null
+  const pty = ptyRoot === null ? null : await newerPtyFor(ptyRoot)
+  if (!cliEntry && !pty) {
     console.log(`✓ Already on the latest version (v${VERSION}).`)
     process.exit(0)
   }
 
-  // A newer build exists. Stop the running daemon FIRST so its own background updater can't race our
-  // staging on the .prev/.tmp files, then swap the bytes and bring it back up on the new build.
+  // A newer build or terminal host exists. Stop the running daemon FIRST so its own background updater can't
+  // race our staging on the .prev/.tmp files, then swap the bytes and bring it back up on the new build.
   //
   // The whole stop → stage → relaunch sequence runs under the spawn lock. Between the stop and the
   // relaunch there is no pid file for several seconds, and anything that spawns `harness start` on
   // "no daemon" (the desktop app does, every few seconds) used to land a second child in that gap.
-  const staged = entry
   await withSpawnLock('update', async () => {
     const running = readPid()
     const wasRunning = !!(running && isAlive(running))
@@ -1266,17 +1275,24 @@ async function updateCommand(force: boolean): Promise<void> {
     }
     if (wasRunning) { console.log('  stopping the running adapter…'); await stopDaemonOrExit() }
 
-    console.log(`▸ Updating v${VERSION} → v${staged.version}…`)
-    let ok = false
-    try { ok = await downloadCanaryStage(staged, resolve(env.ADAPTER_CLI_DIR), (m) => console.log(m)) }
-    catch (e) { console.error(`✗ Update failed: ${e instanceof Error ? e.message : e}`); ok = false }
-    if (!ok) {
-      if (wasRunning) await relaunch() // staging failed → bring the OLD build back so `update` never leaves it down
-      process.exit(1)
+    // Download, verify and canary the host and the build, then put them in, the host first (lib/updateCommand.ts). The
+    // freshly-written cli.js is what the NEXT spawned daemon (`node cli.js __run`) executes — so staging here =
+    // "update, then run the new build". An installed host is on probation, and the master the relaunch (or the next
+    // `harness start`) brings up keeps it or rolls it back; with the build it was paired with, both.
+    const done = await runUpdateSteps({ cliEntry, pty, cliDir: resolve(env.ADAPTER_CLI_DIR), ptyRoot, currentVersion: VERSION })
+    // Nothing new went in: bring the OLD build back so `update` never leaves it down. A host only a newer build could
+    // use, left out, is no failure: there was nothing this build could take.
+    const nothing = done.cli === 'failed' || (done.cli === 'none' && done.pty !== 'installed')
+    if (nothing) {
+      const leftOut = done.cli === 'none' && done.pty === 'paired'
+      if (leftOut) console.log(`✓ Already on the latest version (v${VERSION}).`)
+      if (wasRunning) await relaunch()
+      process.exit(leftOut ? 0 : 1)
     }
-    console.log(`  ✓ installed v${staged.version}`)
     if (wasRunning) { await relaunch(); return }
-    console.log(`✓ Updated to v${staged.version}. Run \`harness start\` to connect.`)
+    console.log(done.cli === 'installed'
+      ? `✓ Updated to v${cliEntry?.version}. Run \`harness start\` to connect.`
+      : `✓ Updated the terminal host to ${pty?.version}. Run \`harness start\` to connect.`)
     process.exit(0)
   }, {
     onWaiting: (owner) => console.log(`  the daemon is ${describeSpawnLockOwner(owner)} — waiting for it to finish…`),
@@ -2628,8 +2644,9 @@ async function logsExportCommand(json: boolean): Promise<void> {
 
 import { orchestratorCommand } from './orchestrator/command.js'
 import { superTabCommand } from './superTabs/command.js'
+import { gitCredentialCommand } from './superTabs/gitCredential.js'
 import { paneOwner, sendCommand } from './messages/command.js'
-import { agentOrigin, closeCommand, psCommand, replyCommand, showCommand, waitCommand, whoamiCommand } from './agentClient/commands.js'
+import { agentOrigin, closeCommand, psCommand, replyCommand, showCommand, tellCommand, waitCommand, whoamiCommand } from './agentClient/commands.js'
 import { agentsHelp, helpFor } from './agentClient/help.js'
 import { openUrlCommand } from './agentClient/openUrl.js'
 import { harnessRunner, mcpCommand } from './agentClient/mcp.js'
@@ -2659,7 +2676,13 @@ function withoutFirst(argv: string[], token: string): string[] {
 
 if (cmd === 'help' && args[0] === 'agents') { console.log(agentsHelp()); process.exit(0) }
 if (!cmd || cmd === '--help' || cmd === '-h' || cmd === 'help') usage()
-if (cmd === 'version' || cmd === '--version' || cmd === '-v') { console.log(VERSION); process.exit(0) }
+// `--json` adds the terminal host protocol this build needs: the updater's canary reads it (lib/selfUpdate.ts
+// `runCanary`) to hold a build back until a host of that protocol is installed. A build from before prints its
+// version alone either way, which the canary reads as protocol 2.
+if (cmd === 'version' || cmd === '--version' || cmd === '-v') {
+  console.log(flags.includes('--json') ? JSON.stringify({ version: VERSION, ptyProtocol: PTY_PROTOCOL }) : VERSION)
+  process.exit(0)
+}
 
 
 switch (cmd) {
@@ -2693,6 +2716,9 @@ switch (cmd) {
   case 'reply':
     replyCommand(rest, { machines: usableMachines }).then(code => { process.exitCode = code }).catch(onError)
     break
+  case 'tell':
+    tellCommand(rest, { machines: usableMachines }).then(code => { process.exitCode = code }).catch(onError)
+    break
   case 'wait':
     waitCommand(rest, { machines: usableMachines }).then(code => { process.exitCode = code }).catch(onError)
     break
@@ -2704,6 +2730,10 @@ switch (cmd) {
     break
   case 'super-tab':
     superTabCommand(rest).then(code => { process.exitCode = code }).catch(onError)
+    break
+  case 'git-credential':
+    // git's credential helper in a Swarm agent's session (docs/swarm-github-app.md); git runs it, people do not.
+    gitCredentialCommand(rest).then(code => { process.exitCode = code }).catch(onError)
     break
   case 'login':
     // The result line goes out FIRST (loginCommand prints it), then the daemon is swapped onto the
@@ -2914,6 +2944,21 @@ switch (cmd) {
     break
   case 'service':
     serviceCommand(rest, serviceCommandDeps({ relaunch: () => launch(false), tildify }))
+      .then((code) => { process.exitCode = code }).catch(onError)
+    break
+  case 'team':
+    // Loaded only here (team/deps.ts). The daemon is stopped before a sign-in changes under it and started again on the
+    // new one; `launch` prints its status block and exits, so it is always the last step.
+    Promise.all([import('./team/command.js'), import('./team/deps.js')])
+      .then(([{ teamCommand }, { teamCommandDeps }]) => teamCommand(rest, teamCommandDeps({
+        stopDaemon: async () => (await stopDaemonOrExit()).pid !== null,
+        startDaemon: () => launch(false),
+        signIn: async (restart) => {
+          const outcome = await loginCommand(false, false, false, { method: 'ask' })
+          if (outcome.signedIn) await restartDaemonForIdentity(restart)
+          else if (restart) await launch(false)
+        },
+      })))
       .then((code) => { process.exitCode = code }).catch(onError)
     break
   case 'reset':

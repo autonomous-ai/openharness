@@ -2,12 +2,23 @@ import 'dart:async';
 
 import 'package:flutter/foundation.dart';
 
+import '../core/viewer_mode.dart';
 import '../ws/ws_conn.dart';
+import '../measurement/product_measurement.dart';
 import 'shared_tabs_model.dart';
 
 typedef SharedTabsRequest = Future<Map<String, dynamic>> Function(
   Map<String, dynamic> payload,
 );
+
+/// The line for a computer that holds the shared tabs and did not answer. On Desktop that is this
+/// computer's daemon. A browser runs none: it asks one of the account's computers, so it names
+/// none as "this computer".
+String unreachableComputerFor({required bool viewer}) =>
+    'Harness could not reach ${viewer ? 'your' : 'this'} computer. Check that it is online, then try again.';
+
+/// [unreachableComputerFor] for this build.
+final String unreachableComputer = unreachableComputerFor(viewer: kViewerMode);
 
 /// A refused `share_*` action, with the daemon's code and a sentence to read.
 class SharedTabsFailure implements Exception {
@@ -124,6 +135,7 @@ class SharedTabsController extends ChangeNotifier {
     required this.foreground,
     this.onActivity,
     this.messagesSwitch,
+    this.measurement,
   }) {
     _switchKnown = messagesSwitch?.value;
     messagesSwitch?.addListener(_switchChanged);
@@ -131,6 +143,7 @@ class SharedTabsController extends ChangeNotifier {
   }
 
   final SharedTabsRequest request;
+  final ProductMeasurement? measurement;
   final ValueListenable<bool> foreground;
   final void Function(SharedActivity activity)? onActivity;
 
@@ -363,10 +376,7 @@ class SharedTabsController extends ChangeNotifier {
       );
     } catch (_) {
       // A timeout, a closed socket or a session not ready: this computer's daemon was not reached.
-      throw const SharedTabsFailure(
-        'UNAVAILABLE',
-        'Harness could not reach this computer. Check that it is online, then try again.',
-      );
+      throw SharedTabsFailure('UNAVAILABLE', unreachableComputer);
     }
   }
 
@@ -377,8 +387,45 @@ class SharedTabsController extends ChangeNotifier {
     Map<String, dynamic> payload,
   ) async {
     final account = _account;
+    final flow = switch (action) {
+      'share_invite' => ProductFlow.shareInvite,
+      'share_accept' => ProductFlow.shareAccept,
+      _ => null,
+    };
+    final finish = flow == null ? null : measurement?.begin(flow);
     try {
-      return await _ask(action, payload);
+      final answer = await _ask(action, payload);
+      if (account != _account || _disposed) {
+        finish?.call(ProductOutcome.cancelled);
+        return answer;
+      }
+      if (action == 'share_invite') {
+        final sent = answer['invited'];
+        final refused = answer['refused'];
+        measurement?.sharedInvites(
+          sent: sent is List ? sent.length : 0,
+          refused: refused is List ? refused.length : 0,
+        );
+        finish?.call(
+          sent is! List
+              ? ProductOutcome.unknown
+              : sent.isEmpty
+              ? ProductOutcome.failed
+              : ProductOutcome.ok,
+        );
+      } else {
+        finish?.call(
+          answer['pending'] == true
+              ? ProductOutcome.unknown
+              : answer['sharedTabId'] is String
+              ? ProductOutcome.ok
+              : ProductOutcome.unknown,
+        );
+      }
+      return answer;
+    } catch (_) {
+      finish?.call(ProductOutcome.failed);
+      rethrow;
     } finally {
       if (account == _account && !_disposed) unawaited(refresh());
     }

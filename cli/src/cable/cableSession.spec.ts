@@ -12,8 +12,9 @@ import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 
 import { CABLE_MAX_FRAME, CableDecoder, CableType, encodeCableFrame } from './cableFrame.js'
-import { CableSession, type CableAgent, type CableHost, type CableMachine, type CablePort } from './cableSession.js'
+import { CableSession, recapFrame, type CableAgent, type CableHost, type CableMachine, type CablePort } from './cableSession.js'
 import { DialLog } from './dialLog.js'
+import type { SwarmCard, SwarmLead } from '../superTabs/cards.js'
 import type { PetStore } from './pets/store.js'
 
 /** A port whose two ends are both in this process. */
@@ -794,6 +795,23 @@ describe('cable session', () => {
       items: [{ id: 's1', agents: 0, panes: 1 }],
     })
     await session.stop()
+  })
+
+  it('posts words spoken to a Swarm Lead in its Swarm chat, and types them for any other harness', async () => {
+    const swarmSay = vi.fn(async (id: string) => id === 'a1')
+    const host = makeHost({ transcribe: vi.fn(async () => 'ship it'), route: vi.fn(), swarmSay })
+    const { session, port } = await connect(host)
+    try {
+      port.say({ t: 'hello', product: 'harness', mac: 'aa:bb' }); await settle()
+      port.say({ t: 'voice.begin', uploadId: 'lead', agentId: 'a1' })
+      port.pcm(Buffer.alloc(3200)); port.say({ t: 'voice.end' })
+      await vi.waitFor(() => expect(port.sent.find(x => x.t === 'voice.transcript')).toMatchObject({ agentId: 'a1', text: 'ship it' }))
+      expect(swarmSay).toHaveBeenCalledWith('a1', 'ship it')
+      expect(host.sendTurn).not.toHaveBeenCalled()
+      port.say({ t: 'voice.begin', uploadId: 'tile', agentId: 'a2' })
+      port.pcm(Buffer.alloc(3200)); port.say({ t: 'voice.end' })
+      await vi.waitFor(() => expect(host.sendTurn).toHaveBeenCalledWith('a2', 'ship it'))
+    } finally { await session.stop() }
   })
 
   it('delivers a turn through the host, not through the protocol', async () => {
@@ -3661,5 +3679,444 @@ describe('hello capabilities', () => {
       expect(line).toMatch(/\] link · tx \d+ B in \d+ frames · rx \d+ B in 1 frames/)
       expect(line.split('non-frame text: ')[1]).toHaveLength(200)
     })
+  })
+})
+
+// ── swarm cards (a Pro that names swarmCard: 'v1') ────────────────────────────────────────────────────
+describe('swarm cards', () => {
+  const PRO = { t: 'hello', product: 'harness', mac: 'aa:bb', board: 'pro', swarmCard: 'v1' }
+  const lead = (n: number, over: Partial<SwarmLead> = {}): SwarmLead => ({ projectId: `proj${n}`, project: `Project ${n}`, engine: 'claude', owner: '', local: '', state: 'work', order: n, since: 134, ...over, id: over.id ?? `lead${n}` })
+  const card = (id: string, leads: SwarmLead[] = [lead(1), lead(2)], over: Partial<SwarmCard> = {}): SwarmCard => ({ id, name: `Swarm ${id}`, count: leads.length, leads, ...over })
+  const ofType = (port: LoopbackPort, t: string) => port.sent.filter((m) => m.t === t)
+  /** The firmware's JSON guard counts one token per object, array, string (keys included) and bare value. */
+  const tokens = (value: unknown): number => {
+    if (Array.isArray(value)) return 1 + value.reduce((n: number, v) => n + tokens(v), 0)
+    if (value && typeof value === 'object') return 1 + Object.entries(value).reduce((n, [, v]) => n + 1 + tokens(v), 0)
+    return 1
+  }
+  const desk = (...rows: Array<{ id: string; superTabId?: string }>) => ({ selected: rows[0]?.id ?? '', tiles: [] as never[],
+    swarms: rows.map((r) => ({ name: r.id, agents: 0, agentIds: [] as string[], panes: 0, ...r })) })
+
+  /** A host whose cards, desk tab and window project the test moves. */
+  function cardHost(state: { cards: SwarmCard[]; desk?: ReturnType<typeof desk>; open?: { superTabId: string; projectId: string; fromDevice: boolean } | null } , over: Partial<CableHost> = {}) {
+    return makeHost({
+      swarmCards: () => state.cards,
+      listSwarms: () => state.desk ?? desk(),
+      activeSwarmProject: () => state.open ?? null,
+      swarmCardsWanted: vi.fn(), swarmCardOpen: vi.fn(), superTabSelected: vi.fn(),
+      swarmCardRecap: vi.fn(async (tabId: string, leadId: string) => ({ tabId, leadId, text: 'Shipped it.', at: 1792560000, none: false })),
+      ...over,
+    })
+  }
+
+  it('sends nothing, asks for nothing and answers nothing to a device that does not name swarmCard', async () => {
+    const state = { cards: [card('st1')] }
+    const host = cardHost(state)
+    const { session, port } = await connect(host)
+    try {
+      port.say({ ...PRO, swarmCard: undefined })
+      await vi.waitFor(() => expect(port.types()).toContain('notif.replace'))
+      await session.syncSwarmCards(true)
+      await session.swarmCardRecap({ tabId: 'st1', leadId: 'lead1', text: 'x', at: 1, none: false })
+      port.say({ t: 'supertab.recap.get', tab: 'st1', lead: 'lead1' })
+      port.say({ t: 'supertab.open', tab: 'st1', lead: 'lead1' })
+      port.say({ t: 'supertab.select', tab: 'st1', lead: 'lead1' })
+      await settle(); await settle()
+      expect(port.types().filter((t) => t.startsWith('supertab'))).toEqual([])
+      expect(host.swarmCardsWanted).not.toHaveBeenCalled()
+      expect(host.swarmCardRecap).not.toHaveBeenCalled()
+      expect(host.swarmCardOpen).not.toHaveBeenCalled()
+      expect(host.superTabSelected).not.toHaveBeenCalled()
+    } finally { await session.stop() }
+  })
+
+  it('on attach: asks for the cards once, then supertabs and one supertab per Swarm, linked to the desk tab', async () => {
+    const state = { cards: [card('st1'), card('st2')], desk: desk({ id: 'tab9', superTabId: 'st2' }, { id: 'tab1' }) }
+    const host = cardHost(state)
+    const { session, port } = await connect(host)
+    try {
+      port.say(PRO)
+      await vi.waitFor(() => expect(ofType(port, 'supertab')).toHaveLength(2))
+      port.say(PRO)   // a repeat hello is a keepalive
+      await settle()
+      expect(host.swarmCardsWanted).toHaveBeenCalledExactlyOnceWith(true)
+      expect(ofType(port, 'supertabs')).toEqual([{ t: 'supertabs', ids: ['st1', 'st2'] }])
+      expect(ofType(port, 'supertab')).toEqual([
+        { t: 'supertab', id: 'st1', tab: '', name: 'Swarm st1', count: 2, leads: [
+          { id: 'lead1', projectId: 'proj1', project: 'Project 1', engine: 'claude', owner: '', local: '', state: 'work', order: 1, since: 134 },
+          { id: 'lead2', projectId: 'proj2', project: 'Project 2', engine: 'claude', owner: '', local: '', state: 'work', order: 2, since: 134 }] },
+        expect.objectContaining({ id: 'st2', tab: 'tab9' }),
+      ])
+      // The list goes first, so the Pro knows the order the details fill.
+      expect(port.types().indexOf('supertabs')).toBeLessThan(port.types().indexOf('supertab'))
+      // Gone: the core is told the last capable device left.
+      await port.close('unplugged')
+      expect(host.swarmCardsWanted).toHaveBeenLastCalledWith(false)
+      expect(host.swarmCardsWanted).toHaveBeenCalledTimes(2)
+    } finally { await session.stop() }
+  })
+
+  it('still sends the cards, with no tab link, when the desktop is closed', async () => {
+    const host = cardHost({ cards: [card('st1')] })   // listSwarms: no window
+    const { session, port } = await connect(host)
+    try {
+      port.say(PRO)
+      await vi.waitFor(() => expect(ofType(port, 'supertab')).toHaveLength(1))
+      expect(ofType(port, 'supertab')[0].tab).toBe('')
+      expect(ofType(port, 'supertab.focus')).toEqual([])
+    } finally { await session.stop() }
+  })
+
+  it('a change is held 300 ms, then only the changed Swarm goes (and supertabs only when the set moved)', async () => {
+    const state = { cards: [card('st1'), card('st2')] } as { cards: SwarmCard[]; desk?: ReturnType<typeof desk> }
+    const { session, port } = await connect(cardHost(state))
+    try {
+      port.say(PRO)
+      await vi.waitFor(() => expect(ofType(port, 'supertab')).toHaveLength(2))
+      port.sent.length = 0
+      state.cards = [card('st1'), card('st2', [lead(1, { state: 'ask' }), lead(2)])]
+      void session.syncSwarmCards()
+      void session.syncSwarmCards()
+      await settle()
+      expect(port.sent).toEqual([])
+      await vi.waitFor(() => expect(ofType(port, 'supertab')).toHaveLength(1), NEXT_TICKS)
+      await settle()
+      expect(port.types()).toEqual(['supertab'])
+      expect(port.sent[0]).toMatchObject({ id: 'st2' })
+      // A Swarm gone and one new: the set changed, so supertabs again, and only the new one's details.
+      port.sent.length = 0
+      state.cards = [card('st2', [lead(1, { state: 'ask' }), lead(2)]), card('st3')]
+      void session.syncSwarmCards()
+      await vi.waitFor(() => expect(ofType(port, 'supertab')).toHaveLength(1), NEXT_TICKS)
+      expect(port.sent.map((m) => [m.t, m.id ?? m.ids])).toEqual([['supertabs', ['st2', 'st3']], ['supertab', 'st3']])
+      // Nothing changed: nothing sent.
+      port.sent.length = 0
+      void session.syncSwarmCards()
+      await new Promise((r) => setTimeout(r, 450))
+      expect(port.types().filter((t) => t.startsWith('supertab'))).toEqual([])
+    } finally { await session.stop() }
+  })
+
+  it('the desk opening the Swarm tab links it: only that Swarm is sent again', async () => {
+    const state = { cards: [card('st1'), card('st2')], desk: desk() }
+    const { session, port } = await connect(cardHost(state))
+    try {
+      port.say(PRO)
+      await vi.waitFor(() => expect(ofType(port, 'supertab')).toHaveLength(2))
+      port.sent.length = 0
+      state.desk = desk({ id: 'tab7', superTabId: 'st1' })
+      void session.syncSwarmCards()
+      await vi.waitFor(() => expect(ofType(port, 'supertab')).toHaveLength(1), NEXT_TICKS)
+      expect(port.sent).toMatchObject([{ t: 'supertab', id: 'st1', tab: 'tab7' }])
+    } finally { await session.stop() }
+  })
+
+  it('a 16 x 12 list is one supertabs and 16 supertab frames, each under 512 JSON tokens', async () => {
+    const wide = 'é'.repeat(24)   // 48 bytes
+    const cards = Array.from({ length: 18 }, (_, s) => card(`st${s}`,
+      Array.from({ length: 13 }, (_, l) => lead(l, { project: wide, owner: wide, local: 'a'.repeat(64), engine: 'codex', id: `l${s}x${l}`, projectId: `p${l}`, order: 100 + l })),
+      { name: wide, count: 40 }))
+    const { session, port } = await connect(cardHost({ cards }))
+    try {
+      port.say(PRO)
+      await vi.waitFor(() => expect(ofType(port, 'supertab')).toHaveLength(16))
+      await settle()
+      expect(ofType(port, 'supertabs')).toHaveLength(1)
+      expect((ofType(port, 'supertabs')[0].ids as string[]).length).toBe(16)
+      const frames = port.sent.map((m, i) => ({ ...m, seq: port.seqs[i] } as Record<string, unknown>)).filter((m) => m.t === 'supertabs' || m.t === 'supertab')
+      expect(frames).toHaveLength(17)
+      for (const f of frames) expect(tokens(f)).toBeLessThan(512)
+      for (const f of ofType(port, 'supertab')) expect((f.leads as Array<{ order: number }>).map((l) => l.order)).toEqual(Array.from({ length: 12 }, (_, l) => 100 + l))
+      expect(Math.max(...frames.map(tokens))).toBeLessThan(260)
+    } finally { await session.stop() }
+  })
+
+  it('a round dial naming both capabilities gets the Swarms with no seq, and Super Tab waits on question', async () => {
+    const { session, port } = await connect(cardHost({ cards: [card('st1', [lead(1, { order: 3 }), lead(2, { order: 0 })])] }))
+    try {
+      port.say({ t: 'hello', product: 'harness', mac: 'cc:dd', swarmCard: 'v1', superTab: 'wait-v1' })
+      await vi.waitFor(() => expect(ofType(port, 'supertab')).toHaveLength(1))
+      expect(ofType(port, 'supertabs')).toEqual([{ t: 'supertabs', ids: ['st1'] }])
+      expect((ofType(port, 'supertab')[0].leads as Array<{ id: string; order: number }>).map((l) => [l.id, l.order])).toEqual([['lead1', 3], ['lead2', 0]])
+      expect(port.seqs.every((seq) => seq === undefined)).toBe(true)
+      await session.question('a1', 'supertab:as1:needs_human', [{ q: 'Which?' }], { superTab: 'Pilot', attention: 'decision' })
+      expect(ofType(port, 'question')).toMatchObject([{ agentId: 'a1', id: 'supertab:as1:needs_human', superTab: 'Pilot', attention: 'decision' }])
+      expect(port.seqs.every((seq) => seq === undefined)).toBe(true)
+    } finally { await session.stop() }
+  })
+
+  it('resync sends everything again, as attach does', async () => {
+    const state = { cards: [card('st1')], open: { superTabId: 'st1', projectId: 'proj2', fromDevice: false } }
+    const { session, port } = await connect(cardHost(state))
+    try {
+      port.say(PRO)
+      await vi.waitFor(() => expect(ofType(port, 'supertab.focus')).toHaveLength(1))
+      port.sent.length = 0
+      port.say({ t: 'resync' })
+      await vi.waitFor(() => expect(ofType(port, 'supertab.focus')).toHaveLength(1))
+      expect(port.types().filter((t) => t.startsWith('supertab'))).toEqual(['supertabs', 'supertab', 'supertab.focus'])
+    } finally { await session.stop() }
+  })
+
+  it('supertab.recap.get asks for the recap and answers with supertab.recap; a failed read answers nothing', async () => {
+    const state = { cards: [card('st1')] }
+    const host = cardHost(state)
+    const { session, port } = await connect(host)
+    try {
+      port.say(PRO)
+      await vi.waitFor(() => expect(ofType(port, 'supertab')).toHaveLength(1))
+      port.say({ t: 'supertab.recap.get', tab: 'st1', lead: 'lead2' })
+      await vi.waitFor(() => expect(ofType(port, 'supertab.recap')).toEqual([
+        { t: 'supertab.recap', tab: 'st1', lead: 'lead2', text: 'Shipped it.', at: 1792560000, none: false }]))
+      expect(host.swarmCardRecap).toHaveBeenCalledWith('st1', 'lead2')
+      for (const failure of [async () => null, async () => { throw new Error('boom') }]) {
+        port.sent.length = 0
+        vi.mocked(host.swarmCardRecap!).mockImplementationOnce(failure)
+        port.say({ t: 'supertab.recap.get', tab: 'st1', lead: 'lead1' })
+        await settle(); await settle()
+        expect(ofType(port, 'supertab.recap')).toEqual([])
+      }
+      // Ids that are not ids are not asked about.
+      vi.mocked(host.swarmCardRecap!).mockClear()
+      port.say({ t: 'supertab.recap.get', tab: 'st 1', lead: 'lead1' })
+      port.say({ t: 'supertab.recap.get', tab: 'st1' })
+      port.say({ t: 'supertab.recap.get', lead: 'lead1' })
+      await settle(); await settle()
+      expect(host.swarmCardRecap).not.toHaveBeenCalled()
+    } finally { await session.stop() }
+  })
+
+  it('supertab.open tells the core which Lead is open, and a pushed recap reaches the device only for that Lead', async () => {
+    const host = cardHost({ cards: [card('st1')] })
+    const { session, port } = await connect(host)
+    try {
+      port.say(PRO)
+      await vi.waitFor(() => expect(ofType(port, 'supertab')).toHaveLength(1))
+      const recap = (leadId: string, text: string) => ({ tabId: 'st1', leadId, text, at: 5, none: false })
+      await session.swarmCardRecap(recap('lead1', 'before open'))
+      expect(ofType(port, 'supertab.recap')).toEqual([])
+      port.say({ t: 'supertab.open', tab: 'st1', lead: 'lead1' }); await settle()
+      expect(host.swarmCardOpen).toHaveBeenLastCalledWith(expect.stringMatching(/^c\d+$/), 'st1', 'lead1')
+      await session.swarmCardRecap(recap('lead2', 'other lead'))
+      await session.swarmCardRecap({ ...recap('lead1', 'other tab'), tabId: 'st2' })
+      expect(ofType(port, 'supertab.recap')).toEqual([])
+      await session.swarmCardRecap(recap('lead1', 'now'))
+      expect(ofType(port, 'supertab.recap')).toEqual([{ t: 'supertab.recap', tab: 'st1', lead: 'lead1', text: 'now', at: 5, none: false }])
+      // Closed: no more pushes.
+      port.say({ t: 'supertab.open', tab: 'st1', lead: '' }); await settle()
+      expect(host.swarmCardOpen).toHaveBeenLastCalledWith(expect.stringMatching(/^c\d+$/), 'st1', null)
+      await session.swarmCardRecap(recap('lead1', 'after close'))
+      expect(ofType(port, 'supertab.recap')).toHaveLength(1)
+      // An open with a Lead but a bad tab is ignored.
+      port.say({ t: 'supertab.open', tab: 'a b', lead: 'lead1' }); await settle()
+      expect(host.swarmCardOpen).toHaveBeenCalledTimes(2)
+    } finally { await session.stop() }
+  })
+
+  it('names the Swarm of the open Lead on a scroll, so the window scrolls that Swarm\'s chat; none once it closed', async () => {
+    const host = cardHost({ cards: [card('st1')] })
+    const { session, port } = await connect(host)
+    try {
+      port.say(PRO)
+      await vi.waitFor(() => expect(ofType(port, 'supertab')).toHaveLength(1))
+      port.say({ t: 'scroll', phase: 'move', dy: 5 }); await settle()
+      expect(host.scrolled).toHaveBeenLastCalledWith('move', 5, 0)
+      port.say({ t: 'supertab.open', tab: 'st1', lead: 'lead1' }); await settle()
+      port.say({ t: 'scroll', phase: 'move', dy: -12 }); await settle()
+      expect(host.scrolled).toHaveBeenLastCalledWith('move', -12, 0, 'st1')
+      port.say({ t: 'supertab.open', tab: 'st1', lead: '' }); await settle()
+      port.say({ t: 'scroll', phase: 'up', dy: 0, v: 300 }); await settle()
+      expect(host.scrolled).toHaveBeenLastCalledWith('up', 0, 300)
+    } finally { await session.stop() }
+  })
+
+  it('an unplugged Pro with a recap open closes it for the core', async () => {
+    const host = cardHost({ cards: [card('st1')] })
+    const { session, port } = await connect(host)
+    try {
+      port.say(PRO)
+      await vi.waitFor(() => expect(ofType(port, 'supertab')).toHaveLength(1))
+      port.say({ t: 'supertab.open', tab: 'st1', lead: 'lead1' }); await settle()
+      await port.close('unplugged')
+      expect(host.swarmCardOpen).toHaveBeenLastCalledWith(expect.stringMatching(/^c\d+$/), 'st1', null)
+    } finally { await session.stop() }
+  })
+
+  it('follows the window: one supertab.focus with that project\'s Lead, none on repeat, none without a Swarm tab', async () => {
+    const state = { cards: [card('st1')], open: null as { superTabId: string; projectId: string; fromDevice: boolean } | null }
+    const { session, port } = await connect(cardHost(state))
+    try {
+      port.say(PRO)
+      await vi.waitFor(() => expect(ofType(port, 'supertab')).toHaveLength(1))
+      expect(ofType(port, 'supertab.focus')).toEqual([])   // the active tab is not a Swarm
+      state.open = { superTabId: 'st1', projectId: 'proj2', fromDevice: false }
+      await session.syncSwarmCards(true)
+      expect(ofType(port, 'supertab.focus')).toEqual([{ t: 'supertab.focus', tab: 'st1', lead: 'lead2' }])
+      void session.syncSwarmCards()
+      await new Promise((r) => setTimeout(r, 450))
+      expect(ofType(port, 'supertab.focus')).toHaveLength(1)   // the same project: not again
+      state.open = { superTabId: 'st1', projectId: 'proj1', fromDevice: false }
+      void session.syncSwarmCards()
+      await vi.waitFor(() => expect(ofType(port, 'supertab.focus')).toHaveLength(2), NEXT_TICKS)
+      expect(ofType(port, 'supertab.focus')[1]).toMatchObject({ lead: 'lead1' })
+      // The window leaves the Swarm tab and comes back: that is a change.
+      state.open = null
+      void session.syncSwarmCards()
+      await new Promise((r) => setTimeout(r, 450))
+      state.open = { superTabId: 'st1', projectId: 'proj1', fromDevice: false }
+      void session.syncSwarmCards()
+      await vi.waitFor(() => expect(ofType(port, 'supertab.focus')).toHaveLength(3), NEXT_TICKS)
+    } finally { await session.stop() }
+  })
+
+  it('a project the list does not hold yet is followed when the list arrives', async () => {
+    const state = { cards: [] as SwarmCard[], open: { superTabId: 'st1', projectId: 'proj1', fromDevice: false } }
+    const { session, port } = await connect(cardHost(state))
+    try {
+      port.say(PRO)
+      await vi.waitFor(() => expect(ofType(port, 'supertabs')).toHaveLength(1))
+      expect(ofType(port, 'supertab.focus')).toEqual([])
+      state.cards = [card('st1')]
+      void session.syncSwarmCards()
+      await vi.waitFor(() => expect(ofType(port, 'supertab.focus')).toEqual([{ t: 'supertab.focus', tab: 'st1', lead: 'lead1' }]), NEXT_TICKS)
+    } finally { await session.stop() }
+  })
+
+  it('supertab.select opens the Lead\'s project on the desktop, and the announce that follows is not echoed back', async () => {
+    const state = { cards: [card('st1')], open: null as { superTabId: string; projectId: string; fromDevice: boolean } | null }
+    const host = cardHost(state)
+    const { session, port } = await connect(host)
+    try {
+      port.say(PRO)
+      await vi.waitFor(() => expect(ofType(port, 'supertab')).toHaveLength(1))
+      port.say({ t: 'supertab.select', tab: 'st1', lead: 'lead2' }); await settle()
+      expect(host.superTabSelected).toHaveBeenCalledExactlyOnceWith('st1', 'proj2')
+      // The window answers with that project, marked or not: no focus comes back.
+      state.open = { superTabId: 'st1', projectId: 'proj2', fromDevice: true }
+      await session.syncSwarmCards(true)
+      expect(ofType(port, 'supertab.focus')).toEqual([])
+      state.open = { superTabId: 'st1', projectId: 'proj2', fromDevice: false }
+      void session.syncSwarmCards()
+      await new Promise((r) => setTimeout(r, 450))
+      expect(ofType(port, 'supertab.focus')).toEqual([])
+      // …but a later move by the person at the desk is followed (once the pick's 2 s are over).
+      vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 2100)
+      state.open = { superTabId: 'st1', projectId: 'proj1', fromDevice: false }
+      void session.syncSwarmCards()
+      await vi.waitFor(() => expect(ofType(port, 'supertab.focus')).toEqual([{ t: 'supertab.focus', tab: 'st1', lead: 'lead1' }]), NEXT_TICKS)
+      // An unknown Lead is not opened.
+      port.say({ t: 'supertab.select', tab: 'st1', lead: 'nobody' }); await settle()
+      expect(host.superTabSelected).toHaveBeenCalledTimes(1)
+    } finally { vi.restoreAllMocks(); await session.stop() }
+  })
+
+  it('another Pro still follows an announce a device caused: only the Pro that picked is spared the echo', async () => {
+    const state = { cards: [card('st1')], open: null as { superTabId: string; projectId: string; fromDevice: boolean } | null }
+    const host = cardHost(state)
+    const one = await connect(host), two = await connect(host)
+    try {
+      one.port.say(PRO); two.port.say(PRO)
+      await vi.waitFor(() => expect(ofType(one.port, 'supertab')).toHaveLength(1))
+      await vi.waitFor(() => expect(ofType(two.port, 'supertab')).toHaveLength(1))
+      one.port.say({ t: 'supertab.select', tab: 'st1', lead: 'lead2' }); await settle()
+      state.open = { superTabId: 'st1', projectId: 'proj2', fromDevice: true }
+      await one.session.syncSwarmCards(true)
+      await two.session.syncSwarmCards(true)
+      expect(ofType(one.port, 'supertab.focus')).toEqual([])
+      expect(ofType(two.port, 'supertab.focus')).toEqual([{ t: 'supertab.focus', tab: 'st1', lead: 'lead2' }])
+    } finally { await one.session.stop(); await two.session.stop() }
+  })
+
+  it('holds off the desktop\'s stale announce of another project for 2 s after a pick, then follows it', async () => {
+    const state = { cards: [card('st1')], open: null as { superTabId: string; projectId: string; fromDevice: boolean } | null }
+    const { session, port } = await connect(cardHost(state))
+    const now = vi.spyOn(Date, 'now')
+    try {
+      now.mockReturnValue(1_000_000)
+      port.say(PRO)
+      await vi.waitFor(() => expect(ofType(port, 'supertab')).toHaveLength(1))
+      port.say({ t: 'supertab.select', tab: 'st1', lead: 'lead2' }); await settle()
+      state.open = { superTabId: 'st1', projectId: 'proj1', fromDevice: false }   // what the window said before it heard the pick
+      now.mockReturnValue(1_001_500)
+      await session.syncSwarmCards(true)
+      expect(ofType(port, 'supertab.focus')).toEqual([])
+      now.mockReturnValue(1_002_100)
+      await session.syncSwarmCards(true)
+      expect(ofType(port, 'supertab.focus')).toEqual([{ t: 'supertab.focus', tab: 'st1', lead: 'lead1' }])
+    } finally { now.mockRestore(); await session.stop() }
+  })
+
+  it('names each cable session to the core, so one Pro closing its recap does not close another\'s', async () => {
+    const host = cardHost({ cards: [card('st1')] })
+    const one = await connect(host), two = await connect(host)
+    try {
+      one.port.say(PRO); two.port.say(PRO)
+      await vi.waitFor(() => expect(ofType(two.port, 'supertab')).toHaveLength(1))
+      one.port.say({ t: 'supertab.open', tab: 'st1', lead: 'lead1' }); await settle()
+      two.port.say({ t: 'supertab.open', tab: 'st1', lead: 'lead1' }); await settle()
+      const opened = vi.mocked(host.swarmCardOpen!).mock.calls
+      expect(opened[0][0]).not.toBe(opened[1][0])
+      one.port.say({ t: 'supertab.open', tab: 'st1', lead: '' }); await settle()
+      expect(vi.mocked(host.swarmCardOpen!).mock.calls.at(-1)).toEqual([opened[0][0], 'st1', null])
+    } finally { await one.session.stop(); await two.session.stop() }
+  })
+
+  it('ignores a repeat of the same recap request inside a second', async () => {
+    const host = cardHost({ cards: [card('st1')] })
+    const { session, port } = await connect(host)
+    const now = vi.spyOn(Date, 'now')
+    try {
+      now.mockReturnValue(5_000_000)
+      port.say(PRO)
+      await vi.waitFor(() => expect(ofType(port, 'supertab')).toHaveLength(1))
+      port.say({ t: 'supertab.recap.get', tab: 'st1', lead: 'lead1' }); await settle(); await settle()
+      port.say({ t: 'supertab.recap.get', tab: 'st1', lead: 'lead1' }); await settle(); await settle()
+      expect(host.swarmCardRecap).toHaveBeenCalledTimes(1)
+      port.say({ t: 'supertab.recap.get', tab: 'st1', lead: 'lead2' }); await settle(); await settle()
+      expect(host.swarmCardRecap).toHaveBeenCalledTimes(2)
+      now.mockReturnValue(5_001_100)
+      port.say({ t: 'supertab.recap.get', tab: 'st1', lead: 'lead1' }); await settle(); await settle()
+      expect(host.swarmCardRecap).toHaveBeenCalledTimes(3)
+    } finally { now.mockRestore(); await session.stop() }
+  })
+
+  it('shortens a recap on a character until its frame is within 6 KB', async () => {
+    const big = '日'.repeat(500) + '"\n'.repeat(1500)   // escapes make the JSON far bigger than the text
+    const host = cardHost({ cards: [card('st1')] }, { swarmCardRecap: vi.fn(async (tabId: string, leadId: string) => ({ tabId, leadId, text: big, at: 5, none: false })) })
+    const { session, port } = await connect(host)
+    try {
+      port.say(PRO)
+      await vi.waitFor(() => expect(ofType(port, 'supertab')).toHaveLength(1))
+      port.say({ t: 'supertab.recap.get', tab: 'st1', lead: 'lead1' })
+      await vi.waitFor(() => expect(ofType(port, 'supertab.recap')).toHaveLength(1))
+      const frame = ofType(port, 'supertab.recap')[0]
+      expect(Buffer.byteLength(JSON.stringify(frame))).toBeLessThanOrEqual(6 * 1024)
+      expect(String(frame.text).length).toBeGreaterThan(100)
+      expect(big.startsWith(String(frame.text))).toBe(true)
+      expect(String(frame.text)).not.toContain('\uFFFD')
+      expect(recapFrame({ tabId: 't', leadId: 'l', text: 'short', at: 1, none: false })).toMatchObject({ text: 'short' })
+    } finally { await session.stop() }
+  })
+
+  it('a Pro with no pick of its own that is told of a device\'s announce follows it, even when the list is fresh', async () => {
+    const state = { cards: [card('st1')], open: { superTabId: 'st1', projectId: 'proj2', fromDevice: true } }
+    const { session, port } = await connect(cardHost(state))
+    try {
+      port.say(PRO)
+      await vi.waitFor(() => expect(ofType(port, 'supertab.focus')).toEqual([{ t: 'supertab.focus', tab: 'st1', lead: 'lead2' }]))
+    } finally { await session.stop() }
+  })
+
+  it('a host without the card hooks still greets a Pro', async () => {
+    const { session, port } = await connect(makeHost())
+    try {
+      port.say(PRO)
+      await vi.waitFor(() => expect(ofType(port, 'supertabs')).toEqual([{ t: 'supertabs', ids: [] }]))
+      port.say({ t: 'supertab.open', tab: 'st1', lead: 'lead1' })
+      port.say({ t: 'supertab.select', tab: 'st1', lead: 'lead1' })
+      port.say({ t: 'supertab.recap.get', tab: 'st1', lead: 'lead1' })
+      await settle(); await settle()
+      expect(ofType(port, 'supertab.recap')).toEqual([])
+    } finally { await session.stop() }
   })
 })

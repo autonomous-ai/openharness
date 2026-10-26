@@ -6,6 +6,9 @@ import { FAIL, readFallback } from './serviceHost.js'
 const row = (agentId: string) => ({ agentId, sessionId: `s-${agentId}`, engine: 'claude', cwd: '/work/app' }) as RegisteredSession
 
 describe('the core API services stand on', () => {
+  it('allows a bounded batch of GitHub reads to finish outside the core', () => {
+    expect(LONG_ANSWERS.projects).toEqual({ git_pull_requests_status: 120_000 })
+  })
   it('closes only the original Swarm-started native session and treats an absent session as gone', async () => {
     const request = { agentId: 'worker', creationId: 'super-original-creation', sessionId: 'native', expiresAt: Date.now() + 120_000, createdAt: new Date(1000).toISOString() }
     const session = { ...row('worker'), sessionId: 'native', registeredAt: 1000, startedBy: 'agent' as const }
@@ -37,20 +40,81 @@ describe('the core API services stand on', () => {
     expect(await core.agents.closeSwarm!({ agentId: 'worker' })).toEqual({ closed: true })
   })
 
-  it('refuses a personal resume before or during the original creation lookup', async () => {
+  // A machine restart stops Swarm sessions; reopened, each keeps its harness, conversation and registeredAt but is marked
+  // resume-only. On 2026-10-23 such a worker could no longer be stopped by the Swarm ("not started by the Swarm").
+  it('closes a Swarm session reopened on its own conversation, and refuses one whose conversation changed during the lookup', async () => {
     const request = { agentId: 'worker', creationId: 'super-original-creation', sessionId: 'native', expiresAt: Date.now() + 120_000, createdAt: new Date(1000).toISOString() }
-    const session = { ...row('worker'), sessionId: 'native', registeredAt: 1000, startedBy: 'agent' as const, resumeOnly: true }
+    const session = { ...row('worker'), sessionId: 'native', registeredAt: 1000, startedBy: 'agent' as const, resumeOnly: true as const }
     const deps = coreDeps(), closeAgent = vi.fn(async () => ({ closed: true as const }))
-    const creationStatus = vi.fn(async () => {
-      session.resumeOnly = true
+    const creationStatus = vi.fn(async () => ({ creationId: request.creationId, state: 'created' as const, agentId: 'worker' }))
+    const core = createCoreApi({ ...deps, registry: { ...deps.registry, byAgent: () => session } as CoreApiDeps['registry'], closeAgent, creationStatus })
+    expect(await core.agents.closeSwarm!(request)).toEqual({ closed: true })
+    expect(closeAgent).toHaveBeenCalledOnce()
+    closeAgent.mockClear()
+    creationStatus.mockImplementationOnce(async () => {
+      session.sessionId = 'personal-resume'
       return { creationId: request.creationId, state: 'created' as const, agentId: 'worker' }
     })
-    const core = createCoreApi({ ...deps, registry: { ...deps.registry, byAgent: () => session } as CoreApiDeps['registry'], closeAgent, creationStatus })
-    expect(await core.agents.closeSwarm!(request)).toMatchObject({ error: expect.any(String) })
-    expect(creationStatus).not.toHaveBeenCalled()
-    session.resumeOnly = false
-    expect(await core.agents.closeSwarm!(request)).toMatchObject({ error: expect.any(String) })
+    expect(await core.agents.closeSwarm!(request)).toEqual({ error: 'AGENT_CHANGED' })
     expect(closeAgent).not.toHaveBeenCalled()
+  })
+
+  // The Super Tab host keeps a Swarm Lead alive and closes the sessions its backend ends (owner, 2026-10-23). The core
+  // decides what a service may do: reopen only a stopped Lead the host's retention names, close only a member it names.
+  it('reopens only a stopped Swarm Lead, and says a live one is up', async () => {
+    const deps = coreDeps(), resumeAgent = vi.fn(async () => ({ ok: true as const, session: row('stopped'), resumed: true }))
+    const leads = vi.fn(() => new Set(['stopped', 'live']))
+    const core = createCoreApi({ ...deps, resumeAgent, swarmMembers: { leads, harnesses: () => new Set() } })
+    expect(await core.agents.keepLeadAlive!('stopped')).toEqual({ ok: true })
+    expect(resumeAgent).toHaveBeenCalledWith('stopped')
+    expect(await core.agents.keepLeadAlive!('live')).toEqual({ ok: true })
+    leads.mockReturnValue(new Set(['live']))
+    expect(await core.agents.keepLeadAlive!('stopped')).toEqual({ ok: false, error: 'NOT_A_LEAD', detail: 'Only a stopped Product Manager of a Swarm project is reopened.' })
+    leads.mockReturnValue(new Set(['gone']))
+    expect(await core.agents.keepLeadAlive!('gone')).toMatchObject({ ok: false, error: 'NOT_A_LEAD' })
+    expect(resumeAgent).toHaveBeenCalledTimes(1)
+    leads.mockReturnValue(new Set(['stopped']))
+    resumeAgent.mockResolvedValueOnce({ ok: false, error: 'AGENT_BUSY', detail: 'busy' } as never)
+    expect(await core.agents.keepLeadAlive!('stopped')).toEqual({ ok: false, error: 'AGENT_BUSY', detail: 'busy' })
+    resumeAgent.mockResolvedValueOnce({ ok: false, error: 'RESUME_FAILED' } as never)
+    expect(await core.agents.keepLeadAlive!('stopped')).toEqual({ ok: false, error: 'RESUME_FAILED' })
+    expect(await createCoreApi(deps).agents.keepLeadAlive!('stopped')).toEqual({ ok: false, error: 'UNSUPPORTED' })
+  })
+
+  it('closes now only a Super Tab member the host retains, and treats an absent one as closed', async () => {
+    const base = coreDeps(), closeAgent = vi.fn(async () => ({ closed: true as const }))
+    const deps = { ...base, registry: { ...base.registry, byAgent: (id: string) => id === 'live' ? { ...row('live'), registeredAt: 1000 } : undefined } as CoreApiDeps['registry'] }
+    const harnesses = vi.fn(() => new Set(['live']))
+    const core = createCoreApi({ ...deps, closeAgent, swarmMembers: { leads: () => new Set(), harnesses } })
+    expect(await core.agents.closeMember!('live')).toEqual({ closed: true })
+    expect(closeAgent).toHaveBeenCalledWith({ agentId: 'live', sessionId: 's-live', createdAt: new Date(1000).toISOString(), mode: 'now' })
+    expect(await core.agents.closeMember!('absent')).toEqual({ closed: true })
+    harnesses.mockReturnValue(new Set())
+    expect(await core.agents.closeMember!('live')).toEqual({ error: 'NOT_A_MEMBER' })
+    harnesses.mockImplementation(() => { throw new Error('Super Tab retention is unreadable.') })
+    expect(await core.agents.closeMember!('live')).toEqual({ error: 'NOT_A_MEMBER' })
+    expect(closeAgent).toHaveBeenCalledTimes(1)
+    expect(await createCoreApi({ ...deps, closeAgent }).agents.closeMember!('live')).toEqual({ error: 'UNSUPPORTED' })
+    expect(await createCoreApi({ ...deps, swarmMembers: { leads: () => new Set(), harnesses: () => new Set(['live']) } }).agents.closeMember!('live')).toEqual({ error: 'UNSUPPORTED' })
+  })
+
+  // The review of #1635: an agent removed before its host wrote a roster naming it is no member there; the exact receipt of
+  // the Swarm's start proves it is the Swarm's own to close, and a receipt naming another harness proves nothing.
+  it('closes a member the retention does not name only when its start receipt names it', async () => {
+    const base = coreDeps(), closeAgent = vi.fn(async () => ({ closed: true as const }))
+    const creationStatus = vi.fn(async (creationId: string) => ({ creationId, state: 'created' as const, agentId: 'live' }))
+    const deps = { ...base, closeAgent, creationStatus, swarmMembers: { leads: () => new Set<string>(), harnesses: () => new Set<string>() },
+      registry: { ...base.registry, byAgent: (id: string) => id === 'live' ? { ...row('live'), registeredAt: 1000 } : undefined } as CoreApiDeps['registry'] }
+    const core = createCoreApi(deps)
+    expect(await core.agents.closeMember!('live')).toEqual({ error: 'NOT_A_MEMBER' })
+    expect(await core.agents.closeMember!('live', 'super-start')).toEqual({ closed: true })
+    expect(creationStatus).toHaveBeenCalledWith('super-start')
+    creationStatus.mockResolvedValueOnce({ creationId: 'super-start', state: 'created', agentId: 'another' })
+    expect(await core.agents.closeMember!('live', 'super-start')).toEqual({ error: 'NOT_A_MEMBER' })
+    creationStatus.mockResolvedValueOnce(null as never)
+    expect(await core.agents.closeMember!('live', 'super-start')).toEqual({ error: 'NOT_A_MEMBER' })
+    expect(await createCoreApi({ ...deps, creationStatus: undefined }).agents.closeMember!('live', 'super-start')).toEqual({ error: 'NOT_A_MEMBER' })
+    expect(closeAgent).toHaveBeenCalledTimes(1)
   })
 
   it('refuses missing or expired close leases, including expiry during the creation lookup', async () => {
@@ -193,8 +257,12 @@ describe('the core API services stand on', () => {
     expect(createCoreApi({ ...deps, cloud }).cloud).toBe(cloud)
     // The Super Tab service's door, the same way.
     expect(core.superTabs).toBeUndefined()
-    const superTabs = { attention: vi.fn() }
+    const superTabs = { attention: vi.fn(), cards: vi.fn(), cardRecap: vi.fn(), shareObservers: vi.fn(), screen: vi.fn(), input: vi.fn() }
     expect(createCoreApi({ ...deps, superTabs }).superTabs).toBe(superTabs)
+    // The devices' way to its card requests, the same way.
+    expect(core.superTabRequest).toBeUndefined()
+    const superTabRequest = vi.fn()
+    expect(createCoreApi({ ...deps, superTabRequest }).superTabRequest).toBe(superTabRequest)
     expect(core.agents.cloud).toBeUndefined()
     const rows = [{ agentId: 'cloud_1' }] as RegisteredSession[]
     expect(createCoreApi({ ...deps, cloudRows: () => rows }).agents.cloud!()).toBe(rows)
@@ -362,7 +430,7 @@ describe('the core API services stand on', () => {
     expect(readFallback(DEVICES_FALLBACKS.routeSend)).toEqual({ deferred: true, value: { ok: false, machine: '', reason } })
     // The Wi-Fi device finds no desk to walk; the dial and the window bridges hear nothing.
     expect(readFallback(DEVICES_FALLBACKS.stepFocus).value).toBe('no_agents')
-    for (const member of ['card', 'desk', 'swarms', 'unread', 'appFocus', 'seen', 'settings', 'windowFocus', 'windowReply', 'voiceReply', 'windowGone', 'scroll', 'engines', 'commanders'] as const) {
+    for (const member of ['card', 'desk', 'swarms', 'swarmCards', 'swarmCardRecap', 'unread', 'appFocus', 'seen', 'settings', 'windowFocus', 'windowReply', 'voiceReply', 'windowGone', 'scroll', 'engines', 'commanders'] as const) {
       expect(DEVICES_FALLBACKS[member], member).toBeUndefined()
     }
     expect(readFallback(DEVICES_FALLBACKS.stop)).toEqual({ deferred: true, value: undefined })

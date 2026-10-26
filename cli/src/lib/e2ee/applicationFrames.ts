@@ -23,15 +23,17 @@ const FLEET_REQUESTS = new Set(['grid_fleet_capabilities', 'grid_fleet_run', 'gr
   'grid_fleet_models_list', 'grid_fleet_model_download', 'grid_fleet_model_start', 'grid_fleet_model_stop'])
 const FLEET_RESULTS = new Set([...FLEET_REQUESTS].map(type => `${type}_result`))
 // `group_sync`: the trust-group roster exchange (groupSyncer.ts) — keys, so always sealed.
-const MACHINE_REQUESTS = new Set([...SHELL_REQUESTS, 'agent_purge', 'agent_worktree_delete', 'agents_cleanup_preview', 'agent_close', 'git_project_info', 'scm_project_info', 'git_pull_request', 'machine_resources', 'api_connections', 'connectors', 'group_sync', 'phone_pair', 'viewer_surface', 'orchestrator', 'agent_handoff_prepare',
+const MACHINE_REQUESTS = new Set([...SHELL_REQUESTS, 'agent_purge', 'agent_worktree_delete', 'agents_cleanup_preview', 'agent_close', 'git_project_info', 'scm_project_info', 'git_pull_request', 'git_pull_requests_status', 'machine_resources', 'api_connections', 'connectors', 'group_sync', 'phone_pair', 'viewer_surface', 'orchestrator', 'agent_handoff_prepare',
   // A held launch's cancellation and its receipt contain the client's private request identity.
-  'agent_create_cancel',
+  'agent_create_cancel', 'agent_handoff_complete',
   // Memories (services/memory.ts): what this machine's agents remember, and About You and its on/off choice.
   'memory_snapshot', 'memory_about_put', 'memory_deliver',
   // Cloud agents (services/cloud.ts): a cloud harness's conversation, the person's words for it, which are connected.
   'cloud_transcript', 'cloud_send', 'cloud_agents',
   // A Harness OS computer managed from the phone (services/osDevice.ts): a Wi-Fi join carries the network's password.
   'os_device',
+  // Add-ons of a device that is this machine (lib/autonomous-device/machineAddons.ts): a proposal's note and what it published.
+  'machine_addon',
   // Sharing a machine across accounts (services/sharedMachines.ts): the addresses it is shared with, and where
   // a guest may start a harness (the owner's folders).
   'shared_machines', 'guest_folders',

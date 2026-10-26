@@ -8,7 +8,8 @@
 import { join } from 'node:path'
 import { homeRoots, launchHomeOf } from '../lib/engineHomes.js'
 import { homeIsNetworkOrDevice } from './kit/homeAdoption.js'
-import { recordTrustIn, trustsIn } from './kit/folderTrust.js'
+import { recordAcceptanceIn, recordTrustIn, trustsIn } from './kit/folderTrust.js'
+import { recordInheritedMcp } from './kit/inheritedMcp.js'
 import { repairHistory } from './kit/resumeRepair.js'
 import { launchContract } from './launches.js'
 import type { AgentEngine } from './types.js'
@@ -27,7 +28,8 @@ export interface FolderTrust {
  * may have moved it since.
  */
 export function folderTrust(engine: AgentEngine, profile?: string | null, environment?: NodeJS.ProcessEnv): FolderTrust | null {
-  const trust = launchContract(engine)?.trust
+  const contract = launchContract(engine)
+  const trust = contract?.trust
   if (!trust) return null
   const home = (): string => launchHomeOf(trust.home, profile, environment)
   const file = (): string => join(home(), trust.file)
@@ -35,8 +37,30 @@ export function folderTrust(engine: AgentEngine, profile?: string | null, enviro
   const network = (): boolean => homeIsNetworkOrDevice(home())
   return {
     trusts: (path) => !network() && trustsIn(trust, file(), path),
-    record: (path) => network() ? 'skipped' : recordTrustIn(trust, file(), path),
+    record: (path) => {
+      if (network()) return 'skipped'
+      const recorded = recordTrustIn(trust, file(), path)
+      // The folder's other question, asked as the engine starts there: the MCP servers it inherits from above. A folder
+      // Harness trusts for its agent is one whose questions are Harness's, so it is answered here too, by its default.
+      const mcp = contract.inheritedMcp
+      if (mcp) {
+        try {
+          const settled = recordInheritedMcp(mcp, path, launchHomeOf(mcp.user.home, profile, environment))
+          if (settled.length) console.log(`[launch] ${engine}: continues without the MCP servers ${settled.join(', ')} it found above ${path}, as its question does by default`)
+        } catch { /* the engine asks, as before */ }
+      }
+      return recorded
+    },
   }
+}
+
+/** Record that full mode's one-time warning is accepted in `engine`'s settings, as its "Yes" would (`bypassAcceptance`); null
+ *  for an engine with no such warning. A network or device home is never opened, as for trust. */
+export function acceptFullMode(engine: AgentEngine, environment?: NodeJS.ProcessEnv): 'accepted' | 'already' | 'skipped' | null {
+  const contract = launchContract(engine)?.bypassAcceptance
+  if (!contract) return null
+  const home = launchHomeOf(contract.home, null, environment)
+  return homeIsNetworkOrDevice(home) ? 'skipped' : recordAcceptanceIn(join(home, contract.file), contract.key)
 }
 
 /** The session a resume relaunches. `codexHome` is the agent's own engine home, the row's profile. */

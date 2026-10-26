@@ -17,6 +17,10 @@ describe('the tile `harness remote` was typed in', () => {
     expect(handoffAgentId(rows, 'p1:%3')).toBe('a')
     expect(handoffAgentId(rows, 'p2:%3')).toBe('b')
     expect(handoffAgentId(rows, 'p3:%3')).toBeNull()
+    // A versioned host's, beside the legacy one of its protocol.
+    const versioned = [...rows, pty('dev', 'p2-0.4.21-dev.win1', '%7'), pty('hashed', 'p2-h0123456789ab', '%7')]
+    expect(handoffAgentId(versioned, 'p2-0.4.21-dev.win1:%7')).toBe('dev')
+    expect(handoffAgentId(versioned, 'p2-h0123456789ab:%7')).toBe('hashed')
   })
 
   it('never by the bare primary pane alone: a row without that runtime is not it', () => {
@@ -25,6 +29,7 @@ describe('the tile `harness remote` was typed in', () => {
 
   it('accepts either form on the wire, and nothing else', () => {
     expect(terminalHandoffRequest({ tmuxPane: 'p1:%3', machineId: 'm', agentId: 'a' })).toEqual({ tmuxPane: 'p1:%3', machineId: 'm', agentId: 'a' })
-    for (const pane of ['p1:3', 'x1:%3', 'p1:%', ':%3', 'p12345:%3']) expect(terminalHandoffRequest({ tmuxPane: pane, machineId: 'm', agentId: 'a' })).toBeNull()
+    for (const pane of ['p2-0.4.21-dev.win1:%7', 'p2-h0123456789ab:%7']) expect(terminalHandoffRequest({ tmuxPane: pane, machineId: 'm', agentId: 'a' })?.tmuxPane).toBe(pane)
+    for (const pane of ['p1:3', 'x1:%3', 'p1:%', ':%3', 'p12345:%3', 'p2-:%3', 'p2-a/b:%3']) expect(terminalHandoffRequest({ tmuxPane: pane, machineId: 'm', agentId: 'a' })).toBeNull()
   })
 })

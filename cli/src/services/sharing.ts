@@ -61,7 +61,7 @@ export function startSharing(core: CoreApi, ports: CorePorts, options: SharingOp
   const viewers = options.viewers ?? new SharedViewerPool(viewerPage(core))
   const superTabs = observerSource(core.dataDir, () => core.daemon.machineId())
   const owner = new HarnessShareOwner({
-    derivedGrants: superTabs.current,
+    derivedGrants: superTabs.known,
     allowsGrant: superTabs.allows,
     machineId: () => core.daemon.machineId(),
     key: {

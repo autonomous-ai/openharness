@@ -20,6 +20,9 @@ enum { POD_TAP_SLOP = 24 };   // px: farther than this from the DOWN and the con
 enum { POD_BAR_H = 72, POD_BAR_SWIPE = 80, POD_EDGE_SWIPE = 80, POD_BOTTOM_Y = 620 };   // POD_BOTTOM_Y: a swipe up that starts at or below it goes Home from a room or a recap
 
 typedef struct { const char *id, *name, *engine, *machine; } pod_roster_row_t;
+// One frame for the daemon about the Swarm cards: `t` is "supertab.select", "supertab.open" or "supertab.recap.get" (a literal), lead "" closes the open recap.
+typedef struct { const char *t; char tab[ID_MAX], lead[ID_MAX]; } pod_supertab_out_t;
+enum { POD_SUPERTAB_OUT_MAX = 8, POD_SUPERTAB_RETRIES = 5, POD_SUPERTAB_RETRY_MS = 3000 };
 
 typedef struct {
     pod_model_t model;
@@ -90,6 +93,17 @@ typedef struct {
     uint32_t last_touch_ms;
     char pending_focus[ID_MAX];
     uint32_t pending_focus_ms;
+    // The Swarm cards' Lead view (see pod_ui_take_supertab): the Lead the daemon was last told is open (empty: none), the frames waiting to go, and when a
+    // supertab.focus began waiting for its Swarm list.
+    char sup_tab[ID_MAX], sup_lead[ID_MAX];
+    char sup_close[ID_MAX];      // a "closed" frame the link dropped, owed for this Swarm until sent (empty: none), unless a Lead opens first
+    pod_supertab_out_t sup_q[POD_SUPERTAB_OUT_MAX];
+    uint8_t sup_qn;
+    uint32_t sup_at;             // when the open Lead was last (re)sent to the daemon, at the model's clock
+    uint8_t sup_tries;           // re-sends of open + recap.get so far while it stays LOADING (at most POD_SUPERTAB_RETRIES)
+    bool sup_reopened;           // the one supertab.open sent POD_SUPERTAB_RETRY_MS after opening, so the daemon surely knows the open Lead
+    bool lead_wait;
+    uint32_t lead_wait_ms;
     // The software update (see pod_ui_ota): while on, the stack stays as it was and ph_view_ota is what is drawn.
     bool ota, ota_restarting;
     int ota_pct;
@@ -112,6 +126,11 @@ pod_out_t pod_ui_turn(pod_ui_t *, const char *id, const char *kind, const char *
 // turn.stats for an agent (-1 leaves a field unknown); unknown agents are ignored.
 pod_out_t pod_ui_turn_stats(pod_ui_t *, const char *id, int32_t passed, int32_t failed, int32_t commits, int32_t tokens_in, int32_t tokens_out);
 // super_tab: the Super Tab the question was asked in (NULL = a plain question) and its attention (pod_model_question_tab).
+// The Swarm cards: the model's lists (pod_model_supertab_ids / _supertab / _recap / _focus) behind the same sync as every feed.
+pod_out_t pod_ui_supertab_ids(pod_ui_t *, const char (*ids)[ID_MAX], int n);
+pod_out_t pod_ui_supertab(pod_ui_t *, const pod_swarm_t *s, uint32_t now_ms);
+pod_out_t pod_ui_supertab_recap(pod_ui_t *, const char *tab, const char *lead, const char *text, uint32_t at, bool none);
+pod_out_t pod_ui_supertab_focus(pod_ui_t *, const char *tab, const char *lead, uint32_t now_ms);   // now_ms: the quiet-window and waiting clocks, as pod_ui_focus's
 pod_out_t pod_ui_question(pod_ui_t *, const char *id, const char *text, const char *super_tab, pod_attention_t attention);
 // The daemon took a recording for this agent (voice.result): Working now, before its turn starts (pod_model_sent).
 pod_out_t pod_ui_sent(pod_ui_t *, const char *id, uint32_t now_ms);
@@ -125,6 +144,19 @@ pod_out_t pod_ui_recap(pod_ui_t *, const char *id, const char *recap, bool resto
 #define POD_FOLLOW_ECHO_MS 800   // on the Tabs screen: the daemon's echo of the device's own move settles within 750 ms
 #define POD_FOLLOW_PENDING_MS 5000
 pod_out_t pod_ui_focus(pod_ui_t *, const char *agent_id, uint32_t now_ms);
+
+// ---- the Lead view (Swarm cards) ----
+// A tap on a Lead pet (POD_A_LEAD) opens the Lead view; a horizontal swipe on it steps to the previous / next Lead; supertab.focus (the model's focus_pending, acted on
+// after every feed) opens the Lead the desktop opened, the way pod_ui_focus does (not while talking, updating or touching; a Lead the list does not hold yet waits
+// POD_FOLLOW_PENDING_MS for it). The frames for the daemon are queued and taken after the lock is released: select (a tap or a swipe, never a follow: the
+// desktop already is there), then whatever makes the daemon's idea of the open recap match the screen: supertab.open with the Lead (and supertab.recap.get unless its
+// text is LOADED; it goes LOADING) when the Lead view shows one, supertab.open with no lead when it no longer does. While the Lead cannot be found (the link dropped,
+// the list not back yet) nothing is sent; a link drop forgets what was open, so the view re-sends open and get when its Lead is back.
+// Returns how many frames were written to out (at most max).
+int pod_ui_take_supertab(pod_ui_t *, pod_supertab_out_t out[], int max);
+// A frame taken by pod_ui_take_supertab that could not be sent (the link was busy): open / recap.get count as not sent, so the retry comes again (a failed retry is not counted);
+// the closing open (no lead) is owed until it is sent, unless a Lead opened since.
+void pod_ui_supertab_unsent(pod_ui_t *, const pod_supertab_out_t *frame);
 
 // The start, armed by a real link down -> up (pod_ui_link): once swarms of this link have arrived, if the stack is at the
 // root (TABS) and tab 0 has agents, enter tab 0 on its first agent (POD_A_ENTER_TAB). It is device-local: no AGENT_OPEN

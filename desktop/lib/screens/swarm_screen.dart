@@ -35,6 +35,7 @@ import '../models/model_search_catalog.dart';
 import '../widgets/resting_section.dart'
     show confirmStopInUse, confirmSwitchAnyway;
 import '../widgets/session_close_dialog.dart';
+import '../super_tabs/lead_guard.dart';
 import '../notify/system_notifications.dart';
 import '../widgets/account_device_detail.dart';
 import '../widgets/approve_device_code.dart';
@@ -149,6 +150,7 @@ import '../orchestrator/orchestrator_launcher.dart';
 import '../orchestrator/orchestrator_workspace.dart';
 import '../state/workspace_learning.dart';
 import '../state/workspace_onboarding.dart';
+import '../state/first_arrival.dart';
 import '../state/workspace_chrome.dart';
 import '../widgets/key_hints.dart';
 import '../daemons/daemon_brain.dart';
@@ -509,6 +511,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
   Widget _startGuide() => WorkspaceWelcome(
     key: ValueKey('welcome:${app.activeSwarmId}:${app.activeSwarm.isSuperTab}'),
     onCommand: _runShortcut,
+    swarmDraft: app.activeSwarm.isSuperTab,
     composerBuilder: newHarnessOpensInBox
         ? (recent) => _newHarnessEmbedded && _newHarness != null
               ? _newHarnessContent(footer: recent)
@@ -525,9 +528,25 @@ class _SwarmScreenState extends State<SwarmScreen> {
                             loading: app.machinesLoading,
                             preparing: _hasNewHarnessMachine,
                             preparingText: app.firstArrival.running
-                                ? 'Opening your agents…'
+                                ? 'Opening your harness…'
                                 : 'Preparing your harness…',
-                            onChoose: () => unawaited(_openMachines()),
+                            recovery: app.firstArrival.error,
+                            checkingStatus: app.firstArrival.checkingStatus,
+                            onRetry: app.firstArrival.canRetry
+                                ? _retryFirstArrival
+                                : null,
+                            onStartNew: app.firstArrival.canRetry &&
+                                    !app.firstArrival.checkingStatus
+                                ? _startFreshAfterArrival
+                                : null,
+                            onChoose: () {
+                              if (app.firstArrival.needsRecovery) {
+                                app.firstArrival.dismiss();
+                                _runShortcut('harnesses.list');
+                              } else {
+                                unawaited(_openMachines());
+                              }
+                            },
                           ),
                           if (recent != null) ...[
                             const SizedBox(height: 56),
@@ -572,6 +591,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
       (!app.activeSwarm.isSuperTab || app.activeSwarm.superTabId == null) &&
       _newHarness == null &&
       _search == null &&
+      !app.firstArrival.needsRecovery &&
       !_pickingFolder &&
       _hasNewHarnessMachine;
 
@@ -580,6 +600,31 @@ class _SwarmScreenState extends State<SwarmScreen> {
   bool get _hasNewHarnessMachine =>
       app.localMachineState != null ||
       widget.chrome?.newHarnessMachine?.call() != null;
+
+  Future<void> _retryFirstArrival() async {
+    final tab = app.activeSwarmId;
+    final work = app.firstArrival.retry(
+      app,
+      stillCurrent: () => mounted && app.activeSwarmId == tab &&
+          _newHarness == null && _search == null && !_pickingFolder,
+    );
+    setState(() {});
+    await work;
+    if (mounted) setState(() {});
+  }
+
+  void _startFreshAfterArrival() {
+    final arrival = app.firstArrival;
+    final session = arrival.selectedSession;
+    final engine = arrival.selectedEngine;
+    arrival.dismiss();
+    unawaited(_newAgent(
+      machineId: app.localMachineState?.machine.machineId,
+      folder: session?.cwd,
+      engine: engine,
+      task: session == null ? FirstArrival.starterTask : null,
+    ));
+  }
 
   void _scheduleWelcomeComposer() {
     if (_welcomeEntryScheduled || !_canShowWelcomeComposer) return;
@@ -599,7 +644,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
                 _search == null &&
                 !_pickingFolder,
           );
-          // Says "Opening your agents…" while it works.
+          // Says "Opening your harness…" while it works.
           if (mounted) setState(() {});
           if (await arriving) return;
           if (!_canShowWelcomeComposer || app.activeSwarmId != tab) return;
@@ -610,6 +655,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
         );
       } finally {
         _welcomeEntryScheduled = false;
+        if (mounted) setState(() {});
         // Switching tabs while defaults load must schedule the new page too.
         if (mounted && app.activeSwarmId != tab) _scheduleWelcomeComposer();
       }
@@ -649,6 +695,8 @@ class _SwarmScreenState extends State<SwarmScreen> {
     _recordNavigation();
     app.addListener(_recordNavigation);
     app.addListener(_observeLearning);
+    _syncMachineListWatch();
+    app.addListener(_syncMachineListWatch);
     // Its own notifier, so marking one agent does not rebuild the workspace —
     // which means the badge has to ask for its own redraw.
     app.agentUnread.addListener(_unreadChanged);
@@ -950,6 +998,8 @@ class _SwarmScreenState extends State<SwarmScreen> {
     terminalFontStore.removeListener(_fontChanged);
     app.removeListener(_recordNavigation);
     app.removeListener(_observeLearning);
+    app.removeListener(_syncMachineListWatch);
+    _machineListWatch?.cancel();
     app.removeListener(_followTabStripFocus);
     _tabStripFocus.removeListener(_tabStripFocusChanged);
     _tabStripFocus.dispose();
@@ -1634,7 +1684,8 @@ class _SwarmScreenState extends State<SwarmScreen> {
               !machine.isOffline,
         )
         .length;
-    return '${machines.length} linked machines · $online online · ${machines.length - online} offline.\n'
+    final linked = machines.length == 1 ? 'machine' : 'machines';
+    return '${machines.length} linked $linked · $online online · ${machines.length - online} offline.\n'
         '${_commandTooltip('Open Machines', 'machines.list')}';
   }
 
@@ -2191,7 +2242,8 @@ class _SwarmScreenState extends State<SwarmScreen> {
                       p.agentId != null &&
                       app.questionFor(p.machineId, p.agentId!) != null,
                 )
-                .length,
+                .length +
+                tabMentionsWaiting(app, swarm),
             if (tabActivity(app, swarm) case final activity?)
               'activity': nativeActivityPayload(
                 activity,
@@ -2882,6 +2934,11 @@ class _SwarmScreenState extends State<SwarmScreen> {
                 SessionCloseItem(
                   name: targets[i].$2.displayName,
                   activity: activities[i],
+                  protectionReason: superTabLeadProtectionReason(
+                    app,
+                    targets[i].$1,
+                    targets[i].$2.id,
+                  ),
                   machineName: showMachines
                       ? app.stateOf(targets[i].$1)?.machine.displayName ??
                             targets[i].$1
@@ -3431,6 +3488,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
           context,
           app,
           keymap: _keymap,
+          from: from,
           onConnectMachine: () => unawaited(_openMachines()),
           // "See your phones": Machines, at its phones, once the dialog has
           // gone. ⚠️ Asked for, not opened here: right after the pop this
@@ -3997,7 +4055,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
       return;
     }
     final content = _newHarnessContent();
-    _newHarnessOverlay = OverlayEntry(
+    _newHarnessOverlay = _workspaceOverlay(
       // Hidden, not removed, while a dialog ROUTE is up — see
       // [_withNewHarnessHidden]. The form keeps its State and its draft.
       builder: (context) => Offstage(
@@ -4608,7 +4666,8 @@ class _SwarmScreenState extends State<SwarmScreen> {
   String? _devicesAttemptedKey;
 
   Widget _devicesViewer(BuildContext context) {
-    final key = '${app.currentUser?.id}:${app.activeSwarmId}';
+    final viewerId = app.panes.where((pane) => pane.isDevices).firstOrNull?.id;
+    final key = '${app.currentUser?.id}:${app.activeSwarmId}:$viewerId';
     if (app.activeSwarm.isDevices &&
         app.devicesEnabled &&
         _devicesAttemptedKey != key) {
@@ -4617,8 +4676,9 @@ class _SwarmScreenState extends State<SwarmScreen> {
         if (mounted &&
             app.activeSwarm.isDevices &&
             app.devicesEnabled &&
-            key == '${app.currentUser?.id}:${app.activeSwarmId}') {
-          unawaited(_devicesHarness.open());
+            key ==
+                '${app.currentUser?.id}:${app.activeSwarmId}:${app.panes.where((pane) => pane.isDevices).firstOrNull?.id}') {
+          unawaited(_devicesHarness.open(swarmId: app.activeSwarmId));
         }
       });
     }
@@ -4635,7 +4695,8 @@ class _SwarmScreenState extends State<SwarmScreen> {
       name: 'Devices',
       opening: _devicesHarness.opening,
       error: _devicesHarness.error,
-      onRetry: () => unawaited(_devicesHarness.open()),
+      onRetry: () =>
+          unawaited(_devicesHarness.open(swarmId: app.activeSwarmId)),
     ),
   );
 
@@ -4656,7 +4717,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
     _closeSearch(restoreFocus: false);
     dismissTransientMenus();
     app.openDevices();
-    unawaited(_devicesHarness.open());
+    if (app.activeSwarm.isDevices) unawaited(_devicesHarness.open());
   }
 
   Widget _devicesButton(BuildContext context) => WorkspaceStoreButton(
@@ -5533,7 +5594,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
         _closeDaemonPreview();
         return;
       }
-      _daemonPreview = OverlayEntry(
+      _daemonPreview = _workspaceOverlay(
         builder: (context) {
           final width = math.min(
             350.0,
@@ -5679,7 +5740,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
     if (overlay == null) return false;
     _closeDaemonPreview();
     _closeDaemonHint();
-    _daemonHintOverlay = OverlayEntry(
+    _daemonHintOverlay = _workspaceOverlay(
       builder: (context) {
         final cell = workspaceBarCellSizeOf(context);
         return Positioned(
@@ -5772,7 +5833,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
     _closeSearch(restoreFocus: false);
     dismissTransientMenus();
     _preparePaneFocus();
-    _daemonOverlay = OverlayEntry(
+    _daemonOverlay = _workspaceOverlay(
       builder: (context) => _anchoredBesideSlot(
         onBarrierTap: _closeDaemon,
         width: 480,
@@ -5888,7 +5949,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
     _face.beginReveal(kind: egg.kind);
     final result = _zoo.hatch(egg.id);
     _preparePaneFocus();
-    _hatchOverlay = OverlayEntry(
+    _hatchOverlay = _workspaceOverlay(
       builder: (context) => _anchoredBesideSlot(
         onBarrierTap: _closeHatch,
         cells: daemonRevealCells,
@@ -5968,7 +6029,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
     app.markModelsOpened();
     unawaited(app.modelManager.refresh());
     unawaited(_modelsMenu!.refresh());
-    _modelsOverlay = OverlayEntry(
+    _modelsOverlay = _workspaceOverlay(
       builder: (context) => LayoutBuilder(
         builder: (context, constraints) => Stack(
           children: [
@@ -6262,6 +6323,18 @@ class _SwarmScreenState extends State<SwarmScreen> {
                           agent.harnessId == row.agentId,
                     )
                     .firstOrNull;
+                final native = app
+                    .stateOf(row.machineId ?? '')
+                    ?.agents
+                    .where((agent) => agent.id == row.agentId)
+                    .firstOrNull;
+                final engine = agent?.engine ?? native?.engine ?? row.engine;
+                if (engine != null &&
+                    engine != 'terminal' &&
+                    engine != 'claude' &&
+                    engine != 'codex') {
+                  return 'Only Claude Code or Codex can join this Swarm.';
+                }
                 if (agent != null) {
                   if (agent.projectId != contributionProject?.id) {
                     return 'This agent belongs to another project. Create a new agent here.';
@@ -6274,11 +6347,6 @@ class _SwarmScreenState extends State<SwarmScreen> {
                       ? 'Already in this conversation.'
                       : null;
                 }
-                final native = app
-                    .stateOf(row.machineId ?? '')
-                    ?.agents
-                    .where((agent) => agent.id == row.agentId)
-                    .firstOrNull;
                 return native != null &&
                         native.engine != 'terminal' &&
                         native.terminalAvailable &&
@@ -6383,7 +6451,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
       },
     );
     _search!.addListener(_syncSearch);
-    _searchOverlay = OverlayEntry(builder: _buildSearchOverlay);
+    _searchOverlay = _workspaceOverlay(builder: _buildSearchOverlay);
     Overlay.of(context).insert(_searchOverlay!);
     _syncSearch();
     // The overlay and focus nodes update independently of the retained canvas.
@@ -7376,11 +7444,18 @@ class _SwarmScreenState extends State<SwarmScreen> {
 
   /// No computer of the account's is connected, and none is on its way: the
   /// inventory has answered, and every one is missing, offline or waiting to
-  /// be linked — what the host's [WorkspaceChrome.firstMachine] is for.
+  /// be linked — what the host's [WorkspaceChrome.firstMachine] is for. Not
+  /// when every one is only asleep ([_asleepComputers]): that account has set
+  /// one up, and keeps its panes.
   bool get _needsFirstConnection =>
       _machineInventorySettled &&
-      !_hasConnectedBrowserMachine &&
-      !app.machineStates.values.any(
+      !_computerConnectedOrComing &&
+      _asleepComputers.isEmpty;
+
+  /// A computer of the account's is connected, or on its way.
+  bool get _computerConnectedOrComing =>
+      _hasConnectedBrowserMachine ||
+      app.machineStates.values.any(
         (machine) =>
             !machine.machine.isShared &&
             !machine.needsLink &&
@@ -7389,12 +7464,98 @@ class _SwarmScreenState extends State<SwarmScreen> {
                 machine.connectionStatus == ConnectionStatus.reconnecting),
       );
 
+  /// The account's own computers, all of them offline and none waiting on this
+  /// one to be linked: set up before, asleep now. Empty for an account with
+  /// none (a computer taken out of it does not count) — that one needs setting
+  /// up — and while any is connected, on its way, or waiting to be linked.
+  List<MachineState> get _asleepComputers {
+    final own = [
+      for (final machine in app.machineStates.values)
+        if (!machine.machine.isShared &&
+            !app.removedMachines.containsKey(machine.machine.machineId))
+          machine,
+    ];
+    if (own.any((machine) => machine.needsLink || !machine.isOffline)) {
+      return const [];
+    }
+    return own;
+  }
+
+  /// The host's connect page covers the canvas: before the machine list first
+  /// answers — the page says it is looking, instead of a New tab page that
+  /// then gives way — and while there is no computer to use. Never over a
+  /// computer that is connected or on its way.
+  bool get _firstMachineCovers =>
+      widget.chrome?.firstMachine != null &&
+      (_needsFirstConnection ||
+          (!app.machineInventoryLoaded && !_computerConnectedOrComing));
+
+  /// Under the host's connect page, the canvas is out of sight, out of the
+  /// accessibility tree and out of Tab's reach: its buttons cannot be pressed.
+  /// A host without one (Desktop) gets the canvas itself, its focus tree as is.
+  Widget _underFirstMachine(Widget canvas) {
+    if (widget.chrome?.firstMachine == null) return canvas;
+    final covered = _firstMachineCovers;
+    return Offstage(
+      offstage: covered,
+      child: ExcludeFocus(excluding: covered, child: canvas),
+    );
+  }
+
+  /// On a host with a connect page (the browser's), which no longer covers
+  /// the panes of an account whose computers are all asleep: says which, and
+  /// that their panes come back with them. Never on Desktop.
+  bool get _showsAsleepBand =>
+      widget.chrome?.firstMachine != null &&
+      _machineInventorySettled &&
+      _asleepComputers.isNotEmpty;
+
+  Widget? _asleepBand() => _showsAsleepBand
+      ? _AsleepBand(
+          names: [
+            for (final machine in _asleepComputers) machine.machine.displayName,
+          ],
+        )
+      : null;
+
+  /// The one timer asking for the machine list while the host's connect page
+  /// or the asleep band shows: a browser with no computer connected hears of
+  /// one signing in, or waking up, no other way — its connections to
+  /// computers are what carry that news. Stopped once one is connected or on
+  /// its way, and with the workspace.
+  Timer? _machineListWatch;
+  static const _machineListWatchEvery = Duration(seconds: 4);
+
+  void _syncMachineListWatch() {
+    if (!_firstMachineCovers && !_showsAsleepBand) {
+      _machineListWatch?.cancel();
+      _machineListWatch = null;
+      return;
+    }
+    _machineListWatch ??= Timer.periodic(
+      _machineListWatchEvery,
+      (_) => unawaited(app.rereadMachines()),
+    );
+  }
+
+  /// The shared error banner shows — except when its only message is the
+  /// machine list's failure, which the host's connect page already shows with
+  /// its own Retry: a phone would read it twice.
+  bool get _showsErrorBanner {
+    if (_projects.error != null) return true;
+    final error = app.lastError;
+    if (error == null) return false;
+    return !(_firstMachineCovers &&
+        !app.machineInventoryLoaded &&
+        error == app.machineListError);
+  }
+
   /// The host's connect-a-computer page over the whole workspace — tabs synced
   /// from the account's desk would otherwise show panes for computers this
   /// browser cannot reach yet. Null when not needed, and for a host without one.
   Widget? _firstConnection(BuildContext context) {
     final page = widget.chrome?.firstMachine;
-    if (page == null || !_needsFirstConnection) return null;
+    if (page == null || !_firstMachineCovers) return null;
     return ColoredBox(
       color: grid.AppPalette.swarmTabBar,
       child: Center(
@@ -7898,8 +8059,18 @@ class _SwarmScreenState extends State<SwarmScreen> {
         if (mounted) linuxTitleBarActions.refresh();
       });
     }
-    return _buildWorkspace(context);
+    return _inChrome(_buildWorkspace(context));
   }
+
+  /// [child] under this workspace's host chrome, so [WorkspaceChrome.of]
+  /// reads the chrome this screen was given. The workspace and every overlay
+  /// it opens go through here; an overlay is outside the workspace's subtree.
+  Widget _inChrome(Widget child) =>
+      WorkspaceChromeScope(chrome: widget.chrome, child: child);
+
+  /// An overlay of this workspace, under its host chrome ([_inChrome]).
+  OverlayEntry _workspaceOverlay({required WidgetBuilder builder}) =>
+      OverlayEntry(builder: (context) => _inChrome(builder(context)));
 
   /// Search, notifications and Store, for the right end of the Linux title
   /// bar — the same three the tab strip draws on every other host.
@@ -8022,7 +8193,8 @@ class _SwarmScreenState extends State<SwarmScreen> {
                           ),
                         ),
                       ),
-                    if (_projects.error != null || app.lastError != null)
+                    ?_asleepBand(),
+                    if (_showsErrorBanner)
                       Material(
                         color: grid.AppPalette.panelBg,
                         child: Padding(
@@ -8134,142 +8306,135 @@ class _SwarmScreenState extends State<SwarmScreen> {
                                           child: Stack(
                                             children: [
                                               Positioned.fill(
-                                                child: PaneShareStatus(
-                                                  visible:
-                                                      widget
-                                                          .chrome
-                                                          ?.showsShareStatus ==
-                                                      true,
-                                                  child: PaneOpacity(
-                                                    opacity: appearancePrefsStore
-                                                        .value
-                                                        .effectivePaneOpacity,
-                                                    child: PaneGrid(
-                                                      notifier: app,
-                                                      swarmMode: true,
-                                                      onOpenModels:
-                                                          _openPaneModels,
-                                                      onSplitPane:
-                                                          (paneId, axis) =>
-                                                              unawaited(
-                                                                _splitAgent(
-                                                                  axis,
-                                                                  paneId:
-                                                                      paneId,
+                                                child: _underFirstMachine(
+                                                  PaneShareStatus(
+                                                    visible:
+                                                        widget
+                                                            .chrome
+                                                            ?.showsShareStatus ==
+                                                        true,
+                                                    child: PaneOpacity(
+                                                      opacity: appearancePrefsStore
+                                                          .value
+                                                          .effectivePaneOpacity,
+                                                      child: PaneGrid(
+                                                        notifier: app,
+                                                        swarmMode: true,
+                                                        onOpenModels:
+                                                            _openPaneModels,
+                                                        onSplitPane:
+                                                            (paneId, axis) =>
+                                                                unawaited(
+                                                                  _splitAgent(
+                                                                    axis,
+                                                                    paneId:
+                                                                        paneId,
+                                                                  ),
                                                                 ),
-                                                              ),
-                                                      devicesViewer:
-                                                          app.devicesEnabled
-                                                          ? _devicesViewer
-                                                          : null,
-                                                      devicesConversation:
-                                                          app.devicesEnabled
-                                                          ? _devicesConversation
-                                                          : null,
-                                                      companionViewer:
-                                                          _creatureEnabled
-                                                          ? _companionViewer
-                                                          : null,
-                                                      companionConversation:
-                                                          _creatureEnabled
-                                                          ? _companionConversation
-                                                          : null,
-                                                      soloFocused: _compact(
-                                                        context,
+                                                        devicesViewer:
+                                                            app.devicesEnabled
+                                                            ? _devicesViewer
+                                                            : null,
+                                                        devicesConversation:
+                                                            app.devicesEnabled
+                                                            ? _devicesConversation
+                                                            : null,
+                                                        companionViewer:
+                                                            _creatureEnabled
+                                                            ? _companionViewer
+                                                            : null,
+                                                        companionConversation:
+                                                            _creatureEnabled
+                                                            ? _companionConversation
+                                                            : null,
+                                                        soloFocused: _compact(
+                                                          context,
+                                                        ),
+                                                        empty:
+                                                            app.panes.isEmpty &&
+                                                                !app
+                                                                    .activeSwarm
+                                                                    .isUtility &&
+                                                                !app
+                                                                    .activeSwarm
+                                                                    .isOrchestrator
+                                                            ? newHarnessOpensInBox ||
+                                                                      app
+                                                                          .activeSwarm
+                                                                          .isNewTabPage
+                                                                  ? _startGuide()
+                                                                  : HarnessStartPage(
+                                                                      key: ValueKey(
+                                                                        'harness-start:${app.activeSwarmId}',
+                                                                      ),
+                                                                      focusNode:
+                                                                          _startSearchFocus,
+                                                                      createSearch: () => SwarmSearchController(
+                                                                        app,
+                                                                        _navigation
+                                                                            .recent,
+                                                                        projects:
+                                                                            _projects,
+                                                                        commands:
+                                                                            _searchCommands,
+                                                                        recentCommands:
+                                                                            () =>
+                                                                                _navigation.recentCommands,
+                                                                        // The first box a new
+                                                                        // person meets is the same
+                                                                        // box: its placeholder
+                                                                        // promises `?` and a way
+                                                                        // to create, so it has them.
+                                                                        modes:
+                                                                            _searchModes,
+                                                                        adding:
+                                                                            true,
+                                                                        offersCreate:
+                                                                            true,
+                                                                        placement:
+                                                                            HarnessPlacement.currentTab,
+                                                                        catalog:
+                                                                            _searchCatalog,
+                                                                      ),
+                                                                      onNewTab:
+                                                                          _newTab,
+                                                                      onNewPane: () => unawaited(
+                                                                        _addAgent(
+                                                                          query: '',
+                                                                        ),
+                                                                      ),
+                                                                      onCommands:
+                                                                          _showSearchCommands,
+                                                                      onQuickStart:
+                                                                          _learning
+                                                                              .offer
+                                                                          ? _startQuickStart
+                                                                          : null,
+                                                                      onPractice:
+                                                                          _practiceKeyboard,
+                                                                      onNew: () => _newAgent(
+                                                                        placement:
+                                                                            HarnessPlacement.currentTab,
+                                                                      ),
+                                                                      onNewWithTask: (task) => _newAgent(
+                                                                        task:
+                                                                            task,
+                                                                        placement:
+                                                                            HarnessPlacement.currentTab,
+                                                                      ),
+                                                                      onStore:
+                                                                          _openStore,
+                                                                      onResourceSearch: (query) => _openSearch(
+                                                                        adding:
+                                                                            true,
+                                                                        query:
+                                                                            query,
+                                                                      ),
+                                                                      onChoose:
+                                                                          _chooseStartSearch,
+                                                                    )
+                                                            : null,
                                                       ),
-                                                      empty:
-                                                          app.panes.isEmpty &&
-                                                              !app
-                                                                  .activeSwarm
-                                                                  .isUtility &&
-                                                              !app
-                                                                  .activeSwarm
-                                                                  .isOrchestrator
-                                                          ? newHarnessOpensInBox ||
-                                                                    app
-                                                                        .activeSwarm
-                                                                        .isNewTabPage
-                                                                ? _startGuide()
-                                                                : HarnessStartPage(
-                                                                    key: ValueKey(
-                                                                      'harness-start:${app.activeSwarmId}',
-                                                                    ),
-                                                                    focusNode:
-                                                                        _startSearchFocus,
-                                                                    createSearch: () => SwarmSearchController(
-                                                                      app,
-                                                                      _navigation
-                                                                          .recent,
-                                                                      projects:
-                                                                          _projects,
-                                                                      commands:
-                                                                          _searchCommands,
-                                                                      recentCommands:
-                                                                          () =>
-                                                                              _navigation.recentCommands,
-                                                                      // The first box a new
-                                                                      // person meets is the same
-                                                                      // box: its placeholder
-                                                                      // promises `?` and a way
-                                                                      // to create, so it has them.
-                                                                      modes:
-                                                                          _searchModes,
-                                                                      adding:
-                                                                          true,
-                                                                      offersCreate:
-                                                                          true,
-                                                                      placement:
-                                                                          HarnessPlacement
-                                                                              .currentTab,
-                                                                      catalog:
-                                                                          _searchCatalog,
-                                                                    ),
-                                                                    onNewTab:
-                                                                        _newTab,
-                                                                    onNewPane: () =>
-                                                                        unawaited(
-                                                                          _addAgent(
-                                                                            query: '',
-                                                                          ),
-                                                                        ),
-                                                                    onCommands:
-                                                                        _showSearchCommands,
-                                                                    onQuickStart:
-                                                                        _learning
-                                                                            .offer
-                                                                        ? _startQuickStart
-                                                                        : null,
-                                                                    onPractice:
-                                                                        _practiceKeyboard,
-                                                                    onNew: () => _newAgent(
-                                                                      placement:
-                                                                          HarnessPlacement
-                                                                              .currentTab,
-                                                                    ),
-                                                                    onNewWithTask:
-                                                                        (
-                                                                          task,
-                                                                        ) => _newAgent(
-                                                                          task:
-                                                                              task,
-                                                                          placement:
-                                                                              HarnessPlacement.currentTab,
-                                                                        ),
-                                                                    onStore:
-                                                                        _openStore,
-                                                                    onResourceSearch:
-                                                                        (
-                                                                          query,
-                                                                        ) => _openSearch(
-                                                                          adding:
-                                                                              true,
-                                                                          query:
-                                                                              query,
-                                                                        ),
-                                                                    onChoose:
-                                                                        _chooseStartSearch,
-                                                                  )
-                                                          : null,
                                                     ),
                                                   ),
                                                 ),
@@ -8883,6 +9048,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
                       final swarm = shown[index];
                       final selected = app.activeSwarmId == swarm.id;
                       final activity = activities[index];
+                      final tags = tabMentionsWaiting(app, swarm);
                       // A status cell animates only while its tab is in view.
                       Widget tabStatus(Widget Function(bool visible) mark) =>
                           ListenableBuilder(
@@ -8968,7 +9134,9 @@ class _SwarmScreenState extends State<SwarmScreen> {
                                 label: labels[index],
                                 selected: selected,
                                 tooltip: tabHint.isEmpty ? null : tabHint,
-                                activityLabel: activity?.label,
+                                activityLabel: tags > 0
+                                    ? tabMentionsLabel(tags)
+                                    : activity?.label,
                                 sharedCount: share.count,
                                 onInvitePeople: menus && share.invite
                                     ? () => unawaited(_invitePeople(swarm.id))
@@ -8996,8 +9164,15 @@ class _SwarmScreenState extends State<SwarmScreen> {
                                         app.requestCloseSwarm(swarm.id),
                                       )
                                     : null,
-                                activity:
-                                    activity == null || activity.mark.isEmpty
+                                activity: tags > 0
+                                    ? Text(
+                                        '$tags',
+                                        key: ValueKey('tab-tags:${swarm.id}'),
+                                        style: DesktopChrome.metadata(
+                                          color: grid.AppPalette.warn,
+                                        ).copyWith(fontWeight: FontWeight.w600),
+                                      )
+                                    : activity == null || activity.mark.isEmpty
                                     ? null
                                     : tabStatus(
                                         (visible) => ActivityMark(
@@ -9272,4 +9447,59 @@ enum _TitlebarCover {
 
   /// A dialog, the spoken palette or another route: the whole titlebar waits.
   modal,
+}
+
+/// Names the account's computers that are asleep, over the workspace that
+/// keeps their panes ([_SwarmScreenState._asleepBand]).
+class _AsleepBand extends StatelessWidget {
+  const _AsleepBand({required this.names});
+
+  final List<String> names;
+
+  @override
+  Widget build(BuildContext context) {
+    final one = names.length == 1;
+    final who = one
+        ? names.single
+        : '${names.sublist(0, names.length - 1).join(', ')} and ${names.last}';
+    return Material(
+      key: const ValueKey('workspace-asleep-band'),
+      color: grid.AppPalette.panelBg,
+      child: Semantics(
+        liveRegion: true,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+          child: Row(
+            children: [
+              Icon(
+                AppIcons.cloudOff,
+                size: 16,
+                color: grid.AppPalette.textSecondary,
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      one ? '$who is offline' : '$who are offline',
+                      style: grid.AppType.body(),
+                    ),
+                    Text(
+                      one
+                          ? 'Its panes reconnect when it is back.'
+                          : 'Their panes reconnect when they are back.',
+                      style: grid.AppType.body(
+                        color: grid.AppPalette.textSecondary,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
 }

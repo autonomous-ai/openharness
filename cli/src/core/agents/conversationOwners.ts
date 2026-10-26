@@ -16,7 +16,7 @@
  * conversation (names are kept by session id, `registry.rename`). A harness that is running is never set
  * aside (its record follows it), nor one whose resume is in flight.
  */
-import { isTerminalEngine } from '../../engines/types.js'
+import { conversationKey } from '../../lib/conversationIdentity.js'
 import { sid } from '../../lib/log.js'
 import type { RegisteredSession } from '../../lib/registry.js'
 import type { StoppedAgentStore } from '../../lib/stoppedAgents.js'
@@ -34,16 +34,7 @@ export interface ConversationOwnersDeps {
   now?: () => number
 }
 
-type Owned = Pick<RegisteredSession, 'engine' | 'sessionId' | 'codexHome' | 'hermesHome'>
-
-/**
- * A conversation, or null for a record that holds none. The same id under another Codex profile or Hermes
- * home is another conversation; a terminal holds none of its own.
- */
-export function conversationKey(row: Owned): string | null {
-  if (!row.sessionId || isTerminalEngine(row.engine)) return null
-  return [row.engine, row.codexHome ?? '', row.hermesHome ?? '', row.sessionId].join('\u0000')
-}
+export { conversationKey } from '../../lib/conversationIdentity.js'
 
 /** Newest binding first; then the newest record, then the id, so every daemon picks the same one. */
 const newestFirst = (a: RegisteredSession, b: RegisteredSession): number =>

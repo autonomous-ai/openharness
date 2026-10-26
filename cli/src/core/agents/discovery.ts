@@ -235,7 +235,13 @@ export function createDiscoveryHandlers({
   const onTerminalAvailability = (agent: RegisteredSession, available: boolean): void => {
     const changed = registry.terminalAvailable(agent.agentId) !== available
     registry.setTerminalAvailable(agent.agentId, available)
-    if (available && changed) announceSession(agent)
+    // A shell has no engine process to observe, so nothing else reactivates it after the core's start marked every row
+    // dormant: its pane being live (on whichever pty host serves it) is all the evidence there is. Held and failed
+    // launches are inactive on purpose.
+    const revive = available && isTerminalEngine(agent.engine) && !agent.active
+      && agent.launch?.state !== 'held' && agent.launch?.state !== 'failed'
+    if (revive) registry.setActive(agent.agentId, true)
+    if (available && (changed || revive)) announceSession(agent)
   }
   return { onDiscovered, onObserved, onDormant, onRemoved, onTerminalAvailability }
 }

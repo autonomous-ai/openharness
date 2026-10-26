@@ -9,10 +9,18 @@ import 'package:harness/terminal/terminal_text.dart';
 import '../shared/theme/app_theme.dart' as grid;
 import '../shared/widgets/app_icon_button.dart';
 import '../shortcuts/app_keymap.dart';
+import 'store_compact_nav.dart';
 
 /// Where "Create harness" goes: the ten-minute guide to a first DSH.
 const kCreateHarnessGuide =
     'https://github.com/autonomous-ai/openharness#your-first-dsh-in-ten-minutes';
+
+void _openCreateHarnessGuide() => unawaited(
+  launchUrl(
+    Uri.parse(kCreateHarnessGuide),
+    mode: LaunchMode.externalApplication,
+  ),
+);
 
 /// The Store's toolbar, laid out like Safari's: history on the left, a compact
 /// search field centred on the pane, and the way to make your own on the right.
@@ -29,6 +37,7 @@ class StoreSearch extends StatelessWidget {
     required this.onClear,
     required this.onBack,
     required this.onForward,
+    this.compact = false,
   });
 
   final TextEditingController controller;
@@ -38,6 +47,10 @@ class StoreSearch extends StatelessWidget {
   final VoidCallback onClear;
   final VoidCallback? onBack;
   final VoidCallback? onForward;
+
+  /// A phone's toolbar: each button answers a finger across [kStoreMinHit],
+  /// while the controls keep the size they are drawn at.
+  final bool compact;
 
   @override
   Widget build(BuildContext context) {
@@ -49,6 +62,13 @@ class StoreSearch extends StatelessWidget {
           grid.AppControl.height,
           MediaQuery.textScalerOf(context).scale(grid.AppType.bodySize) + 18,
         );
+        final field = _Field(
+          controller: controller,
+          focusNode: focusNode,
+          onChanged: onChanged,
+          autofocus: autofocus,
+          onClear: onClear,
+        );
         return Container(
           key: const ValueKey('store-search-header'),
           color: grid.AppPalette.windowBg,
@@ -57,29 +77,32 @@ class StoreSearch extends StatelessWidget {
             child: ConstrainedBox(
               constraints: const BoxConstraints(maxWidth: 1440),
               child: SizedBox(
-                height: height,
+                height: compact ? math.max(height, kStoreMinHit) : height,
                 child: CustomMultiChildLayout(
                   delegate: _ToolbarLayout(),
                   children: [
                     LayoutId(
                       id: _Slot.history,
-                      child: _History(onBack: onBack, onForward: onForward),
+                      child: _History(
+                        onBack: onBack,
+                        onForward: onForward,
+                        compact: compact,
+                      ),
                     ),
                     LayoutId(
                       id: _Slot.search,
-                      child: _Field(
-                        controller: controller,
-                        focusNode: focusNode,
-                        onChanged: onChanged,
-                        autofocus: autofocus,
-                        onClear: onClear,
-                      ),
+                      child: compact
+                          ? Center(
+                              child: SizedBox(height: height, child: field),
+                            )
+                          : field,
                     ),
                     LayoutId(
                       id: _Slot.create,
                       child: _CreateHarness(
                         height: height,
                         labelled: box.maxWidth >= 520,
+                        compact: compact,
                       ),
                     ),
                   ],
@@ -134,27 +157,36 @@ class _ToolbarLayout extends MultiChildLayoutDelegate {
 
 /// Back and forward in one capsule, split by a hairline, as Safari draws them.
 class _History extends StatelessWidget {
-  const _History({required this.onBack, required this.onForward});
+  const _History({
+    required this.onBack,
+    required this.onForward,
+    required this.compact,
+  });
 
   final VoidCallback? onBack;
   final VoidCallback? onForward;
+
+  /// Each button inside a [StoreHitArea] taller than the capsule drawn
+  /// behind them.
+  final bool compact;
 
   @override
   Widget build(BuildContext context) {
     TerminalFontScope.watch(context);
     final back = effectiveCommandHint(context, 'navigation.back');
     final forward = effectiveCommandHint(context, 'navigation.forward');
-    return Container(
-      height: grid.AppControl.height,
-      padding: const EdgeInsets.symmetric(horizontal: 4),
-      decoration: BoxDecoration(
-        color: grid.AppSurface.recess,
-        border: Border.all(color: grid.AppPalette.divider),
-        borderRadius: BorderRadius.circular(grid.AppControl.radius),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
+    Widget button(String id, Widget control, VoidCallback? onPressed) => compact
+        ? StoreHitArea(
+            key: ValueKey('store-$id-hit'),
+            onTap: onPressed,
+            child: control,
+          )
+        : control;
+    final buttons = Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        button(
+          'back',
           AppIconButton(
             key: const ValueKey('store-back'),
             icon: AppIcons.chevronLeft,
@@ -162,12 +194,16 @@ class _History extends StatelessWidget {
             onPressed: onBack,
             size: 17,
           ),
-          Container(
-            width: 1,
-            height: 14,
-            margin: const EdgeInsets.symmetric(horizontal: 3),
-            color: grid.AppPalette.divider,
-          ),
+          onBack,
+        ),
+        Container(
+          width: 1,
+          height: 14,
+          margin: const EdgeInsets.symmetric(horizontal: 3),
+          color: grid.AppPalette.divider,
+        ),
+        button(
+          'forward',
           AppIconButton(
             key: const ValueKey('store-nav-forward'),
             icon: AppIcons.chevronRight,
@@ -175,8 +211,36 @@ class _History extends StatelessWidget {
             onPressed: onForward,
             size: 17,
           ),
-        ],
-      ),
+          onForward,
+        ),
+      ],
+    );
+    final capsule = BoxDecoration(
+      color: grid.AppSurface.recess,
+      border: Border.all(color: grid.AppPalette.divider),
+      borderRadius: BorderRadius.circular(grid.AppControl.radius),
+    );
+    if (!compact) {
+      return Container(
+        height: grid.AppControl.height,
+        padding: const EdgeInsets.symmetric(horizontal: 4),
+        decoration: capsule,
+        child: buttons,
+      );
+    }
+    return Stack(
+      alignment: Alignment.center,
+      children: [
+        Positioned.fill(
+          child: Center(
+            child: Container(
+              height: grid.AppControl.height,
+              decoration: capsule,
+            ),
+          ),
+        ),
+        buttons,
+      ],
     );
   }
 }
@@ -307,25 +371,27 @@ class _Field extends StatelessWidget {
 /// action (Resume Harness, New Harness), so it reads before the chrome around
 /// it. It opens the guide in the browser; the tooltip says so.
 class _CreateHarness extends StatelessWidget {
-  const _CreateHarness({required this.height, required this.labelled});
+  const _CreateHarness({
+    required this.height,
+    required this.labelled,
+    required this.compact,
+  });
 
   final double height;
 
   /// Too narrow a pane keeps a plus alone, with the words in its tooltip.
   final bool labelled;
 
+  /// Inside a [StoreHitArea], for a finger.
+  final bool compact;
+
   @override
   Widget build(BuildContext context) {
-    return Tooltip(
+    final button = Tooltip(
       message: 'Your first harness in ten minutes, on GitHub',
       child: FilledButton(
         key: const ValueKey('store-create-harness'),
-        onPressed: () => unawaited(
-          launchUrl(
-            Uri.parse(kCreateHarnessGuide),
-            mode: LaunchMode.externalApplication,
-          ),
-        ),
+        onPressed: _openCreateHarnessGuide,
         style: FilledButton.styleFrom(
           minimumSize: Size(height, height),
           padding: EdgeInsets.symmetric(horizontal: labelled ? 14 : 0),
@@ -340,6 +406,12 @@ class _CreateHarness extends StatelessWidget {
             ? const Text('Create Harness')
             : const Icon(AppIcons.plus, size: 16),
       ),
+    );
+    if (!compact) return button;
+    return StoreHitArea(
+      key: const ValueKey('store-create-hit'),
+      onTap: _openCreateHarnessGuide,
+      child: button,
     );
   }
 }

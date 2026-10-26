@@ -15,6 +15,13 @@
 #include "pod/pod_view.h"
 #include "pro_canvas.h"
 
+// A recap only lands on a Lead that was asked for (LOADING), as the Lead view does: the fixtures ask first.
+static void asked_recap(pod_model_t *m, const char *tab, const char *lead, const char *text, uint32_t at, bool none)
+{
+    pod_model_supertab_loading(m, tab, lead);
+    pod_model_supertab_recap(m, tab, lead, text, at, none);
+}
+
 #define T0 100000u
 
 typedef struct { const char *id, *name, *engine, *machine; } demo_agent_t;
@@ -270,7 +277,7 @@ static void write_spec(const char *path, const char *screen)
         }
         fputc('}', f);
     }
-    static const char *const act[] = {"NONE", "BACK", "BANNER", "OPEN_TAB", "OPEN_AGENT", "PREV", "NEXT", "TALK", "RECAP", "PANES", "TABS", "INBOX", "OPEN_NOTIF", "FOLLOW", "SCROLL", "ENTER_TAB"};
+    static const char *const act[] = {"NONE", "BACK", "BANNER", "OPEN_TAB", "OPEN_AGENT", "PREV", "NEXT", "TALK", "RECAP", "PANES", "TABS", "INBOX", "OPEN_NOTIF", "FOLLOW", "SCROLL", "ENTER_TAB", "LEAD"};
     fprintf(f, "],\"hits\":[");
     for (int i = 0; i < F.hit_count; i++) {
         const pod_hit_t *h = &F.hits[i];
@@ -298,6 +305,67 @@ static void supertab_ask(const char *id, const char *name, const char *q, pod_at
 {
     pod_model_question_tab(&M, id, q, "Launch v2", attn);
     pod_model_unread_ask(&M, id, name, q, T0);
+}
+
+// home:swarm:<p1|p2|stuck|done|many|remote>: Home on a Swarm card (the mockup swarm-card-v3.html A1 - A5, and a Swarm with Leads on other machines). The desk's first tab is linked to
+// "openharness" (4 projects, one Lead each: p1 the first page, p2 the second; stuck: website is stuck; done: all four; many: 10 projects under a long name, 5 working); remote is a
+// Swarm with no desk tab (its own page) whose Leads run on other people's machines.
+static void swarm_fixture(const char *kind)
+{
+    static pod_swarm_t sw;
+    static const char ids[2][ID_MAX] = {"sw1", "sw2"};
+    struct { const char *id, *project, *engine, *owner, *local; pod_lead_state_t st; unsigned since; } mine[10] = {
+        {"l1", "mobile", "muse", "", "h1", POD_LEAD_ASK, 0}, {"l2", "harness", "claude", "", "h2", POD_LEAD_WORK, 134},
+        {"l3", "website", "codex", "", "h3", POD_LEAD_WORK, 48}, {"l4", "backend", "codex", "", "h4", POD_LEAD_DONE, 0},
+        {"l5", "ios-app", "claude", "", "h5", POD_LEAD_WORK, 611}, {"l6", "docs", "codex", "", "h6", POD_LEAD_WORK, 25},
+        {"l7", "api", "claude", "", "h7", POD_LEAD_WORK, 302}, {"l8", "desktop", "muse", "", "h8", POD_LEAD_DONE, 0},
+        {"l9", "harness-os", "codex", "", "h9", POD_LEAD_WORK, 77}, {"l10", "grid", "claude", "", "h10", POD_LEAD_DONE, 0}},
+      theirs[3] = {{"r1", "ops", "claude", "Linh Tran", "", POD_LEAD_WORK, 0}, {"r2", "billing-service", "codex", "Minh", "", POD_LEAD_STUCK, 0}, {"r3", "docs", "muse", "", "h5", POD_LEAD_DONE, 0}};
+    const bool remote = !strcmp(kind, "remote"), many = !strcmp(kind, "many"), done = !strcmp(kind, "done"), stuck = !strcmp(kind, "stuck");
+    const int n = many ? 10 : 4;
+    pod_model_supertab_ids(&M, ids, remote ? 2 : 1);
+    memset(&sw, 0, sizeof sw);
+    snprintf(sw.id, ID_MAX, "sw1"); snprintf(sw.tab, ID_MAX, "%s", M.tabs[0].id); snprintf(sw.name, sizeof sw.name, "%s", many ? "openharness-launch-october" : "openharness");
+    sw.count = n; sw.lead_n = n;
+    if (stuck || many) mine[2].st = POD_LEAD_STUCK;   // website
+    for (int i = 0; i < n; i++) {
+        pod_lead_t *l = &sw.leads[i];
+        snprintf(l->id, ID_MAX, "%s", mine[i].id); snprintf(l->project, sizeof l->project, "%s", mine[i].project); snprintf(l->engine, sizeof l->engine, "%s", mine[i].engine);
+        snprintf(l->local, ID_MAX, "%s", mine[i].local); l->state = done ? POD_LEAD_DONE : mine[i].st; l->since_s = mine[i].since;
+    }
+    pod_model_supertab(&M, &sw, 0);
+    if (remote) {
+        memset(&sw, 0, sizeof sw);
+        snprintf(sw.id, ID_MAX, "sw2"); snprintf(sw.name, sizeof sw.name, "Shared launch"); sw.count = 3; sw.lead_n = 3;
+        for (int i = 0; i < 3; i++) {
+            pod_lead_t *l = &sw.leads[i];
+            snprintf(l->id, ID_MAX, "%s", theirs[i].id); snprintf(l->project, sizeof l->project, "%s", theirs[i].project); snprintf(l->engine, sizeof l->engine, "%s", theirs[i].engine);
+            snprintf(l->owner, sizeof l->owner, "%s", theirs[i].owner); snprintf(l->local, ID_MAX, "%s", theirs[i].local); l->state = theirs[i].st;
+        }
+        pod_model_supertab(&M, &sw, 0);
+        pod_nav_act(&N, &M, POD_A_SCROLL, M.tab_count, T0);   // the page after the tabs
+    } else {
+        pod_nav_act(&N, &M, POD_A_SCROLL, 0, T0);
+        if (!strcmp(kind, "p2")) N.swarm_page = 1;
+    }
+}
+
+// lead:<loaded|ask|loading|none|remote>: the Lead view over Home (the mockup swarm-card.html B1, B2, and the loading, no-message and remote-Lead states). loaded: the working
+// "harness" Lead (B1); ask: "mobile", which needs you (B2, the orange edge); loading: "website" before its message came; none: "backend", which has said nothing; remote:
+// a Lead on another person's machine (its owner shown, no talk).
+static void lead_fixture(const char *kind)
+{
+    const bool remote = !strcmp(kind, "remote");
+    swarm_fixture(remote ? "remote" : "p1");
+    const pod_swarm_t *sw = pod_model_swarm(&M, remote ? "sw2" : "sw1");
+    const int at = remote ? 0 : !strcmp(kind, "loaded") ? 1 : !strcmp(kind, "ask") ? 0 : !strcmp(kind, "loading") ? 2 : 3;
+    if (!pod_nav_open_lead(&N, &M, sw->id, at)) { fprintf(stderr, "lead:%s: the Lead view did not open\n", kind); exit(2); }
+    const char *id = sw->leads[at].id;
+    if (!strcmp(kind, "loaded")) asked_recap(&M, sw->id, id, "PR #1492 is merged and backend 1.2.100 is on production. The Pro took the test flash. Next: waiting for you to try it on the device.", 1792560000u, false);
+    else if (!strcmp(kind, "ask")) asked_recap(&M, sw->id, id, "iOS 1.0.9 finished building. Do you want it on TestFlight now, or wait for the Android banner fix?", 1792560000u, false);
+    else if (remote) asked_recap(&M, sw->id, id, "Staging is up on the new region. I am moving the queue workers over now; the first batch should land within the hour.", 1792560000u, false);
+    else if (!strcmp(kind, "loading")) pod_model_supertab_loading(&M, sw->id, id);
+    else asked_recap(&M, sw->id, id, NULL, 0, true);
 }
 
 int main(int argc, char **argv)
@@ -354,6 +422,10 @@ int main(int argc, char **argv)
             pod_model_turn(&M, "site", "activity", "Building the landing page", 20, T0);
         }
         pod_nav_act(&N, &M, POD_A_SCROLL, POD_HOME_WORKING, T0);
+    } else if (!strncmp(screen, "home:swarm:", 11)) {
+        swarm_fixture(screen + 11);
+    } else if (!strncmp(screen, "lead:", 5)) {
+        lead_fixture(screen + 5);
     } else if (!strcmp(screen, "tabs:9")) more_tabs(3);   // nine tabs: more than one page
     else if (!strcmp(screen, "tabs:seven") || !strcmp(screen, "tabs:single")) cover_tabs(!strcmp(screen, "tabs:seven"));
     else if (!strcmp(screen, "tabs:none")) { static const char *const *no_ids[1]; static const uint8_t no_n[1]; pod_model_swarms(&M, NULL, no_ids, no_n, 0, "", NULL, 0); pod_model_question_close(&M, "cli"); for (unsigned i = 0; i < sizeof AGENTS / sizeof AGENTS[0]; i++) pod_model_turn(&M, AGENTS[i].id, "done", NULL, 0, T0); }   // the first screen: no tabs, nobody working (else the Working card)

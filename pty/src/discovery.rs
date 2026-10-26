@@ -1,11 +1,9 @@
-//! `<home>/run/pty-host-<protocol>.json`: how a client finds and proves itself to the host.
+//! `<home>/run/pty-host-<instance>.json`: how a client finds and proves itself to the host.
 
 use std::io;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
-
-use crate::protocol::PROTOCOL;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Discovery {
@@ -18,13 +16,7 @@ pub struct Discovery {
 }
 
 pub fn file_path(run_dir: &Path) -> PathBuf {
-    run_dir.join(format!("pty-host-{PROTOCOL}.json"))
-}
-
-/// The host's instance name: one host per protocol (`p1`), so a protocol bump drains into a
-/// new instance.
-pub fn instance() -> String {
-    format!("p{PROTOCOL}")
+    crate::instance::run_file(run_dir, &crate::instance::current(), "json")
 }
 
 /// Write the discovery file atomically: a reader sees the old file or the whole new one, never a
@@ -32,10 +24,9 @@ pub fn instance() -> String {
 /// on Unix, on Windows the pipe's DACL `D:P(A;;GA;;;<user SID>)` (`files::replace_private`).
 pub fn write(run_dir: &Path, discovery: &Discovery) -> io::Result<PathBuf> {
     let path = file_path(run_dir);
-    let tmp = run_dir.join(format!(
-        "pty-host-{PROTOCOL}.json.{}.tmp",
-        std::process::id()
-    ));
+    let mut tmp = path.clone().into_os_string();
+    tmp.push(format!(".{}.tmp", std::process::id()));
+    let tmp = PathBuf::from(tmp);
     let body = serde_json::to_vec(discovery).map_err(io::Error::other)?;
     crate::files::replace_private(&tmp, &path, &body)?;
     Ok(path)
@@ -44,11 +35,12 @@ pub fn write(run_dir: &Path, discovery: &Discovery) -> io::Result<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::protocol::PROTOCOL;
 
     fn sample(token: &str) -> Discovery {
         Discovery {
             protocol: PROTOCOL,
-            instance: instance(),
+            instance: crate::instance::current(),
             endpoint: "/x.sock".into(),
             pid: 7,
             version: "0.1.0".into(),
@@ -60,13 +52,13 @@ mod tests {
     fn writes_and_replaces_the_file() {
         let dir = tempfile::tempdir().unwrap();
         let path = write(dir.path(), &sample("a")).unwrap();
-        assert_eq!(path, dir.path().join(format!("pty-host-{PROTOCOL}.json")));
+        assert_eq!(path, crate::instance::run_file(dir.path(), &crate::instance::current(), "json"));
         write(dir.path(), &sample("b")).unwrap();
         let read: Discovery = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
         assert_eq!(read, sample("b"));
         let v: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
         assert_eq!(v["protocol"], PROTOCOL);
-        assert_eq!(v["instance"], format!("p{PROTOCOL}"));
+        assert_eq!(v["instance"], crate::instance::current());
         // No temporary file is left behind.
         assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
     }

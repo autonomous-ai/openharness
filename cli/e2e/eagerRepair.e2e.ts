@@ -41,7 +41,7 @@ it.each(['missing', 'stalled'] as const)('discovers Muse and closes/resumes Pi w
     writeFileSync(path, `#!${process.execPath}
 const fs = require('node:fs'), path = require('node:path');
 if (process.argv.includes('--version') || process.argv.includes('--help')) { console.log('1.0.0'); process.exit(0) }
-const id = process.argv.includes('--session') ? process.argv[process.argv.indexOf('--session') + 1] : (${JSON.stringify(piIds)})[path.basename(process.cwd())];
+const id = process.argv.includes('--session-id') ? process.argv[process.argv.indexOf('--session-id') + 1] : (${JSON.stringify(piIds)})[path.basename(process.cwd())];
 process.title = (${JSON.stringify(engine)} === 'pi' ? 'pi --session-id ' + id : 'muse').padEnd(160);
 fs.appendFileSync(${JSON.stringify(join(d.root, `${engine}-launches.jsonl`))}, JSON.stringify({ id, args: process.argv.slice(2) }) + '\\n');
 ${engine === 'muse' ? `const folder = path.join(process.env.MUSE_HOME, 'sessions', '2026', '10', '09', '${museId}');
@@ -98,7 +98,7 @@ console.log('fixture-${engine}-ready'); setInterval(() => {}, 1000);
     await until('Pi resumes its exact preallocated conversation', async () =>
       (await rows()).find(row => row.id === pi.id)?.status === 'active' || null, 30_000, 100)
     await until('the private Pi process received the saved resume ID', () => readFileSync(join(d.root, 'pi-launches.jsonl'), 'utf8')
-      .split('\n').filter(Boolean).map(line => JSON.parse(line)).some(row => row.id === id && row.args.includes('--session')) || null, 15_000, 100)
+      .split('\n').filter(Boolean).map(line => JSON.parse(line)).some(row => row.id === id && row.args.includes('--session-id')) || null, 15_000, 100)
   }
   expect((await fetch(`http://127.0.0.1:${d.port}/api/health`)).ok).toBe(true)
   expect(d.coresStarted()).toBe(1)

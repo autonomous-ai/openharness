@@ -17,6 +17,7 @@ import 'desktop_workspace.dart'
 /// [startHarness] rather than depending on this package.
 Future<void> main() async {
   HarnessWidgetsBinding();
+  prepareConsole();
   await startHarness(
     authenticatedScreen: authenticatedWorkspace,
     frame: appFrame,

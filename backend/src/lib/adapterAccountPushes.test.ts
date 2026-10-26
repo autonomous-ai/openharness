@@ -34,6 +34,19 @@ describe('account pushes on a daemon socket', () => {
     expect(m.vaultUnsub).toHaveBeenCalledOnce()
   })
 
+  // A team machine (lib/teamSession.ts) runs for teammates and reads none of the account's desk, zoo, machine list or
+  // connections; it keeps only what it trusts its connections by, the device key log.
+  it('gives a team machine only the device-key-log change', async () => {
+    const send = vi.fn()
+    const stop = await relayAccountPushes('user-1', send, { zoo: true, team: true })
+    expect(m.keys).toHaveBeenCalledWith('user-1', expect.any(Function))
+    for (const other of [m.desk, m.zoo, m.machines, m.vault]) expect(other).not.toHaveBeenCalled()
+    m.keys.mock.calls[0][1]({ seq: 2, hash: 'h' })
+    expect(send).toHaveBeenCalledWith({ t: 'down', connId: '', frame: { type: 'device_keys_changed', payload: { seq: 2, hash: 'h' } } })
+    stop()
+    expect(m.keysUnsub).toHaveBeenCalledOnce()
+  })
+
   it('listens on the channels of the account that owns the socket', async () => {
     await relayAccountPushes('user-1', vi.fn(), on)
     expect(m.desk).toHaveBeenCalledWith('user-1', expect.any(Function))

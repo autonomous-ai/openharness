@@ -7,6 +7,7 @@ import 'controller.dart';
 import 'dialog_scope.dart';
 import 'model.dart';
 import 'project_visibility.dart';
+import 'roles_editor.dart';
 
 Future<void> showProjectAction(
   BuildContext context,
@@ -22,6 +23,7 @@ Future<void> showProjectAction(
   var visibility = project.isPrivate ? 'private' : 'public';
   final members = project.memberIds.toSet();
   var minutes = project.updateMinutes;
+  var mode = project.skillSet;
   var busy = false;
   await showAppDialog<void>(
     context: context,
@@ -43,6 +45,7 @@ Future<void> showProjectAction(
               title: Text(switch (action) {
                 'rename' => 'Rename project',
                 'sharing' => 'Sharing',
+                'skills' => 'Instructions for this project',
                 'cadence' => 'Project updates',
                 _ => 'Project details',
               }),
@@ -129,6 +132,89 @@ Future<void> showProjectAction(
                           style: DesktopChrome.metadata(),
                         ),
                       ],
+                      if (action == 'skills')
+                        Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              'Instructions',
+                              style: DesktopChrome.metadata(),
+                            ),
+                            const SizedBox(height: 8),
+                            RadioGroup<String>(
+                              groupValue: mode,
+                              onChanged: (value) {
+                                if (busy ||
+                                    !canManage ||
+                                    value == null ||
+                                    (value == 'custom' &&
+                                        current?.roles == null)) {
+                                  return;
+                                }
+                                update(() => mode = value);
+                              },
+                              child: Column(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  RadioListTile<String>(
+                                    value: 'default',
+                                    enabled: !busy && canManage,
+                                    contentPadding: EdgeInsets.zero,
+                                    title: const Text(
+                                      'Default — the team process; agents otherwise work their usual way',
+                                    ),
+                                  ),
+                                  RadioListTile<String>(
+                                    value: 'orchestration',
+                                    enabled: !busy && canManage,
+                                    contentPadding: EdgeInsets.zero,
+                                    title: const Text(
+                                      'Harness orchestration — adds Harness practices: plans, test-first, review rounds',
+                                    ),
+                                  ),
+                                  RadioListTile<String>(
+                                    value: 'custom',
+                                    enabled:
+                                        !busy &&
+                                        canManage &&
+                                        current?.roles != null,
+                                    contentPadding: EdgeInsets.zero,
+                                    title: const Text('Custom'),
+                                  ),
+                                ],
+                              ),
+                            ),
+                            if (canManage)
+                              current?.roles == null
+                                  ? OutlinedButton(
+                                      onPressed:
+                                          busy || c.saving || c.hasPendingAction
+                                          ? null
+                                          : () async {
+                                              update(() => busy = true);
+                                              await c.command({
+                                                'type': 'project.roles.create',
+                                                'projectId': project.id,
+                                                'roles': defaultProjectRoles(),
+                                              });
+                                              if (context.mounted) {
+                                                update(() => busy = false);
+                                              }
+                                            },
+                                      child: const Text('Create custom set'),
+                                    )
+                                  : TextButton(
+                                      onPressed: busy
+                                          ? null
+                                          : () => showRolesEditor(
+                                              context,
+                                              c,
+                                              project.id,
+                                            ),
+                                      child: const Text('Edit custom roles'),
+                                    ),
+                          ],
+                        ),
                       if (readOnly) ...[
                         Text(
                           current?.name ?? project.name,
@@ -182,6 +268,9 @@ Future<void> showProjectAction(
                             c.saving ||
                             c.hasPendingAction ||
                             name.trim().isEmpty ||
+                            (action == 'skills' &&
+                                mode == 'custom' &&
+                                current?.roles == null) ||
                             (action != 'cadence' && !canManage)
                         ? null
                         : () async {
@@ -192,6 +281,8 @@ Future<void> showProjectAction(
                                       ? 'rename'
                                       : action == 'sharing'
                                       ? 'sharing'
+                                      : action == 'skills'
+                                      ? 'skills'
                                       : 'cadence'}',
                               'projectId': project.id,
                               if (action == 'rename') 'name': name.trim(),
@@ -200,6 +291,7 @@ Future<void> showProjectAction(
                                 'memberIds': members.toList(),
                               },
                               if (action == 'cadence') 'minutes': minutes,
+                              if (action == 'skills') 'mode': mode,
                             });
                             if (!context.mounted) return;
                             if (result != null) {
@@ -264,7 +356,7 @@ Future<void> _deleteProject(
                       children: [
                         Text(
                           available
-                              ? '“${current?.name ?? project.name}” and all of its conversations will be permanently deleted. This can’t be undone.'
+                              ? '“${current?.name ?? project.name}” and all of its conversations will be permanently deleted. Its Product Manager’s session will close too. This can’t be undone.'
                               : 'This project is no longer available.',
                           style: DesktopChrome.text(),
                         ),

@@ -18,6 +18,7 @@ import { readAuthSession } from '../lib/authSession.js'
 import { HARNESS_OWNER_OPTION } from '../lib/harnessSessionLabel.js'
 import { MessageError } from './model.js'
 import { messagesRpc, type Rpc } from './rpc.js'
+import { PTY_HOST_PANE } from '../lib/ptyHost/instance.js'
 
 export const SEND_USAGE = `harness send — message your teammates in this tab
 
@@ -95,7 +96,7 @@ export function paneOwner(pane: string, tmux: (args: string[]) => string = (args
  *  which has no TMUX_PANE (messages/service.ts takes both). */
 export function sendPane(vars: NodeJS.ProcessEnv): string | undefined {
   if (vars.TMUX_PANE) return vars.TMUX_PANE
-  return /^p\d{1,4}:%\d{1,9}$/.test(vars.HARNESS_PANE ?? '') ? vars.HARNESS_PANE : undefined
+  return PTY_HOST_PANE.test(vars.HARNESS_PANE ?? '') ? vars.HARNESS_PANE : undefined
 }
 
 /** How many tasks `harness send` alone lists: a short section, the windows show the rest. */

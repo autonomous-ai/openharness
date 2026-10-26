@@ -9,10 +9,14 @@ import { identifier, object } from './wire.js'
 
 interface Context {
   tabId: string; baseline: NativeTurnCursor; until: number; head: string | null; blocked?: string
+  recoveryClockOffset?: number; lastGapId?: string
 }
+const GAP_REASONS = ['recording_restarted', 'history_lost', 'unattributed_input', 'context_expired', 'agent_stopped', 'prompt_missing'] as const
+interface Gap { incidentId: string; reason: typeof GAP_REASONS[number]; detectedAt: number }
 interface Event {
   contextId: string; turnId: string; kind: 'prompt' | 'answer' | 'gap'; previousEventId: string | null
   text: string; truncated: boolean; interrupted: boolean
+  gap?: Gap
 }
 interface RecordedAgent {
   cursor: NativeTurnCursor; contexts: Record<string, Context>; turns: Record<string, string>; outbox: Event[]
@@ -79,7 +83,9 @@ export class NativeRecorder {
         for (const [id, entry] of Object.entries(contexts)) {
           const c = object(entry)
           if (!identifier(id) || !identifier(c.tabId) || !nativeTurnCursorIn(c.baseline) || !Number.isFinite(c.until)
-            || !validIdOrNull(c.head) || (c.blocked !== undefined && typeof c.blocked !== 'string')) throw new Error('Invalid terminal context.')
+            || !validIdOrNull(c.head) || (c.blocked !== undefined && typeof c.blocked !== 'string')
+            || (c.recoveryClockOffset !== undefined && !Number.isFinite(c.recoveryClockOffset))
+            || (c.lastGapId !== undefined && !identifier(c.lastGapId))) throw new Error('Invalid terminal context.')
         }
         for (const [id, contextId] of Object.entries(turns)) if (!identifier(id) || !identifier(contextId) || !contexts[contextId]) throw new Error('Invalid terminal turn.')
         for (const value of row.outbox) {
@@ -87,6 +93,11 @@ export class NativeRecorder {
           if (!identifier(e.contextId) || !contexts[e.contextId] || !identifier(e.turnId) || !['prompt', 'answer', 'gap'].includes(String(e.kind))
             || !validIdOrNull(e.previousEventId) || typeof e.text !== 'string' || e.text.length > 16_000
             || typeof e.truncated !== 'boolean' || typeof e.interrupted !== 'boolean') throw new Error('Invalid terminal observation.')
+          if (e.gap !== undefined) {
+            const gap = object(e.gap)
+            if (e.kind !== 'gap' || !identifier(gap.incidentId) || !GAP_REASONS.includes(gap.reason as Gap['reason'])
+              || !Number.isSafeInteger(gap.detectedAt) || (gap.detectedAt as number) < 0) throw new Error('Invalid terminal recording gap.')
+          }
         }
       }
       if (Object.keys(object(saved.agents)).length > 128) throw new Error('Too many recorded terminals.')
@@ -126,6 +137,9 @@ export class NativeRecorder {
       this.available()
       if (!identifier(tabId) || !identifier(contextId) || closed?.aborted) throw new Error('This terminal request is no longer available.')
       const verified = object(await backend(this.core, 'GET', `/api/super-tabs/${tabId}/native/${contextId}`))
+      const recovery = object(verified.recovery)
+      const recoveryClockOffset = recovery.version === 1 && Number.isSafeInteger(recovery.serverTime)
+        ? (recovery.serverTime as number) - this.now() : undefined
       this.available()
       const harnessId = verified.harnessId
       if (closed?.aborted || verified.contextId !== contextId || verified.tabId !== tabId || verified.machineId !== this.machineId
@@ -145,10 +159,14 @@ export class NativeRecorder {
       if (!existing && Object.keys(this.journal.agents[harnessId]?.contexts ?? {}).length >= 256) throw new Error('Too many terminal contexts are active.')
       this.commit(next => {
         const row = next.agents[harnessId] ??= { cursor: page.cursor, contexts: {}, turns: {}, outbox: [] }
-        if (existing) row.contexts[contextId]!.until = this.now() + CONTEXT_LEASE
+        if (existing) {
+          row.contexts[contextId]!.until = this.now() + CONTEXT_LEASE
+          row.contexts[contextId]!.recoveryClockOffset = recoveryClockOffset
+        }
         else {
-          row.contexts[contextId] = { tabId, baseline: page.cursor, until: this.now() + CONTEXT_LEASE, head: verified.lastEventId as string | null }
-          if (verified.lastEventId) this.enqueue(row, contextId, { turnId: randomUUID(), kind: 'gap', text: '', truncated: false, interrupted: false })
+          row.contexts[contextId] = { tabId, baseline: page.cursor, until: this.now() + CONTEXT_LEASE,
+            head: verified.lastEventId as string | null, recoveryClockOffset }
+          if (verified.lastEventId) this.gap(row, contextId, harnessId, page.cursor.epoch, 'recording_restarted')
         }
       })
       return { ok: true, inputContext: contextId }
@@ -160,6 +178,21 @@ export class NativeRecorder {
     const context = row.contexts[contextId]!
     const last = row.outbox.findLast(e => e.contextId === contextId)
     row.outbox.push({ ...event, contextId, previousEventId: last ? eventId(last) : context.head })
+  }
+
+  private gap(row: RecordedAgent, contextId: string, harnessId: string, boundary: string, reason: Gap['reason'], interrupted = false): void {
+    const context = row.contexts[contextId]!
+    // Preparation and capture can both see the same restarted core. The epoch
+    // identifies that incident across views and durable outbox retries.
+    const incidentId = createHash('sha256').update(JSON.stringify(['native-gap', this.machineId, harnessId, reason, boundary])).digest('hex').slice(0, 24)
+    if (context.lastGapId === incidentId) return
+    // An expired view can be prepared again in the same core epoch. It reports
+    // the same incident but appends at a new head, so it needs its own observation.
+    const last = row.outbox.findLast(event => event.contextId === contextId)
+    const turnId = createHash('sha256').update(JSON.stringify([incidentId, last ? eventId(last) : context.head])).digest('hex').slice(0, 24)
+    this.enqueue(row, contextId, { turnId, kind: 'gap', text: '', truncated: false, interrupted,
+      ...(context.recoveryClockOffset === undefined ? {} : { gap: { incidentId, reason, detectedAt: this.now() + context.recoveryClockOffset } }) })
+    context.lastGapId = incidentId
   }
 
   private expired(row: RecordedAgent): string[] {
@@ -188,8 +221,7 @@ export class NativeRecorder {
           if (await this.core.agents.stopped?.(harnessId)) {
             this.commit(next => {
               const row = next.agents[harnessId]!
-              for (const id of new Set(Object.values(row.turns))) this.enqueue(row, id,
-                { turnId: randomUUID(), kind: 'gap', text: '', truncated: false, interrupted: true })
+              for (const id of new Set(Object.values(row.turns))) this.gap(row, id, harnessId, row.cursor.epoch, 'agent_stopped', true)
               row.turns = {}
               for (const c of Object.values(row.contexts)) c.until = 0
               this.prune(next, harnessId)
@@ -206,14 +238,15 @@ export class NativeRecorder {
         this.commit(next => {
           const row = next.agents[harnessId]!
           const gaps = new Set<string>()
-          const gap = (id: string) => {
+          const gap = (id: string, reason: Gap['reason']) => {
             if (gaps.has(id)) return
             gaps.add(id)
-            this.enqueue(row, id, { turnId: randomUUID(), kind: 'gap', text: '', truncated: false, interrupted: false })
+            this.gap(row, id, harnessId, reason === 'recording_restarted' ? page.cursor.epoch
+              : `${page.cursor.epoch}:${page.cursor.sequence}`, reason)
           }
           if (page.gap || page.observations.some(event => event.kind === 'prompt' && event.unattributedInput)) {
             for (const [id, c] of Object.entries(row.contexts)) {
-              if (!c.blocked) gap(id)
+              if (!c.blocked) gap(id, page.gap ? (page.cursor.epoch !== before.cursor.epoch ? 'recording_restarted' : 'history_lost') : 'unattributed_input')
             }
             if (page.gap) row.turns = {}
           }
@@ -224,14 +257,14 @@ export class NativeRecorder {
             if (!contextId || !context || context.blocked) continue
             if (context.baseline.epoch === page.cursor.epoch && observation.sequence <= context.baseline.sequence) continue
             if (observation.kind === 'prompt') {
-              if (context.until <= this.now()) { gap(contextId); continue }
+              if (context.until <= this.now()) { gap(contextId, 'context_expired'); continue }
               row.turns[observation.turnId] = contextId
               this.enqueue(row, contextId, copyEvent(observation))
             } else if (row.turns[observation.turnId] === contextId) {
               this.enqueue(row, contextId, copyEvent(observation))
               delete row.turns[observation.turnId]
             } else if (context.until > this.now()) {
-              this.enqueue(row, contextId, { turnId: observation.turnId, kind: 'gap', text: '', truncated: false, interrupted: true })
+              this.gap(row, contextId, harnessId, observation.turnId, 'prompt_missing', true)
             }
           }
           row.cursor = page.cursor

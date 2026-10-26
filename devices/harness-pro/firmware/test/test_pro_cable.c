@@ -35,7 +35,7 @@ static int checks;
 
 // ---- the recorder --------------------------------------------------------------------------------------
 enum { EV_STATS, EV_LINK, EV_AGENTS, EV_SWARMS, EV_LIBRARY, EV_CONTEXT, EV_TURN, EV_SUMMARY, EV_QUESTION, EV_QCLOSE, EV_FOCUS,
-       EV_VOICE, EV_MACHINES, EV_NREPLACE, EV_NSEEN };
+       EV_VOICE, EV_MACHINES, EV_NREPLACE, EV_NSEEN, EV_STIDS, EV_SUPERTAB, EV_STRECAP, EV_STFOCUS };
 typedef struct { int kind; char id[64]; char a[2400], b[2400], c[2400], d[128]; long n1, n2, n3, n4, n5; } ev_t;
 #define EV_MAX 64
 static ev_t evs[EV_MAX];
@@ -74,6 +74,25 @@ void pro_app_swarms(const cable_swarm_t *items, int n, const cable_swarm_members
     if (members) memcpy(&rec_members, members, sizeof rec_members);
     memcpy(rec_tiles, tiles, (size_t)tile_n * sizeof *tiles);
 }
+static pod_swarm_t rec_card;
+static char rec_ids[SWARMS_CARD_MAX][ID_MAX];
+void pro_app_supertab_ids(const char (*ids)[ID_MAX], int n)
+{
+    ev_t *e = add(EV_STIDS, NULL);
+    e->n1 = n;
+    memcpy(rec_ids, ids, (size_t)n * sizeof *ids);
+}
+void pro_app_supertab(const pod_swarm_t *sw)
+{
+    ev_t *e = add(EV_SUPERTAB, sw->id);
+    rec_card = *sw;
+    e->n1 = sw->lead_n;
+}
+void pro_app_supertab_recap(const char *tab, const char *lead, const char *text, uint32_t at, bool none)
+{
+    ev_t *e = add(EV_STRECAP, tab); put(e->a, lead); put(e->b, text); e->n1 = at; e->n2 = none;
+}
+void pro_app_supertab_focus(const char *tab, const char *lead) { ev_t *e = add(EV_STFOCUS, tab); put(e->a, lead); }
 void pro_app_library(const pro_library_row_t *rows, int count, int offset, int total)
 {
     ev_t *e = add(EV_LIBRARY, NULL);
@@ -139,6 +158,12 @@ bool cable_link_start(cable_frame_cb cb, cable_tick_cb tick, void *ctx) { (void)
 void cable_link_set_log_framing(bool on) { (void)on; }
 static int decoder_resets;
 void cable_link_reset_decoder(void) { decoder_resets++; }
+static bool host_present;   // off unless a test turns it on: with no host the self re-plug's clock never runs
+bool cable_link_host_present(void) { return host_present; }
+static int replugs;
+void cable_link_replug(void) { replugs++; }
+static bool rx_pending;     // part of a frame is in (test_cable_link covers when the real reader says so)
+bool cable_link_rx_pending(void) { return rx_pending; }
 static int64_t now_us = 1000000;
 int64_t esp_timer_get_time(void) { return now_us; }
 const esp_app_desc_t *esp_app_get_description(void) { static const esp_app_desc_t d = { .version = "0.0.0" }; return &d; }
@@ -1072,6 +1097,241 @@ static void seq_gaps(void)
     end_session();
 }
 
+// The Swarm cards (the hello's swarmCard:v1 is checked in test_pro_hello.py): supertabs {ids} + one supertab per Swarm +
+// supertab.recap / supertab.focus in, pro_app_supertab* out.
+static void test_swarm_cards(void)
+{
+    welcome();
+    // the id list: order kept, a bad / repeated id skipped, 20 -> 16
+    reset();
+    feed("{\"t\":\"supertabs\",\"ids\":[\"S1\",\"S2\",7,\"\",\"S1\",\"S3\"]}");
+    CHECK(nev == 1 && evs[0].kind == EV_STIDS && evs[0].n1 == 3 && !strcmp(rec_ids[0], "S1") && !strcmp(rec_ids[2], "S3"));
+    reset();
+    char big[4096];
+    int w = snprintf(big, sizeof big, "{\"t\":\"supertabs\",\"ids\":[");
+    for (int i = 0; i < 20; i++) w += snprintf(big + w, sizeof big - (size_t)w, "%s\"s%d\"", i ? "," : "", i);
+    snprintf(big + w, sizeof big - (size_t)w, "]}");
+    feed(big);
+    CHECK(nev == 1 && evs[0].n1 == SWARMS_CARD_MAX && !strcmp(rec_ids[SWARMS_CARD_MAX - 1], "s15"));
+    reset();   // not an array: dropped
+    feed("{\"t\":\"supertabs\",\"ids\":{}}");
+    CHECK(nev == 0);
+
+    // one Swarm with 3 Leads: every field
+    reset();
+    feed("{\"t\":\"supertab\",\"id\":\"S1\",\"tab\":\"T1\",\"name\":\"openharness\",\"count\":4,\"leads\":["
+         "{\"id\":\"L1\",\"projectId\":\"P1\",\"project\":\"mobile\",\"engine\":\"claude\",\"owner\":\"\",\"local\":\"H1\",\"state\":\"ask\",\"since\":134},"
+         "{\"id\":\"L2\",\"project\":\"web\",\"engine\":\"codex\",\"owner\":\"Mai\",\"local\":\"\",\"state\":\"stuck\",\"since\":0},"
+         "{\"id\":\"L3\",\"project\":\"api\",\"engine\":\"gemini\",\"owner\":\"\",\"local\":\"H3\",\"state\":\"work\",\"since\":9}]}");
+    CHECK(nev == 1 && evs[0].kind == EV_SUPERTAB && !strcmp(evs[0].id, "S1") && evs[0].n1 == 3);
+    CHECK(!strcmp(rec_card.tab, "T1") && !strcmp(rec_card.name, "openharness") && rec_card.count == 4 && rec_card.lead_n == 3);
+    CHECK(!strcmp(rec_card.leads[0].id, "L1") && !strcmp(rec_card.leads[0].projectId, "P1") && !strcmp(rec_card.leads[0].project, "mobile") &&
+          !strcmp(rec_card.leads[0].engine, "claude") && !strcmp(rec_card.leads[0].local, "H1") &&
+          rec_card.leads[0].state == POD_LEAD_ASK && rec_card.leads[0].since_s == 134 &&
+          rec_card.leads[0].recap == POD_RECAP_NONE && rec_card.leads[0].text == NULL);
+    CHECK(rec_card.leads[1].state == POD_LEAD_STUCK && !strcmp(rec_card.leads[1].owner, "Mai") && rec_card.leads[1].projectId[0] == 0 &&
+          rec_card.leads[2].state == POD_LEAD_WORK && rec_card.leads[2].since_s == 9);
+
+    // `order` (the project's index in the Swarm, the app's order) puts the Leads in that order whatever their urgency; without it they stay as they came
+    static const char *plain_leads = "{\"id\":\"L1\",\"projectId\":\"P1\",\"project\":\"mobile\",\"engine\":\"claude\",\"owner\":\"\",\"local\":\"H1\",\"state\":\"ask\",\"since\":134},"
+                                     "{\"id\":\"L2\",\"project\":\"web\",\"engine\":\"codex\",\"owner\":\"Mai\",\"local\":\"\",\"state\":\"done\"}";
+    static const char *order_leads = "{\"id\":\"L1\",\"projectId\":\"P1\",\"project\":\"mobile\",\"engine\":\"claude\",\"owner\":\"\",\"local\":\"H1\",\"state\":\"ask\",\"order\":2,\"since\":134},"
+                                     "{\"order\":0,\"id\":\"L2\",\"project\":\"web\",\"engine\":\"codex\",\"owner\":\"Mai\",\"local\":\"\",\"state\":\"done\"},"
+                                     "{\"id\":\"L3\",\"project\":\"api\",\"engine\":\"codex\",\"state\":\"work\",\"order\":1}";
+    reset();
+    feedf("{\"t\":\"supertab\",\"id\":\"S1\",\"tab\":\"T1\",\"name\":\"openharness\",\"count\":2,\"leads\":[%s]}", plain_leads);
+    CHECK(nev == 1 && rec_card.lead_n == 2 && !strcmp(rec_card.leads[0].id, "L1") && !strcmp(rec_card.leads[1].id, "L2"));
+    pod_swarm_t plain = rec_card;
+    reset();
+    feedf("{\"t\":\"supertab\",\"id\":\"S1\",\"tab\":\"T1\",\"name\":\"openharness\",\"count\":3,\"leads\":[%s]}", order_leads);
+    CHECK(nev == 1 && evs[0].kind == EV_SUPERTAB && rec_card.lead_n == 3);
+    CHECK(!strcmp(rec_card.leads[0].id, "L2") && !strcmp(rec_card.leads[1].id, "L3") && !strcmp(rec_card.leads[2].id, "L1"));
+    for (int i = 0; i < 2; i++) {   // each Lead moved whole
+        const pod_lead_t *a = &plain.leads[i], *b = &rec_card.leads[i ? 0 : 2];
+        CHECK(!strcmp(a->id, b->id) && !strcmp(a->projectId, b->projectId) && !strcmp(a->project, b->project) && !strcmp(a->engine, b->engine) &&
+              !strcmp(a->owner, b->owner) && !strcmp(a->local, b->local) && a->state == b->state && a->since_s == b->since_s &&
+              a->recap == b->recap && a->text == b->text && a->text_at == b->text_at);
+    }
+    reset();   // equal orders keep their arrival order
+    feed("{\"t\":\"supertab\",\"id\":\"S1\",\"leads\":[{\"id\":\"a\",\"order\":1},{\"id\":\"b\",\"order\":0},{\"id\":\"c\",\"order\":1}]}");
+    CHECK(rec_card.lead_n == 3 && !strcmp(rec_card.leads[0].id, "b") && !strcmp(rec_card.leads[1].id, "a") && !strcmp(rec_card.leads[2].id, "c"));
+
+    // 15 Leads -> 12; count absent -> the Leads listed
+    reset();
+    w = snprintf(big, sizeof big, "{\"t\":\"supertab\",\"id\":\"s\",\"name\":\"n\",\"count\":15,\"leads\":[");
+    for (int i = 0; i < 15; i++) w += snprintf(big + w, sizeof big - (size_t)w, "%s{\"id\":\"l%d\",\"state\":\"work\"}", i ? "," : "", i);
+    snprintf(big + w, sizeof big - (size_t)w, "]}");
+    feed(big);
+    CHECK(nev == 1 && rec_card.lead_n == SWARM_LEADS_MAX && !strcmp(rec_card.leads[11].id, "l11") && rec_card.count == 15);
+    reset();
+    feed("{\"t\":\"supertab\",\"id\":\"s\",\"leads\":[{\"id\":\"a\"},{\"id\":\"b\"}]}");
+    CHECK(nev == 1 && rec_card.count == 2);
+
+    // a 60-byte name is cut to 48 on a UTF-8 boundary (the two-byte letter straddles byte 48)
+    reset();
+    feedf("{\"t\":\"supertab\",\"id\":\"s\",\"name\":\"%s\xc3\xa9%s\",\"leads\":[{\"id\":\"l\",\"project\":\"%s\xc3\xa9%s\"}]}",
+          "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "bbbbbbbbbbbbbb", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "bbbbbbbbbbbbbb");
+    CHECK(nev == 1 && strlen(rec_card.name) == 47 && strlen(rec_card.leads[0].project) == 47);
+
+    // unknown state -> done; a malformed or repeated Lead is skipped, not the frame; a Swarm without an id is dropped
+    reset();
+    feed("{\"t\":\"supertab\",\"id\":\"s\",\"name\":\"ok\",\"leads\":[{\"id\":\"a\",\"state\":\"weird\"},"
+         "5,{\"project\":\"no id\"},{\"id\":\"b\",\"state\":\"ask\"},{\"id\":\"b\"}]}");
+    CHECK(nev == 1 && rec_card.lead_n == 2 && rec_card.leads[0].state == POD_LEAD_DONE &&
+          !strcmp(rec_card.leads[1].id, "b") && rec_card.leads[1].state == POD_LEAD_ASK);
+    reset();
+    feed("{\"t\":\"supertab\",\"name\":\"no id\",\"leads\":[]}");
+    CHECK(nev == 0);
+
+    // worst case: 16 Swarms x 12 Leads with every field full is 1 + 16 frames, each inside the JSON guard
+    reset();
+    int frames = 0;
+    w = snprintf(big, sizeof big, "{\"t\":\"supertabs\",\"ids\":[");
+    for (int i = 0; i < 16; i++) w += snprintf(big + w, sizeof big - (size_t)w, "%s\"%032d\"", i ? "," : "", i);
+    snprintf(big + w, sizeof big - (size_t)w, "]}");
+    feed(big); frames++;
+    for (int i = 0; i < 16; i++) {
+        w = snprintf(big, sizeof big, "{\"t\":\"supertab\",\"id\":\"%032d\",\"tab\":\"%032d\",\"name\":\"%048d\",\"count\":12,\"leads\":[", i, i, i);
+        for (int j = 0; j < 12; j++)
+            w += snprintf(big + w, sizeof big - (size_t)w,
+                          "%s{\"id\":\"%032d\",\"projectId\":\"%032d\",\"project\":\"project-%d\",\"engine\":\"claude\",\"owner\":\"\",\"local\":\"%032d\",\"state\":\"work\",\"since\":134}",
+                          j ? "," : "", j, j, j, j);
+        snprintf(big + w, sizeof big - (size_t)w, "]}");
+        CHECK(strlen(big) < CABLE_MAX_PAYLOAD);
+        feed(big); frames++;
+    }
+    CHECK(frames == 17 && nev == 17 && evs[0].kind == EV_STIDS && evs[16].kind == EV_SUPERTAB && evs[16].n1 == 12);
+
+    // supertab.recap: text stored (cut at 1500), none:true
+    reset();
+    char *txt = repeat("\xc3\xa9", 1000);   // 2000 bytes
+    feedf("{\"t\":\"supertab.recap\",\"tab\":\"S1\",\"lead\":\"L1\",\"text\":\"%s\",\"at\":1792560000,\"none\":false}", txt);
+    free(txt);
+    CHECK(nev == 1 && evs[0].kind == EV_STRECAP && !strcmp(evs[0].id, "S1") && !strcmp(evs[0].a, "L1") &&
+          strlen(evs[0].b) == 1500 && evs[0].n1 == 1792560000L && evs[0].n2 == 0);
+    reset();
+    feed("{\"t\":\"supertab.recap\",\"tab\":\"S1\",\"lead\":\"L1\",\"text\":\"\",\"at\":5,\"none\":true}");
+    CHECK(nev == 1 && evs[0].n2 == 1 && !strcmp(evs[0].b, ""));
+    reset();   // no tab / no lead: dropped
+    feed("{\"t\":\"supertab.recap\",\"lead\":\"L1\",\"text\":\"x\"}");
+    feed("{\"t\":\"supertab.recap\",\"tab\":\"S1\",\"text\":\"x\"}");
+    CHECK(nev == 0);
+
+    // supertab.focus
+    reset();
+    feed("{\"t\":\"supertab.focus\",\"tab\":\"S1\",\"lead\":\"L2\"}");
+    feed("{\"t\":\"supertab.focus\",\"tab\":\"S1\"}");
+    CHECK(nev == 1 && evs[0].kind == EV_STFOCUS && !strcmp(evs[0].id, "S1") && !strcmp(evs[0].a, "L2"));
+
+    // the send helper
+    reset();
+    CHECK(pro_cable_supertab_send("supertab.recap.get", "S1", "L1"));
+    CHECK(pro_cable_supertab_send("supertab.open", "S1", NULL));
+    CHECK(!pro_cable_supertab_send("bogus", "S1", "L1"));   // not one of the three: nothing goes out
+    CHECK(nsent == 2 && strstr(sent[0], "\"t\":\"supertab.recap.get\"") && strstr(sent[0], "\"tab\":\"S1\"") && strstr(sent[0], "\"lead\":\"L1\""));
+    CHECK(strstr(sent[1], "\"t\":\"supertab.open\"") && strstr(sent[1], "\"lead\":\"\""));
+}
+
+// Ticks every 5 s for `s` seconds, answering each with a ping when `pings` (a Pro that hears the daemon but cannot greet it).
+static void alone_for(int s, bool pings)
+{
+    for (int t = 0; t < s; t += 5) {
+        now_us += 5 * 1000000;
+        if (pings) feed("{\"t\":\"ping\"}");
+        pro_cable_tick(NULL);
+    }
+}
+
+// The self re-plug: after a cold start beside a booting Mac the Pro's link stayed dead until a hand replugged it. With a host
+// driving the port and no session for 30 s, the Pro drops off the bus so the Mac enumerates it afresh; the waits double to
+// 10 min so a Mac with no daemon sees it rarely; never during a session, an update or an open recording.
+static void self_replug(void)
+{
+    if (pro_cable_connected()) end_session();
+    replugs = 0; offer_active = false; voice_is_open = false;
+    pro_cable_tick(NULL);                 // no host yet: nothing counts
+    host_present = true;
+    alone_for(25, true);
+    now_us += 4 * 1000000; pro_cable_tick(NULL);
+    CHECK(replugs == 0);                  // 29 s with pings but no welcome: not yet
+    now_us += 1 * 1000000; pro_cable_tick(NULL);
+    CHECK(replugs == 1);                  // 30 s
+    // Backoff: 60, 120, 240, 480, then 600 s each.
+    const int waits[] = { 60, 120, 240, 480, 600, 600 };
+    for (int i = 0; i < 6; i++) {
+        alone_for(waits[i] - 5, false);
+        CHECK(replugs == 1 + i);
+        alone_for(5, false);
+        CHECK(replugs == 2 + i);
+    }
+    // No host: an hour unplugged (or the Mac off) never counts, and does not reset the wait (the re-plug itself makes the
+    // host vanish for a moment, so a reset there would loop at 30 s).
+    host_present = false;
+    alone_for(3600, false);
+    CHECK(replugs == 7);
+    host_present = true;
+    alone_for(595, false);
+    CHECK(replugs == 7);
+    alone_for(5, false);
+    CHECK(replugs == 8);
+    // A session: never during it, and it resets the wait to 30 s after it ends.
+    welcome();
+    for (int t = 0; t < 900; t += 10) { now_us += 10 * 1000000; feed("{\"t\":\"ping\"}"); pro_cable_tick(NULL); }
+    CHECK(replugs == 8 && pro_cable_connected());
+    now_us += 10 * 1000000; pro_cable_tick(NULL);   // the last tick of the session: 10 s since the ping
+    end_session();                                   // 26 s: silence ends it
+    alone_for(25, false);
+    CHECK(replugs == 8);
+    alone_for(5, false);
+    CHECK(replugs == 9);                  // 30 s after the session's last tick
+    // An update or a recording in flight: never, and the clock restarts when it ends.
+    offer_active = true;
+    alone_for(120, false);
+    CHECK(replugs == 9);
+    offer_active = false;
+    voice_is_open = true;
+    alone_for(120, false);
+    CHECK(replugs == 9);
+    voice_is_open = false;
+    alone_for(55, false);
+    CHECK(replugs == 9);                  // the wait is 60 s now, counted from the end of the recording
+    alone_for(5, false);
+    CHECK(replugs == 10);
+    host_present = false;
+}
+
+// A welcome is longer than one read (295 B with the features, the reader hands over 256 B at a time), so its first read can
+// land at the 30 s deadline with the rest still due. That is a link coming up: the re-plug waits for the frame. A partial
+// that never completes is dropped by the reader after 300 ms, and the re-plug goes ahead on the next tick.
+static void replug_spares_a_frame_in_flight(void)
+{
+    if (pro_cable_connected()) end_session();
+    welcome(); end_session();             // a session resets the wait to 30 s from its last tick
+    replugs = 0; host_present = true;
+    alone_for(25, false);
+    now_us += 5 * 1000000;
+    rx_pending = true;                    // 256 B of the welcome are in
+    pro_cable_tick(NULL);
+    CHECK(replugs == 0);
+    rx_pending = false;                   // the rest: the session comes up
+    now_us += 10 * 1000;
+    welcome();
+    pro_cable_tick(NULL);
+    CHECK(replugs == 0 && pro_cable_connected());
+    // The stale partial: the tail never comes.
+    end_session();
+    alone_for(25, false);
+    now_us += 5 * 1000000;
+    rx_pending = true;
+    pro_cable_tick(NULL);
+    CHECK(replugs == 0);
+    now_us += 300 * 1000;
+    rx_pending = false;                   // the reader dropped it
+    pro_cable_tick(NULL);
+    CHECK(replugs == 1 && !pro_cable_connected());
+    host_present = false;
+}
+
 int main(void)
 {
     pro_cable_start();   // the lock and the machine table; no tasks run on the host
@@ -1095,6 +1355,9 @@ int main(void)
     send_shapes();
     link_resync();
     seq_gaps();
+    test_swarm_cards();
+    self_replug();
+    replug_spares_a_frame_in_flight();
     printf("test_pro_cable: %d checks passed\n", checks);
     return 0;
 }

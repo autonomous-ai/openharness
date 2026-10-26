@@ -136,7 +136,7 @@ export async function resolveViaLoginShell(
 }
 
 /** One question to one shell: where is `command`? Null unless it answers with an absolute path. */
-function probe(shellPath: string, args: readonly string[], command: string): Promise<string | null> {
+export function probe(shellPath: string, args: readonly string[], command: string): Promise<string | null> {
   return new Promise<string | null>((resolve) => {
     execFile(
       shellPath,

@@ -58,28 +58,28 @@ void main() {
       addTearDown(() => tester.binding.setSurfaceSize(null));
       final store = MemoryStore();
       await mount(tester, store);
-      expect(tester.getSize(left).width, 220);
-      expect(tester.getSize(right).width, 380);
+      expect(tester.getSize(left).width, 300);
+      expect(tester.getSize(right).width, 280);
       await tester.enterText(find.byType(TextField), 'Keep this draft');
       final editor = tester.state<EditableTextState>(find.byType(EditableText));
       final focus = editor.widget.focusNode;
       await tester.drag(leftHandle, const Offset(100, 0));
       await tester.pumpAndSettle();
-      expect(tester.getSize(left).width, closeTo(320, 1));
-      expect(tester.getSize(right).width, 380);
+      expect(tester.getSize(left).width, closeTo(400, 1));
+      expect(tester.getSize(right).width, 280);
       expect(focus.hasFocus, isTrue);
       await tester.drag(rightHandle, const Offset(-60, 0));
       await tester.pumpAndSettle();
-      expect(tester.getSize(right).width, closeTo(440, 1));
-      expect(tester.getSize(center).width, closeTo(640, 1));
+      expect(tester.getSize(right).width, closeTo(340, 1));
+      expect(tester.getSize(center).width, closeTo(660, 1));
       expect(
         tester.state<EditableTextState>(find.byType(EditableText)),
         same(editor),
       );
       expect(find.text('Keep this draft'), findsOneWidget);
       final saved = jsonDecode(store.values[SuperTabPaneLayout.storageKey]!);
-      expect(saved['left'], closeTo(320, 1));
-      expect(saved['right'], closeTo(440, 1));
+      expect(saved['left'], closeTo(400, 1));
+      expect(saved['right'], closeTo(340, 1));
 
       // Responsive overlays do not forget the preferred sizes or edit state.
       await mount(tester, store, sides: false);
@@ -89,12 +89,12 @@ void main() {
         same(editor),
       );
       await mount(tester, store);
-      expect(tester.getSize(left).width, closeTo(320, 1));
-      expect(tester.getSize(right).width, closeTo(440, 1));
+      expect(tester.getSize(left).width, closeTo(400, 1));
+      expect(tester.getSize(right).width, closeTo(340, 1));
       await tester.pumpWidget(const SizedBox());
       await mount(tester, store);
-      expect(tester.getSize(left).width, closeTo(320, 1));
-      expect(tester.getSize(right).width, closeTo(440, 1));
+      expect(tester.getSize(left).width, closeTo(400, 1));
+      expect(tester.getSize(right).width, closeTo(340, 1));
       expect(tester.takeException(), isNull);
     },
   );
@@ -155,7 +155,7 @@ void main() {
     await tester.pumpAndSettle();
     store.readResult.complete('{"left":200,"right":300}');
     await tester.pumpAndSettle();
-    expect(tester.getSize(right).width, closeTo(440, 1));
+    expect(tester.getSize(right).width, closeTo(340, 1));
   });
 
   testWidgets('large text and invalid saved sizes retain usable panes', (

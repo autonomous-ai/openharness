@@ -185,6 +185,12 @@ export async function run(engine, config = {}, { native = false } = {}) {
       : `error: unexpected argument '${refused}' found\n\nUsage: codex [OPTIONS] [PROMPT]\n\nFor more information, try '--help'.\n`)
     process.exit(engine === 'claude' ? 1 : 2)
   }
+  // Resume checks for a live background job before opening a pane. This is a
+  // CLI query, not an agent launch: keep it out of the launch-argv ledger.
+  if (engine === 'claude' && args.length === 2 && args[0] === 'agents' && args[1] === '--json') {
+    process.stdout.write('[]\n')
+    return
+  }
   // Every launch's argv, for a test to read what an agent was started with.
   if (config.root) appendFileSync(join(config.root, 'launch-argv'), `${JSON.stringify({ engine, args })}\n`)
   // The process table shows it as it shows the real CLI: named `claude` or `codex`, with the command line
@@ -367,6 +373,14 @@ export async function run(engine, config = {}, { native = false } = {}) {
       process.stdout.write('\x1b[H\x1b[2J')
     }
   }
+  // `graphicsQuery`: Claude Code asks the terminal for kitty graphics, an APC string, when it believes it is not inside
+  // tmux, as a guest's harness on a shared machine does (its helper starts the engine with `env -i`, so no TMUX). tmux
+  // takes any APC string as the pane's title. Later it sets its title as usual (OSC 0, `title`).
+  if (config.graphicsQuery) {
+    process.stdout.write('\x1b_Gi=31,s=1,v=1,a=q,t=d,f=24;AAAA\x1b\\')
+    const titled = setTimeout(() => process.stdout.write(`\x1b]0;✳ ${config.graphicsQuery.title}\x07`), config.graphicsQuery.titleAfterMs)
+    titled.unref?.()
+  }
   let transcript = engine === 'claude'
     ? join(projectsDir, cwd.replace(/[^a-zA-Z0-9]/g, '-'), `${sessionId}.jsonl`)
     : resumed && !fork && config.rolloutFor?.[resumed]
@@ -408,13 +422,11 @@ export async function run(engine, config = {}, { native = false } = {}) {
     ? (args.includes('--dangerously-skip-permissions') ? 'bypassPermissions'
       : args.includes('--permission-mode') ? args[args.indexOf('--permission-mode') + 1] ?? 'default' : 'default')
     : (args.includes('--dangerously-bypass-approvals-and-sandbox') ? 'bypassPermissions' : 'default')
-  // The model and effort the thread runs on: what Codex writes in each turn's context, and what its
-  // `/model` picker changes (below). Its `-m`/`--model` on the command line outranks the configured one, as
-  // in the real CLI: that is how a relaunch puts an agent back on the model it had before a grid
-  // (subscriptionModel.ts).
-  const modelAt = engine === 'codex' ? args.findIndex((arg) => arg === '-m' || arg === '--model') : -1
+  // The model passed on either engine's command line outranks the fixture default, as in the real CLI.
+  // Codex writes its model and effort in each turn's context; Claude writes its model in the transcript.
+  const modelAt = args.findIndex((arg) => arg === '-m' || arg === '--model')
   let current = { model: (modelAt >= 0 && args[modelAt + 1]) || config.codexModel || 'gpt-6', effort: 'high' }
-  let claudeModel = config.claudeModel ?? 'claude-opus-5-5'
+  let claudeModel = (modelAt >= 0 && args[modelAt + 1]) || config.claudeModel || 'claude-opus-5-5'
   // Test-owned file gate, used to stop an engine worker after its command reached the live CLI.
   const modelGate = async command => {
     const log = join(config.root, 'model-control-commands')

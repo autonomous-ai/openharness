@@ -9,6 +9,7 @@ import '../auth/sign_in_provider.dart';
 import '../shared/widgets/qr_code_view.dart';
 import '../shared/theme/app_theme.dart' as grid;
 import '../state/app_state.dart';
+import '../widgets/finger_target.dart' show kFingerTarget;
 import '../widgets/login_fleet_map.dart';
 import '../widgets/login_relay_diagram.dart';
 import '../widgets/or_divider.dart';
@@ -96,7 +97,7 @@ class LoginScreen extends StatelessWidget {
                     Text('Harness', style: grid.AppType.heading()),
                   ],
                   const Spacer(),
-                  const WebDownloadButton(),
+                  if (!browserHasAppStore()) const WebDownloadButton(),
                 ],
               ),
             ),
@@ -155,9 +156,28 @@ class LoginScreen extends StatelessWidget {
                                 constraints: BoxConstraints(
                                   maxWidth: compact ? 560 : 960,
                                 ),
-                                child: const LoginFleetMap(seamless: true),
+                                child: LoginFleetMap(
+                                  seamless: true,
+                                  pinDetails:
+                                      MediaQuery.sizeOf(context).width >= 480,
+                                ),
                               ),
                               SizedBox(height: gap),
+                              // Above the ways in, so a failed sign-in's reason
+                              // and Try again land on screen (audit S15).
+                              if (notifier.lastError != null &&
+                                  !notifier.sessionExpired) ...[
+                                ConstrainedBox(
+                                  constraints: const BoxConstraints(
+                                    maxWidth: 520,
+                                  ),
+                                  child: _ErrorTile(
+                                    message: notifier.lastError!,
+                                    onRetry: notifier.retryLogin,
+                                  ),
+                                ),
+                                const SizedBox(height: 16),
+                              ],
                               ConstrainedBox(
                                 constraints: const BoxConstraints(
                                   maxWidth: 520,
@@ -170,19 +190,6 @@ class LoginScreen extends StatelessWidget {
                                   offerPhone: offerPhone,
                                 ),
                               ),
-                              if (notifier.lastError != null &&
-                                  !notifier.sessionExpired) ...[
-                                const SizedBox(height: 16),
-                                ConstrainedBox(
-                                  constraints: const BoxConstraints(
-                                    maxWidth: 520,
-                                  ),
-                                  child: _ErrorTile(
-                                    message: notifier.lastError!,
-                                    onRetry: notifier.retryLogin,
-                                  ),
-                                ),
-                              ],
                               SizedBox(height: gap),
                               const _Seal(divider: false),
                             ],
@@ -620,6 +627,13 @@ class _ErrorTile extends StatelessWidget {
             alignment: Alignment.centerLeft,
             child: OutlinedButton(
               onPressed: onRetry,
+              // A finger's size on a phone, as the buttons below it are; the
+              // web's phone layout starts under 720 px.
+              style: MediaQuery.sizeOf(context).width < 720
+                  ? OutlinedButton.styleFrom(
+                      minimumSize: const Size.square(kFingerTarget),
+                    )
+                  : null,
               child: const Text('Try again'),
             ),
           ),
@@ -656,7 +670,7 @@ class _Seal extends StatelessWidget {
             Text(
               'End-to-end encrypted',
               style: Theme.of(context).textTheme.labelSmall
-                  ?.copyWith(color: grid.AppPalette.textFaint),
+                  ?.copyWith(color: grid.AppPalette.textSecondary),
             ),
           ],
         ),

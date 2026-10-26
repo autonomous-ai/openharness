@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { appendFileSync, mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { cleanCodexTitle, codexThreadName, engineSessionTitle, namingTitle, resetCodexThreadNames } from './sessionTitle.js'
+import { cleanCodexTitle, cleanOmpTitle, codexThreadName, engineSessionTitle, namingTitle, ompSessionTitle, resetCodexThreadNames } from './sessionTitle.js'
 
 describe('namingTitle: the engine’s title, when it names the session', () => {
   const harness = { engine: 'claude', cwd: '/Users/example/harnesses/harness-43', defaultName: 'harness-43' }
@@ -150,5 +150,27 @@ describe('engineSessionTitle: what the terminal sweep records', () => {
     expect(engineSessionTitle({ engine: 'codex', sessionId: 's2', codexHome: home }, 'Working | harness-40')).toBe('Working | harness-40')
     expect(engineSessionTitle({ engine: 'codex', sessionId: 's2', codexHome: home }, undefined)).toBeNull()
     expect(engineSessionTitle({ engine: 'claude', sessionId: 's1', codexHome: home }, '✳ Plan the launch')).toBe('✳ Plan the launch')
+  })
+})
+
+describe('omp titles', () => {
+  it('strips the π name, the status or spinner mark and the topic icon', () => {
+    for (const raw of ['π ⠴ \u{F08F3} Login: Fix redirect', 'π ⠙ \u{F08F3} Login: Fix redirect', 'π > \u{F08F3} Login: Fix redirect', 'π * \u{F08F3} Login: Fix redirect', '\u{F08F3} Login: Fix redirect', 'Login: Fix redirect']) {
+      expect(cleanOmpTitle(raw)).toBe('Login: Fix redirect')
+    }
+    expect(cleanOmpTitle('π ⠴ ')).toBeNull()
+    expect(cleanOmpTitle('')).toBeNull()
+  })
+
+  it('reads the title line at the head of an omp session file, falling back to it without a terminal title', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'omp-title-'))
+    const file = join(dir, 's.jsonl')
+    writeFileSync(file, JSON.stringify({ type: 'title', v: 1, title: '\u{F08F3} Login: Fix the redirect loop', source: 'auto', pad: '   ' }) + '\n'
+      + JSON.stringify({ type: 'session', id: 'x' }) + '\n')
+    expect(ompSessionTitle(file)).toBe('Login: Fix the redirect loop')
+    expect(ompSessionTitle(join(dir, 'missing.jsonl'))).toBeNull()
+    expect(engineSessionTitle({ engine: 'omp', transcriptPath: file }, undefined)).toBe('Login: Fix the redirect loop')
+    expect(engineSessionTitle({ engine: 'omp', transcriptPath: file }, 'π ⠋ Renamed topic')).toBe('Renamed topic')
+    rmSync(dir, { recursive: true, force: true })
   })
 })

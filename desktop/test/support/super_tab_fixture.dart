@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
 
@@ -36,13 +37,26 @@ class ConversationServer {
   int revision = 0;
   bool loseReply = false, reject = false, failSave = false, failReads = false;
   Map<String, dynamic>? saved;
+  // While set, every read waits for it: a slow server.
+  Completer<void>? holdReads;
   // Makes every command answer with this refusal: {code, message}.
   Map<String, String>? refuse;
+  // Added to every successful command's result, as a newer backend adds
+  // fields such as `credentialNotice`.
+  final commandResult = <String, dynamic>{};
   final posts = <Map<String, dynamic>>[];
   final receipts = <String, Map<String, dynamic>>{};
   final messages = <Map<String, dynamic>>[];
   // Route decisions by id, answered by GET .../route-decisions/:id.
   final routeDecisions = <String, Map<String, dynamic>>{};
+  // The reader's tags, newest last, answered by GET .../mentions?state=.
+  final mentions = <Map<String, dynamic>>[];
+  // How many times the mentions list was read.
+  int mentionReads = 0;
+  // A backend from before tags: it has no list route.
+  bool mentionsMissing = false;
+  // While set, every read of the mentions list waits for it.
+  Completer<void>? holdMentions;
   // The effective routing policy answered by GET .../routing-policy.
   Map<String, dynamic>? routingPolicy;
   final state = <String, dynamic>{
@@ -169,6 +183,12 @@ class ConversationServer {
         );
         messages.last['replyTo'] = command['replyTo'];
         output['messageId'] = 'message-$revision';
+      } else if (command['type'] == 'mention.done') {
+        mentions.firstWhere((m) => m['id'] == command['mentionId'])
+          ..['resolvedAt'] = '2026-10-24T06:00:00Z'
+          ..['resolvedBy'] = 'done';
+        state['mentionsWaiting'] = (state['mentionsWaiting'] as int) - 1;
+        revision++;
       } else if (command['type'] == 'conversation.create') {
         revision++;
         final id = 'group-$revision';
@@ -183,20 +203,29 @@ class ConversationServer {
           projectFixture('lead', state['name'] as String, 'lead'),
         ];
         final id = 'project-$revision', leadId = 'lead-$revision';
-        (projects as List).add(
-          projectFixture(
+        (projects as List).add({
+          ...projectFixture(
             id,
             command['name'] as String,
             leadId,
             visibility: command['visibility'] as String,
           ),
-        );
+          'skillMode': 'default',
+        });
         (state['conversations'] as List).add({
           ...conversationFixture(leadId, 'Lead'),
           'projectId': id,
           'brief': command['brief'] ?? '',
         });
         output.addAll({'projectId': id, 'conversationId': leadId});
+      } else if (command['type'] == 'conversation.archive') {
+        (state['conversations'] as List)
+                .cast<Map<String, dynamic>>()
+                .firstWhere(
+                  (g) => g['id'] == command['conversationId'],
+                )['archived'] =
+            command['archived'];
+        revision++;
       } else if (command['type'] == 'project.delete') {
         final projectId = command['projectId'];
         final projects =
@@ -237,6 +266,7 @@ class ConversationServer {
           revision++;
         }
       }
+      output.addAll(commandResult);
       final result = {'revision': revision, 'result': output};
       receipts[operationId] = result;
       if (loseReply) {
@@ -245,8 +275,24 @@ class ConversationServer {
       }
       return result;
     }
+    if (holdReads case final hold?) await hold.future;
     if (failReads) throw StateError('Offline');
     final uri = Uri.parse(path);
+    if (uri.pathSegments.last == 'mentions') {
+      mentionReads++;
+      if (mentionsMissing) {
+        throw const SuperTabFailure('NOT_FOUND', 'Not found.', statusCode: 404);
+      }
+      if (holdMentions case final hold?) await hold.future;
+      final waiting = uri.queryParameters['state'] == 'waiting';
+      return jsonDecode(
+        jsonEncode({
+          'mentions': mentions.reversed
+              .where((m) => (m['resolvedAt'] == null) == waiting)
+              .toList(),
+        }),
+      ) as Map<String, dynamic>;
+    }
     if (uri.pathSegments.last == 'routing-policy') {
       final policy = routingPolicy;
       if (policy == null) {
@@ -287,6 +333,30 @@ class ConversationServer {
     }
     return jsonDecode(jsonEncode({'revision': revision, 'state': state}))
         as Map<String, dynamic>;
+  }
+
+  /// The Lead tags the reader in [conversationId], as the backend records it.
+  void tag(
+    String messageId, {
+    String conversationId = 'lead',
+    String text = 'Please confirm the release.',
+    String createdAt = '2026-10-24T05:00:00Z',
+  }) {
+    mentions.add({
+      'id': 'mention-${mentions.length + 1}',
+      'projectId': 'lead',
+      'projectName': 'web-project',
+      'conversationId': conversationId,
+      'conversationTitle': 'Lead',
+      'messageId': messageId,
+      'leadName': 'Wren',
+      'text': text,
+      'createdAt': createdAt,
+      'resolvedAt': null,
+      'resolvedBy': null,
+    });
+    state['mentionsWaiting'] = ((state['mentionsWaiting'] as int?) ?? 0) + 1;
+    revision++;
   }
 
   SuperTabController controller({

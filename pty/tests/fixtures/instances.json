@@ -1,0 +1,32 @@
+[
+  {
+    "protocol": 2,
+    "version": "0.4.20",
+    "instance": "p2-0.4.20"
+  },
+  {
+    "protocol": 2,
+    "version": "0.4.21-dev.win1",
+    "instance": "p2-0.4.21-dev.win1"
+  },
+  {
+    "protocol": 2,
+    "version": "0.1.0",
+    "instance": "p2-0.1.0"
+  },
+  {
+    "protocol": 2,
+    "version": "0.4.21+meta",
+    "instance": "p2-h169ef517daa5"
+  },
+  {
+    "protocol": 2,
+    "version": "1 2",
+    "instance": "p2-hf71998fe363b"
+  },
+  {
+    "protocol": 2,
+    "version": "1234567890123456789012345678901234567890",
+    "instance": "p2-ha4ebdd541454"
+  }
+]

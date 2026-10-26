@@ -104,6 +104,93 @@ bool _isTyped(BufferLine line) {
 /// How many rows a prompt's typed text can run to — a long paste included.
 const _maxInputRows = 200;
 
+/// OpenCode's boxed composer, read at its cursor, before its blank row and
+/// model footer. A cursor at the start means the grey placeholder is not text.
+/// The first-arrival starter is a sentence; the TUI wraps it at word boundaries.
+String? openCodePromptText(Buffer buffer) {
+  final cursor = buffer.absoluteCursorY;
+  if (cursor < 0 || cursor >= buffer.lines.length) return null;
+  final current = buffer.lines[cursor].getText();
+  final side = current.indexOf('┃');
+  if (side < 0 || buffer.cursorX <= side + 3) return null;
+  String? row(int y) {
+    if (y < 0 || y >= buffer.lines.length) return null;
+    final text = buffer.lines[y].getText();
+    if (text.indexOf('┃') != side || text.length <= side + 3) return null;
+    final content = text.substring(side + 3).trimRight();
+    return content.isEmpty ? null : content;
+  }
+
+  var top = cursor;
+  while (top > 0 && cursor - top < _maxInputRows && row(top - 1) != null) {
+    top--;
+  }
+  final parts = <String>[];
+  for (var y = top; y < buffer.lines.length && y - top < _maxInputRows; y++) {
+    final content = row(y);
+    if (content == null) break;
+    parts.add(content);
+  }
+  return parts.isEmpty ? null : parts.join(' ');
+}
+
+/// What is typed into [engine]'s prompt, on one line: OpenCode's box ([openCodePromptText]), or
+/// the `❯`/`›` prompt Claude Code and Codex draw ([promptInputRange]), its wrapped rows joined.
+/// Null when nothing is typed, only the placeholder shows, or the prompt cannot be read.
+String? typedPromptText(Buffer buffer, String? engine) {
+  if (engine == 'opencode') return openCodePromptText(buffer);
+  final range = promptInputRange(buffer);
+  if (range == null) return null;
+  final text = buffer.getText(range).replaceAll(_spaces, ' ').trim();
+  return text.isEmpty ? null : text;
+}
+
+final _spaces = RegExp(r'\s+');
+
+/// Whether [text] read off a prompt holds what a TUI drew in place of something pasted — Claude
+/// Code's `[Pasted text #1 +12 lines]` and `[Image #1]`, Codex's `[Pasted Content 1200 chars]`. What
+/// was pasted is only in the program: typed again from the screen, it would be the marker.
+bool holdsPasteMarker(String text) => _pasteMarker.hasMatch(text);
+
+final _pasteMarker = RegExp(
+  r'\[(?:Pasted text #\d+|Image #\d+|Pasted Content \d+)',
+);
+
+/// Whether the cursor is in [engine]'s prompt: on Claude Code's or Codex's `❯`/`›` line or a row
+/// its text wrapped onto, or inside OpenCode's box — where all three keep the terminal's own cursor,
+/// shown, at the end of what is typed (measured in tmux on 2026-10-23: Claude Code 2.1.309, Codex
+/// 0.163.0, OpenCode 1.19.0). False for any other engine.
+bool cursorInPrompt(Buffer buffer, String? engine) {
+  final cursor = buffer.absoluteCursorY;
+  if (cursor < 0 || cursor >= buffer.lines.length) return false;
+  if (engine == 'opencode') {
+    final side = buffer.lines[cursor].getText().indexOf('┃');
+    return side >= 0 && buffer.cursorX > side;
+  }
+  if (engine != 'claude' && engine != 'codex') return false;
+  final line = buffer.lines[cursor];
+  if (_promptGlyphColumn(line) case final glyph?) {
+    // A question's answer the cursor sits on (`❯ 1. Yes`) is a dialog, not the prompt.
+    return !_answerRow.hasMatch(line.getText(glyph + 1).trimLeft());
+  }
+  // A row the typed text wrapped onto.
+  return promptInputRange(buffer) != null;
+}
+
+/// Whether the cursor sits on a Claude Code or Codex prompt with nothing typed in it — its glyph
+/// alone, or its grey placeholder: the TUI is drawn and waiting for its first words.
+///
+/// Not a question's answer the cursor sits on (`❯ 1. Yes, proceed`): that is a dialog.
+bool emptyPromptAtCursor(Buffer buffer) {
+  final cursor = buffer.absoluteCursorY;
+  if (cursor < 0 || cursor >= buffer.lines.length) return false;
+  final line = buffer.lines[cursor];
+  final glyph = _promptGlyphColumn(line);
+  return glyph != null &&
+      !_answerRow.hasMatch(line.getText(glyph + 1).trimLeft()) &&
+      promptInputRange(buffer) == null;
+}
+
 /// What an agent's prompt starts with, in column 0 or just inside a box's side: Claude Code's `❯`
 /// (`>` in older builds), its `!` shell mode and `#` memory mode, and Codex's `›`. A shell themed
 /// with a `❯` prompt reads the same way, and rightly: what follows it is what was typed.

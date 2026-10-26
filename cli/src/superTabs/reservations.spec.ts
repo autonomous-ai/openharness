@@ -82,6 +82,19 @@ it('retains a learned harness identity after its native window disappears and re
   expect(await restarted.observe(id(1))).toMatchObject({ harnessId: 'native', released: true })
 })
 
+// The review of #1635: the backend's closeSession row names only the harness, so the host finds the Swarm's own start of
+// it here, the receipt every start confirmed against the core before it reported success.
+it('names the start that created a harness, even after it stopped, and none for a harness it never started', async () => {
+  const f = setup(), book = f.open()
+  await book.reserve(input())
+  expect(book.creationOf('native')).toBeNull()
+  f.native.set(id(1), { creationId: id(1), state: 'created', agentId: 'native' })
+  f.stopped.add('native')
+  expect(await book.observe(id(1))).toMatchObject({ harnessId: 'native', released: true })
+  expect(book.creationOf('native')).toBe(id(1))
+  expect(book.creationOf('another')).toBeNull()
+})
+
 it('recovers a harness that started and stopped before the service observed its creation', async () => {
   const f = setup(), book = f.open()
   await book.reserve(input())

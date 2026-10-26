@@ -6,6 +6,7 @@ import { launchBound } from '../core/engines/sessionBinding.js'
 import type { RegisteredSession } from './registry.js'
 import { sid } from './log.js'
 import { isMessageHold, messageHoldText, messageWithheldText, passingHold, type MessageHold } from './messageHolds.js'
+import type { MoveGate } from './hostMove/gate.js'
 import { enterWithheldReason, TERMINAL_LEASE_REFUSED, type TerminalActionResult } from './terminalTypes.js'
 
 const MAX_QUEUE_ITEMS = 8
@@ -104,6 +105,13 @@ interface QueuedInput {
   expiresAt: number
 }
 
+/** A message held while its agent changes host (`MoveGate`): submitted as itself at release, unless cancelled. */
+interface HeldInput {
+  deliveryId?: string
+  bytes: number
+  cancelled: boolean
+}
+
 interface InputState {
   /** The writes this agent's messages are making, one after another in the order they arrived. */
   writes?: Promise<void>
@@ -123,6 +131,9 @@ interface InputState {
   controlLocked: boolean
   settling: boolean
   queue: QueuedInput[]
+  /** The messages the move gate holds for this agent, in arrival order. Counted against the queue's limits,
+   *  and cancellable as queued ones are. */
+  held: HeldInput[]
   timer: NodeJS.Timeout | null
   settleTimer: NodeJS.Timeout | null
   retries: number
@@ -156,6 +167,9 @@ export interface SessionInputDeps {
   /** Clock and timer for the lease wait; real ones by default. */
   now?: () => number
   sleep?: (ms: number) => Promise<void>
+  /** While an agent changes host, its messages wait here and are typed into the pane it ends on. Absent: none
+   *  is ever held. */
+  moveGate?: MoveGate
 }
 
 /** A message not typed because of what the pane showed (messageHold.ts): nothing was written. */
@@ -252,6 +266,7 @@ export class SessionInputController {
         controlLocked: false,
         settling: false,
         queue: [],
+        held: [],
         timer: null,
         settleTimer: null,
         retries: 0,
@@ -288,6 +303,13 @@ export class SessionInputController {
   /** Revoke queued work only; a paste already in progress cannot be recalled. */
   cancelDelivery(deliveryId: string): boolean {
     for (const [sessionId, state] of this.states) {
+      const held = state.held.findIndex((item) => item.deliveryId === deliveryId)
+      if (held >= 0) {
+        state.held[held].cancelled = true
+        state.held.splice(held, 1)
+        this.delivery(sessionId, deliveryId, 'rejected', 'cancelled')
+        return true
+      }
       const index = state.queue.findIndex((item) => item.deliveryId === deliveryId)
       if (index >= 0) {
         state.queue.splice(index, 1)
@@ -306,12 +328,39 @@ export class SessionInputController {
   /** [receipt]: what became of a person's message (one with no [deliveryId]), for its measurement. */
   submit(sessionId: string, content: string, deliveryId?: string, inputContext?: string, receipt?: MessageReceipt): void {
     const said = sayOnce(receipt)
+    // An agent changing host has no pane to type into until the move ends: the message waits, as itself, and
+    // is submitted then, through every check `submitNow` makes, into the pane the row then names.
+    const agentId = this.controlSession(sessionId)?.agentId
+    const gate = this.deps.moveGate
+    if (agentId && gate?.holding(agentId)) {
+      const state = this.state(sessionId)
+      const bytes = Buffer.byteLength(content, 'utf8')
+      if (this.refusedFull(sessionId, state, bytes, deliveryId, said)) return
+      console.log(`[inject] ${sid(sessionId)} held · the agent is changing host · depth=${state.held.length + 1}`)
+      const item: HeldInput = { deliveryId, bytes, cancelled: false }
+      state.held.push(item)
+      gate.enqueue(agentId, async () => {
+        const at = state.held.indexOf(item)
+        if (at >= 0) state.held.splice(at, 1)
+        if (!item.cancelled) await this.submitNow(sessionId, content, deliveryId, inputContext, said)
+      })
+      return
+    }
+    void this.submitNow(sessionId, content, deliveryId, inputContext, said)
+  }
+
+  /**
+   * `submit` past the move gate. Resolves once this message's write is done, or at once when it is queued
+   * here or refused: the gate delivers what it held one at a time, and a keystroke held behind this message
+   * must not land between its paste and its Enter.
+   */
+  private submitNow(sessionId: string, content: string, deliveryId?: string, inputContext?: string, said?: MessageReceipt): Promise<void> {
     const session = this.controlSession(sessionId)
     if (!session) {
       said?.('agent_gone')
       this.delivery(sessionId, deliveryId, 'rejected', 'agent_gone')
       if (!deliveryId?.startsWith('team:')) this.deps.onError(sessionId, 'This harness is no longer available.')
-      return
+      return Promise.resolve()
     }
     const state = this.state(sessionId)
     this.dropExpired(sessionId, state)
@@ -324,7 +373,7 @@ export class SessionInputController {
       this.enqueue(sessionId, state, content, deliveryId, inputContext, said)
       if (this.swarmTypesWhileBusy(session.engine, deliveryId) && state.turnOpen
         && !state.deliveryId && state.awaitingFingerprint && !state.timer) this.armSubmitCheck(sessionId, session, state)
-      return
+      return Promise.resolve()
     }
     this.delivery(sessionId, deliveryId, 'queued')
     // One write at a time per agent, in the order the messages arrived. Claude Code and Codex take
@@ -335,10 +384,10 @@ export class SessionInputController {
     // agent as it is by then, which a restart in between may have changed.
     // With nothing in flight the write starts at once, so a cancel or a control request that follows
     // the submit sees it, as before.
-    this.scheduleWrite(sessionId, session, content, deliveryId, inputContext, said)
+    return this.scheduleWrite(sessionId, session, content, deliveryId, inputContext, said)
   }
 
-  private scheduleWrite(sessionId: string, session: RegisteredSession, content: string, deliveryId?: string, inputContext?: string, receipt?: MessageReceipt): void {
+  private scheduleWrite(sessionId: string, session: RegisteredSession, content: string, deliveryId?: string, inputContext?: string, receipt?: MessageReceipt): Promise<void> {
     const state = this.state(sessionId)
     const write = (): Promise<void> => this.inject(sessionId, this.controlSession(sessionId) ?? session, content, deliveryId, inputContext, receipt)
     const running = state.writes ? state.writes.then(write, write) : write()
@@ -348,6 +397,7 @@ export class SessionInputController {
       if (this.states.get(sessionId) === state && state.queue[0]?.deliveryId?.startsWith('team:service:superTabs:')) this.drainOne(sessionId, state)
     })
     state.writes = settled
+    return settled
   }
 
   /** Reserve this pane for a short native control interaction such as `/model`. */
@@ -366,6 +416,13 @@ export class SessionInputController {
   acquireControl(sessionId: string, opts?: { forAnswer?: boolean }): (() => void) | null {
     const session = this.controlSession(sessionId)
     if (!session) return null
+    // Not while the agent changes host: what the holder typed would reach the pane being replaced. Refused
+    // as a busy pane is, so the caller asks again (device input every 100 ms) and gets it after the move.
+    const gate = this.deps.moveGate
+    if (gate?.holding(session.agentId)) {
+      gate.touch(session.agentId)
+      return null
+    }
     const state = this.state(sessionId)
     this.dropExpired(sessionId, state)
     const turnBlocks = state.turnOpen && !opts?.forAnswer
@@ -1045,6 +1102,17 @@ export class SessionInputController {
   }
 
   private drainOne(sessionId: string, state: InputState): void {
+    // A queued message whose turn is due while the agent changes host goes behind what the gate holds.
+    const agentId = this.controlSession(sessionId)?.agentId
+    const gate = this.deps.moveGate
+    if (agentId && gate?.holding(agentId)) {
+      gate.enqueue(agentId, async () => { const current = this.states.get(sessionId); if (current) await this.drainNow(sessionId, current) })
+      return
+    }
+    void this.drainNow(sessionId, state)
+  }
+
+  private async drainNow(sessionId: string, state: InputState): Promise<void> {
     this.dropExpired(sessionId, state)
     const current = this.controlSession(sessionId)
     const busySwarm = !!current && this.swarmTypesWhileBusy(current.engine, state.queue[0]?.deliveryId)
@@ -1062,21 +1130,26 @@ export class SessionInputController {
       if (!next.deliveryId?.startsWith('team:')) this.deps.onError(sessionId, 'This harness is no longer available.')
       return
     }
-    if (busySwarm) this.scheduleWrite(sessionId, session, next.content, next.deliveryId, next.inputContext, next.receipt)
-    else void this.inject(sessionId, session, next.content, next.deliveryId, next.inputContext, next.receipt)
+    if (busySwarm) await this.scheduleWrite(sessionId, session, next.content, next.deliveryId, next.inputContext, next.receipt)
+    else await this.inject(sessionId, session, next.content, next.deliveryId, next.inputContext, next.receipt)
   }
 
   private enqueue(sessionId: string, state: InputState, content: string, deliveryId?: string, inputContext?: string, receipt?: MessageReceipt): void {
     const bytes = Buffer.byteLength(content, 'utf8')
-    const queuedBytes = state.queue.reduce((sum, item) => sum + item.bytes, 0)
-    if (state.queue.length >= MAX_QUEUE_ITEMS || queuedBytes + bytes > MAX_QUEUE_BYTES) {
-      this.delivery(sessionId, deliveryId, 'rejected', 'queue_full')
-      receipt?.('queue_full')
-      if (!deliveryId?.startsWith('team:')) this.deps.onError(sessionId, 'This agent already has too many queued messages. Try again after the current operation finishes.')
-      return
-    }
+    if (this.refusedFull(sessionId, state, bytes, deliveryId, receipt)) return
     state.queue.push({ content, bytes, expiresAt: Date.now() + ITEM_TTL_MS, deliveryId, inputContext, ...(receipt ? { receipt } : {}) })
     this.delivery(sessionId, deliveryId, 'queued')
+  }
+
+  /** Refuse a message of [bytes] when the agent's queued and held messages are at their limits. */
+  private refusedFull(sessionId: string, state: InputState, bytes: number, deliveryId?: string, receipt?: MessageReceipt): boolean {
+    const waiting = [...state.queue, ...state.held]
+    const waitingBytes = waiting.reduce((sum, item) => sum + item.bytes, 0)
+    if (waiting.length < MAX_QUEUE_ITEMS && waitingBytes + bytes <= MAX_QUEUE_BYTES) return false
+    this.delivery(sessionId, deliveryId, 'rejected', 'queue_full')
+    receipt?.('queue_full')
+    if (!deliveryId?.startsWith('team:')) this.deps.onError(sessionId, 'This agent already has too many queued messages. Try again after the current operation finishes.')
+    return true
   }
 
   private dropExpired(sessionId: string, state: InputState): void {
