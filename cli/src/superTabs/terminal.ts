@@ -125,7 +125,7 @@ function resetOf(said: string, now: number): number | null {
 const STATUS_LINE = /esc to (?:interrupt|cancel)|^\W*[A-Za-z][\w ]*…\s*\(|^\s*⎿\s+tip:|will retry in/i
 
 /** A short digest of the screen without its status lines: two screens with the same one show the same work. */
-export function screenDigest(text: string): string {
+function screenDigest(text: string): string {
   const lines = text.split('\n').filter(line => !STATUS_LINE.test(line)).map(line => line.trimEnd())
   return createHash('sha256').update(lines.join('\n')).digest('base64url')
 }
