@@ -23,8 +23,19 @@ export const FLOWS = [
   superTab('super-tab-empty', 'empty'),
   superTab('super-tab-viewer', 'viewer'),
   superTab('super-tab-offline', 'offline'),
-  superTab('super-tab-roster', 'rich', { steps: [['click', 'Members and machines']] }),
+  // On a phone these views are in the header's ⋮ menu, by name.
+  superTab('super-tab-roster', 'rich', {
+    steps: [['click', 'Members and machines']],
+    compact: [['click', ' options'], ['click', 'Members and machines']],
+  }),
   superTab('super-tab-conversations', 'rich', { only: 'compact', steps: [['click', 'Conversations']] }),
-  superTab('super-tab-terminals', 'rich', { steps: [['click', 'Group terminals']] }),
-  superTab('super-tab-pull-requests', 'rich', { steps: [['click', 'Pull requests']] }),
+  superTab('super-tab-terminals', 'rich', {
+    steps: [['click', 'Group terminals']],
+    compact: [['click', ' options'], ['click', 'Group terminals']],
+  }),
+  superTab('super-tab-pull-requests', 'rich', {
+    steps: [['click', 'Pull requests']],
+    compact: [['click', ' options'], ['click', 'Pull requests']],
+  }),
+  superTab('super-tab-menu', 'rich', { only: 'compact', steps: [['click', ' options']] }),
 ];
