@@ -34,7 +34,7 @@ export function richSwarm(now = NOW) {
   s.join(peer)
   s.join(outsider)
   const lead = s.add('lead-harness', 'lead', true)
-  const secret = s.run({ type: 'project.create', name: 'Secret', visibility: 'private' }).projectId as string
+  const secret = s.run({ type: 'project.create', name: 'Secret', visibility: 'private', brief: '' }).projectId as string
   const web = s.group('Web')
   const worker = s.add('worker-harness', web)
   const assignmentId = s.run({ type: 'work.assign', conversationId: web, agentId: worker }).assignmentId as string
