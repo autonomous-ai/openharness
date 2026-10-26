@@ -48,8 +48,17 @@ class SuperTabClient {
 
   /// The tags waiting for this account in a Swarm: its own state once open,
   /// else what discovery last read, so a tab not opened yet still shows them.
-  int waitingTags(String id) =>
-      _loaded[id]?.snapshot?.mentionsWaiting ?? _tagCounts[id] ?? 0;
+  /// A Swarm paused while away ([SuperTabReading.pausesAway]) reads nothing:
+  /// discovery's count is the fresh one until it is shown again.
+  int waitingTags(String id) {
+    final counted = _tagCounts[id];
+    if (counted != null && _paused(id)) return counted;
+    return _loaded[id]?.snapshot?.mentionsWaiting ?? _tagCounts[id] ?? 0;
+  }
+
+  /// Open here, but not polling: not on screen while the reading pauses.
+  bool _paused(String id) =>
+      _reading.pausesAway && (_loaded[id]?.away ?? false);
   final SuperTabUpload upload;
   final Duration discoveryInterval;
 
@@ -263,7 +272,9 @@ class SuperTabClient {
         onTabs!(tabs.values.toList(), hidden);
         await _readTags([
           for (final id in tabs.keys)
-            if (!hidden.contains(id) && !_loaded.containsKey(id)) id,
+            if (!hidden.contains(id) &&
+                (!_loaded.containsKey(id) || _paused(id)))
+              id,
         ], generation);
       } catch (error) {
         if (generation == _generation) {
@@ -373,17 +384,32 @@ class SuperTabClient {
           'GET',
           '/api/super-tabs/${Uri.encodeComponent(id)}/mentions?state=waiting',
         );
-        if (generation != _generation || _loaded.containsKey(id)) continue;
+        if (generation != _generation ||
+            (_loaded.containsKey(id) && !_paused(id))) {
+          continue;
+        }
         final waiting = [
           for (final row in answer['mentions'] as List)
             SuperTabMention.fromJson(superTabMap(row)),
         ];
-        final seen = _tagsSeen[id];
+        // A paused Swarm already knows the tags it read before it was away.
+        final mentions = _loaded[id] == null
+            ? null
+            : SuperTabMentions.of(_loaded[id]!);
+        final seen = mentions == null
+            ? _tagsSeen[id]
+            : {...?_tagsSeen[id], for (final m in mentions.waiting) m.id};
+        final told = <String>{};
         if (seen != null) {
           for (final mention in waiting.reversed) {
-            if (!seen.contains(mention.id)) onMention?.call(mention);
+            if (!seen.contains(mention.id)) {
+              onMention?.call(mention);
+              told.add(mention.id);
+            }
           }
         }
+        // Not news again when the Swarm is shown and reads its own.
+        mentions?.seen(told);
         _tagsSeen[id] = {...?seen, for (final m in waiting) m.id};
         if (_tagCounts[id] != waiting.length) {
           _tagCounts[id] = waiting.length;
