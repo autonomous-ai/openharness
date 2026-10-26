@@ -51,8 +51,8 @@ beforeAll(async () => {
     if (!found) return reply.code(401).send({ success: false })
     request.user = found
   })
-  await app.register(superTabRoutes, { store, github: null, reads: new SwarmReads(db, store, { now: () => clock }),
-    hosts: new HostReads(db, store, { now: () => clock }) })
+  await app.register(superTabRoutes, { store, github: null, reads: new SwarmReads(store, { now: () => clock }),
+    hosts: new HostReads(store, { now: () => clock }) })
   await app.ready()
 })
 afterAll(async () => {
@@ -351,4 +351,19 @@ describe('a real command through the store by parts (design 4.7)', () => {
       .toEqual([[s.web, written.version, 'Renamed for real']])
     expect(seen.lastChangedAt).toBe(reply.lastChangedAt)
   })
+})
+
+describe('routes given only a store', () => {
+  it('read from that store\'s database, not the app-wide client', async () => {
+    const s = await scene()
+    const plain = Fastify()
+    plain.setErrorHandler(errorHandler)
+    plain.addHook('onRequest', async request => { request.user = owner })
+    await plain.register(superTabRoutes, { store: new SuperTabStore(db), github: null })
+    await plain.ready()
+    try {
+      expect((await plain.inject({ method: 'GET', url: `/api/super-tabs/${s.tabId}/parts` })).statusCode).toBe(200)
+      expect((await plain.inject({ method: 'GET', url: '/api/super-tabs/hosts/host/changes?full=1' })).statusCode).toBe(200)
+    } finally { await plain.close() }
+  }, 10_000)
 })

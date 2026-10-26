@@ -58,7 +58,7 @@ try {
   const again = await step('3 verify: migrate again', () => migrateAll(db, { waitMs: 0 }))
 
   const store = new SuperTabStore(db)
-  const reads = new SwarmReads(db, store), hosts = new HostReads(db, store)
+  const reads = new SwarmReads(store), hosts = new HostReads(store)
   const owner = (s: typeof seeded[number]): AuthUser => ({ sub: s.state.ownerId, email: s.state.people[0]!.email, autonomousEnv: 'prod', role: 'user' })
   const polls = await step('4 read by parts', async () => Promise.all(seeded.map(async s => {
     const first = await reads.firstLoad(owner(s), s.state.id)

@@ -173,7 +173,7 @@ export interface SuperTabStoreHooks {
 /** Persistent coordination. Host adapters own execution and must confirm their local session grants. */
 export class SuperTabStore {
   readonly native: SuperTabNativeStore
-  constructor(private readonly db: PrismaClient, private readonly now: () => number = Date.now,
+  constructor(readonly db: PrismaClient, readonly now: () => number = Date.now,
     private readonly attachments: Attachments | null = null, private readonly hooks: SuperTabStoreHooks = {}) {
     this.native = new SuperTabNativeStore({
       transaction: body => transaction(db, body),

@@ -83,8 +83,8 @@ export async function superTabRoutes(app: FastifyInstance, options: { store?: Su
     { workEnded: (tabId, ended) => { void github?.release(tabId, ended).catch(error => logger.warn('[github] release failed', { tabId, error: String(error) })) },
       // A team account has no git login of its own: without the app it takes no teammates' work.
       teamAccountsIdle: !github })
-  const reads = options.reads ?? new SwarmReads(prisma, store, { githubApp: !!github })
-  const hosts = options.hosts ?? new HostReads(prisma, store, { githubApp: !!github, teamAccountsIdle: !github })
+  const reads = options.reads ?? new SwarmReads(store, { githubApp: !!github })
+  const hosts = options.hosts ?? new HostReads(store, { githubApp: !!github, teamAccountsIdle: !github })
   app.get('/api/super-tabs/grids', (req, reply) => respond(reply, () => store.hostGrids(req.user!)))
   // Each row says whether this server has the Harness GitHub App, so the host knows to ask for a start's token below.
   app.get('/api/super-tabs/hosts/:machineId/pools', updateRequired)

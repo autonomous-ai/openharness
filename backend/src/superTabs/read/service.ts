@@ -23,9 +23,12 @@ type LoadOptions = Parameters<typeof parts.loadActive>[2]
 interface Read { parts: SwarmParts; actor: Actor; view: ReaderView; lastChangedAt: number | null }
 
 export class SwarmReads {
+  private readonly db: PrismaClient
   private readonly now: () => number
-  constructor(private readonly db: PrismaClient, private readonly store: SuperTabStore, private readonly options: { now?: () => number; githubApp?: boolean } = {}) {
-    this.now = options.now ?? Date.now
+  /** Reads the store's own database, on its clock unless given one (tests). */
+  constructor(private readonly store: SuperTabStore, private readonly options: { now?: () => number; githubApp?: boolean } = {}) {
+    this.db = store.db
+    this.now = options.now ?? store.now
   }
 
   async firstLoad(user: AuthUser, tabId: string, asAgentId?: string): Promise<FirstLoad> {
