@@ -61,6 +61,21 @@ describe("Claude Code's composer on Windows", () => {
     expect(composerState(defaultMode)).toBe('ready')
   })
 
+  // DESKTOP-0TFH0OJ, 2026-10-26: in a 42-column pane Claude Code cut its footer at the edge, the composer read as absent, and
+  // each Swarm message was typed but its Enter held as `prompt_hidden`. Read through the pty host, as the daemon reads it.
+  it('finds the composer of a narrow pane, whose footer Claude Code cut at the edge', () => {
+    on('win32')
+    const narrow = (draft: string, footerRow: string) => ['✻ Brewed for 2s · done Thursday 9:07 PM', '', '─'.repeat(42),
+      `> ${draft}`, '─'.repeat(42), footerRow, '  × Auto-update failed: claude.exe in u…', ''].join('\n')
+    for (const cut of ['  ⏵⏵ bypass permissions on (shift+tab to', '  ⏵⏵ bypass permi…', '  ⏸ plan mode on (shift…', '  ? for shortc…']) {
+      expect(composerState(narrow('', cut))).toBe('ready')
+      expect(composerState(narrow('[Pasted text #3 +10 lines]', cut))).toBe('ready')
+      expect(read(narrow('', cut)).hold).toBeNull()
+    }
+    // Indented output under a framed quote is still no footer.
+    expect(composerState(narrow('', '  continued output'))).not.toBe('ready')
+  })
+
   it('reads Mac and Linux screens as before', () => {
     on('darwin')
     expect(read(claudeScreen('>'))).toMatchObject({ pane: { idle: false }, hold: 'team_waiting_idle' })
