@@ -1,0 +1,274 @@
+{
+ "ok": true,
+ "value": {
+  "revision": 214033,
+  "githubApp": true,
+  "state": {
+   "version": 1,
+   "id": "f1a5c0de0000000000000001",
+   "name": "Fixture Swarm",
+   "ownerId": "6a0000000000000000000001",
+   "environment": "prod",
+   "paused": false,
+   "projects": [
+    {
+     "id": "5000000000000000000000aa",
+     "name": "Fixture project",
+     "ownerId": "6a0000000000000000000001",
+     "leadConversationId": "c00000000000000000000001",
+     "visibility": "public",
+     "members": [],
+     "updateMinutes": 5,
+     "skillMode": "default",
+     "skillSet": "default",
+     "progress": {
+      "since": 1793009900000,
+      "dirtyRevision": 214033,
+      "summarizedRevision": 213800,
+      "requestedRevision": 213800
+     }
+    }
+   ],
+   "rules": [],
+   "invitations": [],
+   "localModels": {
+    "grid": "swarm-0123456789ab",
+    "enabled": true
+   },
+   "people": [
+    {
+     "id": "6a0000000000000000000001",
+     "email": "owner@example.com",
+     "role": "owner",
+     "generation": "gen-owner"
+    },
+    {
+     "id": "6a0000000000000000000002",
+     "email": "dev@example.com",
+     "role": "collaborator",
+     "generation": "gen-dev"
+    }
+   ],
+   "agents": [
+    {
+     "id": "a00000000000000000000001",
+     "projectId": "5000000000000000000000aa",
+     "machineId": "d00000000000000000000001",
+     "harnessId": "b00000000000000000000001",
+     "machineOwnerId": "6a0000000000000000000001",
+     "contributorId": "6a0000000000000000000001",
+     "membershipGeneration": "gen-owner",
+     "hostGrant": null,
+     "name": "Lead",
+     "displayName": "River",
+     "configuration": {
+      "engine": "claude",
+      "model": "opus",
+      "effort": "auto",
+      "contextWindow": null,
+      "engineVersion": null
+     },
+     "configurationVersion": "cv-lead",
+     "startedSession": {
+      "sessionId": "sess-lead",
+      "createdAt": "2026-10-26T09:00:00.000Z",
+      "creationId": "super-lead-start"
+     }
+    },
+    {
+     "id": "a00000000000000000000002",
+     "projectId": "5000000000000000000000aa",
+     "machineId": "d00000000000000000000001",
+     "harnessId": "b00000000000000000000002",
+     "machineOwnerId": "6a0000000000000000000001",
+     "contributorId": "6a0000000000000000000001",
+     "membershipGeneration": "gen-owner",
+     "hostGrant": null,
+     "name": "Builder",
+     "displayName": "Hugo",
+     "configuration": {
+      "engine": "claude",
+      "model": "opus",
+      "effort": "high",
+      "contextWindow": null,
+      "engineVersion": null
+     },
+     "configurationVersion": "cv-builder",
+     "limitedUntil": null,
+     "downSince": "2026-10-26T10:19:51.474Z",
+     "workDecision": "awaiting"
+    }
+   ],
+   "conversations": [
+    {
+     "id": "c00000000000000000000001",
+     "projectId": "5000000000000000000000aa",
+     "title": "Fixture project",
+     "leadId": "a00000000000000000000001",
+     "agentIds": [
+      "a00000000000000000000001"
+     ],
+     "archived": false,
+     "brief": "",
+     "checks": [],
+     "assignment": null,
+     "lastMessageSequence": 214010,
+     "pullRequestUrls": []
+    },
+    {
+     "id": "c00000000000000000000002",
+     "projectId": "5000000000000000000000aa",
+     "number": 2,
+     "title": "Fixture work",
+     "leadId": "a00000000000000000000001",
+     "agentIds": [
+      "a00000000000000000000001",
+      "a00000000000000000000002"
+     ],
+     "archived": false,
+     "brief": "Goal:\nShip the fixture\n\nChanges:\nOne file\n\nConstraints:\nNone\n\nOwns:\n- cli/src/superTabs",
+     "task": {
+      "goal": "Ship the fixture",
+      "changes": "One file",
+      "constraints": "None",
+      "owns": [
+       "cli/src/superTabs"
+      ]
+     },
+     "checks": [
+      {
+       "id": "c1",
+       "description": "Tests pass",
+       "independent": false,
+       "evidence": null,
+       "passedBy": null
+      }
+     ],
+     "assignment": {
+      "id": "w0000000000000000000001",
+      "agentId": "a00000000000000000000002",
+      "status": "working",
+      "result": null,
+      "configuration": {
+       "engine": "claude",
+       "model": "opus",
+       "effort": "high",
+       "contextWindow": null,
+       "engineVersion": null
+      },
+      "execution": {
+       "machineId": "d00000000000000000000001",
+       "harnessId": "b00000000000000000000002",
+       "machineOwnerId": "6a0000000000000000000001"
+      },
+      "recordingProgress": {
+       "at": 1793010104375,
+       "revision": 214033
+      }
+     },
+     "lastMessageSequence": 214033,
+     "pullRequestUrls": []
+    },
+    {
+     "id": "c00000000000000000000003",
+     "projectId": "5000000000000000000000aa",
+     "number": 3,
+     "title": "Fixture done",
+     "leadId": "a00000000000000000000001",
+     "agentIds": [
+      "a00000000000000000000001"
+     ],
+     "archived": false,
+     "brief": "Done work",
+     "checks": [],
+     "assignment": {
+      "id": "w0000000000000000000002",
+      "agentId": "a00000000000000000000002",
+      "status": "done",
+      "result": "Merged",
+      "configuration": {
+       "engine": "claude",
+       "model": "opus",
+       "effort": "high",
+       "contextWindow": null,
+       "engineVersion": null
+      },
+      "execution": {
+       "machineId": "d00000000000000000000001",
+       "harnessId": "b00000000000000000000002",
+       "machineOwnerId": "6a0000000000000000000001"
+      }
+     },
+     "lastMessageSequence": 213990,
+     "pullRequestUrls": [
+      "https://github.com/example/repo/pull/7"
+     ]
+    }
+   ],
+   "machines": [
+    {
+     "machineId": "d00000000000000000000001",
+     "name": "MacBookPro2021",
+     "contributorId": "6a0000000000000000000001",
+     "membershipGeneration": "gen-owner",
+     "generation": "pool-gen-1",
+     "scope": "swarm",
+     "engines": [
+      "claude",
+      "codex"
+     ],
+     "maxAgents": 4,
+     "paused": false,
+     "cwd": "/Users/owner/Harness/swarms/f1a5",
+     "observation": {
+      "generation": "pool-gen-1",
+      "receivedAt": 1793010099000,
+      "resources": {
+       "cpuPercent": 12,
+       "memoryUsedBytes": 8000000000,
+       "memoryTotalBytes": 32000000000
+      },
+      "quotas": [
+       {
+        "engine": "claude",
+        "known": true,
+        "windows": []
+       }
+      ],
+      "tools": {
+       "git": true
+      },
+      "runningHarnessIds": [
+       "b00000000000000000000001",
+       "b00000000000000000000002"
+      ],
+      "stoppedHarnessIds": []
+     },
+     "availableSlots": 2,
+     "teamWork": {
+      "allowed": true
+     }
+    }
+   ],
+   "starts": [
+    {
+     "id": "e00000000000000000000002",
+     "request": {
+      "conversationId": "c00000000000000000000002",
+      "machineId": "d00000000000000000000001",
+      "engine": "claude",
+      "name": "Reviewer",
+      "cwd": "/Users/owner/Harness/swarms/f1a5",
+      "worktree": true
+     },
+     "contributorId": "6a0000000000000000000001",
+     "machineOwnerId": "6a0000000000000000000001",
+     "membershipGeneration": "gen-owner",
+     "poolGeneration": "pool-gen-1",
+     "dispatched": false,
+     "creationId": "super-e00000000000000000000002"
+    }
+   ]
+  }
+ }
+}

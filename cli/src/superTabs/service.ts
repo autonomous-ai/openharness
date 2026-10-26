@@ -5,7 +5,7 @@ import { createHash } from 'node:crypto'
 import type { CoreApi, ServiceRequests, SuperTabsPort } from '../core/api.js'
 import { backend, swarmRoleFor, hostJournalFile, identifier, object, SuperTabHost, SuperTabHostError, type SuperTabHostOptions, type SwarmSources } from './host.js'
 import { HostFeed } from './hostFeed.js'
-import { SwarmReads } from './swarmReads.js'
+import { SwarmReads, type SwarmRead } from './swarmReads.js'
 import { within } from './wire.js'
 import { machineChoices } from '../lib/newCommand.js'
 import { START_REQUIREMENTS } from './capacity.js'
@@ -37,7 +37,7 @@ const HELP = {
     model: 'opus', effort: 'high', routeDecisionId: 'DECISION' },
   command: 'command OPERATION_ID JSON: send one of the commands below. Reuse exactly the same ID and JSON after an interrupted request. On Custom skills, work.assign takes "roleId" too, a role of the agent\'s kind. When your assignment needs a person to decide, set work.status needs_human; when you cannot go on, blocked. Set working again once it moves. rule.set and rule.remove change one project\'s routing rules: only the project owner does (naming projectId), or that project\'s Lead passing on the project owner\'s request, with askedIn naming the project owner\'s message in that project\'s chat. project.skills switches a project between the Default, Harness orchestration and Custom skills (Custom once its owner has made the project\'s roles): only its project owner does, or its Lead passing on that owner\'s own chat message, with askedIn naming it. A start, assignment or route that breaks a hard rule (forbidModel, machines, minEffort) is refused for agents; preferEngine and preferIdle only rank.',
   commands: [
-    { type: 'project.report', projectId: 'PROJECT', throughRevision: 123, text: 'What changed, what is blocked, and what comes next. Use null when nothing merits repeating.' },
+    { type: 'project.report', projectId: 'PROJECT', through: { GROUP: 214031 }, text: 'What changed, what is blocked, and what comes next. Use null when nothing merits repeating.' },
     { type: 'project.repository', projectId: 'PROJECT', repositoryUrl: 'https://github.com/OWNER/REPOSITORY' },
     { type: 'project.skills', projectId: 'PROJECT', mode: 'default|orchestration|custom', askedIn: { conversationId: 'GROUP', messageId: 'OWNER_MESSAGE' } },
     { type: 'message.send', conversationId: 'GROUP', text: 'A message addressed to an agent', replyTo: null, recipientIds: ['AGENT'] },
@@ -64,6 +64,8 @@ const HELP = {
 }
 
 const list = (value: unknown) => Array.isArray(value) ? value.map(object) : []
+/** A Swarm read as `GET /api/super-tabs/:id` answered it, `lastChangedAt` in place of `revision` (design 2026-10-26 5.3). */
+const answerOf = (read: SwarmRead) => ({ lastChangedAt: read.lastChangedAt, state: read.state, ...(read.githubApp ? { githubApp: true } : {}) })
 /** Only a project's Lead may tag people (spec 2026-10-24-lead-mentions), so only a Lead's help offers it. */
 const LEAD_HELP = { ...HELP, post: `post GROUP TEXT OPERATION_ID [--reply-to MESSAGE_ID] [--attach PATH]... [--mention PERSON]...: ${POST_HELP} --mention tags a person, by the id or email shown in status (up to 5), when you need them to act or decide; it shows in their notifications.` }
 const OTHER_WORK_FIELDS = ['conversationId', 'projectName', 'title', 'owns', 'status', 'agentName', 'pr'] as const
@@ -89,10 +91,11 @@ function statusView(answer: Record<string, unknown>, agentId: string): Record<st
 }
 
 /** A post's mentions name people by id or email; the backend takes person ids. A name that is nobody in the Swarm is refused
- *  here, before anything is sent. Whether this agent may tag them in this conversation is the backend's to judge. */
-function mentionCommand(command: Record<string, unknown>, state: Record<string, unknown>): Record<string, unknown> {
+ *  here, before anything is sent. Whether this agent may tag them in this conversation is the backend's to judge. Only such
+ *  a post reads the Swarm, for its people. */
+async function mentionCommand(command: Record<string, unknown>, swarm: () => Promise<Record<string, unknown>>): Promise<Record<string, unknown>> {
   if (command.type !== 'message.send' || !Array.isArray(command.mentions)) return command
-  const people = list(state.people)
+  const people = list((await swarm()).people)
   const ids = command.mentions.map(name => {
     const person = people.find(p => p.id === name || typeof name === 'string' && typeof p.email === 'string' && p.email.toLowerCase() === name.toLowerCase())
     if (!person) throw new SuperTabHostError('MENTION_UNKNOWN', `${String(name)} is not a person in this Swarm. Tag a person by the id or email shown in status.`, 400)
@@ -290,52 +293,58 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
           const value = await backend(core, method as string, path, payload.body)
           return { ok: true, value }
         }
-        let agentId = identifier(payload.agentId) ? payload.agentId
-          : identifier(payload.harnessId) ? createHash('sha256').update(JSON.stringify([core.daemon.machineId(), payload.harnessId])).digest('hex').slice(0, 24) : null
-        if (payload.action === 'help' && (!identifier(payload.tabId) || !agentId)) return { ok: true, help: HELP }
-        if (!identifier(payload.tabId) || !agentId) return { error: 'INVALID_REQUEST' }
-        if (!identifier(payload.agentId) && identifier(payload.harnessId)) {
-          const rows = await backend(core, 'GET', `/api/super-tabs/hosts/${core.daemon.machineId()}`)
-          const member = list(rows).find(row => row.tabId === payload.tabId && object(row.agent).machineId === core.daemon.machineId()
-            && object(row.agent).harnessId === payload.harnessId && row.stopRequested !== true)
-          if (identifier(object(member?.agent).id)) agentId = String(object(member?.agent).id)
+        const named = identifier(payload.agentId) ? payload.agentId : null
+        const hashed = identifier(payload.harnessId) ? createHash('sha256').update(JSON.stringify([core.daemon.machineId(), payload.harnessId])).digest('hex').slice(0, 24) : null
+        if (payload.action === 'help' && (!identifier(payload.tabId) || !(named ?? hashed))) return { ok: true, help: HELP }
+        if (!identifier(payload.tabId) || !(named ?? hashed)) return { error: 'INVALID_REQUEST' }
+        // The caller is one of this machine's running agents, as the host roster lists it now: no Swarm is read to know that
+        // (design 2026-10-26 5.3), and the roster is read again for every call, as the whole Swarm once was, by its changes
+        // since the host's last read. A replacement terminal is still its original member, found by its harness.
+        const { feed, reads } = sources()
+        const callerIn = (roster: Record<string, unknown>[]) => {
+          const rows = roster.filter(row => row.tabId === payload.tabId && row.closeSession !== true && object(row.agent).machineId === core.daemon.machineId())
+          const member = rows.find(row => object(row.agent).harnessId === payload.harnessId && row.stopRequested !== true)
+          const id = named ?? (identifier(object(member?.agent).id) ? object(member?.agent).id : hashed)
+          return rows.find(row => object(row.agent).id === id)
         }
-        const path = `/api/super-tabs/${payload.tabId}`
-        const identity = `asAgentId=${agentId}`
-        const answer = object(await backend(core, 'GET', `${path}?${identity}`))
-        const state = object(answer.state)
-        const agent = Array.isArray(state.agents) ? state.agents.map(object).find(a => a.id === agentId) : undefined
-        if (!agent || agent.machineId !== core.daemon.machineId() || typeof agent.harnessId !== 'string'
+        const caller = callerIn((await feed.refresh()).roster)
+        const agent = object(caller?.agent)
+        if (!caller || !identifier(agent.id) || typeof agent.harnessId !== 'string'
           || identifier(payload.harnessId) && agent.harnessId !== payload.harnessId || !core.agents.byAgent(agent.harnessId)) {
           return payload.action === 'help' ? { ok: true, help: HELP } : { error: 'AGENT_UNAVAILABLE', detail: 'This agent is not a running contribution on this machine.' }
         }
-        if (payload.action === 'help') return { ok: true, help: isLead(state, agentId) ? LEAD_HELP : HELP }
+        const agentId = agent.id
+        const path = `/api/super-tabs/${payload.tabId}`
+        const identity = `asAgentId=${agentId}`
+        const swarm = () => reads.read(String(payload.tabId), agentId)
+        if (payload.action === 'help') return { ok: true, help: caller.lead === true ? LEAD_HELP : HELP }
         wake()
         if (payload.action === 'startStatus' && identifier(payload.startId)) {
           return { ok: true, value: await backend(core, 'GET', `${path}/starts/${payload.startId}?${identity}`) }
         }
-        if (payload.action === 'status') return { ok: true, value: statusView(answer, agentId) }
+        if (payload.action === 'status') return { ok: true, value: statusView(answerOf(await swarm()), agentId) }
         // A Lead's terminal read or typing (`screen`, `type`): the backend answers only the agent that asked.
         if (payload.action === 'terminalResult') {
           if (!identifier(payload.terminalRequestId)) return { error: 'INVALID_REQUEST' }
           return { ok: true, value: await backend(core, 'GET', `${path}/terminal/${payload.terminalRequestId}?${identity}`) }
         }
         if (payload.action === 'routeContext') {
-          const [policy, machines] = await Promise.all([
+          const [read, policy, machines] = await Promise.all([
+            swarm(),
             backend(core, 'GET', `${path}/routing-policy?${identity}`),
             core.account.machines().catch(() => null),
           ])
           // A list that could not be read is not an empty one: the Lead's route says so.
           const readable = machines?.status === 200
           // Machines shared with the account but not yet added refuse it, so they are not offered.
-          return { ok: true, value: { tab: answer, policy, agentId,
+          return { ok: true, value: { tab: answerOf(read), policy, agentId,
             machines: readable ? machineChoices(object(object(machines.body).data), null).filter(m => !m.toAdd).map(m => ({ machineId: m.machineId, name: m.label, status: m.status })) : [],
             ...(readable ? {} : { machinesUnreadable: true }) } }
         }
         // The route log and the group's attempts, for the quota open picks hold and what members did before. Apart from
         // `routeContext` so the Lead reads it while it probes the machines; the group's Lead only, like the route itself.
         if (payload.action === 'routeHistory') {
-          const group = list(state.conversations).find(c => c.id === payload.conversationId)
+          const group = list((await swarm()).state.conversations).find(c => c.id === payload.conversationId)
           if (!group || group.leadId !== agentId) return { error: 'LEAD_REQUIRED', detail: 'The coordinating Lead of this group owns routing.', status: 403 }
           const [logged, tried] = await Promise.all([
             within(backend(core, 'GET', `${path}/route-decisions?${identity}`)),
@@ -373,7 +382,7 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
           } catch { return { ok: true, value: page } }
         }
         if (payload.action === 'command' && identifier(payload.operationId) && payload.command && typeof payload.command === 'object' && !Array.isArray(payload.command)) {
-          const command = mentionCommand(taskCommand(object(payload.command)), state)
+          const command = await mentionCommand(taskCommand(object(payload.command)), async () => (await swarm()).state)
           const send = (command: Record<string, unknown>) => backend(core, 'POST', `${path}/commands`,
             { operationId: payload.operationId, command, asAgentId: agentId })
           let value: unknown
