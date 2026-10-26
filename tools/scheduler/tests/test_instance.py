@@ -28,6 +28,10 @@ class LoadTest(unittest.TestCase):
         with self.assertRaisesRegex(InstanceError, 'opus has no default quality'):
             load(instance([task('a')], [machine('m')], [model('opus', quality={'review': 3})]))
 
+    def test_refuses_independence_from_an_unknown_task(self):
+        with self.assertRaisesRegex(InstanceError, 'a must differ from unknown task b'):
+            load(instance([task('a', independent_of=['b'])], [machine('m')], [model('opus')]))
+
     def test_refuses_an_account_on_an_unknown_machine(self):
         with self.assertRaisesRegex(InstanceError, 'account x names unknown machine z'):
             load(instance([task('a')], [machine('m')], [model('opus')],

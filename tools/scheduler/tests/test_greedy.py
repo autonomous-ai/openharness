@@ -56,6 +56,12 @@ class RouteOrderTest(unittest.TestCase):
                              [machine('x', slots=4), machine('y', slots=4)], [model('opus', cost=2)], accounts))
         self.assertEqual(picks(greedy(inst)), {'a': ('x', 'opus'), 'b': ('y', 'opus')})
 
+    def test_a_review_skips_the_family_its_build_was_given(self):
+        inst = load(instance([task('build'), task('review', deps=['build'], independent_of=['build'])],
+                             [machine('m', slots=2, engines=['claude', 'codex'])],
+                             [model('gpt', engine='codex', cost=2), model('opus', cost=3)]))
+        self.assertEqual(picks(greedy(inst)), {'build': ('m', 'gpt'), 'review': ('m', 'opus')})
+
     def test_ignores_the_queue_so_it_finishes_later_than_the_exact_plan(self):
         # The route always takes the cheap one-slot machine; the exact plan spends more to run both at once.
         inst = load(instance([task('a'), task('b')], [machine('cheap'), machine('dear', engines=['codex'])],

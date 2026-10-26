@@ -61,9 +61,11 @@ def evaluate(instance: Instance, assignment: Assignment) -> Result:
     return Result(status='EVALUATED', makespan=max((p.end for p in placements), default=0), cost=cost, plan=placements)
 
 
-def route_pick(instance: Instance, task: Task, committed: Dict[str, Dict[str, int]]) -> Optional[Option]:
-    """The route's pick for one task, given what earlier picks already take from each account."""
-    opts = options(instance, task)
+def route_pick(instance: Instance, task: Task, committed: Dict[str, Dict[str, int]], assignment: Assignment) -> Optional[Option]:
+    """The route's pick for one task, given what earlier picks already take from each account. A review leaves out the
+    family its build was given, as the Lead asks the route for one by naming the other family."""
+    taken = {instance.model(assignment[other][1]).family for other in task.independent_of if other in assignment}
+    opts = [o for o in options(instance, task) if instance.model(o.model).family not in taken]
     if not opts:
         return None
     if task.difficulty == 'high':
@@ -98,7 +100,7 @@ def greedy(instance: Instance) -> Result:
     committed: Dict[str, Dict[str, int]] = {}
     assignment: Assignment = {}
     for t in _ordered(instance):
-        pick = route_pick(instance, t, committed)
+        pick = route_pick(instance, t, committed, assignment)
         if pick is None:
             return Result(status='INFEASIBLE', reason=f'no machine and model meet the floor of: {t.id}')
         assignment[t.id] = (pick.machine, pick.model)

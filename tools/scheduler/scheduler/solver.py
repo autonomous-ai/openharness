@@ -79,6 +79,12 @@ class Formulation:
             m.AddExactlyOne(picks)
             for dep in t.deps:
                 m.Add(self.start[t.id] >= self.end[dep])
+        for t in instance.tasks:
+            for other in t.independent_of:
+                for family in {k.family for k in instance.models}:
+                    same = [x for o, x in self.pick.items() if o.task in (t.id, other) and instance.model(o.model).family == family]
+                    if same:
+                        m.Add(sum(same) <= 1)
         for mid, intervals in by_machine.items():
             slots = instance.machine(mid).slots
             if slots < len(intervals):

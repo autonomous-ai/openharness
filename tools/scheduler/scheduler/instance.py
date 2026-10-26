@@ -23,6 +23,8 @@ class Task:
     deps: Tuple[str, ...] = ()
     spend: Dict[str, float] = field(default_factory=dict)
     difficulty: str = 'medium'
+    # Tasks whose model family this one must not share: a review is done by another family than the work it reviews.
+    independent_of: Tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -46,6 +48,12 @@ class Model:
     machines: Optional[Tuple[str, ...]] = None
     # Whether it spends the machine's engine subscription (an API key or a model on the grid does not).
     subscription: bool = True
+    # Models of one family think alike (Opus, Sonnet and Haiku are all Claude); None takes the engine's name.
+    family: Optional[str] = None
+
+    def __post_init__(self):
+        if self.family is None:
+            object.__setattr__(self, 'family', self.engine)
 
     def quality_for(self, kind: str) -> int:
         return self.quality.get(kind, self.quality['default'])
@@ -119,13 +127,15 @@ def _check_acyclic(tasks: List[Task]) -> None:
 def load(data: dict) -> Instance:
     tasks = [Task(id=str(t['id']), title=str(t.get('title', t['id'])), minutes=int(t['minutes']), floor=int(t.get('floor', 1)),
                   kind=str(t.get('kind') or 'default'), deps=tuple(str(d) for d in t.get('deps', ())),
-                  spend={str(k): float(v) for k, v in t.get('spend', {}).items()}, difficulty=str(t.get('difficulty', 'medium')))
+                  spend={str(k): float(v) for k, v in t.get('spend', {}).items()}, difficulty=str(t.get('difficulty', 'medium')),
+                  independent_of=tuple(str(d) for d in t.get('independent_of', ())))
              for t in data['tasks']]
     machines = [Machine(id=str(m['id']), name=str(m.get('name', m['id'])), slots=int(m['slots']), engines=tuple(m['engines']))
                 for m in data['machines']]
     models = [Model(id=str(m['id']), engine=str(m['engine']), cost=int(m['cost']), quality={str(k): int(v) for k, v in m['quality'].items()},
                     speed=float(m.get('speed', 1.0)), concurrency=m.get('concurrency'),
-                    machines=tuple(m['machines']) if m.get('machines') is not None else None, subscription=bool(m.get('subscription', True)))
+                    machines=tuple(m['machines']) if m.get('machines') is not None else None, subscription=bool(m.get('subscription', True)),
+                    family=m.get('family'))
               for m in data['models']]
     accounts = [Account(id=str(a['id']), members=tuple((str(x[0]), str(x[1])) for x in a['members']),
                         budget={str(k): float(v) for k, v in a['budget'].items()})
@@ -141,6 +151,9 @@ def load(data: dict) -> Instance:
         for dep in t.deps:
             if dep not in ids:
                 raise InstanceError(f'{t.id} depends on unknown task {dep}')
+        for other in t.independent_of:
+            if other not in ids:
+                raise InstanceError(f'{t.id} must differ from unknown task {other}')
     _check_acyclic(tasks)
     machine_ids = {m.id for m in machines}
     for m in models:

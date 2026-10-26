@@ -70,6 +70,22 @@ class QuotaTest(unittest.TestCase):
         self.assertEqual(len(result.plan), 2)
 
 
+class IndependenceTest(unittest.TestCase):
+    def test_a_review_uses_another_model_family_than_the_work_it_reviews(self):
+        # Codex is cheaper for both, but the review must not be Codex if the build is.
+        inst = load(instance([task('build'), task('review', minutes=20, deps=['build'], independent_of=['build'])],
+                             [machine('m', slots=2, engines=['claude', 'codex'])],
+                             [model('gpt', engine='codex', cost=2), model('opus', cost=3)]))
+        result = solve(inst)
+        p = placed(result)
+        self.assertNotEqual(inst.model(p['build'].model).family, inst.model(p['review'].model).family)
+        self.assertEqual(result.cost, 60 * 2 + 20 * 3)
+
+    def test_models_of_one_engine_share_a_family_unless_given_one(self):
+        inst = load(instance([task('a')], [machine('m')], [model('opus'), model('grid', family='deepseek')]))
+        self.assertEqual((inst.model('opus').family, inst.model('grid').family), ('claude', 'deepseek'))
+
+
 class ObjectiveTest(unittest.TestCase):
     def test_finish_time_comes_before_cost(self):
         # One slot each: both on the cheap machine take 120 minutes; splitting finishes at 60 and costs more.
