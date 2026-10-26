@@ -19,6 +19,7 @@ import { LocalClient } from './harness/client.js'
 import { CLI_ROOT, IsolatedDaemon, until } from './harness/daemon.js'
 import { FakeBackend, type FakeMachine } from './harness/fakeBackend.js'
 import { retainedHarnesses } from '../src/superTabs/retention.js'
+import { overOldRoutes } from './harness/swarmReads.js'
 
 const HARNESS_INSTRUCTIONS = 'You are running in Harness, and the person can watch you. You can hand work to other agents (Claude Code, Codex) that run in their own harnesses: `harness new`, `harness wait`, `harness show`, `harness close` (see `harness --help`). Start one only for work that can run in parallel, needs another model, or takes long; do quick work yourself, and close each one once you have its answer. Only use or close harnesses you started.'
 const ME: FakeMachine = { machineId: 'b8'.repeat(16), computerId: 'e2e-computer-0000-0000-0000000000b8', name: 'studio', token: 'e2e-token-agent-client' }
@@ -250,12 +251,12 @@ describe('Harness for agents, end to end', () => {
     const joined = await start(second, 'joined')
     const left = await start(second, 'left')
     const shared = await start(second, 'shared')
-    relay.superTabs = async (_method, raw) => {
+    relay.superTabs = overOldRoutes(async (_method, raw) => {
       const path = new URL(raw, relay.httpUrl).pathname
       return { data: path === `/api/super-tabs/hosts/${ME.machineId}`
         ? [{ tabId: 'retained-team', agent: { id: 'shared-member', harnessId: shared.id, machineId: ME.machineId }, observers: [] }]
         : [] }
-    }
+    })
     expect(await client.request('super_tabs', { action: 'wake' })).toMatchObject({ ok: true })
     await until('the team host to retain its member', () => retainedHarnesses(d.dataDir).has(shared.id) || null, 10_000, 100)
     client.send('message', { agentId: joined.id, content: 'hello from the person' })

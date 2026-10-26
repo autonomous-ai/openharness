@@ -9,6 +9,7 @@ import { LocalClient } from './harness/client.js'
 import { CLI_ROOT, until, type IsolatedDaemon } from './harness/daemon.js'
 import { FakeBackend } from './harness/fakeBackend.js'
 import { signedInDaemon } from './harness/fleet.js'
+import { overOldRoutes } from './harness/swarmReads.js'
 
 let relay: FakeBackend | undefined
 const daemons: IsolatedDaemon[] = [], clients: LocalClient[] = []
@@ -40,7 +41,7 @@ it.each(['project', 'swarm'])('queues a teammate start with %s capacity and resu
   const projects = scope === 'swarm' ? [{ id: 'lead', conversationIds: ['lead'],
     repository: { machineId: memberMachine.machineId, cwd: project, repositoryUrl: null } }] : undefined
   const id = (machine: string, harness: string) => createHash('sha256').update(JSON.stringify([machine, harness])).digest('hex').slice(0, 24)
-  backend.superTabs = async (method, raw, body, caller) => {
+  backend.superTabs = overOldRoutes(async (method, raw, body, caller) => {
     const path = new URL(raw, backend.httpUrl).pathname
     if (path.endsWith('/pools')) {
       expect(path.split('/')[4]).toBe(caller.machineId)
@@ -76,7 +77,7 @@ it.each(['project', 'swarm'])('queues a teammate start with %s capacity and resu
     }
     if (path.endsWith('/deliveries')) return { data: [] }
     throw new Error(`Unexpected pool request ${path}`)
-  }
+  })
   onTestFailed(() => daemons.forEach(d => console.log(d.log().split('\n').slice(-75).join('\n'))))
   await Promise.all(daemons.map(d => d.start()))
   await until('both fixture accounts connected', () => backend.nodeUp(leadMachine.machineId) && backend.nodeUp(memberMachine.machineId), 30000)
