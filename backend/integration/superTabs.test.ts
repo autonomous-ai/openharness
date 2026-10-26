@@ -3023,23 +3023,52 @@ describe('the PM\'s terminal after a private chat (final review, Critical 1)', (
     expect(await store.mayObserve(bob, tab, 'test-host', workerHarness, host.sub)).toBe(true)
   })
 
-  it('keeps that session closed everywhere: as a Builder in another Swarm, through an earlier ordinary share, and in the machine\'s roster', async () => {
-    const { lead, harnessId, swarmShare, ordinaryShare, share } = await privateChat()
-    // Swarm B, where Bob reads a public project and the same session works as a Builder.
+  /** Swarm B, where Bob reads a public project. */
+  async function otherSwarm() {
     const other = (await store.create(owner, randomUUID(), 'Other Swarm', 'public')).id
     const invitation = await run(other, { type: 'invite.create', email: bob.email, role: 'collaborator', conversationId: 'lead' })
     await run(other, { type: 'invite.accept', inviteId: invitation.result.inviteId as string }, bob)
-    const asBuilder = String((await run(other, { type: 'agent.add', conversationId: 'lead', machineId: 'test-host', harnessId,
-      name: 'Builder elsewhere', configuration: config, lead: false })).result.agentId)
-    expect(asBuilder).toBe(lead)
-    const row = (await rosterRows(store, host, 'test-host')).find(t => t.tabId === other && t.agent?.id === asBuilder)!
+    return other
+  }
+
+  it('lets a confidential session be registered in one Swarm only, and no session in two become confidential', async () => {
+    const { harnessId } = await privateChat()
+    const other = await otherSwarm()
+    const add = (tab: string, harness: string, lead: boolean) => run(tab, { type: 'agent.add', conversationId: 'lead', machineId: 'test-host', harnessId: harness,
+      name: lead ? 'Lead' : 'Builder', configuration: config, lead })
+    await expect(add(other, harnessId, false)).rejects.toMatchObject({ code: 'SESSION_CONFIDENTIAL' })
+    // A session in two Swarms already cannot become a Lead in either.
+    const shared = randomUUID()
+    const first = (await store.create(owner, randomUUID(), 'No Lead yet', 'public')).id
+    const sharedId = String((await add(first, shared, false)).result.agentId)
+    await add(other, shared, false)
+    await expect(run(first, { type: 'conversation.agent', conversationId: 'lead', agentId: sharedId, present: true, lead: true }))
+      .rejects.toMatchObject({ code: 'SESSION_CONFIDENTIAL' })
+  })
+
+  it('keeps a session registered in two Swarms before the rule closed everywhere: to the other Swarm\'s Lead, its readers and earlier shares', async () => {
+    const { tab, lead, harnessId, swarmShare, ordinaryShare, share } = await privateChat()
+    const other = await otherSwarm()
+    const otherLead = String((await run(other, { type: 'agent.add', conversationId: 'lead', machineId: 'test-host', harnessId: randomUUID(),
+      name: 'Other Lead', configuration: config, lead: true })).result.agentId)
+    // The PM's session as a Builder in Swarm B, written the way a duplicate from before the rule is stored.
+    const pm = (await storedState(tab)).agents.find(a => a.id === lead)!
+    const b = await storedState(other)
+    const { confidential: _mark, ...unmarked } = pm
+    b.agents.push({ ...unmarked, projectId: b.projects![0]!.id, name: 'Builder elsewhere',
+      membershipGeneration: b.people.find(p => p.id === pm.contributorId)!.generation })
+    b.conversations.find(c => c.id === 'lead')!.agentIds.push(lead)
+    await saveState(other, b)
+    const row = (await rosterRows(store, host, 'test-host')).find(t => t.tabId === other && t.agent?.id === lead)!
     expect(row).toMatchObject({ observers: [], confidential: true })
     expect(await store.mayObserve(bob, other, 'test-host', harnessId, host.sub)).toBe(false)
-    await expect(run(other, { type: 'agent.screen', agentId: asBuilder }, bob)).rejects.toMatchObject({ code: 'TERMINAL_PRIVATE' })
+    await expect(run(other, { type: 'agent.screen', agentId: lead }, bob)).rejects.toMatchObject({ code: 'TERMINAL_PRIVATE' })
+    // Swarm B's Lead cannot read or type into its Builder alias of Swarm A's PM.
+    await expect(run(other, { type: 'agent.screen', agentId: lead }, host, otherLead)).rejects.toMatchObject({ code: 'TERMINAL_PRIVATE' })
+    await expect(run(other, { type: 'agent.input', agentId: lead, keys: ['Enter'] }, host, otherLead)).rejects.toMatchObject({ code: 'TERMINAL_PRIVATE' })
     // Shares made before the chat, opened as the observer relay opens them.
     expect(await recipientShare(swarmShare, bob, db)).toBeNull()
     expect(await recipientShare(ordinaryShare, carol, db)).toBeNull()
-    // Bob's share as Swarm B would have made it, for the same session.
     await db.harnessShare.update({ where: { id: swarmShare }, data: { superTabId: other } })
     expect(await recipientShare(swarmShare, bob, db)).toBeNull()
     // A Builder's session shared the ordinary way still opens.

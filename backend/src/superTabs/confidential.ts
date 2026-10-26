@@ -1,7 +1,7 @@
 import type { Prisma } from '@prisma/client'
-import type { Agent } from './model.js'
+import type { Agent, SuperTabState } from './model.js'
 import { loadActive, reassemble } from './parts/index.js'
-import { confidentialSession } from './projects.js'
+import { confidentialSession, sessionKey, type OtherRegistrations } from './projects.js'
 
 type Transaction = Prisma.TransactionClient
 
@@ -27,4 +27,26 @@ export async function confidentialSessions(tx: Transaction, agentIds: string[]):
     for (const target of state.agents) if (pending.includes(target.id) && confidentialSession(state, target)) found.add(target.id)
   }
   return found
+}
+
+/** The other Swarms' registrations a command that registers a session or makes one confidential is checked against
+ *  (projects.ts requireSingleRegistration): every session of these machines registered elsewhere, and which of `check`
+ *  are confidential there (marked, or a Lead or private member now in a part written before the mark). */
+export async function otherRegistrations(tx: Transaction, state: SuperTabState, check: Array<{ machineId: string; harnessId: string }>): Promise<OtherRegistrations> {
+  const machineIds = [...new Set([...state.agents.map(a => a.machineId), ...check.map(c => c.machineId)])]
+  const rows = await tx.swarmAgent.findMany({ where: { machineId: { in: machineIds }, deleted: false, tabId: { not: state.id } }, select: { tabId: true, key: true, data: true } })
+  const registered = new Set<string>(), confidential = new Set<string>(), wanted = new Set(check.map(c => sessionKey(c.machineId, c.harnessId)))
+  const unmarked = new Map<string, Agent[]>()
+  for (const row of rows) {
+    const target = row.data as unknown as Agent, key = sessionKey(target.machineId, target.harnessId)
+    registered.add(key)
+    if (!wanted.has(key)) continue
+    if (target.confidential) confidential.add(key)
+    else unmarked.set(row.tabId, [...unmarked.get(row.tabId) ?? [], target])
+  }
+  for (const [tabId, targets] of unmarked) {
+    const there = reassemble(await loadActive(tx, tabId, { agentIds: targets.map(t => t.id) }))
+    for (const target of there.agents) if (targets.some(t => t.id === target.id) && confidentialSession(there, target)) confidential.add(sessionKey(target.machineId, target.harnessId))
+  }
+  return { registered, confidential }
 }

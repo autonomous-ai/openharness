@@ -31,16 +31,15 @@ function savedConfidential(file: string, machineId: string): string[] {
 /** Ephemeral authorization, not a durable grant. A stalled or dead producer's
  * snapshot expires; restarting Share never extends it from the clock alone.
  * Confidential sessions are the exception: a session a roster marked confidential keeps refusing every share, ordinary ones
- * too, through an empty or lapsed roster, until a roster lists it as not confidential (final review, Critical 1). */
-export function publishObservers(dataDir: string, machineId: string, rows: unknown[], until: number) {
+ * too, until it closes on this machine (`live` says it no longer runs), whatever later rosters from any Swarm say (final
+ * review, Critical 1). Without `live` nothing is cleared. */
+export function publishObservers(dataDir: string, machineId: string, rows: unknown[], until: number, live?: (harnessId: string) => boolean) {
   const wanted: Wanted[] = []
   const dir = join(dataDir, 'super-tabs'), file = observerSnapshotFile(dataDir, machineId)
-  const confidential = new Set(savedConfidential(file, machineId)), marked = new Set<string>(), cleared = new Set<string>()
+  const confidential = new Set(savedConfidential(file, machineId).filter(id => !live || live(id)))
   for (const value of rows) {
     const row = object(value), agent = object(row.agent)
-    if (identifier(agent.harnessId) && agent.machineId === machineId && typeof row.confidential === 'boolean') {
-      (row.confidential ? marked : cleared).add(agent.harnessId)
-    }
+    if (identifier(agent.harnessId) && agent.machineId === machineId && row.confidential === true) confidential.add(agent.harnessId)
     if (!identifier(row.tabId) || !identifier(agent.harnessId) || agent.machineId !== machineId || !Array.isArray(row.observers)) continue
     for (const observer of row.observers.map(object)) {
       if (typeof observer.email !== 'string') continue
@@ -48,8 +47,6 @@ export function publishObservers(dataDir: string, machineId: string, rows: unkno
         name: typeof agent.name === 'string' ? agent.name : 'Agent', engine: typeof object(agent.configuration).engine === 'string' ? String(object(agent.configuration).engine) : null })
     }
   }
-  for (const id of cleared) if (!marked.has(id)) confidential.delete(id)
-  for (const id of marked) confidential.add(id)
   mkdirSync(dir, { recursive: true, mode: 0o700 })
   writeFileSync(`${file}.next`, JSON.stringify({ machineId, until, wanted, confidential: [...confidential] }), { mode: 0o600 })
   renameSync(`${file}.next`, file)

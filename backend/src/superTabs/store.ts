@@ -14,7 +14,7 @@ import type { Readable } from 'node:stream'
 import { logger } from '../utils/logger.js'
 import { canReadAgent, canReadGroup, canWatchAgent, groupProject, ledProject, projectsOf, agentProjectId, readConversation, roleVersion, type ProjectVisibility } from './projects.js'
 import { bindSession, makeProjectPrivate } from './sessionScope.js'
-import { confidentialSessions } from './confidential.js'
+import { confidentialSessions, otherRegistrations } from './confidential.js'
 import { answersRequest, noteProjectReports, projectUpdateRequest } from './projectUpdates.js'
 import { judgedMachines, loseTasks, sweepLiveness, SWEEP_EVERY_MS } from './liveness.js'
 import { clock, insertParts, lastChangedAt, loadActive, reassemble, split, type HeadData, type SwarmParts } from './parts/index.js'
@@ -53,6 +53,17 @@ export interface Loaded { row: SuperTab; parts: SwarmParts; state: SuperTabState
 export interface Named { groupIds?: string[]; agentIds?: string[]; projectIds?: string[]; startIds?: string[]; startAgentIds?: string[]; allGroups?: boolean; includeRecentStarts?: boolean }
 
 /** The groups, agents, projects and starts a command names in its own fields (design section 3.1). */
+/** Commands that register a session or can make one a Lead or a private member: checked against the other Swarms'
+ *  registrations (projects.ts requireSingleRegistration). */
+const REGISTERS = new Set(['agent.add', 'agent.started', 'agent.rebind', 'conversation.agent', 'conversation.create', 'conversation.audience', 'project.create'])
+/** The session a command registers, when it names one. */
+function registeredBy(state: SuperTabState, command: Command): Array<{ machineId: string; harnessId: string }> {
+  if (command.type === 'agent.add' || command.type === 'agent.rebind') return [{ machineId: command.machineId, harnessId: command.harnessId }]
+  if (command.type !== 'agent.started') return []
+  const start = state.starts?.find(s => s.id === command.startId)
+  return start ? [{ machineId: start.request.machineId, harnessId: command.harnessId }] : []
+}
+
 function namedFor(command: Command): Named {
   const has = (key: string) => key in command
   const field = (key: string) => (command as Record<string, unknown>)[key] as string | undefined
@@ -654,6 +665,7 @@ export class SuperTabStore {
       if (command.type !== 'invite.accept' && command.type !== 'agent.sessionClosed' && command.type !== 'machine.cleaned') author(original, actor)
       const context: CommandContext = { operationId, now: this.now() }
       if (command.type === 'agent.screen' || command.type === 'agent.input') context.confidentialSession = await this.confidential(tx, command.agentId)
+      if (REGISTERS.has(command.type)) context.registrations = await otherRegistrations(tx, original, registeredBy(original, command))
       if ('startId' in command && ['agent.startDispatch', 'agent.started', 'agent.startFailed', 'agent.startSettled', 'route.modelResult'].includes(command.type)) {
         const start = original.starts?.find(s => s.id === command.startId)
         if (start?.poolGeneration && !hostMachineId) fail('HOST_REQUIRED', 'Only the contributed machine can confirm this start.', 403)

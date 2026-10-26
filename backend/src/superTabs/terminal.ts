@@ -2,7 +2,7 @@ import type { PrismaClient } from '@prisma/client'
 import { activeWork, actorKey, agent, author, conversation, fail, isLeads, stableId, type Actor, type Agent, type Author, type Conversation, type MessageDraft,
   type SuperTabState } from './model.js'
 import { downSince } from './machines.js'
-import { agentProjectId, canWatchAgent, projectOf, readAgent } from './projects.js'
+import { agentProjectId, isConfidential, ownSession, projectOf, readAgent } from './projects.js'
 import { redactCredentials } from './credentials.js'
 
 /** The Lead reads and types in an agent's terminal through the host of the agent's machine (spec/2026-10-23-lead-sees-agent-terminal.md).
@@ -32,14 +32,18 @@ export interface TerminalRequest { id: string; agentId: string; harnessId: strin
 /** Only the Lead of the agent's project, or a person with write access who can see the agent, reads or types in its terminal. */
 /** `elsewhere`: the agent's session is confidential in another Swarm (confidential.ts). */
 export function mayDrive(state: SuperTabState, actor: Actor, target: Agent, elsewhere = false): void {
+  // For both kinds of requester: no person or agent reads a confidential session but its own (final review, Critical 1).
+  const closed = () => {
+    if (isConfidential(state, target, elsewhere) && !ownSession(actor, target)) {
+      fail('TERMINAL_PRIVATE', 'Only the person whose machine runs this agent can read or type in its terminal: it holds people’s private chats with the Product Manager.', 403)
+    }
+  }
   if (actor.kind === 'person') {
     author(state, actor, true)
     readAgent(state, actor, target.id)
-    if (!canWatchAgent(state, actor, target, elsewhere)) {
-      fail('TERMINAL_PRIVATE', 'Only the person whose machine runs this agent can read or type in its terminal: it holds people’s private chats with the Product Manager.', 403)
-    }
-    return
+    return closed()
   }
+  closed()
   if (conversation(state, projectOf(state, agentProjectId(state, target)).leadConversationId).leadId !== actor.agentId) {
     fail('LEAD_REQUIRED', 'Only the Lead of this agent’s project, or a person with write access, can read or type in its terminal.', 403)
   }

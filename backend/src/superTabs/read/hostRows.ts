@@ -6,7 +6,7 @@
 import type { AuthUser } from '../../lib/ssoAuth.js'
 import { activeWork, agent, isLeads, SuperTabError, conversation, type Agent, type SuperTabState } from '../model.js'
 import { hostLocalGrid, machineContribution, type MachineCleanup } from '../machines.js'
-import { agentProjectId, agentSetRole, canWatchAgent, confidentialSession, groupProject, ledProject, projectsOf, skillModeOf, skillSetOf } from '../projects.js'
+import { agentProjectId, agentSetRole, canWatchAgent, isConfidential, groupProject, ledProject, projectsOf, skillModeOf, skillSetOf } from '../projects.js'
 import type { HostAgentRow, HostPool, HostRosterRow, HostTabRows } from './contract.js'
 import { hostEtag } from './hostEtag.js'
 
@@ -76,7 +76,7 @@ function agentRow(tabId: string, state: SuperTabState, machineId: string, user: 
     observers: lookups.people.filter(p => p.id !== user.sub && canWatchAgent(state, { kind: 'person', userId: p.id, email: p.email }, target, closed))
       .map(p => ({ email: p.email, userId: p.id })),
     // The host refuses every share of a confidential session, ordinary ones too, and remembers it (cli observers.ts).
-    confidential: closed || !!target.confidential || confidentialSession(state, target),
+    confidential: isConfidential(state, target, closed),
   }
 }
 

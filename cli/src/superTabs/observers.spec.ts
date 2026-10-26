@@ -72,24 +72,30 @@ it('tells a lapsed roster apart from one in force that names nobody, and accepts
   } finally { rmSync(dir, { recursive: true, force: true }) }
 })
 
-it('refuses every share of a session the roster marks confidential, an ordinary one too, until a roster says otherwise', () => {
+it('refuses every share of a session a roster marks confidential, an ordinary one too, until the session closes on this machine', () => {
   const dir = mkdtempSync(join(tmpdir(), 'super-observer-'))
   let now = 1_000_000
   const source = observerSource(dir, () => 'machine', () => now)
-  const row = (harnessId: string, confidential: boolean) => ({ tabId: 'tab', agent: { machineId: 'machine', harnessId, name: harnessId, configuration: {} },
+  const row = (harnessId: string, confidential: boolean, tabId = 'tab') => ({ tabId, agent: { machineId: 'machine', harnessId, name: harnessId, configuration: {} },
     observers: [], confidential })
   // Shared the ordinary way, outside any Swarm: a PM that reads private chats, and a Builder.
   const pm = { tab: null, agentId: 'pm', recipientEmail: 'bob@example.com' } as never
   const builder = { tab: null, agentId: 'builder', recipientEmail: 'bob@example.com' } as never
+  const running = new Set(['pm', 'builder'])
+  const live = (harnessId: string) => running.has(harnessId)
   try {
     expect(source.allows(pm)).toBe(true)
-    publishObservers(dir, 'machine', [row('pm', true), row('builder', false)], now + OBSERVER_VALID_MS); now += 201
+    publishObservers(dir, 'machine', [row('pm', true), row('builder', false)], now + OBSERVER_VALID_MS, live); now += 201
     expect(source.allows(pm)).toBe(false)
     expect(source.allows(builder)).toBe(true)
-    // The Swarm host stops (an empty roster), then its last roster lapses: the PM's session may still run, so it stays closed.
-    publishObservers(dir, 'machine', [], now + OBSERVER_VALID_MS); now += OBSERVER_VALID_MS + 1
+    // Its registration is removed while the session still runs, and another Swarm's row calls it ordinary: still closed.
+    publishObservers(dir, 'machine', [], now + OBSERVER_VALID_MS, live); now += OBSERVER_VALID_MS + 1
     expect(source.allows(pm)).toBe(false)
-    publishObservers(dir, 'machine', [row('pm', false)], now + OBSERVER_VALID_MS); now += 201
+    publishObservers(dir, 'machine', [row('pm', false, 'other')], now + OBSERVER_VALID_MS, live); now += 201
+    expect(source.allows(pm)).toBe(false)
+    // The session closes on this machine: only then is the mark gone.
+    running.delete('pm')
+    publishObservers(dir, 'machine', [], now + OBSERVER_VALID_MS, live); now += 201
     expect(source.allows(pm)).toBe(true)
   } finally { rmSync(dir, { recursive: true, force: true }) }
 })

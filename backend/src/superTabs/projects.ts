@@ -145,7 +145,35 @@ export function canReadAgent(state: SuperTabState, actor: Actor, target: Agent):
 /** A session that reads people's private messages: its project's Lead (the Product Manager each person chats with privately),
  *  or any agent in a private conversation, so a replaced Lead's earlier screen stays closed too. */
 export const confidentialSession = (state: SuperTabState, target: Agent): boolean =>
-  !!ledProject(state, target.id) || state.conversations.some(c => !!c.audience && c.agentIds.includes(target.id))
+  !!ledProject(state, target.id) || privateMember(state, target.id)
+const privateMember = (state: SuperTabState, agentId: string) => state.conversations.some(c => !!c.audience && c.agentIds.includes(agentId))
+
+/** Whether an agent's session is confidential: marked, or a Lead or private member now, here or (`elsewhere`) in another Swarm. */
+export const isConfidential = (state: SuperTabState, target: Agent, elsewhere = false): boolean =>
+  !!target.confidential || elsewhere || confidentialSession(state, target)
+
+/** A native session's identity across Swarms: its machine and harness. */
+export const sessionKey = (machineId: string, harnessId: string) => `${machineId}\n${harnessId}`
+/** The other Swarms' registrations a command is checked against (confidential.ts otherRegistrations), by sessionKey. */
+export interface OtherRegistrations { registered: Set<string>; confidential: Set<string> }
+
+/** A confidential session is registered in one Swarm only (Lead ruling, final review Critical 1), so its mark lives exactly as
+ *  long as that registration: a command may not register again (add, start, rebind) a session confidential elsewhere, nor make
+ *  a session registered elsewhere a Lead or a private conversation's member. Registrations from before the rule stay. */
+export function requireSingleRegistration(before: SuperTabState, after: SuperTabState, elsewhere: OtherRegistrations): void {
+  const prior = new Map(before.agents.map(a => [a.id, a]))
+  for (const target of after.agents) {
+    const was = prior.get(target.id), key = sessionKey(target.machineId, target.harnessId)
+    if ((!was || was.harnessId !== target.harnessId) && elsewhere.confidential.has(key)) {
+      fail('SESSION_CONFIDENTIAL', 'This terminal reads private chats in another Swarm. Start a new agent here.')
+    }
+    const lead = !!ledProject(after, target.id) && !(was && ledProject(before, target.id))
+    const member = privateMember(after, target.id) && !(was && privateMember(before, target.id))
+    if ((lead || member) && elsewhere.registered.has(key)) {
+      fail('SESSION_CONFIDENTIAL', 'This terminal also works in another Swarm, so it cannot lead or read private chats. Start a new agent for this.')
+    }
+  }
+}
 
 /** A session becomes confidential the moment it is a Lead or in a private conversation, and stays so until it leaves the
  *  Swarm (its session closes), even once that membership ends (Lead ruling, final review Critical 1). */
@@ -157,10 +185,12 @@ export function markConfidential(state: SuperTabState): void {
  *  scrollback hold people's private chats, so only the person whose machine runs it may, owners included. `elsewhere`: the
  *  same session is confidential in another Swarm (confidential.ts). Any other agent: every reader of its project, as before. */
 export function canWatchAgent(state: SuperTabState, actor: Actor, target: Agent, elsewhere = false): boolean {
-  if (!canReadAgent(state, actor, target)) return false
-  const confidential = !!target.confidential || elsewhere || confidentialSession(state, target)
-  return !confidential || (actor.kind === 'person' && actor.userId === target.machineOwnerId)
+  return canReadAgent(state, actor, target) && (!isConfidential(state, target, elsewhere) || ownSession(actor, target))
 }
+
+/** The only actors a confidential session admits: the person whose machine runs it, or the session itself. */
+export const ownSession = (actor: Actor, target: Agent): boolean =>
+  actor.kind === 'person' ? actor.userId === target.machineOwnerId : actor.agentId === target.id
 
 export function readAgent(state: SuperTabState, actor: Actor, agentId: string): Agent {
   const target = agent(state, agentId)
