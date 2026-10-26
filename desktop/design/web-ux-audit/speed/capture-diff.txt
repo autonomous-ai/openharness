@@ -1,0 +1,18 @@
+pairs 399 identical 300 under 0.2% 82
+ 12.55%  first-machine-saved/390-dark.png 
+ 12.47%  first-machine-saved/360-dark.png 
+ 10.74%  first-machine-saved/390-light.png 
+  5.80%  first-machine-saved/768-dark.png 
+  4.54%  finder-part/768-dark.png 
+  3.63%  first-machine-saved/1440-dark.png 
+  2.88%  first-machine-saved/1440-light.png 
+  2.85%  finder-part/1440-dark.png 
+  2.37%  finder-part/1440-light.png 
+  0.66%  add-phone/1440-light.png 
+  0.53%  store/390-dark.png 
+  0.53%  store/390-light.png 
+  0.32%  store/768-dark.png 
+  0.28%  add-phone/768-dark.png 
+  0.20%  add-phone/1440-dark.png 
+  0.20%  pane-three/768-dark.png 
+  0.20%  workspace-one/768-dark.png 

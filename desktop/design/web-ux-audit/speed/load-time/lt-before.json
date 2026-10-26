@@ -1,0 +1,65 @@
+[
+  {
+    "profile": "computer, cable",
+    "cold": {
+      "splashMs": 130,
+      "firstFrameMs": 731,
+      "settledMs": 2074,
+      "transferredMB": 6.21
+    },
+    "second": {
+      "splashMs": 129,
+      "firstFrameMs": 794,
+      "settledMs": 2137,
+      "transferredMB": 0.01
+    },
+    "returning": {
+      "splashMs": 180,
+      "firstFrameMs": 239,
+      "settledMs": 1612,
+      "transferredMB": 0.01
+    }
+  },
+  {
+    "profile": "phone, fast 4G",
+    "cold": {
+      "splashMs": 283,
+      "firstFrameMs": 9063,
+      "settledMs": 11435,
+      "transferredMB": 6.21
+    },
+    "second": {
+      "splashMs": 330,
+      "firstFrameMs": 2914,
+      "settledMs": 5150,
+      "transferredMB": 0.01
+    },
+    "returning": {
+      "splashMs": 326,
+      "firstFrameMs": 1220,
+      "settledMs": 3433,
+      "transferredMB": 0.01
+    }
+  },
+  {
+    "profile": "phone, slow 4G",
+    "cold": {
+      "splashMs": 688,
+      "firstFrameMs": 38470,
+      "settledMs": 41265,
+      "transferredMB": 6.21
+    },
+    "second": {
+      "splashMs": 743,
+      "firstFrameMs": 3587,
+      "settledMs": 5738,
+      "transferredMB": 0.01
+    },
+    "returning": {
+      "splashMs": 738,
+      "firstFrameMs": 1965,
+      "settledMs": 4174,
+      "transferredMB": 0.01
+    }
+  }
+]

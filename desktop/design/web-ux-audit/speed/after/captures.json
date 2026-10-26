@@ -1,0 +1,3203 @@
+[
+  {
+    "flow": "workspace",
+    "width": "360",
+    "theme": "dark",
+    "shot": "screens/workspace/360-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "notifications",
+    "width": "360",
+    "theme": "dark",
+    "shot": "screens/notifications/360-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "open-harness",
+    "width": "360",
+    "theme": "dark",
+    "shot": "screens/open-harness/360-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "models",
+    "width": "360",
+    "theme": "dark",
+    "shot": "screens/models/360-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "history",
+    "width": "360",
+    "theme": "dark",
+    "shot": "screens/history/360-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "appearance",
+    "width": "360",
+    "theme": "dark",
+    "shot": "screens/appearance/360-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "first-machine",
+    "width": "360",
+    "theme": "dark",
+    "shot": "screens/first-machine/360-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "first-machine-loading",
+    "width": "360",
+    "theme": "dark",
+    "shot": "screens/first-machine-loading/360-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "first-machine-failed",
+    "width": "360",
+    "theme": "dark",
+    "shot": "screens/first-machine-failed/360-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "link-machine",
+    "width": "360",
+    "theme": "dark",
+    "shot": "screens/link-machine/360-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "computers",
+    "width": "360",
+    "theme": "dark",
+    "shot": "screens/computers/360-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "link-password",
+    "width": "360",
+    "theme": "dark",
+    "shot": "screens/link-password/360-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "offline-only",
+    "width": "360",
+    "theme": "dark",
+    "shot": "screens/offline-only/360-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "offline-back",
+    "width": "360",
+    "theme": "dark",
+    "shot": "screens/offline-back/360-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "booting",
+    "width": "360",
+    "theme": "dark",
+    "shot": "screens/booting/360-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "app-menu",
+    "width": "360",
+    "theme": "dark",
+    "shot": "screens/app-menu/360-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "many-tabs",
+    "width": "360",
+    "theme": "dark",
+    "shot": "screens/many-tabs/360-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "tab-switcher",
+    "width": "360",
+    "theme": "dark",
+    "shot": "screens/tab-switcher/360-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "footer-menu",
+    "width": "360",
+    "theme": "dark",
+    "shot": "screens/footer-menu/360-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "all-commands",
+    "width": "360",
+    "theme": "dark",
+    "shot": "screens/all-commands/360-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "machines",
+    "width": "360",
+    "theme": "dark",
+    "shot": "screens/machines/360-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "settings",
+    "width": "360",
+    "theme": "dark",
+    "shot": "screens/settings/360-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "new-swarm",
+    "width": "360",
+    "theme": "dark",
+    "shot": "screens/new-swarm/360-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "new-swarm-key",
+    "width": "360",
+    "theme": "dark",
+    "shot": "screens/new-swarm-key/360-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "workspace-one",
+    "width": "360",
+    "theme": "dark",
+    "shot": "screens/workspace-one/360-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "connecting",
+    "width": "360",
+    "theme": "dark",
+    "shot": "screens/connecting/360-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "reconnecting",
+    "width": "360",
+    "theme": "dark",
+    "shot": "screens/reconnecting/360-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "offline",
+    "width": "360",
+    "theme": "dark",
+    "shot": "screens/offline/360-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "view-only",
+    "width": "360",
+    "theme": "dark",
+    "shot": "screens/view-only/360-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "opening",
+    "width": "360",
+    "theme": "dark",
+    "shot": "screens/opening/360-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "taken-over",
+    "width": "360",
+    "theme": "dark",
+    "shot": "screens/taken-over/360-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "terminal-error",
+    "width": "360",
+    "theme": "dark",
+    "shot": "screens/terminal-error/360-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "pane-three",
+    "width": "360",
+    "theme": "dark",
+    "shot": "screens/pane-three/360-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "agent-model-menu",
+    "width": "360",
+    "theme": "dark",
+    "shot": "screens/agent-model-menu/360-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "first-machine-saved",
+    "width": "360",
+    "theme": "dark",
+    "shot": "screens/first-machine-saved/360-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "error-banner",
+    "width": "360",
+    "theme": "dark",
+    "shot": "screens/error-banner/360-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "new-device",
+    "width": "360",
+    "theme": "dark",
+    "shot": "screens/new-device/360-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "shared-link",
+    "width": "360",
+    "theme": "dark",
+    "shot": "screens/shared-link/360-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "viewer-incomplete",
+    "width": "360",
+    "theme": "dark",
+    "shot": "screens/viewer-incomplete/360-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "viewer-page",
+    "width": "360",
+    "theme": "dark",
+    "shot": "screens/viewer-page/360-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "settings-account",
+    "width": "360",
+    "theme": "dark",
+    "shot": "screens/settings-account/360-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "settings-appearance",
+    "width": "360",
+    "theme": "dark",
+    "shot": "screens/settings-appearance/360-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "settings-notifications",
+    "width": "360",
+    "theme": "dark",
+    "shot": "screens/settings-notifications/360-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "settings-privacy",
+    "width": "360",
+    "theme": "dark",
+    "shot": "screens/settings-privacy/360-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "settings-usage",
+    "width": "360",
+    "theme": "dark",
+    "shot": "screens/settings-usage/360-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "settings-routing",
+    "width": "360",
+    "theme": "dark",
+    "shot": "screens/settings-routing/360-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "settings-tab-invites",
+    "width": "360",
+    "theme": "dark",
+    "shot": "screens/settings-tab-invites/360-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "settings-experimental",
+    "width": "360",
+    "theme": "dark",
+    "shot": "screens/settings-experimental/360-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "settings-about",
+    "width": "360",
+    "theme": "dark",
+    "shot": "screens/settings-about/360-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "settings-usage-subscriptions",
+    "width": "360",
+    "theme": "dark",
+    "shot": "screens/settings-usage-subscriptions/360-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "store",
+    "width": "360",
+    "theme": "dark",
+    "shot": "screens/store/360-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "store-product",
+    "width": "360",
+    "theme": "dark",
+    "shot": "screens/store-product/360-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "store-all",
+    "width": "360",
+    "theme": "dark",
+    "shot": "screens/store-all/360-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "store-viewers",
+    "width": "360",
+    "theme": "dark",
+    "shot": "screens/store-viewers/360-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "signin",
+    "width": "360",
+    "theme": "dark",
+    "shot": "screens/signin/360-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "signin-waiting",
+    "width": "360",
+    "theme": "dark",
+    "shot": "screens/signin-waiting/360-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "signin-error",
+    "width": "360",
+    "theme": "dark",
+    "shot": "screens/signin-error/360-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "signin-expired",
+    "width": "360",
+    "theme": "dark",
+    "shot": "screens/signin-expired/360-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "signin-qr",
+    "width": "360",
+    "theme": "dark",
+    "shot": "screens/signin-qr/360-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "signin-confirm",
+    "width": "360",
+    "theme": "dark",
+    "shot": "screens/signin-confirm/360-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "new-tab",
+    "width": "360",
+    "theme": "dark",
+    "shot": "screens/new-tab/360-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "new-tab-new-swarm",
+    "width": "360",
+    "theme": "dark",
+    "shot": "screens/new-tab-new-swarm/360-dark.png",
+    "failed": "TimeoutError: locator.tap: Timeout 5000ms exceeded.",
+    "errors": []
+  },
+  {
+    "flow": "empty-tab",
+    "width": "360",
+    "theme": "dark",
+    "shot": "screens/empty-tab/360-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "split-pane",
+    "width": "360",
+    "theme": "dark",
+    "shot": "screens/split-pane/360-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "workspace",
+    "width": "390",
+    "theme": "dark",
+    "shot": "screens/workspace/390-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "notifications",
+    "width": "390",
+    "theme": "dark",
+    "shot": "screens/notifications/390-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "open-harness",
+    "width": "390",
+    "theme": "dark",
+    "shot": "screens/open-harness/390-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "models",
+    "width": "390",
+    "theme": "dark",
+    "shot": "screens/models/390-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "history",
+    "width": "390",
+    "theme": "dark",
+    "shot": "screens/history/390-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "appearance",
+    "width": "390",
+    "theme": "dark",
+    "shot": "screens/appearance/390-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "first-machine",
+    "width": "390",
+    "theme": "dark",
+    "shot": "screens/first-machine/390-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "first-machine-loading",
+    "width": "390",
+    "theme": "dark",
+    "shot": "screens/first-machine-loading/390-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "first-machine-failed",
+    "width": "390",
+    "theme": "dark",
+    "shot": "screens/first-machine-failed/390-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "link-machine",
+    "width": "390",
+    "theme": "dark",
+    "shot": "screens/link-machine/390-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "computers",
+    "width": "390",
+    "theme": "dark",
+    "shot": "screens/computers/390-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "link-password",
+    "width": "390",
+    "theme": "dark",
+    "shot": "screens/link-password/390-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "offline-only",
+    "width": "390",
+    "theme": "dark",
+    "shot": "screens/offline-only/390-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "offline-back",
+    "width": "390",
+    "theme": "dark",
+    "shot": "screens/offline-back/390-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "booting",
+    "width": "390",
+    "theme": "dark",
+    "shot": "screens/booting/390-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "app-menu",
+    "width": "390",
+    "theme": "dark",
+    "shot": "screens/app-menu/390-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "many-tabs",
+    "width": "390",
+    "theme": "dark",
+    "shot": "screens/many-tabs/390-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "tab-switcher",
+    "width": "390",
+    "theme": "dark",
+    "shot": "screens/tab-switcher/390-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "footer-menu",
+    "width": "390",
+    "theme": "dark",
+    "shot": "screens/footer-menu/390-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "all-commands",
+    "width": "390",
+    "theme": "dark",
+    "shot": "screens/all-commands/390-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "machines",
+    "width": "390",
+    "theme": "dark",
+    "shot": "screens/machines/390-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "settings",
+    "width": "390",
+    "theme": "dark",
+    "shot": "screens/settings/390-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "new-swarm",
+    "width": "390",
+    "theme": "dark",
+    "shot": "screens/new-swarm/390-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "new-swarm-key",
+    "width": "390",
+    "theme": "dark",
+    "shot": "screens/new-swarm-key/390-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "workspace-one",
+    "width": "390",
+    "theme": "dark",
+    "shot": "screens/workspace-one/390-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "connecting",
+    "width": "390",
+    "theme": "dark",
+    "shot": "screens/connecting/390-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "reconnecting",
+    "width": "390",
+    "theme": "dark",
+    "shot": "screens/reconnecting/390-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "offline",
+    "width": "390",
+    "theme": "dark",
+    "shot": "screens/offline/390-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "view-only",
+    "width": "390",
+    "theme": "dark",
+    "shot": "screens/view-only/390-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "opening",
+    "width": "390",
+    "theme": "dark",
+    "shot": "screens/opening/390-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "taken-over",
+    "width": "390",
+    "theme": "dark",
+    "shot": "screens/taken-over/390-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "terminal-error",
+    "width": "390",
+    "theme": "dark",
+    "shot": "screens/terminal-error/390-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "pane-three",
+    "width": "390",
+    "theme": "dark",
+    "shot": "screens/pane-three/390-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "agent-model-menu",
+    "width": "390",
+    "theme": "dark",
+    "shot": "screens/agent-model-menu/390-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "first-machine-saved",
+    "width": "390",
+    "theme": "dark",
+    "shot": "screens/first-machine-saved/390-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "error-banner",
+    "width": "390",
+    "theme": "dark",
+    "shot": "screens/error-banner/390-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "new-device",
+    "width": "390",
+    "theme": "dark",
+    "shot": "screens/new-device/390-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "shared-link",
+    "width": "390",
+    "theme": "dark",
+    "shot": "screens/shared-link/390-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "viewer-incomplete",
+    "width": "390",
+    "theme": "dark",
+    "shot": "screens/viewer-incomplete/390-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "viewer-page",
+    "width": "390",
+    "theme": "dark",
+    "shot": "screens/viewer-page/390-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "settings-account",
+    "width": "390",
+    "theme": "dark",
+    "shot": "screens/settings-account/390-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "settings-appearance",
+    "width": "390",
+    "theme": "dark",
+    "shot": "screens/settings-appearance/390-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "settings-notifications",
+    "width": "390",
+    "theme": "dark",
+    "shot": "screens/settings-notifications/390-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "settings-privacy",
+    "width": "390",
+    "theme": "dark",
+    "shot": "screens/settings-privacy/390-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "settings-usage",
+    "width": "390",
+    "theme": "dark",
+    "shot": "screens/settings-usage/390-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "settings-routing",
+    "width": "390",
+    "theme": "dark",
+    "shot": "screens/settings-routing/390-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "settings-tab-invites",
+    "width": "390",
+    "theme": "dark",
+    "shot": "screens/settings-tab-invites/390-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "settings-experimental",
+    "width": "390",
+    "theme": "dark",
+    "shot": "screens/settings-experimental/390-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "settings-about",
+    "width": "390",
+    "theme": "dark",
+    "shot": "screens/settings-about/390-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "settings-usage-subscriptions",
+    "width": "390",
+    "theme": "dark",
+    "shot": "screens/settings-usage-subscriptions/390-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "store",
+    "width": "390",
+    "theme": "dark",
+    "shot": "screens/store/390-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "store-product",
+    "width": "390",
+    "theme": "dark",
+    "shot": "screens/store-product/390-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "store-all",
+    "width": "390",
+    "theme": "dark",
+    "shot": "screens/store-all/390-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "store-viewers",
+    "width": "390",
+    "theme": "dark",
+    "shot": "screens/store-viewers/390-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "signin",
+    "width": "390",
+    "theme": "dark",
+    "shot": "screens/signin/390-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "signin-waiting",
+    "width": "390",
+    "theme": "dark",
+    "shot": "screens/signin-waiting/390-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "signin-error",
+    "width": "390",
+    "theme": "dark",
+    "shot": "screens/signin-error/390-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "signin-expired",
+    "width": "390",
+    "theme": "dark",
+    "shot": "screens/signin-expired/390-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "signin-qr",
+    "width": "390",
+    "theme": "dark",
+    "shot": "screens/signin-qr/390-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "signin-confirm",
+    "width": "390",
+    "theme": "dark",
+    "shot": "screens/signin-confirm/390-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "new-tab",
+    "width": "390",
+    "theme": "dark",
+    "shot": "screens/new-tab/390-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "new-tab-new-swarm",
+    "width": "390",
+    "theme": "dark",
+    "shot": "screens/new-tab-new-swarm/390-dark.png",
+    "failed": "TimeoutError: locator.tap: Timeout 5000ms exceeded.",
+    "errors": []
+  },
+  {
+    "flow": "empty-tab",
+    "width": "390",
+    "theme": "dark",
+    "shot": "screens/empty-tab/390-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "split-pane",
+    "width": "390",
+    "theme": "dark",
+    "shot": "screens/split-pane/390-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "workspace",
+    "width": "390",
+    "theme": "light",
+    "shot": "screens/workspace/390-light.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "notifications",
+    "width": "390",
+    "theme": "light",
+    "shot": "screens/notifications/390-light.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "open-harness",
+    "width": "390",
+    "theme": "light",
+    "shot": "screens/open-harness/390-light.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "models",
+    "width": "390",
+    "theme": "light",
+    "shot": "screens/models/390-light.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "history",
+    "width": "390",
+    "theme": "light",
+    "shot": "screens/history/390-light.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "appearance",
+    "width": "390",
+    "theme": "light",
+    "shot": "screens/appearance/390-light.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "first-machine",
+    "width": "390",
+    "theme": "light",
+    "shot": "screens/first-machine/390-light.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "first-machine-loading",
+    "width": "390",
+    "theme": "light",
+    "shot": "screens/first-machine-loading/390-light.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "first-machine-failed",
+    "width": "390",
+    "theme": "light",
+    "shot": "screens/first-machine-failed/390-light.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "link-machine",
+    "width": "390",
+    "theme": "light",
+    "shot": "screens/link-machine/390-light.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "computers",
+    "width": "390",
+    "theme": "light",
+    "shot": "screens/computers/390-light.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "link-password",
+    "width": "390",
+    "theme": "light",
+    "shot": "screens/link-password/390-light.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "offline-only",
+    "width": "390",
+    "theme": "light",
+    "shot": "screens/offline-only/390-light.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "offline-back",
+    "width": "390",
+    "theme": "light",
+    "shot": "screens/offline-back/390-light.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "booting",
+    "width": "390",
+    "theme": "light",
+    "shot": "screens/booting/390-light.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "app-menu",
+    "width": "390",
+    "theme": "light",
+    "shot": "screens/app-menu/390-light.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "many-tabs",
+    "width": "390",
+    "theme": "light",
+    "shot": "screens/many-tabs/390-light.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "tab-switcher",
+    "width": "390",
+    "theme": "light",
+    "shot": "screens/tab-switcher/390-light.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "footer-menu",
+    "width": "390",
+    "theme": "light",
+    "shot": "screens/footer-menu/390-light.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "all-commands",
+    "width": "390",
+    "theme": "light",
+    "shot": "screens/all-commands/390-light.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "machines",
+    "width": "390",
+    "theme": "light",
+    "shot": "screens/machines/390-light.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "settings",
+    "width": "390",
+    "theme": "light",
+    "shot": "screens/settings/390-light.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "new-swarm",
+    "width": "390",
+    "theme": "light",
+    "shot": "screens/new-swarm/390-light.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "new-swarm-key",
+    "width": "390",
+    "theme": "light",
+    "shot": "screens/new-swarm-key/390-light.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "workspace-one",
+    "width": "390",
+    "theme": "light",
+    "shot": "screens/workspace-one/390-light.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "connecting",
+    "width": "390",
+    "theme": "light",
+    "shot": "screens/connecting/390-light.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "reconnecting",
+    "width": "390",
+    "theme": "light",
+    "shot": "screens/reconnecting/390-light.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "offline",
+    "width": "390",
+    "theme": "light",
+    "shot": "screens/offline/390-light.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "view-only",
+    "width": "390",
+    "theme": "light",
+    "shot": "screens/view-only/390-light.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "opening",
+    "width": "390",
+    "theme": "light",
+    "shot": "screens/opening/390-light.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "taken-over",
+    "width": "390",
+    "theme": "light",
+    "shot": "screens/taken-over/390-light.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "terminal-error",
+    "width": "390",
+    "theme": "light",
+    "shot": "screens/terminal-error/390-light.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "pane-three",
+    "width": "390",
+    "theme": "light",
+    "shot": "screens/pane-three/390-light.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "agent-model-menu",
+    "width": "390",
+    "theme": "light",
+    "shot": "screens/agent-model-menu/390-light.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "first-machine-saved",
+    "width": "390",
+    "theme": "light",
+    "shot": "screens/first-machine-saved/390-light.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "error-banner",
+    "width": "390",
+    "theme": "light",
+    "shot": "screens/error-banner/390-light.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "new-device",
+    "width": "390",
+    "theme": "light",
+    "shot": "screens/new-device/390-light.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "shared-link",
+    "width": "390",
+    "theme": "light",
+    "shot": "screens/shared-link/390-light.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "viewer-incomplete",
+    "width": "390",
+    "theme": "light",
+    "shot": "screens/viewer-incomplete/390-light.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "viewer-page",
+    "width": "390",
+    "theme": "light",
+    "shot": "screens/viewer-page/390-light.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "settings-account",
+    "width": "390",
+    "theme": "light",
+    "shot": "screens/settings-account/390-light.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "settings-appearance",
+    "width": "390",
+    "theme": "light",
+    "shot": "screens/settings-appearance/390-light.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "settings-notifications",
+    "width": "390",
+    "theme": "light",
+    "shot": "screens/settings-notifications/390-light.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "settings-privacy",
+    "width": "390",
+    "theme": "light",
+    "shot": "screens/settings-privacy/390-light.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "settings-usage",
+    "width": "390",
+    "theme": "light",
+    "shot": "screens/settings-usage/390-light.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "settings-routing",
+    "width": "390",
+    "theme": "light",
+    "shot": "screens/settings-routing/390-light.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "settings-tab-invites",
+    "width": "390",
+    "theme": "light",
+    "shot": "screens/settings-tab-invites/390-light.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "settings-experimental",
+    "width": "390",
+    "theme": "light",
+    "shot": "screens/settings-experimental/390-light.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "settings-about",
+    "width": "390",
+    "theme": "light",
+    "shot": "screens/settings-about/390-light.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "settings-usage-subscriptions",
+    "width": "390",
+    "theme": "light",
+    "shot": "screens/settings-usage-subscriptions/390-light.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "store",
+    "width": "390",
+    "theme": "light",
+    "shot": "screens/store/390-light.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "store-product",
+    "width": "390",
+    "theme": "light",
+    "shot": "screens/store-product/390-light.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "store-all",
+    "width": "390",
+    "theme": "light",
+    "shot": "screens/store-all/390-light.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "store-viewers",
+    "width": "390",
+    "theme": "light",
+    "shot": "screens/store-viewers/390-light.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "signin",
+    "width": "390",
+    "theme": "light",
+    "shot": "screens/signin/390-light.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "signin-waiting",
+    "width": "390",
+    "theme": "light",
+    "shot": "screens/signin-waiting/390-light.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "signin-error",
+    "width": "390",
+    "theme": "light",
+    "shot": "screens/signin-error/390-light.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "signin-expired",
+    "width": "390",
+    "theme": "light",
+    "shot": "screens/signin-expired/390-light.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "signin-qr",
+    "width": "390",
+    "theme": "light",
+    "shot": "screens/signin-qr/390-light.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "signin-confirm",
+    "width": "390",
+    "theme": "light",
+    "shot": "screens/signin-confirm/390-light.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "new-tab",
+    "width": "390",
+    "theme": "light",
+    "shot": "screens/new-tab/390-light.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "new-tab-new-swarm",
+    "width": "390",
+    "theme": "light",
+    "shot": "screens/new-tab-new-swarm/390-light.png",
+    "failed": "TimeoutError: locator.tap: Timeout 5000ms exceeded.",
+    "errors": []
+  },
+  {
+    "flow": "empty-tab",
+    "width": "390",
+    "theme": "light",
+    "shot": "screens/empty-tab/390-light.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "split-pane",
+    "width": "390",
+    "theme": "light",
+    "shot": "screens/split-pane/390-light.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "workspace",
+    "width": "768",
+    "theme": "dark",
+    "shot": "screens/workspace/768-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "notifications",
+    "width": "768",
+    "theme": "dark",
+    "shot": "screens/notifications/768-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "open-harness",
+    "width": "768",
+    "theme": "dark",
+    "shot": "screens/open-harness/768-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "models",
+    "width": "768",
+    "theme": "dark",
+    "shot": "screens/models/768-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "history",
+    "width": "768",
+    "theme": "dark",
+    "shot": "screens/history/768-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "appearance",
+    "width": "768",
+    "theme": "dark",
+    "shot": "screens/appearance/768-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "add-phone",
+    "width": "768",
+    "theme": "dark",
+    "shot": "screens/add-phone/768-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "harness-monitor",
+    "width": "768",
+    "theme": "dark",
+    "shot": "screens/harness-monitor/768-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "first-machine",
+    "width": "768",
+    "theme": "dark",
+    "shot": "screens/first-machine/768-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "first-machine-loading",
+    "width": "768",
+    "theme": "dark",
+    "shot": "screens/first-machine-loading/768-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "first-machine-failed",
+    "width": "768",
+    "theme": "dark",
+    "shot": "screens/first-machine-failed/768-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "link-machine",
+    "width": "768",
+    "theme": "dark",
+    "shot": "screens/link-machine/768-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "computers",
+    "width": "768",
+    "theme": "dark",
+    "shot": "screens/computers/768-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "link-password",
+    "width": "768",
+    "theme": "dark",
+    "shot": "screens/link-password/768-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "offline-only",
+    "width": "768",
+    "theme": "dark",
+    "shot": "screens/offline-only/768-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "offline-back",
+    "width": "768",
+    "theme": "dark",
+    "shot": "screens/offline-back/768-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "booting",
+    "width": "768",
+    "theme": "dark",
+    "shot": "screens/booting/768-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "app-menu",
+    "width": "768",
+    "theme": "dark",
+    "shot": "screens/app-menu/768-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "many-tabs",
+    "width": "768",
+    "theme": "dark",
+    "shot": "screens/many-tabs/768-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "tab-menu",
+    "width": "768",
+    "theme": "dark",
+    "shot": "screens/tab-menu/768-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "all-commands",
+    "width": "768",
+    "theme": "dark",
+    "shot": "screens/all-commands/768-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "machines",
+    "width": "768",
+    "theme": "dark",
+    "shot": "screens/machines/768-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "settings",
+    "width": "768",
+    "theme": "dark",
+    "shot": "screens/settings/768-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "new-swarm",
+    "width": "768",
+    "theme": "dark",
+    "shot": "screens/new-swarm/768-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "new-swarm-key",
+    "width": "768",
+    "theme": "dark",
+    "shot": "screens/new-swarm-key/768-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "tab-menu-rename",
+    "width": "768",
+    "theme": "dark",
+    "shot": "screens/tab-menu-rename/768-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "workspace-one",
+    "width": "768",
+    "theme": "dark",
+    "shot": "screens/workspace-one/768-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "connecting",
+    "width": "768",
+    "theme": "dark",
+    "shot": "screens/connecting/768-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "reconnecting",
+    "width": "768",
+    "theme": "dark",
+    "shot": "screens/reconnecting/768-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "offline",
+    "width": "768",
+    "theme": "dark",
+    "shot": "screens/offline/768-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "view-only",
+    "width": "768",
+    "theme": "dark",
+    "shot": "screens/view-only/768-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "opening",
+    "width": "768",
+    "theme": "dark",
+    "shot": "screens/opening/768-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "taken-over",
+    "width": "768",
+    "theme": "dark",
+    "shot": "screens/taken-over/768-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "terminal-error",
+    "width": "768",
+    "theme": "dark",
+    "shot": "screens/terminal-error/768-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "agent-picker",
+    "width": "768",
+    "theme": "dark",
+    "shot": "screens/agent-picker/768-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "model-picker",
+    "width": "768",
+    "theme": "dark",
+    "shot": "screens/model-picker/768-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "pane-three",
+    "width": "768",
+    "theme": "dark",
+    "shot": "screens/pane-three/768-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "first-machine-saved",
+    "width": "768",
+    "theme": "dark",
+    "shot": "screens/first-machine-saved/768-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "finder-part",
+    "width": "768",
+    "theme": "dark",
+    "shot": "screens/finder-part/768-dark.png",
+    "failed": null,
+    "errors": [
+      "Error",
+      "Error"
+    ]
+  },
+  {
+    "flow": "error-banner",
+    "width": "768",
+    "theme": "dark",
+    "shot": "screens/error-banner/768-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "new-device",
+    "width": "768",
+    "theme": "dark",
+    "shot": "screens/new-device/768-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "shared-link",
+    "width": "768",
+    "theme": "dark",
+    "shot": "screens/shared-link/768-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "viewer-incomplete",
+    "width": "768",
+    "theme": "dark",
+    "shot": "screens/viewer-incomplete/768-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "viewer-page",
+    "width": "768",
+    "theme": "dark",
+    "shot": "screens/viewer-page/768-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "settings-account",
+    "width": "768",
+    "theme": "dark",
+    "shot": "screens/settings-account/768-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "settings-appearance",
+    "width": "768",
+    "theme": "dark",
+    "shot": "screens/settings-appearance/768-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "settings-notifications",
+    "width": "768",
+    "theme": "dark",
+    "shot": "screens/settings-notifications/768-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "settings-privacy",
+    "width": "768",
+    "theme": "dark",
+    "shot": "screens/settings-privacy/768-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "settings-usage",
+    "width": "768",
+    "theme": "dark",
+    "shot": "screens/settings-usage/768-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "settings-routing",
+    "width": "768",
+    "theme": "dark",
+    "shot": "screens/settings-routing/768-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "settings-tab-invites",
+    "width": "768",
+    "theme": "dark",
+    "shot": "screens/settings-tab-invites/768-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "settings-experimental",
+    "width": "768",
+    "theme": "dark",
+    "shot": "screens/settings-experimental/768-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "settings-about",
+    "width": "768",
+    "theme": "dark",
+    "shot": "screens/settings-about/768-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "settings-usage-subscriptions",
+    "width": "768",
+    "theme": "dark",
+    "shot": "screens/settings-usage-subscriptions/768-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "store",
+    "width": "768",
+    "theme": "dark",
+    "shot": "screens/store/768-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "store-product",
+    "width": "768",
+    "theme": "dark",
+    "shot": "screens/store-product/768-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "store-all",
+    "width": "768",
+    "theme": "dark",
+    "shot": "screens/store-all/768-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "store-viewers",
+    "width": "768",
+    "theme": "dark",
+    "shot": "screens/store-viewers/768-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "signin",
+    "width": "768",
+    "theme": "dark",
+    "shot": "screens/signin/768-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "signin-waiting",
+    "width": "768",
+    "theme": "dark",
+    "shot": "screens/signin-waiting/768-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "signin-error",
+    "width": "768",
+    "theme": "dark",
+    "shot": "screens/signin-error/768-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "signin-expired",
+    "width": "768",
+    "theme": "dark",
+    "shot": "screens/signin-expired/768-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "signin-qr",
+    "width": "768",
+    "theme": "dark",
+    "shot": "screens/signin-qr/768-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "signin-confirm",
+    "width": "768",
+    "theme": "dark",
+    "shot": "screens/signin-confirm/768-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "new-tab",
+    "width": "768",
+    "theme": "dark",
+    "shot": "screens/new-tab/768-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "new-tab-new-swarm",
+    "width": "768",
+    "theme": "dark",
+    "shot": "screens/new-tab-new-swarm/768-dark.png",
+    "failed": "TimeoutError: locator.tap: Timeout 5000ms exceeded.",
+    "errors": []
+  },
+  {
+    "flow": "empty-tab",
+    "width": "768",
+    "theme": "dark",
+    "shot": "screens/empty-tab/768-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "split-pane",
+    "width": "768",
+    "theme": "dark",
+    "shot": "screens/split-pane/768-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "settings-keyboard-shortcuts",
+    "width": "768",
+    "theme": "dark",
+    "shot": "screens/settings-keyboard-shortcuts/768-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "workspace",
+    "width": "1440",
+    "theme": "dark",
+    "shot": "screens/workspace/1440-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "notifications",
+    "width": "1440",
+    "theme": "dark",
+    "shot": "screens/notifications/1440-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "open-harness",
+    "width": "1440",
+    "theme": "dark",
+    "shot": "screens/open-harness/1440-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "models",
+    "width": "1440",
+    "theme": "dark",
+    "shot": "screens/models/1440-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "history",
+    "width": "1440",
+    "theme": "dark",
+    "shot": "screens/history/1440-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "appearance",
+    "width": "1440",
+    "theme": "dark",
+    "shot": "screens/appearance/1440-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "add-phone",
+    "width": "1440",
+    "theme": "dark",
+    "shot": "screens/add-phone/1440-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "harness-monitor",
+    "width": "1440",
+    "theme": "dark",
+    "shot": "screens/harness-monitor/1440-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "first-machine",
+    "width": "1440",
+    "theme": "dark",
+    "shot": "screens/first-machine/1440-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "first-machine-loading",
+    "width": "1440",
+    "theme": "dark",
+    "shot": "screens/first-machine-loading/1440-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "first-machine-failed",
+    "width": "1440",
+    "theme": "dark",
+    "shot": "screens/first-machine-failed/1440-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "link-machine",
+    "width": "1440",
+    "theme": "dark",
+    "shot": "screens/link-machine/1440-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "computers",
+    "width": "1440",
+    "theme": "dark",
+    "shot": "screens/computers/1440-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "link-password",
+    "width": "1440",
+    "theme": "dark",
+    "shot": "screens/link-password/1440-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "offline-only",
+    "width": "1440",
+    "theme": "dark",
+    "shot": "screens/offline-only/1440-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "offline-back",
+    "width": "1440",
+    "theme": "dark",
+    "shot": "screens/offline-back/1440-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "booting",
+    "width": "1440",
+    "theme": "dark",
+    "shot": "screens/booting/1440-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "app-menu",
+    "width": "1440",
+    "theme": "dark",
+    "shot": "screens/app-menu/1440-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "many-tabs",
+    "width": "1440",
+    "theme": "dark",
+    "shot": "screens/many-tabs/1440-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "tab-menu",
+    "width": "1440",
+    "theme": "dark",
+    "shot": "screens/tab-menu/1440-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "all-commands",
+    "width": "1440",
+    "theme": "dark",
+    "shot": "screens/all-commands/1440-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "machines",
+    "width": "1440",
+    "theme": "dark",
+    "shot": "screens/machines/1440-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "settings",
+    "width": "1440",
+    "theme": "dark",
+    "shot": "screens/settings/1440-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "new-swarm",
+    "width": "1440",
+    "theme": "dark",
+    "shot": "screens/new-swarm/1440-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "new-swarm-key",
+    "width": "1440",
+    "theme": "dark",
+    "shot": "screens/new-swarm-key/1440-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "tab-menu-rename",
+    "width": "1440",
+    "theme": "dark",
+    "shot": "screens/tab-menu-rename/1440-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "workspace-one",
+    "width": "1440",
+    "theme": "dark",
+    "shot": "screens/workspace-one/1440-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "connecting",
+    "width": "1440",
+    "theme": "dark",
+    "shot": "screens/connecting/1440-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "reconnecting",
+    "width": "1440",
+    "theme": "dark",
+    "shot": "screens/reconnecting/1440-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "offline",
+    "width": "1440",
+    "theme": "dark",
+    "shot": "screens/offline/1440-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "view-only",
+    "width": "1440",
+    "theme": "dark",
+    "shot": "screens/view-only/1440-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "opening",
+    "width": "1440",
+    "theme": "dark",
+    "shot": "screens/opening/1440-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "taken-over",
+    "width": "1440",
+    "theme": "dark",
+    "shot": "screens/taken-over/1440-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "terminal-error",
+    "width": "1440",
+    "theme": "dark",
+    "shot": "screens/terminal-error/1440-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "agent-picker",
+    "width": "1440",
+    "theme": "dark",
+    "shot": "screens/agent-picker/1440-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "model-picker",
+    "width": "1440",
+    "theme": "dark",
+    "shot": "screens/model-picker/1440-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "pane-three",
+    "width": "1440",
+    "theme": "dark",
+    "shot": "screens/pane-three/1440-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "first-machine-saved",
+    "width": "1440",
+    "theme": "dark",
+    "shot": "screens/first-machine-saved/1440-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "finder-part",
+    "width": "1440",
+    "theme": "dark",
+    "shot": "screens/finder-part/1440-dark.png",
+    "failed": null,
+    "errors": [
+      "Error",
+      "Error"
+    ]
+  },
+  {
+    "flow": "error-banner",
+    "width": "1440",
+    "theme": "dark",
+    "shot": "screens/error-banner/1440-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "new-device",
+    "width": "1440",
+    "theme": "dark",
+    "shot": "screens/new-device/1440-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "shared-link",
+    "width": "1440",
+    "theme": "dark",
+    "shot": "screens/shared-link/1440-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "viewer-incomplete",
+    "width": "1440",
+    "theme": "dark",
+    "shot": "screens/viewer-incomplete/1440-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "viewer-page",
+    "width": "1440",
+    "theme": "dark",
+    "shot": "screens/viewer-page/1440-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "settings-account",
+    "width": "1440",
+    "theme": "dark",
+    "shot": "screens/settings-account/1440-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "settings-appearance",
+    "width": "1440",
+    "theme": "dark",
+    "shot": "screens/settings-appearance/1440-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "settings-notifications",
+    "width": "1440",
+    "theme": "dark",
+    "shot": "screens/settings-notifications/1440-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "settings-privacy",
+    "width": "1440",
+    "theme": "dark",
+    "shot": "screens/settings-privacy/1440-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "settings-usage",
+    "width": "1440",
+    "theme": "dark",
+    "shot": "screens/settings-usage/1440-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "settings-routing",
+    "width": "1440",
+    "theme": "dark",
+    "shot": "screens/settings-routing/1440-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "settings-tab-invites",
+    "width": "1440",
+    "theme": "dark",
+    "shot": "screens/settings-tab-invites/1440-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "settings-experimental",
+    "width": "1440",
+    "theme": "dark",
+    "shot": "screens/settings-experimental/1440-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "settings-about",
+    "width": "1440",
+    "theme": "dark",
+    "shot": "screens/settings-about/1440-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "settings-usage-subscriptions",
+    "width": "1440",
+    "theme": "dark",
+    "shot": "screens/settings-usage-subscriptions/1440-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "store",
+    "width": "1440",
+    "theme": "dark",
+    "shot": "screens/store/1440-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "store-product",
+    "width": "1440",
+    "theme": "dark",
+    "shot": "screens/store-product/1440-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "store-all",
+    "width": "1440",
+    "theme": "dark",
+    "shot": "screens/store-all/1440-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "store-viewers",
+    "width": "1440",
+    "theme": "dark",
+    "shot": "screens/store-viewers/1440-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "signin",
+    "width": "1440",
+    "theme": "dark",
+    "shot": "screens/signin/1440-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "signin-waiting",
+    "width": "1440",
+    "theme": "dark",
+    "shot": "screens/signin-waiting/1440-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "signin-error",
+    "width": "1440",
+    "theme": "dark",
+    "shot": "screens/signin-error/1440-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "signin-expired",
+    "width": "1440",
+    "theme": "dark",
+    "shot": "screens/signin-expired/1440-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "signin-qr",
+    "width": "1440",
+    "theme": "dark",
+    "shot": "screens/signin-qr/1440-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "signin-confirm",
+    "width": "1440",
+    "theme": "dark",
+    "shot": "screens/signin-confirm/1440-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "new-tab",
+    "width": "1440",
+    "theme": "dark",
+    "shot": "screens/new-tab/1440-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "new-tab-new-swarm",
+    "width": "1440",
+    "theme": "dark",
+    "shot": "screens/new-tab-new-swarm/1440-dark.png",
+    "failed": "TimeoutError: locator.click: Timeout 5000ms exceeded.",
+    "errors": []
+  },
+  {
+    "flow": "empty-tab",
+    "width": "1440",
+    "theme": "dark",
+    "shot": "screens/empty-tab/1440-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "split-pane",
+    "width": "1440",
+    "theme": "dark",
+    "shot": "screens/split-pane/1440-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "settings-keyboard-shortcuts",
+    "width": "1440",
+    "theme": "dark",
+    "shot": "screens/settings-keyboard-shortcuts/1440-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "workspace",
+    "width": "1440",
+    "theme": "light",
+    "shot": "screens/workspace/1440-light.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "notifications",
+    "width": "1440",
+    "theme": "light",
+    "shot": "screens/notifications/1440-light.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "open-harness",
+    "width": "1440",
+    "theme": "light",
+    "shot": "screens/open-harness/1440-light.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "models",
+    "width": "1440",
+    "theme": "light",
+    "shot": "screens/models/1440-light.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "history",
+    "width": "1440",
+    "theme": "light",
+    "shot": "screens/history/1440-light.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "appearance",
+    "width": "1440",
+    "theme": "light",
+    "shot": "screens/appearance/1440-light.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "add-phone",
+    "width": "1440",
+    "theme": "light",
+    "shot": "screens/add-phone/1440-light.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "harness-monitor",
+    "width": "1440",
+    "theme": "light",
+    "shot": "screens/harness-monitor/1440-light.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "first-machine",
+    "width": "1440",
+    "theme": "light",
+    "shot": "screens/first-machine/1440-light.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "first-machine-loading",
+    "width": "1440",
+    "theme": "light",
+    "shot": "screens/first-machine-loading/1440-light.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "first-machine-failed",
+    "width": "1440",
+    "theme": "light",
+    "shot": "screens/first-machine-failed/1440-light.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "link-machine",
+    "width": "1440",
+    "theme": "light",
+    "shot": "screens/link-machine/1440-light.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "computers",
+    "width": "1440",
+    "theme": "light",
+    "shot": "screens/computers/1440-light.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "link-password",
+    "width": "1440",
+    "theme": "light",
+    "shot": "screens/link-password/1440-light.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "offline-only",
+    "width": "1440",
+    "theme": "light",
+    "shot": "screens/offline-only/1440-light.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "offline-back",
+    "width": "1440",
+    "theme": "light",
+    "shot": "screens/offline-back/1440-light.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "booting",
+    "width": "1440",
+    "theme": "light",
+    "shot": "screens/booting/1440-light.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "app-menu",
+    "width": "1440",
+    "theme": "light",
+    "shot": "screens/app-menu/1440-light.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "many-tabs",
+    "width": "1440",
+    "theme": "light",
+    "shot": "screens/many-tabs/1440-light.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "tab-menu",
+    "width": "1440",
+    "theme": "light",
+    "shot": "screens/tab-menu/1440-light.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "all-commands",
+    "width": "1440",
+    "theme": "light",
+    "shot": "screens/all-commands/1440-light.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "machines",
+    "width": "1440",
+    "theme": "light",
+    "shot": "screens/machines/1440-light.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "settings",
+    "width": "1440",
+    "theme": "light",
+    "shot": "screens/settings/1440-light.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "new-swarm",
+    "width": "1440",
+    "theme": "light",
+    "shot": "screens/new-swarm/1440-light.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "new-swarm-key",
+    "width": "1440",
+    "theme": "light",
+    "shot": "screens/new-swarm-key/1440-light.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "tab-menu-rename",
+    "width": "1440",
+    "theme": "light",
+    "shot": "screens/tab-menu-rename/1440-light.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "workspace-one",
+    "width": "1440",
+    "theme": "light",
+    "shot": "screens/workspace-one/1440-light.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "connecting",
+    "width": "1440",
+    "theme": "light",
+    "shot": "screens/connecting/1440-light.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "reconnecting",
+    "width": "1440",
+    "theme": "light",
+    "shot": "screens/reconnecting/1440-light.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "offline",
+    "width": "1440",
+    "theme": "light",
+    "shot": "screens/offline/1440-light.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "view-only",
+    "width": "1440",
+    "theme": "light",
+    "shot": "screens/view-only/1440-light.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "opening",
+    "width": "1440",
+    "theme": "light",
+    "shot": "screens/opening/1440-light.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "taken-over",
+    "width": "1440",
+    "theme": "light",
+    "shot": "screens/taken-over/1440-light.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "terminal-error",
+    "width": "1440",
+    "theme": "light",
+    "shot": "screens/terminal-error/1440-light.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "agent-picker",
+    "width": "1440",
+    "theme": "light",
+    "shot": "screens/agent-picker/1440-light.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "model-picker",
+    "width": "1440",
+    "theme": "light",
+    "shot": "screens/model-picker/1440-light.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "pane-three",
+    "width": "1440",
+    "theme": "light",
+    "shot": "screens/pane-three/1440-light.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "first-machine-saved",
+    "width": "1440",
+    "theme": "light",
+    "shot": "screens/first-machine-saved/1440-light.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "finder-part",
+    "width": "1440",
+    "theme": "light",
+    "shot": "screens/finder-part/1440-light.png",
+    "failed": null,
+    "errors": [
+      "Error",
+      "Error"
+    ]
+  },
+  {
+    "flow": "error-banner",
+    "width": "1440",
+    "theme": "light",
+    "shot": "screens/error-banner/1440-light.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "new-device",
+    "width": "1440",
+    "theme": "light",
+    "shot": "screens/new-device/1440-light.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "shared-link",
+    "width": "1440",
+    "theme": "light",
+    "shot": "screens/shared-link/1440-light.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "viewer-incomplete",
+    "width": "1440",
+    "theme": "light",
+    "shot": "screens/viewer-incomplete/1440-light.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "viewer-page",
+    "width": "1440",
+    "theme": "light",
+    "shot": "screens/viewer-page/1440-light.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "settings-account",
+    "width": "1440",
+    "theme": "light",
+    "shot": "screens/settings-account/1440-light.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "settings-appearance",
+    "width": "1440",
+    "theme": "light",
+    "shot": "screens/settings-appearance/1440-light.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "settings-notifications",
+    "width": "1440",
+    "theme": "light",
+    "shot": "screens/settings-notifications/1440-light.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "settings-privacy",
+    "width": "1440",
+    "theme": "light",
+    "shot": "screens/settings-privacy/1440-light.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "settings-usage",
+    "width": "1440",
+    "theme": "light",
+    "shot": "screens/settings-usage/1440-light.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "settings-routing",
+    "width": "1440",
+    "theme": "light",
+    "shot": "screens/settings-routing/1440-light.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "settings-tab-invites",
+    "width": "1440",
+    "theme": "light",
+    "shot": "screens/settings-tab-invites/1440-light.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "settings-experimental",
+    "width": "1440",
+    "theme": "light",
+    "shot": "screens/settings-experimental/1440-light.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "settings-about",
+    "width": "1440",
+    "theme": "light",
+    "shot": "screens/settings-about/1440-light.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "settings-usage-subscriptions",
+    "width": "1440",
+    "theme": "light",
+    "shot": "screens/settings-usage-subscriptions/1440-light.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "store",
+    "width": "1440",
+    "theme": "light",
+    "shot": "screens/store/1440-light.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "store-product",
+    "width": "1440",
+    "theme": "light",
+    "shot": "screens/store-product/1440-light.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "store-all",
+    "width": "1440",
+    "theme": "light",
+    "shot": "screens/store-all/1440-light.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "store-viewers",
+    "width": "1440",
+    "theme": "light",
+    "shot": "screens/store-viewers/1440-light.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "signin",
+    "width": "1440",
+    "theme": "light",
+    "shot": "screens/signin/1440-light.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "signin-waiting",
+    "width": "1440",
+    "theme": "light",
+    "shot": "screens/signin-waiting/1440-light.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "signin-error",
+    "width": "1440",
+    "theme": "light",
+    "shot": "screens/signin-error/1440-light.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "signin-expired",
+    "width": "1440",
+    "theme": "light",
+    "shot": "screens/signin-expired/1440-light.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "signin-qr",
+    "width": "1440",
+    "theme": "light",
+    "shot": "screens/signin-qr/1440-light.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "signin-confirm",
+    "width": "1440",
+    "theme": "light",
+    "shot": "screens/signin-confirm/1440-light.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "new-tab",
+    "width": "1440",
+    "theme": "light",
+    "shot": "screens/new-tab/1440-light.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "new-tab-new-swarm",
+    "width": "1440",
+    "theme": "light",
+    "shot": "screens/new-tab-new-swarm/1440-light.png",
+    "failed": "TimeoutError: locator.click: Timeout 5000ms exceeded.",
+    "errors": []
+  },
+  {
+    "flow": "empty-tab",
+    "width": "1440",
+    "theme": "light",
+    "shot": "screens/empty-tab/1440-light.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "split-pane",
+    "width": "1440",
+    "theme": "light",
+    "shot": "screens/split-pane/1440-light.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "settings-keyboard-shortcuts",
+    "width": "1440",
+    "theme": "light",
+    "shot": "screens/settings-keyboard-shortcuts/1440-light.png",
+    "failed": null,
+    "errors": []
+  }
+]
