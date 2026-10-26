@@ -126,13 +126,16 @@ const TAIL_SQL = "SELECT json_extract(m.data, '$.role') AS role, json_extract(m.
 /**
  * The same question of an OpenCode 2 session, from the newest row that says where the turn is: a prompt (open),
  * a turn end (`idle`, closed) or an assistant step. A step is open until it completes, while a tool is still
- * pending or running, and when it stopped to call tools; an error ends it.
+ * pending or running, and when it stopped to call tools; an error ends it. Rows are read in `time_created`
+ * order, `seq` only tying that millisecond: 2.0.29 stores hold ties on it and pairs `seq` lays the other way
+ * round from time (same order the readers use).
  */
 const V2_TAIL_SQL = "SELECT m.type AS type, json_extract(m.data, '$.finish') AS finish,"
   + " json_extract(m.data, '$.time.completed') AS completed, json_type(m.data, '$.error') AS failed,"
   + " EXISTS (SELECT 1 FROM json_each(m.data, '$.content') c WHERE json_extract(c.value, '$.type') = 'tool'"
   + " AND json_extract(c.value, '$.state.status') IN ('pending', 'running')) AS pending"
-  + " FROM session_message m WHERE m.session_id = ? AND m.type IN ('user', 'assistant', 'idle') ORDER BY m.seq DESC LIMIT 1"
+  + " FROM session_message m WHERE m.session_id = ? AND m.type IN ('user', 'assistant', 'idle')"
+  + " ORDER BY m.time_created DESC, m.seq DESC LIMIT 1"
 
 export function opencodeV2TurnOpen(row: SqliteRow): boolean | null {
   if (row.type === 'user') return true

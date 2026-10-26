@@ -386,6 +386,26 @@ describe.each(READERS)('OpenCode discovery read through %s', (_name, reader) => 
     store.close()
   })
 
+  it('reads the newest v2 turn row by time_created, seq only tying the same millisecond', async () => {
+    const store = new Store(join(tempDir(), 'opencode.db'), V2_SCHEMA)
+    const provider = opencodeProvider({ engine: 'opencode', dbPath: store.path })
+    const busy = (id: string) => provider.busy!({ pid: 1, record: ownerRecord(store.path, id) })
+
+    // A tie (40 measured in a 2.0.29 store): the same millisecond, `seq` says which came second, the still-open step.
+    store.v2Session('ses_tie')
+    store.v2Message('ses_tie', 'user', { text: 'go' }, T0)
+    store.v2Message('ses_tie', 'assistant', { content: [{ type: 'text', text: '…' }], time: { created: T0 } }, T0)
+    expect(await busy('ses_tie')).toBe(true)
+
+    // A pair the two orders disagree on (18 measured): the turn's `idle` end holds a lower `seq` than the step it
+    // answers, and a later `time_created`. By `seq` alone the stale step would hold the session open.
+    store.v2Session('ses_swapped')
+    store.v2Message('ses_swapped', 'idle', { outcome: 'interrupted' }, T0 + 100)
+    store.v2Message('ses_swapped', 'assistant', { content: [{ type: 'text', text: '…' }], time: { created: T0 } }, T0)
+    expect(await busy('ses_swapped')).toBe(false)
+    store.close()
+  })
+
   it('asks the v1 tables about a session OpenCode 2 has no row of, and reads v2 first when a store has both', async () => {
     const store = new Store(join(tempDir(), 'opencode.db'), SCHEMA + V2_SCHEMA)
     const provider = opencodeProvider({ engine: 'opencode', dbPath: store.path })

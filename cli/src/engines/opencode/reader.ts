@@ -11,7 +11,8 @@
  * exist but are empty), so those are the primary cursor. OpenCode 2 is the other way round: its conversation is
  * in `session_v2`/`session_message`, and the legacy tables only keep what v1 wrote (measured on 2.0.29: 27 recent
  * sessions with messages in `session_message` and none in `message`). A session is read from `session_message`
- * when it has rows there, else from the legacy tables, and the cursor of a v2 session is the row's `seq`.
+ * when it has rows there, else from the legacy tables, and the cursor of a v2 session is the row's `time_created`
+ * with `seq` tying within the millisecond (`time_created` and `seq` disagree in real stores, so time leads).
  */
 
 import type { LiveEvent } from '../../lib/normalize.js'
@@ -32,7 +33,7 @@ function parseJson(text: unknown): Record<string, unknown> {
   try { return object(JSON.parse(text)) ?? {} } catch { return {} }
 }
 
-/** Where a read left off. `seq` is set when the session is OpenCode 2's, whose messages are ordered by it alone. */
+/** Where a read left off. `seq` is set when the session is OpenCode 2's, ordered by `time_created` first, `seq` breaking its ties. */
 interface Cursor { tc: number; id: string; seq?: number }
 
 function cursorOf(msg: OcMessage): Cursor {

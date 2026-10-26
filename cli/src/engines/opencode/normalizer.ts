@@ -32,7 +32,7 @@ export interface OcMessage {
   id: string
   role: string
   timeCreated: number
-  /** OpenCode 2 only: the row's `session_message.seq`, the order of a session's messages (time and id can tie or disagree). */
+  /** OpenCode 2 only: the row's `session_message.seq`, which ties a message into the same millisecond (readers order by `time_created` first, `seq` breaking the ties). */
   seq?: number
   data: Record<string, unknown>
   parts: OcPart[]
