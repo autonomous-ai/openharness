@@ -51,6 +51,16 @@ export function isCloudAgent(id: unknown): id is CloudAgentId {
 export type CloudState = 'starting' | 'working' | 'needs_input' | 'idle' | 'failed' | 'stopped'
 export const CLOUD_STATES: readonly CloudState[] = ['starting', 'working', 'needs_input', 'idle', 'failed', 'stopped']
 
+/**
+ * The maker's own status, beside Harness's. A null is a reading where the maker gave none, so a later look
+ * can drop a detail that went away. It does not say whether the words in the transcript were a question:
+ * Devin's `finished` and a wait can look the same, and the text is not a status.
+ */
+export interface CloudProviderStatus {
+  status: string | null
+  detail: string | null
+}
+
 /** One cloud harness, as the cloud service tells the core about it (`core.cloud.publish`). */
 export interface CloudHarness {
   /** Harness's own id for it, `cloud_…`: never the vendor's session id, which the service keeps. */
@@ -60,6 +70,8 @@ export interface CloudHarness {
   state: CloudState
   /** What it is doing, in a line ("Calling Hair Lab"), or null. */
   activity: string | null
+  /** The maker's own status. Absent on a harness saved before it was kept, and for a maker that does not report one. */
+  providerStatus?: CloudProviderStatus
   /** The GitHub repository a coding agent works on (`owner/name`), or null. */
   repository: string | null
   branch: string | null
@@ -76,9 +88,18 @@ export interface CloudHarness {
 
 /** As much of its last words as the dial's longest card draws, and some over (lib/deviceRecap.ts). */
 export const SAID_MAX = 4_000
+/** A maker's own status string on the way into the core: long enough for an unknown detail, and no more. */
+const PROVIDER_STATUS_MAX = 200
 
 const text = (value: unknown, max = 500): string | null => (typeof value === 'string' && value.trim() ? value.trim().slice(0, max) : null)
 const stamp = (value: unknown): string | null => (typeof value === 'string' && Number.isFinite(Date.parse(value)) ? value : null)
+
+/** A maker's status beside the harness, or nothing when it is absent or not an object. A bad field is dropped, not the harness. */
+function providerStatusIn(raw: unknown): CloudProviderStatus | undefined {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined
+  const value = raw as Record<string, unknown>
+  return { status: text(value.status, PROVIDER_STATUS_MAX), detail: text(value.detail, PROVIDER_STATUS_MAX) }
+}
 
 /** A harness as a service reported it, or null for anything else: the core keeps nothing it cannot read. */
 export function cloudHarnessIn(raw: unknown): CloudHarness | null {
@@ -92,12 +113,14 @@ export function cloudHarnessIn(raw: unknown): CloudHarness | null {
     const label = text(entry?.label, 80), url = text(entry?.url, 2048)
     return label && url && /^https:\/\//.test(url) ? [{ label, url }] : []
   }).slice(0, 8) : []
+  const providerStatus = providerStatusIn(value.providerStatus)
   return {
     agentId,
     agent: value.agent,
     name: text(value.name, 120) ?? CLOUD_AGENTS[value.agent].name,
     state: value.state as CloudState,
     activity: text(value.activity, 200),
+    ...(providerStatus ? { providerStatus } : {}),
     repository: text(value.repository, 200),
     branch: text(value.branch, 200),
     links,
@@ -115,6 +138,8 @@ export interface CloudFrameBlock {
   activity: string | null
   links: { label: string; url: string }[]
   messages: number
+  /** Absent when the harness has no maker status (an older one, or Fo and Cursor). */
+  providerStatus?: CloudProviderStatus
 }
 
 export type CloudAgentFrame = Omit<AgentFrame, 'engine'> & { engine: CloudAgentId; location: 'cloud'; cloud: CloudFrameBlock }
@@ -170,6 +195,9 @@ export function cloudAgentFrame(harness: CloudHarness): CloudAgentFrame {
     bypassPermission: null,
     namedAgent: null,
     location: 'cloud',
-    cloud: { place: CLOUD_AGENTS[harness.agent].place, state: harness.state, activity: harness.activity, links: harness.links, messages: harness.messages },
+    cloud: {
+      place: CLOUD_AGENTS[harness.agent].place, state: harness.state, activity: harness.activity, links: harness.links, messages: harness.messages,
+      ...(harness.providerStatus ? { providerStatus: { status: harness.providerStatus.status, detail: harness.providerStatus.detail } } : {}),
+    },
   }
 }

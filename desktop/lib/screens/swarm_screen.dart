@@ -8633,6 +8633,18 @@ class _SwarmScreenState extends State<SwarmScreen> {
     return _fullStatusBar();
   }
 
+  /// The host offers subscriptions once the account has a computer
+  /// ([WorkspaceChrome.subscriptionsNeedComputer]): the machine list has
+  /// answered, and none of the account's own is in it. Never while it loads.
+  bool get _subscriptionsWaitForComputer =>
+      widget.chrome?.subscriptionsNeedComputer == true &&
+      _machineInventorySettled &&
+      !app.machineStates.values.any(
+        (machine) =>
+            !machine.machine.isShared &&
+            !app.removedMachines.containsKey(machine.machine.machineId),
+      );
+
   /// The status bar's content for a host that draws its own compact footer.
   WorkspaceFooter _workspaceFooter() {
     final focused = WorkspacePaneContext.focused(app);
@@ -8649,9 +8661,10 @@ class _SwarmScreenState extends State<SwarmScreen> {
             detail: detail,
             onPressed: links![field]!.onPressed,
           );
+    final subscriptions = !_subscriptionsWaitForComputer;
     return WorkspaceFooter(
       summary: focused == null
-          ? _subscriptionUsage.text
+          ? (subscriptions ? _subscriptionUsage.text : _footerMachineLabel)
           : [
               focused.machineName,
               focused.branch ?? focused.projectName,
@@ -8676,21 +8689,23 @@ class _SwarmScreenState extends State<SwarmScreen> {
               ? () => _toggleModels(initialTab: ModelsTab.local)
               : null,
         ),
-        for (final account in _subscriptionUsage.accounts)
+        if (subscriptions) ...[
+          for (final account in _subscriptionUsage.accounts)
+            WorkspaceFooterItem(
+              title: '${account.name} ${account.figure}',
+              detail: account.detail,
+              onPressed: _shortcutsEnabled
+                  ? () => _openSubscription(account.searchId)
+                  : null,
+            ),
           WorkspaceFooterItem(
-            title: '${account.name} ${account.figure}',
-            detail: account.detail,
+            title: 'Subscriptions',
+            detail: _subscriptionUsage.text,
             onPressed: _shortcutsEnabled
-                ? () => _openSubscription(account.searchId)
+                ? () => _toggleModels(initialTab: ModelsTab.subscriptions)
                 : null,
           ),
-        WorkspaceFooterItem(
-          title: 'Subscriptions',
-          detail: _subscriptionUsage.text,
-          onPressed: _shortcutsEnabled
-              ? () => _toggleModels(initialTab: ModelsTab.subscriptions)
-              : null,
-        ),
+        ],
         ?link(StatusLineField.machine, 'Machine', focused?.machineName),
         ?link(StatusLineField.project, 'Project', focused?.projectName),
         ?link(StatusLineField.branch, 'Branch', focused?.branch),

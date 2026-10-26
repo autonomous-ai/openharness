@@ -23,6 +23,14 @@ describe('cloud agents', () => {
     expect(cloudHarnessIn({ ...harness, name: '', activity: 5, repository: '', links: [{ label: 'x', url: 'http://no' }, { url: 'https://a' }, null], messages: -1 }))
       .toMatchObject({ name: 'Devin Cloud', activity: null, repository: null, links: [], messages: 0 })
     expect(cloudHarnessIn({ ...harness, links: 'x', messages: 1.5 })).toMatchObject({ links: [], messages: 0 })
+    // An older harness has no maker status. A bad one is dropped or cut down, and the harness still stands.
+    expect(cloudHarnessIn(harness)).not.toHaveProperty('providerStatus')
+    expect(cloudHarnessIn({ ...harness, providerStatus: 'nope' })).toEqual({ ...harness, said: null })
+    expect(cloudHarnessIn({ ...harness, providerStatus: ['suspended'] })).toEqual({ ...harness, said: null })
+    expect(cloudHarnessIn({ ...harness, providerStatus: { status: ` ${'s'.repeat(400)}`, detail: 3 } })!.providerStatus)
+      .toEqual({ status: 's'.repeat(200), detail: null })
+    expect(cloudHarnessIn({ ...harness, providerStatus: { status: 'suspended', detail: null } })!.providerStatus)
+      .toEqual({ status: 'suspended', detail: null })
   })
 
   // What it said stays in the core: the apps read the whole conversation.
@@ -37,6 +45,9 @@ describe('cloud agents', () => {
       gitContext: { state: 'workspace' },
       cloud: { place: "Devin's cloud", state: 'working', activity: null, links: harness.links, messages: 3 },
     })
+    expect(cloudAgentFrame(harness).cloud).not.toHaveProperty('providerStatus')
+    expect(cloudAgentFrame({ ...harness, providerStatus: { status: 'running', detail: null } }).cloud.providerStatus)
+      .toEqual({ status: 'running', detail: null })
     expect(cloudAgentFrame({ ...harness, state: 'stopped', repository: null })).toMatchObject({ status: 'stopped', project: null, gitContext: { state: 'unavailable', current: null }, activity: { state: 'idle', validForMs: 0 } })
     expect(cloudAgentFrame({ ...harness, state: 'starting' }).launch).toEqual({ state: 'starting' })
     expect(cloudAgentFrame({ ...harness, state: 'failed' }).launch).toEqual({ state: 'failed', error: 'CLOUD_FAILED', detail: 'Devin Cloud stopped with an error.' })
