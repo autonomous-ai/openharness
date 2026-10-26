@@ -11,6 +11,8 @@ import '../../widgets/desktop_chrome.dart';
 import '../../widgets/link_another_machine_dialog.dart'
     show kLinkServerInstallCommand, kLinkServerLoginCommand;
 import '../../widgets/web_download_button.dart';
+import 'computer_row.dart';
+import 'saved_computers.dart';
 import 'web_your_computers.dart';
 
 /// What a browser shows while none of the account's computers is connected,
@@ -25,17 +27,22 @@ import 'web_your_computers.dart';
 /// for the machine list while this page shows — and the workspace takes over
 /// the moment one connects.
 ///
-/// Until the machine list first answers it only says it is looking, and if
-/// that list cannot be read, says so with Retry — it never shows setup steps
-/// an account may not need.
+/// Until the machine list first answers it lists the computers this browser
+/// kept from the last answer ([saved]), each checking; with none kept it only
+/// says it is looking. If that list cannot be read, it says so with Retry. It
+/// never shows setup steps an account may not need.
 class WebFirstMachine extends StatefulWidget {
   const WebFirstMachine({
     super.key,
     required this.app,
+    this.saved,
     this.openPage = openInNewTab,
   });
 
   final AppNotifier app;
+
+  /// The computers kept in this browser; null keeps none.
+  final SavedComputersWatch? saved;
 
   /// How the download page opens; tests pass a recorder.
   final Future<bool> Function(Uri uri) openPage;
@@ -72,13 +79,25 @@ class _WebFirstMachineState extends State<WebFirstMachine> {
 
   @override
   Widget build(BuildContext context) {
+    final saved = widget.saved;
+    if (saved == null) return _page(null);
+    return ListenableBuilder(
+      listenable: saved,
+      builder: (context, _) => _page(saved.shown),
+    );
+  }
+
+  /// [kept]: the computers to list, checking, until the machine list answers.
+  Widget _page(List<SavedComputer>? kept) {
     grid.AppTheme.watch(context);
     if (!widget.app.machineInventoryLoaded) {
       final error = widget.app.machineListError;
-      if (error == null) {
+      if (error != null) {
+        return _ListFailed(error: error, onRetry: widget.app.retryMachines);
+      }
+      if (kept == null || kept.isEmpty) {
         return const Center(child: _Waiting('Finding your computers…'));
       }
-      return _ListFailed(error: error, onRetry: widget.app.retryMachines);
     }
     final email = widget.app.currentUser?.email;
     final account = email == null || email.isEmpty ? 'this account' : email;
@@ -109,7 +128,8 @@ class _WebFirstMachineState extends State<WebFirstMachine> {
         ],
       ),
     ];
-    final hasComputers = WebYourComputers.listed(widget.app).isNotEmpty;
+    final hasComputers =
+        kept != null || WebYourComputers.listed(widget.app).isNotEmpty;
     return LayoutBuilder(
       builder: (context, constraints) {
         final sideBySide = constraints.maxWidth >= 640;
@@ -137,7 +157,9 @@ class _WebFirstMachineState extends State<WebFirstMachine> {
             ),
             const SizedBox(height: 28),
             if (hasComputers) ...[
-              WebYourComputers(app: widget.app),
+              kept != null
+                  ? SavedComputerRows(kept)
+                  : WebYourComputers(app: widget.app),
               const SizedBox(height: 18),
               Text(
                 'Or set up another computer',
