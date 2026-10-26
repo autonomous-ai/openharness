@@ -2,9 +2,9 @@
 import { applyCommand, type Command, type CommandContext } from '../commands.js'
 import { createSuperTab, type Actor, type AgentConfiguration, type SuperTabState } from '../model.js'
 
-export const owner: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: 'owner', email: 'owner@example.com' }
-export const peer: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: 'peer', email: 'peer@example.com' }
-export const outsider: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: 'outsider', email: 'outsider@example.com' }
+export const owner: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: '100000000000000000000001', email: 'owner@example.com' }
+export const peer: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: '100000000000000000000002', email: 'peer@example.com' }
+export const outsider: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: '100000000000000000000003', email: 'outsider@example.com' }
 export const config: AgentConfiguration = { engine: 'codex', model: 'test-model', effort: 'high', contextWindow: 200000, engineVersion: 'fixture' }
 export const NOW = 1_793_010_000_000
 
@@ -20,9 +20,9 @@ export function swarm(now = NOW) {
     const { inviteId } = run({ type: 'invite.create', email: person.email, role: 'collaborator', conversationId: 'lead' })
     run({ type: 'invite.accept', inviteId: inviteId as string }, person)
   }
-  const add = (harnessId: string, conversationId: string, lead = false, contributor = owner, machineId = 'host') =>
+  const add = (harnessId: string, conversationId: string, lead = false, contributor = owner, machineId = 'host', machineOwnerId = `${contributor.userId}-machine`) =>
     run({ type: 'agent.add', conversationId, machineId, harnessId, name: harnessId, configuration: config, lead }, contributor,
-      { contribution: { machineOwnerId: `${contributor.userId}-machine`, contributorId: contributor.userId } }).agentId as string
+      { contribution: { machineOwnerId, contributorId: contributor.userId } }).agentId as string
   const group = (title: string, projectId?: string, actor: Actor = owner) => run({ type: 'conversation.create', ...(projectId ? { projectId } : {}),
     title, brief: `${title} brief`, checks: [{ description: `${title} works`, independent: false }] }, actor).conversationId as string
   const contribute = (machineId: string, scope?: 'swarm') => run({ type: 'machine.contribute', machineId, name: machineId, cwd: '/repo',

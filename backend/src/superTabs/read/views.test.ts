@@ -27,7 +27,7 @@ function scene() {
   const parts = store.split(s.state, { tabId: 'tab', version: R, now: NOW })
   return { s, parts, privateId }
 }
-const agentActor = (agentId: string): Actor => ({ kind: 'agent', agentId, machineOwnerId: 'owner-machine' })
+const agentActor = (agentId: string): Actor => ({ kind: 'agent', agentId, machineOwnerId: `${owner.userId}-machine` })
 const keys = (list: Array<{ key: string }>) => list.map(p => p.key)
 
 describe('reader view of the parts (design 4.1, 4.3)', () => {

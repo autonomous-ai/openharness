@@ -15,7 +15,7 @@ describe('migration normalize (design 6.1.2 step 2)', () => {
     delete legacy.agents[1]!.projectId
     delete group(legacy, s.done).number
     legacy.retiredConversationNumber = 10
-    legacy.rules = [{ id: 'r', rule: { kind: 'preferEngine', taskKind: 'ui', engine: 'codex' }, text: 'Codex for UI.', askedBy: 'owner', askedIn: null } as never]
+    legacy.rules = [{ id: 'r', rule: { kind: 'preferEngine', taskKind: 'ui', engine: 'codex' }, text: 'Codex for UI.', askedBy: 'someone', askedIn: null } as never]
     const state = normalize(legacy, { now: NOW, lastActivity: new Map() })
     expect(state.agents[1]!.displayName).toBe(s.state.agents[1]!.displayName)
     expect(state.agents[1]!.projectId).toBe('lead')

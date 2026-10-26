@@ -2,12 +2,12 @@ import { describe, expect, it } from 'vitest'
 import { parts as store, type Part, type SwarmParts } from './partsPort.js'
 import { readerView } from './views.js'
 import { changesFor } from './changes.js'
-import { NOW, owner, peer, richSwarm } from './fixture.test-support.js'
+import { NOW, outsider, owner, peer, richSwarm } from './fixture.test-support.js'
 import type { Actor } from '../model.js'
 
 const R = 9_000
 const LATER = NOW + 5_000
-const agentActor = (agentId: string): Actor => ({ kind: 'agent', agentId, machineOwnerId: 'owner-machine' })
+const agentActor = (agentId: string): Actor => ({ kind: 'agent', agentId, machineOwnerId: `${owner.userId}-machine` })
 
 function scene() {
   const s = richSwarm()
@@ -80,8 +80,8 @@ describe('changes since a cursor (design 4.4)', () => {
     const secretAgent = s.add('secret-harness', s.secretGroup)
     const fresh = store.split(s.state, { tabId: 'tab', version: R, now: NOW })
     const changed = [write(fresh, 'agents', secretAgent, p => { p.deleted = true }), write(fresh, 'agents', s.worker, p => { p.deleted = true }),
-      write(fresh, 'members', 'outsider', p => { p.deleted = true })]
-    expect(receive(fresh, changed, peer)).toMatchObject({ agents: [{ key: s.worker, deleted: true }], members: [{ key: 'outsider', deleted: true }] })
+      write(fresh, 'members', outsider.userId, p => { p.deleted = true })]
+    expect(receive(fresh, changed, peer)).toMatchObject({ agents: [{ key: s.worker, deleted: true }], members: [{ key: outsider.userId, deleted: true }] })
     expect(keys(receive(fresh, changed, owner).agents)).toEqual([secretAgent, s.worker])
     void parts
   })
@@ -96,7 +96,7 @@ describe('changes since a cursor (design 4.4)', () => {
     const { s } = scene()
     s.edit(state => {
       state.starts = [s.web, s.secretGroup].map(conversationId => ({ id: `start-${conversationId}`, creationId: 'c', actorKey: 'person:owner',
-        contributorId: 'owner', membershipGeneration: 'tab', machineOwnerId: 'owner', hostGrant: null, harnessId: null, dispatched: false, error: null,
+        contributorId: owner.userId, membershipGeneration: 'tab', machineOwnerId: owner.userId, hostGrant: null, harnessId: null, dispatched: false, error: null,
         request: { conversationId, machineId: 'mac', engine: 'codex', name: 'Builder', cwd: '/repo', worktree: false,
           requirements: { memoryBytes: 0, diskBytes: 0, maxCpuPercent: 100, tools: [], devices: [], quotaRequired: false } } }))
     })
