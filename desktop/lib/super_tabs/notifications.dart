@@ -221,6 +221,13 @@ class _SuperTabNotificationsState extends State<SuperTabNotifications> {
 
   Widget _row(SuperTabMention mention, {required bool waiting}) {
     final time = mention.createdAt;
+    // The reader's own chat with the Product Manager is named as the sidebar
+    // names it, not by the reader's own name.
+    final place =
+        widget.mentions.controller.pmChat(mention.projectId)?.id ==
+            mention.conversationId
+        ? 'Chat with PM'
+        : mention.conversationTitle;
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 1),
       child: Material(
@@ -260,7 +267,7 @@ class _SuperTabNotificationsState extends State<SuperTabNotifications> {
                         ],
                       ),
                       Text(
-                        '${mention.projectName} · ${mention.conversationTitle}',
+                        '${mention.projectName} · $place',
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         style: DesktopChrome.metadata(),
