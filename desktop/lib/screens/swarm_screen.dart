@@ -3488,6 +3488,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
           context,
           app,
           keymap: _keymap,
+          from: from,
           onConnectMachine: () => unawaited(_openMachines()),
           // "See your phones": Machines, at its phones, once the dialog has
           // gone. ⚠️ Asked for, not opened here: right after the pop this

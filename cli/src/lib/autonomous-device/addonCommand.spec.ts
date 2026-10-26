@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { runAutonomousDeviceCommand } from './command.js'
+import { pickMachine, runAddonCommand } from './addonCommand.js'
 vi.mock('../hookAuth.js', () => ({ readHookCredential: () => 'hook-test-credential' }))
 afterEach(() => vi.restoreAllMocks())
 
@@ -71,3 +72,37 @@ describe('harness autonomous-device addon', () => {
     expect(fetch).not.toHaveBeenCalled()
   })
 })
+
+describe('harness autonomous-device addon --machine', () => {
+  it('asks the named machine over its link, with the same proposal, and says the key when it fails', async () => {
+    const fetch = vi.spyOn(globalThis, 'fetch'); const log = quiet()
+    const asked: Array<[string, string, Record<string, unknown>]> = []
+    const ask = async (machine: string, op: string, input: Record<string, unknown>) => {
+      asked.push([machine, op, input])
+      return op === 'propose' ? { error: { code: 'MACHINE_REQUIRED', message: 'no machine' } } : { result: { devices: [] } }
+    }
+    expect(await runAddonCommand(['state', '--machine', 'lamp-4ace'], '/unused', 18473, {}, ask)).toBe(0)
+    expect(await runAddonCommand(['proposal', 'p1', '--machine', 'lamp-4ace'], '/unused', 18473, {}, ask)).toBe(0)
+    expect(await runAddonCommand(['propose', '--machine', 'lamp-4ace', '--act', 'say', '--holds-ms', '30000', '--note', 'hi', '--addon', 'slack', '--key', 'k1'], '/unused', 18473, {}, ask)).toBe(1)
+    expect(asked).toEqual([['lamp-4ace', 'state', {}], ['lamp-4ace', 'proposal', { proposalId: 'p1' }],
+      ['lamp-4ace', 'propose', { addon: 'slack', act: 'say', holdsMs: 30000, idempotencyKey: 'k1', note: 'hi' }]])
+    expect(JSON.parse(String(log.mock.calls.at(-1)?.[0]))).toEqual({ error: { code: 'MACHINE_REQUIRED', message: 'no machine' }, idempotencyKey: 'k1' })
+    expect(await runAddonCommand(['state', '--machine', 'lamp', '--device', 'x'], '/unused', 18473, {}, ask)).toBe(1)
+    expect(fetch).not.toHaveBeenCalled()
+  })
+})
+
+describe('the machine --machine names', () => {
+  const rows = [{ machineId: 'm_lamp', name: 'lamp-4ace' }, { machineId: 'm_a', name: 'Office' }, { machineId: 'm_b', hostname: 'office' },
+    { machineId: 'm_shared', name: 'kim', isShared: true }]
+  it('is an id, or the one machine of that name, case-blind; this machine too, as its own row', () => {
+    expect(pickMachine('m_lamp', rows)).toBe('m_lamp')
+    expect(pickMachine('LAMP-4ACE', rows)).toBe('m_lamp')
+    expect(pickMachine('m_b', rows)).toBe('m_b')
+  })
+  it('refuses two machines of one name, and a machine shared with this account', () => {
+    expect(() => pickMachine('office', rows)).toThrow(expect.objectContaining({ code: 'AMBIGUOUS' }))
+    expect(() => pickMachine('kim', rows)).toThrow(expect.objectContaining({ code: 'MACHINE_NOT_FOUND' }))
+  })
+})
+

@@ -323,6 +323,11 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
 
   RemoteScrollMirror? _mirror;
 
+  /// The mirror drawing a full-screen program's scroll, if one was made — for a
+  /// benchmark to compare where it draws the rows with where the finger is.
+  @visibleForTesting
+  RemoteScrollMirror? get debugRemoteScrollMirror => _mirror;
+
   /// The screen for the mirror to fetch ahead from, when it can be read whole.
   RemoteScreen? _mirrorScreen() {
     if (!_canMirror || _terminal.synchronizedOutputHeld) return null;
@@ -341,9 +346,9 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
         requestsIdle: () => _remoteScrollLink?.idle ?? true,
         cancelRequests: () => _remoteScrollLink?.cancel() ?? 0,
         pageKeysEnabled: () => _mirrorPageKeys,
-        requestPage: (direction) =>
+        requestPage: (direction, count) =>
             _mirrorPageKeys &&
-            (_remoteScrollLink?.sendPage(direction) ?? false),
+            (_remoteScrollLink?.sendPage(direction, count: count) ?? false),
         readScreen: _mirrorScreen,
       )..memory = _remoteScrollMemory;
 
@@ -409,12 +414,12 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
 
   /// The screen was laid out again: a slide starts, carries on or ends here.
   void _updateRemoteScroll() {
-    // A program whose scrolling rows are remembered gets its mirror before the
-    // first scroll: it fetches ahead from the start.
+    // A program whose page keys scroll it gets its mirror before the first
+    // scroll: it fetches ahead from the start, its scrolling rows remembered
+    // or read off its prompt box (`RemoteScrollMirror._seedScrollingRows`).
     if (_mirror == null &&
         _mirrorRemoteScroll &&
         _mirrorPageKeys &&
-        _remoteScrollMemory?.knowsScrollingRows == true &&
         _canMirror) {
       _mirrorNow;
     }

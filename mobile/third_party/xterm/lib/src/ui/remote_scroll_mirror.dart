@@ -1,7 +1,9 @@
 import 'dart:async';
 import 'dart:math' as math;
+import 'dart:typed_data';
 
 import 'package:flutter/scheduler.dart';
+import 'package:meta/meta.dart' show visibleForTesting;
 import 'package:xterm/src/core/buffer/line.dart';
 import 'package:xterm/src/core/cell.dart';
 import 'package:xterm/src/utils/circular_buffer.dart';
@@ -38,7 +40,9 @@ class RemoteScrollMirror {
     this.pageKeysEnabled,
     this.requestPage,
     this.readScreen,
-  });
+    // A test's own clock, which its fake time moves.
+    @visibleForTesting Stopwatch? clock,
+  }) : _clock = (clock ?? Stopwatch())..start();
 
   /// The program's whole screen now, for [_prefetch] to start from — null
   /// when it cannot be read whole (a frame still arriving, another screen).
@@ -48,9 +52,9 @@ class RemoteScrollMirror {
   /// Page Down keys at all — see [_pageOrWait].
   final bool Function()? pageKeysEnabled;
 
-  /// Press Page Down ([direction] positive) or Page Up once, alone; false when
-  /// it was not sent.
-  final bool Function(int direction)? requestPage;
+  /// Press Page Down ([direction] positive) or Page Up [count] times, alone;
+  /// false when it was not sent.
+  final bool Function(int direction, int count)? requestPage;
 
   /// Something drawn from here moved: paint again.
   final VoidCallback onFrame;
@@ -153,17 +157,62 @@ class RemoteScrollMirror {
   /// A page shorter than this is not worth a key: wheel events do as well.
   static const _minPage = 6;
 
+  /// The most page keys sent together, where they land among rows already
+  /// known — see [_pagesAtOnce].
+  static const _maxPagesAtOnce = 3;
+
   /// A finger faster than this, in rows a second, is scrolled after with page
   /// keys only — see [_pageOrWait]'s `fast`.
   static const _pageSpeed = 120.0;
 
+  /// About how long a page key takes to come back as a frame placed, in
+  /// seconds: what the finger covers meanwhile is how far short of the edge of
+  /// what is known the next page goes — see [_pageLeadRows].
+  ///
+  /// ⚠️ **A page asked for at the edge came too late.** Kept [_leadMax] rows
+  /// ahead of the finger, no more than a page, the next page went only once
+  /// the finger had reached the edge — and the screen held there for its round
+  /// trip (42ms p50, 113ms p90), each flick 78ms (p50) before its first page:
+  /// two pages a flick, the program ~150 rows a second against a finger at
+  /// ~400 (measured on a phone, 2026-10-07). Sent this far short, a page lands
+  /// about as the finger gets there (p75 51ms).
+  static const _pageLatency = 0.08;
+
   /// How long the program must have drawn nothing, and the finger been off the
   /// glass, before the rows above are fetched ahead — see [_prefetch].
-  static const _prefetchAfter = Duration(milliseconds: 1200);
+  ///
+  /// ⚠️ **A thumb goes back soon after it reads.** At 1.2 s, with the settle
+  /// before it, fetching ahead had barely begun when the next flick came, and
+  /// the flick met the edge of what was known at once (an iPhone 14 against
+  /// Claude Code faked over a 100 ms round trip, 2026-10-23). It gives way to
+  /// the finger the moment it comes ([begin]), with the program already part
+  /// of the way up.
+  static const _prefetchAfter = Duration(milliseconds: 500);
 
-  /// How many rows above the screen [_prefetch] has the document reach: three
-  /// or four screens of a phone.
-  static const _prefetchRows = 120;
+  /// How many rows above the screen [_prefetch] has the document reach: ten
+  /// screens of a phone.
+  ///
+  /// ⚠️ **What is fetched ahead is all a flick gets at the finger's pace.**
+  /// Rows not yet seen come a page a round trip, ~160 a second, against a
+  /// flick of 300–400; over rows known the screen keeps up with the finger
+  /// (an iPhone 14 against Claude Code faked over a 100 ms round trip,
+  /// 2026-10-23: from 120 rows to 400, a flick's screen went 62% of the
+  /// finger's way to 71%). The program crosses them again several pages at a
+  /// time ([_pagesAtOnce]), so coming back costs a few round trips.
+  static const _prefetchRows = 400;
+
+  /// The fewest rows a fetch ahead must add to be worth one.
+  ///
+  /// ⚠️ **One row short, it went round again.** The rows that scroll widened
+  /// by one after a fetch, the rows known above the screen came to one less
+  /// than [_prefetchRows], and the program crossed all of them again for that
+  /// one row, and back — on and on (a test against a fake of 2.1.309,
+  /// 2026-10-24). Every fetch scrolls the agent's screen on its computer.
+  static const _prefetchGain = 100;
+
+  /// How long the program must have drawn nothing for its prompt box to say
+  /// which rows scroll — see [_seedScrollingRows].
+  static const _seedQuiet = Duration(milliseconds: 300);
 
   /// About how fast the program scrolls, in rows a second: four wheel events
   /// every 50ms (`_exactBurst` and `_burstGap` in the scroll handler) move it
@@ -207,10 +256,14 @@ class RemoteScrollMirror {
   static const _stillAfter = Duration(milliseconds: 100);
 
   /// How long the program must have stood still before the screen goes back to
-  /// it — see [_checkSettled].
+  /// it — see [_checkSettled] — at the least: over a slower link, longer
+  /// ([_quietMs]).
   static const _settleQuiet = Duration(milliseconds: 100);
 
-  final _clock = Stopwatch()..start();
+  /// The longest [_quietMs] waits, however slow the program has answered.
+  static const _quietMost = Duration(milliseconds: 1000);
+
+  final Stopwatch _clock;
 
   // The grid the document is in; any change and it is dropped.
   int _rowCount = 0;
@@ -240,9 +293,20 @@ class RemoteScrollMirror {
 
   /// Rows known before the document last had to start again, in their own
   /// numbering, and the first and last of them — see [_setAside].
-  Map<int, _DocRow>? _aside;
+  Map<int, _DocRow>? get _aside => _asideRows;
+  set _aside(Map<int, _DocRow>? rows) {
+    _asideRows = rows;
+    _asideBySignature = null;
+  }
+
+  Map<int, _DocRow>? _asideRows;
   int _asideMin = 0;
   int _asideMax = -1;
+
+  /// [_aside] by what its rows say ([rowsBySignature]), made the first time
+  /// [_reattach] looks among them and kept until they are taken back or
+  /// replaced: it looks again on every frame of a scroll, among the same rows.
+  Map<int, List<int>>? _asideBySignature;
 
   /// The screen [_reattach] last looked for among the rows set aside, and when.
   int? _reattachTried;
@@ -253,8 +317,12 @@ class RemoteScrollMirror {
   int _missesInARow = 0;
 
   /// Whether the program's last whole screen showed its prompt — when a page
-  /// key scrolls its transcript ([_promptShown]).
+  /// key scrolls its transcript ([_promptRow]).
   bool _pageKeysSafe = false;
+
+  /// The screen row of the prompt the program's last whole screen showed, for
+  /// a program whose page keys scroll it — or -1 — see [_lowestScrollingRow].
+  int _promptAt = -1;
 
   /// Whether a page key was refused this scroll: wheel events from then on.
   bool _pageKeysRefused = false;
@@ -263,6 +331,7 @@ class RemoteScrollMirror {
   /// nothing else was — see [_pageOrWait] and [_pageLanded].
   bool _pageInFlight = false;
   int _pageDirection = 0;
+  int _pageCount = 1;
   int _pageSentAtMs = 0;
   int _pageFromRemote = 0;
 
@@ -315,6 +384,15 @@ class RemoteScrollMirror {
   /// When a frame last showed the program's rows moved.
   int _movedAtMs = 0;
 
+  /// About how long the program takes to answer — from a request going out to
+  /// the frame that shows it moved: the longest of late, fading — and when the
+  /// oldest request not yet answered went out, or null. See [_quietMs].
+  double _answerMs = 0;
+  int? _askedAtMs;
+
+  /// When the program last drew anything — see [_seedQuiet].
+  int _drewAtMs = -1 << 30;
+
   bool _scrolling = false;
   bool _active = false;
   bool _settling = false;
@@ -357,6 +435,8 @@ class RemoteScrollMirror {
   int _asksSpared = 0;
   int _rowsAsked = 0;
   int _pagesSent = 0;
+  int _frameMicros = 0;
+  int _frameMicrosMost = 0;
   int _startedAtMs = 0;
   int _endedAtMs = 0;
 
@@ -376,6 +456,19 @@ class RemoteScrollMirror {
 
   /// Document row [row], as last seen; null when it never has been.
   BufferLine? rowAt(int row) => _document[row]?.line;
+
+  /// The document row the program's transcript starts at, once a page up has
+  /// gone nowhere — for a benchmark to tell the top of the transcript from a
+  /// screen waiting for rows.
+  @visibleForTesting
+  int? get debugTranscriptTop => _topRow;
+
+  /// How many times the document has started again in numbering of its own
+  /// ([_forget], [_lost]) — for a benchmark not to read the renumbering as the
+  /// rows moving.
+  @visibleForTesting
+  int get debugRenumbered => _renumbered;
+  int _renumbered = 0;
 
   /// The program's own screen row [row] to draw in place of the live one —
   /// held as it was while rows are fetched ahead ([_prefetch]), so its pinned
@@ -412,6 +505,9 @@ class RemoteScrollMirror {
       _takeGrid(screen, rowCount, lineHeight);
       _load();
     }
+    if (screenWhole && _nowMs - _drewAtMs >= _seedQuiet.inMilliseconds) {
+      _seedScrollingRows(screen, rowCount);
+    }
     // Fetching ahead gives way to the finger: what it asked is still counted.
     _stopPrefetch();
     _scrolling = true;
@@ -429,6 +525,8 @@ class RemoteScrollMirror {
     _asksSpared = 0;
     _rowsAsked = 0;
     _pagesSent = 0;
+    _frameMicros = 0;
+    _frameMicrosMost = 0;
     _pageKeysRefused = false;
     _resyncs = 0;
     _missesInARow = 0;
@@ -492,6 +590,19 @@ class RemoteScrollMirror {
           (pixels - _velocityPixels) / _lineHeight * 1000 / elapsed;
       _velocityPixels = pixels;
       _velocityAtMs = now;
+    }
+    if (_active && _chasing) {
+      // Catching up, the screen still goes with the finger, move for move:
+      // the spring takes in only what lies between them ([_onTick]).
+      //
+      // ⚠️ **A spring after a moving finger trails it by its speed over ω.**
+      // Caught still gliding, or let go of the edge of what is known, the screen
+      // was handed to the spring — and dragged on, it sat 6–14 rows behind the
+      // finger for the rest of the drag, over rows long known (Claude Code on an
+      // iPhone 14, 2026-10-24: the content 1–3 rows short every frame of a
+      // flick's start). Moved with the finger, what is left between them dies
+      // away, and the screen is the finger's again.
+      _display = _clamp(_display + (_target - _lastTarget));
     }
     _follow();
     _requestRemote();
@@ -601,6 +712,7 @@ class RemoteScrollMirror {
     int rowCount,
     double lineHeight,
   ) {
+    _drewAtMs = _nowMs;
     if (!_scrolling && !_active) {
       // The program drew: fetching ahead waits until it has been quiet.
       _armPrefetch();
@@ -620,7 +732,15 @@ class RemoteScrollMirror {
       if (_prefetching) _endPrefetch();
       onFrame();
     }
+    // Trace only: what placing the frame took on this thread — the document
+    // matched, rows set aside looked for — while the finger waits on it.
+    final placing = xtermInputTrace == null ? null : (Stopwatch()..start());
     _frame(screen, rowCount);
+    if (placing != null) {
+      final micros = placing.elapsedMicroseconds;
+      _frameMicros += micros;
+      if (micros > _frameMicrosMost) _frameMicrosMost = micros;
+    }
     _activateIfReady();
     if (!_active) {
       // Still learning which rows scroll: the program follows the finger.
@@ -767,6 +887,7 @@ class RemoteScrollMirror {
   }
 
   void _forget() {
+    _renumbered++;
     _document.clear();
     _documentMin = 0;
     _documentMax = -1;
@@ -901,6 +1022,11 @@ class RemoteScrollMirror {
     );
     _remote += shift.rows;
     _movedAtMs = _nowMs;
+    final asked = _askedAtMs;
+    if (asked != null) {
+      _answerMs = math.max((_movedAtMs - asked).toDouble(), _answerMs * 0.8);
+      _askedAtMs = null;
+    }
     if (_pageInFlight) _pageLanded();
     // Gone further than it was asked: Claude Code speeds up wheel events it
     // reads together — as it does when busy drawing, however far apart they
@@ -1044,6 +1170,8 @@ class RemoteScrollMirror {
       probe,
       rows,
       _document,
+      // Made again each time: the document changes with every frame written.
+      rowsBySignature(_document, _signatureOf),
       _documentMin - _remote,
       _documentMax - _remote,
       skip: (k) => k.abs() <= reach,
@@ -1077,49 +1205,34 @@ class RemoteScrollMirror {
     ];
   }
 
-  /// The placing of [probe] rows of [rows] in [known] that most agree: screen
-  /// row `i` showing `known[_remote + i + d]`, for every `d` that puts a probe
-  /// row between [knownMin] and [knownMax] — and how many agree with the next
-  /// best placing. Null when none agrees at all.
+  /// The placing of [probe] rows of [rows] in [known] — [bySignature] its rows
+  /// by what they say — that most agree: screen row `i` showing
+  /// `known[_remote + i + d]`, for every `d` that puts a probe row between
+  /// [knownMin] and [knownMax] — and how many agree with the next best
+  /// placing. Null when none agrees at all. See [bestPlacing].
   ({int d, int agree, int share, int runnerUp})? _bestPlacing(
     List<int> probe,
     List<_Row> rows,
     Map<int, _DocRow> known,
+    Map<int, List<int>> bySignature,
     int knownMin,
     int knownMax, {
     bool Function(int d)? skip,
   }) {
     if (probe.isEmpty) return null;
-    ({int d, int agree, int share})? best;
-    var runnerUp = 0;
-    for (var d = knownMin - probe.last; d <= knownMax - probe.first; d++) {
-      if (skip != null && skip(d)) continue;
-      var agree = 0;
-      var comparable = 0;
-      for (final i in probe) {
-        final kept = known[_remote + i + d];
-        if (kept == null) continue;
-        comparable++;
-        if (kept.signature == rows[i].signature) agree++;
-      }
-      if (agree == 0) continue;
-      final current = best;
-      if (current == null || agree > current.agree) {
-        if (current != null) runnerUp = math.max(runnerUp, current.agree);
-        best = (d: d, agree: agree, share: comparable);
-      } else {
-        runnerUp = math.max(runnerUp, agree);
-      }
-    }
-    final found = best;
-    if (found == null) return null;
-    return (
-      d: found.d,
-      agree: found.agree,
-      share: found.share,
-      runnerUp: runnerUp,
+    return bestPlacing(
+      probe: probe,
+      signatureOf: (i) => rows[i].signature,
+      bySignature: bySignature,
+      isKnown: known.containsKey,
+      origin: _remote,
+      lowest: knownMin - probe.last,
+      highest: knownMax - probe.first,
+      skip: skip,
     );
   }
+
+  static int _signatureOf(_DocRow row) => row.signature;
 
   /// Whether a placing found far off ([_bestPlacing]) leaves no doubt:
   /// [_reattachAgree] rows agreeing — or [_reattachAgreeAll], when every row
@@ -1238,6 +1351,7 @@ class RemoteScrollMirror {
         (fixed(newBottom) || stoodStill(newBottom) && newBottom > shift.last)) {
       newBottom--;
     }
+    newBottom = math.max(newTop, math.min(newBottom, _lowestScrollingRow));
     if (newTop != _top || newBottom != _bottom) {
       inputTrace(() => 'mirror: scrolling rows $newTop..$newBottom');
       _learned = true;
@@ -1307,6 +1421,10 @@ class RemoteScrollMirror {
     final shown = _active ? _display.round() : _remote;
     final low = math.min(_remote, shown) - _keepRows;
     final high = math.max(_remote, shown) + _rowCount + _keepRows;
+    // Nothing outside them — what the last trim leaves while the screen stands
+    // apart from the program. Gone through anyway, every row was looked at on
+    // every frame written, for none to drop.
+    if (_documentMin >= low && _documentMax <= high) return;
     _document.removeWhere((row, _) => row < low || row > high);
     _documentMin = math.max(_documentMin, low);
     _documentMax = math.min(_documentMax, high);
@@ -1363,6 +1481,7 @@ class RemoteScrollMirror {
       probe,
       rows,
       aside,
+      _asideBySignature ??= rowsBySignature(aside, _signatureOf),
       _asideMin - _remote,
       _asideMax - _remote,
     );
@@ -1437,9 +1556,11 @@ class RemoteScrollMirror {
   /// screen — what is known set aside, to be taken back once a later frame
   /// shows where it stands ([_reattach]).
   void _lost() {
+    _renumbered++;
     inputTrace(() => 'mirror: frame not placed — starting again from it');
     // The rows still waiting were counted in books that are gone.
     cancelRequests();
+    _askedAtMs = null;
     _pageInFlight = false;
     _stopPrefetch();
     _setAside();
@@ -1573,7 +1694,9 @@ class RemoteScrollMirror {
         : math.max(0, (timeStamp - last).inMicroseconds) / 1e6;
     _dropLag();
     if (_chasing) {
-      // A critically damped spring towards the goal, solved exactly.
+      // A critically damped spring towards the goal, solved exactly — on what
+      // lies between the screen and it: the finger's own moves are carried in
+      // [scrollTo].
       final goal = _clamp(_target);
       final omega = _omegaNow;
       final x = _display - goal;
@@ -1612,23 +1735,57 @@ class RemoteScrollMirror {
     IndexAwareCircularBuffer<BufferLine> screen,
     int rowCount,
   ) {
-    _pageKeysSafe =
-        (pageKeysEnabled?.call() ?? false) && _promptShown(screen, rowCount);
+    _promptAt =
+        (pageKeysEnabled?.call() ?? false) ? _promptRow(screen, rowCount) : -1;
+    _pageKeysSafe = _promptAt >= 0;
   }
 
-  /// Whether [screen] shows Claude Code's prompt: a row starting `❯` with a
-  /// rule (`────`) right above it, and another a few rows below — its input
-  /// box.
+  /// The lowest row that may scroll: over Claude Code's prompt box, the row
+  /// above the blank one over its rule ([_seedScrollingRows]) — else the last.
   ///
-  /// ⚠️ **Not a list to choose from.** A question it asks — "Do you want to
-  /// proceed?" over "❯ 1. Yes" — has its own words above the `❯`, not a rule,
-  /// and Page Up or Down there would move the choice instead of scrolling. In
-  /// any doubt, no page keys: wheel events only ever scroll.
-  static bool _promptShown(
+  /// ⚠️ **The blank row over the box was taken for content.** Blank, it never
+  /// stands still as far as [_widenScrollingRows] can tell, so a scroll down
+  /// widened the rows that scroll over it, and it was written into the
+  /// document as a row of the transcript — over rows not yet seen to move,
+  /// which were drawn blank from then on (a fake of 2.1.309's layout in
+  /// `mobile/test/remote_scroll_mirror_test.dart`, 2026-10-24).
+  int get _lowestScrollingRow => _promptAt >= 0 ? _promptAt - 3 : _rowCount - 1;
+
+  /// Which rows scroll, read off Claude Code's screen before any scroll has
+  /// shown them: the rows above its prompt box ([_promptRow]) — less the first,
+  /// where it pins the prompt of the rows on screen once that has scrolled
+  /// off, and the last, just over the box's rule, where a "jump to bottom"
+  /// line goes. Only for a program whose page keys scroll it, with nothing
+  /// known of this grid, and only while it is quiet: at work its spinner and
+  /// todo list stand over the box, and are not content. Scrolls widen them as
+  /// they learn ([_widenScrollingRows]), and take back a row that stands still
+  /// while the content moves ([_learnFixedRows]).
+  ///
+  /// ⚠️ **An agent's first scroll waited to learn them.** Until one scroll had
+  /// placed two frames, nothing was drawn from the document and nothing was
+  /// fetched ahead: the screen moved with the program's redraws for the first
+  /// 150–200 ms, a round trip behind the finger, went on 3 rows by itself
+  /// after the finger stopped, and the first flick met the edge of one screen
+  /// (an iPhone 14 against Claude Code faked over a 100 ms round trip,
+  /// 2026-10-23).
+  void _seedScrollingRows(
     IndexAwareCircularBuffer<BufferLine> screen,
     int rowCount,
-  ) =>
-      _promptRow(screen, rowCount) >= 0;
+  ) {
+    if (_top != null || _bottom != null) return;
+    if (!(pageKeysEnabled?.call() ?? false)) return;
+    final prompt = _promptRow(screen, rowCount);
+    // The prompt, the rule over it, and the row over that, left out.
+    final bottom = prompt - 3;
+    const top = 1;
+    if (prompt < 0 || bottom - top + 1 < 2 * _minPage) return;
+    _top = top;
+    _bottom = bottom;
+    _learned = true;
+    inputTrace(
+      () => 'mirror: scrolling rows $top..$bottom read off the prompt box',
+    );
+  }
 
   /// The text of the prompt's row ([_promptRow]), or null when none shows.
   static String? _promptText(
@@ -1639,7 +1796,14 @@ class RemoteScrollMirror {
     return row < 0 ? null : screen[row].getText();
   }
 
-  /// The screen row of Claude Code's prompt — see [_promptShown] — or -1.
+  /// The screen row of Claude Code's prompt, or -1: a row starting `❯` with a
+  /// rule (`────`) right above it, and another a few rows below — its input
+  /// box.
+  ///
+  /// ⚠️ **Not a list to choose from.** A question it asks — "Do you want to
+  /// proceed?" over "❯ 1. Yes" — has its own words above the `❯`, not a rule,
+  /// and Page Up or Down there would move the choice instead of scrolling. In
+  /// any doubt, no page keys: wheel events only ever scroll.
   static int _promptRow(
     IndexAwareCircularBuffer<BufferLine> screen,
     int rowCount,
@@ -1711,22 +1875,73 @@ class RemoteScrollMirror {
     if (lines.abs() < page) return fast;
     if (!requestsIdle() || _wheelsGliding) return true;
     final direction = lines.sign;
-    if (!send(direction)) {
+    final count = _pagesAtOnce(lines, page);
+    if (!send(direction, count)) {
       _pageKeysRefused = true;
       inputTrace(() => 'mirror: page key refused — wheel events from here');
       return false;
     }
+    _asked();
     _pageInFlight = true;
     _pageNowhere = false;
     _pageDirection = direction;
+    _pageCount = count;
     _pageSentAtMs = _nowMs;
     _pageFromRemote = _remote;
-    _requested += direction * page;
+    _requested += direction * page * count;
     _requestedAtMs = _nowMs;
     _askedDirection = direction;
-    _rowsAsked += page;
-    _pagesSent++;
+    _rowsAsked += page * count;
+    _pagesSent += count;
     return true;
+  }
+
+  /// How many page keys go together for [lines] rows, pages of [page] rows:
+  /// one — unless the program has rows already known to cross first. Then as
+  /// many as [lines] holds, up to [_maxPagesAtOnce], as long as they leave its
+  /// screen among the rows known.
+  ///
+  /// ⚠️ **What has been seen came back at the pace of what has not.** Rows
+  /// fetched ahead, or read before, are drawn at once — but the program, one
+  /// page a round trip, has to cross them before it brings anything new: in a
+  /// flick over 120 rows fetched ahead the finger got to their edge long before
+  /// the program did, and the screen held there ~250 ms (an iPhone 14 against
+  /// Claude Code faked over a 100 ms round trip, 2026-10-23). Pages that land
+  /// among rows known are placed like any frame, however far they went: a
+  /// frame shares its rows with the document, not only with the last frame.
+  /// Into rows not yet seen a page still goes alone, so that what it brings
+  /// overlaps what is known.
+  int _pagesAtOnce(int lines, int page) {
+    final top = _top;
+    final bottom = _bottom;
+    if (top == null || bottom == null || _documentMax < _documentMin) return 1;
+    // The rows known between the program's screen and their edge, its way.
+    final known = lines < 0
+        ? _remote + top - _documentMin
+        : _documentMax - (_remote + bottom);
+    final most = math.min(lines.abs() ~/ page, known ~/ page);
+    return most.clamp(1, _maxPagesAtOnce);
+  }
+
+  /// How far past where the program was last seen it may be asked to go, its
+  /// [direction]: [_maxAhead] — or, while its page keys can take it, to the
+  /// edge of the rows known, which it has to cross before it brings anything
+  /// new ([_pagesAtOnce]).
+  int _reachAhead(int direction) {
+    final top = _top;
+    final bottom = _bottom;
+    if (requestPage == null ||
+        !_pageKeysSafe ||
+        _pageKeysRefused ||
+        top == null ||
+        bottom == null ||
+        _documentMax < _documentMin) {
+      return _maxAhead;
+    }
+    final known = direction < 0
+        ? _remote + top - _documentMin
+        : _documentMax - (_remote + bottom);
+    return math.max(_maxAhead, known);
   }
 
   /// A frame placed while a page key was on its way: once the program has
@@ -1737,6 +1952,12 @@ class RemoteScrollMirror {
   void _pageLanded() {
     final moved = (_remote - _pageFromRemote) * _pageDirection;
     if (moved <= 0) return;
+    // Pages sent together may be drawn one by one: landed once most of the
+    // way is gone — the size of a page is only an estimate.
+    if (_pageCount > 1 &&
+        moved < (_pageCount - 1) * _pageRowsNow + _pageRowsNow ~/ 2) {
+      return;
+    }
     _pageInFlight = false;
     _pageLandedAtMs = _nowMs;
     _requested = _remote;
@@ -1768,6 +1989,12 @@ class RemoteScrollMirror {
     _pageInFlight = false;
     _pageNowhere = _remote == _pageFromRemote;
     if (_pageNowhere && requestsIdle()) _requested = _remote;
+    // A page up that went nowhere: the program's first row is where its
+    // transcript starts — nothing above it to fetch ahead ([_prefetch]).
+    final top = _top;
+    if (_pageNowhere && _pageDirection < 0 && top != null) {
+      _topRow = _remote + top;
+    }
   }
 
   /* Fetching ahead */
@@ -1819,6 +2046,8 @@ class RemoteScrollMirror {
       _takeGrid(screen, rowCount, now.lineHeight);
       _load();
     }
+    // Quiet since [_prefetchAfter]: what the prompt box says can be read.
+    _seedScrollingRows(screen, rowCount);
     final top = _top;
     final bottom = _bottom;
     if (top == null || bottom == null) {
@@ -1837,7 +2066,7 @@ class RemoteScrollMirror {
     final want = _remote + top - _prefetchRows;
     final topRow = _topRow;
     final above = _remote + top - _documentMin;
-    if (_documentMin <= want) {
+    if (above > _prefetchRows - _prefetchGain) {
       return _skipPrefetch('$above rows above the screen known already');
     }
     if (topRow != null && _documentMin <= topRow) {
@@ -1877,6 +2106,8 @@ class RemoteScrollMirror {
     _asksSpared = 0;
     _rowsAsked = 0;
     _pagesSent = 0;
+    _frameMicros = 0;
+    _frameMicrosMost = 0;
     _pageKeysRefused = false;
     _resyncs = 0;
     _missesInARow = 0;
@@ -1925,7 +2156,8 @@ class RemoteScrollMirror {
     final top = _top ?? 0;
     inputTrace(
       () => 'mirror: fetched ahead in ${_nowMs - _prefetchStartedAtMs}ms'
-          ' · ${_remote + top - _documentMin} rows above the screen known'
+          ' · ${_display.round() + top - _documentMin} rows above the screen'
+          ' known'
           ' · $_pagesSent pages',
     );
     _settling = true;
@@ -1959,6 +2191,18 @@ class RemoteScrollMirror {
     return math.max(0, math.min(most, wanted));
   }
 
+  /// How many rows ahead of the finger the program is asked to be while the
+  /// finger is fast enough for page keys ([_pageSpeed]): a page, and what the
+  /// finger covers while one comes back ([_pageLatency]) — so the next page
+  /// goes before the finger gets to the edge of what is known. Zero when no
+  /// page key can go.
+  int _pageLeadRows() {
+    if (requestPage == null || !_pageKeysSafe || _pageKeysRefused) return 0;
+    final page = _pageRowsNow;
+    if (page < _minPage) return 0;
+    return page + (_fingerVelocity.abs() * _pageLatency).round();
+  }
+
   /// The program asked to scroll to where the finger is, and a little ahead —
   /// while it scrolls; once it has ended, [_settleStep].
   void _requestRemote() {
@@ -1971,7 +2215,13 @@ class RemoteScrollMirror {
       _asksSpared++;
       return;
     }
-    final lead = moving ? (held ? _maxAhead : _leadRows()) * _direction : 0;
+    final fast = moving && (held || _fingerVelocity.abs() >= _pageSpeed);
+    final ahead = held
+        ? _maxAhead
+        : fast
+            ? math.max(_leadRows(), _pageLeadRows())
+            : _leadRows();
+    final lead = moving ? ahead * _direction : 0;
     final wanted = _target.round() + lead;
     // ⚠️ **Never far past where the program was last seen.** A fling runs
     // hundreds of rows ahead of a program that scrolls ~80 a second, and all of
@@ -1981,7 +2231,8 @@ class RemoteScrollMirror {
     // rows wrong (measured on a phone, 2026-10-06). Asked [_maxAhead] at most
     // past the last row seen, the rest is asked for as the program gets there:
     // each frame asks again.
-    final goal = wanted.clamp(_remote - _maxAhead, _remote + _maxAhead);
+    final goal =
+        wanted.clamp(_remote - _reachAhead(-1), _remote + _reachAhead(1));
     final lines = goal - _requested;
     if (lines == 0) return;
     // While the finger moves the program is only asked onwards. Ahead of the
@@ -1990,7 +2241,6 @@ class RemoteScrollMirror {
     // turn, and glides on the old way a few frames first. Coming back to the
     // row on screen is for when the scroll comes to rest.
     if (_scrolling && _direction != 0 && lines.sign != _direction) return;
-    final fast = moving && (held || _fingerVelocity.abs() >= _pageSpeed);
     if (_pageOrWait(lines, fast: fast)) return;
     _requested = goal;
     _requestedAtMs = _nowMs;
@@ -1998,6 +2248,7 @@ class RemoteScrollMirror {
     _rowsAsked += lines.abs();
     _wheelsAtMs = _nowMs;
     requestLines(lines);
+    _asked();
   }
 
   /// Whether the finger, moving over rows already known, is far enough from
@@ -2045,8 +2296,9 @@ class RemoteScrollMirror {
     final now = _nowMs;
     // Not moved, rather than not drawn: an agent at work redraws its spinner
     // every few frames, and a program at an end never moves however it draws.
-    if (now - _movedAtMs < _resyncAfter.inMilliseconds) return;
-    if (now - _requestedAtMs < _resyncAfter.inMilliseconds) return;
+    final quiet = math.max(_resyncAfter.inMilliseconds, _quietMs);
+    if (now - _movedAtMs < quiet) return;
+    if (now - _requestedAtMs < quiet) return;
     if (!requestsIdle()) return;
     if (_resyncs >= _maxResyncs) return;
     _resyncs++;
@@ -2082,8 +2334,8 @@ class RemoteScrollMirror {
     // see [_resyncIfStalled].
     final quiet = !_pageInFlight &&
         requestsIdle() &&
-        now - _movedAtMs >= _settleQuiet.inMilliseconds &&
-        now - _requestedAtMs >= _settleQuiet.inMilliseconds;
+        now - _movedAtMs >= _quietMs &&
+        now - _requestedAtMs >= _quietMs;
     // Nothing on its way and standing still: the program is where it is,
     // whatever was asked of it.
     if (quiet) _requested = _remote;
@@ -2096,7 +2348,8 @@ class RemoteScrollMirror {
     final far = diff.abs() > _landingRows;
     if (!quiet && (!far || sign != _askedDirection)) return;
     final want = far ? row - sign * _landingBurst : row;
-    final goal = want.clamp(_remote - _maxAhead, _remote + _maxAhead);
+    final goal =
+        want.clamp(_remote - _reachAhead(-1), _remote + _reachAhead(1));
     var lines = goal - _requested;
     // Asked that far already, and on its way.
     if (lines == 0 || lines.sign != sign) return;
@@ -2110,7 +2363,26 @@ class RemoteScrollMirror {
     _rowsAsked += lines.abs();
     _wheelsAtMs = _nowMs;
     requestLines(lines);
+    _asked();
   }
+
+  /// A request went out: when it did, unless an older one is still unanswered.
+  void _asked() => _askedAtMs ??= _nowMs;
+
+  /// How long the program must have stood still, and nothing been asked of it,
+  /// for it to be where it is going to stay: [_settleQuiet], or a little over
+  /// how long it has lately taken to answer, when that is longer.
+  ///
+  /// ⚠️ **Over a slow link it was asked twice.** A redraw came back 200 ms and
+  /// more after its request, and after 100 ms of nothing the program was taken
+  /// to have stopped — the scroll handler, too, counts a batch answered after
+  /// 120 ms with none: the books were put back to where the program was, the
+  /// same rows asked again, and the second answer moved it on after the screen
+  /// had gone back to it — the screen jumping rows by itself (an iPhone 14
+  /// against Claude Code faked over a 200 ms round trip, 2026-10-24).
+  int get _quietMs => math
+      .max(_settleQuiet.inMilliseconds, (_answerMs * 1.25).round())
+      .clamp(0, _quietMost.inMilliseconds);
 
   /// The program stands at the row on screen: drawn from it again.
   void _finishSettle() {
@@ -2124,7 +2396,9 @@ class RemoteScrollMirror {
           ' · $_settleAsks asks to come back · rows kept from the program\'s'
           ' own $_rowsGuarded, put right $_rowsMended'
           ' · $_rowsAsked rows asked ($_pagesSent pages),'
-          ' $_asksSpared asks spared over known rows',
+          ' $_asksSpared asks spared over known rows'
+          ' · frames placed in ${(_frameMicros / 1000).toStringAsFixed(1)}ms,'
+          ' the longest ${(_frameMicrosMost / 1000).toStringAsFixed(1)}ms',
     );
     _settling = false;
     _settleTimer?.cancel();
@@ -2236,6 +2510,85 @@ class _Shift {
   int get last => agreeing.isEmpty ? -1 : agreeing.last;
 }
 
+/// AUTONOMOUS PATCH: [rows]' keys by what they say — for each signature, the
+/// rows that show it — for [bestPlacing] to look a screen's rows up in.
+@visibleForTesting
+Map<int, List<int>> rowsBySignature<T>(
+  Map<int, T> rows,
+  int Function(T row) signatureOf,
+) {
+  final index = <int, List<int>>{};
+  rows.forEach((row, value) {
+    (index[signatureOf(value)] ??= <int>[]).add(row);
+  });
+  return index;
+}
+
+/// AUTONOMOUS PATCH: the placing of the [probe] screen rows among the rows
+/// known that most agree — screen row `i` showing row `origin + i + d` — for
+/// every `d` from [lowest] to [highest] that [skip] leaves: how many agree,
+/// how many could (`share`: a row is known there, [isKnown]), and how many
+/// agree with the next best placing. A tie goes to the lowest `d`. Null when
+/// none agrees at all. [signatureOf] is what screen row `i` says, and
+/// [bySignature] the rows known by what they say ([rowsBySignature]).
+///
+/// ⚠️ **Counted from where a row was seen, not tried at every placing.** Tried
+/// one by one, every placing compared every probe row: with the thousands of
+/// rows a long session keeps, one look was over a hundred thousand lookups —
+/// 2ms for 4,000 rows on a laptop, several times that on a phone — on this
+/// thread, while the finger moved: on every frame not placed nearby, and every
+/// look among the rows set aside. Each probe row now votes only for the
+/// placings that put it on a row that says the same, which is the same count:
+/// 15µs for the same rows, 0.5ms with every row one of four texts (measured
+/// 2026-10-23).
+@visibleForTesting
+({int d, int agree, int share, int runnerUp})? bestPlacing({
+  required List<int> probe,
+  required int Function(int screenRow) signatureOf,
+  required Map<int, List<int>> bySignature,
+  required bool Function(int row) isKnown,
+  required int origin,
+  required int lowest,
+  required int highest,
+  bool Function(int d)? skip,
+}) {
+  if (highest < lowest) return null;
+  // One count per placing, `d - lowest`: a few thousand at most, as many as
+  // the rows known span.
+  final votes = Int32List(highest - lowest + 1);
+  for (final i in probe) {
+    final seen = bySignature[signatureOf(i)];
+    if (seen == null) continue;
+    for (final row in seen) {
+      final d = row - origin - i;
+      if (d >= lowest && d <= highest) votes[d - lowest]++;
+    }
+  }
+  int? best;
+  var agree = 0;
+  var runnerUp = 0;
+  for (var at = 0; at < votes.length; at++) {
+    final count = votes[at];
+    if (count == 0) continue;
+    final d = lowest + at;
+    if (skip != null && skip(d)) continue;
+    if (count > agree) {
+      runnerUp = math.max(runnerUp, agree);
+      best = d;
+      agree = count;
+    } else {
+      runnerUp = math.max(runnerUp, count);
+    }
+  }
+  final d = best;
+  if (d == null) return null;
+  var share = 0;
+  for (final i in probe) {
+    if (isKnown(origin + i + d)) share++;
+  }
+  return (d: d, agree: agree, share: share, runnerUp: runnerUp);
+}
+
 /// AUTONOMOUS PATCH: the program's whole screen, for [RemoteScrollMirror] to
 /// start fetching ahead from on its own — see [RemoteScrollMirror.readScreen].
 typedef RemoteScreen = ({
@@ -2270,10 +2623,6 @@ class RemoteScrollMemory {
 
   /// By grid ([RemoteScrollMirror._gridKey]), least recently kept first.
   final _grids = <String, _Known>{};
-
-  /// Whether which rows scroll is known in any grid — what fetching ahead
-  /// before the first scroll needs.
-  bool get knowsScrollingRows => _grids.isNotEmpty;
 
   void _keep(String grid, _Known known) {
     _grids.remove(grid);
