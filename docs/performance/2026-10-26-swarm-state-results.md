@@ -6,7 +6,8 @@ branch and compared with [the baseline on main](2026-10-26-swarm-state-baseline.
 - **Goal 4:** the migration dry run.
 - **Working together:** the suites and an isolated end-to-end run check that the parts work together.
 
-**Status:** goals 1, 3 and 4 are met on `44d51aae8`.
+**Status:** goals 1, 3 and 4 are met on `44d51aae8`. The migration dry run also ran on `63a497c0e`, the base that
+ships: rollback there refuses, by design, the Swarms the previous release would misread.
 
 A first run on `b4b28aec8` found that goal 3 held for what clients receive, but not for what the server reads from
 MongoDB. That was fixed in its own group (#1745). Its before and after numbers are kept below.
@@ -172,19 +173,46 @@ Idle, a Desktop change read costs 44 KB and a host tick 5 KB.
 
 ## Goal 4: the migration dry run
 
-`scripts/swarm-parts/dry-run.ts`, on its own loopback replica set, ran at `4b8b5ea8a`. It exited 0 in 15.3 s.
+`scripts/swarm-parts/dry-run.ts` runs on its own loopback replica set.
+
+### On the base that ships
+
+This run is from a clean checkout of `63a497c0e`. That base adds the rollback guards of #1748–#1750: rollback refuses
+a Swarm that the previous release would misread. The dry run now writes one such Swarm of each kind after the migration
+(step 5b). It exited 0 in 21.0 s.
 
 | Step | Result | Time |
 |---|---|---|
-| Seed 13 synthetic production-shaped Swarms | the big one: 1.16 MB, 196 groups, 40,000 messages; medium: 412.2 KB, 51 groups, 8,000 messages; ten small; one from before projects | 2,863 ms |
-| Migrate | 13 ok, 0 failed, each read back and verified field by field, message count and order unchanged; big 952 ms, medium 209 ms, the small ones 20–25 ms | 3,561 ms |
+| Seed 13 synthetic production-shaped Swarms | the big one: 1.16 MB, 196 groups, 40,000 messages; medium: 412.2 KB, 51 groups, 8,000 messages; ten small; one from before projects | 3,024 ms |
+| Migrate | 13 ok, 0 failed, each read back and verified field by field, message count and order unchanged; big 920 ms, medium 193 ms, the small ones 19–25 ms | 3,482 ms |
 | Migrate again | nothing to do | 38 ms |
-| Read by parts | the big one: first load 316.6 KB, idle change read 2.6 KB, host form 10.8 KB in full, 108 B idle; old Desktop read 1,130.8 KB | 189 ms |
-| Real commands through the store, then poll | 4 commands, 1 part written each; change read after two of them 6.3 KB (1 group); the host running that work 4.5 KB, another host 108 B | 289 ms |
-| Roll back | 13 ok: the 2 written since rebuilt from their parts, the other 11 identical to their old state | 190 ms |
+| Read by parts | the big one: first load 316.6 KB, idle change read 2.6 KB, host form 10.8 KB in full, 108 B idle; old Desktop read 1,130.8 KB | 182 ms |
+| Real commands through the store, then poll | 4 commands, 1 part written each; change read after two of them 6.3 KB (1 group); the host running that work 4.5 KB, another host 108 B | 296 ms |
+| 5b. Unsafe for the previous release, written after the migration | a private conversation in one small Swarm, a lost task in another | 30 ms |
+| Roll back | **11 of 13 rolled back**: the 2 written since are rebuilt from their parts, and the other 9 are identical to their old state. **2 refused on purpose** (below) | 195 ms |
+| Old-shape read of every rolled-back Swarm | ok for all 11: format 1, revision above every message sequence. This checks the rolled-back state's shape with this branch's reader, not the previous release's binary or its access checks | 78 ms |
+
+The 2 refusals change nothing. The parts stay authoritative, so nothing is lost or made public, and the remedy is to
+roll forward with a fix:
+- **The Swarm with a private conversation:** the previous release would make its private conversation readable by
+  every project reader.
+- **The Swarm with a lost task:** the previous release would read that task as active work.
+
+### Earlier, at `4b8b5ea8a`
+
+This run is from before the rollback guards. It exited 0 in 15.3 s, and rolled back **13 of 13**:
+
+| Step | Result | Time |
+|---|---|---|
+| Seed | the same 13 Swarms | 2,863 ms |
+| Migrate | 13 ok, 0 failed, verified; big 952 ms, medium 209 ms, the small ones 20–25 ms | 3,561 ms |
+| Migrate again | nothing to do | 38 ms |
+| Read by parts | the same sizes as above | 189 ms |
+| Real commands through the store, then poll | the same as above | 289 ms |
+| Roll back | 13 ok: the 2 written since are rebuilt from their parts, and the other 11 are identical to their old state | 190 ms |
 | Old read of every Swarm | ok: format 1, revision above every message sequence | 79 ms |
 
-`integration/superTabMigration.test.ts` passes as part of `npm run test:super-tabs` on the same head. A first dry run on
+`integration/superTabMigration.test.ts` passed as part of `npm run test:super-tabs` at `4b8b5ea8a`. A first dry run on
 `b4b28aec8` gave the same results (3,513 ms to migrate).
 
 ## Isolated end to end
