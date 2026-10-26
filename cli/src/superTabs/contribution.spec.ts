@@ -4,12 +4,13 @@ import { ContributionPreparations, prepareContribution, prepareTeamContribution 
 import { mkdtemp, rm, stat } from 'node:fs/promises'
 import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { swarmReply } from './fixtures/read/index.js'
 
 const GiB = 1024 ** 3
 function fixture() {
   const core = fakeCore()
   const state: Record<string, unknown> = { project: { machineId: core.daemon.machineId(), cwd: '/repo', repositoryUrl: 'https://github.com/example/project' } }
-  const backend = vi.fn(async () => ({ state }))
+  const backend = vi.fn(async (_core: unknown, _method: string, path: string) => swarmReply(path, state))
   const close = vi.fn()
   const request = vi.fn(async () => ({ engines: [
     { engine: 'claude', installed: true, signedIn: true },
@@ -26,6 +27,12 @@ function fixture() {
   return { run, state, deps, core, request, close }
 }
 describe('one-field machine preparation', () => {
+  // #1726: a whole Swarm is no longer read; its parts are, through the daemon's Swarm reads.
+  it('reads the Swarm by parts, as the person', async () => {
+    const f = fixture()
+    await f.run()
+    expect(f.deps.backend.mock.calls.map(c => [c[1], c[2]])).toEqual([['GET', '/api/super-tabs/tab/parts']])
+  })
   it('contributes a swarm workspace without asking for a project or cloning one', async () => {
     const f = fixture()
     const dataDir = await mkdtemp(join(tmpdir(), 'harness-swarm-contribution-'))

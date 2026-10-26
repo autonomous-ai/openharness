@@ -6,6 +6,7 @@ import { LocalClient } from './harness/client.js'
 import { CLI_ROOT, IsolatedDaemon, until } from './harness/daemon.js'
 import { FakeBackend, type FakeMachine } from './harness/fakeBackend.js'
 import { retainContributions } from '../src/superTabs/retention.js'
+import { overOldRoutes } from './harness/swarmReads.js'
 
 const ME: FakeMachine = { machineId: 'c9'.repeat(16), computerId: 'legacy-sw-test', name: 'Fixture', token: 'legacy-sw-token' }
 let daemon: IsolatedDaemon | undefined, relay: FakeBackend | undefined, client: LocalClient | undefined
@@ -20,12 +21,12 @@ it('old Lead and worker restarts and stopped resume gain only their skill; perso
     machineId: ME.machineId, expiresAt: Date.now() + 30 * 24 * 3600_000, updatedAt: Date.now(), signInEpoch: 'e2e' }), { mode: 0o600 })
   onTestFailed(() => console.log(d.log().split('\n').slice(-120).join('\n')))
   const agents: Array<Record<string, any>> = [], groups: Array<Record<string, any>> = []
-  b.superTabs = async (_method, raw) => {
+  b.superTabs = overOldRoutes(async (_method, raw) => {
     const path = new URL(raw, b.httpUrl).pathname
     if (path === `/api/super-tabs/hosts/${ME.machineId}`) return { data: agents.map(agent => ({ tabId: 'tab', agent, observers: [] })) }
     if (path === '/api/super-tabs/tab') return { data: { state: { agents: agents.filter(a => a.id !== 'removed'), conversations: groups } } }
     return { data: [] }
-  }
+  })
   await d.start(); const c = await LocalClient.connect(d, { machineId: ME.machineId }); client = c
   const cwd = join(d.projectsDir, 'legacy'); mkdirSync(cwd)
   writeFileSync(join(cwd, 'AGENTS.md'), 'Project rules stay here\n')

@@ -12,6 +12,7 @@ import { LocalClient } from './harness/client.js'
 import { CLI_ROOT, until, type IsolatedDaemon } from './harness/daemon.js'
 import { FakeBackend } from './harness/fakeBackend.js'
 import { signedInDaemon, writeE2ee } from './harness/fleet.js'
+import { overOldRoutes } from './harness/swarmReads.js'
 
 const TAB = 'shared-work', GROUP = 'offline-editing'
 let backend: FakeBackend | undefined
@@ -46,7 +47,7 @@ it('coordinates an owner-contributed agent while keeping guest machine access se
   let revision = 0, contributionAllowed = true
   const agentId = (machine: string, harness: string) => createHash('sha256').update(JSON.stringify([machine, harness])).digest('hex').slice(0, 24)
   const failure = () => ({ status: 403, error: { code: 'FORBIDDEN', message: 'This contribution is no longer shared.' } })
-  relay.superTabs = async (method, raw, body, caller) => {
+  relay.superTabs = overOldRoutes(async (method, raw, body, caller) => {
     const path = new URL(raw, relay.httpUrl).pathname
     if (path.startsWith('/api/super-tabs/hosts/')) {
       expect(path.split('/')[4]).toBe(caller.machineId)
@@ -124,7 +125,7 @@ it('coordinates an owner-contributed agent while keeping guest machine access se
       return { data: {} }
     }
     throw new Error(`Unexpected route ${method} ${path}`)
-  }
+  })
   await Promise.all(daemons.map(daemon => daemon.start()))
   await until('both accounts connected', () => relay.nodeUp(starter.machineId) && relay.nodeUp(member.machineId), 30_000)
   const onA = await LocalClient.connect(a, { machineId: starter.machineId }), onB = await LocalClient.connect(b, { machineId: member.machineId })

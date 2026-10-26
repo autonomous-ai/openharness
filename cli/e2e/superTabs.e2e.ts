@@ -13,6 +13,7 @@ import { TerminalBinaryKind } from '../src/lib/terminalBinary.js'
 import { LocalClient } from './harness/client.js'
 import { CLI_ROOT, IsolatedDaemon, until } from './harness/daemon.js'
 import { FakeBackend, type FakeMachine } from './harness/fakeBackend.js'
+import { overOldRoutes } from './harness/swarmReads.js'
 
 const ME: FakeMachine = { machineId: 'b8'.repeat(16), computerId: 'e2e-super-tab-computer', name: 'Fixture', token: 'e2e-super-tab-token' }
 const TAB = 'fixture-tab'
@@ -49,7 +50,7 @@ it('starts either engine once, posts to its captured group and delivers shared i
   let loseNativeReply = true
   let revision = 0, allowed = true, deliveryReads = 0
   const idFor = (harnessId: string) => createHash('sha256').update(JSON.stringify([ME.machineId, harnessId])).digest('hex').slice(0, 24)
-  relay.superTabs = async (method, raw, body) => {
+  relay.superTabs = overOldRoutes(async (method, raw, body) => {
     const url = new URL(raw, relay.httpUrl), path = url.pathname
     if (path === `/api/super-tabs/hosts/${ME.machineId}/pools`) return { data: [] }
     if (path === `/api/super-tabs/hosts/${ME.machineId}/assignments`) return { data: assignments }
@@ -139,7 +140,7 @@ it('starts either engine once, posts to its captured group and delivers shared i
       return { data: {} }
     }
     throw new Error(`Unexpected request ${method} ${raw}`)
-  }
+  })
   await d.start()
   const client = await LocalClient.connect(d, { machineId: ME.machineId }); clients.push(client)
   const cwd = join(d.projectsDir, 'project'); mkdirSync(cwd, { recursive: true })
@@ -385,7 +386,7 @@ it.each(['reported', 'legacy'] as const)('Change agent keeps its member and deli
   const agents: Array<Record<string, any>> = []
   let rebinds = 0
   const delivery = { id: 'replacement-delivery', status: 'queued', claimId: null as string | null }
-  relay.superTabs = async (method, raw, body) => {
+  relay.superTabs = overOldRoutes(async (method, raw, body) => {
     const path = new URL(raw, relay.httpUrl).pathname
     if (path.endsWith('/pools') || path.endsWith('/assignments')) return { data: [] }
     if (path === `/api/super-tabs/hosts/${ME.machineId}`) return { data: agents.map(agent => ({ tabId: TAB, agent, observers: [] })) }
@@ -408,7 +409,7 @@ it.each(['reported', 'legacy'] as const)('Change agent keeps its member and deli
       return { data: { message: { id: 'replacement-message', conversationId: 'feature', author: { name: 'Fixture human' }, text: `verify-switched-${mode}` } } }
     }
     throw new Error(`Unexpected request ${method} ${path}`)
-  }
+  })
   await d.start()
   onTestFailed(() => console.log(d.log().split('\n').slice(-100).join('\n')))
   const client = await LocalClient.connect(d, { machineId: ME.machineId }); clients.push(client)

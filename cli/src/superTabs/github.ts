@@ -8,11 +8,15 @@
  */
 import type { CoreApi } from '../core/api.js'
 import { swarmGitHubSessionDir, writeSessionGitHub } from '../lib/swarmGitHub.js'
-import { backend, identifier, object, SuperTabHostError } from './host.js'
+import { backend, identifier, object, SuperTabHostError } from './wire.js'
+import type { SwarmSources } from './host.js'
 
 type Json = Record<string, unknown>
 type Session = NonNullable<ReturnType<CoreApi['agents']['byAgent']>>
 const list = (value: unknown) => Array.isArray(value) ? value.map(object) : []
+/** How old a host form a token request may take: git asks for one on every fetch and push, and the server checks the task on
+ *  each request anyway. */
+const ROSTER_FRESH_MS = 5_000
 
 /** The session's own folder when it was started to use the app, else null. */
 function githubDir(core: CoreApi, session: Session | undefined): string | null {
@@ -29,7 +33,7 @@ const decided = (error: SuperTabHostError) => (error.status >= 400 && error.stat
  * nearly always), the first that has a task answering. For a session started to use the app, its gh login and commit
  * trailers are written from the answer, and its login emptied on a refusal.
  */
-export async function githubToken(core: CoreApi, harnessId: string): Promise<Json> {
+export async function githubToken(core: CoreApi, harnessId: string, sources: SwarmSources): Promise<Json> {
   const machineId = core.daemon.machineId()
   if (!identifier(machineId) || !identifier(harnessId)) return { error: 'INVALID_REQUEST' }
   const session = core.agents.byAgent(harnessId)
@@ -37,7 +41,7 @@ export async function githubToken(core: CoreApi, harnessId: string): Promise<Jso
   const dir = githubDir(core, session)
   let refusal: Json | null = null
   try {
-    const rows = list(await backend(core, 'GET', `/api/super-tabs/hosts/${machineId}`)).filter(row => {
+    const rows = list((await sources.feed.current(ROSTER_FRESH_MS)).roster).filter(row => {
       const agent = object(row.agent)
       return identifier(row.tabId) && identifier(agent.id) && agent.machineId === machineId && agent.harnessId === harnessId
         && row.closeSession !== true && row.stopRequested !== true
@@ -84,7 +88,7 @@ export class GitHubTokenRefresher {
   private readonly now: () => number
   private readonly intervalMs: number
 
-  constructor(private readonly core: CoreApi, options: { now?: () => number; intervalMs?: number } = {}) {
+  constructor(private readonly core: CoreApi, private readonly sources: () => SwarmSources, options: { now?: () => number; intervalMs?: number } = {}) {
     this.now = options.now ?? Date.now
     this.intervalMs = options.intervalMs ?? REFRESH_INTERVAL_MS
   }
@@ -120,7 +124,8 @@ export class GitHubTokenRefresher {
     const machineId = this.core.daemon.machineId()
     if (!identifier(machineId)) return
     let work: Json[]
-    try { work = list(await backend(this.core, 'GET', `/api/super-tabs/hosts/${machineId}/assignments`)) } catch (error) {
+    // A fresh read each minute: a task that ended takes its token away within that minute.
+    try { work = list((await this.sources().feed.refresh()).assignments) } catch (error) {
       if (error instanceof SuperTabHostError) return
       throw error
     }
@@ -135,7 +140,7 @@ export class GitHubTokenRefresher {
       }
       const known = this.primed.get(id)
       if (known && known.assignmentId === task.assignmentId && known.expiresAt - this.now() > RENEW_BELOW_MS) continue
-      const answer = await githubToken(this.core, id)
+      const answer = await githubToken(this.core, id, this.sources())
       const expiresAt = Date.parse(String(object(answer.value).expiresAt))
       if (answer.ok === true && Number.isFinite(expiresAt)) this.primed.set(id, { assignmentId: String(task.assignmentId), expiresAt })
       else this.primed.delete(id)

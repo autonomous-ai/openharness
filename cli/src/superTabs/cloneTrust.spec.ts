@@ -12,6 +12,7 @@ import { recordTrustIn } from '../engines/kit/folderTrust.js'
 import { prepareContribution } from './contribution.js'
 import { prepareSwarmProject } from './projectFolder.js'
 import { ContributedMachines } from './machines.js'
+import { hostForm, swarmReply } from './fixtures/read/index.js'
 
 // Never read the person's login profile: the fixture owns the engine locations.
 vi.mock('../engines/kit/launchExecutable.js', () => ({ launchEnvironment: vi.fn(async () => ({ ...process.env })) }))
@@ -54,7 +55,7 @@ function fixture(legacy = false) {
   const root = join(home, 'harnesses', 'swarms', 'tab'), oldRoot = join(core.dataDir, 'swarm-projects', 'tab'), cwd = legacy ? oldRoot : root
   const row = { tabId: 'tab', machine: { machineId: core.daemon.machineId(), generation: 'grant', scope: 'swarm', cwd, engines: ['claude', 'codex'] },
     projects: [{ id: 'project', repository: { machineId: 'another', repositoryUrl: 'https://github.com/example/project' }, conversationIds: ['work'] }], starts: [], harnessIds: [] }
-  const deps = { backend: vi.fn(async () => ({ state: { projects: row.projects, machines: [row.machine] } })),
+  const deps = { backend: vi.fn(async (_core: unknown, _method: string, path: string) => swarmReply(path, { projects: row.projects, machines: [row.machine] })),
     open: vi.fn(async () => ({ request: vi.fn(async () => ({ engines: [{ engine: 'codex', installed: true, signedIn: true }] })), close: vi.fn() })),
     prepare: vi.fn(async () => join(cwd, 'project')),
     capacity: vi.fn(async () => ({ ok: true, resources: { projectDiskFreeBytes: 1, memoryTotalBytes: 8 * 1024 ** 3, memoryUsedBytes: 0 } })) }
@@ -67,7 +68,7 @@ function expectTrusted(path: string, trusted = true) {
 describe('consented Swarm clones', () => {
   it('places new contributions in the visible Swarm root and preserves earlier roots', async () => {
     const f = fixture()
-    f.deps.backend.mockResolvedValueOnce({ state: { projects: f.row.projects } } as never)
+    f.deps.backend.mockImplementationOnce(async (_core: unknown, _method: string, path: string) => swarmReply(path, { projects: f.row.projects }))
     expect((await prepareContribution(f.core, { tabId: 'tab', scope: 'swarm' }, f.deps as never)).cwd).toBe(f.root)
     expect(existsSync(f.root)).toBe(true)
     f.row.machine.cwd = f.oldRoot
@@ -97,7 +98,7 @@ describe('consented Swarm clones', () => {
     const f = fixture(true), source = clone(join(f.oldRoot, 'project')), current = clone(join(f.root, 'project'))
     const tree = join(home, 'harnesses', 'worktrees', 'project', 'worker'), unrelated = join(home, 'harnesses', 'worktrees', 'project', 'personal')
     git(source, 'worktree', 'add', '-q', '-b', 'super-tab/worker', tree); git(source, 'worktree', 'add', '-q', '-b', 'personal', unrelated)
-    const backend = vi.fn(async (_core: unknown, _method: string, path: string) => path.endsWith('/pools') ? [f.row] : {})
+    const backend = vi.fn(async (_core: unknown, _method: string, path: string) => path.includes('/changes') ? hostForm([], { pools: [f.row] }) : {})
     const start = vi.fn(), close = vi.fn()
     const machine = new ContributedMachines(f.core, f.core.daemon.machineId(), { backend,
       open: async () => ({ request: async () => ({}), close }), capabilities: f.deps.capacity, start, now: () => 1 } as never)
@@ -114,7 +115,7 @@ describe('consented Swarm clones', () => {
     mkdirSync(profile); writeFileSync(join(profile, 'config.toml'), '')
     Object.assign(f.row, { harnessIds: ['worker'] })
     vi.mocked(f.core.agents.all).mockReturnValue([{ agentId: 'worker', engine: 'codex', cwd: tree, codexHome: profile }] as never)
-    const backend = vi.fn(async (_core: unknown, _method: string, path: string) => path.endsWith('/pools') ? [f.row] : {})
+    const backend = vi.fn(async (_core: unknown, _method: string, path: string) => path.includes('/changes') ? hostForm([], { pools: [f.row] }) : {})
     const machine = new ContributedMachines(f.core, f.core.daemon.machineId(), { backend,
       open: async () => ({ request: async () => ({}), close: vi.fn() }), capabilities: f.deps.capacity, start: vi.fn(), now: () => 1 } as never)
     await machine.tick()
@@ -135,7 +136,7 @@ describe('consented Swarm clones', () => {
     const f = fixture(true), source = clone(join(f.oldRoot, 'project'))
     const config = join(process.env.CODEX_HOME!, 'config.toml')
     rmSync(config); mkdirSync(config)
-    const backend = vi.fn(async (_core: unknown, _method: string, path: string) => path.endsWith('/pools') ? [f.row] : {})
+    const backend = vi.fn(async (_core: unknown, _method: string, path: string) => path.includes('/changes') ? hostForm([], { pools: [f.row] }) : {})
     const machine = new ContributedMachines(f.core, f.core.daemon.machineId(), { backend,
       open: async () => ({ request: async () => ({}), close: vi.fn() }), capabilities: f.deps.capacity, start: vi.fn(), now: () => 1 } as never)
     await machine.tick()
@@ -165,7 +166,7 @@ describe('consented Swarm clones', () => {
   it('publishes observations before repair and does no trust work on a second successful tick', async () => {
     const f = fixture(true), source = clone(join(f.oldRoot, 'project'))
     let now = 1
-    const backend = vi.fn(async (_core: unknown, _method: string, path: string) => path.endsWith('/pools') ? [f.row] : {})
+    const backend = vi.fn(async (_core: unknown, _method: string, path: string) => path.includes('/changes') ? hostForm([], { pools: [f.row] }) : {})
     const machine = new ContributedMachines(f.core, f.core.daemon.machineId(), { backend,
       open: async () => ({ request: async () => ({}), close: vi.fn() }), capabilities: f.deps.capacity, start: vi.fn(), now: () => now } as never)
     await machine.tick()
@@ -190,7 +191,7 @@ describe('consented Swarm clones', () => {
     const f = fixture(true), source = clone(join(f.oldRoot, 'project')), file = join(process.env.CODEX_HOME!, 'config.toml')
     rmSync(file); mkdirSync(file)
     let now = 1
-    const backend = vi.fn(async (_core: unknown, _method: string, path: string) => path.endsWith('/pools') ? [f.row] : {})
+    const backend = vi.fn(async (_core: unknown, _method: string, path: string) => path.includes('/changes') ? hostForm([], { pools: [f.row] }) : {})
     const machine = new ContributedMachines(f.core, f.core.daemon.machineId(), { backend,
       open: async () => ({ request: async () => ({}), close: vi.fn() }), capabilities: f.deps.capacity, start: vi.fn(), now: () => now } as never)
     await machine.tick()
@@ -227,7 +228,7 @@ describe('consented Swarm clones', () => {
     const actual = await vi.importActual<typeof import('../lib/gitProject.js')>('../lib/gitProject.js')
     let unavailable = true, now = 1
     vi.mocked(readGitProject).mockImplementation(async (path, options) => path === failed && unavailable ? { error: 'GIT_UNAVAILABLE' } : actual.readGitProject(path, options))
-    const backend = vi.fn(async (_core: unknown, _method: string, path: string) => path.endsWith('/pools') ? [f.row] : {})
+    const backend = vi.fn(async (_core: unknown, _method: string, path: string) => path.includes('/changes') ? hostForm([], { pools: [f.row] }) : {})
     const machine = new ContributedMachines(f.core, f.core.daemon.machineId(), { backend,
       open: async () => ({ request: async () => ({}), close: vi.fn() }), capabilities: f.deps.capacity, start: vi.fn(), now: () => now } as never)
     try {
@@ -245,7 +246,7 @@ describe('consented Swarm clones', () => {
     const claude = join(process.env.CLAUDE_CONFIG_DIR!, '.claude.json'), codex = join(process.env.CODEX_HOME!, 'config.toml')
     writeFileSync(claude, 'invalid JSON'); rmSync(codex); mkdirSync(codex)
     let now = 1
-    const backend = vi.fn(async (_core: unknown, _method: string, path: string) => path.endsWith('/pools') ? [f.row] : {})
+    const backend = vi.fn(async (_core: unknown, _method: string, path: string) => path.includes('/changes') ? hostForm([], { pools: [f.row] }) : {})
     const machine = new ContributedMachines(f.core, f.core.daemon.machineId(), { backend,
       open: async () => ({ request: async () => ({}), close: vi.fn() }), capabilities: f.deps.capacity, start: vi.fn(), now: () => now } as never)
     await machine.tick()
@@ -261,7 +262,7 @@ describe('consented Swarm clones', () => {
     const f = fixture(true), source = clone(join(f.oldRoot, 'project'))
     Object.assign(f.row, { starts: [{ id: 'start', dispatched: true }] })
     let now = 1
-    const backend = vi.fn(async (_core: unknown, _method: string, path: string) => path.endsWith('/pools') ? [f.row] : {})
+    const backend = vi.fn(async (_core: unknown, _method: string, path: string) => path.includes('/changes') ? hostForm([], { pools: [f.row] }) : {})
     const start = vi.fn(async () => ({ ok: false }))
     const machine = new ContributedMachines(f.core, f.core.daemon.machineId(), { backend,
       open: async () => ({ request: async () => ({}), close: vi.fn() }), capabilities: f.deps.capacity, start, now: () => now } as never)
@@ -288,7 +289,7 @@ describe('consented Swarm clones', () => {
     const f = fixture(true), source = clone(join(f.oldRoot, 'project')), codex = join(process.env.CODEX_HOME!, 'config.toml')
     rmSync(codex)
     let now = 1
-    const backend = vi.fn(async (_core: unknown, _method: string, path: string) => path.endsWith('/pools') ? [f.row] : {})
+    const backend = vi.fn(async (_core: unknown, _method: string, path: string) => path.includes('/changes') ? hostForm([], { pools: [f.row] }) : {})
     const machine = new ContributedMachines(f.core, f.core.daemon.machineId(), { backend,
       open: async () => ({ request: async () => ({}), close: vi.fn() }), capabilities: f.deps.capacity, start: vi.fn(), now: () => now } as never)
     try {
@@ -307,7 +308,7 @@ describe('consented Swarm clones', () => {
   it('repairs a newly registered Codex profile and worktree before the next observation is due', async () => {
     const f = fixture(true), source = clone(join(f.oldRoot, 'project'))
     let now = 1
-    const backend = vi.fn(async (_core: unknown, _method: string, path: string) => path.endsWith('/pools') ? [f.row] : {})
+    const backend = vi.fn(async (_core: unknown, _method: string, path: string) => path.includes('/changes') ? hostForm([], { pools: [f.row] }) : {})
     const machine = new ContributedMachines(f.core, f.core.daemon.machineId(), { backend,
       open: async () => ({ request: async () => ({}), close: vi.fn() }), capabilities: f.deps.capacity, start: vi.fn(), now: () => now } as never)
     try {
@@ -329,7 +330,7 @@ describe('consented Swarm clones', () => {
   ])('discovers a later clone after one-shot $failure failure (existing=$existing)', async ({ existing, failure }) => {
     const f = fixture(true), earlier = existing ? clone(join(f.oldRoot, 'earlier')) : undefined
     let now = 1
-    const backend = vi.fn(async (_core: unknown, _method: string, path: string) => path.endsWith('/pools') ? [f.row] : {})
+    const backend = vi.fn(async (_core: unknown, _method: string, path: string) => path.includes('/changes') ? hostForm([], { pools: [f.row] }) : {})
     const machine = new ContributedMachines(f.core, f.core.daemon.machineId(), { backend,
       open: async () => ({ request: async () => ({}), close: vi.fn() }), capabilities: f.deps.capacity, start: vi.fn(), now: () => now } as never)
     try {
@@ -353,7 +354,7 @@ describe('consented Swarm clones', () => {
     const f = fixture(true), source = join(f.oldRoot, 'project')
     mkdirSync(source, { recursive: true })
     let now = 1
-    const backend = vi.fn(async (_core: unknown, _method: string, path: string) => path.endsWith('/pools') ? [f.row] : {})
+    const backend = vi.fn(async (_core: unknown, _method: string, path: string) => path.includes('/changes') ? hostForm([], { pools: [f.row] }) : {})
     const machine = new ContributedMachines(f.core, f.core.daemon.machineId(), { backend,
       open: async () => ({ request: async () => ({}), close: vi.fn() }), capabilities: f.deps.capacity, start: vi.fn(), now: () => now } as never)
     try {
@@ -367,7 +368,7 @@ describe('consented Swarm clones', () => {
     const f = fixture(true), source = clone(join(f.oldRoot, 'project'))
     Object.assign(f.row, { starts: [{ id: 'start', dispatched: true }] })
     let now = 1
-    const backend = vi.fn(async (_core: unknown, _method: string, path: string) => path.endsWith('/pools') ? [f.row] : {})
+    const backend = vi.fn(async (_core: unknown, _method: string, path: string) => path.includes('/changes') ? hostForm([], { pools: [f.row] }) : {})
     const start = vi.fn(async () => ({ ok: false }))
     const machine = new ContributedMachines(f.core, f.core.daemon.machineId(), { backend,
       open: async () => ({ request: async () => ({}), close: vi.fn() }), capabilities: f.deps.capacity, start, now: () => now } as never)
@@ -387,7 +388,7 @@ describe('consented Swarm clones', () => {
     const original = `[projects.${JSON.stringify(source)}]\ntrust_level = "untrusted"\n`
     writeFileSync(codex, original)
     let now = 1
-    const backend = vi.fn(async (_core: unknown, _method: string, path: string) => path.endsWith('/pools') ? [f.row] : {})
+    const backend = vi.fn(async (_core: unknown, _method: string, path: string) => path.includes('/changes') ? hostForm([], { pools: [f.row] }) : {})
     const machine = new ContributedMachines(f.core, f.core.daemon.machineId(), { backend,
       open: async () => ({ request: async () => ({}), close: vi.fn() }), capabilities: f.deps.capacity, start: vi.fn(), now: () => now } as never)
     try {

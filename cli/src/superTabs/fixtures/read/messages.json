@@ -1,0 +1,11 @@
+{ "messages": [
+    { "id": "f00000000000000000000001", "tabId": "f1a5c0de0000000000000001", "conversationId": "c00000000000000000000001",
+      "sequence": 214009, "author": { "kind": "person", "id": "6a0000000000000000000001", "name": "owner@example.com" },
+      "source": null, "text": "How is it going?", "attachments": null, "replyTo": null, "recipientIds": ["a00000000000000000000001"],
+      "mentions": [], "createdAt": "2026-10-26T09:59:00.000Z", "deliveries": [] },
+    { "id": "f00000000000000000000002", "tabId": "f1a5c0de0000000000000001", "conversationId": "c00000000000000000000001",
+      "sequence": 214010, "author": { "kind": "agent", "id": "a00000000000000000000001", "name": "Lead", "displayName": "River" },
+      "source": null, "text": "Work is in review.", "attachments": null, "replyTo": "f00000000000000000000001", "recipientIds": [],
+      "mentions": [], "createdAt": "2026-10-26T10:00:00.000Z", "deliveries": [] }
+  ],
+  "next": { "sequence": 214009, "id": "f00000000000000000000001" } }
