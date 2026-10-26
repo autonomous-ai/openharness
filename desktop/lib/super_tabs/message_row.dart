@@ -149,7 +149,8 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
     // A phone's author is a finger tall, 44 over its 20 px line. The gap
     // above the row gives up the half that would push the name down and the
     // avatar moves down with it, so both stay where they were.
-    final finger = workspaceIsCompact(context) && !widget.grouped;
+    final phone = workspaceIsCompact(context);
+    final finger = phone && !widget.grouped;
     final slack = finger ? 12.0 : 0.0;
     return Padding(
       padding: EdgeInsets.only(top: widget.grouped ? 0 : 12 - slack),
@@ -351,7 +352,7 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
                           children: [
                             if (widget.onReply != null)
                               fingerTarget(
-                                enabled: workspaceIsCompact(context),
+                                enabled: phone,
                                 AppIconButton(
                                   icon: AppIcons.reply,
                                   tooltip: 'Reply',
@@ -359,7 +360,7 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
                                 ),
                               ),
                             fingerTarget(
-                              enabled: workspaceIsCompact(context),
+                              enabled: phone,
                               AppIconButton(
                                 icon: AppIcons.copy,
                                 tooltip: 'Copy message',
