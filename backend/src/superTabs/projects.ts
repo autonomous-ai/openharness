@@ -142,6 +142,19 @@ export function canReadAgent(state: SuperTabState, actor: Actor, target: Agent):
   return canReadProject(state, actor, projectOf(state, agentProjectId(state, target)))
 }
 
+/** A session that reads people's private messages: its project's Lead (the Product Manager each person chats with privately),
+ *  or any agent in a private conversation, so a replaced Lead's earlier screen stays closed too. */
+export const confidentialSession = (state: SuperTabState, target: Agent): boolean =>
+  !!ledProject(state, target.id) || state.conversations.some(c => !!c.audience && c.agentIds.includes(target.id))
+
+/** Who may watch an agent's terminal: observe it, hold a share of it, read or type in it. A confidential session's screen and
+ *  scrollback hold people's private chats, so only the person whose machine runs it may, owners included (v1 ruling, final
+ *  review Critical 1). Any other agent: every reader of its project, as before. */
+export function canWatchAgent(state: SuperTabState, actor: Actor, target: Agent): boolean {
+  if (!canReadAgent(state, actor, target)) return false
+  return !confidentialSession(state, target) || (actor.kind === 'person' && actor.userId === target.machineOwnerId)
+}
+
 export function readAgent(state: SuperTabState, actor: Actor, agentId: string): Agent {
   const target = agent(state, agentId)
   if (!canReadAgent(state, actor, target)) fail('AGENT_UNAVAILABLE', 'This agent is unavailable.', 404)

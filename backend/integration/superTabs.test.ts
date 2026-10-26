@@ -647,17 +647,21 @@ describe('private swarm projects on the real control API', () => {
     const harnessId = randomUUID()
     const agentId = String((await run(tab, { type: 'agent.add', conversationId, machineId: 'test-host', harnessId,
       name: 'Private lead', configuration: config, lead: true })).result.agentId)
+    // Its terminal observers are checked on a Builder's terminal: nobody but its machine's owner watches a Lead (Critical 1).
+    const workerHarness = randomUUID()
+    const workerId = String((await run(tab, { type: 'agent.add', conversationId, machineId: 'test-host', harnessId: workerHarness,
+      name: 'Private builder', configuration: config, lead: false })).result.agentId)
     await run(tab, { ...message('Private result'), conversationId } as Command)
     expect((await store.read(peer, tab)).state.projects!.map(p => p.id)).not.toContain(projectId)
     await expect(store.messages(peer, tab, conversationId, {})).rejects.toMatchObject({ code: 'NOT_FOUND' })
     await expect(store.native.open(peer, tab, { operationId: randomUUID(), conversationId, agentId })).rejects.toMatchObject({ code: 'NOT_FOUND' })
-    expect(await store.mayObserve(peer, tab, 'test-host', harnessId, host.sub)).toBe(false)
-    expect((await rosterRows(store, host, 'test-host')).find(t => t.agent?.id === agentId)!.observers.map(p => p.userId)).not.toContain(peer.sub)
+    expect(await store.mayObserve(peer, tab, 'test-host', workerHarness, host.sub)).toBe(false)
+    expect((await rosterRows(store, host, 'test-host')).find(t => t.agent?.id === workerId)!.observers.map(p => p.userId)).not.toContain(peer.sub)
     await expect(store.messages(host, tab, 'lead', {}, agentId)).rejects.toMatchObject({ code: 'NOT_FOUND' })
 
     await run(tab, { type: 'project.sharing', projectId, visibility: 'private', memberIds: [peer.sub] })
     expect((await store.messages(peer, tab, conversationId, {})).messages.map(m => m.text)).toContain('Private result')
-    expect(await store.mayObserve(peer, tab, 'test-host', harnessId, host.sub)).toBe(true)
+    expect(await store.mayObserve(peer, tab, 'test-host', workerHarness, host.sub)).toBe(true)
     const context = await store.native.open(peer, tab, { operationId: randomUUID(), conversationId, agentId })
     const command = { ...message('Shared review'), conversationId } as Command
     const operationId = randomUUID()
@@ -665,7 +669,7 @@ describe('private swarm projects on the real control API', () => {
     await run(tab, { type: 'project.sharing', projectId, visibility: 'private', memberIds: [] })
     await expect(run(tab, command, peer, undefined, operationId)).rejects.toMatchObject({ code: 'NOT_FOUND' })
     await expect(store.native.read(host, tab, context.contextId)).rejects.toMatchObject({ code: 'NATIVE_CONTEXT_REVOKED' })
-    expect(await store.mayObserve(peer, tab, 'test-host', harnessId, host.sub)).toBe(false)
+    expect(await store.mayObserve(peer, tab, 'test-host', workerHarness, host.sub)).toBe(false)
 
     // Removing a roster row, here with its project, cannot erase the terminal's private history.
     await run(tab, { type: 'project.delete', projectId })
@@ -1662,18 +1666,19 @@ describe('Super Tabs on a real Mongo replica set', () => {
   })
 
   it('derives session-only observer access from accepted membership and removes it with that membership', async () => {
-    const { tab, lead } = await fixture()
-    const state = (await store.read(owner, tab)).state
-    const native = state.agents.find(a => a.id === lead)!.harnessId
+    const { tab } = await fixture()
+    // A Builder's terminal: nobody but its machine's owner watches a Lead (Critical 1).
+    const native = randomUUID()
+    await run(tab, { type: 'agent.add', conversationId: 'lead', machineId: 'test-host', harnessId: native, name: 'Builder', configuration: config, lead: false })
     expect(await store.mayObserve(peer, tab, 'test-host', native, host.sub)).toBe(false)
     await invite(tab, 'viewer')
     expect(await store.mayObserve(peer, tab, 'test-host', native, host.sub)).toBe(true)
     expect(await store.mayObserve(peer, tab, 'test-host', 'another-session', host.sub)).toBe(false)
-    const grants = (await rosterRows(store, host, 'test-host')).find(t => t.tabId === tab)
+    const grants = (await rosterRows(store, host, 'test-host')).find(t => t.tabId === tab && t.agent?.harnessId === native)
     expect(grants?.observers).toContainEqual({ email: peer.email, userId: peer.sub })
     await run(tab, { type: 'member.remove', userId: peer.sub })
     expect(await store.mayObserve(peer, tab, 'test-host', native, host.sub)).toBe(false)
-    expect((await rosterRows(store, host, 'test-host')).find(t => t.tabId === tab)?.observers).not.toContainEqual({ email: peer.email, userId: peer.sub })
+    expect((await rosterRows(store, host, 'test-host')).find(t => t.tabId === tab && t.agent?.harnessId === native)?.observers).not.toContainEqual({ email: peer.email, userId: peer.sub })
   })
 
   it('tells the execution host which of its agents need a decision or are stuck', async () => {
@@ -2966,6 +2971,55 @@ describe('private conversations through the store', () => {
     expect(await ids(peer)).not.toContain(group)
     expect((await store.deliveries(host, tab, lead)).map(d => d.messageId)).not.toContain(sent.result.messageId)
     expect((await db.superTabDelivery.findFirstOrThrow({ where: { tabId: tab, messageId: sent.result.messageId as string } })).status).toBe('cancelled')
+  })
+})
+
+describe('the PM\'s terminal after a private chat (final review, Critical 1)', () => {
+  const bob: AuthUser = { sub: '100000000000000000000004', email: 'bob@example.com', autonomousEnv: 'prod', role: 'user' }
+  /** Alice (peer) and Bob read a public project whose machine neither owns; Alice has a private chat with its PM, and Bob held
+   *  a share of the PM's terminal from before that chat. */
+  async function privateChat() {
+    const { tab, lead } = await fixture()
+    await invite(tab)
+    // The PM runs on host's machine; host is a member too, so the one person who may still watch it.
+    const asHost = await run(tab, { type: 'invite.create', email: host.email, role: 'collaborator', conversationId: 'lead' })
+    await run(tab, { type: 'invite.accept', inviteId: asHost.result.inviteId as string }, host)
+    if (!await db.user.findUnique({ where: { id: bob.sub } })) {
+      await db.user.create({ data: { id: bob.sub, externalId: `fixture-${bob.sub}`, email: bob.email, autonomousEnv: bob.autonomousEnv } })
+    }
+    const invitation = await run(tab, { type: 'invite.create', email: bob.email, role: 'collaborator', conversationId: 'lead' })
+    await run(tab, { type: 'invite.accept', inviteId: invitation.result.inviteId as string }, bob)
+    const harnessId = (await store.read(owner, tab)).state.agents.find(a => a.id === lead)!.harnessId
+    await db.harnessShare.create({ data: { id: randomUUID(), superTabId: tab, ownerId: host.sub, machineId: 'test-host', agentId: harnessId,
+      recipientEmail: bob.email, autonomousEnv: 'prod', name: 'Lead', ownerPublicKey: 'fixture-key', expiresAt: new Date(Date.now() + 86_400_000) } })
+    const chat = String((await run(tab, { type: 'conversation.create', title: 'Chat with PM', brief: '', checks: [], audience: { personIds: [peer.sub] } }, peer))
+      .result.conversationId)
+    const secret = await run(tab, { type: 'message.send', conversationId: chat, text: 'Only for the PM: the launch slips a week.', replyTo: null, recipientIds: [] }, peer)
+    // The PM's session receives it: it is in that terminal now.
+    expect((await store.deliveries(host, tab, lead)).map(d => d.messageId)).toContain(secret.result.messageId)
+    return { tab, lead, harnessId }
+  }
+  const observers = async (agentId: string) => (await rosterRows(store, host, 'test-host')).find(t => t.agent?.id === agentId)!.observers.map(p => p.userId)
+
+  it('lets nobody but its machine\'s owner watch it: not a reader outside the chat, not the Swarm owner, not with an earlier share', async () => {
+    const { tab, lead, harnessId } = await privateChat()
+    expect(await observers(lead)).toEqual([])
+    for (const user of [bob, owner, peer]) expect(await store.mayObserve(user, tab, 'test-host', harnessId, host.sub)).toBe(false)
+    // A Builder's terminal stays watchable by the project's readers.
+    const workerHarness = randomUUID()
+    const worker = String((await run(tab, { type: 'agent.add', conversationId: 'lead', machineId: 'test-host', harnessId: workerHarness,
+      name: 'Worker', configuration: config, lead: false })).result.agentId)
+    expect(await observers(worker)).toEqual(expect.arrayContaining([bob.sub, owner.sub, peer.sub]))
+    expect(await store.mayObserve(bob, tab, 'test-host', workerHarness, host.sub)).toBe(true)
+  })
+
+  it('lets nobody but its machine\'s owner read or type in it through the terminal requests', async () => {
+    const { tab, lead } = await privateChat()
+    for (const user of [bob, owner]) {
+      await expect(run(tab, { type: 'agent.screen', agentId: lead, scrollback: 200 }, user)).rejects.toMatchObject({ code: 'TERMINAL_PRIVATE' })
+      await expect(run(tab, { type: 'agent.input', agentId: lead, text: 'history' }, user)).rejects.toMatchObject({ code: 'TERMINAL_PRIVATE' })
+    }
+    expect((await run(tab, { type: 'agent.screen', agentId: lead }, host)).result.requestId).toBeTruthy()
   })
 })
 

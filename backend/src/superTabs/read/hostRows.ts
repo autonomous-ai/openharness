@@ -6,7 +6,7 @@
 import type { AuthUser } from '../../lib/ssoAuth.js'
 import { activeWork, agent, isLeads, SuperTabError, conversation, type Agent, type SuperTabState } from '../model.js'
 import { hostLocalGrid, machineContribution, type MachineCleanup } from '../machines.js'
-import { agentProjectId, agentSetRole, canReadAgent, groupProject, ledProject, projectsOf, skillModeOf, skillSetOf } from '../projects.js'
+import { agentProjectId, agentSetRole, canWatchAgent, groupProject, ledProject, projectsOf, skillModeOf, skillSetOf } from '../projects.js'
 import type { HostAgentRow, HostPool, HostRosterRow, HostTabRows } from './contract.js'
 import { hostEtag } from './hostEtag.js'
 
@@ -70,7 +70,7 @@ function agentRow(tabId: string, state: SuperTabState, machineId: string, user: 
     lead: !!ledProject(state, target.id),
     leadsConversationId: state.leadsConversationId ?? null,
     stopRequested: target.workDecision === 'stop' && !state.conversations.some(c => activeWork(c) && c.assignment?.agentId === target.id),
-    observers: lookups.people.filter(p => p.id !== user.sub && canReadAgent(state, { kind: 'person', userId: p.id, email: p.email }, target))
+    observers: lookups.people.filter(p => p.id !== user.sub && canWatchAgent(state, { kind: 'person', userId: p.id, email: p.email }, target))
       .map(p => ({ email: p.email, userId: p.id })),
   }
 }

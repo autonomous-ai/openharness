@@ -2,7 +2,7 @@ import type { PrismaClient } from '@prisma/client'
 import { activeWork, actorKey, agent, author, conversation, fail, isLeads, stableId, type Actor, type Agent, type Author, type Conversation, type MessageDraft,
   type SuperTabState } from './model.js'
 import { downSince } from './machines.js'
-import { agentProjectId, projectOf, readAgent } from './projects.js'
+import { agentProjectId, canWatchAgent, projectOf, readAgent } from './projects.js'
 import { redactCredentials } from './credentials.js'
 
 /** The Lead reads and types in an agent's terminal through the host of the agent's machine (spec/2026-10-23-lead-sees-agent-terminal.md).
@@ -34,6 +34,9 @@ export function mayDrive(state: SuperTabState, actor: Actor, target: Agent): voi
   if (actor.kind === 'person') {
     author(state, actor, true)
     readAgent(state, actor, target.id)
+    if (!canWatchAgent(state, actor, target)) {
+      fail('TERMINAL_PRIVATE', 'Only the person whose machine runs this agent can read or type in its terminal: it holds people’s private chats with the Product Manager.', 403)
+    }
     return
   }
   if (conversation(state, projectOf(state, agentProjectId(state, target)).leadConversationId).leadId !== actor.agentId) {

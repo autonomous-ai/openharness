@@ -12,7 +12,7 @@ import { attachmentMime, attachmentName, AttachmentTooLarge, checkedType, MAX_AT
 import { randomBytes } from 'node:crypto'
 import type { Readable } from 'node:stream'
 import { logger } from '../utils/logger.js'
-import { canReadAgent, canReadGroup, groupProject, ledProject, projectsOf, agentProjectId, readConversation, roleVersion, type ProjectVisibility } from './projects.js'
+import { canReadAgent, canReadGroup, canWatchAgent, groupProject, ledProject, projectsOf, agentProjectId, readConversation, roleVersion, type ProjectVisibility } from './projects.js'
 import { bindSession, makeProjectPrivate } from './sessionScope.js'
 import { answersRequest, noteProjectReports, projectUpdateRequest } from './projectUpdates.js'
 import { judgedMachines, loseTasks, sweepLiveness, SWEEP_EVERY_MS } from './liveness.js'
@@ -1420,7 +1420,7 @@ export class SuperTabStore {
         const target = state.agents.find(a => a.machineId === machineId && a.harnessId === harnessId && a.machineOwnerId === machineOwnerId)
         if (!target) return false
         agent(state, target.id)
-        if (!canReadAgent(state, { kind: 'person', userId: user.sub, email: user.email }, target)) return false
+        if (!canWatchAgent(state, { kind: 'person', userId: user.sub, email: user.email }, target)) return false
         await this.agentGrant(tx, state, target)
         return true
       })
