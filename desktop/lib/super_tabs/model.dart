@@ -26,8 +26,13 @@ class SuperTabPerson {
   SuperTabPerson.fromJson(Map<String, dynamic> row)
     : id = _text(row, 'id'),
       email = _text(row, 'email'),
-      role = _text(row, 'role');
+      role = _text(row, 'role'),
+      generation = row['generation'] as String?;
   final String id, email, role;
+
+  /// This membership: a new one each time the person joins the Swarm. Null
+  /// from a backend that does not send it.
+  final String? generation;
   bool get canWrite => role == 'owner' || role == 'collaborator';
 }
 
@@ -90,6 +95,14 @@ class SuperTabConversation {
       agentIds = List.unmodifiable((row['agentIds'] as List).cast<String>()),
       archived = row['archived'] == true,
       dormant = row['dormant'] == true,
+      audience = row['audience'] is Map
+          ? List.unmodifiable([
+              for (final person
+                  in superTabMap(row['audience'])['people'] as List? ??
+                      const [])
+                if (person is Map && person['id'] is String) person['id'],
+            ])
+          : null,
       checks = _list(
         row['checks'] ?? const [],
         (check) => Map<String, dynamic>.unmodifiable(check),
@@ -113,6 +126,10 @@ class SuperTabConversation {
   final String? leadId;
   final List<String> agentIds;
   final bool archived;
+
+  /// A private conversation's people, who read it with the project's Lead
+  /// and nobody else; null for a conversation the project shares.
+  final List<String>? audience;
 
   /// Out of the Swarm's active groups: archived, or finished and quiet for a
   /// day. Read on demand; a new message brings it back.

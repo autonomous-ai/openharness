@@ -889,6 +889,10 @@ class _SuperTabViewState extends State<SuperTabView>
   bool get _terminalsVisible =>
       !_devicesVisible && (widget.terminalsVisible || widget.terminal != null);
 
+  /// The reader's own private chat with its project's Product Manager.
+  bool _isPmChat(SuperTabConversation group) =>
+      c.pmChat(group.projectId)?.id == group.id;
+
   /// The open conversation's name, or what the pane shows instead of one.
   Widget _title(SuperTabConversation? group) => Text(
     _devicesVisible
@@ -903,6 +907,8 @@ class _SuperTabViewState extends State<SuperTabView>
         ? c.snapshot!.projectFor(group.id)!.name
         : group.id == c.snapshot!.leadsConversationId
         ? 'Product Managers'
+        : _isPmChat(group)
+        ? 'Chat with PM'
         : group.label,
     maxLines: 1,
     overflow: TextOverflow.ellipsis,
@@ -1064,7 +1070,9 @@ class _SuperTabViewState extends State<SuperTabView>
           if (editable && project?.ownerId == c.accountId)
             item('Delete Project', () => _groupAction('delete', group)),
         ] else ...[
-          item('Work details', () => _groupAction('work', group)),
+          // A private conversation is chat only: it has no work.
+          if (group.audience == null)
+            item('Work details', () => _groupAction('work', group)),
           if (editable) ...[
             item('Rename', () => _groupAction('rename', group)),
             item(
@@ -1353,6 +1361,8 @@ class _SuperTabViewState extends State<SuperTabView>
                         ? 'Loading conversation…'
                         : c.snapshot!.isProjectLead(group.id)
                         ? 'Discuss the plan with your product manager.'
+                        : _isPmChat(group)
+                        ? 'Only you and the Product Manager read this chat.'
                         : 'Start the conversation.',
                     style: DesktopChrome.text(color: DesktopChrome.muted),
                   ),
@@ -1753,8 +1763,9 @@ class _SuperTabViewState extends State<SuperTabView>
                                             ? 'Loading conversation…'
                                             : c.canWrite
                                             ? c.snapshot!.isProjectLead(
-                                                    group.id,
-                                                  )
+                                                        group.id,
+                                                      ) ||
+                                                      _isPmChat(group)
                                                   ? 'Message Product Manager'
                                                   : group.id ==
                                                         c

@@ -8,6 +8,7 @@ import 'package:flutter/foundation.dart';
 import '../logging/app_log.dart';
 import '../state/harness_attachments.dart';
 import 'attachment_upload.dart';
+import 'identity.dart';
 import 'model.dart';
 import 'parts.dart';
 import 'reading.dart';
@@ -680,6 +681,49 @@ class SuperTabController extends ChangeNotifier {
     return !_disposed && snapshot?.conversation(id) != null;
   }
 
+  /// The signed-in person's private chat with [projectId]'s Product Manager:
+  /// that project's private conversation whose audience is them alone.
+  SuperTabConversation? pmChat(String projectId) => snapshot?.conversations
+      .where(
+        (g) =>
+            g.projectId == projectId &&
+            g.audience?.length == 1 &&
+            g.audience!.single == accountId,
+      )
+      .firstOrNull;
+
+  /// Opens [pmChat], creating it on first use: chat only, for this person
+  /// alone, named after them, with the project's Lead in it. The create is one
+  /// fixed request per person, membership and project, so a second click or
+  /// another window gets the same conversation back from the server's receipt,
+  /// while a person who left and rejoined, whom the old chat no longer admits,
+  /// gets a new one.
+  Future<bool> openPmChat(String projectId) async {
+    if (pmChat(projectId) case final chat?) return select(chat.id);
+    final me = snapshot?.people.where((p) => p.id == accountId).firstOrNull;
+    final email = me?.email;
+    final result = await command({
+      'type': 'conversation.create',
+      'projectId': projectId,
+      'title': email == null || email.isEmpty
+          ? 'Chat with PM'
+          : superTabPersonName(email),
+      'brief': '',
+      'checks': <dynamic>[],
+      'audience': {
+        'personIds': [accountId],
+      },
+    }, operationId: _pmChatOperation(projectId, me?.generation));
+    final id = result?['conversationId'];
+    return id is String && await select(id);
+  }
+
+  String _pmChatOperation(String projectId, String? generation) {
+    final id = 'pm-chat-$projectId-$accountId-${generation ?? ''}';
+    // The backend's operation ids are at most 160 characters.
+    return id.length > 160 ? id.substring(0, 160) : id;
+  }
+
   /// Opens conversation [id], reading it first when it is not held
   /// ([loadGroup]); false when it cannot be read.
   Future<bool> select(String id) async {
@@ -1276,13 +1320,18 @@ class SuperTabController extends ChangeNotifier {
     }
   }
 
-  Future<Map<String, dynamic>?> command(Map<String, dynamic> command) async {
+  /// Sends [command] once, under [operationId] when the caller fixes one so
+  /// that a repeat is the same request (a new one by default).
+  Future<Map<String, dynamic>?> command(
+    Map<String, dynamic> command, {
+    String? operationId,
+  }) async {
     if (_disposed || !_maySend(command) || saving || _pending != null) {
       return null;
     }
     _acted();
     _pending = {
-      'operationId': superTabOperationId(),
+      'operationId': operationId ?? superTabOperationId(),
       'command': Map<String, dynamic>.of(command),
     };
     return retry();

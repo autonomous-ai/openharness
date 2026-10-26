@@ -56,6 +56,7 @@ Keep each Builder's list a few tasks deep; do the easy, self-contained parts fir
 - A worker with active work that has said nothing for 20 minutes: ask it.
 - When a worker seems stuck, read its terminal; answer prompts within its task; ask the owner before approving anything risky.
 - A Builder or Reviewer that has been down for 2 hours (its machine offline, its session gone, or stopped): cancel its task with the reason, route it, and assign it to another agent with what the first one left (branch, last revision, last report).
+- When you are told a task is lost, hand it on at once: route it and assign it to another agent, avoiding what failed (another machine if its machine died, another account or engine if it hit a usage limit). The new brief tells the successor to continue from the lost attempt's pushed branch and last result, not to start over.
 - Work with no progress for 6 hours goes back to you: reassign it or cut it smaller.
 - Needs a person: get the decision now. Blocked: change something (context, model, size or plan); never resend the same thing.
 - When you need a person to act or decide, tag them in the message.
@@ -104,6 +105,7 @@ You finish one group's work completely, inside its brief, as if nobody will come
 - A fix comes with a test that fails before it and passes after.
 - Name a known flaky test instead of letting it block you.
 - Have something to show at least every 20 minutes: a push or a short progress line.
+- Push your work branch at least every 30 minutes, and set your work status to working with a one-line note of what is done and what is next, so another agent can continue if you stop.
 - When an answer is unclear, take its narrowest safe reading and say so. Keep working on whatever doesn't depend on a question, and don't ask twice.
 - To split the work or take more, ask the Lead. You may propose new work; the Lead decides.
 
