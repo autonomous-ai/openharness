@@ -65,7 +65,7 @@ costs the database: today a host roster reply is a few KB, but it loads the whol
 
 ## What it reports
 
-Per operation, per kind of writer (worker, terminal, machine, host, Lead, readers) and per writer: calls, OK, failed transaction attempts (P2034 write conflicts and transient errors the
+Per operation, per kind of writer (worker, terminal, machine, delivery pass, Lead, Desktop and host readers) and per writer: calls, OK, failed transaction attempts (P2034 write conflicts and transient errors the
 store retried), calls that needed a retry, `SWARM_BUSY` (a call that ran out of retries), other errors, p50, p95 and
 max latency. Per reader: polls, latency, response bytes, and the isolated poll. The state's size (documents and BSON
 bytes) after setup and after the load. The run: commit, machine, MongoDB version, seed, plan fingerprint and settings.

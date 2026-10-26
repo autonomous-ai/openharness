@@ -58,6 +58,13 @@ describe('the Swarm load benchmark on today\'s store', () => {
     expect(op('deliveries.list')!.count).toBeGreaterThan(0)
   })
 
+  it('keeps each kind of writer apart: delivery passes, host roster reads, machines, terminals, workers, the Lead', () => {
+    const kinds = Object.fromEntries(report.load.writerKinds.map(k => [k.key, k.count]))
+    expect(Object.keys(kinds)).toEqual(['delivery', 'desktop', 'host', 'lead', 'machine', 'terminal', 'worker'])
+    expect(kinds.host).toBe(op('read.host')!.count)
+    expect(kinds.delivery).toBe(op('deliveries.list')!.count + op('delivery.claim')!.count + op('delivery.ack')!.count)
+  })
+
   it('measures what a poll costs and how big the state is', () => {
     const desktop = op('read.desktop')!.bytes!, host = op('read.host')!.bytes!
     expect(desktop.mean).toBeGreaterThan(host.mean)

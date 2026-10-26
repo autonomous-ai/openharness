@@ -106,7 +106,7 @@ export async function runLoad(driver: SwarmDriver, counter: AttemptCounter, conf
     })
   }
   function deliveryPasses(m: number) {
-    const host = people[m]!, writer = `host-${m}`
+    const host = people[m]!, writer = `delivery-${m}`
     return timeline('delivery passes', p.machines[m]!.deliveryPasses, async () => {
       for (const agentId of agentsOn(m)) {
         const waiting = await measure('deliveries.list', writer, () => driver.deliveries(tabId, host, agentId))

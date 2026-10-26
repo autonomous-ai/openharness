@@ -55,7 +55,7 @@ export function renderMarkdown(report: BenchReport): string {
     '## Run', '', table(['', ''], run), '',
     '## Operations', '', 'Every call during the load, by operation. A failed attempt is one database transaction the store retried (write conflict P2034, or a transient error); SWARM_BUSY is a call that ran out of retries.', '',
     table(['Operation', ...CALL_HEADER], load.ops.map(row => [row.key, ...callCells(row)])), '',
-    '## Writer kinds', '', 'Every call by kind of writer: workers (posts in their groups), terminals (turns recorded in their groups), machines (reports), hosts (delivery passes), the Lead, and readers.', '',
+    '## Writer kinds', '', 'Every call by kind of writer: workers (posts in their groups), terminals (turns recorded in their groups), machines (reports), delivery (each host\'s delivery passes), the Lead, and the Desktop and host readers.', '',
     table(['Kind', ...CALL_HEADER], load.writerKinds.map(row => [row.key, ...callCells(row)])), '',
     '## Writers', '', table(['Writer', ...CALL_HEADER], load.writers.map(row => [row.key, ...callCells(row)])), '',
     '## Readers', '', 'Bytes are response bodies during the load. The isolated poll runs once each after the load, alone, and counts what MongoDB sent the backend for it.', '',
