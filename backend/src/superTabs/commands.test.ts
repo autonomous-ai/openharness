@@ -2516,3 +2516,33 @@ describe('lost work (liveness.ts)', () => {
     expect(f.state.conversations.find(c => c.id === own)!.assignment!.status).toBe('working')
   })
 })
+
+describe('the morning digest setting (digest.ts)', () => {
+  const setup = () => {
+    const f = fixture()
+    const lead = f.add('lead', 'owner', 'lead', true), worker = f.add('worker', 'owner', f.group())
+    const as = (agentId: string): Actor => ({ kind: 'agent', agentId, machineOwnerId: 'host-owner' })
+    const digest = () => f.state.projects?.find(p => p.id === 'lead')?.digest
+    return { f, lead, worker, as, digest }
+  }
+
+  it('sets the project\'s local digest time for a person or its Lead, from tomorrow once today\'s has passed, and clears it', () => {
+    const { f, lead, as, digest } = setup()
+    // 07:00 on 27 October in Vietnam.
+    const at = { now: Date.UTC(2026, 9, 27, 0, 0) }
+    f.run({ type: 'project.digest', projectId: 'lead', time: '08:00', timeZone: 'Asia/Ho_Chi_Minh' }, owner, at)
+    expect(digest()).toEqual({ time: '08:00', timeZone: 'Asia/Ho_Chi_Minh' })
+    f.run({ type: 'project.digest', projectId: 'lead', time: '06:30', timeZone: 'Asia/Ho_Chi_Minh' }, as(lead), at)
+    expect(digest()).toEqual({ time: '06:30', timeZone: 'Asia/Ho_Chi_Minh', lastOn: '2026-10-27' })
+    f.run({ type: 'project.digest', projectId: 'lead', time: null, timeZone: 'Asia/Ho_Chi_Minh' }, owner, at)
+    expect(digest()).toBeUndefined()
+  })
+
+  it('refuses a worker, an unknown time zone and a time that is not a time of day', () => {
+    const { f, worker, as, digest } = setup()
+    expect(() => f.run({ type: 'project.digest', projectId: 'lead', time: '08:00', timeZone: 'UTC' }, as(worker))).toThrow('A person or the project’s Lead sets its morning digest.')
+    expect(() => f.run({ type: 'project.digest', projectId: 'lead', time: '08:00', timeZone: 'Mars/Olympus' })).toThrow('Name a time zone such as Asia/Ho_Chi_Minh.')
+    expect(() => f.run(commandSchema.parse({ type: 'project.digest', projectId: 'lead', time: '24:00', timeZone: 'UTC' }))).toThrow()
+    expect(digest()).toBeUndefined()
+  })
+})

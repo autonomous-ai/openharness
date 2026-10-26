@@ -329,3 +329,25 @@ describe('a start that never runs', () => {
       .rejects.toMatchObject({ code: 'START_FAILED' })
   })
 })
+
+describe('the morning digest', () => {
+  it('wakes the Lead once at the project\'s local time with what its work is doing, and again the next day', async () => {
+    const f = await swarm()
+    const projectId = (await f.timed.read(owner, f.tab)).state.projects![0]!.id
+    // The swarm's clock starts at 02:46 UTC.
+    await f.execute({ type: 'project.digest', projectId, time: '03:00', timeZone: 'UTC' })
+    const digests = async () => (await db.superTabMessage.findMany({ where: { tabId: f.tab }, orderBy: { sequence: 'asc' } }))
+      .filter(m => (m.source as { kind?: string } | null)?.kind === 'digest-request')
+    await f.leadInbox()
+    expect(await digests()).toEqual([])
+    f.clock.now = 3 * 60 * 60_000
+    const inbox = await f.leadInbox()
+    await f.leadInbox()
+    // The same poll's time checks ran first: 13 minutes without progress lost the task, so the digest names it held up.
+    expect((await digests()).map(m => m.text.split('\n\n')[1])).toEqual([`Blocked:\n- #1 Ship the parser: lost (${await f.name(f.worker)}): no progress for 13 minutes`])
+    expect(inbox.map(m => m.id)).toContain((await digests())[0]!.id)
+    f.clock.now += 24 * 60 * 60_000
+    await f.leadInbox()
+    expect(await digests()).toHaveLength(2)
+  })
+})
