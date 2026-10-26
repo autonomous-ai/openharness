@@ -6,7 +6,7 @@
  * minute also catches a share or billing change, which lives outside the parts.
  */
 import type { CoreApi } from '../core/api.js'
-import type { HostChanges, HostTab } from './readContract.js'
+import type { HostChanges, HostChangesRequest, HostTabRows } from './readContract.js'
 import { backend, object, readable } from './wire.js'
 
 type Json = Record<string, unknown>
@@ -19,7 +19,7 @@ export class HostFeed {
   private readonly now: () => number
   private readonly backend: typeof backend
   /** Each Swarm's rows as last returned, in the order the server first listed them. */
-  private tabs = new Map<string, HostTab>()
+  private tabs = new Map<string, HostTabRows>()
   private cursor: string | null = null
   private fullAt = -Infinity
   private readAt = -Infinity
@@ -49,11 +49,11 @@ export class HostFeed {
     // costs its whole rows every second (the Lead's ruling on #1726). A host that holds nothing asks as before.
     const held = Object.fromEntries([...this.tabs].flatMap(([tabId, tab]) => typeof tab.etag === 'string' ? [[tabId, tab.etag]] : []))
     const answer = readable<HostChanges>(Object.keys(held).length
-      ? await this.backend(this.core, 'POST', form, askFull ? { full: true, held } : { cursor: this.cursor, held })
+      ? await this.backend(this.core, 'POST', form, (askFull ? { full: true, held } : { cursor: this.cursor!, held }) satisfies HostChangesRequest)
       : await this.backend(this.core, 'GET', `${form}?${askFull ? 'full=1' : `cursor=${this.cursor}`}`))
     // The answer says what it is: the server answers a bad or too old cursor in full, with no removed Swarms (review round 1).
     const full = answer.full === true
-    const tabs = full ? new Map<string, HostTab>() : new Map(this.tabs)
+    const tabs = full ? new Map<string, HostTabRows>() : new Map(this.tabs)
     for (const tabId of answer.removedTabIds ?? []) tabs.delete(tabId)
     for (const tab of answer.tabs) {
       if (!('unchanged' in tab)) { tabs.set(tab.tabId, tab); continue }
