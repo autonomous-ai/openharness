@@ -535,16 +535,17 @@ export function createQuietGit(timeoutMs = 15_000): GitRun {
     const settle = (answer: { ok: boolean; timedOut?: boolean }) => { if (!settled) { settled = true; clearTimeout(timer); resolve({ ...answer, stdout, stderr }) } }
     child.stdout.setEncoding('utf8').on('data', (text: string) => { stdout = (stdout + text).slice(0, 65_536) })
     child.stderr.setEncoding('utf8').on('data', (text: string) => { stderr = (stderr + text).slice(0, 65_536) })
-    const timer = setTimeout(() => {
-      // Its own group (detached), so the group id is its pid; Windows has no groups, and kills git alone.
+    // Its own group (detached), so the group id is its pid; Windows has no groups, and kills git alone. A helper it left
+    // behind holding its pipes is ended too, whether git hung or had already gone (re-check of #1743: one left per check).
+    const end = () => {
       try { if (process.platform !== 'win32' && child.pid) process.kill(-child.pid, 'SIGKILL'); else child.kill('SIGKILL') } catch { /* already gone */ }
       child.stdout.destroy(); child.stderr.destroy()
-      settle({ ok: false, timedOut: true })
-    }, timeoutMs)
+    }
+    const timer = setTimeout(() => { end(); settle({ ok: false, timedOut: true }) }, timeoutMs)
     child.on('error', () => settle({ ok: false }))
     // Its output is all read once its pipes close; a helper it left running may hold them, so its exit is enough a second on.
     child.on('close', code => settle({ ok: code === 0 }))
-    child.on('exit', code => { setTimeout(() => settle({ ok: code === 0 }), 1_000).unref() })
+    child.on('exit', code => { setTimeout(() => { if (!settled) { end(); settle({ ok: code === 0 }) } }, 1_000).unref() })
   })
 }
 const quietGit = createQuietGit()
