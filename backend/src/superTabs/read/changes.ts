@@ -5,7 +5,7 @@
  */
 import type { Actor, Agent, AgentStart, Conversation } from '../model.js'
 import { canReadAgent, canReadGroup } from '../projects.js'
-import type { MachineData, Part } from '../parts/index.js'
+import { knownKind, type MachineData, type Part } from '../parts/index.js'
 import type { ChangesDelta, DormantStub, Tombstone } from './contract.js'
 import { envelope, progressView, visibleGroupView, type ReaderView } from './views.js'
 
@@ -40,6 +40,9 @@ export function changesFor(view: ReaderView, changed: Part[], actor: Actor): Par
         break
       }
       case 'group': {
+        // A conversation of a kind this release does not know is parked by reassembly, so a first load leaves it out: so
+        // do changes, removals and dormant stubs, or an older reader meets it during a rolling deploy (review of #1745).
+        if (part.data && !knownKind(part.data as Conversation)) break
         if (part.deleted || part.dormant) { if (groupReadable(part.data as Conversation)) out.groups.push(part.deleted ? stub(part) : dormantStub(part)) }
         // Sent from the changed part itself: the reader's view may hold only a conversation's light fields (parts/light.ts).
         else if (groupReadable(part.data as Conversation)) out.groups.push(envelope(part, visibleGroupView(part.data as Conversation, visibleAgents)))

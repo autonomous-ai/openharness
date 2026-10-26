@@ -8,7 +8,7 @@ import type { HeadData, MachineData, Part, PartKind, ProgressData, SwarmParts } 
 interface LegacyProgress { dirtyRevision: number; summarizedRevision: number; requestedRevision: number; since: number; requestedAt?: number; requestMessageId?: string }
 
 /** Conversation kinds this release knows; a part of another kind is kept aside unchanged (model.ts parkLaterConversations). */
-const knownKind = (group: Conversation) => group.kind == null || group.kind === 'leads'
+export const knownKind = (group: Conversation) => group.kind == null || group.kind === 'leads'
 const PART_ONLY_GROUP_FIELDS = ['messageSeq', 'reportSeq', 'dormant', 'lastActivityAt'] as const
 /** Optional lists of `SuperTab.state` an empty one of which differs from an absent one (`[]` after the last machine left). */
 const LISTS = ['parkedConversations', 'starts', 'machines', 'harnessReservations', 'releasedHarnesses', 'closingSessions', 'machineCleanups'] as const

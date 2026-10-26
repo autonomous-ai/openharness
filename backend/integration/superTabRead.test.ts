@@ -177,6 +177,19 @@ describe('changes since a cursor (design 4.2, 4.4)', () => {
     expect(keys((await changes(s.tabId, outsiderCursor, outsider, NOW + 3_000)).body.data.groups)).toEqual([s.web])
   })
 
+  it('leaves out a conversation of a kind this release does not know, in changes as in a first load (rolling deploys)', async () => {
+    const s = await scene()
+    clock = Date.now()
+    const cursor = (await get(`/api/super-tabs/${s.tabId}/parts`, owner)).body.data.cursor
+    // A newer release wrote a conversation of a kind this one parks (model.ts parkLaterConversations).
+    await db.$transaction(tx => guardedWrite(tx, s.tabId, { op: 'insert', kind: 'group', key: 'later-kind', ordinal: Date.now(), first: R + 1,
+      data: { id: 'later-kind', kind: 'board', title: 'Board', leadId: null, agentIds: [], archived: false, brief: 'Not for this release', checks: [],
+        assignment: null, lastMessageSequence: 0 } }, Date.now()))
+    clock = Date.now()
+    expect(keys((await get(`/api/super-tabs/${s.tabId}/parts`, owner)).body.data.groups)).not.toContain('later-kind')
+    expect(keys((await get(`/api/super-tabs/${s.tabId}/changes?cursor=${cursor}`, owner)).body.data.groups)).not.toContain('later-kind')
+  })
+
   it('never sends a private conversation\'s removal to a reader outside it', async () => {
     const s = await scene()
     const [peerCursor, outsiderCursor] = [await firstLoad(s.tabId, peer, NOW), await firstLoad(s.tabId, outsider, NOW)]
