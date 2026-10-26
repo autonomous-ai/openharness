@@ -81,10 +81,14 @@ class _DeferredPartViewState extends State<DeferredPartView> {
   Widget build(BuildContext context) {
     if (widget.part.loaded) return widget.builder(context);
     grid.AppTheme.watch(context);
-    return Center(
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: _failed ? _Failed(onRetry: _retry) : const _Loading(),
+    // Its own Material: the workspace's part is drawn above any page.
+    return Material(
+      type: MaterialType.transparency,
+      child: Center(
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: _failed ? _Failed(onRetry: _retry) : const _Loading(),
+        ),
       ),
     );
   }

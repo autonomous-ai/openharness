@@ -98,6 +98,35 @@ void main() {
     expect(find.text('two'), findsOneWidget);
   });
 
+  testWidgets('it stands on its own above any page, as the workspace does', (
+    tester,
+  ) async {
+    final download = _Download();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: DeferredPartView(
+          part: DeferredPart(download.call),
+          builder: (_) => const Text('Finder'),
+        ),
+      ),
+    );
+    download.fail();
+    await tester.pump();
+
+    expect(tester.takeException(), isNull);
+    expect(find.text('Retry'), findsOneWidget);
+    // Not the bare framework's missing-Material style: underlined in yellow.
+    for (final line in [
+      'Could not load this part of Harness',
+      'Check the connection, then retry.',
+    ]) {
+      final drawn = tester.widget<RichText>(
+        find.descendant(of: find.text(line), matching: find.byType(RichText)),
+      );
+      expect(drawn.text.style?.decoration, isNot(TextDecoration.underline));
+    }
+  });
+
   testWidgets('Retry is a 44 px target on a phone', (tester) async {
     tester.view.physicalSize = const Size(390, 844);
     tester.view.devicePixelRatio = 1;
