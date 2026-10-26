@@ -57,9 +57,12 @@ export function typedKeys(keys: unknown[]): string[] | string {
 
 /** The engines' own limit lines, at the start of a line: Claude Code's "5-hour limit reached ∙ resets 3pm", "Claude usage
  *  limit reached. Your limit will reset at 3pm", "You've hit your limit · resets 3pm" and "API Error: Usage limit
- *  reached", and Codex's "You've hit your usage limit. … try again in 2 hours". Only near the prompt, so an agent writing
- *  about limits in its own words, or an old banner far up the screen, is not one. */
-const LIMIT_LINE = /^[^A-Za-z]*(?:api error:\s*)?(?:claude\s+)?(?:(?:usage|5-hour|weekly|session|opus|sonnet)\s+limit reached|you['’]ve hit your (?:usage )?limit|you['’]ve reached your usage limit)/i
+ *  reached", and Codex's "You've hit your usage limit. … try again in 2 hours". Claude Code 2.1 names the limit it hit
+ *  ("You've hit your session limit", "… weekly limit", "… Opus limit", "You've reached your Fable limit"), and Codex 0.154
+ *  one for a model or a workspace ("You've hit your usage limit for gpt-5.5-codex", "You've reached your workspace credit
+ *  limit"): none of those alerted until 2026-10-26. Only near the prompt, so an agent writing about limits in its own
+ *  words, or an old banner far up the screen, is not one. */
+const LIMIT_LINE = /^[^A-Za-z]*(?:api error:\s*)?(?:claude\s+)?(?:(?:usage|5-hour|weekly|session|opus|sonnet|fable)\s+limit reached|you['’]ve (?:hit|reached) your (?:[\w-]+ ){0,2}limit)/i
 const LIMIT_NEAR_LINES = 15
 const MONTHS = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec']
 
@@ -100,17 +103,18 @@ function resetOf(said: string, now: number): number | null {
     }
     if (ms) return now + ms
   }
-  // The engines say a local time ("3pm", "4:05 PM"), with a date when it is not today ("Oct 25, 9am").
-  const time = /(?:resets?(?: at)?|try again at)\s+(?:([a-z]{3})[a-z]*\s+(\d{1,2}),?\s+(?:at\s+)?)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)?/i.exec(said)
+  // The engines say a local time ("3pm", "4:05 PM"), with a date when it is not today ("Oct 25, 9am"; Codex's
+  // "Oct 27th, 2026 3:05 PM").
+  const time = /(?:resets?(?: at)?|try again at)\s+(?:([a-z]{3})[a-z]*\s+(\d{1,2})(?:st|nd|rd|th)?,?\s+(?:(\d{4})\s+)?(?:at\s+)?)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)?/i.exec(said)
   if (!time) return null
-  const [, month, day, hour, minute, half] = time
+  const [, month, day, year, hour, minute, half] = time
   // "3pm" and "12am" are 12-hour; "15:00" and "0:30", with no am or pm, are 24-hour.
   const h = half ? Number(hour) % 12 + (half.toLowerCase() === 'pm' ? 12 : 0) : Number(hour)
   const date = new Date(now)
-  if (month && MONTHS.includes(month.toLowerCase())) date.setMonth(MONTHS.indexOf(month.toLowerCase()), Number(day))
+  if (month && MONTHS.includes(month.toLowerCase())) date.setFullYear(year ? Number(year) : date.getFullYear(), MONTHS.indexOf(month.toLowerCase()), Number(day))
   date.setHours(h, Number(minute ?? 0), 0, 0)
-  // A time already past today is tomorrow's; a date already past is next year's.
-  if (date.getTime() <= now) month ? date.setFullYear(date.getFullYear() + 1) : date.setDate(date.getDate() + 1)
+  // A time already past today is tomorrow's; a date already past is next year's, unless the engine named the year.
+  if (date.getTime() <= now && !year) month ? date.setFullYear(date.getFullYear() + 1) : date.setDate(date.getDate() + 1)
   return date.getTime()
 }
 

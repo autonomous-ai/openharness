@@ -211,6 +211,13 @@ describe('the stuck and usage-limit alerts', () => {
     expect(t.alerts()).toEqual([{ type: 'agent.alert', agentId: 'a1', alert: 'model', active: true }])
   })
 
+  it.each(['claude-session-limit', 'claude-weekly-limit', 'claude-opus-limit', 'claude-fable-limit', 'codex-usage-limit', 'codex-model-limit'])(
+    'alerts for the %s screen', async name => {
+      const t = setup({ screen: () => ({ ok: true, text: fixture(name), hold: null }) })
+      await t.host.tick([row()])
+      expect(t.alerts()).toEqual([expect.objectContaining({ type: 'agent.alert', agentId: 'a1', alert: 'limit', active: true })])
+    })
+
   it('tries an alert the backend did not take again on the next read', async () => {
     const t = setup({ screen: () => ({ ok: true, text: 'Claude usage limit reached. Your limit will reset at 3pm.', hold: null }) })
     const real = vi.mocked(t.backend).getMockImplementation()!
@@ -283,11 +290,26 @@ describe('reading a usage limit off a screen', () => {
   ])('reads %s', (line, reset) => {
     expect(limitOf(`some work\n${line}\n> `, now)).toEqual({ resetAt: reset.toISOString() })
   })
+  // Whole screens as Claude Code 2.1.310 and Codex 0.154 draw them, their limit lines in the engines' own words
+  // (fixtures/screens): Claude Code names the limit hit, and Codex wraps its long line and dates a reset after today.
+  it.each([
+    ['claude-session-limit', { resetAt: new Date(2026, 9, 23, 15, 0).toISOString() }],
+    ['claude-weekly-limit', { resetAt: new Date(2026, 9, 30, 9, 0).toISOString() }],
+    ['claude-opus-limit', { resetAt: new Date(2026, 9, 30, 9, 0).toISOString() }],
+    ['claude-fable-limit', {}],
+    ['codex-usage-limit', { resetAt: new Date(2026, 9, 27, 15, 5).toISOString() }],
+    ['codex-model-limit', { resetAt: new Date(2026, 9, 23, 16, 5).toISOString() }],
+  ])('reads the %s screen', (name, limit) => {
+    expect(limitOf(fixture(name), now)).toEqual(limit)
+  })
   it('knows a limit without a reset time, and ignores the words in an agent\'s own prose or far above the prompt', () => {
     expect(limitOf('⎿  API Error: Usage limit reached\n> ', now)).toEqual({})
     expect(limitOf('I will add a check for when the usage limit reached message shows.\n> ', now)).toBeNull()
     expect(limitOf(`5-hour limit reached ∙ resets 3pm\n${'line\n'.repeat(30)}> `, now)).toBeNull()
     expect(limitOf('> ', now)).toBeNull()
+    // A full context is not a usage limit; a workspace out of credits is one.
+    expect(limitOf('  ⎿  Context limit reached · /compact or /clear to continue\n> ', now)).toBeNull()
+    expect(limitOf('■ You\'ve reached your workspace credit limit\n› ', now)).toEqual({})
   })
 })
 
