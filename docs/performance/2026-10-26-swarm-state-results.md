@@ -265,11 +265,17 @@ It prints the timings and writes `swarm-parts-migration-<date>.json` to the fold
   - it seeds the Swarm and checks each behaviour over HTTP;
   - it starts an `IsolatedDaemon` signed in through a counting proxy on port 18086, and wakes its Swarm host;
   - it counts the host-form replies for 60 s idle, then 60 s with a post every 5 s.
-- The fake sign-in must also accept `local-outsider-token` (outsider@local.test), for the non-member check.
-- The figures above ran at `4b8b5ea8a` (integration head `44d51aae8`). The file, as checked in, was run again on
-  `f0dfbd855` (base `1d79b4e57`, whose backend and CLI are the same). Every check passed with the same figures, except
-  that the active host-tick window held 60 reads averaging 258 B, against 59 at 257 B. Run it from `cli/`, with the
-  stack up, in about 4.5 minutes; it writes every check and its figures to the JSON file:
+- Any failed check fails the run, and so does any post in the busy window that fails or takes over 30 s. The JSON
+  file is written either way.
+- The fake sign-in must also accept `local-outsider-token` (outsider@local.test), for the non-member check. Without it,
+  the run fails on that check, as it should.
+- The figures above ran at `4b8b5ea8a` (integration head `44d51aae8`).
+- The file as checked in ran again on base `1d79b4e57`, whose backend and CLI are the same, and passed all 12 checks.
+  The other figures were the same. The host-tick windows differed by a few bytes:
+  - idle: 60 reads averaging 284 B (300 B before);
+  - active: 59 reads averaging 257 B, with all 11 posts landed.
+- Run it from `cli/`, with the stack up, in about 4.5 minutes. It writes every check and its figures to the JSON
+  file:
 
   ```bash
   E2E_OUT=<file.json> npx vitest run --root ../docs/performance --globals --testTimeout 900000 \

@@ -9,7 +9,7 @@
 //   E2E_OUT=<file.json> npx vitest run --root ../docs/performance --globals --testTimeout 900000 \
 //     2026-10-26-swarm-state-results-e2e.test.mts
 //
-// E2E_QUICK=1 skips the 31 s and 60 s waits (no idle read past the overlap, short host-tick windows).
+// Any failed check, or any failed post in the busy window, fails the run; the JSON file is written either way.
 // The CLI's test isolation must load before anything else: it gives this run its own home and data folders.
 import '../../cli/vitest.setup.ts'
 import { createServer, request as httpRequest } from 'node:http'
@@ -23,13 +23,19 @@ import { LocalClient } from '../../cli/e2e/harness/client.ts'
 const B = 'http://127.0.0.1:18085', PROXY = 18086
 const OWNER = 'local-owner-token', PEER = 'local-peer-token', OUTSIDER = 'local-outsider-token'
 const out = process.env.E2E_OUT!
-const QUICK = process.env.E2E_QUICK === '1'
 const results: Record<string, unknown> = {}
-const ok = (name: string, pass: boolean, detail: unknown) => { results[name] = { pass, detail }; console.log(`${pass ? 'PASS' : 'FAIL'} ${name} ${JSON.stringify(detail).slice(0, 400)}`) }
+// Every failed check fails the run (after the results file is written), so a leak or an empty window never passes.
+const failed: string[] = []
+const ok = (name: string, pass: boolean, detail: unknown) => {
+  results[name] = { pass, detail }
+  if (!pass) failed.push(name)
+  console.log(`${pass ? 'PASS' : 'FAIL'} ${name} ${JSON.stringify(detail).slice(0, 400)}`)
+}
 
 async function api(token: string, path: string, method = 'GET', body?: unknown) {
+  // A call that hangs fails after 30 s (a post in the busy window then counts as failed) instead of stalling the run.
   const r = await fetch(`${B}${path}`, { method, headers: { authorization: `Bearer ${token}`, ...(body ? { 'content-type': 'application/json' } : {}) },
-    body: body ? JSON.stringify(body) : undefined })
+    body: body ? JSON.stringify(body) : undefined, signal: AbortSignal.timeout(30_000) })
   const text = await r.text()
   let json: any = null
   try { json = JSON.parse(text) } catch {}
@@ -116,7 +122,7 @@ try {
   const privateMessages = await api(PEER, `/api/super-tabs/${tab}/conversations/${privateId}/messages`)
   ok('private conversation absent for a non-audience reader: messages', privateMessages.status >= 400, { status: privateMessages.status })
   console.log('waiting 31 s for the change-read overlap to pass')
-  await new Promise(r => setTimeout(r, QUICK ? 0 : 31_000))
+  await new Promise(r => setTimeout(r, 31_000))
   // The first change read resends what changed in the 30 s before the first load (the overlap); the next one is idle.
   const catchUp = await api(OWNER, `/api/super-tabs/${tab}/changes?cursor=${first.body.data.cursor}`)
   const idle = await api(OWNER, `/api/super-tabs/${tab}/changes?cursor=${catchUp.body.data.cursor}`)
@@ -129,7 +135,7 @@ try {
     { bytes: changed.bytes, groupsSent: changed.body.data.groups.length, parts: posted.parts })
   // A private post: the owner's change read carries it, the peer's does not.
   const peerCursor = (await api(PEER, `/api/super-tabs/${tab}/parts`)).body.data.cursor
-  await new Promise(r => setTimeout(r, QUICK ? 0 : 31_000))
+  await new Promise(r => setTimeout(r, 31_000))
   const peerIdle = await api(PEER, `/api/super-tabs/${tab}/changes?cursor=${peerCursor}`)
   await command(OWNER, tab, { type: 'message.send', conversationId: privateId, text: 'Owner only note.', replyTo: null, recipientIds: [] })
   const peerChanged = await api(PEER, `/api/super-tabs/${tab}/changes?cursor=${peerIdle.body.data.cursor}`)
@@ -160,24 +166,35 @@ try {
   const fullForm = hostReads.find(r => r.full && r.tabsWithRows > 0)
   // Let the minute's full read settle, then measure idle and active windows of 60 s each.
   await new Promise(r => setTimeout(r, 5_000))
+  // Each window lasts this long; with work, a post every 5 s. Every post is counted, and one that fails fails the check.
+  const WINDOW_MS = 60_000, POST_EVERY_MS = 5_000
   const window = async (label: string, during?: () => Promise<void>) => {
     hostReads = []
-    const started = Date.now(), timer = during ? setInterval(() => { during().catch(e => console.log('post failed', e)) }, 5_000) : null
-    await new Promise(r => setTimeout(r, QUICK ? 3_000 : 60_000))
+    const posts: Array<Promise<boolean>> = []
+    const post = () => posts.push(during!().then(() => true, error => { console.log('post failed', error); return false }))
+    const started = Date.now(), timer = during ? setInterval(post, POST_EVERY_MS) : null
+    await new Promise(r => setTimeout(r, WINDOW_MS))
     if (timer) clearInterval(timer)
+    const outcomes = await Promise.all(posts)
     const reads = hostReads.filter(r => r.at >= started)
     const total = reads.reduce((s, r) => s + r.bytes, 0)
     return { label, reads: reads.length, avgBytes: Math.round(total / Math.max(1, reads.length)), maxBytes: Math.max(...reads.map(r => r.bytes)),
-      withRows: reads.filter(r => r.tabsWithRows > 0).length, full: reads.filter(r => r.full).length, posts: label === 'active' ? 12 : 0,
+      withRows: reads.filter(r => r.tabsWithRows > 0).length, full: reads.filter(r => r.full).length,
+      postsOk: outcomes.filter(Boolean).length, postsFailed: outcomes.filter(o => !o).length,
       methods: [...new Set(reads.map(r => r.method))] }
   }
   const idleTick = await window('idle')
   let n = 0
   const activeTick = await window('active', async () => { await command(OWNER, tab, { type: 'message.send', conversationId: work, text: `Lead note ${n++}`, replyTo: null, recipientIds: [builder] }, lead) })
-  ok('host tick bytes with etag', idleTick.reads > 30 && activeTick.reads > 30 && activeTick.methods.includes('POST'),
+  // A host ticks every second: at least half the window's seconds must show a read, and every planned post must land.
+  const enoughReads = (w: { reads: number }) => w.reads >= WINDOW_MS / 2_000
+  const plannedPosts = Math.floor((WINDOW_MS - 1) / POST_EVERY_MS)
+  ok('host tick bytes with etag', enoughReads(idleTick) && enoughReads(activeTick) && activeTick.methods.includes('POST')
+    && activeTick.postsFailed === 0 && activeTick.postsOk >= plannedPosts,
     { fullFormBytes: fullForm?.bytes ?? null, idle: idleTick, active: activeTick })
 
   results.otherDaemonReads = otherPaths
+  if (failed.length) throw new Error(`Failed checks: ${failed.join('; ')}`)
 } catch (error) {
   console.log('ERROR', (error as Error).stack)
   throw error
