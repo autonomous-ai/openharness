@@ -661,22 +661,28 @@ class SuperTabController extends ChangeNotifier {
   Map<String, String> mentions(String conversationId) =>
       Map.unmodifiable(_mentions[conversationId] ?? const {});
 
-  /// Opens conversation [id]. One not held (a closed group a link names) is
-  /// read by id first; false when it cannot be read.
-  Future<bool> select(String id) async {
+  /// Makes conversation [id] part of [snapshot]: one not held (a closed
+  /// group a link or Work details names) is read by id. False when it cannot
+  /// be read.
+  Future<bool> loadGroup(String id) async {
     if (snapshot == null) return false;
-    if (snapshot!.conversation(id) == null) {
-      final parts = _parts;
-      try {
-        if (parts == null || !await _readGroup(parts, id)) return false;
-      } catch (failure) {
-        _readFailure(failure, revokeTab: false);
-        _changed();
-        return false;
-      }
-      _redraw();
-      if (_disposed || snapshot?.conversation(id) == null) return false;
+    if (snapshot!.conversation(id) != null) return true;
+    final parts = _parts;
+    try {
+      if (parts == null || !await _readGroup(parts, id)) return false;
+    } catch (failure) {
+      _readFailure(failure, revokeTab: false);
+      _changed();
+      return false;
     }
+    _redraw();
+    return !_disposed && snapshot?.conversation(id) != null;
+  }
+
+  /// Opens conversation [id], reading it first when it is not held
+  /// ([loadGroup]); false when it cannot be read.
+  Future<bool> select(String id) async {
+    if (!await loadGroup(id)) return false;
     if (id == selectedId && !devicesSelected) return true;
     devicesSelected = false;
     _acted();

@@ -41,9 +41,7 @@ void main() {
         );
         expect(
           prompt,
-          contains(
-            'goal, changes, constraints, owned paths, checks',
-          ),
+          contains('goal, changes, constraints, owned paths, checks'),
         );
         expect(prompt.length, lessThanOrEqualTo(2000));
       }
@@ -114,4 +112,41 @@ void main() {
       },
     );
   }
+
+  testWidgets('work details of a closed group not read yet read it by id', (
+    tester,
+  ) async {
+    final server = ConversationServer();
+    final row =
+        (server.state['conversations'] as List)[1] as Map<String, dynamic>;
+    row
+      ..['archived'] = true
+      ..['task'] = task;
+    final controller = server.controller();
+    addTearDown(controller.dispose);
+    await controller.refresh();
+    expect(controller.snapshot!.conversation('offline'), isNull);
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Builder(
+          builder: (context) => Scaffold(
+            body: TextButton(
+              onPressed: () => showSuperTabWork(context, controller, 'offline'),
+              child: const Text('Open'),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.tap(find.text('Open'));
+    await tester.pumpAndSettle();
+    expect(find.text('Goal'), findsOneWidget);
+    expect(
+      tester
+          .widgetList<SuperTabMessageText>(find.byType(SuperTabMessageText))
+          .map((widget) => widget.text),
+      contains('Keep drafts'),
+    );
+    expect(tester.takeException(), isNull);
+  });
 }
