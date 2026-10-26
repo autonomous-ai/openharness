@@ -87,13 +87,14 @@ describe('what each action reads of the Swarm', () => {
     expect(s.call.mock.calls.map(c => c[1]).filter(path => path.includes('/hosts/')))
       .toEqual([`/api/super-tabs/hosts/${M}/changes?full=1`, `/api/super-tabs/hosts/${M}/changes?cursor=eyJ2IjoyLCJ0IjoxNzkzMDEwMDc0Mzc1LCJlIjowfQ`])
   })
-  it('refuses a caller the roster does not list here, or whose session is not running', async () => {
+  // The server leaves an agent off the roster when this machine has no access or billing for it: the error says where to look.
+  it('refuses a caller the roster does not list here, or whose session is not running, saying which', async () => {
     const s = swarm()
     expect(await s.ask({ action: 'messages', tabId: T, agentId: 'a0000000000000000000000z', conversationId: FIXTURE.workGroup }, owner))
-      .toMatchObject({ error: 'AGENT_UNAVAILABLE' })
+      .toEqual({ error: 'AGENT_UNAVAILABLE', detail: 'This agent is not on this machine\'s Swarm roster right now. That can mean this machine has no access to it, or its billing does not allow it. Check how this machine is shared.' })
     vi.mocked(s.core.agents.byAgent).mockReturnValue(undefined)
     expect(await s.ask({ action: 'messages', tabId: T, agentId: FIXTURE.builderId, conversationId: FIXTURE.workGroup }, owner))
-      .toMatchObject({ error: 'AGENT_UNAVAILABLE' })
+      .toEqual({ error: 'AGENT_UNAVAILABLE', detail: 'This agent is not a running contribution on this machine.' })
   })
   it('tells the person to update Harness when the server needs a newer one', async () => {
     const s = swarm((_method, path) => path.includes('/parts') ? { status: 426, body: { success: false, error: { code: 'UPDATE_REQUIRED' } } } : undefined)

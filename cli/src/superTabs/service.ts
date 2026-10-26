@@ -66,6 +66,7 @@ const HELP = {
 const list = (value: unknown) => Array.isArray(value) ? value.map(object) : []
 /** A Swarm read as `GET /api/super-tabs/:id` answered it, `lastChangedAt` in place of `revision` (design 2026-10-26 5.3). */
 const answerOf = (read: SwarmRead) => ({ lastChangedAt: read.lastChangedAt, state: read.state, ...(read.githubApp ? { githubApp: true } : {}) })
+const OFF_ROSTER = 'This agent is not on this machine\'s Swarm roster right now. That can mean this machine has no access to it, or its billing does not allow it. Check how this machine is shared.'
 /** Only a project's Lead may tag people (spec 2026-10-24-lead-mentions), so only a Lead's help offers it. */
 const LEAD_HELP = { ...HELP, post: `post GROUP TEXT OPERATION_ID [--reply-to MESSAGE_ID] [--attach PATH]... [--mention PERSON]...: ${POST_HELP} --mention tags a person, by the id or email shown in status (up to 5), when you need them to act or decide; it shows in their notifications.` }
 const OTHER_WORK_FIELDS = ['conversationId', 'projectName', 'title', 'owns', 'status', 'agentName', 'pr'] as const
@@ -309,8 +310,11 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
         }
         const caller = callerIn((await feed.refresh()).roster)
         const agent = object(caller?.agent)
-        if (!caller || !identifier(agent.id) || typeof agent.harnessId !== 'string'
-          || identifier(payload.harnessId) && agent.harnessId !== payload.harnessId || !core.agents.byAgent(agent.harnessId)) {
+        if (payload.action === 'help' && (!caller || !identifier(agent.id))) return { ok: true, help: HELP }
+        // The server leaves an agent off the roster when this machine has no access or billing for it; it gives no reason,
+        // and the server enforces the grant anyway, so the text says where to look (Lead's ruling, #1726 G5).
+        if (!caller || !identifier(agent.id)) return { error: 'AGENT_UNAVAILABLE', detail: OFF_ROSTER }
+        if (typeof agent.harnessId !== 'string' || identifier(payload.harnessId) && agent.harnessId !== payload.harnessId || !core.agents.byAgent(agent.harnessId)) {
           return payload.action === 'help' ? { ok: true, help: HELP } : { error: 'AGENT_UNAVAILABLE', detail: 'This agent is not a running contribution on this machine.' }
         }
         const agentId = agent.id
