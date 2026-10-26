@@ -3,6 +3,7 @@ import 'dart:io';
 import 'dart:ui' as ui;
 
 import 'package:dio/dio.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -262,9 +263,7 @@ void main() {
     }
   });
 
-  testWidgets('a server error is a failed read, not a refusal', (
-    tester,
-  ) async {
+  testWidgets('a server error is a failed read, not a refusal', (tester) async {
     status = 502;
     await show(tester, pinnedKey: key);
     expect(find.text('Couldn\u2019t open this shared harness'), findsOneWidget);
@@ -304,6 +303,28 @@ void main() {
       expect(tester.takeException(), isNull);
     },
   );
+
+  testWidgets('a state sits in the middle of a computer\'s window', (
+    tester,
+  ) async {
+    await show(tester, size: const Size(1440, 900));
+    final title = tester.getCenter(find.text('This shared link is incomplete'));
+    expect(title.dy, inInclusiveRange(300, 600));
+    expect(title.dx, closeTo(720, 1));
+    await tester.pumpWidget(const SizedBox());
+  });
+
+  testWidgets('a phone gets one download, the store bar\'s', (tester) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
+    await show(tester);
+    expect(find.byType(WebDownloadButton), findsNothing);
+    await tester.pumpWidget(const SizedBox());
+    debugDefaultTargetPlatformOverride = TargetPlatform.macOS;
+    await show(tester);
+    expect(find.byType(WebDownloadButton), findsOneWidget);
+    await tester.pumpWidget(const SizedBox());
+    debugDefaultTargetPlatformOverride = null;
+  });
 
   test('Open Harness goes to the root of the link\'s own site', () {
     expect(

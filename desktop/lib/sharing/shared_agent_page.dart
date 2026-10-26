@@ -261,12 +261,14 @@ class _SharedAgentPageState extends State<SharedAgentPage> {
                               },
                       ),
                     ),
-                    WebDownloadButton(
-                      open: (uri) {
-                        _countAction(SharedAction.getApp);
-                        return openInNewTab(uri);
-                      },
-                    ),
+                    // A phone's download is the store bar's.
+                    if (!browserHasAppStore())
+                      WebDownloadButton(
+                        open: (uri) {
+                          _countAction(SharedAction.getApp);
+                          return openInNewTab(uri);
+                        },
+                      ),
                   ],
                 ),
               ),

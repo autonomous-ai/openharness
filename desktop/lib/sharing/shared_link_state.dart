@@ -62,32 +62,38 @@ class SharedLinkState extends StatelessWidget {
     final (icon, title, message) = _words;
     final (primary, secondary) = _actions;
     final error = signInError;
-    return SingleChildScrollView(
-      child: Semantics(
-        liveRegion: true,
-        child: EmptyState(
-          icon: icon,
-          title: title,
-          message: message,
-          action: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              primary,
-              if (secondary != null) ...[const SizedBox(height: 4), secondary],
-              if (error != null) ...[
-                const SizedBox(height: 12),
-                ConstrainedBox(
-                  constraints: const BoxConstraints(maxWidth: 320),
-                  child: Text(
-                    error,
-                    textAlign: TextAlign.center,
-                    style: grid.AppType.body(
-                      color: Theme.of(context).colorScheme.error,
+    // In the middle of the window, scrolling only when it is too short.
+    return Center(
+      child: SingleChildScrollView(
+        child: Semantics(
+          liveRegion: true,
+          child: EmptyState(
+            icon: icon,
+            title: title,
+            message: message,
+            action: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                primary,
+                if (secondary != null) ...[
+                  const SizedBox(height: 4),
+                  secondary,
+                ],
+                if (error != null) ...[
+                  const SizedBox(height: 12),
+                  ConstrainedBox(
+                    constraints: const BoxConstraints(maxWidth: 320),
+                    child: Text(
+                      error,
+                      textAlign: TextAlign.center,
+                      style: grid.AppType.body(
+                        color: Theme.of(context).colorScheme.error,
+                      ),
                     ),
                   ),
-                ),
+                ],
               ],
-            ],
+            ),
           ),
         ),
       ),
