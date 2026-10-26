@@ -25,7 +25,11 @@ export function swarm(now = NOW) {
       { contribution: { machineOwnerId: `${contributor.userId}-machine`, contributorId: contributor.userId } }).agentId as string
   const group = (title: string, projectId?: string, actor: Actor = owner) => run({ type: 'conversation.create', ...(projectId ? { projectId } : {}),
     title, brief: `${title} brief`, checks: [{ description: `${title} works`, independent: false }] }, actor).conversationId as string
-  return { run, join, add, group, get state(): SuperTabState { return state } }
+  const contribute = (machineId: string, scope?: 'swarm') => run({ type: 'machine.contribute', machineId, name: machineId, cwd: '/repo',
+    ...(scope ? { scope } : {}), engines: ['codex'], maxAgents: 3 }, owner, { contribution: { machineOwnerId: owner.userId, contributorId: owner.userId } })
+  /** Writes outside commands (store observations, ledger, audiences), as the store would. */
+  const edit = (change: (draft: SuperTabState) => void) => { change(state) }
+  return { run, join, add, group, contribute, edit, get state(): SuperTabState { return state } }
 }
 
 /** Two projects (the Swarm's first, public; "Secret", private to the owner), a Lead, two workers, finished and running work. */
