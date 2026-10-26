@@ -6,6 +6,9 @@ import '../shared/widgets/app_dialog.dart';
 import '../widgets/desktop_chrome.dart';
 import '../widgets/update_notice.dart' show formatDownloadSize;
 import 'attachment_upload.dart';
+// A browser leaves the text viewer, and the Finder editor under it, out of main.dart.js.
+import 'attachment_text_viewer.dart'
+    if (dart.library.js_interop) '../web/parts/attachment_text_viewer.dart';
 import 'attachment_viewer.dart';
 import 'model.dart';
 
