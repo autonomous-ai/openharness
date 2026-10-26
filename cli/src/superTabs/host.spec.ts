@@ -1030,6 +1030,25 @@ describe('a Lead\'s terminal requests', () => {
   })
 })
 
+describe('the progress a host reports', () => {
+  it('sends with its machine\'s reading when each agent\'s screen last changed', async () => {
+    const t = setup()
+    Object.assign(t.core, { superTabs: { attention: vi.fn(), cards: vi.fn(), cardRecap: vi.fn(), shareObservers: vi.fn(), input: vi.fn(),
+      screen: vi.fn(async () => ({ ok: true as const, text: '✻ Editing host.ts…\n❯ ', hold: null })) } })
+    const pool = { tabId: 'tab', machine: { machineId: 'machine-1', generation: 'grant', cwd: '/repo', engines: ['claude'] }, harnessIds: ['harness'], starts: [] }
+    const roster = vi.mocked(t.call).getMockImplementation()!
+    vi.mocked(t.call).mockImplementation(async (method, path, body) => path.includes('/hosts/machine-1/changes')
+      ? { status: 200, body: { success: true, data: hostForm([t.row], { pools: [pool] }) } } : roster(method, path, body))
+    const local = { machineId: 'machine-1', request: vi.fn(async () => ({})), close: vi.fn() }
+    const host = t.open({ machines: { open: async () => local, capabilities: async () => ({ ok: true, resources: {}, tools: {} }) as never } })
+    host.start()
+    // The first reading may go before the first screen read; the next beat carries it.
+    t.wait(16_000)
+    await vi.waitFor(() => expect(vi.mocked(t.call).mock.calls.some(([method, path, body]) => method === 'POST'
+      && path === '/api/super-tabs/tab/machines/machine-1' && typeof (body as { harnessProgress?: Record<string, unknown> }).harnessProgress?.harness === 'number')).toBe(true), { timeout: 3_000 })
+  })
+})
+
 describe('the members a host lets watch its agents', () => {
   it('keeps them watching through a 3 s roster read, wakes Share once, and lets a removed member go at once', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'super-tab-host-')); roots.push(dir)

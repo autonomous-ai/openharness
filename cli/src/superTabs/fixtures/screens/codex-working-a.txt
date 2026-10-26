@@ -1,0 +1,13 @@
+• Explored
+  └ Read machines.ts, terminal.ts
+
+• Ran npx vitest run src/superTabs/terminal.spec.ts
+  └  Test Files  1 passed (1)
+          Tests  28 passed (28)
+
+• Working (1m 05s • esc to interrupt)
+
+
+› Ask Codex to do anything
+
+  100% context left · ? for shortcuts

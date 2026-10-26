@@ -25,9 +25,10 @@ const list = (v: unknown) => Array.isArray(v) ? v.map(object) : []
 // include tools from pending starts. An uncommon tool first named during routing remains unverified and is refused.
 const COMMON_TOOLS = ['git', 'node', 'npm', 'flutter', 'gh', 'cargo', 'python3']
 const VERIFIED_TOOL_TTL_MS = 10 * 60_000
-/** After a backend refuses the privacy field (one from before the Harness Team account), how long the reading goes
- *  without it before the field is offered again: a backend deployed meanwhile is heard from within this long. */
-const PRIVACY_REFUSED_MS = 10 * 60_000
+/** After a backend refuses a new field (privacy, from before the Harness Team account; harnessProgress, from before
+ *  task leases), how long the reading goes without it before the field is offered again: a backend deployed meanwhile
+ *  is heard from within this long. */
+const FIELD_REFUSED_MS = 10 * 60_000
 const UNVERIFIED_TOOL_TTL_MS = 60_000
 
 /** How often the executor asks the backend what its tabs want of it (a start waiting, a pause) and compares what it
@@ -76,7 +77,7 @@ async function swarmWorktree(path: string, source: string, startId: string): Pro
   } catch { return false }
 }
 
-interface MachineDeps {
+export interface MachineDeps {
   backend: typeof backend; open: typeof openDaemon; capabilities: typeof readCapabilities; start: typeof startAgent; now: () => number
   log?: (message: string) => void; env?: NodeJS.ProcessEnv
   /** Readies a queued start before its agent is created (superTabs/projectFolder.ts `prepareSwarmStart`): whom the
@@ -90,6 +91,9 @@ interface MachineDeps {
   modelsStamp?: () => Promise<string>
   /** The machine's host form and Swarm reads, shared with its host (superTabs/host.ts). */
   sources?: SwarmSources
+  /** When each of these harnesses' screens last changed, epoch ms (superTabs/terminal.ts `progressOf`): the backend
+   *  renews a task's lease from it, so work never sits with a dead owner (docs: swarm-never-stops). */
+  progress?: (harnessIds: readonly string[]) => Record<string, number>
 }
 const MACHINE_DEPS = { backend, open: openDaemon, capabilities: readCapabilities, start: startAgent, now: Date.now }
 
@@ -118,6 +122,8 @@ export class ContributedMachines {
   private readonly cleanupRetries = new Map<string, { failures: number; at: number }>()
   /** Until when the reading leaves out its privacy field, which the backend refused. */
   private privacyRefusedUntil = 0
+  /** Until when the reading leaves out its progress, which the backend refused. */
+  private progressRefusedUntil = 0
   /** This pass's privacy reading, read once a pass (the check itself runs at most every five minutes). */
   private privacy(): PrivacyObservation | null {
     try { return (this.deps.privacy ?? teamPrivacyObserver)() } catch (error) {
@@ -248,7 +254,10 @@ export class ContributedMachines {
           ...offered(sharedWith(await this.gridModels(local), row.localGrid),
             await local.request('grid_swarm_offers', { grid: row.localGrid }, 10_000).catch(() => ({}))),
         ].slice(0, MAX_LOCAL_MODELS) : null
-        const observation = { generation: pool.generation, tools: reportedTools, ...(localModels ? { localModels } : {}),
+        const shown = began >= this.progressRefusedUntil ? this.deps.progress?.(running) ?? {} : {}
+        const progress = Object.fromEntries(running.flatMap(id => typeof shown[id] === 'number' ? [[id, shown[id]]] : []))
+        const observation = { generation: pool.generation, tools: reportedTools,
+          ...(Object.keys(progress).length ? { harnessProgress: progress } : {}), ...(localModels ? { localModels } : {}),
           ...(privacy && began >= this.privacyRefusedUntil ? { privacy } : {}),
           ...(refusedModels.length ? { refusedModels } : {}),
           ...(Object.keys(toolProbeErrors).length ? { toolProbeErrors } : {}),
@@ -267,15 +276,17 @@ export class ContributedMachines {
         try {
           const path = `/api/super-tabs/${row.tabId}/machines/${this.machineId}`
           const refused = (error: unknown) => error instanceof SuperTabHostError && error.status === 400 && error.code === 'VALIDATION_ERROR'
-          // Older backends reject the additive fields. The privacy field is the newest, so it goes alone first: a backend
-          // that takes everything else keeps the local models it reads. Their boolean-only view still safely refuses an
+          // Older backends reject the additive fields. The newest go alone first, progress then privacy: a backend that
+          // takes everything else keeps the local models it reads. Their boolean-only view still safely refuses an
           // unverified tool, and a reading without privacy is never one a Team machine passes on.
-          const { privacy: _privacy, ...withoutPrivacy } = observation
+          const { harnessProgress: _progress, ...withoutProgress } = observation
+          const { privacy: _privacy, ...withoutPrivacy } = withoutProgress
           const { toolProbeErrors: _probeErrors, localModels: _served, refusedModels: _refused, ...legacy } = withoutPrivacy
           // A backend before `starting` refuses it: it gets the models the grid lists, as before, not none at all.
           const listedOnly = localModels?.some(m => m.starting)
             ? [{ ...withoutPrivacy, localModels: localModels.filter(m => !m.starting) }] : []
-          const attempts = [observation, ...('privacy' in observation ? [withoutPrivacy] : []), ...listedOnly,
+          const attempts = [observation, ...('harnessProgress' in observation ? [withoutProgress] : []),
+            ...('privacy' in withoutProgress ? [withoutPrivacy] : []), ...listedOnly,
             ...('toolProbeErrors' in observation || 'localModels' in observation || 'refusedModels' in observation ? [legacy] : [])]
           for (const [index, attempt] of attempts.entries()) {
             try {
@@ -283,7 +294,8 @@ export class ContributedMachines {
               break
             } catch (error) {
               if (!refused(error) || index === attempts.length - 1) throw error
-              if (attempt === observation && 'privacy' in observation) this.privacyRefusedUntil = began + PRIVACY_REFUSED_MS
+              if ('harnessProgress' in attempt) this.progressRefusedUntil = began + FIELD_REFUSED_MS
+              else if ('privacy' in attempt) this.privacyRefusedUntil = began + FIELD_REFUSED_MS
             }
           }
           this.published.set(String(row.tabId), { at: began, signature, starting: !!localModels?.some(m => m.starting) })

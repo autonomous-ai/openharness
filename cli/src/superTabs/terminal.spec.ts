@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs'
 import { describe, expect, it, vi } from 'vitest'
 import type { CoreApi, SuperTabScreen } from '../core/api.js'
 import { fakeCore } from '../testing/fakeCore.js'
@@ -30,6 +31,8 @@ function setup(options: { live?: string[]; screen?: (harnessId: string) => Super
     polls: () => vi.mocked(backend).mock.calls.filter(([, path]) => path === '/api/super-tabs/hosts/m1/terminal').length,
     alerts: () => sent.filter(s => s.body.command.type === 'agent.alert').map(s => s.body.command) }
 }
+/** A screen as the engine draws it (fixtures/screens). */
+const fixture = (name: string) => readFileSync(new URL(`./fixtures/screens/${name}.txt`, import.meta.url), 'utf8')
 const screenRequest = (over: Record<string, unknown> = {}) => ({ tabId: 'tab', agentId: 'a1', harnessId: 'h1', request: { id: 'r1', kind: 'screen' }, ...over })
 
 describe('a host serving its Lead\'s terminal requests', () => {
@@ -219,6 +222,48 @@ describe('the stuck and usage-limit alerts', () => {
     await t.host.tick([row()])
     t.wait(15_000); await t.host.tick([row()])
     expect(t.alerts()).toHaveLength(1)
+  })
+})
+
+describe('progress for the machine report', () => {
+  const showing = (text: string) => (): SuperTabScreen => ({ ok: true, text, hold: null })
+
+  it('records when each running agent\'s screen last changed, from the reads the watch already makes', async () => {
+    const t = setup({ screen: showing('✻ Reading files…\n❯ ') })
+    await t.host.tick([row()])
+    expect(t.host.progressOf(['h1'])).toEqual({ h1: 1_000_000 })
+    t.wait(15_000); await t.host.tick([row()])
+    expect(t.host.progressOf(['h1'])).toEqual({ h1: 1_000_000 })
+    t.showing(showing('✻ Editing host.ts…\n❯ ')); t.wait(15_000); await t.host.tick([row()])
+    expect(t.host.progressOf(['h1'])).toEqual({ h1: 1_030_000 })
+    expect(t.core.superTabs!.screen).toHaveBeenCalledTimes(3)
+  })
+
+  it('names only running agents, and forgets one once it stops or leaves', async () => {
+    const t = setup({ live: ['h1', 'h2'] })
+    await t.host.tick([row(), row('a2', 'h2', { stopRequested: true }), row('a3', 'h3')])
+    expect(t.host.progressOf(['h1', 'h2', 'h3'])).toEqual({ h1: 1_000_000 })
+    t.wait(15_000); await t.host.tick([row('a2', 'h2')])
+    expect(t.host.progressOf(['h1', 'h2'])).toEqual({ h2: 1_015_000 })
+    await t.host.tick([])
+    expect(t.host.progressOf(['h1', 'h2'])).toEqual({})
+  })
+
+  it.each(['claude', 'codex'])('does not count %s redrawing only its spinner, elapsed time, token counter or tip, and counts new work', async engine => {
+    const t = setup({ screen: showing(fixture(`${engine}-working-a`)) })
+    await t.host.tick([row()])
+    t.showing(showing(fixture(`${engine}-working-b`))); t.wait(15_000); await t.host.tick([row()])
+    expect(t.host.progressOf(['h1'])).toEqual({ h1: 1_000_000 })
+    t.showing(showing(fixture(`${engine}-working-b`).replace('\n\n', '\n\nEdited cli/src/superTabs/terminal.ts\n\n'))); t.wait(15_000); await t.host.tick([row()])
+    expect(t.host.progressOf(['h1'])).toEqual({ h1: 1_030_000 })
+  })
+
+  it('does not count a screen that only shows its model retrying, nor one that could not be read', async () => {
+    const t = setup({ screen: showing('✻ Waiting for API response · will retry in 2m 38s · check your network\n❯ ') })
+    await t.host.tick([row()])
+    t.showing(showing('✻ Waiting for API response · will retry in 2m 23s · check your network\n❯ ')); t.wait(15_000); await t.host.tick([row()])
+    t.showing(() => ({ ok: false, error: 'pane gone' })); t.wait(15_000); await t.host.tick([row()])
+    expect(t.host.progressOf(['h1'])).toEqual({ h1: 1_000_000 })
   })
 })
 

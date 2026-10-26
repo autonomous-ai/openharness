@@ -31,8 +31,9 @@ function fixture(env: NodeJS.ProcessEnv = {}, privacy: () => PrivacyObservation 
   const prepare = vi.fn(async () => {})
   const log = vi.fn()
   const modelsStamp = vi.fn(async () => stamp)
-  const machine = new ContributedMachines(core, 'host', { backend, open, capabilities, start, prepare, log, env, privacy, modelsStamp, now: () => now } as never)
-  return { machine, pool, core, backend, open, request, close, capabilities, start, prepare, log, modelsStamp, advance: () => { now += 16000 }, step: (ms: number) => { now += ms },
+  const deps = { backend, open, capabilities, start, prepare, log, env, privacy, modelsStamp, now: () => now }
+  const machine = new ContributedMachines(core, 'host', deps as never)
+  return { deps, machine, pool, core, backend, open, request, close, capabilities, start, prepare, log, modelsStamp, advance: () => { now += 16000 }, step: (ms: number) => { now += ms },
     stamp: (next: string) => { stamp = next } }
 }
 
@@ -209,6 +210,36 @@ describe('contributed machine executor', () => {
     expect(posts).toHaveLength(2)
     expect(posts[0]![3]).toHaveProperty('toolProbeErrors')
     expect(posts[1]![3]).not.toHaveProperty('toolProbeErrors')
+  })
+
+  it('sends when each running harness last showed progress, and only for those running', async () => {
+    const f = fixture()
+    const progress = vi.fn((ids: readonly string[]) => ({ running: 900, stopped: 800, elsewhere: 700 }) as Record<string, number>)
+    const machine = new ContributedMachines(f.core, 'host', { ...f.deps, progress } as never)
+    await machine.tick()
+    const body = f.backend.mock.calls.find(c => c[1] === 'POST')![3] as Record<string, unknown>
+    expect(body.harnessProgress).toEqual({ running: 900 })
+    // Nothing read yet for any running harness: the field is left out.
+    progress.mockReturnValue({})
+    f.advance(); await machine.tick()
+    expect(f.backend.mock.calls.filter(c => c[1] === 'POST').at(-1)![3]).not.toHaveProperty('harnessProgress')
+  })
+
+  it('drops progress for a backend that refuses it, and offers it again ten minutes later', async () => {
+    const f = fixture()
+    const original = f.backend.getMockImplementation()!
+    f.backend.mockImplementation(async (core, method, path, body) => {
+      if (method === 'POST' && (body as Record<string, unknown>)?.harnessProgress) throw new SuperTabHostError('VALIDATION_ERROR', 'Unrecognized key: harnessProgress', 400)
+      return original(core, method, path, body)
+    })
+    const machine = new ContributedMachines(f.core, 'host', { ...f.deps, progress: () => ({ running: 900 }) } as never)
+    const posts = () => f.backend.mock.calls.filter(c => c[1] === 'POST' && String(c[2]).includes('/machines/'))
+    await machine.tick()
+    expect(posts().map(c => 'harnessProgress' in (c[3] as object))).toEqual([true, false])
+    f.advance(); await machine.tick()
+    expect(posts().map(c => 'harnessProgress' in (c[3] as object))).toEqual([true, false, false])
+    f.step(600_000); await machine.tick()
+    expect(posts().map(c => 'harnessProgress' in (c[3] as object))).toEqual([true, false, false, true, false])
   })
 
   it('lists the models it serves on the Swarm\'s grid only while the add-on is on, and drops them for an older backend', async () => {

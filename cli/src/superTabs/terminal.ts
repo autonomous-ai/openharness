@@ -4,8 +4,10 @@
  * only a person at that machine could see and clear it. The backend relays the Lead's request to the host of the agent's
  * machine; the host reads or types with the core's own capture and input (core/superTabTerminal.ts) and answers as that
  * agent. It also tells the Lead, once per episode, when a worker has sat on a prompt for 3 minutes or its screen shows
- * a usage limit.
+ * a usage limit. The same reads tell the machine report when each agent's screen last changed: the backend renews the
+ * agent's lease on its task from that (docs: swarm-never-stops, v1 liveness).
  */
+import { createHash } from 'node:crypto'
 import type { CoreApi } from '../core/api.js'
 import type { MessageHold } from '../engines/facets/screen.js'
 import { backend } from './host.js'
@@ -112,6 +114,18 @@ function resetOf(said: string, now: number): number | null {
   return date.getTime()
 }
 
+/** What Claude Code and Codex redraw every second while they work, whether or not the work moves: the spinner line with
+ *  its elapsed time and token counter ("✻ Pondering… (2m 14s · ↓ 3.1k tokens · esc to interrupt)", "• Working (1m 05s •
+ *  esc to interrupt)"), Claude Code's rotating tip under it, and a retry's countdown. A stuck agent's screen changes all
+ *  the time through them (Lead, 2026-10-26), so they are left out of what counts as progress. */
+const STATUS_LINE = /esc to (?:interrupt|cancel)|^\W*[A-Za-z][\w ]*…\s*\(|^\s*⎿\s+tip:|will retry in/i
+
+/** A short digest of the screen without its status lines: two screens with the same one show the same work. */
+export function screenDigest(text: string): string {
+  const lines = text.split('\n').filter(line => !STATUS_LINE.test(line)).map(line => line.trimEnd())
+  return createHash('sha256').update(lines.join('\n')).digest('base64url')
+}
+
 type Episode = { since: number; alerted: boolean } | null
 interface Watched { prompt: Episode; limit: Episode; model: Episode; retried?: number }
 
@@ -121,6 +135,8 @@ export class TerminalHost {
   private serving: Promise<void> | null = null
   private watching: Promise<void> | null = null
   private readonly watched = new Map<string, Watched>()
+  /** Per running harness here, its last screen's digest and when that last changed. */
+  private readonly progress = new Map<string, { digest: string; at: number }>()
   private readonly now: () => number
   private readonly log: (message: string) => void
 
@@ -133,7 +149,7 @@ export class TerminalHost {
    *  the host never waits on it, so a slow screen read never delays deliveries. */
   tick(rows: unknown[]): Promise<void> {
     const here = this.here(rows)
-    if (!here.length) { this.watched.clear(); return Promise.resolve() }
+    if (!here.length) { this.watched.clear(); this.progress.clear(); return Promise.resolve() }
     const own = here.filter(agent => agent.running)
     const now = this.now()
     if (!this.serving && now >= this.nextServeAt) {
@@ -145,6 +161,15 @@ export class TerminalHost {
       this.watching = this.watch(own).catch(error => this.log(error instanceof Error ? error.message : String(error))).finally(() => { this.watching = null })
     }
     return Promise.all([this.serving, this.watching]).then(() => {})
+  }
+
+  /** When each of these harnesses' screens last changed, epoch ms, for those running here that the watch has read. An
+   *  agent's first read counts as a change: the host cannot know what its screen showed before. */
+  progressOf(harnessIds: readonly string[]): Record<string, number> {
+    return Object.fromEntries(harnessIds.flatMap(id => {
+      const seen = this.progress.get(id)
+      return seen ? [[id, seen.at]] : []
+    }))
   }
 
   /** This machine's Swarm agents, as the roster names them, and whether each runs here: a stopping one, or one whose
@@ -203,6 +228,8 @@ export class TerminalHost {
   private async watch(own: Own[]): Promise<void> {
     const keys = new Set(own.map(a => `${a.tabId}:${a.agentId}`))
     for (const key of this.watched.keys()) if (!keys.has(key)) this.watched.delete(key)
+    const harnesses = new Set(own.map(a => a.harnessId))
+    for (const id of this.progress.keys()) if (!harnesses.has(id)) this.progress.delete(id)
     for (const agent of own) {
       const key = `${agent.tabId}:${agent.agentId}`
       const state = this.watched.get(key) ?? { prompt: null, limit: null, model: null }
@@ -211,6 +238,9 @@ export class TerminalHost {
       const read = await this.core.superTabs!.screen(agent.harnessId, 0).catch(() => null)
       if (!read?.ok) continue
       const now = this.now()
+      const digest = screenDigest(read.text), seen = this.progress.get(agent.harnessId)
+      // A model being retried is not the agent's work moving, whatever else the screen shows meanwhile.
+      if (!seen || (seen.digest !== digest && !modelFailing(read.text))) this.progress.set(agent.harnessId, { digest, at: now })
       state.prompt = await this.episode(agent, 'prompt', state.prompt, read.hold !== null && WAITING.has(read.hold), now, since => now - since >= PROMPT_WAIT_MS, {})
       const limit = limitOf(read.text, now)
       state.limit = await this.episode(agent, 'limit', state.limit, limit !== null, now, () => true, limit ?? {})
