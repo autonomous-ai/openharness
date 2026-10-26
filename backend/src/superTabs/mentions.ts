@@ -3,7 +3,7 @@
  *  reads and writes a tab that has them. Called inside SuperTabStore's transactions. */
 import type { Prisma, PrismaClient } from '@prisma/client'
 import { fail, isLeads, person, stableId, type Actor, type Conversation, type MessageDraft, type SuperTabState } from './model.js'
-import { canReadProject, groupProject, ledProject, projectOf } from './projects.js'
+import { canReadGroup, groupProject, ledProject, projectOf } from './projects.js'
 
 type Tx = Prisma.TransactionClient
 export const MAX_MENTIONS = 5
@@ -29,7 +29,7 @@ export function checkMentions(state: SuperTabState, actor: Actor, group: Convers
   if (isLeads(group) || groupProject(state, group).id !== led.id) fail('MENTION_FORBIDDEN', 'A Lead can tag people only in its own project’s conversations.', 403)
   for (const id of ids) {
     const member = state.people.find(p => p.id === id) ?? fail('INVALID_MENTION', 'Tag a person in this Swarm.', 400)
-    if (!canReadProject(state, { kind: 'person', userId: member.id, email: member.email }, led)) {
+    if (!canReadGroup(state, { kind: 'person', userId: member.id, email: member.email }, group)) {
       fail('INVALID_MENTION', `${member.email} cannot read this conversation.`, 400)
     }
   }
@@ -68,7 +68,7 @@ async function readable(tx: Tx, tabId: string, state: SuperTabState, actor: Extr
     ...(open ? waiting : { resolvedAt: { not: null } }) }, orderBy: { createdAt: 'desc' }, take: 500 })
   return rows.filter(row => {
     const group = state.conversations.find(c => c.id === row.conversationId)
-    return !!group && !isLeads(group) && canReadProject(state, actor, projectOf(state, group.projectId ?? 'lead'))
+    return !!group && !isLeads(group) && canReadGroup(state, actor, group)
   })
 }
 

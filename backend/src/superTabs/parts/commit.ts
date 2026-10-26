@@ -1,0 +1,145 @@
+import type { Prisma } from '@prisma/client'
+import { agentOnly, conversation, isLeads, type MessageDraft, type SuperTabState } from '../model.js'
+import { split } from './shape.js'
+import { guardedWrite, PartConflict, type HeadColumns, type PartWrite } from './write.js'
+import type { Part, PartKind, SwarmParts } from './types.js'
+import { RELEASED_CAP } from './types.js'
+
+type Transaction = Prisma.TransactionClient
+
+/** A part a command relies on without changing it: touched so a concurrent change to it conflicts (design section 1). */
+export interface Touch { kind: PartKind; key: string }
+/** A part a command wrote, at its new version: the command reply (design section 4.7). */
+export interface Written { kind: PartKind; key: string; version: number }
+
+const LISTS = { member: 'members', agent: 'agents', group: 'groups', machine: 'machines', start: 'starts', progress: 'progress' } as const
+type ListKind = keyof typeof LISTS
+
+/** JSON with sorted keys, so two equal records compare equal whatever order a command built them in. */
+function canonical(value: unknown): string {
+  return JSON.stringify(value, (_key, item: unknown) => item && typeof item === 'object' && !Array.isArray(item)
+    ? Object.fromEntries(Object.entries(item as Record<string, unknown>).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0)) : item)
+}
+
+/**
+ * Who sees what changed (design section 4.2): a project's visibility or members, a person removed or rejoined, the set of
+ * Leads (the Leads conversation's members), a conversation's audience, or a project removed. Readers reload in full.
+ */
+export function visibilityChanged(before: SuperTabState, after: SuperTabState): boolean {
+  const projects = (state: SuperTabState) => canonical((state.projects ?? []).map(p => [p.id, p.visibility, p.members]))
+  const people = (state: SuperTabState) => canonical(state.people.map(p => [p.id, p.generation, p.role]))
+  const leads = (state: SuperTabState) => canonical(state.conversations.filter(isLeads).map(c => c.agentIds))
+  const audiences = (state: SuperTabState) => new Map(state.conversations.map(c => [c.id, canonical(c.audience ?? null)]))
+  if (projects(before) !== projects(after) || people(before) !== people(after) || leads(before) !== leads(after)) return true
+  const was = audiences(before)
+  return [...audiences(after)].some(([id, audience]) => was.has(id) && was.get(id) !== audience)
+}
+
+/** The Swarm's index row (SuperTab): what hosts, invitations and member lists are looked up by (design section 2.3). */
+export function indexesOf(state: SuperTabState) {
+  return {
+    memberIds: state.people.map(p => p.id), invitedEmails: state.invitations.map(i => i.email),
+    machineIds: [...new Set([...state.agents.map(a => a.machineId), ...(state.machines ?? []).map(m => m.machineId),
+      ...(state.closingSessions ?? []).map(c => c.machineId), ...(state.machineCleanups ?? []).map(c => c.machineId)])],
+    cleanupMachineIds: [...new Set([...(state.machines ?? []).flatMap(m => m.removal ? [m.machineId] : []),
+      ...(state.machineCleanups ?? []).map(c => c.machineId)])],
+  }
+}
+
+/**
+ * Numbers each message in its conversation (design section 1.1 D4): the conversation's counter moves by one per message, in
+ * draft order. A shown message is the conversation's latest and wakes a dormant one; an agent-only notice is numbered but
+ * shown to nobody. Returns each message's sequence.
+ */
+export function numberMessages(state: SuperTabState, messages: MessageDraft[], now: number): Map<string, number> {
+  const sequences = new Map<string, number>()
+  for (const message of messages) {
+    const group = conversation(state, message.conversationId)
+    const sequence = (group.messageSeq ?? state.sequenceBase ?? 0) + 1
+    group.messageSeq = sequence
+    sequences.set(message.id, sequence)
+    if (agentOnly(message.source)) continue
+    group.lastMessageSequence = sequence
+    group.lastActivityAt = new Date(now).toISOString()
+    delete group.dormant
+  }
+  return sequences
+}
+
+/** Keeps the newest RELEASED_CAP released harnesses of each machine (spec, Archive). */
+function capReleased(state: SuperTabState): void {
+  const released = state.releasedHarnesses
+  if (!released) return
+  const count = new Map<string, number>()
+  for (const entry of released) count.set(entry.machineId, (count.get(entry.machineId) ?? 0) + 1)
+  if ([...count.values()].every(n => n <= RELEASED_CAP)) return
+  const seen = new Map<string, number>()
+  state.releasedHarnesses = released.filter(entry => {
+    const index = (seen.get(entry.machineId) ?? 0) + 1
+    seen.set(entry.machineId, index)
+    return index > count.get(entry.machineId)! - RELEASED_CAP
+  })
+}
+
+/**
+ * Writes what a command changed (design section 3.1): each part whose data differs from what was loaded, each new part,
+ * a tombstone for each removed one, a guarded touch for each part in `touches` it did not write, the head when its
+ * counters or the visibility epoch move, and the index row when a person, invitation or machine reference was added or
+ * removed. Every write is guarded by the version it was read at.
+ */
+export async function commitParts(tx: Transaction, loaded: { parts: SwarmParts; state: SuperTabState; row: { id: string; revision: number } },
+  next: SuperTabState, opts: { stamp: number; touches?: Touch[] }): Promise<{ written: Written[]; versions: Map<string, number> }> {
+  const { parts } = loaded, { stamp } = opts
+  capReleased(next)
+  const after = split(next, { tabId: parts.tabId, version: 0, now: stamp, messageBase: parts.sequenceBase })
+  const writes: PartWrite[] = []
+  const first = parts.sequenceBase + 1
+  let referencesChanged = false
+  for (const kind of Object.keys(LISTS) as ListKind[]) {
+    const before = new Map(parts[LISTS[kind]].filter(p => !p.deleted).map(p => [p.key, p as Part]))
+    const now = new Map((after[LISTS[kind]] as Part[]).map(p => [p.key, p]))
+    let added = 0
+    for (const [key, part] of now) {
+      const prior = before.get(key)
+      if (!prior) {
+        writes.push({ op: 'insert', kind, key, data: part.data, ordinal: stamp + added++ / 1000, first })
+        if (kind !== 'group' && kind !== 'start' && kind !== 'progress') referencesChanged = true
+      } else if (canonical(prior.data) !== canonical(part.data)) {
+        writes.push({ op: 'update', kind, key, seen: prior.version, data: part.data })
+      }
+    }
+    for (const [key, prior] of before) {
+      if (now.has(key)) continue
+      writes.push({ op: 'remove', kind, key, seen: prior.version, data: prior.data })
+      if (kind !== 'group' && kind !== 'start' && kind !== 'progress') referencesChanged = true
+    }
+  }
+  const epoch = parts.visibilityEpoch + (visibilityChanged(loaded.state, next) ? 1 : 0)
+  const head: HeadColumns = { groupCounter: Math.max(parts.groupCounter, next.groupCounter ?? 0), visibilityEpoch: epoch, sequenceBase: parts.sequenceBase }
+  if (canonical(parts.head.data) !== canonical(after.head.data) || head.groupCounter !== parts.groupCounter || epoch !== parts.visibilityEpoch) {
+    writes.push({ op: 'update', kind: 'head', key: 'head', seen: parts.head.version, data: after.head.data, head })
+  }
+  if (canonical(indexesOf(loaded.state)) !== canonical(indexesOf(next))) referencesChanged = true
+  const versions = new Map<string, number>()
+  const written: Written[] = []
+  for (const write of writes) {
+    const version = await guardedWrite(tx, parts.tabId, write, stamp)
+    versions.set(`${write.kind}:${write.key}`, version)
+    written.push({ kind: write.kind, key: write.key, version })
+  }
+  const all = [parts.head as Part, ...parts.members, ...parts.agents, ...parts.groups, ...parts.machines, ...parts.starts, ...parts.progress]
+  for (const touch of opts.touches ?? []) {
+    const key = `${touch.kind}:${touch.key}`
+    if (versions.has(key)) continue
+    const part = all.find(p => p.kind === touch.kind && p.key === touch.key && !p.deleted)
+    if (!part) continue
+    versions.set(key, await guardedWrite(tx, parts.tabId, { op: 'touch', kind: touch.kind, key: touch.key, seen: part.version }, stamp))
+  }
+  if (referencesChanged) {
+    // Always written when a reference is added or removed, so two such commands conflict instead of one losing an id.
+    const updated = await tx.superTab.updateMany({ where: { id: loaded.row.id, revision: loaded.row.revision },
+      data: { revision: loaded.row.revision + 1, ...indexesOf(next) } })
+    if (!updated.count) throw new PartConflict('head', 'index')
+  }
+  return { written, versions }
+}

@@ -26,7 +26,9 @@ export type HeadProject = Omit<SwarmProject, 'progress'>
 /** The head: everything in `SuperTabState` that is not one of the other parts. */
 export type HeadData = Omit<SuperTabState, 'people' | 'agents' | 'conversations' | 'parkedConversations' | 'starts' | 'machines'
   | 'harnessReservations' | 'releasedHarnesses' | 'closingSessions' | 'machineCleanups' | 'otherProjectsWork' | 'projects'
-  | 'groupCounter' | 'sequenceBase'> & { projects?: HeadProject[] }
+  | 'groupCounter' | 'sequenceBase'> & { projects?: HeadProject[]
+    /** Which optional lists the state had, so an empty one comes back as `[]` and an absent one stays absent. */
+    presentLists?: string[] }
 
 /** A conversation with the fields only the part store keeps (section 2.2). */
 export type GroupData = Conversation

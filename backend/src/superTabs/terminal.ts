@@ -45,7 +45,7 @@ export function mayDrive(state: SuperTabState, actor: Actor, target: Agent): voi
  *  Swarm-wide Leads conversation), else its project's Lead chat. */
 export function currentGroup(state: SuperTabState, target: Agent): Conversation {
   return state.conversations.find(c => activeWork(c) && c.assignment!.agentId === target.id)
-    ?? state.conversations.findLast(c => !c.archived && !isLeads(c) && c.agentIds.includes(target.id) && c.leadId !== target.id)
+    ?? state.conversations.findLast(c => !c.archived && !isLeads(c) && !c.audience && c.agentIds.includes(target.id) && c.leadId !== target.id)
     ?? conversation(state, projectOf(state, agentProjectId(state, target)).leadConversationId)
 }
 

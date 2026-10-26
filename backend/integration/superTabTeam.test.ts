@@ -10,12 +10,31 @@ import type { AuthUser } from '../src/lib/ssoAuth.js'
 import { SuperTabStore } from '../src/superTabs/store.js'
 import type { Command } from '../src/superTabs/commands.js'
 import type { ContributedMachine } from '../src/superTabs/machines.js'
+import * as parts from '../src/superTabs/parts/index.js'
+import type { SuperTabState } from '../src/superTabs/model.js'
 
 // A team session (docs/plans/2026-10-24-swarm-team-account.md, Task 1) is the owner's account signed in on a second
 // macOS user of the owner's Mac. In a Swarm it may host its own machine and speak as the agents running there, and
 // nothing else: never as the person, never for the person's other machines. A fresh loopback replica set, created here.
 let replica: MongoMemoryReplSet
 let db: PrismaClient
+
+/** A Swarm's whole state as its parts hold it (test helper: the store keeps no single document). */
+async function storedState(tab: string): Promise<SuperTabState> {
+  return parts.reassemble(await db.$transaction(tx => parts.loadAll(tx, tab)))
+}
+/** Replaces a Swarm's parts with `state`, as an older release would have left them. Versions keep rising. */
+async function saveState(tab: string, state: SuperTabState) {
+  await db.$transaction(async tx => {
+    const current = await parts.loadAll(tx, tab)
+    const version = Math.max(current.head.version, ...[...current.members, ...current.agents, ...current.groups, ...current.machines,
+      ...current.starts, ...current.progress].map(p => p.version)) + 1
+    for (const model of [tx.swarmHead, tx.swarmMember, tx.swarmAgent, tx.swarmGroup, tx.swarmMachine, tx.swarmStart, tx.swarmProgress] as unknown as
+      Array<{ deleteMany(args: unknown): Promise<unknown> }>) await model.deleteMany({ where: { tabId: tab } })
+    await parts.insertParts(tx, { ...parts.split(state, { tabId: tab, version, now: Date.now(), visibilityEpoch: current.visibilityEpoch }),
+      sequenceBase: current.sequenceBase })
+  })
+}
 let store: SuperTabStore
 const TEAM_COMPUTER = 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'
 const owner: AuthUser = { sub: '200000000000000000000001', email: 'owner@example.com', autonomousEnv: 'prod', role: 'user' }
@@ -140,7 +159,7 @@ describe('a team session speaking in a Swarm', () => {
     const f = await fixture()
     expect((await store.read(team, f.tab, f.builder)).state.agents.map(a => a.id)).toContain(f.builder)
     const sent = await run(f.tab, { type: 'message.send', conversationId: f.teamGroup, text: 'Started.', replyTo: null, recipientIds: [] }, team, f.builder)
-    expect(sent.revision).toBeGreaterThan(0)
+    expect(sent.parts.length).toBeGreaterThan(0)
     expect((await store.messages(team, f.tab, f.teamGroup, {}, f.builder)).messages.at(-1)).toMatchObject({ text: 'Started.',
       author: expect.objectContaining({ kind: 'agent', id: f.builder }) })
     expect(await store.deliveries(team, f.tab, f.builder)).toEqual([])
@@ -414,12 +433,11 @@ describe('a teammate\'s work and the machines that take it', () => {
     const old = String((await run(f.tab, { type: 'agent.add', conversationId: f.teamGroup, machineId: 'personal-mac', harnessId: 'before-release',
       name: 'Old', configuration: config, lead: false }, person)).result.agentId)
     // Its task was assigned by a release from before the rule: written into the stored Swarm as that release left it.
-    const row = await db.superTab.findUniqueOrThrow({ where: { id: f.tab } })
-    const state = structuredClone(row.state) as unknown as { conversations: Array<{ id: string; agentIds: string[]; assignment: unknown }> }
+    const state = await storedState(f.tab)
     const work = state.conversations.find(c => c.id === f.teamGroup)!
     work.assignment = { id: 'assigned-before', agentId: old, status: 'working', configuration: config, result: null,
       execution: { machineId: 'personal-mac', harnessId: 'before-release', machineOwnerId: person.sub } }
-    await db.superTab.update({ where: { id: f.tab }, data: { state: state as never, revision: row.revision + 1 } })
+    await saveState(f.tab, state)
     await db.superTabRun.create({ data: { id: old, tabId: f.tab, assignmentId: 'assigned-before', machineId: 'personal-mac', harnessId: 'before-release' } })
 
     await store.observeMachine(person, f.tab, 'personal-mac', reading(generation))

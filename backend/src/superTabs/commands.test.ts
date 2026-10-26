@@ -817,8 +817,10 @@ it('assigns stable workgroup numbers through old snapshots, rename, archive and 
   const f = fixture(), first = f.group(), second = f.group()
   // The Lead and Leads conversations have no number.
   expect(f.state.conversations.map(c => c.number)).toEqual([undefined, 1, 2, undefined])
+  // An old snapshot has neither the numbers nor the counter the store by parts keeps.
   delete f.state.conversations[1]!.number
   delete f.state.conversations[2]!.number
+  delete f.state.groupCounter
   expect(visibleState(f.state, owner).conversations.map(c => c.number)).toEqual([undefined, 1, 2, undefined])
   expect(f.state.conversations[1]!.number).toBeUndefined()
   f.run({ type: 'conversation.rename', conversationId: first, title: 'Renamed' })
@@ -2281,5 +2283,69 @@ describe('credentials in Swarm chat', () => {
     // Commands with no words of their own are passed through untouched.
     const pause: Command = { type: 'tab.pause', paused: true }
     expect(withoutCredentials(pause, removed)).toBe(pause)
+  })
+})
+
+describe('private conversations (an explicit audience)', () => {
+  /** A Swarm with a Lead, a worker, and the peer as a collaborator; the peer opens a private conversation with the Lead. */
+  function privateFixture() {
+    const f = fixture()
+    f.invite()
+    const lead = f.add('lead-harness', 'owner', 'lead', true)
+    const worker = f.add('worker-harness')
+    const group = f.run({ type: 'conversation.create', title: 'Peer and PM', brief: '', checks: [], audience: { personIds: ['peer'] } }, peer)
+      .result.conversationId as string
+    const agentActor = (agentId: string): Actor => ({ kind: 'agent', agentId, machineOwnerId: 'host-owner' })
+    // Object.assign keeps the fixture's live `state` getter; a spread would copy today's state.
+    return Object.assign(f, { lead, worker, group, agentActor })
+  }
+  const sees = (state: Parameters<typeof visibleState>[0], actor: Actor, group: string) => visibleState(state, actor).conversations.some(c => c.id === group)
+
+  it('shows it to the people listed and the project Lead only, not to the owners or other agents', () => {
+    const f = privateFixture()
+    expect(f.state.conversations.find(c => c.id === f.group)).toMatchObject({ audience: { people: [{ id: 'peer', generation: expect.any(String) }] },
+      agentIds: [f.lead], leadId: f.lead })
+    expect(sees(f.state, peer, f.group)).toBe(true)
+    expect(sees(f.state, f.agentActor(f.lead), f.group)).toBe(true)
+    expect(sees(f.state, owner, f.group)).toBe(false)
+    expect(sees(f.state, f.agentActor(f.worker), f.group)).toBe(false)
+    expect(() => f.run({ type: 'message.send', conversationId: f.group, text: 'Hello', replyTo: null, recipientIds: [] })).toThrow('unavailable')
+    expect(f.run({ type: 'message.send', conversationId: f.group, text: 'Hello', replyTo: null, recipientIds: [] }, peer).messages[0]!.recipients).toEqual([f.lead])
+  })
+
+  it('lets a person open one only with themselves in it, and a Lead with any project reader', () => {
+    const f = privateFixture()
+    expect(() => f.run({ type: 'conversation.create', title: 'Not mine', brief: '', checks: [], audience: { personIds: ['owner'] } }, peer))
+      .toThrow('yourself')
+    const opened = f.run({ type: 'conversation.create', title: 'Owner and PM', brief: '', checks: [], audience: { personIds: ['owner'] } }, f.agentActor(f.lead))
+    expect(sees(f.state, owner, opened.result.conversationId as string)).toBe(true)
+    expect(() => f.run({ type: 'conversation.create', title: 'Stranger', brief: '', checks: [], audience: { personIds: ['nobody'] } }, f.agentActor(f.lead)))
+      .toThrow()
+  })
+
+  it('lets only the Lead or a listed person change who is in it, and never makes it public', () => {
+    const f = privateFixture()
+    expect(() => f.run({ type: 'conversation.audience', conversationId: f.group, personIds: ['peer', 'owner'] })).toThrow('unavailable')
+    f.run({ type: 'conversation.audience', conversationId: f.group, personIds: ['peer', 'owner'] }, peer)
+    expect(sees(f.state, owner, f.group)).toBe(true)
+    f.run({ type: 'conversation.audience', conversationId: f.group, personIds: [] }, f.agentActor(f.lead))
+    expect(sees(f.state, peer, f.group)).toBe(false)
+    expect(sees(f.state, f.agentActor(f.lead), f.group)).toBe(true)
+    const shared = f.group === 'lead' ? '' : f.run({ type: 'conversation.create', title: 'Shared', brief: '', checks: [] }).result.conversationId as string
+    expect(() => f.run({ type: 'conversation.audience', conversationId: shared, personIds: ['owner'] })).toThrow('stays')
+  })
+
+  it('holds only messages and the project Lead', () => {
+    const f = privateFixture()
+    expect(() => f.run({ type: 'conversation.agent', conversationId: f.group, agentId: f.worker, present: true, lead: false }, peer)).toThrow()
+    expect(() => f.run({ type: 'conversation.agent', conversationId: f.group, agentId: f.worker, present: true, lead: false }, f.agentActor(f.lead)))
+      .toThrow('only the Lead')
+    expect(() => f.run({ type: 'work.define', conversationId: f.group, brief: 'Work', checks: [{ description: 'Done', independent: false }] }, f.agentActor(f.lead)))
+      .toThrow('chat')
+  })
+
+  it('never puts its work or titles in front of other projects\' Leads', () => {
+    const f = privateFixture()
+    expect(visibleState(f.state, f.agentActor(f.lead)).otherProjectsWork ?? []).toEqual([])
   })
 })

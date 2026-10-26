@@ -18,12 +18,8 @@ export async function bindSession(tx: Prisma.TransactionClient, state: SuperTabS
   if (!prior) {
     // Sessions contributed before project privacy existed may already appear
     // in more than one tab. Inspect those registrations before binding one.
-    const rows = await tx.superTab.findMany({ where: { autonomousEnv: state.environment, machineIds: { has: target.machineId } } })
-    scopes = rows.flatMap(row => {
-      const other = row.state as unknown as SuperTabState
-      const contributed = other.agents.find(a => a.id === target.id && a.machineOwnerId === target.machineOwnerId)
-      return contributed ? [scopeId(other, agentProjectId(other, contributed))] : []
-    })
+    const rows = await tx.swarmAgent.findMany({ where: { key: target.id, machineOwnerId: target.machineOwnerId, deleted: false } })
+    scopes = rows.map(row => stableId(row.tabId, (row.data as unknown as Agent).projectId ?? 'lead'))
   }
   if (prior?.privateScope && prior.privateScope !== scope ||
     project.visibility === 'private' && scopes.some(id => id !== scope)) {

@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto'
 import type { RouteDecisionEffect } from './routeRecord.js'
 import { agentDisplayName, assignAgentDisplayNames } from './agentNames.js'
 import { downSince, expireRemovals } from './machines.js'
-import { agentProjectId, agentSetRole, canReadAgent, canReadProject, groupProject, ledProject, placeRules, projectsOf, sharedWithLeads, skillSetOf, type ProjectVisibility, type SwarmProject } from './projects.js'
+import { agentProjectId, agentSetRole, canReadAgent, canReadGroup, canReadProject, groupProject, ledProject, placeRules, projectsOf, sharedWithLeads, skillSetOf, type ProjectVisibility, type SwarmProject } from './projects.js'
 
 export type Role = 'owner' | 'collaborator' | 'viewer'
 export interface Person { id: string; email: string; role: Role; generation: string }
@@ -331,7 +331,7 @@ export function parkLaterConversations(state: SuperTabState): void {
 }
 
 /** Work a Lead of another project should know about: assigned and moving, not finished, stuck or archived. */
-export const crossProjectActive = (group: Conversation): boolean => !group.archived && !isLeads(group)
+export const crossProjectActive = (group: Conversation): boolean => !group.archived && !isLeads(group) && !group.audience
   && ['working', 'review', 'needs_human'].includes(group.assignment?.status ?? '')
 
 function otherProjectsWork(state: SuperTabState, own: SwarmProject): OtherProjectWork[] {
@@ -361,11 +361,14 @@ export function numberConversations(state: SuperTabState): void {
   let next = nextConversationNumber(state)
   const leads = new Set(projectsOf(state).map(p => p.leadConversationId))
   for (const group of state.conversations) {
-    if (!leads.has(group.id) && !isLeads(group) && group.number == null) group.number = next++
+    if (!leads.has(group.id) && !isLeads(group) && group.number == null) state.groupCounter = group.number = next++
   }
 }
+/** The store by parts keeps the highest number ever given (`groupCounter`): a dormant group is not loaded, and its
+ *  number must not be given again. */
 export function nextConversationNumber(state: SuperTabState): number {
-  return Math.max(state.retiredConversationNumber ?? 0, 0, ...[...state.conversations, ...state.parkedConversations ?? []].map(c => c.number ?? 0)) + 1
+  return Math.max(state.groupCounter ?? 0, state.retiredConversationNumber ?? 0, 0,
+    ...[...state.conversations, ...state.parkedConversations ?? []].map(c => c.number ?? 0)) + 1
 }
 export function author(state: SuperTabState, actor: Actor, write = false): Author {
   if (actor.kind === 'person') {
@@ -406,6 +409,8 @@ export function createSuperTab(id: string, name: string, owner: { id: string; em
 export function visibleState(state: SuperTabState, actor: Actor, now = Date.now()): SuperTabState {
   author(state, actor)
   const visible = structuredClone(state)
+  // A dormant conversation is read on demand, never in a whole-Swarm read (spec, Archive); a command may still load one.
+  visible.conversations = visible.conversations.filter(c => !c.dormant)
   syncLeads(visible)
   // People and Leads read the Leads conversation; it is not there for any other agent.
   if (actor.kind === 'agent' && !ledProject(visible, actor.agentId)) {
@@ -439,11 +444,13 @@ export function visibleState(state: SuperTabState, actor: Actor, now = Date.now(
   delete visible.parkedConversations
   numberConversations(visible)
   delete visible.retiredConversationNumber
+  delete visible.groupCounter
+  delete visible.sequenceBase
   placeRules(visible)
   if (visible.rules) visible.rules = visible.rules.filter(r => projectsOf(state).some(p => p.id === r.projectId && canReadProject(state, actor, p)))
   if (visible.projects) {
     visible.projects = visible.projects.filter(p => canReadProject(state, actor, p))
-    visible.conversations = visible.conversations.filter(c => isLeads(c) || canReadProject(state, actor, groupProject(state, c)))
+    visible.conversations = visible.conversations.filter(c => isLeads(c) || canReadGroup(state, actor, c))
     visible.agents = visible.agents.filter(a => canReadAgent(state, actor, a))
     for (const group of visible.conversations.filter(isLeads)) group.agentIds = group.agentIds.filter(id => visible.agents.some(a => a.id === id))
     visible.starts = visible.starts?.filter(s => visible.conversations.some(c => c.id === s.request.conversationId))

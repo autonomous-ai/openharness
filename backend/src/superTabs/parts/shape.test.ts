@@ -34,7 +34,7 @@ function legacy(): SuperTabState {
     releasedHarnesses: [{ machineId: 'other', harnessId: 'old' }],
     closingSessions: [{ agentId: 'gone', machineId: 'third', harnessId: 'h-gone', machineOwnerId: 'u1' }],
     machineCleanups: [{ machineId: 'removed', removalId: 'r1', machineOwnerId: 'u1' }],
-  } as SuperTabState
+  } as unknown as SuperTabState
 }
 
 describe('splitting a Swarm into parts', () => {
@@ -64,12 +64,14 @@ describe('splitting a Swarm into parts', () => {
     expect(parts.progress[0]!.data).toEqual({ since: 111, summarizedFloor: 90, summarized: {}, requestedFloor: 80, requested: {},
       requestedAt: 222, requestMessageId: 'm1' })
     // A report counts up to the project's dirty revision; a later notice in the group is not a report.
-    expect(Object.fromEntries(parts.groups.map(p => [p.key, p.data!.reportSeq]))).toEqual({ lead1: 0, g2: 95, g3: 92, leads: 0, later: 0 })
+    expect(Object.fromEntries(parts.groups.map(p => [p.key, p.data!.reportSeq]))).toEqual({ lead1: 0, g2: 95, g3: 92, leads: 0, later: undefined })
   })
 
   it('numbers its messages and workgroups after everything before the split', () => {
     const parts = split(legacy(), { tabId: 'tab1', version: 500, now: 1000 })
-    expect(parts.groups.every(p => p.data!.messageSeq === 500)).toBe(true)
+    expect(parts.groups.filter(p => p.key !== 'later').every(p => p.data!.messageSeq === 500)).toBe(true)
+    // A conversation of a kind a later release added is kept exactly as that release wrote it.
+    expect(parts.groups.find(p => p.key === 'later')!.data).toEqual(legacy().parkedConversations![0])
     expect(parts.sequenceBase).toBe(500)
     expect(parts.groupCounter).toBe(7)
   })

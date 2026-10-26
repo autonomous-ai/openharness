@@ -13,7 +13,8 @@ import { MAX_ATTACHMENTS, type Attachment } from './attachments.js'
 import { checkMentions, MAX_MENTIONS, type MentionTarget } from './mentions.js'
 import { TERMINAL_KEYS, terminalAlert, terminalRequest, terminalResult, type TerminalRequest } from './terminal.js'
 import { credentialResult, redactCredentials, type CredentialKind } from './credentials.js'
-import { agentKind, agentProjectId, agentSetRole, deleteProject, groupProject, inviteLanding, ledProject, manageProject, MAX_ROLES, mutableProjects, placeRules, projectMembers, projectOf, projectRules, projectsOf, readAgent, readConversation, readProject, roleVersion, sameProject, sharedWithLeads, SKILL_SET_NAMES, skillSetOf, type ProjectRole, type RoleKind, type SwarmProject } from './projects.js'
+import { reportGroups, summarize } from './projectUpdates.js'
+import { agentKind, agentProjectId, audienceOf, agentSetRole, deleteProject, groupProject, inviteLanding, ledProject, manageProject, MAX_ROLES, mutableProjects, placeRules, projectMembers, projectOf, projectRules, projectsOf, readAgent, readConversation, readProject, roleVersion, sameProject, sharedWithLeads, SKILL_SET_NAMES, skillSetOf, type ProjectRole, type RoleKind, type SwarmProject } from './projects.js'
 
 const id = z.string().min(1).max(160).regex(/^[A-Za-z0-9_-]+$/)
 const title = z.string().trim().min(1).max(160)
@@ -79,18 +80,25 @@ export const commandSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('project.delete'), projectId: id }).strict(),
   z.object({ type: z.literal('project.sharing'), projectId: id, visibility: z.enum(['public', 'private']), memberIds: z.array(id).max(200) }).strict(),
   z.object({ type: z.literal('project.cadence'), projectId: id, minutes: z.union([z.literal(1), z.literal(5), z.literal(15), z.literal(30)]) }).strict(),
-  z.object({ type: z.literal('project.report'), projectId: id, throughRevision: z.number().int().nonnegative().safe(), text: text.nullable() }).strict(),
+  // `through`: each conversation's sequence the Lead read, as its wake-up names them. `throughRevision` is the tab revision a
+  // wake-up from before the store by parts named; it is accepted only up to that split (projectUpdates.ts).
+  z.object({ type: z.literal('project.report'), projectId: id, through: z.record(id, z.number().int().nonnegative().safe()).optional(),
+    throughRevision: z.number().int().nonnegative().safe().optional(), text: text.nullable() }).strict()
+    .refine(c => (c.through === undefined) !== (c.throughRevision === undefined), 'Acknowledge with through, the map your wake-up names.'),
   z.object({ type: z.literal('project.repository'), projectId: id, repositoryUrl }).strict(),
   z.object({ type: z.literal('project.skills'), projectId: id, mode: z.enum(['default', 'orchestration', 'custom']), askedIn: askedInSchema.optional() }).strict(),
   z.object({ type: z.literal('project.roles.create'), projectId: id, roles: roleSet }).strict(),
   z.object({ type: z.literal('project.role.set'), projectId: id, role }).strict(),
   z.object({ type: z.literal('project.role.remove'), projectId: id, roleId }).strict(),
   z.object({ type: z.literal('project.roles.reset'), projectId: id, roles: roleSet }).strict(),
-  z.object({ type: z.literal('conversation.create'), projectId: id.optional(), title, brief: z.string().trim().max(8000).optional(), task: task.optional(), reviewOf: id.optional(), checks: z.array(check).max(40) }).strict()
+  // `audience`: a private conversation that only these people and the project's Lead read (projects.ts canReadGroup).
+  z.object({ type: z.literal('conversation.create'), projectId: id.optional(), title, brief: z.string().trim().max(8000).optional(), task: task.optional(), reviewOf: id.optional(), checks: z.array(check).max(40),
+    audience: z.object({ personIds: z.array(id).max(200) }).strict().optional() }).strict()
     .refine(c => c.task !== undefined || c.brief !== undefined, 'Provide a task or brief.')
     .refine(c => !c.task || renderWorkTask(c.task).length <= 8000, 'Keep the rendered task within 8,000 characters.'),
   z.object({ type: z.literal('conversation.rename'), conversationId: id, title }).strict(),
   z.object({ type: z.literal('conversation.archive'), conversationId: id, archived: z.boolean() }).strict(),
+  z.object({ type: z.literal('conversation.audience'), conversationId: id, personIds: z.array(id).max(200) }).strict(),
   z.object({ type: z.literal('agent.add'), conversationId: id, machineId: id, harnessId: id, name: title, configuration, lead: z.boolean(), project: project.optional(), roleId: roleId.optional(), initialMessage: text.optional() }).strict(),
   z.object({ type: z.literal('agent.start'), request: startRequestSchema, routeDecisionId: id.optional(), overrideReason: reason.optional() }).strict(),
   z.object({ type: z.literal('agent.startDispatch'), startId: id }).strict(),
@@ -448,6 +456,10 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
     result.messageId = operationId
   }
   /** An agent starts or assigns only what the route chose; a person may still do either by hand. */
+  /** A private conversation is chat only (design section 4.8). */
+  const chatOnly = (conversationId: string) => {
+    if (state.conversations.find(c => c.id === conversationId)?.audience) fail('AUDIENCE_CHAT_ONLY', 'A private conversation is chat only.', 400)
+  }
   const routed = (routeDecisionId?: string) => {
     if (actor.kind === 'agent' && !routeDecisionId) fail('ROUTE_REQUIRED', 'Route this task first, then start or assign the pick with its routeDecisionId.', 400)
   }
@@ -646,8 +658,10 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       const project = readProject(state, actor, command.projectId)
       const group = conversation(state, project.leadConversationId)
       if (actor.kind !== 'agent' || group.leadId !== actor.agentId) fail('LEAD_REQUIRED', 'The project lead writes its progress updates.', 403)
-      if (project.progress) project.progress.summarizedRevision = Math.max(project.progress.summarizedRevision,
-        Math.min(command.throughRevision, project.progress.dirtyRevision))
+      if (command.throughRevision !== undefined && command.throughRevision > (state.sequenceBase ?? 0)) {
+        fail('THROUGH_REQUIRED', 'Acknowledge with through, the map of workgroups your latest wake-up names.', 400)
+      }
+      summarize(state, project, command.through ?? Object.fromEntries(reportGroups(state, project).map(g => [g.id, command.throughRevision!])))
       if (command.text) message(group.id, command.text, [], null, { kind: 'project-report' })
       break
     }
@@ -920,11 +934,18 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
         (actor.kind === 'agent' ? agentProjectId(state, agent(state, actor.agentId)) : 'lead'))
       controls(state, actor, project.leadConversationId)
       if (state.paused) fail('PAUSED', 'New work is paused in this Super Tab.')
-      if (actor.kind === 'agent' && (!brief || !command.checks.length)) {
+      if (command.audience) {
+        // A private conversation is chat only: no task, checks or review, so private work never reaches other Leads.
+        if (command.task || command.checks.length || command.reviewOf) fail('AUDIENCE_CHAT_ONLY', 'A private conversation is chat only.', 400)
+        if (actor.kind === 'person' && !command.audience.personIds.includes(actor.userId)) {
+          fail('AUDIENCE_SELF', 'Open a private conversation with yourself in it.', 403)
+        }
+      } else if (actor.kind === 'agent' && (!brief || !command.checks.length)) {
         fail('BRIEF_REQUIRED', 'Delegated work needs a brief and acceptance checks.', 400)
       }
       const leadId = conversation(state, project.leadConversationId).leadId
       if (command.reviewOf) {
+        chatOnly(command.reviewOf)
         const reviewed = open(state, command.reviewOf)
         if (reviewed.id === project.leadConversationId || reviewed.reviewOf || groupProject(state, reviewed).id !== project.id) {
           fail('REVIEW_TARGET', 'A review group reviews one build group of the same project.', 400)
@@ -932,9 +953,11 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
         requireCustomRole(project, 'reviewer')
       }
       const number = nextConversationNumber(state)
+      state.groupCounter = number
       state.conversations.push({ id: operationId, ...(state.projects ? { projectId: project.id } : {}),
         number, title: command.title, leadId, agentIds: leadId ? [leadId] : [],
         archived: false, brief, ...(command.task ? { task: command.task } : {}), ...(command.reviewOf ? { reviewOf: command.reviewOf } : {}),
+        ...(command.audience ? { audience: audienceOf(state, project, command.audience.personIds) } : {}),
         assignment: null, lastMessageSequence: 0,
         checks: command.checks.map((c, i) => ({ ...c, id: stableId(operationId, String(i)), evidence: null, passedBy: null })),
       })
@@ -947,12 +970,22 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       controls(state, actor, command.conversationId)
       open(state, command.conversationId).title = command.title
       break
+    case 'conversation.audience': {
+      // Who may read it already passed (readConversation): only its listed people and the project's Lead get here.
+      const group = open(state, command.conversationId)
+      if (!group.audience) fail('AUDIENCE_FIXED', 'A shared conversation stays shared. Open a private conversation instead.', 400)
+      group.audience = audienceOf(state, groupProject(state, group), command.personIds)
+      break
+    }
     case 'conversation.archive': {
       controls(state, actor, command.conversationId)
       const group = conversation(state, command.conversationId)
       if (group.id === groupProject(state, group).leadConversationId) fail('LEAD_CONVERSATION', 'The Lead conversation stays available.')
       if (command.archived && activeWork(group)) fail('WORK_ACTIVE', 'Resolve the active assignment before archiving this conversation.')
       group.archived = command.archived
+      // Archived by hand, it leaves the active set until it is reopened (spec, Archive).
+      if (command.archived) group.dormant = true
+      else delete group.dormant
       break
     }
     case 'agent.add': {
@@ -1012,6 +1045,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       break
     }
     case 'agent.start': {
+      chatOnly(command.request.conversationId)
       controls(state, actor, command.request.conversationId)
       routed(command.routeDecisionId)
       requireWorkerDecisions(state, actor, open(state, command.request.conversationId))
@@ -1248,6 +1282,9 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
         group.agentIds = group.agentIds.filter(id => id !== command.agentId)
         if (group.leadId === command.agentId) group.leadId = null
       } else {
+        if (group.audience && ledProject(state, member.id)?.id !== groupProject(state, group).id) {
+          fail('AUDIENCE_LEAD_ONLY', 'A private conversation holds only the Lead among agents.', 403)
+        }
         // A Reviewer added to a group is handed its review, as an assignment hands a Builder its task.
         if (reviewer) requireTeamWork(state, member.machineId, member.contributorId, groupProject(state, group), context.now, context.teamMachines)
         ruled(agentTarget(state, member), group.id, `${who} added ${member.name}`)
@@ -1351,6 +1388,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       break
     }
     case 'route.record': {
+      chatOnly(command.conversationId)
       controls(state, actor, command.conversationId)
       // A teammate's work runs only on Team machines: candidates elsewhere leave the decision for its exclusions, with
       // why, so the Lead and people see it. A pick there is refused; a current CLI already leaves those machines out.
@@ -1418,6 +1456,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       break
     }
     case 'work.define': {
+      chatOnly(command.conversationId)
       controls(state, actor, command.conversationId)
       const group = open(state, command.conversationId)
       if (activeWork(group)) fail('WORK_ACTIVE', 'Finish or stop the current assignment before changing its acceptance checks.')
@@ -1435,6 +1474,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       break
     }
     case 'work.assign': {
+      chatOnly(command.conversationId)
       const target = agent(state, command.agentId)
       if (state.starts?.some(s => s.poolGeneration && !s.poolSettled && s.request.machineId === target.machineId && s.harnessId === target.harnessId)) {
         fail('START_PENDING', 'Wait for the host to finish this agent’s launch and model selection.')

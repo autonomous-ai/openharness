@@ -10,6 +10,8 @@ interface LegacyProgress { dirtyRevision: number; summarizedRevision: number; re
 /** Conversation kinds this release knows; a part of another kind is kept aside unchanged (model.ts parkLaterConversations). */
 const knownKind = (group: Conversation) => group.kind == null || group.kind === 'leads'
 const PART_ONLY_GROUP_FIELDS = ['messageSeq', 'reportSeq', 'dormant', 'lastActivityAt'] as const
+/** Optional lists of `SuperTab.state` an empty one of which differs from an absent one (`[]` after the last machine left). */
+const LISTS = ['parkedConversations', 'starts', 'machines', 'harnessReservations', 'releasedHarnesses', 'closingSessions', 'machineCleanups'] as const
 const STATE_ONLY = ['people', 'agents', 'conversations', 'parkedConversations', 'starts', 'machines', 'harnessReservations',
   'releasedHarnesses', 'closingSessions', 'machineCleanups', 'otherProjectsWork', 'groupCounter', 'sequenceBase'] as const
 
@@ -45,17 +47,20 @@ function machineParts(state: SuperTabState): Map<string, MachineData> {
  * at the project's dirty revision, since a later notice in it was not a report (design section 6.1).
  */
 export function split(state: SuperTabState, opts: { tabId: string; version: number; now: number; visibilityEpoch?: number;
-  lastActivity?: ReadonlyMap<string, number> }): SwarmParts {
+  lastActivity?: ReadonlyMap<string, number>; messageBase?: number }): SwarmParts {
   const { version, now } = opts
   const head = Object.fromEntries(Object.entries(state).filter(([key]) => !(STATE_ONLY as readonly string[]).includes(key))) as HeadData
   if (state.projects) head.projects = state.projects.map(({ progress: _progress, ...project }) => project)
+  const present = LISTS.filter(list => state[list] !== undefined)
+  if (present.length) head.presentLists = present
   const dirty = new Map<string, number>()
   for (const project of state.projects ?? []) {
     if (!isLegacyProgress(project.progress)) continue
     for (const group of reportGroups(state.conversations, project)) dirty.set(group.id, Math.min(group.lastMessageSequence, project.progress.dirtyRevision))
   }
-  const groups = [...state.conversations, ...state.parkedConversations ?? []].map((group, i) => part('group', group.id, {
-    ...group, messageSeq: group.messageSeq ?? version, reportSeq: group.reportSeq ?? dirty.get(group.id) ?? 0,
+  // A conversation of a kind this release does not know is kept exactly as a later release wrote it.
+  const groups = [...state.conversations, ...state.parkedConversations ?? []].map((group, i) => part('group', group.id, !knownKind(group) ? group : {
+    ...group, messageSeq: group.messageSeq ?? opts.messageBase ?? version, reportSeq: group.reportSeq ?? dirty.get(group.id) ?? 0,
     lastActivityAt: group.lastActivityAt ?? new Date(opts.lastActivity?.get(group.id) ?? now).toISOString(),
   }, i, version, now))
   for (const entry of groups) if (entry.data?.dormant) entry.dormant = true
@@ -102,6 +107,8 @@ export function reassemble(parts: SwarmParts): SuperTabState {
     groupCounter: parts.groupCounter,
     sequenceBase: parts.sequenceBase,
   }
+  const present = new Set<string>(parts.head.data!.presentLists ?? [])
+  delete (state as { presentLists?: unknown }).presentLists
   const parked = groups.filter(group => !knownKind(group))
   const starts: AgentStart[] = live(parts.starts)
   const contributed: ContributedMachine[] = machines.flatMap(m => m.contribution ? [m.contribution] : [])
@@ -109,13 +116,16 @@ export function reassemble(parts: SwarmParts): SuperTabState {
   const released = flat(m => m.released.map(harnessId => ({ machineId: m.machineId, harnessId })))
   const closing = flat(m => m.closingSessions.map(c => ({ agentId: c.agentId, machineId: m.machineId, harnessId: c.harnessId, machineOwnerId: c.machineOwnerId })))
   const cleanups: MachineCleanup[] = flat(m => m.cleanups.map(c => ({ machineId: m.machineId, removalId: c.removalId, machineOwnerId: c.machineOwnerId })))
-  if (parked.length) state.parkedConversations = structuredClone(parked)
-  if (starts.length) state.starts = structuredClone(starts)
-  if (contributed.length) state.machines = structuredClone(contributed)
-  if (reservations.length) state.harnessReservations = reservations
-  if (released.length) state.releasedHarnesses = released
-  if (closing.length) state.closingSessions = closing
-  if (cleanups.length) state.machineCleanups = structuredClone(cleanups)
+  const list = <K extends typeof LISTS[number]>(key: K, items: NonNullable<SuperTabState[K]>) => {
+    if (items.length || present.has(key)) state[key] = structuredClone(items)
+  }
+  list('parkedConversations', parked)
+  list('starts', starts)
+  list('machines', contributed)
+  list('harnessReservations', reservations)
+  list('releasedHarnesses', released)
+  list('closingSessions', closing)
+  list('machineCleanups', cleanups)
   return state
 }
 
