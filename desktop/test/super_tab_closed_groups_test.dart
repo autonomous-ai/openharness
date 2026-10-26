@@ -169,4 +169,44 @@ void main() {
       },
     );
   }
+
+  testWidgets(
+    'closed groups read a page at a time; Show earlier reads the next',
+    (tester) async {
+      await tester.binding.setSurfaceSize(const Size(1280, 800));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      final server = ConversationServer()..parts.dormantPage = 1;
+      final groups = server.state['conversations'] as List;
+      groups[1]['archived'] = true;
+      groups.add({
+        ...conversationFixture('second', 'Second closed'),
+        'projectId': 'lead',
+        'archived': true,
+      });
+      final controller = server.controller();
+      await controller.refresh();
+      await tester.pumpWidget(_app(server, controller));
+      await tester.pumpAndSettle();
+      if (closedRow.evaluate().isEmpty) {
+        await tester.tap(
+          find.byKey(const ValueKey('super-project-expand-lead')),
+        );
+        await tester.pumpAndSettle();
+      }
+      expect(find.text('Closed (1)'), findsOneWidget);
+      await tester.tap(closedRow);
+      await tester.pumpAndSettle();
+      final earlier = find.byKey(const ValueKey('super-closed-earlier-lead'));
+      expect(earlier, findsOneWidget);
+      await tester.tap(earlier);
+      await tester.pumpAndSettle();
+      expect(find.text('Closed (2)'), findsOneWidget);
+      expect(earlier, findsNothing);
+      expect(find.byKey(const ValueKey('super-group-offline')), findsOneWidget);
+      expect(find.byKey(const ValueKey('super-group-second')), findsOneWidget);
+      await tester.pumpWidget(const SizedBox());
+      await controller.flush();
+      controller.dispose();
+    },
+  );
 }

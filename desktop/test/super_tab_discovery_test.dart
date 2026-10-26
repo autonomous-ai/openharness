@@ -31,7 +31,7 @@ class _Catalog {
     String path, {
     Map<String, dynamic>? body,
   }) async {
-    if (Uri.parse(path).path != '/api/super-tabs') {
+    if (Uri.parse(path).path != '/api/super-tabs/list') {
       return server.request(method, path, body: body);
     }
     expectSync(method, 'GET');
@@ -537,7 +537,7 @@ void main() {
       await _close(app, tab);
       expect(app.closedSuperTabs, hasLength(1));
       store.values['super_tab.hidden.other'] = '["${tab.superTabId}"]';
-      catalog.fail = '/api/super-tabs';
+      catalog.fail = '/api/super-tabs/list';
       app.currentUser = const CurrentUserProfile(
         id: 'other',
         email: 'other@example.invalid',
@@ -696,7 +696,7 @@ void main() {
     () async {
       final catalog = _Catalog()
         ..tabs.add({'id': '1123456789abcdef01234567', 'name': 'Build'})
-        ..fail = '/api/super-tabs?after=0123456789abcdef01234567';
+        ..fail = '/api/super-tabs/list?after=0123456789abcdef01234567';
       final app = _computer(catalog, MemoryStore());
       await app.superTabs.refreshTabs();
       expect(app.swarms.where((s) => s.isSuperTab), isEmpty);
@@ -764,7 +764,7 @@ void main() {
   testWidgets('sign-in discovers tabs and retries while the app stays open', (
     tester,
   ) async {
-    final catalog = _Catalog()..fail = '/api/super-tabs';
+    final catalog = _Catalog()..fail = '/api/super-tabs/list';
     final seen = <List<SuperTabListing>>[];
     final client = SuperTabClient(
       storage: MemoryStore(),

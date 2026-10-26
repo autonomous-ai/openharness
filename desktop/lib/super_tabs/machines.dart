@@ -1651,7 +1651,7 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
     }
     if (c.snapshot?.conversations.any(
           (group) =>
-              !group.archived &&
+              !group.closed &&
               group.assignment?['agentId'] == agent.id &&
               superTabWorkWaits(group.assignment?['status']),
         ) ==

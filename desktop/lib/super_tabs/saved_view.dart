@@ -1,6 +1,7 @@
 import 'dart:convert';
 
 import '../core/local_key_value_store.dart';
+import 'parts.dart';
 
 /// The last view of a Swarm tab as read: the state the tab draws and the open
 /// conversation's last page, kept on this device so the next open draws it at
@@ -15,26 +16,6 @@ class SuperTabSavedViews {
 
   /// How many Swarms an account keeps a view of, most recently used first.
   static const maxTabs = 3;
-
-  /// What `SuperTabSnapshot.fromJson` reads: everything else in a state is
-  /// never drawn, so it is never kept (agent starts carry their tasks).
-  static const _drawn = {
-    'version',
-    'id',
-    'name',
-    'ownerId',
-    'paused',
-    'project',
-    'people',
-    'agents',
-    'machines',
-    'conversations',
-    'invitations',
-    'leadsConversationId',
-    'localModels',
-    'mentionsWaiting',
-    'projects',
-  };
 
   String _key(String account, String tabId) => 'super_tab.view.$account.$tabId';
   String _index(String account) => 'super_tab.views.$account';
@@ -88,9 +69,11 @@ class SuperTabSavedViews {
           final raw = await storage.read(_key(account, tabId));
           if (raw == null) return null;
           final view = jsonDecode(raw);
+          // A view an older build kept (a whole state, not parts) is none.
           if (view is! Map<String, dynamic> ||
-              view['state'] is! Map<String, dynamic> ||
-              view['revision'] is! int) {
+              view['format'] != superTabReadFormat ||
+              view['parts'] is! Map<String, dynamic> ||
+              view['lastChangedAt'] is! int) {
             return null;
           }
           try {
@@ -109,13 +92,11 @@ class SuperTabSavedViews {
         // Only for the account using this device: after a sign-out in
         // another tab, or another account's claim, a late write keeps nothing.
         if (await storage.read(_owner) != account) return;
-        final state = view['state'] as Map<String, dynamic>;
         final text = jsonEncode({
           ...view,
-          'state': {
-            for (final entry in state.entries)
-              if (_drawn.contains(entry.key)) entry.key: entry.value,
-          },
+          'parts': SuperTabParts.drawnOnly(
+            view['parts'] as Map<String, dynamic>,
+          ),
         });
         if (_utf8Length(text) > maxBytes) {
           await _forget(account, tabId);

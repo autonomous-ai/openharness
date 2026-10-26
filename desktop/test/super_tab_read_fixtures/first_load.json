@@ -1,0 +1,83 @@
+{
+  "format": 2,
+  "tabId": "c51479bd73b59e58176ad9e4",
+  "cursor": "eyJ2IjoyLCJ0IjoxNzkzMDEwMDc0Mzc1LCJlIjozfQ",
+  "serverTime": 1793010104375,
+  "lastChangedAt": 1793010101002,
+  "epoch": 3,
+  "githubApp": true,
+  "head": {
+    "key": "head", "version": 213990, "changedAt": 1793009000000,
+    "data": {
+      "version": 1, "id": "c51479bd73b59e58176ad9e4", "name": "openharness", "ownerId": "6a86",
+      "environment": "prod", "paused": false, "leadsConversationId": "leads",
+      "projects": [
+        { "id": "5701", "name": "openharness", "ownerId": "6a86", "leadConversationId": "lead5701",
+          "visibility": "public", "members": [], "updateMinutes": 5, "skillMode": "default", "skillSet": "default" }
+      ],
+      "rules": [], "invitations": [], "localModels": { "grid": "swarm-c514", "enabled": true }
+    }
+  },
+  "members": [
+    { "key": "6a86", "version": 213990, "changedAt": 1793000000000,
+      "data": { "id": "6a86", "email": "ken15@autonomous.ai", "role": "owner", "generation": "c514" } }
+  ],
+  "agents": [
+    { "key": "0fcb", "version": 213990, "changedAt": 1793000000000,
+      "data": { "id": "0fcb", "projectId": "5701", "machineId": "7835", "harnessId": "1111",
+                "machineOwnerId": "6a91", "contributorId": "6a91", "membershipGeneration": "02c4",
+                "hostGrant": null, "name": "Lead", "displayName": "River",
+                "configuration": { "engine": "claude", "model": "opus", "effort": "high",
+                                   "contextWindow": null, "engineVersion": null } } },
+    { "key": "0540", "version": 214010, "changedAt": 1793010090000,
+      "data": { "id": "0540", "projectId": "5701", "machineId": "7835", "harnessId": "2973",
+                "machineOwnerId": "6a91", "contributorId": "6a91", "membershipGeneration": "02c4",
+                "hostGrant": null, "name": "Builder", "displayName": "Hugo", "workDecision": "release",
+                "configuration": { "engine": "claude", "model": "opus", "effort": "high",
+                                   "contextWindow": null, "engineVersion": null } } }
+  ],
+  "groups": [
+    { "key": "leads", "version": 213990, "changedAt": 1793000000000,
+      "data": { "id": "leads", "kind": "leads", "title": "Product Managers", "leadId": null, "agentIds": ["0fcb"],
+                "archived": false, "brief": "", "checks": [], "assignment": null,
+                "lastMessageSequence": 0, "messageSeq": 213990, "pullRequestUrls": [] } },
+    { "key": "lead5701", "version": 213990, "changedAt": 1793000000000,
+      "data": { "id": "lead5701", "projectId": "5701", "title": "Lead", "leadId": "0fcb", "agentIds": ["0fcb"],
+                "archived": false, "brief": "", "checks": [], "assignment": null,
+                "lastMessageSequence": 213000, "messageSeq": 213990, "pullRequestUrls": [] } },
+    { "key": "aeef", "version": 214031, "changedAt": 1793010101002,
+      "data": { "id": "aeef", "projectId": "5701", "number": 204, "title": "1726 G1: design doc",
+                "leadId": "0fcb", "agentIds": ["0fcb", "0540"], "archived": false,
+                "brief": "Goal: design",
+                "task": { "goal": "Design", "changes": "A doc", "constraints": "None", "owns": ["docs/design/"] },
+                "checks": [ { "id": "b936", "description": "Doc reviewed", "independent": false, "evidence": null, "passedBy": null } ],
+                "assignment": { "id": "09d0", "agentId": "0540", "status": "working", "result": null,
+                                "configuration": { "engine": "claude", "model": "opus", "effort": "high",
+                                                   "contextWindow": null, "engineVersion": null },
+                                "execution": { "machineId": "7835", "harnessId": "2973", "machineOwnerId": "6a91" },
+                                "recordingProgress": { "at": 1793010104375, "revision": 219804 } },
+                "lastMessageSequence": 219804, "messageSeq": 219804, "pullRequestUrls": [] } }
+  ],
+  "machines": [
+    { "key": "7835", "version": 214020, "changedAt": 1793010100000,
+      "data": { "machineId": "7835", "name": "MacBookPro2021", "contributorId": "6a91", "scope": "swarm",
+                "engines": ["claude", "codex"], "maxAgents": 4, "paused": false, "cwd": "/Users/ken",
+                "generation": "g1", "membershipGeneration": "m1",
+                "observation": { "receivedAt": 1793010099000, "resources": {}, "quotas": [],
+                                 "runningHarnessIds": ["2973"], "stoppedHarnessIds": [] } } }
+  ],
+  "starts": [],
+  "progress": [
+    { "key": "5701", "version": 214001, "changedAt": 1793009900000,
+      "data": { "since": 1793009900000, "summarizedFloor": 213800, "summarized": { "aeef": 219700 },
+                "requestedFloor": 213800, "requested": {}, "requestedAt": null } }
+  ],
+  "derived": {
+    "agents": {
+      "0fcb": { "downSince": null, "limitedUntil": null, "workDecision": null, "roleId": null },
+      "0540": { "downSince": "2026-10-26T10:19:51.474Z", "limitedUntil": null, "workDecision": "awaiting", "roleId": null }
+    },
+    "machines": { "7835": { "availableSlots": 3, "teamWork": { "allowed": true } } },
+    "mentionsWaiting": 0
+  }
+}

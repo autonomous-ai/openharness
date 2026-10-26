@@ -397,7 +397,7 @@ class _SuperTabWorkspaceState extends State<SuperTabWorkspace> {
   ) async {
     final groups =
         controller.snapshot?.conversations
-            .where((g) => !g.archived && g.agentIds.contains(agent.id))
+            .where((g) => !g.closed && g.agentIds.contains(agent.id))
             .toList() ??
         <SuperTabConversation>[];
     if (groups.isEmpty) return;

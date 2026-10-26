@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../core/machine_resources.dart';
@@ -153,7 +155,7 @@ class ProjectSidebar extends StatelessWidget {
     final groups = project == null
         ? [group]
         : controller.snapshot!.conversations.where(
-            (g) => g.projectId == project.id && !g.archived,
+            (g) => g.projectId == project.id && !g.closed,
           );
     final waiting = groups.any((g) => needsHuman(g) > 0);
     final unread = groups.any(controller.unread);
@@ -285,14 +287,15 @@ class ProjectSidebar extends StatelessWidget {
     );
   }
 
-  /// A project's "Closed (N)" row and, when it is open, the archived groups under it.
+  /// A project's "Closed (N)" row and, when it is open, the closed groups under it: archived ones and finished
+  /// ones that left the active set, as read for the project so far.
   List<Widget> _closed(SuperTabProject project) {
     final groups = controller.snapshot!.conversations
         .where(
           (g) =>
               g.projectId == project.id &&
               g.id != project.leadConversationId &&
-              g.archived,
+              g.closed,
         )
         .toList();
     if (groups.isEmpty) return const [];
@@ -347,8 +350,22 @@ class ProjectSidebar extends StatelessWidget {
           ),
         ),
       ),
-      if (open)
+      if (open) ...[
         for (final group in groups) _row(group),
+        if (controller.hasEarlierDormant(project.id))
+          _navigationRow(
+            key: 'super-closed-earlier-${project.id}',
+            label: controller.dormantLoading(project.id)
+                ? 'Loading…'
+                : 'Show earlier',
+            icon: AppIcons.chevronDown,
+            onTap: controller.dormantLoading(project.id)
+                ? null
+                : () => unawaited(
+                    controller.loadDormant(project.id, earlier: true),
+                  ),
+          ),
+      ],
     ];
   }
 
@@ -357,7 +374,7 @@ class ProjectSidebar extends StatelessWidget {
       (g) =>
           g.projectId == project.id &&
           g.id != project.leadConversationId &&
-          !g.archived,
+          !g.closed,
     );
     return groups.isEmpty
         ? [

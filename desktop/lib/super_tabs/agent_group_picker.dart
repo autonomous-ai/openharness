@@ -38,7 +38,7 @@ class _SuperTabAgentGroupPickerState extends State<SuperTabAgentGroupPicker> {
       return const [];
     }
     return snapshot!.conversations
-        .where((g) => !g.archived && g.agentIds.contains(widget.agentId))
+        .where((g) => !g.closed && g.agentIds.contains(widget.agentId))
         .toList();
   }
 

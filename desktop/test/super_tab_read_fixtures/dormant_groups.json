@@ -1,0 +1,9 @@
+{
+  "groups": [
+    { "key": "9c1d", "version": 214040, "changedAt": 1793010105000,
+      "data": { "id": "9c1d", "projectId": "5701", "number": 150, "title": "Old work", "leadId": "0fcb",
+                "agentIds": ["0fcb"], "archived": true, "brief": "", "checks": [], "assignment": null,
+                "lastMessageSequence": 200100, "messageSeq": 200100, "pullRequestUrls": [], "dormant": true } }
+  ],
+  "next": "eyJsYSI6MTc5MzAwMDAwMDAwMCwiayI6IjljMWQifQ"
+}

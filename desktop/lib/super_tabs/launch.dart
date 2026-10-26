@@ -57,11 +57,7 @@ class SuperTabLaunch {
         saved['phase'] == 'starting' || saved['phase'] == 'joining';
     List<HarnessLaunchRole>? roles;
     if (saved['lead'] != true && tab.superTabId != null) {
-      final current = await app.superTabs.map(
-        'GET',
-        '/api/super-tabs/${tab.superTabId}',
-      );
-      final snapshot = SuperTabSnapshot.fromJson(superTabMap(current['state']));
+      final snapshot = await app.superTabs.readSnapshot(tab.superTabId!);
       final project = snapshot.projectFor(conversationId);
       if (project?.skillSet == 'custom') {
         roles = [
@@ -293,12 +289,8 @@ class SuperTabLaunch {
     app.superTabs.deferTabDiscovery(saved['tabId'] as String);
     // Revalidate a journal's destination before native submission. A project
     // deleted on another computer must not leave an unattached native session.
-    final current = await app.superTabs.map(
-      'GET',
-      '/api/super-tabs/${saved['tabId']}',
-    );
+    final snapshot = await app.superTabs.readSnapshot(saved['tabId'] as String);
     checkAccount();
-    final snapshot = SuperTabSnapshot.fromJson(superTabMap(current['state']));
     final conversationId = saved['conversationId'] as String;
     if (snapshot.conversation(conversationId) == null) {
       if (started) throw projectUnavailable;
@@ -609,12 +601,10 @@ class SuperTabLaunch {
       return;
     }
     try {
-      final current = await app.superTabs.map(
-        'GET',
-        '/api/super-tabs/${saved['tabId']}',
+      final snapshot = await app.superTabs.readSnapshot(
+        saved['tabId'] as String,
       );
       checkAccount();
-      final snapshot = SuperTabSnapshot.fromJson(superTabMap(current['state']));
       if (!snapshot.projects.any((p) => p.id == projectId) ||
           snapshot.agents.any((a) => a.projectId == projectId)) {
         return;
