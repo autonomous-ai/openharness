@@ -1,3 +1,4 @@
+import { spawn } from 'node:child_process'
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { lstat, readdir, readFile, realpath, rm, stat } from 'node:fs/promises'
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
@@ -18,6 +19,7 @@ import { projectsRoot } from '../lib/projectFolder.js'
 import { worktreeFolderName } from '../lib/agentNames.js'
 import { teamPrivacyObserver } from '../team/observer.js'
 import type { PrivacyObservation } from '../team/privacy.js'
+import { repositoryKey } from './route.js'
 
 const finite = (v: unknown) => typeof v === 'number' && Number.isFinite(v) ? v : null
 const list = (v: unknown) => Array.isArray(v) ? v.map(object) : []
@@ -90,6 +92,8 @@ interface MachineDeps {
   modelsStamp?: () => Promise<string>
   /** The machine's host form and Swarm reads, shared with its host (superTabs/host.ts). */
   sources?: SwarmSources
+  /** git for the readiness of the Swarm folder's checkouts ([quietGit]). */
+  git?: GitRun
 }
 const MACHINE_DEPS = { backend, open: openDaemon, capabilities: readCapabilities, start: startAgent, now: Date.now }
 
@@ -118,6 +122,39 @@ export class ContributedMachines {
   private readonly cleanupRetries = new Map<string, { failures: number; at: number }>()
   /** Until when the reading leaves out its privacy field, which the backend refused. */
   private privacyRefusedUntil = 0
+  /** Until when the reading leaves out its readiness field, which the backend refused. */
+  private readinessRefusedUntil = 0
+  /** Whether each engine is installed and signed in, and until when that stands: one probe starts login shells and reads
+   *  the engines' accounts, so it runs every [READINESS_MS] (a failed one again after [READINESS_RETRY_MS]). */
+  private engineRead: { value: ReadyEngine[] | null; until: number } | null = null
+  /** Per Swarm folder, its checkouts' readiness and until when it stands, and the folders being read now. A push check
+   *  asks the remote, so it is read beside the pass, never holding up a start. */
+  private readonly checkoutReads = new Map<string, { value: ReadyCheckout[]; until: number }>()
+  private readonly checkoutReading = new Set<string>()
+  private async engineReadiness(local: { request: (type: string, payload: Record<string, unknown>, timeoutMs: number) => Promise<unknown> }): Promise<ReadyEngine[] | null> {
+    const now = this.deps.now()
+    if (this.engineRead && now < this.engineRead.until) return this.engineRead.value
+    const answer = await local.request('engines_probe', { engines: ['claude', 'codex'], accounts: true }, 20_000).catch(() => null)
+    const engines = object(answer).engines
+    // An engine that says nothing of its sign-in (an older daemon, an engine not installed) is unknown, never signed out.
+    const value = Array.isArray(engines) ? list(engines).filter(e => e.engine === 'claude' || e.engine === 'codex')
+      .map(e => ({ engine: String(e.engine), installed: e.installed === true, signedIn: typeof e.signedIn === 'boolean' ? e.signedIn : null })) : null
+    this.engineRead = { value, until: now + (value ? READINESS_MS : READINESS_RETRY_MS) }
+    return value
+  }
+  /** The last readiness of [root]'s checkouts, reading them again beside the pass once it is [READINESS_MS] old. Null
+   *  until the first read is in. */
+  private checkoutReadiness(root: string): ReadyCheckout[] | null {
+    const read = this.checkoutReads.get(root)
+    if ((!read || this.deps.now() >= read.until) && !this.checkoutReading.has(root)) {
+      this.checkoutReading.add(root)
+      void readCheckouts(root, this.deps.git ?? quietGit)
+        .then(value => { this.checkoutReads.set(root, { value, until: this.deps.now() + READINESS_MS }) },
+          error => { this.log(`Could not read the Swarm folder's checkouts: ${error instanceof Error ? error.message : String(error)}`) })
+        .finally(() => this.checkoutReading.delete(root))
+    }
+    return read?.value ?? null
+  }
   /** This pass's privacy reading, read once a pass (the check itself runs at most every five minutes). */
   private privacy(): PrivacyObservation | null {
     try { return (this.deps.privacy ?? teamPrivacyObserver)() } catch (error) {
@@ -248,7 +285,11 @@ export class ContributedMachines {
           ...offered(sharedWith(await this.gridModels(local), row.localGrid),
             await local.request('grid_swarm_offers', { grid: row.localGrid }, 10_000).catch(() => ({}))),
         ].slice(0, MAX_LOCAL_MODELS) : null
+        const readyEngines = await this.engineReadiness(local)
+        const checkouts = pool.scope === 'swarm' ? this.checkoutReadiness(pool.cwd) : null
+        const readiness = { ...(readyEngines ? { engines: readyEngines } : {}), ...(checkouts ? { checkouts } : {}) }
         const observation = { generation: pool.generation, tools: reportedTools, ...(localModels ? { localModels } : {}),
+          ...((readyEngines || checkouts) && began >= this.readinessRefusedUntil ? { readiness } : {}),
           ...(privacy && began >= this.privacyRefusedUntil ? { privacy } : {}),
           ...(refusedModels.length ? { refusedModels } : {}),
           ...(Object.keys(toolProbeErrors).length ? { toolProbeErrors } : {}),
@@ -270,20 +311,23 @@ export class ContributedMachines {
           // Older backends reject the additive fields. The privacy field is the newest, so it goes alone first: a backend
           // that takes everything else keeps the local models it reads. Their boolean-only view still safely refuses an
           // unverified tool, and a reading without privacy is never one a Team machine passes on.
-          const { privacy: _privacy, ...withoutPrivacy } = observation
+          // Readiness is newer still, so it goes alone before them, and a backend from before it keeps the privacy it reads.
+          const { readiness: _readiness, ...ready } = observation
+          const { privacy: _privacy, ...withoutPrivacy } = ready
           const { toolProbeErrors: _probeErrors, localModels: _served, refusedModels: _refused, ...legacy } = withoutPrivacy
           // A backend before `starting` refuses it: it gets the models the grid lists, as before, not none at all.
           const listedOnly = localModels?.some(m => m.starting)
             ? [{ ...withoutPrivacy, localModels: localModels.filter(m => !m.starting) }] : []
-          const attempts = [observation, ...('privacy' in observation ? [withoutPrivacy] : []), ...listedOnly,
-            ...('toolProbeErrors' in observation || 'localModels' in observation || 'refusedModels' in observation ? [legacy] : [])]
+          const attempts = [...('readiness' in observation ? [observation] : []), ready, ...('privacy' in ready ? [withoutPrivacy] : []), ...listedOnly,
+            ...('toolProbeErrors' in ready || 'localModels' in ready || 'refusedModels' in ready ? [legacy] : [])]
           for (const [index, attempt] of attempts.entries()) {
             try {
               await this.deps.backend(this.core, 'POST', path, attempt)
               break
             } catch (error) {
               if (!refused(error) || index === attempts.length - 1) throw error
-              if (attempt === observation && 'privacy' in observation) this.privacyRefusedUntil = began + PRIVACY_REFUSED_MS
+              if (attempt === observation && 'readiness' in observation) this.readinessRefusedUntil = began + READINESS_MS
+              else if (attempt === ready && 'privacy' in ready) this.privacyRefusedUntil = began + PRIVACY_REFUSED_MS
             }
           }
           this.published.set(String(row.tabId), { at: began, signature, starting: !!localModels?.some(m => m.starting) })
@@ -420,6 +464,61 @@ export class ContributedMachines {
     await this.deps.backend(this.core, 'POST', `/api/super-tabs/${tabId}/commands`, { operationId: `machine-cleaned-${removalId}`,
       command: { type: 'machine.cleaned', machineId: this.machineId, removalId } })
   }
+}
+
+// ── Readiness (#229 v1 routing) ─────────────────────────────────────────────────────────────────────────────────────
+// The route picked a Windows machine that never started agents, machines without the project and machines that could not
+// push, because nothing told it so. The reading says what this machine is ready for; the route leaves out only what it
+// says cannot work (routeCommand.ts), and anything unknown stays a candidate.
+
+/** How long an engine's sign-in and a checkout's push access stand before they are read again, and how soon an engine
+ *  probe that failed is tried again. */
+const READINESS_MS = 10 * 60_000
+const READINESS_RETRY_MS = 60_000
+/** The backend's limit on one reading's checkouts (`machineObservationSchema`). */
+const MAX_CHECKOUTS = 64
+type ReadyEngine = { engine: string; installed: boolean; signedIn: boolean | null }
+type ReadyCheckout = { folder: string; repository: string | null; git: boolean; push: boolean | null }
+type GitRun = (cwd: string, args: string[]) => Promise<{ ok: boolean; stdout: string; stderr: string }>
+
+/** git that never waits on a person (Lead, #229: a machine missing credentials must never hang on a password prompt): no
+ *  terminal or askpass prompt, no credential manager window, and a session of its own, so ssh has no terminal to ask on;
+ *  killed after 15 seconds whatever it waits for. */
+const quietGit: GitRun = (cwd, args) => new Promise(resolve => {
+  const env: NodeJS.ProcessEnv = { ...process.env, GIT_TERMINAL_PROMPT: '0', GIT_ASKPASS: '', SSH_ASKPASS: '', SSH_ASKPASS_REQUIRE: 'never',
+    GCM_INTERACTIVE: 'never', GIT_OPTIONAL_LOCKS: '0' }
+  for (const key of ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_COMMON_DIR', 'GIT_INDEX_FILE']) delete env[key]
+  const child = spawn('git', ['-C', cwd, ...args], { env, detached: true, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] })
+  let stdout = '', stderr = ''
+  child.stdout.setEncoding('utf8').on('data', (text: string) => { stdout = (stdout + text).slice(0, 65_536) })
+  child.stderr.setEncoding('utf8').on('data', (text: string) => { stderr = (stderr + text).slice(0, 65_536) })
+  const timer = setTimeout(() => child.kill('SIGKILL'), 15_000)
+  child.on('error', () => { clearTimeout(timer); resolve({ ok: false, stdout, stderr }) })
+  child.on('close', code => { clearTimeout(timer); resolve({ ok: code === 0, stdout, stderr }) })
+})
+
+/** What git or the remote says when this login may not push: refused, signed out, or a credential it could not ask for.
+ *  Anything else (a host it could not reach, a timeout) says nothing about access. */
+const NO_PUSH = /permission|denied|returned error: 40[13]|could not read (username|password)|terminal prompts disabled|authentication failed|invalid username or password|repository not found/i
+
+/** Each project folder in a Swarm folder: the repository its origin names (without credentials), whether it is a
+ *  checkout of its own, and whether this machine's login can push there, by a dry run that runs no hooks. git's own
+ *  words never leave the machine. */
+export async function readCheckouts(root: string, run: GitRun): Promise<ReadyCheckout[]> {
+  const folders = (await readdir(root, { withFileTypes: true })).filter(e => e.isDirectory() && !e.name.startsWith('.'))
+    .map(e => e.name).sort().slice(0, MAX_CHECKOUTS)
+  const out: ReadyCheckout[] = []
+  for (const folder of folders) {
+    const dir = join(root, folder)
+    const top = await run(dir, ['rev-parse', '--show-toplevel'])
+    // A folder inside some other checkout is not a checkout of its own.
+    if (!top.ok || await realpath(top.stdout.trim()).catch(() => '') !== await realpath(dir)) { out.push({ folder, repository: null, git: false, push: null }); continue }
+    const origin = await run(dir, ['remote', 'get-url', 'origin'])
+    if (!origin.ok) { out.push({ folder, repository: null, git: true, push: null }); continue }
+    const pushed = await run(dir, ['push', '--dry-run', '--no-verify', '--porcelain', 'origin', 'HEAD:refs/heads/harness-push-check'])
+    out.push({ folder, repository: repositoryKey(origin.stdout.trim()), git: true, push: pushed.ok ? true : NO_PUSH.test(pushed.stderr) ? false : null })
+  }
+  return out
 }
 
 /** The backend's limit on one machine's local models (`machineObservationSchema`). */

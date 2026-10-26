@@ -166,6 +166,16 @@ export function repoMatch(folder: TaskFolder | null, frame: MemberFrame | null, 
   return (folder.root ?? folder.cwd) === theirs ? 'same' : 'different'
 }
 
+/** A repository's name for comparing two addresses of it: host and path, lowercase, without credentials, port or `.git`,
+ * the same over HTTPS and SSH. Null for a folder on disk or an address it cannot read. A machine reports its checkouts'
+ * origins this way (machines.ts readCheckouts), so no credential in an origin leaves it. */
+export function repositoryKey(url: string): string | null {
+  const text = url.trim()
+  const found = /^[\w.-]+@([\w.-]+):(?!\/)(.+)$/.exec(text) ?? /^(?:https?|ssh|git):\/\/(?:[^@/]*@)?([\w.-]+)(?::\d+)?\/(.+)$/i.exec(text)
+  const path = found?.[2]!.replace(/\/+$/, '').replace(/\.git$/i, '')
+  return found && path ? `${found[1]}/${path}`.toLowerCase() : null
+}
+
 /** A member's model is what its engine reported after work: Claude's full id (`claude-opus-4-7`, `claude-sonnet-4-5[1m]`),
  * Codex's slug (`gpt-5.5`). The policy names Claude families and a Codex `default`, so the id is reduced to its family
  * first, and an id with no row of its own takes the engine's `default` row before the floor. */

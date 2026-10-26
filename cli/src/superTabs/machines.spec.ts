@@ -195,6 +195,162 @@ describe('contributed machine executor', () => {
     await f.machine.tick()
     expect(f.capabilities.mock.lastCall?.[0]).toMatchObject({ tools: ['flutter'] })
   })
+  // v1 routing (#229): the route left out nothing it could not see, and picked machines signed out, without the project or
+  // unable to push. The reading now says what the machine is ready for.
+  describe('readiness', () => {
+    const readings = (f: ReturnType<typeof fixture>) => f.backend.mock.calls.filter(c => c[1] === 'POST' && String(c[2]).includes('/machines/'))
+      .map(c => c[3] as Record<string, unknown> & { readiness?: { engines?: unknown[]; checkouts?: Array<Record<string, unknown>> } })
+    const withEngines = (f: ReturnType<typeof fixture>) => {
+      const usage = f.request.getMockImplementation()!
+      f.request.mockImplementation(async (type, ...rest) => type === 'engines_probe'
+        ? { engines: [{ engine: 'claude', installed: true, signedIn: false }, { engine: 'codex', installed: true }, { engine: 'cursor', installed: true }] }
+        : usage(type, ...rest as []))
+    }
+    const probes = (f: ReturnType<typeof fixture>) => f.request.mock.calls.filter(c => c[0] === 'engines_probe')
+
+    it('says whether each engine is installed and signed in, probing again only after ten minutes', async () => {
+      const f = fixture()
+      withEngines(f)
+      await f.machine.tick()
+      expect(f.request).toHaveBeenCalledWith('engines_probe', { engines: ['claude', 'codex'], accounts: true }, 20_000)
+      // An engine that says nothing about its sign-in is unknown, never signed out.
+      expect(readings(f)[0]!.readiness).toEqual({ engines: [{ engine: 'claude', installed: true, signedIn: false }, { engine: 'codex', installed: true, signedIn: null }] })
+      f.advance(); await f.machine.tick()
+      expect(readings(f)).toHaveLength(2)
+      expect(readings(f)[1]!.readiness?.engines).toHaveLength(2)
+      expect(probes(f)).toHaveLength(1)
+      f.step(10 * 60_000); await f.machine.tick()
+      expect(probes(f)).toHaveLength(2)
+    })
+
+    it('sends no engine readiness when the probe fails, and asks again a minute later', async () => {
+      const f = fixture()
+      const usage = f.request.getMockImplementation()!
+      f.request.mockImplementation(async (type, ...rest) => type === 'engines_probe' ? Promise.reject(new Error('timed out')) : usage(type, ...rest as []))
+      await f.machine.tick()
+      expect(readings(f)[0]).not.toHaveProperty('readiness')
+      f.advance(); await f.machine.tick()
+      expect(probes(f)).toHaveLength(1)
+      f.step(60_000); await f.machine.tick()
+      expect(probes(f)).toHaveLength(2)
+    })
+
+    describe('of its Swarm folder', () => {
+      const roots: string[] = []
+      afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }) })
+      const run = (cwd: string, ...args: string[]) => execFileSync('git', args, { cwd, stdio: 'ignore', env: { ...process.env, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1' } })
+      /** A Swarm folder: p1 a checkout of a GitHub repository this login may not push to, p2 a plain folder, p3 a checkout
+       *  of a repository on disk it can push to. */
+      function swarmFolder() {
+        const root = mkdtempSync(join(tmpdir(), 'readiness-')); roots.push(root)
+        const remote = join(root, 'remote.git'), swarm = join(root, 'swarm')
+        mkdirSync(remote); run(remote, 'init', '-q', '--bare')
+        for (const name of ['p1', 'p3']) {
+          mkdirSync(join(swarm, name), { recursive: true }); const dir = join(swarm, name)
+          run(dir, 'init', '-q'); run(dir, '-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q', '--allow-empty', '-m', 'init')
+        }
+        run(join(swarm, 'p1'), 'remote', 'add', 'origin', 'https://someone:secret-token@github.com/Acme/App.git')
+        run(join(swarm, 'p3'), 'remote', 'add', 'origin', remote)
+        mkdirSync(join(swarm, 'p2')); mkdirSync(join(swarm, '.hidden')); writeFileSync(join(swarm, 'notes.txt'), '')
+        return swarm
+      }
+      /** git as it is, except that a push to GitHub answers as GitHub does to a login without write access. */
+      function gitFor(denied: string) {
+        const calls: string[][] = []
+        const git = vi.fn(async (cwd: string, args: string[]) => {
+          calls.push(args)
+          if (args[0] === 'push' && cwd.endsWith('p1')) return { ok: false, stdout: '', stderr: denied }
+          try { return { ok: true, stdout: execFileSync('git', ['-C', cwd, ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }), stderr: '' } }
+          catch (error) { return { ok: false, stdout: '', stderr: String((error as { stderr?: unknown }).stderr ?? '') } }
+        })
+        return { git, calls }
+      }
+      function swarmFixture(git: ReturnType<typeof gitFor>['git']) {
+        const f = fixture()
+        Object.assign(f.pool.machine, { scope: 'swarm', cwd: swarmFolder() })
+        const machine = new ContributedMachines(f.core, 'host', { backend: f.backend, open: f.open, capabilities: f.capabilities, start: f.start, prepare: f.prepare,
+          log: f.log, now: () => now, git } as never)
+        let now = 1000
+        return { ...f, machine, step: (ms: number) => { now += ms } }
+      }
+
+      it('lists each project folder\'s repository, whether it is a checkout, and whether this login can push, never a credential', async () => {
+        const { git, calls } = gitFor("remote: Permission to Acme/App.git denied to someone.\nfatal: unable to access 'https://github.com/Acme/App.git/': The requested URL returned error: 403")
+        const f = swarmFixture(git)
+        await f.machine.tick()
+        // The folder is read beside the pass, never holding it up.
+        await vi.waitFor(() => expect(calls.filter(a => a[0] === 'push')).toHaveLength(2))
+        f.step(16_000); await f.machine.tick()
+        const checkouts = readings(f).at(-1)!.readiness!.checkouts!
+        expect(checkouts).toEqual([
+          { folder: 'p1', repository: 'github.com/acme/app', git: true, push: false },
+          { folder: 'p2', repository: null, git: false, push: null },
+          { folder: 'p3', repository: null, git: true, push: true },
+        ])
+        expect(JSON.stringify(readings(f))).not.toContain('secret-token')
+        // A dry run that runs no hooks, so nothing is pushed and nothing of the repository's runs.
+        expect(calls.find(a => a[0] === 'push')).toEqual(['push', '--dry-run', '--no-verify', '--porcelain', 'origin', 'HEAD:refs/heads/harness-push-check'])
+        f.step(16_000); await f.machine.tick()
+        expect(calls.filter(a => a[0] === 'push')).toHaveLength(2)
+        f.step(10 * 60_000); await f.machine.tick()
+        await vi.waitFor(() => expect(calls.filter(a => a[0] === 'push')).toHaveLength(4))
+      })
+
+      it('reads a checkout with git itself, which can push to a remote it may write to', async () => {
+        const root = mkdtempSync(join(tmpdir(), 'readiness-')); roots.push(root)
+        const remote = join(root, 'remote.git'), dir = join(root, 'swarm', 'p1')
+        mkdirSync(remote); run(remote, 'init', '-q', '--bare'); mkdirSync(dir, { recursive: true })
+        run(dir, 'init', '-q'); run(dir, '-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q', '--allow-empty', '-m', 'init'); run(dir, 'remote', 'add', 'origin', remote)
+        const f = fixture()
+        Object.assign(f.pool.machine, { scope: 'swarm', cwd: join(root, 'swarm') })
+        await f.machine.tick()
+        await vi.waitFor(async () => {
+          f.advance(); await f.machine.tick()
+          expect(readings(f).at(-1)!.readiness?.checkouts).toEqual([{ folder: 'p1', repository: null, git: true, push: true }])
+        })
+        // A dry run: the remote has nothing.
+        expect(execFileSync('git', ['-C', remote, 'for-each-ref'], { encoding: 'utf8' })).toBe('')
+      })
+
+      it('says a push is unknown, not refused, when the remote could not be reached', async () => {
+        const { git, calls } = gitFor("fatal: unable to access 'https://github.com/Acme/App.git/': Could not resolve host: github.com")
+        const f = swarmFixture(git)
+        await f.machine.tick()
+        await vi.waitFor(() => expect(calls.filter(a => a[0] === 'push')).toHaveLength(2))
+        f.step(16_000); await f.machine.tick()
+        expect(readings(f).at(-1)!.readiness!.checkouts![0]).toEqual({ folder: 'p1', repository: 'github.com/acme/app', git: true, push: null })
+      })
+
+      it('reads a credential prompt git could not show as no push access', async () => {
+        const { git, calls } = gitFor("fatal: could not read Username for 'https://github.com': terminal prompts disabled")
+        const f = swarmFixture(git)
+        await f.machine.tick()
+        await vi.waitFor(() => expect(calls.filter(a => a[0] === 'push')).toHaveLength(2))
+        f.step(16_000); await f.machine.tick()
+        expect(readings(f).at(-1)!.readiness!.checkouts![0]).toMatchObject({ folder: 'p1', push: false })
+      })
+    })
+
+    it('drops only the readiness field for a backend from before it, for ten minutes, keeping privacy', async () => {
+      const f = fixture({}, () => ({ mode: 'dedicated' }))
+      withEngines(f)
+      const original = f.backend.getMockImplementation()!
+      f.backend.mockImplementation(async (core, method, path, body) => {
+        if (method === 'POST' && (body as Record<string, unknown>)?.readiness) throw new SuperTabHostError('VALIDATION_ERROR', 'Unrecognized key: readiness', 400)
+        return original(core, method, path, body)
+      })
+      await f.machine.tick()
+      expect(readings(f)).toHaveLength(2)
+      expect(readings(f)[1]).not.toHaveProperty('readiness')
+      expect(readings(f)[1]).toMatchObject({ privacy: { mode: 'dedicated' } })
+      f.advance(); await f.machine.tick()
+      expect(readings(f)).toHaveLength(3)
+      f.step(10 * 60_000); await f.machine.tick()
+      expect(readings(f).at(-2)).toHaveProperty('readiness')
+      expect(readings(f).at(-1)).not.toHaveProperty('readiness')
+    })
+  })
+
   it('retries a probe-failure observation without its new field for an older backend', async () => {
     const f = fixture()
     f.capabilities.mockResolvedValueOnce({ ok: true, resources: { cpuPercent: 20, memoryTotalBytes: 1000, memoryUsedBytes: 200, projectDiskFreeBytes: 1000 },
