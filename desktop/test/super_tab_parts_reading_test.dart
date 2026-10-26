@@ -222,4 +222,31 @@ void main() {
     expect(reads.last, '/api/super-tabs/tab/parts');
     expect(c.snapshot!.id, 'tab');
   });
+
+  test('a private conversation the reader leaves is gone after the reload', () async {
+    (server.state['conversations'] as List).add({
+      ...conversationFixture('private', 'Ken and the PM'),
+      'audience': {
+        'people': [
+          {'id': 'owner', 'generation': 'g1'},
+        ],
+      },
+    });
+    server.append('Just us', conversationId: 'private');
+    final c = open();
+    await c.refresh();
+    await c.select('private');
+    await c.loadMessages('private');
+    expect(c.messages('private').single.text, 'Just us');
+    // The audience changed: the server moves the epoch and no longer sends it.
+    (server.state['conversations'] as List).removeWhere(
+      (g) => (g as Map)['id'] == 'private',
+    );
+    server.messages.removeWhere((m) => m['conversationId'] == 'private');
+    server.parts.epoch++;
+    await c.refresh();
+    expect(c.snapshot!.conversation('private'), isNull);
+    expect(c.messages('private'), isEmpty);
+    expect(c.selectedId, 'lead');
+  });
 }
