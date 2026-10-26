@@ -44,13 +44,24 @@ export class HostFeed {
   private async read(): Promise<HostRead> {
     const askFull = this.cursor === null || this.now() - this.fullAt >= HOST_FULL_MS
     const startedAt = this.now()
-    const path = `/api/super-tabs/hosts/${this.machineId}/changes?${askFull ? 'full=1' : `cursor=${this.cursor}`}`
-    const answer = readable<HostChanges>(await this.backend(this.core, 'GET', path))
+    const form = `/api/super-tabs/hosts/${this.machineId}/changes`
+    // The rows it holds, by their etag: a Swarm whose rows still match comes back with none, so an active Swarm no longer
+    // costs its whole rows every second (the Lead's ruling on #1726). A host that holds nothing asks as before.
+    const held = Object.fromEntries([...this.tabs].flatMap(([tabId, tab]) => typeof tab.etag === 'string' ? [[tabId, tab.etag]] : []))
+    const answer = readable<HostChanges>(Object.keys(held).length
+      ? await this.backend(this.core, 'POST', form, askFull ? { full: true, held } : { cursor: this.cursor, held })
+      : await this.backend(this.core, 'GET', `${form}?${askFull ? 'full=1' : `cursor=${this.cursor}`}`))
     // The answer says what it is: the server answers a bad or too old cursor in full, with no removed Swarms (review round 1).
     const full = answer.full === true
     const tabs = full ? new Map<string, HostTab>() : new Map(this.tabs)
     for (const tabId of answer.removedTabIds ?? []) tabs.delete(tabId)
-    for (const tab of answer.tabs) tabs.set(tab.tabId, tab)
+    for (const tab of answer.tabs) {
+      if (!('unchanged' in tab)) { tabs.set(tab.tabId, tab); continue }
+      // Unchanged keeps the rows held. One it does not hold (it never named it) is dropped, and comes back whole next time.
+      const kept = this.tabs.get(tab.tabId)
+      if (kept) tabs.set(tab.tabId, { ...kept, etag: tab.etag, lastChangedAt: tab.lastChangedAt })
+      else tabs.delete(tab.tabId)
+    }
     this.tabs = tabs
     this.cursor = answer.cursor
     if (full) this.fullAt = startedAt

@@ -66,9 +66,14 @@ export type Changes = ChangedParts | { reload: true }
 /** `GET /api/super-tabs/list` (design 4.9). */
 export interface ListPage { tabs: Array<{ id: string; name: string; ownerId: string; paused: boolean; lastChangedAt: number | null }>; next: string | null }
 
-/** One Swarm's rows in `GET /api/super-tabs/hosts/:machineId/changes` (design 4.10): today's roster, pool and assignments. */
-export interface HostTab { tabId: string; lastChangedAt: number | null; roster: Json[]; pool: Json | null; assignments: Json[] }
-export interface HostChanges { format: number; full: boolean; cursor: string; tabs: HostTab[]; removedTabIds: string[] }
+/** One Swarm's rows in the host form (design 4.10): today's roster, pool and assignments, and `etag`, a hash of those rows
+ *  (leaving out this machine's own reading and each row's change time). */
+export interface HostTab { tabId: string; lastChangedAt: number | null; etag?: string; roster: Json[]; pool: Json | null; assignments: Json[] }
+/** A Swarm whose rows match the etag the host said it holds: no rows are sent (the Lead's ruling on #1726, group 3's contract). */
+export interface HostTabUnchanged { tabId: string; lastChangedAt: number | null; etag: string; unchanged: true }
+/** `GET /api/super-tabs/hosts/:machineId/changes?cursor=|full=1` while the host holds nothing, else `POST` on that path with
+ *  `{ cursor | full: true, held: { [tabId]: etag } }`. */
+export interface HostChanges { format: number; full: boolean; cursor: string; tabs: Array<HostTab | HostTabUnchanged>; removedTabIds: string[] }
 
 /** A conversation's messages, ordered by `(sequence, id)` (design 4.6). With no cursor, the newest 100, `next` naming the
  *  oldest row: sent back as `before` and `beforeId` for the page before. `next` is null at the end. */

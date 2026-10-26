@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 
 export type ReadFixture = 'parts-lead' | 'parts-builder' | 'changes-lead' | 'changes-reload' | 'legacy-tab-lead' | 'legacy-tab-builder'
-  | 'host-full' | 'host-changes' | 'host-quiet' | 'list' | 'messages' | 'update-required' | 'status-lead' | 'status-builder'
+  | 'host-full' | 'host-changes' | 'host-quiet' | 'host-unchanged' | 'list' | 'messages' | 'update-required' | 'status-lead' | 'status-builder'
 
 const DIR = join(import.meta.dirname, '.')
 export function readFixture<T = Record<string, unknown>>(name: ReadFixture): T {

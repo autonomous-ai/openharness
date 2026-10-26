@@ -174,7 +174,8 @@
      "assignmentId": "w0000000000000000000001",
      "harnessId": "b00000000000000000000002"
     }
-   ]
+   ],
+   "etag": "etag-tab1-a"
   },
   {
    "tabId": "f1a5c0de0000000000000009",
@@ -189,7 +190,8 @@
     }
    ],
    "pool": null,
-   "assignments": []
+   "assignments": [],
+   "etag": "etag-tab9-a"
   }
  ],
  "removedTabIds": []
