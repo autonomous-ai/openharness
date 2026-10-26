@@ -73,6 +73,7 @@ class WorkspaceChrome {
     this.compactPaneHeader = false,
     this.superTabRecovers = false,
     this.superTabReading = const SuperTabReading(),
+    this.subscriptionsNeedComputer = false,
   });
 
   /// What a workspace with no host chrome (Desktop) reads: every switch at
@@ -159,6 +160,11 @@ class WorkspaceChrome {
   /// How the Swarm tabs keep themselves current. The default is Desktop's: a
   /// full read every 3 s, on screen or not. #180's report, fixes 1, 2a and 3.
   final SuperTabReading superTabReading;
+
+  /// True leaves Subscriptions out of the compact footer while the account
+  /// has no computer, once the machine list has said so: there is no agent
+  /// account to read before one. While the list is on its way it stays.
+  final bool subscriptionsNeedComputer;
 
   /// Whether a window [width] wide gets the compact pane header.
   bool compactPaneHeaderAt(double width) =>

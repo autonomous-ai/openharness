@@ -15,7 +15,7 @@ import { createHash } from 'node:crypto';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { loadFlows } from './load-flows.mjs';
-import { VIEWPORTS, contextFor, runStep, settle, urlFor } from './capture.mjs';
+import { VIEWPORTS, answerApi, contextFor, runStep, settle, urlFor } from './capture.mjs';
 import { serve } from './serve.mjs';
 
 const FLOWS = await loadFlows();
@@ -29,6 +29,8 @@ const TAP_FLOWS = [
   'footer-menu', 'notifications', 'open-harness', 'machines', 'all-commands',
   'appearance', 'split-pane', 'store', 'settings', 'settings-notifications',
   'settings-keyboard-shortcuts', 'new-tab', 'error-banner', 'new-device', 'link-password',
+  'shared-link', 'shared-link-private', 'shared-link-refused', 'shared-link-offline',
+  'shared-link-failed', 'settings-account',
 ];
 
 // Scrolling areas: the flow that shows one, and where it is.
@@ -82,6 +84,7 @@ async function open(context, origin, name, viewport, theme = 'dark') {
   if (!f) throw new Error(`no flow "${name}"`);
   const page = await context.newPage();
   try {
+    await answerApi(page, f);
     await page.goto(urlFor(origin, f, theme));
     await settle(page);
     const compact = viewport.width < 720;

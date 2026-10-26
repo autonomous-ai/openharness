@@ -4,7 +4,11 @@ library;
 // The browser build's frame draws the keyboard focus ring (P8).
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:harness/auth/auth_session.dart';
+import 'package:harness/core/config.dart';
+import 'package:harness/state/app_state.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/web/parts/workspace_part.dart';
 import 'package:harness/web/web_entry.dart';
@@ -13,20 +17,30 @@ void main() {
   testWidgets('Tab in the web app draws the ring; a click puts it away', (
     tester,
   ) async {
+    final app = AppNotifier(
+      config: AppConfig.dev,
+      authSession: AuthSession(),
+      configStore: null,
+    );
+    addTearDown(app.dispose);
+    // Under the app's ProviderScope, as `startHarness` runs it.
     await tester.pumpWidget(
-      appFrame(
-        MaterialApp(
-          theme: grid.buildAppTheme(brightness: Brightness.dark),
-          home: Scaffold(
-            body: Column(
-              children: [
-                FilledButton(
-                  autofocus: true,
-                  onPressed: () {},
-                  child: const Text('First'),
-                ),
-                OutlinedButton(onPressed: () {}, child: const Text('Second')),
-              ],
+      ProviderScope(
+        overrides: [appStateProvider.overrideWithValue(app)],
+        child: appFrame(
+          MaterialApp(
+            theme: grid.buildAppTheme(brightness: Brightness.dark),
+            home: Scaffold(
+              body: Column(
+                children: [
+                  FilledButton(
+                    autofocus: true,
+                    onPressed: () {},
+                    child: const Text('First'),
+                  ),
+                  OutlinedButton(onPressed: () {}, child: const Text('Second')),
+                ],
+              ),
             ),
           ),
         ),

@@ -73,6 +73,7 @@ export async function qrSignIn(deps: QrSignInDeps): Promise<QrSignInResult> {
   }
   const { pollToken } = started
   const expired = `The code expired. Run \`harness login${spoken ? ' --code' : ''}\` again.`
+  const expiredResult = { ok: false as const, code: 'EXPIRED' as const, message: expired }
   const link = qrSignInLink(started.code)
   const cancel = async (): Promise<void> => { await deps.post('/api/auth/qr/cancel', { pollToken }).catch(() => {}) }
   const spokenCode = started.spokenCode
@@ -108,17 +109,29 @@ export async function qrSignIn(deps: QrSignInDeps): Promise<QrSignInResult> {
     if (state.status === 'pending') continue
     if (state.status === 'denied') return { ok: false, code: 'DENIED', message: 'Sign-in was denied on the phone.' }
     if (state.status !== 'approved' || !state.email) {
-      return { ok: false, code: 'EXPIRED', message: expired }
+      return expiredResult
     }
-    if (!(await deps.confirm(state.email))) {
+    // #1507: a delayed poll or confirmation can outlast the code; don't ask or claim after expiry.
+    if (expiresAt <= now()) {
+      await cancel()
+      return expiredResult
+    }
+    const confirmed = await deps.confirm(state.email)
+    if (!confirmed) {
       await cancel()
       return { ok: false, code: 'CANCELLED', message: `Not signed in as ${state.email}.` }
+    }
+    if (expiresAt <= now()) {
+      await cancel()
+      return expiredResult
     }
     try {
       const tokens = await deps.post<QrSignInTokens>('/api/auth/qr/claim', { pollToken })
       if (!tokens?.token) throw new Error('the backend returned no session')
       return { ok: true, tokens: { ...tokens, email: tokens.email ?? state.email } }
     } catch (err) {
+      const failure = err as { status?: number; code?: string }
+      if (failure.status === 401 && failure.code === 'QR_INVALID') return expiredResult
       return { ok: false, code: 'BACKEND_ERROR', message: (err as Error).message }
     }
   }

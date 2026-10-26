@@ -29,7 +29,7 @@ void prepareConsole() => prepareWebConsole();
 /// Its first frame starts the workspace's download.
 Widget appFrame(Widget app) => WorkspacePrefetch(
   child: WebFocusRing(
-    child: WebStoreFrame(child: KeyHints(visible: false, child: app)),
+    child: WebAppStoreFrame(child: KeyHints(visible: false, child: app)),
   ),
 );
 

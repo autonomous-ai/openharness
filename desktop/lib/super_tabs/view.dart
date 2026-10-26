@@ -910,10 +910,22 @@ class _SuperTabViewState extends State<SuperTabView>
                         children: [
                           Flexible(child: _title(group)),
                           const SizedBox(width: 8),
-                          Text(
-                            'Updating…',
-                            key: const ValueKey('super-updating'),
-                            style: DesktopChrome.metadata(),
+                          // Where the copy is; how long it stays and where
+                          // it is cleared, a hover or a long press away.
+                          Flexible(
+                            child: Tooltip(
+                              message:
+                                  'This browser keeps a copy of the Super '
+                                  'Tabs you open until you sign out. '
+                                  'Settings ▸ Account clears it now.',
+                              child: Text(
+                                'Saved in this browser · Updating…',
+                                key: const ValueKey('super-updating'),
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: DesktopChrome.metadata(),
+                              ),
+                            ),
                           ),
                         ],
                       )

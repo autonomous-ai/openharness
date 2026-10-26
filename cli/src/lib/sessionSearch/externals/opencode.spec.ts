@@ -13,7 +13,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest
 
 import { builtinSqlite, closeSqliteHandles, overrideBuiltinSqlite } from '../../sqliteBuiltin.js'
 import {
-  LIST_LIMIT, ancestry, argvSubcommand, engineProcess, opencodeListSql, opencodeProvider, opencodeTurnOpen,
+  LIST_LIMIT, ancestry, argvSubcommand, engineProcess, opencodeListSql, opencodeProvider, opencodeTurnOpen, opencodeV2TurnOpen,
   ownerRecord, parseOwnerRecord, readSql, rowsOf, splitCounts, storeStamp, tableColumns, tally, type SqlRead,
 } from './opencode.js'
 import { scanMemo } from './support.js'
@@ -68,6 +68,31 @@ CREATE INDEX \`session_project_idx\` ON \`session\` (\`project_id\`);
 CREATE INDEX \`session_parent_idx\` ON \`session\` (\`parent_id\`);
 `
 
+/**
+ * opencode 2.0.29's own DDL for the tables that replaced them (`.schema`, read-only, this machine). A store it
+ * created has these and none of the above; one it took over from 1.x has both, the v1 tables no longer written.
+ */
+const V2_SCHEMA = `
+CREATE TABLE \`session_v2\` (
+  \`id\` text PRIMARY KEY, \`project_id\` text NOT NULL, \`workspace_id\` text, \`parent_id\` text, \`fork_session_id\` text,
+  \`fork_boundary\` text, \`slug\` text NOT NULL, \`directory\` text NOT NULL, \`path\` text, \`title\` text, \`version\` text NOT NULL,
+  \`share_url\` text, \`summary_additions\` integer, \`summary_deletions\` integer, \`summary_files\` integer, \`summary_diffs\` text,
+  \`metadata\` text, \`cost\` real DEFAULT 0 NOT NULL, \`tokens_input\` integer DEFAULT 0 NOT NULL,
+  \`tokens_output\` integer DEFAULT 0 NOT NULL, \`tokens_reasoning\` integer DEFAULT 0 NOT NULL,
+  \`tokens_cache_read\` integer DEFAULT 0 NOT NULL, \`tokens_cache_write\` integer DEFAULT 0 NOT NULL, \`revert\` text,
+  \`permission\` text, \`agent\` text, \`model\` text, \`time_created\` integer NOT NULL, \`time_updated\` integer NOT NULL,
+  \`time_compacting\` integer, \`time_archived\` integer, \`time_suspended\` integer, \`resume_attempts\` integer DEFAULT 0 NOT NULL,
+  \`time_idle\` integer, \`time_viewed\` integer, \`idle_outcome\` text
+);
+CREATE TABLE \`session_message\` (
+  \`id\` text PRIMARY KEY, \`session_id\` text NOT NULL, \`type\` text NOT NULL, \`seq\` integer NOT NULL,
+  \`time_created\` integer NOT NULL, \`time_updated\` integer NOT NULL, \`data\` text NOT NULL,
+  CONSTRAINT \`fk_session_message_session_id_session_v2_id_fk\` FOREIGN KEY (\`session_id\`) REFERENCES \`session_v2\`(\`id\`) ON DELETE CASCADE
+);
+CREATE UNIQUE INDEX \`session_message_session_seq_idx\` ON \`session_message\` (\`session_id\`,\`seq\`);
+CREATE INDEX \`session_message_session_type_seq_idx\` ON \`session_message\` (\`session_id\`,\`type\`,\`seq\`);
+`
+
 /** What `opencode run` writes (measured, 1.18.32): no one is there to answer a question. */
 const RUN_PERMISSION = JSON.stringify([
   { permission: 'question', pattern: '*', action: 'deny' },
@@ -93,7 +118,7 @@ class Store {
     this.db = new Database(path, { readOnly: false })
     this.db.exec('PRAGMA journal_mode = WAL')
     this.db.exec(schema)
-    if (schema === SCHEMA) {
+    if (schema.includes('CREATE TABLE `project`')) {
       this.db.prepare("INSERT INTO project (id, worktree, time_created, time_updated, sandboxes) VALUES ('p', '/', 0, 0, '[]')").all()
     }
   }
@@ -116,6 +141,35 @@ class Store {
         .all(`prt_${id}_${index}`, id, sessionId, at + index, at + index, JSON.stringify(part))
     })
     return id
+  }
+
+  private readonly v2seq = new Map<string, number>()
+
+  /** A session row of OpenCode 2's `session_v2`, which has the columns of the v1 `session`. */
+  v2Session(id: string, row: SessionRow = {}): this {
+    this.db.prepare(
+      'INSERT INTO session_v2 (id, project_id, parent_id, slug, directory, title, version, permission, time_created, time_updated, time_archived)'
+      + " VALUES (?, 'p', ?, 'slug', ?, ?, '2.0.29', ?, ?, ?, ?)",
+    ).all(id, row.parent ?? null, row.directory ?? `/work/${id}`, row.title ?? 'A title', row.permission ?? null,
+      T0, row.updated ?? T0, row.archived ?? null)
+    return this
+  }
+
+  /** A `session_message` row: what a prompt, an assistant step and the end of a turn are made of. */
+  v2Message(sessionId: string, type: string, data: Record<string, unknown>, at = T0): this {
+    const seq = this.v2seq.get(sessionId) ?? 0
+    this.v2seq.set(sessionId, seq + 1)
+    this.db.prepare('INSERT INTO session_message (id, session_id, type, seq, time_created, time_updated, data) VALUES (?, ?, ?, ?, ?, ?, ?)')
+      .all(`msg_${sessionId}_${seq}`, sessionId, type, seq, at, at, JSON.stringify(data))
+    return this
+  }
+
+  /** A person's ask, a finished answer and the end of the turn, as OpenCode 2 writes them. */
+  v2Turn(sessionId: string, at = T0): this {
+    return this
+      .v2Message(sessionId, 'user', { text: 'please fix the build', time: { created: at }, files: [], agents: [] }, at)
+      .v2Message(sessionId, 'assistant', { content: [{ type: 'text', text: 'Done.' }], finish: 'stop', time: { created: at + 1, completed: at + 2 } }, at + 1)
+      .v2Message(sessionId, 'idle', { outcome: 'succeeded', time: { created: at + 3 } }, at + 3)
   }
 
   /** A person's ask and a finished answer. */
@@ -256,6 +310,115 @@ describe.each(READERS)('OpenCode discovery read through %s', (_name, reader) => 
     // …and reading it created nothing in the engine's folder.
     expect(existsSync(`${store.path}-wal`)).toBe(false)
     expect(existsSync(`${store.path}-shm`)).toBe(false)
+  })
+
+  it('lists OpenCode 2 from session_v2, whose sessions the v1 tables no longer hold', async () => {
+    const store = new Store(join(tempDir(), 'opencode.db'), SCHEMA + V2_SCHEMA)
+    // A session v2 took over from 1.x: in both, its headless mark only on the v1 row (v2 leaves `permission` empty).
+    store.session('ses_oldrun', { permission: RUN_PERMISSION }).turn('ses_oldrun')
+    store.v2Session('ses_oldrun').v2Turn('ses_oldrun')
+    store.session('ses_old', { title: 'Old title', updated: T0 }).turn('ses_old')
+    store.v2Session('ses_old', { title: 'Old title', updated: T0 }).v2Turn('ses_old', T0 + 1000) // answered again in v2
+    // A session v2 began: no v1 row, a later message than its time_updated.
+    store.v2Session('ses_new', { directory: '/work/app', title: 'Add search', updated: T0 + 10 }).v2Turn('ses_new', T0 + 50)
+    store.v2Session('ses_child', { parent: 'ses_new' }).v2Turn('ses_child')
+    // Compactions, shell runs and turn ends are not something said.
+    store.v2Session('ses_unused').v2Message('ses_unused', 'compaction', { status: 'completed' })
+    // A v1 row the store has no v2 row of is not OpenCode 2's.
+    store.session('ses_stale').turn('ses_stale')
+
+    const provider = opencodeProvider({ engine: 'opencode', dbPath: store.path })
+    const found = await provider.scan(context().ctx)
+    // The last prompt or answer (a turn end is not one), or time_updated when that is later.
+    expect(Object.fromEntries(found.map((s) => [s.sessionId, s.mtime]))).toEqual({ ses_old: T0 + 1001, ses_new: T0 + 51 })
+    expect(provider.lastScan()).toEqual({ found: 2, child: 1, headless: 1, empty: 1 })
+    const session = found.find((s) => s.sessionId === 'ses_new')!
+    expect(session).toMatchObject({ engine: 'opencode', cwd: '/work/app', title: 'Add search', origin: 'terminal' })
+    expect((await session.readHistory!()).map((e) => e.type)).toEqual(['user_message', 'text_delta', 'done'])
+    store.close()
+  })
+
+  it('lists a fresh OpenCode 2 store, which has no v1 tables at all', async () => {
+    const store = new Store(join(tempDir(), 'opencode.db'), V2_SCHEMA)
+    store.v2Session('ses_only', { title: 'Only v2' }).v2Turn('ses_only')
+    store.v2Session('ses_none')
+    const provider = opencodeProvider({ engine: 'opencode', dbPath: store.path })
+    expect(await provider.scan(context().ctx)).toMatchObject([{ sessionId: 'ses_only', title: 'Only v2' }])
+    expect(provider.lastScan()).toEqual({ found: 1, empty: 1 })
+    store.close()
+  })
+
+  it('says from the newest turn row of an OpenCode 2 session whether a turn is running', async () => {
+    const store = new Store(join(tempDir(), 'opencode.db'), V2_SCHEMA)
+    const provider = opencodeProvider({ engine: 'opencode', dbPath: store.path })
+    const busy = (id: string) => provider.busy!({ pid: 1, record: ownerRecord(store.path, id) })
+    const step = (id: string, data: Record<string, unknown>) => store.v2Session(id).v2Message(id, 'user', { text: 'go' }).v2Message(id, 'assistant', data)
+    const done = { created: T0, completed: T0 + 1 }
+    const tool = (status: string) => ({ type: 'tool', id: 'call_1', name: 'bash', state: { status, input: {}, content: [], metadata: {} } })
+
+    // No row of this session in a store that only has v2 tables: nothing was said.
+    expect(await busy('ses_missing')).toBe(false)
+    expect(await busy('ses_new')).toBe(false)
+
+    store.v2Session('ses_asked').v2Message('ses_asked', 'user', { text: 'go' })
+    expect(await busy('ses_asked')).toBe(true)
+    step('ses_streaming', { content: [{ type: 'text', text: '...' }], time: { created: T0 } })
+    expect(await busy('ses_streaming')).toBe(true)
+    step('ses_stopped', { content: [{ type: 'text', text: 'Done' }], finish: 'stop', time: done })
+    expect(await busy('ses_stopped')).toBe(false)
+    step('ses_toolcalls', { content: [tool('completed')], finish: 'tool-calls', time: done })
+    expect(await busy('ses_toolcalls')).toBe(true)
+    for (const status of ['running', 'pending']) {
+      step(`ses_tool${status}`, { content: [tool(status)], time: done })
+      expect(await busy(`ses_tool${status}`)).toBe(true)
+    }
+    step('ses_failed', { content: [], finish: 'error', error: { type: 'api', message: 'x' }, time: done })
+    expect(await busy('ses_failed')).toBe(false)
+    step('ses_nullerror', { content: [], error: null, time: { created: T0 } })
+    expect(await busy('ses_nullerror')).toBe(true)
+    // The turn's end is its own row, whatever the outcome; rows that are not turns do not move it.
+    store.v2Session('ses_idle').v2Turn('ses_idle').v2Message('ses_idle', 'compaction', { status: 'running' })
+    expect(await busy('ses_idle')).toBe(false)
+    store.v2Session('ses_interrupted').v2Message('ses_interrupted', 'user', { text: 'go' }).v2Message('ses_interrupted', 'idle', { outcome: 'interrupted' })
+    expect(await busy('ses_interrupted')).toBe(false)
+
+    expect(await provider.busy!({ pid: 1, record: ownerRecord(join(tempDir(), 'gone.db'), 'ses_x') })).toBeNull()
+    store.close()
+  })
+
+  it('reads the newest v2 turn row by time_created, seq only tying the same millisecond', async () => {
+    const store = new Store(join(tempDir(), 'opencode.db'), V2_SCHEMA)
+    const provider = opencodeProvider({ engine: 'opencode', dbPath: store.path })
+    const busy = (id: string) => provider.busy!({ pid: 1, record: ownerRecord(store.path, id) })
+
+    // A tie (40 measured in a 2.0.29 store): the same millisecond, `seq` says which came second, the still-open step.
+    store.v2Session('ses_tie')
+    store.v2Message('ses_tie', 'user', { text: 'go' }, T0)
+    store.v2Message('ses_tie', 'assistant', { content: [{ type: 'text', text: '…' }], time: { created: T0 } }, T0)
+    expect(await busy('ses_tie')).toBe(true)
+
+    // A pair the two orders disagree on (18 measured): the turn's `idle` end holds a lower `seq` than the step it
+    // answers, and a later `time_created`. By `seq` alone the stale step would hold the session open.
+    store.v2Session('ses_swapped')
+    store.v2Message('ses_swapped', 'idle', { outcome: 'interrupted' }, T0 + 100)
+    store.v2Message('ses_swapped', 'assistant', { content: [{ type: 'text', text: '…' }], time: { created: T0 } }, T0)
+    expect(await busy('ses_swapped')).toBe(false)
+    store.close()
+  })
+
+  it('asks the v1 tables about a session OpenCode 2 has no row of, and reads v2 first when a store has both', async () => {
+    const store = new Store(join(tempDir(), 'opencode.db'), SCHEMA + V2_SCHEMA)
+    const provider = opencodeProvider({ engine: 'opencode', dbPath: store.path })
+    const busy = (id: string) => provider.busy!({ pid: 1, record: ownerRecord(store.path, id) })
+    store.session('ses_v1asked').message('ses_v1asked', { role: 'user' })
+    expect(await busy('ses_v1asked')).toBe(true)
+    store.session('ses_v1done').turn('ses_v1done')
+    expect(await busy('ses_v1done')).toBe(false)
+    // Taken over from 1.x, then answered in v2: the stale v1 prompt does not make it busy.
+    store.session('ses_both').message('ses_both', { role: 'user' })
+    store.v2Session('ses_both').v2Turn('ses_both')
+    expect(await busy('ses_both')).toBe(false)
+    store.close()
   })
 
   it('lists the newest 500 and counts the rest as older', async () => {
@@ -527,5 +690,19 @@ describe('the shared helpers', () => {
   it('reads no tail as idle, and an unknown role as unknowable', () => {
     expect(opencodeTurnOpen([])).toBe(false)
     expect(opencodeTurnOpen([{ role: 'tool' }])).toBeNull()
+  })
+
+  it('reads an OpenCode 2 tail: a prompt is open, a turn end closed, a step by its completion, tools and error', () => {
+    expect(opencodeV2TurnOpen({ type: 'user' })).toBe(true)
+    expect(opencodeV2TurnOpen({ type: 'idle' })).toBe(false)
+    expect(opencodeV2TurnOpen({ type: 'compaction' })).toBeNull()
+    const step = { type: 'assistant', completed: 1, failed: null, pending: 0, finish: 'stop' }
+    expect(opencodeV2TurnOpen(step)).toBe(false)
+    expect(opencodeV2TurnOpen({ ...step, completed: null })).toBe(true)
+    expect(opencodeV2TurnOpen({ ...step, pending: 1 })).toBe(true)
+    expect(opencodeV2TurnOpen({ ...step, finish: 'tool-calls' })).toBe(true)
+    expect(opencodeV2TurnOpen({ ...step, finish: null })).toBe(false)
+    expect(opencodeV2TurnOpen({ ...step, finish: 'tool-calls', failed: 'object' })).toBe(false)
+    expect(opencodeV2TurnOpen({ ...step, completed: null, failed: 'null' })).toBe(true)
   })
 })
