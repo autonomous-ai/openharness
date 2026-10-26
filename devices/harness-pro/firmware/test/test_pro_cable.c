@@ -158,6 +158,10 @@ bool cable_link_start(cable_frame_cb cb, cable_tick_cb tick, void *ctx) { (void)
 void cable_link_set_log_framing(bool on) { (void)on; }
 static int decoder_resets;
 void cable_link_reset_decoder(void) { decoder_resets++; }
+static bool host_present;   // off unless a test turns it on: with no host the self re-plug's clock never runs
+bool cable_link_host_present(void) { return host_present; }
+static int replugs;
+void cable_link_replug(void) { replugs++; }
 static int64_t now_us = 1000000;
 int64_t esp_timer_get_time(void) { return now_us; }
 const esp_app_desc_t *esp_app_get_description(void) { static const esp_app_desc_t d = { .version = "0.0.0" }; return &d; }
@@ -1226,6 +1230,74 @@ static void test_swarm_cards(void)
     CHECK(strstr(sent[1], "\"t\":\"supertab.open\"") && strstr(sent[1], "\"lead\":\"\""));
 }
 
+// Ticks every 5 s for `s` seconds, answering each with a ping when `pings` (a Pro that hears the daemon but cannot greet it).
+static void alone_for(int s, bool pings)
+{
+    for (int t = 0; t < s; t += 5) {
+        now_us += 5 * 1000000;
+        if (pings) feed("{\"t\":\"ping\"}");
+        pro_cable_tick(NULL);
+    }
+}
+
+// The self re-plug: after a cold start beside a booting Mac the Pro's link stayed dead until a hand replugged it. With a host
+// driving the port and no session for 30 s, the Pro drops off the bus so the Mac enumerates it afresh; the waits double to
+// 10 min so a Mac with no daemon sees it rarely; never during a session, an update or an open recording.
+static void self_replug(void)
+{
+    if (pro_cable_connected()) end_session();
+    replugs = 0; offer_active = false; voice_is_open = false;
+    pro_cable_tick(NULL);                 // no host yet: nothing counts
+    host_present = true;
+    alone_for(25, true);
+    now_us += 4 * 1000000; pro_cable_tick(NULL);
+    CHECK(replugs == 0);                  // 29 s with pings but no welcome: not yet
+    now_us += 1 * 1000000; pro_cable_tick(NULL);
+    CHECK(replugs == 1);                  // 30 s
+    // Backoff: 60, 120, 240, 480, then 600 s each.
+    const int waits[] = { 60, 120, 240, 480, 600, 600 };
+    for (int i = 0; i < 6; i++) {
+        alone_for(waits[i] - 5, false);
+        CHECK(replugs == 1 + i);
+        alone_for(5, false);
+        CHECK(replugs == 2 + i);
+    }
+    // No host: an hour unplugged (or the Mac off) never counts, and does not reset the wait (the re-plug itself makes the
+    // host vanish for a moment, so a reset there would loop at 30 s).
+    host_present = false;
+    alone_for(3600, false);
+    CHECK(replugs == 7);
+    host_present = true;
+    alone_for(595, false);
+    CHECK(replugs == 7);
+    alone_for(5, false);
+    CHECK(replugs == 8);
+    // A session: never during it, and it resets the wait to 30 s after it ends.
+    welcome();
+    for (int t = 0; t < 900; t += 10) { now_us += 10 * 1000000; feed("{\"t\":\"ping\"}"); pro_cable_tick(NULL); }
+    CHECK(replugs == 8 && pro_cable_connected());
+    now_us += 10 * 1000000; pro_cable_tick(NULL);   // the last tick of the session: 10 s since the ping
+    end_session();                                   // 26 s: silence ends it
+    alone_for(25, false);
+    CHECK(replugs == 8);
+    alone_for(5, false);
+    CHECK(replugs == 9);                  // 30 s after the session's last tick
+    // An update or a recording in flight: never, and the clock restarts when it ends.
+    offer_active = true;
+    alone_for(120, false);
+    CHECK(replugs == 9);
+    offer_active = false;
+    voice_is_open = true;
+    alone_for(120, false);
+    CHECK(replugs == 9);
+    voice_is_open = false;
+    alone_for(55, false);
+    CHECK(replugs == 9);                  // the wait is 60 s now, counted from the end of the recording
+    alone_for(5, false);
+    CHECK(replugs == 10);
+    host_present = false;
+}
+
 int main(void)
 {
     pro_cable_start();   // the lock and the machine table; no tasks run on the host
@@ -1250,6 +1322,7 @@ int main(void)
     link_resync();
     seq_gaps();
     test_swarm_cards();
+    self_replug();
     printf("test_pro_cable: %d checks passed\n", checks);
     return 0;
 }

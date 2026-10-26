@@ -29,6 +29,11 @@ BaseType_t xSemaphoreTake(SemaphoreHandle_t m, TickType_t w) { (void)m; (void)w;
 BaseType_t xSemaphoreGive(SemaphoreHandle_t m) { (void)m; return pdTRUE; }
 BaseType_t xTaskCreate(TaskFunction_t f, const char *n, uint32_t s, void *a, unsigned p, TaskHandle_t *o) { (void)f; (void)n; (void)s; (void)a; (void)p; (void)o; return pdPASS; }
 const char *esp_err_to_name(esp_err_t e) { (void)e; return "err"; }
+void usb_serial_jtag_vfs_use_driver(void) {}
+void usb_serial_jtag_vfs_use_nonblocking(void) {}
+void usb_serial_jtag_ll_phy_enable_pull_override(const usb_serial_jtag_pull_override_vals_t *v) { (void)v; }
+void usb_serial_jtag_ll_phy_disable_pull_override(void) {}
+void vTaskDelay(TickType_t t) { (void)t; }
 
 static int got;
 static uint8_t got_type[8];

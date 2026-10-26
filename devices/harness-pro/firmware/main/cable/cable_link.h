@@ -83,6 +83,11 @@ void cable_link_set_log_framing(bool on);
 // with the cable still in is invisible here — see the hello cadence in pro_cable.c for what stands in.
 bool cable_link_host_present(void);
 
+// Drop off the bus and come back: the D+ pull-up goes off for 100 ms, so the host sees an unplug and a fresh plug-in and
+// enumerates the port again. Blocks the caller for those 100 ms. For the session layer's self re-plug (pro_cable.c), when
+// a host drives the port but nothing on it has answered for a long time: the one fix that otherwise takes a hand.
+void cable_link_replug(void);
+
 // Framing health, cumulative since boot. The RATE is the diagnosis, not the totals: a handful of discarded bytes
 // right after boot is the bootloader's parting words and is expected, while a steady trickle during a session means
 // the two sides disagree about the format or the cable is bad. Without a count those look identical.
