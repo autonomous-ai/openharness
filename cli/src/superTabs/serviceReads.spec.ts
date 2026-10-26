@@ -55,6 +55,7 @@ describe('what each action reads of the Swarm', () => {
     ['attachment', { conversationId: FIXTURE.workGroup, step: 'sent', operationId: 'op-1' }],
     ['command', { operationId: 'op-2', command: { type: 'message.send', conversationId: FIXTURE.workGroup, text: 'Hi', replyTo: null, recipientIds: [] } }],
     ['help', {}],
+    ['decisions', { state: 'open' }],
   ])('reads nothing of it for %s', async (action, payload) => {
     const s = swarm()
     const answer = await s.ask({ action, tabId: T, agentId: FIXTURE.builderId, ...payload }, owner)
@@ -150,5 +151,16 @@ describe('route history when the group cannot be read for another reason', () =>
     const s = swarm((_method, path) => path.includes('/groups/') ? { status: 503, body: { success: false, error: { code: 'SWARM_BUSY', message: 'Busy' } } } : undefined)
     expect(await s.ask({ action: 'routeHistory', tabId: T, agentId: FIXTURE.leadId, conversationId: FIXTURE.workGroup }, owner))
       .toEqual({ error: 'SWARM_BUSY', detail: 'Busy', status: 503 })
+  })
+})
+
+describe('decisions', () => {
+  it('reads the decisions the caller asked, open or answered, as that agent', async () => {
+    const listed = { decisions: [{ id: 'd1', question: 'Ship how?', options: ['Behind a flag', 'To everyone'], recommended: 0, choice: null }] }
+    for (const state of ['open', 'answered']) {
+      const s = swarm((method, path) => path.startsWith(`/api/super-tabs/${T}/decisions?`) ? ok(listed) : undefined)
+      expect(await s.ask({ action: 'decisions', tabId: T, agentId: FIXTURE.leadId, state }, owner)).toEqual({ ok: true, value: listed })
+      expect(s.call).toHaveBeenCalledWith('GET', `/api/super-tabs/${T}/decisions?state=${state}&asAgentId=${FIXTURE.leadId}`, undefined)
+    }
   })
 })
