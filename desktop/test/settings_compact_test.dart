@@ -160,6 +160,29 @@ void main() {
     }
   });
 
+  final signOut = find.byKey(const Key('settings-sign-out-button'));
+
+  testWidgets('a phone\'s section buttons are a finger tall', (tester) async {
+    await mount(
+      tester,
+      const Size(390, 844),
+      initialSection: SettingsSection.account,
+    );
+    expect(tester.getSize(signOut).height, greaterThanOrEqualTo(44));
+  });
+
+  testWidgets('Desktop at 600 keeps the mouse-sized section buttons', (
+    tester,
+  ) async {
+    await mount(
+      tester,
+      const Size(600, 800),
+      initialSection: SettingsSection.account,
+      desktop: true,
+    );
+    expect(tester.getSize(signOut).height, 32);
+  });
+
   testWidgets('a wide window keeps the mouse-sized rows', (tester) async {
     await mount(tester, const Size(1280, 800));
     for (final height in rowHeights(tester)) {
