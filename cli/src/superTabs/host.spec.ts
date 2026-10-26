@@ -728,7 +728,9 @@ it('stops a requested worker once, confirms removal, and releases retention on t
   expect(acknowledgements).toBe(1)
 })
 
-it('closes the session of a worker whose assignment the Lead cancelled', async () => {
+// A lost task (the backend's v1 liveness) has ended for its agent, as a cancelled one has: a stalled agent the Lead stops
+// is closed, never kept for work it no longer holds.
+it.each(['cancelled', 'lost'])('closes the session of a worker whose assignment is %s', async status => {
   const t = setup(), host = t.open()
   vi.mocked(t.core.agents.byAgent).mockReturnValue({ agentId: 'harness', sessionId: 'native', registeredAt: 0, startedBy: 'agent' } as never)
   let closed = false, removed = false
@@ -738,7 +740,7 @@ it('closes the session of a worker whose assignment the Lead cancelled', async (
   t.core.account.backend = async (method, path, body) => {
     if ((body as any)?.command?.type === 'agent.stopLease') return { status: 200, body: { data: { result: { expiresAt: Date.now() + 3_600_000, durationMs: 120_000 } } } }
     if (path.includes('/hosts/')) return { status: 200, body: { data: hostForm(removed ? [] : [{ tabId: 'tab', agent: target, stopRequested: true }], { tabs: ['tab'] }) } }
-    if (method === 'GET') return { status: 200, body: { data: swarmReply(path, { agents: [target], conversations: [{ id: 'g', assignment: { id: 'a', agentId: 'agent', status: 'cancelled' } }] }) } }
+    if (method === 'GET') return { status: 200, body: { data: swarmReply(path, { agents: [target], conversations: [{ id: 'g', assignment: { id: 'a', agentId: 'agent', status } }] }) } }
     removed = true
     return { status: 200, body: { data: {} } }
   }
