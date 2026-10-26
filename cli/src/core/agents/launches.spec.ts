@@ -791,6 +791,26 @@ describe('agent_create with a receipt', () => {
     expect(claudeTrusts).toHaveBeenCalledWith('/repo')
   })
 
+  // WIN-DELL and the Mac Studio, 2026-10-26: Swarm Leads in a reused or fresh checkout of the project's repository sat at
+  // Claude Code's trust question, and so did the next Lead in a worktree of it, its source never answered.
+  it('trusts a Swarm agent\'s checkout of its remote project in the Swarm\'s full mode, and no other existing folder', async () => {
+    const { ask, replies } = setup()
+    const launch = async (payload: Record<string, unknown>, n: number) => { await ask({ creationId: `${CREATION}-${n}`, ...payload }); await vi.waitFor(() => expect(replies).toHaveLength(n)) }
+    const remote = { projectSource: 'remote', repositoryUrl: 'https://github.com/acme/app.git' }
+    await launch({ engine: 'claude', ...remote, swarmRole: 'lead', permissionMode: 'full' }, 1)
+    expect(preTrustClaudeProject).toHaveBeenCalledWith('/projects/prepared')
+    // The guard: the same checkout outside a Swarm or outside full mode, and a Swarm agent in a folder it was handed.
+    await launch({ engine: 'claude', ...remote, permissionMode: 'full' }, 2)
+    await launch({ engine: 'claude', ...remote, swarmRole: 'lead', permissionMode: 'auto' }, 3)
+    await launch({ engine: 'claude', cwd: dir, swarmRole: 'lead', permissionMode: 'full' }, 4)
+    await launch({ engine: 'claude', projectSource: 'worktree', gitSource: '/elsewhere', branchName: 'feature', swarmRole: 'lead', permissionMode: 'full' }, 5)
+    expect(preTrustClaudeProject).toHaveBeenCalledOnce()
+    // A worktree made from that checkout then inherits its answer.
+    vi.mocked(claudeTrusts).mockImplementation(path => path === '/projects/prepared')
+    await launch({ engine: 'claude', projectSource: 'worktree', gitSource: '/projects/prepared', branchName: 'feature', swarmRole: 'lead', permissionMode: 'full' }, 6)
+    expect(preTrustClaudeProject).toHaveBeenCalledTimes(2)
+  })
+
   // A Codex agent on its own profile reads its trust from THAT profile's config.toml: the trust was
   // read and written in ~/.codex alone, so it got Codex's trust prompt in a folder Harness had just made.
   it('asks and records a Codex agent\'s trust in its own profile', async () => {

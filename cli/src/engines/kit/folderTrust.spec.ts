@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { launchClaudeConfigDir, launchCodexHome } from '../../lib/engineHomes.js'
 import { launch as claude } from '../claude/launch.js'
 import { launch as codex } from '../codex/launch.js'
-import { recordTrustIn, trustsIn } from './folderTrust.js'
+import { recordAcceptanceIn, recordTrustIn, trustsIn } from './folderTrust.js'
 
 // The former lib/claudeTrust.spec.ts, its cases unchanged, against the two engines' declared trust (`trust` in
 // claude/launch.ts and codex/launch.ts) applied by the kit, in the homes the former functions read.
@@ -281,5 +281,29 @@ describe('the config each engine actually reads', () => {
     vi.stubEnv('CLAUDE_CONFIG_DIR', '')
     expect(preTrustClaudeProject('/v')).toBe('trusted')
     expect(claudeTrusts('/v')).toBe(true)
+  })
+})
+
+// Claude Code's "Yes, I accept" for full mode writes this key to its user settings (2.1.310); a Swarm Lead on the Mac
+// Studio waited there before its first turn (2026-10-26).
+describe('full mode\'s warning accepted as the engine records it', () => {
+  const key = claude.bypassAcceptance!.key
+  it('adds the key to the settings, keeping everything else, once', () => {
+    const file = join(mkdtempSync(join(tmpdir(), 'accept-')), 'settings.json')
+    writeFileSync(file, JSON.stringify({ theme: 'dark', hooks: { Stop: [] } }))
+    expect(recordAcceptanceIn(file, key)).toBe('accepted')
+    expect(JSON.parse(readFileSync(file, 'utf8'))).toEqual({ theme: 'dark', hooks: { Stop: [] }, skipDangerousModePermissionPrompt: true })
+    expect(recordAcceptanceIn(file, key)).toBe('already')
+  })
+
+  it('leaves a missing, unreadable or other-shaped file, and a value the person set, as it was', () => {
+    const folder = mkdtempSync(join(tmpdir(), 'accept-')), file = join(folder, 'settings.json')
+    expect(recordAcceptanceIn(file, key)).toBe('skipped')
+    expect(readdirSync(folder)).toEqual([])
+    for (const text of ['{not json', '[]', JSON.stringify({ [key]: false })]) {
+      writeFileSync(file, text)
+      expect(recordAcceptanceIn(file, key)).toBe('skipped')
+      expect(readFileSync(file, 'utf8')).toBe(text)
+    }
   })
 })

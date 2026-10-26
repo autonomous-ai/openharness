@@ -8,6 +8,8 @@
  * of one): that answer is theirs. One consented exception is a Swarm's own project clones: clicking Add
  * machine authorizes those checkouts and their Swarm agent worktrees (superTabs/cloneTrust.ts), including
  * earlier contributions repaired after an update. It never authorizes the person's other repositories.
+ * The other is a Swarm agent in the Swarm's full mode in the checkout of its remote project's own repository
+ * (core/agents/launches.ts `swarmCheckout`). Any other existing folder stays the person's question.
  * The callers decide (core/agents/create.ts, launches.ts). A worktree only inherits the answer its source
  * repo already has.
  *
@@ -90,6 +92,19 @@ function recordJson(trust: JsonTrust, file: string, cwd: string): 'trusted' | 'a
   config[trust.projects] = projects
   replaceConfigFile(file, JSON.stringify(config, null, 2))
   return 'trusted'
+}
+
+/** Record the engine's acceptance of its warning for full mode (facets/launch.ts `BypassAcceptanceContract`) as `key` in
+ *  the JSON settings `file`. Like trust, only ever adds: a file that is missing or not an object, or a `key` the person set
+ *  to anything else, stays as it is. */
+export function recordAcceptanceIn(file: string, key: string): 'accepted' | 'already' | 'skipped' {
+  if (!existsSync(file)) return 'skipped'
+  let settings: unknown
+  try { settings = JSON.parse(readFileSync(file, 'utf8')) } catch { return 'skipped' }
+  if (!isPlainObject(settings)) return 'skipped'
+  if (settings[key] !== undefined) return settings[key] === true ? 'already' : 'skipped'
+  replaceConfigFile(file, JSON.stringify({ ...settings, [key]: true }, null, 2))
+  return 'accepted'
 }
 
 /** Its own entry, or a folder above it in the same Git repository, says yes: the inheritance Claude Code applies. Unreadable or absent

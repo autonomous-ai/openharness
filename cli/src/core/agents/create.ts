@@ -41,7 +41,7 @@ import type { LaunchAuthority, LaunchPreparation } from '../../lib/launchPrepara
 import type { publishGridConfigDir } from '../../lib/publishedGridConfig.js'
 import { nativeHookLocations } from '../../engines/kit/nativeLocations.js'
 import { engineHooks } from '../../engines/hooks.js'
-import { folderTrust } from '../../engines/launchPrep.js'
+import { acceptFullMode, folderTrust } from '../../engines/launchPrep.js'
 import { projectsRoot } from '../../lib/projectFolder.js'
 import { NativeFiles } from '../../engines/kit/nativeFiles.js'
 import type { registry, RegisteredSession } from '../../lib/registry.js'
@@ -285,6 +285,13 @@ export function createAgentCreator({
       console.log(describeGridLaunch(engine, grid, built.launch.webSearch))
     }
     if (!current()) return stale()
+    // The Swarm starts its agents in full mode, so a machine that never accepted full mode's warning stops each one there
+    // before its first turn (Claude Code's "Yes, I accept", the Mac Studio, 2026-10-26). The Swarm's owner chose that mode
+    // for it; recorded the way the engine records the person's own yes, in the home this launch reads.
+    if (input.swarmRole && permissionMode === 'full') {
+      try { acceptFullMode(engine, native ? { ...native.environment, ...gridLaunch?.env, ...dshEnv } : undefined) }
+      catch (error) { console.warn(`[agent] full mode acceptance · ${error instanceof Error ? error.message : error}`) }
+    }
     if (trustEmptyProject) {
       try {
         // A clone or user edit can arrive while dependencies are being prepared.

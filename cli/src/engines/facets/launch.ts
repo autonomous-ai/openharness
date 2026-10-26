@@ -144,6 +144,14 @@ export type TrustContract = { home: LaunchHome; file: string } & (
 )
 
 /**
+ * The engine's one-time warning for the mode that approves everything, which it stops showing once `key` is true in
+ * `file` in its home: the setting its own "Yes, I accept" writes. Recorded by core, before a spawn, for a Swarm agent
+ * the Swarm starts in that mode (core/agents/create.ts); `false` there is the person's and stays. Applied by
+ * kit/folderTrust.ts `recordAcceptanceIn`.
+ */
+export interface BypassAcceptanceContract { home: LaunchHome; file: string; key: string }
+
+/**
  * The engine's question about MCP servers a folder inherits: a project file of servers (`file`, `servers` its map) in a
  * folder ABOVE the one it opens, which it asks to use or not as it starts there. Its own "no", the question's default, is
  * kept as `rejected` in `settings` in the folder. Harness records that same "no" for a folder it made empty itself,
@@ -286,6 +294,7 @@ export interface EngineLaunch {
   trust?: TrustContract
   /** Recorded with `trust`, for the same folders (kit/inheritedMcp.ts). */
   inheritedMcp?: InheritedMcpContract
+  bypassAcceptance?: BypassAcceptanceContract
   resumeRepair?: ResumeRepairContract
   attribution?: AttributionContract
   /** How the engine is told, as it starts, that it runs in Harness and how to use it (lib/agentAttribution.ts). */
