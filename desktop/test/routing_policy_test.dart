@@ -38,6 +38,15 @@ Widget formOf(Widget form) => MaterialApp(
 void main() {
   test('round-trips the backend policy', () {
     expect(RoutingPolicy.fromJson(json).toJson(), json);
+    // How local models count is not edited here, but an edit elsewhere keeps it.
+    final local = {
+      ...json,
+      'localModels': {'quality': 2, 'enabled': false},
+    };
+    expect(
+      RoutingPolicy.fromJson(local).copyWith(notes: 'x').toJson(),
+      {...local, 'notes': 'x'},
+    );
   });
 
   testWidgets('edits a model, the floor, the reserve and the notes', (

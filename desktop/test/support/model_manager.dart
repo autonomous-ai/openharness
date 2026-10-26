@@ -116,6 +116,9 @@ class ModelManagerTestApp extends AppNotifier {
   }
 
   final actions = <({String machine, String model, bool start})>[];
+
+  /// The Swarm grid each start or stop named, beside [actions] (null: the account's own).
+  final grids = <String?>[];
   final downloads = <({String machine, String model})>[];
 
   @override
@@ -202,8 +205,10 @@ class ModelManagerTestApp extends AppNotifier {
     String machineId,
     String modelId, {
     required bool start,
+    String? grid,
   }) async {
     actions.add((machine: machineId, model: modelId, start: start));
+    grids.add(grid);
     final inventory = inventoryFor(machineId);
     if (actionReply != null) return actionReply!.future;
     final operation = <String, dynamic>{

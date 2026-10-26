@@ -68,11 +68,14 @@ VoiceMicAction _tapAction(VoiceInputController voice, TerminalSession session) {
     ),
     VoiceInputStatus.unavailable => _face(
       VoiceMicFace.off,
-      onPressed: () => unawaited(voice.startListening()),
+      onPressed: () =>
+          unawaited(voice.startListening(pretend: session.voicePretend)),
     ),
     VoiceInputStatus.idle => _face(
       VoiceMicFace.talk,
-      onPressed: canSend ? () => unawaited(voice.startListening()) : null,
+      onPressed: canSend
+          ? () => unawaited(voice.startListening(pretend: session.voicePretend))
+          : null,
     ),
   };
 }
@@ -133,7 +136,10 @@ VoiceMicAction _holdAction(
     onPressed: live ? _live : null,
     onHoldStart: live
         ? () => unawaited(
-            voice.startHold(session.voiceDeliver ?? session.sendComposerText),
+            voice.startHold(
+              session.voiceDeliver ?? session.sendComposerText,
+              pretend: session.voicePretend,
+            ),
           )
         : null,
     onHoldFinish: live ? _release(voice, session) : null,

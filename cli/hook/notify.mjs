@@ -446,10 +446,11 @@ function readWindowsHookCredential(dataDir, file) {
 /**
  * A Harness pty host pane names itself `HARNESS_PANE=<instance>:%N` (pty/src/panes.rs), as a tmux pane has
  * `TMUX_PANE`. It is read only when there is no TMUX_PANE: a tmux pane inside a pty host pane is still the tmux pane.
+ * The instance is `p<protocol>` or `p<protocol>-<build>`, as cli/src/lib/ptyHost/instance.ts `PTY_HOST_INSTANCE`.
  */
 function ptyHostPane(environment = process.env) {
   if (environment.TMUX_PANE) return null
-  const match = /^(p\d{1,4}):(%\d{1,9})$/.exec(environment.HARNESS_PANE || '')
+  const match = /^(p\d{1,4}(?:-(?:[0-9A-Za-z.-]{1,32}|h[0-9a-f]{12}))?):(%\d{1,9})$/.exec(environment.HARNESS_PANE || '')
   return match ? { instance: match[1], paneId: match[2] } : null
 }
 const PTY_PANE = ptyHostPane()
@@ -1391,7 +1392,7 @@ function mergeRuntimes(current, observed) {
 // as damaged, and a hook while the daemon was down then registered nothing at all: `terminal` was
 // missing, so one terminal open on the machine was enough (e2e/hookclient.e2e.ts).
 const REGISTRY_ENGINES = new Set([
-  'claude', 'codex', 'cursor', 'opencode', 'pi', 'hermes', 'commandcode', 'devin', 'muse', 'amp', 'kilo', 'grok',
+  'claude', 'codex', 'cursor', 'opencode', 'pi', 'omp', 'hermes', 'commandcode', 'devin', 'muse', 'amp', 'kilo', 'grok',
   'agy', 'copilot', 'terminal',
 ])
 

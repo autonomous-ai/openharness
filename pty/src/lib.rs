@@ -5,6 +5,7 @@ pub mod desktop;
 pub mod discovery;
 mod files;
 pub mod host_lock;
+pub mod instance;
 #[cfg(windows)]
 pub mod job;
 pub mod launcher;

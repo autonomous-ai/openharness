@@ -1,5 +1,5 @@
 /** `harness super-tab route` on the real native protocol: a private daemon, tmux and data dir, fake Claude
- * engines and the fake backend (its hosted Jev included). Database authorization is covered by the backend's tests. */
+ * engines and the fake backend (with Jev available to verify routing bypasses it). Database authorization is covered by the backend's tests. */
 import { createHash } from 'node:crypto'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -7,7 +7,7 @@ import { join } from 'node:path'
 import { afterEach, expect, it, onTestFailed } from 'vitest'
 import { superTabCommand } from '../src/superTabs/command.js'
 import { LocalClient } from './harness/client.js'
-import { IsolatedDaemon } from './harness/daemon.js'
+import { IsolatedDaemon, until } from './harness/daemon.js'
 import { FakeBackend, type FakeMachine } from './harness/fakeBackend.js'
 
 const ME: FakeMachine = { machineId: 'c9'.repeat(16), computerId: 'e2e-super-tab-route-computer', name: 'Fixture', token: 'e2e-super-tab-route-token' }
@@ -28,10 +28,8 @@ afterEach(async () => {
 
 async function setup(hostedJev: FakeBackend['jev'], options: { workerBusy?: boolean } = {}) {
   const relay = await FakeBackend.start(); backend = relay; relay.addMachine(ME); relay.jev = hostedJev
-  // The daemon asks Jev on an OpenRouter key when it finds one (jevClient resolveJevKey): the environment's
-  // variable, ORI_CREDENTIALS_PATH or TYPESAFE_CREDENTIALS. This run must reach the fake backend and never
-  // OpenRouter, so the variable is emptied and both files point at a folder that holds nothing. The
-  // default locations are under the isolated HOME.
+  // A regression to Jev should reach the fake backend, never OpenRouter: empty the environment's key and
+  // point both credential locations at an empty folder. Defaults are under the isolated HOME.
   nowhere = mkdtempSync(join(tmpdir(), 'route-e2e-no-key-'))
   const d = await IsolatedDaemon.create({ submissionGate: true, env: {
     BACKEND_WS_URL: relay.wsUrl, WEB_URL: relay.httpUrl, ADAPTER_COMPUTER_ID: ME.computerId,
@@ -105,10 +103,16 @@ async function setup(hostedJev: FakeBackend['jev'], options: { workerBusy?: bool
       { where: () => where, print: text => { answer = JSON.parse(text) } })
     return { code, answer }
   }
-  return { route, start, records, commands, relay, client, cwd }
+  async function resume(startId: string) {
+    let answer: Record<string, any> = {}
+    const code = await superTabCommand(['--tab', TAB, '--agent', leadId, 'resume', startId],
+      { where: () => where, print: text => { answer = JSON.parse(text) } })
+    return { code, answer }
+  }
+  return { route, start, resume, records, commands, relay, client, cwd, leadHarness, workerHarness }
 }
 
-it('routes to Jev’s pick and records the decision', async () => {
+it('routes by policy even when Jev is available and records the decision', async () => {
   const asked: Array<Record<string, any>> = []
   const { route, records } = await setup(body => {
     asked.push(body)
@@ -117,10 +121,10 @@ it('routes to Jev’s pick and records the decision', async () => {
   })
   const { code, answer } = await route()
   expect(code, JSON.stringify(answer)).toBe(0)
-  expect(answer).toMatchObject({ ok: true, routeDecisionId: 'd-1', via: 'jev', pick: { id: 'c1' } })
-  expect(asked).toHaveLength(1)
+  expect(answer).toMatchObject({ ok: true, routeDecisionId: 'd-1', via: 'order', pick: { id: 'c0' } })
+  expect(asked).toHaveLength(0)
   expect(records).toHaveLength(1)
-  expect(records[0].command.decision).toMatchObject({ via: 'jev', pick: 'c1' })
+  expect(records[0].command.decision).toMatchObject({ via: 'order', pick: 'c0' })
   // The idle worker is a candidate; the Lead never is.
   const titles = (records[0].command.decision.candidates as Array<{ title: string }>).map(c => c.title)
   expect(titles.some(t => t.startsWith('Multiply ·'))).toBe(true)
@@ -130,17 +134,17 @@ it('routes to Jev’s pick and records the decision', async () => {
   expect(titles.every(t => t.endsWith(` · ${ME.name}`))).toBe(true)
 }, 180_000)
 
-it('falls back to the policy order when Jev is unavailable', async () => {
+it('uses the policy order when Jev is unavailable', async () => {
   const { route, records, relay } = await setup(null)
   const { code, answer } = await route()
   expect(code, JSON.stringify(answer)).toBe(0)
-  expect(relay.seen.some(line => line.startsWith('POST /api/route/jev'))).toBe(true)
+  expect(relay.seen.some(line => line.startsWith('POST /api/route/jev'))).toBe(false)
   expect(answer).toMatchObject({ ok: true, routeDecisionId: 'd-1', via: 'order', pick: { id: 'c0' } })
   expect(records[0].command.decision).toMatchObject({ via: 'order', pick: 'c0' })
 }, 180_000)
 
 it('starts the routed pick as a new agent with its decision, model and effort', async () => {
-  const { route, start, commands, client, cwd } = await setup(null, { workerBusy: true })
+  const { route, start, resume, commands, client, cwd, leadHarness, workerHarness } = await setup(null, { workerBusy: true })
   const routed = await route()
   expect(routed.code, JSON.stringify(routed.answer)).toBe(0)
   const pick = routed.answer.pick
@@ -148,9 +152,19 @@ it('starts the routed pick as a new agent with its decision, model and effort', 
   const request = { conversationId: 'g1', machineId: pick.machineId, engine: pick.engine, model: pick.model, effort: pick.effort, name: 'Builder',
     cwd, worktree: false, permissionMode: 'auto', requirements: { memoryBytes: 0, diskBytes: 1, maxCpuPercent: 100, tools: [], devices: [], quotaRequired: false },
     routeDecisionId: routed.answer.routeDecisionId }
-  const started = await start('route-start', request)
+  let started = await start('route-start', request)
+  if (started.answer.error === 'START_PENDING') {
+    expect(started.answer).toMatchObject({ startId: 'start-route-start', creationId: 'super-start-route-start' })
+    await until('routed Claude Code session to bind', async () => {
+      const listed = await client.request('agents_list', {}, 30_000)
+      return (listed.agents as Array<{ id: string; sessionId?: string }>).some(a =>
+        a.id !== leadHarness && a.id !== workerHarness && !!a.sessionId) || null
+    }, 60_000, 250)
+    started = await resume(started.answer.startId)
+  }
   expect(started.code, JSON.stringify(started.answer)).toBe(0)
   expect(started.answer.harnessId).toBeTruthy()
+  expect(commands.filter(c => c.command.type === 'agent.start')).toHaveLength(1)
   const command = commands.find(c => c.command.type === 'agent.start')!.command
   // The decision rides on the command, never inside the machine-side request.
   expect(command.routeDecisionId).toBe('d-1')

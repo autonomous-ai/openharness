@@ -101,6 +101,7 @@ Widget _host(
   TerminalSession session, {
   bool visible = true,
   VoidCallback? onToggle,
+  String? firstTask,
 }) => MaterialApp(
   home: Scaffold(
     body: SizedBox(
@@ -111,6 +112,7 @@ Widget _host(
         session: session,
         focused: true,
         composerVisible: visible,
+        firstTask: firstTask,
         onToggleComposer: onToggle ?? () {},
       ),
     ),
@@ -137,6 +139,26 @@ double _contrast(Color a, Color b) {
 }
 
 void main() {
+  testWidgets(
+    'a local first harness has an editable suggestion and sends nothing on opening',
+    (tester) async {
+      final sent = <String>[];
+      final app = _notifier(local: true);
+      final session = await _liveSession(sent);
+      await tester.pumpWidget(
+        _host(app, session, firstTask: 'Make a date page.'),
+      );
+      await tester.pump();
+      expect(find.byType(TerminalComposer), findsOneWidget);
+      expect(find.text('Make a date page.'), findsOneWidget);
+      expect(sent, isEmpty);
+      await tester.enterText(find.byType(TextField), 'My own first task');
+      expect(sent, isEmpty);
+      await tester.pumpWidget(const SizedBox.shrink());
+      session.dispose();
+      app.dispose();
+    },
+  );
   group('composer clipboard paste', () {
     String? clipboard;
     Future<Object?> Function()? checkClipboard;

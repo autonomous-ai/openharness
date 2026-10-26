@@ -1,14 +1,15 @@
 import 'dart:io';
 import 'dart:ui' as ui;
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:integration_test/integration_test.dart';
 import 'package:window_manager/window_manager.dart';
 import 'package:harness/core/test_run.dart';
 import 'package:harness/core/models.dart';
+import 'package:harness/devices/devices_screen.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/state/new_harness.dart';
 import 'package:harness/super_tabs/workspace.dart';
@@ -19,20 +20,34 @@ import 'package:harness/widgets/terminal_panel.dart';
 import 'package:harness/ws/local_cli_discovery.dart';
 
 import '../test/super_tab_launch_test.dart'
-    show SuperTabFixtureConnection, SuperTabLaunchFixture, tabId;
+    show SuperTabFixtureConnection, tabId;
+import '../test/support/super_tab_devices_fixture.dart';
 import '../test/super_tab_route_test.dart' show routeRow, decision;
 import '../test/support/super_tab_fixture.dart'
     show projectFixture, conversationFixture;
+import 'flutter_test_config.dart';
 
 /// A real Flutter/macOS surface with in-memory accounts and native protocol
 /// fixtures. It never opens a production daemon, account, harness or database.
 void main() {
   if (!kUnderTest) throw StateError('Requires FLUTTER_TEST=1');
-  final binding = IntegrationTestWidgetsFlutterBinding.ensureInitialized()
+  final binding = ensureNativeTestBinding()
     ..framePolicy = LiveTestWidgetsFlutterBindingFramePolicy.onlyPumps;
   testWidgets(
     'native Swarm keeps group context, people and terminal in one workspace',
     (tester) async {
+      // FLUTTER_TEST makes Flutter's debug default Android, even on a real
+      // macOS window. This native fixture must exercise the desktop guard.
+      expect(defaultTargetPlatform, TargetPlatform.macOS);
+      final semantics = binding.ensureSemantics();
+      var semanticsDisposed = false;
+      void disposeSemantics() {
+        if (semanticsDisposed) return;
+        semanticsDisposed = true;
+        semantics.dispose();
+      }
+
+      addTearDown(disposeSemantics);
       debugPrint('Swarm fixture: initialize window');
       await windowManager.ensureInitialized().timeout(
         const Duration(seconds: 10),
@@ -40,6 +55,7 @@ void main() {
       await windowManager
           .setSize(const Size(1280, 800))
           .timeout(const Duration(seconds: 10));
+      await windowManager.setTitle('Swarm review — test data');
       // macOS stops delivering frames to a fully occluded native test window.
       // Keep only this isolated fixture above other running Harness builds.
       await windowManager.setAlwaysOnTop(true);
@@ -47,7 +63,8 @@ void main() {
       await windowManager.show().timeout(const Duration(seconds: 10));
       await windowManager.focus().timeout(const Duration(seconds: 10));
       debugPrint('Swarm fixture: create lead');
-      final f = SuperTabLaunchFixture();
+      final f = superTabDevicesFixture();
+      (f.connection as SuperTabDevicesConnection).hasDevice = true;
       f.connection.nativeName = 'hi';
       f.connection.nativeSurface = true;
       f.app.machineStates['m']!
@@ -150,6 +167,24 @@ void main() {
             'resources': {'cpuPercent': 40},
           },
         },
+        // A Codex-only machine: its Claude slot stays blank, so its Codex % lines up with the others'.
+        {
+          'machineId': 'm-codex',
+          'name': 'Build Box',
+          'contributorId': 'person-1',
+          'observation': {
+            'receivedAt': DateTime.now().millisecondsSinceEpoch,
+            'quotas': [
+              {
+                'engine': 'codex',
+                'known': true,
+                'windows': [
+                  {'name': '5-hour', 'usedPercent': 30},
+                ],
+              },
+            ],
+          },
+        },
         {
           'machineId': 'm-old',
           'name': 'Old Mini',
@@ -234,7 +269,11 @@ void main() {
                 listenable: f.app,
                 builder: (context, _) => SuperTabWorkspace(
                   app: f.app,
-                  canvas: PaneGrid(notifier: f.app, swarmMode: true),
+                  canvas: PaneGrid(
+                    notifier: f.app,
+                    swarmMode: true,
+                    devicesViewer: (_) => DevicesTab(notifier: f.app),
+                  ),
                   onAddAgent: (_) {},
                   onNewProject: () {},
                 ),
@@ -268,62 +307,21 @@ void main() {
       expect(find.text('CHATS'), findsNothing);
       expect(find.text('New group'), findsNothing);
       expect(find.byTooltip('New project'), findsOneWidget);
-      // Left sidebar: both Projects and Machines groups start open, one line a machine: its name, its Claude and
-      // Codex allowances and its agents, never its owner, and the offline machine under its closed disclosure.
-      // Both Studio Macs are online rows. A busy one's name may be shortened to
-      // keep its allowance on the line; it then carries its whole name on hover.
-      for (final id in ['m', 'm-twin']) {
-        final row = find.byKey(ValueKey('super-machine-$id'));
-        expect(row, findsOneWidget, reason: id);
-        final shown = tester
-            .widget<RichText>(
-              find.descendant(of: row, matching: find.byType(RichText)).first,
-            )
-            .text
-            .toPlainText();
-        expect(
-          shown == 'Studio Mac' ||
-              (shown.endsWith('…') &&
-                  'Studio Mac'.startsWith(
-                    shown.substring(0, shown.length - 1),
-                  ) &&
-                  find
-                      .descendant(
-                        of: row,
-                        matching: find.byTooltip('Studio Mac'),
-                      )
-                      .evaluate()
-                      .isNotEmpty),
-          isTrue,
-          reason: '$id shows "$shown"',
-        );
-        // Never its owner.
-        for (final who in ['owner', 'person0']) {
-          expect(
-            find.descendant(of: row, matching: find.textContaining(who)),
-            findsNothing,
-            reason: '$id names $who',
-          );
-        }
+      expect(find.byKey(const ValueKey('super-new-project')), findsOneWidget);
+      for (final id in ['m', 'm-twin', 'm-old']) {
+        expect(find.byKey(ValueKey('super-machine-$id')), findsOneWidget);
       }
-      // Claude's chip always shows here; Codex's is the first to give way when the sidebar is narrow.
-      Finder chip(String engine, String figure) => find.descendant(
-        of: find.byKey(ValueKey('super-machine-allowance-m-$engine')),
-        matching: find.text(figure),
-      );
-      expect(chip('claude', '50%'), findsOneWidget);
-      if (find
-          .byKey(const ValueKey('super-machine-allowance-m-codex'))
-          .evaluate()
-          .isNotEmpty) {
-        expect(chip('codex', '88%'), findsOneWidget);
-      }
-      expect(find.text('Offline · 1'), findsOneWidget);
-      expect(find.byKey(const ValueKey('super-machine-m-old')), findsNothing);
-      expect(find.textContaining('CPU'), findsNothing);
+      expect(find.text('Offline · 1'), findsNothing);
       await shot('sidebar-groups');
-      debugPrint(
-        'Swarm fixture: open the tree: a workgroup and the offline machines',
+      await tester.tap(find.byKey(const ValueKey('super-machine-toggle-m')));
+      await tester.pumpAndSettle();
+      expect(
+        find.byKey(const ValueKey('super-machine-allowance-m-claude')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const ValueKey('super-machine-allowance-m-codex')),
+        findsOneWidget,
       );
       final leadWasOpen = c!.expandedProjects.contains('lead');
       if (!leadWasOpen) {
@@ -331,11 +329,8 @@ void main() {
           find.byKey(const ValueKey('super-project-expand-lead')),
         );
       }
-      await tester.tap(find.byKey(const ValueKey('super-machines-offline')));
       await tester.pumpAndSettle();
       expect(find.text('#20 Sidebar polish'), findsOneWidget);
-      expect(find.byKey(const ValueKey('super-machine-m-old')), findsOneWidget);
-      // Each level one step further in than the one above it.
       double textX(String row, String label) => tester
           .getTopLeft(
             find.descendant(
@@ -346,15 +341,22 @@ void main() {
           .dx;
       expect(
         textX('super-group-polish', '#20 Sidebar polish'),
-        greaterThan(textX('super-group-lead', 'Lamp OS')),
+        closeTo(textX('super-group-lead', 'Lamp OS'), .01),
       );
       await shot('sidebar-tree');
+      // Clicking the label itself collapses the whole section.
+      await tester.tap(find.text('Machines'));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const ValueKey('super-machine-m')), findsNothing);
+      await tester.tap(find.text('Machines'));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const ValueKey('super-machine-m')), findsOneWidget);
+      await tester.tap(find.byKey(const ValueKey('super-machine-toggle-m')));
       if (!leadWasOpen) {
         await tester.tap(
           find.byKey(const ValueKey('super-project-expand-lead')),
         );
       }
-      await tester.tap(find.byKey(const ValueKey('super-machines-offline')));
       await tester.pumpAndSettle();
       debugPrint('Swarm fixture: empty project disclosure');
       await tester.tap(
@@ -370,18 +372,34 @@ void main() {
       final swarmId = f.app.activeSwarmId;
       debugPrint('Swarm fixture: open Devices');
       await tester.tap(find.byKey(const ValueKey('super-your-devices')));
-      // This fixture reserves the utility's conversation pane without a machine.
-      // Assert navigation while that pane waits for a connection instead of
-      // waiting for its indeterminate progress animation to settle.
-      await tester
-          .pump(const Duration(milliseconds: 100))
-          .timeout(const Duration(seconds: 10));
+      // Attachment is scheduled after the navigation frame. Wait for the
+      // actual viewer, rather than assuming a single native pump mounted it.
+      for (
+        var i = 0;
+        i < 60 && find.byType(DevicesScreen).evaluate().isEmpty;
+        i++
+      ) {
+        await tester.pump(const Duration(milliseconds: 50));
+      }
       debugPrint('Swarm fixture: Devices frame painted');
-      expect(f.app.activeSwarm.isDevices, isTrue);
-      expect(f.app.activeSwarm.panes.first.isDevices, isTrue);
-      expect(f.app.activeSwarm.panes.last.isViewer, isFalse);
+      expect(f.app.activeSwarm.isSuperTab, isTrue);
+      expect(f.app.activeSwarmId, swarmId);
+      expect(c.devicesSelected, isTrue);
+      expect(f.app.activeSwarm.panes, hasLength(1));
+      expect(f.app.activeSwarm.panes.single.isDevices, isTrue);
+      expect(find.text('Devices chat'), findsNothing);
       expect(f.app.takeMachinesRequest(), isNull);
-      f.app.selectSwarm(swarmId);
+      expect(find.byType(DevicesScreen), findsOneWidget);
+      for (
+        var i = 0;
+        i < 60 && find.text('Brightness').evaluate().isEmpty;
+        i++
+      ) {
+        await tester.pump(const Duration(milliseconds: 50));
+      }
+      expect(find.text('Brightness'), findsOneWidget);
+      await shot('embedded-devices');
+      await tester.tap(find.byKey(const ValueKey('super-group-lead')));
       await tester.pumpAndSettle();
       debugPrint('Swarm fixture: returned from Devices');
       await shot('conversation');
@@ -470,11 +488,22 @@ void main() {
       await tester.tap(
         find.byKey(ValueKey('super-member-${c.snapshot!.agents.single.id}')),
       );
+      await tester.pump(const Duration(milliseconds: 250));
+      await tester.tap(find.text('Open terminal'));
       debugPrint('Swarm fixture: terminal requested');
       for (var i = 0; i < 30 && f.app.activeSwarm.panes.isEmpty; i++) {
         await tester.pump(const Duration(milliseconds: 50));
       }
-      expect(f.app.activeSwarm.panes, hasLength(1));
+      await shot('terminal-requested');
+      expect(
+        f.app.activeSwarm.panes,
+        hasLength(1),
+        reason:
+            'Selected ${c.selectedId}; Devices ${c.devicesSelected}; '
+            'terminals ${c.terminalAgents(c.selectedId).map((a) => a.id).toList()}; '
+            'groups ${c.snapshot!.conversations.map((g) => '${g.id}:${g.agentIds}').toList()}; '
+            'visible ${tester.widgetList<Text>(find.byType(Text)).map((t) => t.data).whereType<String>().join(" | ")}',
+      );
       final machine = f.app.machineStates['m']!;
       debugPrint(
         'Swarm fixture: native prerequisites '
@@ -528,16 +557,40 @@ void main() {
       await shot('terminal-resized');
       final focusRequest = f.app.paneFocusRequest;
       final divider = find.byKey(const ValueKey('super-resize-right'));
-      tester
+      final resizeFocus = tester
           .widget<Focus>(
             find.descendant(of: divider, matching: find.byType(Focus)),
           )
-          .focusNode!
-          .requestFocus();
+          .focusNode!;
+      resizeFocus.requestFocus();
       await tester.pump(const Duration(milliseconds: 50));
+      FocusManager.instance.applyFocusChangesIfNeeded();
+      expect(
+        resizeFocus.hasPrimaryFocus,
+        isTrue,
+        reason:
+            'Keyboard resize needs focus before Escape: '
+            '${FocusManager.instance.primaryFocus}',
+      );
+      // A native window also receives the reviewer's physical modifier keys.
+      // Keep this synthetic Escape assertion independent of that host input.
+      final keyboard = HardwareKeyboard.instance;
+      for (final physical in keyboard.physicalKeysPressed.toList()) {
+        final logical = keyboard.lookUpLayout(physical);
+        if (logical != null) {
+          await tester.sendKeyUpEvent(logical, physicalKey: physical);
+        }
+      }
       await tester.sendKeyEvent(LogicalKeyboardKey.escape);
       await tester.pump(const Duration(milliseconds: 100));
-      expect(f.app.paneFocusRequest, focusRequest + 1);
+      expect(
+        f.app.paneFocusRequest,
+        focusRequest + 1,
+        reason:
+            'Focus after Escape: ${FocusManager.instance.primaryFocus}; '
+            'pressed keys: ${HardwareKeyboard.instance.logicalKeysPressed}; '
+            'focused pane: ${f.app.focusedPaneId}',
+      );
       expect(f.app.activeSwarm.panes.single.session, same(liveSession));
       expect(find.byType(PaneGrid), findsOneWidget);
       expect(
@@ -582,6 +635,8 @@ void main() {
       await tester.tap(
         find.byKey(ValueKey('super-member-${c.snapshot!.agents.single.id}')),
       );
+      await tester.pump(const Duration(milliseconds: 250));
+      await tester.tap(find.text('Open terminal'));
       for (var i = 0; i < 40 && find.text('Resume').evaluate().isEmpty; i++) {
         await tester.pump(const Duration(milliseconds: 50));
       }
@@ -664,6 +719,8 @@ void main() {
       expect(tester.takeException(), isNull);
       await shot('group-terminals');
       await tester.tap(find.byKey(const ValueKey('super-member-lead-agent')));
+      await tester.pump(const Duration(milliseconds: 250));
+      await tester.tap(find.text('Open terminal'));
       await tester.pump(const Duration(milliseconds: 200));
       expect(
         find.byKey(const ValueKey('super-agent-group-open')),
@@ -674,11 +731,50 @@ void main() {
       await tester.pump(const Duration(milliseconds: 200));
       expect(c.selectedId, 'offline');
 
+      // Optional manual inspection of this same isolated native fixture. The
+      // file is supplied by the reviewer; no production account or daemon is
+      // connected, and the automated acceptance above has already completed.
+      final reviewDone =
+          const String.fromEnvironment('SUPER_TAB_NATIVE_REVIEW_DONE')
+              .isNotEmpty
+          ? const String.fromEnvironment('SUPER_TAB_NATIVE_REVIEW_DONE')
+          : Platform.environment['SUPER_TAB_NATIVE_REVIEW_DONE'];
+      if (reviewDone != null) {
+        c.select('lead');
+        c.selectTerminal('lead', null);
+        await tester.pump(const Duration(milliseconds: 200));
+        binding.framePolicy =
+            LiveTestWidgetsFlutterBindingFramePolicy.fullyLive;
+        debugPrint('Swarm fixture: ready for manual review');
+        await tester.runAsync(() async {
+          await File('$reviewDone.ready').writeAsString('ready');
+          final deadline = DateTime.now().add(const Duration(minutes: 10));
+          while (!await File(reviewDone).exists() &&
+              DateTime.now().isBefore(deadline)) {
+            await Future<void>.delayed(const Duration(milliseconds: 200));
+          }
+        });
+        binding.framePolicy =
+            LiveTestWidgetsFlutterBindingFramePolicy.onlyPumps;
+      }
+
       await tester.pumpWidget(const SizedBox());
       await c.flush();
       f.app.superTabs.dispose();
       await tester.pump();
+      // Flutter verifies handles before addTearDown runs on the success path.
+      disposeSemantics();
     },
-    timeout: const Timeout(Duration(minutes: 2)),
+    variant: const TargetPlatformVariant({TargetPlatform.macOS}),
+    timeout: Timeout(
+      Duration(
+        minutes:
+            Platform.environment['SUPER_TAB_NATIVE_REVIEW_DONE'] != null ||
+                const String.fromEnvironment('SUPER_TAB_NATIVE_REVIEW_DONE')
+                    .isNotEmpty
+            ? 12
+            : 2,
+      ),
+    ),
   );
 }

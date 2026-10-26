@@ -22,6 +22,7 @@ import { ENGINES, isTerminalEngine, type AgentEngine } from '../../engines/types
 import { AgentCreationReceiptError, creationFingerprint, validCreationId, type AgentCreationOutcome, type AgentCreationReceipts, type AgentCreationStatus, type CreationAuthority } from '../../lib/agentCreationReceipt.js'
 import type { AgentFrame } from '../../lib/agentFrame.js'
 import { engineLabel } from '../../lib/agentNames.js'
+import { isSwarmRole, isSwarmSkillMode } from '../../lib/swarmSkills.js'
 import {
   AGENT_NAME_RE, FirstPromptUnsupportedError, MAX_FIRST_PROMPT_CHARS, NamedAgentUnsupportedError, permissionModeApproves,
   permissionModeFlags, supportsFirstPrompt, supportsNamedAgent, unsupportedLaunchModelFlag,
@@ -55,7 +56,7 @@ export type ResumeAgent = (agentId: string, permissionMode?: string) => ReturnTy
 
 export interface LaunchRequestDeps {
   /** The receipts of launches asked for with a `creationId`. */
-  receipts: Pick<AgentCreationReceipts, 'run' | 'status' | 'creator' | 'has' | 'runIntent' | 'pendingIntents' | 'pendingIntent' | 'cancelIntent'>
+  receipts: Pick<AgentCreationReceipts, 'run' | 'status' | 'createdLaunchModel' | 'creator' | 'has' | 'runIntent' | 'pendingIntents' | 'pendingIntent' | 'cancelIntent'>
   /** Each launch, read when a request comes in: null on a machine that cannot launch agents. */
   createAgent: () => CreateAgent | null
   prepareCreate?: (input: Parameters<CreateAgent>[0], authority: LaunchAuthority, context?: { local: boolean }) => Promise<LaunchPreparation<Awaited<ReturnType<CreateAgent>>>>
@@ -119,10 +120,21 @@ export function createLaunchRequests({ receipts, createAgent, prepareCreate, pre
       // Only a folder this daemon just made EMPTY is one the engine need not ask about. A clone or
       // the person's own repo is theirs to answer for (engines/kit/folderTrust.ts); a worktree gets only
       // the answer its source repo already has. `branch` IS the source folder: nothing to record.
+      //
+      // One consented exception: a Swarm agent in the Swarm's full mode, in the checkout a remote project resolved
+      // to (cloned now, or one already there that holds that very repository). The person chose this repository
+      // and full mode for the Swarm, and machine trust favors that choice over a prompt. 2026-10-26: on WIN-DELL
+      // a Lead in a reused `harnesses\openharness` sat at Claude Code's trust question; on the Mac Studio a Lead in
+      // a fresh clone did, and the next Lead, in a worktree of it, asked again because the source had never been
+      // answered. Its Yes then landed under the source's key (Claude Code records a worktree's answer under its
+      // main repository), which made the source look trusted before the worktree started.
+      // Claude Code only: Codex's trust also sets its defaults for the person's own later sessions in that folder.
+      const swarmCheckout = input.engine === 'claude' && projectFolder.source === 'remote' && !!input.swarmRole
+        && input.permissionMode === 'full'
       try {
         // A Codex agent on its own profile reads its trust from that profile's config.toml, not ~/.codex.
         const engineTrust = folderTrust(input.engine, input.codexHome)
-        if (engineTrust && (projectFolder.source === 'new'
+        if (engineTrust && (projectFolder.source === 'new' || swarmCheckout
           || (projectFolder.source === 'worktree' && engineTrust.trusts(projectFolder.gitSource)))) {
           engineTrust.record(preparedFolder)
         }
@@ -267,7 +279,9 @@ export function createLaunchRequests({ receipts, createAgent, prepareCreate, pre
     if (!validCreationId(creationId)) { reply({ error: 'INVALID_CREATION_ID' }); return }
     try {
       if (hiddenFrom(asker, creationId)) { reply({ creationId, state: 'missing' }); return }
-      reply({ creationId, ...await creationStatusPayload(receipts.status(creationId)) })
+      const status = receipts.status(creationId)
+      const launchModel = status.state === 'created' ? receipts.createdLaunchModel(creationId) : null
+      reply({ creationId, ...await creationStatusPayload(status), ...(launchModel ? { launchModel } : {}) })
     } catch (error) {
       reply({ error: error instanceof AgentCreationReceiptError ? error.code : 'INTERNAL' })
     }
@@ -393,9 +407,23 @@ export function createLaunchRequests({ receipts, createAgent, prepareCreate, pre
     }
     const swarmRole = payload.swarmRole
     if (swarmRole !== undefined && swarmRole !== null &&
-      ((swarmRole !== 'lead' && swarmRole !== 'dev') || (engine !== 'claude' && engine !== 'codex'))) {
-      reply({ error: 'INVALID_SWARM_ROLE', detail: 'A Swarm role is lead or dev, for Claude Code or Codex.' }); return
+      (!isSwarmRole(swarmRole) || (engine !== 'claude' && engine !== 'codex'))) {
+      reply({ error: 'INVALID_SWARM_ROLE', detail: 'A Swarm role is lead, dev or review, for Claude Code or Codex.' }); return
     }
+    // The skills of the project the agent joins (superTabs/start.ts); a start from before modes sends none.
+    const swarmSkillMode = payload.swarmSkillMode
+    if (swarmSkillMode !== undefined && !isSwarmSkillMode(swarmSkillMode)) {
+      reply({ error: 'INVALID_SWARM_ROLE', detail: 'A Swarm skill mode is default or orchestration.' }); return
+    }
+    // Another person's project work: git and gh use the Harness GitHub App's token for the task (lib/swarmGitHub.ts).
+    // Only `true`, and only with a role; a start from before the app sends none and launches as it did.
+    const swarmGitHub = payload.swarmGitHub
+    if (swarmGitHub !== undefined && (swarmGitHub !== true || !isSwarmRole(swarmRole))) {
+      reply({ error: 'INVALID_SWARM_ROLE', detail: 'swarmGitHub is true, with a Swarm role.' }); return
+    }
+    // Its worktree fetches nothing with this machine's own git login: its host fetched with the app's token just before
+    // (superTabs/projectFolder.ts), or, started by a Lead on its own machine, it starts from what the checkout has.
+    if (swarmGitHub === true && projectFolder?.source === 'worktree') projectFolder = { ...projectFolder, offline: true }
     // Blank is "number it", the same as absent — a client that sends an empty field is not
     // asking for an agent with no name.
     const name = typeof payload.name === 'string' && payload.name.trim() ? payload.name.trim() : null
@@ -464,7 +492,7 @@ export function createLaunchRequests({ receipts, createAgent, prepareCreate, pre
       codexHome,
       dsh,
       prompt,
-      ...(swarmRole === 'lead' || swarmRole === 'dev' ? { swarmRole } : {}),
+      ...(isSwarmRole(swarmRole) ? { swarmRole, ...(swarmSkillMode ? { swarmSkillMode } : {}), ...(swarmGitHub ? { swarmGitHub } : {}) } : {}),
       name,
       agent,
       resumeSessionId,

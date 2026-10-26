@@ -159,7 +159,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   const pets = new PetStore(deps.petsDir ?? join(env.HARNESS_DEVICES_DIR, 'pets'))
   // The assistant's latest paragraph per agent, as the processing cards carry it; gone when the turn ends.
   const latestUpdate = new Map<string, string>()
-  // The Swarm cards' three requests to the Super Tab service, through the core (core/devicesLink.ts). An error is an answer too.
+  // The Swarm cards' requests to the Super Tab service, through the core (core/devicesLink.ts). An error is an answer too.
   const askCards = async (payload: Record<string, unknown>): Promise<Record<string, unknown>> => {
     try { return await core.superTabRequest!(payload) } catch { return { error: 'SERVICE_UNAVAILABLE' } }
   }
@@ -229,9 +229,11 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
       return { tabId, leadId, text: truncateUtf8(r.text, 1500), at: r.at, none: r.none }
     },
     swarmCardOpen: (session, tabId, leadId) => { void askCards({ action: 'cardOpen', session, tabId, leadId }) },
+    // An error (no service, a refused post) is not `said`: the words go to the harness instead, never lost.
+    swarmSay: async (harnessId, text) => (await askCards({ action: 'cardSay', harnessId, text })).said === true,
     // The Pro picked a Lead: the window opens that Swarm tab and project. Harmless with no window.
     superTabSelected: (superTabId, projectId) => core.clients.sendLocal({ type: 'dial_super_tab', payload: { superTabId, projectId } }),
-    scrolled: (phase, dy, velocity) => core.clients.sendLocal({ type: 'dial_scroll', payload: { phase, dy, velocity } }),
+    scrolled: (phase, dy, velocity, superTabId) => core.clients.sendLocal({ type: 'dial_scroll', payload: { phase, dy, velocity, ...(superTabId ? { superTabId } : {}) } }),
     // Gestures stay at this desk. The device inventory and its settings also reach the owner's other
     // machines, through the encrypted device-management event.
     dialStatus: (status) => {

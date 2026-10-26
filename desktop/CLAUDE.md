@@ -76,6 +76,15 @@ FLUTTER_TEST=1 flutter test -d macos --no-pub integration_test/native_terminal_e
 FLUTTER_TEST=1 flutter test -d macos --no-pub integration_test/native_workspace_e2e_test.dart
 ```
 
+`integration_test/flutter_test_config.dart` installs the production accessibility guard before
+Flutter's launcher initializes its binding. A fixture launched directly for manual review must
+call `ensureNativeTestBinding()` too; an unguarded fixture can reproduce the engine's known
+disconnected-semantics crash even though the normal app already protects that boundary.
+Pin macOS-only cases with `TargetPlatformVariant({TargetPlatform.macOS})`: Flutter's debug
+`FLUTTER_TEST` default is Android, which bypasses desktop-specific behavior. Native accessibility
+review must also exercise activation after the framework tree exists; retaining a test semantics
+handle while AppKit reconnects requires replaying the complete tree and custom actions.
+
 `integration_test/sign_in_native_test.dart` walks a new computer from the tour to the sign-in page
 and on to the workspace, in the real window. AppKit draws the tab row, so no Flutter test can see
 or press it: run `python3 tool/native_driver.py <dir> <shots> &` beside it and pass
@@ -229,7 +238,12 @@ The native desktop target uses the CLI for cloud access and SSO tokens:
   opens normally. A server-rejected session requires sign-in again; saved local work
   and running harnesses survive behind the page. A temporary network outage keeps
   an already signed-in workspace available.
-  Agent downloads still run during setup; first-arrival agents wait for an account.
+  Agent downloads still run during setup; first arrival waits for an account and opens one
+  recent usable conversation, or one configured agent with an editable, unsent starter task.
+  A person with no configured agent gets OpenCode alone. Failed opening offers explicit recovery;
+  it never starts again in a later empty tab. An uncertain start keeps its receipt and checks status.
+  The first-run draft also uses the local pane's composer; it is never sent into an installing
+  agent's terminal automatically. Other agents and tabs remain available through the usual controls.
   The page does not change while the browser is open: the same option reopens its page,
   and another option cancels and switches. Failures and cancellation keep the required
   page visible. The workspace account menu is `widgets/account_menu.dart`
@@ -265,7 +279,13 @@ The native desktop target uses the CLI for cloud access and SSO tokens:
   Native link retries wait 5, 10, 20, then 30 seconds between probes, and never close an active
   connection or password-link handshake. Explicit Connect is immediate; repeated clicks join it.
   The initial unlinked refusal is measured once; later automatic probes are suppressed until the
-  machine is linked. This changes neither the browser's retry policy nor the daemon.
+  machine is linked. A browser's link retry backs off the same way (it redialled every 5 s, each
+  refusal reading the device list again). While a machine waits for a link, machine-list reads
+  neither dial nor load it, and only a forced load asks it (a person's reload, a status change);
+  connecting after a link loads its agents (`test/unlinked_machine_load_test.dart`).
+  A released web build prints no `debugPrint` traces (`web/web_console.dart`): framework errors
+  and uncaught errors still reach the console, and `?debug=traces` brings the traces back for that
+  browser until `?debug=off`.
   A viewer build settles its own `NO_PEER_LINK`/`E2E_DENIED` first (`_settleTrust`): it joins the
   device log if it is not in it (`ViewerDeviceLog.ensureRegistered`), reads it and dials again,
   showing the machine as connecting; only a refusal that outlasts two rounds (~15s), or a frozen

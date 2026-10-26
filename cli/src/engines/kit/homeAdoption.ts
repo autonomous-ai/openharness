@@ -272,11 +272,16 @@ function seal(entry: Entry, index: number, found: State, staging: string, check:
   // Another writer may finish a crashed writer's complete immutable record. No lock or partial slot is reaped.
   const source = read(entry.path, check)
   if (!source || digest(source.text) !== entry.digest) throw unavailable('changed before durability confirmation')
-  const fd = openSync(entry.path, journalFlushFlags())
-  try {
-    if (stamp(fstatSync(fd, { bigint: true })) !== source.version) throw unavailable('changed before its durable flush')
-    fsyncSync(fd)
-  } finally { closeSync(fd) }
+  // On Windows, opening O_RDWR changes ctime without writing. The staged writer fsynced before linkSync, so a
+  // second flush would invalidate the version we just read instead of proving anything more.
+  const flags = journalFlushFlags()
+  if (flags !== null) {
+    const fd = openSync(entry.path, flags)
+    try {
+      if (stamp(fstatSync(fd, { bigint: true })) !== source.version) throw unavailable('changed before its durable flush')
+      fsyncSync(fd)
+    } finally { closeSync(fd) }
+  }
   syncDirectory(found.directory, check)
   // Confirmations live outside the journal: losing its newest record cannot look like an older complete pool.
   const marker = index ? join(found.confirmations, String(index).padStart(3, '0') + '.committed') : found.marker

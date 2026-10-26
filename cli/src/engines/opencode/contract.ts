@@ -21,9 +21,11 @@ export const OPENCODE_VERSION = { output: /(\d+)\.\d+\.\d+/, args: ['--version']
  * and writes a `user` row as a turn starts and an `idle` row as it ends — `outcome` succeeded, interrupted or
  * failed alike. Measured on 2.0.24's store: 550 `idle` rows since it began writing them (2026-09-28), and no
  * session since left with a `user` after its last `idle`.
+ * Real OpenCode 2.0.29 stores show 18 row pairs that disagree with seq ordering and 40 (session_id, time_created)
+ * ties. Rows are read by time_created first, seq only tying within the millisecond, the same order the readers use.
  */
 export const OPENCODE_V2_TURN = {
-  sql: "SELECT type FROM session_message WHERE session_id = ? AND type IN ('user', 'idle') ORDER BY seq DESC LIMIT 1;",
+  sql: "SELECT type FROM session_message WHERE session_id = ? AND type IN ('user', 'idle') ORDER BY time_created DESC, seq DESC LIMIT 1;",
   opens: 'user',
 } as const
 
@@ -69,7 +71,7 @@ export const MachineRegister = async ({ directory, worktree, project, client }) 
   const post = async (sessionID) => {
     const pane = process.env.TMUX_PANE
     // A Harness pty host pane (Windows) names itself HARNESS_PANE=<instance>:%N, and has no TMUX_PANE.
-    const ptyPane = pane ? null : /^(p\\d{1,4}):(%\\d{1,9})$/.exec(process.env.HARNESS_PANE || "")
+    const ptyPane = pane ? null : /^(p\\d{1,4}(?:-(?:[0-9A-Za-z.-]{1,32}|h[0-9a-f]{12}))?):(%\\d{1,9})$/.exec(process.env.HARNESS_PANE || "")
     const token = hookToken()
     if ((!pane && !ptyPane) || !token || !sessionID || seen.has(sessionID)) return
     seen.add(sessionID)
@@ -138,7 +140,7 @@ export default {
   id: "harness-session-register",
   setup(ctx) {
     const pane = process.env.TMUX_PANE
-    const ptyPane = pane ? null : /^(p\\d{1,4}):(%\\d{1,9})$/.exec(process.env.HARNESS_PANE || "")
+    const ptyPane = pane ? null : /^(p\\d{1,4}(?:-(?:[0-9A-Za-z.-]{1,32}|h[0-9a-f]{12}))?):(%\\d{1,9})$/.exec(process.env.HARNESS_PANE || "")
     const router = ctx && ctx.ui && ctx.ui.router
     if ((!pane && !ptyPane) || !router || typeof router.current !== "function") return
     const posted = new Set()

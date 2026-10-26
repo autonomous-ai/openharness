@@ -10,7 +10,7 @@ import type { RegisteredSession } from '../lib/registry.js'
 import type { SessionInputDelivery } from '../lib/sessionInput.js'
 import { TERMINAL_LEASE_REFUSED, type ProcessIdentity, type TerminalActionResult } from '../lib/terminalTypes.js'
 import { CLAUDE_REWIND_LIST, CODEX_BROWSING_SCROLLBACK } from '../lib/__fixtures__/rewindPickers.js'
-import { createInput, createMessageRequest, deviceInputDeps, messageWriter, sessionInputDeps, type InputDeps } from './input.js'
+import { createInput, createMessageRequest, deviceInputDeps, heldScreen, messageWriter, sessionInputDeps, type InputDeps } from './input.js'
 import { createScreens } from './engines/screens.js'
 import { screenFor } from '../engines/screens.js'
 import { readerEngine } from '../engines/worker/protocol.js'
@@ -124,6 +124,13 @@ describe('the session input controller\'s dependencies', () => {
     expect(wired.validateRuntime).toBe(given.terminal.validateTerminal)
     expect(wired.capture).toBe(given.terminal.captureTerminal)
     expect(await wired.beforeTeamWrite!(agents.get('a1')!)).toBeNull()
+  })
+
+  it('hands the controller the move gate when it was given one, and none otherwise', () => {
+    const { deps: given } = deps()
+    expect('moveGate' in sessionInputDeps(given, () => lock([]))).toBe(false)
+    const moveGate = { held: () => false } as unknown as NonNullable<InputDeps['moveGate']>
+    expect(sessionInputDeps({ ...given, moveGate }, () => lock([])).moveGate).toBe(moveGate)
   })
 
   it('tells the device of a delivery first, then its caller; its caller alone without a device', () => {
@@ -250,6 +257,7 @@ describe('the session input controller\'s dependencies', () => {
           }),
         } as unknown as InputDeps['terminal'],
       })
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
       vi.useFakeTimers()
       try {
         const written = write('a1', 'hello')
@@ -258,7 +266,19 @@ describe('the session input controller\'s dependencies', () => {
       } finally { vi.useRealTimers() }
       expect(answers).toEqual([screen === null ? 'screen_unreadable' : 'prompt_hidden'])
       expect(reads).toBe(13)
+      // The screen the Enter was held on is in the log, to read back what the reader missed.
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining(`Enter held · ${answers[0]} · screen ${heldScreen(screen)}`))
+      warn.mockRestore()
     }
+  })
+
+  it('logs the bottom of a held screen with its escapes visible, its secrets redacted and its rows cut', () => {
+    expect(heldScreen(null)).toBe('unread')
+    const rows = [...Array.from({ length: 20 }, (_, i) => `row ${i}`), '\u001b[2m───\u001b[0m', '>\u00a0token=abcdefgh1234', 'x'.repeat(500), '', '  ']
+    const logged = JSON.parse(heldScreen(rows.join('\n'))) as string[]
+    expect(logged).toHaveLength(15)
+    expect(logged[0]).toBe('row 8')
+    expect(logged.slice(-3)).toEqual(['\u001b[2m───\u001b[0m', '>\u00a0token=<redacted>', 'x'.repeat(400)])
   })
 
   it('presses the Enter of a message typed while its engine started once it binds its first conversation, and under no other change', async () => {

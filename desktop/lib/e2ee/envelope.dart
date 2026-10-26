@@ -65,6 +65,7 @@ const Set<String> encryptedDownTypes = {
   'agent_recent',
   // Writes the conversation record a switched agent reads (cli/src/lib/agentHandoff.ts).
   'agent_handoff_prepare',
+  'agent_handoff_complete',
   'agent_update',
   'agent_files',
   'agent_read_file',

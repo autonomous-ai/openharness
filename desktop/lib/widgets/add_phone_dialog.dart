@@ -16,6 +16,7 @@ import '../shared/theme/app_theme.dart' as grid;
 import '../shortcuts/app_keymap.dart';
 import '../state/account_devices.dart' show NewDeviceNotice;
 import '../state/app_state.dart';
+import '../measurement/product_measurement.dart' show AddPhoneOpening;
 import '../ws/ws_conn.dart' show WsRequestFailure, WsRequestTimeout;
 import 'desktop_chrome.dart';
 import 'desktop_prompt_surface.dart';
@@ -67,24 +68,72 @@ Future<void> showAddPhoneDialog(
   BuildContext context,
   AppNotifier app, {
   AppKeymap? keymap,
+  AddPhoneOpening? from,
   PhonePairCall? pair,
   PhoneSignInCodeCall? signInCode,
   bool Function()? signInUnavailable,
   VoidCallback? onConnectMachine,
   VoidCallback? onManageDevices,
-}) => showTerminalPrompt<void>(
-  context,
-  keymap: keymap,
-  builder: (_) => AddPhoneDialog(
-    app: app,
-    pair: pair,
-    signInCode: signInCode ?? app.api.phoneSignInCode,
-    signInUnavailable:
-        signInUnavailable ?? () => app.api.phoneSignInUnavailable,
-    onConnectMachine: onConnectMachine,
-    onManageDevices: onManageDevices,
-  ),
-);
+}) {
+  // Membership is needed only for attribution. Last-seen data can delay this
+  // read, so open the dialog first and hold joins until its snapshot arrives.
+  final account = app.currentUser?.id;
+  final generation = app.accountGeneration;
+  Set<String>? known;
+  final pending = <String>{};
+  var reading =
+      from != null && account != null && !kIsWeb && app.viewer == null;
+  void attribute(String pub) {
+    if (account != app.currentUser?.id ||
+        generation != app.accountGeneration ||
+        app.isGuest ||
+        app.signingIn) {
+      return;
+    }
+    if (reading) {
+      pending.add(pub);
+      return;
+    }
+    final keys = known;
+    if (from != null && keys != null && keys.add(pub)) {
+      app.productMeasurement.addPhonePaired(from);
+    }
+  }
+
+  final dialog = showTerminalPrompt<void>(
+    context,
+    keymap: keymap,
+    builder: (_) => AddPhoneDialog(
+      app: app,
+      pair: pair,
+      signInCode: signInCode ?? app.api.phoneSignInCode,
+      signInUnavailable:
+          signInUnavailable ?? () => app.api.phoneSignInUnavailable,
+      onConnectMachine: onConnectMachine,
+      onManageDevices: onManageDevices,
+      onPhoneJoined: (device) => attribute(device.pub),
+    ),
+  );
+  if (reading) {
+    unawaited(() async {
+      try {
+        final devices = await app.loadDevices();
+        if (devices != null) {
+          known = {for (final device in devices.devices) device.pub};
+        }
+      } catch (_) {
+        // A missing snapshot leaves attribution unknown; Add Phone still works.
+      }
+      reading = false;
+      // These joins happened while open, even if the dialog has since closed.
+      for (final pub in pending) {
+        attribute(pub);
+      }
+      pending.clear();
+    }());
+  }
+  return dialog;
+}
 
 /// Where the QR points. The phone's `ConnectCode` (mobile
 /// `lib/phone/welcome/connect_code.dart`) parses exactly this.
@@ -268,6 +317,7 @@ class AddPhoneDialog extends StatefulWidget {
     this.signInUnavailable,
     this.onConnectMachine,
     this.onManageDevices,
+    this.onPhoneJoined,
   });
 
   final AppNotifier app;
@@ -287,6 +337,7 @@ class AddPhoneDialog extends StatefulWidget {
   /// (owner, 2026-10-12). Not "devices": the tab row's Devices is the Harness
   /// hardware. The dialog closes; the caller opens Machines after.
   final VoidCallback? onManageDevices;
+  final ValueChanged<NewDeviceNotice>? onPhoneJoined;
 
   @override
   State<AddPhoneDialog> createState() => _AddPhoneDialogState();
@@ -425,8 +476,9 @@ class _AddPhoneDialogState extends State<AddPhoneDialog> {
   /// A device joined the account while this was open. A computer is not the
   /// phone; anything else signed in with this account is.
   void _deviceJoined(NewDeviceNotice device) {
-    if (_closed || _ready != null || device.kind == 'machine') return;
-    if (_signedOut) return;
+    if (_closed || device.kind == 'machine' || _signedOut) return;
+    widget.onPhoneJoined?.call(device);
+    if (_ready != null) return;
     _phoneIn(device.label);
   }
 

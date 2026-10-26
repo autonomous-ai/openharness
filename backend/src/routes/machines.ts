@@ -16,6 +16,7 @@ import { env } from '../config/env.js'
 import { probeProvider, ProviderProbeError } from '../lib/providerProbe.js'
 import { normalizeComputerId } from '../lib/deviceAuth.js'
 import { machinesSharedWith } from '../lib/machineAccess.js'
+import { isTeamSession, TEAM_SESSION_LIMITED, TEAM_SESSION_MESSAGE } from '../lib/teamSession.js'
 
 const createBody = z.object({
   // Defaults to the caller; admins may provision for another user.
@@ -319,13 +320,19 @@ export async function machineRoutes(app: FastifyInstance): Promise<void> {
     async (req, reply) => {
       const computerId = normalizeComputerId(req.body.computerId)
       if (!computerId) return sendError(reply, 'Invalid computer id', 'BAD_REQUEST', 400)
-      const result = await machineService.resolveOrCreateForComputer(
-        req.user!.sub,
-        req.user!.autonomousEnv,
-        computerId,
-        req.body.label ?? 'computer',
-        req.body.machineId,
-      )
+      // A Mac's team account registers its own computer, as a team machine, and nothing else (lib/teamSession.ts).
+      const team = isTeamSession(req.user)
+      if (team && computerId !== req.user!.harnessComputerId) return sendError(reply, TEAM_SESSION_MESSAGE, TEAM_SESSION_LIMITED, 403)
+      const result = team
+        ? await machineService.resolveForTeamComputer(req.user!, computerId, req.body.label ?? 'computer', req.body.machineId)
+        : await machineService.resolveOrCreateForComputer(
+          req.user!.sub,
+          req.user!.autonomousEnv,
+          computerId,
+          req.body.label ?? 'computer',
+          req.body.machineId,
+          'computer',
+        )
       // The server-internal machine API key must never leave this SSO endpoint.
       return sendSuccess(reply, {
         machine: { machineId: result.machine.machineId, computerId: result.machine.computerId },

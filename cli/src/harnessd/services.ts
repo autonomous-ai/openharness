@@ -12,7 +12,7 @@
  * bind and no update to prove; it beats, or it is restarted. Everything that touches the operating
  * system is injected, so every decision here is tested without one.
  */
-import { SERVICE_EXIT_RESTART, heartbeatGraceMs, isCoreMessage, isUpdaterMessage } from './protocol.js'
+import { SERVICE_EXIT_RESTART, describeStaged, heartbeatGraceMs, isCoreMessage, isUpdaterMessage, type StagedUpdate } from './protocol.js'
 import { describeExit, type CoreHandle } from './supervisor.js'
 
 export interface ServiceSpec {
@@ -42,8 +42,8 @@ export interface ServiceSupervisorDeps {
   setTimer(run: () => void, ms: number): unknown
   clearTimer(timer: unknown): void
   log(line: string): void
-  /** The updater staged `version` on disk (`harnessd:staged`): the core is to hand over for it. */
-  staged?(version: string): void
+  /** The updater staged a CLI build, a terminal host or both on disk (`harnessd:staged`): the core is to hand over. */
+  staged?(staged: StagedUpdate): void
   /** Stop a service with `harnessd:shutdown` rather than SIGTERM: Windows, where Node's `kill` is TerminateProcess
    *  and the service's own stop never runs (./supervisor.ts `SupervisorDeps.stopByMessage`). */
   stopByMessage?: boolean
@@ -190,9 +190,12 @@ class Service {
   private onMessage(child: CoreHandle, message: unknown): void {
     if (isUpdaterMessage(message)) {
       // It restarts the core: from any other service than the updater, a bug or worse, said once and ignored.
-      if (this.spec.name !== UPDATER_PROCESS) { if (!this.refusedStaged) this.deps.log(`[harnessd] service ${this.spec.name} said it staged ${message.version}, which only the updater may — ignored`); this.refusedStaged = true; return }
-      this.deps.log(`[harnessd] service ${this.spec.name} staged ${message.version}`)
-      this.deps.staged?.(message.version)
+      const staged: StagedUpdate = {
+        ...(message.version ? { version: message.version } : {}), ...(message.ptyVersion ? { ptyVersion: message.ptyVersion } : {}),
+      }
+      if (this.spec.name !== UPDATER_PROCESS) { if (!this.refusedStaged) this.deps.log(`[harnessd] service ${this.spec.name} said it staged ${describeStaged(staged)}, which only the updater may — ignored`); this.refusedStaged = true; return }
+      this.deps.log(`[harnessd] service ${this.spec.name} staged ${describeStaged(staged)}`)
+      this.deps.staged?.(staged)
       return
     }
     if (!isCoreMessage(message) || message.type !== 'harnessd:heartbeat') return
@@ -433,7 +436,7 @@ export const SERVICE_HOSTS: Readonly<Record<string, ServiceHostSpec>> = {
   // on a link of its own: its receipts, its streams and its Store preparations. Started only once there is
   // a device, or a request for one (core/devicesWake.ts): about 72 MiB at idle, which a computer with none
   // never pays.
-  devices: { services: ['devices', 'wifi'], heapLimitMiB: 256, rssLimitMiB: 512, onDemand: true, askedSince: 4 },
+  devices: { services: ['devices', 'wifi', 'machineAddons'], heapLimitMiB: 256, rssLimitMiB: 512, onDemand: true, askedSince: 4 },
 }
 
 /** Every service this build can run outside the core's process: what `HARNESSD_SERVICES` names. */

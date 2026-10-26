@@ -248,11 +248,12 @@ static bool scrolls(const pod_ui_t *u)
     // Home pages sideways; the Inbox and a long Lead message scroll by rows; on a room or a recap a drag scrolls the host's pane
     return f->view == POD_V_INBOX || f->view == POD_V_LEAD || f->view == POD_V_AGENT || f->view == POD_V_RECAP;
 }
-// Whether a vertical drag on this screen scrolls the host's terminal pane (the scroll sink): Agent and Recap. The top band and the bottom zone keep their swipes (u->bar, u->edge).
+// Whether a vertical drag on this screen also goes to the host (the scroll sink): Agent and Recap scroll the agent's pane, a Lead's view the Swarm chat
+// the desktop has open (its own rows move too). The top band and the bottom zone keep their swipes (u->bar, u->edge).
 static bool host_scrolls(const pod_ui_t *u)
 {
     const pod_frame_t *f = top(u);
-    return f && (f->view == POD_V_AGENT || f->view == POD_V_RECAP);
+    return f && (f->view == POD_V_AGENT || f->view == POD_V_RECAP || f->view == POD_V_LEAD);
 }
 // A horizontal swipe on the Agent, Recap and Talking screens steps panes, as on the round dial (swipe left = next, right =
 // previous): travel >= POD_SW_MIN_PX, |dx| > 1.5 |dy|, released within POD_SW_MS or leaving at POD_SW_FLICK px/s.
@@ -358,6 +359,25 @@ static bool sup_push(pod_ui_t *u, const char *t, const char *tab, const char *le
     pod_copy_str(o->tab, sizeof o->tab, tab);
     pod_copy_str(o->lead, sizeof o->lead, lead);
     return true;
+}
+
+// A Notices row whose harness is a Swarm's local Lead: read the entry and open that Lead's view the way supertab.focus does (over Home, on the Swarm's card), the
+// desktop told to select it. Not the plain agent: agent.open would make the desktop open the Lead's harness in a new tab. False when no Swarm leads from it.
+static bool notice_lead(pod_ui_t *u, const char *agent_id)
+{
+    pod_model_t *m = &u->model;
+    for (int i = 0; i < m->swarm_n; i++)
+        for (int j = 0; j < m->swarms[i].lead_n; j++) {
+            const pod_lead_t *l = &m->swarms[i].leads[j];
+            if (!l->local[0] || strcmp(l->local, agent_id)) continue;
+            pod_model_unread_read(m, agent_id);
+            if (pod_nav_follow_lead(&u->nav, m, m->swarms[i].id, l->id)) {
+                sup_push(u, "supertab.select", m->swarms[i].id, l->id);
+                u->scroll_px = 0;
+            }
+            return true;
+        }
+    return false;
 }
 
 // PREV / NEXT on the Lead view; when it landed on another Lead the daemon is told to select it.
@@ -579,6 +599,7 @@ pod_out_t pod_ui_touch(pod_ui_t *u, bool down, int x, int y, uint32_t now_ms, bo
         }
     }
     if (arg == -1 && u->hit.id[0]) { *changed = true; return none; }   // what it named is gone: redraw, open nothing
+    if (u->hit.action == POD_A_OPEN_NOTIF && arg >= 0 && arg < u->model.unread_count && notice_lead(u, u->model.unread[arg].agent)) { *changed = true; return none; }
     if (u->hit.action == POD_A_TALK && u->nav.depth) {   // an agent of an offline machine cannot be talked to: say why
         const pod_agent_t *ag = pod_model_find(&u->model, top(u)->agent);
         if (ag && ag->state == POD_OFFLINE) {
@@ -952,7 +973,7 @@ static void apply_lead_focus(pod_ui_t *u)
 static void sup_sync(pod_ui_t *u)
 {
     pod_model_t *m = &u->model;
-    if (!m->linked) { u->sup_tab[0] = u->sup_lead[0] = 0; return; }
+    if (!m->linked) { u->sup_tab[0] = u->sup_lead[0] = u->sup_close[0] = 0; return; }   // the daemon forgets an unplugged device's open Lead
     const pod_frame_t *f = top(u);
     const bool on = f && f->swarm[0] && (f->view == POD_V_LEAD || f->view == POD_V_TALK);
     const pod_swarm_t *sw = NULL;
@@ -960,7 +981,10 @@ static void sup_sync(pod_ui_t *u)
     if (on && !l) return;   // its Lead is not in the model (yet): neither open nor closed, wait for it
     const char *lead = l ? l->id : "";
     if (!strcmp(u->sup_lead, lead) && (!l || !strcmp(u->sup_tab, sw->id))) {   // already what the daemon was told: a frame that may have been lost is re-sent
-        if (!l) return;
+        if (!l) {   // nothing open: a close the link dropped goes again
+            if (u->sup_close[0] && sup_push(u, "supertab.open", u->sup_close, "")) u->sup_close[0] = 0;
+            return;
+        }
         const uint32_t now_ms = m->clock_ms;
         if ((uint32_t)(now_ms - u->sup_at) < POD_SUPERTAB_RETRY_MS || u->sup_qn + 2 > POD_SUPERTAB_OUT_MAX) return;
         if (l->recap == POD_RECAP_LOADING) {   // no reply yet: ask again, a few times; then the "…" stays and nothing more is sent
@@ -993,6 +1017,7 @@ static void sup_sync(pod_ui_t *u)
     }
     pod_copy_str(u->sup_tab, sizeof u->sup_tab, tab);
     pod_copy_str(u->sup_lead, sizeof u->sup_lead, lead);
+    u->sup_close[0] = 0;   // the open replaces any close still owed
     u->sup_at = m->clock_ms;
     u->sup_tries = 0;
     u->sup_reopened = false;
@@ -1008,9 +1033,15 @@ int pod_ui_take_supertab(pod_ui_t *u, pod_supertab_out_t out[], int max)
     return n;
 }
 
-void pod_ui_supertab_unsent(pod_ui_t *u, const char *t)
+void pod_ui_supertab_unsent(pod_ui_t *u, const pod_supertab_out_t *frame)
 {
-    if (!t || !u->sup_lead[0]) return;
+    if (!frame || !frame->t) return;
+    const char *t = frame->t;
+    if (!strcmp(t, "supertab.open") && !frame->lead[0]) {   // the close: the daemon would keep the Lead open and send every later drag to its chat
+        if (!u->sup_lead[0]) pod_copy_str(u->sup_close, sizeof u->sup_close, frame->tab);
+        return;
+    }
+    if (!u->sup_lead[0]) return;
     if (!strcmp(t, "supertab.recap.get")) {
         if (u->sup_tries) u->sup_tries--;   // a failed retry does not use one up
         u->sup_at = u->model.clock_ms;      // and the next waits the usual 3 s

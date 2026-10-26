@@ -11,6 +11,7 @@ import '../../state/workspace_chrome.dart';
 import '../../terminal/terminal_theme.dart';
 import '../../theme/app_theme.dart' show AppColors;
 import '../../terminal/terminal_theme_store.dart';
+import '../../widgets/finger_target.dart';
 import '../../widgets/pane_menu.dart';
 import '../../widgets/workspace_bar_control.dart';
 import 'web_layout.dart';
@@ -68,10 +69,8 @@ class WebAppMenuButton extends StatelessWidget {
     if (box == null || overlay == null) return;
     final origin = box.localToGlobal(Offset.zero, ancestor: overlay);
     // Resolved as it opens, so the rows match the workspace's state right now.
-    final groups = runnableWebMenu(
-      commands.canRun,
-      compact: isWebCompact(context),
-    );
+    final compact = isWebCompact(context);
+    final groups = runnableWebMenu(commands.canRun, compact: compact);
     final chosen = await showPaneMenu<String>(
       context: context,
       // Opened by a click: no row is lit until the pointer picks one.
@@ -84,7 +83,7 @@ class WebAppMenuButton extends StatelessWidget {
       ),
       minWidth: 240,
       maxWidth: 320,
-      children: (close) => _rows(groups, close),
+      children: (close) => _rows(groups, close, compact: compact),
     );
     // Run after the menu closed and handed focus back, never inside it.
     if (chosen == _signOut) {
@@ -98,19 +97,24 @@ class WebAppMenuButton extends StatelessWidget {
 
   List<Widget> _rows(
     List<List<WebMenuItem>> groups,
-    void Function(String?) close,
-  ) {
+    void Function(String?) close, {
+    required bool compact,
+  }) {
     // Uncoloured on purpose: the row's ink tints it, so it turns with the
     // label when the row lights up.
     Widget row(String id, String label, Widget icon) => paneMenuItem(
       onTap: () => close(id),
-      child: PaneMenuRow(
-        key: ValueKey('web-menu:$id'),
-        selected: false,
-        title: label,
-        leading: IconTheme.merge(
-          data: const IconThemeData(size: AppIcons.inlineSize),
-          child: icon,
+      // On a phone the row is a finger's height; a mouse keeps it as it was.
+      child: fingerTarget(
+        enabled: compact,
+        PaneMenuRow(
+          key: ValueKey('web-menu:$id'),
+          selected: false,
+          title: label,
+          leading: IconTheme.merge(
+            data: const IconThemeData(size: AppIcons.inlineSize),
+            child: icon,
+          ),
         ),
       ),
     );

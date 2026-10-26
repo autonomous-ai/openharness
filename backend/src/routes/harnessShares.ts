@@ -7,6 +7,7 @@ import { machineBillingAllowsDataPlane } from '../lib/billingState.js'
 import { validateBody, validateParams } from '../middlewares/validation.js'
 import { sendError, sendSuccess } from '../utils/response.js'
 import type { AuthUser } from '../lib/ssoAuth.js'
+import { TEAM_SESSION_LIMITED, TEAM_SESSION_MESSAGE, teamMachineScope } from '../lib/teamSession.js'
 
 const params = z.object({ id: z.string().uuid() })
 const body = z.object({
@@ -87,6 +88,12 @@ export async function harnessShareRoutes(app: FastifyInstance): Promise<void> {
     '/api/harness-shares/:id', { preHandler: [validateParams(params), validateBody(body)] },
     async (req, reply) => {
       const input = req.body
+      // A Mac's team account (lib/teamSession.ts) shares only its own machine's harnesses, and only with a Swarm's
+      // members, whom the observer socket checks again on every connection.
+      const team = await teamMachineScope(req.user!)
+      if (team !== null && (input.machineId !== team || !input.superTabId)) {
+        return sendError(reply, TEAM_SESSION_MESSAGE, TEAM_SESSION_LIMITED, 403)
+      }
       const machine = await prisma.machine.findFirst({ where: {
         machineId: input.machineId, userId: req.user!.sub, autonomousEnv: req.user!.autonomousEnv, ...machineAlive,
       } })
@@ -105,18 +112,30 @@ export async function harnessShareRoutes(app: FastifyInstance): Promise<void> {
         ownerId: req.user!.sub, autonomousEnv: req.user!.autonomousEnv }
       await prisma.harnessShare.upsert({ where: { id: req.params.id },
         create: { id: req.params.id, ...data }, update: data })
-      await publishShareChanged(req.params.id)
-      await tellRecipient(req.params.id)
+      // Told only when what the recipient sees changes. A renewal moves only the expiry, and an owner daemon that
+      // renewed every few seconds (diego@'s 0.4.55 dev build, 2026-10-26) poked every member's every app to re-read
+      // its machines and shares three times a second, with the backend pinned at its CPU limit.
+      if (!existing || existing.revokedAt != null || existing.name !== data.name || existing.engine !== data.engine
+        || (existing.superTabId ?? null) !== data.superTabId || existing.ownerPublicKey !== data.ownerPublicKey) {
+        await publishShareChanged(req.params.id)
+        await tellRecipient(req.params.id)
+      }
       sendSuccess(reply, { id: req.params.id })
     },
   )
 
   app.delete<{ Params: z.infer<typeof params> }>('/api/harness-shares/:id',
     { preHandler: [validateParams(params)] }, async (req, reply) => {
-      const changed = await prisma.harnessShare.updateMany({ where: {
-        id: req.params.id, ownerId: req.user!.sub, autonomousEnv: req.user!.autonomousEnv,
-      }, data: { revokedAt: new Date() } })
-      if (!changed.count) return sendError(reply, 'Invitation not found.', 'NOT_FOUND', 404)
+      // A team session takes back only its own machine's shares.
+      const team = await teamMachineScope(req.user!)
+      const mine = { id: req.params.id, ownerId: req.user!.sub, autonomousEnv: req.user!.autonomousEnv, ...(team === null ? {} : { machineId: team }) }
+      // Only a live invitation is taken back and told: taking one back again changes nothing, and is answered so.
+      const changed = await prisma.harnessShare.updateMany({ where: { ...mine, OR: [{ revokedAt: null }, { revokedAt: { isSet: false } }] },
+        data: { revokedAt: new Date() } })
+      if (!changed.count) {
+        if (await prisma.harnessShare.findFirst({ where: mine, select: { id: true } })) return sendSuccess(reply, { removed: true })
+        return sendError(reply, 'Invitation not found.', 'NOT_FOUND', 404)
+      }
       await publishShareChanged(req.params.id)
       await tellRecipient(req.params.id)
       sendSuccess(reply, { removed: true })

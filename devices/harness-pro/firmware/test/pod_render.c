@@ -307,25 +307,31 @@ static void supertab_ask(const char *id, const char *name, const char *q, pod_at
     pod_model_unread_ask(&M, id, name, q, T0);
 }
 
-// home:swarm:<p1|p2|remote>: Home on a Swarm card (the mockup swarm-card.html A1 / A3, and a Swarm with Leads on other machines). p1 and p2 are the desk's first tab linked to
-// "openharness" (4 workspaces, one Lead each); remote is a Swarm with no desk tab (its own page) whose Leads run on other people's machines.
+// home:swarm:<p1|p2|stuck|done|many|remote>: Home on a Swarm card (the mockup swarm-card-v3.html A1 - A5, and a Swarm with Leads on other machines). The desk's first tab is linked to
+// "openharness" (4 projects, one Lead each: p1 the first page, p2 the second; stuck: website is stuck; done: all four; many: 10 projects under a long name, 5 working); remote is a
+// Swarm with no desk tab (its own page) whose Leads run on other people's machines.
 static void swarm_fixture(const char *kind)
 {
     static pod_swarm_t sw;
     static const char ids[2][ID_MAX] = {"sw1", "sw2"};
-    struct { const char *id, *project, *engine, *owner, *local; pod_lead_state_t st; unsigned since; } mine[4] = {
+    struct { const char *id, *project, *engine, *owner, *local; pod_lead_state_t st; unsigned since; } mine[10] = {
         {"l1", "mobile", "muse", "", "h1", POD_LEAD_ASK, 0}, {"l2", "harness", "claude", "", "h2", POD_LEAD_WORK, 134},
-        {"l3", "website", "codex", "", "h3", POD_LEAD_WORK, 48}, {"l4", "backend", "codex", "", "h4", POD_LEAD_DONE, 0}},
+        {"l3", "website", "codex", "", "h3", POD_LEAD_WORK, 48}, {"l4", "backend", "codex", "", "h4", POD_LEAD_DONE, 0},
+        {"l5", "ios-app", "claude", "", "h5", POD_LEAD_WORK, 611}, {"l6", "docs", "codex", "", "h6", POD_LEAD_WORK, 25},
+        {"l7", "api", "claude", "", "h7", POD_LEAD_WORK, 302}, {"l8", "desktop", "muse", "", "h8", POD_LEAD_DONE, 0},
+        {"l9", "harness-os", "codex", "", "h9", POD_LEAD_WORK, 77}, {"l10", "grid", "claude", "", "h10", POD_LEAD_DONE, 0}},
       theirs[3] = {{"r1", "ops", "claude", "Linh Tran", "", POD_LEAD_WORK, 0}, {"r2", "billing-service", "codex", "Minh", "", POD_LEAD_STUCK, 0}, {"r3", "docs", "muse", "", "h5", POD_LEAD_DONE, 0}};
-    const bool remote = !strcmp(kind, "remote");
+    const bool remote = !strcmp(kind, "remote"), many = !strcmp(kind, "many"), done = !strcmp(kind, "done"), stuck = !strcmp(kind, "stuck");
+    const int n = many ? 10 : 4;
     pod_model_supertab_ids(&M, ids, remote ? 2 : 1);
     memset(&sw, 0, sizeof sw);
-    snprintf(sw.id, ID_MAX, "sw1"); snprintf(sw.tab, ID_MAX, "%s", M.tabs[0].id); snprintf(sw.name, sizeof sw.name, "openharness");
-    sw.count = 4; sw.lead_n = 4;
-    for (int i = 0; i < 4; i++) {
+    snprintf(sw.id, ID_MAX, "sw1"); snprintf(sw.tab, ID_MAX, "%s", M.tabs[0].id); snprintf(sw.name, sizeof sw.name, "%s", many ? "openharness-launch-october" : "openharness");
+    sw.count = n; sw.lead_n = n;
+    if (stuck || many) mine[2].st = POD_LEAD_STUCK;   // website
+    for (int i = 0; i < n; i++) {
         pod_lead_t *l = &sw.leads[i];
         snprintf(l->id, ID_MAX, "%s", mine[i].id); snprintf(l->project, sizeof l->project, "%s", mine[i].project); snprintf(l->engine, sizeof l->engine, "%s", mine[i].engine);
-        snprintf(l->local, ID_MAX, "%s", mine[i].local); l->state = mine[i].st; l->since_s = mine[i].since;
+        snprintf(l->local, ID_MAX, "%s", mine[i].local); l->state = done ? POD_LEAD_DONE : mine[i].st; l->since_s = mine[i].since;
     }
     pod_model_supertab(&M, &sw, 0);
     if (remote) {

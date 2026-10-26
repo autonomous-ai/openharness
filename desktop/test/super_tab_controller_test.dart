@@ -31,6 +31,29 @@ void main() {
     },
   );
 
+  test('keeps the backend\'s credential notice for the sender until the next action', () async {
+    const notice =
+        'Removed a credential (GitHub token) before saving. Revoke or rotate it.';
+    final server = ConversationServer()
+      ..commandResult['credentialNotice'] = notice;
+    final c = server.controller();
+    await c.refresh();
+    c.setDraft('lead', 'Here is the token.');
+    expect(await c.send(), isNotNull);
+    expect(c.operationNotice, notice);
+    expect(c.draft('lead'), isEmpty);
+    server.commandResult.clear();
+    c.setDraft('lead', 'Plain words.');
+    expect(await c.send(), isNotNull);
+    expect(c.operationNotice, isNull);
+    server.commandResult['credentialNotice'] = notice;
+    c.setDraft('lead', 'Again.');
+    await c.send();
+    c.select('offline');
+    expect(c.operationNotice, isNull);
+    c.dispose();
+  });
+
   test(
     'group terminals keep every member when selecting one and after reopening',
     () async {

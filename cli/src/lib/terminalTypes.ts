@@ -40,6 +40,9 @@ export interface TerminalRootObservation {
   cwd: string
   /** Route aliases reported by the backend; never treated as process identity. */
   aliases?: readonly string[]
+  /** The label the pane was created with, where the backend keeps one (the pty host): a move's new pane is told by
+   *  it (hostMove/moveAgent.ts `removeOrphanMovePanes`). */
+  label?: string
 }
 
 export type TerminalInventoryResult =
@@ -118,6 +121,9 @@ export interface TerminalCreateRequest extends TerminalDispatchControl {
   env?: Record<string, string>
   /** What the pane runs when `command` exits by itself (`TerminalAfterExit`); the pty host's alone. */
   afterExit?: TerminalAfterExit
+  /** Scrollback the new pane starts with (hostMove/seed.ts); the pty host's alone, and only one that lists the `seed`
+   *  feature: the tmux backend ignores it. */
+  seed?: string
   /** Names this process, and its `afterExit` shell, do not get from the backend's own environment (a grid launch's
    *  provider keys, on Windows: lib/windows/engineStart.ts); the pty host's alone, whose panes inherit the host's
    *  environment. Per launch: the next respawn sends its own. */

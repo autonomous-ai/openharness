@@ -13,6 +13,20 @@ pub(super) struct Catalog {
     seed: Vec<Row>,
     revision: String,
 }
+/// A composed command's computer, when the list says it is up and hn has no link to it (one that dropped while it
+/// read offline, an error, or never dialled), is dialled now: `launch` then waits for it as for one still connecting.
+/// It answered "That computer is offline" while it was up (a shared Mac, 2026-10-22). A dial already pending or in
+/// its backoff is left to it (`dial_if_idle`): the waiting command asks again every 100 ms.
+fn wake(app: &mut App, name: &str) {
+    let mut found = app.fleet.machines.iter()
+        .filter(|m| !m.shared && (m.id == name || m.name.eq_ignore_ascii_case(name)));
+    let (Some(m), None) = (found.next(), found.next()) else { return };
+    if m.online() && matches!(m.reach, crate::fleet::Reach::Unknown | crate::fleet::Reach::Offline | crate::fleet::Reach::Error(_)) {
+        let id = m.id.clone();
+        app.dial_if_idle(&id);
+    }
+}
+
 fn host(app: &App, source: &str, name: Option<&str>, connecting: bool) -> Result<String, String> {
     let Some(name) = name else {
         return Ok(source.into());
@@ -490,6 +504,7 @@ pub(super) fn launch(app: &mut App, request: Request) {
     else {
         return;
     };
+    if let Some(name) = launch.host.as_deref() { wake(app, name) }
     let machine = match host(app, &source.0, launch.host.as_deref(), true) {
         Ok(m) => m,
         Err(e) => return reply(app, &request, 1, &e),
@@ -782,6 +797,31 @@ mod tests {
         assert!(rows.iter().all(|r| !r.disabled), "every computer is reachable");
         assert_eq!((row("Mac Auto").right.as_str(), row("Mac Auto").label_dim, row("Mac Auto").tier), ("connected", 0, 0));
         assert_eq!((row("grid-dev").right.as_str(), row("grid-dev").label_dim, row("grid-dev").tier), (crate::shell_picker::OFFLINE, 8, 1));
+    }
+
+    /// `claude @<computer>` on a computer the list says is up, which hn has no link to (dropped while it read
+    /// offline, or never dialled), answered "That computer is offline". It is dialled now, and the launch
+    /// waits for it as for one still connecting; one the list says is down is still offline.
+    #[tokio::test]
+    async fn a_composed_command_dials_a_computer_that_is_up_but_not_linked_yet() {
+        let (sink, _) = tokio::sync::mpsc::unbounded_channel();
+        let mut app = App::new(19449, sink, (100, 35));
+        use crate::fleet::Reach;
+        for (id, name, status, reach) in [("m1", "MacBooks-MacBook-Pro-9.local", "online", Reach::Offline), ("m2", "grid-dev", "online", Reach::Error("DISCONNECTED".into())),
+            ("m3", "lab", "offline", Reach::Offline), ("m4", "air", "online", Reach::Ready)] {
+            app.fleet.machines.push(crate::fleet::Machine { id: id.into(), name: name.into(), shared: false, local: false, status: status.into(), reach });
+        }
+        for name in ["MacBooks-MacBook-Pro-9.local", "grid-dev"] {
+            wake(&mut app, name);
+            let id = app.fleet.machines.iter().find(|m| m.name == name).unwrap().id.clone();
+            assert_eq!(app.fleet.machine(&id).unwrap().reach, Reach::Connecting, "{name} is dialled");
+            assert!(host(&app, "m4", Some(name), true).is_ok(), "{name}: the launch waits for it");
+        }
+        wake(&mut app, "lab");
+        assert_eq!(app.fleet.machine("m3").unwrap().reach, Reach::Offline);
+        assert_eq!(host(&app, "m4", Some("lab"), true).unwrap_err(), "That computer is offline. The command was not started.");
+        wake(&mut app, "air");
+        assert_eq!(app.fleet.machine("m4").unwrap().reach, Reach::Ready, "a linked computer is left as it is");
     }
 
     #[tokio::test]

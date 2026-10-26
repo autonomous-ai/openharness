@@ -232,6 +232,45 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('Pull request 1'), findsOneWidget);
   });
+  testWidgets(
+    'stored links merge with loaded messages without duplicate PR rows',
+    (tester) async {
+      final server = prServer([52, 51]);
+      (server.state['conversations'] as List)
+          .cast<Map<String, dynamic>>()
+          .firstWhere((group) => group['id'] == 'lead')['pullRequestUrls'] = [
+        prUrl(51),
+        prUrl(53),
+      ];
+      final asked = <List<String>>[];
+      await mount(tester, server, (urls) async {
+        asked.add(urls);
+        return {
+          'rows': [prRow(51), prRow(52), prRow(53)],
+        };
+      });
+      expect(asked.single.toSet(), {prUrl(51), prUrl(52), prUrl(53)});
+      expect(asked.single, hasLength(3));
+      for (final number in [51, 52, 53]) {
+        expect(find.text('Pull request $number'), findsOneWidget);
+      }
+      expect(find.text('· 3'), findsOneWidget);
+    },
+  );
+  testWidgets(
+    'older snapshots without stored links still use loaded messages',
+    (tester) async {
+      final asked = <List<String>>[];
+      await mount(tester, prServer([54]), (urls) async {
+        asked.add(urls);
+        return {
+          'rows': [prRow(54)],
+        };
+      });
+      expect(asked.single, [prUrl(54)]);
+      expect(find.text('Pull request 54'), findsOneWidget);
+    },
+  );
   testWidgets('timeout keeps the last answer and says how old it is', (
     tester,
   ) async {

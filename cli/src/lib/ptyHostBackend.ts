@@ -11,12 +11,16 @@
  * apart; the delays start again from 1 s only for a connection that had stayed up 30 s. A host with another pid is another host: its predecessor's panes are gone, and `onHostReplaced` says so,
  * so the reconciler sees them absent and the resume path takes over. `dispose` drops the connection alone.
  *
- * One backend per host instance (`p<protocol>`, ptyHost/drain.ts). The one for this daemon's protocol makes new panes,
- * and starts its host when there is none. One for the protocol before is a drain backend: it reaches the host still
- * running from before an update and never starts one, lists, streams and controls its panes, refuses `create`, and
- * shuts the host down once it has none (`shutdownHost`). A drain host that exits is gone for good (`hostGone`): its
- * inventory is then authoritative and empty, so its panes' runtimes go gone through the reconciler's normal misses.
+ * One backend per host instance (ptyHost/instance.ts, ptyHost/drain.ts). The create backend makes new panes on the
+ * target's host (launch.ts `targetHost`: the build this daemon would start), and starts it when there is none; it is
+ * never connected to another build's host. With no target it takes the newest running host of `PTY_PROTOCOL` and stays
+ * on that instance until that host is proven dead. Every other host is a drain backend's: it reaches a host still running from before an update and
+ * never starts one, lists, streams and controls its panes, refuses `create`, and shuts the host down once it has none
+ * (`shutdownHost`) when it may (`mayShutDown`). A drain host that exits is gone for good (`hostGone`): its inventory is
+ * then authoritative and empty, so its panes' runtimes go gone through the reconciler's normal misses.
  */
+import { existsSync } from 'node:fs'
+import path from 'node:path'
 import { env } from '../config/env.js'
 import type { AgentEngine } from '../engines/types.js'
 import { harnessPaneOwner } from './harnessSessionLabel.js'
@@ -25,8 +29,12 @@ import { lookupPaneEngineProcess } from './paneEngineProcess.js'
 import { comparableStartMarker, processRows, setProcessTableSource, type ProcessRow } from './processTable.js'
 import { setAgentSignaller, type AgentSignal } from './processSignals.js'
 import type { PtyHostCallResult, PtyHostClient } from './ptyHost/client.js'
-import { ensurePtyHost, forgetExitedHost, pidAlive, reachPtyHost, type EnsurePtyHostResult, type HostLiveness, type PtyHostUnavailable, type PtyHostUnreached, type ReachPtyHostResult } from './ptyHost/launch.js'
-import { PTY_PROTOCOL, SHUTDOWN_PROTOCOL, type PtyEvent } from './ptyHost/protocol.js'
+import { discoveryFileName, instanceProtocol } from './ptyHost/instance.js'
+import {
+  compareVersions, discoveredHostDead, ensurePtyHost, forgetExitedHost, pidAlive, reachPtyHost, readInstanceDiscovery,
+  type EnsurePtyHostResult, type HostLiveness, type PtyHostTarget, type PtyHostUnavailable, type PtyHostUnreached, type ReachPtyHostResult,
+} from './ptyHost/launch.js'
+import { PTY_PROTOCOL, SEED_FEATURE, SHUTDOWN_PROTOCOL, type PtyEvent } from './ptyHost/protocol.js'
 import { PtyHostStream } from './ptyHost/stream.js'
 import { submitContent, submitSettleMs } from './submitTiming.js'
 import type { TerminalBackend, TerminalBackendPrepared } from './terminalBackend.js'
@@ -80,11 +88,13 @@ const HOST_EXIT_WAIT_MS = 3_000
 export interface PtyHostBackendOptions {
   /** The host's `--home` (`HARNESS_PTY_DIR`): its discovery file and logs live there. */
   home: string
+  /** A drain backend's host instance (`p2-0.4.20`, a legacy `p1`): set, the backend is a drain backend. */
+  instance?: string
   /**
-   * The host's protocol (`PTY_PROTOCOL` by default): this daemon's own makes new panes; an older one's is a drain
-   * backend (the module comment).
+   * The daemon's target host (`targetHost`, read once as the core starts). A create backend makes panes on its
+   * instance alone; a drain backend weighs its own host's version against it (`mayShutDown`). Null or absent: unknown.
    */
-  protocol?: number
+  target?: PtyHostTarget | null
   /** Reach or start the host (`ensurePtyHost`; a drain backend's only reaches it, `reachPtyHost`); a seam for tests. */
   launch?: (home: string) => Promise<EnsurePtyHostResult | ReachPtyHostResult>
   /** Whether a pid runs (`pidAlive`), and the process table (`processRows`) a drain host's death is proven in; a seam
@@ -141,12 +151,13 @@ export type PtyHostDrainState = 'gone' | 'empty' | 'busy' | 'unknown'
 
 export class PtyHostBackend implements TerminalBackend<PtyRuntimeRef> {
   readonly name = 'ptyhost' as const
-  /** The protocol of the host this backend reaches. */
-  readonly protocol: number
-  /** A backend for a host of an older protocol: never made new panes on, shut down once it has none. */
+  /** A backend for a host other than the target's: never made new panes on, shut down once it has none. */
   readonly draining: boolean
 
   private readonly home: string
+  private readonly target: PtyHostTarget | null
+  /** A drain host's version, from its discovery file, once read. */
+  private hostVersion: string | null = null
   private readonly launch: (home: string) => Promise<EnsurePtyHostResult | ReachPtyHostResult>
   private readonly hostProcess: { alive: (pid: number) => boolean; rows: () => Promise<ProcessRow[] | null> }
   /** A drain backend's host has exited, and why: its panes are gone and nothing starts it again. */
@@ -179,11 +190,11 @@ export class PtyHostBackend implements TerminalBackend<PtyRuntimeRef> {
 
   constructor(options: PtyHostBackendOptions) {
     this.home = options.home
-    this.protocol = options.protocol ?? PTY_PROTOCOL
-    this.draining = this.protocol < PTY_PROTOCOL
+    this.target = options.target ?? null
+    this.draining = options.instance !== undefined
     // A drain backend's instance is known before its host is reached: when it has gone, the rows still name it.
-    if (this.draining) this.instance = `p${this.protocol}`
-    const protocol = this.protocol
+    const drainInstance = options.instance
+    if (drainInstance !== undefined) this.instance = drainInstance
     this.hostProcess = options.hostProcess ?? { alive: pidAlive, rows: processRows }
     this.owner = options.owner ?? (() => harnessPaneOwner(env.ADAPTER_DATA_DIR))
     this.platform = options.platform ?? process.platform
@@ -193,13 +204,53 @@ export class PtyHostBackend implements TerminalBackend<PtyRuntimeRef> {
     const liveness: HostLiveness = this.platform === 'win32'
       ? { alive: (pid) => this.hostProcess.alive(pid), rows: () => this.hostProcess.rows() }
       : { alive: (pid) => this.hostProcess.alive(pid) }
-    this.launch = options.launch ?? (this.draining
-      ? ((home) => reachPtyHost(home, protocol, liveness))
-      : ((home) => ensurePtyHost(home, { liveness })))
+    this.launch = options.launch ?? (drainInstance !== undefined
+      ? ((home) => reachPtyHost(home, drainInstance, liveness))
+      : (async (home) => ensurePtyHost(home, { target: await this.pinnedTarget(liveness), liveness })))
     this.endTree = options.endTree ?? ((pid) => this.endTreeOf(pid))
   }
 
-  /** `ptyhost:<instance>`, the instance being the host's (`p<protocol>`), known once `prepare` reached it. */
+  /**
+   * The host the create backend reaches: the target's; with none, once it has been attached, the instance it took,
+   * while that host is not proven dead. A reconnect while it only does not answer must not take another build's host
+   * instead: that host's pid would read as a replaced host, and every pane of the one it was on as gone. Once it is
+   * proven dead (its discovery file gone, or `discoveredHostDead`), its panes are gone anyway, and the reconnect takes
+   * the newest host that answers or the one the binary starts, as with no pin; `onHostReplaced` then says so. The pin
+   * names only the instance, which is all `ensurePtyHost` matches on.
+   */
+  private async pinnedTarget(liveness: HostLiveness): Promise<PtyHostTarget | null> {
+    if (this.target || this.instance === null) return this.target
+    const pin: PtyHostTarget = { protocol: instanceProtocol(this.instance) ?? PTY_PROTOCOL, version: '', instance: this.instance, features: [], source: 'binary' }
+    const discovery = readInstanceDiscovery(this.home, this.instance)
+    if (!discovery) {
+      // A file caught mid-write is still there: no proof. A host takes its file down only as it exits.
+      const file = discoveryFileName(this.instance)
+      return file && existsSync(path.join(this.home, 'run', file)) ? pin : null
+    }
+    return await discoveredHostDead(this.home, discovery, liveness) ? null : pin
+  }
+
+  /**
+   * Whether the drain may shut this backend's host down once it is empty (ptyHost/drain.ts). Never with no target:
+   * the host may be the one the create backend took. Never for a host newer than a target the binary named (a dev
+   * build's `HARNESS_PTY_BIN`): that newer host is the installed one's, and stays for its daemon. A newer host under an
+   * installed target is a downgrade or a rollback, and goes like any other. A host whose version cannot be read is
+   * not known to be older, so it stays too. Always false for the create backend.
+   */
+  get mayShutDown(): boolean {
+    if (!this.draining || !this.target) return false
+    if (this.target.source === 'installed') return true
+    const version = this.drainHostVersion()
+    return version !== null && compareVersions(version, this.target.version) <= 0
+  }
+
+  /** The drain host's version, from its discovery file: an instance is one build, so once read it is kept. */
+  private drainHostVersion(): string | null {
+    if (this.hostVersion === null && this.instance !== null) this.hostVersion = readInstanceDiscovery(this.home, this.instance)?.version ?? null
+    return this.hostVersion
+  }
+
+  /** `ptyhost:<instance>`, the instance being the host's (ptyHost/instance.ts), known once `prepare` reached it. */
   get instanceId(): string {
     return `ptyhost:${this.instance ?? 'unprepared'}`
   }
@@ -274,9 +325,9 @@ export class PtyHostBackend implements TerminalBackend<PtyRuntimeRef> {
     const rows = await this.hostProcess.rows().catch(() => null)
     if (!rows) return null
     const row = rows.find((candidate) => candidate.pid === pid)
-    if (!row) return `the protocol ${this.protocol} host (pid ${pid}) has exited`
+    if (!row) return `the ${this.instance} host (pid ${pid}) has exited`
     if (this.hostIdentity && this.hostIdentity.pid === pid && !sameProcessIdentity(row, this.hostIdentity)) {
-      return `the protocol ${this.protocol} host (pid ${pid}) has exited; another process has its pid`
+      return `the ${this.instance} host (pid ${pid}) has exited; another process has its pid`
     }
     return null
   }
@@ -329,7 +380,7 @@ export class PtyHostBackend implements TerminalBackend<PtyRuntimeRef> {
       console.error(`[terminal] ptyhost: the drained ${this.instance} host (pid ${pid}) has not exited`)
       return 'failed'
     }
-    forgetExitedHost(this.home, this.protocol, pid)
+    if (this.instance !== null) forgetExitedHost(this.home, this.instance, pid)
     this.markGone(`shut down with no panes left (pid ${pid})`)
     return 'exited'
   }
@@ -424,6 +475,8 @@ export class PtyHostBackend implements TerminalBackend<PtyRuntimeRef> {
     if (this.draining) {
       if (this.hostIdentity?.pid !== client.pid) this.hostIdentity = null
       void this.recordHostIdentity(client)
+      // Read while its discovery file is surely there: the host that file names has just answered.
+      this.drainHostVersion()
     }
     return replaced
   }
@@ -458,7 +511,10 @@ export class PtyHostBackend implements TerminalBackend<PtyRuntimeRef> {
     this.reconnectTimer = null
   }
 
-  /** One attempt: the host this home has, started again if it is not running (`ensurePtyHost`). */
+  /**
+   * One attempt: the host this backend is on, started again if it is not running (`ensurePtyHost`, pinned to the
+   * instance by `pinnedTarget`; a drain backend's only reaches it).
+   */
   private async reconnect(): Promise<void> {
     let reached: EnsurePtyHostResult | ReachPtyHostResult
     try {
@@ -515,10 +571,23 @@ export class PtyHostBackend implements TerminalBackend<PtyRuntimeRef> {
     return { sessionEnv: true }
   }
 
+  /** Whether a host is attached now: false before `prepare` reached one, while a lost connection is reconnecting, and
+   *  once disposed. With a target, the create backend attaches to the target's host alone. */
+  get attached(): boolean {
+    return this.client !== null && !this.disposed
+  }
+
+  /** Whether the host attached now lists `seed`; read live, as the client is replaced on reconnect. False when unattached. */
+  get canSeed(): boolean {
+    return this.client?.features.includes(SEED_FEATURE) ?? false
+  }
+
   async create(request: TerminalCreateRequest): Promise<TerminalCreateResult<PtyRuntimeRef>> {
-    if (this.draining) return terminalActionNotStarted(`the protocol ${this.protocol} pty host is draining: new panes go to the newest host`)
+    if (this.draining) return terminalActionNotStarted(`the ${this.instance} pty host is draining: new panes go to the target host`)
     const client = this.client
     if (!client) return terminalActionNotStarted(UNAVAILABLE)
+    // A pre-G host drops `seed` silently, which would look like a pane that kept its scrollback: refuse instead.
+    if (request.seed !== undefined && !client.features.includes(SEED_FEATURE)) return terminalActionNotStarted('this host cannot seed a pane')
     if (request.current?.() === false) return terminalActionNotStarted('The harness changed before pane dispatch')
     request.onDispatch?.()
     // Held from the start, as tmux's remain-on-exit at create: an engine that exits at once still leaves
@@ -533,6 +602,7 @@ export class PtyHostBackend implements TerminalBackend<PtyRuntimeRef> {
       owner: this.owner(),
       ...(request.label ? { label: request.label } : {}),
       hold: true,
+      ...(request.seed !== undefined ? { seed: request.seed } : {}),
       // Windows: the shell the pane becomes when its engine exits, made by the host (lib/windows/engineStart.ts).
       ...(request.afterExit ? { afterExit: { command: request.afterExit.command, ...(request.afterExit.env ? { env: request.afterExit.env } : {}) } } : {}),
       // Windows: what the pane must not inherit from the host's environment (a grid launch's provider keys).
@@ -580,6 +650,7 @@ export class PtyHostBackend implements TerminalBackend<PtyRuntimeRef> {
           runtime: { backend: 'ptyhost' as const, instance, paneId: pane.pane },
           rootPid: pane.rootPid!,
           cwd: pane.cwd,
+          ...(pane.label ? { label: pane.label } : {}),
         })),
     }
   }
@@ -673,6 +744,21 @@ export class PtyHostBackend implements TerminalBackend<PtyRuntimeRef> {
     if (withheld) return terminalEnterWithheld(withheld)
     if (options?.allowed && !options.allowed()) return terminalEnterWithheld('terminal control revoked')
     return actionOf(await client.call({ op: 'key', pane: runtime.paneId, key: 'Enter' }))
+  }
+
+  /** The host's raw `write`: the bytes a stream's input frame carries, sent as they are. */
+  async writeInput(runtime: PtyRuntimeRef, bytes: Uint8Array): Promise<TerminalActionResult> {
+    const client = this.clientFor(runtime)
+    if (!client) return terminalActionNotStarted(UNAVAILABLE)
+    return actionOf(await client.call({ op: 'write', pane: runtime.paneId, data: Buffer.from(bytes).toString('base64') }))
+  }
+
+  /** The host's bracketed `paste`, which brackets only when the program asked for it: what a stream's Paste
+   *  frame writes (pty/src/stream.rs). */
+  async pasteInput(runtime: PtyRuntimeRef, text: string): Promise<TerminalActionResult> {
+    const client = this.clientFor(runtime)
+    if (!client) return terminalActionNotStarted(UNAVAILABLE)
+    return actionOf(await client.call({ op: 'paste', pane: runtime.paneId, text, bracketed: true }))
   }
 
   async sendKey(runtime: PtyRuntimeRef, key: TerminalLogicalKey): Promise<TerminalActionResult> {

@@ -5,9 +5,11 @@
  * Moved verbatim out of `runForeground` (the core boundary, step 11: docs/design/2026-10-03-harnessd.md).
  */
 import type { clearDeleted as clearDeletedFn, markDeleted as markDeletedFn } from '../../lib/deletedSessions.js'
+import { LEAD_PROTECTED_DETAIL } from '../../lib/closeAgentService.js'
 import { PurgeAgentService } from '../../lib/purgeAgentService.js'
 import type { registry, RegisteredSession } from '../../lib/registry.js'
 import { createResumeAgentService, type ResumeAgentServiceDeps } from '../../lib/resumeAgentService.js'
+import { moveHeldLine } from '../../lib/hostMove/moveAgent.js'
 import type { SessionCheckpointStore } from '../../lib/sessionCheckpoint.js'
 import type { StoppedAgentStore } from '../../lib/stoppedAgents.js'
 import { AgentStopError, createStopAgentService, type StopAgentServiceDeps } from '../../lib/stopAgentService.js'
@@ -57,12 +59,23 @@ export interface LifecycleDeps {
   /** An agent was stopped: closed (`agent_close`), Stop Harness, or purged. The harnesses it started close with it
    *  (services/agentCleanup.ts `closed`). */
   stopped?: (agentId: string) => void
+  /** An agent a move a dead daemon left may still run beside (main.ts `moveHeld`): no engine of it starts this start. */
+  moveHeld?: (agentId: string) => boolean
+  /** Whether the agent is the Lead of an active Swarm project here (superTabs/retention.ts `retainedLeads`). */
+  leadProtected?: (agentId: string) => boolean
+}
+
+/** The owner, 2026-10-23: the Lead of an active project is never stopped, in any case; deleting its project closes it. */
+export class LeadProtectedError extends Error {
+  readonly code = 'LEAD_PROTECTED'
+  constructor() { super(LEAD_PROTECTED_DETAIL) }
 }
 
 export function createAgentLifecycle({
   registry, stoppedAgents, restartJobs, createBackend, noBackendCode, backendFor, agentReconciler, forgetSession, markDeleted, clearDeleted, stopNative, settlePane, cancelExternal,
   sessionCheckpoints, mirror, sessionSearch, send, pinnedControls, retainExitedSession, announceSession,
-  relaunchOverrides, prepareSessionResume, refreshGridWebSearch, adoptSwarmSkill, attachDsh, attachSession, relaunchMarks, stopped, atFolderTrust, atEmptyComposer,
+  relaunchOverrides, prepareSessionResume, refreshGridWebSearch, adoptSwarmSkill, attachDsh, attachSession, relaunchMarks, stopped, atFolderTrust, atEmptyComposer, moveHeld,
+  leadProtected,
 }: LifecycleDeps) {
   /**
    * Stop Harness (`agent_delete`) archives its conversation and launch settings, removes the live
@@ -81,6 +94,7 @@ export function createAgentLifecycle({
    */
   const stopAgent: typeof stop = (target, options) => {
     const agentId = registry.resolve(target)?.agentId ?? target
+    if (leadProtected?.(agentId)) return Promise.reject(new LeadProtectedError())
     return stop(target, options).then(() => { stopped?.(agentId) })
   }
   const purgeAgentService = new PurgeAgentService({
@@ -101,7 +115,17 @@ export function createAgentLifecycle({
     retainExitedSession, announceSession, relaunchOverrides, prepareSessionResume, adoptSwarmSkill,
     refreshGridWebSearch, clearDeleted, attachDsh, attachSession, relaunchMarks,
   })
-  const resumeAgent: ResumeAgent = (id, permissionMode) => (stoppedAgents.get(id) ?? registry.byAgent(id))?.guest
+  const resumeAgent: ResumeAgent = (id, permissionMode) => {
+    // A pane a stopped move left may still run this conversation's engine, which no record names (its pid was never
+    // the row's), so a resume would find the engine gone and start a second one beside it: not this start.
+    const heldId = (stoppedAgents.get(id) ?? registry.byAgent(id))?.agentId ?? id
+    if (moveHeld?.(heldId)) {
+      console.warn(moveHeldLine(heldId))
+      return Promise.resolve({ ok: false, error: 'AGENT_BUSY', detail: 'This harness is held until the daemon restarts.' })
+    }
+    return resumeChecked(id, permissionMode)
+  }
+  const resumeChecked: ResumeAgent = (id, permissionMode) => (stoppedAgents.get(id) ?? registry.byAgent(id))?.guest
     ? Promise.resolve(GUEST_HARNESS_REFUSAL)
     : purgeAgentService.busy(id) || purgeAgentService.blocksFolder(stoppedAgents.get(id)?.cwd)
       ? Promise.resolve({ ok: false, error: 'AGENT_BUSY' }) : resume(id, permissionMode)
@@ -134,7 +158,7 @@ export function createStopRequest({ byAgent, stop }: {
     try { await stop(target) }
     catch (error) {
       if (error instanceof IdentityReadUnavailable) return { error: error.code, detail: error.message, held: true, retryable: true }
-      if (!(error instanceof AgentStopError)) throw error
+      if (!(error instanceof AgentStopError) && !(error instanceof LeadProtectedError)) throw error
       return { error: error.code, detail: error.message }
     }
     return { deleted: true }

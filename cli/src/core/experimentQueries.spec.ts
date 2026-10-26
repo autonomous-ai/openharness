@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { RegisteredSession } from '../lib/registry.js'
 import { fakeCore } from '../testing/fakeCore.js'
-import { answerExperimentQuery, createForExperiment, creationForExperiment } from './experimentQueries.js'
+import { answerExperimentQuery, answerMachineAddonsQuery, createForExperiment, creationForExperiment } from './experimentQueries.js'
 
 const agent = (agentId: string) => ({ agentId, sessionId: `s-${agentId}`, engine: 'claude', cwd: '/w' }) as RegisteredSession
 const experiments = new Set(['orchestrator'])
@@ -28,7 +28,7 @@ describe('the cloud agents\' doors', () => {
 
 describe('the Super Tab service\'s door', () => {
   it('is the Super Tab service\'s alone, and hands its members\' waits to the core whole', async () => {
-    const superTabs = { attention: vi.fn(), cards: vi.fn(), cardRecap: vi.fn() }
+    const superTabs = { attention: vi.fn(), cards: vi.fn(), cardRecap: vi.fn(), shareObservers: vi.fn(), screen: vi.fn(), input: vi.fn() }
     const core = fakeCore({ superTabs })
     const both = new Set(['orchestrator', 'superTabs'])
     const item = { agentId: 'a1', requestId: 'supertab:x:blocked', superTab: 'Pilot', attention: 'stuck', text: 'Stuck: no key' }
@@ -41,7 +41,7 @@ describe('the Super Tab service\'s door', () => {
   })
 
   it('hands it the Swarm cards and a Lead\'s recap the same way, to the Super Tab service alone', async () => {
-    const superTabs = { attention: vi.fn(), cards: vi.fn(), cardRecap: vi.fn() }
+    const superTabs = { attention: vi.fn(), cards: vi.fn(), cardRecap: vi.fn(), shareObservers: vi.fn(), screen: vi.fn(), input: vi.fn() }
     const core = fakeCore({ superTabs })
     const both = new Set(['orchestrator', 'superTabs'])
     const recap = { tabId: 't1', leadId: 'l1', text: 'Shipped', at: 1, none: false }
@@ -51,9 +51,36 @@ describe('the Super Tab service\'s door', () => {
     expect(superTabs.cards).toHaveBeenLastCalledWith([])
     expect(await answerExperimentQuery(core, both, 'superTabs', 'super_tab_card_recap', { recap })).toEqual({})
     expect(superTabs.cardRecap).toHaveBeenLastCalledWith(recap)
-    for (const query of ['super_tab_cards', 'super_tab_card_recap']) {
+    for (const query of ['super_tab_cards', 'super_tab_card_recap', 'super_tab_observers']) {
       expect(await answerExperimentQuery(core, both, 'orchestrator', query, {})).toEqual({ error: 'NOT_SUPER_TABS' })
       expect(await answerExperimentQuery(fakeCore(), both, 'superTabs', query, {})).toEqual({ error: 'NOT_SUPER_TABS' })
+    }
+  })
+
+  it('asks for Share when a Swarm host here has members to show its agents to', async () => {
+    const superTabs = { attention: vi.fn(), cards: vi.fn(), cardRecap: vi.fn(), shareObservers: vi.fn(), screen: vi.fn(), input: vi.fn() }
+    expect(await answerExperimentQuery(fakeCore({ superTabs }), new Set(['superTabs']), 'superTabs', 'super_tab_observers', {})).toEqual({})
+    expect(superTabs.shareObservers).toHaveBeenCalledOnce()
+  })
+  it('reads and types a member\'s terminal for the Super Tab service alone, refusing what is not well formed', async () => {
+    const superTabs = { attention: vi.fn(), cards: vi.fn(), cardRecap: vi.fn(), shareObservers: vi.fn(),
+      screen: vi.fn(async () => ({ ok: true as const, text: 'Allow?', hold: null })), input: vi.fn(async () => ({ ok: true as const })) }
+    const core = fakeCore({ superTabs }), both = new Set(['orchestrator', 'superTabs'])
+    expect(await answerExperimentQuery(core, both, 'superTabs', 'super_tab_screen', { agentId: 'h1', scrollback: 40 })).toEqual({ ok: true, text: 'Allow?', hold: null })
+    expect(superTabs.screen).toHaveBeenLastCalledWith('h1', 40)
+    await answerExperimentQuery(core, both, 'superTabs', 'super_tab_screen', { agentId: 'h1' })
+    expect(superTabs.screen).toHaveBeenLastCalledWith('h1', 0)
+    expect(await answerExperimentQuery(core, both, 'superTabs', 'super_tab_input', { agentId: 'h1', text: 'yes', keys: ['Enter'] })).toEqual({ ok: true })
+    expect(superTabs.input).toHaveBeenLastCalledWith('h1', 'yes', ['Enter'])
+    await answerExperimentQuery(core, both, 'superTabs', 'super_tab_input', { agentId: 'h1', keys: ['1'] })
+    expect(superTabs.input).toHaveBeenLastCalledWith('h1', '', ['1'])
+    for (const [query, payload] of [['super_tab_screen', { agentId: 'bad id' }], ['super_tab_screen', { agentId: 'h1', scrollback: 'x' }],
+      ['super_tab_input', { agentId: 'h1', text: 7 }], ['super_tab_input', { agentId: 'h1', keys: [1] }], ['super_tab_input', { agentId: 'h1', keys: 'Enter' }]] as const) {
+      expect(await answerExperimentQuery(core, both, 'superTabs', query, payload)).toEqual({ ok: false, error: 'INVALID_REQUEST' })
+    }
+    for (const query of ['super_tab_screen', 'super_tab_input']) {
+      expect(await answerExperimentQuery(core, both, 'orchestrator', query, { agentId: 'h1' })).toEqual({ error: 'NOT_SUPER_TABS' })
+      expect(await answerExperimentQuery(fakeCore(), both, 'superTabs', query, { agentId: 'h1' })).toEqual({ error: 'NOT_SUPER_TABS' })
     }
   })
 })
@@ -242,3 +269,36 @@ it('exposes identity-bound close only to the Swarm service and validates its nat
   }
   expect(await answerExperimentQuery(fakeCore(), allowed, 'superTabs', 'close_swarm', payload)).toEqual({ error: 'UNSUPPORTED' })
 })
+
+it('lets only the Swarm service reopen a Lead or close a member, by a valid agent id', async () => {
+  const keepLeadAlive = vi.fn(async () => ({ ok: true as const })), closeMember = vi.fn(async () => ({ closed: true as const }))
+  const core = fakeCore({ agents: { keepLeadAlive, closeMember } })
+  const allowed = new Set(['superTabs', 'orchestrator'])
+  expect(await answerExperimentQuery(core, allowed, 'superTabs', 'keep_lead_alive', { agentId: 'lead' })).toEqual({ ok: true })
+  expect(keepLeadAlive).toHaveBeenCalledWith('lead')
+  expect(await answerExperimentQuery(core, allowed, 'superTabs', 'close_member', { agentId: 'worker' })).toEqual({ closed: true })
+  expect(closeMember).toHaveBeenCalledWith('worker', undefined)
+  expect(await answerExperimentQuery(core, allowed, 'superTabs', 'close_member', { agentId: 'worker', creationId: 'super-0123456789abcdef' })).toEqual({ closed: true })
+  expect(closeMember).toHaveBeenLastCalledWith('worker', 'super-0123456789abcdef')
+  for (const creationId of ['short', 4]) expect(await answerExperimentQuery(core, allowed, 'superTabs', 'close_member', { agentId: 'worker', creationId })).toEqual({ error: 'INVALID_REQUEST' })
+  for (const query of ['keep_lead_alive', 'close_member']) {
+    expect(await answerExperimentQuery(core, allowed, 'orchestrator', query, { agentId: 'lead' })).toEqual({ error: 'NOT_SUPER_TABS' })
+    for (const agentId of ['', '../x', 4]) expect(await answerExperimentQuery(core, allowed, 'superTabs', query, { agentId })).toEqual({ error: 'INVALID_REQUEST' })
+  }
+  expect(await answerExperimentQuery(fakeCore(), allowed, 'superTabs', 'keep_lead_alive', { agentId: 'lead' })).toEqual({ ok: false, error: 'UNSUPPORTED' })
+  expect(await answerExperimentQuery(fakeCore(), allowed, 'superTabs', 'close_member', { agentId: 'worker' })).toEqual({ error: 'UNSUPPORTED' })
+  expect(keepLeadAlive).toHaveBeenCalledTimes(1)
+  expect(closeMember).toHaveBeenCalledTimes(2)
+})
+
+describe('what the add-ons of a device that is this machine ask of the core', () => {
+  it('is told this daemon\'s address, though not an experiment, and nothing else of the experiments\' doors', async () => {
+    const core = fakeCore({ daemon: { machineId: () => 'm_account' } as never })
+    expect(answerMachineAddonsQuery(core, 'machineAddons', 'daemon')).toEqual({ command: 'harness', port: 18473, machineId: 'm_account', autonomousEnv: 'prod' })
+    // The experiments' check alone would refuse it: the reason the core asks this first (core/main.ts).
+    expect(await answerExperimentQuery(core, experiments, 'machineAddons', 'daemon', {})).toEqual({ error: 'NOT_AN_EXPERIMENT' })
+    expect(answerMachineAddonsQuery(core, 'machineAddons', 'shown')).toBeNull()
+    expect(answerMachineAddonsQuery(core, 'wifi', 'daemon')).toBeNull()
+  })
+})
+

@@ -12,6 +12,7 @@
 #include "config_store.h"
 #include "../cable_machines.h"   // cable_machine_t — the wheel's row, already parsed and diffed
 #include "../cable_client.h"     // cable_swarm_t — one of the window's tabs, as the wire carries it
+#include "habitat/supertab.h"   // ht_supertab_t — one Swarm and its Leads, as cable_client parsed it
 
 struct cJSON;
 
@@ -251,6 +252,20 @@ void ui_machines_refresh(void);
 // Replace the whole list from one `swarms` frame. `selected` names the one the window has on screen; it
 // is what every tile's swarm line draws. count 0 hides the line. Safe from the reader task.
 void ui_swarms_replace(const cable_swarm_t *rows, int count, const char *selected);
+
+// --- The Swarms (Super Tabs; cable_client.h). Each is safe from the reader task. ---
+// The `supertabs` list: the Swarms shown, in order. A Swarm gone from it leaves the list and the inbox.
+void ui_supertabs_ids(const char ids[][ID_MAX], int n);
+// One Swarm's card. True when the caller should beep: a Lead started needing a person, off the face.
+bool ui_supertab(const ht_supertab_t *in);
+void ui_supertab_recap(const char *tab, const char *lead, const char *text, uint32_t at, bool none);
+void ui_supertab_focus(const char *tab, const char *lead);
+// A Super Tab wait from harness `agent_id` (some Lead's `local`). It only sets that Lead's inbox text and face;
+// it never opens the question screen. True when the caller should beep.
+bool ui_supertab_wait(const char *agent_id, const char *request, const char *swarm_name, bool stuck, const char *text);
+void ui_supertab_wait_close(const char *agent_id, const char *request);
+// Link lost: forget every Swarm and its inbox entries.
+void ui_supertabs_clear(void);
 /* The grid of the tab named by `swarm_id`, as the window laid it out.
  *
  * THE ID IS NOT DECORATION. These rectangles describe the APP's active tab, and this device can be

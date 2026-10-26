@@ -44,7 +44,7 @@ function Show-Diagnosis {
     catch { Write-Host "$($found.Name): $($_.Exception.Message)" }
   }
   # The master and the core write cli\data\harness.log, harness-launch.exe cli\data\logs\launch.log, the host
-  # pty\logs\pty-host.log (pty/src/logfile.rs), the dial logs\dial-*.log.
+  # pty\logs\pty-host-<instance>.log (pty/src/logfile.rs), the dial logs\dial-*.log.
   foreach ($tree in @('cli\data', 'pty\logs', 'logs')) {
     $dir = Join-Path $root $tree
     $files = @(Get-ChildItem $dir -Filter '*.log' -Recurse -File -Force -ErrorAction SilentlyContinue)

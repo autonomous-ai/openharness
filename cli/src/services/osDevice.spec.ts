@@ -151,6 +151,10 @@ describe('the Harness OS computer, managed from the phone', () => {
     expect(await ask({ action: 'password', current: '1234' })).toMatchObject({ error: 'BAD_REQUEST' })
     exec.mockResolvedValueOnce('{"error": "WRONG_PASSWORD", "message": "That is not the computer\'s password."}')
     expect(await ask({ action: 'password', current: 'x', next: 'abcd' })).toMatchObject({ error: 'WRONG_PASSWORD' })
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    exec.mockResolvedValueOnce('["ok"]')
+    expect(await ask({ action: 'password', current: '1234', next: 'abcd' }))
+      .toEqual({ error: 'FAILED', message: 'setup.py password did not answer an object' })
   })
 
   it('turns SSH on or off, or says how it is', async () => {
@@ -162,6 +166,9 @@ describe('the Harness OS computer, managed from the phone', () => {
     expect(exec).toHaveBeenLastCalledWith('sudo', ['-n', '/usr/bin/python3', SETUP, 'ssh', 'on'], { timeout: 30_000 })
     await ask({ action: 'ssh', state: 'rm -rf' })
     expect(exec).toHaveBeenLastCalledWith('sudo', ['-n', '/usr/bin/python3', SETUP, 'ssh', 'status'], { timeout: 30_000 })
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    exec.mockResolvedValueOnce('null')
+    expect(await ask({ action: 'ssh', state: 'status' })).toEqual({ error: 'FAILED', message: 'setup.py ssh did not answer an object' })
   })
 
   it('starts the update detached, once in ten minutes', async () => {

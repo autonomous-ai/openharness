@@ -48,6 +48,39 @@ describe('leadsOf', () => {
     expect(leadsOf(swarm({ conversations: [...swarm().conversations, work('web', 'review')] }), 'm1', idle).leads[0].state).toBe('work')
   })
 
+  // The app's working mark is each agent's own live turn (the Lead's and every worker's); the card says a project works when any of its agents is in a turn
+  // here, and goes by its open assignments for agents this machine cannot see.
+  it('reads a project as work when any of its agents is in a turn here, whatever its Lead and assignments say', () => {
+    const inTurn = (...ids: string[]) => (h: string) => ({ inTurn: ids.includes(h) })
+    const withWorkers = (over: Record<string, unknown> = {}) => swarm({
+      agents: [agent('a1'), agent('a2'), agent('b1', { projectId: 'web' }), agent('b2', { projectId: 'mobile' })],
+      conversations: [...swarm().conversations, work('web', 'done'), conv('w-old', null, { projectId: 'mobile', agentIds: ['b2'], assignment: { status: 'done' } })],
+      ...over,
+    })
+    // Lead idle, its worker in a turn
+    expect(leadsOf(withWorkers(), 'm1', inTurn('h-b1')).leads.map(l => [l.project, l.state])).toEqual([['web', 'work'], ['mobile', 'done']])
+    // every assignment done, a worker still in a turn (one known only through its group, as the app's roster finds it)
+    const noProjectId = withWorkers({ agents: [agent('a1'), agent('a2'), agent('b2')] })
+    expect(Object.fromEntries(leadsOf(noProjectId, 'm1', inTurn('h-b2')).leads.map(l => [l.project, l.state]))).toEqual({ web: 'done', mobile: 'work' })
+    // the clock is the project's earliest turn here: the worker's when only it works, else whichever began first
+    const since = (map: Record<string, number>) => (h: string) => h in map ? { inTurn: true, since: map[h] } : { inTurn: false }
+    expect(leadsOf(withWorkers(), 'm1', since({ 'h-b1': 40 })).leads[0]).toMatchObject({ project: 'web', state: 'work', since: 40 })
+    expect(leadsOf(withWorkers(), 'm1', since({ 'h-a1': 5, 'h-b1': 40 })).leads[0]).toMatchObject({ project: 'web', state: 'work', since: 40 })
+    expect(leadsOf(withWorkers(), 'm1', since({ 'h-a1': 90, 'h-b1': 40 })).leads[0]).toMatchObject({ project: 'web', state: 'work', since: 90 })
+    // nobody in a turn and nothing open: done
+    expect(leadsOf(withWorkers(), 'm1', idle).leads.map(l => l.state)).toEqual(['done', 'done'])
+    // a worker on another machine has no turn here: its project goes by its assignment
+    const remoteWorker = withWorkers({ agents: [agent('a1'), agent('a2'), agent('b1', { projectId: 'web', machineId: 'm2' })] })
+    expect(leadsOf(remoteWorker, 'm1', inTurn('h-b1')).leads[0].state).toBe('done')
+    // a Lead on another machine: its local worker's turn counts, otherwise its assignments
+    const remoteLead = withWorkers({ agents: [agent('a1', { machineId: 'm2', machineOwnerId: 'sam' }), agent('a2'), agent('b1', { projectId: 'web' })] })
+    expect(leadsOf(remoteLead, 'm1', inTurn('h-b1')).leads[0]).toMatchObject({ id: 'a1', state: 'work', local: '' })
+    expect(leadsOf(remoteLead, 'm1', idle).leads[0].state).toBe('done')
+    // ask and stuck still come first
+    const asks = withWorkers({ conversations: [...withWorkers().conversations as unknown[], work('web', 'needs_human')] })
+    expect(leadsOf(asks, 'm1', inTurn('h-b1')).leads[0].state).toBe('ask')
+  })
+
   it('calls a harness local only on this machine and live here; names an owner only when it is not the signed-in person', () => {
     const remote = swarm({ agents: [agent('a1', { machineId: 'm2', machineOwnerId: 'sam' }), agent('a2', { machineOwnerId: 'sam' })] })
     const byId = Object.fromEntries(leadsOf(remote, 'm1', idle, 'me').leads.map(l => [l.id, l]))
@@ -65,6 +98,22 @@ describe('leadsOf', () => {
     expect(count).toBe(13)
     expect(leads).toHaveLength(12)
     expect(leads.slice(0, 5).map(l => [l.project, l.state])).toEqual([['P7', 'ask'], ['P9', 'ask'], ['P5', 'stuck'], ['P2', 'work'], ['P0', 'done']])
+  })
+
+  it('gives each Lead its project\'s index as `order`, whatever place urgency gives it', () => {
+    const three = swarm({
+      projects: [...swarm().projects, { id: 'api', name: 'api', leadConversationId: 'lead-api' }],
+      agents: [agent('a1'), agent('a2'), agent('a3')],
+      conversations: [...swarm().conversations, conv('lead-api', 'a3', { projectId: 'api' }), work('mobile', 'needs_human'), work('api', 'working')],
+    })
+    expect(leadsOf(three, 'm1', idle).leads.map(l => [l.project, l.state, l.order])).toEqual([['mobile', 'ask', 1], ['api', 'work', 2], ['web', 'done', 0]])
+    // The 12 most urgent of 13 keep their own index: the one left out leaves a gap.
+    const projects = Array.from({ length: 13 }, (_, i) => ({ id: `p${i}`, name: `P${i}`, leadConversationId: `lead-p${i}` }))
+    const many = swarm({ projects, agents: projects.map((_, i) => agent(`a${i}`)),
+      conversations: [...projects.map((p, i) => conv(p.leadConversationId, `a${i}`, { projectId: p.id })), ...projects.slice(1).map(p => work(p.id, 'working'))] })
+    expect(leadsOf(many, 'm1', idle).leads.map(l => l.order)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12])
+    const old = { name: 'Old', agents: [agent('a1')], people: [], conversations: [{ id: 'lead', leadId: 'a1', assignment: null }] }
+    expect(leadsOf(old, 'm1', idle).leads[0].order).toBe(0)
   })
 
   it('cuts a name to 48 bytes on a character boundary and reads a paused Swarm as done', () => {
@@ -97,7 +146,7 @@ function setup(tabs: Record<string, { revision: number; state: Record<string, un
   let listFails = false
   let pages: Record<string, { next: string | null }> = {}
   let pageSize = 0
-  const call = vi.fn(async (method: string, path: string) => {
+  const call = vi.fn(async (method: string, path: string, _body?: unknown) => {
     calls.push(`${method} ${path}`)
     const [route, query] = path.split('?')
     if (route === '/api/super-tabs') {
@@ -217,6 +266,34 @@ describe('SwarmCards.tick', () => {
     expect(t.seen[1][0].leads[0].state).toBe('done')
   })
 
+  it('re-sends when the clock\'s turn changes (the Lead\'s ends, a worker\'s goes on), not while the same turn runs', async () => {
+    const state = swarm({ agents: [agent('a1'), agent('a2'), agent('b1', { projectId: 'web' })] })
+    const t = setup({ t1: { revision: 1, state } }, { activity: { 'h-a1': 'working' }, elapsed: 90 })
+    await t.cards.tick()
+    expect(t.seen[0][0].leads[0]).toMatchObject({ project: 'web', state: 'work', since: 90 })
+    // the worker starts too: the Lead's earlier turn is still the clock, nothing to send
+    vi.mocked(t.core.agents.activity).mockResolvedValue({ 'h-a1': 'working', 'h-b1': 'working' })
+    vi.mocked(t.core.agents.activitySnapshot!).mockResolvedValue({ text: '', elapsedSeconds: 10 })
+    t.advance(5000)
+    await t.cards.tick()
+    expect(t.seen).toHaveLength(1)
+    // the Lead's turn ends, the worker's goes on: same state, another start, so the Pro is told
+    vi.mocked(t.core.agents.activity).mockResolvedValue({ 'h-b1': 'working' })
+    t.advance(5000)
+    await t.cards.tick()
+    expect(t.seen).toHaveLength(2)
+    expect(t.seen[1][0].leads[0]).toMatchObject({ project: 'web', state: 'work', since: 15 })
+    t.advance(5000)
+    await t.cards.tick()
+    expect(t.seen).toHaveLength(2)
+  })
+
+  it('sends a turn that just began as 1 s in, never 0 (the Pro shows no clock for 0)', async () => {
+    const t = setup({ t1: { revision: 1, state: swarm() } }, { activity: { 'h-a1': 'working' }, elapsed: 0 })
+    await t.cards.tick()
+    expect(t.seen[0][0].leads[0]).toMatchObject({ id: 'a1', state: 'work', since: 1 })
+  })
+
   it('names a remote Lead\'s owner using the signed-in account', async () => {
     const t = setup({ t1: { revision: 1, state: swarm({ agents: [agent('a1', { machineId: 'm2', machineOwnerId: 'sam' }), agent('a2')] }) } })
     await t.cards.tick()
@@ -283,6 +360,22 @@ describe('SwarmCards.recap', () => {
     t.tabs.t1.state = withSequence(3)
     await t.cards.tick()
     expect(pushed).toEqual(['m2'])
+  })
+})
+
+describe('SwarmCards.say', () => {
+  it('posts the words as the person in the Lead\'s conversation of a harness here, and is false for any other harness', async () => {
+    const t = setup({ t1: { revision: 1, state: swarm({ agents: [agent('a1', { machineId: 'm2' }), agent('a2')] }) } })
+    await t.cards.tick()
+    expect(await t.cards.say('h-a2', 'ship it')).toBe(true)
+    const post = t.call.mock.calls.find(c => c[0] === 'POST')!
+    expect(post[1]).toBe('/api/super-tabs/t1/commands')
+    expect(post[2]).toMatchObject({ operationId: expect.stringMatching(/^pro-voice-/),
+      command: { type: 'message.send', conversationId: 'lead-mobile', text: 'ship it', replyTo: null, recipientIds: [] } })
+    expect(post[2]).not.toHaveProperty('asAgentId')
+    expect(await t.cards.say('h-a1', 'x')).toBe(false)   // that Lead runs on another machine
+    expect(await t.cards.say('h-zz', 'x')).toBe(false)
+    expect(t.call.mock.calls.filter(c => c[0] === 'POST')).toHaveLength(1)
   })
 })
 

@@ -1,25 +1,33 @@
 import { closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { env } from './config/env.js'
 import { PROBE_ANSWER } from './harnessd/reexec.js'
 import { LEAN_ENTRY, leanFingerprint, type LeanBundle } from './harnessd/leanBundle.js'
 import { DAEMON_LOG_FILE, PID_FILE } from './lib/daemonState.js'
 import { launchDetached } from './lib/windows/launcher.js'
+import { PTY_PROTOCOL } from './lib/ptyHost/protocol.js'
 import type { WindowsMasterDeps } from './masterProcess.js'
 
 const runMaster = vi.hoisted(() => vi.fn((_config: Record<string, unknown>) => 'supervisor'))
 vi.mock('./harnessd/master.js', async (real) => ({ ...await real<object>(), runMaster }))
 const leanBundle = vi.hoisted(() => ({ read: vi.fn((_bundle: Buffer): LeanBundle | null => null) }))
 vi.mock('./harnessd/leanBundle.js', async (real) => ({ ...await real<object>(), readLeanBundle: (bundle: Buffer) => leanBundle.read(bundle) }))
-const spawnLock = vi.hoisted(() => ({ acquire: vi.fn(async (..._args: unknown[]): Promise<() => void> => () => {}) }))
+const spawnLock = vi.hoisted(() => ({
+  acquire: vi.fn(async (..._args: unknown[]): Promise<() => void> => () => {}),
+  sync: vi.fn((..._args: unknown[]): (() => void) | null => () => {}),
+}))
 const socket = vi.hoisted(() => ({ none: false }))
 vi.mock('./lib/localSocket.js', async (real) => {
   const actual = await real<typeof import('./lib/localSocket.js')>()
   return { ...actual, unixSocketPath: (...args: Parameters<typeof actual.unixSocketPath>) => socket.none ? null : actual.unixSocketPath(...args) }
 })
-vi.mock('./lib/daemonSpawnLock.js', async (real) => ({ ...await real<object>(), acquireSpawnLock: (...args: unknown[]) => spawnLock.acquire(...args) }))
+vi.mock('./lib/daemonSpawnLock.js', async (real) => ({
+  ...await real<object>(),
+  acquireSpawnLock: (...args: unknown[]) => spawnLock.acquire(...args),
+  tryAcquireSpawnLockSync: (...args: unknown[]) => spawnLock.sync(...args),
+}))
 
 const {
   BUNDLE_ENV, BUNDLE_SHA256_ENV, HANDOVER_LAUNCH_TIMEOUT_MS, HANDOVER_LOCK_WAIT_MS, LEAN_DIR, LEAN_FINGERPRINT_ENV, LEAN_OFF_FILE, handoverAlive, masterEnv, probeLean,
@@ -418,6 +426,77 @@ describe('starting the master', () => {
     expect((runMaster.mock.calls[0][0] as { updater: boolean }).updater).toBe(true)
     expect(LEAN_DIR).toMatch(/[\\/]lean$/)
     expect(LEAN_OFF_FILE).toMatch(/[\\/]lean-off$/)
+  })
+
+  it('on Windows, judges a terminal host on probation with the build: unjudged at start, rolled back, kept', () => {
+    // The suite's own home (config/testIsolation.ts): the install root the CLI folder sits in.
+    const root = dirname(env.ADAPTER_CLI_DIR)
+    const ptyRoot = join(root, 'runtime', 'pty')
+    try {
+      mkdirSync(join(ptyRoot, '0.10.0'), { recursive: true })
+      writeFileSync(join(ptyRoot, '0.10.0', 'harness-pty.exe'), 'old')
+      writeFileSync(join(ptyRoot, 'current-pty'), '0.11.0')
+      writeFileSync(join(ptyRoot, 'pty-pending.json'), JSON.stringify({ version: '0.11.0', previous: '0.10.0' }))
+      runMaster.mockClear()
+      startMaster({ scriptPath: '/cli/cli.js' }, () => {}, 'win32', () => ({}))
+      const config = runMaster.mock.calls[0][0] as { restoreUpdate(): void; confirmUpdate(): void; unjudgedUpdate(bundle: string | null): string | null }
+      expect(config.unjudgedUpdate(null)).toBe('terminal host 0.11.0')
+      const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+      try { config.restoreUpdate() } finally { log.mockRestore() }
+      expect(readFileSync(join(ptyRoot, 'current-pty'), 'utf8').trim()).toBe('0.10.0')
+      expect(existsSync(join(ptyRoot, 'pty-pending.json'))).toBe(false)
+      expect(JSON.parse(readFileSync(join(ptyRoot, 'pty-rejected.json'), 'utf8'))).toEqual(['0.11.0'])
+      expect(config.unjudgedUpdate(null)).toBeNull()
+      writeFileSync(join(ptyRoot, 'pty-pending.json'), JSON.stringify({ version: '0.12.0', previous: '0.10.0' }))
+      config.confirmUpdate()
+      expect(existsSync(join(ptyRoot, 'pty-pending.json'))).toBe(false)
+      // A corrupt marker, which the poller waits on as on any: judged at the start, and the rollback clears it.
+      writeFileSync(join(ptyRoot, 'pty-pending.json'), '{ not json')
+      expect(config.unjudgedUpdate(null)).toBe('terminal host (unreadable marker)')
+      const quiet = vi.spyOn(console, 'log').mockImplementation(() => {})
+      try { config.restoreUpdate() } finally { quiet.mockRestore() }
+      expect(existsSync(join(ptyRoot, 'pty-pending.json'))).toBe(false)
+      expect(readFileSync(join(ptyRoot, 'current-pty'), 'utf8').trim()).toBe('0.10.0')
+    } finally { rmSync(join(root, 'runtime', 'pty'), { recursive: true, force: true }) }
+  })
+
+  // The stand-in host is a shell script: what `harness-pty.exe version` prints, off Windows.
+  it.skipIf(process.platform === 'win32')('on Windows, judges and keeps the terminal host under the spawn lock, and takes back at start a host it cannot speak', () => {
+    const root = dirname(env.ADAPTER_CLI_DIR)
+    const ptyRoot = join(root, 'runtime', 'pty')
+    const events: string[] = []
+    spawnLock.sync.mockImplementation((purpose: unknown) => { events.push(`lock ${String(purpose)}`); return () => { events.push('release') } })
+    const log = vi.spyOn(console, 'log').mockImplementation((line: string) => { events.push(String(line)) })
+    try {
+      mkdirSync(join(ptyRoot, '0.10.0'), { recursive: true })
+      writeFileSync(join(ptyRoot, '0.10.0', 'harness-pty.exe'), 'old')
+      // A paired host whose CLI build never went in: it says it speaks a protocol above this build's.
+      mkdirSync(join(ptyRoot, '0.11.0'), { recursive: true })
+      const host = join(ptyRoot, '0.11.0', 'harness-pty.exe')
+      writeFileSync(host, `#!/bin/sh\necho '{"version":"0.11.0","protocol":${PTY_PROTOCOL + 1},"features":["seed"]}'\n`, { mode: 0o755 })
+      writeFileSync(join(ptyRoot, 'current-pty'), '0.11.0')
+      writeFileSync(join(ptyRoot, 'pty-pending.json'), JSON.stringify({ version: '0.11.0', previous: '0.10.0' }))
+      runMaster.mockClear()
+      startMaster({ scriptPath: '/cli/cli.js' }, () => {}, 'win32', () => ({}))
+      const config = runMaster.mock.calls[0][0] as { restoreUpdate(): void; confirmUpdate(): void; unjudgedUpdate(bundle: string | null): string | null }
+      expect(config.unjudgedUpdate(null)).toBeNull()
+      expect(readFileSync(join(ptyRoot, 'current-pty'), 'utf8').trim()).toBe('0.10.0')
+      expect(existsSync(join(ptyRoot, 'pty-pending.json'))).toBe(false)
+      expect(events.filter((e) => e.startsWith('lock') || e === 'release')).toEqual(['lock update', 'release'])
+      expect(events.some((e) => e.includes(`speaks protocol ${PTY_PROTOCOL + 1}, which this build does not — taking it back out rather than judging it`))).toBe(true)
+      // A rollback and a keep: each under the lock.
+      events.length = 0
+      writeFileSync(join(ptyRoot, 'pty-pending.json'), JSON.stringify({ version: '0.12.0', previous: '0.10.0' }))
+      config.restoreUpdate()
+      writeFileSync(join(ptyRoot, 'pty-pending.json'), JSON.stringify({ version: '0.12.0', previous: '0.10.0' }))
+      config.confirmUpdate()
+      expect(events.filter((e) => e.startsWith('lock') || e === 'release')).toEqual(['lock update', 'release', 'lock update', 'release'])
+    } finally {
+      log.mockRestore()
+      spawnLock.sync.mockReset()
+      spawnLock.sync.mockImplementation(() => () => {})
+      rmSync(join(root, 'runtime', 'pty'), { recursive: true, force: true })
+    }
   })
 
   it('keeps the services in the core when the core will have no local socket for them to reach it by', () => {

@@ -23,8 +23,10 @@ export function validGitPath(path: unknown): path is string {
   return typeof path === 'string' && isAbsolute(path) && path.length <= 4096 && !/[\x00-\x1f\x7f]/.test(path)
 }
 
-async function git(path: string, args: string[], timeout = 4000): Promise<string> {
-  const env = { ...process.env, GIT_TERMINAL_PROMPT: '0', GCM_INTERACTIVE: 'Never', GIT_OPTIONAL_LOCKS: '0' }
+/** [base]: the environment git starts from, the daemon's own unless a caller gives the one it must use instead
+ *  (lib/swarmGitHub.ts `swarmGitPrepareEnv`). */
+async function git(path: string, args: string[], timeout = 4000, base: NodeJS.ProcessEnv = process.env): Promise<string> {
+  const env = { ...base, GIT_TERMINAL_PROMPT: '0', GCM_INTERACTIVE: 'Never', GIT_OPTIONAL_LOCKS: '0' }
   for (const key of ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_COMMON_DIR', 'GIT_INDEX_FILE', 'GIT_NAMESPACE', 'GIT_PREFIX']) delete (env as NodeJS.ProcessEnv)[key]
   // core.fsmonitor names a program git runs on status/diff; a repository's own config must not choose
   // one for the daemon (same guard as projectPreview.ts).
@@ -201,6 +203,19 @@ async function originDefaultRef(path: string): Promise<string | null> {
   return null
 }
 
+/**
+ * Brings the remote's default branch up to date in [source], with [env]'s git setup instead of the daemon's: a Swarm
+ * host's fetch with the Harness GitHub App's token (lib/swarmGitHub.ts `swarmGitPrepareEnv`), before the worktree starts
+ * from it. True when it fetched. Offline, slow or refused, the worktree starts from what is here, as `prepareGitProject`'s
+ * own fetch does; a repository with no `origin` default branch has nothing to fetch.
+ */
+export async function fetchDefaultBranch(source: string, env: NodeJS.ProcessEnv): Promise<boolean> {
+  if (!validGitPath(source) || !(await insideGitCheckout(source))) return false
+  const remote = remoteBranch(await originDefaultRef(source) ?? undefined)
+  if (!remote) return false
+  return git(source, ['fetch', '--quiet', '--no-tags', remote.remote, remote.refspec], 60_000, env).then(() => true, () => false)
+}
+
 export type GitProjectOptions = {
   root: string
   worktree: boolean
@@ -210,6 +225,10 @@ export type GitProjectOptions = {
    *  from wherever `HEAD` is. A checkout nobody works in (a Swarm host's clone) stays where it was cloned, days
    *  behind. Only a Swarm start asks for it; a repository with no `origin` default branch starts from `HEAD`. */
   fromDefaultBranch?: boolean
+  /** Fetch nothing: start from what the checkout already has. A Swarm start doing another person's work: its host
+   *  fetched with the Harness GitHub App's token just before (`fetchDefaultBranch`), and this machine's own git
+   *  login must not be used for it. */
+  offline?: boolean
   /** The worktree's branch: created from `ref`, or with `existingBranch` checked out as it is. */
   branchName?: string
   existingBranch?: boolean
@@ -255,7 +274,7 @@ export async function prepareGitProject(source: string, options: GitProjectOptio
     const upstream = options.worktree && !existing && !remote && ref
       ? await git(source, ['for-each-ref', '--format=%(upstream)', ref]).then(found => remoteBranch(found) ? found : null, () => null)
       : null
-    const fetch = remote ?? remoteBranch(upstream ?? undefined)
+    const fetch = options.offline ? null : remote ?? remoteBranch(upstream ?? undefined)
     if (fetch) await git(source, ['fetch', '--quiet', '--no-tags', fetch.remote, fetch.refspec], 10_000).catch(() => '')
     // Behind or level with its upstream: the upstream is the newer.
     if (upstream && ref && await git(source, ['merge-base', '--is-ancestor', ref, upstream]).then(() => true, () => false)) {

@@ -1,4 +1,7 @@
 import 'dart:async';
+import 'dart:convert';
+
+import 'package:harness/measurement/product_measurement.dart';
 
 import 'package:fake_async/fake_async.dart';
 import 'package:flutter/foundation.dart';
@@ -47,6 +50,63 @@ SharedTabsController make(SharedTabsRequest r, {void Function(SharedActivity)? o
     SharedTabsController(request: r, foreground: front ?? ValueNotifier(true), onActivity: onActivity);
 
 void main() {
+  test('invite measurement counts acknowledgements without addresses or ids and separates pending acceptance', () async {
+    final reports = <Map<String, dynamic>>[];
+    final usage = ProductMeasurement(
+      surface: 'desktop',
+      automatic: false,
+      context: ProductUsageContext(
+        release: '1.2.3',
+        platform: 'macos',
+        production: true,
+      ),
+      sendSetup: (_) async => {'accepted': true},
+    );
+    usage.account(
+      'PRIVATE_ACCOUNT',
+      choice: () async => {'enabled': true, 'revision': 0},
+      send: (report) async {
+        reports.add(jsonDecode(jsonEncode(report)));
+        return {'accepted': true};
+      },
+    );
+    await usage.flush();
+    usage.proxyVocabulary = 5;
+    var pending = true;
+    final c = SharedTabsController(
+      foreground: ValueNotifier(true),
+      measurement: usage,
+      request: (p) async => switch (p['action']) {
+        'share_invite' => {
+          'invited': ['PRIVATE_1', 'PRIVATE_2'],
+          'refused': ['PRIVATE_3'],
+        },
+        'share_accept' => {'sharedTabId': 'PRIVATE_TAB', 'pending': pending},
+        _ => shares(),
+      },
+    );
+    await c.act('share_invite', {
+      'emails': ['PRIVATE_1', 'PRIVATE_2', 'PRIVATE_3'],
+    });
+    await c.act('share_accept', {'inviteId': 'PRIVATE_INVITE'});
+    pending = false;
+    await c.act('share_accept', {'inviteId': 'PRIVATE_INVITE'});
+    await usage.flush();
+    final totals = <String, int>{};
+    for (final r in reports) {
+      for (final e in (r['counters'] as Map).entries) {
+        totals[e.key as String] = (totals[e.key] ?? 0) + (e.value as int);
+      }
+    }
+    expect(totals['health_desktop_shared_invites_sent'], 2);
+    expect(totals['health_desktop_shared_invites_refused'], 1);
+    expect(totals['ui_desktop_share_accept_unknown'], 1);
+    expect(totals['ui_desktop_share_accept_ok'], 1);
+    expect(jsonEncode(reports), isNot(contains('PRIVATE')));
+    c.dispose();
+    usage.dispose();
+  });
+
   test("reads shares, and a member's desk tab is derived from its shared tab id (R1)", () async {
     final c = make((p) async => shares(rosters: [roster()]));
     await c.refresh();
@@ -462,6 +522,14 @@ void main() {
     });
     await c.refresh();
     await expectLater(c.act('share_leave', {}), throwsA(isA<SharedTabsFailure>().having((e) => e.code, 'code', 'UNAVAILABLE')));
+    await expectLater(
+      c.act('share_leave', {}),
+      throwsA(isA<SharedTabsFailure>().having(
+        (e) => e.message,
+        'message',
+        'Harness could not reach this computer. Check that it is online, then try again.',
+      )),
+    );
     error = TimeoutException('slow');
     await expectLater(c.act('share_leave', {}), throwsA(isA<SharedTabsFailure>().having((e) => e.code, 'code', 'UNAVAILABLE')));
     expect(c.snapshot.notices, hasLength(1));

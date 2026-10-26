@@ -17,6 +17,7 @@ import '../clipboard/native_clipboard.dart';
 import '../core/models.dart';
 import '../core/runtime_platform.dart';
 import '../state/app_state.dart';
+import '../state/workspace_chrome.dart';
 import '../state/harness_activity.dart';
 import '../state/model_start_watch.dart';
 import '../super_tabs/pane.dart';
@@ -46,7 +47,11 @@ import '../shared/theme/app_theme.dart' as grid;
 import '../shared/theme/workspace_bar_style.dart';
 import '../theme/app_theme.dart';
 import 'engine_identity.dart';
+import 'finger_target.dart';
 import 'harness_agent_control.dart';
+import 'harness_agent_picker.dart';
+import 'pane_menu.dart';
+import 'workspace_bar_control.dart';
 import '../agent_messages/pane_message_mark.dart';
 import '../agent_messages/pane_shared_chips.dart';
 import 'harness_activity_mark.dart';
@@ -84,6 +89,11 @@ typedef TerminalNotice = ({
   /// An offline machine is neither confusing nor rare, and a band on every one
   /// of those would cost rows in every tile.
   bool banner,
+
+  /// Whether the output underneath is not live: it is veiled, and this
+  /// notice's band lies over it rather than taking rows from it — a computer
+  /// on its way back, whose terminal comes back the size it was.
+  bool dimsScreen,
 });
 
 /// A [TerminalNotice] without spelling out the fields it does not have.
@@ -100,6 +110,7 @@ TerminalNotice terminalNotice({
   String? secondaryLabel,
   VoidCallback? onSecondary,
   bool banner = false,
+  bool dimsScreen = false,
 }) => (
   label: label,
   detail: detail,
@@ -109,6 +120,7 @@ TerminalNotice terminalNotice({
   secondaryLabel: secondaryLabel,
   onSecondary: onSecondary,
   banner: banner,
+  dimsScreen: dimsScreen,
 );
 
 /// A browser on a phone or tablet, typing through its on-screen keyboard.
@@ -173,8 +185,10 @@ class TerminalPanel extends StatefulWidget {
   /// same, but never retakes a terminal another client holds.
   final bool focusByUser;
 
-  /// Whether this tile's composer textbox is showing. Only consulted for a remote machine.
+  /// Whether this tile's composer is showing, for a remote machine or a first-run draft.
   final bool composerVisible;
+  final String? firstTask;
+  final VoidCallback? onFirstTaskSubmitted;
   final bool readOnly;
   final TerminalNotice? notice;
 
@@ -204,6 +218,8 @@ class TerminalPanel extends StatefulWidget {
     this.focusRequest = 0,
     this.focusByUser = true,
     this.composerVisible = false,
+    this.firstTask,
+    this.onFirstTaskSubmitted,
     this.readOnly = false,
     this.notice,
     this.onToggleComposer,
@@ -272,6 +288,11 @@ class _TerminalPanelState extends State<TerminalPanel>
   String? _passageStream;
   bool _passageRefreshPending = false;
   bool _cursorBlinkVisible = true;
+
+  /// A view-only terminal, where the host labels pane states (the web): a
+  /// lock is drawn where its cursor is, and the cursor is hidden. Audit S4.
+  bool _cursorLocked = false;
+  final _cursorLockKey = GlobalKey(debugLabel: 'terminal cursor lock');
   double _alternateScrollRemainder = 0;
   int? _lastInertiaMicros;
   late final TerminalLinkOpener _linkOpener;
@@ -548,7 +569,8 @@ class _TerminalPanelState extends State<TerminalPanel>
   /// one, which is what puts it on the loopback transport.
   bool get _showsComposer {
     final machineState = widget.notifier.stateOf(widget.session.machineId);
-    return machineState?.isLocalMachine != true && widget.composerVisible;
+    return (machineState?.isLocalMachine != true || widget.firstTask != null) &&
+        widget.composerVisible;
   }
 
   /// The composer refuses focus while it is disabled, which it is until the stream goes live. When
@@ -984,6 +1006,23 @@ class _TerminalPanelState extends State<TerminalPanel>
   void _stopCursorBlink() {
     _cursorBlinkTimer?.cancel();
     _cursorBlinkTimer = null;
+    _setCursorBlinkVisible(!_cursorLocked);
+  }
+
+  /// Follows [_cursorLocked] to what the session is now; read in build, where
+  /// the host's chrome can be.
+  void _syncCursorLock(bool locked) {
+    if (locked) {
+      _cursorLocked = true;
+      _stopCursorBlink();
+      // On every build, not only when the lock comes: a keyframe (a reopen or
+      // a resync) brings a new emulator and resets the session's blink phase,
+      // which would show the cursor again under the lock.
+      if (widget.session.setCursorBlinkPhase(false)) _repaintTerminalCursor();
+      return;
+    }
+    if (!_cursorLocked) return;
+    _cursorLocked = false;
     _setCursorBlinkVisible(true);
   }
 
@@ -1869,6 +1908,17 @@ class _TerminalPanelState extends State<TerminalPanel>
       return KeyEventResult.handled;
     }
     final keyboard = HardwareKeyboard.instance;
+    // A computer on its way back ([TerminalNotice.dimsScreen]): what is typed
+    // now is dropped, as its band says, rather than sent to a link that is
+    // down. ⌘ chords are still the app's.
+    if (widget.notice?.dimsScreen == true &&
+        event is! KeyUpEvent &&
+        !keyboard.isMetaPressed &&
+        (_isTypingKey(event) ||
+            event.logicalKey == LogicalKeyboardKey.enter ||
+            event.logicalKey == LogicalKeyboardKey.numpadEnter)) {
+      return KeyEventResult.handled;
+    }
     // A pane that lost control still gets the keys (xterm's read-only mode
     // keeps the focus node, it only stops opening an input connection), and
     // dropping them silently is how people sit typing into a frozen pane. ⏎
@@ -2170,6 +2220,9 @@ class _TerminalPanelState extends State<TerminalPanel>
     final session = widget.session;
     _syncTerminal(session.terminal);
     _builtStatus = session.status;
+    _syncCursorLock(
+      session.readOnly && WorkspaceChrome.of(context).labelsPaneStatus,
+    );
     final machineState = widget.notifier.stateOf(session.machineId);
     final remote = machineState != null && !machineState.isLocalMachine;
     final showComposer = _showsComposer;
@@ -2400,6 +2453,7 @@ class _TerminalPanelState extends State<TerminalPanel>
                           onTakeControl: _inputBlocked
                               ? () => unawaited(_takeControl())
                               : null,
+                          keyHints: WorkspaceChrome.of(context).showsKeyHints,
                         ),
                       ),
                     if (session.uploadProgress != null ||
@@ -2433,13 +2487,65 @@ class _TerminalPanelState extends State<TerminalPanel>
                           ],
                         ),
                       ),
+                    // Last, so nothing above moves when they come and go.
+                    if (_cursorLocked)
+                      ValueListenableBuilder<bool>(
+                        // A cursor the program hid (ESC[?25l) gets no lock
+                        // either, rather than one in a stray cell.
+                        valueListenable: session.remoteCursorVisibility,
+                        builder: (context, shown, lock) => Positioned.fill(
+                          child: shown ? lock! : const SizedBox.shrink(),
+                        ),
+                        child: IgnorePointer(
+                          child: KeyedSubtree(
+                            key: const ValueKey('terminal-cursor-lock'),
+                            child: CustomPaint(
+                              key: _cursorLockKey,
+                              painter: _CursorLockPainter(
+                                source: session.terminal,
+                                terminal: _laidOutTerminalView,
+                                host: () =>
+                                    _cursorLockKey.currentContext
+                                            ?.findRenderObject()
+                                        as RenderBox?,
+                                color: terminalThemeFor(
+                                  grid.AppTheme.palette.value,
+                                  terminalThemeStore.value,
+                                ).foreground.withValues(alpha: .70),
+                                repaint: Listenable.merge([
+                                  _scrollController,
+                                  _TerminalChanges(session.terminal),
+                                ]),
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                    if (widget.notice case final notice?
+                        when notice.dimsScreen) ...[
+                      Positioned.fill(
+                        child: IgnorePointer(
+                          child: ColoredBox(
+                            color: grid.AppPalette.windowBg.withValues(
+                              alpha: .55,
+                            ),
+                          ),
+                        ),
+                      ),
+                      Positioned(
+                        top: 0,
+                        left: 0,
+                        right: 0,
+                        child: _ControlBanner.notice(notice),
+                      ),
+                    ],
                   ],
                 ),
               ),
             ),
             // The grip is shown whether or not the box is: collapsed, it is the only way back.
             if (!widget.compactHeader &&
-                remote &&
+                (remote || widget.firstTask != null) &&
                 widget.onToggleComposer != null)
               ColoredBox(
                 color: chromeFill,
@@ -2455,6 +2561,8 @@ class _TerminalPanelState extends State<TerminalPanel>
                 child: TerminalComposer(
                   session: session,
                   focusNode: _composerFocus,
+                  initialText: widget.firstTask ?? '',
+                  onSubmitted: widget.onFirstTaskSubmitted,
                   inputEnabled: !widget.readOnly && !session.readOnly,
                   onPasteNonText: _paste,
                 ),
@@ -2710,6 +2818,163 @@ class _TerminalHeader extends StatelessWidget {
   Widget build(BuildContext context) =>
       MediaQuery.withNoTextScaling(child: Builder(builder: _buildHeader));
 
+  /// The header on a phone ([WorkspaceChrome.compactPaneHeaderAt]): the name
+  /// first, the pane's state in words, agent and model behind one menu, and
+  /// controls a finger can hit. Audit findings S2 and S1.
+  Widget _phoneHeader(
+    BuildContext context, {
+    required String title,
+    required TextStyle titleStyle,
+    required String identityDetail,
+    required bool renamable,
+    required TerminalNotice? status,
+    required Color statusColor,
+    required VoidCallback? statusAction,
+    required ModelStartPhase? starting,
+    required Agent? agent,
+    required bool canChangeModel,
+  }) {
+    final machine = notifier.stateOf(session.machineId);
+    final openAgentPicker = notifier.openAgentPicker;
+    final changeAgent =
+        agent != null &&
+            openAgentPicker != null &&
+            machine?.machine.isShared == false &&
+            machine?.nodeOnline != false
+        ? () => openAgentPicker(session.machineId, agent.id)
+        : null;
+    final changeModel =
+        canChangeModel && onOpenModels != null && !readOnly && !session.readOnly
+        ? pickerController?.open
+        : null;
+    return SizedBox(
+      height: kFingerTarget,
+      child: Padding(
+        padding: const EdgeInsets.only(
+          left: _stripPadding,
+          right: grid.AppDesktop.paneCloseInset,
+        ),
+        child: LayoutBuilder(
+          builder: (context, constraints) => Row(
+            children: [
+              Expanded(
+                child: Tooltip(
+                  message: identityDetail,
+                  waitDuration: const Duration(milliseconds: 500),
+                  child: GestureDetector(
+                    behavior: HitTestBehavior.opaque,
+                    onDoubleTap: renamable
+                        ? () => unawaited(
+                            showAgentRenameDialog(
+                              context,
+                              notifier,
+                              session.machineId,
+                              session.agentId,
+                              session.agentName,
+                            ),
+                          )
+                        : null,
+                    child: Text(
+                      title,
+                      key: const ValueKey('terminal-pane-title'),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: titleStyle,
+                    ),
+                  ),
+                ),
+              ),
+              // A state in words says what the activity mark's ⊘ would.
+              if (status == null)
+                HarnessActivityMark(
+                  app: notifier,
+                  machineId: session.machineId,
+                  agentId: session.agentId,
+                ),
+              if (status != null || starting != null) const SizedBox(width: 8),
+              if (status != null)
+                ConstrainedBox(
+                  key: const ValueKey('pane-header-status'),
+                  constraints: BoxConstraints(
+                    maxWidth: constraints.maxWidth * .45,
+                  ),
+                  // Pressable (Take control, Reconnect): a finger's height.
+                  child: fingerTarget(
+                    enabled: statusAction != null,
+                    _PaneStatusChip(
+                      status: status,
+                      color: statusColor,
+                      onPressed: statusAction,
+                      showsIcon: false,
+                      labelWhenInert: true,
+                    ),
+                  ),
+                )
+              else if (starting != null)
+                PaneStartingChip(phase: starting, narrow: true),
+              if (canChangeModel) _modelPicker(context, agent, menuOnly: true),
+              fingerTarget(
+                enabled: true,
+                _PaneIdentityMenuButton(
+                  engine: session.engineId,
+                  agentLabel: agent == null
+                      ? null
+                      : HarnessAgentPicker.label(agent.engine ?? ''),
+                  model: agent?.gridModel ?? agent?.modelName,
+                  onChangeAgent: changeAgent,
+                  onChangeModel: changeModel,
+                ),
+              ),
+              if (onClose != null)
+                fingerTarget(
+                  enabled: true,
+                  PaneCloseButton(onPressed: onClose!),
+                ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// This pane's model control: the header's label, or with [menuOnly] none,
+  /// opened from elsewhere through [pickerController].
+  GridModelPicker _modelPicker(
+    BuildContext context,
+    Agent? agent, {
+    bool compact = false,
+    bool menuOnly = false,
+  }) => GridModelPicker(
+    key: ValueKey(('pane-model', session.machineId, session.agentId)),
+    paneHeader: true,
+    menuOnly: menuOnly,
+    onOpen: onOpenModels,
+    enabled: !readOnly && !session.readOnly,
+    compact: compact,
+    notifier: notifier,
+    machineId: session.machineId,
+    currentModel: agent?.gridModel,
+    subscriptionModel: agent?.modelName,
+    webSearch: agent?.gridWebSearch,
+    engineLabel: session.engineId,
+    controller: pickerController,
+    onSelected: (model) => unawaited(
+      notifier.retargetAgentToGridModel(
+        session.machineId,
+        session.agentId,
+        model.id,
+        gridName: model.grid,
+      ),
+    ),
+    onUseOwnLogin: () =>
+        unawaited(notifier.clearAgentGrid(session.machineId, session.agentId)),
+    // Discovery opens the local Models popover. Selection above
+    // continues to target this pane's existing session.
+    onRunLocalModel: () => unawaited(
+      notifier.runLocalModel(context, machineId: session.machineId),
+    ),
+  );
+
   Widget _buildHeader(BuildContext context) {
     TerminalFontScope.watch(context);
     final titleStyle = workspaceBarTextStyle(
@@ -2765,7 +3030,16 @@ class _TerminalHeader extends StatelessWidget {
                 session.errorCode ??
                 'This stream is closed. Retained output is read only.',
           ),
-        };
+        } ??
+        // Watched, not controlled: said in words where the host labels pane
+        // states (the web), where it was only a greyed model name.
+        (session.readOnly && WorkspaceChrome.of(context).labelsPaneStatus
+            ? terminalNotice(
+                label: 'View only',
+                icon: AppIcons.lock,
+                detail: 'You can watch this terminal. Typing is off.',
+              )
+            : null);
     // A notice that carries its own way out owns the button — a machine that
     // needs linking asks for its password there. Otherwise the button is the
     // session's own reconnect, which a notice has always suppressed.
@@ -2820,6 +3094,24 @@ class _TerminalHeader extends StatelessWidget {
     // A fork says so first: "forked from X" is the one fact about this pane
     // that the folder and the branch — shared with its source — cannot tell.
     final forkedFrom = agent?.forkedFrom;
+    if (WorkspaceChrome.of(context)
+        .compactPaneHeaderAt(MediaQuery.sizeOf(context).width)) {
+      return _carried(
+        _phoneHeader(
+          context,
+          title: title,
+          titleStyle: titleStyle,
+          identityDetail: identityDetail,
+          renamable: roleTitle == null,
+          status: status,
+          statusColor: color,
+          statusAction: statusAction,
+          starting: starting,
+          agent: agent,
+          canChangeModel: showModelPicker,
+        ),
+      );
+    }
     final header = SizedBox(
       height: compact ? 38 : 46,
       child: Padding(
@@ -3062,46 +3354,10 @@ class _TerminalHeader extends StatelessWidget {
                               ),
                               child: Align(
                                 alignment: Alignment.centerLeft,
-                                child: Tooltip(
-                                  message: status.detail,
-                                  child: TextButton(
-                                    onPressed: statusAction,
-                                    style: TextButton.styleFrom(
-                                      foregroundColor: color,
-                                      disabledForegroundColor:
-                                          AppColors.textSoft,
-                                      minimumSize: Size.zero,
-                                      tapTargetSize:
-                                          MaterialTapTargetSize.shrinkWrap,
-                                      padding: const EdgeInsets.symmetric(
-                                        horizontal: 6,
-                                        vertical: 4,
-                                      ),
-                                    ),
-                                    child: Row(
-                                      mainAxisSize: MainAxisSize.min,
-                                      children: [
-                                        Icon(status.icon, size: 14),
-                                        const SizedBox(width: 6),
-                                        Flexible(
-                                          child: Text(
-                                            // The chip names the STATE; what
-                                            // pressing it does is in the tooltip
-                                            // and in `actionLabel`. "Link
-                                            // required" that can be pressed reads
-                                            // better than a bare verb where every
-                                            // neighbour is a status.
-                                            status.label,
-                                            maxLines: 1,
-                                            overflow: TextOverflow.ellipsis,
-                                            style: grid.AppType.monoLabel(
-                                              fontWeight: FontWeight.w400,
-                                            ),
-                                          ),
-                                        ),
-                                      ],
-                                    ),
-                                  ),
+                                child: _PaneStatusChip(
+                                  status: status,
+                                  color: color,
+                                  onPressed: statusAction,
                                 ),
                               ),
                             )
@@ -3206,46 +3462,7 @@ class _TerminalHeader extends StatelessWidget {
                           )
                         : null,
                     modelPicker: showModelPicker
-                        ? GridModelPicker(
-                            key: ValueKey((
-                              'pane-model',
-                              session.machineId,
-                              session.agentId,
-                            )),
-                            paneHeader: true,
-                            onOpen: onOpenModels,
-                            enabled: !readOnly && !session.readOnly,
-                            compact: narrow,
-                            notifier: notifier,
-                            machineId: session.machineId,
-                            currentModel: agent?.gridModel,
-                            subscriptionModel: agent?.modelName,
-                            webSearch: agent?.gridWebSearch,
-                            engineLabel: session.engineId,
-                            controller: pickerController,
-                            onSelected: (model) => unawaited(
-                              notifier.retargetAgentToGridModel(
-                                session.machineId,
-                                session.agentId,
-                                model.id,
-                                gridName: model.grid,
-                              ),
-                            ),
-                            onUseOwnLogin: () => unawaited(
-                              notifier.clearAgentGrid(
-                                session.machineId,
-                                session.agentId,
-                              ),
-                            ),
-                            // Discovery opens the local Models popover. Selection above
-                            // continues to target this pane's existing session.
-                            onRunLocalModel: () => unawaited(
-                              notifier.runLocalModel(
-                                context,
-                                machineId: session.machineId,
-                              ),
-                            ),
-                          )
+                        ? _modelPicker(context, agent, compact: narrow)
                         : null,
                     details: compact || narrow
                         ? null
@@ -3292,7 +3509,11 @@ class _TerminalHeader extends StatelessWidget {
         ),
       ),
     );
-    final strip = header;
+    return _carried(header);
+  }
+
+  /// [strip], carried by this pane's drag when it has one.
+  Widget _carried(Widget strip) {
     final handle = paneDrag;
     if (handle == null) return strip;
 
@@ -3319,6 +3540,236 @@ class _TerminalHeader extends StatelessWidget {
       child: ColoredBox(color: Colors.transparent, child: strip),
     );
   }
+}
+
+/// A pane's state as a chip: its icon and its word, the detail in the tooltip,
+/// pressed for the way out it offers when it offers one.
+class _PaneStatusChip extends StatelessWidget {
+  const _PaneStatusChip({
+    required this.status,
+    required this.color,
+    required this.onPressed,
+    this.showsIcon = true,
+    this.labelWhenInert = false,
+  });
+
+  final TerminalNotice status;
+  final Color color;
+  final VoidCallback? onPressed;
+
+  /// False on a phone, where the word is what the room is for.
+  final bool showsIcon;
+
+  /// True on a phone: a state with nothing to press is drawn as words, not
+  /// as a disabled button a finger would try.
+  final bool labelWhenInert;
+
+  static const _padding = EdgeInsets.symmetric(horizontal: 6, vertical: 4);
+
+  @override
+  Widget build(BuildContext context) {
+    final content = Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        if (showsIcon) ...[
+          Icon(status.icon, size: 14),
+          const SizedBox(width: 6),
+        ],
+        Flexible(
+          child: Text(
+            // The chip names the STATE; what pressing it does is in the
+            // tooltip and in `actionLabel`. "Link required" that can be
+            // pressed reads better than a bare verb where every neighbour is
+            // a status.
+            status.label,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: grid.AppType.monoLabel(fontWeight: FontWeight.w400),
+          ),
+        ),
+      ],
+    );
+    return Tooltip(
+      message: status.detail,
+      child: labelWhenInert && onPressed == null
+          ? Padding(
+              padding: _padding,
+              child: IconTheme.merge(
+                data: IconThemeData(color: AppColors.textSoft),
+                child: DefaultTextStyle.merge(
+                  style: TextStyle(color: AppColors.textSoft),
+                  child: content,
+                ),
+              ),
+            )
+          : TextButton(
+              onPressed: onPressed,
+              style: TextButton.styleFrom(
+                foregroundColor: color,
+                disabledForegroundColor: AppColors.textSoft,
+                minimumSize: Size.zero,
+                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                padding: _padding,
+              ),
+              child: content,
+            ),
+    );
+  }
+}
+
+/// Agent and model behind one control, for a phone's header: the engine's
+/// mark, and a menu with a row for each picker the header would show.
+class _PaneIdentityMenuButton extends StatelessWidget {
+  const _PaneIdentityMenuButton({
+    required this.engine,
+    required this.agentLabel,
+    required this.model,
+    required this.onChangeAgent,
+    required this.onChangeModel,
+  });
+
+  final String? engine;
+  final String? agentLabel;
+  final String? model;
+  final VoidCallback? onChangeAgent, onChangeModel;
+
+  Future<void> _open(BuildContext context) async {
+    final box = context.findRenderObject() as RenderBox?;
+    final overlay =
+        Overlay.of(context).context.findRenderObject() as RenderBox?;
+    if (box == null || overlay == null) return;
+    final origin = box.localToGlobal(Offset.zero, ancestor: overlay);
+    final choice = await showPaneMenu<VoidCallback>(
+      context: context,
+      // Opened by a press: no row is lit until the pointer picks one.
+      focusFirst: false,
+      position: RelativeRect.fromLTRB(
+        origin.dx,
+        origin.dy + box.size.height,
+        overlay.size.width - origin.dx - box.size.width,
+        0,
+      ),
+      minWidth: 220,
+      maxWidth: 320,
+      children: (close) => [
+        for (final (title, detail, action) in [
+          ('Agent', agentLabel, onChangeAgent),
+          ('Model', model, onChangeModel),
+        ])
+          if (action != null)
+            paneMenuItem(
+              onTap: () => close(action),
+              child: fingerTarget(
+                enabled: true,
+                PaneMenuRow(selected: false, title: title, status: detail),
+              ),
+            ),
+      ],
+    );
+    // Run once the menu has closed and handed focus back.
+    choice?.call();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    grid.AppTheme.watch(context);
+    final foreground = terminalThemeFor(
+      grid.AppTheme.palette.value,
+      terminalThemeStore.value,
+    ).foreground;
+    final enabled = onChangeAgent != null || onChangeModel != null;
+    return WorkspaceBarControl(
+      label: 'Agent and model',
+      tooltip: [?agentLabel, ?model].join(' · '),
+      foreground: foreground,
+      onPressed: enabled ? () => unawaited(_open(context)) : null,
+      builder: (context, emphasized) => SizedBox(
+        height: workspaceBarControlHeight(context),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            EngineMark(engine: engine, size: 14, enabled: enabled),
+            Icon(
+              AppIcons.chevronDown,
+              size: 12,
+              color: foreground.withValues(alpha: emphasized ? 1 : .75),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// A lock in the cursor's cell, for a terminal that cannot be typed into.
+class _CursorLockPainter extends CustomPainter {
+  _CursorLockPainter({
+    required this.source,
+    required this.terminal,
+    required this.host,
+    required this.color,
+    super.repaint,
+  });
+
+  final Terminal source;
+  final TerminalViewState? Function() terminal;
+  final RenderBox? Function() host;
+  final Color color;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final render = terminal()?.renderTerminal;
+    final box = host();
+    if (render == null || box == null || !render.attached) return;
+    final buffer = source.buffer;
+    final at = box.globalToLocal(
+      render.localToGlobal(
+        render.getOffset(CellOffset(buffer.cursorX, buffer.absoluteCursorY)),
+      ),
+    );
+    final cell = render.cellSize;
+    final icon = AppIcons.lock;
+    final glyph = TextPainter(
+      text: TextSpan(
+        text: String.fromCharCode(icon.codePoint),
+        style: TextStyle(
+          fontFamily: icon.fontFamily,
+          package: icon.fontPackage,
+          fontSize: cell.height * .8,
+          color: color,
+        ),
+      ),
+      textDirection: TextDirection.ltr,
+    )..layout();
+    glyph.paint(
+      canvas,
+      at +
+          Offset(
+            (cell.width - glyph.width) / 2,
+            (cell.height - glyph.height) / 2,
+          ),
+    );
+    glyph.dispose();
+  }
+
+  @override
+  bool shouldRepaint(_CursorLockPainter old) =>
+      !identical(old.source, source) || old.color != color;
+}
+
+/// The emulator's change notices as a [Listenable], to repaint by.
+class _TerminalChanges implements Listenable {
+  const _TerminalChanges(this.terminal);
+
+  final Terminal terminal;
+
+  @override
+  void addListener(VoidCallback listener) => terminal.addListener(listener);
+
+  @override
+  void removeListener(VoidCallback listener) =>
+      terminal.removeListener(listener);
 }
 
 /// A domain harness's verdict on the agent's workspace, in one word or one count.
@@ -3444,12 +3895,17 @@ class _ControlBanner extends StatelessWidget {
   /// person can act on. Null for the takeover band above.
   final TerminalNotice? notice;
 
+  /// False where the host hides key hints ([WorkspaceChrome.showsKeyHints]):
+  /// the band names the click alone, and its button draws no ⏎. Audit S8.
+  final bool keyHints;
+
   const _ControlBanner({
     required this.busy,
     required this.nudged,
     required this.nudge,
     required this.onTakeControl,
     this.takerName,
+    this.keyHints = true,
   }) : notice = null;
 
   /// The band for a notice that offers a way out — the same strip, the same
@@ -3460,7 +3916,8 @@ class _ControlBanner extends StatelessWidget {
       nudged = false,
       nudge = 0,
       onTakeControl = null,
-      takerName = null;
+      takerName = null,
+      keyHints = true;
 
   String get title => notice != null
       ? notice!.label
@@ -3473,8 +3930,14 @@ class _ControlBanner extends StatelessWidget {
   String? get detail {
     if (notice != null) return notice!.detail;
     if (busy) return null;
-    if (nudged) return 'Keys are ignored — press ⏎ to take control.';
-    return 'Typing is paused. Click here or press ⏎ to take control.';
+    if (nudged) {
+      return keyHints
+          ? 'Keys are ignored — press ⏎ to take control.'
+          : 'Keys are ignored — click here to take control.';
+    }
+    return keyHints
+        ? 'Typing is paused. Click here or press ⏎ to take control.'
+        : 'Typing is paused. Click here to take control.';
   }
 
   @override
@@ -3591,7 +4054,10 @@ class _ControlBanner extends StatelessWidget {
                             ))
                     : busy
                     ? null
-                    : _ControlBannerButton(onPressed: onTakeControl);
+                    : _ControlBannerButton(
+                        onPressed: onTakeControl,
+                        showReturnKey: keyHints,
+                      );
                 final secondary = notice?.secondaryLabel;
                 final button = secondary == null
                     ? primary

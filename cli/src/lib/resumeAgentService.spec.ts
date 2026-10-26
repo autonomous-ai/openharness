@@ -6,6 +6,7 @@ import { createResumeAgentService, type ResumeAgentServiceDeps } from './resumeA
 import { RESUME_READINESS_BUDGET_MS } from './resumeStoppedAgent.js'
 import { registry, type RegisteredSession } from './registry.js'
 import { controlTranscriptEvidence } from '../engines/transcriptBindings.js'
+import { materializeResumeTranscript } from '../engines/resumeTranscript.js'
 import { IdentityReadUnavailable } from '../engines/kit/identityScan.js'
 import { env } from '../config/env.js'
 import { StoppedAgentStore } from './stoppedAgents.js'
@@ -14,7 +15,8 @@ import { checkPidRuntime } from './deleteAgentFallback.js'
 import { checkSessionRuntime, resolvePaneEngineProcess } from './paneEngineProcess.js'
 import { windowsAfterExit, windowsPaneLaunch } from './windows/engineStart.js'
 import { buildEngineLaunchArgv, dropPermissionFlagIfUnsupported, engineLaunchEnv, refusePermissionFlagIfUnsupported } from './engineLaunch.js'
-import { enginePathOverride } from './engineBin.js'
+import { engineBin, enginePathOverride } from './engineBin.js'
+import { stopConflictingBackgroundJob } from './claudeBackgroundJob.js'
 import { installedDsh } from '../dsh/installed.js'
 import { createLaunchHelpers } from '../core/agents/launch.js'
 import { createLaunchAuthority } from '../core/agents/launchAuthority.js'
@@ -40,10 +42,12 @@ vi.mock('./engineLaunch.js', async importOriginal => ({
   dropPermissionFlagIfUnsupported: vi.fn(async (_engine: unknown, choice: unknown) => ({ choice, droppedFlag: null })),
   refusePermissionFlagIfUnsupported: vi.fn(async () => null),
 }))
-vi.mock('./engineBin.js', () => ({ enginePathOverride: vi.fn(() => undefined) }))
+vi.mock('./engineBin.js', () => ({ enginePathOverride: vi.fn(() => undefined), engineBin: vi.fn((engine: string) => engine) }))
+vi.mock('./claudeBackgroundJob.js', () => ({ stopConflictingBackgroundJob: vi.fn(async () => {}) }))
 vi.mock('./engineInstall.js', async original => ({ ...await original<object>(), engineInstallRecipe: () => ({ command: 'fixture-install' }) }))
 vi.mock('../dsh/installed.js', () => ({ installedDsh: vi.fn() }))
 vi.mock('../engines/transcriptBindings.js', async original => ({ ...await original<object>(), controlTranscriptEvidence: vi.fn() }))
+vi.mock('../engines/resumeTranscript.js', () => ({ materializeResumeTranscript: vi.fn(async (_engine, _id, path) => path) }))
 
 let dir: string
 let saved: RegisteredSession
@@ -103,6 +107,7 @@ beforeEach(() => {
   create.mockReset().mockResolvedValue({ state: 'succeeded', runtime: { backend: 'tmux', paneId: pane } })
   kill.mockReset().mockResolvedValue({ state: 'succeeded' })
   vi.mocked(controlTranscriptEvidence).mockImplementation((_engine, _id, path) => ({ path, verify: vi.fn() }))
+  vi.mocked(materializeResumeTranscript).mockReset().mockImplementation(async (_engine, _id, path) => path)
   vi.mocked(enginePathOverride).mockReturnValue(undefined)
   vi.mocked(refusePermissionFlagIfUnsupported).mockReset().mockResolvedValue(null)
   vi.mocked(installedDsh).mockReturnValue(undefined)
@@ -134,6 +139,41 @@ beforeEach(() => {
 afterEach(() => { vi.useRealTimers(); for (const row of registry.list()) registry.removeAgent(row.agentId); rmSync(dir, { recursive: true, force: true }) })
 
 describe('production resume handler', () => {
+  it('holds the reservation and restores cold history before checking its control identity', async () => {
+    const restored = join(dir, 'restored.jsonl')
+    vi.mocked(materializeResumeTranscript).mockImplementation(async (_engine, _id, _path, _profile, current) => {
+      expect(deps.stoppedAgents.resumeReservedAt(saved.agentId)).not.toBeNull()
+      expect(current()).toBe(true)
+      expect(controlTranscriptEvidence).not.toHaveBeenCalled()
+      expect(create).not.toHaveBeenCalled()
+      return restored
+    })
+    expect(await start()).toMatchObject({ ok: true })
+    expect(controlTranscriptEvidence).toHaveBeenCalledWith('codex', saved.sessionId, restored, undefined, saved.cwd)
+  })
+
+  it('does not allocate when Stop cancels an asynchronous history restoration', async () => {
+    vi.mocked(materializeResumeTranscript).mockImplementation(async (_engine, _id, path, _profile, current) => {
+      deps.restartJobs.cancel(saved.agentId)
+      expect(current()).toBe(false)
+      return path
+    })
+    expect(await start()).toMatchObject({ error: 'AGENT_CHANGED' })
+    expect(create).not.toHaveBeenCalled()
+    expect(deps.stoppedAgents.resumeReservedAt(saved.agentId)).toBeNull()
+  })
+
+  it('restoration loses permission if another harness takes the conversation', async () => {
+    vi.mocked(materializeResumeTranscript).mockImplementation(async (_engine, _id, _path, _profile, current) => {
+      registry.resumePendingAgent({ ...saved, agentId: 'other' }, [{ backend: 'tmux', paneId: '%101' }])
+      expect(current()).toBe(false)
+      throw new IdentityReadUnavailable('another harness owns the conversation')
+    })
+    expect(await start()).toMatchObject({ error: 'IDENTITY_UNAVAILABLE' })
+    expect(create).not.toHaveBeenCalled()
+    expect(deps.stoppedAgents.resumeReservedAt(saved.agentId)).toBeNull()
+  })
+
   it('composes stopped resume with real launch preparation before any live row exists', async () => {
     const apiNotes = vi.fn()
     const helpers = createLaunchHelpers({
@@ -310,6 +350,52 @@ describe('production resume handler', () => {
     rewrite({ engine: 'opencode', transcriptPath: '' })
     expect(await start()).toMatchObject({ ok: true, resumed: true, session: { launch: { state: 'ready' } } })
     expect(buildEngineLaunchArgv).toHaveBeenCalledWith('opencode', expect.objectContaining({ resumeSessionId: saved.sessionId }))
+  })
+
+  it('stops a live `claude --bg` job on the exact session before building the resume argv', async () => {
+    rewrite({ engine: 'claude' })
+    expect(await start()).toMatchObject({ ok: true, resumed: true })
+    expect(stopConflictingBackgroundJob).toHaveBeenCalledWith(expect.objectContaining({
+      bin: engineBin('claude'), sessionId: saved.sessionId,
+    }))
+    const stopOrder = vi.mocked(stopConflictingBackgroundJob).mock.invocationCallOrder[0]
+    const argvOrder = vi.mocked(buildEngineLaunchArgv).mock.invocationCallOrder[0]
+    expect(stopOrder).toBeLessThan(argvOrder)
+  })
+
+  it('never checks for a background job on a fresh or fork launch (no resumeSessionId)', async () => {
+    rewrite({ engine: 'claude', sessionId: '' })
+    await start()
+    expect(stopConflictingBackgroundJob).not.toHaveBeenCalled()
+  })
+
+  it('does not check for a background job on a non-Claude engine', async () => {
+    expect(saved.engine).toBe('codex')
+    await start()
+    expect(stopConflictingBackgroundJob).not.toHaveBeenCalled()
+  })
+
+  it('skips the background-job check for a DSH agent: its pane may run on a different host', async () => {
+    rewrite({ engine: 'claude', dsh: { id: 'fixture-dsh', url: 'https://example.test' } as any })
+    vi.mocked(installedDsh).mockReturnValue(true as any)
+    await start()
+    expect(stopConflictingBackgroundJob).not.toHaveBeenCalled()
+  })
+
+  it('still checks for a background job on a captured-native launch, with that launch\'s own environment', async () => {
+    // `native` is the captured launch for every ordinary LOCAL Claude run (launchOverrides.ts), not a
+    // signal the pane is elsewhere — it must not turn this off. `launchEnv` here stands in for what
+    // launchOverrides.ts really produces: `native.environment` (its CLAUDE_CONFIG_DIR) merged in already.
+    rewrite({ engine: 'claude' })
+    const native: NativeLaunch = { token: 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee', opencodeMajor: null,
+      environment: { CLAUDE_CONFIG_DIR: '/native/claude-home' }, proofs: [], current: vi.fn(() => true),
+      prepareHooks: vi.fn(async () => true), permission: vi.fn(async () => 'supported' as const) }
+    vi.mocked(deps.relaunchOverrides).mockResolvedValue({ ok: true,
+      overrides: { env: { CLAUDE_CONFIG_DIR: '/native/claude-home' }, extraArgs: [], clearEnv: [], native } })
+    await start()
+    expect(stopConflictingBackgroundJob).toHaveBeenCalledWith(expect.objectContaining({
+      sessionId: saved.sessionId, env: expect.objectContaining({ CLAUDE_CONFIG_DIR: '/native/claude-home' }),
+    }))
   })
 
   it('marks an engine with no startup hook ready off its own process', async () => {

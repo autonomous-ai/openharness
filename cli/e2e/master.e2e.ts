@@ -55,7 +55,7 @@ describe('harnessd', () => {
     expect(d.corePid()).not.toBe(d.pid)
     expect(readFileSync(join(d.dataDir, 'adapter.pid'), 'utf8').trim()).toBe(String(d.pid))
     // The app judges who owns the daemon by this pid: the master's, as in the pid file, not the core's.
-    const status = await (await fetch(`http://127.0.0.1:${d.port}/api/status`)).json() as Record<string, any>
+    const status = await (await fetch(`http://127.0.0.1:${d.port}/api/status`, { headers: d.localHeaders() })).json() as Record<string, any>
     expect(status.pid).toBe(d.pid)
     expect(status.corePid).toBe(d.corePid())
     expect(status.harnessd.masterPid).toBe(d.pid)
@@ -127,7 +127,7 @@ describe('harnessd', () => {
     const core = d.corePid()!
     expect(core).not.toBe(master)
     expect(Number(execFileSync('ps', ['-o', 'ppid=', '-p', String(core)], { encoding: 'utf8' }).trim())).toBe(master)
-    const status = await (await fetch(`http://127.0.0.1:${d.port}/api/status`)).json() as Record<string, any>
+    const status = await (await fetch(`http://127.0.0.1:${d.port}/api/status`, { headers: d.localHeaders() })).json() as Record<string, any>
     expect(status.harnessd.masterPid).toBe(master)
     expect(readFileSync(join(d.dataDir, 'adapter.pid'), 'utf8').trim()).toBe(String(master))
     // A crashed core is restarted under it, and the agent goes on.

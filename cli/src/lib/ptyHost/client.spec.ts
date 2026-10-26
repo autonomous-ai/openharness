@@ -24,6 +24,8 @@ interface FakeHostOptions {
    * one made with a guessed token.
    */
   proof?: 'right' | 'none' | 'reflect' | 'fromAuth' | 'guess'
+  /** The hello reply's `features`: absent (a host from before them) unless given. */
+  features?: unknown
 }
 interface FakeHost {
   discovery: PtyHostDiscovery
@@ -79,7 +81,8 @@ async function fakeHost(options: FakeHostOptions = {}): Promise<FakeHost> {
             : options.proof === 'fromAuth' ? { proof: helloProof(sent, nonce) }
             : options.proof === 'guess' ? { proof: helloProof('tok-guess', nonce) }
             : { proof: helloProof(token, nonce) }
-          const ok = Buffer.from(`${JSON.stringify({ hello: { ok: true, instance: 'p1', version: 'test', pid: 1, ...proof } })}\n`)
+          const features = options.features === undefined ? {} : { features: options.features }
+          const ok = Buffer.from(`${JSON.stringify({ hello: { ok: true, instance: 'p1', version: 'test', pid: 1, ...features, ...proof } })}\n`)
           socket.write(role === 'stream' && options.streamGreeting ? Buffer.concat([ok, options.streamGreeting]) : ok)
           continue
         }
@@ -148,6 +151,15 @@ describe('PtyHostClient.connect', () => {
     }
     // Nothing was said to the host for them.
     expect(fake.hellos).toHaveLength(2)
+  })
+
+  it('features come from the hello reply, empty when absent', async () => {
+    expect((await connected({ features: ['seed'] })).client.features).toEqual(['seed'])
+    // A host from before features lists none.
+    expect((await connected()).client.features).toEqual([])
+    // Only names: anything else in the list, or a list that is not one, is no feature.
+    expect((await connected({ features: ['seed', 7, null, 'later'] })).client.features).toEqual(['seed', 'later'])
+    expect((await connected({ features: 'seed' })).client.features).toEqual([])
   })
 
   it('refuses a host whose hello names another pid than its discovery file', async () => {

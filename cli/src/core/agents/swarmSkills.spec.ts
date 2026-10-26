@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { RegisteredSession } from '../../lib/registry.js'
+import type { SwarmSkillGrant } from '../../lib/swarmSkills.js'
 import { createLaunchAuthority } from './launchAuthority.js'
 import { createSwarmSkillAdoption } from './swarmSkills.js'
 
@@ -8,7 +9,7 @@ const row = (over: Partial<RegisteredSession> = {}) => ({ agentId: 'old-session'
 
 function setup(saved = row(), live: RegisteredSession | null = saved) {
   let current = true
-  const role = vi.fn(async (): Promise<'lead' | 'dev' | null | undefined> => 'lead')
+  const role = vi.fn(async (): Promise<SwarmSkillGrant | null | undefined> => ({ role: 'lead' }))
   const save = (id: string, skill: NonNullable<RegisteredSession['swarmSkill']>) => {
     if (!live || live.agentId !== id) return false
     live.swarmSkill = skill; return true
@@ -20,11 +21,16 @@ function setup(saved = row(), live: RegisteredSession | null = saved) {
 
 describe('old Swarm role adoption', () => {
   it.each(['claude', 'codex'] as const)('adopts each role for old %s sessions and persists it before launch', async engine => {
-    for (const role of ['lead', 'dev'] as const) {
-      const t = setup(row({ engine })); t.role.mockResolvedValue(role)
+    for (const role of ['lead', 'dev', 'review'] as const) {
+      const t = setup(row({ engine })); t.role.mockResolvedValue({ role })
       expect(await t.adopt(t.saved, t.current)).toMatchObject({ swarmSkill: { role, key: 'old-session' } })
       expect(t.saved.swarmSkill).toEqual({ role, key: 'old-session' })
     }
+  })
+  it('adopts the role with its project\'s skill mode, so the restarted session launches on that text', async () => {
+    const t = setup(); t.role.mockResolvedValue({ role: 'lead', mode: 'default' })
+    expect(await t.adopt(t.saved, t.current)).toMatchObject({ swarmSkill: { role: 'lead', key: 'old-session', mode: 'default' } })
+    expect(t.saved.swarmSkill).toEqual({ role: 'lead', key: 'old-session', mode: 'default' })
   })
   it('carries metadata into a stopped resume without requiring a live registry row', async () => {
     const t = setup(row(), null)
@@ -63,7 +69,7 @@ describe('old Swarm role adoption', () => {
     const t = setup()
     if (unavailable === 'offline') t.role.mockRejectedValueOnce(new Error('Offline'))
     else t.role.mockResolvedValueOnce(undefined)
-    t.role.mockResolvedValueOnce('dev')
+    t.role.mockResolvedValueOnce({ role: 'dev' })
     expect(await t.adopt(t.saved, t.current)).toBe(t.saved)
     expect(await t.adopt(t.saved, t.current)).toMatchObject({ swarmSkill: { role: 'dev' } })
     expect(t.role).toHaveBeenCalledTimes(2)
@@ -91,7 +97,7 @@ describe('old Swarm role adoption', () => {
     })
   it.each(['cancel', 'rebind'] as const)('does not adopt after %s while the roster is being read', async change => {
     const t = setup()
-    t.role.mockImplementation(async () => { if (change === 'cancel') t.cancel(); else t.change(); return 'lead' })
+    t.role.mockImplementation(async () => { if (change === 'cancel') t.cancel(); else t.change(); return { role: 'lead' as const } })
     expect(await t.adopt(t.saved, t.current)).toBeNull()
     expect(t.saved.swarmSkill).toBeUndefined()
   })

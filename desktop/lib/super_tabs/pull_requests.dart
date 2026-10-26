@@ -84,8 +84,11 @@ class _SuperTabPullRequestsState extends State<SuperTabPullRequests> {
   SuperTabController get c => widget.controller;
   bool get _active =>
       widget.visible && _tickers && (widget.app?.foreground.value ?? true);
+  // The Product Managers' conversation belongs to no project, whatever was
+  // chosen in a workgroup before.
   bool get _projectScope =>
-      _all || c.snapshot?.isProjectLead(c.selectedId) == true;
+      c.selectedId != c.snapshot?.leadsConversationId &&
+      (_all || c.snapshot?.isProjectLead(c.selectedId) == true);
   List<SuperTabConversation> get _groups =>
       c.snapshot?.conversations
           .where(
@@ -104,6 +107,11 @@ class _SuperTabPullRequestsState extends State<SuperTabPullRequests> {
     }
 
     for (final group in _groups) {
+      for (final stored in group.pullRequestUrls) {
+        for (final link in superTabPullRequestLinks(stored)) {
+          include(link, group.title);
+        }
+      }
       for (final message in c.messages(group.id)) {
         for (final link in superTabPullRequestLinks(message.text)) {
           include(link, group.title);
@@ -471,7 +479,8 @@ class _SuperTabPullRequestsState extends State<SuperTabPullRequests> {
               const SizedBox(width: 8),
               if (c.snapshot?.isProjectLead(c.selectedId) == true)
                 Text('This project', style: DesktopChrome.metadata())
-              else
+              // The Product Managers' conversation belongs to no project.
+              else if (c.selectedId != c.snapshot?.leadsConversationId)
                 DropdownButton<bool>(
                   value: _all,
                   underline: const SizedBox.shrink(),

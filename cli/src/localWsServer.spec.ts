@@ -42,8 +42,10 @@ class FakeBackend implements LocalWsBackend {
   async handleLocalBinary(_connId: string, frame: TerminalBinaryClear): Promise<void> {
     this.binaries.push(frame)
   }
-  setLocalTerminalFocus(connId: string, agentId: string | null): void {
+  visibles: Array<[string, readonly string[] | undefined]> = []
+  setLocalTerminalFocus(connId: string, agentId: string | null, visibleAgents?: readonly string[]): void {
     this.focuses.push([connId, agentId])
+    this.visibles.push([connId, visibleAgents])
   }
   observed: Array<[string, unknown]> = []
   observeProduct(connId: string, payload: unknown): void {
@@ -870,6 +872,26 @@ describe('local CLI WebSocket', () => {
     // Consumed locally: it describes a hand at this desk, and the machine has no use for an unknown
     // frame type arriving on every pane click.
     expect(backend.frames.map((frame) => frame.type)).toEqual(['terminal_open', 'terminal_open', 'terminal_open'])
+    ws.close()
+  })
+
+  it('app_focus with visibleAgents reaches setLocalTerminalFocus', async () => {
+    const backend = new FakeBackend()
+    server = http.createServer((_req, res) => { res.statusCode = 404; res.end() })
+    local = attachLocalWsServer(server, { machineId, backend })
+    await new Promise<void>((resolve) => server!.listen(0, '127.0.0.1', resolve))
+    const ws = new WebSocket(`ws://127.0.0.1:${(server.address() as AddressInfo).port}/api/local-ws`)
+    await onceOpen(ws)
+    const connected = onceMessage(ws)
+    ws.send(JSON.stringify({ type: 'machine_select', payload: { machineId, localProtocolVersion: 1 } }))
+    await connected
+
+    ws.send(JSON.stringify({ type: 'app_focus', payload: { agentId: 'a', visibleAgents: ['a', 'b', 7, ''] } }))
+    ws.send(JSON.stringify({ type: 'app_focus', payload: { agentId: null, visibleAgents: [] } }))
+    // An older desktop sends no list: it must stay undefined so the window keeps counting as looking.
+    ws.send(JSON.stringify({ type: 'app_focus', payload: { agentId: 'a' } }))
+    await vi.waitFor(() => expect(backend.visibles).toHaveLength(3))
+    expect(backend.visibles.map(([, list]) => list)).toEqual([['a', 'b'], [], undefined])
     ws.close()
   })
 

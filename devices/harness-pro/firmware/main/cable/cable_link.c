@@ -6,6 +6,7 @@
 #include <string.h>
 
 #include "driver/usb_serial_jtag.h"
+#include "driver/usb_serial_jtag_vfs.h"
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "last_words.h"
@@ -13,6 +14,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
+#include "hal/usb_serial_jtag_ll.h"
 
 static const char *TAG = "cable";
 
@@ -70,6 +72,10 @@ static const char *TAG = "cable";
 // of them for a tenth of a second per line. A dropped log line costs a line; a stalled LVGL task costs
 // the screen.
 #define LOG_WRITE_WAIT_MS 5
+
+// How long cable_link_replug holds D+ low. A host sees a detach within microseconds and debounces the attach for 100 ms,
+// so this is a sure unplug without being a long one.
+#define REPLUG_LOW_MS 100
 
 // Reader task stack: STACK_CABLE_LINK (task_stacks.h). The frame callback runs on this task, so it carries whatever
 // the message layer does — JSON parsing, Pod's feeds, and during a firmware install esp_ota_write() plus a SHA-256
@@ -232,12 +238,19 @@ bool cable_link_start(cable_frame_cb cb, cable_tick_cb tick, void *ctx)
         return false;
     }
 
+    // The console writes through the driver from here on, so the driver's ISR is the only writer of the TX FIFO. The
+    // no-driver console wrote the FIFO directly and raced the ISR, which skips its "FIFO empty" interrupt when it finds
+    // the FIFO full: a candidate for the cold-start link that sent nothing until a replug. Bounded like before: a host
+    // that is not reading costs one 50 ms wait, then the console drops until the FIFO moves again.
+    usb_serial_jtag_vfs_use_driver();
+
     // The new task may receive a welcome before xTaskCreate returns. Make the
     // installed driver/send path visible before that callback can run.
     s_running = true;
     if (xTaskCreate(reader_task, "cable_link", STACK_CABLE_LINK, NULL, 5, NULL) != pdPASS) {
         s_running = false;
         ESP_LOGE(TAG, "reader task create failed — no link to the daemon");
+        usb_serial_jtag_vfs_use_nonblocking();   // back off the driver before it goes
         usb_serial_jtag_driver_uninstall();
         vSemaphoreDelete(s_tx_lock);
         s_tx_lock = NULL;
@@ -291,6 +304,21 @@ bool cable_link_host_present(void)
     // Guarded on s_running because the driver call is undefined before install, and "no driver" is
     // indistinguishable from "no host" to everything above: both mean nothing can be said on this port.
     return s_running && usb_serial_jtag_is_connected();
+}
+
+void cable_link_replug(void)
+{
+    if (!s_running) return;
+    // D+ without its pull-up is no device on the bus; the pull-downs stay off and leave the lines to the host's own.
+    const usb_serial_jtag_pull_override_vals_t off = { .dp_pu = false, .dm_pu = false, .dp_pd = false, .dm_pd = false };
+    usb_serial_jtag_ll_phy_enable_pull_override(&off);
+    vTaskDelay(pdMS_TO_TICKS(REPLUG_LOW_MS));
+    usb_serial_jtag_ll_phy_disable_pull_override();
+}
+
+bool cable_link_rx_pending(void)
+{
+    return s_decoder.len != 0;   // the reader's own state, read on the reader (the tick)
 }
 
 void cable_link_counters(uint32_t *corrupt_frames, uint32_t *discarded_bytes)

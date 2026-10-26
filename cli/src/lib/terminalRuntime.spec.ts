@@ -6,6 +6,7 @@ import {
   processIdentityOf,
   primaryRuntime,
   sameProcessIdentity,
+  sessionForPaneId,
   terminalInstanceId,
   terminalPlacementKey,
   terminalRouteKey,
@@ -34,6 +35,17 @@ describe('terminal runtime identity', () => {
     expect(terminalRouteKey({ backend: 'tmux', paneId: '%4' })).toBe('tmux\u0000%4')
     expect(terminalInstanceId({ backend: 'tmux', paneId: '%4' })).toBe('tmux:default')
     expect(() => terminalRouteKey({ ...r, instance: '' })).toThrow('invalid pty host instance')
+  })
+
+  it('sessionForPaneId accepts p2-0.4.21-dev.win1:%7 and p2-h0123456789ab:%7', () => {
+    const row = (agentId: string, instance: string) => ({ agentId, runtimes: [{ backend: 'ptyhost' as const, instance, paneId: '%7' }] })
+    // Two builds of one protocol side by side: each pane is its own host's.
+    const rows = [row('legacy', 'p2'), row('dev', 'p2-0.4.21-dev.win1'), row('hashed', 'p2-h0123456789ab'), { agentId: 'tmux', runtimes: [{ backend: 'tmux' as const, paneId: '%7' }] }]
+    expect(sessionForPaneId(rows, 'p2-0.4.21-dev.win1:%7')?.agentId).toBe('dev')
+    expect(sessionForPaneId(rows, 'p2-h0123456789ab:%7')?.agentId).toBe('hashed')
+    expect(sessionForPaneId(rows, 'p2:%7')?.agentId).toBe('legacy')
+    expect(sessionForPaneId(rows, '%7')?.agentId).toBe('tmux')
+    expect(sessionForPaneId(rows, 'p2-0.4.22:%7')).toBeUndefined()
   })
 
   it('takes a session\'s first runtime as its primary, whatever its backend', () => {

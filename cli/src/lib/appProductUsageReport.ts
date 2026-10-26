@@ -1,5 +1,5 @@
 import { cleanUsageContext, HEALTH_MEASURES, CLI_REPORT_FAILURES } from './productHealthContract.js'
-import { PRODUCT_USAGE_ADD_PHONE_METRICS, PRODUCT_USAGE_METRICS, PRODUCT_USAGE_UI_METRICS,
+import { PRODUCT_USAGE_ADD_PHONE_METRICS, PRODUCT_USAGE_ADD_PHONE_PAIRED_METRICS, PRODUCT_USAGE_PHONE_OFFER_SKIP_METRICS, PRODUCT_USAGE_METRICS, PRODUCT_USAGE_UI_METRICS,
   type ProductUsageReport } from './productUsageContract.js'
 
 /** The contract revision this proxy forwards, sent on each of its answers as `x-harness-usage-vocabulary`.
@@ -7,8 +7,10 @@ import { PRODUCT_USAGE_ADD_PHONE_METRICS, PRODUCT_USAGE_METRICS, PRODUCT_USAGE_U
  * (`ui_desktop_phone_offer_*`) and the ways Add Phone opened (`ui_desktop_add_phone_*`). 4: the card offered
  * after work or after time away (`ui_desktop_phone_offer_after_work_*`, `ui_desktop_phone_offer_away_*`). The
  * Desktop sends a name newer than revision 1 only once a proxy has announced it, so an older CLI never sees one.
+ * 5: first-arrival episodes and shared-tab invitation outcomes.
+ * 6: returning-account phone offers, offer skip reasons and Add Phone pairing sources.
  * Raise it with each name the Desktop gates on it (`ProductHealthMeasure.vocabulary`, `ProductFlow.vocabulary`). */
-export const APP_USAGE_VOCABULARY = 4
+export const APP_USAGE_VOCABULARY = 6
 export const APP_USAGE_VOCABULARY_HEADER = 'x-harness-usage-vocabulary'
 
 // hn's counts reach the daemon's own queue only through hn's `product_observe`; no app can file them.
@@ -16,6 +18,8 @@ const uiMetrics = new Set<string>(PRODUCT_USAGE_UI_METRICS.filter(metric => !met
 const desktopMetrics = new Set<string>([
   ...PRODUCT_USAGE_UI_METRICS.filter(metric => metric.startsWith('ui_desktop_')),
   ...PRODUCT_USAGE_ADD_PHONE_METRICS,
+  ...PRODUCT_USAGE_ADD_PHONE_PAIRED_METRICS,
+  ...PRODUCT_USAGE_PHONE_OFFER_SKIP_METRICS,
   ...HEALTH_MEASURES.map(measure => `health_desktop_${measure}`),
   ...CLI_REPORT_FAILURES.map(reason => `health_desktop_report_failure_${reason}`),
 ])

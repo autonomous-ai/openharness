@@ -26,20 +26,19 @@ class SuperTabSectionHeading extends StatelessWidget {
   final Widget? trailing;
 
   /// Compact actions right before the add action, each an [AppIconButton]
-  /// the size of the add action itself, such as Machines' Your devices.
+  /// the size of the add action itself.
   final List<Widget> actions;
 
-  /// The space after the last action. The left sidebar passes 0, so that
-  /// its + is centered on the column of its rows' trailing dots
-  /// ([ProjectSidebar.markerInset]).
+  /// The space after the last action. The left sidebar passes 0 to align +
+  /// with its rows' trailing disclosure controls.
   final double endInset;
 
   /// Whether a collapsible group's body is currently hidden. Ignored unless
   /// [onToggleCollapsed] is set.
   final bool? collapsed;
 
-  /// Set on a heading that collapses a sidebar group; draws a leading chevron
-  /// that toggles it, aligned with the icon column project/machine rows share.
+  /// Set on a heading that collapses a sidebar group; its label and an adjacent
+  /// trailing chevron form one button on the left of the heading.
   final VoidCallback? onToggleCollapsed;
 
   /// The chevron and every action are a fixed 32 px square; the gap
@@ -47,19 +46,17 @@ class SuperTabSectionHeading extends StatelessWidget {
   /// much room, even when the trailing pill is at its widest.
   static const actionWidth = 32.0;
 
-  /// One step of the sidebar's tree: a group's rows sit one step in from its heading, and the rows under one
-  /// of those (a project's workgroups, the offline machines) two.
+  /// Indentation for nested content outside the sidebar's flat navigation rows.
   static const indentStep = 16.0;
 
-  /// Where a collapsible heading's chevron column starts.
+  /// Shared left inset of sidebar icon columns and section labels.
   static const _leadingInset = 4.0;
 
-  /// Where the icon column of a row at [level] starts, from the row's leading edge; its text starts right
-  /// after that 32 px column, as the heading's does. Level 0 is the heading's own.
+  /// The sidebar uses level 0 for every row, so names remain aligned. Higher
+  /// levels remain available for other nested content.
   static double indentFor(int level) => _leadingInset + level * indentStep;
 
   static const _trailingGap = 4.0;
-  static const _minTitleWidth = 40.0;
 
   @override
   Widget build(BuildContext context) {
@@ -75,55 +72,76 @@ class SuperTabSectionHeading extends StatelessWidget {
         constraints: const BoxConstraints(minHeight: 32),
         child: LayoutBuilder(
           builder: (context, constraints) {
-            // A plain (non-flex) child, so it keeps its natural width right
-            // before the add action instead of splitting the row's free
-            // space with the title — capped only so a narrow drawer at a
-            // large text scale ellipsizes it instead of overflowing.
+            final titleStyle = DesktopChrome.metadata().copyWith(
+              fontWeight: FontWeight.w600,
+            );
+            final titleMeasure = TextPainter(
+              text: TextSpan(text: title, style: titleStyle),
+              textDirection: Directionality.of(context),
+              textScaler: MediaQuery.textScalerOf(context),
+              maxLines: 1,
+            )..layout();
+            final titleWidth =
+                titleMeasure.width +
+                (collapsible ? AppIcons.inlineSize + _trailingGap : 0);
+            titleMeasure.dispose();
+            // Keep the heading readable before allowing a status pill to grow.
+            // At narrow widths the pill can reduce to its icon and tooltip.
             final pillMaxWidth = trailing == null
                 ? 0.0
                 : (constraints.maxWidth -
-                          (collapsible ? actionWidth : 0) -
                           actions.length * actionWidth -
                           (onAdd != null ? actionWidth : 0) -
                           _trailingGap -
-                          _minTitleWidth)
+                          titleWidth)
                       .clamp(0.0, double.infinity);
+            final titleLabel = Text(
+              title,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: titleStyle,
+            );
             return Row(
               children: [
-                if (collapsible)
-                  IconButton(
-                    icon: Icon(
-                      collapsed == true
-                          ? AppIcons.chevronRight
-                          : AppIcons.chevronDown,
-                      size: AppIcons.inlineSize,
-                    ),
-                    color: DesktopChrome.muted,
-                    // The row owns hover/press feedback. Keep the themed
-                    // focus boundary for this independent disclosure action.
-                    style: const ButtonStyle(
-                      minimumSize: WidgetStatePropertyAll(Size.square(32)),
-                      padding: WidgetStatePropertyAll(EdgeInsets.all(6)),
-                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                      visualDensity: VisualDensity.standard,
-                      overlayColor: WidgetStatePropertyAll(Colors.transparent),
-                      backgroundColor: WidgetStatePropertyAll(
-                        Colors.transparent,
-                      ),
-                    ),
-                    tooltip:
-                        '${collapsed == true ? 'Expand' : 'Collapse'} $title',
-                    onPressed: onToggleCollapsed,
-                  ),
                 Expanded(
-                  child: Text(
-                    title,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: DesktopChrome.metadata().copyWith(
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
+                  child: collapsible
+                      ? Align(
+                          alignment: Alignment.centerLeft,
+                          child: Semantics(
+                            button: true,
+                            expanded: collapsed != true,
+                            child: Tooltip(
+                              message:
+                                  '${collapsed == true ? 'Expand' : 'Collapse'} $title',
+                              child: InkWell(
+                                onTap: onToggleCollapsed,
+                                borderRadius: BorderRadius.circular(
+                                  DesktopChrome.rowRadius,
+                                ),
+                                child: ConstrainedBox(
+                                  constraints: const BoxConstraints(
+                                    minHeight: 32,
+                                  ),
+                                  child: Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      Flexible(child: titleLabel),
+                                      const SizedBox(width: _trailingGap),
+                                      Icon(
+                                        collapsed == true
+                                            ? AppIcons.chevronRight
+                                            : AppIcons.chevronDown,
+                                        size: AppIcons.inlineSize,
+                                        color: DesktopChrome.muted,
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ),
+                        )
+                      : titleLabel,
                 ),
                 if (trailing != null) ...[
                   ConstrainedBox(

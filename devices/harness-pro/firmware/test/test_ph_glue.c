@@ -1737,6 +1737,32 @@ static void swarm_card_tap(void) {
     CHECK(tap_(h->x + h->w / 2, h->y + h->h / 2, 5000).fx == POD_FX_NONE && top()->view == POD_V_LEAD && top()->lead == 3 && U.nav.swarm_page == 1);
 }
 
+// A notice of a harness that is a Swarm's Lead: its row opens that Lead's view in the Swarm (and picks it on the desktop), not the agent as a plain one
+// (which sent agent.open, and the desktop opened the agent in a new tab). The entry is read. A notice of any other agent still opens the agent.
+static void notice_opens_lead(void) {
+    swarm_home(4);
+    snprintf(U.model.swarms[0].leads[2].local, ID_MAX, "a3");
+    pod_model_unread_add(&U.model, "a3", "Gamma", "Merged.", 20, 2100);
+    act(POD_A_INBOX, 0);
+    render(2500);
+    const pod_hit_t *h = find(POD_A_OPEN_NOTIF);
+    CHECK(h && !strcmp(h->id, "a3"));
+    take();
+    pod_out_t o = tap_(h->x + h->w / 2, h->y + h->h / 2, 3000);
+    CHECK(o.fx == POD_FX_NONE && top()->view == POD_V_LEAD && !strcmp(top()->swarm, "sw1") && !strcmp(top()->lead_id, "l2"));
+    CHECK(U.nav.depth == 2 && U.nav.stack[0].view == POD_V_TABS && !pod_model_unread_find(&U.model, "a3"));   // Back lands on the Swarm's card
+    CHECK(take() >= 1 && is_q(0, "supertab.select", "sw1", "l2"));
+    // not a Lead: the agent opens as before
+    swarm_home(4);
+    pod_model_unread_add(&U.model, "a2", "Beta", "Done.", 20, 2100);
+    act(POD_A_INBOX, 0);
+    render(2500);
+    h = find(POD_A_OPEN_NOTIF);
+    CHECK(h && !strcmp(h->id, "a2"));
+    o = tap_(h->x + h->w / 2, h->y + h->h / 2, 3000);
+    CHECK(o.fx == POD_FX_AGENT_OPEN && !strcmp(o.agent, "a2") && top()->view != POD_V_LEAD);
+}
+
 // ---- the Lead view ----
 static void lead_tap_sends(void) {
     swarm_home(4);
@@ -1779,8 +1805,8 @@ static void lead_retry(void) {
     CHECK(take() == 3);
     render(6000);
     CHECK(take() == 2);
-    pod_ui_supertab_unsent(&U, Q[0].t);
-    pod_ui_supertab_unsent(&U, Q[1].t);
+    pod_ui_supertab_unsent(&U, &Q[0]);
+    pod_ui_supertab_unsent(&U, &Q[1]);
     render(8999);
     CHECK(take() == 0);
     render(9000);
@@ -1799,7 +1825,7 @@ static void lead_retry(void) {
     CHECK(take() == 2);
     render(6000);
     CHECK(take() == 1);
-    pod_ui_supertab_unsent(&U, Q[0].t);
+    pod_ui_supertab_unsent(&U, &Q[0]);
     render(9000);
     CHECK(take() == 1 && is_q(0, "supertab.open", "sw1", "l2"));
     // a full queue records nothing: the next sync sends the whole of it
@@ -1871,7 +1897,8 @@ static void lead_scrolls(void) {
     render(3500);
     CHECK(pod_scroll_max(&U.nav, &U.model) > 1 && top()->scroll == 0);
     t_(true, 360, 500, 4000); t_(true, 360, 400, 4100); t_(true, 360, 300, 4200); t_(false, 360, 300, 4250);
-    CHECK(top()->view == POD_V_LEAD && top()->scroll >= 1 && top()->lead == 0 && sc_events == 0 && take() == 0);   // the drag moved the text, not the host's pane, and sent nothing
+    CHECK(top()->view == POD_V_LEAD && top()->scroll >= 1 && top()->lead == 0 && take() == 0);   // the drag moved the text and sent no Swarm frame
+    CHECK(sc_down == 1 && sc_move > 0 && sc_up == 1);   // and the desktop's chat follows it, as an agent screen's drag scrolls its pane
     t_(true, 360, 300, 5000); t_(true, 360, 500, 5100); t_(true, 360, 700, 5200); t_(false, 360, 700, 5250);
     CHECK(top()->scroll == 0);
 }
@@ -2043,6 +2070,7 @@ int main(void) {
     swarm_card_pages();
     swarm_card_few_leads();
     swarm_card_tap();
+    notice_opens_lead();
     lead_tap_sends();
     lead_retry();
     lead_swipe_steps();

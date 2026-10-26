@@ -292,6 +292,7 @@ describe('the dial\'s host, wired to the core', () => {
     w.focused!('m1', 'a1')
     w.swarmSelected!('t2')
     w.scrolled!('move', 4, 120)
+    w.scrolled!('move', -6, 0, 'st1')
     w.dialStatus!({ attached: true, fw: '1.2.3' })
     w.dialStatus!({ attached: false })
     expect(vi.mocked(core.clients.sendLocal).mock.calls.map(([frame]) => frame)).toEqual([
@@ -302,6 +303,7 @@ describe('the dial\'s host, wired to the core', () => {
       { type: 'dial_focus', payload: { machineId: 'm1', agentId: 'a1' } },
       { type: 'dial_swarm', payload: { swarmId: 't2' } },
       { type: 'dial_scroll', payload: { phase: 'move', dy: 4, velocity: 120 } },
+      { type: 'dial_scroll', payload: { phase: 'move', dy: -6, velocity: 0, superTabId: 'st1' } },
       { type: 'dial_status', payload: { attached: true, fw: '1.2.3' } },
       { type: 'dial_status', payload: { attached: false } },
     ])
@@ -553,7 +555,7 @@ describe('what the windows say, reaching the dial', () => {
   })
 
   describe('the Swarm cards for a Harness Pro', () => {
-    const lead = { id: 'lead1', projectId: 'proj1', project: 'mobile', engine: 'claude', owner: '', local: '', state: 'work' as const }
+    const lead = { id: 'lead1', projectId: 'proj1', project: 'mobile', engine: 'claude', owner: '', local: '', state: 'work' as const, order: 0 }
     const cards = [{ id: 'st1', name: 'openharness', count: 1, leads: [lead] }]
     const withRequest = (superTabRequest?: CoreApi['superTabRequest']) => start({ core: { ...fakeCore({ dataDir }), ...(superTabRequest ? { superTabRequest } : {}) } as CoreApi })
 
@@ -625,6 +627,15 @@ describe('what the windows say, reaching the dial', () => {
       expect(got!.text).toBe('é'.repeat(750))
       expect(await seen.host.swarmCardRecap!('st1', 'lead2')).toEqual({ tabId: 'st1', leadId: 'lead2', text: 'none', at: 0, none: true })
       for (let i = 0; i < 6; i++) expect(await seen.host.swarmCardRecap!('st1', 'lead1')).toBeNull()
+    })
+
+    it('posts words for a Lead through the service; anything but said: true sends the turn instead', async () => {
+      const answers: Array<Record<string, unknown> | 'throw'> = [{ ok: true, said: true }, { ok: true, said: false }, { error: 'NOT_FOUND' }, 'throw']
+      const superTabRequest = vi.fn(async () => { const next = answers.shift()!; if (next === 'throw') throw new Error('gone'); return next })
+      withRequest(superTabRequest)
+      expect(await seen.host.swarmSay!('h1', 'ship it')).toBe(true)
+      expect(superTabRequest).toHaveBeenCalledWith({ action: 'cardSay', harnessId: 'h1', text: 'ship it' })
+      for (let i = 0; i < 3; i++) expect(await seen.host.swarmSay!('h1', 'ship it')).toBe(false)
     })
 
     it('answers no recap when the core has no service to ask', async () => {

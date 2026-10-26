@@ -59,7 +59,8 @@ export function messageHoldText(engine: string, hold: MessageHold): string {
         ? 'Codex has a search open, where a message would become what it searches for. Close it with Esc in its terminal, then send the message again.'
         : `${name} is searching its prompt history (ctrl+r), where Enter would send an earlier prompt. Close it with ctrl+c in its terminal, then send the message again.`
     case 'trust_open':
-      return `${name} is asking whether to trust this folder. Answer it in its terminal, then send the message again.`
+      // The folder's trust, or Claude Code's question about an MCP server the folder brings (engines/claude/screen.ts).
+      return `${name} is asking whether to trust this folder or an MCP server it brings. Answer it in its terminal, then send the message again.`
     case 'update_prompt_open':
       return `${name} is asking whether to update. Answer it in its terminal, then send the message again.`
     case 'model_prompt_open':

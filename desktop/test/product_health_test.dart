@@ -63,6 +63,158 @@ void main() {
     return all;
   }
 
+  test(
+    'a first arrival waits for initial consent without observing earlier work',
+    () async {
+      usage.firstRunStarted();
+      usage.firstRunReady('m', 'a');
+      usage.firstRunWork('m', 'a');
+      usage.firstRunResponse('m', 'a');
+      await usage.flush();
+      usage.proxyVocabulary = 5;
+      await usage.flush();
+      expect(totals()['health_desktop_first_run_started'], 1);
+      expect(totals()['health_desktop_first_run_ready'], 1);
+      expect(totals()['health_desktop_first_run_response'], isNull);
+      usage.firstRunWork('m', 'a');
+      usage.firstRunResponse('m', 'a');
+      await usage.flush();
+      expect(totals()['health_desktop_first_run_response'], 1);
+    },
+  );
+
+  test(
+    'an initial opt-out discards pending first-arrival eligibility',
+    () async {
+      usage.firstRunStarted();
+      usage.firstRunReady('m', 'a');
+      choice = {'enabled': false, 'revision': 0};
+      await usage.flush();
+      choice = {'enabled': true, 'revision': 1};
+      await usage.flush();
+      usage.proxyVocabulary = 5;
+      usage.firstRunWork('m', 'a');
+      usage.firstRunResponse('m', 'a');
+      await usage.flush();
+      expect(
+        totals().keys.where((name) => name.contains('first_run')),
+        isEmpty,
+      );
+    },
+  );
+
+  test('first-run response follows only the opened harness and never counts retries twice', () async {
+    await usage.flush();
+    usage.proxyVocabulary = 5;
+    usage.firstRunStarted();
+    usage.firstRunStarted();
+    usage.firstRunReady('PRIVATE_MACHINE', 'PRIVATE_AGENT');
+    usage.firstRunWork('OTHER_MACHINE', 'PRIVATE_AGENT');
+    usage.firstRunResponse('PRIVATE_MACHINE', 'PRIVATE_AGENT');
+    await usage.flush();
+    expect(totals()['health_desktop_first_run_response'], isNull);
+    usage.firstRunWork('PRIVATE_MACHINE', 'PRIVATE_AGENT');
+    now = now.add(const Duration(seconds: 45));
+    usage.firstRunResponse('PRIVATE_MACHINE', 'PRIVATE_AGENT');
+    usage.firstRunResponse('PRIVATE_MACHINE', 'PRIVATE_AGENT');
+    await usage.flush();
+    expect(totals()['health_desktop_first_run_started'], 1);
+    expect(totals()['health_desktop_first_run_ready'], 1);
+    expect(totals()['health_desktop_first_run_work'], 1);
+    expect(totals()['health_desktop_first_run_response'], 1);
+    expect(totals()['health_desktop_first_run_response_under_1m'], 1);
+    expect(jsonEncode(reports), isNot(contains('PRIVATE')));
+  });
+
+  test('first-run counters wait for vocabulary 5 while version 4 still sends phone offers', () async {
+    await usage.flush();
+    usage.proxyVocabulary = 4;
+    usage.begin(ProductFlow.phoneOfferAfterWork)(ProductOutcome.ok);
+    usage.firstRunStarted();
+    usage.firstRunReady('m', 'a');
+    usage.firstRunWork('m', 'a');
+    usage.firstRunResponse('m', 'a');
+    await usage.flush();
+    expect(totals().keys.where((name) => name.contains('first_run')), isEmpty);
+    expect(totals()['ui_desktop_phone_offer_after_work_ok'], 1);
+    usage.proxyVocabulary = 5;
+    await usage.flush();
+    expect(totals()['health_desktop_first_run_started'], 1);
+    expect(totals()['health_desktop_first_run_response'], 1);
+  });
+
+  test('invite counters wait for vocabulary 5', () async {
+    await usage.flush();
+    usage.proxyVocabulary = 4;
+    usage.begin(ProductFlow.shareInvite)(ProductOutcome.ok);
+    usage.begin(ProductFlow.shareAccept)(ProductOutcome.ok);
+    usage.sharedInvites(sent: 2, refused: 1);
+    await usage.flush();
+    expect(totals().keys.where((name) => name.contains('share')), isEmpty);
+    usage.proxyVocabulary = 5;
+    await usage.flush();
+    expect(totals()['ui_desktop_share_invite_ok'], 1);
+    expect(totals()['ui_desktop_share_accept_ok'], 1);
+    expect(totals()['health_desktop_shared_invites_sent'], 2);
+    expect(totals()['health_desktop_shared_invites_refused'], 1);
+  });
+
+  test('first-run stages cross midnight on their start day and stop after 24 hours', () async {
+    await usage.flush();
+    usage.proxyVocabulary = 5;
+    now = DateTime.utc(2026, 10, 14, 23, 59);
+    usage.firstRunStarted();
+    usage.firstRunReady('m', 'a');
+    now = now.add(const Duration(minutes: 2));
+    usage.firstRunWork('m', 'a');
+    usage.firstRunResponse('m', 'a');
+    await usage.flush();
+    expect(
+      reports
+          .where(
+            (r) => (r['counters'] as Map).containsKey(
+              'health_desktop_first_run_response',
+            ),
+          )
+          .single['day'],
+      '2026-10-14',
+    );
+    expect(totals()['health_desktop_first_run_response_1m_to_5m'], 1);
+    now = now.add(const Duration(days: 2));
+    usage.firstRunReady('m', 'another');
+    usage.firstRunWork('m', 'another');
+    await usage.flush();
+    expect(totals()['health_desktop_first_run_work'], 1);
+  });
+
+  test('opt-out and account changes discard the first-run target and queued counts', () async {
+    await usage.flush();
+    usage.firstRunStarted();
+    usage.firstRunReady('PRIVATE_MACHINE', 'PRIVATE_AGENT');
+    usage.savedChoice({'enabled': false, 'revision': 1});
+    choice = {'enabled': true, 'revision': 2};
+    usage.savedChoice(choice);
+    usage.proxyVocabulary = 5;
+    usage.firstRunWork('PRIVATE_MACHINE', 'PRIVATE_AGENT');
+    usage.firstRunResponse('PRIVATE_MACHINE', 'PRIVATE_AGENT');
+    await usage.flush();
+    expect(totals().keys.where((name) => name.contains('first_run')), isEmpty);
+  });
+
+  test('normal readiness probes do not say setup was shown', () async {
+    await usage.flush();
+    usage.setupFacts({
+      ProductFlow.setup: 'ready',
+      ProductFlow.setupHarness: 'ready',
+    });
+    await usage.flush();
+    expect(totals()['health_desktop_funnel_setup_seen'], isNull);
+    usage.setupShown();
+    usage.setupShown();
+    await usage.flush();
+    expect(totals()['health_desktop_funnel_setup_seen'], 1);
+  });
+
   test('connection observations restart cleanly after off/on with the same machine', () async {
     await usage.flush();
     final connections = ProductConnections(usage);
@@ -268,7 +420,10 @@ void main() {
       );
       // A launch's first frame is its heavy workspace restore: not a sample
       // (frames 1–59 are not sampled; the 60th is).
-      runtime.framesForTest([frame(900), for (var i = 1; i < 59; i++) frame(5)]);
+      runtime.framesForTest([
+        frame(900),
+        for (var i = 1; i < 59; i++) frame(5),
+      ]);
       // Minimised, then shown: the first frame back is the catch-up, and would
       // otherwise be the 60th, the sampled one.
       runtime.lifecycleChanged(AppLifecycleState.hidden);
@@ -279,7 +434,10 @@ void main() {
       runtime.framesForTest([for (var i = 0; i < 120; i++) frame(400)]);
       // Visible but without focus (inactive) still counts: a person sees it.
       lifecycle = AppLifecycleState.inactive;
-      runtime.framesForTest([frame(700), for (var i = 0; i < 60; i++) frame(5)]);
+      runtime.framesForTest([
+        frame(700),
+        for (var i = 0; i < 60; i++) frame(5),
+      ]);
       await usage.flush();
       expect(totals()['health_desktop_frame_under_16ms'], 2);
       expect(totals()['health_desktop_frame_over_250ms'], isNull);
@@ -410,6 +568,98 @@ void main() {
   );
 
   group('Add Phone', () {
+    test(
+      'returning flow, every skip and pairing way wait for vocabulary 6',
+      () async {
+        await usage.flush();
+        usage.proxyVocabulary = 5;
+        final flow = ProductFlow.values.singleWhere(
+          (f) => f.wire == 'phone_offer_returning',
+        );
+        expect(flow.vocabulary, 6);
+        expect(flow.unbounded, isTrue);
+        for (final outcome in [
+          ProductOutcome.ok,
+          ProductOutcome.cancelled,
+          ProductOutcome.unknown,
+        ]) {
+          usage.begin(flow)(outcome);
+        }
+        for (final reason in [
+          'has_phone',
+          'no_device_list',
+          'already_shown',
+          'stopped',
+          'cap_reached',
+          'not_signed_in',
+          'viewer',
+          'card_showing',
+          'no_storage',
+          'account_changed',
+          'read_limit',
+        ]) {
+          usage.phoneOfferSkipped(reason);
+        }
+        usage.phoneOfferSkipped('PRIVATE_CANARY');
+        for (final from in AddPhoneOpening.values) {
+          usage.addPhonePaired(from);
+        }
+        final pending = usage.begin(flow);
+        now = now.add(const Duration(minutes: 40));
+        await usage.flush();
+        expect(
+          totals().keys.where(
+            (n) =>
+                n.contains('returning') ||
+                n.contains('skipped') ||
+                n.contains('paired'),
+          ),
+          isEmpty,
+        );
+        usage.proxyVocabulary = 6;
+        pending(ProductOutcome.ok);
+        await usage.flush();
+        await usage.flush();
+        expect(totals()['ui_desktop_phone_offer_returning_started'], 4);
+        expect(totals()['ui_desktop_phone_offer_returning_ok'], 2);
+        expect(totals()['ui_desktop_phone_offer_returning_cancelled'], 1);
+        expect(totals()['ui_desktop_phone_offer_returning_unknown'], 1);
+        for (final reason in [
+          'has_phone',
+          'no_device_list',
+          'already_shown',
+          'stopped',
+          'cap_reached',
+          'not_signed_in',
+          'viewer',
+          'card_showing',
+          'no_storage',
+          'account_changed',
+          'read_limit',
+        ]) {
+          expect(totals()['ui_desktop_phone_offer_skipped_$reason'], 1);
+        }
+        for (final from in AddPhoneOpening.values) {
+          expect(totals()['ui_desktop_add_phone_paired_${from.wire}'], 1);
+        }
+        expect(reports.toString(), isNot(contains('PRIVATE_CANARY')));
+      },
+    );
+
+    test('new phone counters respect sharing and disposal', () async {
+      await usage.flush();
+      usage.proxyVocabulary = 6;
+      usage.savedChoice({'enabled': false, 'revision': 1});
+      usage.addPhonePaired(AddPhoneOpening.offer);
+      usage.phoneOfferSkipped('has_phone');
+      await usage.flush();
+      expect(totals()['ui_desktop_add_phone_paired_offer'], isNull);
+      expect(totals()['ui_desktop_phone_offer_skipped_has_phone'], isNull);
+      usage.account(null);
+      usage.addPhonePaired(AddPhoneOpening.menu);
+      usage.phoneOfferSkipped('has_phone');
+    });
+
     Iterable<String> addPhoneNames() => totals().keys.where(
       (key) =>
           key.startsWith('ui_desktop_phone_offer_') ||
@@ -532,18 +782,21 @@ void main() {
       expect(ProductFlow.phoneOfferAwayFinished.unbounded, isTrue);
     });
 
-    test('the card offered after work is not ended by the 15-minute bound', () async {
-      await usage.flush();
-      usage.proxyVocabulary = 4;
-      final card = usage.begin(ProductFlow.phoneOfferAfterWork);
-      now = now.add(const Duration(minutes: 40));
-      await usage.flush();
-      await usage.flush();
-      expect(totals()['ui_desktop_phone_offer_after_work_unknown'], isNull);
-      card(ProductOutcome.cancelled);
-      await usage.flush();
-      expect(totals()['ui_desktop_phone_offer_after_work_cancelled'], 1);
-    });
+    test(
+      'the card offered after work is not ended by the 15-minute bound',
+      () async {
+        await usage.flush();
+        usage.proxyVocabulary = 4;
+        final card = usage.begin(ProductFlow.phoneOfferAfterWork);
+        now = now.add(const Duration(minutes: 40));
+        await usage.flush();
+        await usage.flush();
+        expect(totals()['ui_desktop_phone_offer_after_work_unknown'], isNull);
+        card(ProductOutcome.cancelled);
+        await usage.flush();
+        expect(totals()['ui_desktop_phone_offer_after_work_cancelled'], 1);
+      },
+    );
 
     test('the card is not ended by the 15-minute observation bound', () async {
       await usage.flush();

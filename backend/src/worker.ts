@@ -15,6 +15,8 @@ import {
 import { ensurePlans } from './lib/db/seed.js'
 import { prisma } from './lib/prisma.js'
 import { ensureProductUsageExpiry } from './lib/productUsage.js'
+import { ensureTerminalExpiry } from './superTabs/terminal.js'
+import { ensureMentionExpiry } from './superTabs/mentions.js'
 import { machineBillingWorkerService } from './services/MachineBillingWorkerService.js'
 import { productUsagePeopleRollupService } from './services/ProductUsagePeopleRollupService.js'
 import { logger } from './utils/logger.js'
@@ -30,6 +32,8 @@ async function start(): Promise<void> {
   await migrateUserPresencePerMachine()
   ensureSchema()
   await ensureProductUsageExpiry()
+  await ensureTerminalExpiry(prisma)
+  await ensureMentionExpiry(prisma)
   // AFTER the push: it creates the new collections + their unique indexes, and the copy uses $merge
   // so those indexes survive. Copying first would leave the unique index build to fail silently.
   await migrateMachineRename()

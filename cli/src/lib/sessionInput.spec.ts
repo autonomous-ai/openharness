@@ -5,6 +5,7 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { SessionInputController } from './sessionInput.js'
+import { MoveGate } from './hostMove/gate.js'
 import type { RegisteredSession } from './registry.js'
 import { TERMINAL_LEASE_REFUSED, type ProcessIdentity, type TerminalActionResult } from './terminalTypes.js'
 import { createScreens } from '../core/engines/screens.js'
@@ -1830,5 +1831,106 @@ describe('what became of a person\'s message, for its measurement', () => {
     expect(inject).toHaveBeenCalledTimes(1)
     expect(onError).not.toHaveBeenCalled()
     controller.forget('s1')
+  })
+})
+
+describe('while the agent changes host', () => {
+  const controllerWith = (gate: MoveGate, inject: (target: string, content: string) => Promise<boolean>) =>
+    new SessionInputController({ readScreen: readInlineScreen, submission: inlineSubmission,
+      getSession: (id) => id === 's1' ? session() : id === 's2' ? { ...session(), sessionId: 's2', agentId: 'h2' } : undefined,
+      validateRuntime: async () => true, inject, sendKey: async () => true,
+      capture: async () => codexComposer(''), onError: vi.fn(), moveGate: gate })
+
+  it('a harness send during a hold is delivered after release', async () => {
+    const gate = new MoveGate()
+    const injected: string[] = []
+    const controller = controllerWith(gate, async (_target, content) => { injected.push(content); return true })
+    gate.hold('h1')
+    controller.submit('s1', 'sent while it moves')
+    await new Promise((resolve) => setTimeout(resolve, 5))
+    expect(injected).toEqual([])
+    await gate.release('h1')
+    await vi.waitFor(() => expect(injected).toEqual(['sent while it moves']))
+    controller.forget('s1')
+  })
+
+  it('a held message can be cancelled, and nothing is typed at release', async () => {
+    const gate = new MoveGate()
+    const injected: string[] = []
+    const onDelivery = vi.fn()
+    const controller = new SessionInputController({ readScreen: readInlineScreen, submission: inlineSubmission,
+      getSession: () => session(), validateRuntime: async () => true,
+      inject: async (_target, content) => { injected.push(content); return true }, sendKey: async () => true,
+      capture: async () => codexComposer(''), onError: vi.fn(), onDelivery, beforeTeamWrite: async () => null, moveGate: gate })
+    gate.hold('h1')
+    controller.submit('s1', 'retired before it was typed', 'team:d1')
+    expect(controller.cancelDelivery('team:d1')).toBe(true)
+    expect(onDelivery).toHaveBeenCalledWith({ sessionId: 's1', deliveryId: 'team:d1', state: 'rejected', reason: 'cancelled' })
+    await gate.release('h1')
+    await new Promise((resolve) => setTimeout(resolve, 5))
+    expect(injected).toEqual([])
+    expect(controller.cancelDelivery('team:d1')).toBe(false)
+    controller.forget('s1')
+  })
+
+  it('held messages count against the queue\'s limits', async () => {
+    const gate = new MoveGate()
+    const onError = vi.fn()
+    const injected: string[] = []
+    const controller = new SessionInputController({ readScreen: readInlineScreen, submission: inlineSubmission,
+      getSession: () => session(), validateRuntime: async () => true,
+      inject: async (_target, content) => { injected.push(content); return true }, sendKey: async () => true,
+      capture: async () => codexComposer(''), onError, moveGate: gate })
+    gate.hold('h1')
+    const outcomes: string[] = []
+    for (let i = 0; i < 9; i++) controller.submit('s1', `m${i}`, undefined, undefined, (o) => { outcomes.push(o) })
+    expect(outcomes).toEqual(['queue_full'])
+    expect(onError).toHaveBeenCalledWith('s1', 'This agent already has too many queued messages. Try again after the current operation finishes.')
+    controller.forget('s1')
+  })
+
+  it('held keystrokes behind a held message land after its Enter', async () => {
+    const gate = new MoveGate()
+    const order: string[] = []
+    const controller = controllerWith(gate, async (_target, content) => {
+      order.push(`paste:${content}`)
+      await new Promise((resolve) => setTimeout(resolve, 10))
+      order.push('enter')
+      return true
+    })
+    gate.hold('h1')
+    controller.submit('s1', 'the message')
+    // A keystroke typed into the agent's stream after the message, held by the same gate.
+    gate.enqueue('h1', async () => { order.push('key') })
+    await gate.release('h1')
+    expect(order).toEqual(['paste:the message', 'enter', 'key'])
+    controller.forget('s1')
+  })
+
+  it('control is never handed out onto the pane being replaced, and is given again after the move', async () => {
+    const gate = new MoveGate()
+    const controller = controllerWith(gate, async () => true)
+    gate.hold('h1')
+    // Refused as a busy pane is: device input asks again every 100 ms, so its write waits rather than
+    // reaching the old pane.
+    expect(controller.acquireControl('s1')).toBeNull()
+    expect(controller.acquireControl('s1', { forAnswer: true })).toBeNull()
+    expect(gate.touched('h1')).toBe(true)
+    await gate.release('h1')
+    const release = controller.acquireControl('s1')
+    expect(release).toBeTypeOf('function')
+    release!()
+    controller.forget('s1')
+  })
+
+  it('nothing is held for other agents', async () => {
+    const gate = new MoveGate()
+    const injected: string[] = []
+    const controller = controllerWith(gate, async (_target, content) => { injected.push(content); return true })
+    gate.hold('h1')
+    controller.submit('s2', 'to the other agent')
+    await vi.waitFor(() => expect(injected).toEqual(['to the other agent']))
+    controller.forget('s1')
+    controller.forget('s2')
   })
 })

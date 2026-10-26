@@ -1,4 +1,5 @@
 import { prepareSwarmSkill } from '../../lib/swarmSkills.js'
+import { swarmGitHubLaunch } from '../../lib/swarmGitHub.js'
 import type { NativeLaunch, NativeLaunchResult, NativeLaunchSource } from '../../engines/nativeLaunch.js'
 /**
  * Creating an agent (`agent_create`): open a fresh pane running the chosen engine in the chosen
@@ -40,7 +41,7 @@ import type { LaunchAuthority, LaunchPreparation } from '../../lib/launchPrepara
 import type { publishGridConfigDir } from '../../lib/publishedGridConfig.js'
 import { nativeHookLocations } from '../../engines/kit/nativeLocations.js'
 import { engineHooks } from '../../engines/hooks.js'
-import { folderTrust } from '../../engines/launchPrep.js'
+import { acceptFullMode, folderTrust } from '../../engines/launchPrep.js'
 import { projectsRoot } from '../../lib/projectFolder.js'
 import { NativeFiles } from '../../engines/kit/nativeFiles.js'
 import type { registry, RegisteredSession } from '../../lib/registry.js'
@@ -284,6 +285,13 @@ export function createAgentCreator({
       console.log(describeGridLaunch(engine, grid, built.launch.webSearch))
     }
     if (!current()) return stale()
+    // The Swarm starts its agents in full mode, so a machine that never accepted full mode's warning stops each one there
+    // before its first turn (Claude Code's "Yes, I accept", the Mac Studio, 2026-10-26). The Swarm's owner chose that mode
+    // for it; recorded the way the engine records the person's own yes, in the home this launch reads.
+    if (input.swarmRole && permissionMode === 'full') {
+      try { acceptFullMode(engine, native ? { ...native.environment, ...gridLaunch?.env, ...dshEnv } : undefined) }
+      catch (error) { console.warn(`[agent] full mode acceptance · ${error instanceof Error ? error.message : error}`) }
+    }
     if (trustEmptyProject) {
       try {
         // A clone or user edit can arrive while dependencies are being prepared.
@@ -330,14 +338,22 @@ export function createAgentCreator({
     // key wins on its own terms — OpenCode picked Anthropic over a grid it had been handed, and said
     // only `invalid x-api-key`. Nothing is cleared when no grid is in play: an agent on its own login
     // is supposed to use exactly these variables.
-    const clearEnv = [...(gridLaunch ? gridConflictingEnvToClear(gridLaunch) : []), ...harnessEnvToClear(dshEnv)]
+    // Another person's project work (superTabs/start.ts): git and gh use the Harness GitHub App's token for the task,
+    // never this machine owner's own GitHub login (lib/swarmGitHub.ts). Kept on the row's skill, so a relaunch keeps it.
+    let swarmGitHub: ReturnType<typeof swarmGitHubLaunch> = null
+    if (input.swarmRole && input.swarmGitHub) {
+      try { swarmGitHub = swarmGitHubLaunch(label) }
+      catch (error) { return { ok: false, error: 'SWARM_SKILL_FAILED', detail: String(error) } }
+    }
+    const clearEnv = [...(gridLaunch ? gridConflictingEnvToClear(gridLaunch) : []), ...harnessEnvToClear(dshEnv), ...swarmGitHub?.clearEnv ?? []]
     // The named agent takes the same argv slot on every relaunch (`buildLaunchOverrides` appends it
     // from the row's `agent`, after the grid's and the DSH's argv, exactly as here). The engine was
     // checked for a contract at the wire (AGENT_UNSUPPORTED, opencode v2 included), so this cannot throw.
     // A harness another agent started says so in the pull requests it opens (lib/agentAttribution.ts), last, as every
     // relaunch appends it (`buildLaunchOverrides`), and read from the person's settings where this launch reads them.
     // What Harness tells the agent (its instructions, and the pull request line for one another agent started), last.
-    const swarmSkill = input.swarmRole ? { role: input.swarmRole, key: label } : undefined
+    const swarmSkill = input.swarmRole ? { role: input.swarmRole, key: label, ...(input.swarmSkillMode ? { mode: input.swarmSkillMode } : {}),
+      ...(swarmGitHub ? { github: true as const } : {}) } : undefined
     let swarmInstructions: string | undefined
     if (swarmSkill) {
       try { swarmInstructions = prepareSwarmSkill(cwd, swarmSkill).instructions }
@@ -384,7 +400,7 @@ export function createAgentCreator({
       paneLaunch: windowsPaneLaunch(engine, { ...launchOptions, held: isWindowsHeldPane(argv) }),
       // Windows: the variables the argv's `/usr/bin/env` prefix carries elsewhere, last (engineLaunchEnv).
       env: mergedLaunchEnv(freshHarnessEnvironment(engine, mergedLaunchEnv(mergedLaunchEnv(gridLaunch?.env ?? (codexHome ? profileEnvironment(engine, codexHome) : undefined), dshEnv),
-        mergedLaunchEnv(scmLaunchEnv(scmLaunchRecord), native?.environment)), !!grid,
+        mergedLaunchEnv(mergedLaunchEnv(scmLaunchEnv(scmLaunchRecord), swarmGitHub?.env), native?.environment)), !!grid,
         permissionMode ?? (bypassPermission ? DEFAULT_HARNESS_PERMISSION : 'ask')), engineLaunchEnv(engine, native)),
       grid: grid ? { baseUrl: grid.baseUrl, model: grid.model ?? null } : null,
       gridLaunchRecord: grid && gridLaunch ? { override: grid, webSearch: gridLaunch.webSearch } : null,

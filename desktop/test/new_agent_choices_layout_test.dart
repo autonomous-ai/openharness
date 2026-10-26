@@ -70,6 +70,7 @@ class _ChoicesApp extends AppNotifier {
     PaneSplitRequest? split,
     String? dsh,
     String? swarmRole,
+    String? swarmSkillMode,
     GridModel? model,
     String? prompt,
     String? name,

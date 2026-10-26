@@ -177,6 +177,21 @@ void main() {
     await settle(tester);
   }
 
+  testWidgets('returning account gets a card, never a dialog', (tester) async {
+    final app = working()
+      ..currentUser = const CurrentUserProfile(id: 'returning', email: 'fixture@example.test');
+    addTearDown(app.dispose);
+    await app.offerPhoneForTest(atLaunch: true);
+    await mount(tester, app, Brightness.dark);
+    expect(find.byKey(const Key('phone-offer-card')), findsOneWidget);
+    expect(find.byKey(const Key('add-phone-close')), findsNothing);
+    await captureWindow(tester, _shotsDir, '0-returning-card');
+    await tester.tap(find.byKey(const Key('phone-offer-dismiss')));
+    await settle(tester);
+    expect(app.phoneOfferShowing, isFalse);
+    await tester.pumpWidget(const SizedBox());
+  });
+
   testWidgets('a harness finished while the person was away', (tester) async {
     final app = working();
     addTearDown(app.dispose);

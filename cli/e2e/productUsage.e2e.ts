@@ -22,7 +22,7 @@ it('reports only local counters from a real turn, and the account switch stops t
   await d.start()
   await until('sharing preference read', () => backend!.seen.includes('GET /api/product-usage/settings') || null, 45000)
   const settings = `http://127.0.0.1:${d.port}/api/product-usage/settings`
-  expect((await (await fetch(settings)).json())).toMatchObject({ data: { enabled: true } })
+  expect((await (await fetch(settings, { headers: d.localHeaders() })).json())).toMatchObject({ data: { enabled: true } })
   client = await LocalClient.connect(d, { machineId: machine.machineId })
   const cwd = join(d.projectsDir, 'PRIVATE_PROJECT_CANARY'); mkdirSync(cwd, { recursive: true })
   const creationId = 'private-creation-canary'
@@ -51,7 +51,7 @@ it('reports only local counters from a real turn, and the account switch stops t
   expect(missing.error).toBe('AGENT_NOT_FOUND')
   // The same Desktop-format fixture must pass both the local proxy and the backend route tests.
   const appReport = { ...JSON.parse(readFileSync(new URL('../../tests/fixtures/desktop-product-usage-report.json', import.meta.url), 'utf8')), day: new Date().toISOString().slice(0, 10) }
-  const forwarded = await fetch(`http://127.0.0.1:${d.port}/api/product-usage/report`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-adapter-local': '1' }, body: JSON.stringify(appReport) })
+  const forwarded = await fetch(`http://127.0.0.1:${d.port}/api/product-usage/report`, { method: 'POST', headers: d.localHeaders({ 'content-type': 'application/json', 'x-adapter-local': '1' }), body: JSON.stringify(appReport) })
   expect(forwarded.status).toBe(200)
   expect(backend.productUsage.reports).toContainEqual(appReport)
   await turn()
@@ -71,7 +71,7 @@ it('reports only local counters from a real turn, and the account switch stops t
   expect(sum('request_app_resume_reason_saved_state_missing')).toBe(1)
   const wire = JSON.stringify(backend.productUsage.reports)
   for (const privateValue of ['PRIVATE_', creationId, machine.machineId, machine.computerId, machine.token, agentId, cwd, 'userMessage', 'payload']) expect(wire).not.toContain(privateValue)
-  expect((await fetch(settings, { method: 'POST', headers: { 'content-type': 'application/json', 'x-adapter-local': '1' }, body: '{"enabled":false}' })).status).toBe(200)
+  expect((await fetch(settings, { method: 'POST', headers: d.localHeaders({ 'content-type': 'application/json', 'x-adapter-local': '1' }), body: '{"enabled":false}' })).status).toBe(200)
   const reportsBefore = backend.productUsage.reports.length
   const checksBefore = backend.seen.filter(x => x === 'GET /api/product-usage/settings').length
   await turn()

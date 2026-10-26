@@ -8,7 +8,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { PtyHostBackend } from '../ptyHostBackend.js'
-import { readDiscovery } from '../ptyHost/launch.js'
+import { listDiscoveries } from '../ptyHost/launch.js'
 import { PTY_PROTOCOL } from '../ptyHost/protocol.js'
 import { processRows } from '../processTable.js'
 import { signalAgentProcess } from '../processSignals.js'
@@ -80,7 +80,7 @@ const running = (pid: number): boolean => {
     } finally {
       foreign?.kill()
       backend.dispose()
-      const pid = readDiscovery(home, PTY_PROTOCOL)?.pid
+      const pid = listDiscoveries(home).findLast((found) => found.protocol === PTY_PROTOCOL)?.pid
       if (pid) {
         try { process.kill(pid, 'SIGKILL') } catch { /* already gone */ }
       }
@@ -124,7 +124,7 @@ const running = (pid: number): boolean => {
       expect((await backend.kill(pane)).state).toBe('succeeded')
     } finally {
       backend.dispose()
-      const pid = readDiscovery(home, PTY_PROTOCOL)?.pid
+      const pid = listDiscoveries(home).findLast((found) => found.protocol === PTY_PROTOCOL)?.pid
       if (pid) {
         try { process.kill(pid, 'SIGKILL') } catch { /* already gone */ }
       }

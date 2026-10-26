@@ -1374,7 +1374,7 @@ int main(void) {
         fresh(); ph_view_home(&F, &N, &M, now);
         CHECK(!text_run("Working") && text_run("Solo") && hits_of(POD_A_FOLLOW) == 0);
     }
-    {   // Home's Swarm card (the owner's mockup swarm-card.html): a desk tab linked to a Swarm draws it, the Leads as pets three to a page, no dots
+    {   // Home's Swarm card (the owner's mockup swarm-card.html): a desk tab linked to a Swarm draws it, the Leads as pets three to a page, the capsule under the name
         static pod_model_t M;
         static pod_nav_t N;
         static cable_swarm_t sw[1];
@@ -1405,29 +1405,36 @@ int main(void) {
         pod_nav_init(&N);
         CHECK(M.swarm_n == 1 && pod_home_pages(&M, NULL, 0) == 1 && pod_home_swarm(&M, 0) == &M.swarms[0]);   // the desk tab's page IS the Swarm's
         N.swarm_page = 0; fresh(); ph_view_home(&F, &N, &M, 1000);
-        CHECK(text_run("openharness") && text_run("4") && text_run("workspaces") && !text_run("Desk"));
+        CHECK(text_run("openharness") && text_run("4") && !text_run("workspaces") && !text_run("workspace") && !text_run("Desk"));   // the capsule's disc, no big number
+        CHECK(text_run("1 needs you") && text_run("1 needs you")->fg == ht_rgb(0xFFC796) && text_run("2 working") && text_run("2 working")->fg == ht_rgb(0x9DFFC0) && !text_prefix("1 done"));
         CHECK(text_run("openharness")->x == 90 + 44);   // the title where a tab's name is
         CHECK(text_run("mobile") && text_run("harness") && text_run("website") && !text_run("backend"));
         CHECK(text_run("needs you") && text_run("needs you")->fg == ht_rgb(0xFFC796));
-        CHECK(text_run("working \xc2\xb7 2:14") && text_run("working \xc2\xb7 2:14")->fg == ht_rgb(0x3EE05B) && text_run("working \xc2\xb7 0:48"));
+        CHECK(text_run("2:14") && text_run("2:14")->fg == ht_rgb(0x9DFFC0) && text_run("0:48") && !text_prefix("working \xc2\xb7"));   // a working Lead: only its clock
         CHECK(hits_of(POD_A_LEAD) == 3 && F.hit_count == 3 && hits_of(POD_A_ENTER_TAB) == 0);
         for (int k = 0; k < 3; k++) {   // centred exactly like the Working card: 165 px apart about the card's middle
             const pod_hit_t *h = nth_hit(POD_A_LEAD, k);
             CHECK(h->arg == k && !strcmp(h->id, "sw1") && h->x == 90 + 270 + (k - 1) * 165 - 75 && h->w == 150);
         }
-        {   // the orange dot (14 px) is there while a Lead is ASK, and gone once none is
+        {   // the capsule's pulsing dot (11 px) is there while a Lead needs you or is stuck, and gone once none does
             int dots = 0;
-            for (int i = 0; i < S.count; i++) dots += S.runs[i].pro_kind == K_RECT_AA && S.runs[i].w == 14 && S.runs[i].pro_height == 14;
+            for (int i = 0; i < S.count; i++) dots += S.runs[i].pro_kind == K_RECT_AA && S.runs[i].w == 11 && S.runs[i].pro_height == 11;
             CHECK(dots == 1);
             M.swarms[0].leads[0].state = POD_LEAD_STUCK;
             fresh(); ph_view_home(&F, &N, &M, 1000);
             dots = 0;
-            for (int i = 0; i < S.count; i++) dots += S.runs[i].pro_kind == K_RECT_AA && S.runs[i].w == 14 && S.runs[i].pro_height == 14;
-            CHECK(dots == 0 && text_run("stuck") && text_run("stuck")->fg == ht_rgb(0xFFB0B0));   // stuck is red and does not pulse the card's dot
+            for (int i = 0; i < S.count; i++) dots += S.runs[i].pro_kind == K_RECT_AA && S.runs[i].w == 11 && S.runs[i].pro_height == 11;
+            CHECK(dots == 1 && text_run("stuck") && text_run("stuck")->fg == ht_rgb(0xFFB0B0) && text_run("1 stuck") && text_run("1 stuck")->fg == ht_rgb(0xFFB0B0));   // stuck is red, in the capsule and under the pet, and pulses too
+            fresh(); ph_view_home(&F, &N, &M, 1000);
+            M.swarms[0].leads[0].state = POD_LEAD_DONE;   // nothing needs you: no dot
+            fresh(); ph_view_home(&F, &N, &M, 1000);
+            dots = 0;
+            for (int i = 0; i < S.count; i++) dots += S.runs[i].pro_kind == K_RECT_AA && S.runs[i].w == 11 && S.runs[i].pro_height == 11;
+            CHECK(dots == 0 && !text_prefix("1 needs") && !text_prefix("1 stuck"));
             M.swarms[0].leads[0].state = POD_LEAD_ASK;
         }
         fresh(); ph_view_home(&F, &N, &M, 8000);   // the clock runs: 7 s later
-        CHECK(text_run("working \xc2\xb7 2:21") && text_run("working \xc2\xb7 0:55") && ph_home_moves(&N, &M));
+        CHECK(text_run("2:21") && text_run("0:55") && ph_home_moves(&N, &M));
         N.swarm_page = 1; fresh(); ph_view_home(&F, &N, &M, 1000);   // the 4th Lead alone, in the middle
         CHECK(text_run("backend") && text_run("done") && text_run("done")->fg != ht_rgb(0xFFFFFF) && text_run("done")->fg != ht_rgb(0xFFC796) && !text_run("mobile"));
         CHECK(hits_of(POD_A_LEAD) == 1 && nth_hit(POD_A_LEAD, 0)->arg == 3 && nth_hit(POD_A_LEAD, 0)->x == 90 + 270 - 75);
@@ -1452,11 +1459,11 @@ int main(void) {
             M.swarms[0].lead_n = 4;
             #undef VEILS
         }
-        {   // the gradient is the Swarm's purple, #6A4BB0 -> #22163F
+        {   // the gradient is the Swarm's purple, #6B4FA3 -> #231A3B
             unsigned g1 = 0, g2 = 0;
             for (int i = 0; i < S.count; i++)
                 if (S.runs[i].pro_kind == POD_GRAD && S.runs[i].w == 540) { uint16_t g[2]; memcpy(g, S.runs[i].text, sizeof g); g1 = g[0]; g2 = g[1]; }
-            CHECK(g1 == ht_rgb(0x6A4BB0) && g2 == ht_rgb(0x22163F));
+            CHECK(g1 == ht_rgb(0x6B4FA3) && g2 == ht_rgb(0x231A3B));
         }
         // A remote Lead shows its owner (smaller, muted) under the status; a remote Lead at work has no clock; a Swarm with no desk tab is a page of its own.
         snprintf(S1.id, ID_MAX, "sw2"); S1.tab[0] = 0; snprintf(S1.name, sizeof S1.name, "Solo swarm"); S1.count = 1; S1.lead_n = 1;
@@ -1467,13 +1474,56 @@ int main(void) {
         CHECK(M.swarm_n == 2 && pod_home_pages(&M, NULL, 0) == 2 && pod_home_has(&M, 1) && !pod_home_has(&M, 2));   // page 1 = tab_count + the Swarm's index among the unlinked
         CHECK(pod_home_swarm(&M, 1) == &M.swarms[1] && pod_tabs_pages_of(&N, &M) == 2);
         N.stack[0].scroll = 1; N.swarm_page = 0; fresh(); ph_view_home(&F, &N, &M, 1000);
-        CHECK(text_run("Solo swarm") && text_run("workspace") && text_run("ops") && text_run("working") && !text_prefix("working \xc2\xb7") && text_run("Linh Tran"));
+        CHECK(text_run("Solo swarm") && text_run("1 working") && text_run("ops") && text_run("working") && !text_prefix("working \xc2\xb7") && text_run("Linh Tran"));
         CHECK(text_run("Linh Tran")->fg != ht_rgb(0xFFFFFF) && hits_of(POD_A_LEAD) == 1 && !strcmp(nth_hit(POD_A_LEAD, 0)->id, "sw2"));
         CHECK(text_run("Linh Tran")->y > text_run("working")->y);
         N.stack[0].scroll = 0; fresh(); ph_view_home(&F, &N, &M, 1000);   // the next page peeks at the right: its gradient and title only
         CHECK(text_run("Solo swarm") && !text_run("ops") && hits_of(POD_A_LEAD) == 3);
+        {   // the working line's clock needs a turn's start: a local Lead working only from open assignments (no since) says "working", with no 0:00 counting on
+            pod_lead_t l;
+            memset(&l, 0, sizeof l);
+            char line[64];
+            snprintf(l.local, ID_MAX, "h1"); l.state = POD_LEAD_WORK;
+            ph_lead_status(&l, 5000, line, sizeof line, 0);
+            CHECK(!strcmp(line, "working"));
+            l.since_s = 134; l.since_at_ms = 1000;
+            ph_lead_status(&l, 3500, line, sizeof line, 0);
+            CHECK(!strcmp(line, "working \xc2\xb7 2:16"));
+        }
         // Leads: the pet's scene is work (WORK), ask (ASK, STUCK) or rest (DONE)
         CHECK(ph_lead_scene(POD_LEAD_WORK) == POD_SCENE_WORK && ph_lead_scene(POD_LEAD_ASK) == POD_SCENE_ASK && ph_lead_scene(POD_LEAD_STUCK) == POD_SCENE_ASK && ph_lead_scene(POD_LEAD_DONE) == POD_SCENE_REST);
+        {   // the capsule's counts in the fixed order; the Leads in the Swarm's order whatever their state (the daemon's `order`); "All done", the long forms
+            static const pod_lead_state_t st[6] = {POD_LEAD_DONE, POD_LEAD_WORK, POD_LEAD_ASK, POD_LEAD_STUCK, POD_LEAD_WORK, POD_LEAD_ASK};
+            snprintf(S1.name, sizeof S1.name, "Order");
+            S1.count = S1.lead_n = 6;
+            for (int i = 0; i < 6; i++) {
+                pod_lead_t *l = &S1.leads[i];
+                memset(l, 0, sizeof *l);
+                snprintf(l->id, ID_MAX, "o%d", i); snprintf(l->project, sizeof l->project, "p%d", i); snprintf(l->engine, sizeof l->engine, "codex");
+                snprintf(l->local, ID_MAX, "h%d", i); l->state = st[i]; l->since_s = (unsigned)(10 * (i + 1));
+            }
+            pod_model_supertab(&M, &S1, 1000);
+            N.stack[0].scroll = 1; N.swarm_page = 0; fresh(); ph_view_home(&F, &N, &M, 1000);
+            CHECK(text_run("6") && text_run("1 stuck \xc2\xb7 2 need you") && text_run("1 stuck \xc2\xb7 2 need you")->fg == ht_rgb(0xFFB0B0) && text_run("2") && !text_run("2 working") && !text_prefix("1 done"));   // too wide with "working": the bars and the number
+            CHECK(hits_of(POD_A_LEAD) == 3 && nth_hit(POD_A_LEAD, 0)->arg == 0 && nth_hit(POD_A_LEAD, 1)->arg == 1 && nth_hit(POD_A_LEAD, 2)->arg == 2);   // done, working, needs you: as listed
+            CHECK(text_run("p0") && text_run("p1") && text_run("p2") && text_run("done") && text_run("needs you") && !text_run("p3"));
+            CHECK(text_run("p0")->x < text_run("p1")->x && text_run("p1")->x < text_run("p2")->x);
+            N.swarm_page = 1; fresh(); ph_view_home(&F, &N, &M, 1000);
+            CHECK(hits_of(POD_A_LEAD) == 3 && nth_hit(POD_A_LEAD, 0)->arg == 3 && nth_hit(POD_A_LEAD, 1)->arg == 4 && nth_hit(POD_A_LEAD, 2)->arg == 5);   // stuck, working, needs you
+            CHECK(text_run("stuck") && text_run("0:50") && text_run("needs you") && !text_run("done") && text_run("1 stuck \xc2\xb7 2 need you"));   // the capsule counts the whole Swarm
+            for (int i = 0; i < 6; i++) S1.leads[i].state = POD_LEAD_DONE;
+            pod_model_supertab(&M, &S1, 1000);
+            N.swarm_page = 0; fresh(); ph_view_home(&F, &N, &M, 1000);
+            CHECK(text_run("All done") && text_run("6") && !text_prefix("0 ") && !text_prefix("1 ") && !ph_home_moves(&N, &M));
+            // ten projects, 12 in all, a long name: the name is cut with an ellipsis, the disc widens, "working" shrinks to its bars and the number
+            snprintf(S1.name, sizeof S1.name, "openharness-launch-october");
+            S1.count = S1.lead_n = 12;
+            for (int i = 6; i < 12; i++) { S1.leads[i] = S1.leads[i - 6]; snprintf(S1.leads[i].id, ID_MAX, "o%d", i); }
+            for (int i = 0; i < 12; i++) { S1.leads[i].state = i < 3 ? POD_LEAD_STUCK : i < 6 ? POD_LEAD_ASK : POD_LEAD_WORK; S1.leads[i].since_s = 5; }
+            pod_model_supertab(&M, &S1, 1000);
+            fresh(); ph_view_home(&F, &N, &M, 1000);
+            CHECK(text_prefix("openharness-") && !text_run("openharness-launch-october") && text_run("12") && text_run("3 stuck \xc2\xb7 3 need you") && !text_run("6 working") && text_run("6"));
+        }
     }
     {   // The Lead view (the owner's mockup B1-B3): the Swarm and the project on top, the Lead's last message in a bubble, the pet signing it with "Lead" and its status
         static pod_model_t M;

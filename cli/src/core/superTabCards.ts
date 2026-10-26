@@ -52,9 +52,11 @@ function leadIn(value: unknown): SwarmLead | null {
   // `local` is the harness here that runs the Lead, or empty when it runs on another machine.
   if (typeof lead.local !== 'string' || (lead.local !== '' && !id(lead.local))) return null
   if (lead.since !== undefined && !whole(lead.since)) return null
+  // The project's index in its Swarm, which the round dial shows the Leads by (the Pro sorts its own and ignores it).
+  if (!whole(lead.order)) return null
   return {
     id: lead.id, projectId: lead.projectId, project: cut(lead.project, NAME_BYTES), engine: cut(lead.engine, ENGINE_BYTES),
-    owner: cut(lead.owner, NAME_BYTES), local: lead.local, state: lead.state as SwarmLead['state'],
+    owner: cut(lead.owner, NAME_BYTES), local: lead.local, state: lead.state as SwarmLead['state'], order: lead.order,
     ...(lead.since === undefined ? {} : { since: lead.since }),
   }
 }
@@ -134,11 +136,12 @@ export function createSuperTabCards({ swarmCards, swarmCardRecap, request, log =
       if (!recap) { log('[super-tabs] a Lead recap was not sound; it is dropped'); return }
       swarmCardRecap(recap)
     },
-    /** What the devices may ask of the Super Tab service, and nothing else of it: `cardsWanted` is kept here, `cardRecap` and
-     *  `cardOpen` go to the service; any other action is refused. */
+    /** What the devices may ask of the Super Tab service, and nothing else of it: `cardsWanted` is kept here, `cardRecap`,
+     *  `cardOpen` and `cardSay` go to the service; any other action is refused. */
     ask(payload: Record<string, unknown>): Promise<Record<string, unknown>> {
       if (payload.action === 'cardsWanted') { api.want(payload.on === true, payload.include); return Promise.resolve({ ok: true }) }
       if (payload.action === 'cardRecap') return route({ action: 'cardRecap', tabId: payload.tabId, leadId: payload.leadId })
+      if (payload.action === 'cardSay') return route({ action: 'cardSay', harnessId: payload.harnessId, text: payload.text })
       if (payload.action === 'cardOpen') return route({ action: 'cardOpen', session: payload.session, tabId: payload.tabId, leadId: payload.leadId })
       return Promise.resolve({ error: 'INVALID_REQUEST' })
     },

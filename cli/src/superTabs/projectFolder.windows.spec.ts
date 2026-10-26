@@ -10,6 +10,7 @@ vi.mock('node:path', async (original) => {
   const real = await original<typeof nodePath>()
   return { ...real, ...real.win32, default: real.win32, win32: real.win32, posix: real.posix }
 })
+vi.mock('node:os', async (original) => ({ ...await original<typeof import('node:os')>(), homedir: () => 'C:\\Users\\dev' }))
 
 function fixture() {
   const core = fakeCore({ dataDir: 'C:\\Users\\dev\\.harness\\cli\\data' })
@@ -29,6 +30,14 @@ describe('per-project checkouts on a contributed Windows swarm machine', () => {
     expect(f.prepare).toHaveBeenCalledExactlyOnceWith({
       source: 'remote', repositoryUrl: 'https://github.com/example/project.git', name: 'project-a',
     }, { root: f.root })
+  })
+  it('accepts the visible Swarm root with mixed Windows separators', async () => {
+    const f = fixture(), root = 'C:\\Users\\dev\\harnesses\\swarms\\tab'
+    f.row.machine.cwd = root
+    f.start.request.cwd = `${root}/project-a`
+    f.prepare.mockResolvedValueOnce(`${root}\\project-a`)
+    await f.run()
+    expect(f.prepare).toHaveBeenCalledWith(expect.anything(), { root })
   })
   it('accepts a repository already on this host however its separators are written', async () => {
     const f = fixture()

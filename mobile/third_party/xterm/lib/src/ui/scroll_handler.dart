@@ -12,17 +12,19 @@ class RemoteScrollLink {
   void Function(int lines)? _send;
   bool Function()? _idle;
   int Function()? _cancel;
-  bool Function(int direction)? _page;
+  bool Function(int direction, int count)? _page;
   Object? _owner;
 
   /// Scroll the program [lines] rows, positive towards newer ones. Dropped when
   /// no scroll handler is listening: the program is not on its alternate screen.
   void send(int lines) => _send?.call(lines);
 
-  /// Press Page Down ([direction] positive) or Page Up once — only when nothing
-  /// else asked is still on its way. False when it was not sent: something is,
-  /// or nobody is listening, or the program is scrolled another way.
-  bool sendPage(int direction) => _page?.call(direction) ?? false;
+  /// Press Page Down ([direction] positive) or Page Up [count] times, in one
+  /// write — only when nothing else asked is still on its way. False when it
+  /// was not sent: something is, or nobody is listening, or the program is
+  /// scrolled another way.
+  bool sendPage(int direction, {int count = 1}) =>
+      _page?.call(direction, count) ?? false;
 
   /// Whether every row asked for has gone out and been answered.
   bool get idle => _idle?.call() ?? true;
@@ -37,7 +39,7 @@ class RemoteScrollLink {
     void Function(int) send,
     bool Function() idle,
     int Function() cancel,
-    bool Function(int direction) page,
+    bool Function(int direction, int count) page,
   ) {
     _owner = owner;
     _send = send;
@@ -375,11 +377,14 @@ class _TerminalScrollGestureHandlerState
   }
 
   /// AUTONOMOUS PATCH: [RemoteScrollLink.sendPage] — Page Up or Page Down,
-  /// alone: nothing waiting and nothing unanswered, so the program draws this
-  /// page by itself, never two at once. Answered like a batch of wheel events
-  /// (any write from the program), and paced with them.
-  bool _sendLinkPage(int direction) {
-    if (direction == 0 || _unsentLines != 0 || _batchesInFlight > 0) {
+  /// [count] of them together, alone: nothing waiting and nothing unanswered,
+  /// so the program draws these pages by themselves. Answered like a batch of
+  /// wheel events (any write from the program), and paced with them.
+  bool _sendLinkPage(int direction, int count) {
+    if (direction == 0 ||
+        count < 1 ||
+        _unsentLines != 0 ||
+        _batchesInFlight > 0) {
       return false;
     }
     // A program scrolled by other means than its keys.
@@ -387,9 +392,11 @@ class _TerminalScrollGestureHandlerState
     _batchesInFlight++;
     _answerWait?.cancel();
     _answerWait = Timer(_answerWaitLimit, _onAnswerWaitOver);
-    widget.terminal.keyInput(
-      direction < 0 ? TerminalKey.pageUp : TerminalKey.pageDown,
-    );
+    for (var i = 0; i < count; i++) {
+      widget.terminal.keyInput(
+        direction < 0 ? TerminalKey.pageUp : TerminalKey.pageDown,
+      );
+    }
     return true;
   }
 

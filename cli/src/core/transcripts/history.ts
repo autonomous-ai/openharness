@@ -202,6 +202,8 @@ export function createHistory({ resolve, stopped, pages, dbs, hermesDb, readerFo
               ? wholeHistoryPage(engine('copilot').copilotMessagesToEvents(lines), false).events
             : s.engine === 'pi'
             ? engine('pi').piMessagesToEvents(lines)
+            : s.engine === 'omp'
+            ? engine('omp').ompMessagesToEvents(lines)
             : engine('commandcode').commandcodeMessagesToEvents(lines)
       return {
         id: sessionId,
@@ -247,7 +249,9 @@ export function createHistory({ resolve, stopped, pages, dbs, hermesDb, readerFo
         ? engine('cursor').windowCursorLines(lines, { limit, before })
         : s.engine === 'pi'
           ? engine('pi').windowPiLines(lines, { limit, before })
-          : engine('commandcode').windowCommandCodeLines(lines, { limit, before })
+          : s.engine === 'omp'
+            ? engine('omp').windowOmpLines(lines, { limit, before })
+            : engine('commandcode').windowCommandCodeLines(lines, { limit, before })
     if (w.staleCursor) {
       return { id: sessionId, title: projectDisplayName(s), events: [], timestamp, engine: s.engine, hasMore: false, oldestCursor: null, staleCursor: true, ...truncated }
     }
@@ -261,7 +265,9 @@ export function createHistory({ resolve, stopped, pages, dbs, hermesDb, readerFo
           )
         : s.engine === 'pi'
           ? engine('pi').piMessagesToEvents(w.window)
-          : engine('commandcode').commandcodeMessagesToEvents(w.window)
+          : s.engine === 'omp'
+            ? engine('omp').ompMessagesToEvents(w.window)
+            : engine('commandcode').commandcodeMessagesToEvents(w.window)
     // muse and amp are answered above and never reach here, so both are absent by design.
     // Older pages must not inject a spurious end-of-transcript marker mid-scroll.
     if (before && events[events.length - 1]?.type === 'done') events.pop()

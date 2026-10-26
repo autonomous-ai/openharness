@@ -27,7 +27,7 @@
 //! streams (`exited`, or `killed` at `kill`); no thread holds the table lock while it takes the
 //! registry's.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
@@ -158,6 +158,10 @@ pub struct Panes {
     /// Set by a `shutdown` that found no pane, under the table's lock: from then on no pane is
     /// made, so none can be lost with the host as it exits.
     closing: AtomicBool,
+    /// Running panes `kill` took out of the table: the one exit each still owes is told when it comes.
+    /// Any other exit of a pane no longer in the table was told already (a failed respawn's stand-in
+    /// goes first when it wins the race with the killed child's own).
+    killed: Mutex<HashSet<String>>,
 }
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -192,6 +196,7 @@ fn spec(
         cols,
         rows,
         clear_env,
+        seed: None,
     }
 }
 
@@ -255,6 +260,7 @@ impl Panes {
             instance: instance.into(),
             streams: Registry::default(),
             closing: AtomicBool::new(false),
+            killed: Mutex::default(),
         };
         (panes, events)
     }
@@ -290,7 +296,8 @@ impl Panes {
                                 table.remove(id)
                             }
                         }
-                        None => None,
+                        None if lock(&self.killed).remove(id) => None,
+                        None => return None,
                     }
                 };
                 if removed.is_some() {
@@ -517,6 +524,7 @@ impl Panes {
                 hold,
                 after_exit,
                 clear_inherited,
+                seed,
             } => {
                 let cleared = clearable(clear_inherited);
                 // A child given no directory starts in the user's home (`Pane::spawn`).
@@ -528,20 +536,18 @@ impl Panes {
                 if self.closing.load(Ordering::SeqCst) {
                     return Err(OpError::new("bad_request", "the host is shutting down"));
                 }
-                let pane = Pane::spawn(
-                    id.clone(),
-                    spec(
-                        command.clone(),
-                        cwd,
-                        self.child_env(&id, env.clone()),
-                        cols,
-                        rows,
-                        &cleared,
-                    ),
-                    self.history_limit,
-                    self.sink.clone(),
-                )
-                .map_err(|e| OpError::new("spawn_failed", e.to_string()))?;
+                let mut pane_spec = spec(
+                    command.clone(),
+                    cwd,
+                    self.child_env(&id, env.clone()),
+                    cols,
+                    rows,
+                    &cleared,
+                );
+                pane_spec.seed = seed.map(String::into_bytes);
+                let pane =
+                    Pane::spawn(id.clone(), pane_spec, self.history_limit, self.sink.clone())
+                        .map_err(|e| OpError::new("spawn_failed", e.to_string()))?;
                 let generation = pane.generation();
                 table.insert(
                     id.clone(),
@@ -564,9 +570,15 @@ impl Panes {
                 reply(json!({ "pane": id }))
             }
             Op::Kill { pane, grace_ms } => {
-                let entry = lock(&self.table)
-                    .remove(&pane)
-                    .ok_or_else(|| OpError::no_pane(&pane))?;
+                let entry = {
+                    let mut table = lock(&self.table);
+                    let entry = table.remove(&pane).ok_or_else(|| OpError::no_pane(&pane))?;
+                    // Under the table's lock, so the exit cannot be dispatched before it is owed.
+                    if !entry.dead {
+                        lock(&self.killed).insert(pane.clone());
+                    }
+                    entry
+                };
                 self.streams.close(&pane, "killed");
                 // The reply follows the first signal; the grace, the escalation and the drop
                 // happen off the connection. The pane is dropped (which ends its reader) only
@@ -1315,6 +1327,45 @@ mod tests {
                 .handle(op(json!({"op": "kill", "pane": pane, "graceMs": 200})))
                 .unwrap();
         }
+    }
+
+    /// The failed spawn's stand-in exit can be dispatched before the killed child's own (its reader
+    /// thread set the status, then lost the CPU before sending): the pane is gone by then, and the
+    /// child's late exit must not be told a second time (CI run 39783881853, 1 in 180 under load).
+    #[test]
+    fn a_late_exit_of_the_killed_child_after_the_stand_in_is_not_told_again() {
+        let (panes, events) = bare_table();
+        let pane = create(&panes, &hup_exits(11), false);
+        until("a", || capture(&panes, &pane).unwrap().contains("up-51"));
+        respawn_sh(&panes, &pane, &hup_exits(12)).unwrap();
+        until("b", || capture(&panes, &pane).unwrap().contains("up-52"));
+        let failed = panes
+            .handle(op(json!({"op": "respawn", "pane": pane, "command": []})))
+            .unwrap_err();
+        assert_eq!(failed.code, "spawn_failed");
+        let mut exits = Vec::new();
+        while exits.len() < 3 {
+            let (id, event) = events
+                .recv_timeout(Duration::from_secs(5))
+                .expect("no event");
+            if let PaneEvent::Exited { generation, .. } = event {
+                exits.push((generation, id, event));
+            }
+        }
+        // The stand-in carries the newest generation: dispatch it first, the children's own after.
+        exits.sort_by_key(|(generation, ..)| std::cmp::Reverse(*generation));
+        let notices: Vec<Notice> = exits
+            .iter()
+            .filter_map(|(_, id, event)| panes.event(id, event))
+            .collect();
+        assert_eq!(
+            notices,
+            vec![Notice::Exit {
+                pane: pane.clone(),
+                status: Some(12)
+            }]
+        );
+        assert_eq!(state(&panes, &pane), json!("gone"));
     }
 
     #[test]

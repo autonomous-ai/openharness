@@ -14,7 +14,8 @@ import { statSync } from 'node:fs'
 import path from 'node:path'
 import { env } from '../../config/env.js'
 import type { PtyHostClient, PtyHostDiscovery } from '../ptyHost/client.js'
-import { discoverHosts, discoveredHostDead, pidAlive, reachPtyHost, type HostLiveness } from '../ptyHost/launch.js'
+import { discoveryFileName } from '../ptyHost/instance.js'
+import { discoveredHostDead, listDiscoveries, pidAlive, reachPtyHost, type HostLiveness } from '../ptyHost/launch.js'
 import { SHUTDOWN_PROTOCOL, SUPPORTED_PTY_PROTOCOLS } from '../ptyHost/protocol.js'
 import { startedNoLaterThan, startMarkerMs } from '../processProof.js'
 import { argvTokens, processRows, type ProcessRow } from '../processTable.js'
@@ -35,7 +36,7 @@ export interface PtyHostsDeps {
   /** This home's discovery records, each with when it was written as it was read (null when that could not be read):
    *  a host that agreed to shut down removes its record before it exits, and is still judged against it. */
   discover(): RecordedHost[]
-  reach(protocol: number): Promise<{ client: HostClient } | { unreachable: string }>
+  reach(instance: string): Promise<{ client: HostClient } | { unreachable: string }>
   alive(pid: number): boolean
   /** A's proof that the discovery file's host has gone (its pid now belongs to a later process). */
   dead(discovery: PtyHostDiscovery): Promise<boolean>
@@ -65,7 +66,7 @@ export async function endPtyHosts(deps: PtyHostsDeps): Promise<PtyHostEnd[]> {
     if (!deps.alive(pid) || await deps.dead(discovery)) { ended.push({ pid, protocol, panes: 0, how: 'gone' }); continue }
     let panes = 0
     let why: string
-    const reached = await deps.reach(protocol)
+    const reached = await deps.reach(discovery.instance)
     if ('client' in reached) {
       const client = reached.client
       let agreed = false
@@ -193,12 +194,15 @@ export function ptyHostsDeps(home: string = env.HARNESS_PTY_DIR): PtyHostsDeps {
     home,
     discover: () => {
       // Each record's time before the records: one rewritten in between is judged against the older time, which a
-      // later host fails, so the error is on the side of leaving it.
-      const written = new Map(SUPPORTED_PTY_PROTOCOLS.map((protocol) => [protocol, writtenAt(path.join(home, 'run', `pty-host-${protocol}.json`))]))
-      return discoverHosts(home).map((discovery) => ({ discovery, written: written.get(discovery.protocol) ?? null }))
+      // later host fails, so the error is on the side of leaving it. Keyed by instance: a legacy `p2` and any number
+      // of versioned `p2-<tag>` hosts of one protocol each have their own record.
+      const written = new Map(listDiscoveries(home).map((found) => [found.instance, writtenAt(path.join(home, 'run', discoveryFileName(found.instance) ?? ''))]))
+      return listDiscoveries(home)
+        .filter((discovery) => SUPPORTED_PTY_PROTOCOLS.includes(discovery.protocol))
+        .map((discovery) => ({ discovery, written: written.get(discovery.instance) ?? null }))
     },
-    reach: async (protocol) => {
-      const result = await reachPtyHost(home, protocol, liveness)
+    reach: async (instance) => {
+      const result = await reachPtyHost(home, instance, liveness)
       return 'client' in result ? { client: result.client } : { unreachable: 'incompatible' in result ? result.incompatible : result.unavailable }
     },
     alive: pidAlive,

@@ -5,13 +5,15 @@ import { isTerminalEngine } from '../engines/types.js'
 import { installedDsh } from '../dsh/installed.js'
 import { engineKeepsTranscriptFile, registry as liveRegistry, type RegisteredSession } from './registry.js'
 import { controlTranscriptEvidence } from '../engines/transcriptBindings.js'
+import { materializeResumeTranscript } from '../engines/resumeTranscript.js'
 import { IdentityReadUnavailable } from '../engines/kit/identityScan.js'
 import type { StoppedAgentStore } from './stoppedAgents.js'
 import { resumeStoppedAgent, waitForResumedAgent, resumeChanged, resumeUnconfirmed, RESUME_READINESS_BUDGET_MS } from './resumeStoppedAgent.js'
 import { checkPidRuntime } from './deleteAgentFallback.js'
 import { checkSessionRuntime, resolvePaneEngineProcess } from './paneEngineProcess.js'
-import { enginePathOverride } from './engineBin.js'
+import { engineBin, enginePathOverride } from './engineBin.js'
 import { engineInstallRecipe } from './engineInstall.js'
+import { stopConflictingBackgroundJob } from './claudeBackgroundJob.js'
 import { buildEngineLaunchArgv, dropPermissionFlagIfUnsupported, engineLaunchEnv, permissionModeApproves, permissionModeFlags, refusePermissionFlagIfUnsupported } from './engineLaunch.js'
 import { workspaceMissing } from './workspaceCheck.js'
 import { buildHarnessSessionLabel } from './harnessSessionLabel.js'
@@ -237,6 +239,16 @@ export function createResumeAgentService(deps: ResumeAgentServiceDeps) {
       let token: string | null = null
       let allocationAttempted = false
       try {
+        // Reserve before materializing cold history too: two Open requests must not rewrite a
+        // conversation an earlier, unconfirmed allocation might still be using.
+        token = stoppedAgents.beginResume(agentId)
+        if (!token) token = retakeStaleReservation(agentId)
+        if (!token) return resumeUnconfirmed
+        if (resumeSessionId && saved.transcriptPath) {
+          saved = { ...saved, transcriptPath: await materializeResumeTranscript(saved.engine, resumeSessionId,
+            saved.transcriptPath, saved.codexHome ?? undefined, () => current() && !registry.bySession(saved.sessionId)) }
+          if (!current()) return resumeChanged
+        }
         let transcript = sourceEvidence()
         if (transcript) saved = { ...saved, transcriptPath: transcript.path }
         let sourceError: unknown
@@ -249,11 +261,6 @@ export function createResumeAgentService(deps: ResumeAgentServiceDeps) {
           try { transcript?.verify(); return true }
           catch (error) { sourceError = error; return false }
         }
-        // Reserve before preparing history or rewriting launch configuration: an unknown previous
-        // allocation may still have a writer using those files.
-        token = stoppedAgents.beginResume(agentId)
-        if (!token) token = retakeStaleReservation(agentId)
-        if (!token) return resumeUnconfirmed
         const built = await relaunchOverrides(saved, saved, sourceCurrent)
         if (sourceError) throw sourceError
         transcript?.verify()
@@ -301,6 +308,24 @@ export function createResumeAgentService(deps: ResumeAgentServiceDeps) {
         if (droppedFlag) {
           console.warn(`[resume] ${sid(saved.agentId)} · ${saved.engine} does not take ${droppedFlag}`
             + ` · resuming in Ask · update ${saved.engine} to get ${saved.permissionMode ?? 'Auto'} back`)
+        }
+        // Claude Code refuses `--resume` on a session a `claude --bg` job still has open ("that session
+        // is running in the background … run `claude attach …` or `claude stop …` first"). Claude only.
+        // `native` is the captured launch for every ordinary local Claude run (launchOverrides.ts), not
+        // just grid — it is NOT a signal the pane is elsewhere, so it must not gate this off. A DSH
+        // agent's pane is the one case that may run on a different host entirely, whose jobs store this
+        // process cannot see (and must not touch).
+        if (resumeSessionId && saved.engine === 'claude' && !saved.dsh) {
+          // The exact environment the pane is about to get (built below as `paneEnv`): `launchEnv`
+          // already carries a native launch's own CLAUDE_CONFIG_DIR (launchOverrides.ts merges
+          // `native.environment` into it), and `engineLaunchEnv` adds Windows's own-process variables.
+          await stopConflictingBackgroundJob({
+            bin: engineBin(saved.engine), sessionId: resumeSessionId,
+            env: { ...process.env, ...launchEnv, ...engineLaunchEnv(saved.engine, built.overrides.native) },
+            log: message => console.log(`[resume] ${sid(saved.agentId)} ${message}`),
+          })
+          transcript?.verify()
+          if (!current()) return resumeChanged
         }
         const options = {
           ...(built.overrides.native ? { native: built.overrides.native } : {}),

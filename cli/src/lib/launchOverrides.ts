@@ -1,4 +1,5 @@
 import { prepareSwarmSkill, type SwarmSkill } from './swarmSkills.js'
+import { swarmGitHubLaunch } from './swarmGitHub.js'
 /**
  * What a pane has to be launched WITH, beyond the engine's own argv, for the engine to come back
  * where it was: on the same grid with the same credential, or under the same Codex profile.
@@ -270,6 +271,12 @@ export async function prepareLaunchOverrides(
     if (!current()) return changed
     const scmEnv = scmLaunchEnv(source.scmLaunch)
     if (scmEnv) overrides = { ...overrides, env: { ...overrides.env, ...scmEnv } }
+    // A session started for another person's project keeps git and gh on the Harness GitHub App (lib/swarmGitHub.ts).
+    if (source.swarmSkill?.github) {
+      let github: ReturnType<typeof swarmGitHubLaunch>
+      try { github = swarmGitHubLaunch(source.swarmSkill.key) } catch (error) { return { ok: false, error: 'SWARM_SKILL_FAILED', detail: String(error) } }
+      if (github) overrides = { ...overrides, env: { ...overrides.env, ...github.env }, clearEnv: [...overrides.clearEnv, ...github.clearEnv] }
+    }
     // The named agent rides every relaunch, in the same argv slot `agent_create` put it in. Only an
     // engine with a contract could have had it recorded (create refuses the rest, AGENT_UNSUPPORTED),
     // so the guard is for a row edited by hand — it relaunches as a general session rather than

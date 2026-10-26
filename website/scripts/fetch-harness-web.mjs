@@ -1,10 +1,11 @@
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
-import { cp, mkdtemp, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { cp, mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { configureReleaseAssets, releaseAssetBase } from './harness-web-assets.mjs';
+import { moveDirectory } from './move-directory.mjs';
 
 // This package hosts the compiled app; its only source is desktop/ in the same repository.
 // Release builds pass the bundle CI just built via HARNESS_WEB_ARCHIVE (see Dockerfile.k8s and
@@ -53,13 +54,13 @@ try {
   await cp(extracted, versioned, { recursive: true });
   const versionedDestination = path.join(extracted, releaseAssetBase(release).slice('/harness-web/'.length));
   await mkdir(path.dirname(versionedDestination), { recursive: true });
-  await rename(versioned, versionedDestination);
+  await moveDirectory(versioned, versionedDestination);
   // Retain legacy paths for tabs opened before this deployment. New entries
   // load JavaScript, fonts and CanvasKit exclusively from the archive namespace.
   await writeFile(path.join(extracted, 'index.html'), entry);
   const destination = path.join(root, 'public/harness-web');
   await rm(destination, { recursive: true, force: true });
-  await rename(extracted, destination);
+  await moveDirectory(extracted, destination);
   console.log(`Prepared Harness Web ${release.version} (${release.sourceCommit.slice(0, 12)})`);
 } finally {
   await rm(temporary, { recursive: true, force: true });

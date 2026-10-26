@@ -797,6 +797,23 @@ describe('cable session', () => {
     await session.stop()
   })
 
+  it('posts words spoken to a Swarm Lead in its Swarm chat, and types them for any other harness', async () => {
+    const swarmSay = vi.fn(async (id: string) => id === 'a1')
+    const host = makeHost({ transcribe: vi.fn(async () => 'ship it'), route: vi.fn(), swarmSay })
+    const { session, port } = await connect(host)
+    try {
+      port.say({ t: 'hello', product: 'harness', mac: 'aa:bb' }); await settle()
+      port.say({ t: 'voice.begin', uploadId: 'lead', agentId: 'a1' })
+      port.pcm(Buffer.alloc(3200)); port.say({ t: 'voice.end' })
+      await vi.waitFor(() => expect(port.sent.find(x => x.t === 'voice.transcript')).toMatchObject({ agentId: 'a1', text: 'ship it' }))
+      expect(swarmSay).toHaveBeenCalledWith('a1', 'ship it')
+      expect(host.sendTurn).not.toHaveBeenCalled()
+      port.say({ t: 'voice.begin', uploadId: 'tile', agentId: 'a2' })
+      port.pcm(Buffer.alloc(3200)); port.say({ t: 'voice.end' })
+      await vi.waitFor(() => expect(host.sendTurn).toHaveBeenCalledWith('a2', 'ship it'))
+    } finally { await session.stop() }
+  })
+
   it('delivers a turn through the host, not through the protocol', async () => {
     const host = makeHost()
     const { session, port } = await connect(host)
@@ -3668,7 +3685,7 @@ describe('hello capabilities', () => {
 // ── swarm cards (a Pro that names swarmCard: 'v1') ────────────────────────────────────────────────────
 describe('swarm cards', () => {
   const PRO = { t: 'hello', product: 'harness', mac: 'aa:bb', board: 'pro', swarmCard: 'v1' }
-  const lead = (n: number, over: Partial<SwarmLead> = {}): SwarmLead => ({ projectId: `proj${n}`, project: `Project ${n}`, engine: 'claude', owner: '', local: '', state: 'work', since: 134, ...over, id: over.id ?? `lead${n}` })
+  const lead = (n: number, over: Partial<SwarmLead> = {}): SwarmLead => ({ projectId: `proj${n}`, project: `Project ${n}`, engine: 'claude', owner: '', local: '', state: 'work', order: n, since: 134, ...over, id: over.id ?? `lead${n}` })
   const card = (id: string, leads: SwarmLead[] = [lead(1), lead(2)], over: Partial<SwarmCard> = {}): SwarmCard => ({ id, name: `Swarm ${id}`, count: leads.length, leads, ...over })
   const ofType = (port: LoopbackPort, t: string) => port.sent.filter((m) => m.t === t)
   /** The firmware's JSON guard counts one token per object, array, string (keys included) and bare value. */
@@ -3726,8 +3743,8 @@ describe('swarm cards', () => {
       expect(ofType(port, 'supertabs')).toEqual([{ t: 'supertabs', ids: ['st1', 'st2'] }])
       expect(ofType(port, 'supertab')).toEqual([
         { t: 'supertab', id: 'st1', tab: '', name: 'Swarm st1', count: 2, leads: [
-          { id: 'lead1', projectId: 'proj1', project: 'Project 1', engine: 'claude', owner: '', local: '', state: 'work', since: 134 },
-          { id: 'lead2', projectId: 'proj2', project: 'Project 2', engine: 'claude', owner: '', local: '', state: 'work', since: 134 }] },
+          { id: 'lead1', projectId: 'proj1', project: 'Project 1', engine: 'claude', owner: '', local: '', state: 'work', order: 1, since: 134 },
+          { id: 'lead2', projectId: 'proj2', project: 'Project 2', engine: 'claude', owner: '', local: '', state: 'work', order: 2, since: 134 }] },
         expect.objectContaining({ id: 'st2', tab: 'tab9' }),
       ])
       // The list goes first, so the Pro knows the order the details fill.
@@ -3797,7 +3814,7 @@ describe('swarm cards', () => {
   it('a 16 x 12 list is one supertabs and 16 supertab frames, each under 512 JSON tokens', async () => {
     const wide = 'é'.repeat(24)   // 48 bytes
     const cards = Array.from({ length: 18 }, (_, s) => card(`st${s}`,
-      Array.from({ length: 13 }, (_, l) => lead(l, { project: wide, owner: wide, local: 'a'.repeat(64), engine: 'codex', id: `l${s}x${l}`, projectId: `p${l}` })),
+      Array.from({ length: 13 }, (_, l) => lead(l, { project: wide, owner: wide, local: 'a'.repeat(64), engine: 'codex', id: `l${s}x${l}`, projectId: `p${l}`, order: 100 + l })),
       { name: wide, count: 40 }))
     const { session, port } = await connect(cardHost({ cards }))
     try {
@@ -3809,8 +3826,22 @@ describe('swarm cards', () => {
       const frames = port.sent.map((m, i) => ({ ...m, seq: port.seqs[i] } as Record<string, unknown>)).filter((m) => m.t === 'supertabs' || m.t === 'supertab')
       expect(frames).toHaveLength(17)
       for (const f of frames) expect(tokens(f)).toBeLessThan(512)
-      for (const f of ofType(port, 'supertab')) expect((f.leads as unknown[]).length).toBe(12)
+      for (const f of ofType(port, 'supertab')) expect((f.leads as Array<{ order: number }>).map((l) => l.order)).toEqual(Array.from({ length: 12 }, (_, l) => 100 + l))
       expect(Math.max(...frames.map(tokens))).toBeLessThan(260)
+    } finally { await session.stop() }
+  })
+
+  it('a round dial naming both capabilities gets the Swarms with no seq, and Super Tab waits on question', async () => {
+    const { session, port } = await connect(cardHost({ cards: [card('st1', [lead(1, { order: 3 }), lead(2, { order: 0 })])] }))
+    try {
+      port.say({ t: 'hello', product: 'harness', mac: 'cc:dd', swarmCard: 'v1', superTab: 'wait-v1' })
+      await vi.waitFor(() => expect(ofType(port, 'supertab')).toHaveLength(1))
+      expect(ofType(port, 'supertabs')).toEqual([{ t: 'supertabs', ids: ['st1'] }])
+      expect((ofType(port, 'supertab')[0].leads as Array<{ id: string; order: number }>).map((l) => [l.id, l.order])).toEqual([['lead1', 3], ['lead2', 0]])
+      expect(port.seqs.every((seq) => seq === undefined)).toBe(true)
+      await session.question('a1', 'supertab:as1:needs_human', [{ q: 'Which?' }], { superTab: 'Pilot', attention: 'decision' })
+      expect(ofType(port, 'question')).toMatchObject([{ agentId: 'a1', id: 'supertab:as1:needs_human', superTab: 'Pilot', attention: 'decision' }])
+      expect(port.seqs.every((seq) => seq === undefined)).toBe(true)
     } finally { await session.stop() }
   })
 
@@ -3879,6 +3910,23 @@ describe('swarm cards', () => {
       // An open with a Lead but a bad tab is ignored.
       port.say({ t: 'supertab.open', tab: 'a b', lead: 'lead1' }); await settle()
       expect(host.swarmCardOpen).toHaveBeenCalledTimes(2)
+    } finally { await session.stop() }
+  })
+
+  it('names the Swarm of the open Lead on a scroll, so the window scrolls that Swarm\'s chat; none once it closed', async () => {
+    const host = cardHost({ cards: [card('st1')] })
+    const { session, port } = await connect(host)
+    try {
+      port.say(PRO)
+      await vi.waitFor(() => expect(ofType(port, 'supertab')).toHaveLength(1))
+      port.say({ t: 'scroll', phase: 'move', dy: 5 }); await settle()
+      expect(host.scrolled).toHaveBeenLastCalledWith('move', 5, 0)
+      port.say({ t: 'supertab.open', tab: 'st1', lead: 'lead1' }); await settle()
+      port.say({ t: 'scroll', phase: 'move', dy: -12 }); await settle()
+      expect(host.scrolled).toHaveBeenLastCalledWith('move', -12, 0, 'st1')
+      port.say({ t: 'supertab.open', tab: 'st1', lead: '' }); await settle()
+      port.say({ t: 'scroll', phase: 'up', dy: 0, v: 300 }); await settle()
+      expect(host.scrolled).toHaveBeenLastCalledWith('up', 0, 300)
     } finally { await session.stop() }
   })
 

@@ -343,6 +343,8 @@ export interface CableHost {
   swarmCardRecap?(tabId: string, leadId: string): Promise<LeadRecap | null>
   /** The recap a device has open (its Lead), or null once it closes: the only one pushed when its text changes. */
   swarmCardOpen?(session: string, tabId: string, leadId: string | null): void
+  /** Words for a Lead that runs here: posted as the person in its Swarm chat. False: not a Lead, send the turn as before. */
+  swarmSay?(harnessId: string, text: string): Promise<boolean>
   /** A device picked a Lead: the window opens that Swarm tab and project. */
   superTabSelected?(superTabId: string, projectId: string): void
   /** The Swarm tab the window has on screen and the project open in it; null when the active tab is not a Swarm or there is no window. */
@@ -401,8 +403,9 @@ export interface CableHost {
    * that took a morning to explain. Optional, so a host that cannot answer simply says nothing.
    */
   knows?(agentId: string): boolean
-  /** A finger moving on the dial's glass, on its way to whatever window is open on this computer. */
-  scrolled(phase: 'down' | 'move' | 'up', dy: number, velocity: number): void
+  /** A finger moving on the dial's glass, on its way to whatever window is open on this computer. `superTabId`: the device has a Lead
+   *  of that Swarm open (a Pro's Lead view), so the window scrolls that Swarm's chat rather than a pane. */
+  scrolled(phase: 'down' | 'move' | 'up', dy: number, velocity: number, superTabId?: string): void
   updateAgent(agentId: string, model?: string, effort?: string): void
   /** PCM is 16-bit mono at `sampleRate`; the daemon owns the credential this needs. */
   transcribe(pcm: Buffer, sampleRate: number, lang: string): Promise<string>
@@ -526,6 +529,8 @@ export interface DialStatus {
   /** `hello.board`; "pro" is the square Harness Pro. Absent = a round dial. */
   board?: string
   updating?: string
+  /** Something the person has to do about this device, in words shown as they are (cableFleet.ts: a silent Harness Pro). */
+  problem?: string
   /**
    * Every device on this computer, when a fleet is reporting. Present only on the primary status, and
    * the primary is one of these rows — the flat fields above repeat it so a window that predates this
@@ -1457,7 +1462,8 @@ export class CableSession {
         if (phase !== 'down' && phase !== 'move' && phase !== 'up') return
         const dy = typeof msg.dy === 'number' ? msg.dy : 0
         const v = typeof msg.v === 'number' ? msg.v : 0
-        this.host.scrolled(phase, dy, v)
+        if (this.openLead) this.host.scrolled(phase, dy, v, this.openLead.tabId)
+        else this.host.scrolled(phase, dy, v)
         return
       }
       case 'selection': {
@@ -2256,6 +2262,14 @@ export class CableSession {
       this.voiceDraftCreation = { uploadId, id: state.id }
       await reply({ t: 'voice.draft', ...state }); return
     }
+    // Spoken to a Swarm Lead (its card or its tile): the words go to the Swarm chat as the person's, where everyone in the
+    // tab sees them, not typed into the Lead's terminal. Any other harness, or a failed post, gets the turn as before.
+    if (turn.agentId && !carried && !selection?.ok && await this.host.swarmSay?.(agentId, instruction).catch(() => false)) {
+      if (!current()) return
+      this.log(`cable: voice → Swarm chat of ${agentId.slice(0, 8)}`)
+      await reply({ t: 'voice.transcript', routeId: '', text: transcript, agentId, agentName, needsConfirm: false })
+      return
+    }
     const text = carried ? withCarriedPassage(instruction, carried)
       : selection?.ok && selection.text ? withSelectedPassage(instruction, selection.text) : instruction
     try {
@@ -2647,7 +2661,7 @@ export class CableSession {
       const tab = desk.find((s) => s.superTabId === card.id)?.id ?? ''
       const frame = { t: 'supertab', id: card.id, tab, name: card.name, count: card.count,
         leads: card.leads.slice(0, SWARM_LEADS_MAX).map((l) => ({ id: l.id, projectId: l.projectId, project: l.project,
-          engine: l.engine, owner: l.owner, local: l.local, state: l.state, ...(l.since === undefined ? {} : { since: l.since }) })) }
+          engine: l.engine, owner: l.owner, local: l.local, state: l.state, order: l.order, ...(l.since === undefined ? {} : { since: l.since }) })) }
       const key = JSON.stringify(frame)
       if (this.cardKeys.get(card.id) === key) continue
       this.cardKeys.set(card.id, key)

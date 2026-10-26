@@ -41,6 +41,11 @@ static const char *TAG = "pro_cable";
 #define HELLO_ALONE_MS   2000
 #define HELLO_SESSION_MS 15000
 #define SILENCE_MS       15000
+// Self re-plug (replug_tick). After a cold start beside a booting Mac the link could stay dead both ways until a hand
+// replugged the Pro; a fresh enumeration is that replug. A daemon greets within a hello or two, so a host driving the port
+// with no session for 30 s is stuck or has no daemon; the waits double to 10 min so the second case sees it rarely.
+#define REPLUG_ALONE_MS  30000
+#define REPLUG_MAX_MS    600000
 #define NOTIF_ROWS       16   // notif.replace items kept (the daemon sends at most 8)
 
 // Everything below runs on the cable_link task (12 KB stack) unless the comment says otherwise. Parsing therefore
@@ -60,6 +65,7 @@ static cable_machines_t s_machines;
 static int64_t     s_seq_last = -1;   // -1: none seen this session
 static uint32_t    s_seq_gaps;
 static bool        s_resync_pending;
+static unsigned    s_replugs;         // self re-plugs since the last session
 static bool        s_seq_on;          // the welcome carried a seq
 
 // The id of the recording in flight: written by the voice task, read by the cable_link task to match a reply.
@@ -554,8 +560,10 @@ static pod_lead_state_t lead_state(const char *s)
     return POD_LEAD_DONE;
 }
 
+// The Leads in the Swarm's order (each Lead's `order`, the project's index in the app), whatever their urgency; a Lead without one keeps its place as it came.
 static void read_leads(const cJSON *it, pod_swarm_t *sw)
 {
+    double order[SWARM_LEADS_MAX];
     const cJSON *l = NULL;
     cJSON_ArrayForEach(l, cJSON_GetObjectItemCaseSensitive(it, "leads")) {
         if (sw->lead_n >= SWARM_LEADS_MAX) break;
@@ -564,7 +572,15 @@ static void read_leads(const cJSON *it, pod_swarm_t *sw)
         bool duplicate = false;
         for (int i = 0; i < sw->lead_n; i++) if (!strcmp(sw->leads[i].id, id)) duplicate = true;
         if (duplicate) continue;
-        pod_lead_t *ld = &sw->leads[sw->lead_n++];
+        const cJSON *o = cJSON_GetObjectItemCaseSensitive(l, "order");
+        const double key = cJSON_IsNumber(o) ? o->valuedouble : sw->lead_n;
+        int at = sw->lead_n;
+        while (at > 0 && order[at - 1] > key) at--;   // after every equal one: ties keep their arrival order
+        memmove(&sw->leads[at + 1], &sw->leads[at], (size_t)(sw->lead_n - at) * sizeof sw->leads[0]);
+        memmove(&order[at + 1], &order[at], (size_t)(sw->lead_n - at) * sizeof order[0]);
+        order[at] = key;
+        sw->lead_n++;
+        pod_lead_t *ld = &sw->leads[at];
         memset(ld, 0, sizeof *ld);
         snprintf(ld->id, sizeof ld->id, "%s", id);
         const char *pid = str_of(l, "projectId");
@@ -933,6 +949,8 @@ static void session_up(const cJSON *p)
         // console and `idf.py monitor` behaves as it always has.
         cable_link_set_log_framing(true);
         ESP_LOGI(TAG, "session up: %s", s_machine_name);
+        if (s_replugs) ESP_LOGW(TAG, "usb: came back after %u self re-plug(s)", s_replugs);
+        s_replugs = 0;
         fw_confirm_session_up((uint32_t)(esp_timer_get_time() / 1000));   // starts the clock a fresh image is confirmed on (fw_update.h)
     }
     if (was && !moved) return;
@@ -1107,6 +1125,28 @@ static void link_resync(void)
     }
 }
 
+// Before the silence check, so the clock starts at the session's last tick. Only a host that is there counts, but its
+// absence does not reset the wait: the re-plug itself makes the host vanish for a moment, and a reset would loop at 30 s.
+static void replug_tick(int64_t now)
+{
+    static int64_t since, wait = (int64_t)REPLUG_ALONE_MS * 1000;
+    if (atomic_load(&s_session)) wait = (int64_t)REPLUG_ALONE_MS * 1000;
+    // Never in the middle of an update or a recording: an unplug there loses the transfer.
+    if (atomic_load(&s_session) || !cable_link_host_present() || fw_update_active() || pro_voice_open()) {
+        since = now;
+        return;
+    }
+    // A frame half in is a link alive mid-message (a welcome spans two reads): wait for it. The reader drops a stale
+    // partial after 300 ms, so this defers by that at most, and whole pings in between never hold it off.
+    if (now - since < wait || cable_link_rx_pending()) return;
+    s_replugs++;
+    ESP_LOGW(TAG, "usb: no session for %llds with the host present: self re-plug #%u",
+             (long long)((now - since) / 1000000), s_replugs);
+    since = now;
+    if (wait < (int64_t)REPLUG_MAX_MS * 1000 / 2) wait *= 2; else wait = (int64_t)REPLUG_MAX_MS * 1000;
+    cable_link_replug();
+}
+
 void pro_cable_tick(void *ctx)
 {
     (void)ctx;
@@ -1119,6 +1159,7 @@ void pro_cable_tick(void *ctx)
     last_words_rx((uint32_t)(s_last_rx_us / 1000));
     fw_update_tick((uint32_t)(esp_timer_get_time() / 1000));
     link_resync();
+    replug_tick(esp_timer_get_time());
     if (atomic_load(&s_session) && esp_timer_get_time() - s_last_rx_us > (int64_t)SILENCE_MS * 1000)
         session_down("silence");
 }

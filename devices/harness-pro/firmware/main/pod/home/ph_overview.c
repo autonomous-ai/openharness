@@ -10,11 +10,13 @@
 // Working card (the owner's mockup, option D): while an agent works one more card comes after Notices, before tab 0, in Codex's blue
 // (the owner's pick): "Working" and the count in ph_bd_84, then up to three pets (their work scene, ink at most 128 px, feet on y 384) with the name and the
 // elapsed time under each; the working agents newest first, three to a page (nav->work_page). One POD_A_FOLLOW hit over each pet.
-// Swarm card (the owner's mockup swarm-card.html, built from the Working card's layout): a desk tab linked to a Swarm (pod_model_swarm_for_tab) draws
-// the Swarm instead of its tab card, and a Swarm with no desk tab is one more page after the tabs (pod_home_swarm). Purple #6A4BB0 -> #22163F: the Swarm's name,
-// the number of workspaces in ph_num_230 with "workspaces" beside it (an orange dot pulses before it while a Lead needs you), then the Leads as pets three to
-// a page (nav->swarm_page), centred like Working's, with the project and the status under each: green "working · m:ss", orange "needs you", red "stuck",
-// grey "done"; a Lead on another person's machine adds its owner in a smaller muted line. One POD_A_LEAD hit over each pet (arg = the Lead's index, id = the Swarm's).
+// Swarm card (the owner's mockup swarm-card-v3.html, built from the Working card's frame): a desk tab linked to a Swarm (pod_model_swarm_for_tab) draws
+// the Swarm instead of its tab card, and a Swarm with no desk tab is one more page after the tabs (pod_home_swarm). Purple #6B4FA3 -> #231A3B: the Swarm's name
+// (cut with an ellipsis), under it one capsule: a white disc with the number of projects, then how many are stuck, need you and work ("1 stuck · 1 needs you",
+// "2 working" with the equaliser; too wide: "working" shrinks to the bars and the number), or "All done"; then the Leads as pets three to a page
+// (nav->swarm_page) in the Working card's slots, each in the scene of its state (ph_lead_scene), stuck first, then needs you, working, done (the Swarm's order
+// inside each, so a page turn never reshuffles), with the project and the status under it: "needs you", "stuck", "done", a working Lead only its clock
+// (m:ss); a Lead on another person's machine adds its owner in a smaller muted line. One POD_A_LEAD hit over each pet (arg = the Lead's index, id = the Swarm's).
 // Paging: the TABS frame's scroll is the tab index, POD_HOME_NOTICES the Notices card (only while notices exist) and POD_HOME_WORKING the Working card (only
 // while an agent works): the page list is pod_home_pages, so a card coming or going never moves the person to another tab: it only adds or drops a page before
 // tab 0 (and when the card shown goes, Home settles on the next page to its right).
@@ -71,7 +73,7 @@ unsigned ph_lead_status(const pod_lead_t *l, uint32_t now_ms, char *line, size_t
     if (l->state == POD_LEAD_ASK) { snprintf(line, n, "needs you"); return PH_LEAD_ASK; }
     if (l->state == POD_LEAD_STUCK) { snprintf(line, n, "stuck"); return PH_LEAD_STUCK; }
     if (l->state == POD_LEAD_DONE) { snprintf(line, n, "done"); return dim; }
-    if (l->local[0] || l->since_s) {   // working: a local Lead's turn runs on (a remote one has no clock)
+    if (l->since_s) {   // working with a turn's start (the daemon's since): the clock runs on; without one (a remote Lead, or only open assignments) none
         char t[24];
         const uint32_t into = (int32_t)(now_ms - l->since_at_ms) > 0 ? (now_ms - l->since_at_ms) / 1000 : 0;
         pod_fmt_elapsed(t, sizeof t, (int64_t)l->since_s + into);
@@ -125,8 +127,8 @@ bool ph_home_moves(const pod_nav_t *nav, const pod_model_t *m)
     if (t == POD_HOME_WORKING) return true;   // the pets
     if (t < 0) return false;   // the Notices card is still
     const pod_swarm_t *sw = pod_home_swarm(m, t);
-    if (sw) {   // a Swarm card: a working Lead's pet and clock, a Lead that needs you
-        for (int j = 0; j < sw->lead_n && j < SWARM_LEADS_MAX; j++) if (sw->leads[j].state == POD_LEAD_WORK || sw->leads[j].state == POD_LEAD_ASK) return true;
+    if (sw) {   // a Swarm card: a working Lead's pet and clock, the capsule's dot while a Lead needs you or is stuck
+        for (int j = 0; j < sw->lead_n && j < SWARM_LEADS_MAX; j++) if (sw->leads[j].state != POD_LEAD_DONE) return true;
         return false;
     }
     tab_agents(m, t, &working);
@@ -277,11 +279,12 @@ static bool slot_logo(ht_scene_t *s, int x, int y, const char *engine, unsigned 
 }
 
 // One status pill at (x, y): fill (black 28 % over the card), a mark (equaliser, dot or none), the text. Returns its width.
-static int pill(ht_scene_t *s, int x, int y, unsigned fill, int kind, unsigned ink, const char *text, uint32_t now_ms)
+// `pad` is the side padding; `bg` false draws the mark and text alone (a segment of a capsule that is already filled).
+static int pill_pad(ht_scene_t *s, int x, int y, unsigned fill, int kind, unsigned ink, const char *text, uint32_t now_ms, int pad, bool bg)
 {
-    const int mark = kind == 1 ? 32 : kind == 2 ? 11 : 0, tw = ht_pro_width(&ph_sb_22, text), w = PILL_PAD * 2 + (mark ? mark + 10 : 0) + tw;
-    ht_pro_rect_aa(s, x, y, w, PILL_H, PILL_H / 2, C(fill));
-    int tx = x + PILL_PAD;
+    const int mark = kind == 1 ? 32 : kind == 2 ? 11 : 0, tw = ht_pro_width(&ph_sb_22, text), w = pad * 2 + (mark ? mark + 10 : 0) + tw;
+    if (bg) ht_pro_rect_aa(s, x, y, w, PILL_H, PILL_H / 2, C(fill));
+    int tx = x + pad;
     if (kind == 1) {   // four bars, 5 px wide 4 px apart, 30..100 % of 22 px, anchored at the bottom
         static const int phase[4] = {0, -300, -600, -150};
         for (int i = 0; i < 4; i++) {
@@ -293,6 +296,10 @@ static int pill(ht_scene_t *s, int x, int y, unsigned fill, int kind, unsigned i
     }
     ph_text(s, tx + (mark ? mark + 10 : 0), y + PILL_H / 2, tw + 2, &ph_sb_22, ink, text);
     return w;
+}
+static int pill(ht_scene_t *s, int x, int y, unsigned fill, int kind, unsigned ink, const char *text, uint32_t now_ms)
+{
+    return pill_pad(s, x, y, fill, kind, ink, text, now_ms, PILL_PAD, true);
 }
 
 // An engine's logo at exactly `size` (a baked one: 28, 36, 44 or 72), else a ">_" outline box of that size on `fill`.
@@ -491,11 +498,33 @@ static void working_card(pod_out_frame_t *f, const pod_nav_t *nav, const pod_mod
 }
 
 // The Swarm card (see the header). A neighbour (full false) is the faded gradient and the Swarm's name, like a tab's.
-enum { SW_PEEK_SHOW = 56, SW_PEEK_FADE = 102, SW_FEET = 424, SW_SIDE = 118, SW_NAME_Y = SW_FEET + 31, SW_STATE_Y = SW_FEET + 65, SW_OWNER_Y = SW_FEET + 95, SW_DOT = 14, SW_HIT_Y = 300, SW_HIT_H = 250 };
+enum { SW_PEEK_SHOW = 56, SW_PEEK_FADE = 102, SW_PILL_Y = 116, SW_CAP_H = 58, SW_DISC = 46, SW_SEG_PAD = 13, SW_OWNER_Y = WK_TIME_Y + 30, SW_HIT_Y = 186, SW_HIT_H = 296 };
 // Centred on cx, the run's top at y.
 static void centred(ht_scene_t *s, int cx, int y, const ht_pro_font_t *f, unsigned rgb, const char *t)
 {
     ht_pro_text(s, cx - ht_pro_width(f, t) / 2, y, ht_pro_width(f, t) + 2, f, C(rgb), t);
+}
+// The order the card shows the Leads in: ord[] = indices into sw->leads, the Swarm's order (the app's, as the cable put them) whatever their state, so a Lead
+// keeps its place as it changes; cnt[0..3] = how many are stuck, need you, working, done.
+static int lead_order(const pod_swarm_t *sw, int *ord, int *cnt)
+{
+    static const pod_lead_state_t rank[4] = {POD_LEAD_STUCK, POD_LEAD_ASK, POD_LEAD_WORK, POD_LEAD_DONE};
+    int n = 0;
+    cnt[0] = cnt[1] = cnt[2] = cnt[3] = 0;
+    for (int j = 0; j < sw->lead_n && j < SWARM_LEADS_MAX; j++) {
+        ord[n++] = j;
+        for (int r = 0; r < 4; r++) if (sw->leads[j].state == rank[r]) cnt[r]++;
+    }
+    return n;
+}
+// A Lead's status line on this card: "needs you", "stuck", "done", a working Lead's clock alone (ph_lead_status's line less its "working · "). Returns its colour.
+static unsigned swarm_status(const pod_lead_t *l, uint32_t now_ms, char *line, size_t n, unsigned dim)
+{
+    char full[CABLE_NAME_MAX + 4];
+    const unsigned ink = ph_lead_status(l, now_ms, full, sizeof full, dim);
+    const char *dot = l->state == POD_LEAD_WORK ? strstr(full, "\xc2\xb7 ") : NULL;
+    snprintf(line, n, "%s", dot ? dot + 3 : full);
+    return l->state == POD_LEAD_WORK ? PH_PILL_WORK : ink;   // the clock in the Working card's green
 }
 static void swarm_card(pod_out_frame_t *f, const pod_nav_t *nav, const pod_swarm_t *sw, int x, int y, int w, int h, int r, int fade, bool full, uint32_t now_ms)
 {
@@ -512,57 +541,88 @@ static void swarm_card(pod_out_frame_t *f, const pod_nav_t *nav, const pod_swarm
     }
     ph_text(s, nx, y + NAME_Y + nf->height / 2, NAME_W, nf, PH_CARD_INK, name);
 
-    // the number of workspaces and its label, as a tab card's agent count, with an orange dot pulsing before the label while a Lead needs you
-    bool ask = false;
-    for (int j = 0; j < sw->lead_n && j < SWARM_LEADS_MAX; j++) ask |= sw->leads[j].state == POD_LEAD_ASK;
+    int ord[SWARM_LEADS_MAX], cnt[4];
+    const int lead_n = lead_order(sw, ord, cnt);
     char txt[CABLE_NAME_MAX + 4];
-    snprintf(txt, sizeof txt, "%d", sw->count);
-    const int cw = ht_pro_width(&ph_num_230, txt);
-    ht_pro_text(s, x + NUM_X, y + NUM_TOP, cw + 2, &ph_num_230, C(PH_CARD_INK), txt);
-    const unsigned ground = ph_mix(c1, c2, 100 - NUM_BASE * 100 / h);
-    int lx = x + NUM_X + cw + LABEL_GAP;
-    if (ask) {
-        ht_pro_rect_aa(s, lx, y + NUM_BASE - 17, SW_DOT, SW_DOT, SW_DOT / 2, C(ph_mix(PH_LEAD_ASK, ground, 25 + 75 * (unsigned)tri(now_ms, 1200) / 100)));
-        lx += SW_DOT + 12;
+    if (!lead_n) {   // a Swarm with no project yet
+        const char *e = "No projects yet", *e2 = "Start one in the app";
+        centred(s, x + w / 2, y + 300, &ph_sb_34, ph_mix(0xFFFFFF, c1, 88), e);
+        centred(s, x + w / 2, y + 350, &ph_sb_22, ph_mix(0xFFFFFF, ph_mix(c1, c2, 40), 62), e2);
+        return;
     }
-    on_baseline(s, lx, y + NUM_BASE, &ph_sb_26, ph_mix(0xFFFFFF, ground, 85), sw->count == 1 ? "workspace" : "workspaces");
 
-    // the Leads, three to a page
-    const int pages = (sw->lead_n + WK_PER_PAGE - 1) / WK_PER_PAGE;
+    // The capsule: black 30 % over the card, a white disc with the number of projects, then "stuck · needs you" (one segment, red when anything is stuck,
+    // else orange, with a pulsing dot), "working" (the equaliser, green), or "All done" when nothing is. Too wide: "working" gives way to the bars and the number.
+    const unsigned fill = ph_mix(0x000000, ph_mix(c1, c2, 100 - (SW_PILL_Y + SW_CAP_H / 2) * 100 / h), 30);
+    char seg[2][CABLE_NAME_MAX];
+    int kind[2], ink[2], ns = 0, work = -1;
+    const char *needs = cnt[1] == 1 ? "needs" : "need";
+    if (cnt[0] && cnt[1]) snprintf(seg[ns], sizeof seg[0], "%d stuck \xc2\xb7 %d %s you", cnt[0], cnt[1], needs);
+    else if (cnt[0]) snprintf(seg[ns], sizeof seg[0], "%d stuck", cnt[0]);
+    else if (cnt[1]) snprintf(seg[ns], sizeof seg[0], "%d %s you", cnt[1], needs);
+    if (cnt[0] || cnt[1]) { kind[ns] = 2; ink[ns] = cnt[0] ? PH_LEAD_STUCK : PH_LEAD_ASK; ns++; }
+    if (cnt[2]) { snprintf(seg[ns], sizeof seg[0], "%d working", cnt[2]); kind[ns] = 1; ink[ns] = PH_PILL_WORK; work = ns++; }
+    if (!ns) { snprintf(seg[ns], sizeof seg[0], "All done"); kind[ns] = 0; ink[ns] = ph_mix(0xFFFFFF, fill, 86); ns++; }
+    snprintf(txt, sizeof txt, "%d", sw->count > 99 ? 99 : sw->count);
+    const int dw = ht_pro_width(&ph_sb_34, txt), disc = dw + 24 > SW_DISC ? dw + 24 : SW_DISC;   // a disc, widening to a lozenge for two digits
+    const int x0 = x + NAME_X, inset = (SW_CAP_H - SW_DISC) / 2;
+    int segw[2], total;
+    for (;;) {
+        total = inset + disc + 6 + 8;
+        for (int i = 0; i < ns; i++) {
+            const int mark = kind[i] == 1 ? 32 : kind[i] == 2 ? 11 : 0;
+            segw[i] = SW_SEG_PAD * 2 + (mark ? mark + 10 : 0) + ht_pro_width(&ph_sb_22, seg[i]);
+            total += segw[i];
+        }
+        if (total <= NAME_W || work < 0 || !strchr(seg[work], ' ')) break;
+        snprintf(seg[work], sizeof seg[0], "%d", cnt[2]);
+    }
+    const int ccy = y + SW_PILL_Y + SW_CAP_H / 2;
+    ht_pro_rect_aa(s, x0, ccy - SW_CAP_H / 2, total, SW_CAP_H, SW_CAP_H / 2, C(fill));
+    ht_pro_rect_aa(s, x0 + inset, ccy - SW_DISC / 2, disc, SW_DISC, SW_DISC / 2, C(ph_mix(0xFFFFFF, fill, 92)));
+    ph_text(s, x0 + inset + (disc - dw) / 2, ccy + 1, dw + 2, &ph_sb_34, c2, txt);
+    int sx = x0 + inset + disc + 6;
+    for (int i = 0; i < ns; i++) {
+        pill_pad(s, sx, ccy - PILL_H / 2, fill, kind[i], ink[i], seg[i], now_ms, SW_SEG_PAD, false);
+        sx += segw[i];
+    }
+
+    // the Leads, three to a page, in the card's order
+    const int pages = (lead_n + WK_PER_PAGE - 1) / WK_PER_PAGE;
     const int page = nav->swarm_page < pages ? nav->swarm_page : pages > 0 ? pages - 1 : 0;
-    const int first = page * WK_PER_PAGE, shown = sw->lead_n - first < WK_PER_PAGE ? sw->lead_n - first : WK_PER_PAGE;
+    const int first = page * WK_PER_PAGE, shown = lead_n - first < WK_PER_PAGE ? lead_n - first : WK_PER_PAGE;
     const char *engine[WK_PER_PAGE] = {0};
     pod_scene_t scene[WK_PER_PAGE] = {0};
     int cx[WK_PER_PAGE] = {0};
-    for (int k = 0; k < shown; k++) { engine[k] = sw->leads[first + k].engine; scene[k] = ph_lead_scene(sw->leads[first + k].state); }
+    for (int k = 0; k < shown; k++) { engine[k] = sw->leads[ord[first + k]].engine; scene[k] = ph_lead_scene(sw->leads[ord[first + k]].state); }
     // the page's neighbour Lead peeks in at the card's edge (the next page's first at the right, the previous page's last at the left): faded, clipped to
     // the card by a veil (it paints the ground over what spilled past the edge), no text. Drawn first so the page's own pets stand over it.
     for (int side = -1; side <= 1; side += 2) {
-        if (side > 0 ? first + shown >= sw->lead_n : page == 0) continue;
-        const pod_lead_t *l = &sw->leads[side > 0 ? first + shown : first - 1];
+        if (side > 0 ? first + shown >= lead_n : page == 0) continue;
+        const pod_lead_t *l = &sw->leads[ord[side > 0 ? first + shown : first - 1]];
         const pod_scene_t sc = ph_lead_scene(l->state);
-        const int sd = !strcmp(l->engine, "claude") ? 2 * SW_SIDE : SW_SIDE;
+        const int sd = !strcmp(l->engine, "claude") ? 2 * WK_SIDE : WK_SIDE;
         const int cxp = side > 0 ? x + w - SW_PEEK_SHOW + sd / 2 : x + SW_PEEK_SHOW - sd / 2;
-        const int ink = pod_pet_ink_h(l->engine, sc, sd, 8), top = y + SW_FEET - (ink ? ink : LOGO) - 12;
-        pet_at(s, y, h, c1, c2, SW_FEET, SW_SIDE, cxp, l->engine, sc, now_ms);
+        const int ink = pod_pet_ink_h(l->engine, sc, sd, 8), top = y + WK_FEET - (ink ? ink : LOGO) - 12;
+        pet_at(s, y, h, c1, c2, WK_FEET, WK_SIDE, cxp, l->engine, sc, now_ms);
         const int vx = side > 0 ? x + w - SW_PEEK_SHOW - 4 : x - sd, vw = SW_PEEK_SHOW + 4 + sd;
-        pod_veil(s, vx, top, vw, y + SW_FEET + WK_SHADOW_H - top, side > 0 ? x + w : x, side > 0, y, h, C(c1), C(c2), C(PH_HOME_BG), SW_PEEK_FADE);
+        pod_veil(s, vx, top, vw, y + WK_FEET + WK_SHADOW_H - top, side > 0 ? x + w : x, side > 0, y, h, C(c1), C(c2), C(PH_HOME_BG), SW_PEEK_FADE);
     }
-    pet_row(s, x, y, w, h, c1, c2, SW_FEET, SW_SIDE, shown, engine, scene, cx, now_ms);
+    pet_row(s, x, y, w, h, c1, c2, WK_FEET, WK_SIDE, shown, engine, scene, cx, now_ms);
     for (int k = 0; k < shown; k++) {
-        const pod_lead_t *l = &sw->leads[first + k];
+        const pod_lead_t *l = &sw->leads[ord[first + k]];
         shown_name(txt, sizeof txt, l->project, WK_NAME_W, &ph_sb_22);
-        centred(s, cx[k], y + SW_NAME_Y, &ph_sb_22, PH_CARD_INK, txt);
-        const unsigned dim = ph_mix(0xFFFFFF, ph_mix(c1, c2, 100 - (SW_STATE_Y + 11) * 100 / h), 60);   // white at 60 % over the card
+        centred(s, cx[k], y + WK_NAME_Y, &ph_sb_22, PH_CARD_INK, txt);
+        const unsigned dim = ph_mix(0xFFFFFF, ph_mix(c1, c2, 100 - (WK_TIME_Y + 11) * 100 / h), 60);   // white at 60 % over the card
         char line[CABLE_NAME_MAX + 4];
-        const unsigned ink = ph_lead_status(l, now_ms, line, sizeof line, dim);
+        const unsigned ink = swarm_status(l, now_ms, line, sizeof line, dim);
         shown_name(txt, sizeof txt, line, WK_NAME_W + 6, &ph_sb_22);
-        centred(s, cx[k], y + SW_STATE_Y, &ph_sb_22, ink, txt);
+        centred(s, cx[k], y + WK_TIME_Y, &ph_sb_22, ink, txt);
         if (l->owner[0]) {   // someone else's machine: whose, small and muted
             shown_name(txt, sizeof txt, l->owner, WK_NAME_W, &ph_mono_18);
             centred(s, cx[k], y + SW_OWNER_Y, &ph_mono_18, ph_mix(0xFFFFFF, ph_mix(c1, c2, 100 - (SW_OWNER_Y + 12) * 100 / h), 55), txt);
         }
-        pod_hit_add_id(f, cx[k] - WK_HIT_W / 2, y + SW_HIT_Y, WK_HIT_W, SW_HIT_H, POD_A_LEAD, first + k, sw->id);
+        pod_hit_add_id(f, cx[k] - WK_HIT_W / 2, y + SW_HIT_Y, WK_HIT_W, SW_HIT_H, POD_A_LEAD, ord[first + k], sw->id);
     }
 }
 

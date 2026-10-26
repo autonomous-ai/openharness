@@ -5,16 +5,20 @@
  * only when its `revision` moved. The service hands the result to the core whole (`onCards`); the core owns the wire.
  *
  * Status of a project's Lead, most pressing first: `ask` (an assignment of the project needs a person, `needs_human`),
- * `stuck` (`blocked`), `work` (the Lead runs here and is in a turn, or an assignment works or is in review), else `done`.
+ * `stuck` (`blocked`), `work` (an agent of the project, the Lead or a worker, runs here and is in a turn, as the app marks each
+ * agent working by its own live turn, `since` from the earliest of those turns; or an assignment works or is in review, all there is for agents on
+ * other machines), else `done`.
  * A paused Swarm keeps its card and every Lead reads `done`.
  */
+import { randomUUID } from 'node:crypto'
 import type { CoreApi } from '../core/api.js'
 import { backend, SuperTabHostError } from './host.js'
 import { identifier, object } from './wire.js'
 
 type Json = Record<string, unknown>
 export type LeadState = 'ask' | 'stuck' | 'work' | 'done'
-export interface SwarmLead { id: string; projectId: string; project: string; engine: string; owner: string; local: string; state: LeadState; since?: number }
+/** `order`: the project's index in the Swarm (the app's order), so a dial can show the Leads as the app does whatever their urgency. */
+export interface SwarmLead { id: string; projectId: string; project: string; engine: string; owner: string; local: string; state: LeadState; order: number; since?: number }
 export interface SwarmCard { id: string; name: string; count: number; leads: SwarmLead[] }
 export interface LeadRecap { tabId: string; leadId: string; text: string; at: number; none: boolean }
 
@@ -37,7 +41,8 @@ function cut(text: string, bytes: number): string {
 const list = (v: unknown): Json[] => Array.isArray(v) ? v.map(object) : []
 
 /**
- * One Lead per project of the Swarm, in project order then by urgency. `live` says whether this machine's core has a
+ * One Lead per project of the Swarm, most urgent first with ties in project order; the 12 most urgent are kept, and each
+ * carries its project's index as `order` (gaps where a project has no Lead or was cut). `live` says whether this machine's core has a
  * harness and whether it is in a turn (null: not here); `me` is the signed-in person's id, so a Lead on someone else's
  * machine names that owner (people[] has an email, which is the name a Swarm shows a person by).
  */
@@ -46,8 +51,12 @@ export function leadsOf(state: Json, machineId: string, live: (harnessId: string
   // An old tab has no `projects`: its one project is the tab itself, `lead`, led by the conversation `lead`.
   const projects = Array.isArray(state.projects) ? list(state.projects) : [{ id: 'lead', name: state.name, leadConversationId: 'lead' }]
   const paused = state.paused === true
+  // An agent's project as the app's roster reads it: its own, else the first group that has it or that it leads.
+  const projectOf = (a: Json) => typeof a.projectId === 'string' ? a.projectId
+    : conversations.find(c => (Array.isArray(c.agentIds) && c.agentIds.includes(a.id)) || c.leadId === a.id)?.projectId ?? 'lead'
+  const turnHere = (a: Json) => a.machineId === machineId && typeof a.harnessId === 'string' && a.harnessId !== '' ? live(a.harnessId) : null
   const leads: SwarmLead[] = []
-  for (const project of projects) {
+  for (const [order, project] of projects.entries()) {
     const lead = conversations.find(c => c.id === project.leadConversationId)
     const agent = lead && agents.find(a => a.id === lead.leadId)
     if (!agent) continue
@@ -60,15 +69,22 @@ export function leadsOf(state: Json, machineId: string, live: (harnessId: string
     if (!paused) {
       if (waits.has('needs_human')) state = 'ask'
       else if (waits.has('blocked')) state = 'stuck'
-      else if (here?.inTurn) { state = 'work'; since = here.since }
-      else if (waits.has('working') || waits.has('review')) state = 'work'
+      else {
+        // The project's clock is its earliest turn here (the most seconds in), the Lead's or a worker's.
+        const turns = [here, ...agents.filter(a => a !== agent && projectOf(a) === (project.id ?? 'lead')).map(turnHere)].filter(t => t?.inTurn)
+        if (turns.length) {
+          state = 'work'
+          const secs = turns.map(t => t!.since).filter((v): v is number => typeof v === 'number')
+          if (secs.length) since = Math.max(...secs)
+        } else if (waits.has('working') || waits.has('review')) state = 'work'
+      }
     }
     const ownerId = agent.machineOwnerId
     const owner = me && typeof ownerId === 'string' && ownerId !== me ? people.find(p => p.id === ownerId) : undefined
     leads.push({
       id: String(agent.id), projectId: String(project.id ?? 'lead'), project: cut(String(project.name ?? ''), NAME_BYTES), engine: String(object(agent.configuration).engine ?? ''),
       owner: owner && typeof owner.email === 'string' ? cut(owner.email, NAME_BYTES) : '',
-      local: here && cardId(harnessId) ? harnessId : '', state, ...(since !== undefined ? { since } : {}),
+      local: here && cardId(harnessId) ? harnessId : '', state, order, ...(since !== undefined ? { since } : {}),
     })
   }
   // Array.sort is stable: equal urgency keeps the project order.
@@ -112,6 +128,8 @@ export class SwarmCards {
   /** When each local Lead's current turn began, so `since` counts on between polls. */
   private turns = new Map<string, number>()
   private last: string | null = null
+  /** When each shown Lead's clock started (ms, `${card}/${lead}`), as the list last sent said. */
+  private lastStarts = new Map<string, number>()
   private me: string | undefined
   private include: string[] = []
   private opened = new Map<string, Opened>()
@@ -210,8 +228,13 @@ export class SwarmCards {
       cards.push({ id: row.id as string, name: cut(String(tab.state.name ?? row.name ?? ''), NAME_BYTES), count, leads })
     }
     // `since` moves every poll while a turn runs and the Pro counts on by itself, so it alone never re-sends the list.
+    // Nor does a clock that keeps its turn; one whose turn changed (the Lead's ended, a worker's goes on) does. The start is
+    // compared within 2 s: `since` is whole seconds, read at a poll's own moment.
     const signature = JSON.stringify(cards, (key, value) => key === 'since' ? value !== undefined : value)
-    if (signature !== this.last) { this.last = signature; this.onCards?.(cards) }
+    const now = this.now(), starts = new Map<string, number>()
+    for (const card of cards) for (const lead of card.leads) if (lead.since !== undefined) starts.set(`${card.id}/${lead.id}`, now - lead.since * 1000)
+    const moved = [...starts].some(([key, at]) => Math.abs(at - (this.lastStarts.get(key) ?? at)) > 2000)
+    if (signature !== this.last || moved) { this.last = signature; this.lastStarts = starts; this.onCards?.(cards) }
     this.prune()
     await this.pushOpen()
   }
@@ -231,7 +254,8 @@ export class SwarmCards {
         const elapsed = (await this.core.agents.activitySnapshot?.(id).catch(() => null))?.elapsedSeconds
         this.turns.set(id, now - (typeof elapsed === 'number' && elapsed > 0 ? elapsed * 1000 : 0))
       }
-      out.set(id, { inTurn: true, since: Math.max(0, Math.floor((now - this.turns.get(id)!) / 1000)) })
+      // At least 1: the Pro reads 0 as no turn start and shows no clock.
+      out.set(id, { inTurn: true, since: Math.max(1, Math.floor((now - this.turns.get(id)!) / 1000)) })
     }
     for (const id of [...this.turns.keys()]) if (!ids.has(id)) this.turns.delete(id)
     return out
@@ -282,6 +306,20 @@ export class SwarmCards {
       this.recaps.set(key, { sequence: found.sequence, recap })
       return recap
     } finally { this.recapsRunning-- }
+  }
+
+  /** Words spoken on a Pro to a Lead that runs here (its harness): posted as the person in that Lead's conversation, as typed in
+   *  the Swarm chat. False when that harness leads no project in the Swarms as last read, so the caller sends the turn as before. */
+  async say(harnessId: string, text: string): Promise<boolean> {
+    for (const [tabId, { state }] of this.tabs) {
+      const agent = list(state.agents).find(a => a.machineId === this.machineId && a.harnessId === harnessId)
+      const found = agent && cardId(agent.id) ? this.leadConversation(tabId, agent.id) : null
+      if (!found) continue
+      await backend(this.core, 'POST', `/api/super-tabs/${tabId}/commands`, { operationId: `pro-voice-${randomUUID()}`,
+        command: { type: 'message.send', conversationId: found.id, text, replyTo: null, recipientIds: [] } })
+      return true
+    }
+    return false
   }
 
   /** Remembered recaps are kept only for Leads that are still in a tab. */

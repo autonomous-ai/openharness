@@ -396,6 +396,34 @@ void main() {
     },
   );
 
+  testWidgets(
+    'a sent message whose credential was removed says so in one line above the composer',
+    (tester) async {
+      const notice =
+          'Removed a credential (JWT) before saving. Revoke or rotate it.';
+      final server = ConversationServer()
+        ..commandResult['credentialNotice'] = notice;
+      await show(tester, server);
+      expect(
+        find.byKey(const ValueKey('super-operation-notice')),
+        findsNothing,
+      );
+      await tester.enterText(
+        find.byKey(const ValueKey('super-message-composer')),
+        'My login token is in here.',
+      );
+      await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+      await tester.pumpAndSettle();
+      expect(find.text(notice), findsOneWidget);
+      expect(
+        find.byKey(const ValueKey('super-operation-notice')),
+        findsOneWidget,
+      );
+      // Let the emptied draft's save run.
+      await tester.pump(const Duration(milliseconds: 300));
+    },
+  );
+
   testWidgets('the quote of your own message reads You, not your email', (
     tester,
   ) async {

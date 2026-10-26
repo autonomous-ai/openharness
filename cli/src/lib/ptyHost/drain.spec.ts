@@ -1,6 +1,6 @@
-import { spawn } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
 import { once } from 'node:events'
-import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import net from 'node:net'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
@@ -13,7 +13,8 @@ import { terminalRouteKey } from '../terminalRuntime.js'
 import type { ProcessRow } from '../processTable.js'
 import type { PtyRuntimeRef, TerminalInventoryResult } from '../terminalTypes.js'
 import { PtyHostClient } from './client.js'
-import type { ReachPtyHostResult } from './launch.js'
+import { discoveryFileName } from './instance.js'
+import type { PtyHostTarget, ReachPtyHostResult } from './launch.js'
 import { helloProof, PTY_PROTOCOL, SHUTDOWN_PROTOCOL, type PtyEvent, type PtyOp } from './protocol.js'
 
 // The Windows seams, watched: a drain backend must never install them (they are the create backend's).
@@ -23,8 +24,8 @@ vi.mock('../processTable.js', async (importOriginal) => {
 })
 
 const { PtyHostBackend } = await import('../ptyHostBackend.js')
-const { EMPTY_PASSES, isDrainBackend, ptyHostBackends, PtyHostDrain, rowsOnInstance } = await import('./drain.js')
-const { readDiscovery } = await import('./launch.js')
+const { EMPTY_PASSES, isDrainBackend, ptyHostBackends, ptyHostOnProbation, PtyHostDrain, rowInstancesOf, rowsOnInstance, untilHostAttached, withoutCreateHost } = await import('./drain.js')
+const { listDiscoveries, readInstanceDiscovery, removeUnusedPtyVersions, targetHost } = await import('./launch.js')
 const { setProcessTableSource } = await import('../processTable.js')
 
 const OLD = PTY_PROTOCOL - 1
@@ -52,10 +53,16 @@ const endpointIn = (dir: string, name: string) => process.platform === 'win32'
   ? `\\\\.\\pipe\\pty-drain-${path.basename(dir)}-${name}`
   : path.join(dir, `${name}.sock`)
 
-/** A stand-in host in this process: it proves its token, says hello as `p<protocol>`, and lists [panes]. */
-async function fakeHostAt(endpoint: string, panes: unknown[] = []) {
+/**
+ * A stand-in host in this process: it proves its token, says hello as [instance] (`p<protocol>` by default) with
+ * [pid] (this process's by default), lists [panes], and records every op it is asked; a `shutdown` is granted, and
+ * [onShutdown] told.
+ */
+async function fakeHostAt(endpoint: string, panes: unknown[] = [], options: { instance?: string; pid?: number; onShutdown?: () => void } = {}) {
   const token = `tok-${path.basename(endpoint)}`
   const hellos: number[] = []
+  const ops: string[] = []
+  const pid = options.pid ?? process.pid
   const server = net.createServer(socket => {
     socket.on('error', () => {})
     let pending = ''
@@ -67,24 +74,36 @@ async function fakeHostAt(endpoint: string, panes: unknown[] = []) {
         const value = JSON.parse(pending.slice(0, at))
         pending = pending.slice(at + 1)
         if (said) {
-          socket.write(`${JSON.stringify(value.op === 'inventory' ? { id: value.id, ok: true, panes } : { id: value.id, ok: true })}\n`)
+          ops.push(value.op)
+          if (value.op === 'shutdown') options.onShutdown?.()
+          socket.write(`${JSON.stringify(value.op === 'inventory' ? { id: value.id, ok: true, panes } : value.op === 'create' ? { id: value.id, ok: true, pane: '%9' } : { id: value.id, ok: true })}\n`)
           continue
         }
         said = true
         hellos.push(value.hello.protocol)
-        socket.write(`${JSON.stringify({ hello: { ok: true, instance: `p${value.hello.protocol}`, version: '0.1.0', pid: process.pid, proof: helloProof(token, value.hello.nonce) } })}\n`)
+        socket.write(`${JSON.stringify({ hello: { ok: true, instance: options.instance ?? `p${value.hello.protocol}`, version: '0.1.0', pid, proof: helloProof(token, value.hello.nonce) } })}\n`)
       }
     })
   })
   server.listen(endpoint)
   await once(server, 'listening')
   cleanup.push(() => new Promise(resolve => server.close(resolve)))
-  return { endpoint, token, pid: process.pid, hellos }
+  return { endpoint, token, pid, hellos, ops }
 }
 
-function writeDiscovery(home: string, value: { protocol: number; instance: string; endpoint: string; token: string; pid: number }) {
+function writeDiscovery(home: string, value: { protocol: number; instance: string; endpoint: string; token: string; pid: number; version?: string }) {
   mkdirSync(path.join(home, 'run'), { recursive: true })
-  writeFileSync(path.join(home, 'run', `pty-host-${value.protocol}.json`), JSON.stringify({ version: '0.1.0', ...value }))
+  writeFileSync(path.join(home, 'run', discoveryFileName(value.instance)!), JSON.stringify({ version: '0.1.0', ...value }))
+}
+
+/** A target of [version] (`p<PTY_PROTOCOL>-<version>`), from [source]. */
+const targetOf = (version: string, source: PtyHostTarget['source'] = 'installed', instance = `p${PTY_PROTOCOL}-${version}`): PtyHostTarget =>
+  ({ protocol: PTY_PROTOCOL, version, instance, features: ['seed'], source })
+
+/** A pid no process has any more: a child's that has exited. */
+function deadPid(): number {
+  const child = spawnSync(process.execPath, ['-e', ''])
+  return child.pid!
 }
 
 /** A stub client of a host with [pid] speaking [protocol]: [replies] by op name, `ok {}` for the rest. */
@@ -127,7 +146,7 @@ function drainBackend(results: Array<StubClient | ReachPtyHostResult>, options: 
   const tables = vi.fn(options.rows ?? (async () => [row(10)]))
   const backend = new PtyHostBackend({
     home: options.home ?? '/tmp/none',
-    protocol: OLD,
+    instance: `p${OLD}`,
     launch,
     owner: () => 'me',
     platform: options.platform ?? 'linux',
@@ -138,49 +157,200 @@ function drainBackend(results: Array<StubClient | ReachPtyHostResult>, options: 
 
 const OLD_PANE: PtyRuntimeRef = { backend: 'ptyhost', instance: `p${OLD}`, paneId: '%3' }
 
+const P = PTY_PROTOCOL
+const PANE_ROW = { pane: '%3', rootPid: 7, cwd: '/w', title: '', dead: false, owner: 'me', label: null }
+
+/**
+ * [home] with the target's host (`p<P>-0.2.0`, this process's pid) and another of [version] of the same protocol, with
+ * [panes]: its pid is one no process has, and the `hostProcess` seam says it runs until it is asked to shut down.
+ * The runtime has `pty/0.1.0`, `pty/0.2.0` (`current-pty`) and `pty/0.3.0`.
+ */
+async function twoVersions(version: string, panes: unknown[] = []) {
+  const home = tmpHome()
+  const runtime = tmpHome()
+  for (const name of ['0.1.0', '0.2.0', '0.3.0']) mkdirSync(path.join(runtime, 'pty', name), { recursive: true })
+  writeFileSync(path.join(runtime, 'pty', 'current-pty'), '0.2.0')
+  const pid = deadPid()
+  let exited = false
+  const other = await fakeHostAt(endpointIn(home, 'other'), panes, { instance: `p${P}-${version}`, pid, onShutdown: () => { exited = true } })
+  const target = await fakeHostAt(endpointIn(home, 'target'), [], { instance: `p${P}-0.2.0` })
+  writeDiscovery(home, { protocol: P, instance: `p${P}-${version}`, version, endpoint: other.endpoint, token: other.token, pid })
+  writeDiscovery(home, { protocol: P, instance: `p${P}-0.2.0`, version: '0.2.0', endpoint: target.endpoint, token: target.token, pid: target.pid })
+  const hostProcess = { alive: (candidate: number) => candidate !== pid || !exited, rows: async () => [] }
+  return { home, runtime, other, target, hostProcess }
+}
+
+/** The create and drain backends of [home] under [target], prepared, and a drain over them. */
+async function drained(home: string, target: PtyHostTarget | null, options: { hostProcess?: { alive: (pid: number) => boolean; rows: () => Promise<ProcessRow[] | null> }; inUse?: () => boolean; cleanup?: () => void } = {}) {
+  const { create, drain } = ptyHostBackends(home, { target, owner: () => 'me', platform: 'linux', ...(options.hostProcess ? { hostProcess: options.hostProcess } : {}) })
+  cleanup.push(() => { create.dispose(); for (const backend of drain) backend.dispose() })
+  expect(await create.prepare({ ownedPanes: new Map() })).toEqual({ state: 'ready' })
+  for (const backend of drain) expect(await backend.prepare({ ownedPanes: new Map() })).toEqual({ state: 'ready' })
+  const backends: TerminalBackend[] = [create, ...drain]
+  const drainer = new PtyHostDrain({ drain, backends, coordinator: { replaceBackends: () => {} }, inUse: options.inUse ?? (() => false), cleanup: options.cleanup })
+  return { create, drain, backends, drainer }
+}
+
 describe.runIf(PTY_PROTOCOL >= 2)('ptyHostBackends', () => {
-  it('creates on the newest host and keeps older panes on the old one', async () => {
+  it('creates on the target host and keeps older protocol panes on the old one', async () => {
+    quiet()
     const home = tmpHome()
-    const oldHost = await fakeHostAt(endpointIn(home, 'old'), [{ pane: '%3', rootPid: 7, cwd: '/w', title: '', dead: false, owner: 'me', label: null }])
+    const oldHost = await fakeHostAt(endpointIn(home, 'old'), [PANE_ROW])
     const newHost = await fakeHostAt(endpointIn(home, 'new'))
     writeDiscovery(home, { protocol: OLD, instance: `p${OLD}`, ...oldHost })
-    writeDiscovery(home, { protocol: PTY_PROTOCOL, instance: `p${PTY_PROTOCOL}`, ...newHost })
-    const { create, drain } = ptyHostBackends(home, { owner: () => 'me', platform: 'linux' })
+    writeDiscovery(home, { protocol: P, instance: `p${P}`, ...newHost })
+    // A pre-G binary's target: its host is the legacy `p<P>`.
+    const { create, drain } = ptyHostBackends(home, { target: targetOf('0.1.0', 'binary', `p${P}`), owner: () => 'me', platform: 'linux' })
     cleanup.push(() => { create.dispose(); for (const backend of drain) backend.dispose() })
     expect(await create.prepare({ ownedPanes: new Map() })).toEqual({ state: 'ready' })
     for (const backend of drain) expect(await backend.prepare({ ownedPanes: new Map() })).toEqual({ state: 'ready' })
-    expect(create.instanceId).toBe(`ptyhost:p${PTY_PROTOCOL}`)
+    expect(create.instanceId).toBe(`ptyhost:p${P}`)
     expect(drain.map((b) => b.instanceId)).toEqual([`ptyhost:p${OLD}`])
     // Each is spoken to in its own protocol.
-    expect([oldHost.hellos, newHost.hellos]).toEqual([[OLD], [PTY_PROTOCOL]])
+    expect([oldHost.hellos, newHost.hellos]).toEqual([[OLD], [P]])
     expect([isDrainBackend(create), isDrainBackend(drain[0])]).toEqual([false, true])
     // The old pane is listed on its own instance, and the route keys of both instances reach their own backend.
     expect(await drain[0].inventory()).toEqual({ state: 'available', roots: [{ runtime: OLD_PANE, rootPid: 7, cwd: '/w' }] })
     const created = await create.create({ command: ['sh'] })
     if (created.state !== 'succeeded') throw new Error(JSON.stringify(created))
-    expect(created.runtime.instance).toBe(`p${PTY_PROTOCOL}`)
+    expect(created.runtime.instance).toBe(`p${P}`)
     const terminals = new TerminalBackendCoordinator([create, ...drain], ['ptyhost'])
     expect(terminals.backendFor(OLD_PANE)).toBe(drain[0])
     expect(terminals.backendFor(created.runtime)).toBe(create)
-    expect(terminalRouteKey(OLD_PANE)).not.toBe(terminalRouteKey({ ...OLD_PANE, instance: `p${PTY_PROTOCOL}` }))
+    expect(terminalRouteKey(OLD_PANE)).not.toBe(terminalRouteKey({ ...OLD_PANE, instance: `p${P}` }))
     // A drain backend never makes a pane.
     expect(await drain[0].create({ command: ['sh'] })).toMatchObject({ state: 'failed', dispatch: 'not_started', reason: expect.stringContaining('draining') })
   })
 
-  it('makes a drain backend for an older protocol only with its discovery file, or rows still on it', () => {
+  it('an older version\'s host of the same protocol drains', async () => {
+    quiet()
+    const { home, other, target, hostProcess } = await twoVersions('0.1.0', [PANE_ROW])
+    for (const source of ['installed', 'binary'] as const) {
+      const { create, drain } = await drained(home, targetOf('0.2.0', source), { hostProcess })
+      expect(drain.map((b) => [b.instanceId, b.draining, b.mayShutDown])).toEqual([[`ptyhost:p${P}-0.1.0`, true, true]])
+      expect(create.instanceId).toBe(`ptyhost:p${P}-0.2.0`)
+      const created = await create.create({ command: ['sh'] })
+      expect(created).toMatchObject({ state: 'succeeded', runtime: { instance: `p${P}-0.2.0` } })
+      expect(await drain[0].inventory()).toEqual({ state: 'available', roots: [{ runtime: { backend: 'ptyhost', instance: `p${P}-0.1.0`, paneId: '%3' }, rootPid: 7, cwd: '/w' }] })
+      expect(await drain[0].create({ command: ['sh'] })).toMatchObject({ state: 'failed', dispatch: 'not_started', reason: expect.stringContaining('draining') })
+    }
+    // New panes went to the target alone.
+    expect([other.ops.includes('create'), target.ops.filter((op) => op === 'create').length]).toEqual([false, 2])
+  })
+
+  it('a legacy p2 host drains', async () => {
+    quiet()
     const home = tmpHome()
-    expect(ptyHostBackends(home).drain).toEqual([])
-    const onOld = ptyHostBackends(home, { rowsOn: (id) => id === `ptyhost:p${OLD}` })
-    expect(onOld.drain.map((b) => [b.instanceId, b.protocol, b.draining])).toEqual([[`ptyhost:p${OLD}`, OLD, true]])
-    expect([onOld.create.protocol, onOld.create.draining]).toEqual([PTY_PROTOCOL, false])
-    writeDiscovery(home, { protocol: OLD, instance: `p${OLD}`, endpoint: '/x', token: 't', pid: 1 })
-    expect(ptyHostBackends(home).drain).toHaveLength(1)
+    const legacy = await fakeHostAt(endpointIn(home, 'legacy'), [PANE_ROW])
+    const target = await fakeHostAt(endpointIn(home, 'target'), [], { instance: `p${P}-0.2.0` })
+    writeDiscovery(home, { protocol: P, instance: `p${P}`, endpoint: legacy.endpoint, token: legacy.token, pid: legacy.pid })
+    writeDiscovery(home, { protocol: P, instance: `p${P}-0.2.0`, version: '0.2.0', endpoint: target.endpoint, token: target.token, pid: target.pid })
+    const { create, drain } = await drained(home, targetOf('0.2.0'))
+    expect([create.instanceId, drain.map((b) => [b.instanceId, b.mayShutDown])]).toEqual([`ptyhost:p${P}-0.2.0`, [[`ptyhost:p${P}`, true]]])
+    expect(await drain[0].inventory()).toMatchObject({ state: 'available', roots: [{ runtime: { instance: `p${P}`, paneId: '%3' } }] })
+    expect(await create.create({ command: ['sh'] })).toMatchObject({ state: 'succeeded', runtime: { instance: `p${P}-0.2.0` } })
+    expect(legacy.ops).not.toContain('create')
+  })
+
+  it('a newer host drains and shuts down under an installed target', async () => {
+    quiet()
+    const { home, other, hostProcess } = await twoVersions('0.3.0')
+    const { create, drain, backends, drainer } = await drained(home, targetOf('0.2.0', 'installed'), { hostProcess })
+    expect(drain.map((b) => [b.instanceId, b.mayShutDown])).toEqual([[`ptyhost:p${P}-0.3.0`, true]])
+    for (let pass = 0; pass < EMPTY_PASSES; pass++) await drainer.step()
+    expect(other.ops).toContain('shutdown')
+    expect(drain[0].hostGone).toContain('shut down')
+    expect(backends).toEqual([create])
+  })
+
+  it('a newer host is reached but never shut down under a binary target', async () => {
+    quiet()
+    const { home, other, hostProcess } = await twoVersions('0.3.0')
+    let rows = true
+    const { create, drain, backends, drainer } = await drained(home, targetOf('0.2.0', 'binary'), { hostProcess, inUse: () => rows })
+    expect(drain.map((b) => [b.instanceId, b.mayShutDown])).toEqual([[`ptyhost:p${P}-0.3.0`, false]])
+    expect(other.hellos).toEqual([P])
+    for (let pass = 0; pass < EMPTY_PASSES + 2; pass++) await drainer.step()
+    // Rows still name it: reached, listed, kept.
+    expect(backends).toEqual([create, drain[0]])
+    expect(await drain[0].inventory()).toEqual({ state: 'available', roots: [] })
+    rows = false
+    await drainer.step()
+    // Its backend leaves; the host is never asked to go.
+    expect(backends).toEqual([create])
+    expect(other.ops).not.toContain('shutdown')
+    expect(drain[0].hostGone).toBeNull()
+  })
+
+  it('a drain backend never shuts its host down when there is no target', async () => {
+    quiet()
+    const { home, other, hostProcess } = await twoVersions('0.1.0')
+    const { drain } = ptyHostBackends(home, { target: null, owner: () => 'me', platform: 'linux', hostProcess })
+    expect(drain.map((b) => [b.instanceId, b.mayShutDown])).toEqual([[`ptyhost:p${P}-0.1.0`, false], [`ptyhost:p${P}-0.2.0`, false]])
+    expect(other.ops).toEqual([])
+  })
+
+  it('with no target, the drain backend of the host the create backend took leaves', async () => {
+    quiet()
+    const { home, hostProcess } = await twoVersions('0.1.0')
+    const { create, drain } = ptyHostBackends(home, { target: null, owner: () => 'me', platform: 'linux', hostProcess })
+    cleanup.push(() => { create.dispose(); for (const backend of drain) backend.dispose() })
+    for (const backend of [create, ...drain]) expect(await backend.prepare({ ownedPanes: new Map() })).toEqual({ state: 'ready' })
+    // The newest host answered the create backend.
+    expect(create.instanceId).toBe(`ptyhost:p${P}-0.2.0`)
+    const disposed = vi.spyOn(drain[1], 'dispose')
+    const kept = withoutCreateHost([create, ...drain], create)
+    expect(kept).toEqual([create, drain[0]])
+    expect(disposed).toHaveBeenCalledTimes(1)
+    expect(withoutCreateHost(kept, create)).toEqual(kept)
+  })
+
+  it('rows on an instance with no discovery get a drain backend', () => {
+    const home = tmpHome()
+    expect(ptyHostBackends(home, { target: targetOf('0.2.0') }).drain).toEqual([])
+    writeDiscovery(home, { protocol: P, instance: `p${P}-0.1.0`, version: '0.1.0', endpoint: '/x', token: 't', pid: 1 })
+    const rows = [`ptyhost:p${P}-0.0.9`, `ptyhost:p${OLD}`, `ptyhost:p${P}-0.1.0`, `ptyhost:p${P}-0.2.0`, 'ptyhost:p9-1.0', 'ptyhost:../x', `ptyhost:p${OLD}`]
+    const { create, drain } = ptyHostBackends(home, { target: targetOf('0.2.0'), rowInstances: () => rows })
+    // The discovered one, then those only rows name: never the target's, an unsupported protocol's or a non-instance.
+    expect(drain.map((b) => [b.instanceId, b.draining])).toEqual([[`ptyhost:p${P}-0.1.0`, true], [`ptyhost:p${P}-0.0.9`, true], [`ptyhost:p${OLD}`, true]])
+    expect([create.instanceId, create.draining]).toEqual(['ptyhost:unprepared', false])
+  })
+
+  it('rowInstancesOf: the pty host instances rows name, once each', () => {
+    const rows = [
+      { runtimes: [OLD_PANE, { ...OLD_PANE, paneId: '%4' }] },
+      { runtimes: [{ backend: 'tmux' as const, instance: 'default', paneId: '%1' }, { backend: 'ptyhost' as const, instance: `p${P}-0.1.0`, paneId: '%1' }] },
+    ]
+    expect(rowInstancesOf(rows)).toEqual([`ptyhost:p${OLD}`, `ptyhost:p${P}-0.1.0`])
+  })
+
+  it('an empty older host is shut down after EMPTY_PASSES and its folder removed', async () => {
+    quiet()
+    const { home, runtime, other, hostProcess } = await twoVersions('0.1.0')
+    const { create, backends, drainer } = await drained(home, targetOf('0.2.0'), { hostProcess, cleanup: () => { removeUnusedPtyVersions(home, runtime) } })
+    await drainer.step()
+    expect(other.ops).not.toContain('shutdown')
+    await drainer.step()
+    expect(other.ops).toContain('shutdown')
+    expect(backends).toEqual([create])
+    expect(readInstanceDiscovery(home, `p${P}-0.1.0`)).toBeNull()
+    expect(['0.1.0', '0.2.0', '0.3.0'].map((name) => existsSync(path.join(runtime, 'pty', name)))).toEqual([false, true, true])
+  })
+
+  it('a newer host\'s folder is never removed', async () => {
+    quiet()
+    const { home, runtime, other, hostProcess } = await twoVersions('0.3.0')
+    const { create, backends, drainer } = await drained(home, targetOf('0.2.0'), { hostProcess, cleanup: () => { removeUnusedPtyVersions(home, runtime) } })
+    for (let pass = 0; pass < EMPTY_PASSES; pass++) await drainer.step()
+    // Shut down (a rollback), and gone: still its folder stays, newer than `current-pty`.
+    expect([other.ops.includes('shutdown'), backends]).toEqual([true, [create]])
+    expect(['0.1.0', '0.2.0', '0.3.0'].map((name) => existsSync(path.join(runtime, 'pty', name)))).toEqual([false, true, true])
   })
 
   it('rowsOnInstance: whether a row has a runtime on the instance', () => {
     const rows = [{ runtimes: [OLD_PANE] }, { runtimes: [{ backend: 'tmux' as const, instance: 'default', paneId: '%1' }] }]
     expect(rowsOnInstance(rows, `ptyhost:p${OLD}`)).toBe(true)
-    expect(rowsOnInstance(rows, `ptyhost:p${PTY_PROTOCOL}`)).toBe(false)
+    expect(rowsOnInstance(rows, `ptyhost:p${P}`)).toBe(false)
   })
 })
 
@@ -350,12 +520,13 @@ describe.runIf(PTY_PROTOCOL >= 2)('a drain backend', () => {
 })
 
 /** Drain backends stubbed by state, and a drain over them. */
-function drainFixture(options: { oldPanes?: unknown[]; inUse?: () => boolean } = {}) {
-  type Stub = { instanceId: string; draining: true; hostGone: string | null; shutdownCalled: boolean; disposed: boolean; panes: unknown[]; refuse: boolean; unknown: boolean
+function drainFixture(options: { oldPanes?: unknown[]; inUse?: () => boolean; createAvailable?: () => boolean } = {}) {
+  type Stub = { instanceId: string; draining: true; mayShutDown: boolean; hostGone: string | null; shutdownCalled: boolean; disposed: boolean; panes: unknown[]; refuse: boolean; unknown: boolean
     drainState(): Promise<string>; shutdownHost(): Promise<string>; dispose(): void }
   const stub: Stub = {
     instanceId: `ptyhost:p${OLD}`,
     draining: true,
+    mayShutDown: true,
     hostGone: null,
     shutdownCalled: false,
     disposed: false,
@@ -381,9 +552,44 @@ function drainFixture(options: { oldPanes?: unknown[]; inUse?: () => boolean } =
     coordinator: { replaceBackends: (list) => { replaced.push([...list]) } },
     inUse: options.inUse ?? (() => false),
     cleanup: cleaned,
+    ...(options.createAvailable ? { createAvailable: options.createAvailable } : {}),
   })
   return { drain: [stub], drainer, step: () => drainer.step(), backends, create, replaced, cleaned }
 }
+
+describe('a host on probation', () => {
+  it('is one with a pty-pending.json', () => {
+    const runtime = mkdtempSync(path.join(tmpdir(), 'probation-'))
+    try {
+      expect(ptyHostOnProbation(runtime)).toBe(false)
+      mkdirSync(path.join(runtime, 'pty'))
+      writeFileSync(path.join(runtime, 'pty', 'pty-pending.json'), '{}')
+      expect(ptyHostOnProbation(runtime)).toBe(true)
+    } finally { rmSync(runtime, { recursive: true, force: true }) }
+  })
+
+  it('makes the core wait to be ready until the create backend is attached to it, said once, and forever when it never is', async () => {
+    vi.useFakeTimers()
+    try {
+      const lines: string[] = []
+      let attached = false
+      let ready = false
+      void untilHostAttached(() => attached, 'p2-0.11.0', (line) => lines.push(line)).then(() => { ready = true })
+      await vi.advanceTimersByTimeAsync(10_000)
+      expect(ready).toBe(false)
+      expect(lines).toEqual(['[terminal] ptyhost: the host on probation (p2-0.11.0) is not attached — not ready until it is; the master rolls it back if it never is'])
+      attached = true
+      await vi.advanceTimersByTimeAsync(250)
+      expect(ready).toBe(true)
+      expect(lines).toHaveLength(2)
+      expect(lines[1]).toBe('[terminal] ptyhost: the host on probation (p2-0.11.0) is attached')
+      // Attached from the start: ready at once, nothing said.
+      const quietLines: string[] = []
+      await untilHostAttached(() => true, null, (line) => quietLines.push(line))
+      expect(quietLines).toEqual([])
+    } finally { vi.useRealTimers() }
+  })
+})
 
 describe('PtyHostDrain', () => {
   it('shuts a drained host down after two empty passes', async () => {
@@ -423,6 +629,32 @@ describe('PtyHostDrain', () => {
     expect(kill).not.toHaveBeenCalled()
     expect(backend.hostGone).toBeNull()
     expect(client.closed).toBe(true)
+  })
+
+  it('never asks a host it may not shut down: it stays running, and its backend leaves once no row names it', async () => {
+    quiet()
+    let rows = true
+    const { drain, step, backends } = drainFixture({ inUse: () => rows })
+    drain[0].mayShutDown = false
+    for (let pass = 0; pass < EMPTY_PASSES + 1; pass++) await step()
+    expect([drain[0].shutdownCalled, backends.length]).toEqual([false, 2])
+    rows = false
+    await step()
+    expect([drain[0].shutdownCalled, backends.length, drain[0].hostGone]).toEqual([false, 1, null])
+  })
+
+  it('never shuts an old host down while the create backend is unavailable: it may be the only host that serves', async () => {
+    quiet()
+    let available = false
+    const { drain, step, backends } = drainFixture({ createAvailable: () => available })
+    for (let pass = 0; pass < EMPTY_PASSES + 2; pass++) await step()
+    expect([drain[0].shutdownCalled, backends.length]).toEqual([false, 2])
+    // Counted afresh once it is back: two empty passes with a create backend to go to.
+    available = true
+    await step()
+    expect(drain[0].shutdownCalled).toBe(false)
+    await step()
+    expect(drain[0].shutdownCalled).toBe(true)
   })
 
   it('counts empty passes in a row: a pass with a pane, or one that could not ask, starts again', async () => {
@@ -534,10 +766,13 @@ const computed = (word: string) => process.platform === 'win32' ? `echo "${word}
 describe.runIf(!!realBinary)('shutdown on the real host', () => {
   it('is refused while the host has a pane; granted, the host exits and takes its discovery file down', async () => {
     const home = tmpHome()
-    const { create } = ptyHostBackends(home, { owner: () => 'me' })
-    cleanup.push(() => { create.dispose(); killPid(readDiscovery(home, PTY_PROTOCOL)?.pid) })
+    const target = targetHost({ runtimeDir: home })
+    if (!target) throw new Error('HARNESS_PTY_BIN says no version')
+    const { create } = ptyHostBackends(home, { target, owner: () => 'me' })
+    cleanup.push(() => { create.dispose(); killPid(readInstanceDiscovery(home, target.instance)?.pid) })
     expect(await create.prepare({ ownedPanes: new Map() })).toEqual({ state: 'ready' })
-    const discovery = readDiscovery(home, PTY_PROTOCOL)!
+    expect(create.instanceId).toBe(`ptyhost:${target.instance}`)
+    const discovery = readInstanceDiscovery(home, target.instance)!
     const client = await PtyHostClient.connect(discovery)
     if (!(client instanceof PtyHostClient)) throw new Error(JSON.stringify(client))
     cleanup.push(() => client.close())
@@ -548,20 +783,24 @@ describe.runIf(!!realBinary)('shutdown on the real host', () => {
     expect((await create.kill(pane.runtime)).state).toBe('succeeded')
     expect(await client.call({ op: 'shutdown' })).toEqual({ state: 'ok', value: {} })
     expect(await until(() => alive(discovery.pid), (up) => !up)).toBe(false)
-    expect(existsSync(path.join(home, 'run', `pty-host-${PTY_PROTOCOL}.json`))).toBe(false)
+    expect(listDiscoveries(home).some((found) => found.pid === discovery.pid)).toBe(false)
   }, CASE_TIMEOUT_MS)
 })
 
-// A protocol bump with real hosts: HARNESS_PTY_BIN_PREV is a build of the protocol before (the commit before the bump,
-// built apart), HARNESS_PTY_BIN this one's.
-describe.runIf(!!realBinary && !!previousBinary && PTY_PROTOCOL >= 2)('a protocol bump with the real hosts', () => {
-  it('streams the old host\'s pane, makes new panes on the new host, and lets the old one go once its pane closes', async () => {
+// Two builds of one protocol with real hosts: HARNESS_PTY_BIN_PREV is the previous version, the same source built
+// with `HARNESS_PTY_VERSION=0.0.1` and copied aside first (as windows.yml builds it), HARNESS_PTY_BIN this one's.
+describe.runIf(!!realBinary && !!previousBinary)('a previous version with the real hosts', () => {
+  it('streams the old host\'s pane, makes new panes on the target, and shuts the old one down once its pane closes', async () => {
     quiet()
     const home = tmpHome()
-    cleanup.push(() => { killPid(readDiscovery(home, OLD)?.pid); killPid(readDiscovery(home, PTY_PROTOCOL)?.pid) })
+    const target = targetHost({ runtimeDir: home })
+    const previous = targetHost({ runtimeDir: home, env: { HARNESS_PTY_BIN: previousBinary } })
+    if (!target || !previous) throw new Error('a binary says no version')
+    expect(previous.instance).not.toBe(target.instance)
+    cleanup.push(() => { killPid(readInstanceDiscovery(home, previous.instance)?.pid); killPid(readInstanceDiscovery(home, target.instance)?.pid) })
     // The host an older daemon started, with a shell pane in it.
     spawn(previousBinary!, ['serve', '--home', home], { cwd: home, detached: true, stdio: 'ignore', windowsHide: true }).unref()
-    const old = await until(() => readDiscovery(home, OLD), (found) => found !== null)
+    const old = await until(() => readInstanceDiscovery(home, previous.instance), (found) => found !== null)
     if (!old) throw new Error('the previous host published no discovery file')
     const oldPid = old.pid
     const before = await PtyHostClient.connect(old)
@@ -569,15 +808,15 @@ describe.runIf(!!realBinary && !!previousBinary && PTY_PROTOCOL >= 2)('a protoco
     const made = await before.call({ op: 'create', command: SHELL, cols: 80, rows: 24, owner: 'me', hold: true })
     before.close()
     if (made.state !== 'ok') throw new Error(JSON.stringify(made))
-    const oldPane: PtyRuntimeRef = { backend: 'ptyhost', instance: `p${OLD}`, paneId: made.value.pane }
+    const oldPane: PtyRuntimeRef = { backend: 'ptyhost', instance: previous.instance, paneId: made.value.pane }
 
-    // This daemon: the new protocol's host is started, the old one drained.
-    const { create, drain } = ptyHostBackends(home, { owner: () => 'me' })
+    // This daemon: the target's host is started beside it, the old one drained.
+    const { create, drain } = ptyHostBackends(home, { target, owner: () => 'me' })
     cleanup.push(() => { create.dispose(); for (const backend of drain) backend.dispose() })
-    expect(drain).toHaveLength(1)
+    expect(drain.map((backend) => [backend.instanceId, backend.mayShutDown])).toEqual([[`ptyhost:${previous.instance}`, true]])
     expect(await create.prepare({ ownedPanes: new Map() })).toEqual({ state: 'ready' })
     expect(await drain[0].prepare({ ownedPanes: new Map() })).toEqual({ state: 'ready' })
-    expect([create.instanceId, drain[0].instanceId]).toEqual([`ptyhost:p${PTY_PROTOCOL}`, `ptyhost:p${OLD}`])
+    expect(create.instanceId).toBe(`ptyhost:${target.instance}`)
     const backends: TerminalBackend[] = [create, drain[0]]
     const terminals = new TerminalBackendCoordinator(backends, ['ptyhost'])
     expect(terminals.backendFor(oldPane)).toBe(drain[0])
@@ -595,14 +834,13 @@ describe.runIf(!!realBinary && !!previousBinary && PTY_PROTOCOL >= 2)('a protoco
     expect(await until(() => output, (text) => text.includes('drained-42'))).toContain('drained-42')
     await opened.value.close()
 
-    // New panes land on the new host.
+    // New panes land on the target's host.
     const fresh = await create.create({ command: SHELL })
     if (fresh.state !== 'succeeded') throw new Error(JSON.stringify(fresh))
-    expect(fresh.runtime.instance).toBe(`p${PTY_PROTOCOL}`)
+    expect(fresh.runtime.instance).toBe(target.instance)
     expect(terminals.backendFor(fresh.runtime)).toBe(create)
 
-    // The old pane closes: two empty passes later its backend has left. The protocol 1 host has no `shutdown` and
-    // is never signalled: it stays running, idle.
+    // The old pane closes: two empty passes later the old host is shut down and its backend has left.
     const drainer = new PtyHostDrain({ drain, backends, coordinator: terminals, inUse: () => false })
     await drainer.step()
     expect(backends).toHaveLength(2)
@@ -613,10 +851,9 @@ describe.runIf(!!realBinary && !!previousBinary && PTY_PROTOCOL >= 2)('a protoco
     await drainer.step()
     expect(backends).toEqual([create])
     expect(terminals.instances()).toEqual([create])
-    await new Promise((resolve) => setTimeout(resolve, 300))
-    expect(alive(oldPid)).toBe(true)
-    expect(readDiscovery(home, OLD)?.pid).toBe(oldPid)
-    // The new host and its pane are untouched.
+    expect(await until(() => alive(oldPid), (up) => !up)).toBe(false)
+    expect(readInstanceDiscovery(home, previous.instance)).toBeNull()
+    // The target's host and its pane are untouched.
     const remaining: TerminalInventoryResult = await create.inventory()
     expect(remaining.state === 'available' && remaining.roots.map((root) => root.runtime)).toEqual([fresh.runtime])
     expect((await create.kill(fresh.runtime)).state).toBe('succeeded')

@@ -32,6 +32,10 @@ export const HEALTH_MEASURES = [
   // 50 ms or more by its longest phase, and one per collector day whose sampled frames included one over 250 ms.
   // The Desktop counts them only once its CLI's report proxy has said it knows them.
   'frame_slow_wait', 'frame_slow_build', 'frame_slow_raster', 'frame_long_collector',
+  // Vocabulary 5: first-arrival app episodes, scoped to the harness opened by onboarding.
+  'first_run_started', 'first_run_ready', 'first_run_work', 'first_run_response',
+  'first_run_response_under_1m', 'first_run_response_1m_to_5m', 'first_run_response_over_5m',
+  'shared_invites_sent', 'shared_invites_refused',
 ] as const
 // Delivery attempts, including retries; separate from the cross-surface app measures.
 export const CLI_REPORT_FAILURES = ['invalid', 'too_large', 'auth', 'rate_limited', 'timeout', 'unreachable',

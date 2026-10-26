@@ -41,7 +41,16 @@ class _EnvironmentSetupScreenState extends State<EnvironmentSetupScreen> {
   bool _detailsOpen = false;
 
   @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) widget.notifier.productMeasurement.setupShown();
+    });
+  }
+
+  @override
   void dispose() {
+    widget.notifier.productMeasurement.setupHidden();
     _copyTimer?.cancel();
     _scroll.dispose();
     _primaryFocus.dispose();
