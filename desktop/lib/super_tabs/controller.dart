@@ -149,6 +149,14 @@ class SuperTabController extends ChangeNotifier {
   /// The state last drawn, while the reading adapts ([_read]).
   Map<String, dynamic>? _shownState;
 
+  /// The rows each conversation's messages were read from, kept only to save
+  /// the view ([SuperTabReading.drawsSaved]).
+  final _rows = <String, Map<String, Map<String, dynamic>>>{};
+
+  /// A saved view is on screen and no read has replaced it yet.
+  bool get showingSaved => _showingSaved;
+  bool _showingSaved = false;
+
   /// The last time the person did something here, or a new message reached
   /// the open conversation: what keeps the full poll ([SuperTabReading.quietPoll]).
   DateTime _lastActivity = clock.now();
@@ -429,6 +437,85 @@ class SuperTabController extends ChangeNotifier {
 
   void _acted() => _lastActivity = clock.now();
 
+  void _keepRows(String id, List rows) {
+    if (!_policy.drawsSaved) return;
+    final kept = _rows[id] ??= {};
+    for (final row in rows) {
+      final map = superTabMap(row);
+      kept[map['id'] as String] = map;
+    }
+  }
+
+  /// The view to keep on this device ([SuperTabReading.drawsSaved]): the
+  /// state as last read and the open conversation's last page, or null.
+  Map<String, dynamic>? get savedView {
+    final state = _shownState;
+    if (!_policy.drawsSaved || state == null || accessRevoked) return null;
+    final id = selectedId;
+    final shown = _messages[id] ?? const <SuperTabMessage>[];
+    final page = shown.length > _savedPage
+        ? shown.sublist(shown.length - _savedPage)
+        : shown;
+    final rows = [for (final message in page) ?_rows[id]?[message.id]];
+    return {
+      'revision': revision,
+      'state': state,
+      'conversationId': id,
+      'messages': rows,
+      'next': page.length < shown.length ? page.first.sequence : _before[id],
+    };
+  }
+
+  /// A conversation's page as the backend reads it.
+  static const _savedPage = 100;
+
+  /// Draws a [savedView] kept from an earlier visit while the first read is
+  /// on its way: that read replaces it. One for another Swarm, one that no
+  /// longer parses, or one after a read has landed, draws nothing.
+  void drawSaved(Map<String, dynamic> view) {
+    if (!_policy.drawsSaved || snapshot != null || stateReads > 0) return;
+    try {
+      final state = superTabMap(view['state']);
+      final saved = SuperTabSnapshot.fromJson(state);
+      if (saved.id != tabId) return;
+      final id = view['conversationId'];
+      final rows = [
+        for (final row in view['messages'] as List? ?? const [])
+          superTabMap(row),
+      ];
+      final messages = rows.map(SuperTabMessage.fromJson).toList();
+      final revisionSaved = (view['revision'] as num).toInt();
+      snapshot = saved;
+      revision = revisionSaved;
+      _shownState = state;
+      if (id == selectedId &&
+          saved.conversation(id as String) != null &&
+          messages.every((m) => m.conversationId == id)) {
+        _messages[id] = messages
+          ..sort((a, b) => a.sequence.compareTo(b.sequence));
+        _keepRows(id, rows);
+        _before[id] = (view['next'] as num?)?.toInt();
+      }
+      _showingSaved = true;
+      loading = false;
+      if (_startedAt != null) _changed();
+    } on FormatException {
+      _dropSaved();
+    } on TypeError {
+      _dropSaved();
+    }
+  }
+
+  /// A view from an older shape: draw nothing, read as usual.
+  void _dropSaved() {
+    snapshot = null;
+    revision = -1;
+    _shownState = null;
+    _messages.clear();
+    _rows.clear();
+    _before.clear();
+  }
+
   /// A machine able to serve Swarm reads just connected: read now instead of
   /// at the next poll ([SuperTabReading.readsOnConnect]). Joins a read under way.
   Future<void> machineAvailable() {
@@ -627,6 +714,7 @@ class SuperTabController extends ChangeNotifier {
               (id) => !next.projects.any((project) => project.id == id),
             );
         _messages.removeWhere((id, _) => !allowed.contains(id));
+        _rows.removeWhere((id, _) => !allowed.contains(id));
         _drafts.removeWhere((id, _) => !allowed.contains(id));
         _attachments.removeWhere((id, files) {
           if (allowed.contains(id)) return false;
@@ -655,6 +743,11 @@ class SuperTabController extends ChangeNotifier {
                   ? (query: earlyQuery!, page: early)
                   : null,
             ));
+      if (_showingSaved) {
+        // Read now: the saved view, and its Updating line, give way.
+        _showingSaved = false;
+        stateChanged = true;
+      }
     } catch (failure) {
       if (_inConnectGrace(failure)) {
         _waitingForMachine = true;
@@ -693,7 +786,7 @@ class SuperTabController extends ChangeNotifier {
   /// ([SuperTabReading.connectGrace]) runs out: its error waits for the grace.
   bool _inConnectGrace(Object failure) {
     final since = _startedAt;
-    if (snapshot != null ||
+    if (stateReads > 0 ||
         since == null ||
         failure is! SuperTabFailure ||
         failure.code != 'MACHINE_UNAVAILABLE') {
@@ -736,6 +829,9 @@ class SuperTabController extends ChangeNotifier {
   /// shown, what came after the newest, or the latest page.
   String _query(String id, {bool older = false}) {
     if (older) return '?before=${_before[id]}';
+    // A saved page may be stale in its receipts as well as short of new
+    // messages: the first read after it takes the latest page whole.
+    if (_showingSaved) return '';
     final tail = _messages[id]?.lastOrNull?.sequence;
     return tail != null ? '?after=$tail' : '';
   }
@@ -832,6 +928,7 @@ class SuperTabController extends ChangeNotifier {
       if (incoming.any((m) => m.conversationId != id)) {
         throw const FormatException('A different conversation was returned.');
       }
+      _keepRows(id, answer['messages'] as List);
       final combined = {
         for (final m in _messages[id] ?? <SuperTabMessage>[]) m.id: m,
         for (final m in incoming) m.id: m,
@@ -877,6 +974,7 @@ class SuperTabController extends ChangeNotifier {
         for (final row in rows) {
           combined[row.id] = row;
         }
+        _keepRows(id, receipt['messages'] as List);
       }
       final next = combined.values.toList()
         ..sort((a, b) => a.sequence.compareTo(b.sequence));
@@ -890,7 +988,8 @@ class SuperTabController extends ChangeNotifier {
       if (arrived && id == selectedId) _acted();
       if (!same) _changed();
     } catch (failure) {
-      _readFailure(failure, revokeTab: false);
+      // The state read waits for a machine within the grace: so do these.
+      if (!_inConnectGrace(failure)) _readFailure(failure, revokeTab: false);
       if (failure is SuperTabFailure &&
           const {'FORBIDDEN', 'NOT_FOUND'}.contains(failure.code)) {
         _messages.remove(id);

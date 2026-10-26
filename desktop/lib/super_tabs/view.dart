@@ -861,6 +861,26 @@ class _SuperTabViewState extends State<SuperTabView>
   bool get _terminalsVisible =>
       !_devicesVisible && (widget.terminalsVisible || widget.terminal != null);
 
+  /// The open conversation's name, or what the pane shows instead of one.
+  Widget _title(SuperTabConversation? group) => Text(
+    _devicesVisible
+        ? 'Your devices'
+        : _notificationsVisible
+        ? 'Notifications'
+        : group == null
+        ? c.snapshot?.projects.isEmpty == true
+              ? c.snapshot!.name
+              : 'Choose a project'
+        : c.snapshot!.isProjectLead(group.id)
+        ? c.snapshot!.projectFor(group.id)!.name
+        : group.id == c.snapshot!.leadsConversationId
+        ? 'Product Managers'
+        : group.label,
+    maxLines: 1,
+    overflow: TextOverflow.ellipsis,
+    style: DesktopChrome.text(medium: true),
+  );
+
   Widget _header(SuperTabConversation? group, bool narrow, bool showRoster) =>
       Container(
         constraints: const BoxConstraints(minHeight: 52),
@@ -883,24 +903,22 @@ class _SuperTabViewState extends State<SuperTabView>
                   crossAxisAlignment: CrossAxisAlignment.start,
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    Text(
-                      _devicesVisible
-                          ? 'Your devices'
-                          : _notificationsVisible
-                          ? 'Notifications'
-                          : group == null
-                          ? c.snapshot?.projects.isEmpty == true
-                                ? c.snapshot!.name
-                                : 'Choose a project'
-                          : c.snapshot!.isProjectLead(group.id)
-                          ? c.snapshot!.projectFor(group.id)!.name
-                          : group.id == c.snapshot!.leadsConversationId
-                          ? 'Product Managers'
-                          : group.label,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: DesktopChrome.text(medium: true),
-                    ),
+                    // A view saved on this device, until the first read
+                    // replaces it ([SuperTabReading.drawsSaved]).
+                    if (c.showingSaved)
+                      Row(
+                        children: [
+                          Flexible(child: _title(group)),
+                          const SizedBox(width: 8),
+                          Text(
+                            'Updating…',
+                            key: const ValueKey('super-updating'),
+                            style: DesktopChrome.metadata(),
+                          ),
+                        ],
+                      )
+                    else
+                      _title(group),
                     if (!_devicesVisible && !_notificationsVisible)
                       if (c.reviewLine(group) case final line?)
                         Text(
