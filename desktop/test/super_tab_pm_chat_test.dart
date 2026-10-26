@@ -127,6 +127,36 @@ void main() {
       expect(peer.pmChat('lead')!.id, isNot(owner.pmChat('lead')!.id));
     });
 
+    test('a person who left and rejoined gets a new chat, not the one they can no longer read', () async {
+      final server = swarm();
+      final people = (server.state['people'] as List).cast<Map>();
+      people.firstWhere((p) => p['id'] == 'peer')['generation'] = 'first';
+      final c = server.controller(account: 'peer');
+      addTearDown(c.dispose);
+      await c.refresh();
+      expect(await c.openPmChat('lead'), isTrue);
+      final before = c.pmChat('lead')!.id;
+
+      // Removed and invited back: the same person at a new membership, which
+      // the old chat's audience no longer lets read it. A rejoin has readers
+      // reload in full (backend parts/commit.ts visibilityChanged).
+      people.firstWhere((p) => p['id'] == 'peer')['generation'] = 'second';
+      server.parts.epoch++;
+      await c.refresh();
+      expect(c.snapshot!.conversation(before), isNull);
+      expect(c.pmChat('lead'), isNull);
+
+      expect(await c.openPmChat('lead'), isTrue);
+
+      final after = c.pmChat('lead')!;
+      expect(after.id, isNot(before));
+      expect(c.selectedId, after.id);
+      expect(
+        creates(server).map((p) => p['operationId']).toSet(),
+        hasLength(2),
+      );
+    });
+
     test("another member, the owner included, does not see a person's chat and opens their own", () async {
       final server = swarm();
       final peer = server.controller(account: 'peer');

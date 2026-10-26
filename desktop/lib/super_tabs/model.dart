@@ -26,8 +26,13 @@ class SuperTabPerson {
   SuperTabPerson.fromJson(Map<String, dynamic> row)
     : id = _text(row, 'id'),
       email = _text(row, 'email'),
-      role = _text(row, 'role');
+      role = _text(row, 'role'),
+      generation = row['generation'] as String?;
   final String id, email, role;
+
+  /// This membership: a new one each time the person joins the Swarm. Null
+  /// from a backend that does not send it.
+  final String? generation;
   bool get canWrite => role == 'owner' || role == 'collaborator';
 }
 

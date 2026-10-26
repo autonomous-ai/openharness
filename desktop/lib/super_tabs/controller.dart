@@ -694,14 +694,14 @@ class SuperTabController extends ChangeNotifier {
 
   /// Opens [pmChat], creating it on first use: chat only, for this person
   /// alone, named after them, with the project's Lead in it. The create is one
-  /// fixed request per person and project, so a second click or another
-  /// window gets the same conversation back from the server's receipt.
+  /// fixed request per person, membership and project, so a second click or
+  /// another window gets the same conversation back from the server's receipt,
+  /// while a person who left and rejoined, whom the old chat no longer admits,
+  /// gets a new one.
   Future<bool> openPmChat(String projectId) async {
     if (pmChat(projectId) case final chat?) return select(chat.id);
-    final email = snapshot?.people
-        .where((p) => p.id == accountId)
-        .firstOrNull
-        ?.email;
+    final me = snapshot?.people.where((p) => p.id == accountId).firstOrNull;
+    final email = me?.email;
     final result = await command({
       'type': 'conversation.create',
       'projectId': projectId,
@@ -713,13 +713,13 @@ class SuperTabController extends ChangeNotifier {
       'audience': {
         'personIds': [accountId],
       },
-    }, operationId: _pmChatOperation(projectId));
+    }, operationId: _pmChatOperation(projectId, me?.generation));
     final id = result?['conversationId'];
     return id is String && await select(id);
   }
 
-  String _pmChatOperation(String projectId) {
-    final id = 'pm-chat-$projectId-$accountId';
+  String _pmChatOperation(String projectId, String? generation) {
+    final id = 'pm-chat-$projectId-$accountId-${generation ?? ''}';
     // The backend's operation ids are at most 160 characters.
     return id.length > 160 ? id.substring(0, 160) : id;
   }

@@ -147,14 +147,29 @@ class SwarmPartsBackend {
         ..sort((a, b) => a.value.ordinal.compareTo(b.value.ordinal));
 
   /// Whether [reader] may not read [part]: a private conversation is read only
-  /// by its audience (and the project's Lead, an agent), owners included.
-  static bool _hidden(String id, _HeldPart part, String? reader) {
+  /// by its audience (and the project's Lead, an agent), owners included, and
+  /// by each person only at the membership generation they were listed with
+  /// (backend projects.ts canReadGroup), when [state] gives them one.
+  static bool _hidden(
+    String id,
+    _HeldPart part,
+    String? reader,
+    Map<String, dynamic> state,
+  ) {
     if (reader == null || part.deleted || !id.startsWith('groups:')) {
       return false;
     }
     final audience = part.data['audience'];
-    return audience is Map &&
-        !(audience['people'] as List).any((p) => (p as Map)['id'] == reader);
+    if (audience is! Map) return false;
+    final generation = (state['people'] as List?)
+        ?.cast<Map>()
+        .where((p) => p['id'] == reader)
+        .firstOrNull?['generation'];
+    return !(audience['people'] as List).any(
+      (p) =>
+          (p as Map)['id'] == reader &&
+          (generation == null || p['generation'] == generation),
+    );
   }
 
   /// The answer to a Swarm read of [state] at [path] by [reader], or null for a path that is not one. With no
@@ -189,7 +204,7 @@ class SwarmPartsBackend {
         final kind = entry.key.substring(0, entry.key.indexOf(':'));
         if (kind == 'head' || entry.value.deleted) continue;
         if (kind == 'groups' && dormant(entry.value.data)) continue;
-        if (_hidden(entry.key, entry.value, reader)) continue;
+        if (_hidden(entry.key, entry.value, reader, state)) continue;
         (answer[kind] as List).add(_envelope(entry.key, entry.value));
       }
       return _measured('parts', answer);
@@ -217,7 +232,7 @@ class SwarmPartsBackend {
       };
       for (final entry in _ordered()) {
         if (entry.value.changedAt <= since) continue;
-        if (_hidden(entry.key, entry.value, reader)) continue;
+        if (_hidden(entry.key, entry.value, reader, state)) continue;
         final kind = entry.key.substring(0, entry.key.indexOf(':'));
         if (kind == 'head') {
           answer['head'] = _envelope(entry.key, entry.value);
@@ -234,7 +249,7 @@ class SwarmPartsBackend {
         final held = _parts['groups:${segments[4]}'];
         if (held == null ||
             held.deleted ||
-            _hidden('groups:${segments[4]}', held, reader)) {
+            _hidden('groups:${segments[4]}', held, reader, state)) {
           throw const SuperTabFailure(
             'NOT_FOUND',
             'Conversation not found.',
@@ -250,7 +265,7 @@ class SwarmPartsBackend {
           if (entry.key.startsWith('groups:') &&
               !entry.value.deleted &&
               dormant(entry.value.data) &&
-              !_hidden(entry.key, entry.value, reader) &&
+              !_hidden(entry.key, entry.value, reader, state) &&
               (projectId == null ||
                   (entry.value.data['projectId'] ?? 'lead') == projectId))
             entry,
@@ -536,7 +551,15 @@ class ConversationServer {
             'audience': {
               'people': [
                 for (final person in people)
-                  {'id': person, 'generation': 'fixture'},
+                  {
+                    'id': person,
+                    'generation':
+                        (state['people'] as List?)
+                            ?.cast<Map>()
+                            .where((p) => p['id'] == person)
+                            .firstOrNull?['generation'] ??
+                        'fixture',
+                  },
               ],
             },
         });
