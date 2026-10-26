@@ -60,6 +60,37 @@ void main() {
     },
   );
 
+  test('a Harness Pro the daemon could not bring back says what to do on its row, until it answers again', () async {
+    final dial = DialState();
+    final controller = DevicesController(
+      dial: dial,
+      accountId: 'a',
+      sendSettings: (_, _) async => true,
+    );
+    await controller.load();
+    report(dial, [deviceStatus('E8:F6', mac: 'e8:f6')]);
+    final key = controller.devices.single.key;
+    // The daemon's row for a Pro silent since its port opened, after one reset over the cable.
+    report(dial, [
+      DialStatus.fromJson({
+        'id': 'E8:F6',
+        'attached': false,
+        'board': 'pro',
+        'problem':
+            'Harness Pro isn\'t answering — unplug it and plug it back in',
+      }),
+    ]);
+    expect(controller.devices, hasLength(1));
+    expect(
+      controller.device(key)!.connectionLabel,
+      'Harness Pro isn\'t answering — unplug it and plug it back in',
+    );
+    report(dial, [deviceStatus('E8:F6', mac: 'e8:f6')]);
+    expect(controller.device(key)!.connectionLabel, 'Connected');
+    controller.dispose();
+    dial.dispose();
+  });
+
   test('a failed library read cannot overwrite saved devices; retry merges new arrivals', () async {
     final storage = _ReadFailureStore();
     final dial = DialState();

@@ -58,7 +58,7 @@ class HarnessDevice {
       ? 'Updating'
       : status.attached
       ? 'Connected'
-      : 'Disconnected';
+      : status.problem ?? 'Disconnected';
 
   HarnessDevice copyWith({
     String? name,
@@ -282,6 +282,7 @@ class DevicesController extends ChangeNotifier {
           hw: live.hw ?? known?.status.hw,
           board: live.board ?? known?.status.board,
           updating: live.updating,
+          problem: live.problem,
           // A disconnect frame may omit readings. Preserve them for reference,
           // but require fresh settings when a connected device greets us again.
           settings:
