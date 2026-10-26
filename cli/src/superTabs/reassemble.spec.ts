@@ -23,11 +23,11 @@ describe('the old Swarm state, rebuilt from parts', () => {
     expect(list(state.conversations)[2]).toMatchObject({ lastMessageSequence: 214041, assignment: { status: 'review' } })
     expect(state.starts).toEqual([])
     expect(list(state.machines)[0]).toMatchObject({ availableSlots: 3, observation: { receivedAt: 1793010105000 } })
-    // Down no longer, the expired limit still shown as none, and the decision the server stored.
+    // Down no longer, no limit, and the decision the server stored.
     const builder = list(state.agents)[1]
     expect(builder).not.toHaveProperty('downSince')
     expect(builder).not.toHaveProperty('workDecision')
-    expect(builder.limitedUntil).toBeNull()
+    expect(builder).not.toHaveProperty('limitedUntil')
     expect(state.otherProjectsWork).toEqual([])
     expect(list(state.projects)[0].progress).toEqual({ since: 1793009900000, dirtyRevision: 214041, summarizedRevision: 213800, requestedRevision: 213800 })
   })
@@ -38,6 +38,12 @@ describe('the old Swarm state, rebuilt from parts', () => {
       requestedFloor: 213700, requested: { [FIXTURE.workGroup]: 214030, [FIXTURE.doneGroup]: 213990 }, requestedAt: 6, requestMessageId: 'r1' }
     expect(list(reassemble(storeOf(first)).projects)[0].progress)
       .toEqual({ since: 5, dirtyRevision: 214033, summarizedRevision: 214020, requestedRevision: 214030, requestedAt: 6, requestMessageId: 'r1' })
+  })
+
+  it('shows a usage limit while it lasts', async () => {
+    const first = readFixture<FirstLoad>('parts-lead')
+    first.derived.agents[FIXTURE.builderId].limitedUntil = '2026-10-26T12:00:00.000Z'
+    expect(list(reassemble(storeOf(first)).agents)[1].limitedUntil).toBe('2026-10-26T12:00:00.000Z')
   })
 
   it('shows the role on Custom skills, none when its kind has no role there, and no role elsewhere', () => {

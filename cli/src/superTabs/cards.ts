@@ -108,7 +108,7 @@ export function lastLeadMessage(messages: Json[], leadId: string): { text: strin
   return best && { text: best.text, at: best.at }
 }
 
-interface TabCache { lastChangedAt: number; state: Json }
+interface TabCache { lastChangedAt: number | null; state: Json }
 interface Cached { sequence: number; recap: LeadRecap }
 /** A Lead some Harness Pro has the recap of open, and the sessions (one per Pro) that have it open. */
 interface Opened { tabId: string; leadId: string; sequence: number | null; sessions: Set<string> }

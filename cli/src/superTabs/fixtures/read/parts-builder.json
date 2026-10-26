@@ -115,8 +115,7 @@
      "contextWindow": null,
      "engineVersion": null
     },
-    "configurationVersion": "cv-builder",
-    "limitedUntil": "2026-10-26T09:00:00.000Z"
+    "configurationVersion": "cv-builder"
    }
   }
  ],
@@ -139,10 +138,7 @@
     "assignment": null,
     "lastMessageSequence": 214010,
     "pullRequestUrls": [],
-    "messageSeq": 214010,
-    "reportSeq": 0,
-    "dormant": false,
-    "lastActivityAt": "2026-10-26T10:00:00.000Z"
+    "messageSeq": 214010
    }
   },
   {
@@ -202,10 +198,7 @@
     },
     "lastMessageSequence": 214033,
     "pullRequestUrls": [],
-    "messageSeq": 214033,
-    "reportSeq": 214033,
-    "dormant": false,
-    "lastActivityAt": "2026-10-26T10:41:41.002Z"
+    "messageSeq": 214033
    }
   },
   {
@@ -246,10 +239,7 @@
     "pullRequestUrls": [
      "https://github.com/example/repo/pull/7"
     ],
-    "messageSeq": 213990,
-    "reportSeq": 213990,
-    "dormant": false,
-    "lastActivityAt": "2026-10-26T09:45:00.000Z"
+    "messageSeq": 213990
    }
   }
  ],

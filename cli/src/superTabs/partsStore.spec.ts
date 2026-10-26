@@ -6,7 +6,7 @@ import type { ChangedParts, FirstLoad } from './readContract.js'
 const first = () => storeOf(readFixture<FirstLoad>('parts-lead'))
 const keys = (store: PartsStore, kind: Parameters<PartsStore['parts']['get']>[0]) => [...store.parts.get(kind)!.keys()]
 const changes = (patch: Partial<ChangedParts>): ChangedParts => ({ format: 2, reload: false, cursor: 'next', serverTime: 2, lastChangedAt: 2, epoch: 3,
-  head: null, members: [], agents: [], groups: [], machines: [], starts: [], progress: [], derived: {}, ...patch })
+  head: null, members: [], agents: [], groups: [], machines: [], starts: [], progress: [], derived: { agents: {}, machines: {} }, ...patch })
 
 describe('a Swarm read as parts', () => {
   it('keeps every part of a first load in its order, with the cursor, epoch, change time and derived values', () => {

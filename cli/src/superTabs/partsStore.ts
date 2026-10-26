@@ -10,7 +10,7 @@ type ListedKind = Exclude<PartKind, 'head'>
 export interface PartsStore {
   cursor: string
   epoch: number
-  lastChangedAt: number
+  lastChangedAt: number | null
   githubApp: boolean
   head: PartEnvelope | null
   /** Live parts by kind, in the order the server listed them; new keys go last. */

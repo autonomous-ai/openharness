@@ -11,7 +11,7 @@ import { backend, object, readable, SuperTabHostError } from './wire.js'
 
 type Json = Record<string, unknown>
 /** A Swarm as `GET /api/super-tabs/:id` gave it: its state in the old shape, `lastChangedAt` in place of `revision`. */
-export interface SwarmRead { state: Json; lastChangedAt: number; githubApp: boolean }
+export interface SwarmRead { state: Json; lastChangedAt: number | null; githubApp: boolean }
 
 /** One per running agent and Swarm on a machine, plus up to 16 the Pro cards read as the person; one of the largest Swarms
  *  holds about a megabyte. */
