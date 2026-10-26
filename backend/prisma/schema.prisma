@@ -1029,6 +1029,9 @@ model SuperTabSessionScope {
   closeLeaseGeneration String?
   /// Serializes contribution changes with stop intent across public Swarms.
   stopReleaseId String?
+  /// Set when the session first became confidential (a Lead or in a private conversation): the write a concurrent
+  /// registration in another Swarm conflicts with, so a confidential session keeps one registration (final review C1).
+  confidential Boolean?
   id           String   @id @map("_id")
   scopeIds     String[]
   privateScope String?

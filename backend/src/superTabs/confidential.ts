@@ -2,6 +2,7 @@ import type { Prisma } from '@prisma/client'
 import type { Agent, SuperTabState } from './model.js'
 import { loadActive, reassemble } from './parts/index.js'
 import { confidentialSession, sessionKey, type OtherRegistrations } from './projects.js'
+import { bindSession, sessionRecordId } from './sessionScope.js'
 
 type Transaction = Prisma.TransactionClient
 
@@ -49,4 +50,12 @@ export async function otherRegistrations(tx: Transaction, state: SuperTabState, 
     for (const target of there.agents) if (targets.some(t => t.id === target.id) && confidentialSession(there, target)) confidential.add(sessionKey(target.machineId, target.harnessId))
   }
   return { registered, confidential }
+}
+
+/** Records on the native session's shared record (the one each registration writes) that it became confidential. A
+ *  registration of the same session committing in another Swarm meanwhile then conflicts with this write, so one of the
+ *  two retries and is refused (projects.ts requireSingleRegistration). */
+export async function recordConfidential(tx: Transaction, state: SuperTabState, target: Agent, now: number): Promise<void> {
+  await bindSession(tx, state, target, now)
+  await tx.superTabSessionScope.update({ where: { id: sessionRecordId(state, target) }, data: { confidential: true } })
 }
