@@ -8,6 +8,7 @@ import { activeCount, type BenchConfig } from './config.js'
 import type { SwarmDriver } from './driver.js'
 import { seedAccounts } from './fixtures.js'
 import { legacyDriver } from './legacyDriver.js'
+import { partsDriver } from './drivers/parts.js'
 import { runLoad } from './load.js'
 import { plan, planDigest } from './plan.js'
 import { isolatedPolls } from './probe.js'
@@ -15,7 +16,7 @@ import type { BenchReport } from './report.js'
 import { seedSwarm } from './seed.js'
 
 /** Each store version's clients. The parts store (#1726 groups 2–3) adds its driver here; the scenario stays as it is. */
-export const DRIVERS: Record<string, (db: PrismaClient, users: () => readonly AuthUser[]) => Promise<SwarmDriver>> = { legacy: legacyDriver }
+export const DRIVERS: Record<string, (db: PrismaClient, users: () => readonly AuthUser[]) => Promise<SwarmDriver>> = { legacy: legacyDriver, parts: partsDriver }
 
 function commit(): BenchReport['commit'] {
   try {
