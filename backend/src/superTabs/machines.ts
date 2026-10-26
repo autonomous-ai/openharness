@@ -74,7 +74,7 @@ export type StoredPrivacy = MachinePrivacy & { seenAt: number }
  *  the repository it checks out (an address without credentials), whether it is a git checkout, and whether this
  *  machine's own login can push to it. Absent from hosts before it; null and absent entries are unknown. */
 const readiness = z.object({
-  engines: z.array(z.object({ engine: z.string().regex(/^[a-z][a-z0-9_-]{0,79}$/), installed: z.boolean(), signedIn: z.boolean().nullable() }).strict()).max(8).optional(),
+  engines: z.array(z.object({ engine: z.string().regex(/^[a-z][a-z0-9_-]{0,79}$/), installed: z.boolean().nullable(), signedIn: z.boolean().nullable() }).strict()).max(8).optional(),
   checkouts: z.array(z.object({ folder: z.string().min(1).max(160).regex(/^[^/\\]+$/).refine(f => f !== '.' && f !== '..'),
     repository: z.string().max(300).nullable(), git: z.boolean(), push: z.boolean().nullable() }).strict()).max(64).optional(),
 }).strict()

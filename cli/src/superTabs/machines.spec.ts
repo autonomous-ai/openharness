@@ -6,7 +6,7 @@ import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { RegisteredSession } from '../lib/registry.js'
 import { fakeCore } from '../testing/fakeCore.js'
-import { apisOn, ContributedMachines, liveOn, localModelsStamp, offered, refusedOn, servedOn, sharedWith, swarmWorktreesFile } from './machines.js'
+import { apisOn, ContributedMachines, createQuietGit, liveOn, localModelsStamp, offered, refusedOn, servedOn, sharedWith, swarmWorktreesFile } from './machines.js'
 import { SuperTabHostError } from './host.js'
 import { startAgent } from './start.js'
 import { hostForm, swarmReply } from './fixtures/read/index.js'
@@ -223,6 +223,15 @@ describe('contributed machine executor', () => {
       expect(probes(f)).toHaveLength(2)
     })
 
+    it('reads an engine the probe calls not installed as unknown, since a timed-out shell probe says the same (review of #1743)', async () => {
+      const f = fixture()
+      const usage = f.request.getMockImplementation()!
+      f.request.mockImplementation(async (type, ...rest) => type === 'engines_probe'
+        ? { engines: [{ engine: 'claude', installed: false }, { engine: 'codex', installed: true, signedIn: true }] } : usage(type, ...rest as []))
+      await f.machine.tick()
+      expect(readings(f)[0]!.readiness?.engines).toEqual([{ engine: 'claude', installed: null, signedIn: null }, { engine: 'codex', installed: true, signedIn: true }])
+    })
+
     it('sends no engine readiness when the probe fails, and asks again a minute later', async () => {
       const f = fixture()
       const usage = f.request.getMockImplementation()!
@@ -249,7 +258,7 @@ describe('contributed machine executor', () => {
           mkdirSync(join(swarm, name), { recursive: true }); const dir = join(swarm, name)
           run(dir, 'init', '-q'); run(dir, '-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q', '--allow-empty', '-m', 'init')
         }
-        run(join(swarm, 'p1'), 'remote', 'add', 'origin', 'https://someone:secret-token@github.com/Acme/App.git')
+        run(join(swarm, 'p1'), 'remote', 'add', 'origin', 'https://someone:secret-token@github.com/Acme/App.git?access_token=query-secret')
         run(join(swarm, 'p3'), 'remote', 'add', 'origin', remote)
         mkdirSync(join(swarm, 'p2')); mkdirSync(join(swarm, '.hidden')); writeFileSync(join(swarm, 'notes.txt'), '')
         return swarm
@@ -287,7 +296,7 @@ describe('contributed machine executor', () => {
           { folder: 'p2', repository: null, git: false, push: null },
           { folder: 'p3', repository: null, git: true, push: true },
         ])
-        expect(JSON.stringify(readings(f))).not.toContain('secret-token')
+        expect(JSON.stringify(readings(f))).not.toMatch(/secret-token|query-secret/)
         // A dry run that runs no hooks, so nothing is pushed and nothing of the repository's runs.
         expect(calls.find(a => a[0] === 'push')).toEqual(['push', '--dry-run', '--no-verify', '--porcelain', 'origin', 'HEAD:refs/heads/harness-push-check'])
         f.step(16_000); await f.machine.tick()
@@ -325,6 +334,38 @@ describe('contributed machine executor', () => {
         expect(f.log.mock.calls.filter(c => String(c[0]).includes('Swarm folder'))).toHaveLength(1)
         f.step(60_000); await f.machine.tick()
         await vi.waitFor(() => expect(f.log.mock.calls.filter(c => String(c[0]).includes('Swarm folder'))).toHaveLength(2))
+      })
+
+      it('leaves out a folder whose probe failed rather than calling it no checkout, and reads it again a minute later (review of #1743)', async () => {
+        const { git: real, calls } = gitFor('denied')
+        let failing = true
+        const git = vi.fn(async (cwd: string, args: string[]) => failing && args[0] === 'rev-parse' && cwd.endsWith('p3')
+          ? { ok: false, stdout: '', stderr: '', timedOut: true } : real(cwd, args))
+        const f = swarmFixture(git)
+        await f.machine.tick()
+        await vi.waitFor(() => expect(calls.filter(a => a[0] === 'push')).toHaveLength(1))
+        f.step(16_000); await f.machine.tick()
+        expect(readings(f).at(-1)!.readiness!.checkouts!.map(c => [c.folder, c.git])).toEqual([['p1', true], ['p2', false]])
+        failing = false
+        f.step(60_000); await f.machine.tick()
+        await vi.waitFor(() => expect(calls.filter(a => a[0] === 'push')).toHaveLength(3))
+        f.step(16_000); await f.machine.tick()
+        expect(readings(f).at(-1)!.readiness!.checkouts!.map(c => c.folder)).toEqual(['p1', 'p2', 'p3'])
+      })
+
+      it('ends a git whose helper hangs at its deadline, with everything it started, and settles at once', async () => {
+        const root = mkdtempSync(join(tmpdir(), 'readiness-')); roots.push(root)
+        const dir = join(root, 'p1'), pidFile = join(root, 'helper.pid'), ssh = join(root, 'ssh.sh')
+        // An ssh that leaves a helper behind holding git's output, as a stuck credential helper or ssh agent can.
+        writeFileSync(ssh, `#!/bin/sh\nsleep 60 &\necho $! > ${pidFile}\nsleep 60\n`, { mode: 0o755 })
+        mkdirSync(dir); run(dir, 'init', '-q'); run(dir, '-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q', '--allow-empty', '-m', 'init')
+        run(dir, 'remote', 'add', 'origin', 'ssh://git@example.invalid/acme/app.git'); run(dir, 'config', 'core.sshCommand', ssh)
+        const began = Date.now()
+        const answer = await createQuietGit(1_000)(dir, ['push', '--dry-run', '--no-verify', '--porcelain', 'origin', 'HEAD:refs/heads/harness-push-check'])
+        expect(answer).toMatchObject({ ok: false, timedOut: true })
+        expect(Date.now() - began).toBeLessThan(5_000)
+        const helper = Number(readFileSync(pidFile, 'utf8'))
+        await vi.waitFor(() => expect(() => process.kill(helper, 0)).toThrow())
       })
 
       it('says a push is unknown, not refused, when the remote could not be reached', async () => {

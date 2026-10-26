@@ -779,7 +779,7 @@ describe('routing contributed capacity', () => {
       expect(reasons(out.answer)[0]!.reason).toContain('Claude Code is not signed in to a subscription on this machine.')
       const missing = await runPool(swarm(undefined, [{ engine: 'claude', installed: false, signedIn: null }]), false, {}, project)
       expect(reasons(missing.answer)[0]!.reason).toContain('Claude Code is not installed on this machine.')
-      for (const engines of [[{ engine: 'claude', installed: true, signedIn: null }], [{ engine: 'codex', installed: true, signedIn: false }], [{ engine: 'cursor', installed: false, signedIn: null }], []]) {
+      for (const engines of [[{ engine: 'claude', installed: true, signedIn: null }], [{ engine: 'claude', installed: null, signedIn: null }], [{ engine: 'codex', installed: true, signedIn: false }], [{ engine: 'cursor', installed: false, signedIn: null }], []]) {
         expect((await runPool(swarm(undefined, engines), false, {}, project)).answer.ok).toBe(true)
       }
     })

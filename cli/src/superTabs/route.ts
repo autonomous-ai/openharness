@@ -171,9 +171,19 @@ export function repoMatch(folder: TaskFolder | null, frame: MemberFrame | null, 
  * origins this way (machines.ts readCheckouts), so no credential in an origin leaves it. */
 export function repositoryKey(url: string): string | null {
   const text = url.trim()
-  const found = /^[\w.-]+@([\w.-]+):(?!\/)(.+)$/.exec(text) ?? /^(?:https?|ssh|git):\/\/(?:[^@/]*@)?([\w.-]+)(?::\d+)?\/(.+)$/i.exec(text)
-  const path = found?.[2]!.replace(/\/+$/, '').replace(/\.git$/i, '')
-  return found && path ? `${found[1]}/${path}`.toLowerCase() : null
+  // Only the host and the path are kept: userinfo, a port, a query and a fragment can all carry what is not the repository's
+  // name, a token among them (review of #1743).
+  const scp = /^[\w.-]+@([\w.-]+):(?!\/)([^?#]+)/.exec(text)
+  let host: string | undefined, path: string | undefined
+  if (scp) [, host, path] = scp
+  else {
+    try {
+      const parsed = new URL(text)
+      if (['http:', 'https:', 'ssh:', 'git:'].includes(parsed.protocol)) [host, path] = [parsed.hostname, decodeURIComponent(parsed.pathname)]
+    } catch { /* Not an address: a folder on disk, or nothing readable. */ }
+  }
+  const clean = path?.replace(/^\/+|\/+$/g, '').replace(/\.git$/i, '')
+  return host && clean ? `${host}/${clean}`.toLowerCase() : null
 }
 
 /** A member's model is what its engine reported after work: Claude's full id (`claude-opus-4-7`, `claude-sonnet-4-5[1m]`),

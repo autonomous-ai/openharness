@@ -39,7 +39,7 @@ it('accepts the served models Builders are not offered, with why', () => {
 
 it('accepts what a machine is ready for, and a reading from before it', () => {
   const { receivedAt: _receivedAt, ...sent } = observation
-  const readiness = { engines: [{ engine: 'claude', installed: true, signedIn: false }, { engine: 'codex', installed: true, signedIn: null }],
+  const readiness = { engines: [{ engine: 'claude', installed: true, signedIn: false }, { engine: 'codex', installed: null, signedIn: null }],
     checkouts: [{ folder: 'p1', repository: 'github.com/acme/app', git: true, push: false }, { folder: 'p2', repository: null, git: false, push: null }] }
   expect(machineObservationSchema.safeParse(sent).success).toBe(true)
   expect(machineObservationSchema.safeParse({ ...sent, readiness }).success).toBe(true)
