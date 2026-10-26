@@ -11,6 +11,7 @@ class SuperTabReading {
     this.readsOnConnect = false,
     this.connectGrace = Duration.zero,
     this.messagesWithState = false,
+    this.drawsSaved = false,
   });
 
   /// Null keeps a full read every poll. Otherwise, once the open conversation
@@ -36,6 +37,11 @@ class SuperTabReading {
   /// True starts the saved conversation's messages read beside the first
   /// state read, instead of after it.
   final bool messagesWithState;
+
+  /// True keeps the last view of each Swarm as read on this device and draws
+  /// it at once on the next open, until the first read replaces it
+  /// (`SuperTabSavedViews`).
+  final bool drawsSaved;
 
   /// Whether the poll adapts at all; false is Desktop's fixed period.
   bool get adapts => quietPoll != null || pausesAway;

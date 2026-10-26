@@ -1,12 +1,15 @@
 import 'dart:async';
 import 'dart:convert';
 
+import 'package:clock/clock.dart';
+
 import '../core/local_key_value_store.dart';
 import 'attachment_upload.dart';
 import 'controller.dart';
 import 'model.dart';
 import 'notifications.dart';
 import 'reading.dart';
+import 'saved_view.dart';
 
 typedef SuperTabTransport = Future<Object?> Function(
   String method,
@@ -93,9 +96,40 @@ class SuperTabClient {
 
   bool _isAway(String id) => !_pageVisible || id != _shown;
 
+  late final _views = SuperTabSavedViews(storage);
+  final _viewSaves = <String, Timer>{};
+  final _viewSavedAt = <String, DateTime>{};
+
+  /// How often a Swarm's view may be written while it keeps changing: each
+  /// write is a few hundred KB into the browser's storage.
+  static const _viewSaveEvery = Duration(seconds: 15);
+
+  void _saveViewSoon(String id) {
+    if (_viewSaves.containsKey(id)) return;
+    final last = _viewSavedAt[id];
+    final since = last == null
+        ? _viewSaveEvery
+        : clock.now().difference(last);
+    _viewSaves[id] = Timer(
+      since >= _viewSaveEvery ? Duration.zero : _viewSaveEvery - since,
+      () => _saveView(id),
+    );
+  }
+
+  void _saveView(String id) {
+    _viewSaves.remove(id)?.cancel();
+    final account = _account;
+    final view = _loaded[id]?.savedView;
+    if (account == null || view == null) return;
+    _viewSavedAt[id] = clock.now();
+    unawaited(_views.write(account, id, view).catchError((Object _) {}));
+  }
+
   void _applyAway() {
     for (final entry in _loaded.entries) {
       final away = _isAway(entry.key);
+      // Going away: what changed since the last write is kept now.
+      if (away && _viewSaves.containsKey(entry.key)) _saveView(entry.key);
       // Back on screen, the Swarm reads its own tags: the count discovery
       // kept while it was away is stale from now on.
       if (!away && entry.value.away) _tagCounts.remove(entry.key);
@@ -155,6 +189,12 @@ class SuperTabClient {
 
   void bind(String? account) {
     if (_account == account) return;
+    // Nothing of an account that left stays on this device.
+    if (_account case final left?) unawaited(_views.forgetAccount(left));
+    for (final timer in _viewSaves.values) {
+      timer.cancel();
+    }
+    _viewSaves.clear();
     _account = account;
     _generation++;
     _discoveryTimer?.cancel();
@@ -341,6 +381,10 @@ class SuperTabClient {
     final saved = raw == null
         ? <String, dynamic>{}
         : superTabMap(jsonDecode(raw));
+    final view = _reading.drawsSaved ? await _views.read(account, id) : null;
+    if (generation != _generation) {
+      throw const SuperTabFailure('ACCOUNT_CHANGED', 'The account changed.');
+    }
     final controller = SuperTabController(
       tabId: id,
       accountId: account,
@@ -355,9 +399,18 @@ class SuperTabClient {
       upload: upload,
       reading: _reading,
     )..away = _isAway(id);
+    if (view != null) controller.drawSaved(view);
     var seenRevision = -1;
     var seenSelected = controller.selectedId;
     controller.addListener(() {
+      if (_reading.drawsSaved && generation == _generation) {
+        if (controller.accessRevoked) {
+          _viewSaves.remove(id)?.cancel();
+          unawaited(_views.forget(account, id));
+        } else if (!controller.showingSaved) {
+          _saveViewSoon(id);
+        }
+      }
       if (controller.selectedId != seenSelected) {
         seenSelected = controller.selectedId;
         onSelection?.call(controller);
