@@ -1670,9 +1670,9 @@ describe('Super Tabs on a real Mongo replica set', () => {
   it('rejects unshared hosts and spoofed agent identities through the HTTP API', async () => {
     const { tab, lead } = await fixture()
     const headers = { authorization: `Bearer ${owner.sub}` }
-    expect((await app.inject({ url: `/api/super-tabs/${tab}` })).statusCode).toBe(401)
-    expect((await app.inject({ url: `/api/super-tabs/${tab}`, headers })).statusCode).toBe(200)
-    expect((await app.inject({ url: `/api/super-tabs/${tab}?asAgentId=${lead}`, headers })).statusCode).toBe(403)
+    expect((await app.inject({ url: `/api/super-tabs/${tab}/parts` })).statusCode).toBe(401)
+    expect((await app.inject({ url: `/api/super-tabs/${tab}/parts`, headers })).statusCode).toBe(200)
+    expect((await app.inject({ url: `/api/super-tabs/${tab}/parts?asAgentId=${lead}`, headers })).statusCode).toBe(403)
     const malformed = await app.inject({ method: 'POST', url: `/api/super-tabs/${tab}/commands`, headers,
       payload: { operationId: randomUUID(), command: { ...message('No spoofing.'), contributorId: owner.sub } } })
     expect(malformed.statusCode).toBe(400)

@@ -1334,6 +1334,8 @@ model SwarmGroup {
   messageSeq         Int       @default(0)
   reportSeq          Int       @default(0)
   lastActivityAt     DateTime
+  /// The machines whose hosts this group's last write concerned: its agents' and its work's, before and after (host reads).
+  hostMachineIds     String[]  @default([])
 
   @@unique([tabId, key])
   @@index([tabId, changedAt])
@@ -1379,6 +1381,8 @@ model SwarmMachine {
   machineId       String
   contributed     Boolean   @default(false)
   cleanupOwnerIds String[]
+  /// The last change to its settings or ledger, never its own reading (host reads wake on this, not on changedAt).
+  hostChangedAt   DateTime?
 
   @@unique([tabId, key])
   @@index([tabId, changedAt])
