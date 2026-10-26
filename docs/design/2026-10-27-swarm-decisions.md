@@ -22,8 +22,12 @@ question in chat. A decision now has one shape and one place:
   batch together ("Wren asked 2 questions · project · conversation").
 - **Answering:**
   - The person asked taps one option (`decision.answer`), once. A viewer may answer what was asked of them.
-  - The answer is posted in the conversation the question came from, addressed to the asking agent and the
-    project's Lead. That is how it reaches the work.
+  - The asking agent and the project's Lead get a notice in the conversation the question came from. Only they read
+    it, and it carries none of the answer; it points them to `harness super-tab decisions --answered`, which checks who
+    reads it. Other readers of the conversation see nothing: no message, no unread mark, no link (review of #1753).
+  - The person must still be in the Swarm and still read that conversation, when answering and when an answer is
+    retried. An answer in a quiet or archived conversation works like any other.
+  - Asking the same open question again is the same decision, not a second one.
 - **Provisional work:** the asker keeps working on its recommendation, marked provisional, until the answer arrives.
   The Lead and Builder skills say so.
 - **Who reads a decision:**
@@ -37,7 +41,7 @@ question in chat. A decision now has one shape and one place:
 A decision is about the work, and it is seen where the work is seen:
 - The question a worker writes is in its own terminal.
 - A needs-human question still shows in its work group.
-- The answer is posted in the asking conversation.
+- The answer is read through `harness super-tab decisions --answered`, in the asking agent's terminal.
 
 Anything private goes through the person's Chat with PM. A decision asked there stays inside that private
 conversation.
@@ -54,7 +58,7 @@ conversation.
 
 ## Seen on an isolated stack
 
-Taken 2026-10-27 at `491e68f1b` plus the naming fix. Everything ran on 127.0.0.1:
+Taken 2026-10-27 after the review fixes (the answer notice only the asker and the Lead read). Everything ran on 127.0.0.1:
 - loopback MongoDB and Redis containers;
 - the fake sign-in of the local backend recipe;
 - this branch's backend;
@@ -65,5 +69,6 @@ The Lead asked through the real `decision.ask`.
   ![Chat with PM](2026-10-27-swarm-decisions/1-chat-with-pm.png)
 - The Decisions list in Notifications, one batch per ask, with the recommendation marked:
   ![Decisions](2026-10-27-swarm-decisions/2-decisions-list.png)
-- After one tap. The choice shows, the count drops, and the answer is posted to the Lead in Chat with PM:
+- After one tap. The choice shows and the count drops. The person's Chat with PM gets no message and no unread mark.
+  The Lead's notice there carries none of the answer, and the Lead's decisions read has it:
   ![Answered](2026-10-27-swarm-decisions/3-answered.png)

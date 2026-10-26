@@ -31,7 +31,7 @@ import { endedHolds, HOLDING, type WorkHold } from '../github/holds.js'
 import { mayDrive, TERMINAL_ANSWER_MS, TERMINAL_EXPIRY_MS, TERMINAL_PICKUP_MS, type TerminalEffect } from './terminal.js'
 import { closeAssignment, closeUnassignedStart, readDecision, recentRoutes, timedDecisionOf, writeRouteEffects } from './routeDecisions.js'
 import { listMentions, markDone, mentionsWaiting, readMention, resolveByReply, writeMentions } from './mentions.js'
-import { listDecisions, readAskedDecision, recordAnswer, writeDecisions } from './decisions.js'
+import { answerable, listDecisions, readAskedDecision, recordAnswer, writeDecisions } from './decisions.js'
 import { DEFAULT_ROUTING_POLICY, effectivePolicy, routingPolicySchema, type RoutingPolicy } from './routingPolicy.js'
 import { authenticatedEmail, authorizeSwarmJoin, configureSharing, joinSwarmSchema, requireSharingOwner,
   saveSharingSchema, sharingDetails, type JoinSwarm, type SaveSharing } from './sharing.js'
@@ -170,6 +170,10 @@ export interface SuperTabStoreHooks {
 }
 
 /** Persistent coordination. Host adapters own execution and must confirm their local session grants. */
+/** The routing decision a command names. `decision.answer` names a person's decision instead (decisions.ts). */
+const routeDecisionOf = (command: Command): string | undefined => command.type === 'decision.answer' ? undefined
+  : 'decisionId' in command ? command.decisionId : 'routeDecisionId' in command ? command.routeDecisionId : undefined
+
 export class SuperTabStore {
   readonly native: SuperTabNativeStore
   constructor(readonly db: PrismaClient, readonly now: () => number = Date.now,
@@ -323,11 +327,16 @@ export class SuperTabStore {
     const groupIds = [...named.groupIds ?? []], startIds = [...named.startIds ?? []], agentIds: string[] = [], startAgentIds: string[] = []
     const start = 'startId' in command ? state.starts?.find(s => s.id === command.startId) : undefined
     if (start) groupIds.push(start.request.conversationId)
-    const decisionId = 'decisionId' in command ? command.decisionId : 'routeDecisionId' in command ? command.routeDecisionId : undefined
+    const decisionId = routeDecisionOf(command)
     if (decisionId) {
       const decision = await readDecision(tx, tabId, decisionId)
       if (decision) groupIds.push(decision.conversationId)
       if (decision?.final?.kind === 'new') startIds.push(decision.final.startId)
+    }
+    // A person's decision may sit in a quiet or archived conversation: it is loaded to answer it (review of #1753).
+    if (command.type === 'decision.answer') {
+      const asked = await readAskedDecision(tx, tabId, command.decisionId)
+      if (asked) groupIds.push(asked.conversationId)
     }
     if (command.type === 'delivery.resolve') {
       const delivery = await tx.superTabDelivery.findFirst({ where: { id: command.deliveryId, tabId }, select: { conversationId: true } })
@@ -652,7 +661,9 @@ export class SuperTabStore {
             if (!delivery) fail('NOT_FOUND', 'This delivery is unavailable.', 404)
             readConversation(original, actor, delivery.conversationId)
           }
-          if ('decisionId' in command) {
+          // A retried answer is checked again: the person must still read the decision's conversation (review of #1753).
+          if (command.type === 'decision.answer') answerable(original, actor, await readAskedDecision(tx, tabId, command.decisionId))
+          else if ('decisionId' in command) {
             const decision = await readDecision(tx, tabId, command.decisionId) ?? fail('NOT_FOUND', 'This routing decision is unavailable.', 404)
             readConversation(original, actor, decision.conversationId)
           }
@@ -911,7 +922,10 @@ export class SuperTabStore {
       if (command.type === 'message.send' && actor.kind === 'person') await resolveByReply(tx, tabId, command.conversationId, actor.userId, context.now)
       await writeMentions(tx, tabId, effects.state, effects.messages, context.now)
       if (command.type === 'mention.done') await markDone(tx, tabId, command.mentionId, context.mention!.personId, context.now)
-      if (effects.decisions) await writeDecisions(tx, tabId, effects.decisions, context.now)
+      if (effects.decisions) {
+        const ids = await writeDecisions(tx, tabId, effects.decisions, context.now)
+        if (command.type === 'decision.ask') effects.result.decisionIds = ids
+      }
       if (effects.decisionAnswer) await recordAnswer(tx, tabId, effects.decisionAnswer, context.now)
       if (context.attachments?.length) {
         // Conflicts with a concurrent send of the same file: only one message can take it.

@@ -78,12 +78,13 @@ describe('answering a decision', () => {
   const open = (s: ReturnType<typeof swarm>, overrides: Partial<DecisionTarget> = {}): DecisionTarget => ({ id: 'decision-1', personId: 'peer',
     conversationId: s.group, askerAgentId: s.worker, question: 'Ship how?', options: ['Behind a flag', 'To everyone'], answeredAt: null, ...overrides })
 
-  it('records the asked person\'s choice and tells the asking agent and the Lead in the asking conversation', () => {
+  it('records the asked person\'s choice and tells the asking agent and the Lead with a notice only they read, carrying none of it', () => {
     const s = swarm()
     const answered = s.run({ type: 'decision.answer', decisionId: 'decision-1', choice: 1, note: 'We are confident.' }, peer, { decision: open(s) })
     expect(answered.decisionAnswer).toEqual({ id: 'decision-1', choice: 1, note: 'We are confident.' })
     expect(answered.messages).toEqual([expect.objectContaining({ conversationId: s.group, recipients: [s.worker, s.lead],
-      text: 'peer@example.com decided: To everyone\n\nShip how?\n\nWe are confident.' })])
+      source: { kind: 'agent-only', decisionId: 'decision-1' } })])
+    for (const text of ['Ship how?', 'To everyone', 'We are confident.']) expect(answered.messages[0]!.text).not.toContain(text)
   })
 
   it('takes an answer only from the person asked, once, and only for one of its options', () => {
@@ -94,6 +95,10 @@ describe('answering a decision', () => {
     expect(answer(peer, undefined)).toThrow('unavailable')
     expect(answer(peer, open(s, { answeredAt: 5 }))).toThrow('already answered')
     expect(answer(peer, open(s), 2)).toThrow('Choose one of its options')
+    // A person who can no longer read its conversation cannot answer it, though they stay in the Swarm.
+    const hidden = s.run({ type: 'conversation.create', title: 'Owner only', brief: '', checks: [], audience: { personIds: ['owner'] } }).result.conversationId as string
+    expect(answer(peer, open(s, { conversationId: hidden }))).toThrow('unavailable')
+    expect(answer(peer, open(s, { conversationId: 'gone' }))).toThrow('unavailable')
   })
 
   it('still records the answer when the asker has left the conversation, telling whoever of them is left', () => {
