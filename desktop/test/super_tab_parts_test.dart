@@ -327,4 +327,19 @@ void main() {
       expect(parts.addDormant([read]).changed, isFalse);
     },
   );
+
+  test(
+    'a Swarm with no change yet reads (the contract allows lastChangedAt null)',
+    () {
+      final parts = SuperTabParts.firstLoad({
+        ...recorded('first_load'),
+        'lastChangedAt': null,
+      });
+      expect(parts.lastChangedAt, 0);
+      parts.apply({...recorded('changes'), 'lastChangedAt': null});
+      expect(parts.lastChangedAt, 0);
+      parts.apply(recorded('changes'));
+      expect(parts.lastChangedAt, 1793010106120);
+    },
+  );
 }

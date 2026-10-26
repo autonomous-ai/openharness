@@ -3,8 +3,8 @@ import 'package:collection/collection.dart' show DeepCollectionEquality;
 import 'model.dart';
 
 /// The response shape a Swarm read answers in (docs/design/2026-10-26-swarm-state-parts.md, section 4), mirrored by
-/// hand from backend `superTabs/read/contract.ts`. A first load of any other format is from a backend this build
-/// cannot read.
+/// hand from backend `superTabs/read/contract.ts` (final at cd004bf5c). A first load of any other format is from a
+/// backend this build cannot read.
 const superTabReadFormat = 2;
 
 /// The part lists a first load and a change read carry, by their names there. The head is a single part.
@@ -58,7 +58,8 @@ class SuperTabParts {
       superTabMap(answer['derived'] ?? const {}),
       cursor: _cursor(answer),
       epoch: _int(answer['epoch']),
-      lastChangedAt: _int(answer['lastChangedAt']),
+      // Null for a Swarm with no part changed yet (contract.ts `ReadMeta`).
+      lastChangedAt: _int(answer['lastChangedAt'] ?? 0),
       githubApp: answer['githubApp'] == true,
     );
     parts._seen['head'] = _int(parts._head['version']);
@@ -101,7 +102,7 @@ class SuperTabParts {
   int epoch;
 
   /// The newest change of any part, in epoch milliseconds (spec ruling 8): what tells a list or a cache that this
-  /// Swarm changed.
+  /// Swarm changed. 0 before any part changed.
   int lastChangedAt;
 
   /// Whether the backend has the GitHub app, as the first load says.
