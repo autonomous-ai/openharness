@@ -45,10 +45,17 @@ class SuperTabDecisionList extends StatelessWidget {
       if (decision.batchId != batch) {
         batch = decision.batchId;
         final count = d.open.where((o) => o.batchId == batch).length;
+        // The reader's own chat with the PM is named as the sidebar names it,
+        // not by the reader's own name (as notifications.dart does).
+        final place =
+            d.controller.pmChat(decision.projectId)?.id ==
+                decision.conversationId
+            ? 'Chat with PM'
+            : decision.conversationTitle;
         yield _note(
           '${decision.askerName} asked $count '
           '${count == 1 ? 'question' : 'questions'} · '
-          '${decision.projectName} · ${decision.conversationTitle}',
+          '${decision.projectName} · $place',
         );
       }
       yield SuperTabDecisionCard(decisions: d, decision: decision);

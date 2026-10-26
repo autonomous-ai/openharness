@@ -170,7 +170,7 @@ void main() {
       'shows the reader\'s open decisions of that project above its messages',
       (tester) async {
         final server = swarm()
-          ..ask(['Ship how?'])
+          ..ask(['Ship how?'], conversationId: 'pm-chat')
           ..ask(['Elsewhere?'], projectId: 'other');
         await showView(tester, server);
         await tester.tap(find.byKey(const ValueKey('super-pm-chat-lead')));
@@ -185,6 +185,15 @@ void main() {
           find.descendant(of: panel, matching: find.text('Elsewhere?')),
           findsNothing,
         );
+        // The list names the reader's own chat as the sidebar does.
+        await tester.tap(notificationsEntry());
+        await tester.pumpAndSettle();
+        expect(
+          find.text('Wren asked 1 question · web-project · Chat with PM'),
+          findsOneWidget,
+        );
+        await tester.tap(find.byKey(const ValueKey('super-pm-chat-lead')));
+        await tester.pumpAndSettle();
 
         await tester.tap(option('decision-1', 0));
         await tester.pumpAndSettle();
