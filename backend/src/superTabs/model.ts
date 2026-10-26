@@ -334,7 +334,8 @@ export function parkLaterConversations(state: SuperTabState): void {
 export const crossProjectActive = (group: Conversation): boolean => !group.archived && !isLeads(group) && !group.audience
   && ['working', 'review', 'needs_human'].includes(group.assignment?.status ?? '')
 
-function otherProjectsWork(state: SuperTabState, own: SwarmProject): OtherProjectWork[] {
+/** The active work of the other projects a project's Lead may know about (shared with the read API, design 7.2). */
+export function otherProjectsWork(state: SuperTabState, own: SwarmProject): OtherProjectWork[] {
   return state.conversations.filter(crossProjectActive).flatMap(group => {
     const project = groupProject(state, group), assignment = group.assignment!
     if (project.id === own.id || !sharedWithLeads(project)) return []

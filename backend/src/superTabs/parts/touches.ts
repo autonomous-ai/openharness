@@ -38,7 +38,9 @@ export function touchesFor(command: Command, actor: Actor, before: SuperTabState
   else agent(actor.agentId)
   // D2: the group a command names, which it reads even when it does not write it.
   if ('conversationId' in command && command.type !== 'invite.create') group(command.conversationId)
-  // D3: the agent a command names.
+  // D3: the agent a command names. Not a message's recipients: every recipient is in the conversation the message writes,
+  // and removing an agent writes every conversation it is in (rule b), so the conversation guards it. Touching them would
+  // make every worker's post touch its Lead, and posts in different groups would conflict again (spec goal 1).
   if ('agentId' in command) agent(command.agentId)
   // D9: a custom role choice reads the role sets on the head.
   if ('roleId' in command && command.roleId) head()
@@ -100,9 +102,6 @@ export function touchesFor(command: Command, actor: Actor, before: SuperTabState
     case 'conversation.agent':
       head()
       break
-    case 'message.send':
-      for (const message of effects.messages) for (const recipient of message.recipients) agent(recipient)
-      break
     case 'delivery.resolve':
       if (context.delivery) {
         agent(context.delivery.agentId)
@@ -122,6 +121,15 @@ export function touchesFor(command: Command, actor: Actor, before: SuperTabState
     }
     case 'work.cancel':
       leadCheck(projectOfGroup(command.conversationId)?.id)
+      progress(projectOfGroup(command.conversationId)?.id)
+      break
+    case 'work.status':
+      // Finished work puts its worker's decision before the Lead (finishWorker): the Lead's next start, assignment or
+      // route touches the same part, so it cannot pass over that decision on a stale read (design ruling R5).
+      if (command.status === 'done' || command.status === 'stopped') progress(projectOfGroup(command.conversationId)?.id)
+      break
+    case 'work.define':
+      if (before.conversations.find(c => c.id === command.conversationId)?.assignment) progress(projectOfGroup(command.conversationId)?.id)
       break
     case 'route.record': {
       head()

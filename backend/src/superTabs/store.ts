@@ -12,7 +12,7 @@ import { attachmentMime, attachmentName, AttachmentTooLarge, checkedType, MAX_AT
 import { randomBytes } from 'node:crypto'
 import type { Readable } from 'node:stream'
 import { logger } from '../utils/logger.js'
-import { agentSetRole, canReadAgent, canReadGroup, canReadProject, groupProject, ledProject, projectsOf, agentProjectId, readConversation, roleVersion, skillModeOf, skillSetOf, type ProjectVisibility } from './projects.js'
+import { agentSetRole, canReadAgent, canReadGroup, groupProject, ledProject, projectsOf, agentProjectId, readConversation, roleVersion, skillModeOf, skillSetOf, type ProjectVisibility } from './projects.js'
 import { bindSession, makeProjectPrivate } from './sessionScope.js'
 import { answersRequest, freshProgress, noteProjectReports, projectUpdateRequest } from './projectUpdates.js'
 import { clock, insertParts, lastChangedAt, loadActive, reassemble, split, type HeadData, type SwarmParts } from './parts/index.js'
@@ -76,39 +76,16 @@ function deliveryTouches(delivery: SuperTabDelivery): Touch[] {
   return [{ kind: 'agent', key: delivery.agentId }, { kind: delivery.authorKind === 'person' ? 'member' : 'agent', key: delivery.authorId }]
 }
 
-/** Loads one Swarm's parts and the state commands run on. Older group link lists are rebuilt for this read only; a
- *  command that writes the group keeps them (design ruling R8: reads never write). */
+/** Loads one Swarm's parts and the state commands run on. Reads never write (design ruling R8); the migration rebuilt
+ *  every group's link list from its history. */
 export async function loadRow(tx: Transaction, row: SuperTab, named: Named = {}): Promise<Loaded> {
   const parts = await loadActive(tx, row.id, named)
   const state = reassemble(parts)
   parkLaterConversations(state)
   syncLeads(state)
-  await restorePullRequestUrls(tx, row.id, state)
   return { row, parts, state }
 }
 
-/** Old groups have no link list. Reconstruct theirs from complete stored history once; current groups accumulate
- * links on write. */
-async function restorePullRequestUrls(tx: Transaction, tabId: string, state: SuperTabState): Promise<void> {
-  const missing = state.conversations.filter(group => group.pullRequestUrls === undefined)
-  if (!missing.length) return
-  const conversationIds = missing.map(group => group.id)
-  const [messages, attempts] = await Promise.all([
-    tx.superTabMessage.findMany({ where: { tabId, conversationId: { in: conversationIds }, text: { contains: 'https://github.com/' } },
-      select: { conversationId: true, text: true }, orderBy: { sequence: 'asc' } }),
-    tx.superTabAttempt.findMany({ where: { tabId, conversationId: { in: conversationIds } },
-      select: { conversationId: true, snapshot: true }, orderBy: { createdAt: 'asc' } }),
-  ])
-  for (const group of missing) {
-    const prior = attempts.filter(attempt => attempt.conversationId === group.id)
-      .map(attempt => attempt.snapshot as unknown as { checks?: Array<{ evidence?: string | null }>; assignment?: { result?: string | null } })
-    appendPullRequestUrls(group, [
-      ...messages.filter(message => message.conversationId === group.id).map(message => message.text),
-      ...prior.flatMap(attempt => [...(attempt.checks ?? []).map(check => check.evidence), attempt.assignment?.result]),
-      ...group.checks.map(check => check.evidence), group.assignment?.result,
-    ])
-  }
-}
 /** Removed machines whose host has not yet said it cleaned up: still listed (machine.removal), or past the 24 h fallback. */
 const cleanups = (state: SuperTabState) => [
   ...(state.machines ?? []).flatMap(m => m.removal ? [{ machineId: m.machineId, removalId: m.removal.id, machineOwnerId: m.contributorId }] : []),
@@ -1733,7 +1710,9 @@ export class SuperTabStore {
         }
       }
       const sequences = numberMessages(state, notices, this.now())
-      await this.save(tx, loaded, state, clock.next())
+      // A confirmed stop finishes its worker, as work.status stopped does (design ruling R5).
+      const project = group ? groupProject(state, group).id : undefined
+      await this.save(tx, loaded, state, clock.next(), project && state.projects ? [{ kind: 'progress', key: project }] : [])
       await this.writeMessages(tx, tabId, state, notices, sequences)
       if (!prior) await tx.superTabStopReceipt.create({ data: { id, tabId, assignmentId, ...execution, receipt } })
       ended = endedHolds(before, state)

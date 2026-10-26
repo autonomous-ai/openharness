@@ -121,7 +121,7 @@ describe('durable group pull request links', () => {
     return (group as unknown as { pullRequestUrls?: string[] }).pullRequestUrls
   }
 
-  it('keeps one link beyond the latest 100 messages and reconstructs an older group on read', async () => {
+  it('keeps one link beyond the latest 100 messages', async () => {
     const { tab } = await fixture()
     await run(tab, message(`Review ${pr(41)}`))
     await run(tab, message(`Same PR again: ${pr(41)}`))
@@ -134,27 +134,6 @@ describe('durable group pull request links', () => {
     expect((await store.messages(owner, tab, 'lead', {})).messages).toHaveLength(100)
     expect((await store.messages(owner, tab, 'lead', {})).messages.some(row => row.text.includes(pr(41)))).toBe(false)
     expect(await links(tab)).toEqual([pr(41)])
-
-    const state = await storedState(tab)
-    delete state.conversations.find(group => group.id === 'lead')!.pullRequestUrls
-    await saveState(tab, state)
-    let historyScans = 0
-    const observed = db.$extends({ query: { superTabMessage: { async findMany({ args, query }) {
-      historyScans++
-      return query(args)
-    } } } })
-    const observedStore = new SuperTabStore(observed as unknown as PrismaClient)
-    expect((await observedStore.read(owner, tab)).state.conversations[0]!.pullRequestUrls).toEqual([pr(41)])
-    expect(historyScans).toBe(1)
-    // A read never writes (design ruling R8): the stored group keeps no list until a command writes the group.
-    expect((await storedState(tab)).conversations.find(group => group.id === 'lead')!.pullRequestUrls).toBeUndefined()
-    expect((await observedStore.read(owner, tab)).state.conversations[0]!.pullRequestUrls).toEqual([pr(41)])
-    expect(historyScans).toBe(2)
-    await run(tab, message('One more note after the older link was found.'))
-    const saved = await storedState(tab)
-    expect(saved.conversations.find(group => group.id === 'lead')!.pullRequestUrls).toEqual([pr(41)])
-    expect((await observedStore.read(owner, tab)).state.conversations[0]!.pullRequestUrls).toEqual([pr(41)])
-    expect(historyScans).toBe(2)
   })
 
   it('lists links from check evidence and a work result even when no message has those links', async () => {
@@ -167,22 +146,6 @@ describe('durable group pull request links', () => {
       evidence: `Reviewed ${pr(42)} and ${pr(42)}` }, host, lead)
     expect((await store.messages(owner, tab, 'lead', {})).messages.some(row => row.text.includes(pr(42)))).toBe(false)
     await run(tab, { type: 'work.status', conversationId: 'lead', assignmentId, status: 'working', result: `Built ${pr(43)}` }, host, lead)
-    expect(await links(tab)).toEqual([pr(42), pr(43)])
-
-    await db.superTabMessage.deleteMany({ where: { tabId: tab, conversationId: 'lead', text: { contains: pr(43) } } })
-    const state = await storedState(tab)
-    delete state.conversations.find(group => group.id === 'lead')!.pullRequestUrls
-    await saveState(tab, state)
-    expect((await store.messages(owner, tab, 'lead', {})).messages.some(row => /github\.com/.test(row.text))).toBe(false)
-    expect(await links(tab)).toEqual([pr(42), pr(43)])
-
-    await run(tab, { type: 'work.status', conversationId: 'lead', assignmentId, status: 'done', result: `Built ${pr(43)}` }, host, lead)
-    await run(tab, { type: 'work.define', conversationId: 'lead', brief: 'Next work',
-      checks: [{ description: 'Next check', independent: false }] })
-    await db.superTabMessage.deleteMany({ where: { tabId: tab, conversationId: 'lead', text: { contains: pr(43) } } })
-    const oldState = await storedState(tab)
-    delete oldState.conversations.find(group => group.id === 'lead')!.pullRequestUrls
-    await saveState(tab, oldState)
     expect(await links(tab)).toEqual([pr(42), pr(43)])
   })
 })
@@ -235,20 +198,6 @@ describe('native recording restart recovery', () => {
     })) })
     expect((await store.messages(owner, f.tab, f.group, {})).messages.some(row => row.text.includes(url))).toBe(false)
     expect((await group()).pullRequestUrls).toEqual([url])
-  })
-
-  it('keeps older links when a native message arrives before a legacy group is backfilled', async () => {
-    const f = await recoveryFixture()
-    const oldUrl = 'https://github.com/example/project/pull/45'
-    const newUrl = 'https://github.com/example/project/pull/46'
-    await run(f.tab, { type: 'message.send', conversationId: f.group, text: oldUrl, replyTo: null, recipientIds: [] })
-    const state = await storedState(f.tab)
-    delete state.conversations.find(group => group.id === f.group)!.pullRequestUrls
-    await saveState(f.tab, state)
-    await f.append({ turnId: 'saved_turn', kind: 'answer', previousEventId: f.checkpoint.eventId,
-      text: newUrl, truncated: false, interrupted: false })
-    const group = (await store.read(owner, f.tab)).state.conversations.find(c => c.id === f.group)!
-    expect(group.pullRequestUrls).toEqual([oldUrl, newUrl])
   })
 
   it.each(['recording_restarted', 'history_lost', 'agent_stopped'] as const)('wakes only the Lead and blocks working work for %s with a checkpoint time and no visible ids', async reason => {
@@ -3021,6 +2970,20 @@ describe('Swarm parts storage', () => {
     expect((await db.$transaction(tx => parts.loadAll(tx, tabId))).groups.map(p => p.key)).toContain('quiet')
   })
 
+  it('refuses to write a part over 4 MiB and writes nothing of that command', async () => {
+    const tabId = await stored()
+    const row = await db.superTab.findFirstOrThrow({ where: { id: tabId } }).catch(() => null)
+    const loaded = await db.$transaction(tx => parts.loadActive(tx, tabId))
+    const state = parts.reassemble(loaded)
+    const next = structuredClone(state)
+    next.name = 'Renamed'
+    next.conversations.find(c => c.id === 'lead')!.brief = 'x'.repeat(4 * 1024 * 1024 + 1)
+    const { commitParts } = await import('../src/superTabs/parts/commit.js')
+    await expect(db.$transaction(tx => commitParts(tx, { parts: loaded, state, row: row ?? { id: tabId, revision: 0 } }, next, { stamp: Date.now() })))
+      .rejects.toMatchObject({ code: 'PART_TOO_LARGE', status: 413 })
+    expect((await db.$transaction(tx => parts.loadActive(tx, tabId))).head.data!.name).toBe('Parts')
+  })
+
   it('names the newest data change of each Swarm', async () => {
     const tabId = await stored()
     const before = (await db.$transaction(tx => parts.lastChangedAt(tx, [tabId]))).get(tabId)!
@@ -3103,5 +3066,102 @@ describe('Swarm sweeps', () => {
     await ensurePartExpiry(db)
     const indexes = await db.$runCommandRaw({ listIndexes: 'SwarmGroup' }) as { cursor: { firstBatch: Array<{ key: object; expireAfterSeconds?: number }> } }
     expect(indexes.cursor.firstBatch).toContainEqual(expect.objectContaining({ key: { purgeAt: 1 }, expireAfterSeconds: 0 }))
+  })
+})
+
+describe('Swarm parts under concurrent writes', () => {
+  /** A store whose transactions are counted: one per attempt, so every retry after a conflict shows. */
+  function counted() {
+    let attempts = 0
+    const proxy = new Proxy(db, { get(target, key, receiver) {
+      if (key === '$transaction') return (...args: Parameters<PrismaClient['$transaction']>) => { attempts++; return (target.$transaction as (...a: unknown[]) => unknown)(...args) }
+      return Reflect.get(target, key, receiver)
+    } })
+    return { store: new SuperTabStore(proxy as PrismaClient), get attempts() { return attempts } }
+  }
+  /** A group with its own assigned worker, so the worker's posts reach the Lead. */
+  async function workGroup(tab: string, title: string) {
+    const group = String((await run(tab, { type: 'conversation.create', title, brief: 'Build it', checks: [{ description: 'Built', independent: false }] })).result.conversationId)
+    const worker = String((await run(tab, { type: 'agent.add', conversationId: group, machineId: 'test-host', harnessId: randomUUID(),
+      name: title, configuration: config, lead: false })).result.agentId)
+    await run(tab, { type: 'work.assign', conversationId: group, agentId: worker })
+    return { group, worker }
+  }
+
+  it('lets agents post in different groups at the same time without a single conflict', async () => {
+    const { tab } = await fixture()
+    const groups = await Promise.all(['Parser', 'Renderer', 'Exporter', 'Importer'].map(title => workGroup(tab, title)))
+    // The project is dirty already, as it is in a busy Swarm: posts do not write its progress again.
+    for (const { group, worker } of groups) await run(tab, { type: 'message.send', conversationId: group, text: 'Started.', replyTo: null, recipientIds: [] }, host, worker)
+    const c = counted()
+    // Each worker posts in turn in its own group, all workers at once: any conflict is between different groups.
+    await Promise.all(groups.map(async ({ group, worker }) => {
+      for (let i = 0; i < 5; i++) await c.store.execute(host, tab, { operationId: randomUUID(),
+        command: { type: 'message.send', conversationId: group, text: `Progress ${i}`, replyTo: null, recipientIds: [] } }, worker)
+    }))
+    expect(c.attempts).toBe(groups.length * 5)
+    for (const { group } of groups) {
+      const sequences = (await store.messages(owner, tab, group, {})).messages.map(m => m.sequence)
+      expect(new Set(sequences).size).toBe(sequences.length)
+      expect(sequences).toEqual([...sequences].sort((a, b) => a - b))
+    }
+  })
+
+  it('gives a machine\'s last slot to exactly one of two concurrent starts', async () => {
+    const tab = (await store.create(owner, randomUUID(), 'Slots')).id
+    await run(tab, { type: 'invite.create', email: host.email, role: 'collaborator', conversationId: 'lead' })
+      .then(r => run(tab, { type: 'invite.accept', inviteId: r.result.inviteId as string }, host))
+    await run(tab, { type: 'machine.contribute', machineId: 'test-host', name: 'Host', cwd: '/fixture/repo', engines: ['codex'], maxAgents: 1 }, host)
+    const generation = (await store.hostPools(host, 'test-host')).find(p => p.tabId === tab)!.machine.generation
+    await store.observeMachine(host, tab, 'test-host', { generation, resources: { cpuPercent: 10, memoryTotalBytes: 32e9, memoryUsedBytes: 4e9,
+      diskFreeBytes: 120e9, diskTotalBytes: 500e9, projectDiskFreeBytes: 120e9, deviceType: 'Laptop', chip: 'Fixture', os: 'macOS', gpuPercent: null },
+      quotas: [], tools: {}, runningHarnessIds: [], stoppedHarnessIds: [] })
+    const request = (name: string) => ({ conversationId: 'lead', machineId: 'test-host', engine: 'codex', name, cwd: '/fixture/repo', worktree: false,
+      requirements: { memoryBytes: 0, diskBytes: 0, maxCpuPercent: 100, tools: [], devices: [], quotaRequired: false } })
+    const results = await Promise.allSettled([run(tab, { type: 'agent.start', request: request('One') }, host),
+      run(tab, { type: 'agent.start', request: request('Two') }, host)])
+    expect(results.filter(r => r.status === 'fulfilled')).toHaveLength(1)
+    expect(results.find(r => r.status === 'rejected')).toMatchObject({ reason: { code: 'MACHINE_FULL' } })
+  })
+
+  it('never keeps a message from a person removed while it was being sent', async () => {
+    const { tab, lead } = await fixture()
+    await invite(tab)
+    const results = await Promise.allSettled([run(tab, message('Sent while leaving.'), peer), run(tab, { type: 'member.remove', userId: peer.sub })])
+    expect(results[1]!.status).toBe('fulfilled')
+    // Sent first, its delivery was revoked with the membership; sent second, it was refused. Either way nothing waits.
+    expect(await store.deliveries(host, tab, lead)).toEqual([])
+    const authored = await db.superTabDelivery.findMany({ where: { tabId: tab, authorId: peer.sub } })
+    expect(authored.every(d => d.status === 'cancelled')).toBe(true)
+  })
+
+  it('serializes a claim against revoking an agent sender', async () => {
+    const { tab, lead } = await fixture()
+    const { group, worker } = await workGroup(tab, 'Revoked')
+    await run(tab, { type: 'message.send', conversationId: group, text: 'Report for the Lead.', replyTo: null, recipientIds: [] }, host, worker)
+    const delivery = (await store.deliveries(host, tab, lead)).find(d => d.authorId === worker)!
+    await run(tab, { type: 'work.cancel', conversationId: group, assignmentId: (await store.read(owner, tab)).state.conversations.find(c => c.id === group)!.assignment!.id,
+      reason: 'Withdrawing the worker' })
+    const results = await Promise.allSettled([
+      store.delivery(host, tab, lead, delivery.id, { type: 'claim', claimId: randomUUID() }),
+      run(tab, { type: 'agent.remove', agentId: worker }),
+    ])
+    expect(results[1]!.status).toBe('fulfilled')
+    expect((await db.superTabDelivery.findUniqueOrThrow({ where: { id: delivery.id } })).status).toBe('cancelled')
+    expect((await store.deliveries(host, tab, lead)).map(d => d.id)).not.toContain(delivery.id)
+  })
+
+  it('assigns the routed agent through its finished start, without an override reason', async () => {
+    const { tab, lead } = await fixture()
+    const { routeDecisionId, startId } = await routedStart(tab, lead)
+    await store.execute(host, tab, { operationId: randomUUID(), command: { type: 'agent.startDispatch', startId } }, lead)
+    const agentId = String((await store.execute(host, tab, { operationId: randomUUID(), command: { type: 'agent.started', startId,
+      harnessId: randomUUID(), configuration: config } }, lead)).result.agentId)
+    // Started and not pooled: the start is finished and out of every command's active state.
+    expect((await db.swarmStart.findFirstOrThrow({ where: { tabId: tab, key: startId } })).finishedAt).not.toBeNull()
+    await run(tab, { type: 'work.define', conversationId: 'lead', brief: 'Routed work', checks: [{ description: 'Done', independent: false }] }, host, lead)
+    const assigned = await run(tab, { type: 'work.assign', conversationId: 'lead', agentId, routeDecisionId }, host, lead)
+    expect(assigned.result.assignmentId).toBeTruthy()
+    expect((await store.routeDecision(owner, tab, routeDecisionId)).final).toMatchObject({ kind: 'new', startId })
   })
 })

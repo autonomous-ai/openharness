@@ -1,5 +1,5 @@
 import type { Prisma } from '@prisma/client'
-import { agentOnly, conversation, isLeads, type MessageDraft, type SuperTabState } from '../model.js'
+import { agentOnly, conversation, fail, isLeads, type MessageDraft, type SuperTabState } from '../model.js'
 import { split } from './shape.js'
 import { guardedWrite, PartConflict, type HeadColumns, type PartWrite } from './write.js'
 import type { Part, PartKind, SwarmParts } from './types.js'
@@ -11,6 +11,9 @@ type Transaction = Prisma.TransactionClient
 export interface Touch { kind: PartKind; key: string }
 /** A part a command wrote, at its new version: the command reply (design section 4.7). */
 export interface Written { kind: PartKind; key: string; version: number }
+
+/** MongoDB limits a document to 16 MiB. A part leaves room for its columns and indexes (design section 1.4). */
+export const PART_LIMIT_BYTES = 4 * 1024 * 1024
 
 const LISTS = { member: 'members', agent: 'agents', group: 'groups', machine: 'machines', start: 'starts', progress: 'progress' } as const
 type ListKind = keyof typeof LISTS
@@ -67,7 +70,7 @@ export function numberMessages(state: SuperTabState, messages: MessageDraft[], n
 }
 
 /** Keeps the newest RELEASED_CAP released harnesses of each machine (spec, Archive). */
-function capReleased(state: SuperTabState): void {
+export function capReleased(state: SuperTabState): void {
   const released = state.releasedHarnesses
   if (!released) return
   const count = new Map<string, number>()
@@ -120,6 +123,11 @@ export async function commitParts(tx: Transaction, loaded: { parts: SwarmParts; 
     writes.push({ op: 'update', kind: 'head', key: 'head', seen: parts.head.version, data: after.head.data, head })
   }
   if (canonical(indexesOf(loaded.state)) !== canonical(indexesOf(next))) referencesChanged = true
+  for (const write of writes) {
+    if ('data' in write && Buffer.byteLength(JSON.stringify(write.data)) > PART_LIMIT_BYTES) {
+      fail('PART_TOO_LARGE', 'This Swarm record has reached its size limit.', 413)
+    }
+  }
   const versions = new Map<string, number>()
   const written: Written[] = []
   for (const write of writes) {
