@@ -268,20 +268,16 @@ class _SuperTabRosterState extends State<SuperTabRoster> {
         .where((p) => p.id == _agentProjectId(agent))
         .firstOrNull;
     final customRole = c.snapshot!.activeRoleForAgent(agent);
-    final role =
-        customRole?.name ??
-        (c.snapshot!.isLead(agent.id)
-            ? 'Product Manager'
-            : agent.isReviewer
-            ? 'Reviewer'
-            : 'Engineer');
-    final badge =
-        customRole?.name ??
-        (c.snapshot!.isLead(agent.id)
-            ? 'PM'
-            : agent.isReviewer
-            ? 'Rev'
-            : 'Dev');
+    final role = customRole?.name ?? (c.snapshot!.isLead(agent.id)
+        ? 'Product Manager'
+        : agent.isReviewer
+        ? 'Reviewer'
+        : 'Engineer');
+    final badge = customRole?.name ?? (c.snapshot!.isLead(agent.id)
+        ? 'PM'
+        : agent.isReviewer
+        ? 'Rev'
+        : 'Dev');
     final status = info.status ?? 'Status unavailable';
     final tooltip = [
       [name, role, ?project?.name].join(' · '),

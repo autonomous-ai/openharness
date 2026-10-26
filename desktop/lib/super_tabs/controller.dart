@@ -209,7 +209,8 @@ class SuperTabController extends ChangeNotifier {
   /// The latest read of the Swarm's state failed (and the tab is still ours). While it is, what the
   /// machines last reported cannot be told from what they report now: a machine is neither online nor
   /// offline, and the Swarm says its backend is unreachable instead of calling machines offline.
-  bool get backendUnreachable => _refreshFailing && !accessRevoked;
+  bool get backendUnreachable =>
+      _refreshFailing && !accessRevoked && !updateRequired;
   bool _refreshFailing = false;
 
   /// Since when the reads have been failing, while [backendUnreachable]: the first failure of this run of them.
@@ -682,7 +683,10 @@ class SuperTabController extends ChangeNotifier {
   /// Opens conversation [id], reading it first when it is not held
   /// ([loadGroup]); false when it cannot be read.
   Future<bool> select(String id) async {
-    if (!await loadGroup(id)) return false;
+    // A held group is selected at once, before this returns.
+    if (snapshot?.conversation(id) == null && !await loadGroup(id)) {
+      return false;
+    }
     if (id == selectedId && !devicesSelected) return true;
     devicesSelected = false;
     _acted();
@@ -767,10 +771,7 @@ class SuperTabController extends ChangeNotifier {
       if (moved) {
         // A closed group named by the saved selection is read by id: a first
         // load has only the active groups.
-        if (read.full &&
-            !parts.state['conversations'].any(
-              (Object? g) => (g as Map)['id'] == selectedId,
-            )) {
+        if (read.full && !parts.holdsGroup(selectedId)) {
           await _readGroup(parts, selectedId);
           if (_disposed || accessRevoked) return;
         }
@@ -822,7 +823,9 @@ class SuperTabController extends ChangeNotifier {
         // A new store holds no closed groups yet, nor one a saved view drew:
         // the open projects read theirs.
         if (read.full || stateReads == 1) {
+          // A read for the parts before has nothing to give these.
           _dormantPages.clear();
+          _dormantReads.clear();
           for (final project in expandedProjects) {
             unawaited(loadDormant(project));
           }
@@ -951,11 +954,14 @@ class SuperTabController extends ChangeNotifier {
       return Future.value();
     }
     _changed();
-    return _dormantReads[projectId] = _readDormant(projectId, earlier)
-        .whenComplete(() {
-          _dormantReads.remove(projectId);
-          _changed();
-        });
+    late final Future<void> reading;
+    reading = _readDormant(projectId, earlier).whenComplete(() {
+      if (identical(_dormantReads[projectId], reading)) {
+        _dormantReads.remove(projectId);
+      }
+      _changed();
+    });
+    return _dormantReads[projectId] = reading;
   }
 
   Future<void> _readDormant(String projectId, bool earlier) async {

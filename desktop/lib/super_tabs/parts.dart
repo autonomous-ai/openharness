@@ -125,6 +125,11 @@ class SuperTabParts {
   /// The values worked out at read time, as the last read sent them.
   Map<String, dynamic> get derived => _derived;
 
+  /// Whether this reader holds group [groupId], active or dormant.
+  bool holdsGroup(String groupId) =>
+      _live['groups']?.containsKey(groupId) == true ||
+      _dormant.containsKey(groupId);
+
   /// Whether [groupId] is a dormant group this reader holds.
   bool isDormant(String groupId) => _dormant.containsKey(groupId);
 

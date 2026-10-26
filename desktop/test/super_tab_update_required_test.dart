@@ -44,6 +44,8 @@ void main() {
       async.elapse(const Duration(seconds: 3));
       expect(c.updateRequired, isTrue);
       expect(c.error, update);
+      // The backend answered: it is not unreachable.
+      expect(c.backendUnreachable, isFalse);
       final asked = reads.length;
       async.elapse(const Duration(minutes: 1));
       expect(reads, hasLength(asked));

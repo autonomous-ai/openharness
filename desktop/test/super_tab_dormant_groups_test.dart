@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/super_tabs/controller.dart';
 
@@ -151,4 +153,38 @@ void main() {
       expect(again.unread(again.snapshot!.conversation('finished')!), isFalse);
     },
   );
+
+  test('a reload while closed groups are being read reads them again for the new parts', () async {
+    Completer<void>? hold;
+    reads = [];
+    final c = SuperTabController(
+      tabId: 'tab',
+      accountId: 'owner',
+      request: (method, path, {body}) async {
+        if (method == 'GET' && path.contains('/groups')) {
+          reads.add(path);
+          if (hold case final wait?) await wait.future;
+        }
+        return server.request(method, path, body: body);
+      },
+      save: server.save,
+      pollInterval: Duration.zero,
+    );
+    await c.refresh();
+    hold = Completer<void>();
+    c.toggleProject('lead');
+    final stale = c.loadDormant('lead');
+    // Who may see what changed meanwhile: the next read loads in full.
+    server.parts.epoch++;
+    await c.refresh();
+    final waiting = hold;
+    hold = null;
+    waiting.complete();
+    await stale;
+    // The reload asked for them again by itself: nothing else asks.
+    await pumpEventQueue();
+    expect(reads.where((p) => p.contains('dormant=1')), hasLength(2));
+    expect(c.dormantLoaded('lead'), isTrue);
+    expect(c.snapshot!.conversation('old')!.closed, isTrue);
+  });
 }
