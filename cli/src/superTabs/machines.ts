@@ -190,7 +190,12 @@ export class ContributedMachines {
         if (!identifier(pool.generation) || pool.machineId !== this.machineId || typeof pool.cwd !== 'string') continue
         const ids = Array.isArray(row.harnessIds) ? row.harnessIds.filter(identifier) : []
         const stopped: string[] = []
-        for (const id of ids) if (await this.core.agents.stopped?.(id)) stopped.push(id)
+        // A stopped agent keeps a saved record; one closed by hand or whose session crashed away is kept nowhere (`gone`).
+        // Both are reported, so the backend hands its task on at once rather than when its lease runs out. Only one the
+        // registry no longer lists is asked about, so a pass costs no more for the agents that run.
+        for (const id of ids) {
+          if (await this.core.agents.stopped?.(id) || (!this.core.agents.byAgent(id) && await this.core.agents.gone?.(id))) stopped.push(id)
+        }
         const running = ids.filter(id => !!this.core.agents.byAgent(id) && !stopped.includes(id))
         const pending = list(row.starts)
         const tools = [...new Set([...COMMON_TOOLS, ...pending.flatMap(start => {

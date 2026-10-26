@@ -609,6 +609,18 @@ describe('contributed machine executor', () => {
       expect(lastBody(f)).toMatchObject({ runningHarnessIds: ['newcomer'], stoppedHarnessIds: ['running', 'stopped'] })
     })
 
+    it('reports a session closed by hand, which leaves no stopped record, as stopped on the next look', async () => {
+      const f = fixture(); quiet(f)
+      await f.machine.tick()
+      expect(lastBody(f)).toMatchObject({ runningHarnessIds: ['running'], stoppedHarnessIds: ['stopped'] })
+      // Closed or crashed: gone from the registry, and kept nowhere as a stopped agent.
+      vi.mocked(f.core.agents.byAgent).mockImplementation(() => undefined)
+      Object.assign(f.core.agents, { gone: vi.fn(async (id: string) => id === 'running') })
+      await after(f, 5_000)
+      expect(posts(f)).toHaveLength(2)
+      expect(lastBody(f)).toMatchObject({ runningHarnessIds: [], stoppedHarnessIds: ['running', 'stopped'] })
+    })
+
     it('publishes at once when new work is paused or allowed again', async () => {
       const f = fixture(); quiet(f)
       await f.machine.tick()
