@@ -91,7 +91,10 @@ class AccountSection extends StatelessWidget {
                   children: [
                     account,
                     const SizedBox(height: 12),
-                    SavedSuperTabsRow(superTabs: notifier.superTabs),
+                    SavedSuperTabsRow(
+                      superTabs: notifier.superTabs,
+                      copies: notifier.browserCopies,
+                    ),
                   ],
                 )
               : account,

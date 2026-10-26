@@ -86,6 +86,13 @@ class SavedComputers {
         } catch (_) {}
       });
 
+  /// Clear now: [account]'s computers go; the browser stays [account]'s.
+  Future<void> clear(String account) => _serial(() async {
+    if (await storage.read(_owner) == account) {
+      await storage.delete(_key(account));
+    }
+  });
+
   /// [account] (null when signed out) is the one using this browser now:
   /// any other's computers, kept before a reload too, are forgotten.
   Future<void> claim(String? account) => _serial(() async {
@@ -145,6 +152,15 @@ class SavedComputersWatch extends ChangeNotifier {
     unawaited(store.write(account, listed));
   }
 
+  /// Settings ▸ Account's Clear now: the kept computers go. The list on
+  /// screen is not kept again until it changes.
+  Future<void> clear() async {
+    final account = _account;
+    _kept = null;
+    _changed();
+    if (account != null) await store.clear(account);
+  }
+
   void _bind(String? account) {
     _account = account;
     _kept = null;
@@ -167,13 +183,20 @@ class SavedComputersWatch extends ChangeNotifier {
   }
 }
 
-/// The one [SavedComputersWatch] of [app], kept in this browser's storage.
-/// The web workspace asks for it when it is first drawn, so the list is kept
-/// whenever it answers, not only once the connect page shows.
+/// The one [SavedComputersWatch] of [app], kept in this browser's storage and
+/// cleared by Clear now ([AppNotifier.browserCopies]). The web workspace asks
+/// for it when it is first drawn, so the list is kept whenever it answers, not
+/// only once the connect page shows.
 SavedComputersWatch savedComputersOf(AppNotifier app) =>
-    _watches[app] ??= SavedComputersWatch(
-      app,
-      SavedComputers(app.localStore ?? HarnessFileStore.shared),
-    );
+    _watches[app] ??= _watch(app);
+
+SavedComputersWatch _watch(AppNotifier app) {
+  final watch = SavedComputersWatch(
+    app,
+    SavedComputers(app.localStore ?? HarnessFileStore.shared),
+  );
+  app.browserCopies.add(watch.clear);
+  return watch;
+}
 
 final _watches = Expando<SavedComputersWatch>('savedComputersOf');

@@ -207,6 +207,49 @@ void main() {
     },
   );
 
+  test('Clear now takes the kept computers, and an unchanged list is not kept again', () async {
+    final storage = MemoryStore();
+    final app = _Account()..currentUser = _ann;
+    addTearDown(app.dispose);
+    final store = SavedComputers(storage);
+    final own = SavedComputersWatch(app, store);
+    addTearDown(own.dispose);
+    app
+      ..list('m1', 'Studio')
+      ..answer();
+    await pumpEventQueue();
+    expect(await store.read('ann'), isNotNull);
+
+    await own.clear();
+    app.notifyListeners();
+    await pumpEventQueue();
+    expect(await store.read('ann'), isNull);
+    expect(storage.values['web.computers.saved_by'], 'ann');
+
+    app
+      ..list('m2', 'Build server')
+      ..notifyListeners();
+    await pumpEventQueue();
+    expect((await store.read('ann'))?.map((c) => c.name), [
+      'Studio',
+      'Build server',
+    ]);
+  });
+
+  test('the browser\'s Clear now reaches the kept computers', () async {
+    final storage = MemoryStore();
+    final app = createApp(store: storage)..currentUser = _ann;
+    addTearDown(app.dispose);
+    savedComputersOf(app);
+    await pumpEventQueue();
+    await SavedComputers(storage).write('ann', _macs);
+    expect(storage.values['web.computers.ann'], isNotNull);
+
+    await app.browserCopies.clear();
+
+    expect(storage.values['web.computers.ann'], isNull);
+  });
+
   group('the connect page', () {
     late _Account app;
     setUp(() => app = _Account()..currentUser = _ann);
