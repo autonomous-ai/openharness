@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { brotliDecompressSync, gunzipSync } from 'node:zlib';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { precompressFolder } from './precompress.mjs';
+import { acceptsEncoding, precompressFolder } from './precompress.mjs';
 
 let folder;
 beforeEach(async () => {
@@ -37,5 +37,24 @@ describe('pre-compressed release files', () => {
 
     expect((await readdir(folder)).sort()).toEqual(['app_icon.png', 'canvaskit']);
     expect(await readdir(path.join(folder, 'canvaskit'))).toEqual(['canvaskit.js.symbols', 'chromium']);
+  });
+});
+
+describe('which copy a browser takes', () => {
+  // As Next.js tests a has-condition's value: the whole header, anchored.
+  const takes = (encoding, header) => new RegExp(`^${acceptsEncoding(encoding)}$`).test(header);
+
+  it('takes an encoding the browser lists, wherever it stands', () => {
+    for (const header of ['br', 'gzip, deflate, br, zstd', 'br, gzip', 'gzip,br', 'br;q=1.0, gzip;q=0.8', 'gzip;q=0.5, br;q=0.9']) {
+      expect(takes('br', header), header).toBe(true);
+    }
+    expect(takes('gzip', 'gzip, deflate')).toBe(true);
+  });
+
+  it('does not take one it lists at q=0, or does not list', () => {
+    for (const header of ['br;q=0, gzip', 'gzip, br; q=0', 'br;q=0.0', 'brotli', 'gzip, deflate', '']) {
+      expect(takes('br', header), header).toBe(false);
+    }
+    expect(takes('gzip', 'br, gzip;q=0')).toBe(false);
   });
 });

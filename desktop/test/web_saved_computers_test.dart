@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/auth/auth_session.dart';
 import 'package:harness/core/config.dart';
@@ -246,6 +247,67 @@ void main() {
     expect(storage.values['web.computers.ann'], isNotNull);
 
     await app.browserCopies.clear();
+
+    expect(storage.values['web.computers.ann'], isNull);
+  });
+
+  test('a session that expires forgets the kept computers, as it does the Super Tab views', () async {
+    final storage = MemoryStore();
+    final app = createApp(store: storage)
+      ..status = AppStatus.authenticated
+      ..currentUser = _ann;
+    addTearDown(app.dispose);
+    savedComputersOf(app);
+    app.notifyListeners();
+    await pumpEventQueue();
+    await SavedComputers(storage).write('ann', _macs);
+    expect(storage.values['web.computers.ann'], isNotNull);
+
+    app.expireSessionForTest('Your sign-in expired. Sign in again.');
+    await pumpEventQueue();
+
+    expect(storage.values['web.computers.ann'], isNull);
+    expect(storage.values['web.computers.saved_by'], isNull);
+  });
+
+  test('a browser that boots into an expired session forgets the last account\'s computers', () async {
+    final storage = MemoryStore();
+    await SavedComputers(storage).claim('ann');
+    await SavedComputers(storage).write('ann', _macs);
+    final app = createApp(store: storage);
+    addTearDown(app.dispose);
+    savedComputersOf(app);
+    await pumpEventQueue();
+    // Booting: who signed in is not known yet, so nothing is forgotten.
+    expect(storage.values['web.computers.ann'], isNotNull);
+
+    app
+      ..status = AppStatus.unauthenticated
+      ..notifyListeners();
+    await pumpEventQueue();
+
+    expect(storage.values['web.computers.ann'], isNull);
+    expect(storage.values['web.computers.saved_by'], isNull);
+  });
+
+  testWidgets('the web frame keeps the computers from the app\'s start, before any workspace', (
+    tester,
+  ) async {
+    final storage = MemoryStore();
+    final app = createApp(store: storage)..status = AppStatus.unauthenticated;
+    addTearDown(app.dispose);
+    await tester.runAsync(() async {
+      await SavedComputers(storage).claim('ann');
+      await SavedComputers(storage).write('ann', _macs);
+    });
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [appStateProvider.overrideWithValue(app)],
+        child: const KeptComputers(child: SizedBox.shrink()),
+      ),
+    );
+    await tester.runAsync(pumpEventQueue);
 
     expect(storage.values['web.computers.ann'], isNull);
   });

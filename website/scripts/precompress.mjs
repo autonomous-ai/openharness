@@ -11,6 +11,14 @@ const gzipped = promisify(gzip);
 // these extensions' .br or .gz copy to a browser that accepts it.
 export const PRECOMPRESSED = ['js', 'mjs', 'wasm', 'json', 'ttf', 'otf', 'svg', 'html'];
 
+/// A pattern for an Accept-Encoding header that takes [encoding]: listed as a
+/// token, with no q-value or a q-value above 0 (`br;q=0` refuses brotli).
+/// Whole-header, as Next.js tests a has-condition (`^value$`).
+export function acceptsEncoding(encoding) {
+  const nonZero = String.raw`(?:1(?:\.0{0,3})?|0?\.\d*[1-9]\d*)`;
+  return String.raw`(?:.*[\s,])?${encoding}(?:\s*;\s*q\s*=\s*${nonZero})?\s*(?:,.*)?`;
+}
+
 const compressible = (file) => PRECOMPRESSED.includes(path.extname(file).slice(1));
 
 async function* files(folder) {

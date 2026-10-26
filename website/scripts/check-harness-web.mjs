@@ -65,6 +65,8 @@ for (const route of [`${assetBase}main.dart.js`, `${assetBase}canvaskit/chromium
   for (const [acceptEncoding, encoding, decode] of [
     ['gzip, deflate, br, zstd', 'br', brotliDecompressSync],
     ['gzip, deflate', 'gzip', gunzipSync],
+    // q=0 refuses an encoding: this browser takes gzip, not brotli.
+    ['br;q=0, gzip', 'gzip', gunzipSync],
   ]) {
     const sent = await raw(new URL(route, base), acceptEncoding);
     assert.equal(sent.headers['content-encoding'], encoding, `${route} for ${acceptEncoding}`);

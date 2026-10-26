@@ -2,6 +2,8 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
+import 'package:flutter/widgets.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/harness_file_store.dart';
 import '../../core/local_key_value_store.dart';
@@ -123,6 +125,11 @@ class SavedComputersWatch extends ChangeNotifier {
   final SavedComputers store;
 
   String? _account;
+
+  /// Whether the browser was found signed out and the last account's
+  /// computers forgotten: a boot into an expired session never had an
+  /// account to leave.
+  bool _forgotten = false;
   List<SavedComputer>? _kept;
   List<SavedComputer>? _written;
   List<SavedComputer>? _wasShown;
@@ -132,8 +139,11 @@ class SavedComputersWatch extends ChangeNotifier {
   List<SavedComputer>? get shown => app.machineInventoryLoaded ? null : _kept;
 
   void _changed() {
-    final account = app.currentUser?.id;
-    if (account != _account) _bind(account);
+    final signedOut = app.status == AppStatus.unauthenticated;
+    // Booting, nobody is known yet and nothing is forgotten; signed out (by
+    // hand, or a session that expired, at boot too), the last account's go.
+    final account = signedOut ? null : app.currentUser?.id;
+    if (account != _account || (signedOut && !_forgotten)) _bind(account);
     // The list answering takes the kept computers off the page.
     if (!identical(shown, _wasShown)) {
       _wasShown = shown;
@@ -163,6 +173,7 @@ class SavedComputersWatch extends ChangeNotifier {
 
   void _bind(String? account) {
     _account = account;
+    _forgotten = account == null;
     _kept = null;
     _written = null;
     final claimed = store.claim(account);
@@ -200,3 +211,38 @@ SavedComputersWatch _watch(AppNotifier app) {
 }
 
 final _watches = Expando<SavedComputersWatch>('savedComputersOf');
+
+/// Above every screen of the browser build (`web_entry.dart`'s frame): the
+/// app's [SavedComputersWatch] from its start, so a browser that opens signed
+/// out, or into an expired session, forgets the last account's computers
+/// even though no workspace is ever drawn.
+class KeptComputers extends StatefulWidget {
+  const KeptComputers({super.key, required this.child});
+
+  final Widget child;
+
+  @override
+  State<KeptComputers> createState() => _KeptComputersState();
+}
+
+class _KeptComputersState extends State<KeptComputers> {
+  bool _started = false;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (_started) return;
+    _started = true;
+    // The app comes from the ProviderScope around HarnessApp; a frame drawn
+    // without one (a widget test of the frame alone) keeps nothing.
+    final scope = context
+        .getElementForInheritedWidgetOfExactType<UncontrolledProviderScope>();
+    if (scope == null) return;
+    savedComputersOf(
+      ProviderScope.containerOf(context, listen: false).read(appStateProvider),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) => widget.child;
+}

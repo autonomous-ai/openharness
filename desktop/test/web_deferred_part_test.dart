@@ -20,9 +20,13 @@ class _Download {
   void next() => pending = Completer<void>();
 }
 
-Widget _host(DeferredPart part) => MaterialApp(
+Widget _host(DeferredPart part, {VoidCallback? reload}) => MaterialApp(
   home: Scaffold(
-    body: DeferredPartView(part: part, builder: (_) => const Text('Finder')),
+    body: DeferredPartView(
+      part: part,
+      reload: reload ?? () {},
+      builder: (_) => const Text('Finder'),
+    ),
   ),
 );
 
@@ -126,6 +130,60 @@ void main() {
       expect(drawn.text.style?.decoration, isNot(TextDecoration.underline));
     }
   });
+
+  testWidgets('a download that stalls offers Retry after about 20 s', (
+    tester,
+  ) async {
+    final download = _Download();
+    await tester.pumpWidget(_host(DeferredPart(download.call)));
+
+    await tester.pump(const Duration(seconds: 19));
+    expect(find.text('Retry'), findsNothing);
+    await tester.pump(const Duration(seconds: 2));
+    expect(find.text('Still loading this part of Harness'), findsOneWidget);
+    expect(find.text('Loading…'), findsNothing);
+
+    download.next();
+    await tester.tap(find.text('Retry'));
+    await tester.pump();
+    expect(download.calls, 2);
+    expect(find.text('Loading…'), findsOneWidget);
+
+    download.pending.complete();
+    await tester.pump();
+    expect(find.text('Finder'), findsOneWidget);
+  });
+
+  testWidgets(
+    'a Retry that fails again says Harness may have been updated, and offers Reload',
+    (tester) async {
+      final download = _Download();
+      var reloads = 0;
+      await tester.pumpWidget(
+        _host(DeferredPart(download.call), reload: () => reloads++),
+      );
+      download.fail();
+      await tester.pump();
+      expect(find.text('Reload'), findsNothing);
+
+      download.next();
+      await tester.tap(find.text('Retry'));
+      await tester.pump();
+      download.fail();
+      await tester.pump();
+
+      expect(
+        find.text(
+          'Harness may have been updated since this page opened. '
+          'Reload the page to get the new version.',
+        ),
+        findsOneWidget,
+      );
+      await tester.tap(find.text('Reload'));
+      expect(reloads, 1);
+      expect(find.text('Retry'), findsOneWidget);
+    },
+  );
 
   testWidgets('Retry is a 44 px target on a phone', (tester) async {
     tester.view.physicalSize = const Size(390, 844);

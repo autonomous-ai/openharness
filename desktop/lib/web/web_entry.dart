@@ -5,6 +5,7 @@ import '../community/hub_return_web.dart';
 import '../widgets/key_hints.dart';
 import '../ws/terminal_transport_plugin.dart';
 import 'p2p/p2p_resume_retry.dart';
+import 'onboarding/saved_computers.dart';
 import 'p2p/web_terminal_p2p.dart';
 import 'parts/workspace_part.dart';
 import 'shell/web_focus_ring.dart';
@@ -26,10 +27,13 @@ void prepareConsole() => prepareWebConsole();
 /// What a browser build draws around every screen: on a phone, the bar that
 /// sends it to the Harness app in its store. Above the Navigator, so every
 /// screen and route under it shows no key hints: the web is mouse-first.
-/// Its first frame starts the workspace's download.
+/// Its first frame starts the workspace's download, and from the start it
+/// keeps (and forgets) the account's computers.
 Widget appFrame(Widget app) => WorkspacePrefetch(
-  child: WebFocusRing(
-    child: WebAppStoreFrame(child: KeyHints(visible: false, child: app)),
+  child: KeptComputers(
+    child: WebFocusRing(
+      child: WebAppStoreFrame(child: KeyHints(visible: false, child: app)),
+    ),
   ),
 );
 

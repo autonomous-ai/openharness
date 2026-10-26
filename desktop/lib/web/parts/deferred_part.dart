@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import '../../shared/theme/app_icons.dart';
 import '../../shared/theme/app_theme.dart' as grid;
 import '../../widgets/desktop_chrome.dart';
+import 'page_reload.dart' if (dart.library.js_interop) 'page_reload_web.dart';
 
 /// A part of the browser build that `main.dart.js` leaves out: a `deferred`
 /// library, downloaded the first time something needs it. One download is
@@ -21,6 +22,13 @@ class DeferredPart {
   bool get loaded => _loaded;
   bool _loaded = false;
 
+  /// Asks for it again, even while a download is pending: a stalled one is
+  /// not waited on.
+  Future<void> retry() {
+    if (!_loaded) _loading = null;
+    return load();
+  }
+
   Future<void> load() => _loading ??= _download().then(
     (_) => _loaded = true,
     onError: (Object error, StackTrace stack) {
@@ -31,58 +39,108 @@ class DeferredPart {
 }
 
 /// [builder]'s widget once [part] is in. Until then a loading line in its
-/// place, and if the download fails, a sentence and Retry instead of a blank.
+/// place; if the download fails, or is still going after [stallAfter], a
+/// sentence and Retry instead of a blank. A Retry that fails too offers to
+/// reload the page: an older page cannot download a part a release replaced.
 class DeferredPartView extends StatefulWidget {
   const DeferredPartView({
     super.key,
     required this.part,
     required this.builder,
+    this.reload = reloadPage,
   });
 
   final DeferredPart part;
   final WidgetBuilder builder;
+
+  /// Reloads the page; tests pass a recorder.
+  final VoidCallback reload;
+
+  /// How long a download goes before Retry is offered beside it.
+  static const stallAfter = Duration(seconds: 20);
 
   @override
   State<DeferredPartView> createState() => _DeferredPartViewState();
 }
 
 class _DeferredPartViewState extends State<DeferredPartView> {
-  bool _failed = false;
+  var _failures = 0;
+  bool _failed = false, _stalled = false;
+  Timer? _stall;
 
   @override
   void initState() {
     super.initState();
-    if (!widget.part.loaded) _load();
+    if (!widget.part.loaded) _load(widget.part.load());
   }
 
-  void _load() {
-    widget.part.load().then(
+  @override
+  void dispose() {
+    _stall?.cancel();
+    super.dispose();
+  }
+
+  void _load(Future<void> download) {
+    _stall?.cancel();
+    _stall = Timer(DeferredPartView.stallAfter, () {
+      if (mounted) setState(() => _stalled = true);
+    });
+    download.then(
       (_) {
-        if (mounted) setState(() => _failed = false);
+        _stall?.cancel();
+        if (mounted) setState(() => _failed = _stalled = false);
       },
       onError: (Object _) {
-        if (mounted) setState(() => _failed = true);
+        _stall?.cancel();
+        if (!mounted) return;
+        setState(() {
+          _failures++;
+          _failed = true;
+          _stalled = false;
+        });
       },
     );
   }
 
   void _retry() {
-    setState(() => _failed = false);
-    _load();
+    setState(() => _failed = _stalled = false);
+    _load(widget.part.retry());
   }
 
   @override
   Widget build(BuildContext context) {
     if (widget.part.loaded) return widget.builder(context);
     grid.AppTheme.watch(context);
+    final Widget shown;
+    if (_failed && _failures > 1) {
+      shown = _Problem(
+        title: 'Could not load this part of Harness',
+        detail:
+            'Harness may have been updated since this page opened. '
+            'Reload the page to get the new version.',
+        onRetry: _retry,
+        onReload: widget.reload,
+      );
+    } else if (_failed) {
+      shown = _Problem(
+        title: 'Could not load this part of Harness',
+        detail: 'Check the connection, then retry.',
+        onRetry: _retry,
+      );
+    } else if (_stalled) {
+      shown = _Problem(
+        title: 'Still loading this part of Harness',
+        detail: 'Check the connection, then retry.',
+        onRetry: _retry,
+      );
+    } else {
+      shown = const _Loading();
+    }
     // Its own Material: the workspace's part is drawn above any page.
     return Material(
       type: MaterialType.transparency,
       child: Center(
-        child: Padding(
-          padding: const EdgeInsets.all(16),
-          child: _failed ? _Failed(onRetry: _retry) : const _Loading(),
-        ),
+        child: Padding(padding: const EdgeInsets.all(16), child: shown),
       ),
     );
   }
@@ -111,36 +169,62 @@ class _Loading extends StatelessWidget {
   );
 }
 
-class _Failed extends StatelessWidget {
-  const _Failed({required this.onRetry});
+/// What went wrong in a sentence, and what to do: Retry, and Reload when a
+/// retry did not help.
+class _Problem extends StatelessWidget {
+  const _Problem({
+    required this.title,
+    required this.detail,
+    required this.onRetry,
+    this.onReload,
+  });
 
+  final String title;
+  final String detail;
   final VoidCallback onRetry;
+  final VoidCallback? onReload;
 
   @override
-  Widget build(BuildContext context) => Column(
-    mainAxisSize: MainAxisSize.min,
-    children: [
-      Semantics(
-        liveRegion: true,
-        child: Text(
-          'Could not load this part of Harness',
-          textAlign: TextAlign.center,
-          style: DesktopChrome.text(color: DesktopChrome.foreground),
+  Widget build(BuildContext context) {
+    final buttonStyle = TextButton.styleFrom(minimumSize: const Size(44, 44));
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Semantics(
+          liveRegion: true,
+          child: Text(
+            title,
+            textAlign: TextAlign.center,
+            style: DesktopChrome.text(color: DesktopChrome.foreground),
+          ),
         ),
-      ),
-      const SizedBox(height: 4),
-      Text(
-        'Check the connection, then retry.',
-        textAlign: TextAlign.center,
-        style: DesktopChrome.metadata(),
-      ),
-      const SizedBox(height: 8),
-      TextButton.icon(
-        style: TextButton.styleFrom(minimumSize: const Size(44, 44)),
-        onPressed: onRetry,
-        icon: const Icon(AppIcons.rotateCw, size: 14),
-        label: const Text('Retry'),
-      ),
-    ],
-  );
+        const SizedBox(height: 4),
+        Text(
+          detail,
+          textAlign: TextAlign.center,
+          style: DesktopChrome.metadata(),
+        ),
+        const SizedBox(height: 8),
+        Wrap(
+          alignment: WrapAlignment.center,
+          spacing: 8,
+          children: [
+            if (onReload case final reload?)
+              TextButton.icon(
+                style: buttonStyle,
+                onPressed: reload,
+                icon: const Icon(AppIcons.refreshCw, size: 14),
+                label: const Text('Reload'),
+              ),
+            TextButton.icon(
+              style: buttonStyle,
+              onPressed: onRetry,
+              icon: const Icon(AppIcons.rotateCw, size: 14),
+              label: const Text('Retry'),
+            ),
+          ],
+        ),
+      ],
+    );
+  }
 }

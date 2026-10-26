@@ -15,15 +15,15 @@ const ENCODINGS = [
   { name: 'br', suffix: 'br' },
   { name: 'gzip', suffix: 'gz' },
 ]
-// One token of Accept-Encoding, wherever it stands in the list.
-const accepts = (name) => [{ type: 'header', key: 'accept-encoding', value: `(?:.*[\\s,])?${name}(?:[\\s,;].*)?` }]
+// An Accept-Encoding that takes [name]: listed, and not at q=0 (scripts/precompress.mjs).
+const accepts = (acceptsEncoding, name) => [{ type: 'header', key: 'accept-encoding', value: acceptsEncoding(name) }]
 const releaseFile = (ext) => `/harness-web/releases/:path*/:file.${ext}`
 
-async function precompressedTypes() {
-  const { PRECOMPRESSED } = await import('./scripts/precompress.mjs')
+async function precompression() {
+  const { PRECOMPRESSED, acceptsEncoding } = await import('./scripts/precompress.mjs')
   const missing = PRECOMPRESSED.filter((ext) => !PRECOMPRESSED_TYPES[ext])
   if (missing.length) throw new Error(`No Content-Type for pre-compressed .${missing.join(', .')}`)
-  return PRECOMPRESSED
+  return { precompressed: PRECOMPRESSED, acceptsEncoding }
 }
 
 module.exports = {
@@ -91,13 +91,13 @@ module.exports = {
   // install and download pages, and installer redirects. Flutter's base
   // href places its assets under /harness-web/ without changing the visible URL.
   async rewrites() {
-    const precompressed = await precompressedTypes()
+    const { precompressed, acceptsEncoding } = await precompression()
     return {
       beforeFiles: [
         // The browser's first accepted encoding wins; one that takes neither gets the file as is.
         ...ENCODINGS.flatMap(({ name, suffix }) => precompressed.map((ext) => ({
           source: releaseFile(ext),
-          has: accepts(name),
+          has: accepts(acceptsEncoding, name),
           destination: `/harness-web/releases/:path*/:file.${ext}.${suffix}`,
         }))),
         // Older desktop builds consume snapshots without following redirects.
@@ -117,7 +117,7 @@ module.exports = {
     }
   },
   async headers() {
-    const precompressed = await precompressedTypes()
+    const { precompressed, acceptsEncoding } = await precompression()
     return [
       {
         source: '/:path*',
@@ -183,7 +183,7 @@ module.exports = {
       // In the rewrites' order reversed, so a browser taking both gets brotli's last, which wins.
       ...[...ENCODINGS].reverse().flatMap(({ name }) => precompressed.map((ext) => ({
         source: releaseFile(ext),
-        has: accepts(name),
+        has: accepts(acceptsEncoding, name),
         headers: [
           { key: 'Content-Encoding', value: name },
           { key: 'Content-Type', value: PRECOMPRESSED_TYPES[ext] },
