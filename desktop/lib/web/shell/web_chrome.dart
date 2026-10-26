@@ -46,15 +46,14 @@ WorkspaceChrome _webWorkspaceChrome(AppNotifier app) => WorkspaceChrome(
   superTabRecovers: true,
   // A phone pays for every read: poll the Swarm on screen only, slow it while
   // the conversation is quiet, read when a machine connects instead of at the
-  // next poll, and ask for the saved conversation beside the first state.
-  // Drawing the last view kept on this device is off until the #1723 review
-  // findings are fixed (missing messages after a long absence, among others).
+  // next poll, ask for the saved conversation beside the first state, and
+  // draw the last view kept on this device while the first read is on its way.
   superTabReading: const SuperTabReading(
     quietPoll: Duration(seconds: 15),
     pausesAway: true,
     readsOnConnect: true,
     connectGrace: Duration(seconds: 10),
     messagesWithState: true,
-    drawsSaved: false,
+    drawsSaved: true,
   ),
 );
