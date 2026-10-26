@@ -1,10 +1,11 @@
 /**
  * Rollback to the previous release (design 6.4), behind the same gate as the migration. Before any write in parts, the
  * old state goes back unchanged. After writes, the state is rebuilt from the parts, numbered past everything used since,
- * and the parts are kept until the owner says they can go.
+ * and the parts are kept until the owner says they can go. A Swarm the previous release would misread is never rolled
+ * back: it checks no audience and knows no lost work (final review, Critical 2).
  */
 import type { Prisma, PrismaClient } from '@prisma/client'
-import { nextConversationNumber } from '../model.js'
+import { nextConversationNumber, type Conversation, type SuperTabState } from '../model.js'
 import * as parts from '../parts/index.js'
 
 export interface RollbackReport { tabId: string; ok: boolean; error?: string }
@@ -33,6 +34,22 @@ const newestVersion = (stored: parts.SwarmParts) =>
 const newestSequence = async (tx: Prisma.TransactionClient, tabId: string) =>
   (await tx.superTabMessage.findFirst({ where: { tabId }, orderBy: { sequence: 'desc' }, select: { sequence: true } }))?.sequence ?? 0
 
+const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`
+
+/**
+ * What the previous release would misread in a state rebuilt from the parts. It filters conversations by project alone,
+ * so a private one becomes readable by every project reader; and it ends work only on done, stopped or cancelled, so a
+ * lost task (status lost, or the marker a later cancel keeps) reads as active. Null when there is neither.
+ */
+function downgradeHazard(state: SuperTabState): string | null {
+  const groups: Conversation[] = [...state.conversations, ...state.parkedConversations ?? []]
+  const hidden = groups.filter(g => g.audience).length
+  const lost = groups.filter(g => g.assignment?.status === 'lost' || g.assignment?.lost).length
+  const hazards = [...hidden ? [`its ${plural(hidden, 'private conversation')} would become readable by every project reader`] : [],
+    ...lost ? [`its ${plural(lost, 'lost task')} would read as active work`] : []]
+  return hazards.length ? `the previous release would misread it: ${hazards.join(', and ')}` : null
+}
+
 /** Before any write in parts: the old state back as it was, the parts dropped. Refused once anything was written since. */
 export function rollbackLegacy(db: PrismaClient, tabId: string): Promise<RollbackReport> {
   return run(db, tabId, async tx => {
@@ -57,6 +74,9 @@ export function rollbackFromParts(db: PrismaClient, tabId: string): Promise<Roll
     const stored = await parts.loadAll(tx, tabId)
     const state = parts.toLegacyState(parts.reassemble(stored))
     if (state.version !== 1) fail(`its rebuilt state has version ${String(state.version)}, not 1`)
+    const hazard = downgradeHazard(state)
+    if (hazard) fail(`Swarm ${tabId} was not rolled back, and nothing was changed: ${hazard}. Roll forward with a fix instead; `
+      + 'the parts stay authoritative, so nothing is lost or made public.')
     if (stored.groupCounter > nextConversationNumber(state) - 1) state.retiredConversationNumber = stored.groupCounter
     const revision = Math.max(row.revision, newestVersion(stored), await newestSequence(tx, tabId)) + 1
     const restored = await tx.superTab.updateMany({ where: { id: tabId, format: 2, revision: row.revision },
