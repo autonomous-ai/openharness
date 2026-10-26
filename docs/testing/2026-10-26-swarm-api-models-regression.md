@@ -14,9 +14,9 @@ code was changed. Local models (engines on a member's machine) are out of scope.
 
 | Machine | Owner | OS | CLI | grid | Desktop | Notes |
 | --- | --- | --- | --- | --- | --- | --- |
-| MacbookPro.local | ken15 | macOS | not read | not read | not read | Shares the DeepSeek API. |
+| MacbookPro.local | ken15 | macOS | 0.4.73 (read about 10:50) | 0.3.59 | not read | Shares the DeepSeek API. Read by an agent on it. |
 | MACs-Mac-Studio.local | ken15 | macOS | 0.4.72; 0.4.73 at 10:40 | 0.3.59 | not read | Runs the Lead. Read by the Lead. |
-| WIN-DELL | ken15 | Windows | not read | not read | not read | Grid supports Windows (Ken), but Harness does not install it there ([F5](#f5)). |
+| WIN-DELL | ken15 | Windows | not read | not read | not read | Runs no Swarm agent ([F5](#f5)); Harness does not install grid there ([F7](#f7)). |
 | MacBooks-MacBook-Pro-19.local | tony | macOS | 0.4.72, then 0.4.73 from 09:45:55 | 0.3.59 (installed 09:22 by flow 4) | 1.3.19 | This Engineer's machine. |
 | Diego's Mac | diego | macOS | not read | not read | not read | |
 | MacBookPro2021.local | phamngochuy | macOS | not read | not read | not read | Its readings carry no Local models field. |
@@ -86,8 +86,11 @@ MACs-Mac-Studio.local's log (read by the Lead) shows grid signed in and no "coul
 is what `notReady` answers when grid's set-up ends with no detail (`cli/src/services/models.ts:213-216`), which is the
 `no-cli` outcome: no grid binary after the install attempt (`cli/src/lib/gridAttach.ts:99-102`). Harness never
 installs grid on Windows (`cli/src/lib/runtimeInstall.ts:322-323`, and grid's own `install.sh` stops there; see
-[F5](#f5)), so a Windows computer without a grid it can find answers exactly this. So the failing reporter is most
-likely WIN-DELL. **Not verified**: WIN-DELL's log lines are requested.
+[F7](#f7)), so a Windows computer without a grid it can find answers exactly this. MacbookPro.local's log (read by an
+agent on it) has no "could not be set up" line, and its grid-attach logged "already signed in … nothing to do" at
+09:45:58. Every computer signed in as the owner reports this status, those outside the Swarm too
+(`cli/src/superTabs/host.ts` `pollMachines` runs `SwarmGrids` on each; `hostGrids` answers by owner). So the failing
+reporter is most likely WIN-DELL. **Not verified**: WIN-DELL's log lines are requested.
 
 **Impact.**
 - Routing and Builder starts do not read this flag. Verified: routes 3a/3b (09:21:28, 09:21:30) and the four smoke starts
@@ -100,7 +103,7 @@ likely WIN-DELL. **Not verified**: WIN-DELL's log lines are requested.
   not be set up on this computer. Try again." (Tony's screenshots, posted by the Lead).
 - WIN-DELL retried grid's install every minute (assumed, pending its log); on 0.4.73 it asks only once the Swarm shows
   failed.
-- What 0.4.73 leaves (code reading, not tested): a Windows computer still gets no grid from Harness ([F5](#f5)), and if
+- What 0.4.73 leaves (code reading, not tested): a Windows computer still gets no grid from Harness ([F7](#f7)), and if
   every owner computer that can set grid up goes away, the status keeps saying ready, since only a computer that kept it
   ready reports a failure over ready.
 
@@ -216,7 +219,9 @@ share on it answered Nico throughout. The retry, queued at about 09:30, cloned f
 
 The empty `()` in that log line is a small fault of its own: the message puts the error's cause in parentheses
 (`cli/src/gateway/accountHttp.ts:70`, `e.cause?.message ?? e.message`), and an empty cause text is not replaced, so the
-reason is lost.
+reason is lost. MacbookPro.local's own log (read by an agent on it) shows it twice more today, at 07:06 and 09:02 UTC,
+beside one with the cause kept: `Connect Timeout Error (attempted address: harness-api.autonomous.ai:443, timeout:
+10000ms)` at 18:37 UTC the day before.
 
 ### F4
 
@@ -243,44 +248,35 @@ second gap. The answer also tells the Lead to share a model that is shared. Desk
 
 ### F5
 
-**A Builder started on the shared API model on WIN-DELL is dispatched and then never runs, with no error anywhere a
-person can see it.** The Lead started a fifth smoke Builder on DeepSeek on WIN-DELL at about 09:36 (same task as flow 4).
-WIN-DELL took it: its readings paused from 09:35:42 to 09:37:55 while it readied the project, and at 09:38:12 the Swarm
-showed the start dispatched. From then to at least 09:53:12 the start had no agent and no error, while WIN-DELL's readings
-were fresh (1–15 s) with free slots.
+**Swarm starts on WIN-DELL are dispatched and then never run, with no error anywhere a person can see it.**
 
-Why, from the code: on the machine, a create with a grid model whose launch target cannot be had is saved and held with
-"Waiting for the selected model. This request is saved and will continue when it is available."
-(`cli/src/core/agents/launches.ts`, `modelHold`; the target is `modelTarget(selection)`), with no time limit. The Swarm
-start then reads as pending, and the host writes the reason only to that machine's own log
-(`cli/src/superTabs/machines.ts` `noteWaiting`: `Swarm start … is waiting: …`). For a Swarm grid model the target is
-`swarmLaunchTarget`, which returns nothing when grid is not ready and drops the reason `notReady` gave
-(`cli/src/services/models.ts:202-203` on `main`), so even the local log says only that it waits for the model.
+| Start | Requested | Dispatched | Seen last | Agent | Error |
+| --- | --- | --- | --- | --- | --- |
+| Smoke Builder on DeepSeek (same task as flow 4) | about 09:36 | 09:38:12, after WIN-DELL's readings paused 09:35:42–09:37:55 to ready the project | 10:54:27 | none | none |
+| Plain Claude (sonnet) agent the Lead started to read WIN-DELL's grid set-up | about 10:42 | yes | 10:54:27 | none | none |
 
-Why WIN-DELL's grid is not ready: grid supports Windows (Ken, the owner), but Harness has no way to put it there.
-- `cli/src/lib/runtimeInstall.ts:322-323` (unchanged in 0.4.73 and on `main`): `ensureManagedGrid` returns null on
-  Windows, "Not on Windows (spec section 1): no grid is published for it, and an agent's pane there has no grid to run."
-  It comes from the Windows CLI plan (`docs/superpowers/plans/2026-10-16-windows-native-cli.md`, "no grid on Windows").
-  Harness's grid download list has only `darwin-arm64`, `darwin-x64`, `linux-x64` and `linux-arm64` builds of 0.3.59
-  (its manifest, read at 10:48).
-- The fallback is grid's own installer, `curl -fsSL https://grid.autonomous.ai/install.sh | bash`
-  (`cli/src/lib/gridInstall.ts:119`), which stops on Windows: `unsupported OS: … — macOS and Linux only (Windows: see the
-  docs)`. There is no `install.ps1` (404).
-- A grid the person installed is used only if `grid.exe` is on the daemon's PATH (`binaryOnPath` tries `.exe`). The
-  home fallback looks for `~/.local/bin/grid` without `.exe` and reads `HOME` (`cli/src/lib/gridBinary.ts:74-77`), so a
-  grid installed there is missed on Windows when that folder is not on PATH (code reading).
+WIN-DELL's readings were fresh (1–15 s) with free slots the whole time, and it has run no agent in this Swarm
+(running and stopped lists empty). Because the plain Claude start hangs too, grid is at most part of the cause.
 
-So the plan's "no grid on Windows" is out of date. **Not verified by log**: the agent now on WIN-DELL reports whether a
-grid command exists there, its CLI version and its grid log lines.
+**Why nobody is told.** The machine records why it holds a create (`held`, a service and a sentence, in
+`agent-creations/<creationId>.hold`; `cli/src/lib/agentCreationReceipt.ts` `readHold`) and sends it with the pending
+answer. The Swarm's start code drops it: any answer that is not `created` becomes `START_PENDING` with the fixed text
+"Keep this start ID. Run resume with it to check the same native creation; do not make another start request."
+(`cli/src/superTabs/start.ts:238-241` on `main`). The host logs only that text (`cli/src/superTabs/machines.ts`
+`noteWaiting`: `Swarm start … is waiting: …`) and tells the Swarm nothing, so a hold has no time limit and no visible
+reason. **Not verified on the machine**: the two newest `.hold` files on WIN-DELL are asked of Ken.
+
+**Possible causes.** For the DeepSeek start, grid not being set up on WIN-DELL would hold it on its own
+([F7](#f7)–[F9](#f9)); the plain Claude start needs another cause, not yet known. **Not verified on the machine.**
 
 Two further effects:
-- Routing offered WIN-DELL for the shared model like every other machine (route 3a listed it), although it could not run it.
-  It still does on 0.4.73: the Lead's route at 10:22 named all six machines, WIN-DELL included.
-- The Swarm has no way to cancel a dispatched start, and the held request would start a Builder if WIN-DELL ever got a
-  grid. The Lead asked Ken to close any Builder that appears there.
+- Routing offers WIN-DELL like every other machine, the shared model included (route 3a; on 0.4.73 the Lead's route at
+  10:22 still named all six machines, WIN-DELL included), although nothing started there runs.
+- The Swarm has no way to cancel a dispatched start, and a held request starts its agent whenever its hold clears.
+  The Lead asked Ken to close any Builder that appears there.
 
-Reproduce: contribute a Windows machine to a Swarm with a shared API model; start a Builder on that model there; read
-the Swarm state for 20 minutes.
+Reproduce: contribute WIN-DELL (Windows, CLI version not read) to a Swarm; start a Claude agent there, with or without a
+shared API model; read the Swarm state for 15 minutes.
 
 ### F6
 
@@ -292,6 +288,37 @@ screenshots): no Shared with you section, and a search for "0731" found only "AP
 this computer's daemon listed `DeepSeek-V4-Flash-0731` on the autonomous.ai grid (read 09:51 with `grid_models_list`).
 The offer could be made below the Desktop, but people cannot, so it was not (Lead's ruling). To do: either turn the
 switch back on before the release or mark the section hidden in the plan.
+
+### F7
+
+**Harness has no way to put grid on a Windows machine, although grid supports Windows (Ken, the owner).** The Swarm's
+grid models, and the owner's own Local models set-up ([F1](#f1)), need it there.
+- `cli/src/lib/runtimeInstall.ts:322-323` (unchanged in 0.4.73 and on `main`): `ensureManagedGrid` returns null on
+  Windows, "Not on Windows (spec section 1): no grid is published for it, and an agent's pane there has no grid to run."
+  It comes from the Windows CLI plan (`docs/superpowers/plans/2026-10-16-windows-native-cli.md`, "no grid on Windows"),
+  now out of date. Harness's grid download list has only `darwin-arm64`, `darwin-x64`, `linux-x64` and `linux-arm64`
+  builds of 0.3.59 (its manifest, read at 10:48).
+- The fallback is grid's own installer, `curl -fsSL https://grid.autonomous.ai/install.sh | bash`
+  (`cli/src/lib/gridInstall.ts:119`), which stops on Windows: `unsupported OS: … — macOS and Linux only (Windows: see the
+  docs)`. There is no `install.ps1` (404).
+
+So a Windows machine has grid only if the person installed it and the daemon can find it ([F8](#f8)). **Not verified
+on the machine**: whether WIN-DELL has one; the agent meant to read it is itself one of the stuck starts ([F5](#f5)).
+
+### F8
+
+**On Windows, a grid installed in the user's `.local\bin` is missed when that folder is not on the daemon's PATH.**
+`gridBinaryPath` tries PATH first, where `binaryOnPath` adds `.exe`, and then `~/.local/bin/grid` built from `HOME`,
+without `.exe` (`cli/src/lib/gridBinary.ts:74-77`); Windows sets `USERPROFILE`, not always `HOME`, and grid's binary there
+is `grid.exe`. Code reading; not run on Windows.
+
+### F9
+
+**When grid is not ready, a start on a Swarm grid model loses the reason.** `swarmLaunchTarget` returns nothing when
+`notReady` gives a sentence (`cli/src/services/models.ts:202-203` on `main`), so the create is held with the generic
+"Waiting for the selected model. This request is saved and will continue when it is available."
+(`cli/src/core/agents/launches.ts`, `modelHold`) instead of, for example, "Grid could not be set up on this computer.
+Try again." With [F5](#f5)'s dropped hold, the person sees nothing at all. Code reading.
 
 ## Flow 8: automated coverage
 
@@ -312,6 +339,8 @@ Gaps these suites leave, each matching a finding above: no backend test calls `G
 held model beside a refused Builder on it ([F2](#f2)); no CLI test reads a machine's readings while a start is being
 prepared ([F4](#f4)); no routing or start test has a machine whose grid cannot be set up (no `win32` case in the Super
 Tab route, start or machines suites), and `machines.spec.ts` pins only that a waiting start is logged locally ([F5](#f5)).
+Two tests pin the behaviour found wrong: `cli/src/lib/runtimeInstall.spec.ts:735` ("installs no grid on Windows",
+[F7](#f7)) and `cli/src/services/models.spec.ts:378-381` (a grid that cannot be set up answers null, [F9](#f9)).
 
 ## Rulings
 
@@ -321,5 +350,6 @@ Tab route, start or machines suites), and `machines.spec.ts` pins only that a wa
 | F2 is real: the route after the four starts was a rerun, not a fresh route | Lead | Confirmed from the attached route files | A false finding |
 | Flow 5 is "not in this build (hidden by the owner on 23 Oct)" plus a plan mismatch; no offer made below the Desktop | Lead | People cannot reach it, so it is not a user flow in this release | It is tested when turned back on |
 | WIN-DELL's DeepSeek start is a fail: dispatched 09:38:12, never runs, no error shown | Lead | Code reading plus 20+ minutes observed | Low: a rerun |
-| Grid supports Windows: F5 is a bug, not a known limitation | Lead, from Ken (owner) | The owner's statement outranks the 16 Oct Windows plan | F5 reported as a bug when it is a limitation |
+| Grid supports Windows: Harness not installing grid there is a bug, not a known limitation | Lead, from Ken (owner) | The owner's statement outranks the 16 Oct Windows plan | F7 reported as a bug when it is a limitation |
+| F5 is "WIN-DELL starts no Swarm agent"; the grid items (install, `.exe` lookup, reason dropped) are separate findings | Lead | A plain Claude start hangs there too | Low: re-filed when the `.hold` files are read |
 | Flow 6 is judged against the 2026-10-24 decision (a share keeps its address across a restart), and the plan's "Shares end when the models service restarts" is recorded as a plan mismatch | Engineer | The later decision and the code (`SwarmApiShares.restore`) agree | Flow 6 judged against the wrong rule |
