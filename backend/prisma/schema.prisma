@@ -1336,6 +1336,8 @@ model SwarmGroup {
   lastActivityAt     DateTime
   /// The machines whose hosts this group's last write concerned: its agents' and its work's, before and after (host reads).
   hostMachineIds     String[]  @default([])
+  /// A short hash of the fields host rows read (read/hostRows.ts); a post leaves it. Missing on a part written before it.
+  hostDigest         String?
 
   @@unique([tabId, key])
   @@index([tabId, changedAt])

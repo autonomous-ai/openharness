@@ -159,8 +159,8 @@ export interface HostTabUnchanged { tabId: string; lastChangedAt: number | null;
 export interface HostTabRows {
   tabId: string
   lastChangedAt: number | null
-  /** A short hash of `roster`, `pool` and `assignments`, without the host's own machine reading or the rows' change times:
-   *  send it back in `held`. */
+  /** Opaque: send it back in `held`. It changes whenever `roster`, `pool` or `assignments` do (not for the host's own
+   *  machine reading or the rows' change times), and may change when they do not. */
   etag: string
   unchanged?: never
   /** Today's `GET /hosts/:m` rows for this Swarm, `revision` replaced by `lastChangedAt`. */

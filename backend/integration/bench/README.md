@@ -28,11 +28,11 @@ machines, and never reads `DATABASE_URL` or any other database. It writes `<driv
 | `--lane L` | mixed | `mixed`: the busy Swarm below. `cross-group`: one writer per group at a time, for goal 1 (below). |
 | `--machines N` | 6 | Contributed machines, each its own person's; machine 0 is the owner's and runs the Lead. |
 | `--duration S` | 120 | Load length in seconds. A slow store stretches it by up to a quarter (at least 10 s); work left after that is reported as skipped. |
-| `--desktop-readers N` | 3 | Desktop windows of the owner and the first machine owners, polling the full state. |
-| `--host-readers N` | 2 | CLI hosts of the first machines reading their roster. |
+| `--desktop-readers N` | 3 | Desktop windows of the owner and the first machine owners, polling the Swarm (below). |
+| `--host-readers N` | 2 | CLI hosts of the first machines reading their roster (below). |
 | `--mix a=w,…` | `message.send=2,work.status=1,work.check=1` | Relative weights of a worker's posts in its own group. |
 | `--every k=ms,…` | see `config.ts` | Cadences: `workerPostMs` 4000, `leadSendMs` 5000, `nativeTurnMs` 10000, `observeMs` 15000, `deliveryPassMs` 3000, `desktopPollMs` 3000, `hostTickMs` 1000. |
-| `--driver NAME` | legacy | Which store's clients to run (below). |
+| `--driver NAME` | parts | Which store's clients to run (below). |
 
 The bench's own tests (helpers, plus a short run of the whole scenario), and its typecheck:
 
@@ -81,12 +81,14 @@ as an agent), read back setup facts (`snapshot`), a machine's generation and rep
 claim and acknowledge deliveries, a Desktop reader and a host reader, the state's size, close. Commands keep their
 shapes across versions, so they cross the seam as they are.
 
-`legacyDriver.ts` is today's store through today's routes. For the parts store, add a driver that:
+Two drivers, registered in `DRIVERS` (`bench.ts`); run either with the same seed. Nothing in `plan.ts`, `seed.ts` or
+`load.ts` differs between them.
 
-- builds its routes or store on the given (counted) client, and returns the same `Reply` shape;
-- makes `desktopReader` and `hostReader` poll the way the new clients do (first load, then changes since a cursor),
-  keeping their cursor inside the reader;
-- answers `snapshot` from its parts, and `stateSize` with the total of its active parts (documents and BSON bytes);
-
-then register it in `DRIVERS` (`bench.ts`) and run `--driver <name>` with the same seed. Nothing in `plan.ts`,
-`seed.ts` or `load.ts` changes.
+- `legacyDriver.ts` (`--driver legacy`) is main's store through main's routes: every Desktop poll reads the whole
+  Swarm, every host tick its roster. On the store by parts those full reads answer 426, so it runs only on main (the
+  baseline).
+- `drivers/parts.ts` (`--driver parts`, the default here) is the store by parts, read the way the merged clients read
+  it: commands and the other writes through the same routes; setup facts from a first load; each Desktop window loads
+  once, then reads the changes since its cursor (a `reload` answer is followed by a first load in the same poll); each
+  host reads its host form in full at start and at least every minute, and by change in between, naming the etag of
+  the rows it holds. The state's size is its live parts.

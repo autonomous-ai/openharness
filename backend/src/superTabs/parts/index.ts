@@ -5,7 +5,8 @@
 
 export * from './types.js'
 export { clock, createClock } from './clock.js'
-export { reassemble, split, toLegacyState } from './shape.js'
+export { knownKind, reassemble, split, toLegacyState } from './shape.js'
 
 export { insertParts, lastChangedAt, loadActive, loadAll, loadChanged, loadDormant } from './load.js'
+export { loadLight } from './light.js'
 export { guardedWrite, PartConflict, type PartWrite } from './write.js'

@@ -7,16 +7,24 @@ import { benchApp, caller, type Call } from './http.js'
 
 const base = '/api/super-tabs'
 
-/** Today's store: one `SuperTab` document per Swarm, read in full by every poll (store.ts, routes/superTabs.ts). */
-export async function legacyDriver(db: PrismaClient, users: () => readonly AuthUser[]): Promise<SwarmDriver> {
+/** The Super Tab routes on one store, in process. Drivers that share them share the store and its in-process state. */
+export interface StoreRoutes { call: Call; close(): Promise<void> }
+
+export async function storeRoutes(db: PrismaClient, users: () => readonly AuthUser[]): Promise<StoreRoutes> {
   const store = new SuperTabStore(db)
   // No GitHub App: the bench never reaches GitHub.
   const app = await benchApp(users, async scope => superTabRoutes(scope, { store, github: null }))
-  const call: Call = caller(app)
+  return { call: caller(app), close: () => app.close() }
+}
+
+/** Today's store: one `SuperTab` document per Swarm, read in full by every poll (store.ts, routes/superTabs.ts). On the
+ *  store by parts its full reads answer 426, so `partsDriver` keeps only its writes. */
+export async function legacyDriver(db: PrismaClient, users: () => readonly AuthUser[], routes?: StoreRoutes): Promise<SwarmDriver> {
+  const { call, close } = routes ?? await storeRoutes(db, users)
   const reader = (label: string, user: AuthUser, url: string): Reader => ({ label, poll: () => call(user, 'GET', url) })
   return {
     name: 'legacy',
-    close: () => app.close(),
+    close,
     createSwarm: (owner, operationId, name) => call(owner, 'POST', base, { operationId, name }),
     execute: (tabId, user, operationId, command, asAgentId) =>
       call<CommandResult>(user, 'POST', `${base}/${tabId}/commands`, { operationId, command, ...(asAgentId ? { asAgentId } : {}) }),
