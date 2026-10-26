@@ -3,16 +3,20 @@ import 'dart:async';
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:url_launcher/link.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../core/models.dart';
 import '../measurement/hub_usage.dart';
+import '../shared/theme/app_icons.dart';
 import '../shared/theme/app_theme.dart' as grid;
+import '../shared/widgets/empty_state.dart';
 import '../state/app_state.dart';
 import '../state/terminal_pane.dart';
 import '../widgets/desktop_chrome.dart';
 import '../widgets/web_download_button.dart';
 import 'shared_agent_location.dart';
 import 'shared_harness_panel.dart';
+import 'shared_link_state.dart';
 
 /// Public landing and private recipient view, using the same encrypted renderer as desktop.
 /// It does not add a machine, receive a peer key, or restore the visitor's workspace.
@@ -25,6 +29,7 @@ class SharedAgentPage extends StatefulWidget {
     required this.location,
     this.dio,
     this.usage,
+    this.openHarness,
   });
   final AppNotifier app;
   final SharedAgentLocation location;
@@ -32,6 +37,9 @@ class SharedAgentPage extends StatefulWidget {
 
   /// Tests pass their own; the page otherwise counts into the app's [hubUsage].
   final HubUsage? usage;
+
+  /// Opens the Harness app at this site's root; a test passes its own.
+  final Future<void> Function()? openHarness;
   @override
   State<SharedAgentPage> createState() => _SharedAgentPageState();
 }
@@ -47,8 +55,8 @@ class _SharedAgentPageState extends State<SharedAgentPage> {
         ),
       );
   Map<String, dynamic>? _data;
-  String? _error;
-  bool _loading = true, _signInRequired = false;
+  SharedLinkProblem? _problem;
+  bool _loading = true;
   int _revision = 0;
   Timer? _offlineRetry;
   late bool _signedIn = widget.app.status == AppStatus.authenticated;
@@ -115,6 +123,15 @@ class _SharedAgentPageState extends State<SharedAgentPage> {
     unawaited(_load());
   }
 
+  void _openHarness() => unawaited(
+    (widget.openHarness ?? _openHarnessHere)().catchError((Object _) {}),
+  );
+
+  static Future<void> _openHarnessHere() => launchUrl(
+    SharedAgentLocation.workspaceOf(Uri.base),
+    webOnlyWindowName: '_self',
+  );
+
   @override
   void didUpdateWidget(SharedAgentPage oldWidget) {
     super.didUpdateWidget(oldWidget);
@@ -136,22 +153,32 @@ class _SharedAgentPageState extends State<SharedAgentPage> {
     super.dispose();
   }
 
-  Future<void> _load() async {
+  void _show(SharedLinkProblem problem) => setState(() {
+    _loading = false;
+    _problem = problem;
+  });
+
+  /// Reads the link. [quietly] keeps the page as it is until the answer
+  /// differs: the offline page's own re-read neither flashes Opening nor
+  /// says its state again.
+  Future<void> _load({bool quietly = false}) async {
     _offlineRetry?.cancel();
     final revision = ++_revision;
-    setState(() {
-      _loading = true;
-      _data = null;
-      _error = null;
-      _signInRequired = false;
-    });
+    if (!quietly) {
+      setState(() {
+        _loading = true;
+        _data = null;
+        _problem = null;
+      });
+    }
+    final key = widget.location.ownerKey;
+    if (key == null || !RegExp(r'^[A-Za-z0-9+/]{43}=$').hasMatch(key)) {
+      // Nothing to ask the server: only a whole link can open.
+      _countOpen(SharedOpen.failed);
+      _show(SharedLinkProblem.incomplete);
+      return;
+    }
     try {
-      final key = widget.location.ownerKey;
-      if (key == null || !RegExp(r'^[A-Za-z0-9+/]{43}=$').hasMatch(key)) {
-        throw const FormatException(
-          'This link is incomplete. Ask the owner to copy the full link again.',
-        );
-      }
       final token = await _accessToken();
       final response = await _dio.get(
         '${widget.app.config.apiBaseUrl}/api/shared-agents/${widget.location.id}',
@@ -163,34 +190,33 @@ class _SharedAgentPageState extends State<SharedAgentPage> {
         ),
       );
       if (!mounted || revision != _revision) return;
-      if (response.statusCode != 200) {
-        _countOpen(
-          response.statusCode == 401 ? SharedOpen.private : SharedOpen.noAccess,
-        );
-        setState(() {
-          _signInRequired = response.statusCode == 401;
-          _error = _signInRequired
-              ? 'This link is private. Sign in with an invited email.'
-              : 'This link is unavailable or your email has not been invited. Ask the owner for access.';
-          _loading = false;
+      final status = response.statusCode;
+      if (status == 401 || status == 403 || status == 404) {
+        _countOpen(status == 401 ? SharedOpen.private : SharedOpen.noAccess);
+        // A refusal to someone signed in is never a reason to sign in again:
+        // that would send the reader round the sign-in for the same answer.
+        // A 401 is not a refusal: the server took no session at all, and a
+        // fresh sign-in gets the link or a refusal, so it cannot loop.
+        _show(switch ((status, _signedIn)) {
+          (401, false) => SharedLinkProblem.signIn,
+          (401, true) => SharedLinkProblem.signInEnded,
+          _ => SharedLinkProblem.refused,
         });
         return;
       }
+      if (status != 200) throw StateError('shared link read: $status');
       final data = Map<String, dynamic>.from(response.data['data'] as Map);
       if (data['ownerPublicKey'] != key) {
-        throw const FormatException(
-          'The owner identity has changed. Ask the owner for a new link.',
-        );
+        _countOpen(SharedOpen.failed);
+        _show(SharedLinkProblem.changed);
+        return;
       }
       if (data['online'] != true) {
         _countOpen(SharedOpen.offline);
-        setState(() {
-          _loading = false;
-          _error = 'The owner’s machine is offline. This page reconnects when it comes back.';
-        });
+        _show(SharedLinkProblem.offline);
         _offlineRetry = Timer(
           const Duration(seconds: 10),
-          () => unawaited(_load()),
+          () => unawaited(_load(quietly: true)),
         );
         return;
       }
@@ -199,13 +225,10 @@ class _SharedAgentPageState extends State<SharedAgentPage> {
         _data = data;
         _loading = false;
       });
-    } catch (error) {
+    } catch (_) {
       if (mounted && revision == _revision) {
         _countOpen(SharedOpen.failed);
-        setState(() {
-          _loading = false;
-          _error = error is FormatException ? error.message : 'Could not open this link. Check your connection and try again.';
-        });
+        _show(SharedLinkProblem.failed);
       }
     }
   }
@@ -245,12 +268,14 @@ class _SharedAgentPageState extends State<SharedAgentPage> {
                               },
                       ),
                     ),
-                    WebDownloadButton(
-                      open: (uri) {
-                        _countAction(SharedAction.getApp);
-                        return openInNewTab(uri);
-                      },
-                    ),
+                    // A phone's download is the store bar's.
+                    if (!browserHasAppStore())
+                      WebDownloadButton(
+                        open: (uri) {
+                          _countAction(SharedAction.getApp);
+                          return openInNewTab(uri);
+                        },
+                      ),
                   ],
                 ),
               ),
@@ -279,83 +304,25 @@ class _SharedAgentPageState extends State<SharedAgentPage> {
                       linkEnvironment: widget.location.environment,
                       onClose: () => setState(() {
                         _data = null;
-                        _error = 'Viewing paused.';
+                        _problem = SharedLinkProblem.paused;
                       }),
                       onSignIn: _signedIn ? null : _signIn,
                       onUsage: _countAction,
                     )
-                  : Center(
-                      child: SingleChildScrollView(
-                        padding: const EdgeInsets.all(24),
-                        child: ConstrainedBox(
-                          constraints: const BoxConstraints(maxWidth: 440),
-                          child: Column(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              Text(
-                                _loading
-                                    ? 'Opening shared harness…'
-                                    : 'Shared harness',
-                                style: DesktopChrome.heading(),
-                                textAlign: TextAlign.center,
-                              ),
-                              if (!_loading) ...[
-                                const SizedBox(height: 12),
-                                Semantics(
-                                  liveRegion: true,
-                                  child: Text(
-                                    _error ?? 'Shared harness',
-                                    style: DesktopChrome.text(
-                                      size: 13,
-                                      color: DesktopChrome.muted,
-                                    ),
-                                    textAlign: TextAlign.center,
-                                  ),
-                                ),
-                              ],
-                              if (widget.app.lastError != null) ...[
-                                const SizedBox(height: 12),
-                                Text(
-                                  widget.app.lastError!,
-                                  style: DesktopChrome.text(
-                                    size: 13,
-                                    color: Theme.of(context).colorScheme.error,
-                                  ),
-                                  textAlign: TextAlign.center,
-                                ),
-                              ],
-                              const SizedBox(height: 20),
-                              Wrap(
-                                spacing: 8,
-                                runSpacing: 8,
-                                alignment: WrapAlignment.center,
-                                children: [
-                                  if (_signInRequired)
-                                    DesktopPill(
-                                      label: widget.app.signingIn
-                                          ? 'Signing in…'
-                                          : 'Sign in',
-                                      onPressed: widget.app.signingIn
-                                          ? null
-                                          : _signIn,
-                                    ),
-                                  if (!_loading && !_signInRequired)
-                                    DesktopPill(
-                                      label: 'Retry',
-                                      onPressed: _retry,
-                                    ),
-                                  if (!_loading && _signedIn && _data == null)
-                                    DesktopPill(
-                                      label: 'Switch account',
-                                      onPressed: () =>
-                                          unawaited(widget.app.logout()),
-                                    ),
-                                ],
-                              ),
-                            ],
-                          ),
-                        ),
-                      ),
+                  : _loading
+                  ? const EmptyState(
+                      icon: AppIcons.link2,
+                      title: 'Opening shared harness…',
+                    )
+                  : SharedLinkState(
+                      problem: _problem ?? SharedLinkProblem.failed,
+                      email: widget.app.currentUser?.email,
+                      signingIn: widget.app.signingIn,
+                      signInError: widget.app.lastError,
+                      onSignIn: _signIn,
+                      onSwitchAccount: () => unawaited(widget.app.logout()),
+                      onRetry: _retry,
+                      onOpenHarness: _openHarness,
                     ),
             ),
           ],

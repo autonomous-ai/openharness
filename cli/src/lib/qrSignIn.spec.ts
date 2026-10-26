@@ -3,7 +3,7 @@ import { claimTicket, qrSignIn, qrSignInLink, type QrSignInDeps } from './qrSign
 import { terminalQr } from './terminalQr.js'
 
 /** A backend that answers the QR sign-in routes from a script of poll answers. */
-function backend(polls: Array<{ status: string; email?: string }>, opts: { extend?: 'ok' | 'fail'; claim?: 'ok' | 'fail'; spoken?: 'unsupported' | 'rejected' } = {}) {
+function backend(polls: Array<{ status: string; email?: string }>, opts: { extend?: 'ok' | 'fail'; claim?: 'ok' | 'fail' | 'expired' | 'unauthorized'; spoken?: 'unsupported' | 'rejected' } = {}) {
   const calls: Array<{ path: string; body: unknown }> = []
   let clock = 0
   const post = vi.fn(async (path: string, body: unknown) => {
@@ -22,6 +22,8 @@ function backend(polls: Array<{ status: string; email?: string }>, opts: { exten
     }
     if (path === '/api/auth/qr/claim') {
       if (opts.claim === 'fail') throw new Error('Nothing to claim')
+      if (opts.claim === 'expired') throw Object.assign(new Error('Nothing to claim: scan again.'), { status: 401, code: 'QR_INVALID' })
+      if (opts.claim === 'unauthorized') throw Object.assign(new Error('Not authorized.'), { status: 401, code: 'UNAUTHORIZED' })
       return { token: 'hna_x', refreshToken: 'hnr_x', expiresIn: 3600, autonomousEnv: 'prod', email: 'dee@example.com' }
     }
     if (path === '/api/auth/qr/cancel') return { cancelled: true }
@@ -91,6 +93,53 @@ describe('qrSignIn', () => {
     expect(new Set(d.shown)).toEqual(new Set([qrSignInLink('hnq_code')]))
   })
 
+  it('does not ask the person to confirm an approval delivered after the code expired', async () => {
+    const b = backend([{ status: 'approved', email: 'dee@example.com' }])
+    const d = b.deps()
+    const post = d.post
+    d.post = async <T>(path: string, body: unknown): Promise<T> => {
+      if (path === '/api/auth/qr/poll') await d.sleep?.(121_000)
+      return post<T>(path, body)
+    }
+
+    const r = await qrSignIn(d)
+
+    expect(r).toMatchObject({ ok: false, code: 'EXPIRED' })
+    expect(d.confirm).not.toHaveBeenCalled()
+    expect(b.paths()).not.toContain('/api/auth/qr/claim')
+    expect(b.paths()).toContain('/api/auth/qr/cancel')
+  })
+
+  it('reports expiry when the person confirms after the code ran out', async () => {
+    const b = backend([{ status: 'approved', email: 'dee@example.com' }])
+    const d = b.deps()
+    d.confirm = vi.fn(async () => {
+      await d.sleep?.(121_000)
+      return true
+    })
+
+    const r = await qrSignIn(d)
+
+    expect(r).toMatchObject({ ok: false, code: 'EXPIRED' })
+    expect(b.paths()).not.toContain('/api/auth/qr/claim')
+    expect(b.paths()).toContain('/api/auth/qr/cancel')
+  })
+
+  it('reports an expired claim as EXPIRED', async () => {
+    const approved = [{ status: 'approved', email: 'dee@example.com' }]
+    expect(await qrSignIn(backend(approved, { claim: 'expired' }).deps())).toMatchObject({ ok: false, code: 'EXPIRED' })
+  })
+
+  it('preserves an unrelated unauthorized claim failure', async () => {
+    const approved = [{ status: 'approved', email: 'dee@example.com' }]
+    expect(await qrSignIn(backend(approved, { claim: 'unauthorized' }).deps())).toMatchObject({ ok: false, code: 'BACKEND_ERROR' })
+  })
+
+  it('preserves other claim failures', async () => {
+    const approved = [{ status: 'approved', email: 'dee@example.com' }]
+    expect(await qrSignIn(backend(approved, { claim: 'fail' }).deps())).toMatchObject({ ok: false, code: 'BACKEND_ERROR' })
+  })
+
   it('gives up when the code can live no longer', async () => {
     const b = backend(Array.from({ length: 200 }, () => ({ status: 'pending' })), { extend: 'fail' })
     const r = await qrSignIn(b.deps())
@@ -121,6 +170,23 @@ describe('qrSignIn with a spoken code', () => {
     expect(said).toEqual([['12345678', 120]])
     expect(d.shown).toEqual([])
     expect(d.confirm).toHaveBeenCalledWith('dee@example.com')
+  })
+
+  it('does not ask the person to confirm an approval delivered after the spoken code expired', async () => {
+    const b = backend([{ status: 'approved', email: 'dee@example.com' }])
+    const { d } = spokenDeps(b)
+    const post = d.post
+    d.post = async <T>(path: string, body: unknown): Promise<T> => {
+      if (path === '/api/auth/qr/poll') await d.sleep?.(121_000)
+      return post<T>(path, body)
+    }
+
+    const r = await qrSignIn(d)
+
+    expect(r).toMatchObject({ ok: false, code: 'EXPIRED' })
+    expect(d.confirm).not.toHaveBeenCalled()
+    expect(b.paths()).not.toContain('/api/auth/qr/claim')
+    expect(b.paths()).toContain('/api/auth/qr/cancel')
   })
 
   it('says the same code again each time it is kept alive', async () => {

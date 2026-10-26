@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:math' as math;
 
+import 'finger_target.dart';
 import 'swarm_search_field.dart';
 
 import 'package:harness/shared/theme/app_icons.dart';
@@ -977,6 +978,11 @@ class _SwarmSearchResultsState extends State<SwarmSearchResults> {
             58,
             scale.scale(13) * 1.4 + scale.scale(12) * 1.4 + 26,
           );
+        }
+        // A phone's row is a finger tall, one line or two: its slot also
+        // holds the 2 px either side of a desktop row's fill.
+        if (workspaceIsCompact(context)) {
+          _rowHeight = math.max(_rowHeight, kFingerTarget + 4);
         }
         _desktopRows = desktop;
         _modelHeadingHeight = swarmRows

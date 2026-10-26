@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import 'package:harness/shared/theme/app_icons.dart';
 import 'package:flutter/material.dart';
 
@@ -50,9 +52,47 @@ class SettingsCompactSection extends StatelessWidget {
           ),
         ),
       ),
-      Expanded(child: child),
+      Expanded(child: _FingerButtons(child: child)),
     ],
   );
+}
+
+/// A phone's section: its buttons a finger tall, and as wide as they were.
+class _FingerButtons extends StatelessWidget {
+  const _FingerButtons({required this.child});
+
+  final Widget child;
+
+  static ButtonStyle _tall(ButtonStyle? style) {
+    final least = style?.minimumSize?.resolve(const {}) ?? Size.zero;
+    return (style ?? const ButtonStyle()).copyWith(
+      minimumSize: WidgetStatePropertyAll(
+        Size(
+          math.max(least.width, kFingerTarget),
+          math.max(least.height, kFingerTarget),
+        ),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Theme(
+      data: theme.copyWith(
+        filledButtonTheme: FilledButtonThemeData(
+          style: _tall(theme.filledButtonTheme.style),
+        ),
+        outlinedButtonTheme: OutlinedButtonThemeData(
+          style: _tall(theme.outlinedButtonTheme.style),
+        ),
+        textButtonTheme: TextButtonThemeData(
+          style: _tall(theme.textButtonTheme.style),
+        ),
+      ),
+      child: child,
+    );
+  }
 }
 
 /// Settings on a phone: the list of sections, or one open section. The

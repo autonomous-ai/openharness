@@ -20,6 +20,9 @@ class SharedAgentLocation {
     return SharedAgentLocation(match[1]!, key, env);
   }
 
+  /// Where a link's Open Harness goes: the root of the site it came from.
+  static Uri workspaceOf(Uri link) => Uri.parse('${link.origin}/');
+
   /// Only a local share path can be restored after OAuth. Never accept an external redirect.
   static String? returnPath(Object? value) {
     if (value is! String) return null;

@@ -34,6 +34,7 @@ import '../models/models_panel.dart';
 import '../models/model_search_catalog.dart';
 import '../widgets/resting_section.dart'
     show confirmStopInUse, confirmSwitchAnyway;
+import '../widgets/finger_target.dart';
 import '../widgets/session_close_dialog.dart';
 import '../super_tabs/lead_guard.dart';
 import '../notify/system_notifications.dart';
@@ -3913,6 +3914,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
         app,
         machineId,
         source: 'swarm',
+        chrome: widget.chrome,
         initialFolder: folder,
         initialProjectFolder: projectFolder,
         initialPermissionMode: permissionMode,
@@ -8227,9 +8229,13 @@ class _SwarmScreenState extends State<SwarmScreen> {
                               ),
                               if (_projects.error == null &&
                                   app.lastErrorRetryable)
-                                TextButton(
-                                  onPressed: app.retryMachines,
-                                  child: const Text('Retry'),
+                                // A phone's Retry is a finger's size.
+                                fingerTarget(
+                                  enabled: _compact(context),
+                                  TextButton(
+                                    onPressed: app.retryMachines,
+                                    child: const Text('Retry'),
+                                  ),
                                 ),
                               IconButton(
                                 onPressed: _projects.error != null
@@ -8619,6 +8625,18 @@ class _SwarmScreenState extends State<SwarmScreen> {
     return _fullStatusBar();
   }
 
+  /// The host offers subscriptions once the account has a computer
+  /// ([WorkspaceChrome.subscriptionsNeedComputer]): the machine list has
+  /// answered, and none of the account's own is in it. Never while it loads.
+  bool get _subscriptionsWaitForComputer =>
+      widget.chrome?.subscriptionsNeedComputer == true &&
+      _machineInventorySettled &&
+      !app.machineStates.values.any(
+        (machine) =>
+            !machine.machine.isShared &&
+            !app.removedMachines.containsKey(machine.machine.machineId),
+      );
+
   /// The status bar's content for a host that draws its own compact footer.
   WorkspaceFooter _workspaceFooter() {
     final focused = WorkspacePaneContext.focused(app);
@@ -8635,9 +8653,10 @@ class _SwarmScreenState extends State<SwarmScreen> {
             detail: detail,
             onPressed: links![field]!.onPressed,
           );
+    final subscriptions = !_subscriptionsWaitForComputer;
     return WorkspaceFooter(
       summary: focused == null
-          ? _subscriptionUsage.text
+          ? (subscriptions ? _subscriptionUsage.text : _footerMachineLabel)
           : [
               focused.machineName,
               focused.branch ?? focused.projectName,
@@ -8662,21 +8681,23 @@ class _SwarmScreenState extends State<SwarmScreen> {
               ? () => _toggleModels(initialTab: ModelsTab.local)
               : null,
         ),
-        for (final account in _subscriptionUsage.accounts)
+        if (subscriptions) ...[
+          for (final account in _subscriptionUsage.accounts)
+            WorkspaceFooterItem(
+              title: '${account.name} ${account.figure}',
+              detail: account.detail,
+              onPressed: _shortcutsEnabled
+                  ? () => _openSubscription(account.searchId)
+                  : null,
+            ),
           WorkspaceFooterItem(
-            title: '${account.name} ${account.figure}',
-            detail: account.detail,
+            title: 'Subscriptions',
+            detail: _subscriptionUsage.text,
             onPressed: _shortcutsEnabled
-                ? () => _openSubscription(account.searchId)
+                ? () => _toggleModels(initialTab: ModelsTab.subscriptions)
                 : null,
           ),
-        WorkspaceFooterItem(
-          title: 'Subscriptions',
-          detail: _subscriptionUsage.text,
-          onPressed: _shortcutsEnabled
-              ? () => _toggleModels(initialTab: ModelsTab.subscriptions)
-              : null,
-        ),
+        ],
         ?link(StatusLineField.machine, 'Machine', focused?.machineName),
         ?link(StatusLineField.project, 'Project', focused?.projectName),
         ?link(StatusLineField.branch, 'Branch', focused?.branch),
@@ -9350,35 +9371,44 @@ class _SwarmScreenState extends State<SwarmScreen> {
         );
 
   /// A compact host uses a tab switcher instead of the tab list.
-  Widget _compactTabStrip(WorkspaceChrome chrome, TerminalTheme theme) =>
-      Builder(
-        builder: (context) {
-          final cell = workspaceBarCellSizeOf(context);
-          return Material(
-            key: const ValueKey('workspace-tab-bar'),
-            color: grid.AppPalette.swarmTabBar,
-            child: SizedBox(
-              height: math.max(_tabBarHeight, cell.height * 2),
-              child: Row(
-                children: [
-                  SizedBox(width: cell.width),
-                  SizedBox(
-                    width: chrome.leadingWidth(context),
-                    child: chrome.leading(context, _workspaceCommands),
-                  ),
-                  Expanded(
-                    child: chrome.compactTabs!(context, _workspaceCommands),
-                  ),
-                  _searchButton(theme),
-                  _notificationsButton(theme),
-                  if (kIsWeb && _slotShown) _daemonTabButton(),
-                  SizedBox(width: cell.width),
-                ],
+  Widget _compactTabStrip(
+    WorkspaceChrome chrome,
+    TerminalTheme theme,
+  ) => Builder(
+    builder: (context) {
+      final cell = workspaceBarCellSizeOf(context);
+      return Material(
+        key: const ValueKey('workspace-tab-bar'),
+        color: grid.AppPalette.swarmTabBar,
+        // A phone's bar: every control a finger's size, its icon as it
+        // was, so the bar is at least that tall too.
+        child: SizedBox(
+          height: math.max(
+            kFingerTarget,
+            math.max(_tabBarHeight, cell.height * 2),
+          ),
+          child: Row(
+            children: [
+              SizedBox(width: cell.width),
+              SizedBox(
+                width: math.max(chrome.leadingWidth(context), kFingerTarget),
+                child: fingerTarget(
+                  enabled: true,
+                  chrome.leading(context, _workspaceCommands),
+                ),
               ),
-            ),
-          );
-        },
+              Expanded(child: chrome.compactTabs!(context, _workspaceCommands)),
+              fingerTarget(enabled: true, _searchButton(theme)),
+              fingerTarget(enabled: true, _notificationsButton(theme)),
+              if (kIsWeb && _slotShown)
+                fingerTarget(enabled: true, _daemonTabButton()),
+              SizedBox(width: cell.width),
+            ],
+          ),
+        ),
       );
+    },
+  );
 
   Widget _statusToolIcon(
     String id,

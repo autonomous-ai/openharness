@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/harness_file_store.dart';
 import '../../core/local_key_value_store.dart';
@@ -9,6 +10,7 @@ import '../../core/phone_app_links.dart';
 import '../../shared/theme/app_icons.dart';
 import '../../shared/theme/app_theme.dart' as grid;
 import '../../shared/theme/app_type.dart';
+import '../../state/app_state.dart';
 import '../../widgets/web_download_button.dart' show openInNewTab;
 import 'web_hidden_under_keyboard.dart';
 
@@ -34,9 +36,14 @@ class WebStoreFrame extends StatefulWidget {
     required this.child,
     this.storage,
     this.open = openInNewTab,
+    this.quiet = false,
   });
 
   final Widget child;
+
+  /// True draws Get the app outlined rather than filled, so it does not
+  /// compete with the page's own primary action (sign-in).
+  final bool quiet;
 
   /// Where a closed bar is remembered; the browser's own store when absent.
   final LocalKeyValueStore? storage;
@@ -88,6 +95,7 @@ class _WebStoreFrameState extends State<WebStoreFrame> {
         if (shown)
           WebHiddenUnderKeyboard(
             child: _WebStoreBar(
+              quiet: widget.quiet,
               onOpen: () => unawaited(widget.open(link)),
               onDismiss: _dismiss,
             ),
@@ -107,8 +115,13 @@ class _WebStoreFrameState extends State<WebStoreFrame> {
 
 /// Close, what the app is for, and the way to it.
 class _WebStoreBar extends StatelessWidget {
-  const _WebStoreBar({required this.onOpen, required this.onDismiss});
+  const _WebStoreBar({
+    required this.quiet,
+    required this.onOpen,
+    required this.onDismiss,
+  });
 
+  final bool quiet;
   final VoidCallback onOpen;
   final VoidCallback onDismiss;
 
@@ -180,21 +193,61 @@ class _WebStoreBar extends StatelessWidget {
                   ),
                 ),
                 const SizedBox(width: 8),
-                FilledButton(
-                  key: const ValueKey('web-store-banner-open'),
-                  onPressed: onOpen,
-                  // Narrower than a form's button: the words beside it need
-                  // the width on a phone.
-                  style: FilledButton.styleFrom(
-                    padding: const EdgeInsets.symmetric(horizontal: 16),
+                // Narrower than a form's button: the words beside it need
+                // the width on a phone. Padded: a thumb's target.
+                if (quiet)
+                  OutlinedButton(
+                    key: const ValueKey('web-store-banner-open'),
+                    onPressed: onOpen,
+                    style: OutlinedButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(horizontal: 16),
+                      tapTargetSize: MaterialTapTargetSize.padded,
+                    ),
+                    child: const Text('Get the app'),
+                  )
+                else
+                  FilledButton(
+                    key: const ValueKey('web-store-banner-open'),
+                    onPressed: onOpen,
+                    style: FilledButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(horizontal: 16),
+                      tapTargetSize: MaterialTapTargetSize.padded,
+                    ),
+                    child: const Text('Get the app'),
                   ),
-                  child: const Text('Get the app'),
-                ),
               ],
             ),
           ),
         ),
       ),
+    );
+  }
+}
+
+/// [WebStoreFrame] as the app draws it: quiet until someone is signed in, so
+/// on a first visit the sign-in buttons are the page's only filled actions.
+/// The bar keeps its place at the top, where a phone's app banner is looked
+/// for and closed; below the sign-in it would sit under Safari's toolbar and
+/// push the page's own words off a small phone.
+class WebAppStoreFrame extends ConsumerWidget {
+  const WebAppStoreFrame({super.key, required this.child, this.storage});
+
+  final Widget child;
+
+  /// Where a closed bar is remembered; the browser's own store when absent.
+  final LocalKeyValueStore? storage;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final app = ref.watch(appStateProvider);
+    return ListenableBuilder(
+      listenable: app,
+      builder: (context, child) => WebStoreFrame(
+        storage: storage,
+        quiet: app.status != AppStatus.authenticated,
+        child: child!,
+      ),
+      child: child,
     );
   }
 }
