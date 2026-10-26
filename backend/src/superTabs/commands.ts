@@ -135,7 +135,8 @@ export const commandSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('work.status'), conversationId: id, assignmentId: id,
     status: z.enum(['working', 'needs_human', 'blocked', 'review', 'done', 'stopped']), result: text.nullable() }).strict(),
   z.object({ type: z.literal('work.cancel'), conversationId: id, assignmentId: id, reason }).strict(),
-  z.object({ type: z.literal('work.resume'), conversationId: id, assignmentId: id }).strict(),
+  // `lostAt` names the loss being resumed (Assignment.lost.at): one task can be lost to a limit, resumed and lost again.
+  z.object({ type: z.literal('work.resume'), conversationId: id, assignmentId: id, lostAt: z.number().int().nonnegative().safe() }).strict(),
   z.object({ type: z.literal('route.record'), conversationId: id, decision: routeRecordSchema }).strict(),
   z.object({ type: z.literal('route.override'), decisionId: id, candidateId: z.string().regex(/^c\d{1,2}$/), reason }).strict(),
   z.object({ type: z.literal('route.modelResult'), decisionId: id, startId: id, model: z.string().min(1).max(200), effort: z.string().min(1).max(80) }).strict(),
@@ -1629,7 +1630,9 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       // host asks here before typing into the session (cli superTabs/limitResume.ts), so a task handed on never resumes.
       const group = open(state, command.conversationId)
       const assignment = group.assignment
-      if (assignment?.id !== command.assignmentId || assignment.status !== 'lost') fail('TASK_MOVED', 'This task was handed on or closed, so it does not resume.')
+      if (assignment?.id !== command.assignmentId || assignment.status !== 'lost' || assignment.lost?.at !== command.lostAt) {
+        fail('TASK_MOVED', 'This task was handed on or closed, so it does not resume.')
+      }
       if (actor.kind !== 'agent' || actor.agentId !== assignment.agentId) fail('FORBIDDEN', 'Only the agent that lost this task resumes it.', 403)
       const worker = agent(state, assignment.agentId)
       const resumeAt = assignment.lost?.resumeAt

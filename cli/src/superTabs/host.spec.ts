@@ -1066,11 +1066,11 @@ describe('a task lost to a usage limit', () => {
     const t = setup()
     Object.assign(t.core, { superTabs: { attention: vi.fn(), cards: vi.fn(), cardRecap: vi.fn(), shareObservers: vi.fn(),
       input: vi.fn(async () => ({ ok: true as const })), screen: vi.fn(async () => ({ ok: true as const, text: '❯ ', hold: null })) } })
-    Object.assign(t.row, { resume: { conversationId: 'group', assignmentId: 'work', at: new Date(0).toISOString() } })
+    Object.assign(t.row, { resume: { conversationId: 'group', assignmentId: 'work', lostAt: 3, at: new Date(0).toISOString() } })
     await t.open().tick()
     await vi.waitFor(() => expect(t.core.superTabs!.input).toHaveBeenCalledWith('harness', CONTINUE, ['Enter']))
     expect(t.call).toHaveBeenCalledWith('POST', '/api/super-tabs/tab/commands',
-      { operationId: 'limit-resume-work', asAgentId: 'agent', command: { type: 'work.resume', conversationId: 'group', assignmentId: 'work' } })
+      { operationId: 'limit-resume-work-3', asAgentId: 'agent', command: { type: 'work.resume', conversationId: 'group', assignmentId: 'work', lostAt: 3 } })
   })
 })
 

@@ -61,8 +61,8 @@ function agentRow(tabId: string, state: SuperTabState, machineId: string, user: 
   // (cli superTabs/limitResume.ts), and the backend still decides (commands.ts work.resume).
   const marked = target.lostTask
   const lost = marked?.resumeAt ? state.conversations.find(c => c.id === marked.conversationId)?.assignment : undefined
-  const resume = marked?.resumeAt && lost?.id === marked.assignmentId && lost.status === 'lost'
-    ? { conversationId: marked.conversationId, assignmentId: marked.assignmentId, at: marked.resumeAt } : null
+  const resume = marked?.resumeAt && lost?.id === marked.assignmentId && lost.status === 'lost' && lost.lost?.at === marked.at
+    ? { conversationId: marked.conversationId, assignmentId: marked.assignmentId, lostAt: marked.at, at: marked.resumeAt } : null
   const home = projectsOf(state).find(p => p.id === agentProjectId(state, target))
   const custom = home && skillSetOf(home) === 'custom' ? home : null
   const chosen = custom ? agentSetRole(state, custom, target) : null

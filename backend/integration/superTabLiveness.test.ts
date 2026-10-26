@@ -183,11 +183,11 @@ describe('work that loses its owner', () => {
   // Night shift: a task lost to a usage limit whose screen gave a reset time resumes in that same session after the reset.
   it('tells the worker\'s host when its lost task resumes, and gives it back to the same session after the reset', async () => {
     const f = await swarm()
-    const resetAt = new Date(f.clock.now + 30 * MINUTE).toISOString()
+    const resetAt = new Date(f.clock.now + 30 * MINUTE).toISOString(), lostAt = f.clock.now
     await f.execute({ type: 'agent.alert', agentId: f.worker, alert: 'limit', active: true, resetAt }, host, f.worker)
     const row = async () => (await rosterRows(f.timed, host, 'test-host')).find(t => t.tabId === f.tab && t.agent?.id === f.worker)!
-    expect((await row()).resume).toEqual({ conversationId: f.group, assignmentId: f.assignmentId, at: resetAt })
-    const resume = () => f.execute({ type: 'work.resume', conversationId: f.group, assignmentId: f.assignmentId }, host, f.worker)
+    expect((await row()).resume).toEqual({ conversationId: f.group, assignmentId: f.assignmentId, lostAt, at: resetAt })
+    const resume = () => f.execute({ type: 'work.resume', conversationId: f.group, assignmentId: f.assignmentId, lostAt }, host, f.worker)
     await expect(resume()).rejects.toThrow('Its usage limit has not reset yet.')
     f.clock.now += 30 * MINUTE
     await resume()
@@ -198,13 +198,14 @@ describe('work that loses its owner', () => {
 
   it('does not resume a task handed to another agent before the reset, and its host is no longer asked to', async () => {
     const f = await swarm()
+    const lostAt = f.clock.now
     await f.execute({ type: 'agent.alert', agentId: f.worker, alert: 'limit', active: true, resetAt: new Date(f.clock.now + 30 * MINUTE).toISOString() }, host, f.worker)
     const other = await f.add(f.group, 'test-host', f.harness.other, 'Other')
     const handedOn = String((await f.execute({ type: 'work.assign', conversationId: f.group, agentId: other })).result.assignmentId)
     const row = async () => (await rosterRows(f.timed, host, 'test-host')).find(t => t.tabId === f.tab && t.agent?.id === f.worker)!
     expect((await row()).resume).toBeNull()
     f.clock.now += 30 * MINUTE
-    await expect(f.execute({ type: 'work.resume', conversationId: f.group, assignmentId: f.assignmentId }, host, f.worker))
+    await expect(f.execute({ type: 'work.resume', conversationId: f.group, assignmentId: f.assignmentId, lostAt }, host, f.worker))
       .rejects.toThrow('This task was handed on or closed, so it does not resume.')
     expect(await f.assignment()).toMatchObject({ id: handedOn, agentId: other, status: 'working' })
   })

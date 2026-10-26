@@ -16,7 +16,8 @@ export const CONTINUE = 'continue: your usage limit has reset and this task is y
 const RETRY_MS = 15_000
 
 export class LimitResume {
-  /** Assignments resumed or refused here: neither is asked about again, though a roster read from before still lists it. */
+  /** Losses resumed or refused here, by assignment and loss (one task can be lost, resumed and lost again): neither is
+   *  asked about again, though a roster read from before still lists it. */
   private readonly settled = new Set<string>()
   private readonly retryAt = new Map<string, number>()
   private running: Promise<void> | null = null
@@ -39,31 +40,33 @@ export class LimitResume {
     for (const row of rows.map(object)) {
       const agent = object(row.agent), resume = object(row.resume)
       if (!identifier(row.tabId) || !identifier(agent.id) || !identifier(agent.harnessId) || agent.machineId !== this.machineId) continue
-      if (!identifier(resume.conversationId) || !identifier(resume.assignmentId) || !(Date.parse(String(resume.at)) <= now)) continue
-      if (row.stopRequested === true || !this.core.agents.byAgent(agent.harnessId) || this.settled.has(resume.assignmentId)) continue
-      if ((this.retryAt.get(resume.assignmentId) ?? 0) > now) continue
-      await this.resume(row.tabId, agent.id, agent.harnessId, resume.conversationId, resume.assignmentId, now)
+      if (!identifier(resume.conversationId) || !identifier(resume.assignmentId) || !Number.isSafeInteger(resume.lostAt) || !(Date.parse(String(resume.at)) <= now)) continue
+      const loss = `${resume.assignmentId}-${resume.lostAt}`
+      if (row.stopRequested === true || !this.core.agents.byAgent(agent.harnessId) || this.settled.has(loss)) continue
+      if ((this.retryAt.get(loss) ?? 0) > now) continue
+      await this.resume(row.tabId, agent.id, agent.harnessId, resume.conversationId, resume.assignmentId, resume.lostAt as number, loss, now)
     }
   }
 
-  private async resume(tabId: string, agentId: string, harnessId: string, conversationId: string, assignmentId: string, now: number): Promise<void> {
-    const later = () => { this.retryAt.set(assignmentId, now + RETRY_MS) }
+  private async resume(tabId: string, agentId: string, harnessId: string, conversationId: string, assignmentId: string, lostAt: number, loss: string,
+    now: number): Promise<void> {
+    const later = () => { this.retryAt.set(loss, now + RETRY_MS) }
     // Enter on a permission prompt, a question or a menu would answer it. An unreadable screen says nothing either way.
     const read = await this.core.superTabs!.screen(harnessId, 0).catch(() => null)
     if (!read?.ok || (read.hold !== null && WAITING.has(read.hold))) return later()
     try {
       // The same operation each time: an answer lost on the way is replayed, not applied twice.
-      await backend(this.core, 'POST', `/api/super-tabs/${tabId}/commands`, { operationId: `limit-resume-${assignmentId}`, asAgentId: agentId,
-        command: { type: 'work.resume', conversationId, assignmentId } })
+      await backend(this.core, 'POST', `/api/super-tabs/${tabId}/commands`, { operationId: `limit-resume-${loss}`, asAgentId: agentId,
+        command: { type: 'work.resume', conversationId, assignmentId, lostAt } })
     } catch (error) {
       const refused = error instanceof SuperTabHostError && error.status >= 400 && error.status < 500 && error.code !== 'LIMIT_NOT_RESET'
       this.log(`limit resume of ${assignmentId}: ${error instanceof Error ? error.message : String(error)}`)
-      if (refused) this.settled.add(assignmentId)
+      if (refused) this.settled.add(loss)
       else later()
       return
     }
-    this.settled.add(assignmentId)
-    this.retryAt.delete(assignmentId)
+    this.settled.add(loss)
+    this.retryAt.delete(loss)
     // The task is the agent's again either way; one it never continues is lost again when its lease runs out.
     const typed = await this.core.superTabs!.input(harnessId, CONTINUE, ['Enter'])
     if (!typed.ok) this.log(`limit resume of ${assignmentId}: ${typed.error}`)

@@ -7,7 +7,7 @@ import { fakeCore } from '../testing/fakeCore.js'
 import { CONTINUE, LimitResume } from './limitResume.js'
 
 const RESET = 1_000_000 + 30 * 60_000
-const resume = { conversationId: 'g1', assignmentId: 'w1', at: new Date(RESET).toISOString() }
+const resume = { conversationId: 'g1', assignmentId: 'w1', lostAt: 5, at: new Date(RESET).toISOString() }
 const row = (over: Record<string, unknown> = {}) => ({ tabId: 'tab', agent: { id: 'a1', harnessId: 'h1', machineId: 'm1' }, resume, ...over })
 /** A screen as the engine draws it (fixtures/screens). */
 const fixture = (name: string) => readFileSync(new URL(`./fixtures/screens/${name}.txt`, import.meta.url), 'utf8')
@@ -37,8 +37,8 @@ describe('a host resuming a task its agent lost to a usage limit', () => {
     t.wait(30 * 60_000)
     await t.resumer.tick([row()])
     expect(t.steps).toEqual(['ask work.resume', `type ${CONTINUE}`])
-    expect(t.backend).toHaveBeenCalledWith('POST', '/api/super-tabs/tab/commands', { operationId: 'limit-resume-w1', asAgentId: 'a1',
-      command: { type: 'work.resume', conversationId: 'g1', assignmentId: 'w1' } })
+    expect(t.backend).toHaveBeenCalledWith('POST', '/api/super-tabs/tab/commands', { operationId: 'limit-resume-w1-5', asAgentId: 'a1',
+      command: { type: 'work.resume', conversationId: 'g1', assignmentId: 'w1', lostAt: 5 } })
     expect(t.core.superTabs!.input).toHaveBeenCalledWith('h1', CONTINUE, ['Enter'])
   })
 
@@ -70,6 +70,16 @@ describe('a host resuming a task its agent lost to a usage limit', () => {
     await t.resumer.tick([row()])
     await t.resumer.tick([row()])
     expect(t.steps).toEqual(['ask work.resume', `type ${CONTINUE}`])
+  })
+
+  it('resumes the same task again when it is lost to a limit a second time (#1757 review, 1)', async () => {
+    const t = setup()
+    t.wait(30 * 60_000)
+    await t.resumer.tick([row()])
+    t.wait(60 * 60_000)
+    await t.resumer.tick([row({ resume: { ...resume, lostAt: 9, at: new Date(RESET + 30 * 60_000).toISOString() } })])
+    expect(t.steps).toEqual(['ask work.resume', `type ${CONTINUE}`, 'ask work.resume', `type ${CONTINUE}`])
+    expect(vi.mocked(t.backend).mock.calls.map(([, , body]) => (body as { operationId: string }).operationId)).toEqual(['limit-resume-w1-5', 'limit-resume-w1-9'])
   })
 
   it('leaves alone an agent of another machine, one not running here, one stopping, and one with nothing to resume', async () => {

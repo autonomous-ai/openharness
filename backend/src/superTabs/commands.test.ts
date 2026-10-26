@@ -2461,7 +2461,7 @@ describe('lost work (liveness.ts)', () => {
     const { f, lead, group, worker, as, task, limit } = lostFixture()
     limit()
     const assignmentId = task().assignment!.id
-    const resumed = f.run({ type: 'work.resume', conversationId: group, assignmentId }, as(worker), { now: 3_600_000 })
+    const resumed = f.run({ type: 'work.resume', conversationId: group, assignmentId, lostAt: 1000 }, as(worker), { now: 3_600_000 })
     expect(task().assignment).toMatchObject({ id: assignmentId, agentId: worker, status: 'working', leaseUntil: 3_600_000 + 5 * 60_000 })
     expect(task().assignment).not.toHaveProperty('lost')
     expect(task().lostAttempt).toBeUndefined()
@@ -2472,10 +2472,26 @@ describe('lost work (liveness.ts)', () => {
     expect(task().assignment!.status).toBe('review')
   })
 
+  it('resumes each loss of one task once: a second usage limit is a new loss, and the first one\'s resume no longer applies (#1757 review, 1)', () => {
+    const { f, group, worker, as, task, limit } = lostFixture()
+    limit()
+    const assignmentId = task().assignment!.id
+    f.run({ type: 'work.resume', conversationId: group, assignmentId, lostAt: 1000 }, as(worker), { now: 3_600_000 })
+    // The limit screen goes, the task runs, and the engine hits its limit again an hour later.
+    f.run({ type: 'agent.alert', agentId: worker, alert: 'limit', active: false }, as(worker), { now: 3_600_100 })
+    f.run({ type: 'agent.alert', agentId: worker, alert: 'limit', active: true, resetAt: new Date(9_000_000).toISOString() }, as(worker), { now: 7_200_000 })
+    expect(task().assignment).toMatchObject({ id: assignmentId, status: 'lost', lost: { at: 7_200_000, resumeAt: '1970-01-01T02:30:00.000Z' } })
+    expect(f.state.agents.find(a => a.id === worker)!.lostTask).toMatchObject({ assignmentId, at: 7_200_000, resumeAt: '1970-01-01T02:30:00.000Z' })
+    expect(() => f.run({ type: 'work.resume', conversationId: group, assignmentId, lostAt: 1000 }, as(worker), { now: 9_000_000 }))
+      .toThrow('This task was handed on or closed, so it does not resume.')
+    f.run({ type: 'work.resume', conversationId: group, assignmentId, lostAt: 7_200_000 }, as(worker), { now: 9_000_000 })
+    expect(task().assignment).toMatchObject({ id: assignmentId, agentId: worker, status: 'working' })
+  })
+
   it('does not resume a lost task before its limit resets', () => {
     const { f, group, worker, as, task, limit } = lostFixture()
     limit()
-    expect(() => f.run({ type: 'work.resume', conversationId: group, assignmentId: task().assignment!.id }, as(worker), { now: 3_599_999 }))
+    expect(() => f.run({ type: 'work.resume', conversationId: group, assignmentId: task().assignment!.id, lostAt: 1000 }, as(worker), { now: 3_599_999 }))
       .toThrow('Its usage limit has not reset yet.')
     expect(task().assignment!.status).toBe('lost')
   })
@@ -2488,7 +2504,7 @@ describe('lost work (liveness.ts)', () => {
       if (close === 'cancel') f.run({ type: 'work.cancel', conversationId: group, assignmentId: lostId, reason: 'Not needed' }, as(lead))
       else f.run({ type: 'work.assign', conversationId: group, agentId: other, ...via }, as(lead), decisionIn(group))
       const before = structuredClone(task().assignment)
-      expect(() => f.run({ type: 'work.resume', conversationId: group, assignmentId: lostId }, as(worker), { now: 3_600_000 }))
+      expect(() => f.run({ type: 'work.resume', conversationId: group, assignmentId: lostId, lostAt: 1000 }, as(worker), { now: 3_600_000 }))
         .toThrow('This task was handed on or closed, so it does not resume.')
       expect(task().assignment).toEqual(before)
     }
@@ -2499,12 +2515,12 @@ describe('lost work (liveness.ts)', () => {
     limit()
     const assignmentId = task().assignment!.id
     for (const actor of [as(other), as(lead), owner]) {
-      expect(() => f.run({ type: 'work.resume', conversationId: group, assignmentId }, actor, { now: 3_600_000 }))
+      expect(() => f.run({ type: 'work.resume', conversationId: group, assignmentId, lostAt: 1000 }, actor, { now: 3_600_000 }))
         .toThrow('Only the agent that lost this task resumes it.')
     }
     const plain = lostFixture()
     plain.f.run({ type: 'agent.alert', agentId: plain.worker, alert: 'limit', active: true }, plain.as(plain.worker))
-    expect(() => plain.f.run({ type: 'work.resume', conversationId: plain.group, assignmentId: plain.task().assignment!.id }, plain.as(plain.worker), { now: 99_000_000 }))
+    expect(() => plain.f.run({ type: 'work.resume', conversationId: plain.group, assignmentId: plain.task().assignment!.id, lostAt: 1000 }, plain.as(plain.worker), { now: 99_000_000 }))
       .toThrow('This task was not lost to a usage limit with a reset time.')
   })
 
