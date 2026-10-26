@@ -3052,12 +3052,37 @@ describe('Swarm sweeps', () => {
     return group
   }
 
+  /** The project's Lead reports through everything its workgroup said so far. */
+  async function acknowledge(tab: string, lead: string, group: string) {
+    const read = (await store.read(owner, tab)).state.conversations.find(c => c.id === group)!
+    await run(tab, { type: 'project.report', projectId: 'lead', through: { [group]: read.lastMessageSequence }, text: null }, host, lead)
+  }
+
+  it('puts a conversation archived by hand to sleep once its reports are acknowledged, and ordinary loads stop reading it', async () => {
+    const { tab, lead } = await fixture()
+    const group = await finishedGroup(tab, lead)
+    await run(tab, { type: 'conversation.archive', conversationId: group, archived: true })
+    const loaded = async () => (await db.$transaction(tx => parts.loadActive(tx, tab))).groups.map(p => p.key)
+    expect(await loaded()).toContain(group)
+    await acknowledge(tab, lead, group)
+    await sweepSwarms(db)
+    expect(await loaded()).not.toContain(group)
+    expect((await db.$transaction(tx => parts.loadDormant(tx, tab, {}))).map(p => p.key)).toEqual([group])
+    // Reopened, it is active again.
+    await run(tab, { type: 'conversation.archive', conversationId: group, archived: false })
+    expect(await loaded()).toContain(group)
+  })
+
   it('puts a conversation with finished work to sleep after a quiet day, and a new message wakes it', async () => {
     const { tab, lead } = await fixture()
     const group = await finishedGroup(tab, lead)
     const listed = async () => (await store.read(owner, tab)).state.conversations.map(c => c.id)
     await sweepSwarms(db, Date.now() + day - 60_000)
     expect(await listed()).toContain(group)
+    // Its reports are not acknowledged yet: it stays awake, where the Lead's report check sees it.
+    await sweepSwarms(db, Date.now() + day + 60_000)
+    expect(await listed()).toContain(group)
+    await acknowledge(tab, lead, group)
     await sweepSwarms(db, Date.now() + day + 60_000)
     expect(await listed()).not.toContain(group)
     // The Lead conversation stays awake whatever its age.
@@ -3067,6 +3092,90 @@ describe('Swarm sweeps', () => {
     await run(tab, { type: 'message.send', conversationId: group, text: 'One more thing.', replyTo: null, recipientIds: [] })
     expect(await listed()).toContain(group)
     expect(await db.$transaction(tx => parts.loadDormant(tx, tab, {}))).toEqual([])
+  })
+
+  it('reaches a finished group behind more than a batch of quiet groups that cannot sleep', async () => {
+    const { tab, lead } = await fixture()
+    const group = await finishedGroup(tab, lead)
+    // 520 groups the sweep must pass over: quiet for days, older than the finished group, but their work is not finished.
+    const old = new Date(Date.now() - 10 * day)
+    await db.swarmGroup.createMany({ data: Array.from({ length: 520 }, (_, i) => {
+      // Keys that sort before any generated id, so they come first in the store's natural order as well as by age.
+      const key = `-idle-${String(i).padStart(3, '0')}`
+      return { id: `${tab}:${key}`, tabId: tab, key, version: 1, changedAt: old, deleted: false, ordinal: 1000 + i, projectId: 'lead', kind: null,
+        archived: false, dormant: false, agentIds: [], executionMachineId: null, messageSeq: 0, reportSeq: 0, lastActivityAt: old,
+        data: { id: key, projectId: 'lead', title: key, leadId: null, agentIds: [], archived: false, brief: '', checks: [], assignment: null, lastMessageSequence: 0 } }
+    }) })
+    await acknowledge(tab, lead, group)
+    await sweepSwarms(db, Date.now() + day + 60_000)
+    expect((await db.$transaction(tx => parts.loadDormant(tx, tab, {}))).map(p => p.key)).toContain(group)
+  })
+
+  it('revokes a terminal in a dormant conversation when its opener loses the project, and restoring access does not revive it', async () => {
+    const { tab } = await fixture()
+    await invite(tab)
+    const projectId = String((await run(tab, { type: 'project.create', name: 'Secret', visibility: 'private', brief: '' })).result.projectId)
+    await run(tab, { type: 'project.sharing', projectId, visibility: 'private', memberIds: [peer.sub] })
+    const leadChat = (await store.read(owner, tab)).state.projects!.find(p => p.id === projectId)!.leadConversationId
+    const projectLead = String((await run(tab, { type: 'agent.add', conversationId: leadChat, machineId: 'test-host', harnessId: randomUUID(),
+      name: 'Secret Lead', configuration: config, lead: true })).result.agentId)
+    const group = String((await run(tab, { type: 'conversation.create', projectId, title: 'Quiet', brief: 'Old work',
+      checks: [{ description: 'Done', independent: false }] })).result.conversationId)
+    const worker = String((await run(tab, { type: 'agent.add', conversationId: group, machineId: 'test-host', harnessId: randomUUID(),
+      name: 'Secret Worker', configuration: config, lead: false })).result.agentId)
+    const { contextId } = await store.native.open(peer, tab, { operationId: randomUUID(), conversationId: group, agentId: worker })
+    const turn = await store.native.append(host, tab, contextId, { turnId: 'kept', kind: 'prompt', previousEventId: null, text: 'Typed by the peer',
+      truncated: false, interrupted: false }) as { eventId: string }
+    const waiting = await db.superTabDelivery.findFirstOrThrow({ where: { tabId: tab, messageId: turn.eventId, agentId: projectLead } })
+    // Its work finished, its reports acknowledged, a quiet day later it sleeps: no ordinary load reads it any more. Not
+    // archived: archiving revokes its terminals by itself.
+    const assignmentId = String((await run(tab, { type: 'work.assign', conversationId: group, agentId: worker })).result.assignmentId)
+    const checkId = (await storedState(tab)).conversations.find(c => c.id === group)!.checks[0]!.id
+    await run(tab, { type: 'work.check', conversationId: group, assignmentId, checkId, passed: true, evidence: 'Shown' })
+    await run(tab, { type: 'work.status', conversationId: group, assignmentId, status: 'done', result: 'Shipped' }, host, worker)
+    const read = (await storedState(tab)).conversations.find(c => c.id === group)!
+    await run(tab, { type: 'project.report', projectId, through: { [group]: read.lastMessageSequence }, text: null }, host, projectLead)
+    await sweepSwarms(db, Date.now() + day + 60_000)
+    expect((await db.$transaction(tx => parts.loadDormant(tx, tab, {}))).map(p => p.key)).toContain(group)
+    expect((await db.superTabNativeContext.findUniqueOrThrow({ where: { id: contextId } })).revoked).toBe(false)
+
+    await run(tab, { type: 'project.sharing', projectId, visibility: 'private', memberIds: [] })
+    expect((await db.superTabNativeContext.findUniqueOrThrow({ where: { id: contextId } })).revoked).toBe(true)
+    expect((await db.superTabDelivery.findUniqueOrThrow({ where: { id: waiting.id } })).status).toBe('cancelled')
+    await run(tab, { type: 'project.sharing', projectId, visibility: 'private', memberIds: [peer.sub] })
+    await expect(store.native.append(host, tab, contextId, { turnId: 'late', kind: 'prompt', previousEventId: turn.eventId, text: 'After removal',
+      truncated: false, interrupted: false })).rejects.toMatchObject({ code: 'NATIVE_CONTEXT_REVOKED' })
+  })
+
+  it('never lets a person, agent or machine come back at a lower version, even long after it was removed', async () => {
+    const { tab } = await fixture()
+    const harnessId = randomUUID()
+    const add = async () => String((await run(tab, { type: 'agent.add', conversationId: 'lead', machineId: 'test-host', harnessId, name: 'Returning',
+      configuration: config, lead: false })).result.agentId)
+    const agentId = await add()
+    for (const effort of ['low', 'medium']) {
+      const previous = (await storedState(tab)).agents.find(a => a.id === agentId)!.configurationVersion ?? null
+      await run(tab, { type: 'agent.configuration', previousVersion: previous, configuration: { ...config, effort } }, host, agentId)
+    }
+    const before = await db.swarmAgent.findFirstOrThrow({ where: { tabId: tab, key: agentId } })
+    await run(tab, { type: 'agent.remove', agentId })
+    // Past the tombstone's 7 days: its record stays, compacted, and holds the version; nothing purges it.
+    await sweepSwarms(db, Date.now() + 8 * day)
+    const kept = await db.swarmAgent.findFirstOrThrow({ where: { tabId: tab, key: agentId } })
+    expect(kept.deleted).toBe(true)
+    expect(kept.data).toEqual({})
+    expect(kept.version).toBeGreaterThan(before.version)
+    await ensurePartExpiry(db)
+    for (const collection of ['SwarmMember', 'SwarmAgent', 'SwarmMachine']) {
+      const indexes = await db.$runCommandRaw({ listIndexes: collection }) as { cursor: { firstBatch: Array<{ expireAfterSeconds?: number }> } }
+      expect(indexes.cursor.firstBatch.filter(i => i.expireAfterSeconds !== undefined), collection).toEqual([])
+    }
+    await add()
+    const back = await db.swarmAgent.findFirstOrThrow({ where: { tabId: tab, key: agentId } })
+    expect(back.deleted).toBe(false)
+    expect(back.version).toBeGreaterThan(kept.version)
+    const history = await db.superTabConfiguration.findMany({ where: { tabId: tab, agentId }, orderBy: { revision: 'asc' } })
+    expect(history.at(-1)!.configuration).toMatchObject({ effort: 'high' })
   })
 
   it('drops finished starts and expired invitations after their time, and creates the purge index', async () => {

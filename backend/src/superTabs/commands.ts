@@ -13,7 +13,7 @@ import { MAX_ATTACHMENTS, type Attachment } from './attachments.js'
 import { checkMentions, MAX_MENTIONS, type MentionTarget } from './mentions.js'
 import { TERMINAL_KEYS, terminalAlert, terminalRequest, terminalResult, type TerminalRequest } from './terminal.js'
 import { credentialResult, redactCredentials, type CredentialKind } from './credentials.js'
-import { reportGroups, summarize } from './projectUpdates.js'
+import { dirtyGroups, reportGroups, summarize } from './projectUpdates.js'
 import { agentKind, agentProjectId, audienceOf, agentSetRole, deleteProject, groupProject, inviteLanding, ledProject, manageProject, MAX_ROLES, mutableProjects, placeRules, projectMembers, projectOf, projectRules, projectsOf, readAgent, readConversation, readProject, roleVersion, sameProject, sharedWithLeads, SKILL_SET_NAMES, skillSetOf, type ProjectRole, type RoleKind, type SwarmProject } from './projects.js'
 
 const id = z.string().min(1).max(160).regex(/^[A-Za-z0-9_-]+$/)
@@ -983,8 +983,9 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       if (group.id === groupProject(state, group).leadConversationId) fail('LEAD_CONVERSATION', 'The Lead conversation stays available.')
       if (command.archived && activeWork(group)) fail('WORK_ACTIVE', 'Resolve the active assignment before archiving this conversation.')
       group.archived = command.archived
-      // Archived by hand, it leaves the active set until it is reopened (spec, Archive).
-      if (command.archived) group.dormant = true
+      // Archived by hand, it leaves the active set until it is reopened (spec, Archive), once its reports are acknowledged:
+      // until then the sweep leaves it in the active set, where the report check sees it (design section 3.6).
+      if (command.archived && !dirtyGroups(state, groupProject(state, group)).includes(group)) group.dormant = true
       else delete group.dormant
       break
     }

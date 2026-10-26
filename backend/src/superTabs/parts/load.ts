@@ -1,6 +1,6 @@
 import type { Prisma } from '@prisma/client'
 import { delegate, extracted, partId, type PartRow } from './write.js'
-import type { GroupData, HeadData, Part, PartKind, ProgressData, SwarmParts } from './types.js'
+import type { GroupData, HeadData, Part, PartKind, SwarmParts } from './types.js'
 import { PART_KINDS } from './types.js'
 
 type Transaction = Prisma.TransactionClient
@@ -23,7 +23,7 @@ async function assemble(tx: Transaction, tabId: string, where: Record<Exclude<Pa
  * plus the groups named by id, the groups the named agents are in and the named projects' groups (dormant ones too),
  * and the finished starts named by id or by the agent they started.
  */
-export async function loadActive(tx: Transaction, tabId: string,
+export function loadActive(tx: Transaction, tabId: string,
   opts: { groupIds?: string[]; agentIds?: string[]; projectIds?: string[]; startIds?: string[]; startAgentIds?: string[]
     /** Also the finished starts not yet expired (finished within 7 days), as a first load shows them (design section 4.3). */
     includeRecentStarts?: boolean
@@ -37,19 +37,7 @@ export async function loadActive(tx: Transaction, tabId: string,
       !!opts.agentIds?.length && { agentIds: { hasSome: opts.agentIds } }, !!opts.projectIds?.length && { projectId: { in: opts.projectIds } }),
     start: opts.includeRecentStarts ? live : or({ finishedAt: null }, !!opts.startIds?.length && { key: { in: opts.startIds } },
       !!opts.startAgentIds?.length && { agentId: { in: opts.startAgentIds } }),
-  }).then(parts => withUnreported(tx, parts))
-}
-
-/** A dormant group whose last report its Lead has not acknowledged stays in the report check until it is (design
- *  section 3.6): one query over each project's groups past its summarized floor, filtered by its watermark later. */
-async function withUnreported(tx: Transaction, parts: SwarmParts): Promise<SwarmParts> {
-  const floors = parts.progress.filter(p => !p.deleted && p.data).map(p => ({ projectId: p.key, floor: (p.data as ProgressData).summarizedFloor }))
-  if (!floors.length) return parts
-  const loaded = new Set(parts.groups.map(g => g.key))
-  const rows = await tx.swarmGroup.findMany({ where: { tabId: parts.tabId, deleted: false, dormant: true, key: { notIn: [...loaded] },
-    OR: floors.flatMap(({ projectId, floor }) => [{ projectId, reportSeq: { gt: floor } },
-      ...(projectId === 'lead' ? [{ projectId: null, reportSeq: { gt: floor } }] : [])]) } })
-  return rows.length ? { ...parts, groups: [...parts.groups, ...rows.map(row => toPart<GroupData>('group', row as unknown as PartRow))] } : parts
+  })
 }
 
 /** Every part of one Swarm, tombstones included with their last data (migration verification and rollback). */

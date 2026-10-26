@@ -57,7 +57,10 @@ function namedFor(command: Command): Named {
   const groupIds = [field('conversationId'), command.type === 'agent.start' ? command.request.conversationId : undefined,
     command.type === 'conversation.create' ? command.reviewOf : undefined,
     'askedIn' in command ? command.askedIn?.conversationId : undefined].filter((id): id is string => !!id)
-  return { groupIds, startIds: has('startId') ? [field('startId')!] : [], projectIds: command.type === 'project.delete' ? [command.projectId] : [] }
+  // Deleting a project or changing who reads it reaches every one of its groups, dormant ones too: their terminal
+  // contexts are revoked from the groups the command loaded (native.ts revokeNativeContexts).
+  return { groupIds, startIds: has('startId') ? [field('startId')!] : [],
+    projectIds: command.type === 'project.delete' || command.type === 'project.sharing' ? [command.projectId] : [] }
 }
 
 /** What a receipt keeps of a command's reply besides its result: the parts it wrote and when (design section 4.7). */
