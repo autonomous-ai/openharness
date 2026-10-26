@@ -9,7 +9,11 @@ import 'package:flutter/rendering.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/state/workspace_chrome.dart';
+import 'package:harness/screens/swarm_screen.dart';
+import 'package:harness/web/shell/web_chrome.dart';
 import 'package:harness/widgets/new_agent_dialog.dart';
+
+import '../tool/web_ux_seed.dart';
 
 import 'support/mixed_agents.dart';
 import 'swarm_state_test.dart' show createApp;
@@ -103,4 +107,42 @@ void main() {
     expect(find.textContaining('ctrl-enter', findRichText: true), findsNothing);
     expect(find.textContaining('shift-tab', findRichText: true), findsNothing);
   });
+
+  testWidgets(
+    'Split pane from the web workspace\'s menu opens it phone-sized',
+    (tester) async {
+      final app = withPanes(signedIn(), 2);
+      addTearDown(app.dispose);
+      tester.view.devicePixelRatio = 1;
+      tester.view.physicalSize = const Size(390, 844);
+      addTearDown(tester.view.reset);
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: grid.buildAppTheme(brightness: Brightness.dark),
+          home: SwarmScreen(
+            notifier: app,
+            nativeTabs: false,
+            chrome: webWorkspaceChrome(app),
+          ),
+        ),
+      );
+      await tester.pump(const Duration(milliseconds: 200));
+      await tester.tap(find.byKey(const ValueKey('web-app-menu-button')));
+      await tester.pump(const Duration(milliseconds: 300));
+      await tester.tap(find.byKey(const ValueKey('web-menu:pane.split_right')));
+      await tester.pump(const Duration(milliseconds: 500));
+
+      expect(find.byKey(const Key('create-agent-submit')), findsOneWidget);
+      expect(
+        find.textContaining('ctrl-enter', findRichText: true),
+        findsNothing,
+      );
+      expect(
+        tester.getSize(find.byKey(const Key('create-agent-submit'))).height,
+        greaterThanOrEqualTo(44),
+      );
+      await tester.pumpWidget(const SizedBox.shrink());
+      await tester.pump(const Duration(seconds: 1));
+    },
+  );
 }

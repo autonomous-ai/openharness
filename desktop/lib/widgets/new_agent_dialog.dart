@@ -79,6 +79,10 @@ Future<NewAgentDialogResult?> showNewAgentDialog(
 
   /// The harness's first message, sent as it starts — the store's "Try this prompt".
   String? initialPrompt,
+
+  /// The workspace's chrome, for a caller above its [WorkspaceChromeScope]
+  /// (the workspace itself); others' is read from [context].
+  WorkspaceChrome? chrome,
 }) {
   if (initialDraft != null) {
     machineId = initialDraft.machineId;
@@ -105,7 +109,7 @@ Future<NewAgentDialogResult?> showNewAgentDialog(
   final activeKeymap = keymap ?? KeymapTheme.of(context, listen: false);
   // The workspace's chrome too: the web's hidden key hints and its phone
   // width ([WorkspaceChrome.compactBelow]) hold in this route as well.
-  final chrome = WorkspaceChromeScope.maybeOf(context);
+  chrome ??= WorkspaceChromeScope.maybeOf(context);
   return showAppDialog<NewAgentDialogResult>(
     context: context,
     transitionDuration: Duration.zero,

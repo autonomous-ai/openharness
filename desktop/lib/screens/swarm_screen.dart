@@ -3922,6 +3922,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
         app,
         machineId,
         source: 'swarm',
+        chrome: widget.chrome,
         initialFolder: folder,
         initialProjectFolder: projectFolder,
         initialPermissionMode: permissionMode,
