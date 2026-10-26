@@ -1,4 +1,7 @@
 import 'package:harness/shared/theme/app_icons.dart';
+
+import 'finger_target.dart';
+
 import 'package:flutter/material.dart';
 
 import '../shared/theme/app_theme.dart';
@@ -51,7 +54,11 @@ class _HarnessHelpLinkState extends State<HarnessHelpLink> {
       style:
           TextButton.styleFrom(
             foregroundColor: AppPalette.textSecondary,
-            minimumSize: const Size(0, 32),
+            // A phone's link is a finger tall.
+            minimumSize: Size(
+              0,
+              workspaceIsCompact(context) ? kFingerTarget : 32,
+            ),
             padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
             textStyle: widget.textStyle ?? AppType.body(height: 1.4),
             side: BorderSide.none,
