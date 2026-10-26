@@ -29,7 +29,7 @@ export const MachineRegister = async ({ directory, worktree, project, client }) 
   const post = async (sessionID) => {
     const pane = process.env.TMUX_PANE
     // A Harness pty host pane (Windows) names itself HARNESS_PANE=<instance>:%N, and has no TMUX_PANE.
-    const ptyPane = pane ? null : /^(p\\d{1,4}):(%\\d{1,9})$/.exec(process.env.HARNESS_PANE || "")
+    const ptyPane = pane ? null : /^(p\\d{1,4}(?:-(?:[0-9A-Za-z.-]{1,32}|h[0-9a-f]{12}))?):(%\\d{1,9})$/.exec(process.env.HARNESS_PANE || "")
     const token = hookToken()
     if ((!pane && !ptyPane) || !token || !sessionID || seen.has(sessionID)) return
     seen.add(sessionID)

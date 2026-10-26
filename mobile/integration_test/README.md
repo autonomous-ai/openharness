@@ -114,6 +114,88 @@ It pools every measured observation and every frame across the runs in the
 directory, then takes percentiles — it never averages percentiles — and prints
 markdown tables, plus each run's timeline rankings.
 
+## Claude Code's fullscreen scroll
+
+`claude_scroll_test.dart` measures one thing against what a native list does:
+the rows that scroll move as far as the finger every frame, and stop when it
+does. The production `TerminalView`, set up for Claude Code as `TerminalPanel`
+sets it up (the `RemoteScrollMirror`, page keys, `RemoteScrollPhysics`), in a
+profile build, touched through the device's own dispatch (`perf/gestures.dart`).
+Per scenario — the first drag on a freshly opened terminal, slow reading drags,
+flicks up after reading, flicks on into rows nobody fetched, flicks back down —
+it reports how far the content went against the finger (`rowsBehind`), frame by
+frame (`errorRows*`), frames it stood still under a moving finger
+(`stalledFrames`), lurches past it (`jumpFrames`), movement after the finger and
+its fling stopped (`rowsAfterStop`), when the mirror first drew
+(`firstMirrorFrameMs`), and the engine's frame timings.
+
+Behind the terminal is Claude Code 2.1.309's fullscreen renderer faked in the
+app (`claude_scroll/program.dart`: wheel acceleration, a dropped wheel after a
+turn, Page Up/Down by half the transcript, a pinned prompt and "Jump to bottom"
+line, its layout under the transcript), across a link of
+`CLAUDE_FAKE_ONE_WAY_MS` each way (30) with a redraw of `CLAUDE_FAKE_DRAW_MS`
+(40). The same every run, so two builds compare.
+
+```sh
+flutter build ios --profile --target=integration_test/claude_scroll_test.dart
+
+HARNESS_SCROLL_LABEL=after \
+flutter drive --profile --no-dds --keep-app-running \
+  --use-application-binary=build/ios/iphoneos/Runner.app \
+  --driver=test_driver/claude_scroll_driver.dart \
+  --target=integration_test/claude_scroll_test.dart \
+  -d <device id>
+```
+
+Results go to `build/claude_scroll/<label>-<UTC time>.json` with every frame's
+sample and the mirror's trace; the driver prints the per-scenario medians.
+`CLAUDE_SCROLL_ROUNDS` (3) and `CLAUDE_SCROLL_SCENARIOS` (name prefixes) are
+`--dart-define`s on the build line. Like the benchmark above it replaces the
+app on the phone: reinstall the development build afterwards.
+
+`claude_scroll_app_test.dart` measures the same in the REAL app, end to
+end: it starts the app as a tap on its icon would, with the phone's own
+sign-in, opens one of the owner's own Claude Code agents over the real link,
+takes its terminal as "Take control" does, puts the keyboard away, and runs
+the same scenarios. `CLAUDE_AGENT_NAME` is a comma-separated list of agent
+names tried in turn: the first with 300 rows above its screen once it has
+fetched ahead is measured, else the one with most. The phone must already be
+signed in. Opening an agent takes its pane at the phone's size, as opening it
+by hand does, and the scroll sends it wheel events and Page Up/Down — nothing
+is typed; pick agents that are idle.
+
+```sh
+flutter build ios --profile --target=integration_test/claude_scroll_app_test.dart \
+  --dart-define=CLAUDE_AGENT_NAME="T- 300,Testing with Claude Code"
+HARNESS_SCROLL_LABEL=app flutter drive --profile --no-dds --keep-app-running \
+  --use-application-binary=build/ios/iphoneos/Runner.app \
+  --driver=test_driver/claude_scroll_driver.dart \
+  --target=integration_test/claude_scroll_app_test.dart -d <device id>
+```
+
+With a real program the newest row is not known: frames past it count as
+stalled in `flick_down`. The oldest is, once a page up has gone nowhere.
+
+What these measured before and after the mirror's rework, on an iPhone 14 and
+a Galaxy S23, over Wi-Fi and 4G: `claude_scroll/RESULTS.md`.
+
+⚠️ **On Android, always `--keep-app-running` and a prebuilt APK.** `flutter
+drive` uninstalls the app when it finishes, and on the first build — no APK yet
+— it takes the package from the source manifest: it uninstalled a Play-installed
+Harness that way (2026-10-24). A local build cannot replace the Play install
+(Play re-signs it with Google's key); to run beside it, build with
+`--android-project-arg=harnessIdSuffix=.bench` and check the package with
+`aapt2 dump badging` before installing. A copy beside the Play one has its own
+sign-in.
+
+`CLAUDE_SCROLL_PROGRAM=live` puts the real Claude Code behind it instead: the
+phone listens on `CLAUDE_BRIDGE_PORT` (8765) and prints its addresses, and
+`claude_scroll/claude_bridge.py` on a Mac connects to it, runs
+`claude --resume <session>` in a pseudo terminal at the phone's grid and holds
+every byte `CLAUDE_BRIDGE_DELAY_MS` each way. Nothing on the Mac listens, and the
+bridge passes only wheel reports and Page Up/Down to Claude Code. Resume a
+session no agent is using, in a folder Claude Code already trusts.
+
 ## Files
 
 - `perf_test.dart` — entry point; one test that runs the suite.
@@ -130,3 +212,6 @@ markdown tables, plus each run's timeline rankings.
 - `../scripts/perf_summarize.py` — the summarizer.
 - `../test/perf_fixture_test.dart` — the fixture's assumptions, and that an
   idle terminal page asks for no frames, on every `flutter test`.
+- `claude_scroll_test.dart`, `claude_scroll_app_test.dart`, `claude_scroll/`
+  and `../test_driver/claude_scroll_driver.dart` — Claude Code's fullscreen
+  scroll, above; `claude_scroll/RESULTS.md` — its results.

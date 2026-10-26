@@ -36,7 +36,7 @@ class SettingsBody extends StatelessWidget {
   Widget build(BuildContext context) {
     final screen = switch (section) {
       SettingsSection.account => AccountSection(notifier: notifier),
-      SettingsSection.usage => const UsageSection(),
+      SettingsSection.usage => UsageSection(subscriptions: notifier.modelsMenu),
       SettingsSection.connectors => ConnectorsSection(notifier: notifier),
       SettingsSection.customize => throw StateError(
         'Customization opens over the workspace.',

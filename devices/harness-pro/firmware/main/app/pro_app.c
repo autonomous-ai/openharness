@@ -154,6 +154,25 @@ static void perform(const pod_out_t *o)
     }
 }
 
+// The Swarm cards' select / open / recap.get frames the Lead view owes the daemon (pod_ui_take_supertab reconciles them with what is on screen). Taken under the
+// lock, sent after it. Its own frame: the queue is too big for leave()'s (1 KB cap).
+static __attribute__((noinline)) void send_supertabs(void)
+{
+    pod_supertab_out_t q[POD_SUPERTAB_OUT_MAX];
+    pro_app_lock();
+    const uint32_t rev = s_pod.model.revision;
+    const int n = pod_ui_take_supertab(&s_pod, q, POD_SUPERTAB_OUT_MAX);
+    if (s_pod.model.revision != rev) change();   // asking for a recap puts it LOADING: a change no feed announced (the flag is the model's revision: not consumed here)
+    pro_app_unlock();
+    bool lost[POD_SUPERTAB_OUT_MAX] = {0};
+    bool any = false;
+    for (int i = 0; i < n; i++) any |= lost[i] = !pro_cable_supertab_send(q[i].t, q[i].tab, q[i].lead);
+    if (!any) return;
+    pro_app_lock();   // a frame the link dropped is owed again (open / recap.get are retried)
+    for (int i = 0; i < n; i++) if (lost[i]) pod_ui_supertab_unsent(&s_pod, &q[i]);
+    pro_app_unlock();
+}
+
 // Release the lock, then do what the feeds asked for. Every entry that took the lock ends here.
 static void leave(void)
 {
@@ -172,6 +191,7 @@ static void leave(void)
     pro_app_unlock();
     for (int i = 0; i < n; i++) perform(&q[i]);
     for (int i = 0; i < read_n; i++) pro_cable_send_notif_read(reads[i].agent, reads[i].token);
+    send_supertabs();
     if (wake) pro_app_wake();   // an alert: light a dark glass so its banner is seen
     if (beep && !pro_settings_muted() && !atomic_load(&s_updating)) audio_beep();   // and chime, unless muted
     if (lib) send_library(lib_request, lib_offset);
@@ -349,6 +369,36 @@ void pro_app_swarms(const cable_swarm_t *items, int n, const cable_swarm_members
     pro_app_lock();
     pod_model_clock(&s_pod.model, ms());   // the focus echo window is measured on this clock, which otherwise stands still while the glass sleeps
     settle(pod_ui_swarms(&s_pod, items, n, members, selected, tiles, tile_n));   // every frame, changed or not (P12)
+    leave();
+}
+
+// The Swarm cards. The model copies the list and keeps the Lead recap texts (pod_model_supertab); a recap lands on its Lead.
+// supertab.focus is recorded by the model (focus_*) and acted on by the glue after the feed (apply_lead_focus): the Lead view opens.
+void pro_app_supertab_ids(const char (*ids)[ID_MAX], int n)
+{
+    pro_app_lock();
+    settle(pod_ui_supertab_ids(&s_pod, ids, n));
+    leave();
+}
+
+void pro_app_supertab(const pod_swarm_t *sw)
+{
+    pro_app_lock();
+    settle(pod_ui_supertab(&s_pod, sw, ms()));
+    leave();
+}
+
+void pro_app_supertab_recap(const char *tab, const char *lead, const char *text, uint32_t at, bool none)
+{
+    pro_app_lock();
+    settle(pod_ui_supertab_recap(&s_pod, tab, lead, text, at, none));
+    leave();
+}
+
+void pro_app_supertab_focus(const char *tab, const char *lead)
+{
+    pro_app_lock();
+    settle(pod_ui_supertab_focus(&s_pod, tab, lead, ms()));
     leave();
 }
 

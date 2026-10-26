@@ -58,7 +58,7 @@ export function createLaunchHelpers({ authority, prepareApiTools, launchOverride
     session = structuredClone(session)
     const changed = { ok: false, error: 'AGENT_CHANGED', detail: 'The harness changed or stopped during launch preparation.' } as const
     if (!current()) return changed
-    const result = await buildLaunchOverrides(launchOverridesDeps, session.engine, { dsh: session.dsh ?? null, dshRuntime: session.dshRuntime ?? null, cwd: session.cwd, agent: session.agent ?? null, scmLaunch: session.scmLaunch ?? null, startedBy: session.startedBy ?? null, ...source, gridLaunch: source.gridLaunch ?? null }, configKey, current, native)
+    const result = await buildLaunchOverrides(launchOverridesDeps, session.engine, { dsh: session.dsh ?? null, dshRuntime: session.dshRuntime ?? null, swarmSkill: session.swarmSkill, cwd: session.cwd, agent: session.agent ?? null, scmLaunch: session.scmLaunch ?? null, startedBy: session.startedBy ?? null, ...source, gridLaunch: source.gridLaunch ?? null }, configKey, current, native)
     if (!current()) return changed
     if (!result.ok && (result.unavailable || result.error === 'AGENT_CHANGED')) return result
     // Saved-API instructions remain available after an ordinary semantic refusal, as before.

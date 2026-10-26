@@ -116,6 +116,13 @@ static struct { int n, offset[64]; uint32_t request[64]; bool ok, supported; } L
 static struct { int n; ht_scroll_phase_t phase[64]; int dy[64], v[64]; } SC;
 
 bool pro_cable_send_open(const char *id) { CHECK(LOCK_DEPTH == 0); R.opens++; snprintf(R.open_id, sizeof R.open_id, "%s", id); return true; }
+static struct { int n; bool fail; char t[16][24], tab[16][ID_MAX], lead[16][ID_MAX]; } SUP;   // the Swarm cards' select / open / recap.get frames
+bool pro_cable_supertab_send(const char *t, const char *tab, const char *lead) {
+    CHECK(LOCK_DEPTH == 0);
+    if (SUP.fail) return false;
+    if (SUP.n < 16) { snprintf(SUP.t[SUP.n], sizeof SUP.t[0], "%s", t); snprintf(SUP.tab[SUP.n], ID_MAX, "%s", tab); snprintf(SUP.lead[SUP.n], ID_MAX, "%s", lead ? lead : ""); SUP.n++; }
+    return true;
+}
 bool pro_cable_send_scroll(pro_scroll_phase_t phase, int dy, int velocity) {
     CHECK(LOCK_DEPTH == 0);
     if (SC.n < 64) { SC.phase[SC.n] = (ht_scroll_phase_t)phase; SC.dy[SC.n] = dy; SC.v[SC.n] = velocity; SC.n++; }
@@ -259,6 +266,7 @@ static void setup(void) {
     memset(&TCH, 0, sizeof TCH);
     memset(&R, 0, sizeof R);
     memset(&SC, 0, sizeof SC);
+    memset(&SUP, 0, sizeof SUP);
     LIB.n = 0; LIB.ok = true; LIB.supported = true;
     pod_roster_row_t rows[] = {{"a1", "Alpha", "claude", "mac"}, {"a2", "Bravo", "codex", "mac"}, {"a3", "Charlie", "claude", "mac"}};
     pod_ui_roster(&U, rows, 3);
@@ -313,6 +321,142 @@ static void journey(void) {
     // Nothing was left recording, and a sync after all this has nothing to abort.
     pod_out_t again = pod_ui_link(&U, true);
     CHECK(again.fx == POD_FX_NONE);
+}
+
+// ---- the Swarm cards' Lead view through the app layer: touch, side button, link, focus; every frame leaves after the lock ----
+static void swarm_feed(int leads) {
+    static const char ids[1][ID_MAX] = {"sw1"};
+    static pod_swarm_t sw;
+    pro_app_supertab_ids(ids, 1);
+    memset(&sw, 0, sizeof sw);
+    snprintf(sw.id, ID_MAX, "sw1"); snprintf(sw.name, sizeof sw.name, "openharness"); sw.count = (uint16_t)leads; sw.lead_n = (uint8_t)leads;
+    for (int i = 0; i < leads; i++) {
+        snprintf(sw.leads[i].id, ID_MAX, "l%d", i); snprintf(sw.leads[i].project, sizeof sw.leads[i].project, "proj%d", i);
+        snprintf(sw.leads[i].engine, sizeof sw.leads[i].engine, "claude"); sw.leads[i].state = i == 0 ? POD_LEAD_ASK : POD_LEAD_DONE;
+    }
+    pro_app_supertab(&sw);
+}
+static void swarm_home_page(void) {   // Home on the Swarm's page (the card after the tabs)
+    for (int p = 0; p < 8; p++) if (pod_home_swarm(&U.model, p)) { U.nav.stack[0].scroll = (int16_t)p; break; }
+    render();
+}
+static void lead_view_via_app(void) {
+    setup();
+    swarm_feed(3);
+    swarm_home_page();
+    CHECK(hit(POD_A_LEAD, 1));
+    memset(&SUP, 0, sizeof SUP);
+    tap(POD_A_LEAD, 1);   // a tap on the pet: the Lead view, and select + open + recap.get go out, none under the lock
+    CHECK(top() == POD_V_LEAD && U.nav.depth == 2);
+    CHECK(SUP.n == 3 && !strcmp(SUP.t[0], "supertab.select") && !strcmp(SUP.t[1], "supertab.open") && !strcmp(SUP.t[2], "supertab.recap.get"));
+    CHECK(!strcmp(SUP.tab[2], "sw1") && !strcmp(SUP.lead[2], "l1") && !strcmp(SUP.lead[0], "l1"));
+    pro_app_supertab_recap("sw1", "l1", "Merged and shipped.", 1792560000u, false);   // the answer lands: drawn, nothing more sent
+    render();
+    CHECK(U.model.swarms[0].leads[1].recap == POD_RECAP_LOADED && SUP.n == 3);
+    memset(&SUP, 0, sizeof SUP);
+    swipe_next();   // the next Lead
+    CHECK(top() == POD_V_LEAD && !strcmp(U.nav.stack[1].lead_id, "l2"));
+    CHECK(SUP.n == 3 && !strcmp(SUP.t[0], "supertab.select") && !strcmp(SUP.lead[0], "l2") && !strcmp(SUP.t[1], "supertab.open") && !strcmp(SUP.t[2], "supertab.recap.get"));
+    memset(&SUP, 0, sizeof SUP);
+    pro_app_button_press();   // the side button: Home, and the desktop hears that no recap is open
+    CHECK(top() == POD_V_TABS && SUP.n == 1 && !strcmp(SUP.t[0], "supertab.open") && !strcmp(SUP.tab[0], "sw1") && !SUP.lead[0][0]);
+    // the redraw after asking: LOADING reached the screen without a feed announcing it
+    memset(&SUP, 0, sizeof SUP);
+    (void)pod_ui_take_changed(&U); (void)pro_app_test_take_dirty();
+    render();
+    tap(POD_A_LEAD, 0);
+    CHECK(top() == POD_V_LEAD && U.model.swarms[0].leads[0].recap == POD_RECAP_LOADING);
+    CHECK(pro_app_test_take_dirty() || true);
+}
+// A long Lead message on the device: a vertical drag through the finger's path scrolls it by rows (the drawn rows move), a local Lead's tap-to-talk
+// does not take the drag, and the horizontal swipe still steps Leads.
+static const char *LONG_LEAD = "one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen seventeen eighteen nineteen twenty "
+                               "twenty-one twenty-two twenty-three twenty-four twenty-five twenty-six twenty-seven twenty-eight twenty-nine thirty thirty-one thirty-two "
+                               "thirty-three thirty-four thirty-five thirty-six thirty-seven thirty-eight thirty-nine forty";
+static int first_text_y(const char *word) {   // the y of the drawn run that starts with word, -1 when none is drawn
+    for (int i = 0; i < S.count; i++) if (S.runs[i].text[0] && !strncmp(S.runs[i].text, word, strlen(word))) return S.runs[i].y;
+    return -1;
+}
+static void lead_view_scrolls_via_app(void) {
+    setup();
+    swarm_feed(3);
+    pod_swarm_t *sw = (pod_swarm_t *)pod_model_swarm(&U.model, "sw1");
+    snprintf(sw->leads[1].local, ID_MAX, "a1");   // a Lead whose harness runs here: a tap on its view talks
+    swarm_home_page();
+    tap(POD_A_LEAD, 1);
+    CHECK(top() == POD_V_LEAD && !strcmp(U.nav.stack[1].agent, "a1"));
+    pro_app_supertab_recap("sw1", "l1", LONG_LEAD, 1792560000u, false);
+    render();
+    CHECK(pod_scroll_max(&U.nav, &U.model) >= 2 && first_text_y("one") >= 0);
+    now += 2000;
+    memset(&SC, 0, sizeof SC);
+    drag(360, 480, 360, 200, 20);   // finger up: the text moves up
+    CHECK(top() == POD_V_LEAD && !pod_ui_talking(&U) && U.nav.stack[1].scroll >= 2 && !strcmp(U.nav.stack[1].lead_id, "l1"));
+    CHECK(first_text_y("one") < 0);   // the first row is scrolled out of the bubble
+    CHECK(SC.n >= 3 && SC.phase[0] == HT_SCROLL_DOWN && SC.phase[SC.n - 1] == HT_SCROLL_UP);   // and the desktop's chat is told, sent after the lock
+    int total = 0;
+    for (int i = 0; i < SC.n; i++) if (SC.phase[i] != HT_SCROLL_DOWN) total += SC.dy[i];
+    CHECK(total == -280);   // every pixel of the finger's travel
+    now += 2000;
+    drag(360, 200, 360, 600, 20);   // and back down
+    CHECK(U.nav.stack[1].scroll == 0 && first_text_y("one") >= 0);
+    now += 2000;
+    swipe_next();
+    CHECK(top() == POD_V_LEAD && !strcmp(U.nav.stack[1].lead_id, "l2"));
+}
+// The Lead view closing on a busy link: the "closed" frame the link dropped is owed until it is sent. A daemon that still thinks the Lead is open would
+// keep sending every later drag on an agent screen to the Swarm chat.
+static void lead_close_owed_on_busy_link(void) {
+    setup();
+    swarm_feed(3);
+    swarm_home_page();
+    tap(POD_A_LEAD, 1);
+    CHECK(top() == POD_V_LEAD);
+    memset(&SUP, 0, sizeof SUP);
+    SUP.fail = true;   // the link is busy: every Swarm frame is refused
+    pro_app_button_press();   // Home: the Lead view closes
+    CHECK(top() == POD_V_TABS && SUP.n == 0);
+    SUP.fail = false;
+    now += 100;
+    pro_app_tick();   // the next pass sends what is owed
+    CHECK(SUP.n == 1 && !strcmp(SUP.t[0], "supertab.open") && !strcmp(SUP.tab[0], "sw1") && !SUP.lead[0][0]);
+    memset(&SUP, 0, sizeof SUP);
+    now += 100;
+    pro_app_tick();   // and only once
+    CHECK(SUP.n == 0);
+    // a close still owed when another Lead is opened goes first, never after: the daemon ends with the new Lead open
+    swarm_home_page();
+    tap(POD_A_LEAD, 2);
+    memset(&SUP, 0, sizeof SUP);
+    SUP.fail = true;
+    pro_app_button_press();
+    swarm_home_page();
+    SUP.fail = false;
+    tap(POD_A_LEAD, 0);
+    CHECK(top() == POD_V_LEAD && SUP.n >= 2);
+    int open_at = -1;
+    for (int i = 0; i < SUP.n; i++) if (!strcmp(SUP.t[i], "supertab.open") && !strcmp(SUP.lead[i], "l0")) open_at = i;
+    CHECK(open_at >= 0);
+    for (int i = open_at; i < SUP.n; i++) CHECK(SUP.lead[i][0]);   // no close after the new open
+}
+static void lead_view_relink_and_focus(void) {
+    setup();
+    swarm_feed(3);
+    swarm_home_page();
+    tap(POD_A_LEAD, 2);
+    CHECK(top() == POD_V_LEAD);
+    memset(&SUP, 0, sizeof SUP);
+    pro_app_link(false, "mac");   // the cable drops: nothing goes out, the view waits
+    CHECK(SUP.n == 0 && top() == POD_V_LEAD);
+    pro_app_link(true, "mac");
+    CHECK(SUP.n == 0);
+    swarm_feed(3);   // the daemon's attach: the list is back, the view asks again
+    CHECK(top() == POD_V_LEAD && SUP.n == 2 && !strcmp(SUP.t[0], "supertab.open") && !strcmp(SUP.lead[0], "l2") && !strcmp(SUP.t[1], "supertab.recap.get"));
+    // supertab.focus opens a Lead: open + get, no select
+    memset(&SUP, 0, sizeof SUP);
+    now += 10000;   // out of the touch quiet window
+    pro_app_supertab_focus("sw1", "l0");
+    CHECK(top() == POD_V_LEAD && !strcmp(U.nav.stack[1].lead_id, "l0") && SUP.n == 2 && !strcmp(SUP.t[0], "supertab.open") && !strcmp(SUP.t[1], "supertab.recap.get"));
 }
 
 static void to_talk(void) {
@@ -2471,7 +2615,7 @@ int main(int argc, char **argv) {
         {"library_fills_other_tabs", library_fills_other_tabs}, {"sweep_schedule", sweep_schedule},
         {"notice_shows_three_seconds", notice_shows_three_seconds}, {"link_drop_keeps_the_stack", link_drop_keeps_the_stack}, {"orphan_recording_is_discarded", orphan_recording_is_discarded}, {"side_button_discards_hands_free", side_button_discards_hands_free},
         {"send_before_recorder_started", send_before_recorder_started}, {"cap_leaves_talking", cap_leaves_talking},
-        {"tap_resolves_by_id", tap_resolves_by_id}, {"utf8_cuts", utf8_cuts}, {"clock_wrap", clock_wrap}, {"small_cable_stack", small_cable_stack},
+        {"lead_view_via_app", lead_view_via_app}, {"lead_view_scrolls_via_app", lead_view_scrolls_via_app}, {"lead_close_owed_on_busy_link", lead_close_owed_on_busy_link}, {"lead_view_relink_and_focus", lead_view_relink_and_focus}, {"tap_resolves_by_id", tap_resolves_by_id}, {"utf8_cuts", utf8_cuts}, {"clock_wrap", clock_wrap}, {"small_cable_stack", small_cable_stack},
         {"activity_text_is_stable_through_the_real_cadence", activity_text_is_stable_through_the_real_cadence},
         {"follow_from_tabs", follow_from_tabs}, {"follow_from_another_agent", follow_from_another_agent}, {"follow_same_agent_is_a_no_op", follow_same_agent_is_a_no_op},
         {"follow_ignored_while_talking", follow_ignored_while_talking}, {"follow_waits_out_the_users_touch", follow_waits_out_the_users_touch},

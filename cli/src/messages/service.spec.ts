@@ -6,7 +6,7 @@ import type { BackendNotice, TurnDelivery } from '../core/api.js'
 import type { RegisteredSession } from '../lib/registry.js'
 import { fakeCore } from '../testing/fakeCore.js'
 import { PaneInbox } from './inbox.js'
-import { deliveryKey, FYI_REASON, PUMP_MS } from './mailbox.js'
+import { deliveryKey, FYI_REASON, MAX_BACKOFF_MS, PUMP_MS } from './mailbox.js'
 import { header, LEADER_ROLE, LIMITS, LONG_TEXT, longAdvice, MessageError, parseMessage, RULES, WORKER_ROLE, type Message } from './model.js'
 import type { Rpc } from './rpc.js'
 import { HELD_OFF_REASON, HELD_OUTSIDE_MS, MESSAGES_OFF_TEXT, REMOTE_STATUS_MS, SETTING_FRESH_MS, startAgentMessages, SWEEP_AFTER_MS, TICK_MS, WHO_MS } from './service.js'
@@ -29,8 +29,8 @@ const OWNER_REMOTE = { local: false, owner: true }
 const session = (agentId: string, pane: string, engine = 'claude', cwd = `/work/${agentId}`) =>
   ({ agentId, sessionId: `s-${agentId}`, engine, cwd, tmuxPane: pane, runtimes: [{ backend: 'tmux', paneId: pane }], active: true, title: agentId }) as unknown as RegisteredSession
 /** A harness in a pty host pane: its `tmuxPane` is that pane's id, which a tmux pane may also have. */
-const ptySession = (agentId: string, pane: string, engine = 'claude') =>
-  ({ ...session(agentId, pane, engine), runtimes: [{ backend: 'ptyhost', instance: 'p1', paneId: pane }] }) as unknown as RegisteredSession
+const ptySession = (agentId: string, pane: string, engine = 'claude', instance = 'p1') =>
+  ({ ...session(agentId, pane, engine), runtimes: [{ backend: 'ptyhost', instance, paneId: pane }] }) as unknown as RegisteredSession
 
 interface Setup {
   tabs?: Array<{ id: string; name: string; panes: Array<{ machineId: string; agentId: string }>; leader?: { machineId: string; agentId: string } | null }>
@@ -283,7 +283,9 @@ describe('harness send', () => {
 
   it('refuses while Agent Messages are off on this computer, saying where to turn them on, and when the directory cannot be read', async () => {
     // One switch of the account replaced each tab's chat icon, which the owner hit by mistake (2026-10-12).
-    const refused = { error: 'MESSAGES_OFF', detail: 'Agent Messages are off. The person turns on "Agents in the same tab can message each other" in Settings ▸ Experimental, or runs `harness settings agent-messages on`.' }
+    // The agent asks the person, and turns it on only after their yes (lib/agentSettings.ts `askThePersonFirst`).
+    const refused = { error: 'MESSAGES_OFF', detail: MESSAGES_OFF_TEXT }
+    expect(MESSAGES_OFF_TEXT).toMatch(/^Agent Messages are off\. agent-messages is off\. Ask the person, .*"May agents in the same tab message each other\?" Only if they say yes, run `harness settings agent-messages on --person-said-yes`.* If they say no: work on without messaging your teammates\.$/)
     // An account that never said: off by default, so nothing is sent and no one is told of teammates.
     rmSync(agentSettingsPath(root))
     const fresh = setup()
@@ -532,8 +534,105 @@ describe('a harness and the harnesses it started', () => {
   })
 })
 
+describe('harness tell: more work from the harness that started it', () => {
+  // One way, from the starter, behind `agents-tell-agents` (tell.ts): not Agent Messages, which stay off means off.
+  const start = (by: string, child: string, byMachine = 'm1', engine = 'codex') => new Ledger(ledgerPath(root)).append({
+    at: 1, depth: 1, by: { machineId: byMachine, agentId: by, name: by, engine }, child: { machineId: 'm1', agentId: child, name: child },
+  })
+  /** Agent Messages off, as by default, and the person's say on telling. */
+  const allow = (t: ReturnType<typeof setup>, on = true) => { t.setting(false); setAgentSettingsForTest(root, { agentsTellAgents: on }) }
+
+  it('types more work into a harness it started, with Agent Messages off and no tab, saying who it is from', async () => {
+    const t = setup({ tabs: [] })
+    start('lead', 'web')
+    allow(t)
+    const reply = await t.ask({ action: 'tell', pane: '%1', machine: 'Mac Auto', agentId: 'web', text: 'Now add tests for the footer.' })
+    expect(reply).toMatchObject({ state: 'queued' })
+    const id = reply.id as string
+    expect(t.delivered).toHaveLength(1)
+    const [agentId, text, deliveryId] = t.delivered[0]
+    expect(agentId).toBe('web')
+    expect(deliveryId).toBe(`team:msg:${deliveryKey(id, 'web')}:1`)
+    // Named as the starter's CLI names its machine, not by the host: Agent Messages' directory is not read while off.
+    expect(text).toBe('[from lead · Codex · Mac Auto, the harness that started you: more work. It reads your answer itself.]\n\nNow add tests for the footer.')
+    // No roster note: it has no teammates to message.
+    expect(text).not.toContain('Agent Messages are on')
+    t.deliveryEvent({ deliveryId, sessionId: 'web', state: 'started' })
+    const history = await t.ask({ action: 'history', tabId: 'told' })
+    expect(history.messages).toEqual([expect.objectContaining({ id, statuses: [expect.objectContaining({ agentId: 'web', state: 'delivered', via: 'prompt' })] })])
+  })
+
+  it('is refused until the person turns it on, and for any harness its caller did not start, either way', async () => {
+    const t = setup({ tabs: [] })
+    start('lead', 'web')
+    start('lead', 'gone')
+    t.setting(false)
+    expect(await t.ask({ action: 'tell', pane: '%1', agentId: 'web', text: 'x' })).toMatchObject({ error: 'TELL_OFF', detail: expect.stringContaining('agents-tell-agents') })
+    allow(t)
+    // api was the person's; the started one may not tell its starter; a harness no longer running is said so.
+    expect(await t.ask({ action: 'tell', pane: '%1', agentId: 'api', text: 'x' })).toMatchObject({ error: 'NOT_YOURS' })
+    expect(await t.ask({ action: 'tell', pane: '%3', agentId: 'lead', text: 'x' })).toMatchObject({ error: 'NOT_YOURS' })
+    expect(await t.ask({ action: 'tell', pane: '%1', agentId: 'gone', text: 'x' })).toMatchObject({ error: 'NOT_RUNNING' })
+    expect(await t.ask({ action: 'tell', pane: '%9', agentId: 'web', text: 'x' })).toMatchObject({ error: 'NOT_A_HARNESS' })
+    expect(await t.ask({ action: 'tell', agentId: 'web', text: 'x' })).toMatchObject({ error: 'NOT_A_HARNESS' })
+    expect(await t.ask({ action: 'tell', pane: '%1', agentId: 'web', text: '  ' })).toMatchObject({ error: 'USAGE' })
+    expect(await t.ask({ action: 'tell', pane: '%1', text: 'x' })).toMatchObject({ error: 'USAGE' })
+    expect(await t.ask({ action: 'tell', pane: '%1', agentId: 'web', text: 'x'.repeat(LIMITS.text + 1) })).toMatchObject({ error: 'TOO_LONG' })
+    // What a pane's request names as its sender is never read: it is the pane's harness.
+    expect(await t.ask({ action: 'tell', pane: '%2', from: { machineId: 'm1', agentId: 'lead' }, agentId: 'web', text: 'x' })).toMatchObject({ error: 'NOT_YOURS' })
+    expect(t.delivered).toEqual([])
+  })
+
+  it('from another of the owner\'s machines, is checked against this machine\'s own record of who started it', async () => {
+    const t = setup({ tabs: [] })
+    start('phone', 'web', 'm2', 'claude')
+    allow(t)
+    const from = { machineId: 'm2', agentId: 'phone' }
+    expect(await t.ask({ action: 'tell', from, machine: 'laptop', agentId: 'web', text: 'Ship the fix.' }, OWNER_REMOTE)).toMatchObject({ state: 'queued' })
+    expect(t.delivered[0][1]).toBe('[from phone · Claude Code · laptop, the harness that started you: more work. It reads your answer itself.]\n\nShip the fix.')
+    // Another harness on that machine, or one claiming to be this machine's over the relay.
+    expect(await t.ask({ action: 'tell', from: { machineId: 'm2', agentId: 'other' }, agentId: 'web', text: 'x' }, OWNER_REMOTE)).toMatchObject({ error: 'NOT_YOURS' })
+    expect(await t.ask({ action: 'tell', from: { machineId: 'm1', agentId: 'lead' }, agentId: 'web', text: 'x' }, OWNER_REMOTE)).toMatchObject({ error: 'NOT_FROM_THERE' })
+    expect(await t.ask({ action: 'tell', agentId: 'web', text: 'x' }, OWNER_REMOTE)).toMatchObject({ error: 'INVALID_REQUEST' })
+    expect(t.delivered).toHaveLength(1)
+  })
+
+  it('waits while the harness is busy, and is refused at the next look once the person turns it off', async () => {
+    vi.useFakeTimers()
+    const t = setup({ tabs: [] })
+    start('lead', 'web')
+    allow(t)
+    t.service.start()
+    const reply = await t.ask({ action: 'tell', pane: '%1', agentId: 'web', text: 'More.' })
+    t.deliveryEvent({ deliveryId: t.delivered.at(-1)![2], sessionId: 'web', state: 'rejected', reason: 'team_waiting_draft' })
+    // Off sleeps Agent Messages; the mailbox still looks while this waits, and tries again once its wait is over.
+    t.tick(MAX_BACKOFF_MS)
+    await vi.advanceTimersByTimeAsync(PUMP_MS * 2)
+    expect(t.delivered.length).toBeGreaterThan(1)
+    setAgentSettingsForTest(root, { agentsTellAgents: false })
+    t.deliveryEvent({ deliveryId: t.delivered.at(-1)![2], sessionId: 'web', state: 'rejected', reason: 'team_waiting_draft' })
+    const tries = t.delivered.length
+    t.tick(MAX_BACKOFF_MS)
+    await vi.advanceTimersByTimeAsync(PUMP_MS * 2)
+    expect(t.delivered).toHaveLength(tries)
+    const history = await t.ask({ action: 'history', tabId: 'told' })
+    expect(history.messages).toEqual([expect.objectContaining({ id: reply.id, statuses: [expect.objectContaining({ state: 'failed', reason: expect.stringContaining('agents-tell-agents') })] })])
+    t.service.stop()
+  })
+
+  it('a hand-over under `told` from another machine is no way around the tabs', async () => {
+    const t = setup({ tabs: [] })
+    start('phone', 'web', 'm2', 'claude')
+    allow(t)
+    const answer = await t.ask({ action: 'deliver', message: { id: 'm00000dd', tabId: 'told', text: 'hi', at: 5,
+      from: { machineId: 'm2', agentId: 'phone', name: 'phone', engine: 'claude', machine: 'laptop' }, to: [{ machineId: 'm1', agentId: 'web', name: 'web' }] } }, OWNER_REMOTE)
+    expect(answer.statuses).toEqual([expect.objectContaining({ agentId: 'web', state: 'failed' })])
+    expect(t.delivered).toEqual([])
+  })
+})
+
 describe('from the owner\'s other machines', () => {
-  const incoming = (to = 'api', from = { machineId: 'm2', agentId: 'phone' }) => ({
+  const incoming =(to = 'api', from = { machineId: 'm2', agentId: 'phone' }) => ({
     id: 'm00000aa', tabId: 'app', text: 'from the phone', at: 5,
     from: { ...from, name: 'phone', engine: 'claude', machine: 'laptop' },
     to: [{ machineId: 'm1', agentId: to, name: to }],
@@ -732,6 +831,14 @@ describe('the roster note and the directory', () => {
     expect((await t.ask({ action: 'send', pane: '%5', to: 'b', text: 'hi' })).error).toBe('NOT_A_HARNESS')
     expect((await t.ask({ action: 'send', pane: 'p1:%5', to: 'b', text: 'hi' })).recipients).toEqual([{ name: 'b', state: 'queued' }])
     expect((await t.ask({ action: 'send', pane: 'p2:%5', to: 'b', text: 'hi' })).error).toBe('NOT_A_HARNESS')
+  })
+
+  it('names a versioned pty host\'s pane by its own instance: p2-0.4.21-dev.win1:%7 and p2-h0123456789ab:%7', async () => {
+    const tabs = [{ id: 'app', name: 'app', panes: ['a', 'b', 'c'].map((agentId) => ({ machineId: 'm1', agentId })) }]
+    const t = setup({ tabs, agents: [ptySession('a', '%7', 'claude', 'p2-0.4.21-dev.win1'), ptySession('b', '%7', 'claude', 'p2-h0123456789ab'), session('c', '%6')] })
+    expect((await t.ask({ action: 'send', pane: 'p2-0.4.21-dev.win1:%7', to: 'c', text: 'hi' })).recipients).toEqual([{ name: 'c', state: 'queued' }])
+    expect((await t.ask({ action: 'send', pane: 'p2-h0123456789ab:%7', to: 'c', text: 'hi' })).recipients).toEqual([{ name: 'c', state: 'queued' }])
+    expect((await t.ask({ action: 'send', pane: 'p2-0.4.22:%7', to: 'c', text: 'hi' })).error).toBe('NOT_A_HARNESS')
   })
 
   it('keeps the notes it put in the store, withdraws a gone harness\'s, and sweeps old files nothing waits on', async () => {

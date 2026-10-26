@@ -59,6 +59,7 @@ from `main` before relying on its CI.
 | CLI per-file coverage gates (`test:core`, `test:harnessd`, `test:resume`, `test:orchestrator`, `test:sharing`, `test:remote-viewers`, `test:portability`, `test:local-models`) | nowhere automatically | when you change files those gates cover (`src/core/`, `src/services/`, `src/harnessd/` and each gate's area) |
 | CLI serial, PTY and login-shell specs; macOS process images | CLI release builds and verifies process images only | when you change `src/cable/` serial code, shell startup or process images; run the specs on macOS |
 | CLI end to end (`cli/e2e`) | nightly and **Actions → CLI end to end → Run workflow** | for user-facing CLI flows; start one run on the branch |
+| A guest's harness against an owner's (`npm run test:guest-real`) | nowhere automatically: it needs a Mac with guest access on and a guest user | when you change guest sharing, a guest's launch or environment, Stop, or how pane titles name harnesses: the guest runs as another OS user with `env -i`, and each difference has broken something only a shared Mac showed |
 | Desktop tests on macOS | nowhere automatically | when you change macOS-specific Desktop code; `make desktop-test` on a Mac |
 | TUI native fixtures and connected shells | the TUI release (`release-tui.yml`) | optional locally: `scripts/validate-tui-native.py` |
 | Experience, authoring, Home Assistant and Desktop logging browser checks | **Run workflow** on their own workflows | when you change their area |

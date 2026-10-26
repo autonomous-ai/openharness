@@ -57,7 +57,7 @@ if (process.argv[2] === '__run' && process.env.HARNESSD_RESTARTS === '0') {
     await until('the master to receive the queued bind', () => daemon.log().includes(`core bound (pid ${firstCore},`))
     writeFileSync(file('exit'), '')
     await until('the next core to be ready', () => daemon.log().includes('[cli] ready'), 60_000)
-    const status = await fetch(`http://127.0.0.1:${daemon.port}/api/status`).then(response => response.json()) as any
+    const status = await fetch(`http://127.0.0.1:${daemon.port}/api/status`, { headers: daemon.localHeaders() }).then(response => response.json()) as any
     expect(status.harnessd).toMatchObject({ state: 'running', restarts: 1, lastExit: 'code 75', lastExitReason: 'update', masterPid: master })
     await until('the update to be kept', () => daemon.log().includes('the update stayed up — keeping it'))
     expect(daemon.coresStarted()).toBe(2)

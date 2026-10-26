@@ -72,7 +72,16 @@ enum ProductHealthMeasure {
   frameSlowWait('frame_slow_wait'),
   frameSlowBuild('frame_slow_build'),
   frameSlowRaster('frame_slow_raster'),
-  frameLongCollector('frame_long_collector');
+  frameLongCollector('frame_long_collector'),
+  firstRunStarted('first_run_started'),
+  firstRunReady('first_run_ready'),
+  firstRunWork('first_run_work'),
+  firstRunResponse('first_run_response'),
+  firstRunResponseUnder1m('first_run_response_under_1m'),
+  firstRunResponse1mTo5m('first_run_response_1m_to_5m'),
+  firstRunResponseOver5m('first_run_response_over_5m'),
+  sharedInvitesSent('shared_invites_sent'),
+  sharedInvitesRefused('shared_invites_refused');
 
   const ProductHealthMeasure(this.wire);
   final String wire;
@@ -88,6 +97,15 @@ enum ProductHealthMeasure {
     frameSlowBuild ||
     frameSlowRaster ||
     frameLongCollector => 2,
+    firstRunStarted ||
+    firstRunReady ||
+    firstRunWork ||
+    firstRunResponse ||
+    firstRunResponseUnder1m ||
+    firstRunResponse1mTo5m ||
+    firstRunResponseOver5m ||
+    sharedInvitesSent ||
+    sharedInvitesRefused => 5,
     _ => 1,
   };
 }

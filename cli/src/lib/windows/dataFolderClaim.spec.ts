@@ -2,7 +2,7 @@
 // listen fails with EADDRINUSE as a pipe's does); the real pipe is checked in dataFolderClaim.real.spec.ts.
 import { randomBytes } from 'node:crypto'
 import { connect, createServer, type Server } from 'node:net'
-import { mkdirSync, mkdtempSync, realpathSync, rmSync } from 'node:fs'
+import { chmodSync, mkdirSync, mkdtempSync, realpathSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { claimDataFolder, dataFolderClaimPipe, type DataFolderClaim, type DataFolderClaimDeps } from './dataFolderClaim.js'
@@ -120,6 +120,18 @@ describe.skipIf(process.platform === 'win32')('the data folder claim, a Unix soc
     }
   })
 
+  // DESKTOP-0TFH0OJ, 2026-10-23: a core started over ssh as administrator held the claim; the Desktop then started one
+  // with an ordinary token, whose ask was refused with EPERM. It read that as "not Harness" and ran beside the first:
+  // two hosts wrote one observer file and claimed the same deliveries. A socket nobody may write stands in for that pipe.
+  it.skipIf(process.getuid?.() === 0)('refuses the start when the holder of its name may not be asked', async () => {
+    const { dataDir, deps } = folder()
+    await take(dataDir, TOKEN, { ...deps, holder: { pid: process.pid, corePid: process.pid } })
+    const path = deps.pipeFor!(dataDir)
+    chmodSync(path, 0)
+    await expect(claimDataFolder(dataDir, TOKEN, deps)).rejects.toMatchObject({ code: 'EADDRINUSE',
+      message: `${path} is held by something this process may not open, most likely a Harness daemon started as administrator or in another Windows session. Stop it there, then start Harness again.` })
+  })
+
   it('starts without the claim when the core holding it proves another token', async () => {
     const { dataDir, deps } = folder()
     await take(dataDir, Buffer.alloc(32, 9), { ...deps, holder: { pid: process.pid, corePid: process.pid } })
@@ -127,10 +139,19 @@ describe.skipIf(process.platform === 'win32')('the data folder claim, a Unix soc
   })
 
   it('waits for the core of a master that is gone, then claims the folder once it leaves', async () => {
-    const { dataDir, deps } = folder({ alive: () => false, pollMs: 20 })
+    let orphanObserved!: () => void
+    const waiting = new Promise<void>((resolve) => { orphanObserved = resolve })
+    const { dataDir, deps } = folder({ alive: () => false, pollMs: 20, log: (line) => {
+      lines.push(line)
+      orphanObserved()
+    } })
     const orphan = await claimDataFolder(dataDir, TOKEN, { ...deps, holder: { pid: 41, corePid: 42 } })
-    setTimeout(() => orphan.release(), 150)
-    expect((await take(dataDir, TOKEN, deps)).held).toBe(true)
+    const claiming = take(dataDir, TOKEN, deps)
+    // A timed close could cut the holder's proof in half under CI load and test the unrelated
+    // "not Harness" path. Release only after the claimant has proved and observed the orphan.
+    await waiting
+    orphan.release()
+    expect((await claiming).held).toBe(true)
     expect(lines).toContain(`[cli] this data folder is still claimed by the core (pid 42) of a master that is gone (pid 41) — waiting for it to leave`)
   })
 

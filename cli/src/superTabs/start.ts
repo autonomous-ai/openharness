@@ -3,7 +3,10 @@ import { parseRuntimeProfile } from '../lib/runtimeProfileWire.js'
 import { randomUUID } from 'node:crypto'
 import { openDaemon, type Daemon, type Where } from '../agentClient/daemon.js'
 import { admission, quotaOf, type Requirements } from './capacity.js'
-import { identifier, object } from './host.js'
+import { groupSkillMode, identifier, object } from './host.js'
+import { permissionModeFlags } from '../lib/engineLaunch.js'
+import type { AgentEngine } from '../engines/types.js'
+import { swarmSkillUse, type SwarmSkillMode } from '../lib/swarmSkills.js'
 
 type Json = Record<string, unknown>
 export type ScopedRequest = (payload: Json) => Promise<Json>
@@ -14,7 +17,7 @@ const number = (v: unknown) => typeof v === 'number' && Number.isFinite(v) ? v :
 const PRE_DISPATCH_REFUSALS = new Set([
   'INVALID_ENGINE', 'INVALID_CWD', 'INVALID_PROJECT_SOURCE', 'INVALID_REPOSITORY',
   'INVALID_GRID', 'INVALID_CODEX_HOME', 'INVALID_DSH', 'INVALID_PROMPT',
-  'PROMPT_TOO_LONG', 'PROMPT_UNSUPPORTED', 'INVALID_AGENT', 'AGENT_UNSUPPORTED',
+  'INVALID_SWARM_ROLE', 'PROMPT_TOO_LONG', 'PROMPT_UNSUPPORTED', 'INVALID_AGENT', 'AGENT_UNSUPPORTED',
   'INVALID_PERMISSION_MODE', 'INVALID_SESSION', 'INVALID_STARTED_BY', 'UNSUPPORTED_ON_REMOTE',
 ])
 // A daemon that cannot take the launch model answers these before it makes a receipt, so the same creation id can be
@@ -48,6 +51,35 @@ export async function inspectCapacity(target: Daemon, request: Json) {
   return { capacity, engine, quota, ...admission(capacity, engine, quota, requirements, !!request.codexHome || !!request.gridModel) }
 }
 
+/** What the start reads from the Swarm about the project whose group the agent joins:
+ *
+ * - its skills, so the agent starts on that text and is never moved to it at once. A project from before modes, or a
+ *   state this start cannot read, is orchestration; the host moves a running agent to its project's mode
+ *   (superTabs/host.ts) if that guess is wrong.
+ * - whether the agent does another person's project work (the project's owner is not the machine's owner) on a server
+ *   with the Harness GitHub App, and whom that work is for. Then git and gh in the session use the app's token for its
+ *   task instead of the machine owner's GitHub login (lib/swarmGitHub.ts, docs/swarm-github-app.md). A person's own
+ *   agents, a server without the app, and a state this start cannot read launch as before.
+ */
+export async function projectFacts(scoped: ScopedRequest, conversationId: unknown, machineOwnerId: unknown):
+  Promise<{ mode: SwarmSkillMode; github: { requester: string } | null }> {
+  const answer = object(object(await scoped({ action: 'status' }).catch(() => ({}))).value)
+  const state = object(answer.state)
+  const group = (Array.isArray(state.conversations) ? state.conversations.map(object) : []).find(group => group.id === conversationId)
+  const mode = groupSkillMode(state, group)
+  // A Swarm from before projects is one project, its owner's.
+  const project = Array.isArray(state.projects) ? state.projects.map(object).find(p => p.id === (group?.projectId ?? 'lead')) : { ownerId: state.ownerId }
+  const ownerId = project?.ownerId
+  const requester = (Array.isArray(state.people) ? state.people.map(object) : []).find(p => p.id === ownerId)?.email
+  const github = answer.githubApp === true && group && identifier(ownerId) && identifier(machineOwnerId) && ownerId !== machineOwnerId
+    && typeof requester === 'string' && requester ? { requester } : null
+  return { mode, github }
+}
+
+/** What an agent doing another person's project work is told about git, gh and its pull requests. */
+export const githubPromptLine = (requester: string) => `git and gh here use a Harness GitHub App token for this project's repository while you `
+  + `have a task, not this computer's own GitHub login. Start each pull request body with: Requested by ${requester} through Harness.`
+
 /** Whether the machine launches `engine` with a model of its own for that session (lib/launchModel.ts). A daemon from
  *  before the flags does not name the field, and agent_create would silently drop a model it does not know. */
 const launchesWithModel = (capacity: Json, engine: unknown) => Array.isArray(capacity.launchModel) && capacity.launchModel.includes(engine)
@@ -58,12 +90,27 @@ const launchesWithModel = (capacity: Json, engine: unknown) => Array.isArray(cap
 export async function startAgent(input: Json, scoped: ScopedRequest, where: Where, open: typeof openDaemon = openDaemon): Promise<Json> {
   let startId = input.startId
   let routed: unknown
+  let permissionWarning: string | undefined
   if (input.action === 'start') {
     // The routing decision belongs to the command, not to the machine-side request.
     const { routeDecisionId, overrideReason, ...request } = object(input.request)
     routed = routeDecisionId
-    const result = requireSuccess(await scoped({ action: 'command', operationId: input.operationId,
-      command: { type: 'agent.start', request, ...(routeDecisionId ? { routeDecisionId } : {}), ...(overrideReason ? { overrideReason } : {}) } }))
+    const submit = (request: Json) => scoped({ action: 'command', operationId: input.operationId,
+      command: { type: 'agent.start', request, ...(routeDecisionId ? { routeDecisionId } : {}), ...(overrideReason ? { overrideReason } : {}) } })
+    let reply = await submit({ ...request, permissionMode: 'full' })
+    // Older backends refused this field before recording a start. A recorded
+    // legacy retry may instead report a hash mismatch after its reply was lost:
+    // replay its exact payload with the same operation ID to recover that receipt.
+    // Other refusals and uncertain replies never authorize another intent.
+    if (reply.error === 'OPERATION_REUSED' || (reply.error === 'OUTSIDE_CONTRIBUTION' && typeof reply.detail === 'string' &&
+      reply.detail.endsWith('Refused: permissionMode (it runs with its own default account settings, so leave it out).'))) {
+      const { permissionMode: _mode, ...legacyRequest } = request
+      if (reply.error === 'OUTSIDE_CONTRIBUTION') {
+        permissionWarning = "This backend cannot request full permissions. Older machine hosts run the agent with the machine's default. Update Harness on the backend and machine."
+      }
+      reply = await submit(legacyRequest)
+    }
+    const result = requireSuccess(reply)
     startId = object(result.result).startId
   }
   if (!identifier(startId)) throw new Error('The start has no durable receipt. Do not create an agent without it.')
@@ -72,10 +119,18 @@ export async function startAgent(input: Json, scoped: ScopedRequest, where: Wher
   const request = object(start.request), creationId = start.creationId
   if (!identifier(request.machineId) || !identifier(creationId)) throw new Error('This start receipt is invalid.')
   if (start.error) return { error: 'START_FAILED', startId, detail: start.error }
-  if (start.harnessId && (!start.poolGeneration || start.poolSettled)) return { ok: true, startId, machineId: request.machineId, harnessId: start.harnessId }
+  if (!start.dispatched && !start.harnessId && request.engine !== 'claude' && request.engine !== 'codex') {
+    const detail = 'A Swarm agent runs only Claude Code or Codex.'
+    requireSuccess(await scoped({ action: 'command', operationId: `unsupported-${randomUUID()}`,
+      command: { type: 'agent.startFailed', startId, error: detail } }))
+    return { error: 'SWARM_ENGINE', startId, detail }
+  }
+  if (start.harnessId && (!start.poolGeneration || start.poolSettled)) return { ok: true, startId, machineId: request.machineId, harnessId: start.harnessId,
+    ...(permissionWarning ? { permissionWarning } : {}) }
   // Contributed capacity is executed by its owner. A collaborator receives no
   // machine credentials and cannot issue arbitrary commands to that computer.
   if (start.poolGeneration && input.hostDispatch !== true) return { ok: true, queued: true, startId, machineId: request.machineId,
+    ...(permissionWarning ? { permissionWarning } : {}),
     detail: 'Queued on the contributed machine. Resume this start ID to read its receipt.' }
   const target = await open(where, request.machineId)
   /** What the agent runs now, as its frame says; null when the frame cannot say. */
@@ -119,13 +174,29 @@ export async function startAgent(input: Json, scoped: ScopedRequest, where: Wher
       // native dispatch, even if retrying the backend operation returns a receipt.
       requireSuccess(await scoped({ action: 'command', operationId: `dispatch-${randomUUID()}`,
         command: { type: 'agent.startDispatch', startId } }))
-      const payload: Json = { engine: request.engine, name: request.name, creationId, startedBy: 'agent',
-        prompt: `You are joining a shared Super Tab. Run harness super-tab --tab ${input.tabId} status until this harness appears in the roster. Do not begin project work yet. Your lead will assign work in conversation ${request.conversationId}. Reply in that conversation using harness super-tab --tab ${input.tabId} post ${request.conversationId} 'your message' UNIQUE_OPERATION_ID. Run harness super-tab help for commands. If sandbox restrictions block this local command, request permission to run it outside the sandbox.`,
+      // Both direct and contributed-host starts reach this boundary. Existing
+      // native receipts are read above and never have their permissions changed.
+      // Engines without a full mode retain their existing approving launch flags.
+      // The backend starts a Reviewer only on Claude Code or Codex, the engines with built-in Swarm skills.
+      const skilled = ['claude', 'codex'].includes(String(request.engine)), reviewer = request.role === 'reviewer'
+      const role = reviewer ? 'review' : 'dev', facts = skilled ? await projectFacts(scoped, request.conversationId, start.machineOwnerId) : null
+      // A contributed machine's host cannot read the tab as a Lead does: it asked the backend whose work this is when it
+      // readied the start, and prepared it with the app's token if it is another person's (superTabs/projectFolder.ts).
+      const hosted = input.hostDispatch === true ? object(input.github) : null
+      const mode = facts?.mode ?? null
+      const github = hosted ? (typeof hosted.requester === 'string' && hosted.requester ? { requester: hosted.requester } : null) : facts?.github ?? null
+      const payload: Json = { engine: request.engine, name: request.name, creationId, startedBy: 'agent', bypassPermission: true,
+        ...(permissionModeFlags(request.engine as AgentEngine, 'full') ? { permissionMode: 'full' } : {}),
+        ...(mode ? { swarmRole: role, swarmSkillMode: mode } : {}),
+        ...(github ? { swarmGitHub: true } : {}),
+        prompt: `You are joining a shared Super Tab${reviewer ? ' as a Reviewer' : ''}. ${mode ? `${swarmSkillUse(role, mode)} ` : ''}Run harness super-tab --tab ${input.tabId} status until this harness appears in the roster. ${reviewer
+          ? `Do not review yet. You review work in conversation ${request.conversationId} when it is ready for review.`
+          : `Do not begin project work yet. Your lead will assign work in conversation ${request.conversationId}.`} Reply in that conversation using harness super-tab --tab ${input.tabId} post ${request.conversationId} 'your message' UNIQUE_OPERATION_ID. Run harness super-tab help for commands. If sandbox restrictions block this local command, request permission to run it outside the sandbox.${github ? ` ${githubPromptLine(github.requester)}` : ''}`,
         ...(request.worktree ? { projectSource: 'worktree', gitSource: request.cwd, branchName: `super-tab/${startId}`,
           // No branch named: the repository's default branch, fetched, not the host checkout's old HEAD.
           ...(request.branchRef ? { branchRef: request.branchRef } : { branchBase: 'default' }) } : { cwd: request.cwd }),
       }
-      for (const key of ['permissionMode', 'codexHome', 'gridModel', 'gridName']) if (request[key] !== undefined) payload[key] = request[key]
+      for (const key of ['codexHome', 'gridModel', 'gridName']) if (request[key] !== undefined) payload[key] = request[key]
       // The routed model goes on the command line of this session alone. Typing /model into the pane afterwards saves
       // it as the person's default in their own Claude settings (manual run 2, 2026-10-19).
       launched = canLaunch && launchesWithModel(resources.capacity, request.engine)
@@ -185,8 +256,21 @@ export async function startAgent(input: Json, scoped: ScopedRequest, where: Wher
     const matched = profile && profile.sessionId === nativeId && profile.engine === frame.engine ? profile : null
     const configuration = { engine: text(frame.engine) ?? String(request.engine), model: matched?.model ?? null, effort: matched?.effort ?? null,
       contextWindow: number(frame.contextWindow), engineVersion: text(frame.engineVersion) }
-    const joined = start.harnessId ? { result: {} } : requireSuccess(await scoped({ action: 'command', operationId: `joined-${startId}`,
-      command: { type: 'agent.started', startId, harnessId: nativeId, configuration } }))
+    const startedSession = typeof frame.sessionId === 'string' && frame.sessionId && typeof frame.createdAt === 'string' && Number.isFinite(Date.parse(frame.createdAt))
+      ? { sessionId: frame.sessionId, createdAt: frame.createdAt } : undefined
+    // New native frames have their creation time before the engine binds. Wait for its original session identity.
+    if (typeof frame.createdAt === 'string' && !startedSession) return { error: 'START_PENDING', startId, creationId,
+      detail: 'Waiting for the launched engine to record its session identity. Resume this same start request.' }
+    const join = { type: 'agent.started', startId, harnessId: nativeId, configuration }
+    let joined: Json = { result: {} }
+    if (!start.harnessId) {
+      let reply = await scoped({ action: 'command', operationId: `joined-${startId}`, command: { ...join, ...(startedSession ? { startedSession } : {}) } })
+      if (startedSession && ['VALIDATION_ERROR', 'INVALID_REQUEST'].includes(String(reply.error))) {
+        // Older backends retain the launch, but cannot attest its native identity for automatic stopping.
+        reply = await scoped({ action: 'command', operationId: `joined-legacy-${startId}`, command: join })
+      }
+      joined = requireSuccess(reply)
+    }
     await target.request('super_tabs', { action: 'wake' }).catch(() => {})
     await target.request('harness_share_rosters', {}).catch(() => {})
     // A launched agent already runs the routed model. Any other (Codex, a grid model, a machine that does not list the
@@ -201,12 +285,17 @@ export async function startAgent(input: Json, scoped: ScopedRequest, where: Wher
     let switching = routedModel && launched === false
     if (routedModel && launched === undefined) {
       // This invocation did not send the create, and the one that did may have launched with the model, fallen back to
-      // the switch, or been cut off before either. Only the agent's frame says which; /model is never typed blind, as
-      // Claude Code would save it as the person's default.
+      // the switch, or been cut off before either. A concrete runtime difference still needs a switch. A temporary
+      // automatic effort is not a difference when the completed native receipt proves that effort was passed at launch.
+      // /model is never typed blind, as Claude Code would save it as the person's default.
       const ran = await ranNow(nativeId, String(request.engine))
       const same = (wanted: string, actual: string) => wanted === 'default' || wanted === 'auto' || wanted === actual
       if (!ran) modelWarning = `Could not confirm that the agent runs ${model} ${effort}; its configuration could not be read, so it was left as it is.`
-      else switching = !same(String(model), ran.model) || !same(String(effort), ran.effort)
+      else {
+        const accepted = object(native.launchModel)
+        const effortStillUnknown = ran.effort === 'auto' && accepted.effort === effort && same(String(model), ran.model)
+        switching = !same(String(model), ran.model) || (!same(String(effort), ran.effort) && !effortStillUnknown)
+      }
     }
     if (switching) {
       const selectedModel = encodeRuntimeProfile({ sessionId: nativeId, engine: String(request.engine) as never, model: String(model), effort: effort as never })
@@ -237,6 +326,7 @@ export async function startAgent(input: Json, scoped: ScopedRequest, where: Wher
         }
       }
     }
-    return { ok: true, startId, machineId: request.machineId, harnessId: nativeId, ...object(joined.result), ...(modelWarning ? { modelWarning } : {}) }
+    return { ok: true, startId, machineId: request.machineId, harnessId: nativeId, ...object(joined.result),
+      ...(permissionWarning ? { permissionWarning } : {}), ...(modelWarning ? { modelWarning } : {}) }
   } finally { target.close() }
 }

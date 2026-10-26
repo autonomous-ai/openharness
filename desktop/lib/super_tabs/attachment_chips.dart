@@ -6,11 +6,12 @@ import '../shared/widgets/app_dialog.dart';
 import '../widgets/desktop_chrome.dart';
 import '../widgets/update_notice.dart' show formatDownloadSize;
 import 'attachment_upload.dart';
+import 'attachment_viewer.dart';
 import 'model.dart';
 
 /// The files a message carries, one chip each. The chat never loads a file by
-/// itself: a chip only names it, and a click opens it — an image in a viewer
-/// that fetches it then, anything else in the browser.
+/// itself: a chip only names it, and a click opens it — an image or a text
+/// file in a viewer that fetches it then, anything else in the browser.
 class SuperTabAttachmentChips extends StatelessWidget {
   const SuperTabAttachmentChips(this.attachments, {super.key});
 
@@ -45,6 +46,11 @@ class _AttachmentChip extends StatelessWidget {
       await showAppDialog<void>(
         context: context,
         builder: (_) => _ImageViewer(file: file, url: url),
+      );
+    } else if (opensAsText(file)) {
+      await showAppDialog<void>(
+        context: context,
+        builder: (_) => AttachmentTextViewer(file: file, url: url),
       );
     } else {
       await openInBrowser(url);
@@ -135,19 +141,7 @@ class _ImageViewer extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 12),
-          Row(
-            mainAxisAlignment: MainAxisAlignment.end,
-            children: [
-              TextButton(
-                onPressed: () => openInBrowser(url),
-                child: const Text('Open in browser'),
-              ),
-              TextButton(
-                onPressed: () => Navigator.pop(context),
-                child: const Text('Close'),
-              ),
-            ],
-          ),
+          AttachmentViewerActions(file: file, url: url),
         ],
       ),
     ),

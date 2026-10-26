@@ -106,6 +106,85 @@ void main() {
   );
 
   testWidgets(
+    'a ready replacement refreshes the terminal without changing member identity',
+    (tester) async {
+      final f = SuperTabLaunchFixture();
+      f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Pilot');
+      final member = {
+        'id': 'stable-member',
+        'name': 'Engineer',
+        'displayName': 'Sage',
+        'machineId': 'm',
+        'harnessId': 'native-original',
+        'contributorId': 'owner',
+        'configuration': {'engine': 'codex'},
+      };
+      f.connection.server.state['agents'] = [member];
+      (f.connection.server.state['conversations'] as List)[0]['agentIds'] = [
+        'stable-member',
+      ];
+      f.app.machineStates['m']!.agents = const [
+        Agent(
+          id: 'native-original',
+          name: 'Original',
+          engine: 'codex',
+          terminalAvailable: true,
+        ),
+        Agent(
+          id: 'native-replacement',
+          name: 'Replacement',
+          engine: 'claude',
+          terminalAvailable: true,
+        ),
+      ];
+      final c = await f.app.superTabs.open(tabId);
+      await c.refresh();
+      c.selectGroupTerminals('lead');
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: ListenableBuilder(
+              listenable: f.app,
+              builder: (_, _) => SuperTabWorkspace(
+                app: f.app,
+                canvas: const Text('Native terminals'),
+                onAddAgent: (_) {},
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(f.app.panes.single.agentId, 'native-original');
+
+      // A replacement from another client updates the binding while both
+      // native inventories remain ready, with the same stable member ID.
+      member['harnessId'] = 'native-replacement';
+      member['configuration'] = {'engine': 'claude'};
+      await c.refresh();
+      await tester.pumpAndSettle();
+      expect(c.snapshot!.agents.single.id, 'stable-member');
+      expect(c.snapshot!.agentName('stable-member'), 'Sage');
+      expect(c.selectedId, 'lead');
+      expect(f.app.panes.single.agentId, 'native-replacement');
+      expect(
+        f.connection.calls.where(
+          (call) =>
+              call.$1 == 'agent_resume' ||
+              call.$1 == 'agent_create' ||
+              call.$1 == 'agent_close',
+        ),
+        isEmpty,
+      );
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox());
+      await c.flush();
+      f.app.superTabs.dispose();
+      await tester.pump();
+    },
+  );
+
+  testWidgets(
     'group terminals keep all members when opening one and ignore pane close',
     (tester) async {
       final f = SuperTabLaunchFixture();

@@ -27,6 +27,7 @@ export const ENGINE_CLI_COMMANDS: Readonly<Record<AgentEngine, string>> = {
   cursor: 'cursor-agent',
   opencode: 'opencode',
   pi: 'pi',
+  omp: 'omp',
   hermes: 'hermes',
   commandcode: 'cmd',
   devin: 'devin',
@@ -75,6 +76,7 @@ export const ENGINE_CLI_ALIASES: Readonly<Record<AgentEngine, readonly string[]>
   cursor: ['agent', 'cursor-agent'],
   opencode: ['opencode'],
   pi: ['pi'],
+  omp: ['omp'],
   hermes: ['hermes', 'hermes-agent'],
   commandcode: ['cmd', 'command-code', 'commandcode'],
   devin: ['devin'],
@@ -441,6 +443,7 @@ export function enginePathOverride(engine: AgentEngine): string | undefined {
     case 'cursor': return env.CURSOR_PATH
     case 'opencode': return env.OPENCODE_PATH
     case 'pi': return env.PI_PATH
+    case 'omp': return env.OMP_PATH
     case 'hermes': return env.HERMES_PATH
     case 'commandcode': return env.COMMANDCODE_PATH
     case 'devin': return env.DEVIN_PATH
@@ -463,6 +466,7 @@ export function engineBin(engine: AgentEngine, platform: NodeJS.Platform = proce
     case 'cursor': return env.CURSOR_PATH || ENGINE_CLI_COMMANDS.cursor
     case 'opencode': return env.OPENCODE_PATH || ENGINE_CLI_COMMANDS.opencode
     case 'pi': return env.PI_PATH || ENGINE_CLI_COMMANDS.pi
+    case 'omp': return env.OMP_PATH || ENGINE_CLI_COMMANDS.omp
     case 'hermes': return env.HERMES_PATH || ENGINE_CLI_COMMANDS.hermes
     // command-code's package `bin` lists `cmd` first and its README uses it. On Windows `cmd` is the command processor,
     // found on PATH before npm's shim (the Windows VM, F7): there it is `command-code`, from the same package.

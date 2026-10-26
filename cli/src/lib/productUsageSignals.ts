@@ -14,11 +14,11 @@ const actions = { agent_create: 'create', agent_resume: 'resume', agent_restart:
 } as const
 const unmeasured = (..._args: unknown[]): void => {}
 const setup = new Set(['TMUX_UNAVAILABLE', 'PTY_HOST_UNAVAILABLE', 'TMUX_TOO_OLD_FOR_DSH', 'TMUX_TOO_OLD_FOR_GRID',
-  'ENGINE_UNAVAILABLE', 'NATIVE_LAUNCH_HELD', 'DSH_MATERIALIZE_FAILED', 'SPAWN_FAILED', 'REGISTRATION_FAILED', 'GRID_CONFIG_FAILED'])
+  'ENGINE_UNAVAILABLE', 'NATIVE_LAUNCH_HELD', 'DSH_MATERIALIZE_FAILED', 'SWARM_SKILL_FAILED', 'SPAWN_FAILED', 'REGISTRATION_FAILED', 'GRID_CONFIG_FAILED'])
 const auth = new Set(['UNAUTHORIZED', 'AUTH_REQUIRED', 'LOGIN_REQUIRED', 'OWNER_REQUIRED', 'E2EE_REQUIRED'])
 const unavailable = new Set(['SERVICE_UNAVAILABLE', 'SERVICE_FAILED', 'GRID_UNAVAILABLE', 'API_UNAVAILABLE',
   'UNSUPPORTED', 'UNSUPPORTED_ON_REMOTE', 'TIMEOUT', 'NATIVE_UNAVAILABLE'])
-const invalid = new Set(['INVALID_ENGINE', 'INVALID_CWD', 'CWD_NOT_FOUND', 'INVALID_GRID', 'INVALID_DSH',
+const invalid = new Set(['INVALID_ENGINE', 'INVALID_CWD', 'CWD_NOT_FOUND', 'INVALID_GRID', 'INVALID_DSH', 'INVALID_SWARM_ROLE',
   'INVALID_MODEL', 'INVALID_PERMISSION_MODE', 'INVALID_CREATION_ID', 'INVALID_PROJECT_SOURCE', 'WORKTREE_BUSY'])
 const resumeReasons = new Map<string, ResumeReason>([
   ['TMUX_UNAVAILABLE', 'runtime_unavailable'], ['NATIVE_LAUNCH_HELD', 'runtime_unavailable'],
@@ -61,7 +61,7 @@ export interface ProductUsageLaunchSignal {
   phase: 'start' | 'pending' | 'created' | 'failed' | 'cancelled' | 'unconfirmed' | 'work_requested'
   origin?: 'interactive' | 'tool'
   failure?: Failure
-  /** The listed code of an `other` failure, or of a created launch's late one (`late`). */
+  /** The listed code of an `other` or setup failure, or of a created launch's late one (`late`). */
   code?: LaunchErrorCode
   wait?: 'install' | 'model' | 'native' | 'other'
   /** The engine a new launch asked for (`start`), as a fixed name: an installation's first launch counts it. */
@@ -96,7 +96,7 @@ export function productUsageLaunch(type: string, id: unknown, emit: (signal: Pro
   return (error: unknown, state: unknown, agent: unknown, held: unknown) => {
     if (error != null || state === 'failed') {
       const failure = failureKind(error)
-      send({ phase: 'failed', failure, ...(failure === 'other' ? { code: launchErrorCode(error) } : {}) })
+      send({ phase: 'failed', failure, ...(failure === 'other' || failure === 'setup' ? { code: launchErrorCode(error) } : {}) })
     }
     else if (state === 'created' || agent) send(createdSignal(agent))
     else if (state === 'pending') send({ phase: 'pending', wait: held === 'install' ? 'install' : held === 'models' ? 'model' : held === 'native' ? 'native' : 'other' })
@@ -161,6 +161,15 @@ export function productUsageRequest(type: string, emit: (metric: ProductUsageMet
       // Which code an `other` refusal of a create or a resume had: 22 creates and 9 resumes were `other` on
       // 2026-10-16 (production counters), with nothing to say why. A fixed name from the list, or unlisted.
       if (kind === 'other' && (action === 'create' || action === 'resume')) count(`error_code_${launchErrorCode(error)}`)
+      // The 2026-10-21 setup spike (10 failed launches, 4 phone creates) named no prerequisite. These new
+      // families preserve the old `other`-by-code totals and keep the phone's creates apart from Desktop's.
+      if (kind === 'setup' && action === 'create') {
+        const code = launchErrorCode(error)
+        count(`error_setup_code_${code}`)
+        if (origin === 'phone') {
+          try { emit(`phone_create_error_setup_code_${code}` as ProductUsageMetric) } catch { /* Optional measurement. */ }
+        }
+      }
       // A delete's or a restart's, whatever its kind: the phone's 3 delete refusals were `other` and its 2 restart
       // refusals `setup` on 2026-10-19, a kind of nine codes, with nothing to say which.
       if (action === 'delete' || action === 'restart') {

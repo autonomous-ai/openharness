@@ -57,7 +57,7 @@ import {
   P2pSignalRateGuard,
   terminalP2pPolicy,
 } from './p2pSignaling.js'
-import { presenceTracker, recordRemoteUsage, touchClientOnlineDay } from './dailyTracking.js'
+import { presenceTracker, recordRemoteUsage, touchClientOnlineDay, type ClientBuild } from './dailyTracking.js'
 import { isBackendOnlyDownType } from './backendOnlyFrames.js'
 
 // How often an open mobile/web socket refreshes its person's `user_daily_client_presence` row.
@@ -73,6 +73,15 @@ const wss = createWss(WS_LIMITS.web, { echoFirstProtocol: true })
 const DEVICE_RESEED_MS = 30_000
 // Trailing debounce for list re-derivations poked by machines_watch (see scheduleWatchAgents).
 const WATCH_DEBOUNCE_MS = 250
+
+/** Who is on the other end of a per-user socket, as the client declares it: the surface (`?client=`), and
+ *  for the phone the release (`?release=`, the public x.y.z) and whether the build is a debug or simulator
+ *  one (`?debug=1`). An app that predates the last two sends neither: no release, not a debug build. */
+export function declaredClient(query: URLSearchParams): { surface: 'mobile' | 'web' | null; build: ClientBuild } {
+  const declared = query.get('client')
+  const surface = declared === 'mobile' || declared === 'web' ? declared : null
+  return { surface, build: surface === 'mobile' ? { release: query.get('release'), debug: query.get('debug') === '1' } : {} }
+}
 
 /** HTTP upgrade hook for `/api/web-ws`. Subprotocol = SSO access token or legacy agent apiKey. */
 export function handleWebUpgrade(req: IncomingMessage, socket: Duplex, head: Buffer): void {
@@ -97,29 +106,31 @@ export function handleWebUpgrade(req: IncomingMessage, socket: Duplex, head: Buf
       const requestedEnvironment = parseAutonomousEnvironment(query.get('autonomousEnv'))
       // Who is on the other end, as the client declares it: the mobile app and the web viewer say so;
       // the daemon's relay (and any older client) says nothing and is never counted as a person.
-      const declared = query.get('client')
-      const surface = declared === 'mobile' || declared === 'web' ? declared : null
+      const { surface, build } = declaredClient(query)
       const user = await authenticateAccessToken(cred, requestedEnvironment)
       if (socket.destroyed) return
-      wss.handleUpgrade(req, socket, head, (ws) => attachUserClient(ws, user, surface))
+      wss.handleUpgrade(req, socket, head, (ws) => attachUserClient(ws, user, surface, build))
     } catch (err) {
       if (socket.destroyed) return
       const invalid = err instanceof SsoAuthError && err.code === 'INVALID_TOKEN'
       const mismatch = err instanceof SsoAuthError &&
         (err.code === 'AUTONOMOUS_ENV_MISMATCH' || err.code === 'AUTONOMOUS_ENV_NOT_ALLOWED')
-      const code = invalid ? 4401 : mismatch ? 4403 : 1013
+      // A Mac's team account (lib/teamSession.ts) never selects or attaches to a machine here: refused for good,
+      // not an expired sign-in to refresh and retry.
+      const team = err instanceof SsoAuthError && err.code === 'TEAM_SESSION_LIMITED'
+      const code = invalid ? 4401 : mismatch || team ? 4403 : 1013
       const reason = invalid
         ? 'auth expired'
         : mismatch
           ? `env:${err.requiredEnv ?? 'prod'}`
-          : 'auth service unavailable'
+          : team ? 'team sign-in' : 'auth service unavailable'
       wss.handleUpgrade(req, socket, head, (ws) => { try { ws.close(code, reason) } catch { /* ignore */ } })
     }
   })().catch((err) => { logger.warn('web-ws upgrade failed', { error: String(err) }); socket.destroy() })
 }
 
 /** PER-USER socket: starts unattached; `machine_select` scopes it to one owned machine at a time. */
-function attachUserClient(ws: WebSocket, user: AuthUser, surface: 'mobile' | 'web' | null): void {
+function attachUserClient(ws: WebSocket, user: AuthUser, surface: 'mobile' | 'web' | null, build: ClientBuild): void {
   let client: HubClient | null = null
   let currentAgentId: string | null = null
   let currentBinding: Machine | null = null
@@ -143,7 +154,7 @@ function attachUserClient(ws: WebSocket, user: AuthUser, surface: 'mobile' | 'we
   let presenceTimer: ReturnType<typeof setInterval> | null = null
   if (surface) {
     const touchPresence = presenceTracker(
-      (now, isNewConnection) => touchClientOnlineDay(user.sub, surface, now, { isNewConnection }),
+      (now, isNewConnection) => touchClientOnlineDay(user.sub, surface, now, { isNewConnection, build }),
       (kind, err) => logger.warn('client presence tracking failed', { userId: user.sub, surface, kind, error: String(err) }),
       { pingFloorMs: WEB_CLIENT_PRESENCE_WRITE_MS, openFloorMs: 0 },
     )

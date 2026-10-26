@@ -4,6 +4,8 @@ import {
   DEFAULT_SUPERVISOR_OPTIONS, HAND_OVER_GRACE_MS, Supervisor, describeExit, namesTheDisk, type CoreHandle, type ReexecOutcome, type ResumeState, type SupervisorDeps, type SupervisorOptions,
   type SupervisorStatus,
 } from './supervisor.js'
+import type { PtyRestore } from '../lib/windows/ptyInstall.js'
+import { keepStaged, rollBackStaged } from '../lib/windows/ptyUpdate.js'
 
 const MIB = 1024 * 1024
 
@@ -410,8 +412,8 @@ describe('Supervisor', () => {
       const supervisor = make()
       supervisor.start()
       core().up()
-      supervisor.updateStaged('9.9.9')
-      supervisor.updateStaged('9.9.9')
+      supervisor.updateStaged({ version: '9.9.9' })
+      supervisor.updateStaged({ version: '9.9.9' })
       expect(core().sent.filter((message) => message.type === 'harnessd:update')).toEqual([{ type: 'harnessd:update', version: '9.9.9' }])
       expect(lines.at(-1)).toBe('[harnessd] the updater staged 9.9.9 — asking the core to hand over')
       core().exit(CORE_EXIT_UPDATE)
@@ -429,7 +431,7 @@ describe('Supervisor', () => {
       const supervisor = make()
       supervisor.start()
       core().up()
-      supervisor.updateStaged('9.9.9')
+      supervisor.updateStaged({ version: '9.9.9' })
       live(HAND_OVER_GRACE_MS - 1_000)
       expect(core().kills).toEqual([])
       live(1_000)
@@ -452,7 +454,7 @@ describe('Supervisor', () => {
       expect(core().env.HARNESSD_SAFE_MODE).toBe('crash-loop')
       core().exit(1)
       expect(supervisor.status().state).toBe('restarting')
-      supervisor.updateStaged('9.9.9')
+      supervisor.updateStaged({ version: '9.9.9' })
       expect(lines.at(-1)).toBe('[harnessd] the updater staged 9.9.9 — the next core starts on it')
       vi.advanceTimersByTime(0)
       expect(core().env.HARNESSD_SAFE_MODE).toBeUndefined()
@@ -465,7 +467,7 @@ describe('Supervisor', () => {
 
     it('judges the first core when a build is staged before the master starts one', () => {
       const supervisor = make()
-      supervisor.updateStaged('9.9.9')
+      supervisor.updateStaged({ version: '9.9.9' })
       expect(cores).toHaveLength(0)
       supervisor.start()
       core().up()
@@ -478,7 +480,7 @@ describe('Supervisor', () => {
       const supervisor = make({}, { reexec: (_state, proceed) => { deciding.push(proceed) } })
       supervisor.start()
       expect(cores).toHaveLength(0)
-      supervisor.updateStaged('9.9.9')
+      supervisor.updateStaged({ version: '9.9.9' })
       expect(cores).toHaveLength(0)
       deciding[0]('kept')
       expect(cores).toHaveLength(1)
@@ -488,8 +490,87 @@ describe('Supervisor', () => {
       expect(calls).toContain('restore')
       supervisor.stop('stopping')
       const before = lines.length
-      supervisor.updateStaged('9.9.10')
+      supervisor.updateStaged({ version: '9.9.10' })
       expect(lines.length).toBe(before)
+    })
+
+    it('a PTY-only staging hands over and goes on probation', () => {
+      const supervisor = make()
+      supervisor.start()
+      core().up()
+      supervisor.updateStaged({ ptyVersion: '0.11.0' })
+      // A core of any version hands over for it: the message names the host where a build would be.
+      expect(core().sent.filter((message) => message.type === 'harnessd:update')).toEqual([{ type: 'harnessd:update', version: 'terminal host 0.11.0' }])
+      expect(lines.at(-1)).toBe('[harnessd] the updater staged terminal host 0.11.0 — asking the core to hand over')
+      core().exit(CORE_EXIT_UPDATE)
+      vi.advanceTimersByTime(0)
+      expect(cores).toHaveLength(2)
+      core().up()
+      core().exit(1)
+      vi.advanceTimersByTime(0)
+      expect(calls).toContain('restore')
+      // Both, named in one line.
+      make().updateStaged({ version: '9.9.9', ptyVersion: '0.11.0' })
+      expect(lines.at(-1)).toBe('[harnessd] the updater staged 9.9.9 and terminal host 0.11.0 — the next core starts on it')
+    })
+
+    it('a PTY staged while a build is on probation supersedes it: neither is rolled back or kept yet', () => {
+      const supervisor = make()
+      supervisor.start()
+      core().up()
+      supervisor.updateStaged({ version: '9.9.9' })
+      core().exit(CORE_EXIT_UPDATE)
+      vi.advanceTimersByTime(0)
+      core().up()
+      // On probation, its updater (restarted on the new build) stages a host: the same bundle on disk.
+      supervisor.updateStaged({ ptyVersion: '0.11.0' })
+      live(options.updateProbationMs)
+      expect(calls).not.toContain('confirm')
+      core().exit(CORE_EXIT_UPDATE)
+      vi.advanceTimersByTime(0)
+      expect(calls).not.toContain('restore')
+      expect(lines).toContain('[harnessd] the updated core staged a newer build before it was kept (code 75) — restarting onto that one')
+      core().up()
+      live(options.updateProbationMs)
+      expect(calls.filter((call) => call === 'confirm')).toHaveLength(1)
+    })
+
+    describe('with the master\'s own rollback and keep (lib/windows/ptyUpdate.ts)', () => {
+      const pending = { version: '0.11.0', previous: '0.10.0' }
+      const restore = (restorePty: () => PtyRestore) => () => rollBackStaged({
+        cliPending: () => false, restoreCli: () => calls.push('restore cli'), ptyRoot: '/root', log: (line) => lines.push(line),
+        restorePty: () => { calls.push('restore pty'); return restorePty() }, readPending: () => pending,
+      })
+
+      it('a failed probation with only a PTY pending restores the PTY and not the CLI', () => {
+        const supervisor = make({}, { restoreUpdate: restore(() => ({ found: true, pointer: true, restored: ['harness.exe', 'harness-launch.exe'], kept: [], missing: [] })) })
+        supervisor.start()
+        core().up()
+        supervisor.updateStaged({ ptyVersion: '0.11.0' })
+        core().exit(CORE_EXIT_UPDATE)
+        vi.advanceTimersByTime(0)
+        core().up()
+        core().exit(1)
+        vi.advanceTimersByTime(0)
+        expect(calls).toContain('restore pty')
+        expect(calls).not.toContain('restore cli')
+        expect(lines).toContain('[harnessd] terminal host 0.11.0 did not come back healthy — back to 0.10.0')
+      })
+
+      it('a kept probation confirms both', () => {
+        const supervisor = make({}, {
+          confirmUpdate: () => keepStaged({ confirmCli: () => calls.push('confirm cli'), ptyRoot: '/root', confirmPty: () => { calls.push('confirm pty') } }),
+        })
+        supervisor.start()
+        core().up()
+        supervisor.updateStaged({ version: '9.9.9', ptyVersion: '0.11.0' })
+        expect(core().sent.filter((message) => message.type === 'harnessd:update')).toEqual([{ type: 'harnessd:update', version: '9.9.9' }])
+        core().exit(CORE_EXIT_UPDATE)
+        vi.advanceTimersByTime(0)
+        core().up()
+        live(options.updateProbationMs)
+        expect(calls.filter((call) => call.startsWith('confirm'))).toEqual(['confirm cli', 'confirm pty'])
+      })
     })
   })
 

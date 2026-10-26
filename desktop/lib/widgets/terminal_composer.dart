@@ -25,12 +25,16 @@ class TerminalComposer extends StatefulWidget {
     required this.session,
     required this.focusNode,
     this.inputEnabled = true,
+    this.initialText = '',
+    this.onSubmitted,
     this.onPasteNonText,
   });
 
   final TerminalSession session;
   final FocusNode focusNode;
   final bool inputEnabled;
+  final String initialText;
+  final VoidCallback? onSubmitted;
   final Future<void> Function()? onPasteNonText;
 
   @override
@@ -38,7 +42,9 @@ class TerminalComposer extends StatefulWidget {
 }
 
 class _TerminalComposerState extends State<TerminalComposer> {
-  final TextEditingController _controller = TextEditingController();
+  late final TextEditingController _controller = TextEditingController(
+    text: widget.initialText,
+  );
 
   @override
   void initState() {
@@ -107,6 +113,7 @@ class _TerminalComposerState extends State<TerminalComposer> {
         return;
       }
       _controller.clear();
+      widget.onSubmitted?.call();
     } finally {
       _sending = false;
     }

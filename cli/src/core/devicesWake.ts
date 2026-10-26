@@ -20,8 +20,8 @@
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 
-/** The services in the devices' process, which a request or a notice for wakes. */
-export const DEVICES_ON_DEMAND = ['devices', 'wifi'] as const
+/** The services in the devices' process, which a request or a notice for wakes: a device that is this machine's add-ons too. */
+export const DEVICES_ON_DEMAND = ['devices', 'wifi', 'machineAddons'] as const
 /** How often /dev is looked at for a dial's port while there is none: the dial's own scan's cadence. */
 export const DIAL_LOOK_MS = 2_000
 /** The Wi-Fi device's direct links (lib/autonomous-device/direct.ts) and the gateway's pairings (lib/e2ee/store.ts),

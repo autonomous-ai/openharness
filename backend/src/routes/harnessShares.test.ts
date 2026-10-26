@@ -114,11 +114,34 @@ describe('account-bound harness invitations', () => {
     const id = randomUUID()
     const remove = () => app.inject({ method: 'DELETE', url: `/api/harness-shares/${id}`, headers: auth })
     expect((await remove()).json()).toEqual({ success: true, data: { removed: true } })
-    expect(mocks.prisma.harnessShare.updateMany).toHaveBeenCalledWith({ where: { id, ownerId: 'owner', autonomousEnv: 'prod' }, data: { revokedAt: expect.any(Date) } })
+    expect(mocks.prisma.harnessShare.updateMany).toHaveBeenCalledWith({ where: { id, ownerId: 'owner', autonomousEnv: 'prod', OR: [{ revokedAt: null }, { revokedAt: { isSet: false } }] }, data: { revokedAt: expect.any(Date) } })
     expect(mocks.changed).toHaveBeenCalledWith(id)
     mocks.prisma.harnessShare.updateMany.mockResolvedValue({ count: 0 })
     expect((await remove()).statusCode).toBe(404)
     expect(mocks.changed).toHaveBeenCalledTimes(1)
+  })
+  // diego@'s 0.4.55 dev build took back the same invitations every few seconds and renewed others as often; each
+  // poked every member's every app to re-read its machines and shares (2026-10-26, the backend at its CPU limit).
+  it('answers a repeated revocation and a renewal without telling anyone again', async () => {
+    const id = randomUUID()
+    mocks.prisma.harnessShare.updateMany.mockResolvedValue({ count: 0 })
+    mocks.prisma.harnessShare.findFirst.mockResolvedValue({ id })
+    const removed = await app.inject({ method: 'DELETE', url: `/api/harness-shares/${id}`, headers: auth })
+    expect(removed.json()).toEqual({ success: true, data: { removed: true } })
+    const saved = { id, ...input(), ownerId: 'owner', superTabId: null, revokedAt: null, expiresAt: new Date(input().expiresAt) }
+    mocks.prisma.harnessShare.findUnique.mockResolvedValue(saved)
+    expect((await put({ ...input(), expiresAt: new Date(Date.now() + 31 * 86400_000).toISOString() }, id)).statusCode).toBe(200)
+    expect(mocks.prisma.harnessShare.upsert).toHaveBeenCalledTimes(1)
+    expect(mocks.changed).not.toHaveBeenCalled()
+    expect(mocks.listChanged).not.toHaveBeenCalled()
+    // What the recipient sees, changed: told.
+    for (const change of [{ name: 'Renamed' }, { engine: 'claude' }, { superTabId: 'c51479bd73b59e58176ad9e4' }]) {
+      mocks.prisma.harnessShare.findUnique.mockResolvedValue(saved)
+      await put({ ...input(), ...change }, id)
+    }
+    mocks.prisma.harnessShare.findUnique.mockResolvedValue({ ...saved, revokedAt: new Date() })
+    await put(input(), id)
+    expect(mocks.changed).toHaveBeenCalledTimes(4)
   })
   it('tells the invited account that its list changed, so its apps need not poll for invitations', async () => {
     const id = randomUUID()
@@ -159,6 +182,27 @@ describe('account-bound harness invitations', () => {
     expect(await recipientShare('share', ken)).toBeNull()
     mocks.prisma.machine.findFirst.mockResolvedValueOnce({ ...machine, billingStatus: 'pending' })
     expect(await recipientShare('share', ken)).toBeNull()
+  })
+  // A team machine (lib/teamSession.ts) hosts Swarm agents for teammates. Its daemon shares an agent's terminal with the
+  // Swarm members who may watch it, and nothing else: only its own machine's harnesses, only for a Swarm.
+  it('lets a team session share only its own machine\'s harnesses, for a Swarm, and take back only those', async () => {
+    const TEAM_COMPUTER = 'b'.repeat(32)
+    const teamMachine = { ...machine, machineId: 'team-mac', computerId: TEAM_COMPUTER, sessionKind: 'team' }
+    mocks.auth.mockResolvedValue({ ...owner, harnessSessionId: 'team-session', harnessSessionKind: 'team', harnessComputerId: TEAM_COMPUTER })
+    mocks.prisma.machine.findMany.mockResolvedValue([teamMachine])
+    mocks.prisma.machine.findFirst.mockResolvedValue(teamMachine)
+    const swarm = { ...input(), machineId: 'team-mac', superTabId: 'a'.repeat(24) }
+    expect((await put(swarm)).statusCode).toBe(200)
+    for (const payload of [{ ...swarm, machineId: 'm1' }, { ...swarm, superTabId: null }, { ...input(), machineId: 'team-mac' }]) {
+      const res = await put(payload)
+      expect(res.statusCode).toBe(403)
+      expect(res.json().error.code).toBe('TEAM_SESSION_LIMITED')
+    }
+    expect(mocks.prisma.harnessShare.upsert).toHaveBeenCalledTimes(1)
+    const id = randomUUID()
+    expect((await app.inject({ method: 'DELETE', url: `/api/harness-shares/${id}`, headers: auth })).statusCode).toBe(200)
+    expect(mocks.prisma.harnessShare.updateMany).toHaveBeenLastCalledWith({ where: { id, ownerId: 'owner', autonomousEnv: 'prod', machineId: 'team-mac', OR: [{ revokedAt: null }, { revokedAt: { isSet: false } }] },
+      data: { revokedAt: expect.any(Date) } })
   })
   it('rechecks Super Tab membership for session admission and excludes revoked views from inventory', async () => {
     mocks.auth.mockResolvedValue(ken)

@@ -104,6 +104,66 @@ it('preserves an unexpected evidence failure without signalling or hiding its ca
   expect(terminateDeletedAgent).not.toHaveBeenCalled()
   expect(deps.forgetSession).not.toHaveBeenCalled()
 })
+// A guest's harness runs as the guest's own OS user: the owner's daemon can neither read its process's descriptors
+// (the native control probe) nor signal it (EPERM). Measured on a Mac sharing with a guest, 2026-10-22: closing the
+// owner's tmux pane ended the guest's process.
+it('stops a guest harness by closing its pane, without the native probe or a signal, once its process has left', async () => {
+  Object.assign(row, { guest: 'kim@example.com' })
+  vi.mocked(captureResumeIdentity).mockRejectedValue(new IdentityReadUnavailable('the native control probe did not complete'))
+  vi.mocked(checkPidRuntime).mockResolvedValueOnce({ state: 'alive' }).mockResolvedValue({ state: 'gone', reason: 'saved process identity is no longer running' })
+  deps.wait = vi.fn(async () => {})
+  await createStopAgentService(deps)(row.agentId)
+  expect(captureResumeIdentity).not.toHaveBeenCalled()
+  expect(deps.stopNative).not.toHaveBeenCalled()
+  expect(terminateDeletedAgent).not.toHaveBeenCalled()
+  expect(tmuxKill).toHaveBeenCalledOnce()
+  expect(checkPidRuntime).toHaveBeenCalledTimes(2)
+  expect(stoppedAgents.get(row.agentId)).toMatchObject({ active: false, sessionId: 'saved' })
+  expect(registry.byAgent(row.agentId)).toBeUndefined()
+})
+it('keeps a guest harness whose process is still running after its pane closed', async () => {
+  Object.assign(row, { guest: 'kim@example.com' })
+  vi.mocked(checkPidRuntime).mockResolvedValue({ state: 'alive' })
+  deps.wait = vi.fn(async () => {})
+  await expect(createStopAgentService(deps)(row.agentId)).rejects.toThrow('Could not confirm that the harness stopped')
+  expect(tmuxKill).toHaveBeenCalledOnce()
+  expect(deps.forgetSession).not.toHaveBeenCalled()
+  expect(registry.byAgent(row.agentId)).toBe(row)
+})
+it('checks the saved guest process after its pane removes the registry row, without claiming the changed stop completed', async () => {
+  vi.useFakeTimers()
+  Object.assign(row, { guest: 'kim@example.com' })
+  const identity = { ...row.processIdentity! }
+  tmuxKill.mockImplementationOnce(async () => {
+    registry.removeAgent(row.agentId)
+    return { state: 'succeeded', dispatch: 'executed' }
+  })
+  vi.mocked(checkPidRuntime).mockResolvedValueOnce({ state: 'alive' })
+    .mockResolvedValue({ state: 'gone', reason: 'guest exited after its pane closed' })
+  try {
+    const result = expect(createStopAgentService(deps)(row.agentId)).rejects.toThrow('The harness changed while pausing')
+    await vi.advanceTimersByTimeAsync(250)
+    await result
+    expect(checkPidRuntime).toHaveBeenCalledTimes(2)
+    for (const [session] of vi.mocked(checkPidRuntime).mock.calls) expect(session.processIdentity).toEqual(identity)
+    expect(deps.forgetSession).not.toHaveBeenCalled()
+    expect(terminateDeletedAgent).not.toHaveBeenCalled()
+    expect(stoppedAgents.get(row.agentId)?.sessionId).toBe('saved')
+  } finally { vi.useRealTimers() }
+})
+it('waits for the process a starting guest harness gained while it was saved', async () => {
+  // Stopped before its engine was seen, which the pane's watcher binds while the screen is saved: an older copy of the
+  // row has no process, which reads as gone at once.
+  Object.assign(row, { guest: 'kim@example.com', processIdentity: undefined })
+  const engine = { pid: 91, executable: 'claude', startMarker: 'guest' }
+  vi.mocked(checkPidRuntime).mockImplementation(async s => s.processIdentity ? { state: 'alive' } : { state: 'gone', reason: 'none' })
+  deps.wait = vi.fn(async () => {})
+  await expect(createStopAgentService(deps)(row.agentId, { checkpoint: async (_s, phase) => {
+    if (phase === 'before') row.processIdentity = engine
+  } })).rejects.toThrow('Could not confirm that the harness stopped')
+  expect(vi.mocked(checkPidRuntime).mock.calls.every(([s]) => s.processIdentity?.pid === 91)).toBe(true)
+  expect(registry.byAgent(row.agentId)).toBe(row)
+})
 // A close of a harness still starting that waited in vain for its first conversation (closeAgentService.ts).
 it('stops a harness that never bound a conversation without one, only when its close asks', async () => {
   Object.assign(row, { sessionId: '', transcriptPath: null, boundAt: null })

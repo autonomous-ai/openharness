@@ -38,6 +38,18 @@ void pro_app_agents(const pro_agent_row_t *rows, int n);
 void pro_app_swarms(const cable_swarm_t *items, int n, const cable_swarm_members_t *members,
                     const char *selected, const cable_tile_t *tiles, int tile_n);
 
+// ---- Swarm cards (hello swarmCard:v1) ----
+// `supertabs`: the current set and order of Swarm ids (at most SWARMS_CARD_MAX, each shorter than ID_MAX, no repeats). A Swarm not
+// listed is dropped; a listed one not yet received stays absent until its `supertab` frame arrives.
+void pro_app_supertab_ids(const char (*ids)[ID_MAX], int n);
+// `supertab`: one Swarm's data (<= SWARM_LEADS_MAX Leads, names cut on a UTF-8 boundary, a bad Lead skipped), replacing that Swarm's. Ignored
+// when its id is not in the last id list. `since_at_ms` and every Lead's `text` are 0/NULL here: the model stamps the clock and keeps the cached texts.
+void pro_app_supertab(const pod_swarm_t *s);
+// `supertab.recap`: the Lead's last message (<= SWARM_TEXT_MAX - 1 bytes; "" when `none`), `at` its epoch seconds.
+void pro_app_supertab_recap(const char *tab, const char *lead, const char *text, uint32_t at, bool none);
+// `supertab.focus`: the desktop opened this Swarm project. Both ids are non-empty.
+void pro_app_supertab_focus(const char *tab, const char *lead);
+
 // ---- library ----
 // Same layout as pod_library_row_t (pod_glue.h). `machine` is the machine NAME ("" when the machine list does not
 // hold the id), `status` one of idle working question finished failed paused offline.

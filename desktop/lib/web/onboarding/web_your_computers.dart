@@ -17,6 +17,12 @@ import '../../widgets/machine_picker_form.dart';
 ///
 /// What used to open was the machine picker itself — a search box with `@` in
 /// it and tabs for harnesses and agents a browser with no computer cannot use.
+/// The onboarding pages' buttons: drawn at their usual size, with the padded
+/// tap target around them, so a finger on a phone gets at least 44 px.
+final ButtonStyle webOnboardingButton = FilledButton.styleFrom(
+  tapTargetSize: MaterialTapTargetSize.padded,
+);
+
 class WebYourComputers extends StatefulWidget {
   const WebYourComputers({super.key, required this.app});
 
@@ -214,9 +220,17 @@ class _ComputerRow extends StatelessWidget {
               ),
             )
           else if (link == ComputerLinkState.ready)
-            FilledButton(onPressed: onConnect, child: const Text('Connect'))
+            FilledButton(
+              style: webOnboardingButton,
+              onPressed: onConnect,
+              child: const Text('Connect'),
+            )
           else if (link == ComputerLinkState.failed)
-            FilledButton(onPressed: onConnect, child: const Text('Try again')),
+            FilledButton(
+              style: webOnboardingButton,
+              onPressed: onConnect,
+              child: const Text('Try again'),
+            ),
         ],
       ),
     );

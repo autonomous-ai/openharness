@@ -432,7 +432,7 @@ def mirror_journey(command, source):
     api({'action': 'activity', 'agent': replacement_agent, 'activity': 'working'})
     before_stop = len(requests('agent_close'))
     close_from_menu(row=0)
-    shown('Stop? Saved history will remain.')
+    shown('Stopping this harness will close this pane. History will be saved.')
     click_text('[ Stop ]')
     wait(lambda: original_pane not in hn('list-panes', '-s', '-t', 'mirror-review', '-F', '#{pane_id}').splitlines(), 'confirmed Stop closes the owning session view')
     wait(lambda: source not in tmux('capture-pane', '-p', '-t', 'test:0').splitlines()[0], 'owner no longer shows the stopped harness')
@@ -893,13 +893,17 @@ try:
     wait(lambda: 'Cancel' not in screen(), 'Cancel is the default stop action')
     assert len(hn('list-panes', '-F', '#{pane_id}').splitlines()) == 2
     close_from_menu(occurrence=1, row=y - 1)
-    shown('Stop? Saved history will remain.')
+    shown('Stopping this harness will close this pane. History will be saved.')
     click_text('[ Stop ]')
     shown('could not save')
+    # As Desktop: the failure keeps the pane, and offers to close only the view.
+    shown('[ Keep open ]')
+    shown('[ Close pane ]')
     assert len(hn('list-panes', '-F', '#{pane_id}').splitlines()) == 2
     snapshot('stop-save-failed')
     keys('Escape')
     wait(lambda: 'Stop not confirmed' not in screen(), 'dismiss stop failure')
+    assert len(hn('list-panes', '-F', '#{pane_id}').splitlines()) == 2
     print('PASS workspace: busy stop defaults to Cancel and a save failure keeps its pane', flush=True)
 
     # Mouse reporting inside the program is still the program's. Header controls consume their
@@ -998,7 +1002,7 @@ try:
     # and a missing progress phrase alone can also mean its frame has not been drawn yet.
     hn('select-window', '-t', workspace)
     wait(lambda: 'Alpha task terminal' in (painted := screen())
-         and 'Stop Harness' not in painted and 'Remote' not in painted.splitlines()[-1],
+         and 'Close pane' not in painted and 'Remote' not in painted.splitlines()[-1],
          'idle stop paints the remaining workspace and dismisses its dialog')
 
     # Mouse creation keeps the GUI: + opens a harness dialog in this window;

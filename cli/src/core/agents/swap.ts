@@ -8,6 +8,8 @@
 import { homedir } from 'node:os'
 import { checkPidRuntime, terminateDeletedAgent } from '../../lib/deleteAgentFallback.js'
 import { buildEngineCommandArgv, buildEngineLaunchArgv, engineLaunchEnv } from '../../lib/engineLaunch.js'
+import { engineBin } from '../../lib/engineBin.js'
+import { stopConflictingBackgroundJob } from '../../lib/claudeBackgroundJob.js'
 import { windowsLaunchRefusal } from '../../lib/windows/launch.js'
 import { isWindowsHeldPane, windowsPaneLaunch } from '../../lib/windows/engineStart.js'
 import { mergedLaunchEnv } from './launchEnv.js'
@@ -162,6 +164,16 @@ export function createPaneSwap({ byAgent, prepareSessionResume, keepAbandonedCon
       launchRefusal: (opts) => {
         try { buildEngineCommandArgv(session.engine, relaunchOptions(opts)); return null } catch (error) { return windowsLaunchRefusal(error).detail }
       },
+      // Claude only. `launch.native` is the captured launch for every ordinary LOCAL Claude run
+      // (launchOverrides.ts), not a signal the pane is elsewhere, so it must not gate this off. A DSH
+      // agent's pane is the one case that may run on a different host entirely, whose `claude --bg`
+      // jobs this process cannot see.
+      ...(session.engine === 'claude' && !session.dsh ? { stopConflictingJob: () =>
+        // The exact environment the pane is about to get, the same way `respawn` above builds it: `launch.env`
+        // already carries a native launch's own CLAUDE_CONFIG_DIR (launchOverrides.ts merges `native.environment`
+        // into it), and `engineLaunchEnv` adds Windows's own-process variables.
+        stopConflictingBackgroundJob({ bin: engineBin(session.engine), sessionId: session.sessionId,
+          env: { ...process.env, ...launch.env, ...engineLaunchEnv(session.engine, launch.native) } }) } : {}),
       log: (message) => console.log(message),
     }
   }

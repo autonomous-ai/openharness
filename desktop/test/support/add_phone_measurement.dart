@@ -12,6 +12,14 @@ class AddPhoneRecorder extends ProductMeasurement {
   /// Each flow's end, as `flow:outcome`.
   final ended = <String>[];
   final openings = <AddPhoneOpening>[];
+  final skipped = <String>[];
+  final pairings = <AddPhoneOpening>[];
+
+  @override
+  void addPhonePaired(AddPhoneOpening from) => pairings.add(from);
+
+  @override
+  void phoneOfferSkipped(String reason) => skipped.add(reason);
 
   @override
   void Function(ProductOutcome) begin(ProductFlow flow) {

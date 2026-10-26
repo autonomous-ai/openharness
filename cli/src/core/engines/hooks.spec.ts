@@ -92,6 +92,15 @@ describe('which agent a hook belongs to', () => {
     expect(deps.registry.byRuntimeEngine).toHaveBeenCalledWith(pty, 'claude')
   })
 
+  it('accepts tmux hints after the missing backend recovers in this daemon', async () => {
+    const a1 = agent('a1', 100)
+    const { deps, hooks } = setup({ '%1': a1 }, { tmuxBackend: null })
+    deps.tmuxBackend = {}
+    vi.mocked(processRows).mockResolvedValueOnce(tree([300, 200], [200, 100], [100, 1]) as never)
+    expect(await hooks.resolveHookAgent({ engine: 'claude', runtimeHints: [hint('%1')], callerPid: 300 })).toEqual(a1)
+    expect(deps.agentReconciler.triggerHint).toHaveBeenCalledWith({ backend: 'tmux', paneId: '%1' }, 'claude')
+  })
+
   it.each([
     ['no pty host backend', {}, { instance: 'p1', paneId: '%1' }],
     ['an instance that is not one', { ptyHostBackend: {} }, { instance: 'p1\u0000x', paneId: '%1' }],

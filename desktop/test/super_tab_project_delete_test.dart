@@ -60,7 +60,7 @@ void main() {
     expect(server.posts, isEmpty);
     expect(
       find.text(
-        '“Pilot” and all of its conversations will be permanently deleted. This can’t be undone.',
+        '“Pilot” and all of its conversations will be permanently deleted. Its Product Manager’s session will close too. This can’t be undone.',
       ),
       findsOneWidget,
     );
@@ -126,7 +126,7 @@ void main() {
       expect(find.text('Loading conversation…'), findsNothing);
       expect(composer, findsNothing);
       expect(find.byTooltip('Project options'), findsNothing);
-      expect(find.text('New project'), findsOneWidget);
+      expect(find.byTooltip('New project'), findsOneWidget);
       expect(find.byTooltip('Chat'), findsNothing);
       await finish(tester);
     },

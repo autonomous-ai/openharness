@@ -1,4 +1,5 @@
 import type { AgentEngine } from '../engines/types.js'
+import { PTY_HOST_PANE } from './ptyHost/instance.js'
 import type { ProcessIdentity, TerminalBackendName, TerminalRuntimeRef } from './terminalTypes.js'
 
 const SEP = '\u0000'
@@ -49,9 +50,6 @@ export function terminalRuntimeLabel(runtime: TerminalRuntimeRef): string {
 export function primaryRuntime(session: { readonly runtimes: readonly TerminalRuntimeRef[] }): TerminalRuntimeRef {
   return session.runtimes[0]
 }
-
-/** A pty host pane as its shell names itself: `HARNESS_PANE`, `<instance>:%N`. */
-const PTY_HOST_PANE = /^(p\d{1,4}):(%\d{1,9})$/
 
 /**
  * The row a shell's own word about its pane names (`harness remote`, `harness send`). A bare `%N` is `$TMUX_PANE`,

@@ -24,6 +24,7 @@ interface Reservation {
 export interface ReservationBook {
   reserve(input: Json, closed?: AbortSignal): Promise<Json>
   observe(creationId: unknown, closed?: AbortSignal): Promise<Json>
+  creationOf(harnessId: string): string | null
   stop(): void
 }
 interface Dependencies {
@@ -132,8 +133,10 @@ export class CapacityReservations implements ReservationBook {
         const observation = await this.native(row.creation_id)
         const harnessId = observation?.state === 'created' ? observation.agentId : row.harness_id
         if (row.harness_id && harnessId !== row.harness_id) throw new Error('The native creation identity changed. Inspect this machine before starting more agents.')
+        // A stopped agent keeps its record; one the person closed by hand does not, and neither is running.
         const released = observation?.state === 'failed' || observation?.state === 'cancelled'
           || (!!harnessId && await this.core.agents.stopped?.(harnessId).catch(() => false) === true)
+          || (observation?.state === 'created' && await this.core.agents.gone?.(harnessId!).catch(() => false) === true)
         return { row, harnessId, released }
       }))
       this.transaction(() => {
@@ -156,6 +159,14 @@ export class CapacityReservations implements ReservationBook {
     const row = this.db.prepare('SELECT harness_id, released FROM reservations WHERE creation_id = ?').get(creationId)
     return row ? { ok: true, reservationId: creationId, harnessId: row.harness_id, released: row.released === 1 }
       : { error: 'CAPACITY_RECEIPT_MISSING', detail: 'This start has no capacity receipt. Inspect the machine before starting another agent.' }
+  }
+
+  /** The Swarm start that created this harness: every start confirms the harness its native receipt names before it
+   *  reports success, and a stopped one keeps its row. The core still checks the receipt itself. */
+  creationOf(harnessId: string): string | null {
+    this.check()
+    const row = this.db.prepare('SELECT creation_id FROM reservations WHERE harness_id = ? ORDER BY created_at DESC LIMIT 1').get(harnessId)
+    return typeof row?.creation_id === 'string' ? row.creation_id : null
   }
 
   async reserve(input: Json, closed?: AbortSignal): Promise<Json> {

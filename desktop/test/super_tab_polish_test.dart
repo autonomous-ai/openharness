@@ -379,29 +379,23 @@ void main() {
         if (profile.scale > 1) {
           await tester.tap(find.byTooltip('Members and machines'));
           await tester.pumpAndSettle();
-          await tester.ensureVisible(find.text('Machines'));
-          await tester.pumpAndSettle();
-          expect(tester.takeException(), isNull);
           await shot('-resources');
+          expect(tester.takeException(), isNull);
           await tester.sendKeyEvent(LogicalKeyboardKey.escape);
           await tester.pumpAndSettle();
           await tester.tap(find.byTooltip('Conversations'));
           await tester.pumpAndSettle();
+          expect(find.text('Machines'), findsOneWidget);
+          expect(tester.takeException(), isNull);
           await shot('-projects');
           expect(tester.takeException(), isNull);
         } else {
           expect(find.text('Machines'), findsOneWidget);
-          // Resources share one scroll area, so Machines follows the roster.
+          expect(find.text('Projects'), findsOneWidget);
+          // The Machines group lives beside Projects in the left sidebar.
           expect(
-            tester.getTopLeft(find.text('Machines')).dy,
-            lessThan(
-              tester
-                      .getBottomLeft(
-                        find.byKey(const ValueKey('super-member-reviewer')),
-                      )
-                      .dy +
-                  60,
-            ),
+            tester.getTopLeft(find.text('Machines')).dx,
+            tester.getTopLeft(find.text('Projects')).dx,
           );
         }
         // Capture one row treatment across disclosure, label and nested work.

@@ -9,7 +9,7 @@ const flush = () => new Promise(resolve => setTimeout(resolve, 0))
 
 function setup(withPort = true) {
   let api!: CoreApi, wire!: ServiceProcessOptions
-  const port = { connected: vi.fn(), disconnected: vi.fn(), stop: vi.fn() }
+  const port = { connected: vi.fn(), disconnected: vi.fn(), stop: vi.fn(), swarmRole: vi.fn(async () => null) }
   const stopped = vi.fn()
   const process = runSuperTabsService({ dataDir: '/not-a-real-data-dir', socketPath: '/not-a-real-socket', machineId: 'm', token: 't',
     run: options => { wire = options; return { stop: stopped } },

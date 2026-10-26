@@ -2,6 +2,7 @@
  * Create snapshots instructions/env/argv; resume reads that snapshot; fork copies it under a new
  * key. Toolchains and skill assets stay at their installed package paths, as in spec 1.
  */
+import { ignoreHarnessRuntime } from '../lib/harnessRuntimeIgnore.js'
 import { createHash, randomUUID } from 'node:crypto'
 import { closeSync, existsSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, readlinkSync, realpathSync, renameSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs'
 import { basename, join, resolve } from 'node:path'
@@ -160,10 +161,7 @@ export function prepareHarnessLaunch(dsh: InstalledDsh, workspace: string, engin
   const ws = realpathSync(workspace)
   const dir = harnessRuntimeDir(ws, key)
   ensureRuntimeDir(ws, dir)
-  const ignoreFile = join(ws, '.harness', '.gitignore')
-  const ignored = existsSync(ignoreFile) ? readFileSync(ignoreFile, 'utf8') : ''
-  const ignoreRules = ['runtime/', 'legacy-AGENTS.md'].filter(rule => !ignored.split('\n').includes(rule))
-  if (ignoreRules.length) writeManagedFile(ignoreFile, `${ignored}${ignored && !ignored.endsWith('\n') ? '\n' : ''}${ignoreRules.join('\n')}\n`)
+  ignoreHarnessRuntime(ws)
   const file = join(dir, 'runtime.json')
   const from = sourceKey ? join(harnessRuntimeDir(ws, sourceKey), 'runtime.json') : file
   if (sourceKey) {

@@ -307,7 +307,7 @@ sends a plain Enter).
 | `C-b z` `C-b space` `C-b M-1…7` `C-b { }` `C-b C-o` | zoom, next layout, a layout, swap, rotate |
 | `C-b C-←↑→↓` `C-b M-←↑→↓` | resize (repeatable, like tmux's `-r`) |
 | `C-b n` `C-b p` `C-b l` `C-b 0…9` `C-b w` `C-b ,` | windows |
-| `C-b x` / `C-b &` | Stop Harness / Close Tab. Owned harnesses are saved and stopped; idle ones stop directly, while working, unknown or draft sessions ask first with Cancel selected. A failed save keeps the pane. Plain terminals ask before closing; shared or already-stopped harnesses only close their view. |
+| `C-b x` / `C-b &` | Close pane / Close Tab, as in Desktop. Owned harnesses are saved and stopped; idle ones stop directly, while working, unknown or draft ones ask first with Cancel selected. A failed stop keeps the pane and says why, with Keep open selected; Close pane then closes only the view (the harness may still be running). Plain terminals ask before closing; shared, already-stopped or unlisted harnesses, and ones without a terminal, only close their view. |
 | `C-b [` `C-b ]` | copy mode (tmux's, vi or emacs keys as `mode-keys` says), paste |
 | `C-b <` `C-b >` | the window and pane menus |
 | `C-b /` | what a key does |

@@ -149,3 +149,57 @@ it('shows every way into Add Phone beside the Desktop\'s Add Phone card', () => 
     addPhoneOpenings: { offer: 1, titlebar: 4, menu: 0, account: 0, machines: 0, command: 0 } })
   expect(r.flows.find(f => f.channel === 'ui' && f.surface === 'phone' && f.flow === 'phone_offer')).not.toHaveProperty('addPhoneOpenings')
 })
+
+it('shows new phone pairings and skipped-card reasons only beside the Desktop card', () => {
+  const r = dailyProductReview([
+    row('2026-10-12', 'ui_desktop_add_phone_paired_offer', 1),
+    row('2026-10-12', 'ui_desktop_add_phone_paired_titlebar', 2),
+    row('2026-10-12', 'ui_desktop_add_phone_paired_menu', 3),
+    row('2026-10-12', 'ui_desktop_add_phone_paired_account', 4),
+    row('2026-10-12', 'ui_desktop_add_phone_paired_machines', 5),
+    row('2026-10-12', 'ui_desktop_add_phone_paired_command', 6),
+    row('2026-10-12', 'ui_desktop_phone_offer_skipped_has_phone', 7),
+    row('2026-10-12', 'ui_desktop_phone_offer_skipped_no_device_list', 8),
+    row('2026-10-12', 'ui_desktop_phone_offer_skipped_already_shown', 9),
+    row('2026-10-12', 'ui_desktop_phone_offer_skipped_stopped', 10),
+    row('2026-10-12', 'ui_desktop_phone_offer_skipped_cap_reached', 11),
+    row('2026-10-12', 'ui_desktop_phone_offer_skipped_not_signed_in', 12),
+    row('2026-10-12', 'ui_desktop_phone_offer_skipped_viewer', 13),
+    row('2026-10-12', 'ui_desktop_phone_offer_skipped_card_showing', 14),
+    row('2026-10-12', 'ui_desktop_phone_offer_skipped_no_storage', 15),
+    row('2026-10-12', 'ui_desktop_phone_offer_skipped_account_changed', 16),
+    row('2026-10-12', 'ui_desktop_phone_offer_skipped_read_limit', 17),
+  ], new Date('2026-10-13'))
+  const card = r.flows.find(f => f.channel === 'ui' && f.surface === 'desktop' && f.flow === 'phone_offer')
+  expect(card).toMatchObject({
+    addPhonePaired: { offer: 1, titlebar: 2, menu: 3, account: 4, machines: 5, command: 6 },
+    phoneOfferSkipped: { has_phone: 7, no_device_list: 8, already_shown: 9, stopped: 10, cap_reached: 11,
+      not_signed_in: 12, viewer: 13, card_showing: 14, no_storage: 15, account_changed: 16, read_limit: 17 },
+  })
+  expect(r.flows.filter(f => 'addPhonePaired' in f)).toEqual([card])
+  expect(r.flows.filter(f => 'phoneOfferSkipped' in f)).toEqual([card])
+})
+
+it('zero-fills absent pairing and skip counters and uses the existing complete seven-day window', () => {
+  const r = dailyProductReview([
+    row('2026-10-06', 'ui_desktop_add_phone_paired_command', 2),
+    row('2026-10-12', 'ui_desktop_add_phone_paired_command', 3),
+    row('2026-10-05', 'ui_desktop_add_phone_paired_offer', 999),
+    row('2026-10-13', 'ui_desktop_add_phone_paired_offer', 999),
+    row('2026-10-06', 'ui_desktop_phone_offer_skipped_has_phone', 4),
+    row('2026-10-12', 'ui_desktop_phone_offer_skipped_has_phone', 5),
+    row('2026-10-05', 'ui_desktop_phone_offer_skipped_stopped', 999),
+    row('2026-10-13', 'ui_desktop_phone_offer_skipped_stopped', 999),
+  ], new Date('2026-10-13'))
+  expect(r.flows.find(f => f.channel === 'ui' && f.surface === 'desktop' && f.flow === 'phone_offer')).toMatchObject({
+    addPhonePaired: { offer: 0, titlebar: 0, menu: 0, account: 0, machines: 0, command: 5 },
+    phoneOfferSkipped: { has_phone: 9, no_device_list: 0, already_shown: 0, stopped: 0, cap_reached: 0,
+      not_signed_in: 0, viewer: 0, card_showing: 0, no_storage: 0, account_changed: 0, read_limit: 0 },
+  })
+  const empty = dailyProductReview([], new Date('2026-10-13'))
+  expect(empty.flows.find(f => f.channel === 'ui' && f.surface === 'desktop' && f.flow === 'phone_offer')).toMatchObject({
+    addPhonePaired: { offer: 0, titlebar: 0, menu: 0, account: 0, machines: 0, command: 0 },
+    phoneOfferSkipped: { has_phone: 0, no_device_list: 0, already_shown: 0, stopped: 0, cap_reached: 0,
+      not_signed_in: 0, viewer: 0, card_showing: 0, no_storage: 0, account_changed: 0, read_limit: 0 },
+  })
+})

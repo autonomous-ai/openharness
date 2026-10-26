@@ -194,6 +194,38 @@ void main() {
     },
   );
 
+  group('whose computer is too old (P3)', () {
+    test('Desktop: this computer, word for word', () {
+      expect(
+        harnessTooOldLine(null, viewer: false),
+        'Update Harness on this computer to share tabs.',
+      );
+      expect(
+        harnessTooOldLine('0.4.0-dev.3', viewer: false),
+        "This computer runs a development build of Harness (0.4.0-dev.3), which doesn't update itself.",
+      );
+      expect(
+        harnessTooOldLine('0.4.1', viewer: false),
+        'This computer runs Harness 0.4.1; shared tabs need $kAgentMessagesMinimumCli or newer.',
+      );
+    });
+
+    test('a browser runs no Harness of its own: your computer', () {
+      expect(
+        harnessTooOldLine(null, viewer: true),
+        'Update Harness on your computer to share tabs.',
+      );
+      expect(
+        harnessTooOldLine('0.4.0-dev.3', viewer: true),
+        "Your computer runs a development build of Harness (0.4.0-dev.3), which doesn't update itself.",
+      );
+      expect(
+        harnessTooOldLine('0.4.1', viewer: true),
+        'Your computer runs Harness 0.4.1; shared tabs need $kAgentMessagesMinimumCli or newer.',
+      );
+    });
+  });
+
   group('the version is read the way the app reaches its daemon', () {
     // Port 9 (discard) is never the daemon: a read that does not go over the socket cannot answer.
     final base = Uri.parse('http://127.0.0.1:9');

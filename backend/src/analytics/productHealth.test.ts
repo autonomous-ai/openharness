@@ -56,6 +56,19 @@ it('splits phone onboarding counts by release and platform, and drops a developm
     counters: expect.objectContaining({ ui_phone_computer_wait_started: 12 }) })])
 })
 
+it('reads the relay\'s count of the phone\'s opens by release with the release\'s coverage', () => {
+  const row = (metric: string, value: number) => ({ dayUtc: new Date('2026-10-01'), metric, value })
+  const data = dailyProductHealth([
+    row('breakdown:release:phone:1.0.8:health_phone_collector_days', 25),
+    row('breakdown:release:phone:1.0.8:relay_mobile_opens', 344),
+    row('breakdown:release:phone:unknown:health_phone_collector_days', 3),
+    row('breakdown:release:phone:unknown:relay_mobile_opens', 9000),
+    row('breakdown:release:phone:1.0.8:relay_mobile_debug_opens', 15104),
+  ], new Date('2026-10-04'))
+  expect(data.breakdowns).toEqual([expect.objectContaining({ dimension: 'release', surface: 'phone', bucket: '1.0.8',
+    counters: { health_phone_collector_days: 25, relay_mobile_opens: 344 } })])
+  expect(data.sparseBreakdownsSuppressed).toBe(1)
+})
 it('suppresses sparse labels, distinguishes missing from zero, and matures first-work cohorts', () => {
   const row = (day: string, metric: string, value: number) => ({ dayUtc: new Date(day), metric, value })
   const data = dailyProductHealth([
@@ -73,4 +86,13 @@ it('suppresses sparse labels, distinguishes missing from zero, and matures first
   expect(data.daily[0].firstWorkRetention[1].percent).toBeNull()
   expect(data.daily[0].requestReconciliation[0]).toMatchObject({ starts: 4, outcomes: 2, difference: 2 })
   expect(data.daily[1].firstWorkRetention[0].denominator).toBeNull()
+})
+
+it('reports first-run activation only against its own observed episode denominator', () => {
+  const row = (metric: string, value: number) => ({ dayUtc: new Date('2026-10-20'), metric: `health_desktop_${metric}`, value })
+  const report = dailyProductHealth([row('first_run_started', 10), row('first_run_ready', 9),
+    row('first_run_work', 8), row('first_run_response', 7), row('first_run_response_under_1m', 6)], new Date('2026-10-21'))
+  expect(report.daily[0].firstRun).toMatchObject({ started: 10, ready: 9, work: 8, response: 7, responsePercent: 70, mature: false })
+  expect(dailyProductHealth([row('collector_days', 5)], new Date('2026-10-23')).daily[0].firstRun.responsePercent).toBeNull()
+  expect(dailyProductHealth([row('first_run_started', 1), row('first_run_response', 2)], new Date('2026-10-23')).daily[0].firstRun.responsePercent).toBeNull()
 })

@@ -512,6 +512,19 @@ class NewHarnessController extends ChangeNotifier {
       error = draft.error;
       _warnedAboutClosing = draft.dismissalWarningShown;
     }
+    // A recovering request shows what it was sent with: Check status asks
+    // its machine, whatever machine this form was opened on.
+    if (this.integration case final request? when request.pending) {
+      _machineId = request.machineId ?? _machineId;
+      if (request.engine case final engine?) {
+        _engine = engine;
+        _harnessId = null;
+      }
+      if (request.folder case final folder?) {
+        _project = NewHarnessProject.folder(folder);
+      }
+      status = request.pendingNote;
+    }
     if ((projectName != null || _autoProject) &&
         !checking &&
         _project.folder == null &&
@@ -1290,7 +1303,8 @@ class NewHarnessController extends ChangeNotifier {
     profile: _profile,
     profileChosen: _profileChosen,
     attempt: _attempt,
-    integration: integration,
+    // A discarded request's launch is spent; the next form gets a fresh one.
+    integration: _discarded ? null : integration,
     error: error,
     dismissalWarningShown: _warnedAboutClosing,
     projectsByMachine: Map.unmodifiable({
@@ -1397,8 +1411,10 @@ class NewHarnessController extends ChangeNotifier {
   String get _settingsEngine => _agentPreview ?? _engine;
   LocalCodexProfile? get _settingsProfile =>
       _settingsEngine == _engine ? _profile : null;
-  List<PermissionMode> get _settingsModes =>
-      permissionModesOf(_baseOf(_settingsEngine));
+  String? get _forcedPermissionMode => integration?.forcedPermissionMode;
+  List<PermissionMode> get _settingsModes => _forcedPermissionMode != null
+      ? const []
+      : permissionModesOf(_baseOf(_settingsEngine));
   String get _settingsMode =>
       _settingsModes.any((mode) => mode.id == _permissionFor(_settingsEngine))
       ? _permissionFor(_settingsEngine)
@@ -1406,7 +1422,9 @@ class NewHarnessController extends ChangeNotifier {
   bool get takesTask => isCloud || takesFirstTask(_base);
   bool get taskTooLong => task.trim().length > kFirstTaskMaxLength;
   List<PermissionMode> get _modes =>
-      _noAgentSetup || isCloud ? const [] : permissionModesOf(_base);
+      _noAgentSetup || isCloud || _forcedPermissionMode != null
+      ? const []
+      : permissionModesOf(_base);
   bool get hasModes => _modes.isNotEmpty;
   String get mode =>
       _modes.any((mode) => mode.id == _mode) ? _mode : kDefaultPermissionMode;
@@ -1425,7 +1443,9 @@ class NewHarnessController extends ChangeNotifier {
 
   /// Settings are offered separately so browsing never inserts list rows.
   List<NewHarnessOption> agentSettingsFor(String engine) {
-    final modes = permissionModesOf(_baseOf(engine));
+    final modes = _forcedPermissionMode != null
+        ? const <PermissionMode>[]
+        : permissionModesOf(_baseOf(engine));
     final mode =
         modes.where((mode) => mode.id == _permissionFor(engine)).firstOrNull ??
         modes.where((mode) => mode.id == kDefaultPermissionMode).firstOrNull;
@@ -3692,6 +3712,7 @@ class NewHarnessController extends ChangeNotifier {
   bool get checking =>
       _attempt?.awaitingConfirmation == true || integration?.pending == true;
   bool get canCancelPending => _attempt?.canCancelPending == true;
+  bool get canFollowPending => _attempt?.canFollowPending == true;
 
   /// The folder a new project's typed name found already there
   /// (`PROJECT_EXISTS`), with the project and machine it was refused for.
@@ -3726,7 +3747,7 @@ class NewHarnessController extends ChangeNotifier {
   /// nothing until it has an answer.
   Future<NewHarnessOutcome>? _following;
 
-  /// Asks after a request the machine holds, without the person pressing
+  /// Asks after a request the machine holds or is starting, without pressing
   /// Check status. The machine starts a held harness by itself (an agent it is
   /// installing, a model waking). The line said "Installing Kilo. The harness
   /// starts once it is installed." and stayed after Kilo had started, with no
@@ -3735,7 +3756,7 @@ class NewHarnessController extends ChangeNotifier {
   /// or when it was refused, which the line then says.
   Future<NewHarnessOutcome> followHeld() {
     if (_following case final check?) return check;
-    if (_disposed || busy || !canCancelPending) {
+    if (_disposed || busy || !canFollowPending) {
       return Future.value(NewHarnessOutcome.failed);
     }
     final check = create(quiet: true);
@@ -3764,6 +3785,46 @@ class NewHarnessController extends ChangeNotifier {
       error = problem;
     }
     notifyListeners();
+  }
+
+  /// Only while a request is being recovered: once its creation failed, the
+  /// form is the person's again and Discard would delete what they retry.
+  bool get canDiscardPending =>
+      integration?.pending == true && integration?.discard != null;
+
+  /// The destination dropped its request; the form is closed, not reused.
+  bool get discarded => _discarded;
+  bool _discarded = false;
+
+  /// Drops a request the destination cannot finish. Null once it is gone or
+  /// kept (which the line then says), else the question to confirm before
+  /// dropping it anyway.
+  Future<String?> discardPending({bool anyway = false}) async {
+    final discard = integration?.discard;
+    if (busy || discard == null) return null;
+    busy = true;
+    error = null;
+    status = 'Discarding the request…';
+    notifyListeners();
+    try {
+      final question = await discard(anyway: anyway);
+      if (_disposed) return null;
+      busy = false;
+      status = null;
+      if (question == null) {
+        _discarded = true;
+        _attempt = null;
+        integration!
+          ..pending = false
+          ..resume = null
+          ..discard = null;
+      }
+      notifyListeners();
+      return question;
+    } catch (failure) {
+      _fail(failure.toString());
+      return null;
+    }
   }
 
   bool _warnedAboutClosing = false;
@@ -3999,9 +4060,17 @@ class NewHarnessController extends ChangeNotifier {
         );
       }
     }
-    final permissionMode = hasModes ? mode : null;
+    final forcedMode = _forcedPermissionMode;
+    // Only Claude Code and Codex name a full mode. Other engines use their
+    // existing approving launch flags through bypassPermission.
+    final permissionMode = forcedMode == null
+        ? (hasModes ? mode : null)
+        : permissionModesOf(base).any((mode) => mode.id == forcedMode)
+        ? forcedMode
+        : null;
     final bypass =
-        permissionMode != null && permissionModeApproves(permissionMode);
+        forcedMode != null ||
+        (permissionMode != null && permissionModeApproves(permissionMode));
     final folder = _project.folder;
     final firstMessage = task.trim();
     String launchMessage = firstMessage;
@@ -4033,7 +4102,10 @@ class NewHarnessController extends ChangeNotifier {
     final launchSetup = LaunchSetup(
       engine: base,
       harnessId: harness,
-      permissionMode: permissionMode ?? kDefaultPermissionMode,
+      // A Swarm's required mode is not the person's next ordinary launch choice.
+      permissionMode: _forcedPermissionMode != null
+          ? _permissionFor(base)
+          : permissionMode ?? kDefaultPermissionMode,
       model: model,
       profile: base == 'codex' && model == null && !asGuest ? _profile : null,
       profileMachineId: _machineId,
@@ -4042,6 +4114,12 @@ class NewHarnessController extends ChangeNotifier {
     final launchedWorktree =
         _recoveredWorktreePreference ??
         (isGitProject && !inWorktree ? worktree : null);
+    // A destination's journal keeps them for a later recovery's form.
+    // Only a real folder: a new project's or a clone's label is no path, and a
+    // recovery that unlocks the form after a failure would send it as one.
+    integration
+      ?..engine = base
+      ..folder = folder;
     final failure = await app.createAgent(
       _machineId,
       engine: base,
@@ -4060,6 +4138,8 @@ class NewHarnessController extends ChangeNotifier {
           : null,
       model: model,
       dsh: harness,
+      swarmRole: integration?.swarmRole,
+      swarmSkillMode: integration?.swarmSkillMode,
       // Sent exactly as written; an agent that cannot take one is never sent it.
       prompt: takesTask && files.isEmpty && launchMessage.isNotEmpty
           ? launchMessage
@@ -4090,9 +4170,8 @@ class NewHarnessController extends ChangeNotifier {
         }
         destination.pending = false;
       } catch (problem) {
-        return _fail(
-          'Harness started. Could not join the conversation: $problem',
-        );
+        // The destination says what started and what did not.
+        return _fail(problem.toString());
       }
     }
     if (failure == null &&

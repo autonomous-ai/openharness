@@ -179,6 +179,24 @@ describe('appendDeviceKey', () => {
     expect(r).toMatchObject({ ok: false, status: 403, code: 'WRONG_CHANNEL' })
   })
 
+  // A team machine (lib/teamSession.ts) is a machine of the account run for teammates: it adds its own key, so the
+  // person's apps reach it end to end, but it never takes another device off the account.
+  it('lets a team machine add its own key and leave, but never remove another device\'s key', async () => {
+    const teamChannel = { kind: 'machine' as const, machineId: MID2, harnessSessionId: 'team-session', team: true }
+    await appendDeviceKey(USER, await addEntry(phone, 'viewer', '', 'phone'), { kind: 'viewer' })
+    await appendDeviceKey(USER, await addEntry(box1, 'machine', MID1, 'box1'), { kind: 'machine', machineId: MID1 })
+    expect(await appendDeviceKey(USER, await addEntry(box2, 'machine', MID2, 'team'), teamChannel)).toMatchObject({ ok: true })
+    for (const target of [box1.pub, phone.pub]) {
+      expect(await appendDeviceKey(USER, await removeEntry(target, box2), teamChannel)).toMatchObject({ ok: false, status: 403, code: 'WRONG_CHANNEL' })
+    }
+    expect(m.publishDown).not.toHaveBeenCalled()
+    expect(m.revoke).not.toHaveBeenCalled()
+    expect(await appendDeviceKey(USER, await removeEntry(box2.pub, box2), teamChannel)).toMatchObject({ ok: true })
+    // The owner's machine may still take the team machine off.
+    await appendDeviceKey(USER, await addEntry(key(4), 'machine', MID2, 'team again'), teamChannel)
+    expect(await appendDeviceKey(USER, await removeEntry(key(4).pub, box1), { kind: 'machine', machineId: MID1 })).toMatchObject({ ok: true })
+  })
+
   it('ends the Harness session of a removed phone', async () => {
     await appendDeviceKey(USER, await addEntry(phone, 'viewer', '', 'phone'), { kind: 'viewer', harnessSessionId: 'sess-1' })
     await appendDeviceKey(USER, await addEntry(box1, 'machine', MID1, 'box1'), { kind: 'machine', machineId: MID1 })

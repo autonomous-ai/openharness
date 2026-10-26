@@ -2,10 +2,13 @@
 
 Use [CLAUDE.md](CLAUDE.md) for architecture, build commands, and testing.
 
-For every DSH dashboard, follow the [DSH workspace contract](design/dsh-workspace.md):
+For DSH dashboards, follow the [DSH workspace contract](design/dsh-workspace.md):
 70% viewer on the left, 30% real agent chat on the right, including loading,
 missing dependencies, failures, retries, and restoration. Reserve the chat slot
 before startup; never let an unavailable conversation become a full-width viewer.
+The Swarm's **Your devices** is a dashboard-only exception: fill its center pane,
+keep the sidebars visible, and do not start or reserve a Devices conversation.
+Standalone Devices retains its existing viewer/chat workspace.
 
 For all UI outside terminal panes, follow the
 [desktop design system](design/desktop-design-system.md). The user's current

@@ -1,8 +1,8 @@
 import { describe, expect, it, vi } from 'vitest'
 import { fakeCore } from '../testing/fakeCore.js'
-import { ContributionPreparations, prepareContribution } from './contribution.js'
+import { ContributionPreparations, prepareContribution, prepareTeamContribution } from './contribution.js'
 import { mkdtemp, rm, stat } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
+import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 const GiB = 1024 ** 3
@@ -33,29 +33,70 @@ describe('one-field machine preparation', () => {
       delete f.state.project
       const core = fakeCore({ dataDir })
       const result = await prepareContribution(core, { tabId: 'tab', scope: 'swarm' }, f.deps as never)
-      const cwd = join(dataDir, 'swarm-projects', 'tab')
-      expect(result).toMatchObject({ scope: 'swarm', cwd, engines: ['claude', 'pi'] })
+      const cwd = join(homedir(), 'harnesses', 'swarms', 'tab')
+      expect(result).toMatchObject({ scope: 'swarm', cwd, engines: ['claude', 'codex'] })
       expect((await stat(cwd)).isDirectory()).toBe(true)
       expect(f.deps.prepare).not.toHaveBeenCalled()
       expect(f.deps.capacity).toHaveBeenCalledWith({ cwd, tools: ['git'], devices: [] })
-    } finally { await rm(dataDir, { recursive: true, force: true }) }
+    } finally {
+      await rm(join(homedir(), 'harnesses', 'swarms', 'tab'), { recursive: true, force: true })
+      await rm(dataDir, { recursive: true, force: true })
+    }
+  })
+  // A Mac's Harness Team account reads no Swarm as the person (backend lib/teamSession.ts): its Mac's daemon adds it, and it
+  // prepares its own swarm workspace without that read ("One machine", docs/plans/2026-10-24-swarm-team-account.md).
+  it('prepares a Harness Team account\'s swarm workspace without reading the Swarm, and only that', async () => {
+    const f = fixture()
+    const dataDir = await mkdtemp(join(tmpdir(), 'harness-swarm-contribution-'))
+    try {
+      const core = fakeCore({ dataDir })
+      const team = { ...f.deps, team: () => true }
+      const result = await prepareContribution(core, { tabId: 'tab', scope: 'swarm' }, team as never)
+      expect(result).toMatchObject({ scope: 'swarm', cwd: join(homedir(), 'harnesses', 'swarms', 'tab'), engines: ['claude', 'codex'] })
+      expect(f.deps.backend).not.toHaveBeenCalled()
+      await expect(prepareContribution(core, { tabId: 'tab' }, team as never)).rejects.toThrow('swarm')
+    } finally {
+      await rm(join(homedir(), 'harnesses', 'swarms', 'tab'), { recursive: true, force: true })
+      await rm(dataDir, { recursive: true, force: true })
+    }
   })
   it('uses the lead project on its host and probes all engines without inventing authentication', async () => {
     const f = fixture()
-    expect(await f.run()).toEqual({ ok: true, state: 'ready', cwd: '/repo', engines: ['claude', 'pi'], maxAgents: 8 })
-    expect(f.request).toHaveBeenCalledWith('engines_probe', { accounts: true }, 20000)
+    expect(await f.run()).toEqual({ ok: true, state: 'ready', cwd: '/repo', engines: ['claude', 'codex'], maxAgents: 8, maxAvailableAgents: 16 })
+    expect(f.request).toHaveBeenCalledWith('engines_probe', { engines: ['claude', 'codex'], accounts: true }, 20000)
     expect(f.deps.prepare).not.toHaveBeenCalled()
     expect(f.close).toHaveBeenCalledOnce()
   })
-  it('offers one slot per 2 GiB free, the memory each start needs, between one and eight', async () => {
+  it('offers installed Claude and Codex even when the account probe reports no vendor login', async () => {
+    const f = fixture()
+    f.request.mockResolvedValueOnce({ engines: [
+      { engine: 'claude', installed: true, signedIn: false },
+      { engine: 'codex', installed: true, signedIn: false },
+      { engine: 'opencode', installed: true, signedIn: true },
+      { engine: 'kilo', installed: true, signedIn: true },
+    ] })
+    expect(await f.run()).toMatchObject({ engines: ['claude', 'codex'] })
+  })
+  it.each([
+    { totalGiB: 32, usedGiB: 30, maxAgents: 8, maxAvailableAgents: 16 },
+    { totalGiB: 16, usedGiB: 15, maxAgents: 4, maxAvailableAgents: 8 },
+    { totalGiB: 64, usedGiB: 63, maxAgents: 16, maxAvailableAgents: 16 },
+    { totalGiB: 2, usedGiB: 1, maxAgents: 1, maxAvailableAgents: 1 },
+  ])('suggests $maxAgents of $maxAvailableAgents slots from $totalGiB GiB total RAM', async ({ totalGiB, usedGiB, maxAgents, maxAvailableAgents }) => {
+    const f = fixture()
+    f.deps.capacity.mockResolvedValueOnce({ ok: true, resources: {
+      memoryTotalBytes: totalGiB * GiB, memoryUsedBytes: usedGiB * GiB, projectDiskFreeBytes: 100 * GiB,
+    } })
+    expect(await f.run()).toMatchObject({ maxAgents, maxAvailableAgents })
+  })
+  it('keeps the suggestion when free RAM changes but total RAM does not', async () => {
     const f = fixture()
     const slots = async (freeBytes: number) => {
       f.deps.capacity.mockResolvedValueOnce({ ok: true, resources: { memoryTotalBytes: 32 * GiB, memoryUsedBytes: 32 * GiB - freeBytes, projectDiskFreeBytes: 100 * GiB } })
       return (await f.run() as { maxAgents?: number }).maxAgents
     }
-    // Diego's Mac on 2026-10-21: 32 GiB, about 5.3 GiB free.
-    expect(await slots(5.3 * GiB)).toBe(2)
-    expect(await slots(GiB)).toBe(1)
+    expect(await slots(5.3 * GiB)).toBe(8)
+    expect(await slots(GiB)).toBe(8)
     expect(await slots(30 * GiB)).toBe(8)
   })
   it('prepares the repository on another machine and reuses an existing contribution', async () => {
@@ -78,7 +119,7 @@ describe('one-field machine preparation', () => {
   it('fails when no installed engine or project disk can be read and closes the connection', async () => {
     const f = fixture()
     f.request.mockResolvedValueOnce({ engines: [] })
-    await expect(f.run()).rejects.toThrow('Sign in')
+    await expect(f.run()).rejects.toThrow('Install Claude Code or Codex')
     f.deps.capacity.mockResolvedValueOnce({ error: 'INVALID_REQUEST' } as never)
     await expect(f.run()).rejects.toThrow('project folder')
     expect(f.close).toHaveBeenCalledTimes(2)
@@ -103,5 +144,35 @@ describe('one-field machine preparation', () => {
     expect(jobs.read({ tabId: 'tab' })).toEqual({ error: 'INVALID_REQUEST' })
     for (let i = 0; i < 32; i++) jobs.read({ tabId: 'tab', operationId: `setup-${i}` })
     expect(jobs.read({ tabId: 'tab', operationId: 'extra' })).toMatchObject({ error: 'SETUP_BUSY' })
+  })
+})
+
+describe('this Mac\'s Harness Team account preparing through the relay', () => {
+  function relay(answers: Record<string, unknown>[]) {
+    const core = fakeCore()
+    const request = vi.fn(async () => answers.shift() ?? { ok: true, state: 'preparing' })
+    const close = vi.fn()
+    const open = vi.fn(async () => ({ machineId: 'team-1', request, close }))
+    let clock = 0
+    const deps = { open, sleep: vi.fn(async () => { clock += 1_000 }), deadlineMs: 3_000, now: () => clock }
+    return { core, request, close, open, deps }
+  }
+
+  it('asks the team account\'s own daemon, keeps one receipt while it prepares, and closes the line', async () => {
+    const r = relay([{ ok: true, state: 'preparing' }, { ok: true, state: 'ready', scope: 'swarm', cwd: '/Users/harnessteam/harnesses/swarms/tab', engines: ['codex'] }])
+    expect(await prepareTeamContribution(r.core, { tabId: 'tab', machineId: 'team-1' }, r.deps as never)).toMatchObject({ cwd: '/Users/harnessteam/harnesses/swarms/tab' })
+    expect(r.open).toHaveBeenCalledWith({ dataDir: r.core.dataDir, port: r.core.daemon.port, machineId: r.core.daemon.machineId() }, 'team-1')
+    const [first, second] = r.request.mock.calls as unknown as [string, Record<string, unknown>][]
+    expect(first![1]).toMatchObject({ action: 'prepareContribution', tabId: 'tab', scope: 'swarm' })
+    expect(second![1].operationId).toBe(first![1].operationId)
+    expect(r.close).toHaveBeenCalledOnce()
+  })
+
+  it('says why it could not, and gives up after its deadline', async () => {
+    const failed = relay([{ error: 'SETUP_FAILED', detail: 'Install Claude Code or Codex on this machine, then try again.' }])
+    await expect(prepareTeamContribution(failed.core, { tabId: 'tab', machineId: 'team-1' }, failed.deps as never)).rejects.toThrow('Install Claude Code or Codex')
+    const slow = relay([])
+    await expect(prepareTeamContribution(slow.core, { tabId: 'tab', machineId: 'team-1' }, slow.deps as never)).rejects.toThrow('still preparing')
+    expect(slow.close).toHaveBeenCalledOnce()
   })
 })

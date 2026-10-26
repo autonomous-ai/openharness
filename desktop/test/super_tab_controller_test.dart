@@ -7,6 +7,54 @@ import 'support/super_tab_fixture.dart';
 
 void main() {
   test(
+    'receipt refreshes the latest own message when a new reply arrives',
+    () async {
+      final server = ConversationServer()..append('Please start.');
+      server.messages.first['deliveries'] = [
+        {'id': 'delivery', 'agentId': 'lead-agent', 'status': 'claimed'},
+      ];
+      final c = server.controller();
+      await c.refresh();
+      server.messages.first['deliveries'] = [
+        {'id': 'delivery', 'agentId': 'lead-agent', 'status': 'answered'},
+      ];
+      server.append('Done.');
+      server.messages.last['author'] = {
+        'kind': 'agent',
+        'id': 'lead-agent',
+        'name': 'Lead',
+      };
+      server.messages.last['replyTo'] = server.messages.first['id'];
+      await c.refresh();
+      expect(c.messages('lead').first.deliveries.single['status'], 'answered');
+      c.dispose();
+    },
+  );
+
+  test('keeps the backend\'s credential notice for the sender until the next action', () async {
+    const notice =
+        'Removed a credential (GitHub token) before saving. Revoke or rotate it.';
+    final server = ConversationServer()
+      ..commandResult['credentialNotice'] = notice;
+    final c = server.controller();
+    await c.refresh();
+    c.setDraft('lead', 'Here is the token.');
+    expect(await c.send(), isNotNull);
+    expect(c.operationNotice, notice);
+    expect(c.draft('lead'), isEmpty);
+    server.commandResult.clear();
+    c.setDraft('lead', 'Plain words.');
+    expect(await c.send(), isNotNull);
+    expect(c.operationNotice, isNull);
+    server.commandResult['credentialNotice'] = notice;
+    c.setDraft('lead', 'Again.');
+    await c.send();
+    c.select('offline');
+    expect(c.operationNotice, isNull);
+    c.dispose();
+  });
+
+  test(
     'group terminals keep every member when selecting one and after reopening',
     () async {
       final server = ConversationServer();

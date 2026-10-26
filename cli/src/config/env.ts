@@ -218,7 +218,7 @@ const fields = {
   // `harness.log` there is the daemon's console, and `harness reset` wipes it.
   HARNESS_LOGS_DIR: text(join(adapterRootDir, 'logs')),
   // The Harness PTY host's `--home` (the `ptyhost` terminal backend, pty/): it writes `run/` (its discovery
-  // file and endpoint) and `logs/pty-host.log` under it. Product-root state like the logs: the host outlives
+  // file and endpoint) and `logs/pty-host-<instance>.log` under it. Product-root state like the logs: the host outlives
   // a daemon restart, and the next daemon finds it here.
   HARNESS_PTY_DIR: text(join(adapterRootDir, 'pty')),
   // The dials' own product-root state: `pets/` holds the custom pet packs and which pack stands for what.
@@ -289,6 +289,8 @@ const fields = {
   OPENCODE_PATH: maybe,
   // Path to the `pi` CLI for Pi recap one-shots (else `pi` is resolved from PATH).
   PI_PATH: maybe,
+  // Path to the `omp` CLI (else `omp` is resolved from PATH).
+  OMP_PATH: maybe,
   // Path to the `hermes` CLI for Hermes recap one-shots (else `hermes` is resolved from PATH).
   HERMES_PATH: maybe,
   // Path to the `commandcode` CLI for Command Code recap one-shots (else resolved from PATH).

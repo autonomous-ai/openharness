@@ -2,6 +2,9 @@ import { PRODUCT_USAGE_METRICS, PRODUCT_USAGE_SETUP_METRICS, PRODUCT_USAGE_ACTIO
 import { cleanUsageContext, type ProductUsageContext } from '../types/productHealthContract.js'
 
 const allowed = new Set<string>(PRODUCT_USAGE_METRICS)
+// Read from the margins too, though not reported by the clients: the relay's count of the phone's opens by release
+// (lib/dailyTracking.ts mobileOpenMetrics), which shares the phone's release label and its coverage threshold.
+const readableMargins = new Set<string>([...PRODUCT_USAGE_METRICS, 'relay_mobile_opens'])
 // Two marginal tables in the existing expiring total store. No release/platform cross-product,
 // account joins, per-report rows, or arbitrary attributes survive ingestion.
 export function healthBreakdowns(context: ProductUsageContext | undefined, metric: string): string[] {
@@ -25,7 +28,7 @@ export function dailyProductHealth(rows: Row[], now: Date) {
       const c = days.get(day) ?? {}; c[row.metric] = (c[row.metric] ?? 0) + row.value; days.set(day, c)
     } else {
       const m = /^breakdown:(release|platform):(cli|desktop|phone):([^:]+):(.+)$/.exec(row.metric)
-      if (!m || !allowed.has(m[4])) continue
+      if (!m || !readableMargins.has(m[4])) continue
       const context = cleanUsageContext({ surface: m[2], release: m[1] === 'release' ? m[3] : 'unknown',
         platform: m[1] === 'platform' ? m[3] : 'other', channel: 'production' })
       if (!context || (m[1] === 'release' && context.release !== m[3])) continue
@@ -53,6 +56,7 @@ export function dailyProductHealth(rows: Row[], now: Date) {
       waitBuckets: Object.fromEntries(['first_work', 'first_response'].flatMap(step => ['under_1m', '1m_to_5m', 'over_5m'].map(bucket => [`${step}_${bucket}`, c[`${prefix}_${step}_${bucket}`] ?? null]))),
       definition: 'Locally deduplicated episodes, not a joined per-person funnel. Stages can cross UTC days; no daily conversion ratio is inferred.',
     })),
+    firstRun: firstRunActivation(c, Date.parse(day) + 2 * 86400000 <= Date.parse(today)),
     firstWorkRetention: [1, 7, 28].map(lag => {
       const mature = Date.parse(day) + (lag + 1) * 86400000 <= Date.parse(today)
       const denominator = c.health_cli_first_interactive_work ?? null
@@ -80,4 +84,24 @@ export function dailyProductHealth(rows: Row[], now: Date) {
       habit: 'Weekly work-day bins describe completed UTC weeks from installations that report again; non-returners may be missing. First-work returns are specific to explicitly marked composer work, not all human activity.',
       privacy: 'Fixed aggregate totals; no identity or content joins. Sparse margins require 20 collector observations, which are not 20 distinct people. No guarantee of anonymity is inferred from that threshold.',
     } }
+}
+
+/** All stages belong to the start day of one first-arrival app episode. A routine app
+ * launch never enrolls; retries in that episode do not add another denominator. */
+export function firstRunActivation(c: Record<string, number>, mature: boolean) {
+  const started = c.health_desktop_first_run_started ?? null
+  const response = started === null ? null : c.health_desktop_first_run_response ?? 0
+  return {
+    started,
+    ready: started === null ? null : c.health_desktop_first_run_ready ?? 0,
+    work: started === null ? null : c.health_desktop_first_run_work ?? 0,
+    response,
+    responsePercent: started && response !== null && response <= started
+      ? Math.round(1000 * response / started) / 10 : null,
+    responseUnder1m: c.health_desktop_first_run_response_under_1m ?? null,
+    response1mTo5m: c.health_desktop_first_run_response_1m_to_5m ?? null,
+    responseOver5m: c.health_desktop_first_run_response_over_5m ?? null,
+    mature,
+    definition: 'Consented first-arrival app episodes reaching a live response in the opened harness, within the same app run and at most 24 hours. Counts belong to the start day; retries share its denominator. Not unique people, all installs, task completion or a cross-restart 24-hour cohort. Immature days and delivery loss are provisional.',
+  }
 }

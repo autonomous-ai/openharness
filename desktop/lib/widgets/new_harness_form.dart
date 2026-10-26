@@ -88,7 +88,11 @@ class NewHarnessFormState extends State<NewHarnessForm> {
       !box.busy &&
       !box.linkingProfile &&
       box.requiredChoice == null &&
-      !box.taskTooLong;
+      !box.taskTooLong &&
+      (box.integration?.roles == null ||
+          box.integration!.roles!.any(
+            (role) => role.id == box.integration!.roleId,
+          ));
   FocusNode get _desktopDefaultFocus => box.takesTask
       ? _taskFocus
       : _desktopStartEnabled
@@ -170,13 +174,14 @@ class NewHarnessFormState extends State<NewHarnessForm> {
 
   Timer? _heldFollow;
 
-  /// A request the machine holds starts by itself (an agent it is installing,
-  /// a model waking). Asked after while this form is open, so the harness
+  /// A request the machine holds or is starting completes by itself (an agent
+  /// installing, a model waking, a worktree being made). Asked after while
+  /// this form is open, including after the initial startup wait, so the harness
   /// opens when it has started; before, it started with no pane and the form
   /// went on saying it would, until Check status was pressed
   /// ([NewHarnessController.followHeld]).
   void _followHeld() {
-    if (!box.canCancelPending) {
+    if (!box.canFollowPending) {
       _heldFollow?.cancel();
       _heldFollow = null;
       return;
@@ -1674,11 +1679,16 @@ class NewHarnessFormState extends State<NewHarnessForm> {
                                         ),
                                       ),
                                     ],
+                                    // Only an error can repeat the required
+                                    // choice's reason; a status always shows.
                                     if (!choosing &&
                                         (box.error != null ||
                                             box.status != null) &&
-                                        box.error !=
-                                            box.requiredChoice?.message) ...[
+                                        (box.error == null ||
+                                            box.error !=
+                                                box
+                                                    .requiredChoice
+                                                    ?.message)) ...[
                                       const SizedBox(height: 12),
                                       _status(),
                                     ],
@@ -2242,6 +2252,37 @@ class NewHarnessFormState extends State<NewHarnessForm> {
     child: const Text('Cancel request'),
   );
 
+  Widget _discardPendingButton() => TextButton(
+    key: const ValueKey('discard-pending-request'),
+    onPressed: box.busy ? null : () => unawaited(_discardPending()),
+    child: const Text('Discard request'),
+  );
+
+  Future<void> _discardPending() async {
+    final question = await box.discardPending();
+    if (question != null && mounted) {
+      final sure = await showDialog<bool>(
+        context: context,
+        builder: (context) => AlertDialog(
+          content: Text(question),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Keep request'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(context, true),
+              child: const Text('Discard anyway'),
+            ),
+          ],
+        ),
+      );
+      if (sure != true || !mounted) return;
+      await box.discardPending(anyway: true);
+    }
+    if (mounted && box.discarded) widget.onClose();
+  }
+
   /// Offered beside the refusal of a typed project name whose folder is
   /// already there: starts in that folder, only once pressed.
   Widget _useExistingFolderButton() => TextButton(
@@ -2257,7 +2298,46 @@ class NewHarnessFormState extends State<NewHarnessForm> {
     crossAxisAlignment: WrapCrossAlignment.center,
     children: [
       if (box.canCancelPending) _cancelPendingButton(),
+      if (box.canDiscardPending) _discardPendingButton(),
       if (box.existingFolder != null) _useExistingFolderButton(),
+      if (box.integration?.roles case final roles?)
+        roles.isEmpty
+            ? const Text('This project has no Engineer or Reviewer roles.')
+            : SizedBox(
+                width: 180,
+                child: InputDecorator(
+                  decoration: const InputDecoration(labelText: 'Role'),
+                  child: DropdownButtonHideUnderline(
+                    child: DropdownButton<String>(
+                      key: const ValueKey('new-harness-role'),
+                      isExpanded: true,
+                      value:
+                          roles.any(
+                            (role) => role.id == box.integration!.roleId,
+                          )
+                          ? box.integration!.roleId
+                          : null,
+                      items: [
+                        for (final role in roles)
+                          DropdownMenuItem(
+                            value: role.id,
+                            child: Text(
+                              role.name,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                      ],
+                      onChanged: box.locked
+                          ? null
+                          : (value) => setState(() {
+                              if (value != null) {
+                                box.integration!.chooseRole(value);
+                              }
+                            }),
+                    ),
+                  ),
+                ),
+              ),
       if (includeProjectVisibility &&
           box.integration?.projectVisibility != null)
         FocusTraversalOrder(
@@ -3046,6 +3126,7 @@ class NewHarnessFormState extends State<NewHarnessForm> {
               ),
             _buildButton(),
             if (box.canCancelPending) _cancelPendingButton(),
+            if (box.canDiscardPending) _discardPendingButton(),
             if (box.existingFolder != null) _useExistingFolderButton(),
             if (!_picking && box.requiredChoice != null) ...[
               SizedBox(height: _rowHeight),

@@ -110,11 +110,14 @@ class ActivityMark extends StatefulWidget {
     this.visible = true,
     this.emphasized = false,
     this.tooltip = true,
+    this.showIdle = false,
     this.clock,
   });
   final HarnessActivity activity;
   final Color color;
   final bool visible, emphasized, tooltip;
+  // Rows with an explicit status line need a visible mark for every state.
+  final bool showIdle;
   final ActivityClock? clock;
 
   @override
@@ -170,6 +173,8 @@ class _ActivityMarkState extends State<ActivityMark> {
   Widget build(BuildContext context) {
     final mark = _listening
         ? activitySpinnerFrames[clock.frame]
+        : widget.showIdle && widget.activity == HarnessActivity.idle
+        ? '○'
         : widget.activity.mark;
     final cell = workspaceBarCellSizeOf(context);
     final style =

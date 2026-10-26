@@ -294,3 +294,26 @@ it if one is dropped.
     visual: emulator, hit-testing and selection see the new screen at once. A
     change that is not a recognisable scroll ends any slide on the spot, as the
     screen behaved before. False draws each redraw as it lands, as upstream.
+
+21. **A full-screen program's scroll is drawn from rows kept here**
+    (`lib/src/ui/remote_scroll_mirror.dart`, `TerminalView.altBufferScrollMirror`).
+    The finger moves a document of the program's rows; the program is asked to
+    scroll ahead of it — a page at a time once the finger is fast, the next
+    page sent before the finger reaches the edge of what is known, several
+    pages together where they land among rows already known — and each frame
+    it draws is placed in the document. With page keys on (Claude Code), which
+    rows scroll is read off its prompt box while it is quiet, so the first
+    scroll of an agent is drawn from the document and the 400 rows above are
+    fetched ahead before anyone scrolls; the blank row over the box never
+    joins the rows that scroll. "Quiet" waits a little over how long the
+    program has lately taken to answer, so a slow link does not have it asked
+    twice. Catching up — still gliding, or let go of the edge of what is
+    known — the screen still moves with the finger, the spring taking in only
+    what lies between them, not trailing the finger by its speed. A page up
+    that goes nowhere marks the top of the transcript. A frame placed far off,
+    and rows set aside to be found again, are
+    looked up by row text (`bestPlacing`, `rowsBySignature`) rather than tried
+    at every placing. Regressions: `mobile/test/remote_scroll_mirror_test.dart`,
+    against a fake Claude Code; measured on a phone by
+    `mobile/integration_test/claude_scroll_test.dart`, results in
+    `mobile/integration_test/claude_scroll/RESULTS.md`.

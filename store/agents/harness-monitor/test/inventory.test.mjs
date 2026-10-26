@@ -60,7 +60,20 @@ test('reconnect and failed reads refresh before the regular remote interval', as
   await read(); await read(); assert.equal(reads, 1)
   online = false; assert.equal((await read()).rows[0].activity, 'offline')
   online = true; fail = true; assert.equal((await read()).rows[0].canOpen, false); assert.equal(reads, 2)
-  fail = false; assert.equal((await read()).rows[0].canOpen, true); assert.equal(reads, 3)
+  // Asked again 15 s after a failed read, not on the next tick.
+  fail = false; await read(); assert.equal(reads, 2)
+  now += 15_000; assert.equal((await read()).rows[0].canOpen, true); assert.equal(reads, 3)
+})
+test('a machine that keeps failing is asked later and later, at most every five minutes, and at once on a refresh', async () => {
+  const remote = { at: 0, answers: new Map() }; let now = 0, reads = 0
+  const options = { remote, remoteIntervalMs: 15_000, reportMachines: async () => ({ machines: [{ ...machine, online: true }] }),
+    agentsFor: async () => { reads++; throw Error('Disconnected') } }
+  const asks = []
+  for (; now <= 20 * 60_000; now += 4_000) { const before = reads; await collect({ ...options, now }); if (reads > before) asks.push(now) }
+  const gaps = asks.slice(1).map((at, i) => at - asks[i])
+  assert.deepEqual(gaps.slice(0, 5).map(gap => Math.ceil(gap / 4_000) * 4_000), [16_000, 32_000, 60_000, 120_000, 240_000])
+  assert.ok(gaps.every(gap => gap <= 5 * 60_000 + 4_000))
+  const before = reads; await collect({ ...options, remoteIntervalMs: 0, now }); assert.equal(reads, before + 1)
 })
 test('ambiguous IDs and pane numbers cannot choose another machine', () => {
   const a = merge(), b = merge({}, { machine: { machineId: 'm2' } })

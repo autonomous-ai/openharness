@@ -8,6 +8,7 @@ import 'package:harness/state/app_state.dart';
 import 'package:harness/state/pane_layout_store.dart';
 import 'package:harness/screens/swarm_screen.dart';
 import 'package:harness/state/swarm.dart';
+import 'package:harness/state/terminal_pane.dart';
 import 'package:harness/super_tabs/client.dart';
 import 'package:harness/ws/ws_conn.dart';
 
@@ -47,6 +48,22 @@ class _Catalog {
   }
 }
 
+class _RestoringStore extends MemoryStore {
+  final readingLayout = Completer<void>();
+  final releaseLayout = Completer<void>();
+  bool holdLayout = false;
+
+  @override
+  Future<String?> read(String key) async {
+    final value = await super.read(key);
+    if (holdLayout && key == 'swarm_layout_v1') {
+      readingLayout.complete();
+      await releaseLayout.future;
+    }
+    return value;
+  }
+}
+
 class _Connection extends WsConn {
   _Connection(this.catalog)
     : super(
@@ -78,7 +95,11 @@ class _Connection extends WsConn {
   }
 }
 
-AppNotifier _computer(_Catalog catalog, MemoryStore store) {
+AppNotifier _computer(
+  _Catalog catalog,
+  MemoryStore store, {
+  bool enteredSuperTabs = true,
+}) {
   final connection = _Connection(catalog);
   final app = createApp(
     store: store,
@@ -91,6 +112,7 @@ AppNotifier _computer(_Catalog catalog, MemoryStore store) {
     id: 'owner',
     email: 'owner@example.invalid',
   );
+  if (enteredSuperTabs) app.enterSuperTabs();
   addTearDown(app.dispose);
   return app;
 }
@@ -106,6 +128,63 @@ Future<void> _close(AppNotifier app, Swarm tab) async {
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
+
+  test('account membership cannot reveal SuperTabs before deliberate entry', () async {
+    final store = MemoryStore();
+    final app = _computer(_Catalog(), store, enteredSuperTabs: false);
+    app.newSwarm(name: 'Regular work');
+    final regular = app.activeSwarm;
+    await app.superTabs.refreshTabs();
+    expect(app.swarms.where((s) => s.isSuperTab), isEmpty);
+    expect(app.activeSwarm, same(regular));
+    // The hidden shortcut marks a draft. It permits discovery without replacing
+    // or navigating away from the existing regular work.
+    app.newSwarm(newTabPage: true);
+    app.markSuperTabDraft(app.activeSwarmId);
+    final draft = app.activeSwarm;
+    await app.superTabs.refreshTabs();
+    expect(app.swarms, contains(regular));
+    expect(app.activeSwarm, same(draft));
+    expect(app.swarms.where((s) => s.superTabId != null).single.name, 'Pilot');
+  });
+
+  test(
+    'restoring an already-open SuperTab keeps discovery available',
+    () async {
+      final store = MemoryStore();
+      await PaneLayoutStore(storage: store).saveSwarms([
+        Swarm(id: 'work', name: 'Regular work'),
+        Swarm(id: 'pilot', name: 'Pilot', kind: 'superTab')
+          ..superTabId = '0123456789abcdef01234567',
+      ], 'work');
+      final app = _computer(_Catalog(), store, enteredSuperTabs: false);
+      app.currentUser = null;
+      await app.restorePaneLayoutForTest();
+      app.currentUser = const CurrentUserProfile(
+        id: 'owner',
+        email: 'owner@example.invalid',
+      );
+      await app.superTabs.refreshTabs();
+      expect(app.swarms.map((s) => s.id), ['work', 'pilot']);
+      expect(app.activeSwarmId, 'work');
+    },
+  );
+
+  test(
+    'entering SuperTabs for one account does not reveal them to another',
+    () async {
+      final app = _computer(_Catalog(), MemoryStore());
+      app.currentUser = const CurrentUserProfile(
+        id: 'other',
+        email: 'other@example.invalid',
+      );
+      await app.superTabs.refreshTabs();
+      expect(app.swarms.where((s) => s.isSuperTab), isEmpty);
+      app.enterSuperTabs();
+      await app.superTabs.refreshTabs();
+      expect(app.swarms.where((s) => s.isSuperTab), hasLength(1));
+    },
+  );
 
   testWidgets(
     'another computer opens the discovered tab and its shared messages',
@@ -155,6 +234,43 @@ void main() {
       expect(app.swarms.where((s) => s.isSuperTab), hasLength(1));
     },
   );
+
+  test('discovery cannot replace regular tabs during an authenticated layout restore', () async {
+    final store = _RestoringStore();
+    final layout = PaneLayoutStore(storage: store);
+    await layout.saveSwarms([
+      Swarm(id: 'work', name: 'Existing work')
+        ..panes.add(TerminalPane(id: 1, machineId: 'm', agentId: 'a0')),
+      Swarm(id: 'notes', name: 'Notes')
+        ..panes.add(TerminalPane(id: 2, machineId: 'm', agentId: 'a1')),
+    ], 'notes');
+    final saved = store.values['swarm_layout_v1'];
+    final app = _computer(_Catalog(), store);
+    store.holdLayout = true;
+    final restoring = app.restorePaneLayoutForTest();
+    await store.readingLayout.future;
+    List<Swarm>? discoveredDuringRestore;
+    String? savedDuringRestore;
+    try {
+      // Re-seating a signed-in machine restores through the same path while
+      // the workspace is already authenticated. The boot status is no fence.
+      await app.superTabs.refreshTabs();
+      discoveredDuringRestore = app.swarms.where((s) => s.isSuperTab).toList();
+      savedDuringRestore = store.values['swarm_layout_v1'];
+    } finally {
+      store.holdLayout = false;
+      store.releaseLayout.complete();
+      await restoring;
+    }
+    expect(app.swarms.map((s) => s.id), ['work', 'notes']);
+    expect(app.activeSwarmId, 'notes');
+    expect(app.allPanes.map((p) => p.agentId), ['a0', 'a1']);
+    expect(discoveredDuringRestore, isEmpty);
+    expect(savedDuringRestore, saved);
+    await app.superTabs.refreshTabs();
+    expect(app.swarms.map((s) => s.name), ['Existing work', 'Notes', 'Pilot']);
+    expect(app.activeSwarmId, 'notes');
+  });
 
   test(
     'two computers discover the same tab without navigation or a local copy',

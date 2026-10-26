@@ -168,6 +168,7 @@ export class RelayGateway implements GatewayPort {
         this.core.client(connId, {
           role, label: this.e2ee.sessionLabel(connId), identity, direct: this.directDeviceSinks.has(connId),
           accountOwner: role === 'web' && !!peer && !peer.shared,
+          ...(peer?.kind === 'machine' && peer.machineId && !peer.shared ? { machineId: peer.machineId } : {}),
           // Trusted only because this machine is shared: that account's guest, never the owner.
           ...(peer?.shared ? { guest: peer.sharedWith ?? '' } : {}),
         })

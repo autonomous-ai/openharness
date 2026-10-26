@@ -457,6 +457,9 @@ export function createProductUsage(deps: ProductUsageDeps) {
         add(`launch_failed_${kind}` as ProductUsageMetric)
         // 23 of 25 launch failures were `other` on 2026-10-16 (production counters): the code says which.
         if (kind === 'other') add(`launch_failed_code_${listed(signal.code)}`)
+        // Setup's 10 failures on 2026-10-21 could not say which prerequisite failed. A separate family
+        // keeps the existing `other` code totals comparable; the launch map still counts polls only once.
+        if (kind === 'setup') add(`launch_failed_setup_code_${listed(signal.code)}`)
       }
       if (signal.phase === 'created') {
         // Its start had already failed by the reply that said created (a status poll), or it is still starting:

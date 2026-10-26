@@ -412,7 +412,7 @@ describe('Harness for agents, end to end', () => {
     expect(hello.result.instructions).toContain('Never give work to, or close, a harness you did not start')
     server.notify('notifications/initialized')
     const tools = (await server.request('tools/list')).result.tools.map((t: { name: string }) => t.name)
-    expect(tools).toEqual(['harness_whoami', 'harness_list', 'harness_start', 'harness_wait', 'harness_read', 'harness_close'])
+    expect(tools).toEqual(['harness_whoami', 'harness_list', 'harness_search', 'harness_machines', 'harness_start', 'harness_wait', 'harness_read', 'harness_close'])
 
     // An empty folder of its own: refused, with the project it can ask for instead.
     const scratch = join(d.root, 'tmp', 'mcp-scratch')
@@ -460,7 +460,7 @@ describe('Harness for agents, end to end', () => {
     await d.start()
     await until('Harness to allow its commands in Claude Code and Codex', () => existsSync(rules)
       && readFileSync(settings, 'utf8').includes('mcp__plugin_harness_harness__harness_send'), 30_000)
-    const tools = { whoami: 'harness_whoami', ps: 'harness_list', show: 'harness_read', wait: 'harness_wait', new: 'harness_start', close: 'harness_close', send: 'harness_send' }
+    const tools = { whoami: 'harness_whoami', ps: 'harness_list', search: 'harness_search', machines: 'harness_machines', show: 'harness_read', wait: 'harness_wait', new: 'harness_start', close: 'harness_close', send: 'harness_send' }
     const verbs = Object.keys(tools) as Array<keyof typeof tools>, launcher = join(d.env.HOME!, '.local', 'bin', 'harness')
     // The person's deny of `harness close` is theirs: no allow for it in either spelling (Claude Code does not count the
     // launcher's path as the same command). Its MCP tool is another tool, and is allowed by name. `harness --help`,

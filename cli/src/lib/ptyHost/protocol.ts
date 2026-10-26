@@ -2,8 +2,8 @@
 import { createHash } from 'node:crypto'
 
 /**
- * The protocol this daemon's host speaks (protocol.rs `PROTOCOL`), and the instance its panes are made on
- * (`p<protocol>`).
+ * The protocol this daemon's host speaks (protocol.rs `PROTOCOL`). A host's instance is `p<protocol>-<version>`, so
+ * hosts of one protocol and different builds run side by side (instance.ts); one from before that is `p<protocol>`.
  *
  * - 2: the `shutdown` op, for draining a host of the protocol before.
  * - 1: the first.
@@ -18,6 +18,11 @@ export const PTY_PROTOCOL = 2
 export const SUPPORTED_PTY_PROTOCOLS: readonly number[] = [PTY_PROTOCOL - 1, PTY_PROTOCOL].filter((p) => p >= 1)
 /** The first protocol with the `shutdown` op. */
 export const SHUTDOWN_PROTOCOL = 2
+/**
+ * The feature a host lists (its hello reply's and `harness-pty version`'s `features`) when its `create` takes a
+ * `seed`: added within protocol 2, so a host's protocol does not say it. A host that lists no features has none.
+ */
+export const SEED_FEATURE = 'seed'
 export const MAX_FRAME = 8 * 1024 * 1024
 
 export enum FrameKind {
@@ -133,7 +138,7 @@ export interface HelloLine {
   hello: { auth: string; nonce: string; protocol: number; role: HelloRole; clientId: string }
 }
 export type HelloReply =
-  | { hello: { ok: true; instance: string; version: string; pid: number; proof: string } }
+  | { hello: { ok: true; instance: string; version: string; pid: number; features?: string[]; proof: string } }
   | { hello: { ok: false; code: string; reason: string } }
 
 const tokenDigest = (token: string, separator: string, nonce: string) =>
@@ -190,7 +195,7 @@ export interface PtyAfterExit {
 }
 
 export type PtyOp =
-  | { op: 'create'; command: string[]; cwd?: string; env?: Record<string, string>; cols: number; rows: number; owner: string; label?: string; hold: boolean; afterExit?: PtyAfterExit; clearInherited?: string[] }
+  | { op: 'create'; command: string[]; cwd?: string; env?: Record<string, string>; cols: number; rows: number; owner: string; label?: string; hold: boolean; afterExit?: PtyAfterExit; clearInherited?: string[]; /** Scrollback the pane starts with: lines separated by \n or \r\n. Send only to a host listing the `seed` feature. */ seed?: string }
   | { op: 'kill'; pane: string; graceMs?: number }
   | { op: 'inventory' }
   | { op: 'titles' }

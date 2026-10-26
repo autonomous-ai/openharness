@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 
 import '../../screens/login_screen.dart';
@@ -58,6 +59,9 @@ class AccountSection extends StatelessWidget {
         title: 'Account',
         subtitle: local
             ? 'Connected to a local development session.'
+            // A browser is not "this computer" (docs/naming-system.md).
+            : kIsWeb
+            ? 'Your Harness sign-in in this browser.'
             : 'Your Harness sign-in on this computer.',
         child: SingleChildScrollView(
           child: SettingRow(

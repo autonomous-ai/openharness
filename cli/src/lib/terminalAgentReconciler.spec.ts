@@ -167,6 +167,27 @@ describe('composite terminal reconciliation', () => {
     expect(onTerminalAvailability).toHaveBeenCalledWith(current, true)
   })
 
+  it('verifies a shell row on a drain host\'s pane, by that host\'s instance and not the target\'s', async () => {
+    const old: TerminalRuntimeRef = { backend: 'ptyhost', instance: 'p2-0.4.901', paneId: '%1' }
+    // The target's host has a pane of the same id: only the row's own instance may answer for it.
+    const target: TerminalRuntimeRef = { backend: 'ptyhost', instance: 'p2-0.4.902', paneId: '%1' }
+    const current = { ...session([old]), engine: 'terminal' as const, active: false, processIdentity: null }
+    const onTerminalAvailability = vi.fn()
+    const reconciler = new TerminalAgentReconciler({
+      current: () => [current], backends: [], backendOrder: ['ptyhost'],
+      onDiscovered: vi.fn(), onObserved: vi.fn(), onDormant: vi.fn(), onRemoved: vi.fn(),
+      onTerminalAvailability,
+      probe: async () => probe([
+        { instanceId: 'ptyhost:p2-0.4.902', result: { state: 'available', roots: [{ runtime: target, rootPid: 1, cwd: '/work' }] } },
+        { instanceId: 'ptyhost:p2-0.4.901', result: { state: 'available', roots: [{ runtime: old, rootPid: 2, cwd: '/work' }] } },
+      ]),
+    })
+
+    await reconciler.trigger()
+
+    expect(onTerminalAvailability).toHaveBeenCalledWith(current, true)
+  })
+
   it('still verifies retained panes when the process table is unavailable', async () => {
     const current = { ...session([tmux]), active: false }
     const onTerminalAvailability = vi.fn()

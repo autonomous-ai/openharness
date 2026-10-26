@@ -9,7 +9,7 @@ let dir: string
 beforeEach(() => { dir = mkdtempSync(join(tmpdir(), 'agent-settings-')) })
 afterEach(() => { rmSync(dir, { recursive: true, force: true }); clearAuthSession() })
 
-const OFF = { agentsStartAgents: false, pullRequestLine: false, agentMessages: false, agentMessagesHideSummary: false }
+const OFF = { agentsStartAgents: false, pullRequestLine: false, agentMessages: false, agentMessagesHideSummary: false, agentsTellAgents: false }
 const session = (over: Partial<AuthSession> = {}): AuthSession =>
   ({ version: 1, accessToken: 't', autonomousEnv: 'prod', computerId: 'c', machineId: 'm1', updatedAt: 0, ...over })
 const owner = { accountId: 'acct', machineId: 'm1' }
@@ -19,8 +19,8 @@ describe('what the person lets agents do', () => {
     // Off for all: none had been announced (owner, 2026-10-12).
     expect(readAgentSettings(dir, session())).toEqual(OFF)
     expect(readAgentSettings(dir, null)).toEqual(OFF)
-    expect(AGENT_SETTING_NAMES).toEqual({ 'agents-start-agents': 'agentsStartAgents', 'pull-request-line': 'pullRequestLine', 'agent-messages': 'agentMessages', 'agent-messages-hide-summary': 'agentMessagesHideSummary' })
-    expect(AGENT_SETTING_EXPERIMENTS).toEqual({ agentsStartAgents: 'agents_start_agents', pullRequestLine: 'agent_pull_request_line', agentMessages: 'agent_messages', agentMessagesHideSummary: 'agent_messages_hide_summary' })
+    expect(AGENT_SETTING_NAMES).toEqual({ 'agents-start-agents': 'agentsStartAgents', 'agents-tell-agents': 'agentsTellAgents', 'pull-request-line': 'pullRequestLine', 'agent-messages': 'agentMessages', 'agent-messages-hide-summary': 'agentMessagesHideSummary' })
+    expect(AGENT_SETTING_EXPERIMENTS).toEqual({ agentsStartAgents: 'agents_start_agents', pullRequestLine: 'agent_pull_request_line', agentMessages: 'agent_messages', agentMessagesHideSummary: 'agent_messages_hide_summary', agentsTellAgents: 'agents_tell_agents' })
   })
 
   it('reads the copy kept for the account signed in here, written whole and private', () => {
@@ -36,7 +36,7 @@ describe('what the person lets agents do', () => {
   })
 
   it('never turns one account\'s experiments on for another, or for no one', () => {
-    saveAgentSettings(dir, owner, { agentsStartAgents: true, pullRequestLine: true, agentMessages: true, agentMessagesHideSummary: true })
+    saveAgentSettings(dir, owner, { agentsStartAgents: true, pullRequestLine: true, agentMessages: true, agentMessagesHideSummary: true, agentsTellAgents: true })
     // Signed out, signed in with no machine yet, to another account's machine, or to another account.
     expect(readAgentSettings(dir, null)).toEqual(OFF)
     expect(readAgentSettings(dir, session({ machineId: undefined }))).toEqual(OFF)

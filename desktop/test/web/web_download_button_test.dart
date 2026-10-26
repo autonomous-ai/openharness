@@ -111,4 +111,24 @@ void main() {
       },
     );
   }
+
+  // Found in review: Tab landed on a node with no name, so a screen reader
+  // said only "button". The focus, the name and the link are one node.
+  testWidgets('the node Tab focuses is named Download app', (tester) async {
+    final handle = tester.ensureSemantics();
+    await tester.pumpWidget(
+      const MaterialApp(home: Center(child: WebDownloadButton())),
+    );
+    expect(
+      tester.getSemantics(find.byType(WebDownloadButton)),
+      isSemantics(
+        label: 'Download app',
+        isFocusable: true,
+        isButton: true,
+        isLink: true,
+        hasTapAction: true,
+      ),
+    );
+    handle.dispose();
+  });
 }

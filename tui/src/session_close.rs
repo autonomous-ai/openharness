@@ -83,10 +83,14 @@ enum Stage { Inspect, Review, Stop, Failed }
 struct Operation {
     id: String,
     title: String,
+    /// The tab's name when closing a whole tab; a pane's close has none.
+    tab: Option<String>,
     targets: Vec<Target>,
     views: Vec<View>,
     /// Plain shells obey tmux's kill contract, after an explicit confirmation.
     shells: bool,
+    /// A harness whose CLI can't save and stop it: the others stop, then the close says why it could not.
+    unsupported: bool,
     return_to_shell: bool,
     stage: Stage,
     at: usize,
@@ -102,7 +106,7 @@ pub struct State {
     pub sent: Vec<(String, Value)>,
 }
 
-pub fn pane(app: &mut App, pane: u64) { begin(app, vec![pane], "Stop Harness", true); }
+pub fn pane(app: &mut App, pane: u64) { begin(app, vec![pane], "Close pane", None, true); }
 
 /// Default tmux close keys keep their keys, while managed harnesses use the same lifecycle as ×.
 /// Explicit kill commands and ordinary shells retain tmux's behavior.
@@ -116,10 +120,11 @@ pub fn tab(app: &mut App, tab: usize) {
     let Some(tab) = app.tabs.get(tab) else { return };
     if tab.panes().is_empty() { app.close_tab(app.tabs.iter().position(|t| t.id == tab.id).unwrap()); return }
     let title = format!("Close Tab · {}", tab.name);
-    begin(app, tab.panes(), &title, false);
+    let name = tab.name.clone();
+    begin(app, tab.panes(), &title, Some(name), false);
 }
 
-fn begin(app: &mut App, panes: Vec<u64>, title: &str, return_to_shell: bool) {
+fn begin(app: &mut App, panes: Vec<u64>, title: &str, tab: Option<String>, return_to_shell: bool) {
     if app.read_only() { app.error("client is read-only"); return }
     if app.session_close.operation.as_ref().is_some_and(|op| matches!(op.stage, Stage::Inspect | Stage::Stop) && (op.stage == Stage::Stop || showing(app, &op.id))) {
         app.say("A stop is already being checked", theme::MUTED);
@@ -129,6 +134,7 @@ fn begin(app: &mut App, panes: Vec<u64>, title: &str, return_to_shell: bool) {
     let mut views = Vec::new();
     let mut seen = HashSet::new();
     let mut shells = false;
+    let mut unsupported = false;
     for pane in panes {
         let Some(p) = app.panes.get(&pane) else { continue };
         views.extend(View::capture(app, pane));
@@ -138,25 +144,50 @@ fn begin(app: &mut App, panes: Vec<u64>, title: &str, return_to_shell: bool) {
         }
         let shared = app.fleet.machine(&p.machine_id).is_some_and(|m| m.shared);
         if shared { continue }
-        let Some(a) = app.fleet.agent(&p.machine_id, &p.agent_id) else {
-            app.say("Stop not confirmed: this harness is unavailable", theme::WARN);
-            return;
-        };
-        if a.status == "stopped" || a.dsh_id == "autonomous/harness-monitor" { continue }
-        if !a.close_supported || a.created_at_wire.is_empty() {
-            app.say("Update the Harness CLI on this machine to save and stop this harness", theme::WARN);
-            return;
-        }
+        // As Desktop's Close: a harness no longer listed, already stopped, without a terminal, or the
+        // monitor's reusable dashboard has nothing to stop. Its view closes.
+        let Some(a) = app.fleet.agent(&p.machine_id, &p.agent_id) else { continue };
+        if a.status == "stopped" || a.dsh_id == "autonomous/harness-monitor" || !a.terminal_available { continue }
+        // An older CLI can't save and stop it. Say so, and still let the view close (Close pane) rather than
+        // hide it silently, or keep it with no way out.
+        if !a.close_supported || a.created_at_wire.is_empty() { unsupported = true; continue }
         if seen.insert((a.machine_id.clone(), a.id.clone())) {
             targets.push(Target { identity: Identity::capture(app, a), name: a.name.clone(), activity: "unknown".into(), closed: false });
         }
     }
     if views.is_empty() { return }
     let id = uuid::Uuid::new_v4().simple().to_string();
-    app.session_close.operation = Some(Operation { id: id.clone(), title: title.into(), targets, views, shells, return_to_shell,
-        stage: Stage::Inspect, at: 0, force: false });
+    app.session_close.operation = Some(Operation { id: id.clone(), title: title.into(), tab, targets, views, shells, unsupported,
+        return_to_shell, stage: Stage::Inspect, at: 0, force: false });
     if !show(app, "Checking session activity…", false) { app.session_close.operation = None; return }
     advance(app, &id);
+}
+
+/// What a harness is doing, as a row of the dialog says it (Desktop's `_activityLabel`).
+fn activity_label(activity: &str) -> &'static str {
+    match activity {
+        "working" => "Working",
+        "needs_input" => "Waiting for input",
+        "draft" => "Unsent text",
+        "idle" => "Idle",
+        "stopped" => "Stopped",
+        "unconfirmed" => "Stop not confirmed",
+        _ => "Activity unknown",
+    }
+}
+
+/// The question's first line, for the harnesses that are not idle (Desktop's `_summary`).
+fn summary(attention: &[&Target]) -> String {
+    let one = attention.len() == 1;
+    let subject = if one { "1 harness".to_string() } else { format!("{} harnesses", attention.len()) };
+    let kinds: HashSet<&str> = attention.iter().map(|t| t.activity.as_str()).collect();
+    if kinds.len() != 1 { return format!("{subject} {} attention.", if one { "needs" } else { "need" }) }
+    match kinds.into_iter().next().unwrap_or_default() {
+        "working" => format!("{subject} {} still working.", if one { "is" } else { "are" }),
+        "needs_input" => format!("{subject} {} waiting for input.", if one { "is" } else { "are" }),
+        "draft" => format!("{subject} {} unsent text.", if one { "has" } else { "have" }),
+        _ => format!("{subject} may still be working."),
+    }
 }
 
 fn showing(app: &App, id: &str) -> bool {
@@ -169,30 +200,52 @@ fn show(app: &mut App, message: &str, confirm: bool) -> bool {
     let mut items = Vec::new();
     let title = op.title.clone();
     let id = op.id.clone();
-    let room = app.size.1.saturating_sub(if confirm { 6 } else { 4 }) as usize;
-    if confirm {
-        let remaining: Vec<_> = op.targets.iter().filter(|t| !t.closed).collect();
-        for t in remaining.iter().take(room.saturating_sub(1)) {
-            // (What it is doing, said as a sentence.)
-            let name = &t.name;
-            items.push(menu::note(&match t.activity.as_str() {
-                "idle" => format!("{name} is idle."),
-                "working" => format!("{name} is still working."),
-                "needs_input" => format!("{name} is waiting for your input."),
-                "draft" => format!("{name} has text you haven't sent."),
-                _ => format!("Not sure what {name} is doing right now."),
-            }));
+    let failed = op.stage == Stage::Failed;
+    let room = app.size.1.saturating_sub(if confirm || failed { 6 } else { 4 }) as usize;
+    // One row per harness: its name, its machine when the close spans several, and what it is doing.
+    let several = op.targets.iter().map(|t| &t.identity.machine).collect::<HashSet<_>>().len() > 1;
+    let rows = |items: &mut Vec<_>, listed: &[&Target]| {
+        let space = room.saturating_sub(items.len() + 1);
+        for t in listed.iter().take(space) {
+            let activity = activity_label(if t.closed { "stopped" } else { &t.activity });
+            items.push(menu::note(&if several { format!("{} · {} · {activity}", t.name, app.fleet.machine_name(&t.identity.machine)) }
+                else { format!("{} · {activity}", t.name) }));
         }
-        let shown = items.len();
-        if remaining.len() > shown { items.push(menu::note(&format!("and {} more", remaining.len() - shown))); }
+        if listed.len() > space { items.push(menu::note(&format!("and {} more", listed.len() - space))); }
+    };
+    if confirm {
+        // Desktop's question: what needs attention, then what Stop will do.
+        let pending: Vec<&Target> = op.targets.iter().filter(|t| !t.closed).collect();
+        let attention: Vec<&Target> = pending.iter().copied().filter(|t| t.activity != "idle").collect();
+        if !attention.is_empty() { items.push(menu::note(&summary(&attention))); }
+        if !pending.is_empty() {
+            let these = if pending.len() == 1 { "this harness".to_string() } else { format!("all {} harnesses", pending.len()) };
+            let scope = op.tab.as_ref().map_or("this pane".to_string(), |name| format!("the tab “{name}”"));
+            items.push(menu::note(&format!("Stopping {these} will close {scope}. History will be saved.")));
+        }
+        rows(&mut items, &attention);
         if op.shells && items.len() < room { items.push(menu::note("The terminal and its running commands will end.")); }
+        let closed = op.targets.len() - pending.len();
+        if closed > 0 && items.len() < room {
+            items.push(menu::note(&format!("{closed} {} already closed.", if closed == 1 { "harness has" } else { "harnesses have" })));
+        }
     }
-    if !message.is_empty() { items.push(menu::note(message)); }
+    if failed {
+        // Desktop's failure: why, that the view can still close, and where each harness got to.
+        items.push(menu::note(message));
+        items.push(menu::note(if op.tab.is_some() { "You can close this tab. Some harnesses may still be running." }
+            else { "You can close this pane. The harness may still be running." }));
+        rows(&mut items, &op.targets.iter().collect::<Vec<_>>());
+    } else if !message.is_empty() { items.push(menu::note(message)); }
     let button = |label: &str, key| crate::buttons::Button { label: label.into(), key };
-    let mut buttons = vec![button(if matches!(op.stage, Stage::Failed | Stage::Stop) { "Back" } else { "Cancel" }, None)];
-    if confirm { buttons.push(button("Stop", Some('s'))); }
-    // (One button, Back: nothing to move between.)
-    let hint = if confirm { crate::buttons::KEYS } else { "" };
+    let (buttons, hint) = match op.stage {
+        // Keep open is the default; Close pane removes only the views (`dismiss`).
+        Stage::Failed => (vec![button("Keep open", None), button(if op.tab.is_some() { "Close Tab" } else { "Close pane" }, None)], crate::buttons::KEYS),
+        Stage::Stop => (vec![button("Back", None)], ""),
+        _ if confirm => (vec![button("Cancel", None), button("Stop", Some('s'))], crate::buttons::KEYS),
+        // (One button: nothing to move between.)
+        _ => (vec![button("Cancel", None)], ""),
+    };
     let row = crate::buttons::Row { buttons, chosen: 0, hint: hint.into() };
     menu::open_buttons(app, &title, items, row, vec![format!("close-harness -x {id}"), format!("close-harness -y {id}")])
 }
@@ -201,6 +254,8 @@ fn fail(app: &mut App, message: String) {
     let visible = app.session_close.operation.as_ref().is_some_and(|op| showing(app, &op.id));
     let Some(op) = &mut app.session_close.operation else { return };
     let closed = op.targets.iter().filter(|t| t.closed).count();
+    // The harness whose stop went unanswered or was refused: its row says so.
+    if op.stage == Stage::Stop { if let Some(t) = op.targets.get_mut(op.at).filter(|t| !t.closed) { t.activity = "unconfirmed".into(); } }
     op.stage = Stage::Failed;
     let message = if closed == 0 { message } else { format!("{closed} stopped. {message}") };
     // Keep the full explanation in messages even when the terminal is too narrow for its row.
@@ -222,12 +277,15 @@ fn advance(app: &mut App, id: &str) {
             op.at = 0;
             if confirm {
                 op.stage = Stage::Review;
-                show(app, "Stop? Saved history will remain.", true);
+                show(app, "", true);
                 return;
             }
             op.stage = Stage::Stop;
             show(app, "Saving and stopping…", false);
             advance(app, id);
+        } else if op.unsupported {
+            // (Desktop's: the others are stopped; the one an older CLI serves keeps its view until Close pane.)
+            fail(app, "Update the Harness CLI on this machine to save and stop this harness".into());
         } else { finish(app); }
         return;
     }
@@ -323,6 +381,7 @@ fn remove_confirmed(app: &mut App, identity: &Identity) {
 
 pub fn confirm(app: &mut App, id: &str) {
     let Some(op) = &mut app.session_close.operation else { return };
+    if op.id == id && op.stage == Stage::Failed { dismiss(app); return }
     if op.id != id || op.stage != Stage::Review { return }
     op.stage = Stage::Stop;
     op.force = true;
@@ -338,6 +397,32 @@ pub fn cancel(app: &mut App, id: &str) {
         if op.stage != Stage::Stop { app.session_close.operation = None; }
     }
     if showing(app, id) { app.modal = None; }
+}
+
+/// Close pane / Close Tab after a stop that failed: Desktop's `closeAfterError`. Only the captured views close. No
+/// stop is sent again, and a lost answer is not taken as a stop: the harness may still be running, and it stays in
+/// the list to open again. A harness launched again under the same id since the review is another one, and keeps
+/// its views. A conversation that changed within the same launch is still that harness: the daemon can drop a
+/// binding it can no longer read (a guest's harness, run as another OS user), and refusing then left the pane
+/// with no way to close. Plain terminals close only after their Stop was confirmed.
+fn dismiss(app: &mut App) {
+    let Some(op) = app.session_close.operation.take() else { return };
+    if showing(app, &op.id) { app.modal = None; }
+    let relaunched = op.targets.iter().any(|t| app.fleet.agent(&t.identity.machine, &t.identity.agent)
+        .is_some_and(|a| a.created_at_wire != t.identity.created));
+    if relaunched || op.targets.iter().any(|t| !t.identity.owner_matches(app)) {
+        app.say("The harness changed. Check it before closing.", theme::WARN);
+        return;
+    }
+    let mut seen = HashSet::new();
+    for view in op.views {
+        // A pane showing a picked session in place of its shell returns to that shell.
+        if op.return_to_shell && crate::shell_context::is_session_visit(app, view.pane) { crate::shell_context::leave(app, view.pane); continue }
+        let Some(p) = app.panes.get(&view.pane) else { continue };
+        let shell = crate::local::is_local(&p.machine_id) || app.shells.contains(&(p.machine_id.clone(), p.agent_id.clone()));
+        if view.owner != app.fleet.local_id || p.machine_id != view.machine || p.agent_id != view.agent || (shell && !op.force) { continue }
+        if seen.insert(view.pane) { app.close_pane(view.pane); }
+    }
 }
 
 fn finish(app: &mut App) {
@@ -590,12 +675,155 @@ mod tests {
 
     #[tokio::test]
     async fn an_old_daemon_cannot_turn_stop_into_hide() {
+        // It says why it can't stop, and the view closes only when asked (Close pane), as after any failed stop.
         let mut app = app();
         app.fleet.agents.get_mut(&("local".into(), "a1".into())).unwrap().close_supported = false;
         pane(&mut app, 1);
         assert!(app.session_close.sent.is_empty());
         assert!(app.panes.contains_key(&1));
-        assert!(app.toast.as_ref().unwrap().0.contains("Update"));
+        assert!(notes(&app).iter().any(|n| n.contains("Update the Harness CLI")), "{:?}", notes(&app));
+        assert_eq!(buttons(&app), ["Keep open", "Close pane"]);
+        key(&mut app, KeyCode::Right);
+        key(&mut app, KeyCode::Enter);
+        assert!(app.session_close.sent.is_empty(), "Close pane never asks to stop");
+        assert!(!app.panes.contains_key(&1)); assert!(app.panes.contains_key(&2));
+        assert_eq!(app.fleet.agent("local", "a1").unwrap().status, "active");
+    }
+
+    #[tokio::test]
+    async fn a_tab_with_an_old_cli_harness_still_stops_the_others_then_says_why_one_could_not() {
+        let mut app = app();
+        app.tabs[0].root.as_mut().unwrap().split(1, 3, crate::layout::Dir::Horizontal);
+        app.panes.insert(3, crate::pane::Pane::new(3, "local", "a2", 40, 20));
+        app.fleet.agents.get_mut(&("local".into(), "a2".into())).unwrap().close_supported = false;
+        tab(&mut app, 0);
+        answer(&mut app, "inspect", json!({"activity":"idle"}));
+        answer(&mut app, "idle", json!({"closed":true}));
+        assert_eq!(modes(&app), ["inspect", "idle"], "only the harness that can be saved is asked");
+        assert!(!app.panes.contains_key(&1), "the stopped harness's view closes");
+        assert!(app.panes.contains_key(&3));
+        assert!(notes(&app).iter().any(|n| n.contains("Update the Harness CLI")), "{:?}", notes(&app));
+        assert_eq!(buttons(&app), ["Keep open", "Close Tab"]);
+        key(&mut app, KeyCode::Right);
+        key(&mut app, KeyCode::Enter);
+        assert_eq!(modes(&app), ["inspect", "idle"]);
+        assert!(!app.panes.contains_key(&3));
+        assert_eq!(app.fleet.agent("local", "a2").unwrap().status, "active");
+    }
+
+    fn notes(app: &App) -> Vec<String> {
+        let Some(Modal::Menu(m)) = &app.modal else { return vec![] };
+        m.items.iter().map(|i| i.label.clone()).collect()
+    }
+    fn buttons(app: &App) -> Vec<String> {
+        let Some(Modal::Menu(m)) = &app.modal else { return vec![] };
+        m.buttons.as_ref().map(|b| b.row.buttons.iter().map(|x| x.label.clone()).collect()).unwrap_or_default()
+    }
+
+    #[tokio::test]
+    async fn a_refused_stop_offers_close_pane_which_closes_only_the_view() {
+        // A guest's harness on a shared computer: its owner's daemon can't read the conversation, and refuses.
+        let refuse = |app: &mut App| {
+            pane(app, 1);
+            answer(app, "inspect", json!({"activity":"idle"}));
+            answer(app, "idle", json!({"error":"IDENTITY_UNAVAILABLE",
+                "detail":"Conversation identity is held: the native control probe did not complete."}));
+        };
+        let mut app = app();
+        refuse(&mut app);
+        assert_eq!(buttons(&app), ["Keep open", "Close pane"]);
+        let Some(Modal::Menu(m)) = &app.modal else { unreachable!() };
+        assert_eq!(m.buttons.as_ref().unwrap().row.chosen, 0, "Keep open is the default");
+        let said = notes(&app);
+        assert!(said.iter().any(|n| n.contains("the native control probe did not complete")), "{said:?}");
+        assert!(said.iter().any(|n| n == "You can close this pane. The harness may still be running."), "{said:?}");
+        assert!(said.iter().any(|n| n == "Task 1 · Stop not confirmed"), "{said:?}");
+        key(&mut app, KeyCode::Enter);
+        assert!(app.modal.is_none() && app.session_close.operation.is_none());
+        assert!(app.panes.contains_key(&1), "Keep open keeps the pane");
+
+        let mut app = self::app();
+        refuse(&mut app);
+        key(&mut app, KeyCode::Right);
+        key(&mut app, KeyCode::Enter);
+        assert_eq!(modes(&app), ["inspect", "idle"], "no stop is sent again");
+        assert!(app.modal.is_none() && app.session_close.operation.is_none());
+        assert!(!app.panes.contains_key(&1)); assert!(app.panes.contains_key(&2));
+        assert_eq!(app.fleet.agent("local", "a1").unwrap().status, "active", "it may still be running, and stays listed");
+    }
+
+    #[tokio::test]
+    async fn close_pane_after_a_failure_keeps_a_relaunched_harness_but_not_a_dropped_conversation() {
+        let fail_then = |change: fn(&mut crate::fleet::Agent)| {
+            let mut app = app();
+            pane(&mut app, 1);
+            answer(&mut app, "inspect", json!({"activity":"idle"}));
+            answer(&mut app, "idle", json!({"error":"IDENTITY_UNAVAILABLE"}));
+            change(app.fleet.agents.get_mut(&("local".into(), "a1".into())).unwrap());
+            key(&mut app, KeyCode::Right);
+            key(&mut app, KeyCode::Enter);
+            assert_eq!(modes(&app), ["inspect", "idle"]);
+            app
+        };
+        // The daemon dropped a binding it could not read: the same launch, so the view closes.
+        let app = fail_then(|a| a.session_id.clear());
+        assert!(!app.panes.contains_key(&1));
+        // Launched again under the same id: another harness, which keeps its view.
+        let app = fail_then(|a| a.created_at_wire.push('x'));
+        assert!(app.panes.contains_key(&1));
+        assert!(app.toast.as_ref().unwrap().0.contains("changed"));
+    }
+
+    #[tokio::test]
+    async fn a_view_of_an_unlisted_harness_or_one_without_a_terminal_just_closes() {
+        for change in ["unlisted", "no terminal"] {
+            let mut app = app();
+            if change == "unlisted" { app.fleet.agents.remove(&("local".into(), "a1".into())); }
+            else { app.fleet.agents.get_mut(&("local".into(), "a1".into())).unwrap().terminal_available = false; }
+            pane(&mut app, 1);
+            assert!(app.session_close.sent.is_empty(), "{change}: nothing to stop");
+            assert!(!app.panes.contains_key(&1), "{change}: its view closes");
+            assert!(app.panes.contains_key(&2));
+            assert!(app.modal.is_none());
+        }
+    }
+
+    #[tokio::test]
+    async fn the_question_says_what_needs_attention_and_what_stop_closes() {
+        let mut app = app();
+        pane(&mut app, 1);
+        answer(&mut app, "inspect", json!({"activity":"working"}));
+        let Some(Modal::Menu(m)) = &app.modal else { panic!("no question") };
+        assert_eq!(m.title.to_string(), "Close pane");
+        assert_eq!(notes(&app), ["1 harness is still working.", "Stopping this harness will close this pane. History will be saved.",
+            "Task 1 · Working"]);
+        // A whole tab: each harness that needs attention, and the tab by name.
+        let mut app = self::app();
+        app.tabs[0].root.as_mut().unwrap().split(1, 3, crate::layout::Dir::Horizontal);
+        app.panes.insert(3, crate::pane::Pane::new(3, "local", "a2", 40, 20));
+        tab(&mut app, 0);
+        answer(&mut app, "inspect", json!({"activity":"needs_input"}));
+        answer(&mut app, "inspect", json!({"activity":"draft"}));
+        assert_eq!(notes(&app), ["2 harnesses need attention.", "Stopping all 2 harnesses will close the tab “tab-1”. History will be saved.",
+            "Task 1 · Waiting for input", "Task 2 · Unsent text"]);
+        assert_eq!(buttons(&app), ["Cancel", "Stop"]);
+    }
+
+    #[tokio::test]
+    async fn close_tab_after_a_failure_keeps_terminals_whose_end_was_not_confirmed() {
+        let mut app = app();
+        app.tabs[0].root.as_mut().unwrap().split(1, 3, crate::layout::Dir::Horizontal);
+        app.panes.insert(3, crate::pane::Pane::new(3, "local", "zsh", 40, 20));
+        app.shells.insert(("local".into(), "zsh".into()));
+        tab(&mut app, 0);
+        answer(&mut app, "inspect", json!({"error":"ENGINE_UNAVAILABLE","detail":"Could not check Task 1."}));
+        assert_eq!(buttons(&app), ["Keep open", "Close Tab"]);
+        assert!(notes(&app).iter().any(|n| n == "You can close this tab. Some harnesses may still be running."));
+        key(&mut app, KeyCode::Right);
+        key(&mut app, KeyCode::Enter);
+        assert_eq!(modes(&app), ["inspect"]);
+        assert!(!app.panes.contains_key(&1), "the harness's view closes");
+        assert!(app.panes.contains_key(&3), "the terminal keeps running: nobody agreed to end it");
     }
 
     #[tokio::test]

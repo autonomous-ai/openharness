@@ -14,7 +14,7 @@ import { usageTarget, usageTargetKey, usageSnapshot, validUsage, validUsageTarge
  * each asked of the core over its link (`ask`). The agents it reads come as the apps are shown them (`service_query shown`): each with its
  * name, whether its terminal is there and its harness's viewer.
  */
-import { CONNECTOR_VAULT_OFF, CONVERSATIONS_OFF, DAEMON_UNKNOWN, DELIVERIES_OFF, LANE_OFF, OBSERVER_KEY_OFF, resolveAgent, TAB_KEY_OFF, TAB_RELAY_OFF, TERMINALS_OFF, WIFI_OFF, type CloudCore, type SuperTabsCore, type CoreApi, type DaemonAddress, type TerminalWatch } from '../core/api.js'
+import { CONNECTOR_VAULT_OFF, CONVERSATIONS_OFF, DAEMON_UNKNOWN, DELIVERIES_OFF, LANE_OFF, OBSERVER_KEY_OFF, resolveAgent, TAB_KEY_OFF, TAB_RELAY_OFF, TERMINALS_OFF, WIFI_OFF, type CloudCore, type SuperTabsCore, type SuperTabScreen, type SuperTabTyped, type CoreApi, type DaemonAddress, type TerminalWatch } from '../core/api.js'
 import type { AgentDshContext } from '../lib/agentFrame.js'
 import type { RegisteredSession } from '../lib/registry.js'
 import type { turnsLink } from './turnsLink.js'
@@ -92,6 +92,11 @@ export const UNASKED = {
   lastTurn: CoreApi['transcripts']['lastTurn']
 }
 
+/** The core's answer to a terminal read or write, or why there is none, in words the Lead reads. */
+const terminalAnswer = (asked: Promise<Record<string, unknown>>): Promise<SuperTabTyped | SuperTabScreen> => asked.then(
+  answer => answer.ok === true ? answer as SuperTabScreen : { ok: false, error: String(answer.error ?? 'The terminal could not be reached.') },
+  () => ({ ok: false, error: 'This machine\'s daemon could not be asked. Try again in a moment.' }))
+
 export function processCoreApi(dataDir: string, service: string, view: AgentsView = {}): CoreApi {
   const live = (): ShownAgent[] => view.live?.() ?? []
   const ask = view.ask
@@ -120,7 +125,19 @@ export function processCoreApi(dataDir: string, service: string, view: AgentsVie
       live,
       displayName: (session) => (session as ShownAgent).displayName ?? '',
       byAgent: (agentId) => live().find((session) => session.agentId === agentId),
+      closeSwarm: async request => await (ask?.('close_swarm', { ...request }) ?? Promise.resolve({ error: 'SERVICE_UNAVAILABLE' }))
+        .catch(() => ({ error: 'SERVICE_UNAVAILABLE' })),
+      keepLeadAlive: async agentId => {
+        const answer = await ask?.('keep_lead_alive', { agentId }).catch(() => null)
+        if (answer?.ok === true) return { ok: true }
+        return answer?.ok === false && typeof answer.error === 'string'
+          ? { ok: false, error: answer.error, ...(typeof answer.detail === 'string' ? { detail: answer.detail } : {}) }
+          : { ok: false, error: 'SERVICE_UNAVAILABLE' }
+      },
+      closeMember: async (agentId, creationId) => await (ask?.('close_member', { agentId, ...(creationId ? { creationId } : {}) }) ?? Promise.resolve({ error: 'SERVICE_UNAVAILABLE' }))
+        .catch(() => ({ error: 'SERVICE_UNAVAILABLE' })),
       stopped: async agentId => (await ask?.('stopped', { agentId }).catch(() => null))?.stopped === true,
+      gone: async agentId => (await ask?.('gone', { agentId }).catch(() => null))?.gone === true,
       creationStatus: async creationId => creationObservation(creationId,
         (await ask?.('creation_status', { creationId }).catch(() => null))?.observation),
       resolve: (id) => resolveAgent(live(), id),
@@ -237,6 +254,13 @@ export function processCoreApi(dataDir: string, service: string, view: AgentsVie
       // hears the next, and a new core the host's first roster (superTabs/host.ts).
       superTabs: {
         attention: (items) => { void ask('super_tab_attention', { items }).catch(() => {}) },
+        // The Swarm cards, whole each time they change, and one Lead's recap (core/superTabCards.ts).
+        cards: (items) => { void ask('super_tab_cards', { items }).catch(() => {}) },
+        cardRecap: (recap) => { void ask('super_tab_card_recap', { recap }).catch(() => {}) },
+        shareObservers: () => { void ask('super_tab_observers', {}).catch(() => {}) },
+        // A Lead's read of a member's terminal and its typing (core/superTabTerminal.ts), answered by the core.
+        screen: (agentId, scrollback) => terminalAnswer(ask('super_tab_screen', { agentId, scrollback })) as Promise<SuperTabScreen>,
+        input: (agentId, text, keys) => terminalAnswer(ask('super_tab_input', { agentId, text, keys })),
       } satisfies SuperTabsCore,
     } : {}),
   }

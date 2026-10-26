@@ -93,4 +93,54 @@ void main() {
       'this browser',
     );
   });
+
+  // Audit finding P7: on a phone the line under each machine ("home · claude,
+  // codex") is cut off, so the page asks for the names alone.
+  testWidgets('without pin details each machine keeps only its name', (
+    tester,
+  ) async {
+    // The map's width on a 360 px phone: the page pads it by 24 a side.
+    const phoneMapWidth = 312.0;
+    Future<List<ui.Paragraph>> drawn({required bool pinDetails}) async {
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: grid.buildAppTheme(brightness: Brightness.dark),
+          home: grid.BrightnessScope(
+            child: Center(
+              child: SizedBox(
+                width: phoneMapWidth,
+                child: LoginFleetMap(seamless: true, pinDetails: pinDetails),
+              ),
+            ),
+          ),
+        ),
+      );
+      final picture = find.descendant(
+        of: find.byType(LoginFleetMap),
+        matching: find.byType(CustomPaint),
+      );
+      final canvas = TestRecordingCanvas();
+      tester
+          .widget<CustomPaint>(picture)
+          .painter!
+          .paint(canvas, tester.getSize(picture));
+      return [
+        for (final call in canvas.invocations)
+          if (call.invocation.memberName == #drawParagraph)
+            call.invocation.positionalArguments[0] as ui.Paragraph,
+      ];
+    }
+
+    final full = await drawn(pinDetails: true);
+    final names = await drawn(pinDetails: false);
+    // Four machines, one line under each.
+    expect(full.length - names.length, 4);
+    // What is left is at least 11 px on screen: the drawing is scaled down
+    // to the phone, its labels are not.
+    const scale = phoneMapWidth / 512;
+    for (final line in names) {
+      expect(line.height * scale, greaterThanOrEqualTo(11));
+    }
+    expect(const LoginFleetMap().pinDetails, isTrue);
+  });
 }

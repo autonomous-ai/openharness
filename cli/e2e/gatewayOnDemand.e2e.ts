@@ -24,7 +24,7 @@ import { RelayPhone, type PhoneFrame } from './harness/relayPhone.js'
 const starts = (d: IsolatedDaemon) => [...d.log().matchAll(/\[harnessd\] service gateway started/g)].length
 const connections = (d: IsolatedDaemon) => d.log().split('\n').filter((line) => line.includes('[services] gateway connected')).length
 const pidsOf = (d: IsolatedDaemon) => [...d.log().matchAll(/\[harnessd\] service gateway started \(pid (\d+)\)/g)].map((match) => Number(match[1]))
-const status = async (d: IsolatedDaemon) => await (await fetch(`http://127.0.0.1:${d.port}/api/status`)).json() as Record<string, any>
+const status = async (d: IsolatedDaemon) => await (await fetch(`http://127.0.0.1:${d.port}/api/status`, { headers: d.localHeaders() })).json() as Record<string, any>
 const isTurn = (type: string, agentId: string) => (frame: Frame | PhoneFrame) => frame.type === type && frame.agentId === agentId
 
 describe('the gateway\'s process, once it is needed', () => {
@@ -77,7 +77,7 @@ describe('the gateway\'s process, once it is needed', () => {
 
   it('a key command starts it and is answered by it; killed, it comes back and answers again', async () => {
     const d = await fresh()
-    const pairs = async () => await (await fetch(`http://127.0.0.1:${d.port}/api/pairs`)).json() as Record<string, any>
+    const pairs = async () => await (await fetch(`http://127.0.0.1:${d.port}/api/pairs`, { headers: d.localHeaders() })).json() as Record<string, any>
     expect(await pairs()).toEqual({ pairs: [] })
     expect(starts(d)).toBe(1)
     const [pid] = pidsOf(d)

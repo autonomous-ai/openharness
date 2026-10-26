@@ -83,6 +83,30 @@ jobs:
         if: ${{ !inputs.release }}
         working-directory: pty
         run: cargo test --locked --target ${{ matrix.target }}
+      # The previous version of the host, for the specs of two real builds (the rollover, sub-project G): the same source
+      # stamped older, built into the same target first and copied aside, with the ConPTY payload it loads from its own
+      # folder. The release build below changes HARNESS_PTY_VERSION, which recompiles only the crate.
+      - name: Build the previous host
+        if: ${{ !inputs.release }}
+        working-directory: pty
+        shell: pwsh
+        env:
+          HARNESS_PTY_VERSION: '0.0.1'
+        run: |
+          cargo build --locked --release --target ${{ matrix.target }} --bin harness-pty
+          if ($LASTEXITCODE -ne 0) { throw "cargo build exited $LASTEXITCODE" }
+          $previous = "target/${{ matrix.target }}/previous"
+          New-Item -ItemType Directory -Force $previous | Out-Null
+          Copy-Item "target/${{ matrix.target }}/release/harness-pty.exe", "vendor/conpty/${{ matrix.arch }}/conpty.dll", "vendor/conpty/${{ matrix.arch }}/OpenConsole.exe" $previous
+          & "$previous/harness-pty.exe" version
+      # The Rust side of the two builds: both hosts serve one home side by side, each with its own discovery file
+      # (pty/tests/control.rs). Set, HARNESS_PTY_BIN_OLD must name a file, or the test fails rather than skips.
+      - name: 'Rust: two versions side by side'
+        if: ${{ !inputs.release }}
+        working-directory: pty
+        env:
+          HARNESS_PTY_BIN_OLD: ${{ github.workspace }}\pty\target\${{ matrix.target }}\previous\harness-pty.exe
+        run: cargo test --locked --target ${{ matrix.target }} --test control two_versions_serve_side_by_side -- --nocapture
       # harness-serial (serial/, sub-project E): the dial's serial port. Tested on each architecture.
       - name: 'Serial: Rust tests'
         if: ${{ !inputs.release }}
@@ -141,13 +165,26 @@ jobs:
         env:
           RUN_TERMINAL_CONTRACT: "1"
           HARNESS_PTY_BIN: ${{ github.workspace }}\pty\target\${{ matrix.target }}\release\harness-pty.exe
-          # installPs1.spec.ts runs the real harness.exe; a --target build is not where it looks by default.
-          HARNESS_EXE_BIN: ${{ github.workspace }}\pty\target\${{ matrix.target }}\release\harness.exe
           # serialWindows.spec.ts runs the real harness-serial.exe, placed beside the host by the payload step.
           HARNESS_SERIAL_BIN: ${{ github.workspace }}\pty\target\${{ matrix.target }}\release\harness-serial.exe
         run: |
-          $paths = @('src/lib/ptyHostBackend.contract.spec.ts', 'src/lib/ptyHost', 'src/lib/windows', 'src/scripts/installPs1.spec.ts', 'src/scripts/windowsCiChecks.spec.ts', 'src/lib/uninstall', 'src/engines/kit/hookRemoval.spec.ts', 'src/engines/kit/windowsHooks.spec.ts', 'src/engines/kit/windowsFiles.spec.ts', 'src/engines/kit/nativePaths.windows.spec.ts', 'src/engines/kit/launchExecutable.windows.spec.ts', 'src/engines/removeHooks.spec.ts', 'src/engines/windowsHomes.spec.ts', 'src/cable/windowsSerial.spec.ts', 'src/cable/serialWindows.spec.ts')
+          $paths = @('src/lib/ptyHostBackend.contract.spec.ts', 'src/lib/ptyHost', 'src/lib/windows', 'src/scripts/windowsCiChecks.spec.ts', 'src/lib/uninstall', 'src/engines/kit/hookRemoval.spec.ts', 'src/engines/kit/windowsHooks.spec.ts', 'src/engines/kit/windowsFiles.spec.ts', 'src/engines/kit/nativePaths.windows.spec.ts', 'src/engines/kit/launchExecutable.windows.spec.ts', 'src/engines/removeHooks.spec.ts', 'src/engines/windowsHomes.spec.ts', 'src/cable/windowsSerial.spec.ts', 'src/cable/serialWindows.spec.ts')
           npx vitest run @paths --maxWorkers=1
+      # Two real builds (sub-project G): the rollover from the previous host to this one (hostMove.real.spec.ts, and
+      # drain.spec.ts's two-build case), and the payload install (the bin\ replacement, and install.ps1 in Windows
+      # PowerShell 5.1). Verbose, so the log names each case that ran.
+      - name: 'Two real builds: the pty host rollover and the payload install'
+        if: ${{ !inputs.release }}
+        working-directory: cli
+        shell: pwsh
+        env:
+          HARNESS_PTY_BIN: ${{ github.workspace }}\pty\target\${{ matrix.target }}\release\harness-pty.exe
+          HARNESS_PTY_BIN_PREV: ${{ github.workspace }}\pty\target\${{ matrix.target }}\previous\harness-pty.exe
+          # installPs1.spec.ts runs the real harness.exe; a --target build is not where it looks by default.
+          HARNESS_EXE_BIN: ${{ github.workspace }}\pty\target\${{ matrix.target }}\release\harness.exe
+        run: |
+          $paths = @('src/lib/hostMove/hostMove.real.spec.ts', 'src/lib/ptyHost/drain.spec.ts', 'src/lib/windows/ptyInstall.windows.real.spec.ts', 'src/scripts/installPs1.spec.ts')
+          npx vitest run @paths --maxWorkers=1 --reporter=verbose
       - name: Collect the payload
         shell: pwsh
         run: |
@@ -312,7 +349,7 @@ jobs:
         run: |
           # Each tree under its own path below logs\ (the same file name is in more than one), as it is under the profile:
           # the master's and the core's cli\data\harness.log, harness-launch.exe's cli\data\logs\launch.log, the terminal
-          # host's pty\logs\pty-host.log, the dial's logs\dial-*.log. Every path starts with a dot, which upload-artifact
+          # host's pty\logs\pty-host-<instance>.log, the dial's logs\dial-*.log. Every path starts with a dot, which upload-artifact
           # takes for hidden and leaves out unless include-hidden-files says otherwise: run 39083518767 uploaded nothing.
           # Each file copied is named here, so the job's own output says what the artifact holds.
           $logs = "$env:RUNNER_TEMP\logs"

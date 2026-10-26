@@ -72,6 +72,8 @@ class _App extends AppNotifier {
     String? swarmId,
     PaneSplitRequest? split,
     String? dsh,
+    String? swarmRole,
+    String? swarmSkillMode,
     GridModel? model,
     String? prompt,
     String? name,

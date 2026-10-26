@@ -7,6 +7,8 @@
  *   and what its frame says about its harness (its viewer);
  * - `create`: create an agent, as the window's `agent_create` does;
  * - `creation_status`: read the exact native receipt without exposing its launch request;
+ * - `keep_lead_alive`, `close_member`: for the Super Tab service alone, reopen a stopped Swarm Lead and close a member
+ *   whose session its backend ended, each only as core/api.ts allows;
  * - `stop_turn`: stop an agent's turn;
  * - `windows`: a change notice for every window on this computer (`orchestrator_changed`);
  * - `daemon`: how an agent's shell reaches this daemon, for the prompts the experiment writes;
@@ -20,7 +22,13 @@
  * - `cloud_publish`, `cloud_ask`, `cloud_unask`: the cloud agents' harnesses and their questions
  *   (`core.cloud`, core/agents/cloud.ts), for the cloud service alone;
  * - `super_tab_attention`: the Super Tab members here waiting on a person (`core.superTabs`,
- *   core/superTabAttention.ts), for the Super Tab service alone.
+ *   core/superTabAttention.ts), for the Super Tab service alone;
+ * - `super_tab_cards`, `super_tab_card_recap`: the Swarms' cards and a Lead's last message for the Harness Pro
+ *   (`core.superTabs`, core/superTabCards.ts), for the Super Tab service alone;
+ * - `super_tab_observers`: members may watch an agent here, so Share must run (`core.superTabs`), for the Super Tab
+ *   service alone;
+ * - `super_tab_screen`, `super_tab_input`: a member's terminal read as plain text and typed into for its Lead
+ *   (`core.superTabs`, core/superTabTerminal.ts), for the Super Tab service alone.
  * The core answers them only for the experiments (core/api.ts `EXPERIMENTS`): creating an agent or
  * telling the windows something is no other process's to ask. The process's side is
  * services/processCoreApi.ts. Agent Messages, an experiment until 2026-10-12, asks a few of the same and is
@@ -34,7 +42,7 @@ import { nativeTurnCursorIn } from '../lib/nativeTurnObservations.js'
 type Payload = Record<string, unknown>
 type Core = Pick<CoreApi, 'agents' | 'turns' | 'clients' | 'daemon' | 'account' | 'cloud' | 'superTabs' | 'transcripts'>
 
-const QUERIES: ReadonlySet<string> = new Set(['shown', 'stopped', 'creation_status', 'native_turns', 'create', 'stop_turn', 'windows', 'daemon', 'backend', 'observer_key', 'observer_send', 'account', 'cloud_publish', 'cloud_ask', 'cloud_unask', 'super_tab_attention'])
+const QUERIES: ReadonlySet<string> = new Set(['shown', 'close_swarm', 'keep_lead_alive', 'close_member', 'stopped', 'gone', 'creation_status', 'native_turns', 'create', 'stop_turn', 'windows', 'daemon', 'backend', 'observer_key', 'observer_send', 'account', 'cloud_publish', 'cloud_ask', 'cloud_unask', 'super_tab_attention', 'super_tab_cards', 'super_tab_card_recap', 'super_tab_observers', 'super_tab_screen', 'super_tab_input'])
 const METHODS: ReadonlySet<string> = new Set(['GET', 'POST', 'PUT', 'PATCH', 'DELETE'])
 const text = (value: unknown): string => (typeof value === 'string' ? value : '')
 
@@ -57,6 +65,13 @@ export function daemonAddress(core: Pick<CoreApi, 'daemon'>): Payload {
   return { command: core.daemon.command, port: core.daemon.port, machineId: core.daemon.machineId(), autonomousEnv: core.daemon.autonomousEnv }
 }
 
+/** What the add-ons of a device that is this machine ask in their own process (services/machineAddonsProcess.ts):
+ *  this daemon's address, for the account's machine id. Answered before the experiments' check, which would refuse
+ *  it as NOT_AN_EXPERIMENT; any other query of theirs is not answered here. */
+export function answerMachineAddonsQuery(core: Pick<CoreApi, 'daemon'>, service: string, query: string): Payload | null {
+  return service === 'machineAddons' && query === 'daemon' ? daemonAddress(core) : null
+}
+
 /** The answer to an experiment's query, or null when it is not one of these. */
 export async function answerExperimentQuery(core: Core, experiments: ReadonlySet<string>, service: string, query: string, payload: Payload): Promise<Payload | null> {
   if (!QUERIES.has(query)) return null
@@ -68,8 +83,33 @@ export async function answerExperimentQuery(core: Core, experiments: ReadonlySet
   switch (query) {
     case 'shown':
       return shownAgents(core)
+    case 'close_swarm': {
+      if (service !== 'superTabs') return { error: 'NOT_SUPER_TABS' }
+      const { agentId, creationId, sessionId, createdAt, expiresAt } = payload
+      if (!/^[A-Za-z0-9_-]{1,160}$/.test(text(agentId)) ||
+          creationId !== undefined && (typeof creationId !== 'string' || !/^[A-Za-z0-9_-]{16,96}$/.test(creationId)) ||
+          sessionId !== undefined && typeof sessionId !== 'string' ||
+          createdAt !== undefined && (typeof createdAt !== 'string' || !Number.isFinite(Date.parse(createdAt))) ||
+          expiresAt !== undefined && (typeof expiresAt !== 'number' || !Number.isFinite(expiresAt))) return { error: 'INVALID_REQUEST' }
+      return { ...await (core.agents.closeSwarm?.({ agentId: agentId as string,
+        ...(typeof creationId === 'string' ? { creationId } : {}), ...(typeof sessionId === 'string' ? { sessionId } : {}),
+        ...(typeof createdAt === 'string' ? { createdAt } : {}), ...(typeof expiresAt === 'number' ? { expiresAt } : {}) }) ?? { error: 'UNSUPPORTED' }) }
+    }
+    // The Super Tab host keeps its Leads alive and closes the sessions its backend ends; the core decides which (core/api.ts).
+    case 'keep_lead_alive':
+    case 'close_member': {
+      if (service !== 'superTabs') return { error: 'NOT_SUPER_TABS' }
+      const { agentId, creationId } = payload
+      if (typeof agentId !== 'string' || !/^[A-Za-z0-9_-]{1,160}$/.test(agentId)
+        || creationId !== undefined && (typeof creationId !== 'string' || !/^[A-Za-z0-9_-]{16,96}$/.test(creationId))) return { error: 'INVALID_REQUEST' }
+      return query === 'keep_lead_alive'
+        ? { ...await (core.agents.keepLeadAlive?.(agentId) ?? { ok: false, error: 'UNSUPPORTED' }) }
+        : { ...await (core.agents.closeMember?.(agentId, creationId as string | undefined) ?? { error: 'UNSUPPORTED' }) }
+    }
     case 'stopped':
       return { stopped: !!text(payload.agentId) && await core.agents.stopped?.(text(payload.agentId)) === true }
+    case 'gone':
+      return { gone: !!text(payload.agentId) && await core.agents.gone?.(text(payload.agentId)) === true }
     case 'creation_status':
       return { observation: await core.agents.creationStatus?.(text(payload.creationId)) ?? null }
     case 'native_turns': {
@@ -125,6 +165,27 @@ export async function answerExperimentQuery(core: Core, experiments: ReadonlySet
       if (service !== 'superTabs' || !core.superTabs) return { error: 'NOT_SUPER_TABS' }
       core.superTabs.attention(Array.isArray(payload.items) ? payload.items : [])
       return {}
+    }
+    case 'super_tab_cards':
+    case 'super_tab_card_recap': {
+      // Checked by the core (core/superTabCards.ts), which drops what is not sound; here only the list's shape.
+      if (service !== 'superTabs' || !core.superTabs) return { error: 'NOT_SUPER_TABS' }
+      if (query === 'super_tab_cards') core.superTabs.cards(Array.isArray(payload.items) ? payload.items : [])
+      else core.superTabs.cardRecap(payload.recap as never)
+      return {}
+    }
+    case 'super_tab_observers':
+      if (service !== 'superTabs' || !core.superTabs) return { error: 'NOT_SUPER_TABS' }
+      core.superTabs.shareObservers()
+      return {}
+    case 'super_tab_screen':
+    case 'super_tab_input': {
+      if (service !== 'superTabs' || !core.superTabs) return { error: 'NOT_SUPER_TABS' }
+      const { agentId, scrollback = 0, text: typed = '', keys = [] } = payload
+      if (!/^[A-Za-z0-9_-]{1,160}$/.test(text(agentId)) || typeof scrollback !== 'number' || typeof typed !== 'string'
+        || !Array.isArray(keys) || !keys.every(key => typeof key === 'string')) return { ok: false, error: 'INVALID_REQUEST' }
+      return { ...query === 'super_tab_screen' ? await core.superTabs.screen(agentId as string, scrollback)
+        : await core.superTabs.input(agentId as string, typed, keys as string[]) }
     }
     case 'account': {
       const known = await core.account.identity()

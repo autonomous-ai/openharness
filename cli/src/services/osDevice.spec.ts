@@ -77,7 +77,7 @@ describe('the Harness OS computer, managed from the phone', () => {
           cli: { running: '0.9.1', available: true, next: null },
         },
       },
-      wifi: { ssid: 'Home: 5G' }, hotspot: 'Harness-BD19', encrypted: true,
+      wifi: { ssid: 'Home: 5G' }, hotspot: 'Harness-BD19', encrypted: true, features: ['sign_out', 'password', 'ssh'],
     })
     expect(exec).toHaveBeenCalledWith('/usr/bin/python3', [LIVE_UPDATE, 'status'], { timeout: 15_000 })
     expect(exec).toHaveBeenCalledWith('/usr/bin/python3', [SETUP, 'name'], { timeout: 10_000 })
@@ -88,12 +88,20 @@ describe('the Harness OS computer, managed from the phone', () => {
 
   it('still answers on Harness OS when its update tool or nmcli fails', async () => {
     const failing = (reason: unknown) => service({ exec: vi.fn(async () => { throw reason }) }).ask({ action: 'status' })
-    expect(await failing(new Error('Command failed: python3\nTraceback ...'))).toEqual({ harnessOs: true, update: { available: false, error: 'Command failed: python3' }, wifi: { ssid: null }, hotspot: null, encrypted: true })
-    expect(await failing('killed')).toEqual({ harnessOs: true, update: { available: false, error: 'killed' }, wifi: { ssid: null }, hotspot: null, encrypted: true })
+    expect(await failing(new Error('Command failed: python3\nTraceback ...'))).toEqual({ harnessOs: true, update: { available: false, error: 'Command failed: python3' }, wifi: { ssid: null }, hotspot: null, encrypted: true, features: ['sign_out', 'password', 'ssh'] })
+    expect(await failing('killed')).toEqual({ harnessOs: true, update: { available: false, error: 'killed' }, wifi: { ssid: null }, hotspot: null, encrypted: true, features: ['sign_out', 'password', 'ssh'] })
     const notJson = service({ exec: vi.fn(async () => 'not json') })
     expect(await notJson.ask({ action: 'status' })).toMatchObject({ update: { available: false, error: expect.stringContaining('JSON') } })
     const notObject = service({ exec: vi.fn(async () => '[1]') })
     expect(await notObject.ask({ action: 'status' })).toMatchObject({ update: { available: false, error: 'live_update.py status did not answer an object' } })
+  })
+
+  it('still reports status when the boot command line is unreadable and no hotspot is named', async () => {
+    const { ask } = service({
+      readFile: async () => { throw new Error('boot command line unavailable') },
+      exec: async (file, args) => args[0] === SETUP ? '  \n' : file === '/usr/bin/python3' ? STATUS : '',
+    })
+    expect(await ask({ action: 'status' })).toMatchObject({ harnessOs: true, encrypted: false, hotspot: null, update: { available: true } })
   })
 
   it('reads an update as available from the system channel or a runtime build ready', () => {
@@ -125,6 +133,42 @@ describe('the Harness OS computer, managed from the phone', () => {
     const { ask, spawnDetached } = service()
     expect(await ask({ action: 'update', reboot: true })).toEqual({ started: true })
     expect(spawnDetached).toHaveBeenCalledWith('/usr/bin/harness', ['update', '--reboot'])
+  })
+
+  it('signs the computer out for another account, detached', async () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+    const { ask, spawnDetached } = service()
+    expect(await ask({ action: 'sign_out' })).toEqual({ started: true })
+    expect(spawnDetached).toHaveBeenCalledWith('sudo', ['-n', '/usr/bin/python3', SETUP, 'sign-out'])
+  })
+
+  it('changes the password with both only on the helper\'s stdin', async () => {
+    const exec = vi.fn(async () => '{"ok": true, "disk": true}')
+    const { ask } = service({ exec })
+    expect(await ask({ action: 'password', current: '1234', next: 'abcd' })).toEqual({ ok: true, disk: true })
+    expect(exec).toHaveBeenCalledWith('sudo', ['-n', '/usr/bin/python3', SETUP, 'password'],
+      { timeout: 90_000, input: JSON.stringify({ current: '1234', new: 'abcd' }) })
+    expect(await ask({ action: 'password', current: '1234' })).toMatchObject({ error: 'BAD_REQUEST' })
+    exec.mockResolvedValueOnce('{"error": "WRONG_PASSWORD", "message": "That is not the computer\'s password."}')
+    expect(await ask({ action: 'password', current: 'x', next: 'abcd' })).toMatchObject({ error: 'WRONG_PASSWORD' })
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    exec.mockResolvedValueOnce('["ok"]')
+    expect(await ask({ action: 'password', current: '1234', next: 'abcd' }))
+      .toEqual({ error: 'FAILED', message: 'setup.py password did not answer an object' })
+  })
+
+  it('turns SSH on or off, or says how it is', async () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+    const answer = { enabled: true, active: true, user: 'me', addresses: [{ interface: 'wlo1', address: '172.168.21.13' }] }
+    const exec = vi.fn(async () => JSON.stringify(answer))
+    const { ask } = service({ exec })
+    expect(await ask({ action: 'ssh', state: 'on' })).toEqual(answer)
+    expect(exec).toHaveBeenLastCalledWith('sudo', ['-n', '/usr/bin/python3', SETUP, 'ssh', 'on'], { timeout: 30_000 })
+    await ask({ action: 'ssh', state: 'rm -rf' })
+    expect(exec).toHaveBeenLastCalledWith('sudo', ['-n', '/usr/bin/python3', SETUP, 'ssh', 'status'], { timeout: 30_000 })
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    exec.mockResolvedValueOnce('null')
+    expect(await ask({ action: 'ssh', state: 'status' })).toEqual({ error: 'FAILED', message: 'setup.py ssh did not answer an object' })
   })
 
   it('starts the update detached, once in ten minutes', async () => {

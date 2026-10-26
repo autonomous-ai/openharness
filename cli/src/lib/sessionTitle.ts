@@ -14,7 +14,7 @@
  * What is left after cleaning can still be no name at all: an engine's own name before the first
  * prompt ("Claude Code"), or just the folder. Those fall through to the numbered default.
  */
-import { readFileSync, statSync } from 'node:fs'
+import { closeSync, openSync, readFileSync, readSync, statSync } from 'node:fs'
 import { basename, join } from 'node:path'
 import { ENGINES } from '../engines/types.js'
 import { launchCodexHome, sessionCodexHome } from './engineHomes.js'
@@ -98,6 +98,53 @@ export function codexThreadName(sessionId: string | null | undefined, codexHome?
 /** Test seam. */
 export function resetCodexThreadNames(): void { codexIndexCache = null }
 
+/** omp's terminal title: "π ⠴ 󰣳 Fix login: …": its name, a status mark (a Braille spinner frame
+ *  while working, ">" when idle, or another single mark), then an optional Nerd Font icon. */
+const OMP_TITLE_PREFIX = /^π\s+(?:[\u2800-\u28ff]|[^\s\p{L}\p{N}])?\s*/u
+/** A leading Nerd Font / private-use icon, as omp puts on its own session titles. */
+const PRIVATE_USE_ICON = /^[\u{E000}-\u{F8FF}\u{F0000}-\u{FFFFD}\u{100000}-\u{10FFFD}]+\s*/u
+
+/**
+ * An omp title with the parts that churn stripped: the "π" name, the status/spinner mark (so a
+ * working pane does not retitle on every spinner frame) and the topic icon. A title that is not
+ * omp's is only trimmed of a leading icon.
+ */
+export function cleanOmpTitle(title: string | null | undefined): string | null {
+  if (!title) return null
+  const cleaned = title.trim().replace(OMP_TITLE_PREFIX, '').replace(PRIVATE_USE_ICON, '').trim()
+  return cleaned || null
+}
+
+/** How much of the head of an omp session file is read for its `{"type":"title"}` line. */
+const OMP_TITLE_HEAD_BYTES = 16 * 1024
+
+/**
+ * omp's own session title: the `{"type":"title"}` line it keeps (padded, rewritten in place) at the
+ * head of its session .jsonl. Null for a missing file or no title line; the last title line in the
+ * head wins.
+ */
+export function ompSessionTitle(transcriptPath: string | null | undefined): string | null {
+  if (!transcriptPath) return null
+  let head = ''
+  try {
+    const fd = openSync(transcriptPath, 'r')
+    try {
+      const buffer = Buffer.alloc(OMP_TITLE_HEAD_BYTES)
+      const read = readSync(fd, buffer, 0, buffer.length, 0)
+      head = buffer.subarray(0, read).toString('utf8')
+    } finally { closeSync(fd) }
+  } catch { return null }
+  let title: string | null = null
+  for (const line of head.split('\n')) {
+    if (!line.includes('"type":"title"')) continue
+    try {
+      const row = JSON.parse(line) as { type?: unknown; title?: unknown }
+      if (row.type === 'title' && typeof row.title === 'string') title = cleanOmpTitle(row.title) ?? title
+    } catch { /* a line cut by the head limit, or mid-rewrite */ }
+  }
+  return title
+}
+
 /**
  * The title the terminal sweep records for a session: Codex's thread name when it has one, else the
  * terminal title as the engine wrote it. Cleaning for display happens in namingTitle, so a title
@@ -111,5 +158,7 @@ export function engineSessionTitle(
     const named = codexThreadName(session.sessionId, sessionCodexHome(session))
     if (named) return named
   }
+  // The live terminal title first (it follows /rename at once), else omp's own session file.
+  if (session.engine === 'omp') return cleanOmpTitle(terminalTitle) ?? ompSessionTitle(session.transcriptPath)
   return terminalTitle ?? null
 }

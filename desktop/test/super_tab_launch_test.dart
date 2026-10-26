@@ -2,9 +2,11 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
 
+import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/core/first_task.dart';
 import 'package:harness/core/models.dart';
+import 'package:harness/core/launch_setup.dart';
 import 'package:harness/state/app_state.dart';
 import 'package:harness/state/new_harness.dart';
 import 'package:harness/state/harness_attachments.dart';
@@ -12,6 +14,8 @@ import 'package:harness/terminal/terminal_binary.dart';
 import 'package:harness/super_tabs/launch.dart';
 import 'package:harness/super_tabs/client.dart';
 import 'package:harness/super_tabs/controller.dart';
+import 'package:harness/widgets/new_harness_form.dart';
+import 'package:harness/ws/local_cli_discovery.dart';
 import 'package:harness/ws/ws_conn.dart';
 
 import 'support/super_tab_fixture.dart';
@@ -20,7 +24,7 @@ import 'swarm_state_test.dart' show createApp, MemoryStore;
 const tabId = '0123456789abcdef01234567';
 
 class SuperTabFixtureConnection extends WsConn {
-  SuperTabFixtureConnection(this.store)
+  SuperTabFixtureConnection(this.store, {bool local = false})
     : super(
         wsBaseUrl: 'ws://fixture.invalid',
         autonomousEnv: 'test',
@@ -29,19 +33,31 @@ class SuperTabFixtureConnection extends WsConn {
         onAuthFailure: (_) {},
         onEvent: (_) {},
         onStatus: (_) {},
+        transportKind: local
+            ? WsTransportKind.localPlaintext
+            : WsTransportKind.cloudE2ee,
+        localWsUri: local ? Uri.parse('ws://127.0.0.1:1/ws') : null,
       ) {
     server.state['id'] = tabId;
   }
   final MemoryStore store;
   final server = ConversationServer();
   final calls = <(String, Map<String, dynamic>)>[];
+  final extraEngines = <String>[];
   final joins = <Map<String, dynamic>>[];
+
+  /// Preparation operations this fixture has already answered: the daemon
+  /// answers a new one with `preparing` and is ready only when it is read
+  /// again (`cli/src/superTabs/contribution.ts`), so a client that gives up
+  /// after one answer never sees anything ready.
+  final prepared = <Object?>{};
   bool loseCreate = false, loseJoin = false;
   bool failNative = false;
   WsRequestFailure? backendFailure;
   bool failResume = false;
   bool nativeSurface = false;
   bool failFiles = false, failCreation = false, changeAccountOnUpload = false;
+  bool changeAccountOnProjectRead = false;
   late AppNotifier app;
   final sentFiles = <Uint8List>[];
   final terminalCalls = <(String, Map<String, dynamic>)>[];
@@ -132,18 +148,30 @@ class SuperTabFixtureConnection extends WsConn {
       };
     }
     if (type == 'super_tabs') {
+      if (changeAccountOnProjectRead &&
+          payload['method'] == 'GET' &&
+          payload['path'] == '/api/super-tabs/$tabId') {
+        app.currentUser = const CurrentUserProfile(
+          id: 'different',
+          email: 'different@example.com',
+        );
+      }
       if (payload['action'] == 'backend' && backendFailure != null) {
         throw backendFailure!;
       }
       if (payload['action'] == 'wake') return {'ok': true};
       if (payload['action'] == 'prepareContribution') {
+        if (prepared.add(payload['operationId'])) {
+          return {'ok': true, 'state': 'preparing'};
+        }
         return {
           'ok': true,
           'state': 'ready',
           'cwd': '/work/project',
           'scope': 'swarm',
           'engines': ['claude', 'codex', 'pi'],
-          'maxAgents': 4,
+          'maxAgents': 8,
+          'maxAvailableAgents': 16,
         };
       }
       if (payload['action'] == 'prepareNative' ||
@@ -171,12 +199,15 @@ class SuperTabFixtureConnection extends WsConn {
       if (payload['path'] == '/api/super-tabs' && payload['method'] == 'POST') {
         final body = payload['body'] as Map;
         server.state['projects'] ??= [
-          projectFixture(
-            'lead',
-            'Swarm',
-            'lead',
-            visibility: body['projectVisibility'] as String? ?? 'public',
-          ),
+          {
+            ...projectFixture(
+              'lead',
+              'Swarm',
+              'lead',
+              visibility: body['projectVisibility'] as String? ?? 'public',
+            ),
+            'skillMode': 'default',
+          },
         ];
         return {
           'ok': true,
@@ -187,6 +218,16 @@ class SuperTabFixtureConnection extends WsConn {
       if (body?['command'] case final Map command
           when command['type'] == 'agent.add') {
         joins.add(Map<String, dynamic>.from(body!));
+        // As the backend: a deleted project's conversation is not found.
+        if (!(server.state['conversations'] as List).cast<Map>().any(
+          (g) => g['id'] == command['conversationId'],
+        )) {
+          throw const SuperTabFailure(
+            'NOT_FOUND',
+            'This conversation is unavailable.',
+            statusCode: 404,
+          );
+        }
         if (!server.receipts.containsKey(body['operationId'])) {
           (server.state['agents'] as List).add({
             'id': 'lead-agent',
@@ -307,6 +348,8 @@ class SuperTabFixtureConnection extends WsConn {
         'engines': [
           {'engine': 'codex', 'installed': true, 'supportsCodexHome': true},
           {'engine': 'claude', 'installed': true},
+          for (final engine in extraEngines)
+            {'engine': engine, 'installed': true},
         ],
       },
       'codex_profiles_list' => {'profiles': <dynamic>[]},
@@ -318,12 +361,19 @@ class SuperTabFixtureConnection extends WsConn {
 }
 
 class SuperTabLaunchFixture {
-  SuperTabLaunchFixture() {
-    connection = SuperTabFixtureConnection(store);
+  SuperTabLaunchFixture({
+    bool local = false,
+    SuperTabFixtureConnection Function(MemoryStore)? connectionFactory,
+    LocalCliDiscovery? discovery,
+  }) {
+    connection =
+        connectionFactory?.call(store) ??
+        SuperTabFixtureConnection(store, local: local);
     app = createApp(
       store: store,
       connectionForTest: (_) => connection,
       connected: true,
+      localCliDiscovery: discovery,
     );
     app.machineStates['m']!
       ..localOnly = true
@@ -340,11 +390,20 @@ class SuperTabLaunchFixture {
       email: 'owner@example.com',
     );
     app.markSuperTabDraft(app.activeSwarmId);
-    addTearDown(app.dispose);
+    addTearDown(dispose);
   }
   final store = MemoryStore();
   late final AppNotifier app;
   late final SuperTabFixtureConnection connection;
+  bool _disposed = false;
+
+  /// Once. A widget test whose app read a machine list must call it itself: Flutter checks for pending timers (the
+  /// list's safety net) before tear-downs run.
+  void dispose() {
+    if (_disposed) return;
+    _disposed = true;
+    app.dispose();
+  }
 
   Future<NewHarnessController> box({
     String engine = 'codex',
@@ -377,6 +436,91 @@ class SuperTabLaunchFixture {
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
+  test(
+    'Swarm members with no full mode retain their supported launch behavior',
+    () async {
+      for (final engine in ['opencode', 'hermes']) {
+        final f = SuperTabLaunchFixture();
+        f.connection.extraEngines.add(engine);
+        f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Company');
+        final box = await f.box(engine: engine);
+        expect(
+          await box.create(),
+          NewHarnessOutcome.created,
+          reason: box.error,
+        );
+        final request = f.connection.calls
+            .firstWhere((c) => c.$1 == 'agent_create')
+            .$2;
+        expect(request['permissionMode'], isNull);
+        expect(request['bypassPermission'], isTrue);
+        expect(
+          box.agentSettingsFor(engine).map((o) => o.id),
+          isNot(contains(NewHarnessController.permissionsId)),
+        );
+      }
+    },
+  );
+
+  for (final engine in ['claude', 'codex']) {
+    for (final kind in ['new Swarm', 'new project', 'member']) {
+      test(
+        '$kind launches $engine in full mode without permission choices',
+        () async {
+          final f = SuperTabLaunchFixture();
+          await f.app.agentPreference.selectPermissionMode(engine, 'ask');
+          await f.app.agentPreference.remember(
+            engine,
+            setup: LaunchSetup(engine: engine, permissionMode: 'ask'),
+          );
+          if (kind != 'new Swarm') {
+            f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Company');
+          }
+          final box = await f.box(
+            engine: engine,
+            newProject: kind == 'new project',
+          );
+          expect(
+            box.agentSettingsFor(engine).map((o) => o.id),
+            isNot(contains(NewHarnessController.permissionsId)),
+          );
+          box.advancedOpen = true;
+          expect(box.fields, isNot(contains(NewHarnessField.mode)));
+          box.openLaunchSetting(NewHarnessField.mode);
+          expect(box.field, isNot(NewHarnessField.mode));
+          expect(
+            await box.create(),
+            NewHarnessOutcome.created,
+            reason: box.error,
+          );
+          final request = f.connection.calls
+              .firstWhere((c) => c.$1 == 'agent_create')
+              .$2;
+          expect(request['permissionMode'], 'full');
+          expect(request['swarmRole'], kind == 'member' ? 'dev' : 'lead');
+          expect(
+            request['swarmSkillMode'],
+            kind == 'member' ? 'orchestration' : 'default',
+          );
+          await Future<void>.delayed(Duration.zero);
+          final ordinary = NewHarnessController(
+            f.app,
+            machineId: 'm',
+            engine: engine,
+            folder: '/work/project',
+          );
+          addTearDown(ordinary.dispose);
+          await Future<void>.delayed(Duration.zero);
+          expect(
+            ordinary.agentSettingsFor(engine).map((o) => o.id),
+            contains(NewHarnessController.permissionsId),
+          );
+          expect(ordinary.mode, 'ask');
+        },
+      );
+    }
+  }
+
   test(
     'guest machine access cannot create a Swarm lead under the owner account',
     () async {
@@ -622,6 +766,12 @@ void main() {
         expect(
           f.connection.calls
               .firstWhere((c) => c.$1 == 'agent_create')
+              .$2['swarmRole'],
+          'lead',
+        );
+        expect(
+          f.connection.calls
+              .firstWhere((c) => c.$1 == 'agent_create')
               .$2['prompt'],
           isNull,
         );
@@ -755,6 +905,315 @@ void main() {
     },
   );
 
+  for (final engine in ['claude', 'codex']) {
+    test('a Desktop $engine Swarm worker gets the DEV role', () async {
+      final f = SuperTabLaunchFixture();
+      f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Company');
+      final box = await f.box(engine: engine);
+      expect(await box.create(), NewHarnessOutcome.created, reason: box.error);
+      final create = f.connection.calls
+          .firstWhere((c) => c.$1 == 'agent_create')
+          .$2;
+      expect(create['swarmRole'], 'dev');
+      expect(create['prompt'], contains('swarm-dev'));
+    });
+  }
+
+  test(
+    'a Desktop Builder starts with the existing project skill mode',
+    () async {
+      final f = SuperTabLaunchFixture();
+      f.connection.server.state['projects'] = [
+        {...projectFixture('lead', 'Company', 'lead'), 'skillMode': 'default'},
+      ];
+      f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Company');
+      final box = await f.box();
+      expect(await box.create(), NewHarnessOutcome.created, reason: box.error);
+      final create = f.connection.calls
+          .firstWhere((c) => c.$1 == 'agent_create')
+          .$2;
+      expect(create['swarmRole'], 'dev');
+      expect(create['swarmSkillMode'], 'default');
+    },
+  );
+
+  test(
+    'a Desktop agent joining a custom project sends its chosen role id',
+    () async {
+      final f = SuperTabLaunchFixture();
+      f.connection.server.state['projects'] = [
+        {
+          ...projectFixture('lead', 'Company', 'lead'),
+          'skillSet': 'custom',
+          'skillMode': 'default',
+          'roles': [
+            {
+              'id': 'lead',
+              'name': 'Product Manager',
+              'kind': 'lead',
+              'version': 'v1',
+            },
+            {
+              'id': 'dev',
+              'name': 'Engineer',
+              'kind': 'builder',
+              'version': 'v1',
+            },
+            {
+              'id': 'review',
+              'name': 'Reviewer',
+              'kind': 'reviewer',
+              'version': 'v1',
+            },
+          ],
+        },
+      ];
+      f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Company');
+      final box = await f.box();
+      expect(await box.create(), NewHarnessOutcome.created, reason: box.error);
+      expect(f.connection.joins.single['command']['roleId'], 'dev');
+    },
+  );
+
+  testWidgets('new agent form lets a custom project choose a reviewer role', (
+    tester,
+  ) async {
+    final f = SuperTabLaunchFixture();
+    f.connection.server.state['projects'] = [
+      {
+        ...projectFixture('lead', 'Company', 'lead'),
+        'skillSet': 'custom',
+        'skillMode': 'default',
+        'roles': [
+          {
+            'id': 'lead',
+            'name': 'Product Manager',
+            'kind': 'lead',
+            'version': 'v1',
+          },
+          {'id': 'dev', 'name': 'Engineer', 'kind': 'builder', 'version': 'v1'},
+          {
+            'id': 'review',
+            'name': 'Security Reviewer',
+            'kind': 'reviewer',
+            'version': 'v1',
+          },
+        ],
+      },
+    ];
+    f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Company');
+    final box = (await tester.runAsync(() => f.box()))!;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: SizedBox(
+            width: 1200,
+            height: 800,
+            child: NewHarnessForm(
+              controller: box,
+              desktop: true,
+              onClose: () {},
+              onCreated: () {},
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+    expect(find.byKey(const ValueKey('new-harness-role')), findsOneWidget);
+    await tester.tap(find.byKey(const ValueKey('new-harness-role')));
+    await tester.pump();
+    await tester.tap(find.text('Security Reviewer').last);
+    await tester.pump();
+    expect(box.integration!.roleId, 'review');
+    expect(box.integration!.swarmRole, 'review');
+    expect(
+      await tester.runAsync(() => box.create()),
+      NewHarnessOutcome.created,
+      reason: box.error,
+    );
+    final create = f.connection.calls
+        .firstWhere((entry) => entry.$1 == 'agent_create')
+        .$2;
+    expect(create['swarmRole'], 'review');
+    expect(f.connection.joins.single['command']['roleId'], 'review');
+  });
+
+  test('switching away from Custom resets a pending Reviewer launch', () async {
+    final f = SuperTabLaunchFixture();
+    final project = {
+      ...projectFixture('lead', 'Company', 'lead'),
+      'skillSet': 'custom',
+      'skillMode': 'default',
+      'roles': [
+        {'id': 'dev', 'name': 'Engineer', 'kind': 'builder', 'version': 'v1'},
+        {
+          'id': 'review',
+          'name': 'Reviewer',
+          'kind': 'reviewer',
+          'version': 'v1',
+        },
+      ],
+    };
+    f.connection.server.state['projects'] = [project];
+    f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Company');
+    final box = await f.box();
+    box.integration!.chooseRole('review');
+    project['skillSet'] = 'default';
+    expect(await box.create(), NewHarnessOutcome.created, reason: box.error);
+    final create = f.connection.calls
+        .firstWhere((entry) => entry.$1 == 'agent_create')
+        .$2;
+    expect(create['swarmSkillMode'], 'default');
+    expect(create['swarmRole'], 'dev');
+    expect(f.connection.joins.single['command'], isNot(contains('roleId')));
+  });
+
+  testWidgets('recovering a removed role keeps the form readable', (
+    tester,
+  ) async {
+    final f = SuperTabLaunchFixture();
+    f.connection.server.state['projects'] = [
+      {
+        ...projectFixture('lead', 'Company', 'lead'),
+        'skillSet': 'custom',
+        'skillMode': 'default',
+        'roles': [
+          {
+            'id': 'lead',
+            'name': 'Product Manager',
+            'kind': 'lead',
+            'version': 'v1',
+          },
+          {'id': 'dev', 'name': 'Engineer', 'kind': 'builder', 'version': 'v1'},
+        ],
+      },
+    ];
+    f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Company');
+    f.store.values['super_tab.launch.owner.${f.app.activeSwarmId}.lead'] =
+        jsonEncode({
+          'operationId': 'saved-operation',
+          'joinId': 'saved-join',
+          'tabId': tabId,
+          'conversationId': 'lead',
+          'lead': false,
+          'roleId': 'removed',
+          'roleKind': 'builder',
+          'phase': 'starting',
+        });
+    final box = (await tester.runAsync(() => f.box()))!;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: NewHarnessForm(
+            controller: box,
+            desktop: true,
+            onClose: () {},
+            onCreated: () {},
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+    expect(tester.takeException(), isNull);
+    expect(find.byKey(const ValueKey('new-harness-role')), findsOneWidget);
+  });
+
+  test(
+    'a role changed before launch is rejected before native creation',
+    () async {
+      final f = SuperTabLaunchFixture();
+      final project = {
+        ...projectFixture('lead', 'Company', 'lead'),
+        'skillSet': 'custom',
+        'skillMode': 'default',
+        'roles': [
+          {
+            'id': 'lead',
+            'name': 'Product Manager',
+            'kind': 'lead',
+            'version': 'v1',
+          },
+          {'id': 'dev', 'name': 'Engineer', 'kind': 'builder', 'version': 'v1'},
+        ],
+      };
+      f.connection.server.state['projects'] = [project];
+      f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Company');
+      final box = await f.box();
+      project['roles'] = [
+        {
+          'id': 'lead',
+          'name': 'Product Manager',
+          'kind': 'lead',
+          'version': 'v2',
+        },
+        {'id': 'dev', 'name': 'Reviewer', 'kind': 'reviewer', 'version': 'v2'},
+      ];
+      expect(await box.create(), NewHarnessOutcome.failed);
+      expect(
+        f.connection.calls.where((call) => call.$1 == 'agent_create'),
+        isEmpty,
+      );
+    },
+  );
+
+  test(
+    'reopened unfinished form replaces a removed role with an available one',
+    () async {
+      final f = SuperTabLaunchFixture();
+      f.connection.server.state['projects'] = [
+        {
+          ...projectFixture('lead', 'Company', 'lead'),
+          'skillSet': 'custom',
+          'skillMode': 'default',
+          'roles': [
+            {
+              'id': 'lead',
+              'name': 'Product Manager',
+              'kind': 'lead',
+              'version': 'v1',
+            },
+            {
+              'id': 'dev',
+              'name': 'Engineer',
+              'kind': 'builder',
+              'version': 'v1',
+            },
+          ],
+        },
+      ];
+      f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Company');
+      f.store.values['super_tab.launch.owner.${f.app.activeSwarmId}.lead'] =
+          jsonEncode({
+            'operationId': 'saved-operation',
+            'joinId': 'saved-join',
+            'tabId': tabId,
+            'conversationId': 'lead',
+            'lead': false,
+            'roleId': 'removed',
+            'roleKind': 'builder',
+          });
+      final box = await f.box();
+      expect(box.integration!.roleId, 'dev');
+    },
+  );
+
+  test('account switch during role lookup closes the old launch', () async {
+    final f = SuperTabLaunchFixture()
+      ..connection.changeAccountOnProjectRead = true;
+    f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Company');
+    await expectLater(
+      f.box(),
+      throwsA(
+        isA<SuperTabFailure>().having(
+          (failure) => failure.code,
+          'code',
+          'ACCOUNT_CHANGED',
+        ),
+      ),
+    );
+  });
+
   test('the lead prompt routes before starting or assigning work', () async {
     final f = SuperTabLaunchFixture()..connection.nativeName = 'hi';
     final box = await f.box(engine: 'claude');
@@ -764,11 +1223,18 @@ void main() {
                 .firstWhere((c) => c.$1 == 'agent_create')
                 .$2['prompt']
             as String;
+    expect(
+      prompt,
+      contains('Route only to start an agent or assign work, never your own'),
+    );
     expect(prompt, contains('route GROUP'));
     expect(prompt, contains('size (small, medium or large)'));
     expect(prompt, contains('routeDecisionId'));
     expect(prompt, contains('overrideReason'));
     expect(prompt, contains('NO_CANDIDATE'));
+    expect(prompt, contains('reuse, keep or stop'));
+    expect(prompt, contains('prefer stop'));
+    expect(prompt.length, lessThanOrEqualTo(2000));
   });
 
   test('a new Lead starts Claude Code or Codex; other agents stay open to the rest', () async {
@@ -810,8 +1276,8 @@ void main() {
                 .firstWhere((c) => c.$1 == 'agent_create')
                 .$2['prompt']
             as String;
-    expect(prompt, contains('like a helpful colleague'));
-    expect(prompt, contains('under about 150 words'));
+    expect(prompt, contains('helpful colleague'));
+    expect(prompt, contains('under 150 words'));
     expect(prompt, contains('UNIQUE_OPERATION_ID [--reply-to MESSAGE_ID]`'));
     expect(prompt, contains('answer each message once'));
     expect(prompt, contains('do not post again'));

@@ -34,7 +34,8 @@ static bool same(const char *a, const char *b) { return a && b && !strcmp(a, b);
 
 // ── model ────────────────────────────────────────────────────────────────────────────────────────────
 
-void pod_model_reset(pod_model_t *m) { memset(m, 0, sizeof *m); }
+static void swarms_free(pod_model_t *m);
+void pod_model_reset(pod_model_t *m) { swarms_free(m); memset(m, 0, sizeof *m); }
 
 static uint32_t (*s_random)(void);
 void pod_model_random(uint32_t (*rnd)(void)) { s_random = rnd; }
@@ -709,7 +710,168 @@ void pod_model_link(pod_model_t *m, bool up) {
             m->agents[i].super_tab[0] = 0;
             m->agents[i].attention = POD_ATTN_NONE;
         }
+        swarms_free(m);   // the daemon sends the Swarm list again on the next link, and the open recap is asked for again
+        m->swarm_n = 0;
+        m->want_n = 0;
+        m->swarm_ids = false;
+        m->focus_pending = false;
     }
+    m->revision++;
+}
+
+// ---- the Swarm cards ----
+#include "pod/pod_mem.h"   // pod_big_alloc: a Lead's recap text lives in PSRAM
+#ifndef ESP_PLATFORM
+int pod_big_alloc_fail;
+#endif
+
+static void lead_free_text(pod_lead_t *l) { free(l->text); l->text = NULL; }
+static void swarms_free(pod_model_t *m) {
+    for (int i = 0; i < m->swarm_n && i < SWARMS_CARD_MAX; i++)
+        for (int j = 0; j < m->swarms[i].lead_n && j < SWARM_LEADS_MAX; j++) lead_free_text(&m->swarms[i].leads[j]);
+}
+
+int pod_model_lead_index(const pod_swarm_t *s, const char *lead_id) {
+    if (!s || !lead_id || !*lead_id) return -1;
+    for (int j = 0; j < s->lead_n; j++)
+        if (!strcmp(s->leads[j].id, lead_id)) return j;
+    return -1;
+}
+
+const pod_swarm_t *pod_model_swarm(const pod_model_t *m, const char *swarm_id) {
+    if (!swarm_id || !*swarm_id) return NULL;
+    for (int i = 0; i < m->swarm_n; i++)
+        if (!strcmp(m->swarms[i].id, swarm_id)) return &m->swarms[i];
+    return NULL;
+}
+
+const pod_swarm_t *pod_model_swarm_for_tab(const pod_model_t *m, const char *tab_id) {
+    if (!tab_id || !*tab_id) return NULL;
+    for (int i = 0; i < m->swarm_n; i++)
+        if (!strcmp(m->swarms[i].tab, tab_id)) return &m->swarms[i];
+    return NULL;
+}
+
+static int want_idx(const pod_model_t *m, const char *id) {
+    for (int i = 0; i < m->want_n; i++)
+        if (!strcmp(m->want[i], id)) return i;
+    return -1;
+}
+
+void pod_model_supertab_ids(pod_model_t *m, const char (*ids)[ID_MAX], int n) {
+    static EXT_RAM_BSS_ATTR pod_swarm_t tmp;   // one Swarm (3 KB) is too much for the cable_link stack
+    if (!ids || n < 0) n = 0;
+    m->swarm_ids = true;
+    m->want_n = 0;
+    for (int i = 0; i < n && m->want_n < SWARMS_CARD_MAX; i++) {
+        if (!ids[i][0] || memchr(ids[i], 0, ID_MAX) == NULL || want_idx(m, ids[i]) >= 0) continue;
+        memcpy(m->want[m->want_n++], ids[i], ID_MAX);
+    }
+    int k = 0;   // keep the listed ones, free the rest
+    for (int i = 0; i < m->swarm_n; i++) {
+        if (want_idx(m, m->swarms[i].id) < 0) {
+            for (int j = 0; j < m->swarms[i].lead_n; j++) lead_free_text(&m->swarms[i].leads[j]);
+            continue;
+        }
+        if (k != i) m->swarms[k] = m->swarms[i];   // ownership of the texts moves with the struct
+        k++;
+    }
+    if (k < m->swarm_n) memset(&m->swarms[k], 0, (size_t)(m->swarm_n - k) * sizeof m->swarms[0]);
+    m->swarm_n = (uint8_t)k;
+    for (int t = 0; t < m->swarm_n; t++) {   // selection sort by the list's order
+        int best = t;
+        for (int i = t + 1; i < m->swarm_n; i++)
+            if (want_idx(m, m->swarms[i].id) < want_idx(m, m->swarms[best].id)) best = i;
+        if (best == t) continue;
+        tmp = m->swarms[t]; m->swarms[t] = m->swarms[best]; m->swarms[best] = tmp;
+    }
+    m->revision++;
+}
+
+void pod_model_supertab(pod_model_t *m, const pod_swarm_t *s, uint32_t now_ms) {
+    if (!s || !s->id[0]) return;
+    const int w = want_idx(m, s->id);
+    if (w < 0) return;   // not in the last id list (the list comes first)
+    pod_model_clock(m, now_ms);
+    int at = -1;
+    for (int i = 0; i < m->swarm_n; i++)
+        if (!strcmp(m->swarms[i].id, s->id)) at = i;
+    if (at < 0) {   // new: slot it in before the first received Swarm that the list puts after it
+        at = m->swarm_n;
+        for (int i = 0; i < m->swarm_n; i++)
+            if (want_idx(m, m->swarms[i].id) > w) { at = i; break; }
+        if (m->swarm_n >= SWARMS_CARD_MAX) return;
+        memmove(&m->swarms[at + 1], &m->swarms[at], (size_t)(m->swarm_n - at) * sizeof m->swarms[0]);
+        memset(&m->swarms[at], 0, sizeof m->swarms[0]);
+        m->swarm_n++;
+    }
+    pod_swarm_t *d = &m->swarms[at];
+    struct { pod_recap_state_t recap; char *text; uint32_t text_at; } carry[SWARM_LEADS_MAX];
+    memset(carry, 0, sizeof carry);
+    const int ln = s->lead_n > SWARM_LEADS_MAX ? SWARM_LEADS_MAX : s->lead_n;
+    for (int j = 0; j < ln; j++) {
+        const int k = pod_model_lead_index(d, s->leads[j].id);
+        if (k < 0) continue;
+        pod_lead_t *ol = &d->leads[k];   // taken over: the old copy no longer owns the text
+        carry[j].recap = ol->recap; carry[j].text = ol->text; carry[j].text_at = ol->text_at;
+        ol->text = NULL;
+    }
+    for (int j = 0; j < d->lead_n; j++) lead_free_text(&d->leads[j]);   // the ones that left
+    *d = *s;
+    d->lead_n = (uint8_t)ln;
+    for (int j = 0; j < SWARM_LEADS_MAX; j++) {
+        pod_lead_t *l = &d->leads[j];
+        if (j >= ln) { memset(l, 0, sizeof *l); continue; }
+        l->text = carry[j].text;
+        l->recap = carry[j].recap;
+        l->text_at = carry[j].text_at;
+        l->since_at_ms = now_ms;
+    }
+    m->revision++;
+}
+
+void pod_model_supertab_recap(pod_model_t *m, const char *tab, const char *lead, const char *text, uint32_t at, bool none) {
+    const pod_swarm_t *s = pod_model_swarm(m, tab);
+    const int j = pod_model_lead_index(s, lead);
+    if (j < 0) return;
+    pod_lead_t *l = &((pod_swarm_t *)s)->leads[j];
+    if (l->recap == POD_RECAP_NONE) return;   // a Lead nobody asked for or has left: a late reply would only sit there stale
+    lead_free_text(l);
+    l->text_at = at;
+    if (none || !text) {
+        l->recap = POD_RECAP_EMPTY;
+    } else {
+        l->text = pod_big_alloc(SWARM_TEXT_MAX);
+        if (!l->text) { l->recap = POD_RECAP_LOADING; m->revision++; return; }   // out of memory: still waiting, so the retry asks again
+        pod_copy_str(l->text, SWARM_TEXT_MAX, text);
+        l->recap = POD_RECAP_LOADED;
+    }
+    m->revision++;
+}
+
+void pod_model_supertab_loading(pod_model_t *m, const char *tab, const char *lead) {
+    const pod_swarm_t *s = pod_model_swarm(m, tab);
+    const int j = pod_model_lead_index(s, lead);
+    if (j < 0 || s->leads[j].recap != POD_RECAP_NONE) return;
+    ((pod_swarm_t *)s)->leads[j].recap = POD_RECAP_LOADING;
+    m->revision++;
+}
+
+void pod_model_supertab_close(pod_model_t *m, const char *tab, const char *lead) {
+    const pod_swarm_t *s = pod_model_swarm(m, tab);
+    const int j = pod_model_lead_index(s, lead);
+    if (j < 0 || s->leads[j].recap == POD_RECAP_NONE) return;
+    pod_lead_t *l = &((pod_swarm_t *)s)->leads[j];
+    lead_free_text(l);
+    l->recap = POD_RECAP_NONE;
+    m->revision++;
+}
+
+void pod_model_supertab_focus(pod_model_t *m, const char *tab, const char *lead) {
+    if (!tab || !*tab || !lead || !*lead) return;
+    pod_copy_str(m->focus_tab, sizeof m->focus_tab, tab);
+    pod_copy_str(m->focus_lead, sizeof m->focus_lead, lead);
+    m->focus_pending = true;
     m->revision++;
 }
 

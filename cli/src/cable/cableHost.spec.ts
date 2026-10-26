@@ -961,3 +961,56 @@ describe('DaemonCableHost player library and member ids', () => {
     AGENTS.length = 0
   })
 })
+
+describe('Swarm cards', () => {
+  const card = { id: 'st1', name: 'openharness', count: 1, leads: [{ id: 'l1', projectId: 'p1', project: 'mobile', engine: 'claude', owner: '', local: '', state: 'work' as const, order: 0 }] }
+
+  it('keeps the list the core last handed it, and names a Swarm tab\'s Swarm on the desk row', () => {
+    const host = new DaemonCableHost(wiring())
+    expect(host.swarmCards()).toEqual([])
+    host.setSwarmCards([card])
+    expect(host.swarmCards()).toEqual([card])
+    host.setSwarms({ active: 't2', tiles: [], swarms: [
+      { id: 't1', name: 'Work', agentIds: ['a'], panes: 1 },
+      { id: 't2', name: 'openharness', agentIds: [], panes: 1, superTabId: 'st1', projectId: 'p1' },
+    ] })
+    expect(host.listSwarms().swarms).toEqual([
+      { id: 't1', name: 'Work', agents: 1, agentIds: ['a'], panes: 1 },
+      { id: 't2', name: 'openharness', agents: 0, agentIds: [], panes: 1, superTabId: 'st1' },
+    ])
+  })
+
+  it('says which Swarm project the window has open: only on a Swarm tab that names one, with the device mark', () => {
+    const host = new DaemonCableHost(wiring())
+    expect(host.activeSwarmProject()).toBeNull()   // no window
+    const swarms = [
+      { id: 't1', name: 'Work', agentIds: [], panes: 0 },
+      { id: 't2', name: 'Swarm', agentIds: [], panes: 1, superTabId: 'st1', projectId: 'p1' },
+      { id: 't3', name: 'Swarm, no project', agentIds: [], panes: 1, superTabId: 'st1' },
+    ]
+    host.setSwarms({ active: 't1', swarms, tiles: [] })
+    expect(host.activeSwarmProject()).toBeNull()
+    host.setSwarms({ active: 't2', swarms, tiles: [] })
+    expect(host.activeSwarmProject()).toEqual({ superTabId: 'st1', projectId: 'p1', fromDevice: false })
+    host.setSwarms({ active: 't2', swarms, tiles: [], fromDevice: true })
+    expect(host.activeSwarmProject()).toEqual({ superTabId: 'st1', projectId: 'p1', fromDevice: true })
+    host.setSwarms({ active: 't3', swarms, tiles: [] })
+    expect(host.activeSwarmProject()).toBeNull()
+  })
+
+  it('hands the wiring what a device asks, and answers nothing when the wiring has none', async () => {
+    const w = wiring({
+      swarmCardsWanted: vi.fn(), swarmCardOpen: vi.fn(), superTabSelected: vi.fn(),
+      swarmCardRecap: vi.fn(async (tabId: string, leadId: string) => ({ tabId, leadId, text: 'hi', at: 1, none: false })),
+    })
+    const host = new DaemonCableHost(w)
+    host.swarmCardsWanted(true); host.swarmCardOpen('c1', 'st1', 'l1'); host.superTabSelected('st1', 'p1')
+    expect(w.swarmCardsWanted).toHaveBeenCalledWith(true)
+    expect(w.swarmCardOpen).toHaveBeenCalledWith('c1', 'st1', 'l1')
+    expect(w.superTabSelected).toHaveBeenCalledWith('st1', 'p1')
+    expect(await host.swarmCardRecap('st1', 'l1')).toEqual({ tabId: 'st1', leadId: 'l1', text: 'hi', at: 1, none: false })
+    const bare = new DaemonCableHost(wiring())
+    bare.swarmCardsWanted(false); bare.swarmCardOpen('c1', 'st1', null); bare.superTabSelected('st1', 'p1')
+    expect(await bare.swarmCardRecap('st1', 'l1')).toBeNull()
+  })
+})

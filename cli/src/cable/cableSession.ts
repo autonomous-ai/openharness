@@ -155,6 +155,26 @@ const ACTION_MAX_BYTES = 188
 
 /** What the Pro's firmware holds of a swarms frame: 24 tabs, 24 ids each, and 512 JSON tokens (480 here). */
 const SWARMS_MAX = 24
+/** The Pro's Swarm cards: at most 16 Swarms of 12 Leads, a change held this long so a burst is one push. */
+const SWARM_CARDS_MAX = 16
+const SWARM_LEADS_MAX = 12
+const SWARM_CARDS_DEBOUNCE_MS = 300
+/** A Super Tab, project or agent id as the backend writes them. */
+/** The Pro keeps an id in 48 bytes with its NUL. */
+const CARD_ID = /^[A-Za-z0-9_-]{1,47}$/
+/** A `supertab.recap` frame the Pro takes at most this many bytes of JSON for. */
+const RECAP_FRAME_MAX = 6 * 1024
+/** Repeats of one Lead's recap request inside this are ignored; a device that picks another stale announce within this is not followed. */
+const RECAP_REPEAT_MS = 1000
+const PICK_ECHO_MS = 2000
+/** The recap frame, its text shortened (on a character) until the whole JSON fits what the Pro reads. */
+export function recapFrame(r: LeadRecap): Message {
+  const make = (text: string): Message => ({ t: 'supertab.recap', tab: r.tabId, lead: r.leadId, text, at: r.at, none: r.none })
+  let text = r.text
+  while (text && Buffer.byteLength(JSON.stringify(make(text))) > RECAP_FRAME_MAX) text = truncateUtf8(text, Math.floor(Buffer.byteLength(text) * 0.9))
+  return make(text)
+}
+let nextCardSession = 0
 const SWARM_IDS_MAX = 24
 const SWARM_TOKENS_MAX = 480
 
@@ -227,6 +247,8 @@ export interface CableSwarm {
    * entry — a shell is still never named to the dial.
    */
   panes: number
+  /** The Super Tab (Swarm) this tab shows, when it is one: how the Harness Pro's Swarm card finds its desk tab. */
+  superTabId?: string
 }
 
 /**
@@ -251,9 +273,15 @@ export interface CableTile {
 /** The window's swarms as it last described them, or null while no window is connected. */
 export interface AppSwarms {
   active: string
-  swarms: Array<{ id: string; name: string; agentIds: string[]; panes: number }>
+  swarms: Array<{
+    id: string; name: string; agentIds: string[]; panes: number
+    /** A Super Tab (Swarm) tab: which Swarm it shows and the project the window has open in it. Absent on any other tab. */
+    superTabId?: string; projectId?: string
+  }>
   /** The ACTIVE swarm's grid. Empty from a window that predates the field, or one with no panes. */
   tiles: CableTile[]
+  /** This announce was caused by a device's pick (`supertab.select`): the device is not told to follow it back. */
+  fromDevice?: boolean
 }
 
 /** Why the list is as short as it is. The dial renders this, instead of drawing an empty wheel. */
@@ -276,6 +304,8 @@ import type { FormCommand, FormResult } from './windowForm.js'
 import { deriveLongRecap, extendShortRecap } from '../lib/deviceRecap.js'
 import type { TurnStatsFields } from './turnStats.js'
 import type { Tier } from '../lib/notifyTier.js'
+import type { LeadRecap, SwarmCard } from '../superTabs/cards.js'
+import { truncateUtf8 } from '../lib/deviceRecentTrim.js'
 
 export interface RouteDecision {
   agentId: string
@@ -305,6 +335,20 @@ export interface CableHost {
   listSwarms(): { selected: string; swarms: CableSwarm[]; tiles: CableTile[] }
   /** The dial picked a swarm. Relayed to the window, which switches and re-describes its desk. */
   selectSwarm(swarmId: string): void
+  /** The Swarm cards the core last told the devices (core/superTabCards.ts); empty until it has. */
+  swarmCards?(): SwarmCard[]
+  /** A device that speaks `swarmCard: 'v1'` is attached (true) or gone (false): the core starts or stops reading the Swarms. */
+  swarmCardsWanted?(on: boolean): void
+  /** One Lead's last message, read on request; null when it could not be read. */
+  swarmCardRecap?(tabId: string, leadId: string): Promise<LeadRecap | null>
+  /** The recap a device has open (its Lead), or null once it closes: the only one pushed when its text changes. */
+  swarmCardOpen?(session: string, tabId: string, leadId: string | null): void
+  /** Words for a Lead that runs here: posted as the person in its Swarm chat. False: not a Lead, send the turn as before. */
+  swarmSay?(harnessId: string, text: string): Promise<boolean>
+  /** A device picked a Lead: the window opens that Swarm tab and project. */
+  superTabSelected?(superTabId: string, projectId: string): void
+  /** The Swarm tab the window has on screen and the project open in it; null when the active tab is not a Swarm or there is no window. */
+  activeSwarmProject?(): { superTabId: string; projectId: string; fromDevice: boolean } | null
   appName(): string
   voiceLang(): string
   /** The window's latest selected pane, including selections made before this dial attached. */
@@ -359,8 +403,9 @@ export interface CableHost {
    * that took a morning to explain. Optional, so a host that cannot answer simply says nothing.
    */
   knows?(agentId: string): boolean
-  /** A finger moving on the dial's glass, on its way to whatever window is open on this computer. */
-  scrolled(phase: 'down' | 'move' | 'up', dy: number, velocity: number): void
+  /** A finger moving on the dial's glass, on its way to whatever window is open on this computer. `superTabId`: the device has a Lead
+   *  of that Swarm open (a Pro's Lead view), so the window scrolls that Swarm's chat rather than a pane. */
+  scrolled(phase: 'down' | 'move' | 'up', dy: number, velocity: number, superTabId?: string): void
   updateAgent(agentId: string, model?: string, effort?: string): void
   /** PCM is 16-bit mono at `sampleRate`; the daemon owns the credential this needs. */
   transcribe(pcm: Buffer, sampleRate: number, lang: string): Promise<string>
@@ -484,6 +529,8 @@ export interface DialStatus {
   /** `hello.board`; "pro" is the square Harness Pro. Absent = a round dial. */
   board?: string
   updating?: string
+  /** Something the person has to do about this device, in words shown as they are (cableFleet.ts: a silent Harness Pro). */
+  problem?: string
   /**
    * Every device on this computer, when a fleet is reporting. Present only on the primary status, and
    * the primary is one of these rows — the flat fields above repeat it so a window that predates this
@@ -613,6 +660,8 @@ export class CableSession {
    *  answers on the device. Any other device is not sent one: the round dial would open a question screen for it that
    *  cannot load. */
   private superTabWaits = false
+  /** `swarmCard: 'v1'` (a Pro): the Swarm cards, their Leads' recaps and the Swarm focus travel on the cable. */
+  private swarmCard = false
   private playerOffset = 0
   private playerRequest = 0
   private playerLibraryKey = ''
@@ -626,13 +675,15 @@ export class CableSession {
 
   /** For the greeting's log line: which capabilities this hello named, or nothing. */
   private capabilitiesNamed(): string {
-    const named = [this.swarmMembers && 'swarms', this.longRecap && 'recap', this.stepsActivity && 'activity', this.statsTurn && 'stats', this.playerCapable && 'player', this.superTabWaits && 'superTab']
+    const named = [this.swarmMembers && 'swarms', this.longRecap && 'recap', this.stepsActivity && 'activity', this.statsTurn && 'stats', this.playerCapable && 'player', this.superTabWaits && 'superTab', this.swarmCard && 'swarmCard']
       .filter(Boolean)
     return named.length ? ` caps ${named.join(',')}` : ''
   }
 
   private resetCapabilities(): void {
     this.swarmMembers = this.longRecap = this.stepsActivity = this.statsTurn = this.playerCapable = this.superTabWaits = false
+    this.swarmCard = false
+    this.dropCards()
     this.seqOn = false
     this.seq = 0
     this.resyncAt = 0
@@ -1192,6 +1243,8 @@ export class CableSession {
         this.statsTurn = str('stats') === 'turn-v1'
         this.playerCapable = str('player') === 'library-v1'
         this.superTabWaits = str('superTab') === 'wait-v1'
+        this.swarmCard = str('swarmCard') === 'v1'
+        this.wantCards(this.swarmCard)
         this.seqOn = str('board') === 'pro'
         this.seq = 0
         const mac = str('mac') ?? ''
@@ -1294,6 +1347,11 @@ export class CableSession {
         return
       case 'resync':
         await this.resync()
+        return
+      case 'supertab.recap.get':
+      case 'supertab.open':
+      case 'supertab.select':
+        await this.onSuperTab(msg.t, str('tab') ?? '', str('lead') ?? '')
         return
       case 'swarm.select':
         // Not answered here: the window switches, its desk changes, and the new `swarms` and ring
@@ -1404,7 +1462,8 @@ export class CableSession {
         if (phase !== 'down' && phase !== 'move' && phase !== 'up') return
         const dy = typeof msg.dy === 'number' ? msg.dy : 0
         const v = typeof msg.v === 'number' ? msg.v : 0
-        this.host.scrolled(phase, dy, v)
+        if (this.openLead) this.host.scrolled(phase, dy, v, this.openLead.tabId)
+        else this.host.scrolled(phase, dy, v)
         return
       }
       case 'selection': {
@@ -2203,6 +2262,14 @@ export class CableSession {
       this.voiceDraftCreation = { uploadId, id: state.id }
       await reply({ t: 'voice.draft', ...state }); return
     }
+    // Spoken to a Swarm Lead (its card or its tile): the words go to the Swarm chat as the person's, where everyone in the
+    // tab sees them, not typed into the Lead's terminal. Any other harness, or a failed post, gets the turn as before.
+    if (turn.agentId && !carried && !selection?.ok && await this.host.swarmSay?.(agentId, instruction).catch(() => false)) {
+      if (!current()) return
+      this.log(`cable: voice → Swarm chat of ${agentId.slice(0, 8)}`)
+      await reply({ t: 'voice.transcript', routeId: '', text: transcript, agentId, agentName, needsConfirm: false })
+      return
+    }
     const text = carried ? withCarriedPassage(instruction, carried)
       : selection?.ok && selection.text ? withSelectedPassage(instruction, selection.text) : instruction
     try {
@@ -2486,6 +2553,7 @@ export class CableSession {
     try {
       await this.syncMachines(true)
       await this.syncSwarms(true)
+      await this.syncSwarmCards(true)
       await this.syncAgents(true)
       await this.syncPlayerLibrary(true)
     } finally {
@@ -2508,12 +2576,155 @@ export class CableSession {
     this.resyncAt = now
     await this.syncMachines(true)
     await this.syncSwarms(true)
+    await this.syncSwarmCards(true)
     await this.syncAgents(true)
     await this.replaceNotifications(this.host.listUnread())
     for (const { agentId, id, questions } of this.questionInbox.open()) {
       if (this.liveTurns.get(agentId) === 'question') await this.send({ t: 'question', agentId, ...this.whoIs(agentId), id, questions })
     }
     await this.resendSuperTabAsks()
+  }
+
+  // ── swarm cards (a Pro that named `swarmCard: 'v1'`) ────────────────────────────────────────────────
+
+  /** What this session told the core: that a capable device is here (see wantCards). */
+  private cardsWanted = false
+  /** Each Swarm's `supertab` frame as the Pro was last sent it, and the ids list: only a difference is sent again. */
+  private readonly cardKeys = new Map<string, string>()
+  private cardIdsKey = ''
+  private cardTimer: ReturnType<typeof setTimeout> | null = null
+  /** The Lead whose recap the Pro has open: the only one a changed text is pushed for. */
+  private openLead: { tabId: string; leadId: string } | null = null
+  /** The Swarm project the Pro was last pointed at (or picked itself), so a repeat announce sends nothing. */
+  private focusedKey = ''
+  /** This cable session's name for the service, so one Pro closing its recap does not close another's. */
+  private readonly cardSession = `c${++nextCardSession}`
+  /** The project this Pro itself picked last and when: the desktop's announce of it is no news, and a stale one of another is held off. */
+  private picked: { key: string; at: number } | null = null
+  private lastRecapGet: { key: string; at: number } | null = null
+
+  /** Tell the core a capable device is here (or gone), once per change: it reads the Swarms only while one is. */
+  private wantCards(on: boolean): void {
+    if (on === this.cardsWanted) return
+    this.cardsWanted = on
+    this.host.swarmCardsWanted?.(on)
+  }
+
+  /** The link ended: forget what the Pro was told and had open, and stop asking the core for Swarms on its behalf. */
+  private dropCards(): void {
+    if (this.cardTimer) clearTimeout(this.cardTimer)
+    this.cardTimer = null
+    this.cardKeys.clear()
+    this.cardIdsKey = ''
+    this.focusedKey = ''
+    this.picked = null
+    this.lastRecapGet = null
+    if (this.openLead) this.host.swarmCardOpen?.(this.cardSession, this.openLead.tabId, null)
+    this.openLead = null
+    this.wantCards(false)
+  }
+
+  /**
+   * Push the Swarm cards IF they differ from what the Pro was last told: `supertabs` (ids, in order) when the set or order
+   * moved, then one `supertab` per Swarm that changed — the Pro refuses a frame over 512 JSON tokens, and 16 Swarms of 12
+   * Leads do not fit in one. A change is held 300 ms so a burst of backend reads and desk announcements is one push;
+   * `force` (attach, resync) sends everything at once.
+   */
+  async syncSwarmCards(force = false): Promise<void> {
+    if (!this.swarmCard) return
+    if (force) {
+      if (this.cardTimer) clearTimeout(this.cardTimer)
+      this.cardTimer = null
+      return this.queued(() => this.pushSwarmCards(true))
+    }
+    if (this.cardTimer) return
+    this.cardTimer = setTimeout(() => {
+      this.cardTimer = null
+      this.queued(() => this.pushSwarmCards(false)).catch((err) => this.log(`cable: swarm cards failed (${(err as Error).message})`))
+    }, SWARM_CARDS_DEBOUNCE_MS)
+    this.cardTimer.unref?.()
+  }
+
+  private async pushSwarmCards(force: boolean): Promise<void> {
+    if (!this.swarmCard) return
+    if (force) { this.cardKeys.clear(); this.cardIdsKey = ''; this.focusedKey = '' }
+    const cards = (this.host.swarmCards?.() ?? []).slice(0, SWARM_CARDS_MAX)
+    const desk = this.host.listSwarms().swarms
+    const ids = JSON.stringify(cards.map((c) => c.id))
+    if (ids !== this.cardIdsKey) {
+      this.cardIdsKey = ids
+      await this.send({ t: 'supertabs', ids: cards.map((c) => c.id) })
+    }
+    for (const id of [...this.cardKeys.keys()]) if (!cards.some((c) => c.id === id)) this.cardKeys.delete(id)
+    for (const card of cards) {
+      // The desk tab of the same Swarm, when the window has one: empty when it is closed or never opened it.
+      const tab = desk.find((s) => s.superTabId === card.id)?.id ?? ''
+      const frame = { t: 'supertab', id: card.id, tab, name: card.name, count: card.count,
+        leads: card.leads.slice(0, SWARM_LEADS_MAX).map((l) => ({ id: l.id, projectId: l.projectId, project: l.project,
+          engine: l.engine, owner: l.owner, local: l.local, state: l.state, order: l.order, ...(l.since === undefined ? {} : { since: l.since }) })) }
+      const key = JSON.stringify(frame)
+      if (this.cardKeys.get(card.id) === key) continue
+      this.cardKeys.set(card.id, key)
+      await this.send(frame)
+    }
+    await this.pushSwarmFocus()
+  }
+
+  /** Point the Pro at the Lead of the project the window has open, once per change and never at its own pick. */
+  private async pushSwarmFocus(): Promise<void> {
+    const open = this.host.activeSwarmProject?.()
+    if (!open) { this.focusedKey = ''; return }
+    const key = `${open.superTabId}/${open.projectId}`
+    if (key === this.focusedKey) return
+    // Only the Pro that picked has nothing to follow; every other Pro still goes where the window went.
+    if (open.fromDevice && this.picked?.key === key) { this.focusedKey = key; return }
+    // The desktop's announce from before it heard the pick: not where the window is going.
+    if (!open.fromDevice && this.picked && this.picked.key !== key && Date.now() - this.picked.at < PICK_ECHO_MS) return
+    const lead = this.host.swarmCards?.().find((c) => c.id === open.superTabId)?.leads.find((l) => l.projectId === open.projectId)
+    // Not in the list yet: asked again when it arrives.
+    if (!lead) return
+    this.focusedKey = key
+    await this.send({ t: 'supertab.focus', tab: open.superTabId, lead: lead.id })
+  }
+
+  /** A Lead's changed text, for the Pro that has that Lead's recap open. */
+  async swarmCardRecap(recap: LeadRecap): Promise<void> {
+    if (!this.swarmCard || this.openLead?.tabId !== recap.tabId || this.openLead.leadId !== recap.leadId) return
+    return this.queued(async () => { await this.send(recapFrame(recap)) })
+  }
+
+  /** The Pro's three requests about Swarm cards. Ids that are not ids are ignored, like any frame this daemon cannot use. */
+  private async onSuperTab(type: string, tab: string, lead: string): Promise<void> {
+    if (!this.swarmCard) return
+    // The recap closing names no Lead: it is the one request that may leave a field empty.
+    if (type === 'supertab.open' && lead === '') {
+      this.openLead = null
+      this.host.swarmCardOpen?.(this.cardSession, tab, null)
+      return
+    }
+    if (!CARD_ID.test(tab) || !CARD_ID.test(lead)) return
+    if (type === 'supertab.open') {
+      this.openLead = { tabId: tab, leadId: lead }
+      this.host.swarmCardOpen?.(this.cardSession, tab, lead)
+      return
+    }
+    if (type === 'supertab.select') {
+      const projectId = this.host.swarmCards?.().find((c) => c.id === tab)?.leads.find((l) => l.id === lead)?.projectId
+      if (!projectId) { this.log(`cable: ignored pick of unknown Lead ${lead}`); return }
+      // Remembered before the window answers, so its announce of this very project is not sent back as a focus.
+      this.focusedKey = `${tab}/${projectId}`
+      this.picked = { key: this.focusedKey, at: Date.now() }
+      this.host.superTabSelected?.(tab, projectId)
+      return
+    }
+    // A repeat for the same Lead inside a second is ignored: the first answer is on its way.
+    const asked = `${tab}/${lead}`, now = Date.now()
+    if (this.lastRecapGet?.key === asked && now - this.lastRecapGet.at < RECAP_REPEAT_MS) return
+    this.lastRecapGet = { key: asked, at: now }
+    let recap: LeadRecap | null = null
+    try { recap = await this.host.swarmCardRecap?.(tab, lead) ?? null } catch (err) { this.log(`cable: recap for ${lead} failed (${(err as Error).message})`) }
+    // Nothing on a failure: the Pro keeps its "…" and asks again on the next open.
+    if (recap) await this.queued(async () => { await this.send(recapFrame(recap)) })
   }
 
   // ── swarms ────────────────────────────────────────────────────────────────────────────────────────

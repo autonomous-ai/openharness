@@ -326,6 +326,17 @@ pub fn is_session_visit(app: &App, pane: u64) -> bool {
         context.visit.as_ref().is_some_and(|v| v.pane == pane && v.machine == p.machine_id && v.agent == p.agent_id)))
 }
 
+/// Close pane on a picked session whose stop did not happen (session_close `dismiss`): the pane goes back to its parked
+/// shell, as after the session's exit, and the session keeps running.
+pub fn leave(app: &mut App, pane: u64) {
+    let Some((token, visit)) = app.shell_context.contexts.iter_mut()
+        .find_map(|(t, c)| c.visit.as_mut().filter(|v| v.pane == pane).map(|v| (t.clone(), v))) else { return };
+    visit.exited = true;
+    visit.resuming = false;
+    app.shell_context.dirty.insert(token);
+    return_from_sessions(app);
+}
+
 pub fn resuming(app: &mut App, pane: u64) -> Option<String> {
     let visit = app.shell_context.contexts.values_mut().filter_map(|c| c.visit.as_mut()).find(|v| v.pane == pane)?;
     visit.id = visit_id(); // Invalidate a probe started for the previous invocation.
@@ -1029,6 +1040,8 @@ mod tests {
             let chosen = app.fleet.agents.get_mut(&("local".into(), "chosen".into())).unwrap();
             chosen.close_supported = true;
             chosen.created_at_wire = "2026-10-05T00:00:00.123Z".into();
+            // A running harness's row always says its terminal is there (cli agentFrame `terminal.available`).
+            chosen.terminal_available = true;
             app.session_close.replies.extend([
                 Ok(json!({"activity":"idle"})), Ok(json!({"closed":true,"activity":"idle"}))
             ]);
@@ -1043,6 +1056,25 @@ mod tests {
                 assert!(app.shell_context.contexts[&token].visit.is_none());
             }
         }
+    }
+    #[tokio::test]
+    async fn close_pane_after_a_refused_stop_returns_a_picked_session_to_its_shell() {
+        // A guest's harness, say, whose stop its owner's daemon refused: the view goes, the harness keeps running.
+        let (mut app, token, pane) = visit_fixture(false);
+        let chosen = app.fleet.agents.get_mut(&("local".into(), "chosen".into())).unwrap();
+        chosen.close_supported = true;
+        chosen.created_at_wire = "2026-10-05T00:00:00.123Z".into();
+        chosen.terminal_available = true;
+        app.session_close.replies.extend([Ok(json!({"activity":"idle"})), Ok(json!({"error":"IDENTITY_UNAVAILABLE"}))]);
+        crate::session_close::pane(&mut app, pane);
+        for code in [crossterm::event::KeyCode::Right, crossterm::event::KeyCode::Enter] {
+            crate::input::modal_key(&mut app, crossterm::event::KeyEvent::new(code, crossterm::event::KeyModifiers::NONE));
+        }
+        assert_eq!(app.session_close.sent.len(), 2, "Close pane sends no stop");
+        assert!(app.modal.is_none());
+        assert_eq!(app.panes[&app.focused().unwrap()].agent_id, "shell");
+        assert!(app.shell_context.contexts[&token].visit.is_none());
+        assert_eq!(app.fleet.agent("local", "chosen").unwrap().status, "active");
     }
     #[tokio::test]
     async fn retired_source_returns_to_its_surviving_shell_even_after_archive_is_removed() {

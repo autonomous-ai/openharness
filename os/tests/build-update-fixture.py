@@ -136,8 +136,9 @@ def main(argv=None):
         parser.error('Node must match the native Linux build architecture.')
     started = time.time()
     commit = clean_source(ROOT)
+    # As build-runtime.sh names them: the CLI as the newest published one this source contains.
     versions = {'hn': tomllib.loads((ROOT / 'tui/Cargo.toml').read_text())['package']['version'],
-                'cli': json.loads((ROOT / 'cli/package.json').read_text())['version']}
+                'cli': command(sys.executable, ROOT / 'os/tools/runtime-baseline.py', '--cli-version')}
     baselines = json.loads(command(sys.executable, ROOT / 'os/tools/runtime-baseline.py'))
     baseline = baselines.get('cli', {}).get('version')
     if not isinstance(baseline, str) or not re.fullmatch(r'\d+\.\d+\.\d+', baseline):

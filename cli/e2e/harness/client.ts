@@ -48,7 +48,7 @@ export class LocalClient {
     const url = options.tcp
       ? `ws://127.0.0.1:${daemon.port}/api/local-ws`
       : `ws+unix://${daemon.socketPath}:/api/local-ws`
-    const ws = new WebSocket(url)
+    const ws = new WebSocket(url, options.tcp ? { headers: daemon.localHeaders() } : undefined)
     await new Promise<void>((resolve, reject) => {
       ws.once('open', () => resolve())
       ws.once('error', reject)

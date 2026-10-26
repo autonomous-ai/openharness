@@ -297,6 +297,17 @@ describe('stopped harness persistence', () => {
     expect(store.available([])).toHaveLength(1)
   })
 
+  it.each([true, false])('hides a live Codex conversation across explicit and implicit default profiles, archived explicit=%s', async explicit => {
+    const { saved, store } = await fixture()
+    const { env } = await import('../config/env.js')
+    const defaultHome = join(env.CODEX_HOME, '.')
+    store.save({ ...saved, engine: 'codex', codexHome: explicit ? defaultHome : null })
+    const running = { ...saved, engine: 'codex' as const, agentId: 'replacement', codexHome: explicit ? null : defaultHome }
+    expect(store.available([running])).toEqual([])
+    expect(store.get(saved.agentId)?.sessionId).toBe(saved.sessionId)
+    expect(store.available([{ ...running, codexHome: '/another/codex-profile' }])).toHaveLength(1)
+  })
+
   it('stopping the shell left by an exited engine preserves its conversation', async () => {
     const { saved, store } = await fixture()
     store.save(saved)

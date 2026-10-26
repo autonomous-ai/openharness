@@ -10,6 +10,13 @@
 #include "pod/pod_view_shared.h"
 #include "pro_canvas.h"
 
+// A recap only lands on a Lead that was asked for (LOADING), as the Lead view does: the fixtures ask first.
+static void asked_recap(pod_model_t *m, const char *tab, const char *lead, const char *text, uint32_t at, bool none)
+{
+    pod_model_supertab_loading(m, tab, lead);
+    pod_model_supertab_recap(m, tab, lead, text, at, none);
+}
+
 static int checks;
 #define CHECK(c) do { if (!(c)) { fprintf(stderr, "FAIL line %d: %s\n", __LINE__, #c); abort(); } checks++; } while (0)
 enum { K_TEXT = 1, K_RECT = 2, K_IMAGE = 3, K_RECT_AA = 4, K_RECT_STROKE = 5 };
@@ -1366,6 +1373,245 @@ int main(void) {
         CHECK(pod_home_working(&M) == 0 && !pod_home_has(&M, POD_HOME_WORKING) && pod_tabs_pages_of(&N, &M) == 1);
         fresh(); ph_view_home(&F, &N, &M, now);
         CHECK(!text_run("Working") && text_run("Solo") && hits_of(POD_A_FOLLOW) == 0);
+    }
+    {   // Home's Swarm card (the owner's mockup swarm-card.html): a desk tab linked to a Swarm draws it, the Leads as pets three to a page, the capsule under the name
+        static pod_model_t M;
+        static pod_nav_t N;
+        static cable_swarm_t sw[1];
+        static const char *const w0[] = {"w1"}, *const *lists[1] = {w0};
+        static uint8_t counts[1] = {1};
+        static const char ids[2][ID_MAX] = {"sw1", "sw2"};
+        static pod_swarm_t S1;
+        struct { const char *id, *project, *engine, *owner, *local; pod_lead_state_t st; unsigned since; } L[4] = {
+            {"l1", "mobile", "muse", "", "h1", POD_LEAD_ASK, 0}, {"l2", "harness", "claude", "", "h2", POD_LEAD_WORK, 134},
+            {"l3", "website", "codex", "", "h3", POD_LEAD_WORK, 48}, {"l4", "backend", "codex", "", "h4", POD_LEAD_DONE, 0}};
+        pod_model_reset(&M);
+        pod_model_agents_begin(&M);
+        pod_model_agent(&M, "w1", "w1", "claude", "Mac");
+        pod_model_agents_end(&M);
+        snprintf(sw[0].id, SWARM_ID_MAX, "desk1"); snprintf(sw[0].name, CABLE_NAME_MAX, "Desk"); sw[0].panes = sw[0].agents = 1;
+        pod_model_swarms(&M, sw, lists, counts, 1, "desk1", NULL, 0);
+        pod_model_link(&M, true);
+        pod_model_supertab_ids(&M, ids, 1);   // sw1 only: linked to the desk tab
+        memset(&S1, 0, sizeof S1);
+        snprintf(S1.id, ID_MAX, "sw1"); snprintf(S1.tab, ID_MAX, "desk1"); snprintf(S1.name, sizeof S1.name, "openharness");
+        S1.count = 4; S1.lead_n = 4;
+        for (int i = 0; i < 4; i++) {
+            pod_lead_t *l = &S1.leads[i];
+            snprintf(l->id, ID_MAX, "%s", L[i].id); snprintf(l->project, sizeof l->project, "%s", L[i].project); snprintf(l->engine, sizeof l->engine, "%s", L[i].engine);
+            snprintf(l->owner, sizeof l->owner, "%s", L[i].owner); snprintf(l->local, ID_MAX, "%s", L[i].local); l->state = L[i].st; l->since_s = L[i].since;
+        }
+        pod_model_supertab(&M, &S1, 1000);
+        pod_nav_init(&N);
+        CHECK(M.swarm_n == 1 && pod_home_pages(&M, NULL, 0) == 1 && pod_home_swarm(&M, 0) == &M.swarms[0]);   // the desk tab's page IS the Swarm's
+        N.swarm_page = 0; fresh(); ph_view_home(&F, &N, &M, 1000);
+        CHECK(text_run("openharness") && text_run("4") && !text_run("workspaces") && !text_run("workspace") && !text_run("Desk"));   // the capsule's disc, no big number
+        CHECK(text_run("1 needs you") && text_run("1 needs you")->fg == ht_rgb(0xFFC796) && text_run("2 working") && text_run("2 working")->fg == ht_rgb(0x9DFFC0) && !text_prefix("1 done"));
+        CHECK(text_run("openharness")->x == 90 + 44);   // the title where a tab's name is
+        CHECK(text_run("mobile") && text_run("harness") && text_run("website") && !text_run("backend"));
+        CHECK(text_run("needs you") && text_run("needs you")->fg == ht_rgb(0xFFC796));
+        CHECK(text_run("2:14") && text_run("2:14")->fg == ht_rgb(0x9DFFC0) && text_run("0:48") && !text_prefix("working \xc2\xb7"));   // a working Lead: only its clock
+        CHECK(hits_of(POD_A_LEAD) == 3 && F.hit_count == 3 && hits_of(POD_A_ENTER_TAB) == 0);
+        for (int k = 0; k < 3; k++) {   // centred exactly like the Working card: 165 px apart about the card's middle
+            const pod_hit_t *h = nth_hit(POD_A_LEAD, k);
+            CHECK(h->arg == k && !strcmp(h->id, "sw1") && h->x == 90 + 270 + (k - 1) * 165 - 75 && h->w == 150);
+        }
+        {   // the capsule's pulsing dot (11 px) is there while a Lead needs you or is stuck, and gone once none does
+            int dots = 0;
+            for (int i = 0; i < S.count; i++) dots += S.runs[i].pro_kind == K_RECT_AA && S.runs[i].w == 11 && S.runs[i].pro_height == 11;
+            CHECK(dots == 1);
+            M.swarms[0].leads[0].state = POD_LEAD_STUCK;
+            fresh(); ph_view_home(&F, &N, &M, 1000);
+            dots = 0;
+            for (int i = 0; i < S.count; i++) dots += S.runs[i].pro_kind == K_RECT_AA && S.runs[i].w == 11 && S.runs[i].pro_height == 11;
+            CHECK(dots == 1 && text_run("stuck") && text_run("stuck")->fg == ht_rgb(0xFFB0B0) && text_run("1 stuck") && text_run("1 stuck")->fg == ht_rgb(0xFFB0B0));   // stuck is red, in the capsule and under the pet, and pulses too
+            fresh(); ph_view_home(&F, &N, &M, 1000);
+            M.swarms[0].leads[0].state = POD_LEAD_DONE;   // nothing needs you: no dot
+            fresh(); ph_view_home(&F, &N, &M, 1000);
+            dots = 0;
+            for (int i = 0; i < S.count; i++) dots += S.runs[i].pro_kind == K_RECT_AA && S.runs[i].w == 11 && S.runs[i].pro_height == 11;
+            CHECK(dots == 0 && !text_prefix("1 needs") && !text_prefix("1 stuck"));
+            M.swarms[0].leads[0].state = POD_LEAD_ASK;
+        }
+        fresh(); ph_view_home(&F, &N, &M, 8000);   // the clock runs: 7 s later
+        CHECK(text_run("2:21") && text_run("0:55") && ph_home_moves(&N, &M));
+        N.swarm_page = 1; fresh(); ph_view_home(&F, &N, &M, 1000);   // the 4th Lead alone, in the middle
+        CHECK(text_run("backend") && text_run("done") && text_run("done")->fg != ht_rgb(0xFFFFFF) && text_run("done")->fg != ht_rgb(0xFFC796) && !text_run("mobile"));
+        CHECK(hits_of(POD_A_LEAD) == 1 && nth_hit(POD_A_LEAD, 0)->arg == 3 && nth_hit(POD_A_LEAD, 0)->x == 90 + 270 - 75);
+        N.swarm_page = 9; fresh(); ph_view_home(&F, &N, &M, 1000);   // past the last page: the last
+        CHECK(text_run("backend") && hits_of(POD_A_LEAD) == 1);
+        {   // the neighbouring page's Lead peeks in at the card's edge (a veil clips and fades it): the next page's first at the right, the previous page's last at the left
+            #define VEILS(n_) do { n_ = 0; for (int i_ = 0; i_ < S.count; i_++) n_ += S.runs[i_].pro_kind == POD_VEIL; } while (0)
+            int v;
+            N.swarm_page = 0; fresh(); ph_view_home(&F, &N, &M, 1000); VEILS(v);
+            CHECK(v == 1);   // page 0 of 2: a next page, no previous
+            for (int i = 0; i < S.count; i++) if (S.runs[i].pro_kind == POD_VEIL) CHECK(S.runs[i].x + S.runs[i].w > 90 + 540 && S.runs[i].x > 90 + 300);   // at the right edge
+            N.swarm_page = 1; fresh(); ph_view_home(&F, &N, &M, 1000); VEILS(v);
+            CHECK(v == 1);   // the last page: a previous page, no next
+            for (int i = 0; i < S.count; i++) if (S.runs[i].pro_kind == POD_VEIL) CHECK(S.runs[i].x < 90 && S.runs[i].x + S.runs[i].w < 90 + 300);   // at the left edge
+            M.swarms[0].lead_n = 7;
+            for (int k = 4; k < 7; k++) M.swarms[0].leads[k] = M.swarms[0].leads[k - 4];
+            N.swarm_page = 1; fresh(); ph_view_home(&F, &N, &M, 1000); VEILS(v);
+            CHECK(v == 2 && hits_of(POD_A_LEAD) == 3);   // a middle page: both neighbours
+            M.swarms[0].lead_n = 3;
+            N.swarm_page = 0; fresh(); ph_view_home(&F, &N, &M, 1000); VEILS(v);
+            CHECK(v == 0 && hits_of(POD_A_LEAD) == 3);   // one page: nothing peeks
+            M.swarms[0].lead_n = 4;
+            #undef VEILS
+        }
+        {   // the gradient is the Swarm's purple, #6B4FA3 -> #231A3B
+            unsigned g1 = 0, g2 = 0;
+            for (int i = 0; i < S.count; i++)
+                if (S.runs[i].pro_kind == POD_GRAD && S.runs[i].w == 540) { uint16_t g[2]; memcpy(g, S.runs[i].text, sizeof g); g1 = g[0]; g2 = g[1]; }
+            CHECK(g1 == ht_rgb(0x6B4FA3) && g2 == ht_rgb(0x231A3B));
+        }
+        // A remote Lead shows its owner (smaller, muted) under the status; a remote Lead at work has no clock; a Swarm with no desk tab is a page of its own.
+        snprintf(S1.id, ID_MAX, "sw2"); S1.tab[0] = 0; snprintf(S1.name, sizeof S1.name, "Solo swarm"); S1.count = 1; S1.lead_n = 1;
+        snprintf(S1.leads[0].id, ID_MAX, "r1"); snprintf(S1.leads[0].project, sizeof S1.leads[0].project, "ops"); snprintf(S1.leads[0].engine, sizeof S1.leads[0].engine, "claude");
+        snprintf(S1.leads[0].owner, sizeof S1.leads[0].owner, "Linh Tran"); S1.leads[0].local[0] = 0; S1.leads[0].state = POD_LEAD_WORK; S1.leads[0].since_s = 0;
+        pod_model_supertab_ids(&M, ids, 2);
+        pod_model_supertab(&M, &S1, 1000);
+        CHECK(M.swarm_n == 2 && pod_home_pages(&M, NULL, 0) == 2 && pod_home_has(&M, 1) && !pod_home_has(&M, 2));   // page 1 = tab_count + the Swarm's index among the unlinked
+        CHECK(pod_home_swarm(&M, 1) == &M.swarms[1] && pod_tabs_pages_of(&N, &M) == 2);
+        N.stack[0].scroll = 1; N.swarm_page = 0; fresh(); ph_view_home(&F, &N, &M, 1000);
+        CHECK(text_run("Solo swarm") && text_run("1 working") && text_run("ops") && text_run("working") && !text_prefix("working \xc2\xb7") && text_run("Linh Tran"));
+        CHECK(text_run("Linh Tran")->fg != ht_rgb(0xFFFFFF) && hits_of(POD_A_LEAD) == 1 && !strcmp(nth_hit(POD_A_LEAD, 0)->id, "sw2"));
+        CHECK(text_run("Linh Tran")->y > text_run("working")->y);
+        N.stack[0].scroll = 0; fresh(); ph_view_home(&F, &N, &M, 1000);   // the next page peeks at the right: its gradient and title only
+        CHECK(text_run("Solo swarm") && !text_run("ops") && hits_of(POD_A_LEAD) == 3);
+        {   // the working line's clock needs a turn's start: a local Lead working only from open assignments (no since) says "working", with no 0:00 counting on
+            pod_lead_t l;
+            memset(&l, 0, sizeof l);
+            char line[64];
+            snprintf(l.local, ID_MAX, "h1"); l.state = POD_LEAD_WORK;
+            ph_lead_status(&l, 5000, line, sizeof line, 0);
+            CHECK(!strcmp(line, "working"));
+            l.since_s = 134; l.since_at_ms = 1000;
+            ph_lead_status(&l, 3500, line, sizeof line, 0);
+            CHECK(!strcmp(line, "working \xc2\xb7 2:16"));
+        }
+        // Leads: the pet's scene is work (WORK), ask (ASK, STUCK) or rest (DONE)
+        CHECK(ph_lead_scene(POD_LEAD_WORK) == POD_SCENE_WORK && ph_lead_scene(POD_LEAD_ASK) == POD_SCENE_ASK && ph_lead_scene(POD_LEAD_STUCK) == POD_SCENE_ASK && ph_lead_scene(POD_LEAD_DONE) == POD_SCENE_REST);
+        {   // the capsule's counts in the fixed order; the Leads in the Swarm's order whatever their state (the daemon's `order`); "All done", the long forms
+            static const pod_lead_state_t st[6] = {POD_LEAD_DONE, POD_LEAD_WORK, POD_LEAD_ASK, POD_LEAD_STUCK, POD_LEAD_WORK, POD_LEAD_ASK};
+            snprintf(S1.name, sizeof S1.name, "Order");
+            S1.count = S1.lead_n = 6;
+            for (int i = 0; i < 6; i++) {
+                pod_lead_t *l = &S1.leads[i];
+                memset(l, 0, sizeof *l);
+                snprintf(l->id, ID_MAX, "o%d", i); snprintf(l->project, sizeof l->project, "p%d", i); snprintf(l->engine, sizeof l->engine, "codex");
+                snprintf(l->local, ID_MAX, "h%d", i); l->state = st[i]; l->since_s = (unsigned)(10 * (i + 1));
+            }
+            pod_model_supertab(&M, &S1, 1000);
+            N.stack[0].scroll = 1; N.swarm_page = 0; fresh(); ph_view_home(&F, &N, &M, 1000);
+            CHECK(text_run("6") && text_run("1 stuck \xc2\xb7 2 need you") && text_run("1 stuck \xc2\xb7 2 need you")->fg == ht_rgb(0xFFB0B0) && text_run("2") && !text_run("2 working") && !text_prefix("1 done"));   // too wide with "working": the bars and the number
+            CHECK(hits_of(POD_A_LEAD) == 3 && nth_hit(POD_A_LEAD, 0)->arg == 0 && nth_hit(POD_A_LEAD, 1)->arg == 1 && nth_hit(POD_A_LEAD, 2)->arg == 2);   // done, working, needs you: as listed
+            CHECK(text_run("p0") && text_run("p1") && text_run("p2") && text_run("done") && text_run("needs you") && !text_run("p3"));
+            CHECK(text_run("p0")->x < text_run("p1")->x && text_run("p1")->x < text_run("p2")->x);
+            N.swarm_page = 1; fresh(); ph_view_home(&F, &N, &M, 1000);
+            CHECK(hits_of(POD_A_LEAD) == 3 && nth_hit(POD_A_LEAD, 0)->arg == 3 && nth_hit(POD_A_LEAD, 1)->arg == 4 && nth_hit(POD_A_LEAD, 2)->arg == 5);   // stuck, working, needs you
+            CHECK(text_run("stuck") && text_run("0:50") && text_run("needs you") && !text_run("done") && text_run("1 stuck \xc2\xb7 2 need you"));   // the capsule counts the whole Swarm
+            for (int i = 0; i < 6; i++) S1.leads[i].state = POD_LEAD_DONE;
+            pod_model_supertab(&M, &S1, 1000);
+            N.swarm_page = 0; fresh(); ph_view_home(&F, &N, &M, 1000);
+            CHECK(text_run("All done") && text_run("6") && !text_prefix("0 ") && !text_prefix("1 ") && !ph_home_moves(&N, &M));
+            // ten projects, 12 in all, a long name: the name is cut with an ellipsis, the disc widens, "working" shrinks to its bars and the number
+            snprintf(S1.name, sizeof S1.name, "openharness-launch-october");
+            S1.count = S1.lead_n = 12;
+            for (int i = 6; i < 12; i++) { S1.leads[i] = S1.leads[i - 6]; snprintf(S1.leads[i].id, ID_MAX, "o%d", i); }
+            for (int i = 0; i < 12; i++) { S1.leads[i].state = i < 3 ? POD_LEAD_STUCK : i < 6 ? POD_LEAD_ASK : POD_LEAD_WORK; S1.leads[i].since_s = 5; }
+            pod_model_supertab(&M, &S1, 1000);
+            fresh(); ph_view_home(&F, &N, &M, 1000);
+            CHECK(text_prefix("openharness-") && !text_run("openharness-launch-october") && text_run("12") && text_run("3 stuck \xc2\xb7 3 need you") && !text_run("6 working") && text_run("6"));
+        }
+    }
+    {   // The Lead view (the owner's mockup B1-B3): the Swarm and the project on top, the Lead's last message in a bubble, the pet signing it with "Lead" and its status
+        static pod_model_t M;
+        static pod_nav_t N;
+        static const char ids[1][ID_MAX] = {"sw1"};
+        static pod_swarm_t S1;
+        pod_model_reset(&M);
+        pod_model_link(&M, true);
+        pod_model_supertab_ids(&M, ids, 1);
+        memset(&S1, 0, sizeof S1);
+        snprintf(S1.id, ID_MAX, "sw1"); snprintf(S1.name, sizeof S1.name, "openharness"); S1.count = 3; S1.lead_n = 3;
+        snprintf(S1.leads[0].id, ID_MAX, "l0"); snprintf(S1.leads[0].project, sizeof S1.leads[0].project, "mobile"); snprintf(S1.leads[0].engine, sizeof S1.leads[0].engine, "muse");
+        S1.leads[0].state = POD_LEAD_ASK;
+        snprintf(S1.leads[1].id, ID_MAX, "l1"); snprintf(S1.leads[1].project, sizeof S1.leads[1].project, "autonomous-harness"); snprintf(S1.leads[1].engine, sizeof S1.leads[1].engine, "claude");
+        snprintf(S1.leads[1].local, ID_MAX, "h1"); S1.leads[1].state = POD_LEAD_WORK; S1.leads[1].since_s = 134;
+        snprintf(S1.leads[2].id, ID_MAX, "l2"); snprintf(S1.leads[2].project, sizeof S1.leads[2].project, "ops"); snprintf(S1.leads[2].engine, sizeof S1.leads[2].engine, "codex");
+        snprintf(S1.leads[2].owner, sizeof S1.leads[2].owner, "Linh Tran"); S1.leads[2].state = POD_LEAD_DONE;
+        pod_model_supertab(&M, &S1, 1000);
+        pod_nav_init(&N);
+        CHECK(pod_nav_open_lead(&N, &M, "sw1", 0) && N.depth == 2 && N.stack[1].view == POD_V_LEAD && !strcmp(N.stack[1].swarm, "sw1") && !strcmp(N.stack[1].lead_id, "l0") && N.stack[1].lead == 0);
+        // B2: needs you, LOADED. The Swarm's name (small, purple) over the project, the bubble with the text, the orange inner edge, the pet, "Lead" and "needs you".
+        asked_recap(&M, "sw1", "l0", "Build 1.0.9 is done. TestFlight now, or wait for the Android banner fix?", 1792560000u, false);
+        fresh(); ph_view_lead(&F, &N, &M, 1000);
+        CHECK(S.background == ht_rgb(PH_ROOM_BG) && F.hit_count == 0 && dot_runs() == 0);
+        CHECK(centred_run(text_run("openharness")) && text_run("openharness")->fg == ht_rgb(0xB79CFF) && centred_run(text_run("mobile")) && text_run("mobile")->fg == ht_rgb(PH_ROOM_INK));
+        CHECK(text_run("openharness")->y < text_run("mobile")->y && text_run("mobile")->y < 150);
+        CHECK(text_prefix("Build 1.0.9 is done.") && text_prefix("Build 1.0.9 is done.")->fg == ht_rgb(PH_LETTER_INK) && text_prefix("Build 1.0.9 is done.")->x == 60 + 34);
+        CHECK(text_run("Lead") && text_run("Lead")->x == 160 && text_run("needs you") && text_run("needs you")->x == 160 && text_run("needs you")->fg == ht_rgb(0xFFC796));
+        CHECK(text_run("Lead")->y < text_run("needs you")->y && !text_run("No message yet") && !text_run("\xe2\x80\xa6"));
+        {   // the edge: an orange block at the bubble's left, the paper 8 px in; the paper is 600 wide without an edge
+            int edge = 0, paper = 0, wide = 0;
+            for (int i = 0; i < S.count; i++) {
+                const ht_run_t *r = &S.runs[i];
+                edge += r->pro_kind == K_RECT_AA && r->x == 60 && r->w == 120 && r->fg == ht_rgb(0xFF9A52);
+                paper += r->pro_kind == K_RECT_AA && r->x == 68 && r->w == 592 && r->fg == ht_rgb(PH_LETTER);
+                wide += r->pro_kind == K_RECT_AA && r->w == 600 && r->fg == ht_rgb(PH_LETTER);
+            }
+            CHECK(edge == 1 && paper == 1 && wide == 0);
+        }
+        N.stack[1].lead = 0; M.swarms[0].leads[0].state = POD_LEAD_STUCK;   // stuck: the edge is red, the line says so
+        fresh(); ph_view_lead(&F, &N, &M, 1000);
+        { int red = 0; for (int i = 0; i < S.count; i++) red += S.runs[i].pro_kind == K_RECT_AA && S.runs[i].x == 60 && S.runs[i].w == 120 && S.runs[i].fg == ht_rgb(0xE5484D);
+          CHECK(red == 1 && text_run("stuck") && text_run("stuck")->fg == ht_rgb(0xFFB0B0)); }
+        M.swarms[0].leads[0].state = POD_LEAD_ASK;
+        // B1: working, no edge; the status clock runs
+        N.stack[1].view = POD_V_LEAD; snprintf(N.stack[1].lead_id, ID_MAX, "l1"); N.stack[1].lead = 1;
+        asked_recap(&M, "sw1", "l1", "PR #1492 is merged and the backend is on production. Next: your turn on the device.", 1792560000u, false);
+        fresh(); ph_view_lead(&F, &N, &M, 1000);
+        CHECK(centred_run(text_run("autonomous-harness")) && text_run("working \xc2\xb7 2:14") && text_run("working \xc2\xb7 2:14")->fg == ht_rgb(0x3EE05B));
+        { int edge = 0; for (int i = 0; i < S.count; i++) edge += S.runs[i].pro_kind == K_RECT_AA && S.runs[i].w == 120; CHECK(edge == 0); }
+        fresh(); ph_view_lead(&F, &N, &M, 8000);
+        CHECK(text_run("working \xc2\xb7 2:21") && ph_lead_next_ms(&N, &M, 8000) <= 1000);
+        // LOADING draws "..." in a bubble of its own; a Lead never asked for looks the same
+        pod_model_supertab_close(&M, "sw1", "l1");
+        pod_model_supertab_loading(&M, "sw1", "l1");
+        CHECK(M.swarms[0].leads[1].recap == POD_RECAP_LOADING && M.swarms[0].leads[1].text == NULL);
+        fresh(); ph_view_lead(&F, &N, &M, 1000);
+        CHECK(text_run("\xe2\x80\xa6") && text_run("\xe2\x80\xa6")->fg == ht_rgb(PH_LETTER_INK) && !text_run("No message yet") && !text_prefix("PR #"));
+        // EMPTY: no bubble, "No message yet" muted in the middle, the pet rests
+        asked_recap(&M, "sw1", "l1", NULL, 0, true);
+        fresh(); ph_view_lead(&F, &N, &M, 1000);
+        CHECK(centred_run(text_run("No message yet")) && text_run("No message yet")->fg == ht_rgb(PH_ROOM_MUTED) && !text_run("\xe2\x80\xa6") && text_run("Lead"));
+        { int paper = 0; for (int i = 0; i < S.count; i++) paper += S.runs[i].pro_kind == K_RECT_AA && S.runs[i].fg == ht_rgb(PH_LETTER); CHECK(paper == 0); }
+        CHECK(ph_lead_max_row(&N, &M) == 0);
+        // A remote Lead: its owner under the status (smaller, muted), a Lead that is done says so in grey
+        N.stack[1].view = POD_V_LEAD; snprintf(N.stack[1].lead_id, ID_MAX, "l2"); N.stack[1].lead = 2;
+        asked_recap(&M, "sw1", "l2", "Deployed.", 1792560000u, false);
+        fresh(); ph_view_lead(&F, &N, &M, 1000);
+        CHECK(text_run("ops") && text_run("done") && text_run("done")->fg != ht_rgb(0xFFFFFF) && text_run("Linh Tran") && text_run("Linh Tran")->fg == ht_rgb(PH_ROOM_MUTED));
+        CHECK(text_run("done")->y < text_run("Linh Tran")->y && text_run("Lead")->y < text_run("done")->y);
+        // A long message: 7 rows at a time, scrolled by rows, the last visible row lighter while more follows
+        asked_recap(&M, "sw1", "l2", "one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen seventeen eighteen nineteen twenty "
+                                 "twenty-one twenty-two twenty-three twenty-four twenty-five twenty-six twenty-seven twenty-eight twenty-nine thirty thirty-one thirty-two thirty-three "
+                                 "thirty-four thirty-five thirty-six thirty-seven thirty-eight thirty-nine forty forty-one forty-two forty-three forty-four forty-five forty-six", 1, false);
+        CHECK(pod_scroll_pitch(&N) == 46 && pod_scroll_max(&N, &M) > 0 && pod_scroll_max(&N, &M) == ph_lead_max_row(&N, &M));
+        fresh(); ph_view_lead(&F, &N, &M, 1000);
+        { int ink = 0, more = 0; for (int i = 0; i < S.count; i++) { ink += S.runs[i].pro_kind == K_TEXT && S.runs[i].fg == ht_rgb(PH_LETTER_INK); more += S.runs[i].pro_kind == K_TEXT && S.runs[i].fg == ht_rgb(PH_LETTER_MORE); }
+          CHECK(ink == 6 && more == 1 && text_prefix("one two")); }
+        N.stack[1].scroll = (int16_t)pod_scroll_max(&N, &M);
+        fresh(); ph_view_lead(&F, &N, &M, 1000);
+        { int more = 0; for (int i = 0; i < S.count; i++) more += S.runs[i].pro_kind == K_TEXT && S.runs[i].fg == ht_rgb(PH_LETTER_MORE); CHECK(more == 0 && !text_prefix("one two") && text_prefix("forty")); }
+        N.stack[1].scroll = 9999;   // past the end: the view clamps
+        fresh(); ph_view_lead(&F, &N, &M, 1000);
+        CHECK(text_prefix("forty") || text_run("Lead"));
+        // The model does not hold the Lead (a dropped link): nothing is drawn, nothing breaks
+        pod_model_link(&M, false);
+        fresh(); ph_view_lead(&F, &N, &M, 1000);
+        CHECK(S.count == 0 && pod_nav_lead(&N, &M, NULL) == NULL && ph_lead_next_ms(&N, &M, 1000) > 0 && ph_lead_max_row(&N, &M) == 0);
     }
     printf("test_ph_views: %d checks ok\n", checks);
     return 0;

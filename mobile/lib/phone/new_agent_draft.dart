@@ -22,6 +22,7 @@ class NewAgentDraft {
   const NewAgentDraft({
     required this.machineId,
     required this.engine,
+    this.engineChosen = true,
     required this.permissionMode,
     this.folder,
     this.exactFolder,
@@ -43,6 +44,9 @@ class NewAgentDraft {
 
   final String machineId;
   final String? engine;
+
+  /// Whether [engine] was picked on the form, not just the one it opened on.
+  final bool engineChosen;
   final String permissionMode;
 
   /// A folder that exists, or ([project]) one the machine is to make. Exactly one is ever set —

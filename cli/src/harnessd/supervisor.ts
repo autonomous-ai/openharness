@@ -14,10 +14,12 @@ import {
   CORE_EXIT_STOP,
   CORE_EXIT_UPDATE,
   HARNESSD_PROTOCOL,
+  describeStaged,
   heartbeatGraceMs,
   isCoreMessage,
   type CoreMessage,
   type MasterMessage,
+  type StagedUpdate,
 } from './protocol.js'
 
 export interface CoreHandle {
@@ -264,6 +266,8 @@ export class Supervisor {
   private unproven = 0
   /** The bundle on disk when the running core was started (`deps.bundle`). */
   private spawnedOn: string | null = null
+  /** The updater staged a terminal host while the running core ran (`updateStaged`). */
+  private ptyStagedSinceSpawn = false
 
   constructor(
     private readonly deps: SupervisorDeps,
@@ -341,27 +345,34 @@ export class Supervisor {
   }
 
   /**
-   * The updater (services/updaterProcess.ts) staged `version` on disk. The core used to stage it itself
-   * and exit 75; now the master asks it to (`harnessd:update`), and its exit is the update's, judged as
-   * before. A core that does not leave within `HAND_OVER_GRACE_MS` is stopped, and that exit counts as the
-   * update's too. With no core running (a restart's backoff, safe mode's), the next one starts on the new
-   * bundle at once, on probation, with a clean slate: whatever was crashing may be what it fixes.
+   * The updater (services/updaterProcess.ts) staged a CLI build, a terminal host (Windows) or both on disk.
+   * The core used to stage a build itself and exit 75; now the master asks it to (`harnessd:update`), and its
+   * exit is the update's, judged as before: one probation for whatever was staged, which the master's own
+   * rollback and keep cover both of (lib/windows/ptyUpdate.ts `rollBackStaged`, `keepStaged`). A core that
+   * does not leave within `HAND_OVER_GRACE_MS` is stopped, and that exit counts as the update's too. With no
+   * core running (a restart's backoff, safe mode's), the next one starts on the new bundle at once, on
+   * probation, with a clean slate: whatever was crashing may be what it fixes.
    */
-  updateStaged(version: string): void {
+  updateStaged(staged: StagedUpdate): void {
     if (this.state === 'stopping' || this.state === 'stopped') return
+    const what = describeStaged(staged)
     const core = this.core
     if (!core) {
       this.update = 'pending'
       this.crashes = []
       this.safeMode = null
-      this.deps.log(`[harnessd] the updater staged ${version} — the next core starts on it`)
+      this.deps.log(`[harnessd] the updater staged ${what} — the next core starts on it`)
       // Waiting out a backoff: no longer. Otherwise the next core is already being started (a
       // re-execution deciding), and starts on the bundle on disk.
       if (this.restartTimer !== null) this.scheduleSpawn(0)
       return
     }
+    if (staged.ptyVersion) this.ptyStagedSinceSpawn = true
     if (this.handOverTimer !== null) return
-    this.deps.log(`[harnessd] the updater staged ${version} — asking the core to hand over`)
+    this.deps.log(`[harnessd] the updater staged ${what} — asking the core to hand over`)
+    // A core of any version takes the message only with a version, which it says in its log: for a host alone, the
+    // host's, named as one.
+    const version = staged.version ?? what
     core.send({ type: 'harnessd:update', version })
     this.armTimer('handOverTimer', () => {
       this.handOverTimer = null
@@ -418,6 +429,7 @@ export class Supervisor {
     if (this.lastExit) env.HARNESSD_LAST_EXIT = this.lastExit
     if (this.safeMode) env.HARNESSD_SAFE_MODE = this.safeMode
     this.spawnedOn = this.deps.bundle?.() ?? null
+    this.ptyStagedSinceSpawn = false
     const core = this.deps.spawnCore(env)
     this.core = core
     core.onMessage((message) => { if (this.core === core && isCoreMessage(message)) this.onMessage(core, message) })
@@ -615,8 +627,10 @@ export class Supervisor {
     this.scheduleSpawn(delay)
   }
 
-  /** Whether the bundle on disk changed since the running core was started (`deps.bundle`). */
+  /** Whether something newer was staged since the running core was started: the bundle on disk changed
+   *  (`deps.bundle`), or the updater staged a terminal host, which leaves the bundle as it was. */
   private stagedSinceSpawn(): boolean {
+    if (this.ptyStagedSinceSpawn) return true
     const now = this.deps.bundle?.() ?? null
     return now !== null && now !== this.spawnedOn
   }

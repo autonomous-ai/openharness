@@ -67,6 +67,24 @@ UsageCredentials _creds({
 }
 
 void main() {
+  group('whose computer is read (P3)', () {
+    test('Desktop reads this computer\'s Claude and Codex accounts', () {
+      final usage = UsageController(autoStart: false);
+      addTearDown(usage.dispose);
+      expect(
+        usage.readings.map((r) => r.provider),
+        [UsageProvider.claude, UsageProvider.codex],
+      );
+    });
+
+    test('a viewer build has no agent CLI here: no reading of its own', () {
+      final usage = UsageController(autoStart: false, readsThisComputer: false);
+      addTearDown(usage.dispose);
+      expect(usage.readings, isEmpty);
+      expect(usage.accounts.where((a) => a.isLocal), isEmpty);
+    });
+  });
+
   group('reset timestamps', () {
     test('seconds and milliseconds are told apart by magnitude', () {
       final seconds = parseResetTimestamp(1770000000);

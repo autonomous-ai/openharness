@@ -1,3 +1,4 @@
+import { parseSwarmSkill, type SwarmSkill } from './swarmSkills.js'
 /**
  * Registry of process-owned AGENTS — one per supported top-level engine process in a tmux pane.
  *
@@ -58,6 +59,8 @@ import { mergeTerminalRuntimes, primaryRuntime, processIdentityKey, sameProcessI
 import type { HookTerminalHint, ProcessIdentity, TerminalRuntimeRef } from './terminalTypes.js'
 import { externalReservations, externalResumePending, externalResumeIds, parseExternalResume, type ExternalResumeIntent } from './externalResume.js'
 import type { StartedBy } from './agentAttribution.js'
+import { PTY_HOST_INSTANCE } from './ptyHost/instance.js'
+import { isKittyGraphicsCommand } from './terminalTitle.js'
 
 export type { ProcessIdentity } from './terminalTypes.js'
 
@@ -202,6 +205,8 @@ export interface RegisteredSession {
   dsh?: string | null
   /** Stable key of the session-scoped harness runtime; preserved by bind, restore and fork. */
   dshRuntime?: string | null
+  /** Role and stable key of this Swarm session; absent for ordinary sessions. */
+  swarmSkill?: SwarmSkill
   /**
    * The engine's own named agent this pane was opened as (`agent_create`'s `agent`; opencode
    * `--agent <name>`), or null for a general session. Chosen at creation and carried into every
@@ -356,8 +361,8 @@ const PRE_V2_BACKUP_FILE = join(env.ADAPTER_DATA_DIR, 'registry.pre-v2.json')
 const NAME_OVERRIDES = new Map<string, string>()
 
 const PANE_RE = /^%\d+$/
-/** A pty host instance: `p` and its protocol version (`PtyRuntimeRef.instance`). */
-const PTY_INSTANCE_RE = /^p\d{1,4}$/
+/** A pty host instance (`PtyRuntimeRef.instance`): `p<protocol>`, or `p<protocol>-<build>` (ptyHost/instance.ts). */
+const PTY_INSTANCE_RE = PTY_HOST_INSTANCE
 const GROK_SESSION_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 const AGENT_ENGINES: ReadonlySet<string> = new Set(ENGINES)
 
@@ -406,6 +411,10 @@ function normalizedAgentEngine(value: unknown): AgentEngine {
 }
 const LOCK_WAIT_MS = 20
 const LOCK_ATTEMPTS = 100
+/** A lock directory with no owner.json, or one that names no one, is a crash (or a full disk) between mkdir and the
+ *  owner write: a window of microseconds. Older than this it is debris, not a lock (daemonSpawnLock.ts does the same);
+ *  left alone it made every registry write fail with "registry lock is busy" until someone removed it by hand. */
+const OWNERLESS_STALE_MS = 5_000
 
 function sleepSync(ms: number): void {
   const view = new Int32Array(new SharedArrayBuffer(4))
@@ -430,11 +439,18 @@ function withRegistryFileLock<T>(apply: () => T): T {
       mkdirSync(LOCK_DIR, { mode: 0o700 })
       created = true
       const owner = join(LOCK_DIR, 'owner.json')
-      const fd = openSync(owner, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600)
       try {
-        writeFileSync(fd, JSON.stringify({ pid: process.pid, ...processIdentity, token }))
-        fsyncSync(fd)
-      } finally { closeSync(fd) }
+        const fd = openSync(owner, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600)
+        try {
+          writeFileSync(fd, JSON.stringify({ pid: process.pid, ...processIdentity, token }))
+          fsyncSync(fd)
+        } finally { closeSync(fd) }
+      } catch (ownerError) {
+        // The directory is ours (mkdir made it) but names no one: remove it whole, or it outlives this process ownerless.
+        rmSync(LOCK_DIR, { recursive: true, force: true })
+        created = false
+        throw ownerError
+      }
       try {
         return apply()
       } finally {
@@ -446,11 +462,14 @@ function withRegistryFileLock<T>(apply: () => T): T {
       let ownerPid = 0
       let ownerStartMarker = ''
       let ownerToken = ''
+      let since = Date.now()
       try {
         const stat = lstatSync(LOCK_DIR)
+        since = stat.mtimeMs
         if (!stat.isDirectory() || stat.isSymbolicLink() || (uid !== null && stat.uid !== uid)
           || (stat.mode & 0o777) !== 0o700) throw new Error('registry lock has unsafe owner, mode, or type')
         const ownerStat = lstatSync(join(LOCK_DIR, 'owner.json'))
+        since = Math.max(since, ownerStat.mtimeMs)
         if (!ownerStat.isFile() || ownerStat.isSymbolicLink() || (uid !== null && ownerStat.uid !== uid)
           || (ownerStat.mode & 0o777) !== 0o600) throw new Error('registry lock owner has unsafe owner, mode, or type')
         const owner = JSON.parse(readFileSync(join(LOCK_DIR, 'owner.json'), 'utf8')) as {
@@ -462,7 +481,12 @@ function withRegistryFileLock<T>(apply: () => T): T {
       } catch (inspectionError) {
         if (inspectionError instanceof Error && inspectionError.message.startsWith('registry lock')) throw inspectionError
       }
-      if (ownerPid > 0 && ownerToken && !lockOwnerAlive(ownerPid, ownerStartMarker)) {
+      if (!(ownerPid > 0 && ownerToken)) {
+        if (Date.now() - since > OWNERLESS_STALE_MS) {
+          rmSync(LOCK_DIR, { recursive: true, force: true })
+          continue
+        }
+      } else if (!lockOwnerAlive(ownerPid, ownerStartMarker)) {
         try {
           const current = JSON.parse(readFileSync(join(LOCK_DIR, 'owner.json'), 'utf8')) as {
             pid?: unknown; startMarker?: unknown; generationMarker?: unknown; token?: unknown
@@ -1066,6 +1090,7 @@ class Registry {
   private terminalAvailableAgents = new Set<string>()
   private transactionDepth = 0
   private savePending = false
+  private readonly afterTransactionCallbacks: Array<{ run: () => void; reject: (error: unknown) => void }> = []
   /** Root corruption/unknown schemas are read-only until the operator restores valid bytes. */
   private writeBlocked = false
   /** Last committed row bytes, used for a three-way merge with daemon-down hook writes. */
@@ -1319,6 +1344,7 @@ class Registry {
           ...normalizedForkedFrom((raw as { forkedFrom?: unknown }).forkedFrom),
           dsh: normalizedDshId((raw as { dsh?: unknown }).dsh),
           dshRuntime: typeof raw.dshRuntime === 'string' && raw.dshRuntime ? raw.dshRuntime : null,
+          ...(parseSwarmSkill(raw.swarmSkill) ? { swarmSkill: parseSwarmSkill(raw.swarmSkill) } : {}),
           agent: normalizedAgentName((raw as { agent?: unknown }).agent),
           ...(rawGridLaunch !== undefined ? { gridLaunch: rawGridLaunch } : {}),
           ...(rawGridLaunch ? { gridWebSearch: normalizedGridWebSearch(raw?.gridWebSearch) } : {}),
@@ -1629,6 +1655,7 @@ class Registry {
     codexHome?: string | null
     dsh?: string | null
     dshRuntime?: string | null
+    swarmSkill?: SwarmSkill
     /** The engine's named agent the pane was opened as (`agent_create`'s `agent`), validated upstream. */
     agent?: string | null
     bypassPermission?: boolean
@@ -1677,6 +1704,7 @@ class Registry {
       hermesHome: null,
       dsh: input.dsh ?? null,
       dshRuntime: input.dshRuntime ?? null,
+      ...(input.swarmSkill ? { swarmSkill: input.swarmSkill } : {}),
       agent: normalizedAgentName(input.agent),
       ...(input.bypassPermission ? { bypassPermission: true } : {}),
       ...(permissionModeName(input.permissionMode) ? { permissionMode: input.permissionMode } : {}),
@@ -2026,6 +2054,7 @@ class Registry {
       hermesHome: input.hermesHome ?? existing?.hermesHome ?? null,
       dsh: existing?.dsh ?? null,
       dshRuntime: existing?.dshRuntime ?? null,
+      ...(existing?.swarmSkill ? { swarmSkill: existing.swarmSkill } : {}),
       agent: existing?.agent ?? null,
       // Carried forward like `agent`: dropped at the first hook, a restart of a harness another agent started came
       // back without its pull request line (found by e2e/agentClient.e2e.ts).
@@ -2183,7 +2212,7 @@ class Registry {
     this.terminalAvailableAgents.delete(agentId)
     // The archived conversation owns the original Harness ID. Preserve the physical shell under
     // a new identity, without sending input, stopping processes or claiming its route twice.
-    const entry = separateShell ? { ...original, agentId: randomUUID(), dsh: null, dshRuntime: null, agent: null, defaultName: this.automaticName('Terminal', new Date()) } : original
+    const entry = separateShell ? { ...original, agentId: randomUUID(), dsh: null, dshRuntime: null, swarmSkill: undefined, agent: null, defaultName: this.automaticName('Terminal', new Date()) } : original
     // The shell under a new identity is the person's, not a harness an agent started: kept, a window took the new id for
     // a new child and opened the shell beside the agent, even after the person had closed the child (review of #1217).
     if (separateShell) delete entry.parentAgentId
@@ -2455,6 +2484,16 @@ class Registry {
     return true
   }
 
+  /** Older Swarm members adopt a role at restart, once; later roster reads cannot replace a saved role. */
+  setSwarmSkill(agentId: string, skill: SwarmSkill): boolean {
+    const session = this.agents.get(agentId)
+    if (!session || session.swarmSkill || (session.engine !== 'claude' && session.engine !== 'codex')) return false
+    session.swarmSkill = { ...skill }
+    session.touchedAt = Date.now()
+    this.save()
+    return true
+  }
+
   /** Fill in the DSH a row did not know (discovery read `HARNESS_DSH` off the live process). Never
    *  replaces one it already has — the harness is chosen once, at creation. */
   setDsh(agentId: string, dsh: string): boolean {
@@ -2599,9 +2638,17 @@ class Registry {
       if (!holding) return
       holding = false
       this.transactionDepth--
-      if (this.transactionDepth === 0 && this.savePending) {
-        this.savePending = false
-        this.save()
+      if (this.transactionDepth === 0) {
+        try {
+          if (this.savePending) {
+            this.savePending = false
+            this.save()
+          }
+        } catch (error) {
+          for (const callback of this.afterTransactionCallbacks.splice(0)) callback.reject(error)
+          throw error
+        }
+        while (this.transactionDepth === 0 && this.afterTransactionCallbacks.length) this.afterTransactionCallbacks.shift()!.run()
       }
     }
     const timer = options.holdSavesMs === undefined ? undefined : setTimeout(() => {
@@ -2617,6 +2664,18 @@ class Registry {
       clearTimeout(timer)
       release()
     }
+  }
+
+  /** Run a durability-sensitive action only after the current discovery batch has committed. */
+  afterTransaction<T>(action: () => T): Promise<T> {
+    if (this.transactionDepth === 0) {
+      try { return Promise.resolve(action()) } catch (error) { return Promise.reject(error) }
+    }
+    return new Promise<T>((resolve, reject) => {
+      this.afterTransactionCallbacks.push({ run: () => {
+        try { resolve(action()) } catch (error) { reject(error) }
+      }, reject })
+    })
   }
 
   flush(options: { exiting?: boolean } = {}): void {
@@ -2972,6 +3031,8 @@ function defaultProjectDisplayName(s: RegisteredSession): string {
  * its network, and a pane keeps the name it was made under.
  */
 export function titleDisplayName(title: string | null | undefined): string | null {
+  // (A graphics query tmux took as a pane title, one a registry stored before tmux.ts stopped reading it included.)
+  if (title && isKittyGraphicsCommand(title)) return null
   const cleaned = title
     ?.trim()
     .replace(/^[\s\p{Mark}\p{Punctuation}\p{Symbol}]+/u, '')

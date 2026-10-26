@@ -293,6 +293,22 @@ def trial_source(config):
     return source, account
 
 
+# The password as installed, for `harness factory-reset` to put back (setup.py restore_initial_password).
+# Root's alone, on the installed root: inside the encrypted disk where there is one.
+INITIAL_ACCOUNT = '/var/lib/harness-os/initial-account.json'
+
+
+def save_initial_password(target, config):
+    """The account's password hash, and on an encrypted disk the password itself: the disk's key
+    slots can only be changed with a passphrase that opens one, and a reset puts back this one."""
+    shadow = next((line.split(':')[1] for line in (target / 'etc/shadow').read_text().splitlines()
+                   if line.split(':', 1)[0] == config['username']), None)
+    record = {'username': config['username'], 'shadow': shadow}
+    if config['encrypt']:
+        record.update(initial=config['password'], current=config['password'])
+    write(target, INITIAL_ACCOUNT, json.dumps(record) + '\n', 0o600)
+
+
 def preserve_trial(trial, target, home):
     if trial is None:
         return None
@@ -458,6 +474,7 @@ def install_image(config, source, target, progress, resources):
             chroot(target, 'userdel', '-r', 'me')
         chroot(target, 'useradd', '-m', '-G', 'wheel,video,audio', '-s', '/bin/bash', config['username'])
         chroot(target, 'chpasswd', input=f"{config['username']}:{config['password']}\n".encode())
+        save_initial_password(target, config)
         chroot(target, 'passwd', '-l', 'root')
         (target / 'var/lib/systemd/linger/me').unlink(missing_ok=True)
         write(target, f'/var/lib/systemd/linger/{config["username"]}', '')

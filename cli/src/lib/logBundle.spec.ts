@@ -68,6 +68,59 @@ describe('buildLogBundle', () => {
     expect(bundleFileName(now)).toBe('harness-logs-20260915-1030.zip')
   })
 
+  it('takes each device\'s own dial logs from its usb-<serial> folder, redacted, within the same week', () => {
+    // The fleet writes one folder per device (cableFleet.ts); a bundle without them left out the Pro's own
+    // console on 20-26 Oct, the one log that says whether it rebooted.
+    const root = mkdtempSync(join(tmpdir(), 'bundle-'))
+    const logs = join(root, 'logs'), pro = join(logs, 'usb-E8-F6-0A-E7-63-7D'), other = join(logs, 'notes')
+    mkdirSync(pro, { recursive: true }); mkdirSync(other)
+    writeFileSync(join(pro, 'dial-20260915.log'), '[daemon] dial E8 on fw 0.1.13 board pro\nsession_token: abcdefgh12345\n')
+    writeFileSync(join(pro, 'dial-20260901.log'), 'too old\n')
+    writeFileSync(join(pro, 'notes.txt'), 'no\n')
+    writeFileSync(join(other, 'dial-20260915.log'), 'not a device folder\n')
+    const { zip, included } = buildLogBundle({ logsDir: logs, dataDir: root, now: new Date(2026, 8, 15, 10, 30), version: '0', redact: redactSecretsInText })
+    const files = readZip(zip)
+    expect([...files.keys()]).toEqual(['README.txt', 'logs/usb-E8-F6-0A-E7-63-7D/dial-20260915.log'])
+    expect(files.get('logs/usb-E8-F6-0A-E7-63-7D/dial-20260915.log')?.toString()).toBe('[daemon] dial E8 on fw 0.1.13 board pro\nsession_token: <redacted>\n')
+    expect(included).toEqual(['usb-E8-F6-0A-E7-63-7D/dial-20260915.log'])
+  })
+
+  it('caps the devices\' dial logs, newest first, so a desk of devices cannot make the bundle huge', () => {
+    const root = mkdtempSync(join(tmpdir(), 'bundle-'))
+    const logs = join(root, 'logs'), a = join(logs, 'usb-AA'), b = join(logs, 'usb-BB')
+    mkdirSync(a, { recursive: true }); mkdirSync(b)
+    writeFileSync(join(a, 'dial-20260915.log'), 'a'.repeat(40))
+    writeFileSync(join(b, 'dial-20260914.log'), 'b'.repeat(40))
+    writeFileSync(join(a, 'dial-20260913.log'), 'c'.repeat(40))
+    writeFileSync(join(logs, 'app-20260913.log'), 'the app log is not capped\n')
+    const { zip, included } = buildLogBundle({ logsDir: logs, dataDir: root, now: new Date(2026, 8, 15, 10, 30), version: '0', redact: (t) => t, deviceLogCapBytes: 100 })
+    expect([...readZip(zip).keys()]).toEqual(['README.txt', 'logs/app-20260913.log', 'logs/usb-AA/dial-20260915.log', 'logs/usb-BB/dial-20260914.log'])
+    expect(included).toContain('usb-AA/dial-20260913.log (left out to keep the bundle small)')
+  })
+
+  it('keeps every device\'s newest day, as its tail when that day alone is over the cap, then older days while there is room', () => {
+    // The reviewer's case: dialLog caps a day at 20 MB and then writes one more line, so a newest day can be 20 MB + 90 B.
+    // Counting whole files left that day out, and every older day after it.
+    const root = mkdtempSync(join(tmpdir(), 'bundle-'))
+    const logs = join(root, 'logs'), big = join(logs, 'usb-AA'), small = join(logs, 'usb-BB')
+    mkdirSync(big, { recursive: true }); mkdirSync(small)
+    const cap = 20 * 1024 * 1024
+    writeFileSync(join(big, 'dial-20260915.log'), 'x'.repeat(cap) + 'y'.repeat(89) + '\n')
+    writeFileSync(join(big, 'dial-20260914.log'), 'o'.repeat(1024))
+    writeFileSync(join(small, 'dial-20260913.log'), 'the other device\n')
+    const { zip, included } = buildLogBundle({ logsDir: logs, dataDir: root, now: new Date(2026, 8, 15, 10, 30), version: '0', redact: (t) => t })
+    const files = readZip(zip)
+    expect([...files.keys()]).toEqual(['README.txt', 'logs/usb-AA/dial-20260915.log', 'logs/usb-BB/dial-20260913.log'])
+    const newest = files.get('logs/usb-AA/dial-20260915.log')!
+    expect(newest.length).toBe(cap - 17)
+    expect(newest.toString().endsWith('y'.repeat(89) + '\n')).toBe(true)
+    expect(files.get('logs/usb-BB/dial-20260913.log')?.toString()).toBe('the other device\n')
+    expect(included).toEqual(expect.arrayContaining([
+      `usb-AA/dial-20260915.log (last ${Math.round((cap - 17) / 1024)} KB)`,
+      'usb-AA/dial-20260914.log (left out to keep the bundle small)',
+    ]))
+  })
+
   it('still produces a bundle with a README when there is nothing to include', () => {
     const root = mkdtempSync(join(tmpdir(), 'bundle-'))
     const { zip, included } = buildLogBundle({ logsDir: join(root, 'none'), dataDir: root, version: '0', redact: (s) => s })

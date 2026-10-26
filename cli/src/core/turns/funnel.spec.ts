@@ -41,6 +41,19 @@ function setup(engine = 'claude', over: Partial<FunnelDeps> = {}) {
 describe('the event funnel', () => {
   afterEach(() => vi.restoreAllMocks())
 
+  it('tells of an agent working on each live turn start and progress, never on its end or a re-read', () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+    const working = vi.fn()
+    const { funnel } = setup('claude', { working })
+    funnel('s1', [started(), text()])
+    expect(working.mock.calls).toEqual([['a1'], ['a1']])
+    working.mockClear()
+    funnel('s1', [ended()])
+    funnel('s1', [started(), text(), ended()], { replay: true })
+    funnel('s1', [started(), text(), ended()], { resumed: true })
+    expect(working).not.toHaveBeenCalled()
+  })
+
   it('offers native observation after client dispatch without letting an observer break the turn', () => {
     vi.spyOn(console, 'log').mockImplementation(() => {})
     vi.spyOn(console, 'error').mockImplementation(() => {})

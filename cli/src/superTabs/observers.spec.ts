@@ -6,7 +6,7 @@ import { b64e, newEphemeral, newIdentity } from '../lib/e2ee/core.js'
 import { recipientHandshake } from '../sharing/crypto.js'
 import { HarnessGrantStore } from '../sharing/grants.js'
 import { HarnessShareOwner } from '../sharing/owner.js'
-import { observerSnapshotFile, observerSource, publishObservers } from './observers.js'
+import { OBSERVER_VALID_MS, observerSnapshotFile, observerSource, publishObservers } from './observers.js'
 
 it('expires session authority and closes an existing encrypted terminal observer after removal', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'super-observer-')), key = newIdentity()
@@ -47,4 +47,27 @@ it('expires session authority and closes an existing encrypted terminal observer
     writeFileSync(observerSnapshotFile(dir, 'machine'), '{'); now += 201
     expect(source.current()).toEqual([])
   } finally { await owner.stop(); rmSync(dir, { recursive: true, force: true }) }
+})
+
+it('tells a lapsed roster apart from one in force that names nobody, and accepts no roster valid for longer', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'super-observer-'))
+  let now = 1_000_000
+  const source = observerSource(dir, () => 'machine', () => now)
+  const rows = [{ tabId: 'tab', agent: { machineId: 'machine', harnessId: 'native', name: 'Builder', configuration: {} },
+    observers: [{ email: 'Peer@Example.com' }] }]
+  try {
+    expect(source.known()).toBeNull()
+    publishObservers(dir, 'machine', rows, now + OBSERVER_VALID_MS); now += 201
+    expect(source.known()).toEqual([{ tab: 'super:tab', agentId: 'native', email: 'peer@example.com', name: 'Builder', engine: null }])
+    // Read again after the cache's 200 ms, a moment before it lapses: still in force.
+    now += OBSERVER_VALID_MS - 202
+    expect(source.known()).toHaveLength(1)
+    now += 1
+    expect(source.known()).toBeNull()
+    expect(source.current()).toEqual([])
+    publishObservers(dir, 'machine', [], now + OBSERVER_VALID_MS); now += 201
+    expect(source.known()).toEqual([])
+    publishObservers(dir, 'machine', rows, now + OBSERVER_VALID_MS + 1000); now += 201
+    expect(source.known()).toBeNull()
+  } finally { rmSync(dir, { recursive: true, force: true }) }
 })

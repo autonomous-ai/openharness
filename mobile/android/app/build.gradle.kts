@@ -43,6 +43,11 @@ android {
         // needs to rise with every upload.
         versionCode = flutter.versionCode
         versionName = flutter.versionName
+        // A copy that installs beside the Play one, for the on-device benchmarks
+        // (mobile/integration_test/README.md): `-P harnessIdSuffix=.bench`. A local build cannot
+        // replace a Play install — Play re-signs the app with a key only Google holds — and
+        // uninstalling it to make room signs the phone out.
+        (project.findProperty("harnessIdSuffix") as String?)?.let { applicationIdSuffix = it }
     }
 
     signingConfigs {

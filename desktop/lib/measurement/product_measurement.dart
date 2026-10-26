@@ -31,6 +31,9 @@ enum ProductFlow {
   // The Add Phone card (widgets/phone_offer_card.dart), offered once per computer: begun when it is on
   // screen, ok by its Add Phone, cancelled by its ×, unknown when it goes another way.
   phoneOffer('phone_offer'),
+  phoneOfferReturning('phone_offer_returning'),
+  shareInvite('share_invite'),
+  shareAccept('share_accept'),
   // The same card offered once to a computer that never had it, after one of its own harnesses
   // finished a turn (`AppNotifier._offerPhoneAfterWork`): counted apart, so the two offers read apart.
   phoneOfferAfterWork('phone_offer_after_work'),
@@ -58,6 +61,8 @@ enum ProductFlow {
   /// queue for that answer instead of being skipped ([ProductMeasurement]).
   int get vocabulary => switch (this) {
     phoneOffer => 3,
+    phoneOfferReturning => 6,
+    shareInvite || shareAccept => 5,
     phoneOfferAfterWork || phoneOfferAwayWaited || phoneOfferAwayFinished => 4,
     _ => 1,
   };
@@ -67,6 +72,7 @@ enum ProductFlow {
   /// an Add Phone pressed after 15 minutes would otherwise be lost to unknown.
   bool get unbounded =>
       this == phoneOffer ||
+      this == phoneOfferReturning ||
       this == phoneOfferAfterWork ||
       this == phoneOfferAwayWaited ||
       this == phoneOfferAwayFinished;
@@ -147,6 +153,11 @@ class ProductMeasurement extends ChangeNotifier {
   final _countedOn = <ProductHealthMeasure, String>{};
   final _funnelSeen = <String, Set<ProductHealthMeasure>>{};
   final _funnelStarted = <String, DateTime>{};
+  DateTime? _firstRunAt;
+  bool _firstRunRequested = false;
+  (String, String)? _firstRunTarget;
+  final _firstRunStages = <String>{};
+  bool _setupShown = false;
   final _expires = <Object, DateTime>{};
   final _expire = <Object, void Function(ProductOutcome)>{};
   int get choiceRevision => _revision;
@@ -294,6 +305,10 @@ class ProductMeasurement extends ChangeNotifier {
       _enabled = null;
       return;
     }
+    // Initial preference loading must not omit an eligible first arrival.
+    // Keep only its eligibility/current harness, never pre-consent work or responses.
+    final firstRunPending = _revision < 0 && _firstRunRequested;
+    final firstRunTarget = firstRunPending ? _firstRunTarget : null;
     if (revision != _revision || !enabled) {
       _accountEpoch++;
       _clear('ui');
@@ -323,6 +338,12 @@ class ProductMeasurement extends ChangeNotifier {
       _setup.clear();
       _setupMissing.clear();
     }
+    if (firstRunPending && sharing) {
+      firstRunStarted();
+      if (firstRunTarget case final target?) {
+        firstRunReady(target.$1, target.$2);
+      }
+    }
     notifyListeners();
   }
 
@@ -340,6 +361,10 @@ class ProductMeasurement extends ChangeNotifier {
     if (channel == 'ui') {
       _coverageDay = null;
       _countedOn.clear();
+      _firstRunAt = null;
+      _firstRunRequested = false;
+      _firstRunTarget = null;
+      _firstRunStages.clear();
     }
   }
 
@@ -513,12 +538,143 @@ class ProductMeasurement extends ChangeNotifier {
     );
   }
 
+  /// A new non-machine key joined while Add Phone was open, by its opening only.
+  void addPhonePaired(AddPhoneOpening from) {
+    if (!healthEnabled || !sharing || _disposed) return;
+    _coverage();
+    _count(
+      'ui',
+      _now().toUtc().toIso8601String().substring(0, 10),
+      'ui_desktop_add_phone_paired_${from.wire}',
+    );
+  }
+
+  /// A card path declined an offer. Fixed reasons only; never account or device data.
+  void phoneOfferSkipped(String reason) {
+    if (!const {
+          'has_phone',
+          'no_device_list',
+          'already_shown',
+          'stopped',
+          'cap_reached',
+          'not_signed_in',
+          'viewer',
+          'card_showing',
+          'no_storage',
+          'account_changed',
+          'read_limit',
+        }.contains(reason) ||
+        !healthEnabled ||
+        !sharing ||
+        _disposed) {
+      return;
+    }
+    _coverage();
+    _count(
+      'ui',
+      _now().toUtc().toIso8601String().substring(0, 10),
+      'ui_desktop_phone_offer_skipped_$reason',
+    );
+  }
+
+  /// One first-arrival episode in this app run. Retries share its denominator;
+  /// routine launches never call this. Targets stay in RAM and are never reported.
+  void firstRunStarted() {
+    if (!healthEnabled ||
+        _disposed ||
+        _account == null ||
+        _firstRunAt != null ||
+        accountOptOutPending) {
+      return;
+    }
+    if (_enabled == null && _revision < 0) {
+      _firstRunRequested = true;
+      return;
+    }
+    if (!sharing) return;
+    _firstRunRequested = false;
+    _firstRunAt = _now().toUtc();
+    _firstRunStage('started');
+  }
+
+  /// Counts acknowledged invitation results, never addresses, tab ids or invite ids.
+  void sharedInvites({required int sent, required int refused}) {
+    if (!healthEnabled || !sharing || _disposed) return;
+    _coverage();
+    final day = _now().toUtc().toIso8601String().substring(0, 10);
+    for (final (name, count) in [('sent', sent), ('refused', refused)]) {
+      for (var i = 0; i < count.clamp(0, 1000); i++) {
+        _count('ui', day, 'health_desktop_shared_invites_$name');
+      }
+    }
+  }
+
+  void firstRunReady(String machineId, String? agentId) {
+    if ((_firstRunAt == null && !_firstRunRequested) || agentId == null) return;
+    _firstRunTarget = (machineId, agentId);
+    _firstRunStage('ready');
+  }
+
+  void firstRunWork(String machineId, String agentId) {
+    if (_firstRunTarget == (machineId, agentId)) _firstRunStage('work');
+  }
+
+  void firstRunResponse(String machineId, String agentId) {
+    if (_firstRunTarget != (machineId, agentId) ||
+        !_firstRunStages.contains('work') ||
+        _firstRunStages.contains('response')) {
+      return;
+    }
+    _firstRunStage('response');
+    final start = _firstRunAt;
+    if (start == null || !_firstRunStages.contains('response')) return;
+    final seconds = _now().toUtc().difference(start).inSeconds;
+    _firstRunStage(
+      'response_${seconds < 60
+          ? 'under_1m'
+          : seconds < 300
+          ? '1m_to_5m'
+          : 'over_5m'}',
+    );
+  }
+
+  void _firstRunStage(String stage) {
+    final start = _firstRunAt;
+    if (!healthEnabled || !sharing || _disposed || start == null) return;
+    final elapsed = _now().toUtc().difference(start);
+    if (elapsed.isNegative ||
+        elapsed > const Duration(hours: 24) ||
+        !_firstRunStages.add(stage)) {
+      return;
+    }
+    _coverage();
+    _count(
+      'ui',
+      start.toIso8601String().substring(0, 10),
+      'health_desktop_first_run_$stage',
+    );
+  }
+
+  /// Called only when setup is actually visible. A successful readiness probe
+  /// on a normal launch is not an impression of setup.
+  void setupShown() {
+    _setupShown = true;
+    milestone(ProductHealthMeasure.funnelSetupSeen);
+  }
+
+  void setupHidden() => _setupShown = false;
+
   /// The proxy revision ([proxyVocabulary]) that forwards [metric]: the Add
   /// Phone card's flow and the ways Add Phone opened are 3, the card offered
-  /// after work or after time away 4, everything else this queue holds is 1 (a
-  /// health measure newer than 1 is never queued before the proxy has named
-  /// it, [health]).
+  /// after work or after time away 4, and first-run/invite counters 5. Other
+  /// health measures use [health] to wait for support before counting.
   static int _vocabularyOf(String metric) {
+    if (metric.startsWith('ui_desktop_phone_offer_skipped_') ||
+        metric.startsWith('ui_desktop_add_phone_paired_')) {
+      return 6;
+    }
+    if (metric.startsWith('health_desktop_first_run_') ||
+        metric.startsWith('health_desktop_shared_invites_')) return 5;
     for (final flow in _newerFlows) {
       if (metric.startsWith('ui_desktop_${flow.wire}_')) return flow.vocabulary;
     }
@@ -550,7 +706,7 @@ class ProductMeasurement extends ChangeNotifier {
   }
 
   void _observeSetupFacts() {
-    if (_setupFacts.isNotEmpty) milestone(ProductHealthMeasure.funnelSetupSeen);
+    if (_setupShown) milestone(ProductHealthMeasure.funnelSetupSeen);
     if (!_setupAllowed && !sharing) return;
     for (final entry in _setupFacts.entries) {
       if (!entry.key.beforeSignIn || entry.key == ProductFlow.signIn) continue;

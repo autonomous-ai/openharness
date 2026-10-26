@@ -1,7 +1,8 @@
 import 'package:flutter/foundation.dart';
 
 import '../ws/ws_conn.dart';
-import 'shared_tabs.dart' show SharedTabsFailure, SharedTabsRequest;
+import 'shared_tabs.dart'
+    show SharedTabsFailure, SharedTabsRequest, unreachableComputer;
 
 enum TabHarnessState { working, idle, unknown }
 
@@ -66,10 +67,7 @@ class TabActivityReader {
         detail == null || detail.isEmpty ? e.code : detail,
       );
     } catch (_) {
-      throw const SharedTabsFailure(
-        'UNAVAILABLE',
-        'Harness could not reach this computer. Check that it is online, then try again.',
-      );
+      throw SharedTabsFailure('UNAVAILABLE', unreachableComputer);
     }
     final rows = answer['harnesses'];
     if (rows is! List) return const [];

@@ -17,7 +17,8 @@ import { checkDevAck } from './deviceAckCore.js'
  *
  * Who may append what is decided by the CHANNEL, on top of the signatures:
  *  - a machine appends over its own adapter socket, and only about ITSELF (`kind: 'machine'`, its own
- *    machineId) — so no device can register a key under another machine's id;
+ *    machineId) — so no device can register a key under another machine's id; a team machine
+ *    (lib/teamSession.ts) also removes only its own key, never another device of the account;
  *  - a viewer app appends over REST, only `kind: 'viewer'` entries, and signs removals with a viewer key.
  */
 
@@ -33,7 +34,7 @@ export type DeviceKeyAppendResult = { ok: true; head: DevLogHead } | ({ ok: fals
 
 /** Who is appending: a machine over its adapter socket, or a viewer over REST. */
 export type DeviceKeyChannel =
-  | { kind: 'machine'; machineId: string; harnessSessionId?: string }
+  | { kind: 'machine'; machineId: string; harnessSessionId?: string; team?: boolean }
   | { kind: 'viewer'; harnessSessionId?: string }
 
 export async function readDeviceKeyLog(userId: string, since: number): Promise<{ acct: string; head: DevLogHead; entries: unknown[] }> {
@@ -145,6 +146,9 @@ function channelAllows(entry: DevLogEntry, state: DevLogState, channel: DeviceKe
   if (channel.kind === 'machine') {
     // A machine speaks only as itself: its own key, under its own id.
     if (entry.op === 'add') return entry.kind === 'machine' && entry.machineId === channel.machineId
+    // A team machine may leave, but never take another device off the account (and so sign it out).
+    const removed = state.active[entry.pub]
+    if (channel.team && !(removed?.kind === 'machine' && removed.machineId === channel.machineId)) return false
     return signer?.kind === 'machine' && signer.machineId === channel.machineId
   }
   if (entry.op === 'add') return entry.kind === 'viewer'

@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process'
-import { mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -291,6 +291,10 @@ describe('USB dial fleet', () => {
       expect(f.host.onDialAttached).toHaveBeenCalledTimes(1)
       await f.fleet.turnStarted('a', 'Working')
       for (const port of f.ports) expect(port.sent).toContainEqual({ t: 'turn.started', agentId: 'a', text: 'Working' })
+      // The Swarm cards reach every session; a dial that did not name them is sent nothing.
+      await f.fleet.syncSwarmCards(true)
+      await f.fleet.swarmCardRecap({ tabId: 'st1', leadId: 'l1', text: 'x', at: 1, none: false })
+      for (const port of f.ports) expect(port.sent.some(m => String(m.t).startsWith('supertab'))).toBe(false)
       f.setPorts([device('/dev/tux', 'BB:02')]); await f.fleet['scan']()
       expect(f.ports[0].isOpen).toBe(false)
       expect(f.ports[1].isOpen).toBe(true)
@@ -503,6 +507,21 @@ describe('a board that is not a dial', () => {
       for (let i = 0; i < 3; i++) await second.scan()
       expect(second.opens()).not.toContain('/dev/other')
     } finally { await second.fleet.stop() }
+  })
+
+  it('remembers a board that greeted as a dial, so a later silent probe never marks it foreign', async () => {
+    const file = join(mkdtempSync(join(tmpdir(), 'fleet-verdicts-')), 'dial-ports.json')
+    const s = scenario({ file })
+    try {
+      s.fleet.start()
+      await vi.waitFor(() => expect(s.f.ports.map(p => p.path)).toContain('/dev/tim'))
+      await s.f.greet(s.f.ports.filter(p => p.path === '/dev/tim'))
+      await vi.waitFor(() => expect(s.fleet.isConnected).toBe(true))
+    } finally { await s.fleet.stop() }
+    const dial = { ...device('/dev/tim', 'AA:01'), session: '201' }
+    const verdicts = new DialVerdicts(file)
+    verdicts.markForeign(dial)
+    expect(verdicts.isForeign(dial)).toBe(false)
   })
 
   it('is never opened while another program has it, and only then once that program is done', async () => {
@@ -722,5 +741,178 @@ describe('macOS USB inventory', () => {
       await find()
       expect(runIoreg).toHaveBeenCalledTimes(5)
     })
+  })
+})
+
+describe('a Harness Pro that is silent from the moment its port opens', () => {
+  // A user's Pro, started beside a booting Mac, sent nothing at all on 20-26 Oct: the daemon wrote it off as
+  // "not a Harness dial" and the Pro sat on its Home screen until it was replugged. This session stands in for
+  // CableSession's 20 s silence (tested there) so each step is one call.
+  class Quiet {
+    static made: Quiet[] = []
+    isConnected = false
+    wantsStats = false
+    constructor(readonly host: CableHost) { Quiet.made.push(this) }
+    start() {}
+    async stop() {}
+    petDial() { return { supported: false, held: [], sending: null, errors: {} } }
+    silent() { this.host.onForeignPort?.('/dev/pro', 'silent') }
+  }
+  const PRO = 'E8:F6:0A:E7:63:7D'
+  const NOTICE = 'Not answering — unplug and replug'
+  function setup(opts: { verdicts?: DialVerdicts; session?: string; serial?: string } = {}) {
+    Quiet.made = []
+    const f = fixture()
+    const port = { ...device('/dev/pro', opts.serial ?? PRO), session: opts.session ?? '7' }
+    f.setPorts([port])
+    const reset = vi.fn(async () => true)
+    const verdicts = opts.verdicts ?? new DialVerdicts()
+    const fleet = new CableFleet(Quiet as unknown as typeof CableSession, f.host, f.logs, DialLog, { ...f.options, verdicts, watchEveryMs: 0, reset })
+    const scan = async () => { await (fleet as unknown as { scan(): Promise<void> }).scan(); await new Promise(r => setTimeout(r, 5)) }
+    const rows = () => (vi.mocked(f.host.onDialStatus!).mock.calls.at(-1)?.[0].devices ?? [])
+    return { f, fleet, port, reset, verdicts, scan, rows }
+  }
+
+  it('is reset over the cable once, watched again, and only then is the person told', async () => {
+    const s = setup()
+    s.verdicts.markDial(s.port, 'pro')
+    try {
+      s.fleet.start()
+      await vi.waitFor(() => expect(Quiet.made).toHaveLength(1))
+      Quiet.made[0].silent()
+      await vi.waitFor(() => expect(s.reset).toHaveBeenCalledWith('/dev/pro'))
+      // Looked at again, by a fresh session, after the reset.
+      await vi.waitFor(async () => { await s.scan(); expect(Quiet.made).toHaveLength(2) })
+      expect(s.rows()).toEqual([])
+      Quiet.made[1].silent()
+      await vi.waitFor(() => expect(s.rows()).toEqual([{ id: PRO, attached: false, board: 'pro', problem: NOTICE }]))
+      // Exactly one reset, and the port is then left alone for this attachment.
+      for (let i = 0; i < 3; i++) await s.scan()
+      expect(s.reset).toHaveBeenCalledTimes(1)
+      expect(Quiet.made).toHaveLength(2)
+      expect(s.verdicts.isForeign(s.port)).toBe(false)
+      // Replugged: a new attachment is looked at again, and the notice goes.
+      s.f.setPorts([{ ...s.port, session: '8' }])
+      await vi.waitFor(async () => { await s.scan(); expect(Quiet.made).toHaveLength(3) })
+      expect(s.rows()).toEqual([])
+    } finally { await s.fleet.stop() }
+  })
+
+  it('is told to the person at once where the board cannot be reset', async () => {
+    const s = setup()
+    s.verdicts.markDial(s.port, 'pro')
+    s.reset.mockResolvedValue(false)
+    try {
+      s.fleet.start()
+      await vi.waitFor(() => expect(Quiet.made).toHaveLength(1))
+      Quiet.made[0].silent()
+      await vi.waitFor(() => expect(s.rows()).toEqual([{ id: PRO, attached: false, board: 'pro', problem: NOTICE }]))
+      for (let i = 0; i < 3; i++) await s.scan()
+      expect(Quiet.made).toHaveLength(1)
+    } finally { await s.fleet.stop() }
+  })
+
+  it('is never reset when its port has no USB serial, since only a serial says which board it is: notice only', async () => {
+    const s = setup()
+    const nameless = { path: '/dev/pro', vendorId: 0x303a, productId: 0x1001, session: '7' }
+    s.f.setPorts([nameless])
+    s.verdicts.markDial(nameless, 'pro')
+    try {
+      s.fleet.start()
+      await vi.waitFor(() => expect(Quiet.made).toHaveLength(1))
+      Quiet.made[0].silent()
+      await vi.waitFor(() => expect(s.rows()).toEqual([{ id: '/dev/pro', attached: false, board: 'pro', problem: NOTICE }]))
+      expect(s.reset).not.toHaveBeenCalled()
+    } finally { await s.fleet.stop() }
+  })
+
+  it('is not reset when the daemon stops or USB passes to another account just before the reset', async () => {
+    for (const change of ['usb', 'stop'] as const) {
+      const s = setup()
+      s.verdicts.markDial(s.port, 'pro')
+      try {
+        s.fleet.start()
+        await vi.waitFor(() => expect(Quiet.made).toHaveLength(1))
+        // The change lands while the silent session is being stopped, after the decision to reset.
+        Quiet.made[0].stop = async () => {
+          if (change === 'usb') s.f.options.canUseUsb.mockReturnValue(false)
+          else void s.fleet.stop()
+        }
+        Quiet.made[0].silent()
+        await new Promise(r => setTimeout(r, 50))
+        expect(s.reset).not.toHaveBeenCalled()
+      } finally { await s.fleet.stop() }
+    }
+  })
+
+  it('withdraws a notice it has shown when the second silent round is given up, and says so to the window', async () => {
+    const s = setup()
+    s.verdicts.markDial(s.port, 'pro')
+    try {
+      s.fleet.start()
+      await vi.waitFor(() => expect(Quiet.made).toHaveLength(1))
+      Quiet.made[0].silent()
+      await vi.waitFor(async () => { await s.scan(); expect(Quiet.made).toHaveLength(2) })
+      // Stopping the second, still silent, session reports it gone, which publishes the notice; then USB passes
+      // to another account before the notice is settled.
+      Quiet.made[1].stop = async () => {
+        Quiet.made[1].host.onDialStatus?.({ attached: false })
+        s.f.options.canUseUsb.mockReturnValue(false)
+      }
+      Quiet.made[1].silent()
+      await vi.waitFor(() => expect(vi.mocked(s.f.host.onDialStatus!).mock.calls.some(([st]) => st.devices?.some(d => d.problem))).toBe(true))
+      await new Promise(r => setTimeout(r, 50))
+      expect(s.rows()).toEqual([])
+    } finally { await s.fleet.stop() }
+  })
+
+  it('withdraws its notice when USB passes to another account at this computer', async () => {
+    const s = setup()
+    s.verdicts.markDial(s.port, 'pro')
+    s.reset.mockResolvedValue(false)
+    try {
+      s.fleet.start()
+      await vi.waitFor(() => expect(Quiet.made).toHaveLength(1))
+      Quiet.made[0].silent()
+      await vi.waitFor(() => expect(s.rows()).toEqual([{ id: PRO, attached: false, board: 'pro', problem: NOTICE }]))
+      s.f.options.canUseUsb.mockReturnValue(false)
+      await s.scan()
+      expect(s.rows()).toEqual([])
+    } finally { await s.fleet.stop() }
+  })
+
+  it('never resets a silent board this computer has not seen greet as a Harness Pro', async () => {
+    for (const known of ['nothing', 'round dial'] as const) {
+      const s = setup({ serial: 'CC:03' })
+      if (known === 'round dial') s.verdicts.markDial(s.port)
+      try {
+        s.fleet.start()
+        await vi.waitFor(() => expect(Quiet.made).toHaveLength(1))
+        Quiet.made[0].silent()
+        await vi.waitFor(() => expect(s.f.host.log).toHaveBeenCalledWith(expect.stringContaining('is not a Harness dial (silent)')))
+        await s.scan()
+        expect(s.reset).not.toHaveBeenCalled()
+        expect(s.rows().some(r => r.problem)).toBe(false)
+      } finally { await s.fleet.stop() }
+    }
+  })
+
+  it('is known from its own dial log when it greeted before the record kept the board, so a verdict does not pin it', async () => {
+    // This user's Pro: last greeted a daemon older than the board record, then judged foreign on this very
+    // attachment, which held for 6 h and across every restart.
+    const file = join(mkdtempSync(join(tmpdir(), 'fleet-verdicts-')), 'dial-ports.json')
+    const pinned = new DialVerdicts(file)
+    const s = setup({ verdicts: pinned })
+    pinned.markForeign(s.port)
+    const folder = join(s.f.logs, 'usb-E8-F6-0A-E7-63-7D')
+    mkdirSync(folder)
+    writeFileSync(join(folder, 'dial-20261022.log'), '2026-10-22T09:49:09.860Z [daemon] dial E8:F6:0A:E7:63:7D on fw 0.1.13 proto 3 hw harness-pro board pro caps swarms\n')
+    try {
+      s.fleet.start()
+      await vi.waitFor(() => expect(Quiet.made).toHaveLength(1))
+      expect(new DialVerdicts(file).isPro(s.port)).toBe(true)
+      Quiet.made[0].silent()
+      await vi.waitFor(() => expect(s.reset).toHaveBeenCalledTimes(1))
+    } finally { await s.fleet.stop() }
   })
 })

@@ -14,8 +14,9 @@
  *     unbound until its next turn, which is recoverable — mis-binding is not.
  */
 
-import { realpath, stat } from 'fs/promises'
+import { readdir, readlink, realpath, stat } from 'fs/promises'
 import { basename, dirname, isAbsolute, join, sep } from 'path'
+import { homedir } from 'node:os'
 import { env } from '../config/env.js'
 import type { SessionStoreContract } from '../engines/facets/sessionStore.js'
 import { identityBytes, identityEntries, identityFile, identityHead, identityLines, identityScanBudget, IdentityReadUnavailable } from '../engines/kit/identityScan.js'
@@ -160,6 +161,41 @@ async function readTranscriptMeta(path: string): Promise<TranscriptMeta | null> 
   return head?.cwd ? { cwd: head.cwd } : null
 }
 
+async function ompSessionMeta(path: string): Promise<TranscriptMeta | null> {
+  if (basename(path) === '__advisor.jsonl') return null
+  return readTranscriptMeta(path)
+}
+
+/** omp's sessions root. A symlinked `~/.omp` is resolved: /proc names the file the process actually holds. */
+async function ompSessionsRoot(): Promise<string> {
+  const root = join(homedir(), '.omp', 'agent', 'sessions')
+  return realpath(root).catch(() => root)
+}
+
+/**
+ * omp's folder for a working directory: the path under the home directory (else the absolute path), its
+ * separators turned into `-`, with a leading `-`. `/home/me/src/app` → `-src-app`, `/tmp/x` → `-tmp-x`.
+ * Measured on 34 of 34 folders. Pi's `--<path>--` rule does not apply.
+ */
+export function ompSessionFolder(cwd: string, home: string = homedir()): string {
+  const inside = cwd === home || cwd.startsWith(`${home}${sep}`)
+  const path = inside ? cwd.slice(home.length).replace(/^[\\/]+/, '') : cwd.replace(/^[\\/]+/, '')
+  return `-${path.split(/[\\/]+/).filter(Boolean).join('-')}`
+}
+
+async function ompHeldSession(pid: number): Promise<RepairedSession | null> {
+  let links: string[]
+  try { links = await readdir(`/proc/${pid}/fd`) } catch { return null }
+  const root = `${await ompSessionsRoot()}/`
+  for (const fd of links) {
+    let target = ''
+    try { target = await readlink(`/proc/${pid}/fd/${fd}`) } catch { continue }
+    if (!target.endsWith('.jsonl') || target.includes('__advisor') || !target.startsWith(root)) continue
+    return { sessionId: idFromFile(target), transcriptPath: target }
+  }
+  return null
+}
+
 /**
  * How a scan of `engine`'s declared store reads a file (its session store's `scan`), refusing a session another
  * one delegated to.
@@ -292,6 +328,15 @@ async function dbEngineSession(dbPath: string, sql: string, params: SqliteParam[
   return typeof id === 'string' && id && id !== excludedSessionId ? { sessionId: id } : null
 }
 
+/**
+ * Where an OpenCode store keeps its sessions: OpenCode 2's `session_v2`, which has the same columns, when the
+ * store has it, else OpenCode 1's `session`. A v2 store still holds the v1 table, only what v1 wrote.
+ */
+async function opencodeSessionTable(dbPath: string): Promise<'session_v2' | 'session'> {
+  const found = await sqliteReadAll(dbPath, "SELECT name FROM sqlite_master WHERE type='table' AND name='session_v2'", [], { maxBuffer: 4096 })
+  return found.ok && found.rows.length > 0 ? 'session_v2' : 'session'
+}
+
 /** One `?` per directory, for an `IN (…)` over both spellings of the cwd. */
 function placeholders(count: number): string {
   return Array.from({ length: count }, () => '?').join(', ')
@@ -382,6 +427,13 @@ export async function findLiveSession(
   const dirList = placeholders(dirs.length)
   // Native identity is eager. Optional interpretation cannot keep a process unbound.
   switch (engine) {
+    case 'omp': {
+      // The file the process holds is exact. Without a pid, only this directory's folder is scanned:
+      // the whole store holds every project's sessions and runs out of the scan's entry budget.
+      const held = opts?.pid ? await ompHeldSession(opts.pid) : null
+      if (held) return held
+      return fileEngineSession(join(await ompSessionsRoot(), ompSessionFolder(cwd)), cwd, startedAtMs, ompSessionMeta, opts)
+    }
     case 'pi':
       return fileEngineSession(join(env.PI_HOME, 'agent', 'sessions'), cwd, startedAtMs, readTranscriptMeta, opts)
     case 'commandcode':
@@ -431,16 +483,18 @@ export async function findLiveSession(
         if (!isAbsolute(root)) throw new IdentityReadUnavailable('the session working directory is invalid')
         return root ? { cwd: root, sessionId: basename(sessionDir) } : null
       }, opts)
-    case 'opencode':
+    case 'opencode': {
       // time_created is epoch MILLISECONDS here.
+      const database = join(env.OPENCODE_DATA_DIR, 'opencode.db')
       return dbEngineSession(
-        join(env.OPENCODE_DATA_DIR, 'opencode.db'),
-        `SELECT id FROM session WHERE directory IN (${dirList}) AND parent_id IS NULL`
+        database,
+        `SELECT id FROM ${await opencodeSessionTable(database)} WHERE directory IN (${dirList}) AND parent_id IS NULL`
           + ' AND (time_created >= ? OR time_updated >= ?)'
           + ' ORDER BY time_updated DESC LIMIT 2;',
         [...dirs, Math.trunc(sinceMs), Math.trunc(sinceMs)],
         opts?.excludedSessionId,
       )
+    }
     case 'kilo':
       // Same store shape as opencode (measured: `session` is byte-identical between the two DBs), and
       // time_created is epoch MILLISECONDS here too — the real row on this machine reads 1786091927554.

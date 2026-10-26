@@ -240,6 +240,17 @@ model Machine {
   // device-auth grant and refreshed on every adapter-ws connect, so `harness auth device` on the same
   // box reconnects to THAT machine instead of minting a second one. Null on rows that predate it.
   computerId                      String?
+  // How the computer signed in on its LAST adapter-ws connect: `team` for a team session (lib/teamSession.ts),
+  // a Mac's team account running teammates' Swarm agents; `computer` for any other sign-in. A `team` row taken
+  // over by a normal sign-in is set to `computer` before that socket attaches, so `team` never names a machine a
+  // normal sign-in serves. Null on rows that predate it (never a team machine). A team session acts only for a
+  // row marked `team`; Swarm routing reads it (Task 3 of docs/plans/2026-10-24-swarm-team-account.md).
+  sessionKind                     String?
+  // A team machine's Mac: the machineId of the owner's own machine on the computer whose Harness Team account this
+  // is, so every list shows that Mac once ("One machine" in docs/plans/2026-10-24-swarm-team-account.md). Copied from
+  // the team session (`HarnessSession.hostMachineId`) whenever that session registers its machine; nothing a team
+  // session sends sets it. Null for every other machine, a dedicated one (`harness team on`) included.
+  hostMachineId                   String?
   // Version string the CLIENT reported on its LAST adapter-ws connect (remote machines only) — the
   // client sends it as `?v=` and it is overwritten every time, so it reflects the most recent connect.
   // Self-declared and sanitized at the upgrade; null for a machine that never connected or a client
@@ -989,6 +1000,8 @@ model SuperTab {
   memberIds      String[]
   invitedEmails  String[]
   machineIds     String[]
+  /// Machines whose host still has to clean up after their removal: read apart from the 100-Swarm host poll.
+  cleanupMachineIds String[] @default([])
   revision       Int      @default(0)
   state          Json
   createdAt      DateTime @default(now())
@@ -997,11 +1010,20 @@ model SuperTab {
   @@index([autonomousEnv, memberIds])
   @@index([autonomousEnv, invitedEmails])
   @@index([autonomousEnv, machineIds])
+  @@index([autonomousEnv, cleanupMachineIds])
 }
 
 // A terminal retains its history when removed from a roster. These bindings
 // prevent contributing a private session to another project's audience later.
 model SuperTabSessionScope {
+  /// Administrative retirement belongs only to the Swarm that withdrew this session.
+  releasedTabIds String[] @default([])
+  /// A bounded native close may finish after membership is withdrawn.
+  closeLeaseId String?
+  closeLeaseUntil DateTime?
+  closeLeaseGeneration String?
+  /// Serializes contribution changes with stop intent across public Swarms.
+  stopReleaseId String?
   id           String   @id @map("_id")
   scopeIds     String[]
   privateScope String?
@@ -1021,9 +1043,30 @@ model SuperTabMessage {
   attachments     Json?
   replyTo         String?
   recipientIds    String[]
+  /// People a Lead tagged (superTabs/mentions.ts); absent on older rows.
+  mentions        String[]
   createdAt       DateTime @default(now())
 
   @@index([tabId, conversationId, sequence])
+}
+
+/// A Lead's tag of a person, waiting until they reply in that conversation or mark it done (superTabs/mentions.ts).
+/// Kept out of the tab state so an older backend still reads it; removed 30 days after createdAt by a TTL index.
+model SuperTabMention {
+  id             String    @id @map("_id")
+  tabId          String
+  personId       String
+  projectId      String
+  conversationId String
+  messageId      String
+  authorAgentId  String
+  createdAt      DateTime
+  resolvedAt     DateTime?
+  /// reply | done
+  resolvedBy     String?
+
+  @@index([tabId, personId, createdAt])
+  @@index([tabId, conversationId, personId])
 }
 
 /// One uploaded file, which one message of the actor that uploaded it can send once.
@@ -1088,6 +1131,11 @@ model SuperTabDelivery {
   status                String   @default("queued")
   claimId               String?
   receipt               String?
+  // Optional on older records: backend first, then Desktop's inline receipt.
+  holdReason            String?
+  holdSince             DateTime?
+  deliveredAt           DateTime?
+  answeredAt            DateTime?
   createdAt             DateTime @default(now())
   updatedAt             DateTime @updatedAt
 
@@ -1158,6 +1206,19 @@ model SuperTabStopReceipt {
   @@unique([tabId, assignmentId])
 }
 
+// A custom role's skill text (superTabs/projects.ts ProjectRole), outside the tab snapshot: the snapshot keeps only
+// its version, so tab reads and host rosters stay small. Hosts fetch the text when the version changes.
+model SuperTabRoleText {
+  id        String @id @map("_id")
+  tabId     String
+  projectId String
+  roleId    String
+  version   String
+  text      String
+
+  @@index([tabId, projectId])
+}
+
 // Configuration observations stay outside the tab snapshot so a long-running
 // assignment keeps its complete history without making every tab read grow.
 model SuperTabConfiguration {
@@ -1173,6 +1234,33 @@ model SuperTabConfiguration {
   @@index([tabId, agentId, revision])
 }
 
+// A Lead's read of, or input to, an agent's terminal, relayed to the host of the agent's machine
+// (backend/src/superTabs/terminal.ts). Outside the tab snapshot and history: a screen can show secrets,
+// so its text is kept only until the requester reads it.
+model SuperTabTerminalRequest {
+  id             String    @id @map("_id")
+  tabId          String
+  agentId        String
+  machineId      String
+  machineOwnerId String
+  harnessId      String
+  requesterKey   String
+  kind           String
+  scrollback     Int?
+  text           String?
+  keys           String[]  @default([])
+  /// pending -> claimed (handed to the host once) -> done
+  status         String    @default("pending")
+  ok             Boolean?
+  result         String?
+  error          String?
+  createdAt      DateTime
+  claimedAt      DateTime?
+
+  @@index([machineId, status])
+  @@index([tabId, createdAt])
+}
+
 model ExperimentalSettings {
   id               String  @id @map("_id") @db.ObjectId
   userId           String
@@ -1186,6 +1274,8 @@ model ExperimentalSettings {
   agentMessages        Boolean @default(false)
   /// Inverted on purpose: off shares a one-line summary of what each harness does with the shared tab's other accounts.
   agentMessagesHideSummary Boolean @default(false)
+  /// An agent may give more work to a harness it started (`harness tell`, cli/src/messages/tell.ts). Off by default.
+  agentsTellAgents     Boolean @default(false)
   revision         Int     @default(0)
 
   @@index([userId])
@@ -1239,7 +1329,14 @@ model HarnessSession {
   label       String
   /// `computer` — a computer signed in by a phone scanning its QR (lib/harnessSession.ts): it may
   /// connect AS a machine. Absent (every older row) or `viewer` — an app, which may not.
+  /// `team` — the daemon of a Mac's team account, minted by one of the account's computers
+  /// (lib/teamSession.ts): it may connect only as the machine of `computerId`, and do less than a computer.
   kind        String?
+  /// With `kind: team`: the computer it is bound to (normalized, lib/deviceAuth.ts:normalizeComputerId).
+  computerId  String?
+  /// With `kind: team`: the machine of the Mac whose team account this is, recorded when the code was minted
+  /// (routes/auth.ts) and copied onto the team machine (`Machine.hostMachineId`). Null for a dedicated machine.
+  hostMachineId String?
   createdAt   DateTime  @default(now())
   lastUsedAt  DateTime  @default(now())
   /// Slides forward on every refresh: a phone in use stays signed in, one left in a drawer does not.

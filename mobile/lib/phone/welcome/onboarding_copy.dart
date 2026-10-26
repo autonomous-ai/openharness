@@ -25,6 +25,13 @@
 /// account to sign in with, and where Add Phone is (owner, 2026-10-12, after trying it):
 /// until the phone adds the computer itself, the computer signs in on its own, and that is where
 /// people stood stuck.
+/// Exception approved by the owner, Tony, 2026-10-22: one suggestion with a Send button above the
+/// mic in the first session, once — Desktop's pre-typed starter when the pane has one, otherwise the
+/// first of the New Harness first-task ideas. It goes after Send or a spoken message; no cycling and
+/// no other additions were approved.
+/// Owner, 2026-10-23: that session (OpenCode, Claude Code, Codex) opens with the keyboard up over the
+/// task typed into the prompt — Claude Code's and Codex's typed by the phone — and its mic pretends:
+/// no microphone and no permission prompt, a second tap sends the prompt as it stands.
 abstract final class OnboardingCopy {
   /// ① The welcome's headline: everything lit, the promise.
   static const welcome =
@@ -79,6 +86,6 @@ abstract final class OnboardingCopy {
   /// What the phone says by the mic the first time it opens a session — one line, once.
   static const micSendIt = 'Send it, or say anything.';
   static const micPickUp = 'Pick up where you left off.';
-  static const micSayWhat = 'Say what to build.';
+  static const micSayWhat = 'Say what to build, or send this:';
   static const micTalk = 'Talk to it.';
 }

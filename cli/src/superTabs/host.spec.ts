@@ -1,11 +1,14 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { createHash } from 'node:crypto'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
+import { prepareSwarmSkill } from '../lib/swarmSkills.js'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { CoreApi, TurnDelivery } from '../core/api.js'
 import { fakeCore } from '../testing/fakeCore.js'
-import { backend, hostJournalFile, SuperTabHost } from './host.js'
+import { backend, swarmRoleFor, hostJournalFile, SuperTabHost, type SuperTabHostOptions } from './host.js'
 import { retainedHarnesses, retentionFile } from './retention.js'
+import { observerSource } from './observers.js'
 
 const roots: string[] = []
 const hosts: SuperTabHost[] = []
@@ -14,7 +17,10 @@ afterEach(() => { for (const host of hosts.splice(0)) host.stop(); for (const ro
 function setup(messageFields: Record<string, unknown> = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'super-tab-host-')); roots.push(dir)
   const listeners = new Set<(e: TurnDelivery) => void>()
-  const row = { tabId: 'tab', agent: { id: 'agent', harnessId: 'harness', machineId: 'machine-1' } }
+  const row: { tabId: string; agent: { id: string; harnessId: string; machineId: string }; lead?: boolean } = { tabId: 'tab', agent: { id: 'agent', harnessId: 'harness', machineId: 'machine-1' } }
+  /** The conversation the delivery comes from, and the ones the agent's own view of the tab lists. */
+  let from = 'lead'
+  const views = ['lead']
   let removed = false, revoked = false, status = 'queued', claimId: string | null = null
   const receipts: Record<string, unknown>[] = []
   const holds: Record<string, unknown>[] = []
@@ -22,8 +28,9 @@ function setup(messageFields: Record<string, unknown> = {}) {
   const call: CoreApi['account']['backend'] = vi.fn(async (method, path, body) => {
     let data: unknown
     if (path.includes('/hosts/')) data = removed ? [] : [row]
+    else if (path.includes('?asAgentId=')) data = { state: { conversations: views.map(id => ({ id })) } }
     else if (revoked) return { status: 403, body: { success: false, error: { code: 'FORBIDDEN', message: 'Grant removed' } } }
-    else if (method === 'GET') data = status === 'delivered' ? [] : [{ id: 'delivery', claimId, status }]
+    else if (method === 'GET') data = status === 'delivered' ? [] : [{ id: 'delivery', conversationId: from, claimId, status }]
     else {
       const command = body as Record<string, unknown>
       if (command.type === 'claim') { claimId = command.claimId as string; status = 'claimed' }
@@ -34,20 +41,149 @@ function setup(messageFields: Record<string, unknown> = {}) {
     return { status: 200, body: { success: true, data } }
   })
   const core = fakeCore({ dataDir: dir,
-    agents: { byAgent: vi.fn(() => ({ agentId: 'harness' }) as never), terminalAvailable: vi.fn(() => true) },
+    agents: { creationStatus: vi.fn(async creationId => ({ creationId, state: 'created' as const, agentId: 'harness' })), byAgent: vi.fn(() => ({ agentId: 'harness' }) as never), terminalAvailable: vi.fn(() => true) },
     account: { backend: call },
     turns: { onDelivery: vi.fn(fn => { listeners.add(fn); return () => { listeners.delete(fn) } }) },
   })
   const log = vi.fn()
-  const open = () => { const host = new SuperTabHost(core, 'machine-1', { log, now: () => clock }); hosts.push(host); return host }
+  const open = (options: SuperTabHostOptions = {}) => { const host = new SuperTabHost(core, 'machine-1', { log, now: () => clock, ...options }); hosts.push(host); return host }
   const event = (state: TurnDelivery['state'], reason?: string) => {
     for (const fn of listeners) fn({ deliveryId: 'team:service:superTabs:delivery', sessionId: 'harness', state, reason })
   }
   const saved = () => JSON.parse(readFileSync(hostJournalFile(dir, 'machine-1'), 'utf8'))
-  return { core, call, open, event, receipts, holds, log, wait: (ms: number) => { clock += ms }, saved, dir, remove: () => { removed = true }, revoke: (value = true) => { revoked = value }, foreignClaim: () => { claimId = 'another-process' } }
+  return { core, call, open, event, receipts, holds, log, row, wait: (ms: number) => { clock += ms }, saved, dir, remove: () => { removed = true }, revoke: (value = true) => { revoked = value }, foreignClaim: () => { claimId = 'another-process' }, from: (id: string) => { from = id }, views }
 }
 
+describe('current Swarm role lookup', () => {
+  it('derives a Reviewer from its stored role while it is in a current group', async () => {
+    const t = setup()
+    const agent = { id: 'agent', harnessId: 'harness', machineId: 'machine-1', role: 'reviewer' }
+    let groups = [{ leadId: 'other', agentIds: ['agent'] }]
+    vi.mocked(t.call).mockImplementation(async (_method, path) => ({ status: 200, body: { success: true, data:
+      path.includes('/hosts/') ? [{ tabId: 'tab', agent }] : { state: { agents: [agent], conversations: groups } } } }))
+    expect(await swarmRoleFor(t.core, 'machine-1', 'harness')).toEqual({ role: 'review', mode: 'orchestration' })
+    groups = []
+    expect(await swarmRoleFor(t.core, 'machine-1', 'harness')).toBeNull()
+  })
+  it.each(['lead', 'member', 'assigned'] as const)('derives an old %s from current groups on its machine', async kind => {
+    const t = setup()
+    const agent = { id: 'agent', harnessId: 'harness', machineId: 'machine-1' }
+    const group = { leadId: kind === 'lead' ? 'agent' : 'other', agentIds: kind === 'member' ? ['agent'] : [],
+      assignment: kind === 'assigned' ? { agentId: 'agent', execution: { machineId: 'machine-1' } } : null }
+    vi.mocked(t.call).mockImplementation(async (_method, path) => ({ status: 200, body: { success: true, data:
+      path.includes('/hosts/') ? [{ tabId: 'tab', agent }] : { state: { agents: [agent], conversations: [group] } } } }))
+    expect(await swarmRoleFor(t.core, 'machine-1', 'harness')).toEqual({ role: kind === 'lead' ? 'lead' : 'dev', mode: 'orchestration' })
+    expect(await swarmRoleFor(t.core, 'machine-1', 'personal')).toBeNull()
+  })
+  it('gives the mode of the project whose group made the role, Lead first', async () => {
+    const t = setup()
+    const agent = { id: 'agent', harnessId: 'harness', machineId: 'machine-1' }
+    const projects = [{ id: 'lead', skillMode: 'default' }, { id: 'p2', skillMode: 'orchestration' }, { id: 'p3', skillMode: 'default' }]
+    let conversations: unknown[] = [{ projectId: 'p2', leadId: 'other', agentIds: ['agent'] }, { projectId: 'p3', leadId: 'agent', agentIds: [] }]
+    vi.mocked(t.call).mockImplementation(async (_method, path) => ({ status: 200, body: { success: true, data:
+      path.includes('/hosts/') ? [{ tabId: 'tab', agent }] : { state: { agents: [agent], conversations, projects } } } }))
+    expect(await swarmRoleFor(t.core, 'machine-1', 'harness')).toEqual({ role: 'lead', mode: 'default' })
+    conversations = [{ projectId: 'p2', leadId: 'other', agentIds: ['agent'] }]
+    expect(await swarmRoleFor(t.core, 'machine-1', 'harness')).toEqual({ role: 'dev', mode: 'orchestration' })
+    // A group from before projects is in the first project.
+    conversations = [{ leadId: 'other', agentIds: ['agent'] }]
+    expect(await swarmRoleFor(t.core, 'machine-1', 'harness')).toEqual({ role: 'dev', mode: 'default' })
+  })
+  it.each(['removed-roster', 'foreign', 'removed-state', 'archived', 'released', 'none', 'malformed'] as const)
+    ('never adopts a session whose membership is %s', async kind => {
+      const t = setup()
+      const agent = { id: 'agent', harnessId: 'harness', machineId: kind === 'foreign' ? 'other' : 'machine-1' }
+      vi.mocked(t.call).mockImplementation(async (_method, path) => ({ status: 200, body: { success: true, data: path.includes('/hosts/')
+        ? kind === 'malformed' ? {} : kind === 'removed-roster' ? [] : [{ tabId: 'tab', agent, stopRequested: kind === 'released' }]
+        : { state: { agents: kind === 'removed-state' ? [] : [agent], conversations:
+          kind === 'none' ? [] : [{ leadId: 'agent', agentIds: ['agent'], archived: kind === 'archived' }] } } } }))
+      expect(await swarmRoleFor(t.core, 'machine-1', 'harness')).toBeNull()
+    })
+  it('prefers Lead when a session also works in another group and never reuses a stale roster', async () => {
+    const t = setup(), agent = { id: 'agent', harnessId: 'harness', machineId: 'machine-1' }
+    let present = true
+    vi.mocked(t.call).mockImplementation(async (_method, path) => ({ status: 200, body: { success: true, data: path.includes('/hosts/')
+      ? present ? [{ tabId: 'tab', agent }] : []
+      : { state: { agents: [agent], conversations: [{ agentIds: ['agent'] }, { leadId: 'agent' }] } } } }))
+    expect(await swarmRoleFor(t.core, 'machine-1', 'harness')).toEqual({ role: 'lead', mode: 'orchestration' })
+    present = false
+    expect(await swarmRoleFor(t.core, 'machine-1', 'harness')).toBeNull()
+    expect(await swarmRoleFor(t.core, 'machine-1', 'harness')).toBeNull()
+  })
+})
+
 describe('Super Tab native delivery handoff', () => {
+  it('revokes an in-flight old-terminal lease when the member is rebound, preserving uncertainty', async () => {
+    const t = setup(), host = t.open()
+    await host.tick()
+    t.row.agent.harnessId = 'new-harness'
+    await host.tick()
+    expect(t.core.turns.deliver).toHaveBeenCalledTimes(1)
+    expect(t.core.turns.cancelDelivery).toHaveBeenCalledWith('team:service:superTabs:delivery')
+    expect(t.saved().entries.delivery.stage).toBe('uncertain')
+    expect(t.receipts.at(-1)).toMatchObject({ uncertain: true })
+  })
+  it('retargets held input after Change agent without retargeting uncertain input', async () => {
+    const t = setup(), host = t.open()
+    await host.tick(); t.event('rejected', 'team_waiting_busy')
+    t.row.agent.harnessId = 'new-harness'
+    await host.tick()
+    expect(t.core.turns.deliver).toHaveBeenLastCalledWith('new-harness', expect.any(String), 'team:service:superTabs:delivery')
+    expect(t.saved().entries.delivery.harnessId).toBe('new-harness')
+    host.stop()
+    const fresh = t.open()
+    await fresh.tick()
+    expect(t.saved().entries.delivery.stage).toBe('uncertain')
+    expect(t.core.turns.deliver).toHaveBeenCalledTimes(2)
+  })
+  // Leads see each other's work and talk (spec 2026-10-23): the Leads conversation reaches Leads alone. The server
+  // delivers it only to them; this host also types into an agent that leads nothing only what its own view can read.
+  it('never types a Leads conversation message into an agent that leads nothing, and says so once', async () => {
+    const t = setup(), host = t.open()
+    t.from('leads')
+    for (let i = 0; i < 3; i++) await host.tick()
+    expect(t.core.turns.deliver).not.toHaveBeenCalled()
+    expect(t.call).not.toHaveBeenCalledWith('POST', expect.stringContaining('/deliveries/delivery'), expect.anything())
+    expect(t.log.mock.calls.filter(([line]) => String(line).includes('not in a conversation'))).toHaveLength(1)
+    t.views.push('leads')
+    await host.tick()
+    expect(t.core.turns.deliver).toHaveBeenCalledTimes(1)
+  })
+  // The review of #1657: a Leads message held for a busy Lead must not be typed once that agent no longer leads.
+  it('rechecks a held Leads conversation message after its agent stops being a Lead', async () => {
+    const t = setup(), host = t.open()
+    t.row.lead = true
+    t.from('leads')
+    await host.tick()
+    expect(t.core.turns.deliver).toHaveBeenCalledTimes(1)
+    t.event('rejected', 'team_waiting_busy')
+    expect(t.saved().entries.delivery.stage).toBe('prepared')
+    t.row.lead = false
+    for (let i = 0; i < 3; i++) await host.tick()
+    expect(t.core.turns.deliver).toHaveBeenCalledTimes(1)
+    expect(t.saved().entries.delivery.stage).toBe('prepared')
+  })
+  it('reads an agent\'s view once for its own conversation, and never for a Lead', async () => {
+    const t = setup(), host = t.open()
+    await host.tick()
+    expect(t.core.turns.deliver).toHaveBeenCalledTimes(1)
+    const views = () => vi.mocked(t.call).mock.calls.filter(([, path]) => path === '/api/super-tabs/tab?asAgentId=agent').length
+    expect(views()).toBe(1)
+    t.event('rejected', 'team_waiting_busy')
+    await host.tick()
+    expect(views()).toBe(1)
+    const lead = setup()
+    lead.row.lead = true
+    lead.from('leads')
+    await lead.open().tick()
+    expect(lead.core.turns.deliver).toHaveBeenCalledTimes(1)
+    expect(vi.mocked(lead.call).mock.calls.some(([, path]) => path.includes('?asAgentId='))).toBe(false)
+  })
+  it('names all five task parts in the worker delivery header', async () => {
+    const t = setup()
+    await t.open().tick()
+    expect(vi.mocked(t.core.turns.deliver).mock.calls[0]?.[1]).toContain('goal, changes, constraints, owned code and acceptance checks')
+  })
   it('keeps roster members through host failure and restart, releasing only a confirmed removal', async () => {
     const t = setup(), first = t.open()
     await first.tick()
@@ -78,6 +214,14 @@ describe('Super Tab native delivery handoff', () => {
       'In reply to message question-2. Read it before interpreting the answer:'
     ), 'team:service:superTabs:delivery')
     expect(vi.mocked(t.core.turns.deliver).mock.calls[0]?.[1]).toContain('Message message from Collaborator:\nYes, keep them.')
+    expect(vi.mocked(t.core.turns.deliver).mock.calls[0]?.[1]).toContain('On Claude Code or Codex, Leads use swarm-lead, Builders swarm-dev and Reviewers swarm-review.')
+    expect(vi.mocked(t.core.turns.deliver).mock.calls[0]?.[1]).toContain('Leads coordinate: assign multi-part or 15+ minute work to Swarm agent groups; do only answers, lookups and work under 15 minutes yourself; your subagents only read/look up.')
+  })
+
+  it('types only the notice for an agent-only delivery, with no invitation to reply in the conversation', async () => {
+    const t = setup({ text: 'Harness updated your built-in swarm-lead skill.', source: { kind: 'agent-only' } })
+    await t.open().tick()
+    expect(t.core.turns.deliver).toHaveBeenCalledWith('harness', 'Harness updated your built-in swarm-lead skill.', 'team:service:superTabs:delivery')
   })
 
   it('keeps a slow configuration observation out of the native delivery and lease path', async () => {
@@ -152,7 +296,7 @@ describe('Super Tab native delivery handoff', () => {
     const original = vi.mocked(t.core.account.backend).getMockImplementation()!
     vi.mocked(t.core.account.backend).mockImplementation(async (method, path, body) => {
       if (method === 'GET' && path.endsWith('/deliveries')) {
-        return { status: 200, body: { success: true, data: [{ id: 'delivery', claimId: null, status: 'queued' }, { id: 'second', claimId: null, status: 'queued' }] } }
+        return { status: 200, body: { success: true, data: [{ id: 'delivery', conversationId: 'lead', claimId: null, status: 'queued' }, { id: 'second', conversationId: 'lead', claimId: null, status: 'queued' }] } }
       }
       if (method === 'POST' && path.endsWith('/deliveries/delivery')) {
         return { status: 409, body: { success: false, error: { code: 'DELIVERY_RESOLVED', message: 'This message was already answered.' } } }
@@ -380,6 +524,43 @@ it('confirms a stopped assignment only with fresh native evidence, including aft
   expect(proof).toHaveLength(1)
 })
 
+describe('the super-tab command in delivered input', () => {
+  it('names the short command in every line that names a command, and asks for it once while the input is held', async () => {
+    const t = setup({ replyTo: 'earlier' })
+    const agentCommand = vi.fn(async () => 'harness super-tab')
+    const host = new SuperTabHost(t.core, 'machine-1', { log: vi.fn(), agentCommand }); hosts.push(host)
+    await host.tick()
+    const text = String(vi.mocked(t.core.turns.deliver).mock.calls[0]?.[1])
+    expect(text).toContain(`Read its state: harness super-tab --tab 'tab' --agent 'agent' status`)
+    expect(text).toContain(`harness super-tab --tab 'tab' --agent 'agent' message 'lead' 'earlier'`)
+    expect(text).toContain(`harness super-tab --tab 'tab' --agent 'agent' route GROUP JSON`)
+    expect(text).not.toContain('--port')
+    t.event('rejected', 'team_waiting_busy')
+    await host.tick()
+    expect(t.core.turns.deliver).toHaveBeenCalledTimes(2)
+    expect(agentCommand).toHaveBeenCalledTimes(1)
+    expect(agentCommand).toHaveBeenCalledWith(t.core, 'machine-1')
+  })
+  it('falls back to the full command when the lookup fails, and does not ask again', async () => {
+    const t = setup()
+    const agentCommand = vi.fn(async () => { throw new Error('no shell') })
+    const host = new SuperTabHost(t.core, 'machine-1', { log: vi.fn(), agentCommand }); hosts.push(host)
+    await host.tick()
+    expect(String(vi.mocked(t.core.turns.deliver).mock.calls[0]?.[1]))
+      .toContain(`Read its state: ${t.core.daemon.command} super-tab --port ${t.core.daemon.port} --machine 'machine-1' --tab 'tab' --agent 'agent' status`)
+    t.event('rejected', 'team_waiting_busy')
+    await host.tick()
+    expect(agentCommand).toHaveBeenCalledTimes(1)
+  })
+  it('keeps the daemon\'s full command when nothing proves a shorter one works (no launcher is looked up in a spec)', async () => {
+    const t = setup()
+    const host = new SuperTabHost(t.core, 'machine-1', { log: vi.fn() }); hosts.push(host)
+    await host.tick()
+    expect(String(vi.mocked(t.core.turns.deliver).mock.calls[0]?.[1]))
+      .toContain(`Read its state: ${t.core.daemon.command} super-tab --port ${t.core.daemon.port} --machine 'machine-1' --tab 'tab' --agent 'agent' status`)
+  })
+})
+
 describe('Super Tab attachments in delivered input', () => {
   it('lists the downloaded files after the text and downloads them once while the terminal holds the input', async () => {
     const file = { id: 'a1', name: 'screen.png', mime: 'image/png', size: 5, url: 'https://cdn.example.test/x/screen.png' }
@@ -429,9 +610,9 @@ describe('Super Tab waits for the Harness Pro', () => {
       if (offline) throw new Error('Host offline')
       return { status: 200, body: { success: true, data: path.includes('/hosts/') ? rows : [] } }
     })
-    const superTabs = { attention: vi.fn() }
+    const superTabs = { attention: vi.fn(), cards: vi.fn(), cardRecap: vi.fn(), shareObservers: vi.fn(), screen: vi.fn(), input: vi.fn() }
     const core = fakeCore({ dataDir: dir, superTabs, account: { backend: call },
-      agents: { byAgent: vi.fn(() => ({ agentId: 'harness' }) as never), terminalAvailable: vi.fn(() => true) } })
+      agents: { creationStatus: vi.fn(async creationId => ({ creationId, state: 'created' as const, agentId: 'harness' })), byAgent: vi.fn(() => ({ agentId: 'harness' }) as never), terminalAvailable: vi.fn(() => true) } })
     const open = () => { const host = new SuperTabHost(core, 'machine-1', { log: vi.fn() }); hosts.push(host); return host }
     const first = open()
     await first.tick()
@@ -466,7 +647,7 @@ describe('Super Tab waits for the Harness Pro', () => {
       agent: { id: 'agent', harnessId: 'harness', machineId: 'machine-1' } }]
     const call: CoreApi['account']['backend'] = vi.fn(async (_method, path) => ({ status: 200, body: { success: true, data: path.includes('/hosts/') ? rows : [] } }))
     let here = true, clock = 0
-    const superTabs = { attention: vi.fn() }
+    const superTabs = { attention: vi.fn(), cards: vi.fn(), cardRecap: vi.fn(), shareObservers: vi.fn(), screen: vi.fn(), input: vi.fn() }
     const core = fakeCore({ dataDir: dir, superTabs, account: { backend: call },
       agents: { byAgent: vi.fn(() => (here ? { agentId: 'harness' } : undefined) as never), terminalAvailable: vi.fn(() => true) } })
     const host = new SuperTabHost(core, 'machine-1', { log: vi.fn(), now: () => clock }); hosts.push(host)
@@ -489,5 +670,1014 @@ describe('Super Tab waits for the Harness Pro', () => {
     clock += 10_000
     await host.tick()
     expect(superTabs.attention).toHaveBeenCalledTimes(2)
+  })
+})
+
+it('stops a requested worker once, confirms removal, and releases retention on the next roster', async () => {
+  const t = setup(), host = t.open()
+  vi.mocked(t.core.agents.byAgent).mockReturnValue({ agentId: 'harness', sessionId: 'native', registeredAt: 0, startedBy: 'agent' } as never)
+  let closed = false, removed = false, acknowledgements = 0
+  const target = { id: 'agent', harnessId: 'harness', machineId: 'machine-1', workDecision: 'stop', startedSession: { creationId: 'super-original-creation', sessionId: 'native', createdAt: new Date(0).toISOString() } }
+  t.core.agents.stopped = async () => closed
+  t.core.agents.closeSwarm = async request => { expect(request.agentId).toBe('harness'); expect(request.expiresAt).toBeLessThanOrEqual(Date.now() + 120_000); closed = true; return { closed: true } }
+  t.core.account.backend = async (method, path, body) => {
+    if ((body as any)?.command?.type === 'agent.stopLease') return { status: 200, body: { data: { result: { expiresAt: Date.now() + 3_600_000, durationMs: 120_000 } } } }
+    if (path.includes('/hosts/')) return { status: 200, body: { data: removed ? [] : [{ tabId: 'tab', agent: target, stopRequested: true }] } }
+    if (method === 'GET') return { status: 200, body: { data: { state: { agents: [target], conversations: [] } } } }
+    acknowledgements++; removed = true
+    return { status: 200, body: { data: {} } }
+  }
+  await host.tick()
+  await vi.waitFor(() => expect(acknowledgements).toBe(1))
+  expect(closed).toBe(true)
+  expect(t.core.turns.deliver).not.toHaveBeenCalled()
+  await host.tick()
+  expect(retainedHarnesses(t.dir).size).toBe(0)
+  expect(acknowledgements).toBe(1)
+})
+
+it('closes the session of a worker whose assignment the Lead cancelled', async () => {
+  const t = setup(), host = t.open()
+  vi.mocked(t.core.agents.byAgent).mockReturnValue({ agentId: 'harness', sessionId: 'native', registeredAt: 0, startedBy: 'agent' } as never)
+  let closed = false, removed = false
+  const target = { id: 'agent', harnessId: 'harness', machineId: 'machine-1', workDecision: 'stop', startedSession: { creationId: 'super-original-creation', sessionId: 'native', createdAt: new Date(0).toISOString() } }
+  t.core.agents.stopped = async () => closed
+  t.core.agents.closeSwarm = async () => { closed = true; return { closed: true } }
+  t.core.account.backend = async (method, path, body) => {
+    if ((body as any)?.command?.type === 'agent.stopLease') return { status: 200, body: { data: { result: { expiresAt: Date.now() + 3_600_000, durationMs: 120_000 } } } }
+    if (path.includes('/hosts/')) return { status: 200, body: { data: removed ? [] : [{ tabId: 'tab', agent: target, stopRequested: true }] } }
+    if (method === 'GET') return { status: 200, body: { data: { state: { agents: [target], conversations: [{ id: 'g', assignment: { id: 'a', agentId: 'agent', status: 'cancelled' } }] } } } }
+    removed = true
+    return { status: 200, body: { data: {} } }
+  }
+  await host.tick()
+  await vi.waitFor(() => expect(removed).toBe(true))
+  expect(closed).toBe(true)
+})
+
+it.each(['active', 'foreign', 'changed', 'missing', 'refused', 'unconfirmed', 'unsupported'])('withholds closure or acknowledgement when stop safety is %s', async kind => {
+  const t = setup(), host = t.open()
+  vi.mocked(t.core.agents.byAgent).mockReturnValue({ agentId: 'harness', sessionId: 'native', registeredAt: 0, startedBy: 'agent' } as never)
+  const target = { id: 'agent', harnessId: 'harness', machineId: 'machine-1', workDecision: 'stop', releaseId: 'release-1', startedSession: { creationId: 'super-original-creation', sessionId: 'native', createdAt: new Date(0).toISOString() } }
+  const close = vi.fn(async () => kind === 'refused' ? { error: 'NOT_SWARM_STARTED' } : kind === 'unconfirmed' ? { deferred: true as const } : { closed: true as const })
+  const acknowledge = vi.fn()
+  t.core.agents.closeSwarm = kind === 'unsupported' ? undefined : close
+  t.core.agents.stopped = async () => false
+  t.core.account.backend = async (method, path, body) => {
+    if ((body as any)?.command?.type === 'agent.stopLease') return { status: 200, body: { data: { result: { expiresAt: Date.now() + 3_600_000, durationMs: 120_000 } } } }
+    if (path.includes('/hosts/')) return { status: 200, body: { data: [{ tabId: 'tab', agent: target, stopRequested: true }] } }
+    if (method === 'GET') return { status: 200, body: { data: { state: {
+      agents: kind === 'missing' ? [] : [{ ...target, machineId: kind === 'foreign' ? 'foreign' : target.machineId, releaseId: kind === 'changed' ? 'release-2' : 'release-1' }],
+      conversations: [{ assignment: { agentId: 'agent', status: kind === 'active' ? 'working' : 'done' } }],
+    } } } }
+    acknowledge(); return { status: 200, body: { data: {} } }
+  }
+  await host.tick()
+  // Finish the asynchronous lifecycle pickup without relying on the delivery poll to wait on it.
+  await new Promise(resolve => setTimeout(resolve, 20))
+  expect(acknowledge).not.toHaveBeenCalled()
+  if (['active', 'foreign', 'changed', 'missing', 'unsupported'].includes(kind)) expect(close).not.toHaveBeenCalled()
+  else expect(close).toHaveBeenCalledOnce()
+  expect(t.core.turns.deliver).not.toHaveBeenCalled()
+})
+
+it('retries a lost removal acknowledgement from native stopped evidence without closing twice', async () => {
+  const t = setup(), host = t.open()
+  vi.mocked(t.core.agents.byAgent).mockReturnValue({ agentId: 'harness', sessionId: 'native', registeredAt: 0, startedBy: 'agent' } as never)
+  const target = { id: 'agent', harnessId: 'harness', machineId: 'machine-1', workDecision: 'stop', startedSession: { creationId: 'super-original-creation', sessionId: 'native', createdAt: new Date(0).toISOString() } }
+  let stopped = false, attempts = 0
+  const close = vi.fn()
+  t.core.agents.closeSwarm = async () => { if (!stopped) { close(); stopped = true }; return { closed: true } }
+  t.core.agents.stopped = async () => stopped
+  t.core.account.backend = async (method, path, body) => {
+    if ((body as any)?.command?.type === 'agent.stopLease') return { status: 200, body: { data: { result: { expiresAt: Date.now() + 3_600_000, durationMs: 120_000 } } } }
+    if (path.includes('/hosts/')) return { status: 200, body: { data: [{ tabId: 'tab', agent: target, stopRequested: true }] } }
+    if (method === 'GET') return { status: 200, body: { data: { state: { agents: [target], conversations: [] } } } }
+    attempts++
+    if (attempts === 1) throw new Error('Lost acknowledgement')
+    return { status: 200, body: { data: {} } }
+  }
+  await host.tick(); await vi.waitFor(() => expect(attempts).toBe(1))
+  t.wait(5_000); await host.tick(); await vi.waitFor(() => expect(attempts).toBe(2))
+  expect(close).toHaveBeenCalledOnce()
+})
+
+
+function releaseFixture(nativeKind = 'swarm', result: Record<string, unknown> = { error: 'NOT_SWARM_STARTED' }, extra: Record<string, unknown> = {}) {
+  const t = setup(), host = t.open()
+  const identity = { creationId: 'super-original-creation', sessionId: 'native', createdAt: new Date(0).toISOString() }
+  const target = { id: 'agent', harnessId: 'harness', machineId: 'machine-1', workDecision: 'stop', releaseId: 'release-1', name: 'Permission builder',
+    ...(['missing-record', 'legacy', 'legacy-personal'].includes(nativeKind) ? {} : { startedSession: identity }) }
+  const native = { agentId: 'harness', sessionId: nativeKind === 'changed' ? 'replacement' : 'native', registeredAt: 0, boundAt: 3_000 as number | null,
+    startedBy: ['personal', 'legacy-personal'].includes(nativeKind) ? undefined : 'agent', processIdentity: { pid: 1, startMarker: 'first', executable: 'codex' } }
+  const lookup = vi.fn(async () => ({ creationId: identity.creationId, state: 'created' as const, agentId: 'harness' }))
+  const close = vi.fn(async () => result), lease = vi.fn(), remove = vi.fn(), sent = vi.fn()
+  t.core.agents.byAgent = vi.fn(() => native as never)
+  t.core.agents.creationStatus = lookup
+  t.core.agents.closeSwarm = close as NonNullable<CoreApi['agents']['closeSwarm']>
+  t.core.account.backend = async (method, path, body) => {
+    const command = (body as any)?.command
+    if (command?.type === 'agent.stopLease') { lease(); return { status: 200, body: { data: { result: { durationMs: 120_000 } } } } }
+    if (command?.type === 'agent.remove') { remove(); return { status: 200, body: { data: {} } } }
+    if (command?.type === 'message.send') { sent(body); return { status: 200, body: { data: {} } } }
+    if (path.includes('/hosts/')) return { status: 200, body: { data: [{ tabId: 'tab', agent: target, stopRequested: true }] } }
+    return { status: 200, body: { data: { state: { agents: [target], conversations: [], ...extra } } } }
+  }
+  const poll = async (advance = 0) => { t.wait(advance); await host.tick(); await new Promise(resolve => setImmediate(resolve)) }
+  return { ...t, host, target, native, lookup, close, lease, remove, sent, poll }
+}
+
+// On 2026-10-23 a worker its machine's restart had stopped, reopened on the same conversation, could no longer be stopped by
+// the Swarm ("not started by the Swarm"): the reopen marks the row resume-only, though it is still the Swarm's session.
+it('stops a Swarm worker reopened after a restart on the conversation the Swarm started', async () => {
+  const t = releaseFixture('swarm', { closed: true })
+  Object.assign(t.native, { resumeOnly: true })
+  await t.poll()
+  await vi.waitFor(() => expect(t.remove).toHaveBeenCalledOnce())
+  expect(t.close).toHaveBeenCalledWith(expect.objectContaining({ agentId: 'harness', creationId: 'super-original-creation', sessionId: 'native' }))
+})
+
+it('still refuses, as changed, a reopened worker that now runs another conversation', async () => {
+  const t = releaseFixture('changed', { closed: true })
+  Object.assign(t.native, { resumeOnly: true })
+  for (let i = 0; i < 3; i++) await t.poll(130_000)
+  expect(t.close).not.toHaveBeenCalled()
+  expect(t.remove).not.toHaveBeenCalled()
+})
+
+// A Swarm start before #1527 left only its start record and the native creation receipt (super-<startId>).
+const group = { id: 'group', leadId: 'lead', agentIds: ['lead', 'agent'], assignment: { agentId: 'agent', status: 'done' } }
+const legacyStarts = { starts: [{ id: 'start-1', creationId: 'super-start-1', harnessId: 'harness', request: { machineId: 'machine-1', name: 'Permission builder' }, error: null }] }
+
+it('closes a worker a pre-#1527 Swarm start launched, proven by its start record and creation receipt', async () => {
+  const t = releaseFixture('legacy', { closed: true }, legacyStarts)
+  t.lookup.mockResolvedValue({ creationId: 'super-start-1', state: 'created', agentId: 'harness' })
+  await t.poll()
+  await vi.waitFor(() => expect(t.remove).toHaveBeenCalledOnce())
+  expect(t.lookup).toHaveBeenCalledWith('super-start-1')
+  expect(t.close).toHaveBeenCalledWith(expect.objectContaining({ agentId: 'harness', creationId: 'super-start-1', sessionId: 'native', createdAt: new Date(0).toISOString() }))
+  expect(t.sent).not.toHaveBeenCalled()
+})
+
+it.each([
+  ['a person started it', 'legacy-personal', legacyStarts],
+  ['no start record names it', 'legacy', { starts: [{ ...legacyStarts.starts[0], harnessId: 'another-harness' }] }],
+  ['its start record is for another machine', 'legacy', { starts: [{ ...legacyStarts.starts[0], request: { machineId: 'machine-2' } }] }],
+  ['its start failed', 'legacy', { starts: [{ ...legacyStarts.starts[0], error: 'Native creation failed.' }] }],
+  ['its creation id is not the start\'s', 'legacy', { starts: [{ ...legacyStarts.starts[0], creationId: 'person-made-creation' }] }],
+])('never closes a similarly named worker when %s', async (_why, kind, extra) => {
+  const t = releaseFixture(kind, { closed: true }, extra)
+  for (let i = 0; i < 10; i++) await t.poll(130_000)
+  expect(t.lease).not.toHaveBeenCalled()
+  expect(t.close).not.toHaveBeenCalled()
+  expect(t.remove).not.toHaveBeenCalled()
+})
+
+it.each([['/clear', 3_600_000], ['an unknown bind', null], ['a bind before launch', -1]])('refuses, as changed, a pre-#1527 worker whose session moved on (%s)', async (_why, boundAt) => {
+  const t = releaseFixture('legacy', { closed: true }, { ...legacyStarts, conversations: [group] })
+  t.native.boundAt = boundAt
+  for (let i = 0; i < 10; i++) await t.poll(130_000)
+  expect(t.lease).not.toHaveBeenCalled()
+  expect(t.close).not.toHaveBeenCalled()
+  expect(t.sent).toHaveBeenCalledOnce()
+  expect(t.sent).toHaveBeenCalledWith(expect.objectContaining({ command: expect.objectContaining({ text: expect.stringContaining('it now runs a different session than the one the Swarm started') }) }))
+})
+
+it('retries a pre-#1527 stop while its creation receipt is still pending, then closes it', async () => {
+  const t = releaseFixture('legacy', { closed: true }, { ...legacyStarts, conversations: [group] })
+  t.lookup.mockResolvedValue({ creationId: 'super-start-1', state: 'pending' } as never)
+  await t.poll()
+  expect(t.lookup).toHaveBeenCalledOnce()
+  expect(t.lease).not.toHaveBeenCalled()
+  t.lookup.mockResolvedValue({ creationId: 'super-start-1', state: 'created', agentId: 'harness' })
+  await t.poll(5_000)
+  await vi.waitFor(() => expect(t.remove).toHaveBeenCalledOnce())
+  expect(t.lease).toHaveBeenCalledOnce()
+  expect(t.sent).not.toHaveBeenCalled()
+})
+
+it('rejects a pre-#1527 start whose receipt names a different native harness', async () => {
+  const t = releaseFixture('legacy', { closed: true }, legacyStarts)
+  t.lookup.mockResolvedValue({ creationId: 'super-start-1', state: 'created', agentId: 'another-harness' })
+  for (let i = 0; i < 10; i++) await t.poll(130_000)
+  expect(t.lease).not.toHaveBeenCalled()
+  expect(t.close).not.toHaveBeenCalled()
+})
+
+it.each([
+  ['personal', {}, 'it was not started by the Swarm'],
+  ['changed', {}, 'it now runs a different session than the one the Swarm started'],
+  ['swarm', { error: 'NOT_SWARM_STARTED' }, 'it was not started by the Swarm'],
+  ['swarm', { error: 'AGENT_CHANGED' }, 'it now runs a different session than the one the Swarm started'],
+])('tells the Lead once when a %s stop is refused for good (%o)', async (kind, result, why) => {
+  const t = releaseFixture(kind, result, { conversations: [{ id: 'lead-only', leadId: null, agentIds: ['lead'] }, group] })
+  vi.mocked(t.core.machine.name).mockReturnValue('MacbookPro')
+  for (let i = 0; i < 10; i++) await t.poll(130_000)
+  expect(t.sent).toHaveBeenCalledOnce()
+  expect(t.sent).toHaveBeenCalledWith({ operationId: 'stop-refused-release-1', asAgentId: 'agent', command: { type: 'message.send', conversationId: 'group', replyTo: null,
+    recipientIds: ['lead'], text: `Could not stop Permission builder on MacbookPro: ${why}. Close it on that machine.` } })
+})
+
+it('tells the Lead nothing through an archived group, which would refuse the notice', async () => {
+  const t = releaseFixture('personal', {}, { conversations: [{ ...group, archived: true }] })
+  for (let i = 0; i < 3; i++) await t.poll(130_000)
+  expect(t.sent).not.toHaveBeenCalled()
+})
+
+it('says the session changed when one is back after the worker had closed', async () => {
+  const t = releaseFixture('swarm', { closed: true }, { conversations: [group] })
+  t.remove.mockImplementationOnce(() => { throw new Error('Lost acknowledgement') })
+  await t.poll()
+  t.close.mockResolvedValue({ error: 'NOT_SWARM_STARTED' })
+  await t.poll(5_000)
+  await vi.waitFor(() => expect(t.sent).toHaveBeenCalledWith(expect.objectContaining({ command: expect.objectContaining({ text: expect.stringContaining('it now runs a different session') }) })))
+})
+
+it('tells no one of a transient close failure, and logs a notice that cannot be sent', async () => {
+  const quiet = releaseFixture('swarm', { error: 'SERVICE_UNAVAILABLE' }, { conversations: [group] })
+  for (let i = 0; i < 10; i++) await quiet.poll(130_000)
+  expect(quiet.sent).not.toHaveBeenCalled()
+  const lost = releaseFixture('personal', {}, { conversations: [group] })
+  lost.sent.mockImplementation(() => { throw new Error('Backend unavailable') })
+  await lost.poll()
+  await vi.waitFor(() => expect(lost.log).toHaveBeenCalledWith('Backend unavailable'))
+})
+
+it('names the worker by its member name, else plainly, and sends nothing without a Lead in its group', async () => {
+  const named = releaseFixture('personal', {}, { conversations: [group] })
+  Object.assign(named.target, { displayName: 'Wren' })
+  await named.poll()
+  await vi.waitFor(() => expect(named.sent).toHaveBeenCalledWith(expect.objectContaining({ command: expect.objectContaining({ text: expect.stringContaining('Could not stop Wren on') }) })))
+  const unnamed = releaseFixture('personal', {}, { conversations: [group] })
+  Reflect.deleteProperty(unnamed.target, 'name')
+  await unnamed.poll()
+  await vi.waitFor(() => expect(unnamed.sent).toHaveBeenCalledWith(expect.objectContaining({ command: expect.objectContaining({ text: expect.stringContaining('Could not stop this worker on') }) })))
+  const leaderless = releaseFixture('personal', {}, { conversations: [{ ...group, leadId: null }, { ...group, id: 'gone', agentIds: ['agent'] }] })
+  for (let i = 0; i < 3; i++) await leaderless.poll(130_000)
+  expect(leaderless.sent).not.toHaveBeenCalled()
+  expect(leaderless.log).toHaveBeenCalledWith(expect.stringContaining('not the original Swarm launch'))
+})
+
+it.each(['personal', 'missing-record', 'changed'])('requests no close lease for an ineligible %s runtime', async kind => {
+  const t = releaseFixture(kind)
+  for (let i = 0; i < 10; i++) await t.poll(1_000)
+  expect(t.lease).not.toHaveBeenCalled()
+  expect(t.close).not.toHaveBeenCalled()
+})
+
+it('never acquires a lease for a creation receipt naming a different native harness', async () => {
+  const t = releaseFixture()
+  t.lookup.mockResolvedValue({ creationId: 'super-original-creation', state: 'created', agentId: 'another-harness' })
+  for (let i = 0; i < 10; i++) await t.poll(130_000)
+  expect(t.lease).not.toHaveBeenCalled()
+})
+
+it.each(['NOT_SWARM_STARTED', 'AGENT_CHANGED'])('does not keep leasing a runtime refused as %s; still clears it once gone', async error => {
+  const t = releaseFixture('swarm', { error })
+  for (let i = 0; i < 10; i++) await t.poll(130_000)
+  expect(t.lease).toHaveBeenCalledTimes(1)
+  expect(t.close).toHaveBeenCalledTimes(1)
+  vi.mocked(t.core.agents.byAgent).mockReturnValue(undefined)
+  t.close.mockResolvedValue({ closed: true })
+  await t.poll()
+  expect(t.remove).toHaveBeenCalledOnce()
+  expect(t.lease).toHaveBeenCalledTimes(1)
+})
+
+it('backs off transient close failures and caps retries for the same runtime', async () => {
+  const t = releaseFixture('swarm', { error: 'SERVICE_UNAVAILABLE' })
+  await t.poll()
+  for (let i = 0; i < 4; i++) await t.poll(1_000)
+  expect(t.lease).toHaveBeenCalledTimes(1)
+  await t.poll(1_000)
+  expect(t.lease).toHaveBeenCalledTimes(2)
+  await t.poll(14_000)
+  expect(t.lease).toHaveBeenCalledTimes(2)
+  await t.poll(1_000)
+  expect(t.lease).toHaveBeenCalledTimes(3)
+  for (let i = 0; i < 10; i++) await t.poll(130_000)
+  expect(t.lease).toHaveBeenCalledTimes(5)
+  t.native.processIdentity.startMarker = 'new-runtime'
+  await t.poll()
+  expect(t.lease).toHaveBeenCalledTimes(6)
+})
+
+
+it('backs off unavailable launch-receipt reads without writing any close leases', async () => {
+  const t = releaseFixture()
+  t.lookup.mockRejectedValue(new Error('Core temporarily unavailable'))
+  for (let i = 0; i < 10; i++) await t.poll(130_000)
+  expect(t.lookup).toHaveBeenCalledTimes(5)
+  expect(t.lease).not.toHaveBeenCalled()
+})
+
+it('rechecks authoritative native absence before retrying a lost acknowledgement', async () => {
+  const t = releaseFixture('swarm', { closed: true })
+  t.remove.mockImplementationOnce(() => { throw new Error('Lost acknowledgement') })
+  await t.poll()
+  t.close.mockResolvedValue({ error: 'NOT_SWARM_STARTED' })
+  await t.poll(5_000)
+  await t.poll(130_000)
+  expect(t.lease).toHaveBeenCalledOnce()
+  expect(t.remove).toHaveBeenCalledOnce()
+  expect(t.close).toHaveBeenLastCalledWith({ agentId: 'harness' })
+})
+
+describe('a Lead\'s terminal requests', () => {
+  it('asks for its agents\' terminal requests with each roster read, and answers a screen read as the agent', async () => {
+    const t = setup()
+    Object.assign(t.core, { superTabs: { attention: vi.fn(), cards: vi.fn(), cardRecap: vi.fn(), shareObservers: vi.fn(), input: vi.fn(),
+      screen: vi.fn(async () => ({ ok: true as const, text: 'Allow? 1. Yes', hold: null })) } })
+    const roster = vi.mocked(t.call).getMockImplementation()!
+    vi.mocked(t.call).mockImplementation(async (method, path, body) => path === '/api/super-tabs/hosts/machine-1/terminal'
+      ? { status: 200, body: { success: true, data: [{ tabId: 'tab', agentId: 'agent', harnessId: 'harness', request: { id: 'r1', kind: 'screen' } }] } }
+      : roster(method, path, body))
+    await t.open().tick()
+    await vi.waitFor(() => expect(t.call).toHaveBeenCalledWith('POST', '/api/super-tabs/tab/commands',
+      { operationId: 'terminal-r1', asAgentId: 'agent', command: { type: 'agent.screenResult', requestId: 'r1', ok: true, text: 'Allow? 1. Yes' } }))
+  })
+})
+
+describe('the members a host lets watch its agents', () => {
+  it('keeps them watching through a 3 s roster read, wakes Share once, and lets a removed member go at once', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'super-tab-host-')); roots.push(dir)
+    const member = { tabId: 'tab', agent: { id: 'agent', harnessId: 'harness', machineId: 'machine-1', name: 'River' },
+      observers: [{ email: 'peer@example.com', userId: 'peer' }] }
+    let rows: unknown[] = [member], clock = 0, answer: (() => void) | null = null
+    const call: CoreApi['account']['backend'] = vi.fn(async (_method, path) => {
+      // The roster read takes 3 s when asked to (seen up to 2.8 s, 2026-10-23); everything else answers at once.
+      if (path.includes('/hosts/') && answer === null) await new Promise<void>(resolve => { answer = resolve })
+      return { status: 200, body: { success: true, data: path.includes('/hosts/') ? rows : [] } }
+    })
+    const superTabs = { attention: vi.fn(), cards: vi.fn(), cardRecap: vi.fn(), shareObservers: vi.fn(), screen: vi.fn(), input: vi.fn() }
+    const core = fakeCore({ dataDir: dir, superTabs, account: { backend: call },
+      agents: { byAgent: vi.fn(() => ({ agentId: 'harness' }) as never), terminalAvailable: vi.fn(() => true) } })
+    const host = new SuperTabHost(core, 'machine-1', { log: vi.fn(), now: () => clock }); hosts.push(host)
+    const source = observerSource(dir, () => 'machine-1', () => clock)
+    const peer = { tab: 'super:tab', agentId: 'harness', recipientEmail: 'peer@example.com' } as never
+    const read = async () => { const reading = host.tick(); await vi.waitFor(() => expect(answer).not.toBeNull()); answer!(); await reading; answer = null }
+    await read()
+    expect(source.allows(peer)).toBe(true)
+    // The next read is asked a second later and answers 3 s after that: the roster in force never lapses meanwhile.
+    for (let i = 0; i < 4; i++) {
+      clock += 1_000
+      const reading = host.tick()
+      await vi.waitFor(() => expect(answer).not.toBeNull())
+      clock += 3_000
+      expect(source.allows(peer)).toBe(true)
+      expect(source.known()).toHaveLength(1)
+      answer!(); await reading; answer = null
+    }
+    expect(superTabs.shareObservers).toHaveBeenCalledOnce()
+    // Removed from the Swarm: the very next answer takes the view away and tells Share everyone left.
+    rows = []
+    clock += 1_000; await read(); clock += 201
+    expect(source.allows(peer)).toBe(false)
+    expect(source.known()).toEqual([])
+    // A host that stops publishes nobody, in force: Share withdraws the invitations rather than keeping them.
+    rows = [member]
+    clock += 1_000; await read(); clock += 201
+    expect(source.known()).toHaveLength(1)
+    host.stop(); clock += 201
+    expect(source.known()).toEqual([])
+    expect(superTabs.shareObservers).toHaveBeenCalledOnce()
+  })
+})
+
+describe('adding the machine its own Lead runs on to the Swarm', () => {
+  function joining() {
+    const dir = mkdtempSync(join(tmpdir(), 'super-tab-join-')); roots.push(dir)
+    const agent = { id: 'lead', harnessId: 'harness', machineId: 'machine-1' }
+    const rows = [{ tabId: 'own', joinSwarm: true, agent }, { tabId: 'other', joinSwarm: false, agent }, { tabId: 'old', agent }]
+    const commands: unknown[] = [], refusals: string[] = []
+    let clock = 0
+    const call: CoreApi['account']['backend'] = vi.fn(async (method, path, body) => {
+      if (path.endsWith('/commands')) {
+        commands.push({ path, ...(body as object) })
+        const code = refusals.shift()
+        if (code) return { status: 409, body: { success: false, error: { code, message: `Refused: ${code}` } } }
+        return { status: 200, body: { success: true, data: {} } }
+      }
+      return { status: 200, body: { success: true, data: path.includes('/hosts/') ? rows : [] } }
+    })
+    const core = fakeCore({ dataDir: dir, account: { backend: call, machineName: vi.fn(() => 'Ken Mac') } })
+    const prepare = vi.fn(async () => ({ ok: true, state: 'ready', cwd: '/data/swarm-projects/own', engines: ['claude', 'codex'], maxAgents: 3, scope: 'swarm' }))
+    const log = vi.fn()
+    const host = new SuperTabHost(core, 'machine-1', { log, now: () => clock, prepareContribution: prepare }); hosts.push(host)
+    /** One roster pass at `at` ms, waiting for the add it may start to finish. */
+    const pass = async (at: number) => {
+      clock = at
+      const tries = prepare.mock.calls.length, heard = commands.length + log.mock.calls.length
+      await host.tick()
+      if (prepare.mock.calls.length > tries) await vi.waitFor(() => expect(commands.length + log.mock.calls.length).toBeGreaterThan(heard))
+    }
+    return { core, rows, commands, refusals, prepare, log, pass }
+  }
+
+  it('adds it once with the prepared slots and leaves unmarked Swarms alone', async () => {
+    const t = joining()
+    await t.pass(0)
+    expect(t.prepare).toHaveBeenCalledExactlyOnceWith(t.core, { tabId: 'own', scope: 'swarm' })
+    expect(t.commands).toEqual([{ path: '/api/super-tabs/own/commands', operationId: expect.any(String), command: { type: 'machine.contribute',
+      machineId: 'machine-1', name: 'Ken Mac', cwd: '/data/swarm-projects/own', scope: 'swarm', engines: ['claude', 'codex'], maxAgents: 3, ifMissing: true } }])
+    await t.pass(59_000)
+    t.rows[0]!.joinSwarm = false
+    await t.pass(120_000)
+    expect(t.prepare).toHaveBeenCalledTimes(1)
+  })
+
+  it('backs off a refusal, doubling up to half an hour, and starts over after an add', async () => {
+    const t = joining()
+    t.refusals.push(...Array(7).fill('STARTS_PENDING'))
+    let at = 0
+    const retriesAfter = async (wait: number) => {
+      const tries = t.prepare.mock.calls.length
+      await t.pass(at + wait - 1)
+      expect(t.prepare).toHaveBeenCalledTimes(tries)
+      await t.pass(at += wait)
+      expect(t.prepare).toHaveBeenCalledTimes(tries + 1)
+    }
+    await t.pass(at)
+    // Seven refusals; the eighth try adds the machine.
+    for (const wait of [60_000, 120_000, 240_000, 480_000, 960_000, 1_800_000, 1_800_000]) await retriesAfter(wait)
+    expect(t.commands).toHaveLength(8)
+    t.refusals.push('STARTS_PENDING')
+    await retriesAfter(60_000)
+    await retriesAfter(60_000)
+    expect(t.log).toHaveBeenCalledWith('Could not add this machine to its Swarm: Refused: STARTS_PENDING')
+  })
+
+  it.each(['MACHINES_FULL', 'OWNER_REQUIRED'])('stops after %s until the roster stops asking', async code => {
+    const t = joining()
+    t.refusals.push(code)
+    await t.pass(0)
+    await t.pass(24 * 60 * 60_000)
+    expect(t.prepare).toHaveBeenCalledTimes(1)
+    t.rows[0]!.joinSwarm = false
+    await t.pass(24 * 60 * 60_000 + 1)
+    t.rows[0]!.joinSwarm = true
+    await t.pass(24 * 60 * 60_000 + 2)
+    expect(t.prepare).toHaveBeenCalledTimes(2)
+  })
+})
+
+// One machine (docs/plans/2026-10-24-swarm-team-account.md): this Mac's Harness Team account is this Mac under the scenes.
+// Where its owner added this Mac, the roster names the team account still missing (backend store.ts hostTabs `joinTeam`);
+// the team account prepares its own workspace, asked through the relay, and this host adds it as the person.
+describe('adding this Mac\'s Harness Team account where this Mac was added', () => {
+  function joining() {
+    const dir = mkdtempSync(join(tmpdir(), 'super-tab-team-join-')); roots.push(dir)
+    const rows: Record<string, unknown>[] = [{ tabId: 'own', joinTeam: { machineId: 'team-1', name: 'MacBook Pro', maxAgents: 4 } }, { tabId: 'other', joinTeam: {} }]
+    const commands: unknown[] = [], refusals: string[] = []
+    let clock = 0
+    const call: CoreApi['account']['backend'] = vi.fn(async (method, path, body) => {
+      if (path.endsWith('/commands')) {
+        commands.push({ path, ...(body as object) })
+        const code = refusals.shift()
+        if (code) return { status: 409, body: { success: false, error: { code, message: `Refused: ${code}` } } }
+        return { status: 200, body: { success: true, data: {} } }
+      }
+      return { status: 200, body: { success: true, data: path.includes('/hosts/') ? rows : [] } }
+    })
+    const core = fakeCore({ dataDir: dir, account: { backend: call, machineName: vi.fn(() => 'MacBook Pro') } })
+    const prepareTeam = vi.fn(async () => ({ ok: true, state: 'ready', cwd: '/Users/harnessteam/harnesses/swarms/own', engines: ['claude'], maxAgents: 8, scope: 'swarm' }))
+    const prepare = vi.fn()
+    const log = vi.fn()
+    const host = new SuperTabHost(core, 'machine-1', { log, now: () => clock, prepareContribution: prepare as never, prepareTeam }); hosts.push(host)
+    const pass = async (at: number) => {
+      clock = at
+      const tries = prepareTeam.mock.calls.length, heard = commands.length + log.mock.calls.length
+      await host.tick()
+      if (prepareTeam.mock.calls.length > tries) await vi.waitFor(() => expect(commands.length + log.mock.calls.length).toBeGreaterThan(heard))
+    }
+    return { core, rows, commands, refusals, prepareTeam, prepare, log, pass }
+  }
+
+  it('adds it once, prepared by its own daemon, with this Mac\'s name and slots', async () => {
+    const t = joining()
+    await t.pass(0)
+    expect(t.prepareTeam).toHaveBeenCalledExactlyOnceWith(t.core, { tabId: 'own', machineId: 'team-1' })
+    expect(t.prepare).not.toHaveBeenCalled()
+    expect(t.commands).toEqual([{ path: '/api/super-tabs/own/commands', operationId: expect.any(String), command: { type: 'machine.contribute',
+      machineId: 'team-1', name: 'MacBook Pro', cwd: '/Users/harnessteam/harnesses/swarms/own', scope: 'swarm', engines: ['claude'], maxAgents: 4, ifMissing: true } }])
+    t.rows.splice(0, 1)
+    await t.pass(120_000)
+    expect(t.prepareTeam).toHaveBeenCalledTimes(1)
+  })
+
+  it('backs off while the team account cannot prepare (offline, signed out), and says why', async () => {
+    const t = joining()
+    t.prepareTeam.mockRejectedValueOnce(new Error('That machine is not reachable now.'))
+    await t.pass(0)
+    expect(t.commands).toEqual([])
+    expect(t.log).toHaveBeenCalledWith('Could not add this Mac\'s Harness Team account to its Swarm: That machine is not reachable now.')
+    await t.pass(59_000)
+    expect(t.prepareTeam).toHaveBeenCalledTimes(1)
+    await t.pass(60_000)
+    expect(t.prepareTeam).toHaveBeenCalledTimes(2)
+    expect(t.commands).toHaveLength(1)
+  })
+})
+
+describe('built-in skill text after a CLI update', () => {
+  const older = '---\nname: swarm-dev\n---\nAn older release of this skill.\n'
+  function syncFixture(stale = true, mode?: 'default' | 'orchestration') {
+    let skillMode = mode
+    const t = setup(), workspace = mkdtempSync(join(tmpdir(), 'super-tab-skills-')); roots.push(workspace)
+    const roles = { lead: 'lead', builder: 'dev', reviewer: 'review' } as const
+    const sessions = Object.fromEntries([...Object.entries(roles).map(([name, role]) => [`h-${name}`,
+      { agentId: `h-${name}`, cwd: workspace, swarmSkill: { role, key: `key-${name}` } }]),
+      ['h-personal', { agentId: 'h-personal', cwd: workspace }]])
+    const files = Object.fromEntries(Object.entries(roles).map(([name, role]) => {
+      const { file } = prepareSwarmSkill(workspace, { role, key: `key-${name}`, ...(mode ? { mode } : {}) })
+      // What an older CLI left: its own text and no record of which text it was.
+      if (stale) { writeFileSync(file, older); rmSync(join(dirname(file), 'version.json')) }
+      return [name, file]
+    }))
+    const agents = [...Object.keys(roles), 'personal'].map(name => ({ id: `a-${name}`, harnessId: `h-${name}`, machineId: 'machine-1' }))
+    let groups: Array<Record<string, unknown>> = [
+      { id: 'lead-group', leadId: 'a-lead', agentIds: ['a-lead', 'a-builder', 'a-reviewer'] },
+      { id: 'work', leadId: 'a-lead', agentIds: ['a-lead', 'a-builder'], assignment: { agentId: 'a-builder', status: 'working' } },
+    ]
+    const sent: Array<{ operationId: string; asAgentId: string; command: Record<string, any> }> = []
+    const receipts = new Map<string, string>()
+    /** On Custom, each agent's roster role (absent on a built-in set), and the role texts the backend serves. */
+    const rowRoles: Record<string, unknown> = {}
+    const texts: Record<string, { version: string; text: string }> = {}
+    const fetched: string[] = []
+    /** Backend calls held until the test releases them: the roster may change while the refresh waits on one. */
+    const holds: Array<{ match: (path: string, body: any) => boolean; until: Promise<void> }> = []
+    let inFlight = 0
+    /** A notice the backend refuses (an older backend, an outage), and every refused request. */
+    let refuse: ((request: any) => { status: number; body: Record<string, unknown> } | undefined) | undefined
+    const refused: Array<{ operationId: string; command: Record<string, any> }> = []
+    t.core.agents.byAgent = vi.fn(id => sessions[id] as never)
+    t.core.agents.terminalAvailable = vi.fn(() => true)
+    t.core.account.backend = vi.fn(async (method, path, body) => {
+      const held = holds.findIndex(h => h.match(path, body))
+      if (held >= 0) await holds.splice(held, 1)[0]!.until
+      inFlight++
+      await Promise.resolve()
+      inFlight--
+      const request = body as any
+      if (path.includes('/hosts/')) return { status: 200, body: { data: agents.map(agent => ({ tabId: 'tab', agent, ...(skillMode ? { skillMode } : {}),
+        ...(agent.id in rowRoles ? { role: rowRoles[agent.id] } : {}) })) } }
+      const role = /^\/api\/super-tabs\/tab\/projects\/pilot\/roles\/([a-z0-9]+)$/.exec(path)?.[1]
+      if (role) {
+        fetched.push(role)
+        return texts[role] ? { status: 200, body: { data: texts[role] } } : { status: 404, body: { success: false, error: { code: 'NOT_FOUND', message: 'This role is unavailable.' } } }
+      }
+      if (path.endsWith('/deliveries')) return { status: 200, body: { data: [] } }
+      const refusal = request?.command?.type === 'message.send' ? refuse?.(request) : undefined
+      if (refusal) { refused.push(request); return refusal }
+      if (request?.command?.type === 'message.send') {
+        // As the backend does: a repeated operation gets its first receipt; the same id for a different request is refused.
+        const prior = receipts.get(request.operationId), same = JSON.stringify(request.command)
+        if (prior !== undefined && prior !== same) return { status: 409, body: { success: false, error: { code: 'OPERATION_REUSED', message: 'Use a new operation ID for a different request.' } } }
+        if (prior === undefined) { receipts.set(request.operationId, same); sent.push(request) }
+        return { status: 200, body: { data: {} } }
+      }
+      return { status: 200, body: { data: { state: { agents, conversations: groups } } } }
+    })
+    // The refresh runs beside the poll: wait until no backend call is in flight and the host's own work has had its turn.
+    const pass = async (host = t.open(), advance = 0) => {
+      t.wait(advance); await host.tick()
+      for (let idle = 0; idle < 3;) { await new Promise(resolve => setImmediate(resolve)); idle = inFlight ? 0 : idle + 1 }
+      return host
+    }
+    const holdNext = (match: (path: string, body: any) => boolean) => {
+      let release!: () => void
+      holds.push({ match, until: new Promise<void>(resolve => { release = resolve }) })
+      return release
+    }
+    return { t, files, sent, refused, pass, rowRoles, texts, fetched, holdNext, setRefuse: (next: typeof refuse) => { refuse = next }, setGroups: (next: typeof groups) => { groups = next }, setMode: (next: typeof mode) => { skillMode = next } }
+  }
+
+  // Custom roles and skills per project (spec 2026-10-23): on Custom the roster names each agent's role and its text's
+  // version, never the text; the host fetches the text only when that version changes, installs it as the skill of the
+  // agent's kind, and tells the agent as any skill update.
+  describe('a project on its Custom skills', () => {
+    const version = (text: string) => createHash('sha256').update(text).digest('hex').slice(0, 16)
+    const custom = (f: ReturnType<typeof syncFixture>, text: string, name = 'Planner') => {
+      f.texts.lead = { version: version(text), text }
+      f.rowRoles['a-lead'] = { id: 'lead', name, kind: 'lead', version: version(text), projectId: 'pilot' }
+    }
+    it('installs the Lead\'s role under swarm-lead, fetches its text once while the version holds, and tells it once', async () => {
+      const f = syncFixture(false, 'default')
+      custom(f, '---\nname: swarm-lead\n---\nPlan the work.\n')
+      const host = await f.pass()
+      expect(readFileSync(f.files.lead!, 'utf8')).toBe(`---\nname: swarm-lead\ndescription: "The Planner role of this project's Custom skills."\n---\nPlan the work.\n`)
+      expect(f.files.lead!.endsWith(join('swarm-lead', 'SKILL.md'))).toBe(true)
+      expect(f.sent.map(s => [s.asAgentId, s.command.text])).toEqual([['a-lead', expect.stringMatching(/^This project now uses its Custom skills, as Planner\./)]])
+      for (let i = 1; i <= 3; i++) await f.pass(host, i * 120_000)
+      expect(f.fetched).toEqual(['lead'])
+      expect(f.sent).toHaveLength(1)
+    })
+    it('fetches again when the version changes, overwrites the file and tells the agent to re-read it', async () => {
+      const f = syncFixture(false, 'default')
+      custom(f, 'Plan the work.\n')
+      const host = await f.pass()
+      custom(f, 'Plan the work, then ship it.\n')
+      await f.pass(host, 1_000)
+      expect(f.fetched).toEqual(['lead', 'lead'])
+      expect(readFileSync(f.files.lead!, 'utf8')).toMatch(/\n---\nPlan the work, then ship it\.\n$/)
+      expect(f.sent.map(s => s.command.text)).toEqual([expect.stringMatching(/^This project now uses its Custom skills/),
+        `The project owner updated your Planner role. Before your next step, read ${JSON.stringify(f.files.lead)} again with your file or shell tool and follow the new version.`])
+    })
+    it('renames the role in the file when the owner renames it, without fetching its unchanged text again', async () => {
+      const f = syncFixture(false, 'default')
+      custom(f, 'Plan the work.\n')
+      const host = await f.pass()
+      custom(f, 'Plan the work.\n', 'Coordinator')
+      await f.pass(host, 1_000)
+      expect(f.fetched).toEqual(['lead'])
+      expect(readFileSync(f.files.lead!, 'utf8')).toContain('description: "The Coordinator role of this project\'s Custom skills."')
+    })
+    it('keeps the file and installs nothing when the text read back is not the roster\'s version, and tries again later', async () => {
+      const f = syncFixture(false, 'default')
+      custom(f, 'Plan the work.\n')
+      f.texts.lead = { version: 'another-version0', text: 'Something else.\n' }
+      const before = readFileSync(f.files.lead!, 'utf8')
+      const host = await f.pass()
+      expect(readFileSync(f.files.lead!, 'utf8')).toBe(before)
+      expect(f.sent).toEqual([])
+      expect(f.t.log).toHaveBeenCalledWith(expect.stringContaining('Planner'))
+      custom(f, 'Plan the work.\n')
+      await f.pass(host, 60_000)
+      expect(readFileSync(f.files.lead!, 'utf8')).toMatch(/\nPlan the work\.\n$/)
+    })
+    // The review of #1660: a refresh works from the roster it started with, across its fetch and its notice. A role gone
+    // meanwhile must not get its old text installed, nor a re-read notice after the backend's role-gone one.
+    it.each([
+      ['its text is fetched', (path: string) => path.includes('/roles/'), false],
+      ['its notice is about to be sent', (path: string, body: any) => path.includes('?asAgentId=a-lead') && !body, true],
+    ])('drops a refresh whose role is gone while %s', async (_case, match, installed) => {
+      const f = syncFixture(false, 'default')
+      custom(f, 'Plan the work.\n')
+      const before = readFileSync(f.files.lead!, 'utf8')
+      const release = f.holdNext(match)
+      const host = f.t.open()
+      await host.tick()
+      await vi.waitFor(() => expect(vi.mocked(f.t.core.account.backend).mock.calls.some(([, path, body]) => match(path, body))).toBe(true))
+      f.rowRoles['a-lead'] = null
+      await host.tick()
+      release()
+      await f.pass(host, 1_000)
+      expect(f.sent).toEqual([])
+      expect(readFileSync(f.files.lead!, 'utf8') === before).toBe(!installed)
+      // The role back as it was: installed and told after all.
+      custom(f, 'Plan the work.\n')
+      await f.pass(host, 1_000)
+      expect(readFileSync(f.files.lead!, 'utf8')).toMatch(/\nPlan the work\.\n$/)
+      expect(f.sent).toHaveLength(1)
+    })
+    // Round 2 of that review: the roster that drops the role arrives while that poll's own delivery read stalls; the
+    // older refresh must already see it, not wait for the poll to finish.
+    it('drops a refresh whose role is gone in a roster whose poll is still reading deliveries', async () => {
+      const f = syncFixture(false, 'default')
+      custom(f, 'Plan the work.\n')
+      const before = readFileSync(f.files.lead!, 'utf8')
+      const fetch = f.holdNext(path => path.includes('/roles/'))
+      const host = f.t.open()
+      await host.tick()
+      await vi.waitFor(() => expect(vi.mocked(f.t.core.account.backend).mock.calls.some(([, path]) => path.includes('/roles/'))).toBe(true))
+      f.rowRoles['a-lead'] = null
+      const deliveries = f.holdNext(path => path.endsWith('/agents/a-lead/deliveries'))
+      const poll = host.tick()
+      await vi.waitFor(() => expect(vi.mocked(f.t.core.account.backend).mock.calls.filter(([, path]) => path.endsWith('/agents/a-lead/deliveries'))).toHaveLength(2))
+      fetch()
+      for (let i = 0; i < 20; i++) await new Promise(resolve => setImmediate(resolve))
+      expect(f.sent).toEqual([])
+      expect(readFileSync(f.files.lead!, 'utf8')).toBe(before)
+      deliveries()
+      await poll
+      await f.pass(host, 1_000)
+      expect(f.sent).toEqual([])
+    })
+    it('leaves an agent whose role is gone on its file, fetching and telling nothing: the backend tells it', async () => {
+      const f = syncFixture(false, 'default')
+      f.rowRoles['a-builder'] = null
+      const before = readFileSync(f.files.builder!, 'utf8')
+      await f.pass()
+      expect(readFileSync(f.files.builder!, 'utf8')).toBe(before)
+      expect(f.fetched).toEqual([])
+      expect(f.sent).toEqual([])
+    })
+  })
+
+  it('rewrites each running Lead, Builder and Reviewer skill once and tells each agent once, never a personal session', async () => {
+    const f = syncFixture()
+    const host = await f.pass()
+    for (const file of Object.values(f.files)) expect(readFileSync(file, 'utf8')).not.toBe(older)
+    expect(f.sent.map(s => [s.asAgentId, s.command.recipientIds, s.command.conversationId]).sort()).toEqual([
+      ['a-builder', ['a-builder'], 'work'], ['a-lead', ['a-lead'], 'lead-group'], ['a-reviewer', ['a-reviewer'], 'lead-group']])
+    for (const s of f.sent) expect(s.command.text).toContain(f.files[s.asAgentId.slice(2)]!)
+    // Only the agent sees its notice; no person reads it in a chat.
+    for (const s of f.sent) expect(s.command.agentOnly).toBe(true)
+    expect(f.sent.find(s => s.asAgentId === 'a-reviewer')!.command.text).toContain('swarm-review skill')
+    // A second pass and a restarted host find the files current and say nothing more.
+    await f.pass(host, 5_000)
+    await f.pass()
+    expect(f.sent).toHaveLength(3)
+  })
+
+  it('sends each notice the old way, once, when an older backend refuses the agent-only mark', async () => {
+    const f = syncFixture()
+    f.setRefuse(request => request.command.agentOnly ? { status: 400, body: { success: false,
+      error: { code: 'VALIDATION_ERROR', message: 'command: Unrecognized key: "agentOnly"' } } } : undefined)
+    const host = await f.pass()
+    expect(f.refused.map(r => r.operationId).sort()).toEqual(f.sent.map(s => s.operationId).sort())
+    expect(f.sent.map(s => [s.asAgentId, s.command.recipientIds, 'agentOnly' in s.command]).sort()).toEqual([
+      ['a-builder', ['a-builder'], false], ['a-lead', ['a-lead'], false], ['a-reviewer', ['a-reviewer'], false]])
+    await f.pass(host, 120_000)
+    expect(f.sent).toHaveLength(3)
+    expect(f.refused).toHaveLength(3)
+  })
+
+  it('never falls back to a visible notice on any other refusal, and retries later as before', async () => {
+    const f = syncFixture()
+    let reply = { status: 400, body: { success: false, error: { code: 'VALIDATION_ERROR', message: 'command.text: Too big' } } }
+    f.setRefuse(() => reply)
+    const host = await f.pass()
+    reply = { status: 503, body: { success: false, error: { code: 'BACKEND_UNAVAILABLE', message: 'agentOnly notice could not be stored' } } }
+    await f.pass(host, 60_000)
+    expect(f.sent).toEqual([])
+    expect(f.refused).toHaveLength(6)
+    expect(f.refused.every(r => r.command.agentOnly === true)).toBe(true)
+    f.setRefuse(undefined)
+    await f.pass(host, 60_000)
+    expect(f.sent.map(s => s.command.agentOnly)).toEqual([true, true, true])
+  })
+
+  it('records a notice that was sent before its record was lost, even after its group changed', async () => {
+    const f = syncFixture()
+    await f.pass()
+    const lead = join(dirname(f.files.lead!), 'version.json'), record = JSON.parse(readFileSync(lead, 'utf8'))
+    // The send succeeded, the record did not survive, and the Lead's group was archived meanwhile.
+    writeFileSync(lead, JSON.stringify({ ...record, notified: 'older', toldChange: undefined }))
+    f.setGroups([{ id: 'lead-group', archived: true, leadId: 'a-lead', agentIds: ['a-lead'] }, { id: 'next', leadId: 'a-lead', agentIds: ['a-lead'] }])
+    await f.pass()
+    expect(JSON.parse(readFileSync(lead, 'utf8'))).toMatchObject({ notified: record.notified, toldChange: record.toldChange })
+    expect(f.t.log).not.toHaveBeenCalled()
+    const calls = vi.mocked(f.t.core.account.backend).mock.calls.length
+    await f.pass()
+    expect(vi.mocked(f.t.core.account.backend).mock.calls.slice(calls).some(([, , body]) => (body as any)?.command?.type === 'message.send')).toBe(false)
+    expect(f.sent).toHaveLength(3)
+  })
+
+  it('moves running agents to the project\'s new mode at once, tells each once, and again when it switches back', async () => {
+    const f = syncFixture(false, 'default')
+    const defaults = Object.fromEntries(Object.entries(f.files).map(([name, file]) => [name, readFileSync(file, 'utf8')]))
+    // A new Default agent started with its mode's text: nothing to rewrite or tell.
+    const host = await f.pass()
+    expect(f.sent).toEqual([])
+    f.setMode('orchestration')
+    await f.pass(host, 1_000)
+    expect(f.sent.map(s => s.asAgentId).sort()).toEqual(['a-builder', 'a-lead', 'a-reviewer'])
+    for (const s of f.sent) expect(s.command.text).toBe(`This project now uses the Harness orchestration skills. Before your next step, read ${JSON.stringify(f.files[s.asAgentId.slice(2)])} again with your file or shell tool and follow it in place of your earlier swarm-${({ lead: 'lead', builder: 'dev', reviewer: 'review' } as Record<string, string>)[s.asAgentId.slice(2)]} skill.`)
+    expect(readFileSync(f.files.builder!, 'utf8')).toContain('No production code without a failing test first.')
+    await f.pass(host, 1_000)
+    expect(f.sent).toHaveLength(3)
+    f.setMode('default')
+    await f.pass(host, 1_000)
+    expect(f.sent).toHaveLength(6)
+    expect(new Set(f.sent.map(s => s.operationId)).size).toBe(6)
+    expect(f.sent.slice(3).every(s => s.command.text.startsWith('This project now uses the Default skills.'))).toBe(true)
+    for (const [name, file] of Object.entries(f.files)) expect(readFileSync(file, 'utf8')).toBe(defaults[name])
+    await f.pass(host, 1_000)
+    await f.pass()
+    expect(f.sent).toHaveLength(6)
+  })
+
+  it('reads a roster row without a mode, or with one it does not know, as Harness orchestration', async () => {
+    const f = syncFixture(false, 'default')
+    f.setMode(undefined)
+    await f.pass()
+    expect(f.sent.map(s => s.command.text.split('.')[0])).toEqual(Array(3).fill('This project now uses the Harness orchestration skills'))
+    const g = syncFixture(false)
+    g.setMode('light' as never)
+    await g.pass()
+    expect(g.sent).toEqual([])
+  })
+
+  it('says nothing when the skill files already hold the built-in text', async () => {
+    const f = syncFixture(false)
+    await f.pass()
+    expect(f.sent).toEqual([])
+  })
+
+  it('rewrites the file of a session in no open group at once and tells it once it joins one', async () => {
+    const f = syncFixture()
+    f.setGroups([{ id: 'old', archived: true, leadId: 'a-lead', agentIds: ['a-lead', 'a-builder', 'a-reviewer'] }])
+    const host = await f.pass()
+    for (const file of Object.values(f.files)) expect(readFileSync(file, 'utf8')).not.toBe(older)
+    expect(f.sent).toEqual([])
+    f.setGroups([{ id: 'next', leadId: 'a-lead', agentIds: ['a-lead', 'a-builder', 'a-reviewer'] }])
+    await f.pass(host, 60_000)
+    expect(f.sent.map(s => s.asAgentId).sort()).toEqual(['a-builder', 'a-lead', 'a-reviewer'])
+    await f.pass(host, 60_000)
+    expect(f.sent).toHaveLength(3)
+  })
+})
+
+/** A host on this machine whose roster is [rows] (changeable), with the core's keep-alive and member close mocked. */
+function lifeFixture(rows: Record<string, unknown>[], options: SuperTabHostOptions = {}) {
+  const t = setup(), host = t.open(options)
+  const commands: Record<string, unknown>[] = []
+  let live = false
+  const keepLeadAlive = vi.fn(async () => ({ ok: false as const, error: 'AGENT_BUSY' } as { ok: true } | { ok: false; error: string }))
+  const closeMember = vi.fn(async () => ({ closed: true as const } as { closed?: true; error?: string }))
+  t.core.agents.byAgent = vi.fn(() => (live ? { agentId: 'harness' } : undefined) as never)
+  t.core.agents.keepLeadAlive = keepLeadAlive
+  t.core.agents.closeMember = closeMember
+  t.core.account.backend = async (_method, path, body) => {
+    if ((body as any)?.command) { commands.push(body as Record<string, unknown>); return { status: 200, body: { data: {} } } }
+    if (path.includes('/hosts/')) return { status: 200, body: { data: rows } }
+    return { status: 200, body: { data: [] } }
+  }
+  const poll = async (advance = 0) => { t.wait(advance); await host.tick(); for (let i = 0; i < 5; i++) await new Promise(resolve => setImmediate(resolve)) }
+  return { ...t, host, rows, commands, keepLeadAlive, closeMember, poll, live: (value: boolean) => { live = value } }
+}
+const leadRow = (extra: Record<string, unknown> = {}) => ({ tabId: 'tab', lead: true, active: true, agent: { id: 'agent', harnessId: 'harness', machineId: 'machine-1' }, ...extra })
+
+describe('keeping a Swarm Lead alive', () => {
+  // The owner, 2026-10-23: a Lead whose session died (a machine restart, a kill) stalls its whole project until someone
+  // reopens it by hand. Its host reopens it on its own conversation; a crash loop must not spin.
+  it('reopens a Lead whose session is gone, backing off while it cannot, and leaves a live one alone', async () => {
+    const t = lifeFixture([leadRow()])
+    await t.poll()
+    expect(t.keepLeadAlive).toHaveBeenCalledTimes(1)
+    expect(t.keepLeadAlive).toHaveBeenCalledWith('harness')
+    await t.poll(4_000)
+    expect(t.keepLeadAlive).toHaveBeenCalledTimes(1)
+    await t.poll(1_000)
+    expect(t.keepLeadAlive).toHaveBeenCalledTimes(2)
+    await t.poll(9_000)
+    expect(t.keepLeadAlive).toHaveBeenCalledTimes(2)
+    await t.poll(1_000)
+    expect(t.keepLeadAlive).toHaveBeenCalledTimes(3)
+    // The wait doubles, up to half an hour.
+    for (let i = 0; i < 20; i++) await t.poll(30 * 60_000)
+    const calls = t.keepLeadAlive.mock.calls.length
+    await t.poll(30 * 60_000 - 1)
+    expect(t.keepLeadAlive).toHaveBeenCalledTimes(calls)
+    await t.poll(1)
+    expect(t.keepLeadAlive).toHaveBeenCalledTimes(calls + 1)
+    expect(t.log).toHaveBeenCalledWith(expect.stringContaining('Could not reopen the Product Manager'))
+    t.keepLeadAlive.mockResolvedValue({ ok: true })
+    await t.poll(30 * 60_000)
+    t.live(true)
+    for (let i = 0; i < 3; i++) await t.poll(60 * 60_000)
+    expect(t.keepLeadAlive).toHaveBeenCalledTimes(calls + 2)
+    // Gone again later: reopened at once, its backoff started over.
+    t.live(false)
+    await t.poll()
+    expect(t.keepLeadAlive).toHaveBeenCalledTimes(calls + 3)
+  })
+
+  it('waits a minute after a reopen it asked for before asking again', async () => {
+    const t = lifeFixture([leadRow()])
+    t.keepLeadAlive.mockResolvedValue({ ok: true })
+    await t.poll()
+    await t.poll(59_000)
+    expect(t.keepLeadAlive).toHaveBeenCalledTimes(1)
+    await t.poll(1_000)
+    expect(t.keepLeadAlive).toHaveBeenCalledTimes(2)
+  })
+
+  it('reopens no agent the roster does not mark Lead: once its project is deleted, or while it is being stopped', async () => {
+    const t = lifeFixture([leadRow()])
+    await t.poll()
+    expect(t.keepLeadAlive).toHaveBeenCalledTimes(1)
+    t.rows.splice(0, 1, leadRow({ lead: false }))
+    for (let i = 0; i < 3; i++) await t.poll(30 * 60_000)
+    t.rows.splice(0, 1, leadRow({ stopRequested: true }), leadRow({ closeSession: true, agent: { id: 'other', harnessId: 'other', machineId: 'machine-1' } }))
+    for (let i = 0; i < 3; i++) await t.poll(30 * 60_000)
+    t.rows.splice(0, 2)
+    for (let i = 0; i < 3; i++) await t.poll(30 * 60_000)
+    expect(t.keepLeadAlive).toHaveBeenCalledTimes(1)
+  })
+
+  it('reopens nothing on a core that cannot', async () => {
+    const t = lifeFixture([leadRow()])
+    t.core.agents.keepLeadAlive = undefined
+    await t.poll()
+    expect(t.keepLeadAlive).not.toHaveBeenCalled()
+  })
+})
+
+describe('closing the sessions the backend ends', () => {
+  const ended = (extra: Record<string, unknown> = {}) => ({ tabId: 'tab', closeSession: true, agent: { id: 'agent', harnessId: 'harness', machineId: 'machine-1' }, ...extra })
+
+  // Deleting a project left its Lead's session running, and removing an ordinary agent left its session behind (owner,
+  // 2026-10-23: no zombie agents). The backend marks the session; this host closes it and says so.
+  it('closes a member it knew, says it closed once, and never closes it again', async () => {
+    const t = lifeFixture([leadRow({ lead: false })])
+    await t.poll()
+    t.rows.splice(0, 1, ended())
+    await t.poll()
+    await vi.waitFor(() => expect(t.commands).toHaveLength(1))
+    expect(t.closeMember).toHaveBeenCalledWith('harness', undefined)
+    expect(t.commands[0]).toEqual({ operationId: 'session-closed-agent-harness', command: { type: 'agent.sessionClosed', agentId: 'agent', harnessId: 'harness' } })
+    for (let i = 0; i < 3; i++) await t.poll(60_000)
+    expect(t.closeMember).toHaveBeenCalledTimes(1)
+    expect(t.commands).toHaveLength(1)
+  })
+
+  it('closes after a host restart a member the last roster named, and retries a lost acknowledgement without closing twice', async () => {
+    const t = lifeFixture([leadRow({ lead: false })])
+    await t.poll()
+    t.host.stop()
+    t.rows.splice(0, 1, ended())
+    let refused = 1
+    const backend = t.core.account.backend
+    t.core.account.backend = async (method, path, body) => (body as any)?.command?.type === 'agent.sessionClosed' && refused-- > 0
+      ? { status: 503, body: { success: false, error: { code: 'BACKEND_UNAVAILABLE', message: 'down' } } } : backend(method, path, body)
+    const restarted = t.open()
+    const poll = async (advance = 0) => { t.wait(advance); await restarted.tick(); for (let i = 0; i < 5; i++) await new Promise(resolve => setImmediate(resolve)) }
+    await poll()
+    expect(t.log).toHaveBeenCalledWith('down')
+    await poll(5_000)
+    await vi.waitFor(() => expect(t.commands).toHaveLength(1))
+    expect(t.closeMember).toHaveBeenCalledTimes(1)
+  })
+
+  it('never asks to close a Lead, and acknowledges nothing the core refuses as not its member', async () => {
+    const t = lifeFixture([ended({ lead: true })])
+    for (let i = 0; i < 3; i++) await t.poll(60_000)
+    expect(t.closeMember).not.toHaveBeenCalled()
+    t.rows.splice(0, 1, ended())
+    t.closeMember.mockResolvedValue({ error: 'NOT_A_MEMBER' })
+    for (let i = 0; i < 3; i++) await t.poll(60_000)
+    expect(t.closeMember).toHaveBeenCalledWith('harness', undefined)
+    expect(t.commands).toHaveLength(0)
+  })
+
+  // The review of #1635: an agent removed before this host wrote its first roster was never a member here, so it was never
+  // closed nor acknowledged, and its row stayed for good. The released backend's row names only the harness; this host's
+  // own record of the Swarm start that created it is the proof, which the core checks against its receipt.
+  it('closes an agent removed before any roster named it, proven by this host\'s start of it', async () => {
+    const t = lifeFixture([ended()], { startReceipt: harnessId => harnessId === 'harness' ? 'super-0123456789abcdef' : null })
+    await t.poll()
+    await vi.waitFor(() => expect(t.commands).toHaveLength(1))
+    expect(t.closeMember).toHaveBeenCalledWith('harness', 'super-0123456789abcdef')
+  })
+
+  it('still closes a known member when this host\'s start record cannot be read', async () => {
+    const t = lifeFixture([ended()], { startReceipt: () => { throw new Error('The capacity ledger is unreadable.') } })
+    await t.poll()
+    await vi.waitFor(() => expect(t.commands).toHaveLength(1))
+    expect(t.closeMember).toHaveBeenCalledWith('harness', undefined)
+  })
+
+  it('backs off a close the core refuses, and acknowledges nothing until it closes', async () => {
+    const t = lifeFixture([leadRow({ lead: false })])
+    await t.poll()
+    t.rows.splice(0, 1, ended())
+    t.closeMember.mockResolvedValue({ error: 'LEAD_PROTECTED' })
+    await t.poll()
+    await t.poll(4_000)
+    expect(t.closeMember).toHaveBeenCalledTimes(1)
+    await t.poll(1_000)
+    expect(t.closeMember).toHaveBeenCalledTimes(2)
+    expect(t.log).toHaveBeenCalledWith(expect.stringContaining('LEAD_PROTECTED'))
+    t.closeMember.mockResolvedValue({ closed: true })
+    await t.poll(10_000)
+    await vi.waitFor(() => expect(t.commands).toHaveLength(1))
+  })
+
+  it('closes nothing on a core that cannot', async () => {
+    const t = lifeFixture([leadRow({ lead: false })])
+    await t.poll()
+    t.core.agents.closeMember = undefined
+    t.rows.splice(0, 1, ended())
+    await t.poll()
+    expect(t.commands).toHaveLength(0)
+  })
+})
+
+describe('a machine its owner removed from a Swarm', () => {
+  afterEach(() => { vi.unstubAllEnvs() })
+  it('cleans up for its own machine\'s cleanup row and acknowledges, ignoring another machine\'s', async () => {
+    const t = setup()
+    const home = join(t.dir, 'home'); vi.stubEnv('HOME', home); vi.stubEnv('USERPROFILE', home)
+    const folder = join(t.dir, 'swarm-projects', 'tab', 'project'), other = join(t.dir, 'swarm-projects', 'other-tab')
+    mkdirSync(folder, { recursive: true }); mkdirSync(other, { recursive: true })
+    const sent: unknown[] = []
+    vi.mocked(t.call).mockImplementation(async (method, path, body) => {
+      if (path.includes('/hosts/')) return { status: 200, body: { success: true, data: [
+        { tabId: 'tab', cleanup: { machineId: 'machine-1', removalId: 'removal' } },
+        { tabId: 'other-tab', cleanup: { machineId: 'machine-2', removalId: 'theirs' } }] } }
+      if (method === 'POST') sent.push(body)
+      return { status: 200, body: { success: true, data: method === 'GET' ? { state: { starts: [] } } : { revision: 1 } } }
+    })
+    const host = t.open()
+    await host.tick()
+    await vi.waitFor(() => expect(sent).toEqual([{ operationId: 'machine-cleaned-removal', command: { type: 'machine.cleaned', machineId: 'machine-1', removalId: 'removal' } }]))
+    expect(existsSync(join(t.dir, 'swarm-projects', 'tab'))).toBe(false)
+    expect(existsSync(other)).toBe(true)
+    await host.tick()
+    await new Promise(resolve => setTimeout(resolve, 50))
+    expect(sent).toHaveLength(1)
   })
 })

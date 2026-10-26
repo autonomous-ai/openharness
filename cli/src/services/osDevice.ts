@@ -33,6 +33,9 @@ export const UPDATE_BUSY_MS = 10 * 60_000
 export const STATUS_TIMEOUT_MS = 15_000
 export const NMCLI_TIMEOUT_MS = 10_000
 export const SCAN_TIMEOUT_MS = 20_000
+/** The disk's key slots are slow to change on purpose (a passphrase is hashed for seconds), twice. */
+export const PASSWORD_TIMEOUT_MS = 90_000
+const ACTIONS = ['update', 'wifi_scan', 'wifi_join', 'wifi_result', 'sign_out', 'password', 'ssh']
 /** The most output a command run here may print before it is stopped. */
 export const MAX_OUTPUT = 1024 * 1024
 
@@ -181,7 +184,8 @@ export function startOsDevice(_core: CoreApi, deps: OsDeviceDeps = {}): ServiceR
       read(CMDLINE).catch(() => ''),
     ])
     // Encrypted, it waits for its password at every start (installer.py: rd.luks.name=).
-    return { harnessOs: true, update, wifi: { ssid }, hotspot, encrypted: /(^|\s)rd\.luks\.name=/.test(cmdline) }
+    // features: what this daemon does for a phone beyond the update and the Wi-Fi.
+    return { harnessOs: true, update, wifi: { ssid }, hotspot, encrypted: /(^|\s)rd\.luks\.name=/.test(cmdline), features: ['sign_out', 'password', 'ssh'] }
   }
 
   const update = (payload: Payload): Payload => {
@@ -215,17 +219,48 @@ export function startOsDevice(_core: CoreApi, deps: OsDeviceDeps = {}): ServiceR
     } catch { return { result: null } }
   }
 
+  /** Signed out for another account: its harnesses and projects stay, its Wi-Fi goes and its hotspot
+   *  opens, for a phone on the other account to set it up. Out of reach right after: the reply first. */
+  const signOut = (): Payload => {
+    console.log('[os-device] sign-out')
+    detached('sudo', ['-n', PYTHON, SETUP, 'sign-out'])
+    return { started: true }
+  }
+
+  /** The computer's one password — the disk's where it is encrypted and the account's — changed, the
+   *  current one checked first. Both only on the helper's stdin, never in argv or a log. */
+  const password = async (payload: Payload): Promise<Payload> => {
+    const { current, next } = payload
+    if (typeof current !== 'string' || typeof next !== 'string' || !next) return { error: 'BAD_REQUEST', message: 'Enter the current password and a new one.' }
+    const out = await exec('sudo', ['-n', PYTHON, SETUP, 'password'], { timeout: PASSWORD_TIMEOUT_MS, input: JSON.stringify({ current, new: next }) })
+    const parsed: unknown = JSON.parse(out)
+    if (!record(parsed)) throw new Error('setup.py password did not answer an object')
+    return parsed
+  }
+
+  /** SSH on, off, or how it is, with the private addresses it answers on. */
+  const ssh = async (payload: Payload): Promise<Payload> => {
+    const state = payload.state === 'on' || payload.state === 'off' ? payload.state : 'status'
+    if (state !== 'status') console.log(`[os-device] ssh ${state}`)
+    const parsed: unknown = JSON.parse(await exec('sudo', ['-n', PYTHON, SETUP, 'ssh', state], { timeout: NMCLI_TIMEOUT_MS * 3 }))
+    if (!record(parsed)) throw new Error('setup.py ssh did not answer an object')
+    return parsed
+  }
+
   return {
     os_device: async (payload, asker) => {
       if (!asker.owner) return { error: 'OWNER_REQUIRED' }
       const action = payload.action
       if (action === 'status') return status()
-      if (action !== 'update' && action !== 'wifi_scan' && action !== 'wifi_join' && action !== 'wifi_result') return { error: 'BAD_REQUEST' }
+      if (typeof action !== 'string' || !ACTIONS.includes(action)) return { error: 'BAD_REQUEST' }
       if (!harnessOs()) return { error: 'UNSUPPORTED_OS' }
       try {
         if (action === 'update') return update(payload)
         if (action === 'wifi_scan') return await scan()
         if (action === 'wifi_join') return join(payload)
+        if (action === 'sign_out') return signOut()
+        if (action === 'password') return await password(payload)
+        if (action === 'ssh') return await ssh(payload)
         return await result()
       } catch (error) {
         // Never the payload: it may hold a Wi-Fi password.

@@ -68,7 +68,7 @@ pub fn kill_pid(pid: u32) {
 }
 
 pub fn discovery_file(home: &std::path::Path) -> std::path::PathBuf {
-    home.join(format!("run/pty-host-{PROTOCOL}.json"))
+    harness_pty::instance::run_file(&home.join("run"), &harness_pty::instance::current(), "json")
 }
 
 /// The discovery file of `home` once it is there.

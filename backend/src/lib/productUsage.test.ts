@@ -109,6 +109,28 @@ it('stores launch codes as day totals like any other counter', async () => {
     .toEqual(Object.entries(counters).map(([metric, value]) => [metric, { $inc: { value } }]))
 })
 
+it('accepts the Windows and Git helper refusals that older launch reports called unlisted', async () => {
+  const codes = ['engine_launch_refused', 'pty_host_unavailable', 'git_project_unavailable', 'branch_exists',
+    'invalid_branch', 'branch_switch_failed', 'branch_in_use', 'worktree_failed']
+  const counters = Object.fromEntries(codes.map(code => [`launch_failed_code_${code}`, 1]))
+  expect(await ingestProductUsage('private-account', { ...report, counters }, now)).toEqual({ accepted: true })
+  expect(db.$runCommandRaw.mock.calls[0][0].updates.map((u: { q: { metric: string } }) => u.q.metric))
+    .toEqual(Object.keys(counters))
+})
+
+it('stores setup reasons in separate families without reinterpreting the other-failure totals', async () => {
+  const counters = {
+    launch_failed_setup: 2, launch_failed_setup_code_tmux_unavailable: 1, launch_failed_setup_code_native_launch_held: 1,
+    create_error_setup: 2, create_error_setup_code_tmux_unavailable: 1, create_error_setup_code_pty_host_unavailable: 1,
+    request_phone_create_error_setup: 1, phone_create_error_setup_code_tmux_unavailable: 1,
+    launch_failed_other: 1, launch_failed_code_worktree_failed: 1,
+  }
+  expect(await ingestProductUsage('private-account', { ...report, counters }, now)).toEqual({ accepted: true })
+  const stored = db.$runCommandRaw.mock.calls[0][0].updates.map((u: { q: { metric: string }; u: unknown }) => [u.q.metric, u.u])
+  expect(stored).toEqual(Object.entries(counters).map(([metric, value]) => [metric, { $inc: { value } }]))
+  expect(JSON.stringify(stored)).not.toContain('private-account')
+})
+
 describe('preference', () => {
   it('defaults on but preserves a prior off choice', async () => {
     expect(await productUsageChoice('private-account')).toEqual({ enabled: true, revision: 0 })
@@ -236,6 +258,19 @@ it('the legacy relay respects off and writes only an aggregate counter when on',
   db.productUsagePreference.findUnique.mockResolvedValue({ enabled: true, revision: 2 })
   await recordRelayUsage('private-account', now, 'relay_turns_started')
   expect(JSON.stringify(db.productUsageTotal.upsert.mock.calls)).not.toContain('private-account')
+})
+
+it('one relay event adds to each total it names under a single preference read', async () => {
+  db.productUsagePreference.findUnique.mockResolvedValue({ enabled: true, revision: 2 })
+  await recordRelayUsage('private-account', now, 'relay_mobile_opens', ['breakdown:release:phone:1.0.8:relay_mobile_opens'])
+  expect(db.productUsagePreference.findUnique).toHaveBeenCalledOnce()
+  expect(db.productUsageTotal.upsert.mock.calls.map(([call]) => [call.where.dayUtc_metric.metric, call.create.value, call.update.value])).toEqual([
+    ['relay_mobile_opens', 1, { increment: 1 }], ['breakdown:release:phone:1.0.8:relay_mobile_opens', 1, { increment: 1 }]])
+  expect(JSON.stringify(db.productUsageTotal.upsert.mock.calls)).not.toContain('private-account')
+  db.productUsageTotal.upsert.mockClear()
+  db.productUsagePreference.findUnique.mockResolvedValue({ enabled: false, revision: 3 })
+  await recordRelayUsage('private-account', now, 'relay_mobile_opens', ['relay_mobile_debug_opens'])
+  expect(db.productUsageTotal.upsert).not.toHaveBeenCalled()
 })
 
 it('a relay metrics failure cannot interrupt work or log an identity or database error', async () => {

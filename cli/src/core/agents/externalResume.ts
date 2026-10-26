@@ -13,6 +13,7 @@ import { adoptionDecision } from './adopt.js'
 import { heldPaneArgv } from './heldLaunches.js'
 import { createExternalInspector } from './externalInspect.js'
 import { stopExternalOwner } from './externalOwner.js'
+import { moveHeldLine } from '../../lib/hostMove/moveAgent.js'
 
 type CreateAgent = NonNullable<BackendSocket['onCreateAgent']>
 type Owner = NonNullable<ExternalResumeIntent['owner']>
@@ -43,6 +44,9 @@ export interface ExternalResumeDeps {
   launch(): void
   forget(agentId: string): void
   stopOwner?: typeof stopExternalOwner
+  /** The agent whose conversation [sessionId] is, when a move a dead daemon left may still run its engine (main.ts
+   *  `moveHeld`): adopted, it would get a second engine beside that one. Null for any other. */
+  heldConversation?: (sessionId: string) => string | null
 }
 
 export function createExternalResumes(deps: ExternalResumeDeps) {
@@ -168,8 +172,18 @@ export function createExternalResumes(deps: ExternalResumeDeps) {
     if (!backend?.killHeld) return { ok: false, error: backend ? 'TMUX_UNAVAILABLE' : deps.noBackendCode ?? 'TMUX_UNAVAILABLE' }
     const request = externalSessionRequest({ sessionId: input.resumeSessionId, engine: input.engine })
     if (!request) return { ok: false, error: 'INVALID_SESSION' }
+    const moveHeld = (ids: readonly string[]) => {
+      const agentId = ids.map((id) => deps.heldConversation?.(id) ?? null).find((held) => held !== null)
+      if (!agentId) return null
+      console.warn(moveHeldLine(agentId))
+      return { ok: false as const, error: 'AGENT_BUSY', detail: 'This conversation is held until the daemon restarts.' }
+    }
+    const heldBefore = moveHeld([request.sessionId])
+    if (heldBefore) return heldBefore
     const answer = await inspect(request)
     if (stopped) return { ok: false, error: 'CORE_NOT_READY' }
+    const heldAfter = answer.ok && answer.session ? moveHeld([answer.session.sessionId, ...answer.session.aliases ?? []]) : null
+    if (heldAfter) return heldAfter
     const decision = adoptionDecision(request.sessionId, request.engine, input.takeOver ?? null, answer, held)
     if (!decision.ok && decision.error !== 'SEARCH_UNAVAILABLE'
       && !(decision.error === 'SESSION_BUSY_IN_TERMINAL' && activityUnknown(answer))) return decision

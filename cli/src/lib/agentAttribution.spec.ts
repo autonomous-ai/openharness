@@ -68,6 +68,15 @@ describe('what Harness tells an agent as it starts', () => {
     expect(agentLaunchArgs('codex', null, said, dataDir)).toEqual([])
   })
 
+  it('keeps Swarm role instructions when generic agent spawning is enabled', () => {
+    setAgentSettingsForTest(dataDir, { agentsStartAgents: true })
+    for (const engine of ['claude', 'codex']) {
+      const args = agentLaunchArgs(engine, null, { cwd: '/w', read: () => null, swarmInstructions: 'Read the swarm-dev skill.' }, dataDir)
+      expect(args.join(' ')).toContain('Read the swarm-dev skill.')
+      expect(args.join(' ')).not.toContain(HARNESS_INSTRUCTIONS)
+    }
+  })
+
   it('joins every appended system prompt into one, for Claude Code; leaves other engines\' arguments alone', () => {
     expect(joinedInstructions('claude', ['--system-prompt-snapshot', 'off', '--append-system-prompt', 'grid', '--agent', 'x', '--append-system-prompt', 'ours']))
       .toEqual(['--system-prompt-snapshot', 'off', '--agent', 'x', '--append-system-prompt', 'grid\n\nours'])

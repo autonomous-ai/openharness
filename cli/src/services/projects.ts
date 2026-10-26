@@ -5,6 +5,7 @@
  * socket's switch as they were (docs/design/2026-10-06-core-boundary-next.md, step 4).
  */
 import type { CoreApi, ServiceRequests } from '../core/api.js'
+import { createPullRequestsStatusReader } from '../lib/pullRequestsStatus.js'
 import { listDir } from '../lib/fsBrowse.js'
 import { readGitProject } from '../lib/gitProject.js'
 import { MediaPreviewError, readMediaPreviewChunk } from '../lib/mediaPreview.js'
@@ -20,7 +21,13 @@ export function startProjects(core: CoreApi): ServiceRequests {
   /** The browsable home, widened by the folders agents are running in: a repository outside both is not
    *  somewhere this daemon runs git. */
   const knownRoots = (): string[] => core.agents.live().flatMap((agent) => agent.cwd ? [agent.cwd] : [])
+  const readPullRequests = createPullRequestsStatusReader()
   return {
+    git_pull_requests_status: internalOnThrow('git_pull_requests_status', (payload, asker) => {
+      // A trusted collaborator may use terminals here, but must not borrow this computer's GitHub account.
+      if (!asker.owner || !asker.local && asker.accountOwner !== true) return { error: 'OWNER_REQUIRED' }
+      return readPullRequests(payload.urls)
+    }),
     git_pull_request: internalOnThrow('git_pull_request', (payload) => {
       const id = payload.agentId
       const agent = typeof id === 'string' ? core.agents.resolve(id) : undefined

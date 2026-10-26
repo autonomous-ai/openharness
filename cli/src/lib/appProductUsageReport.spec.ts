@@ -84,8 +84,8 @@ it('drops names this contract does not know yet, says so once, and refuses every
   ]) expect(appProductUsageReport(refused), JSON.stringify(refused)).toBeUndefined()
 })
 
-it('announces vocabulary 4, the revision whose frame-phase and Add Phone names a Desktop waits for', () => {
-  expect(APP_USAGE_VOCABULARY).toBe(4)
+it('announces vocabulary 6 including first-arrival, invite and existing Add Phone names', () => {
+  expect(APP_USAGE_VOCABULARY).toBe(6)
   for (const measure of ['frame_slow_wait', 'frame_slow_build', 'frame_slow_raster', 'frame_long_collector']) {
     expect(appProductUsageReport({ ...native, counters: { [`health_desktop_${measure}`]: 1 } })).toBeDefined()
   }
@@ -100,4 +100,18 @@ it('announces vocabulary 4, the revision whose frame-phase and Add Phone names a
     'ui_desktop_add_phone_menu', 'ui_desktop_add_phone_account', 'ui_desktop_add_phone_machines', 'ui_desktop_add_phone_command'])
   // Only a Desktop report with its context files them: not the legacy UI-only form.
   expect(appProductUsageReport({ ...old, counters: { ui_desktop_add_phone_menu: 1 } })).toBeUndefined()
+})
+
+it('forwards returning offers, every skip reason and every pairing source in vocabulary 6', () => {
+  expect(APP_USAGE_VOCABULARY).toBe(6)
+  const metrics = [
+    ...['started', 'ok', 'cancelled', 'unknown', 'under_1s', 'over_1m'].map(x => `ui_desktop_phone_offer_returning_${x}`),
+    ...['has_phone', 'no_device_list', 'already_shown', 'stopped', 'cap_reached', 'not_signed_in',
+      'viewer', 'card_showing', 'no_storage', 'account_changed', 'read_limit'].map(x => `ui_desktop_phone_offer_skipped_${x}`),
+    ...['offer', 'titlebar', 'menu', 'account', 'machines', 'command'].map(x => `ui_desktop_add_phone_paired_${x}`),
+  ]
+  for (const metric of metrics) {
+    const report = { ...native, counters: { [metric]: 1 } }
+    expect(appProductUsageReport(report), metric).toEqual(report)
+  }
 })

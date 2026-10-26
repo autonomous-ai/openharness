@@ -35,6 +35,8 @@ export interface ClosingDeps {
   engineReady: (engine: string, ms: number) => Promise<void>
   /** The agents stopped and kept: a close of one already closed is answered closed. */
   stoppedAgents?: Pick<StoppedAgentStore, 'get' | 'resumeReservedAt'>
+  /** Whether the agent may be the Lead of an active Swarm project: never closed (superTabs/retention.ts `mayBeLead`). */
+  leadProtected?: (agentId: string) => boolean
 }
 
 /** How long a close waits for an engine worker that restarted under its read, before reading once more. */
@@ -42,7 +44,7 @@ export const CLOSE_READ_RECONNECT_MS = 10_000
 
 export function createAgentClosing({
   readScreen, registry, cleanupTabs, watcher, captureTerminal, sessionTurnState, openQuestions, terminals, sessionCheckpoints,
-  stopAgent, announceSession, engineReady, stoppedAgents, nativeRecoveryReady = () => true,
+  stopAgent, announceSession, engineReady, stoppedAgents, nativeRecoveryReady = () => true, leadProtected,
 }: ClosingDeps) {
   const ready = (s: RegisteredSession): boolean =>
     !s.identityHold && !s.admissionHold && !s.interpretationHold && nativeRecoveryReady(s)
@@ -90,12 +92,15 @@ export function createAgentClosing({
       return inspectCloseActivity(s, reading, sessionTurnState(s.sessionId), openQuestions.has(s.sessionId))
     },
     idleCurrent: s => ready(s) && (!s.sessionId || sessionTurnState(s.sessionId) === false) && !openQuestions.has(s.sessionId),
+    // The question the engine asks before any conversation, as its pane shows it now (lib/closeAgentService.ts).
+    atStartupQuestion: async s => (await readScreen(s, await captureTerminal(s.agentId, 80)))?.messageHold === 'trust_open',
     checkpoint: async (s, phase) => {
       const captured = phase === 'before' ? await terminals.captureRetained(s, { historyLines: 2000 }) : null
       await sessionCheckpoints.save(s, { screen: captured?.state === 'succeeded' ? captured.value : null })
     },
     stop: stopAgent,
     changed: announceSession,
+    leadProtected,
     // Not live, not being resumed, and kept as stopped with the conversation the close names: it was closed. A record
     // that cannot be read says nothing, and the close is answered as changed, as before.
     closedAlready: request => {
