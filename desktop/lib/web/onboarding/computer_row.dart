@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 
 import '../../shared/theme/app_icons.dart';
 import '../../widgets/desktop_chrome.dart';
-import 'saved_computers.dart';
 
 /// One computer on the connect page: its name, where it stands in words, and
 /// a spinner or a button at the end.
@@ -65,28 +64,5 @@ class ComputerRowSpinner extends StatelessWidget {
       strokeWidth: 1.5,
       color: DesktopChrome.muted,
     ),
-  );
-}
-
-/// The computers this browser kept, while the machine list is read: their
-/// names only, each checking, and nothing to press until the list answers.
-class SavedComputerRows extends StatelessWidget {
-  const SavedComputerRows(this.computers, {super.key});
-
-  final List<SavedComputer> computers;
-
-  @override
-  Widget build(BuildContext context) => Column(
-    crossAxisAlignment: CrossAxisAlignment.stretch,
-    children: [
-      for (final computer in computers) ...[
-        ComputerRow(
-          name: computer.name,
-          status: 'Checking…',
-          trailing: const ComputerRowSpinner(),
-        ),
-        const SizedBox(height: 10),
-      ],
-    ],
   );
 }

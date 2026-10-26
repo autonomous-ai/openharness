@@ -28,12 +28,6 @@ class DeferredPart {
       Error.throwWithStackTrace(error, stack);
     },
   );
-
-  /// [action] once the part is in; fails as the download does.
-  Future<T> run<T>(FutureOr<T> Function() action) async {
-    await load();
-    return action();
-  }
 }
 
 /// [builder]'s widget once [part] is in. Until then a loading line in its

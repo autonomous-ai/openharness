@@ -142,19 +142,4 @@ void main() {
     expect(retry.width, greaterThanOrEqualTo(44));
     expect(retry.height, greaterThanOrEqualTo(44));
   });
-
-  test('a run that needs the part waits for it and fails as it does', () async {
-    final download = _Download();
-    final part = DeferredPart(download.call);
-
-    final run = part.run(() => 'opened');
-    download.fail();
-    await expectLater(run, throwsException);
-
-    download.next();
-    final again = part.run(() => 'opened');
-    download.pending.complete();
-    expect(await again, 'opened');
-    expect(download.calls, 2);
-  });
 }

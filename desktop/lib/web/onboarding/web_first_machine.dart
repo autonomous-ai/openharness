@@ -11,7 +11,7 @@ import '../../widgets/desktop_chrome.dart';
 import '../../widgets/link_another_machine_dialog.dart'
     show kLinkServerInstallCommand, kLinkServerLoginCommand;
 import '../../widgets/web_download_button.dart';
-import 'computer_row.dart';
+import 'saved_computer_rows.dart';
 import 'saved_computers.dart';
 import 'web_your_computers.dart';
 
