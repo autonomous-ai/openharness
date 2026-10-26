@@ -8,6 +8,7 @@ import 'package:harness/auth/auth_session.dart';
 import 'package:harness/core/config.dart';
 import 'package:harness/settings/settings_screen.dart';
 import 'package:harness/settings/settings_section.dart';
+import 'package:harness/shared/layouts/widgets/sidebar_item.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/state/app_state.dart';
 
@@ -117,6 +118,36 @@ void main() {
     await tester.binding.handlePopRoute();
     await tester.pumpAndSettle();
     expect(find.byType(SettingsScreen), findsNothing);
+  });
+
+  /// The rail's rows for the sections, without Back and the search field.
+  Iterable<double> rowHeights(WidgetTester tester) => [
+    for (final section in [
+      SettingsSection.notifications,
+      SettingsSection.connectors,
+    ])
+      tester
+          .getSize(
+            find.ancestor(
+              of: find.text(section.label),
+              matching: find.byType(SidebarItem),
+            ),
+          )
+          .height,
+  ];
+
+  testWidgets('a phone\'s rows are a finger tall', (tester) async {
+    await mount(tester, const Size(390, 844));
+    for (final height in rowHeights(tester)) {
+      expect(height, greaterThanOrEqualTo(44));
+    }
+  });
+
+  testWidgets('a wide window keeps the mouse-sized rows', (tester) async {
+    await mount(tester, const Size(1280, 800));
+    for (final height in rowHeights(tester)) {
+      expect(height, 38);
+    }
   });
 
   testWidgets('a wide window keeps the list beside the section', (
