@@ -213,6 +213,19 @@ describe('routeTask', () => {
     expect(open.mock.calls.map(c => c[1])).toEqual(['m1'])
     expect(recorded(s).command.decision.candidates.some((c: { title: string }) => c.title.startsWith('New agent') && c.title.includes('m1'))).toBe(true)
   })
+  it('starts nothing on an account machine that says it runs Windows, or whose last two starts started nothing', async () => {
+    const windows = opener(id => daemon(id, { agents: id === 'm1' ? ['h1'] : [], capacity: { resources: { memoryTotalBytes: 8e9, memoryUsedBytes: 1e9, cpuPercent: 10, projectDiskFreeBytes: 1e11, os: 'Windows' }, tools: { git: true }, devices: {} } }))
+    const s = scoped()
+    expect(await routeTask(input, s, where, windows)).toMatchObject({ ok: true, pick: { kind: 'member' } })
+    expect(recorded(s).command.decision.excluded).toEqual(expect.arrayContaining([expect.objectContaining({ title: expect.stringContaining('New agent'),
+      reason: expect.stringContaining('Swarm agents do not run on Windows yet.') })]))
+    const failed = { id: 's', request: { machineId: 'm1' }, harnessId: null, dispatched: true, error: 'The engine did not start.' }
+    const t = tab(); Object.assign(t.state, { starts: [failed, { ...failed, id: 's2' }] })
+    const stuck = scoped({ tab: t })
+    await routeTask(input, stuck, where, opener())
+    expect(recorded(stuck).command.decision.excluded).toEqual(expect.arrayContaining([expect.objectContaining({ title: expect.stringContaining('remote-1'),
+      reason: expect.stringContaining('last 2 starts') })]))
+  })
   it('says a listed machine without the project folder needs it cloned, not that its disk could not be verified', async () => {
     const needs = { cwd: '/repo/api' }
     const noFolder = { ok: true, resources: { memoryTotalBytes: 8e9, memoryUsedBytes: 1e9, cpuPercent: 10 }, tools: {}, devices: {} }
@@ -656,10 +669,13 @@ describe('routing contributed capacity', () => {
   const healthy = () => ({ machineId: 'm1', name: 'Contributed laptop', cwd: '/owner/project', engines: ['claude'], paused: false,
     observation: { receivedAt: Date.now(), resources: { memoryTotalBytes: 32e9, memoryUsedBytes: 2e9, projectDiskFreeBytes: 200e9 },
       tools: { git: true }, runningHarnessIds: ['h1'], quotas: [{ engine: 'claude', known: true, windows: [{ name: '5-hour', usedPercent: 20, resetsAt: Date.now() + 3600000 }] }] } })
-  async function runPool(pool: Record<string, any>, members = false, needs: Record<string, unknown> = {}, project?: Record<string, unknown>) {
+  async function runPool(pool: Record<string, any>, members = false, needs: Record<string, unknown> = {}, project?: Record<string, unknown>,
+    more: { state?: Record<string, unknown>; tab?: Record<string, unknown>; review?: boolean } = {}) {
     const groups = conversations()
     if (project) Object.assign(groups[1]!, { projectId: project.id })
-    const s = scoped({ context: { ok: true, value: { agentId: 'lead', tab: { state: { id: 'tab', agents: members ? agents : [agents[1]], conversations: groups, machines: [pool], ...(project ? { projects: [project] } : {}) } }, policy: { policy, warnings: [] }, machines: [] } } })
+    if (more.review) Object.assign(groups[1]!, { reviewOf: 'g0' })
+    const crew = members ? agents.map(a => more.review && a.id === 'a1' ? { ...a, role: 'reviewer' } : a) : [agents[1]]
+    const s = scoped({ context: { ok: true, value: { agentId: 'lead', tab: { ...more.tab, state: { id: 'tab', agents: crew, conversations: groups, machines: [pool], ...(project ? { projects: [project] } : {}), ...more.state } }, policy: { policy, warnings: [] }, machines: [] } } })
     const open = opener()
     const answer = await routeTask({ ...input, assessment: { ...input.assessment, needs } }, s, where, open)
     expect(open).not.toHaveBeenCalled()
@@ -737,6 +753,91 @@ describe('routing contributed capacity', () => {
     expect((await runPool(shared, false, {}, { id: 'project-two' })).answer.ok).not.toBe(true)
     expect((await runPool(shared)).answer.ok).not.toBe(true)
   })
+  // v1 routing (#229): the route sent work to a Windows machine that never started agents, to machines without the
+  // project and to machines that could not push. A machine that says it cannot do the work is left out, with why; one
+  // that says nothing is not.
+  describe('what a machine says it is ready for', () => {
+    const reasons = (answer: Record<string, unknown>) => (answer.excluded as Array<{ title: string; reason: string }>)
+    const project = { id: 'p2', ownerId: 'owner', repository: { machineId: 'other', cwd: '/elsewhere', repositoryUrl: 'https://github.com/Example/Two.git' } }
+    const swarm = (checkouts?: unknown[], engines?: unknown[]) => {
+      const pool: Record<string, any> = { ...healthy(), scope: 'swarm', cwd: '/swarm-root', contributorId: 'owner' }
+      pool.observation.readiness = { ...(checkouts ? { checkouts } : {}), ...(engines ? { engines } : {}) }
+      return pool
+    }
+    const checkout = (extra: Record<string, unknown> = {}) => ({ folder: 'p2', repository: 'github.com/example/two', git: true, push: true, ...extra })
+
+    it('never starts a Swarm agent on Windows, and keeps a member already there', async () => {
+      const windows = healthy(); Object.assign(windows.observation.resources, { os: 'Windows' })
+      const { answer } = await runPool(windows)
+      expect(answer).toMatchObject({ error: 'NO_CANDIDATE' })
+      expect(reasons(answer)[0]!.reason).toContain('Swarm agents do not run on Windows yet')
+      expect((await runPool(windows, true)).answer).toMatchObject({ ok: true, pick: { kind: 'member' } })
+    })
+
+    it('leaves out an engine the machine says is signed out or not installed, and keeps one whose sign-in is unknown', async () => {
+      const out = await runPool(swarm(undefined, [{ engine: 'claude', installed: true, signedIn: false }]), false, {}, project)
+      expect(out.answer).toMatchObject({ error: 'NO_CANDIDATE' })
+      expect(reasons(out.answer)[0]!.reason).toContain('Claude Code is not signed in to a subscription on this machine.')
+      const missing = await runPool(swarm(undefined, [{ engine: 'claude', installed: false, signedIn: null }]), false, {}, project)
+      expect(reasons(missing.answer)[0]!.reason).toContain('Claude Code is not installed on this machine.')
+      for (const engines of [[{ engine: 'claude', installed: true, signedIn: null }], [{ engine: 'claude', installed: null, signedIn: null }], [{ engine: 'codex', installed: true, signedIn: false }], [{ engine: 'cursor', installed: false, signedIn: null }], []]) {
+        expect((await runPool(swarm(undefined, engines), false, {}, project)).answer.ok).toBe(true)
+      }
+    })
+
+    it('still offers a local model on a machine whose engine is signed out, since the grid needs no subscription', async () => {
+      const grid = 'swarm-0123456789ab', pool = swarm(undefined, [{ engine: 'claude', installed: true, signedIn: false }])
+      pool.observation.localModels = [{ grid, model: 'qwen3' }]
+      const { answer, s } = await runPool(pool, false, {}, project, { state: { localModels: { grid, enabled: true } } })
+      expect(answer).toMatchObject({ ok: true, pick: { gridModel: 'qwen3' } })
+      expect(recorded(s).command.decision.excluded).toEqual(expect.arrayContaining([expect.objectContaining({ reason: expect.stringContaining('not signed in') })]))
+    })
+
+    it('leaves out a project folder that is not a checkout of the project\'s repository', async () => {
+      const plain = await runPool(swarm([checkout({ git: false, repository: null, push: null })]), false, {}, project)
+      expect(plain.answer).toMatchObject({ error: 'NO_CANDIDATE' })
+      expect(reasons(plain.answer)[0]!.reason).toContain('is not a git checkout')
+      const other = await runPool(swarm([checkout({ repository: 'github.com/example/other' })]), false, {}, project)
+      expect(reasons(other.answer)[0]!.reason).toContain('checkout of another repository')
+      // Its own repository under another address, no folder yet (it is cloned on start), or a remote it cannot name.
+      for (const checkouts of [[checkout()], [checkout({ folder: 'p9', git: false })], [checkout({ repository: null })]]) {
+        expect((await runPool(swarm(checkouts), false, {}, project)).answer.ok).toBe(true)
+      }
+      expect((await runPool(swarm([checkout({ repository: 'github.com/example/other' })]), false, {}, { ...project, repository: { ...project.repository, repositoryUrl: undefined, machineId: 'm1' } })).answer.ok).toBe(true)
+    })
+
+    it('leaves out a machine whose login cannot push when the work needs a push, members too', async () => {
+      const denied = swarm([checkout({ push: false })])
+      const work = await runPool(denied, true, {}, project)
+      expect(work.answer).toMatchObject({ error: 'NO_CANDIDATE' })
+      expect(reasons(work.answer).map(r => r.reason)).toEqual(expect.arrayContaining([expect.stringContaining('cannot push to the project repository')]))
+      expect(reasons(work.answer).some(r => r.title.includes('Multiply'))).toBe(true)
+      // A review pushes nothing, and an unknown push is no refusal.
+      expect((await runPool(swarm([checkout({ push: false })]), true, {}, project, { review: true })).answer.ok).toBe(true)
+      expect((await runPool(swarm([checkout({ push: null })]), false, {}, project)).answer.ok).toBe(true)
+    })
+
+    it('ignores the machine\'s own login when a teammate\'s project pushes through the Harness GitHub App', async () => {
+      const mates = { ...project, ownerId: 'mate' }
+      expect((await runPool(swarm([checkout({ push: false })]), false, {}, mates, { tab: { githubApp: true } })).answer.ok).toBe(true)
+      // The owner's own project still pushes with the owner's login, and without the App so does a teammate's.
+      expect((await runPool(swarm([checkout({ push: false })]), false, {}, project, { tab: { githubApp: true } })).answer.ok).not.toBe(true)
+      expect((await runPool(swarm([checkout({ push: false })]), false, {}, mates)).answer.ok).not.toBe(true)
+    })
+
+    it('leaves out a machine whose last two starts started nothing, until one does', async () => {
+      const start = (extra: Record<string, unknown>) => ({ id: `s${Math.random()}`, request: { machineId: 'm1' }, harnessId: null, dispatched: false, error: null, ...extra })
+      const failed = start({ error: 'Claude Code is not signed in.' }), queued = start({}), started = start({ harnessId: 'h9', dispatched: true })
+      const stuck = await runPool(healthy(), true, {}, undefined, { state: { starts: [started, failed, queued] } })
+      expect(stuck.answer).toMatchObject({ ok: true, pick: { kind: 'member' } })
+      expect(recorded(stuck.s).command.decision.excluded).toEqual(expect.arrayContaining([expect.objectContaining({
+        title: expect.stringContaining('New agent'), reason: expect.stringContaining('last 2 starts') })]))
+      for (const starts of [[failed, started], [failed], [failed, start({ dispatched: true })], [failed, queued].map(s => ({ ...s, request: { machineId: 'm9' } }))]) {
+        expect((await runPool(healthy(), false, {}, undefined, { state: { starts } })).answer.ok).toBe(true)
+      }
+    })
+  })
+
   it.each([
     ['stale', (p: any) => { p.observation.receivedAt = 0 }],
     ['paused', (p: any) => { p.paused = true }],

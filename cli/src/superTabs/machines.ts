@@ -1,3 +1,4 @@
+import { spawn } from 'node:child_process'
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { lstat, readdir, readFile, realpath, rm, stat } from 'node:fs/promises'
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
@@ -18,6 +19,7 @@ import { projectsRoot } from '../lib/projectFolder.js'
 import { worktreeFolderName } from '../lib/agentNames.js'
 import { teamPrivacyObserver } from '../team/observer.js'
 import type { PrivacyObservation } from '../team/privacy.js'
+import { repositoryKey } from './route.js'
 
 const finite = (v: unknown) => typeof v === 'number' && Number.isFinite(v) ? v : null
 const list = (v: unknown) => Array.isArray(v) ? v.map(object) : []
@@ -98,6 +100,8 @@ export interface MachineDeps {
   modelsStamp?: () => Promise<string>
   /** The machine's host form and Swarm reads, shared with its host (superTabs/host.ts). */
   sources?: SwarmSources
+  /** git for the readiness of the Swarm folder's checkouts ([quietGit]). */
+  git?: GitRun
   /** When each of these harnesses' screens last changed, epoch ms (superTabs/terminal.ts `progressOf`): the backend
    *  renews a task's lease from it, so work never sits with a dead owner (docs: swarm-never-stops). */
   progress?: (harnessIds: readonly string[]) => Record<string, number>
@@ -133,6 +137,45 @@ export class ContributedMachines {
   private privacyRefusedUntil = 0
   /** Until when the reading leaves out its progress, which the backend refused. */
   private progressRefusedUntil = 0
+  /** Until when the reading leaves out its readiness field, which the backend refused. */
+  private readinessRefusedUntil = 0
+  /** Whether each engine is installed and signed in, and until when that stands: one probe starts login shells and reads
+   *  the engines' accounts, so it runs every [READINESS_MS] (a failed one again after [READINESS_RETRY_MS]). */
+  private engineRead: { value: ReadyEngine[] | null; until: number } | null = null
+  /** Per Swarm folder, its checkouts' readiness and until when it stands, and the folders being read now. A push check
+   *  asks the remote, so it is read beside the pass, never holding up a start. */
+  private readonly checkoutReads = new Map<string, { value: ReadyCheckout[] | null; until: number }>()
+  private readonly checkoutReading = new Set<string>()
+  private async engineReadiness(local: { request: (type: string, payload: Record<string, unknown>, timeoutMs: number) => Promise<unknown> }): Promise<ReadyEngine[] | null> {
+    const now = this.deps.now()
+    if (this.engineRead && now < this.engineRead.until) return this.engineRead.value
+    const answer = await local.request('engines_probe', { engines: ['claude', 'codex'], accounts: true }, 20_000).catch(() => null)
+    const engines = object(answer).engines
+    // An engine that says nothing of its sign-in (an older daemon, an engine not installed) is unknown, never signed out.
+    // Not installed is unknown too: the probe answers the same for a login shell that timed out (lib/engineProbe.ts), and
+    // such a machine fails its first start loudly instead (review of #1743).
+    const value = Array.isArray(engines) ? list(engines).filter(e => e.engine === 'claude' || e.engine === 'codex')
+      .map((e): ReadyEngine => ({ engine: String(e.engine), installed: e.installed === true ? true : null, signedIn: e.installed === true && typeof e.signedIn === 'boolean' ? e.signedIn : null })) : null
+    this.engineRead = { value, until: now + (value ? READINESS_MS : READINESS_RETRY_MS) }
+    return value
+  }
+  /** The last readiness of [root]'s checkouts, reading them again beside the pass once it is [READINESS_MS] old. Null
+   *  until the first read is in. */
+  private checkoutReadiness(root: string): ReadyCheckout[] | null {
+    const read = this.checkoutReads.get(root)
+    if ((!read || this.deps.now() >= read.until) && !this.checkoutReading.has(root)) {
+      this.checkoutReading.add(root)
+      void readCheckouts(root, this.deps.git ?? quietGit)
+        // A folder whose probe failed is left out and read again a minute later, not taken for ten.
+        .then(({ checkouts, unsure }) => { this.checkoutReads.set(root, { value: checkouts, until: this.deps.now() + (unsure ? READINESS_RETRY_MS : READINESS_MS) }) }, error => {
+          // An unreadable folder says nothing, and is read again a minute later, not on every pass.
+          this.checkoutReads.set(root, { value: null, until: this.deps.now() + READINESS_RETRY_MS })
+          this.log(`Could not read the Swarm folder's checkouts: ${error instanceof Error ? error.message : String(error)}`)
+        })
+        .finally(() => this.checkoutReading.delete(root))
+    }
+    return read?.value ?? null
+  }
   /** This pass's privacy reading, read once a pass (the check itself runs at most every five minutes). */
   private privacy(): PrivacyObservation | null {
     try { return (this.deps.privacy ?? teamPrivacyObserver)() } catch (error) {
@@ -269,10 +312,14 @@ export class ContributedMachines {
           ...offered(sharedWith(await this.gridModels(local), row.localGrid),
             await local.request('grid_swarm_offers', { grid: row.localGrid }, 10_000).catch(() => ({}))),
         ].slice(0, MAX_LOCAL_MODELS) : null
+        const readyEngines = await this.engineReadiness(local)
+        const checkouts = pool.scope === 'swarm' ? this.checkoutReadiness(pool.cwd) : null
+        const readiness = { ...(readyEngines ? { engines: readyEngines } : {}), ...(checkouts ? { checkouts } : {}) }
         const shown = began >= this.progressRefusedUntil ? this.deps.progress?.(running) ?? {} : {}
         const progress = Object.fromEntries(running.flatMap(id => typeof shown[id] === 'number' ? [[id, shown[id]]] : []))
         const observation = { generation: pool.generation, tools: reportedTools,
           ...(Object.keys(progress).length ? { harnessProgress: progress } : {}), ...(localModels ? { localModels } : {}),
+          ...((readyEngines || checkouts) && began >= this.readinessRefusedUntil ? { readiness } : {}),
           ...(privacy && began >= this.privacyRefusedUntil ? { privacy } : {}),
           ...(refusedModels.length ? { refusedModels } : {}),
           ...(Object.keys(toolProbeErrors).length ? { toolProbeErrors } : {}),
@@ -291,16 +338,17 @@ export class ContributedMachines {
         try {
           const path = `/api/super-tabs/${row.tabId}/machines/${this.machineId}`
           const refused = (error: unknown) => error instanceof SuperTabHostError && error.status === 400 && error.code === 'VALIDATION_ERROR'
-          // Older backends reject the additive fields. The newest go alone first, progress then privacy: a backend that
-          // takes everything else keeps the local models it reads. Their boolean-only view still safely refuses an
+          // Older backends reject the additive fields. The newest go alone first, readiness, progress, then privacy: a backend
+          // that takes everything else keeps the local models it reads. Their boolean-only view still safely refuses an
           // unverified tool, and a reading without privacy is never one a Team machine passes on.
-          const { harnessProgress: _progress, ...withoutProgress } = observation
+          const { readiness: _readiness, ...ready } = observation
+          const { harnessProgress: _progress, ...withoutProgress } = ready
           const { privacy: _privacy, ...withoutPrivacy } = withoutProgress
           const { toolProbeErrors: _probeErrors, localModels: _served, refusedModels: _refused, ...legacy } = withoutPrivacy
           // A backend before `starting` refuses it: it gets the models the grid lists, as before, not none at all.
           const listedOnly = localModels?.some(m => m.starting)
             ? [{ ...withoutPrivacy, localModels: localModels.filter(m => !m.starting) }] : []
-          const attempts = [observation, ...('harnessProgress' in observation ? [withoutProgress] : []),
+          const attempts = [...('readiness' in observation ? [observation] : []), ready, ...('harnessProgress' in ready ? [withoutProgress] : []),
             ...('privacy' in withoutProgress ? [withoutPrivacy] : []), ...listedOnly,
             ...('toolProbeErrors' in observation || 'localModels' in observation || 'refusedModels' in observation ? [legacy] : [])]
           for (const [index, attempt] of attempts.entries()) {
@@ -309,7 +357,8 @@ export class ContributedMachines {
               break
             } catch (error) {
               if (!refused(error) || index === attempts.length - 1) throw error
-              if ('harnessProgress' in attempt) this.progressRefusedUntil = began + FIELD_REFUSED_MS
+              if ('readiness' in attempt) this.readinessRefusedUntil = began + FIELD_REFUSED_MS
+              else if ('harnessProgress' in attempt) this.progressRefusedUntil = began + FIELD_REFUSED_MS
               else if ('privacy' in attempt) this.privacyRefusedUntil = began + FIELD_REFUSED_MS
             }
           }
@@ -455,6 +504,82 @@ export class ContributedMachines {
     await this.deps.backend(this.core, 'POST', `/api/super-tabs/${tabId}/commands`, { operationId: `machine-cleaned-${removalId}`,
       command: { type: 'machine.cleaned', machineId: this.machineId, removalId } })
   }
+}
+
+// ── Readiness (#229 v1 routing) ─────────────────────────────────────────────────────────────────────────────────────
+// The route picked a Windows machine that never started agents, machines without the project and machines that could not
+// push, because nothing told it so. The reading says what this machine is ready for; the route leaves out only what it
+// says cannot work (routeCommand.ts), and anything unknown stays a candidate.
+
+/** How long an engine's sign-in and a checkout's push access stand before they are read again, and how soon an engine
+ *  probe that failed is tried again. */
+const READINESS_MS = 10 * 60_000
+const READINESS_RETRY_MS = 60_000
+/** The backend's limit on one reading's checkouts (`machineObservationSchema`). */
+const MAX_CHECKOUTS = 64
+type ReadyEngine = { engine: string; installed: true | null; signedIn: boolean | null }
+type ReadyCheckout = { folder: string; repository: string | null; git: boolean; push: boolean | null }
+type GitRun = (cwd: string, args: string[]) => Promise<{ ok: boolean; stdout: string; stderr: string; timedOut?: boolean }>
+
+/** git that never waits on a person (Lead, #229: a machine missing credentials must never hang on a password prompt): no
+ *  terminal or askpass prompt, no credential manager window, and a session of its own, so ssh has no terminal to ask on.
+ *  At [timeoutMs] its whole process group is killed, the helpers it started with it, and the answer settles then, even
+ *  while a helper that got away still holds its output (review of #1743: one could keep a refresh pending for good). */
+export function createQuietGit(timeoutMs = 15_000): GitRun {
+  return (cwd, args) => new Promise(resolve => {
+    const env: NodeJS.ProcessEnv = { ...process.env, GIT_TERMINAL_PROMPT: '0', GIT_ASKPASS: '', SSH_ASKPASS: '', SSH_ASKPASS_REQUIRE: 'never',
+      GCM_INTERACTIVE: 'never', GIT_OPTIONAL_LOCKS: '0' }
+    for (const key of ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_COMMON_DIR', 'GIT_INDEX_FILE']) delete env[key]
+    const child = spawn('git', ['-C', cwd, ...args], { env, detached: true, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] })
+    let stdout = '', stderr = '', settled = false
+    const settle = (answer: { ok: boolean; timedOut?: boolean }) => { if (!settled) { settled = true; clearTimeout(timer); resolve({ ...answer, stdout, stderr }) } }
+    child.stdout.setEncoding('utf8').on('data', (text: string) => { stdout = (stdout + text).slice(0, 65_536) })
+    child.stderr.setEncoding('utf8').on('data', (text: string) => { stderr = (stderr + text).slice(0, 65_536) })
+    // Its own group (detached), so the group id is its pid; Windows has no groups, and kills git alone. A helper it left
+    // behind holding its pipes is ended too, whether git hung or had already gone (re-check of #1743: one left per check).
+    const end = () => {
+      try { if (process.platform !== 'win32' && child.pid) process.kill(-child.pid, 'SIGKILL'); else child.kill('SIGKILL') } catch { /* already gone */ }
+      child.stdout.destroy(); child.stderr.destroy()
+    }
+    const timer = setTimeout(() => { end(); settle({ ok: false, timedOut: true }) }, timeoutMs)
+    child.on('error', () => settle({ ok: false }))
+    // Its output is all read once its pipes close; a helper it left running may hold them, so its exit is enough a second on.
+    child.on('close', code => settle({ ok: code === 0 }))
+    child.on('exit', code => { setTimeout(() => { if (!settled) { end(); settle({ ok: code === 0 }) } }, 1_000).unref() })
+  })
+}
+const quietGit = createQuietGit()
+
+/** What git or the remote says when this login may not push: refused, signed out, or a credential it could not ask for.
+ *  Anything else (a host it could not reach, a timeout) says nothing about access. */
+const NO_PUSH = /permission|denied|returned error: 40[13]|could not read (username|password)|terminal prompts disabled|authentication failed|invalid username or password|repository not found/i
+
+/** What git says of a folder that is no repository at all: the one failure that tells it is not a checkout. */
+const NOT_A_REPOSITORY = /not a git repository/i
+
+/** Each project folder in a Swarm folder: the repository its origin names (without credentials), whether it is a
+ *  checkout of its own, and whether this machine's login can push there, by a dry run that runs no hooks. git's own
+ *  words never leave the machine. A folder whose probe failed (a timeout, git that would not start, an unreadable
+ *  repository) is left out, which the route reads as unknown, and [unsure] says to read it again soon. */
+export async function readCheckouts(root: string, run: GitRun): Promise<{ checkouts: ReadyCheckout[]; unsure: boolean }> {
+  const folders = (await readdir(root, { withFileTypes: true })).filter(e => e.isDirectory() && !e.name.startsWith('.'))
+    .map(e => e.name).sort().slice(0, MAX_CHECKOUTS)
+  const out: ReadyCheckout[] = []
+  let unsure = false
+  for (const folder of folders) {
+    const dir = join(root, folder)
+    const top = await run(dir, ['rev-parse', '--show-toplevel'])
+    if (!top.ok && !top.timedOut && NOT_A_REPOSITORY.test(top.stderr)) { out.push({ folder, repository: null, git: false, push: null }); continue }
+    const [own, here] = top.ok ? await Promise.all([realpath(top.stdout.trim()).catch(() => null), realpath(dir).catch(() => null)]) : [null, null]
+    if (!own || !here) { unsure = true; continue }
+    // A folder inside some other checkout is not a checkout of its own.
+    if (own !== here) { out.push({ folder, repository: null, git: false, push: null }); continue }
+    const origin = await run(dir, ['remote', 'get-url', 'origin'])
+    if (!origin.ok) { out.push({ folder, repository: null, git: true, push: null }); continue }
+    const pushed = await run(dir, ['push', '--dry-run', '--no-verify', '--porcelain', 'origin', 'HEAD:refs/heads/harness-push-check'])
+    out.push({ folder, repository: repositoryKey(origin.stdout.trim()), git: true, push: pushed.ok ? true : !pushed.timedOut && NO_PUSH.test(pushed.stderr) ? false : null })
+  }
+  return { checkouts: out, unsure }
 }
 
 /** The backend's limit on one machine's local models (`machineObservationSchema`). */

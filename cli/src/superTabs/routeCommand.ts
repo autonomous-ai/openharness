@@ -7,7 +7,7 @@ import { openDaemon, type Daemon, type Where } from '../agentClient/daemon.js'
 import { requiredToolReason, startRequirements } from './capacity.js'
 import { inspectCapacity, type ScopedRequest } from './start.js'
 import { ENDED_WORK, object, within } from './wire.js'
-import { API_BUILDERS, choose, decide, parseAssessment, quotaOf2, rateFor, recordOf, repoMatch, type Assessment, type Commitment, type HeldModel, type MemberFrame, type Policy, type Probe, type SwarmRule, type TaskFolder } from './route.js'
+import { API_BUILDERS, choose, decide, parseAssessment, quotaOf2, rateFor, recordOf, repoMatch, repositoryKey, type Assessment, type Commitment, type HeldModel, type MemberFrame, type Policy, type Probe, type SwarmRule, type TaskFolder } from './route.js'
 import { stat } from 'node:fs/promises'
 import { describeScmProject } from '../scm/scmProjects.js'
 
@@ -23,6 +23,48 @@ const OFFLINE = 'Machine is offline or unreachable.'
 const UNKNOWN_QUOTA: Probe['quota'] = { known: false, leftPercent: null, resetsAt: null }
 const UNKNOWN_LOAD: NonNullable<Probe['load']> = { agents: null, freeMemoryBytes: null, hasFolder: null }
 const EXHAUSTED_WINDOW = 'The subscription has an exhausted usage window. Wait for a fresh allowance reading or choose another account.'
+/** Temporary (Scholes, 2026-10-26): grid's CLI does not run on Windows yet, so a Swarm agent started there never comes up
+ *  (WIN-DELL took starts that silently never ran). Lifting it is emptying this list. Compared with the OS every reading
+ *  has (lib/machineHardware.ts names it `Windows`), so a host from before readiness is left out too. */
+const NO_SWARM_AGENTS_ON: readonly string[] = ['Windows']
+const ENGINE_NAME: Record<string, string> = { claude: 'Claude Code', codex: 'Codex' }
+const NO_PUSH = "This machine's git login cannot push to the project repository. Its owner can sign in to GitHub there (gh auth login, then gh auth setup-git)."
+const STALLED = 'Its last 2 starts on this machine started no agent (they failed or were never picked up), so it is left out until a start there succeeds. Its owner can check the machine.'
+/** What a machine says it cannot do for this task (#229 v1 routing): `all` keeps out its new agents, `engines` those of an
+ *  engine, `push` its new agents and members alike. Only a known failure is said; anything unknown says nothing. */
+interface Unready { all: string[]; engines: Record<string, string>; push: string | null }
+const READY: Unready = { all: [], engines: {}, push: null }
+/** Whether the Swarm's last 2 starts on [machineId] both started nothing: failed, or queued and never picked up. A start
+ *  being created (dispatched, no agent yet) is not counted, nor is a machine with fewer than 2 starts. */
+function stalled(starts: Json[], machineId: string): boolean {
+  const last = starts.filter(s => object(s.request).machineId === machineId).slice(-2)
+  return last.length === 2 && last.every(s => !s.harnessId && (!!s.error || s.dispatched !== true))
+}
+/** What a contributed machine's reading says it is not ready for, for work in [projectId] ([needsPush] unless a review).
+ *  Its own login's push access counts only when it is the one that pushes: not for a teammate's project where the server
+ *  has the Harness GitHub App, whose token the agent pushes with (start.ts). */
+function unreadyPool(pool: Json, project: Json | undefined, projectId: string, needsPush: boolean, githubApp: boolean, projectOwner: unknown): Unready {
+  const observed = object(pool.observation), readiness = object(observed.readiness), repository = object(project?.repository)
+  const engines: Record<string, string> = {}
+  for (const e of list(readiness.engines)) {
+    const name = ENGINE_NAME[String(e.engine)]
+    if (!name) continue
+    if (e.installed === false) engines[String(e.engine)] = `${name} is not installed on this machine.`
+    // Worded as a subscription's, so a Builder on a local model, which runs through the grid without one, is not kept out.
+    else if (e.signedIn === false) engines[String(e.engine)] = `${name} is not signed in to a subscription on this machine. Its owner can sign in there; the next reading clears this.`
+  }
+  // Only a Swarm folder's own checkout of the project is read; the repository's machine runs it from the Lead's checkout.
+  const checkout = pool.scope === 'swarm' && repository.machineId !== pool.machineId ? list(readiness.checkouts).find(c => c.folder === projectId) : undefined
+  const wanted = typeof repository.repositoryUrl === 'string' ? repositoryKey(repository.repositoryUrl) : null
+  const all = [
+    ...(NO_SWARM_AGENTS_ON.includes(String(object(observed.resources).os)) ? [`Swarm agents do not run on ${String(object(observed.resources).os)} yet.`] : []),
+    ...(checkout?.git === false ? ['The project folder on this machine is not a git checkout. Its owner can remove it, and the next start clones the project.'] : []),
+    ...(checkout?.git === true && wanted && typeof checkout.repository === 'string' && checkout.repository !== wanted
+      ? ['The project folder on this machine is a checkout of another repository. Its owner can remove it, and the next start clones the project.'] : []),
+  ]
+  const app = githubApp && projectOwner !== pool.contributorId
+  return { all, engines, push: needsPush && !app && checkout?.push === false ? NO_PUSH : null }
+}
 /** A running member keeps its engine and memory, but still needs a live terminal, account allowance and the task's tools. */
 function memberRefusals(running: boolean | null, quota: Probe['quota'], tools: string[], devices: string[], reportedTools: Json, reportedDevices: Json, toolProbeErrors: Json): string[] {
   return [
@@ -144,7 +186,7 @@ export async function routeTask(input: { tabId: string; conversationId: string; 
   // (production, 2026-10-21). A member may run on a machine only its collaborator can open; the Lead tries that machine
   // too, but a member there is unknown, never offline.
   const swarmMachines = new Set([where.machineId, ...list(state.machines).map(m => String(m.machineId)), ...agents.map(a => String(a.machineId))])
-  const machines = new Map<string, { name: string; status: string; account: boolean; pool?: Json; folded?: boolean }>()
+  const machines = new Map<string, { name: string; status: string; account: boolean; pool?: Json; folded?: boolean; unready?: Unready; stalled?: boolean }>()
   for (const m of list(value.machines)) if (swarmMachines.has(String(m.machineId))) machines.set(String(m.machineId), { name: String(m.name), status: String(m.status ?? 'unknown'), account: true })
   // The Lead's own machine is the account's even when the list could not be read.
   if (!machines.has(where.machineId)) machines.set(where.machineId, { name: where.machineId, status: 'unknown', account: true })
@@ -165,8 +207,10 @@ export async function routeTask(input: { tabId: string; conversationId: string; 
       ...(original.scope === 'swarm' && repository.machineId !== original.machineId && typeof repository.repositoryUrl !== 'string'
         ? { repositoryUnavailable: true } : {}),
     }
-    machines.set(String(pool.machineId), { name: String(pool.name), status: 'contributed', account: false, pool })
+    machines.set(String(pool.machineId), { name: String(pool.name), status: 'contributed', account: false, pool,
+      unready: unreadyPool(original, project, projectId, !review, object(value.tab).githubApp === true, projectOwner) })
   }
+  for (const [machineId, machine] of machines) machine.stalled = stalled(list(state.starts), machineId)
   // One machine (docs/plans/2026-10-24-swarm-team-account.md): a Mac's Harness Team account is that Mac, under its name. A
   // teammate's project starts only in the team account and the Mac's owner's own projects only with the owner, so only one
   // of the two offers new agents here, and the other is not listed as unfit; agents already on either stay members.
@@ -317,7 +361,7 @@ export function localProbes(state: Json, policy: Policy, probes: Probe[], a: Ass
       refusals: base.refusals.filter(r => !SUBSCRIPTION.test(r)), gridModel: m.model, gridName: m.grid, gridLabel: m.label, gridKind: m.kind })))
 }
 
-async function probeMachine(machineId: string, { name: machineName, status, account, pool, folded }: { name: string; status: string; account: boolean; pool?: Json; folded?: boolean },
+async function probeMachine(machineId: string, { name: machineName, status, account, pool, folded, unready = READY, stalled: stuck = false }: { name: string; status: string; account: boolean; pool?: Json; folded?: boolean; unready?: Unready; stalled?: boolean },
   members: Json[], allModels: Policy['models'], policy: Policy, a: Assessment, where: Where, open: typeof openDaemon): Promise<Probe[]> {
   const listedEngines = Array.isArray(pool?.engines) ? pool.engines.filter((engine): engine is string => typeof engine === 'string') : []
   const legacy = listedEngines.some(engine => !ENGINES.includes(engine))
@@ -353,15 +397,17 @@ async function probeMachine(machineId: string, { name: machineName, status, acco
       ...(!finite(resources.projectDiskFreeBytes) || resources.projectDiskFreeBytes < needs.diskBytes ? ['The project has insufficient measured free disk.'] : []),
       ...(!finite(resources.memoryTotalBytes) || !finite(resources.memoryUsedBytes) || resources.memoryTotalBytes - resources.memoryUsedBytes < needs.memoryBytes ? ['Insufficient measured free memory.'] : []),
       ...needs.tools.map(t => requiredToolReason(t, tools[t], object(observed.toolProbeErrors)[t])).filter((reason): reason is string => reason !== null),
-      ...(needs.devices.length ? ['Required devices have not been reported.'] : [])]
+      ...(needs.devices.length ? ['Required devices have not been reported.'] : []),
+      ...unready.all, ...(unready.push ? [unready.push] : []), ...(stuck ? [STALLED] : [])]
     return [...members.map(m => {
       const allowance = quota(String(object(m.configuration).engine))
       const running = Array.isArray(observed.runningHarnessIds) ? observed.runningHarnessIds.includes(m.harnessId) : null
       return memberProbe(m, fresh ? [...memberRefusals(running, allowance, needs.tools, needs.devices, tools, object(observed.devices), object(observed.toolProbeErrors)),
-        ...teammates(m.contributorId)] : [OFFLINE],
+        ...teammates(m.contributorId), ...(unready.push ? [unready.push] : [])] : [OFFLINE],
         allowance, null, fresh && running === null)
     }),
-      ...models.map(m => newProbe(m, [...newReasons, ...(quota(m.engine).leftPercent === 0 ? ['Subscription exhausted.'] : [])], quota(m.engine), fresh && quota(m.engine).known,
+      ...models.map(m => newProbe(m, [...newReasons, ...(unready.engines[m.engine] ? [unready.engines[m.engine]!] : []),
+        ...(quota(m.engine).leftPercent === 0 ? ['Subscription exhausted.'] : [])], quota(m.engine), fresh && quota(m.engine).known,
         { agents: Array.isArray(observed.runningHarnessIds) ? observed.runningHarnessIds.length : null,
           freeMemoryBytes: finite(resources.memoryTotalBytes) && finite(resources.memoryUsedBytes) ? resources.memoryTotalBytes - resources.memoryUsedBytes : null,
           hasFolder: finite(resources.projectDiskFreeBytes) }))]
@@ -405,7 +451,10 @@ async function probeMachine(machineId: string, { name: machineName, status, acco
       // could not measure the named folder's disk, a missing folder is the likely cause; a failed or unsupported read says nothing.
       const noFolder = !!a.needs.cwd && machineId !== where.machineId && object(inspected.capacity).ok === true && !finite(resources.projectDiskFreeBytes)
       const reasons = noFolder ? inspected.reasons.map(r => r === DISK_UNVERIFIED ? NO_PROJECT_FOLDER : r) : inspected.reasons
-      probes.push(newProbe(m, inspected.allowed ? [] : reasons, quotaOf2(inspected.quota), inspected.unknown.length === 0 && inspected.quota.known, load))
+      // A machine reached directly says its OS in the same capacity read (lib/machineHardware.ts).
+      const os = String(resources.os)
+      const unfit = [...(NO_SWARM_AGENTS_ON.includes(os) ? [`Swarm agents do not run on ${os} yet.`] : []), ...(stuck ? [STALLED] : [])]
+      probes.push(newProbe(m, [...(inspected.allowed ? [] : reasons), ...unfit], quotaOf2(inspected.quota), inspected.unknown.length === 0 && inspected.quota.known, load))
     }
     return probes
   } finally { target.close() }
