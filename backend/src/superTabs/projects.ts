@@ -23,14 +23,8 @@ export interface SwarmProject {
   visibility: ProjectVisibility
   members: Array<{ id: string; generation: string }>
   updateMinutes: 1 | 5 | 15 | 30
-  progress?: {
-    dirtyRevision: number
-    summarizedRevision: number
-    since: number
-    requestedRevision: number
-    requestedAt?: number
-    requestMessageId?: string
-  }
+  /** Report watermark per conversation (projectUpdates.ts); kept in its own part (store by parts). */
+  progress?: import('./parts/types.js').ProgressData
   repository?: { machineId: string; cwd: string; repositoryUrl: string | null }
   /** Absent on projects from before skill modes, which keep the texts their agents already run. */
   skillMode?: SkillMode
@@ -112,7 +106,36 @@ export function readConversation(state: SuperTabState, actor: Actor, conversatio
     return group
   }
   readProject(state, actor, groupProject(state, group).id)
+  if (!canReadGroup(state, actor, group)) fail('NOT_FOUND', 'This conversation is unavailable.', 404)
   return group
+}
+
+/** Whether a project's owner and the Swarm's owner also read its private conversations. The owner decided they do not
+ *  (2026-10-26); this is the one place that decides it (design section 4.8). */
+export const PRIVATE_VISIBLE_TO_OWNERS = false
+
+/** Who reads a conversation: the Leads conversation's people and Leads; a project conversation's readers; and a private
+ *  conversation's listed people (at the generation they were listed with) and the project's Lead, nobody else. */
+export function canReadGroup(state: SuperTabState, actor: Actor, group: Conversation): boolean {
+  if (isLeads(group)) return actor.kind === 'person' ? state.people.some(p => p.id === actor.userId) : !!ledProject(state, actor.agentId)
+  const project = groupProject(state, group)
+  if (!canReadProject(state, actor, project)) return false
+  if (!group.audience) return true
+  if (actor.kind === 'agent') return ledProject(state, actor.agentId)?.id === project.id
+  const member = state.people.find(p => p.id === actor.userId)
+  return !!member && (group.audience.people.some(p => p.id === member.id && p.generation === member.generation)
+    || (PRIVATE_VISIBLE_TO_OWNERS && (member.id === project.ownerId || member.id === state.ownerId)))
+}
+
+/** A private conversation's audience: each person a member who reads its project, captured at their generation. */
+export function audienceOf(state: SuperTabState, project: SwarmProject, personIds: string[]): NonNullable<Conversation['audience']> {
+  return { people: [...new Set(personIds)].map(id => {
+    const member = state.people.find(p => p.id === id) ?? fail('INVALID_AUDIENCE', 'List people in this Swarm.', 400)
+    if (!canReadProject(state, { kind: 'person', userId: member.id, email: member.email }, project)) {
+      fail('INVALID_AUDIENCE', `${member.email} cannot read this project.`, 400)
+    }
+    return { id: member.id, generation: member.generation }
+  }) }
 }
 
 export function canReadAgent(state: SuperTabState, actor: Actor, target: Agent): boolean {

@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto'
 import type { RouteDecisionEffect } from './routeRecord.js'
 import { agentDisplayName, assignAgentDisplayNames } from './agentNames.js'
 import { downSince, expireRemovals } from './machines.js'
-import { agentProjectId, agentSetRole, canReadAgent, canReadProject, groupProject, ledProject, placeRules, projectsOf, sharedWithLeads, skillSetOf, type ProjectVisibility, type SwarmProject } from './projects.js'
+import { agentProjectId, agentSetRole, canReadAgent, canReadGroup, canReadProject, groupProject, ledProject, placeRules, projectsOf, sharedWithLeads, skillSetOf, type ProjectVisibility, type SwarmProject } from './projects.js'
 
 export type Role = 'owner' | 'collaborator' | 'viewer'
 export interface Person { id: string; email: string; role: Role; generation: string }
@@ -135,6 +135,16 @@ export interface Conversation {
   lastMessageSequence: number
   /** Linked GitHub pull requests, including links older than the latest message page. Absent in older snapshots. */
   pullRequestUrls?: string[]
+  /** The last sequence given to a message here. Each conversation numbers its own messages (store by parts). */
+  messageSeq?: number
+  /** The sequence of its last message that counts toward its project's reports (projectUpdates.ts). */
+  reportSeq?: number
+  /** Out of first loads and changes: work done or cancelled and quiet for a day, or archived by hand. A message wakes it. */
+  dormant?: boolean
+  /** When its last message was written (ISO). */
+  lastActivityAt?: string
+  /** A private conversation: only these people and the project's Lead read it (projects.ts canReadGroup). */
+  audience?: import('./parts/types.js').Audience
 }
 
 export function appendPullRequestUrls(group: Conversation, texts: Iterable<string | null | undefined>): void {
@@ -196,6 +206,10 @@ export interface SuperTabState {
   /** The Local models add-on (docs/plans/2026-10-23-swarm-local-models.md): off until the owner turns it on, and only
    * then does anything call grid. The grid is kept when it is turned off, so turning it on again is instant. */
   localModels?: SwarmLocalModels
+  /** The highest workgroup number ever given (store by parts); numbers are never given twice. */
+  groupCounter?: number
+  /** The tab revision when this Swarm was split into parts; every later message sequence is above it. */
+  sequenceBase?: number
 }
 export interface SwarmLocalModels {
   /** The Swarm's own grid, minted on first turn-on and never renamed. */
@@ -317,10 +331,11 @@ export function parkLaterConversations(state: SuperTabState): void {
 }
 
 /** Work a Lead of another project should know about: assigned and moving, not finished, stuck or archived. */
-export const crossProjectActive = (group: Conversation): boolean => !group.archived && !isLeads(group)
+export const crossProjectActive = (group: Conversation): boolean => !group.archived && !isLeads(group) && !group.audience
   && ['working', 'review', 'needs_human'].includes(group.assignment?.status ?? '')
 
-function otherProjectsWork(state: SuperTabState, own: SwarmProject): OtherProjectWork[] {
+/** The active work of the other projects a project's Lead may know about (shared with the read API, design 7.2). */
+export function otherProjectsWork(state: SuperTabState, own: SwarmProject): OtherProjectWork[] {
   return state.conversations.filter(crossProjectActive).flatMap(group => {
     const project = groupProject(state, group), assignment = group.assignment!
     if (project.id === own.id || !sharedWithLeads(project)) return []
@@ -347,11 +362,14 @@ export function numberConversations(state: SuperTabState): void {
   let next = nextConversationNumber(state)
   const leads = new Set(projectsOf(state).map(p => p.leadConversationId))
   for (const group of state.conversations) {
-    if (!leads.has(group.id) && !isLeads(group) && group.number == null) group.number = next++
+    if (!leads.has(group.id) && !isLeads(group) && group.number == null) state.groupCounter = group.number = next++
   }
 }
+/** The store by parts keeps the highest number ever given (`groupCounter`): a dormant group is not loaded, and its
+ *  number must not be given again. */
 export function nextConversationNumber(state: SuperTabState): number {
-  return Math.max(state.retiredConversationNumber ?? 0, 0, ...[...state.conversations, ...state.parkedConversations ?? []].map(c => c.number ?? 0)) + 1
+  return Math.max(state.groupCounter ?? 0, state.retiredConversationNumber ?? 0, 0,
+    ...[...state.conversations, ...state.parkedConversations ?? []].map(c => c.number ?? 0)) + 1
 }
 export function author(state: SuperTabState, actor: Actor, write = false): Author {
   if (actor.kind === 'person') {
@@ -392,6 +410,8 @@ export function createSuperTab(id: string, name: string, owner: { id: string; em
 export function visibleState(state: SuperTabState, actor: Actor, now = Date.now()): SuperTabState {
   author(state, actor)
   const visible = structuredClone(state)
+  // A dormant conversation is read on demand, never in a whole-Swarm read (spec, Archive); a command may still load one.
+  visible.conversations = visible.conversations.filter(c => !c.dormant)
   syncLeads(visible)
   // People and Leads read the Leads conversation; it is not there for any other agent.
   if (actor.kind === 'agent' && !ledProject(visible, actor.agentId)) {
@@ -425,11 +445,13 @@ export function visibleState(state: SuperTabState, actor: Actor, now = Date.now(
   delete visible.parkedConversations
   numberConversations(visible)
   delete visible.retiredConversationNumber
+  delete visible.groupCounter
+  delete visible.sequenceBase
   placeRules(visible)
   if (visible.rules) visible.rules = visible.rules.filter(r => projectsOf(state).some(p => p.id === r.projectId && canReadProject(state, actor, p)))
   if (visible.projects) {
     visible.projects = visible.projects.filter(p => canReadProject(state, actor, p))
-    visible.conversations = visible.conversations.filter(c => isLeads(c) || canReadProject(state, actor, groupProject(state, c)))
+    visible.conversations = visible.conversations.filter(c => isLeads(c) || canReadGroup(state, actor, c))
     visible.agents = visible.agents.filter(a => canReadAgent(state, actor, a))
     for (const group of visible.conversations.filter(isLeads)) group.agentIds = group.agentIds.filter(id => visible.agents.some(a => a.id === id))
     visible.starts = visible.starts?.filter(s => visible.conversations.some(c => c.id === s.request.conversationId))
