@@ -23,14 +23,15 @@ describe('resetting a board over its cable', () => {
     expect(await resetBoard('/dev/cu.usbmodem1', { platform: 'darwin', run: missing })).toBe(false)
   })
 
-  it('is a script the real perl runs, and a port that refuses the lines is a "no"', async () => {
+  // Windows has no /dev/null tty to refuse the lines, and the reset is never attempted there (the case above).
+  it.skipIf(process.platform === 'win32')('is a script the real perl runs, and a port that refuses the lines is a "no"', async () => {
     // /dev/null opens but is no tty, so the ioctl fails: exit 3 says the script parsed and got as far as the
     // first TIOCMSET (a syntax error would be 255, a failed open 2), and it still comes back as a plain "no".
     let code: unknown
     const run = async (file: string, args: string[], options: { timeout: number }) => {
       try { return await promisify(execFile)(file, args, options) } catch (error) { code = (error as { code?: unknown }).code; throw error }
     }
-    expect(await resetBoard('/dev/null', { platform: process.platform === 'win32' ? 'linux' : process.platform, run })).toBe(false)
+    expect(await resetBoard('/dev/null', { platform: process.platform, run })).toBe(false)
     expect(code).toBe(3)
   })
 })

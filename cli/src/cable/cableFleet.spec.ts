@@ -759,7 +759,7 @@ describe('a Harness Pro that is silent from the moment its port opens', () => {
     silent() { this.host.onForeignPort?.('/dev/pro', 'silent') }
   }
   const PRO = 'E8:F6:0A:E7:63:7D'
-  const NOTICE = 'Harness Pro isn\'t answering — unplug it and plug it back in'
+  const NOTICE = 'Not answering — unplug and replug'
   function setup(opts: { verdicts?: DialVerdicts; session?: string; serial?: string } = {}) {
     Quiet.made = []
     const f = fixture()

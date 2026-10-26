@@ -77,13 +77,13 @@ void main() {
         'attached': false,
         'board': 'pro',
         'problem':
-            'Harness Pro isn\'t answering — unplug it and plug it back in',
+            'Not answering — unplug and replug',
       }),
     ]);
     expect(controller.devices, hasLength(1));
     expect(
       controller.device(key)!.connectionLabel,
-      'Harness Pro isn\'t answering — unplug it and plug it back in',
+      'Not answering — unplug and replug',
     );
     report(dial, [deviceStatus('E8:F6', mac: 'e8:f6')]);
     expect(controller.device(key)!.connectionLabel, 'Connected');

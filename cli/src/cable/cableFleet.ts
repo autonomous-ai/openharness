@@ -45,8 +45,8 @@ const FAULTS_TO_DROP = 5
 const DROP_BACKOFF_MS = 5_000
 const DROP_BACKOFF_MAX_MS = 60_000
 const DROP_FORGIVEN_MS = 300_000
-/** Shown on a silent Harness Pro's row once a reset has not brought it back. */
-const UNANSWERED_NOTICE = 'Harness Pro isn\'t answering — unplug it and plug it back in'
+/** Shown on a silent Harness Pro's row once a reset has not brought it back: short, the card gives it about two lines. */
+const UNANSWERED_NOTICE = 'Not answering — unplug and replug'
 /** A Harness Pro's greeting as the daemon writes it into that device's dial log (cableSession.ts, dialLog.ts). */
 const PRO_GREETING = /\] dial \S+ (?:back )?on fw \S+ .*\bboard pro\b/
 
