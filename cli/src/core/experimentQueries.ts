@@ -65,6 +65,13 @@ export function daemonAddress(core: Pick<CoreApi, 'daemon'>): Payload {
   return { command: core.daemon.command, port: core.daemon.port, machineId: core.daemon.machineId(), autonomousEnv: core.daemon.autonomousEnv }
 }
 
+/** What the add-ons of a device that is this machine ask in their own process (services/machineAddonsProcess.ts):
+ *  this daemon's address, for the account's machine id. Answered before the experiments' check, which would refuse
+ *  it as NOT_AN_EXPERIMENT; any other query of theirs is not answered here. */
+export function answerMachineAddonsQuery(core: Pick<CoreApi, 'daemon'>, service: string, query: string): Payload | null {
+  return service === 'machineAddons' && query === 'daemon' ? daemonAddress(core) : null
+}
+
 /** The answer to an experiment's query, or null when it is not one of these. */
 export async function answerExperimentQuery(core: Core, experiments: ReadonlySet<string>, service: string, query: string, payload: Payload): Promise<Payload | null> {
   if (!QUERIES.has(query)) return null

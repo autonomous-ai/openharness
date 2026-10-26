@@ -209,7 +209,7 @@ import { createDeliveries } from './deliveries.js'
 import { createTerminalWatch } from './terminalWatch.js'
 import { createSharingLink } from './sharingLink.js'
 import { createAgentSettingsSync, createExperimentHooks, wakeExperiments } from './experiments.js'
-import { answerExperimentQuery, createForExperiment, creationForExperiment } from './experimentQueries.js'
+import { answerExperimentQuery, answerMachineAddonsQuery, createForExperiment, creationForExperiment } from './experimentQueries.js'
 import { createSuperTabAttention } from './superTabAttention.js'
 import { createSuperTabTerminal } from './superTabTerminal.js'
 import { createSuperTabCards } from './superTabCards.js'
@@ -1560,6 +1560,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       ?? (service === 'messages' ? await messagesLink.answer(query, payload) : null)
       ?? await answerConnectorsQuery(coreApi, service, query, payload)
       ?? await answerSharedMachinesQuery(sharedMachinesAccount, service, query, payload)
+      ?? answerMachineAddonsQuery(coreApi, service, query)
       ?? await answerExperimentQuery(coreApi, experiments, service, query, payload)
       ?? await terminalWatch.answer(service, query, payload)
       ?? (service === 'orchestrator' ? orchestratorLink.answer(query, payload) : null)
