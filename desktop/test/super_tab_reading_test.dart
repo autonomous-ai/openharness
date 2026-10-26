@@ -23,6 +23,9 @@ class _Reads {
   final paths = <String>[];
   bool machineMissing = false;
 
+  /// How long each answer takes, as a phone on 4G waits for it.
+  Duration latency = Duration.zero;
+
   Future<Map<String, dynamic>> call(
     String method,
     String path, {
@@ -35,6 +38,12 @@ class _Reads {
           'MACHINE_UNAVAILABLE',
           'Connect one of your machines to open Swarm.',
         ),
+      );
+    }
+    if (latency > Duration.zero) {
+      return Future.delayed(
+        latency,
+        () => server.request(method, path, body: body),
       );
     }
     return server.request(method, path, body: body);
@@ -103,6 +112,20 @@ void main() {
         server.holdReads!.complete();
         server.holdReads = null;
         async.flushMicrotasks();
+        c.dispose();
+      });
+    });
+
+    test('every poll is drawn, changed or not', () {
+      fakeAsync((async) {
+        final server = ConversationServer()..append('Hello');
+        final reads = _Reads(server);
+        final c = _controller(reads)..start();
+        async.elapse(const Duration(seconds: 61));
+        var notified = 0;
+        c.addListener(() => notified++);
+        async.elapse(const Duration(seconds: 30));
+        expect(notified, greaterThanOrEqualTo(10));
         c.dispose();
       });
     });
@@ -263,6 +286,51 @@ void main() {
         async.flushMicrotasks();
         // Its answer is used, not asked for again.
         expect(reads.tails, 1);
+        c.dispose();
+      });
+    });
+
+    test('a quiet full read with nothing new redraws nothing', () {
+      fakeAsync((async) {
+        final server = ConversationServer()..append('Hello');
+        final reads = _Reads(server);
+        final c = _controller(reads, reading: _web)..start();
+        async.elapse(const Duration(seconds: 61));
+        var notified = 0;
+        c.addListener(() => notified++);
+        reads.clear();
+        async.elapse(const Duration(seconds: 30));
+        expect(reads.states, 2);
+        expect(notified, 0);
+        // What the backend works out at read time changes the state without
+        // a new revision (an agent seen down, a limit that ran out): drawn.
+        server.state['name'] = 'Pilot, renamed';
+        reads.clear();
+        do {
+          async.elapse(const Duration(seconds: 3));
+        } while (reads.states == 0);
+        expect(notified, greaterThan(0));
+        expect(c.snapshot!.name, 'Pilot, renamed');
+        notified = 0;
+        // A change is still drawn.
+        server.append('A new line.');
+        async.elapse(const Duration(seconds: 3));
+        expect(notified, greaterThan(0));
+        expect(c.messages('lead').last.text, 'A new line.');
+        c.dispose();
+      });
+    });
+
+    test('a slow answer does not stretch the 3 s poll', () {
+      fakeAsync((async) {
+        final server = ConversationServer()..append('Hello');
+        final reads = _Reads(server)
+          ..latency = const Duration(milliseconds: 900);
+        final c = _controller(reads, reading: _web)..start();
+        async.elapse(const Duration(seconds: 2));
+        reads.clear();
+        async.elapse(const Duration(seconds: 27));
+        expect(reads.states, 9);
         c.dispose();
       });
     });

@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:math';
 
 import 'package:clock/clock.dart';
+import 'package:collection/collection.dart' show DeepCollectionEquality;
 import 'package:dio/dio.dart' show CancelToken, DioException, DioExceptionType;
 import 'package:flutter/foundation.dart';
 
@@ -144,6 +145,9 @@ class SuperTabController extends ChangeNotifier {
 
   SuperTabReading _policy;
   DateTime? _startedAt, _lastFullRead;
+
+  /// The state last drawn, while the reading adapts ([_read]).
+  Map<String, dynamic>? _shownState;
 
   /// The last time the person did something here, or a new message reached
   /// the open conversation: what keeps the full poll ([SuperTabReading.quietPoll]).
@@ -389,7 +393,8 @@ class SuperTabController extends ChangeNotifier {
     _schedule();
   }
 
-  void _schedule() {
+  /// [after] is what is left of the poll once a read took the rest of it.
+  void _schedule([Duration? after]) {
     _poll?.cancel();
     if (_disposed || pollInterval <= Duration.zero) return;
     if (!_policy.adapts) {
@@ -397,14 +402,20 @@ class SuperTabController extends ChangeNotifier {
       return;
     }
     if (accessRevoked || (_policy.pausesAway && _away)) return;
-    _poll = Timer(pollInterval, () => unawaited(_tick()));
+    final wait = after ?? pollInterval;
+    _poll = Timer(
+      wait > Duration.zero ? wait : Duration.zero,
+      () => unawaited(_tick()),
+    );
   }
 
   /// One adaptive poll: the full read when it is due, else only the open
-  /// conversation's new messages and its own unsettled receipt.
+  /// conversation's new messages and its own unsettled receipt. The next one
+  /// comes a poll after this one began, however long its answer took.
   Future<void> _tick() async {
+    final began = clock.now();
     await (_fullReadDue ? refresh() : _readMessages(selectedId, light: true));
-    _schedule();
+    _schedule(pollInterval - clock.now().difference(began));
   }
 
   bool get _fullReadDue {
@@ -552,8 +563,13 @@ class SuperTabController extends ChangeNotifier {
   }
 
   Future<void> _read() async {
+    // An adapting read that changes nothing redraws nothing: on a phone each
+    // redraw of the whole tab is a long frame, every poll.
+    final quiet = _policy.adapts && snapshot != null;
+    final before = _shown;
+    var stateChanged = false;
     loading = snapshot == null;
-    _changed();
+    if (!quiet) _changed();
     _lastFullRead = clock.now();
     final took = Stopwatch()..start();
     // The open conversation's messages, asked for beside the state
@@ -579,7 +595,14 @@ class SuperTabController extends ChangeNotifier {
         'swarm',
         'state read in ${took.elapsedMilliseconds} ms (revision $nextRevision)',
       );
-      final next = SuperTabSnapshot.fromJson(superTabMap(answer['state']));
+      final raw = superTabMap(answer['state']);
+      // Some of the state is worked out at read time (an agent seen down, a
+      // limit that ran out) and changes with no new revision.
+      if (_policy.adapts) {
+        stateChanged = !const DeepCollectionEquality().equals(raw, _shownState);
+        _shownState = raw;
+      }
+      final next = SuperTabSnapshot.fromJson(raw);
       if (next.id != tabId) {
         throw const FormatException('A different Swarm was returned.');
       }
@@ -644,9 +667,19 @@ class SuperTabController extends ChangeNotifier {
       );
     } finally {
       loading = _waitingForMachine;
-      _changed();
+      if (!quiet || stateChanged || _shown != before) _changed();
     }
   }
+
+  /// What a state read can change on screen, beside the messages.
+  ({int revision, String? error, bool failing, bool revoked, bool loading})
+  get _shown => (
+    revision: revision,
+    error: error,
+    failing: _refreshFailing,
+    revoked: accessRevoked,
+    loading: loading,
+  );
 
   /// A first read that found no machine connected, before the grace
   /// ([SuperTabReading.connectGrace]) runs out: its error waits for the grace.
@@ -667,6 +700,24 @@ class SuperTabController extends ChangeNotifier {
       loading = false;
       _changed();
     });
+    return true;
+  }
+
+  /// The same messages with the same receipts: posted text does not change.
+  static bool _sameMessages(
+    List<SuperTabMessage>? shown,
+    List<SuperTabMessage> next,
+  ) {
+    if (shown == null || shown.length != next.length) return false;
+    for (var i = 0; i < next.length; i++) {
+      final a = shown[i], b = next[i];
+      if (a.id != b.id || a.deliveries.length != b.deliveries.length) {
+        return false;
+      }
+      for (var j = 0; j < b.deliveries.length; j++) {
+        if (!mapEquals(a.deliveries[j], b.deliveries[j])) return false;
+      }
+    }
     return true;
   }
 
@@ -777,7 +828,6 @@ class SuperTabController extends ChangeNotifier {
         for (final m in _messages[id] ?? <SuperTabMessage>[]) m.id: m,
         for (final m in incoming) m.id: m,
       };
-      var settled = false;
       final own = combined.values
           .where(
             (m) => !m.fromAgent && !m.fromTerminal && m.authorId == accountId,
@@ -819,18 +869,18 @@ class SuperTabController extends ChangeNotifier {
         for (final row in rows) {
           combined[row.id] = row;
         }
-        settled = true;
       }
-      // A light check that found nothing new changes nothing on screen.
-      if (light && incoming.isEmpty && !settled) return;
-      _messages[id] = combined.values.toList()
+      final next = combined.values.toList()
         ..sort((a, b) => a.sequence.compareTo(b.sequence));
+      // An adapting read that found nothing new changes nothing on screen.
+      final same = _policy.adapts && _sameMessages(_messages[id], next);
+      _messages[id] = next;
       if (older || !_before.containsKey(id)) {
         _before[id] = (answer['next'] as num?)?.toInt();
       }
       // Something new in the conversation on screen keeps the full poll.
       if (arrived && id == selectedId) _acted();
-      _changed();
+      if (!same) _changed();
     } catch (failure) {
       _readFailure(failure, revokeTab: false);
       if (failure is SuperTabFailure &&
