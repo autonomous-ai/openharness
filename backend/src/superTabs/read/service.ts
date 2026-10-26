@@ -7,6 +7,7 @@ import type { AuthUser } from '../../lib/ssoAuth.js'
 import { isTeamSession, TEAM_SESSION_LIMITED, TEAM_SESSION_MESSAGE } from '../../lib/teamSession.js'
 import { author, fail, type Actor, type AgentStart } from '../model.js'
 import { mentionsWaiting } from '../mentions.js'
+import { decisionConversations, decisionsWaiting } from '../decisions.js'
 import { transaction, type SuperTabStore } from '../store.js'
 import { migrateSwarm } from '../migration/migrate.js'
 import * as parts from '../parts/index.js'
@@ -44,9 +45,10 @@ export class SwarmReads {
     const t0 = this.now()
     return this.read(user, tabId, async tx => {
       // Light (parts/light.ts): changed parts come whole from the change feed; the rest is read only to check visibility and
-      // derive values: the Lead conversations, those with running work, and those a person's mentions are in (their count).
-      const mentioned = asAgentId ? [] : (await tx.superTabMention.findMany({ where: { tabId, personId: user.sub }, select: { conversationId: true },
-        distinct: ['conversationId'] })).map(m => m.conversationId)
+      // derive values: the Lead conversations, those with running work, and those a person's mentions and open decisions are
+      // in (their counts).
+      const mentioned = asAgentId ? [] : [...new Set([...(await tx.superTabMention.findMany({ where: { tabId, personId: user.sub },
+        select: { conversationId: true }, distinct: ['conversationId'] })).map(m => m.conversationId), ...await decisionConversations(tx, tabId, user.sub)])]
       const light = { includeRecentStarts: true, groups: 'working' as const, groupIds: mentioned }
       let read = await this.load(tx, user, tabId, asAgentId, t0, light, parts.loadLight)
       const from = readCursor(cursor, read.parts.visibilityEpoch, t0)
@@ -119,12 +121,12 @@ export class SwarmReads {
     const loaded = await loader(tx, tabId, opts)
     const state = parts.reassemble(loaded)
     const actor = await this.store.actor(tx, user, state, asAgentId)
-    const [teamMachines, mentions, newest] = await Promise.all([
+    const [teamMachines, counts, newest] = await Promise.all([
       state.machines?.length ? this.store.teamMachines(tx, state) : [],
-      actor.kind === 'person' ? mentionsWaiting(tx, tabId, state, actor, t0) : undefined,
+      actor.kind === 'person' ? Promise.all([mentionsWaiting(tx, tabId, state, actor, t0), decisionsWaiting(tx, tabId, state, actor)]) : undefined,
       parts.lastChangedAt(tx, [tabId]),
     ])
     return { parts: loaded, actor, lastChangedAt: newest.get(tabId) ?? null,
-      view: readerView(loaded, actor, t0, { teamMachines, ...(mentions !== undefined ? { mentionsWaiting: mentions } : {}) }) }
+      view: readerView(loaded, actor, t0, { teamMachines, ...(counts ? { mentionsWaiting: counts[0], decisionsWaiting: counts[1] } : {}) }) }
   }
 }

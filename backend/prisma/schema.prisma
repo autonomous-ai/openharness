@@ -1078,6 +1078,33 @@ model SuperTabMention {
   @@index([tabId, conversationId, personId])
 }
 
+/// A question to one person, with options and a recommendation (backend/src/superTabs/decisions.ts). Kept out of the tab
+/// state, as mentions are: an asking agent and the asked person read it, and the person answers it once.
+model SuperTabDecision {
+  id             String    @id @map("_id")
+  tabId          String
+  /// The ask that put several questions to one person together.
+  batchId        String
+  projectId      String
+  conversationId String
+  /// The task whose needs_human asked it, or null for the Lead's decision.ask.
+  assignmentId   String?
+  personId       String
+  askerAgentId   String
+  question       String
+  options        String[]
+  recommended    Int
+  unblocks       String
+  createdAt      DateTime
+  answeredAt     DateTime?
+  choice         Int?
+  note           String?
+
+  @@index([tabId, personId, createdAt])
+  @@index([tabId, askerAgentId, createdAt])
+  @@index([tabId, projectId, createdAt])
+}
+
 /// One uploaded file, which one message of the actor that uploaded it can send once.
 model SuperTabAttachment {
   id             String   @id @map("_id")

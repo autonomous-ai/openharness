@@ -550,6 +550,66 @@ describe('a real command through the store by parts (design 4.7)', () => {
   })
 })
 
+describe('decisions asked of one person (v2)', () => {
+  const post = async (tabId: string, command: Record<string, unknown>, as: AuthUser = owner, asAgentId?: string) => {
+    const response = await app.inject({ method: 'POST', url: `/api/super-tabs/${tabId}/commands`, headers: { authorization: `Bearer ${as.sub}` },
+      payload: { operationId: randomUUID(), command, ...(asAgentId ? { asAgentId } : {}) } })
+    return { status: response.statusCode, body: response.json() as { data: { result: Record<string, unknown> }; error?: { code: string } } }
+  }
+  const decisions = async (tabId: string, as: AuthUser, state = 'open', agent?: string) =>
+    (await get(`/api/super-tabs/${tabId}/decisions?state=${state}${agent ? `&asAgentId=${agent}` : ''}`, as)).body.data.decisions as Array<Record<string, any>>
+  const question = (text: string) => ({ question: text, options: ['Behind a flag', 'To everyone'], recommended: 0, unblocks: 'The release' })
+
+  it('shows a decision only to the person asked and the agent that asked, and counts it on their first load', async () => {
+    const s = await scene()
+    clock = Date.now()
+    const asked = await post(s.tabId, { type: 'decision.ask', conversationId: s.web, personId: peer.sub, questions: [question('Ship how?'), question('Name it?')] }, owner, s.lead)
+    expect(asked.status, JSON.stringify(asked.body)).toBe(200)
+    const seen = await decisions(s.tabId, peer)
+    expect(seen.map(d => d.question).sort()).toEqual(['Name it?', 'Ship how?'])
+    for (const d of seen) expect(d).toMatchObject({ options: ['Behind a flag', 'To everyone'], recommended: 0, unblocks: 'The release', conversationTitle: 'Web', askerAgentId: s.lead })
+    expect(new Set(seen.map(d => d.batchId)).size).toBe(1)
+    // Not the Swarm's owner, another member, or another agent; the asking Lead does.
+    expect(await decisions(s.tabId, owner)).toEqual([])
+    expect(await decisions(s.tabId, outsider)).toEqual([])
+    expect(await decisions(s.tabId, owner, 'open', s.worker)).toEqual([])
+    expect((await decisions(s.tabId, owner, 'open', s.lead)).length).toBe(2)
+    expect((await get(`/api/super-tabs/${s.tabId}/parts`, peer)).body.data.derived.decisionsWaiting).toBe(2)
+    expect((await get(`/api/super-tabs/${s.tabId}/parts`, owner)).body.data.derived.decisionsWaiting).toBe(0)
+  })
+
+  it('takes the person\'s one-tap answer once, and the answer reaches the asking worker and the Lead', async () => {
+    const s = await scene()
+    clock = Date.now()
+    const assignmentId = (await get(`/api/super-tabs/${s.tabId}/parts`, owner)).body.data.groups.find((g: { key: string }) => g.key === s.web).data.assignment.id
+    const needs = await post(s.tabId, { type: 'work.status', conversationId: s.web, assignmentId, status: 'needs_human', result: 'Ship to everyone?',
+      ask: { personId: peer.sub, options: ['Behind a flag', 'To everyone'], recommended: 0, unblocks: 'Turning it on' } }, owner, s.worker)
+    expect(needs.status, JSON.stringify(needs.body)).toBe(200)
+    const [open] = await decisions(s.tabId, peer)
+    expect(open).toMatchObject({ assignmentId, askerAgentId: s.worker, question: 'Ship to everyone?' })
+    const answered = await post(s.tabId, { type: 'decision.answer', decisionId: open!.id, choice: 1, note: 'Go.' }, peer)
+    expect(answered.status, JSON.stringify(answered.body)).toBe(200)
+    expect(await decisions(s.tabId, peer)).toEqual([])
+    expect(await decisions(s.tabId, peer, 'answered')).toEqual([expect.objectContaining({ id: open!.id, choice: 1, note: 'Go.' })])
+    expect(await decisions(s.tabId, owner, 'answered', s.worker)).toEqual([expect.objectContaining({ id: open!.id, choice: 1 })])
+    const notice = await db.superTabMessage.findUnique({ where: { id: answered.body.data.result.messageId as string } })
+    expect(notice).toMatchObject({ conversationId: s.web, recipientIds: [s.worker, s.lead], text: 'peer@example.com decided: To everyone\n\nShip to everyone?\n\nGo.' })
+    expect((await db.superTabDelivery.findMany({ where: { tabId: s.tabId, messageId: notice!.id } })).map(d => d.agentId).sort()).toEqual([s.lead, s.worker].sort())
+    // Once only, and only by the person asked.
+    expect((await post(s.tabId, { type: 'decision.answer', decisionId: open!.id, choice: 0 }, peer)).body.error?.code).toBe('DECISION_ANSWERED')
+    expect((await post(s.tabId, { type: 'decision.answer', decisionId: open!.id, choice: 0 }, owner)).status).toBe(404)
+  })
+
+  it('counts an open decision in a quiet conversation on a change read, which loads only some conversations', async () => {
+    const s = await scene()
+    clock = Date.now()
+    expect((await post(s.tabId, { type: 'decision.ask', conversationId: s.done, personId: peer.sub, questions: [question('Reopen it?')] }, owner, s.lead)).status).toBe(200)
+    const first = (await get(`/api/super-tabs/${s.tabId}/parts`, peer)).body.data
+    clock = Date.now()
+    expect((await get(`/api/super-tabs/${s.tabId}/changes?cursor=${first.cursor}`, peer)).body.data.derived.decisionsWaiting).toBe(1)
+  })
+})
+
 describe('routes given only a store', () => {
   it('read from that store\'s database, not the app-wide client', async () => {
     const s = await scene()

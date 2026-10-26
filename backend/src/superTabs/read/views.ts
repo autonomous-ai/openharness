@@ -30,6 +30,8 @@ export interface ReadExtras {
   teamMachines: string[]
   /** A person's open mentions, counted by the store. */
   mentionsWaiting?: number
+  /** A person's open decisions (decisions.ts). */
+  decisionsWaiting?: number
 }
 
 const HEAD_FIELDS = ['version', 'id', 'name', 'project', 'projects', 'leadsConversationId', 'ownerId', 'environment',
@@ -97,5 +99,6 @@ function derive(state: SuperTabState, visible: SuperTabState, actor: Actor, now:
     machines: Object.fromEntries((visible.machines ?? []).map(machine)),
     ...(visible.otherProjectsWork ? { otherProjectsWork: visible.otherProjectsWork } : {}),
     ...(actor.kind === 'person' && extras.mentionsWaiting !== undefined ? { mentionsWaiting: extras.mentionsWaiting } : {}),
+    ...(actor.kind === 'person' && extras.decisionsWaiting !== undefined ? { decisionsWaiting: extras.decisionsWaiting } : {}),
   }
 }

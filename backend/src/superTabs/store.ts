@@ -31,6 +31,7 @@ import { endedHolds, HOLDING, type WorkHold } from '../github/holds.js'
 import { mayDrive, TERMINAL_ANSWER_MS, TERMINAL_EXPIRY_MS, TERMINAL_PICKUP_MS, type TerminalEffect } from './terminal.js'
 import { closeAssignment, closeUnassignedStart, readDecision, recentRoutes, timedDecisionOf, writeRouteEffects } from './routeDecisions.js'
 import { listMentions, markDone, mentionsWaiting, readMention, resolveByReply, writeMentions } from './mentions.js'
+import { listDecisions, readAskedDecision, recordAnswer, writeDecisions } from './decisions.js'
 import { DEFAULT_ROUTING_POLICY, effectivePolicy, routingPolicySchema, type RoutingPolicy } from './routingPolicy.js'
 import { authenticatedEmail, authorizeSwarmJoin, configureSharing, joinSwarmSchema, requireSharingOwner,
   saveSharingSchema, sharingDetails, type JoinSwarm, type SaveSharing } from './sharing.js'
@@ -720,6 +721,7 @@ export class SuperTabStore {
           proof.harnessId === execution.harnessId && proof.machineOwnerId === execution.machineOwnerId
       }
       if (command.type === 'mention.done') context.mention = await readMention(tx, tabId, command.mentionId)
+      if (command.type === 'decision.answer') context.decision = await readAskedDecision(tx, tabId, command.decisionId)
       if (command.type === 'message.send' && command.attachmentIds?.length) context.attachments = await this.sendable(tx, tabId, actor, command)
       if (command.type === 'route.record') context.recentRoutes = await recentRoutes(tx, tabId, context.now)
       if (TEAM_WORK_COMMANDS.has(command.type)) {
@@ -909,6 +911,8 @@ export class SuperTabStore {
       if (command.type === 'message.send' && actor.kind === 'person') await resolveByReply(tx, tabId, command.conversationId, actor.userId, context.now)
       await writeMentions(tx, tabId, effects.state, effects.messages, context.now)
       if (command.type === 'mention.done') await markDone(tx, tabId, command.mentionId, context.mention!.personId, context.now)
+      if (effects.decisions) await writeDecisions(tx, tabId, effects.decisions, context.now)
+      if (effects.decisionAnswer) await recordAnswer(tx, tabId, effects.decisionAnswer, context.now)
       if (context.attachments?.length) {
         // Conflicts with a concurrent send of the same file: only one message can take it.
         const taken = await tx.superTabAttachment.updateMany({ where: { tabId, id: { in: context.attachments.map(a => a.id) }, ...unused },
@@ -1274,6 +1278,17 @@ export class SuperTabStore {
     return transaction(this.db, async tx => {
       const { state: tab } = await this.load(tx, user, tabId, { allGroups: true })
       return { mentions: await listMentions(tx, tabId, tab, { kind: 'person', userId: user.sub, email: user.email }, this.now(), state === 'waiting') }
+    })
+  }
+
+  /** The caller's decisions in this Swarm, newest first: a person's asked of them, an agent's asked by it (a Lead's also
+   *  those asked in its project), still open or answered. */
+  async decisions(user: AuthUser, tabId: string, state: 'open' | 'answered', asAgentId?: string) {
+    return transaction(this.db, async tx => {
+      const { state: tab } = await this.load(tx, user, tabId, { allGroups: true })
+      const actor = await this.actor(tx, user, tab, asAgentId)
+      author(tab, actor)
+      return { decisions: await listDecisions(tx, tabId, tab, actor, state === 'open') }
     })
   }
 
