@@ -98,6 +98,29 @@ describe('buildLogBundle', () => {
     expect(included).toContain('usb-AA/dial-20260913.log (left out to keep the bundle small)')
   })
 
+  it('keeps every device\'s newest day, as its tail when that day alone is over the cap, then older days while there is room', () => {
+    // The reviewer's case: dialLog caps a day at 20 MB and then writes one more line, so a newest day can be 20 MB + 90 B.
+    // Counting whole files left that day out, and every older day after it.
+    const root = mkdtempSync(join(tmpdir(), 'bundle-'))
+    const logs = join(root, 'logs'), big = join(logs, 'usb-AA'), small = join(logs, 'usb-BB')
+    mkdirSync(big, { recursive: true }); mkdirSync(small)
+    const cap = 20 * 1024 * 1024
+    writeFileSync(join(big, 'dial-20260915.log'), 'x'.repeat(cap) + 'y'.repeat(89) + '\n')
+    writeFileSync(join(big, 'dial-20260914.log'), 'o'.repeat(1024))
+    writeFileSync(join(small, 'dial-20260913.log'), 'the other device\n')
+    const { zip, included } = buildLogBundle({ logsDir: logs, dataDir: root, now: new Date(2026, 8, 15, 10, 30), version: '0', redact: (t) => t })
+    const files = readZip(zip)
+    expect([...files.keys()]).toEqual(['README.txt', 'logs/usb-AA/dial-20260915.log', 'logs/usb-BB/dial-20260913.log'])
+    const newest = files.get('logs/usb-AA/dial-20260915.log')!
+    expect(newest.length).toBe(cap - 17)
+    expect(newest.toString().endsWith('y'.repeat(89) + '\n')).toBe(true)
+    expect(files.get('logs/usb-BB/dial-20260913.log')?.toString()).toBe('the other device\n')
+    expect(included).toEqual(expect.arrayContaining([
+      `usb-AA/dial-20260915.log (last ${Math.round((cap - 17) / 1024)} KB)`,
+      'usb-AA/dial-20260914.log (left out to keep the bundle small)',
+    ]))
+  })
+
   it('still produces a bundle with a README when there is nothing to include', () => {
     const root = mkdtempSync(join(tmpdir(), 'bundle-'))
     const { zip, included } = buildLogBundle({ logsDir: join(root, 'none'), dataDir: root, version: '0', redact: (s) => s })

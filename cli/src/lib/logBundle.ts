@@ -75,23 +75,40 @@ export function buildLogBundle(opts: LogBundleOptions): { zip: Buffer; included:
     if (!DEVICE_DIR.test(name)) return [name]
     try { return readdirSync(join(opts.logsDir, name)).sort().filter((f) => f.startsWith('dial-')).map((f) => `${name}/${f}`) } catch { return [] }
   })
-  // A device's day may be 20 MB (dialLog.ts) and a desk may hold several, so their logs share one cap, newest day first.
-  const capped = new Set<string>()
-  let deviceBytes = 0
-  const byDay = (name: string) => DATED.exec(basename(name))?.[2] ?? ''
-  for (const name of names.filter((n) => n.includes('/') && byDay(n) >= cutoff).sort((x, y) => byDay(y).localeCompare(byDay(x)))) {
-    try { deviceBytes += statSync(join(opts.logsDir, name)).size } catch { continue }
-    if (deviceBytes > (opts.deviceLogCapBytes ?? 20 * 1024 * 1024)) capped.add(name)
+  // A device's day may be 20 MB (dialLog.ts) and a desk may hold several, so their logs share one cap. Every device keeps
+  // its newest day, as its tail when that does not fit: counting whole files once left out every device's logs when one
+  // day was 20 MB and the line that says so. Older days follow, newest first, while there is room.
+  const cap = opts.deviceLogCapBytes ?? 20 * 1024 * 1024
+  const dayOf = (name: string) => DATED.exec(basename(name))?.[2] ?? ''
+  const sizeOf = (name: string) => { try { return statSync(join(opts.logsDir, name)).size } catch { return 0 } }
+  const deviceDays = names.filter((n) => n.includes('/') && dayOf(n) >= cutoff).sort((x, y) => dayOf(y).localeCompare(dayOf(x)))
+  // deviceDays is newest first; reversed, each folder's newest day is the last one written into the map.
+  const newestPerDevice = [...new Map([...deviceDays].reverse().map((n) => [n.split('/')[0], n])).values()]
+  /** Bytes to take from the end of each device log; 0 leaves it out. */
+  const take = new Map<string, number>()
+  let room = cap
+  newestPerDevice.sort((x, y) => sizeOf(x) - sizeOf(y)).forEach((name, i, all) => {
+    const share = Math.min(sizeOf(name), Math.floor(room / (all.length - i)))
+    take.set(name, share)
+    room -= share
+  })
+  for (const name of deviceDays) {
+    if (take.has(name)) continue
+    const size = sizeOf(name)
+    take.set(name, size <= room ? size : 0)
+    if (size <= room) room -= size
   }
   for (const name of names) {
     const m = DATED.exec(basename(name))
     if (!m || m[2] < cutoff) continue
-    if (capped.has(name)) { included.push(`${name} (left out to keep the bundle small)`); continue }
+    const bytes = take.get(name)
+    if (bytes === 0) { included.push(`${name} (left out to keep the bundle small)`); continue }
     const path = join(opts.logsDir, name)
     try {
-      const text = readFileSync(path, 'utf8')
+      const whole = bytes === undefined || bytes >= statSync(path).size
+      const text = whole ? readFileSync(path, 'utf8') : readTail(path, bytes).toString('utf8')
       entries.push({ name: `logs/${name}`, data: Buffer.from(opts.redact(text)), mtime: statSync(path).mtime })
-      included.push(name)
+      included.push(whole ? name : `${name} (last ${Math.round(bytes / 1024)} KB)`)
     } catch { /* unreadable: skipped, said in the README below */ }
   }
 
