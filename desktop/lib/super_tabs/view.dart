@@ -8,6 +8,7 @@ import '../shared/theme/app_theme.dart' as grid;
 import '../shared/widgets/app_dialog.dart';
 import '../shared/widgets/app_icon_button.dart';
 import '../widgets/desktop_chrome.dart';
+import '../widgets/finger_target.dart';
 import '../widgets/new_harness_attachments.dart';
 import '../widgets/new_harness_paste.dart';
 import '../state/app_state.dart';
@@ -881,133 +882,177 @@ class _SuperTabViewState extends State<SuperTabView>
     style: DesktopChrome.text(medium: true),
   );
 
-  Widget _header(SuperTabConversation? group, bool narrow, bool showRoster) =>
-      Container(
-        constraints: const BoxConstraints(minHeight: 52),
-        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 6),
-        decoration: BoxDecoration(
-          border: Border(bottom: BorderSide(color: DesktopChrome.rim)),
-        ),
-        child: Row(
-          children: [
-            if (narrow)
-              AppIconButton(
-                icon: AppIcons.columns2,
-                tooltip: 'Conversations',
-                onPressed: () => setState(() => _sidebarOpen = !_sidebarOpen),
-              ),
-            Expanded(
-              child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 8),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    // A view saved on this device, until the first read
-                    // replaces it ([SuperTabReading.drawsSaved]).
-                    if (c.showingSaved)
-                      Row(
-                        children: [
-                          Flexible(child: _title(group)),
-                          const SizedBox(width: 8),
-                          Text(
-                            'Updating…',
-                            key: const ValueKey('super-updating'),
-                            style: DesktopChrome.metadata(),
-                          ),
-                        ],
-                      )
-                    else
-                      _title(group),
-                    if (!_devicesVisible && !_notificationsVisible)
-                      if (c.reviewLine(group) case final line?)
-                        Text(
-                          line,
-                          key: const ValueKey('super-review-line'),
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: DesktopChrome.metadata(),
-                        ),
-                  ],
-                ),
-              ),
-            ),
-            if (group != null &&
-                !_devicesVisible &&
-                !_notificationsVisible) ...[
-              AppIconButton(
-                key: const ValueKey('super-chat'),
-                icon: AppIcons.messageSquare,
-                size: AppIcons.inlineSize,
-                tooltip: 'Chat',
-                selected: !_terminalsVisible && !_showPullRequests,
-                color: !_terminalsVisible && !_showPullRequests
-                    ? DesktopChrome.foreground
-                    : DesktopChrome.muted,
-                onPressed: () {
-                  setState(() => _showPullRequests = false);
-                  widget.onCloseTerminal?.call();
-                  _readVisibleTailAfterFrame();
-                  WidgetsBinding.instance.addPostFrameCallback((_) {
-                    if (mounted) _focus.requestFocus();
-                  });
-                },
-              ),
-              const SizedBox(width: 4),
-              AppIconButton(
-                key: const ValueKey('super-terminals'),
-                icon: AppIcons.terminal,
-                size: AppIcons.inlineSize,
-                tooltip: 'Group terminals (${group.agentIds.length})',
-                selected: _terminalsVisible,
-                color: _terminalsVisible
-                    ? DesktopChrome.foreground
-                    : DesktopChrome.muted,
-                // A read-only viewer's terminal reads are refused.
-                onPressed: group.agentIds.isNotEmpty && c.canWrite
-                    ? () {
-                        setState(() => _showPullRequests = false);
-                        widget.onOpenGroupTerminals?.call();
-                      }
-                    : null,
-              ),
-              const SizedBox(width: 4),
-              AppIconButton(
-                key: const ValueKey('super-pull-requests'),
-                focusNode: _pullRequestsFocus,
-                icon: AppIcons.gitPullRequest,
-                size: AppIcons.inlineSize,
-                tooltip: 'Pull requests',
-                selected: !_terminalsVisible && _showPullRequests,
-                color: !_terminalsVisible && _showPullRequests
-                    ? DesktopChrome.foreground
-                    : DesktopChrome.muted,
-                onPressed: () {
-                  widget.onCloseTerminal?.call();
-                  setState(() => _showPullRequests = true);
-                },
-              ),
-              // Not a workgroup: nothing to rename, archive or detail.
-              if (group.id != c.snapshot!.leadsConversationId) _options(group),
-            ],
-            if (!showRoster)
-              AppIconButton(
-                icon: AppIcons.users,
-                tooltip: 'Members and machines',
-                selected: _rosterOpen,
-                onPressed: () => setState(() => _rosterOpen = !_rosterOpen),
-              ),
-          ],
-        ),
-      );
+  /// On a phone the header's bar holds Chat and ⋮, each a finger's size, and
+  /// ⋮ names the rest (terminals, pull requests, people) instead of five bare
+  /// icons. Desktop, which sets no [WorkspaceChrome.compactBelow], never.
+  bool get _phone => workspaceIsCompact(context);
 
-  Widget _options(SuperTabConversation group) {
+  /// Whether ⋮ carries the views a wider header draws as icons.
+  bool get _menuNamesViews =>
+      _phone && !_devicesVisible && !_notificationsVisible;
+
+  /// Opens the group's terminals beside the chat; null when it has none this
+  /// reader may open (a read-only viewer's terminal reads are refused).
+  VoidCallback? _openTerminals(SuperTabConversation group) =>
+      group.agentIds.isNotEmpty && c.canWrite
+      ? () {
+          setState(() => _showPullRequests = false);
+          widget.onOpenGroupTerminals?.call();
+        }
+      : null;
+
+  void _openPullRequests() {
+    widget.onCloseTerminal?.call();
+    setState(() => _showPullRequests = true);
+  }
+
+  void _toggleRoster() => setState(() => _rosterOpen = !_rosterOpen);
+
+  Widget _header(
+    SuperTabConversation? group,
+    bool narrow,
+    bool showRoster,
+  ) => Container(
+    constraints: const BoxConstraints(minHeight: 52),
+    padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 6),
+    decoration: BoxDecoration(
+      border: Border(bottom: BorderSide(color: DesktopChrome.rim)),
+    ),
+    child: Row(
+      children: [
+        if (narrow)
+          fingerTarget(
+            enabled: _phone,
+            AppIconButton(
+              icon: AppIcons.columns2,
+              tooltip: 'Conversations',
+              onPressed: () => setState(() => _sidebarOpen = !_sidebarOpen),
+            ),
+          ),
+        Expanded(
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 8),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                // A view saved on this device, until the first read
+                // replaces it ([SuperTabReading.drawsSaved]).
+                if (c.showingSaved)
+                  Row(
+                    children: [
+                      Flexible(child: _title(group)),
+                      const SizedBox(width: 8),
+                      Text(
+                        'Updating…',
+                        key: const ValueKey('super-updating'),
+                        style: DesktopChrome.metadata(),
+                      ),
+                    ],
+                  )
+                else
+                  _title(group),
+                if (!_devicesVisible && !_notificationsVisible)
+                  if (c.reviewLine(group) case final line?)
+                    Text(
+                      line,
+                      key: const ValueKey('super-review-line'),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: DesktopChrome.metadata(),
+                    ),
+              ],
+            ),
+          ),
+        ),
+        if (group != null && !_devicesVisible && !_notificationsVisible) ...[
+          fingerTarget(
+            enabled: _phone,
+            AppIconButton(
+              key: const ValueKey('super-chat'),
+              icon: AppIcons.messageSquare,
+              size: AppIcons.inlineSize,
+              tooltip: 'Chat',
+              selected: !_terminalsVisible && !_showPullRequests,
+              color: !_terminalsVisible && !_showPullRequests
+                  ? DesktopChrome.foreground
+                  : DesktopChrome.muted,
+              onPressed: () {
+                setState(() => _showPullRequests = false);
+                widget.onCloseTerminal?.call();
+                _readVisibleTailAfterFrame();
+                WidgetsBinding.instance.addPostFrameCallback((_) {
+                  if (mounted) _focus.requestFocus();
+                });
+              },
+            ),
+          ),
+          if (!_menuNamesViews) ...[
+            const SizedBox(width: 4),
+            AppIconButton(
+              key: const ValueKey('super-terminals'),
+              icon: AppIcons.terminal,
+              size: AppIcons.inlineSize,
+              tooltip: 'Group terminals (${group.agentIds.length})',
+              selected: _terminalsVisible,
+              color: _terminalsVisible
+                  ? DesktopChrome.foreground
+                  : DesktopChrome.muted,
+              onPressed: _openTerminals(group),
+            ),
+            const SizedBox(width: 4),
+            AppIconButton(
+              key: const ValueKey('super-pull-requests'),
+              focusNode: _pullRequestsFocus,
+              icon: AppIcons.gitPullRequest,
+              size: AppIcons.inlineSize,
+              tooltip: 'Pull requests',
+              selected: !_terminalsVisible && _showPullRequests,
+              color: !_terminalsVisible && _showPullRequests
+                  ? DesktopChrome.foreground
+                  : DesktopChrome.muted,
+              onPressed: _openPullRequests,
+            ),
+          ],
+          // Not a workgroup: nothing to rename, archive or detail — but
+          // on a phone ⋮ still carries the views the bar leaves out.
+          if (_menuNamesViews || group.id != c.snapshot!.leadsConversationId)
+            fingerTarget(
+              enabled: _phone,
+              _options(group, views: _menuNamesViews, roster: !showRoster),
+            ),
+        ],
+        if (!showRoster && (group == null || !_menuNamesViews))
+          fingerTarget(
+            enabled: _phone,
+            AppIconButton(
+              icon: AppIcons.users,
+              tooltip: 'Members and machines',
+              selected: _rosterOpen,
+              onPressed: _toggleRoster,
+            ),
+          ),
+      ],
+    ),
+  );
+
+  /// The group's ⋮ menu. With [views] (a phone) it opens on the views the
+  /// header has no room for — the group's terminals, its pull requests and,
+  /// with [roster], the people and machines — each a finger's height.
+  Widget _options(
+    SuperTabConversation group, {
+    bool views = false,
+    bool roster = false,
+  }) {
     final project = c.snapshot?.projectFor(group.id);
     final isProject = c.snapshot?.isProjectLead(group.id) == true;
+    final isLeads = group.id == c.snapshot?.leadsConversationId;
     final editable = c.canWrite && !c.saving && !c.hasPendingAction;
     Widget item(String label, VoidCallback? action) => MenuItemButton(
-      style: const ButtonStyle(
-        minimumSize: WidgetStatePropertyAll(Size(208, 32)),
+      style: ButtonStyle(
+        minimumSize: WidgetStatePropertyAll(
+          Size(208, views ? kFingerTarget : 32),
+        ),
         side: WidgetStatePropertyAll(BorderSide.none),
         padding: WidgetStatePropertyAll(EdgeInsets.symmetric(horizontal: 12)),
         alignment: Alignment.centerLeft,
@@ -1022,7 +1067,20 @@ class _SuperTabViewState extends State<SuperTabView>
         padding: WidgetStatePropertyAll(EdgeInsets.all(6)),
       ),
       menuChildren: [
-        if (isProject) ...[
+        if (views) ...[
+          item(
+            'Group terminals (${group.agentIds.length})',
+            _openTerminals(group),
+          ),
+          item('Pull requests', _openPullRequests),
+          if (roster) item('Members and machines', _toggleRoster),
+          if (!isLeads) const Divider(height: 9),
+        ],
+        // The leads' conversation is no workgroup: nothing to rename, archive
+        // or detail.
+        if (isLeads)
+          ...const <Widget>[]
+        else if (isProject) ...[
           if (editable && project?.ownerId == c.accountId)
             item('Rename project', () => _groupAction('rename', group)),
           item('Project details', () => _groupAction('details', group)),
