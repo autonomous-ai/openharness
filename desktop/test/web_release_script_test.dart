@@ -71,8 +71,9 @@ Future<void> _git(Directory repo, List<String> args) async {
 /// whose `flutter` writes [families].
 Future<ProcessResult> _release(Directory repo, List<String> families) async {
   Directory(p.join(repo.path, 'scripts')).createSync();
-  File('scripts/build-web-release.sh')
-      .copySync(p.join(repo.path, 'scripts', 'build-web-release.sh'));
+  File(
+    'scripts/build-web-release.sh',
+  ).copySync(p.join(repo.path, 'scripts', 'build-web-release.sh'));
   final flutter = File(p.join(repo.path, 'fake-flutter.sh'))
     ..writeAsStringSync(_fakeFlutter(families));
   await Process.run('chmod', ['+x', flutter.path]);
@@ -143,37 +144,25 @@ void main() {
     expect(files.where((file) => file.endsWith('lucide.ttf')), isEmpty);
   }, skip: skip);
 
-  test(
-    'the page fetches the fonts it ships beside the app, not after it',
-    () async {
-      final result = await _release(repo, [
-        ..._others,
-        ..._unusedLucide,
-        _used,
-      ]);
+  test('the page fetches the fonts it ships beside the app, not after it', () async {
+    final result = await _release(repo, [..._others, ..._unusedLucide, _used]);
 
-      expect(result.exitCode, 0, reason: '${result.stderr}');
-      final index = _builtIndex(repo);
-      final head = index.substring(0, index.indexOf('</head>'));
-      expect(head, contains(_preload('FontManifest.json')));
-      for (final family in [..._others, _used]) {
-        expect(head, contains(_preload(_assetOf(family))), reason: family);
-      }
-      for (final family in _unusedLucide) {
-        expect(index, isNot(contains(_assetOf(family))), reason: family);
-      }
-    },
-    skip: skip,
-  );
+    expect(result.exitCode, 0, reason: '${result.stderr}');
+    final index = _builtIndex(repo);
+    final head = index.substring(0, index.indexOf('</head>'));
+    expect(head, contains(_preload('FontManifest.json')));
+    for (final family in [..._others, _used]) {
+      expect(head, contains(_preload(_assetOf(family))), reason: family);
+    }
+    for (final family in _unusedLucide) {
+      expect(index, isNot(contains(_assetOf(family))), reason: family);
+    }
+  }, skip: skip);
 
-  test(
-    'a build with no Lucide 400 font fails instead of shipping blind',
-    () async {
-      final result = await _release(repo, [..._others, ..._unusedLucide]);
+  test('a build with no Lucide 400 font fails instead of shipping blind', () async {
+    final result = await _release(repo, [..._others, ..._unusedLucide]);
 
-      expect(result.exitCode, isNot(0));
-      expect('${result.stderr}', contains(_used));
-    },
-    skip: skip,
-  );
+    expect(result.exitCode, isNot(0));
+    expect('${result.stderr}', contains(_used));
+  }, skip: skip);
 }
