@@ -14,7 +14,8 @@ import type { Readable } from 'node:stream'
 import { logger } from '../utils/logger.js'
 import { canReadAgent, canReadGroup, groupProject, ledProject, projectsOf, agentProjectId, readConversation, roleVersion, type ProjectVisibility } from './projects.js'
 import { bindSession, makeProjectPrivate } from './sessionScope.js'
-import { answersRequest, freshProgress, noteProjectReports, projectUpdateRequest } from './projectUpdates.js'
+import { answersRequest, noteProjectReports, projectUpdateRequest } from './projectUpdates.js'
+import { judgedMachines, loseTasks, sweepLiveness, SWEEP_EVERY_MS } from './liveness.js'
 import { clock, insertParts, lastChangedAt, loadActive, reassemble, split, type HeadData, type SwarmParts } from './parts/index.js'
 import { commitParts, indexesOf, numberMessages, type Touch, type Written } from './parts/commit.js'
 import { touchesFor } from './parts/touches.js'
@@ -1345,8 +1346,20 @@ export class SuperTabStore {
     })
   }
 
+  /** When each Swarm's time checks last ran on a machine's report, on this server (liveness.ts SWEEP_EVERY_MS). */
+  private readonly swept = new Map<string, number>()
+
+  /** Whether a machine's report runs its Swarm's time checks now; decided once per report, not per transaction attempt. */
+  private sweepDue(tabId: string, now: number): boolean {
+    const last = this.swept.get(tabId)
+    if (last !== undefined && now - last < SWEEP_EVERY_MS) return false
+    this.swept.set(tabId, now)
+    return true
+  }
+
   async observeMachine(user: AuthUser, tabId: string, machineId: string, input: MachineObservation) {
     const observation = machineObservationSchema.parse(input)
+    const sweep = this.sweepDue(tabId, this.now())
     return transaction(this.db, async tx => {
       await this.hostFor(tx, user, machineId)
       const loaded = await this.load(tx, user, tabId), state = structuredClone(loaded.state)
@@ -1359,17 +1372,26 @@ export class SuperTabStore {
       // go, its cleanup waits for this host, as the next sweep would have done (machines.ts expireRemovals).
       expireRemovals(state, now)
       const stamp = clock.next()
-      // A reading writes only its machine's part, and an agent's part only when its presence changes (spec).
-      const saved = async () => ({ version: (await this.save(tx, loaded, state, stamp)).versions.get(`machine:${machineId}`) ?? 0 })
+      // A reading writes only its machine's part, and an agent's part only when its presence changes (spec); a group's only
+      // when a task there is lost.
+      const saved = async (lost: MessageDraft[] = []) => {
+        const sequences = numberMessages(state, lost, now)
+        const touches = judgedMachines(state, lost).filter(t => t.key !== machineId)
+        const version = (await this.save(tx, loaded, state, stamp, touches)).versions.get(`machine:${machineId}`) ?? 0
+        await this.writeMessages(tx, tabId, state, lost, sequences)
+        return { version }
+      }
       if (!state.machines?.includes(pool)) return saved()
       recordAgentPresence(state, machineId, observation.runningHarnessIds, now)
       const team = isTeamSession(user)
       // Its privacy check counts only from the Harness Team account's own session; an ordinary sign-in's claim is dropped.
-      const { privacy: reported, ...reading } = observation
+      // Progress is kept for running sessions only: their leases are read from it (liveness.ts).
+      const { privacy: reported, harnessProgress, ...reading } = observation
+      const progress = harnessProgress && Object.fromEntries(Object.entries(harnessProgress).filter(([id]) => observation.runningHarnessIds.includes(id)))
       const privacy = observedPrivacy(pool.observation?.privacy, reported, team, now)
       pool.observation = { ...reading, quotas: observation.quotas.filter(q => contributedEngines(pool, observation).includes(q.engine)), receivedAt: now,
         // How the machine is signed in, from the session that reported and never from the report (lib/teamSession.ts).
-        sessionKind: team ? 'team' : 'computer', ...(privacy ? { privacy } : {}) }
+        sessionKind: team ? 'team' : 'computer', ...(privacy ? { privacy } : {}), ...(progress ? { harnessProgress: progress } : {}) }
       // Current-generation physical stop proof also finishes a close whose membership was already withdrawn.
       for (const proof of observation.stoppedReservations ?? []) {
         if (!observation.stoppedHarnessIds.includes(proof.harnessId)) continue
@@ -1382,7 +1404,9 @@ export class SuperTabStore {
         await tx.superTabSessionScope.updateMany({ where: { id, closeLeaseGeneration: proof.generation },
           data: { closeLeaseId: null, closeLeaseUntil: null, closeLeaseGeneration: null } })
       }
-      return saved()
+      // Its own agents lose their tasks at once (a stopped session); every 30 seconds it runs the Swarm's time checks too, so
+      // they keep running when the Lead's own machine is the one that died.
+      return saved([...loseTasks(state, now, worker => worker.machineId === machineId), ...sweep ? sweepLiveness(state, now) : []])
     })
   }
 
@@ -1433,30 +1457,28 @@ export class SuperTabStore {
       const loaded = await this.load(tx, user, tabId), state = structuredClone(loaded.state)
       author(state, await this.actor(tx, user, state, agentId), true)
       const target = agent(state, agentId)
+      // A Lead's poll runs the time checks (liveness.ts): lost work wakes it in this same poll.
+      const written = ledProject(state, agentId) ? sweepLiveness(state, this.now()) : []
       const update = projectUpdateRequest(state, target, this.now())
+      let woken = false
       if (update) {
-        const project = groupProject(state, conversation(state, update.conversationId))
-        // A worker down two hours asks for a wake-up even when no report has come in yet.
-        const progress = project.progress ??= freshProgress(this.now())
+        const progress = groupProject(state, conversation(state, update.conversationId)).progress!
         const pending = progress.requestMessageId
           ? await tx.superTabDelivery.findFirst({ where: { tabId, agentId, messageId: progress.requestMessageId,
             status: { in: ['queued', 'claimed', 'uncertain', 'delivered'] } } })
           : null
         if (!pending) {
-          const through = update.source!.through as Record<string, number>
-          if (Object.keys(through).length) {
-            progress.requested = { ...progress.requested, ...through }
-            progress.requestedAt = this.now()
-          }
+          progress.requested = { ...progress.requested, ...update.source!.through as Record<string, number> }
+          progress.requestedAt = this.now()
           progress.requestMessageId = update.id
-          for (const { agentId, since } of (update.source!.down ?? []) as Array<{ agentId: string; since: string }>) {
-            state.agents.find(a => a.id === agentId)!.downNamed = since
-          }
-          const sequences = numberMessages(state, [update], this.now())
-          await this.save(tx, loaded, state, clock.next(), [{ kind: 'agent', key: agentId }])
-          await this.writeMessages(tx, tabId, state, [update], sequences)
+          written.push(update)
+          woken = true
         }
       }
+      // One write for both: the time checks' changes and the wake-up's.
+      const sequences = numberMessages(state, written, this.now())
+      await this.save(tx, loaded, state, clock.next(), [...judgedMachines(state, written), ...woken ? [{ kind: 'agent' as const, key: agentId }] : []])
+      await this.writeMessages(tx, tabId, state, written, sequences)
       const rows = await tx.superTabDelivery.findMany({ where: { tabId, agentId, status: { in: ['queued', 'claimed', 'uncertain'] } },
         orderBy: { createdAt: 'asc' }, take: 100 })
       const allowed: SuperTabDelivery[] = []

@@ -98,8 +98,6 @@ export function terminalAlert(state: SuperTabState, actor: Actor, sender: Author
   if (alerting.includes(command.alert)) return []
   target.alerting = [...alerting, command.alert]
   const group = currentGroup(state, target)
-  const chat = conversation(state, projectOf(state, agentProjectId(state, target)).leadConversationId)
-  const lead = chat.leadId && chat.leadId !== target.id ? chat.leadId : null
   let text = `${nameOf(target)} is waiting at a prompt in its terminal.`
   const source: Record<string, unknown> = { kind: 'terminal-alert', agentId: target.id, alert: command.alert }
   if (command.alert === 'limit') {
@@ -110,7 +108,21 @@ export function terminalAlert(state: SuperTabState, actor: Actor, sender: Author
   // Its engine has been retrying its model for 10 minutes (2026-10-24: a Builder on a small local model retried for an
   // hour while its Lead waited on it).
   if (command.alert === 'model') text = `${nameOf(target)} can't get answers from its model: its requests keep failing. Stop it, or give the work to another model.`
-  const here = !!lead && group.agentIds.includes(lead)
-  const row = { id, conversationId: group.id, author: sender, replyTo: null, recipients: here ? [lead] : [], text, source }
-  return here || !lead || !chat.agentIds.includes(lead) ? [row] : [row, { ...row, id: stableId(id, 'lead'), conversationId: chat.id, recipients: [lead] }]
+  return toLead(state, target, { id, conversationId: group.id, author: sender, replyTo: null, recipients: [], text, source })
+}
+
+/** The project Lead of an agent, unless the agent is that Lead. */
+export function leadOf(state: SuperTabState, target: Agent): Agent | undefined {
+  const lead = conversation(state, projectOf(state, agentProjectId(state, target)).leadConversationId).leadId
+  return lead && lead !== target.id ? state.agents.find(a => a.id === lead) : undefined
+}
+
+/** A row about an agent, delivered to its project Lead: in the row's group when the Lead is there, else by a second row in
+ *  the Lead's chat. */
+export function toLead(state: SuperTabState, target: Agent, row: MessageDraft): MessageDraft[] {
+  const chat = conversation(state, projectOf(state, agentProjectId(state, target)).leadConversationId)
+  const lead = leadOf(state, target)?.id
+  const here = !!lead && conversation(state, row.conversationId).agentIds.includes(lead)
+  const first = { ...row, recipients: here ? [lead] : [] }
+  return here || !lead || !chat.agentIds.includes(lead) ? [first] : [first, { ...first, id: stableId(row.id, 'lead'), conversationId: chat.id, recipients: [lead] }]
 }
