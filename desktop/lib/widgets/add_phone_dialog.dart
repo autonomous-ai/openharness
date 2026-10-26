@@ -16,6 +16,7 @@ import '../shared/theme/app_theme.dart' as grid;
 import '../shortcuts/app_keymap.dart';
 import '../state/account_devices.dart' show NewDeviceNotice;
 import '../state/app_state.dart';
+import '../measurement/product_measurement.dart' show AddPhoneOpening;
 import '../ws/ws_conn.dart' show WsRequestFailure, WsRequestTimeout;
 import 'desktop_chrome.dart';
 import 'desktop_prompt_surface.dart';
@@ -67,24 +68,49 @@ Future<void> showAddPhoneDialog(
   BuildContext context,
   AppNotifier app, {
   AppKeymap? keymap,
+  AddPhoneOpening? from,
   PhonePairCall? pair,
   PhoneSignInCodeCall? signInCode,
   bool Function()? signInUnavailable,
   VoidCallback? onConnectMachine,
   VoidCallback? onManageDevices,
-}) => showTerminalPrompt<void>(
-  context,
-  keymap: keymap,
-  builder: (_) => AddPhoneDialog(
-    app: app,
-    pair: pair,
-    signInCode: signInCode ?? app.api.phoneSignInCode,
-    signInUnavailable:
-        signInUnavailable ?? () => app.api.phoneSignInUnavailable,
-    onConnectMachine: onConnectMachine,
-    onManageDevices: onManageDevices,
-  ),
-);
+}) async {
+  // Read once before opening: a repeated join for an existing key is not a new phone.
+  // If the snapshot is unavailable, leave attribution unknown and keep Add Phone usable.
+  Set<String>? known;
+  final account = app.currentUser?.id;
+  if (from != null && account != null && !kIsWeb && app.viewer == null) {
+    try {
+      final devices = await app.loadDevices();
+      if (devices != null) {
+        known = {for (final device in devices.devices) device.pub};
+      }
+    } catch (_) {}
+  }
+  if (!context.mounted) return;
+  return showTerminalPrompt<void>(
+    context,
+    keymap: keymap,
+    builder: (_) => AddPhoneDialog(
+      app: app,
+      pair: pair,
+      signInCode: signInCode ?? app.api.phoneSignInCode,
+      signInUnavailable:
+          signInUnavailable ?? () => app.api.phoneSignInUnavailable,
+      onConnectMachine: onConnectMachine,
+      onManageDevices: onManageDevices,
+      onPhoneJoined: (device) {
+        if (from == null ||
+            known == null ||
+            account != app.currentUser?.id ||
+            !known.add(device.pub)) {
+          return;
+        }
+        app.productMeasurement.addPhonePaired(from);
+      },
+    ),
+  );
+}
 
 /// Where the QR points. The phone's `ConnectCode` (mobile
 /// `lib/phone/welcome/connect_code.dart`) parses exactly this.
@@ -268,6 +294,7 @@ class AddPhoneDialog extends StatefulWidget {
     this.signInUnavailable,
     this.onConnectMachine,
     this.onManageDevices,
+    this.onPhoneJoined,
   });
 
   final AppNotifier app;
@@ -287,6 +314,7 @@ class AddPhoneDialog extends StatefulWidget {
   /// (owner, 2026-10-12). Not "devices": the tab row's Devices is the Harness
   /// hardware. The dialog closes; the caller opens Machines after.
   final VoidCallback? onManageDevices;
+  final ValueChanged<NewDeviceNotice>? onPhoneJoined;
 
   @override
   State<AddPhoneDialog> createState() => _AddPhoneDialogState();
@@ -425,8 +453,9 @@ class _AddPhoneDialogState extends State<AddPhoneDialog> {
   /// A device joined the account while this was open. A computer is not the
   /// phone; anything else signed in with this account is.
   void _deviceJoined(NewDeviceNotice device) {
-    if (_closed || _ready != null || device.kind == 'machine') return;
-    if (_signedOut) return;
+    if (_closed || device.kind == 'machine' || _signedOut) return;
+    widget.onPhoneJoined?.call(device);
+    if (_ready != null) return;
     _phoneIn(device.label);
   }
 

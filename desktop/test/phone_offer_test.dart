@@ -10,6 +10,8 @@ import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/state/app_state.dart';
 import 'package:harness/widgets/add_phone_dialog.dart';
 import 'package:harness/widgets/phone_offer_card.dart';
+import 'package:harness/viewer/viewer_services.dart';
+import 'package:harness/viewer/viewer_key_store.dart';
 
 import 'support/add_phone_measurement.dart';
 import 'swarm_screen_test.dart' show mount, terminal;
@@ -34,6 +36,7 @@ class _DevicesApi extends ApiClient {
 
   Map<String, dynamic>? listing;
   bool fails;
+  void Function()? onRead;
 
   /// How many times the list was read.
   int reads = 0;
@@ -41,8 +44,18 @@ class _DevicesApi extends ApiClient {
   @override
   Future<Map<String, dynamic>?> daemonDevices() async {
     reads++;
+    onRead?.call();
     if (fails) throw StateError('The network connection was lost.');
     return listing;
+  }
+}
+
+class _OnReadStore extends MemoryStore {
+  void Function(String)? onRead;
+  @override
+  Future<String?> read(String key) async {
+    onRead?.call(key);
+    return super.read(key);
   }
 }
 
@@ -89,20 +102,110 @@ void main() {
       },
     );
 
-    test('a computer that opens signed in has had its first sign-in', () async {
-      final store = MemoryStore();
-      final app = createApp(store: store)
-        ..signedIn = true
-        ..api = _DevicesApi(_listing([]));
-      addTearDown(app.dispose);
-      await app.offerPhoneForTest(atLaunch: true);
-      expect(app.phoneOfferShowing, isFalse);
-      await pumpEventQueue();
+    test(
+      'a signed-in returning account sees the card once it is on screen',
+      () async {
+        final store = MemoryStore();
+        AppNotifier launch(String id) => createApp(store: store)
+          ..signedIn = true
+          ..currentUser = CurrentUserProfile(
+            id: id,
+            email: 'person@example.test',
+          )
+          ..api = _DevicesApi(_listing([]));
+        final app = launch('account-a');
+        addTearDown(app.dispose);
+        await app.offerPhoneForTest(atLaunch: true);
+        expect(app.phoneOfferShowing, isTrue);
+        expect(store.values['phone_offer_returning.account-a'], isNull);
+      expect(store.values[_done], isNull);
+        app.phoneOfferShown();
+        app.phoneOfferShown();
+        await pumpEventQueue();
+        expect(store.values['phone_offer_returning.account-a'], '1');
       expect(store.values[_done], '1');
-      // So a later sign-in by hand offers nothing either.
-      await app.offerPhoneForTest(atLaunch: false);
-      expect(app.phoneOfferShowing, isFalse);
-    });
+        expect(store.values[_seen], '1');
+        expect(store.values[_shows], '1');
+        final next = launch('account-a');
+        addTearDown(next.dispose);
+        await next.offerPhoneForTest(atLaunch: true);
+        expect(next.phoneOfferShowing, isFalse);
+        await next.offerPhoneAfterWorkForTest();
+        expect(next.phoneOfferShowing, isFalse);
+        final other = launch('account-b');
+        addTearDown(other.dispose);
+        await other.offerPhoneForTest(atLaunch: true);
+        expect(other.phoneOfferShowing, isTrue);
+      },
+    );
+
+    test(
+      'returning launch retries an unreadable list on the next launch',
+      () async {
+        for (final api in [_DevicesApi(null), _DevicesApi(null, fails: true)]) {
+          final store = MemoryStore();
+          AppNotifier launch() => createApp(store: store)
+            ..signedIn = true
+            ..currentUser = const CurrentUserProfile(
+              id: 'a',
+              email: 'a@example.test',
+            )
+            ..api = api;
+          final first = launch();
+          addTearDown(first.dispose);
+          await first.offerPhoneForTest(atLaunch: true);
+          expect(first.phoneOfferShowing, isFalse);
+          expect(store.values['phone_offer_returning.a'], isNull);
+          api.fails = false;
+          api.listing = _listing([]);
+          final next = launch();
+          addTearDown(next.dispose);
+          await next.offerPhoneForTest(atLaunch: true);
+          expect(next.phoneOfferShowing, isTrue);
+          expect(api.reads, 2);
+        }
+      },
+    );
+
+    test(
+      'returning launch respects a phone, prior x and every Add Phone opening',
+      () async {
+        for (final kind in ['phone', 'browser']) {
+          final app = createApp(store: MemoryStore())
+            ..signedIn = true
+            ..currentUser = const CurrentUserProfile(
+              id: 'a',
+              email: 'a@example.test',
+            )
+            ..api = _DevicesApi(_listing([_device(kind)]));
+          addTearDown(app.dispose);
+          await app.offerPhoneForTest(atLaunch: true);
+          expect(app.phoneOfferShowing, isFalse);
+        }
+        for (final opening in [null, ...AddPhoneOpening.values]) {
+          final store = MemoryStore();
+          final first = createApp(store: store);
+          addTearDown(first.dispose);
+          if (opening == null) {
+            first.dismissPhoneOffer();
+          } else {
+            first.addPhoneOpened(opening);
+          }
+          final api = _DevicesApi(_listing([]));
+          final next = createApp(store: store)
+            ..signedIn = true
+            ..currentUser = const CurrentUserProfile(
+              id: 'a',
+              email: 'a@example.test',
+            )
+            ..api = api;
+          addTearDown(next.dispose);
+          await next.offerPhoneForTest(atLaunch: true);
+          expect(next.phoneOfferShowing, isFalse);
+          expect(api.reads, 0);
+        }
+      },
+    );
 
     test('with nowhere to remember it, nothing is offered', () async {
       // No state file — a test, a fixture — would mean an offer at every launch.
@@ -160,6 +263,229 @@ void main() {
     });
   });
 
+  test('a returning launch without a stable account identity offers nothing', () async {
+    for (final id in [null, '']) {
+      final usage = AddPhoneRecorder();
+      final app = createApp(store: MemoryStore(), productMeasurement: usage)
+        ..signedIn = true
+        ..currentUser = CurrentUserProfile(id: id, email: 'a@example.test');
+      addTearDown(app.dispose);
+      await app.offerPhoneForTest(atLaunch: true);
+      expect(app.phoneOfferShowing, isFalse);
+      expect(usage.skipped, ['not_signed_in']);
+    }
+  });
+
+  test('a guest launch cannot show after the account lands during its state read', () async {
+    final usage = AddPhoneRecorder();
+    final store = _OnReadStore();
+    final app = createApp(store: store, productMeasurement: usage)..signedIn = false;
+    addTearDown(app.dispose);
+    store.onRead = (key) { if (key == _done) { app.signedIn = true; } };
+    await app.offerPhoneForTest(atLaunch: true);
+    expect(app.phoneOfferShowing, isFalse);
+    expect(usage.skipped, ['account_changed']);
+  });
+
+  test('each offer refusal counts one fixed skip reason without another device read', () async {
+    final usage = AddPhoneRecorder();
+    final store = MemoryStore()..values[_stopped] = '1';
+    final api = _DevicesApi(_listing([]));
+    final app = createApp(store: store, productMeasurement: usage)
+      ..status = AppStatus.authenticated
+      ..signedIn = true
+      ..currentUser = const CurrentUserProfile(id: 'a', email: 'a@example.test')
+      ..api = api;
+    addTearDown(app.dispose);
+    await app.offerPhoneForTest(atLaunch: true);
+    expect(usage.skipped, ['stopped']);
+    expect(api.reads, 0);
+    store.values.remove(_stopped);
+    await app.offerPhoneForTest(atLaunch: true);
+    app.phoneOfferShown();
+    expect(usage.started, ['phoneOfferReturning']);
+    await app.offerPhoneForTest(atLaunch: true);
+    expect(usage.skipped.last, 'card_showing');
+  });
+
+  test(
+    'skip reasons distinguish seen, stop, no list, cached phone and read limit',
+    () async {
+      for (final (values, api, expected) in [
+        ({_seen: '1'}, _DevicesApi(_listing([])), 'already_shown'),
+        ({_stopped: '1'}, _DevicesApi(_listing([])), 'stopped'),
+        (<String, String>{}, _DevicesApi(null), 'no_device_list'),
+        (
+          <String, String>{},
+          _DevicesApi(_listing([_device('phone')])),
+          'has_phone',
+        ),
+      ]) {
+        final usage = AddPhoneRecorder();
+        final store = MemoryStore()..values.addAll(values);
+        final app = createApp(store: store, productMeasurement: usage)
+          ..status = AppStatus.authenticated
+          ..signedIn = true
+          ..api = api;
+        addTearDown(app.dispose);
+        await app.offerPhoneAfterWorkForTest();
+        expect(usage.skipped, [expected]);
+        expect(app.phoneOfferShowing, isFalse);
+        if (expected == 'no_device_list') {
+          for (var i = 0; i < 5; i++) {
+            await app.offerPhoneAfterWorkForTest();
+          }
+          expect(api.reads, 3);
+          expect(usage.skipped, [
+            'no_device_list',
+            'no_device_list',
+            'no_device_list',
+            'read_limit',
+            'read_limit',
+            'read_limit',
+          ]);
+        }
+        if (expected == 'has_phone') {
+          await app.offerPhoneAfterWorkForTest();
+          expect(usage.skipped, ['has_phone', 'has_phone']);
+          expect(api.reads, 1);
+        }
+      }
+    },
+  );
+
+  test('returning launch reports already shown and the sign-in path respects a prior stop', () async {
+    final usage = AddPhoneRecorder();
+    final store = MemoryStore()..values['phone_offer_returning.a'] = '1';
+    final api = _DevicesApi(_listing([]));
+    final app = createApp(store: store, productMeasurement: usage)
+      ..signedIn = true
+      ..currentUser = const CurrentUserProfile(id: 'a', email: 'a@example.test')
+      ..api = api;
+    addTearDown(app.dispose);
+    await app.offerPhoneForTest(atLaunch: true);
+    expect(usage.skipped, ['already_shown']);
+    store.values[_stopped] = '1';
+    await app.offerPhoneForTest(atLaunch: false);
+    expect(usage.skipped, ['already_shown', 'stopped']);
+    expect(api.reads, 0);
+  });
+
+  test('a viewer never offers cards or reads devices', () async {
+    final store = MemoryStore();
+    final session = AuthSession(storage: store);
+    final usage = AddPhoneRecorder();
+    final api = _DevicesApi(_listing([]));
+    final app =
+        AppNotifier(
+            config: AppConfig.dev,
+            authSession: session,
+            viewer: ViewerServices(
+              config: AppConfig.dev,
+              session: session,
+              keys: ViewerKeyStore(storage: store),
+            ),
+            productMeasurement: usage,
+          )
+          ..signedIn = true
+          ..status = AppStatus.authenticated
+          ..api = api;
+    addTearDown(app.dispose);
+    await app.offerPhoneForTest(atLaunch: true);
+    await app.offerPhoneForTest(atLaunch: false);
+    await app.offerPhoneAfterWorkForTest();
+    expect(app.phoneOfferShowing, isFalse);
+    expect(api.reads, 0);
+    expect(usage.skipped, ['viewer', 'viewer', 'viewer']);
+  });
+
+  test('signing out during each device read cannot show a card', () async {
+    for (final path in ['returning', 'sign_in', 'work']) {
+      final usage = AddPhoneRecorder();
+      final api = _DevicesApi(_listing([]));
+      final app = createApp(store: MemoryStore(), productMeasurement: usage)
+        ..status = AppStatus.authenticated
+        ..signedIn = true
+        ..currentUser = const CurrentUserProfile(
+          id: 'a',
+          email: 'a@example.test',
+        )
+        ..api = api;
+      addTearDown(app.dispose);
+      api.onRead = () => app.signedIn = false;
+      if (path == 'work') {
+        await app.offerPhoneAfterWorkForTest();
+      } else {
+        await app.offerPhoneForTest(atLaunch: path == 'returning');
+      }
+      expect(app.phoneOfferShowing, isFalse, reason: path);
+      expect(usage.skipped, ['not_signed_in'], reason: path);
+    }
+  });
+
+  test('Add Phone opened while a card path reads devices stops the pending card', () async {
+    for (final path in ['returning', 'sign_in', 'work']) {
+      final usage = AddPhoneRecorder();
+      final api = _DevicesApi(_listing([]));
+      final app = createApp(store: MemoryStore(), productMeasurement: usage)
+        ..status = AppStatus.authenticated
+        ..signedIn = true
+        ..currentUser = const CurrentUserProfile(id: 'a', email: 'a@example.test')
+        ..api = api;
+      addTearDown(app.dispose);
+      api.onRead = () => app.addPhoneOpened(AddPhoneOpening.menu);
+      if (path == 'work') { await app.offerPhoneAfterWorkForTest(); }
+      else { await app.offerPhoneForTest(atLaunch: path == 'returning'); }
+      expect(app.phoneOfferShowing, isFalse, reason: path);
+      expect(usage.skipped, ['stopped'], reason: path);
+    }
+  });
+
+  test('changing accounts before a returning card is shown writes no offer record', () async {
+    final store = MemoryStore();
+    final usage = AddPhoneRecorder();
+    final app = createApp(store: store, productMeasurement: usage)
+      ..signedIn = true
+      ..currentUser = const CurrentUserProfile(id: 'a', email: 'a@example.test')
+      ..api = _DevicesApi(_listing([]));
+    addTearDown(app.dispose);
+    await app.offerPhoneForTest(atLaunch: true);
+    app.currentUser = const CurrentUserProfile(id: 'b', email: 'b@example.test');
+    app.phoneOfferShown();
+    await pumpEventQueue();
+    expect(store.values[_done], isNull);
+    expect(store.values[_seen], isNull);
+    expect(store.values['phone_offer_returning.a'], isNull);
+    expect(store.values['phone_offer_returning.b'], isNull);
+    expect(usage.started, isEmpty);
+  });
+
+  test(
+    'another account arriving during a returning read cannot inherit its offer',
+    () async {
+      final usage = AddPhoneRecorder();
+      final store = MemoryStore();
+      final api = _DevicesApi(_listing([]));
+      final app = createApp(store: store, productMeasurement: usage)
+        ..signedIn = true
+        ..currentUser = const CurrentUserProfile(
+          id: 'a',
+          email: 'a@example.test',
+        )
+        ..api = api;
+      addTearDown(app.dispose);
+      api.onRead = () => app.currentUser = const CurrentUserProfile(
+        id: 'b',
+        email: 'b@example.test',
+      );
+      await app.offerPhoneForTest(atLaunch: true);
+      expect(app.phoneOfferShowing, isFalse);
+      expect(usage.skipped, ['account_changed']);
+      expect(store.values['phone_offer_returning.a'], isNull);
+      expect(store.values['phone_offer_returning.b'], isNull);
+    },
+  );
+
   group('after work, on a computer that never showed it', () {
     /// A computer that opened signed in — marked offered at launch, the card never on its screen —
     /// on an account answering [api], measured by [usage].
@@ -174,9 +500,9 @@ void main() {
         ..signedIn = true
         ..api = api;
       addTearDown(app.dispose);
-      await app.offerPhoneForTest(atLaunch: true);
+      // The historical signed-in launch marked done without ever showing a card.
+      kept.values[_done] = '1';
       expect(app.phoneOfferShowing, isFalse);
-      expect(kept.values[_done], '1');
       return (app, kept);
     }
 
@@ -635,6 +961,64 @@ void main() {
       expect(api.reads, 0);
     });
 
+    test(
+      'a returning card uses one away-cap slot and suppresses the work card',
+      () async {
+        final usage = AddPhoneRecorder();
+        final (app, store) = await working(
+          _DevicesApi(_listing([])),
+          usage: usage,
+        );
+        app.currentUser = const CurrentUserProfile(
+          id: 'a',
+          email: 'a@example.test',
+        );
+        await app.offerPhoneForTest(atLaunch: true);
+        app.phoneOfferShown();
+        await pumpEventQueue();
+        expect(store.values[_shows], '1');
+        app.dropPhoneOffer();
+        await app.offerPhoneAfterWorkForTest();
+        expect(app.phoneOfferShowing, isFalse);
+        for (var i = 0; i < 3; i++) {
+          leave(app);
+          await finishes(app, id: 'return-$i');
+          await back(app, const Duration(minutes: 10));
+          expect(app.phoneOfferShowing, i < 2);
+          if (i < 2) {
+            app.phoneOfferShown();
+            await pumpEventQueue();
+            app.dropPhoneOffer();
+          }
+        }
+        expect(store.values[_shows], '3');
+        expect(usage.skipped.last, 'cap_reached');
+      },
+    );
+
+    test('signing out during the away read records one skip', () async {
+      final usage = AddPhoneRecorder();
+      final api = _DevicesApi(_listing([]));
+      final (app, _) = await working(api, usage: usage);
+      api.onRead = () => app.signedIn = false;
+      leave(app);
+      await finishes(app);
+      await back(app, const Duration(minutes: 10));
+      expect(app.phoneOfferShowing, isFalse);
+      expect(usage.skipped, ['not_signed_in']);
+    });
+
+    test('an account whose workspace is not ready skips the away card', () async {
+      final usage = AddPhoneRecorder();
+      final (app, _) = await working(_DevicesApi(_listing([])), usage: usage);
+      leave(app);
+      await finishes(app);
+      app.status = AppStatus.unauthenticated;
+      await back(app, const Duration(minutes: 10));
+      expect(app.phoneOfferShowing, isFalse);
+      expect(usage.skipped, ['not_signed_in']);
+    });
+
     test('a card already up is left as it is', () async {
       final (app, _) = await working(_DevicesApi(_listing([])));
       await app.offerPhoneAfterWorkForTest();
@@ -866,7 +1250,8 @@ void main() {
                     onAdd: () {},
                     onDismiss: () {},
                     away: (
-                      agent: 'Refactor auth flow and more'.padRight(length, 'x')
+                      agent: 'Refactor auth flow and more'
+                          .padRight(length, 'x')
                           .substring(0, length),
                       waited: waited,
                       minutes: 21,
@@ -918,6 +1303,40 @@ void main() {
       await mount(tester, app);
       return (app, store);
     }
+
+    testWidgets(
+      'the returning card waits for first arrival before recording its account',
+      (tester) async {
+        final usage = AddPhoneRecorder();
+        final store = MemoryStore()..values['first_arrival_v1'] = 'new';
+        final app = createApp(store: store, productMeasurement: usage)
+          ..status = AppStatus.authenticated
+          ..signedIn = true
+          ..currentUser = const CurrentUserProfile(
+            id: 'a',
+            email: 'a@example.test',
+          )
+          ..api = _DevicesApi(_listing([]));
+        addTearDown(app.dispose);
+        await app.firstArrival.restore();
+        await app.offerPhoneForTest(atLaunch: true);
+        await mount(tester, app);
+        expect(app.phoneOfferShowing, isTrue);
+        expect(find.byType(PhoneOfferCard), findsNothing);
+        expect(find.byType(AddPhoneDialog), findsNothing);
+        expect(store.values['phone_offer_returning.a'], isNull);
+        expect(usage.started, isEmpty);
+        app.firstArrival.dismiss();
+        app.notifyListeners();
+        await tester.pump();
+        await tester.pump();
+        expect(find.byType(PhoneOfferCard), findsOneWidget);
+        expect(find.byType(AddPhoneDialog), findsNothing);
+        expect(store.values['phone_offer_returning.a'], '1');
+        expect(usage.started, ['phoneOfferReturning']);
+        await tester.pumpWidget(const SizedBox());
+      },
+    );
 
     testWidgets(
       'the card stands in the top-right, and Add Phone opens from it',

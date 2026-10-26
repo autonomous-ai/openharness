@@ -31,6 +31,7 @@ enum ProductFlow {
   // The Add Phone card (widgets/phone_offer_card.dart), offered once per computer: begun when it is on
   // screen, ok by its Add Phone, cancelled by its ×, unknown when it goes another way.
   phoneOffer('phone_offer'),
+  phoneOfferReturning('phone_offer_returning'),
   shareInvite('share_invite'),
   shareAccept('share_accept'),
   // The same card offered once to a computer that never had it, after one of its own harnesses
@@ -60,6 +61,7 @@ enum ProductFlow {
   /// queue for that answer instead of being skipped ([ProductMeasurement]).
   int get vocabulary => switch (this) {
     phoneOffer => 3,
+    phoneOfferReturning => 6,
     shareInvite || shareAccept => 5,
     phoneOfferAfterWork || phoneOfferAwayWaited || phoneOfferAwayFinished => 4,
     _ => 1,
@@ -70,6 +72,7 @@ enum ProductFlow {
   /// an Add Phone pressed after 15 minutes would otherwise be lost to unknown.
   bool get unbounded =>
       this == phoneOffer ||
+      this == phoneOfferReturning ||
       this == phoneOfferAfterWork ||
       this == phoneOfferAwayWaited ||
       this == phoneOfferAwayFinished;
@@ -535,6 +538,45 @@ class ProductMeasurement extends ChangeNotifier {
     );
   }
 
+  /// A new non-machine key joined while Add Phone was open, by its opening only.
+  void addPhonePaired(AddPhoneOpening from) {
+    if (!healthEnabled || !sharing || _disposed) return;
+    _coverage();
+    _count(
+      'ui',
+      _now().toUtc().toIso8601String().substring(0, 10),
+      'ui_desktop_add_phone_paired_${from.wire}',
+    );
+  }
+
+  /// A card path declined an offer. Fixed reasons only; never account or device data.
+  void phoneOfferSkipped(String reason) {
+    if (!const {
+          'has_phone',
+          'no_device_list',
+          'already_shown',
+          'stopped',
+          'cap_reached',
+          'not_signed_in',
+          'viewer',
+          'card_showing',
+          'no_storage',
+          'account_changed',
+          'read_limit',
+        }.contains(reason) ||
+        !healthEnabled ||
+        !sharing ||
+        _disposed) {
+      return;
+    }
+    _coverage();
+    _count(
+      'ui',
+      _now().toUtc().toIso8601String().substring(0, 10),
+      'ui_desktop_phone_offer_skipped_$reason',
+    );
+  }
+
   /// One first-arrival episode in this app run. Retries share its denominator;
   /// routine launches never call this. Targets stay in RAM and are never reported.
   void firstRunStarted() {
@@ -627,6 +669,10 @@ class ProductMeasurement extends ChangeNotifier {
   /// after work or after time away 4, and first-run/invite counters 5. Other
   /// health measures use [health] to wait for support before counting.
   static int _vocabularyOf(String metric) {
+    if (metric.startsWith('ui_desktop_phone_offer_skipped_') ||
+        metric.startsWith('ui_desktop_add_phone_paired_')) {
+      return 6;
+    }
     if (metric.startsWith('health_desktop_first_run_') ||
         metric.startsWith('health_desktop_shared_invites_')) return 5;
     for (final flow in _newerFlows) {
