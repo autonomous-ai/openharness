@@ -34,6 +34,7 @@ import '../models/models_panel.dart';
 import '../models/model_search_catalog.dart';
 import '../widgets/resting_section.dart'
     show confirmStopInUse, confirmSwitchAnyway;
+import '../widgets/finger_target.dart';
 import '../widgets/session_close_dialog.dart';
 import '../super_tabs/lead_guard.dart';
 import '../notify/system_notifications.dart';
@@ -535,7 +536,8 @@ class _SwarmScreenState extends State<SwarmScreen> {
                             onRetry: app.firstArrival.canRetry
                                 ? _retryFirstArrival
                                 : null,
-                            onStartNew: app.firstArrival.canRetry &&
+                            onStartNew:
+                                app.firstArrival.canRetry &&
                                     !app.firstArrival.checkingStatus
                                 ? _startFreshAfterArrival
                                 : null,
@@ -605,8 +607,12 @@ class _SwarmScreenState extends State<SwarmScreen> {
     final tab = app.activeSwarmId;
     final work = app.firstArrival.retry(
       app,
-      stillCurrent: () => mounted && app.activeSwarmId == tab &&
-          _newHarness == null && _search == null && !_pickingFolder,
+      stillCurrent: () =>
+          mounted &&
+          app.activeSwarmId == tab &&
+          _newHarness == null &&
+          _search == null &&
+          !_pickingFolder,
     );
     setState(() {});
     await work;
@@ -618,12 +624,14 @@ class _SwarmScreenState extends State<SwarmScreen> {
     final session = arrival.selectedSession;
     final engine = arrival.selectedEngine;
     arrival.dismiss();
-    unawaited(_newAgent(
-      machineId: app.localMachineState?.machine.machineId,
-      folder: session?.cwd,
-      engine: engine,
-      task: session == null ? FirstArrival.starterTask : null,
-    ));
+    unawaited(
+      _newAgent(
+        machineId: app.localMachineState?.machine.machineId,
+        folder: session?.cwd,
+        engine: engine,
+        task: session == null ? FirstArrival.starterTask : null,
+      ),
+    );
   }
 
   void _scheduleWelcomeComposer() {
@@ -2236,13 +2244,14 @@ class _SwarmScreenState extends State<SwarmScreen> {
             'iconAsset': swarm.isStore
                 ? kStoreMarkAsset
                 : engineIdentity(_tabEngine(swarm)).asset,
-            'attention': swarm.panes
-                .where(
-                  (p) =>
-                      p.agentId != null &&
-                      app.questionFor(p.machineId, p.agentId!) != null,
-                )
-                .length +
+            'attention':
+                swarm.panes
+                    .where(
+                      (p) =>
+                          p.agentId != null &&
+                          app.questionFor(p.machineId, p.agentId!) != null,
+                    )
+                    .length +
                 tabMentionsWaiting(app, swarm),
             if (tabActivity(app, swarm) case final activity?)
               'activity': nativeActivityPayload(
@@ -9350,35 +9359,44 @@ class _SwarmScreenState extends State<SwarmScreen> {
         );
 
   /// A compact host uses a tab switcher instead of the tab list.
-  Widget _compactTabStrip(WorkspaceChrome chrome, TerminalTheme theme) =>
-      Builder(
-        builder: (context) {
-          final cell = workspaceBarCellSizeOf(context);
-          return Material(
-            key: const ValueKey('workspace-tab-bar'),
-            color: grid.AppPalette.swarmTabBar,
-            child: SizedBox(
-              height: math.max(_tabBarHeight, cell.height * 2),
-              child: Row(
-                children: [
-                  SizedBox(width: cell.width),
-                  SizedBox(
-                    width: chrome.leadingWidth(context),
-                    child: chrome.leading(context, _workspaceCommands),
-                  ),
-                  Expanded(
-                    child: chrome.compactTabs!(context, _workspaceCommands),
-                  ),
-                  _searchButton(theme),
-                  _notificationsButton(theme),
-                  if (kIsWeb && _slotShown) _daemonTabButton(),
-                  SizedBox(width: cell.width),
-                ],
+  Widget _compactTabStrip(
+    WorkspaceChrome chrome,
+    TerminalTheme theme,
+  ) => Builder(
+    builder: (context) {
+      final cell = workspaceBarCellSizeOf(context);
+      return Material(
+        key: const ValueKey('workspace-tab-bar'),
+        color: grid.AppPalette.swarmTabBar,
+        // A phone's bar: every control a finger's size, its icon as it
+        // was, so the bar is at least that tall too.
+        child: SizedBox(
+          height: math.max(
+            kFingerTarget,
+            math.max(_tabBarHeight, cell.height * 2),
+          ),
+          child: Row(
+            children: [
+              SizedBox(width: cell.width),
+              SizedBox(
+                width: math.max(chrome.leadingWidth(context), kFingerTarget),
+                child: fingerTarget(
+                  enabled: true,
+                  chrome.leading(context, _workspaceCommands),
+                ),
               ),
-            ),
-          );
-        },
+              Expanded(child: chrome.compactTabs!(context, _workspaceCommands)),
+              fingerTarget(enabled: true, _searchButton(theme)),
+              fingerTarget(enabled: true, _notificationsButton(theme)),
+              if (kIsWeb && _slotShown)
+                fingerTarget(enabled: true, _daemonTabButton()),
+              SizedBox(width: cell.width),
+            ],
+          ),
+        ),
       );
+    },
+  );
 
   Widget _statusToolIcon(
     String id,
