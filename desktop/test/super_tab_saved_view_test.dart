@@ -298,6 +298,22 @@ class _Transport {
   }
 }
 
+/// When the saved view is read, among the requests a test records.
+class _OrderStore extends MemoryStore {
+  final order = <String>[];
+
+  /// How long reading the saved view takes, as a slow device's storage.
+  Duration viewDelay = Duration.zero;
+  @override
+  Future<String?> read(String key) async {
+    if (key == _viewKey) {
+      order.add('view');
+      if (viewDelay > Duration.zero) await Future<void>.delayed(viewDelay);
+    }
+    return super.read(key);
+  }
+}
+
 /// Writes to the saved views, by key.
 class _CountingStore extends MemoryStore {
   final writes = <String>[];
@@ -378,6 +394,73 @@ void _clientTests() {
       expect(store.writes, contains(_viewKey));
       expect(store.values[_viewKey], contains('Last one.'));
       client.dispose();
+    });
+  });
+
+  test('the first read is asked for before the saved view is read', () {
+    fakeAsync((async) {
+      final server = ConversationServer()..append('Hello');
+      final store = _OrderStore();
+      final first = _client(_Transport(server), store)
+        ..bind('owner')
+        ..show('tab');
+      first.open('tab');
+      async.elapse(const Duration(seconds: 1));
+      first.show(null);
+      async.flushMicrotasks();
+      store.order.clear();
+      final transport = _Transport(server)..hold = Completer<void>();
+      final second =
+          SuperTabClient(
+              transport: (method, path, {body}) {
+                store.order.add('request');
+                return transport.call(method, path, body: body);
+              },
+              storage: store,
+              discoveryInterval: Duration.zero,
+            )
+            ..reading = _web
+            ..bind('owner')
+            ..show('tab');
+      SuperTabController? c;
+      second.open('tab').then((opened) => c = opened);
+      async.flushMicrotasks();
+      expect(store.order.first, 'request');
+      expect(store.order, contains('view'));
+      expect(c!.showingSaved, isTrue);
+      expect(c!.messages('lead').single.text, 'Hello');
+      transport.hold!.complete();
+      transport.hold = null;
+      async.flushMicrotasks();
+      expect(c!.showingSaved, isFalse);
+      first.dispose();
+      second.dispose();
+    });
+  });
+
+  test('a first read that lands before the saved view is not drawn over', () {
+    fakeAsync((async) {
+      final server = ConversationServer()..append('Hello');
+      final store = _OrderStore();
+      final first = _client(_Transport(server), store)
+        ..bind('owner')
+        ..show('tab');
+      first.open('tab');
+      async.elapse(const Duration(seconds: 1));
+      first.show(null);
+      async.flushMicrotasks();
+      server.append('Newer.');
+      store.viewDelay = const Duration(milliseconds: 500);
+      final second = _client(_Transport(server), store)
+        ..bind('owner')
+        ..show('tab');
+      SuperTabController? c;
+      second.open('tab').then((opened) => c = opened);
+      async.elapse(const Duration(seconds: 1));
+      expect(c!.showingSaved, isFalse);
+      expect(c!.messages('lead').map((m) => m.text), ['Hello', 'Newer.']);
+      first.dispose();
+      second.dispose();
     });
   });
 

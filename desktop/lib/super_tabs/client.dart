@@ -107,9 +107,7 @@ class SuperTabClient {
   void _saveViewSoon(String id) {
     if (_viewSaves.containsKey(id)) return;
     final last = _viewSavedAt[id];
-    final since = last == null
-        ? _viewSaveEvery
-        : clock.now().difference(last);
+    final since = last == null ? _viewSaveEvery : clock.now().difference(last);
     _viewSaves[id] = Timer(
       since >= _viewSaveEvery ? Duration.zero : _viewSaveEvery - since,
       () => _saveView(id),
@@ -382,10 +380,6 @@ class SuperTabClient {
     final saved = raw == null
         ? <String, dynamic>{}
         : superTabMap(jsonDecode(raw));
-    final view = _reading.drawsSaved ? await _views.read(account, id) : null;
-    if (generation != _generation) {
-      throw const SuperTabFailure('ACCOUNT_CHANGED', 'The account changed.');
-    }
     final controller = SuperTabController(
       tabId: id,
       accountId: account,
@@ -400,7 +394,6 @@ class SuperTabClient {
       upload: upload,
       reading: _reading,
     )..away = _isAway(id);
-    if (view != null) controller.drawSaved(view);
     var seenRevision = -1;
     var seenSelected = controller.selectedId;
     controller.addListener(() {
@@ -428,6 +421,14 @@ class SuperTabClient {
     _tagCounts.remove(id);
     _loaded[id] = controller;
     controller.start();
+    // After the first read is asked for: reading and drawing a saved view
+    // takes the main thread a moment a phone's first read need not wait on.
+    if (_reading.drawsSaved) {
+      final view = await _views.read(account, id);
+      if (view != null && generation == _generation) {
+        controller.drawSaved(view);
+      }
+    }
     return controller;
   }
 

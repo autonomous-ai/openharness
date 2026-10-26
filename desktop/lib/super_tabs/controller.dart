@@ -469,11 +469,11 @@ class SuperTabController extends ChangeNotifier {
   /// A conversation's page as the backend reads it.
   static const _savedPage = 100;
 
-  /// Draws a [savedView] kept from an earlier visit, before [start]: the
-  /// first read replaces it. One for another Swarm, or that no longer
-  /// parses, draws nothing.
+  /// Draws a [savedView] kept from an earlier visit while the first read is
+  /// on its way: that read replaces it. One for another Swarm, one that no
+  /// longer parses, or one after a read has landed, draws nothing.
   void drawSaved(Map<String, dynamic> view) {
-    if (!_policy.drawsSaved || snapshot != null || _startedAt != null) return;
+    if (!_policy.drawsSaved || snapshot != null || stateReads > 0) return;
     try {
       final state = superTabMap(view['state']);
       final saved = SuperTabSnapshot.fromJson(state);
@@ -497,6 +497,8 @@ class SuperTabController extends ChangeNotifier {
         _before[id] = (view['next'] as num?)?.toInt();
       }
       _showingSaved = true;
+      loading = false;
+      if (_startedAt != null) _changed();
     } on FormatException {
       _dropSaved();
     } on TypeError {
