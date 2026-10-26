@@ -61,18 +61,18 @@ int main(void)
 
     // Whole frames pass straight through.
     reader_step(a, (int)la);
-    CHECK(got == 1 && s_decoder.len == 0);
+    CHECK(got == 1 && s_decoder.len == 0 && !cable_link_rx_pending());
 
     // The tail of a frame is lost (a dropped USB packet) and nothing follows: 300 ms later the partial is dropped,
     // counted corrupt, and the next frame decodes at once. Before: it sat there for 15 s.
     reader_step(a, 64);
-    CHECK(s_decoder.len == 64);
+    CHECK(s_decoder.len == 64 && cable_link_rx_pending());          // the self re-plug waits on this
     now_us += 299 * 1000;
     reader_step(NULL, 0);
-    CHECK(s_decoder.len == 64 && s_decoder.corrupt_frames == 0);   // not yet
+    CHECK(s_decoder.len == 64 && s_decoder.corrupt_frames == 0 && cable_link_rx_pending());   // not yet
     now_us += 2 * 1000;
     reader_step(NULL, 0);
-    CHECK(s_decoder.len == 0 && s_decoder.corrupt_frames == 1);
+    CHECK(s_decoder.len == 0 && s_decoder.corrupt_frames == 1 && !cable_link_rx_pending());
     reader_step(b, (int)lb);
     CHECK(got == 2);
 
@@ -111,9 +111,18 @@ int main(void)
     reader_step(NULL, 0);
     CHECK(s_decoder.len == 0 && s_decoder.corrupt_frames == 3);
 
+    // A frame longer than one read (a 295 B welcome over 256 B reads) is pending between the two reads, done after.
+    uint8_t w[1024];
+    const size_t lw = frame(w, 295 - 8);
+    CHECK(lw == 295 && lw > READ_CHUNK);
+    reader_step(w, READ_CHUNK);
+    CHECK(got == 6 && cable_link_rx_pending());
+    reader_step(w + READ_CHUNK, (int)(lw - READ_CHUNK));
+    CHECK(got == 7 && !cable_link_rx_pending());
+
     // The driver's counters ride the stats.
     cable_link_stats_t st = cable_link_stats();
-    CHECK(st.isr_rx == 7 && st.ring_drop == 2 && st.frames_ok == 6);
+    CHECK(st.isr_rx == 7 && st.ring_drop == 2 && st.frames_ok == 7);
     CHECK(st.corrupt_frames == 3 && st.rx_bytes > 0);
 
     printf("test_cable_link: %d checks passed\n", checks);

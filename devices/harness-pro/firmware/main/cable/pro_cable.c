@@ -1136,7 +1136,9 @@ static void replug_tick(int64_t now)
         since = now;
         return;
     }
-    if (now - since < wait) return;
+    // A frame half in is a link alive mid-message (a welcome spans two reads): wait for it. The reader drops a stale
+    // partial after 300 ms, so this defers by that at most, and whole pings in between never hold it off.
+    if (now - since < wait || cable_link_rx_pending()) return;
     s_replugs++;
     ESP_LOGW(TAG, "usb: no session for %llds with the host present: self re-plug #%u",
              (long long)((now - since) / 1000000), s_replugs);

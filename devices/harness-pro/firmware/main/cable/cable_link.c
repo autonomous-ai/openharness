@@ -316,6 +316,11 @@ void cable_link_replug(void)
     usb_serial_jtag_ll_phy_disable_pull_override();
 }
 
+bool cable_link_rx_pending(void)
+{
+    return s_decoder.len != 0;   // the reader's own state, read on the reader (the tick)
+}
+
 void cable_link_counters(uint32_t *corrupt_frames, uint32_t *discarded_bytes)
 {
     if (corrupt_frames) *corrupt_frames = s_decoder.corrupt_frames;

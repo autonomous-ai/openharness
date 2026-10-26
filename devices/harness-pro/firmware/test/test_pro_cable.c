@@ -162,6 +162,8 @@ static bool host_present;   // off unless a test turns it on: with no host the s
 bool cable_link_host_present(void) { return host_present; }
 static int replugs;
 void cable_link_replug(void) { replugs++; }
+static bool rx_pending;     // part of a frame is in (test_cable_link covers when the real reader says so)
+bool cable_link_rx_pending(void) { return rx_pending; }
 static int64_t now_us = 1000000;
 int64_t esp_timer_get_time(void) { return now_us; }
 const esp_app_desc_t *esp_app_get_description(void) { static const esp_app_desc_t d = { .version = "0.0.0" }; return &d; }
@@ -1298,6 +1300,38 @@ static void self_replug(void)
     host_present = false;
 }
 
+// A welcome is longer than one read (295 B with the features, the reader hands over 256 B at a time), so its first read can
+// land at the 30 s deadline with the rest still due. That is a link coming up: the re-plug waits for the frame. A partial
+// that never completes is dropped by the reader after 300 ms, and the re-plug goes ahead on the next tick.
+static void replug_spares_a_frame_in_flight(void)
+{
+    if (pro_cable_connected()) end_session();
+    welcome(); end_session();             // a session resets the wait to 30 s from its last tick
+    replugs = 0; host_present = true;
+    alone_for(25, false);
+    now_us += 5 * 1000000;
+    rx_pending = true;                    // 256 B of the welcome are in
+    pro_cable_tick(NULL);
+    CHECK(replugs == 0);
+    rx_pending = false;                   // the rest: the session comes up
+    now_us += 10 * 1000;
+    welcome();
+    pro_cable_tick(NULL);
+    CHECK(replugs == 0 && pro_cable_connected());
+    // The stale partial: the tail never comes.
+    end_session();
+    alone_for(25, false);
+    now_us += 5 * 1000000;
+    rx_pending = true;
+    pro_cable_tick(NULL);
+    CHECK(replugs == 0);
+    now_us += 300 * 1000;
+    rx_pending = false;                   // the reader dropped it
+    pro_cable_tick(NULL);
+    CHECK(replugs == 1 && !pro_cable_connected());
+    host_present = false;
+}
+
 int main(void)
 {
     pro_cable_start();   // the lock and the machine table; no tasks run on the host
@@ -1323,6 +1357,7 @@ int main(void)
     seq_gaps();
     test_swarm_cards();
     self_replug();
+    replug_spares_a_frame_in_flight();
     printf("test_pro_cable: %d checks passed\n", checks);
     return 0;
 }
