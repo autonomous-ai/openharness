@@ -5,7 +5,7 @@
   "description": "Work on Python projects with an AI agent and open the workspace in the installed PyCharm IDE.",
   "author": "Edwin Rodriguez (ProgreTech; AI-assisted)",
   "repo": "https://github.com/progretech-llc/openharness",
-  "ref": "codex/pycharm-store-harness",
+  "ref": "18f1e96d5c43029ddf36011cb8a8997cb1b70f99",
   "path": "store/agents/progretech-pycharm",
   "homepage": "https://www.jetbrains.com/pycharm/",
   "upstream": "https://www.jetbrains.com/pycharm/",
