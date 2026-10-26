@@ -170,6 +170,9 @@ export function startCloudService(options: CloudServiceOptions) {
     if (update.state === 'needs_input' && !entry.heard) update = { ...update, state: undefined, question: undefined }
     if (update.state) entry.harness.state = update.state
     if (update.activity !== undefined) entry.harness.activity = update.activity
+    // Refreshed even when this look brought no messages, and when its "waiting" was the wait just answered.
+    // A null detail replaces the old one: the maker no longer reports it.
+    if (update.providerStatus) entry.harness.providerStatus = { status: update.providerStatus.status, detail: update.providerStatus.detail }
     if (update.branch !== undefined) entry.harness.branch = update.branch
     if (update.links) entry.harness.links = update.links
     if (update.remote) entry.remote = { ...entry.remote, ...update.remote }
@@ -289,9 +292,12 @@ export function startCloudService(options: CloudServiceOptions) {
     // Working from the moment the words go, as a terminal agent's turn starts with its prompt: Fo answers
     // `ask_fo` with its whole reply, 15 s later, and the dial sat on the last recap all that time (2026-10-11).
     // Told, not saved: refused, it is back where it was.
-    const was = { state: entry.harness.state, activity: entry.harness.activity }
+    const was = { state: entry.harness.state, activity: entry.harness.activity, providerStatus: entry.harness.providerStatus }
     entry.harness.state = 'working'
     entry.harness.activity = null
+    // The status from before these words is not this turn's. It stands again when the next look says so;
+    // a refused send puts the old one back, because the maker never took the words.
+    delete entry.harness.providerStatus
     publish()
     const adapter = adapters[entry.harness.agent]
     try {
@@ -299,6 +305,7 @@ export function startCloudService(options: CloudServiceOptions) {
       if (moved) entry.remote = { ...entry.remote, ...moved }
     } catch (error) {
       Object.assign(entry.harness, was)
+      if (!was.providerStatus) delete entry.harness.providerStatus
       publish()
       return refused(error, entry.harness.agent)
     }
@@ -346,6 +353,8 @@ export function startCloudService(options: CloudServiceOptions) {
     timers.delete(agentId)
     entry.harness.state = 'stopped'
     entry.harness.activity = adapter.stop ? null : `${CLOUD_AGENTS[entry.harness.agent].name} keeps working on its own.`
+    // A local stop is not the maker's last report. Showing that report would call a finished session current.
+    delete entry.harness.providerStatus
     ask(entry, null)
     touched(entry)
     return adapter.stop ? { ok: true } : { ok: true, detail: `${CLOUD_AGENTS[entry.harness.agent].name} keeps working on its own.` }

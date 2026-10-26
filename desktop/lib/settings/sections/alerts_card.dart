@@ -2,12 +2,19 @@ library;
 
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 import '../../notify/alert_sounds.dart';
 import '../../notify/system_notifications.dart';
 import '../../shared/theme/app_theme.dart' as grid;
 import '../../shared/widgets/setting_row.dart';
+
+/// A phone's or tablet's browser, where the banner is tapped, not clicked.
+/// Desktop runs on neither.
+bool get _touch =>
+    defaultTargetPlatform == TargetPlatform.iOS ||
+    defaultTargetPlatform == TargetPlatform.android;
 
 /// Settings ▸ Notifications: how an agent gets your attention.
 ///
@@ -46,7 +53,8 @@ class AlertsCard extends StatelessWidget {
             controlSemanticLabel: 'On-screen alerts',
             detail:
                 'Show a banner when an agent finishes, or stops to ask you '
-                'something. Click it to go to that harness.',
+                'something. ${_touch ? 'Tap' : 'Click'} it to go to that '
+                'harness.',
             control: Align(
               alignment: Alignment.centerLeft,
               child: Switch(

@@ -330,6 +330,8 @@ void main() {
     visible(find.text('1. Open Harness on your other computer.'));
     visible(find.text('Download Harness'));
     visible(find.text('2. Open Machines and choose Set password.'));
+    // flutter_test runs as Android: a phone's word (audit finding S8).
+    visible(find.text('Back here, tap Connect and enter that password.'));
     visible(find.text('Set up a server…'));
     await capture(tester, 'machines-clean-setup', panelOnly: true);
 

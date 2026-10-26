@@ -22,6 +22,7 @@ import '../super_tabs/project_visibility.dart';
 import 'box_chrome.dart' show kTerminalCornerRadius, terminalPaneBorder;
 import 'dsh_install_panel.dart' show describeInstallFailure;
 import 'desktop_chrome.dart';
+import 'finger_target.dart';
 import 'new_harness_attachments.dart';
 import 'new_harness_paste.dart';
 import 'engine_identity.dart';
@@ -1800,105 +1801,114 @@ class NewHarnessFormState extends State<NewHarnessForm> {
               lastPart ??
               box.project.repository?.name ??
               'Choose repo';
+    // A phone has room for neither the capsules side by side nor a mouse's
+    // target: there each is a line of its own, a finger tall.
+    final phone = workspaceIsCompact(context);
+    Widget fields(List<Widget> children) => phone
+        ? Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            spacing: 8,
+            children: children,
+          )
+        : Wrap(spacing: 8, runSpacing: 8, children: children);
     return Row(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Expanded(
-          child: Wrap(
-            spacing: 8,
-            runSpacing: 8,
-            children: [
-              _desktopField(
-                order: 1,
-                anchor: _desktopAnchors[_Row.agent]!,
-                child: _desktopChoiceButton(
-                  _Row.agent,
-                  AppIcons.code,
-                  capsule: true,
-                ),
+          child: fields([
+            _desktopField(
+              order: 1,
+              finger: phone,
+              anchor: _desktopAnchors[_Row.agent]!,
+              child: _desktopChoiceButton(
+                _Row.agent,
+                AppIcons.code,
+                capsule: true,
               ),
-              // A cloud agent runs in its maker's cloud, never on a computer:
-              // the place is said where the computer is, and does not change.
-              if (box.isCloud)
-                _desktopField(
-                  order: 2,
-                  anchor: _headerMachineAnchor,
+            ),
+            // A cloud agent runs in its maker's cloud, never on a computer:
+            // the place is said where the computer is, and does not change.
+            if (box.isCloud)
+              _desktopField(
+                order: 2,
+                finger: phone,
+                anchor: _headerMachineAnchor,
+                child: DesktopPill(
+                  key: const ValueKey('new-harness-field-machine'),
+                  focusNode: _headerMachineFocus,
+                  label: cloudPlaceOf(box.engine),
+                  semanticLabel: 'Runs in ${cloudPlaceOf(box.engine)}',
+                  icon: AppIcons.monitor,
+                  capsule: true,
+                  tooltip: '${box.agentLabel} runs on its maker\'s servers',
+                  textSize: 13,
+                  surfaceColor: DesktopChrome.surface,
+                  onPressed: null,
+                ),
+              )
+            else
+              _desktopField(
+                order: 2,
+                finger: phone,
+                anchor: _headerMachineAnchor,
+                child: _desktopMachineAnchor(
                   child: DesktopPill(
                     key: const ValueKey('new-harness-field-machine'),
                     focusNode: _headerMachineFocus,
-                    label: cloudPlaceOf(box.engine),
-                    semanticLabel: 'Runs in ${cloudPlaceOf(box.engine)}',
-                    icon: AppIcons.monitor,
+                    label: _repoMachineLabel(box.machineId),
+                    semanticLabel:
+                        'Computer, ${_repoMachineLabel(box.machineId)}',
+                    icon: box.app.stateOf(box.machineId)?.isLocalMachine == true
+                        ? AppIcons.laptop
+                        : AppIcons.monitor,
+                    menu: true,
                     capsule: true,
-                    tooltip: '${box.agentLabel} runs on its maker\'s servers',
+                    tooltip: 'Choose computer',
                     textSize: 13,
                     surfaceColor: DesktopChrome.surface,
-                    onPressed: null,
-                  ),
-                )
-              else
-                _desktopField(
-                  order: 2,
-                  anchor: _headerMachineAnchor,
-                  child: _desktopMachineAnchor(
-                    child: DesktopPill(
-                      key: const ValueKey('new-harness-field-machine'),
-                      focusNode: _headerMachineFocus,
-                      label: _repoMachineLabel(box.machineId),
-                      semanticLabel:
-                          'Computer, ${_repoMachineLabel(box.machineId)}',
-                      icon:
-                          box.app.stateOf(box.machineId)?.isLocalMachine == true
-                          ? AppIcons.laptop
-                          : AppIcons.monitor,
-                      menu: true,
-                      capsule: true,
-                      tooltip: 'Choose computer',
-                      textSize: 13,
-                      surfaceColor: DesktopChrome.surface,
-                      onPressed: box.locked
-                          ? null
-                          : () => _headerMachineMenu.isOpen
-                                ? _headerMachineMenu.close()
-                                : _headerMachineMenu.open(),
-                    ),
+                    onPressed: box.locked
+                        ? null
+                        : () => _headerMachineMenu.isOpen
+                              ? _headerMachineMenu.close()
+                              : _headerMachineMenu.open(),
                   ),
                 ),
-              // Fo takes no repository; a cloud coding agent works on the chosen
-              // repository's GitHub copy, never on this computer's folder.
-              if ((!box.isCloud || cloudAgentTakesRepository(box.engine)) &&
-                  (!box.asGuest ||
-                      box.fields.contains(NewHarnessField.projectMenu)))
-                _desktopField(
-                  order: 3,
-                  anchor: _desktopAnchors[_Row.project]!,
-                  maxWidth: 340,
-                  child: Tooltip(
-                    message: box.isCloud
-                        ? (box.cloudRepository == null
-                              ? 'Choose a repository on GitHub, or a folder whose remote is on GitHub'
-                              : 'Works on ${box.cloudRepository}. Changes not pushed stay on this computer.')
-                        : '',
-                    child: _desktopChoiceButton(
-                      _Row.project,
-                      AppIcons.folder,
-                      label: box.isCloud
-                          ? box.cloudRepository
-                                    ?.replaceFirst(
-                                      RegExp(
-                                        r'^(https://github\.com/|git@github\.com:)',
-                                      ),
-                                      '',
-                                    )
-                                    .replaceFirst(RegExp(r'\.git$'), '') ??
-                                projectName
-                          : projectName,
-                      capsule: true,
-                    ),
+              ),
+            // Fo takes no repository; a cloud coding agent works on the chosen
+            // repository's GitHub copy, never on this computer's folder.
+            if ((!box.isCloud || cloudAgentTakesRepository(box.engine)) &&
+                (!box.asGuest ||
+                    box.fields.contains(NewHarnessField.projectMenu)))
+              _desktopField(
+                order: 3,
+                finger: phone,
+                anchor: _desktopAnchors[_Row.project]!,
+                maxWidth: 340,
+                child: Tooltip(
+                  message: box.isCloud
+                      ? (box.cloudRepository == null
+                            ? 'Choose a repository on GitHub, or a folder whose remote is on GitHub'
+                            : 'Works on ${box.cloudRepository}. Changes not pushed stay on this computer.')
+                      : '',
+                  child: _desktopChoiceButton(
+                    _Row.project,
+                    AppIcons.folder,
+                    label: box.isCloud
+                        ? box.cloudRepository
+                                  ?.replaceFirst(
+                                    RegExp(
+                                      r'^(https://github\.com/|git@github\.com:)',
+                                    ),
+                                    '',
+                                  )
+                                  .replaceFirst(RegExp(r'\.git$'), '') ??
+                              projectName
+                        : projectName,
+                    capsule: true,
                   ),
                 ),
-            ],
-          ),
+              ),
+          ]),
         ),
         if (!widget.embedded) ...[
           const SizedBox(width: 8),
@@ -2192,17 +2202,22 @@ class NewHarnessFormState extends State<NewHarnessForm> {
     },
   );
 
+  /// One control of the box. With [finger] (a phone) it takes its line's
+  /// whole width and a finger's height.
   Widget _desktopField({
     required double order,
     required GlobalKey anchor,
     required Widget child,
     double maxWidth = 280,
+    bool finger = false,
   }) => FocusTraversalOrder(
     order: NumericFocusOrder(order),
     child: ConstrainedBox(
       key: anchor,
-      constraints: BoxConstraints(maxWidth: maxWidth),
-      child: child,
+      constraints: BoxConstraints(
+        maxWidth: finger ? double.infinity : maxWidth,
+      ),
+      child: fingerTarget(enabled: finger, child),
     ),
   );
 

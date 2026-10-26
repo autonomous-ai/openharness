@@ -3927,16 +3927,24 @@ class _ControlBanner extends StatelessWidget {
       ? 'Another app took control of this terminal'
       : '$takerName took control of this terminal';
 
-  String? get detail {
+  /// What the band says under its title. Without key hints (the web) it
+  /// names the gesture: a tap on a phone's or tablet's browser, a click on a
+  /// computer's. Audit S8.
+  String? detailFor(TargetPlatform platform) {
     if (notice != null) return notice!.detail;
     if (busy) return null;
+    final touch =
+        platform == TargetPlatform.iOS || platform == TargetPlatform.android;
+    final press = touch ? 'tap' : 'click';
     if (nudged) {
       return keyHints
           ? 'Keys are ignored — press ⏎ to take control.'
-          : 'Keys are ignored — click here to take control.';
+          : 'Keys are ignored — $press here to take control.';
     }
     return keyHints
         ? 'Typing is paused. Click here or press ⏎ to take control.'
+        : touch
+        ? 'Typing is paused. Tap here to take control.'
         : 'Typing is paused. Click here to take control.';
   }
 
@@ -3948,7 +3956,9 @@ class _ControlBanner extends StatelessWidget {
     final ink = notice != null && notice!.icon == AppIcons.circleAlert
         ? AppColors.danger
         : AppColors.warning;
-    final detail = this.detail;
+    final detail = detailFor(defaultTargetPlatform);
+    // A phone's band is pressed with a finger: its buttons are that tall.
+    final finger = workspaceIsCompact(context);
     final reduceMotion = MediaQuery.disableAnimationsOf(context);
     // Composited over the pane's own ground, as [UpdateNotice] is over the
     // window's: the terminal theme behind this band may be any colour, and a
@@ -4051,12 +4061,14 @@ class _ControlBanner extends StatelessWidget {
                               label: notice!.actionLabel!,
                               onPressed: notice!.onAction,
                               showReturnKey: false,
+                              finger: finger,
                             ))
                     : busy
                     ? null
                     : _ControlBannerButton(
                         onPressed: onTakeControl,
                         showReturnKey: keyHints,
+                        finger: finger,
                       );
                 final secondary = notice?.secondaryLabel;
                 final button = secondary == null
@@ -4069,9 +4081,11 @@ class _ControlBanner extends StatelessWidget {
                           TextButton(
                             onPressed: notice!.onSecondary,
                             style: TextButton.styleFrom(
-                              minimumSize: const Size(0, 28),
+                              minimumSize: Size(0, finger ? kFingerTarget : 28),
                               tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                              visualDensity: VisualDensity.compact,
+                              visualDensity: finger
+                                  ? VisualDensity.standard
+                                  : VisualDensity.compact,
                             ),
                             child: Text(
                               secondary,
@@ -4121,10 +4135,14 @@ class _ControlBannerButton extends StatelessWidget {
   /// ⏎ is drawn only where the key really does this — taking the stream back
   /// (`_onTerminalKey`). A notice's action has no chord behind it.
   final bool showReturnKey;
+
+  /// A finger's height ([kFingerTarget]) on a phone; a mouse's elsewhere.
+  final bool finger;
   const _ControlBannerButton({
     required this.onPressed,
     this.label = 'Take control',
     this.showReturnKey = true,
+    this.finger = false,
   });
 
   @override
@@ -4140,10 +4158,10 @@ class _ControlBannerButton extends StatelessWidget {
         ),
         foregroundColor: scheme.onSurface,
         side: BorderSide(color: scheme.onSurface.withValues(alpha: .14)),
-        minimumSize: const Size(0, 28),
+        minimumSize: Size(0, finger ? kFingerTarget : 28),
         padding: const EdgeInsets.fromLTRB(12, 0, 8, 0),
         tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-        visualDensity: VisualDensity.compact,
+        visualDensity: finger ? VisualDensity.standard : VisualDensity.compact,
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,

@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import '../shared/theme/app_theme.dart' as grid;
 import '../shared/widgets/app_dialog.dart';
 import '../widgets/desktop_chrome.dart';
+import '../widgets/finger_target.dart';
 import 'controller.dart';
 import 'dialog_scope.dart';
 import 'message_row.dart';
@@ -86,7 +87,10 @@ class _SuperTabRouteRowState extends State<SuperTabRouteRow> {
           foregroundColor: Theme.of(context).colorScheme.onSurfaceVariant,
           backgroundColor: Colors.transparent,
           side: BorderSide.none,
-          minimumSize: const Size(0, 28),
+          // A phone's action is a finger's size.
+          minimumSize: workspaceIsCompact(context)
+              ? const Size.square(kFingerTarget)
+              : const Size(0, 28),
           padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
           tapTargetSize: MaterialTapTargetSize.shrinkWrap,
           textStyle: DesktopChrome.metadata(),

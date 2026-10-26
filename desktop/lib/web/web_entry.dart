@@ -26,7 +26,7 @@ void prepareConsole() => prepareWebConsole();
 /// sends it to the Harness app in its store. Above the Navigator, so every
 /// screen and route under it shows no key hints: the web is mouse-first.
 Widget appFrame(Widget app) => WebFocusRing(
-  child: WebStoreFrame(child: KeyHints(visible: false, child: app)),
+  child: WebAppStoreFrame(child: KeyHints(visible: false, child: app)),
 );
 
 /// A browser reaches a machine through the relay, so each connection gets a

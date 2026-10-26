@@ -1764,6 +1764,70 @@ describe('a cloud harness (#1444)', () => {
     expect(c.err.join('\n')).toMatch(/stop it in Harness/)
     expect(d.requests.some((r) => r.type === 'agent_close' && r.payload.mode !== 'inspect')).toBe(false)
   })
+
+  it('shows the maker\'s status in show and ps --all, and leaves Fo, Cursor and a local harness as they were', async () => {
+    const d = new FakeDaemon()
+    d.frames = [
+      cloud('asleep', 'stopped', { status: 'stopped', cloud: { state: 'stopped', activity: 'Devin went to sleep after inactivity.', providerStatus: { status: 'suspended', detail: 'inactivity' }, links: [] } }),
+      cloud('halted', 'stopped', { status: 'stopped', cloud: { state: 'stopped', activity: 'The session was stopped by request.', providerStatus: { status: 'suspended', detail: 'user_request' }, links: [] } }),
+      cloud('done', 'idle', { cloud: { state: 'idle', activity: null, providerStatus: { status: 'exit', detail: null }, links: [] } }),
+      cloud('fo', 'idle', { engine: 'fo', cloud: { state: 'idle', activity: 'Calling Hair Lab', links: [] } }),
+      cloud('cursor', 'working', { engine: 'cursor-cloud', cloud: { state: 'working', links: [] } }),
+      frame('local'),
+    ]
+    const listed = harness(d, { pane: undefined })
+    expect(await psCommand(['--json'], listed.deps)).toBe(EXIT.ok)
+    expect(JSON.parse(listed.out[0]).harnesses.map((r: { name: string }) => r.name)).not.toContain('asleep')
+    const all = harness(d, { pane: undefined })
+    expect(await psCommand(['--all', '--json'], all.deps)).toBe(EXIT.ok)
+    const byName = Object.fromEntries(JSON.parse(all.out[0]).harnesses.map((r: { name: string }) => [r.name, r]))
+    expect(byName.asleep.cloud).toEqual({ state: 'stopped', activity: 'Devin went to sleep after inactivity.', providerStatus: { status: 'suspended', detail: 'inactivity' } })
+    expect(byName.halted.cloud).toEqual({ state: 'stopped', activity: 'The session was stopped by request.', providerStatus: { status: 'suspended', detail: 'user_request' } })
+    expect(byName.done.cloud.providerStatus).toEqual({ status: 'exit', detail: null })
+    expect(byName.fo.cloud).toEqual({ state: 'idle', activity: 'Calling Hair Lab' })
+    expect(byName.cursor.cloud).toEqual({ state: 'working', activity: null })
+    expect(byName.local).not.toHaveProperty('cloud')
+    const shown = harness(d, { pane: undefined })
+    expect(await showCommand(['halted', '--json'], shown.deps)).toBe(EXIT.ok)
+    expect(JSON.parse(shown.out.join('\n')).cloud).toEqual({ state: 'stopped', activity: 'The session was stopped by request.', providerStatus: { status: 'suspended', detail: 'user_request' } })
+    const fo = harness(d, { pane: undefined })
+    expect(await showCommand(['fo', '--json'], fo.deps)).toBe(EXIT.ok)
+    expect(JSON.parse(fo.out.join('\n')).cloud).toEqual({ state: 'idle', activity: 'Calling Hair Lab' })
+    expect(JSON.parse(fo.out.join('\n'))).not.toHaveProperty('cloud.providerStatus')
+    const local = harness(d, { pane: undefined })
+    expect(await showCommand(['local', '--json'], local.deps)).toBe(EXIT.ok)
+    expect(JSON.parse(local.out.join('\n'))).not.toHaveProperty('cloud')
+  })
+
+  it('waits on the frame it ended on, including one that left the live list', async () => {
+    const steps = [
+      cloud('devin', 'starting', { cloud: { state: 'starting', activity: null, providerStatus: { status: 'new', detail: null }, links: [] } }),
+      cloud('devin', 'working', { cloud: { state: 'working', activity: null, providerStatus: { status: 'running', detail: 'working' }, links: [] } }),
+      cloud('devin', 'idle', { cloud: { state: 'idle', activity: null, providerStatus: { status: 'running', detail: 'finished' }, links: [] } }),
+    ]
+    const d = new FakeDaemon()
+    d.extra.agents_list = () => ({ agents: [steps.length > 1 ? steps.shift()! : steps[0]!] })
+    const h = harness(d)
+    expect(await waitCommand(['devin', '--json'], h.deps)).toBe(EXIT.ok)
+    expect(JSON.parse(h.out.join('\n')).harnesses[0]).toMatchObject({ state: 'idle', cloud: { state: 'idle', providerStatus: { status: 'running', detail: 'finished' } } })
+    const asking = new FakeDaemon()
+    asking.frames = [cloud('devin', 'needs_input', { cloud: { state: 'needs_input', activity: null, providerStatus: { status: 'running', detail: 'waiting_for_approval' }, links: [] } })]
+    const w = harness(asking)
+    expect(await waitCommand(['devin', '--json'], w.deps)).toBe(EXIT.needsInput)
+    expect(JSON.parse(w.out.join('\n')).harnesses[0]).toMatchObject({ state: 'needs-input', needsPerson: true, cloud: { providerStatus: { status: 'running', detail: 'waiting_for_approval' } } })
+    const gone = new FakeDaemon()
+    const live = cloud('devin', 'working', { cloud: { state: 'working', activity: null, providerStatus: { status: 'running', detail: 'working' }, links: [] } })
+    const stopped = cloud('devin', 'stopped', { status: 'stopped', cloud: { state: 'stopped', activity: 'The session was stopped by request.', providerStatus: { status: 'suspended', detail: 'user_request' }, links: [] } })
+    let n = 0
+    gone.extra.agents_list = (payload) => {
+      n += 1
+      if (n <= 2) return { agents: [live] }
+      return { agents: payload.includeStopped ? [stopped] : [] }
+    }
+    const s = harness(gone)
+    expect(await waitCommand(['devin', '--json'], s.deps)).toBe(EXIT.stopped)
+    expect(JSON.parse(s.out.join('\n')).harnesses[0].cloud).toEqual({ state: 'stopped', activity: 'The session was stopped by request.', providerStatus: { status: 'suspended', detail: 'user_request' } })
+  })
 })
 
 describe('harness tell', () => {

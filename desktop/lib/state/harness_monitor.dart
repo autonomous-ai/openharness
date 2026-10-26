@@ -6,6 +6,7 @@ import '../core/harness_resources.dart';
 import '../core/models.dart';
 import '../shared/theme/workspace_bar_style.dart'
     show workspaceBarGroupSeparator;
+import '../widgets/pointer_words.dart';
 import 'app_state.dart';
 import 'harness_sessions.dart';
 
@@ -83,7 +84,7 @@ class HarnessMonitor extends ChangeNotifier {
 
   String get resourceDetail => summary.resourceDetail;
   String get detail =>
-      '${live.length} open across connected machines. Click to open Harness Monitor.';
+      '${live.length} open across connected machines. ${clickWord()} to open Harness Monitor.';
 
   void start() {
     if (_started || _disposed) return;
@@ -264,10 +265,10 @@ class HarnessMonitorSummary {
       'CPU: 100% is one core. RAM includes child processes and shared servers counted once; shared memory pages can overlap.\n'
       'GPU: harness process GPU use on supported macOS and Linux NVIDIA drivers. First samples and unavailable counters show —. Cloud model GPU usage is not reported.\n'
       'SSD: workspace disk space, shared and nested folders counted once per machine. Files remain after stopping.\n'
-      'Totals include available readings and may be partial. — means unavailable. Click to open Harness Monitor.';
+      'Totals include available readings and may be partial. — means unavailable. ${clickWord()} to open Harness Monitor.';
 
   String get detail =>
-      '$liveCount open across connected machines, including idle and starting harnesses. Click to open Harness Monitor.\n'
+      '$liveCount open across connected machines, including idle and starting harnesses. ${clickWord()} to open Harness Monitor.\n'
       '${HarnessResources.explanation}${sharedLabel == null ? '' : '\n$sharedLabel, included once in the session monitor.'}';
 }
 
