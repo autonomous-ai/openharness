@@ -69,6 +69,29 @@ void main() {
     expect(c.error, update);
   });
 
+  test('a refused closed-groups read alone says the same and stops', () async {
+    final c = SuperTabController(
+      tabId: 'tab',
+      accountId: 'owner',
+      request: (method, path, {body}) {
+        if (method == 'GET') reads.add(path);
+        if (path.contains('/groups?dormant=1')) throw superTabUpdateRequired;
+        return server.request(method, path, body: body);
+      },
+      save: server.save,
+      pollInterval: Duration.zero,
+    );
+    reads = [];
+    await c.refresh();
+    c.toggleProject('lead');
+    await c.loadDormant('lead');
+    expect(c.updateRequired, isTrue);
+    expect(c.error, update);
+    final asked = reads.length;
+    await c.refresh();
+    expect(reads, hasLength(asked));
+  });
+
   test('a refused first load says to update Harness', () async {
     refuse = true;
     final c = open();

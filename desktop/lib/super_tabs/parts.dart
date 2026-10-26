@@ -131,6 +131,12 @@ class SuperTabParts {
       _live['groups']?.containsKey(groupId) == true ||
       _dormant.containsKey(groupId);
 
+  /// Dormant groups held with data from before a stub closed them, to read again by id.
+  List<String> get staleGroups => _stale.toList();
+
+  /// Keeps [groupId]'s held data as it is: it cannot be read again.
+  void forgetStale(String groupId) => _stale.remove(groupId);
+
   /// Whether [groupId] is a dormant group this reader holds.
   bool isDormant(String groupId) => _dormant.containsKey(groupId);
 

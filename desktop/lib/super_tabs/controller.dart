@@ -891,13 +891,10 @@ class SuperTabController extends ChangeNotifier {
             if (identical(_parts, held)) _parts = null;
             rethrow;
           }
-          // A stub says a held group closed, not how: its data is read again.
-          for (final id in change.dormantGroups) {
-            if (held.isDormant(id)) await _readGroup(held, id);
-          }
+          final refreshed = await _refreshStale(held);
           return (
             full: false,
-            changed: change.changed,
+            changed: change.changed || refreshed,
             removed: change.removedGroups,
           );
         }
@@ -912,6 +909,32 @@ class SuperTabController extends ChangeNotifier {
     }
     _parts = parts;
     return (full: true, changed: true, removed: const <String>{});
+  }
+
+  /// A stub says a held group closed, not how: its data is read again by id.
+  /// Best effort, after the change read is merged: a failed read leaves the
+  /// group as it was and is tried at the next read; only an update answer
+  /// stops the tab. True when a group's data was read.
+  Future<bool> _refreshStale(SuperTabParts parts) async {
+    var read = false;
+    for (final id in parts.staleGroups) {
+      try {
+        if (await _readGroup(parts, id)) {
+          read = true;
+        } else {
+          // Gone or no longer the reader's: its tombstone or a reload follows.
+          parts.forgetStale(id);
+        }
+      } catch (failure) {
+        if (_isUpdateRequired(failure)) rethrow;
+        appLog.warn(
+          'swarm',
+          'closed group read failed: '
+              '${failure is SuperTabFailure ? '${failure.code} (status ${failure.statusCode})' : failure.runtimeType}',
+        );
+      }
+    }
+    return read;
   }
 
   /// Reads group [id] by id into [parts], active or closed (section 4.5).
@@ -979,6 +1002,10 @@ class SuperTabController extends ChangeNotifier {
       // Nothing new read changes nothing drawn, nor the view kept.
       if (change.changed) _redraw();
     } catch (failure) {
+      if (_isUpdateRequired(failure)) {
+        _requireUpdate();
+        return;
+      }
       // Not read: the next open of the list asks again.
       appLog.warn(
         'swarm',

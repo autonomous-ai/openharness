@@ -187,4 +187,45 @@ void main() {
     expect(c.dormantLoaded('lead'), isTrue);
     expect(c.snapshot!.conversation('old')!.closed, isTrue);
   });
+
+  test('a failed fetch of a closed group still applies the rest of the change read', () async {
+    (server.state['conversations'] as List).add(
+      conversationFixture('doomed', 'Deleted soon'),
+    );
+    var failGroup = false;
+    reads = [];
+    final c = SuperTabController(
+      tabId: 'tab',
+      accountId: 'owner',
+      request: (method, path, {body}) async {
+        if (method == 'GET' && path.contains('/groups')) {
+          reads.add(path);
+          if (failGroup && path.endsWith('/groups/offline')) {
+            failGroup = false;
+            throw StateError('Connection lost');
+          }
+        }
+        return server.request(method, path, body: body);
+      },
+      save: server.save,
+      pollInterval: Duration.zero,
+    );
+    await c.refresh();
+    expect(c.snapshot!.conversation('doomed'), isNotNull);
+    // One change read: a group archived, another deleted. Fetching the
+    // archived one fails.
+    group('offline')['archived'] = true;
+    (server.state['conversations'] as List).removeWhere(
+      (g) => (g as Map)['id'] == 'doomed',
+    );
+    failGroup = true;
+    await c.refresh();
+    expect(c.snapshot!.conversation('doomed'), isNull);
+    expect(c.snapshot!.conversation('offline')!.closed, isTrue);
+    // The next poll changes nothing more, and still gets it right.
+    await c.refresh();
+    expect(c.snapshot!.conversation('doomed'), isNull);
+    expect(c.snapshot!.conversation('offline')!.archived, isTrue);
+    expect(reads.where((p) => p.endsWith('/groups/offline')), hasLength(2));
+  });
 }

@@ -58,6 +58,67 @@ void main() {
       controller.dispose();
     },
   );
+  testWidgets(
+    'older archived conversations stay reachable behind newer closed ones',
+    (tester) async {
+      final server = ConversationServer()..parts.dormantPage = 1;
+      (server.state['conversations'] as List)[1]['archived'] = true;
+      // Finished later and quiet: closed, not archived, and newer.
+      (server.state['conversations'] as List).add({
+        ...conversationFixture('finished', 'Finished work'),
+        'dormant': true,
+      });
+      final controller = server.controller();
+      await controller.refresh();
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: SuperTabView(
+              controller: controller,
+              onInvite: () {},
+              onAddAgent: (_) {},
+              onOpenTerminal: (_) {},
+              machineName: (_) => 'Test Mac',
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      Future<void> openList() async {
+        await tester.tap(find.byTooltip('Project options'));
+        await tester.pumpAndSettle();
+        await tester.tap(find.text('Archived conversations'));
+        await tester.pumpAndSettle();
+      }
+
+      final earlier = find.byKey(const ValueKey('super-archived-earlier'));
+      await openList();
+      // The first page holds only the newer closed group: nothing archived
+      // shows, and paging is still there, whatever the search.
+      expect(find.text('Offline editing'), findsNothing);
+      await tester.enterText(
+        find.descendant(
+          of: find.byType(Dialog),
+          matching: find.byType(TextField),
+        ),
+        'offline',
+      );
+      await tester.pumpAndSettle();
+      expect(earlier, findsOneWidget);
+      await tester.tap(find.text('Close'));
+      await tester.pumpAndSettle();
+      // Another page exists: the menu keeps the list.
+      await openList();
+      await tester.tap(earlier);
+      await tester.pumpAndSettle();
+      expect(find.text('Offline editing'), findsOneWidget);
+      expect(earlier, findsNothing);
+      await tester.pumpWidget(const SizedBox());
+      await controller.flush();
+      controller.dispose();
+    },
+  );
+
   testWidgets('archived conversations remain searchable and can be reopened', (
     tester,
   ) async {

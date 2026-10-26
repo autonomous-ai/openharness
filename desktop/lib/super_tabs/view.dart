@@ -705,32 +705,29 @@ class _SuperTabViewState extends State<SuperTabView>
                                       onTap: () =>
                                           Navigator.pop(context, group.id),
                                     ),
-                                  if (projectId != null &&
-                                      c.hasEarlierDormant(projectId))
-                                    ListTile(
-                                      key: const ValueKey(
-                                        'super-archived-earlier',
-                                      ),
-                                      title: Text(
-                                        c.dormantLoading(projectId)
-                                            ? 'Loading…'
-                                            : 'Show earlier',
-                                        style: DesktopChrome.control(
-                                          color: DesktopChrome.muted,
-                                        ),
-                                      ),
-                                      onTap: c.dormantLoading(projectId)
-                                          ? null
-                                          : () => unawaited(
-                                              c.loadDormant(
-                                                projectId,
-                                                earlier: true,
-                                              ),
-                                            ),
-                                    ),
                                 ],
                               ),
                       ),
+                      // Older closed groups are a page away whatever the
+                      // rows above show: newer finished groups or a search
+                      // can leave none of them archived or matching.
+                      if (projectId != null && c.hasEarlierDormant(projectId))
+                        ListTile(
+                          key: const ValueKey('super-archived-earlier'),
+                          title: Text(
+                            c.dormantLoading(projectId)
+                                ? 'Loading…'
+                                : 'Show earlier',
+                            style: DesktopChrome.control(
+                              color: DesktopChrome.muted,
+                            ),
+                          ),
+                          onTap: c.dormantLoading(projectId)
+                              ? null
+                              : () => unawaited(
+                                  c.loadDormant(projectId, earlier: true),
+                                ),
+                        ),
                     ],
                   ),
                 ),
@@ -1083,9 +1080,10 @@ class _SuperTabViewState extends State<SuperTabView>
             ),
           ],
         ],
-        // Until the project's closed groups are read, it may have archived
-        // ones: the list reads them when it opens.
+        // Until all of the project's closed groups are read, it may have
+        // archived ones: the list reads them when it opens.
         if (!c.dormantLoaded(group.projectId) ||
+            c.hasEarlierDormant(group.projectId) ||
             c.snapshot?.conversations.any(
                   (g) => g.archived && g.projectId == group.projectId,
                 ) ==
