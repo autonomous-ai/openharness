@@ -7,9 +7,10 @@
 //    served as the website serves it (serve-release.mjs): every part the app
 //    names is in the release folder, cached as immutable and compressed.
 // 2. <fixture-build> (tool/web_ux_fixture.dart, as capture.mjs builds it), on
-//    the finder-part scenario: a Finder tile downloads its part and draws it.
-//    With the part's download failing, it says so and offers Retry, and Retry
-//    once the network is back draws it. Screens of each go to [out-dir].
+//    the finder-part scenario: the signed-in workspace and then its Finder
+//    tile download their parts and draw. With every part's download failing,
+//    the page says so and offers Retry, and Retry once the network is back
+//    draws both. Screens of each go to [out-dir].
 // Prints what it saw and exits 1 if any check failed.
 import { chromium } from './playwright.mjs';
 import { readdirSync, mkdirSync } from 'node:fs';
@@ -66,7 +67,7 @@ const shot = (tab, name) => outDir && tab.screenshot({ path: join(outDir, `${nam
   const seen = partRequests(tab);
   await tab.goto(url);
   await settle(tab);
-  check(seen.length > 0 && seen.every((s) => s === 200), `online: the Finder's part downloaded (${seen.join(', ')})`);
+  check(seen.length >= 2 && seen.every((s) => s === 200), `online: the workspace's and the Finder's parts downloaded (${seen.join(', ')})`);
   check(await tab.getByText('Loading…').count() === 0, 'online: no loading line left');
   check(await tab.getByText('Could not load this part of Harness').count() === 0, 'online: no failure');
   await shot(tab, 'finder-part-online');
@@ -82,7 +83,7 @@ const shot = (tab, name) => outDir && tab.screenshot({ path: join(outDir, `${nam
   await settle(tab);
   await tab.getByText('Could not load this part of Harness').first()
     .waitFor({ timeout: 30000 }).catch(() => {});
-  check(await tab.getByText('Could not load this part of Harness').count() === 1, 'offline: the tile says it could not load');
+  check(await tab.getByText('Could not load this part of Harness').count() === 1, 'offline: the page says it could not load');
   const retry = tab.getByRole('button', { name: 'Retry' });
   check(await retry.count() === 1, 'offline: it offers Retry');
   await shot(tab, 'finder-part-offline');
@@ -90,8 +91,9 @@ const shot = (tab, name) => outDir && tab.screenshot({ path: join(outDir, `${nam
   if (await retry.count() === 0) throw new Error('no Retry to press');
   await retry.first().click();
   await tab.waitForTimeout(3000);
-  check(seen.includes(200), `back online: Retry downloaded the part (${seen.join(', ')})`);
+  check(seen.filter((s) => s === 200).length >= 2, `back online: Retry downloaded the parts (${seen.join(', ')})`);
   check(await tab.getByText('Could not load this part of Harness').count() === 0, 'back online: the failure is gone');
+  check(await tab.getByText('Loading…').count() === 0, 'back online: the workspace and its Finder tile are drawn');
   await shot(tab, 'finder-part-retried');
   await context.close();
 }
