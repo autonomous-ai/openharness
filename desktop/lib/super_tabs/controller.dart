@@ -497,15 +497,21 @@ class SuperTabController extends ChangeNotifier {
         _before[id] = (view['next'] as num?)?.toInt();
       }
       _showingSaved = true;
-    } on Object {
-      // A view from an older shape: draw nothing, read as usual.
-      snapshot = null;
-      revision = -1;
-      _shownState = null;
-      _messages.clear();
-      _rows.clear();
-      _before.clear();
+    } on FormatException {
+      _dropSaved();
+    } on TypeError {
+      _dropSaved();
     }
+  }
+
+  /// A view from an older shape: draw nothing, read as usual.
+  void _dropSaved() {
+    snapshot = null;
+    revision = -1;
+    _shownState = null;
+    _messages.clear();
+    _rows.clear();
+    _before.clear();
   }
 
   /// A machine able to serve Swarm reads just connected: read now instead of

@@ -195,6 +195,7 @@ class SuperTabClient {
       timer.cancel();
     }
     _viewSaves.clear();
+    _viewSavedAt.clear();
     _account = account;
     _generation++;
     _discoveryTimer?.cancel();
