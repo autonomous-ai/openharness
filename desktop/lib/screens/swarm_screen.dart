@@ -535,7 +535,8 @@ class _SwarmScreenState extends State<SwarmScreen> {
                             onRetry: app.firstArrival.canRetry
                                 ? _retryFirstArrival
                                 : null,
-                            onStartNew: app.firstArrival.canRetry &&
+                            onStartNew:
+                                app.firstArrival.canRetry &&
                                     !app.firstArrival.checkingStatus
                                 ? _startFreshAfterArrival
                                 : null,
@@ -605,8 +606,12 @@ class _SwarmScreenState extends State<SwarmScreen> {
     final tab = app.activeSwarmId;
     final work = app.firstArrival.retry(
       app,
-      stillCurrent: () => mounted && app.activeSwarmId == tab &&
-          _newHarness == null && _search == null && !_pickingFolder,
+      stillCurrent: () =>
+          mounted &&
+          app.activeSwarmId == tab &&
+          _newHarness == null &&
+          _search == null &&
+          !_pickingFolder,
     );
     setState(() {});
     await work;
@@ -618,12 +623,14 @@ class _SwarmScreenState extends State<SwarmScreen> {
     final session = arrival.selectedSession;
     final engine = arrival.selectedEngine;
     arrival.dismiss();
-    unawaited(_newAgent(
-      machineId: app.localMachineState?.machine.machineId,
-      folder: session?.cwd,
-      engine: engine,
-      task: session == null ? FirstArrival.starterTask : null,
-    ));
+    unawaited(
+      _newAgent(
+        machineId: app.localMachineState?.machine.machineId,
+        folder: session?.cwd,
+        engine: engine,
+        task: session == null ? FirstArrival.starterTask : null,
+      ),
+    );
   }
 
   void _scheduleWelcomeComposer() {
@@ -2236,13 +2243,14 @@ class _SwarmScreenState extends State<SwarmScreen> {
             'iconAsset': swarm.isStore
                 ? kStoreMarkAsset
                 : engineIdentity(_tabEngine(swarm)).asset,
-            'attention': swarm.panes
-                .where(
-                  (p) =>
-                      p.agentId != null &&
-                      app.questionFor(p.machineId, p.agentId!) != null,
-                )
-                .length +
+            'attention':
+                swarm.panes
+                    .where(
+                      (p) =>
+                          p.agentId != null &&
+                          app.questionFor(p.machineId, p.agentId!) != null,
+                    )
+                    .length +
                 tabMentionsWaiting(app, swarm),
             if (tabActivity(app, swarm) case final activity?)
               'activity': nativeActivityPayload(
@@ -8619,6 +8627,18 @@ class _SwarmScreenState extends State<SwarmScreen> {
     return _fullStatusBar();
   }
 
+  /// The host offers subscriptions once the account has a computer
+  /// ([WorkspaceChrome.subscriptionsNeedComputer]): the machine list has
+  /// answered, and none of the account's own is in it. Never while it loads.
+  bool get _subscriptionsWaitForComputer =>
+      widget.chrome?.subscriptionsNeedComputer == true &&
+      _machineInventorySettled &&
+      !app.machineStates.values.any(
+        (machine) =>
+            !machine.machine.isShared &&
+            !app.removedMachines.containsKey(machine.machine.machineId),
+      );
+
   /// The status bar's content for a host that draws its own compact footer.
   WorkspaceFooter _workspaceFooter() {
     final focused = WorkspacePaneContext.focused(app);
@@ -8635,9 +8655,10 @@ class _SwarmScreenState extends State<SwarmScreen> {
             detail: detail,
             onPressed: links![field]!.onPressed,
           );
+    final subscriptions = !_subscriptionsWaitForComputer;
     return WorkspaceFooter(
       summary: focused == null
-          ? _subscriptionUsage.text
+          ? (subscriptions ? _subscriptionUsage.text : _footerMachineLabel)
           : [
               focused.machineName,
               focused.branch ?? focused.projectName,
@@ -8662,21 +8683,23 @@ class _SwarmScreenState extends State<SwarmScreen> {
               ? () => _toggleModels(initialTab: ModelsTab.local)
               : null,
         ),
-        for (final account in _subscriptionUsage.accounts)
+        if (subscriptions) ...[
+          for (final account in _subscriptionUsage.accounts)
+            WorkspaceFooterItem(
+              title: '${account.name} ${account.figure}',
+              detail: account.detail,
+              onPressed: _shortcutsEnabled
+                  ? () => _openSubscription(account.searchId)
+                  : null,
+            ),
           WorkspaceFooterItem(
-            title: '${account.name} ${account.figure}',
-            detail: account.detail,
+            title: 'Subscriptions',
+            detail: _subscriptionUsage.text,
             onPressed: _shortcutsEnabled
-                ? () => _openSubscription(account.searchId)
+                ? () => _toggleModels(initialTab: ModelsTab.subscriptions)
                 : null,
           ),
-        WorkspaceFooterItem(
-          title: 'Subscriptions',
-          detail: _subscriptionUsage.text,
-          onPressed: _shortcutsEnabled
-              ? () => _toggleModels(initialTab: ModelsTab.subscriptions)
-              : null,
-        ),
+        ],
         ?link(StatusLineField.machine, 'Machine', focused?.machineName),
         ?link(StatusLineField.project, 'Project', focused?.projectName),
         ?link(StatusLineField.branch, 'Branch', focused?.branch),
