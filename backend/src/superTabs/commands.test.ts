@@ -2393,6 +2393,52 @@ describe('lost work (liveness.ts)', () => {
     expect(task().assignment).toMatchObject({ leaseUntil: 1000 + 5 * 60_000, progressAt: 1000 })
   })
 
+  it('keeps the lost worker marked when the Lead cancels its task or hands it to another agent (final review, Important 3)', () => {
+    const marked = { conversationId: expect.any(String), assignmentId: expect.any(String), reason: expect.stringContaining('usage limit'), at: 1000 }
+    for (const close of ['cancel', 'reassign'] as const) {
+      const { f, lead, group, worker, other, as, task, limit } = lostFixture()
+      limit()
+      const lostId = task().assignment!.id
+      expect(f.state.agents.find(a => a.id === worker)!.lostTask).toEqual({ ...marked, conversationId: group, assignmentId: lostId })
+      if (close === 'cancel') f.run({ type: 'work.cancel', conversationId: group, assignmentId: lostId, reason: 'Not needed' }, as(lead))
+      else f.run({ type: 'work.assign', conversationId: group, agentId: other, ...via }, as(lead), decisionIn(group))
+      expect(f.state.agents.find(a => a.id === worker)!.lostTask).toEqual({ ...marked, conversationId: group, assignmentId: lostId })
+    }
+  })
+
+  it('clears the mark once the worker finishes a new task, but not when the Lead merely assigns it one', () => {
+    const { f, lead, group, worker, as, task, limit } = lostFixture()
+    limit()
+    f.run({ type: 'work.cancel', conversationId: group, assignmentId: task().assignment!.id, reason: 'Not needed' }, as(lead))
+    const next = f.group()
+    const assignmentId = f.run({ type: 'work.assign', conversationId: next, agentId: worker, ...via }, as(lead), decisionIn(next)).result.assignmentId as string
+    expect(f.state.agents.find(a => a.id === worker)!.lostTask).toBeDefined()
+    f.run({ type: 'work.status', conversationId: next, assignmentId, status: 'review', result: 'Ready' }, as(worker))
+    expect(f.state.agents.find(a => a.id === worker)!.lostTask).toBeDefined()
+    const checkId = f.state.conversations.find(c => c.id === next)!.checks[0]!.id
+    f.run({ type: 'work.check', conversationId: next, assignmentId, checkId, passed: true, evidence: 'Verified' })
+    f.run({ type: 'work.status', conversationId: next, assignmentId, status: 'done', result: 'Delivered' }, as(worker))
+    expect(f.state.agents.find(a => a.id === worker)!.lostTask).toBeUndefined()
+  })
+
+  it('clears the mark when a person assigns the worker by hand', () => {
+    const { f, lead, group, worker, as, task, limit } = lostFixture()
+    limit()
+    f.run({ type: 'work.cancel', conversationId: group, assignmentId: task().assignment!.id, reason: 'Not needed' }, as(lead))
+    const next = f.group()
+    f.run({ type: 'work.assign', conversationId: next, agentId: worker })
+    expect(f.state.agents.find(a => a.id === worker)!.lostTask).toBeUndefined()
+  })
+
+  it('clears the mark when the worker\'s terminal is replaced (Change agent)', () => {
+    const { f, group, worker, as, limit } = lostFixture()
+    limit()
+    f.run({ type: 'agent.rebind', agentId: worker, machineId: 'host', projectId: 'lead', previousHarnessId: 'worker', harnessId: 'worker-2', configuration: config }, as(worker))
+    expect(f.state.agents.find(a => a.id === worker)).toMatchObject({ harnessId: 'worker-2' })
+    expect(f.state.agents.find(a => a.id === worker)!.lostTask).toBeUndefined()
+    expect(f.state.conversations.find(c => c.id === group)!.lostAttempt).toMatchObject({ agentId: worker })
+  })
+
   it('does not lose work a Lead holds: Leads are not covered here', () => {
     const { f, lead, as } = lostFixture()
     const own = f.group()

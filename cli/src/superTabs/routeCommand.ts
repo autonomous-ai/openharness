@@ -165,10 +165,9 @@ export async function routeTask(input: { tabId: string; conversationId: string; 
   if (group.leadId !== value.agentId) return { error: 'LEAD_REQUIRED', detail: 'Only the Lead of this group routes its work.' }
   const projectId = String(group.projectId ?? 'lead')
   const project = list(state.projects).find(p => p.id === projectId)
-  // The group's Lead and the tab Lead coordinate; neither is a worker candidate even when idle. Nor is the agent of a lost
-  // task: it died, stalled or hit a limit, and its work goes to another (v1 liveness).
+  // The group's Lead and the tab Lead coordinate; neither is a worker candidate even when idle.
   const busy = new Set([String(group.leadId), String(conversations.find(c => c.id === 'lead')?.leadId),
-    ...conversations.filter(c => active(c.assignment) || object(c.assignment).status === 'lost').map(c => String(object(c.assignment).agentId))])
+    ...conversations.filter(c => active(c.assignment)).map(c => String(object(c.assignment).agentId))])
   // A review group is assigned only to a Reviewer, and a Reviewer nothing else.
   const review = typeof group.reviewOf === 'string'
   if (review) assessment = { ...assessment, kind: 'review' }
@@ -241,8 +240,19 @@ export async function routeTask(input: { tabId: string; conversationId: string; 
     const until = Date.parse(String(members.find(m => m.id === agentId)?.limitedUntil))
     return until > Date.now() ? [`Its screen showed a usage limit until ${new Date(until).toISOString()}.`] : []
   }
+  // Nor does the agent of a lost task take work: it died, stalled or hit a limit, and its work goes to another (v1 liveness).
+  // The backend keeps that mark on the agent until it recovers (backend superTabs/model.ts lostTask), since cancelling or
+  // reassigning the task leaves it idle, and the task's group drops out of this read once it goes quiet (final review,
+  // Important 3). A task still lost says so itself.
+  const lostTask = (agentId: string | undefined) => {
+    const marked = members.find(m => m.id === agentId)?.lostTask
+    const still = conversations.map(c => object(c.assignment)).find(a => a.status === 'lost' && a.agentId === agentId)
+    if (!marked && !still) return []
+    const reason = text(object(marked).reason) ?? text(object(still?.lost).reason)
+    return [`It lost its last task${reason ? ` (${reason})` : ''}. It takes work again once a person assigns it by hand or the Lead replaces it.`]
+  }
   const probes = probed.flat().map(p => p.kind === 'member' ? { ...p, repo: repoMatch(folder, p.frame ?? null, p.machineId === where.machineId),
-    refusals: [...p.refusals, ...limited(p.agentId)],
+    refusals: [...p.refusals, ...limited(p.agentId), ...lostTask(p.agentId)],
     earlier: ended.filter(e => e.agentId === p.agentId).reverse().slice(0, 3).map(e => ({ group: e.group, outcome: e.outcome })) } : p)
   probes.push(...localProbes(state, policy, probes, assessment, review))
   // Picks started or assigned and still at work hold part of their account's quota; the log, and so this, is per Swarm.
