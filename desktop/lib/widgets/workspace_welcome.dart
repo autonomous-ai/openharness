@@ -632,12 +632,12 @@ class _WorkspaceWelcomeState extends State<WorkspaceWelcome> {
     );
   }
 
-  /// The commands, each with its shortcut: the whole page before there is
-  /// anything to pick up, and the column beside the list after.
   /// A row's least size: a finger's height on a phone, its text's elsewhere.
   Size get _rowMinimum =>
       workspaceIsCompact(context) ? const Size(0, kFingerTarget) : Size.zero;
 
+  /// The commands, each with its shortcut: the whole page before there is
+  /// anything to pick up, and the column beside the list after.
   Widget _commands(
     List<({String command, String description, String? hint})> rows,
     double width,

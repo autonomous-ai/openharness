@@ -67,7 +67,10 @@ class _FingerButtons extends StatelessWidget {
     final least = style?.minimumSize?.resolve(const {}) ?? Size.zero;
     return (style ?? const ButtonStyle()).copyWith(
       minimumSize: WidgetStatePropertyAll(
-        Size(math.max(least.width, kFingerTarget), kFingerTarget),
+        Size(
+          math.max(least.width, kFingerTarget),
+          math.max(least.height, kFingerTarget),
+        ),
       ),
     );
   }
