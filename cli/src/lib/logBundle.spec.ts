@@ -85,6 +85,19 @@ describe('buildLogBundle', () => {
     expect(included).toEqual(['usb-E8-F6-0A-E7-63-7D/dial-20260915.log'])
   })
 
+  it('caps the devices\' dial logs, newest first, so a desk of devices cannot make the bundle huge', () => {
+    const root = mkdtempSync(join(tmpdir(), 'bundle-'))
+    const logs = join(root, 'logs'), a = join(logs, 'usb-AA'), b = join(logs, 'usb-BB')
+    mkdirSync(a, { recursive: true }); mkdirSync(b)
+    writeFileSync(join(a, 'dial-20260915.log'), 'a'.repeat(40))
+    writeFileSync(join(b, 'dial-20260914.log'), 'b'.repeat(40))
+    writeFileSync(join(a, 'dial-20260913.log'), 'c'.repeat(40))
+    writeFileSync(join(logs, 'app-20260913.log'), 'the app log is not capped\n')
+    const { zip, included } = buildLogBundle({ logsDir: logs, dataDir: root, now: new Date(2026, 8, 15, 10, 30), version: '0', redact: (t) => t, deviceLogCapBytes: 100 })
+    expect([...readZip(zip).keys()]).toEqual(['README.txt', 'logs/app-20260913.log', 'logs/usb-AA/dial-20260915.log', 'logs/usb-BB/dial-20260914.log'])
+    expect(included).toContain('usb-AA/dial-20260913.log (left out to keep the bundle small)')
+  })
+
   it('still produces a bundle with a README when there is nothing to include', () => {
     const root = mkdtempSync(join(tmpdir(), 'bundle-'))
     const { zip, included } = buildLogBundle({ logsDir: join(root, 'none'), dataDir: root, version: '0', redact: (s) => s })

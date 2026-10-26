@@ -24,6 +24,8 @@ export interface LogBundleOptions {
   days?: number
   /** How much of the end of `harness.log` to take. Default 5 MB. */
   harnessLogTailBytes?: number
+  /** Most bytes of devices' dial logs, newest day first across every device. Default 20 MB. */
+  deviceLogCapBytes?: number
   now?: Date
   version: string
   /** Free text for the README — `harness status` output, the app's version, anything else known. */
@@ -73,9 +75,18 @@ export function buildLogBundle(opts: LogBundleOptions): { zip: Buffer; included:
     if (!DEVICE_DIR.test(name)) return [name]
     try { return readdirSync(join(opts.logsDir, name)).sort().filter((f) => f.startsWith('dial-')).map((f) => `${name}/${f}`) } catch { return [] }
   })
+  // A device's day may be 20 MB (dialLog.ts) and a desk may hold several, so their logs share one cap, newest day first.
+  const capped = new Set<string>()
+  let deviceBytes = 0
+  const byDay = (name: string) => DATED.exec(basename(name))?.[2] ?? ''
+  for (const name of names.filter((n) => n.includes('/') && byDay(n) >= cutoff).sort((x, y) => byDay(y).localeCompare(byDay(x)))) {
+    try { deviceBytes += statSync(join(opts.logsDir, name)).size } catch { continue }
+    if (deviceBytes > (opts.deviceLogCapBytes ?? 20 * 1024 * 1024)) capped.add(name)
+  }
   for (const name of names) {
     const m = DATED.exec(basename(name))
     if (!m || m[2] < cutoff) continue
+    if (capped.has(name)) { included.push(`${name} (left out to keep the bundle small)`); continue }
     const path = join(opts.logsDir, name)
     try {
       const text = readFileSync(path, 'utf8')
