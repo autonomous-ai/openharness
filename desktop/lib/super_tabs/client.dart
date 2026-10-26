@@ -95,7 +95,11 @@ class SuperTabClient {
 
   void _applyAway() {
     for (final entry in _loaded.entries) {
-      entry.value.away = _isAway(entry.key);
+      final away = _isAway(entry.key);
+      // Back on screen, the Swarm reads its own tags: the count discovery
+      // kept while it was away is stale from now on.
+      if (!away && entry.value.away) _tagCounts.remove(entry.key);
+      entry.value.away = away;
     }
   }
 

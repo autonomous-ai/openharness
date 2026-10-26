@@ -201,6 +201,32 @@ void main() {
     });
   });
 
+  test('web: a tag marked done while shown does not come back on leaving', () {
+    fakeAsync((async) {
+      final backend = _Backend();
+      final client = _client(backend, reading: _web)..bind('owner');
+      final other = backend.servers['other']!..append('Please confirm.');
+      other.tag(other.messages.last['id'] as String);
+      client.show('tab');
+      client.open('tab');
+      client.open('other');
+      async.elapse(const Duration(seconds: 20));
+      expect(client.waitingTags('other'), 1);
+      client.show('other');
+      async.flushMicrotasks();
+      // Marked done on screen: the Swarm's own read says none wait.
+      other.mentions.single['resolvedAt'] = '2026-10-26T06:00:00Z';
+      other.state['mentionsWaiting'] = 0;
+      other.revision++;
+      async.elapse(const Duration(seconds: 3));
+      expect(client.waitingTags('other'), 0);
+      client.show('tab');
+      async.flushMicrotasks();
+      expect(client.waitingTags('other'), 0);
+      client.dispose();
+    });
+  });
+
   test('Desktop reading: a connect waits for the poll, every tab polls', () {
     fakeAsync((async) {
       final backend = _Backend()..machine = false;
