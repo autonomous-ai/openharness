@@ -50,21 +50,38 @@ class Model:
     subscription: bool = True
     # Models of one family think alike (Opus, Sonnet and Haiku are all Claude); None takes the engine's name.
     family: Optional[str] = None
+    # A model reached through a member's API or another owner's grid; the route ranks it after a machine's own engine.
+    remote: bool = False
+    # The words the route's candidate title gives it (`Claude opus high`), its last tie-break; None takes the id.
+    label: Optional[str] = None
 
     def __post_init__(self):
         if self.family is None:
             object.__setattr__(self, 'family', self.engine)
+        if self.label is None:
+            object.__setattr__(self, 'label', self.id)
 
     def quality_for(self, kind: str) -> int:
         return self.quality.get(kind, self.quality['default'])
 
 
 @dataclass(frozen=True)
+class Window:
+    """A usage window as read when the plan starts: percent left, and minutes until it refills (None: not known)."""
+    name: str
+    left: float
+    resets_in: Optional[int] = None
+
+
+@dataclass(frozen=True)
 class Account:
-    """One subscription's usage windows: what is left of each, after the reserve, in percent."""
+    """One subscription. `budget` is what the exact plan may spend of each window, in percent; `windows` and `reserve`
+    are the readings the route ranks candidates by (greedy.py)."""
     id: str
     members: Tuple[Tuple[str, str], ...]
     budget: Dict[str, float]
+    windows: Tuple[Window, ...] = ()
+    reserve: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -124,6 +141,21 @@ def _check_acyclic(tasks: List[Task]) -> None:
         visit(t.id, [])
 
 
+def _account(a: dict) -> Account:
+    """Windows default to the budget, never refilling; the budget defaults to the weekly window less the reserve, as only
+    the weekly window holds over a night (a 5-hour window refills)."""
+    reserve = float(a.get('reserve', 0))
+    windows = tuple(Window(name=str(w['name']), left=float(w['left']), resets_in=None if w.get('resets_in') is None else int(w['resets_in']))
+                    for w in a.get('windows', ()))
+    if 'budget' in a:
+        budget = {str(k): float(v) for k, v in a['budget'].items()}
+    else:
+        budget = {w.name: w.left - reserve for w in windows if w.name == 'weekly'}
+    if not windows:
+        windows = tuple(Window(name=k, left=v) for k, v in budget.items())
+    return Account(id=str(a['id']), members=tuple((str(x[0]), str(x[1])) for x in a['members']), budget=budget, windows=windows, reserve=reserve)
+
+
 def load(data: dict) -> Instance:
     tasks = [Task(id=str(t['id']), title=str(t.get('title', t['id'])), minutes=int(t['minutes']), floor=int(t.get('floor', 1)),
                   kind=str(t.get('kind') or 'default'), deps=tuple(str(d) for d in t.get('deps', ())),
@@ -135,11 +167,10 @@ def load(data: dict) -> Instance:
     models = [Model(id=str(m['id']), engine=str(m['engine']), cost=int(m['cost']), quality={str(k): int(v) for k, v in m['quality'].items()},
                     speed=float(m.get('speed', 1.0)), concurrency=m.get('concurrency'),
                     machines=tuple(m['machines']) if m.get('machines') is not None else None, subscription=bool(m.get('subscription', True)),
-                    family=m.get('family'))
+                    family=m.get('family'), label=m.get('label'),
+                    remote=bool(m.get('remote', False)))
               for m in data['models']]
-    accounts = [Account(id=str(a['id']), members=tuple((str(x[0]), str(x[1])) for x in a['members']),
-                        budget={str(k): float(v) for k, v in a['budget'].items()})
-                for a in data.get('accounts', ())]
+    accounts = [_account(a) for a in data.get('accounts', ())]
     _unique('task', tasks)
     _unique('machine', machines)
     _unique('model', models)
@@ -175,8 +206,9 @@ def duration(task: Task, model: Model) -> int:
     return math.ceil(task.minutes / model.speed)
 
 
-def options(instance: Instance, task: Task) -> List[Option]:
-    """Every machine and model that may run the task: the engine is on the machine and the quality meets the floor."""
+def options(instance: Instance, task: Task, floor: bool = True) -> List[Option]:
+    """Every machine and model that may run the task: the engine is on the machine and, unless `floor` is false, the
+    quality meets the floor."""
     return [Option(task=task.id, machine=m.id, model=k.id, minutes=duration(task, k))
             for m in instance.machines for k in instance.models
-            if k.engine in m.engines and (k.machines is None or m.id in k.machines) and k.quality_for(task.kind) >= task.floor]
+            if k.engine in m.engines and (k.machines is None or m.id in k.machines) and (not floor or k.quality_for(task.kind) >= task.floor)]

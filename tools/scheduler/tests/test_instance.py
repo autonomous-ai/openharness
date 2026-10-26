@@ -38,6 +38,21 @@ class LoadTest(unittest.TestCase):
                           [{'id': 'x', 'members': [['z', 'claude']], 'budget': {'weekly': 10}}]))
 
 
+class AccountTest(unittest.TestCase):
+    def test_windows_default_to_the_budget_with_no_reset_and_no_reserve(self):
+        inst = load(instance([task('a')], [machine('m')], [model('opus')],
+                             [{'id': 'x', 'members': [['m', 'claude']], 'budget': {'weekly': 40}}]))
+        w = inst.accounts[0].windows
+        self.assertEqual([(x.name, x.left, x.resets_in) for x in w], [('weekly', 40.0, None)])
+        self.assertEqual(inst.accounts[0].reserve, 0.0)
+
+    def test_the_budget_defaults_to_the_weekly_window_less_the_reserve(self):
+        inst = load(instance([task('a')], [machine('m')], [model('opus')],
+                             [{'id': 'x', 'members': [['m', 'claude']], 'reserve': 10,
+                               'windows': [{'name': '5-hour', 'left': 90, 'resets_in': 30}, {'name': 'weekly', 'left': 50, 'resets_in': 5000}]}]))
+        self.assertEqual(inst.accounts[0].budget, {'weekly': 40.0})
+
+
 class OptionsTest(unittest.TestCase):
     def test_only_models_meeting_the_floor_on_machines_with_their_engine(self):
         inst = load(instance(

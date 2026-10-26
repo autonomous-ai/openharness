@@ -1,7 +1,7 @@
 import unittest
 
-from scheduler.greedy import evaluate, greedy
-from scheduler.instance import load
+from scheduler.greedy import Decision, Sized, evaluate, greedy, size_up
+from scheduler.instance import Option, load
 from scheduler.solver import solve
 from tests.helpers import instance, machine, model, task
 
@@ -68,6 +68,75 @@ class RouteOrderTest(unittest.TestCase):
                              [model('haiku', cost=1), model('gpt', engine='codex', cost=3)]))
         self.assertEqual(greedy(inst).makespan, 120)
         self.assertEqual(solve(inst).makespan, 60)
+
+
+def account(id, machine, engine='claude', reserve=10, **windows):
+    """windows: name -> (left, resets_in); `five` is the 5-hour window."""
+    named = {'five': '5-hour', 'weekly': 'weekly'}
+    return {'id': id, 'members': [[machine, engine]], 'reserve': reserve,
+            'windows': [{'name': named[k], 'left': v[0], 'resets_in': v[1]} for k, v in windows.items()]}
+
+
+LARGE = {'5-hour': 50, 'weekly': 8}
+MEDIUM = {'5-hour': 30, 'weekly': 4}
+
+
+class RouteQuotaTest(unittest.TestCase):
+    """route.ts sizeUp and compare: effective cost before cost, on the quota readings at the time each task is routed."""
+
+    def reset_case(self, resets_in):
+        return load(instance([task('t', minutes=180, floor=3, difficulty='high', spend=LARGE)],
+                             [machine('a'), machine('b', engines=['codex'])],
+                             [model('opus', cost=3), model('gpt', engine='codex', cost=2)],
+                             [account('ca', 'a', five=(50, resets_in), weekly=(80, 7200)), account('cb', 'b', 'codex', weekly=(80, 7200))]))
+
+    def test_near_a_5_hour_reset_the_unused_window_makes_opus_free_so_it_beats_cheaper_codex(self):
+        # Resets in 30 minutes: the task needs 50 x 3/2 x 30/180 = 12.5 of the window and 40 is usable, otherwise lost.
+        self.assertEqual(picks(greedy(self.reset_case(30))), {'t': ('a', 'opus')})
+
+    def test_far_from_the_reset_cheaper_codex_wins(self):
+        self.assertEqual(picks(greedy(self.reset_case(600))), {'t': ('b', 'gpt')})
+
+    def test_a_task_that_is_not_hard_pays_for_more_than_a_days_share_of_the_weekly_window(self):
+        # Codex: 10 usable over 7 days is 1.43 a day against 4 needed, so its cost 2 becomes 2 + 2 x 4/1.43 = 7.6 > Opus's 3.
+        inst = load(instance([task('t', floor=2, difficulty='medium', spend=MEDIUM)],
+                             [machine('x', engines=['codex']), machine('y')],
+                             [model('gpt', engine='codex', cost=2), model('opus', cost=3)],
+                             [account('cx', 'x', 'codex', weekly=(20, 10080)), account('cy', 'y', five=(100, None), weekly=(90, 1440))]))
+        self.assertEqual(picks(greedy(inst)), {'t': ('y', 'opus')})
+
+    def refill_case(self):
+        return load(instance([task('a', spend=MEDIUM), task('b', deps=['a'], spend=MEDIUM)],
+                             [machine('x', slots=2), machine('y', slots=2)], [model('opus', cost=2)],
+                             [account('ax', 'x', five=(15, 30), weekly=(90, 10000)), account('ay', 'y', five=(100, None), weekly=(90, 10000))]))
+
+    def test_a_5_hour_window_refills_at_its_reset(self):
+        # x's window has 15 left and resets at minute 30. Read at minute 60 it is full again: 100 - 10 reserve = 90
+        # usable against the 30 a medium task needs, and its next reset is 270 minutes away, so nothing is free.
+        inst = self.refill_case()
+        got = size_up(inst, inst.task('b'), Option('b', 'x', 'opus', 60), 60, [])
+        self.assertEqual(got, Sized('fits', 3.0, 2.0, 90.0))
+
+    def test_work_that_has_run_uses_the_window_and_a_finished_pick_holds_nothing(self):
+        # a ran on y from 0 to 60, using its 30: read at 60, y has 100 - 30 - 10 = 60 usable and a holds no more.
+        inst = self.refill_case()
+        ran = [Decision(inst.task('a'), 'y', 'opus', at=0, start=0, end=60)]
+        got = size_up(inst, inst.task('b'), Option('b', 'y', 'opus', 60), 60, ran)
+        self.assertEqual(got, Sized('fits', 2.0, 2.0, 60.0))
+
+    def test_an_open_pick_holds_the_rest_of_its_spend(self):
+        # a, routed at 0 and still running at 30, has used 15 and holds the other 15: 100 - 15 - 15 - 10 = 60.
+        inst = self.refill_case()
+        running = [Decision(inst.task('a'), 'y', 'opus', at=0, start=0, end=60)]
+        self.assertEqual(size_up(inst, inst.task('b'), Option('b', 'y', 'opus', 60), 30, running).tight, 60.0)
+
+    def test_a_task_routed_after_the_reset_goes_to_the_refilled_account(self):
+        # a, at 0: x has 5 usable, short of the 15 it needs before the reset, so a goes to y. b, at 60: x has 90, y 60.
+        self.assertEqual(picks(greedy(self.refill_case())), {'a': ('y', 'opus'), 'b': ('x', 'opus')})
+
+    def test_with_nothing_at_its_floor_the_route_takes_the_best_below_it(self):
+        inst = load(instance([task('t', floor=3)], [machine('m')], [model('haiku', cost=1, quality=1)]))
+        self.assertEqual(picks(greedy(inst)), {'t': ('m', 'haiku')})
 
 
 if __name__ == '__main__':

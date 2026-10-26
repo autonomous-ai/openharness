@@ -1,3 +1,4 @@
+import copy
 import unittest
 
 from scheduler.instance import load
@@ -16,9 +17,9 @@ POLICY = {
 }
 
 
-def machine(id, name, slots, quotas, local=()):
+def machine(id, name, slots, quotas, local=(), received=1793044800000):
     return {'machineId': id, 'name': name, 'maxAgents': slots, 'engines': ['claude', 'codex', 'cursor'],
-            'observation': {'quotas': quotas, 'localModels': list(local)}}
+            'observation': {'quotas': quotas, 'localModels': list(local), 'receivedAt': received}}
 
 
 def group(id, title, engine=None, model=None, machine_id=None):
@@ -29,15 +30,20 @@ def group(id, title, engine=None, model=None, machine_id=None):
     return out
 
 
-WEEKLY_67 = {'engine': 'codex', 'known': True, 'windows': [{'name': 'weekly', 'usedPercent': 67, 'resetsAt': 1793599668}]}
+# The snapshot is read at the latest observation: 2026-10-26T21:00Z (m2); m1 was observed at 20:00Z.
+# Codex reports resets in epoch seconds (1793480400 is 2026-10-31T21:00Z, 7200 minutes on), Claude as ISO strings.
+WEEKLY_67 = {'engine': 'codex', 'known': True, 'windows': [{'name': '5-hour', 'usedPercent': 20, 'resetsAt': '2026-10-26T22:00:00+00:00'},
+                                                           {'name': 'weekly', 'usedPercent': 67, 'resetsAt': 1793480400}]}
 STATUS = {'value': {'state': {
     'machines': [
         machine('m1', 'Studio', 16, [{'engine': 'claude', 'known': False, 'windows': []}, WEEKLY_67],
                 [{'grid': 'g', 'model': 'deepseek/flash', 'name': 'DeepSeek', 'kind': 'api'}]),
         machine('m2', 'Laptop', 1, [{'engine': 'claude', 'known': True, 'windows': [
-            {'name': '5-hour', 'usedPercent': 3, 'resetsAt': '2026-10-26T21:59:59+00:00'},
-            {'name': 'weekly', 'usedPercent': 72, 'resetsAt': '2026-10-30T14:59:59+00:00'}]}, WEEKLY_67]),
+            {'name': '5-hour', 'usedPercent': 3, 'resetsAt': '2026-10-26T20:30:00+00:00'},
+            {'name': 'weekly', 'usedPercent': 72, 'resetsAt': '2026-10-30T14:59:59+00:00'}]}, WEEKLY_67], received=1793048400000),
+        machine('m3', 'Banned', 8, [{'engine': 'claude', 'known': True, 'windows': [{'name': 'weekly', 'usedPercent': 10, 'resetsAt': 1793480400}]}]),
     ],
+    'rules': [{'projectId': 'p', 'rule': {'kind': 'machines', 'machineIds': ['m1', 'm2']}, 'text': 'Owner: no Banned for now'}],
     'conversations': [
         group('lead', 'Lead'),
         group('g1', 'Build', 'claude', 'opus', 'm2'),
@@ -85,9 +91,32 @@ class ConvertTest(unittest.TestCase):
         got = sorted((a.members, a.budget) for a in self.inst.accounts)
         self.assertEqual(got, [((('m1', 'codex'), ('m2', 'codex')), {'weekly': 24.0}), ((('m2', 'claude'),), {'weekly': 30.0})])
 
+    def test_quota_windows_are_read_at_the_snapshot_with_resets_in_minutes_and_a_past_reset_refilled(self):
+        got = sorted((a.members, [(w.name, w.left, w.resets_in) for w in a.windows], a.reserve) for a in self.inst.accounts)
+        # Weekly left includes what the actual picks spent (start of the night); the 5-hour readings are as read.
+        self.assertEqual(got, [
+            ((('m1', 'codex'), ('m2', 'codex')), [('5-hour', 80.0, 60), ('weekly', 34.0, 7200)], 10.0),
+            ((('m2', 'claude'),), [('5-hour', 100.0, None), ('weekly', 40.0, 5400)], 10.0)])
+
+    def test_added_back_spend_never_takes_a_window_past_full(self):
+        # m2's Claude weekly: 5% used, so 95 left; adding back g1's 12 would give 107, more than a window holds.
+        status = copy.deepcopy(STATUS)
+        status['value']['state']['machines'][1]['observation']['quotas'][0]['windows'][1]['usedPercent'] = 5
+        claude = next(a for a in load(convert(status, ROUTE_LOG, CONFIG)['instance']).accounts if a.members == (('m2', 'claude'),))
+        self.assertEqual((claude.windows[1].left, claude.budget), (100.0, {'weekly': 90.0}))
+
+    def test_an_owner_rule_naming_machines_leaves_the_others_out(self):
+        self.assertNotIn('m3', [m.id for m in self.inst.machines])
+        self.assertFalse([a for a in self.inst.accounts if any(m == 'm3' for m, _ in a.members)])
+
+    def test_models_carry_the_words_of_the_routes_candidate_title(self):
+        got = {m.id: m.label for m in self.inst.models}
+        self.assertEqual(got, {'claude-opus': 'Claude opus high', 'codex-default': 'Codex default default',
+                               'claude-sonnet': 'Claude sonnet medium', 'grid-deepseek/flash': 'Claude on DeepSeek (API)'})
+
     def test_a_task_takes_its_assessment_from_the_route_log(self):
         t = self.inst.task('g1')
-        self.assertEqual((t.minutes, t.floor, t.kind, t.difficulty, t.spend), (180, 3, 'backend', 'high', {'weekly': 8}))
+        self.assertEqual((t.minutes, t.floor, t.kind, t.difficulty, t.spend), (180, 3, 'backend', 'high', {'5-hour': 50, 'weekly': 8}))
 
     def test_a_hand_matched_request_and_an_estimate_are_used_and_listed_as_estimates(self):
         self.assertEqual((self.inst.task('g2').minutes, self.inst.task('g2').floor), (20, 2))

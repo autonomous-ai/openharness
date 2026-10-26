@@ -9,6 +9,7 @@
     "kind": "testing",
     "difficulty": "medium",
     "spend": {
+     "5-hour": 50,
      "weekly": 8
     },
     "deps": [],
@@ -22,6 +23,7 @@
     "kind": "performance",
     "difficulty": "medium",
     "spend": {
+     "5-hour": 30,
      "weekly": 4
     },
     "deps": [],
@@ -35,6 +37,7 @@
     "kind": "backend",
     "difficulty": "medium",
     "spend": {
+     "5-hour": 30,
      "weekly": 4
     },
     "deps": [],
@@ -48,6 +51,7 @@
     "kind": "design",
     "difficulty": "high",
     "spend": {
+     "5-hour": 30,
      "weekly": 4
     },
     "deps": [],
@@ -61,6 +65,7 @@
     "kind": "review",
     "difficulty": "high",
     "spend": {
+     "5-hour": 30,
      "weekly": 4
     },
     "deps": [
@@ -78,6 +83,7 @@
     "kind": "backend",
     "difficulty": "high",
     "spend": {
+     "5-hour": 50,
      "weekly": 8
     },
     "deps": [
@@ -93,6 +99,7 @@
     "kind": "backend",
     "difficulty": "high",
     "spend": {
+     "5-hour": 50,
      "weekly": 8
     },
     "deps": [
@@ -108,6 +115,7 @@
     "kind": "backend",
     "difficulty": "high",
     "spend": {
+     "5-hour": 50,
      "weekly": 8
     },
     "deps": [
@@ -123,6 +131,7 @@
     "kind": "ui",
     "difficulty": "high",
     "spend": {
+     "5-hour": 50,
      "weekly": 8
     },
     "deps": [
@@ -138,6 +147,7 @@
     "kind": "review",
     "difficulty": "medium",
     "spend": {
+     "5-hour": 10,
      "weekly": 1
     },
     "deps": [
@@ -155,6 +165,7 @@
     "kind": "review",
     "difficulty": "high",
     "spend": {
+     "5-hour": 30,
      "weekly": 4
     },
     "deps": [
@@ -172,6 +183,7 @@
     "kind": "review",
     "difficulty": "high",
     "spend": {
+     "5-hour": 10,
      "weekly": 1
     },
     "deps": [
@@ -189,6 +201,7 @@
     "kind": "research",
     "difficulty": "medium",
     "spend": {
+     "5-hour": 30,
      "weekly": 4
     },
     "deps": [],
@@ -202,6 +215,7 @@
     "kind": "research",
     "difficulty": "medium",
     "spend": {
+     "5-hour": 30,
      "weekly": 4
     },
     "deps": [],
@@ -215,6 +229,7 @@
     "kind": "review",
     "difficulty": "high",
     "spend": {
+     "5-hour": 10,
      "weekly": 1
     },
     "deps": [
@@ -232,6 +247,7 @@
     "kind": "review",
     "difficulty": "high",
     "spend": {
+     "5-hour": 10,
      "weekly": 1
     },
     "deps": [
@@ -249,6 +265,7 @@
     "kind": "backend",
     "difficulty": "high",
     "spend": {
+     "5-hour": 30,
      "weekly": 4
     },
     "deps": [
@@ -267,6 +284,7 @@
     "kind": "backend",
     "difficulty": "high",
     "spend": {
+     "5-hour": 30,
      "weekly": 4
     },
     "deps": [
@@ -282,6 +300,7 @@
     "kind": "backend",
     "difficulty": "high",
     "spend": {
+     "5-hour": 50,
      "weekly": 8
     },
     "deps": [],
@@ -295,6 +314,7 @@
     "kind": "cli",
     "difficulty": "high",
     "spend": {
+     "5-hour": 50,
      "weekly": 8
     },
     "deps": [],
@@ -308,6 +328,7 @@
     "kind": "cli",
     "difficulty": "high",
     "spend": {
+     "5-hour": 30,
      "weekly": 4
     },
     "deps": [],
@@ -321,6 +342,7 @@
     "kind": "ui",
     "difficulty": "high",
     "spend": {
+     "5-hour": 50,
      "weekly": 8
     },
     "deps": [],
@@ -334,6 +356,7 @@
     "kind": "review",
     "difficulty": "high",
     "spend": {
+     "5-hour": 10,
      "weekly": 1
     },
     "deps": [
@@ -351,6 +374,7 @@
     "kind": "review",
     "difficulty": "high",
     "spend": {
+     "5-hour": 10,
      "weekly": 1
     },
     "deps": [
@@ -368,6 +392,7 @@
     "kind": "review",
     "difficulty": "high",
     "spend": {
+     "5-hour": 10,
      "weekly": 1
     },
     "deps": [
@@ -385,6 +410,7 @@
     "kind": "review",
     "difficulty": "high",
     "spend": {
+     "5-hour": 10,
      "weekly": 1
     },
     "deps": [
@@ -402,6 +428,7 @@
     "kind": "review",
     "difficulty": "high",
     "spend": {
+     "5-hour": 10,
      "weekly": 1
     },
     "deps": [
@@ -419,6 +446,7 @@
     "kind": "review",
     "difficulty": "medium",
     "spend": {
+     "5-hour": 10,
      "weekly": 1
     },
     "deps": [
@@ -436,6 +464,7 @@
     "kind": "merge",
     "difficulty": "medium",
     "spend": {
+     "5-hour": 30,
      "weekly": 4
     },
     "deps": [
@@ -452,6 +481,7 @@
     "kind": "review",
     "difficulty": "high",
     "spend": {
+     "5-hour": 30,
      "weekly": 4
     },
     "deps": [
@@ -469,6 +499,7 @@
     "kind": "review",
     "difficulty": "medium",
     "spend": {
+     "5-hour": 10,
      "weekly": 1
     },
     "deps": [
@@ -486,6 +517,7 @@
     "kind": "fix",
     "difficulty": "high",
     "spend": {
+     "5-hour": 30,
      "weekly": 4
     },
     "deps": [
@@ -501,6 +533,7 @@
     "kind": "fix",
     "difficulty": "high",
     "spend": {
+     "5-hour": 30,
      "weekly": 4
     },
     "deps": [
@@ -516,6 +549,7 @@
     "kind": "fix",
     "difficulty": "high",
     "spend": {
+     "5-hour": 30,
      "weekly": 4
     },
     "deps": [
@@ -531,6 +565,7 @@
     "kind": "review",
     "difficulty": "high",
     "spend": {
+     "5-hour": 10,
      "weekly": 1
     },
     "deps": [
@@ -548,6 +583,7 @@
     "kind": "review",
     "difficulty": "high",
     "spend": {
+     "5-hour": 10,
      "weekly": 1
     },
     "deps": [
@@ -565,6 +601,7 @@
     "kind": "review",
     "difficulty": "high",
     "spend": {
+     "5-hour": 10,
      "weekly": 1
     },
     "deps": [
@@ -582,6 +619,7 @@
     "kind": "cli",
     "difficulty": "high",
     "spend": {
+     "5-hour": 50,
      "weekly": 8
     },
     "deps": [],
@@ -595,6 +633,7 @@
     "kind": "cli",
     "difficulty": "high",
     "spend": {
+     "5-hour": 50,
      "weekly": 8
     },
     "deps": [],
@@ -608,6 +647,7 @@
     "kind": "cli",
     "difficulty": "high",
     "spend": {
+     "5-hour": 50,
      "weekly": 8
     },
     "deps": [],
@@ -621,6 +661,7 @@
     "kind": "cli",
     "difficulty": "high",
     "spend": {
+     "5-hour": 50,
      "weekly": 8
     },
     "deps": [],
@@ -634,6 +675,7 @@
     "kind": "research",
     "difficulty": "high",
     "spend": {
+     "5-hour": 50,
      "weekly": 8
     },
     "deps": [],
@@ -652,7 +694,7 @@
    },
    {
     "id": "001bcba1e7e9deb6f8756c053a951ce2",
-    "name": "Diego's Mac",
+    "name": "[person]'s Mac",
     "slots": 8,
     "engines": [
      "claude",
@@ -662,15 +704,6 @@
    {
     "id": "78351f130fd7a6e04a93c47790767040",
     "name": "MacBookPro2021.local",
-    "slots": 8,
-    "engines": [
-     "claude",
-     "codex"
-    ]
-   },
-   {
-    "id": "d4a1916eb08cc2ececc17e4f90dae498",
-    "name": "WIN-DELL",
     "slots": 8,
     "engines": [
      "claude",
@@ -712,7 +745,8 @@
     "cost": 3,
     "quality": {
      "default": 3
-    }
+    },
+    "label": "Claude opus high"
    },
    {
     "id": "codex-default",
@@ -720,7 +754,8 @@
     "cost": 2,
     "quality": {
      "default": 3
-    }
+    },
+    "label": "Codex default default"
    },
    {
     "id": "claude-sonnet",
@@ -728,7 +763,8 @@
     "cost": 2,
     "quality": {
      "default": 2
-    }
+    },
+    "label": "Claude sonnet medium"
    },
    {
     "id": "claude-haiku",
@@ -736,7 +772,8 @@
     "cost": 1,
     "quality": {
      "default": 1
-    }
+    },
+    "label": "Claude haiku auto"
    },
    {
     "id": "grid-deepseek/deepseek-v4.1-flash-1017",
@@ -747,7 +784,9 @@
     },
     "concurrency": 4,
     "subscription": false,
-    "family": "deepseek/deepseek-v4.1-flash-1017"
+    "family": "deepseek/deepseek-v4.1-flash-1017",
+    "remote": true,
+    "label": "Claude on deepseek/deepseek-v4.1-flash-1017 \u00b7 OpenRouter (API)"
    }
   ],
   "accounts": [
@@ -763,6 +802,14 @@
       "codex"
      ]
     ],
+    "reserve": 10.0,
+    "windows": [
+     {
+      "name": "weekly",
+      "left": 59.0,
+      "resets_in": 9055
+     }
+    ],
     "budget": {
      "weekly": 49.0
     }
@@ -774,6 +821,19 @@
       "001bcba1e7e9deb6f8756c053a951ce2",
       "claude"
      ]
+    ],
+    "reserve": 10.0,
+    "windows": [
+     {
+      "name": "5-hour",
+      "left": 100.0,
+      "resets_in": null
+     },
+     {
+      "name": "weekly",
+      "left": 52.0,
+      "resets_in": 5267
+     }
     ],
     "budget": {
      "weekly": 42.0
@@ -787,6 +847,14 @@
       "codex"
      ]
     ],
+    "reserve": 10.0,
+    "windows": [
+     {
+      "name": "weekly",
+      "left": 0.0,
+      "resets_in": 32099
+     }
+    ],
     "budget": {
      "weekly": -10.0
     }
@@ -799,65 +867,88 @@
       "claude"
      ]
     ],
-    "budget": {
-     "weekly": 186.0
-    }
-   },
-   {
-    "id": "claude-5",
-    "members": [
-     [
-      "d4a1916eb08cc2ececc17e4f90dae498",
-      "claude"
-     ]
+    "reserve": 10.0,
+    "windows": [
+     {
+      "name": "5-hour",
+      "left": 98.0,
+      "resets_in": 257
+     },
+     {
+      "name": "weekly",
+      "left": 100.0,
+      "resets_in": 8387
+     }
     ],
     "budget": {
-     "weekly": 26.0
+     "weekly": 90.0
     }
    },
    {
-    "id": "codex-6",
-    "members": [
-     [
-      "d4a1916eb08cc2ececc17e4f90dae498",
-      "codex"
-     ]
-    ],
-    "budget": {
-     "weekly": 57.0
-    }
-   },
-   {
-    "id": "codex-7",
+    "id": "codex-5",
     "members": [
      [
       "ebedf81ba6a1ab03c324f4e8f58b094a",
       "codex"
      ]
     ],
+    "reserve": 10.0,
+    "windows": [
+     {
+      "name": "5-hour",
+      "left": 100.0,
+      "resets_in": 300
+     },
+     {
+      "name": "weekly",
+      "left": 95.0,
+      "resets_in": 9097
+     }
+    ],
     "budget": {
      "weekly": 85.0
     }
    },
    {
-    "id": "claude-8",
+    "id": "claude-6",
     "members": [
      [
       "0caa2f6c73e8123baf0705c76b35420d",
       "claude"
      ]
     ],
+    "reserve": 10.0,
+    "windows": [
+     {
+      "name": "5-hour",
+      "left": 100.0,
+      "resets_in": null
+     },
+     {
+      "name": "weekly",
+      "left": 81.0,
+      "resets_in": 7487
+     }
+    ],
     "budget": {
      "weekly": 71.0
     }
    },
    {
-    "id": "codex-9",
+    "id": "codex-7",
     "members": [
      [
       "0caa2f6c73e8123baf0705c76b35420d",
       "codex"
      ]
+    ],
+    "reserve": 10.0,
+    "windows": [
+     {
+      "name": "weekly",
+      "left": 97.0,
+      "resets_in": 35126
+     }
     ],
     "budget": {
      "weekly": 87.0
@@ -1205,7 +1296,7 @@
   },
   {
    "group": "d80142e540abade0e9ac21de",
-   "title": "Smoke: DeepSeek API on Diego's Mac",
+   "title": "Smoke: DeepSeek API on [person]'s Mac",
    "reason": "a person pinned it to one machine and the shared DeepSeek model"
   },
   {

@@ -1,12 +1,13 @@
 """python -m scheduler solve INSTANCE [--pareto] [--time-limit S]
 python -m scheduler compare NIGHT [--time-limit S]
-python -m scheduler convert STATUS ROUTE_LOG CONFIG OUT"""
+python -m scheduler convert STATUS ROUTE_LOG CONFIG OUT
+python -m scheduler redact STATUS ROUTE_LOG STATUS_OUT ROUTE_LOG_OUT"""
 import argparse
 import dataclasses
 import json
 import sys
 
-from . import swarm
+from . import redact, swarm
 from .compare import compare, table
 from .instance import load
 from .solver import pareto, solve
@@ -25,10 +26,14 @@ def main(argv=None) -> int:
     p_compare.add_argument('--max-slots', type=int, help='cap every machine at this many agents')
     p_convert = sub.add_parser('convert', help='a Swarm status snapshot and route log to a night file')
     p_convert.add_argument('paths', nargs=4, metavar=('STATUS', 'ROUTE_LOG', 'CONFIG', 'OUT'))
+    p_redact = sub.add_parser('redact', help='keep only what convert reads, without emails or people\'s names')
+    p_redact.add_argument('paths', nargs=4, metavar=('STATUS', 'ROUTE_LOG', 'STATUS_OUT', 'ROUTE_LOG_OUT'))
     args = parser.parse_args(argv)
 
     if args.command == 'convert':
         return swarm.main(args.paths)
+    if args.command == 'redact':
+        return redact.main(args.paths)
     with open(getattr(args, 'instance', None) or args.night) as f:
         data = json.load(f)
     if args.command == 'compare':
