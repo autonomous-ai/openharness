@@ -39,15 +39,14 @@ class SuperTabPartsChange {
 /// version read, the values worked out at read time (`derived`), and where the next change read starts. The screens
 /// keep reading the old whole-Swarm shape, which [state] builds from the parts.
 class SuperTabParts {
-  SuperTabParts._({
+  SuperTabParts._(
+    this._head,
+    this._derived, {
     required this.cursor,
     required this.epoch,
     required this.lastChangedAt,
-    required Map<String, dynamic> head,
-    required Map<String, dynamic> derived,
     required this.githubApp,
-  }) : _head = head,
-       _derived = derived;
+  });
 
   /// A first load (section 4.3). Throws a [FormatException] for a response of another format.
   factory SuperTabParts.firstLoad(Map<String, dynamic> answer) {
@@ -55,11 +54,11 @@ class SuperTabParts {
       throw const FormatException('Update Harness to open this Swarm.');
     }
     final parts = SuperTabParts._(
+      _envelope(answer['head'], live: true),
+      superTabMap(answer['derived'] ?? const {}),
       cursor: _cursor(answer),
       epoch: _int(answer['epoch']),
       lastChangedAt: _int(answer['lastChangedAt']),
-      head: _envelope(answer['head'], live: true),
-      derived: superTabMap(answer['derived'] ?? const {}),
       githubApp: answer['githubApp'] == true,
     );
     parts._seen['head'] = _int(parts._head['version']);
