@@ -19,7 +19,13 @@ final _button = find.widgetWithText(FilledButton, 'Take control');
 Future<(AppNotifier, TerminalSession)> _takenOver(
   WidgetTester tester, {
   required bool web,
+  Size? window,
 }) async {
+  if (window != null) {
+    tester.view.devicePixelRatio = 1;
+    tester.view.physicalSize = window;
+    addTearDown(tester.view.reset);
+  }
   final app = createApp();
   app.stateOf('m')!
     ..nodeOnline = true
@@ -46,7 +52,7 @@ Future<(AppNotifier, TerminalSession)> _takenOver(
     MaterialApp(
       home: Scaffold(
         body: SizedBox(
-          width: 900,
+          width: window?.width ?? 900,
           height: 400,
           child: web
               ? WorkspaceChromeScope(
@@ -74,6 +80,16 @@ Future<void> _finish(WidgetTester tester, AppNotifier app) async {
   app.dispose();
 }
 
+/// A computer's browser, and Desktop's own platforms.
+final _mouse = TargetPlatformVariant.only(TargetPlatform.macOS);
+final _desktopPlatforms = TargetPlatformVariant.desktop();
+
+/// A phone's or tablet's browser.
+final _touch = TargetPlatformVariant({
+  TargetPlatform.android,
+  TargetPlatform.iOS,
+});
+
 void main() {
   testWidgets('on the web the band asks for a click and draws no key', (
     tester,
@@ -93,7 +109,7 @@ void main() {
       findsNothing,
     );
     await _finish(tester, app);
-  });
+  }, variant: _mouse);
 
   testWidgets('on the web a stray key is answered without naming a key', (
     tester,
@@ -109,7 +125,43 @@ void main() {
     );
     expect(find.textContaining('⏎'), findsNothing);
     await _finish(tester, app);
-  });
+  }, variant: _mouse);
+
+  testWidgets('a touch screen is asked for a tap, its stray key too', (
+    tester,
+  ) async {
+    final (app, _) = await _takenOver(tester, web: true);
+
+    expect(
+      find.text('Typing is paused. Tap here to take control.'),
+      findsOneWidget,
+    );
+    await tester.sendKeyEvent(LogicalKeyboardKey.keyA);
+    await tester.pump();
+    expect(
+      find.text('Keys are ignored — tap here to take control.'),
+      findsOneWidget,
+    );
+    await _finish(tester, app);
+  }, variant: _touch);
+
+  testWidgets('on a phone Take control is a finger tall', (tester) async {
+    final (app, _) = await _takenOver(
+      tester,
+      web: true,
+      window: const Size(390, 844),
+    );
+
+    expect(tester.getSize(_button).height, greaterThanOrEqualTo(44));
+    await _finish(tester, app);
+  }, variant: _touch);
+
+  testWidgets('a wide web window keeps the mouse-sized button', (tester) async {
+    final (app, _) = await _takenOver(tester, web: true);
+
+    expect(tester.getSize(_button).height, lessThan(44));
+    await _finish(tester, app);
+  }, variant: _mouse);
 
   testWidgets('Desktop keeps ⏎ on the band and on its button', (tester) async {
     final (app, _) = await _takenOver(tester, web: false);
@@ -126,5 +178,5 @@ void main() {
       findsOneWidget,
     );
     await _finish(tester, app);
-  });
+  }, variant: _desktopPlatforms);
 }
