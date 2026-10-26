@@ -1,0 +1,46 @@
+{
+  "format": 2, "reload": false,
+  "cursor": "eyJ2IjoyLCJ0IjoxNzkzMDEwMDc3Mzc1LCJlIjozfQ",
+  "serverTime": 1793010107375, "lastChangedAt": 1793010106120, "epoch": 3,
+  "head": null,
+  "members": [],
+  "agents": [
+    { "key": "a00000000000000000000001", "version": 214000, "changedAt": 1793010000000,
+      "data": { "id": "a00000000000000000000001", "name": "Overlap duplicate, same version: ignored" } }
+  ],
+  "groups": [
+    { "key": "c00000000000000000000002", "version": 214040, "changedAt": 1793010106120,
+      "data": { "id": "c00000000000000000000002", "projectId": "5000000000000000000000aa", "number": 2, "title": "Fixture work",
+        "leadId": "a00000000000000000000001", "agentIds": ["a00000000000000000000001", "a00000000000000000000002"], "archived": false,
+        "brief": "Goal:\nShip the fixture\n\nChanges:\nOne file\n\nConstraints:\nNone\n\nOwns:\n- cli/src/superTabs",
+        "task": { "goal": "Ship the fixture", "changes": "One file", "constraints": "None", "owns": ["cli/src/superTabs"] },
+        "checks": [ { "id": "c1", "description": "Tests pass", "independent": false, "evidence": null, "passedBy": null } ],
+        "assignment": { "id": "w0000000000000000000001", "agentId": "a00000000000000000000002", "status": "review", "result": "Ready at abc123",
+          "configuration": { "engine": "claude", "model": "opus", "effort": "high", "contextWindow": null, "engineVersion": null },
+          "execution": { "machineId": "d00000000000000000000001", "harnessId": "b00000000000000000000002", "machineOwnerId": "6a0000000000000000000001" },
+          "recordingProgress": { "at": 1793010106120, "revision": 214041 } },
+        "lastMessageSequence": 214041, "pullRequestUrls": [],
+        "messageSeq": 214041, "reportSeq": 214041, "dormant": false, "lastActivityAt": "2026-10-26T10:41:46.120Z" } },
+    { "key": "c00000000000000000000003", "version": 214042, "changedAt": 1793010105000, "dormant": true }
+  ],
+  "machines": [
+    { "key": "d00000000000000000000001", "version": 214050, "changedAt": 1793010105900,
+      "data": { "machineId": "d00000000000000000000001", "name": "MacBookPro2021", "contributorId": "6a0000000000000000000001",
+        "membershipGeneration": "gen-owner", "generation": "pool-gen-1", "scope": "swarm", "engines": ["claude", "codex"],
+        "maxAgents": 4, "paused": false, "cwd": "/Users/owner/Harness/swarms/f1a5",
+        "observation": { "generation": "pool-gen-1", "receivedAt": 1793010105000,
+          "resources": { "cpuPercent": 30, "memoryUsedBytes": 9000000000, "memoryTotalBytes": 32000000000 },
+          "quotas": [ { "engine": "claude", "known": true, "windows": [] } ], "tools": { "git": true },
+          "runningHarnessIds": ["b00000000000000000000001", "b00000000000000000000002"], "stoppedHarnessIds": [] } } }
+  ],
+  "starts": [ { "key": "e00000000000000000000002", "version": 214043, "changedAt": 1793010105500, "deleted": true } ],
+  "progress": [],
+  "derived": {
+    "agents": {
+      "a00000000000000000000001": { "downSince": null, "limitedUntil": null, "workDecision": null, "roleId": null },
+      "a00000000000000000000002": { "downSince": null, "limitedUntil": null, "workDecision": null, "roleId": null }
+    },
+    "machines": { "d00000000000000000000001": { "availableSlots": 3, "teamWork": { "allowed": true } } },
+    "otherProjectsWork": []
+  }
+}
