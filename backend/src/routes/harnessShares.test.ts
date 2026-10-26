@@ -4,9 +4,9 @@ import { randomUUID } from 'node:crypto'
 const mocks = vi.hoisted(() => ({
   prisma: { harnessShare: { findFirst: vi.fn(), findMany: vi.fn(), findUnique: vi.fn(), upsert: vi.fn(), updateMany: vi.fn() },
     machine: { findFirst: vi.fn(), findMany: vi.fn() }, user: { findMany: vi.fn(), findUnique: vi.fn() } },
-  mayObserve: vi.fn(), presence: vi.fn(), changed: vi.fn(), listChanged: vi.fn(), auth: vi.fn(),
+  mayOpenShare: vi.fn(), presence: vi.fn(), changed: vi.fn(), listChanged: vi.fn(), auth: vi.fn(),
 }))
-vi.mock('../superTabs/store.js', () => ({ SuperTabStore: class { mayObserve = mocks.mayObserve } }))
+vi.mock('../superTabs/store.js', () => ({ SuperTabStore: class { mayOpenShare = mocks.mayOpenShare } }))
 vi.mock('../lib/prisma.js', () => ({ prisma: mocks.prisma, machineAlive: { OR: [{ deletedAt: null }, { deletedAt: { isSet: false } }] } }))
 vi.mock('../lib/bus.js', () => ({ getAgentPresenceMany: mocks.presence, publishShareChanged: mocks.changed,
   publishDeviceMachineListChanged: mocks.listChanged }))
@@ -25,6 +25,7 @@ describe('account-bound harness invitations', () => {
   let app: FastifyInstance
   beforeEach(async () => {
     vi.resetAllMocks()
+    mocks.mayOpenShare.mockResolvedValue(true)
     mocks.auth.mockResolvedValue(owner)
     mocks.prisma.machine.findFirst.mockResolvedValue(machine)
     mocks.prisma.machine.findMany.mockResolvedValue([machine])
@@ -209,11 +210,21 @@ describe('account-bound harness invitations', () => {
     const share = { id: 'share', ...input(), superTabId: 'a'.repeat(24), ownerId: owner.sub, expiresAt: new Date(input().expiresAt) }
     mocks.prisma.harnessShare.findFirst.mockResolvedValue(share)
     mocks.prisma.harnessShare.findMany.mockResolvedValue([share])
-    mocks.mayObserve.mockResolvedValue(true)
     expect(await recipientShare('share', ken)).toEqual(share)
-    expect(mocks.mayObserve).toHaveBeenCalledWith(ken, share.superTabId, 'm1', 'agent-1', owner.sub)
-    mocks.mayObserve.mockResolvedValue(false)
+    expect(mocks.mayOpenShare).toHaveBeenCalledWith(ken, share)
+    mocks.mayOpenShare.mockResolvedValue(false)
     expect(await recipientShare('share', ken)).toBeNull()
+    expect((await app.inject({ method: 'GET', url: '/api/harness-shares', headers: auth })).json().data.machines).toEqual([])
+  })
+
+  it('asks the Swarms about an ordinary share too: a confidential session refuses it (final review, Critical 1)', async () => {
+    mocks.auth.mockResolvedValue(ken)
+    const share = { id: 'share', ...input(), superTabId: null, ownerId: owner.sub, expiresAt: new Date(input().expiresAt) }
+    mocks.prisma.harnessShare.findFirst.mockResolvedValue(share)
+    mocks.prisma.harnessShare.findMany.mockResolvedValue([share])
+    mocks.mayOpenShare.mockResolvedValue(false)
+    expect(await recipientShare('share', ken)).toBeNull()
+    expect(mocks.mayOpenShare).toHaveBeenCalledWith(ken, share)
     expect((await app.inject({ method: 'GET', url: '/api/harness-shares', headers: auth })).json().data.machines).toEqual([])
   })
 
