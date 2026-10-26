@@ -351,6 +351,25 @@ describe('a start that never runs', () => {
 })
 
 describe('the morning digest', () => {
+  it('lists work that shipped and was archived before the digest (#1757 review, 4)', async () => {
+    const f = await swarm()
+    const projectId = (await f.timed.read(owner, f.tab)).state.projects![0]!.id
+    await f.execute({ type: 'project.digest', projectId, time: '03:00', timeZone: 'UTC' })
+    const checkId = (await f.timed.read(owner, f.tab)).state.conversations.find(c => c.id === f.group)!.checks[0]!.id
+    await f.execute({ type: 'work.check', conversationId: f.group, assignmentId: f.assignmentId, checkId, passed: true, evidence: 'Verified' })
+    await f.execute({ type: 'work.status', conversationId: f.group, assignmentId: f.assignmentId, status: 'done',
+      result: 'Merged https://github.com/example/project/pull/9' }, host, f.worker)
+    await f.execute({ type: 'conversation.archive', conversationId: f.group, archived: true })
+    // Overnight the sweep puts it to sleep (sweeps.ts sleepQuietGroups, once its Lead acknowledged its reports): ordinary
+    // loads no longer read it.
+    await db.swarmGroup.updateMany({ where: { tabId: f.tab, key: f.group }, data: { dormant: true } })
+    expect((await f.timed.read(owner, f.tab)).state.conversations.some(c => c.id === f.group)).toBe(false)
+    f.clock.now = 3 * 60 * 60_000
+    await f.leadInbox()
+    const digest = (await db.superTabMessage.findMany({ where: { tabId: f.tab } })).find(m => (m.source as { kind?: string } | null)?.kind === 'digest-request')!
+    expect(digest.text.split('\n\n')[1]).toBe('Shipped:\n- #1 Ship the parser: https://github.com/example/project/pull/9')
+  })
+
   it('wakes the Lead once at the project\'s local time with what its work is doing, and again the next day', async () => {
     const f = await swarm()
     const projectId = (await f.timed.read(owner, f.tab)).state.projects![0]!.id

@@ -16,7 +16,7 @@ import { canReadAgent, canReadGroup, canWatchAgent, groupProject, ledProject, pr
 import { bindSession, makeProjectPrivate } from './sessionScope.js'
 import { confidentialSessions, otherRegistrations, recordConfidential } from './confidential.js'
 import { answersRequest, noteProjectReports, projectUpdateRequest } from './projectUpdates.js'
-import { digestRequest } from './digest.js'
+import { digestDue, digestRequest, digestSince } from './digest.js'
 import { judgedMachines, loseTasks, sweepLiveness, SWEEP_EVERY_MS } from './liveness.js'
 import { clock, insertParts, lastChangedAt, loadActive, reassemble, split, type HeadData, type SwarmParts } from './parts/index.js'
 import { commitParts, indexesOf, numberMessages, type Touch, type Written } from './parts/commit.js'
@@ -1485,7 +1485,16 @@ export class SuperTabStore {
 
   async deliveries(user: AuthUser, tabId: string, agentId: string) {
     return transaction(this.db, async tx => {
-      const loaded = await this.load(tx, user, tabId), state = structuredClone(loaded.state)
+      let loaded = await this.load(tx, user, tabId)
+      // Work finished since the last digest and archived or asleep since still shipped, but ordinary loads leave it out
+      // (#1757 review, 4): a due digest loads it.
+      const led = ledProject(loaded.state, agentId)
+      if (led && digestDue(led, this.now())) {
+        const finished = await tx.swarmGroup.findMany({ where: { tabId, deleted: false, dormant: true, lastActivityAt: { gte: new Date(digestSince(led, this.now())) },
+          OR: [{ projectId: led.id }, ...led.id === 'lead' ? [{ projectId: null }] : []] }, select: { key: true } })
+        if (finished.length) loaded = await this.ensure(tx, loaded, { groupIds: finished.map(g => g.key) })
+      }
+      const state = structuredClone(loaded.state)
       author(state, await this.actor(tx, user, state, agentId), true)
       const target = agent(state, agentId)
       // A Lead's poll runs the time checks (liveness.ts): lost work wakes it in this same poll.

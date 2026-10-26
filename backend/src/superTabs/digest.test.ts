@@ -38,6 +38,8 @@ function fixture(): SuperTabState {
       group(6, 'Cache', work('di', 'lost', { lost: { reason: 'its machine Studio has been offline for 2 minutes', at: LAST + 2 * HOUR } })),
       group(7, 'Pricing', work('ed', 'needs_human', { result: 'Which plan do we launch with?' })),
       group(8, 'Archived spike', work('ed', 'working'), { archived: true }),
+      // Merged and archived overnight: it still shipped (#1757 review, 4).
+      group(10, 'Release notes', work('bo', 'done'), { archived: true, dormant: true, pullRequestUrls: ['https://github.com/example/lampos/pull/15'] }),
       group(9, 'Bootloader', work('nico', 'working'), { projectId: 'p2', leadId: 'lead-2' }),
     ],
   } as SuperTabState
@@ -49,6 +51,7 @@ describe('a project\'s morning digest', () => {
     expect(projectDigest(fixture(), lampOS(fixture()), LAST)).toBe([
       'Shipped:',
       '- #1 Night shift: https://github.com/example/lampos/pull/12',
+      '- #10 Release notes: https://github.com/example/lampos/pull/15',
       'In progress:',
       '- #3 Lexer: working (Ana)',
       '- #4 Docs: ready for review (Bo), https://github.com/example/lampos/pull/14',

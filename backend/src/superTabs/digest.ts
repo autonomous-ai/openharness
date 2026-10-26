@@ -32,6 +32,9 @@ export function digestDue(project: SwarmProject, now: number): string | null {
   return local.time >= digest.time && digest.lastOn !== local.date ? local.date : null
 }
 
+/** Where a project's digest starts: its last one, or the day before the first. */
+export const digestSince = (project: SwarmProject, now: number): number => project.digest?.lastAt ?? now - FIRST_SPAN_MS
+
 /** The date a newly set digest counts as sent for: today, when today's time has already passed, so it starts tomorrow. */
 export function digestStartsAfter(time: string, timeZone: string, now: number): string | undefined {
   const local = localNow(timeZone, now)
@@ -44,15 +47,17 @@ export function digestStartsAfter(time: string, timeZone: string, now: number): 
  * decisions part appears only once there are decisions to list.
  */
 export function projectDigest(state: SuperTabState, project: SwarmProject, since: number, decisions: string[] = []): string {
-  const groups = reportGroups(state, project).filter(g => !g.archived && g.number !== undefined).sort((a, b) => a.number! - b.number!)
+  // Work that shipped and was archived since still shipped (#1757 review, 4); only open work is in progress or held up.
+  const groups = reportGroups(state, project).filter(g => g.number !== undefined).sort((a, b) => a.number! - b.number!)
+  const open = groups.filter(g => !g.archived)
   const named = (g: Conversation) => `#${g.number} ${g.title}`
   const who = (g: Conversation) => agentDisplayName(state.agents, g.assignment!.agentId)
   const pr = (g: Conversation) => g.pullRequestUrls?.at(-1)
   const shipped = groups.filter(g => g.assignment?.status === 'done' && Date.parse(g.lastActivityAt ?? '') >= since)
     .map(g => `- ${named(g)}: ${pr(g) ?? 'done, no pull request'}`)
-  const moving = groups.filter(g => activeWork(g) && IN_PROGRESS[g.assignment!.status])
+  const moving = open.filter(g => activeWork(g) && IN_PROGRESS[g.assignment!.status])
     .map(g => `- ${named(g)}: ${IN_PROGRESS[g.assignment!.status]} (${who(g)})${pr(g) ? `, ${pr(g)}` : ''}`)
-  const held = groups.filter(g => g.assignment && HELD_UP[g.assignment.status]).map(g => {
+  const held = open.filter(g => g.assignment && HELD_UP[g.assignment.status]).map(g => {
     const why = g.assignment!.status === 'lost' ? g.assignment!.lost?.reason : g.assignment!.result
     return `- ${named(g)}: ${HELD_UP[g.assignment!.status]} (${who(g)})${why ? `: ${why.replace(/\s+/g, ' ').slice(0, 300)}` : ''}`
   })
@@ -72,7 +77,7 @@ export function digestRequest(state: SuperTabState, target: Agent, now: number):
     + 'Check that each pull request under Shipped is merged, and move one that is not to In progress. Then post one message to the people in this chat '
     + 'with these parts, in plain words, without commands or internal IDs.\n\n'
     // Decision packets (Echo's group) are not stored yet: until they are, the decisions part is left out.
-    + projectDigest(state, project, digest.lastAt ?? now - FIRST_SPAN_MS)
+    + projectDigest(state, project, digestSince(project, now))
   return { id: stableId('digest', state.id, project.id, on), conversationId: project.leadConversationId,
     author: author(state, { kind: 'agent', agentId: target.id, machineOwnerId: target.machineOwnerId }),
     text, replyTo: null, recipients: [target.id], source: { kind: 'digest-request', projectId: project.id, on } }
