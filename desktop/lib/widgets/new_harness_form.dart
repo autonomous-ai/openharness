@@ -1679,11 +1679,16 @@ class NewHarnessFormState extends State<NewHarnessForm> {
                                         ),
                                       ),
                                     ],
+                                    // Only an error can repeat the required
+                                    // choice's reason; a status always shows.
                                     if (!choosing &&
                                         (box.error != null ||
                                             box.status != null) &&
-                                        box.error !=
-                                            box.requiredChoice?.message) ...[
+                                        (box.error == null ||
+                                            box.error !=
+                                                box
+                                                    .requiredChoice
+                                                    ?.message)) ...[
                                       const SizedBox(height: 12),
                                       _status(),
                                     ],
@@ -2247,6 +2252,37 @@ class NewHarnessFormState extends State<NewHarnessForm> {
     child: const Text('Cancel request'),
   );
 
+  Widget _discardPendingButton() => TextButton(
+    key: const ValueKey('discard-pending-request'),
+    onPressed: box.busy ? null : () => unawaited(_discardPending()),
+    child: const Text('Discard request'),
+  );
+
+  Future<void> _discardPending() async {
+    final question = await box.discardPending();
+    if (question != null && mounted) {
+      final sure = await showDialog<bool>(
+        context: context,
+        builder: (context) => AlertDialog(
+          content: Text(question),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Keep request'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(context, true),
+              child: const Text('Discard anyway'),
+            ),
+          ],
+        ),
+      );
+      if (sure != true || !mounted) return;
+      await box.discardPending(anyway: true);
+    }
+    if (mounted && box.discarded) widget.onClose();
+  }
+
   /// Offered beside the refusal of a typed project name whose folder is
   /// already there: starts in that folder, only once pressed.
   Widget _useExistingFolderButton() => TextButton(
@@ -2262,6 +2298,7 @@ class NewHarnessFormState extends State<NewHarnessForm> {
     crossAxisAlignment: WrapCrossAlignment.center,
     children: [
       if (box.canCancelPending) _cancelPendingButton(),
+      if (box.canDiscardPending) _discardPendingButton(),
       if (box.existingFolder != null) _useExistingFolderButton(),
       if (box.integration?.roles case final roles?)
         roles.isEmpty
@@ -3089,6 +3126,7 @@ class NewHarnessFormState extends State<NewHarnessForm> {
               ),
             _buildButton(),
             if (box.canCancelPending) _cancelPendingButton(),
+            if (box.canDiscardPending) _discardPendingButton(),
             if (box.existingFolder != null) _useExistingFolderButton(),
             if (!_picking && box.requiredChoice != null) ...[
               SizedBox(height: _rowHeight),

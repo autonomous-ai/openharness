@@ -2096,6 +2096,24 @@ class AppNotifier extends ChangeNotifier {
     return Agent.fromJson(Map<String, dynamic>.from(result['agent'] as Map));
   }
 
+  /// Asks [machineId] to drop a Swarm launch's request. The reply is its
+  /// receipt: `cancelled`, or what had already become of the request.
+  Future<Map<String, dynamic>> cancelSuperTabCreation(
+    String machineId,
+    String creationId,
+  ) async {
+    final revision = _authRevision, account = currentUser?.id;
+    final result = await _conn(machineId).request(
+      'agent_create_cancel',
+      payload: {'creationId': creationId},
+      timeout: const Duration(seconds: 10),
+    );
+    if (!_authWorkCurrent(revision) || currentUser?.id != account) {
+      throw const SuperTabFailure('ACCOUNT_CHANGED', 'The account changed.');
+    }
+    return result;
+  }
+
   /// Where this computer keeps, per shared tab, the other accounts'
   /// harnesses it has seen in the roster (R2): `{sharedTabId: [paneKey]}`,
   /// one record per account, so one person's record on a shared computer
