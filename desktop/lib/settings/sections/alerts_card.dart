@@ -10,6 +10,12 @@ import '../../notify/system_notifications.dart';
 import '../../shared/theme/app_theme.dart' as grid;
 import '../../shared/widgets/setting_row.dart';
 
+/// A phone's or tablet's browser, where the banner is tapped, not clicked.
+/// Desktop runs on neither.
+bool get _touch =>
+    defaultTargetPlatform == TargetPlatform.iOS ||
+    defaultTargetPlatform == TargetPlatform.android;
+
 /// Settings ▸ Notifications: how an agent gets your attention.
 ///
 /// One switch per CHANNEL, because people differ about them — a banner is
@@ -18,12 +24,6 @@ import '../../shared/widgets/setting_row.dart';
 /// "needs you" are not split the same way: those are two triggers of one thing,
 /// and somebody who wants to know about a stuck agent wants to know about a
 /// finished one.
-/// A phone's or tablet's browser, where the banner is tapped, not clicked.
-/// Desktop runs on neither.
-bool get _touch =>
-    defaultTargetPlatform == TargetPlatform.iOS ||
-    defaultTargetPlatform == TargetPlatform.android;
-
 class AlertsCard extends StatelessWidget {
   const AlertsCard({
     super.key,
