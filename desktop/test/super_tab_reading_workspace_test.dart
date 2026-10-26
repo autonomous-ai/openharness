@@ -15,7 +15,8 @@ import 'super_tab_launch_test.dart'
     show SuperTabFixtureConnection, SuperTabLaunchFixture, tabId;
 import 'swarm_state_test.dart' show MemoryStore;
 
-/// The Swarm state reads the fixture's machine has answered.
+/// The Swarm state reads (first loads and change reads) the fixture's machine
+/// has answered.
 int _stateReads(SuperTabLaunchFixture f) => _connectionReads(f.connection);
 
 int _connectionReads(SuperTabFixtureConnection connection) => connection.calls
@@ -23,7 +24,10 @@ int _connectionReads(SuperTabFixtureConnection connection) => connection.calls
       (c) =>
           c.$1 == 'super_tabs' &&
           c.$2['method'] == 'GET' &&
-          c.$2['path'] == '/api/super-tabs/$tabId',
+          (c.$2['path'] == '/api/super-tabs/$tabId/parts' ||
+              (c.$2['path'] as String).startsWith(
+                '/api/super-tabs/$tabId/changes?',
+              )),
     )
     .length;
 

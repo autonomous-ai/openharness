@@ -2,7 +2,6 @@ import 'dart:async';
 import 'dart:math';
 
 import 'package:clock/clock.dart';
-import 'package:collection/collection.dart' show DeepCollectionEquality;
 import 'package:dio/dio.dart' show CancelToken, DioException, DioExceptionType;
 import 'package:flutter/foundation.dart';
 
@@ -10,6 +9,7 @@ import '../logging/app_log.dart';
 import '../state/harness_attachments.dart';
 import 'attachment_upload.dart';
 import 'model.dart';
+import 'parts.dart';
 import 'reading.dart';
 import 'review_verdict.dart';
 
@@ -123,7 +123,13 @@ class SuperTabController extends ChangeNotifier {
   final Duration uploadTimeout;
   SuperTabSnapshot? snapshot;
   String selectedId = 'lead';
-  int revision = -1;
+
+  /// The newest change of the Swarm this tab has read, in epoch milliseconds: what tells the app and the tag list
+  /// that it changed (spec ruling 8).
+  int lastChangedAt = -1;
+
+  /// The Swarm's parts as last read: what the next read asks changes for, and what [snapshot] is built from.
+  SuperTabParts? _parts;
   String? error, operationError, operationErrorCode;
 
   /// One line for the sender after a command succeeds, from the backend: that a
@@ -469,7 +475,7 @@ class SuperTabController extends ChangeNotifier {
         : shown;
     final rows = [for (final message in page) ?_rows[id]?[message.id]];
     return {
-      'revision': revision,
+      'revision': lastChangedAt,
       'state': state,
       'conversationId': id,
       'messages': rows,
@@ -497,7 +503,7 @@ class SuperTabController extends ChangeNotifier {
       final messages = rows.map(SuperTabMessage.fromJson).toList();
       final revisionSaved = (view['revision'] as num).toInt();
       snapshot = saved;
-      revision = revisionSaved;
+      lastChangedAt = revisionSaved;
       _shownState = state;
       if (id == selectedId &&
           saved.conversation(id as String) != null &&
@@ -520,7 +526,7 @@ class SuperTabController extends ChangeNotifier {
   /// A view from an older shape: draw nothing, read as usual.
   void _dropSaved() {
     snapshot = null;
-    revision = -1;
+    lastChangedAt = -1;
     _shownState = null;
     _messages.clear();
     _rows.clear();
@@ -551,6 +557,7 @@ class SuperTabController extends ChangeNotifier {
     devicesSelected = false;
     error = message;
     snapshot = null;
+    _parts = null;
     _messages.clear();
     _poll?.cancel();
     _changed();
@@ -686,34 +693,36 @@ class SuperTabController extends ChangeNotifier {
             ..ignore())
         : null;
     try {
-      final answer = await request('GET', _path);
+      final read = await _readParts();
       if (_disposed || accessRevoked) return;
+      final parts = _parts!;
       _refreshFailing = false;
       unreachableSince = null;
       _waitingForMachine = false;
       _graceEnd?.cancel();
       stateReads++;
-      final nextRevision = (answer['revision'] as num).toInt();
       // How long the Swarm took to answer, and nothing it said: the log shows a slow or failing
       // backend, which the sidebar's ages and the machines' states otherwise only hint at.
       appLog.debug(
         'swarm',
-        'state read in ${took.elapsedMilliseconds} ms (revision $nextRevision)',
+        'state read in ${took.elapsedMilliseconds} ms '
+            '(${read.full ? 'first load' : 'changes'}, last changed ${parts.lastChangedAt})',
       );
-      final raw = superTabMap(answer['state']);
-      // Some of the state is worked out at read time (an agent seen down, a
-      // limit that ran out) and changes with no new revision.
-      if (_policy.adapts) {
-        stateChanged = !const DeepCollectionEquality().equals(raw, _shownState);
+      // A part or a value worked out at read time (an agent seen down, a
+      // limit that ran out) changed: the snapshot is built again. The first
+      // read over a saved view wins, whatever it saved.
+      final moved = read.changed || _showingSaved;
+      if (moved) {
+        final raw = parts.state;
+        if (_policy.adapts) {
+          stateChanged = true;
+          _viewVersion++;
+        }
         _shownState = raw;
-        if (stateChanged) _viewVersion++;
-      }
-      final next = SuperTabSnapshot.fromJson(raw);
-      if (next.id != tabId) {
-        throw const FormatException('A different Swarm was returned.');
-      }
-      // The first read over a saved view wins, whatever revision was saved.
-      if (nextRevision >= revision || _showingSaved) {
+        final next = SuperTabSnapshot.fromJson(raw);
+        if (next.id != tabId) {
+          throw const FormatException('A different Swarm was returned.');
+        }
         snapshot = next;
         final allowed = next.conversations.map((c) => c.id).toSet();
         final localAccessChanged =
@@ -745,10 +754,10 @@ class SuperTabController extends ChangeNotifier {
         if (!allowed.contains(selectedId)) {
           selectedId = next.projects.firstOrNull?.leadConversationId ?? 'lead';
         }
-        revision = nextRevision;
-        error = null;
         if (localAccessChanged) _saveSoon();
       }
+      lastChangedAt = parts.lastChangedAt;
+      error = null;
       await (selectedId == earlyId && messagesRead != null
           ? messagesRead
           : _readMessages(
@@ -786,10 +795,43 @@ class SuperTabController extends ChangeNotifier {
     }
   }
 
+  /// One read of the Swarm's parts: changes since the cursor once a first load
+  /// is held, else a first load. A reload answer, or a change read refused (the
+  /// Swarm or the reader's access moved), reads in full at once.
+  Future<({bool full, bool changed})> _readParts() async {
+    final held = _parts;
+    if (held != null) {
+      try {
+        final answer = await request(
+          'GET',
+          '$_path/changes?cursor=${Uri.encodeQueryComponent(held.cursor)}',
+        );
+        if (answer['reload'] != true) {
+          try {
+            return (full: false, changed: held.apply(answer).changed);
+          } catch (_) {
+            // Half merged: the next read starts again from a first load.
+            if (identical(_parts, held)) _parts = null;
+            rethrow;
+          }
+        }
+      } on SuperTabFailure catch (failure) {
+        if (!const {'FORBIDDEN', 'NOT_FOUND'}.contains(failure.code)) rethrow;
+      }
+      _parts = null;
+    }
+    final parts = SuperTabParts.firstLoad(await request('GET', '$_path/parts'));
+    if (parts.state['id'] != tabId) {
+      throw const FormatException('A different Swarm was returned.');
+    }
+    _parts = parts;
+    return (full: true, changed: true);
+  }
+
   /// What a state read can change on screen, beside the messages.
-  ({int revision, String? error, bool failing, bool revoked, bool loading})
+  ({int lastChangedAt, String? error, bool failing, bool revoked, bool loading})
   get _shown => (
-    revision: revision,
+    lastChangedAt: lastChangedAt,
     error: error,
     failing: _refreshFailing,
     revoked: accessRevoked,
@@ -872,6 +914,7 @@ class SuperTabController extends ChangeNotifier {
       accessRevoked = true;
       devicesSelected = false;
       snapshot = null;
+      _parts = null;
       _messages.clear();
       _poll?.cancel();
     }
@@ -1086,11 +1129,8 @@ class SuperTabController extends ChangeNotifier {
         _pending = pending;
         rethrow;
       }
+      // What the command wrote is in the next change read.
       await refresh();
-      if (!_disposed &&
-          revision < ((answer['revision'] as num?)?.toInt() ?? revision)) {
-        await refresh();
-      }
       return result;
     } catch (failure) {
       if (!_disposed) {

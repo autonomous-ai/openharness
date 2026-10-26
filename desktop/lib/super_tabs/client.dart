@@ -8,6 +8,7 @@ import 'attachment_upload.dart';
 import 'controller.dart';
 import 'model.dart';
 import 'notifications.dart';
+import 'parts.dart';
 import 'reading.dart';
 import 'saved_view.dart';
 
@@ -376,6 +377,15 @@ class SuperTabClient {
     Map<String, dynamic>? body,
   }) async => superTabMap(await request(method, path, body: body));
 
+  /// The Swarm as it is now, read once with a first load: for a check outside
+  /// an open tab (a launch revalidating its destination).
+  Future<SuperTabSnapshot> readSnapshot(String id) async {
+    final parts = SuperTabParts.firstLoad(
+      await map('GET', '/api/super-tabs/${Uri.encodeComponent(id)}/parts'),
+    );
+    return SuperTabSnapshot.fromJson(parts.state);
+  }
+
   Future<SuperTabController> open(String id) =>
       _controllers.putIfAbsent(id, () {
         final generation = _generation;
@@ -413,7 +423,7 @@ class SuperTabClient {
       upload: upload,
       reading: _reading,
     )..away = _isAway(id);
-    var seenRevision = -1;
+    var seenChange = (lastChangedAt: -1, mentionsWaiting: -1);
     var seenSelected = controller.selectedId;
     controller.addListener(() {
       if (_reading.drawsSaved && generation == _generation) {
@@ -430,9 +440,15 @@ class SuperTabClient {
         seenSelected = controller.selectedId;
         onSelection?.call(controller);
       }
-      if (controller.snapshot != null && controller.revision != seenRevision) {
-        seenRevision = controller.revision;
-        onSnapshot?.call(controller);
+      if (controller.snapshot case final snapshot?) {
+        final change = (
+          lastChangedAt: controller.lastChangedAt,
+          mentionsWaiting: snapshot.mentionsWaiting,
+        );
+        if (change != seenChange) {
+          seenChange = change;
+          onSnapshot?.call(controller);
+        }
       }
     });
     // What discovery already announced is not news when the Swarm opens.

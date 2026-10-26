@@ -819,7 +819,7 @@ void main() {
     });
 
     test(
-      'records how long a read took and its revision, nothing it said',
+      'records how long a read took, its kind and last change, nothing it said',
       () async {
         final server = ConversationServer();
         server.state['name'] = 'PRIVATE_SWARM_NAME';
@@ -829,7 +829,10 @@ void main() {
         expect(
           read,
           matches(
-            RegExp(r'^debug swarm state read in \d+ ms \(revision \d+\)$'),
+            RegExp(
+              r'^debug swarm state read in \d+ ms '
+              r'\((first load|changes), last changed \d+\)$',
+            ),
           ),
         );
         expect(log.lines.join('\n'), isNot(contains('PRIVATE')));

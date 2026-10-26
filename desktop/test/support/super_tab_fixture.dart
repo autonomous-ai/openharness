@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math';
 import 'dart:typed_data';
 
 import 'package:dio/dio.dart' show CancelToken;
@@ -33,8 +34,296 @@ Map<String, dynamic> projectFixture(
   'updateMinutes': 5,
 };
 
+/// What the backend's Swarm reads answer (docs/design/2026-10-26-swarm-state-parts.md, section 4), worked out from
+/// a test's whole-Swarm state. Each read compares every part with what it held: a part whose JSON changed gets the
+/// next version and a new `changedAt`, a part that is gone gets a tombstone. Tests keep changing the state as they
+/// did; the reads see exactly those changes.
+class SwarmPartsBackend {
+  /// The server's clock, one tick per change; a cursor is a tick.
+  int clock = 1000;
+  int _version = 100;
+
+  /// The visibility epoch: a test moves it to have the next change read answer a reload.
+  int epoch = 1;
+
+  /// The ticks a change read sends again, as the 30 s overlap does.
+  int overlap = 3;
+
+  /// Every read answered, by path, in order.
+  final reads = <String>[];
+
+  /// The size of each first load and change read answered, in JSON bytes.
+  final bytes = <String, List<int>>{};
+
+  final _parts = <String, _HeldPart>{};
+
+  /// The parts of [state], by `kind:key`. Groups marked dormant leave the active set.
+  static Map<String, Map<String, dynamic>> split(Map<String, dynamic> state) {
+    final parts = <String, Map<String, dynamic>>{};
+    parts['head:head'] = {
+      for (final entry in state.entries)
+        if (!const {
+          'people',
+          'agents',
+          'conversations',
+          'machines',
+          'starts',
+          'mentionsWaiting',
+          'otherProjectsWork',
+          'githubApp',
+        }.contains(entry.key))
+          entry.key: entry.value,
+    };
+    void each(String kind, String list, String id) {
+      for (final row in state[list] as List? ?? const []) {
+        final data = Map<String, dynamic>.from(row as Map);
+        parts['$kind:${data[id]}'] = data;
+      }
+    }
+
+    each('members', 'people', 'id');
+    each('agents', 'agents', 'id');
+    each('groups', 'conversations', 'id');
+    each('machines', 'machines', 'machineId');
+    each('starts', 'starts', 'id');
+    return parts;
+  }
+
+  /// Whether this backend leaves [group] out of the active set.
+  static bool dormant(Map<String, dynamic> group) => group['dormant'] == true;
+
+  void _sync(Map<String, dynamic> state) {
+    final now = split(jsonDecode(jsonEncode(state)) as Map<String, dynamic>);
+    for (final entry in now.entries) {
+      final json = jsonEncode(entry.value);
+      final held = _parts[entry.key];
+      if (held != null && !held.deleted && held.json == json) continue;
+      _parts[entry.key] = _HeldPart(
+        version: ++_version,
+        changedAt: ++clock,
+        json: json,
+        ordinal: held?.ordinal ?? _parts.length,
+      );
+    }
+    for (final entry in _parts.entries.toList()) {
+      if (entry.value.deleted || now.containsKey(entry.key)) continue;
+      _parts[entry.key] = _HeldPart(
+        version: ++_version,
+        changedAt: ++clock,
+        json: entry.value.json,
+        ordinal: entry.value.ordinal,
+        deleted: true,
+      );
+    }
+  }
+
+  Map<String, dynamic> _envelope(String id, _HeldPart part) => {
+    'key': id.substring(id.indexOf(':') + 1),
+    'version': part.version,
+    'changedAt': part.changedAt,
+    if (part.deleted)
+      'deleted': true
+    else if (id.startsWith('groups:') && dormant(part.data))
+      'dormant': true
+    else
+      'data': part.data,
+  };
+
+  String _cursor(int tick) => 'c${tick}e$epoch';
+
+  Map<String, dynamic> _derived(Map<String, dynamic> state) => {
+    'agents': <String, dynamic>{},
+    'machines': <String, dynamic>{},
+    if (state['mentionsWaiting'] != null)
+      'mentionsWaiting': state['mentionsWaiting'],
+    if (state['otherProjectsWork'] != null)
+      'otherProjectsWork': state['otherProjectsWork'],
+  };
+
+  List<MapEntry<String, _HeldPart>> _ordered() =>
+      _parts.entries.toList()
+        ..sort((a, b) => a.value.ordinal.compareTo(b.value.ordinal));
+
+  /// The answer to a Swarm read of [state] at [path], or null for a path that is not one.
+  Map<String, dynamic>? read(String path, Map<String, dynamic> state) {
+    final uri = Uri.parse(path);
+    final segments = uri.pathSegments;
+    if (segments.length < 4 || segments[0] != 'api') return null;
+    final route = segments[3];
+    // Time passes between reads, changed or not.
+    clock++;
+    if (segments.length == 4 && route == 'parts') {
+      _sync(state);
+      reads.add(path);
+      final answer = <String, dynamic>{
+        'format': 2,
+        'tabId': state['id'],
+        'cursor': _cursor(clock - overlap),
+        'serverTime': clock,
+        'lastChangedAt': _lastChangedAt(),
+        'epoch': epoch,
+        'githubApp': state['githubApp'] ?? false,
+        'head': _envelope('head:head', _parts['head:head']!),
+        for (final kind in _kinds) kind: <dynamic>[],
+        'derived': _derived(state),
+      };
+      for (final entry in _ordered()) {
+        final kind = entry.key.substring(0, entry.key.indexOf(':'));
+        if (kind == 'head' || entry.value.deleted) continue;
+        if (kind == 'groups' && dormant(entry.value.data)) continue;
+        (answer[kind] as List).add(_envelope(entry.key, entry.value));
+      }
+      return _measured('parts', answer);
+    }
+    if (segments.length == 4 && route == 'changes') {
+      reads.add(path);
+      final cursor = RegExp(r'^c(\d+)e(\d+)$')
+          .firstMatch(uri.queryParameters['cursor'] ?? '');
+      if (cursor == null || int.parse(cursor.group(2)!) != epoch) {
+        return _measured('changes', {'reload': true});
+      }
+      final since = int.parse(cursor.group(1)!);
+      final start = clock;
+      _sync(state);
+      final answer = <String, dynamic>{
+        'format': 2,
+        'reload': false,
+        'cursor': _cursor(start - overlap),
+        'serverTime': clock,
+        'lastChangedAt': _lastChangedAt(),
+        'epoch': epoch,
+        'head': null,
+        for (final kind in _kinds) kind: <dynamic>[],
+        'derived': _derived(state),
+      };
+      for (final entry in _ordered()) {
+        if (entry.value.changedAt <= since) continue;
+        final kind = entry.key.substring(0, entry.key.indexOf(':'));
+        if (kind == 'head') {
+          answer['head'] = _envelope(entry.key, entry.value);
+        } else {
+          (answer[kind] as List).add(_envelope(entry.key, entry.value));
+        }
+      }
+      return _measured('changes', answer);
+    }
+    if (route == 'groups') {
+      _sync(state);
+      reads.add(path);
+      if (segments.length == 5) {
+        final held = _parts['groups:${segments[4]}'];
+        if (held == null || held.deleted) {
+          throw const SuperTabFailure(
+            'NOT_FOUND',
+            'Conversation not found.',
+            statusCode: 404,
+          );
+        }
+        return {'group': _dormantEnvelope('groups:${segments[4]}', held)};
+      }
+      final projectId = uri.queryParameters['projectId'];
+      final before = uri.queryParameters['before'];
+      final groups = [
+        for (final entry in _ordered().reversed)
+          if (entry.key.startsWith('groups:') &&
+              !entry.value.deleted &&
+              dormant(entry.value.data) &&
+              (projectId == null ||
+                  (entry.value.data['projectId'] ?? 'lead') == projectId))
+            entry,
+      ];
+      final from = before == null
+          ? 0
+          : groups.indexWhere((e) => e.key == 'groups:$before') + 1;
+      final page = groups.skip(from).take(dormantPage).toList();
+      return {
+        'groups': [for (final e in page) _dormantEnvelope(e.key, e.value)],
+        'next': from + page.length < groups.length
+            ? page.last.key.substring('groups:'.length)
+            : null,
+      };
+    }
+    return null;
+  }
+
+  /// Groups per page of the dormant list.
+  int dormantPage = 50;
+
+  Map<String, dynamic> _dormantEnvelope(String id, _HeldPart part) => {
+    'key': id.substring(id.indexOf(':') + 1),
+    'version': part.version,
+    'changedAt': part.changedAt,
+    'data': {...part.data, if (dormant(part.data)) 'dormant': true},
+  };
+
+  Map<String, dynamic> _measured(String kind, Map<String, dynamic> answer) {
+    final copy = jsonDecode(jsonEncode(answer)) as Map<String, dynamic>;
+    (bytes[kind] ??= []).add(utf8.encode(jsonEncode(copy)).length);
+    return copy;
+  }
+
+  int _lastChangedAt() => _parts.values.fold(0, (t, p) => max(t, p.changedAt));
+
+  /// What a command reply says it wrote: the parts that changed since [tick].
+  List<Map<String, dynamic>> writtenSince(
+    int tick,
+    Map<String, dynamic> state,
+  ) {
+    _sync(state);
+    return [
+      for (final entry in _ordered())
+        if (entry.value.changedAt > tick)
+          {
+            'kind': switch (entry.key.substring(0, entry.key.indexOf(':'))) {
+              'members' => 'member',
+              'agents' => 'agent',
+              'groups' => 'group',
+              'machines' => 'machine',
+              'starts' => 'start',
+              final kind => kind,
+            },
+            'key': entry.key.substring(entry.key.indexOf(':') + 1),
+            'version': entry.value.version,
+          },
+    ];
+  }
+
+  static const _kinds = [
+    'members',
+    'agents',
+    'groups',
+    'machines',
+    'starts',
+    'progress',
+  ];
+}
+
+class _HeldPart {
+  _HeldPart({
+    required this.version,
+    required this.changedAt,
+    required this.json,
+    required this.ordinal,
+    this.deleted = false,
+  });
+  final int version, changedAt, ordinal;
+  final String json;
+  final bool deleted;
+  Map<String, dynamic> get data => jsonDecode(json) as Map<String, dynamic>;
+}
+
+/// What the backend answers an old whole-Swarm read with (section 4.11).
+const superTabUpdateRequired = SuperTabFailure(
+  'UPDATE_REQUIRED',
+  'Update Harness to keep using this Swarm.',
+  statusCode: 426,
+);
+
 class ConversationServer {
   int revision = 0;
+
+  /// The Swarm reads this server answers, worked out from [state].
+  final parts = SwarmPartsBackend();
   bool loseReply = false, reject = false, failSave = false, failReads = false;
   Map<String, dynamic>? saved;
   // While set, every read waits for it: a slow server.
@@ -170,6 +459,7 @@ class ConversationServer {
       }
       final operationId = body['operationId'] as String;
       if (receipts[operationId] case final receipt?) return receipt;
+      final tick = parts.clock;
       final command = body['command'] as Map;
       final output = <String, dynamic>{};
       if (command['type'] == 'message.send') {
@@ -267,7 +557,11 @@ class ConversationServer {
         }
       }
       output.addAll(commandResult);
-      final result = {'revision': revision, 'result': output};
+      final result = {
+        'result': output,
+        'parts': parts.writtenSince(tick, state),
+        'lastChangedAt': parts.clock,
+      };
       receipts[operationId] = result;
       if (loseReply) {
         loseReply = false;
@@ -328,11 +622,25 @@ class ConversationServer {
       return {
         'messages': after == null ? page.reversed.toList() : page,
         'next': next,
-        'revision': revision,
       };
     }
-    return jsonDecode(jsonEncode({'revision': revision, 'state': state}))
-        as Map<String, dynamic>;
+    if (parts.read(path, state) case final answer?) return answer;
+    if (uri.path == '/api/super-tabs/list') {
+      return {
+        'tabs': [
+          {
+            'id': state['id'],
+            'name': state['name'],
+            'ownerId': state['ownerId'],
+            'paused': state['paused'] ?? false,
+            'lastChangedAt': parts.clock,
+          },
+        ],
+        'next': null,
+      };
+    }
+    // The whole-Swarm reads are gone (section 4.11): nothing may still ask.
+    throw superTabUpdateRequired;
   }
 
   /// The Lead tags the reader in [conversationId], as the backend records it.
@@ -357,6 +665,12 @@ class ConversationServer {
     });
     state['mentionsWaiting'] = ((state['mentionsWaiting'] as int?) ?? 0) + 1;
     revision++;
+    // The Lead's message carrying the tag moves its conversation.
+    final group = (state['conversations'] as List)
+        .cast<Map<String, dynamic>>()
+        .where((g) => g['id'] == conversationId)
+        .firstOrNull;
+    group?['lastMessageSequence'] = revision;
   }
 
   SuperTabController controller({

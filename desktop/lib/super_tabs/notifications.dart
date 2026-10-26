@@ -69,7 +69,7 @@ class SuperTabMentions extends ChangeNotifier {
   List<SuperTabMention> waiting = const [], earlier = const [];
   String? error;
   int? _count;
-  int _revision = -1;
+  int _lastChangedAt = -1;
   // Null until the first read: tags waiting then are not news.
   Set<String>? _seen;
   Future<void>? _loading;
@@ -93,8 +93,8 @@ class SuperTabMentions extends ChangeNotifier {
     // A tag that expires moves the count without changing the Swarm.
     final count = snapshot.mentionsWaiting;
     final moved = count != _count;
-    if (!moved && controller.revision == _revision) return;
-    _revision = controller.revision;
+    if (!moved && controller.lastChangedAt == _lastChangedAt) return;
+    _lastChangedAt = controller.lastChangedAt;
     _count = count;
     if (count == 0 && (!moved || _seen == null)) {
       _seen ??= {};

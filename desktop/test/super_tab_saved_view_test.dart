@@ -199,7 +199,7 @@ void _controllerTests() {
       // The state and the latest page: receipts and new messages in one read.
       expect(reads.paths, [
         '/api/super-tabs/tab/conversations/lead/messages',
-        '/api/super-tabs/tab',
+        '/api/super-tabs/tab/parts',
       ]);
       server.holdReads!.complete();
       server.holdReads = null;
@@ -717,7 +717,10 @@ void _reviewTests() {
         final client =
             SuperTabClient(
                 transport: (method, path, {body}) {
-                  if (path == '/api/super-tabs/tab') reads.add(path);
+                  if (path == '/api/super-tabs/tab/parts' ||
+                      path.startsWith('/api/super-tabs/tab/changes?')) {
+                    reads.add(path);
+                  }
                   return transport.call(method, path, body: body);
                 },
                 storage: store,
