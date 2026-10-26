@@ -167,13 +167,15 @@ export class SuperTabStore {
   // of theirs. It may host only its own machine and speak only as the agents running there.
 
   /** The one machine a team session hosts for; null for any other sign-in. One with no machine to act for does nothing. */
-  private async teamHost(tx: Transaction, user: AuthUser): Promise<string | null> {
+  /** Shared with the read API (superTabs/read, design section 7.2). */
+  async teamHost(tx: Transaction, user: AuthUser): Promise<string | null> {
     if (!isTeamSession(user)) return null
     return (await teamMachine(user, tx))?.machineId ?? fail(TEAM_SESSION_LIMITED, TEAM_SESSION_MESSAGE, 403)
   }
 
   /** A host route of a team session must name its own machine. */
-  private async hostFor(tx: Transaction, user: AuthUser, machineId: string): Promise<void> {
+  /** Shared with the read API (superTabs/read, design section 7.2). */
+  async hostFor(tx: Transaction, user: AuthUser, machineId: string): Promise<void> {
     const team = await this.teamHost(tx, user)
     if (team !== null && team !== machineId) fail(TEAM_SESSION_LIMITED, TEAM_SESSION_MESSAGE, 403)
   }
@@ -218,7 +220,8 @@ export class SuperTabStore {
 
   /** The tab's contributed machines whose account row is signed in as a Harness Team account (`Machine.sessionKind`,
    *  lib/teamSession.ts): one of the two signs routing reads that a machine is a Team machine (machines.ts teamWorkCheck). */
-  private async teamMachines(tx: Transaction, state: SuperTabState): Promise<string[]> {
+  /** Shared with the read API (superTabs/read, design section 7.2). */
+  async teamMachines(tx: Transaction, state: SuperTabState): Promise<string[]> {
     const ids = (state.machines ?? []).map(m => m.machineId)
     if (!ids.length) return []
     const rows = await tx.machine.findMany({ where: { machineId: { in: ids }, autonomousEnv: state.environment, sessionKind: 'team', ...machineAlive },
@@ -263,12 +266,14 @@ export class SuperTabStore {
     })
   }
 
-  private async row(tx: Transaction, user: AuthUser, tabId: string) {
+  /** Shared with the read API (superTabs/read, design section 7.2). */
+  async row(tx: Transaction, user: AuthUser, tabId: string) {
     return await tx.superTab.findFirst({ where: { id: tabId, autonomousEnv: user.autonomousEnv } }) ??
       fail('NOT_FOUND', 'This Super Tab is unavailable.', 404)
   }
 
-  private async actor(tx: Transaction, user: AuthUser, state: SuperTabState, agentId?: string): Promise<Actor> {
+  /** Shared with the read API (superTabs/read, design section 7.2). */
+  async actor(tx: Transaction, user: AuthUser, state: SuperTabState, agentId?: string): Promise<Actor> {
     const team = await this.teamHost(tx, user)
     if (!agentId) {
       // A team session never speaks or reads as the person.
@@ -283,7 +288,8 @@ export class SuperTabStore {
     return { kind: 'agent', agentId, machineOwnerId: user.sub }
   }
 
-  private async agentGrant(tx: Transaction, state: SuperTabState, target: Agent): Promise<void> {
+  /** Shared with the read API (superTabs/read, design section 7.2). */
+  async agentGrant(tx: Transaction, state: SuperTabState, target: Agent): Promise<void> {
     const machine = await tx.machine.findFirst({ where: { machineId: target.machineId, userId: target.machineOwnerId,
       autonomousEnv: state.environment, ...machineAlive } })
     if (!machine || !machineBillingAllowsDataPlane(machine)) fail('HOST_UNAVAILABLE', 'This execution host is unavailable.', 403)

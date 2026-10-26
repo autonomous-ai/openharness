@@ -2987,6 +2987,8 @@ describe('Swarm parts storage', () => {
     const named = await db.$transaction(tx => parts.loadActive(tx, tabId, { groupIds: ['quiet'], startIds: ['done'] }))
     expect(named.groups.find(p => p.key === 'quiet')).toMatchObject({ dormant: true })
     expect(named.starts.map(p => p.key).sort()).toEqual(['done', 'running'])
+    const firstLoad = await db.$transaction(tx => parts.loadActive(tx, tabId, { includeRecentStarts: true }))
+    expect(firstLoad.starts.map(p => p.key).sort()).toEqual(['done', 'running'])
     expect((await db.$transaction(tx => parts.loadActive(tx, tabId, { agentIds: ['a1'] }))).groups.map(p => p.key)).toContain('quiet')
     expect((await db.$transaction(tx => parts.loadDormant(tx, tabId, {}))).map(p => p.key)).toEqual(['quiet'])
     expect((await db.$transaction(tx => parts.loadAll(tx, tabId))).groups.map(p => p.key)).toContain('quiet')
