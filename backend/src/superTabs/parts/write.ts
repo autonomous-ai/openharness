@@ -20,10 +20,13 @@ export interface HeadColumns { groupCounter: number; visibilityEpoch: number; se
 
 export type PartWrite =
   /** `first`: a new key's version, the Swarm's sequence base + 1 (design section 2.1). */
-  | { op: 'insert'; kind: PartKind; key: string; data: unknown; ordinal: number; first?: number; head?: HeadColumns }
-  | { op: 'update'; kind: PartKind; key: string; seen: number; data: unknown; head?: HeadColumns }
-  | { op: 'remove'; kind: PartKind; key: string; seen: number; data: unknown }
+  | { op: 'insert'; kind: PartKind; key: string; data: unknown; ordinal: number; first?: number; head?: HeadColumns; host?: HostColumns }
+  | { op: 'update'; kind: PartKind; key: string; seen: number; data: unknown; head?: HeadColumns; host?: HostColumns }
+  | { op: 'remove'; kind: PartKind; key: string; seen: number; data: unknown; host?: HostColumns }
   | { op: 'touch'; kind: PartKind; key: string; seen: number }
+
+/** What a write tells host reads (read/host.ts), set by the commit that knows the part's data before and after. */
+export interface HostColumns { hostChangedAt?: Date; hostMachineIds?: string[] }
 
 /** The part model behind each kind. They share their columns (schema.prisma, Swarm state by parts). */
 export function delegate(tx: Transaction, kind: PartKind) {
@@ -89,7 +92,7 @@ async function keepFinishedAt(tx: Transaction, id: string, fields: Record<string
 export async function guardedWrite(tx: Transaction, tabId: string, write: PartWrite, stamp: number): Promise<number> {
   const model = delegate(tx, write.kind), id = partId(tabId, write.key)
   if (write.op === 'insert') {
-    let fields = { ...extracted(write.kind, write.data, stamp), ...write.head }
+    let fields = { ...extracted(write.kind, write.data, stamp), ...write.head, ...write.host }
     // A part added again under the same key continues from its tombstone's version (spec ruling 6).
     const prior = await model.findUnique({ where: { id } })
     if (prior && !prior.deleted) throw new PartConflict(write.kind, write.key)
@@ -106,9 +109,9 @@ export async function guardedWrite(tx: Transaction, tabId: string, write: PartWr
     return version
   }
   const data = write.op === 'touch' ? {}
-    : write.op === 'remove' ? { changedAt: new Date(stamp), deleted: true, purgeAt: new Date(stamp + RETENTION_MS), data: json(write.data) }
+    : write.op === 'remove' ? { changedAt: new Date(stamp), deleted: true, purgeAt: new Date(stamp + RETENTION_MS), data: json(write.data), ...write.host }
     : { changedAt: new Date(stamp), data: json(write.data), ...(write.kind === 'start'
-      ? await keepFinishedAt(tx, id, extracted(write.kind, write.data, stamp)) : extracted(write.kind, write.data, stamp)), ...write.head }
+      ? await keepFinishedAt(tx, id, extracted(write.kind, write.data, stamp)) : extracted(write.kind, write.data, stamp)), ...write.head, ...write.host }
   const updated = await model.updateMany({ where: { id, version: write.seen, deleted: false }, data: { version: write.seen + 1, ...data } })
   if (!updated.count) throw new PartConflict(write.kind, write.key)
   return write.seen + 1

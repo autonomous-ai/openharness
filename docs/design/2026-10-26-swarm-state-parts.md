@@ -1173,3 +1173,13 @@ skill texts reference `throughRevision` only through the wake-up text, which cha
   - The old state is kept unchanged and read-only until the owner says it can go, which is the spec's intent.
   - *Cost if wrong:* a reader of the raw `state` field outside the backend would see the stub. None exists in this
     repository.
+- **R15 Host reads need what a write changed, not only its new data** (group 3 review round 1; Lead's ruling).
+  - 4.10 woke a host for a group whose new `agentIds` include one of its agents. An agent removed from its last group
+    then never woke its host, which kept it `active` (and out of automatic cleanup) until the 60 s full read.
+  - Each group write therefore records the machines its agents and its work were on, before and after
+    (`SwarmGroup.hostMachineIds`, set by `parts/commit.ts`), and the host form wakes on that.
+- **R16 A machine's own reading wakes no host** (group 5's end-to-end run; Lead's ruling).
+  - Machines report every 15 s. With the 30 s overlap every host tick resent its Swarm in full.
+  - A host's rows carry only its own reading, which it sent. So the host form wakes on `SwarmMachine.hostChangedAt`,
+    which `parts/commit.ts` moves only when a machine part's settings or ledger change, never when only its reading
+    does. Desktop and web feeds still get readings by `changedAt`.

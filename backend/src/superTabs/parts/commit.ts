@@ -1,8 +1,8 @@
 import type { Prisma } from '@prisma/client'
 import { agentOnly, conversation, fail, isLeads, type MessageDraft, type SuperTabState } from '../model.js'
 import { split } from './shape.js'
-import { guardedWrite, PartConflict, type HeadColumns, type PartWrite } from './write.js'
-import type { Part, PartKind, SwarmParts } from './types.js'
+import { guardedWrite, PartConflict, type HeadColumns, type HostColumns, type PartWrite } from './write.js'
+import type { GroupData, MachineData, Part, PartKind, SwarmParts } from './types.js'
 import { RELEASED_CAP } from './types.js'
 
 type Transaction = Prisma.TransactionClient
@@ -90,6 +90,25 @@ export function capReleased(state: SuperTabState): void {
  * counters or the visibility epoch move, and the index row when a person, invitation or machine reference was added or
  * removed. Every write is guarded by the version it was read at.
  */
+/** A machine part without its machine's own reading: what that machine's host needs to hear about. */
+const withoutReading = (data: unknown) => {
+  const machine = data as MachineData | undefined
+  return machine && { ...machine, contribution: machine.contribution && { ...machine.contribution, observation: undefined } }
+}
+
+/**
+ * What a part write tells host reads (read/host.ts, review round 1), from the part's data before and after (undefined for
+ * an insert or a removal): a machine's settings or ledger changed, not only its own reading; and which machines' hosts a
+ * group's write concerned, by its agents and its work before and after, so an agent leaving its last group wakes its host.
+ */
+export function hostMarker(kind: PartKind, before: unknown, after: unknown, machineOf: ReadonlyMap<string, string>, stamp: number): { host?: HostColumns } {
+  if (kind === 'machine') return canonical(withoutReading(before)) === canonical(withoutReading(after)) ? {} : { host: { hostChangedAt: new Date(stamp) } }
+  if (kind !== 'group') return {}
+  const machines = ([before, after] as Array<GroupData | undefined>).flatMap(g => g
+    ? [...g.agentIds.flatMap(id => machineOf.get(id) ?? []), ...(g.assignment ? [g.assignment.execution.machineId] : [])] : [])
+  return { host: { hostMachineIds: [...new Set(machines)] } }
+}
+
 export async function commitParts(tx: Transaction, loaded: { parts: SwarmParts; state: SuperTabState; row: { id: string; revision: number } },
   next: SuperTabState, opts: { stamp: number; touches?: Touch[] }): Promise<{ written: Written[]; versions: Map<string, number> }> {
   const { parts } = loaded, { stamp } = opts
@@ -97,6 +116,9 @@ export async function commitParts(tx: Transaction, loaded: { parts: SwarmParts; 
   const after = split(next, { tabId: parts.tabId, version: 0, now: stamp, messageBase: parts.sequenceBase })
   const writes: PartWrite[] = []
   const first = parts.sequenceBase + 1
+  // An agent removed by this write is still in the loaded state, so its machine is known for the host marker.
+  const machineOf = new Map([...loaded.state.agents, ...next.agents].map(a => [a.id, a.machineId]))
+  const host = (kind: PartKind, before: unknown, after: unknown) => hostMarker(kind, before, after, machineOf, stamp)
   let referencesChanged = false
   for (const kind of Object.keys(LISTS) as ListKind[]) {
     const before = new Map(parts[LISTS[kind]].filter(p => !p.deleted).map(p => [p.key, p as Part]))
@@ -105,15 +127,15 @@ export async function commitParts(tx: Transaction, loaded: { parts: SwarmParts; 
     for (const [key, part] of now) {
       const prior = before.get(key)
       if (!prior) {
-        writes.push({ op: 'insert', kind, key, data: part.data, ordinal: stamp + added++ / 1000, first })
+        writes.push({ op: 'insert', kind, key, data: part.data, ordinal: stamp + added++ / 1000, first, ...host(kind, undefined, part.data) })
         if (kind !== 'group' && kind !== 'start' && kind !== 'progress') referencesChanged = true
       } else if (canonical(prior.data) !== canonical(part.data)) {
-        writes.push({ op: 'update', kind, key, seen: prior.version, data: part.data })
+        writes.push({ op: 'update', kind, key, seen: prior.version, data: part.data, ...host(kind, prior.data, part.data) })
       }
     }
     for (const [key, prior] of before) {
       if (now.has(key)) continue
-      writes.push({ op: 'remove', kind, key, seen: prior.version, data: prior.data })
+      writes.push({ op: 'remove', kind, key, seen: prior.version, data: prior.data, ...host(kind, prior.data, undefined) })
       if (kind !== 'group' && kind !== 'start' && kind !== 'progress') referencesChanged = true
     }
   }

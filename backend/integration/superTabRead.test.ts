@@ -13,7 +13,6 @@ import { superTabRoutes } from '../src/routes/superTabs.js'
 import { errorHandler } from '../src/middlewares/errorHandler.js'
 import * as parts from '../src/superTabs/parts/index.js'
 import { guardedWrite } from '../src/superTabs/parts/write.js'
-import type { MachineData } from '../src/superTabs/parts/index.js'
 import { migrateSwarm } from '../src/superTabs/migration/migrate.js'
 import { SwarmReads } from '../src/superTabs/read/service.js'
 import { HostReads } from '../src/superTabs/read/host.js'
@@ -260,6 +259,9 @@ describe('host form (design 4.10)', () => {
     return scene((s, ids) => {
     s.contribute(machine, 'swarm')
     const idle = s.add('idle-harness', ids.done, false, ownerActor, machine, owner.sub)
+    // An agent whose only group has nothing else of this machine in it (no Lead, no running work here).
+    const lonerGroup = s.group('Loner home', ids.secret)
+    const loner = s.add('loner-harness', lonerGroup, false, ownerActor, machine, owner.sub)
     // In the project without a Lead, so no agent of this machine is in it.
     const archived = s.group('Archived, no agent here', ids.secret)
     s.run({ type: 'conversation.archive', conversationId: archived, archived: true })
@@ -272,7 +274,7 @@ describe('host form (design 4.10)', () => {
         request: { conversationId: conversationId!, machineId: machine, engine: 'codex', name: 'Builder', cwd: '/repo', worktree: false,
           requirements: { memoryBytes: 0, diskBytes: 0, maxCpuPercent: 100, tools: [], devices: [], quotaRequired: false } } }))
     })
-    return { idle }
+    return { idle, loner, lonerGroup }
   }, machine)
   }
   const host = async (cursor?: string, full = false, as: AuthUser = owner) =>
@@ -288,7 +290,7 @@ describe('host form (design 4.10)', () => {
     const tab = body.data.tabs.find((t: { tabId: string }) => t.tabId === s.tabId)
     expect(tab.lastChangedAt).toBe(MIGRATED)
     const rows = new Map<string, Row>(tab.roster.filter((r: Row) => r.agent).map((r: Row) => [r.agent!.id, r]))
-    expect([...rows.keys()].sort()).toEqual([s.lead, s.worker, s.more.idle].sort())
+    expect([...rows.keys()].sort()).toEqual([s.lead, s.worker, s.more.idle, s.more.loner].sort())
     expect(rows.get(s.lead)).toMatchObject({ lead: true, active: true, leadsConversationId: s.leads, lastChangedAt: MIGRATED,
       observers: [{ email: peer.email, userId: peer.sub }, { email: outsider.email, userId: outsider.sub }] })
     // Its only group is finished and dormant, yet not archived: the host must not hand it to automatic cleanup.
@@ -301,58 +303,67 @@ describe('host form (design 4.10)', () => {
 
   it('wakes the host only for changes that concern its machine', async () => {
     const s = await hostScene()
-    clock = NOW
-    const cursor = (await host(undefined, true)).body.data.cursor
-    clock = NOW + 1_000
+    const { cursor } = await fullRead(s.tabId)
+    clock = Date.now()
     expect((await host(cursor)).body.data).toMatchObject({ full: false, tabs: [], removedTabIds: [] })
-    await writeGroup(s.tabId, s.secretGroup, NOW + 1_000, g => { g.title = 'Not this machine' })
-    clock = NOW + 2_000
+    await command(s.tabId, { type: 'conversation.rename', conversationId: s.secretGroup, title: 'Not this machine' })
+    clock = Date.now()
     expect((await host(cursor)).body.data.tabs).toEqual([])
-    await writeGroup(s.tabId, s.web, NOW + 2_000, g => { g.title = 'Its worker\'s group' })
-    clock = NOW + 3_000
+    await command(s.tabId, { type: 'conversation.rename', conversationId: s.web, title: 'Its worker\'s group' })
+    clock = Date.now()
     expect((await host(cursor)).body.data.tabs.map((t: { tabId: string }) => t.tabId)).toEqual([s.tabId])
   })
 
-  /** A write of this machine's part as the store makes it: a reading stamps its time at the write; a command does not. */
-  async function writeMachine(tabId: string, at: number, change: (contribution: NonNullable<MachineData['contribution']>) => void) {
-    await db.$transaction(async tx => {
-      const stored = (await parts.loadActive(tx, tabId)).machines.find(m => m.key === machine)!
-      const data = structuredClone(stored.data!)
-      change(data.contribution!)
-      await guardedWrite(tx, tabId, { op: 'update', kind: 'machine', key: machine, seen: stored.version, data }, at)
-    })
+  /** The machine's reading, through the store as its host sends it every 15 s. */
+  async function reading(tabId: string, generation: string) {
+    await new SuperTabStore(db).observeMachine(owner, tabId, machine, { generation, resources: { cpuPercent: 5, memoryTotalBytes: null,
+      memoryUsedBytes: null, diskFreeBytes: null, diskTotalBytes: null, projectDiskFreeBytes: null, deviceType: null, chip: null, os: null,
+      gpuPercent: null }, tools: {}, quotas: [], runningHarnessIds: ['lead-harness', 'worker-harness', 'idle-harness', 'loner-harness'],
+      stoppedHarnessIds: [] })
   }
-  const reading = (at: number) => (contribution: NonNullable<MachineData['contribution']>) => {
-    contribution.observation = { generation: contribution.generation, receivedAt: at, resources: {} as never, tools: {}, quotas: [],
-      runningHarnessIds: [], stoppedHarnessIds: [] }
+  const command = (tabId: string, body: Record<string, unknown>) => new SuperTabStore(db).execute(owner, tabId, { operationId: randomUUID(), command: body as never })
+  /** A full read on the real clock (the store stamps with it): its cursor and the machine's contribution generation. */
+  async function fullRead(tabId: string) {
+    clock = Date.now()
+    const data = (await host(undefined, true)).body.data
+    return { cursor: data.cursor as string, generation: data.tabs.find((t: { tabId: string }) => t.tabId === tabId).pool.machine.generation as string }
+  }
+  const poolOf = async (tabId: string, cursor: string) => {
+    clock = Date.now()
+    return (await host(cursor)).body.data.tabs.find((t: { tabId: string }) => t.tabId === tabId)?.pool as { machine: { paused: boolean } } | undefined
   }
 
-  it('sleeps through the machine\'s own readings, every 15 s, and wakes when the machine itself changes', async () => {
+  it('wakes the host for a pause even when a reading lands after it, before the host polls', async () => {
     const s = await hostScene()
-    clock = NOW
-    const cursor = (await host(undefined, true)).body.data.cursor
-    // The host's own report, stamped as the store stamps it (its reading time is the write's own, give or take ms).
-    await writeMachine(s.tabId, NOW + 1_000, reading(NOW + 998))
-    clock = NOW + 2_000
-    expect((await host(cursor)).body.data).toMatchObject({ full: false, tabs: [], removedTabIds: [] })
-    // Its owner pauses it a few seconds later: that is news for its host.
-    await writeMachine(s.tabId, NOW + 5_000, contribution => { contribution.paused = true })
-    clock = NOW + 6_000
-    expect((await host(cursor)).body.data.tabs.map((t: { tabId: string }) => t.tabId)).toEqual([s.tabId])
+    const { cursor, generation } = await fullRead(s.tabId)
+    await command(s.tabId, { type: 'machine.pause', machineId: machine, paused: true })
+    await reading(s.tabId, generation)
+    expect((await poolOf(s.tabId, cursor))?.machine.paused).toBe(true)
+  })
+
+  it('wakes the host for a pause made right after a reading', async () => {
+    const s = await hostScene()
+    const { cursor, generation } = await fullRead(s.tabId)
+    await reading(s.tabId, generation)
+    await command(s.tabId, { type: 'machine.pause', machineId: machine, paused: true })
+    expect((await poolOf(s.tabId, cursor))?.machine.paused).toBe(true)
+  })
+
+  it('wakes an agent\'s host when the agent leaves its last group, so the host sees it inactive', async () => {
+    const s = await hostScene()
+    const { cursor } = await fullRead(s.tabId)
+    await command(s.tabId, { type: 'conversation.agent', conversationId: s.more.lonerGroup, agentId: s.more.loner, present: false, lead: false })
+    clock = Date.now()
+    const tab = (await host(cursor)).body.data.tabs.find((t: { tabId: string }) => t.tabId === s.tabId)
+    expect(tab?.roster.find((r: { agent?: { id: string } }) => r.agent?.id === s.more.loner)).toMatchObject({ active: false })
   })
 
   it('sleeps through a real reading sent through the store', async () => {
     const s = await hostScene()
-    const store = new SuperTabStore(db)
-    // The store stamps with the real clock; this host keeps to it.
+    const { cursor, generation } = await fullRead(s.tabId)
+    await reading(s.tabId, generation)
     clock = Date.now()
-    const full = (await host(undefined, true)).body.data
-    const generation = full.tabs.find((t: { tabId: string }) => t.tabId === s.tabId).pool.machine.generation as string
-    await store.observeMachine(owner, s.tabId, machine, { generation, resources: { cpuPercent: 5, memoryTotalBytes: null, memoryUsedBytes: null,
-      diskFreeBytes: null, diskTotalBytes: null, projectDiskFreeBytes: null, deviceType: null, chip: null, os: null, gpuPercent: null },
-      tools: {}, quotas: [], runningHarnessIds: ['lead-harness', 'worker-harness', 'idle-harness'], stoppedHarnessIds: [] })
-    clock = Date.now()
-    expect((await host(full.cursor)).body.data).toMatchObject({ tabs: [], removedTabIds: [] })
+    expect((await host(cursor)).body.data).toMatchObject({ tabs: [], removedTabIds: [] })
   })
 
   it('names a Swarm that no longer lists the machine', async () => {
@@ -362,7 +373,9 @@ describe('host form (design 4.10)', () => {
     await db.superTab.update({ where: { id: s.tabId }, data: { machineIds: [], cleanupMachineIds: [] } })
     await db.$transaction(async tx => {
       const stored = (await parts.loadActive(tx, s.tabId)).machines.find(m => m.key === machine)!
-      await guardedWrite(tx, s.tabId, { op: 'update', kind: 'machine', key: machine, seen: stored.version, data: { ...stored.data!, contribution: null } }, NOW + 1_000)
+      // As the commit writes it: the contribution ended, so the settings marker moves (parts/commit.ts).
+      await guardedWrite(tx, s.tabId, { op: 'update', kind: 'machine', key: machine, seen: stored.version, data: { ...stored.data!, contribution: null },
+        host: { hostChangedAt: new Date(NOW + 1_000) } }, NOW + 1_000)
     })
     clock = NOW + 2_000
     expect((await host(cursor)).body.data).toMatchObject({ tabs: [], removedTabIds: [s.tabId] })
