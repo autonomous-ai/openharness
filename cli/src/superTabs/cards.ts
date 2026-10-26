@@ -2,7 +2,8 @@
  * The Swarms a Harness Pro shows as cards on Home: for each Swarm (Super Tab) this account is in, one Lead per project with
  * what it is doing now, plus the last thing a Lead said, for the Pro's recap. Read as the person (never as an agent) from
  * the same backend routes the desktop uses, every 5 s while a capable Pro is attached (`want`), and a tab's detail is read
- * only when its `revision` moved. The service hands the result to the core whole (`onCards`); the core owns the wire.
+ * only when its `lastChangedAt` moved, by what changed since the last read (superTabs/swarmReads.ts). The service hands the
+ * result to the core whole (`onCards`); the core owns the wire.
  *
  * Status of a project's Lead, most pressing first: `ask` (an assignment of the project needs a person, `needs_human`),
  * `stuck` (`blocked`), `work` (an agent of the project, the Lead or a worker, runs here and is in a turn, as the app marks each
@@ -14,6 +15,7 @@ import { randomUUID } from 'node:crypto'
 import type { CoreApi } from '../core/api.js'
 import { backend, SuperTabHostError } from './host.js'
 import { identifier, object } from './wire.js'
+import { SwarmReads, type SwarmRead } from './swarmReads.js'
 
 type Json = Record<string, unknown>
 export type LeadState = 'ask' | 'stuck' | 'work' | 'done'
@@ -106,15 +108,11 @@ export function lastLeadMessage(messages: Json[], leadId: string): { text: strin
   return best && { text: best.text, at: best.at }
 }
 
-interface TabCache { revision: number; state: Json }
+interface TabCache { lastChangedAt: number; state: Json }
 interface Cached { sequence: number; recap: LeadRecap }
 /** A Lead some Harness Pro has the recap of open, and the sessions (one per Pro) that have it open. */
 interface Opened { tabId: string; leadId: string; sequence: number | null; sessions: Set<string> }
-/** What GET /api/super-tabs/:id answers: `{ revision, state }`. A reply without a numeric revision is never reused (-1). */
-const tabOf = (answer: unknown): TabCache => {
-  const reply = object(answer)
-  return { revision: typeof reply.revision === 'number' ? reply.revision : -1, state: object(reply.state) }
-}
+const tabOf = (read: SwarmRead): TabCache => ({ lastChangedAt: read.lastChangedAt, state: read.state })
 
 export class SwarmCards {
   onCards?: (cards: SwarmCard[]) => void
@@ -135,10 +133,12 @@ export class SwarmCards {
   private opened = new Map<string, Opened>()
   private openBy = new Map<string, string>()
   private recapsRunning = 0
+  private readonly reads: SwarmReads
 
-  constructor(private readonly core: CoreApi, private readonly machineId: string, options: { now?: () => number; intervalMs?: number } = {}) {
+  constructor(private readonly core: CoreApi, private readonly machineId: string, options: { now?: () => number; intervalMs?: number; reads?: SwarmReads } = {}) {
     this.now = options.now ?? Date.now
     this.intervalMs = options.intervalMs ?? 5000
+    this.reads = options.reads ?? new SwarmReads(core)
   }
 
   /** Poll while a capable Pro is attached; none otherwise (no request at all). `include`: the Swarms the desktop has tabs for, read first. */
@@ -190,7 +190,7 @@ export class SwarmCards {
     const rows: Json[] = []
     let after = ''
     for (let page = 0; page < MAX_LIST_PAGES; page++) {
-      const data = object(await backend(this.core, 'GET', `/api/super-tabs${after ? `?after=${encodeURIComponent(after)}` : ''}`))
+      const data = object(await backend(this.core, 'GET', `/api/super-tabs/list${after ? `?after=${encodeURIComponent(after)}` : ''}`))
       rows.push(...list(data.tabs).filter(r => cardId(r.id)))
       if (!identifier(data.next)) break
       if (rows.length >= MAX_CARDS && this.include.every(id => rows.some(r => r.id === id))) break
@@ -205,9 +205,9 @@ export class SwarmCards {
     const known = new Map<string, TabCache>()
     await Promise.all(rows.map(async row => {
       const id = row.id as string, held = this.tabs.get(id)
-      // A row without a numeric revision cannot say it is unchanged: that tab is always read again.
-      if (held && typeof row.revision === 'number' && held.revision === row.revision) { known.set(id, held); return }
-      try { known.set(id, tabOf(await backend(this.core, 'GET', `/api/super-tabs/${id}`))) } catch (error) {
+      // A row without a numeric change time cannot say it is unchanged: that tab is always read again.
+      if (held && typeof row.lastChangedAt === 'number' && held.lastChangedAt === row.lastChangedAt) { known.set(id, held); return }
+      try { known.set(id, tabOf(await this.reads.read(id))) } catch (error) {
         // Lost access drops only this card; any other failure keeps what was read before.
         const status = error instanceof SuperTabHostError ? error.status : 0
         if (held && status !== 401 && status !== 403) known.set(id, held)
@@ -282,7 +282,7 @@ export class SwarmCards {
     if (!found) {
       if (this.recapsRunning >= MAX_RECAPS_IN_FLIGHT) throw new Error('too many recap reads at once')
       this.recapsRunning++
-      try { this.tabs.set(tabId, tabOf(await backend(this.core, 'GET', `/api/super-tabs/${tabId}`))) } finally { this.recapsRunning-- }
+      try { this.tabs.set(tabId, tabOf(await this.reads.read(tabId))) } finally { this.recapsRunning-- }
       found = this.leadConversation(tabId, leadId)
     }
     if (!found) return { tabId, leadId, text: '', at: 0, none: true }
@@ -293,14 +293,12 @@ export class SwarmCards {
     this.recapsRunning++
     try {
       const path = `/api/super-tabs/${tabId}/conversations/${found.id}/messages`
-      let page = list(object(await backend(this.core, 'GET', path)).messages)
-      let said = lastLeadMessage(page, leadId)
-      if (!said && page.length) {
-        const oldest = Math.min(...page.map(m => typeof m.sequence === 'number' ? m.sequence : Infinity))
-        if (Number.isFinite(oldest)) {
-          page = list(object(await backend(this.core, 'GET', `${path}?before=${oldest}`)).messages)
-          said = lastLeadMessage(page, leadId)
-        }
+      const newest = object(await backend(this.core, 'GET', path))
+      let said = lastLeadMessage(list(newest.messages), leadId)
+      // The page before, from the page's own (sequence, id) cursor: a page edge inside equal sequences skips nothing (design 4.6).
+      const before = object(newest.next)
+      if (!said && typeof before.sequence === 'number' && identifier(before.id)) {
+        said = lastLeadMessage(list(object(await backend(this.core, 'GET', `${path}?before=${before.sequence}&beforeId=${before.id}`)).messages), leadId)
       }
       const recap: LeadRecap = said ? { tabId, leadId, text: cut(said.text, RECAP_BYTES), at: said.at, none: false } : { tabId, leadId, text: '', at: 0, none: true }
       this.recaps.set(key, { sequence: found.sequence, recap })

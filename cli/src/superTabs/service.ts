@@ -196,7 +196,7 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
     const machine = core.daemon.machineId()
     if (cardsMachine !== machine) { swarmCards?.want(false); swarmCards = null; cardsMachine = machine }
     if (!swarmCards) {
-      swarmCards = (options.cards ?? ((api, id) => new SwarmCards(api, id)))(core, machine)
+      swarmCards = (options.cards ?? ((api, id) => new SwarmCards(api, id, { reads: sources().reads })))(core, machine)
       swarmCards.onCards = items => core.superTabs?.cards(items)
       swarmCards.onRecap = recap => core.superTabs?.cardRecap(recap)
     }

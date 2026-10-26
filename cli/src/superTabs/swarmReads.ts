@@ -13,8 +13,9 @@ type Json = Record<string, unknown>
 /** A Swarm as `GET /api/super-tabs/:id` gave it: its state in the old shape, `lastChangedAt` in place of `revision`. */
 export interface SwarmRead { state: Json; lastChangedAt: number; githubApp: boolean }
 
-/** About one per running agent and Swarm on a machine; one of the largest Swarms holds about a megabyte. */
-const MAX_SWARMS = 32
+/** One per running agent and Swarm on a machine, plus up to 16 the Pro cards read as the person; one of the largest Swarms
+ *  holds about a megabyte. */
+const MAX_SWARMS = 48
 
 export class SwarmReads {
   private readonly held = new Map<string, PartsStore>()
