@@ -8,7 +8,7 @@ import { benchApp, caller, type Call } from './http.js'
 const base = '/api/super-tabs'
 
 /** Today's store: one `SuperTab` document per Swarm, read in full by every poll (store.ts, routes/superTabs.ts). */
-export async function legacyDriver(db: PrismaClient, users: () => readonly AuthUser[]): Promise<SwarmDriver & { close(): Promise<void> }> {
+export async function legacyDriver(db: PrismaClient, users: () => readonly AuthUser[]): Promise<SwarmDriver> {
   const store = new SuperTabStore(db)
   // No GitHub App: the bench never reaches GitHub.
   const app = await benchApp(users, async scope => superTabRoutes(scope, { store, github: null }))

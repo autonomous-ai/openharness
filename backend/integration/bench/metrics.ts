@@ -30,6 +30,9 @@ export interface Row {
   bytes: { mean: number; p50: number; p95: number; total: number } | null
 }
 
+/** A writer's row, with how many calls of each operation it made. */
+export type WriterRow = Row & { byOp: Record<string, number> }
+
 /** Nearest-rank percentile; null when there are no values. */
 export function percentile(values: readonly number[], p: number): number | null {
   if (!values.length) return null
@@ -67,5 +70,11 @@ export class Recorder {
   private readonly samples: Sample[] = []
   add(sample: Sample): void { this.samples.push(sample) }
   byOp(): Row[] { return grouped(this.samples, s => s.op) }
-  byWriter(): Row[] { return grouped(this.samples, s => s.writer) }
+  byWriter(): WriterRow[] {
+    return grouped(this.samples, s => s.writer).map(row => {
+      const byOp: Record<string, number> = {}
+      for (const s of this.samples) if (s.writer === row.key) byOp[s.op] = (byOp[s.op] ?? 0) + 1
+      return { ...row, byOp }
+    })
+  }
 }

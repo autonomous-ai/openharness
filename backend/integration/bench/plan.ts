@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import { activeCount, WORKER_ACTIONS, type BenchConfig, type WorkerAction } from './config.js'
 import { random, schedule, type Random } from './random.js'
 
@@ -60,4 +61,9 @@ export function plan(config: BenchConfig): Plan {
       polls: steady(random(seed, `host-${index}`), every.hostTickMs, durationMs) })),
   ]
   return { doneGroups, workers, lead, machines, readers }
+}
+
+/** A fingerprint of the work a plan holds: equal fingerprints in two reports mean both runs were asked to do the same. */
+export function planDigest(p: Plan): string {
+  return createHash('sha256').update(JSON.stringify(p)).digest('hex')
 }

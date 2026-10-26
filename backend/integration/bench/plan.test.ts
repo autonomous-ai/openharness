@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { DEFAULT_CONFIG, type BenchConfig } from './config.js'
-import { plan } from './plan.js'
+import { plan, planDigest } from './plan.js'
 
 const small: BenchConfig = { ...DEFAULT_CONFIG, groups: 10, doneShare: 0.7, machines: 3, durationMs: 20_000 }
 
@@ -8,6 +8,12 @@ describe('plan', () => {
   it('is the same for the same seed and differs for another', () => {
     expect(plan(small)).toEqual(plan(small))
     expect(plan({ ...small, seed: small.seed + 1 }).workers[0]!.actions).not.toEqual(plan(small).workers[0]!.actions)
+  })
+
+  it('fingerprints the plan, so two reports can show they ran the same work', () => {
+    expect(planDigest(plan(small))).toMatch(/^[0-9a-f]{64}$/)
+    expect(planDigest(plan(small))).toBe(planDigest(plan(small)))
+    expect(planDigest(plan({ ...small, seed: 2 }))).not.toBe(planDigest(plan(small)))
   })
 
   it('gives every active group its own worker, and shares the done groups among the workers', () => {

@@ -39,6 +39,12 @@ describe('Recorder', () => {
     expect(recorder.byOp()[0]!.bytes).toEqual({ mean: 250, p50: 200, p95: 400, total: 1000 })
   })
 
+  it('counts each writer\'s calls per operation', () => {
+    const recorder = new Recorder()
+    for (const op of ['message.send', 'message.send', 'work.check']) recorder.add({ op, writer: 'lead', ms: 1, failedAttempts: [], outcome: 'ok' })
+    expect(recorder.byWriter()[0]!.byOp).toEqual({ 'message.send': 2, 'work.check': 1 })
+  })
+
   it('keeps operations and writers in name order', () => {
     const recorder = new Recorder()
     for (const op of ['work.status', 'message.send', 'observeMachine']) recorder.add({ op, writer: `w-${op}`, ms: 1, failedAttempts: [], outcome: 'ok' })

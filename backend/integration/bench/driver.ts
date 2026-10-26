@@ -34,6 +34,7 @@ export interface SwarmDriver {
   hostReader(host: AuthUser, machineId: string): Reader
   /** What the Swarm's state costs to store: the documents that hold it and their total BSON size. */
   stateSize(tabId: string): Promise<{ bytes: number; documents: number }>
+  close(): Promise<void>
 }
 
 /** A client's view of one call. `code` is the error code (`SWARM_BUSY` and so on), null on success. */
