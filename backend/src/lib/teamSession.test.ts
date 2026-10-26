@@ -108,7 +108,8 @@ beforeEach(async () => {
   // A GitHub App that hands out a fixed token: the route's own checks are the store's (githubAssignment).
   const github = { issue: vi.fn(async () => ({ token: 'fixture-token', expiresAt: new Date(0).toISOString() })), release: vi.fn(async () => {}),
     prepare: vi.fn(async () => ({ token: 'fixture-read-token', expiresAt: new Date(0).toISOString(), repository: 'example/project' })) }
-  await app.register(superTabRoutes, { store: store.store, github: github as never })
+  // The read API by parts is recorded the same way: its classes reach the store only through it.
+  await app.register(superTabRoutes, { store: store.store, reads: store.store as never, hosts: store.store as never, github: github as never })
   await app.register(harnessShareRoutes)
   await app.register(deviceKeyRoutes)
   await app.register(machineRoutes)
@@ -135,14 +136,15 @@ const share = () => ({ superTabId: 'a'.repeat(24), machineId: 'team-mac', agentI
 describe('a team session on its own machine', () => {
   // Every route the allowlist names, as a team daemon calls it, and the store method each one reaches.
   const own: Array<[string, string, unknown, string]> = [
-    ['GET', '/api/super-tabs/hosts/team-mac', undefined, 'hostTabs'],
-    ['GET', '/api/super-tabs/hosts/team-mac/pools', undefined, 'hostPools'],
-    ['GET', '/api/super-tabs/hosts/team-mac/assignments', undefined, 'hostAssignments'],
+    ['GET', '/api/super-tabs/hosts/team-mac/changes?full=1', undefined, 'changes'],
     ['POST', '/api/super-tabs/hosts/team-mac/terminal', undefined, 'hostTerminal'],
     ['GET', '/api/super-tabs/hosts/team-mac/starts/tab-1/start-1', undefined, 'start'],
     ['POST', '/api/super-tabs/hosts/team-mac/starts/tab-1/start-1', startOp, 'execute'],
     ['POST', '/api/super-tabs/tab-1/machines/team-mac', observation, 'observeMachine'],
-    ['GET', '/api/super-tabs/tab-1?asAgentId=agent-1', undefined, 'read'],
+    ['GET', '/api/super-tabs/tab-1/parts?asAgentId=agent-1', undefined, 'firstLoad'],
+    ['GET', '/api/super-tabs/tab-1/changes?cursor=eyJ2IjoyfQ&asAgentId=agent-1', undefined, 'changes'],
+    ['GET', '/api/super-tabs/tab-1/groups?dormant=1&asAgentId=agent-1', undefined, 'dormant'],
+    ['GET', '/api/super-tabs/tab-1/groups/group-1?asAgentId=agent-1', undefined, 'group'],
     ['GET', '/api/super-tabs/tab-1/starts/start-1?asAgentId=agent-1', undefined, 'start'],
     ['GET', '/api/super-tabs/tab-1/routing-policy?asAgentId=agent-1', undefined, 'tabPolicy'],
     ['GET', '/api/super-tabs/tab-1/route-decisions?asAgentId=agent-1', undefined, 'routeDecisions'],
@@ -165,6 +167,17 @@ describe('a team session on its own machine', () => {
       expect(res.statusCode, res.body).toBe(200)
       expect(store.calls.map(c => c.method)).toEqual([reached])
       expect(store.calls[0]!.args[0]).toMatchObject({ harnessSessionKind: 'team', harnessComputerId: TEAM_COMPUTER })
+    })
+  }
+
+  // Kept on the team session's list, so an old team daemon learns to update rather than being refused.
+  for (const url of ['/api/super-tabs/hosts/team-mac', '/api/super-tabs/hosts/team-mac/pools', '/api/super-tabs/hosts/team-mac/assignments',
+    '/api/super-tabs/tab-1?asAgentId=agent-1']) {
+    it(`GET ${url.split('?')[0]} tells an old team daemon to update Harness`, async () => {
+      const res = await call('GET', url)
+      expect(res.statusCode, res.body).toBe(426)
+      expect(res.json().error?.code).toBe('UPDATE_REQUIRED')
+      expect(store.calls).toEqual([])
     })
   }
 
@@ -213,6 +226,7 @@ describe('a team session reaching past its own machine', () => {
       ['GET', '/api/super-tabs/hosts/owner-mac', undefined],
       ['GET', '/api/super-tabs/hosts/owner-mac/pools', undefined],
       ['GET', '/api/super-tabs/hosts/owner-mac/assignments', undefined],
+      ['GET', '/api/super-tabs/hosts/owner-mac/changes?full=1', undefined],
       ['POST', '/api/super-tabs/hosts/owner-mac/terminal', undefined],
       ['GET', '/api/super-tabs/hosts/owner-mac/starts/tab-1/start-1', undefined],
       ['POST', '/api/super-tabs/hosts/owner-mac/starts/tab-1/start-1', startOp],
@@ -226,7 +240,8 @@ describe('a team session reaching past its own machine', () => {
     for (const url of ['/api/super-tabs/tab-1', '/api/super-tabs/tab-1/starts/start-1', '/api/super-tabs/tab-1/routing-policy',
       '/api/super-tabs/tab-1/route-decisions', '/api/super-tabs/tab-1/route-decisions/decision-1',
       '/api/super-tabs/tab-1/conversations/lead/messages', '/api/super-tabs/tab-1/conversations/lead/attempts',
-      '/api/super-tabs/tab-1/terminal/request-1', '/api/super-tabs/tab-1?asAgentId=']) limited(await call('GET', url))
+      '/api/super-tabs/tab-1/terminal/request-1', '/api/super-tabs/tab-1?asAgentId=', '/api/super-tabs/tab-1/parts',
+      '/api/super-tabs/tab-1/changes?cursor=eyJ2IjoyfQ', '/api/super-tabs/tab-1/groups?dormant=1', '/api/super-tabs/tab-1/groups/group-1']) limited(await call('GET', url))
     limited(await call('POST', '/api/super-tabs/tab-1/attachments'))
     expect(store.calls).toEqual([])
   })
@@ -277,6 +292,7 @@ describe('a team session reaching past its own machine', () => {
   it('cannot use the person\'s Swarm routes: list, create, invite, join, sharing, rules, terminals or machine removal', async () => {
     for (const [method, url, payload] of [
       ['GET', '/api/super-tabs', undefined],
+      ['GET', '/api/super-tabs/list', undefined],
       ['POST', '/api/super-tabs', { operationId: 'op', name: 'Mine' }],
       ['GET', '/api/super-tabs/invitations', undefined],
       ['GET', '/api/super-tabs/tab-1/sharing', undefined],
@@ -299,7 +315,9 @@ describe('a team session reaching past its own machine', () => {
   it('without its machine registered yet, it can reach no host or agent route', async () => {
     m.machines.splice(m.machines.findIndex(row => row.machineId === 'team-mac'), 1)
     limited(await call('GET', '/api/super-tabs/hosts/team-mac'))
+    limited(await call('GET', '/api/super-tabs/hosts/team-mac/changes'))
     limited(await call('GET', '/api/super-tabs/tab-1?asAgentId=agent-1'))
+    limited(await call('GET', '/api/super-tabs/tab-1/parts?asAgentId=agent-1'))
     limited(await call('POST', '/api/super-tabs/tab-1/commands', { ...command, asAgentId: 'agent-1' }))
     expect(store.calls).toEqual([])
   })
@@ -322,9 +340,9 @@ describe('behind the gate, each surface refuses on its own too', () => {
 
 describe('the owner, unchanged', () => {
   it('reaches the same routes, as the person', async () => {
-    expect((await call('GET', '/api/super-tabs/tab-1', undefined, 'owner-token')).statusCode).toBe(200)
-    expect((await call('GET', '/api/super-tabs/hosts/owner-mac', undefined, 'owner-token')).statusCode).toBe(200)
-    expect((await call('GET', '/api/super-tabs/hosts/team-mac', undefined, 'owner-token')).statusCode).toBe(200)
+    expect((await call('GET', '/api/super-tabs/tab-1/parts', undefined, 'owner-token')).statusCode).toBe(200)
+    expect((await call('GET', '/api/super-tabs/hosts/owner-mac/changes', undefined, 'owner-token')).statusCode).toBe(200)
+    expect((await call('GET', '/api/super-tabs/hosts/team-mac/changes', undefined, 'owner-token')).statusCode).toBe(200)
     // A computer's GitHub token request is the store's to judge, whatever machine its body names.
     expect((await call('POST', '/api/super-tabs/tab-1/github-token?asAgentId=agent-1', { machineId: 'owner-mac' }, 'owner-token')).statusCode).toBe(200)
     expect(store.calls.map(c => c.args[0])).toEqual([owner, owner, owner, owner])

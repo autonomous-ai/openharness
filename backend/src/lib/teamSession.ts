@@ -107,6 +107,9 @@ export const TEAM_ROUTES: readonly TeamRoute[] = [
   { method: 'GET', url: '/api/super-tabs/hosts/:machineId', scope: 'machine' },
   { method: 'GET', url: '/api/super-tabs/hosts/:machineId/pools', scope: 'machine' },
   { method: 'GET', url: '/api/super-tabs/hosts/:machineId/assignments', scope: 'machine' },
+  // The host loop by parts (docs/design/2026-10-26-swarm-state-parts.md 4.10). The three reads above answer 426 now; they
+  // stay listed so an old team daemon is told to update rather than refused.
+  { method: 'GET', url: '/api/super-tabs/hosts/:machineId/changes', scope: 'machine' },
   { method: 'POST', url: '/api/super-tabs/hosts/:machineId/terminal', scope: 'machine' },
   { method: 'GET', url: '/api/super-tabs/hosts/:machineId/starts/:tabId/:startId', scope: 'machine' },
   { method: 'POST', url: '/api/super-tabs/hosts/:machineId/starts/:tabId/:startId', scope: 'machine' },
@@ -116,6 +119,10 @@ export const TEAM_ROUTES: readonly TeamRoute[] = [
   { method: 'POST', url: '/api/super-tabs/:tabId/machines/:machineId', scope: 'machine' },
   // Reads as one of its agents.
   { method: 'GET', url: '/api/super-tabs/:tabId', scope: 'agent' },
+  { method: 'GET', url: '/api/super-tabs/:tabId/parts', scope: 'agent' },
+  { method: 'GET', url: '/api/super-tabs/:tabId/changes', scope: 'agent' },
+  { method: 'GET', url: '/api/super-tabs/:tabId/groups', scope: 'agent' },
+  { method: 'GET', url: '/api/super-tabs/:tabId/groups/:conversationId', scope: 'agent' },
   { method: 'GET', url: '/api/super-tabs/:tabId/starts/:startId', scope: 'agent' },
   { method: 'GET', url: '/api/super-tabs/:tabId/routing-policy', scope: 'agent' },
   { method: 'GET', url: '/api/super-tabs/:tabId/route-decisions', scope: 'agent' },
