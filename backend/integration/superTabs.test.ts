@@ -387,6 +387,23 @@ describe('Change agent on a Swarm member', () => {
     const resent = (await store.deliveries(host, tab, lead)).find(d => d.id !== uncertain.id && !receiptIds.includes(d.id) && d.status === 'queued')!
     expect(resent).toMatchObject({ agentId: lead, status: 'queued' })
   })
+  it('revokes the replaced terminal\'s recording contexts and the turns of it still waiting for the Lead', async () => {
+    const { tab, lead } = await fixture()
+    const group = String((await run(tab, { type: 'conversation.create', title: 'Rebound', brief: 'Work', checks: [{ description: 'Done', independent: false }] })).result.conversationId)
+    const harnessId = randomUUID()
+    const worker = String((await run(tab, { type: 'agent.add', conversationId: group, machineId: 'test-host', harnessId, name: 'Worker',
+      configuration: config, lead: false })).result.agentId)
+    const { contextId } = await store.native.open(owner, tab, { operationId: randomUUID(), conversationId: group, agentId: worker })
+    await store.native.append(host, tab, contextId, { turnId: 'old_turn', kind: 'prompt', previousEventId: null, text: 'Typed before the switch',
+      truncated: false, interrupted: false })
+    const turn = (await store.deliveries(host, tab, lead)).find(d => d.nativeContextId === contextId)!
+    await run(tab, { type: 'agent.rebind', agentId: worker, machineId: 'test-host', projectId: 'lead', previousHarnessId: harnessId,
+      harnessId: randomUUID(), configuration: config }, host, worker)
+    expect((await db.superTabNativeContext.findUniqueOrThrow({ where: { id: contextId } })).revoked).toBe(true)
+    expect((await db.superTabDelivery.findUniqueOrThrow({ where: { id: turn.id } })).status).toBe('cancelled')
+    await expect(store.delivery(host, tab, lead, turn.id, { type: 'claim', claimId: randomUUID() })).rejects.toMatchObject({ code: 'DELIVERY_REVOKED' })
+  })
+
   it('refuses a replacement already contributed in another tab', async () => {
     const first = await fixture(), second = await fixture()
     const previous = (await store.read(owner, first.tab)).state.agents[0]!
@@ -3126,6 +3143,22 @@ describe('Swarm parts under concurrent writes', () => {
     expect(c.attempts).toBe(contexts.length * 4)
   })
 
+  it('lets a Lead\'s host claim its deliveries while the Lead posts, without a conflict between them', async () => {
+    const { tab, lead } = await fixture()
+    const groups = await Promise.all(['North', 'South', 'East'].map(title => workGroup(tab, title)))
+    for (const { group, worker } of groups) {
+      for (let i = 0; i < 2; i++) await run(tab, { type: 'message.send', conversationId: group, text: `Report ${i}`, replyTo: null, recipientIds: [] }, host, worker)
+    }
+    const waiting = await store.deliveries(host, tab, lead)
+    expect(waiting.length).toBeGreaterThanOrEqual(6)
+    const c = counted()
+    await Promise.all([
+      ...waiting.map(d => c.store.delivery(host, tab, lead, d.id, { type: 'claim', claimId: randomUUID() })),
+      c.store.execute(host, tab, { operationId: randomUUID(), command: { type: 'message.send', conversationId: 'lead', text: 'Planning.', replyTo: null, recipientIds: [] } }, lead),
+    ])
+    expect(c.attempts).toBe(waiting.length + 1)
+  })
+
   it('gives a machine\'s last slot to exactly one of two concurrent starts', async () => {
     const tab = (await store.create(owner, randomUUID(), 'Slots')).id
     await run(tab, { type: 'invite.create', email: host.email, role: 'collaborator', conversationId: 'lead' })
@@ -3168,6 +3201,42 @@ describe('Swarm parts under concurrent writes', () => {
     expect(results[1]!.status).toBe('fulfilled')
     expect((await db.superTabDelivery.findUniqueOrThrow({ where: { id: delivery.id } })).status).toBe('cancelled')
     expect((await store.deliveries(host, tab, lead)).map(d => d.id)).not.toContain(delivery.id)
+  })
+
+  it('serializes a claim against removing its receiving agent', async () => {
+    const { tab, lead } = await fixture()
+    const { group, worker } = await workGroup(tab, 'Receiver')
+    await run(tab, { type: 'work.cancel', conversationId: group, assignmentId: (await store.read(owner, tab)).state.conversations.find(c => c.id === group)!.assignment!.id,
+      reason: 'Withdrawing the worker' })
+    await run(tab, { type: 'message.send', conversationId: group, text: 'For the worker.', replyTo: null, recipientIds: [worker] }, host, lead)
+    const delivery = (await store.deliveries(host, tab, worker))[0]!
+    const results = await Promise.allSettled([
+      store.delivery(host, tab, worker, delivery.id, { type: 'claim', claimId: randomUUID() }),
+      run(tab, { type: 'agent.remove', agentId: worker }),
+    ])
+    expect(results[1]!.status).toBe('fulfilled')
+    expect((await db.superTabDelivery.findUniqueOrThrow({ where: { id: delivery.id } })).status).toBe('cancelled')
+  })
+
+  it('writes the waiting delivery rows of a conversation archived or left by their receiver, so a claim in flight conflicts', async () => {
+    const { tab, lead } = await fixture()
+    const { group, worker } = await workGroup(tab, 'Rows')
+    const assignmentId = (await store.read(owner, tab)).state.conversations.find(c => c.id === group)!.assignment!.id
+    await run(tab, { type: 'work.cancel', conversationId: group, assignmentId, reason: 'Done here' })
+    const waiting = await run(tab, { type: 'message.send', conversationId: group, text: 'Still waiting.', replyTo: null, recipientIds: [worker] }, host, lead)
+    const row = async () => db.superTabDelivery.findFirstOrThrow({ where: { tabId: tab, agentId: worker, messageId: waiting.result.messageId as string } })
+    const before = await row()
+    await new Promise(resolve => setTimeout(resolve, 5))
+    await run(tab, { type: 'conversation.agent', conversationId: group, agentId: worker, present: false, lead: false })
+    const left = await row()
+    expect(left.updatedAt.getTime()).toBeGreaterThan(before.updatedAt.getTime())
+    expect(left.status).toBe(before.status)
+    await new Promise(resolve => setTimeout(resolve, 5))
+    await run(tab, { type: 'conversation.archive', conversationId: group, archived: true })
+    const archived = await row()
+    expect(archived.updatedAt.getTime()).toBeGreaterThan(left.updatedAt.getTime())
+    // Archiving keeps them for when the conversation reopens, as before.
+    expect(archived.status).toBe(before.status)
   })
 
   it('assigns the routed agent through its finished start, without an override reason', async () => {

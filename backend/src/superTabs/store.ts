@@ -71,9 +71,15 @@ function replyOf(prior: { revision: number; result: unknown; parts: unknown }) {
     ...(kept ? { lastChangedAt: kept.lastChangedAt } : prior.revision ? { legacyRevision: prior.revision } : {}) }
 }
 
-/** A delivery claim, ack or hold relies on its receiving agent and its sender (spec ruling 9). */
+/**
+ * What a delivery claim, ack or hold touches (spec ruling 9, narrowed). Removing the receiver or an agent sender, or
+ * either changing generation, cancels this delivery row, which the claim writes: they conflict on the row. A person
+ * sender can also lose the conversation without leaving (project sharing, a new audience), and only their part says so.
+ * Touching the receiving agent made every claim of a Lead's deliveries conflict with the others and with the Lead's own
+ * posts (benchmark, mixed lane: the Lead's calls ran out of retries).
+ */
 function deliveryTouches(delivery: SuperTabDelivery): Touch[] {
-  return [{ kind: 'agent', key: delivery.agentId }, { kind: delivery.authorKind === 'person' ? 'member' : 'agent', key: delivery.authorId }]
+  return delivery.authorKind === 'person' ? [{ kind: 'member', key: delivery.authorId }] : []
 }
 
 /** Loads one Swarm's parts and the state commands run on. Reads never write (design ruling R8); the migration rebuilt

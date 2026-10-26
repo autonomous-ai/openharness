@@ -247,7 +247,12 @@ export async function revokeNativeContexts(tx: Transaction, before: SuperTabStat
     const current = after.people.find(p => p.id === member.id)
     if (!current || current.generation !== member.generation || current.role === 'viewer') conditions.push({ userId: member.id })
   }
-  for (const target of before.agents) if (!after.agents.some(a => a.id === target.id)) conditions.push({ agentId: target.id })
+  // A removed agent's contexts, and those of an agent given a replacement terminal: they name the old terminal, and its
+  // waiting turns are cancelled with them, so a claim racing the change conflicts on their rows (rule b).
+  for (const target of before.agents) {
+    const current = after.agents.find(a => a.id === target.id)
+    if (!current || current.harnessId !== target.harnessId) conditions.push({ agentId: target.id })
+  }
   for (const group of before.conversations) {
     const current = after.conversations.find(c => c.id === group.id)
     if (!current || current.archived) conditions.push({ conversationId: group.id })
