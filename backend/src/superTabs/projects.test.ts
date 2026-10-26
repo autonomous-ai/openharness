@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
 import { applyCommand, commandSchema, type Command, type CommandContext } from './commands.js'
 import { createSuperTab, visibleState, type Actor, type MessageDraft } from './model.js'
-import { canReadAgent, projectOf, projectsOf, readConversation, skillModeOf, skillSetOf } from './projects.js'
+import { canReadAgent, canWatchAgent, markConfidential, projectOf, projectsOf, readConversation, skillModeOf, skillSetOf } from './projects.js'
 
 const owner: Actor = { kind: 'person', userId: 'owner', email: 'owner@example.com' }
 const peer: Actor = { kind: 'person', userId: 'peer', email: 'peer@example.com' }
@@ -513,5 +513,38 @@ describe('custom role sets', () => {
     expect(visible.projects!.find(x => x.id === p.projectId)!.skillSet).toBe('custom')
     expect(visible.agents.filter(a => [lead, worker].includes(a.id)).map(a => a.roleId)).toEqual(['lead', 'dev'])
     expect(visible.projects!.find(x => x.id === 'lead')!.skillSet).toBe('default')
+  })
+})
+
+describe('who may watch an agent\'s terminal (final review, Critical 1)', () => {
+  it('keeps a session in a private chat to its machine\'s owner even when it is no longer the Lead, and leaves other agents to every reader', () => {
+    const f = setup()
+    const host: Actor = { kind: 'person', userId: 'host', email: 'host@example.com' }
+    f.state.people.push({ id: 'host', email: 'host@example.com', role: 'collaborator', generation: 'first' })
+    const builder = f.add('lead', 'builder', false), former = f.add('lead', 'former', false)
+    const target = (id: string) => f.state.agents.find(a => a.id === id)!
+    // A private chat that still lists an earlier Lead's session: its screen holds that chat.
+    f.state.conversations.push({ id: 'chat', title: 'Chat with PM', leadId: null, agentIds: [former], archived: false, brief: '', checks: [],
+      assignment: null, lastMessageSequence: 0, audience: { people: [{ id: 'peer', generation: 'first' }] } })
+    for (const reader of [owner, peer]) {
+      expect(canWatchAgent(f.state, reader, target(former))).toBe(false)
+      expect(canWatchAgent(f.state, reader, target(builder))).toBe(true)
+    }
+    expect(canWatchAgent(f.state, host, target(former))).toBe(true)
+  })
+
+  it('keeps a session confidential once marked, after its private membership ends, until it leaves', () => {
+    const f = setup()
+    const former = f.add('lead', 'former', false)
+    f.state.conversations.push({ id: 'chat', title: 'Chat with PM', leadId: null, agentIds: [former], archived: false, brief: '', checks: [],
+      assignment: null, lastMessageSequence: 0, audience: { people: [{ id: 'peer', generation: 'first' }] } })
+    markConfidential(f.state)
+    f.state.conversations = f.state.conversations.filter(c => c.id !== 'chat')
+    expect(canWatchAgent(f.state, peer, f.state.agents.find(a => a.id === former)!)).toBe(false)
+    // Every command marks: a Lead stored before the mark is marked by the next one.
+    const lead = f.add('lead', 'pm', true)
+    delete f.state.agents.find(a => a.id === lead)!.confidential
+    f.run({ type: 'conversation.create', title: 'Next', brief: '', checks: [] })
+    expect(f.state.agents.find(a => a.id === lead)!.confidential).toBe(true)
   })
 })

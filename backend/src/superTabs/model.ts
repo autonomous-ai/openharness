@@ -50,6 +50,9 @@ export interface Agent {
   limitedUntil?: string | null
   /** Terminal alert episodes in progress, so each one posts a single row (terminal.ts). */
   alerting?: Array<'prompt' | 'limit' | 'model'>
+  /** Set once its session is a Lead or in a private conversation, and kept until the session leaves: nobody but its
+   *  machine's person watches it (projects.ts canWatchAgent). */
+  confidential?: true
 }
 export type AgentRole = 'builder' | 'reviewer'
 export const agentRole = (agent: Pick<Agent, 'role'>): AgentRole => agent.role ?? 'builder'

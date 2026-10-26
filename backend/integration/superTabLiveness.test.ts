@@ -12,6 +12,7 @@ import type { Command } from '../src/superTabs/commands.js'
 import type { MachineObservation } from '../src/superTabs/machines.js'
 import * as parts from '../src/superTabs/parts/index.js'
 import { poolRows } from './hostRows.test-support.js'
+import { beforeFirstWrite } from './interleave.test-support.js'
 import { SwarmReads } from '../src/superTabs/read/service.js'
 
 // Work never sits with a dead owner: an active assignment whose agent died, stalled or hit a limit becomes lost within
@@ -89,24 +90,6 @@ async function swarm({ legacy = false } = {}) {
     clock: { get now() { return now }, set now(value: number) { now = value } } }
 }
 
-/** The database, but every transaction runs `interleave` (another writer committing) before its first group write. */
-function beforeFirstGroupWrite(interleave: () => Promise<void>): PrismaClient {
-  const wrap = (tx: PrismaClient) => new Proxy(tx, { get(target, key, receiver) {
-    const value = Reflect.get(target, key, receiver)
-    if (key !== 'swarmGroup') return value
-    return new Proxy(value, { get(group, method, groupReceiver) {
-      const original = Reflect.get(group, method, groupReceiver)
-      if (method !== 'updateMany') return original
-      return async (...args: unknown[]) => { await interleave(); return original.apply(group, args) }
-    } })
-  } })
-  return new Proxy(db, { get(target, key, receiver) {
-    if (key !== '$transaction') return Reflect.get(target, key, receiver)
-    return (body: (tx: PrismaClient) => Promise<unknown>, options: unknown) =>
-      (target.$transaction as (b: unknown, o: unknown) => Promise<unknown>)((tx: PrismaClient) => body(wrap(tx)), options)
-  } })
-}
-
 /** A Swarm created before projects existed. */
 async function dropProjects(tab: string) {
   await db.$transaction(async tx => {
@@ -165,7 +148,7 @@ describe('work that loses its owner', () => {
     f.clock.now += 2 * MINUTE + 5_000
     // The Lead's poll reads the worker's machine as silent; just before it writes the loss, that machine reports.
     let raced = false
-    const racing = new SuperTabStore(beforeFirstGroupWrite(async () => {
+    const racing = new SuperTabStore(beforeFirstWrite(db, async () => {
       if (raced) return
       raced = true
       await f.observe('test-host', [f.harness.worker], { harnessProgress: { [f.harness.worker]: f.clock.now } })

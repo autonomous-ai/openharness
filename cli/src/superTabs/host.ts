@@ -167,6 +167,8 @@ export class SuperTabHost {
   private readonly log: (message: string) => void
   private retentionError: string | null = null
   private readonly observers: typeof publishObservers
+  /** Whether a session still runs on this machine: a confidential session's mark stays until it closes (observers.ts). */
+  private readonly stillRuns = (harnessId: string) => !!this.core.agents.byAgent(harnessId)
   /** Share was asked to run once a roster here first named someone to show an agent to. */
   private shareWoken = false
   private readonly attachedFiles: typeof attachedFiles
@@ -302,7 +304,7 @@ export class SuperTabHost {
     this.authorized.clear()
     // An empty roster in force, which Share reads as everyone gone and withdraws their invitations; a lapsed one
     // would only pause their views (superTabs/observers.ts `known`).
-    try { this.observers(this.core.dataDir, this.machineId, [], this.now() + OBSERVER_VALID_MS) } catch { /* The old snapshot expires. */ }
+    try { this.observers(this.core.dataDir, this.machineId, [], this.now() + OBSERVER_VALID_MS, this.stillRuns) } catch { /* The old snapshot expires. */ }
     // Signed out or another machine: this host's alerts are no longer anyone's. A core that is gone heard nothing, and
     // the next host's first roster replaces them anyway.
     if (this.attention !== null && this.attention !== '[]') {
@@ -529,7 +531,7 @@ export class SuperTabHost {
       this.retentionError = message
     }
     // Valid from this answer until the next is due, slow reads included, so it never lapses between two reads.
-    this.observers(this.core.dataDir, this.machineId, data, this.now() + OBSERVER_VALID_MS)
+    this.observers(this.core.dataDir, this.machineId, data, this.now() + OBSERVER_VALID_MS, this.stillRuns)
     this.wakeShare(data)
     this.publishAttention(data)
     this.joinSwarms(data)

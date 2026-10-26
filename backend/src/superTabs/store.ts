@@ -12,8 +12,9 @@ import { attachmentMime, attachmentName, AttachmentTooLarge, checkedType, MAX_AT
 import { randomBytes } from 'node:crypto'
 import type { Readable } from 'node:stream'
 import { logger } from '../utils/logger.js'
-import { canReadAgent, canReadGroup, groupProject, ledProject, projectsOf, agentProjectId, readConversation, roleVersion, type ProjectVisibility } from './projects.js'
+import { canReadAgent, canReadGroup, canWatchAgent, groupProject, ledProject, projectsOf, agentProjectId, readConversation, roleVersion, type ProjectVisibility } from './projects.js'
 import { bindSession, makeProjectPrivate } from './sessionScope.js'
+import { confidentialSessions, otherRegistrations, recordConfidential } from './confidential.js'
 import { answersRequest, noteProjectReports, projectUpdateRequest } from './projectUpdates.js'
 import { judgedMachines, loseTasks, sweepLiveness, SWEEP_EVERY_MS } from './liveness.js'
 import { clock, insertParts, lastChangedAt, loadActive, reassemble, split, type HeadData, type SwarmParts } from './parts/index.js'
@@ -52,6 +53,17 @@ export interface Loaded { row: SuperTab; parts: SwarmParts; state: SuperTabState
 export interface Named { groupIds?: string[]; agentIds?: string[]; projectIds?: string[]; startIds?: string[]; startAgentIds?: string[]; allGroups?: boolean; includeRecentStarts?: boolean }
 
 /** The groups, agents, projects and starts a command names in its own fields (design section 3.1). */
+/** Commands that register a session or can make one a Lead or a private member: checked against the other Swarms'
+ *  registrations (projects.ts requireSingleRegistration). A rebind is refused onto any terminal registered elsewhere already. */
+const REGISTERS = new Set(['agent.add', 'agent.started', 'conversation.agent', 'conversation.create', 'conversation.audience', 'project.create'])
+/** The session a command registers, when it names one. */
+function registeredBy(state: SuperTabState, command: Command): Array<{ machineId: string; harnessId: string }> {
+  if (command.type === 'agent.add') return [{ machineId: command.machineId, harnessId: command.harnessId }]
+  if (command.type !== 'agent.started') return []
+  const start = state.starts?.find(s => s.id === command.startId)
+  return start ? [{ machineId: start.request.machineId, harnessId: command.harnessId }] : []
+}
+
 function namedFor(command: Command): Named {
   const has = (key: string) => key in command
   const field = (key: string) => (command as Record<string, unknown>)[key] as string | undefined
@@ -652,6 +664,8 @@ export class SuperTabStore {
       }
       if (command.type !== 'invite.accept' && command.type !== 'agent.sessionClosed' && command.type !== 'machine.cleaned') author(original, actor)
       const context: CommandContext = { operationId, now: this.now() }
+      if (command.type === 'agent.screen' || command.type === 'agent.input') context.confidentialSession = await this.confidential(tx, command.agentId)
+      if (REGISTERS.has(command.type)) context.registrations = await otherRegistrations(tx, original, registeredBy(original, command))
       if ('startId' in command && ['agent.startDispatch', 'agent.started', 'agent.startFailed', 'agent.startSettled', 'route.modelResult'].includes(command.type)) {
         const start = original.starts?.find(s => s.id === command.startId)
         if (start?.poolGeneration && !hostMachineId) fail('HOST_REQUIRED', 'Only the contributed machine can confirm this start.', 403)
@@ -757,6 +771,10 @@ export class SuperTabStore {
       if (command.type === 'agent.add' || command.type === 'agent.started') {
         const target = agent(effects.state, effects.result.agentId as string)
         await bindSession(tx, effects.state, target, context.now)
+      }
+      // A session that just became confidential writes the record its registrations write (confidential.ts).
+      for (const target of effects.state.agents) {
+        if (target.confidential && !original.agents.find(a => a.id === target.id)?.confidential) await recordConfidential(tx, effects.state, target, context.now)
       }
       if (command.type === 'project.sharing' && command.visibility === 'private') {
         await makeProjectPrivate(tx, effects.state, command.projectId)
@@ -1127,7 +1145,7 @@ export class SuperTabStore {
         const row = await tx.superTabTerminalRequest.findFirst({ where: { id: requestId, tabId, createdAt: { gte: new Date(now - TERMINAL_EXPIRY_MS) } } })
         if (!row || row.requesterKey !== actorKey(actor)) fail('NOT_FOUND', 'This terminal request is unavailable.', 404)
         // A sender who has since lost write access, or is no longer the agent's project Lead, gets nothing.
-        mayDrive(state, actor, agent(state, row.agentId))
+        mayDrive(state, actor, agent(state, row.agentId), await this.confidential(tx, row.agentId))
         const late = row.status === 'pending' && now - row.createdAt.getTime() > TERMINAL_PICKUP_MS
           ? 'The agent’s machine did not pick up the request within 10 seconds. It may be offline or asleep.'
           : row.status === 'claimed' && now - row.claimedAt!.getTime() > TERMINAL_ANSWER_MS
@@ -1188,7 +1206,7 @@ export class SuperTabStore {
     try {
       agent(state, target.id)
       await this.agentGrant(tx, state, target)
-      mayDrive(state, requester, target)
+      mayDrive(state, requester, target, await this.confidential(tx, target.id))
     } catch (error) {
       if (error instanceof SuperTabError) return 'This request is no longer allowed.'
       throw error
@@ -1420,11 +1438,23 @@ export class SuperTabStore {
         const target = state.agents.find(a => a.machineId === machineId && a.harnessId === harnessId && a.machineOwnerId === machineOwnerId)
         if (!target) return false
         agent(state, target.id)
-        if (!canReadAgent(state, { kind: 'person', userId: user.sub, email: user.email }, target)) return false
+        if (!canWatchAgent(state, { kind: 'person', userId: user.sub, email: user.email }, target, await this.confidential(tx, target.id))) return false
         await this.agentGrant(tx, state, target)
         return true
       })
     } catch (error) { if (error instanceof SuperTabError) return false; throw error }
+  }
+
+  /** Whether an agent's session is confidential in any Swarm (confidential.ts). */
+  private async confidential(tx: Transaction, agentId: string): Promise<boolean> {
+    return (await confidentialSessions(tx, [agentId])).has(agentId)
+  }
+
+  /** Whether a terminal share may open, wherever it came from (routes/harnessShares.ts): a confidential session's only for
+   *  its machine's person, even an ordinary share made outside any Swarm; a Swarm's share only while that Swarm allows it. */
+  async mayOpenShare(user: AuthUser, share: { superTabId: string | null; machineId: string; agentId: string; ownerId: string }): Promise<boolean> {
+    if (user.sub !== share.ownerId && await transaction(this.db, tx => this.confidential(tx, stableId(share.machineId, share.agentId)))) return false
+    return !share.superTabId || this.mayObserve(user, share.superTabId, share.machineId, share.agentId, share.ownerId)
   }
 
   private deliveryAllowed(state: SuperTabState, delivery: SuperTabDelivery): boolean {

@@ -4,10 +4,13 @@ import { agentProjectId, projectOf } from './projects.js'
 
 const scopeId = (state: SuperTabState, projectId: string) => stableId(state.id, projectId)
 
+/** The record every Swarm registering one native session writes. */
+export const sessionRecordId = (state: SuperTabState, target: Agent) => stableId('swarm-session', state.environment, target.machineOwnerId, target.id)
+
 export async function bindSession(tx: Prisma.TransactionClient, state: SuperTabState, target: Agent, now = Date.now()) {
   const project = projectOf(state, agentProjectId(state, target))
   const scope = scopeId(state, project.id)
-  const id = stableId('swarm-session', state.environment, target.machineOwnerId, target.id)
+  const id = sessionRecordId(state, target)
   const prior = await tx.superTabSessionScope.findUnique({ where: { id } })
   if (prior?.releasedTabIds.includes(state.id)) fail('SESSION_RELEASED', 'This session was withdrawn while stopping in this Swarm. Start a new Harness here or use it in another Swarm.')
   if (prior?.closeLeaseUntil && prior.closeLeaseUntil.getTime() > now) fail('CLOSE_PENDING', 'Another Swarm is stopping this session. Wait up to two minutes, then try again.')

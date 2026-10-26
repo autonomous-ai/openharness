@@ -556,6 +556,34 @@ it('confirms a stopped assignment only with fresh native evidence, including aft
   expect(proof).toHaveLength(1)
 })
 
+describe('a private chat delivered to the PM (final review, Critical 1)', () => {
+  it('types the secret into the PM\'s terminal, then refuses every share of that session until it closes here', async () => {
+    const secret = 'Only for the PM: the launch slips a week.'
+    const t = setup({ conversationId: 'chat', text: secret })
+    t.from('chat')
+    // The roster as the backend sends it for a PM: no observers, and marked confidential.
+    Object.assign(t.row, { lead: true, confidential: true, observers: [] })
+    const host = t.open()
+    await host.tick()
+    expect(vi.mocked(t.core.turns.deliver).mock.calls[0]?.[0]).toBe('harness')
+    expect(vi.mocked(t.core.turns.deliver).mock.calls[0]?.[1]).toContain(secret)
+    const cache = observerSource(t.dir, () => 'machine-1', () => 1)
+    const ordinary = { tab: null, agentId: 'harness', recipientEmail: 'carol@example.com' } as never
+    const swarm = { tab: 'super:tab', agentId: 'harness', recipientEmail: 'bob@example.com' } as never
+    expect(cache.allows(ordinary)).toBe(false)
+    expect(cache.allows(swarm)).toBe(false)
+    // Its registration is removed while the session still runs on this machine: still refused.
+    t.remove()
+    await host.tick()
+    t.wait(201)
+    expect(observerSource(t.dir, () => 'machine-1', () => 300).allows(ordinary)).toBe(false)
+    // The session closes here: only now may it be shared again.
+    vi.mocked(t.core.agents.byAgent).mockReturnValue(undefined as never)
+    await host.tick()
+    expect(observerSource(t.dir, () => 'machine-1', () => 600).allows(ordinary)).toBe(true)
+  })
+})
+
 describe('the super-tab command in delivered input', () => {
   it('names the short command in every line that names a command, and asks for it once while the input is held', async () => {
     const t = setup({ replyTo: 'earlier' })
