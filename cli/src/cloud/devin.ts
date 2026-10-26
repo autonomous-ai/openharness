@@ -3,7 +3,9 @@
  * organization the key belongs to (`GET /v3/self`), read by its status and its messages, every few seconds
  * while someone watches. `status` + `status_detail` say where it is: `running`/`working`, waiting on the
  * person (`waiting_for_user`, `waiting_for_approval`), `finished`, or `suspended` (asleep: Stop archives
- * it, and a message wakes it). It bills ACUs while it works, so every session gets a limit.
+ * it, and a message wakes it). Those two strings are kept beside Harness's state: `finished` and a wait,
+ * and a sleep and a stop, can share a normalized state, and a message's words do not say which. It bills
+ * ACUs while it works, so every session gets a limit.
  */
 import { CLOUD_AGENTS, type CloudState } from '../lib/cloudAgents.js'
 import { refusal, type Bridge } from './bridge.js'
@@ -30,6 +32,12 @@ export function devinState(status: unknown, detail: unknown): CloudState {
 const SUSPENDED: Record<string, string> = {
   usage_limit_exceeded: 'It reached its ACU limit.', out_of_credits: 'The Devin account is out of credits.', out_of_quota: 'The Devin account is out of quota.',
   payment_declined: 'Devin declined the payment.', org_usage_limit_exceeded: 'The organization reached its ACU limit.',
+  inactivity: 'Devin went to sleep after inactivity.', user_request: 'The session was stopped by request.',
+}
+
+/** Devin's own status. Missing values are null so the next look replaces the pair instead of keeping a stale detail. */
+function providerStatus(session: Json): NonNullable<CloudUpdate['providerStatus']> {
+  return { status: str(session.status), detail: str(session.status_detail) }
 }
 
 export function devinLinks(session: Json): CloudLink[] {
@@ -67,7 +75,7 @@ export function devinAdapter(bridge: Bridge, code: () => Promise<string>): Cloud
       })
       const id = str(session.session_id)
       if (!id) throw refusal(NAME, 502, { detail: 'No session was made.' })
-      return { remote: { id }, links: devinLinks(session), update: { messages: [], state: devinState(session.status, session.status_detail) } }
+      return { remote: { id }, links: devinLinks(session), update: { messages: [], state: devinState(session.status, session.status_detail), providerStatus: providerStatus(session) } }
     },
     async send(remote, text) {
       await call('POST', `${await base()}/${encodeURIComponent(remote.id)}/messages`, { message: text })
@@ -91,6 +99,7 @@ export function devinAdapter(bridge: Bridge, code: () => Promise<string>): Cloud
       return {
         messages,
         state,
+        providerStatus: providerStatus(session),
         activity: session.status === 'suspended' ? SUSPENDED[String(session.status_detail)] ?? null : null,
         // Asked from Devin's newest words; with none new, the question already asked stands (cloud/service.ts).
         question: state !== 'needs_input' ? null : lastWords ? { text: lastWords.slice(0, 500), choices: [] } : undefined,
