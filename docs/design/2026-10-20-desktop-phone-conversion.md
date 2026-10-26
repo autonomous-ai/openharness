@@ -203,10 +203,15 @@ Vocabulary 6 adds the returning flow, `ui_desktop_phone_offer_skipped_<reason>`,
 [product measurement](../product-measurement.md). The CLI forwards the names and announces revision 6;
 Desktop queues them until then. Backend and CLI vocabularies remain identical.
 
-The dialog already receives live `deviceJoins` notices. Read one account-device snapshot before opening,
-then count each new non-machine key once per dialog, excluding keys already in that snapshot. Keep the
+The dialog already receives live `deviceJoins` notices. Open the dialog immediately and read one account-device
+snapshot alongside it. Hold joins until the snapshot arrives, then count each new non-machine key once per
+dialog, excluding keys already in that snapshot. Keep the
 snapshot and deduplication set in RAM; report only the opening (`offer`, `titlebar`, `menu`, `account`,
 `machines`, `command`). A returning card uses `offer`. Repeated notices, rebuilds, machines, notices after
 close and another account's notices do not count. A second new phone does. An unreadable snapshot leaves
 attribution unknown and keeps the dialog usable; a successful pairing handshake alone is not proof of a
 new account device.
+
+Skip reasons count each path/reason pair once per app run. An auth-revision change clears the counted pairs,
+allowing the next account to count again without retaining old revisions. Finished-turn volume and repeated
+returns to the window do not inflate these counters. Fixed names and vocabulary 6 remain unchanged.

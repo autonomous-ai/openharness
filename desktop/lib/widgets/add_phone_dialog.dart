@@ -74,21 +74,33 @@ Future<void> showAddPhoneDialog(
   bool Function()? signInUnavailable,
   VoidCallback? onConnectMachine,
   VoidCallback? onManageDevices,
-}) async {
-  // Read once before opening: a repeated join for an existing key is not a new phone.
-  // If the snapshot is unavailable, leave attribution unknown and keep Add Phone usable.
-  Set<String>? known;
+}) {
+  // Membership is needed only for attribution. Last-seen data can delay this
+  // read, so open the dialog first and hold joins until its snapshot arrives.
   final account = app.currentUser?.id;
-  if (from != null && account != null && !kIsWeb && app.viewer == null) {
-    try {
-      final devices = await app.loadDevices();
-      if (devices != null) {
-        known = {for (final device in devices.devices) device.pub};
-      }
-    } catch (_) {}
+  final generation = app.accountGeneration;
+  Set<String>? known;
+  final pending = <String>{};
+  var reading =
+      from != null && account != null && !kIsWeb && app.viewer == null;
+  void attribute(String pub) {
+    if (account != app.currentUser?.id ||
+        generation != app.accountGeneration ||
+        app.isGuest ||
+        app.signingIn) {
+      return;
+    }
+    if (reading) {
+      pending.add(pub);
+      return;
+    }
+    final keys = known;
+    if (from != null && keys != null && keys.add(pub)) {
+      app.productMeasurement.addPhonePaired(from);
+    }
   }
-  if (!context.mounted) return;
-  return showTerminalPrompt<void>(
+
+  final dialog = showTerminalPrompt<void>(
     context,
     keymap: keymap,
     builder: (_) => AddPhoneDialog(
@@ -99,17 +111,28 @@ Future<void> showAddPhoneDialog(
           signInUnavailable ?? () => app.api.phoneSignInUnavailable,
       onConnectMachine: onConnectMachine,
       onManageDevices: onManageDevices,
-      onPhoneJoined: (device) {
-        if (from == null ||
-            known == null ||
-            account != app.currentUser?.id ||
-            !known.add(device.pub)) {
-          return;
-        }
-        app.productMeasurement.addPhonePaired(from);
-      },
+      onPhoneJoined: (device) => attribute(device.pub),
     ),
   );
+  if (reading) {
+    unawaited(() async {
+      try {
+        final devices = await app.loadDevices();
+        if (devices != null) {
+          known = {for (final device in devices.devices) device.pub};
+        }
+      } catch (_) {
+        // A missing snapshot leaves attribution unknown; Add Phone still works.
+      }
+      reading = false;
+      // These joins happened while open, even if the dialog has since closed.
+      for (final pub in pending) {
+        attribute(pub);
+      }
+      pending.clear();
+    }());
+  }
+  return dialog;
 }
 
 /// Where the QR points. The phone's `ConnectCode` (mobile

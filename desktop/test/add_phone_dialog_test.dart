@@ -41,15 +41,17 @@ AppNotifier _signedInApp() {
 }
 
 class _DeviceSnapshotApi extends ApiClient {
-  _DeviceSnapshotApi({this.fails = false, this.listing})
+  _DeviceSnapshotApi({this.fails = false, this.listing, this.pending})
     : super(
         config: AppConfig.dev,
         session: AuthSession(storage: MemoryStore()),
       );
   final bool fails;
   final Map<String, dynamic>? listing;
+  final Completer<Map<String, dynamic>?>? pending;
   @override
   Future<Map<String, dynamic>?> daemonDevices() async {
+    if (pending != null) return pending!.future;
     if (fails) throw StateError('unreadable');
     return listing ?? {'members': <Object>[]};
   }
@@ -964,6 +966,147 @@ void main() {
       expect(find.byType(AddPhoneDialog), findsNothing);
     });
   });
+
+  for (final from in AddPhoneOpening.values) {
+    testWidgets(
+      'opens immediately from ${from.name} while the snapshot never completes',
+      (tester) async {
+        final snapshot = Completer<Map<String, dynamic>?>();
+        final app = _signedInApp()
+          ..currentUser = const CurrentUserProfile(
+            id: 'a',
+            email: 'a@example.test',
+          )
+          ..api = _DeviceSnapshotApi(pending: snapshot);
+        addTearDown(app.dispose);
+        final daemon = _FakeDaemon(List.filled(3, _failed('NO_INTENT')));
+        await _open(tester, app, daemon.call, from: from);
+        expect(find.byType(AddPhoneDialog), findsOneWidget);
+        expect(find.byKey(const ValueKey('add-phone-close')), findsOneWidget);
+        expect(find.byType(PhonePairQr), findsOneWidget);
+        expect(snapshot.isCompleted, isFalse);
+        await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+        await tester.pump();
+        expect(find.byType(AddPhoneDialog), findsNothing);
+      },
+    );
+  }
+
+  testWidgets(
+    'joins before a late snapshot are judged once against its known keys',
+    (tester) async {
+      final snapshot = Completer<Map<String, dynamic>?>();
+      final usage = AddPhoneRecorder();
+      final app = createApp(productMeasurement: usage)
+        ..status = AppStatus.authenticated
+        ..signedIn = true
+        ..currentUser = const CurrentUserProfile(
+          id: 'a',
+          email: 'a@example.test',
+        )
+        ..api = _DeviceSnapshotApi(pending: snapshot);
+      addTearDown(app.dispose);
+      final daemon = _FakeDaemon(List.filled(3, _failed('NO_INTENT')));
+      await _open(tester, app, daemon.call, from: AddPhoneOpening.menu);
+      expect(find.byType(AddPhoneDialog), findsOneWidget);
+      await _joins(tester, app, pub: 'existing');
+      await _joins(tester, app, pub: 'new-phone');
+      app.newDevices.clear();
+      await _joins(tester, app, pub: 'new-phone');
+      app.notifyListeners();
+      await tester.pump();
+      expect(usage.pairings, isEmpty);
+      snapshot.complete({
+        'members': [
+          {
+            'pub': 'existing',
+            'label': 'Existing',
+            'kind': 'viewer',
+            'addedAt': 1,
+            'fingerprint': 'fp',
+            'self': false,
+          },
+        ],
+      });
+      await tester.pump();
+      await tester.pump();
+      expect(usage.pairings, [AddPhoneOpening.menu]);
+      app.newDevices.clear();
+      await _joins(tester, app, pub: 'existing');
+      await _joins(tester, app, pub: 'new-phone');
+      await tester.pump();
+      expect(usage.pairings, [AddPhoneOpening.menu]);
+      await tester.pumpWidget(const SizedBox());
+    },
+  );
+
+  for (final failed in [false, true]) {
+    testWidgets(
+      'a ${failed ? 'failed' : 'null'} late snapshot drops buffered attribution and keeps the dialog usable',
+      (tester) async {
+        final snapshot = Completer<Map<String, dynamic>?>();
+        final usage = AddPhoneRecorder();
+        final app = createApp(productMeasurement: usage)
+          ..status = AppStatus.authenticated
+          ..signedIn = true
+          ..currentUser = const CurrentUserProfile(
+            id: 'a',
+            email: 'a@example.test',
+          )
+          ..api = _DeviceSnapshotApi(pending: snapshot);
+        addTearDown(app.dispose);
+        final daemon = _FakeDaemon(List.filled(3, _failed('NO_INTENT')));
+        await _open(tester, app, daemon.call, from: AddPhoneOpening.offer);
+        expect(find.byType(AddPhoneDialog), findsOneWidget);
+        await _joins(tester, app);
+        await tester.pump();
+        expect(find.text('Dee’s iPhone is ready.'), findsOneWidget);
+        expect(usage.pairings, isEmpty);
+        if (failed) {
+          snapshot.completeError(StateError('snapshot unavailable'));
+        } else {
+          snapshot.complete(null);
+        }
+        await tester.pump();
+        await tester.pump();
+        await _joins(tester, app, pub: 'another-phone');
+        await tester.pump();
+        expect(usage.pairings, isEmpty);
+        expect(find.text('Dee’s iPhone is ready.'), findsOneWidget);
+        await tester.pumpWidget(const SizedBox());
+      },
+    );
+  }
+
+  testWidgets(
+    'a buffered join can be attributed after closing but a later join cannot',
+    (tester) async {
+      final snapshot = Completer<Map<String, dynamic>?>();
+      final usage = AddPhoneRecorder();
+      final app = createApp(productMeasurement: usage)
+        ..status = AppStatus.authenticated
+        ..signedIn = true
+        ..currentUser = const CurrentUserProfile(
+          id: 'a',
+          email: 'a@example.test',
+        )
+        ..api = _DeviceSnapshotApi(pending: snapshot);
+      addTearDown(app.dispose);
+      final daemon = _FakeDaemon(List.filled(3, _failed('NO_INTENT')));
+      await _open(tester, app, daemon.call, from: AddPhoneOpening.offer);
+      expect(find.byType(AddPhoneDialog), findsOneWidget);
+      await _joins(tester, app, pub: 'while-open');
+      await tester.pump();
+      await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+      await tester.pump();
+      await _joins(tester, app, pub: 'after-close');
+      snapshot.complete({'members': <Object>[]});
+      await tester.pump();
+      await tester.pump();
+      expect(usage.pairings, [AddPhoneOpening.offer]);
+      await tester.pumpWidget(const SizedBox());
+    },
+  );
 
   for (final from in AddPhoneOpening.values) {
     testWidgets('new phones count once per device from ${from.name}', (

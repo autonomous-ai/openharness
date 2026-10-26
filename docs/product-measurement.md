@@ -29,15 +29,22 @@ Add Phone skip reasons are a fixed list: `has_phone` (including a cached answer)
 `cap_reached` (the away card's combined show count is three), `not_signed_in` (including a missing account
 identity or a workspace not ready), `viewer` (web or viewer window), `card_showing`, `no_storage` (missing or
 unreadable local state), `account_changed` (the original account/work is no longer current), and `read_limit`
-(after-work's three unanswered reads in this run). One counter per declined path invocation, not per frame;
-no account or device identifiers, names, card text, or error content are reported. The first sign-in path keeps
+(after-work's three unanswered reads in this run). Count each path/reason pair at most once per app run.
+Account-work invalidation clears the counted pairs, so another account can count again and old revisions do
+not accumulate. A counter means a launch where that reason blocked that path, rather than a number of turns
+or returns to the window; the same reason can count once for each distinct path. Fixed reason names and
+vocabulary 6 are unchanged. No account or device identifiers, names, card text, or error content are reported.
+The first sign-in path keeps
 its existing fallback of offering a card when its device list cannot be read; that is an offer, not a skip.
 
 A pairing counter uses the existing live account-join signal, only while the Add Phone dialog is open and
-signed in. It excludes computers and every device in the snapshot read immediately before opening, and counts
+signed in. The dialog opens immediately while a known-key snapshot is read alongside it. Joins received
+before the snapshot are held until it arrives; keys in that snapshot never count. It excludes computers and counts
 each new device key once even if its notice repeats or the dialog rebuilds. A handshake alone may be an
 existing phone and does not count. A second new phone can count in the same dialog. Attribution is omitted
-when the opening snapshot is unreadable, the account identity is unavailable, or the account changes.
+when the opening snapshot fails or is null, the account identity is unavailable, or the account changes.
+A join received while open can be attributed after closing once its snapshot arrives; notices received after
+closing do not count. The snapshot never delays opening the dialog.
 The snapshot and deduplication keys stay in RAM, outside the report. Returning cards use the `offer` opening;
 their separate flow identifies the card. Openings measure dialogs, pairing counters measure new account keys,
 and neither proves that the phone subsequently used a harness.

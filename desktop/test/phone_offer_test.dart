@@ -10,6 +10,7 @@ import 'package:harness/core/models.dart';
 import 'package:harness/measurement/product_measurement.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/state/app_state.dart';
+import 'package:harness/state/pane_layout_store.dart';
 import 'package:harness/widgets/add_phone_dialog.dart';
 import 'package:harness/widgets/phone_offer_card.dart';
 import 'package:harness/viewer/viewer_services.dart';
@@ -325,7 +326,8 @@ void main() {
       final usage = AddPhoneRecorder();
       final app = createApp(store: MemoryStore(), productMeasurement: usage)
         ..signedIn = true
-        ..currentUser = CurrentUserProfile(id: id, email: 'a@example.test');
+        ..currentUser = CurrentUserProfile(id: id, email: 'a@example.test')
+          ..api = _DevicesApi(_listing([]));
       addTearDown(app.dispose);
       await app.offerPhoneForTest(atLaunch: true);
       expect(app.phoneOfferShowing, isFalse);
@@ -395,21 +397,166 @@ void main() {
           expect(api.reads, 3);
           expect(usage.skipped, [
             'no_device_list',
-            'no_device_list',
-            'no_device_list',
-            'read_limit',
-            'read_limit',
             'read_limit',
           ]);
         }
         if (expected == 'has_phone') {
           await app.offerPhoneAfterWorkForTest();
-          expect(usage.skipped, ['has_phone', 'has_phone']);
+          expect(usage.skipped, ['has_phone']);
           expect(api.reads, 1);
         }
       }
     },
   );
+
+  test('50 finished own turns count already_shown once for this run', () async {
+    final store = MemoryStore()..values[_seen] = '1';
+    final usage = AddPhoneRecorder();
+    final api = _DevicesApi(_listing([]));
+    final app = createApp(store: store, productMeasurement: usage)
+      ..status = AppStatus.authenticated
+      ..signedIn = true
+      ..api = api;
+    addTearDown(app.dispose);
+    app.adoptSessionForTest(terminal('a0', []));
+    for (var i = 0; i < 50; i++) {
+      await app.handleMachineEventForTest('m', {
+        'type': 'turn_ended',
+        'agentId': 'a0',
+      });
+      await pumpEventQueue();
+    }
+    expect(usage.skipped, ['already_shown']);
+    expect(api.reads, 0);
+  });
+
+  test('an account invalidation permits each path/reason again without retaining old revisions', () async {
+    final store = MemoryStore()..values[_seen] = '1';
+    final usage = AddPhoneRecorder();
+    final app =
+        AppNotifier(
+            config: AppConfig.dev,
+            configStore: null,
+            authSession: AuthSession(storage: MemoryStore()),
+            paneLayoutStore: PaneLayoutStore(storage: store),
+            productMeasurement: usage,
+            localManualFixture: const LocalManualFixture(
+              apiBaseUrl: 'http://127.0.0.1:9',
+              apiKey: 'fixture',
+              machineId: 'fixture',
+              machineName: 'Fixture',
+            ),
+          )
+          ..status = AppStatus.authenticated
+          ..signedIn = true
+          ..currentUser = const CurrentUserProfile(
+            id: 'a',
+            email: 'a@example.test',
+          );
+    addTearDown(app.dispose);
+    final generation = app.accountGeneration;
+    for (var i = 0; i < 50; i++) {
+      await app.offerPhoneAfterWorkForTest();
+    }
+    expect(usage.skipped, ['already_shown']);
+    app.expireSessionForTest('Account changed');
+    expect(app.accountGeneration, greaterThan(generation));
+    app
+      ..status = AppStatus.authenticated
+      ..signedIn = true
+      ..currentUser = const CurrentUserProfile(
+        id: 'b',
+        email: 'b@example.test',
+      );
+    for (var i = 0; i < 50; i++) {
+      await app.offerPhoneAfterWorkForTest();
+    }
+    expect(usage.skipped, ['already_shown', 'already_shown']);
+  });
+
+  test(
+    'the same reason counts separately for launch, sign-in and work paths',
+    () async {
+      final store = MemoryStore()..values[_stopped] = '1';
+      final usage = AddPhoneRecorder();
+      final app = createApp(store: store, productMeasurement: usage)
+        ..status = AppStatus.authenticated
+        ..signedIn = true;
+      addTearDown(app.dispose);
+      app.dismissPhoneOffer();
+      for (var i = 0; i < 50; i++) {
+        await app.offerPhoneForTest(atLaunch: true);
+        await app.offerPhoneForTest(atLaunch: false);
+        await app.offerPhoneAfterWorkForTest();
+      }
+      expect(usage.skipped, ['stopped', 'stopped', 'stopped']);
+    },
+  );
+
+  test(
+    'a completed sign-in offer counts already_shown once without a device read',
+    () async {
+      final store = MemoryStore()..values[_done] = '1';
+      final usage = AddPhoneRecorder();
+      final api = _DevicesApi(_listing([]));
+      final app = createApp(store: store, productMeasurement: usage)
+        ..status = AppStatus.authenticated
+        ..signedIn = true
+        ..api = api;
+      addTearDown(app.dispose);
+      for (var i = 0; i < 50; i++) {
+        await app.offerPhoneForTest(atLaunch: false);
+      }
+      expect(usage.skipped, ['already_shown']);
+      expect(api.reads, 0);
+    },
+  );
+
+  test(
+    'a window closed before its launch decision cannot show a card',
+    () async {
+      final api = _DevicesApi(_listing([]));
+      final app = createApp(store: MemoryStore())..api = api;
+      app.dispose();
+      await app.offerPhoneForTest(atLaunch: true);
+      expect(app.phoneOfferShowing, isFalse);
+      expect(api.reads, 0);
+    },
+  );
+
+  for (final path in ['work', 'sign_in', 'launch']) {
+    test(
+      'a window closed during the $path device read cannot show a card',
+      () async {
+        final api = _DevicesApi(_listing([]));
+        final app = createApp(store: MemoryStore())
+          ..status = AppStatus.authenticated
+          ..signedIn = true
+          ..currentUser = const CurrentUserProfile(
+            id: 'a',
+            email: 'a@example.test',
+          )
+          ..api = api;
+        var closed = false;
+        addTearDown(() {
+          if (!closed) {
+            app.dispose();
+          }
+        });
+        api.onRead = () {
+          closed = true;
+          app.dispose();
+        };
+        if (path == 'work') {
+          await app.offerPhoneAfterWorkForTest();
+        } else {
+          await app.offerPhoneForTest(atLaunch: path == 'launch');
+        }
+        expect(app.phoneOfferShowing, isFalse);
+        expect(api.reads, 1);
+      },
+    );
+  }
 
   test('returning launch reports already shown and the sign-in path respects a prior stop', () async {
     final usage = AddPhoneRecorder();
@@ -736,6 +883,7 @@ void main() {
       _DevicesApi api, {
       MemoryStore? store,
       AddPhoneRecorder? usage,
+      bool disposeAtTearDown = true,
     }) async {
       now = DateTime.utc(2026, 10, 20, 9);
       state = AppLifecycleState.resumed;
@@ -746,7 +894,7 @@ void main() {
         ..api = api
         ..phoneOfferClock = (() => now)
         ..lifecycle = (() => state);
-      addTearDown(app.dispose);
+      if (disposeAtTearDown) addTearDown(app.dispose);
       return (app, kept);
     }
 
@@ -1075,6 +1223,63 @@ void main() {
       expect(app.phoneOfferShowing, isFalse);
       expect(usage.skipped, ['not_signed_in']);
     });
+
+    for (final reason in [
+      'stopped',
+      'cap_reached',
+      'no_device_list',
+      'has_phone',
+      'card_showing',
+    ]) {
+      test('50 returns after time away count $reason once', () async {
+        final usage = AddPhoneRecorder();
+        final store = MemoryStore();
+        if (reason == 'stopped') {
+          store.values[_stopped] = '1';
+        }
+        if (reason == 'cap_reached') {
+          store.values[_shows] = '3';
+        }
+        final api = _DevicesApi(
+          reason == 'no_device_list'
+              ? null
+              : _listing(reason == 'has_phone' ? [_device('phone')] : []),
+        );
+        final (app, _) = await working(api, store: store, usage: usage);
+        if (reason == 'card_showing') {
+          await app.offerPhoneAfterWorkForTest();
+        }
+        for (var i = 0; i < 50; i++) {
+          leave(app);
+          await finishes(app, id: 'dedup-$i');
+          await back(app, const Duration(minutes: 10));
+        }
+        expect(usage.skipped, [reason]);
+      });
+    }
+
+    test(
+      'a window closed during the away device read cannot show a card',
+      () async {
+        final api = _DevicesApi(_listing([]));
+        final (app, _) = await working(api, disposeAtTearDown: false);
+        var closed = false;
+        addTearDown(() {
+          if (!closed) {
+            app.dispose();
+          }
+        });
+        api.onRead = () {
+          closed = true;
+          app.dispose();
+        };
+        leave(app);
+        await finishes(app);
+        await back(app, const Duration(minutes: 10));
+        expect(app.phoneOfferShowing, isFalse);
+        expect(api.reads, 1);
+      },
+    );
 
     test('a card already up is left as it is', () async {
       final (app, _) = await working(_DevicesApi(_listing([])));

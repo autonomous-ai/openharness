@@ -7681,8 +7681,20 @@ class AppNotifier extends ChangeNotifier {
   String? _returningPhoneOfferAccount;
   bool _phoneOffersStoppedHere = false;
 
-  void _skipPhoneOffer(String reason) =>
+  int _phoneOfferSkipRevision = -1;
+  final _phoneOfferSkips = <(String, String)>{};
+
+  void _skipPhoneOffer(String path, String reason) {
+    // Invalidation changes the revision on account transitions. Forget old
+    // pairs rather than retaining a long-lived set for every previous account.
+    if (_phoneOfferSkipRevision != _authRevision) {
+      _phoneOfferSkips.clear();
+      _phoneOfferSkipRevision = _authRevision;
+    }
+    if (_phoneOfferSkips.add((path, reason))) {
       productMeasurement.phoneOfferSkipped(reason);
+    }
+  }
 
   String? _phoneOfferBlock() {
     if (kIsWeb || viewer != null) return 'viewer';
@@ -7858,12 +7870,13 @@ class AppNotifier extends ChangeNotifier {
   /// showed the first card, or opened Add Phone, has seen it.
   Future<void> _offerPhoneAfterWork() async {
     final blocked = _phoneOfferBlock();
-    if (blocked != null) return _skipPhoneOffer(blocked);
+    if (blocked != null) return _skipPhoneOffer('after_work', blocked);
     if (status != AppStatus.authenticated) {
-      return _skipPhoneOffer('not_signed_in');
+      return _skipPhoneOffer('after_work', 'not_signed_in');
     }
     if (_phoneOfferAfterWorkAsked) {
       return _skipPhoneOffer(
+        'after_work',
         _phoneOfferAfterWorkUnanswered >= _phoneOfferUnansweredReads
             ? 'read_limit'
             : 'already_shown',
@@ -7872,8 +7885,10 @@ class AppNotifier extends ChangeNotifier {
     _phoneOfferAfterWorkAsked = true;
     final revision = _authRevision;
     final stopped = await _phoneOfferStopReason();
-    if (stopped != null) return _skipPhoneOffer(stopped);
-    if (await _phoneOfferSeen()) return _skipPhoneOffer('already_shown');
+    if (stopped != null) return _skipPhoneOffer('after_work', stopped);
+    if (await _phoneOfferSeen()) {
+      return _skipPhoneOffer('after_work', 'already_shown');
+    }
     // No list to judge by: asked again at a later finished turn, a few times a run at most.
     void unanswered() => _phoneOfferAfterWorkAsked =
         ++_phoneOfferAfterWorkUnanswered >= _phoneOfferUnansweredReads;
@@ -7882,22 +7897,24 @@ class AppNotifier extends ChangeNotifier {
       final devices = await loadDevices();
       if (devices == null) {
         unanswered();
-        return _skipPhoneOffer('no_device_list');
+        return _skipPhoneOffer('after_work', 'no_device_list');
       }
       hasPhone = devices.devices.any(
         (device) => !device.isMachine && !device.self,
       );
     } catch (_) {
       unanswered();
-      return _skipPhoneOffer('no_device_list');
+      return _skipPhoneOffer('after_work', 'no_device_list');
     }
-    if (!_authWorkCurrent(revision)) return _skipPhoneOffer('account_changed');
+    if (!_authWorkCurrent(revision)) {
+      return _skipPhoneOffer('after_work', 'account_changed');
+    }
     final changed = _phoneOfferBlock();
-    if (changed != null) return _skipPhoneOffer(changed);
+    if (changed != null) return _skipPhoneOffer('after_work', changed);
     if (hasPhone) {
       _accountHasPhone = true;
       _markPhoneOfferSeen();
-      return _skipPhoneOffer('has_phone');
+      return _skipPhoneOffer('after_work', 'has_phone');
     }
     _phoneOfferFlow = ProductFlow.phoneOfferAfterWork;
     _phoneOfferAway = null;
@@ -7986,30 +8003,32 @@ class AppNotifier extends ChangeNotifier {
     ({String agent, bool waited, DateTime at}) missed,
   ) async {
     final blocked = _phoneOfferBlock();
-    if (blocked != null) return _skipPhoneOffer(blocked);
+    if (blocked != null) return _skipPhoneOffer('away', blocked);
     if (status != AppStatus.authenticated) {
-      return _skipPhoneOffer('not_signed_in');
+      return _skipPhoneOffer('away', 'not_signed_in');
     }
     final revision = _authRevision;
     final stopped = await _phoneOfferStopReason(cap: true);
-    if (stopped != null) return _skipPhoneOffer(stopped);
+    if (stopped != null) return _skipPhoneOffer('away', stopped);
     bool hasPhone;
     try {
       final devices = await loadDevices();
       // No list to judge by: nothing this time; the next time away asks again.
-      if (devices == null) return _skipPhoneOffer('no_device_list');
+      if (devices == null) return _skipPhoneOffer('away', 'no_device_list');
       hasPhone = devices.devices.any(
         (device) => !device.isMachine && !device.self,
       );
     } catch (_) {
-      return _skipPhoneOffer('no_device_list');
+      return _skipPhoneOffer('away', 'no_device_list');
     }
-    if (!_authWorkCurrent(revision)) return _skipPhoneOffer('account_changed');
+    if (!_authWorkCurrent(revision)) {
+      return _skipPhoneOffer('away', 'account_changed');
+    }
     final changed = _phoneOfferBlock();
-    if (changed != null) return _skipPhoneOffer(changed);
+    if (changed != null) return _skipPhoneOffer('away', changed);
     if (hasPhone) {
       _accountHasPhone = true;
-      return _skipPhoneOffer('has_phone');
+      return _skipPhoneOffer('away', 'has_phone');
     }
     final minutes = phoneOfferClock().difference(missed.at).inMinutes;
     _phoneOfferFlow = missed.waited
@@ -8032,42 +8051,44 @@ class AppNotifier extends ChangeNotifier {
   /// code. A signed-in launch gets one returning-account card on this computer (owner, 2026-10-26),
   /// unless a phone already exists or the person stopped offers here.
   Future<void> _offerPhoneAtLaunch(int revision) async {
-    if (kIsWeb || viewer != null) return _skipPhoneOffer('viewer');
-    if (!_authWorkCurrent(revision)) return _skipPhoneOffer('account_changed');
-    if (_phoneOffer) return _skipPhoneOffer('card_showing');
+    if (kIsWeb || viewer != null) return _skipPhoneOffer('launch', 'viewer');
+    if (!_authWorkCurrent(revision)) {
+      return _skipPhoneOffer('launch', 'account_changed');
+    }
+    if (_phoneOffer) return _skipPhoneOffer('launch', 'card_showing');
     if (signedIn) {
       final stopped = await _phoneOfferStopReason();
-      if (stopped != null) return _skipPhoneOffer(stopped);
+      if (stopped != null) return _skipPhoneOffer('launch', stopped);
       // Boot loads the profile independently of machine discovery. Wait for that
       // identity here, without delaying the workspace or reading devices again.
       if (currentUser?.id?.isNotEmpty != true) await _loadProfile();
       final blocked = _phoneOfferBlock();
-      if (blocked != null) return _skipPhoneOffer(blocked);
+      if (blocked != null) return _skipPhoneOffer('launch', blocked);
       final account = currentUser?.id;
       if (account == null || account.isEmpty) {
-        return _skipPhoneOffer('not_signed_in');
+        return _skipPhoneOffer('launch', 'not_signed_in');
       }
       try {
         if (await _paneLayout!.storage.read('phone_offer_returning.$account') ==
             '1') {
-          return _skipPhoneOffer('already_shown');
+          return _skipPhoneOffer('launch', 'already_shown');
         }
-        if (_accountHasPhone) return _skipPhoneOffer('has_phone');
+        if (_accountHasPhone) return _skipPhoneOffer('launch', 'has_phone');
         final devices = await loadDevices();
-        if (devices == null) return _skipPhoneOffer('no_device_list');
+        if (devices == null) return _skipPhoneOffer('launch', 'no_device_list');
         if (!_authWorkCurrent(revision) || currentUser?.id != account) {
-          return _skipPhoneOffer('account_changed');
+          return _skipPhoneOffer('launch', 'account_changed');
         }
         final changed = _phoneOfferBlock();
-        if (changed != null) return _skipPhoneOffer(changed);
+        if (changed != null) return _skipPhoneOffer('launch', changed);
         if (devices.devices.any(
           (device) => !device.isMachine && !device.self,
         )) {
           _accountHasPhone = true;
-          return _skipPhoneOffer('has_phone');
+          return _skipPhoneOffer('launch', 'has_phone');
         }
       } catch (_) {
-        return _skipPhoneOffer('no_device_list');
+        return _skipPhoneOffer('launch', 'no_device_list');
       }
       _returningPhoneOfferAccount = account;
       _phoneOfferFlow = ProductFlow.phoneOfferReturning;
@@ -8076,10 +8097,12 @@ class AppNotifier extends ChangeNotifier {
       notifyListeners();
       return;
     }
-    if (!isGuest) return _skipPhoneOffer('not_signed_in');
-    if (await _phoneOfferDone()) return _skipPhoneOffer('already_shown');
+    if (!isGuest) return _skipPhoneOffer('launch', 'not_signed_in');
+    if (await _phoneOfferDone()) {
+      return _skipPhoneOffer('launch', 'already_shown');
+    }
     if (!_authWorkCurrent(revision) || !isGuest) {
-      return _skipPhoneOffer('account_changed');
+      return _skipPhoneOffer('launch', 'account_changed');
     }
     _phoneOfferFlow = ProductFlow.phoneOffer;
     _phoneOfferAway = null;
@@ -8097,10 +8120,12 @@ class AppNotifier extends ChangeNotifier {
   /// phone or a browser on it, which has its way in.
   Future<void> _offerPhoneAfterSignIn(int revision) async {
     final blocked = _phoneOfferBlock();
-    if (blocked != null) return _skipPhoneOffer(blocked);
+    if (blocked != null) return _skipPhoneOffer('sign_in', blocked);
     final stopped = await _phoneOfferStopReason();
-    if (stopped != null) return _skipPhoneOffer(stopped);
-    if (await _phoneOfferDone()) return _skipPhoneOffer('already_shown');
+    if (stopped != null) return _skipPhoneOffer('sign_in', stopped);
+    if (await _phoneOfferDone()) {
+      return _skipPhoneOffer('sign_in', 'already_shown');
+    }
     var hasPhone = false;
     try {
       final devices = await loadDevices();
@@ -8110,12 +8135,14 @@ class AppNotifier extends ChangeNotifier {
     } catch (_) {
       // A list that cannot be read offers the card anyway: it costs one × to put away.
     }
-    if (!_authWorkCurrent(revision)) return _skipPhoneOffer('account_changed');
+    if (!_authWorkCurrent(revision)) {
+      return _skipPhoneOffer('sign_in', 'account_changed');
+    }
     final changed = _phoneOfferBlock();
-    if (changed != null) return _skipPhoneOffer(changed);
+    if (changed != null) return _skipPhoneOffer('sign_in', changed);
     if (hasPhone) {
       _markPhoneOfferDone();
-      return _skipPhoneOffer('has_phone');
+      return _skipPhoneOffer('sign_in', 'has_phone');
     }
     _phoneOfferFlow = ProductFlow.phoneOffer;
     _phoneOfferAway = null;
