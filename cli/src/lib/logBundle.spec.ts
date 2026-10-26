@@ -68,6 +68,23 @@ describe('buildLogBundle', () => {
     expect(bundleFileName(now)).toBe('harness-logs-20260915-1030.zip')
   })
 
+  it('takes each device\'s own dial logs from its usb-<serial> folder, redacted, within the same week', () => {
+    // The fleet writes one folder per device (cableFleet.ts); a bundle without them left out the Pro's own
+    // console on 20-26 Oct, the one log that says whether it rebooted.
+    const root = mkdtempSync(join(tmpdir(), 'bundle-'))
+    const logs = join(root, 'logs'), pro = join(logs, 'usb-E8-F6-0A-E7-63-7D'), other = join(logs, 'notes')
+    mkdirSync(pro, { recursive: true }); mkdirSync(other)
+    writeFileSync(join(pro, 'dial-20260915.log'), '[daemon] dial E8 on fw 0.1.13 board pro\nsession_token: abcdefgh12345\n')
+    writeFileSync(join(pro, 'dial-20260901.log'), 'too old\n')
+    writeFileSync(join(pro, 'notes.txt'), 'no\n')
+    writeFileSync(join(other, 'dial-20260915.log'), 'not a device folder\n')
+    const { zip, included } = buildLogBundle({ logsDir: logs, dataDir: root, now: new Date(2026, 8, 15, 10, 30), version: '0', redact: redactSecretsInText })
+    const files = readZip(zip)
+    expect([...files.keys()]).toEqual(['README.txt', 'logs/usb-E8-F6-0A-E7-63-7D/dial-20260915.log'])
+    expect(files.get('logs/usb-E8-F6-0A-E7-63-7D/dial-20260915.log')?.toString()).toBe('[daemon] dial E8 on fw 0.1.13 board pro\nsession_token: <redacted>\n')
+    expect(included).toEqual(['usb-E8-F6-0A-E7-63-7D/dial-20260915.log'])
+  })
+
   it('still produces a bundle with a README when there is nothing to include', () => {
     const root = mkdtempSync(join(tmpdir(), 'bundle-'))
     const { zip, included } = buildLogBundle({ logsDir: join(root, 'none'), dataDir: root, version: '0', redact: (s) => s })

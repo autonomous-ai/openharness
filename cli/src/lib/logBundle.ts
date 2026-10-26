@@ -1,5 +1,5 @@
 import { readdirSync, readFileSync, statSync, openSync, readSync, closeSync } from 'node:fs'
-import { join } from 'node:path'
+import { basename, join } from 'node:path'
 import { writeZip, type ZipEntry } from './zipWriter.js'
 
 /**
@@ -7,7 +7,8 @@ import { writeZip, type ZipEntry } from './zipWriter.js'
  * one zip, secrets blanked.
  *
  *   app-YYYYMMDD.log, cli-YYYYMMDD.log   the desktop app's own log and its CLI transcript
- *   dial-YYYYMMDD.log                    the dial's console + the daemon's cable events (dialLog.ts)
+ *   dial-YYYYMMDD.log                    the dial's console + the daemon's cable events (dialLog.ts),
+ *                                        and usb-<serial>/dial-YYYYMMDD.log, one folder per device
  *   harness.log (tail)                   the daemon's console — the last few MB, which is where today is
  *   README.txt                           when, which version, what was included
  *
@@ -32,6 +33,7 @@ export interface LogBundleOptions {
 }
 
 const DATED = /^(app|cli|dial)-(\d{8})\.log$/
+const DEVICE_DIR = /^usb-[A-Za-z0-9_-]+$/
 
 function ymd(d: Date): string {
   return `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}`
@@ -65,8 +67,14 @@ export function buildLogBundle(opts: LogBundleOptions): { zip: Buffer; included:
 
   let names: string[] = []
   try { names = readdirSync(opts.logsDir).sort() } catch { /* no logs directory yet */ }
+  // Each device's dial logs are in a folder of their own, `usb-<serial>/` (cableFleet.ts). Reading only the top
+  // level left a user's Harness Pro console out of the bundle sent about it stuck silent (20-26 Oct).
+  names = names.flatMap((name) => {
+    if (!DEVICE_DIR.test(name)) return [name]
+    try { return readdirSync(join(opts.logsDir, name)).sort().filter((f) => f.startsWith('dial-')).map((f) => `${name}/${f}`) } catch { return [] }
+  })
   for (const name of names) {
-    const m = DATED.exec(name)
+    const m = DATED.exec(basename(name))
     if (!m || m[2] < cutoff) continue
     const path = join(opts.logsDir, name)
     try {
