@@ -115,3 +115,40 @@ describe('the project report a Lead is shown how to send', () => {
     expect(JSON.stringify(help)).not.toContain('throughRevision')
   })
 })
+
+// Review round 1: a group that left the active set (archived, or finished and idle) is not in the cached parts, yet its own
+// Lead still reads its route history. The group is read by id, as the backend serves an active or a dormant one.
+describe('route history of a group outside the active set', () => {
+  const DORMANT = 'c0000000000000000000000d'
+  const history = (leadId: string | null) => swarm((_method, path) => {
+    if (path.startsWith(`/api/super-tabs/${T}/groups/${DORMANT}?`)) return leadId === null
+      ? { status: 404, body: { success: false, error: { code: 'NOT_FOUND', message: 'No such group.' } } }
+      : ok({ group: { key: DORMANT, version: 214200, changedAt: 1, data: { id: DORMANT, leadId, agentIds: [leadId], archived: true, dormant: true } } })
+    if (path.includes('/route-decisions') || path.includes('/attempts')) return ok([])
+    return undefined
+  })
+  const ask = (s: ReturnType<typeof swarm>, agentId: string) => s.ask({ action: 'routeHistory', tabId: T, agentId, conversationId: DORMANT }, owner)
+  const logReads = (s: ReturnType<typeof swarm>) => s.call.mock.calls.filter(c => c[1].includes('/route-decisions')).length
+
+  it('gives a dormant group\'s own Lead its history', async () => {
+    const s = history(FIXTURE.leadId)
+    expect(await ask(s, FIXTURE.leadId)).toEqual({ ok: true, value: { decisions: [], attempts: [] } })
+    expect(s.call).toHaveBeenCalledWith('GET', `/api/super-tabs/${T}/groups/${DORMANT}?asAgentId=${FIXTURE.leadId}`, undefined)
+  })
+  it('refuses a caller that does not lead it, and a group the caller cannot read, before reading any history', async () => {
+    const other = history(FIXTURE.leadId)
+    expect(await ask(other, FIXTURE.builderId)).toMatchObject({ error: 'LEAD_REQUIRED', status: 403 })
+    expect(logReads(other)).toBe(0)
+    const unreadable = history(null)
+    expect(await ask(unreadable, FIXTURE.leadId)).toMatchObject({ error: 'LEAD_REQUIRED', status: 403 })
+    expect(logReads(unreadable)).toBe(0)
+  })
+})
+
+describe('route history when the group cannot be read for another reason', () => {
+  it('says so, rather than calling the caller no Lead', async () => {
+    const s = swarm((_method, path) => path.includes('/groups/') ? { status: 503, body: { success: false, error: { code: 'SWARM_BUSY', message: 'Busy' } } } : undefined)
+    expect(await s.ask({ action: 'routeHistory', tabId: T, agentId: FIXTURE.leadId, conversationId: FIXTURE.workGroup }, owner))
+      .toEqual({ error: 'SWARM_BUSY', detail: 'Busy', status: 503 })
+  })
+})

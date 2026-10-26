@@ -52,6 +52,18 @@ describe('the host form of a machine\'s Swarms', () => {
     expect(paths()).toEqual([FULL, SINCE(C0), FULL])
   })
 
+  // Review round 1: the server answers in full when the cursor is bad or too old, with no list of removed Swarms.
+  it('takes a full answer to a read by change as full: Swarms it omits are dropped, and the minute starts again', async () => {
+    const forced = { ...readFixture<Json>('host-full'), cursor: 'forced', tabs: readFixture<{ tabs: Json[] }>('host-full').tabs.slice(0, 1) }
+    const { feed, paths, later } = feedOf([ok(readFixture('host-full')), ok(forced), ok(readFixture('host-quiet'))])
+    await feed.refresh()
+    later(50_000)
+    expect(agents((await feed.refresh()).roster)).toEqual(['1:1', '1:2'])
+    later(50_000)
+    await feed.refresh()
+    expect(paths()).toEqual([FULL, SINCE(C0), SINCE('forced')])
+  })
+
   it('keeps its rows and cursor when a read fails, and starts in full again when the first one did', async () => {
     const { feed, paths } = feedOf([refused(503, 'SWARM_BUSY', 'Busy'), ok(readFixture('host-full')), refused(502, 'BAD_GATEWAY'), ok(readFixture('host-quiet'))])
     await expect(feed.refresh()).rejects.toMatchObject({ code: 'SWARM_BUSY' })

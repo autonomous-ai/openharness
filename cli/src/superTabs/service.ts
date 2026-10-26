@@ -348,8 +348,11 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
         // The route log and the group's attempts, for the quota open picks hold and what members did before. Apart from
         // `routeContext` so the Lead reads it while it probes the machines; the group's Lead only, like the route itself.
         if (payload.action === 'routeHistory') {
-          const group = list((await swarm()).state.conversations).find(c => c.id === payload.conversationId)
-          if (!group || group.leadId !== agentId) return { error: 'LEAD_REQUIRED', detail: 'The coordinating Lead of this group owns routing.', status: 403 }
+          // The one group by id, active or dormant (design 4.5): a group that left the active set still has its history, and
+          // a group this agent cannot read answers 404, refused like one it does not lead (review round 1).
+          const group = identifier(payload.conversationId) ? object(object(await backend(core, 'GET', `${path}/groups/${payload.conversationId}?${identity}`)
+            .catch(error => { if (error instanceof SuperTabHostError && [403, 404].includes(error.status)) return null; throw error })).group).data : null
+          if (!group || object(group).leadId !== agentId) return { error: 'LEAD_REQUIRED', detail: 'The coordinating Lead of this group owns routing.', status: 403 }
           const [logged, tried] = await Promise.all([
             within(backend(core, 'GET', `${path}/route-decisions?${identity}`)),
             // An older backend has no such route: its 404 is unreadable like any other failure.

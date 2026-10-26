@@ -39,8 +39,10 @@ export function mergeChanges(store: PartsStore, changes: ChangedParts): PartsSto
     for (const part of changes[field] as PartEnvelope[]) {
       const known = held.get(part.key) ?? (kind === 'group' ? dormant.get(part.key) : undefined)
       if (known && known.version >= part.version) continue
-      held.delete(part.key)
       dormant.delete(part.key)
+      // A live part replaced in place keeps its position: Map.set on a key it holds does not move it, so status keeps its
+      // order while parts change (review round 1). A part new to the active list goes at the end.
+      if (part.dormant || part.deleted) held.delete(part.key)
       if (part.dormant) dormant.set(part.key, part)
       else if (!part.deleted) held.set(part.key, part)
     }

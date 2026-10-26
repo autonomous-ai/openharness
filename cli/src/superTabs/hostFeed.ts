@@ -42,10 +42,12 @@ export class HostFeed {
   }
 
   private async read(): Promise<HostRead> {
-    const full = this.cursor === null || this.now() - this.fullAt >= HOST_FULL_MS
+    const askFull = this.cursor === null || this.now() - this.fullAt >= HOST_FULL_MS
     const startedAt = this.now()
-    const path = `/api/super-tabs/hosts/${this.machineId}/changes?${full ? 'full=1' : `cursor=${this.cursor}`}`
+    const path = `/api/super-tabs/hosts/${this.machineId}/changes?${askFull ? 'full=1' : `cursor=${this.cursor}`}`
     const answer = readable<HostChanges>(await this.backend(this.core, 'GET', path))
+    // The answer says what it is: the server answers a bad or too old cursor in full, with no removed Swarms (review round 1).
+    const full = answer.full === true
     const tabs = full ? new Map<string, HostTab>() : new Map(this.tabs)
     for (const tabId of answer.removedTabIds ?? []) tabs.delete(tabId)
     for (const tab of answer.tabs) tabs.set(tab.tabId, tab)

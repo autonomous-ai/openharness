@@ -32,6 +32,20 @@ describe('a Swarm read as parts', () => {
     expect(store.head?.version).toBe(213990)
   })
 
+  // Review round 1: an update moved its part to the end, so ordinary activity reordered status.
+  it('keeps every updated part where it was, and puts only new parts at the end', () => {
+    const live = (key: string, version: number) => ({ key, version, changedAt: 9, data: { id: key } })
+    const store = mergeChanges(first(), changes({
+      groups: [live(FIXTURE.workGroup, 214100), live(FIXTURE.leadGroup, 214101), live('c0000000000000000000000a', 214102)],
+      agents: [live(FIXTURE.leadId, 214103), live(FIXTURE.builderId, 214104)],
+      members: [live(FIXTURE.ownerId, 214105)],
+    }))
+    expect(keys(store, 'group')).toEqual([FIXTURE.leadGroup, FIXTURE.leadsGroup, FIXTURE.workGroup, FIXTURE.doneGroup, 'c0000000000000000000000a'])
+    expect(store.parts.get('group')!.get(FIXTURE.workGroup)!.version).toBe(214100)
+    expect(keys(store, 'agent')).toEqual([FIXTURE.leadId, FIXTURE.builderId])
+    expect(keys(store, 'member')).toEqual([FIXTURE.ownerId, FIXTURE.collaboratorId])
+  })
+
   it('never lets an older version replace a newer one, nor a tombstone older than what it holds', () => {
     const held = first()
     const older = mergeChanges(held, changes({

@@ -374,6 +374,8 @@ describe('routeHistory', () => {
     const state = { agents: [{ ...t.agent, name: 'Boss' }, { id: 'a2', name: 'Multiply' }, { id: 'a3', name: 'Reader' }], conversations: [{ id: 'g1', leadId: lead ?? t.agentId }] }
     vi.mocked(t.core.account.backend).mockImplementation(async (_method, path) => {
       if (path.includes('/messages') || path.includes('/route-decisions') || path.includes('/attempts')) return await read(path) as never
+      // The one group by id (design 4.5), from the same state.
+      if (path.startsWith('/api/super-tabs/tab/groups/g1?')) return { status: 200, body: { success: true, data: { group: { key: 'g1', version: 1, changedAt: 1, data: state.conversations[0] } } } }
       return { status: 200, body: { success: true, data: path.includes('/routing-policy') ? { policy: { version: 1 }, warnings: [] } : swarmData(t.agent, path, state) } }
     })
     t.core.account.machines = vi.fn(async () => ({ status: 200, body: { data: { machines: [] } } }))
