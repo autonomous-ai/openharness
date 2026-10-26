@@ -179,6 +179,11 @@ export function createAgentSettingsSync(deps: {
         const written = heard(await deps.backend('PATCH', EXPERIMENTAL_SETTINGS, { accountId, feature, enabled }), asked)
         if (!agentSettingsFromAnswer(written)) return failed(written)
       }
+      // Turned on by an agent on the person's yes (agentClient/settings.ts): Harness has only its word for that yes.
+      const byAgent = (body as Record<string, unknown>).byAgent
+      if (typeof byAgent === 'string' && byAgent.trim()) {
+        log(`[settings] ${changes.map(([key, enabled]) => `${key} ${enabled ? 'on' : 'off'}`).join(', ')} by ${byAgent.trim().slice(0, 40)}, which says the person said yes`)
+      }
       return { status: 200, body: { ...readAgentSettings(deps.dataDir, deps.session()), signedIn: true } }
     },
   }

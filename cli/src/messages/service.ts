@@ -35,7 +35,7 @@ import { basename, join } from 'node:path'
 import { SHARED_ACTIVITY_WINDOW_FRAME, SHARED_TABS_WINDOW_FRAME, type CoreApi, type ServiceRequests, type TabFrame, type TurnDelivery } from '../core/api.js'
 import { env } from '../config/env.js'
 import { agentProject } from '../lib/agentProject.js'
-import { agentSettingsPath, readAgentSettings } from '../lib/agentSettings.js'
+import { agentSettingsPath, askThePersonFirst, readAgentSettings } from '../lib/agentSettings.js'
 import type { RegisteredSession } from '../lib/registry.js'
 import { primaryRuntime, sessionForPaneId, terminalRouteKey } from '../lib/terminalRuntime.js'
 import { type DirectoryTab, MessageDirectory, POLL_MS, type Member } from './directory.js'
@@ -137,7 +137,7 @@ export const WHO_WAIT_MS = 4_000
 /** How long `harness send` alone waits for the tasks before it gives the roster without them. */
 export const TASKS_WAIT_MS = 4_000
 /** What `harness send` says while this computer has Agent Messages off: where the person turns them on again. */
-export const MESSAGES_OFF_TEXT = 'Agent Messages are off. The person turns on "Agents in the same tab can message each other" in Settings ▸ Experimental, or runs `harness settings agent-messages on`.'
+export const MESSAGES_OFF_TEXT = `Agent Messages are off. ${askThePersonFirst('agent-messages', 'work on without messaging your teammates.')}`
 
 /** How long the windows' `shared_tabs_changed` waits for more of the same change. */
 export const SHARES_COALESCE_MS = 250

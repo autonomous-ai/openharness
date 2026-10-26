@@ -283,7 +283,9 @@ describe('harness send', () => {
 
   it('refuses while Agent Messages are off on this computer, saying where to turn them on, and when the directory cannot be read', async () => {
     // One switch of the account replaced each tab's chat icon, which the owner hit by mistake (2026-10-12).
-    const refused = { error: 'MESSAGES_OFF', detail: 'Agent Messages are off. The person turns on "Agents in the same tab can message each other" in Settings ▸ Experimental, or runs `harness settings agent-messages on`.' }
+    // The agent asks the person, and turns it on only after their yes (lib/agentSettings.ts `askThePersonFirst`).
+    const refused = { error: 'MESSAGES_OFF', detail: MESSAGES_OFF_TEXT }
+    expect(MESSAGES_OFF_TEXT).toMatch(/^Agent Messages are off\. agent-messages is off\. Ask the person, .*"May agents in the same tab message each other\?" Only if they say yes, run `harness settings agent-messages on --person-said-yes`.* If they say no: work on without messaging your teammates\.$/)
     // An account that never said: off by default, so nothing is sent and no one is told of teammates.
     rmSync(agentSettingsPath(root))
     const fresh = setup()

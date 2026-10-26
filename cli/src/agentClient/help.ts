@@ -6,6 +6,7 @@ import { CLOSE_USAGE, EXIT, PS_USAGE, SHOW_USAGE, SPAWN_LIMITS, TELL_USAGE, WAIT
 import { NEW_USAGE } from '../lib/newCommand.js'
 import { SEND_USAGE } from '../messages/command.js'
 import { outsideCaller } from './model.js'
+import { PERSON_SAID_YES } from '../lib/agentSettings.js'
 
 const synopsis = (usage: string): string => usage.split('\n')[0].replace(/^Usage: /, '')
 const sendLine = (): string => (SEND_USAGE.split('\n').find((l) => l.includes('harness send <name>[,<name>]')) ?? '').trim().split(/\s{2,}/)[0]
@@ -38,8 +39,10 @@ export function agentsHelp(): string {
       + `${EXIT.stopped} stopped or gone · ${EXIT.refused} refused (do not retry) · ${EXIT.timeout} still working when the wait ended.`,
     `Limits: ${SPAWN_LIMITS.livePerHarness} of yours open at once, ${SPAWN_LIMITS.perWindow} starts in ${SPAWN_LIMITS.windowMs / 60_000} minutes;`,
     'a harness another agent started may not start harnesses.',
-    'Rules: name every harness. Put the whole task in it: more work later goes only by harness tell,',
-    'which the person turns on (harness settings agents-tell-agents).',
+    'Rules: name every harness. Put the whole task in it: more work later goes only by harness tell.',
+    'A setting that refuses you is the person\'s to give: ask them with your tool for asking them',
+    '(Claude Code: AskUserQuestion; Codex: request_user_input) or in your reply, and only after their yes run',
+    `harness settings <name> on ${PERSON_SAID_YES}. Never answer it for them.`,
     'Close what you started once you have its answer. Never close one you did not start.',
     'When a harness needs the person, tell the person: only they answer it.',
     'Never ask a harness to publish, deploy, delete or push.',

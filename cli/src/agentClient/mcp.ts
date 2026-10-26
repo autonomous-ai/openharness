@@ -17,6 +17,7 @@ import { VERSION } from '../version.js'
 import { AGENT_SESSION_ENV } from './model.js'
 import { EXIT, VIA_MCP_ENV } from './commands.js'
 import { ENGINES, TERMINAL_ENGINE } from '../engines/types.js'
+import { AGENT_SETTING_NAMES, PERSON_SAID_YES } from '../lib/agentSettings.js'
 
 /** Newest first: the client's own when it is one of these, else the newest. */
 export const PROTOCOL_VERSIONS = ['2025-11-25', '2025-06-18', '2025-03-26', '2024-11-05'] as const
@@ -30,7 +31,7 @@ Call harness_whoami first: it says whether you may start harnesses now. Then lis
 
 Name every harness. Then wait for it (harness_wait), read its answer (harness_read), and close it once you have its answer (harness_close). At most 4 of yours at once, and a harness another agent started may not start harnesses itself. Never ask a harness to publish, deploy, delete or push.
 
-Each answer ends with Next: the call to make next. A refusal is final: do not retry it; tell the person, or do the work yourself.`
+Each answer ends with Next: the call to make next. A refusal is final: do not retry it; tell the person, or do the work yourself. One that says a setting is off is the person's to give: ask them with your tool for asking them, or in your reply, and only after their yes turn it on (harness_settings with person_said_yes), then try again. Never answer it for them.`
 
 /** How long `harness_wait` waits when not told: within what MCP clients allow a call. Codex ends one at 60 s unless its
  *  config says otherwise (`tool_timeout_sec`, developers.openai.com/codex/mcp), so 120 s ended every long wait as an
@@ -155,6 +156,19 @@ export const TOOLS: Tool[] = [
     // A message adds to a teammate's inbox in this tab and nothing more; as harness_start, said so Codex does not ask.
     annotations: { destructiveHint: false, openWorldHint: false },
     argv: (a) => ['send', str(a.to), typeof a.text === 'string' ? a.text : ''],
+  },
+  {
+    name: 'harness_settings',
+    description: 'What agents may do here, the person\'s settings: with no name, each one and whether it is on. With a name, turn it on or off. Turning one on is the person\'s yes to give: ask them first, with your tool for asking them or in your reply, and set person_said_yes only after they said yes. Turning one off needs no one\'s yes.',
+    inputSchema: schema({
+      name: { type: 'string', enum: Object.keys(AGENT_SETTING_NAMES), description: 'The setting, as a refusal names it.' },
+      on: { type: 'boolean', description: 'true to turn it on, false to turn it off.' },
+      person_said_yes: { type: 'boolean', description: 'The person said yes to turning it on, just now, when you asked them.' },
+    }),
+    // Not marked safe: a setting widens what agents may do, so an engine that asks before an unmarked tool (Codex) asks
+    // the person too. Harness's verbs are allowed without asking; this one is not among them (facets/hooks.ts).
+    argv: (a) => !str(a.name) ? ['settings']
+      : ['settings', str(a.name), a.on === false ? 'off' : 'on', ...(a.person_said_yes === true ? [PERSON_SAID_YES] : [])],
   },
   {
     name: 'harness_close',

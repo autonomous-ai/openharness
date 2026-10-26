@@ -929,7 +929,10 @@ describe('harness new, run by an agent', () => {
     rmSync(agentSettingsPath(dir))
     const inPane = (await agentOrigin(harness(d).deps))!
     await expect(inPane.check()).rejects.toMatchObject({ code: 'TURNED_OFF', message: AGENTS_START_AGENTS_OFF })
-    expect(AGENTS_START_AGENTS_OFF).toBe('Agents may not start harnesses: the person turns on "Agents can start other agents" in Harness Settings ▸ Experimental, or runs `harness settings agents-start-agents on`. Until then, do the work yourself.')
+    // The agent asks the person with its own tool, and turns it on only after their yes: people do not open a terminal.
+    expect(AGENTS_START_AGENTS_OFF).toMatch(/^Agents may not start harnesses yet\. agents-start-agents is off\. Ask the person, with your tool for asking them \(Claude Code: AskUserQuestion; Codex: request_user_input\)/)
+    expect(AGENTS_START_AGENTS_OFF).toContain('Only if they say yes, run `harness settings agents-start-agents on --person-said-yes`')
+    expect(AGENTS_START_AGENTS_OFF).toMatch(/Never answer it for them\. If they say no: do the work yourself\.$/)
     const outside = (await agentOrigin(harness(d, { pane: undefined, env: { CODEX_THREAD_ID: 't' } }).deps))!
     await expect(outside.check()).rejects.toThrow(AGENTS_START_AGENTS_OFF)
     expect(await agentOrigin(harness(d, { pane: undefined }).deps)).toBeNull()
@@ -1630,7 +1633,7 @@ describe('harness whoami', () => {
     const h = harness(d)
     expect(await whoamiCommand(['--json'], h.deps)).toBe(EXIT.ok)
     const { context } = JSON.parse(h.out.join('\n'))
-    expect(context.canStart).toEqual({ ok: false, reason: 'SWITCH_OFF', message: 'The person has not turned on "Agents can start other agents".', fix: 'harness settings agents-start-agents on', fixBy: 'person' })
+    expect(context.canStart).toEqual({ ok: false, reason: 'SWITCH_OFF', message: 'The person has not turned on "Agents can start other agents".', fix: 'harness settings agents-start-agents on --person-said-yes', fixBy: 'person' })
     expect(context.machines).toEqual([])
   })
 

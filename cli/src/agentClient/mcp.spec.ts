@@ -52,7 +52,7 @@ describe('harness mcp', () => {
   it('lists send only to a harness in its own pane: an agent outside Harness has nothing to be answered at', async () => {
     const names = async (inPane: boolean) => ((await answer({ jsonrpc: '2.0', id: 1, method: 'tools/list' }, deps({ inPane })))!.result as { tools: Array<{ name: string; argv?: unknown }> }).tools
     const outside = await names(false)
-    expect(outside.map((t) => t.name)).toEqual(['harness_whoami', 'harness_list', 'harness_search', 'harness_machines', 'harness_start', 'harness_wait', 'harness_read', 'harness_close'])
+    expect(outside.map((t) => t.name)).toEqual(['harness_whoami', 'harness_list', 'harness_search', 'harness_machines', 'harness_start', 'harness_wait', 'harness_read', 'harness_settings', 'harness_close'])
     expect(outside.every((t) => t.argv === undefined)).toBe(true)
     expect((await names(true)).map((t) => t.name)).toContain('harness_send')
     expect(await answer(call('harness_send', { to: 'x', text: 'y' }), deps())).toMatchObject({ error: { code: -32602 } })
@@ -81,13 +81,18 @@ describe('harness mcp', () => {
     const listed = ((await answer({ jsonrpc: '2.0', id: 1, method: 'tools/list' }, deps({ inPane: true })))!.result as { tools: Array<{ name: string; annotations?: Record<string, unknown> }> }).tools
     expect(Object.fromEntries(listed.map((tool) => [tool.name, codexAsks(tool.annotations)]))).toEqual({
       harness_whoami: false, harness_list: false, harness_search: false, harness_machines: false, harness_start: false, harness_wait: false, harness_read: false, harness_tell: false, harness_send: false, harness_close: false,
+      // Turning a setting on widens what agents may do: an engine that asks before an unmarked tool asks the person too.
+      harness_settings: true,
     })
   })
 
   it('runs only the verbs Harness allows agents to run without asking, each as the tool the rules name', () => {
     // The engines' permission rules (facets/hooks.ts HARNESS_AGENT_TOOLS) allow each verb, and its tool by name.
-    const runs = Object.fromEntries(TOOLS.map((tool) => [tool.argv({ name: 'x', names: ['x'], task: 't', to: 'x', text: 't' }, '/work')[0], tool.name]))
+    // But `settings`, which the engine asks the person about (a setting widens what agents may do).
+    const runs = Object.fromEntries(TOOLS.filter((tool) => tool.name !== 'harness_settings')
+      .map((tool) => [tool.argv({ name: 'x', names: ['x'], task: 't', to: 'x', text: 't' }, '/work')[0], tool.name]))
     expect(runs).toEqual(HARNESS_AGENT_TOOLS)
+    expect(Object.keys(HARNESS_AGENT_TOOLS)).not.toContain('settings')
   })
 
   it('runs each tool as its verb', async () => {
@@ -110,6 +115,10 @@ describe('harness mcp', () => {
     await answer(call('harness_read', { name: 'a', chars: 99.9 }), d)
     await answer(call('harness_send', { to: 'a', text: 'also the footer' }), d)
     await answer(call('harness_tell', { name: 'a', text: '--now: add tests\ntoo' }), d)
+    await answer(call('harness_settings'), d)
+    await answer(call('harness_settings', { name: 'agents-tell-agents', on: true }), d)
+    await answer(call('harness_settings', { name: 'agents-tell-agents', on: true, person_said_yes: true }), d)
+    await answer(call('harness_settings', { name: 'agent-messages', on: false }), d)
     await answer(call('harness_close', { name: 'a' }), d)
     await answer(call('harness_close', { name: 'a', now: true }), d)
     expect(r.calls.map((c) => c.argv)).toEqual([
@@ -125,6 +134,8 @@ describe('harness mcp', () => {
       ['send', 'a', 'also the footer'],
       // After `--`, words that look like options are the work, not flags.
       ['tell', 'a', '--', '--now: add tests\ntoo'],
+      ['settings'], ['settings', 'agents-tell-agents', 'on'], ['settings', 'agents-tell-agents', 'on', '--person-said-yes'],
+      ['settings', 'agent-messages', 'off'],
       ['close', 'a'], ['close', 'a', '--now'],
     ])
   })
