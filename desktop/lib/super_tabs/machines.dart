@@ -1100,6 +1100,10 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
         if (m is! Map || m['model'] is! String) continue;
         final model = m['model'] as String;
         final named = m['name'] is String ? m['name'] as String : model;
+        final starting = m['starting'] == true;
+        final state = starting
+            ? '\nStarting: not on the Swarm\'s grid yet'
+            : '';
         switch (m['kind']) {
           case 'api' when m['grid'] == local.grid:
             final via = named.contains(' · ')
@@ -1109,14 +1113,24 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
               name: model.contains('/')
                   ? model.substring(model.lastIndexOf('/') + 1)
                   : model,
-              tip: [model, if (via != null) 'Shared from $via'].join('\n'),
+              tip:
+                  [model, if (via != null) 'Shared from $via'].join('\n') +
+                  state,
+              starting: starting,
             ));
           case 'shared' when swarmSharedWithYouShown:
-            localModels.add((name: named, tip: '$named\nShared with you'));
+            localModels.add((
+              name: named,
+              tip: '$named\nShared with you',
+              starting: false,
+            ));
           case 'local' || null when m['grid'] == local.grid:
             localModels.add((
               name: named,
-              tip: '$named\nRunning on this machine',
+              tip: starting
+                  ? '$named\nStarting on this machine'
+                  : '$named\nRunning on this machine',
+              starting: starting,
             ));
         }
       }
@@ -1956,7 +1970,8 @@ class _MachineView {
 }
 
 /// A model a machine offers its Swarm: its short name on the row, the whole of it on hover.
-typedef _ServedModel = ({String name, String tip});
+/// [starting]: run or shared here, not yet listed by the Swarm's grid (CLI `superTabs/machines.ts`).
+typedef _ServedModel = ({String name, String tip, bool starting});
 
 /// An allowance's note, from its detail lines: the window that stops work first, and its reset. Another machine's
 /// lines put that window first (`5-hour: 44% remaining · resets in 2h 10m`); this computer's name it
@@ -2539,7 +2554,7 @@ class _MachineReadings extends StatelessWidget {
                     height: 22,
                     padding: const EdgeInsets.symmetric(horizontal: 8),
                     decoration: BoxDecoration(
-                      color: local
+                      color: local && !model.starting
                           ? grid.AppPalette.online.withValues(alpha: .13)
                           : DesktopChrome.foreground.withValues(alpha: .06),
                       borderRadius: BorderRadius.circular(6),
@@ -2547,12 +2562,14 @@ class _MachineReadings extends StatelessWidget {
                     child: Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        if (local) ...[
+                        if (local || model.starting) ...[
                           Container(
                             width: 5,
                             height: 5,
                             decoration: BoxDecoration(
-                              color: grid.AppPalette.online,
+                              color: model.starting
+                                  ? DesktopChrome.muted
+                                  : grid.AppPalette.online,
                               shape: BoxShape.circle,
                             ),
                           ),
@@ -2567,10 +2584,23 @@ class _MachineReadings extends StatelessWidget {
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
                             style: grid.AppType.monoMeta(
-                              color: DesktopChrome.foreground,
+                              color: model.starting
+                                  ? DesktopChrome.muted
+                                  : DesktopChrome.foreground,
                             ),
                           ),
                         ),
+                        if (model.starting) ...[
+                          const SizedBox(width: 5),
+                          Text(
+                            'starting…',
+                            style: DesktopChrome.text(
+                              size: 11,
+                              height: 1.3,
+                              color: DesktopChrome.muted,
+                            ),
+                          ),
+                        ],
                       ],
                     ),
                   ),

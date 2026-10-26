@@ -303,7 +303,11 @@ function modelsRequests(core: CoreApi, grid: GridSetUp, privateGridName: () => P
     try {
       const list = type === 'grid_fleet_models_list'
       const setup = list ? payload.setup === true : type !== 'grid_fleet_model_stop'
-      const unready = setup ? await notReady(grid, type !== 'grid_fleet_model_download') : null
+      // A start or stop for a Swarm runs on the Swarm's grid, which its owner's computer made: it needs grid signed in,
+      // not the account's own grid. Asked to make that too, a Run for Swarm failed on an account at its plan's network
+      // limit ("Free plan allows 5 networks") while the Swarm's grid stood ready (2026-10-26).
+      const forSwarm = !list && type !== 'grid_fleet_model_download' && typeof payload.grid === 'string' && SWARM_GRID.test(payload.grid)
+      const unready = setup ? await notReady(grid, type !== 'grid_fleet_model_download' && !forSwarm) : null
       const gridName = await privateGridName()
       if (list) {
         const snapshot = await localModels.list(gridName, payload.refresh === true || setup)

@@ -734,10 +734,15 @@ describe('the models service', () => {
       it('a start or stop with a Swarm `grid` runs on that grid; a download, or a name that is not a Swarm grid, does not', async () => {
         const { ask } = setup([], named)
         local.act.mockClear()
+        access.ensure.mockClear()
         await ask('grid_fleet_model_start', { modelId: 'org/Model-GGUF', grid: 'swarm-0123456789ab' })
+        // The Swarm's grid is its owner's: a start there signs grid in and never makes the account's own grid
+        // (2026-10-26: one at the plan's network limit failed every Run for Swarm).
+        expect(access.ensure.mock.calls).toEqual([[{ ownGrid: false }]])
         await ask('grid_fleet_model_stop', { modelId: 'org/Model-GGUF', grid: 'swarm-0123456789ab' })
         await ask('grid_fleet_model_download', { modelId: 'org/Model-GGUF', grid: 'swarm-0123456789ab' })
         await ask('grid_fleet_model_start', { modelId: 'org/Model-GGUF', grid: 'someone-elses-grid' })
+        expect(access.ensure.mock.calls.at(-1)).toEqual([{ ownGrid: true }])
         expect(local.act.mock.calls).toEqual([
           ['swarm-0123456789ab', 'org/Model-GGUF', 'start'], ['swarm-0123456789ab', 'org/Model-GGUF', 'stop'],
           ['kelvin-1a2b3c4d', 'org/Model-GGUF', 'download'], ['kelvin-1a2b3c4d', 'org/Model-GGUF', 'start'],

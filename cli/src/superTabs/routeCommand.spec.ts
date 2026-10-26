@@ -916,6 +916,10 @@ describe('local models on the Swarm\'s grid', () => {
     expect(offered(state({ starts: [start({ error: 'NO_CAPACITY' })] }))).toHaveLength(1)
     expect(offered(state({ starts: [{ request: { model: 'opus' } }, {}] }))).toHaveLength(1)
   })
+  it('never offers a model that is still starting: the grid does not list it yet', () => {
+    expect(offered(state({ machines: [served([{ grid: GRID, model: 'qwen3', name: 'Qwen 3', starting: true }])] }))).toEqual([])
+    expect(offered(state({ machines: [served([{ grid: GRID, model: 'qwen3', name: 'Qwen 3', starting: false }])] }))).toHaveLength(1)
+  })
   it('lets up to four Builders share an API model, which answers several requests at once', () => {
     const api = state({ machines: [served([{ grid: GRID, model: 'ds', name: 'DeepSeek', kind: 'api' }])] })
     const starts = (n: number) => Array.from({ length: n }, (_, i) => ({ request: { gridModel: 'ds' }, harnessId: `h${i}` }))

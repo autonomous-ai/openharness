@@ -279,7 +279,13 @@ The native desktop target uses the CLI for cloud access and SSO tokens:
   Native link retries wait 5, 10, 20, then 30 seconds between probes, and never close an active
   connection or password-link handshake. Explicit Connect is immediate; repeated clicks join it.
   The initial unlinked refusal is measured once; later automatic probes are suppressed until the
-  machine is linked. This changes neither the browser's retry policy nor the daemon.
+  machine is linked. A browser's link retry backs off the same way (it redialled every 5 s, each
+  refusal reading the device list again). While a machine waits for a link, machine-list reads
+  neither dial nor load it, and only a forced load asks it (a person's reload, a status change);
+  connecting after a link loads its agents (`test/unlinked_machine_load_test.dart`).
+  A released web build prints no `debugPrint` traces (`web/web_console.dart`): framework errors
+  and uncaught errors still reach the console, and `?debug=traces` brings the traces back for that
+  browser until `?debug=off`.
   A viewer build settles its own `NO_PEER_LINK`/`E2E_DENIED` first (`_settleTrust`): it joins the
   device log if it is not in it (`ViewerDeviceLog.ensureRegistered`), reads it and dials again,
   showing the machine as connecting; only a refusal that outlasts two rounds (~15s), or a frozen

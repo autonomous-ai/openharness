@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/core/models.dart';
 import 'package:harness/models/model_search_catalog.dart';
@@ -5,6 +7,7 @@ import 'package:harness/models/swarm_models_target.dart';
 import 'package:harness/state/swarm_navigation.dart';
 import 'package:harness/state/swarm_search.dart';
 import 'package:harness/usage/models_menu_controller.dart';
+import 'package:harness/ws/ws_conn.dart';
 
 import 'support/model_manager.dart';
 
@@ -247,6 +250,22 @@ void main() {
     expect(search.modelRowStatus(row('served')), 'In Swarm');
     expect(search.swarmModelAction(row('served'))!.label, 'Stop for Swarm');
     expect(search.swarmModelAction(row('catalog'))!.label, 'Get');
+    // A start the CLI refuses says why, in its words, though the list read after it clears the manager's error
+    // (2026-10-26: a Run for Swarm refused at the plan's network limit said nothing).
+    final refusal = Completer<Map<String, dynamic>>();
+    app.actionReply = refusal;
+    final refused = search.swarmModelAction(row('downloaded'))!.run!();
+    refusal.completeError(
+      const WsRequestFailure(
+        responseType: 'grid_fleet_model_start_result',
+        code: 'Free plan allows 5 networks; upgrade to create more',
+      ),
+    );
+    expect(
+      await refused,
+      'Free plan allows 5 networks; upgrade to create more',
+    );
+    app.actionReply = null;
     final run = search.swarmModelAction(row('downloaded'))!;
     expect(run.label, 'Run for Swarm');
     expect(await run.run!(), isNull);
