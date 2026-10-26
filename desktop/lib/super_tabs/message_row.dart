@@ -6,6 +6,7 @@ import '../shared/theme/app_theme.dart' as grid;
 import '../shared/widgets/app_icon_button.dart';
 import '../widgets/desktop_chrome.dart';
 import '../widgets/engine_identity.dart';
+import '../widgets/finger_target.dart';
 import 'attachment_chips.dart';
 import 'identity.dart';
 import 'message_text.dart';
@@ -330,19 +331,26 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
                           ),
                           side: BorderSide(color: DesktopChrome.rim),
                         ),
+                        // A phone's actions are a finger's size each.
                         child: Row(
                           mainAxisSize: MainAxisSize.min,
                           children: [
                             if (widget.onReply != null)
-                              AppIconButton(
-                                icon: AppIcons.reply,
-                                tooltip: 'Reply',
-                                onPressed: widget.onReply,
+                              fingerTarget(
+                                enabled: workspaceIsCompact(context),
+                                AppIconButton(
+                                  icon: AppIcons.reply,
+                                  tooltip: 'Reply',
+                                  onPressed: widget.onReply,
+                                ),
                               ),
-                            AppIconButton(
-                              icon: AppIcons.copy,
-                              tooltip: 'Copy message',
-                              onPressed: _copy,
+                            fingerTarget(
+                              enabled: workspaceIsCompact(context),
+                              AppIconButton(
+                                icon: AppIcons.copy,
+                                tooltip: 'Copy message',
+                                onPressed: _copy,
+                              ),
                             ),
                           ],
                         ),

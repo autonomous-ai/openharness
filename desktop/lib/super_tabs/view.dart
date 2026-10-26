@@ -908,6 +908,50 @@ class _SuperTabViewState extends State<SuperTabView>
 
   void _toggleRoster() => setState(() => _rosterOpen = !_rosterOpen);
 
+  /// On a phone, the view ⋮ opened in place of the chat, which the bar has no
+  /// icon to mark as selected; null while the chat is the view.
+  String? get _openViewName => !_menuNamesViews
+      ? null
+      : _terminalsVisible
+      ? 'Group terminals'
+      : _showPullRequests
+      ? 'Pull requests'
+      : null;
+
+  /// The line under the header's title: on a phone the open view, then the
+  /// group's review line.
+  Widget? _subtitle(SuperTabConversation? group) {
+    final line = c.reviewLine(group);
+    final review = line == null
+        ? null
+        : Text(
+            line,
+            key: const ValueKey('super-review-line'),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: DesktopChrome.metadata(),
+          );
+    final view = _openViewName;
+    if (view == null) return review;
+    return Row(
+      children: [
+        Flexible(
+          child: Text(
+            view,
+            key: const ValueKey('super-open-view'),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: DesktopChrome.metadata(color: DesktopChrome.foreground),
+          ),
+        ),
+        if (review != null) ...[
+          Text(' · ', style: DesktopChrome.metadata()),
+          Flexible(child: review),
+        ],
+      ],
+    );
+  }
+
   Widget _header(
     SuperTabConversation? group,
     bool narrow,
@@ -965,14 +1009,7 @@ class _SuperTabViewState extends State<SuperTabView>
                 else
                   _title(group),
                 if (!_devicesVisible && !_notificationsVisible)
-                  if (c.reviewLine(group) case final line?)
-                    Text(
-                      line,
-                      key: const ValueKey('super-review-line'),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: DesktopChrome.metadata(),
-                    ),
+                  ?_subtitle(group),
               ],
             ),
           ),
@@ -1031,10 +1068,10 @@ class _SuperTabViewState extends State<SuperTabView>
           if (_menuNamesViews || group.id != c.snapshot!.leadsConversationId)
             fingerTarget(
               enabled: _phone,
-              _options(group, views: _menuNamesViews, roster: !showRoster),
+              _options(group, views: _menuNamesViews),
             ),
         ],
-        if (!showRoster && (group == null || !_menuNamesViews))
+        if (!showRoster)
           fingerTarget(
             enabled: _phone,
             AppIconButton(
@@ -1049,13 +1086,9 @@ class _SuperTabViewState extends State<SuperTabView>
   );
 
   /// The group's ⋮ menu. With [views] (a phone) it opens on the views the
-  /// header has no room for — the group's terminals, its pull requests and,
-  /// with [roster], the people and machines — each a finger's height.
-  Widget _options(
-    SuperTabConversation group, {
-    bool views = false,
-    bool roster = false,
-  }) {
+  /// header has no room for — the group's terminals and its pull requests —
+  /// each a finger's height.
+  Widget _options(SuperTabConversation group, {bool views = false}) {
     final project = c.snapshot?.projectFor(group.id);
     final isProject = c.snapshot?.isProjectLead(group.id) == true;
     final isLeads = group.id == c.snapshot?.leadsConversationId;
@@ -1085,7 +1118,6 @@ class _SuperTabViewState extends State<SuperTabView>
             _openTerminals(group),
           ),
           item('Pull requests', _openPullRequests),
-          if (roster) item('Members and machines', _toggleRoster),
           if (!isLeads) const Divider(height: 9),
         ],
         // The leads' conversation is no workgroup: nothing to rename, archive
@@ -1543,11 +1575,14 @@ class _SuperTabViewState extends State<SuperTabView>
                     text: reply.text,
                   ),
                 ),
-                AppIconButton(
-                  icon: AppIcons.close,
-                  tooltip: 'Cancel reply',
-                  onPressed: () =>
-                      setState(() => _replies.remove(c.selectedId)),
+                fingerTarget(
+                  enabled: _phone,
+                  AppIconButton(
+                    icon: AppIcons.close,
+                    tooltip: 'Cancel reply',
+                    onPressed: () =>
+                        setState(() => _replies.remove(c.selectedId)),
+                  ),
                 ),
               ],
             ),
@@ -1818,27 +1853,35 @@ class _SuperTabViewState extends State<SuperTabView>
                                     ),
                                   ),
                                 ),
-                                NewHarnessAttachButton(
-                                  attachments: _files,
-                                  enabled: writable && !busy,
+                                fingerTarget(
+                                  enabled: _phone,
+                                  NewHarnessAttachButton(
+                                    attachments: _files,
+                                    enabled: writable && !busy,
+                                  ),
                                 ),
                                 ListenableBuilder(
                                   listenable: Listenable.merge([
                                     _composer,
                                     _files,
                                   ]),
-                                  builder: (context, _) => AppIconButton(
-                                    icon: AppIcons.arrowUp,
-                                    tooltip: 'Send message',
-                                    color: DesktopChrome.accent,
-                                    onPressed:
-                                        writable &&
-                                            !busy &&
-                                            !c.hasPendingAction &&
-                                            (_composer.text.trim().isNotEmpty ||
-                                                !_files.isEmpty)
-                                        ? () => unawaited(_send())
-                                        : null,
+                                  builder: (context, _) => fingerTarget(
+                                    enabled: _phone,
+                                    AppIconButton(
+                                      icon: AppIcons.arrowUp,
+                                      tooltip: 'Send message',
+                                      color: DesktopChrome.accent,
+                                      onPressed:
+                                          writable &&
+                                              !busy &&
+                                              !c.hasPendingAction &&
+                                              (_composer.text
+                                                      .trim()
+                                                      .isNotEmpty ||
+                                                  !_files.isEmpty)
+                                          ? () => unawaited(_send())
+                                          : null,
+                                    ),
                                   ),
                                 ),
                               ],
