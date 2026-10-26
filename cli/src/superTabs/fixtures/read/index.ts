@@ -19,3 +19,9 @@ export const FIXTURE = {
   leadsGroup: 'c00000000000000000000000', leadGroup: 'c00000000000000000000001', workGroup: 'c00000000000000000000002', doneGroup: 'c00000000000000000000003',
   startId: 'e00000000000000000000002', projectId: '5000000000000000000000aa',
 } as const
+
+/** A backend reply in the envelope `core.account.backend` returns. */
+export interface BackendReply { status: number; body: Record<string, unknown> }
+export const ok = (data: unknown): BackendReply => ({ status: 200, body: { success: true, data } })
+export const refused = (status: number, code: string, message?: string): BackendReply =>
+  ({ status, body: { success: false, error: { code, ...(message ? { message } : {}) } } })

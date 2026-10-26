@@ -21,23 +21,9 @@ import { replacementObservations } from './replacements.js'
 import { TerminalHost } from './terminal.js'
 
 type Json = Record<string, unknown>
-export class SuperTabHostError extends Error {
-  constructor(readonly code: string, message: string, readonly status = 503) { super(message) }
-}
-export { identifier, object } from './wire.js'
-import { ENDED_WORK, identifier, object } from './wire.js'
+export { backend, identifier, object, SuperTabHostError } from './wire.js'
+import { backend, ENDED_WORK, identifier, object, SuperTabHostError } from './wire.js'
 import { recordSwarmSkillNotice, refreshSwarmSkill, type SkillRefresh, type SwarmSkillGrant, type SwarmSkillMode } from '../lib/swarmSkills.js'
-
-/** The core signs each request. Neither the service nor its journal holds an account credential. */
-export async function backend(core: CoreApi, method: string, path: string, body?: unknown): Promise<unknown> {
-  const reply = await core.account.backend(method, path, body)
-  if (reply.status < 200 || reply.status >= 300 || reply.body.success === false) {
-    const error = object(reply.body.error)
-    throw new SuperTabHostError(String(error.code ?? reply.body.code ?? 'BACKEND_UNAVAILABLE'),
-      String(error.message ?? reply.body.message ?? 'Could not reach this Super Tab.'), reply.status)
-  }
-  return reply.body.data
-}
 
 /** The skills of a group's project in a tab state: a group from before projects is in the first, and a project from before
  *  modes, or a Swarm from before projects, is orchestration. */
