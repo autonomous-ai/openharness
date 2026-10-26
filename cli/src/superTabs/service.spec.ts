@@ -7,6 +7,7 @@ import { fakeCore } from '../testing/fakeCore.js'
 import type { CoreApi } from '../core/api.js'
 import { sharedSwarm, superTabService } from './service.js'
 import { object } from './wire.js'
+import { hostForm, swarmReply } from './fixtures/read/index.js'
 
 const list = (value: unknown) => Array.isArray(value) ? value.map(object) : []
 import { hostJournalFile, SuperTabHostError, type SuperTabHost, type SuperTabHostOptions } from './host.js'
@@ -24,7 +25,7 @@ function setup(options: { prepareContribution?: typeof import('./contribution.js
 describe('restart role lookup through the service', () => {
   it('does not start the delivery loop when a personal session restarts', async () => {
     const host = vi.fn(() => ({ machineId: 'machine-1', start: vi.fn(), stop: vi.fn(), swarmRole: async () => null }) as never)
-    const core = fakeCore({ account: { backend: vi.fn(async () => ({ status: 200, body: { data: [] } })) } })
+    const core = fakeCore({ account: { backend: vi.fn(async () => ({ status: 200, body: { data: hostForm([]) } })) } })
     const service = superTabService(core, { host })
     expect(await service.port.swarmRole('personal')).toBeNull()
     expect(await service.requests.super_tabs({ action: 'swarmRole', harnessId: 'personal' }, owner)).toEqual({ ok: true, role: null })
@@ -34,7 +35,7 @@ describe('restart role lookup through the service', () => {
   it('answers the same current role in inline and process requests, for the owner only', async () => {
     const agent = { id: 'agent', machineId: 'machine-1', harnessId: 'old-native' }
     const call = vi.fn<CoreApi['account']['backend']>(async (_method, path) => ({ status: 200, body: { data:
-      path.includes('/hosts/') ? [{ tabId: 'tab', agent }] : { state: { agents: [agent], conversations: [{ leadId: 'agent' }] } } } }))
+      path.includes('/hosts/') ? hostForm([{ tabId: 'tab', agent }]) : swarmReply(path, { agents: [agent], conversations: [{ leadId: 'agent' }] }) } }))
     const service = superTabService(fakeCore({ account: { backend: call } }))
     expect(await service.port.swarmRole('old-native')).toEqual({ role: 'lead', mode: 'orchestration' })
     expect(await service.requests.super_tabs({ action: 'swarmRole', harnessId: 'old-native' }, owner)).toEqual({ ok: true, role: 'lead', mode: 'orchestration' })

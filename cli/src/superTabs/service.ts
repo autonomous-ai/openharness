@@ -3,7 +3,9 @@ import { existsSync } from 'node:fs'
 import { readAuthSession } from '../lib/authSession.js'
 import { createHash } from 'node:crypto'
 import type { CoreApi, ServiceRequests, SuperTabsPort } from '../core/api.js'
-import { backend, swarmRoleFor, hostJournalFile, identifier, object, SuperTabHost, SuperTabHostError, type SuperTabHostOptions } from './host.js'
+import { backend, swarmRoleFor, hostJournalFile, identifier, object, SuperTabHost, SuperTabHostError, type SuperTabHostOptions, type SwarmSources } from './host.js'
+import { HostFeed } from './hostFeed.js'
+import { SwarmReads } from './swarmReads.js'
 import { within } from './wire.js'
 import { machineChoices } from '../lib/newCommand.js'
 import { START_REQUIREMENTS } from './capacity.js'
@@ -162,6 +164,13 @@ export interface SuperTabServiceOptions {
 }
 export function superTabService(core: CoreApi, options: SuperTabServiceOptions = {}): { requests: ServiceRequests; port: SuperTabsPort } {
   const preparations = new ContributionPreparations(input => (options.prepareContribution ?? prepareContribution)(core, input))
+  // One host form and one set of Swarm reads per machine, shared by the host and every action here (design 2026-10-26 5.3).
+  let held: SwarmSources | null = null
+  const sources = (): SwarmSources => {
+    const machine = core.daemon.machineId()
+    if (held?.feed.machineId !== machine) held = { feed: new HostFeed(core, machine), reads: new SwarmReads(core) }
+    return held
+  }
   let host: SuperTabHost | null = null
   let book: ReservationBook | null = null, bookMachine: string | null = null
   const reservations = () => {
@@ -174,7 +183,7 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
     const machine = core.daemon.machineId()
     if (host?.machineId !== machine) { host?.stop(); host = null }
     host ??= (options.host ?? ((api, id, given) => new SuperTabHost(api, id, given)))(core, machine,
-      { startReceipt: harnessId => reservations().creationOf(harnessId) })
+      { startReceipt: harnessId => reservations().creationOf(harnessId), sources: sources() })
     host.start()
     return host
   }
@@ -195,7 +204,7 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
   // In the Harness Team account only: whether its Claude Code and Codex are installed and signed in, for its owner to read.
   const engines = (options.teamEngines ?? teamEngineReporter)()
   let autoSetup: Promise<Pick<TeamAutoSetup, 'offer'>> | null = null
-  const disconnect = () => { preparations.clear(); host?.stop(); host = null; book?.stop(); book = null; bookMachine = null; swarmCards?.want(false); swarmCards = null; cardsMachine = null; tokens.stop(); engines.stop() }
+  const disconnect = () => { preparations.clear(); host?.stop(); host = null; held = null; book?.stop(); book = null; bookMachine = null; swarmCards?.want(false); swarmCards = null; cardsMachine = null; tokens.stop(); engines.stop() }
   const port = {
     connected: () => {
       tokens.start()
@@ -208,7 +217,7 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
     },
     disconnected: disconnect,
     stop: disconnect,
-    swarmRole: async (harnessId: string) => (await within(swarmRoleFor(core, core.daemon.machineId(), harnessId).then(grant => ({ grant }))))?.grant,
+    swarmRole: async (harnessId: string) => (await within(swarmRoleFor(sources(), harnessId).then(grant => ({ grant }))))?.grant,
   }
   const requests: ServiceRequests = {
     super_tabs: async (payload, asker, closed) => {

@@ -25,3 +25,36 @@ export interface BackendReply { status: number; body: Record<string, unknown> }
 export const ok = (data: unknown): BackendReply => ({ status: 200, body: { success: true, data } })
 export const refused = (status: number, code: string, message?: string): BackendReply =>
   ({ status, body: { success: false, error: { code, ...(message ? { message } : {}) } } })
+
+type Json = Record<string, unknown>
+const asList = (v: unknown): Json[] => Array.isArray(v) ? v as Json[] : []
+/** Each fake reply's parts are newer than the last, as a server's would be after any change. */
+let version = 1
+
+/** A host form that lists `rows` (old roster rows) Swarm by Swarm, plus Swarms in `tabs` with no rows: an empty Swarm's rows
+ *  are replaced by none. Pools and assignments go with their Swarm. */
+export function hostForm(rows: unknown, options: { tabs?: string[]; pools?: unknown; assignments?: unknown } = {}): Json {
+  const roster = asList(rows), pools = asList(options.pools), assignments = asList(options.assignments)
+  const ids = [...new Set([...roster, ...pools, ...assignments].map(row => String(row.tabId)).concat(options.tabs ?? []))]
+  return { format: 2, full: true, cursor: `host-${++version}`, removedTabIds: [], tabs: ids.map(tabId => ({ tabId, lastChangedAt: version,
+    roster: roster.filter(row => row.tabId === tabId), pool: pools.find(pool => pool.tabId === tabId) ?? null,
+    assignments: assignments.filter(work => work.tabId === tabId) })) }
+}
+
+/** A first load of a Swarm whose state (in the old shape) is `state`: every record a part, nothing derived. */
+export function partsOf(state: Json, options: { githubApp?: boolean; lastChangedAt?: number } = {}): Json {
+  const v = ++version
+  const part = (key: unknown, data: Json) => ({ key: String(key), version: v, changedAt: v, data })
+  const { people, agents, conversations, machines, starts, otherProjectsWork, mentionsWaiting, ...head } = state
+  return { format: 2, tabId: String(state.id ?? 'tab'), cursor: `tab-${v}`, serverTime: v, lastChangedAt: options.lastChangedAt ?? v, epoch: 1,
+    ...(options.githubApp ? { githubApp: true } : {}),
+    head: part('head', head), members: asList(people).map(p => part(p.id, p)), agents: asList(agents).map(a => part(a.id, a)),
+    groups: asList(conversations).map((c, i) => part(c.id ?? `group-${i}`, c)), machines: asList(machines).map(m => part(m.machineId, m)),
+    starts: asList(starts).map(s => part(s.id, s)), progress: [],
+    derived: { ...(otherProjectsWork !== undefined ? { otherProjectsWork } : {}), ...(mentionsWaiting !== undefined ? { mentionsWaiting } : {}) } }
+}
+
+/** A fake Swarm read: a changes read asks for a reload, so every read is a first load of the state the test holds now (a
+ *  fake keeps no history to send tombstones from). */
+export const swarmReply = (path: string, state: Json, options: { githubApp?: boolean; lastChangedAt?: number } = {}): Json =>
+  /\/changes\?cursor=/.test(path) && !path.includes('/hosts/') ? { reload: true } : partsOf(state, options)
