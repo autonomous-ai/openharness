@@ -71,6 +71,24 @@ export async function settle(page) {
   await page.waitForTimeout(1500);
 }
 
+/// A flow's `api` answers the app's backend reads in the browser, so a state
+/// that needs a server reply (a private or offline shared link) is drawn by
+/// the real page: { '/api/shared-agents/': { status, body } }. Everything else
+/// stays blocked by [contextFor].
+export async function answerApi(page, flow) {
+  for (const [path, { status = 200, body = {} }] of Object.entries(flow.api ?? {})) {
+    await page.route(`**${path}**`, (route) => {
+      const headers = {
+        'access-control-allow-origin': '*',
+        'access-control-allow-headers': 'authorization, x-autonomous-env',
+        'access-control-allow-methods': 'GET, OPTIONS',
+      };
+      if (route.request().method() === 'OPTIONS') return route.fulfill({ status: 204, headers });
+      return route.fulfill({ status, headers, contentType: 'application/json', body: JSON.stringify(body) });
+    });
+  }
+}
+
 export async function runStep(page, [kind, target], touch) {
   const press = touch ? 'tap' : 'click';
   const button = (exact) => page.getByRole('button', { name: target, exact }).first();
@@ -101,6 +119,7 @@ async function shoot(context, origin, flow, viewport, theme, outDir) {
   const shot = `screens/${flow.name}/${viewport.name}-${theme}.png`;
   let failed = null;
   try {
+    await answerApi(page, flow);
     await page.goto(urlFor(origin, flow, theme));
     await settle(page);
     for (const step of steps) {

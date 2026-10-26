@@ -12,7 +12,10 @@ import 'package:harness/measurement/hub_usage.dart';
 import 'package:harness/sharing/shared_agent_location.dart';
 import 'package:harness/sharing/shared_agent_page.dart';
 import 'package:harness/sharing/shared_harness_panel.dart';
+import 'package:harness/core/models.dart';
+import 'package:harness/shared/theme/app_icons.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
+import 'package:harness/shared/widgets/empty_state.dart';
 import 'package:harness/state/app_state.dart';
 import 'package:harness/widgets/web_download_button.dart';
 import 'package:url_launcher/link.dart';
@@ -28,6 +31,7 @@ void main() {
   late List<RequestOptions> requests;
   late int status;
   late Map<String, dynamic> metadata;
+  late int harnessOpens;
 
   setUp(() {
     app = AppNotifier(
@@ -38,6 +42,7 @@ void main() {
     requests = [];
     status = 200;
     metadata = {'ownerPublicKey': key, 'online': false};
+    harnessOpens = 0;
     dio = Dio()
       ..interceptors.add(
         InterceptorsWrapper(
@@ -90,6 +95,7 @@ void main() {
             dio: dio,
             location: SharedAgentLocation(id, pinnedKey, environment),
             usage: usage,
+            openHarness: () async => harnessOpens++,
           ),
         ),
       ),
@@ -136,54 +142,151 @@ void main() {
     await tester.pumpWidget(const SizedBox());
   });
 
-  testWidgets('incomplete and changed owner identities never open a viewer', (
-    tester,
-  ) async {
-    await show(tester);
-    expect(find.textContaining('This link is incomplete'), findsOneWidget);
-    expect(requests, isEmpty);
-    expect(find.byType(SharedHarnessPanel), findsNothing);
-    await tester.pumpWidget(const SizedBox());
+  /// The state's one way forward: a filled button a thumb can hit.
+  Finder primary(String label) => find.widgetWithText(FilledButton, label);
+
+  void expectThumbSized(WidgetTester tester, Finder button) {
+    expect(button, findsOneWidget);
+    final size = tester.getSize(button);
+    expect(size.height, greaterThanOrEqualTo(44));
+    expect(size.width, greaterThanOrEqualTo(44));
+  }
+
+  /// No state that cannot be helped by trying again offers it.
+  void expectNoRetry() {
+    for (final label in ['Retry', 'Try again', 'Check now']) {
+      expect(find.text(label), findsNothing, reason: label);
+    }
+  }
+
+  group('an incomplete link', () {
+    testWidgets('says what to do in one sentence and offers Open Harness', (
+      tester,
+    ) async {
+      await show(tester);
+      expect(find.text('This shared link is incomplete'), findsOneWidget);
+      expect(
+        find.text('Ask the owner to copy the whole link again.'),
+        findsOneWidget,
+      );
+      expectNoRetry();
+      expect(find.text('Sign in'), findsNothing);
+      expect(requests, isEmpty);
+      expect(find.byType(SharedHarnessPanel), findsNothing);
+      expectThumbSized(tester, primary('Open Harness'));
+      await tester.tap(primary('Open Harness'));
+      await tester.pump();
+      expect(harnessOpens, 1);
+      await tester.pumpWidget(const SizedBox());
+    });
+
+    testWidgets('is drawn as the app\'s empty state, with its icon', (
+      tester,
+    ) async {
+      await show(tester);
+      expect(
+        find.descendant(
+          of: find.byType(EmptyState),
+          matching: find.text('This shared link is incomplete'),
+        ),
+        findsOneWidget,
+      );
+      expect(find.byIcon(AppIcons.unlink), findsOneWidget);
+      await tester.pumpWidget(const SizedBox());
+    });
+  });
+
+  testWidgets('a changed owner identity never opens a viewer', (tester) async {
     metadata['ownerPublicKey'] = base64Encode(List.filled(32, 2));
     await show(tester, pinnedKey: key);
-    expect(
-      find.textContaining('The owner identity has changed'),
-      findsOneWidget,
-    );
+    expect(find.text('This link no longer matches its owner'), findsOneWidget);
     expect(find.byType(SharedHarnessPanel), findsNothing);
     expect(requests.single.headers['x-autonomous-env'], 'stag');
     expect(requests.single.headers.containsKey('Authorization'), isFalse);
+    expectNoRetry();
+    expectThumbSized(tester, primary('Open Harness'));
     await tester.pumpWidget(const SizedBox());
   });
 
-  testWidgets(
-    'private and denied links show access guidance without opening a viewer',
-    (tester) async {
-      status = 401;
-      await show(tester, pinnedKey: key);
-      expect(
-        find.textContaining('Sign in with an invited email'),
-        findsOneWidget,
-      );
-      expect(find.widgetWithText(TextButton, 'Sign in'), findsOneWidget);
-      expect(find.byType(SharedHarnessPanel), findsNothing);
-      await tester.pumpWidget(const SizedBox());
-      status = 403;
-      await show(tester, pinnedKey: key);
-      expect(
-        find.textContaining('your email has not been invited'),
-        findsOneWidget,
-      );
-      expect(find.byType(SharedHarnessPanel), findsNothing);
-      await tester.pumpWidget(const SizedBox());
-    },
-  );
+  testWidgets('a private link asks a signed-out visitor to sign in', (
+    tester,
+  ) async {
+    status = 401;
+    app.status = AppStatus.unauthenticated;
+    await show(tester, pinnedKey: key);
+    expect(find.text('This shared harness is private'), findsOneWidget);
+    expect(
+      find.text('Sign in with the email it was shared with.'),
+      findsOneWidget,
+    );
+    expect(find.byIcon(AppIcons.lock), findsOneWidget);
+    expectThumbSized(tester, primary('Sign in'));
+    expectNoRetry();
+    expect(find.byType(SharedHarnessPanel), findsNothing);
+    await tester.pumpWidget(const SizedBox());
+  });
+
+  group('a link refused to a signed-in reader', () {
+    for (final refusal in [403, 404, 401]) {
+      testWidgets('($refusal) never asks to sign in again', (tester) async {
+        status = refusal;
+        app
+          ..status = AppStatus.authenticated
+          ..currentUser = const CurrentUserProfile(
+            name: 'Jamie',
+            email: 'jamie@example.test',
+          );
+        await show(tester, pinnedKey: key);
+        expect(
+          find.text('You can\u2019t open this shared harness'),
+          findsOneWidget,
+        );
+        // Expired, turned off or another email: the server answers alike.
+        expect(
+          find.text(
+            'It may have expired or been turned off, or it was shared with '
+            'an email other than jamie@example.test.',
+          ),
+          findsOneWidget,
+        );
+        expect(find.text('Sign in'), findsNothing);
+        expectNoRetry();
+        expectThumbSized(tester, primary('Switch account'));
+        final open = find.widgetWithText(TextButton, 'Open Harness');
+        expectThumbSized(tester, open);
+        await tester.tap(open);
+        await tester.pump();
+        expect(harnessOpens, 1);
+        await tester.pumpWidget(const SizedBox());
+      });
+    }
+  });
+
+  testWidgets('a server error is a failed read, not a refusal', (
+    tester,
+  ) async {
+    status = 502;
+    await show(tester, pinnedKey: key);
+    expect(find.text('Couldn\u2019t open this shared harness'), findsOneWidget);
+    expect(find.text('Check your connection and try again.'), findsOneWidget);
+    expectThumbSized(tester, primary('Try again'));
+    await tester.tap(primary('Try again'));
+    await tester.pump(const Duration(milliseconds: 50));
+    expect(requests.length, 2);
+    await tester.pumpWidget(const SizedBox());
+  });
 
   testWidgets(
     'offline links retry automatically and stop retrying when closed',
     (tester) async {
       await show(tester, pinnedKey: key);
-      expect(find.textContaining('machine is offline'), findsOneWidget);
+      expect(find.text('The owner\u2019s computer is offline'), findsOneWidget);
+      expect(
+        find.text('This page opens the harness by itself when it is back.'),
+        findsOneWidget,
+      );
+      expect(find.byIcon(AppIcons.cloudOff), findsOneWidget);
+      expectThumbSized(tester, primary('Check now'));
       expect(find.byType(SharedHarnessPanel), findsNothing);
       expect(requests.length, 1);
       await tester.pump(const Duration(seconds: 10));
@@ -202,6 +305,15 @@ void main() {
     },
   );
 
+  test('Open Harness goes to the root of the link\'s own site', () {
+    expect(
+      SharedAgentLocation.workspaceOf(
+        Uri.parse('https://harness.example/s/$id?env=stag#key=$key'),
+      ),
+      Uri.parse('https://harness.example/'),
+    );
+  });
+
   for (final brightness in Brightness.values) {
     for (final scale in [1.0, 2.0]) {
       testWidgets(
@@ -216,11 +328,8 @@ void main() {
             scale: scale,
           );
           await tester.pumpAndSettle();
-          expect(
-            find.textContaining('Sign in with an invited email'),
-            findsOneWidget,
-          );
-          final signIn = find.widgetWithText(TextButton, 'Sign in');
+          expect(find.text('This shared harness is private'), findsOneWidget);
+          final signIn = find.widgetWithText(FilledButton, 'Sign in');
           await tester.ensureVisible(signIn);
           await tester.pumpAndSettle();
           expect(signIn.hitTestable(), findsOneWidget);
@@ -245,7 +354,7 @@ void main() {
       await show(tester, pinnedKey: key, environment: 'prod', usage: usage);
       await tester.pump(const Duration(seconds: 10));
       await tester.pump(const Duration(milliseconds: 50));
-      await tester.tap(find.widgetWithText(TextButton, 'Retry'));
+      await tester.tap(find.widgetWithText(FilledButton, 'Check now'));
       await tester.pump(const Duration(milliseconds: 50));
       usage.flush();
       expect(requests.length, greaterThanOrEqualTo(3));
