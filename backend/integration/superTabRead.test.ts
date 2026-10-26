@@ -63,7 +63,7 @@ afterAll(async () => {
 
 /** A Swarm in parts: two projects (one private to its owner), a Lead and a worker on the owner's machine, finished work
  *  quiet for two days (dormant), and a private conversation for `peer`. */
-async function scene<T = void>(extra: (s: ReturnType<typeof swarm>, ids: { web: string; done: string; lead: string }) => T = () => undefined as T, machineId = 'host') {
+async function scene<T = void>(extra: (s: ReturnType<typeof swarm>, ids: { web: string; done: string; lead: string; secret: string }) => T = () => undefined as T, machineId = 'host') {
   const s = swarm(MIGRATED)
   s.join(peerActor)
   s.join(outsiderActor)
@@ -81,7 +81,7 @@ async function scene<T = void>(extra: (s: ReturnType<typeof swarm>, ids: { web: 
     const finished = state.conversations.find(c => c.id === done)!
     finished.assignment = { ...state.conversations.find(c => c.id === web)!.assignment!, id: 'old-work', status: 'done' }
   })
-  const more = extra(s, { web, done, lead })
+  const more = extra(s, { web, done, lead, secret })
   const tabId = `tab-${randomUUID()}`
   const state = { ...structuredClone(s.state), id: tabId } as SuperTabState
   await writeLegacySwarm(db, { state, revision: R, messages: [{ id: `${tabId}-m1`, conversationId: done, sequence: 5, text: 'Done',
@@ -259,12 +259,17 @@ describe('host form (design 4.10)', () => {
     return scene((s, ids) => {
     s.contribute(machine, 'swarm')
     const idle = s.add('idle-harness', ids.done, false, ownerActor, machine, owner.sub)
+    // In the project without a Lead, so no agent of this machine is in it.
+    const archived = s.group('Archived, no agent here', ids.secret)
+    s.run({ type: 'conversation.archive', conversationId: archived, archived: true })
     s.edit(state => {
       const pool = state.machines!.find(m => m.machineId === machine)!
-      state.starts = [{ id: 'queued', creationId: 'c', actorKey: `person:${owner.sub}`, contributorId: owner.sub, membershipGeneration: pool.membershipGeneration,
+      // One in a running group, one in a dormant group none of its agents is in: the host still has to settle it.
+      state.starts = [[ids.web, 'queued'], [archived, 'queued-in-dormant']].map(([conversationId, id]) => ({ id: id!, creationId: 'c',
+        actorKey: `person:${owner.sub}`, contributorId: owner.sub, membershipGeneration: pool.membershipGeneration,
         machineOwnerId: owner.sub, hostGrant: null, harnessId: null, dispatched: false, error: null, poolGeneration: pool.generation,
-        request: { conversationId: ids.web, machineId: machine, engine: 'codex', name: 'Builder', cwd: '/repo', worktree: false,
-          requirements: { memoryBytes: 0, diskBytes: 0, maxCpuPercent: 100, tools: [], devices: [], quotaRequired: false } } }]
+        request: { conversationId: conversationId!, machineId: machine, engine: 'codex', name: 'Builder', cwd: '/repo', worktree: false,
+          requirements: { memoryBytes: 0, diskBytes: 0, maxCpuPercent: 100, tools: [], devices: [], quotaRequired: false } } }))
     })
     return { idle }
   }, machine)
@@ -287,7 +292,7 @@ describe('host form (design 4.10)', () => {
       observers: [{ email: peer.email, userId: peer.sub }, { email: outsider.email, userId: outsider.sub }] })
     // Its only group is finished and dormant, yet not archived: the host must not hand it to automatic cleanup.
     expect(rows.get(s.more.idle)).toMatchObject({ lead: false, active: true })
-    expect(tab.pool).toMatchObject({ tabId: s.tabId, machine: { machineId: machine }, starts: [{ id: 'queued' }] })
+    expect(tab.pool).toMatchObject({ tabId: s.tabId, machine: { machineId: machine }, starts: [{ id: 'queued' }, { id: 'queued-in-dormant' }] })
     expect(tab.pool.projects[0].conversationIds).toContain(s.web)
     expect(tab.pool.projects[0].conversationIds).not.toContain(s.privateId)
     expect(tab.assignments).toEqual([{ tabId: s.tabId, assignmentId: expect.any(String), harnessId: 'worker-harness' }])

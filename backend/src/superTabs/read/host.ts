@@ -76,12 +76,15 @@ export class HostReads {
     })
   }
 
-  /** The Swarm's active parts plus every group its agents on this machine are in, dormant ones too (a finished group
-   *  that is not archived still keeps its agent from automatic cleanup). */
+  /** The Swarm's active parts plus, dormant ones included, every group its agents on this machine are in (a finished
+   *  group that is not archived still keeps its agent from automatic cleanup) and every group of a start it holds (the
+   *  host still settles a queued start whose group went quiet). */
   private async tabState(tx: Transaction, tabId: string, machineId: string): Promise<SuperTabState> {
     let loaded = await parts.loadActive(tx, tabId)
     const agentIds = loaded.agents.filter(a => !a.deleted && a.data?.machineId === machineId).map(a => a.key)
-    if (agentIds.length) loaded = await parts.loadActive(tx, tabId, { agentIds })
+    const loadedGroups = new Set(loaded.groups.map(g => g.key))
+    const groupIds = [...new Set(loaded.starts.map(s => s.data!.request.conversationId))].filter(id => !loadedGroups.has(id))
+    if (agentIds.length || groupIds.length) loaded = await parts.loadActive(tx, tabId, { agentIds, groupIds })
     return parts.reassemble(loaded)
   }
 
