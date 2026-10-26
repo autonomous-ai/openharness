@@ -243,13 +243,11 @@ export async function routeTask(input: { tabId: string; conversationId: string; 
   // Nor does the agent of a lost task take work: it died, stalled or hit a limit, and its work goes to another (v1 liveness).
   // The backend keeps that mark on the agent until it recovers (backend superTabs/model.ts lostTask), since cancelling or
   // reassigning the task leaves it idle, and the task's group drops out of this read once it goes quiet (final review,
-  // Important 3). A task still lost says so itself.
+  // Important 3). The mark alone decides: recovery clears it while the old task may still be lost (re-check of #1749).
   const lostTask = (agentId: string | undefined) => {
     const marked = members.find(m => m.id === agentId)?.lostTask
-    const still = conversations.map(c => object(c.assignment)).find(a => a.status === 'lost' && a.agentId === agentId)
-    if (!marked && !still) return []
-    const reason = text(object(marked).reason) ?? text(object(still?.lost).reason)
-    return [`It lost its last task${reason ? ` (${reason})` : ''}. It takes work again once a person assigns it by hand or the Lead replaces it.`]
+    // The backend writes the mark with its loss's reason (backend superTabs/liveness.ts loseTask).
+    return marked ? [`It lost its last task (${String(object(marked).reason)}). It takes work again once a person assigns it by hand or the Lead replaces it.`] : []
   }
   const probes = probed.flat().map(p => p.kind === 'member' ? { ...p, repo: repoMatch(folder, p.frame ?? null, p.machineId === where.machineId),
     refusals: [...p.refusals, ...limited(p.agentId), ...lostTask(p.agentId)],

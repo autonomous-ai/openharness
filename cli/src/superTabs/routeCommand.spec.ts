@@ -101,9 +101,12 @@ describe('routeTask', () => {
     expect(offered.length).toBeGreaterThan(0)
     expect(offered.some(c => /^(Lead|Multiply) ·/.test(c))).toBe(false)
   })
-  // A lost task's agent died, stalled or hit a limit: its work goes to someone else (v1 liveness), never back to it.
+  // A lost task's agent died, stalled or hit a limit: its work goes to someone else (v1 liveness), never back to it. The
+  // backend marks the agent in the same write that loses the task (backend superTabs/liveness.ts).
   it.each(['working', 'lost'])('does not offer a member whose task is %s', async status => {
-    const s = scoped({ tab: tab({ id: 'x', agentId: 'a1', status }) })
+    const state = tab({ id: 'x', agentId: 'a1', status })
+    if (status === 'lost') state.state.agents = agents.map(a => a.id === 'a1' ? { ...a, lostTask: { conversationId: 'g1', assignmentId: 'x', reason: 'stalled', at: 1 } } : a)
+    const s = scoped({ tab: state })
     await routeTask(input, s, where as never, opener(id => daemon(id, { agents: ['h1'] })))
     expect((recorded(s).command.decision.candidates as Array<{ title: string }>).some(c => c.title.startsWith('Multiply'))).toBe(false)
   })
@@ -142,9 +145,21 @@ describe('routeTask', () => {
         [earlier({ ...lost, status: 'cancelled' }), earlier({ id: 'z', agentId: 'a1', status: 'done' }, { id: 'g2' })])
       expect(candidates.some(c => c.title.startsWith('Multiply'))).toBe(true)
     })
-    it('stays out while its task is still lost, with the task\'s own reason', async () => {
-      const { excluded } = await route(agents, [earlier({ ...lost, status: 'lost' })])
+    it('stays out while its task is still lost', async () => {
+      const { excluded } = await route(marked, [earlier({ ...lost, status: 'lost' })])
       expect(excluded).toContainEqual({ title: 'Multiply · Claude sonnet medium · remote-1', reason })
+    })
+    // Re-check of #1749: recovery clears the mark while the old task may still be lost; that task alone must not refuse it.
+    it('is offered again after its terminal was replaced, though its old task is still lost', async () => {
+      const replaced = agents.map(a => a.id === 'a1' ? { ...a, harnessId: 'h1b' } : a)
+      const state = tab(); Object.assign(state.state, { agents: replaced, conversations: [...state.state.conversations, earlier({ ...lost, status: 'lost' })] })
+      const s = scoped({ tab: state })
+      await routeTask(input, s, where as never, opener(id => daemon(id, { agents: ['h1b'] })), () => 'op')
+      expect((recorded(s).command.decision.candidates as Array<{ title: string }>).some(c => c.title.startsWith('Multiply'))).toBe(true)
+    })
+    it('is offered again after it finished a newer task, though its old task is still lost', async () => {
+      const { candidates } = await route(agents, [earlier({ ...lost, status: 'lost' }), earlier({ id: 'z', agentId: 'a1', status: 'done' }, { id: 'g2' })])
+      expect(candidates.some(c => c.title.startsWith('Multiply'))).toBe(true)
     })
   })
   it('leaves out what breaks the owner\'s rules in the tab, and ignores a rule it cannot read', async () => {
