@@ -127,8 +127,13 @@ export interface SwarmList {
   next: string | null
 }
 
-/** GET /api/super-tabs/conversations/:conversationId/messages: `revision` is gone; pages use a `(sequence, id)` cursor. */
+/** GET /api/super-tabs/:tabId/conversations/:conversationId/messages[?after=&afterId= | ?before=&beforeId= | ?messageId=]
+ *  (design 4.6). Rows are ordered by (sequence, id); `revision` is gone. With no cursor the page is the newest 100, and
+ *  `next` names its oldest row: send it back as `before`/`beforeId` for the page before. Forward pages (`after`) name their
+ *  newest row the same way. `next` is null at the end. `after` alone (no `afterId`) means strictly after that sequence,
+ *  which is all a poll for new messages needs. */
 export interface MessagePageCursor { sequence: number; id: string }
+export interface MessagePage<M = Record<string, unknown>> { messages: M[]; next: MessagePageCursor | null }
 
 /** GET /api/super-tabs/hosts/:machineId/changes?cursor=[&full=1]. Ask `full=1` at start and at least every 60 s. */
 export interface HostChanges {
