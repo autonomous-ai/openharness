@@ -3,6 +3,7 @@ import 'dart:convert';
 
 import 'package:fake_async/fake_async.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:harness/core/local_key_value_store.dart';
 import 'package:harness/super_tabs/client.dart';
 import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/reading.dart';
@@ -35,10 +36,13 @@ Map<String, dynamic> _view({String tab = 'tab', int pad = 0}) {
 void main() {
   group('a controller', _controllerTests);
   group('the client', _clientTests);
+  group('review of #1723', _reviewTests);
+  group('re-review of #1727', _reReviewTests);
 
   test('keeps what the Swarm draws, not what it never shows', () async {
     final store = MemoryStore();
     final views = SuperTabSavedViews(store);
+    await views.claim('owner');
     await views.write('owner', 'tab', _view());
     final read = (await views.read('owner', 'tab'))!;
     expect(read['revision'], 7);
@@ -53,6 +57,7 @@ void main() {
   test('a view over the size cap is not kept, and an older one goes', () async {
     final store = MemoryStore();
     final views = SuperTabSavedViews(store, maxBytes: 4096);
+    await views.claim('owner');
     await views.write('owner', 'tab', _view());
     expect(await views.read('owner', 'tab'), isNotNull);
     await views.write('owner', 'tab', _view(pad: 8000));
@@ -65,6 +70,7 @@ void main() {
 
   test('an account keeps its three most recent Swarms', () async {
     final views = SuperTabSavedViews(MemoryStore());
+    await views.claim('owner');
     for (final tab in ['a', 'b', 'c', 'd']) {
       await views.write('owner', tab, _view(tab: tab));
     }
@@ -84,19 +90,23 @@ void main() {
     () async {
       final store = MemoryStore();
       final views = SuperTabSavedViews(store);
+      await views.claim('owner');
       await views.write('owner', 'tab', _view());
-      await views.write('other', 'tab', _view());
       expect(await views.read('stranger', 'tab'), isNull);
+      expect(await views.read('owner', 'tab'), isNotNull);
       await views.forgetAccount('owner');
       expect(await views.read('owner', 'tab'), isNull);
-      expect(await views.read('other', 'tab'), isNotNull);
-      expect(store.values.keys.where((k) => k.contains('owner')), isEmpty);
+      expect(
+        store.values.keys.where((k) => k.startsWith('super_tab.view')),
+        isEmpty,
+      );
     },
   );
 
   test('a lost Swarm is forgotten; a view it cannot read is none', () async {
     final store = MemoryStore();
     final views = SuperTabSavedViews(store);
+    await views.claim('owner');
     await views.write('owner', 'tab', _view());
     await views.forget('owner', 'tab');
     expect(await views.read('owner', 'tab'), isNull);
@@ -526,6 +536,338 @@ void _clientTests() {
         store.values.keys.where((k) => k.contains('super_tab.view')),
         isEmpty,
       );
+      client.dispose();
+    });
+  });
+}
+
+/// A store that refuses, as a full (writes) or private-mode (reads too)
+/// browser storage does.
+class _FailingStore extends MemoryStore {
+  bool refuseReads = false, refuseWrites = false;
+  @override
+  Future<String?> read(String key) async {
+    if (refuseReads && key.startsWith('super_tab.view')) {
+      throw StateError('SecurityError');
+    }
+    return super.read(key);
+  }
+
+  @override
+  Future<void> write(String key, String value) async {
+    if (refuseWrites && key.startsWith('super_tab.view')) {
+      throw StateError('QuotaExceededError');
+    }
+    return super.write(key, value);
+  }
+}
+
+/// Every key the client touched, reads and deletes included.
+class _TouchStore extends MemoryStore {
+  final touched = <String>[];
+  @override
+  Future<String?> read(String key) {
+    touched.add(key);
+    return super.read(key);
+  }
+
+  @override
+  Future<void> delete(String key) {
+    touched.add(key);
+    return super.delete(key);
+  }
+}
+
+/// Saves [server]'s Swarm as `owner` through a client on [store], then
+/// leaves it, as a person does before closing the page.
+void _visit(FakeAsync async, ConversationServer server, MemoryStore store) {
+  final client = _client(_Transport(server), store)
+    ..bind('owner')
+    ..show('tab');
+  client.open('tab');
+  async.elapse(const Duration(seconds: 1));
+  client.show(null);
+  async.flushMicrotasks();
+  // Not disposed: closing a page signs nobody out (dispose is a sign-out).
+}
+
+/// A browser store whose cross-tab lock another tab holds: an iPhone
+/// suspending a background tab that held it.
+class _StuckLockStore extends MemoryStore
+    implements SynchronizedLocalKeyValueStore {
+  final release = Completer<void>();
+  @override
+  Future<T> synchronized<T>(String scope, Future<T> Function() action) =>
+      release.future.then((_) => action());
+}
+
+void _reReviewTests() {
+  // Minor a.
+  test('a lock another tab holds delays the open no more than 250 ms', () {
+    fakeAsync((async) {
+      final server = ConversationServer()..append('Hello');
+      final store = _StuckLockStore();
+      final client = _client(_Transport(server), store)
+        ..bind('owner')
+        ..show('tab');
+      SuperTabController? c;
+      client.open('tab').then((opened) => c = opened);
+      async.elapse(const Duration(milliseconds: 249));
+      expect(c, isNull);
+      async.elapse(const Duration(milliseconds: 2));
+      expect(c, isNotNull);
+      expect(c!.showingSaved, isFalse);
+      expect(c!.messages('lead').single.text, 'Hello');
+      store.release.complete();
+      async.flushMicrotasks();
+      client.dispose();
+    });
+  });
+
+  // Minor b.
+  test('after a sign-out elsewhere, a late write keeps nothing', () async {
+    final store = MemoryStore();
+    final views = SuperTabSavedViews(store);
+    await views.claim('owner');
+    await views.write('owner', 'tab', _view());
+    expect(store.values[_viewKey], isNotNull);
+    // Another browser tab signs out: the device keeps nobody's views now.
+    await SuperTabSavedViews(store).claim(null);
+    expect(store.values[_viewKey], isNull);
+    await views.write('owner', 'tab', _view());
+    expect(store.values[_viewKey], isNull);
+    // Nor one written for another account than the one using the device.
+    await views.claim('someone-else');
+    await views.write('owner', 'tab', _view());
+    expect(store.values[_viewKey], isNull);
+  });
+}
+
+void _reviewTests() {
+  // Finding 1.
+  test('more than a page since the save leaves no gap in the transcript', () {
+    final server = ConversationServer();
+    for (var i = 1; i <= 120; i++) {
+      server.append('m$i');
+    }
+    final view = _saved(server);
+    fakeAsync((async) {
+      for (var i = 121; i <= 270; i++) {
+        server.append('m$i');
+      }
+      final c = _controller(_Reads(server))
+        ..drawSaved(view)
+        ..start();
+      async.flushMicrotasks();
+      final shown = c.messages('lead').map((m) => m.text).toList();
+      expect(shown.length, 100);
+      expect(shown.first, 'm171');
+      expect(shown.last, 'm270');
+      unawaited(c.loadMessages('lead', older: true));
+      async.flushMicrotasks();
+      final sequences = c.messages('lead').map((m) => m.sequence).toList();
+      expect(sequences.first, 71);
+      for (var i = 1; i < sequences.length; i++) {
+        expect(sequences[i], sequences[i - 1] + 1, reason: 'at $i');
+      }
+      c.dispose();
+    });
+  });
+
+  // Finding 2.
+  test('nothing is written back while the saved view is on screen', () {
+    fakeAsync((async) {
+      final server = ConversationServer()..append('Hello');
+      final store = _CountingStore();
+      _visit(async, server, store);
+      server.append('Newer.');
+      store.writes.clear();
+      final transport = _Transport(server)..hold = Completer<void>();
+      final client = _client(transport, store)
+        ..bind('owner')
+        ..show('tab');
+      client.open('tab');
+      async.elapse(const Duration(seconds: 2));
+      expect(store.writes.where((k) => k == _viewKey), isEmpty);
+      transport.hold!.complete();
+      transport.hold = null;
+      async.elapse(const Duration(seconds: 1));
+      // The fresh view is kept at once, not 15 s later.
+      expect(store.writes.where((k) => k == _viewKey), hasLength(1));
+      expect(store.values[_viewKey], contains('Newer.'));
+      client.dispose();
+    });
+  });
+
+  // Finding 3.
+  for (final (name, full, private) in [
+    ('full', true, false),
+    ('private mode', true, true),
+  ]) {
+    test('a $name storage opens the Swarm as today, with one poll', () {
+      fakeAsync((async) {
+        final server = ConversationServer()..append('Hello');
+        final store = _FailingStore();
+        _visit(async, server, store);
+        store
+          ..refuseWrites = full
+          ..refuseReads = private;
+        final reads = <String>[];
+        final transport = _Transport(server)..hold = Completer<void>();
+        final client =
+            SuperTabClient(
+                transport: (method, path, {body}) {
+                  if (path == '/api/super-tabs/tab') reads.add(path);
+                  return transport.call(method, path, body: body);
+                },
+                storage: store,
+                discoveryInterval: Duration.zero,
+              )
+              ..reading = _web
+              ..bind('owner')
+              ..show('tab');
+        SuperTabController? c;
+        Object? failed;
+        client
+            .open('tab')
+            .then<void>(
+              (opened) => c = opened,
+              onError: (Object e) => failed = e,
+            );
+        async.flushMicrotasks();
+        // A full storage still reads: the saved view draws. Private mode
+        // reads nothing: the Swarm opens as today.
+        expect(failed, isNull);
+        expect(c!.showingSaved, !private);
+        transport.hold!.complete();
+        transport.hold = null;
+        async.elapse(const Duration(milliseconds: 7100));
+        expect(c!.error, isNull);
+        expect(c!.messages('lead').single.text, 'Hello');
+        expect(reads, hasLength(3));
+        // Leaving and signing out: no error escapes either.
+        client.show(null);
+        client.bind('someone-else');
+        async.flushMicrotasks();
+        client.dispose();
+      });
+    });
+  }
+
+  // Finding 4.
+  test('views saved at the same moment all stay listed, and all go', () async {
+    final store = MemoryStore();
+    final views = SuperTabSavedViews(store);
+    await views.claim('owner');
+    await Future.wait([
+      views.write('owner', 'a', _view(tab: 'a')),
+      views.write('owner', 'b', _view(tab: 'b')),
+      views.write('owner', 'c', _view(tab: 'c')),
+    ]);
+    for (final tab in ['a', 'b', 'c']) {
+      expect(store.values['super_tab.view.owner.$tab'], isNotNull, reason: tab);
+    }
+    // Signing out then finds every one of them.
+    await views.forgetAccount('owner');
+    expect(
+      store.values.keys.where((k) => k.startsWith('super_tab.view')),
+      isEmpty,
+    );
+  });
+
+  // Finding 5.
+  test('another account after a reload clears the one before', () {
+    fakeAsync((async) {
+      final server = ConversationServer()..append('Hello');
+      final store = MemoryStore();
+      _visit(async, server, store);
+      expect(store.values[_viewKey], isNotNull);
+      // The same account after a reload keeps its view.
+      _client(_Transport(server), store).bind('owner');
+      async.flushMicrotasks();
+      expect(store.values[_viewKey], isNotNull);
+      // Another account on the next page load: nothing of the first stays.
+      final other = _client(_Transport(server), store)..bind('someone-else');
+      async.flushMicrotasks();
+      expect(
+        store.values.keys.where(
+          (k) => k.startsWith('super_tab.view') && k.contains('owner'),
+        ),
+        isEmpty,
+      );
+      other.dispose();
+    });
+  });
+
+  test('at boot the account binds before the web says views are kept', () {
+    fakeAsync((async) {
+      final server = ConversationServer()..append('Hello');
+      final store = MemoryStore();
+      _visit(async, server, store);
+      // As AppNotifier does: the account first, the workspace's reading after.
+      SuperTabClient(
+          transport: _Transport(server).call,
+          storage: store,
+          discoveryInterval: Duration.zero,
+        )
+        ..bind('someone-else')
+        ..reading = _web;
+      async.flushMicrotasks();
+      expect(store.values[_viewKey], isNull);
+    });
+  });
+
+  // Finding 6.
+  test('the first read wins over a saved view, whatever its revision', () {
+    final server = ConversationServer()..append('Hello');
+    final view = _saved(server)..['revision'] = 999;
+    fakeAsync((async) {
+      server.state['name'] = 'Pilot, renamed';
+      final c = _controller(_Reads(server))
+        ..drawSaved(view)
+        ..start();
+      async.flushMicrotasks();
+      expect(c.showingSaved, isFalse);
+      expect(c.snapshot!.name, 'Pilot, renamed');
+      c.dispose();
+    });
+  });
+
+  // Finding 8.
+  test('a change of the page only, not of what was read, writes nothing', () {
+    fakeAsync((async) {
+      final server = ConversationServer()..append('Hello');
+      final store = _CountingStore();
+      final client = _client(_Transport(server), store)
+        ..bind('owner')
+        ..show('tab');
+      SuperTabController? c;
+      client.open('tab').then((opened) => c = opened);
+      async.elapse(const Duration(seconds: 20));
+      store.writes.clear();
+      c!.markRead('lead');
+      c!.toggleProject('lead');
+      async.elapse(const Duration(seconds: 20));
+      expect(store.writes.where((k) => k == _viewKey), isEmpty);
+      client.dispose();
+    });
+  });
+
+  // Finding 9.
+  test('Desktop: an account change reads and deletes no saved view', () {
+    fakeAsync((async) {
+      final store = _TouchStore();
+      final client =
+          _client(
+              _Transport(ConversationServer()),
+              store,
+              reading: const SuperTabReading(),
+            )
+            ..bind('owner')
+            ..bind('someone-else')
+            ..bind(null);
+      async.flushMicrotasks();
+      expect(store.touched.where((k) => k.contains('super_tab.view')), isEmpty);
       client.dispose();
     });
   });

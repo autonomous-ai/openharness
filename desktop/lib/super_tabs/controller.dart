@@ -157,6 +157,12 @@ class SuperTabController extends ChangeNotifier {
   bool get showingSaved => _showingSaved;
   bool _showingSaved = false;
 
+  /// Moves when what a [savedView] holds changes: the state as read, or the
+  /// open conversation and its page. Not for what only the page around them
+  /// does (read marks, open groups), which needs no new copy kept.
+  int get viewVersion => _viewVersion;
+  int _viewVersion = 0;
+
   /// The last time the person did something here, or a new message reached
   /// the open conversation: what keeps the full poll ([SuperTabReading.quietPoll]).
   DateTime _lastActivity = clock.now();
@@ -450,7 +456,12 @@ class SuperTabController extends ChangeNotifier {
   /// state as last read and the open conversation's last page, or null.
   Map<String, dynamic>? get savedView {
     final state = _shownState;
-    if (!_policy.drawsSaved || state == null || accessRevoked) return null;
+    if (!_policy.drawsSaved ||
+        state == null ||
+        accessRevoked ||
+        _showingSaved) {
+      return null;
+    }
     final id = selectedId;
     final shown = _messages[id] ?? const <SuperTabMessage>[];
     final page = shown.length > _savedPage
@@ -624,6 +635,7 @@ class SuperTabController extends ChangeNotifier {
       if (group.archived) closedOpenProjects.add(group.projectId);
     }
     selectedId = id;
+    _viewVersion++;
     operationNotice = null;
     _saveSoon();
     _changed();
@@ -694,12 +706,14 @@ class SuperTabController extends ChangeNotifier {
       if (_policy.adapts) {
         stateChanged = !const DeepCollectionEquality().equals(raw, _shownState);
         _shownState = raw;
+        if (stateChanged) _viewVersion++;
       }
       final next = SuperTabSnapshot.fromJson(raw);
       if (next.id != tabId) {
         throw const FormatException('A different Swarm was returned.');
       }
-      if (nextRevision >= revision) {
+      // The first read over a saved view wins, whatever revision was saved.
+      if (nextRevision >= revision || _showingSaved) {
         snapshot = next;
         final allowed = next.conversations.map((c) => c.id).toSet();
         final localAccessChanged =
@@ -928,9 +942,14 @@ class SuperTabController extends ChangeNotifier {
       if (incoming.any((m) => m.conversationId != id)) {
         throw const FormatException('A different conversation was returned.');
       }
+      // The first read over a saved page replaces it: merged, the saved
+      // page would leave a gap when more than a page arrived since.
+      final replacing = _showingSaved && !older;
+      if (replacing) _rows.remove(id);
       _keepRows(id, answer['messages'] as List);
       final combined = {
-        for (final m in _messages[id] ?? <SuperTabMessage>[]) m.id: m,
+        if (!replacing)
+          for (final m in _messages[id] ?? <SuperTabMessage>[]) m.id: m,
         for (final m in incoming) m.id: m,
       };
       final own = combined.values
@@ -981,12 +1000,15 @@ class SuperTabController extends ChangeNotifier {
       // An adapting read that found nothing new changes nothing on screen.
       final same = _policy.adapts && _sameMessages(_messages[id], next);
       _messages[id] = next;
-      if (older || !_before.containsKey(id)) {
+      if (older || replacing || !_before.containsKey(id)) {
         _before[id] = (answer['next'] as num?)?.toInt();
       }
       // Something new in the conversation on screen keeps the full poll.
       if (arrived && id == selectedId) _acted();
-      if (!same) _changed();
+      if (!same) {
+        if (id == selectedId) _viewVersion++;
+        _changed();
+      }
     } catch (failure) {
       // The state read waits for a machine within the grace: so do these.
       if (!_inConnectGrace(failure)) _readFailure(failure, revokeTab: false);
