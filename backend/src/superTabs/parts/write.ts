@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import type { Prisma } from '@prisma/client'
 import { activeWork, stableId, type AgentStart, type Agent } from '../model.js'
 import type { GroupData, MachineData, PartKind } from './types.js'
@@ -49,6 +50,14 @@ export const partId = (tabId: string, key: string) => `${tabId}:${key}`
 /** A start leaves command state once it failed, or started and (when pooled) settled. */
 export const startFinished = (start: AgentStart) => !!start.error || (!!start.harnessId && (!start.poolGeneration || !!start.poolSettled))
 
+/** What host rows read of a conversation (read/hostRows.ts), with its id, as a short hash: a post, a rename or a new brief
+ *  leaves it, so the host form can answer 'unchanged' from this column alone (group 3b). */
+function hostDigest(group: GroupData): string {
+  const work = group.assignment
+  return createHash('sha256').update(JSON.stringify([group.id, group.kind ?? null, group.projectId ?? null, group.archived, group.agentIds, group.leadId ?? null,
+    !!group.audience, work ? [work.id, work.agentId, work.status, work.execution, work.result?.slice(0, 500) ?? null] : null])).digest('base64url').slice(0, 22)
+}
+
 /** The columns each kind keeps out of its data for queries (schema.prisma). */
 export function extracted(kind: PartKind, data: unknown, stamp: number): Record<string, unknown> {
   switch (kind) {
@@ -57,7 +66,7 @@ export function extracted(kind: PartKind, data: unknown, stamp: number): Record<
       return { projectId: group.projectId ?? null, kind: group.kind ?? null, archived: group.archived, dormant: !!group.dormant,
         agentIds: group.agentIds, executionMachineId: activeWork(group) ? group.assignment!.execution.machineId : null,
         messageSeq: group.messageSeq ?? 0, reportSeq: group.reportSeq ?? 0,
-        lastActivityAt: group.lastActivityAt ? new Date(group.lastActivityAt) : new Date(stamp) }
+        lastActivityAt: group.lastActivityAt ? new Date(group.lastActivityAt) : new Date(stamp), hostDigest: hostDigest(group) }
     }
     case 'agent': {
       const agent = data as Agent

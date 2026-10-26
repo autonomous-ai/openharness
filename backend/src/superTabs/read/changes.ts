@@ -7,7 +7,7 @@ import type { Actor, Agent, AgentStart, Conversation } from '../model.js'
 import { canReadAgent, canReadGroup } from '../projects.js'
 import type { MachineData, Part } from '../parts/index.js'
 import type { ChangesDelta, DormantStub, Tombstone } from './contract.js'
-import { envelope, progressView, type ReaderView } from './views.js'
+import { envelope, progressView, visibleGroupView, type ReaderView } from './views.js'
 
 export type PartChanges = Pick<ChangesDelta, 'head' | 'members' | 'agents' | 'groups' | 'machines' | 'starts' | 'progress'>
 
@@ -22,6 +22,7 @@ export function changesFor(view: ReaderView, changed: Part[], actor: Actor): Par
   const groupReadable = (group: Conversation) => safely(() => canReadGroup(state, actor, group))
   const groupOf = (id: string) => state.conversations.find(c => c.id === id)
     ?? changed.find(p => p.kind === 'group' && p.key === id)?.data as Conversation | undefined
+  const visibleAgents = new Set(seen.agents.map(a => a.key))
   const out: PartChanges = { head: null, members: [], agents: [], groups: [], machines: [], starts: [], progress: [] }
   for (const part of changed) {
     switch (part.kind) {
@@ -40,7 +41,8 @@ export function changesFor(view: ReaderView, changed: Part[], actor: Actor): Par
       }
       case 'group': {
         if (part.deleted || part.dormant) { if (groupReadable(part.data as Conversation)) out.groups.push(part.deleted ? stub(part) : dormantStub(part)) }
-        else { const group = live(seen.groups, part.key); if (group) out.groups.push(group) }
+        // Sent from the changed part itself: the reader's view may hold only a conversation's light fields (parts/light.ts).
+        else if (groupReadable(part.data as Conversation)) out.groups.push(envelope(part, visibleGroupView(part.data as Conversation, visibleAgents)))
         break
       }
       case 'machine': {

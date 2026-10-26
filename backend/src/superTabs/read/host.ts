@@ -3,6 +3,7 @@
  * that concerns it since the cursor (incremental). Grants and billing live outside the parts, so the host asks for a full
  * read at start and at least every 60 s.
  */
+import { createHash } from 'node:crypto'
 import type { Prisma, PrismaClient } from '@prisma/client'
 import type { AuthUser } from '../../lib/ssoAuth.js'
 import { machineAlive } from '../../lib/prisma.js'
@@ -17,6 +18,8 @@ import { cursorFor, readCursor } from './cursor.js'
 import { hostTab, type HostLookups } from './hostRows.js'
 
 type Transaction = Prisma.TransactionClient
+/** The row hash's length at the front of an etag (read/hostEtag.ts); the input signature follows it. */
+const ROW_HASH = 22
 /** A full read covers this many of the machine's Swarms, most recently changed first (was 100 full Swarms each second). */
 const FULL_TABS = 500
 
@@ -59,10 +62,16 @@ export class HostReads {
       const tabs = []
       for (const tabId of ids) {
         if (woken && !woken.has(tabId)) continue
+        const lastChangedAt = newest.get(tabId) ?? null, held = request.held?.[tabId]
+        // The etag is the rows' hash and then the signature of what they were built from. A matching signature answers
+        // 'unchanged' from version columns alone. Never on a full read: grants and billing live outside the parts.
+        const inputs = await this.inputs(tx, tabId)
+        if (!full && held && inputs && held.slice(ROW_HASH) === inputs) { tabs.push({ tabId, lastChangedAt, etag: held, unchanged: true as const }); continue }
         const state = await this.tabState(tx, tabId, machineId)
-        const rows = await hostTab(tabId, state, machineId, user, newest.get(tabId) ?? null, await this.lookups(tx, state, teams))
+        const rows = await hostTab(tabId, state, machineId, user, lastChangedAt, await this.lookups(tx, state, teams))
+        const etag = rows.etag + (inputs ?? '')
         // The host already holds these rows: say so instead of sending them again.
-        tabs.push(request.held?.[tabId] === rows.etag ? { tabId, lastChangedAt: rows.lastChangedAt, etag: rows.etag, unchanged: true as const } : rows)
+        tabs.push(held?.slice(0, ROW_HASH) === rows.etag ? { tabId, lastChangedAt, etag, unchanged: true as const } : { ...rows, etag })
       }
       return { format: READ_FORMAT, full, cursor: cursorFor(t0, 0), tabs,
         removedTabIds: full ? [] : await this.removed(tx, user.autonomousEnv, machineId, from.since, new Set(ids)) }
@@ -96,12 +105,38 @@ export class HostReads {
    *  group that is not archived still keeps its agent from automatic cleanup) and every group of a start it holds (the
    *  host still settles a queued start whose group went quiet). */
   private async tabState(tx: Transaction, tabId: string, machineId: string): Promise<SuperTabState> {
-    let loaded = await parts.loadActive(tx, tabId)
-    const agentIds = loaded.agents.filter(a => !a.deleted && a.data?.machineId === machineId).map(a => a.key)
-    const loadedGroups = new Set(loaded.groups.map(g => g.key))
-    const groupIds = [...new Set(loaded.starts.map(s => s.data!.request.conversationId))].filter(id => !loadedGroups.has(id))
-    if (agentIds.length || groupIds.length) loaded = await parts.loadActive(tx, tabId, { agentIds, groupIds })
-    return parts.reassemble(loaded)
+    const [agents, starts] = await Promise.all([
+      tx.swarmAgent.findMany({ where: { tabId, machineId, deleted: false }, select: { key: true } }),
+      tx.swarmStart.findMany({ where: { tabId, deleted: false, finishedAt: null }, select: { conversationId: true } }),
+    ])
+    // Light conversations (parts/light.ts): host rows read their members, Lead, work and privacy, never their bodies.
+    return parts.reassemble(await parts.loadLight(tx, tabId, { agentIds: agents.map(a => a.key), groupIds: [...new Set(starts.map(s => s.conversationId))] }))
+  }
+
+  /**
+   * The signature of everything host rows are built from, read from version columns only (no part data): the head,
+   * members, agents and starts by their data stamps, machines by their settings marker (not their readings), and
+   * conversations by their host-fields digest and dormancy (a post leaves both). Null while a conversation has no digest
+   * yet: a missing digest counts as changed.
+   */
+  private async inputs(tx: Transaction, tabId: string): Promise<string | null> {
+    const live = { tabId, deleted: false }, stamp = { key: true, changedAt: true } as const
+    const [head, members, agents, starts, machines, digests] = await Promise.all([
+      tx.swarmHead.findUnique({ where: { id: `${tabId}:head` }, select: { changedAt: true } }),
+      tx.swarmMember.findMany({ where: live, select: stamp }), tx.swarmAgent.findMany({ where: live, select: stamp }),
+      tx.swarmStart.findMany({ where: live, select: stamp }),
+      tx.swarmMachine.findMany({ where: live, select: { key: true, hostChangedAt: true } }),
+      // Every conversation's digest (which carries its id) and dormancy, in key order, as one string: about 23 bytes each.
+      tx.swarmGroup.aggregateRaw({ pipeline: [{ $match: { tabId, deleted: false } }, { $sort: { key: 1 } },
+        { $group: { _id: null, missing: { $sum: { $cond: [{ $ifNull: ['$hostDigest', false] }, 0, 1] } },
+          all: { $push: { $concat: [{ $ifNull: ['$hostDigest', ''] }, { $cond: ['$dormant', '1', '0'] }] } } } },
+        { $project: { _id: 0, missing: 1, all: { $reduce: { input: '$all', initialValue: '', in: { $concat: ['$$value', '$$this'] } } } } }] }),
+    ])
+    const groups = (digests as unknown as Array<{ missing: number; all: string }>)[0] ?? { missing: 0, all: '' }
+    if (!head || groups.missing) return null
+    const keyed = <T extends { key: string }>(rows: T[]) => rows.sort((a, b) => a.key < b.key ? -1 : a.key > b.key ? 1 : 0)
+    return createHash('sha256').update(JSON.stringify([head.changedAt, keyed(members), keyed(agents), keyed(starts), keyed(machines), groups.all]))
+      .digest('base64url').slice(0, ROW_HASH)
   }
 
   private async lookups(tx: Transaction, state: SuperTabState, teams: Array<{ machineId: string }>): Promise<HostLookups> {

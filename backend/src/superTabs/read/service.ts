@@ -19,7 +19,7 @@ import { envelope, groupView, readerView, type ReaderView } from './views.js'
 import { decodeDormantPage, encodeDormantPage } from './dormantPage.js'
 
 type Transaction = Prisma.TransactionClient
-type LoadOptions = Parameters<typeof parts.loadActive>[2]
+type LoadOptions = NonNullable<Parameters<typeof parts.loadActive>[2]> & Pick<NonNullable<Parameters<typeof parts.loadLight>[2]>, 'groups'>
 interface Read { parts: SwarmParts; actor: Actor; view: ReaderView; lastChangedAt: number | null }
 
 export class SwarmReads {
@@ -43,14 +43,19 @@ export class SwarmReads {
   async changes(user: AuthUser, tabId: string, cursor: string, asAgentId?: string): Promise<Changes> {
     const t0 = this.now()
     return this.read(user, tabId, async tx => {
-      let read = await this.load(tx, user, tabId, asAgentId, t0, { includeRecentStarts: true })
+      // Light (parts/light.ts): changed parts come whole from the change feed; the rest is read only to check visibility and
+      // derive values: the Lead conversations, those with running work, and those a person's mentions are in (their count).
+      const mentioned = asAgentId ? [] : (await tx.superTabMention.findMany({ where: { tabId, personId: user.sub }, select: { conversationId: true },
+        distinct: ['conversationId'] })).map(m => m.conversationId)
+      const light = { includeRecentStarts: true, groups: 'working' as const, groupIds: mentioned }
+      let read = await this.load(tx, user, tabId, asAgentId, t0, light, parts.loadLight)
       const from = readCursor(cursor, read.parts.visibilityEpoch, t0)
       if ('reload' in from) return from
       const changed = (await parts.loadChanged(tx, [tabId], new Date(from.since))).get(tabId) ?? []
       // A changed start whose group went dormant is read against that group, so its readers alone learn of it.
       const held = new Set(read.parts.groups.map(g => g.key))
       const dormant = [...new Set(changed.flatMap(p => p.kind === 'start' ? [(p.data as AgentStart).request.conversationId] : []))].filter(id => !held.has(id))
-      if (dormant.length) read = await this.load(tx, user, tabId, asAgentId, t0, { includeRecentStarts: true, groupIds: dormant })
+      if (dormant.length) read = await this.load(tx, user, tabId, asAgentId, t0, { ...light, groupIds: [...mentioned, ...dormant] }, parts.loadLight)
       return { format: READ_FORMAT, reload: false, cursor: cursorFor(t0, read.parts.visibilityEpoch), serverTime: t0, lastChangedAt: read.lastChangedAt,
         epoch: read.parts.visibilityEpoch, ...changesFor(read.view, changed, read.actor), derived: read.view.derived }
     })
@@ -102,13 +107,16 @@ export class SwarmReads {
   /** Runs a read; a Swarm still in one row is migrated first, as a safety net for one the job did not see (design 6.1),
    *  and answers 503 while that cannot be done. The store's own loader refuses a Swarm not in parts. */
   private async read<T>(user: AuthUser, tabId: string, body: (tx: Transaction) => Promise<T>): Promise<T> {
+    // The row's format only: a migrated row still holds its old state, as large as the Swarm, until the owner drops it.
     const row = await this.db.superTab.findFirst({ where: { id: tabId, autonomousEnv: user.autonomousEnv }, select: { format: true } })
-    if (row && row.format !== 2 && !(await migrateSwarm(this.db, tabId)).ok) fail(SWARM_MIGRATING.code, SWARM_MIGRATING.message, SWARM_MIGRATING.status)
-    return transaction(this.db, async tx => { await this.store.row(tx, user, tabId); return body(tx) })
+    if (!row) fail('NOT_FOUND', 'This Super Tab is unavailable.', 404)
+    if (row.format !== 2 && !(await migrateSwarm(this.db, tabId)).ok) fail(SWARM_MIGRATING.code, SWARM_MIGRATING.message, SWARM_MIGRATING.status)
+    return transaction(this.db, body)
   }
 
-  private async load(tx: Transaction, user: AuthUser, tabId: string, asAgentId: string | undefined, t0: number, opts: LoadOptions): Promise<Read> {
-    const loaded = await parts.loadActive(tx, tabId, opts)
+  private async load(tx: Transaction, user: AuthUser, tabId: string, asAgentId: string | undefined, t0: number, opts: LoadOptions,
+    loader: (tx: Transaction, tabId: string, opts: LoadOptions) => Promise<SwarmParts> = parts.loadActive): Promise<Read> {
+    const loaded = await loader(tx, tabId, opts)
     const state = parts.reassemble(loaded)
     const actor = await this.store.actor(tx, user, state, asAgentId)
     const [teamMachines, mentions, newest] = await Promise.all([

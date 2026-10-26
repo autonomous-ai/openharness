@@ -3,7 +3,7 @@
  * plus the private-conversation check, each record sent in its part's envelope. Time-based and cross-part values go only
  * in `derived`, so a part never changes without a new version (Lead's ruling).
  */
-import { visibleState, type Actor, type Agent, type Conversation, type SuperTabState } from '../model.js'
+import { isLeads, visibleState, type Actor, type Agent, type Conversation, type SuperTabState } from '../model.js'
 import { machineSlots, teamWorkRefusal, type ContributedMachine } from '../machines.js'
 import * as store from '../parts/index.js'
 import type { Part, SwarmParts } from '../parts/index.js'
@@ -42,6 +42,11 @@ export const envelope = <T>(part: Pick<Part, 'key' | 'version' | 'changedAt'>, d
 export function groupView(group: Conversation): GroupView {
   const { messageSeq, reportSeq: _report, lastActivityAt: _activity, dormant, audience, ...rest } = group
   return { ...rest, messageSeq: messageSeq ?? 0, ...(dormant ? { dormant: true as const } : {}), ...(audience ? { audience } : {}) }
+}
+
+/** A conversation's whole data as the reader may see it: the Leads conversation lists only the agents the reader can see. */
+export function visibleGroupView(group: Conversation, visibleAgents: ReadonlySet<string>): GroupView {
+  return groupView(isLeads(group) ? { ...group, agentIds: group.agentIds.filter(id => visibleAgents.has(id)) } : group)
 }
 
 export function agentView(agent: Agent): AgentView {

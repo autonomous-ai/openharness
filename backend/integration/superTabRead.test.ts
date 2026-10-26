@@ -413,6 +413,18 @@ describe('host form (design 4.10)', () => {
     expect(entry((await hostPost({ full: true, held: { [s.tabId]: etag } })).data, s.tabId)).toMatchObject({ unchanged: true, etag })
   })
 
+  it('rebuilds the rows on a full read even when every version still matches: emails and grants live outside the parts', async () => {
+    const s = await hostScene()
+    const first = await hostPost({ full: true })
+    const etag = entry(first.data, s.tabId).etag as string
+    await db.user.update({ where: { id: peer.sub }, data: { email: 'peer-renamed@example.com' } })
+    try {
+      const full = entry((await hostPost({ full: true, held: { [s.tabId]: etag } })).data, s.tabId) as { unchanged?: true; roster: Array<{ observers?: Array<{ email: string }> }> }
+      expect(full.unchanged).toBeUndefined()
+      expect(full.roster.flatMap(r => r.observers ?? []).map(o => o.email)).toContain('peer-renamed@example.com')
+    } finally { await db.user.update({ where: { id: peer.sub }, data: { email: peer.email } }) }
+  })
+
   it('refuses a malformed held map', async () => {
     await hostScene()
     clock = Date.now()
@@ -485,4 +497,97 @@ describe('routes given only a store', () => {
       expect((await plain.inject({ method: 'GET', url: '/api/super-tabs/hosts/host/changes?full=1' })).statusCode).toBe(200)
     } finally { await plain.close() }
   }, 10_000)
+})
+
+describe('what a read costs the database (group 3b)', () => {
+  /** What MongoDB sent this process, as the benchmark's isolated poll measures it (integration/bench/probe.ts). */
+  const sent = async () => {
+    const out = ((await db.$runCommandRaw({ serverStatus: 1 })) as { network: { bytesOut: unknown } }).network.bytesOut
+    return typeof out === 'number' ? out : Number((out as { $numberLong?: string; $numberInt?: string }).$numberLong ?? (out as { $numberInt?: string }).$numberInt)
+  }
+  async function databaseBytes(call: () => Promise<unknown>): Promise<number> {
+    const before = await sent(), own = await sent() - before
+    const start = await sent()
+    await call()
+    return Math.max(0, await sent() - start - own)
+  }
+  /** The whole Swarm as stored: what a read that reassembles it loads. */
+  const swarmBytes = async (tabId: string) => {
+    const all = await db.$transaction(tx => parts.loadAll(tx, tabId))
+    return [all.head, ...all.members, ...all.agents, ...all.groups, ...all.machines, ...all.starts, ...all.progress].reduce((n, p) => n + JSON.stringify(p.data).length, 0)
+  }
+  /** Sixty more conversations with long briefs, as a busy Swarm's history makes them (about half a megabyte). */
+  const bulky = (s: ReturnType<typeof swarm>) => {
+    for (let i = 0; i < 60; i++) s.run({ type: 'conversation.create', title: `Old work ${i}`, brief: `${'Long brief text. '.repeat(470)}${i}`, checks: [] })
+  }
+
+  it('a Desktop change read with nothing changed loads a few tens of KB, not the Swarm', async () => {
+    const s = await scene(f => bulky(f))
+    const whole = await swarmBytes(s.tabId)
+    expect(whole).toBeGreaterThan(400_000)
+    clock = Date.now()
+    const cursor = (await get(`/api/super-tabs/${s.tabId}/parts`, peer)).body.data.cursor
+    clock = Date.now()
+    const bytes = await databaseBytes(() => get(`/api/super-tabs/${s.tabId}/changes?cursor=${cursor}`, peer))
+    expect(bytes).toBeLessThan(25_000)
+  })
+
+  it('still sends a new start in a conversation with no work yet', async () => {
+    const s = await scene(f => ({ idle: f.group('Not started yet') }))
+    clock = Date.now()
+    const cursor = (await get(`/api/super-tabs/${s.tabId}/parts`, owner)).body.data.cursor
+    const generation = (await db.swarmMember.findFirst({ where: { tabId: s.tabId, key: owner.sub } }))!.data as { generation: string }
+    await db.$transaction(tx => guardedWrite(tx, s.tabId, { op: 'insert', kind: 'start', key: 'queued-start', ordinal: Date.now(), first: R + 1, data: {
+      id: 'queued-start', creationId: 'c', actorKey: `person:${owner.sub}`, contributorId: owner.sub, membershipGeneration: generation.generation,
+      machineOwnerId: owner.sub, hostGrant: null, harnessId: null, dispatched: false, error: null,
+      request: { conversationId: s.more.idle, machineId: 'host', engine: 'codex', name: 'Builder', cwd: '/repo', worktree: false,
+        requirements: { memoryBytes: 0, diskBytes: 0, maxCpuPercent: 100, tools: [], devices: [], quotaRequired: false } } } }, Date.now()))
+    clock = Date.now()
+    expect(keys((await get(`/api/super-tabs/${s.tabId}/changes?cursor=${cursor}`, owner)).body.data.starts)).toEqual(['queued-start'])
+  })
+
+  it('still shows the owner an invitation that lands in a conversation with no work', async () => {
+    const s = await scene(f => ({ idle: f.group('Landing') }))
+    clock = Date.now()
+    const cursor = (await get(`/api/super-tabs/${s.tabId}/parts`, owner)).body.data.cursor
+    await new SuperTabStore(db).execute(owner, s.tabId, { operationId: randomUUID(),
+      command: { type: 'invite.create', email: 'new@example.com', role: 'viewer', conversationId: s.more.idle } })
+    clock = Date.now()
+    const head = (await get(`/api/super-tabs/${s.tabId}/changes?cursor=${cursor}`, owner)).body.data.head
+    expect(head.data.invitations.map((i: { email: string }) => i.email)).toEqual(['new@example.com'])
+  })
+
+  it('after one post it loads about what changed', async () => {
+    const s = await scene(f => bulky(f))
+    clock = Date.now()
+    const cursor = (await get(`/api/super-tabs/${s.tabId}/parts`, peer)).body.data.cursor
+    await new SuperTabStore(db).execute(owner, s.tabId, { operationId: randomUUID(),
+      command: { type: 'message.send', conversationId: s.web, text: 'One post', replyTo: null, recipientIds: [] } })
+    clock = Date.now()
+    let groups = 0
+    const bytes = await databaseBytes(async () => { groups = (await get(`/api/super-tabs/${s.tabId}/changes?cursor=${cursor}`, peer)).body.data.groups.length })
+    expect(groups).toBe(1)
+    expect(bytes).toBeLessThan(30_000)
+  })
+
+  it('the host form answers "unchanged" after a post in its agent\'s group without loading conversation bodies', async () => {
+    const machineId = `m-${randomUUID().slice(0, 8)}`
+    await db.machine.create({ data: { machineId, userId: owner.sub, apiKey: 'fixture-only', managerId: 'fixture', autonomousEnv: 'prod', authMode: 'remote' } })
+    const s = await scene(f => { f.contribute(machineId, 'swarm'); bulky(f) }, machineId)
+    const post = (body: Record<string, unknown>) => app.inject({ method: 'POST', url: `/api/super-tabs/hosts/${machineId}/changes`,
+      headers: { authorization: `Bearer ${owner.sub}` }, payload: body })
+    clock = Date.now()
+    const first = (await post({ full: true })).json().data as { cursor: string; tabs: Array<{ tabId: string; etag: string }> }
+    const etag = first.tabs.find(t => t.tabId === s.tabId)!.etag
+    await new SuperTabStore(db).execute(owner, s.tabId, { operationId: randomUUID(),
+      command: { type: 'message.send', conversationId: s.web, text: 'Busy', replyTo: null, recipientIds: [] } })
+    clock = Date.now()
+    let answer: Record<string, unknown> | undefined
+    const bytes = await databaseBytes(async () => {
+      answer = ((await post({ cursor: first.cursor, held: { [s.tabId]: etag } })).json().data.tabs as Array<Record<string, unknown>>).find(t => t.tabId === s.tabId)
+    })
+    expect(answer).toMatchObject({ unchanged: true, etag: expect.stringMatching(/^[A-Za-z0-9_-]{44}$/) })
+    // From version columns alone: building the rows from light conversations costs about 39 KB here, this about 10 KB.
+    expect(bytes).toBeLessThan(20_000)
+  })
 })
