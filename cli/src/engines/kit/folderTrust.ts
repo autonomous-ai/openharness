@@ -16,8 +16,8 @@
  * Only ever ADDS trust, never removes anything, and does nothing when the engine has never run here (no
  * file), when the file does not parse, or when it already says yes.
  */
-import { existsSync, readFileSync, realpathSync, renameSync, writeFileSync } from 'node:fs'
-import { posix, win32 } from 'node:path'
+import { existsSync, mkdirSync, readFileSync, realpathSync, renameSync, writeFileSync } from 'node:fs'
+import { dirname, posix, win32 } from 'node:path'
 import type { TrustContract } from '../facets/launch.js'
 
 type JsonTrust = Extract<TrustContract, { format: 'json' }>
@@ -95,10 +95,20 @@ function recordJson(trust: JsonTrust, file: string, cwd: string): 'trusted' | 'a
 }
 
 /** Record the engine's acceptance of its warning for full mode (facets/launch.ts `BypassAcceptanceContract`) as `key` in
- *  the JSON settings `file`. Like trust, only ever adds: a file that is missing or not an object, or a `key` the person set
- *  to anything else, stays as it is. */
+ *  the JSON settings `file`. Like trust, only ever adds: a file that is not an object, or a `key` the person set to anything
+ *  else, stays as it is. A missing file is created holding the key alone: unlike `.claude.json`, which the engine writes on
+ *  its first run, these settings may not exist yet on a fresh machine, whose first Lead would then stop at the warning. It is
+ *  created before the engine's hooks are merged into it (core/agents/create.ts), and never over a file made meanwhile. */
 export function recordAcceptanceIn(file: string, key: string): 'accepted' | 'already' | 'skipped' {
-  if (!existsSync(file)) return 'skipped'
+  if (!existsSync(file)) {
+    mkdirSync(dirname(file), { recursive: true, mode: 0o700 })
+    try {
+      writeFileSync(file, JSON.stringify({ [key]: true }, null, 2), { mode: 0o600, flag: 'wx' })
+      return 'accepted'
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
+    }
+  }
   let settings: unknown
   try { settings = JSON.parse(readFileSync(file, 'utf8')) } catch { return 'skipped' }
   if (!isPlainObject(settings)) return 'skipped'

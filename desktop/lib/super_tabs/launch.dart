@@ -554,6 +554,10 @@ class SuperTabLaunch {
   /// cancelled on its machine first; one that started keeps running there.
   Future<String?> discard({bool anyway = false}) async {
     checkAccount();
+    // Its project goes too only when nothing can still join it: a started
+    // Lead keeps running and points at it, and one that may still start would.
+    var nothingWillJoin =
+        saved['phase'] != 'starting' && saved['phase'] != 'joining';
     if (saved['phase'] == 'joining' && !anyway) {
       return 'The $who keeps running on $machineName. Remove this request?';
     }
@@ -586,8 +590,9 @@ class SuperTabLaunch {
       }.contains(state)) {
         return '$machineName is already starting the $who and could not stop it. Discard anyway?';
       }
+      nothingWillJoin = true;
     }
-    await _deleteEmptyProject();
+    if (nothingWillJoin) await _deleteEmptyProject();
     await app.superTabs.storage.delete(key);
     checkAccount();
     return null;

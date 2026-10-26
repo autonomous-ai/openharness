@@ -128,7 +128,9 @@ export function createLaunchRequests({ receipts, createAgent, prepareCreate, pre
       // a fresh clone did, and the next Lead, in a worktree of it, asked again because the source had never been
       // answered. Its Yes then landed under the source's key (Claude Code records a worktree's answer under its
       // main repository), which made the source look trusted before the worktree started.
-      const swarmCheckout = projectFolder.source === 'remote' && !!input.swarmRole && input.permissionMode === 'full'
+      // Claude Code only: Codex's trust also sets its defaults for the person's own later sessions in that folder.
+      const swarmCheckout = input.engine === 'claude' && projectFolder.source === 'remote' && !!input.swarmRole
+        && input.permissionMode === 'full'
       try {
         // A Codex agent on its own profile reads its trust from that profile's config.toml, not ~/.codex.
         const engineTrust = folderTrust(input.engine, input.codexHome)

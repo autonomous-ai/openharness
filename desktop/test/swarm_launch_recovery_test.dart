@@ -159,6 +159,7 @@ void main() {
       'The Lead keeps running on Test host. Remove this request?',
     );
     expect(journal(f), isNotNull);
+    final projectId = journal(f)!['projectId'];
     expect(await box.discardPending(anyway: true), isNull);
     expect(box.discarded, isTrue);
     expect(journal(f), isNull);
@@ -166,6 +167,28 @@ void main() {
       f.connection.calls.map((c) => c.$1),
       isNot(anyOf(contains('agent_create_cancel'), contains('agent_close'))),
     );
+    // The running Lead points at its project, so the project stays.
+    expect(
+      (f.connection.server.state['projects'] as List).map((p) => p['id']),
+      contains(projectId),
+    );
+  });
+
+  test('a failed creation gives the form back without Discard', () async {
+    final f = await stuckProject();
+    final box = await reopen(f);
+    expect(box.canDiscardPending, isTrue);
+    f.connection.creationRecovery = (_, payload) async => {
+      'creationId': payload['creationId'],
+      'state': 'cancelled',
+    };
+    expect(await box.create(), NewHarnessOutcome.failed);
+    expect(
+      box.error,
+      'This startup request was cancelled. Try again to start this project.',
+    );
+    expect(box.checking, isFalse);
+    expect(box.canDiscardPending, isFalse);
   });
 
   test(

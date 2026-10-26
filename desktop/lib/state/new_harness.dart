@@ -3787,7 +3787,10 @@ class NewHarnessController extends ChangeNotifier {
     notifyListeners();
   }
 
-  bool get canDiscardPending => integration?.discard != null;
+  /// Only while a request is being recovered: once its creation failed, the
+  /// form is the person's again and Discard would delete what they retry.
+  bool get canDiscardPending =>
+      integration?.pending == true && integration?.discard != null;
 
   /// The destination dropped its request; the form is closed, not reused.
   bool get discarded => _discarded;
@@ -4112,9 +4115,11 @@ class NewHarnessController extends ChangeNotifier {
         _recoveredWorktreePreference ??
         (isGitProject && !inWorktree ? worktree : null);
     // A destination's journal keeps them for a later recovery's form.
+    // Only a real folder: a new project's or a clone's label is no path, and a
+    // recovery that unlocks the form after a failure would send it as one.
     integration
       ?..engine = base
-      ..folder = folder ?? projectLabel;
+      ..folder = folder;
     final failure = await app.createAgent(
       _machineId,
       engine: base,

@@ -296,10 +296,15 @@ describe('full mode\'s warning accepted as the engine records it', () => {
     expect(recordAcceptanceIn(file, key)).toBe('already')
   })
 
-  it('leaves a missing, unreadable or other-shaped file, and a value the person set, as it was', () => {
+  it('creates missing settings, its folder too, holding the key alone', () => {
+    const file = join(mkdtempSync(join(tmpdir(), 'accept-')), '.claude', 'settings.json')
+    expect(recordAcceptanceIn(file, key)).toBe('accepted')
+    expect(JSON.parse(readFileSync(file, 'utf8'))).toEqual({ skipDangerousModePermissionPrompt: true })
+    expect(recordAcceptanceIn(file, key)).toBe('already')
+  })
+
+  it('leaves an unreadable or other-shaped file, and a value the person set, as it was', () => {
     const folder = mkdtempSync(join(tmpdir(), 'accept-')), file = join(folder, 'settings.json')
-    expect(recordAcceptanceIn(file, key)).toBe('skipped')
-    expect(readdirSync(folder)).toEqual([])
     for (const text of ['{not json', '[]', JSON.stringify({ [key]: false })]) {
       writeFileSync(file, text)
       expect(recordAcceptanceIn(file, key)).toBe('skipped')

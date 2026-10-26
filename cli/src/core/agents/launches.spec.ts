@@ -805,9 +805,12 @@ describe('agent_create with a receipt', () => {
     await launch({ engine: 'claude', cwd: dir, swarmRole: 'lead', permissionMode: 'full' }, 4)
     await launch({ engine: 'claude', projectSource: 'worktree', gitSource: '/elsewhere', branchName: 'feature', swarmRole: 'lead', permissionMode: 'full' }, 5)
     expect(preTrustClaudeProject).toHaveBeenCalledOnce()
+    // Claude Code only: a Codex Lead's checkout is not trusted for it.
+    await launch({ engine: 'codex', ...remote, swarmRole: 'lead', permissionMode: 'full' }, 6)
+    expect(preTrustCodexProject).not.toHaveBeenCalled()
     // A worktree made from that checkout then inherits its answer.
     vi.mocked(claudeTrusts).mockImplementation(path => path === '/projects/prepared')
-    await launch({ engine: 'claude', projectSource: 'worktree', gitSource: '/projects/prepared', branchName: 'feature', swarmRole: 'lead', permissionMode: 'full' }, 6)
+    await launch({ engine: 'claude', projectSource: 'worktree', gitSource: '/projects/prepared', branchName: 'feature', swarmRole: 'lead', permissionMode: 'full' }, 7)
     expect(preTrustClaudeProject).toHaveBeenCalledTimes(2)
   })
 
