@@ -7,12 +7,14 @@
 library;
 
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:harness/auth/auth_session.dart';
 import 'package:harness/auth/sign_in_provider.dart';
 import 'package:harness/core/config.dart';
 import 'package:harness/core/models.dart';
 import 'package:harness/state/app_state.dart';
+import 'package:harness/terminal/terminal_binary.dart';
 import 'package:harness/terminal/terminal_session.dart';
 
 /// Nothing listens on port 9 (discard), so a stray request fails fast.
@@ -106,6 +108,7 @@ class WebUxApp extends AppNotifier {
     bool readOnly = false,
   }) {
     late final TerminalSession session;
+    var keyframes = 0;
     session =
         TerminalSession(
             machineId: machineId,
@@ -113,18 +116,26 @@ class WebUxApp extends AppNotifier {
             agentName: agent.name,
             engineId: agent.engine,
             readOnly: readOnly,
-            // The computer owns the grid: it answers a resize with the screen
-            // drawn at the size asked for, which replaces the pane's grid (a
-            // keyframe). Without that, a pane kept the 80x24 the screen was
+            // The computer owns the grid: it answers a resize with a keyframe,
+            // the screen drawn at the size asked for, which replaces the
+            // pane's grid. Without it, a pane kept the 80x24 the screen was
             // written at: off the right edge of a phone, and scrolled under
             // its header on a tablet whose pane is shorter than 24 rows.
             send: (type, payload) async {
               if (type == 'terminal_resize' && screen.isNotEmpty) {
                 // Its answer arrives after the resize, never inside it.
                 await Future<void>.delayed(Duration.zero);
-                session.terminal
-                  ..resize(payload['cols'] as int, payload['rows'] as int)
-                  ..write('\x1b[2J\x1b[H$screen');
+                await session.handleBinary(
+                  TerminalBinaryFrame(
+                    kind: TerminalBinaryKind.keyframe,
+                    streamId: session.streamId!,
+                    seq: ++keyframes,
+                    bytes: utf8.encode(screen),
+                    compressed: false,
+                    cols: payload['cols'] as int,
+                    rows: payload['rows'] as int,
+                  ),
+                );
               }
               return true;
             },
