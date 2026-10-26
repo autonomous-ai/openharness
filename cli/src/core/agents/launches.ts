@@ -120,10 +120,21 @@ export function createLaunchRequests({ receipts, createAgent, prepareCreate, pre
       // Only a folder this daemon just made EMPTY is one the engine need not ask about. A clone or
       // the person's own repo is theirs to answer for (engines/kit/folderTrust.ts); a worktree gets only
       // the answer its source repo already has. `branch` IS the source folder: nothing to record.
+      //
+      // One consented exception: a Swarm agent in the Swarm's full mode, in the checkout a remote project resolved
+      // to (cloned now, or one already there that holds that very repository). The person chose this repository
+      // and full mode for the Swarm, and machine trust favors that choice over a prompt. 2026-10-26: on WIN-DELL
+      // a Lead in a reused `harnesses\openharness` sat at Claude Code's trust question; on the Mac Studio a Lead in
+      // a fresh clone did, and the next Lead, in a worktree of it, asked again because the source had never been
+      // answered. Its Yes then landed under the source's key (Claude Code records a worktree's answer under its
+      // main repository), which made the source look trusted before the worktree started.
+      // Claude Code only: Codex's trust also sets its defaults for the person's own later sessions in that folder.
+      const swarmCheckout = input.engine === 'claude' && projectFolder.source === 'remote' && !!input.swarmRole
+        && input.permissionMode === 'full'
       try {
         // A Codex agent on its own profile reads its trust from that profile's config.toml, not ~/.codex.
         const engineTrust = folderTrust(input.engine, input.codexHome)
-        if (engineTrust && (projectFolder.source === 'new'
+        if (engineTrust && (projectFolder.source === 'new' || swarmCheckout
           || (projectFolder.source === 'worktree' && engineTrust.trusts(projectFolder.gitSource)))) {
           engineTrust.record(preparedFolder)
         }

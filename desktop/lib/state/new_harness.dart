@@ -512,6 +512,19 @@ class NewHarnessController extends ChangeNotifier {
       error = draft.error;
       _warnedAboutClosing = draft.dismissalWarningShown;
     }
+    // A recovering request shows what it was sent with: Check status asks
+    // its machine, whatever machine this form was opened on.
+    if (this.integration case final request? when request.pending) {
+      _machineId = request.machineId ?? _machineId;
+      if (request.engine case final engine?) {
+        _engine = engine;
+        _harnessId = null;
+      }
+      if (request.folder case final folder?) {
+        _project = NewHarnessProject.folder(folder);
+      }
+      status = request.pendingNote;
+    }
     if ((projectName != null || _autoProject) &&
         !checking &&
         _project.folder == null &&
@@ -1290,7 +1303,8 @@ class NewHarnessController extends ChangeNotifier {
     profile: _profile,
     profileChosen: _profileChosen,
     attempt: _attempt,
-    integration: integration,
+    // A discarded request's launch is spent; the next form gets a fresh one.
+    integration: _discarded ? null : integration,
     error: error,
     dismissalWarningShown: _warnedAboutClosing,
     projectsByMachine: Map.unmodifiable({
@@ -3773,6 +3787,46 @@ class NewHarnessController extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Only while a request is being recovered: once its creation failed, the
+  /// form is the person's again and Discard would delete what they retry.
+  bool get canDiscardPending =>
+      integration?.pending == true && integration?.discard != null;
+
+  /// The destination dropped its request; the form is closed, not reused.
+  bool get discarded => _discarded;
+  bool _discarded = false;
+
+  /// Drops a request the destination cannot finish. Null once it is gone or
+  /// kept (which the line then says), else the question to confirm before
+  /// dropping it anyway.
+  Future<String?> discardPending({bool anyway = false}) async {
+    final discard = integration?.discard;
+    if (busy || discard == null) return null;
+    busy = true;
+    error = null;
+    status = 'Discarding the request…';
+    notifyListeners();
+    try {
+      final question = await discard(anyway: anyway);
+      if (_disposed) return null;
+      busy = false;
+      status = null;
+      if (question == null) {
+        _discarded = true;
+        _attempt = null;
+        integration!
+          ..pending = false
+          ..resume = null
+          ..discard = null;
+      }
+      notifyListeners();
+      return question;
+    } catch (failure) {
+      _fail(failure.toString());
+      return null;
+    }
+  }
+
   bool _warnedAboutClosing = false;
 
   /// Every dismissal path observes the same in-flight receipt and completion.
@@ -4060,6 +4114,12 @@ class NewHarnessController extends ChangeNotifier {
     final launchedWorktree =
         _recoveredWorktreePreference ??
         (isGitProject && !inWorktree ? worktree : null);
+    // A destination's journal keeps them for a later recovery's form.
+    // Only a real folder: a new project's or a clone's label is no path, and a
+    // recovery that unlocks the form after a failure would send it as one.
+    integration
+      ?..engine = base
+      ..folder = folder;
     final failure = await app.createAgent(
       _machineId,
       engine: base,
@@ -4110,9 +4170,8 @@ class NewHarnessController extends ChangeNotifier {
         }
         destination.pending = false;
       } catch (problem) {
-        return _fail(
-          'Harness started. Could not join the conversation: $problem',
-        );
+        // The destination says what started and what did not.
+        return _fail(problem.toString());
       }
     }
     if (failure == null &&

@@ -129,6 +129,9 @@ class SuperTabLaunch {
               : 'dev';
           return prompt;
         } on SuperTabFailure catch (failure) {
+          if (failure.code == 'PROJECT_UNAVAILABLE' && launch.started) {
+            integration.discard = launch.discard;
+          }
           // Validation rejects the request before applying it. A lost response
           // stays locked so retrying cannot create a second project or change
           // the visibility of a project that may already exist.
@@ -152,9 +155,20 @@ class SuperTabLaunch {
         saved['machineId'] = machine;
         saved['creationId'] = receipt;
         saved['phase'] = 'starting';
+        saved['engine'] = integration.engine;
+        saved['folder'] = integration.folder;
         await launch.persist();
       },
-      complete: launch.complete,
+      complete: (machine, harnessId) async {
+        try {
+          await launch.join(machine, harnessId);
+        } catch (_) {
+          // The harness exists and its join did not finish: the journal now
+          // holds it, and the person may rather drop it than retry.
+          integration.discard = launch.discard;
+          rethrow;
+        }
+      },
       stageAttachments: launch.stageAttachments,
       needsAttachmentReview: () => saved['filesState'] == 'sending',
       resolveAttachments: (resend) async {
@@ -180,7 +194,38 @@ class SuperTabLaunch {
             }
           : null,
     )..pending = recovering;
+    if (recovering) {
+      integration
+        ..machineId = saved['machineId'] as String?
+        ..engine = saved['engine'] as String?
+        ..folder = saved['folder'] as String?
+        ..pendingNote = saved['phase'] == 'joining'
+            ? launch.startedNote
+            : launch.waitingNote
+        ..discard = launch.discard;
+    }
     return integration;
+  }
+
+  /// A native start was asked for, so the journal must outlive this form.
+  bool get started =>
+      saved['phase'] == 'starting' || saved['phase'] == 'joining';
+  String get who => saved['lead'] == true ? 'Lead' : 'harness';
+  String get machineName {
+    final machine = saved['machineId'] as String?;
+    if (machine == null) return 'the machine';
+    return app.stateOf(machine)?.machine.displayName ?? machine;
+  }
+
+  String get startedNote =>
+      'The $who started on $machineName. Check status to add it to the project.';
+  String get waitingNote {
+    final title =
+        saved['title'] ??
+        (saved['newProject'] == true ? 'New project' : 'Swarm');
+    return saved['lead'] == true
+        ? 'Waiting for $machineName to start the Lead for “$title”.'
+        : 'Waiting for $machineName to start the harness.';
   }
 
   void checkAccount() {
@@ -256,12 +301,11 @@ class SuperTabLaunch {
     final snapshot = SuperTabSnapshot.fromJson(superTabMap(current['state']));
     final conversationId = saved['conversationId'] as String;
     if (snapshot.conversation(conversationId) == null) {
-      if (saved['phase'] != 'starting' && saved['phase'] != 'joining') {
-        // Nothing can still be starting: reopening New Project should get a
-        // fresh destination instead of loading this deleted project forever.
-        await app.superTabs.storage.delete(key);
-        checkAccount();
-      }
+      if (started) throw projectUnavailable;
+      // Nothing can still be starting: reopening New Project should get a
+      // fresh destination instead of loading this deleted project forever.
+      await app.superTabs.storage.delete(key);
+      checkAccount();
       throw const SuperTabFailure(
         'PROJECT_UNAVAILABLE',
         'This project is no longer available. Close this form and create a new project.',
@@ -293,6 +337,12 @@ class SuperTabLaunch {
     await persist();
     return prompt;
   }
+
+  // A started request's journal stays until the person discards it.
+  static const projectUnavailable = SuperTabFailure(
+    'PROJECT_UNAVAILABLE',
+    'This project is no longer available. Discard this request, then create a new project.',
+  );
 
   Future<void> stageAttachments(
     List<HarnessAttachment> files,
@@ -440,18 +490,146 @@ class SuperTabLaunch {
     await app.superTabs.storage.delete(key);
   }
 
+  /// [complete] in the person's words. The harness exists, so whatever went
+  /// wrong is the join, which Check status retries with the same receipt.
+  Future<void> join(
+    String machine,
+    String harnessId, {
+    Agent? recovered,
+  }) async {
+    try {
+      await complete(machine, harnessId, recovered: recovered);
+    } on SuperTabFailure catch (failure) {
+      // The backend no longer has the project's conversation.
+      if (failure.code == 'NOT_FOUND') throw projectUnavailable;
+      if (const {
+        'ACCOUNT_CHANGED',
+        'AGENT_UNAVAILABLE',
+        'FILES_UNCONFIRMED',
+      }.contains(failure.code)) {
+        rethrow;
+      }
+      throw _joinFailed(failure);
+    } catch (failure) {
+      throw _joinFailed(failure);
+    }
+  }
+
+  SuperTabFailure _joinFailed(Object failure) => SuperTabFailure(
+    'JOIN_FAILED',
+    'The $who started on $machineName. Joining it to the project failed: '
+        '${'$failure'.replaceFirst(RegExp(r'\.$'), '')}. Check status to try again.',
+  );
+
   Future<void> resume() async {
     checkAccount();
     final machine = saved['machineId'] as String;
-    final native = await app.recoverSuperTabCreation(
-      machine,
-      saved['creationId'] as String,
-      cancelIfMissing:
-          saved['phase'] == 'starting' &&
-          (saved['launchPrompt'] as String? ?? '').trim().length >
-              kFirstTaskMaxLength &&
-          (saved['files'] as List? ?? const []).isEmpty,
-    );
-    await complete(machine, native.id, recovered: native);
+    final Agent native;
+    try {
+      native = await app.recoverSuperTabCreation(
+        machine,
+        saved['creationId'] as String,
+        cancelIfMissing:
+            saved['phase'] == 'starting' &&
+            (saved['launchPrompt'] as String? ?? '').trim().length >
+                kFirstTaskMaxLength &&
+            (saved['files'] as List? ?? const []).isEmpty,
+      );
+    } on SuperTabFailure catch (failure) {
+      if (failure.code != 'CREATION_PENDING') rethrow;
+      throw SuperTabFailure(
+        'CREATION_PENDING',
+        '$machineName has not started the $who yet.',
+      );
+    } catch (_) {
+      throw SuperTabFailure(
+        'MACHINE_UNREACHABLE',
+        'Could not reach $machineName. Check that it is online, then check status again.',
+      );
+    }
+    await join(machine, native.id, recovered: native);
+  }
+
+  /// [HarnessLaunchIntegration.discard]: a request that has not started is
+  /// cancelled on its machine first; one that started keeps running there.
+  Future<String?> discard({bool anyway = false}) async {
+    checkAccount();
+    // Its project goes too only when nothing can still join it: a started
+    // Lead keeps running and points at it, and one that may still start would.
+    var nothingWillJoin =
+        saved['phase'] != 'starting' && saved['phase'] != 'joining';
+    if (saved['phase'] == 'joining' && !anyway) {
+      return 'The $who keeps running on $machineName. Remove this request?';
+    }
+    if (saved['phase'] == 'starting' && !anyway) {
+      final creationId = saved['creationId'] as String;
+      final Map<String, dynamic> receipt;
+      try {
+        receipt = await app.cancelSuperTabCreation(
+          saved['machineId'] as String,
+          creationId,
+        );
+      } on SuperTabFailure {
+        rethrow;
+      } catch (_) {
+        return 'Could not reach $machineName, so it may still start the $who. Discard anyway?';
+      }
+      final state = receipt['creationId'] == creationId
+          ? receipt['state']
+          : null;
+      // A started harness can still join, so the request stays.
+      if (state == 'created') {
+        throw SuperTabFailure('CREATION_STARTED', startedNote);
+      }
+      // Unavailable: it started and is gone again, so nothing is left to keep.
+      if (!const {
+        'cancelled',
+        'missing',
+        'failed',
+        'unavailable',
+      }.contains(state)) {
+        return '$machineName is already starting the $who and could not stop it. Discard anyway?';
+      }
+      nothingWillJoin = true;
+    }
+    if (nothingWillJoin) await _deleteEmptyProject();
+    await app.superTabs.storage.delete(key);
+    checkAccount();
+    return null;
+  }
+
+  /// A new project nothing joined is only a name in the Swarm. Best effort:
+  /// a project left behind can still be deleted from its options, and must
+  /// not keep the person in this request.
+  Future<void> _deleteEmptyProject() async {
+    final projectId = saved['projectId'];
+    if (saved['newProject'] != true ||
+        saved['projectPrepared'] != true ||
+        projectId is! String) {
+      return;
+    }
+    try {
+      final current = await app.superTabs.map(
+        'GET',
+        '/api/super-tabs/${saved['tabId']}',
+      );
+      checkAccount();
+      final snapshot = SuperTabSnapshot.fromJson(superTabMap(current['state']));
+      if (!snapshot.projects.any((p) => p.id == projectId) ||
+          snapshot.agents.any((a) => a.projectId == projectId)) {
+        return;
+      }
+      await app.superTabs.map(
+        'POST',
+        '/api/super-tabs/${saved['tabId']}/commands',
+        body: {
+          'operationId': '${saved['operationId']}-discard',
+          'command': {'type': 'project.delete', 'projectId': projectId},
+        },
+      );
+    } catch (_) {
+      // Unreachable, busy or not the owner's: the project stays.
+    }
+    checkAccount();
   }
 }

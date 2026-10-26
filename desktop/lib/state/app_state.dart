@@ -2085,6 +2085,18 @@ class AppNotifier extends ChangeNotifier {
         failure['detail'] as String? ?? result['error'] as String? ?? 'The machine could not start this harness. You can change its settings and try again.',
       );
     }
+    // Nothing will start for these either: a cancel that went through (its
+    // journal delete did not), or a harness that started and stopped again.
+    // Read as pending, Check status repeated "not started yet" forever.
+    if (result['creationId'] == creationId &&
+        (result['state'] == 'cancelled' || result['state'] == 'unavailable')) {
+      throw SuperTabFailure(
+        'CREATION_FAILED',
+        result['state'] == 'cancelled'
+            ? 'This startup request was cancelled. Try again to start this project.'
+            : 'The harness started and then stopped. Try again to start this project.',
+      );
+    }
     if (result['creationId'] != creationId ||
         result['state'] != 'created' ||
         result['agent'] is! Map) {
@@ -2094,6 +2106,24 @@ class AppNotifier extends ChangeNotifier {
       );
     }
     return Agent.fromJson(Map<String, dynamic>.from(result['agent'] as Map));
+  }
+
+  /// Asks [machineId] to drop a Swarm launch's request. The reply is its
+  /// receipt: `cancelled`, or what had already become of the request.
+  Future<Map<String, dynamic>> cancelSuperTabCreation(
+    String machineId,
+    String creationId,
+  ) async {
+    final revision = _authRevision, account = currentUser?.id;
+    final result = await _conn(machineId).request(
+      'agent_create_cancel',
+      payload: {'creationId': creationId},
+      timeout: const Duration(seconds: 10),
+    );
+    if (!_authWorkCurrent(revision) || currentUser?.id != account) {
+      throw const SuperTabFailure('ACCOUNT_CHANGED', 'The account changed.');
+    }
+    return result;
   }
 
   /// Where this computer keeps, per shared tab, the other accounts'
