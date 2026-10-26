@@ -17,7 +17,8 @@ Citations are `path:line` on `feat/swarm-state-parts` at `83312cb7d`.
 - Every part has `version` (bumped by every write and every touch, never reset) and `changedAt` (stamped only when
   its data changes). Part `data` keeps today's JSON shape for that record, so the pure command layer
   (`applyCommand`) runs unchanged on a state reassembled from the parts a command loads.
-- A command loads the Swarm's **active** parts (everything except dormant groups and finished starts), runs
+- A command loads the Swarm's **active** parts (everything except dormant groups and finished starts, plus the ones
+  it names, 3.1), runs
   `applyCommand`, writes only the parts whose data changed, and **touches** (version-guarded no-op bump) the parts
   whose invariants it read. Section 1 lists both for every command and writer.
 - Reads: first load, changes since a cursor (`changedAt > cursor`, cursor = server read start − 30 s), dormant groups
@@ -230,10 +231,10 @@ model SwarmGroup {                 // likewise SwarmHead, SwarmMember, SwarmAgen
 |---|---|---|
 | `SwarmHead` (one per Swarm) | `SuperTabState` scalars and settings: `version:1`, `id`, `name`, `project`, `projects` (**without** `progress`), `leadsConversationId`, `overlapAlerts`, `ownerId`, `environment`, `routingPolicy`, `rules`, `sharing`, `paused`, `invitations`, `retiredConversationNumber`, `localModels` | `groupCounter Int`, `visibilityEpoch Int`, `sequenceBase Int` (the migration's `R`; 0 for a new Swarm). Index `[tabId]` via the unique key. |
 | `SwarmMember` (one per person) | `Person` `{id, email, role, generation}` | `personId String`. People live only here, not on the head (Ruling R2). |
-| `SwarmGroup` (one per conversation, Leads included) | `Conversation` as today, plus `messageSeq`, `reportSeq`, `dormant`, `lastActivityAt` (ISO), `audience?` (4.8) | `projectId String?`, `kind String?`, `archived Boolean`, `dormant Boolean`, `agentIds String[]`, `executionMachineId String?` (active assignment), `messageSeq Int`, `lastActivityAt DateTime`. Indexes: `[tabId, dormant, changedAt]`, `[tabId, agentIds]`, `[tabId, projectId, dormant, lastActivityAt]`, `[dormant, lastActivityAt]` (sweep), `[executionMachineId]`. |
+| `SwarmGroup` (one per conversation, Leads included) | `Conversation` as today, plus `messageSeq`, `reportSeq`, `dormant`, `lastActivityAt` (ISO), `audience?` (4.8) | `projectId String?`, `kind String?`, `archived Boolean`, `dormant Boolean`, `agentIds String[]`, `executionMachineId String?` (active assignment), `messageSeq Int`, `reportSeq Int`, `lastActivityAt DateTime`. Indexes: `[tabId, dormant, changedAt]`, `[tabId, agentIds]`, `[tabId, projectId, dormant, lastActivityAt]`, `[tabId, projectId, dormant, reportSeq]`, `[dormant, lastActivityAt]` (sweep), `[executionMachineId]`. |
 | `SwarmAgent` | `Agent` as today | `machineId`, `machineOwnerId`, `contributorId`. Indexes `[machineId, deleted]`, `[tabId, contributorId]`. |
 | `SwarmMachine` (per machine the Swarm references) | `{ machineId, contribution: ContributedMachine \| null (incl. observation), reservations: [{harnessId, generation, renewed}], released: [harnessId] (newest last, capped at 200), closingSessions: [{agentId, harnessId, machineOwnerId}], cleanups: [{removalId, machineOwnerId}] }` | `machineId`, `contributed Boolean`, `cleanupOwnerIds String[]`. Index `[machineId, deleted]`. |
-| `SwarmStart` | `AgentStart` as today | `machineId`, `conversationId`, `finishedAt DateTime?` (set when it errors, or has a harness and is settled or not pooled). The expiry sweep tombstones a start 7 days after `finishedAt`. Index `[tabId, finishedAt]`, `[machineId, finishedAt]`. |
+| `SwarmStart` | `AgentStart` as today | `machineId`, `conversationId`, `agentId String?` (once it has a harness, 3.1), `finishedAt DateTime?` (set when it errors, or has a harness and is settled or not pooled). The expiry sweep tombstones a start 7 days after `finishedAt`; until then a command that matches it loads it by key or `agentId`. Index `[tabId, finishedAt]`, `[machineId, finishedAt]`, `[tabId, agentId]`. |
 | `SwarmProgress` (one per project with stored projects) | `{ since, summarizedFloor, summarized: {groupId: seq}, requestedFloor, requested: {groupId: seq}, requestedAt?, requestMessageId? }` (3.6) | `projectId`. |
 
 **Group `data` fields added:**
@@ -249,17 +250,18 @@ model SwarmGroup {                 // likewise SwarmHead, SwarmMember, SwarmAgen
 ### 2.3 What stays in existing collections
 
 - `SuperTab` (`schema.prisma:996-1014`) becomes the **index row**. It keeps `memberIds`, `invitedEmails`,
-  `machineIds` and `cleanupMachineIds`, maintained as in 1.4, and `state`, read-only after migration. It also keeps
-  `revision`, which the migration sets to `R+1` (the freeze fence, 6.1). It gains `format Int @default(1)` (2 once
-  migrated) and `migratedAt DateTime?`.
+  `machineIds` and `cleanupMachineIds`, maintained as in 1.4, and `revision`, which the migration sets to `R+1`. It
+  gains `format Int @default(1)` (2 once migrated), `migratedAt DateTime?` and `legacyState Json?`. The migration
+  moves the old state there unchanged and read-only, and leaves `state = { "version": 2 }` as the data fence
+  against old processes (6.1.1, R14).
   - `machineIds` stays the union of agents', contributions', closing sessions' and cleanups' machines. Active
     assignments' machines are dropped from the union: an assignment's machine is its agent's, or a closing session's
     once the agent is removed (`commands.ts:529-533`).
 - Unchanged collections: messages, deliveries, operations, native contexts, runs, attempts, route decisions, stop
   receipts, role texts, terminal requests, mentions, attachments, session scopes and routing policies. Their only
   changes:
-  - `SuperTabMessage.sequence` is the group sequence for new rows. The existing index
-    `[tabId, conversationId, sequence]` (`schema.prisma:1050`) serves per-group paging.
+  - `SuperTabMessage.sequence` is the group sequence for new rows. The index `[tabId, conversationId, sequence]`
+    (`schema.prisma:1050`) becomes `[tabId, conversationId, sequence, id]` for the `(sequence, id)` page cursor (4.6).
   - `SuperTabOperation` gains `parts Json?`, the reply's part versions (4.7). `revision` keeps its stored value on
     old receipts and is `0` on new ones (spec ruling 8).
   - `SuperTabConfiguration.revision` stores the agent part's new `version`. Versions start at `R`, so a new row
@@ -274,7 +276,8 @@ transaction(db, async tx => {                       // store.ts:101-123, unchang
   stamp = clock.next()                              // per attempt (3.3)
   view  = loadActive(tx, tabId, named)              // H, all M, all live A, non-dormant G, all Mc, unfinished S, all P,
                                                     // plus groups the command names by id (dormant ones too),
-                                                    // plus D8 groups by agentIds when the command removes agents
+                                                    // plus D8 groups by agentIds when the command removes agents,
+                                                    // plus finished starts it matches (below)
   state = reassemble(view)                          // SuperTabState shape, parts in ordinal order (6.2)
   ...actor, team, receipt and context reads exactly as executeOnce today (store.ts:519-650)
   effects = applyCommand(state, actor, command, context)   // pure, unchanged except the audience rule (4.8)
@@ -287,6 +290,16 @@ transaction(db, async tx => {                       // store.ts:101-123, unchang
 })
 ```
 
+- **Finished starts a command matches stay loadable** until the expiry sweep tombstones them, 7 days after
+  `finishedAt`. Two places look a finished start up:
+  - `work.assign` with a `routeDecisionId` loads the start named by the decision's `final.startId`, so
+    `started(d)` matches the routed worker as today (`commands.ts:1471-1478`).
+  - `agent.remove` by the agent itself loads the start whose `agentId` equals the removed agent, to close its route
+    hold (`store.ts:785-789`).
+  - `SwarmStart` therefore extracts `agentId = stableId(request.machineId, harnessId)` once it has a harness
+    (`commands.ts:1109`, 2.2).
+  - Slot counts do not need finished starts. A started harness is also counted through its agent or its
+    reservation, which a person's removal keeps (`commands.ts:1216-1219`, `machines.ts:341-364`).
 - The loaders read with snapshot semantics. A stale read is caught only by a write to the same part, which is
   why section 1 lists touches.
 - `loadActive` costs what today's full read costs, minus dormant groups and finished starts. Group 0's benchmark
@@ -356,8 +369,13 @@ transaction(db, async tx => {                       // store.ts:101-123, unchang
   native turns in a non-Lead project group. Hold notices and stop notices bump `lastMessageSequence` but not
   `reportSeq`, as today (`store.ts:1538`, `store.ts:1597`). They do not mark a project dirty. Ruling R12.
 - **Dirty on read:** group `g` of project `p` is dirty when `g.reportSeq > (P.summarized[g] ?? P.summarizedFloor)`.
-  The project is dirty when any of its groups is. Private groups never count (4.8). Only active groups are checked:
-  a group goes dormant only after 24 h without a message, by which time its report has been due for hours.
+  The project is dirty when any of its groups is. Private groups never count (4.8).
+- **Dormant groups stay in the report check until the Lead acknowledges them** (review round 1). The dirty check
+  reads the project's active groups plus its dormant groups with `reportSeq > P.summarizedFloor`. That is one query
+  on the extracted `reportSeq` (index `[tabId, projectId, dormant, reportSeq]`, 2.2), filtered by the `summarized`
+  map. A dormant group leaves the check once `summarized[g] ≥ reportSeq`.
+  - `message.send` and native appends use the same check to decide the clean→dirty write.
+  - The wake-up's `through` map includes those dormant groups.
 - **Write on the change from clean to dirty only:** `P.since = now`. Posts in different groups of a dirty project
   never write `P`.
 - **Wake-up (`projectUpdateRequest`, `projectUpdates.ts:35-66`).**
@@ -536,7 +554,14 @@ stands. Every contributed machine has an entry in `derived.machines`. These are 
 - **The server returns** every part the reader can see with `changedAt > cursor.t`, each whole. Dormant groups
   come back as the one-line stub until they change again (spec ruling 5).
 - **A part the reader can no longer see** never appears with data: any change that makes one invisible bumps the epoch.
-  Tombstones and dormant stubs carry no data, so they go to every reader of the Swarm.
+- **Tombstones and dormant stubs pass the same read check as live parts.**
+  - A tombstone keeps the part's last live `data` on the server; it is never sent.
+  - A stub or tombstone goes only to a reader who could read that last data: `canReadGroup` for a group (audience
+    included), `canReadAgent` for an agent, a start's group for a start, the machine rules for a machine. Members
+    and the head are visible to every member.
+  - Where the check cannot be made because the project is gone, the change bumps the epoch, and every reader reloads.
+    `project.delete` already bumps the epoch (4.2).
+  - A private group's stub, removal or key never reaches anyone outside its audience.
 - **The client merges** by `(kind, key)`, keeping the higher `version`. A tombstone removes the part. A dormant stub
   moves the group out of the active list. The client replaces `derived` and moves to the returned `cursor`.
   Overlap duplicates have equal versions and are ignored.
@@ -563,7 +588,18 @@ stands. Every contributed machine has an entry in `derived.machines`. These are 
   (`store.ts:1126-1152`), except that the response drops `revision`.
 - `sequence` is per group and strictly increasing for new messages. Old messages keep theirs, ties included
   (spec ruling 7).
-- The page cursor `next` stays a sequence.
+- **Pages use a stable `(sequence, id)` cursor** (review round 1). Today a page boundary inside a run of equal
+  sequences skips rows (`store.ts:1135`, `1145`).
+  - Rows are ordered by `(sequence, id)`, ascending forward and descending backward.
+  - Request: `after=<sequence>&afterId=<id>` or `before=<sequence>&beforeId=<id>`, two plain parameters so the
+    daemon's path pattern still passes.
+    - `after` without `afterId` means strictly after that sequence. That is enough for polling new messages, which
+      always have fresh sequences.
+    - `before` without `beforeId` means strictly before.
+  - Forward: `sequence > s OR (sequence = s AND id > i)`. Backward: the mirror.
+  - Response: `"next": { "sequence": 213990, "id": "9f2c…" }`, or `null`.
+  - Index: `SuperTabMessage` `[tabId, conversationId, sequence, id]`, which replaces `[tabId, conversationId, sequence]`
+    (2.3).
 - A message posted to a dormant group makes it active: it comes back in the feed as a full group.
 
 ### 4.7 Command reply
@@ -610,9 +646,9 @@ canReadGroup(state, actor, g) =
 ```
 
 The project owner and the Swarm owner are **not** implied: only the listed people and the Lead (addendum).
-This is one constant, `PRIVATE_VISIBLE_TO_OWNERS = false`, next to `canReadGroup`. The owner's privacy decision
-(section 8, Q3a) is pending, and flipping the constant must be the only change it needs: no other path may decide
-owner visibility on its own.
+This is one constant, `PRIVATE_VISIBLE_TO_OWNERS = false`, next to `canReadGroup`. The owner (Ken) decided it stays
+off: owners do not see private channels (section 8, Q3a). It stays one constant, and no other path may decide owner
+visibility on its own.
 
 **Where it is enforced** (each must use `canReadGroup`, not `canReadProject`):
 
@@ -773,6 +809,7 @@ Today: a full `GET /:tabId` every 3 s per open Swarm (`controller.dart:52`, `414
 | Swarm list (`client.dart:311-331`, `tab_invites_section.dart:56-63`) | `GET /api/super-tabs/list`; it reads `id`, `name` (and may use `lastChangedAt`). |
 | Work details and archived groups (`work_details.dart`, `view.dart:646-690`, `project_sidebar.dart:288-295`) | The active list comes from active groups. Archived and auto-dormant groups load on demand from `groups?dormant=1` when the person opens the archived or earlier list, and one group by id when a link or mention names it. Selecting one pages its messages through the unchanged route (`controller.dart:625-643`). |
 | Unread, scroll, read marks (`controller.dart:393-401`, `647-657`, `view.dart:188-193`) | No change: per-group sequence. |
+| Message paging (`controller.dart:839-851`, `918-934`) | Older history sends `before` and `beforeId` from the response's `next` object (4.6). Polling for new messages keeps `after=<last sequence>`. Merge by id and sort by `(sequence, id)`. |
 | Errors (`controller.dart:864-878`, `1096-1113`) | Map 426 to the update message (5.1). A first-load 426 shows the full-page error on web (`view.dart:1188-1210`). |
 | Private conversations | No UI in this project. The client must not assume every member sees every group of a project. It renders what it receives and reloads on an epoch change. |
 
@@ -802,6 +839,7 @@ record, and the whole list on every poll.
 | `harness super-tab` actions (`service.ts:294-302`) | full read before every action | parts cache. `messages`, `message`, `screen`, `type`, `remove-machine` and `start`/`resume` status polling stop fetching Swarm state at all. `post`/`command` read the cache only for `--mention` (members). `help` reads it only for `isLead`. |
 | `route` (`routeCommand.ts`, `service.ts:314-330`) | full read twice | the parts cache once. Machines carry `availableSlots` and `teamWork` from `derived`, and agents carry `limitedUntil`; the fields it reads are unchanged (`routeCommand.ts:116-177`, `252-297`, `339-366`). |
 | `project.report` help example (`service.ts:38`) | `throughRevision` | `through` map (3.6). |
+| Message paging (`service.ts:360-362`; `cards.ts:101-102`, `299-301`) | `after=`/`before=` a sequence | `message` keeps `after=<sequence>` (new messages). Card recaps page back with `before` and `beforeId` from `next` (4.6). |
 
 **`harness super-tab status` keeps its output.**
 - It prints `{"ok":true,"value":{…}}` (`command.ts:152`), where `value.state` is built by `statusView`
@@ -821,9 +859,51 @@ record, and the whole list on every poll.
 
 ### 6.1 Algorithm (one transaction per Swarm, idempotent)
 
-The migration runs in the singleton `backend-worker` at startup of the release (`backend/ecosystem.config.cjs`),
-**before** the API serves a Swarm's new routes. A Swarm whose `SuperTab.format` is still 1 answers 503
-`SWARM_MIGRATING` on the new routes (4.11).
+The migration runs as a one-off job of the new image (`node dist/migrate.js`, group 3) inside a maintenance window
+in which **no old backend process is running** (6.1.1). A Swarm whose `SuperTab.format` is still 1 answers 503
+`SWARM_MIGRATING` on the new routes (4.11); the new backend also migrates such a row on first access with the same
+code, as a safety net for a row the job did not see.
+
+#### 6.1.1 Deploy sequence and the gate on old writers
+
+A guarded bump of `revision` alone does not fence old processes. An old process that reads the row after the
+migration sees `R+1`, and its own guarded write (`store.ts:519-521`, `767-769`; `observeMachine` `1273`, `1308`)
+succeeds. So old writers are stopped first, and the data is fenced as well. This matches the owner's decision that
+every client moves at once (spec, owner decisions).
+
+1. **Prepare.** The release's backend image, CLI and Desktop builds are ready and the local dry run (6.5) passed. Do
+   not publish the CLI or Desktop yet: they need the new routes.
+2. **Gate: stop every old writer.**
+   - Kubernetes: scale the old API Deployment and the old job Deployment to 0 replicas. Suspend ArgoCD sync for
+     them so they are not scaled back up, and serve 503 from the ingress during the window.
+   - Docker/pm2 installs: `pm2 stop all`.
+   - Clients retry 5xx. Hosts log and retry, and Desktop shows its reconnecting state (`controller.dart:773-776`).
+3. **Verify no old writer remains.**
+   - The orchestrator shows 0 running pods of the old image for both Deployments.
+   - The job's preflight reads `max(SuperTab.updatedAt)`, `max(SuperTabMessage.createdAt)` and
+     `max(SuperTabDelivery.updatedAt)`, waits 60 s, and reads them again. Any change aborts with "a writer is still
+     running".
+   - While any host is online, a live old API process writes within 15 s: hosts observe every 5–15 s
+     (`cli/src/superTabs/machines.ts:34`, `37`, `140-146`) and claim deliveries every second.
+4. **Migrate** every `format = 1` row (6.1.2). The job's report must say `ok` for every Swarm. If any
+   Swarm fails, fix and rerun, or roll back (6.4); no new write has happened yet.
+5. **Deploy the new backend** (API and job), then lift the gate.
+6. **Publish the CLI and Desktop.** Old clients get 426 from now on (4.11).
+
+**Data fence (backstop).**
+- Step 6 of the migration moves the old state to `legacyState` and leaves `state = { "version": 2 }`.
+- Every old code path reads `state` through `stateOf` before it writes, and `stateOf` refuses any `version ≠ 1`
+  with `UPDATE_REQUIRED` (`store.ts:39-45`). The paths:
+  - commands (`store.ts:520`), observations (`1273`), native recording (`158`, then `native.ts:85`, `111`);
+  - claims, acks and holds (`1497`), the deliveries wake-up (`1437`), stopped receipts (`1564`);
+  - sharing (`381`), join (`416`), the read backfill (`449`), and terminal relays (`1030`, `1068`).
+- So an old process that somehow survives the gate fails before writing.
+- The only old write that skips `stateOf` is `create` (`store.ts:330-345`), which inserts a new `format = 1` row;
+  the new backend migrates it on first access.
+- The spec's "old `state` kept read-only" holds: the old state is kept unchanged in `legacyState` until the owner
+  says it can go (Ruling R14).
+
+#### 6.1.2 Per-Swarm steps
 
 For each `SuperTab` row with `format = 1`, in one transaction (`transaction()` with a 60 s timeout for this job only):
 
@@ -863,17 +943,12 @@ For each `SuperTab` row with `format = 1`, in one transaction (`transaction()` w
 5. **Verify** (6.3). On any difference, throw: the transaction aborts, nothing is written, and the Swarm stays at
    `format 1` (503 `SWARM_MIGRATING`) with the difference logged.
 6. **Insert** the parts (`createMany` per model). Update the row:
-   `{ format: 2, revision: R + 1, migratedAt: now }`, guarded by `where: { id, revision: R }`. Keep `state` as it
-   was.
+   `{ format: 2, revision: R + 1, migratedAt: now, legacyState: <the old state, unchanged>, state: { version: 2 } }`,
+   guarded by `where: { id, revision: R }`.
 
 **Freeze.**
-- Bumping `revision` to `R+1` fences every write by an old backend still running during the rolling deploy. Every
-  old writer uses `update where { id, revision }` (`store.ts:767`, `1283`, `1308`, `1460`, `1514`, `1542`, `1600`;
-  `native.ts:224`) and now fails.
-- The old read backfill uses `updateMany where revision` (`store.ts:455`) and becomes a no-op.
-- A write that committed between step 1 and step 6 makes the guarded update fail. The transaction retries and
-  re-reads.
-- So "writes to the old routes are frozen" holds per Swarm from the moment it migrates, with no global switch.
+- Old writes are frozen for the whole migration by the gate (6.1.1, steps 2–3), and afterwards by the data fence.
+- The guarded update in step 6 only protects against the new backend's own lazy migration racing the job.
 
 **Idempotent.** A Swarm with `format = 2` is skipped. A failed Swarm wrote nothing and is retried on the next start
 or by the dry-run tool.
@@ -908,11 +983,14 @@ The same function serves commands (3.1), the CLI's `status` (5.3), verification 
 
 ### 6.4 Rollback
 
-- **Before any new write** (release aborted right after migration): redeploy the previous backend. It reads
-  `state`, which is unchanged, at revision `R+1`, and works. Drop the part collections.
+- Every rollback runs behind the same gate (6.1.1, steps 2–3), with the new backend stopped and verified quiet.
+- **Before any new write** (failure at step 4 or 5): run `scripts/swarm-parts/rollback --legacy`. For every
+  `format = 2` row it sets `state = legacyState`, `format = 1`, and leaves `revision = R+1`. Then redeploy the
+  previous backend; it reads the old state and works. Drop the part collections.
 - **After new writes:** run `scripts/swarm-parts/rollback` (group 3). For each `format = 2` Swarm, it does
-  `state = reassemble(parts)` and writes `{ state, revision: max(R+1, highest message sequence, highest part version) + 1, format: 1 }`.
-  It then redeploys the previous backend.
+  `state = reassemble(parts)`, checks it with the old `stateOf`, and writes
+  `{ state, revision: max(R+1, highest message sequence, highest part version) + 1, format: 1 }`. Then redeploy the
+  previous backend and lift the gate.
   - Old code numbers new messages from that revision. Old code also numbers per tab: it gives every new message, in
     any group, `row.revision + 1`. Starting `revision` above every sequence written in parts mode keeps each group
     strictly increasing.
@@ -947,7 +1025,7 @@ The same function serves commands (3.1), the CLI's `status` (5.3), verification 
 
 | Group | Owns |
 |---|---|
-| **2 Backend storage and commands** | `backend/prisma/schema.prisma` (part models, `SuperTab.format/migratedAt`, `SuperTabOperation.parts`); `backend/src/superTabs/parts/**` (new: models, `loadActive`, `reassemble`, `split`, `diffParts`, `guardedWrite`, `clock`, `touchesFor`); `store.ts`, `commands.ts`, `model.ts`, `projects.ts` (incl. `canReadGroup`), `machines.ts`, `native.ts`, `projectUpdates.ts`, `mentions.ts`, `terminal.ts`, `sessionScope.ts`, `agentNames.ts`, `holdNotice.ts`, `routeDecisions.ts`; sweeps in `backend/src/worker.ts` and `backend/src/superTabs/sweeps.ts` (new); `backend/src/superTabs/*.test.ts`; `backend/integration/superTabs.test.ts`, `superTabSharing.test.ts`, `superTabTeam.test.ts`, `superTabGithub.test.ts` (adapted, never weakened) |
+| **2 Backend storage and commands** | `backend/prisma/schema.prisma` (part models, `SuperTab.format/migratedAt/legacyState`, `SuperTabOperation.parts`, the message index); `backend/src/superTabs/parts/**` (new: models, `loadActive`, `reassemble`, `split`, `diffParts`, `guardedWrite`, `clock`, `touchesFor`); `store.ts`, `commands.ts`, `model.ts`, `projects.ts` (incl. `canReadGroup`), `machines.ts`, `native.ts`, `projectUpdates.ts`, `mentions.ts`, `terminal.ts`, `sessionScope.ts`, `agentNames.ts`, `holdNotice.ts`, `routeDecisions.ts`; sweeps in `backend/src/worker.ts` and `backend/src/superTabs/sweeps.ts` (new); `backend/src/superTabs/*.test.ts`; `backend/integration/superTabs.test.ts`, `superTabSharing.test.ts`, `superTabTeam.test.ts`, `superTabGithub.test.ts` (adapted, never weakened) |
 | **3 Backend read API and migration** | `backend/src/routes/superTabs.ts`; `backend/src/superTabs/read/**` (new: `parts`, `changes`, `groups`, `list`, host form, per-part visible views, `derived`, cursor codec, `lastChangedAt`); `backend/src/superTabs/migration/**` (new); `backend/scripts/swarm-parts/**` (seed, dry run, rollback); `backend/integration/superTabRead.test.ts`, `backend/integration/superTabMigration.test.ts` (new) |
 | **4 Desktop and web** | `desktop/lib/super_tabs/**`; `desktop/lib/settings/sections/tab_invites_section.dart`; the Swarm list calls in `desktop/lib/state/app_state.dart` (`:1723-1771` only); `desktop/test/super_tab*`, `desktop/test/support/super_tab_fixture.dart`, `desktop/tool/super_tab_mobile_fixture.dart` |
 | **5 CLI** | `cli/src/superTabs/**` (host, machines, cards, service, command, start, routeCommand, contribution, github, native, attach, swarmGrids) and their specs; Lead-facing texts that name `throughRevision` or `lastMessageSequence` outside the backend (`cli/src/superTabs/service.ts`) |
@@ -996,8 +1074,8 @@ Each item has a recommended answer.
 
 **Lead's rulings (2026-10-26):**
 - Q1, Q2, Q4, Q5, Q7: accepted as recommended.
-- Q3: (b)–(g) accepted. (a), whether owners can see private channels, is with the owner; it is designed as not
-  visible, behind the single constant in 4.8.
+- Q3: (b)–(g) accepted. (a): the owner (Ken) decided owners do **not** see private channels; the single constant in
+  4.8 is `false`.
 - Q6: accepted as independent of N. The replica count and NTP are being confirmed with the owner; this does not
   block anything.
 - R1–R10: no objection.
@@ -1064,7 +1142,7 @@ skill texts reference `throughRevision` only through the wake-up text, which cha
 - **R2 People live only in member parts.** Spec ruling 2 gives every person a part; keeping a second copy on the
   head would make every membership change write two places. *Cost if wrong:* none.
 - **R3 `dormant` separate from `archived`:** Q1.
-- **R4 Every message gets its own sequence.**
+- **R4 Every message gets its own sequence, and pages use `(sequence, id)`** (4.6).
   - Today all messages of one command share the tab revision (`store.ts:1110`).
   - The page cursor `next = last row's sequence` with `sequence > after` (`store.ts:1135`, `1145`) can skip rows
     that share a sequence at a page edge.
@@ -1084,7 +1162,14 @@ skill texts reference `throughRevision` only through the wake-up text, which cha
   - Hold and stop notices bump `lastMessageSequence` but never marked a project dirty (`store.ts:1538`, `1597`;
     neither calls `noteProjectReports`).
   - Computing dirtiness from `lastMessageSequence` would change that.
-- **R13 Starts finished more than 7 days ago disappear** (spec archive).
-  - `work.assign` looks a started agent's start up to match a route candidate (`commands.ts:1472-1473`).
-  - After 7 days a decision that still names that start falls back to the member-candidate match.
+- **R13 Finished starts leave first load and command state, but stay loadable by key for 7 days** (spec archive,
+  review round 1).
+  - `work.assign` and an agent's own removal load the finished start they match (3.1).
+  - After the 7-day expiry, a decision that still names that start falls back to the member-candidate match.
   - *Cost if wrong:* an assignment more than 7 days after a routed start needs an override reason.
+- **R14 The old state moves to `legacyState`; `state` becomes `{ "version": 2 }`** (6.1.1, review round 1).
+  - Old code refuses that state in `stateOf` before every write (`store.ts:39-45`), so a surviving old process
+    cannot write.
+  - The old state is kept unchanged and read-only until the owner says it can go, which is the spec's intent.
+  - *Cost if wrong:* a reader of the raw `state` field outside the backend would see the stub. None exists in this
+    repository.
