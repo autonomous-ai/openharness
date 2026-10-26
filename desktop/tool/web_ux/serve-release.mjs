@@ -3,8 +3,9 @@
 // the page at /harness-web/ with no-store, rewritten by the website's own
 // configureReleaseAssets to load the app from a folder named for this build,
 // which is cached as immutable; the unversioned copy beside it revalidated
-// every time; everything brotli-compressed at the level Cloudflare uses, with
-// ETags. Any other path without an extension gets the page, as /s/… links do.
+// every time; ETags. The release folder's app, engine, manifests and fonts are
+// sent as the website pre-compresses them (brotli at its highest level,
+// website/scripts/precompress.mjs), anything else at the level Cloudflare uses. Any other path without an extension gets the page, as /s/… links do.
 //
 //   node tool/web_ux/serve-release.mjs <release-build-dir> [port]
 import { createServer } from 'node:http';
@@ -14,6 +15,7 @@ import { fileURLToPath } from 'node:url';
 import { brotliCompressSync, constants } from 'node:zlib';
 import { createHash } from 'node:crypto';
 import { configureReleaseAssets, releaseAssetBase } from '../../../website/scripts/harness-web-assets.mjs';
+import { PRECOMPRESSED } from '../../../website/scripts/precompress.mjs';
 
 const TYPES = {
   '.html': 'text/html', '.js': 'text/javascript', '.mjs': 'text/javascript',
@@ -41,15 +43,21 @@ async function release(root) {
 export async function serveRelease(root, port = 0) {
   const { page, base } = await release(root);
   const files = new Map();
-  async function file(path) {
-    if (!files.has(path)) {
+  async function file(path, versioned) {
+    const key = `${versioned}:${path}`;
+    if (!files.has(key)) {
       const raw = await readFile(join(root, path)).catch(() => null);
-      files.set(path, raw && {
-        body: brotliCompressSync(raw, { params: { [constants.BROTLI_PARAM_QUALITY]: 3 } }),
+      const quality = versioned && PRECOMPRESSED.includes(extname(path).slice(1))
+        ? constants.BROTLI_MAX_QUALITY
+        : 3;
+      files.set(key, raw && {
+        body: brotliCompressSync(raw, {
+          params: { [constants.BROTLI_PARAM_QUALITY]: quality, [constants.BROTLI_PARAM_SIZE_HINT]: raw.length },
+        }),
         etag: `"${createHash('sha1').update(raw).digest('hex')}"`,
       });
     }
-    return files.get(path);
+    return files.get(key);
   }
   const server = createServer(async (req, res) => {
     const pathname = normalize(decodeURIComponent(new URL(req.url, 'http://x').pathname));
@@ -61,7 +69,9 @@ export async function serveRelease(root, port = 0) {
       cacheControl = IMMUTABLE;
     }
     // The page, and any unknown path as /s/… links get it, is the versioned page.
-    const entry = extname(path) === '' || path === 'index.html' ? null : await file(path);
+    const entry = extname(path) === '' || path === 'index.html'
+      ? null
+      : await file(path, cacheControl === IMMUTABLE);
     if (!entry && extname(path) !== '' && path !== 'index.html') { res.writeHead(404); return res.end(); }
     const body = entry ? entry.body : brotliCompressSync(page);
     const headers = {

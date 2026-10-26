@@ -160,6 +160,10 @@ const server = await serveRelease(root);
 // routing, which would turn the browser's HTTP cache off and every warm load cold.
 const args = ['--host-resolver-rules=MAP * ~NOTFOUND, EXCLUDE 127.0.0.1'];
 const browser = await chromium.launch({ executablePath: process.env.CHROME_PATH, args });
+// One load nobody times, so the server has compressed every file before the first timed one.
+const prime = await browser.newContext();
+await once(prime, server.origin, { ...PROFILES[0], network: null, cpu: 1 });
+await prime.close();
 const results = [];
 for (const profile of PROFILES) {
   const cold = [], second = [], returning = [];

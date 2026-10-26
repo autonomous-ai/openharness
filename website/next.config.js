@@ -1,3 +1,31 @@
+// The release's app, engine, manifests and fonts are compressed once at build time
+// (scripts/precompress.mjs): each one's .br, else .gz, copy goes to a browser that takes it.
+// The Content-Type Next sends for the file itself, so every encoding of it says the same.
+const PRECOMPRESSED_TYPES = {
+  js: 'application/javascript; charset=UTF-8',
+  mjs: 'application/javascript; charset=UTF-8',
+  wasm: 'application/wasm',
+  json: 'application/json; charset=UTF-8',
+  ttf: 'font/ttf',
+  otf: 'font/otf',
+  svg: 'image/svg+xml',
+  html: 'text/html; charset=UTF-8',
+}
+const ENCODINGS = [
+  { name: 'br', suffix: 'br' },
+  { name: 'gzip', suffix: 'gz' },
+]
+// One token of Accept-Encoding, wherever it stands in the list.
+const accepts = (name) => [{ type: 'header', key: 'accept-encoding', value: `(?:.*[\\s,])?${name}(?:[\\s,;].*)?` }]
+const releaseFile = (ext) => `/harness-web/releases/:path*/:file.${ext}`
+
+async function precompressedTypes() {
+  const { PRECOMPRESSED } = await import('./scripts/precompress.mjs')
+  const missing = PRECOMPRESSED.filter((ext) => !PRECOMPRESSED_TYPES[ext])
+  if (missing.length) throw new Error(`No Content-Type for pre-compressed .${missing.join(', .')}`)
+  return PRECOMPRESSED
+}
+
 module.exports = {
   // Self-contained build (.next/standalone: server.js + pruned node_modules) for a lean
   // production container — the runtime image copies this instead of installing deps.
@@ -63,8 +91,15 @@ module.exports = {
   // install and download pages, and installer redirects. Flutter's base
   // href places its assets under /harness-web/ without changing the visible URL.
   async rewrites() {
+    const precompressed = await precompressedTypes()
     return {
       beforeFiles: [
+        // The browser's first accepted encoding wins; one that takes neither gets the file as is.
+        ...ENCODINGS.flatMap(({ name, suffix }) => precompressed.map((ext) => ({
+          source: releaseFile(ext),
+          has: accepts(name),
+          destination: `/harness-web/releases/:path*/:file.${ext}.${suffix}`,
+        }))),
         // Older desktop builds consume snapshots without following redirects.
         { source: '/explore/:id/snapshot', destination: '/hub/:id/snapshot' },
         { source: '/explore/:id/download', destination: '/hub/:id/download' },
@@ -82,6 +117,7 @@ module.exports = {
     }
   },
   async headers() {
+    const precompressed = await precompressedTypes()
     return [
       {
         source: '/:path*',
@@ -139,6 +175,20 @@ module.exports = {
           { key: 'Cache-Control', value: 'public, max-age=31536000, immutable' },
         ],
       },
+      ...precompressed.map((ext) => ({
+        source: releaseFile(ext),
+        headers: [{ key: 'Vary', value: 'Accept-Encoding' }],
+      })),
+      // After the rewrite above the file sent is its .br or .gz copy: say what it holds and how.
+      // In the rewrites' order reversed, so a browser taking both gets brotli's last, which wins.
+      ...[...ENCODINGS].reverse().flatMap(({ name }) => precompressed.map((ext) => ({
+        source: releaseFile(ext),
+        has: accepts(name),
+        headers: [
+          { key: 'Content-Encoding', value: name },
+          { key: 'Content-Type', value: PRECOMPRESSED_TYPES[ext] },
+        ],
+      }))),
       ...['/', '/s/:id', '/auth/callback', '/callback', '/harness-web', '/harness-web/index.html', '/harness-web/release.json'].map((source) => ({
         source,
         headers: [
