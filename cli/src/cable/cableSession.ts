@@ -529,6 +529,8 @@ export interface DialStatus {
   /** `hello.board`; "pro" is the square Harness Pro. Absent = a round dial. */
   board?: string
   updating?: string
+  /** Something the person has to do about this device, in words shown as they are (cableFleet.ts: a silent Harness Pro). */
+  problem?: string
   /**
    * Every device on this computer, when a fleet is reporting. Present only on the primary status, and
    * the primary is one of these rows — the flat fields above repeat it so a window that predates this
