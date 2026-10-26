@@ -38,7 +38,7 @@ class _Backend {
         'Connect one of your machines to open Swarm.',
       );
     }
-    if (path.startsWith('/api/super-tabs?') || path == '/api/super-tabs') {
+    if (Uri.parse(path).path == '/api/super-tabs/list') {
       return {
         'tabs': [
           {'id': 'tab', 'name': 'Pilot'},
@@ -60,7 +60,7 @@ class _Backend {
       )
       .length;
   int get discoveries =>
-      paths.where((p) => Uri.parse(p).path == '/api/super-tabs').length;
+      paths.where((p) => Uri.parse(p).path == '/api/super-tabs/list').length;
 }
 
 SuperTabClient _client(

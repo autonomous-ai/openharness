@@ -366,7 +366,7 @@ class _Transport {
   }) async {
     if (hold case final wait?) await wait.future;
     if (refuse case final failure?) throw failure;
-    if (Uri.parse(path).path == '/api/super-tabs') {
+    if (Uri.parse(path).path == '/api/super-tabs/list') {
       return {
         'tabs': [
           {'id': 'tab', 'name': 'Pilot'},

@@ -311,7 +311,7 @@ class SuperTabClient {
         do {
           final page = await map(
             'GET',
-            '/api/super-tabs${after == null ? '' : '?after=${Uri.encodeComponent(after)}'}',
+            '/api/super-tabs/list${after == null ? '' : '?after=${Uri.encodeComponent(after)}'}',
           );
           if (generation != _generation) return;
           if (page['tabs'] is! List) {

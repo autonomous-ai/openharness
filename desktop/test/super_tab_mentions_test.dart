@@ -547,7 +547,8 @@ void main() {
       var counted = 0;
       final client = SuperTabClient(
         storage: MemoryStore(),
-        transport: (method, path, {body}) async => path == '/api/super-tabs'
+        transport: (method, path, {body}) async =>
+            path == '/api/super-tabs/list'
             ? {
                 'tabs': [
                   {'id': 'tab', 'name': 'Pilot'},
@@ -589,7 +590,7 @@ void main() {
         final client = SuperTabClient(
           storage: MemoryStore(),
           transport: (method, path, {body}) async {
-            if (path == '/api/super-tabs') {
+            if (path == '/api/super-tabs/list') {
               return {
                 'tabs': [
                   {'id': 'gone', 'name': 'Older'},
