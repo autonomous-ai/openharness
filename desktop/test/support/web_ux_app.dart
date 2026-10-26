@@ -20,11 +20,7 @@ const webUxConfig = AppConfig(apiBaseUrl: 'http://127.0.0.1:9');
 
 class WebUxApp extends AppNotifier {
   WebUxApp()
-    : super(
-        config: webUxConfig,
-        authSession: AuthSession(),
-        configStore: null,
-      );
+    : super(config: webUxConfig, authSession: AuthSession(), configStore: null);
 
   /// Whether the first machine list has answered.
   bool inventoryLoaded = true;
@@ -109,14 +105,25 @@ class WebUxApp extends AppNotifier {
     TerminalSessionStatus status = TerminalSessionStatus.controlling,
     bool readOnly = false,
   }) {
-    final session =
+    late final TerminalSession session;
+    session =
         TerminalSession(
             machineId: machineId,
             agentId: agent.id,
             agentName: agent.name,
             engineId: agent.engine,
             readOnly: readOnly,
-            send: (_, _) async => true,
+            // The computer owns the grid and redraws it at the size a resize
+            // asks for; without that, a phone's pane kept the 80 columns the
+            // screen was written at, running off its edge.
+            send: (type, _) async {
+              if (type == 'terminal_resize' && screen.isNotEmpty) {
+                // Its answer arrives after the resize, never inside it.
+                await Future<void>.delayed(Duration.zero);
+                session.terminal.write('\x1b[2J\x1b[H$screen');
+              }
+              return true;
+            },
             sendBinary: (_) async => true,
           )
           ..status = status

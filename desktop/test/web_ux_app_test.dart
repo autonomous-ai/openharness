@@ -77,4 +77,46 @@ void main() {
     expect(app.lastError, 'Could not start Claude Code.');
     expect(app.sessionExpired, isTrue);
   });
+
+  /// The rows of [session]'s screen, as drawn.
+  List<String> rows(TerminalSession session) => [
+    for (final line in session.terminal.buffer.lines.toList())
+      line.toString().trimRight(),
+  ];
+
+  test(
+    'a resize redraws the screen at the new width, as a daemon does',
+    () async {
+      final app = WebUxApp()..addMachine('m1', 'Studio Mac');
+      addTearDown(app.dispose);
+      final session = app.openTerminal(
+        'm1',
+        _agent,
+        screen: '${'x' * 60}\r\nend',
+      );
+
+      // A phone's pane: narrower than the 80 columns the screen was written at.
+      session.terminal.resize(30, 10);
+      await pumpEventQueue();
+
+      expect(rows(session).take(3), ['x' * 30, 'x' * 30, 'end']);
+    },
+  );
+
+  test('a view-only terminal keeps the grid another app drew', () async {
+    final app = WebUxApp()..addMachine('m1', 'Studio Mac');
+    addTearDown(app.dispose);
+    final session = app.openTerminal(
+      'm1',
+      _agent,
+      screen: '${'x' * 60}\r\nend',
+      readOnly: true,
+    );
+
+    session.terminal.resize(30, 10);
+    await pumpEventQueue();
+
+    // No input, so no resize reaches the computer: the grid is clipped.
+    expect(rows(session).take(2), ['x' * 30, 'end']);
+  });
 }
