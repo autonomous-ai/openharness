@@ -212,8 +212,10 @@ export class SuperTabNativeStore {
       const draft = { id: eventId, conversationId: group.id, author: observedBy, text, replyTo: null, recipients }
       const now = Date.now(), sequences = numberMessages(state, [draft], now), sequence = sequences.get(eventId)!
       noteProjectReports(state, [draft], sequences, now)
-      // The turn relies on its agent and on the person who opened the terminal (spec ruling 2).
-      await this.deps.save(tx, loaded, state, this.deps.stamp(), [{ kind: 'agent', key: target.id }, { kind: 'member', key: binding.operator.id }])
+      // The turn touches its agent (spec ruling 2). The person who opened the terminal is guarded by this context's row,
+      // which the turn writes: removing that person, or taking away their access, revokes the context (rule b,
+      // revokeNativeContexts). Touching the person instead would make one person's terminals in different groups conflict.
+      await this.deps.save(tx, loaded, state, this.deps.stamp(), [{ kind: 'agent', key: target.id }])
       await tx.superTabMessage.create({ data: { id: eventId, tabId, conversationId: group.id, sequence,
         author: json(observedBy), source: json({ kind: 'native', phase: event.kind, turnId: event.turnId,
           operator: binding.operator, truncated: event.truncated, interrupted: event.interrupted, ...(recovery ? { recovery: recovery.source } : {}) }),

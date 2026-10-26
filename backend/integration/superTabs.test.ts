@@ -3107,6 +3107,25 @@ describe('Swarm parts under concurrent writes', () => {
     }
   })
 
+  it('records terminal turns in different groups at the same time without a single conflict, even when one person opened them all', async () => {
+    const { tab } = await fixture()
+    const groups = await Promise.all(['Alpha', 'Beta', 'Gamma'].map(title => workGroup(tab, title)))
+    const contexts = []
+    for (const { group, worker } of groups) contexts.push((await store.native.open(owner, tab, { operationId: randomUUID(), conversationId: group, agentId: worker })).contextId)
+    // The project is dirty already: a turn writes only its own group.
+    for (const contextId of contexts) await store.native.append(host, tab, contextId, { turnId: 'warm', kind: 'prompt', previousEventId: null, text: 'Warm up', truncated: false, interrupted: false })
+    const c = counted()
+    await Promise.all(contexts.map(async contextId => {
+      let previous = (await db.superTabNativeContext.findUniqueOrThrow({ where: { id: contextId } })).lastEventId
+      for (let i = 0; i < 4; i++) {
+        const recorded = await c.store.native.append(host, tab, contextId, { turnId: `turn_${i}`, kind: 'prompt', previousEventId: previous,
+          text: `Prompt ${i}`, truncated: false, interrupted: false }) as { eventId: string }
+        previous = recorded.eventId
+      }
+    }))
+    expect(c.attempts).toBe(contexts.length * 4)
+  })
+
   it('gives a machine\'s last slot to exactly one of two concurrent starts', async () => {
     const tab = (await store.create(owner, randomUUID(), 'Slots')).id
     await run(tab, { type: 'invite.create', email: host.email, role: 'collaborator', conversationId: 'lead' })
