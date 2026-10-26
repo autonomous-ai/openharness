@@ -41,7 +41,7 @@ export interface Agent {
   replacement?: { previousHarnessId: string; harnessId: string }
   /** When a reading first showed its session gone or its host confirmed a stop; cleared when it is back (machines.ts). */
   downSince?: string
-  /** The down time already named in the Lead's scheduled wake-up (projectUpdates.ts), so each time down is named once. */
+  /** Written by the two-hour down wake-up that lost work replaced (liveness.ts); older states may still carry it, never shown. */
   downNamed?: string
   /** A usage limit seen on its terminal; routing skips the agent until then. Shown as null once passed (terminal.ts). */
   limitedUntil?: string | null
@@ -82,11 +82,14 @@ export interface AgentStart {
   request: AgentStartRequest
   harnessId: string | null
   dispatched: boolean
+  /** When its host was asked to launch it; a start not running 3 minutes later fails (liveness.ts). */
+  dispatchedAt?: number
   error: string | null
 }
 /** `needs_human`: the agent needs a person's decision (its result is the question). `blocked`: it cannot go on (its result
- * says why). Both stay active work; the machine running the agent alerts its Harness Pro (cli/src/superTabs/attention.ts). */
-export type WorkStatus = 'planned' | 'working' | 'needs_human' | 'blocked' | 'review' | 'done' | 'stopped' | 'cancelled' | 'reconciling'
+ * says why). Both stay active work; the machine running the agent alerts its Harness Pro (cli/src/superTabs/attention.ts).
+ * `lost`: its agent died, stalled or hit a limit (liveness.ts); no longer active, so the Lead assigns it again or cancels it. */
+export type WorkStatus = 'planned' | 'working' | 'needs_human' | 'blocked' | 'review' | 'done' | 'stopped' | 'cancelled' | 'reconciling' | 'lost'
 export interface Check {
   id: string
   description: string
@@ -103,6 +106,12 @@ export interface Assignment {
   result: string | null
   /** Explicit progress fences delayed recording gaps; absent on older backends. */
   recordingProgress?: { at: number; revision: number }
+  /** Its agent owns it until then; progress renews it (liveness.ts). Absent on assignments from before leases. */
+  leaseUntil?: number
+  /** Its agent's last progress the lease saw, for the Lead's wake-up when it is lost. */
+  progressAt?: number
+  /** Why and when it was lost (status `lost`). */
+  lost?: { reason: string; at: number }
 }
 export interface WorkTask {
   goal: string
@@ -145,6 +154,8 @@ export interface Conversation {
   lastActivityAt?: string
   /** A private conversation: only these people and the project's Lead read it (projects.ts canReadGroup). */
   audience?: import('./parts/types.js').Audience
+  /** The last attempt here that was lost: its agent's status and checks for it are refused, even after reassignment. */
+  lostAttempt?: { id: string; agentId: string }
 }
 
 export function appendPullRequestUrls(group: Conversation, texts: Iterable<string | null | undefined>): void {
@@ -269,14 +280,15 @@ export function fail(code: string, message: string, status = 409): never { throw
 export const stableId = (...parts: string[]): string => createHash('sha256').update(JSON.stringify(parts)).digest('hex').slice(0, 24)
 export const actorKey = (actor: Actor): string => actor.kind === 'person' ? `person:${actor.userId}` : `agent:${actor.agentId}`
 export const activeWork = (group: Conversation): boolean => !!group.assignment &&
-  !['done', 'stopped', 'cancelled'].includes(group.assignment.status)
+  !['done', 'stopped', 'cancelled', 'lost'].includes(group.assignment.status)
 
 /** Old states derive pending decisions from their closed assignments; new states persist them on the worker. */
 export function awaitingWorkers(state: SuperTabState, projectId: string): Agent[] {
   return state.agents.filter(a => {
     if (state.conversations.some(c => c.leadId === a.id) || state.conversations.some(c => activeWork(c) && c.assignment?.agentId === a.id)
       || reviewing(state, a.id)) return false
-    const groups = state.conversations.filter(c => c.assignment?.agentId === a.id)
+    // A lost task's agent is not waiting for a decision: it may be gone, and it must not hold up the next assignment.
+    const groups = state.conversations.filter(c => c.assignment?.agentId === a.id && c.assignment.status !== 'lost')
     return (a.projectId ?? groups.map(c => groupProject(state, c).id)[0] ?? 'lead') === projectId &&
       (a.workDecision === 'awaiting' || (!a.workDecision && groups.some(c => !activeWork(c))))
   })
@@ -464,6 +476,7 @@ export function visibleState(state: SuperTabState, actor: Actor, now = Date.now(
       if (!pool.observation) continue
       pool.observation.runningHarnessIds = pool.observation.runningHarnessIds.filter(id => harnesses.has(id))
       pool.observation.stoppedHarnessIds = pool.observation.stoppedHarnessIds.filter(id => harnesses.has(id))
+      if (pool.observation.harnessProgress) pool.observation.harnessProgress = Object.fromEntries(Object.entries(pool.observation.harnessProgress).filter(([id]) => harnesses.has(id)))
       if (pool.observation.stoppedReservations) pool.observation.stoppedReservations = pool.observation.stoppedReservations.filter(r => harnesses.has(r.harnessId))
     }
     visible.invitations = visible.invitations.filter(i => visible.conversations.some(c => c.id === i.conversationId))

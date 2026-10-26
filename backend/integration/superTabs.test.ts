@@ -717,16 +717,10 @@ describe('private swarm projects on the real control API', () => {
 })
 
 describe('since when a worker is down', () => {
-  async function downFixture({ legacy = false } = {}) {
+  async function downFixture() {
     let now = 1_000_000
     const timed = new SuperTabStore(db, () => now)
-    const tab = (await timed.create(owner, randomUUID(), 'Down since', legacy ? undefined : 'public')).id
-    if (legacy) {
-      // New Swarms always store a project; emulate one created before projects existed.
-      const state = await storedState(tab)
-      delete state.projects
-      await saveState(tab, state)
-    }
+    const tab = (await timed.create(owner, randomUUID(), 'Down since', 'public')).id
     const execute = (command: Command, user = owner, asAgentId?: string) =>
       timed.execute(user, tab, { operationId: randomUUID(), command }, asAgentId)
     const invitation = await execute({ type: 'invite.create', email: host.email, role: 'collaborator', conversationId: 'lead' })
@@ -792,70 +786,6 @@ describe('since when a worker is down', () => {
     await f.observe([f.leadHarness])
     expect(await f.downSince(f.worker)).toBe(iso(lastReading))
     expect(await f.downSince(f.lead)).toBeUndefined()
-  })
-
-  it('names a worker down two hours or more in the Lead\'s scheduled wake-up, once per time it went down', async () => {
-    const f = await downFixture()
-    const wakeUps = async () => (await db.superTabMessage.findMany({ where: { tabId: f.tab, conversationId: 'lead' }, orderBy: { sequence: 'asc' } }))
-      .filter(m => (m.source as Record<string, unknown>)?.kind === 'update-request')
-    const poll = async () => (await f.timed.deliveries(host, f.tab, f.lead)).filter(d => d.conversationId === 'lead')
-    // The Lead acknowledges through what its wake-up names.
-    const acknowledge = async () => f.execute({ type: 'project.report', projectId: 'lead',
-      through: ((await wakeUps()).at(-1)!.source as { through: Record<string, number> }).through, text: null }, host, f.lead)
-    await f.observe([f.leadHarness, f.workerHarness])
-    f.clock.now += 300_000
-    expect(await poll()).toHaveLength(1)
-    await acknowledge()
-    expect(await poll()).toEqual([])
-
-    const down = f.clock.now
-    await f.observe([f.leadHarness, f.workerHarness])
-    await f.observe([f.leadHarness])
-    f.clock.now = down + 2 * 3_600_000 - 60_000
-    await f.execute({ ...message('A new report'), conversationId: f.group } as Command)
-    f.clock.now += 59_999
-    expect(await poll()).toEqual([])
-    f.clock.now++
-    expect(await poll()).toHaveLength(1)
-    const named = (await wakeUps()).at(-1)!
-    expect(named.text).toContain(`Worker (down since ${iso(down)}; task "Ship the parser")`)
-    expect(named.text).not.toContain('Lead (down')
-    expect(named.text).not.toContain('Consolidate')
-    expect(await poll()).toHaveLength(1)
-    await acknowledge()
-    // The report that was not yet due still gets its own request.
-    f.clock.now += 240_000
-    expect(await poll()).toHaveLength(1)
-    expect((await wakeUps()).at(-1)!.text).toContain('Consolidate new reports')
-    await acknowledge()
-    f.clock.now += 3 * 3_600_000
-    expect(await poll()).toEqual([])
-
-    await f.observe([f.leadHarness, f.workerHarness])
-    const again = f.clock.now
-    await f.observe([f.leadHarness])
-    f.clock.now += 2 * 3_600_000
-    expect(await poll()).toHaveLength(1)
-    expect((await wakeUps()).at(-1)!.text).toContain(`Worker (down since ${iso(again)}`)
-    expect(await wakeUps()).toHaveLength(4)
-  })
-
-  it('wakes the Lead of an older Swarm without stored projects', async () => {
-    const f = await downFixture({ legacy: true })
-    expect((await f.timed.read(owner, f.tab)).state.projects).toBeUndefined()
-    const poll = async () => (await f.timed.deliveries(host, f.tab, f.lead)).filter(d => d.conversationId === 'lead')
-    const down = f.clock.now
-    await f.observe([f.leadHarness, f.workerHarness])
-    await f.observe([f.leadHarness])
-    f.clock.now = down + 2 * 3_600_000 - 1
-    expect(await poll()).toEqual([])
-    f.clock.now++
-    const polls = [...await poll(), ...await poll()]
-    expect(new Set(polls.map(d => d.id)).size).toBe(1)
-    const wakeUps = (await db.superTabMessage.findMany({ where: { tabId: f.tab, conversationId: 'lead' } }))
-      .filter(m => (m.source as Record<string, unknown>)?.kind === 'update-request')
-    expect(wakeUps).toHaveLength(1)
-    expect(wakeUps[0]!.text).toContain(`Worker (down since ${iso(down)}; task "Ship the parser")`)
   })
 })
 

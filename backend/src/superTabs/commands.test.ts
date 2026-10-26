@@ -2349,3 +2349,51 @@ describe('private conversations (an explicit audience)', () => {
     expect(visibleState(f.state, f.agentActor(f.lead)).otherProjectsWork ?? []).toEqual([])
   })
 })
+
+describe('lost work (liveness.ts)', () => {
+  /** A Lead, and a group with two workers, the first assigned; the clock is at 1000 in every command. */
+  const lostFixture = () => {
+    const f = fixture()
+    const lead = f.add('lead', 'owner', 'lead', true)
+    const group = f.group(), worker = f.add('worker', 'owner', group), other = f.add('other', 'owner', group)
+    const as = (agentId: string): Actor => ({ kind: 'agent', agentId, machineOwnerId: 'host-owner' })
+    f.run({ type: 'work.assign', conversationId: group, agentId: worker })
+    const task = () => f.state.conversations.find(c => c.id === group)!
+    const limit = () => f.run({ type: 'agent.alert', agentId: worker, alert: 'limit', active: true, resetAt: new Date(3_600_000).toISOString() }, as(worker))
+    return { f, lead, group, worker, other, as, task, limit }
+  }
+
+  it('lets the Lead hand lost work to another agent without first deciding about the lost one', () => {
+    const { f, lead, group, other, as, task, limit } = lostFixture()
+    limit()
+    expect(task().assignment!.status).toBe('lost')
+    f.run({ type: 'work.assign', conversationId: group, agentId: other, ...via }, as(lead), decisionIn(group))
+    expect(task().assignment).toMatchObject({ agentId: other, status: 'working', leaseUntil: 1000 + 5 * 60_000 })
+  })
+
+  it('leaves the lost agent undecided when the Lead cancels lost work, and does not tell it twice', () => {
+    const { f, lead, group, worker, as, task, limit } = lostFixture()
+    limit()
+    const cancelled = f.run({ type: 'work.cancel', conversationId: group, assignmentId: task().assignment!.id, reason: 'Not needed' }, as(lead))
+    expect(task().assignment!.status).toBe('cancelled')
+    expect(cancelled.messages[0]!.recipients).toEqual([])
+    expect(f.state.agents.find(a => a.id === worker)!.workDecision).toBeUndefined()
+  })
+
+  it('renews the lease on the worker\'s own post in its task\'s group, not on anyone else\'s', () => {
+    const { f, lead, group, worker, as, task } = lostFixture()
+    task().assignment!.leaseUntil = 0
+    f.run({ type: 'message.send', conversationId: group, text: 'Halfway.', replyTo: null, recipientIds: [] }, as(lead))
+    expect(task().assignment!.leaseUntil).toBe(0)
+    f.run({ type: 'message.send', conversationId: group, text: 'Halfway.', replyTo: null, recipientIds: [] }, as(worker))
+    expect(task().assignment).toMatchObject({ leaseUntil: 1000 + 5 * 60_000, progressAt: 1000 })
+  })
+
+  it('does not lose work a Lead holds: Leads are not covered here', () => {
+    const { f, lead, as } = lostFixture()
+    const own = f.group()
+    f.run({ type: 'work.assign', conversationId: own, agentId: lead })
+    f.run({ type: 'agent.alert', agentId: lead, alert: 'limit', active: true }, as(lead))
+    expect(f.state.conversations.find(c => c.id === own)!.assignment!.status).toBe('working')
+  })
+})
