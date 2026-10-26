@@ -146,8 +146,13 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
     final active = _hovered || _focused;
     final authorStyle = DesktopChrome.text(medium: true)
         .copyWith(fontWeight: FontWeight.w600);
+    // A phone's author is a finger tall, 44 over its 20 px line. The gap
+    // above the row gives up the half that would push the name down and the
+    // avatar moves down with it, so both stay where they were.
+    final finger = workspaceIsCompact(context) && !widget.grouped;
+    final slack = finger ? 12.0 : 0.0;
     return Padding(
-      padding: EdgeInsets.only(top: widget.grouped ? 0 : 12),
+      padding: EdgeInsets.only(top: widget.grouped ? 0 : 12 - slack),
       child: MouseRegion(
         onEnter: (_) => setState(() => _hovered = true),
         onExit: (_) => setState(() => _hovered = false),
@@ -201,8 +206,9 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
                     child: Row(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        SizedBox(
+                        Container(
                           width: SuperTabMessageRow.avatarSize,
+                          padding: EdgeInsets.only(top: slack),
                           child: widget.grouped
                               ? null
                               : ExcludeSemantics(
@@ -237,9 +243,17 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
                                     children: [
                                       InkWell(
                                         onTap: widget.onOpenAgent,
-                                        child: Text(
-                                          widget.author,
-                                          style: authorStyle,
+                                        child: fingerTarget(
+                                          enabled: finger,
+                                          Align(
+                                            alignment: Alignment.centerLeft,
+                                            widthFactor: 1,
+                                            heightFactor: 1,
+                                            child: Text(
+                                              widget.author,
+                                              style: authorStyle,
+                                            ),
+                                          ),
                                         ),
                                       ),
                                       if (message.fromAgent)
