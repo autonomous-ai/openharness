@@ -18,6 +18,8 @@ import { DEFAULT_ROUTING_POLICY } from '../src/superTabs/routingPolicy.js'
 import { stableId, type SuperTabState } from '../src/superTabs/model.js'
 import { ensureTerminalExpiry, TERMINAL_EXPIRY_MS } from '../src/superTabs/terminal.js'
 import { ensureMentionExpiry, MENTION_EXPIRY_MS } from '../src/superTabs/mentions.js'
+import * as parts from '../src/superTabs/parts/index.js'
+import { guardedWrite, PartConflict } from '../src/superTabs/parts/write.js'
 
 // A fresh loopback replica set, created here. This suite never reads DATABASE_URL or an existing database.
 let replica: MongoMemoryReplSet
@@ -2923,5 +2925,80 @@ describe('credentials in Swarm chat', () => {
       expect(everything).not.toContain(secret)
       expect(output).not.toContain(secret)
     }
+  })
+})
+
+describe('Swarm parts storage', () => {
+  /** A Swarm born in parts at version 1, with one dormant group and one finished start. */
+  async function stored() {
+    const tabId = `parts-${randomUUID()}`
+    const state = (await import('../src/superTabs/model.js')).createSuperTab(tabId, 'Parts', { id: owner.sub, email: owner.email }, 'prod')
+    state.conversations.push({ id: 'quiet', projectId: 'lead', number: 1, title: 'Quiet', leadId: null, agentIds: ['a1'], archived: false,
+      brief: '', checks: [], assignment: null, lastMessageSequence: 0, dormant: true })
+    state.agents.push({ id: 'a1', machineId: 'm1', harnessId: 'h1', machineOwnerId: host.sub, contributorId: owner.sub, membershipGeneration: tabId,
+      name: 'A', configuration: config })
+    const request = { conversationId: 'lead', machineId: 'm1', engine: 'codex', name: 'B', cwd: '/w', worktree: false,
+      requirements: { memoryBytes: 0, diskBytes: 0, maxCpuPercent: 100, tools: [], devices: [], quotaRequired: false } }
+    const start = { creationId: 'c', actorKey: 'person:x', contributorId: owner.sub, membershipGeneration: tabId, machineOwnerId: host.sub,
+      hostGrant: null, request, dispatched: true, error: null }
+    state.starts = [{ ...start, id: 'running', harnessId: null }, { ...start, id: 'done', harnessId: 'h1' }]
+    await db.$transaction(tx => parts.insertParts(tx, parts.split(state, { tabId, version: 1, now: Date.now() - 60_000 })))
+    return tabId
+  }
+
+  it('writes a part only at the version it was read; a writer that read an older version conflicts and retries', async () => {
+    const tabId = await stored()
+    const head = (await db.$transaction(tx => parts.loadActive(tx, tabId))).head
+    await db.$transaction(tx => guardedWrite(tx, tabId, { op: 'update', kind: 'head', key: 'head', seen: head.version,
+      data: { ...head.data!, name: 'Renamed' } }, Date.now()))
+    const stale = db.$transaction(tx => guardedWrite(tx, tabId, { op: 'update', kind: 'head', key: 'head', seen: head.version,
+      data: { ...head.data!, name: 'Lost' } }, Date.now()))
+    await expect(stale).rejects.toBeInstanceOf(PartConflict)
+    await expect(stale).rejects.toMatchObject({ code: 'P2034' })
+    const after = (await db.$transaction(tx => parts.loadActive(tx, tabId))).head
+    expect(after).toMatchObject({ version: head.version + 1, data: { name: 'Renamed' } })
+  })
+
+  it('moves the version on a touch but leaves the data and the change time', async () => {
+    const tabId = await stored()
+    const before = (await db.$transaction(tx => parts.loadActive(tx, tabId))).agents[0]!
+    await db.$transaction(tx => guardedWrite(tx, tabId, { op: 'touch', kind: 'agent', key: 'a1', seen: before.version }, Date.now()))
+    const after = (await db.$transaction(tx => parts.loadActive(tx, tabId))).agents[0]!
+    expect(after).toEqual({ ...before, version: before.version + 1 })
+  })
+
+  it('keeps a removed part as a tombstone with its last data, and a part added again continues from its version', async () => {
+    const tabId = await stored()
+    const agent = (await db.$transaction(tx => parts.loadActive(tx, tabId))).agents[0]!
+    await db.$transaction(tx => guardedWrite(tx, tabId, { op: 'remove', kind: 'agent', key: 'a1', seen: agent.version, data: agent.data! }, Date.now()))
+    expect((await db.$transaction(tx => parts.loadActive(tx, tabId))).agents).toEqual([])
+    const since = new Date(Date.now() - 1_000)
+    const changed = (await db.$transaction(tx => parts.loadChanged(tx, [tabId], since))).get(tabId)!
+    expect(changed.find(p => p.kind === 'agent')).toMatchObject({ key: 'a1', deleted: true, data: { name: 'A' } })
+    await db.$transaction(tx => guardedWrite(tx, tabId, { op: 'insert', kind: 'agent', key: 'a1', data: { ...agent.data!, name: 'Again' }, ordinal: 5 }, Date.now()))
+    expect((await db.$transaction(tx => parts.loadActive(tx, tabId))).agents[0]).toMatchObject({ version: agent.version + 2, data: { name: 'Again' } })
+  })
+
+  it('loads dormant groups and finished starts only when a command names them', async () => {
+    const tabId = await stored()
+    const active = await db.$transaction(tx => parts.loadActive(tx, tabId))
+    expect(active.groups.map(p => p.key)).not.toContain('quiet')
+    expect(active.starts.map(p => p.key)).toEqual(['running'])
+    const named = await db.$transaction(tx => parts.loadActive(tx, tabId, { groupIds: ['quiet'], startIds: ['done'] }))
+    expect(named.groups.find(p => p.key === 'quiet')).toMatchObject({ dormant: true })
+    expect(named.starts.map(p => p.key).sort()).toEqual(['done', 'running'])
+    expect((await db.$transaction(tx => parts.loadActive(tx, tabId, { agentIds: ['a1'] }))).groups.map(p => p.key)).toContain('quiet')
+    expect((await db.$transaction(tx => parts.loadDormant(tx, tabId, {}))).map(p => p.key)).toEqual(['quiet'])
+    expect((await db.$transaction(tx => parts.loadAll(tx, tabId))).groups.map(p => p.key)).toContain('quiet')
+  })
+
+  it('names the newest data change of each Swarm', async () => {
+    const tabId = await stored()
+    const before = (await db.$transaction(tx => parts.lastChangedAt(tx, [tabId]))).get(tabId)!
+    const head = (await db.$transaction(tx => parts.loadActive(tx, tabId))).head
+    const stamp = Date.now()
+    await db.$transaction(tx => guardedWrite(tx, tabId, { op: 'update', kind: 'head', key: 'head', seen: head.version, data: head.data! }, stamp))
+    expect((await db.$transaction(tx => parts.lastChangedAt(tx, [tabId]))).get(tabId)).toBe(stamp)
+    expect(stamp).toBeGreaterThan(before)
   })
 })
