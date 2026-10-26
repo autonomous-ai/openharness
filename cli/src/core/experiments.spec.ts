@@ -124,7 +124,7 @@ describe('the account\'s agent experiments, kept for this computer', () => {
   })
   afterEach(() => { vi.useRealTimers(); rmSync(dataDir, { recursive: true, force: true }) })
 
-  const OFF = { agentsStartAgents: false, pullRequestLine: false, agentMessages: false, agentMessagesHideSummary: false }
+  const OFF = { agentsStartAgents: false, pullRequestLine: false, agentMessages: false, agentMessagesHideSummary: false, agentsTellAgents: false }
   /** The account's answer, as backend routes/experimentalSettings.ts gives it. */
   const account = (features: Record<string, boolean>, accountId = 'acct') =>
     ({ status: 200, body: { success: true, data: { accountId, revision: 1, features: { share_button: false, ...features }, available: {} } } })

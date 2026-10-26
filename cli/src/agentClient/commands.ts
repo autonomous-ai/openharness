@@ -21,14 +21,15 @@ import { join } from 'node:path'
 import { readAgentSettings } from '../lib/agentSettings.js'
 import { MAX_FIRST_PROMPT_CHARS } from '../lib/engineLaunch.js'
 import { NewUsageError, resolveNewMachine, type NewMachine, type NewOrigin } from '../lib/newCommand.js'
-import { engineName } from '../messages/model.js'
+import { engineName, MessageError } from '../messages/model.js'
 import { machineListCachePath } from '../device/machineList.js'
 import { readAuthSession } from '../lib/authSession.js'
 import { buildContext, formatContext, type Context, type SpawnCount, type SpawnReason } from './context.js'
 import { formatNext, type NextStep } from './next.js'
 import { AgentClientError, openDaemon, whereFor, type Daemon, type Where } from './daemon.js'
-import { Ledger, ledgerPath, type Pending, type Started } from './ledger.js'
+import { Ledger, ledgerPath, type Pending, type Started, type Told } from './ledger.js'
 import { messagesRpc, type Rpc } from '../messages/rpc.js'
+import { TELL_OFF_TEXT } from '../messages/tell.js'
 import { sendPane } from '../messages/command.js'
 import { asSaid, callerOf, clip, cloudTurn, forAgent, isAgent, lastTurn, matching, outsideCaller, rowsOf, stateOf, STOPPED_WITHIN_MS, type Caller, type Frame, type HistoryEvent, type Row, type State } from './model.js'
 
@@ -67,6 +68,12 @@ export const REPLY_USAGE = `Usage: harness reply [--machine <name>] <name> [--js
 Says <words> to a cloud harness (Devin Cloud, Cursor Cloud, Fo): its answer to the question it asked, or what to do next.
 The person's, or a program's acting for them; an agent does not answer for the person.
 ${ON_MACHINE}`
+export const TELL_USAGE = `Usage: harness tell [--machine <name>] <name> [--json] -- <work…>
+
+Gives more work to a harness you started: typed into it once it is free, or given at its next tool call while it
+works. Then wait for it (harness wait <name>) and read its answer (harness show <name>). Only a harness you started,
+and only while the person allows it (harness settings agents-tell-agents).
+${ON_MACHINE}`
 export const WAIT_USAGE = `Usage: harness wait [--machine <name>] <name>[,<name>…] [--any] [--timeout 30m] [--json]
 
 Waits until each harness has stopped working, then prints its state. --any returns when the first one does.
@@ -87,8 +94,9 @@ and, if not, who can change that; how many of yours are open, and how many start
 
 export const EXIT = { ok: 0, failed: 1, usage: 2, needsInput: 3, stopped: 4, refused: 5, timeout: 124 } as const
 
-/** Not a failure: the caller may not do this. It should not retry; it tells the person or does the work itself. */
-export const REFUSED_CODES: ReadonlySet<string> = new Set(['SPAWN_LIMIT', 'TURNED_OFF', 'NOT_YOURS'])
+/** Not a failure: the caller may not do this. It should not retry; it tells the person or does the work itself.
+ *  `TELL_OFF` and `NOT_RUNNING` are `harness tell`'s: retried, they are refused the same. */
+export const REFUSED_CODES: ReadonlySet<string> = new Set(['SPAWN_LIMIT', 'TURNED_OFF', 'NOT_YOURS', 'TELL_OFF', 'NOT_RUNNING'])
 
 /** What a refused caller may do instead: close one of its own when it is at its limit; otherwise the message says. */
 export function refusalNext(env: NodeJS.ProcessEnv, error: AgentClientError): NextStep[] {
@@ -100,7 +108,7 @@ const stateSaid = (state: string): string => (state === 'needs-input' ? 'needs t
 
 /** Set by `harness mcp` (mcp.ts) for the verbs it runs: their next steps are then named as its tools. */
 export const VIA_MCP_ENV = 'HARNESS_VIA_MCP'
-const TOOL_OF = { ps: 'harness_list', show: 'harness_read', wait: 'harness_wait', close: 'harness_close' } as const
+const TOOL_OF = { ps: 'harness_list', show: 'harness_read', wait: 'harness_wait', close: 'harness_close', tell: 'harness_tell' } as const
 
 /**
  * A next step as the caller can take it: the shell's `harness show x`, or the tool `harness mcp` offers for it. An MCP
@@ -569,12 +577,23 @@ export function psCommand(argv: readonly string[], deps: ClientDeps = {}): Promi
 
 /** What `show` says to do next, from its state and whose it is: never `close` for a harness the caller did not start.
  *  Idle and the caller's: a harness left open after its answer is read sits there for nobody (owner, October 12). */
-function showNext(env: NodeJS.ProcessEnv, state: State, yours: boolean, at: string): NextStep[] {
+function showNext(env: NodeJS.ProcessEnv, state: State, yours: boolean, at: string, canTell = false): NextStep[] {
   if (state === 'needs-input') return [{ tell: 'tell the person; only they answer it (a question or a permission).' }]
   if (state === 'working' || state === 'unknown' || state === 'starting' || state === 'installing') return [{ run: step(env, 'wait', at), when: 'until it stops working' }]
-  if (state === 'idle' && yours) return [{ run: step(env, 'close', at), when: 'once you have what you need' }]
+  if (state === 'idle' && yours) {
+    const close: NextStep = { run: step(env, 'close', at), when: 'once you have what you need' }
+    // It keeps what it learned: more work for it costs less than a new harness told everything again.
+    return canTell ? [{ run: tellStep(env, at), when: 'to give it more work in the same conversation' }, close] : [close]
+  }
   return []
 }
+
+/** `harness tell x -- <work>`, or the tool `harness mcp` offers for it. */
+const tellStep = (env: NodeJS.ProcessEnv, at: string): string => step(env, 'tell', at, { flag: '-- <work>', arg: 'text: "<work>"' })
+
+/** Whether [o]'s caller may tell the harnesses it started: a harness in a pane, while the person allows it. */
+const tellsHere = (o: Opened, pane: string | undefined): boolean =>
+  !!o.caller && !o.caller.outside && !!pane && readAgentSettings(o.where.dataDir).agentsTellAgents
 
 /**
  * What an agent's `ps` ends with: its idle harness to read and then close (one left open after its answer is read sits
@@ -667,17 +686,21 @@ export function showCommand(argv: readonly string[], deps: ClientDeps = {}): Pro
       const answer = turn?.answer ?? ''
       // A name the verbs take: an unnamed harness is called by its session title, a sentence, so by its id's start.
       const at = onAway(addressOf({ machineId: '', agentId: t.frame.id, name: t.frame.name ?? '', engine: '' }), away)
+      // Told more work it has not taken yet: what it says now answers the work before.
+      const pendingTell = t.frame.location === 'cloud' ? null : toldPending(o, t, turn, s.now())
       const next = t.frame.location === 'cloud' && state === 'needs-input' && !o.caller && !o.orphan
         // Answered by the person, or a program speaking for them (the lamp): no agent tool says it.
         ? [{ run: `harness reply ${at} -- <the person's answer>`, when: 'it waits for the person: tell them what it asks' }]
-        // `close` takes no cloud harness.
-        : showNext(s.env, state, t.yours && t.frame.location !== 'cloud', at)
+        : pendingTell && state !== 'needs-input' ? [{ run: step(s.env, 'wait', at), when: 'until it has taken the work you told it' }]
+        // `close` and `tell` take no cloud harness.
+        : showNext(s.env, state, t.yours && t.frame.location !== 'cloud', at, tellsHere(o, s.pane))
       const result = {
         name: t.frame.name, id: t.frame.id, agent: engineName(t.frame.engine ?? ''), machine: t.machine, state, startedBy,
         folder: t.frame.project?.cwd ?? null, branch: t.frame.project?.branch ?? null,
         ask: turn?.ask ?? null, answer: clip(answer, chars), truncated: answer.length > chars, tools: turn?.tools ?? 0, next,
         ...(state === 'needs-input' ? { needsPerson: true } : {}),
         ...(t.frame.cloud?.links?.length ? { links: t.frame.cloud.links } : {}),
+        ...(pendingTell ? { told: { at: new Date(pendingTell.at).toISOString(), taken: false } } : {}),
       }
       if (flags.has('--json')) s.out(JSON.stringify(result, null, 1))
       else {
@@ -691,6 +714,7 @@ export function showCommand(argv: readonly string[], deps: ClientDeps = {}): Pro
           if (result.truncated) s.out(`… ${answer.length - chars} more characters: ${step(s.env, 'show', onAway(result.name ?? t.frame.id, away), { flag: `--chars ${answer.length}`, arg: `chars: ${answer.length}` })}`)
         }
         for (const link of result.links ?? []) s.out(`${link.label}: ${link.url}`)
+        if (pendingTell) s.out(`It has not taken the work you told it ${ago(new Date(pendingTell.at).toISOString(), s.now())} ago yet: this answer is to the work before.`)
         const said = formatNext(next)
         if (said) s.out(said)
       }
@@ -725,6 +749,87 @@ export function replyCommand(argv: readonly string[], deps: ClientDeps = {}): Pr
       return EXIT.ok
     } finally { if (t?.remote) t.daemon.close(); o.daemon.close() }
   })
+}
+
+// ── tell ───────────────────────────────────────────────────────────────────────────────────────────
+
+/** How much of the words a `Told` line keeps to know the turn they asked (ledger.ts `Told`). */
+const PROBE_CHARS = 80
+/** The words as a turn's ask holds them, to compare: spaces as one, since a pane may wrap or trim them. */
+const flat = (text: string): string => text.replace(/\s+/g, ' ').trim()
+
+/**
+ * More work for a harness the caller started (messages/tell.ts): asked of the machine it runs on, which checks its own
+ * record of who started it and queues the words in its mailbox. Recorded here (`Told`), so `wait` does not take the
+ * harness's answer to the work before for its answer to this.
+ */
+export function tellCommand(argv: readonly string[], deps: ClientDeps = {}): Promise<number> {
+  return run(TELL_USAGE, deps, wantsJson, argv, async (s) => {
+    const dash = argv.indexOf('--')
+    const { names, flags, machine } = words(dash < 0 ? argv : argv.slice(0, dash), { '--json': 'flag' })
+    const text = dash < 0 ? '' : argv.slice(dash + 1).join(' ').trim()
+    if (names.length !== 1) throw new UsageError(names.length ? 'Tell one harness at a time.' : 'Name the harness to tell.')
+    if (!text) throw new UsageError('Give the work after --: harness tell <name> -- <work>')
+    const away = await machineOf(s, s.where(), machine)
+    const o = await opened(s)
+    let t: Target | null = null
+    try {
+      if (o.orphan) throw new AgentClientError('NOT_YOURS', ORPHAN, 'ORPHAN')
+      const caller = o.caller
+      // The machine names the starter by its pane: an agent outside Harness, or the person, has none to tell from.
+      if (!caller || caller.outside || !s.pane) {
+        throw new AgentClientError('NOT_YOURS', 'harness tell runs in the pane of the harness that started the one it tells. To talk to a harness yourself, open it in Harness.')
+      }
+      if (!readAgentSettings(o.where.dataDir).agentsTellAgents) throw new AgentClientError('TELL_OFF', TELL_OFF_TEXT)
+      t = await target(s, o, names[0], away)
+      const name = t.frame.name ?? t.frame.id.slice(0, 8)
+      if (t.frame.location === 'cloud') throw new UsageError(`${name} runs in its maker's cloud: harness tell reaches a harness in a pane only.`)
+      if (!t.yours) throw new AgentClientError('NOT_YOURS', `You did not start ${name}, so you may not tell it. Only the person can.`)
+      // Harness closes one another agent started once it has sat idle half an hour (services/agentCleanup.ts).
+      if (stateOf(t.frame) === 'stopped') {
+        throw new AgentClientError('NOT_RUNNING', `${name} is no longer running: it was closed or stopped. Start a new harness with the whole task.`)
+      }
+      // From a pane here the machine reads the starter from the pane; another machine takes this one's word for it.
+      const here = t.machineId === o.where.machineId
+      const payload = here
+        ? { action: 'tell', pane: s.pane, machine: o.machine, agentId: t.frame.id, text }
+        : { action: 'tell', from: { machineId: caller.machineId, agentId: caller.agentId }, machine: o.machine, agentId: t.frame.id, text }
+      let reply: Record<string, unknown>
+      try { reply = await s.record({ port: o.where.port, dataDir: o.where.dataDir, machineId: t.machineId }, payload, 20_000) } catch (error) {
+        if (error instanceof MessageError) throw new AgentClientError(error.code, error.message)
+        throw error
+      }
+      try { o.ledger.append({ at: s.now(), by: { machineId: caller.machineId, agentId: caller.agentId }, told: { machineId: t.machineId, agentId: t.frame.id }, probe: flat(text).slice(0, PROBE_CHARS) }) }
+      catch { /* `wait` then reads its last answer as it would without the line */ }
+      const at = onAway(addressOf({ machineId: '', agentId: t.frame.id, name: t.frame.name ?? '', engine: '' }), away)
+      const next: NextStep[] = [{ run: step(s.env, 'wait', at), when: `until it has answered; then read it: ${step(s.env, 'show', at)}` }]
+      const state = typeof reply.state === 'string' ? reply.state : 'queued'
+      const failed = state === 'failed'
+      const effect = failed ? `${name} did not take it: ${typeof reply.reason === 'string' ? reply.reason : 'its machine refused it'}.`
+        : `${name} has it: typed once it is free, or given at its next tool call while it works.`
+      s.out(flags.has('--json') ? JSON.stringify({ name, id: t.frame.id, message: reply.id ?? null, state, effect, next: failed ? [] : next })
+        : [`${name} on ${t.machine}: told. ${effect}`, failed ? null : formatNext(next)].filter(Boolean).join('\n'))
+      return failed ? EXIT.failed : EXIT.ok
+    } finally { if (t?.remote) t.daemon.close(); o.daemon.close() }
+  })
+}
+
+/** How long after a tell an idle harness is still taken to be about to take it. Past it, the harness is read as it is:
+ *  its machine refused the words, or something holds its pane (a dialog, the person's draft), and `show` says so. */
+const TOLD_HOLD_MS = 10 * 60_000
+
+/**
+ * The work the caller last told [t] that it has not taken yet, or null. Taken: a turn asked with those words (typed
+ * into an idle harness), or anything it did after the tell (given at a tool call, inside the turn it was in). Until
+ * then its last answer is to the work before: the answer a `wait` returned at once, and wrongly, after a tell.
+ */
+function toldPending(o: Opened, t: Target, turn: { ask?: string | null } | null, now: number): Told | null {
+  const told = o.caller ? o.ledger.toldBy(o.caller, { machineId: t.machineId, agentId: t.frame.id }) : null
+  if (!told || now - told.at > TOLD_HOLD_MS) return null
+  if (turn?.ask && flat(turn.ask).includes(told.probe)) return null
+  // Another machine's clock: a minute either way says nothing, and the turn's words still do.
+  const active = Date.parse(t.frame.updatedAt ?? '')
+  return active > told.at + (t.machineId === o.where.machineId ? 0 : CLOCK_SLACK_MS) ? null : told
 }
 
 // ── wait ───────────────────────────────────────────────────────────────────────────────────────────
@@ -829,6 +934,8 @@ export function waitCommand(argv: readonly string[], deps: ClientDeps = {}): Pro
         // Idle, on two looks in a row with the same last turn: a message sent just before is typed within a look,
         // and the turn it starts shows as working. One idle look returned before it, on the turn before (#1180).
         const turn = await readLastTurn(t, 1)
+        // Told more work it has not taken yet: idle on the answer to the work before.
+        if (toldPending(o, t, turn, s.now())) { idle.delete(t); return null }
         const key = turn ? `${turn.ask}\u0000${turn.tools}\u0000${turn.answer.length}` : ''
         const before = idle.get(t)
         const looks = before && before.turn === key ? before.looks + 1 : 1
@@ -976,7 +1083,8 @@ export function closeCommand(argv: readonly string[], deps: ClientDeps = {}): Pr
       }
       // Closed while still starting, before its machine could read its conversation: there is none to keep.
       const kept = reply.withoutConversation !== true
-      const effect = kept ? 'Its conversation is kept; the person can resume it.' : 'It was still starting, so no conversation was kept.'
+      // Still starting, or at a question its engine asks first (the folder's trust, an MCP server): it had none yet.
+      const effect = kept ? 'Its conversation is kept; the person can resume it.' : 'It had not started a conversation, so none was kept.'
       // How many of its own are left, counted as `whoami` counts them, without the one just closed.
       const closedHere = t.machineId === o.where.machineId, closedId = t.frame.id
       o.frames = o.frames.filter((f) => !(closedHere && f.id === closedId))

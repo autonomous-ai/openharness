@@ -26,7 +26,7 @@ export const INSTRUCTIONS = `Harness runs coding agents (Claude Code, Codex, and
 
 Every harness spends the person's tokens. Start one (harness_start) only for work that can run in parallel with yours, needs another model's view (a review, a second opinion from Codex), takes long, or belongs in its own folder. Do quick work yourself. Give it a project name (project), never a folder of your own: Harness owns and trusts a project folder it makes (~/harnesses/<name>), so the agent needs no approval; a folder you name makes Claude Code or Codex ask the person to trust it, and it waits until they answer.
 
-Call harness_whoami first: it says whether you may start harnesses now. Then list (harness_list), search what was already said or decided (harness_search), and see the machines you may run on (harness_machines). Put everything in the task: starting a harness does not let you message it. A follow-up goes by harness_send only to a teammate in your tab, while Agent Messages are on; otherwise start a new harness with the fuller task. Never give work to, or close, a harness you did not start: those are the person's.
+Call harness_whoami first: it says whether you may start harnesses now. Then list (harness_list), search what was already said or decided (harness_search), and see the machines you may run on (harness_machines). Put everything in the task. More work for a harness you started goes by harness_tell, once you have read its answer, while the person allows it; a message to a teammate in your tab by harness_send, while Agent Messages are on; otherwise start a new harness with the fuller task. Never give work to, or close, a harness you did not start: those are the person's.
 
 Name every harness. Then wait for it (harness_wait), read its answer (harness_read), and close it once you have its answer (harness_close). At most 4 of yours at once, and a harness another agent started may not start harnesses itself. Never ask a harness to publish, deploy, delete or push.
 
@@ -63,10 +63,14 @@ export const TOOLS: Tool[] = [
   },
   {
     name: 'harness_list',
-    description: 'The harnesses on this machine: name, agent, state (working, idle, needs the person), who started each ("you" for yours), when it was last active, its folder, and what it is about.',
-    inputSchema: schema({ all: { type: 'boolean', description: 'Also the ones stopped in the last week.' } }),
+    description: 'The harnesses on a machine, this one unless machine names another: name, agent, state (working, idle, needs the person), who started each ("you" for yours), when it was last active, its folder, and what it is about.',
+    inputSchema: schema({
+      all: { type: 'boolean', description: 'Also the ones stopped in the last week.' },
+      machine: { type: 'string', description: 'Another of the person\'s machines, by name (harness_machines), to list its harnesses: those you started there too.' },
+    }),
     annotations: { readOnlyHint: true },
-    argv: (a) => ['ps', ...(a.all === true ? ['--all'] : [])],
+    // A harness started on another machine was in no list: `ps` lists one machine, and the tool named none.
+    argv: (a) => ['ps', ...(str(a.machine) ? ['--machine', str(a.machine)] : []), ...(a.all === true ? ['--all'] : [])],
   },
   {
     name: 'harness_search',
@@ -92,6 +96,7 @@ export const TOOLS: Tool[] = [
       name: { type: 'string', description: 'A short name to call it by (e.g. "reviewer"). Always give one.' },
       agent: { type: 'string', enum: [...STARTABLE_AGENTS], description: 'The agent to run: Claude Code (default), Codex, or another harness engine (opencode, pi, cursor, …).' },
       machine: { type: 'string', description: 'Another of the person\'s machines, by name, to run it there.' },
+      model: { type: 'string', description: 'The model it launches with, as the agent names it (haiku, opus, gpt-5.4-mini); its own default when left out.' },
     }, ['task', 'name']),
     // Starting a harness only adds one, on the person's own machines. Said so, Codex runs it without asking: a tool
     // that says nothing counts as destructive and open-world there, so `codex exec` refused every start ("MCP tool
@@ -105,7 +110,7 @@ export const TOOLS: Tool[] = [
       // (a clean VM, CLI 0.3.75, 2026-10-11). Both given, `harness new` says to name one.
       const folder = str(a.folder), project = str(a.project)
       const where = folder ? [isAbsolute(folder) || folder.startsWith('~') ? folder : resolve(cwd, folder)] : []
-      return ['new', str(a.agent) || 'claude', ...(str(a.machine) ? ['--machine', str(a.machine)] : []), ...where,
+      return ['new', str(a.agent) || 'claude', ...(str(a.machine) ? ['--machine', str(a.machine)] : []), ...(str(a.model) ? ['--model', str(a.model)] : []), ...where,
         ...(project || !folder ? ['--new', ...(project ? [project] : [])] : []),
         '--name', str(a.name), '--task', typeof a.task === 'string' ? a.task : '']
     },
@@ -131,6 +136,17 @@ export const TOOLS: Tool[] = [
     inputSchema: schema({ name: { type: 'string' }, chars: { type: 'number', minimum: 1, description: 'How much of the answer (4000 characters by default).' } }, ['name']),
     annotations: { readOnlyHint: true },
     argv: (a) => ['show', str(a.name), ...(typeof a.chars === 'number' && a.chars > 0 ? ['--chars', String(Math.floor(a.chars))] : [])],
+  },
+  {
+    name: 'harness_tell',
+    description: 'Give more work to a harness you started, on any machine, in the conversation it already has: typed into it once it is free, or given at its next tool call while it works. Read its answer first (harness_read); then wait for the new one (harness_wait) and read it. Only a harness you started, and only while the person allows it (Harness Settings, agents-tell-agents); a refusal says so.',
+    inputSchema: schema({
+      name: { type: 'string', description: 'The harness you started.' },
+      text: { type: 'string', description: 'The work, as you would write it to a colleague: what to do and what to answer with.' },
+    }, ['name', 'text']),
+    // As harness_send: words into a harness the caller started, and nothing more; said so, Codex does not ask.
+    annotations: { destructiveHint: false, openWorldHint: false },
+    argv: (a) => ['tell', str(a.name), '--', typeof a.text === 'string' ? a.text : ''],
   },
   {
     name: 'harness_send',
@@ -189,7 +205,8 @@ export async function answer(message: Message, deps: McpDeps, state: { client?: 
   const reply = (result: unknown) => ({ jsonrpc: '2.0', id, result })
   const fail = (code: number, text: string) => ({ jsonrpc: '2.0', id: isRequest ? id : null, error: { code, message: text } })
   if (typeof message.method !== 'string') return isRequest ? fail(-32600, 'Invalid request') : null
-  const tools = TOOLS.filter((tool) => tool.name !== 'harness_send' || deps.inPane)
+  // Both name their sender by its pane: an agent outside Harness has none to send or tell from.
+  const tools = TOOLS.filter((tool) => (tool.name !== 'harness_send' && tool.name !== 'harness_tell') || deps.inPane)
   switch (message.method) {
     case 'initialize': {
       const asked = str(message.params?.protocolVersion)

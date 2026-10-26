@@ -30,15 +30,20 @@ export interface AgentSettings {
    *  inverted, as the account's experiment is (backend lib/experimentalSettings.ts): every one of them is "off unless
    *  true", and sharing the summary is the default. */
   agentMessagesHideSummary: boolean
+  /** An agent may give more work to a harness it started (`harness tell`, messages/tell.ts), with no tab and whether
+   *  Agent Messages are on or not. A switch of its own, off by default: the owner ruled that a harness another started
+   *  gets no exception from Agent Messages (2026-10-11), so this one-way order from the starter is the person's to
+   *  allow, not a side effect of starting. */
+  agentsTellAgents: boolean
 }
 
-export const AGENT_SETTINGS_DEFAULTS: AgentSettings = { agentsStartAgents: false, pullRequestLine: false, agentMessages: false, agentMessagesHideSummary: false }
+export const AGENT_SETTINGS_DEFAULTS: AgentSettings = { agentsStartAgents: false, pullRequestLine: false, agentMessages: false, agentMessagesHideSummary: false, agentsTellAgents: false }
 
 /** Each setting's name in `harness settings`, and its key. */
-export const AGENT_SETTING_NAMES: Record<string, keyof AgentSettings> = { 'agents-start-agents': 'agentsStartAgents', 'pull-request-line': 'pullRequestLine', 'agent-messages': 'agentMessages', 'agent-messages-hide-summary': 'agentMessagesHideSummary' }
+export const AGENT_SETTING_NAMES: Record<string, keyof AgentSettings> = { 'agents-start-agents': 'agentsStartAgents', 'agents-tell-agents': 'agentsTellAgents', 'pull-request-line': 'pullRequestLine', 'agent-messages': 'agentMessages', 'agent-messages-hide-summary': 'agentMessagesHideSummary' }
 
 /** Each setting's account experiment, as the backend names it (lib/experimentalSettings.ts `experimentalFeatures`). */
-export const AGENT_SETTING_EXPERIMENTS: Record<keyof AgentSettings, string> = { agentsStartAgents: 'agents_start_agents', pullRequestLine: 'agent_pull_request_line', agentMessages: 'agent_messages', agentMessagesHideSummary: 'agent_messages_hide_summary' }
+export const AGENT_SETTING_EXPERIMENTS: Record<keyof AgentSettings, string> = { agentsStartAgents: 'agents_start_agents', pullRequestLine: 'agent_pull_request_line', agentMessages: 'agent_messages', agentMessagesHideSummary: 'agent_messages_hide_summary', agentsTellAgents: 'agents_tell_agents' }
 
 /** Whom a copy is for: the account, and this computer's machine in it. A machine is one account's, so a sign-in to
  *  another account on this computer has another. */

@@ -32,6 +32,18 @@ export const launch: EngineLaunch = {
     format: 'json', projects: 'projects', accepted: 'hasTrustDialogAccepted', entry: { allowedTools: [] },
   },
   /**
+   * `.mcp.json` in a folder above, such as the home's, is asked about as "New MCP server found in this project". Its
+   * default, "Continue without using this MCP server", adds the name to `disabledMcpjsonServers` in the folder's
+   * `.claude/settings.local.json` (localSettings); a name there is `rejected` and never asked again, whatever else
+   * approves it. A user settings `enabledMcpjsonServers`, `disabledMcpjsonServers` or `enableAllProjectMcpServers`
+   * decides it without asking (2.1.310 `Yft`, `EFn`).
+   */
+  inheritedMcp: {
+    file: '.mcp.json', servers: 'mcpServers', settings: '.claude/settings.local.json', rejected: 'disabledMcpjsonServers',
+    user: { home: { variable: 'CLAUDE_CONFIG_DIR', otherwise: { folder: '.claude' } }, file: 'settings.json',
+      approved: 'enabledMcpjsonServers', rejected: 'disabledMcpjsonServers', approveAll: 'enableAllProjectMcpServers' },
+  },
+  /**
    * Claude Code's `attribution.pr`: the text it adds to a pull request it opens. Set, it replaces Claude Code's own
    * line, so the value keeps that line first (2.1.296 `rro`: `pr: h.pr ?? <own line>`). `--settings` overrides the
    * person's user, project and local settings key by key (lodash `mergeWith`), so their `attribution.commit` stays.

@@ -168,7 +168,7 @@ export function createAgentSettingsSync(deps: {
       const changes = body && typeof body === 'object'
         ? Object.entries(body as Record<string, unknown>).filter(([key, value]) => key in AGENT_SETTING_EXPERIMENTS && typeof value === 'boolean')
         : []
-      if (!changes.length) return { status: 400, body: { error: { code: 'BAD_REQUEST', message: 'Nothing to change: send {"agentsStartAgents": true|false}, {"pullRequestLine": true|false}, {"agentMessages": true|false} or {"agentMessagesHideSummary": true|false}.' } } }
+      if (!changes.length) return { status: 400, body: { error: { code: 'BAD_REQUEST', message: 'Nothing to change: send {"agentsStartAgents": true|false}, {"pullRequestLine": true|false}, {"agentMessages": true|false}, {"agentMessagesHideSummary": true|false} or {"agentsTellAgents": true|false}.' } } }
       const asked = deps.session()
       if (!asked?.machineId) return { status: 409, body: { error: { code: 'SIGNED_OUT', message: AGENT_SETTINGS_SIGNED_OUT } } }
       const read = heard(await deps.backend('GET', EXPERIMENTAL_SETTINGS), asked)

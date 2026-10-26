@@ -5,6 +5,8 @@ import {
   CLAUDE_PROMPT, CLAUDE_REWIND_CONFIRM, CLAUDE_REWIND_LIST, CODEX_BROWSING_FULLSCREEN, CODEX_BROWSING_SCROLLBACK, CODEX_PROMPT,
 } from './__fixtures__/rewindPickers.js'
 import * as TAKEOVER from './__fixtures__/takeoverScreens.js'
+import { screen as claudeScreen } from '../engines/claude/screen.js'
+import { inspectCloseActivity } from './closeAgentService.js'
 
 const fixture = (name: string) => readFileSync(new URL(`./__fixtures__/${name}`, import.meta.url), 'utf8')
 const RULE = '─'.repeat(100)
@@ -145,12 +147,23 @@ describe('the engines\' own screens that take the composer\'s place', () => {
       CLAUDE_HISTORY_SEARCH: 'search_open',
       CLAUDE_HISTORY_SEARCH_NO_MATCH: 'search_open',
       CLAUDE_TRUST_PROMPT: 'trust_open',
+      // A question about trusting what the folder brings: held, and the person answers it.
+      CLAUDE_MCP_SERVER_PROMPT: 'trust_open',
       CLAUDE_SIGN_IN: 'sign_in_open',
     }
     for (const [name, hold] of Object.entries(expected)) {
       const engine = name.startsWith('CLAUDE') ? 'claude' : 'codex'
       expect(messageHold(engine, TAKEOVER[name as keyof typeof TAKEOVER]), name).toBe(hold)
     }
+  })
+
+  it('reads Claude Code\'s question about an inherited MCP server as the person\'s to answer, never as a draft', () => {
+    // What `harness wait` and `close` read: a harness at it needs the person, and has no conversation yet.
+    const reading = claudeScreen.inspect(TAKEOVER.CLAUDE_MCP_SERVER_PROMPT)
+    // A dialog before anything a composer holds, as at the folder's trust: its `❯` row is no draft to wait on.
+    expect(reading.pane).toMatchObject({ dialog: true, idle: false })
+    expect(reading.teamHold).toBe('team_waiting_user')
+    expect(inspectCloseActivity({ engine: 'claude', sessionId: '', transcriptPath: null, boundAt: null, launch: null, resumeOnly: false } as never, reading, undefined, false)).toBe('needs_input')
   })
 
   it('is not fooled by their words in the conversation, above a ready composer', () => {
@@ -178,6 +191,8 @@ describe('the engines\' own screens that take the composer\'s place', () => {
     expect(messageHold('codex', `${TAKEOVER.CODEX_TRUST_PROMPT}\n\n${CODEX_PROMPT}`)).toBeNull()
     expect(messageHold('codex', `${TAKEOVER.CODEX_UPDATE_PROMPT}\n\n${CODEX_PROMPT}`)).toBeNull()
     expect(messageHold('claude', `${TAKEOVER.CLAUDE_TRUST_PROMPT}\n${CLAUDE_PROMPT}`)).toBeNull()
+    expect(messageHold('claude', `${TAKEOVER.CLAUDE_MCP_SERVER_PROMPT}\n${CLAUDE_PROMPT}`)).toBeNull()
+    expect(messageHold('claude', `⏺ It said: New MCP server found in this project: argent\n  ❯ Continue without using this MCP server, it said\n${CLAUDE_PROMPT}`)).toBeNull()
     expect(messageHold('claude', `${TAKEOVER.CLAUDE_SIGN_IN}\n${CLAUDE_PROMPT}`)).toBeNull()
     // Another engine's pane is not read for them.
     expect(messageHold('cursor', TAKEOVER.CODEX_UPDATE_PROMPT)).toBeNull()
@@ -218,7 +233,7 @@ describe('what the person is told', () => {
       'Claude Code has its Rewind menu open, where Enter would pick a point to rewind to. Close it with Esc in its terminal, then send the message again.',
       'Claude Code is showing its transcript (ctrl+o), where a message is not typed. Close it with Esc in its terminal, then send the message again.',
       'Claude Code is searching its prompt history (ctrl+r), where Enter would send an earlier prompt. Close it with ctrl+c in its terminal, then send the message again.',
-      'Claude Code is asking whether to trust this folder. Answer it in its terminal, then send the message again.',
+      'Claude Code is asking whether to trust this folder or an MCP server it brings. Answer it in its terminal, then send the message again.',
       'Claude Code is asking whether to update. Answer it in its terminal, then send the message again.',
       'Claude Code is asking whether to switch to a new model. Answer it in its terminal, then send the message again.',
       'Claude Code is asking how to sign in. Sign in in its terminal, then send the message again.',

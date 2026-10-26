@@ -144,6 +144,24 @@ export type TrustContract = { home: LaunchHome; file: string } & (
 )
 
 /**
+ * The engine's question about MCP servers a folder inherits: a project file of servers (`file`, `servers` its map) in a
+ * folder ABOVE the one it opens, which it asks to use or not as it starts there. Its own "no", the question's default, is
+ * kept as `rejected` in `settings` in the folder. Harness records that same "no" for a folder it made empty itself,
+ * where it records the folder's trust, so its agent starts at once instead of waiting on the person: a Claude Code
+ * harness in a new project under the home sat at "New MCP server found in this project: argent" with its first message
+ * never typed, while `harness wait` read it as working (2026-10-26). A server the person decided in their user
+ * settings (`user`: `approved`, `rejected`, or `approveAll` on) is theirs and left alone; so is a file in the folder.
+ * Applied by kit/inheritedMcp.ts.
+ */
+export interface InheritedMcpContract {
+  file: string
+  servers: string
+  settings: string
+  rejected: string
+  user: { home: LaunchHome; file: string; approved: string; rejected: string; approveAll: string }
+}
+
+/**
  * Making a stopped conversation's history resumable before the engine is launched on it again. Applied by
  * kit/resumeRepair.ts, after the engine has stopped and before the tail moves and the engine starts.
  */
@@ -266,6 +284,8 @@ export interface EngineLaunch {
   /** The line, in that file, that has the engine read `file` too (Claude Code's `@AGENTS.md` import). */
   instructionImport?: { file: string; line: string }
   trust?: TrustContract
+  /** Recorded with `trust`, for the same folders (kit/inheritedMcp.ts). */
+  inheritedMcp?: InheritedMcpContract
   resumeRepair?: ResumeRepairContract
   attribution?: AttributionContract
   /** How the engine is told, as it starts, that it runs in Harness and how to use it (lib/agentAttribution.ts). */

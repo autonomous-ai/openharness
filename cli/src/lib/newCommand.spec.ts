@@ -13,8 +13,17 @@ const env = { cwd: '/work/repo', home: '/home/me', platform: 'linux' as const }
 describe('harness new: the words', () => {
   it('asks nothing: claude, here, on this machine', () => {
     expect(parseNewArgs([], env)).toEqual({
-      agent: 'claude', machine: null, cwd: '/work/repo', projectName: null, mode: 'auto', modeGiven: false, prompt: null, name: null, repo: null, acuLimit: null, json: false,
+      agent: 'claude', machine: null, cwd: '/work/repo', projectName: null, mode: 'auto', modeGiven: false, prompt: null, name: null, repo: null, acuLimit: null, model: null, json: false,
     })
+  })
+
+  it('sends a model as the app\'s box does, for the machine to check, and none for a terminal', () => {
+    const args = parseNewArgs(['claude', '--model', 'haiku', 'snake', '--', 'build', 'it'], env)
+    expect(args).toMatchObject({ agent: 'claude', model: 'haiku', projectName: 'snake', prompt: 'build it' })
+    expect(newAgentPayload(args, null)).toMatchObject({ engine: 'claude', model: 'haiku', projectSource: 'new', projectName: 'snake' })
+    expect(newAgentPayload(parseNewArgs(['claude'], env), '/work/repo')).not.toHaveProperty('model')
+    expect(() => parseNewArgs(['claude', '--model'], env)).toThrow('--model needs a value.')
+    expect(() => parseNewArgs(['terminal', '--model', 'haiku'], env)).toThrow('A terminal runs no model')
   })
 
   it('reads agent, --machine and a folder in any order', () => {

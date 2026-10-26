@@ -31,6 +31,7 @@ export const SETTINGS_USAGE = `Usage: harness settings [<name> on|off]
 What agents may do, as Settings ▸ Experimental shows it: experiments of your account, the same on each of its
 computers, and each off until you turn it on:
   agents-start-agents   agents may start, wait for and close harnesses of their own, and are told how
+  agents-tell-agents    an agent may give more work to a harness it started (harness tell), with no tab
   pull-request-line     a harness another agent starts says so in the pull requests it opens: one line beside the
                         engine's own
   agent-messages        agents in the same tab may message each other with harness send
@@ -40,6 +41,7 @@ computers, and each off until you turn it on:
 
 const ABOUT: Record<keyof AgentSettings, string> = {
   agentsStartAgents: 'agents may start, wait for and close harnesses of their own',
+  agentsTellAgents: 'an agent may give more work to a harness it started',
   pullRequestLine: 'a harness another agent starts says so in the pull requests it opens',
   agentMessages: 'agents in the same tab may message each other',
   agentMessagesHideSummary: 'the one-line summary of what a harness does is kept from a shared tab\'s other accounts',

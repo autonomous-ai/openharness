@@ -26,6 +26,11 @@ function takeover(capture: string): PaneTakeover | null {
   if (bottom.some((line) => CLAUDE_TRANSCRIPT_FOOTER.test(line))) return 'transcript'
   if (bottom.some((line) => CLAUDE_HISTORY_SEARCH.test(line))) return 'search'
   if (shown(/Quick safety check: Is this a project you created or one you trust\?/, /^\s*(?:❯\s*)?Yes, I trust this folder\s*$/)) return 'trust'
+  // Whether to trust the MCP servers of a `.mcp.json` the folder brings (one, or several to pick from; 2.1.310): its
+  // highlighted `❯ Continue without using this MCP server` was read as a draft in the composer, and `harness wait`
+  // waited on it as on an agent about to work (2026-10-26). It is the person's to answer, as the folder's trust is.
+  if (shown(/New MCP servers? found in this project/i, /^\s*(?:❯\s*)?Continue without using this MCP server\s*$/)
+    || shown(/new MCP servers found in this project/i, /Select any you wish to enable/i)) return 'trust'
   if (shown(/^\s*Select login method:\s*$/, /^\s*(?:❯\s*)?1\. Claude account with subscription\b/)) return 'sign_in'
   return null
 }

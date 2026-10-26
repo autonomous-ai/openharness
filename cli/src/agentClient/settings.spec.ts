@@ -20,7 +20,7 @@ function daemon(answer: (method: string, body: unknown) => { status: number; bod
   return { run, asked, out, err }
 }
 
-const OFF = { agentsStartAgents: false, pullRequestLine: false, agentMessages: false, agentMessagesHideSummary: false }
+const OFF = { agentsStartAgents: false, pullRequestLine: false, agentMessages: false, agentMessagesHideSummary: false, agentsTellAgents: false }
 
 describe('harness settings', () => {
   it('lists the account\'s settings as this computer keeps them, every one off until turned on', async () => {
@@ -28,6 +28,7 @@ describe('harness settings', () => {
     expect(await d.run()).toBe(0)
     expect(d.out).toEqual([[
       'agents-start-agents         off  agents may start, wait for and close harnesses of their own',
+      'agents-tell-agents          off  an agent may give more work to a harness it started',
       'pull-request-line           off  a harness another agent starts says so in the pull requests it opens',
       'agent-messages              off  agents in the same tab may message each other',
       'agent-messages-hide-summary off  the one-line summary of what a harness does is kept from a shared tab\'s other accounts',
