@@ -1200,6 +1200,8 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       }
       target.harnessId = command.harnessId
       target.replacement = { previousHarnessId: command.previousHarnessId, harnessId: command.harnessId }
+      // A new terminal is not the session that lost its task.
+      delete target.lostTask
       target.configuration = command.configuration
       target.configurationVersion = operationId
       if (command.startedSession) target.startedSession = command.startedSession
@@ -1514,6 +1516,8 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       if (state.conversations.some(c => activeWork(c) && c.assignment?.agentId === worker.id)) fail('AGENT_BUSY', 'This agent already owns an active assignment.')
       delete worker.workDecision
       delete worker.releaseId
+      // A person's own pick takes a worker that lost its task back into routing (model.ts lostTask); a Lead's does not.
+      if (actor.kind === 'person') delete worker.lostTask
       for (const reviewer of state.agents) {
         if (agentRole(reviewer) === 'reviewer' && group.agentIds.includes(reviewer.id) && reviewer.workDecision !== 'stop') delete reviewer.workDecision
       }
@@ -1558,6 +1562,8 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       assignment.status = command.status
       assignment.result = command.result
       if (['done', 'stopped'].includes(command.status)) finishWorker(state, assignment.agentId, group)
+      // Finished work shows the worker recovered from a task it lost before.
+      if (command.status === 'done') delete state.agents.find(a => a.id === assignment.agentId)?.lostTask
       if (changed) {
         const label = { working: 'Working', needs_human: 'Needs a human', blocked: 'Stuck', review: 'Ready for review', done: 'Done', stopped: 'Stopped' }[command.status]
         const lead = group.leadId
