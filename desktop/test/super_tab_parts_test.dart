@@ -293,4 +293,38 @@ void main() {
     // Versions are kept too: the overlap changes nothing on the copy.
     expect(kept.apply(recorded('changes')).changed, isFalse);
   });
+
+  test(
+    'a group a stub closed takes its data read by id at the same version',
+    () {
+      final parts = SuperTabParts.firstLoad(recorded('first_load'));
+      parts.apply({
+        ...recorded('changes'),
+        'groups': [
+          {
+            'key': 'aeef',
+            'version': 214100,
+            'changedAt': 1793010200000,
+            'dormant': true,
+          },
+        ],
+      });
+      // Held from before it closed: stale until read again.
+      expect(group(parts.state, 'aeef')['archived'], false);
+      final read = {
+        'key': 'aeef',
+        'version': 214100,
+        'changedAt': 1793010200000,
+        'data': {
+          ...group(parts.state, 'aeef'),
+          'archived': true,
+          'dormant': true,
+        },
+      };
+      expect(parts.addDormant([read]).changed, isTrue);
+      expect(group(parts.state, 'aeef')['archived'], true);
+      // Read once: the same copy again changes nothing.
+      expect(parts.addDormant([read]).changed, isFalse);
+    },
+  );
 }

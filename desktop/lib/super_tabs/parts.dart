@@ -80,6 +80,9 @@ class SuperTabParts {
       final part = _envelope(raw, live: true);
       parts._dormant[part['key'] as String] = part;
     }
+    parts._stale.addAll(
+      (json['stale'] as List? ?? const []).whereType<String>(),
+    );
     final seen = json['seen'];
     if (seen is Map) {
       for (final entry in seen.entries) {
@@ -115,6 +118,10 @@ class SuperTabParts {
   /// again never replaces it or brings it back (section 4.4).
   final _seen = <String, int>{};
 
+  /// Dormant groups held with their data from before a stub closed them: a read by id at the stub's version is
+  /// their current data.
+  final _stale = <String>{};
+
   /// The values worked out at read time, as the last read sent them.
   Map<String, dynamic> get derived => _derived;
 
@@ -144,11 +151,13 @@ class SuperTabParts {
           held.remove(key);
           if (kind == 'groups') {
             _dormant.remove(key);
+            _stale.remove(key);
             removed.add(key);
           }
         } else if (kind == 'groups' && part['dormant'] == true) {
           final last = held.remove(key) ?? _dormant[key];
           if (last != null) {
+            _stale.add(key);
             _dormant[key] = {
               ...last,
               'version': part['version'],
@@ -162,7 +171,10 @@ class SuperTabParts {
             throw const FormatException('A Swarm part arrived without data.');
           }
           held[key] = part;
-          if (kind == 'groups') _dormant.remove(key);
+          if (kind == 'groups') {
+            _dormant.remove(key);
+            _stale.remove(key);
+          }
         }
       }
     }
@@ -189,7 +201,10 @@ class SuperTabParts {
     for (final raw in groups) {
       final part = _envelope(raw, live: true);
       final key = part['key'] as String;
-      if (!_newer('groups:$key', part)) continue;
+      final current =
+          _stale.contains(key) && _int(part['version']) == _seen['groups:$key'];
+      if (!current && !_newer('groups:$key', part)) continue;
+      _stale.remove(key);
       changed = true;
       if (superTabMap(part['data'])['dormant'] == true) {
         active.remove(key);
@@ -250,6 +265,7 @@ class SuperTabParts {
     },
     'dormant': _dormant.values.toList(),
     'seen': Map<String, int>.of(_seen),
+    'stale': _stale.toList(),
   };
 
   Iterable<Map<String, dynamic>> _data(String kind) =>

@@ -258,7 +258,10 @@ class SuperTabController extends ChangeNotifier {
   bool offlineMachinesOpen = false;
 
   void toggleProject(String id) {
-    if (!expandedProjects.remove(id)) expandedProjects.add(id);
+    if (!expandedProjects.remove(id)) {
+      expandedProjects.add(id);
+      unawaited(loadDormant(id));
+    }
     _saveSoon();
     _changed();
   }
@@ -634,17 +637,24 @@ class SuperTabController extends ChangeNotifier {
   Map<String, String> mentions(String conversationId) =>
       Map.unmodifiable(_mentions[conversationId] ?? const {});
 
-  void select(String id) {
-    if (snapshot?.conversation(id) == null ||
-        (id == selectedId && !devicesSelected)) {
-      return;
+  /// Opens conversation [id]. One not held (a closed group a link names) is
+  /// read by id first; false when it cannot be read.
+  Future<bool> select(String id) async {
+    if (snapshot == null) return false;
+    if (snapshot!.conversation(id) == null) {
+      final parts = _parts;
+      if (parts == null || !await _readGroup(parts, id)) return false;
+      _redraw();
+      if (_disposed || snapshot?.conversation(id) == null) return false;
     }
+    if (id == selectedId && !devicesSelected) return true;
     devicesSelected = false;
     _acted();
     if (!snapshot!.isProjectLead(id)) {
       final group = snapshot!.conversation(id)!;
       expandedProjects.add(group.projectId);
-      if (group.archived) closedOpenProjects.add(group.projectId);
+      unawaited(loadDormant(group.projectId));
+      if (group.closed) closedOpenProjects.add(group.projectId);
     }
     selectedId = id;
     _viewVersion++;
@@ -652,6 +662,7 @@ class SuperTabController extends ChangeNotifier {
     _saveSoon();
     _changed();
     unawaited(loadMessages(id));
+    return true;
   }
 
   /// A visible transcript passes the boundary it displayed. The loaded messages
@@ -718,6 +729,15 @@ class SuperTabController extends ChangeNotifier {
       // read over a saved view wins, whatever it saved.
       final moved = read.changed || _showingSaved;
       if (moved) {
+        // A closed group named by the saved selection is read by id: a first
+        // load has only the active groups.
+        if (read.full &&
+            !parts.state['conversations'].any(
+              (Object? g) => (g as Map)['id'] == selectedId,
+            )) {
+          await _readGroup(parts, selectedId);
+          if (_disposed || accessRevoked) return;
+        }
         final raw = parts.state;
         if (_policy.adapts) {
           stateChanged = true;
@@ -730,6 +750,10 @@ class SuperTabController extends ChangeNotifier {
         }
         snapshot = next;
         final allowed = next.conversations.map((c) => c.id).toSet();
+        // What this device keeps of a group goes with the group itself (a
+        // tombstone), not when a read leaves it out: a closed group is out of
+        // every first load and still has its drafts and read marks.
+        final removed = read.removed;
         final localAccessChanged =
             !allowed.contains(selectedId) ||
             [
@@ -737,22 +761,22 @@ class SuperTabController extends ChangeNotifier {
               ..._terminals.keys,
               ..._mentions.keys,
               ..._readAt.keys,
-            ].any((id) => !allowed.contains(id)) ||
+            ].any(removed.contains) ||
             expandedProjects.any(
               (id) => !next.projects.any((project) => project.id == id),
             );
         _messages.removeWhere((id, _) => !allowed.contains(id));
         _rows.removeWhere((id, _) => !allowed.contains(id));
-        _drafts.removeWhere((id, _) => !allowed.contains(id));
+        _drafts.removeWhere((id, _) => removed.contains(id));
         _attachments.removeWhere((id, files) {
           if (allowed.contains(id)) return false;
           files.dispose();
           return true;
         });
-        _terminals.removeWhere((id, _) => !allowed.contains(id));
-        _mentions.removeWhere((id, _) => !allowed.contains(id));
+        _terminals.removeWhere((id, _) => removed.contains(id));
+        _mentions.removeWhere((id, _) => removed.contains(id));
         _before.removeWhere((id, _) => !allowed.contains(id));
-        _readAt.removeWhere((id, _) => !allowed.contains(id));
+        _readAt.removeWhere((id, _) => removed.contains(id));
         expandedProjects.removeWhere(
           (id) => !next.projects.any((project) => project.id == id),
         );
@@ -760,6 +784,13 @@ class SuperTabController extends ChangeNotifier {
           selectedId = next.projects.firstOrNull?.leadConversationId ?? 'lead';
         }
         if (localAccessChanged) _saveSoon();
+        // A new store holds no closed groups yet: the open projects read theirs.
+        if (read.full) {
+          _dormantPages.clear();
+          for (final project in expandedProjects) {
+            unawaited(loadDormant(project));
+          }
+        }
       }
       lastChangedAt = parts.lastChangedAt;
       error = null;
@@ -803,7 +834,7 @@ class SuperTabController extends ChangeNotifier {
   /// One read of the Swarm's parts: changes since the cursor once a first load
   /// is held, else a first load. A reload answer, or a change read refused (the
   /// Swarm or the reader's access moved), reads in full at once.
-  Future<({bool full, bool changed})> _readParts() async {
+  Future<({bool full, bool changed, Set<String> removed})> _readParts() async {
     final held = _parts;
     if (held != null) {
       try {
@@ -812,13 +843,23 @@ class SuperTabController extends ChangeNotifier {
           '$_path/changes?cursor=${Uri.encodeQueryComponent(held.cursor)}',
         );
         if (answer['reload'] != true) {
+          final SuperTabPartsChange change;
           try {
-            return (full: false, changed: held.apply(answer).changed);
+            change = held.apply(answer);
           } catch (_) {
             // Half merged: the next read starts again from a first load.
             if (identical(_parts, held)) _parts = null;
             rethrow;
           }
+          // A stub says a held group closed, not how: its data is read again.
+          for (final id in change.dormantGroups) {
+            if (held.isDormant(id)) await _readGroup(held, id);
+          }
+          return (
+            full: false,
+            changed: change.changed,
+            removed: change.removedGroups,
+          );
         }
       } on SuperTabFailure catch (failure) {
         if (!const {'FORBIDDEN', 'NOT_FOUND'}.contains(failure.code)) rethrow;
@@ -830,7 +871,89 @@ class SuperTabController extends ChangeNotifier {
       throw const FormatException('A different Swarm was returned.');
     }
     _parts = parts;
-    return (full: true, changed: true);
+    return (full: true, changed: true, removed: const <String>{});
+  }
+
+  /// Reads group [id] by id into [parts], active or closed (section 4.5).
+  /// False when the reader cannot read it (gone, or no longer theirs).
+  Future<bool> _readGroup(SuperTabParts parts, String id) async {
+    try {
+      final answer = await request(
+        'GET',
+        '$_path/groups/${Uri.encodeComponent(id)}',
+      );
+      if (!identical(parts, _parts) && _parts != null) return false;
+      parts.addDormant([answer['group']]);
+      return true;
+    } on SuperTabFailure catch (failure) {
+      if (const {'FORBIDDEN', 'NOT_FOUND'}.contains(failure.code)) return false;
+      rethrow;
+    }
+  }
+
+  /// The closed groups read for each project: where the next earlier page
+  /// starts, null when there is none. A project not here has not been read.
+  final _dormantPages = <String, String?>{};
+  final _dormantReads = <String, Future<void>>{};
+
+  /// Whether [projectId]'s closed groups have been read.
+  bool dormantLoaded(String projectId) => _dormantPages.containsKey(projectId);
+
+  /// Whether a read of [projectId]'s closed groups is under way.
+  bool dormantLoading(String projectId) => _dormantReads.containsKey(projectId);
+
+  /// Whether [projectId] has closed groups older than those read.
+  bool hasEarlierDormant(String projectId) => _dormantPages[projectId] != null;
+
+  /// Reads [projectId]'s closed groups, newest first, a page at a time: the
+  /// first page once, [earlier] the next one. Joins a read under way.
+  Future<void> loadDormant(String projectId, {bool earlier = false}) {
+    if (_disposed || accessRevoked || _parts == null) return Future.value();
+    if (_dormantReads[projectId] case final reading?) return reading;
+    if (earlier ? !hasEarlierDormant(projectId) : dormantLoaded(projectId)) {
+      return Future.value();
+    }
+    _changed();
+    return _dormantReads[projectId] = _readDormant(projectId, earlier)
+        .whenComplete(() {
+          _dormantReads.remove(projectId);
+          _changed();
+        });
+  }
+
+  Future<void> _readDormant(String projectId, bool earlier) async {
+    final parts = _parts!;
+    final before = earlier ? _dormantPages[projectId] : null;
+    try {
+      final answer = await request(
+        'GET',
+        '$_path/groups?dormant=1&projectId=${Uri.encodeQueryComponent(projectId)}'
+            '${before == null ? '' : '&before=${Uri.encodeQueryComponent(before)}'}',
+      );
+      if (_disposed || accessRevoked || !identical(parts, _parts)) return;
+      final change = parts.addDormant(answer['groups'] as List);
+      _dormantPages[projectId] = answer['next'] as String?;
+      // Nothing new read changes nothing drawn, nor the view kept.
+      if (change.changed) _redraw();
+    } catch (failure) {
+      // Not read: the next open of the list asks again.
+      appLog.warn(
+        'swarm',
+        'closed groups read failed: '
+            '${failure is SuperTabFailure ? '${failure.code} (status ${failure.statusCode})' : failure.runtimeType}',
+      );
+    }
+  }
+
+  /// Builds the snapshot again from the parts held, after a read on demand.
+  void _redraw() {
+    final parts = _parts;
+    if (parts == null || snapshot == null) return;
+    final raw = parts.state;
+    _shownState = raw;
+    snapshot = SuperTabSnapshot.fromJson(raw);
+    _viewVersion++;
+    _changed();
   }
 
   /// What a state read can change on screen, beside the messages.

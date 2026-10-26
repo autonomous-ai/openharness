@@ -89,8 +89,10 @@ class SwarmPartsBackend {
     return parts;
   }
 
-  /// Whether this backend leaves [group] out of the active set.
-  static bool dormant(Map<String, dynamic> group) => group['dormant'] == true;
+  /// Whether this backend leaves [group] out of the active set: archived by
+  /// hand, or marked dormant as the backend's sweep marks finished, quiet work.
+  static bool dormant(Map<String, dynamic> group) =>
+      group['dormant'] == true || group['archived'] == true;
 
   void _sync(Map<String, dynamic> state) {
     final now = split(jsonDecode(jsonEncode(state)) as Map<String, dynamic>);

@@ -89,6 +89,7 @@ class SuperTabConversation {
       leadId = row['leadId'] as String?,
       agentIds = List.unmodifiable((row['agentIds'] as List).cast<String>()),
       archived = row['archived'] == true,
+      dormant = row['dormant'] == true,
       checks = _list(
         row['checks'] ?? const [],
         (check) => Map<String, dynamic>.unmodifiable(check),
@@ -112,6 +113,13 @@ class SuperTabConversation {
   final String? leadId;
   final List<String> agentIds;
   final bool archived;
+
+  /// Out of the Swarm's active groups: archived, or finished and quiet for a
+  /// day. Read on demand; a new message brings it back.
+  final bool dormant;
+
+  /// Listed with the project's closed groups, not its active ones.
+  bool get closed => archived || dormant;
   final List<Map<String, dynamic>> checks;
 
   /// Persisted links may be absent on older backends; loaded messages still supply links.
