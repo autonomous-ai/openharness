@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -37,6 +39,14 @@ class _DevicesApi extends ApiClient {
   Map<String, dynamic>? listing;
   bool fails;
   void Function()? onRead;
+  Future<Map<String, dynamic>?>? profile;
+  int profileReads = 0;
+
+  @override
+  Future<Map<String, dynamic>?> me() async {
+    profileReads++;
+    return profile == null ? null : await profile;
+  }
 
   /// How many times the list was read.
   int reads = 0;
@@ -261,6 +271,53 @@ void main() {
       await app.offerPhoneForTest(atLaunch: false);
       expect(app.phoneOfferShowing, isFalse);
     });
+  });
+
+  test('a returning launch waits for the asynchronous account profile', () async {
+    final profile = Completer<Map<String, dynamic>?>();
+    final api = _DevicesApi(_listing([]))..profile = profile.future;
+    final store = MemoryStore();
+    final app = createApp(store: store)
+      ..status = AppStatus.authenticated
+      ..signedIn = true
+      ..api = api;
+    addTearDown(app.dispose);
+    final offer = app.offerPhoneForTest(atLaunch: true);
+    await pumpEventQueue();
+    expect(api.profileReads, 1);
+    expect(api.reads, 0);
+    expect(app.phoneOfferShowing, isFalse);
+    profile.complete({'user': {'id': 'loaded-account', 'email': 'a@example.test'}});
+    await offer;
+    expect(app.phoneOfferShowing, isTrue);
+    expect(api.profileReads, 1);
+    expect(api.reads, 1);
+    expect(store.values['phone_offer_returning.loaded-account'], isNull);
+    app.phoneOfferShown();
+    await pumpEventQueue();
+    expect(store.values['phone_offer_returning.loaded-account'], '1');
+  });
+
+  test('signing out while the returning profile loads leaves no record', () async {
+    final profile = Completer<Map<String, dynamic>?>();
+    final api = _DevicesApi(_listing([]))..profile = profile.future;
+    final store = MemoryStore();
+    final usage = AddPhoneRecorder();
+    final app = createApp(store: store, productMeasurement: usage)
+      ..status = AppStatus.authenticated
+      ..signedIn = true
+      ..api = api;
+    addTearDown(app.dispose);
+    final offer = app.offerPhoneForTest(atLaunch: true);
+    await pumpEventQueue();
+    expect(api.profileReads, 1);
+    app.signedIn = false;
+    profile.complete({'user': {'id': 'loaded-account', 'email': 'a@example.test'}});
+    await offer;
+    expect(app.phoneOfferShowing, isFalse);
+    expect(api.reads, 0);
+    expect(store.values, isEmpty);
+    expect(usage.skipped, ['not_signed_in']);
   });
 
   test('a returning launch without a stable account identity offers nothing', () async {

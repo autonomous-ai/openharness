@@ -48,7 +48,8 @@ Offer the existing card once per account on this computer when the launch is alr
 has no non-machine device other than self in `loadDevices()`, no card has been dismissed with × and Add Phone
 has never been opened here (`phone_offer_stopped`), this is neither web nor a viewer window, and no other
 phone card is showing. Historical `phone_offer_done` and `phone_offer_seen` do not rule out this returning
-account's launch offer. The account needs a stable identity and local state that can be read.
+account's launch offer. The account needs a stable identity and local state that can be read. The offer waits for the existing
+asynchronous profile load, without delaying the workspace; an unavailable identity records no offer.
 
 It is a card, never an automatic dialog, and waits for first arrival just like the existing card.
 Write `phone_offer_returning.<account id>` only when `phoneOfferShown` says it is on screen. Closing the app

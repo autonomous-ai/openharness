@@ -8036,12 +8036,17 @@ class AppNotifier extends ChangeNotifier {
     if (!_authWorkCurrent(revision)) return _skipPhoneOffer('account_changed');
     if (_phoneOffer) return _skipPhoneOffer('card_showing');
     if (signedIn) {
+      final stopped = await _phoneOfferStopReason();
+      if (stopped != null) return _skipPhoneOffer(stopped);
+      // Boot loads the profile independently of machine discovery. Wait for that
+      // identity here, without delaying the workspace or reading devices again.
+      if (currentUser?.id?.isNotEmpty != true) await _loadProfile();
+      final blocked = _phoneOfferBlock();
+      if (blocked != null) return _skipPhoneOffer(blocked);
       final account = currentUser?.id;
       if (account == null || account.isEmpty) {
         return _skipPhoneOffer('not_signed_in');
       }
-      final stopped = await _phoneOfferStopReason();
-      if (stopped != null) return _skipPhoneOffer(stopped);
       try {
         if (await _paneLayout!.storage.read('phone_offer_returning.$account') ==
             '1') {
