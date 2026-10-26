@@ -17,6 +17,9 @@ Widget authenticatedWorkspace(AppNotifier app) => CommunityForkHost(
   ),
 );
 
+/// A native build's console is stderr, read only by a developer: it keeps every line.
+void prepareConsole() {}
+
 /// A native build draws nothing around its screens.
 Widget appFrame(Widget app) => CommunityLinkHost(child: app);
 

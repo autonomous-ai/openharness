@@ -9,6 +9,7 @@ import 'p2p/web_terminal_p2p.dart';
 import 'shell/web_focus_ring.dart';
 import 'shell/web_store_banner.dart';
 import 'shell/web_workspace.dart';
+import 'web_console.dart';
 
 /// The signed-in screen of a browser build, chosen over
 /// `desktop_workspace.dart` by the conditional import in `main.dart`: the
@@ -17,6 +18,9 @@ Widget authenticatedWorkspace(AppNotifier app) => P2pResumeRetry(
   plugins: webTerminalP2p,
   child: HubReturn(child: WebWorkspace(app: app)),
 );
+
+/// A released browser build's console carries errors, not traces (see [prepareWebConsole]).
+void prepareConsole() => prepareWebConsole();
 
 /// What a browser build draws around every screen: on a phone, the bar that
 /// sends it to the Harness app in its store. Above the Navigator, so every
