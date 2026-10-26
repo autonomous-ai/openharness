@@ -65,6 +65,23 @@ def _accounts(machines: List[dict], reserve: int) -> List[dict]:
     return list(by_reading.values())
 
 
+def _add_back(accounts: List[dict], tasks: List[dict], actual: Dict[str, list], models: List[dict]) -> None:
+    """The snapshot is taken after the night's work spent its quota. Adding back what the actual picks are expected to have
+    spent gives every plan the same budget the night started with (an estimate: the spend comes from the size table)."""
+    rows = {m['id']: m for m in models}
+    for t in tasks:
+        if t['id'] not in actual:
+            continue
+        machine_id, picked = actual[t['id']]
+        model = rows[picked]
+        if not model.get('subscription', True):
+            continue
+        account = next((a for a in accounts if [machine_id, model['engine']] in a['members']), None)
+        if account is not None:
+            for window in account['budget']:
+                account['budget'][window] += t['spend'].get(window, 0.0) * model['cost'] / 2
+
+
 def _actual_model(configuration: dict, grid: Dict[str, str], model_ids: set) -> Optional[str]:
     engine, model = configuration.get('engine'), str(configuration.get('model') or '')
     if model in grid:
@@ -115,6 +132,9 @@ def convert(status: dict, route_log: List[dict], config: dict) -> dict:
         picked = _actual_model(assignment['configuration'], grid, ids)
         if picked is not None:
             actual[g['id']] = [assignment['execution']['machineId'], picked]
+    accounts = _accounts(machines, policy['quotaReserve'])
+    if config.get('budget', 'start') == 'start':
+        _add_back(accounts, tasks, actual, models)
     task_ids = {t['id'] for t in tasks}
     for t in tasks:
         for dep in t['deps']:
@@ -125,7 +145,7 @@ def convert(status: dict, route_log: List[dict], config: dict) -> dict:
         'machines': [{'id': m['machineId'], 'name': m['name'], 'slots': m['maxAgents'],
                       'engines': [e for e in m['engines'] if e in ENGINES]} for m in machines],
         'models': models,
-        'accounts': _accounts(machines, policy['quotaReserve']),
+        'accounts': accounts,
     }
     return {'instance': instance, 'actual': actual, 'estimates': estimates, 'excluded': excluded}
 

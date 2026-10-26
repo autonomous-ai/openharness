@@ -76,8 +76,14 @@ class ConvertTest(unittest.TestCase):
                                'claude-sonnet': ('claude', 2, 2, None, True), 'grid-deepseek/flash': ('claude', 1, 1, 4, False)})
 
     def test_weekly_quota_less_the_reserve_is_the_budget_and_identical_readings_share_an_account(self):
-        got = sorted((a.members, a.budget) for a in self.inst.accounts)
+        out = convert(STATUS, ROUTE_LOG, {**CONFIG, 'budget': 'now'})
+        got = sorted((tuple(map(tuple, a['members'])), a['budget']) for a in out['instance']['accounts'])
         self.assertEqual(got, [((('m1', 'codex'), ('m2', 'codex')), {'weekly': 23.0}), ((('m2', 'claude'),), {'weekly': 18.0})])
+
+    def test_by_default_the_budget_is_the_start_of_the_night_with_the_actual_picks_spend_added_back(self):
+        # g1: large on Opus takes 8 x 3 / 2 = 12 from m2's Claude account; g2: small on Codex takes 1 from the shared one.
+        got = sorted((a.members, a.budget) for a in self.inst.accounts)
+        self.assertEqual(got, [((('m1', 'codex'), ('m2', 'codex')), {'weekly': 24.0}), ((('m2', 'claude'),), {'weekly': 30.0})])
 
     def test_a_task_takes_its_assessment_from_the_route_log(self):
         t = self.inst.task('g1')
