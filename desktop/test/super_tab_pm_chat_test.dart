@@ -247,6 +247,34 @@ void main() {
       },
     );
 
+    testWidgets(
+      'the chat lists only its own people: the person and the Product Manager',
+      (tester) async {
+        final server = swarm();
+        (server.state['agents'] as List).add({
+          'id': 'builder',
+          'name': 'Builder',
+          'machineId': 'm1',
+          'harnessId': 'h2',
+          'contributorId': 'owner',
+          'configuration': {'engine': 'claude', 'model': 'opus'},
+        });
+        final c = await show(tester, server);
+        expect(
+          find.byKey(const ValueKey('super-person-owner')),
+          findsOneWidget,
+        );
+        await tester.tap(entry);
+        await tester.pumpAndSettle();
+
+        expect(find.byKey(const ValueKey('super-person-peer')), findsOneWidget);
+        expect(find.byKey(const ValueKey('super-person-owner')), findsNothing);
+        expect(find.text('Lead'), findsWidgets);
+        expect(find.text('Builder'), findsNothing);
+        await close(tester, c);
+      },
+    );
+
     testWidgets('a reply from the Product Manager marks the entry unread', (
       tester,
     ) async {

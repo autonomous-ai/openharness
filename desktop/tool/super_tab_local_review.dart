@@ -9,13 +9,16 @@
 /// reaches a real account or production data.
 library;
 
-import 'package:dio/dio.dart';
+import 'dart:convert';
+import 'dart:js_interop';
+
 import 'package:flutter/material.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/shared/theme/color_palette.dart';
 import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/model.dart';
 import 'package:harness/super_tabs/view.dart';
+import 'package:web/web.dart' as web;
 
 const _people = {
   'owner': ('local-owner-token', 'owner@local.test'),
@@ -24,6 +27,18 @@ const _people = {
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  try {
+    await _review();
+  } catch (error, stack) {
+    // A review page that cannot load says why, on the page and in the console.
+    debugPrint('Local review failed: $error\n$stack');
+    runApp(
+      MaterialApp(home: Scaffold(body: Text('Local review failed: $error'))),
+    );
+  }
+}
+
+Future<void> _review() async {
   final query = Uri.base.queryParameters;
   final person = _people[query['as'] ?? 'owner'];
   final tabId = query['tab'];
@@ -31,30 +46,35 @@ Future<void> main() async {
     throw StateError('Local review needs a loopback origin, ?tab= and ?as=');
   }
   final (token, email) = person;
-  final dio = Dio(
-    BaseOptions(
-      baseUrl: Uri.base.origin,
-      headers: {'authorization': 'Bearer $token'},
-      validateStatus: (_) => true,
-    ),
-  );
   Future<Map<String, dynamic>> request(
     String method,
     String path, {
     Map<String, dynamic>? body,
   }) async {
-    final response = await dio.request<Map<String, dynamic>>(
-      path,
-      data: body,
-      options: Options(method: method),
+    final response = await web.window
+        .fetch(
+          path.toJS,
+          web.RequestInit(
+            method: method,
+            headers:
+                {
+                      'authorization': 'Bearer $token',
+                      'content-type': 'application/json',
+                    }.jsify()!
+                    as web.HeadersInit,
+            body: body == null ? null : jsonEncode(body).toJS,
+          ),
+        )
+        .toDart;
+    final answer = superTabMap(
+      jsonDecode((await response.text().toDart).toDart),
     );
-    final answer = response.data ?? const {};
     if (answer['success'] != true) {
       final error = superTabMap(answer['error']);
       throw SuperTabFailure(
         error['code'] as String? ?? 'ERROR',
         error['message'] as String? ?? 'Failed.',
-        statusCode: response.statusCode ?? 0,
+        statusCode: response.status,
       );
     }
     return superTabMap(answer['data']);
@@ -62,6 +82,7 @@ Future<void> main() async {
 
   // The account id the backend gave this person on first use.
   final first = await request('GET', '/api/super-tabs/$tabId/parts');
+  debugPrint('review: first load read');
   final accountId = [
     for (final member in first['members'] as List)
       if ((member as Map)['data']['email'] == email) member['key'] as String,
@@ -76,7 +97,9 @@ Future<void> main() async {
     save: (_) async {},
     pollInterval: Duration.zero,
   );
+  debugPrint('review: account $accountId');
   await controller.refresh();
+  debugPrint('review: refreshed, error ${controller.error}');
   final project = controller.snapshot!.projects.first.id;
   if (!controller.expandedProjects.contains(project)) {
     controller.toggleProject(project);
@@ -86,7 +109,9 @@ Future<void> main() async {
   } else if (query['group'] case final group?) {
     await controller.select(group);
   }
+  debugPrint('review: opened ${controller.selectedId}');
   await controller.loadMessages(controller.selectedId);
+  debugPrint('review: messages loaded');
   runApp(
     MaterialApp(
       debugShowCheckedModeBanner: false,

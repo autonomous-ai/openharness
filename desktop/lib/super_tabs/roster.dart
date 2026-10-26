@@ -268,16 +268,20 @@ class _SuperTabRosterState extends State<SuperTabRoster> {
         .where((p) => p.id == _agentProjectId(agent))
         .firstOrNull;
     final customRole = c.snapshot!.activeRoleForAgent(agent);
-    final role = customRole?.name ?? (c.snapshot!.isLead(agent.id)
-        ? 'Product Manager'
-        : agent.isReviewer
-        ? 'Reviewer'
-        : 'Engineer');
-    final badge = customRole?.name ?? (c.snapshot!.isLead(agent.id)
-        ? 'PM'
-        : agent.isReviewer
-        ? 'Rev'
-        : 'Dev');
+    final role =
+        customRole?.name ??
+        (c.snapshot!.isLead(agent.id)
+            ? 'Product Manager'
+            : agent.isReviewer
+            ? 'Reviewer'
+            : 'Engineer');
+    final badge =
+        customRole?.name ??
+        (c.snapshot!.isLead(agent.id)
+            ? 'PM'
+            : agent.isReviewer
+            ? 'Rev'
+            : 'Dev');
     final status = info.status ?? 'Status unavailable';
     final tooltip = [
       [name, role, ?project?.name].join(' · '),
@@ -388,17 +392,25 @@ class _SuperTabRosterState extends State<SuperTabRoster> {
     final projectId = c.selected?.projectId == ''
         ? null
         : c.selected?.projectId;
+    // A private conversation lists only who reads it: its people and the
+    // agents in it, the project's Lead.
+    final audience = c.selected?.audience;
     final members =
         state?.agents
             .where(
               (agent) =>
-                  projectId == null || _agentProjectId(agent) == projectId,
+                  (projectId == null || _agentProjectId(agent) == projectId) &&
+                  (audience == null || c.selected!.agentIds.contains(agent.id)),
             )
             .toList() ??
         const <SuperTabAgent>[];
     final leads = members.where((a) => state!.isLead(a.id)).toList();
     final agents = members.where((a) => !state!.isLead(a.id)).toList();
-    final people = state?.people ?? const <SuperTabPerson>[];
+    final people =
+        state?.people
+            .where((p) => audience == null || audience.contains(p.id))
+            .toList() ??
+        const <SuperTabPerson>[];
     final shownPeople = _allPeople ? people : people.take(_peopleShown);
     return [
       SuperTabSectionHeading(
