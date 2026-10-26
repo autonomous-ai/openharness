@@ -17,7 +17,7 @@ code was changed. Local models (engines on a member's machine) are out of scope.
 | MacbookPro.local | ken15 | macOS | not read | not read | not read | Shares the DeepSeek API. |
 | MACs-Mac-Studio.local | ken15 | macOS | 0.4.72 | 0.3.59 | not read | Runs the Lead. Read by the Lead. |
 | WIN-DELL | ken15 | Windows | not read | none (assumed) | not read | No grid is published for Windows. |
-| MacBooks-MacBook-Pro-19.local | tony | macOS | 0.4.72 | 0.3.59 (installed 09:22 by flow 4) | 1.3.19 | This Engineer's machine. |
+| MacBooks-MacBook-Pro-19.local | tony | macOS | 0.4.72, then 0.4.73 from 09:45:55 | 0.3.59 (installed 09:22 by flow 4) | 1.3.19 | This Engineer's machine. |
 | Diego's Mac | diego | macOS | not read | not read | not read | |
 | MacBookPro2021.local | phamngochuy | macOS | not read | not read | not read | Its readings carry no Local models field. |
 
@@ -25,7 +25,8 @@ code was changed. Local models (engines on a member's machine) are out of scope.
 
 | Flow | Machine | Result | Evidence |
 | --- | --- | --- | --- |
-| 1. Local models on and ready | Swarm (owner's computers) | **fail** | Status flipped between ready and "Grid could not be set up on this computer. Try again." every ~60 s until 09:45:45; [F1](#f1) |
+| 1. Local models on and ready | Swarm (owner's computers) | **fail** on 0.4.72 | Status flipped between ready and "Grid could not be set up on this computer. Try again." every ~60 s until 09:45:45; [F1](#f1) |
+| 1. Local models on and ready, recheck | Swarm, CLI 0.4.73 | pass | 82 of 82 reads ready from 10:23:23 to 10:38:17, none failed since 09:46:02 ([Flow 1](#flow-1-local-models-on-and-ready)) |
 | 1. Membership and visibility | MacBooks-MacBook-Pro-19.local | pass | `grid --remote ls` lists `swarm-626d5615ecf5`; `grid --remote models swarm-626d5615ecf5` lists the DeepSeek model on node MacbookPro.local |
 | 2. Share an API: machine readings | MacbookPro.local | pass | Its reading lists the model with kind `api` (every status read 09:15–09:28) |
 | 2. Share an API: Local models window preview | MacbookPro.local | not verified | Needs a screenshot from Ken |
@@ -38,6 +39,7 @@ code was changed. Local models (engines on a member's machine) are out of scope.
 | 4. Builder on DeepSeek, through the relay | MACs-Mac-Studio.local | pass | Arlo: task done with the expected answers |
 | 4. Builder on DeepSeek, through the relay | Diego's Mac | pass | Arlo (second of that name): task done; started 6 min 22 s after it was queued |
 | 4. Builder on DeepSeek, through the relay | WIN-DELL | **fail** | Dispatched 09:38:12, never runs, no error shown; [F5](#f5) |
+| 4. Builder on DeepSeek after CLI 0.4.73 (post-fix recheck) | MACs-Mac-Studio.local | pass | Requested 10:22:00, running 10:22:41, expected answers, model DeepSeek through OpenRouter |
 | 5. Shared with you → Offer to Swarm | MacBooks-MacBook-Pro-19.local | not in this build | The Desktop hides Shared with you and Offer to Swarm on purpose; the plan still describes them; [F6](#f6) |
 | 6. Models service restart on the sharing machine | MacbookPro.local | pending | Needs Ken's ok |
 | 7. Delete the saved API (#1716) | MacbookPro.local | pending | Last; needs Ken's agreement |
@@ -55,8 +57,20 @@ fixed rhythm — about 20 s ready, then about 40 s with
 ```
 
 A second watcher, reading every ~17 s from 09:32, saw the same rhythm (1–3 failed reads a minute) until the last failed
-read at 09:45:45; from 09:46:02 every read said ready (checked to 09:49). Nothing changed on the Lead's machine then;
-what changed on the owner's other computers is asked of Ken.
+read at 09:45:45; from 09:46:02 to 10:23:18 all 134 reads said ready, and MacbookPro.local's reading listed DeepSeek
+(under 45 s old) and grid listed it on every one of them.
+
+**Fixed in CLI 0.4.73.** `bf77fd7ca` (#1730, tag `v0.4.73_cli` at `f7b93bc4b`, released at about 09:46): an owner's
+computer that cannot set grid up no longer reports a failure over a grid the Swarm shows ready, unless it kept the grid
+ready itself, and does not ask grid again while another computer keeps it (`cli/src/superTabs/swarmGrids.ts`). The fix
+acts on the failing computer, so the flapping stops once that one runs 0.4.73. MacBooks-MacBook-Pro-19.local updated
+itself at 09:45:55 (`[update] applying 0.4.72 → 0.4.73`); it is not the owner's, so it never reported this status.
+**Recheck on 0.4.73** (Lead's request): the Swarm state read every ~11 s from 10:23:23 to 10:38:17, 82 reads, all
+`{"enabled": true, "ready": true}` with no error; the 17 s watcher over the same span read ready 52 times out of 52, and
+MacbookPro.local's reading listed DeepSeek, under 45 s old, on all 53 of its reads. Before the fix the same 10 s polling
+saw 18 failures in 30 reads. A Builder on DeepSeek on Mac Studio passed at 10:22 ([flow 4](#flow-4-builders-on-the-shared-api-model)).
+Which of the owner's computers run 0.4.73 cannot be read from here (readings carry no CLI version); asked of the Lead.
+**F1 is fixed on 0.4.73**; which computer failed is still not confirmed by its log.
 
 **Which computer, and why.** Every computer signed in as the Swarm owner keeps the Swarm's grid: the daemon's Super Tab
 host runs `SwarmGrids` on each of them (`cli/src/superTabs/host.ts` `pollMachines`), `GET /api/super-tabs/grids` answers
@@ -82,7 +96,11 @@ managed grid (`cli/src/lib/runtimeInstall.ts:321-323`: "no grid is published for
   (`desktop/lib/models/swarm_models_target.dart:62-66`). Observed on MacBooks-MacBook-Pro-19.local (Tony, a member) at
   09:34: Manage models showed "The Swarm owner has not set up models yet." and, in red, "Could not set up: Grid could
   not be set up on this computer. Try again." (Tony's screenshots, posted by the Lead).
-- WIN-DELL retries grid's install every minute (assumed, pending its log).
+- WIN-DELL retried grid's install every minute (assumed, pending its log); on 0.4.73 it asks only once the Swarm shows
+  failed.
+- What 0.4.73 leaves (code reading, not tested): a computer that cannot run grid still cannot run it ([F5](#f5)), and if
+  every owner computer that can goes away, the status keeps saying ready, since only a computer that kept it ready
+  reports a failure over ready.
 
 ## Flow 3
 
@@ -118,6 +136,7 @@ Expected: 8 rows, `4`, `?? smoke-check.txt`.
 | Diego's Mac (Arlo) | 09:22:13 | 09:28:35 | about 09:30 | 8, 4, `?? smoke-check.txt`, commit `0df48fc38` | Builder's report |
 | MacbookPro.local, first start | 09:22 | — | — | — | Failed 09:28:25; see [F3](#f3) |
 | MacbookPro.local, retry | about 09:30 | 09:34:35 | about 09:35:30 (56 s of work) | 8, 4, `?? smoke-check.txt`, commit `018467761` | Builder's report: DeepSeek, high effort |
+| MACs-Mac-Studio.local, after CLI 0.4.73 | 10:22:00 | 10:22:41 | soon after; stopped by the Lead | 8, 4, `?? smoke-check.txt`, commit `0d3485bad` | Builder's report: `deepseek/deepseek-v4.1-flash-1017` via OpenRouter |
 
 On MacBooks-MacBook-Pro-19.local, which had never used grid, the daemon's log shows the whole launch on its own
 (local time UTC+7):
@@ -143,7 +162,8 @@ Observations, not failures of this add-on:
 - Diego's Mac's `harness.log` (pasted by Diego) repeats `[super-tabs] This agent is no longer in the Super Tab.` about
   every 6 s from 09:26:59 to 09:30:36, and logs `Could not close a session the Swarm ended (NOT_A_MEMBER).` at 09:29:41:
   its host keeps asking about an agent that has left. Its readings then stopped from about 09:31:50, when its Builder
-  was stopped (229 s old at 09:35:42, 246 s at 09:35:59); cause not known.
+  was stopped (229 s old at 09:35:42, 246 s at 09:35:59), and came back at 10:19:19 (11 s old), about 47 minutes later;
+  cause not known.
 - The retry's new worktree on MacbookPro.local already had `M CLAUDE.md` before the Builder touched it.
 - The same `This agent is no longer in the Super Tab.` line is in MacBooks-MacBook-Pro-19.local's own `harness.log`
   27,772 times since 23 Oct 22:45 (UTC+7), still about every 6 s at 09:52 UTC: it predates this test.
@@ -158,6 +178,7 @@ Observations, not failures of this add-on:
 cannot run grid.** See [Flow 1](#flow-1-local-models-on-and-ready). Reproduce: be the owner of a Swarm on two computers
 signed in to the same account, one of which cannot set grid up (WIN-DELL here); turn Local models on; read the Swarm
 state every 10 s for five minutes. Exact error: `Grid could not be set up on this computer. Try again.`
+Status: fixed in CLI 0.4.73 (`bf77fd7ca`), rechecked 10:23–10:38 with no failed read.
 
 ### F2
 
@@ -236,6 +257,7 @@ start and for grid's set-up are asked of Ken.
 
 Two further effects:
 - Routing offered WIN-DELL for the shared model like every other machine (route 3a listed it), although it cannot run it.
+  It still does on 0.4.73: the Lead's route at 10:22 named all six machines, WIN-DELL included.
 - The Swarm has no way to cancel a dispatched start, and the held request would start a Builder if WIN-DELL ever got a
   grid. The Lead asked Ken to close any Builder that appears there.
 
