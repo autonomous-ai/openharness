@@ -14,8 +14,11 @@ export function configurationObservation(core: CoreApi, machineId: string, value
   const profile = parseRuntimeProfile(core.agents.runtimeProfile(native))
   if (!profile || profile.sessionId !== native.agentId || profile.engine !== native.engine || profile.model.length > 200) return null
   const sameModel = previous.engine === native.engine && previous.model === profile.model
+  // Claude Code never reports an effort it was launched with (--effort), so its reading falls back to 'auto': for the same
+  // model, that is no news about a known effort. Builders started with opus high read as auto until 2026-10-27.
+  const unread = profile.effort === 'auto' && sameModel && typeof previous.effort === 'string'
   const configuration = {
-    engine: native.engine, model: profile.model, effort: profile.effort,
+    engine: native.engine, model: profile.model, effort: unread ? previous.effort : profile.effort,
     contextWindow: sameModel && Number.isSafeInteger(previous.contextWindow) && Number(previous.contextWindow) > 0 ? previous.contextWindow : null,
     engineVersion: previous.engine === native.engine && typeof previous.engineVersion === 'string' ? previous.engineVersion : null,
   }
