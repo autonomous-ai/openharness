@@ -411,6 +411,10 @@ function normalizedAgentEngine(value: unknown): AgentEngine {
 }
 const LOCK_WAIT_MS = 20
 const LOCK_ATTEMPTS = 100
+/** A lock directory with no owner.json, or one that names no one, is a crash (or a full disk) between mkdir and the
+ *  owner write: a window of microseconds. Older than this it is debris, not a lock (daemonSpawnLock.ts does the same);
+ *  left alone it made every registry write fail with "registry lock is busy" until someone removed it by hand. */
+const OWNERLESS_STALE_MS = 5_000
 
 function sleepSync(ms: number): void {
   const view = new Int32Array(new SharedArrayBuffer(4))
@@ -435,11 +439,18 @@ function withRegistryFileLock<T>(apply: () => T): T {
       mkdirSync(LOCK_DIR, { mode: 0o700 })
       created = true
       const owner = join(LOCK_DIR, 'owner.json')
-      const fd = openSync(owner, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600)
       try {
-        writeFileSync(fd, JSON.stringify({ pid: process.pid, ...processIdentity, token }))
-        fsyncSync(fd)
-      } finally { closeSync(fd) }
+        const fd = openSync(owner, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600)
+        try {
+          writeFileSync(fd, JSON.stringify({ pid: process.pid, ...processIdentity, token }))
+          fsyncSync(fd)
+        } finally { closeSync(fd) }
+      } catch (ownerError) {
+        // The directory is ours (mkdir made it) but names no one: remove it whole, or it outlives this process ownerless.
+        rmSync(LOCK_DIR, { recursive: true, force: true })
+        created = false
+        throw ownerError
+      }
       try {
         return apply()
       } finally {
@@ -451,11 +462,14 @@ function withRegistryFileLock<T>(apply: () => T): T {
       let ownerPid = 0
       let ownerStartMarker = ''
       let ownerToken = ''
+      let since = Date.now()
       try {
         const stat = lstatSync(LOCK_DIR)
+        since = stat.mtimeMs
         if (!stat.isDirectory() || stat.isSymbolicLink() || (uid !== null && stat.uid !== uid)
           || (stat.mode & 0o777) !== 0o700) throw new Error('registry lock has unsafe owner, mode, or type')
         const ownerStat = lstatSync(join(LOCK_DIR, 'owner.json'))
+        since = Math.max(since, ownerStat.mtimeMs)
         if (!ownerStat.isFile() || ownerStat.isSymbolicLink() || (uid !== null && ownerStat.uid !== uid)
           || (ownerStat.mode & 0o777) !== 0o600) throw new Error('registry lock owner has unsafe owner, mode, or type')
         const owner = JSON.parse(readFileSync(join(LOCK_DIR, 'owner.json'), 'utf8')) as {
@@ -467,7 +481,12 @@ function withRegistryFileLock<T>(apply: () => T): T {
       } catch (inspectionError) {
         if (inspectionError instanceof Error && inspectionError.message.startsWith('registry lock')) throw inspectionError
       }
-      if (ownerPid > 0 && ownerToken && !lockOwnerAlive(ownerPid, ownerStartMarker)) {
+      if (!(ownerPid > 0 && ownerToken)) {
+        if (Date.now() - since > OWNERLESS_STALE_MS) {
+          rmSync(LOCK_DIR, { recursive: true, force: true })
+          continue
+        }
+      } else if (!lockOwnerAlive(ownerPid, ownerStartMarker)) {
         try {
           const current = JSON.parse(readFileSync(join(LOCK_DIR, 'owner.json'), 'utf8')) as {
             pid?: unknown; startMarker?: unknown; generationMarker?: unknown; token?: unknown

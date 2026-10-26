@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { processStartMarker } from './processLiveness.js'
@@ -488,6 +488,29 @@ describe('registry remote display names', () => {
     })?.entry.agentId).toBe('after-reused-pid-lock')
     expect(registry.byAgent('after-reused-pid-lock')).toBeTruthy()
   })
+
+  it.each([['no owner file', null], ['an empty owner file', ''], ['an owner file naming no one', '{}']])(
+    'reclaims an old lock with %s, and leaves a fresh one to its creator', async (_label, owner) => {
+      const { registry } = await loadRegistryModule()
+      registry.load()
+      const lockDir = join(dataDir, 'registry.json.lock')
+      const leave = (age: number) => {
+        mkdirSync(lockDir, { mode: 0o700 })
+        if (owner !== null) writeFileSync(join(lockDir, 'owner.json'), owner, { mode: 0o600 })
+        const at = (Date.now() - age) / 1000
+        if (owner !== null) utimesSync(join(lockDir, 'owner.json'), at, at)
+        utimesSync(lockDir, at, at)
+      }
+      leave(60_000)
+      expect(registry.openProcessAgent({ agentId: 'after-ownerless-lock', engine: 'claude', tmuxPane: '%34',
+        processIdentity: processIdentity(834) })?.entry.agentId).toBe('after-ownerless-lock')
+      expect(existsSync(lockDir)).toBe(false)
+      leave(0)
+      registry.openProcessAgent({ agentId: 'during-fresh-lock', engine: 'claude', tmuxPane: '%35', processIdentity: processIdentity(835) })
+      expect(existsSync(lockDir)).toBe(true)   // its creator may be writing owner.json right now: never taken from it
+      expect(readFileSync(join(dataDir, 'registry.json'), 'utf8')).not.toContain('during-fresh-lock')
+      rmSync(lockDir, { recursive: true, force: true })
+    })
 
   it('deduplicates nested panes by process identity', async () => {
     const { registry } = await loadRegistryModule()
