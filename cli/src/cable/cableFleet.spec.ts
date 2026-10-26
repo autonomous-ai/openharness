@@ -812,6 +812,20 @@ describe('a Harness Pro that is silent from the moment its port opens', () => {
     } finally { await s.fleet.stop() }
   })
 
+  it('is never reset when its port has no USB serial, since only a serial says which board it is: notice only', async () => {
+    const s = setup()
+    const nameless = { path: '/dev/pro', vendorId: 0x303a, productId: 0x1001, session: '7' }
+    s.f.setPorts([nameless])
+    s.verdicts.markDial(nameless, 'pro')
+    try {
+      s.fleet.start()
+      await vi.waitFor(() => expect(Quiet.made).toHaveLength(1))
+      Quiet.made[0].silent()
+      await vi.waitFor(() => expect(s.rows()).toEqual([{ id: '/dev/pro', attached: false, board: 'pro', problem: NOTICE }]))
+      expect(s.reset).not.toHaveBeenCalled()
+    } finally { await s.fleet.stop() }
+  })
+
   it('never resets a silent board this computer has not seen greet as a Harness Pro', async () => {
     for (const known of ['nothing', 'round dial'] as const) {
       const s = setup({ serial: 'CC:03' })

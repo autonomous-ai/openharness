@@ -317,7 +317,8 @@ export class CableFleet {
       this.entries.delete(id)
       await entry.session.stop()
       if (this.unanswered.get(id) !== held) return
-      if (!again && await this.reset(entry.port.path)) {
+      // Only a USB serial says which board this is; a port without one is told, never reset.
+      if (!again && entry.port.serialNumber && await this.reset(entry.port.path)) {
         this.host.log(`cable: Harness Pro on ${entry.port.path} is silent — reset it over the cable, looking again [usb ${id}]`)
         if (this.unanswered.get(id) === held) held.stage = 'reset'
         return
