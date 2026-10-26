@@ -14,14 +14,14 @@
  * Its messages are kept under the pseudo-tab `told`: no tab carries them, and nothing that reads a tab's log shows them.
  */
 import type { Ledger, LedgerMember } from '../agentClient/ledger.js'
+import { askThePersonFirst } from '../lib/agentSettings.js'
 import { engineName, shown, type Message } from './model.js'
 
 /** The tab id a told message is kept under. No desk tab has it: ids there are the backend's. */
 export const TOLD_TAB = 'told'
 
-/** Said when the person has not allowed it. The agent should not retry: it starts a new harness or does the work itself. */
-export const TELL_OFF_TEXT = 'Agents may not give more work to harnesses they started: the person turns on "agents-tell-agents" '
-  + '(`harness settings agents-tell-agents on`). Until then, start a new harness with the whole task, or do the work yourself.'
+/** Said when the person has not allowed it: the agent asks them, and retries only after their yes. */
+export const TELL_OFF_TEXT = `Agents may not give more work to harnesses they started yet. ${askThePersonFirst('agents-tell-agents', 'start a new harness with the whole task, or do the work yourself.')}`
 
 export interface TellRefusal { code: 'TELL_OFF' | 'NOT_YOURS' | 'NOT_RUNNING'; message: string }
 

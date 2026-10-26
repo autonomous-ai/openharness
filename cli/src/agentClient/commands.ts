@@ -18,7 +18,7 @@ import { randomBytes } from 'node:crypto'
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { hostname } from 'node:os'
 import { join } from 'node:path'
-import { readAgentSettings } from '../lib/agentSettings.js'
+import { askThePersonFirst, readAgentSettings } from '../lib/agentSettings.js'
 import { MAX_FIRST_PROMPT_CHARS } from '../lib/engineLaunch.js'
 import { NewUsageError, resolveNewMachine, type NewMachine, type NewOrigin } from '../lib/newCommand.js'
 import { engineName, MessageError } from '../messages/model.js'
@@ -139,7 +139,7 @@ class UsageError extends Error {}
 /** What an agent's `harness new` (and MCP's `harness_start`) says while the person has not let agents start agents: an
  *  account experiment, off by default (lib/agentSettings.ts), so it says where the person turns it on, as `harness send`
  *  does. */
-export const AGENTS_START_AGENTS_OFF = 'Agents may not start harnesses: the person turns on "Agents can start other agents" in Harness Settings ▸ Experimental, or runs `harness settings agents-start-agents on`. Until then, do the work yourself.'
+export const AGENTS_START_AGENTS_OFF = `Agents may not start harnesses yet. ${askThePersonFirst('agents-start-agents', 'do the work yourself.')}`
 
 const ORPHAN = 'This pane\'s harness is no longer running, so nothing here may close or start harnesses. Only the person can.'
 
