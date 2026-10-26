@@ -11,6 +11,7 @@ import 'package:harness_mobile/demo/sample_mode.dart'
     show SampleMode, SampleSession, openSampleMode;
 import 'package:harness_mobile/core/device_name.dart';
 import 'package:harness_mobile/notify/system_notices.dart';
+import 'package:harness_mobile/settings/experimental_features.dart';
 import 'package:harness_mobile/measurement/product_measurement.dart';
 import 'package:harness_mobile/shared/widgets/app_dialog.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart';
@@ -77,9 +78,18 @@ import 'voice_language_store.dart';
 /// rail footer — on a phone there is no rail, so this is the only way to reach either.
 
 class SettingsPage extends StatelessWidget {
-  const SettingsPage({super.key, required this.notifier, this.large = true});
+  const SettingsPage({
+    super.key,
+    required this.notifier,
+    this.large = true,
+    this.experiments,
+  });
 
   final AppNotifier notifier;
+
+  /// What Experimental switches: [experimentalFeaturesStore] unless a test hands in its own, so a
+  /// tap there never writes to the developer's own state file.
+  final ExperimentalFeaturesStore? experiments;
 
   /// The tab's big title. Off when the page is pushed from a terminal's menu, where it needs the
   /// back chevron a large header does not draw.
@@ -133,7 +143,12 @@ class SettingsPage extends StatelessWidget {
                       weight: FontWeight.w600,
                     ),
                   ),
-                  Expanded(child: _Body(notifier: notifier)),
+                  Expanded(
+                    child: _Body(
+                      notifier: notifier,
+                      experiments: experiments ?? experimentalFeaturesStore,
+                    ),
+                  ),
                 ],
               ),
             ),
@@ -145,9 +160,10 @@ class SettingsPage extends StatelessWidget {
 }
 
 class _Body extends StatelessWidget {
-  const _Body({required this.notifier});
+  const _Body({required this.notifier, required this.experiments});
 
   final AppNotifier notifier;
+  final ExperimentalFeaturesStore experiments;
 
   @override
   Widget build(BuildContext context) => ListView(
@@ -268,6 +284,15 @@ class _Body extends StatelessWidget {
       SettingsGroup(children: [_VoiceLanguageRow()]),
       const SettingsCaption('Appearance'),
       SettingsGroup(children: [_PaletteRow(), _TextSizeRow()]),
+      // The desktop's Labs ▸ Experimental, and in the same place: after how the app looks, before
+      // Help. Features still being built, each off until turned on here.
+      const SettingsCaption('Experimental'),
+      SettingsGroup(
+        children: [
+          for (final experiment in PhoneExperiment.values)
+            _ExperimentRow(experiment: experiment, store: experiments),
+        ],
+      ),
       const SettingsCaption('Help'),
       SettingsGroup(
         children: [
@@ -636,6 +661,43 @@ class _NotificationsRowState extends State<_NotificationsRow>
       onTap: () => unawaited(_tap()),
     );
   }
+}
+
+/// One [PhoneExperiment] and its switch. The whole row toggles it, as a phone's own settings do;
+/// the switch only shows which way it is.
+class _ExperimentRow extends StatelessWidget {
+  const _ExperimentRow({required this.experiment, required this.store});
+
+  final PhoneExperiment experiment;
+  final ExperimentalFeaturesStore store;
+
+  @override
+  Widget build(BuildContext context) => ValueListenableBuilder(
+    valueListenable: store,
+    builder: (context, _, _) {
+      AppTheme.watch(context);
+      final on = store.isOn(experiment);
+      void toggle(bool next) {
+        HapticFeedback.selectionClick();
+        unawaited(store.set(experiment, next));
+      }
+
+      // One control to a screen reader: "Swarm, switch, off", not a button and a switch.
+      return MergeSemantics(
+        child: SettingsRow(
+          key: ValueKey('settings-experiment-${experiment.id}'),
+          title: experiment.label,
+          detail: experiment.description,
+          trailing: Switch.adaptive(
+            value: on,
+            activeTrackColor: Tty.of(context).green,
+            onChanged: toggle,
+          ),
+          onTap: () => toggle(!on),
+        ),
+      );
+    },
+  );
 }
 
 /// What this phone is called on another screen's "took control" banner —
