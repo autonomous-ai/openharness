@@ -20,6 +20,19 @@ type Transaction = Prisma.TransactionClient
 /** A full read covers this many of the machine's Swarms, most recently changed first (was 100 full Swarms each second). */
 const FULL_TABS = 500
 
+/** How far apart a reading's own time and its write's stamp can be: the store takes both one after the other. */
+const READING_STAMP_SLACK_MS = 250
+/**
+ * A machine part whose last write was its machine's reading (every 15 s). That is no news for any host: a host's rows
+ * carry only its own reading, which it sent (group 5's run, 2026-10-26: with the 30 s overlap every tick resent the whole
+ * Swarm). Desktop and web feeds still get readings. A command's later write (pause, slots, removal) moves the part's stamp
+ * past the reading's time and does wake the host; one landing within the slack of a reading waits for the 60 s full read.
+ */
+function readingOnly(part: Part): boolean {
+  const receivedAt = (part.data as MachineData | null)?.contribution?.observation?.receivedAt
+  return receivedAt !== undefined && part.changedAt - receivedAt >= 0 && part.changedAt - receivedAt <= READING_STAMP_SLACK_MS
+}
+
 /** A change any host of the Swarm cares about without looking further (names, pause, observers, its agents and starts). */
 function plainlyRelevant(part: Part, machineId: string): boolean {
   switch (part.kind) {
@@ -68,9 +81,9 @@ export class HostReads {
       const tabs = []
       for (const tabId of ids) {
         const mine = changed?.get(tabId) ?? []
-        if (changed && !mine.length) continue
+        if (changed && !mine.some(p => !readingOnly(p))) continue
         const state = await this.tabState(tx, tabId, machineId)
-        if (changed && !mine.some(p => plainlyRelevant(p, machineId) || relevantTo(state, p, machineId))) continue
+        if (changed && !mine.some(p => !readingOnly(p) && (plainlyRelevant(p, machineId) || relevantTo(state, p, machineId)))) continue
         tabs.push(await hostTab(tabId, state, machineId, user, newest.get(tabId) ?? null, await this.lookups(tx, state, teams)))
       }
       return { format: READ_FORMAT, full, cursor: cursorFor(t0, 0), tabs,

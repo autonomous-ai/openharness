@@ -13,6 +13,7 @@ import { superTabRoutes } from '../src/routes/superTabs.js'
 import { errorHandler } from '../src/middlewares/errorHandler.js'
 import * as parts from '../src/superTabs/parts/index.js'
 import { guardedWrite } from '../src/superTabs/parts/write.js'
+import type { MachineData } from '../src/superTabs/parts/index.js'
 import { migrateSwarm } from '../src/superTabs/migration/migrate.js'
 import { SwarmReads } from '../src/superTabs/read/service.js'
 import { HostReads } from '../src/superTabs/read/host.js'
@@ -310,6 +311,48 @@ describe('host form (design 4.10)', () => {
     await writeGroup(s.tabId, s.web, NOW + 2_000, g => { g.title = 'Its worker\'s group' })
     clock = NOW + 3_000
     expect((await host(cursor)).body.data.tabs.map((t: { tabId: string }) => t.tabId)).toEqual([s.tabId])
+  })
+
+  /** A write of this machine's part as the store makes it: a reading stamps its time at the write; a command does not. */
+  async function writeMachine(tabId: string, at: number, change: (contribution: NonNullable<MachineData['contribution']>) => void) {
+    await db.$transaction(async tx => {
+      const stored = (await parts.loadActive(tx, tabId)).machines.find(m => m.key === machine)!
+      const data = structuredClone(stored.data!)
+      change(data.contribution!)
+      await guardedWrite(tx, tabId, { op: 'update', kind: 'machine', key: machine, seen: stored.version, data }, at)
+    })
+  }
+  const reading = (at: number) => (contribution: NonNullable<MachineData['contribution']>) => {
+    contribution.observation = { generation: contribution.generation, receivedAt: at, resources: {} as never, tools: {}, quotas: [],
+      runningHarnessIds: [], stoppedHarnessIds: [] }
+  }
+
+  it('sleeps through the machine\'s own readings, every 15 s, and wakes when the machine itself changes', async () => {
+    const s = await hostScene()
+    clock = NOW
+    const cursor = (await host(undefined, true)).body.data.cursor
+    // The host's own report, stamped as the store stamps it (its reading time is the write's own, give or take ms).
+    await writeMachine(s.tabId, NOW + 1_000, reading(NOW + 998))
+    clock = NOW + 2_000
+    expect((await host(cursor)).body.data).toMatchObject({ full: false, tabs: [], removedTabIds: [] })
+    // Its owner pauses it a few seconds later: that is news for its host.
+    await writeMachine(s.tabId, NOW + 5_000, contribution => { contribution.paused = true })
+    clock = NOW + 6_000
+    expect((await host(cursor)).body.data.tabs.map((t: { tabId: string }) => t.tabId)).toEqual([s.tabId])
+  })
+
+  it('sleeps through a real reading sent through the store', async () => {
+    const s = await hostScene()
+    const store = new SuperTabStore(db)
+    // The store stamps with the real clock; this host keeps to it.
+    clock = Date.now()
+    const full = (await host(undefined, true)).body.data
+    const generation = full.tabs.find((t: { tabId: string }) => t.tabId === s.tabId).pool.machine.generation as string
+    await store.observeMachine(owner, s.tabId, machine, { generation, resources: { cpuPercent: 5, memoryTotalBytes: null, memoryUsedBytes: null,
+      diskFreeBytes: null, diskTotalBytes: null, projectDiskFreeBytes: null, deviceType: null, chip: null, os: null, gpuPercent: null },
+      tools: {}, quotas: [], runningHarnessIds: ['lead-harness', 'worker-harness', 'idle-harness'], stoppedHarnessIds: [] })
+    clock = Date.now()
+    expect((await host(full.cursor)).body.data).toMatchObject({ tabs: [], removedTabIds: [] })
   })
 
   it('names a Swarm that no longer lists the machine', async () => {
