@@ -2206,14 +2206,14 @@ it('lets a person force-withdraw a stuck stop, clears its fence and retires the 
   await run(tab, { type: 'project.delete', projectId: 'lead' })
 })
 
-it('refuses to stop a finished worker that is the Lead of another Swarm', async () => {
-  // The other Swarm has no Lead yet: the shared session becomes its first.
+it('refuses to stop a finished worker that also works in another Swarm', async () => {
+  // A session registered in two Swarms can no longer be a Lead in either (final review, Critical 1), so it works there as a Builder.
   const first = await fixture(), second = { tab: (await store.create(owner, randomUUID(), 'Other')).id }, native = randomUUID()
   const group = (await run(first.tab, { type: 'conversation.create', title: 'Finished worker', brief: 'Work', checks: [{ description: 'Done', independent: false }] })).result.conversationId as string
   const worker = (await run(first.tab, { type: 'agent.add', conversationId: group, machineId: 'test-host', harnessId: native, name: 'Worker', configuration: config, lead: false })).result.agentId as string
   const assignmentId = (await run(first.tab, { type: 'work.assign', conversationId: group, agentId: worker })).result.assignmentId as string
   await store.stopped(host, first.tab, assignmentId, 'completed')
-  await run(second.tab, { type: 'agent.add', conversationId: 'lead', machineId: 'test-host', harnessId: native, name: 'Other Lead', configuration: config, lead: true })
+  await run(second.tab, { type: 'agent.add', conversationId: 'lead', machineId: 'test-host', harnessId: native, name: 'Other Builder', configuration: config, lead: false })
   await expect(run(first.tab, { type: 'agent.release', agentId: worker, decision: 'stop' }, host, first.lead)).rejects.toMatchObject({ code: 'SESSION_SHARED' })
   expect((await store.read(owner, first.tab)).state.agents.find(a => a.id === worker)!.workDecision).toBe('awaiting')
 })

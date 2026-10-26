@@ -54,11 +54,11 @@ export interface Named { groupIds?: string[]; agentIds?: string[]; projectIds?: 
 
 /** The groups, agents, projects and starts a command names in its own fields (design section 3.1). */
 /** Commands that register a session or can make one a Lead or a private member: checked against the other Swarms'
- *  registrations (projects.ts requireSingleRegistration). */
-const REGISTERS = new Set(['agent.add', 'agent.started', 'agent.rebind', 'conversation.agent', 'conversation.create', 'conversation.audience', 'project.create'])
+ *  registrations (projects.ts requireSingleRegistration). A rebind is refused onto any terminal registered elsewhere already. */
+const REGISTERS = new Set(['agent.add', 'agent.started', 'conversation.agent', 'conversation.create', 'conversation.audience', 'project.create'])
 /** The session a command registers, when it names one. */
 function registeredBy(state: SuperTabState, command: Command): Array<{ machineId: string; harnessId: string }> {
-  if (command.type === 'agent.add' || command.type === 'agent.rebind') return [{ machineId: command.machineId, harnessId: command.harnessId }]
+  if (command.type === 'agent.add') return [{ machineId: command.machineId, harnessId: command.harnessId }]
   if (command.type !== 'agent.started') return []
   const start = state.starts?.find(s => s.id === command.startId)
   return start ? [{ machineId: start.request.machineId, harnessId: command.harnessId }] : []
