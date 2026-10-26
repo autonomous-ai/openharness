@@ -17,7 +17,8 @@ MongoDB. That was fixed in its own group (#1745). Its before and after numbers a
   host-row clean-up (#1739), tonight's v1 work (liveness and takeover #1742 and #1744, routing readiness #1743) and the
   database-read fix (#1745).
 - **What ran:** every run here is from `4b8b5ea8a` on `validate/swarm-state-parts`, with a clean tree. That commit is
-  the head plus this document. Desktop has not changed since `4eab760ed`, where its suites ran.
+  the head plus this document. After that, #1746 (Desktop's private chat with the PM) merged at `1d79b4e57`. It changes
+  only `desktop/` and `docs/`, so the Desktop suites were rerun there.
 - **Main, for comparison:**
   - the baseline runs at `b71522ab6` (main `0d3485bad`);
   - the hot variant, new here, at `f53d296d8`, whose `backend/src` and `backend/prisma` are identical to main.
@@ -138,8 +139,17 @@ the load, by a reader already up to date. Mixed run 1:
 | Desktop, hot | 774.6–778.0 | 1,279.4–1,291.9 | 438.9–451.5 |
 | Host, hot | 781.0–781.5 | 1,801.0–1,804.5 | 81.8–128.3 |
 
-A diagnostic separates idle from active. It used the default 200-group Swarm (1,147.1 KB of parts), one up-to-date
-reader of each kind, and no write for 35 s:
+A diagnostic separates idle from active: `backend/integration/bench/pollDatabaseBytes.ts`. It used the default
+200-group Swarm (1,147.1 KB of parts), one up-to-date reader of each kind (Desktop as the owner, the host of machine 1),
+and no write for 35 s. Run it from `backend/` (about 1.5 minutes, on its own loopback replica set). It prints one JSON
+line per poll:
+
+```bash
+NODE_ENV=test HARNESS_CREDENTIAL_ENCRYPTION_KEY=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA= \
+  DATABASE_URL=mongodb://127.0.0.1:1/bench-never-used npx tsx integration/bench/pollDatabaseBytes.ts
+```
+
+The "before #1745" column is the same measurement at `b4b28aec8`.
 
 | Poll | Sent to the client | Read from MongoDB, before #1745 | Read from MongoDB, now |
 |---|---|---|---|
@@ -209,9 +219,55 @@ this Swarm get `AGENT_UNAVAILABLE`, as designed. Group 5 ran it with live sessio
 `03180d7a1`, before #1745, gave the same results. Both times the stack was taken down at the end: processes stopped and
 containers removed, with no port left open.
 
+## Reproducing the numbers
+
+All of these run from `backend/` after `npm ci`. Each starts its own MongoDB replica set on 127.0.0.1 and reads no
+other database.
+
+**Benchmark, new store** (at the integration head, about 3 minutes each, one after the other on a quiet machine):
+
+```bash
+npm run bench:swarm-state                          # mixed, run 1; run it again for run 2
+npm run bench:swarm-state -- --lane cross-group    # the goal-1 lane
+npm run bench:swarm-state -- --done-share 0        # the hot Swarm
+```
+
+**Benchmark, main** (the same three commands, from a checkout of `f53d296d8`, where the default driver is main's).
+The mixed and lane baselines are recorded in [the baseline](2026-10-26-swarm-state-baseline.md). Only the hot run is
+new here.
+
+**Where the output lives.** Each run prints its markdown report and writes `<driver>-<time>.json` and `.md` to
+`integration/bench/results/` (or `--out DIR`). That folder keeps only committed reports in git. The runs this document
+quotes are committed there:
+- main: `baseline-main-0d3485bad-{mixed-1,mixed-2,cross-group,hot}.json`;
+- new store: `results-44d51aae8-{mixed-1,mixed-2,cross-group,hot}.json`.
+
+Each report names its commit, machine and plan fingerprint.
+
+**Database bytes per poll:** `pollDatabaseBytes.ts`, with the command above.
+
+**Migration dry run:**
+
+```bash
+NODE_ENV=test HARNESS_CREDENTIAL_ENCRYPTION_KEY=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA= \
+  node --import tsx scripts/swarm-parts/dry-run.ts --out <folder>
+```
+
+It prints the timings and writes `swarm-parts-migration-<date>.json` to the folder.
+
+**Isolated end to end:**
+- The stack is group 3's local backend recipe: containers, fake sign-in and the backend on port 18085.
+- The Desktop part is the opt-in test in `desktop/`:
+  `SWARM_LOCAL_BACKEND=http://127.0.0.1:18085 SWARM_LOCAL_TAB=<Swarm id> flutter test --no-pub test/super_tab_local_backend_test.dart`.
+- The rest came from a one-off script in this group's chat, which is not in the repository. It uses the CLI's
+  end-to-end harness (`cli/e2e/harness/daemon.ts`, `client.ts`) under Vitest with `cli/vitest.setup.ts`:
+  - it seeds the Swarm and checks each behaviour over HTTP;
+  - it starts an `IsolatedDaemon` signed in through a counting proxy, and wakes its Swarm host;
+  - it counts the host-form replies for 60 s idle, then 60 s with a post every 5 s.
+
 ## Suites
 
-Backend and CLI at `4b8b5ea8a`. Desktop at `4eab760ed`, the last change under `desktop/`.
+Backend and CLI at `4b8b5ea8a`. Desktop at `1d79b4e57`, the current head, which adds #1746 under `desktop/`.
 
 | Suite | Command | Result |
 |---|---|---|
@@ -226,8 +282,8 @@ Backend and CLI at `4b8b5ea8a`. Desktop at `4eab760ed`, the last change under `d
 | CLI `test:core` | `npm run test:core` | 3,116 passed. The coverage gate fails with the same 15 misses as on main (transcripts `ingest`, `history`, `attach`, `lastTurn`; services `machineAddonsProcess`, `process`), compared line by line |
 | Super Tab end to end | `npx vitest run --config vitest.e2e.config.ts e2e/superTabs.e2e.ts e2e/superTabMachines.e2e.ts e2e/superTabsCollaboration.e2e.ts e2e/superTabRoute.e2e.ts e2e/swarmLegacySkills.e2e.ts e2e/agentClient.e2e.ts` | 12 passed, 9 failed: exactly the 9 group 5 recorded as failing on the base (5 in `agentClient`, 3 in `superTabs`, 1 in `superTabsCollaboration`), compared by name |
 | Desktop analyzer | `flutter analyze --no-pub` (Flutter 3.47.2) | 47 issues, the identical list at `d9cf81002`, none in a file #1726 changed |
-| Desktop affected suites (VM) | `flutter test --no-pub --timeout 60s --concurrency=6 test/super_tab_*_test.dart test/welcome_closed_super_tabs_test.dart test/devices_harness_test.dart test/swarm_launch_recovery_test.dart test/swarm_projects_test.dart test/swarm_sharing_test.dart test/shared_tab_invites_test.dart` | 770 passed, 2 skipped (one is the opt-in local backend test) |
-| Desktop affected suites (Chrome) | `flutter test --no-pub --platform chrome --dart-define=HARNESS_TEST=true` with the 9 reading, saved view, parts, dormant group, paging and update files | 91 passed |
+| Desktop affected suites (VM) | `flutter test --no-pub --timeout 60s --concurrency=6 test/super_tab_*_test.dart test/welcome_closed_super_tabs_test.dart test/devices_harness_test.dart test/swarm_launch_recovery_test.dart test/swarm_projects_test.dart test/swarm_sharing_test.dart test/shared_tab_invites_test.dart` | 784 passed, 3 skipped (one is the opt-in local backend test). At `4eab760ed`, before #1746: 770 passed, 2 skipped |
+| Desktop affected suites (Chrome) | `flutter test --no-pub --platform chrome --dart-define=HARNESS_TEST=true test/super_tab_reading_test.dart test/super_tab_reading_client_test.dart test/super_tab_reading_workspace_test.dart test/super_tab_saved_view_test.dart test/super_tab_saved_view_widget_test.dart test/super_tab_parts_reading_test.dart test/super_tab_dormant_groups_test.dart test/super_tab_message_paging_test.dart test/super_tab_update_required_test.dart` | 91 passed |
 
 ## Limits
 
