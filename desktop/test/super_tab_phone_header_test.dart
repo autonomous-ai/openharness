@@ -156,6 +156,9 @@ void main() {
     expect(find.byType(SuperTabRoster), findsOneWidget);
     final row = find.byKey(const ValueKey('super-person-owner'));
     expect(tester.getSize(row).height, greaterThanOrEqualTo(44));
+    final invite = tester.getSize(find.byTooltip('Invite people'));
+    expect(invite.width, greaterThanOrEqualTo(44));
+    expect(invite.height, greaterThanOrEqualTo(44));
     await tester.tapAt(const Offset(40, 400));
     await tester.pumpAndSettle();
     expect(find.byType(SuperTabRoster), findsNothing);
@@ -223,6 +226,7 @@ void main() {
       tester.getSize(find.byKey(const ValueKey('super-person-owner'))).height,
       36,
     );
+    expect(tester.getSize(find.byTooltip('Invite people')), const Size(32, 32));
     await _unmount(tester, controller);
   });
 }
