@@ -12,7 +12,7 @@ import { fail, type AgentStart, type SuperTabState } from '../model.js'
 import { transaction, type SuperTabStore } from '../store.js'
 import * as parts from '../parts/index.js'
 import type { MachineData, Part } from '../parts/index.js'
-import { READ_FORMAT, type HostChanges } from './contract.js'
+import { READ_FORMAT, type HostChanges, type HostChangesRequest } from './contract.js'
 import { cursorFor, readCursor } from './cursor.js'
 import { hostTab, type HostLookups } from './hostRows.js'
 
@@ -40,7 +40,7 @@ export class HostReads {
     this.now = options.now ?? store.now
   }
 
-  async changes(user: AuthUser, machineId: string, request: { cursor?: string; full?: boolean }): Promise<HostChanges> {
+  async changes(user: AuthUser, machineId: string, request: HostChangesRequest): Promise<HostChanges> {
     const t0 = this.now()
     const from = request.cursor && !request.full ? readCursor(request.cursor, 0, t0) : { reload: true as const }
     return transaction(this.db, async tx => {
@@ -60,7 +60,9 @@ export class HostReads {
       for (const tabId of ids) {
         if (woken && !woken.has(tabId)) continue
         const state = await this.tabState(tx, tabId, machineId)
-        tabs.push(await hostTab(tabId, state, machineId, user, newest.get(tabId) ?? null, await this.lookups(tx, state, teams)))
+        const rows = await hostTab(tabId, state, machineId, user, newest.get(tabId) ?? null, await this.lookups(tx, state, teams))
+        // The host already holds these rows: say so instead of sending them again.
+        tabs.push(request.held?.[tabId] === rows.etag ? { tabId, lastChangedAt: rows.lastChangedAt, etag: rows.etag, unchanged: true as const } : rows)
       }
       return { format: READ_FORMAT, full, cursor: cursorFor(t0, 0), tabs,
         removedTabIds: full ? [] : await this.removed(tx, user.autonomousEnv, machineId, from.since, new Set(ids)) }

@@ -34,6 +34,9 @@ const changesQuery = agentQuery.extend({ cursor })
 const dormantQuery = agentQuery.extend({ dormant: z.literal('1'), projectId: id.optional(), before: cursor.optional() })
 const groupParams = tabParams.extend({ conversationId: id })
 const hostChangesQuery = z.object({ cursor: cursor.optional(), full: z.literal('1').optional() }).strict()
+const etag = z.string().regex(/^[A-Za-z0-9_-]{1,64}$/)
+const hostChangesBody = z.object({ cursor: cursor.optional(), full: z.boolean().optional(),
+  held: z.record(id, etag).refine(held => Object.keys(held).length <= 500, 'At most 500 Swarms.').optional() }).strict()
 const startParams = tabParams.extend({ startId: id })
 const nativeParams = tabParams.extend({ contextId: id })
 const messageParams = tabParams.extend({ conversationId: id })
@@ -93,6 +96,10 @@ export async function superTabRoutes(app: FastifyInstance, options: { store?: Su
   app.get<{ Params: z.infer<typeof hostParams>; Querystring: z.infer<typeof hostChangesQuery> }>('/api/super-tabs/hosts/:machineId/changes',
     { preHandler: [validateParams(hostParams), validateQuery(hostChangesQuery)] },
     (req, reply) => respond(reply, () => hosts.changes(req.user!, req.params.machineId, { cursor: req.query.cursor, full: req.query.full === '1' })))
+  // The same read for a host that holds etags (`held`, design 4.10): too many for a URL, so in a body.
+  app.post<{ Params: z.infer<typeof hostParams>; Body: z.infer<typeof hostChangesBody> }>('/api/super-tabs/hosts/:machineId/changes',
+    { preHandler: [validateParams(hostParams), validateBody(hostChangesBody)] },
+    (req, reply) => respond(reply, () => hosts.changes(req.user!, req.params.machineId, req.body)))
   // A read-only token for a queued start's project repository, for its host to clone and fetch the folder before the agent
   // exists, so that the machine owner's own git login is never used for another person's project (docs/swarm-github-app.md).
   // The machine owner's own project answers `github: false` and the host uses its own login, unless it asks `always` (a

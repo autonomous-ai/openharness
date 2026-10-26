@@ -379,6 +379,48 @@ describe('host form (design 4.10)', () => {
     expect(tab?.roster.find((r: { agent?: { id: string } }) => r.agent?.id === s.more.loner)).toMatchObject({ active: false })
   })
 
+  /** The host form by POST, with the hashes the host holds for each Swarm's rows. */
+  const hostPost = async (body: { cursor?: string; full?: boolean; held?: Record<string, string> }) => {
+    clock = Date.now()
+    const response = await app.inject({ method: 'POST', url: `/api/super-tabs/hosts/${machine}/changes`, headers: { authorization: `Bearer ${owner.sub}` }, payload: body })
+    return { status: response.statusCode, bytes: response.body.length, data: response.json().data as { cursor: string; tabs: Array<Record<string, unknown>> } }
+  }
+  const entry = (data: { tabs: Array<Record<string, unknown>> }, tabId: string) => data.tabs.find(t => t.tabId === tabId)!
+
+  it('answers "unchanged" for an active Swarm whose rows the host already holds, and sends the rows once one changes', async () => {
+    const s = await hostScene()
+    const first = await hostPost({ full: true })
+    const etag = entry(first.data, s.tabId).etag as string
+    expect(etag).toMatch(/^[A-Za-z0-9_-]{16,64}$/)
+    // Active: a change that concerns this host (its worker's group), but leaves its rows as they were.
+    await command(s.tabId, { type: 'conversation.rename', conversationId: s.web, title: 'Same rows' })
+    const same = await hostPost({ cursor: first.data.cursor, held: { [s.tabId]: etag } })
+    expect(entry(same.data, s.tabId)).toEqual({ tabId: s.tabId, etag, unchanged: true, lastChangedAt: expect.any(Number) })
+    expect(same.bytes).toBeLessThan(first.bytes / 4)
+    // One row changes: the machine is paused, so its pool row does.
+    await command(s.tabId, { type: 'machine.pause', machineId: machine, paused: true })
+    const changed = entry((await hostPost({ cursor: first.data.cursor, held: { [s.tabId]: etag } })).data, s.tabId)
+    expect(changed.unchanged).toBeUndefined()
+    expect(changed.etag).not.toBe(etag)
+    expect(changed).toMatchObject({ pool: { machine: { paused: true } }, roster: expect.any(Array), assignments: expect.any(Array) })
+  })
+
+  it('keeps the same hash through the host\'s own reading, and honours held hashes on the full read too', async () => {
+    const s = await hostScene()
+    const first = await hostPost({ full: true })
+    const { etag, pool } = entry(first.data, s.tabId) as { etag: string; pool: { machine: { generation: string } } }
+    await reading(s.tabId, pool.machine.generation)
+    expect(entry((await hostPost({ full: true, held: { [s.tabId]: etag } })).data, s.tabId)).toMatchObject({ unchanged: true, etag })
+  })
+
+  it('refuses a malformed held map', async () => {
+    await hostScene()
+    clock = Date.now()
+    const response = await app.inject({ method: 'POST', url: `/api/super-tabs/hosts/${machine}/changes`, headers: { authorization: `Bearer ${owner.sub}` },
+      payload: { held: { 'not a tab id!': 'x' } } })
+    expect(response.statusCode).toBe(400)
+  })
+
   it('sleeps through a real reading sent through the store', async () => {
     const s = await hostScene()
     const { cursor, generation } = await fullRead(s.tabId)

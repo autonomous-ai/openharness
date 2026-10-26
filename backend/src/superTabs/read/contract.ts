@@ -135,19 +135,34 @@ export interface SwarmList {
 export interface MessagePageCursor { sequence: number; id: string }
 export interface MessagePage<M = Record<string, unknown>> { messages: M[]; next: MessagePageCursor | null }
 
-/** GET /api/super-tabs/hosts/:machineId/changes?cursor=[&full=1]. Ask `full=1` at start and at least every 60 s. */
+/** GET /api/super-tabs/hosts/:machineId/changes?cursor=[&full=1], or POST to the same path with this body when the host
+ *  holds etags (up to 500 Swarms do not fit in a URL). Ask `full` at start and at least every 60 s. */
+export interface HostChangesRequest {
+  cursor?: string
+  full?: boolean
+  /** Swarm id → the `etag` of the rows the host holds for it. A Swarm whose rows still hash the same comes back unchanged. */
+  held?: Record<string, string>
+}
 export interface HostChanges {
   format: typeof READ_FORMAT
   full: boolean
   cursor: string
-  /** Swarms with a host-relevant change (all of the machine's Swarms when `full`); replace each one's rows. */
+  /** Swarms with a host-relevant change (all of the machine's Swarms when `full`): replace each one's rows, or keep the
+   *  rows held for an `unchanged` one. */
   tabs: HostTab[]
   /** Incremental only: Swarms that no longer list this machine. Empty when `full`. */
   removedTabIds: string[]
 }
-export interface HostTab {
+export type HostTab = HostTabRows | HostTabUnchanged
+/** The rows still hash to the `etag` the host sent in `held`: keep them (only `lastChangedAt` may have moved). */
+export interface HostTabUnchanged { tabId: string; lastChangedAt: number | null; etag: string; unchanged: true }
+export interface HostTabRows {
   tabId: string
   lastChangedAt: number | null
+  /** A short hash of `roster`, `pool` and `assignments`, without the host's own machine reading or the rows' change times:
+   *  send it back in `held`. */
+  etag: string
+  unchanged?: never
   /** Today's `GET /hosts/:m` rows for this Swarm, `revision` replaced by `lastChangedAt`. */
   roster: HostRosterRow[]
   /** Today's `GET /hosts/:m/pools` row for this Swarm, or null when this machine is not contributed there by the caller. */

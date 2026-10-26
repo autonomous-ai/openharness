@@ -110,6 +110,8 @@ export const TEAM_ROUTES: readonly TeamRoute[] = [
   // The host loop by parts (docs/design/2026-10-26-swarm-state-parts.md 4.10). The three reads above answer 426 now; they
   // stay listed so an old team daemon is told to update rather than refused.
   { method: 'GET', url: '/api/super-tabs/hosts/:machineId/changes', scope: 'machine' },
+  // The same read with the etags the host holds, in a body (too many for a URL).
+  { method: 'POST', url: '/api/super-tabs/hosts/:machineId/changes', scope: 'machine' },
   { method: 'POST', url: '/api/super-tabs/hosts/:machineId/terminal', scope: 'machine' },
   { method: 'GET', url: '/api/super-tabs/hosts/:machineId/starts/:tabId/:startId', scope: 'machine' },
   { method: 'POST', url: '/api/super-tabs/hosts/:machineId/starts/:tabId/:startId', scope: 'machine' },

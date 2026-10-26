@@ -137,6 +137,7 @@ describe('a team session on its own machine', () => {
   // Every route the allowlist names, as a team daemon calls it, and the store method each one reaches.
   const own: Array<[string, string, unknown, string]> = [
     ['GET', '/api/super-tabs/hosts/team-mac/changes?full=1', undefined, 'changes'],
+    ['POST', '/api/super-tabs/hosts/team-mac/changes', { full: true, held: { 'tab-1': 'etag-1' } }, 'changes'],
     ['POST', '/api/super-tabs/hosts/team-mac/terminal', undefined, 'hostTerminal'],
     ['GET', '/api/super-tabs/hosts/team-mac/starts/tab-1/start-1', undefined, 'start'],
     ['POST', '/api/super-tabs/hosts/team-mac/starts/tab-1/start-1', startOp, 'execute'],
@@ -227,6 +228,7 @@ describe('a team session reaching past its own machine', () => {
       ['GET', '/api/super-tabs/hosts/owner-mac/pools', undefined],
       ['GET', '/api/super-tabs/hosts/owner-mac/assignments', undefined],
       ['GET', '/api/super-tabs/hosts/owner-mac/changes?full=1', undefined],
+      ['POST', '/api/super-tabs/hosts/owner-mac/changes', { full: true }],
       ['POST', '/api/super-tabs/hosts/owner-mac/terminal', undefined],
       ['GET', '/api/super-tabs/hosts/owner-mac/starts/tab-1/start-1', undefined],
       ['POST', '/api/super-tabs/hosts/owner-mac/starts/tab-1/start-1', startOp],

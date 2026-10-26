@@ -7,7 +7,8 @@ import type { AuthUser } from '../../lib/ssoAuth.js'
 import { activeWork, agent, isLeads, SuperTabError, conversation, type Agent, type SuperTabState } from '../model.js'
 import { hostLocalGrid, machineContribution, type MachineCleanup } from '../machines.js'
 import { agentProjectId, agentSetRole, canReadAgent, groupProject, ledProject, projectsOf, skillModeOf, skillSetOf } from '../projects.js'
-import type { HostAgentRow, HostPool, HostRosterRow, HostTab } from './contract.js'
+import type { HostAgentRow, HostPool, HostRosterRow, HostTabRows } from './contract.js'
+import { hostEtag } from './hostEtag.js'
 
 export interface HostLookups {
   /** The Swarm's people with their account emails (observers). */
@@ -24,9 +25,10 @@ const cleanups = (state: SuperTabState): MachineCleanup[] => [
   ...(state.machines ?? []).flatMap(m => m.removal ? [{ machineId: m.machineId, removalId: m.removal.id, machineOwnerId: m.contributorId }] : []),
   ...(state.machineCleanups ?? [])]
 
-export async function hostTab(tabId: string, state: SuperTabState, machineId: string, user: AuthUser, lastChangedAt: number | null, lookups: HostLookups): Promise<HostTab> {
-  return { tabId, lastChangedAt, roster: await roster(tabId, state, machineId, user, lastChangedAt, lookups),
+export async function hostTab(tabId: string, state: SuperTabState, machineId: string, user: AuthUser, lastChangedAt: number | null, lookups: HostLookups): Promise<HostTabRows> {
+  const rows = { tabId, lastChangedAt, roster: await roster(tabId, state, machineId, user, lastChangedAt, lookups),
     pool: pool(tabId, state, machineId, user, lookups.githubApp), assignments: assignments(tabId, state, machineId, user) }
+  return { ...rows, etag: hostEtag(rows) }
 }
 
 async function roster(tabId: string, state: SuperTabState, machineId: string, user: AuthUser, lastChangedAt: number | null, lookups: HostLookups): Promise<HostRosterRow[]> {
