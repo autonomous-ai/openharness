@@ -69,4 +69,23 @@ describe('verdicts on USB boards', () => {
     next.markForeign(board('2', 'BB:02'))
     expect(next.isForeign(board('2', 'BB:02'))).toBe(true)
   })
+
+  it('remembers which board greeted, across restarts, so only a known Harness Pro is ever reset', () => {
+    const file = join(mkdtempSync(join(tmpdir(), 'verdicts-')), 'dial-ports.json')
+    const verdicts = new DialVerdicts(file)
+    expect(verdicts.isPro(board('1'))).toBe(false)
+    // A round dial (no board) is a dial, not a Pro.
+    verdicts.markDial(board('1', 'RD:01'))
+    expect(verdicts.isPro(board('1', 'RD:01'))).toBe(false)
+    // A dial recorded before the board was kept learns it on its next greeting.
+    verdicts.markDial(board('1'))
+    verdicts.markDial(board('1'), 'pro')
+    expect(new DialVerdicts(file).isPro(board('2'))).toBe(true)
+    // A later greeting that names no board keeps what is known.
+    new DialVerdicts(file).markDial(board('2'))
+    expect(new DialVerdicts(file).isPro(board('3'))).toBe(true)
+    // A foreign board is never a Pro.
+    verdicts.markForeign(board('1', 'BB:02'))
+    expect(verdicts.isPro(board('1', 'BB:02'))).toBe(false)
+  })
 })
