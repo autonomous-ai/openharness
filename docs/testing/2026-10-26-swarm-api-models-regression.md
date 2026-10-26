@@ -32,7 +32,8 @@ code was changed. Local models (engines on a member's machine) are out of scope.
 | 3a. Route naming "deepseek 4.1 flash" | all six | pass | Pick on Diego's Mac with `gridModel`/`gridName`; same model offered on all six machines |
 | 3b. Route without a model name | all six | not verified | DeepSeek printed on MacbookPro.local only; full list not read ([3b](#flow-3)) |
 | 3c. Route naming a model four Builders hold | Swarm | **fail** | Explanation naming the Builders is missing; [F2](#f2) |
-| 4. Builder on DeepSeek, sharing machine | MacbookPro.local | **fail** (start) | "Cloning took too long. Check the connection and retry."; retry pending; [F3](#f3) |
+| 3d. Route while the sharing machine's readings are stale | Swarm | **fail** | "No candidate runs …" while the grid serves it; [F4](#f4) |
+| 4. Builder on DeepSeek, sharing machine | MacbookPro.local | **fail** first start, retry pending | "Cloning took too long. Check the connection and retry."; [F3](#f3) |
 | 4. Builder on DeepSeek, through the relay | MacBooks-MacBook-Pro-19.local | pass | Nico: task done; 77/77 model replies from DeepSeek, no API error |
 | 4. Builder on DeepSeek, through the relay | MACs-Mac-Studio.local | pass | Arlo: task done with the expected answers |
 | 4. Builder on DeepSeek, through the relay | Diego's Mac | pass | Arlo (second of that name): task done; started 6 min 22 s after it was queued |
@@ -131,6 +132,9 @@ Observations, not failures of this add-on:
 - Two Builders in the Swarm were both named Arlo (Mac Studio, Diego's Mac).
 - Nico first used its harness id as its Swarm agent id; the backend refused every call ("agent no longer in Super Tab")
   until it switched to its Swarm agent id.
+- Diego's Mac's `harness.log` (pasted by Diego) repeats `[super-tabs] This agent is no longer in the Super Tab.` about
+  every 6 s from 09:26:59 to 09:30:36, and logs `Could not close a session the Swarm ended (NOT_A_MEMBER).` at 09:29:41:
+  its host keeps asking about an agent that has left.
 
 ## Findings
 
@@ -165,9 +169,40 @@ with refused member row: {"error":"NO_CANDIDATE","excluded":[{"title":"Builder �
 ### F3
 
 **The smoke start on MacbookPro.local failed: `Cloning took too long. Check the connection and retry.`** Queued 09:22,
-failed 09:28:25. The Lead saw the machine's readings about five minutes old just before; at 09:28:42 its reading was
-4 s old and the DeepSeek share on it had answered Nico throughout. Cause not verified (Ken's log lines around the clone
-are requested); a retry was queued at about 09:30.
+failed 09:28:25: the project's first clone on that machine was killed at its 300 s limit
+(`cli/src/lib/projectFolder.ts` `cloneRepository`). Its `harness.log` (Ken's screenshot, local time UTC+7) shows the
+machine losing the backend in bursts from 07:57 to 09:24:12 UTC, `[super-tabs] Could not reach the Harness backend ().
+Check the connection and try again.`, with `An internal server error occurred` and `Swarm grid: An internal server error
+occurred` at 08:15–08:16; the clone itself logs nothing. Its network is the likely cause (not verified). The DeepSeek
+share on it answered Nico throughout. The retry, queued at about 09:30, cloned for about 4½ minutes and started at
+09:34:35.
+
+The empty `()` in that log line is a small fault of its own: the message puts the error's cause in parentheses
+(`cli/src/gateway/accountHttp.ts:70`, `e.cause?.message ?? e.message`), and an empty cause text is not replaced, so the
+reason is lost.
+
+### F4
+
+**While a start clones the project on the sharing machine, that machine sends no readings, so the Swarm stops offering
+its shared API for up to five minutes.** The host readies a queued start (`prepareSwarmStart`, which clones) inside the
+same pass that sends the machine's readings (`cli/src/superTabs/machines.ts` `poll`), and `tick` runs one pass at a time;
+a clone may take 300 s before it is killed (`cli/src/lib/projectFolder.ts` `cloneRepository`). Routing offers a shared
+model only from readings under 45 s old (`cli/src/superTabs/routeCommand.ts` `LOCAL_FRESH_MS`), and the backend admits
+a start on the Swarm's grid only while a fresh reading serves the model (`backend/src/superTabs/machines.ts:389`).
+Observed on MacbookPro.local, twice:
+
+| Window | Readings | Start | Route naming "deepseek 4.1 flash" | Grid from MacBooks-MacBook-Pro-19.local |
+| --- | --- | --- | --- | --- |
+| 09:22–09:28 | about 5 min old before 09:28:25, 4 s old at 09:28:42 | first start, clone killed at 09:28:25 | 09:32 (Lead): no candidate, reading 178 s old | model listed on MacbookPro.local; Nico answered |
+| 09:30–09:34 | 132 s at 09:32:05 … 249 s at 09:34:01, 16 s at 09:34:18 | retry cloning, started 09:34:35 | 09:33:47 (Lead), verbatim below, reading 237 s old | model listed at every 15 s read |
+
+```json
+{"error":"NO_CANDIDATE","excluded":[{"title":"Named model","reason":"No candidate runs \"deepseek 4.1 flash\". Share it with the Swarm (Manage models), or check its name."}]}
+```
+
+The second gap starts when the retry is queued and ends 17 s before it starts. Ken's log, posted at 09:33:09, shows no
+backend error after 09:24:12; when the screenshot was taken is not known, so the network is not ruled out for the
+second gap. The answer also tells the Lead to share a model that is shared. Desktop shows such a machine as Offline after 35 s.
 
 ## Flow 8: automated coverage
 
