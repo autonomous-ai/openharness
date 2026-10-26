@@ -168,3 +168,35 @@ def solve(instance: Instance, time_limit: float = 10.0, workers: int = 8, makesp
     return Result(status='OPTIMAL' if proven else 'FEASIBLE', makespan=makespan, cost=cost, makespan_bound=makespan_bound,
                   cost_bound=cost_bound, gap=max(_gap(makespan, makespan_bound), _gap(cost, cost_bound)),
                   seconds=time.monotonic() - began, plan=plan)
+
+
+@dataclass
+class Front:
+    points: List[Result]
+    complete: bool
+    seconds: float
+
+
+def pareto(instance: Instance, time_limit: float = 10.0, workers: int = 8) -> Front:
+    """Finish time against cost, fastest first. Each point is the fastest plan cheaper than the one before, at its least
+    cost, so every point found optimal is on the front; the walk ends when no cheaper plan exists. `complete` is false when
+    time ran out or a point was not proven optimal."""
+    began = time.monotonic()
+    points: List[Result] = []
+    cap: Optional[int] = None
+    complete = True
+    while True:
+        left = time_limit - (time.monotonic() - began)
+        if left <= 0:
+            complete = False
+            break
+        result = solve(instance, time_limit=left, workers=workers, cost_cap=cap)
+        if result.status == 'INFEASIBLE':
+            break
+        if result.status not in ('OPTIMAL', 'FEASIBLE'):
+            complete = False
+            break
+        complete = complete and result.status == 'OPTIMAL'
+        points.append(result)
+        cap = result.cost - 1
+    return Front(points=points, complete=complete, seconds=time.monotonic() - began)
