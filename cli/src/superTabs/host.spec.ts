@@ -1067,10 +1067,28 @@ describe('a task lost to a usage limit', () => {
     Object.assign(t.core, { superTabs: { attention: vi.fn(), cards: vi.fn(), cardRecap: vi.fn(), shareObservers: vi.fn(),
       input: vi.fn(async () => ({ ok: true as const })), screen: vi.fn(async () => ({ ok: true as const, text: '❯ ', hold: null })) } })
     Object.assign(t.row, { resume: { conversationId: 'group', assignmentId: 'work', lostAt: 3, at: new Date(0).toISOString() } })
+    // Once the backend gave the task back, this machine's assignment rows list it running in this session.
+    const roster = vi.mocked(t.call).getMockImplementation()!
+    let resumed = false
+    vi.mocked(t.call).mockImplementation(async (method, path, body) => {
+      if ((body as { command?: { type?: string } } | undefined)?.command?.type === 'work.resume') resumed = true
+      return path.includes('/hosts/machine-1/changes')
+        ? { status: 200, body: { success: true, data: hostForm([t.row], { assignments: resumed ? [{ tabId: 'tab', assignmentId: 'work', harnessId: 'harness' }] : [] }) } }
+        : roster(method, path, body)
+    })
     await t.open().tick()
     await vi.waitFor(() => expect(t.core.superTabs!.input).toHaveBeenCalledWith('harness', CONTINUE, ['Enter']))
     expect(t.call).toHaveBeenCalledWith('POST', '/api/super-tabs/tab/commands',
       { operationId: 'limit-resume-work-3', asAgentId: 'agent', command: { type: 'work.resume', conversationId: 'group', assignmentId: 'work', lostAt: 3 } })
+  })
+  it('does not type when its assignment rows do not list the task in this session after the backend answered', async () => {
+    const t = setup()
+    Object.assign(t.core, { superTabs: { attention: vi.fn(), cards: vi.fn(), cardRecap: vi.fn(), shareObservers: vi.fn(),
+      input: vi.fn(async () => ({ ok: true as const })), screen: vi.fn(async () => ({ ok: true as const, text: '❯ ', hold: null })) } })
+    Object.assign(t.row, { resume: { conversationId: 'group', assignmentId: 'work', lostAt: 3, at: new Date(0).toISOString() } })
+    await t.open().tick()
+    await vi.waitFor(() => expect(t.log).toHaveBeenCalledWith('limit resume of work: the task is no longer this session\'s'))
+    expect(t.core.superTabs!.input).not.toHaveBeenCalled()
   })
 })
 

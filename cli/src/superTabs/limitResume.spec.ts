@@ -12,7 +12,7 @@ const row = (over: Record<string, unknown> = {}) => ({ tabId: 'tab', agent: { id
 /** A screen as the engine draws it (fixtures/screens). */
 const fixture = (name: string) => readFileSync(new URL(`./fixtures/screens/${name}.txt`, import.meta.url), 'utf8')
 
-function setup(options: { live?: string[]; reply?: () => { status: number; body: Record<string, unknown> }; screen?: () => SuperTabScreen } = {}) {
+function setup(options: { live?: string[]; reply?: () => { status: number; body: Record<string, unknown> }; screen?: () => SuperTabScreen; owns?: () => boolean } = {}) {
   let clock = 1_000_000
   const steps: string[] = []
   const backend: CoreApi['account']['backend'] = vi.fn(async (_method, _path, body) => {
@@ -25,7 +25,9 @@ function setup(options: { live?: string[]; reply?: () => { status: number; body:
     superTabs: { attention: vi.fn(), cards: vi.fn(), cardRecap: vi.fn(), shareObservers: vi.fn(), screen: vi.fn(async () => options.screen?.() ?? { ok: true as const, text: '❯ ', hold: null }),
       input: vi.fn(async (_harnessId: string, text: string) => { steps.push(`type ${text}`); return { ok: true as const } }) },
   })
-  const resumer = new LimitResume(core, 'm1', { now: () => clock, log: vi.fn() })
+  // The host's current assignment rows, read after the backend answered (host.ts reads its feed).
+  const owns = vi.fn(async (tabId: string, assignmentId: string, harnessId: string) => { steps.push(`check ${tabId} ${assignmentId} ${harnessId}`); return options.owns?.() ?? true })
+  const resumer = new LimitResume(core, 'm1', { now: () => clock, log: vi.fn(), owns })
   return { core, backend, steps, resumer, wait: (ms: number) => { clock += ms } }
 }
 
@@ -36,7 +38,7 @@ describe('a host resuming a task its agent lost to a usage limit', () => {
     expect(t.steps).toEqual([])
     t.wait(30 * 60_000)
     await t.resumer.tick([row()])
-    expect(t.steps).toEqual(['ask work.resume', `type ${CONTINUE}`])
+    expect(t.steps).toEqual(['ask work.resume', 'check tab w1 h1', `type ${CONTINUE}`])
     expect(t.backend).toHaveBeenCalledWith('POST', '/api/super-tabs/tab/commands', { operationId: 'limit-resume-w1-5', asAgentId: 'a1',
       command: { type: 'work.resume', conversationId: 'g1', assignmentId: 'w1', lostAt: 5 } })
     expect(t.core.superTabs!.input).toHaveBeenCalledWith('h1', CONTINUE, ['Enter'])
@@ -51,6 +53,16 @@ describe('a host resuming a task its agent lost to a usage limit', () => {
     expect(t.core.superTabs!.input).not.toHaveBeenCalled()
   })
 
+  it('does not type when this session no longer holds the task though the backend said yes: a replayed yes after a takeover (#1757 review, 2)', async () => {
+    const t = setup({ owns: () => false })
+    t.wait(30 * 60_000)
+    await t.resumer.tick([row()])
+    t.wait(15_000)
+    await t.resumer.tick([row()])
+    expect(t.steps).toEqual(['ask work.resume', 'check tab w1 h1'])
+    expect(t.core.superTabs!.input).not.toHaveBeenCalled()
+  })
+
   it('asks again on a later read when the backend could not be reached or its clock has not reached the reset yet', async () => {
     const replies = [{ status: 503, body: { success: false, error: { code: 'BACKEND_UNAVAILABLE', message: 'Down.' } } },
       { status: 409, body: { success: false, error: { code: 'LIMIT_NOT_RESET', message: 'Its usage limit has not reset yet.' } } }]
@@ -61,7 +73,7 @@ describe('a host resuming a task its agent lost to a usage limit', () => {
       await t.resumer.tick([row()])
       t.wait(15_000)
     }
-    expect(t.steps).toEqual(['ask work.resume', 'ask work.resume', 'ask work.resume', `type ${CONTINUE}`])
+    expect(t.steps).toEqual(['ask work.resume', 'ask work.resume', 'ask work.resume', 'check tab w1 h1', `type ${CONTINUE}`])
   })
 
   it('types continue once, though a roster read from before the resume still lists it', async () => {
@@ -69,7 +81,7 @@ describe('a host resuming a task its agent lost to a usage limit', () => {
     t.wait(30 * 60_000)
     await t.resumer.tick([row()])
     await t.resumer.tick([row()])
-    expect(t.steps).toEqual(['ask work.resume', `type ${CONTINUE}`])
+    expect(t.steps).toEqual(['ask work.resume', 'check tab w1 h1', `type ${CONTINUE}`])
   })
 
   it('resumes the same task again when it is lost to a limit a second time (#1757 review, 1)', async () => {
@@ -78,7 +90,7 @@ describe('a host resuming a task its agent lost to a usage limit', () => {
     await t.resumer.tick([row()])
     t.wait(60 * 60_000)
     await t.resumer.tick([row({ resume: { ...resume, lostAt: 9, at: new Date(RESET + 30 * 60_000).toISOString() } })])
-    expect(t.steps).toEqual(['ask work.resume', `type ${CONTINUE}`, 'ask work.resume', `type ${CONTINUE}`])
+    expect(t.steps).toEqual(['ask work.resume', 'check tab w1 h1', `type ${CONTINUE}`, 'ask work.resume', 'check tab w1 h1', `type ${CONTINUE}`])
     expect(vi.mocked(t.backend).mock.calls.map(([, , body]) => (body as { operationId: string }).operationId)).toEqual(['limit-resume-w1-5', 'limit-resume-w1-9'])
   })
 
@@ -105,7 +117,7 @@ describe('a host resuming a task its agent lost to a usage limit', () => {
     expect(t.steps).toEqual([])
     t.wait(15_000)
     await t.resumer.tick([row()])
-    expect(t.steps).toEqual(['ask work.resume', `type ${CONTINUE}`])
+    expect(t.steps).toEqual(['ask work.resume', 'check tab w1 h1', `type ${CONTINUE}`])
   })
 
   // Nothing redraws when a limit resets: the screen its host reads then is the limit screen the engine left (Lead,
@@ -118,6 +130,6 @@ describe('a host resuming a task its agent lost to a usage limit', () => {
       const t = setup({ screen: () => ({ ok: true, text, hold: engine.inspect(text).messageHold }) })
       t.wait(30 * 60_000)
       await t.resumer.tick([row()])
-      expect(t.steps).toEqual(['ask work.resume', `type ${CONTINUE}`])
+      expect(t.steps).toEqual(['ask work.resume', 'check tab w1 h1', `type ${CONTINUE}`])
     })
 })

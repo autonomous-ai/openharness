@@ -11,7 +11,7 @@ import { SuperTabStore } from '../src/superTabs/store.js'
 import type { Command } from '../src/superTabs/commands.js'
 import type { MachineObservation } from '../src/superTabs/machines.js'
 import * as parts from '../src/superTabs/parts/index.js'
-import { poolRows, rosterRows } from './hostRows.test-support.js'
+import { assignmentRows, poolRows, rosterRows } from './hostRows.test-support.js'
 import { beforeFirstWrite } from './interleave.test-support.js'
 import { SwarmReads } from '../src/superTabs/read/service.js'
 
@@ -194,6 +194,25 @@ describe('work that loses its owner', () => {
     expect(await f.assignment()).toMatchObject({ id: f.assignmentId, agentId: f.worker, status: 'working' })
     expect((await row()).resume).toBeNull()
     expect((await f.leadInbox()).map(m => m.text)).toContain(`${await f.name(f.worker)} resumed its task after its usage limit reset.`)
+  })
+
+  // #1757 review, 2: a receipt replays the first answer, so it never says who holds the task now; the host's assignment
+  // rows do (cli superTabs/limitResume.ts reads them before typing).
+  it('replays a resume whose answer was lost even after a takeover, while its host\'s assignment rows no longer list it', async () => {
+    const f = await swarm()
+    const lostAt = f.clock.now
+    await f.execute({ type: 'agent.alert', agentId: f.worker, alert: 'limit', active: true, resetAt: new Date(f.clock.now + 30 * MINUTE).toISOString() }, host, f.worker)
+    f.clock.now += 30 * MINUTE
+    const resume = { operationId: `limit-resume-${f.assignmentId}-${lostAt}`, command: { type: 'work.resume', conversationId: f.group, assignmentId: f.assignmentId, lostAt } as Command }
+    const listed = async () => (await assignmentRows(f.timed, host, 'test-host')).some(a => a.tabId === f.tab && a.assignmentId === f.assignmentId && a.harnessId === f.harness.worker)
+    await f.timed.execute(host, f.tab, resume, f.worker)
+    expect(await listed()).toBe(true)
+    // Its answer never reached the host. The Product Manager cancels the task and hands it to another agent.
+    await f.execute({ type: 'work.cancel', conversationId: f.group, assignmentId: f.assignmentId, reason: 'Moving it on' })
+    const other = await f.add(f.group, 'test-host', f.harness.other, 'Other')
+    await f.execute({ type: 'work.assign', conversationId: f.group, agentId: other })
+    expect((await f.timed.execute(host, f.tab, resume, f.worker)).result).toEqual({})
+    expect(await listed()).toBe(false)
   })
 
   it('does not resume a task handed to another agent before the reset, and its host is no longer asked to', async () => {
