@@ -140,6 +140,12 @@ void main() {
     expect(_stateReads(f), greaterThanOrEqualTo(2));
     f.app.newSwarm();
     await tester.pump();
+    // The web keeps the view it read for the next open (#180 fix 4).
+    await tester.pump();
+    expect(
+      f.store.values.keys.where((k) => k.startsWith('super_tab.view.')),
+      isNotEmpty,
+    );
     var before = _stateReads(f);
     await tester.pump(const Duration(seconds: 30));
     expect(_stateReads(f), before);
