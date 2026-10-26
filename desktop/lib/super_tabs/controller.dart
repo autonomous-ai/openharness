@@ -12,6 +12,9 @@ import 'model.dart';
 import 'reading.dart';
 import 'review_verdict.dart';
 
+/// A messages read started beside a state read, and what it asked for.
+typedef _EarlyRead = ({String query, Future<Map<String, dynamic>> page});
+
 typedef SuperTabRequest = Future<Map<String, dynamic>> Function(
   String method,
   String path, {
@@ -553,17 +556,14 @@ class SuperTabController extends ChangeNotifier {
     _changed();
     _lastFullRead = clock.now();
     final took = Stopwatch()..start();
-    // The saved conversation's first page, asked for beside the first state
-    // read ([SuperTabReading.messagesWithState]); dropped if the state moves
-    // the selection elsewhere.
+    // The open conversation's messages, asked for beside the state
+    // ([SuperTabReading.messagesWithState]); dropped if the state moves the
+    // selection elsewhere.
     final earlyId = selectedId;
-    final early =
-        _policy.messagesWithState &&
-            snapshot == null &&
-            _savedSelection &&
-            (_messages[earlyId]?.isEmpty ?? true)
-        ? (request('GET', _messagesPath(earlyId))..ignore())
-        : null;
+    final earlyQuery = _earlyQuery(earlyId);
+    final early = earlyQuery == null
+        ? null
+        : (request('GET', '${_messagesPath(earlyId)}$earlyQuery')..ignore());
     try {
       final answer = await request('GET', _path);
       if (_disposed || accessRevoked) return;
@@ -620,7 +620,9 @@ class SuperTabController extends ChangeNotifier {
       }
       await _readMessages(
         selectedId,
-        early: selectedId == earlyId ? early : null,
+        early: selectedId == earlyId && early != null
+            ? (query: earlyQuery!, page: early)
+            : null,
       );
     } catch (failure) {
       if (_inConnectGrace(failure)) {
@@ -671,6 +673,25 @@ class SuperTabController extends ChangeNotifier {
   String _messagesPath(String id) =>
       '$_path/conversations/${Uri.encodeComponent(id)}/messages';
 
+  /// What a read of [id]'s messages asks for: the page before the oldest
+  /// shown, what came after the newest, or the latest page.
+  String _query(String id, {bool older = false}) {
+    if (older) return '?before=${_before[id]}';
+    final tail = _messages[id]?.lastOrNull?.sequence;
+    return tail != null ? '?after=$tail' : '';
+  }
+
+  /// The query of [id]'s messages read to start beside a state read, or null.
+  /// On first open only for the conversation the saved state named; after
+  /// that, for a conversation the state has and no read of it under way.
+  String? _earlyQuery(String id) {
+    if (!_policy.messagesWithState || _reading.containsKey(id)) return null;
+    final known = snapshot == null
+        ? _savedSelection
+        : snapshot!.conversation(id) != null;
+    return known ? _query(id) : null;
+  }
+
   void _readFailure(Object failure, {bool revokeTab = true}) {
     if (_disposed) return;
     error = failure is SuperTabFailure
@@ -694,12 +715,12 @@ class SuperTabController extends ChangeNotifier {
   }
 
   /// [light] asks only for new messages (and the person's own unsettled
-  /// receipt), not the page again; [early] is a first page already asked for.
+  /// receipt), not the page again; [early] is a read already asked for.
   Future<void> _readMessages(
     String id, {
     bool older = false,
     bool light = false,
-    Future<Map<String, dynamic>>? early,
+    _EarlyRead? early,
   }) => _reading[id] ??=
       _loadMessages(id, older: older, light: light, early: early).whenComplete(
         () {
@@ -712,7 +733,7 @@ class SuperTabController extends ChangeNotifier {
     String id, {
     required bool older,
     bool light = false,
-    Future<Map<String, dynamic>>? early,
+    _EarlyRead? early,
   }) async {
     if (_disposed || accessRevoked || snapshot?.conversation(id) == null) {
       return;
@@ -723,15 +744,11 @@ class SuperTabController extends ChangeNotifier {
       final tail = known != null && known.isNotEmpty
           ? known.last.sequence
           : null;
-      final query = older
-          ? '?before=${_before[id]}'
-          : tail != null
-          ? '?after=$tail'
-          : '';
-      final first = early != null && query.isEmpty ? early : null;
+      final query = _query(id, older: older);
+      final first = early != null && early.query == query ? early.page : null;
       var answer = first != null
           ? await first.catchError(
-              (Object _) => request('GET', _messagesPath(id)),
+              (Object _) => request('GET', '${_messagesPath(id)}$query'),
             )
           : await request('GET', '${_messagesPath(id)}$query');
       final arrived =
@@ -760,6 +777,7 @@ class SuperTabController extends ChangeNotifier {
         for (final m in _messages[id] ?? <SuperTabMessage>[]) m.id: m,
         for (final m in incoming) m.id: m,
       };
+      var settled = false;
       final own = combined.values
           .where(
             (m) => !m.fromAgent && !m.fromTerminal && m.authorId == accountId,
@@ -801,7 +819,10 @@ class SuperTabController extends ChangeNotifier {
         for (final row in rows) {
           combined[row.id] = row;
         }
+        settled = true;
       }
+      // A light check that found nothing new changes nothing on screen.
+      if (light && incoming.isEmpty && !settled) return;
       _messages[id] = combined.values.toList()
         ..sort((a, b) => a.sequence.compareTo(b.sequence));
       if (older || !_before.containsKey(id)) {

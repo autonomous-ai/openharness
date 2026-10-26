@@ -90,6 +90,23 @@ void main() {
       });
     });
 
+    test('each poll reads the state, then the messages', () {
+      fakeAsync((async) {
+        final server = ConversationServer()..append('Hello');
+        final reads = _Reads(server);
+        final c = _controller(reads)..start();
+        async.flushMicrotasks();
+        server.holdReads = Completer<void>();
+        reads.clear();
+        async.elapse(const Duration(seconds: 3));
+        expect(reads.paths, ['/api/super-tabs/tab']);
+        server.holdReads!.complete();
+        server.holdReads = null;
+        async.flushMicrotasks();
+        c.dispose();
+      });
+    });
+
     test('the first read waits for the state before the messages', () {
       fakeAsync((async) {
         final server = ConversationServer()
@@ -203,6 +220,49 @@ void main() {
         expect(reads.states, 0);
         expect(reads.pages, 0);
         expect(reads.receipts, 1);
+        c.dispose();
+      });
+    });
+
+    test('a light check with nothing new redraws nothing', () {
+      fakeAsync((async) {
+        final server = ConversationServer()..append('Hello');
+        final reads = _Reads(server);
+        final c = _controller(reads, reading: _web)..start();
+        async.elapse(const Duration(seconds: 61));
+        do {
+          reads.clear();
+          async.elapse(const Duration(seconds: 3));
+        } while (reads.states == 0);
+        var notified = 0;
+        c.addListener(() => notified++);
+        // The four light checks before the next full read.
+        async.elapse(const Duration(seconds: 12));
+        expect(reads.tails, greaterThanOrEqualTo(5));
+        expect(notified, 0);
+        c.dispose();
+      });
+    });
+
+    test('a full read asks for new messages beside the state', () {
+      fakeAsync((async) {
+        final server = ConversationServer()..append('Hello');
+        final reads = _Reads(server);
+        final c = _controller(reads, reading: _web)..start();
+        async.flushMicrotasks();
+        server.holdReads = Completer<void>();
+        reads.clear();
+        async.elapse(const Duration(seconds: 3));
+        expect(reads.paths, [
+          '/api/super-tabs/tab/conversations/lead/messages?after=1',
+          '/api/super-tabs/tab',
+        ]);
+        _reply(server, 'Done.');
+        server.holdReads!.complete();
+        server.holdReads = null;
+        async.flushMicrotasks();
+        // Its answer is used, not asked for again.
+        expect(reads.tails, 1);
         c.dispose();
       });
     });
