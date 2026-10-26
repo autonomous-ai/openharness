@@ -6,6 +6,7 @@ import 'attachment_upload.dart';
 import 'controller.dart';
 import 'model.dart';
 import 'notifications.dart';
+import 'reading.dart';
 
 typedef SuperTabTransport = Future<Object?> Function(
   String method,
@@ -51,6 +52,59 @@ class SuperTabClient {
       _loaded[id]?.snapshot?.mentionsWaiting ?? _tagCounts[id] ?? 0;
   final SuperTabUpload upload;
   final Duration discoveryInterval;
+
+  /// How every Swarm tab here keeps itself current. Desktop's unless the host
+  /// composition sets another (`SuperTabWorkspace` hands on its chrome's).
+  SuperTabReading get reading => _reading;
+  set reading(SuperTabReading value) {
+    if (identical(value, _reading)) return;
+    _reading = value;
+    for (final controller in _loaded.values) {
+      controller.reading = value;
+    }
+  }
+
+  SuperTabReading _reading = const SuperTabReading();
+  String? _shown;
+  bool _pageVisible = true, _serverRead = false;
+
+  /// The Swarm tab on screen, or null for none: every other one is away.
+  void show(String? tabId) {
+    if (_shown == tabId) return;
+    _shown = tabId;
+    _applyAway();
+  }
+
+  /// False while the page or window is hidden: every Swarm tab is away.
+  set pageVisible(bool visible) {
+    if (_pageVisible == visible) return;
+    _pageVisible = visible;
+    _applyAway();
+  }
+
+  bool _isAway(String id) => !_pageVisible || id != _shown;
+
+  void _applyAway() {
+    for (final entry in _loaded.entries) {
+      entry.value.away = _isAway(entry.key);
+    }
+  }
+
+  /// A machine able to serve Swarm reads connected ([SuperTabReading.readsOnConnect]):
+  /// one read of the tab on screen and one discovery, however many machines
+  /// connect in the same moment.
+  void serverAvailable() {
+    if (!_reading.readsOnConnect || _account == null || _serverRead) return;
+    _serverRead = true;
+    scheduleMicrotask(() {
+      _serverRead = false;
+      for (final controller in _loaded.values) {
+        unawaited(controller.machineAvailable());
+      }
+      unawaited(refreshTabs());
+    });
+  }
+
   String? _account;
   int _generation = 0;
   Timer? _discoveryTimer;
@@ -284,7 +338,8 @@ class SuperTabClient {
       },
       save: (state) => storage.write(key, jsonEncode(state)),
       upload: upload,
-    );
+      reading: _reading,
+    )..away = _isAway(id);
     var seenRevision = -1;
     var seenSelected = controller.selectedId;
     controller.addListener(() {
