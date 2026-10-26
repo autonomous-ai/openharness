@@ -88,6 +88,24 @@ async function swarm({ legacy = false } = {}) {
     clock: { get now() { return now }, set now(value: number) { now = value } } }
 }
 
+/** The database, but every transaction runs `interleave` (another writer committing) before its first group write. */
+function beforeFirstGroupWrite(interleave: () => Promise<void>): PrismaClient {
+  const wrap = (tx: PrismaClient) => new Proxy(tx, { get(target, key, receiver) {
+    const value = Reflect.get(target, key, receiver)
+    if (key !== 'swarmGroup') return value
+    return new Proxy(value, { get(group, method, groupReceiver) {
+      const original = Reflect.get(group, method, groupReceiver)
+      if (method !== 'updateMany') return original
+      return async (...args: unknown[]) => { await interleave(); return original.apply(group, args) }
+    } })
+  } })
+  return new Proxy(db, { get(target, key, receiver) {
+    if (key !== '$transaction') return Reflect.get(target, key, receiver)
+    return (body: (tx: PrismaClient) => Promise<unknown>, options: unknown) =>
+      (target.$transaction as (b: unknown, o: unknown) => Promise<unknown>)((tx: PrismaClient) => body(wrap(tx)), options)
+  } })
+}
+
 /** A Swarm created before projects existed. */
 async function dropProjects(tab: string) {
   await db.$transaction(async tx => {
@@ -115,6 +133,23 @@ describe('work that loses its owner', () => {
     f.clock.now = silent + 2 * MINUTE + 5_000
     await f.observe('lead-host', [f.harness.lead])
     expect(await f.assignment()).toMatchObject({ status: 'lost', lost: { reason: 'its machine Worker Mac has been offline for 2 minutes' } })
+  })
+
+  it('is not lost when a fresh report from its machine commits between the time checks\' read and their write', async () => {
+    const f = await swarm()
+    await f.beat(f.clock.now)
+    f.clock.now += 2 * MINUTE + 5_000
+    // The Lead's poll reads the worker's machine as silent; just before it writes the loss, that machine reports.
+    let raced = false
+    const racing = new SuperTabStore(beforeFirstGroupWrite(async () => {
+      if (raced) return
+      raced = true
+      await f.observe('test-host', [f.harness.worker], { harnessProgress: { [f.harness.worker]: f.clock.now } })
+    }), () => f.clock.now)
+    await racing.deliveries(host, f.tab, f.lead)
+    expect(raced).toBe(true)
+    expect((await f.assignment()).status).toBe('working')
+    expect(await f.lostRows()).toEqual([])
   })
 
   it('is lost at once when the host reports its session stopped, and the Lead is woken with who, why and the last result', async () => {

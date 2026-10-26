@@ -133,6 +133,14 @@ export function loseTasks(state: SuperTabState, now: number, which: (worker: Age
   })
 }
 
+/** The machine parts a loss was judged from (offline, stopped, its reports' renewals). The write that records the loss
+ *  touches them, so a fresh report committed since the read makes it retry on current data instead of fencing a live worker. */
+export function judgedMachines(state: SuperTabState, rows: MessageDraft[]): Array<{ kind: 'machine'; key: string }> {
+  const lost = new Set(rows.flatMap(r => r.source?.kind === 'work-lost' ? [r.source.agentId as string] : []))
+  const machines = new Set(state.agents.filter(a => lost.has(a.id)).map(a => a.machineId))
+  return [...machines].filter(id => state.machines?.some(m => m.machineId === id)).map(key => ({ kind: 'machine' as const, key }))
+}
+
 /** The time checks, run on the Lead's poll and on any machine's report: every worker task with a reason is lost, and
  *  every start dispatched over 3 minutes ago that is not running fails. */
 export function sweepLiveness(state: SuperTabState, now: number): MessageDraft[] {

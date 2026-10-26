@@ -15,7 +15,7 @@ import { logger } from '../utils/logger.js'
 import { canReadAgent, canReadGroup, groupProject, ledProject, projectsOf, agentProjectId, readConversation, roleVersion, type ProjectVisibility } from './projects.js'
 import { bindSession, makeProjectPrivate } from './sessionScope.js'
 import { answersRequest, noteProjectReports, projectUpdateRequest } from './projectUpdates.js'
-import { loseTasks, sweepLiveness, SWEEP_EVERY_MS } from './liveness.js'
+import { judgedMachines, loseTasks, sweepLiveness, SWEEP_EVERY_MS } from './liveness.js'
 import { clock, insertParts, lastChangedAt, loadActive, reassemble, split, type HeadData, type SwarmParts } from './parts/index.js'
 import { commitParts, indexesOf, numberMessages, type Touch, type Written } from './parts/commit.js'
 import { touchesFor } from './parts/touches.js'
@@ -1376,7 +1376,8 @@ export class SuperTabStore {
       // when a task there is lost.
       const saved = async (lost: MessageDraft[] = []) => {
         const sequences = numberMessages(state, lost, now)
-        const version = (await this.save(tx, loaded, state, stamp)).versions.get(`machine:${machineId}`) ?? 0
+        const touches = judgedMachines(state, lost).filter(t => t.key !== machineId)
+        const version = (await this.save(tx, loaded, state, stamp, touches)).versions.get(`machine:${machineId}`) ?? 0
         await this.writeMessages(tx, tabId, state, lost, sequences)
         return { version }
       }
@@ -1476,7 +1477,7 @@ export class SuperTabStore {
       }
       // One write for both: the time checks' changes and the wake-up's.
       const sequences = numberMessages(state, written, this.now())
-      await this.save(tx, loaded, state, clock.next(), woken ? [{ kind: 'agent', key: agentId }] : [])
+      await this.save(tx, loaded, state, clock.next(), [...judgedMachines(state, written), ...woken ? [{ kind: 'agent' as const, key: agentId }] : []])
       await this.writeMessages(tx, tabId, state, written, sequences)
       const rows = await tx.superTabDelivery.findMany({ where: { tabId, agentId, status: { in: ['queued', 'claimed', 'uncertain'] } },
         orderBy: { createdAt: 'asc' }, take: 100 })
