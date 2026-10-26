@@ -668,9 +668,11 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       break
     case 'agent.alert': {
       effects.messages.push(...terminalAlert(state, actor, sender, operationId, context.now, command))
-      // A reset time the screen gave is when the task resumes in this same session unless it is handed on first.
-      const resumeAt = command.resetAt && Date.parse(command.resetAt) > context.now ? agent(state, command.agentId).limitedUntil ?? undefined : undefined
-      if (command.alert === 'limit' && command.active) effects.messages.push(...loseTasks(state, context.now, worker => worker.id === command.agentId, resumeAt))
+      if (command.alert === 'limit' && command.active) {
+        // A reset time the screen gave is when the task resumes in this same session unless it is handed on first.
+        const resumeAt = command.resetAt && Date.parse(command.resetAt) > context.now ? agent(state, command.agentId).limitedUntil ?? undefined : undefined
+        effects.messages.push(...loseTasks(state, context.now, worker => worker.id === command.agentId, resumeAt))
+      }
       break
     }
     case 'project.report': {
