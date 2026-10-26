@@ -113,14 +113,18 @@ class WebUxApp extends AppNotifier {
             agentName: agent.name,
             engineId: agent.engine,
             readOnly: readOnly,
-            // The computer owns the grid and redraws it at the size a resize
-            // asks for; without that, a phone's pane kept the 80 columns the
-            // screen was written at, running off its edge.
-            send: (type, _) async {
+            // The computer owns the grid: it answers a resize with the screen
+            // drawn at the size asked for, which replaces the pane's grid (a
+            // keyframe). Without that, a pane kept the 80x24 the screen was
+            // written at: off the right edge of a phone, and scrolled under
+            // its header on a tablet whose pane is shorter than 24 rows.
+            send: (type, payload) async {
               if (type == 'terminal_resize' && screen.isNotEmpty) {
                 // Its answer arrives after the resize, never inside it.
                 await Future<void>.delayed(Duration.zero);
-                session.terminal.write('\x1b[2J\x1b[H$screen');
+                session.terminal
+                  ..resize(payload['cols'] as int, payload['rows'] as int)
+                  ..write('\x1b[2J\x1b[H$screen');
               }
               return true;
             },

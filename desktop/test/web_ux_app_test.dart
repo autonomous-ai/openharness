@@ -84,24 +84,23 @@ void main() {
       line.toString().trimRight(),
   ];
 
-  test(
-    'a resize redraws the screen at the new width, as a daemon does',
-    () async {
-      final app = WebUxApp()..addMachine('m1', 'Studio Mac');
-      addTearDown(app.dispose);
-      final session = app.openTerminal(
-        'm1',
-        _agent,
-        screen: '${'x' * 60}\r\nend',
-      );
+  test('a resize is answered with the screen redrawn at that size, as a computer does', () async {
+    final app = WebUxApp()..addMachine('m1', 'Studio Mac');
+    addTearDown(app.dispose);
+    final session = app.openTerminal(
+      'm1',
+      _agent,
+      screen: '${'x' * 60}\r\nend',
+    );
 
-      // A phone's pane: narrower than the 80 columns the screen was written at.
-      session.terminal.resize(30, 10);
-      await pumpEventQueue();
+    // A pane narrower and shorter than the 80x24 the screen was written at
+    // reports its size, as the view does: it never resizes the grid itself.
+    session.terminal.onResize!(45, 20, 0, 0);
+    await pumpEventQueue();
 
-      expect(rows(session).take(3), ['x' * 30, 'x' * 30, 'end']);
-    },
-  );
+    expect((session.terminal.viewWidth, session.terminal.viewHeight), (45, 20));
+    expect(rows(session).take(3), ['x' * 45, 'x' * 15, 'end']);
+  });
 
   test('a view-only terminal keeps the grid another app drew', () async {
     final app = WebUxApp()..addMachine('m1', 'Studio Mac');
@@ -113,10 +112,10 @@ void main() {
       readOnly: true,
     );
 
-    session.terminal.resize(30, 10);
+    session.terminal.onResize!(45, 20, 0, 0);
     await pumpEventQueue();
 
-    // No input, so no resize reaches the computer: the grid is clipped.
-    expect(rows(session).take(2), ['x' * 30, 'end']);
+    // No input, so no resize reaches the computer: its grid stays.
+    expect((session.terminal.viewWidth, session.terminal.viewHeight), (80, 24));
   });
 }
