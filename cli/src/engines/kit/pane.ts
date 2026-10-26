@@ -214,8 +214,11 @@ function promptMarker(engine: AgentEngine): RegExp {
 }
 
 const COMPOSER_RULE = /^[─━]{3,}(?:.*[─━]{3,})?\s*$/
-/** A row only Claude Code's own footer draws: its shortcut hint, or its permission mode with the key that cycles it. */
-const CLAUDE_FOOTER = /^\s+(?:\? for shortcuts|.*\(shift\+tab to cycle\))/
+/** A row only Claude Code's own footer draws: its shortcut hint, or its permission mode with the key that cycles it. Claude
+ *  Code cuts the row at the pane's width, so its start is enough: a mode's `⏵⏵`/`⏸`, or `? for sh…`. A 42-column pane on
+ *  DESKTOP-0TFH0OJ (2026-10-26) showed `⏵⏵ bypass permissions on (shift+tab to`, its composer read as absent, and every
+ *  Swarm message typed into it was held before its Enter as `prompt_hidden`. */
+const CLAUDE_FOOTER = /^\s+(?:\? for sh|[⏵⏸]+\s|.*\(shift\+tab to cycle\))/
 /**
  * The line of Claude Code's composer when it draws `>` for its marker, or -1. In the Harness terminal on Windows it draws
  * `>` and a no-break space where it draws `❯` elsewhere, so the pane never read idle and every Super Tab delivery to it

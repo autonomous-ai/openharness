@@ -1,6 +1,8 @@
 import 'dart:async';
 import 'dart:math';
 
+import 'package:clock/clock.dart';
+import 'package:collection/collection.dart' show DeepCollectionEquality;
 import 'package:dio/dio.dart' show CancelToken, DioException, DioExceptionType;
 import 'package:flutter/foundation.dart';
 
@@ -8,7 +10,11 @@ import '../logging/app_log.dart';
 import '../state/harness_attachments.dart';
 import 'attachment_upload.dart';
 import 'model.dart';
+import 'reading.dart';
 import 'review_verdict.dart';
+
+/// A messages read started beside a state read, and what it asked for.
+typedef _EarlyRead = ({String query, Future<Map<String, dynamic>> page});
 
 typedef SuperTabRequest = Future<Map<String, dynamic>> Function(
   String method,
@@ -44,8 +50,10 @@ class SuperTabController extends ChangeNotifier {
     this.uploadTimeout = const Duration(minutes: 2),
     Map<String, dynamic> initial = const {},
     this.pollInterval = const Duration(seconds: 3),
-  }) {
+    SuperTabReading reading = const SuperTabReading(),
+  }) : _policy = reading {
     if (initial['tabId'] == tabId && initial['accountId'] == accountId) {
+      _savedSelection = initial['selectedId'] is String;
       expandedProjects.addAll(
         (initial['expandedProjects'] as List? ?? const []).whereType<String>(),
       );
@@ -124,8 +132,52 @@ class SuperTabController extends ChangeNotifier {
   bool loading = false, saving = false, uploading = false;
   bool accessRevoked = false;
   bool _disposed = false;
-  Timer? _poll, _draftSave;
+  Timer? _poll, _draftSave, _graceEnd;
   Future<void>? _refreshing;
+
+  /// How this tab keeps itself current; Desktop's unless a host sets another.
+  SuperTabReading get reading => _policy;
+  set reading(SuperTabReading value) {
+    if (identical(value, _policy)) return;
+    _policy = value;
+    if (_startedAt != null) _schedule();
+  }
+
+  SuperTabReading _policy;
+  DateTime? _startedAt, _lastFullRead;
+
+  /// The state last drawn, while the reading adapts ([_read]).
+  Map<String, dynamic>? _shownState;
+
+  /// The last time the person did something here, or a new message reached
+  /// the open conversation: what keeps the full poll ([SuperTabReading.quietPoll]).
+  DateTime _lastActivity = clock.now();
+
+  /// The saved state named the open conversation before any read.
+  bool _savedSelection = false;
+
+  /// The first reads found no machine connected, within the grace
+  /// ([SuperTabReading.connectGrace]): still loading rather than failed.
+  bool _waitingForMachine = false;
+  Object? _graceFailure;
+
+  /// Not on screen: another tab is shown, or the page is hidden. Only a
+  /// reading that [SuperTabReading.pausesAway] stops polling for it; coming
+  /// back reads at once.
+  bool get away => _away;
+  bool _away = false;
+  set away(bool value) {
+    if (_away == value) return;
+    _away = value;
+    if (!_policy.pausesAway || _startedAt == null || _disposed) return;
+    if (value) {
+      _poll?.cancel();
+      return;
+    }
+    _acted();
+    unawaited(refresh());
+    _schedule();
+  }
 
   /// The latest read of the Swarm's state failed (and the tab is still ours). While it is, what the
   /// machines last reported cannot be told from what they report now: a machine is neither online nor
@@ -336,11 +388,57 @@ class SuperTabController extends ChangeNotifier {
 
   void start() {
     if (_disposed) return;
+    _startedAt = _lastActivity = clock.now();
     unawaited(refresh());
+    _schedule();
+  }
+
+  /// [after] is what is left of the poll once a read took the rest of it.
+  void _schedule([Duration? after]) {
     _poll?.cancel();
-    if (pollInterval > Duration.zero) {
+    if (_disposed || pollInterval <= Duration.zero) return;
+    if (!_policy.adapts) {
       _poll = Timer.periodic(pollInterval, (_) => unawaited(refresh()));
+      return;
     }
+    if (accessRevoked || (_policy.pausesAway && _away)) return;
+    final wait = after ?? pollInterval;
+    _poll = Timer(
+      wait > Duration.zero ? wait : Duration.zero,
+      () => unawaited(_tick()),
+    );
+  }
+
+  /// One adaptive poll: the full read when it is due, else only the open
+  /// conversation's new messages and its own unsettled receipt. The next one
+  /// comes a poll after this one began, however long its answer took.
+  Future<void> _tick() async {
+    final began = clock.now();
+    await (_fullReadDue ? refresh() : _readMessages(selectedId, light: true));
+    _schedule(pollInterval - clock.now().difference(began));
+  }
+
+  bool get _fullReadDue {
+    final quiet = _policy.quietPoll;
+    if (quiet == null || snapshot == null || _refreshFailing) return true;
+    final now = clock.now();
+    if (now.difference(_lastActivity) < _policy.quietAfter) return true;
+    final last = _lastFullRead;
+    return last == null || now.difference(last) >= quiet;
+  }
+
+  void _acted() => _lastActivity = clock.now();
+
+  /// A machine able to serve Swarm reads just connected: read now instead of
+  /// at the next poll ([SuperTabReading.readsOnConnect]). Joins a read under way.
+  Future<void> machineAvailable() {
+    if (!_policy.readsOnConnect ||
+        _disposed ||
+        accessRevoked ||
+        (_policy.pausesAway && _away)) {
+      return Future.value();
+    }
+    return refresh();
   }
 
   void _changed() {
@@ -403,6 +501,7 @@ class SuperTabController extends ChangeNotifier {
   }
 
   void setDraft(String conversationId, String value) {
+    _acted();
     _drafts[conversationId] = value;
     _mentions[conversationId]?.removeWhere(
       (_, token) => !containsMention(value, token),
@@ -431,6 +530,7 @@ class SuperTabController extends ChangeNotifier {
       return;
     }
     devicesSelected = false;
+    _acted();
     if (!snapshot!.isProjectLead(id)) {
       final group = snapshot!.conversation(id)!;
       expandedProjects.add(group.projectId);
@@ -463,14 +563,36 @@ class SuperTabController extends ChangeNotifier {
   }
 
   Future<void> _read() async {
+    // An adapting read that changes nothing redraws nothing: on a phone each
+    // redraw of the whole tab is a long frame, every poll.
+    final quiet = _policy.adapts && snapshot != null;
+    final before = _shown;
+    var stateChanged = false;
     loading = snapshot == null;
-    _changed();
+    if (!quiet) _changed();
+    _lastFullRead = clock.now();
     final took = Stopwatch()..start();
+    // The open conversation's messages, asked for beside the state
+    // ([SuperTabReading.messagesWithState]); dropped if the state moves the
+    // selection elsewhere.
+    final earlyId = selectedId;
+    final earlyQuery = _earlyQuery(earlyId);
+    final early = earlyQuery == null
+        ? null
+        : (request('GET', '${_messagesPath(earlyId)}$earlyQuery')..ignore());
+    // A conversation the state already has takes its answer as it comes, so
+    // a reply shows without waiting for the state.
+    final messagesRead = early != null && snapshot != null
+        ? (_readMessages(earlyId, early: (query: earlyQuery!, page: early))
+            ..ignore())
+        : null;
     try {
       final answer = await request('GET', _path);
       if (_disposed || accessRevoked) return;
       _refreshFailing = false;
       unreachableSince = null;
+      _waitingForMachine = false;
+      _graceEnd?.cancel();
       stateReads++;
       final nextRevision = (answer['revision'] as num).toInt();
       // How long the Swarm took to answer, and nothing it said: the log shows a slow or failing
@@ -479,7 +601,14 @@ class SuperTabController extends ChangeNotifier {
         'swarm',
         'state read in ${took.elapsedMilliseconds} ms (revision $nextRevision)',
       );
-      final next = SuperTabSnapshot.fromJson(superTabMap(answer['state']));
+      final raw = superTabMap(answer['state']);
+      // Some of the state is worked out at read time (an agent seen down, a
+      // limit that ran out) and changes with no new revision.
+      if (_policy.adapts) {
+        stateChanged = !const DeepCollectionEquality().equals(raw, _shownState);
+        _shownState = raw;
+      }
+      final next = SuperTabSnapshot.fromJson(raw);
       if (next.id != tabId) {
         throw const FormatException('A different Swarm was returned.');
       }
@@ -518,9 +647,22 @@ class SuperTabController extends ChangeNotifier {
         error = null;
         if (localAccessChanged) _saveSoon();
       }
-      await loadMessages(selectedId);
+      await (selectedId == earlyId && messagesRead != null
+          ? messagesRead
+          : _readMessages(
+              selectedId,
+              early: selectedId == earlyId && early != null
+                  ? (query: earlyQuery!, page: early)
+                  : null,
+            ));
     } catch (failure) {
-      _readFailure(failure);
+      if (_inConnectGrace(failure)) {
+        _waitingForMachine = true;
+        _graceFailure = failure;
+      } else {
+        _waitingForMachine = false;
+        _readFailure(failure);
+      }
       if (!_disposed && !accessRevoked) {
         _refreshFailing = true;
         unreachableSince ??= DateTime.now();
@@ -532,9 +674,81 @@ class SuperTabController extends ChangeNotifier {
             '${failure is SuperTabFailure ? '${failure.code} (status ${failure.statusCode})' : failure.runtimeType}',
       );
     } finally {
+      loading = _waitingForMachine;
+      if (!quiet || stateChanged || _shown != before) _changed();
+    }
+  }
+
+  /// What a state read can change on screen, beside the messages.
+  ({int revision, String? error, bool failing, bool revoked, bool loading})
+  get _shown => (
+    revision: revision,
+    error: error,
+    failing: _refreshFailing,
+    revoked: accessRevoked,
+    loading: loading,
+  );
+
+  /// A first read that found no machine connected, before the grace
+  /// ([SuperTabReading.connectGrace]) runs out: its error waits for the grace.
+  bool _inConnectGrace(Object failure) {
+    final since = _startedAt;
+    if (snapshot != null ||
+        since == null ||
+        failure is! SuperTabFailure ||
+        failure.code != 'MACHINE_UNAVAILABLE') {
+      return false;
+    }
+    final left = _policy.connectGrace - clock.now().difference(since);
+    if (left <= Duration.zero) return false;
+    _graceEnd ??= Timer(left, () {
+      if (_disposed || !_waitingForMachine) return;
+      _waitingForMachine = false;
+      _readFailure(_graceFailure!);
       loading = false;
       _changed();
+    });
+    return true;
+  }
+
+  /// The same messages with the same receipts: posted text does not change.
+  static bool _sameMessages(
+    List<SuperTabMessage>? shown,
+    List<SuperTabMessage> next,
+  ) {
+    if (shown == null || shown.length != next.length) return false;
+    for (var i = 0; i < next.length; i++) {
+      final a = shown[i], b = next[i];
+      if (a.id != b.id || a.deliveries.length != b.deliveries.length) {
+        return false;
+      }
+      for (var j = 0; j < b.deliveries.length; j++) {
+        if (!mapEquals(a.deliveries[j], b.deliveries[j])) return false;
+      }
     }
+    return true;
+  }
+
+  String _messagesPath(String id) =>
+      '$_path/conversations/${Uri.encodeComponent(id)}/messages';
+
+  /// What a read of [id]'s messages asks for: the page before the oldest
+  /// shown, what came after the newest, or the latest page.
+  String _query(String id, {bool older = false}) {
+    if (older) return '?before=${_before[id]}';
+    final tail = _messages[id]?.lastOrNull?.sequence;
+    return tail != null ? '?after=$tail' : '';
+  }
+
+  /// The query of [id]'s messages read to start beside a state read, or null.
+  /// On first open only for the conversation the saved state named; after
+  /// that, for a conversation the state has and no read of it under way.
+  String? _earlyQuery(String id) {
+    if (!_policy.messagesWithState || _reading.containsKey(id)) return null;
+    final known = snapshot == null
+        ? _savedSelection
+        : snapshot!.conversation(id) != null;
+    return known ? _query(id) : null;
   }
 
   void _readFailure(Object failure, {bool revokeTab = true}) {
@@ -554,13 +768,32 @@ class SuperTabController extends ChangeNotifier {
   }
 
   /// Joins a read of [id] already under way, so a caller can wait for it.
-  Future<void> loadMessages(String id, {bool older = false}) =>
-      _reading[id] ??= _loadMessages(id, older: older).whenComplete(() {
-        // A block: whenComplete would wait on the removed future, itself.
-        _reading.remove(id);
-      });
+  Future<void> loadMessages(String id, {bool older = false}) {
+    if (older) _acted();
+    return _readMessages(id, older: older);
+  }
 
-  Future<void> _loadMessages(String id, {required bool older}) async {
+  /// [light] asks only for new messages (and the person's own unsettled
+  /// receipt), not the page again; [early] is a read already asked for.
+  Future<void> _readMessages(
+    String id, {
+    bool older = false,
+    bool light = false,
+    _EarlyRead? early,
+  }) => _reading[id] ??=
+      _loadMessages(id, older: older, light: light, early: early).whenComplete(
+        () {
+          // A block: whenComplete would wait on the removed future, itself.
+          _reading.remove(id);
+        },
+      );
+
+  Future<void> _loadMessages(
+    String id, {
+    required bool older,
+    bool light = false,
+    _EarlyRead? early,
+  }) async {
     if (_disposed || accessRevoked || snapshot?.conversation(id) == null) {
       return;
     }
@@ -570,17 +803,18 @@ class SuperTabController extends ChangeNotifier {
       final tail = known != null && known.isNotEmpty
           ? known.last.sequence
           : null;
-      final query = older
-          ? '?before=${_before[id]}'
-          : tail != null
-          ? '?after=$tail'
-          : '';
-      var answer = await request(
-        'GET',
-        '$_path/conversations/${Uri.encodeComponent(id)}/messages$query',
-      );
+      final query = _query(id, older: older);
+      final first = early != null && early.query == query ? early.page : null;
+      var answer = first != null
+          ? await first.catchError(
+              (Object _) => request('GET', '${_messagesPath(id)}$query'),
+            )
+          : await request('GET', '${_messagesPath(id)}$query');
+      final arrived =
+          !older && tail != null && (answer['messages'] as List).isNotEmpty;
       if (!_disposed &&
           !older &&
+          !light &&
           tail != null &&
           (answer['messages'] as List).isEmpty) {
         // No new text: refresh delivery receipts in the page already shown.
@@ -644,12 +878,17 @@ class SuperTabController extends ChangeNotifier {
           combined[row.id] = row;
         }
       }
-      _messages[id] = combined.values.toList()
+      final next = combined.values.toList()
         ..sort((a, b) => a.sequence.compareTo(b.sequence));
+      // An adapting read that found nothing new changes nothing on screen.
+      final same = _policy.adapts && _sameMessages(_messages[id], next);
+      _messages[id] = next;
       if (older || !_before.containsKey(id)) {
         _before[id] = (answer['next'] as num?)?.toInt();
       }
-      _changed();
+      // Something new in the conversation on screen keeps the full poll.
+      if (arrived && id == selectedId) _acted();
+      if (!same) _changed();
     } catch (failure) {
       _readFailure(failure, revokeTab: false);
       if (failure is SuperTabFailure &&
@@ -665,6 +904,7 @@ class SuperTabController extends ChangeNotifier {
     if (_disposed || !_maySend(command) || saving || _pending != null) {
       return null;
     }
+    _acted();
     _pending = {
       'operationId': superTabOperationId(),
       'command': Map<String, dynamic>.of(command),
@@ -935,6 +1175,7 @@ class SuperTabController extends ChangeNotifier {
   void dispose() {
     _disposed = true;
     _poll?.cancel();
+    _graceEnd?.cancel();
     _draftSave?.cancel();
     for (final files in _attachments.values) {
       files.dispose();

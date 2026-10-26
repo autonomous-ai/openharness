@@ -88,14 +88,38 @@ const cleanupRows = (tabId: string, state: SuperTabState, machineId: string, own
  *  Swarms only waiting for this machine to close a removed agent's session. */
 const HOST_TABS = { orderBy: { updatedAt: 'desc' as const }, take: 100 }
 
-/** Retrying a transaction never repeats a host action. All effects here are durable database writes. */
-async function transaction<T>(db: PrismaClient, body: (tx: Transaction) => Promise<T>): Promise<T> {
-  for (let attempt = 0; ; attempt++) {
-    try { return await db.$transaction(body) } catch (error) {
-      const code = error && typeof error === 'object' && 'code' in error ? error.code : null
-      if (attempt >= 4 || (code !== 'P2034' && code !== 'P2002')) throw error
+/**
+ * Retrying a transaction never repeats a host action. All effects here are durable database writes.
+ *
+ * Every command rewrites the whole Swarm row, and a busy Swarm is written every few seconds: on 2026-10-26 a
+ * 1.16 MB row (revision 213,9xx) lost all five back-to-back retries of a person's `agent.add` to its agents' and
+ * hosts' writes, and the form showed a 500 on every Check status. Retries now wait, growing and jittered, and a
+ * command that still cannot get in says the Swarm is busy, as a 503: every client retries a 5xx, while a 4xx is final
+ * (a 409 would stop a host's terminal recording for good, cli superTabs/native.ts). The 5 s default
+ * transaction timeout also expired on that row's reads; Mongo's own transient errors (a lock wait) retry too.
+ */
+export async function transaction<T>(db: Pick<PrismaClient, '$transaction'>, body: (tx: Transaction) => Promise<T>,
+  sleep: (ms: number) => Promise<void> = ms => new Promise(resolve => setTimeout(resolve, ms))): Promise<T> {
+  for (let attempt = 1; ; attempt++) {
+    try { return await db.$transaction(body, TRANSACTION_OPTIONS) } catch (error) {
+      if (!retryable(error)) throw error
+      if (attempt >= TRANSACTION_ATTEMPTS) {
+        // A unique key still taken after every retry is a real duplicate, not contention.
+        if ((error as { code?: unknown }).code === 'P2002') throw error
+        fail('SWARM_BUSY', 'This Swarm is busy. Try again in a moment.', 503)
+      }
+      await sleep(Math.random() * Math.min(TRANSACTION_BACKOFF_CAP_MS, TRANSACTION_BACKOFF_MS * 2 ** (attempt - 1)))
     }
   }
+}
+const TRANSACTION_OPTIONS = { maxWait: 5_000, timeout: 15_000 }
+const TRANSACTION_ATTEMPTS = 8
+const TRANSACTION_BACKOFF_MS = 50
+const TRANSACTION_BACKOFF_CAP_MS = 1_500
+function retryable(error: unknown): boolean {
+  if (!error || typeof error !== 'object') return false
+  const code = 'code' in error ? error.code : null
+  return code === 'P2034' || code === 'P2002' || (error instanceof Error && error.message.includes('TransientTransactionError'))
 }
 
 /** A Lead's start dispatches within seconds of being recorded; one still undispatched after this long was given up. */

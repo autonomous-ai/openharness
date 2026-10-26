@@ -218,6 +218,16 @@ class SuperTabFixtureConnection extends WsConn {
       if (body?['command'] case final Map command
           when command['type'] == 'agent.add') {
         joins.add(Map<String, dynamic>.from(body!));
+        // As the backend: a deleted project's conversation is not found.
+        if (!(server.state['conversations'] as List).cast<Map>().any(
+          (g) => g['id'] == command['conversationId'],
+        )) {
+          throw const SuperTabFailure(
+            'NOT_FOUND',
+            'This conversation is unavailable.',
+            statusCode: 404,
+          );
+        }
         if (!server.receipts.containsKey(body['operationId'])) {
           (server.state['agents'] as List).add({
             'id': 'lead-agent',

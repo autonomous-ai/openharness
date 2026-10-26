@@ -32,6 +32,8 @@ const MACHINE_REQUESTS = new Set([...SHELL_REQUESTS, 'agent_purge', 'agent_workt
   'cloud_transcript', 'cloud_send', 'cloud_agents',
   // A Harness OS computer managed from the phone (services/osDevice.ts): a Wi-Fi join carries the network's password.
   'os_device',
+  // Add-ons of a device that is this machine (lib/autonomous-device/machineAddons.ts): a proposal's note and what it published.
+  'machine_addon',
   // Sharing a machine across accounts (services/sharedMachines.ts): the addresses it is shared with, and where
   // a guest may start a harness (the owner's folders).
   'shared_machines', 'guest_folders',

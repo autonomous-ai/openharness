@@ -8,7 +8,7 @@
 import { join } from 'node:path'
 import { homeRoots, launchHomeOf } from '../lib/engineHomes.js'
 import { homeIsNetworkOrDevice } from './kit/homeAdoption.js'
-import { recordTrustIn, trustsIn } from './kit/folderTrust.js'
+import { recordAcceptanceIn, recordTrustIn, trustsIn } from './kit/folderTrust.js'
 import { recordInheritedMcp } from './kit/inheritedMcp.js'
 import { repairHistory } from './kit/resumeRepair.js'
 import { launchContract } from './launches.js'
@@ -52,6 +52,15 @@ export function folderTrust(engine: AgentEngine, profile?: string | null, enviro
       return recorded
     },
   }
+}
+
+/** Record that full mode's one-time warning is accepted in `engine`'s settings, as its "Yes" would (`bypassAcceptance`); null
+ *  for an engine with no such warning. A network or device home is never opened, as for trust. */
+export function acceptFullMode(engine: AgentEngine, environment?: NodeJS.ProcessEnv): 'accepted' | 'already' | 'skipped' | null {
+  const contract = launchContract(engine)?.bypassAcceptance
+  if (!contract) return null
+  const home = launchHomeOf(contract.home, null, environment)
+  return homeIsNetworkOrDevice(home) ? 'skipped' : recordAcceptanceIn(join(home, contract.file), contract.key)
 }
 
 /** The session a resume relaunches. `codexHome` is the agent's own engine home, the row's profile. */

@@ -68,9 +68,10 @@ vi.mock('../../engines/kit/nativeHookFiles.js', () => ({
 const trust = vi.hoisted(() => ({
   claudeTrusts: vi.fn((_path: string) => false), codexTrusts: vi.fn((_path: string, _profile?: string | null) => false),
   preTrustClaudeProject: vi.fn((_path: string): unknown => undefined), preTrustCodexProject: vi.fn((_path: string, _profile?: string | null): unknown => undefined),
+  acceptFullMode: vi.fn((_engine: string, _environment?: NodeJS.ProcessEnv): unknown => 'accepted'),
 }))
-const { preTrustClaudeProject, preTrustCodexProject } = trust
-vi.mock('../../engines/launchPrep.js', () => ({ folderTrust: (engine: string, profile?: string | null) => engine === 'claude'
+const { preTrustClaudeProject, preTrustCodexProject, acceptFullMode } = trust
+vi.mock('../../engines/launchPrep.js', () => ({ acceptFullMode: trust.acceptFullMode, folderTrust: (engine: string, profile?: string | null) => engine === 'claude'
     ? { trusts: (path: string) => trust.claudeTrusts(path), record: (path: string) => trust.preTrustClaudeProject(path) }
     : engine === 'codex' ? { trusts: (path: string) => trust.codexTrusts(path, profile), record: (path: string) => trust.preTrustCodexProject(path, profile) } : null }))
 vi.mock('../../lib/createAgentPane.js', () => ({ createAndRegisterPane: vi.fn() }))
@@ -189,6 +190,24 @@ describe('creating an agent', () => {
     const file = JSON.parse(/read (".*") with/.exec(place.swarmInstructions!)![1]!)
     expect(readFileSync(file, 'utf8').includes('Work otherwise the way you normally do.')).toBe(mode === 'default')
     expect(place.swarmInstructions!.startsWith(mode === 'default' ? 'Use the swarm-dev skill for this session: the team process' : 'Use the built-in swarm-dev skill')).toBe(true)
+  })
+
+  // A Swarm Lead on the Mac Studio sat at Claude Code's "Yes, I accept" for full mode before its first turn (2026-10-26).
+  it('accepts full mode\'s warning for a Swarm agent the Swarm starts in full mode, and for nothing else', async () => {
+    await setup().create(request({ swarmRole: 'lead', permissionMode: 'full' }))
+    expect(acceptFullMode).toHaveBeenLastCalledWith('claude', undefined)
+    const launch = { current: () => true, environment: { HOME: root, CLAUDE_CONFIG_DIR: '/moved' }, prepareHooks: async () => true } as unknown as NativeLaunch
+    await setup({ native: async () => ({ ok: true, launch }) }).create(request({ swarmRole: 'dev', permissionMode: 'full' }))
+    expect(acceptFullMode).toHaveBeenLastCalledWith('claude', expect.objectContaining({ CLAUDE_CONFIG_DIR: '/moved' }))
+    await setup().create(request({ swarmRole: 'lead', permissionMode: 'auto' }))
+    await setup().create(request({ permissionMode: 'full' }))
+    expect(acceptFullMode).toHaveBeenCalledTimes(2)
+    // A settings file it cannot write leaves the engine to ask, and the launch goes on.
+    vi.mocked(acceptFullMode).mockImplementationOnce(() => { throw new Error('settings locked') }).mockImplementationOnce(() => { throw 'worse' })
+    expect(await setup().create(request({ swarmRole: 'lead', permissionMode: 'full' }))).toMatchObject({ ok: true })
+    expect(await setup().create(request({ swarmRole: 'lead', permissionMode: 'full' }))).toMatchObject({ ok: true })
+    expect(console.warn).toHaveBeenCalledWith('[agent] full mode acceptance · settings locked')
+    expect(console.warn).toHaveBeenCalledWith('[agent] full mode acceptance · worse')
   })
 
   it('keeps a selected Store harness when attaching a Swarm skill', async () => {

@@ -66,4 +66,12 @@ class HarnessLaunchIntegration {
   bool pending = false;
   bool completed = false;
   String? preparedPrompt;
+  // What a request was sent with. The journal keeps them, and a [pending]
+  // recovery shows them: Check status asks that machine, not the form's.
+  String? machineId, engine, folder;
+  // What a [pending] recovery is waiting for, in the person's words.
+  String? pendingNote;
+  // Drops a request recovery cannot finish. Null once dropped, or a question
+  // to confirm before dropping it anyway; throws when the request is kept.
+  Future<String?> Function({bool anyway})? discard;
 }

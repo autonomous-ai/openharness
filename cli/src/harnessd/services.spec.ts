@@ -475,9 +475,9 @@ describe('ServiceSupervisor', () => {
 
   it('runs the devices only once there is one, asked for by a core of protocol 4, and from the start when named (tests)', () => {
     const [devices] = serviceSpecs({}, SERVICE_HOSTS).filter((spec) => spec.name === 'devices')
-    expect(devices).toMatchObject({ services: ['devices', 'wifi'], onDemand: true, askedSince: 4 })
+    expect(devices).toMatchObject({ services: ['devices', 'wifi', 'machineAddons'], onDemand: true, askedSince: 4 })
     const [named] = serviceSpecs({ HARNESSD_SERVICES: 'devices' }, SERVICE_HOSTS)
-    expect(named.services).toEqual(['devices', 'wifi'])
+    expect(named.services).toEqual(['devices', 'wifi', 'machineAddons'])
     expect(named.onDemand).toBeUndefined()
   })
 

@@ -436,7 +436,7 @@ export const SERVICE_HOSTS: Readonly<Record<string, ServiceHostSpec>> = {
   // on a link of its own: its receipts, its streams and its Store preparations. Started only once there is
   // a device, or a request for one (core/devicesWake.ts): about 72 MiB at idle, which a computer with none
   // never pays.
-  devices: { services: ['devices', 'wifi'], heapLimitMiB: 256, rssLimitMiB: 512, onDemand: true, askedSince: 4 },
+  devices: { services: ['devices', 'wifi', 'machineAddons'], heapLimitMiB: 256, rssLimitMiB: 512, onDemand: true, askedSince: 4 },
 }
 
 /** Every service this build can run outside the core's process: what `HARNESSD_SERVICES` names. */

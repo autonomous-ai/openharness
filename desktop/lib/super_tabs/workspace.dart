@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import '../shared/widgets/app_dialog.dart';
 import '../state/app_state.dart';
 import '../state/terminal_pane.dart';
+import '../state/workspace_chrome.dart';
 import 'agent_group_picker.dart';
 import 'controller.dart';
 import 'dialog_scope.dart';
@@ -47,6 +48,31 @@ class _SuperTabWorkspaceState extends State<SuperTabWorkspace> {
   final _failures = <(String, String?), String>{};
   final _nativeHeartbeats = <Timer>[];
 
+  /// The Swarm tab last told to the client as the one on screen.
+  String? _shown;
+  late final _lifecycle = AppLifecycleListener(
+    onStateChange: (state) => app.superTabs.pageVisible =
+        state != AppLifecycleState.hidden &&
+        state != AppLifecycleState.paused &&
+        state != AppLifecycleState.detached,
+  );
+
+  @override
+  void initState() {
+    super.initState();
+    _lifecycle;
+  }
+
+  /// Which Swarm tab is on screen, told after the frame: a change can start
+  /// a read, and a read notifies listeners this build may be one of.
+  void _showTab(String? id) {
+    if (_shown == id) return;
+    _shown = id;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted && _shown == id) app.superTabs.show(id);
+    });
+  }
+
   void _clearNativeContext() {
     for (final timer in _nativeHeartbeats) {
       timer.cancel();
@@ -71,6 +97,7 @@ class _SuperTabWorkspaceState extends State<SuperTabWorkspace> {
 
   @override
   void dispose() {
+    _lifecycle.dispose();
     _clearNativeContext();
     super.dispose();
   }
@@ -398,6 +425,9 @@ class _SuperTabWorkspaceState extends State<SuperTabWorkspace> {
     final canvas = KeyedSubtree(key: _canvasKey, child: widget.canvas);
     final tab = app.activeSwarm;
     final id = tab.superTabId;
+    // Before any open below: a controller starts reading the way it is made.
+    app.superTabs.reading = WorkspaceChrome.of(context).superTabReading;
+    _showTab(tab.isSuperTab ? id : null);
     if (!tab.isSuperTab || id == null) {
       _clearNativeContext();
       _terminalRequest = null;
