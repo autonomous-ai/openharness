@@ -289,6 +289,8 @@ const fields = {
   OPENCODE_PATH: maybe,
   // Path to the `pi` CLI for Pi recap one-shots (else `pi` is resolved from PATH).
   PI_PATH: maybe,
+  // Path to the `omp` CLI (else `omp` is resolved from PATH).
+  OMP_PATH: maybe,
   // Path to the `hermes` CLI for Hermes recap one-shots (else `hermes` is resolved from PATH).
   HERMES_PATH: maybe,
   // Path to the `commandcode` CLI for Command Code recap one-shots (else resolved from PATH).

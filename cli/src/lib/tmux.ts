@@ -161,7 +161,6 @@ async function panePid(pane: string): Promise<number | null> {
 }
 
 /**
-
  * The pane's OWN process — whatever is sitting there, engine or not.
  *
  * [resolvePaneEngineProcess] answers "is the engine running here yet", which during an install is

@@ -71,6 +71,8 @@ export const ENGINE_INSTALL: Readonly<Record<ProcessEngine, EngineInstallRecipe>
     executable: { names: ['opencode'], npmGlobal: true, homeRelativePaths: ['.opencode/bin/opencode'] },
   },
   pi: {
+    // pi.dev publishes the scoped package with --ignore-scripts. The unscoped package is unrelated
+    // and does not provide the `pi` executable.
     command: 'npm install -g --ignore-scripts @earendil-works/pi-coding-agent',
     source: 'https://pi.dev/',
     executable: { names: ['pi'], npmGlobal: true },
