@@ -2394,7 +2394,8 @@ describe('lost work (liveness.ts)', () => {
   })
 
   it('keeps the lost worker marked when the Lead cancels its task or hands it to another agent (final review, Important 3)', () => {
-    const marked = { conversationId: expect.any(String), assignmentId: expect.any(String), reason: expect.stringContaining('usage limit'), at: 1000 }
+    const marked = { conversationId: expect.any(String), assignmentId: expect.any(String), reason: expect.stringContaining('usage limit'), at: 1000,
+      resumeAt: '1970-01-01T01:00:00.000Z' }
     for (const close of ['cancel', 'reassign'] as const) {
       const { f, lead, group, worker, other, as, task, limit } = lostFixture()
       limit()
@@ -2437,6 +2438,74 @@ describe('lost work (liveness.ts)', () => {
     expect(f.state.agents.find(a => a.id === worker)).toMatchObject({ harnessId: 'worker-2' })
     expect(f.state.agents.find(a => a.id === worker)!.lostTask).toBeUndefined()
     expect(f.state.conversations.find(c => c.id === group)!.lostAttempt).toMatchObject({ agentId: worker })
+  })
+
+  it('records when a task lost to a usage limit with a reset time resumes, and tells the Lead it resumes then unless handed on', () => {
+    const { f, worker, task, limit } = lostFixture()
+    const lead = limit().messages.find(m => m.source?.kind === 'work-lost' && !m.recipients.includes(worker))!
+    expect(task().assignment!.lost).toEqual({ reason: expect.stringContaining('usage limit'), at: 1000, resumeAt: '1970-01-01T01:00:00.000Z' })
+    expect(f.state.agents.find(a => a.id === worker)!.lostTask).toMatchObject({ resumeAt: '1970-01-01T01:00:00.000Z' })
+    expect(lead.text).toContain('It resumes by itself when its limit resets at 01:00 UTC, unless you hand it on first.')
+    expect(lead.text).not.toContain('Assign it to another agent now')
+  })
+
+  it('records no resume time for a usage limit whose screen gave no reset time', () => {
+    const { f, worker, as, task } = lostFixture()
+    const rows = f.run({ type: 'agent.alert', agentId: worker, alert: 'limit', active: true }, as(worker)).messages
+    expect(task().assignment!.lost).not.toHaveProperty('resumeAt')
+    expect(f.state.agents.find(a => a.id === worker)!.lostTask).not.toHaveProperty('resumeAt')
+    expect(rows.find(m => m.source?.kind === 'work-lost' && !m.recipients.includes(worker))!.text).toContain('Assign it to another agent now, or cancel it.')
+  })
+
+  it('gives the worker its own lost task back once its limit has reset, and accepts its status again', () => {
+    const { f, lead, group, worker, as, task, limit } = lostFixture()
+    limit()
+    const assignmentId = task().assignment!.id
+    const resumed = f.run({ type: 'work.resume', conversationId: group, assignmentId }, as(worker), { now: 3_600_000 })
+    expect(task().assignment).toMatchObject({ id: assignmentId, agentId: worker, status: 'working', leaseUntil: 3_600_000 + 5 * 60_000 })
+    expect(task().assignment).not.toHaveProperty('lost')
+    expect(task().lostAttempt).toBeUndefined()
+    expect(f.state.agents.find(a => a.id === worker)!.lostTask).toBeUndefined()
+    expect(resumed.messages).toEqual([expect.objectContaining({ conversationId: group, recipients: [lead],
+      text: 'worker resumed its task after its usage limit reset.' })])
+    f.run({ type: 'work.status', conversationId: group, assignmentId, status: 'review', result: 'Ready' }, as(worker), { now: 3_600_001 })
+    expect(task().assignment!.status).toBe('review')
+  })
+
+  it('does not resume a lost task before its limit resets', () => {
+    const { f, group, worker, as, task, limit } = lostFixture()
+    limit()
+    expect(() => f.run({ type: 'work.resume', conversationId: group, assignmentId: task().assignment!.id }, as(worker), { now: 3_599_999 }))
+      .toThrow('Its usage limit has not reset yet.')
+    expect(task().assignment!.status).toBe('lost')
+  })
+
+  it('does not resume a lost task the Lead cancelled or handed to another agent before the reset', () => {
+    for (const close of ['cancel', 'reassign'] as const) {
+      const { f, lead, group, worker, other, as, task, limit } = lostFixture()
+      limit()
+      const lostId = task().assignment!.id
+      if (close === 'cancel') f.run({ type: 'work.cancel', conversationId: group, assignmentId: lostId, reason: 'Not needed' }, as(lead))
+      else f.run({ type: 'work.assign', conversationId: group, agentId: other, ...via }, as(lead), decisionIn(group))
+      const before = structuredClone(task().assignment)
+      expect(() => f.run({ type: 'work.resume', conversationId: group, assignmentId: lostId }, as(worker), { now: 3_600_000 }))
+        .toThrow('This task was handed on or closed, so it does not resume.')
+      expect(task().assignment).toEqual(before)
+    }
+  })
+
+  it('resumes a lost task only for its own worker, and only after a loss that gave a reset time', () => {
+    const { f, lead, group, worker, other, as, task, limit } = lostFixture()
+    limit()
+    const assignmentId = task().assignment!.id
+    for (const actor of [as(other), as(lead), owner]) {
+      expect(() => f.run({ type: 'work.resume', conversationId: group, assignmentId }, actor, { now: 3_600_000 }))
+        .toThrow('Only the agent that lost this task resumes it.')
+    }
+    const plain = lostFixture()
+    plain.f.run({ type: 'agent.alert', agentId: plain.worker, alert: 'limit', active: true }, plain.as(plain.worker))
+    expect(() => plain.f.run({ type: 'work.resume', conversationId: plain.group, assignmentId: plain.task().assignment!.id }, plain.as(plain.worker), { now: 99_000_000 }))
+      .toThrow('This task was not lost to a usage limit with a reset time.')
   })
 
   it('does not lose work a Lead holds: Leads are not covered here', () => {

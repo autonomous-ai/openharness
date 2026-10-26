@@ -11,7 +11,7 @@ import { routingOverrideSchema } from './routingPolicy.js'
 import { agentTarget, askedInSchema, broken, MAX_RULES, RULE_MESSAGE_MS, ruleSchema, ruleTextSchema, startTarget, type RunTarget } from './rules.js'
 import { MAX_ATTACHMENTS, type Attachment } from './attachments.js'
 import { checkMentions, MAX_MENTIONS, type MentionTarget } from './mentions.js'
-import { TERMINAL_KEYS, terminalAlert, terminalRequest, terminalResult, type TerminalRequest } from './terminal.js'
+import { TERMINAL_KEYS, terminalAlert, terminalRequest, terminalResult, toLead, type TerminalRequest } from './terminal.js'
 import { loseTasks, renewLease, renewOwnTask } from './liveness.js'
 import { credentialResult, redactCredentials, type CredentialKind } from './credentials.js'
 import { dirtyGroups, reportGroups, summarize } from './projectUpdates.js'
@@ -132,6 +132,7 @@ export const commandSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('work.status'), conversationId: id, assignmentId: id,
     status: z.enum(['working', 'needs_human', 'blocked', 'review', 'done', 'stopped']), result: text.nullable() }).strict(),
   z.object({ type: z.literal('work.cancel'), conversationId: id, assignmentId: id, reason }).strict(),
+  z.object({ type: z.literal('work.resume'), conversationId: id, assignmentId: id }).strict(),
   z.object({ type: z.literal('route.record'), conversationId: id, decision: routeRecordSchema }).strict(),
   z.object({ type: z.literal('route.override'), decisionId: id, candidateId: z.string().regex(/^c\d{1,2}$/), reason }).strict(),
   z.object({ type: z.literal('route.modelResult'), decisionId: id, startId: id, model: z.string().min(1).max(200), effort: z.string().min(1).max(80) }).strict(),
@@ -664,7 +665,9 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       break
     case 'agent.alert': {
       effects.messages.push(...terminalAlert(state, actor, sender, operationId, context.now, command))
-      if (command.alert === 'limit' && command.active) effects.messages.push(...loseTasks(state, context.now, worker => worker.id === command.agentId))
+      // A reset time the screen gave is when the task resumes in this same session unless it is handed on first.
+      const resumeAt = command.resetAt && Date.parse(command.resetAt) > context.now ? agent(state, command.agentId).limitedUntil ?? undefined : undefined
+      if (command.alert === 'limit' && command.active) effects.messages.push(...loseTasks(state, context.now, worker => worker.id === command.agentId, resumeAt))
       break
     }
     case 'project.report': {
@@ -1599,6 +1602,29 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       if (!lost) finishWorker(state, assignment.agentId, group)
       message(group.id, `${isLead ? 'The Lead' : 'The tab owner'} cancelled this task: ${command.reason.replace(/[.\s]+$/, '')}.${gone ? '' : ' Stop working on it.'}`,
         gone ? [] : [assignment.agentId], null, SYSTEM_ROW)
+      break
+    }
+    case 'work.resume': {
+      // Its usage limit has reset: the session that lost this task to it takes it back, unless it was handed on first. Its
+      // host asks here before typing into the session (cli superTabs/limitResume.ts), so a task handed on never resumes.
+      const group = open(state, command.conversationId)
+      const assignment = group.assignment
+      if (assignment?.id !== command.assignmentId || assignment.status !== 'lost') fail('TASK_MOVED', 'This task was handed on or closed, so it does not resume.')
+      if (actor.kind !== 'agent' || actor.agentId !== assignment.agentId) fail('FORBIDDEN', 'Only the agent that lost this task resumes it.', 403)
+      const worker = agent(state, assignment.agentId)
+      const resumeAt = assignment.lost?.resumeAt
+      if (!resumeAt) fail('NO_RESUME', 'This task was not lost to a usage limit with a reset time.')
+      if (context.now < Date.parse(resumeAt)) fail('LIMIT_NOT_RESET', 'Its usage limit has not reset yet.')
+      if (worker.harnessId !== assignment.execution.harnessId) fail('SESSION_CHANGED', 'This agent runs in another session now, so the task does not resume.')
+      if (state.conversations.some(c => activeWork(c) && c.assignment?.agentId === worker.id)) fail('AGENT_BUSY', 'This agent already owns an active assignment.')
+      assignment.status = 'working'
+      delete assignment.lost
+      delete group.lostAttempt
+      delete worker.lostTask
+      renewLease(assignment, context.now)
+      effects.messages.push(...toLead(state, worker, { id: stableId(operationId, 'resumed'), conversationId: group.id, author: sender, replyTo: null,
+        recipients: [], text: `${worker.displayName ?? worker.name} resumed its task after its usage limit reset.`,
+        source: { kind: 'work-resumed', agentId: worker.id, assignmentId: assignment.id } }))
       break
     }
     case 'work.check': {

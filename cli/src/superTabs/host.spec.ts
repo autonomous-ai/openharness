@@ -8,6 +8,7 @@ import type { CoreApi, TurnDelivery } from '../core/api.js'
 import { fakeCore } from '../testing/fakeCore.js'
 import { backend, swarmRoleFor, hostJournalFile, SuperTabHost, type SuperTabHostOptions } from './host.js'
 import { hostForm, swarmReply } from './fixtures/read/index.js'
+import { CONTINUE } from './limitResume.js'
 import { HostFeed } from './hostFeed.js'
 import { SwarmReads } from './swarmReads.js'
 import { retainedHarnesses, retentionFile } from './retention.js'
@@ -1057,6 +1058,19 @@ describe('a Lead\'s terminal requests', () => {
     await t.open().tick()
     await vi.waitFor(() => expect(t.call).toHaveBeenCalledWith('POST', '/api/super-tabs/tab/commands',
       { operationId: 'terminal-r1', asAgentId: 'agent', command: { type: 'agent.screenResult', requestId: 'r1', ok: true, text: 'Allow? 1. Yes' } }))
+  })
+})
+
+describe('a task lost to a usage limit', () => {
+  it('is resumed in its session from the roster row once the limit has reset', async () => {
+    const t = setup()
+    Object.assign(t.core, { superTabs: { attention: vi.fn(), cards: vi.fn(), cardRecap: vi.fn(), shareObservers: vi.fn(),
+      input: vi.fn(async () => ({ ok: true as const })), screen: vi.fn(async () => ({ ok: true as const, text: '❯ ', hold: null })) } })
+    Object.assign(t.row, { resume: { conversationId: 'group', assignmentId: 'work', at: new Date(0).toISOString() } })
+    await t.open().tick()
+    await vi.waitFor(() => expect(t.core.superTabs!.input).toHaveBeenCalledWith('harness', CONTINUE, ['Enter']))
+    expect(t.call).toHaveBeenCalledWith('POST', '/api/super-tabs/tab/commands',
+      { operationId: 'limit-resume-work', asAgentId: 'agent', command: { type: 'work.resume', conversationId: 'group', assignmentId: 'work' } })
   })
 })
 

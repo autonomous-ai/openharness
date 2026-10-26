@@ -45,7 +45,7 @@ export interface Agent {
   downNamed?: string
   /** Its last task was lost (liveness.ts): routing leaves it out, even once that task is cancelled or reassigned, until it
    *  finishes a new task, a person assigns it work by hand, or its terminal is replaced (commands.ts). */
-  lostTask?: { conversationId: string; assignmentId: string; reason: string; at: number }
+  lostTask?: { conversationId: string; assignmentId: string; reason: string; at: number; resumeAt?: string }
   /** A usage limit seen on its terminal; routing skips the agent until then. Shown as null once passed (terminal.ts). */
   limitedUntil?: string | null
   /** Terminal alert episodes in progress, so each one posts a single row (terminal.ts). */
@@ -116,8 +116,9 @@ export interface Assignment {
   leaseUntil?: number
   /** Its agent's last progress the lease saw, for the Lead's wake-up when it is lost. */
   progressAt?: number
-  /** Why and when it was lost (status `lost`). */
-  lost?: { reason: string; at: number }
+  /** Why and when it was lost (status `lost`); after a usage limit whose screen gave a reset time, when its own agent may
+   *  take it back (work.resume) unless it was handed on first. */
+  lost?: { reason: string; at: number; resumeAt?: string }
 }
 export interface WorkTask {
   goal: string

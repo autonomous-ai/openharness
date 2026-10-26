@@ -11,7 +11,7 @@ import { SuperTabStore } from '../src/superTabs/store.js'
 import type { Command } from '../src/superTabs/commands.js'
 import type { MachineObservation } from '../src/superTabs/machines.js'
 import * as parts from '../src/superTabs/parts/index.js'
-import { poolRows } from './hostRows.test-support.js'
+import { poolRows, rosterRows } from './hostRows.test-support.js'
 import { beforeFirstWrite } from './interleave.test-support.js'
 import { SwarmReads } from '../src/superTabs/read/service.js'
 
@@ -178,6 +178,35 @@ describe('work that loses its owner', () => {
     await f.execute({ type: 'agent.alert', agentId: f.worker, alert: 'limit', active: true, resetAt: new Date(f.clock.now + 30 * MINUTE).toISOString() }, host, f.worker)
     expect(await f.assignment()).toMatchObject({ status: 'lost', lost: { reason: `it hit a usage limit until ${new Date(f.clock.now + 30 * MINUTE).toISOString().slice(11, 16)} UTC` } })
     expect((await f.leadInbox()).some(m => (m.source as { kind?: string }).kind === 'work-lost')).toBe(true)
+  })
+
+  // Night shift: a task lost to a usage limit whose screen gave a reset time resumes in that same session after the reset.
+  it('tells the worker\'s host when its lost task resumes, and gives it back to the same session after the reset', async () => {
+    const f = await swarm()
+    const resetAt = new Date(f.clock.now + 30 * MINUTE).toISOString()
+    await f.execute({ type: 'agent.alert', agentId: f.worker, alert: 'limit', active: true, resetAt }, host, f.worker)
+    const row = async () => (await rosterRows(f.timed, host, 'test-host')).find(t => t.tabId === f.tab && t.agent?.id === f.worker)!
+    expect((await row()).resume).toEqual({ conversationId: f.group, assignmentId: f.assignmentId, at: resetAt })
+    const resume = () => f.execute({ type: 'work.resume', conversationId: f.group, assignmentId: f.assignmentId }, host, f.worker)
+    await expect(resume()).rejects.toThrow('Its usage limit has not reset yet.')
+    f.clock.now += 30 * MINUTE
+    await resume()
+    expect(await f.assignment()).toMatchObject({ id: f.assignmentId, agentId: f.worker, status: 'working' })
+    expect((await row()).resume).toBeNull()
+    expect((await f.leadInbox()).map(m => m.text)).toContain(`${await f.name(f.worker)} resumed its task after its usage limit reset.`)
+  })
+
+  it('does not resume a task handed to another agent before the reset, and its host is no longer asked to', async () => {
+    const f = await swarm()
+    await f.execute({ type: 'agent.alert', agentId: f.worker, alert: 'limit', active: true, resetAt: new Date(f.clock.now + 30 * MINUTE).toISOString() }, host, f.worker)
+    const other = await f.add(f.group, 'test-host', f.harness.other, 'Other')
+    const handedOn = String((await f.execute({ type: 'work.assign', conversationId: f.group, agentId: other })).result.assignmentId)
+    const row = async () => (await rosterRows(f.timed, host, 'test-host')).find(t => t.tabId === f.tab && t.agent?.id === f.worker)!
+    expect((await row()).resume).toBeNull()
+    f.clock.now += 30 * MINUTE
+    await expect(f.execute({ type: 'work.resume', conversationId: f.group, assignmentId: f.assignmentId }, host, f.worker))
+      .rejects.toThrow('This task was handed on or closed, so it does not resume.')
+    expect(await f.assignment()).toMatchObject({ id: handedOn, agentId: other, status: 'working' })
   })
 
   it('is lost when its lease runs out with no progress, though its machine keeps reporting', async () => {
