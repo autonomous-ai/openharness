@@ -101,8 +101,9 @@ describe('routeTask', () => {
     expect(offered.length).toBeGreaterThan(0)
     expect(offered.some(c => /^(Lead|Multiply) ·/.test(c))).toBe(false)
   })
-  it('does not offer a member that is already working on a task', async () => {
-    const s = scoped({ tab: tab({ id: 'x', agentId: 'a1', status: 'working' }) })
+  // A lost task's agent died, stalled or hit a limit: its work goes to someone else (v1 liveness), never back to it.
+  it.each(['working', 'lost'])('does not offer a member whose task is %s', async status => {
+    const s = scoped({ tab: tab({ id: 'x', agentId: 'a1', status }) })
     await routeTask(input, s, where as never, opener(id => daemon(id, { agents: ['h1'] })))
     expect((recorded(s).command.decision.candidates as Array<{ title: string }>).some(c => c.title.startsWith('Multiply'))).toBe(false)
   })
