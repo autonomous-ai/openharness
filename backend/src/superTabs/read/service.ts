@@ -88,6 +88,7 @@ export class SwarmReads {
     // A Swarm not yet in parts is migrated when it is opened; until then the list names it from its old row.
     const legacy = await this.db.superTab.findMany({ where: { id: { in: page.filter(r => r.format !== 2).map(r => r.id) } }, select: { id: true, state: true } })
     const ids = page.filter(r => r.format === 2).map(r => r.id)
+    // Every head changed after the epoch: one read of each listed Swarm's head part.
     const [heads, newest] = await transaction(this.db, tx => Promise.all([parts.loadChanged(tx, ids, new Date(0), ['head']), parts.lastChangedAt(tx, ids)]))
     return { tabs: page.map(row => {
       const head = (heads.get(row.id)?.[0]?.data ?? legacy.find(l => l.id === row.id)?.state) as { name: string; paused: boolean }

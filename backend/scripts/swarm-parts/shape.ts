@@ -29,7 +29,6 @@ export const personId = (swarm: number, n: number) => (swarm * 16 + n + 1).toStr
 
 export function buildSwarm(spec: SwarmSpec, index: number, now: number): SeededSwarm {
   const rng = random(index + 1)
-  const pick = <T>(list: T[]) => list[Math.floor(rng() * list.length)]!
   const tabId = `seed${index.toString(16).padStart(20, '0')}`
   const people = Array.from({ length: 5 }, (_, n) => ({ kind: 'person' as const, userId: personId(index, n), email: `person${n}@swarm${index}.example` }))
   const owner = people[0]!
@@ -57,12 +56,11 @@ export function buildSwarm(spec: SwarmSpec, index: number, now: number): SeededS
   const finishedBefore = new Map<string, number>()
   edit(state, rng, groups, workers, finishedBefore, now)
   const { messages, revision } = history(state, rng, tabId, finishedBefore, spec.messages, now, owner)
-  ledger(state, rng, machines, workers, groups, now, revision)
+  ledger(state, rng, machines, workers, groups, now)
   if (spec.targetBytes) pad(state, spec.targetBytes, rng)
   if (spec.withoutProjects) { delete state.projects; for (const a of state.agents) delete a.projectId; for (const c of state.conversations) delete c.projectId }
   const attempts = groups.filter((_, g) => g % 10 === 3).map(conversationId => ({ id: `${tabId}-attempt-${conversationId}`, conversationId,
-    snapshot: { checks: [{ evidence: `Tried in ${pr(9000 + Math.floor(rng() * 999))}` }], assignment: { agentId: pick(workers), status: 'stopped', result: prose(rng, 200) } } }))
-  void pick
+    snapshot: { checks: [{ evidence: `Tried in ${pr(9000 + Math.floor(rng() * 999))}` }], assignment: { agentId: workers[0], status: 'stopped', result: prose(rng, 200) } } }))
   return { state, revision, messages, attempts }
 }
 
@@ -111,7 +109,7 @@ function history(state: SuperTabState, rng: () => number, tabId: string, finishe
 }
 
 /** What only the store writes: starts in every state, slot ledgers, observations, rules, invitations, report progress. */
-function ledger(state: SuperTabState, rng: () => number, machines: string[], workers: string[], groups: string[], now: number, revision: number) {
+function ledger(state: SuperTabState, rng: () => number, machines: string[], workers: string[], groups: string[], now: number) {
   const pool = state.machines![0]!
   const request = (conversationId: string) => ({ conversationId, machineId: pool.machineId, engine: 'claude', name: 'Builder', cwd: '/work', worktree: true,
     requirements: { memoryBytes: 0, diskBytes: 0, maxCpuPercent: 85, tools: ['git'], devices: [], quotaRequired: false } })
@@ -140,7 +138,6 @@ function ledger(state: SuperTabState, rng: () => number, machines: string[], wor
   // One group from before link lists, and one of a kind a later release added.
   delete state.conversations.find(c => c.id === groups[groups.length - 1])!.pullRequestUrls
   state.parkedConversations = [{ id: 'later-kind', kind: 'board' as never, title: 'Board', leadId: null, agentIds: [], archived: false, brief: '', checks: [], assignment: null, lastMessageSequence: 0 }]
-  void revision
 }
 
 /** Longer results and evidence until the state reaches the production size this spec copies. */

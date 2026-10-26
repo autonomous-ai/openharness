@@ -6,7 +6,7 @@
  * Every payload below is the `data` of the usual `{ success, data }` envelope. Times are epoch milliseconds; part `data`
  * keeps today's ISO strings where today's record has them.
  */
-import type { Agent, AgentStart, Conversation, Invitation, Person, SuperTabState, WorkStatus } from '../model.js'
+import type { Agent, AgentStart, Conversation, Person, SuperTabState, WorkStatus } from '../model.js'
 import type { ContributedMachine } from '../machines.js'
 
 export const READ_FORMAT = 2
@@ -194,4 +194,3 @@ export const UPDATE_REQUIRED = { code: 'UPDATE_REQUIRED', status: 426, message: 
 /** HTTP 503 on the new routes while a Swarm is still on the old format; clients retry. */
 export const SWARM_MIGRATING = { code: 'SWARM_MIGRATING', status: 503, message: 'This Swarm is being upgraded. Try again in a moment.' } as const
 
-export type { Invitation }
