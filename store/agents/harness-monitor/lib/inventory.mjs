@@ -86,6 +86,9 @@ export function mergeRows(agents, { state = {}, machine = null, local = true, no
   })
 }
 
+const RETRY_MS = 15_000
+const RETRY_MAX_MS = 5 * 60_000
+
 /** Cache is scoped to this viewer, never an account-global singleton. Offline machines retain rows. */
 export async function collect({
   state = {}, now = Date.now(), includeRemote = true, timeoutMs = 8000, home = homedir(),
@@ -98,20 +101,31 @@ export async function collect({
   const answers = remote.answers ??= new Map()
   const failed = remote.failed ??= new Set()
   const previouslyOnline = remote.online ??= new Set()
+  const retryAt = remote.retryAt ??= new Map()
   const due = remoteIntervalMs <= 0 || !remote.at || now - remote.at >= remoteIntervalMs
-  await Promise.all(machines.filter(m => m.online && (m.current || due || !answers.has(m.machineId) || !previouslyOnline.has(m.machineId) || failed.has(m.machineId))).map(async machine => {
+  // A machine that would not answer is asked again later and later, not on every 4 s local tick: three unreachable
+  // machines behind one open Monitor were each dialed every few seconds, a relay session apiece (2026-10-26). A
+  // refresh the person asks for (remoteIntervalMs 0) still asks at once.
+  const wanted = m => failed.has(m.machineId) ? remoteIntervalMs <= 0 || now >= (retryAt.get(m.machineId)?.at ?? 0)
+    : due || !answers.has(m.machineId) || !previouslyOnline.has(m.machineId)
+  await Promise.all(machines.filter(m => m.online && (m.current || wanted(m))).map(async machine => {
     try {
       const answer = agentsFor ? { agents: await agentsFor(machine.machineId, { timeoutMs }), shared: [] }
         : await inventoryFor(machine.machineId, { timeoutMs })
-      answers.set(machine.machineId, { ...answer, receivedAt: now }); failed.delete(machine.machineId)
+      answers.set(machine.machineId, { ...answer, receivedAt: now }); failed.delete(machine.machineId); retryAt.delete(machine.machineId)
     }
-    catch (error) { failed.add(machine.machineId); problems.push({ machine: machine.name, error: error.message }) }
+    catch (error) {
+      failed.add(machine.machineId); problems.push({ machine: machine.name, error: error.message })
+      const misses = (retryAt.get(machine.machineId)?.misses ?? 0) + 1
+      retryAt.set(machine.machineId, { misses, at: now + Math.min(RETRY_MS * 2 ** (misses - 1), RETRY_MAX_MS) })
+    }
   }))
   if (due) remote.at = now
   remote.online = new Set(machines.filter(m => !report.error && m.online).map(m => m.machineId))
   if (!report.error) {
     const known = new Set(machines.map(m => m.machineId))
     for (const id of answers.keys()) if (!known.has(id)) { answers.delete(id); failed.delete(id) }
+    for (const id of retryAt.keys()) if (!known.has(id)) retryAt.delete(id)
     remote.machines = machines
   }
   const visibleMachines = report.error ? (remote.machines ?? []) : machines
