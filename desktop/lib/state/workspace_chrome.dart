@@ -1,5 +1,7 @@
 import 'package:flutter/widgets.dart';
 
+import '../super_tabs/reading.dart';
+
 /// The workspace's command table as a host composition sees it: the same ids
 /// and callbacks keys, native menus and the command box already run.
 class WorkspaceCommands {
@@ -70,6 +72,7 @@ class WorkspaceChrome {
     this.labelsPaneStatus = false,
     this.compactPaneHeader = false,
     this.superTabRecovers = false,
+    this.superTabReading = const SuperTabReading(),
   });
 
   /// What a workspace with no host chrome (Desktop) reads: every switch at
@@ -152,6 +155,10 @@ class WorkspaceChrome {
   /// it), and "Create a project to get started." carries New project. Audit
   /// findings S12, P5.
   final bool superTabRecovers;
+
+  /// How the Swarm tabs keep themselves current. The default is Desktop's: a
+  /// full read every 3 s, on screen or not. #180's report, fixes 1, 2a and 3.
+  final SuperTabReading superTabReading;
 
   /// Whether a window [width] wide gets the compact pane header.
   bool compactPaneHeaderAt(double width) =>

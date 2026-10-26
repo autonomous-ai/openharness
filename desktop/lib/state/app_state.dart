@@ -1156,6 +1156,7 @@ class AppNotifier extends ChangeNotifier {
   // Account and inventory replies belong to the session that requested them.
   // Signing out invalidates them before asynchronous connection cleanup.
   int _authRevision = 0;
+
   /// Cancels work across account changes, independently of measurement preferences.
   int get accountGeneration => _authRevision;
   Future<void>? _profileInFlight;
@@ -1809,6 +1810,9 @@ class AppNotifier extends ChangeNotifier {
 
   Map<String, String> _superTabNames = {};
   bool _superTabsEntered = false;
+
+  /// Whether a machine could serve Swarm reads at the last connection change.
+  bool _superTabsServed = false;
 
   /// Membership alone must not reveal the hidden feature in a regular workspace.
   /// The hidden shortcut, an explicit open, or a restored Swarm supplies that intent.
@@ -3497,8 +3501,7 @@ class AppNotifier extends ChangeNotifier {
     final captured = tab.panes
         .where(
           (p) =>
-              identical(p, pane) ||
-              p.viewsAgent(pane.machineId, pane.agentId),
+              identical(p, pane) || p.viewsAgent(pane.machineId, pane.agentId),
         )
         .toList();
     return _afterCloseGuards(
@@ -4351,7 +4354,10 @@ class AppNotifier extends ChangeNotifier {
                : AgentPrefetch(log: (line) => appLog.info('setup', line))),
        windowsSelfInstall =
            windowsSelfInstall ??
-           (RuntimePlatform.isWindows && kReleaseMode && !kUnderTest && !kViewerMode
+           (RuntimePlatform.isWindows &&
+                   kReleaseMode &&
+                   !kUnderTest &&
+                   !kViewerMode
                ? WindowsSelfInstall()
                : null),
        _exitApp = exitApp ?? exit,
@@ -8669,6 +8675,11 @@ class AppNotifier extends ChangeNotifier {
         );
       }
     }
+    // Swarm reads go through a connected machine: the moment one can serve
+    // them again, the Swarm on screen reads (`SuperTabReading.readsOnConnect`).
+    final served = sharedTabsTarget != null;
+    if (served && !_superTabsServed) superTabs.serverAvailable();
+    _superTabsServed = served;
     notifyListeners();
   }
 
@@ -14315,8 +14326,8 @@ class AppNotifier extends ChangeNotifier {
     // person (an engine Windows cannot start as asked).
     'ENGINE_LAUNCH_REFUSED' =>
       detail != null && detail.isNotEmpty
-      ? detail
-      : 'This engine cannot start on $machine. Nothing was started.',
+          ? detail
+          : 'This engine cannot start on $machine. Nothing was started.',
     'CODEX_CLI_TOO_OLD' =>
       detail ??
           'The installed Codex CLI on $machine is too old for Auto approvals. '
@@ -15615,7 +15626,10 @@ class AppNotifier extends ChangeNotifier {
     final resuming = attempt.agent?.isStopped == true;
     if (resuming && machine.connectionStatus != ConnectionStatus.connected) {
       final connected = await connectTrusted(machineId);
-      if (!_restartCurrent(attempt, beforeSend: !attempt.awaitingConfirmation)) {
+      if (!_restartCurrent(
+        attempt,
+        beforeSend: !attempt.awaitingConfirmation,
+      )) {
         return const RestartAgentResult(
           error: 'The harness changed while connecting. Select it again.',
           retryable: false,
@@ -15666,8 +15680,11 @@ class AppNotifier extends ChangeNotifier {
         }
       }
       _measurementResumes.remove(measurementKey)?.call(ProductOutcome.failed);
-      return RestartAgentResult(error: _restartFailure(code, detail, resuming: resuming));
+      return RestartAgentResult(
+        error: _restartFailure(code, detail, resuming: resuming),
+      );
     }
+
     final unknown = RestartAgentResult(
       error: resuming
           ? 'Still waiting for the Open response. Select the harness again to check status.'
@@ -15826,15 +15843,16 @@ class AppNotifier extends ChangeNotifier {
   }) => code == 'PTY_HOST_UNAVAILABLE'
       // Its detail is written for the log.
       ? 'Harness could not open a terminal on this machine. Run harness start on it, then try again.'
-      : detail is String && detail.isNotEmpty &&
-          !const {
-            'IDENTITY_UNAVAILABLE',
-            'CWD_NOT_FOUND',
-            'SESSION_FOLDER_GONE',
-            'GRID_CREDENTIAL_REQUIRED',
-            'ENGINE_NOT_INSTALLED',
-            'ENGINE_UNAVAILABLE',
-          }.contains(code)
+      : detail is String &&
+            detail.isNotEmpty &&
+            !const {
+              'IDENTITY_UNAVAILABLE',
+              'CWD_NOT_FOUND',
+              'SESSION_FOLDER_GONE',
+              'GRID_CREDENTIAL_REQUIRED',
+              'ENGINE_NOT_INSTALLED',
+              'ENGINE_UNAVAILABLE',
+            }.contains(code)
       ? detail
       : switch (code) {
           'ENGINE_LAUNCH_REFUSED' =>
@@ -15849,12 +15867,9 @@ class AppNotifier extends ChangeNotifier {
           'RESUME_UNAVAILABLE' => 'The saved conversation is unavailable. The harness can still be started fresh.',
           'RESUME_SESSION_MISMATCH' => 'The harness came back on a different conversation. The saved one is still kept.',
           'RESUME_FAILED' => 'The harness did not come back. Its output and conversation are kept.',
-          'IDENTITY_UNAVAILABLE' =>
-            'The saved conversation could not be verified. Check that its agent account and project are still available, then retry. You can also start a new harness; the saved one is kept.',
-          'CWD_NOT_FOUND' || 'SESSION_FOLDER_GONE' =>
-            'The project folder is unavailable. Restore it, then retry, or start a new harness in another folder.',
-          'GRID_CREDENTIAL_REQUIRED' =>
-            'Reconnect the model provider in Models, then retry. Your saved conversation is kept.',
+          'IDENTITY_UNAVAILABLE' => 'The saved conversation could not be verified. Check that its agent account and project are still available, then retry. You can also start a new harness; the saved one is kept.',
+          'CWD_NOT_FOUND' || 'SESSION_FOLDER_GONE' => 'The project folder is unavailable. Restore it, then retry, or start a new harness in another folder.',
+          'GRID_CREDENTIAL_REQUIRED' => 'Reconnect the model provider in Models, then retry. Your saved conversation is kept.',
           'ENGINE_NOT_INSTALLED' || 'ENGINE_UNAVAILABLE' =>
             'Install this agent on the computer, then retry.',
           _ =>
@@ -16098,11 +16113,8 @@ class AppNotifier extends ChangeNotifier {
     required Duration timeout,
   }) async {
     try {
-      return await _conn(machineId).request(
-        type,
-        payload: payload,
-        timeout: timeout,
-      );
+      return await _conn(machineId)
+          .request(type, payload: payload, timeout: timeout);
     } on WsRequestFailure catch (failure) {
       return {...failure.payload, 'error': failure.code};
     }
@@ -18706,8 +18718,7 @@ class AppNotifier extends ChangeNotifier {
       }
     }
     bool closesWithPane(TerminalPane candidate) =>
-        candidate == pane ||
-        candidate.viewsAgent(pane.machineId, pane.agentId);
+        candidate == pane || candidate.viewsAgent(pane.machineId, pane.agentId);
     if (tab.kind == 'harness' &&
         tab.panes.every(closesWithPane) &&
         !_activeAgentCreations.any((attempt) => attempt._targetId == tab.id)) {

@@ -1,4 +1,5 @@
 import '../../state/app_state.dart';
+import '../../super_tabs/reading.dart';
 import '../../state/workspace_chrome.dart';
 import '../onboarding/web_first_machine.dart';
 import '../footer/web_footer_bar.dart';
@@ -43,4 +44,14 @@ WorkspaceChrome _webWorkspaceChrome(AppNotifier app) => WorkspaceChrome(
   labelsPaneStatus: true,
   compactPaneHeader: true,
   superTabRecovers: true,
+  // A phone pays for every read: poll the Swarm on screen only, slow it while
+  // the conversation is quiet, read when a machine connects instead of at the
+  // next poll, and ask for the saved conversation beside the first state.
+  superTabReading: const SuperTabReading(
+    quietPoll: Duration(seconds: 15),
+    pausesAway: true,
+    readsOnConnect: true,
+    connectGrace: Duration(seconds: 10),
+    messagesWithState: true,
+  ),
 );
