@@ -154,6 +154,23 @@ export const CLAUDE_TRUST_PROMPT = [
   ' \u001b[2m\u001b[3mEnter to confirm · Esc to cancel\u001b[0m',
 ].join('\n')
 
+/** Claude Code asking about a server in a `.mcp.json` above the folder it starts in, here the home's (2.1.310, read
+ *  from a harness's pane on 2026-10-26): unnumbered, `Continue without` highlighted. Its `❯` row was read as a draft
+ *  in the composer, so `harness wait` waited on a harness that had not started its first message. */
+export const CLAUDE_MCP_SERVER_PROMPT = [
+  `\u001b[38;5;220m${RULE}\u001b[39m`,
+  ' \u001b[1m\u001b[38;5;220mNew MCP server found in this project: argent\u001b[0m',
+  '',
+  ' MCP servers may execute code or access system resources. All tool calls',
+  ' require approval. Learn more in the MCP documentation.',
+  '',
+  '   Use this MCP server',
+  '   Use this and all future MCP servers in this project',
+  ' \u001b[38;5;153m❯\u001b[39m \u001b[38;5;153mContinue without using this MCP server\u001b[39m',
+  '',
+  ' \u001b[2m\u001b[3mEnter to confirm · Esc to cancel\u001b[0m',
+].join('\n')
+
 /** Claude Code asking how to sign in (2.1.289): Enter starts the highlighted sign-in. */
 export const CLAUDE_SIGN_IN = [
   ' Claude Code can be used with your Claude subscription or billed based on API usage through your Console account.',

@@ -688,14 +688,23 @@ class _SwarmResourcePreviewState extends State<SwarmResourcePreview> {
 
   List<_ResourceAction> _visibleActions() => [
     ..._actions(),
-    // A Swarm's Manage models has no Actions menu: an API's one other action, Edit, is beside its button.
+    // A Swarm's Manage models has no Actions menu: an API's other actions, Edit and Delete, are beside its button.
+    // Delete asks first, as ⌘I's does; the CLI takes the API off every Swarm it is shared with before removing it.
     if (_swarmCards) ...[
-      if (model?.api case final api? when model?.apiModel == null)
+      if (model?.api case final api? when model?.apiModel == null) ...[
         _ResourceAction(
           'Edit connection',
           _pending.contains(row?.id) ? null : () => _editApi(api.id),
           command: 'picker.resource_settings',
         ),
+        _ResourceAction(
+          'Delete',
+          _pending.contains(row?.id)
+              ? null
+              : () => _editApi(api.id, removing: true),
+          command: 'picker.resource_remove',
+        ),
+      ],
     ] else if (!_isManagement &&
         row?.isCreate != true &&
         _commands().isNotEmpty)
@@ -2585,6 +2594,9 @@ class _SwarmResourcePreviewState extends State<SwarmResourcePreview> {
                         controller: widget.search.models!.manager.apis,
                         connectionId: _apiConnectionId,
                         removing: _apiRemoving,
+                        swarmShares: widget.search.isSwarmModels && row != null
+                            ? widget.search.swarmApiShareCount(row!)
+                            : null,
                         onClose: _closeApiForm,
                         onFocusChanged: widget.search.setManaging,
                         onSwitchPane: _switchPane,

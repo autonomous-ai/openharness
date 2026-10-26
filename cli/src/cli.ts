@@ -170,12 +170,13 @@ Machine:
   harness show <name>          a harness's state and last turn: what it was asked and what it answered
   harness wait <name>[,<name>] wait until they stop working (--any, --timeout 30m); exit 3 = needs the person
   harness close <name> [--now] save a harness's screen and stop it; an agent closes only what it started
+  harness tell <name> -- <w>   from an agent's pane: more work for a harness it started (agents-tell-agents)
   harness reply <name> -- <w>  say words to a cloud harness (Devin Cloud, Cursor Cloud, Fo): its answer or what next
-                               new, ps, show, wait, reply and close take --machine <name> for another of your
+                               new, ps, show, wait, tell, reply and close take --machine <name> for another of your
                                machines: \`harness show --machine office x\`
   harness mcp                  the agent verbs as an MCP server on stdin/stdout, for agents that use MCP
   harness help agents          the agent commands, states, exit codes and rules on one screen
-  harness settings [<name> on|off]  what agents may do (agents-start-agents, pull-request-line, agent-messages): your account's experiments in Settings ▸ Experimental, each off by default
+  harness settings [<name> on|off]  what agents may do (agents-start-agents, agents-tell-agents, pull-request-line, agent-messages): your account's experiments in Settings ▸ Experimental, each off by default
   harness machines delete <id> remove ANOTHER machine (refuses this one; use \`harness logout\`)
   harness e2e plan             which coding tools have a new version out (the grid-switch e2e trigger)
   harness e2e grid-switch      move a fresh agent subscription -> grid -> back home with its tool + MCP; leaves a review bundle
@@ -2645,7 +2646,7 @@ import { orchestratorCommand } from './orchestrator/command.js'
 import { superTabCommand } from './superTabs/command.js'
 import { gitCredentialCommand } from './superTabs/gitCredential.js'
 import { paneOwner, sendCommand } from './messages/command.js'
-import { agentOrigin, closeCommand, psCommand, replyCommand, showCommand, waitCommand, whoamiCommand } from './agentClient/commands.js'
+import { agentOrigin, closeCommand, psCommand, replyCommand, showCommand, tellCommand, waitCommand, whoamiCommand } from './agentClient/commands.js'
 import { agentsHelp, helpFor } from './agentClient/help.js'
 import { openUrlCommand } from './agentClient/openUrl.js'
 import { harnessRunner, mcpCommand } from './agentClient/mcp.js'
@@ -2714,6 +2715,9 @@ switch (cmd) {
     break
   case 'reply':
     replyCommand(rest, { machines: usableMachines }).then(code => { process.exitCode = code }).catch(onError)
+    break
+  case 'tell':
+    tellCommand(rest, { machines: usableMachines }).then(code => { process.exitCode = code }).catch(onError)
     break
   case 'wait':
     waitCommand(rest, { machines: usableMachines }).then(code => { process.exitCode = code }).catch(onError)

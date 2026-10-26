@@ -2,6 +2,7 @@
  * Where an agent is and what it may do, said before it acts (docs/design/2026-10-15-agent-experience.md, part 1).
  * Pure: commands.ts gathers what it says.
  */
+import { PERSON_SAID_YES } from '../lib/agentSettings.js'
 import type { NewMachine } from '../lib/newCommand.js'
 import { engineName } from '../messages/model.js'
 import type { Caller } from './model.js'
@@ -41,6 +42,8 @@ export interface Context {
 }
 
 const TURN_ON = 'harness settings agents-start-agents on'
+/** What the agent runs itself once the person said yes (agentClient/settings.ts). */
+const TURN_ON_ONCE_ASKED = `${TURN_ON} ${PERSON_SAID_YES}`
 /** Other machines named on line 3; the rest are counted. */
 const MACHINES_SHOWN = 4
 const oneLine = (text: string, max = 40): string => {
@@ -72,7 +75,7 @@ export function buildContext(i: ContextInput): Context {
   const canStart: NonNullable<Context['canStart']> =
     i.orphan && !i.caller ? no('ORPHAN', 'This pane\'s harness is no longer running. Only the person can start or close harnesses here.', null, 'person')
     : !i.signedIn ? no('SIGNED_OUT', 'This computer is signed out of Harness, and starting is the account\'s choice.', `harness login, then ${TURN_ON}`, 'person')
-    : !i.switchOn ? no('SWITCH_OFF', 'The person has not turned on "Agents can start other agents".', TURN_ON, 'person')
+    : !i.switchOn ? no('SWITCH_OFF', 'The person has not turned on "Agents can start other agents".', TURN_ON_ONCE_ASKED, 'person')
     : i.check?.reason === 'DEPTH' ? no('DEPTH', 'An agent started you, and only one level is allowed. Do the work yourself, or say in your answer what else is needed.')
     : i.check?.reason === 'OPEN_LIMIT' ? no('OPEN_LIMIT', `You have ${quota?.open ?? i.limits.livePerHarness} open, the most.`, i.closeStep, 'you')
     : i.check?.reason === 'MACHINE_LIMIT' ? no('MACHINE_LIMIT', i.check.message)
@@ -91,8 +94,11 @@ export function formatContext(c: Context): string {
     : `You: ${c.caller.agent}, outside Harness, on ${c.caller.machine}. Nothing can message you here.`
   if (!c.canStart) return who
   const s = c.canStart
-  // The person's own terminal: an agent asked to run it itself is refused (settings.ts `settingsOnlyThePerson`).
-  const asking = s.fixBy === 'you' ? 'To free a place' : s.reason === 'SWITCH_OFF' ? 'Ask them to run, in their own terminal' : 'Ask the person to run, in their own terminal'
+  // The switch is the person's yes: the agent asks them with its own tool for it, and runs the command only after it
+  // (settings.ts). Signing in is theirs alone: a code on their phone.
+  const asking = s.fixBy === 'you' ? 'To free a place'
+    : s.reason === 'SWITCH_OFF' ? 'Ask them, with your tool for asking them (Claude Code: AskUserQuestion; Codex: request_user_input) or in your reply; only after their yes, run'
+    : 'Ask the person to run, in their own terminal'
   const can = s.ok ? 'Can start harnesses: yes.'
     : s.reason === 'START_RATE' && c.quota?.nextStartAt ? `Can start harnesses: not until ${hhmm(c.quota.nextStartAt)} (${s.message.replace(/\.$/, '')}).`
     : `Can start harnesses: no. ${s.message}${s.fix ? ` ${asking}: ${s.fix}` : ''}`

@@ -576,7 +576,10 @@ export class LocalModels {
         const advertised = Array.isArray(named) ? named.filter((v: unknown) => typeof v === 'string' && v.length > 0) : []
         const aliases: string[] = advertised.length ? advertised : [file]
         result.push({ file: basename(file), selector: file, aliases, nodeId: str(record.node_id), name: str(record.meta_name), live,
-          pidAlive, dead, siblings: specs.length + (record.media ? 1 : 0) })
+          // An API a Swarm shares is a spec of the same engine process but runs nothing here, and a leave by this
+          // file's selector leaves it serving: it is no sibling (2026-10-26: Stop for Swarm on Qwen3.6 was refused,
+          // "Other models share its engine", beside a shared DeepSeek).
+          pidAlive, dead, siblings: specs.filter(s => !SWARM_API_SHARE.test(str(s.endpoint_url))).length + (record.media ? 1 : 0) })
         if (!dead) blocker = `Stop ${cleanName(aliases[0])} first to start another local model.`
       }
     }
@@ -829,9 +832,11 @@ export class LocalModels {
     await Promise.all([this.loadCatalog(force), this.readReceipt(grid)])
     let owned: Owned[] = [], nodes: Record<string, any>[] = [], inventoryError: string | undefined, asleep = false
     // `grid ls` once: the own grid's records, and every other grid this computer may serve on.
-    let grids: Record<string, any>[] = []
+    let grids: Record<string, any>[] = [], listed = false
     const ownedHere = async () => {
-      grids = validArg(grid) ? rows(await this.json(['--remote', 'ls', '--json'])) : []
+      const answer = validArg(grid) ? await this.json(['--remote', 'ls', '--json']) : null
+      listed = Array.isArray(answer)
+      grids = rows(answer)
       return this.owned(grid, grids)
     }
     try {
@@ -840,7 +845,11 @@ export class LocalModels {
       // A grid that is down — its owner status says stopped or asleep (DOWN) — runs nothing: an answer,
       // not a gap, so Start stays enabled (and brings it back up). Asleep says so even to a member, in
       // the grid's own answer. Only a read that failed some other way is "could not be checked".
-      if (inventory.state === 'unknown' && !DOWN.has(inventory.status ?? '')) throw new Error('unanswered')
+      // A grid this account does not have yet runs nothing either: the CLI makes the account's own grid only when
+      // something needs it, and a Swarm's models run on the Swarm's grid. Read as unchecked, every Start went dark,
+      // Run for Swarm too, for a new account whose Swarm grid was ready (2026-10-26). `grid ls` answered, without it.
+      const missing = listed && !grids.some(row => row.grid === grid)
+      if (inventory.state === 'unknown' && !DOWN.has(inventory.status ?? '') && !missing) throw new Error('unanswered')
       asleep = inventory.state === 'asleep' || inventory.status === 'asleep'
       nodes = inventory.state === 'awake' ? rows(inventory.nodes) : []
     } catch { inventoryError = 'Running models could not be checked. Try again.' }

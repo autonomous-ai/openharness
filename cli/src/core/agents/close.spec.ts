@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { inspectCloseActivity, type CloseAgentServiceDeps } from '../../lib/closeAgentService.js'
 import { projectDisplayName, type RegisteredSession } from '../../lib/registry.js'
 import { CLOSE_READ_RECONNECT_MS, createAgentClosing, createCloseRequests, type ClosingDeps } from './close.js'
+import * as TAKEOVER from '../../lib/__fixtures__/takeoverScreens.js'
 
 // The real close service, recording what it was built with so its callbacks can be driven directly.
 vi.mock('../../lib/closeAgentService.js', async (real) => {
@@ -48,6 +49,13 @@ describe('closing agents no window shows', () => {
     expect(close.openTabs).toBe(deps.cleanupTabs)
     expect(close.stop).toBe(deps.stopAgent)
     expect(close.changed).toBe(deps.announceSession)
+  })
+
+  it('reads from its pane whether it waits at a question its engine asks before any conversation', async () => {
+    const at = (screen: string) => setup({ captureTerminal: vi.fn(async () => screen) }).close.atStartupQuestion!(row({ sessionId: '' }))
+    expect(await at(TAKEOVER.CLAUDE_MCP_SERVER_PROMPT)).toBe(true)
+    expect(await at(TAKEOVER.CLAUDE_TRUST_PROMPT)).toBe(true)
+    expect(await at('screen')).toBe(false)
   })
 
   it('knows a close of one already closed: not live, and kept stopped with the conversation the close names', () => {

@@ -5,11 +5,11 @@ import { releaseAssetBase } from './harness-web-assets.mjs';
 const base = new URL(process.argv[2] || 'http://127.0.0.1:3000');
 const release = JSON.parse(await readFile(new URL('../harness-web-release.json', import.meta.url), 'utf8'));
 const assetBase = releaseAssetBase(release);
-// The front door is the Hub: `/` redirects there, temporarily, unless it is an `hn view` link.
-const front = await fetch(new URL('/', base), { redirect: 'manual' });
-assert.equal(front.status, 307, '/ must redirect to the Hub');
-assert.equal(new URL(front.headers.get('location'), base).pathname, '/hub');
-for (const route of ['/web', '/?viewer=1&machine=fixture-machine&agent=fixture-agent', '/s/11111111-1111-4111-8111-111111111111', '/auth/callback?code=fixture-code&state=fixture-state', '/callback', '/harness-web']) {
+// The front door is the web app; its old address `/web` sends there, temporarily, query and all.
+const old = await fetch(new URL('/web?machine=fixture-machine&agent=fixture-agent', base), { redirect: 'manual' });
+assert.equal(old.status, 307, '/web must redirect to the web app at /');
+assert.equal(new URL(old.headers.get('location'), base).href, new URL('/?machine=fixture-machine&agent=fixture-agent', base).href);
+for (const route of ['/', '/?viewer=1&machine=fixture-machine&agent=fixture-agent', '/s/11111111-1111-4111-8111-111111111111', '/auth/callback?code=fixture-code&state=fixture-state', '/callback', '/harness-web']) {
   const response = await fetch(new URL(route, base));
   assert.equal(response.status, 200, route);
   assert.match(response.headers.get('content-type'), /text\/html/);

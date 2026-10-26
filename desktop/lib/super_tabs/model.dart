@@ -396,7 +396,13 @@ List<SuperTabLocalModelRow> superTabLocalModelRows(
         in observation['localModels'] is List
             ? observation['localModels'] as List
             : const []) {
-      if (m is! Map || m['grid'] is! String || m['model'] is! String) continue;
+      // Still starting (the grid does not list it yet): not usable by the Swarm now.
+      if (m is! Map ||
+          m['grid'] is! String ||
+          m['model'] is! String ||
+          m['starting'] == true) {
+        continue;
+      }
       final grid = m['grid'] as String, model = m['model'] as String;
       if (rows.any((r) => r.grid == grid && r.model == model)) continue;
       rows.add((
@@ -439,7 +445,10 @@ List<SuperTabServedModel> superTabServedModels(
         in observation['localModels'] is List
             ? observation['localModels'] as List
             : const [])
-      if (m is Map && m['grid'] == grid && m['model'] is String)
+      if (m is Map &&
+          m['grid'] == grid &&
+          m['model'] is String &&
+          m['starting'] != true)
         (
           model: m['model'] as String,
           name: m['name'] is String

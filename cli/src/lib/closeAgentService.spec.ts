@@ -621,6 +621,40 @@ describe('a close of a harness still starting', () => {
     expect(stops().at(-1)?.withoutConversation).toBeTypeOf('function')
     expect(stops().slice(0, -1).every(options => !options.withoutConversation)).toBe(true)
   })
+  it('past its start, at a question its engine asks before any conversation, is closed now without one', async () => {
+    // A Claude Code harness 18 minutes at "New MCP server found in this project" (2026-10-26): every close was refused.
+    // Its engine was launched; nothing ever bound.
+    time = row.registeredAt + 18 * 60_000
+    Object.assign(row, { launch: { state: 'ready' } })
+    vi.mocked(deps.stop).mockImplementation(async (id, options) => {
+      if (!options.withoutConversation) throw held()
+      options.withoutConversation()
+      registry.removeAgent(id)
+    })
+    expect(await service.request(request('now'))).toMatchObject({ error: 'IDENTITY_UNAVAILABLE' })
+    deps.atStartupQuestion = vi.fn(async () => false)
+    service = new CloseAgentService(deps)
+    expect(await service.request(request('now'))).toMatchObject({ error: 'IDENTITY_UNAVAILABLE' })
+    vi.mocked(deps.atStartupQuestion).mockResolvedValue(true)
+    // Not on a close once idle: one at a question waits for the person.
+    vi.mocked(deps.activity).mockResolvedValue('needs_input')
+    expect(await service.request(request('idle'))).toEqual({ error: 'SESSION_NOT_IDLE', activity: 'needs_input' })
+    expect(await service.request(request('now'))).toEqual({ closed: true, withoutConversation: true })
+    expect(registry.byAgent(row.agentId)).toBeUndefined()
+  })
+  it('never lets a conversation go that way, whatever its screen shows', async () => {
+    time = row.registeredAt + 18 * 60_000
+    Object.assign(row, { sessionId: 'first', boundAt: time - 1 })
+    delete row.launch
+    vi.mocked(deps.stop).mockImplementation(async (id, options) => {
+      if (!options.withoutConversation) throw held()
+      registry.removeAgent(id)
+    })
+    deps.atStartupQuestion = vi.fn(async () => true)
+    service = new CloseAgentService(deps)
+    expect(await service.request({ ...request('now'), sessionId: 'first' })).toMatchObject({ error: 'IDENTITY_UNAVAILABLE' })
+    expect(deps.atStartupQuestion).not.toHaveBeenCalled()
+  })
   it('a close that finds it idle stops it the same way; one that finds it working leaves it', async () => {
     vi.mocked(deps.stop).mockImplementation(async (id, options) => {
       if (!options.withoutConversation) throw held()

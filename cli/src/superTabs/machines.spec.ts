@@ -1,17 +1,18 @@
 import { execFileSync } from 'node:child_process'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { RegisteredSession } from '../lib/registry.js'
 import { fakeCore } from '../testing/fakeCore.js'
-import { apisOn, ContributedMachines, liveOn, offered, refusedOn, servedOn, sharedWith, swarmWorktreesFile } from './machines.js'
+import { apisOn, ContributedMachines, liveOn, localModelsStamp, offered, refusedOn, servedOn, sharedWith, swarmWorktreesFile } from './machines.js'
 import { SuperTabHostError } from './host.js'
 import { startAgent } from './start.js'
 import type { PrivacyObservation } from '../team/privacy.js'
 
 function fixture(env: NodeJS.ProcessEnv = {}, privacy: () => PrivacyObservation | null = () => null) {
-  let now = 1000
+  let now = 1000, stamp = 's0'
   const core = fakeCore({ dataDir: '/isolated-pool-fixture', agents: {
     byAgent: vi.fn(id => id === 'running' ? { agentId: id } as never : undefined),
     stopped: vi.fn(async id => id === 'stopped'),
@@ -26,8 +27,10 @@ function fixture(env: NodeJS.ProcessEnv = {}, privacy: () => PrivacyObservation 
   const start = vi.fn(async () => ({ ok: true }))
   const prepare = vi.fn(async () => {})
   const log = vi.fn()
-  const machine = new ContributedMachines(core, 'host', { backend, open, capabilities, start, prepare, log, env, privacy, now: () => now } as never)
-  return { machine, pool, core, backend, open, request, close, capabilities, start, prepare, log, advance: () => { now += 16000 }, step: (ms: number) => { now += ms } }
+  const modelsStamp = vi.fn(async () => stamp)
+  const machine = new ContributedMachines(core, 'host', { backend, open, capabilities, start, prepare, log, env, privacy, modelsStamp, now: () => now } as never)
+  return { machine, pool, core, backend, open, request, close, capabilities, start, prepare, log, modelsStamp, advance: () => { now += 16000 }, step: (ms: number) => { now += ms },
+    stamp: (next: string) => { stamp = next } }
 }
 
 describe('contributed machine executor', () => {
@@ -242,7 +245,7 @@ describe('contributed machine executor', () => {
     f.step(60_000); await f.machine.tick()
     expect(reads()).toBe(before + 1)
   })
-  it('reports what it serves on the Swarm\'s grid only while the grid lists it, and everything when the grid is unread', async () => {
+  it('reports what the Swarm\'s grid does not list yet as starting, and everything as it is when the grid is unread', async () => {
     const GRID = 'swarm-0123456789ab'
     const f = fixture()
     Object.assign(f.pool, { localGrid: GRID })
@@ -253,13 +256,70 @@ describe('contributed machine executor', () => {
       ? { shares: [{ grid: GRID, connectionId: 'c1', model: 'deepseek/deepseek-chat' }] }
       : type === 'grid_fleet_models_list' ? { models: [{ servedOn: [{ grid: GRID, servedAs: ['qwen3'] }] }] }
       : type === 'grid_swarm_heal' ? heal : { providers: [] }) as never)
-    const reported = async () => { f.advance(); await f.machine.tick(); return (f.backend.mock.calls.filter(c => c[1] === 'POST').at(-1)![3] as { localModels: Array<{ model: string }> }).localModels.map(m => m.model) }
-    expect(await reported()).toEqual(['qwen3'])
+    const reported = async () => { f.advance(); await f.machine.tick()
+      return (f.backend.mock.calls.filter(c => c[1] === 'POST').at(-1)![3] as { localModels: Array<{ model: string; starting?: true }> }).localModels
+        .map(m => m.starting ? `${m.model} (starting)` : m.model) }
+    expect(await reported()).toEqual(['qwen3', 'deepseek/deepseek-chat (starting)'])
     expect(local.request).toHaveBeenCalledWith('grid_swarm_heal', { grid: GRID }, 30_000)
     heal = { live: null, missing: [] }
     expect(await reported()).toEqual(['qwen3', 'deepseek/deepseek-chat'])
     heal = Promise.reject(new Error('older daemon'))
     expect(await reported()).toEqual(['qwen3', 'deepseek/deepseek-chat'])
+  })
+  // 2026-10-26: a model run for the Swarm waited for the next 15 s beat to reach the machine's panel, then for the grid.
+  it('sends a reading on the next pass when its Swarm models change, and every pass while one is starting', async () => {
+    const GRID = 'swarm-0123456789ab'
+    const f = fixture()
+    Object.assign(f.pool, { localGrid: GRID })
+    await f.machine.tick()
+    const local = (await f.open.mock.results[0]!.value) as { request: ReturnType<typeof vi.fn> }
+    let live: string[] = []
+    local.request.mockImplementation((async (type: string) => type === 'grid_fleet_models_list'
+      ? { models: [{ servedOn: [{ grid: GRID, servedAs: ['qwen3'] }] }] }
+      : type === 'grid_swarm_heal' ? { live, missing: [] } : { providers: [] }) as never)
+    const posts = () => f.backend.mock.calls.filter(c => c[1] === 'POST').length
+    const pass = async () => { f.step(6_000); await f.machine.tick() }
+    await pass()
+    const quiet = posts()
+    await pass()
+    expect(posts()).toBe(quiet)
+    // A start: the engine records change, so this pass sends it, as starting, and the next ones too until it is listed.
+    f.stamp('s1')
+    await pass()
+    expect(posts()).toBe(quiet + 1)
+    expect((f.backend.mock.calls.at(-1)![3] as { localModels: unknown[] }).localModels).toEqual([{ grid: GRID, model: 'qwen3', kind: 'local', starting: true }])
+    await pass()
+    expect(posts()).toBe(quiet + 2)
+    live = ['qwen3']
+    await pass()
+    expect((f.backend.mock.calls.filter(c => c[1] === 'POST').at(-1)![3] as { localModels: unknown[] }).localModels).toEqual([{ grid: GRID, model: 'qwen3', kind: 'local' }])
+    const listed = posts()
+    await pass()
+    expect(posts()).toBe(listed)
+    // A backend before `starting` refuses it, and gets what the grid lists rather than no models at all.
+    const original = f.backend.getMockImplementation()!
+    f.backend.mockImplementation(async (core, method, path, body) => {
+      if (method === 'POST' && JSON.stringify(body).includes('"starting"')) throw new SuperTabHostError('VALIDATION_ERROR', 'Unrecognized key: starting', 400)
+      return original(core, method, path, body)
+    })
+    live = []
+    f.stamp('s2')
+    await pass()
+    expect((f.backend.mock.calls.at(-1)![3] as { localModels: unknown[] }).localModels).toEqual([])
+    f.backend.mockImplementation(original)
+  })
+  it('stamps the files that change with this machine\'s Swarm models, never reading them', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'models-stamp-'))
+    try {
+      const before = await localModelsStamp(home, { GRID_HOME: join(home, 'grid') })
+      await mkdir(join(home, 'grid', 'run', 'engines', 'grid-1'), { recursive: true })
+      await writeFile(join(home, 'grid', 'run', 'engines', 'grid-1', 'remote.json'), '{}')
+      await writeFile(join(home, 'swarm-api-shares.json'), '[]')
+      const after = await localModelsStamp(home, { GRID_HOME: join(home, 'grid') })
+      expect(after).not.toBe(before)
+      expect(after.split(',')).toHaveLength(2)
+      expect(await localModelsStamp(home, { HOME: home })).toMatch(/^\d/)
+    } finally { await rm(home, { recursive: true, force: true }) }
   })
   it('reads the models a heal answer says are live', () => {
     expect(liveOn({ live: ['a', 7, 'b'] })).toEqual(new Set(['a', 'b']))

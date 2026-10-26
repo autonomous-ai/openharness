@@ -1,2 +1,2 @@
-/** Where the Harness web app (the Flutter workspace) lives: `/` opens the Hub (owner, 2026-10-13). */
-export const webAppPath = '/web';
+/** Where the Harness web app (the Flutter workspace) lives: the site's front door (owner, 2026-10-26). */
+export const webAppPath = '/';

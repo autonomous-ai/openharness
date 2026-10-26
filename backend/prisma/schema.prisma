@@ -1274,6 +1274,8 @@ model ExperimentalSettings {
   agentMessages        Boolean @default(false)
   /// Inverted on purpose: off shares a one-line summary of what each harness does with the shared tab's other accounts.
   agentMessagesHideSummary Boolean @default(false)
+  /// An agent may give more work to a harness it started (`harness tell`, cli/src/messages/tell.ts). Off by default.
+  agentsTellAgents     Boolean @default(false)
   revision         Int     @default(0)
 
   @@index([userId])

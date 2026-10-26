@@ -115,6 +115,9 @@ export interface CloseAgentServiceDeps {
   closedAlready?(request: AgentCloseRequest): boolean
   /** Whether the agent may be the Lead of an active Swarm project (superTabs/retention.ts `mayBeLead`): never closed. */
   leadProtected?(agentId: string): boolean
+  /** Whether its pane shows a question the engine asks before any conversation: the folder's trust, or an MCP server the
+   *  folder brings (`trust_open`). */
+  atStartupQuestion?(s: RegisteredSession): Promise<boolean>
   now?: () => number
   sleep?: (ms: number) => Promise<void>
 }
@@ -205,6 +208,15 @@ export class CloseAgentService {
     const asked = this.deps.registry.byAgent(request.agentId)
     const starting = !!asked && identity(asked) === target && stillStarting(asked, askedAt) ? harnessIdentity(asked) : null
     const result = await this.attempt(request, target, revision)
+    // Closed now at a question its engine asks before any conversation, never answered: it has none to keep, and none can
+    // be read, so every close was refused "cannot tell which conversation it is in", for good, once it was past starting
+    // (a Claude Code harness at "New MCP server found in this project", 18 minutes on, 2026-10-26). Deleting one took
+    // this exception already (purgeAgentService.ts `unstartedChat`).
+    if (!result.closed && request.mode === 'now' && result.error === 'IDENTITY_UNAVAILABLE' && asked && identity(asked) === target
+      && unusedChat(asked) && await this.deps.atStartupQuestion?.(asked) === true) {
+      const latest = this.deps.registry.byAgent(request.agentId)
+      if (latest && identity(latest) === target && unusedChat(latest)) return this.attempt(request, target, revision, true)
+    }
     if (result.closed || (request.mode !== 'now' && request.mode !== 'idle') || !starting) return result
     return this.whileStarting(request, starting, target, revision, askedAt + CLOSE_BIND_WAIT_MS, result)
   }

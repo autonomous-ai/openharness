@@ -1,5 +1,5 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
-import { lstat, readFile, realpath, rm } from 'node:fs/promises'
+import { lstat, readdir, readFile, realpath, rm, stat } from 'node:fs/promises'
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import type { CoreApi } from '../core/api.js'
 import { openDaemon } from '../agentClient/daemon.js'
@@ -85,7 +85,7 @@ export class ContributedMachines {
   /** Per tab, when its observation was last sent and what it said that matters to a reader: the harnesses
    *  running and stopped, whether new work is paused, and which starts are waiting. A change in any of them is
    *  sent at once; otherwise the heartbeat keeps the reading fresh. */
-  private readonly published = new Map<string, { at: number; signature: string }>()
+  private readonly published = new Map<string, { at: number; signature: string; starting?: boolean }>()
   /** Shell tool availability belongs to this machine, not a tab. Resource readings still refresh every heartbeat. */
   private readonly toolCache = new Map<string, { value: boolean | null; detail?: string; until: number }>()
   /** Per waiting start, why it was last not started, so the log says it once per reason, not every pass. */
@@ -123,7 +123,9 @@ export class ContributedMachines {
       /** Whether this daemon runs team work only (a Harness Team account, `harness team on`): it has no git login of its own. */
       team?: () => boolean
       /** The Harness Team account's privacy check (team/privacy.ts): null for the owner's own daemon. */
-      privacy?: () => PrivacyObservation | null } =
+      privacy?: () => PrivacyObservation | null
+      /** What says this machine's Swarm models changed, read every pass without asking the daemon ([localModelsStamp]). */
+      modelsStamp?: () => Promise<string> } =
       { backend, open: openDaemon, capabilities: readCapabilities, start: startAgent, now: Date.now }) {}
   stop() { this.stopped = true }
   /** DESKTOP-0TFH0OJ, 2026-10-23: every Claude start there was refused (CLI 0.4.57 took an API-key Claude for one not
@@ -152,6 +154,10 @@ export class ContributedMachines {
     for (const id of this.waiting.keys()) if (!pendingIds.has(id)) this.waiting.delete(id)
     for (const tab of this.published.keys()) if (!pools.some(row => row.tabId === tab)) this.published.delete(tab)
     const privacy = this.privacy()
+    // A model run or stopped for a Swarm, or an API shared with it, is sent on this pass, not on the next beat: the
+    // machine's panel waited up to 15 s more for it (2026-10-26). Files only, so a pass with nothing new asks nobody.
+    const modelsStamp = pools.some(row => typeof row.localGrid === 'string')
+      ? await (this.deps.modelsStamp ?? (() => localModelsStamp(this.core.dataDir, this.deps.env ?? process.env)))().catch(() => '') : ''
     // The local daemon is reached only for a reading to send, never for a pass that has nothing to say.
     let local: Awaited<ReturnType<typeof openDaemon>> | null = null
     let usage: Record<string, unknown> | null = null
@@ -173,9 +179,11 @@ export class ContributedMachines {
         const signature = JSON.stringify([row.reservations, pool.generation, [...running].sort(), [...stopped].sort(), row.paused === true || pool.paused === true,
           pending.map(start => start.id).sort(),
           // A privacy result that changes (a home folder opened again) is sent at once, not on the next beat.
-          privacy ? [privacy.mode, 'passed' in privacy ? privacy.passed : null, 'item' in privacy ? privacy.item : null] : null])
+          privacy ? [privacy.mode, 'passed' in privacy ? privacy.passed : null, 'item' in privacy ? privacy.item : null] : null,
+          typeof row.localGrid === 'string' ? modelsStamp : null])
         const last = this.published.get(String(row.tabId))
-        if (!last || last.signature !== signature || began - last.at >= MACHINE_HEARTBEAT_MS) {
+        // A model still starting is read again every pass until the grid lists it, so the panel shows it live at once.
+        if (!last || last.signature !== signature || last.starting || began - last.at >= MACHINE_HEARTBEAT_MS) {
         local ??= await this.deps.open(where)
         // The existing usage reader owns its provider cache. Raw responses and
         // account credentials never leave this machine.
@@ -214,12 +222,14 @@ export class ContributedMachines {
         // it again). Unknown — the grid could not be read — keeps the reading as it is.
         const live = typeof row.localGrid === 'string'
           ? liveOn(await local.request('grid_swarm_heal', { grid: row.localGrid }, 30_000).catch(() => ({}))) : null
-        const listed = (m: LocalModelReading) => !live || live.has(m.model)
+        // Not yet listed by the grid (a start or a share still registering): sent as starting, which the panel shows and
+        // the route never offers, rather than left out until the grid lists it.
+        const marked = (m: LocalModelReading): LocalModelReading => !live || live.has(m.model) ? m : { ...m, starting: true }
         const fleet = typeof row.localGrid === 'string' ? await local.request('grid_fleet_models_list', {}, 20_000).catch(() => ({})) : null
         const refusedModels = typeof row.localGrid === 'string' ? refusedOn(fleet, row.localGrid) : []
         const localModels = typeof row.localGrid === 'string' ? [
-          ...servedOn(fleet, row.localGrid).filter(listed),
-          ...apisOn(await local.request('grid_swarm_api_shares', { grid: row.localGrid }, 10_000).catch(() => ({})), row.localGrid).filter(listed),
+          ...servedOn(fleet, row.localGrid).map(marked),
+          ...apisOn(await local.request('grid_swarm_api_shares', { grid: row.localGrid }, 10_000).catch(() => ({})), row.localGrid).map(marked),
           ...offered(sharedWith(await this.gridModels(local), row.localGrid),
             await local.request('grid_swarm_offers', { grid: row.localGrid }, 10_000).catch(() => ({}))),
         ].slice(0, MAX_LOCAL_MODELS) : null
@@ -247,7 +257,10 @@ export class ContributedMachines {
           // unverified tool, and a reading without privacy is never one a Team machine passes on.
           const { privacy: _privacy, ...withoutPrivacy } = observation
           const { toolProbeErrors: _probeErrors, localModels: _served, refusedModels: _refused, ...legacy } = withoutPrivacy
-          const attempts = [observation, ...('privacy' in observation ? [withoutPrivacy] : []),
+          // A backend before `starting` refuses it: it gets the models the grid lists, as before, not none at all.
+          const listedOnly = localModels?.some(m => m.starting)
+            ? [{ ...withoutPrivacy, localModels: localModels.filter(m => !m.starting) }] : []
+          const attempts = [observation, ...('privacy' in observation ? [withoutPrivacy] : []), ...listedOnly,
             ...('toolProbeErrors' in observation || 'localModels' in observation || 'refusedModels' in observation ? [legacy] : [])]
           for (const [index, attempt] of attempts.entries()) {
             try {
@@ -258,7 +271,7 @@ export class ContributedMachines {
               if (attempt === observation && 'privacy' in observation) this.privacyRefusedUntil = began + PRIVACY_REFUSED_MS
             }
           }
-          this.published.set(String(row.tabId), { at: began, signature })
+          this.published.set(String(row.tabId), { at: began, signature, starting: !!localModels?.some(m => m.starting) })
         } catch (error) { this.failed = true; throw error }
         }
         this.repairTrust ??= createSwarmCloneTrustRepair(this.core, this.deps.now)
@@ -401,7 +414,18 @@ const GRID_MODELS_MS = 60_000
 /** Every Swarm's grid, as the backend mints its name: their models belong to their own Swarm. */
 const SWARM_GRID = /^swarm-[0-9a-f]{12}$/
 
-type LocalModelReading = { grid: string; model: string; name?: string; contextWindow?: number; kind: 'local' | 'api' | 'shared' }
+type LocalModelReading = { grid: string; model: string; name?: string; contextWindow?: number; kind: 'local' | 'api' | 'shared'; starting?: true }
+
+/** When this machine's Swarm models last changed, from the files that change with them: the APIs it shares
+ *  (`swarm-api-shares.json`) and grid's engine records (`run/engines/<grid>/remote.json`, rewritten on every join and
+ *  leave). Their modification times, never their contents. */
+export async function localModelsStamp(dataDir: string, env: NodeJS.ProcessEnv): Promise<string> {
+  const engines = join(env.GRID_HOME || join(env.HOME ?? '', '.grid'), 'run', 'engines')
+  const files = [join(dataDir, 'swarm-api-shares.json'),
+    ...(await readdir(engines).catch(() => [] as string[])).sort().map(grid => join(engines, grid, 'remote.json'))]
+  const times = await Promise.all(files.map(file => stat(file).then(s => s.mtimeMs, () => 0)))
+  return times.join(',')
+}
 
 /** The models a `grid_swarm_heal` answer says the Swarm's grid lists, or null when it could not say (an older daemon, or
  *  the grid unread). */

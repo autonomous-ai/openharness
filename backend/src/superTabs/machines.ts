@@ -81,7 +81,9 @@ export const machineObservationSchema = z.object({ generation: z.string().max(16
    *  on this machine, since only its sign-in reaches that grid. */
   localModels: z.array(z.object({ grid: z.string().min(1).max(160), model: z.string().min(1).max(200),
     name: z.string().max(200).optional(), contextWindow: z.number().int().positive().nullable().optional(),
-    kind: z.enum(['local', 'api', 'shared']).optional() }).strict()).max(64).optional(),
+    kind: z.enum(['local', 'api', 'shared']).optional(),
+    /** Started or shared on this machine, not yet listed by the grid: shown as starting, never offered to a Builder. */
+    starting: z.boolean().optional() }).strict()).max(64).optional(),
   /** Models this machine serves on the Swarm's grid that Builders are not offered, too small or too slow to drive a coding
    *  agent (cli/src/lib/codingModel.ts), with why: so the route can tell a Lead asked for one why it is not offered. */
   refusedModels: z.array(z.object({ grid: z.string().min(1).max(160), model: z.string().min(1).max(200),
@@ -375,7 +377,7 @@ export function servedLocalModels(state: SuperTabState, now: number) {
   const grid = state.localModels?.enabled ? state.localModels.grid : null
   if (!grid) return []
   return (state.machines ?? []).flatMap(m => !m.observation || now - m.observation.receivedAt > MACHINE_FRESH_MS ? []
-    : (m.observation.localModels ?? []).filter(l => l.grid === grid).map(l => ({ ...l, machineId: m.machineId })))
+    : (m.observation.localModels ?? []).filter(l => l.grid === grid && !l.starting).map(l => ({ ...l, machineId: m.machineId })))
 }
 
 /** Whether a start names a model it may run on now: one the Swarm's grid serves, from any machine; or one on another grid
@@ -387,7 +389,7 @@ export function localModelAllowed(state: SuperTabState, request: AgentStartReque
   if (request.gridName === grid) return servedLocalModels(state, now).some(l => l.model === request.gridModel)
   const pool = (state.machines ?? []).find(m => m.machineId === request.machineId)
   return !!pool?.observation && now - pool.observation.receivedAt <= MACHINE_FRESH_MS
-    && (pool.observation.localModels ?? []).some(l => l.grid === request.gridName && l.model === request.gridModel)
+    && (pool.observation.localModels ?? []).some(l => l.grid === request.gridName && l.model === request.gridModel && !l.starting)
 }
 
 /** `teamMachines`: the tab's machines whose account row is signed in as a team account, read by the store. A start is

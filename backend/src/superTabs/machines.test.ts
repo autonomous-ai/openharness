@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { createSuperTab, SuperTabError, type AgentStart, type AgentStartRequest, type SuperTabState } from './model.js'
-import { admitMachineStart, machineSlots, machineObservationSchema, type ContributedMachine } from './machines.js'
+import { admitMachineStart, machineSlots, machineObservationSchema, servedLocalModels, type ContributedMachine } from './machines.js'
 
 const NOW = 1_000_000
 const requirements = { memoryBytes: 1, diskBytes: 1, maxCpuPercent: 50, tools: ['git'], devices: [], quotaRequired: false }
@@ -11,6 +11,21 @@ it('accepts optional tool probe failures while preserving older observations', (
   const { receivedAt: _receivedAt, ...sent } = observation
   expect(machineObservationSchema.safeParse(sent).success).toBe(true)
   expect(machineObservationSchema.safeParse({ ...sent, tools: { git: true }, toolProbeErrors: { flutter: 'interactive shell timed out' } }).success).toBe(true)
+})
+
+it('takes a model that is starting, and never counts it as served for a Builder', () => {
+  const { receivedAt: _receivedAt, ...sent } = observation
+  const model = { grid: 'swarm-0123456789ab', model: 'qwen3', kind: 'local' as const }
+  expect(machineObservationSchema.safeParse({ ...sent, localModels: [{ ...model, starting: true }] }).success).toBe(true)
+  const state: SuperTabState = createSuperTab('tab', 'Team', { id: 'owner', email: 'owner@example.com' }, 'test')
+  state.localModels = { grid: model.grid, enabled: true }
+  const pool = (starting: boolean) => [{ machineId: 'host', name: 'Mac', contributorId: 'owner', membershipGeneration: 'tab', generation: 'g1',
+    cwd: '/x', scope: 'swarm' as const, engines: ['claude'], maxAgents: 2, paused: false,
+    observation: { ...observation, localModels: [{ ...model, ...(starting ? { starting } : {}) }] } }]
+  state.machines = pool(true) as never
+  expect(servedLocalModels(state, NOW)).toEqual([])
+  state.machines = pool(false) as never
+  expect(servedLocalModels(state, NOW).map(l => l.model)).toEqual(['qwen3'])
 })
 
 it('accepts the served models Builders are not offered, with why', () => {

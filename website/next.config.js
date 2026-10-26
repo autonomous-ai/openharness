@@ -31,9 +31,9 @@ module.exports = {
         destination: 'https://harness.autonomous.ai/:path*',
         permanent: true,
       })),
-      // The front door is the Hub (owner, 2026-10-13); the workspace moved to /web. Temporary, so a
-      // browser does not cache it. `hn view` links (/?machine=…&agent=…) still open the viewer here.
-      { source: '/', missing: [{ type: 'query', key: 'machine' }], destination: '/hub', permanent: false },
+      // The front door is the web app again (owner, 2026-10-26; from 2026-10-13 it was the Hub and the
+      // app lived at /web). Old /web links land on it, query and all; temporary, so no browser keeps it.
+      { source: '/web', destination: '/', permanent: false },
       { source: '/install', destination: '/download', permanent: true },
       { source: '/explore', destination: '/hub', permanent: true },
       { source: '/explore/:id', destination: '/hub/:id', permanent: true },
@@ -68,9 +68,7 @@ module.exports = {
         // Older desktop builds consume snapshots without following redirects.
         { source: '/explore/:id/snapshot', destination: '/hub/:id/snapshot' },
         { source: '/explore/:id/download', destination: '/hub/:id/download' },
-        // `/` reaches here only as an `hn view` link; everything else there redirects to the Hub.
         { source: '/', destination: '/harness-web/index.html' },
-        { source: '/web', destination: '/harness-web/index.html' },
         { source: '/s/:id', destination: '/harness-web/index.html' },
         { source: '/auth/callback', destination: '/harness-web/index.html' },
         // Local website previews use the SSO service's native loopback callback.
@@ -141,7 +139,7 @@ module.exports = {
           { key: 'Cache-Control', value: 'public, max-age=31536000, immutable' },
         ],
       },
-      ...['/', '/web', '/s/:id', '/auth/callback', '/callback', '/harness-web', '/harness-web/index.html', '/harness-web/release.json'].map((source) => ({
+      ...['/', '/s/:id', '/auth/callback', '/callback', '/harness-web', '/harness-web/index.html', '/harness-web/release.json'].map((source) => ({
         source,
         headers: [
           { key: 'Cache-Control', value: 'no-store' },
