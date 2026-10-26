@@ -69,6 +69,15 @@ export const machinePrivacySchema = z.union([
 export type MachinePrivacy = z.infer<typeof machinePrivacySchema>
 /** As a pool keeps it: `seenAt` is when this server first received that check's result, on the server's clock. */
 export type StoredPrivacy = MachinePrivacy & { seenAt: number }
+/** What the machine is ready for (cli/src/superTabs/machines.ts readiness), for the route to leave out one that cannot do
+ *  the work: per engine whether it is installed and signed in, and per folder in its Swarm workspace (one per project)
+ *  the repository it checks out (an address without credentials), whether it is a git checkout, and whether this
+ *  machine's own login can push to it. Absent from hosts before it; null and absent entries are unknown. */
+const readiness = z.object({
+  engines: z.array(z.object({ engine: z.string().regex(/^[a-z][a-z0-9_-]{0,79}$/), installed: z.boolean(), signedIn: z.boolean().nullable() }).strict()).max(8).optional(),
+  checkouts: z.array(z.object({ folder: z.string().min(1).max(160).regex(/^[^/\\]+$/).refine(f => f !== '.' && f !== '..'),
+    repository: z.string().max(300).nullable(), git: z.boolean(), push: z.boolean().nullable() }).strict()).max(64).optional(),
+}).strict()
 export const machineObservationSchema = z.object({ generation: z.string().max(160), resources: resource,
   tools: z.record(z.string().max(80), z.boolean()).refine(v => Object.keys(v).length <= 20),
   toolProbeErrors: z.record(z.string().max(80), z.string().max(200)).refine(v => Object.keys(v).length <= 20).optional(),
@@ -91,6 +100,7 @@ export const machineObservationSchema = z.object({ generation: z.string().max(16
   /** A Harness Team daemon's privacy check; absent from the owner's own daemon and from hosts before it. The store keeps
    *  it only when a team session reported it (observedPrivacy). */
   privacy: machinePrivacySchema.optional(),
+  readiness: readiness.optional(),
 }).strict()
 export type MachineObservation = z.infer<typeof machineObservationSchema>
 
