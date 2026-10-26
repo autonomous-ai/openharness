@@ -33,7 +33,7 @@ code was changed. Local models (engines on a member's machine) are out of scope.
 | 3b. Route without a model name | all six | not verified | DeepSeek printed on MacbookPro.local only; full list not read ([3b](#flow-3)) |
 | 3c. Route naming a model four Builders hold | Swarm | **fail** | Explanation naming the Builders is missing; [F2](#f2) |
 | 3d. Route while the sharing machine's readings are stale | Swarm | **fail** | "No candidate runs …" while the grid serves it; [F4](#f4) |
-| 4. Builder on DeepSeek, sharing machine | MacbookPro.local | **fail** first start, retry pending | "Cloning took too long. Check the connection and retry."; [F3](#f3) |
+| 4. Builder on DeepSeek, sharing machine | MacbookPro.local | pass on retry | First start failed: "Cloning took too long. Check the connection and retry." ([F3](#f3)); retry done 09:35 |
 | 4. Builder on DeepSeek, through the relay | MacBooks-MacBook-Pro-19.local | pass | Nico: task done; 77/77 model replies from DeepSeek, no API error |
 | 4. Builder on DeepSeek, through the relay | MACs-Mac-Studio.local | pass | Arlo: task done with the expected answers |
 | 4. Builder on DeepSeek, through the relay | Diego's Mac | pass | Arlo (second of that name): task done; started 6 min 22 s after it was queued |
@@ -109,7 +109,8 @@ Expected: 8 rows, `4`, `?? smoke-check.txt`.
 | MacBooks-MacBook-Pro-19.local (Nico) | 09:22:0x | 09:22:47 | 09:26:41 (assigned 09:25:37) | 8, 4, `?? smoke-check.txt`, commit `7754ca93c` | Transcript: 77 of 77 assistant messages `model: deepseek/deepseek-v4.1-flash-1017`, no API error |
 | MACs-Mac-Studio.local (Arlo) | 09:22:23 | 09:22:45 | 09:25:57 (answers 09:23:55) | 8, 4, `?? smoke-check.txt`, commit `7754ca93c` | Builder's report; Swarm agent configuration model DeepSeek |
 | Diego's Mac (Arlo) | 09:22:13 | 09:28:35 | about 09:30 | 8, 4, `?? smoke-check.txt`, commit `0df48fc38` | Builder's report |
-| MacbookPro.local | 09:22 | — | — | — | Start failed; see [F3](#f3) |
+| MacbookPro.local, first start | 09:22 | — | — | — | Failed 09:28:25; see [F3](#f3) |
+| MacbookPro.local, retry | about 09:30 | 09:34:35 | about 09:35:30 (56 s of work) | 8, 4, `?? smoke-check.txt`, commit `018467761` | Builder's report: DeepSeek, high effort |
 
 On MacBooks-MacBook-Pro-19.local, which had never used grid, the daemon's log shows the whole launch on its own
 (local time UTC+7):
@@ -122,7 +123,7 @@ On MacBooks-MacBook-Pro-19.local, which had never used grid, the daemon's log sh
 16:22:49.701 [launch] 88e44187 ready → none · register claude (new session)
 ```
 
-The Lead kept the screens of all three (60 lines each); none shows an API error or a retry.
+The Lead kept the screens of all four (60 lines each); none shows an API error or a retry.
 
 Observations, not failures of this add-on:
 - Arlo on Mac Studio did the task from the group's brief before it was assigned (answers 09:23:55, assigned 09:25:36),
@@ -134,7 +135,9 @@ Observations, not failures of this add-on:
   until it switched to its Swarm agent id.
 - Diego's Mac's `harness.log` (pasted by Diego) repeats `[super-tabs] This agent is no longer in the Super Tab.` about
   every 6 s from 09:26:59 to 09:30:36, and logs `Could not close a session the Swarm ended (NOT_A_MEMBER).` at 09:29:41:
-  its host keeps asking about an agent that has left.
+  its host keeps asking about an agent that has left. Its readings then stopped from about 09:31:50, when its Builder
+  was stopped (229 s old at 09:35:42, 246 s at 09:35:59); cause not known.
+- The retry's new worktree on MacbookPro.local already had `M CLAUDE.md` before the Builder touched it.
 
 ## Findings
 
@@ -217,3 +220,8 @@ Node 24.13.0, Flutter 3.47.2. All three exited 0 with no warnings or errors in t
 
 The encryption key is the backend's `npm test` value from `backend/package.json`. `test:local-models` was not run: it
 covers on-device local models (`lib/localModels.ts`), not this add-on.
+
+Gaps these suites leave, each matching a finding above: no backend test calls `GET /api/super-tabs/grids` or
+`store.hostGrids`, and none has two owner computers report `localModels.status` ([F1](#f1)); `route.spec.ts` has no
+held model beside a refused Builder on it ([F2](#f2)); no CLI test reads a machine's readings while a start is being
+prepared ([F4](#f4)).
