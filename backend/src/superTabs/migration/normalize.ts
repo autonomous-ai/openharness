@@ -3,10 +3,24 @@
  * applied, persisted, so behavior after the migration is identical. Link lists are restored from history beforehand
  * (store.ts restorePullRequestUrls); removals that expire and the released-harness cap are left to the first write.
  */
-import { activeWork, awaitingWorkers, isLeads, numberConversations, parkLaterConversations, syncLeads, type SuperTabState } from '../model.js'
+import { activeWork, awaitingWorkers, isLeads, numberConversations, parkLaterConversations, syncLeads, type Conversation, type SuperTabState } from '../model.js'
 import { assignAgentDisplayNames } from '../agentNames.js'
 import { agentProjectId, placeRules, projectsOf } from '../projects.js'
-import { DORMANT_AFTER_MS } from '../parts/index.js'
+import { DORMANT_AFTER_MS, type ProgressData } from '../parts/index.js'
+
+/** Report progress as a row from before parts keeps it, in tab revisions. */
+interface LegacyProgress { dirtyRevision: number; summarizedRevision: number }
+
+/** Whether the group's last report is past what its Lead summarized: such a group stays awake until it is read, as the
+ *  store's sweep keeps it (sweeps.ts, group 2's review round 1). A private conversation never feeds reports. */
+function owesReports(state: SuperTabState, group: Conversation): boolean {
+  if (group.audience) return false
+  const progress = state.projects?.find(p => p.id === (group.projectId ?? 'lead'))?.progress as LegacyProgress | ProgressData | undefined
+  if (!progress) return false
+  // The split gives a group of a project with old progress the report sequence min(last message, dirty revision).
+  if ('dirtyRevision' in progress) return Math.min(group.lastMessageSequence, progress.dirtyRevision) > progress.summarizedRevision
+  return (group.reportSeq ?? 0) > (progress.summarized[group.id] ?? progress.summarizedFloor)
+}
 
 export function normalize(original: SuperTabState, { now, lastActivity }: { now: number; lastActivity: ReadonlyMap<string, number> }): SuperTabState {
   const state = structuredClone(original)
@@ -22,7 +36,8 @@ export function normalize(original: SuperTabState, { now, lastActivity }: { now:
     const finished = !!group.assignment && !activeWork(group) && group.assignment.status !== 'stopped'
     // A group with no message counts as active now; the archive sweep takes it a day later if it stays quiet.
     const quiet = now - (lastActivity.get(group.id) ?? now) > DORMANT_AFTER_MS
-    if (group.archived || (finished && quiet && !isLeads(group) && !leadGroups.has(group.id))) group.dormant = true
+    if (isLeads(group) || leadGroups.has(group.id) || owesReports(state, group)) continue
+    if (group.archived || (finished && quiet)) group.dormant = true
   }
   return state
 }

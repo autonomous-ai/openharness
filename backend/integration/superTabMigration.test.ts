@@ -81,6 +81,17 @@ describe('migrating one Swarm to parts (design 6.1.2)', () => {
       .toEqual([{ sequence: 10 }, { sequence: 30 }, { sequence: 40 }])
   })
 
+  it('keeps a finished, quiet group awake while its reports are unread, and still verifies', async () => {
+    // The web group finished two days ago; its last report (30) is past what the Lead summarized (20).
+    const { s, tabId } = await legacySwarm(state => {
+      setLegacyProgress(state.projects![0]!, { dirtyRevision: 30, summarizedRevision: 20, since: 1, requestedRevision: 20 })
+    })
+    expect(await migrateSwarm(db, tabId, { now: () => NOW })).toMatchObject({ ok: true, dormant: 0 })
+    const web = (await db.$transaction(tx => parts.loadAll(tx, tabId))).groups.find(g => g.key === s.web)!
+    expect(web.dormant).toBeUndefined()
+    expect(web.data).toMatchObject({ reportSeq: 30 })
+  })
+
   it('skips a Swarm that is already in parts, changing nothing', async () => {
     const { tabId } = await legacySwarm()
     await migrateSwarm(db, tabId, { now: () => NOW })

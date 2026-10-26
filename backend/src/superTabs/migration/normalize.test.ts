@@ -55,6 +55,32 @@ describe('migration normalize (design 6.1.2 step 2)', () => {
     expect(group(normalize(stopped, { now: NOW, lastActivity: activity }), s.web).dormant).toBeUndefined()
   })
 
+  it('keeps a finished or archived group awake while its Lead has not read its reports, as the store\'s sweep does', () => {
+    const s = richSwarm()
+    const legacy = structuredClone(s.state)
+    finish(group(legacy, s.web), 'done')
+    group(legacy, s.web).lastMessageSequence = 30
+    group(legacy, s.done).archived = true
+    group(legacy, s.done).lastMessageSequence = 25
+    const quiet = new Map([[s.web, NOW - DAY - 1]])
+    // Reports up to 30 written, the Lead summarized up to 20: the web group's last report (30) is unread, the archived one's (25) too.
+    ;(legacy.projects![0] as { progress?: unknown }).progress = { dirtyRevision: 30, summarizedRevision: 20, since: 1, requestedRevision: 20 }
+    expect(normalize(legacy, { now: NOW, lastActivity: quiet }).conversations.filter(c => c.dormant).map(c => c.id)).toEqual([])
+    // Once summarized up to 30, both have nothing left to report and sleep.
+    ;(legacy.projects![0] as { progress?: unknown }).progress = { dirtyRevision: 30, summarizedRevision: 30, since: 1, requestedRevision: 30 }
+    expect(normalize(legacy, { now: NOW, lastActivity: quiet }).conversations.filter(c => c.dormant).map(c => c.id).sort()).toEqual([s.web, s.done].sort())
+  })
+
+  it('lets a private conversation sleep whatever its project owes, since it never feeds reports', () => {
+    const s = richSwarm()
+    const legacy = structuredClone(s.state)
+    group(legacy, s.done).archived = true
+    group(legacy, s.done).lastMessageSequence = 25
+    group(legacy, s.done).audience = { people: [] }
+    ;(legacy.projects![0] as { progress?: unknown }).progress = { dirtyRevision: 30, summarizedRevision: 20, since: 1, requestedRevision: 20 }
+    expect(group(normalize(legacy, { now: NOW, lastActivity: new Map() }), s.done).dormant).toBe(true)
+  })
+
   it('parks conversations of an unknown kind and keeps the Leads conversation in step, as reading the row does', () => {
     const legacy = structuredClone(richSwarm().state)
     legacy.conversations.push({ id: 'later', kind: 'future' as never, title: 'Later', leadId: null, agentIds: [], archived: false, brief: '', checks: [], assignment: null, lastMessageSequence: 0 })
