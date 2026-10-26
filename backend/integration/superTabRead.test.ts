@@ -190,6 +190,58 @@ describe('changes since a cursor (design 4.2, 4.4)', () => {
     expect(keys((await get(`/api/super-tabs/${s.tabId}/changes?cursor=${cursor}`, owner)).body.data.groups)).not.toContain('later-kind')
   })
 
+  /** Derived values from a whole first load and from a change read in the same moment must agree (parts/light.ts). */
+  async function derivedBoth(tabId: string, as: AuthUser) {
+    clock = Date.now()
+    const first = (await get(`/api/super-tabs/${tabId}/parts`, as)).body.data
+    const changed = (await get(`/api/super-tabs/${tabId}/changes?cursor=${first.cursor}`, as)).body.data
+    return { full: first.derived, light: changed.derived }
+  }
+  /** The web group's task was lost, then cancelled: its worker keeps no decision (liveness.ts, commands.ts work.cancel). */
+  const lostThenCancelled = (state: SuperTabState, web: string, worker: string) => {
+    const group = state.conversations.find(c => c.id === web)!
+    group.assignment = { ...group.assignment!, status: 'cancelled', result: 'Gone quiet', lost: { reason: 'no progress seen', at: MIGRATED } }
+    group.lostAttempt = { id: group.assignment.id, agentId: worker }
+    delete state.agents.find(a => a.id === worker)!.workDecision
+  }
+  /** After the migration (which stores derived decisions), the worker has none: as a loss after it leaves it. */
+  async function noDecision(tabId: string, agentId: string) {
+    await db.$transaction(async tx => {
+      const agent = (await parts.loadActive(tx, tabId)).agents.find(a => a.key === agentId)!
+      const { workDecision: _gone, ...data } = agent.data!
+      await guardedWrite(tx, tabId, { op: 'update', kind: 'agent', key: agentId, seen: agent.version, data }, MIGRATED + 1)
+    })
+  }
+  const mention = (tabId: string, conversationId: string, personId: string) => db.superTabMention.create({ data: { id: `${tabId}-${conversationId}-m`,
+    tabId, conversationId, messageId: `${tabId}-msg`, personId, projectId: 'lead', authorAgentId: 'lead-agent', createdAt: new Date() } })
+
+  it('derives the same decisions from a change read as from a first load after a task was lost, then cancelled', async () => {
+    const s = await scene((f, ids) => f.edit(state => lostThenCancelled(state, ids.web, state.agents.find(a => a.name === 'worker-harness')!.id)))
+    await noDecision(s.tabId, s.worker)
+    await mention(s.tabId, s.web, peer.sub)
+    const { full, light } = await derivedBoth(s.tabId, peer)
+    expect(full.agents[s.worker].workDecision).toBeNull()
+    expect(light).toEqual(full)
+  })
+
+  it('and when that worker also has an earlier ordinary finished task, which the first load does count', async () => {
+    const s = await scene((f, ids) => {
+      const earlier = f.group('Earlier work')
+      f.edit(state => {
+        const worker = state.agents.find(a => a.name === 'worker-harness')!.id
+        lostThenCancelled(state, ids.web, worker)
+        const group = state.conversations.find(c => c.id === earlier)!
+        group.agentIds.push(worker)
+        group.assignment = { ...state.conversations.find(c => c.id === ids.web)!.assignment!, id: 'earlier-work', status: 'done', result: 'Shipped' }
+        delete group.assignment.lost
+      })
+    })
+    await noDecision(s.tabId, s.worker)
+    const { full, light } = await derivedBoth(s.tabId, peer)
+    expect(full.agents[s.worker].workDecision).toBe('awaiting')
+    expect(light).toEqual(full)
+  })
+
   it('never sends a private conversation\'s removal to a reader outside it', async () => {
     const s = await scene()
     const [peerCursor, outsiderCursor] = [await firstLoad(s.tabId, peer, NOW), await firstLoad(s.tabId, outsider, NOW)]
