@@ -270,4 +270,15 @@ covers on-device local models (`lib/localModels.ts`), not this add-on.
 Gaps these suites leave, each matching a finding above: no backend test calls `GET /api/super-tabs/grids` or
 `store.hostGrids`, and none has two owner computers report `localModels.status` ([F1](#f1)); `route.spec.ts` has no
 held model beside a refused Builder on it ([F2](#f2)); no CLI test reads a machine's readings while a start is being
-prepared ([F4](#f4)).
+prepared ([F4](#f4)); no routing or start test has a machine that cannot run grid (no `win32` case in the Super Tab
+route, start or machines suites), and `machines.spec.ts` pins only that a waiting start is logged locally ([F5](#f5)).
+
+## Rulings
+
+| Ruling | By | Why | Cost if wrong |
+| --- | --- | --- | --- |
+| 3b is "not verified", with the printed-alternatives explanation | Lead | The logged decision's full candidate list could not be read | 3b is retested later |
+| F2 is real: the route after the four starts was a rerun, not a fresh route | Lead | Confirmed from the attached route files | A false finding |
+| Flow 5 is "not in this build (hidden by the owner on 23 Oct)" plus a plan mismatch; no offer made below the Desktop | Lead | People cannot reach it, so it is not a user flow in this release | It is tested when turned back on |
+| WIN-DELL's DeepSeek start is a fail: dispatched 09:38:12, never runs, no error shown | Lead | Code reading plus 20+ minutes observed | Low: a rerun |
+| Flow 6 is judged against the 2026-10-24 decision (a share keeps its address across a restart), and the plan's "Shares end when the models service restarts" is recorded as a plan mismatch | Engineer | The later decision and the code (`SwarmApiShares.restore`) agree | Flow 6 judged against the wrong rule |
