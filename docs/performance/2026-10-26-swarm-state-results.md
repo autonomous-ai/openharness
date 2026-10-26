@@ -17,9 +17,12 @@ MongoDB. That was fixed in its own group (#1745). Its before and after numbers a
 - **Integration head:** `feat/swarm-state-parts` at `44d51aae8`. It holds groups 0–5 (PRs #1731–#1735, #1737), the
   host-row clean-up (#1739), tonight's v1 work (liveness and takeover #1742 and #1744, routing readiness #1743) and the
   database-read fix (#1745).
-- **What ran:** every run here is from `4b8b5ea8a` on `validate/swarm-state-parts`, with a clean tree. That commit is
-  the head plus this document. After that, #1746 (Desktop's private chat with the PM) merged at `1d79b4e57`. It changes
-  only `desktop/` and `docs/`, so the Desktop suites were rerun there.
+- **What ran:** unless a section names another commit, the runs are from `4b8b5ea8a` on `validate/swarm-state-parts`,
+  with a clean tree. That commit is the head plus this document. Other commits, where they apply:
+  - the "before #1745" figures are from `b4b28aec8` (`03180d7a1` for the end-to-end run);
+  - the Desktop suites, and the end-to-end reference file as checked in, ran on `1d79b4e57`. That commit adds #1746
+    (Desktop's private chat with the PM), which changes only `desktop/` and `docs/`;
+  - the first dry run in Goal 4 ran on `63a497c0e`, the base that ships, with the rollback guards of #1748–#1750.
 - **Main, for comparison:**
   - the baseline runs at `b71522ab6` (main `0d3485bad`);
   - the hot variant, new here, at `f53d296d8`, whose `backend/src` and `backend/prisma` are identical to main.
