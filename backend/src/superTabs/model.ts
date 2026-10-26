@@ -287,8 +287,9 @@ export function awaitingWorkers(state: SuperTabState, projectId: string): Agent[
   return state.agents.filter(a => {
     if (state.conversations.some(c => c.leadId === a.id) || state.conversations.some(c => activeWork(c) && c.assignment?.agentId === a.id)
       || reviewing(state, a.id)) return false
-    // A lost task's agent is not waiting for a decision: it may be gone, and it must not hold up the next assignment.
-    const groups = state.conversations.filter(c => c.assignment?.agentId === a.id && c.assignment.status !== 'lost')
+    // A lost task's agent is not waiting for a decision, even once the task is cancelled: it may be gone, and it must not
+    // hold up the next assignment.
+    const groups = state.conversations.filter(c => c.assignment?.agentId === a.id && !c.assignment.lost)
     return (a.projectId ?? groups.map(c => groupProject(state, c).id)[0] ?? 'lead') === projectId &&
       (a.workDecision === 'awaiting' || (!a.workDecision && groups.some(c => !activeWork(c))))
   })

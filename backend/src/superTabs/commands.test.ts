@@ -2371,13 +2371,17 @@ describe('lost work (liveness.ts)', () => {
     expect(task().assignment).toMatchObject({ agentId: other, status: 'working', leaseUntil: 1000 + 5 * 60_000 })
   })
 
-  it('leaves the lost agent undecided when the Lead cancels lost work, and does not tell it twice', () => {
-    const { f, lead, group, worker, as, task, limit } = lostFixture()
+  it('leaves the lost agent undecided when the Lead cancels lost work, without telling it twice or blocking the next assignment', () => {
+    const { f, lead, group, worker, other, as, task, limit } = lostFixture()
     limit()
     const cancelled = f.run({ type: 'work.cancel', conversationId: group, assignmentId: task().assignment!.id, reason: 'Not needed' }, as(lead))
     expect(task().assignment!.status).toBe('cancelled')
     expect(cancelled.messages[0]!.recipients).toEqual([])
     expect(f.state.agents.find(a => a.id === worker)!.workDecision).toBeUndefined()
+    // The Lead's next assignment in the project goes to a healthy worker without deciding about the dead one first.
+    const next = f.group()
+    f.run({ type: 'work.assign', conversationId: next, agentId: other, ...via }, as(lead), decisionIn(next))
+    expect(f.state.conversations.find(c => c.id === next)!.assignment).toMatchObject({ agentId: other, status: 'working' })
   })
 
   it('renews the lease on the worker\'s own post in its task\'s group, not on anyone else\'s', () => {

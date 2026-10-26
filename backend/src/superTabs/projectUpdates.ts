@@ -83,4 +83,3 @@ export function answersRequest(progress: ProgressData, legacy: number | undefine
   if (!Object.keys(progress.requested).length) return legacy === undefined || legacy >= progress.requestedFloor
   return Object.entries(progress.requested).every(([id, seq]) => (progress.summarized[id] ?? progress.summarizedFloor) >= seq)
 }
-
