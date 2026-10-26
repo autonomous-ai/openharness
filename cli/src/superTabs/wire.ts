@@ -1,5 +1,5 @@
 import type { CoreApi } from '../core/api.js'
-import { UPDATE_MESSAGE, UPDATE_REQUIRED } from './readContract.js'
+import { READ_FORMAT, UPDATE_MESSAGE, UPDATE_REQUIRED } from './readContract.js'
 
 type Json = Record<string, unknown>
 export const object = (v: unknown): Json => v && typeof v === 'object' && !Array.isArray(v) ? v as Json : {}
@@ -27,4 +27,10 @@ export async function backend(core: CoreApi, method: string, path: string, body?
       String(error.message ?? reply.body.message ?? 'Could not reach this Super Tab.'), reply.status)
   }
   return reply.body.data
+}
+
+/** A read reply in a format this client cannot read comes from a newer server: the person updates Harness (design 5.1). */
+export function readable<T>(reply: unknown): T {
+  if (object(reply).format !== READ_FORMAT) throw new SuperTabHostError(UPDATE_REQUIRED, UPDATE_MESSAGE, 426)
+  return reply as T
 }

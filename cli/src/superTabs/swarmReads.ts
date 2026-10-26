@@ -5,9 +5,9 @@
  */
 import type { CoreApi } from '../core/api.js'
 import { mergeChanges, storeOf, type PartsStore } from './partsStore.js'
-import { READ_FORMAT, UPDATE_MESSAGE, UPDATE_REQUIRED, type ChangedParts, type FirstLoad } from './readContract.js'
+import type { ChangedParts, FirstLoad } from './readContract.js'
 import { reassemble } from './reassemble.js'
-import { backend, object, SuperTabHostError } from './wire.js'
+import { backend, object, readable, SuperTabHostError } from './wire.js'
 
 type Json = Record<string, unknown>
 /** A Swarm as `GET /api/super-tabs/:id` gave it: its state in the old shape, `lastChangedAt` in place of `revision`. */
@@ -15,12 +15,6 @@ export interface SwarmRead { state: Json; lastChangedAt: number; githubApp: bool
 
 /** About one per running agent and Swarm on a machine; one of the largest Swarms holds about a megabyte. */
 const MAX_SWARMS = 32
-
-/** A reply in a format this client cannot read comes from a newer server: the person updates Harness (design 5.1). */
-function readable<T>(reply: unknown): T {
-  if (object(reply).format !== READ_FORMAT) throw new SuperTabHostError(UPDATE_REQUIRED, UPDATE_MESSAGE, 426)
-  return reply as T
-}
 
 export class SwarmReads {
   private readonly held = new Map<string, PartsStore>()
