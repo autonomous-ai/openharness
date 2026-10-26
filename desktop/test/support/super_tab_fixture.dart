@@ -324,6 +324,12 @@ class ConversationServer {
 
   /// The Swarm reads this server answers, worked out from [state].
   final parts = SwarmPartsBackend();
+
+  /// Messages per page, as the backend pages them.
+  int messagePage = 100;
+
+  /// Told of every messages read, by path.
+  void Function(String path)? onRead;
   bool loseReply = false, reject = false, failSave = false, failReads = false;
   Map<String, dynamic>? saved;
   // While set, every read waits for it: a slow server.
@@ -603,26 +609,51 @@ class ConversationServer {
       return jsonDecode(jsonEncode(decision)) as Map<String, dynamic>;
     }
     if (uri.pathSegments.last == 'messages') {
+      onRead?.call(path);
       final conversationId = uri.pathSegments[4];
-      final after = int.tryParse(uri.queryParameters['after'] ?? '');
-      final before = int.tryParse(uri.queryParameters['before'] ?? '');
-      final messageId = uri.queryParameters['messageId'];
-      var rows = messages
-          .where(
-            (m) =>
-                m['conversationId'] == conversationId &&
-                (messageId == null || m['id'] == messageId) &&
-                (after == null || (m['sequence'] as int) > after) &&
-                (before == null || (m['sequence'] as int) < before),
-          )
-          .toList();
+      final query = uri.queryParameters;
+      final after = int.tryParse(query['after'] ?? '');
+      final before = int.tryParse(query['before'] ?? '');
+      final afterId = query['afterId'], beforeId = query['beforeId'];
+      final messageId = query['messageId'];
+      // Pages run in (sequence, id) order (section 4.6).
+      int order(Map<String, dynamic> a, Map<String, dynamic> b) {
+        final bySequence = (a['sequence'] as int).compareTo(
+          b['sequence'] as int,
+        );
+        return bySequence != 0
+            ? bySequence
+            : (a['id'] as String).compareTo(b['id'] as String);
+      }
+
+      bool past(Map<String, dynamic> m, int sequence, String? id, int sign) {
+        final s = (m['sequence'] as int).compareTo(sequence) * sign;
+        if (s != 0 || id == null) return s > 0;
+        return (m['id'] as String).compareTo(id) * sign > 0;
+      }
+
+      var rows =
+          messages
+              .where(
+                (m) =>
+                    m['conversationId'] == conversationId &&
+                    (messageId == null || m['id'] == messageId) &&
+                    (after == null || past(m, after, afterId, 1)) &&
+                    (before == null || past(m, before, beforeId, -1)),
+              )
+              .toList()
+            ..sort(order);
       if (after == null) rows = rows.reversed.toList();
-      final page = rows.take(100).toList();
-      final next = rows.length > 100 ? page.last['sequence'] : null;
-      return {
-        'messages': after == null ? page.reversed.toList() : page,
-        'next': next,
-      };
+      final page = rows.take(messagePage).toList();
+      final next = rows.length > messagePage
+          ? {'sequence': page.last['sequence'], 'id': page.last['id']}
+          : null;
+      return jsonDecode(
+        jsonEncode({
+          'messages': after == null ? page.reversed.toList() : page,
+          'next': next,
+        }),
+      ) as Map<String, dynamic>;
     }
     if (parts.read(path, state) case final answer?) return answer;
     if (uri.path == '/api/super-tabs/list') {

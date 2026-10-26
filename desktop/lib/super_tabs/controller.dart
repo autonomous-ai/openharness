@@ -226,7 +226,11 @@ class SuperTabController extends ChangeNotifier {
   ({String conversationId, List<HarnessAttachment> files})? _sending;
   int _uploadRun = 0;
   final _messages = <String, List<SuperTabMessage>>{};
-  final _before = <String, int?>{};
+
+  /// Where each conversation's older history continues: the oldest message
+  /// read, as the backend's page cursor names it (section 4.6). Null at the
+  /// start of the conversation.
+  final _before = <String, SuperTabPage?>{};
   final _reading = <String, Future<void>>{};
   final expandedProjects = <String>{};
   final expandedMachines = <String>{};
@@ -479,7 +483,9 @@ class SuperTabController extends ChangeNotifier {
       'state': state,
       'conversationId': id,
       'messages': rows,
-      'next': page.length < shown.length ? page.first.sequence : _before[id],
+      'next': page.length < shown.length
+          ? SuperTabPage.of(page.first).toJson()
+          : _before[id]?.toJson(),
     };
   }
 
@@ -508,10 +514,9 @@ class SuperTabController extends ChangeNotifier {
       if (id == selectedId &&
           saved.conversation(id as String) != null &&
           messages.every((m) => m.conversationId == id)) {
-        _messages[id] = messages
-          ..sort((a, b) => a.sequence.compareTo(b.sequence));
+        _messages[id] = messages..sort(superTabMessageOrder);
         _keepRows(id, rows);
-        _before[id] = (view['next'] as num?)?.toInt();
+        _before[id] = SuperTabPage.read(view['next']);
       }
       _showingSaved = true;
       loading = false;
@@ -884,7 +889,10 @@ class SuperTabController extends ChangeNotifier {
   /// What a read of [id]'s messages asks for: the page before the oldest
   /// shown, what came after the newest, or the latest page.
   String _query(String id, {bool older = false}) {
-    if (older) return '?before=${_before[id]}';
+    if (older) {
+      final page = _before[id]!;
+      return '?before=${page.sequence}&beforeId=${Uri.encodeQueryComponent(page.id)}';
+    }
     // A saved page may be stale in its receipts as well as short of new
     // messages: the first read after it takes the latest page whole.
     if (_showingSaved) return '';
@@ -1038,13 +1046,12 @@ class SuperTabController extends ChangeNotifier {
         }
         _keepRows(id, receipt['messages'] as List);
       }
-      final next = combined.values.toList()
-        ..sort((a, b) => a.sequence.compareTo(b.sequence));
+      final next = combined.values.toList()..sort(superTabMessageOrder);
       // An adapting read that found nothing new changes nothing on screen.
       final same = _policy.adapts && _sameMessages(_messages[id], next);
       _messages[id] = next;
       if (older || replacing || !_before.containsKey(id)) {
-        _before[id] = (answer['next'] as num?)?.toInt();
+        _before[id] = SuperTabPage.read(answer['next']);
       }
       // Something new in the conversation on screen keeps the full poll.
       if (arrived && id == selectedId) _acted();

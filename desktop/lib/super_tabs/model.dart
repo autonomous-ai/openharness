@@ -551,6 +551,35 @@ SuperTabAttachment? _tryAttachment(Object? row) {
   }
 }
 
+/// Messages in the order a conversation shows them: by sequence, then id, as
+/// the backend pages them (messages from before the parts migration can share
+/// a sequence).
+int superTabMessageOrder(SuperTabMessage a, SuperTabMessage b) {
+  final bySequence = a.sequence.compareTo(b.sequence);
+  return bySequence != 0 ? bySequence : a.id.compareTo(b.id);
+}
+
+/// Where a conversation's older history continues: the message a page ended
+/// on (docs/design/2026-10-26-swarm-state-parts.md, section 4.6).
+class SuperTabPage {
+  const SuperTabPage(this.sequence, this.id);
+  SuperTabPage.of(SuperTabMessage message) : this(message.sequence, message.id);
+
+  /// The backend's `next`, or null at the start of the conversation.
+  static SuperTabPage? read(Object? next) => switch (next) {
+    {'sequence': final num sequence, 'id': final String id} => SuperTabPage(
+      sequence.toInt(),
+      id,
+    ),
+    null => null,
+    _ => throw const FormatException('Invalid Swarm page.'),
+  };
+
+  final int sequence;
+  final String id;
+  Map<String, dynamic> toJson() => {'sequence': sequence, 'id': id};
+}
+
 /// Optional timing/hold fields keep messages from older backends readable.
 class SuperTabDelivery {
   SuperTabDelivery.fromJson(Map<String, dynamic> row)
