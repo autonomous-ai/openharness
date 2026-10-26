@@ -3047,30 +3047,49 @@ describe('the PM\'s terminal after a private chat (final review, Critical 1)', (
       .rejects.toMatchObject({ code: 'SESSION_CONFIDENTIAL' })
   })
 
-  it('lets only one of a concurrent promotion to Lead in one Swarm and a registration in another win', async () => {
+  /** A gate a transaction waits at once, before its first write: `reached` says it read everything, `open` lets it write. */
+  function gate() {
+    let reach!: () => void, open!: () => void, first = true
+    const reached = new Promise<void>(resolve => { reach = resolve }), opened = new Promise<void>(resolve => { open = resolve })
+    // Only its first attempt waits; a retry after the conflict reads again and goes straight on.
+    const at = async () => { if (!first) return; first = false; reach(); await opened }
+    return { at, reached, open }
+  }
+
+  it.each(['promotion', 'registration'] as const)('lets only one of a concurrent promotion to Lead in one Swarm and a registration in another win: %s first', async winner => {
     const shared = randomUUID()
-    const first = (await store.create(owner, randomUUID(), 'Promotes', 'public')).id, other = await otherSwarm()
-    const add = (tab: string, user = store) => user.execute(owner, tab, { operationId: randomUUID(), command: { type: 'agent.add', conversationId: 'lead',
-      machineId: 'test-host', harnessId: shared, name: 'Shared', configuration: config, lead: false } })
-    const sharedId = String((await add(first)).result.agentId)
-    // Both transactions read before either writes: each waits at its first conversation write until the other is there too.
-    let arrived = 0, release!: () => void
-    const both = new Promise<void>(resolve => { release = resolve })
-    const barrier = async () => { if (++arrived <= 2) { if (arrived === 2) release(); await Promise.race([both, new Promise(r => setTimeout(r, 3000))]) } }
-    const racing = () => new SuperTabStore(beforeFirstWrite(db, barrier))
-    const results = await Promise.allSettled([
-      racing().execute(owner, first, { operationId: randomUUID(), command: { type: 'conversation.agent', conversationId: 'lead', agentId: sharedId, present: true, lead: true } }),
-      add(other, racing()),
-    ])
-    expect(arrived).toBeGreaterThanOrEqual(2)
-    expect(results.filter(r => r.status === 'fulfilled')).toHaveLength(1)
-    expect(results.find(r => r.status === 'rejected')).toMatchObject({ reason: { code: 'SESSION_CONFIDENTIAL' } })
-    // Whichever won, once the first Swarm lets the session go no Swarm holds it unmarked: a confidential session has one registration.
-    const promoted = results[0]!.status === 'fulfilled'
-    if (promoted) {
-      await run(first, { type: 'conversation.agent', conversationId: 'lead', agentId: sharedId, present: false, lead: false })
-      expect(await db.swarmAgent.count({ where: { key: sharedId, deleted: false, tabId: other } })).toBe(0)
-    } else expect((await storedState(first)).agents.find(a => a.id === sharedId)!.confidential).toBeUndefined()
+    const first = (await fixture()).tab, other = await otherSwarm()
+    const project = (await run(first, { type: 'project.create', name: 'Promotes', visibility: 'public', brief: '' })).result as { projectId: string; conversationId: string }
+    const sharedId = String((await run(first, { type: 'agent.add', conversationId: project.conversationId, machineId: 'test-host', harnessId: shared,
+      name: 'Shared', configuration: config, lead: false })).result.agentId)
+    // Both transactions read before either writes; then the winner commits, and only then may the other write.
+    const promotionGate = gate(), registrationGate = gate()
+    const promotion = new SuperTabStore(beforeFirstWrite(db, promotionGate.at)).execute(owner, first, { operationId: randomUUID(),
+      command: { type: 'conversation.agent', conversationId: project.conversationId, agentId: sharedId, present: true, lead: true } })
+    const registration = new SuperTabStore(beforeFirstWrite(db, registrationGate.at)).execute(owner, other, { operationId: randomUUID(),
+      command: { type: 'agent.add', conversationId: 'lead', machineId: 'test-host', harnessId: shared, name: 'Shared', configuration: config, lead: false } })
+    await Promise.all([promotionGate.reached, registrationGate.reached])
+    const [won, lost] = winner === 'promotion' ? [promotion, registration] : [registration, promotion]
+    const [wonGate, lostGate] = winner === 'promotion' ? [promotionGate, registrationGate] : [registrationGate, promotionGate]
+    wonGate.open()
+    await won
+    lostGate.open()
+    await expect(lost).rejects.toMatchObject({ code: 'SESSION_CONFIDENTIAL' })
+    const registered = async (tab: string) => db.swarmAgent.count({ where: { key: sharedId, deleted: false, tabId: tab } })
+    if (winner === 'promotion') {
+      expect(await registered(other)).toBe(0)
+      expect((await storedState(first)).agents.find(a => a.id === sharedId)!.confidential).toBe(true)
+    } else {
+      expect(await registered(other)).toBe(1)
+      expect((await storedState(first)).agents.find(a => a.id === sharedId)!.confidential).toBeUndefined()
+    }
+    // Swarm A lets the session go with its project (a Lead is protected from plain removal): no Swarm then holds a confidential
+    // session unmarked, because it never had a second registration.
+    await run(first, { type: 'project.delete', projectId: project.projectId })
+    expect(await registered(first)).toBe(0)
+    const left = await db.swarmAgent.findMany({ where: { key: sharedId, deleted: false } })
+    expect(left.every(row => winner === 'registration' && !(row.data as { confidential?: boolean }).confidential)).toBe(true)
+    expect(left).toHaveLength(winner === 'promotion' ? 0 : 1)
   })
 
   it('keeps a session registered in two Swarms before the rule closed everywhere: to the other Swarm\'s Lead, its readers and earlier shares', async () => {
