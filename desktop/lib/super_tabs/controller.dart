@@ -152,8 +152,8 @@ class SuperTabController extends ChangeNotifier {
   SuperTabReading _policy;
   DateTime? _startedAt, _lastFullRead;
 
-  /// The state last drawn, while the reading adapts ([_read]).
-  Map<String, dynamic>? _shownState;
+  /// When the parts held were last read: how old a [savedView] of them is.
+  DateTime? _partsReadAt;
 
   /// The rows each conversation's messages were read from, kept only to save
   /// the view ([SuperTabReading.drawsSaved]).
@@ -466,11 +466,13 @@ class SuperTabController extends ChangeNotifier {
   }
 
   /// The view to keep on this device ([SuperTabReading.drawsSaved]): the
-  /// state as last read and the open conversation's last page, or null.
+  /// Swarm's parts as last read, with the cursor the next read starts at,
+  /// and the open conversation's last page; or null.
   Map<String, dynamic>? get savedView {
-    final state = _shownState;
+    final parts = _parts, readAt = _partsReadAt;
     if (!_policy.drawsSaved ||
-        state == null ||
+        parts == null ||
+        readAt == null ||
         accessRevoked ||
         _showingSaved) {
       return null;
@@ -482,8 +484,10 @@ class SuperTabController extends ChangeNotifier {
         : shown;
     final rows = [for (final message in page) ?_rows[id]?[message.id]];
     return {
-      'revision': lastChangedAt,
-      'state': state,
+      'format': superTabReadFormat,
+      'savedAt': readAt.millisecondsSinceEpoch,
+      'lastChangedAt': lastChangedAt,
+      'parts': parts.toJson(),
       'conversationId': id,
       'messages': rows,
       'next': page.length < shown.length
@@ -495,14 +499,25 @@ class SuperTabController extends ChangeNotifier {
   /// A conversation's page as the backend reads it.
   static const _savedPage = 100;
 
+  /// How long a saved view's cursor is good for: the backend keeps
+  /// tombstones 7 days and reloads older cursors an hour before that.
+  static const _savedFor = Duration(days: 6, hours: 23);
+
   /// Draws a [savedView] kept from an earlier visit while the first read is
-  /// on its way: that read replaces it. One for another Swarm, one that no
-  /// longer parses, or one after a read has landed, draws nothing.
+  /// on its way, and holds its parts: the first read asks only for what
+  /// changed since, and replaces it. One for another Swarm, one too old for
+  /// its cursor, one that no longer parses, or one after a read has landed,
+  /// draws nothing.
   void drawSaved(Map<String, dynamic> view) {
     if (!_policy.drawsSaved || snapshot != null || stateReads > 0) return;
     try {
-      final state = superTabMap(view['state']);
-      final saved = SuperTabSnapshot.fromJson(state);
+      if (view['format'] != superTabReadFormat) return;
+      final savedAt = DateTime.fromMillisecondsSinceEpoch(
+        (view['savedAt'] as num).toInt(),
+      );
+      if (clock.now().difference(savedAt) >= _savedFor) return;
+      final parts = SuperTabParts.fromJson(superTabMap(view['parts']));
+      final saved = SuperTabSnapshot.fromJson(parts.state);
       if (saved.id != tabId) return;
       final id = view['conversationId'];
       final rows = [
@@ -510,10 +525,11 @@ class SuperTabController extends ChangeNotifier {
           superTabMap(row),
       ];
       final messages = rows.map(SuperTabMessage.fromJson).toList();
-      final revisionSaved = (view['revision'] as num).toInt();
+      final changedAt = (view['lastChangedAt'] as num).toInt();
       snapshot = saved;
-      lastChangedAt = revisionSaved;
-      _shownState = state;
+      lastChangedAt = changedAt;
+      _parts = parts;
+      _partsReadAt = savedAt;
       if (id == selectedId &&
           saved.conversation(id as String) != null &&
           messages.every((m) => m.conversationId == id)) {
@@ -535,7 +551,8 @@ class SuperTabController extends ChangeNotifier {
   void _dropSaved() {
     snapshot = null;
     lastChangedAt = -1;
-    _shownState = null;
+    _parts = null;
+    _partsReadAt = null;
     _messages.clear();
     _rows.clear();
     _before.clear();
@@ -743,7 +760,6 @@ class SuperTabController extends ChangeNotifier {
           stateChanged = true;
           _viewVersion++;
         }
-        _shownState = raw;
         final next = SuperTabSnapshot.fromJson(raw);
         if (next.id != tabId) {
           throw const FormatException('A different Swarm was returned.');
@@ -784,8 +800,9 @@ class SuperTabController extends ChangeNotifier {
           selectedId = next.projects.firstOrNull?.leadConversationId ?? 'lead';
         }
         if (localAccessChanged) _saveSoon();
-        // A new store holds no closed groups yet: the open projects read theirs.
-        if (read.full) {
+        // A new store holds no closed groups yet, nor one a saved view drew:
+        // the open projects read theirs.
+        if (read.full || stateReads == 1) {
           _dormantPages.clear();
           for (final project in expandedProjects) {
             unawaited(loadDormant(project));
@@ -793,6 +810,7 @@ class SuperTabController extends ChangeNotifier {
         }
       }
       lastChangedAt = parts.lastChangedAt;
+      _partsReadAt = clock.now();
       error = null;
       await (selectedId == earlyId && messagesRead != null
           ? messagesRead
@@ -949,9 +967,7 @@ class SuperTabController extends ChangeNotifier {
   void _redraw() {
     final parts = _parts;
     if (parts == null || snapshot == null) return;
-    final raw = parts.state;
-    _shownState = raw;
-    snapshot = SuperTabSnapshot.fromJson(raw);
+    snapshot = SuperTabSnapshot.fromJson(parts.state);
     _viewVersion++;
     _changed();
   }

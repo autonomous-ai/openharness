@@ -268,6 +268,26 @@ class SuperTabParts {
     'stale': _stale.toList(),
   };
 
+  /// [json] (from [toJson]) without what the screens never draw: agent starts carry their tasks, and project
+  /// progress is never shown. A store read back from it gets them again as they change.
+  static Map<String, dynamic> drawnOnly(Map<String, dynamic> json) {
+    const undrawn = {'starts', 'progress'};
+    final seen = json['seen'];
+    return {
+      ...json,
+      'load': {
+        ...superTabMap(json['load']),
+        for (final kind in undrawn) kind: const <dynamic>[],
+      },
+      'seen': {
+        if (seen is Map)
+          for (final entry in seen.entries)
+            if (!undrawn.contains((entry.key as String).split(':').first))
+              entry.key: entry.value,
+      },
+    };
+  }
+
   Iterable<Map<String, dynamic>> _data(String kind) =>
       (_live[kind] ?? const {}).values.map((part) => superTabMap(part['data']));
 
