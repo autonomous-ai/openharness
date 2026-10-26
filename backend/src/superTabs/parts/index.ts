@@ -3,10 +3,11 @@
  * and the migration share.
  */
 import type { Prisma } from '@prisma/client'
-import type { SuperTabState } from '../model.js'
 import type { GroupData, Part, PartKind, SwarmParts } from './types.js'
 
 export * from './types.js'
+export { clock, createClock } from './clock.js'
+export { reassemble, split, toLegacyState } from './shape.js'
 type Transaction = Prisma.TransactionClient
 
 const pending = (name: string): never => { throw new Error(`parts.${name} is not implemented yet`) }
@@ -31,12 +32,5 @@ export function loadDormant(_tx: Transaction, _tabId: string,
   _page: { projectId?: string; before?: { lastActivityAt: number; key: string } }): Promise<Part<GroupData>[]> {
   return pending('loadDormant')
 }
-/** The state commands run on: today's shape, parts in ordinal order, with the part-only group fields kept. */
-export function reassemble(_parts: SwarmParts): SuperTabState { return pending('reassemble') }
-/** The state in `SuperTab.state`'s shape: part-only group fields removed, report progress rebuilt as revisions
- *  (verification and rollback, section 6.2). */
-export function toLegacyState(_state: SuperTabState): SuperTabState { return pending('toLegacyState') }
-/** One Swarm's state as parts. */
-export function split(_state: SuperTabState, _opts: { tabId: string; version: number; now: number }): SwarmParts { return pending('split') }
 /** The newest data change of each Swarm, computed when read (section 3.7). */
 export function lastChangedAt(_tx: Transaction, _tabIds: string[]): Promise<Map<string, number>> { return pending('lastChangedAt') }
