@@ -70,7 +70,11 @@ class SuperTabClient {
   SuperTabReading get reading => _reading;
   set reading(SuperTabReading value) {
     if (identical(value, _reading)) return;
+    final claims = value.drawsSaved && !_reading.drawsSaved;
     _reading = value;
+    // The account bound before the host said views are kept, at boot. With
+    // none bound yet, the bind that follows claims.
+    if (claims && _account != null) _claimViews();
     for (final controller in _loaded.values) {
       controller.reading = value;
     }
@@ -99,6 +103,14 @@ class SuperTabClient {
   late final _views = SuperTabSavedViews(storage);
   final _viewSaves = <String, Timer>{};
   final _viewSavedAt = <String, DateTime>{};
+  final _viewVersions = <String, int>{};
+
+  /// Only the account using this device keeps views on it: any other one,
+  /// after a reload too, is forgotten ([SuperTabSavedViews.claim]).
+  void _claimViews() {
+    if (!_reading.drawsSaved) return;
+    unawaited(_views.claim(_account).catchError((Object _) {}));
+  }
 
   /// How often a Swarm's view may be written while it keeps changing: each
   /// write is a few hundred KB into the browser's storage.
@@ -117,9 +129,12 @@ class SuperTabClient {
   void _saveView(String id) {
     _viewSaves.remove(id)?.cancel();
     final account = _account;
-    final view = _loaded[id]?.savedView;
+    final controller = _loaded[id];
+    final view = controller?.savedView;
+    // Nothing to keep is no write: the 15 s wait starts with a real one.
     if (account == null || view == null) return;
     _viewSavedAt[id] = clock.now();
+    _viewVersions[id] = controller!.viewVersion;
     unawaited(_views.write(account, id, view).catchError((Object _) {}));
   }
 
@@ -187,14 +202,15 @@ class SuperTabClient {
 
   void bind(String? account) {
     if (_account == account) return;
-    // Nothing of an account that left stays on this device.
-    if (_account case final left?) unawaited(_views.forgetAccount(left));
     for (final timer in _viewSaves.values) {
       timer.cancel();
     }
     _viewSaves.clear();
     _viewSavedAt.clear();
+    _viewVersions.clear();
     _account = account;
+    // Nothing of an account that left stays on this device.
+    _claimViews();
     _generation++;
     _discoveryTimer?.cancel();
     _discovering = null;
@@ -400,8 +416,10 @@ class SuperTabClient {
       if (_reading.drawsSaved && generation == _generation) {
         if (controller.accessRevoked) {
           _viewSaves.remove(id)?.cancel();
-          unawaited(_views.forget(account, id));
-        } else if (!controller.showingSaved) {
+          unawaited(_views.forget(account, id).catchError((Object _) {}));
+        } else if (controller.viewVersion != _viewVersions[id]) {
+          // Kept only when what it holds changed; none while a saved view
+          // is still on screen ([SuperTabController.savedView]).
           _saveViewSoon(id);
         }
       }
