@@ -51,7 +51,12 @@ class WebTabSwitcher extends StatelessWidget {
     ].join(' ');
     return Row(
       children: [
-        Flexible(child: _switcher(context, label, enabled, theme)),
+        Flexible(
+          child: fingerTarget(
+            enabled: true,
+            _switcher(context, label, enabled, theme),
+          ),
+        ),
         fingerTarget(enabled: true, _newTabButton(context, enabled, theme)),
       ],
     );

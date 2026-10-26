@@ -8236,9 +8236,13 @@ class _SwarmScreenState extends State<SwarmScreen> {
                               ),
                               if (_projects.error == null &&
                                   app.lastErrorRetryable)
-                                TextButton(
-                                  onPressed: app.retryMachines,
-                                  child: const Text('Retry'),
+                                // A phone's Retry is a finger's size.
+                                fingerTarget(
+                                  enabled: _compact(context),
+                                  TextButton(
+                                    onPressed: app.retryMachines,
+                                    child: const Text('Retry'),
+                                  ),
                                 ),
                               IconButton(
                                 onPressed: _projects.error != null

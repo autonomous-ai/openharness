@@ -237,6 +237,7 @@ void main() {
 
   const barControls = [
     'web-app-menu-button',
+    'web-tab-switcher',
     'web-new-tab-button',
     'swarm-search-button',
     'workspace-notifications-button',
