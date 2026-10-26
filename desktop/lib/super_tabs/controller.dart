@@ -128,6 +128,13 @@ class SuperTabController extends ChangeNotifier {
   /// that it changed (spec ruling 8).
   int lastChangedAt = -1;
 
+  /// The backend no longer serves this build's reads (HTTP 426): the tab says
+  /// to update Harness and asks nothing more (section 5.1).
+  bool updateRequired = false;
+
+  /// What the tab says once [updateRequired] (docs/naming-system.md).
+  static const updateMessage = 'Update Harness to keep using this Swarm.';
+
   /// The Swarm's parts as last read: what the next read asks changes for, and what [snapshot] is built from.
   SuperTabParts? _parts;
   String? error, operationError, operationErrorCode;
@@ -423,7 +430,7 @@ class SuperTabController extends ChangeNotifier {
   /// [after] is what is left of the poll once a read took the rest of it.
   void _schedule([Duration? after]) {
     _poll?.cancel();
-    if (_disposed || pollInterval <= Duration.zero) return;
+    if (_disposed || updateRequired || pollInterval <= Duration.zero) return;
     if (!_policy.adapts) {
       _poll = Timer.periodic(pollInterval, (_) => unawaited(refresh()));
       return;
@@ -660,7 +667,13 @@ class SuperTabController extends ChangeNotifier {
     if (snapshot == null) return false;
     if (snapshot!.conversation(id) == null) {
       final parts = _parts;
-      if (parts == null || !await _readGroup(parts, id)) return false;
+      try {
+        if (parts == null || !await _readGroup(parts, id)) return false;
+      } catch (failure) {
+        _readFailure(failure, revokeTab: false);
+        _changed();
+        return false;
+      }
       _redraw();
       if (_disposed || snapshot?.conversation(id) == null) return false;
     }
@@ -697,7 +710,7 @@ class SuperTabController extends ChangeNotifier {
   }
 
   Future<void> refresh() {
-    if (_disposed || accessRevoked) return Future.value();
+    if (_disposed || accessRevoked || updateRequired) return Future.value();
     return _refreshing ??= _read().whenComplete(() => _refreshing = null);
   }
 
@@ -1050,8 +1063,22 @@ class SuperTabController extends ChangeNotifier {
     return known ? _query(id) : null;
   }
 
+  /// A refusal that says this build is too old for the backend.
+  static bool _isUpdateRequired(Object failure) =>
+      failure is SuperTabFailure &&
+      (failure.statusCode == 426 ||
+          (failure.code == 'UPDATE_REQUIRED' && failure.statusCode != 400));
+
+  /// Says to update Harness and stops the poll: no read can succeed now.
+  void _requireUpdate() {
+    updateRequired = true;
+    error = updateMessage;
+    _poll?.cancel();
+  }
+
   void _readFailure(Object failure, {bool revokeTab = true}) {
     if (_disposed) return;
+    if (_isUpdateRequired(failure)) return _requireUpdate();
     error = failure is SuperTabFailure
         ? failure.message
         : 'Could not refresh this conversation. Try again.';
@@ -1279,7 +1306,18 @@ class SuperTabController extends ChangeNotifier {
       await refresh();
       return result;
     } catch (failure) {
-      if (!_disposed) {
+      if (!_disposed && _isUpdateRequired(failure)) {
+        _requireUpdate();
+        operationError = updateMessage;
+        operationErrorCode = 'UPDATE_REQUIRED';
+        // Refused by the backend: nothing was done, nothing to retry.
+        _pending = null;
+        try {
+          await _persist();
+        } catch (_) {
+          _pending = pending;
+        }
+      } else if (!_disposed) {
         operationError = failure is SuperTabFailure
             ? failure.message
             : 'The action is not confirmed. Retry to check it.';

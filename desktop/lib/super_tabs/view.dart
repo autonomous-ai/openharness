@@ -1230,7 +1230,7 @@ class _SuperTabViewState extends State<SuperTabView>
             textAlign: TextAlign.center,
             style: DesktopChrome.text(color: DesktopChrome.muted),
           ),
-          if (!c.accessRevoked) ...[
+          if (!c.accessRevoked && !c.updateRequired) ...[
             const SizedBox(height: 12),
             TextButton(
               style: _thumb,
@@ -1333,7 +1333,7 @@ class _SuperTabViewState extends State<SuperTabView>
             child: Row(
               children: [
                 Expanded(child: Text(c.error!, style: DesktopChrome.control())),
-                if (!c.accessRevoked)
+                if (!c.accessRevoked && !c.updateRequired)
                   TextButton(
                     onPressed: () => unawaited(c.refresh()),
                     child: const Text('Retry'),
