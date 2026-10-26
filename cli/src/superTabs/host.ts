@@ -1,5 +1,5 @@
 import { OBSERVER_VALID_MS, publishObservers } from './observers.js'
-import { ContributedMachines } from './machines.js'
+import { ContributedMachines, type MachineDeps } from './machines.js'
 import { SwarmGrids } from './swarmGrids.js'
 import { retainContributions } from './retention.js'
 import { configurationObservation } from './configuration.js'
@@ -92,6 +92,8 @@ export interface SuperTabHostOptions {
   startReceipt?: (harnessId: string) => string | null
   /** The machine's host form and Swarm reads, shared with the service's other readers (superTabs/service.ts). */
   sources?: SwarmSources
+  /** What the contributed-machine executor reaches the local daemon with (superTabs/machines.ts), for a spec. */
+  machines?: Partial<MachineDeps>
 }
 
 const defaultAgentCommand = (core: CoreApi, machineId: string) => agentCommandPrefix(core.daemon, machineId,
@@ -202,6 +204,7 @@ export class SuperTabHost {
   private timer: ReturnType<typeof setTimeout> | null = null
   private native: NativeRecorder | null = null
   private machines: ContributedMachines | null = null
+  private readonly machineDeps: Partial<MachineDeps>
   private grids: SwarmGrids | null = null
   /** The waits last handed to the core (superTabs/attention.ts); null until the first roster, which is always handed
    *  over whole, so a restarted service closes what its predecessor raised and no longer holds. */
@@ -241,6 +244,7 @@ export class SuperTabHost {
     this.observers = options.observers ?? publishObservers
     this.attachedFiles = options.attachedFiles ?? attachedFiles
     this.prepareContribution = options.prepareContribution ?? prepareContribution
+    this.machineDeps = options.machines ?? {}
     this.prepareTeam = options.prepareTeam ?? ((core, input) => prepareTeamContribution(core, input))
     this.agentCommand = options.agentCommand ?? defaultAgentCommand
     this.startReceipt = options.startReceipt ?? (() => null)
@@ -315,9 +319,13 @@ export class SuperTabHost {
     this.native ??= new NativeRecorder(this.core, this.machineId)
     return this.native.prepare(tabId, contextId, renew, closed)
   }
+  /** The machine report sends when each agent's screen last changed, from this host's own screen reads. */
+  private contributed(): ContributedMachines {
+    return this.machines ??= new ContributedMachines(this.core, this.machineId,
+      { ...this.machineDeps, sources: this.sources, progress: ids => this.terminal.progressOf(ids) })
+  }
   private pollMachines() {
-    this.machines ??= new ContributedMachines(this.core, this.machineId, { sources: this.sources })
-    void this.machines.tick().catch(error => this.log(error instanceof Error ? error.message : String(error)))
+    void this.contributed().tick().catch(error => this.log(error instanceof Error ? error.message : String(error)))
     this.grids ??= new SwarmGrids(this.core, this.machineId)
     void this.grids.tick().catch(error => this.log(`Swarm grid: ${error instanceof Error ? error.message : String(error)}`))
   }
@@ -828,8 +836,7 @@ export class SuperTabHost {
     for (const row of rows.map(object)) {
       const cleanup = object(row.cleanup)
       if (!identifier(row.tabId) || cleanup.machineId !== this.machineId || !identifier(cleanup.removalId)) continue
-      this.machines ??= new ContributedMachines(this.core, this.machineId, { sources: this.sources })
-      void this.machines.clean(row.tabId, cleanup.removalId).catch(error => this.log(error instanceof Error ? error.message : String(error)))
+      void this.contributed().clean(row.tabId, cleanup.removalId).catch(error => this.log(error instanceof Error ? error.message : String(error)))
     }
   }
 

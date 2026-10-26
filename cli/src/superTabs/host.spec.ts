@@ -728,7 +728,9 @@ it('stops a requested worker once, confirms removal, and releases retention on t
   expect(acknowledgements).toBe(1)
 })
 
-it('closes the session of a worker whose assignment the Lead cancelled', async () => {
+// A lost task (the backend's v1 liveness) has ended for its agent, as a cancelled one has: a stalled agent the Lead stops
+// is closed, never kept for work it no longer holds.
+it.each(['cancelled', 'lost'])('closes the session of a worker whose assignment is %s', async status => {
   const t = setup(), host = t.open()
   vi.mocked(t.core.agents.byAgent).mockReturnValue({ agentId: 'harness', sessionId: 'native', registeredAt: 0, startedBy: 'agent' } as never)
   let closed = false, removed = false
@@ -738,7 +740,7 @@ it('closes the session of a worker whose assignment the Lead cancelled', async (
   t.core.account.backend = async (method, path, body) => {
     if ((body as any)?.command?.type === 'agent.stopLease') return { status: 200, body: { data: { result: { expiresAt: Date.now() + 3_600_000, durationMs: 120_000 } } } }
     if (path.includes('/hosts/')) return { status: 200, body: { data: hostForm(removed ? [] : [{ tabId: 'tab', agent: target, stopRequested: true }], { tabs: ['tab'] }) } }
-    if (method === 'GET') return { status: 200, body: { data: swarmReply(path, { agents: [target], conversations: [{ id: 'g', assignment: { id: 'a', agentId: 'agent', status: 'cancelled' } }] }) } }
+    if (method === 'GET') return { status: 200, body: { data: swarmReply(path, { agents: [target], conversations: [{ id: 'g', assignment: { id: 'a', agentId: 'agent', status } }] }) } }
     removed = true
     return { status: 200, body: { data: {} } }
   }
@@ -1027,6 +1029,25 @@ describe('a Lead\'s terminal requests', () => {
     await t.open().tick()
     await vi.waitFor(() => expect(t.call).toHaveBeenCalledWith('POST', '/api/super-tabs/tab/commands',
       { operationId: 'terminal-r1', asAgentId: 'agent', command: { type: 'agent.screenResult', requestId: 'r1', ok: true, text: 'Allow? 1. Yes' } }))
+  })
+})
+
+describe('the progress a host reports', () => {
+  it('sends with its machine\'s reading when each agent\'s screen last changed', async () => {
+    const t = setup()
+    Object.assign(t.core, { superTabs: { attention: vi.fn(), cards: vi.fn(), cardRecap: vi.fn(), shareObservers: vi.fn(), input: vi.fn(),
+      screen: vi.fn(async () => ({ ok: true as const, text: '✻ Editing host.ts…\n❯ ', hold: null })) } })
+    const pool = { tabId: 'tab', machine: { machineId: 'machine-1', generation: 'grant', cwd: '/repo', engines: ['claude'] }, harnessIds: ['harness'], starts: [] }
+    const roster = vi.mocked(t.call).getMockImplementation()!
+    vi.mocked(t.call).mockImplementation(async (method, path, body) => path.includes('/hosts/machine-1/changes')
+      ? { status: 200, body: { success: true, data: hostForm([t.row], { pools: [pool] }) } } : roster(method, path, body))
+    const local = { machineId: 'machine-1', request: vi.fn(async () => ({})), close: vi.fn() }
+    const host = t.open({ machines: { open: async () => local, capabilities: async () => ({ ok: true, resources: {}, tools: {} }) as never } })
+    host.start()
+    // The first reading may go before the first screen read; the next beat carries it.
+    t.wait(16_000)
+    await vi.waitFor(() => expect(vi.mocked(t.call).mock.calls.some(([method, path, body]) => method === 'POST'
+      && path === '/api/super-tabs/tab/machines/machine-1' && typeof (body as { harnessProgress?: Record<string, unknown> }).harnessProgress?.harness === 'number')).toBe(true), { timeout: 3_000 })
   })
 })
 

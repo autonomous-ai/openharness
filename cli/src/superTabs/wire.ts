@@ -9,8 +9,9 @@ export async function within<T>(read: Promise<T>, ms = 3000): Promise<T | null> 
   let timer: NodeJS.Timeout | undefined
   try { return await Promise.race([read, new Promise<null>(resolve => { timer = setTimeout(resolve, ms, null) })]) } catch { return null } finally { clearTimeout(timer) }
 }
-/** Assignment statuses (and route outcomes) that mean the work is over; the backend's `activeWork` lists the same ones. */
-export const ENDED_WORK = ['done', 'stopped', 'cancelled']
+/** Assignment statuses (and route outcomes) that mean the work is over; the backend's `activeWork` lists the same ones.
+ *  `lost`: its agent died, stalled or hit a limit, and the Lead hands it on (the backend's v1 liveness). */
+export const ENDED_WORK = ['done', 'stopped', 'cancelled', 'lost']
 
 export class SuperTabHostError extends Error {
   constructor(readonly code: string, message: string, readonly status = 503) { super(message) }

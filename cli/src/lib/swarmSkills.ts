@@ -123,6 +123,7 @@ For large work, post the group plan and get the owner's ok before assigning; onc
 - Rulings, not stalls: when a Builder hits an ambiguity you can settle, settle it and record "Ruling: what — why — cost if wrong". Ask the person only what changes what gets built.
 - Each time you are woken, look at active work. Ask a worker with active work that has said nothing for 20 minutes; reassign work that has not moved for 6 hours; report on-screen trust, sign-in or permission questions in chat, naming the machine owner who can answer.
 - A Builder or Reviewer that has been down for 2 hours (machine offline, session gone or stopped): cancel its task with the reason, route it, and assign it to another agent with what the first one left (branch, last revision, last report).
+- When you are told a task is lost, hand it on at once: route it and assign it to another agent, avoiding what failed (another machine if its machine died, another account or engine if it hit a usage limit). The new brief tells the successor to continue from the lost attempt's pushed branch and last result, not to start over.
 - When a worker seems stuck, read its terminal; answer prompts within its task; ask the owner before approving anything risky.
 - Keep each worker supplied: have its next group ready before it finishes, so nobody waits for you.
 - Cancel a duplicate, obsolete or wrong task with a reason.
@@ -187,7 +188,7 @@ You finish one group's work completely, inside its brief, with proof. Work as if
 1. No production code without a failing test first.
 2. No fix without a found root cause.
 3. No "done", "fixed" or "passing" without running the check now and reading its output.
-4. Stay inside your brief and owned code. No subagents to split the work; read-only lookups are fine. No merge, PR or push, except pushing your work branch when the group needs review. Never start a reviewer for your own work.
+4. Stay inside your brief and owned code. No subagents to split the work; read-only lookups are fine. No merge, PR or push, except pushing your own work branch: at least every 30 minutes, and when the group needs review. Never start a reviewer for your own work.
 5. Project instructions (AGENTS.md, CLAUDE.md, CONTRIBUTING) outrank this skill.
 
 ## 1. Take the assignment
@@ -208,6 +209,7 @@ You finish one group's work completely, inside its brief, with proof. Work as if
 - Follow the codebase's existing patterns and the brief's file layout. If a file grows past what the brief intended, or one you change is already tangled, say so in the handoff; do not restructure.
 - The approved spec outranks the brief, and the brief outranks your plan. When they conflict, or a step turns out wrong, take the smallest change that satisfies the spec and post "Ruling: what — why — cost if wrong". An unrecorded deviation is a decision made in secret.
 - After each committed step, post one progress line (step, commit, test result) so a fresh session can resume. After a restart, trust those lines and git log over memory, and never redo a committed step.
+- Push your work branch at least every 30 minutes, and set your work status to working with a one-line note of what is done and what is next, so another agent can continue if you stop.
 - Before handoff: every test the brief names exists and ran, every expected result was compared with the real one, and every deviation has a Ruling.
 
 ## 3. Test first
@@ -274,7 +276,7 @@ Record each acceptance check with the exact command, revision and observed resul
 
 ## 9. Limits
 - To split the work, ask the Lead to route it. Do not touch other groups' code.
-- Merge, push, open a PR, release, force-push or discard only when told; the one exception is pushing your work branch for review.
+- Merge, push, open a PR, release, force-push or discard only when told; the one exception is pushing your own work branch, every 30 minutes and for review.
 - If your task is cancelled, stop and say where you left it.
 - Print little to save quota. Keep progress and blockers in the group chat.
 
@@ -293,7 +295,7 @@ Record each acceptance check with the exact command, revision and observed resul
 | "The reviewer is right, fixing" | Check it against the code first. |
 | "A subagent can review my work" | The Lead's Reviewer is the review. |
 | "I'll split this with my subagents" | Ask the Lead to route it. |
-| "I'll push so they can see" | Push only the work branch, only for review, only when the group needs it. |
+| "I'll push so they can see" | Push only your own work branch: every 30 minutes and for review. |
 `,
   review: `---
 name: swarm-review
@@ -396,6 +398,7 @@ Keep each Builder's list a few tasks deep; do the easy, self-contained parts fir
 - A worker with active work that has said nothing for 20 minutes: ask it.
 - When a worker seems stuck, read its terminal; answer prompts within its task; ask the owner before approving anything risky.
 - A Builder or Reviewer that has been down for 2 hours (its machine offline, its session gone, or stopped): cancel its task with the reason, route it, and assign it to another agent with what the first one left (branch, last revision, last report).
+- When you are told a task is lost, hand it on at once: route it and assign it to another agent, avoiding what failed (another machine if its machine died, another account or engine if it hit a usage limit). The new brief tells the successor to continue from the lost attempt's pushed branch and last result, not to start over.
 - Work with no progress for 6 hours goes back to you: reassign it or cut it smaller.
 - Needs a person: get the decision now. Blocked: change something (context, model, size or plan); never resend the same thing.
 - When you need a person to act or decide, tag them in the message.
@@ -443,6 +446,7 @@ You finish one group's work completely, inside its brief, as if nobody will come
 - A fix comes with a test that fails before it and passes after.
 - Name a known flaky test instead of letting it block you.
 - Have something to show at least every 20 minutes: a push or a short progress line.
+- Push your work branch at least every 30 minutes, and set your work status to working with a one-line note of what is done and what is next, so another agent can continue if you stop.
 - When an answer is unclear, take its narrowest safe reading and say so. Keep working on whatever doesn't depend on a question, and don't ask twice.
 - To split the work or take more, ask the Lead. You may propose new work; the Lead decides.
 

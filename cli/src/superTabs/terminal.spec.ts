@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs'
 import { describe, expect, it, vi } from 'vitest'
 import type { CoreApi, SuperTabScreen } from '../core/api.js'
 import { fakeCore } from '../testing/fakeCore.js'
@@ -30,6 +31,8 @@ function setup(options: { live?: string[]; screen?: (harnessId: string) => Super
     polls: () => vi.mocked(backend).mock.calls.filter(([, path]) => path === '/api/super-tabs/hosts/m1/terminal').length,
     alerts: () => sent.filter(s => s.body.command.type === 'agent.alert').map(s => s.body.command) }
 }
+/** A screen as the engine draws it (fixtures/screens). */
+const fixture = (name: string) => readFileSync(new URL(`./fixtures/screens/${name}.txt`, import.meta.url), 'utf8')
 const screenRequest = (over: Record<string, unknown> = {}) => ({ tabId: 'tab', agentId: 'a1', harnessId: 'h1', request: { id: 'r1', kind: 'screen' }, ...over })
 
 describe('a host serving its Lead\'s terminal requests', () => {
@@ -208,6 +211,13 @@ describe('the stuck and usage-limit alerts', () => {
     expect(t.alerts()).toEqual([{ type: 'agent.alert', agentId: 'a1', alert: 'model', active: true }])
   })
 
+  it.each(['claude-session-limit', 'claude-weekly-limit', 'claude-opus-limit', 'claude-fable-limit', 'codex-usage-limit', 'codex-model-limit'])(
+    'alerts for the %s screen', async name => {
+      const t = setup({ screen: () => ({ ok: true, text: fixture(name), hold: null }) })
+      await t.host.tick([row()])
+      expect(t.alerts()).toEqual([expect.objectContaining({ type: 'agent.alert', agentId: 'a1', alert: 'limit', active: true })])
+    })
+
   it('tries an alert the backend did not take again on the next read', async () => {
     const t = setup({ screen: () => ({ ok: true, text: 'Claude usage limit reached. Your limit will reset at 3pm.', hold: null }) })
     const real = vi.mocked(t.backend).getMockImplementation()!
@@ -219,6 +229,48 @@ describe('the stuck and usage-limit alerts', () => {
     await t.host.tick([row()])
     t.wait(15_000); await t.host.tick([row()])
     expect(t.alerts()).toHaveLength(1)
+  })
+})
+
+describe('progress for the machine report', () => {
+  const showing = (text: string) => (): SuperTabScreen => ({ ok: true, text, hold: null })
+
+  it('records when each running agent\'s screen last changed, from the reads the watch already makes', async () => {
+    const t = setup({ screen: showing('✻ Reading files…\n❯ ') })
+    await t.host.tick([row()])
+    expect(t.host.progressOf(['h1'])).toEqual({ h1: 1_000_000 })
+    t.wait(15_000); await t.host.tick([row()])
+    expect(t.host.progressOf(['h1'])).toEqual({ h1: 1_000_000 })
+    t.showing(showing('✻ Editing host.ts…\n❯ ')); t.wait(15_000); await t.host.tick([row()])
+    expect(t.host.progressOf(['h1'])).toEqual({ h1: 1_030_000 })
+    expect(t.core.superTabs!.screen).toHaveBeenCalledTimes(3)
+  })
+
+  it('names only running agents, and forgets one once it stops or leaves', async () => {
+    const t = setup({ live: ['h1', 'h2'] })
+    await t.host.tick([row(), row('a2', 'h2', { stopRequested: true }), row('a3', 'h3')])
+    expect(t.host.progressOf(['h1', 'h2', 'h3'])).toEqual({ h1: 1_000_000 })
+    t.wait(15_000); await t.host.tick([row('a2', 'h2')])
+    expect(t.host.progressOf(['h1', 'h2'])).toEqual({ h2: 1_015_000 })
+    await t.host.tick([])
+    expect(t.host.progressOf(['h1', 'h2'])).toEqual({})
+  })
+
+  it.each(['claude', 'codex'])('does not count %s redrawing only its spinner, elapsed time, token counter or tip, and counts new work', async engine => {
+    const t = setup({ screen: showing(fixture(`${engine}-working-a`)) })
+    await t.host.tick([row()])
+    t.showing(showing(fixture(`${engine}-working-b`))); t.wait(15_000); await t.host.tick([row()])
+    expect(t.host.progressOf(['h1'])).toEqual({ h1: 1_000_000 })
+    t.showing(showing(fixture(`${engine}-working-b`).replace('\n\n', '\n\nEdited cli/src/superTabs/terminal.ts\n\n'))); t.wait(15_000); await t.host.tick([row()])
+    expect(t.host.progressOf(['h1'])).toEqual({ h1: 1_030_000 })
+  })
+
+  it('does not count a screen that only shows its model retrying, nor one that could not be read', async () => {
+    const t = setup({ screen: showing('✻ Waiting for API response · will retry in 2m 38s · check your network\n❯ ') })
+    await t.host.tick([row()])
+    t.showing(showing('✻ Waiting for API response · will retry in 2m 23s · check your network\n❯ ')); t.wait(15_000); await t.host.tick([row()])
+    t.showing(() => ({ ok: false, error: 'pane gone' })); t.wait(15_000); await t.host.tick([row()])
+    expect(t.host.progressOf(['h1'])).toEqual({ h1: 1_000_000 })
   })
 })
 
@@ -238,11 +290,26 @@ describe('reading a usage limit off a screen', () => {
   ])('reads %s', (line, reset) => {
     expect(limitOf(`some work\n${line}\n> `, now)).toEqual({ resetAt: reset.toISOString() })
   })
+  // Whole screens as Claude Code 2.1.310 and Codex 0.154 draw them, their limit lines in the engines' own words
+  // (fixtures/screens): Claude Code names the limit hit, and Codex wraps its long line and dates a reset after today.
+  it.each([
+    ['claude-session-limit', { resetAt: new Date(2026, 9, 23, 15, 0).toISOString() }],
+    ['claude-weekly-limit', { resetAt: new Date(2026, 9, 30, 9, 0).toISOString() }],
+    ['claude-opus-limit', { resetAt: new Date(2026, 9, 30, 9, 0).toISOString() }],
+    ['claude-fable-limit', {}],
+    ['codex-usage-limit', { resetAt: new Date(2026, 9, 27, 15, 5).toISOString() }],
+    ['codex-model-limit', { resetAt: new Date(2026, 9, 23, 16, 5).toISOString() }],
+  ])('reads the %s screen', (name, limit) => {
+    expect(limitOf(fixture(name), now)).toEqual(limit)
+  })
   it('knows a limit without a reset time, and ignores the words in an agent\'s own prose or far above the prompt', () => {
     expect(limitOf('⎿  API Error: Usage limit reached\n> ', now)).toEqual({})
     expect(limitOf('I will add a check for when the usage limit reached message shows.\n> ', now)).toBeNull()
     expect(limitOf(`5-hour limit reached ∙ resets 3pm\n${'line\n'.repeat(30)}> `, now)).toBeNull()
     expect(limitOf('> ', now)).toBeNull()
+    // A full context is not a usage limit; a workspace out of credits is one.
+    expect(limitOf('  ⎿  Context limit reached · /compact or /clear to continue\n> ', now)).toBeNull()
+    expect(limitOf('■ You\'ve reached your workspace credit limit\n› ', now)).toEqual({})
   })
 })
 

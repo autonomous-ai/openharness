@@ -27,10 +27,18 @@ const list = (v: unknown) => Array.isArray(v) ? v.map(object) : []
 // include tools from pending starts. An uncommon tool first named during routing remains unverified and is refused.
 const COMMON_TOOLS = ['git', 'node', 'npm', 'flutter', 'gh', 'cargo', 'python3']
 const VERIFIED_TOOL_TTL_MS = 10 * 60_000
-/** After a backend refuses the privacy field (one from before the Harness Team account), how long the reading goes
- *  without it before the field is offered again: a backend deployed meanwhile is heard from within this long. */
-const PRIVACY_REFUSED_MS = 10 * 60_000
+/** After a backend refuses a new field (privacy, from before the Harness Team account; harnessProgress, from before
+ *  task leases), how long the reading goes without it before the field is offered again: a backend deployed meanwhile
+ *  is heard from within this long. */
+const FIELD_REFUSED_MS = 10 * 60_000
 const UNVERIFIED_TOOL_TTL_MS = 60_000
+/** How long this machine refuses a start before failing it with its reason, so the Lead starts it elsewhere: a minute of
+ *  busy CPU or memory may pass, and routing saw this machine able a moment ago. A refusal no one reported left starts
+ *  "Queued" for hours (DESKTOP-0TFH0OJ, 2026-10-23). */
+const START_REFUSED_MS = 60_000
+/** What a start answers while its launch may already have happened or is under way: never failed from here, or an agent
+ *  could run with no start to show for it. The failures already reported say so themselves. */
+const NOT_REFUSED = new Set(['START_UNCERTAIN', 'START_PENDING', 'START_REFUSED', 'START_FAILED', 'SWARM_ENGINE'])
 
 /** How often the executor asks the backend what its tabs want of it (a start waiting, a pause) and compares what it
  *  would report with what it last did. Only this read is this frequent: the resource readers run when there is
@@ -78,7 +86,7 @@ async function swarmWorktree(path: string, source: string, startId: string): Pro
   } catch { return false }
 }
 
-interface MachineDeps {
+export interface MachineDeps {
   backend: typeof backend; open: typeof openDaemon; capabilities: typeof readCapabilities; start: typeof startAgent; now: () => number
   log?: (message: string) => void; env?: NodeJS.ProcessEnv
   /** Readies a queued start before its agent is created (superTabs/projectFolder.ts `prepareSwarmStart`): whom the
@@ -94,6 +102,9 @@ interface MachineDeps {
   sources?: SwarmSources
   /** git for the readiness of the Swarm folder's checkouts ([quietGit]). */
   git?: GitRun
+  /** When each of these harnesses' screens last changed, epoch ms (superTabs/terminal.ts `progressOf`): the backend
+   *  renews a task's lease from it, so work never sits with a dead owner (docs: swarm-never-stops). */
+  progress?: (harnessIds: readonly string[]) => Record<string, number>
 }
 const MACHINE_DEPS = { backend, open: openDaemon, capabilities: readCapabilities, start: startAgent, now: Date.now }
 
@@ -115,6 +126,8 @@ export class ContributedMachines {
   private readonly toolCache = new Map<string, { value: boolean | null; detail?: string; until: number }>()
   /** Per waiting start, why it was last not started, so the log says it once per reason, not every pass. */
   private readonly waiting = new Map<string, string>()
+  /** Per waiting start, since when this machine has refused it without a break. */
+  private readonly refusedSince = new Map<string, number>()
   /** Removals cleaned and acknowledged by this host, and the one in progress per removal. */
   private readonly cleaned = new Set<string>()
   private readonly cleaning = new Map<string, Promise<void>>()
@@ -122,6 +135,8 @@ export class ContributedMachines {
   private readonly cleanupRetries = new Map<string, { failures: number; at: number }>()
   /** Until when the reading leaves out its privacy field, which the backend refused. */
   private privacyRefusedUntil = 0
+  /** Until when the reading leaves out its progress, which the backend refused. */
+  private progressRefusedUntil = 0
   /** Until when the reading leaves out its readiness field, which the backend refused. */
   private readinessRefusedUntil = 0
   /** Whether each engine is installed and signed in, and until when that stands: one probe starts login shells and reads
@@ -210,6 +225,7 @@ export class ContributedMachines {
     if (this.stopped || pools.length === 0) { this.published.clear(); this.waiting.clear(); return }
     const pendingIds = new Set(pools.flatMap(row => list(row.starts).map(start => start.id)))
     for (const id of this.waiting.keys()) if (!pendingIds.has(id)) this.waiting.delete(id)
+    for (const id of this.refusedSince.keys()) if (!pendingIds.has(id)) this.refusedSince.delete(id)
     for (const tab of this.published.keys()) if (!pools.some(row => row.tabId === tab)) this.published.delete(tab)
     const privacy = this.privacy()
     // A model run or stopped for a Swarm, or an API shared with it, is sent on this pass, not on the next beat: the
@@ -227,7 +243,12 @@ export class ContributedMachines {
         if (!identifier(pool.generation) || pool.machineId !== this.machineId || typeof pool.cwd !== 'string') continue
         const ids = Array.isArray(row.harnessIds) ? row.harnessIds.filter(identifier) : []
         const stopped: string[] = []
-        for (const id of ids) if (await this.core.agents.stopped?.(id)) stopped.push(id)
+        // A stopped agent keeps a saved record; one closed by hand or whose session crashed away is kept nowhere (`gone`).
+        // Both are reported, so the backend hands its task on at once rather than when its lease runs out. Only one the
+        // registry no longer lists is asked about, so a pass costs no more for the agents that run.
+        for (const id of ids) {
+          if (await this.core.agents.stopped?.(id) || (!this.core.agents.byAgent(id) && await this.core.agents.gone?.(id))) stopped.push(id)
+        }
         const running = ids.filter(id => !!this.core.agents.byAgent(id) && !stopped.includes(id))
         const pending = list(row.starts)
         const tools = [...new Set([...COMMON_TOOLS, ...pending.flatMap(start => {
@@ -294,7 +315,10 @@ export class ContributedMachines {
         const readyEngines = await this.engineReadiness(local)
         const checkouts = pool.scope === 'swarm' ? this.checkoutReadiness(pool.cwd) : null
         const readiness = { ...(readyEngines ? { engines: readyEngines } : {}), ...(checkouts ? { checkouts } : {}) }
-        const observation = { generation: pool.generation, tools: reportedTools, ...(localModels ? { localModels } : {}),
+        const shown = began >= this.progressRefusedUntil ? this.deps.progress?.(running) ?? {} : {}
+        const progress = Object.fromEntries(running.flatMap(id => typeof shown[id] === 'number' ? [[id, shown[id]]] : []))
+        const observation = { generation: pool.generation, tools: reportedTools,
+          ...(Object.keys(progress).length ? { harnessProgress: progress } : {}), ...(localModels ? { localModels } : {}),
           ...((readyEngines || checkouts) && began >= this.readinessRefusedUntil ? { readiness } : {}),
           ...(privacy && began >= this.privacyRefusedUntil ? { privacy } : {}),
           ...(refusedModels.length ? { refusedModels } : {}),
@@ -314,26 +338,28 @@ export class ContributedMachines {
         try {
           const path = `/api/super-tabs/${row.tabId}/machines/${this.machineId}`
           const refused = (error: unknown) => error instanceof SuperTabHostError && error.status === 400 && error.code === 'VALIDATION_ERROR'
-          // Older backends reject the additive fields. The privacy field is the newest, so it goes alone first: a backend
+          // Older backends reject the additive fields. The newest go alone first, readiness, progress, then privacy: a backend
           // that takes everything else keeps the local models it reads. Their boolean-only view still safely refuses an
           // unverified tool, and a reading without privacy is never one a Team machine passes on.
-          // Readiness is newer still, so it goes alone before them, and a backend from before it keeps the privacy it reads.
           const { readiness: _readiness, ...ready } = observation
-          const { privacy: _privacy, ...withoutPrivacy } = ready
+          const { harnessProgress: _progress, ...withoutProgress } = ready
+          const { privacy: _privacy, ...withoutPrivacy } = withoutProgress
           const { toolProbeErrors: _probeErrors, localModels: _served, refusedModels: _refused, ...legacy } = withoutPrivacy
           // A backend before `starting` refuses it: it gets the models the grid lists, as before, not none at all.
           const listedOnly = localModels?.some(m => m.starting)
             ? [{ ...withoutPrivacy, localModels: localModels.filter(m => !m.starting) }] : []
-          const attempts = [...('readiness' in observation ? [observation] : []), ready, ...('privacy' in ready ? [withoutPrivacy] : []), ...listedOnly,
-            ...('toolProbeErrors' in ready || 'localModels' in ready || 'refusedModels' in ready ? [legacy] : [])]
+          const attempts = [...('readiness' in observation ? [observation] : []), ready, ...('harnessProgress' in ready ? [withoutProgress] : []),
+            ...('privacy' in withoutProgress ? [withoutPrivacy] : []), ...listedOnly,
+            ...('toolProbeErrors' in observation || 'localModels' in observation || 'refusedModels' in observation ? [legacy] : [])]
           for (const [index, attempt] of attempts.entries()) {
             try {
               await this.deps.backend(this.core, 'POST', path, attempt)
               break
             } catch (error) {
               if (!refused(error) || index === attempts.length - 1) throw error
-              if (attempt === observation && 'readiness' in observation) this.readinessRefusedUntil = began + READINESS_MS
-              else if (attempt === ready && 'privacy' in ready) this.privacyRefusedUntil = began + PRIVACY_REFUSED_MS
+              if ('readiness' in attempt) this.readinessRefusedUntil = began + FIELD_REFUSED_MS
+              else if ('harnessProgress' in attempt) this.progressRefusedUntil = began + FIELD_REFUSED_MS
+              else if ('privacy' in attempt) this.privacyRefusedUntil = began + FIELD_REFUSED_MS
             }
           }
           this.published.set(String(row.tabId), { at: began, signature, starting: !!localModels?.some(m => m.starting) })
@@ -378,6 +404,8 @@ export class ContributedMachines {
               }
             }
             const result = await this.deps.start({ tabId: row.tabId, startId: start.id, hostDispatch: true, ...(github ? { github } : {}) }, scoped, where, this.deps.open)
+            const refused = result.ok !== true && !start.dispatched && !NOT_REFUSED.has(String(result.error))
+            if (!refused) this.refusedSince.delete(start.id)
             if (result.ok === true && identifier(result.harnessId)) {
               this.waiting.delete(start.id)
               // Before the start settles: a settled start is no longer listed, so a missed record would never be made.
@@ -385,11 +413,17 @@ export class ContributedMachines {
               await scoped({ action: 'command', operationId: `settled-${start.id}`,
                 command: { type: 'agent.startSettled', startId: start.id, warning: result.modelWarning ?? null } })
             } else if (result.ok !== true) {
-              this.noteWaiting(start.id, String(result.detail ?? (Array.isArray(result.reasons) ? result.reasons.join(' ') : result.error)))
+              const reason = String(result.detail ?? (Array.isArray(result.reasons) ? result.reasons.join(' ') : result.error))
+              this.noteWaiting(start.id, reason)
+              const since = this.refusedSince.get(start.id) ?? began
+              if (refused) this.refusedSince.set(start.id, since)
+              if (refused && began - since >= START_REFUSED_MS) {
+                await scoped({ action: 'command', operationId: `refused-${start.id}`, command: { type: 'agent.startFailed', startId: start.id, error: reason } })
+              }
             }
           }
           // Keep its durable receipt; another start must not be starved by this failure.
-          catch (error) { this.noteWaiting(start.id, error instanceof Error ? error.message : String(error)) }
+          catch (error) { this.refusedSince.delete(start.id); this.noteWaiting(start.id, error instanceof Error ? error.message : String(error)) }
         }
         } catch { /* Revocation or one unavailable project cannot block another contribution. */ }
       }

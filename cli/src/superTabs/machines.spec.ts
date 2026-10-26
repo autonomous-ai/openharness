@@ -31,8 +31,9 @@ function fixture(env: NodeJS.ProcessEnv = {}, privacy: () => PrivacyObservation 
   const prepare = vi.fn(async () => {})
   const log = vi.fn()
   const modelsStamp = vi.fn(async () => stamp)
-  const machine = new ContributedMachines(core, 'host', { backend, open, capabilities, start, prepare, log, env, privacy, modelsStamp, now: () => now } as never)
-  return { machine, pool, core, backend, open, request, close, capabilities, start, prepare, log, modelsStamp, advance: () => { now += 16000 }, step: (ms: number) => { now += ms },
+  const deps = { backend, open, capabilities, start, prepare, log, env, privacy, modelsStamp, now: () => now }
+  const machine = new ContributedMachines(core, 'host', deps as never)
+  return { deps, machine, pool, core, backend, open, request, close, capabilities, start, prepare, log, modelsStamp, advance: () => { now += 16000 }, step: (ms: number) => { now += ms },
     stamp: (next: string) => { stamp = next } }
 }
 
@@ -423,6 +424,58 @@ describe('contributed machine executor', () => {
     expect(posts[1]![3]).not.toHaveProperty('toolProbeErrors')
   })
 
+  it('sends when each running harness last showed progress, and only for those running', async () => {
+    const f = fixture()
+    const progress = vi.fn((ids: readonly string[]) => ({ running: 900, stopped: 800, elsewhere: 700 }) as Record<string, number>)
+    const machine = new ContributedMachines(f.core, 'host', { ...f.deps, progress } as never)
+    await machine.tick()
+    const body = f.backend.mock.calls.find(c => c[1] === 'POST')![3] as Record<string, unknown>
+    expect(body.harnessProgress).toEqual({ running: 900 })
+    // Nothing read yet for any running harness: the field is left out.
+    progress.mockReturnValue({})
+    f.advance(); await machine.tick()
+    expect(f.backend.mock.calls.filter(c => c[1] === 'POST').at(-1)![3]).not.toHaveProperty('harnessProgress')
+  })
+
+  it('drops progress for a backend that refuses it, and offers it again ten minutes later', async () => {
+    const f = fixture()
+    const original = f.backend.getMockImplementation()!
+    f.backend.mockImplementation(async (core, method, path, body) => {
+      if (method === 'POST' && (body as Record<string, unknown>)?.harnessProgress) throw new SuperTabHostError('VALIDATION_ERROR', 'Unrecognized key: harnessProgress', 400)
+      return original(core, method, path, body)
+    })
+    const machine = new ContributedMachines(f.core, 'host', { ...f.deps, progress: () => ({ running: 900 }) } as never)
+    const posts = () => f.backend.mock.calls.filter(c => c[1] === 'POST' && String(c[2]).includes('/machines/'))
+    await machine.tick()
+    expect(posts().map(c => 'harnessProgress' in (c[3] as object))).toEqual([true, false])
+    f.advance(); await machine.tick()
+    expect(posts().map(c => 'harnessProgress' in (c[3] as object))).toEqual([true, false, false])
+    f.step(600_000); await machine.tick()
+    expect(posts().map(c => 'harnessProgress' in (c[3] as object))).toEqual([true, false, false, true, false])
+  })
+
+  it('drops readiness alone for a backend that takes progress, and both, keeping privacy, for one that takes neither', async () => {
+    const f = fixture({}, () => ({ mode: 'dedicated' }))
+    const usage = f.request.getMockImplementation()!
+    f.request.mockImplementation(async (type, ...rest) => type === 'engines_probe' ? { engines: [{ engine: 'codex', installed: true, signedIn: true }] } : usage(type, ...rest as []))
+    let refuses = ['readiness']
+    const original = f.backend.getMockImplementation()!
+    f.backend.mockImplementation(async (core, method, path, body) => {
+      const sent = body as Record<string, unknown>
+      if (method === 'POST' && refuses.some(key => sent?.[key])) throw new SuperTabHostError('VALIDATION_ERROR', 'Unrecognized key', 400)
+      return original(core, method, path, body)
+    })
+    const machine = new ContributedMachines(f.core, 'host', { ...f.deps, progress: () => ({ running: 900 }) } as never)
+    const posts = () => f.backend.mock.calls.filter(c => c[1] === 'POST' && String(c[2]).includes('/machines/')).map(c => c[3] as Record<string, unknown>)
+    const fields = (post: Record<string, unknown>) => ['readiness', 'harnessProgress', 'privacy'].filter(key => key in post)
+    await machine.tick()
+    expect(posts().map(fields)).toEqual([['readiness', 'harnessProgress', 'privacy'], ['harnessProgress', 'privacy']])
+    refuses = ['readiness', 'harnessProgress']
+    const older = new ContributedMachines(f.core, 'host', { ...f.deps, progress: () => ({ running: 900 }) } as never)
+    f.backend.mockClear(); await older.tick()
+    expect(posts().map(fields)).toEqual([['readiness', 'harnessProgress', 'privacy'], ['harnessProgress', 'privacy'], ['privacy']])
+  })
+
   it('lists the models it serves on the Swarm\'s grid only while the add-on is on, and drops them for an older backend', async () => {
     const GRID = 'swarm-0123456789ab'
     const f = fixture()
@@ -754,6 +807,43 @@ describe('contributed machine executor', () => {
       ['Swarm start start is waiting: Waiting for the launched engine.']])
   })
 
+  describe('a start this machine cannot run', () => {
+    const failures = (f: ReturnType<typeof fixture>) => f.backend.mock.calls.filter(c => c[1] === 'POST' && c[2] === '/api/super-tabs/hosts/host/starts/tab/start')
+      .map(c => c[3] as { operationId: string; command: { type: string; error?: string } }).filter(body => body.command.type === 'agent.startFailed')
+
+    it('is failed with the machine\'s own reason once it has refused it for a minute', async () => {
+      const f = fixture()
+      f.start.mockResolvedValue({ error: 'CAPACITY_UNAVAILABLE', startId: 'start', reasons: ['The selected agent engine is not installed on this machine.', 'CPU use is 97%; the requested maximum is 85%.'] } as never)
+      await f.machine.tick()
+      // A busy minute passes: CPU or memory may free up, and routing saw this machine able a moment ago.
+      f.step(30_000); await f.machine.tick()
+      expect(failures(f)).toEqual([])
+      f.step(30_000); await f.machine.tick()
+      expect(failures(f)).toEqual([{ operationId: 'refused-start', command: { type: 'agent.startFailed', startId: 'start',
+        error: 'The selected agent engine is not installed on this machine. CPU use is 97%; the requested maximum is 85%.' } }])
+    })
+
+    it('starts its minute again after a pass that did not refuse it, and never fails one whose launch is uncertain or pending', async () => {
+      const f = fixture()
+      f.start.mockResolvedValue({ error: 'CONTRIBUTION_REQUIRED', startId: 'start', detail: 'Ask the machine owner to use Add machine in this Swarm.' } as never)
+      await f.machine.tick()
+      f.start.mockRejectedValue(new Error('Could not reach the Harness backend.'))
+      f.step(30_000); await f.machine.tick()
+      f.start.mockResolvedValue({ error: 'CONTRIBUTION_REQUIRED', startId: 'start', detail: 'Ask the machine owner to use Add machine in this Swarm.' } as never)
+      f.step(30_000); await f.machine.tick()
+      expect(failures(f)).toEqual([])
+      for (const error of ['START_UNCERTAIN', 'START_PENDING', 'START_REFUSED']) {
+        f.start.mockResolvedValue({ error, startId: 'start', detail: 'The machine did not confirm.' } as never)
+        f.step(60_000); await f.machine.tick()
+        f.step(60_000); await f.machine.tick()
+      }
+      // Refused again: its minute starts now, not at the passes before.
+      f.start.mockResolvedValue({ error: 'CONTRIBUTION_REQUIRED', startId: 'start', detail: 'Ask the machine owner to use Add machine in this Swarm.' } as never)
+      f.step(60_000); await f.machine.tick()
+      expect(failures(f)).toEqual([])
+    })
+  })
+
   it('a lead queues a contributed start without connecting to that computer', async () => {
     const open = vi.fn()
     const scoped = vi.fn(async () => ({ ok: true, value: { creationId: 'creation', poolGeneration: 'grant', request: { machineId: 'host', engine: 'claude' } } }))
@@ -788,6 +878,18 @@ describe('contributed machine executor', () => {
       await after(f, 5_000)
       expect(posts(f)).toHaveLength(3)
       expect(lastBody(f)).toMatchObject({ runningHarnessIds: ['newcomer'], stoppedHarnessIds: ['running', 'stopped'] })
+    })
+
+    it('reports a session closed by hand, which leaves no stopped record, as stopped on the next look', async () => {
+      const f = fixture(); quiet(f)
+      await f.machine.tick()
+      expect(lastBody(f)).toMatchObject({ runningHarnessIds: ['running'], stoppedHarnessIds: ['stopped'] })
+      // Closed or crashed: gone from the registry, and kept nowhere as a stopped agent.
+      vi.mocked(f.core.agents.byAgent).mockImplementation(() => undefined)
+      Object.assign(f.core.agents, { gone: vi.fn(async (id: string) => id === 'running') })
+      await after(f, 5_000)
+      expect(posts(f)).toHaveLength(2)
+      expect(lastBody(f)).toMatchObject({ runningHarnessIds: [], stoppedHarnessIds: ['running', 'stopped'] })
     })
 
     it('publishes at once when new work is paused or allowed again', async () => {

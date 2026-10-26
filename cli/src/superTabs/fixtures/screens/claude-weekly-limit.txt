@@ -1,0 +1,12 @@
+⏺ Bash(npx vitest run src/superTabs)
+  ⎿   Test Files  35 passed (35)
+           Tests  893 passed (893)
+
+⏺ All green. Committing step 1 now.
+  ⎿  You've hit your weekly limit · resets Oct 30, 9am (Asia/Saigon)
+     /upgrade to increase your usage limit.
+
+────────────────────────────────────────────────────────────────────────────────
+❯ 
+────────────────────────────────────────────────────────────────────────────────
+  ⏵⏵ bypass permissions on (shift+tab to cycle)

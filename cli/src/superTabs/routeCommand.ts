@@ -165,9 +165,10 @@ export async function routeTask(input: { tabId: string; conversationId: string; 
   if (group.leadId !== value.agentId) return { error: 'LEAD_REQUIRED', detail: 'Only the Lead of this group routes its work.' }
   const projectId = String(group.projectId ?? 'lead')
   const project = list(state.projects).find(p => p.id === projectId)
-  // The group's Lead and the tab Lead coordinate; neither is a worker candidate even when idle.
+  // The group's Lead and the tab Lead coordinate; neither is a worker candidate even when idle. Nor is the agent of a lost
+  // task: it died, stalled or hit a limit, and its work goes to another (v1 liveness).
   const busy = new Set([String(group.leadId), String(conversations.find(c => c.id === 'lead')?.leadId),
-    ...conversations.filter(c => active(c.assignment)).map(c => String(object(c.assignment).agentId))])
+    ...conversations.filter(c => active(c.assignment) || object(c.assignment).status === 'lost').map(c => String(object(c.assignment).agentId))])
   // A review group is assigned only to a Reviewer, and a Reviewer nothing else.
   const review = typeof group.reviewOf === 'string'
   if (review) assessment = { ...assessment, kind: 'review' }
