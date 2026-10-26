@@ -8,9 +8,12 @@ import { MongoMemoryReplSet } from 'mongodb-memory-server-core'
 import { PrismaClient } from '@prisma/client'
 import * as parts from '../src/superTabs/parts/index.js'
 import { migrateSwarm } from '../src/superTabs/migration/migrate.js'
+import { rollbackFromParts, rollbackLegacy } from '../src/superTabs/migration/rollback.js'
+import { migrateAll } from '../src/superTabs/migration/job.js'
+import { guardedWrite } from '../src/superTabs/parts/write.js'
 import { normalize } from '../src/superTabs/migration/normalize.js'
 import { stateDifference } from '../src/superTabs/migration/verify.js'
-import type { Author, SuperTabState } from '../src/superTabs/model.js'
+import { visibleState, type Author, type SuperTabState } from '../src/superTabs/model.js'
 import { writeLegacySwarm, type LegacyMessage } from '../scripts/swarm-parts/legacy.js'
 import { NOW, richSwarm } from '../src/superTabs/read/fixture.test-support.js'
 
@@ -106,5 +109,77 @@ describe('migrating one Swarm to parts (design 6.1.2)', () => {
     expect(report).toMatchObject({ ok: false })
     expect(report.error).toContain('1 message in a conversation it does not have: gone')
     expect(await partCount(tabId)).toBe(0)
+  })
+})
+
+describe('rolling back (design 6.4)', () => {
+  it('before any new write, puts the old state back unchanged and drops the Swarm\'s parts', async () => {
+    const { tabId, state } = await legacySwarm()
+    await migrateSwarm(db, tabId, { now: () => NOW })
+    expect(await rollbackLegacy(db, tabId)).toMatchObject({ tabId, ok: true })
+    expect(await db.superTab.findUnique({ where: { id: tabId } })).toMatchObject({ format: 1, revision: R + 1, migratedAt: null, legacyState: null,
+      state: JSON.parse(JSON.stringify(state)) })
+    expect(await partCount(tabId)).toBe(0)
+    // And it migrates again from there.
+    expect(await migrateSwarm(db, tabId, { now: () => NOW })).toMatchObject({ ok: true })
+  })
+
+  it('refuses the plain rollback once parts were written after the migration, since it would lose them', async () => {
+    const { s, tabId } = await legacySwarm()
+    await migrateSwarm(db, tabId, { now: () => NOW })
+    await db.$transaction(async tx => {
+      const lead = (await parts.loadActive(tx, tabId)).groups.find(g => g.key === 'lead')!
+      await guardedWrite(tx, tabId, { op: 'update', kind: 'group', key: 'lead', seen: lead.version, data: { ...lead.data!, title: 'Changed' } }, NOW + 1)
+    })
+    void s
+    expect(await rollbackLegacy(db, tabId)).toMatchObject({ ok: false, error: expect.stringContaining('written since') })
+    expect(await db.superTab.findUnique({ where: { id: tabId } })).toMatchObject({ format: 2 })
+  })
+
+  it('after new writes, rebuilds the old state from the parts, numbering past every sequence and number used since', async () => {
+    const { s, tabId } = await legacySwarm()
+    await migrateSwarm(db, tabId, { now: () => NOW })
+    await db.$transaction(async tx => {
+      const loaded = await parts.loadActive(tx, tabId)
+      const lead = loaded.groups.find(g => g.key === 'lead')!
+      await guardedWrite(tx, tabId, { op: 'update', kind: 'group', key: 'lead', seen: lead.version,
+        data: { ...lead.data!, title: 'Changed', messageSeq: R + 3, lastMessageSequence: R + 3 } }, NOW + 1)
+      await guardedWrite(tx, tabId, { op: 'update', kind: 'head', key: 'head', seen: loaded.head.version, data: loaded.head.data,
+        head: { groupCounter: 9, visibilityEpoch: 1, sequenceBase: R } }, NOW + 1)
+    })
+    await db.superTabMessage.create({ data: { id: `${tabId}-new`, tabId, conversationId: 'lead', sequence: R + 3, author: {}, text: 'New', recipientIds: [], mentions: [] } })
+    expect(await rollbackFromParts(db, tabId)).toMatchObject({ tabId, ok: true })
+    const row = (await db.superTab.findUnique({ where: { id: tabId } }))!
+    expect(row).toMatchObject({ format: 1, revision: R + 4, migratedAt: null })
+    const state = row.state as unknown as SuperTabState
+    expect(state.version).toBe(1)
+    expect(state.conversations.find(c => c.id === 'lead')).toMatchObject({ title: 'Changed', lastMessageSequence: R + 3 })
+    expect(state.conversations.find(c => c.id === 'lead')).not.toHaveProperty('messageSeq')
+    expect(state).not.toHaveProperty('groupCounter')
+    expect(state.retiredConversationNumber).toBe(9)
+    expect(state.conversations.find(c => c.id === s.web)!.pullRequestUrls).toEqual([PR])
+    // The previous release reads it as it read any Swarm.
+    expect(() => visibleState(state, { kind: 'person', userId: state.ownerId, email: 'owner@example.com' }, NOW)).not.toThrow()
+  })
+})
+
+describe('the migration job (design 6.1.1)', () => {
+  const instant = async () => {}
+
+  it('refuses to start while a writer is still running', async () => {
+    const { tabId } = await legacySwarm()
+    const sleep = async () => { await db.superTabMessage.create({ data: { id: `${tabId}-late`, tabId, conversationId: 'lead', sequence: R, author: {},
+      text: 'Still here', recipientIds: [], mentions: [] } }) }
+    await expect(migrateAll(db, { now: () => NOW, sleep })).rejects.toThrow('a writer is still running')
+    expect(await db.superTab.findUnique({ where: { id: tabId } })).toMatchObject({ format: 1 })
+  })
+
+  it('migrates every Swarm still in one row once writers are quiet, and reports each one', async () => {
+    const [a, b] = [await legacySwarm(), await legacySwarm()]
+    const run = await migrateAll(db, { now: () => NOW, sleep: instant })
+    expect(run.reports.map(r => r.tabId)).toEqual(expect.arrayContaining([a.tabId, b.tabId]))
+    expect(run.reports.find(r => r.tabId === a.tabId)).toMatchObject({ ok: true, groups: a.state.conversations.length })
+    expect(run.totals).toMatchObject({ swarms: run.reports.length, failed: run.reports.filter(r => !r.ok).length })
+    expect(await db.superTab.count({ where: { id: { in: [a.tabId, b.tabId] }, format: 2 } })).toBe(2)
   })
 })
