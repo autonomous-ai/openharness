@@ -12,34 +12,37 @@ import 'package:harness/web/parts/deferred_part.dart';
 import 'package:harness/widgets/pane_grid.dart';
 
 void main() {
-  testWidgets('a computer draws a Finder tile at once, with nothing to download', (
-    tester,
-  ) async {
-    final notifier = AppNotifier(
-      config: AppConfig.dev,
-      authSession: AuthSession(),
-      configStore: null,
-    );
-    notifier.panes.add(
-      TerminalPane(
-        id: 1,
-        machineId: 'm',
-        kind: PaneKind.finder,
-        finderRoot: '/work/repo',
-      ),
-    );
-    await tester.binding.setSurfaceSize(const Size(1200, 800));
-    addTearDown(() => tester.binding.setSurfaceSize(null));
+  testWidgets(
+    'a computer draws a Finder tile at once, with nothing to download',
+    (tester) async {
+      final notifier = AppNotifier(
+        config: AppConfig.dev,
+        authSession: AuthSession(),
+        configStore: null,
+      );
+      notifier.panes.add(
+        TerminalPane(
+          id: 1,
+          machineId: 'm',
+          kind: PaneKind.finder,
+          finderRoot: '/work/repo',
+        ),
+      );
+      await tester.binding.setSurfaceSize(const Size(1200, 800));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
 
-    await tester.pumpWidget(
-      MaterialApp(home: Scaffold(body: PaneGrid(notifier: notifier))),
-    );
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(body: PaneGrid(notifier: notifier)),
+        ),
+      );
 
-    expect(
-      tester.widget<FinderPanePanel>(find.byType(FinderPanePanel)).root,
-      '/work/repo',
-    );
-    expect(find.byType(DeferredPartView), findsNothing);
-    expect(find.text('Loading…'), findsNothing);
-  });
+      expect(
+        tester.widget<FinderPanePanel>(find.byType(FinderPanePanel)).root,
+        '/work/repo',
+      );
+      expect(find.byType(DeferredPartView), findsNothing);
+      expect(find.text('Loading…'), findsNothing);
+    },
+  );
 }

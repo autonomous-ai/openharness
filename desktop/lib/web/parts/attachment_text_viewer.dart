@@ -13,7 +13,11 @@ final attachmentTextPart = DeferredPart(viewer.loadLibrary);
 /// by the attachment chips' conditional import: the same viewer, once
 /// [attachmentTextPart] is in.
 class AttachmentTextViewer extends StatelessWidget {
-  const AttachmentTextViewer({super.key, required this.file, required this.url});
+  const AttachmentTextViewer({
+    super.key,
+    required this.file,
+    required this.url,
+  });
 
   final SuperTabAttachment file;
   final Uri url;

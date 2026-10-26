@@ -39,7 +39,11 @@ class DeferredPart {
 /// [builder]'s widget once [part] is in. Until then a loading line in its
 /// place, and if the download fails, a sentence and Retry instead of a blank.
 class DeferredPartView extends StatefulWidget {
-  const DeferredPartView({super.key, required this.part, required this.builder});
+  const DeferredPartView({
+    super.key,
+    required this.part,
+    required this.builder,
+  });
 
   final DeferredPart part;
   final WidgetBuilder builder;

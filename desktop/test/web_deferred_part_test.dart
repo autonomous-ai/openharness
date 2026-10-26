@@ -14,7 +14,8 @@ class _Download {
     return pending.future;
   }
 
-  void fail() => pending.completeError(Exception('net::ERR_INTERNET_DISCONNECTED'));
+  void fail() =>
+      pending.completeError(Exception('net::ERR_INTERNET_DISCONNECTED'));
 
   void next() => pending = Completer<void>();
 }
@@ -62,18 +63,19 @@ void main() {
     expect(find.text('Finder'), findsOneWidget);
   });
 
-  testWidgets('a part already downloaded draws at once, with no loading frame', (
-    tester,
-  ) async {
-    final download = _Download()..pending.complete();
-    final part = DeferredPart(download.call);
-    await part.load();
+  testWidgets(
+    'a part already downloaded draws at once, with no loading frame',
+    (tester) async {
+      final download = _Download()..pending.complete();
+      final part = DeferredPart(download.call);
+      await part.load();
 
-    await tester.pumpWidget(_host(part));
+      await tester.pumpWidget(_host(part));
 
-    expect(find.text('Finder'), findsOneWidget);
-    expect(download.calls, 1);
-  });
+      expect(find.text('Finder'), findsOneWidget);
+      expect(download.calls, 1);
+    },
+  );
 
   testWidgets('two places opening one part download it once', (tester) async {
     final download = _Download();
