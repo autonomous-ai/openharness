@@ -12,6 +12,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/shared/theme/color_palette.dart';
+import 'package:harness/state/workspace_chrome.dart';
 import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/view.dart';
 
@@ -69,14 +70,24 @@ class _FixtureState extends State<_Fixture> {
   }
 
   @override
-  Widget build(BuildContext context) => Scaffold(
-    body: SafeArea(
-      child: SuperTabView(
-        controller: widget.controller,
-        onInvite: () {},
-        onAddAgent: (_) {},
-        onOpenTerminal: (_) {},
-        machineName: (machineId) => machineId,
+  // Under the switch the web workspace turns on for the Swarm tab
+  // (`webWorkspaceChrome`), and with New project as the workspace passes it.
+  Widget build(BuildContext context) => WorkspaceChromeScope(
+    chrome: WorkspaceChrome(
+      leadingWidth: (_) => 0,
+      leading: (_, _) => const SizedBox.shrink(),
+      superTabRecovers: true,
+    ),
+    child: Scaffold(
+      body: SafeArea(
+        child: SuperTabView(
+          controller: widget.controller,
+          onInvite: () {},
+          onAddAgent: (_) {},
+          onOpenTerminal: (_) {},
+          onNewProject: () {},
+          machineName: (machineId) => machineId,
+        ),
       ),
     ),
   );

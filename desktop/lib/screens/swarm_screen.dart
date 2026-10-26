@@ -511,6 +511,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
   Widget _startGuide() => WorkspaceWelcome(
     key: ValueKey('welcome:${app.activeSwarmId}:${app.activeSwarm.isSuperTab}'),
     onCommand: _runShortcut,
+    swarmDraft: app.activeSwarm.isSuperTab,
     composerBuilder: newHarnessOpensInBox
         ? (recent) => _newHarnessEmbedded && _newHarness != null
               ? _newHarnessContent(footer: recent)
@@ -3487,6 +3488,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
           context,
           app,
           keymap: _keymap,
+          from: from,
           onConnectMachine: () => unawaited(_openMachines()),
           // "See your phones": Machines, at its phones, once the dialog has
           // gone. ⚠️ Asked for, not opened here: right after the pop this

@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { createSuperTabCards } from './superTabCards.js'
 
 const lead = (id: string, over: Record<string, unknown> = {}) =>
-  ({ id, projectId: `p-${id}`, project: 'mobile', engine: 'claude', owner: '', local: 'h1', state: 'work', since: 12, ...over })
+  ({ id, projectId: `p-${id}`, project: 'mobile', engine: 'claude', owner: '', local: 'h1', state: 'work', order: 0, since: 12, ...over })
 const card = (id: string, leads: unknown[] = [lead('l1')], over: Record<string, unknown> = {}) => ({ id, name: 'openharness', count: 4, leads, ...over })
 const recap = (over: Record<string, unknown> = {}) => ({ tabId: 't1', leadId: 'l1', text: 'Shipped it', at: 1792560000, none: false, ...over })
 
@@ -17,11 +17,12 @@ describe('the Swarm cards on the devices', () => {
     const { cards, swarmCards } = setup()
     cards.replay()
     expect(swarmCards).not.toHaveBeenCalled()
-    const list = [card('t1', [lead('l1'), lead('l2', { state: 'ask' }, ), lead('l3', { since: undefined })])]
+    const list = [card('t1', [lead('l1', { order: 2 }), lead('l2', { state: 'ask', order: 0 }), lead('l3', { since: undefined, order: 5 })])]
     cards.cards(list)
     expect(swarmCards).toHaveBeenLastCalledWith(JSON.parse(JSON.stringify(list)))
     // Without `since` the key is left out; with an empty owner the lead is still whole.
     expect(swarmCards.mock.calls[0][0][0].leads[2]).not.toHaveProperty('since')
+    expect(swarmCards.mock.calls[0][0][0].leads.map((l: { order: number }) => l.order)).toEqual([2, 0, 5])
     swarmCards.mockClear()
     cards.replay()
     expect(swarmCards).toHaveBeenCalledOnce()
@@ -40,6 +41,7 @@ describe('the Swarm cards on the devices', () => {
       'not a list', [null], [card('bad id')], [card('')], [card('x'.repeat(65))], [card('x'.repeat(48))], [card('t1', [lead('l1', { local: 'x'.repeat(48) })])], [card('t1', 'nope' as never)], [card('t1', [lead('bad id')])],
       [card('t1', [lead('l1', { projectId: 'no good' })])], [card('t1', [lead('l1', { state: 'sleeping' })])], [card('t1', [lead('l1', { project: 7 })])],
       [card('t1', [lead('l1', { local: 'bad local' })])], [card('t1', [lead('l1', { since: -1 })])], [card('t1', [lead('l1', { since: 'soon' })])],
+      [card('t1', [lead('l1', { order: undefined })])], [card('t1', [lead('l1', { order: -1 })])], [card('t1', [lead('l1', { order: 1.5 })])],
       [card('t1', [lead('l1')], { count: -1 })], [card('t1', [lead('l1')], { count: 1.5 })], [card('t1', [lead('l1')], { name: 3 })],
     ]
     for (const list of bad) cards.cards(list)

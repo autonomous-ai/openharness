@@ -33,10 +33,34 @@ first. For those people, the only way to Add Phone was the title bar's icon, the
 
 ## What is built
 
-The same top-right card (`PhoneOfferCard`) as the first offer, at two new moments. Nothing else in the window
+The same top-right card (`PhoneOfferCard`) as the first offer, at the moments below. Nothing else in the window
 changes, and Add Phone opens the same dialog. The card stands below the top-right pane's header
 (`AgentAlertBanners.footerDrop`), not over it: it stays until it is answered, and at the corner it covered that
 pane's model and its ×, often the very pane waiting on the person.
+
+### 0. Once at a returning account's signed-in launch (owner, 2026-10-26)
+
+The October 26 daily report found no accounts with an older computer adding their first phone in four days,
+among 307 accounts. The existing paths rarely ran for those people. This owner decision supersedes the
+October 9 rule that an already-signed-in launch only marks the offer done for this case.
+
+Offer the existing card once per account on this computer when the launch is already signed in, the account
+has no non-machine device other than self in `loadDevices()`, no card has been dismissed with × and Add Phone
+has never been opened here (`phone_offer_stopped`), this is neither web nor a viewer window, and no other
+phone card is showing. Historical `phone_offer_done` and `phone_offer_seen` do not rule out this returning
+account's launch offer. The account needs a stable identity and local state that can be read. The offer waits for the existing
+asynchronous profile load, without delaying the workspace; an unavailable identity records no offer.
+
+It is a card, never an automatic dialog, and waits for first arrival just like the existing card.
+Write `phone_offer_returning.<account id>` only when `phoneOfferShown` says it is on screen. Closing the app
+with it unanswered does not bring that launch card back. Closing before it is on screen leaves it eligible.
+An unreadable device list (including an older CLI) shows nothing and writes no returning record, so the next
+launch tries again. This path reads devices at most once per launch. It does not add reads to the existing
+after-work retry limit.
+
+Showing it writes `phone_offer_seen` to suppress the after-work card and increments `phone_offer_shows`.
+The away card remains eligible until that combined count reaches three, or × / Add Phone stops it.
+The returning flow is `phone_offer_returning`, with the same outcomes and no observation timeout.
 
 ### 1. Once after work, on a computer that never showed the card
 
@@ -82,7 +106,7 @@ told them while they were away:
 
 - Only on an account with **no phone or browser** yet (`loadDevices`). No list to judge by: no card this time.
   An account found to have one is not read again in that run: each read reaches the backend through the daemon.
-- **At most 3 cards per computer**, every kind together (the first offer, after work, after time away).
+- **Away cards stop at 3 combined showings per computer**, including the first offer, returning offer and after-work offer. The returning launch offer is once per account on that computer.
 - **× or Add Phone opened (from the card or any other way in) stops the cards on this computer for good.**
 - A card left unanswered stays on screen until the app closes or the person signs out. On a later run, the card
   after time away may come back, until the 3-card cap.
@@ -99,7 +123,8 @@ In the Desktop's local state file (`LocalKeyValueStore`, beside the dial's state
 
 | Key | Written when | Read by |
 |---|---|---|
-| `phone_offer_done` (existing) | Add Phone opened, card put away, account has a phone, or a signed-in launch | the first offer |
+| `phone_offer_returning.<account id>` | returning card on screen, once per account locally | signed-in returning launch |
+| `phone_offer_done` (existing) | Add Phone opened, card put away, the first sign-in finds a phone, or the returning card is on screen; older versions wrote it at signed-in launch | the first offer |
 | `phone_offer_seen` | any card on screen, or Add Phone opened | the card after work |
 | `phone_offer_stopped` | the card's ×, or Add Phone opened any way | the card after time away |
 | `phone_offer_shows` | every card on screen, counted | the card after time away (cap 3) |
@@ -113,6 +138,7 @@ Each card is its own flow, so the moments compare with each other and with the f
 | Flow | Card |
 |---|---|
 | `phone_offer` | the first offer (existing) |
+| `phone_offer_returning` | once at a returning account’s signed-in launch (vocabulary 6) |
 | `phone_offer_after_work` | once after work |
 | `phone_offer_away_waited` | back to a harness that waited |
 | `phone_offer_away_finished` | back to a harness that finished |
@@ -169,3 +195,23 @@ A Desktop released first still offers the cards; its counts wait for the CLI.
 - Away time follows the window (`appLifecycleChanged`), not the person. A window left behind another app for 5
   minutes while the person sat at the computer counts as away. The card then says what happened, which stays true.
 - Counts are per computer, not per person: a person with two computers can see up to 3 cards on each.
+
+## October 26 measurement additions
+
+Vocabulary 6 adds the returning flow, `ui_desktop_phone_offer_skipped_<reason>`, and
+`ui_desktop_add_phone_paired_<opening>`. The fixed reason list and precise count semantics are in
+[product measurement](../product-measurement.md). The CLI forwards the names and announces revision 6;
+Desktop queues them until then. Backend and CLI vocabularies remain identical.
+
+The dialog already receives live `deviceJoins` notices. Open the dialog immediately and read one account-device
+snapshot alongside it. Hold joins until the snapshot arrives, then count each new non-machine key once per
+dialog, excluding keys already in that snapshot. Keep the
+snapshot and deduplication set in RAM; report only the opening (`offer`, `titlebar`, `menu`, `account`,
+`machines`, `command`). A returning card uses `offer`. Repeated notices, rebuilds, machines, notices after
+close and another account's notices do not count. A second new phone does. An unreadable snapshot leaves
+attribution unknown and keeps the dialog usable; a successful pairing handshake alone is not proof of a
+new account device.
+
+Skip reasons count each path/reason pair once per app run. An auth-revision change clears the counted pairs,
+allowing the next account to count again without retaining old revisions. Finished-turn volume and repeated
+returns to the window do not inflate these counters. Fixed names and vocabulary 6 remain unchanged.

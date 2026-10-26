@@ -18,8 +18,16 @@ import '../shared/theme/app_theme.dart' as grid;
 /// A fully drawn still shows a sealed packet and a plain packet together,
 /// without an entrance delay or a continuous idle repaint loop.
 class LoginFleetMap extends StatelessWidget {
-  const LoginFleetMap({super.key, this.seamless = false});
+  const LoginFleetMap({
+    super.key,
+    this.seamless = false,
+    this.pinDetails = true,
+  });
   final bool seamless;
+
+  /// False leaves each machine its name alone, without the line under it
+  /// (where it is, what runs there): on a phone that line is cut off.
+  final bool pinDetails;
 
   static const double aspectRatio = 512 / 190;
   // Show both sealed and plain packets without running a ticker while idle.
@@ -62,6 +70,7 @@ class LoginFleetMap extends StatelessWidget {
             t: _reducedPhase,
             palette: palette,
             seamless: seamless,
+            pinDetails: pinDetails,
           ),
           size: Size.infinite,
         ),
@@ -182,8 +191,10 @@ class _MapPainter extends CustomPainter {
     required this.t,
     required this.palette,
     this.seamless = false,
+    this.pinDetails = true,
   });
   final bool seamless;
+  final bool pinDetails;
 
   /// 0 → 1 over the first sight of the field; 1 forever after.
   final double entrance;
@@ -467,7 +478,7 @@ class _MapPainter extends CustomPainter {
       // Labels are laid out in unscaled space and only faded, so the text
       // never renders at a fractional scale mid-pop.
       final nameWidth = _measure(pin.name, weight: FontWeight.w500);
-      final subWidth = _measure(pin.sub, mono: true);
+      final subWidth = pinDetails ? _measure(pin.sub, mono: true) : 0.0;
       final width = math.max(nameWidth, subWidth);
       // Centred on the pin, but never off the field.
       final left = (pin.at.dx - width / 2).clamp(
@@ -483,6 +494,7 @@ class _MapPainter extends CustomPainter {
         weight: FontWeight.w500,
         color: _fade(palette.ink2, alpha),
       );
+      if (!pinDetails) continue;
       _text(
         canvas,
         pin.sub,
@@ -491,7 +503,8 @@ class _MapPainter extends CustomPainter {
           top + grid.AppType.captionSize * 1.2 / _paintScale,
         ),
         mono: true,
-        color: _fade(palette.faint, alpha),
+        // Read, not decoration: the secondary ink, at 4.5:1 (audit P1).
+        color: _fade(palette.ink2, alpha),
       );
     }
   }
@@ -591,6 +604,7 @@ class _MapPainter extends CustomPainter {
       old.t != t ||
       old.entrance != entrance ||
       old.palette != palette ||
+      old.pinDetails != pinDetails ||
       old._sansStyle != _sansStyle ||
       old._monoStyle != _monoStyle;
 }

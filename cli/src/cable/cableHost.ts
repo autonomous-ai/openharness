@@ -115,8 +115,8 @@ export interface CableHostWiring {
   swarmSay?: (harnessId: string, text: string) => Promise<boolean>
   /** A device picked a Lead: the window opens that Swarm tab and project. */
   superTabSelected?: (superTabId: string, projectId: string) => void
-  /** A finger on the dial's glass, in pieces, while it is down. */
-  scrolled?: (phase: 'down' | 'move' | 'up', dy: number, velocity: number) => void
+  /** A finger on the dial's glass, in pieces, while it is down; `superTabId` when it scrolls that Swarm's chat (a Pro's Lead view). */
+  scrolled?: (phase: 'down' | 'move' | 'up', dy: number, velocity: number, superTabId?: string) => void
   /** The dial came, went, or started taking an update — see CableSession's onDialStatus. */
   dialStatus?: (status: DialStatus) => void
   appFocus?: CableHost['appFocus']
@@ -680,7 +680,7 @@ export class DaemonCableHost implements CableHost {
     return { machineId: this.machineOf(agentId), agentId }
   }
 
-  scrolled(phase: 'down' | 'move' | 'up', dy: number, velocity: number): void {
+  scrolled(phase: 'down' | 'move' | 'up', dy: number, velocity: number, superTabId?: string): void {
     // THE ENDS ARE LOGGED, THE MIDDLE IS NOT. A stroke is a `down`, a dozen `move`s and an `up`, several
     // times a second: logging the middle buries every other line in the file. But the failure this
     // protocol is most exposed to is a stroke that never CLOSES — the far side then holds a drag forever
@@ -690,7 +690,8 @@ export class DaemonCableHost implements CableHost {
 
       this.wiring.log(phase === 'down' ? 'cable: scroll ↓' : `cable: scroll ↑ (v=${velocity})`)
     }
-    this.wiring.scrolled?.(phase, dy, velocity)
+    if (superTabId) this.wiring.scrolled?.(phase, dy, velocity, superTabId)
+    else this.wiring.scrolled?.(phase, dy, velocity)
   }
 
   updateAgent(agentId: string, model?: string, effort?: string): void {

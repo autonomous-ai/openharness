@@ -12,6 +12,7 @@ import '../widgets/new_harness_attachments.dart';
 import '../widgets/new_harness_paste.dart';
 import '../state/app_state.dart';
 import '../state/harness_attachments.dart';
+import '../state/workspace_chrome.dart';
 import 'roster.dart';
 import 'recording_notice.dart';
 import 'pull_requests.dart';
@@ -27,6 +28,7 @@ import 'work_details.dart';
 import 'project_sidebar.dart';
 import 'project_options.dart';
 import 'pane_layout.dart';
+import '../widgets/dial_list_scroll.dart';
 
 typedef _ComposerChoice = ({String label, String? detail, VoidCallback choose});
 
@@ -92,6 +94,15 @@ class _SuperTabViewState extends State<SuperTabView>
   String? _completionPrefix;
   final _completionKeys = List.generate(6, (_) => GlobalKey());
   SuperTabController get c => widget.controller;
+
+  /// A device with a Lead of this Swarm open scrolls the chat on screen.
+  late final _dial = DialListScroll(() => _scroll[c.selectedId]);
+  VoidCallback? _unregisterDial;
+  void _registerDial() {
+    _unregisterDial?.call();
+    _unregisterDial = widget.app?.registerSuperTabScroll(c.tabId, _dial.handle);
+  }
+
   bool get _devicesVisible =>
       c.devicesSelected &&
       widget.app?.devicesEnabled == true &&
@@ -115,6 +126,7 @@ class _SuperTabViewState extends State<SuperTabView>
     WidgetsBinding.instance.addObserver(this);
     _composer.addListener(_composerMoved);
     c.addListener(_changed);
+    _registerDial();
     _changed();
   }
 
@@ -135,6 +147,10 @@ class _SuperTabViewState extends State<SuperTabView>
   @override
   void didUpdateWidget(SuperTabView oldWidget) {
     super.didUpdateWidget(oldWidget);
+    if (oldWidget.controller != c || oldWidget.app != widget.app) {
+      _dial.cancel();
+      _registerDial();
+    }
     if (oldWidget.controller != c) {
       oldWidget.controller.removeListener(_changed);
       c.addListener(_changed);
@@ -179,6 +195,7 @@ class _SuperTabViewState extends State<SuperTabView>
     if (_selected != id) {
       _scrollRequest++;
       _jumpingToEnd = false;
+      _dial.cancel(); // a fling from the last conversation never scrolls this one
     }
     if (_selected != id || _composer.text != draft) {
       _composer.value = TextEditingValue(
@@ -300,6 +317,8 @@ class _SuperTabViewState extends State<SuperTabView>
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     c.removeListener(_changed);
+    _unregisterDial?.call();
+    _dial.cancel();
     _composer.dispose();
     _focus.dispose();
     _pullRequestsFocus.dispose();
@@ -1139,6 +1158,39 @@ class _SuperTabViewState extends State<SuperTabView>
     );
   }
 
+  /// On the web a conversation is read before anything else is drawn
+  /// ([WorkspaceChrome.superTabRecovers]); Desktop keeps "Loading" meanwhile.
+  bool get _readsFirst => WorkspaceChrome.of(context).superTabRecovers;
+
+  /// A thumb's target on a phone, for the buttons only [_readsFirst] adds.
+  static const _thumb = ButtonStyle(
+    tapTargetSize: MaterialTapTargetSize.padded,
+  );
+
+  Widget _firstReadFailed(String error) => Center(
+    child: Padding(
+      padding: const EdgeInsets.all(24),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(
+            error,
+            textAlign: TextAlign.center,
+            style: DesktopChrome.text(color: DesktopChrome.muted),
+          ),
+          if (!c.accessRevoked) ...[
+            const SizedBox(height: 12),
+            TextButton(
+              style: _thumb,
+              onPressed: () => unawaited(c.refresh()),
+              child: const Text('Retry'),
+            ),
+          ],
+        ],
+      ),
+    ),
+  );
+
   Widget _date(DateTime time) => Padding(
     padding: const EdgeInsets.fromLTRB(24, 20, 24, 4),
     child: Row(
@@ -1168,6 +1220,15 @@ class _SuperTabViewState extends State<SuperTabView>
                 'Create a project to get started.',
                 style: DesktopChrome.text(color: DesktopChrome.muted),
               ),
+              if (WorkspaceChrome.of(context).superTabRecovers &&
+                  widget.onNewProject != null) ...[
+                const SizedBox(height: 12),
+                FilledButton(
+                  style: _thumb,
+                  onPressed: c.canWrite ? widget.onNewProject : null,
+                  child: const Text('New project'),
+                ),
+              ],
               if (c.operationError != null) ...[
                 const SizedBox(height: 12),
                 Text(c.operationError!, style: DesktopChrome.metadata()),
@@ -1210,9 +1271,11 @@ class _SuperTabViewState extends State<SuperTabView>
         : messages.where((message) => message.sequence > newAfter).length;
     final reply = _replies[c.selectedId];
     final choices = _completionChoices;
+    // No conversation read yet: its error is the page itself, not a line over "Loading".
+    final unread = _readsFirst && c.snapshot == null;
     return Column(
       children: [
-        if (c.error != null)
+        if (c.error != null && !unread)
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 8),
             child: Row(
@@ -1229,6 +1292,8 @@ class _SuperTabViewState extends State<SuperTabView>
         Expanded(
           child: c.loading
               ? const Center(child: CircularProgressIndicator())
+              : unread && c.error != null
+              ? _firstReadFailed(c.error!)
               : messages.isEmpty
               ? Center(
                   child: Text(
@@ -1631,7 +1696,10 @@ class _SuperTabViewState extends State<SuperTabView>
                                           color: DesktopChrome.muted,
                                         ),
                                         contentPadding: EdgeInsets.zero,
-                                        hintText: group == null
+                                        hintText:
+                                            _readsFirst && c.snapshot == null
+                                            ? null
+                                            : group == null
                                             ? 'Loading conversation…'
                                             : c.canWrite
                                             ? c.snapshot!.isProjectLead(
