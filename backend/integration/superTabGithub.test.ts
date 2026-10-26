@@ -14,6 +14,7 @@ import { errorHandler } from '../src/middlewares/errorHandler.js'
 import type { Command } from '../src/superTabs/commands.js'
 import { GitHubTokens, MemoryTokenCache } from '../src/github/tokens.js'
 import { fakeApp, fakeGitHub, throwawayKey } from '../src/github/fakeGitHub.js'
+import { poolRows } from './hostRows.test-support.js'
 
 // The Harness GitHub App's token endpoint on the real control API: a fresh loopback MongoDB and a fake GitHub. This suite
 // never reads DATABASE_URL, an existing database or github.com.
@@ -197,7 +198,7 @@ describe('a queued start\'s preparation token', () => {
       await env.run(tab, { type: 'invite.accept', inviteId: invitation.result.inviteId as string } as Command, contributor)
     }
     await env.run(tab, { type: 'machine.contribute', machineId, name: 'Pool', cwd: '/swarm-root', scope: 'swarm', engines: ['codex'], maxAgents: 2 } as Command, contributor)
-    const pool = (await env.store.hostPools(contributor, machineId)).find(p => p.tabId === tab)!
+    const pool = (await poolRows(env.store, contributor, machineId)).find(p => p.tabId === tab)!
     if (contributor === owner) await env.store.observeMachine(contributor, tab, machineId, { generation: pool.machine.generation, ...observed })
     else {
       // Another person's project runs only on a Team machine (#1694): this one is used only for agents (`harness team on`).

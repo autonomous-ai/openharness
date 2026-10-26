@@ -83,8 +83,7 @@ function recorder() {
             requester: { name: 'Owner', email: 'owner@example.com' }, agentName: 'Builder', machineName: 'MacBook Pro · Team' }
           : name === 'githubStart'
             ? { tabId: 'tab-1', startId: 'start-1', repositoryUrl: 'https://github.com/example/project', own: true, requester: { name: 'Owner', email: 'owner@example.com' } }
-            // The pools route marks each row with the app (routes/superTabs.ts), so its store answers rows.
-            : name === 'hostPools' ? [] : { ok: true }
+            : { ok: true }
       } })
   return { store: methods() as unknown as SuperTabStore, calls }
 }

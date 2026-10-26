@@ -1,7 +1,7 @@
 /**
  * One Swarm's rows for a machine's host (design 4.10): exactly what `GET /hosts/:m`, `/pools` and `/assignments` gave
- * (store.ts hostTabs, hostPools, hostAssignments), built from a reassembled state, with `revision` replaced by
- * `lastChangedAt` and the Leads conversation id added to agent rows.
+ * before parts (the store's old host reads, which this replaced), built from a reassembled state, with `revision`
+ * replaced by `lastChangedAt` and the Leads conversation id added to agent rows.
  */
 import type { AuthUser } from '../../lib/ssoAuth.js'
 import { activeWork, agent, isLeads, SuperTabError, conversation, type Agent, type SuperTabState } from '../model.js'
