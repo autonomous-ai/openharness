@@ -26,6 +26,9 @@ class _Reads {
   /// How long each answer takes, as a phone on 4G waits for it.
   Duration latency = Duration.zero;
 
+  /// While set, each state read waits for a completer added here.
+  List<Completer<void>>? holdState;
+
   Future<Map<String, dynamic>> call(
     String method,
     String path, {
@@ -39,6 +42,11 @@ class _Reads {
           'Connect one of your machines to open Swarm.',
         ),
       );
+    }
+    if (holdState case final held? when path == '/api/super-tabs/tab') {
+      final wait = Completer<void>();
+      held.add(wait);
+      return wait.future.then((_) => server.request(method, path, body: body));
     }
     if (latency > Duration.zero) {
       return Future.delayed(
@@ -317,6 +325,29 @@ void main() {
         async.elapse(const Duration(seconds: 3));
         expect(notified, greaterThan(0));
         expect(c.messages('lead').last.text, 'A new line.');
+        c.dispose();
+      });
+    });
+
+    test('a reply shows as its messages answer, not after the state', () {
+      fakeAsync((async) {
+        final server = ConversationServer()..append('Hello');
+        final reads = _Reads(server);
+        final c = _controller(reads, reading: _web)..start();
+        async.flushMicrotasks();
+        _reply(server, 'Done.');
+        // The state answers slowly; the messages at once.
+        server.holdReads = Completer<void>();
+        final heldStates = <Completer<void>>[];
+        reads.holdState = heldStates;
+        server.holdReads!.complete();
+        server.holdReads = null;
+        async.elapse(const Duration(seconds: 3));
+        expect(heldStates, hasLength(1));
+        expect(c.messages('lead').last.text, 'Done.');
+        heldStates.single.complete();
+        async.flushMicrotasks();
+        expect(reads.tails, 1);
         c.dispose();
       });
     });

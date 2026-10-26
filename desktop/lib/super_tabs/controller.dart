@@ -580,6 +580,12 @@ class SuperTabController extends ChangeNotifier {
     final early = earlyQuery == null
         ? null
         : (request('GET', '${_messagesPath(earlyId)}$earlyQuery')..ignore());
+    // A conversation the state already has takes its answer as it comes, so
+    // a reply shows without waiting for the state.
+    final messagesRead = early != null && snapshot != null
+        ? (_readMessages(earlyId, early: (query: earlyQuery!, page: early))
+            ..ignore())
+        : null;
     try {
       final answer = await request('GET', _path);
       if (_disposed || accessRevoked) return;
@@ -641,12 +647,14 @@ class SuperTabController extends ChangeNotifier {
         error = null;
         if (localAccessChanged) _saveSoon();
       }
-      await _readMessages(
-        selectedId,
-        early: selectedId == earlyId && early != null
-            ? (query: earlyQuery!, page: early)
-            : null,
-      );
+      await (selectedId == earlyId && messagesRead != null
+          ? messagesRead
+          : _readMessages(
+              selectedId,
+              early: selectedId == earlyId && early != null
+                  ? (query: earlyQuery!, page: early)
+                  : null,
+            ));
     } catch (failure) {
       if (_inConnectGrace(failure)) {
         _waitingForMachine = true;
