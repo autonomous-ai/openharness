@@ -998,7 +998,9 @@ The same function serves commands (3.1), the CLI's `status` (5.3), verification 
     previous backend checks no audience: it filters conversations and messages by project alone. It also ends work
     only on done, stopped or cancelled. So `rollbackFromParts` refuses, before changing any row, a Swarm with:
     - any private conversation, which would become readable by every project reader;
-    - any lost task, status `lost` or a later cancel that kept `assignment.lost`, which would read as active.
+    - any task with status `lost`, which would read as active;
+    - any task cancelled after it was lost (it keeps `assignment.lost`). The previous backend reads it as finished, but
+      ignores the marker, so the fenced worker would read as an ordinary finished worker awaiting a decision.
   - The refusal names the Swarm and the reason. The Swarm stays in parts. Recovery is to roll forward with a fix: the
     parts stay authoritative, so nothing is lost or made public.
   - A reassigned task whose `lostAttempt` names an earlier worker is not refused. The current assignment is the new

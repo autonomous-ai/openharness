@@ -38,15 +38,18 @@ const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`
 
 /**
  * What the previous release would misread in a state rebuilt from the parts. It filters conversations by project alone,
- * so a private one becomes readable by every project reader; and it ends work only on done, stopped or cancelled, so a
- * lost task (status lost, or the marker a later cancel keeps) reads as active. Null when there is neither.
+ * so a private one becomes readable by every project reader. It ends work only on done, stopped or cancelled, so a task
+ * whose status is lost reads as active. A lost task cancelled later is finished there, but it knows no lost marker: the
+ * fenced worker reads as an ordinary finished one awaiting a decision (model.ts awaitingWorkers). Null when there is neither.
  */
 function downgradeHazard(state: SuperTabState): string | null {
   const groups: Conversation[] = [...state.conversations, ...state.parkedConversations ?? []]
   const hidden = groups.filter(g => g.audience).length
-  const lost = groups.filter(g => g.assignment?.status === 'lost' || g.assignment?.lost).length
+  const lost = groups.filter(g => g.assignment?.status === 'lost').length
+  const marked = groups.filter(g => g.assignment?.lost && g.assignment.status !== 'lost').length
   const hazards = [...hidden ? [`its ${plural(hidden, 'private conversation')} would become readable by every project reader`] : [],
-    ...lost ? [`its ${plural(lost, 'lost task')} would read as active work`] : []]
+    ...lost ? [`its ${plural(lost, 'lost task')} would read as active work`] : [],
+    ...marked ? [`its ${plural(marked, 'task')} lost and then cancelled would lose the lost marker, so each fenced worker would read as an ordinary finished one awaiting a decision`] : []]
   return hazards.length ? `the previous release would misread it: ${hazards.join(', and ')}` : null
 }
 
