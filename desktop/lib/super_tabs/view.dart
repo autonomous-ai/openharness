@@ -22,6 +22,8 @@ import 'model.dart';
 import 'message_row.dart';
 import 'message_receipt.dart';
 import 'notifications.dart';
+import 'decisions.dart';
+import 'decisions_view.dart';
 import 'route_row.dart';
 import 'terminal_row.dart';
 import 'work_details.dart';
@@ -1347,6 +1349,12 @@ class _SuperTabViewState extends State<SuperTabView>
               ],
             ),
           ),
+        // The reader's own chat with the PM shows what the PM asked them.
+        if (group != null && _isPmChat(group))
+          SuperTabDecisionsPanel(
+            decisions: SuperTabDecisions.of(c),
+            projectId: group.projectId,
+          ),
         Expanded(
           child: c.loading
               ? const Center(child: CircularProgressIndicator())
@@ -1902,6 +1910,9 @@ class _SuperTabViewState extends State<SuperTabView>
                                 mentions: SuperTabMentions.of(c),
                                 onOpen: (mention) =>
                                     unawaited(_openMention(mention)),
+                                leading: SuperTabDecisionList(
+                                  decisions: SuperTabDecisions.of(c),
+                                ),
                               )
                             : const SizedBox.shrink(),
                       ],
