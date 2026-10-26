@@ -9465,24 +9465,15 @@ class AppNotifier extends ChangeNotifier {
     }
   }
 
+  /// Both builds back off the same way: a browser's retry used to redial every 5 s for good, each
+  /// refusal reading the account's device list again — 12 dials and 12 reads a minute for one
+  /// unlinked machine.
   void _startLinkRetry(String machineId) {
     if (_linkRetryTimers.containsKey(machineId)) return;
-    if (viewer == null) {
-      _scheduleNativeLinkRetry(machineId, offlineRetryInterval);
-      return;
-    }
-    _linkRetryTimers[machineId] = Timer.periodic(offlineRetryInterval, (_) {
-      final state = machineStates[machineId];
-      if (state == null || !state.needsLink) {
-        _stopLinkRetry(machineId);
-        return;
-      }
-      unawaited(_pool?.closeMachine(machineId));
-      _connectMachine(state);
-    });
+    _scheduleLinkRetry(machineId, offlineRetryInterval);
   }
 
-  void _scheduleNativeLinkRetry(String machineId, Duration delay) {
+  void _scheduleLinkRetry(String machineId, Duration delay) {
     final state = machineStates[machineId];
     if (state == null || !state.needsLink || _disposed) return;
     final revision = _authRevision;
@@ -9511,7 +9502,7 @@ class AppNotifier extends ChangeNotifier {
       } finally {
         if (current()) {
           final next = delay * 2;
-          _scheduleNativeLinkRetry(
+          _scheduleLinkRetry(
             machineId,
             next > const Duration(seconds: 30)
                 ? const Duration(seconds: 30)
@@ -10801,10 +10792,20 @@ class AppNotifier extends ChangeNotifier {
       return;
     }
     for (final machine in machines) {
-      _connectMachine(machineStates[machine.machineId]!);
-      unawaited(_loadMachineData(machineStates[machine.machineId]!));
+      final state = machineStates[machine.machineId]!;
+      if (_awaitingLink(state)) continue;
+      _connectMachine(state);
+      unawaited(_loadMachineData(state));
     }
   }
+
+  /// An unlinked machine whose link retry is waiting: the retry dials it, a device list that pins
+  /// its key dials it at once ([_redialPinnedMachines]), and the connection that follows a link
+  /// loads its agents. A machine-list read dialling it as well was refused every time — every 4 s
+  /// while a browser's connect page shows.
+  bool _awaitingLink(MachineState machine) =>
+      machine.needsLink &&
+      _linkRetryTimers.containsKey(machine.machine.machineId);
 
   /// Viewer builds: a machine this app holds no key for may only be missing from its copy of the
   /// device log — a computer signed in after this app did — so the log is read first, briefly,
@@ -10817,6 +10818,7 @@ class AppNotifier extends ChangeNotifier {
     final revision = _authRevision;
     final waiting = <MachineState>[];
     for (final state in states) {
+      if (_awaitingLink(state)) continue;
       if (state.machine.isShared ||
           state.needsLink ||
           await _holdsMachineKey(state.machine.machineId)) {
@@ -11672,6 +11674,10 @@ class AppNotifier extends ChangeNotifier {
     if (machine.machine.isShared) return;
     if (!_machineWorkCurrent(machine, _authRevision)) return;
     if (machine.agentLoadStatus == AgentLoadStatus.loaded && !force) return;
+    // An unlinked machine refuses every load, and each refusal costs a dial, an error state and a
+    // repaint: every machine-list read used to pay that again for nothing. Linking it connects it,
+    // and the connection loads with force (`_onMachineConnected`); so does a person's reload.
+    if (machine.needsLink && !force) return;
     if (machine.isLocalMachine &&
         !machine.usesLocalTransport &&
         _localLinkLive(machine) &&
