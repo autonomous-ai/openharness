@@ -7,7 +7,7 @@ import { openDaemon, type Daemon, type Where } from '../agentClient/daemon.js'
 import { requiredToolReason, startRequirements } from './capacity.js'
 import { inspectCapacity, type ScopedRequest } from './start.js'
 import { ENDED_WORK, object, within } from './wire.js'
-import { choose, decide, parseAssessment, quotaOf2, rateFor, recordOf, repoMatch, type Assessment, type Commitment, type MemberFrame, type Policy, type Probe, type SwarmRule, type TaskFolder } from './route.js'
+import { API_BUILDERS, choose, decide, parseAssessment, quotaOf2, rateFor, recordOf, repoMatch, type Assessment, type Commitment, type HeldModel, type MemberFrame, type Policy, type Probe, type SwarmRule, type TaskFolder } from './route.js'
 import { stat } from 'node:fs/promises'
 import { describeScmProject } from '../scm/scmProjects.js'
 
@@ -131,7 +131,11 @@ export async function routeTask(input: { tabId: string; conversationId: string; 
   if (review) assessment = { ...assessment, kind: 'review' }
   // A backend from before rules keeps none, so routing there is the policy order alone. Rules bind only their own project's
   // groups; a backend from before per-project rules gives none a project, and its rules bind every group.
-  const rules = list(state.rules).filter(r => r.rule && typeof r.text === 'string' && (r.projectId === undefined || r.projectId === projectId)) as unknown as SwarmRule[]
+  // A Mac's Harness Team account is that Mac (One machine, below): a machines rule naming the Mac allows it too.
+  const macOf = new Map(list(state.machines).filter(m => typeof m.hostMachineId === 'string').map(m => [String(m.machineId), String(m.hostMachineId)]))
+  const rules = (list(state.rules).filter(r => r.rule && typeof r.text === 'string' && (r.projectId === undefined || r.projectId === projectId)) as unknown as SwarmRule[])
+    .map(r => r.rule.kind !== 'machines' ? r : { ...r, rule: { ...r.rule,
+      machineIds: [...r.rule.machineIds, ...[...macOf].filter(([, mac]) => r.rule.kind === 'machines' && r.rule.machineIds.includes(mac)).map(([team]) => team)] } })
   const members = agents.filter(a => !busy.has(String(a.id)) && (a.role === 'reviewer') === review && ENGINES.includes(String(object(a.configuration).engine))).map(a => withLaunchEffort(a, list(state.starts)))
   // A new agent starts only on a machine in the Swarm's Machines list (the backend refuses any other): a contributed machine, or
   // one an agent of the Swarm runs on. The Lead runs here, so its own machine is always listed. Of the account's machines
@@ -139,14 +143,21 @@ export async function routeTask(input: { tabId: string; conversationId: string; 
   // (production, 2026-10-21). A member may run on a machine only its collaborator can open; the Lead tries that machine
   // too, but a member there is unknown, never offline.
   const swarmMachines = new Set([where.machineId, ...list(state.machines).map(m => String(m.machineId)), ...agents.map(a => String(a.machineId))])
-  const machines = new Map<string, { name: string; status: string; account: boolean; pool?: Json }>()
+  const machines = new Map<string, { name: string; status: string; account: boolean; pool?: Json; folded?: boolean }>()
   for (const m of list(value.machines)) if (swarmMachines.has(String(m.machineId))) machines.set(String(m.machineId), { name: String(m.name), status: String(m.status ?? 'unknown'), account: true })
   // The Lead's own machine is the account's even when the list could not be read.
   if (!machines.has(where.machineId)) machines.set(where.machineId, { name: where.machineId, status: 'unknown', account: true })
   for (const m of members) if (!machines.has(String(m.machineId))) machines.set(String(m.machineId), { name: String(m.machineId), status: 'unknown', account: false })
+  // A teammate's project runs only on Team machines: the backend says per machine whether it takes one now, and why not
+  // (backend superTabs/machines.ts teamWorkRefusal). Its project owner's own machines take its work as before.
+  const projectOwner = project?.ownerId ?? state.ownerId
   for (const original of list(state.machines)) {
     const repository = object(project?.repository)
+    const teamWork = object(original.teamWork)
     const pool: Json = { ...original,
+      // Offline is said once, by the reading's own age below.
+      ...(teamWork.allowed === false && teamWork.code !== 'MACHINE_OFFLINE' && typeof teamWork.reason === 'string'
+        ? { teammatesRefused: teamWork.reason, projectOwnerId: projectOwner } : {}),
       ...(original.scope === 'swarm' ? { cwd: repository.machineId === original.machineId
         ? repository.cwd : `${String(original.cwd).replace(/\/+$/, '')}/${projectId}` } : {}),
       ...(original.scope !== 'swarm' && projectId !== 'lead' ? { projectUnavailable: true } : {}),
@@ -154,6 +165,14 @@ export async function routeTask(input: { tabId: string; conversationId: string; 
         ? { repositoryUnavailable: true } : {}),
     }
     machines.set(String(pool.machineId), { name: String(pool.name), status: 'contributed', account: false, pool })
+  }
+  // One machine (docs/plans/2026-10-24-swarm-team-account.md): a Mac's Harness Team account is that Mac, under its name. A
+  // teammate's project starts only in the team account and the Mac's owner's own projects only with the owner, so only one
+  // of the two offers new agents here, and the other is not listed as unfit; agents already on either stay members.
+  for (const [team, mac] of macOf) {
+    const pool = machines.get(team)?.pool
+    if (!pool || !machines.has(mac)) continue
+    machines.get(projectOwner === pool.contributorId ? team : mac)!.folded = true
   }
   const enabled = policy.models.filter(m => m.enabled && ENGINES.includes(m.engine))
 
@@ -180,10 +199,11 @@ export async function routeTask(input: { tabId: string; conversationId: string; 
   const probes = probed.flat().map(p => p.kind === 'member' ? { ...p, repo: repoMatch(folder, p.frame ?? null, p.machineId === where.machineId),
     refusals: [...p.refusals, ...limited(p.agentId)],
     earlier: ended.filter(e => e.agentId === p.agentId).reverse().slice(0, 3).map(e => ({ group: e.group, outcome: e.outcome })) } : p)
+  probes.push(...localProbes(state, policy, probes, assessment, review))
   // Picks started or assigned and still at work hold part of their account's quota; the log, and so this, is per Swarm.
   const working = (decisions ?? []).filter(d => d.final && d.outcome === null && typeof d.account === 'string')
     .map(d => ({ account: d.account, spend: object(d.spend), size: d.size, createdAt: Date.parse(String(d.createdAt)) }) as Commitment)
-  const choice = choose(probes, policy, assessment, Date.now(), working, rules)
+  const choice = choose(probes, policy, assessment, Date.now(), working, rules, heldLocalModels(state))
   if ('error' in choice) return choice
   const verdict = decide(choice)
   const operationId = `route-${newId()}`
@@ -196,7 +216,7 @@ export async function routeTask(input: { tabId: string; conversationId: string; 
   const routeDecisionId = recorded.ok === true ? object(object(recorded.value).result).routeDecisionId : undefined
   const decision = typeof routeDecisionId === 'string' ? `,"routeDecisionId":"${routeDecisionId}"` : ''
   const publicOf = (s: typeof verdict.pick) => ({ id: s.id, kind: s.kind, ...(s.agentId ? { agentId: s.agentId } : {}), machineId: s.machineId,
-    engine: s.engine, model: s.model, effort: s.effort, title: s.title })
+    engine: s.engine, model: s.model, effort: s.effort, title: s.title, ...(s.gridModel ? { gridModel: s.gridModel, gridName: s.gridName } : {}) })
   return {
     ok: true, ...(typeof routeDecisionId === 'string' ? { routeDecisionId } : { unrecorded: true }),
     pick: publicOf(verdict.pick), via: verdict.via, p: verdict.p, belowFloor: choice.belowFloor, why: verdict.why,
@@ -207,8 +227,10 @@ export async function routeTask(input: { tabId: string; conversationId: string; 
     next: verdict.pick.kind === 'member'
       ? `Assign with: command OPERATION_ID {"type":"work.assign","conversationId":"${input.conversationId}","agentId":"${verdict.pick.agentId}"${decision}}`
       : `Start with: start OPERATION_ID ${JSON.stringify({ conversationId: input.conversationId, name: review ? 'Reviewer' : 'Builder', ...(review ? { role: 'reviewer' } : {}), cwd: text(machines.get(verdict.pick.machineId)?.pool?.cwd) ?? assessment.needs.cwd ?? '/absolute/repo/on/that/machine',
-        worktree: true, requirements: startRequirements(assessment.needs), machineId: verdict.pick.machineId, engine: verdict.pick.engine, model: verdict.pick.model,
-        effort: verdict.pick.effort, ...(typeof routeDecisionId === 'string' ? { routeDecisionId } : {}) })}, then assign the started agent${decision ? ' with the same routeDecisionId' : ''}. It starts from the repository's default branch, fetched first; add "branchRef":"refs/remotes/origin/BRANCH" to start from another branch.`,
+        worktree: true, requirements: startRequirements(assessment.needs), machineId: verdict.pick.machineId, engine: verdict.pick.engine,
+        // A local model is named by the grid alone: no subscription model or effort goes with it.
+        ...(verdict.pick.gridModel ? { gridModel: verdict.pick.gridModel, gridName: verdict.pick.gridName } : { model: verdict.pick.model, effort: verdict.pick.effort }),
+        ...(typeof routeDecisionId === 'string' ? { routeDecisionId } : {}) })}, then assign the started agent${decision ? ' with the same routeDecisionId' : ''}. It starts from the repository's default branch, fetched first; add "branchRef":"refs/remotes/origin/BRANCH" to start from another branch.`,
   }
 }
 
@@ -218,12 +240,88 @@ function alternativesTo<T extends { id: string; machineId: string }>(pick: T, sh
   return shown.filter(s => s.id !== pick.id).filter((s, i) => { const best = !seen.has(s.machineId); seen.add(s.machineId); return i < 2 || best })
 }
 
-async function probeMachine(machineId: string, { name: machineName, status, account, pool }: { name: string; status: string; account: boolean; pool?: Json },
+/** A reading this old says nothing is served (backend `MACHINE_FRESH_MS`). */
+const LOCAL_FRESH_MS = 45_000
+/** Refusals about a subscription's allowance, which a local model does not spend. */
+const SUBSCRIPTION = /subscription/i
+
+interface Served { grid: string; model: string; label: string; kind: 'local' | 'api' | 'shared'; machines: Set<string> | null; holders: string[] }
+
+/** The models served for the Swarm while the owner has the add-on on and a fresh reading lists them, by grid and model, each
+ * with the Builders on it: one started on a model, or starting on it, holds it until it leaves the Swarm. */
+function servedModels(state: Json, swarm: string, now: number): Map<string, Served> {
+  // By grid and model: its label, and the machines that may run it (null: any).
+  const served = new Map<string, Served>()
+  for (const machine of list(state.machines)) {
+    const observed = object(machine.observation)
+    if (!finite(observed.receivedAt) || now - observed.receivedAt > LOCAL_FRESH_MS) continue
+    for (const l of list(observed.localModels)) {
+      if (typeof l.grid !== 'string' || typeof l.model !== 'string') continue
+      const key = `${l.grid}\0${l.model}`, anywhere = l.grid === swarm
+      const kind = l.kind === 'api' || l.kind === 'shared' ? l.kind : anywhere ? 'local' : 'shared'
+      const known = served.get(key) ?? { grid: l.grid, model: l.model, label: text(l.name) ?? l.model, kind, machines: anywhere ? null : new Set<string>(), holders: [] }
+      known.machines?.add(String(machine.machineId))
+      served.set(key, known)
+    }
+  }
+  const agents = new Map(list(state.agents).map(agent => [String(agent.harnessId), text(agent.displayName) ?? text(agent.name) ?? 'a Builder']))
+  for (const start of list(state.starts)) {
+    const request = object(start.request)
+    if (typeof request.gridModel !== 'string' || start.error || (start.harnessId && !agents.has(String(start.harnessId)))) continue
+    served.get(`${typeof request.gridName === 'string' ? request.gridName : swarm}\0${request.gridModel}`)?.holders
+      .push(start.harnessId ? agents.get(String(start.harnessId))! : 'a Builder that is starting')
+  }
+  return served
+}
+
+/** Whether [m] can take another Builder: a local engine or a model shared with a member takes one, an API model up to [API_BUILDERS]. */
+const takesBuilder = (m: Served) => m.holders.length < (m.kind === 'api' ? API_BUILDERS : 1)
+
+/** The Swarm's served models that take no more Builders, and who is on them, then those a fresh reading says Builders are
+ *  never offered, and why (superTabs/machines.ts refusedOn): what the route says when it offers none. */
+export function heldLocalModels(state: Json, now: number = Date.now()): HeldModel[] {
+  const addOn = object(state.localModels)
+  if (addOn.enabled !== true || typeof addOn.grid !== 'string') return []
+  const held: HeldModel[] = [...servedModels(state, addOn.grid, now).values()].filter(m => !takesBuilder(m))
+    .map(({ model, label, kind, holders }) => ({ model, label, kind, holders }))
+  for (const machine of list(state.machines)) {
+    const observed = object(machine.observation)
+    if (!finite(observed.receivedAt) || now - observed.receivedAt > LOCAL_FRESH_MS) continue
+    for (const r of list(observed.refusedModels)) {
+      if (r.grid !== addOn.grid || typeof r.model !== 'string' || typeof r.why !== 'string' || held.some(m => m.model === r.model)) continue
+      held.push({ model: r.model, label: text(r.name) ?? r.model, kind: 'local', holders: [], refused: r.why })
+    }
+  }
+  return held
+}
+
+/** New agents on local models (docs/plans/2026-10-23-swarm-local-models.md), only while the owner has the add-on on and a
+ * fresh reading lists the model. One served on the Swarm's grid, an engine of a member's or an API one shares, is reached
+ * through the grid relay from any Swarm machine that can start Claude Code or Codex. One on another grid, shared with a
+ * machine's owner, only from that machine (owner, 2026-10-23). One Builder per local engine, since it answers one
+ * conversation at a time; up to [API_BUILDERS] per API model (owner, 2026-10-24). Never for a review. */
+export function localProbes(state: Json, policy: Policy, probes: Probe[], a: Assessment, review: boolean, now: number = Date.now()): Probe[] {
+  const addOn = object(state.localModels)
+  const swarm = addOn.enabled === true && typeof addOn.grid === 'string' ? addOn.grid : null
+  if (!swarm || review || (policy.localModels?.enabled === false && !a.local)) return []
+  const served = new Map([...servedModels(state, swarm, now)].filter(([, m]) => takesBuilder(m)))
+  if (!served.size) return []
+  // One base per machine and engine: the first new-agent row the policy offers there, which carries the machine's refusals.
+  const bases = new Map<string, Probe>()
+  for (const p of probes) if (p.kind === 'new' && !p.gridModel && !bases.has(`${p.machineId}\0${p.engine}`)) bases.set(`${p.machineId}\0${p.engine}`, p)
+  const quality = policy.localModels?.quality ?? 1
+  return [...bases.values()].flatMap(base => [...served.values()].filter(m => !m.machines || m.machines.has(base.machineId))
+    .map((m): Probe => ({ ...base, model: 'default', effort: 'default', quality, cost: 1, quota: UNKNOWN_QUOTA, known: true,
+      refusals: base.refusals.filter(r => !SUBSCRIPTION.test(r)), gridModel: m.model, gridName: m.grid, gridLabel: m.label, gridKind: m.kind })))
+}
+
+async function probeMachine(machineId: string, { name: machineName, status, account, pool, folded }: { name: string; status: string; account: boolean; pool?: Json; folded?: boolean },
   members: Json[], allModels: Policy['models'], policy: Policy, a: Assessment, where: Where, open: typeof openDaemon): Promise<Probe[]> {
   const listedEngines = Array.isArray(pool?.engines) ? pool.engines.filter((engine): engine is string => typeof engine === 'string') : []
   const legacy = listedEngines.some(engine => !ENGINES.includes(engine))
   const installed = legacy ? list(object(pool?.observation).quotas).map(quota => quota.engine) : listedEngines
-  const models = pool ? allModels.filter(m => installed.includes(m.engine)) : account ? allModels : []
+  // A Mac folded into its Harness Team account, or the other way round, offers no new agent of its own (routeTask).
+  const models = folded ? [] : pool ? allModels.filter(m => installed.includes(m.engine)) : account ? allModels : []
   const engines = [...new Set([...models.map(m => m.engine), ...members.map(m => String(object(m.configuration).engine) as 'claude' | 'codex')])]
   const memberProbe = (m: Json, refusals: string[] = [], quota = UNKNOWN_QUOTA, frame: MemberFrame | null = null, terminalUnverified = false): Probe => {
     const c = object(m.configuration), engine = String(c.engine) as 'claude' | 'codex'
@@ -244,7 +342,9 @@ async function probeMachine(machineId: string, { name: machineName, status, acco
     const quota = (engine: string) => { const q = quotas.find(q => q.engine === engine); return fresh && q ? quotaOf2({ known: q.known === true, windows: list(q.windows).filter(w => finite(w.usedPercent)).map(w => ({ usedPercent: w.usedPercent as number, resetsAt: w.resetsAt, name: text(w.name) ?? undefined })) }) : UNKNOWN_QUOTA }
     const blocked = [...(!fresh ? [OFFLINE] : []), ...(pool.paused ? ['New work is paused on this machine.'] : [])]
     const tools = object(observed.tools)
-    const newReasons = [...blocked,
+    /** Work for a project its owner does not run here: a new agent runs under the contribution, a member under its own grant. */
+    const teammates = (contributorId: unknown) => typeof pool.teammatesRefused === 'string' && contributorId !== pool.projectOwnerId ? [pool.teammatesRefused] : []
+    const newReasons = [...blocked, ...teammates(pool.contributorId),
       ...(pool.projectUnavailable === true ? ['Its owner must add this machine to the swarm again to support other projects.'] : []),
       ...(pool.repositoryUnavailable === true ? ['Share a repository for this project before starting agents on this machine.'] : []),
       ...(pool.availableSlots === 0 ? ['This machine has no available agent slots.'] : []),
@@ -255,7 +355,8 @@ async function probeMachine(machineId: string, { name: machineName, status, acco
     return [...members.map(m => {
       const allowance = quota(String(object(m.configuration).engine))
       const running = Array.isArray(observed.runningHarnessIds) ? observed.runningHarnessIds.includes(m.harnessId) : null
-      return memberProbe(m, fresh ? memberRefusals(running, allowance, needs.tools, needs.devices, tools, object(observed.devices), object(observed.toolProbeErrors)) : [OFFLINE],
+      return memberProbe(m, fresh ? [...memberRefusals(running, allowance, needs.tools, needs.devices, tools, object(observed.devices), object(observed.toolProbeErrors)),
+        ...teammates(m.contributorId)] : [OFFLINE],
         allowance, null, fresh && running === null)
     }),
       ...models.map(m => newProbe(m, [...newReasons, ...(quota(m.engine).leftPercent === 0 ? ['Subscription exhausted.'] : [])], quota(m.engine), fresh && quota(m.engine).known,

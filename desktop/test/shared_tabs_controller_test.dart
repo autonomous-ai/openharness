@@ -522,6 +522,14 @@ void main() {
     });
     await c.refresh();
     await expectLater(c.act('share_leave', {}), throwsA(isA<SharedTabsFailure>().having((e) => e.code, 'code', 'UNAVAILABLE')));
+    await expectLater(
+      c.act('share_leave', {}),
+      throwsA(isA<SharedTabsFailure>().having(
+        (e) => e.message,
+        'message',
+        'Harness could not reach this computer. Check that it is online, then try again.',
+      )),
+    );
     error = TimeoutException('slow');
     await expectLater(c.act('share_leave', {}), throwsA(isA<SharedTabsFailure>().having((e) => e.code, 'code', 'UNAVAILABLE')));
     expect(c.snapshot.notices, hasLength(1));

@@ -1,4 +1,7 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
+// Only pure functions of sso.ts are tested here. Its Redis client, opened on import, would log a refused connection
+// after this short file has already finished, which the test runner reports as an error in whichever file is then running.
+vi.mock('./bus.js', () => ({ pub: {} }))
 import { normalizeEntryPoint } from './sso.js'
 
 /**

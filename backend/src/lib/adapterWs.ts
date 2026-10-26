@@ -11,6 +11,11 @@
  * Auth: the first WebSocket subprotocol is the user's SSO access token. The stable `computer` query
  * parameter selects (or creates) that user's Remote machine; a managed machine never gains a second
  * writer for its down:{machineId} channel.
+ *
+ * A team session (lib/teamSession.ts), a Mac's team account, connects only as its own computer's machine
+ * and only while that row is a team machine. Its socket hears only the device-key pushes, never the
+ * account's grid name, raises no pairing notice on the person's apps, and may take only its own key off
+ * the device key log. Every connect records which kind of sign-in serves the machine (`sessionKind`).
  */
 import type { IncomingMessage } from 'http'
 import type { Duplex } from 'stream'
@@ -39,6 +44,7 @@ import { DAEMONS } from '../config/env.js'
 import { parseAutonomousEnvironment } from './autonomousEnvironment.js'
 import { machineService } from '../services/MachineService.js'
 import { appendDeviceKey } from './deviceKeyLog.js'
+import { TEAM_CONVERTED_FRAME } from './teamSession.js'
 import { AppError } from '../errors/index.js'
 import {
   isEncryptedTerminalFrame,
@@ -169,24 +175,39 @@ export function handleAdapterUpgrade(req: IncomingMessage, socket: Duplex, head:
   // Where this computer is, per Cloudflare (absent off-Cloudflare). Read once here, at the only point
   // that still has the upgrade request, and carried into the machine row + its daily presence.
   const countryCode = countryCodeFromHeaders(req.headers)
+  const forbid = (): void => {
+    try { socket.write('HTTP/1.1 403 Forbidden\r\nConnection: close\r\nContent-Length: 0\r\n\r\n') } catch { /* ignore */ }
+    socket.destroy()
+  }
   void (async () => {
     let user
-    try { user = await authenticateAccessToken(accessToken, autonomousEnv, { allowHarnessSession: 'computer' }) } catch (err) {
+    // A team session is taken here only as the machine of the computer it is bound to (below).
+    try { user = await authenticateAccessToken(accessToken, autonomousEnv, { allowHarnessSession: 'computer', allowTeamSession: true }) } catch (err) {
       if (err instanceof SsoAuthError && (err.code === 'AUTONOMOUS_ENV_MISMATCH' || err.code === 'AUTONOMOUS_ENV_NOT_ALLOWED')) {
-        try { socket.write('HTTP/1.1 403 Forbidden\r\nConnection: close\r\nContent-Length: 0\r\n\r\n') } catch { /* ignore */ }
-        socket.destroy()
+        forbid()
         return
       }
       deny()
       return
     }
-    const resolved = await machineService.resolveOrCreateForComputer(user.sub, user.autonomousEnv, computerId, label ?? 'computer', claimedMachineId)
-    const machine = resolved.machine
+    const team = user.harnessSessionKind === 'team'
+    // Never another machine of the account: a team session names its own computer, or nothing is looked up at all.
+    if (team && computerId !== user.harnessComputerId) { forbid(); return }
+    let machine
+    if (team) {
+      machine = (await machineService.resolveForTeamComputer(user, computerId, label ?? 'computer', claimedMachineId)).machine
+    } else {
+      machine = (await machineService.resolveOrCreateForComputer(user.sub, user.autonomousEnv, computerId, label ?? 'computer', claimedMachineId, 'computer')).machine
+      // Before it attaches: a former team machine now served by a normal sign-in must not be read as a team machine. Any
+      // other row is stamped by the connect's own update below; until then it is not a team machine either.
+      if (machine.sessionKind === 'team') await prisma.machine.update({ where: { machineId: machine.machineId }, data: { sessionKind: 'computer' } })
+    }
     const machineId = machine.machineId
     if (!machineBillingAllowsDataPlane(machine)) { denyPayment(); return }
     // Single-computer claim BEFORE upgrade/attach, so a rejected second computer never supersedes the first.
     if (!(await claimMachineOwner(machineId, computerId, PRESENCE_TTL_SEC))) { denyBusy(); return }
-    wss.handleUpgrade(req, socket, head, (ws) => void attachAdapter(ws, machineId, machine.userId, machine.name, label, computerId, clientVersion, countryCode, user.harnessSessionId))
+    const name = machine.name, owner = machine.userId
+    wss.handleUpgrade(req, socket, head, (ws) => void attachAdapter(ws, machineId, owner, name, label, computerId, clientVersion, countryCode, user.harnessSessionId, team))
   })().catch((err) => {
     if (err instanceof AppError) {
       // 403 is the revoked-machine answer from `resolveOrCreateForComputer`, 429 its new-id rate limit
@@ -201,7 +222,7 @@ export function handleAdapterUpgrade(req: IncomingMessage, socket: Duplex, head:
   })
 }
 
-async function attachAdapter(ws: WebSocket, machineId: string, userId: string, currentName: string | null, label?: string, computerId?: string, clientVersion?: string, countryCode?: string, harnessSessionId?: string): Promise<void> {
+async function attachAdapter(ws: WebSocket, machineId: string, userId: string, currentName: string | null, label?: string, computerId?: string, clientVersion?: string, countryCode?: string, harnessSessionId?: string, team = false): Promise<void> {
   // A different computer was already rejected at the upgrade (denyBusy), so this only closes our OWN
   // stale local socket on a same-computer reconnect landing on this worker.
   owners.get(machineId)?.close(4000, 'superseded')
@@ -211,7 +232,8 @@ async function attachAdapter(ws: WebSocket, machineId: string, userId: string, c
   send({ t: 'connected', machineId })
   // What changed for the ACCOUNT on some worker (its tabs, its machine list): this computer's app
   // re-reads through its daemon rather than polling for it. See adapterAccountPushes.ts.
-  const accountPushesUnsub = await relayAccountPushes(userId, send, { zoo: DAEMONS.on })
+  // A team machine reads none of the account's desk, zoo, machines or connections: it hears only the device-key pushes.
+  const accountPushesUnsub = await relayAccountPushes(userId, send, { zoo: DAEMONS.on, team })
 
   // Last desktop-app state THIS socket asserted. Socket-scoped on purpose: a new adapter connection
   // starts with no claim and must re-assert, so a fresh value can never renew a stale one.
@@ -266,6 +288,9 @@ async function attachAdapter(ws: WebSocket, machineId: string, userId: string, c
         ...(boundComputer ? { computerId: boundComputer } : {}),
         // Same rule again; absent (not behind Cloudflare) leaves the last value.
         ...(countryCode ? { countryCode } : {}),
+        // Which kind of sign-in serves the machine now (lib/teamSession.ts). A team row was checked, and a former team
+        // row flipped, before the socket attached; this stamps every other row.
+        sessionKind: team ? 'team' : 'computer',
       },
     }).catch(() => { /* best effort */ })
   }
@@ -275,7 +300,8 @@ async function attachAdapter(ws: WebSocket, machineId: string, userId: string, c
   // Minted and remembered by `routes/grid.ts`; read-only here. A user who has never signed in since
   // the route shipped simply has none yet, and the daemon treats that as "no grid" rather than an
   // error — the next `harness login` mints it.
-  const gridName = (await prisma.user.findUnique({ where: { id: userId }, select: { gridName: true } })
+  // Never on a team machine (lib/teamSession.ts): the grid is the person's inference endpoint, not teammates'.
+  const gridName = team ? null : (await prisma.user.findUnique({ where: { id: userId }, select: { gridName: true } })
     .catch(() => null))?.gridName ?? null
   send({ t: 'down', connId: '', frame: { type: 'machine_meta', payload: { name: currentName?.trim() || seededName, gridName } } })
 
@@ -332,6 +358,12 @@ async function attachAdapter(ws: WebSocket, machineId: string, userId: string, c
     offlineReason: 'remote computer offline',
     deliver: (msg) => {
       if (ws.readyState !== WebSocket.OPEN) return
+      // Its computer just turned itself into a team machine (lib/harnessSession.ts): a socket still connected under the
+      // old sign-in must not keep serving a machine marked `team`. Backend-only (`__`), never forwarded.
+      if ((msg.frame as { type?: string } | undefined)?.type === TEAM_CONVERTED_FRAME) {
+        if (!team) { try { ws.close(4009, 'now a team machine') } catch { /* ignore */ } }
+        return
+      }
       send({ t: 'down', connId: msg.connId, frame: msg.frame })
       // `machine_revoked` used to be pushed and nothing more, leaving the socket open and the machine
       // still serving if the client ignored it — an old CLI, a dropped frame. Close it ourselves right
@@ -462,7 +494,7 @@ async function attachAdapter(ws: WebSocket, machineId: string, userId: string, c
           send({ t: 'down', connId: '', frame: { type: 'devlog_append_result', payload: { requestId, error: 'RATE_LIMITED' } } })
           return
         }
-        void appendDeviceKey(userId, p.entry, { kind: 'machine', machineId, ...(harnessSessionId ? { harnessSessionId } : {}) })
+        void appendDeviceKey(userId, p.entry, { kind: 'machine', machineId, ...(harnessSessionId ? { harnessSessionId } : {}), ...(team ? { team } : {}) })
           .then((r) => send({ t: 'down', connId: '', frame: { type: 'devlog_append_result', payload: r.ok
             ? { requestId, head: r.head }
             : { requestId, error: r.code, ...('head' in r ? { head: r.head } : {}) } } }))
@@ -501,9 +533,12 @@ async function attachAdapter(ws: WebSocket, machineId: string, userId: string, c
         }
       }
       if (env.userEligible) {
-        void publishUserDeviceE2eePair(userId, machineId, env.frame).catch((err) => {
-          logger.warn('adapter user-level e2ee pair publish failed', { machineId, userId, error: String(err) })
-        })
+        // A team machine raises no notice on the person's apps: pairing a device with a machine is the person's to start.
+        if (!team) {
+          void publishUserDeviceE2eePair(userId, machineId, env.frame).catch((err) => {
+            logger.warn('adapter user-level e2ee pair publish failed', { machineId, userId, error: String(err) })
+          })
+        }
         if (env.webEligible === false && env.commanderEligible !== true && !env.targetConnId) return
       }
       // No originPid: the hub's Redis loopback must deliver to this instance's own web clients too

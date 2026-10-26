@@ -240,6 +240,17 @@ model Machine {
   // device-auth grant and refreshed on every adapter-ws connect, so `harness auth device` on the same
   // box reconnects to THAT machine instead of minting a second one. Null on rows that predate it.
   computerId                      String?
+  // How the computer signed in on its LAST adapter-ws connect: `team` for a team session (lib/teamSession.ts),
+  // a Mac's team account running teammates' Swarm agents; `computer` for any other sign-in. A `team` row taken
+  // over by a normal sign-in is set to `computer` before that socket attaches, so `team` never names a machine a
+  // normal sign-in serves. Null on rows that predate it (never a team machine). A team session acts only for a
+  // row marked `team`; Swarm routing reads it (Task 3 of docs/plans/2026-10-24-swarm-team-account.md).
+  sessionKind                     String?
+  // A team machine's Mac: the machineId of the owner's own machine on the computer whose Harness Team account this
+  // is, so every list shows that Mac once ("One machine" in docs/plans/2026-10-24-swarm-team-account.md). Copied from
+  // the team session (`HarnessSession.hostMachineId`) whenever that session registers its machine; nothing a team
+  // session sends sets it. Null for every other machine, a dedicated one (`harness team on`) included.
+  hostMachineId                   String?
   // Version string the CLIENT reported on its LAST adapter-ws connect (remote machines only) — the
   // client sends it as `?v=` and it is overwritten every time, so it reflects the most recent connect.
   // Self-declared and sanitized at the upgrade; null for a machine that never connected or a client
@@ -1032,9 +1043,30 @@ model SuperTabMessage {
   attachments     Json?
   replyTo         String?
   recipientIds    String[]
+  /// People a Lead tagged (superTabs/mentions.ts); absent on older rows.
+  mentions        String[]
   createdAt       DateTime @default(now())
 
   @@index([tabId, conversationId, sequence])
+}
+
+/// A Lead's tag of a person, waiting until they reply in that conversation or mark it done (superTabs/mentions.ts).
+/// Kept out of the tab state so an older backend still reads it; removed 30 days after createdAt by a TTL index.
+model SuperTabMention {
+  id             String    @id @map("_id")
+  tabId          String
+  personId       String
+  projectId      String
+  conversationId String
+  messageId      String
+  authorAgentId  String
+  createdAt      DateTime
+  resolvedAt     DateTime?
+  /// reply | done
+  resolvedBy     String?
+
+  @@index([tabId, personId, createdAt])
+  @@index([tabId, conversationId, personId])
 }
 
 /// One uploaded file, which one message of the actor that uploaded it can send once.
@@ -1295,7 +1327,14 @@ model HarnessSession {
   label       String
   /// `computer` — a computer signed in by a phone scanning its QR (lib/harnessSession.ts): it may
   /// connect AS a machine. Absent (every older row) or `viewer` — an app, which may not.
+  /// `team` — the daemon of a Mac's team account, minted by one of the account's computers
+  /// (lib/teamSession.ts): it may connect only as the machine of `computerId`, and do less than a computer.
   kind        String?
+  /// With `kind: team`: the computer it is bound to (normalized, lib/deviceAuth.ts:normalizeComputerId).
+  computerId  String?
+  /// With `kind: team`: the machine of the Mac whose team account this is, recorded when the code was minted
+  /// (routes/auth.ts) and copied onto the team machine (`Machine.hostMachineId`). Null for a dedicated machine.
+  hostMachineId String?
   createdAt   DateTime  @default(now())
   lastUsedAt  DateTime  @default(now())
   /// Slides forward on every refresh: a phone in use stays signed in, one left in a drawer does not.

@@ -8,16 +8,19 @@ export type SwarmRole = 'lead' | 'dev' | 'review'
 /** A Swarm project's skill set, which its owner chooses (2026-10-23): Default is the team process alone, Harness orchestration
  * adds Harness practices. A session saved without one launched before modes, on the orchestration text. */
 export type SwarmSkillMode = 'default' | 'orchestration'
-export interface SwarmSkill { role: SwarmRole; key: string; mode?: SwarmSkillMode }
+/** `github`: git and gh in this session use the Harness GitHub App's token for its task (lib/swarmGitHub.ts), set when a
+ *  start does another person's project work (superTabs/start.ts) and kept for every relaunch. */
+export interface SwarmSkill { role: SwarmRole; key: string; mode?: SwarmSkillMode; github?: true }
 /** What a session's current Swarm membership grants it, before it has a key. */
-export type SwarmSkillGrant = Omit<SwarmSkill, 'key'>
+export type SwarmSkillGrant = Omit<SwarmSkill, 'key' | 'github'>
 export const isSwarmRole = (value: unknown): value is SwarmRole => value === 'lead' || value === 'dev' || value === 'review'
 export const isSwarmSkillMode = (value: unknown): value is SwarmSkillMode => value === 'default' || value === 'orchestration'
 
 export function parseSwarmSkill(value: unknown): SwarmSkill | undefined {
   if (!value || typeof value !== 'object') return undefined
-  const { role, key, mode } = value as Partial<SwarmSkill>
-  return isSwarmRole(role) && typeof key === 'string' && key.length > 0 ? { role, key, ...(isSwarmSkillMode(mode) ? { mode } : {}) } : undefined
+  const { role, key, mode, github } = value as Partial<SwarmSkill>
+  return isSwarmRole(role) && typeof key === 'string' && key.length > 0
+    ? { role, key, ...(isSwarmSkillMode(mode) ? { mode } : {}), ...(github === true ? { github } : {}) } : undefined
 }
 
 /** The owner's texts, used verbatim. */
@@ -108,12 +111,14 @@ For large work, post the group plan and get the owner's ok before assigning; onc
 - Route each group before starting or assigning: difficulty, risk, size, why, needs. Use the pick, or override with a reason.
 - Match strength to work: mechanical → cheaper; integration and judgment → standard; design or subtle risk → strongest. A review is at least as strong as the build. Don't go below the standard tier for Reviewers, or for Builders working from prose; the cheapest models take more turns and end up costing more.
 - Reuse an idle agent before starting a new one. Start only on the Swarm's listed machines, from the branch the work builds on.
+- Local models: when the Swarm serves one (a member's model, a shared API, a model shared with a member), the route may pick it for low-difficulty, well-specified work; it costs no subscription. Set "local":true in the route only when a person asks for a local model. When a person names a model, set "model" to their words ("deepseek 4.1 flash"): the route then offers that model alone. Start the pick with the gridModel and gridName the route gives, never a model or effort.
 - The brief is all a Builder gets. Never pass your chat history; put everything needed in the brief.
 - Before assigning, look at other projects' active work; if your task touches the same code, say so in the Leads conversation and agree an order first.
 
 ## 7. Run the work
 - When a restart interrupts active work, read the recovery notice and its last recorded checkpoint, then check the agent’s actual session and saved work. Ask it to continue from that checkpoint and report working; either you or the assigned agent can clear the recovery block. Never replay old input or commands: they may already have taken effect. A delayed recording gap after fresh progress is not a new interruption. Keep work already in review in review while you inspect the session. Ordinary typed input, an expired recording view, a missing recorded prompt, or an unclassified gap from an older recorder does not establish that work was interrupted.
 - Needs-human: get the person's decision now.
+- When you need a person to act or decide, tag them in the message.
 - Blocked: change something. Give more context, re-route to a stronger model, cut the work smaller, or fix the plan. Never resend the same thing to the same model.
 - Rulings, not stalls: when a Builder hits an ambiguity you can settle, settle it and record "Ruling: what — why — cost if wrong". Ask the person only what changes what gets built.
 - Each time you are woken, look at active work. Ask a worker with active work that has said nothing for 20 minutes; reassign work that has not moved for 6 hours; report on-screen trust, sign-in or permission questions in chat, naming the machine owner who can answer.
@@ -382,6 +387,7 @@ Keep each Builder's list a few tasks deep; do the easy, self-contained parts fir
 
 ## 3. Route, start, assign
 - Route each group; reuse an idle agent before starting one; start only on the Swarm's machines.
+- Local models: the route may pick one for low-difficulty, well-specified work; set "local":true only when a person asks for one, set "model" to a model a person names, and start it with the route's gridModel and gridName.
 - The brief is all a Builder gets; never rely on chat history.
 - Before assigning, look at other projects' active work; if your task touches the same code, say so in the Leads conversation and agree an order first.
 
@@ -392,6 +398,7 @@ Keep each Builder's list a few tasks deep; do the easy, self-contained parts fir
 - A Builder or Reviewer that has been down for 2 hours (its machine offline, its session gone, or stopped): cancel its task with the reason, route it, and assign it to another agent with what the first one left (branch, last revision, last report).
 - Work with no progress for 6 hours goes back to you: reassign it or cut it smaller.
 - Needs a person: get the decision now. Blocked: change something (context, model, size or plan); never resend the same thing.
+- When you need a person to act or decide, tag them in the message.
 - Settle ambiguities you can and record "Ruling: what — why — cost if wrong".
 - When a worker finishes: reuse, keep or stop. Prefer stop.
 

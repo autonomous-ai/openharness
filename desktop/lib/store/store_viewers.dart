@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 
 import '../core/dsh_catalog.dart';
 import '../shared/theme/app_theme.dart' as grid;
+import 'store_host.dart';
 
 /// Shared packages are inspected here, separately from browsing harnesses.
 class StoreViewers extends StatelessWidget {
@@ -39,7 +40,9 @@ class StoreViewers extends StatelessWidget {
         const SizedBox(height: 24),
         if (viewers.isEmpty)
           Text(
-            loaded
+            storeRunsNoHarness(context)
+                ? kStoreOnAComputer
+                : loaded
                 ? 'No viewers reported by this computer.'
                 : 'Asking this computer…',
             style: TextStyle(color: grid.AppPalette.textSecondary),

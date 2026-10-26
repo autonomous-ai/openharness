@@ -365,12 +365,14 @@ async function authStatusCommand(json: boolean): Promise<void> {
     autonomousEnv: latest?.autonomousEnv,
     expiresAt: latest?.expiresAt,
     method: latest?.method ?? 'sso',
+    // A Harness Team sign-in (team/): this computer runs its own Swarm agents and reaches no other computer.
+    ...(latest?.kind ? { kind: latest.kind } : {}),
     // Read-only: a machine that has not signed in yet has no key, and asking must not make one.
     ...(fingerprintNow ? { fingerprint: fingerprintNow } : {}),
   }
   if (json) console.log(JSON.stringify(payload))
   else {
-    console.log(`\n  ${payload.loggedIn ? '✓ Signed in' : '✗ Not signed in'}${payload.machineId ? ` (machine ${payload.machineId})` : ''}${payload.loggedIn && payload.method === 'qr' ? ' — by your phone' : ''}\n`)
+    console.log(`\n  ${payload.loggedIn ? '✓ Signed in' : '✗ Not signed in'}${payload.machineId ? ` (machine ${payload.machineId})` : ''}${payload.loggedIn && payload.kind === 'team' ? ' — for team work only (harness team off undoes it)' : payload.loggedIn && payload.method === 'qr' ? ' — by your phone' : ''}\n`)
     // A session a phone approved is Harness's own, and billing's Autonomous service does not take it.
     // Say so where the person looks, not only when billing refuses. Grid is not named: it learns who
     // holds a Harness-issued sign-in from the Harness backend (autonomous-grid ADR 0046), and naming
@@ -2641,6 +2643,7 @@ async function logsExportCommand(json: boolean): Promise<void> {
 
 import { orchestratorCommand } from './orchestrator/command.js'
 import { superTabCommand } from './superTabs/command.js'
+import { gitCredentialCommand } from './superTabs/gitCredential.js'
 import { paneOwner, sendCommand } from './messages/command.js'
 import { agentOrigin, closeCommand, psCommand, replyCommand, showCommand, waitCommand, whoamiCommand } from './agentClient/commands.js'
 import { agentsHelp, helpFor } from './agentClient/help.js'
@@ -2723,6 +2726,10 @@ switch (cmd) {
     break
   case 'super-tab':
     superTabCommand(rest).then(code => { process.exitCode = code }).catch(onError)
+    break
+  case 'git-credential':
+    // git's credential helper in a Swarm agent's session (docs/swarm-github-app.md); git runs it, people do not.
+    gitCredentialCommand(rest).then(code => { process.exitCode = code }).catch(onError)
     break
   case 'login':
     // The result line goes out FIRST (loginCommand prints it), then the daemon is swapped onto the
@@ -2933,6 +2940,21 @@ switch (cmd) {
     break
   case 'service':
     serviceCommand(rest, serviceCommandDeps({ relaunch: () => launch(false), tildify }))
+      .then((code) => { process.exitCode = code }).catch(onError)
+    break
+  case 'team':
+    // Loaded only here (team/deps.ts). The daemon is stopped before a sign-in changes under it and started again on the
+    // new one; `launch` prints its status block and exits, so it is always the last step.
+    Promise.all([import('./team/command.js'), import('./team/deps.js')])
+      .then(([{ teamCommand }, { teamCommandDeps }]) => teamCommand(rest, teamCommandDeps({
+        stopDaemon: async () => (await stopDaemonOrExit()).pid !== null,
+        startDaemon: () => launch(false),
+        signIn: async (restart) => {
+          const outcome = await loginCommand(false, false, false, { method: 'ask' })
+          if (outcome.signedIn) await restartDaemonForIdentity(restart)
+          else if (restart) await launch(false)
+        },
+      })))
       .then((code) => { process.exitCode = code }).catch(onError)
     break
   case 'reset':

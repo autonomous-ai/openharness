@@ -131,6 +131,15 @@ describe('installing the helper', () => {
       .toEqual({ ok: false, code: 'FAILED', message: 'Sharing could not be set up on this computer.' })
   })
 
+  it('finds the script\'s reason after earlier lines, which osascript ends with CR', async () => {
+    // As macOS hands `do shell script`'s stderr back (seen in the VM rig, 24 Oct 2026): every line but the last ends in CR.
+    const stderr = '0:120: execution error: cp: /usr/local/lib/harness/x: Operation not permitted\r'
+      + 'harness: /usr/local is not owned by root (6)\n'
+    const failed = vi.fn<GuestRunner>(async () => ({ code: 1, stdout: '', stderr }))
+    expect(await installGuestHelper({ owner: 'ann', runner: failed, platform: 'darwin', nodeRuntimeDir: null, hookScript: null }))
+      .toEqual({ ok: false, code: 'FAILED', message: '/usr/local is not owned by root (6)' })
+  })
+
   it('uses pkexec on a Linux desktop and sudo in a terminal', async () => {
     const runner = vi.fn<GuestRunner>(async () => ok)
     expect(await installGuestHelper({ owner: 'ann', runner, platform: 'linux', graphical: true, nodeRuntimeDir: null, hookScript: null })).toEqual({ ok: true })

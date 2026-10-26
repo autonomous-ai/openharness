@@ -61,6 +61,23 @@ const LIMIT_LINE = /^[^A-Za-z]*(?:api error:\s*)?(?:claude\s+)?(?:(?:usage|5-hou
 const LIMIT_NEAR_LINES = 15
 const MONTHS = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec']
 
+/** An engine retrying a model that does not answer: Claude Code's "Waiting for API response · will retry in 2m 38s · check
+ *  your network" and its "API Error: 503 …", "Request timed out" or "Connection error", and Codex's "stream disconnected -
+ *  retrying" and "Reconnecting…". 2026-10-24: a Builder on a small local model retried for an hour, the relay giving up on
+ *  every answer, while its Lead waited on it. Only near the prompt, as a limit is. */
+const MODEL_LINE = /waiting for api response|api error:\s*(?:5\d\d|overloaded|request timed out|connection)|stream (?:error|disconnected)[^\n]*retrying|^\W*reconnecting\b/i
+/** Retries come and go on a busy model; ten minutes of them is a model the work cannot get answers from. */
+const MODEL_WAIT_MS = 10 * 60_000
+/** How long a screen must stay clear of retries before its model counts as answering again. Between retries the engine
+ *  shows a plain spinner for the minutes a new attempt takes: 2026-10-24, a Builder on Qwen3.6 35B, whose every answer the
+ *  relay had already dropped, read as answering on each attempt, so its ten minutes never ran out. */
+const MODEL_CLEAR_MS = 10 * 60_000
+
+/** Whether the screen shows its engine retrying its model. */
+export function modelFailing(text: string): boolean {
+  return text.split('\n').slice(-LIMIT_NEAR_LINES).some(line => MODEL_LINE.test(line))
+}
+
 /** A usage limit on screen, with when it resets if the screen says; null for none. */
 export function limitOf(text: string, now: number): { resetAt?: string } | null {
   const lines = text.split('\n')
@@ -95,7 +112,8 @@ function resetOf(said: string, now: number): number | null {
   return date.getTime()
 }
 
-interface Watched { prompt: { since: number; alerted: boolean } | null; limit: { since: number; alerted: boolean } | null }
+type Episode = { since: number; alerted: boolean } | null
+interface Watched { prompt: Episode; limit: Episode; model: Episode; retried?: number }
 
 export class TerminalHost {
   private nextServeAt = 0
@@ -179,14 +197,15 @@ export class TerminalHost {
     await backend(this.core, 'POST', `/api/super-tabs/${agent.tabId}/commands`, { operationId, asAgentId: agent.agentId, command })
   }
 
-  /** One alert per episode: a prompt waiting 3 minutes, or a usage limit on screen; each ended once it is gone. An alert
+  /** One alert per episode: a prompt waiting 3 minutes, a usage limit on screen, or its model failing for 10 minutes; each
+   *  ended once it is gone. An alert
    *  the backend did not take is tried again on the next read. */
   private async watch(own: Own[]): Promise<void> {
     const keys = new Set(own.map(a => `${a.tabId}:${a.agentId}`))
     for (const key of this.watched.keys()) if (!keys.has(key)) this.watched.delete(key)
     for (const agent of own) {
       const key = `${agent.tabId}:${agent.agentId}`
-      const state = this.watched.get(key) ?? { prompt: null, limit: null }
+      const state = this.watched.get(key) ?? { prompt: null, limit: null, model: null }
       this.watched.set(key, state)
       // A screen that could not be read says nothing either way.
       const read = await this.core.superTabs!.screen(agent.harnessId, 0).catch(() => null)
@@ -195,11 +214,14 @@ export class TerminalHost {
       state.prompt = await this.episode(agent, 'prompt', state.prompt, read.hold !== null && WAITING.has(read.hold), now, since => now - since >= PROMPT_WAIT_MS, {})
       const limit = limitOf(read.text, now)
       state.limit = await this.episode(agent, 'limit', state.limit, limit !== null, now, () => true, limit ?? {})
+      if (modelFailing(read.text)) state.retried = now
+      const retrying = state.retried !== undefined && now - state.retried < MODEL_CLEAR_MS
+      state.model = await this.episode(agent, 'model', state.model, retrying, now, since => now - since >= MODEL_WAIT_MS, {})
     }
   }
 
-  private async episode(agent: Own, alert: 'prompt' | 'limit', current: Watched['prompt'], seen: boolean, now: number,
-    due: (since: number) => boolean, extra: Json): Promise<Watched['prompt']> {
+  private async episode(agent: Own, alert: 'prompt' | 'limit' | 'model', current: Episode, seen: boolean, now: number,
+    due: (since: number) => boolean, extra: Json): Promise<Episode> {
     const episode = seen ? current ?? { since: now, alerted: false } : current
     if (!episode) return null
     if (seen === episode.alerted || (seen && !due(episode.since))) return seen ? episode : null

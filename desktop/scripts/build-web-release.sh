@@ -18,6 +18,29 @@ source_commit="$(git rev-parse HEAD)"
   --no-web-resources-cdn --base-href=/harness-web/ \
   --output=build/web-release --build-name="$version"
 
+# lucide_icons_flutter lists seven fonts and the browser fetches every one on first load, but
+# the app draws only weight 400 (lib/shared/theme/app_icons.dart): the other six are 1.5 MB
+# compressed. Dropped here, not in pubspec.yaml, so the Desktop bundle is unchanged.
+python3 - <<'PY'
+import json
+from pathlib import Path
+import sys
+
+package = 'packages/lucide_icons_flutter/'
+used = package + 'Lucide400'
+assets = Path('build/web-release/assets')
+manifest_path = assets / 'FontManifest.json'
+manifest = json.loads(manifest_path.read_text())
+if used not in {entry['family'] for entry in manifest}:
+    sys.exit(f'{used} is not in the font manifest; update the unused-font step in build-web-release.sh.')
+unused = [e for e in manifest if e['family'].startswith(package) and e['family'] != used]
+for entry in unused:
+    for font in entry['fonts']:
+        (assets / font['asset']).unlink()
+manifest_path.write_text(json.dumps([e for e in manifest if e not in unused], separators=(',', ':')))
+print(f"Dropped {len(unused)} unused icon fonts from the web release.")
+PY
+
 python3 - "$version" "$source_commit" <<'PY'
 import hashlib
 import json

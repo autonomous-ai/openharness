@@ -1,6 +1,6 @@
 // cli/src/superTabs/route.spec.ts
 import { describe, expect, it } from 'vitest'
-import { breaks, choose, decide, floorFor, parseAssessment, quotaOf2, rateFor, recordOf, repoMatch, type Assessment, type Commitment, type MemberFrame, type Policy, type Probe, type SwarmRule, type TaskFolder } from './route.js'
+import { API_BUILDERS, LOCAL_NONE, breaks, choose, decide, floorFor, parseAssessment, quotaOf2, rateFor, recordOf, repoMatch, type Assessment, type Commitment, type MemberFrame, type Policy, type Probe, type SwarmRule, type TaskFolder } from './route.js'
 
 const object = (v: unknown) => v as Record<string, unknown>
 
@@ -184,6 +184,15 @@ describe('strength, fit and effective cost', () => {
     const spent = route([on(SONNET, 'a', windows([90, 5 * H], [5, 7 * D]))], {})
     expect(spent.shown[0].fit).toMatchObject({ status: 'short', effectiveCost: 2 })
     expect(spent.short).toBe('No candidate is expected to cover this task; its weekly quota is expected to run out partway and resets in 7 days.')
+  })
+  it('a Codex account that has only a weekly window is read in full; a Claude one missing its 5-hour window is not', () => {
+    const CODEX = { engine: 'codex', model: 'default', effort: 'default', quality: 2, cost: 2 } as const
+    const weekly = quotaOf2({ known: true, windows: [{ usedPercent: 19, resetsAt: (NOW + 6 * D) / 1000, name: 'weekly' }] })
+    const r = route([on(CODEX, 'codex', weekly), on(SONNET, 'claude', windows([90, 3 * H], [80, 5 * D]))], { difficulty: 'low' })
+    expect(r.shown.map(s => [s.engine, s.fit.status])).toEqual([['claude', 'fits'], ['codex', 'fits']])
+    expect(r.excluded).toEqual([])
+    const half = route([on(SONNET, 'half', weekly), on(SONNET, 'claude', windows([90, 3 * H], [80, 5 * D]))], { difficulty: 'low' })
+    expect(half.excluded.map(e => e.title)).toEqual(['New agent · Claude sonnet medium · half'])
   })
   it('an engine on an API key is metered: it fits with no window, beside a subscription machine and ranked after it', () => {
     const metered = quotaOf2({ known: true, windows: [] })
@@ -485,5 +494,90 @@ describe('the owner\'s rules', () => {
     expect(parseAssessment({ difficulty: 'low', risk: 'low', why: 'x', kind: 'ui' })).toMatchObject({ kind: 'ui' })
     expect(parseAssessment({ difficulty: 'low', risk: 'low', why: 'x', kind: 'UI work' })).toContain('kind')
     expect(parseAssessment({ difficulty: 'low', risk: 'low', why: 'x' })).not.toHaveProperty('kind')
+  })
+})
+
+describe('local models on the Swarm\'s grid', () => {
+  const local = (patch: Partial<Probe> = {}) => probe({ model: 'default', effort: 'default', quality: 1, cost: 1, quota: { known: false, leftPercent: null, resetsAt: null },
+    gridModel: 'qwen3', gridName: 'swarm-0123456789ab', gridLabel: 'Qwen 3', ...patch })
+  it('reads local only as true, and leaves it out otherwise', () => {
+    expect(parseAssessment({ difficulty: 'low', risk: 'low', why: 'x', local: true })).toMatchObject({ local: true })
+    expect(parseAssessment({ difficulty: 'low', risk: 'low', why: 'x', local: false })).not.toHaveProperty('local')
+    expect(parseAssessment({ difficulty: 'low', risk: 'low', why: 'x', local: 'yes' })).toContain('local')
+  })
+  it('fits a local model on no subscription, names it as local and records where it is served', () => {
+    const r = ok(choose([local()], policy, a({ difficulty: 'low' }), NOW))
+    expect(r.shown[0]).toMatchObject({ title: 'New agent · Claude on Qwen 3 (local) · remote-1', fit: { status: 'fits', account: 'local:swarm-0123456789ab:qwen3' } })
+    expect(r.shown[0]!.label).toContain('Claude on Qwen 3 (local)')
+    expect((recordOf(r, decide(r), a(), policy) as { candidates: unknown[] }).candidates[0]).toMatchObject({ gridModel: 'qwen3', gridName: 'swarm-0123456789ab' })
+    // Without a name or a label: the model stands for both, and nothing about the grid is recorded without a grid.
+    const bare = ok(choose([local({ gridName: undefined, gridLabel: undefined })], policy, a({ difficulty: 'low' }), NOW))
+    expect(bare.shown[0]).toMatchObject({ title: 'New agent · Claude on qwen3 (local) · remote-1', fit: { account: 'local::qwen3' } })
+    expect((recordOf(bare, decide(bare), a(), policy) as { candidates: unknown[] }).candidates[0]).not.toHaveProperty('gridModel')
+  })
+  it('keeps a local model under the floor of a harder task, and keeps it beside a subscription row of the same name', () => {
+    const r = ok(choose([probe(), local()], policy, a(), NOW))
+    expect(r.shown.map(s => s.gridModel)).toEqual([undefined])
+    // Same machine, engine, model and effort as a subscription `default` row: both stay, being different models.
+    const both = ok(choose([probe({ model: 'default', effort: 'default', quality: 1, cost: 1, quota: windows([80, 3 * H], [90, 5 * D]) }), local()], policy, a({ difficulty: 'low' }), NOW))
+    expect(both.shown).toHaveLength(2)
+  })
+  it('considers only local models when a person asked for one, whatever the floor, and says when none is served', () => {
+    const r = ok(choose([probe({ model: 'opus', effort: 'high', quality: 3, cost: 3 }), local()], policy, a({ difficulty: 'high', local: true }), NOW))
+    expect(r.shown.map(s => s.gridModel)).toEqual(['qwen3'])
+    expect(r.belowFloor).toBe(false)
+    expect(choose([probe()], policy, a({ local: true }), NOW)).toEqual({ error: 'NO_CANDIDATE', excluded: [{ title: 'Local models', reason: LOCAL_NONE }] })
+  })
+
+  it('offers only the model a person named, whatever its strength, and says when nothing runs it', () => {
+    const api = local({ gridModel: 'deepseek/deepseek-v4.1-flash-1017', gridLabel: 'deepseek/deepseek-v4.1-flash-1017 · OpenRouter', gridKind: 'api' })
+    const older = local({ gridModel: 'DeepSeek-V4-Flash-0731', gridLabel: undefined, gridKind: 'shared' })
+    const opus = probe({ model: 'opus', effort: 'high', quality: 3, cost: 3, quota: windows([80, 3 * H], [90, 5 * D]) })
+    const r = ok(choose([opus, older, api], policy, a({ difficulty: 'high', model: 'deepseek 4.1 flash' }), NOW))
+    expect(r.shown.map(s => s.gridModel)).toEqual(['deepseek/deepseek-v4.1-flash-1017'])
+    expect(r.shown[0]!.title).toBe('New agent · Claude on deepseek/deepseek-v4.1-flash-1017 · OpenRouter (API) · remote-1')
+    expect(r.belowFloor).toBe(false)
+    // A subscription model by name, and the engine's name counts as one of its words.
+    expect(ok(choose([opus, api], policy, a({ model: 'Claude Opus' }), NOW)).shown.map(s => s.model)).toEqual(['opus'])
+    expect(ok(choose([older], policy, a({ difficulty: 'low' }), NOW)).shown[0]!.title).toContain('(shared)')
+    expect(choose([opus], policy, a({ model: 'gpt 9' }), NOW)).toEqual({ error: 'NO_CANDIDATE',
+      excluded: [{ title: 'Named model', reason: 'No candidate runs "gpt 9". Share it with the Swarm (Manage models), or check its name.' }] })
+    expect(parseAssessment({ difficulty: 'low', risk: 'low', why: 'x', model: ' deepseek 4.1 flash ' })).toMatchObject({ model: 'deepseek 4.1 flash' })
+    expect(parseAssessment({ difficulty: 'low', risk: 'low', why: 'x', model: '...' })).toContain('model')
+    expect(parseAssessment({ difficulty: 'low', risk: 'low', why: 'x', model: 7 })).toContain('model')
+    expect(parseAssessment({ difficulty: 'low', risk: 'low', why: 'x', model: 'x'.repeat(201) })).toContain('model')
+  })
+
+  it('puts a model that runs on a machine before an API or another grid\'s model, at equal cost and strength', () => {
+    const api = local({ gridModel: 'aaa-api', gridLabel: 'aaa-api', gridKind: 'api' })
+    const shared = local({ gridModel: 'aab-shared', gridLabel: 'aab-shared', gridKind: 'shared' })
+    const engine = local({ gridModel: 'zzz-llama', gridLabel: 'zzz-llama', gridKind: 'local' })
+    expect(ok(choose([api, shared, engine], policy, a({ local: true }), NOW)).shown.map(s => s.gridModel)).toEqual(['zzz-llama', 'aaa-api', 'aab-shared'])
+    // A model with no kind runs on the Swarm's grid, as an engine does.
+    const bare = local({ gridModel: 'zzz-bare', gridLabel: 'zzz-bare', gridKind: undefined })
+    expect(ok(choose([api, bare], policy, a({ local: true }), NOW)).shown.map(s => s.gridModel)).toEqual(['zzz-bare', 'aaa-api'])
+  })
+
+  it('offers the Builder already on a named model, and says who holds a named or local model it cannot offer', () => {
+    // A member running the named model is a candidate like any other.
+    const wren = probe({ kind: 'member', agentId: 'wren', name: 'Wren', model: 'deepseek/deepseek-v4.1-flash-1017', effort: 'xhigh', quality: 1, cost: 1 })
+    expect(ok(choose([probe(), wren], policy, a({ model: 'deepseek 4.1 flash' }), NOW)).shown.map(s => s.agentId)).toEqual(['wren'])
+    const ds = { model: 'deepseek/deepseek-v4.1-flash-1017', label: 'deepseek/deepseek-v4.1-flash-1017 · OpenRouter', kind: 'api' as const, holders: ['Wren', 'Ada', 'Bo', 'Cy'] }
+    const qwen = { model: 'qwen3:4b', label: 'Qwen 3 4B', kind: 'local' as const, holders: ['Faye'] }
+    expect(choose([probe()], policy, a({ model: 'deepseek 4.1 flash' }), NOW, [], [], [qwen, ds])).toEqual({ error: 'NO_CANDIDATE', excluded: [{ title: 'Named model',
+      reason: `"deepseek/deepseek-v4.1-flash-1017 · OpenRouter" is shared with the Swarm, but Builders Wren, Ada, Bo and Cy are on it: an API model takes ${API_BUILDERS} Builders at a time. Assign the work to one of them once it is free, or stop one to free the model.` }] })
+    // A name nothing holds still reads as not shared.
+    expect(choose([probe()], policy, a({ model: 'gpt 9' }), NOW, [], [], [qwen])).toMatchObject({ excluded: [{ reason: expect.stringContaining('No candidate runs "gpt 9"') }] })
+    expect(choose([probe()], policy, a({ local: true }), NOW, [], [], [qwen])).toEqual({ error: 'NO_CANDIDATE', excluded: [{ title: 'Local models',
+      reason: '"Qwen 3 4B" is shared with the Swarm, but Builder Faye is on it: a local model serves one Builder at a time. Assign the work to that Builder once it is free, or stop it to free the model.' }] })
+    expect(LOCAL_NONE).toContain('Manage models')
+  })
+
+  it('says why a named model the Swarm has is never offered to Builders, rather than to share it', () => {
+    const llama = { model: 'llama3.2:3b', label: 'llama3.2:3b', kind: 'local' as const, holders: [],
+      refused: 'llama3.2:3b is too small for a coding agent (about 3B parameters; Builders need 7B or more).' }
+    const reason = '"llama3.2:3b" is shared with the Swarm, but Builders are not offered it: llama3.2:3b is too small for a coding agent (about 3B parameters; Builders need 7B or more). Ask a member to run a larger model, or share an API (Manage models).'
+    expect(choose([probe()], policy, a({ model: 'llama 3.2 3b' }), NOW, [], [], [llama])).toEqual({ error: 'NO_CANDIDATE', excluded: [{ title: 'Named model', reason }] })
+    expect(choose([probe()], policy, a({ local: true }), NOW, [], [], [llama])).toEqual({ error: 'NO_CANDIDATE', excluded: [{ title: 'Local models', reason }] })
   })
 })

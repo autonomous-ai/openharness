@@ -188,7 +188,9 @@ class SuperTabSnapshot {
         row['invitations'],
         (row) => Map<String, dynamic>.unmodifiable(row),
       ),
-      leadsConversationId = row['leadsConversationId'] as String? {
+      leadsConversationId = row['leadsConversationId'] as String?,
+      localModels = SuperTabLocalModels.read(row['localModels']),
+      mentionsWaiting = (row['mentionsWaiting'] as num?)?.toInt() ?? 0 {
     if (row['version'] != 1) {
       throw const FormatException('Update Harness to open this Swarm.');
     }
@@ -222,6 +224,13 @@ class SuperTabSnapshot {
   /// Where the projects' Product Managers talk, Swarm-wide; null in a Swarm
   /// from before it (spec 2026-10-23-leads-see-and-talk.md).
   final String? leadsConversationId;
+
+  /// The Local models add-on, once the owner has turned it on; null before.
+  final SuperTabLocalModels? localModels;
+
+  /// The reader's tags still waiting for them, Swarm-wide; 0 from a backend
+  /// before tags (spec 2026-10-24-lead-mentions.md).
+  final int mentionsWaiting;
   SuperTabConversation? conversation(String id) =>
       conversations.where((c) => c.id == id).firstOrNull;
   SuperTabAgent? agent(String id) =>
@@ -274,11 +283,170 @@ class SuperTabSnapshot {
   String agentName(String id, {String fallback = 'Agent'}) =>
       agent(id)?.displayName ?? agent(id)?.name ?? fallback;
 
+  /// [machineId]'s contribution to this Swarm, if it has one.
+  Map<String, dynamic>? pool(String machineId) =>
+      machines.where((m) => m['machineId'] == machineId).firstOrNull;
+
+  /// The Mac a Harness Team account's pool is part of: the machine its pool names as `hostMachineId` (stamped by the
+  /// backend), while that Mac is in this Swarm too, from the same person (docs/plans/2026-10-24-swarm-team-account.md).
+  /// Null for every other pool, a machine used only for agents included.
+  String? _macOf(Map<String, dynamic>? team) {
+    final host = team?['hostMachineId'];
+    if (host is! String || host == team!['machineId']) return null;
+    final mac = pool(host);
+    return mac != null &&
+            mac['hostMachineId'] == null &&
+            mac['contributorId'] == team['contributorId']
+        ? host
+        : null;
+  }
+
+  /// Every Harness Team account's pool in [machineId]'s row: one, or more once the account was set up again and its old
+  /// pool is still listed (backend superTabs/machines.ts `teamPoolsOf`). The backend changes them with the Mac.
+  List<Map<String, dynamic>> teamPoolsOf(String machineId) => [
+    for (final m in machines)
+      if (_macOf(m) == machineId) m,
+  ];
+
+  /// The one of them that runs teammates' work on the Mac: not being removed, and the last to report (backend
+  /// superTabs/machines.ts `teamPoolOf`). Null when there is none.
+  Map<String, dynamic>? teamPoolOf(String machineId) {
+    num reported(Map<String, dynamic> m) => switch (m['observation']) {
+      {'receivedAt': final num at} => at,
+      _ => -1,
+    };
+    Map<String, dynamic>? best;
+    for (final m in teamPoolsOf(machineId)) {
+      if (m['removal'] != null) continue;
+      if (best == null || reported(m) >= reported(best)) best = m;
+    }
+    return best;
+  }
+
+  /// The machine [machineId] is shown as in this Swarm, one row per computer: the Mac, for its Harness Team account
+  /// while that Mac is in the Swarm too; [machineId] itself otherwise.
+  String placeOf(String machineId) => _macOf(pool(machineId)) ?? machineId;
+
+  /// Whether more than one person can start work here: teammates' agents are a question only then.
+  bool get hasTeammates => people.where((p) => p.role != 'viewer').length > 1;
+
   // Resolve the person shown in chat from the same identity as the roster.
   // Recorded labels remain the fallback for agents no longer in the Swarm.
   String authorName(SuperTabMessage message) => message.fromAgent
       ? agentName(message.authorId, fallback: message.authorName)
       : message.authorName;
+}
+
+/// The Swarm's Local models add-on (docs/plans/2026-10-23-swarm-local-models.md): its grid, whether it is on, and what the
+/// owner's computer last reported about setting the grid up (`ready` null until it has).
+class SuperTabLocalModels {
+  const SuperTabLocalModels({
+    required this.grid,
+    required this.enabled,
+    this.ready,
+    this.error,
+  });
+
+  static SuperTabLocalModels? read(Object? value) {
+    if (value is! Map || value['grid'] is! String) return null;
+    return SuperTabLocalModels(
+      grid: value['grid'] as String,
+      enabled: value['enabled'] == true,
+      ready: value['ready'] is bool ? value['ready'] as bool : null,
+      error: value['error'] is String ? value['error'] as String : null,
+    );
+  }
+
+  final String grid;
+  final bool enabled;
+  final bool? ready;
+  final String? error;
+}
+
+/// One model the Swarm can start Builders on now, as a machine's fresh reading says: on the Swarm's grid (`local`, a
+/// member's engine; `api`, an API a member shares), usable from any machine; or shared with the machine's owner and
+/// offered by them (`shared`), usable on that machine alone.
+typedef SuperTabLocalModelRow = ({
+  String grid,
+  String model,
+  String name,
+  String machine,
+  String kind,
+});
+
+/// Every model the Swarm can use now, once each, from the machines' fresh readings (backend `MACHINE_FRESH_MS`).
+List<SuperTabLocalModelRow> superTabLocalModelRows(
+  SuperTabSnapshot? snapshot, {
+  required DateTime now,
+  Duration freshFor = const Duration(seconds: 45),
+}) {
+  final local = snapshot?.localModels;
+  if (local == null || !local.enabled) return const [];
+  final rows = <SuperTabLocalModelRow>[];
+  for (final pool in snapshot!.machines) {
+    final observation = pool['observation'];
+    if (observation is! Map) continue;
+    final at = observation['receivedAt'];
+    if (at is! num ||
+        now.difference(DateTime.fromMillisecondsSinceEpoch(at.toInt())) >
+            freshFor) {
+      continue;
+    }
+    for (final m
+        in observation['localModels'] is List
+            ? observation['localModels'] as List
+            : const []) {
+      if (m is! Map || m['grid'] is! String || m['model'] is! String) continue;
+      final grid = m['grid'] as String, model = m['model'] as String;
+      if (rows.any((r) => r.grid == grid && r.model == model)) continue;
+      rows.add((
+        grid: grid,
+        model: model,
+        name: m['name'] is String ? m['name'] as String : model,
+        machine: pool['name'] as String? ?? 'A machine',
+        kind: m['kind'] is String
+            ? m['kind'] as String
+            : grid == local.grid
+            ? 'local'
+            : 'shared',
+      ));
+    }
+  }
+  return rows;
+}
+
+/// One model a machine serves on the Swarm's grid, as its last reading says.
+typedef SuperTabServedModel = ({String model, String name});
+
+/// The models [pool]'s reading says it serves on [grid]. A reading older than [freshFor] says nothing (backend
+/// `MACHINE_FRESH_MS`), as the route reads it.
+List<SuperTabServedModel> superTabServedModels(
+  Map<String, dynamic>? pool,
+  String grid, {
+  required DateTime now,
+  Duration freshFor = const Duration(seconds: 45),
+}) {
+  final observation = pool?['observation'];
+  if (observation is! Map) return const [];
+  final at = observation['receivedAt'];
+  if (at is! num ||
+      now.difference(DateTime.fromMillisecondsSinceEpoch(at.toInt())) >
+          freshFor) {
+    return const [];
+  }
+  return [
+    for (final m
+        in observation['localModels'] is List
+            ? observation['localModels'] as List
+            : const [])
+      if (m is Map && m['grid'] == grid && m['model'] is String)
+        (
+          model: m['model'] as String,
+          name: m['name'] is String
+              ? m['name'] as String
+              : m['model'] as String,
+        ),
+  ];
 }
 
 class SuperTabRouteChoice {
@@ -415,6 +583,9 @@ class SuperTabMessage {
       source = Map.unmodifiable(superTabMap(row['source'] ?? const {})),
       createdAt = DateTime.tryParse(row['createdAt'] as String? ?? ''),
       attachments = _attachments(row['attachments']),
+      mentions = List.unmodifiable(
+        (row['mentions'] as List?)?.whereType<String>() ?? const <String>[],
+      ),
       deliveries = _list(
         row['deliveries'] ?? const [],
         (d) => Map<String, dynamic>.unmodifiable(d),
@@ -426,6 +597,9 @@ class SuperTabMessage {
   final Map<String, dynamic> source;
   final DateTime? createdAt;
   final List<SuperTabAttachment> attachments;
+
+  /// The people a Lead tagged in this message, by person id.
+  final List<String> mentions;
   final List<Map<String, dynamic>> deliveries;
   // Preserve the recorded identity for history and for removed agents. Views
   // with a current roster resolve the visible name through Snapshot.authorName.

@@ -5,11 +5,12 @@ import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { RegisteredSession } from '../lib/registry.js'
 import { fakeCore } from '../testing/fakeCore.js'
-import { ContributedMachines, swarmWorktreesFile } from './machines.js'
+import { apisOn, ContributedMachines, liveOn, offered, refusedOn, servedOn, sharedWith, swarmWorktreesFile } from './machines.js'
 import { SuperTabHostError } from './host.js'
 import { startAgent } from './start.js'
+import type { PrivacyObservation } from '../team/privacy.js'
 
-function fixture(env: NodeJS.ProcessEnv = {}) {
+function fixture(env: NodeJS.ProcessEnv = {}, privacy: () => PrivacyObservation | null = () => null) {
   let now = 1000
   const core = fakeCore({ dataDir: '/isolated-pool-fixture', agents: {
     byAgent: vi.fn(id => id === 'running' ? { agentId: id } as never : undefined),
@@ -25,7 +26,7 @@ function fixture(env: NodeJS.ProcessEnv = {}) {
   const start = vi.fn(async () => ({ ok: true }))
   const prepare = vi.fn(async () => {})
   const log = vi.fn()
-  const machine = new ContributedMachines(core, 'host', { backend, open, capabilities, start, prepare, log, env, now: () => now } as never)
+  const machine = new ContributedMachines(core, 'host', { backend, open, capabilities, start, prepare, log, env, privacy, now: () => now } as never)
   return { machine, pool, core, backend, open, request, close, capabilities, start, prepare, log, advance: () => { now += 16000 }, step: (ms: number) => { now += ms } }
 }
 
@@ -77,6 +78,32 @@ describe('contributed machine executor', () => {
     await f.machine.tick()
     expect(f.prepare).toHaveBeenCalledTimes(2)
     expect(f.start).toHaveBeenCalledTimes(2)
+  })
+  it('starts another person\'s work with the app for whom it is, and fails a start whose token cannot be had', async () => {
+    const f = fixture()
+    f.prepare.mockResolvedValueOnce({ requester: 'olive@example.com' } as never)
+    await f.machine.tick()
+    expect((f.start.mock.calls as unknown[][])[0]![0]).toEqual({ tabId: 'tab', startId: 'start', hostDispatch: true, github: { requester: 'olive@example.com' } })
+    f.prepare.mockRejectedValueOnce(new Error('This machine could not get a Harness GitHub App token for this project'))
+    f.advance()
+    await f.machine.tick()
+    expect(f.start).toHaveBeenCalledTimes(1)
+    const failed = f.backend.mock.calls.find(c => JSON.stringify(c[3] ?? {}).includes('could not get a Harness GitHub App token'))!
+    expect(failed[3]).toMatchObject({ command: { type: 'agent.startFailed', startId: 'start' } })
+  })
+  it('readies a start with the backend, as a team account when this daemon runs team work only', async () => {
+    for (const team of [false, true]) {
+      const f = fixture()
+      const machine = new ContributedMachines(f.core, 'host', { backend: f.backend, open: f.open, capabilities: f.capabilities, start: f.start,
+        log: f.log, env: {}, privacy: () => null, team: () => team, now: () => 1000 } as never)
+      Object.assign(f.pool, { githubApp: true })
+      f.backend.mockImplementation(async (_core: unknown, _method: string, path: string): Promise<unknown> => path.endsWith('/pools') ? [f.pool]
+        : path.endsWith('/github-token') ? { github: false } : { revision: 1 })
+      await machine.tick()
+      const asked = f.backend.mock.calls.find(c => String(c[2]).endsWith('/github-token'))!
+      expect(asked[3]).toEqual(team ? { always: true } : {})
+      expect(f.start).toHaveBeenCalledTimes(team ? 0 : 1)
+    }
   })
   it('publishes only scoped measurements and executes through the owner start endpoint', async () => {
     const f = fixture()
@@ -153,6 +180,237 @@ describe('contributed machine executor', () => {
     expect(posts).toHaveLength(2)
     expect(posts[0]![3]).toHaveProperty('toolProbeErrors')
     expect(posts[1]![3]).not.toHaveProperty('toolProbeErrors')
+  })
+
+  it('lists the models it serves on the Swarm\'s grid only while the add-on is on, and drops them for an older backend', async () => {
+    const GRID = 'swarm-0123456789ab'
+    const f = fixture()
+    await f.machine.tick()
+    const local = (await f.open.mock.results[0]!.value) as { request: ReturnType<typeof vi.fn> }
+    expect(local.request.mock.calls.some(c => c[0] === 'grid_fleet_models_list')).toBe(false)
+    expect(f.backend.mock.calls.find(c => c[1] === 'POST')![3]).not.toHaveProperty('localModels')
+    Object.assign(f.pool, { localGrid: GRID })
+    local.request.mockImplementation((async (type: string) => type === 'grid_fleet_models_list'
+      ? { models: [{ name: 'Qwen 3', contextWindow: 32768, servedOn: [{ grid: GRID, servedAs: ['qwen3'] }] }] } : { providers: [] }) as never)
+    f.advance(); await f.machine.tick()
+    expect(f.backend.mock.calls.filter(c => c[1] === 'POST').at(-1)![3]).toMatchObject({ localModels: [{ grid: GRID, model: 'qwen3', name: 'Qwen 3', contextWindow: 32768, kind: 'local' }] })
+    expect(f.backend.mock.calls.filter(c => c[1] === 'POST').at(-1)![3]).not.toHaveProperty('refusedModels')
+    // A model too small for Builders is reported apart, with why; an older backend that refuses the field gets it without.
+    local.request.mockImplementation((async (type: string) => type === 'grid_fleet_models_list'
+      ? { models: [{ name: 'llama3.2:3b', servedOn: [{ grid: GRID, servedAs: ['llama3.2:3b'] }] }] } : { providers: [] }) as never)
+    const before = f.backend.getMockImplementation()!
+    f.backend.mockImplementation(async (core, method, path, body) => {
+      if (method === 'POST' && (body as Record<string, unknown>)?.refusedModels) throw new SuperTabHostError('VALIDATION_ERROR', 'Unrecognized key: refusedModels', 400)
+      return before(core, method, path, body)
+    })
+    f.advance(); await f.machine.tick()
+    const refusedPosts = f.backend.mock.calls.filter(c => c[1] === 'POST')
+    expect(refusedPosts.at(-2)![3]).toMatchObject({ localModels: [], refusedModels: [{ grid: GRID, model: 'llama3.2:3b', name: 'llama3.2:3b', why: expect.stringContaining('too small') }] })
+    expect(refusedPosts.at(-1)![3]).not.toHaveProperty('refusedModels')
+    f.backend.mockImplementation(before)
+    // A failed read serves nothing; an older backend that refuses the field gets the observation without it.
+    local.request.mockImplementation((async (type: string) => { if (type === 'grid_fleet_models_list') throw new Error('timeout'); return { providers: [] } }) as never)
+    const original = f.backend.getMockImplementation()!
+    f.backend.mockImplementation(async (core, method, path, body) => {
+      if (method === 'POST' && (body as Record<string, unknown>)?.localModels) throw new SuperTabHostError('VALIDATION_ERROR', 'Unrecognized key: localModels', 400)
+      return original(core, method, path, body)
+    })
+    f.advance(); await f.machine.tick()
+    const posts = f.backend.mock.calls.filter(c => c[1] === 'POST')
+    expect(posts.at(-2)![3]).toMatchObject({ localModels: [] })
+    expect(posts.at(-1)![3]).not.toHaveProperty('localModels')
+  })
+  it('adds the APIs it shares on the Swarm\'s grid and the models shared with its owner, and reads other grids once a minute', async () => {
+    const GRID = 'swarm-0123456789ab'
+    const f = fixture()
+    Object.assign(f.pool, { localGrid: GRID })
+    await f.machine.tick()
+    const local = (await f.open.mock.results[0]!.value) as { request: ReturnType<typeof vi.fn> }
+    local.request.mockImplementation((async (type: string) => type === 'grid_swarm_api_shares'
+      ? { shares: [{ grid: GRID, connectionId: 'c1', model: 'deepseek/deepseek-chat', name: 'OpenRouter' }] }
+      : type === 'grid_swarm_offers' ? { offers: [{ grid: GRID, sharedGrid: 'team-grid', model: 'qwen3-30b' }] }
+      : type === 'grid_models_list' ? { grids: [{ name: 'team-grid', models: [{ id: 'qwen3-30b' }, { id: 'not-offered' }] }] } : { providers: [] }) as never)
+    f.advance(); await f.machine.tick()
+    expect(f.backend.mock.calls.filter(c => c[1] === 'POST').at(-1)![3]).toMatchObject({ localModels: [
+      { grid: GRID, model: 'deepseek/deepseek-chat', name: 'deepseek/deepseek-chat · OpenRouter', kind: 'api' },
+      { grid: 'team-grid', model: 'qwen3-30b', kind: 'shared' },
+    ] })
+    const reads = () => local.request.mock.calls.filter(c => c[0] === 'grid_models_list').length
+    const before = reads()
+    f.advance(); await f.machine.tick()
+    expect(reads()).toBe(before)
+    f.step(60_000); await f.machine.tick()
+    expect(reads()).toBe(before + 1)
+  })
+  it('reports what it serves on the Swarm\'s grid only while the grid lists it, and everything when the grid is unread', async () => {
+    const GRID = 'swarm-0123456789ab'
+    const f = fixture()
+    Object.assign(f.pool, { localGrid: GRID })
+    await f.machine.tick()
+    const local = (await f.open.mock.results[0]!.value) as { request: ReturnType<typeof vi.fn> }
+    let heal: unknown = { live: ['qwen3'], missing: ['deepseek/deepseek-chat'] }
+    local.request.mockImplementation((async (type: string) => type === 'grid_swarm_api_shares'
+      ? { shares: [{ grid: GRID, connectionId: 'c1', model: 'deepseek/deepseek-chat' }] }
+      : type === 'grid_fleet_models_list' ? { models: [{ servedOn: [{ grid: GRID, servedAs: ['qwen3'] }] }] }
+      : type === 'grid_swarm_heal' ? heal : { providers: [] }) as never)
+    const reported = async () => { f.advance(); await f.machine.tick(); return (f.backend.mock.calls.filter(c => c[1] === 'POST').at(-1)![3] as { localModels: Array<{ model: string }> }).localModels.map(m => m.model) }
+    expect(await reported()).toEqual(['qwen3'])
+    expect(local.request).toHaveBeenCalledWith('grid_swarm_heal', { grid: GRID }, 30_000)
+    heal = { live: null, missing: [] }
+    expect(await reported()).toEqual(['qwen3', 'deepseek/deepseek-chat'])
+    heal = Promise.reject(new Error('older daemon'))
+    expect(await reported()).toEqual(['qwen3', 'deepseek/deepseek-chat'])
+  })
+  it('reads the models a heal answer says are live', () => {
+    expect(liveOn({ live: ['a', 7, 'b'] })).toEqual(new Set(['a', 'b']))
+    expect(liveOn({ live: null })).toBeNull()
+    expect(liveOn(null)).toBeNull()
+  })
+  it('keeps of the models shared with its owner only those they offer', () => {
+    const shared = [{ grid: 'team', model: 'a', kind: 'shared' as const }, { grid: 'team', model: 'b', kind: 'shared' as const }]
+    expect(offered(shared, { offers: [{ sharedGrid: 'team', model: 'b' }] })).toEqual([shared[1]])
+    expect(offered(shared, null)).toEqual([])
+  })
+  it('reads only live models of grids other than Swarms\', once each, and shared APIs of this Swarm alone', () => {
+    const GRID = 'swarm-0123456789ab'
+    expect(sharedWith(null, GRID)).toEqual([])
+    expect(sharedWith({ grids: [
+      { name: GRID, models: [{ id: 'mine' }] }, { name: 'swarm-ffffffffffff', models: [{ id: 'theirs' }] },
+      { name: 'team', models: [{ id: 'a' }, { id: 'a' }, { id: 'down', unavailable: { reason: 'offline' } }, { id: 7 }, { id: '' }] },
+      { name: 7, models: [{ id: 'b' }] }, { name: 'x'.repeat(161), models: [{ id: 'c' }] },
+    ] }, GRID)).toEqual([{ grid: 'team', model: 'a', kind: 'shared' }])
+    expect(apisOn({ shares: [{ grid: GRID, model: 'm' }, { grid: 'other', model: 'n' }, { grid: GRID, model: '' }, { grid: GRID, model: 'x'.repeat(201) }] }, GRID))
+      .toEqual([{ grid: GRID, model: 'm', kind: 'api' }])
+    expect(apisOn(null, GRID)).toEqual([])
+  })
+  it('leaves out a served model too small or too slow for a coding agent', () => {
+    const GRID = 'swarm-0123456789ab'
+    const on = (servedAs: string, more: Record<string, unknown> = {}) => ({ ...more, servedOn: [{ grid: GRID, servedAs: [servedAs] }] })
+    expect(servedOn({ models: [
+      on('llama3.2:3b', { name: 'llama3.2:3b', sizeBytes: 2e9 }), on('Qwen3-4B'), on('slow', { name: 'Qwen3.6-35B-A3B', estTokS: 3 }),
+      on('fast', { name: 'Qwen3.6-35B-A3B', estTokS: 3, tokensPerSecond: 40, paramsB: 35, quant: 'Q4_K_M' }), on('gemma', { name: 'gemma-4-E2B-it', sizeBytes: 3.2e9 }),
+    ] }, GRID).map(m => m.model)).toEqual(['fast'])
+    // What is left out is reported with why, so a Lead asked for it hears that rather than to share it.
+    expect(refusedOn({ models: [on('llama3.2:3b', { name: 'llama3.2:3b', sizeBytes: 2e9 }), on('Qwen3-4B'), on('fast', { paramsB: 35, tokensPerSecond: 40 })] }, GRID)).toEqual([
+      { grid: GRID, model: 'llama3.2:3b', name: 'llama3.2:3b', why: 'llama3.2:3b is too small for a coding agent (about 3B parameters; Builders need 7B or more).' },
+      { grid: GRID, model: 'Qwen3-4B', why: 'Qwen3-4B is too small for a coding agent (about 4B parameters; Builders need 7B or more).' },
+    ])
+    expect(refusedOn(null, GRID)).toEqual([])
+  })
+  it('reads a served model by the first name grid lists it under, and keeps sixteen at most', () => {
+    const GRID = 'swarm-0123456789ab'
+    expect(servedOn(null, GRID)).toEqual([])
+    expect(servedOn({ models: [
+      { name: 7, contextWindow: 1.5, servedOn: [{ grid: 'other', servedAs: ['elsewhere'] }, { grid: GRID, servedAs: ['', 9, 'qwen3'] }] },
+      { servedOn: [{ grid: GRID, servedAs: 'qwen3' }] }, { servedOn: [{ grid: GRID, servedAs: ['x'.repeat(201)] }] }, { contextWindow: -1, servedOn: [{ grid: GRID }] },
+    ] }, GRID)).toEqual([{ grid: GRID, model: 'qwen3', kind: 'local' }])
+    const many = { models: Array.from({ length: 20 }, (_, i) => ({ name: 'n'.repeat(300), servedOn: [{ grid: GRID, servedAs: [`m${i}`] }] })) }
+    const read = servedOn(many, GRID)
+    expect(read).toHaveLength(16)
+    expect(read[0]!.name).toHaveLength(200)
+  })
+
+  // The Harness Team account (cli/src/team/): its daemon reports its privacy check with the reading, and refuses new
+  // work while it fails, besides routing (Task 3) not sending it any.
+  describe('Harness Team privacy', () => {
+    const passed: PrivacyObservation = { mode: 'account', passed: true, checkedAt: 900 }
+    const exposed: PrivacyObservation = { mode: 'account', passed: false, item: 'gitconfig', detail: 'The team account could read ~/.gitconfig.', checkedAt: 900 }
+    const posts = (f: ReturnType<typeof fixture>) => f.backend.mock.calls.filter(c => c[1] === 'POST' && String(c[2]).includes('/machines/')).map(c => c[3] as Record<string, unknown>)
+
+    it('sends the check with the reading, and nothing from the owner\'s own daemon', async () => {
+      const team = fixture({}, () => passed)
+      await team.machine.tick()
+      expect(posts(team)[0]).toMatchObject({ privacy: passed })
+      expect(team.start).toHaveBeenCalledOnce()
+      const owner = fixture()
+      await owner.machine.tick()
+      expect(posts(owner)[0]).not.toHaveProperty('privacy')
+      const dedicated = fixture({}, () => ({ mode: 'dedicated' }))
+      await dedicated.machine.tick()
+      expect(posts(dedicated)[0]).toMatchObject({ privacy: { mode: 'dedicated' } })
+      expect(dedicated.start).toHaveBeenCalledOnce()
+    })
+
+    it('refuses a new start while the team account is not private, and never starts it anywhere else', async () => {
+      const f = fixture({}, () => exposed)
+      await f.machine.tick()
+      expect(f.start).not.toHaveBeenCalled()
+      const refusal = f.backend.mock.calls.find(c => String(c[2]).endsWith('/starts/tab/start'))![3] as { operationId: string; command: Record<string, unknown> }
+      expect(refusal.operationId).toBe('privacy-failed-start')
+      expect(refusal.command).toMatchObject({ type: 'agent.startFailed', startId: 'start' })
+      expect(String(refusal.command.error)).toContain('not private (gitconfig)')
+      // One already dispatched is reconciled as before: refusing it could orphan what it launched.
+      f.pool.starts[0]!.dispatched = true
+      f.advance(); await f.machine.tick()
+      expect(f.start).toHaveBeenCalledOnce()
+    })
+
+    it('sends a changed result at once, without waiting for the next beat', async () => {
+      let current: PrivacyObservation = passed
+      const f = fixture({}, () => current)
+      await f.machine.tick()
+      f.step(6_000); await f.machine.tick()
+      expect(posts(f)).toHaveLength(1)
+      current = exposed
+      f.step(6_000); await f.machine.tick()
+      expect(posts(f)).toHaveLength(2)
+      expect(posts(f)[1]).toMatchObject({ privacy: { passed: false, item: 'gitconfig' } })
+    })
+
+    it('reports a check that throws as unchecked, and refuses on it', async () => {
+      const f = fixture({}, () => { throw new Error('config unreadable') })
+      await f.machine.tick()
+      expect(posts(f)[0]).toMatchObject({ privacy: { mode: 'account', passed: false, item: 'unchecked' } })
+      expect(f.start).not.toHaveBeenCalled()
+    })
+
+    it('drops only the privacy field for a backend from before it, for ten minutes, keeping the local-model fields', async () => {
+      const f = fixture({}, () => passed)
+      f.capabilities.mockResolvedValue({ ok: true, resources: { cpuPercent: 20, memoryTotalBytes: 1000, memoryUsedBytes: 200, projectDiskFreeBytes: 1000 },
+        tools: { git: true }, toolProbeErrors: { flutter: 'timed out' } } as never)
+      const original = f.backend.getMockImplementation()!
+      f.backend.mockImplementation(async (core, method, path, body) => {
+        if (method === 'POST' && (body as Record<string, unknown>)?.privacy) throw new SuperTabHostError('VALIDATION_ERROR', 'Unrecognized key: privacy', 400)
+        return original(core, method, path, body)
+      })
+      await f.machine.tick()
+      expect(posts(f)).toHaveLength(2)
+      expect(posts(f)[1]).not.toHaveProperty('privacy')
+      expect(posts(f)[1]).toHaveProperty('toolProbeErrors')
+      f.advance(); await f.machine.tick()
+      expect(posts(f)).toHaveLength(3)
+      expect(posts(f)[2]).not.toHaveProperty('privacy')
+      f.step(10 * 60_000); await f.machine.tick()
+      expect(posts(f).at(-2)).toHaveProperty('privacy')
+      expect(posts(f).at(-1)).not.toHaveProperty('privacy')
+    })
+
+    it('falls back to the oldest reading when the backend refuses the other new fields too', async () => {
+      const f = fixture({}, () => passed)
+      f.capabilities.mockResolvedValue({ ok: true, resources: { cpuPercent: 20, memoryTotalBytes: 1000, memoryUsedBytes: 200, projectDiskFreeBytes: 1000 },
+        tools: { git: true }, toolProbeErrors: { flutter: 'timed out' } } as never)
+      const original = f.backend.getMockImplementation()!
+      f.backend.mockImplementation(async (core, method, path, body) => {
+        const sent = body as Record<string, unknown>
+        if (method === 'POST' && (sent?.privacy || sent?.toolProbeErrors)) throw new SuperTabHostError('VALIDATION_ERROR', 'Unrecognized key', 400)
+        return original(core, method, path, body)
+      })
+      await f.machine.tick()
+      expect(posts(f)).toHaveLength(3)
+      expect(posts(f)[2]).not.toHaveProperty('privacy')
+      expect(posts(f)[2]).not.toHaveProperty('toolProbeErrors')
+    })
+
+    it('does not retry a refusal that is not about the fields', async () => {
+      const f = fixture({}, () => passed)
+      const original = f.backend.getMockImplementation()!
+      f.backend.mockImplementation(async (core, method, path, body) => {
+        if (method === 'POST' && String(path).includes('/machines/')) throw new SuperTabHostError('FORBIDDEN', 'no', 403)
+        return original(core, method, path, body)
+      })
+      await expect(f.machine.tick()).resolves.toBeUndefined()
+      expect(posts(f)).toHaveLength(1)
+    })
   })
 
   it('binds stopped native proof to the current slot reservation generation', async () => {

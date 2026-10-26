@@ -1,0 +1,154 @@
+/**
+ * The Harness Team account, set up on its own the moment a person joins a Swarm or adds this Mac to one
+ * (docs/plans/2026-10-24-swarm-team-account.md, Task 3). The owner chose "no button, no setup screen": the only thing a
+ * person sees is macOS's own administrator prompt, and it appears while they are at this Mac doing that. Desktop asks this
+ * Mac's own daemon (super_tabs `teamSetup`, from the local owner only) right after a join or a contribution succeeds;
+ * nothing asks from a background event, with nobody there, and nothing asks on Windows or Linux.
+ *
+ * Macs that joined and were added before this release never pass through either moment, and routing now sends
+ * teammates' work only to Team machines. So Desktop also asks once as it starts on a Mac (`startup`), with the person
+ * there: it goes ahead only while this Mac is in a Swarm with other people in it.
+ *
+ * A cancelled prompt is remembered, so the next join does not ask again: only `harness team setup`, run by the person,
+ * offers it again. Removing the account (`harness team remove`) is remembered the same way. A setup that failed is not
+ * tried again on its own for a day.
+ */
+import { readFileSync, renameSync, writeFileSync, mkdirSync, rmSync } from 'node:fs'
+import { dirname, join } from 'node:path'
+import type { AuthSession } from '../lib/authSession.js'
+import type { TeamConfig } from './config.js'
+import { TEAM_USER } from './layout.js'
+
+export interface TeamSetupDecision {
+  /** `declined`: the person cancelled the prompt or removed the account. `failed`: setup could not make it. */
+  state: 'declined' | 'failed'
+  at: number
+  detail?: string
+}
+
+/** Where the owner's daemon keeps the decision, in its own data folder. */
+export const teamSetupDecisionFile = (dataDir: string) => join(dataDir, 'team-setup.json')
+
+export function readTeamSetupDecision(file: string): TeamSetupDecision | null {
+  try {
+    const value = JSON.parse(readFileSync(file, 'utf8')) as Partial<TeamSetupDecision>
+    if ((value.state !== 'declined' && value.state !== 'failed') || typeof value.at !== 'number' || !Number.isFinite(value.at)) return null
+    return { state: value.state, at: value.at, ...(typeof value.detail === 'string' ? { detail: value.detail.slice(0, 300) } : {}) }
+  } catch { return null }
+}
+
+export function writeTeamSetupDecision(file: string, decision: TeamSetupDecision | null): void {
+  if (!decision) { rmSync(file, { force: true }); return }
+  mkdirSync(dirname(file), { recursive: true })
+  const next = `${file}.${process.pid}.next`
+  writeFileSync(next, `${JSON.stringify(decision)}\n`, { mode: 0o600 })
+  renameSync(next, file)
+}
+
+/** A failed setup is offered again on its own after this long. */
+export const AUTO_SETUP_RETRY_MS = 24 * 60 * 60_000
+
+export type AutoSetupState = 'unsupported' | 'signed-out' | 'dedicated' | 'running' | 'exists' | 'declined' | 'waiting' | 'not-shared' | 'started'
+
+/** The moment the person is at this Mac: they joined a Swarm, added this Mac to one, or opened the app (`startup`). */
+export type AutoSetupReason = 'join' | 'contribute' | 'startup'
+export const AUTO_SETUP_REASONS: readonly AutoSetupReason[] = ['join', 'contribute', 'startup']
+
+export interface AutoSetupDeps {
+  platform: NodeJS.Platform
+  session(): AuthSession | null
+  readConfig(): TeamConfig | null
+  accountExists(user: string): Promise<boolean>
+  readDecision(): TeamSetupDecision | null
+  writeDecision(decision: TeamSetupDecision): void
+  /** `harness team setup --json`, as this account: its exit code and the JSON it answered (null when it said none). */
+  setup(): Promise<{ code: number; result: Record<string, unknown> | null }>
+  now(): number
+  log(line: string): void
+}
+
+/** What a setup that made nothing answers: not cancelled, and not an account that exists but did not report in time. */
+const MADE_NOTHING = new Set(['SETUP_FAILED', 'NOT_INSTALLED', 'NOT_SIGNED_IN', 'RUN_AS_YOURSELF', 'INVALID_INPUT', 'BACKEND', 'EXPIRED', 'NOT_TEAM'])
+
+export class TeamAutoSetup {
+  private running: Promise<void> | null = null
+  constructor(private readonly deps: AutoSetupDeps) {}
+
+  /**
+   * Starts the setup when it is wanted, and answers at once with why it did or did not; the prompt is macOS's. At `startup`
+   * it is wanted only while [sharedSwarm] says this Mac is in a Swarm with other people in it (false when it cannot say).
+   */
+  async offer(reason: AutoSetupReason, sharedSwarm: () => Promise<boolean> = async () => false): Promise<{ state: AutoSetupState }> {
+    const { deps } = this
+    if (deps.platform !== 'darwin') return { state: 'unsupported' }
+    const session = deps.session()
+    if (!session) return { state: 'signed-out' }
+    if (session.kind === 'team') return { state: 'dedicated' }
+    if (this.running) return { state: 'running' }
+    if (deps.readConfig() || await deps.accountExists(TEAM_USER)) return { state: 'exists' }
+    const decision = deps.readDecision()
+    if (decision?.state === 'declined') return { state: 'declined' }
+    if (decision?.state === 'failed' && deps.now() - decision.at < AUTO_SETUP_RETRY_MS && deps.now() >= decision.at) return { state: 'waiting' }
+    if (reason === 'startup' && !await sharedSwarm().catch(() => false)) return { state: 'not-shared' }
+    if (this.running) return { state: 'running' }
+    this.running = this.run().finally(() => { this.running = null })
+    return { state: 'started' }
+  }
+
+  /** Waits for a setup this started, for a spec. */
+  settled(): Promise<void> { return this.running ?? Promise.resolve() }
+
+  private async run(): Promise<void> {
+    const { deps } = this
+    deps.log('setting up the Harness Team account: macOS asks for an administrator password')
+    let outcome: { code: number; result: Record<string, unknown> | null }
+    try {
+      outcome = await deps.setup()
+    } catch (error) {
+      outcome = { code: 1, result: { ok: false, code: 'SETUP_FAILED', message: error instanceof Error ? error.message : String(error) } }
+    }
+    const code = typeof outcome.result?.code === 'string' ? outcome.result.code : null
+    const message = typeof outcome.result?.message === 'string' ? outcome.result.message : undefined
+    try {
+      if (code === 'CANCELLED') {
+        deps.writeDecision({ state: 'declined', at: deps.now() })
+        deps.log('the Harness Team account prompt was cancelled: it is not offered again on its own (harness team setup offers it)')
+      } else if (outcome.code !== 0 && code !== null && MADE_NOTHING.has(code)) {
+        deps.writeDecision({ state: 'failed', at: deps.now(), ...(message ? { detail: message } : {}) })
+        deps.log(`the Harness Team account was not set up: ${message ?? code}`)
+      } else {
+        deps.log(outcome.code === 0 ? 'the Harness Team account is set up' : `the Harness Team account was set up, with something to look at: harness team status`)
+      }
+    } catch (error) {
+      deps.log(`could not remember the Harness Team account setup: ${error instanceof Error ? error.message : String(error)}`)
+    }
+  }
+}
+
+/** The owner's daemon's own: this account's sign-in and data folder, and `harness team setup --json` run in this process. */
+export async function realTeamAutoSetup(dataDir: string, log: (line: string) => void): Promise<TeamAutoSetup> {
+  const [{ readAuthSession }, { readTeamConfig }, { runGuestCommand }] = await Promise.all([
+    import('../lib/authSession.js'), import('./config.js'), import('../lib/guestAccounts.js')])
+  const file = teamSetupDecisionFile(dataDir)
+  return new TeamAutoSetup({
+    platform: process.platform,
+    session: readAuthSession,
+    readConfig: () => readTeamConfig(),
+    accountExists: async (user) => (await runGuestCommand('id', ['-u', user], { timeoutMs: 10_000 })).code === 0,
+    readDecision: () => readTeamSetupDecision(file),
+    writeDecision: (decision) => writeTeamSetupDecision(file, decision),
+    setup: async () => {
+      const [{ teamCommand }, { teamCommandDeps }] = await Promise.all([import('./command.js'), import('./deps.js')])
+      const lines: string[] = []
+      const refuse = async (): Promise<never> => { throw new Error('setup does not restart the daemon') }
+      const code = await teamCommand(['setup', '--json'], { ...teamCommandDeps({ stopDaemon: refuse, startDaemon: refuse }),
+        out: (line) => lines.push(line), err: (line) => lines.push(line), interactive: false })
+      const last = [...lines].reverse().find((line) => line.startsWith('{'))
+      let result: Record<string, unknown> | null = null
+      try { result = last ? JSON.parse(last) as Record<string, unknown> : null } catch { /* said nothing readable */ }
+      return { code, result }
+    },
+    now: () => Date.now(),
+    log,
+  })
+}

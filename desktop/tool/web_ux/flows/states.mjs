@@ -15,6 +15,8 @@ export const FLOWS = [
   { name: 'viewer-page', scenario: 'workspace', path: '/?viewer=1&machine=m1&agent=a1' },
   ...['Account', 'Appearance', 'Notifications', 'Privacy', 'Usage', 'Routing',
     'Tab invites', 'Experimental', 'About'].map(settings),
+  // Usage in a browser with the account's subscriptions read (P6).
+  { ...settings('Usage'), name: 'settings-usage-subscriptions', scenario: 'subscriptions' },
   superTab('super-tab', 'rich'),
   superTab('super-tab-group', 'rich', { path: '/?group=wg-blocked' }),
   superTab('super-tab-one', 'one'),

@@ -160,6 +160,27 @@ describe('account-bound harness invitations', () => {
     mocks.prisma.machine.findFirst.mockResolvedValueOnce({ ...machine, billingStatus: 'pending' })
     expect(await recipientShare('share', ken)).toBeNull()
   })
+  // A team machine (lib/teamSession.ts) hosts Swarm agents for teammates. Its daemon shares an agent's terminal with the
+  // Swarm members who may watch it, and nothing else: only its own machine's harnesses, only for a Swarm.
+  it('lets a team session share only its own machine\'s harnesses, for a Swarm, and take back only those', async () => {
+    const TEAM_COMPUTER = 'b'.repeat(32)
+    const teamMachine = { ...machine, machineId: 'team-mac', computerId: TEAM_COMPUTER, sessionKind: 'team' }
+    mocks.auth.mockResolvedValue({ ...owner, harnessSessionId: 'team-session', harnessSessionKind: 'team', harnessComputerId: TEAM_COMPUTER })
+    mocks.prisma.machine.findMany.mockResolvedValue([teamMachine])
+    mocks.prisma.machine.findFirst.mockResolvedValue(teamMachine)
+    const swarm = { ...input(), machineId: 'team-mac', superTabId: 'a'.repeat(24) }
+    expect((await put(swarm)).statusCode).toBe(200)
+    for (const payload of [{ ...swarm, machineId: 'm1' }, { ...swarm, superTabId: null }, { ...input(), machineId: 'team-mac' }]) {
+      const res = await put(payload)
+      expect(res.statusCode).toBe(403)
+      expect(res.json().error.code).toBe('TEAM_SESSION_LIMITED')
+    }
+    expect(mocks.prisma.harnessShare.upsert).toHaveBeenCalledTimes(1)
+    const id = randomUUID()
+    expect((await app.inject({ method: 'DELETE', url: `/api/harness-shares/${id}`, headers: auth })).statusCode).toBe(200)
+    expect(mocks.prisma.harnessShare.updateMany).toHaveBeenLastCalledWith({ where: { id, ownerId: 'owner', autonomousEnv: 'prod', machineId: 'team-mac' },
+      data: { revokedAt: expect.any(Date) } })
+  })
   it('rechecks Super Tab membership for session admission and excludes revoked views from inventory', async () => {
     mocks.auth.mockResolvedValue(ken)
     const share = { id: 'share', ...input(), superTabId: 'a'.repeat(24), ownerId: owner.sub, expiresAt: new Date(input().expiresAt) }

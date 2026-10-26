@@ -12,6 +12,7 @@ import 'package:harness/core/models.dart';
 import 'package:harness/screens/login_screen.dart';
 import 'package:harness/state/app_state.dart';
 import 'package:harness/viewer/interactive_viewer.dart';
+import 'package:harness/viewer/viewer_link_incomplete.dart';
 import 'package:harness/viewer/viewer_page.dart';
 import 'package:web/web.dart' as web;
 
@@ -72,10 +73,8 @@ void main() {
       ),
     );
     await tester.pump();
-    expect(
-      find.text('This viewer link is incomplete. Run hn view again.'),
-      findsOneWidget,
-    );
+    expect(find.byType(ViewerLinkIncomplete), findsOneWidget);
+    expect(find.text('This viewer link is incomplete'), findsOneWidget);
     expect(find.text('Workspace must stay closed'), findsNothing);
     expect(find.byType(ViewerPage), findsNothing);
     expect(app.requests, isEmpty);

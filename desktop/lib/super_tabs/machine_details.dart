@@ -18,6 +18,7 @@ class SuperTabMachineDetails extends StatelessWidget {
     this.resources,
     this.cwd,
     this.engines,
+    this.footer,
   });
 
   final String name, status;
@@ -25,6 +26,9 @@ class SuperTabMachineDetails extends StatelessWidget {
   final MachineResources? resources;
   final List<String>? engines;
   final List<Map<String, Object?>> accounts;
+
+  /// Below the details, inside the same scroll: what a Swarm adds about the machine (its local models).
+  final Widget? footer;
 
   Widget _row(String label, String value, {required bool stacked}) => Padding(
     padding: const EdgeInsets.symmetric(vertical: 5),
@@ -185,6 +189,7 @@ class SuperTabMachineDetails extends StatelessWidget {
                     for (final detail in hardware)
                       _row(detail.$1, detail.$2, stacked: stacked),
                   ]),
+                  ?footer,
                 ],
               ),
             ),

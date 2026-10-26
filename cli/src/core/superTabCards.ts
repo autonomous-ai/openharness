@@ -52,9 +52,11 @@ function leadIn(value: unknown): SwarmLead | null {
   // `local` is the harness here that runs the Lead, or empty when it runs on another machine.
   if (typeof lead.local !== 'string' || (lead.local !== '' && !id(lead.local))) return null
   if (lead.since !== undefined && !whole(lead.since)) return null
+  // The project's index in its Swarm, which the round dial shows the Leads by (the Pro sorts its own and ignores it).
+  if (!whole(lead.order)) return null
   return {
     id: lead.id, projectId: lead.projectId, project: cut(lead.project, NAME_BYTES), engine: cut(lead.engine, ENGINE_BYTES),
-    owner: cut(lead.owner, NAME_BYTES), local: lead.local, state: lead.state as SwarmLead['state'],
+    owner: cut(lead.owner, NAME_BYTES), local: lead.local, state: lead.state as SwarmLead['state'], order: lead.order,
     ...(lead.since === undefined ? {} : { since: lead.since }),
   }
 }

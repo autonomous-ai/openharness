@@ -236,6 +236,16 @@ const envSchema = z.object({
   // Where clients read the files. https:// in production (superTabs/attachments.ts refuses anything else at startup).
   SUPER_TAB_ATTACHMENTS_PUBLIC_BASE: z.string().url().default('https://cdn.harness.autonomous.ai'),
 
+  // The Harness GitHub App (github/app.ts, docs/swarm-github-app.md): a Swarm agent doing a task pushes and opens pull
+  // requests with a one-hour token for its project's repository alone. Both empty: off, and POST
+  // /api/super-tabs/:tabId/github-token answers GITHUB_APP_NOT_CONFIGURED. One without the other, or a key that cannot be
+  // read, stops the backend at startup with a message that never shows the key. The ID is the numeric App ID (or the
+  // Client ID); the key is the app's PEM private key as downloaded, with its line breaks as \n, or base64 of the file.
+  GITHUB_APP_ID: z.string().default(''),
+  GITHUB_APP_PRIVATE_KEY: z.string().default(''),
+  // The app's name in github.com/apps/NAME, for the install link a refusal gives. Optional.
+  GITHUB_APP_SLUG: z.string().default(''),
+
   // TTL for the in-memory subdomain→machineId cache on the public app-proxy hot path
   // (avoids a Mongo lookup per request). Bounds staleness after a cross-instance app teardown.
   // 60 min default (mapping is stable; a same-instance delete evicts immediately).

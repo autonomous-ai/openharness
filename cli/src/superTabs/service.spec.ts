@@ -1,12 +1,15 @@
 import { createHash } from 'node:crypto'
+import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { dirname, join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 import { fakeCore } from '../testing/fakeCore.js'
 import type { CoreApi } from '../core/api.js'
-import { superTabService } from './service.js'
+import { sharedSwarm, superTabService } from './service.js'
 import { object } from './wire.js'
 
 const list = (value: unknown) => Array.isArray(value) ? value.map(object) : []
-import { SuperTabHostError, type SuperTabHost, type SuperTabHostOptions } from './host.js'
+import { hostJournalFile, SuperTabHostError, type SuperTabHost, type SuperTabHostOptions } from './host.js'
 
 const owner = { local: true, owner: true }, visitor = { local: false, owner: false }
 function setup(options: { prepareContribution?: typeof import('./contribution.js').prepareContribution } = {}) {
@@ -658,5 +661,175 @@ describe('a Lead\'s terminal result', () => {
       .toEqual({ ok: true, value: { ok: true, text: 'Allow? 1. Yes' } })
     expect(t.call.mock.calls.at(-1)!.slice(0, 2)).toEqual(['GET', `/api/super-tabs/tab/terminal/r1?asAgentId=${t.agentId}`])
     expect(await t.ask({ action: 'terminalResult', tabId: 'tab', agentId: t.agentId, terminalRequestId: '../x' }, owner)).toEqual({ error: 'INVALID_REQUEST' })
+  })
+})
+
+describe('GitHub App tokens through the service', () => {
+  it('gives a local agent its task\'s token, never one asked for through the relay', async () => {
+    const call = vi.fn<CoreApi['account']['backend']>(async (method, path) => ({ status: 200, body: { success: true, data: method === 'GET' && path.endsWith('/machine-1')
+      ? [{ tabId: 'tab-1', agent: { id: 'agent-1', machineId: 'machine-1', harnessId: 'native' } }]
+      : { token: 'ghs_fixtureToken0000001', expiresAt: '2026-10-24T13:00:00.000Z', repository: 'acme/app', trailers: [] } } }))
+    const service = superTabService(fakeCore({ account: { backend: call }, agents: { byAgent: vi.fn(() => ({ agentId: 'native' }) as never) } }),
+      { githubTokens: () => ({ start: vi.fn(), stop: vi.fn() }) })
+    expect(await service.requests.super_tabs({ action: 'githubToken', harnessId: 'native' }, owner))
+      .toMatchObject({ ok: true, value: { token: 'ghs_fixtureToken0000001', tabId: 'tab-1', agentId: 'agent-1' } })
+    expect(call).toHaveBeenCalledWith('POST', '/api/super-tabs/tab-1/github-token?asAgentId=agent-1', { machineId: 'machine-1' })
+    const calls = call.mock.calls.length
+    expect(await service.requests.super_tabs({ action: 'githubToken', harnessId: 'native' }, { local: false, owner: true, accountOwner: true } as never))
+      .toEqual({ error: 'OWNER_REQUIRED' })
+    expect(await service.requests.super_tabs({ action: 'githubToken', harnessId: 'native' }, visitor)).toEqual({ error: 'OWNER_REQUIRED' })
+    expect(call.mock.calls.length).toBe(calls)
+  })
+
+  it('runs a team daemon\'s Swarm host from its first connection, and a person\'s only once it hosts Swarm work', () => {
+    const quiet = { githubTokens: () => ({ start: vi.fn(), stop: vi.fn() }), teamEngines: () => ({ start: vi.fn(), stop: vi.fn() }) }
+    const started = (team: boolean) => {
+      const start = vi.fn()
+      const service = superTabService(fakeCore({ dataDir: mkdtempSync(join(tmpdir(), 'team-wake-')) }),
+        { ...quiet, team: () => team, host: () => ({ machineId: 'machine-1', start, stop: vi.fn() }) as unknown as SuperTabHost })
+      service.port.connected()
+      return start.mock.calls.length
+    }
+    // Added to a Swarm by its Mac's daemon, which does not wake it: without its host it reported no privacy check (third VM run).
+    expect(started(true)).toBe(1)
+    expect(started(false)).toBe(0)
+  })
+
+  it('keeps the tokens fresh while connected, and stops with the service', () => {
+    const tokens = { start: vi.fn(), stop: vi.fn() }
+    const engines = { start: vi.fn(), stop: vi.fn() }
+    const service = superTabService(fakeCore(), { githubTokens: () => tokens, teamEngines: () => engines })
+    service.port.connected()
+    expect(tokens.start).toHaveBeenCalledTimes(1)
+    // And, in a Harness Team account, reports its own engines to its owner (team/engines.ts).
+    expect(engines.start).toHaveBeenCalledTimes(1)
+    service.port.disconnected()
+    service.port.stop()
+    expect(tokens.stop).toHaveBeenCalledTimes(2)
+    expect(engines.stop).toHaveBeenCalledTimes(2)
+  })
+})
+
+describe('the Harness Team account, offered by Desktop on this Mac', () => {
+  it('runs only for the local owner, for a moment the person is there, and says whether it started', async () => {
+    const offer = vi.fn(async (_reason: string, _shared: () => Promise<boolean>) => ({ state: 'started' as const }))
+    const make = vi.fn(async () => ({ offer }))
+    const service = superTabService(fakeCore(), { teamSetup: make })
+    expect(await service.requests.super_tabs({ action: 'teamSetup', reason: 'join' }, owner)).toEqual({ ok: true, state: 'started' })
+    expect(offer).toHaveBeenCalledWith('join', expect.any(Function))
+    for (const asker of [visitor, { local: false, owner: true, accountOwner: true }]) {
+      expect(await service.requests.super_tabs({ action: 'teamSetup', reason: 'join' }, asker as never)).toEqual({ error: 'OWNER_REQUIRED' })
+    }
+    for (const reason of [undefined, 'background', 7]) {
+      expect(await service.requests.super_tabs({ action: 'teamSetup', reason }, owner)).toEqual({ error: 'INVALID_REQUEST' })
+    }
+    await service.requests.super_tabs({ action: 'teamSetup', reason: 'contribute' }, owner)
+    expect(make).toHaveBeenCalledTimes(1)
+    expect(offer).toHaveBeenCalledTimes(2)
+  })
+
+  it('at app start, answers at once on a Mac that hosts no Swarm work, as no regular user\'s does', async () => {
+    const offer = vi.fn(async (_reason: string, _shared: () => Promise<boolean>) => ({ state: 'not-shared' as const }))
+    const make = vi.fn(async () => ({ offer }))
+    const dataDir = mkdtempSync(join(tmpdir(), 'team-startup-'))
+    const service = superTabService(fakeCore({ dataDir }), { teamSetup: make })
+    expect(await service.requests.super_tabs({ action: 'teamSetup', reason: 'startup' }, owner)).toEqual({ ok: true, state: 'not-shared' })
+    expect(make).not.toHaveBeenCalled()
+    // Once this Mac hosts Swarm work, the offer decides.
+    mkdirSync(dirname(hostJournalFile(dataDir, 'machine-1')), { recursive: true })
+    writeFileSync(hostJournalFile(dataDir, 'machine-1'), '{}')
+    await service.requests.super_tabs({ action: 'teamSetup', reason: 'startup' }, owner)
+    expect(offer).toHaveBeenCalledWith('startup', expect.any(Function))
+  })
+
+  it('tries again to make its setup when making it failed', async () => {
+    const make = vi.fn().mockRejectedValueOnce(new Error('import failed')).mockResolvedValueOnce({ offer: async () => ({ state: 'exists' }) })
+    const service = superTabService(fakeCore(), { teamSetup: make })
+    expect(await service.requests.super_tabs({ action: 'teamSetup', reason: 'join' }, owner)).toMatchObject({ error: 'SUPER_TAB_UNAVAILABLE' })
+    expect(await service.requests.super_tabs({ action: 'teamSetup', reason: 'join' }, owner)).toEqual({ ok: true, state: 'exists' })
+  })
+
+  it('at app start, counts a Swarm this Mac is in with anyone else in it', async () => {
+    const answers = (pools: unknown, tabs: Record<string, unknown>) => vi.fn<CoreApi['account']['backend']>(async (_method, path) => {
+      if (path.endsWith('/pools')) return pools instanceof Error ? { status: 503, body: { success: false } } : { status: 200, body: { success: true, data: pools } }
+      const tab = tabs[path.split('/').pop()!]
+      return tab ? { status: 200, body: { success: true, data: tab } } : { status: 403, body: { success: false, error: { code: 'FORBIDDEN' } } }
+    })
+    const core = (call: CoreApi['account']['backend'], machineId = 'machine-1') => fakeCore({ account: { backend: call }, daemon: { machineId: () => machineId } as never })
+    const shared = answers([{ tabId: 'solo' }, { tabId: 'gone' }, { tabId: 'team' }],
+      { solo: { state: { people: [{ id: 'me' }] } }, team: { state: { people: [{ id: 'me' }, { id: 'kim' }] } } })
+    expect(await sharedSwarm(core(shared))).toBe(true)
+    expect(shared).toHaveBeenCalledWith('GET', '/api/super-tabs/hosts/machine-1/pools', undefined)
+    expect(await sharedSwarm(core(answers([{ tabId: 'solo' }, { tabId: '../x' }], { solo: { state: { people: [{ id: 'me' }] } } })))).toBe(false)
+    expect(await sharedSwarm(core(answers(new Error('down'), {})))).toBe(false)
+    expect(await sharedSwarm(core(answers({ not: 'a list' }, {})))).toBe(false)
+    expect(await sharedSwarm(core(answers([], {}), ''))).toBe(false)
+  })
+})
+
+// Lead mentions (spec 2026-10-24-lead-mentions): a post names people by id or email; the backend gets their person ids,
+// and only a Lead's help offers it.
+describe('mentions on a post', () => {
+  const people = [{ id: 'person-ken', email: 'Ken@Example.com', role: 'owner' }, { id: 'person-dee', email: 'dee@example.com', role: 'collaborator' }]
+  const swarm = (t: ReturnType<typeof setup>, leadId: string | null) => {
+    const state = { agents: [t.agent], people, projects: [{ id: 'pilot', name: 'Pilot', leadConversationId: 'pilot' }],
+      conversations: [{ id: 'pilot', leadId, agentIds: [t.agentId] }, { id: 'work', projectId: 'pilot', leadId: t.agentId, agentIds: [t.agentId] }] }
+    t.call.mockImplementation(async () => ({ status: 200, body: { success: true, data: { revision: 7, state } } }))
+  }
+  const post = (t: ReturnType<typeof setup>, mentions: unknown) => t.ask({ action: 'command', tabId: 'tab', agentId: t.agentId, operationId: 'op',
+    command: { type: 'message.send', conversationId: 'pilot', text: 'Please confirm', replyTo: null, recipientIds: [], mentions } }, owner)
+  const posted = (t: ReturnType<typeof setup>) => t.call.mock.calls.filter(([method]) => method === 'POST')
+
+  it('sends the person ids of people named by id or by email, each once', async () => {
+    const t = setup()
+    swarm(t, t.agentId)
+    expect(await post(t, ['ken@example.com', 'person-dee', 'KEN@EXAMPLE.COM'])).toMatchObject({ ok: true, operationId: 'op' })
+    expect(posted(t)).toEqual([['POST', '/api/super-tabs/tab/commands', { operationId: 'op', asAgentId: t.agentId,
+      command: { type: 'message.send', conversationId: 'pilot', text: 'Please confirm', replyTo: null, recipientIds: [], mentions: ['person-ken', 'person-dee'] } }]])
+  })
+
+  it('refuses a person who is not in the Swarm before anything is sent', async () => {
+    const t = setup()
+    swarm(t, t.agentId)
+    expect(await post(t, ['dee@example.com', 'someone@example.com'])).toEqual({ error: 'MENTION_UNKNOWN',
+      detail: 'someone@example.com is not a person in this Swarm. Tag a person by the id or email shown in status.', status: 400 })
+    expect(await post(t, [42])).toMatchObject({ error: 'MENTION_UNKNOWN' })
+    expect(posted(t)).toEqual([])
+  })
+
+  it('explains a server from before mentions', async () => {
+    const t = setup()
+    swarm(t, t.agentId)
+    const read = t.call.getMockImplementation()!
+    t.call.mockImplementation(async (...args) => args[0] === 'POST'
+      ? { status: 400, body: { success: false, error: { code: 'VALIDATION_ERROR', message: 'command: Unrecognized key: "mentions"' } } } as never : read(...args))
+    expect(await post(t, ['person-ken'])).toEqual({ error: 'MENTIONS_UNSUPPORTED', detail: 'This Swarm\'s server does not support tagging people yet.' })
+  })
+
+  const help = async (t: ReturnType<typeof setup>, payload: Record<string, unknown>) => object(object(await t.ask({ action: 'help', ...payload }, owner)).help)
+  const mention = '[--mention PERSON]...'
+  it('offers --mention in help to a project\'s Lead only', async () => {
+    const t = setup()
+    swarm(t, t.agentId)
+    const lead = await help(t, { tabId: 'tab', agentId: t.agentId })
+    expect(lead.post).toContain(`post GROUP TEXT OPERATION_ID [--reply-to MESSAGE_ID] [--attach PATH]... ${mention}:`)
+    expect(lead.post).toContain('--mention tags a person, by the id or email shown in status (up to 5), when you need them to act or decide; it shows in their notifications.')
+    expect(await help(t, { tabId: 'tab', harnessId: 'native' })).toEqual(lead)
+    // A former Lead still named on an older work group is not one, as in status.
+    swarm(t, 'new-lead')
+    expect(String((await help(t, { tabId: 'tab', agentId: t.agentId })).post)).not.toContain('--mention')
+  })
+
+  it('answers help without --mention outside a tab, or when the caller cannot be read', async () => {
+    const t = setup()
+    swarm(t, t.agentId)
+    const plain = await help(t, {})
+    expect(String(plain.post)).not.toContain('--mention')
+    expect(plain.leadOptions).toBe('Leads: run help with --tab ID for options only a Lead has.')
+    expect(String((await help(t, { tabId: 'tab' })).post)).not.toContain('--mention')
+    t.call.mockRejectedValue(new Error('Offline'))
+    expect(String((await help(t, { tabId: 'tab', agentId: t.agentId })).post)).not.toContain('--mention')
+    t.call.mockResolvedValue({ status: 200, body: { success: true, data: { state: { agents: [] } } } })
+    expect(String((await help(t, { tabId: 'tab', agentId: t.agentId })).post)).not.toContain('--mention')
   })
 })

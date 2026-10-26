@@ -1,0 +1,69 @@
+/**
+ * What setup made, written root-owned to /Library/Application Support/Harness/team.json and read by the team
+ * daemon (its privacy check) and by the owner's `harness team status`. Nothing in it is secret: names and paths.
+ */
+import { readFileSync } from 'node:fs'
+import { TEAM_CONFIG_FILE, carriedBackendEnv, checkPath, checkPort, checkUser } from './layout.js'
+
+export interface TeamConfig {
+  version: 1
+  /** The team account's short name, and its home. */
+  user: string
+  realName: string
+  home: string
+  /** The Mac's owner, whose files the team account must not reach, and their home. */
+  owner: string
+  ownerHome: string
+  /** The world-readable file in the owner's home that only the home folder's mode protects. */
+  sentinel: string
+  port: number
+  label: string
+  plist: string
+  statusFile: string
+  /** The team account's Node and CLI, which `harness team remove` runs as that account to sign it out. */
+  node: string
+  cli: string
+  /** The backend settings carried from the owner's environment (./layout.ts `carriedBackendEnv`), which the team
+   *  daemon runs with and `harness team remove` signs it out against. */
+  env: Record<string, string>
+  createdAt: string
+}
+
+export function teamConfigJson(config: TeamConfig): string {
+  return `${JSON.stringify(config, null, 2)}\n`
+}
+
+/** The config at [path], every field checked; null when there is none or it is not one setup wrote. */
+export function readTeamConfig(path: string = TEAM_CONFIG_FILE, read: (path: string) => string = (p) => readFileSync(p, 'utf8')): TeamConfig | null {
+  let raw: unknown
+  try { raw = JSON.parse(read(path)) } catch { return null }
+  if (!raw || typeof raw !== 'object') return null
+  const value = raw as Record<string, unknown>
+  try {
+    const text = (key: string): string => {
+      const v = value[key]
+      if (typeof v !== 'string' || !v) throw new Error(key)
+      return v
+    }
+    if (value.version !== 1 || typeof value.port !== 'number') return null
+    return {
+      version: 1,
+      user: checkUser(text('user')),
+      realName: text('realName').slice(0, 80),
+      home: checkPath(text('home')),
+      owner: checkUser(text('owner')),
+      ownerHome: checkPath(text('ownerHome')),
+      sentinel: checkPath(text('sentinel')),
+      port: checkPort(value.port),
+      label: text('label'),
+      plist: checkPath(text('plist')),
+      statusFile: checkPath(text('statusFile')),
+      node: checkPath(text('node')),
+      cli: checkPath(text('cli')),
+      env: carriedBackendEnv(value.env && typeof value.env === 'object' ? value.env as NodeJS.ProcessEnv : {}),
+      createdAt: text('createdAt'),
+    }
+  } catch {
+    return null
+  }
+}

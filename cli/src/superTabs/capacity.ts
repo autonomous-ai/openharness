@@ -78,10 +78,14 @@ export function quotaOf(reply: Json, engine: string, customAccount: boolean) {
     const body = object(reading.body)
     const raw = engine === 'claude' ? [body.five_hour, body.seven_day]
       : engine === 'codex' ? [object(body.rate_limit).primary_window, object(body.rate_limit).secondary_window] : []
-    // Both engines report the short window first and the weekly one second; the name is by that position, kept even when one is missing.
+    // Both engines report the short window first and the weekly one second, so the name is by that position, kept even
+    // when one is missing — unless the window says how long it is, as Codex's do (`limit_window_seconds`, the length the
+    // Desktop names them by). 2026-10-24: a Codex account reported only its weekly window, first; read as its 5-hour one,
+    // the weekly read as missing, and the route never offered Codex while a Claude candidate fit.
     raw.forEach((value, index) => {
-      const w = object(value), used = w.utilization ?? w.used_percentage ?? w.used_percent
-      if (finite(used) && used >= 0 && used <= 100) windows.push({ usedPercent: used, resetsAt: w.resets_at ?? w.reset_at ?? null, name: index === 0 ? '5-hour' : 'weekly' })
+      const w = object(value), used = w.utilization ?? w.used_percentage ?? w.used_percent, length = w.limit_window_seconds
+      const name = finite(length) && length > 0 ? (length >= 86_400 ? 'weekly' : '5-hour') : index === 0 ? '5-hour' : 'weekly'
+      if (finite(used) && used >= 0 && used <= 100 && !windows.some(x => x.name === name)) windows.push({ usedPercent: used, resetsAt: w.resets_at ?? w.reset_at ?? null, name })
     })
   }
   return { known: windows.length > 0, account: typeof reading?.account === 'string' ? reading.account : null, windows }

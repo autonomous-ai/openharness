@@ -50,13 +50,17 @@ export function modelMatches(ruleModel: string, model: string | null): boolean {
 }
 
 /** Why a hard rule rules the target out, or null when none does. A machines rule names the machines it allows now: a removed
- *  machine leaves the rule but stays in the owner's words (machine.remove). */
-export function broken(rules: SwarmRule[] | undefined, target: RunTarget, machineName = (id: string) => id): string | null {
+ *  machine leaves the rule but stays in the owner's words (machine.remove). A Mac's Harness Team account is that Mac
+ *  ([macOf], machines.ts teamStartRequest), so a rule naming the Mac allows it. */
+export function broken(rules: SwarmRule[] | undefined, target: RunTarget, machineName = (id: string) => id,
+  macOf: (id: string) => string | undefined = () => undefined): string | null {
+  const mac = macOf(target.machineId)
   for (const { rule, text } of rules ?? []) {
     const engineName = ENGINE[target.engine] ?? target.engine
     const out = rule.kind === 'forbidModel' ? (!rule.engine || rule.engine === target.engine)
         && modelMatches(rule.model, target.model) && `${engineName} ${target.model}`
-      : rule.kind === 'machines' ? !rule.machineIds.includes(target.machineId) && `this machine (it allows only ${rule.machineIds.map(machineName).join(', ')})`
+      : rule.kind === 'machines' ? !rule.machineIds.includes(target.machineId) && !(mac && rule.machineIds.includes(mac))
+        && `this machine (it allows only ${rule.machineIds.map(machineName).join(', ')})`
       : rule.kind === 'minEffort' ? (!rule.engine || rule.engine === target.engine) && rank(target.effort) < rank(rule.effort)
         && `${engineName} at ${target.effort && rank(target.effort) >= 0 ? `${target.effort} effort` : 'an unnamed effort'}`
       : false

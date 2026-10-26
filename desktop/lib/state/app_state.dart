@@ -97,6 +97,7 @@ import '../core/harness_file_store.dart';
 import '../super_tabs/attachment_upload.dart';
 import '../super_tabs/client.dart';
 import '../super_tabs/controller.dart';
+import '../super_tabs/notifications.dart' show superTabMentionNotice;
 import '../measurement/setup_preference_store.dart';
 import '../devices/device_hosts.dart';
 import '../stats/harness_stats.dart';
@@ -328,6 +329,8 @@ class AgentCreationAttempt {
 
   bool get awaitingConfirmation => _awaitingConfirmation;
   bool get canCancelPending => _awaitingConfirmation && _holdReason != null;
+  bool get canFollowPending =>
+      _awaitingConfirmation && (_starting || _holdReason != null);
 
   /// The machine's code for a request it refused before launching anything,
   /// such as `SESSION_BUSY_IN_TERMINAL`: what a caller can offer next.
@@ -1715,6 +1718,8 @@ class AppNotifier extends ChangeNotifier {
   late final superTabs = SuperTabClient(
     storage: localStore ?? HarnessFileStore.shared,
     upload: uploadWith(() => api),
+    onMention: superTabMentionNotice(systemNotifications),
+    onTagCounts: notifyListeners,
     discoveryInterval: kUnderTest ? Duration.zero : const Duration(seconds: 15),
     onTabs: (tabs, hidden) {
       // Discovery can finish while an already signed-in machine is re-seating
@@ -1887,6 +1892,39 @@ class AppNotifier extends ChangeNotifier {
       );
     }
     return result;
+  }
+
+  /// Whether this is a Mac, as the Harness Team account offer reads it. Off
+  /// under test, on a Mac too, unless a test sets it.
+  @visibleForTesting
+  bool? macOSForTest;
+  bool _teamOfferedAtStart = false;
+
+  /// The Harness Team account on this Mac (cli/src/team/autoSetup.ts),
+  /// offered while the person is here: as they join a Swarm ([reason]
+  /// `join`), add this Mac to one (`contribute`), or open the app
+  /// (`startup`). This Mac's own daemon decides whether to ask: no account
+  /// yet, not declined before, and at start only while this Mac is in a
+  /// Swarm with other people in it. macOS's administrator prompt is all the
+  /// person sees. Nothing on Windows or Linux, and never for another machine,
+  /// where nobody may be at it.
+  Future<void> offerTeamAccount(String reason) async {
+    if (!(macOSForTest ?? (Platform.isMacOS && !kUnderTest))) return;
+    final here = machineStates.values
+        .where(
+          (state) => state.isLocalMachine && !state.machine.isSharedMachine,
+        )
+        .firstOrNull;
+    if (here == null) return;
+    try {
+      await superTabMachineRequest(here.machine.machineId, {
+        'action': 'teamSetup',
+        'reason': reason,
+      });
+    } catch (error) {
+      // An older daemon, or one that cannot say: nothing is asked.
+      appLog.debug('super-tabs', 'team account not offered: $error');
+    }
   }
 
   Future<void> wakeSuperTabHost(String machineId) async {
@@ -4684,6 +4722,24 @@ class AppNotifier extends ChangeNotifier {
     };
   }
 
+  /// Dial scroll handlers of the mounted Swarm chats, by Super Tab: a device with
+  /// one of that Swarm's Leads open (a Pro's Lead view) scrolls its chat.
+  final _superTabScrollHandlers =
+      <String, void Function(int phase, int dy, int velocity)>{};
+
+  /// Called by a Swarm's chat while mounted; returns how to withdraw it.
+  VoidCallback registerSuperTabScroll(
+    String superTabId,
+    void Function(int phase, int dy, int velocity) handler,
+  ) {
+    _superTabScrollHandlers[superTabId] = handler;
+    return () {
+      if (identical(_superTabScrollHandlers[superTabId], handler)) {
+        _superTabScrollHandlers.remove(superTabId);
+      }
+    };
+  }
+
   bool get canAddPane => panes.length < maxPanes;
 
   Iterable<TerminalPane> panesFor(String machineId) =>
@@ -5074,6 +5130,13 @@ class AppNotifier extends ChangeNotifier {
       // the offline poll (the one thing that would have re-probed) stopped, and the tiles sat on
       // "Offline" over a live terminal with nothing left to restore them. Measured 2026-09-18 21:50.
       machine.localEndpoint ??= _cliEndpoint;
+      // Once a launch, with the person here: a Mac that joined a Swarm before
+      // teammates' work went only to Team machines never met the join or
+      // contribute moment.
+      if (!_teamOfferedAtStart && !machine.machine.isSharedMachine) {
+        _teamOfferedAtStart = true;
+        unawaited(offerTeamAccount('startup'));
+      }
     } else {
       machine.transportMode = MachineTransportMode.cloudE2ee;
     }
@@ -11281,14 +11344,84 @@ class AppNotifier extends ChangeNotifier {
     return connection.request('connectors', payload: payload, timeout: timeout);
   }
 
+  /// Starts or stops a local model; with [grid], on that Swarm's grid instead of the account's own
+  /// (docs/plans/2026-10-23-swarm-local-models.md).
   Future<Map<String, dynamic>> controlLocalModel(
     String machineId,
     String modelId, {
     required bool start,
+    String? grid,
   }) => _conn(machineId).request(
     start ? 'grid_fleet_model_start' : 'grid_fleet_model_stop',
-    payload: {'modelId': modelId},
+    payload: {'modelId': modelId, 'grid': ?grid},
     timeout: const Duration(seconds: 12),
+  );
+
+  /// Sets a Swarm's grid up on [machineId], this computer of the Swarm owner's (CLI `lib/swarmGrid.ts`): `grid`
+  /// installed and signed in with the Harness account when it is not, the grid created, [members] added and anyone
+  /// else removed. Minutes on a computer that has never run grid.
+  Future<Map<String, dynamic>> swarmGridSync(
+    String machineId,
+    String grid,
+    List<String> members,
+  ) => _conn(machineId).request(
+    'grid_swarm_sync',
+    payload: {'grid': grid, 'members': members},
+    timeout: const Duration(minutes: 5),
+  );
+
+  /// The models shared with this person that [machineId] offers to the Swarm whose grid is [grid] (CLI `lib/swarmOffers.ts`).
+  Future<Map<String, dynamic>> swarmOffers(String machineId, String grid) =>
+      _conn(machineId).request(
+        'grid_swarm_offers',
+        payload: {'grid': grid},
+        timeout: const Duration(seconds: 10),
+      );
+
+  /// Offers [model], shared with this person on [sharedGrid], to the Swarm whose grid is [grid], or stops: the Swarm's
+  /// Lead may then start Builders on [machineId] on it.
+  Future<Map<String, dynamic>> swarmOffer(
+    String machineId, {
+    required String grid,
+    required String sharedGrid,
+    required String model,
+    required bool start,
+  }) => _conn(machineId).request(
+    'grid_swarm_offer',
+    payload: {
+      'grid': grid,
+      'sharedGrid': sharedGrid,
+      'model': model,
+      'action': start ? 'start' : 'stop',
+    },
+    timeout: const Duration(seconds: 10),
+  );
+
+  /// The saved APIs [machineId] shares with the Swarm whose grid is [grid] (CLI `lib/swarmApiShares.ts`).
+  Future<Map<String, dynamic>> swarmApiShares(String machineId, String grid) =>
+      _conn(machineId).request(
+        'grid_swarm_api_shares',
+        payload: {'grid': grid},
+        timeout: const Duration(seconds: 10),
+      );
+
+  /// Shares [model] of the saved API [connectionId] with the Swarm whose grid is [grid], or stops: every Builder in
+  /// the Swarm may then run on it, on this computer's key and credits.
+  Future<Map<String, dynamic>> swarmApiShare(
+    String machineId, {
+    required String grid,
+    required String connectionId,
+    required String model,
+    required bool start,
+  }) => _conn(machineId).request(
+    'grid_swarm_api_share',
+    payload: {
+      'grid': grid,
+      'connectionId': connectionId,
+      'model': model,
+      'action': start ? 'start' : 'stop',
+    },
+    timeout: const Duration(minutes: 2),
   );
 
   Future<Map<String, dynamic>> downloadLocalModel(
@@ -20401,6 +20534,11 @@ class AppNotifier extends ChangeNotifier {
         if (phase == 0) _requestDeviceWindow(machine);
         final dy = (payload['dy'] as num?)?.round() ?? 0;
         final velocity = (payload['velocity'] as num?)?.round() ?? 0;
+        // A Lead's view on the device: that Swarm's chat scrolls, never a pane.
+        if (payload['superTabId'] case final String superTabId) {
+          _superTabScrollHandlers[superTabId]?.call(phase, dy, velocity);
+          return;
+        }
         final pane = focusedPane;
         final cloudScroll = pane?.agentId == null
             ? null
