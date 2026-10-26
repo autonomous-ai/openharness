@@ -605,10 +605,14 @@ canReadGroup(state, actor, g) =
   !canReadProject(…)  → false
   !g.audience         → true
   actor is a person   → g.audience.people has { id: actor.userId, generation: member.generation }
+                        || (PRIVATE_VISIBLE_TO_OWNERS && actor is the project owner or the Swarm owner)
   actor is an agent   → actor is the project's Lead (ledProject(state, actor.agentId)?.id === project.id)
 ```
 
 The project owner and the Swarm owner are **not** implied: only the listed people and the Lead (addendum).
+This is one constant, `PRIVATE_VISIBLE_TO_OWNERS = false`, next to `canReadGroup`. The owner's privacy decision
+(section 8, Q3a) is pending, and flipping the constant must be the only change it needs: no other path may decide
+owner visibility on its own.
 
 **Where it is enforced** (each must use `canReadGroup`, not `canReadProject`):
 
@@ -988,8 +992,17 @@ against recorded fixtures of the section 4 examples.
 
 ## 8. Open questions and findings, ranked
 
-Each item has a recommended answer. Items 1–3 should be settled before groups 2–5 start; the rest can be confirmed
-during the work.
+Each item has a recommended answer.
+
+**Lead's rulings (2026-10-26):**
+- Q1, Q2, Q4, Q5, Q7: accepted as recommended.
+- Q3: (b)–(g) accepted. (a), whether owners can see private channels, is with the owner; it is designed as not
+  visible, behind the single constant in 4.8.
+- Q6: accepted as independent of N. The replica count and NTP are being confirmed with the owner; this does not
+  block anything.
+- R1–R10: no objection.
+
+The items as raised:
 
 **Q1. Auto-archive must not use `archived` (spec ruling 5 against the code).**
 - Spec ruling 5 says archive uses the existing `Conversation.archived` field, and that a new message brings the
