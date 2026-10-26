@@ -102,22 +102,47 @@ describe('a host resuming a task its agent lost to a usage limit', () => {
     expect(t.steps).toEqual([])
   })
 
-  it('holds back while its screen shows a prompt or a menu, where Enter would choose something, and resumes once it is gone', async () => {
+  it('holds back the typing while a prompt or a menu is open, where Enter would choose something, and types once it is gone', async () => {
     let hold: SuperTabScreen = { ok: true, text: 'Allow edit? 1. Yes 2. No', hold: 'permission_open' }
     const t = setup({ screen: () => hold })
     t.wait(30 * 60_000)
     await t.resumer.tick([row()])
-    expect(t.steps).toEqual([])
+    expect(t.steps).toEqual(['ask work.resume', 'check tab w1 h1'])
+    // The task is the agent's again, so its row no longer asks; the host still owes the typing.
     hold = { ok: false, error: 'Could not read the terminal.' }
     t.wait(15_000)
-    await t.resumer.tick([row()])
-    expect(t.steps).toEqual([])
+    await t.resumer.tick([row({ resume: null })])
     hold = { ok: true, text: '❯ ', hold: null }
-    await t.resumer.tick([row()])
-    expect(t.steps).toEqual([])
+    await t.resumer.tick([row({ resume: null })])
+    expect(t.steps).toEqual(['ask work.resume', 'check tab w1 h1', 'check tab w1 h1'])
     t.wait(15_000)
+    await t.resumer.tick([row({ resume: null })])
+    expect(t.steps).toEqual(['ask work.resume', 'check tab w1 h1', 'check tab w1 h1', 'check tab w1 h1', `type ${CONTINUE}`])
+  })
+
+  it('reads the screen when it types: a prompt that opens while the backend answers gets no continue (#1757 review, 3)', async () => {
+    let screen: SuperTabScreen = { ok: true, text: '❯ ', hold: null }
+    const t = setup({ screen: () => screen, reply: () => {
+      screen = { ok: true, text: 'Allow edit? 1. Yes 2. No', hold: 'permission_open' }
+      return { status: 200, body: { success: true, data: { result: {} } } }
+    } })
+    t.wait(30 * 60_000)
     await t.resumer.tick([row()])
-    expect(t.steps).toEqual(['ask work.resume', 'check tab w1 h1', `type ${CONTINUE}`])
+    expect(t.steps).toEqual(['ask work.resume', 'check tab w1 h1'])
+    expect(t.core.superTabs!.input).not.toHaveBeenCalled()
+  })
+
+  it('drops typing it still owes once the task is no longer this session\'s', async () => {
+    let owns = true
+    const t = setup({ screen: () => ({ ok: true, text: 'Allow edit? 1. Yes 2. No', hold: 'permission_open' }), owns: () => owns })
+    t.wait(30 * 60_000)
+    await t.resumer.tick([row()])
+    owns = false
+    t.wait(15_000)
+    await t.resumer.tick([])
+    t.wait(15_000)
+    await t.resumer.tick([])
+    expect(t.steps).toEqual(['ask work.resume', 'check tab w1 h1', 'check tab w1 h1'])
   })
 
   // Nothing redraws when a limit resets: the screen its host reads then is the limit screen the engine left (Lead,

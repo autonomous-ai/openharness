@@ -25,6 +25,8 @@ export class LimitResume {
    *  asked about again, though a roster read from before still lists it. */
   private readonly settled = new Set<string>()
   private readonly retryAt = new Map<string, number>()
+  /** Losses the backend gave back whose continue is not typed yet: the row stops listing them once the task is resumed. */
+  private readonly typing = new Map<string, Due>()
   private running: Promise<void> | null = null
   private readonly now: () => number
   private readonly log: (message: string) => void
@@ -53,13 +55,11 @@ export class LimitResume {
       await this.resume({ tabId: row.tabId, agentId: agent.id, harnessId: agent.harnessId, conversationId: resume.conversationId,
         assignmentId: resume.assignmentId, lostAt: resume.lostAt as number, key }, now)
     }
+    for (const due of [...this.typing.values()]) if ((this.retryAt.get(due.key) ?? 0) <= now) await this.type(due, now)
   }
 
+  /** Asks the backend for the task back; once it says yes, the continue is owed (`typing`). */
   private async resume(due: Due, now: number): Promise<void> {
-    const later = () => { this.retryAt.set(due.key, now + RETRY_MS) }
-    // Enter on a permission prompt, a question or a menu would answer it. An unreadable screen says nothing either way.
-    const read = await this.core.superTabs!.screen(due.harnessId, 0).catch(() => null)
-    if (!read?.ok || (read.hold !== null && WAITING.has(read.hold))) return later()
     try {
       // The same operation each time: an answer lost on the way is replayed, not applied twice.
       await backend(this.core, 'POST', `/api/super-tabs/${due.tabId}/commands`, { operationId: `limit-resume-${due.key}`, asAgentId: due.agentId,
@@ -68,14 +68,30 @@ export class LimitResume {
       const refused = error instanceof SuperTabHostError && error.status >= 400 && error.status < 500 && error.code !== 'LIMIT_NOT_RESET'
       this.log(`limit resume of ${due.assignmentId}: ${error instanceof Error ? error.message : String(error)}`)
       if (refused) this.settled.add(due.key)
-      else later()
+      else this.retryAt.set(due.key, now + RETRY_MS)
       return
     }
     this.settled.add(due.key)
     this.retryAt.delete(due.key)
+    this.typing.set(due.key, due)
+  }
+
+  /** Types the owed continue, checking each time first that the task is still this session's and nothing on screen would
+   *  take the Enter. The screen is read here, after the backend answered, not before asking (#1757 review, 3): a prompt
+   *  that opened meanwhile would have taken it. The read and the typing are still two steps; the terminal module checks
+   *  holds at input once it lives outside the core (the follow-up to Avery's move). */
+  private async type(due: Due, now: number): Promise<void> {
     // A replayed yes is the first answer, not who holds the task now: after a lost reply and a takeover it still says yes
     // (#1757 review, 2). The assignment rows read now say whether this session runs it.
-    if (!await this.owns(due.tabId, due.assignmentId, due.harnessId)) return this.log(`limit resume of ${due.assignmentId}: the task is no longer this session's`)
+    if (!await this.owns(due.tabId, due.assignmentId, due.harnessId)) {
+      this.typing.delete(due.key)
+      return this.log(`limit resume of ${due.assignmentId}: the task is no longer this session's`)
+    }
+    // Enter on a permission prompt, a question or a menu would answer it. An unreadable screen says nothing either way.
+    const read = await this.core.superTabs!.screen(due.harnessId, 0).catch(() => null)
+    if (!read?.ok || (read.hold !== null && WAITING.has(read.hold))) return void this.retryAt.set(due.key, now + RETRY_MS)
+    this.typing.delete(due.key)
+    this.retryAt.delete(due.key)
     // The task is the agent's again either way; one it never continues is lost again when its lease runs out.
     const typed = await this.core.superTabs!.input(due.harnessId, CONTINUE, ['Enter'])
     if (!typed.ok) this.log(`limit resume of ${due.assignmentId}: ${typed.error}`)
