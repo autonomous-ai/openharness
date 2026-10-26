@@ -16,8 +16,9 @@ import 'support/web_ux_app.dart';
 Future<WebUxApp> _mount(
   WidgetTester tester,
   Size size,
-  WebUxApp Function() seed,
-) async {
+  WebUxApp Function() seed, {
+  bool desktop = false,
+}) async {
   final app = seed();
   addTearDown(app.dispose);
   tester.view.devicePixelRatio = 1;
@@ -29,7 +30,8 @@ Future<WebUxApp> _mount(
       home: SwarmScreen(
         notifier: app,
         nativeTabs: false,
-        chrome: webWorkspaceChrome(app),
+        // Desktop sets no chrome.
+        chrome: desktop ? null : webWorkspaceChrome(app),
       ),
     ),
   );
@@ -88,6 +90,33 @@ void main() {
     await _mount(tester, const Size(360, 740), _withError);
     expect(_target(tester, find.widgetWithText(TextButton, 'Retry')), _finger);
     await _unmount(tester);
+  });
+
+  // Desktop sets no compactBelow: a narrow window is no phone.
+  testWidgets('Desktop at 600 keeps the bar\'s mouse sizes', (tester) async {
+    Future<List<Size>> bar(Size window) async {
+      await _mount(
+        tester,
+        window,
+        () => withPanes(signedIn(), 2),
+        desktop: true,
+      );
+      final sizes = [
+        for (final key in [
+          'swarm-search-button',
+          'workspace-notifications-button',
+        ])
+          tester.getSize(find.byKey(ValueKey(key))),
+      ];
+      await _unmount(tester);
+      return sizes;
+    }
+
+    final narrow = await bar(const Size(600, 800));
+    for (final size in narrow) {
+      expect(size.height, lessThan(44));
+    }
+    expect(narrow, await bar(const Size(1280, 800)));
   });
 
   testWidgets('a wide window keeps the mouse-sized Retry', (tester) async {

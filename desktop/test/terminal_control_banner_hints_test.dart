@@ -163,6 +163,18 @@ void main() {
     await _finish(tester, app);
   }, variant: _mouse);
 
+  // Desktop sets no compactBelow: a narrow window is no phone.
+  testWidgets('Desktop at 600 keeps the mouse-sized button', (tester) async {
+    final (app, _) = await _takenOver(
+      tester,
+      web: false,
+      window: const Size(600, 800),
+    );
+
+    expect(tester.getSize(_button).height, lessThan(44));
+    await _finish(tester, app);
+  }, variant: _desktopPlatforms);
+
   testWidgets('Desktop keeps ⏎ on the band and on its button', (tester) async {
     final (app, _) = await _takenOver(tester, web: false);
 

@@ -25,6 +25,7 @@ void main() {
     WidgetTester tester,
     Size size, {
     SettingsSection? initialSection,
+    bool desktop = false,
   }) async {
     final notifier = AppNotifier(
       config: AppConfig.dev,
@@ -44,13 +45,21 @@ void main() {
             builder: (context) => Scaffold(
               body: TextButton(
                 key: settingsButton,
-                onPressed: () => showSettingsScreen(
-                  context,
-                  notifier,
-                  initialSection: initialSection,
-                  source: 'test',
-                  compactBelow: 720,
-                ),
+                // Desktop passes no compactBelow.
+                onPressed: () => desktop
+                    ? showSettingsScreen(
+                        context,
+                        notifier,
+                        initialSection: initialSection,
+                        source: 'test',
+                      )
+                    : showSettingsScreen(
+                        context,
+                        notifier,
+                        initialSection: initialSection,
+                        source: 'test',
+                        compactBelow: 720,
+                      ),
                 child: const Text('Settings'),
               ),
             ),
@@ -140,6 +149,14 @@ void main() {
     await mount(tester, const Size(390, 844));
     for (final height in rowHeights(tester)) {
       expect(height, greaterThanOrEqualTo(44));
+    }
+  });
+
+  // Desktop sets no compactBelow: a narrow window is no phone.
+  testWidgets('Desktop at 600 keeps the mouse-sized rows', (tester) async {
+    await mount(tester, const Size(600, 800), desktop: true);
+    for (final height in rowHeights(tester)) {
+      expect(height, 38);
     }
   });
 
