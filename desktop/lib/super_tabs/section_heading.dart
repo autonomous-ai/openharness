@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../shared/theme/app_icons.dart';
 import '../shared/widgets/app_icon_button.dart';
 import '../widgets/desktop_chrome.dart';
+import '../widgets/finger_target.dart';
 
 /// Keeps resource headings aligned whether their add action is available or not.
 class SuperTabSectionHeading extends StatelessWidget {
@@ -61,6 +62,9 @@ class SuperTabSectionHeading extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final collapsible = onToggleCollapsed != null;
+    // A phone's add action is a finger's size.
+    final phone = workspaceIsCompact(context);
+    final addWidth = phone ? kFingerTarget : actionWidth;
     return Padding(
       padding: EdgeInsets.fromLTRB(
         collapsible ? _leadingInset : 16,
@@ -91,7 +95,7 @@ class SuperTabSectionHeading extends StatelessWidget {
                 ? 0.0
                 : (constraints.maxWidth -
                           actions.length * actionWidth -
-                          (onAdd != null ? actionWidth : 0) -
+                          (onAdd != null ? addWidth : 0) -
                           _trailingGap -
                           titleWidth)
                       .clamp(0.0, double.infinity);
@@ -152,10 +156,13 @@ class SuperTabSectionHeading extends StatelessWidget {
                 ],
                 ...actions,
                 if (onAdd != null)
-                  AppIconButton(
-                    icon: AppIcons.plus,
-                    tooltip: addTooltip ?? title,
-                    onPressed: onAdd,
+                  fingerTarget(
+                    enabled: phone,
+                    AppIconButton(
+                      icon: AppIcons.plus,
+                      tooltip: addTooltip ?? title,
+                      onPressed: onAdd,
+                    ),
                   ),
               ],
             );

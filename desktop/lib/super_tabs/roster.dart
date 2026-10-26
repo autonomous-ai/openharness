@@ -11,6 +11,7 @@ import '../terminal/terminal_theme.dart';
 import '../terminal/terminal_theme_store.dart';
 import '../widgets/desktop_chrome.dart';
 import '../widgets/engine_identity.dart';
+import '../widgets/finger_target.dart';
 import '../widgets/harness_activity_mark.dart';
 import 'agent_details.dart';
 import 'controller.dart';
@@ -400,6 +401,7 @@ class _SuperTabRosterState extends State<SuperTabRoster> {
     final agents = members.where((a) => !state!.isLead(a.id)).toList();
     final people = state?.people ?? const <SuperTabPerson>[];
     final shownPeople = _allPeople ? people : people.take(_peopleShown);
+    final compact = workspaceIsCompact(context);
     return [
       SuperTabSectionHeading(
         'Humans',
@@ -410,7 +412,8 @@ class _SuperTabRosterState extends State<SuperTabRoster> {
         ListTile(
           key: ValueKey('super-person-${person.id}'),
           dense: true,
-          minTileHeight: 36,
+          // A phone's row is a finger's height; a mouse keeps 36.
+          minTileHeight: fingerHeight(36, enabled: compact),
           minVerticalPadding: 6,
           minLeadingWidth: 24,
           contentPadding: const EdgeInsets.symmetric(horizontal: 16),
@@ -453,7 +456,7 @@ class _SuperTabRosterState extends State<SuperTabRoster> {
       if (people.length > _peopleShown)
         ListTile(
           dense: true,
-          minTileHeight: 36,
+          minTileHeight: fingerHeight(36, enabled: compact),
           contentPadding: const EdgeInsets.symmetric(horizontal: 16),
           title: Text(
             _allPeople

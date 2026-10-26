@@ -15,6 +15,7 @@ import 'package:harness/shared/theme/color_palette.dart';
 import 'package:harness/state/workspace_chrome.dart';
 import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/view.dart';
+import 'package:harness/web/shell/web_layout.dart';
 
 import '../test/support/super_tab_fixture.dart';
 
@@ -71,11 +72,13 @@ class _FixtureState extends State<_Fixture> {
 
   @override
   // Under the switch the web workspace turns on for the Swarm tab
-  // (`webWorkspaceChrome`), and with New project as the workspace passes it.
+  // (`webWorkspaceChrome`), and with New project as the workspace passes it;
+  // a phone below the web's compact width, as the workspace does.
   Widget build(BuildContext context) => WorkspaceChromeScope(
     chrome: WorkspaceChrome(
       leadingWidth: (_) => 0,
       leading: (_, _) => const SizedBox.shrink(),
+      compactBelow: kWebCompactBelow,
       superTabRecovers: true,
     ),
     child: Scaffold(

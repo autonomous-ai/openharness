@@ -11,6 +11,7 @@ import '../../state/workspace_chrome.dart';
 import '../../state/workspace_status.dart';
 import '../../terminal/terminal_theme.dart';
 import '../../terminal/terminal_theme_store.dart';
+import '../../widgets/finger_target.dart';
 import '../../widgets/pane_menu.dart';
 import '../../widgets/pane_grid.dart' show soloPaneId;
 import '../shell/web_dropdown_control.dart';
@@ -50,8 +51,13 @@ class WebTabSwitcher extends StatelessWidget {
     ].join(' ');
     return Row(
       children: [
-        Flexible(child: _switcher(context, label, enabled, theme)),
-        _newTabButton(context, enabled, theme),
+        Flexible(
+          child: fingerTarget(
+            enabled: true,
+            _switcher(context, label, enabled, theme),
+          ),
+        ),
+        fingerTarget(enabled: true, _newTabButton(context, enabled, theme)),
       ],
     );
   }
