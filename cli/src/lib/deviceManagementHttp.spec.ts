@@ -36,7 +36,10 @@ describe('the device that is this machine: its own add-on service', () => {
     expect(service.machineAddonProposals).toHaveBeenLastCalledWith({ after: 3, waitMs: 20000 })
     await autonomousDeviceLocalRequest(service, 'GET', '/api/autonomous-device/machine-addon/proposals')
     expect(service.machineAddonProposals).toHaveBeenLastCalledWith({ after: 0, waitMs: 0 })
-    for (const query of ['?after=-1', '?after=1&after=2', '?waitMs=123456', '?other=1']) {
+    const instance = '0f8fad5b-d9cb-469f-a165-70867728950e'
+    await autonomousDeviceLocalRequest(service, 'GET', `/api/autonomous-device/machine-addon/proposals?after=1&instance=${instance}`)
+    expect(service.machineAddonProposals).toHaveBeenLastCalledWith({ after: 1, waitMs: 0, instance })
+    for (const query of ['?after=-1', '?after=1&after=2', '?waitMs=123456', '?other=1', '?instance=nope', `?instance=${'a'.repeat(36)}&instance=x`]) {
       expect((await autonomousDeviceLocalRequest(service, 'GET', `/api/autonomous-device/machine-addon/proposals${query}`)).status).toBe(400)
     }
     expect((await autonomousDeviceLocalRequest(service, 'POST', '/api/autonomous-device/machine-addon/hello', { x: 1 })).status).toBe(400)

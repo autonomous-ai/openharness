@@ -21,12 +21,19 @@ async function machineIdOf(word: string, dataDir: string, port: number): Promise
     headers: { 'x-adapter-local': '1', ...localCredentialHeaders(dataDir) }, signal: AbortSignal.timeout(8000) })
   if (!response.ok) throw Object.assign(new Error('Could not read the account\'s machines. Sign in and try again.'), { code: 'MACHINES_UNAVAILABLE' })
   const body = await response.json() as { data?: { machines?: Record<string, unknown>[] }; machines?: Record<string, unknown>[] }
-  const rows = (body.data?.machines ?? body.machines ?? []).filter(row => typeof row.machineId === 'string' && !row.isShared)
+  return pickMachine(word, body.data?.machines ?? body.machines ?? [])
+}
+
+/** The machine `word` names among the account's own: its id, or else its one name. Two of the same name is refused. */
+export function pickMachine(word: string, machines: Record<string, unknown>[]): string {
+  const rows = machines.filter(row => typeof row.machineId === 'string' && !row.isShared)
+  const byId = rows.find(row => row.machineId === word)
+  if (byId) return byId.machineId as string
   const lower = word.toLowerCase()
-  const found = rows.find(row => row.machineId === word)
-    ?? rows.find(row => [row.name, row.hostname].some(name => typeof name === 'string' && name.toLowerCase() === lower))
-  if (!found) throw Object.assign(new Error(`None of your machines is called ${word}.`), { code: 'MACHINE_NOT_FOUND' })
-  return found.machineId as string
+  const named = rows.filter(row => [row.name, row.hostname].some(name => typeof name === 'string' && name.toLowerCase() === lower))
+  if (named.length > 1) throw Object.assign(new Error(`${named.length} of your machines are called ${word}: name one by its id.`), { code: 'AMBIGUOUS' })
+  if (!named.length) throw Object.assign(new Error(`None of your machines is called ${word}.`), { code: 'MACHINE_NOT_FOUND' })
+  return named[0].machineId as string
 }
 
 const askMachine = (dataDir: string, port: number): MachineAsk => async (machine, op, input) => {

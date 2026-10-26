@@ -38,6 +38,8 @@ export class MachineAddons {
   private inbox: InboxEntry[] = []
   private seq = 0
   private readonly waiters = new Set<() => void>()
+  /** This store's own id: a new one after any restart, so the device's service can tell it lost everything. */
+  readonly instance = randomUUID()
 
   constructor(private readonly options: MachineAddonsOptions) {
     this.addons = new DeviceAddons({ machineId: '', serverInstanceId: randomUUID(), now: options.now,
@@ -57,11 +59,11 @@ export class MachineAddons {
   /** The service started: what it published before is cleared, as a device's hello clears it. */
   hello(): Record<string, unknown> {
     this.addons.hello(this.self)
-    return { topics: 0 }
+    return { topics: 0, instance: this.instance }
   }
 
   publish(values: unknown): Record<string, unknown> {
-    return this.addons.request(this.self, { type: 'addon.publish', requestId: randomUUID(), values })
+    return { ...this.addons.request(this.self, { type: 'addon.publish', requestId: randomUUID(), values }), instance: this.instance }
   }
 
   decide(input: { proposalId: unknown; decision: unknown; reason?: unknown }): Record<string, unknown> {
@@ -71,10 +73,12 @@ export class MachineAddons {
 
   /**
    * The proposals after `after`, waiting up to `waitMs` for one when there are none. `next` is the cursor for the
-   * next take. A cursor ahead of this daemon's (it restarted) reads from the start, said by `reset`.
+   * next take, and `instance` this store's. `reset`: the store is not the one `instance` named, or the cursor is
+   * ahead of it: it restarted and holds nothing the service published, which publishes again after a hello;
+   * the take reads from the start. `gap`: proposals after the cursor were dropped from the inbox before this take.
    */
-  async proposals(after: number, waitMs = 0): Promise<{ proposals: InboxEntry[]; next: number; reset?: true }> {
-    const reset = after > this.seq
+  async proposals(after: number, waitMs = 0, instance?: string): Promise<{ proposals: InboxEntry[]; next: number; instance: string; reset?: true; gap?: true }> {
+    const reset = (instance !== undefined && instance !== this.instance) || after > this.seq
     const from = reset ? 0 : after
     if (!reset && waitMs > 0 && !this.inbox.some(entry => entry.seq > from)) {
       await new Promise<void>(resolve => {
@@ -83,8 +87,10 @@ export class MachineAddons {
         this.waiters.add(wake)
       })
     }
+    const first = this.inbox[0]?.seq ?? this.seq + 1
+    const gap = !reset && from < first - 1
     return { proposals: this.inbox.filter(entry => entry.seq > from).map(entry => structuredClone(entry)), next: this.seq,
-      ...(reset ? { reset: true as const } : {}) }
+      instance: this.instance, ...(reset ? { reset: true as const } : {}), ...(gap ? { gap: true as const } : {}) }
   }
 
   // ── agents: on the person's other machines over the machine link, or on this one ────────────────────
@@ -126,7 +132,8 @@ export class MachineAddons {
       if (payload.op === 'publish') return { result: this.publish(input.values) }
       if (payload.op === 'decision') return { result: this.decide({ proposalId: input.proposalId, decision: input.decision, reason: input.reason }) }
       const whole = (value: unknown): number => typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : 0
-      return { result: { ...await this.proposals(whole(input.after), whole(input.waitMs)) } }
+      const instance = typeof input.instance === 'string' ? input.instance : undefined
+      return { result: { ...await this.proposals(whole(input.after), whole(input.waitMs), instance) } }
     } catch (error) {
       if (error instanceof DeviceAddonError) return { error: { code: error.code, message: error.message } }
       throw error

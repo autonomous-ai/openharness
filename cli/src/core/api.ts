@@ -754,6 +754,8 @@ const MINUTE = 60_000
 export const LONG_ANSWERS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
   // Fifty GitHub reads, four at a time, each with an eight-second subprocess deadline.
   projects: { git_pull_requests_status: 120_000 },
+  // The device's own service waits up to 20 s for its next proposal (lib/autonomous-device/machineAddons.ts).
+  machineAddons: { machine_addon: 30_000 },
   models: {
     grid_fleet_run: GRID_FLEET_MAX_TIMEOUT_MS + MINUTE,
     grid_fleet_models_list: 15 * MINUTE, grid_fleet_model_download: 15 * MINUTE, grid_fleet_model_start: 15 * MINUTE,

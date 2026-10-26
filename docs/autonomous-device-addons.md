@@ -177,8 +177,16 @@ loopback routes, like the other `autonomous-device` routes:
 
 `proposals` is the device's inbox in place of the `addon.proposal` event: the proposals after `after`, each
 as the event's payload with its `seq`, and `next` for the next take. With none, it waits up to `waitMs`
-(at most 20 s) for one. The inbox keeps the last 32. A cursor ahead of the inbox (the daemon restarted)
-reads from the start and says `reset: true`.
+(at most 20 s) for one. The inbox keeps the last 32; `gap: true` says proposals after the cursor were
+dropped from it before this take.
+
+**Restarts.** Everything is in RAM, and the daemon or its devices' process may restart at any time (every
+Harness update does). Every `hello`, `publish` and `proposals` answer carries `instance`, the store's own id,
+new after each restart. The service passes the last one it saw as `proposals?instance=`. When the store is
+another one, or the cursor is ahead of it, the answer says `reset: true` and reads from the start: what
+the service published is gone, and the owner's machines get `DEVICE_NOT_FOUND` until it publishes again.
+**On `reset`, the service sends `hello` and publishes its whole set again**, as a device does after
+`addon.republish`.
 
 **Agents** on the owner's other machines reach the device over the existing machine link, as the
 sealed `machine_addon` request (`{op:"state"|"propose"|"proposal",input}`), and the CLI takes
@@ -197,7 +205,10 @@ harness autonomous-device addon proposal <proposalId> --machine lamp-4ace --json
   record of the link that carried it (`Asker.machine`), never from the payload, which may not carry one.
   A device can then ask its person's yes per computer. The owner's phone or browser may read `state`, but a
   proposal needs a machine (`MACHINE_REQUIRED`). An agent on the device itself proposes as that machine.
-- **A machine reads back its own proposals alone.** Another machine's reads as `PROPOSAL_UNKNOWN`.
+- **A machine reads back its own proposals alone.** Another machine's reads as `PROPOSAL_UNKNOWN`, and its
+  idempotency keys are its own: the same key from another machine is another proposal.
+- `--machine` takes a machine's id or its name. Two of the account's machines with that name are refused
+  `AMBIGUOUS`: name one by its id.
 - A proposal's target is always the device that is that machine: `deviceId` in the input is ignored.
 - It runs in the devices' process (`services/machineAddons.ts`), started at its first request, in RAM; a daemon restart forgets it all.
 

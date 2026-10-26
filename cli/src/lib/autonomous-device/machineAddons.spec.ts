@@ -18,7 +18,7 @@ function fixture() {
 describe('machine add-ons: a device that is this Harness machine', () => {
   it('serves what its own service published to the owner\'s machines, and clears it at the service\'s hello', () => {
     const f = fixture()
-    expect(f.addons.publish([{ topic: 'voice/state', value: { state: 'listening' } }])).toEqual({ topics: 1 })
+    expect(f.addons.publish([{ topic: 'voice/state', value: { state: 'listening' } }])).toEqual({ topics: 1, instance: f.addons.instance })
     expect(f.addons.request({ op: 'state' }, OFFICE)).toEqual({ result: { devices: [{ deviceId: LAMP, online: true,
       topics: { 'voice/state': { value: { state: 'listening' }, at: null, receivedAt: 1_000_000 } } }] } })
     f.addons.hello()
@@ -76,7 +76,7 @@ describe('machine add-ons: a device that is this Harness machine', () => {
     const waiting = f.addons.proposals(0, 5_000)
     f.propose(OFFICE)
     expect((await waiting).proposals).toHaveLength(1)
-    expect(await f.addons.proposals(1)).toEqual({ proposals: [], next: 1 })
+    expect(await f.addons.proposals(1)).toEqual({ proposals: [], next: 1, instance: f.addons.instance })
     expect(await f.addons.proposals(7)).toMatchObject({ reset: true, next: 1, proposals: [{ seq: 1 }] })
     for (let i = 0; i < INBOX_MAX + 3; i++) {
       f.tick(60_000)
@@ -93,11 +93,52 @@ describe('machine add-ons: a device that is this Harness machine', () => {
   it('takes publishes and decisions over `machine_addon` from a process on this machine alone', async () => {
     const f = fixture()
     expect(await f.addons.request({ op: 'publish', input: { values: [{ topic: 'voice/state', value: {} }] } }, OFFICE)).toMatchObject({ error: { code: 'LOCAL_ONLY' } })
-    expect(await f.addons.request({ op: 'publish', input: { values: [{ topic: 'voice/state', value: {} }] } }, { local: true, owner: true })).toEqual({ result: { topics: 1 } })
+    expect(await f.addons.request({ op: 'publish', input: { values: [{ topic: 'voice/state', value: {} }] } }, { local: true, owner: true })).toMatchObject({ result: { topics: 1 } })
     const id = ((f.propose(OFFICE) as { result: { proposal: { proposalId: string } } }).result.proposal.proposalId)
     expect(await f.addons.request({ op: 'proposals', input: { after: 0 } }, { local: true, owner: true })).toMatchObject({ result: { next: 1, proposals: [{ seq: 1 }] } })
     expect(await f.addons.request({ op: 'decision', input: { proposalId: id, decision: 'maybe' } }, { local: true, owner: true })).toMatchObject({ error: { code: 'INVALID_REQUEST' } })
     expect(await f.addons.request({ op: 'decision', input: { proposalId: id, decision: 'dropped' } }, { local: true, owner: true })).toEqual({ result: { proposalId: id, state: 'dropped' } })
-    expect(await f.addons.request({ op: 'hello' }, { local: true, owner: true })).toEqual({ result: { topics: 0 } })
+    expect(await f.addons.request({ op: 'hello' }, { local: true, owner: true })).toMatchObject({ result: { topics: 0 } })
+  })
+
+  it('tells the device\'s service that the store it published to is gone: another instance, or a cursor ahead of it', async () => {
+    const before = fixture()
+    before.addons.publish([{ topic: 'voice/state', value: {} }])
+    const old = before.addons.instance
+    // The daemon or its process restarted: a new store, empty, at cursor 0.
+    const after = fixture()
+    expect(after.addons.instance).not.toBe(old)
+    expect(await after.addons.proposals(0, 0, old)).toEqual({ proposals: [], next: 0, instance: after.addons.instance, reset: true })
+    expect(after.propose(OFFICE)).toMatchObject({ error: { code: 'DEVICE_NOT_FOUND' } })
+    // A restarted store already past the old cursor reads from its start, so nothing new is skipped.
+    after.addons.publish([{ topic: 'voice/state', value: {} }])
+    for (let i = 0; i < 3; i++) { after.propose(OFFICE); after.tick(1) }
+    expect(await after.addons.proposals(2, 0, old)).toMatchObject({ reset: true, next: 3, proposals: [{ seq: 1 }, { seq: 2 }, { seq: 3 }] })
+    expect(await after.addons.proposals(2, 0, after.addons.instance)).toEqual({ proposals: [expect.objectContaining({ seq: 3 })], next: 3, instance: after.addons.instance })
+  })
+
+  it('says when proposals after the cursor were dropped from the inbox', async () => {
+    const f = fixture()
+    f.addons.publish([{ topic: 'voice/state', value: {} }])
+    for (let i = 0; i < INBOX_MAX + 8; i++) {
+      f.tick(60_000)
+      f.propose(OFFICE)
+      const last = (await f.addons.proposals(f.addons['seq'] - 1)).proposals.at(-1)!
+      f.addons.decide({ proposalId: (last.proposal as { proposalId: string }).proposalId, decision: 'dropped' })
+    }
+    expect(await f.addons.proposals(0)).toMatchObject({ gap: true, proposals: { length: INBOX_MAX } })
+    expect(await f.addons.proposals(8)).not.toHaveProperty('gap')
+    expect(await f.addons.proposals(INBOX_MAX + 8)).not.toHaveProperty('gap')
+  })
+
+  it('keeps each machine\'s idempotency keys its own: the same key from another machine is another proposal', () => {
+    const f = fixture()
+    f.addons.publish([{ topic: 'voice/state', value: {} }])
+    const input = { addon: 'slack-summary', idempotencyKey: 'same', act: 'say', holdsMs: 10_000, note: 'one' }
+    const a = f.addons.request({ op: 'propose', input }, OFFICE) as { result: { proposal: { proposalId: string } } }
+    const b = f.addons.request({ op: 'propose', input: { ...input, note: 'two' } }, LAPTOP) as { result: { proposal: { proposalId: string } } }
+    expect(b.result.proposal.proposalId).not.toBe(a.result.proposal.proposalId)
+    expect((f.addons.request({ op: 'propose', input }, OFFICE) as typeof a).result.proposal.proposalId).toBe(a.result.proposal.proposalId)
+    expect(f.addons.request({ op: 'propose', input: { ...input, note: 'changed' } }, OFFICE)).toMatchObject({ error: { code: 'IDEMPOTENCY_CONFLICT' } })
   })
 })

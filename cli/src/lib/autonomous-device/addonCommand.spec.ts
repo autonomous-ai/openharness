@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { runAutonomousDeviceCommand } from './command.js'
-import { runAddonCommand } from './addonCommand.js'
+import { pickMachine, runAddonCommand } from './addonCommand.js'
 vi.mock('../hookAuth.js', () => ({ readHookCredential: () => 'hook-test-credential' }))
 afterEach(() => vi.restoreAllMocks())
 
@@ -91,3 +91,18 @@ describe('harness autonomous-device addon --machine', () => {
     expect(fetch).not.toHaveBeenCalled()
   })
 })
+
+describe('the machine --machine names', () => {
+  const rows = [{ machineId: 'm_lamp', name: 'lamp-4ace' }, { machineId: 'm_a', name: 'Office' }, { machineId: 'm_b', hostname: 'office' },
+    { machineId: 'm_shared', name: 'kim', isShared: true }]
+  it('is an id, or the one machine of that name, case-blind; this machine too, as its own row', () => {
+    expect(pickMachine('m_lamp', rows)).toBe('m_lamp')
+    expect(pickMachine('LAMP-4ACE', rows)).toBe('m_lamp')
+    expect(pickMachine('m_b', rows)).toBe('m_b')
+  })
+  it('refuses two machines of one name, and a machine shared with this account', () => {
+    expect(() => pickMachine('office', rows)).toThrow(expect.objectContaining({ code: 'AMBIGUOUS' }))
+    expect(() => pickMachine('kim', rows)).toThrow(expect.objectContaining({ code: 'MACHINE_NOT_FOUND' }))
+  })
+})
+

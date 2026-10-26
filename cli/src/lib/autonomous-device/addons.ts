@@ -161,8 +161,9 @@ export class DeviceAddons {
     const { deviceId: _target, idempotencyKey: _key, ...intent } = req
     const digest = createHash('sha256').update(canonical(intent)).digest('hex')
     for (const existing of this.proposals.values()) {
-      if (existing.addon !== req.addon || existing.idempotencyKey !== req.idempotencyKey) continue
-      if (existing.digest !== digest || (req.deviceId && req.deviceId !== existing.deviceId) || existing.from?.machineId !== from?.machineId) fail('IDEMPOTENCY_CONFLICT', 'Key already belongs to a different proposal')
+      // A key is the proposing machine's own: another machine's same key is another proposal, and says nothing of it.
+      if (existing.addon !== req.addon || existing.idempotencyKey !== req.idempotencyKey || existing.from?.machineId !== from?.machineId) continue
+      if (existing.digest !== digest || (req.deviceId && req.deviceId !== existing.deviceId)) fail('IDEMPOTENCY_CONFLICT', 'Key already belongs to a different proposal')
       return this.view(existing)
     }
     const deviceId = this.target(req.deviceId)

@@ -1,7 +1,7 @@
 /**
  * Add-ons for a device that is this machine, in their own process (`harness __service machineAddons`, in the devices'
  * process): the same handler as in the core's process (services/machineAddons.ts). It asks the core only where this
- * daemon runs, for this machine's id; what it holds is RAM, bounded as v1's add-ons are.
+ * daemon runs, for this machine's account id; what it holds is RAM, bounded as v1's add-ons are.
  */
 import { startMachineAddons } from './machineAddons.js'
 import { runServiceProcess, type ServiceProcess } from './process.js'
@@ -14,17 +14,19 @@ export interface MachineAddonsServiceOptions {
   token: string
   /** Swapped in tests for one that does not touch the real socket or process. */
   run?: typeof runServiceProcess
+  /** Swapped in tests for one that asks no core. */
+  core?: typeof processCoreApi
 }
 
 export function runMachineAddonsService(options: MachineAddonsServiceOptions): ServiceProcess {
-  const core = processCoreApi(options.dataDir, 'machineAddons')
-  // This machine's id is the master's to give: the core's own answer would need a round trip per request.
-  const machineId = options.machineId
+  // This machine's account id, as the core says it and processCoreApi keeps it: `options.machineId` is the
+  // computer's id, which the owner's other machines don't know it by.
+  const core = (options.core ?? processCoreApi)(options.dataDir, 'machineAddons')
   return (options.run ?? runServiceProcess)({
     name: 'machineAddons',
     socketPath: options.socketPath,
     machineId: options.machineId,
     token: options.token,
-    requests: startMachineAddons({ ...core, daemon: { ...core.daemon, machineId: () => machineId } }),
+    requests: startMachineAddons(core),
   })
 }

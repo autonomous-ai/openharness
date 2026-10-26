@@ -17,7 +17,7 @@ export interface AutonomousDeviceManagement {
   machineAddonHello(): unknown | Promise<unknown>
   machineAddonPublish(input: { values: unknown }): unknown | Promise<unknown>
   machineAddonDecision(input: { proposalId: unknown; decision: unknown; reason?: unknown }): unknown | Promise<unknown>
-  machineAddonProposals(target: { after: number; waitMs: number }): unknown | Promise<unknown>
+  machineAddonProposals(target: { after: number; waitMs: number; instance?: string }): unknown | Promise<unknown>
 }
 
 export interface AutonomousDeviceLocalResponse { status: number; body: unknown }
@@ -52,7 +52,7 @@ export function machineAddonRoutes(ask: (op: string, input: Record<string, unkno
     machineAddonHello: () => call('hello', {}),
     machineAddonPublish: ({ values }) => call('publish', { values }),
     machineAddonDecision: (input) => call('decision', input),
-    machineAddonProposals: ({ after, waitMs }) => call('proposals', { after, waitMs }, waitMs),
+    machineAddonProposals: ({ after, waitMs, instance }) => call('proposals', { after, waitMs, ...(instance ? { instance } : {}) }, waitMs),
   }
 }
 
@@ -156,10 +156,11 @@ export async function autonomousDeviceLocalRequest(
       break
     case '/api/autonomous-device/machine-addon/proposals': {
       const query = url.searchParams
-      if ([...query.keys()].some(key => key !== 'after' && key !== 'waitMs') || query.getAll('after').length > 1 || query.getAll('waitMs').length > 1) return bad()
-      const after = query.get('after') ?? '0', waitMs = query.get('waitMs') ?? '0'
-      if (!/^\d{1,15}$/.test(after) || !/^\d{1,5}$/.test(waitMs)) return bad()
-      call = () => service.machineAddonProposals({ after: Number(after), waitMs: Number(waitMs) })
+      if ([...query.keys()].some(key => !['after', 'waitMs', 'instance'].includes(key))
+        || ['after', 'waitMs', 'instance'].some(key => query.getAll(key).length > 1)) return bad()
+      const after = query.get('after') ?? '0', waitMs = query.get('waitMs') ?? '0', instance = query.get('instance')
+      if (!/^\d{1,15}$/.test(after) || !/^\d{1,5}$/.test(waitMs) || (instance !== null && !/^[0-9a-f-]{36}$/i.test(instance))) return bad()
+      call = () => service.machineAddonProposals({ after: Number(after), waitMs: Number(waitMs), ...(instance ? { instance } : {}) })
       break
     }
     case '/api/autonomous-device/addon/state':
