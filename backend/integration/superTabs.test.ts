@@ -3147,6 +3147,39 @@ describe('Swarm sweeps', () => {
       truncated: false, interrupted: false })).rejects.toMatchObject({ code: 'NATIVE_CONTEXT_REVOKED' })
   })
 
+  it('revokes a terminal in a dormant legacy conversation of the default project, stored with no project, when its opener loses the project', async () => {
+    const { tab, lead } = await fixture()
+    await invite(tab)
+    await run(tab, { type: 'project.sharing', projectId: 'lead', visibility: 'private', memberIds: [peer.sub] })
+    const group = String((await run(tab, { type: 'conversation.create', title: 'Legacy quiet', brief: 'Old work',
+      checks: [{ description: 'Done', independent: false }] })).result.conversationId)
+    const worker = String((await run(tab, { type: 'agent.add', conversationId: group, machineId: 'test-host', harnessId: randomUUID(),
+      name: 'Legacy Worker', configuration: config, lead: false })).result.agentId)
+    const { contextId } = await store.native.open(peer, tab, { operationId: randomUUID(), conversationId: group, agentId: worker })
+    const turn = await store.native.append(host, tab, contextId, { turnId: 'kept', kind: 'prompt', previousEventId: null, text: 'Typed by the peer',
+      truncated: false, interrupted: false }) as { eventId: string }
+    const waiting = await db.superTabDelivery.findFirstOrThrow({ where: { tabId: tab, messageId: turn.eventId, agentId: lead } })
+    const assignmentId = String((await run(tab, { type: 'work.assign', conversationId: group, agentId: worker })).result.assignmentId)
+    const checkId = (await storedState(tab)).conversations.find(c => c.id === group)!.checks[0]!.id
+    await run(tab, { type: 'work.check', conversationId: group, assignmentId, checkId, passed: true, evidence: 'Shown' })
+    await run(tab, { type: 'work.status', conversationId: group, assignmentId, status: 'done', result: 'Shipped' }, host, worker)
+    await acknowledge(tab, lead, group)
+    await sweepSwarms(db, Date.now() + day + 60_000)
+    // Stored as a Swarm from before projects left it: no project on the group, which then belongs to the default one.
+    const row = await db.swarmGroup.findFirstOrThrow({ where: { tabId: tab, key: group } })
+    const { projectId: _projectId, ...legacy } = row.data as Record<string, unknown>
+    await db.swarmGroup.update({ where: { id: row.id }, data: { projectId: null, data: legacy as never } })
+    expect((await db.$transaction(tx => parts.loadDormant(tx, tab, {}))).map(p => p.key)).toContain(group)
+    expect((await db.superTabNativeContext.findUniqueOrThrow({ where: { id: contextId } })).revoked).toBe(false)
+
+    await run(tab, { type: 'project.sharing', projectId: 'lead', visibility: 'private', memberIds: [] })
+    expect((await db.superTabNativeContext.findUniqueOrThrow({ where: { id: contextId } })).revoked).toBe(true)
+    expect((await db.superTabDelivery.findUniqueOrThrow({ where: { id: waiting.id } })).status).toBe('cancelled')
+    await run(tab, { type: 'project.sharing', projectId: 'lead', visibility: 'private', memberIds: [peer.sub] })
+    await expect(store.native.append(host, tab, contextId, { turnId: 'late', kind: 'prompt', previousEventId: turn.eventId, text: 'After removal',
+      truncated: false, interrupted: false })).rejects.toMatchObject({ code: 'NATIVE_CONTEXT_REVOKED' })
+  })
+
   it('never lets a person, agent or machine come back at a lower version, even long after it was removed', async () => {
     const { tab } = await fixture()
     const harnessId = randomUUID()

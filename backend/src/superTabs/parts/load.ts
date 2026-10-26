@@ -34,7 +34,9 @@ export function loadActive(tx: Transaction, tabId: string,
   return assemble(tx, tabId, {
     member: live, agent: live, machine: live, progress: live,
     group: opts.allGroups ? live : or({ dormant: false }, !!opts.groupIds?.length && { key: { in: opts.groupIds } },
-      !!opts.agentIds?.length && { agentIds: { hasSome: opts.agentIds } }, !!opts.projectIds?.length && { projectId: { in: opts.projectIds } }),
+      !!opts.agentIds?.length && { agentIds: { hasSome: opts.agentIds } }, !!opts.projectIds?.length && { projectId: { in: opts.projectIds } },
+      // A group stored with no project belongs to the default one (projects.ts groupProject), as in a Swarm from before projects.
+      !!opts.projectIds?.includes('lead') && { projectId: null }, !!opts.projectIds?.includes('lead') && { projectId: { isSet: false } }),
     start: opts.includeRecentStarts ? live : or({ finishedAt: null }, !!opts.startIds?.length && { key: { in: opts.startIds } },
       !!opts.startAgentIds?.length && { agentId: { in: opts.startAgentIds } }),
   })
