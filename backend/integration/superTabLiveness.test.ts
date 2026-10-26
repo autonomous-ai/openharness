@@ -351,6 +351,15 @@ describe('a start that never runs', () => {
 })
 
 describe('the morning digest', () => {
+  it('is sent once when two of the Lead\'s polls run at the same moment', async () => {
+    const f = await swarm()
+    const projectId = (await f.timed.read(owner, f.tab)).state.projects![0]!.id
+    await f.execute({ type: 'project.digest', projectId, time: '03:00', timeZone: 'UTC' })
+    f.clock.now = 3 * 60 * 60_000
+    await Promise.all([f.leadInbox(), f.leadInbox()])
+    expect((await db.superTabMessage.findMany({ where: { tabId: f.tab } })).filter(m => (m.source as { kind?: string } | null)?.kind === 'digest-request')).toHaveLength(1)
+  })
+
   it('lists work that shipped and was archived before the digest (#1757 review, 4)', async () => {
     const f = await swarm()
     const projectId = (await f.timed.read(owner, f.tab)).state.projects![0]!.id
