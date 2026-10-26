@@ -92,6 +92,14 @@ describe('migrating one Swarm to parts (design 6.1.2)', () => {
     expect(web.data).toMatchObject({ reportSeq: 30 })
   })
 
+  it('stores the host-fields digest of every conversation it creates (host form version check)', async () => {
+    const { tabId, state } = await legacySwarm()
+    await migrateSwarm(db, tabId, { now: () => NOW })
+    const rows = await db.swarmGroup.findMany({ where: { tabId }, select: { key: true, hostDigest: true } })
+    expect(rows).toHaveLength(state.conversations.length)
+    expect(rows.filter(r => !r.hostDigest)).toEqual([])
+  })
+
   it('skips a Swarm that is already in parts, changing nothing', async () => {
     const { tabId } = await legacySwarm()
     await migrateSwarm(db, tabId, { now: () => NOW })

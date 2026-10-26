@@ -107,10 +107,15 @@ export class HostReads {
   private async tabState(tx: Transaction, tabId: string, machineId: string): Promise<SuperTabState> {
     const [agents, starts] = await Promise.all([
       tx.swarmAgent.findMany({ where: { tabId, machineId, deleted: false }, select: { key: true } }),
-      tx.swarmStart.findMany({ where: { tabId, deleted: false, finishedAt: null }, select: { conversationId: true } }),
+      tx.swarmStart.findMany({ where: { tabId, machineId, deleted: false, finishedAt: null }, select: { conversationId: true } }),
     ])
-    // Light conversations (parts/light.ts): host rows read their members, Lead, work and privacy, never their bodies.
-    return parts.reassemble(await parts.loadLight(tx, tabId, { agentIds: agents.map(a => a.key), groupIds: [...new Set(starts.map(s => s.conversationId))] }))
+    const groupIds = [...new Set(starts.map(s => s.conversationId))]
+    // A pool lists every conversation of a project it has a start in.
+    const projectIds = groupIds.length ? [...new Set((await tx.swarmGroup.findMany({ where: { tabId, key: { in: groupIds } }, select: { projectId: true } }))
+      .map(g => g.projectId ?? 'lead'))] : []
+    // Light conversations (parts/light.ts), and only those host rows read: its agents' (dormant ones too, for `active`),
+    // the Lead conversations, running work (assignments, attention, stop requests), and its starts' and their projects'.
+    return parts.reassemble(await parts.loadLight(tx, tabId, { groups: 'working', agentIds: agents.map(a => a.key), groupIds, projectIds }))
   }
 
   /**

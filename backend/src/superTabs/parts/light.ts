@@ -52,10 +52,10 @@ const toPart = <T>(kind: PartKind, row: PartRow): Part<T> => ({ kind, key: row.k
  * The live parts of one Swarm with conversations light. Conversations: every active one (`groups: 'active'`, as
  * `loadActive`), or only the Lead conversations and those with running work (`'working'`: what visibility and derived
  * values read once every finished worker's decision is stored); plus those named by id and those the named agents are in,
- * dormant ones too. Starts: unfinished, or every live start with `includeRecentStarts`.
+ * dormant ones too, and the active ones of the named projects. Starts: unfinished, or every live start with `includeRecentStarts`.
  */
 export async function loadLight(tx: Transaction, tabId: string,
-  opts: { groupIds?: string[]; agentIds?: string[]; includeRecentStarts?: boolean; groups?: 'active' | 'working' } = {}): Promise<SwarmParts> {
+  opts: { groupIds?: string[]; agentIds?: string[]; projectIds?: string[]; includeRecentStarts?: boolean; groups?: 'active' | 'working' } = {}): Promise<SwarmParts> {
   const head = await tx.swarmHead.findUnique({ where: { id: partId(tabId, 'head') } })
   if (!head) throw Object.assign(new Error(`Swarm ${tabId} has no parts`), { code: 'PARTS_MISSING' })
   const live = { tabId, deleted: false }
@@ -66,7 +66,10 @@ export async function loadLight(tx: Transaction, tabId: string,
   const working = [...projects ? projects.map(p => p.leadConversationId) : ['lead'], leadsConversationId ?? '',
     ...starts.map(s => s.data!.request.conversationId), ...invitations.map(i => i.conversationId)]
   const which = opts.groups === 'working' ? [{ key: { $in: working } }, { executionMachineId: { $ne: null } }] : [{ dormant: false }]
-  const named = [...which, ...opts.groupIds?.length ? [{ key: { $in: opts.groupIds } }] : [], ...opts.agentIds?.length ? [{ agentIds: { $in: opts.agentIds } }] : []]
+  const named = [...which, ...opts.groupIds?.length ? [{ key: { $in: opts.groupIds } }] : [], ...opts.agentIds?.length ? [{ agentIds: { $in: opts.agentIds } }] : [],
+    ...opts.projectIds?.length ? [{ projectId: { $in: opts.projectIds }, dormant: false }] : [],
+    // The Swarm's first project also holds conversations stored with no project (model.ts groupProject).
+    ...opts.projectIds?.includes('lead') ? [{ projectId: null, dormant: false }] : []]
   const [members, agents, machines, progress, groups] = await Promise.all([
     ...(['member', 'agent', 'machine'] as const).map(kind => delegate(tx, kind).findMany({ where: live }).then(rows => rows.map(row => toPart(kind, row)))),
     delegate(tx, 'progress').findMany({ where: live }).then(rows => rows.map(row => toPart('progress', row))),
