@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { parts as store } from './partsPort.js'
+import * as store from '../parts/index.js'
 import { readerView } from './views.js'
 import { NOW, outsider, owner, peer, richSwarm } from './fixture.test-support.js'
 import type { Actor } from '../model.js'

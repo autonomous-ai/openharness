@@ -9,7 +9,9 @@ import { author, fail, type Actor, type AgentStart } from '../model.js'
 import { mentionsWaiting } from '../mentions.js'
 import { transaction, type SuperTabStore } from '../store.js'
 import { migrateSwarm } from '../migration/migrate.js'
-import { canReadGroup, parts, type SwarmParts } from './partsPort.js'
+import * as parts from '../parts/index.js'
+import type { SwarmParts } from '../parts/index.js'
+import { canReadGroup } from '../projects.js'
 import { READ_FORMAT, SWARM_MIGRATING, type Changes, type DormantGroups, type FirstLoad, type OneGroup, type SwarmList } from './contract.js'
 import { cursorFor, readCursor } from './cursor.js'
 import { changesFor } from './changes.js'
@@ -68,8 +70,13 @@ export class SwarmReads {
   async group(user: AuthUser, tabId: string, conversationId: string, asAgentId?: string): Promise<OneGroup> {
     const t0 = this.now()
     return this.read(user, tabId, async tx => {
-      const { view } = await this.load(tx, user, tabId, asAgentId, t0, { groupIds: [conversationId] })
-      return { group: view.parts.groups.find(g => g.key === conversationId) ?? fail('NOT_FOUND', 'This conversation is unavailable.', 404) }
+      const { view, parts: loaded, actor } = await this.load(tx, user, tabId, asAgentId, t0, { groupIds: [conversationId] })
+      const active = view.parts.groups.find(g => g.key === conversationId)
+      if (active) return { group: active }
+      // A dormant group is in no whole-Swarm view; it passes the same read check as on the dormant list.
+      const dormant = loaded.groups.find(g => g.key === conversationId && g.dormant)
+      if (dormant && canReadGroup(view.state, actor, dormant.data!)) return { group: envelope(dormant, groupView({ ...dormant.data!, dormant: true })) }
+      return fail('NOT_FOUND', 'This conversation is unavailable.', 404)
     })
   }
 
@@ -88,11 +95,12 @@ export class SwarmReads {
     }), next: rows.length > 100 ? page.at(-1)!.id : null }
   }
 
-  /** Runs a read; a Swarm still in one row is migrated first (design 6.1), and answers 503 while that cannot be done. */
+  /** Runs a read; a Swarm still in one row is migrated first, as a safety net for one the job did not see (design 6.1),
+   *  and answers 503 while that cannot be done. The store's own loader refuses a Swarm not in parts. */
   private async read<T>(user: AuthUser, tabId: string, body: (tx: Transaction) => Promise<T>): Promise<T> {
-    const row = await transaction(this.db, tx => this.store.row(tx, user, tabId))
-    if (row.format !== 2 && !(await migrateSwarm(this.db, tabId)).ok) fail(SWARM_MIGRATING.code, SWARM_MIGRATING.message, SWARM_MIGRATING.status)
-    return transaction(this.db, body)
+    const row = await this.db.superTab.findFirst({ where: { id: tabId, autonomousEnv: user.autonomousEnv }, select: { format: true } })
+    if (row && row.format !== 2 && !(await migrateSwarm(this.db, tabId)).ok) fail(SWARM_MIGRATING.code, SWARM_MIGRATING.message, SWARM_MIGRATING.status)
+    return transaction(this.db, async tx => { await this.store.row(tx, user, tabId); return body(tx) })
   }
 
   private async load(tx: Transaction, user: AuthUser, tabId: string, asAgentId: string | undefined, t0: number, opts: LoadOptions): Promise<Read> {

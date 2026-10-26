@@ -4,8 +4,8 @@
  * cannot be made (its project is gone), the change also moved the visibility epoch and every reader reloads.
  */
 import type { Actor, Agent, AgentStart, Conversation } from '../model.js'
-import { canReadAgent } from '../projects.js'
-import { canReadGroup, type MachineData, type Part } from './partsPort.js'
+import { canReadAgent, canReadGroup } from '../projects.js'
+import type { MachineData, Part } from '../parts/index.js'
 import type { ChangesDelta, DormantStub, Tombstone } from './contract.js'
 import { envelope, progressView, type ReaderView } from './views.js'
 

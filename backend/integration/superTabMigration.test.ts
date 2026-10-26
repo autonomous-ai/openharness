@@ -14,7 +14,7 @@ import { guardedWrite } from '../src/superTabs/parts/write.js'
 import { normalize } from '../src/superTabs/migration/normalize.js'
 import { stateDifference } from '../src/superTabs/migration/verify.js'
 import { visibleState, type Author, type SuperTabState } from '../src/superTabs/model.js'
-import { writeLegacySwarm, type LegacyMessage } from '../scripts/swarm-parts/legacy.js'
+import { setLegacyProgress, writeLegacySwarm, type LegacyMessage } from '../scripts/swarm-parts/legacy.js'
 import { NOW, richSwarm } from '../src/superTabs/read/fixture.test-support.js'
 
 // A fresh loopback replica set, created here. This suite never reads DATABASE_URL or an existing database.
@@ -92,7 +92,7 @@ describe('migrating one Swarm to parts (design 6.1.2)', () => {
   it('writes nothing and names the first difference when the parts would not reassemble into the old state', async () => {
     // Report progress past every group's last message cannot be told apart from the groups; the Swarm stays as it was.
     const { tabId } = await legacySwarm(state => {
-      state.projects![0]!.progress = { dirtyRevision: 45, summarizedRevision: 0, since: 1, requestedRevision: 0 }
+      setLegacyProgress(state.projects![0]!, { dirtyRevision: 45, summarizedRevision: 0, since: 1, requestedRevision: 0 })
     })
     const report = await migrateSwarm(db, tabId, { now: () => NOW })
     expect(report).toMatchObject({ tabId, ok: false })

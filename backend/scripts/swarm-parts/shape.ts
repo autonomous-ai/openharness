@@ -5,7 +5,7 @@
  */
 import { applyCommand, type Command, type CommandContext } from '../../src/superTabs/commands.js'
 import { createSuperTab, type Actor, type AgentConfiguration, type Assignment, type Author, type SuperTabState } from '../../src/superTabs/model.js'
-import type { LegacyMessage } from './legacy.js'
+import { setLegacyProgress, type LegacyMessage } from './legacy.js'
 
 export interface SwarmSpec { name: string; groups: number; agents: number; machines: number; projects: number; messages: number; targetBytes?: number; withoutProjects?: true }
 export const PRODUCTION_SHAPED: SwarmSpec[] = [
@@ -122,7 +122,7 @@ function ledger(state: SuperTabState, rng: () => number, machines: string[], wor
       error: error as string | null, poolGeneration: pool.generation, poolSettled: settled as boolean, request: request(groups[s % groups.length]!) }))
   for (const machine of state.machines!) machine.observation = { generation: machine.generation, receivedAt: now - Math.floor(rng() * 20_000), sessionKind: 'computer',
     resources: { cpuPercent: 12, memoryTotalBytes: 34_359_738_368, memoryUsedBytes: 17_179_869_184, diskFreeBytes: 10 ** 11, diskTotalBytes: 10 ** 12,
-      projectDiskFreeBytes: 10 ** 11, deviceType: 'laptop', chip: 'Apple M2', os: 'macOS 15', gpuPercent: null }, tools: { git: '2.45' },
+      projectDiskFreeBytes: 10 ** 11, deviceType: 'laptop', chip: 'Apple M2', os: 'macOS 15', gpuPercent: null }, tools: { git: true },
     quotas: [], runningHarnessIds: state.agents.filter(a => a.machineId === machine.machineId).map(a => a.harnessId), stoppedHarnessIds: [] }
   state.harnessReservations = workers.slice(0, 4).map(id => { const a = state.agents.find(x => x.id === id)!; return { machineId: a.machineId, harnessId: a.harnessId, generation: 'g1', renewed: false } })
   state.releasedHarnesses = Array.from({ length: 30 }, (_, r) => ({ machineId: machines[r % machines.length]!, harnessId: `released-${r}` }))
@@ -130,12 +130,12 @@ function ledger(state: SuperTabState, rng: () => number, machines: string[], wor
   state.machineCleanups = [{ machineId: 'removed-machine', removalId: 'removal-1', machineOwnerId: owner }]
   state.overlapAlerts = groups.length > 3 ? [`${groups[0]}:${groups[1]}`] : []
   state.rules = (state.projects ?? []).map((p, r) => ({ id: `rule-${r}`, projectId: p.id, rule: { kind: 'preferEngine' as const, taskKind: 'ui', engine: 'codex' as const },
-    text: 'Codex for UI work.', askedBy: owner, askedIn: null }))
+    text: 'Codex for UI work.', askedBy: owner, askedIn: null, addedBy: owner, createdAt: new Date(now - 30 * DAY).toISOString() }))
   state.invitations.push({ id: 'pending-invite', email: 'later@example.com', role: 'viewer', conversationId: 'lead', expiresAt: now + 7 * DAY })
   for (const project of state.projects ?? []) {
     const reports = state.conversations.filter(c => (c.projectId ?? 'lead') === project.id && c.id !== project.leadConversationId && !c.kind).map(c => c.lastMessageSequence)
     const dirty = Math.max(0, ...reports)
-    if (dirty) project.progress = { dirtyRevision: dirty, summarizedRevision: Math.max(0, dirty - 40), since: now - DAY, requestedRevision: Math.max(0, dirty - 20), requestedAt: now - 3_600_000 }
+    if (dirty) setLegacyProgress(project, { dirtyRevision: dirty, summarizedRevision: Math.max(0, dirty - 40), since: now - DAY, requestedRevision: Math.max(0, dirty - 20), requestedAt: now - 3_600_000 })
   }
   // One group from before link lists, and one of a kind a later release added.
   delete state.conversations.find(c => c.id === groups[groups.length - 1])!.pullRequestUrls

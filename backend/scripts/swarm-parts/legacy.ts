@@ -18,6 +18,12 @@ export interface LegacyMessage {
 
 const json = (value: unknown) => JSON.parse(JSON.stringify(value)) as Prisma.InputJsonValue
 
+/** Report progress as rows from before parts keep it, in tab revisions (parts keep a watermark per group instead). */
+export interface LegacyProgress { dirtyRevision: number; summarizedRevision: number; since: number; requestedRevision: number; requestedAt?: number; requestMessageId?: string }
+export function setLegacyProgress(project: NonNullable<SuperTabState['projects']>[number], progress: LegacyProgress): void {
+  (project as { progress?: unknown }).progress = progress
+}
+
 /** The row's lookup lists as the old store kept them (store.ts indexes). */
 export function legacyIndexes(state: SuperTabState) {
   return {

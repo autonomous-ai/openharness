@@ -5,7 +5,9 @@
  */
 import { visibleState, type Actor, type Agent, type Conversation, type SuperTabState } from '../model.js'
 import { machineSlots, teamWorkRefusal, type ContributedMachine } from '../machines.js'
-import { canReadGroup, parts as store, type Part, type SwarmParts } from './partsPort.js'
+import * as store from '../parts/index.js'
+import type { Part, SwarmParts } from '../parts/index.js'
+import { canReadGroup } from '../projects.js'
 import type { AgentView, Derived, GroupView, HeadView, LivePart, MachineView, MemberView, ProgressView, StartView } from './contract.js'
 
 export interface ReaderParts {

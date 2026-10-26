@@ -1,5 +1,5 @@
 import { fail } from '../model.js'
-import type { GroupData, Part } from './partsPort.js'
+import type { GroupData, Part } from '../parts/index.js'
 
 /** The dormant list's page cursor: unpadded base64url of `{"la": lastActivityAt ms, "k": key}` (design 4.5). */
 export function encodeDormantPage(last: Part<GroupData>): string {

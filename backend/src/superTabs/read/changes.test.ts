@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { parts as store, type Part, type SwarmParts } from './partsPort.js'
+import * as store from '../parts/index.js'
+import type { Part, SwarmParts } from '../parts/index.js'
 import { readerView } from './views.js'
 import { changesFor } from './changes.js'
 import { NOW, outsider, owner, peer, richSwarm } from './fixture.test-support.js'
@@ -108,7 +109,7 @@ describe('changes since a cursor (design 4.4)', () => {
 
   it('sends changed project progress only to readers of the project', () => {
     const { s } = scene()
-    s.edit(state => { for (const p of state.projects!) p.progress = { dirtyRevision: 1, summarizedRevision: 0, since: 1, requestedRevision: 0 } })
+    s.edit(state => { for (const p of state.projects!) p.progress = { since: 1, summarizedFloor: 0, summarized: {}, requestedFloor: 0, requested: {} } })
     const fresh = store.split(s.state, { tabId: 'tab', version: R, now: NOW })
     const changed = [write(fresh, 'progress', 'lead', () => {}), write(fresh, 'progress', s.secret, () => {})]
     expect(receive(fresh, changed, peer).progress).toEqual([{ key: 'lead', version: R + 1, changedAt: LATER,
