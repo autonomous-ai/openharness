@@ -2,7 +2,8 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { addressOf, agentOrigin, AGENTS_START_AGENTS_OFF, closeCommand, DEPTH_REFUSAL, EXIT, parseDuration, psCommand, refusalNext, replyCommand, showCommand, spawnCheck, spawnCount, spawnRefusal, SPAWN_LIMITS, step, waitCommand, whoamiCommand, type ClientDeps } from './commands.js'
+import { addressOf, agentOrigin, AGENTS_START_AGENTS_OFF, closeCommand, DEPTH_REFUSAL, EXIT, parseDuration, psCommand, refusalNext, replyCommand, showCommand, spawnCheck, spawnCount, spawnRefusal, SPAWN_LIMITS, step, tellCommand, waitCommand, whoamiCommand, type ClientDeps } from './commands.js'
+import { RefusedError, type Rpc } from '../messages/rpc.js'
 import { AgentClientError, type Daemon, type Where } from './daemon.js'
 import { Ledger, ledgerPath } from './ledger.js'
 import { agentSettingsPath } from '../lib/agentSettings.js'
@@ -865,9 +866,9 @@ describe('harness close', () => {
     const h = harness(d)
     started(h.ledger, 'lead', 'kid')
     expect(await closeCommand(['kid', '--now'], h.deps)).toBe(EXIT.ok)
-    expect(h.out).toEqual(['kid on studio: closed. It was still starting, so no conversation was kept.\nNext: nothing; you have 0 open of 4.'])
+    expect(h.out).toEqual(['kid on studio: closed. It had not started a conversation, so none was kept.\nNext: nothing; you have 0 open of 4.'])
     expect(await closeCommand(['kid', '--now', '--json'], h.deps)).toBe(EXIT.ok)
-    expect(JSON.parse(h.out[1])).toEqual({ name: 'kid', id: 'kid', closed: true, conversationKept: false, effect: 'It was still starting, so no conversation was kept.', next: [], open: 0 })
+    expect(JSON.parse(h.out[1])).toEqual({ name: 'kid', id: 'kid', closed: true, conversationKept: false, effect: 'It had not started a conversation, so none was kept.', next: [], open: 0 })
     expect(await closeCommand(['kid', '--now'], h.deps)).toBe(EXIT.failed)
     expect(h.err).toEqual(['kid was not closed: Harness cannot tell which conversation it is in right now, and closing it would lose that conversation. Try again in a moment.'])
   })
@@ -928,7 +929,10 @@ describe('harness new, run by an agent', () => {
     rmSync(agentSettingsPath(dir))
     const inPane = (await agentOrigin(harness(d).deps))!
     await expect(inPane.check()).rejects.toMatchObject({ code: 'TURNED_OFF', message: AGENTS_START_AGENTS_OFF })
-    expect(AGENTS_START_AGENTS_OFF).toBe('Agents may not start harnesses: the person turns on "Agents can start other agents" in Harness Settings ▸ Experimental, or runs `harness settings agents-start-agents on`. Until then, do the work yourself.')
+    // The agent asks the person with its own tool, and turns it on only after their yes: people do not open a terminal.
+    expect(AGENTS_START_AGENTS_OFF).toMatch(/^Agents may not start harnesses yet\. agents-start-agents is off\. Ask the person, with your tool for asking them \(Claude Code: AskUserQuestion; Codex: request_user_input\)/)
+    expect(AGENTS_START_AGENTS_OFF).toContain('Only if they say yes, run `harness settings agents-start-agents on --person-said-yes`')
+    expect(AGENTS_START_AGENTS_OFF).toMatch(/Never answer it for them\. If they say no: do the work yourself\.$/)
     const outside = (await agentOrigin(harness(d, { pane: undefined, env: { CODEX_THREAD_ID: 't' } }).deps))!
     await expect(outside.check()).rejects.toThrow(AGENTS_START_AGENTS_OFF)
     expect(await agentOrigin(harness(d, { pane: undefined }).deps)).toBeNull()
@@ -1629,7 +1633,7 @@ describe('harness whoami', () => {
     const h = harness(d)
     expect(await whoamiCommand(['--json'], h.deps)).toBe(EXIT.ok)
     const { context } = JSON.parse(h.out.join('\n'))
-    expect(context.canStart).toEqual({ ok: false, reason: 'SWITCH_OFF', message: 'The person has not turned on "Agents can start other agents".', fix: 'harness settings agents-start-agents on', fixBy: 'person' })
+    expect(context.canStart).toEqual({ ok: false, reason: 'SWITCH_OFF', message: 'The person has not turned on "Agents can start other agents".', fix: 'harness settings agents-start-agents on --person-said-yes', fixBy: 'person' })
     expect(context.machines).toEqual([])
   })
 
@@ -1759,5 +1763,133 @@ describe('a cloud harness (#1444)', () => {
     expect(await closeCommand(['devin'], c.deps)).toBe(EXIT.usage)
     expect(c.err.join('\n')).toMatch(/stop it in Harness/)
     expect(d.requests.some((r) => r.type === 'agent_close' && r.payload.mode !== 'inspect')).toBe(false)
+  })
+})
+
+describe('harness tell', () => {
+  const told = (over: { state?: string; error?: [string, string] } = {}) => {
+    const calls: Array<[string, Record<string, unknown>]> = []
+    const record: Rpc = async (target, payload) => {
+      calls.push([target.machineId, payload])
+      if (over.error) throw new RefusedError(over.error[0], over.error[1])
+      return { id: 'm0000001', state: over.state ?? 'queued' }
+    }
+    return { calls, record }
+  }
+  const answeredWith = (d: FakeDaemon, id: string, ask: string, answer: string) =>
+    d.pages.set(`s-${id}`, [{ events: [ev('user_message', { content: ask }), ev('text_delta', { content: answer }), ev('done')], hasMore: false }])
+
+  beforeEach(() => { setAgentSettingsForTest(dir, { agentsTellAgents: true }) })
+
+  it('gives a harness it started more work, through its machine, and records it for wait', async () => {
+    const d = new FakeDaemon()
+    d.frames = [frame('lead', { engine: 'claude' }), frame('kid')]
+    const r = told()
+    const h = harness(d, { record: r.record })
+    started(h.ledger, 'lead', 'kid')
+    expect(await tellCommand(['kid', '--', 'Now', 'add', 'tests.'], h.deps)).toBe(EXIT.ok)
+    expect(r.calls).toEqual([['m', { action: 'tell', pane: '%lead', machine: 'studio', agentId: 'kid', text: 'Now add tests.' }]])
+    expect(h.out.join('\n')).toBe('kid on studio: told. kid has it: typed once it is free, or given at its next tool call while it works.\n'
+      + 'Next: harness wait kid  (until it has answered; then read it: harness show kid)')
+    expect(h.ledger.toldBy({ machineId: 'm', agentId: 'lead' }, { machineId: 'm', agentId: 'kid' })).toEqual({
+      at: NOW, by: { machineId: 'm', agentId: 'lead' }, told: { machineId: 'm', agentId: 'kid' }, probe: 'Now add tests.' })
+  })
+
+  it('on another machine, says who tells it: that machine checks its own record', async () => {
+    const d = new FakeDaemon(), far = new FakeDaemon('m2')
+    d.frames = [frame('lead', { engine: 'claude' })]
+    far.frames = [frame('far')]
+    const r = told()
+    const h = harness(d, { record: r.record, others: { m2: far } })
+    started(h.ledger, 'lead', 'far', 'm2')
+    expect(await tellCommand(['far', '--json', '--', 'Ship it.'], h.deps)).toBe(EXIT.ok)
+    expect(r.calls).toEqual([['m2', { action: 'tell', from: { machineId: 'm', agentId: 'lead' }, machine: 'studio', agentId: 'far', text: 'Ship it.' }]])
+    expect(JSON.parse(h.out.join('\n'))).toMatchObject({ name: 'far', state: 'queued', next: [{ run: 'harness wait far' }] })
+    expect(far.closed).toBe(true)
+  })
+
+  it('is refused, never asked of a machine, until the person allows it, and for a harness the caller did not start', async () => {
+    const d = new FakeDaemon()
+    d.frames = [frame('lead', { engine: 'claude' }), frame('kid'), frame('theirs'), frame('done', { status: 'stopped' })]
+    const r = told()
+    started(new Ledger(ledgerPath(dir)), 'lead', 'kid')
+    started(new Ledger(ledgerPath(dir)), 'lead', 'done')
+    setAgentSettingsForTest(dir, { agentsTellAgents: false })
+    let h = harness(d, { record: r.record })
+    expect(await tellCommand(['kid', '--', 'x'], h.deps)).toBe(EXIT.refused)
+    expect(h.err.join('\n')).toContain('harness settings agents-tell-agents on')
+    setAgentSettingsForTest(dir, { agentsTellAgents: true })
+    h = harness(d, { record: r.record })
+    expect(await tellCommand(['theirs', '--', 'x'], h.deps)).toBe(EXIT.refused)
+    expect(h.err.join('\n')).toBe('You did not start theirs, so you may not tell it. Only the person can.')
+    h = harness(d, { record: r.record })
+    expect(await tellCommand(['done', '--', 'x'], h.deps)).toBe(EXIT.refused)
+    expect(h.err.join('\n')).toMatch(/no longer running.*Start a new harness/)
+    // The person at a terminal has no pane to tell from: they open the harness in Harness.
+    h = harness(d, { record: r.record, pane: undefined })
+    expect(await tellCommand(['kid', '--', 'x'], h.deps)).toBe(EXIT.refused)
+    h = harness(d, { record: r.record })
+    expect(await tellCommand(['kid'], h.deps)).toBe(EXIT.usage)
+    expect(await tellCommand(['kid', 'theirs', '--', 'x'], h.deps)).toBe(EXIT.usage)
+    expect(r.calls).toEqual([])
+  })
+
+  it('says the machine\'s refusal as it said it, as a refusal not to retry', async () => {
+    const d = new FakeDaemon()
+    d.frames = [frame('lead', { engine: 'claude' }), frame('kid')]
+    const r = told({ error: ['NOT_YOURS', 'You did not start that harness, as its machine records it, so you may not tell it. Only the person can.'] })
+    const h = harness(d, { record: r.record })
+    started(h.ledger, 'lead', 'kid')
+    expect(await tellCommand(['kid', '--json', '--', 'x'], h.deps)).toBe(EXIT.refused)
+    expect(JSON.parse(h.out.join('\n'))).toMatchObject({ error: 'NOT_YOURS', code: 'NOT_YOURS' })
+    expect(h.ledger.toldBy({ machineId: 'm', agentId: 'lead' }, { machineId: 'm', agentId: 'kid' })).toBeNull()
+  })
+
+  it('wait does not return on the answer to the work before, until the harness takes the new work', async () => {
+    const d = new FakeDaemon()
+    d.frames = [frame('lead', { engine: 'claude' }), frame('kid')]
+    answeredWith(d, 'kid', 'Fix the footer.', 'Fixed.')
+    const h = harness(d)
+    started(h.ledger, 'lead', 'kid')
+    h.ledger.append({ at: NOW, by: { machineId: 'm', agentId: 'lead' }, told: { machineId: 'm', agentId: 'kid' }, probe: 'Now add tests.' })
+    // Idle on the turn before the tell: still waiting when the wait ends.
+    expect(await waitCommand(['kid', '--timeout', '10s'], h.deps)).toBe(EXIT.timeout)
+    // Typed into it, a turn asked with those words: that answer is the one to read.
+    answeredWith(d, 'kid', '[from lead · Claude Code · studio, the harness that started you: more work. It reads your answer itself.]\n\nNow  add\ntests.', 'Added 3.')
+    expect(await waitCommand(['kid', '--timeout', '10s'], h.deps)).toBe(EXIT.ok)
+  })
+
+  it('wait takes work given inside a turn, and lets go of a tell nothing took after a while', async () => {
+    const d = new FakeDaemon()
+    d.frames = [frame('lead', { engine: 'claude' }), frame('kid', { updatedAt: new Date(NOW + 5_000).toISOString() })]
+    answeredWith(d, 'kid', 'Fix the footer.', 'Fixed, and tests added.')
+    const h = harness(d)
+    started(h.ledger, 'lead', 'kid')
+    h.ledger.append({ at: NOW, by: { machineId: 'm', agentId: 'lead' }, told: { machineId: 'm', agentId: 'kid' }, probe: 'Now add tests.' })
+    // It worked after the tell (given at a tool call): its answer is the new one.
+    expect(await waitCommand(['kid', '--timeout', '10s'], h.deps)).toBe(EXIT.ok)
+    d.frames[1] = frame('kid')
+    h.advance(10 * 60_000 + 1)
+    expect(await waitCommand(['kid', '--timeout', '10s'], h.deps)).toBe(EXIT.ok)
+  })
+
+  it('show says the answer is to the work before, and an idle harness of the caller\'s can be told more', async () => {
+    const d = new FakeDaemon()
+    d.frames = [frame('lead', { engine: 'claude' }), frame('kid')]
+    answeredWith(d, 'kid', 'Fix the footer.', 'Fixed.')
+    const h = harness(d)
+    started(h.ledger, 'lead', 'kid')
+    expect(await showCommand(['kid'], h.deps)).toBe(EXIT.ok)
+    expect(h.out.join('\n')).toContain('Next: harness tell kid -- <work>  (to give it more work in the same conversation)\n  or: harness close kid  (once you have what you need)')
+    h.ledger.append({ at: NOW, by: { machineId: 'm', agentId: 'lead' }, told: { machineId: 'm', agentId: 'kid' }, probe: 'Now add tests.' })
+    const again = harness(d)
+    expect(await showCommand(['kid', '--json'], again.deps)).toBe(EXIT.ok)
+    expect(JSON.parse(again.out.join('\n'))).toMatchObject({ answer: 'Fixed.', told: { taken: false }, next: [{ run: 'harness wait kid' }] })
+    // Through MCP the next steps are its tools.
+    const mcp = harness(d, { env: { HARNESS_VIA_MCP: '1' } })
+    setAgentSettingsForTest(dir, {})
+    new Ledger(ledgerPath(dir)).append({ at: NOW - 11 * 60_000, by: { machineId: 'm', agentId: 'lead' }, told: { machineId: 'm', agentId: 'kid' }, probe: 'Old.' })
+    expect(await showCommand(['kid'], mcp.deps)).toBe(EXIT.ok)
+    expect(mcp.out.join('\n')).toContain('Next: harness_tell (name: "kid", text: "<work>")')
   })
 })

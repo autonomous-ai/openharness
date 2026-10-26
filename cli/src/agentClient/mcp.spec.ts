@@ -52,16 +52,21 @@ describe('harness mcp', () => {
   it('lists send only to a harness in its own pane: an agent outside Harness has nothing to be answered at', async () => {
     const names = async (inPane: boolean) => ((await answer({ jsonrpc: '2.0', id: 1, method: 'tools/list' }, deps({ inPane })))!.result as { tools: Array<{ name: string; argv?: unknown }> }).tools
     const outside = await names(false)
-    expect(outside.map((t) => t.name)).toEqual(['harness_whoami', 'harness_list', 'harness_search', 'harness_machines', 'harness_start', 'harness_wait', 'harness_read', 'harness_close'])
+    expect(outside.map((t) => t.name)).toEqual(['harness_whoami', 'harness_list', 'harness_search', 'harness_machines', 'harness_start', 'harness_wait', 'harness_read', 'harness_settings', 'harness_close'])
     expect(outside.every((t) => t.argv === undefined)).toBe(true)
     expect((await names(true)).map((t) => t.name)).toContain('harness_send')
     expect(await answer(call('harness_send', { to: 'x', text: 'y' }), deps())).toMatchObject({ error: { code: -32602 } })
+    // Tell names its sender by its pane too: more work from the harness that started one, never from outside Harness.
+    expect((await names(true)).map((t) => t.name)).toContain('harness_tell')
+    expect(await answer(call('harness_tell', { name: 'x', text: 'y' }), deps())).toMatchObject({ error: { code: -32602 } })
+    const tell = (await names(true)).find((t) => t.name === 'harness_tell') as unknown as { description: string }
+    expect(tell.description).toMatch(/^Give more work to a harness you started, on any machine, in the conversation it already has/)
+    expect(tell.description).toContain('only while the person allows it (Harness Settings, agents-tell-agents)')
     // It reaches teammates in the agent's tab while Agent Messages are on (Settings ▸ Experimental, owner 2026-10-12), and
     // nothing else: not a harness the agent started (owner, 2026-10-11: Agent Messages off means off).
     const send = (await names(true)).find((t) => t.name === 'harness_send') as unknown as { description: string }
     expect(send.description).toMatch(/teammate: a harness in the same tab as you, while Agent Messages are on \(Settings ▸ Experimental, off by default\)\. Refused anywhere else, even to a harness you started/)
-    expect(INSTRUCTIONS).toContain('A follow-up goes by harness_send only to a teammate in your tab, while Agent Messages are on')
-    expect(INSTRUCTIONS).toContain('starting a harness does not let you message it')
+    expect(INSTRUCTIONS).toContain('More work for a harness you started goes by harness_tell, once you have read its answer, while the person allows it; a message to a teammate in your tab by harness_send, while Agent Messages are on')
     expect(INSTRUCTIONS).not.toContain('Send follow-ups for the same work to the harness you started')
     // When to start one at all, and to close it, as every harness is told as it starts (lib/agentAttribution.ts).
     expect(INSTRUCTIONS).toContain('Every harness spends the person\'s tokens. Start one (harness_start) only for work that can run in parallel')
@@ -75,14 +80,19 @@ describe('harness mcp', () => {
     const codexAsks = (a: Record<string, unknown> = {}) => a.destructiveHint === true || (a.readOnlyHint !== true && (a.destructiveHint !== false || a.openWorldHint !== false))
     const listed = ((await answer({ jsonrpc: '2.0', id: 1, method: 'tools/list' }, deps({ inPane: true })))!.result as { tools: Array<{ name: string; annotations?: Record<string, unknown> }> }).tools
     expect(Object.fromEntries(listed.map((tool) => [tool.name, codexAsks(tool.annotations)]))).toEqual({
-      harness_whoami: false, harness_list: false, harness_search: false, harness_machines: false, harness_start: false, harness_wait: false, harness_read: false, harness_send: false, harness_close: false,
+      harness_whoami: false, harness_list: false, harness_search: false, harness_machines: false, harness_start: false, harness_wait: false, harness_read: false, harness_tell: false, harness_send: false, harness_close: false,
+      // Turning a setting on widens what agents may do: an engine that asks before an unmarked tool asks the person too.
+      harness_settings: true,
     })
   })
 
   it('runs only the verbs Harness allows agents to run without asking, each as the tool the rules name', () => {
     // The engines' permission rules (facets/hooks.ts HARNESS_AGENT_TOOLS) allow each verb, and its tool by name.
-    const runs = Object.fromEntries(TOOLS.map((tool) => [tool.argv({ name: 'x', names: ['x'], task: 't', to: 'x', text: 't' }, '/work')[0], tool.name]))
+    // But `settings`, which the engine asks the person about (a setting widens what agents may do).
+    const runs = Object.fromEntries(TOOLS.filter((tool) => tool.name !== 'harness_settings')
+      .map((tool) => [tool.argv({ name: 'x', names: ['x'], task: 't', to: 'x', text: 't' }, '/work')[0], tool.name]))
     expect(runs).toEqual(HARNESS_AGENT_TOOLS)
+    expect(Object.keys(HARNESS_AGENT_TOOLS)).not.toContain('settings')
   })
 
   it('runs each tool as its verb', async () => {
@@ -90,30 +100,42 @@ describe('harness mcp', () => {
     const d = deps({ run: r.run, inPane: true })
     await answer(call('harness_list'), d)
     await answer(call('harness_list', { all: true }), d)
+    await answer(call('harness_list', { machine: ' grid-dev ', all: true }), d)
     await answer(call('harness_search', { words: 'who am i', limit: 5, when: 'last week' }), d)
     await answer(call('harness_search', { words: 'review the diff' }), d)
     await answer(call('harness_machines'), d)
     await answer(call('harness_start', { task: 'review it\nall of it', folder: 'app', name: 'reviewer' }), d)
     await answer(call('harness_start', { task: 'train', folder: '/abs', name: 'gpu', agent: 'codex', machine: 'mini' }), d)
     await answer(call('harness_start', { task: 'x', folder: '~/p', name: 'n' }), d)
+    await answer(call('harness_start', { task: 'a game', project: 'snake', name: 'game', model: ' haiku ' }), d)
     await answer(call('harness_wait', { names: ['a', ' b ', ''] }), d)
     await answer(call('harness_wait', { names: ['a'], any: true, timeout_seconds: 9999 }), d)
     await answer(call('harness_wait', { names: ['a'], timeout_seconds: 1.5 }), d)
     await answer(call('harness_read', { name: 'a' }), d)
     await answer(call('harness_read', { name: 'a', chars: 99.9 }), d)
     await answer(call('harness_send', { to: 'a', text: 'also the footer' }), d)
+    await answer(call('harness_tell', { name: 'a', text: '--now: add tests\ntoo' }), d)
+    await answer(call('harness_settings'), d)
+    await answer(call('harness_settings', { name: 'agents-tell-agents', on: true }), d)
+    await answer(call('harness_settings', { name: 'agents-tell-agents', on: true, person_said_yes: true }), d)
+    await answer(call('harness_settings', { name: 'agent-messages', on: false }), d)
     await answer(call('harness_close', { name: 'a' }), d)
     await answer(call('harness_close', { name: 'a', now: true }), d)
     expect(r.calls.map((c) => c.argv)).toEqual([
-      ['ps'], ['ps', '--all'],
+      ['ps'], ['ps', '--all'], ['ps', '--machine', 'grid-dev', '--all'],
       ['search', 'who am i', 'last week', '--limit', '5'], ['search', 'review the diff'],
       ['machines'],
       ['new', 'claude', '/work/here/app', '--name', 'reviewer', '--task', 'review it\nall of it'],
       ['new', 'codex', '--machine', 'mini', '/abs', '--name', 'gpu', '--task', 'train'],
       ['new', 'claude', '~/p', '--name', 'n', '--task', 'x'],
+      ['new', 'claude', '--model', 'haiku', '--new', 'snake', '--name', 'game', '--task', 'a game'],
       ['wait', 'a,b', '--timeout', '45s'], ['wait', 'a', '--any', '--timeout', '600s'], ['wait', 'a', '--timeout', '2s'],
       ['show', 'a'], ['show', 'a', '--chars', '99'],
       ['send', 'a', 'also the footer'],
+      // After `--`, words that look like options are the work, not flags.
+      ['tell', 'a', '--', '--now: add tests\ntoo'],
+      ['settings'], ['settings', 'agents-tell-agents', 'on'], ['settings', 'agents-tell-agents', 'on', '--person-said-yes'],
+      ['settings', 'agent-messages', 'off'],
       ['close', 'a'], ['close', 'a', '--now'],
     ])
   })

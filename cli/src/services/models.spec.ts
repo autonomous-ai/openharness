@@ -44,6 +44,7 @@ const apiShares = vi.hoisted(() => ({
   list: vi.fn((_grid?: string) => [{ grid: 'swarm-0123456789ab', connectionId: 'c1', model: 'm', name: 'OpenRouter' }]),
   restore: vi.fn(async (): Promise<void> => {}),
   rejoin: vi.fn(async () => ({ ok: true })),
+  stopConnection: vi.fn(async (): Promise<void> => {}),
 }))
 const swarmOffers = vi.hoisted(() => ({
   set: vi.fn((): unknown[] => [{ grid: 'swarm-0123456789ab', sharedGrid: 'team', model: 'muse' }]),
@@ -857,7 +858,12 @@ describe('the models service', () => {
         expect(rememberSavedApis).toHaveBeenCalledTimes(1)
         expect(await ask('api_connections', { action: 'save', connection: { name: 'x' } })).toEqual({ connections: [], presets: [], action: 'save' })
         expect(rememberSavedApis).toHaveBeenCalledTimes(2)
+        apiShares.stopConnection.mockClear()
         expect(await ask('api_connections', { action: 'remove', id: 'a' })).toEqual({ connections: [], presets: [], action: 'remove' })
+        // A deleted API comes off every Swarm first: its share holds the key.
+        expect(apiShares.stopConnection).toHaveBeenCalledExactlyOnceWith('a')
+        await ask('api_connections', { action: 'remove', id: 7 })
+        expect(apiShares.stopConnection).toHaveBeenCalledOnce()
         expect(await ask('api_connections', { action: 'models', id: 'a' })).toEqual({ id: 'a', models: ['m1'] })
         expect(apiModelsRequest).toHaveBeenCalledOnce()
         expect(rememberSavedApis).toHaveBeenCalledTimes(2)

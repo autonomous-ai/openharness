@@ -117,7 +117,7 @@ export function parseMessage(value: unknown): Message | null {
  *  (an escape sequence, a bidi override, a zero-width space), which could redraw a terminal or pass one name for
  *  another. The roster cleans harness names where it is read (roster.ts `cleanName`); an engine, a machine, an account's
  *  name and a name another machine of this account sends are cleaned here. */
-const shown = (value: string): string => value.replace(/[\p{Cc}\p{Cf}]/gu, '')
+export const shown = (value: string): string => value.replace(/[\p{Cc}\p{Cf}]/gu, '')
 
 /**
  * The engine's name as a person reads it: the app's own word for each (lib/agentNames.ts), Claude Code by its whole

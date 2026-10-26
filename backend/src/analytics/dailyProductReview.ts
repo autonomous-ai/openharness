@@ -1,4 +1,4 @@
-import { LAUNCH_ERROR_CODES, LAUNCH_ERROR_FAMILIES, PRODUCT_FEEDBACK, PRODUCT_FEEDBACK_REASONS, PRODUCT_FEEDBACK_OUTCOMES, PRODUCT_USAGE_ACTIONS, PRODUCT_USAGE_ADD_PHONE_OPENINGS, PRODUCT_USAGE_AUTOMATIC_ACTIONS, PRODUCT_USAGE_FLOWS, PRODUCT_USAGE_LONG_FLOWS, PRODUCT_USAGE_LONG_MEASURES, PRODUCT_USAGE_ONBOARDING_MARKS, PRODUCT_USAGE_SETUP_FLOWS, PRODUCT_USAGE_SURFACES, PRODUCT_USAGE_UI_SURFACES, PRODUCT_USAGE_USER_OPENED_ACTIONS } from '../types/productUsage.js'
+import { LAUNCH_ERROR_CODES, LAUNCH_ERROR_FAMILIES, PRODUCT_FEEDBACK, PRODUCT_FEEDBACK_REASONS, PRODUCT_FEEDBACK_OUTCOMES, PRODUCT_USAGE_ACTIONS, PRODUCT_USAGE_ADD_PHONE_OPENINGS, PRODUCT_USAGE_AUTOMATIC_ACTIONS, PRODUCT_USAGE_FLOWS, PRODUCT_USAGE_LONG_FLOWS, PRODUCT_USAGE_LONG_MEASURES, PRODUCT_USAGE_ONBOARDING_MARKS, PRODUCT_USAGE_PHONE_OFFER_SKIP_REASONS, PRODUCT_USAGE_SETUP_FLOWS, PRODUCT_USAGE_SURFACES, PRODUCT_USAGE_UI_SURFACES, PRODUCT_USAGE_USER_OPENED_ACTIONS } from '../types/productUsage.js'
 import { DAILY_PRODUCT_METRICS } from './dailyProductUsage.js'
 
 type Row = { dayUtc: Date; metric: string; value: number }
@@ -114,9 +114,11 @@ export function dailyProductReview(rows: Row[], now: Date) {
           ...(channel === 'ui' && surface === 'phone' && (PRODUCT_USAGE_LONG_FLOWS as readonly string[]).includes(flow)
             ? { over1mBuckets: Object.fromEntries(PRODUCT_USAGE_LONG_MEASURES.map(bucket => [bucket, c[`${prefix}${bucket}`] ?? (started ? 0 : null)])) } : {}),
           ...(channel === 'ui' ? marksOf(prefix) : {}),
-          // Beside the Desktop's Add Phone card, every way Add Phone was opened: the card's own button is `offer`.
+          // Beside the Desktop's card: openings, new phones by opening, and reasons a card did not show.
           ...(channel === 'ui' && surface === 'desktop' && flow === 'phone_offer'
-            ? { addPhoneOpenings: Object.fromEntries(PRODUCT_USAGE_ADD_PHONE_OPENINGS.map(opening => [opening, c[`ui_desktop_add_phone_${opening}`] ?? 0])) } : {}),
+            ? { addPhoneOpenings: Object.fromEntries(PRODUCT_USAGE_ADD_PHONE_OPENINGS.map(opening => [opening, c[`ui_desktop_add_phone_${opening}`] ?? 0])),
+              addPhonePaired: Object.fromEntries(PRODUCT_USAGE_ADD_PHONE_OPENINGS.map(opening => [opening, c[`ui_desktop_add_phone_paired_${opening}`] ?? 0])),
+              phoneOfferSkipped: Object.fromEntries(PRODUCT_USAGE_PHONE_OFFER_SKIP_REASONS.map(reason => [reason, c[`ui_desktop_phone_offer_skipped_${reason}`] ?? 0])) } : {}),
           interpretation: channel === 'setup'
             ? 'Optional signed-out app-session counts, untrusted and self-selected. No cross-step linkage, unique people or signup conversion. Web pre-sign-in is not collected.'
             : 'Observed app operations, possibly automatic. Missing outcomes include closed apps, offline reports and choice changes; absence is not failure. Viewer opening is not page rendering; update staging is not successful relaunch.',
