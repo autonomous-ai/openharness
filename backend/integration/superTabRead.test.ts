@@ -15,6 +15,7 @@ import * as parts from '../src/superTabs/parts/index.js'
 import { guardedWrite } from '../src/superTabs/parts/write.js'
 import { migrateSwarm } from '../src/superTabs/migration/migrate.js'
 import { SwarmReads } from '../src/superTabs/read/service.js'
+import { HostReads } from '../src/superTabs/read/host.js'
 import type { Conversation, SuperTabState } from '../src/superTabs/model.js'
 import { writeLegacySwarm } from '../scripts/swarm-parts/legacy.js'
 import { NOW, outsider as outsiderActor, owner as ownerActor, peer as peerActor, swarm } from '../src/superTabs/read/fixture.test-support.js'
@@ -50,7 +51,8 @@ beforeAll(async () => {
     if (!found) return reply.code(401).send({ success: false })
     request.user = found
   })
-  await app.register(superTabRoutes, { store, github: null, reads: new SwarmReads(db, store, { now: () => clock }) })
+  await app.register(superTabRoutes, { store, github: null, reads: new SwarmReads(db, store, { now: () => clock }),
+    hosts: new HostReads(db, store, { now: () => clock }) })
   await app.ready()
 })
 afterAll(async () => {
@@ -61,14 +63,14 @@ afterAll(async () => {
 
 /** A Swarm in parts: two projects (one private to its owner), a Lead and a worker on the owner's machine, finished work
  *  quiet for two days (dormant), and a private conversation for `peer`. */
-async function scene(extra: (s: ReturnType<typeof swarm>) => void = () => {}) {
+async function scene<T = void>(extra: (s: ReturnType<typeof swarm>, ids: { web: string; done: string; lead: string }) => T = () => undefined as T, machineId = 'host') {
   const s = swarm(MIGRATED)
   s.join(peerActor)
   s.join(outsiderActor)
-  const lead = s.add('lead-harness', 'lead', true, ownerActor, 'host', owner.sub)
+  const lead = s.add('lead-harness', 'lead', true, ownerActor, machineId, owner.sub)
   const secret = s.run({ type: 'project.create', name: 'Secret', visibility: 'private', brief: '' }).projectId as string
   const web = s.group('Web')
-  const worker = s.add('worker-harness', web, false, ownerActor, 'host', owner.sub)
+  const worker = s.add('worker-harness', web, false, ownerActor, machineId, owner.sub)
   s.run({ type: 'work.assign', conversationId: web, agentId: worker })
   const done = s.group('Done work')
   const secretGroup = s.group('Secret work', secret)
@@ -79,14 +81,14 @@ async function scene(extra: (s: ReturnType<typeof swarm>) => void = () => {}) {
     const finished = state.conversations.find(c => c.id === done)!
     finished.assignment = { ...state.conversations.find(c => c.id === web)!.assignment!, id: 'old-work', status: 'done' }
   })
-  extra(s)
+  const more = extra(s, { web, done, lead })
   const tabId = `tab-${randomUUID()}`
   const state = { ...structuredClone(s.state), id: tabId } as SuperTabState
   await writeLegacySwarm(db, { state, revision: R, messages: [{ id: `${tabId}-m1`, conversationId: done, sequence: 5, text: 'Done',
     author: { kind: 'person', id: owner.sub, name: owner.email, membershipGeneration: tabId }, createdAt: new Date(MIGRATED - 2 * DAY) }] })
   const report = await migrateSwarm(db, tabId, { now: () => MIGRATED })
   if (!report.ok) throw new Error(report.error)
-  return { tabId, lead, worker, web, done, secretGroup, privateId, secret, leads: state.leadsConversationId! }
+  return { tabId, lead, worker, web, done, secretGroup, privateId, secret, leads: state.leadsConversationId!, more }
 }
 const get = async (url: string, as: AuthUser = owner) => {
   const response = await app.inject({ method: 'GET', url, headers: { authorization: `Bearer ${as.sub}` } })
@@ -245,4 +247,82 @@ describe('Swarm list and old routes (design 4.9, 4.11)', () => {
       expect(status).toBe(426)
       expect(body.error).toEqual({ code: 'UPDATE_REQUIRED', message: 'Update Harness to keep using this Swarm.' })
     })
+})
+
+describe('host form (design 4.10)', () => {
+  /** The owner's machine `host` contributed to the Swarm, a third agent whose only group is dormant, a queued start. */
+  let machine = 'host'
+  /** Each test has its own machine, so other tests' Swarms never show up in its host reads. */
+  const hostScene = async () => {
+    machine = `m-${randomUUID().slice(0, 8)}`
+    await db.machine.create({ data: { machineId: machine, userId: owner.sub, apiKey: 'fixture-only', managerId: 'fixture', autonomousEnv: 'prod', authMode: 'remote' } })
+    return scene((s, ids) => {
+    s.contribute(machine, 'swarm')
+    const idle = s.add('idle-harness', ids.done, false, ownerActor, machine, owner.sub)
+    s.edit(state => {
+      const pool = state.machines!.find(m => m.machineId === machine)!
+      state.starts = [{ id: 'queued', creationId: 'c', actorKey: `person:${owner.sub}`, contributorId: owner.sub, membershipGeneration: pool.membershipGeneration,
+        machineOwnerId: owner.sub, hostGrant: null, harnessId: null, dispatched: false, error: null, poolGeneration: pool.generation,
+        request: { conversationId: ids.web, machineId: machine, engine: 'codex', name: 'Builder', cwd: '/repo', worktree: false,
+          requirements: { memoryBytes: 0, diskBytes: 0, maxCpuPercent: 100, tools: [], devices: [], quotaRequired: false } } }]
+    })
+    return { idle }
+  }, machine)
+  }
+  const host = async (cursor?: string, full = false, as: AuthUser = owner) =>
+    get(`/api/super-tabs/hosts/${machine}/changes?${[cursor && `cursor=${cursor}`, full && 'full=1'].filter(Boolean).join('&')}`, as)
+  type Row = { agent?: { id: string }; lead?: boolean; active?: boolean; leadsConversationId?: string; observers?: Array<{ userId: string }>; lastChangedAt?: number }
+
+  it('gives a full read of the machine\'s Swarm: today\'s roster, pool and assignment rows, from the parts', async () => {
+    const s = await hostScene()
+    clock = NOW
+    const { status, body } = await host(undefined, true)
+    expect(status).toBe(200)
+    expect(body.data).toMatchObject({ format: 2, full: true, removedTabIds: [] })
+    const tab = body.data.tabs.find((t: { tabId: string }) => t.tabId === s.tabId)
+    expect(tab.lastChangedAt).toBe(MIGRATED)
+    const rows = new Map<string, Row>(tab.roster.filter((r: Row) => r.agent).map((r: Row) => [r.agent!.id, r]))
+    expect([...rows.keys()].sort()).toEqual([s.lead, s.worker, s.more.idle].sort())
+    expect(rows.get(s.lead)).toMatchObject({ lead: true, active: true, leadsConversationId: s.leads, lastChangedAt: MIGRATED,
+      observers: [{ email: peer.email, userId: peer.sub }, { email: outsider.email, userId: outsider.sub }] })
+    // Its only group is finished and dormant, yet not archived: the host must not hand it to automatic cleanup.
+    expect(rows.get(s.more.idle)).toMatchObject({ lead: false, active: true })
+    expect(tab.pool).toMatchObject({ tabId: s.tabId, machine: { machineId: machine }, starts: [{ id: 'queued' }] })
+    expect(tab.pool.projects[0].conversationIds).toContain(s.web)
+    expect(tab.pool.projects[0].conversationIds).not.toContain(s.privateId)
+    expect(tab.assignments).toEqual([{ tabId: s.tabId, assignmentId: expect.any(String), harnessId: 'worker-harness' }])
+  })
+
+  it('wakes the host only for changes that concern its machine', async () => {
+    const s = await hostScene()
+    clock = NOW
+    const cursor = (await host(undefined, true)).body.data.cursor
+    clock = NOW + 1_000
+    expect((await host(cursor)).body.data).toMatchObject({ full: false, tabs: [], removedTabIds: [] })
+    await writeGroup(s.tabId, s.secretGroup, NOW + 1_000, g => { g.title = 'Not this machine' })
+    clock = NOW + 2_000
+    expect((await host(cursor)).body.data.tabs).toEqual([])
+    await writeGroup(s.tabId, s.web, NOW + 2_000, g => { g.title = 'Its worker\'s group' })
+    clock = NOW + 3_000
+    expect((await host(cursor)).body.data.tabs.map((t: { tabId: string }) => t.tabId)).toEqual([s.tabId])
+  })
+
+  it('names a Swarm that no longer lists the machine', async () => {
+    const s = await hostScene()
+    clock = NOW
+    const cursor = (await host(undefined, true)).body.data.cursor
+    await db.superTab.update({ where: { id: s.tabId }, data: { machineIds: [], cleanupMachineIds: [] } })
+    await db.$transaction(async tx => {
+      const stored = (await parts.loadActive(tx, s.tabId)).machines.find(m => m.key === machine)!
+      await guardedWrite(tx, s.tabId, { op: 'update', kind: 'machine', key: machine, seen: stored.version, data: { ...stored.data!, contribution: null } }, NOW + 1_000)
+    })
+    clock = NOW + 2_000
+    expect((await host(cursor)).body.data).toMatchObject({ tabs: [], removedTabIds: [s.tabId] })
+  })
+
+  it('refuses a machine the caller does not own', async () => {
+    await hostScene()
+    const { status, body } = await host(undefined, true, peer)
+    expect([status, body.error!.code]).toEqual([403, 'HOST_UNAVAILABLE'])
+  })
 })

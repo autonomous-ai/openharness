@@ -20,6 +20,7 @@ import { attribution } from '../github/attribution.js'
 import { githubTokensFromEnv, type GitHubTokens } from '../github/tokens.js'
 import { logger } from '../utils/logger.js'
 import { SwarmReads } from '../superTabs/read/service.js'
+import { HostReads } from '../superTabs/read/host.js'
 import { UPDATE_REQUIRED } from '../superTabs/read/contract.js'
 
 const id = z.string().min(1).max(160).regex(/^[A-Za-z0-9_-]+$/)
@@ -32,6 +33,7 @@ const cursor = z.string().min(1).max(512).regex(/^[A-Za-z0-9_-]+$/)
 const changesQuery = agentQuery.extend({ cursor })
 const dormantQuery = agentQuery.extend({ dormant: z.literal('1'), projectId: id.optional(), before: cursor.optional() })
 const groupParams = tabParams.extend({ conversationId: id })
+const hostChangesQuery = z.object({ cursor: cursor.optional(), full: z.literal('1').optional() }).strict()
 const startParams = tabParams.extend({ startId: id })
 const nativeParams = tabParams.extend({ contextId: id })
 const messageParams = tabParams.extend({ conversationId: id })
@@ -72,7 +74,7 @@ async function respond(reply: FastifyReply, action: () => Promise<unknown>) {
  *  before or right after any action, so it meets this at once. */
 const updateRequired = (_req: unknown, reply: FastifyReply) => sendError(reply, UPDATE_REQUIRED.message, UPDATE_REQUIRED.code, UPDATE_REQUIRED.status)
 
-export async function superTabRoutes(app: FastifyInstance, options: { store?: SuperTabStore; github?: GitHubTokens | null; reads?: SwarmReads } = {}) {
+export async function superTabRoutes(app: FastifyInstance, options: { store?: SuperTabStore; github?: GitHubTokens | null; reads?: SwarmReads; hosts?: HostReads } = {}) {
   const github = options.github !== undefined ? options.github : await githubTokensFromEnv(env)
   // A task that ends revokes the token it was given; a revoke that fails is logged inside and never blocks the write.
   const store = options.store ?? new SuperTabStore(prisma, Date.now, attachmentsFromEnv(env),
@@ -80,9 +82,15 @@ export async function superTabRoutes(app: FastifyInstance, options: { store?: Su
       // A team account has no git login of its own: without the app it takes no teammates' work.
       teamAccountsIdle: !github })
   const reads = options.reads ?? new SwarmReads(prisma, store, { githubApp: !!github })
+  const hosts = options.hosts ?? new HostReads(prisma, store, { githubApp: !!github, teamAccountsIdle: !github })
   app.get('/api/super-tabs/grids', (req, reply) => respond(reply, () => store.hostGrids(req.user!)))
   // Each row says whether this server has the Harness GitHub App, so the host knows to ask for a start's token below.
   app.get('/api/super-tabs/hosts/:machineId/pools', updateRequired)
+  // Replaces the three host reads above and below: every Swarm of the machine with `full=1` (at start and at least every
+  // 60 s), else only those with a change that concerns it since the cursor (design 4.10).
+  app.get<{ Params: z.infer<typeof hostParams>; Querystring: z.infer<typeof hostChangesQuery> }>('/api/super-tabs/hosts/:machineId/changes',
+    { preHandler: [validateParams(hostParams), validateQuery(hostChangesQuery)] },
+    (req, reply) => respond(reply, () => hosts.changes(req.user!, req.params.machineId, { cursor: req.query.cursor, full: req.query.full === '1' })))
   // A read-only token for a queued start's project repository, for its host to clone and fetch the folder before the agent
   // exists, so that the machine owner's own git login is never used for another person's project (docs/swarm-github-app.md).
   // The machine owner's own project answers `github: false` and the host uses its own login, unless it asks `always` (a
