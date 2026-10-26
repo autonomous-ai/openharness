@@ -12,6 +12,7 @@ import { agentTarget, askedInSchema, broken, MAX_RULES, RULE_MESSAGE_MS, ruleSch
 import { MAX_ATTACHMENTS, type Attachment } from './attachments.js'
 import { checkMentions, MAX_MENTIONS, type MentionTarget } from './mentions.js'
 import { TERMINAL_KEYS, terminalAlert, terminalRequest, terminalResult, type TerminalRequest } from './terminal.js'
+import { loseTasks, renewLease, renewOwnTask } from './liveness.js'
 import { credentialResult, redactCredentials, type CredentialKind } from './credentials.js'
 import { dirtyGroups, reportGroups, summarize } from './projectUpdates.js'
 import { agentKind, agentProjectId, audienceOf, agentSetRole, deleteProject, groupProject, inviteLanding, ledProject, manageProject, MAX_ROLES, mutableProjects, placeRules, projectMembers, projectOf, projectRules, projectsOf, readAgent, readConversation, readProject, roleVersion, sameProject, sharedWithLeads, SKILL_SET_NAMES, skillSetOf, type ProjectRole, type RoleKind, type SwarmProject } from './projects.js'
@@ -631,6 +632,13 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
     }
   }
 
+  /** After its task was lost, its old agent's status and checks for that attempt are refused, even once it is reassigned. */
+  const fenceLost = (group: Conversation, assignmentId: string) => {
+    if (actor.kind === 'agent' && group.lostAttempt?.id === assignmentId && group.lostAttempt.agentId === actor.agentId) {
+      fail('ASSIGNMENT_LOST', 'This task was lost and moved on, so your status and results for it are no longer accepted. Stop working on it.')
+    }
+  }
+
   /** Changing or clearing the Lead of a project's Lead conversation would let it be stopped next. */
   const keepLead = (group: Conversation, next: string | null) => {
     if (group.leadId && group.leadId !== next && group.id === groupProject(state, group).leadConversationId) protectLead(state, group.leadId)
@@ -652,6 +660,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       break
     case 'agent.alert': {
       effects.messages.push(...terminalAlert(state, actor, sender, operationId, context.now, command))
+      if (command.alert === 'limit' && command.active) effects.messages.push(...loseTasks(state, context.now, worker => worker.id === command.agentId))
       break
     }
     case 'project.report': {
@@ -1119,6 +1128,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
         admitMachineStart(state, start.request, context.now, start, context.teamMachines)
         if (start.dispatched || start.error || start.harnessId) fail('START_CLAIMED', 'This native start was already requested. Read its creation status; do not start another.')
         start.dispatched = true
+        start.dispatchedAt = context.now
         break
       }
       if (command.type === 'agent.startSettled') {
@@ -1367,6 +1377,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       }
       // The transcript still accepts a human message while the lead is unavailable. The UI can say why no delivery was created.
       message(group.id, command.text, recipients, command.replyTo, command.agentOnly ? AGENT_ONLY : undefined, attachments, mentions)
+      if (actor.kind === 'agent') renewOwnTask(group, actor.agentId, context.now)
       break
     }
     case 'delivery.resolve': {
@@ -1463,7 +1474,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       if (activeWork(group)) fail('WORK_ACTIVE', 'Finish or stop the current assignment before changing its acceptance checks.')
       if (group.assignment) {
         const worker = state.agents.find(a => a.id === group.assignment!.agentId)
-        if (worker && !worker.workDecision) finishWorker(state, worker.id)
+        if (worker && !worker.workDecision && group.assignment.status !== 'lost') finishWorker(state, worker.id)
       }
       rememberAttempt(group)
       group.assignment = null
@@ -1506,6 +1517,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       rememberAttempt(group)
       group.assignment = { id: operationId, agentId: worker.id, status: 'working', configuration: structuredClone(worker.configuration),
         execution: { machineId: worker.machineId, harnessId: worker.harnessId, machineOwnerId: worker.machineOwnerId }, result: null }
+      renewLease(group.assignment, context.now)
       group.checks.forEach(c => { c.evidence = null; c.passedBy = null })
       result.assignmentId = operationId
       let routeNote: { decisionId: string; text: string } | null = null, personChose = false
@@ -1529,6 +1541,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
     case 'work.status': {
       const group = open(state, command.conversationId)
       const assignment = group.assignment
+      fenceLost(group, command.assignmentId)
       if (!assignment || assignment.id !== command.assignmentId) fail('STALE_ASSIGNMENT', 'This is no longer the active assignment.')
       if (!activeWork(group)) fail('ATTEMPT_CLOSED', 'Assign a new attempt to continue this work.')
       if (actor.kind === 'agent' && actor.agentId !== assignment.agentId && actor.agentId !== group.leadId) fail('FORBIDDEN', 'Only the assigned agent or coordinating lead can update this work.', 403)
@@ -1552,6 +1565,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
           (actor.kind !== 'agent' || id !== actor.agentId) && state.agents.some(a => a.id === id && agentRole(a) === 'reviewer' && a.workDecision !== 'stop'))
         message(group.id, `${label}${command.result ? `\n\n${command.result}` : ''}`, [...(tellLead ? [lead] : []), ...reviewers], null, SYSTEM_ROW)
       }
+      if (actor.kind === 'agent') renewOwnTask(group, actor.agentId, context.now)
       break
     }
     case 'work.cancel': {
@@ -1565,18 +1579,21 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       }
       // A retry after the cancel keeps the first reason and tells the worker once.
       if (assignment.status === 'cancelled') break
-      if (!activeWork(group)) fail('ATTEMPT_CLOSED', 'This attempt has already ended.')
+      const lost = assignment.status === 'lost'
+      if (!activeWork(group) && !lost) fail('ATTEMPT_CLOSED', 'This attempt has already ended.')
       // A removed worker (reconciling) can never confirm a stop, so this is the only way to close its task; nobody is left to tell.
-      const gone = assignment.status === 'reconciling'
+      // A lost task's agent was told already that its task moved, and does not wait for a decision.
+      const gone = assignment.status === 'reconciling' || lost
       assignment.status = 'cancelled'
       assignment.result = command.reason
-      finishWorker(state, assignment.agentId, group)
+      if (!lost) finishWorker(state, assignment.agentId, group)
       message(group.id, `${isLead ? 'The Lead' : 'The tab owner'} cancelled this task: ${command.reason.replace(/[.\s]+$/, '')}.${gone ? '' : ' Stop working on it.'}`,
         gone ? [] : [assignment.agentId], null, SYSTEM_ROW)
       break
     }
     case 'work.check': {
       const group = open(state, command.conversationId)
+      fenceLost(group, command.assignmentId)
       if (!group.assignment || group.assignment.id !== command.assignmentId) fail('STALE_ASSIGNMENT', 'This is no longer the active assignment.')
       if (!activeWork(group)) fail('ATTEMPT_CLOSED', 'Assign a new attempt before changing its acceptance evidence.')
       if (group.assignment.status === 'reconciling') fail('RECONCILING', 'Reconcile the previous assignment before continuing.')
@@ -1585,6 +1602,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       if (check.independent && actor.kind === 'agent' && actor.agentId === group.assignment.agentId) fail('INDEPENDENT_REVIEW', 'Another agent or a person must perform this check.')
       check.evidence = command.evidence
       check.passedBy = command.passed ? actorKey(actor) : null
+      if (actor.kind === 'agent') renewOwnTask(group, actor.agentId, context.now)
       break
     }
   }
