@@ -106,6 +106,9 @@ class SuperTabSavedViews {
   /// one goes with it rather than staying behind, older still.
   Future<void> write(String account, String tabId, Map<String, dynamic> view) =>
       _serial(() async {
+        // Only for the account using this device: after a sign-out in
+        // another tab, or another account's claim, a late write keeps nothing.
+        if (await storage.read(_owner) != account) return;
         final state = view['state'] as Map<String, dynamic>;
         final text = jsonEncode({
           ...view,

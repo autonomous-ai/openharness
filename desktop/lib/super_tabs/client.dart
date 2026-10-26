@@ -116,6 +116,9 @@ class SuperTabClient {
   /// write is a few hundred KB into the browser's storage.
   static const _viewSaveEvery = Duration(seconds: 15);
 
+  /// How long an open waits for a saved view before drawing without one.
+  static const _viewLockWait = Duration(milliseconds: 250);
+
   void _saveViewSoon(String id) {
     if (_viewSaves.containsKey(id)) return;
     final last = _viewSavedAt[id];
@@ -442,7 +445,11 @@ class SuperTabClient {
     // After the first read is asked for: reading and drawing a saved view
     // takes the main thread a moment a phone's first read need not wait on.
     if (_reading.drawsSaved) {
-      final view = await _views.read(account, id);
+      // Behind the lock shared with this browser's other tabs: one iOS has
+      // suspended may hold it. Past a short wait, open with no saved view.
+      final view = await _views
+          .read(account, id)
+          .timeout(_viewLockWait, onTimeout: () => null);
       if (view != null && generation == _generation) {
         controller.drawSaved(view);
       }

@@ -3,6 +3,7 @@ import 'dart:convert';
 
 import 'package:fake_async/fake_async.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:harness/core/local_key_value_store.dart';
 import 'package:harness/super_tabs/client.dart';
 import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/reading.dart';
@@ -36,10 +37,12 @@ void main() {
   group('a controller', _controllerTests);
   group('the client', _clientTests);
   group('review of #1723', _reviewTests);
+  group('re-review of #1727', _reReviewTests);
 
   test('keeps what the Swarm draws, not what it never shows', () async {
     final store = MemoryStore();
     final views = SuperTabSavedViews(store);
+    await views.claim('owner');
     await views.write('owner', 'tab', _view());
     final read = (await views.read('owner', 'tab'))!;
     expect(read['revision'], 7);
@@ -54,6 +57,7 @@ void main() {
   test('a view over the size cap is not kept, and an older one goes', () async {
     final store = MemoryStore();
     final views = SuperTabSavedViews(store, maxBytes: 4096);
+    await views.claim('owner');
     await views.write('owner', 'tab', _view());
     expect(await views.read('owner', 'tab'), isNotNull);
     await views.write('owner', 'tab', _view(pad: 8000));
@@ -66,6 +70,7 @@ void main() {
 
   test('an account keeps its three most recent Swarms', () async {
     final views = SuperTabSavedViews(MemoryStore());
+    await views.claim('owner');
     for (final tab in ['a', 'b', 'c', 'd']) {
       await views.write('owner', tab, _view(tab: tab));
     }
@@ -85,19 +90,23 @@ void main() {
     () async {
       final store = MemoryStore();
       final views = SuperTabSavedViews(store);
+      await views.claim('owner');
       await views.write('owner', 'tab', _view());
-      await views.write('other', 'tab', _view());
       expect(await views.read('stranger', 'tab'), isNull);
+      expect(await views.read('owner', 'tab'), isNotNull);
       await views.forgetAccount('owner');
       expect(await views.read('owner', 'tab'), isNull);
-      expect(await views.read('other', 'tab'), isNotNull);
-      expect(store.values.keys.where((k) => k.contains('owner')), isEmpty);
+      expect(
+        store.values.keys.where((k) => k.startsWith('super_tab.view')),
+        isEmpty,
+      );
     },
   );
 
   test('a lost Swarm is forgotten; a view it cannot read is none', () async {
     final store = MemoryStore();
     final views = SuperTabSavedViews(store);
+    await views.claim('owner');
     await views.write('owner', 'tab', _view());
     await views.forget('owner', 'tab');
     expect(await views.read('owner', 'tab'), isNull);
@@ -582,6 +591,58 @@ void _visit(FakeAsync async, ConversationServer server, MemoryStore store) {
   // Not disposed: closing a page signs nobody out (dispose is a sign-out).
 }
 
+/// A browser store whose cross-tab lock another tab holds: an iPhone
+/// suspending a background tab that held it.
+class _StuckLockStore extends MemoryStore
+    implements SynchronizedLocalKeyValueStore {
+  final release = Completer<void>();
+  @override
+  Future<T> synchronized<T>(String scope, Future<T> Function() action) =>
+      release.future.then((_) => action());
+}
+
+void _reReviewTests() {
+  // Minor a.
+  test('a lock another tab holds delays the open no more than 250 ms', () {
+    fakeAsync((async) {
+      final server = ConversationServer()..append('Hello');
+      final store = _StuckLockStore();
+      final client = _client(_Transport(server), store)
+        ..bind('owner')
+        ..show('tab');
+      SuperTabController? c;
+      client.open('tab').then((opened) => c = opened);
+      async.elapse(const Duration(milliseconds: 249));
+      expect(c, isNull);
+      async.elapse(const Duration(milliseconds: 2));
+      expect(c, isNotNull);
+      expect(c!.showingSaved, isFalse);
+      expect(c!.messages('lead').single.text, 'Hello');
+      store.release.complete();
+      async.flushMicrotasks();
+      client.dispose();
+    });
+  });
+
+  // Minor b.
+  test('after a sign-out elsewhere, a late write keeps nothing', () async {
+    final store = MemoryStore();
+    final views = SuperTabSavedViews(store);
+    await views.claim('owner');
+    await views.write('owner', 'tab', _view());
+    expect(store.values[_viewKey], isNotNull);
+    // Another browser tab signs out: the device keeps nobody's views now.
+    await SuperTabSavedViews(store).claim(null);
+    expect(store.values[_viewKey], isNull);
+    await views.write('owner', 'tab', _view());
+    expect(store.values[_viewKey], isNull);
+    // Nor one written for another account than the one using the device.
+    await views.claim('someone-else');
+    await views.write('owner', 'tab', _view());
+    expect(store.values[_viewKey], isNull);
+  });
+}
+
 void _reviewTests() {
   // Finding 1.
   test('more than a page since the save leaves no gap in the transcript', () {
@@ -697,11 +758,15 @@ void _reviewTests() {
   test('views saved at the same moment all stay listed, and all go', () async {
     final store = MemoryStore();
     final views = SuperTabSavedViews(store);
+    await views.claim('owner');
     await Future.wait([
       views.write('owner', 'a', _view(tab: 'a')),
       views.write('owner', 'b', _view(tab: 'b')),
       views.write('owner', 'c', _view(tab: 'c')),
     ]);
+    for (final tab in ['a', 'b', 'c']) {
+      expect(store.values['super_tab.view.owner.$tab'], isNotNull, reason: tab);
+    }
     // Signing out then finds every one of them.
     await views.forgetAccount('owner');
     expect(
