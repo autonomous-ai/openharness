@@ -1358,18 +1358,16 @@ async function logout(): Promise<void> {
  * route to the same end (a mutable id, a live re-bind) touches the socket, the E2EE identity and the
  * local binding at once, and the daemon already survives a restart cleanly for every update.
  *
- * No-op when nothing is running (`harness start` boots on the new session by itself) or when the daemon
- * already wears the right id (a `harness login` on a computer that was signed in all along) — unless the
- * sign-in itself stopped it (`stoppedDaemon`: `login --force` stops a signed-in daemon before switching
- * accounts). That one is started again on the new session: left down, the computer was off the account
- * until someone ran `harness start`, and the web showed it offline.
+ * If it was running before sign-in, or `login --force` stopped it before switching accounts, bring it back
+ * when sign-in leaves it down. A clean exit is intentional to launchd and systemd, so their restart policy
+ * does not bring a daemon back after its identity changes.
  */
-async function restartDaemonForIdentity(stoppedDaemon = false): Promise<void> {
+async function restartDaemonForIdentity(restartIfDown = false): Promise<void> {
   // OUR daemon, by its pid file and private socket. A login in another HOME must never restart a
   // different OS user's daemon just because it happens to hold the default TCP port.
   const pid = readPid()
   if (!pid || !isAlive(pid)) {
-    if (!stoppedDaemon) return
+    if (!restartIfDown) return
     console.log('  starting the daemon again on this account…')
     await launch(false)   // prints the status block and exits
     return
@@ -2735,17 +2733,21 @@ switch (cmd) {
     // git's credential helper in a Swarm agent's session (docs/swarm-github-app.md); git runs it, people do not.
     gitCredentialCommand(rest).then(code => { process.exitCode = code }).catch(onError)
     break
-  case 'login':
+  case 'login': {
     // The result line goes out FIRST (loginCommand prints it), then the daemon is swapped onto the
     // account: the desktop app reads that line and does not wait for a restart it observes anyway.
+    // Capture before sign-in: the daemon can exit cleanly when its identity changes, and the installed
+    // service treats a clean exit as an intentional stop.
+    const daemonWasRunning = isDaemonRunning()
     loginCommand(foreground, flags.includes('--force'), flags.includes('--json'), {
       entryPoint: entryPointFlag(),
       ticket: flags.find((f) => f.startsWith('--ticket='))?.slice('--ticket='.length) || undefined,
       method: signInMethodFlag(flags) ?? (flags.includes('--json') || !process.stdin.isTTY ? undefined : 'ask'),
     })
-      .then((outcome) => outcome.signedIn ? restartDaemonForIdentity(outcome.stoppedDaemon) : undefined)
+      .then((outcome) => outcome.signedIn ? restartDaemonForIdentity(outcome.stoppedDaemon || daemonWasRunning) : undefined)
       .catch(onError)
     break
+  }
   case 'auth':
     if (args[0] !== 'status') { console.error('Unknown command: auth ' + (args[0] ?? '')); usage(1) }
     else authStatusCommand(flags.includes('--json')).catch(onError)

@@ -328,6 +328,15 @@ async function dbEngineSession(dbPath: string, sql: string, params: SqliteParam[
   return typeof id === 'string' && id && id !== excludedSessionId ? { sessionId: id } : null
 }
 
+/**
+ * Where an OpenCode store keeps its sessions: OpenCode 2's `session_v2`, which has the same columns, when the
+ * store has it, else OpenCode 1's `session`. A v2 store still holds the v1 table, only what v1 wrote.
+ */
+async function opencodeSessionTable(dbPath: string): Promise<'session_v2' | 'session'> {
+  const found = await sqliteReadAll(dbPath, "SELECT name FROM sqlite_master WHERE type='table' AND name='session_v2'", [], { maxBuffer: 4096 })
+  return found.ok && found.rows.length > 0 ? 'session_v2' : 'session'
+}
+
 /** One `?` per directory, for an `IN (…)` over both spellings of the cwd. */
 function placeholders(count: number): string {
   return Array.from({ length: count }, () => '?').join(', ')
@@ -474,16 +483,18 @@ export async function findLiveSession(
         if (!isAbsolute(root)) throw new IdentityReadUnavailable('the session working directory is invalid')
         return root ? { cwd: root, sessionId: basename(sessionDir) } : null
       }, opts)
-    case 'opencode':
+    case 'opencode': {
       // time_created is epoch MILLISECONDS here.
+      const database = join(env.OPENCODE_DATA_DIR, 'opencode.db')
       return dbEngineSession(
-        join(env.OPENCODE_DATA_DIR, 'opencode.db'),
-        `SELECT id FROM session WHERE directory IN (${dirList}) AND parent_id IS NULL`
+        database,
+        `SELECT id FROM ${await opencodeSessionTable(database)} WHERE directory IN (${dirList}) AND parent_id IS NULL`
           + ' AND (time_created >= ? OR time_updated >= ?)'
           + ' ORDER BY time_updated DESC LIMIT 2;',
         [...dirs, Math.trunc(sinceMs), Math.trunc(sinceMs)],
         opts?.excludedSessionId,
       )
+    }
     case 'kilo':
       // Same store shape as opencode (measured: `session` is byte-identical between the two DBs), and
       // time_created is epoch MILLISECONDS here too — the real row on this machine reads 1786091927554.

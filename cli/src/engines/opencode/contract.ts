@@ -21,9 +21,11 @@ export const OPENCODE_VERSION = { output: /(\d+)\.\d+\.\d+/, args: ['--version']
  * and writes a `user` row as a turn starts and an `idle` row as it ends — `outcome` succeeded, interrupted or
  * failed alike. Measured on 2.0.24's store: 550 `idle` rows since it began writing them (2026-09-28), and no
  * session since left with a `user` after its last `idle`.
+ * Real OpenCode 2.0.29 stores show 18 row pairs that disagree with seq ordering and 40 (session_id, time_created)
+ * ties. Rows are read by time_created first, seq only tying within the millisecond, the same order the readers use.
  */
 export const OPENCODE_V2_TURN = {
-  sql: "SELECT type FROM session_message WHERE session_id = ? AND type IN ('user', 'idle') ORDER BY seq DESC LIMIT 1;",
+  sql: "SELECT type FROM session_message WHERE session_id = ? AND type IN ('user', 'idle') ORDER BY time_created DESC, seq DESC LIMIT 1;",
   opens: 'user',
 } as const
 

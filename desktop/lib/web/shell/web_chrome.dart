@@ -56,4 +56,5 @@ WorkspaceChrome _webWorkspaceChrome(AppNotifier app) => WorkspaceChrome(
     messagesWithState: true,
     drawsSaved: true,
   ),
+  subscriptionsNeedComputer: true,
 );
