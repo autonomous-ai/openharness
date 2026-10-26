@@ -129,7 +129,7 @@ export class ContributedMachines {
   private engineRead: { value: ReadyEngine[] | null; until: number } | null = null
   /** Per Swarm folder, its checkouts' readiness and until when it stands, and the folders being read now. A push check
    *  asks the remote, so it is read beside the pass, never holding up a start. */
-  private readonly checkoutReads = new Map<string, { value: ReadyCheckout[]; until: number }>()
+  private readonly checkoutReads = new Map<string, { value: ReadyCheckout[] | null; until: number }>()
   private readonly checkoutReading = new Set<string>()
   private async engineReadiness(local: { request: (type: string, payload: Record<string, unknown>, timeoutMs: number) => Promise<unknown> }): Promise<ReadyEngine[] | null> {
     const now = this.deps.now()
@@ -149,8 +149,11 @@ export class ContributedMachines {
     if ((!read || this.deps.now() >= read.until) && !this.checkoutReading.has(root)) {
       this.checkoutReading.add(root)
       void readCheckouts(root, this.deps.git ?? quietGit)
-        .then(value => { this.checkoutReads.set(root, { value, until: this.deps.now() + READINESS_MS }) },
-          error => { this.log(`Could not read the Swarm folder's checkouts: ${error instanceof Error ? error.message : String(error)}`) })
+        .then(value => { this.checkoutReads.set(root, { value, until: this.deps.now() + READINESS_MS }) }, error => {
+          // An unreadable folder says nothing, and is read again a minute later, not on every pass.
+          this.checkoutReads.set(root, { value: null, until: this.deps.now() + READINESS_RETRY_MS })
+          this.log(`Could not read the Swarm folder's checkouts: ${error instanceof Error ? error.message : String(error)}`)
+        })
         .finally(() => this.checkoutReading.delete(root))
     }
     return read?.value ?? null

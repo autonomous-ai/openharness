@@ -776,12 +776,20 @@ describe('routing contributed capacity', () => {
     it('leaves out an engine the machine says is signed out or not installed, and keeps one whose sign-in is unknown', async () => {
       const out = await runPool(swarm(undefined, [{ engine: 'claude', installed: true, signedIn: false }]), false, {}, project)
       expect(out.answer).toMatchObject({ error: 'NO_CANDIDATE' })
-      expect(reasons(out.answer)[0]!.reason).toContain('Claude Code is not signed in on this machine.')
+      expect(reasons(out.answer)[0]!.reason).toContain('Claude Code is not signed in to a subscription on this machine.')
       const missing = await runPool(swarm(undefined, [{ engine: 'claude', installed: false, signedIn: null }]), false, {}, project)
       expect(reasons(missing.answer)[0]!.reason).toContain('Claude Code is not installed on this machine.')
       for (const engines of [[{ engine: 'claude', installed: true, signedIn: null }], [{ engine: 'codex', installed: true, signedIn: false }], [{ engine: 'cursor', installed: false, signedIn: null }], []]) {
         expect((await runPool(swarm(undefined, engines), false, {}, project)).answer.ok).toBe(true)
       }
+    })
+
+    it('still offers a local model on a machine whose engine is signed out, since the grid needs no subscription', async () => {
+      const grid = 'swarm-0123456789ab', pool = swarm(undefined, [{ engine: 'claude', installed: true, signedIn: false }])
+      pool.observation.localModels = [{ grid, model: 'qwen3' }]
+      const { answer, s } = await runPool(pool, false, {}, project, { state: { localModels: { grid, enabled: true } } })
+      expect(answer).toMatchObject({ ok: true, pick: { gridModel: 'qwen3' } })
+      expect(recorded(s).command.decision.excluded).toEqual(expect.arrayContaining([expect.objectContaining({ reason: expect.stringContaining('not signed in') })]))
     })
 
     it('leaves out a project folder that is not a checkout of the project\'s repository', async () => {

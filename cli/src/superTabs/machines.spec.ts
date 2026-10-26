@@ -312,6 +312,21 @@ describe('contributed machine executor', () => {
         expect(execFileSync('git', ['-C', remote, 'for-each-ref'], { encoding: 'utf8' })).toBe('')
       })
 
+      it('says nothing of a Swarm folder it cannot read, and tries again a minute later, not every pass', async () => {
+        const { git } = gitFor('')
+        const f = swarmFixture(git)
+        Object.assign(f.pool.machine, { cwd: join(tmpdir(), 'readiness-missing-folder') })
+        await f.machine.tick()
+        await vi.waitFor(() => expect(f.log).toHaveBeenCalledWith(expect.stringContaining('Could not read the Swarm folder')))
+        // Proving it is not read again needs the time a read would take: each pass is followed by more than a folder read.
+        for (let i = 0; i < 3; i++) { f.step(16_000); await f.machine.tick(); await new Promise(done => setTimeout(done, 50)) }
+        expect(readings(f)).toHaveLength(4)
+        expect(readings(f).at(-1)!.readiness?.checkouts).toBeUndefined()
+        expect(f.log.mock.calls.filter(c => String(c[0]).includes('Swarm folder'))).toHaveLength(1)
+        f.step(60_000); await f.machine.tick()
+        await vi.waitFor(() => expect(f.log.mock.calls.filter(c => String(c[0]).includes('Swarm folder'))).toHaveLength(2))
+      })
+
       it('says a push is unknown, not refused, when the remote could not be reached', async () => {
         const { git, calls } = gitFor("fatal: unable to access 'https://github.com/Acme/App.git/': Could not resolve host: github.com")
         const f = swarmFixture(git)

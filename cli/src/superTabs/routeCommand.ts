@@ -50,7 +50,8 @@ function unreadyPool(pool: Json, project: Json | undefined, projectId: string, n
     const name = ENGINE_NAME[String(e.engine)]
     if (!name) continue
     if (e.installed === false) engines[String(e.engine)] = `${name} is not installed on this machine.`
-    else if (e.signedIn === false) engines[String(e.engine)] = `${name} is not signed in on this machine. Its owner can sign in there; the next reading clears this.`
+    // Worded as a subscription's, so a Builder on a local model, which runs through the grid without one, is not kept out.
+    else if (e.signedIn === false) engines[String(e.engine)] = `${name} is not signed in to a subscription on this machine. Its owner can sign in there; the next reading clears this.`
   }
   // Only a Swarm folder's own checkout of the project is read; the repository's machine runs it from the Lead's checkout.
   const checkout = pool.scope === 'swarm' && repository.machineId !== pool.machineId ? list(readiness.checkouts).find(c => c.folder === projectId) : undefined
