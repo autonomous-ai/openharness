@@ -16,6 +16,7 @@ import type { MachineData, Part } from '../parts/index.js'
 import { READ_FORMAT, type HostChanges, type HostChangesRequest } from './contract.js'
 import { cursorFor, readCursor } from './cursor.js'
 import { hostTab, type HostLookups } from './hostRows.js'
+import { confidentialSessions } from '../confidential.js'
 
 type Transaction = Prisma.TransactionClient
 /** The row hash's length at the front of an etag (read/hostEtag.ts); the input signature follows it. */
@@ -146,7 +147,8 @@ export class HostReads {
 
   private async lookups(tx: Transaction, state: SuperTabState, teams: Array<{ machineId: string }>): Promise<HostLookups> {
     const people = await tx.user.findMany({ where: { id: { in: state.people.map(p => p.id) }, autonomousEnv: state.environment }, select: { id: true, email: true } })
-    return { people, teams, githubApp: !!this.options.githubApp, agentGrant: target => this.store.agentGrant(tx, state, target) }
+    const confidential = await confidentialSessions(tx, state.agents.map(a => a.id))
+    return { people, confidential, teams, githubApp: !!this.options.githubApp, agentGrant: target => this.store.agentGrant(tx, state, target) }
   }
 
   /** Swarms whose record of this machine changed since the cursor and that no longer list it. */

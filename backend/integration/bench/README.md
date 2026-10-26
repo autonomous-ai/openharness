@@ -34,6 +34,15 @@ machines, and never reads `DATABASE_URL` or any other database. It writes `<driv
 | `--every k=ms,…` | see `config.ts` | Cadences: `workerPostMs` 4000, `leadSendMs` 5000, `nativeTurnMs` 10000, `observeMs` 15000, `deliveryPassMs` 3000, `desktopPollMs` 3000, `hostTickMs` 1000. |
 | `--driver NAME` | parts | Which store's clients to run (below). |
 
+The isolated poll in the report runs right after the load, while every part changed in the last 30 s still comes
+again. To see what one up-to-date poll costs the database when the Swarm is idle, and after a single post, run the
+diagnostic. It takes the same options:
+
+```bash
+NODE_ENV=test HARNESS_CREDENTIAL_ENCRYPTION_KEY=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA= \
+  DATABASE_URL=mongodb://127.0.0.1:1/bench-never-used npx tsx integration/bench/pollDatabaseBytes.ts
+```
+
 The bench's own tests (helpers, plus a short run of the whole scenario), and its typecheck:
 
 ```bash

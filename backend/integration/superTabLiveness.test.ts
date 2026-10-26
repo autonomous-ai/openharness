@@ -12,6 +12,8 @@ import type { Command } from '../src/superTabs/commands.js'
 import type { MachineObservation } from '../src/superTabs/machines.js'
 import * as parts from '../src/superTabs/parts/index.js'
 import { poolRows } from './hostRows.test-support.js'
+import { beforeFirstWrite } from './interleave.test-support.js'
+import { SwarmReads } from '../src/superTabs/read/service.js'
 
 // Work never sits with a dead owner: an active assignment whose agent died, stalled or hit a limit becomes lost within
 // minutes, its old agent is fenced off, and the Lead is woken to hand it on. A fresh loopback replica set, created here.
@@ -88,24 +90,6 @@ async function swarm({ legacy = false } = {}) {
     clock: { get now() { return now }, set now(value: number) { now = value } } }
 }
 
-/** The database, but every transaction runs `interleave` (another writer committing) before its first group write. */
-function beforeFirstGroupWrite(interleave: () => Promise<void>): PrismaClient {
-  const wrap = (tx: PrismaClient) => new Proxy(tx, { get(target, key, receiver) {
-    const value = Reflect.get(target, key, receiver)
-    if (key !== 'swarmGroup') return value
-    return new Proxy(value, { get(group, method, groupReceiver) {
-      const original = Reflect.get(group, method, groupReceiver)
-      if (method !== 'updateMany') return original
-      return async (...args: unknown[]) => { await interleave(); return original.apply(group, args) }
-    } })
-  } })
-  return new Proxy(db, { get(target, key, receiver) {
-    if (key !== '$transaction') return Reflect.get(target, key, receiver)
-    return (body: (tx: PrismaClient) => Promise<unknown>, options: unknown) =>
-      (target.$transaction as (b: unknown, o: unknown) => Promise<unknown>)((tx: PrismaClient) => body(wrap(tx)), options)
-  } })
-}
-
 /** A Swarm created before projects existed. */
 async function dropProjects(tab: string) {
   await db.$transaction(async tx => {
@@ -122,6 +106,29 @@ async function dropProjects(tab: string) {
 }
 
 describe('work that loses its owner', () => {
+  // Final review, Important 3: routing keeps a lost task's worker out after the task is cancelled, from the mark on the agent.
+  it('marks its worker in the same write that loses it, and the mark outlives a cancel in first loads and change reads', async () => {
+    const f = await swarm()
+    const reads = new SwarmReads(f.timed, { now: () => f.clock.now })
+    await f.beat(f.clock.now)
+    const { cursor } = await reads.firstLoad(owner, f.tab)
+    f.clock.now += 2 * MINUTE + 5_000
+    await f.observe('lead-host', [f.harness.lead])
+    const lostAt = f.clock.now
+    expect((await f.assignment()).status).toBe('lost')
+    const [agentRow, groupRow] = [await db.swarmAgent.findFirst({ where: { tabId: f.tab, key: f.worker } }), await db.swarmGroup.findFirst({ where: { tabId: f.tab, key: f.group } })]
+    // One commit stamps every part it writes alike: the worker's part was written with the lost task's.
+    expect(agentRow!.changedAt.getTime()).toBe(groupRow!.changedAt.getTime())
+    expect((agentRow!.data as { lostTask?: unknown }).lostTask).toBeDefined()
+    f.clock.now += MINUTE
+    await f.execute({ type: 'work.cancel', conversationId: f.group, assignmentId: f.assignmentId, reason: 'Not needed' })
+    const mark = { conversationId: f.group, assignmentId: f.assignmentId, reason: 'its machine Worker Mac has been offline for 2 minutes', at: lostAt }
+    const changed = await reads.changes(owner, f.tab, cursor)
+    expect(changed.reload).toBe(false)
+    expect('agents' in changed && changed.agents.find(a => a.key === f.worker)).toMatchObject({ data: { lostTask: mark } })
+    expect((await reads.firstLoad(owner, f.tab)).agents.find(a => a.key === f.worker)!.data.lostTask).toEqual(mark)
+  })
+
   it('is lost when its machine has been offline for 2 minutes, found by another machine\'s report', async () => {
     const f = await swarm()
     await f.beat(f.clock.now)
@@ -141,7 +148,7 @@ describe('work that loses its owner', () => {
     f.clock.now += 2 * MINUTE + 5_000
     // The Lead's poll reads the worker's machine as silent; just before it writes the loss, that machine reports.
     let raced = false
-    const racing = new SuperTabStore(beforeFirstGroupWrite(async () => {
+    const racing = new SuperTabStore(beforeFirstWrite(db, async () => {
       if (raced) return
       raced = true
       await f.observe('test-host', [f.harness.worker], { harnessProgress: { [f.harness.worker]: f.clock.now } })

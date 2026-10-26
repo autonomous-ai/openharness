@@ -845,6 +845,31 @@ void main() {
       expect(MacSystemNotifier().deniedAdvice, contains('System Settings'));
     });
 
+    testWidgets('on-screen alerts are clicked on a computer', (tester) async {
+      await pump(
+        tester,
+        SystemNotifications(store: store(), notifier: _Recorder()),
+      );
+      expect(find.textContaining('Click it to go to that harness.'), findsOne);
+      expect(find.textContaining('Tap it'), findsNothing);
+    }, variant: TargetPlatformVariant.desktop());
+
+    testWidgets(
+      'on-screen alerts are tapped on a phone or tablet',
+      (tester) async {
+        await pump(
+          tester,
+          SystemNotifications(store: store(), notifier: _Recorder()),
+        );
+        expect(find.textContaining('Tap it to go to that harness.'), findsOne);
+        expect(find.textContaining('Click it'), findsNothing);
+      },
+      variant: TargetPlatformVariant({
+        TargetPlatform.android,
+        TargetPlatform.iOS,
+      }),
+    );
+
     testWidgets('no row where there is no notifier to switch', (tester) async {
       await pump(
         tester,

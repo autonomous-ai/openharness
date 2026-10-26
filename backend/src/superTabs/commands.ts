@@ -15,7 +15,7 @@ import { TERMINAL_KEYS, terminalAlert, terminalRequest, terminalResult, type Ter
 import { loseTasks, renewLease, renewOwnTask } from './liveness.js'
 import { credentialResult, redactCredentials, type CredentialKind } from './credentials.js'
 import { dirtyGroups, reportGroups, summarize } from './projectUpdates.js'
-import { agentKind, agentProjectId, audienceOf, agentSetRole, deleteProject, groupProject, inviteLanding, ledProject, manageProject, MAX_ROLES, mutableProjects, placeRules, projectMembers, projectOf, projectRules, projectsOf, readAgent, readConversation, readProject, roleVersion, sameProject, sharedWithLeads, SKILL_SET_NAMES, skillSetOf, type ProjectRole, type RoleKind, type SwarmProject } from './projects.js'
+import { agentKind, agentProjectId, audienceOf, agentSetRole, deleteProject, markConfidential, requireSingleRegistration, groupProject, inviteLanding, ledProject, manageProject, MAX_ROLES, mutableProjects, placeRules, projectMembers, projectOf, projectRules, projectsOf, readAgent, readConversation, readProject, roleVersion, sameProject, sharedWithLeads, SKILL_SET_NAMES, skillSetOf, type ProjectRole, type RoleKind, type SwarmProject } from './projects.js'
 
 const id = z.string().min(1).max(160).regex(/^[A-Za-z0-9_-]+$/)
 const title = z.string().trim().min(1).max(160)
@@ -202,6 +202,10 @@ export function withoutCredentials(command: Command, removed: CredentialKind[]):
 export interface CommandContext {
   operationId: string
   now: number
+  /** For a terminal request: its agent's session is confidential in some Swarm, read by the store (confidential.ts). */
+  confidentialSession?: boolean
+  /** For a command that registers a session or can make one confidential: the other Swarms' registrations (confidential.ts). */
+  registrations?: import('./projects.js').OtherRegistrations
   /** Read from host ownership/access records by the store, never copied from the request. */
   contribution?: { machineOwnerId: string; contributorId: string; hostGrant?: string | null
     /** A Harness Team account's machine: the Mac it lives on, from its account row (machines.ts ContributedMachine). */
@@ -647,7 +651,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
   switch (command.type) {
     case 'agent.screen':
     case 'agent.input': {
-      const { effect, message, removed: typed } = terminalRequest(state, actor, sender, operationId, context.now, command)
+      const { effect, message, removed: typed } = terminalRequest(state, actor, sender, operationId, context.now, command, context.confidentialSession)
       effects.terminal = effect
       result.requestId = operationId
       if (message) effects.messages.push(message)
@@ -1196,6 +1200,8 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       }
       target.harnessId = command.harnessId
       target.replacement = { previousHarnessId: command.previousHarnessId, harnessId: command.harnessId }
+      // A new terminal is not the session that lost its task.
+      delete target.lostTask
       target.configuration = command.configuration
       target.configurationVersion = operationId
       if (command.startedSession) target.startedSession = command.startedSession
@@ -1510,6 +1516,8 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       if (state.conversations.some(c => activeWork(c) && c.assignment?.agentId === worker.id)) fail('AGENT_BUSY', 'This agent already owns an active assignment.')
       delete worker.workDecision
       delete worker.releaseId
+      // A person's own pick takes a worker that lost its task back into routing (model.ts lostTask); a Lead's does not.
+      if (actor.kind === 'person') delete worker.lostTask
       for (const reviewer of state.agents) {
         if (agentRole(reviewer) === 'reviewer' && group.agentIds.includes(reviewer.id) && reviewer.workDecision !== 'stop') delete reviewer.workDecision
       }
@@ -1554,6 +1562,8 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       assignment.status = command.status
       assignment.result = command.result
       if (['done', 'stopped'].includes(command.status)) finishWorker(state, assignment.agentId, group)
+      // Finished work shows the worker recovered from a task it lost before.
+      if (command.status === 'done') delete state.agents.find(a => a.id === assignment.agentId)?.lostTask
       if (changed) {
         const label = { working: 'Working', needs_human: 'Needs a human', blocked: 'Stuck', review: 'Ready for review', done: 'Done', stopped: 'Stopped' }[command.status]
         const lead = group.leadId
@@ -1615,6 +1625,8 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
     if (!acknowledged && !state.agents.some(a => a.id === target.id)) fail('STOP_REQUESTED', 'Wait for the execution host to finish stopping its workers before withdrawing them.')
   }
   syncLeads(state)
+  if (context.registrations) requireSingleRegistration(original, state, context.registrations)
+  markConfidential(state)
   assignAgentDisplayNames(state.agents)
   // The size limit is per stored part now (parts/commit.ts PART_LIMIT_BYTES); a Swarm as a whole has none.
   // Every row this command writes, whatever its words came from: an older message resent, a rule written before this check.

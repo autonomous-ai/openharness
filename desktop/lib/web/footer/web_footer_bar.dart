@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
 
 import '../../shared/theme/app_icons.dart';
@@ -35,8 +37,12 @@ class WebFooterBar extends StatelessWidget {
       child: Material(
         key: const ValueKey('workspace-status-bar'),
         type: MaterialType.transparency,
+        // Each control a finger's size, so the bar is at least that tall.
         child: SizedBox(
-          height: workspaceBarControlHeight(context) + kWorkspaceInset,
+          height: math.max(
+            kFingerTarget,
+            workspaceBarControlHeight(context) + kWorkspaceInset,
+          ),
           child: Padding(
             padding: EdgeInsets.symmetric(
               horizontal: workspaceBarCellSizeOf(context).width,
@@ -47,12 +53,15 @@ class WebFooterBar extends StatelessWidget {
                   child: Align(
                     alignment: Alignment.centerLeft,
                     child: Builder(
-                      builder: (context) => WebDropdownControl(
-                        key: const ValueKey('web-footer-menu-button'),
-                        label: footer.summary,
-                        tooltip: 'Status',
-                        color: foreground,
-                        onPressed: () => _open(context),
+                      builder: (context) => fingerTarget(
+                        enabled: true,
+                        WebDropdownControl(
+                          key: const ValueKey('web-footer-menu-button'),
+                          label: footer.summary,
+                          tooltip: 'Status',
+                          color: foreground,
+                          onPressed: () => _open(context),
+                        ),
                       ),
                     ),
                   ),
@@ -60,10 +69,16 @@ class WebFooterBar extends StatelessWidget {
                 // One filled action in the bar: Share when it is on. A phone's
                 // download is the store bar's.
                 if (!browserHasAppStore())
-                  WebDownloadButton(prominent: share == null),
+                  fingerTarget(
+                    enabled: true,
+                    WebDownloadButton(prominent: share == null),
+                  ),
                 if (share != null) ...[
                   SizedBox(width: workspaceBarCellSizeOf(context).width),
-                  _WebShareIconButton(share: share),
+                  fingerTarget(
+                    enabled: true,
+                    _WebShareIconButton(share: share),
+                  ),
                 ],
               ],
             ),

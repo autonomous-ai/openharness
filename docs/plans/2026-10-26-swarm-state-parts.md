@@ -141,6 +141,26 @@ Every part has its own `version` (incremented on each write) and a `changedAt` s
   until the owner says it can be dropped.
 - Old clients: the backend answers the old full-state routes with an "update Harness" error that every client
   version shows as an error (my call: HTTP 426 with code `UPDATE_REQUIRED`).
+- Rollback (`backend/src/superTabs/migration/rollback.ts`):
+  - **Before any write in parts:** the kept old state goes back unchanged (`rollbackLegacy`).
+  - **After writes:** the old state is rebuilt from the parts (`rollbackFromParts`).
+  - **Refused when the previous release would misread the Swarm** (final review, Critical 2; Lead ruling for v1):
+    - The previous release checks no audience. It filters conversations and messages by project alone, so a private
+      conversation (Chat with PM) would become readable by every project reader.
+    - It ends work only on done, stopped or cancelled, so a task whose status is lost would read as active. A lost
+      task cancelled later is finished there too, but that release knows no lost marker. Its fenced worker would read
+      as an ordinary finished worker awaiting a decision.
+    - So `rollbackFromParts` refuses a Swarm with any private conversation or any lost task before it changes any
+      row. The refusal names the Swarm and the reason.
+    - The recovery path is to roll forward with a fix. The parts stay authoritative, so nothing is lost or made public.
+    - A Swarm with neither rolls back as before.
+- The dry run (`backend/scripts/swarm-parts/dry-run.ts`):
+  - After the migration, it writes a private chat into one synthetic Swarm and a lost task into another, and shows
+    that rollback refuses both and leaves their rows unchanged.
+  - Its step 7 reads each rolled-back state with this branch's `visibleState`. That checks the state's shape still
+    reads. It does not run the previous release's binary or its access checks, so it is not evidence that the
+    previous release reads the state safely. The refusal above is what keeps the cases that release would misread
+    out of its hands.
 
 ## Rulings from the builder check (draft 2, my calls)
 

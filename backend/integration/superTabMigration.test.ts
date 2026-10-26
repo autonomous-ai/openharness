@@ -216,6 +216,60 @@ describe('rolling back (design 6.4)', () => {
     // The previous release reads it as it read any Swarm.
     expect(() => visibleState(state, { kind: 'person', userId: state.ownerId, email: 'owner@example.com' }, NOW)).not.toThrow()
   })
+
+  // Final review, Critical 2: the previous release checks no audience (private conversations become readable by every
+  // project reader) and reads lost work as active. A rollback that would hand it either is refused before any row changes.
+  /** A write in parts after the migration, as the new release makes it: one group changed, or a new one. */
+  async function writeGroup(tabId: string, key: string, change: (group: parts.SwarmParts['groups'][number]['data']) => object) {
+    await db.$transaction(async tx => {
+      const groups = (await parts.loadAll(tx, tabId)).groups
+      const group = groups.find(g => g.key === key)
+      if (group) return void await guardedWrite(tx, tabId, { op: 'update', kind: 'group', key, seen: group.version, data: change(group.data) }, NOW + 1)
+      const lead = groups.find(g => g.key === 'lead')!
+      await guardedWrite(tx, tabId, { op: 'insert', kind: 'group', key, ordinal: Math.max(...groups.map(g => g.ordinal)) + 1,
+        data: change({ ...lead.data!, id: key, number: 90, assignment: null, lastMessageSequence: 0 }) }, NOW + 1)
+    })
+  }
+  /** Every row a rollback could change: the Swarm's row and its parts. */
+  const rows = async (tabId: string) => ({ tab: await db.superTab.findUnique({ where: { id: tabId } }),
+    parts: await db.$transaction(tx => parts.loadAll(tx, tabId)) })
+
+  it('refuses to roll back from the parts while a conversation is private, changing no row, and says how to recover', async () => {
+    const { tabId } = await legacySwarm()
+    await migrateSwarm(db, tabId, { now: () => NOW })
+    await writeGroup(tabId, 'chat-with-pm', group => ({ ...group, title: 'Chat with PM', audience: { people: [{ id: 'owner', generation: 'tab' }] } }))
+    const before = await rows(tabId)
+    const report = await rollbackFromParts(db, tabId)
+    expect(report).toMatchObject({ tabId, ok: false })
+    expect(report.error).toContain(tabId)
+    expect(report.error).toContain('private conversation')
+    expect(report.error).toMatch(/roll forward with a fix/i)
+    expect(await rows(tabId)).toEqual(before)
+  })
+
+  it('refuses while a task is lost, or was lost and then cancelled, changing no row', async () => {
+    for (const status of ['lost', 'cancelled'] as const) {
+      const { s, tabId } = await legacySwarm()
+      await migrateSwarm(db, tabId, { now: () => NOW })
+      await writeGroup(tabId, s.web, group => ({ ...group, assignment: { ...group!.assignment!, status, lost: { reason: 'no progress seen', at: NOW } },
+        lostAttempt: { id: group!.assignment!.id, agentId: group!.assignment!.agentId } }))
+      const before = await rows(tabId)
+      const report = await rollbackFromParts(db, tabId)
+      expect([status, report]).toMatchObject([status, { tabId, ok: false, error: expect.stringContaining('lost') }])
+      // A cancelled task is finished on the previous backend too; what it loses is the lost marker (final review, Minor).
+      expect(report.error).toContain(status === 'lost' ? 'would read as active work' : 'lost and then cancelled would lose the lost marker')
+      expect(report.error).toMatch(/roll forward with a fix/i)
+      expect(await rows(tabId)).toEqual(before)
+    }
+  })
+
+  it('still rolls back from the parts a Swarm with new writes but no private conversation and no lost work', async () => {
+    const { tabId } = await legacySwarm()
+    await migrateSwarm(db, tabId, { now: () => NOW })
+    await writeGroup(tabId, 'lead', group => ({ ...group, title: 'Changed after the migration' }))
+    expect(await rollbackFromParts(db, tabId)).toMatchObject({ tabId, ok: true })
+    expect(await db.superTab.findUnique({ where: { id: tabId } })).toMatchObject({ format: 1 })
+  })
 })
 
 describe('the migration job (design 6.1.1)', () => {

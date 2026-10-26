@@ -994,6 +994,17 @@ The same function serves commands (3.1), the CLI's `status` (5.3), verification 
   - Old code numbers new messages from that revision. Old code also numbers per tab: it gives every new message, in
     any group, `row.revision + 1`. Starting `revision` above every sequence written in parts mode keeps each group
     strictly increasing.
+  - **Refused for a Swarm the previous backend would misread** (final review, Critical 2; Lead ruling for v1). The
+    previous backend checks no audience: it filters conversations and messages by project alone. It also ends work
+    only on done, stopped or cancelled. So `rollbackFromParts` refuses, before changing any row, a Swarm with:
+    - any private conversation, which would become readable by every project reader;
+    - any task with status `lost`, which would read as active;
+    - any task cancelled after it was lost (it keeps `assignment.lost`). The previous backend reads it as finished, but
+      ignores the marker, so the fenced worker would read as an ordinary finished worker awaiting a decision.
+  - The refusal names the Swarm and the reason. The Swarm stays in parts. Recovery is to roll forward with a fix: the
+    parts stay authoritative, so nothing is lost or made public.
+  - A reassigned task whose `lostAttempt` names an earlier worker is not refused. The current assignment is the new
+    worker's, and the previous backend accepts status only for the current assignment id and its agent.
 - Part collections are dropped only after the owner says so. The old `state` field is likewise kept until the owner
   says it can go (spec).
 
@@ -1014,9 +1025,11 @@ The same function serves commands (3.1), the CLI's `status` (5.3), verification 
   2. verify;
   3. migrate again, with no change expected;
   4. run the new backend's integration suites against the migrated data;
-  5. post commands through the new store;
-  6. roll back;
-  7. run the old backend's read of every Swarm.
+  5. post commands through the new store, then write a private chat into one Swarm and a lost task into another;
+  6. roll back: those two are refused with their rows unchanged (6.4), the rest roll back;
+  7. read every rolled-back Swarm with this branch's `visibleState`. This checks the old shape still reads. It does
+     not run the previous backend's binary or its access checks, so it is not evidence that the previous backend reads
+     the state safely; the refusal in 6.4 keeps out what it would misread.
   Time each step. Group 6 repeats it on the integrated branch.
 
 ## 7. Group split for 2–5

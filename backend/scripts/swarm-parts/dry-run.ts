@@ -3,6 +3,10 @@
  * a loopback replica set this script starts itself (never DATABASE_URL or a remote host), each step timed:
  * seed → migrate → verify (migrate again: nothing to do) → read by parts → commands through the store → roll back → old read.
  * Also bytes per poll, before (old full-state reads) and after (first load, changes, host form).
+ * After the migration, one Swarm gets a private conversation and another a lost task; rolling those back is refused, since
+ * the previous release would make the conversation public and read the task as active (final review, Critical 2).
+ * The old-read step reads each rolled-back state with this branch's visibleState: it checks the state's shape, not the
+ * previous release's binary or its access checks.
  *
  *   NODE_ENV=test HARNESS_CREDENTIAL_ENCRYPTION_KEY=<test key, as the suites use> node --import tsx scripts/swarm-parts/dry-run.ts [--out artifacts]
  */
@@ -20,6 +24,8 @@ import { SuperTabStore } from '../../src/superTabs/store.js'
 import { visibleState, type SuperTabState } from '../../src/superTabs/model.js'
 import { migrateAll } from '../../src/superTabs/migration/job.js'
 import { rollbackFromParts, rollbackLegacy } from '../../src/superTabs/migration/rollback.js'
+import * as parts from '../../src/superTabs/parts/index.js'
+import { guardedWrite } from '../../src/superTabs/parts/write.js'
 import { stateDifference } from '../../src/superTabs/migration/verify.js'
 import { SwarmReads } from '../../src/superTabs/read/service.js'
 import { HostReads } from '../../src/superTabs/read/host.js'
@@ -94,10 +100,32 @@ try {
       groupsSent: 'groups' in changes ? changes.groups.length : null, otherHost: { bytes: bytes(host), tabs: host.tabs.length },
       runningHost: { bytes: bytes(runner), tabs: runner.tabs.map(t => t.tabId === big.state.id ? 'big' : t.tabId) } }
   })
-  // Written in parts since the migration: rebuilt from the parts. The others go back to their old state unchanged.
+  // What only the new release writes, after the migration: a private chat, and a task its worker lost.
+  const [hidden, lost] = [seeded[2]!, seeded.slice(3).find(s => s.state.conversations.some(c => c.assignment))!]
+  const unsafe = await step('5b a private chat and a lost task, written after the migration', async () => {
+    const chat = await store.execute(owner(hidden), hidden.state.id, { operationId: randomUUID(),
+      command: { type: 'conversation.create', title: 'Chat with PM', brief: 'Private.', checks: [], audience: { personIds: [hidden.state.ownerId] } } })
+    const task = lost.state.conversations.find(c => c.assignment)!
+    await db.$transaction(async tx => {
+      const group = (await parts.loadAll(tx, lost.state.id)).groups.find(g => g.key === task.id)!
+      const assignment = group.data!.assignment!
+      await guardedWrite(tx, lost.state.id, { op: 'update', kind: 'group', key: task.id, seen: group.version,
+        data: { ...group.data!, assignment: { ...assignment, status: 'lost', lost: { reason: 'no progress seen', at: Date.now() } },
+          lostAttempt: { id: assignment.id, agentId: assignment.agentId } } }, Date.now())
+    })
+    return { privateChat: { swarm: hidden.spec.name, parts: chat.parts.length }, lostTask: { swarm: lost.spec.name, conversation: task.id } }
+  })
+  const before = async (s: typeof seeded[number]) => (await db.superTab.findUnique({ where: { id: s.state.id }, select: { format: true, revision: true } }))!
+  const unsafeRows = { hidden: await before(hidden), lost: await before(lost) }
+  // Written in parts since the migration: rebuilt from the parts, or refused when the previous release would misread them.
+  // The others go back to their old state unchanged.
   const rollbacks = await step('6 roll back', async () => [await rollbackFromParts(db, big.state.id), await rollbackFromParts(db, medium.state.id),
-    ...await Promise.all(seeded.slice(2).map(s => rollbackLegacy(db, s.state.id)))])
-  const oldReads = await step('7 old read of every Swarm', async () => Promise.all(seeded.map(async s => {
+    await rollbackFromParts(db, hidden.state.id), await rollbackFromParts(db, lost.state.id),
+    ...await Promise.all(seeded.slice(2).filter(s => s !== hidden && s !== lost).map(s => rollbackLegacy(db, s.state.id)))])
+  const refused = await Promise.all([hidden, lost].map(async (s, i) => ({ name: s.spec.name, refused: !rollbacks[2 + i]!.ok, error: rollbacks[2 + i]!.error,
+    rowUnchanged: JSON.stringify(await before(s)) === JSON.stringify(i ? unsafeRows.lost : unsafeRows.hidden) })))
+  // This branch's visibleState over each rolled-back state: its shape still reads. Not the previous release's binary.
+  const oldReads = await step('7 old-shape read of every rolled-back Swarm (this branch\'s visibleState, not the previous binary)', async () => Promise.all(seeded.filter(s => s !== hidden && s !== lost).map(async s => {
     const row = (await db.superTab.findUnique({ where: { id: s.state.id } }))!
     const state = row.state as unknown as SuperTabState
     visibleState(state, { kind: 'person', userId: state.ownerId, email: s.state.people[0]!.email }, now)
@@ -107,12 +135,14 @@ try {
   })))
 
   const report = { at: new Date(now).toISOString(), timings, migration: migration.reports.map(r => ({ ...r, name: seeded.find(s => s.state.id === r.tabId)?.spec.name })),
-    totals: migration.totals, again: again.totals, polls: polls.map(({ cursor: _c, machineId: _m, ...p }) => p), written, rollbacks, oldReads }
+    totals: migration.totals, again: again.totals, polls: polls.map(({ cursor: _c, machineId: _m, ...p }) => p), written, unsafe, rollbacks, refused,
+    oldReads, oldReadsChecked: 'the rolled-back state\'s shape, with this branch\'s visibleState; not the previous release\'s binary or its access checks' }
   mkdirSync(out, { recursive: true })
   const file = join(out, `swarm-parts-migration-${report.at.slice(0, 10)}.json`)
   writeFileSync(file, JSON.stringify(report, null, 2))
-  console.log(JSON.stringify({ totals: report.totals, again: report.again, timings, polls: report.polls.slice(0, 2), written, rolledBack: rollbacks.every(r => r.ok),
-    oldReads: oldReads.every(r => r.format === 1 && r.version === 1 && r.revisionAboveEverySequence && r.unchanged !== false) }, null, 2))
+  console.log(JSON.stringify({ totals: report.totals, again: report.again, timings, polls: report.polls.slice(0, 2), written, unsafe,
+    rolledBack: rollbacks.filter((_, i) => i !== 2 && i !== 3).every(r => r.ok), refused,
+    oldShapeReads: oldReads.every(r => r.format === 1 && r.version === 1 && r.revisionAboveEverySequence && r.unchanged !== false) }, null, 2))
   console.log(`report: ${file}`)
 } finally {
   await db.$disconnect()
