@@ -358,6 +358,27 @@ describe('host form (design 4.10)', () => {
     expect(tab?.roster.find((r: { agent?: { id: string } }) => r.agent?.id === s.more.loner)).toMatchObject({ active: false })
   })
 
+  it('still wakes the departed agent\'s host when the group is renamed after the removal, before the host polls', async () => {
+    const s = await hostScene()
+    const { cursor } = await fullRead(s.tabId)
+    await command(s.tabId, { type: 'conversation.agent', conversationId: s.more.lonerGroup, agentId: s.more.loner, present: false, lead: false })
+    await command(s.tabId, { type: 'conversation.rename', conversationId: s.more.lonerGroup, title: 'Renamed after the removal' })
+    clock = Date.now()
+    const tab = (await host(cursor)).body.data.tabs.find((t: { tabId: string }) => t.tabId === s.tabId)
+    expect(tab?.roster.find((r: { agent?: { id: string } }) => r.agent?.id === s.more.loner)).toMatchObject({ active: false })
+  })
+
+  it('still wakes it after two more writes to the group', async () => {
+    const s = await hostScene()
+    const { cursor } = await fullRead(s.tabId)
+    await command(s.tabId, { type: 'conversation.agent', conversationId: s.more.lonerGroup, agentId: s.more.loner, present: false, lead: false })
+    await command(s.tabId, { type: 'conversation.rename', conversationId: s.more.lonerGroup, title: 'Once' })
+    await command(s.tabId, { type: 'message.send', conversationId: s.more.lonerGroup, text: 'Twice', replyTo: null, recipientIds: [] })
+    clock = Date.now()
+    const tab = (await host(cursor)).body.data.tabs.find((t: { tabId: string }) => t.tabId === s.tabId)
+    expect(tab?.roster.find((r: { agent?: { id: string } }) => r.agent?.id === s.more.loner)).toMatchObject({ active: false })
+  })
+
   it('sleeps through a real reading sent through the store', async () => {
     const s = await hostScene()
     const { cursor, generation } = await fullRead(s.tabId)

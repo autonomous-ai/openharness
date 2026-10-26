@@ -1178,6 +1178,9 @@ skill texts reference `throughRevision` only through the wake-up text, which cha
     then never woke its host, which kept it `active` (and out of automatic cleanup) until the 60 s full read.
   - Each group write therefore records the machines its agents and its work were on, before and after
     (`SwarmGroup.hostMachineIds`, set by `parts/commit.ts`), and the host form wakes on that.
+  - That list is the last write's only, so a later write to the group (a rename, a post) would replace it before the
+    host reads. An agent a group's write lets go (out of its members and its work) is therefore also written again, its
+    data unchanged, and its host wakes on that agent's change, whatever the group's later writes say (review round 2).
 - **R16 A machine's own reading wakes no host** (group 5's end-to-end run; Lead's ruling).
   - Machines report every 15 s. With the 30 s overlap every host tick resent its Swarm in full.
   - A host's rows carry only its own reading, which it sent. So the host form wakes on `SwarmMachine.hostChangedAt`,

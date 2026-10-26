@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { createSuperTab } from '../model.js'
-import { capReleased, hostMarker, visibilityChanged } from './commit.js'
+import { capReleased, departedAgents, hostMarker, visibilityChanged } from './commit.js'
 
 describe('writing a Swarm\'s parts', () => {
   it('keeps the newest 200 released harnesses of each machine and drops the oldest', () => {
@@ -61,5 +61,19 @@ describe('what a write tells host reads (review round 1)', () => {
     const machineOf = new Map([['leaving', 'm1'], ['staying', 'm2']])
     expect(hostMarker('group', group(['leaving', 'staying'], 'm3'), group(['staying']), machineOf, 9)).toEqual({ host: { hostMachineIds: ['m1', 'm2', 'm3'] } })
     expect(hostMarker('agent', {}, {}, machineOf, 9)).toEqual({})
+  })
+})
+
+describe('agents a group write lets go (review round 2)', () => {
+  const group = (agentIds: string[], worker?: string) => ({ id: 'g', title: 'G', leadId: null, agentIds, archived: false, brief: '', checks: [],
+    lastMessageSequence: 0, assignment: worker ? { id: 'w', agentId: worker, status: 'working', configuration: {}, result: null,
+      execution: { machineId: 'm', harnessId: 'h', machineOwnerId: 'o' } } : null })
+
+  it('names the agents that left the group or its work, and nobody for a write that keeps everyone', () => {
+    expect(departedAgents(group(['lead', 'loner']), group(['lead']))).toEqual(['loner'])
+    expect(departedAgents(group(['lead'], 'worker'), group(['lead']))).toEqual(['worker'])
+    expect(departedAgents(group(['lead', 'worker'], 'worker'), group(['lead', 'worker']))).toEqual([])
+    expect(departedAgents(group(['lead']), group(['lead', 'new']))).toEqual([])
+    expect(departedAgents(undefined, group(['lead']))).toEqual([])
   })
 })

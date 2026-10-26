@@ -109,6 +109,14 @@ export function hostMarker(kind: PartKind, before: unknown, after: unknown, mach
   return { host: { hostMachineIds: [...new Set(machines)] } }
 }
 
+/** The agents a group's write let go: in its members or its work before, in neither after. Each is written again, data
+ *  unchanged, so its host hears of it whatever later writes to the group leave in that group's marker (review round 2). */
+export function departedAgents(before: unknown, after: unknown): string[] {
+  const of = (group: GroupData | undefined) => new Set(group ? [...group.agentIds, ...(group.assignment ? [group.assignment.agentId] : [])] : [])
+  const kept = of(after as GroupData | undefined)
+  return [...of(before as GroupData | undefined)].filter(id => !kept.has(id))
+}
+
 export async function commitParts(tx: Transaction, loaded: { parts: SwarmParts; state: SuperTabState; row: { id: string; revision: number } },
   next: SuperTabState, opts: { stamp: number; touches?: Touch[] }): Promise<{ written: Written[]; versions: Map<string, number> }> {
   const { parts } = loaded, { stamp } = opts
@@ -137,6 +145,15 @@ export async function commitParts(tx: Transaction, loaded: { parts: SwarmParts; 
       if (now.has(key)) continue
       writes.push({ op: 'remove', kind, key, seen: prior.version, data: prior.data, ...host(kind, prior.data, undefined) })
       if (kind !== 'group' && kind !== 'start' && kind !== 'progress') referencesChanged = true
+    }
+  }
+  const agentsWritten = new Set(writes.filter(w => w.kind === 'agent').map(w => w.key))
+  for (const write of writes.filter((w): w is Extract<PartWrite, { op: 'update' }> => w.kind === 'group' && w.op === 'update')) {
+    for (const id of departedAgents(parts.groups.find(g => g.key === write.key)!.data, write.data)) {
+      const agent = parts.agents.find(a => a.key === id && !a.deleted), data = after.agents.find(a => a.key === id)?.data
+      if (!agent || !data || agentsWritten.has(id)) continue
+      agentsWritten.add(id)
+      writes.push({ op: 'update', kind: 'agent', key: id, seen: agent.version, data })
     }
   }
   const epoch = parts.visibilityEpoch + (visibilityChanged(loaded.state, next) ? 1 : 0)
