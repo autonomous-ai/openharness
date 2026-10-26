@@ -1,0 +1,1361 @@
+{
+  "benchmark": "swarm-state",
+  "version": 1,
+  "driver": "legacy",
+  "startedAt": "2026-10-26T11:31:55.416Z",
+  "commit": {
+    "sha": "b71522ab633a1881e5390f81da9b854e0a1e9778",
+    "dirty": false
+  },
+  "machine": {
+    "platform": "darwin",
+    "release": "25.6.0",
+    "arch": "arm64",
+    "cpu": "Apple M1 Max",
+    "cpus": 10,
+    "memoryGb": 64,
+    "node": "24.18.0",
+    "mongo": "7.0.24"
+  },
+  "config": {
+    "seed": 1726,
+    "groups": 200,
+    "doneShare": 0.9,
+    "workers": 20,
+    "lane": "mixed",
+    "machines": 6,
+    "durationMs": 120000,
+    "desktopReaders": 3,
+    "hostReaders": 2,
+    "mix": {
+      "message.send": 2,
+      "work.status": 1,
+      "work.check": 1
+    },
+    "every": {
+      "workerPostMs": 4000,
+      "leadSendMs": 5000,
+      "nativeTurnMs": 10000,
+      "observeMs": 15000,
+      "deliveryPassMs": 3000,
+      "desktopPollMs": 3000,
+      "hostTickMs": 1000
+    },
+    "text": {
+      "briefChars": 3000,
+      "resultChars": 600,
+      "messageChars": 300
+    }
+  },
+  "planDigest": "8ba3412b11e8239158b685f025f27eb4d02db893abf3a889b67194fc99766a2a",
+  "setup": {
+    "ms": 59110.810959,
+    "calls": 1178,
+    "workers": 20,
+    "activeGroups": 20,
+    "doneGroups": 180
+  },
+  "load": {
+    "plannedMs": 120000,
+    "actualMs": 122225.49050000001,
+    "skipped": {
+      "native answers": 134
+    },
+    "ops": [
+      {
+        "key": "deliveries.list",
+        "count": 840,
+        "ok": 840,
+        "conflicts": 0,
+        "retriedCalls": 0,
+        "swarmBusy": 0,
+        "errors": {},
+        "p50Ms": 29.929541999998037,
+        "p95Ms": 66.08920799999032,
+        "maxMs": 431.28695799999696,
+        "bytes": null
+      },
+      {
+        "key": "delivery.ack",
+        "count": 580,
+        "ok": 579,
+        "conflicts": 96,
+        "retriedCalls": 45,
+        "swarmBusy": 1,
+        "errors": {},
+        "p50Ms": 51.57925000000978,
+        "p95Ms": 172.51929199999722,
+        "maxMs": 2323.6855829999986,
+        "bytes": null
+      },
+      {
+        "key": "delivery.claim",
+        "count": 582,
+        "ok": 580,
+        "conflicts": 219,
+        "retriedCalls": 87,
+        "swarmBusy": 2,
+        "errors": {},
+        "p50Ms": 54.59962500000256,
+        "p95Ms": 325.91537499999686,
+        "maxMs": 3917.455999999991,
+        "bytes": null
+      },
+      {
+        "key": "message.send",
+        "count": 339,
+        "ok": 218,
+        "conflicts": 1559,
+        "retriedCalls": 292,
+        "swarmBusy": 121,
+        "errors": {},
+        "p50Ms": 991.359415999992,
+        "p95Ms": 3797.460167000012,
+        "maxMs": 4572.808459000007,
+        "bytes": null
+      },
+      {
+        "key": "native.append",
+        "count": 338,
+        "ok": 169,
+        "conflicts": 1737,
+        "retriedCalls": 282,
+        "swarmBusy": 169,
+        "errors": {},
+        "p50Ms": 2031.6948750000156,
+        "p95Ms": 4014.1297500000073,
+        "maxMs": 4627.844125000003,
+        "bytes": null
+      },
+      {
+        "key": "observeMachine",
+        "count": 48,
+        "ok": 33,
+        "conflicts": 201,
+        "retriedCalls": 39,
+        "swarmBusy": 15,
+        "errors": {},
+        "p50Ms": 586.984375,
+        "p95Ms": 3473.784790999998,
+        "maxMs": 4749.710999999996,
+        "bytes": null
+      },
+      {
+        "key": "read.desktop",
+        "count": 120,
+        "ok": 120,
+        "conflicts": 0,
+        "retriedCalls": 0,
+        "swarmBusy": 0,
+        "errors": {},
+        "p50Ms": 35.69079199997941,
+        "p95Ms": 77.8876670000027,
+        "maxMs": 108.6934590000019,
+        "bytes": {
+          "mean": 1046145,
+          "p50": 1047703,
+          "p95": 1051918,
+          "total": 125537440
+        }
+      },
+      {
+        "key": "read.host",
+        "count": 240,
+        "ok": 240,
+        "conflicts": 0,
+        "retriedCalls": 0,
+        "swarmBusy": 0,
+        "errors": {},
+        "p50Ms": 54.16037500000675,
+        "p95Ms": 116.18441699999676,
+        "maxMs": 203.78804200000013,
+        "bytes": {
+          "mean": 4691,
+          "p50": 4177,
+          "p95": 5205,
+          "total": 1125840
+        }
+      },
+      {
+        "key": "work.check",
+        "count": 128,
+        "ok": 98,
+        "conflicts": 507,
+        "retriedCalls": 99,
+        "swarmBusy": 30,
+        "errors": {},
+        "p50Ms": 772.3967090000224,
+        "p95Ms": 3720.4720830000006,
+        "maxMs": 4038.2212089999957,
+        "bytes": null
+      },
+      {
+        "key": "work.status",
+        "count": 155,
+        "ok": 112,
+        "conflicts": 657,
+        "retriedCalls": 134,
+        "swarmBusy": 43,
+        "errors": {},
+        "p50Ms": 733.9343329999829,
+        "p95Ms": 3542.695792000013,
+        "maxMs": 4039.738375000001,
+        "bytes": null
+      }
+    ],
+    "writerKinds": [
+      {
+        "key": "delivery",
+        "count": 2002,
+        "ok": 1999,
+        "conflicts": 315,
+        "retriedCalls": 132,
+        "swarmBusy": 3,
+        "errors": {},
+        "p50Ms": 41.96183299999393,
+        "p95Ms": 154.64745800000674,
+        "maxMs": 3917.455999999991,
+        "bytes": null
+      },
+      {
+        "key": "desktop",
+        "count": 120,
+        "ok": 120,
+        "conflicts": 0,
+        "retriedCalls": 0,
+        "swarmBusy": 0,
+        "errors": {},
+        "p50Ms": 35.69079199997941,
+        "p95Ms": 77.8876670000027,
+        "maxMs": 108.6934590000019,
+        "bytes": {
+          "mean": 1046145,
+          "p50": 1047703,
+          "p95": 1051918,
+          "total": 125537440
+        }
+      },
+      {
+        "key": "host",
+        "count": 240,
+        "ok": 240,
+        "conflicts": 0,
+        "retriedCalls": 0,
+        "swarmBusy": 0,
+        "errors": {},
+        "p50Ms": 54.16037500000675,
+        "p95Ms": 116.18441699999676,
+        "maxMs": 203.78804200000013,
+        "bytes": {
+          "mean": 4691,
+          "p50": 4177,
+          "p95": 5205,
+          "total": 1125840
+        }
+      },
+      {
+        "key": "lead",
+        "count": 26,
+        "ok": 17,
+        "conflicts": 122,
+        "retriedCalls": 22,
+        "swarmBusy": 9,
+        "errors": {},
+        "p50Ms": 754.2920000000158,
+        "p95Ms": 3859.0559590000194,
+        "maxMs": 4025.296457999997,
+        "bytes": null
+      },
+      {
+        "key": "machine",
+        "count": 48,
+        "ok": 33,
+        "conflicts": 201,
+        "retriedCalls": 39,
+        "swarmBusy": 15,
+        "errors": {},
+        "p50Ms": 586.984375,
+        "p95Ms": 3473.784790999998,
+        "maxMs": 4749.710999999996,
+        "bytes": null
+      },
+      {
+        "key": "terminal",
+        "count": 338,
+        "ok": 169,
+        "conflicts": 1737,
+        "retriedCalls": 282,
+        "swarmBusy": 169,
+        "errors": {},
+        "p50Ms": 2031.6948750000156,
+        "p95Ms": 4014.1297500000073,
+        "maxMs": 4627.844125000003,
+        "bytes": null
+      },
+      {
+        "key": "worker",
+        "count": 596,
+        "ok": 411,
+        "conflicts": 2601,
+        "retriedCalls": 503,
+        "swarmBusy": 185,
+        "errors": {},
+        "p50Ms": 859.1547910000081,
+        "p95Ms": 3666.462541000001,
+        "maxMs": 4572.808459000007,
+        "bytes": null
+      }
+    ],
+    "writers": [
+      {
+        "key": "delivery-0",
+        "count": 1307,
+        "ok": 1305,
+        "conflicts": 255,
+        "retriedCalls": 111,
+        "swarmBusy": 2,
+        "errors": {},
+        "p50Ms": 48.495959000021685,
+        "p95Ms": 201.9663750000036,
+        "maxMs": 3917.455999999991,
+        "bytes": null,
+        "byOp": {
+          "deliveries.list": 200,
+          "delivery.claim": 554,
+          "delivery.ack": 553
+        }
+      },
+      {
+        "key": "delivery-1",
+        "count": 170,
+        "ok": 170,
+        "conflicts": 15,
+        "retriedCalls": 4,
+        "swarmBusy": 0,
+        "errors": {},
+        "p50Ms": 29.887083999987226,
+        "p95Ms": 62.68912499997532,
+        "maxMs": 2391.6747079999914,
+        "bytes": null,
+        "byOp": {
+          "deliveries.list": 160,
+          "delivery.claim": 5,
+          "delivery.ack": 5
+        }
+      },
+      {
+        "key": "delivery-2",
+        "count": 126,
+        "ok": 126,
+        "conflicts": 1,
+        "retriedCalls": 1,
+        "swarmBusy": 0,
+        "errors": {},
+        "p50Ms": 32.84008300001733,
+        "p95Ms": 60.46045800000138,
+        "maxMs": 140.09700000000885,
+        "bytes": null,
+        "byOp": {
+          "deliveries.list": 120,
+          "delivery.claim": 3,
+          "delivery.ack": 3
+        }
+      },
+      {
+        "key": "delivery-3",
+        "count": 134,
+        "ok": 134,
+        "conflicts": 16,
+        "retriedCalls": 6,
+        "swarmBusy": 0,
+        "errors": {},
+        "p50Ms": 31.233666999993147,
+        "p95Ms": 90.05037499999162,
+        "maxMs": 3724.9892500000133,
+        "bytes": null,
+        "byOp": {
+          "deliveries.list": 120,
+          "delivery.claim": 7,
+          "delivery.ack": 7
+        }
+      },
+      {
+        "key": "delivery-4",
+        "count": 139,
+        "ok": 138,
+        "conflicts": 23,
+        "retriedCalls": 8,
+        "swarmBusy": 1,
+        "errors": {},
+        "p50Ms": 31.0944579999923,
+        "p95Ms": 145.06050000002142,
+        "maxMs": 3240.5427920000075,
+        "bytes": null,
+        "byOp": {
+          "deliveries.list": 120,
+          "delivery.claim": 10,
+          "delivery.ack": 9
+        }
+      },
+      {
+        "key": "delivery-5",
+        "count": 126,
+        "ok": 126,
+        "conflicts": 5,
+        "retriedCalls": 2,
+        "swarmBusy": 0,
+        "errors": {},
+        "p50Ms": 34.4708329999994,
+        "p95Ms": 68.20616699999664,
+        "maxMs": 300.5302090000041,
+        "bytes": null,
+        "byOp": {
+          "deliveries.list": 120,
+          "delivery.claim": 3,
+          "delivery.ack": 3
+        }
+      },
+      {
+        "key": "lead",
+        "count": 26,
+        "ok": 17,
+        "conflicts": 122,
+        "retriedCalls": 22,
+        "swarmBusy": 9,
+        "errors": {},
+        "p50Ms": 754.2920000000158,
+        "p95Ms": 3859.0559590000194,
+        "maxMs": 4025.296457999997,
+        "bytes": null,
+        "byOp": {
+          "message.send": 26
+        }
+      },
+      {
+        "key": "machine-0",
+        "count": 8,
+        "ok": 6,
+        "conflicts": 30,
+        "retriedCalls": 6,
+        "swarmBusy": 2,
+        "errors": {},
+        "p50Ms": 559.8869580000173,
+        "p95Ms": 2664.1543749999983,
+        "maxMs": 2664.1543749999983,
+        "bytes": null,
+        "byOp": {
+          "observeMachine": 8
+        }
+      },
+      {
+        "key": "machine-1",
+        "count": 8,
+        "ok": 8,
+        "conflicts": 21,
+        "retriedCalls": 5,
+        "swarmBusy": 0,
+        "errors": {},
+        "p50Ms": 327.09249999999884,
+        "p95Ms": 2401.515458000009,
+        "maxMs": 2401.515458000009,
+        "bytes": null,
+        "byOp": {
+          "observeMachine": 8
+        }
+      },
+      {
+        "key": "machine-2",
+        "count": 8,
+        "ok": 2,
+        "conflicts": 53,
+        "retriedCalls": 8,
+        "swarmBusy": 6,
+        "errors": {},
+        "p50Ms": 2736.4561669999966,
+        "p95Ms": 3473.784790999998,
+        "maxMs": 3473.784790999998,
+        "bytes": null,
+        "byOp": {
+          "observeMachine": 8
+        }
+      },
+      {
+        "key": "machine-3",
+        "count": 8,
+        "ok": 7,
+        "conflicts": 26,
+        "retriedCalls": 7,
+        "swarmBusy": 1,
+        "errors": {},
+        "p50Ms": 236.7528750000056,
+        "p95Ms": 2958.321207999994,
+        "maxMs": 2958.321207999994,
+        "bytes": null,
+        "byOp": {
+          "observeMachine": 8
+        }
+      },
+      {
+        "key": "machine-4",
+        "count": 8,
+        "ok": 4,
+        "conflicts": 41,
+        "retriedCalls": 7,
+        "swarmBusy": 4,
+        "errors": {},
+        "p50Ms": 571.901457999993,
+        "p95Ms": 4749.710999999996,
+        "maxMs": 4749.710999999996,
+        "bytes": null,
+        "byOp": {
+          "observeMachine": 8
+        }
+      },
+      {
+        "key": "machine-5",
+        "count": 8,
+        "ok": 6,
+        "conflicts": 30,
+        "retriedCalls": 6,
+        "swarmBusy": 2,
+        "errors": {},
+        "p50Ms": 272.74862500000745,
+        "p95Ms": 3593.989709000016,
+        "maxMs": 3593.989709000016,
+        "bytes": null,
+        "byOp": {
+          "observeMachine": 8
+        }
+      },
+      {
+        "key": "terminal-00",
+        "count": 16,
+        "ok": 9,
+        "conflicts": 69,
+        "retriedCalls": 12,
+        "swarmBusy": 7,
+        "errors": {},
+        "p50Ms": 554.8032499999972,
+        "p95Ms": 3571.219207999995,
+        "maxMs": 3571.219207999995,
+        "bytes": null,
+        "byOp": {
+          "native.append": 16
+        }
+      },
+      {
+        "key": "terminal-01",
+        "count": 12,
+        "ok": 3,
+        "conflicts": 76,
+        "retriedCalls": 11,
+        "swarmBusy": 9,
+        "errors": {},
+        "p50Ms": 2021.7418340000004,
+        "p95Ms": 3882.5487500000017,
+        "maxMs": 3882.5487500000017,
+        "bytes": null,
+        "byOp": {
+          "native.append": 12
+        }
+      },
+      {
+        "key": "terminal-02",
+        "count": 16,
+        "ok": 7,
+        "conflicts": 89,
+        "retriedCalls": 14,
+        "swarmBusy": 9,
+        "errors": {},
+        "p50Ms": 2358.0570420000004,
+        "p95Ms": 3837.832290999999,
+        "maxMs": 3837.832290999999,
+        "bytes": null,
+        "byOp": {
+          "native.append": 16
+        }
+      },
+      {
+        "key": "terminal-03",
+        "count": 18,
+        "ok": 11,
+        "conflicts": 78,
+        "retriedCalls": 13,
+        "swarmBusy": 7,
+        "errors": {},
+        "p50Ms": 591.78125,
+        "p95Ms": 4263.075582999998,
+        "maxMs": 4263.075582999998,
+        "bytes": null,
+        "byOp": {
+          "native.append": 18
+        }
+      },
+      {
+        "key": "terminal-04",
+        "count": 13,
+        "ok": 2,
+        "conflicts": 99,
+        "retriedCalls": 13,
+        "swarmBusy": 11,
+        "errors": {},
+        "p50Ms": 2540.842874999973,
+        "p95Ms": 3321.4497919999994,
+        "maxMs": 3321.4497919999994,
+        "bytes": null,
+        "byOp": {
+          "native.append": 13
+        }
+      },
+      {
+        "key": "terminal-05",
+        "count": 19,
+        "ok": 11,
+        "conflicts": 83,
+        "retriedCalls": 14,
+        "swarmBusy": 8,
+        "errors": {},
+        "p50Ms": 1538.5490839999984,
+        "p95Ms": 4025.092499999999,
+        "maxMs": 4025.092499999999,
+        "bytes": null,
+        "byOp": {
+          "native.append": 19
+        }
+      },
+      {
+        "key": "terminal-06",
+        "count": 19,
+        "ok": 9,
+        "conflicts": 101,
+        "retriedCalls": 17,
+        "swarmBusy": 10,
+        "errors": {},
+        "p50Ms": 2519.5529589999933,
+        "p95Ms": 4014.1297500000073,
+        "maxMs": 4014.1297500000073,
+        "bytes": null,
+        "byOp": {
+          "native.append": 19
+        }
+      },
+      {
+        "key": "terminal-07",
+        "count": 16,
+        "ok": 6,
+        "conflicts": 96,
+        "retriedCalls": 16,
+        "swarmBusy": 10,
+        "errors": {},
+        "p50Ms": 2362.2848749999976,
+        "p95Ms": 4304.918875000003,
+        "maxMs": 4304.918875000003,
+        "bytes": null,
+        "byOp": {
+          "native.append": 16
+        }
+      },
+      {
+        "key": "terminal-08",
+        "count": 18,
+        "ok": 11,
+        "conflicts": 86,
+        "retriedCalls": 15,
+        "swarmBusy": 7,
+        "errors": {},
+        "p50Ms": 908.8664169999975,
+        "p95Ms": 4059.5746669999935,
+        "maxMs": 4059.5746669999935,
+        "bytes": null,
+        "byOp": {
+          "native.append": 18
+        }
+      },
+      {
+        "key": "terminal-09",
+        "count": 21,
+        "ok": 14,
+        "conflicts": 81,
+        "retriedCalls": 15,
+        "swarmBusy": 7,
+        "errors": {},
+        "p50Ms": 844.2677499999991,
+        "p95Ms": 4007.7873750000144,
+        "maxMs": 4411.494707999998,
+        "bytes": null,
+        "byOp": {
+          "native.append": 21
+        }
+      },
+      {
+        "key": "terminal-10",
+        "count": 17,
+        "ok": 5,
+        "conflicts": 101,
+        "retriedCalls": 14,
+        "swarmBusy": 12,
+        "errors": {},
+        "p50Ms": 2208.157124999998,
+        "p95Ms": 4201.217082999996,
+        "maxMs": 4201.217082999996,
+        "bytes": null,
+        "byOp": {
+          "native.append": 17
+        }
+      },
+      {
+        "key": "terminal-11",
+        "count": 18,
+        "ok": 9,
+        "conflicts": 106,
+        "retriedCalls": 16,
+        "swarmBusy": 9,
+        "errors": {},
+        "p50Ms": 2340.242083000019,
+        "p95Ms": 4627.844125000003,
+        "maxMs": 4627.844125000003,
+        "bytes": null,
+        "byOp": {
+          "native.append": 18
+        }
+      },
+      {
+        "key": "terminal-12",
+        "count": 15,
+        "ok": 6,
+        "conflicts": 84,
+        "retriedCalls": 12,
+        "swarmBusy": 9,
+        "errors": {},
+        "p50Ms": 2182.2167499999923,
+        "p95Ms": 4455.805207999991,
+        "maxMs": 4455.805207999991,
+        "bytes": null,
+        "byOp": {
+          "native.append": 15
+        }
+      },
+      {
+        "key": "terminal-13",
+        "count": 17,
+        "ok": 10,
+        "conflicts": 75,
+        "retriedCalls": 12,
+        "swarmBusy": 7,
+        "errors": {},
+        "p50Ms": 1352.0327499999985,
+        "p95Ms": 4186.48662500002,
+        "maxMs": 4186.48662500002,
+        "bytes": null,
+        "byOp": {
+          "native.append": 17
+        }
+      },
+      {
+        "key": "terminal-14",
+        "count": 20,
+        "ok": 11,
+        "conflicts": 93,
+        "retriedCalls": 16,
+        "swarmBusy": 9,
+        "errors": {},
+        "p50Ms": 1149.1426670000073,
+        "p95Ms": 4064.1034170000057,
+        "maxMs": 4148.698000000004,
+        "bytes": null,
+        "byOp": {
+          "native.append": 20
+        }
+      },
+      {
+        "key": "terminal-15",
+        "count": 18,
+        "ok": 13,
+        "conflicts": 65,
+        "retriedCalls": 14,
+        "swarmBusy": 5,
+        "errors": {},
+        "p50Ms": 328.50279200001387,
+        "p95Ms": 3756.6022499999963,
+        "maxMs": 3756.6022499999963,
+        "bytes": null,
+        "byOp": {
+          "native.append": 18
+        }
+      },
+      {
+        "key": "terminal-16",
+        "count": 15,
+        "ok": 7,
+        "conflicts": 89,
+        "retriedCalls": 13,
+        "swarmBusy": 8,
+        "errors": {},
+        "p50Ms": 2416.6996660000004,
+        "p95Ms": 3333.9922910000023,
+        "maxMs": 3333.9922910000023,
+        "bytes": null,
+        "byOp": {
+          "native.append": 15
+        }
+      },
+      {
+        "key": "terminal-17",
+        "count": 17,
+        "ok": 10,
+        "conflicts": 82,
+        "retriedCalls": 15,
+        "swarmBusy": 7,
+        "errors": {},
+        "p50Ms": 1267.9710839999898,
+        "p95Ms": 4282.834999999992,
+        "maxMs": 4282.834999999992,
+        "bytes": null,
+        "byOp": {
+          "native.append": 17
+        }
+      },
+      {
+        "key": "terminal-18",
+        "count": 13,
+        "ok": 6,
+        "conflicts": 70,
+        "retriedCalls": 11,
+        "swarmBusy": 7,
+        "errors": {},
+        "p50Ms": 2465.9057500000054,
+        "p95Ms": 4043.005999999994,
+        "maxMs": 4043.005999999994,
+        "bytes": null,
+        "byOp": {
+          "native.append": 13
+        }
+      },
+      {
+        "key": "terminal-19",
+        "count": 20,
+        "ok": 9,
+        "conflicts": 114,
+        "retriedCalls": 19,
+        "swarmBusy": 11,
+        "errors": {},
+        "p50Ms": 1993.0559169999906,
+        "p95Ms": 3451.806540999998,
+        "maxMs": 3800.130375000008,
+        "bytes": null,
+        "byOp": {
+          "native.append": 20
+        }
+      },
+      {
+        "key": "worker-00",
+        "count": 29,
+        "ok": 23,
+        "conflicts": 120,
+        "retriedCalls": 25,
+        "swarmBusy": 6,
+        "errors": {},
+        "p50Ms": 783.9985000000161,
+        "p95Ms": 2791.0575839999947,
+        "maxMs": 3900.6545830000105,
+        "bytes": null,
+        "byOp": {
+          "work.status": 10,
+          "work.check": 7,
+          "message.send": 12
+        }
+      },
+      {
+        "key": "worker-01",
+        "count": 28,
+        "ok": 20,
+        "conflicts": 110,
+        "retriedCalls": 24,
+        "swarmBusy": 8,
+        "errors": {},
+        "p50Ms": 393.49566699998104,
+        "p95Ms": 3666.462541000001,
+        "maxMs": 3839.490167000011,
+        "bytes": null,
+        "byOp": {
+          "work.status": 5,
+          "message.send": 13,
+          "work.check": 10
+        }
+      },
+      {
+        "key": "worker-02",
+        "count": 29,
+        "ok": 19,
+        "conflicts": 134,
+        "retriedCalls": 26,
+        "swarmBusy": 10,
+        "errors": {},
+        "p50Ms": 1418.6976250000007,
+        "p95Ms": 3844.616458000004,
+        "maxMs": 4194.588166000001,
+        "bytes": null,
+        "byOp": {
+          "message.send": 16,
+          "work.status": 10,
+          "work.check": 3
+        }
+      },
+      {
+        "key": "worker-03",
+        "count": 30,
+        "ok": 20,
+        "conflicts": 127,
+        "retriedCalls": 24,
+        "swarmBusy": 10,
+        "errors": {},
+        "p50Ms": 634.8042080000014,
+        "p95Ms": 3449.058999999994,
+        "maxMs": 3599.1717079999944,
+        "bytes": null,
+        "byOp": {
+          "message.send": 18,
+          "work.check": 9,
+          "work.status": 3
+        }
+      },
+      {
+        "key": "worker-04",
+        "count": 31,
+        "ok": 22,
+        "conflicts": 131,
+        "retriedCalls": 26,
+        "swarmBusy": 9,
+        "errors": {},
+        "p50Ms": 995.1517089999979,
+        "p95Ms": 3983.5236659999937,
+        "maxMs": 4010.416167000003,
+        "bytes": null,
+        "byOp": {
+          "message.send": 15,
+          "work.status": 11,
+          "work.check": 5
+        }
+      },
+      {
+        "key": "worker-05",
+        "count": 32,
+        "ok": 20,
+        "conflicts": 158,
+        "retriedCalls": 29,
+        "swarmBusy": 12,
+        "errors": {},
+        "p50Ms": 1415.4045420000039,
+        "p95Ms": 3910.617665999991,
+        "maxMs": 4089.363333000001,
+        "bytes": null,
+        "byOp": {
+          "message.send": 14,
+          "work.status": 10,
+          "work.check": 8
+        }
+      },
+      {
+        "key": "worker-06",
+        "count": 30,
+        "ok": 24,
+        "conflicts": 108,
+        "retriedCalls": 24,
+        "swarmBusy": 6,
+        "errors": {},
+        "p50Ms": 413.51066700000956,
+        "p95Ms": 3509.6701659999962,
+        "maxMs": 3956.456707999998,
+        "bytes": null,
+        "byOp": {
+          "message.send": 19,
+          "work.status": 7,
+          "work.check": 4
+        }
+      },
+      {
+        "key": "worker-07",
+        "count": 29,
+        "ok": 22,
+        "conflicts": 110,
+        "retriedCalls": 24,
+        "swarmBusy": 7,
+        "errors": {},
+        "p50Ms": 435.76425000000745,
+        "p95Ms": 3409.5670830000017,
+        "maxMs": 3458.319082999995,
+        "bytes": null,
+        "byOp": {
+          "message.send": 11,
+          "work.check": 7,
+          "work.status": 11
+        }
+      },
+      {
+        "key": "worker-08",
+        "count": 31,
+        "ok": 22,
+        "conflicts": 135,
+        "retriedCalls": 28,
+        "swarmBusy": 9,
+        "errors": {},
+        "p50Ms": 812.5999580000062,
+        "p95Ms": 3995.6258329999982,
+        "maxMs": 4038.2212089999957,
+        "bytes": null,
+        "byOp": {
+          "work.status": 7,
+          "message.send": 15,
+          "work.check": 9
+        }
+      },
+      {
+        "key": "worker-09",
+        "count": 31,
+        "ok": 26,
+        "conflicts": 118,
+        "retriedCalls": 26,
+        "swarmBusy": 5,
+        "errors": {},
+        "p50Ms": 761.4969999999885,
+        "p95Ms": 3578.313875000007,
+        "maxMs": 3642.8384169999918,
+        "bytes": null,
+        "byOp": {
+          "message.send": 13,
+          "work.check": 11,
+          "work.status": 7
+        }
+      },
+      {
+        "key": "worker-10",
+        "count": 33,
+        "ok": 26,
+        "conflicts": 136,
+        "retriedCalls": 27,
+        "swarmBusy": 7,
+        "errors": {},
+        "p50Ms": 822.3235419999983,
+        "p95Ms": 3542.695792000013,
+        "maxMs": 3551.4192500000063,
+        "bytes": null,
+        "byOp": {
+          "message.send": 17,
+          "work.check": 7,
+          "work.status": 9
+        }
+      },
+      {
+        "key": "worker-11",
+        "count": 29,
+        "ok": 18,
+        "conflicts": 129,
+        "retriedCalls": 24,
+        "swarmBusy": 11,
+        "errors": {},
+        "p50Ms": 772.3967090000224,
+        "p95Ms": 3797.460167000012,
+        "maxMs": 4039.738375000001,
+        "bytes": null,
+        "byOp": {
+          "work.check": 4,
+          "work.status": 5,
+          "message.send": 20
+        }
+      },
+      {
+        "key": "worker-12",
+        "count": 31,
+        "ok": 22,
+        "conflicts": 143,
+        "retriedCalls": 28,
+        "swarmBusy": 9,
+        "errors": {},
+        "p50Ms": 1011.9704170000041,
+        "p95Ms": 3809.3565420000086,
+        "maxMs": 4570.4903750000085,
+        "bytes": null,
+        "byOp": {
+          "work.status": 8,
+          "message.send": 15,
+          "work.check": 8
+        }
+      },
+      {
+        "key": "worker-13",
+        "count": 27,
+        "ok": 16,
+        "conflicts": 133,
+        "retriedCalls": 24,
+        "swarmBusy": 11,
+        "errors": {},
+        "p50Ms": 1275.0475420000002,
+        "p95Ms": 3817.2034580000036,
+        "maxMs": 3972.7917080000043,
+        "bytes": null,
+        "byOp": {
+          "message.send": 15,
+          "work.status": 8,
+          "work.check": 4
+        }
+      },
+      {
+        "key": "worker-14",
+        "count": 29,
+        "ok": 18,
+        "conflicts": 132,
+        "retriedCalls": 23,
+        "swarmBusy": 11,
+        "errors": {},
+        "p50Ms": 827.8370829999913,
+        "p95Ms": 3516.802541000012,
+        "maxMs": 4336.8305419999815,
+        "bytes": null,
+        "byOp": {
+          "work.check": 5,
+          "message.send": 17,
+          "work.status": 7
+        }
+      },
+      {
+        "key": "worker-15",
+        "count": 30,
+        "ok": 22,
+        "conflicts": 126,
+        "retriedCalls": 22,
+        "swarmBusy": 8,
+        "errors": {},
+        "p50Ms": 917.3925409999792,
+        "p95Ms": 3891.4512920000125,
+        "maxMs": 4004.6839159999945,
+        "bytes": null,
+        "byOp": {
+          "work.status": 6,
+          "message.send": 17,
+          "work.check": 7
+        }
+      },
+      {
+        "key": "worker-16",
+        "count": 30,
+        "ok": 14,
+        "conflicts": 154,
+        "retriedCalls": 25,
+        "swarmBusy": 16,
+        "errors": {},
+        "p50Ms": 2048.2822500000184,
+        "p95Ms": 3393.3949580000044,
+        "maxMs": 3646.9659159999865,
+        "bytes": null,
+        "byOp": {
+          "message.send": 16,
+          "work.status": 8,
+          "work.check": 6
+        }
+      },
+      {
+        "key": "worker-17",
+        "count": 29,
+        "ok": 17,
+        "conflicts": 151,
+        "retriedCalls": 27,
+        "swarmBusy": 12,
+        "errors": {},
+        "p50Ms": 2153.693250000011,
+        "p95Ms": 3910.8346670000174,
+        "maxMs": 4572.808459000007,
+        "bytes": null,
+        "byOp": {
+          "message.send": 20,
+          "work.check": 4,
+          "work.status": 5
+        }
+      },
+      {
+        "key": "worker-18",
+        "count": 31,
+        "ok": 21,
+        "conflicts": 136,
+        "retriedCalls": 26,
+        "swarmBusy": 10,
+        "errors": {},
+        "p50Ms": 1029.708375000002,
+        "p95Ms": 3371.993499999997,
+        "maxMs": 3949.5331250000017,
+        "bytes": null,
+        "byOp": {
+          "work.status": 11,
+          "message.send": 17,
+          "work.check": 3
+        }
+      },
+      {
+        "key": "worker-19",
+        "count": 27,
+        "ok": 19,
+        "conflicts": 110,
+        "retriedCalls": 21,
+        "swarmBusy": 8,
+        "errors": {},
+        "p50Ms": 715.6362920000101,
+        "p95Ms": 3343.7470829999947,
+        "maxMs": 4476.554207999987,
+        "bytes": null,
+        "byOp": {
+          "message.send": 13,
+          "work.check": 7,
+          "work.status": 7
+        }
+      }
+    ],
+    "readers": [
+      {
+        "key": "desktop:bench-0@example.com",
+        "count": 40,
+        "ok": 40,
+        "conflicts": 0,
+        "retriedCalls": 0,
+        "swarmBusy": 0,
+        "errors": {},
+        "p50Ms": 29.445040999999037,
+        "p95Ms": 75.23050000000512,
+        "maxMs": 100.83287499999278,
+        "bytes": {
+          "mean": 1046141,
+          "p50": 1047703,
+          "p95": 1051918,
+          "total": 41845656
+        },
+        "byOp": {
+          "read.desktop": 40
+        }
+      },
+      {
+        "key": "desktop:bench-1@example.com",
+        "count": 40,
+        "ok": 40,
+        "conflicts": 0,
+        "retriedCalls": 0,
+        "swarmBusy": 0,
+        "errors": {},
+        "p50Ms": 37.85029200000281,
+        "p95Ms": 60.06575000000885,
+        "maxMs": 72.14545899999212,
+        "bytes": {
+          "mean": 1046040,
+          "p50": 1047703,
+          "p95": 1051918,
+          "total": 41841589
+        },
+        "byOp": {
+          "read.desktop": 40
+        }
+      },
+      {
+        "key": "desktop:bench-2@example.com",
+        "count": 40,
+        "ok": 40,
+        "conflicts": 0,
+        "retriedCalls": 0,
+        "swarmBusy": 0,
+        "errors": {},
+        "p50Ms": 40.72529200001736,
+        "p95Ms": 88.69462500000373,
+        "maxMs": 108.6934590000019,
+        "bytes": {
+          "mean": 1046255,
+          "p50": 1047703,
+          "p95": 1051917,
+          "total": 41850195
+        },
+        "byOp": {
+          "read.desktop": 40
+        }
+      },
+      {
+        "key": "host:bench-machine-0",
+        "count": 120,
+        "ok": 120,
+        "conflicts": 0,
+        "retriedCalls": 0,
+        "swarmBusy": 0,
+        "errors": {},
+        "p50Ms": 54.096082999996725,
+        "p95Ms": 121.08166700000584,
+        "maxMs": 196.9342910000123,
+        "bytes": {
+          "mean": 5205,
+          "p50": 5205,
+          "p95": 5205,
+          "total": 624600
+        },
+        "byOp": {
+          "read.host": 120
+        }
+      },
+      {
+        "key": "host:bench-machine-1",
+        "count": 120,
+        "ok": 120,
+        "conflicts": 0,
+        "retriedCalls": 0,
+        "swarmBusy": 0,
+        "errors": {},
+        "p50Ms": 54.16037500000675,
+        "p95Ms": 110.45604099999764,
+        "maxMs": 203.78804200000013,
+        "bytes": {
+          "mean": 4177,
+          "p50": 4177,
+          "p95": 4177,
+          "total": 501240
+        },
+        "byOp": {
+          "read.host": 120
+        }
+      }
+    ]
+  },
+  "state": {
+    "afterSetup": {
+      "bytes": 1038794,
+      "documents": 1
+    },
+    "afterLoad": {
+      "bytes": 1061815,
+      "documents": 1
+    }
+  },
+  "isolatedPolls": [
+    {
+      "reader": "desktop:bench-0@example.com",
+      "responseBytes": 1051947,
+      "databaseBytesOut": 1062801,
+      "ms": 20.12524999998277
+    },
+    {
+      "reader": "desktop:bench-1@example.com",
+      "responseBytes": 1051947,
+      "databaseBytesOut": 1062801,
+      "ms": 19.75633299999754
+    },
+    {
+      "reader": "desktop:bench-2@example.com",
+      "responseBytes": 1051947,
+      "databaseBytesOut": 1062801,
+      "ms": 18.94900000002235
+    },
+    {
+      "reader": "host:bench-machine-0",
+      "responseBytes": 5205,
+      "databaseBytesOut": 1066386,
+      "ms": 21.349541000003228
+    },
+    {
+      "reader": "host:bench-machine-1",
+      "responseBytes": 4177,
+      "databaseBytesOut": 1065888,
+      "ms": 19.198999999993248
+    }
+  ]
+}
