@@ -516,12 +516,13 @@ class SwarmSearchController extends ChangeNotifier {
       // The Swarm's grid is read when the action runs: a first run sets the Swarm's models up, and names it then.
       Future<String?> Function() act(String action, {bool forSwarm = false}) =>
           () async {
-            await owner.control(
-              local,
-              action,
-              grid: forSwarm ? swarm.grid : null,
-            );
-            return owner.error;
+            // What control answers: the read after it clears [owner.error], and a refused Run for Swarm said nothing.
+            return await owner.control(
+                  local,
+                  action,
+                  grid: forSwarm ? swarm.grid : null,
+                ) ??
+                owner.error;
           };
       if (local.servedOn(swarm.grid)) {
         return (

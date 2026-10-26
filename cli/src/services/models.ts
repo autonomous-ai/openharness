@@ -303,7 +303,11 @@ function modelsRequests(core: CoreApi, grid: GridSetUp, privateGridName: () => P
     try {
       const list = type === 'grid_fleet_models_list'
       const setup = list ? payload.setup === true : type !== 'grid_fleet_model_stop'
-      const unready = setup ? await notReady(grid, type !== 'grid_fleet_model_download') : null
+      // A start or stop for a Swarm runs on the Swarm's grid, which its owner's computer made: it needs grid signed in,
+      // not the account's own grid. Asked to make that too, a Run for Swarm failed on an account at its plan's network
+      // limit ("Free plan allows 5 networks") while the Swarm's grid stood ready (2026-10-26).
+      const forSwarm = !list && type !== 'grid_fleet_model_download' && typeof payload.grid === 'string' && SWARM_GRID.test(payload.grid)
+      const unready = setup ? await notReady(grid, type !== 'grid_fleet_model_download' && !forSwarm) : null
       const gridName = await privateGridName()
       if (list) {
         const snapshot = await localModels.list(gridName, payload.refresh === true || setup)
@@ -401,7 +405,7 @@ function modelsRequests(core: CoreApi, grid: GridSetUp, privateGridName: () => P
       return { ...await heal.check(payload.grid) }
     },
     ...gridCommands(grid, core.dataDir, shares),
-    ...launchTargetRequests(core),
+    ...launchTargetRequests(core, (id) => shares.stopConnection(id)),
   }
 }
 
@@ -483,15 +487,17 @@ function gridCommands(grid: GridSetUp, dataDir: string, shares: SwarmApiShares =
  * socket's switch (docs/design/2026-10-06-core-boundary-next.md, step 4). Its own function so the socket's
  * specs can serve it alone behind the gates.
  */
-export function launchTargetRequests(core: CoreApi): ServiceRequests {
+export function launchTargetRequests(core: CoreApi, onRemove: (connectionId: string) => Promise<void>): ServiceRequests {
   // The saved APIs, a file in the data folder (lib/apiConnections.ts): read afresh on every request.
   const apiConnections = new ApiConnections(core.dataDir)
   return {
     // The APIs saved on this machine (lib/apiConnections.ts): list, save and remove one, and one API's
     // models. Their keys stay here, so only the owner manages them: this machine's app, or its paired one.
-    api_connections: internalOnThrow('api_connections', (payload, asker) => {
+    api_connections: internalOnThrow('api_connections', async (payload, asker) => {
       if (!asker.owner) return { error: 'OWNER_REQUIRED' }
       if (payload.action === 'models') return apiModelsRequest(apiConnections, payload)
+      // A deleted API comes off every Swarm it is shared with first: its share holds the key and would go on serving.
+      if (payload.action === 'remove' && typeof payload.id === 'string') await onRemove(payload.id)
       const reply = apiConnectionsRequest(apiConnections, payload)
       if (payload.action === 'save') rememberSavedApis(apiConnections)
       return reply

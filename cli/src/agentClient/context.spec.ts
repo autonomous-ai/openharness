@@ -26,7 +26,8 @@ describe('the context block', () => {
 
   it('the switch off: the person turns it on, and how; checked before the limits', () => {
     const c = buildContext(input({ switchOn: false, check: { reason: 'DEPTH', message: 'x' } }))
-    expect(formatContext(c).split('\n')[1]).toBe('Can start harnesses: no. The person has not turned on "Agents can start other agents". Ask them to run, in their own terminal: harness settings agents-start-agents on')
+    // The agent asks them with its own tool, and runs it only after their yes: people do not open a terminal for this.
+    expect(formatContext(c).split('\n')[1]).toBe('Can start harnesses: no. The person has not turned on "Agents can start other agents". Ask them, with your tool for asking them (Claude Code: AskUserQuestion; Codex: request_user_input) or in your reply; only after their yes, run: harness settings agents-start-agents on --person-said-yes')
     expect(c.canStart).toMatchObject({ ok: false, reason: 'SWITCH_OFF', fixBy: 'person' })
   })
 

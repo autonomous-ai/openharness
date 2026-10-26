@@ -575,6 +575,11 @@ export const ENGINE_PROCESS_SIGNATURES: Readonly<Record<RegisteredSession['engin
     basenames: [/^pi$/],
     entrypoints: [/pi-coding-agent[\/\\]dist[\/\\]cli\.js$/],
   },
+  // The release binary is a single executable named `omp` (measured: /proc/<pid>/comm and exe).
+  omp: {
+    basenames: [/^omp$/],
+    entrypoints: [],
+  },
   hermes: {
     basenames: [/^hermes$/, /^hermes-agent$/],
     entrypoints: [/hermes-agent[\/\\]hermes$/, /(?:^|[\/\\])hermes_cli(?:[\/\\]|\.|$)/],

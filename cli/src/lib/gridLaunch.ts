@@ -645,6 +645,7 @@ const GRID_ENGINE_REFUSALS: Partial<Record<AgentEngine, string>> = {
   devin: 'Devin runs on its own hosted service and documents no endpoint override',
   muse: 'Muse Code documents no way to change its endpoint',
   commandcode: 'Command Code documents no way to change its endpoint',
+  omp: 'Harness has not yet verified how omp is pointed at another endpoint',
   terminal: 'a terminal runs no engine to point at a grid — start one inside it and it will use its own login',
 }
 

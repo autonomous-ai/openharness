@@ -67,6 +67,23 @@ describe('an API shared with a Swarm', () => {
     expect(answer.status).toBe(204)
   })
 
+  it('takes every share of a deleted API off its grid and closes it, even when grid refuses, and keeps the others', async () => {
+    const stateFile = join(await mkdtemp(join(tmpdir(), 'shares-')), 'shares.json')
+    const f = setup({ stateFile }); open = f.shares
+    await f.shares.share(GRID, 'c1', 'deepseek/deepseek-chat')
+    await f.shares.share('swarm-ffffffffffff', 'c1', 'deepseek/deepseek-chat')
+    await f.shares.share(GRID, 'c2', 'google/gemini')
+    f.exec.mockImplementation(async (args) => args.includes('leave') ? { ...ok, code: 'GRID_FAILED' as const, exitCode: 1, stderr: 'grid is down' } : ok)
+    await f.shares.stopConnection('c1')
+    expect(f.exec.mock.calls.filter(c => c[0].includes('leave')).map(c => c[0][2])).toEqual([GRID, 'swarm-ffffffffffff'])
+    expect(f.shares.list().map(s => s.connectionId)).toEqual(['c2'])
+    expect(JSON.parse(await readFile(stateFile, 'utf8')).map((r: { connectionId: string }) => r.connectionId)).toEqual(['c2'])
+    // Nothing shared: nothing asked of grid.
+    f.exec.mockClear()
+    await f.shares.stopConnection('c9')
+    expect(f.exec).not.toHaveBeenCalled()
+  })
+
   it('stops by leaving the grid and closing its endpoint, and says why when grid or the API refuses', async () => {
     const f = setup(); open = f.shares
     await f.shares.share(GRID, 'c1', 'm')

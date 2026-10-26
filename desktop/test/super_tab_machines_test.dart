@@ -1023,6 +1023,13 @@ void main() {
           machine(
             served: [
               {'grid': swarmGrid, 'model': 'qwen3', 'name': 'Qwen 3'},
+              // Run here, not yet listed by the Swarm's grid: shown as starting.
+              {
+                'grid': swarmGrid,
+                'model': 'qwen36',
+                'name': 'Qwen 3.6',
+                'starting': true,
+              },
               {'grid': 'swarm-ffffffffffff', 'model': 'other'},
               {
                 'grid': swarmGrid,
@@ -1049,6 +1056,11 @@ void main() {
           find.byKey(const ValueKey('super-machine-local-studio-Qwen 3')),
           findsOneWidget,
         );
+        expect(
+          find.byKey(const ValueKey('super-machine-local-studio-Qwen 3.6')),
+          findsOneWidget,
+        );
+        expect(find.text('starting…'), findsOneWidget);
         expect(find.text('API'), findsOneWidget);
         expect(
           find.byKey(

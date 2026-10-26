@@ -256,7 +256,8 @@ function servedModels(state: Json, swarm: string, now: number): Map<string, Serv
     const observed = object(machine.observation)
     if (!finite(observed.receivedAt) || now - observed.receivedAt > LOCAL_FRESH_MS) continue
     for (const l of list(observed.localModels)) {
-      if (typeof l.grid !== 'string' || typeof l.model !== 'string') continue
+      // A model still starting (the grid does not list it yet) is the panel's to show, not a Builder's to run on.
+      if (typeof l.grid !== 'string' || typeof l.model !== 'string' || l.starting === true) continue
       const key = `${l.grid}\0${l.model}`, anywhere = l.grid === swarm
       const kind = l.kind === 'api' || l.kind === 'shared' ? l.kind : anywhere ? 'local' : 'shared'
       const known = served.get(key) ?? { grid: l.grid, model: l.model, label: text(l.name) ?? l.model, kind, machines: anywhere ? null : new Set<string>(), holders: [] }

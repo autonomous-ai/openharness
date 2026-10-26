@@ -49,6 +49,8 @@ export interface NewArgs {
   repo: string | null
   /** Devin Cloud's ACU limit. */
   acuLimit: number | null
+  /** The model to launch with, as the engine names it (`haiku`, `gpt-5.4-mini`); the machine checks it (lib/launchModel.ts). */
+  model: string | null
   json: boolean
 }
 
@@ -75,7 +77,8 @@ export const NEW_USAGE = [
   '  -- <words…>    everything after -- is the first message, unquoted:',
   '                   harness new codex -- fix the flaky login test',
   '  --name <n>     the harness\'s name until the agent titles its session',
-  '  --repo <r>     a cloud coding agent\'s GitHub repository: owner/name or https://github.com/owner/name',
+  '  --model <m>    the model it launches with, as the agent names it: haiku, opus, gpt-5.4-mini',
+  '  --repo <r>    a cloud coding agent\'s GitHub repository: owner/name or https://github.com/owner/name',
   '                 (Cursor Cloud needs one; Devin Cloud works without)',
   '  --acu-limit <n>  the most ACUs Devin Cloud may spend (1-1000; 5 when left out)',
   '  --json         print the result as one JSON line',
@@ -104,6 +107,7 @@ export function parseNewArgs(argv: string[], env: { cwd: string; home: string; p
   let name: string | null = null
   let repo: string | null = null
   let acuLimit: number | null = null
+  let model: string | null = null
   let json = false
   const value = (flag: string, index: number): string => {
     const next = argv[index + 1]
@@ -124,6 +128,13 @@ export function parseNewArgs(argv: string[], env: { cwd: string; home: string; p
     else if (word === '--mode') { mode = value(word, i); modeGiven = true; i++ }
     else if (word === '--prompt' || word === '--task') { prompt = value(word, i); i++ }
     else if (word === '--name') { name = value(word, i); i++ }
+    // The app's New Harness box sends a model the same way; `harness new` had no word for it, so an agent asked to
+    // get "another model's view" could start only the engine's default model.
+    else if (word === '--model') {
+      model = value(word, i).trim()
+      if (!model) throw new NewUsageError('--model needs a value.')
+      i++
+    }
     else if (word === '--repo') {
       repo = value(word, i).trim()
       if (!repo) throw new NewUsageError('--repo needs a value.')
@@ -173,6 +184,7 @@ export function parseNewArgs(argv: string[], env: { cwd: string; home: string; p
   // A terminal opens in a folder and never makes one (the machine's INVALID_PROJECT_SOURCE), so the project was left
   // out of what is sent: `harness new terminal my-game` opened a terminal in the home folder, with no ~/harnesses/my-game
   // and no word about it (CLI 0.3.76, 2026-10-12).
+  if (words[0] === 'terminal' && model !== null) throw new NewUsageError('A terminal runs no model: --model is for an agent.')
   if (words[0] === 'terminal' && projectName !== null) {
     throw new NewUsageError('A terminal opens in a folder; it does not make a project. Name a folder (harness new terminal ~/code/x), or none to open it here.')
   }
@@ -195,7 +207,7 @@ export function parseNewArgs(argv: string[], env: { cwd: string; home: string; p
     if (machine === null) cwd = env.cwd
     else projectName = ''
   }
-  return { agent: words[0] ?? 'claude', machine, cwd, projectName, mode, modeGiven, prompt, name, repo, acuLimit, json }
+  return { agent: words[0] ?? 'claude', machine, cwd, projectName, mode, modeGiven, prompt, name, repo, acuLimit, model, json }
 }
 
 /** The `agent_create` payload for [args]: the same fields the app's box sends. [baseEngine] is the
@@ -231,6 +243,7 @@ export function newAgentPayload(args: NewArgs, cwd: string | null, baseEngine = 
     ...(args.name ? { name: args.name } : {}),
     ...(args.repo ? { repositoryUrl: args.repo } : {}),
     ...(args.acuLimit !== null ? { acuLimit: args.acuLimit } : {}),
+    ...(args.model !== null ? { model: args.model } : {}),
     creationId: randomUUID(),
   }
 }

@@ -10,8 +10,8 @@ retired; only the host routes below were kept.
 
 | Route | What |
 |---|---|
-| `/` | Redirects (307) to `/hub`, the front door (owner, 2026-10-13). An `hn view` link (`/?machine=…&agent=…`) still opens the Flutter viewer here |
-| `/web`, `/s/:id`, `/auth/callback`, `/callback` | The Flutter app (`public/harness-web/index.html`, via `rewrites()` in `next.config.js`); `/web` is the workspace, where sign-in returns (`src/lib/webApp.ts`) |
+| `/`, `/s/:id`, `/auth/callback`, `/callback` | The Flutter app (`public/harness-web/index.html`, via `rewrites()` in `next.config.js`); `/` is the workspace and the front door (owner, 2026-10-26), where sign-in returns (`src/lib/webApp.ts`), and an `hn view` link (`/?machine=…&agent=…`) opens its viewer |
+| `/web` | Redirects (307) to `/`, keeping the query: the workspace's address from 2026-10-13 to 2026-10-26, when the Hub was the front door |
 | `/download` (and `/install` → it) | Install page: CLI command and desktop downloads |
 | `/app` | The phone app's download code: an iPhone or iPad is redirected to the App Store and an Android device to Google Play, by user agent (`src/lib/phoneApp.ts`); anything else gets both stores |
 | `/pair` | Phone setup guidance — the mobile app and the desktop "add phone" dialog link here |

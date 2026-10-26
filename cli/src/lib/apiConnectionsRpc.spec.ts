@@ -15,7 +15,7 @@ function socketWithModels(): BackendSocket {
   const socket = relaySocket('fixture')
   const host = createServiceHost(emptyPorts())
   // Served alone, under a name of its own: `models` is a port's name, which `serve` keeps for `start`.
-  host.serve('launch-targets', launchTargetRequests, fakeCore(), ['api_connections', 'codex_profiles_list', 'codex_profile_link'])
+  host.serve('launch-targets', (core) => launchTargetRequests(core, async () => {}), fakeCore(), ['api_connections', 'codex_profiles_list', 'codex_profile_link'])
   socket.serviceRouter = host.route
   return socket
 }

@@ -124,7 +124,7 @@ describe('the account\'s agent experiments, kept for this computer', () => {
   })
   afterEach(() => { vi.useRealTimers(); rmSync(dataDir, { recursive: true, force: true }) })
 
-  const OFF = { agentsStartAgents: false, pullRequestLine: false, agentMessages: false, agentMessagesHideSummary: false }
+  const OFF = { agentsStartAgents: false, pullRequestLine: false, agentMessages: false, agentMessagesHideSummary: false, agentsTellAgents: false }
   /** The account's answer, as backend routes/experimentalSettings.ts gives it. */
   const account = (features: Record<string, boolean>, accountId = 'acct') =>
     ({ status: 200, body: { success: true, data: { accountId, revision: 1, features: { share_button: false, ...features }, available: {} } } })
@@ -317,6 +317,26 @@ describe('the account\'s agent experiments, kept for this computer', () => {
       .toEqual({ status: 200, body: { ...OFF, agentMessages: true, agentsStartAgents: true, signedIn: true } })
     expect(patches).toEqual([{ accountId: 'acct', feature: 'agent_messages', enabled: true }, { accountId: 'acct', feature: 'agents_start_agents', enabled: true }])
     expect(t.want).toHaveBeenCalledOnce()
+  })
+
+  it('names in its log the agent that turned one on with the person\'s yes, which is only its word', async () => {
+    const lines: string[] = []
+    const t = setup({ log: (line) => lines.push(line) })
+    answer(account({}))
+    answers.push(async () => account({ agents_tell_agents: true }))
+    expect(await t.sync.settingsWrite({ agentsTellAgents: true, byAgent: 'Claude Code' }))
+      .toEqual({ status: 200, body: { ...OFF, agentsTellAgents: true, signedIn: true } })
+    expect(lines).toEqual(['[settings] agentsTellAgents on by Claude Code, which says the person said yes'])
+    // The summary switch grants by turning off: the agent's word is named for it too.
+    answer(account({ agent_messages_hide_summary: true }))
+    answers.push(async () => account({}))
+    await t.sync.settingsWrite({ agentMessagesHideSummary: false, byAgent: 'Codex' })
+    expect(lines.at(-1)).toBe('[settings] agentMessagesHideSummary off by Codex, which says the person said yes')
+    // Not for the person's own write, nor for a name that says nothing.
+    answer(account({ agents_tell_agents: true }))
+    answers.push(async () => account({}))
+    await t.sync.settingsWrite({ agentsTellAgents: false, byAgent: ' ' })
+    expect(lines).toHaveLength(2)
   })
 
   it('refuses a write with nothing in it, signed out, or with the account out of reach, and says why', async () => {

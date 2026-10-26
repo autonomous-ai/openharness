@@ -49,6 +49,14 @@ enum ExperimentalFeature {
     'agent_messages_hide_summary',
     'Share a one-line summary of what your harnesses are doing with people in your shared tabs',
     'One line of at most 120 characters, for the harnesses listed in a shared tab.',
+  ),
+
+  /// `harness tell` (cli/src/messages/tell.ts): one way, from the starter, apart
+  /// from Agent Messages, which give a started harness no exception (owner, 2026-10-11).
+  agentsTellAgents(
+    'agents_tell_agents',
+    'Agents can give more work to harnesses they started',
+    'Turn on to let an agent send a harness it started its next task with harness tell, in the same conversation, on any of your machines.',
   );
 
   const ExperimentalFeature(this.id, this.label, this.description);
@@ -66,7 +74,8 @@ enum ExperimentalFeature {
     agentsStartAgents ||
     agentPullRequestLine ||
     agentMessages ||
-    agentMessagesHideSummary => true,
+    agentMessagesHideSummary ||
+    agentsTellAgents => true,
   };
 }
 

@@ -77,6 +77,11 @@ export const ENGINE_INSTALL: Readonly<Record<ProcessEngine, EngineInstallRecipe>
     source: 'https://pi.dev/',
     executable: { names: ['pi'], npmGlobal: true },
   },
+  omp: {
+    command: 'curl -fsSL https://omp.sh/install | sh',
+    source: 'https://github.com/can1357/oh-my-pi',
+    executable: { names: ['omp'], homeRelativePaths: ['.local/bin/omp'] },
+  },
   hermes: {
     command: 'curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash',
     source: 'https://github.com/NousResearch/hermes-agent/blob/main/website/docs/getting-started/quickstart.md',

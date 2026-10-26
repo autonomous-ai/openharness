@@ -9,6 +9,7 @@ import '../core/project_folder.dart';
 import '../core/test_run.dart';
 import '../state/app_state.dart';
 import '../widgets/grid_model_picker.dart' show modelPickerSupports;
+import '../ws/ws_conn.dart' show WsRequestFailure;
 import 'local_model.dart';
 import 'api_connections_controller.dart';
 
@@ -720,7 +721,13 @@ class ModelManagerController extends ChangeNotifier {
   }
 
   /// [grid]: start or stop it on that Swarm's grid instead of the account's own (docs/plans/2026-10-23-swarm-local-models.md).
-  Future<void> control(LocalModel model, String action, {String? grid}) async {
+  /// Answers why the request was refused, or null. The answer is kept for the caller: the list read that follows
+  /// clears [error], and a refused Run for Swarm said nothing (2026-10-26: "Free plan allows 5 networks").
+  Future<String?> control(
+    LocalModel model,
+    String action, {
+    String? grid,
+  }) async {
     final owner = machine;
     if (owner == null ||
         owner.connectionStatus != ConnectionStatus.connected ||
@@ -729,22 +736,25 @@ class ModelManagerController extends ChangeNotifier {
         owner.machine.isShared ||
         busy ||
         !inventoryAvailable) {
-      return;
+      return null;
     }
     final current = localModels
         .where((entry) => entry.id == model.id)
         .firstOrNull;
-    if (current == null) return;
+    if (current == null) return null;
     final download = action == 'download';
     final startModel = action == 'start';
     if (download) {
-      if (!supportsDownload || current.downloaded || !current.canStart) return;
+      if (!supportsDownload || current.downloaded || !current.canStart) {
+        return null;
+      }
     } else if (startModel) {
-      if (!current.canStart) return;
+      if (!current.canStart) return null;
     } else if (action != 'stop' ||
         !(grid == null ? current.canStop : current.servedOn(grid))) {
-      return;
+      return null;
     }
+    String? refused;
     pendingId = model.id;
     _actionRevision++;
     inventoryAvailable = false;
@@ -762,10 +772,13 @@ class ModelManagerController extends ChangeNotifier {
               start: startModel,
               grid: grid,
             );
-      if (!_current(owner)) return;
-      error = answer['error'] as String?;
+      if (!_current(owner)) return null;
+      error = refused = answer['error'] as String?;
       pendingOperation = LocalModelOperation.parse(answer['operation']);
       operationBusy = pendingOperation?.active == true;
+    } on WsRequestFailure catch (failure) {
+      // The CLI refused it, in its own words (grid's plan limit, a sign-in): those, not a generic retry.
+      if (_current(owner)) error = refused = failure.detail ?? failure.code;
     } catch (_) {
       if (_current(owner)) {
         error =
@@ -781,6 +794,7 @@ class ModelManagerController extends ChangeNotifier {
         if (_current(owner)) await refresh();
       }
     }
+    return refused;
   }
 
   @override

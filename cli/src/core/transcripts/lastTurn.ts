@@ -57,6 +57,7 @@ export function createLastTurnReader({ bySession, dbs, hermesDb, readerFor }: La
     if (s.engine === 'agy') return (await loadEngine('agy'))?.lastAgyTurnText(lines) ?? null
     if (s.engine === 'copilot') return (await loadEngine('copilot'))?.lastCopilotTurnText(lines) ?? null
     if (s.engine === 'pi') return (await loadEngine('pi'))?.lastPiTurnText(lines) ?? null
+    if (s.engine === 'omp') return (await loadEngine('omp'))?.lastOmpTurnText(lines) ?? null
     if (s.engine === 'commandcode') return (await loadEngine('commandcode'))?.lastCommandCodeTurnText(lines) ?? null
     // No reader and no code of its own here: Claude Code and Codex always have a reader, and a shell keeps no
     // transcript, so no engine reaches this. Their recaps are their readers', never core's.

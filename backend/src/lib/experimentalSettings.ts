@@ -5,8 +5,10 @@ import { prisma } from './prisma.js'
 /** The account's experiments. `agent_messages_hide_summary` is stored inverted, like none of the others: every
  *  experiment here is "off unless true", and a default of sharing the one-line summary needs the switch that stops it
  *  (shared-tab activity design, ruling T4). The three before it are what agents may do with Harness: they left each computer's
- *  Settings ▸ Agents for here, one choice for every computer of the account (owner, 2026-10-12). */
-export const experimentalFeatures = ['focus_bar_creature', 'share_button', 'devices_tab', 'agents_start_agents', 'agent_pull_request_line', 'agent_messages', 'agent_messages_hide_summary'] as const
+ *  Settings ▸ Agents for here, one choice for every computer of the account (owner, 2026-10-12). `agents_tell_agents` is
+ *  another: an agent may give more work to a harness it started (`harness tell`), behind a switch of its own because a
+ *  harness another started gets no exception from Agent Messages (owner, 2026-10-11). */
+export const experimentalFeatures = ['focus_bar_creature', 'share_button', 'devices_tab', 'agents_start_agents', 'agent_pull_request_line', 'agent_messages', 'agent_messages_hide_summary', 'agents_tell_agents'] as const
 export type ExperimentalFeature = typeof experimentalFeatures[number]
 export const experimentalSettingsId = (userId: string): string =>
   createHash('sha256').update(JSON.stringify(['experimental-settings', userId])).digest('hex').slice(0, 24)
@@ -15,7 +17,7 @@ export const experimentalSettingsId = (userId: string): string =>
 const FIELDS = {
   focus_bar_creature: 'focusBarCreature', share_button: 'shareButton', devices_tab: 'devicesTab',
   agents_start_agents: 'agentsStartAgents', agent_pull_request_line: 'agentPullRequestLine', agent_messages: 'agentMessages',
-  agent_messages_hide_summary: 'agentMessagesHideSummary',
+  agent_messages_hide_summary: 'agentMessagesHideSummary', agents_tell_agents: 'agentsTellAgents',
 } as const satisfies Record<ExperimentalFeature, string>
 type Row = { [K in (typeof FIELDS)[ExperimentalFeature]]?: boolean } & { revision: number }
 

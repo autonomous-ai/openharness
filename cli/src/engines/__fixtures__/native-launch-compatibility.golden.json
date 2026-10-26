@@ -120,6 +120,24 @@
     "refused": "FirstPromptUnsupportedError",
     "detail": "pi has no documented way to start with a first prompt, so the agent was not created."
   },
+  "omp fresh": [
+    "omp"
+  ],
+  "omp resume": [
+    "omp"
+  ],
+  "omp fork": [
+    "omp"
+  ],
+  "omp permission": [
+    "omp",
+    "--model",
+    "fixture/model"
+  ],
+  "omp first": [
+    "omp",
+    "literal ; $(first message)"
+  ],
   "hermes fresh": [
     "hermes"
   ],

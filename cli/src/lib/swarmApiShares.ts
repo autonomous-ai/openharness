@@ -156,6 +156,20 @@ export class SwarmApiShares {
     await writeFile(this.deps.stateFile, JSON.stringify([...this.running.values()].map(({ grid, alias, connectionId, port, token }) => ({ grid, alias, connectionId, port, token }))), { mode: 0o600 }).catch(() => {})
   }
 
+  /** Every share of the saved API [connectionId] off its grid, its endpoint closed whether or not grid answers: the API
+   *  is being deleted, and a share holds its key in this process, so it would serve on a key the person removed. */
+  stopConnection(connectionId: string): Promise<void> {
+    return this.serial(async () => {
+      const gone = [...this.running.values()].filter(share => share.connectionId === connectionId)
+      for (const share of gone) {
+        await this.deps.exec(['--remote', 'leave', share.grid, '--engine', share.alias]).catch(() => {})
+        share.server.close()
+        this.running.delete(keyOf(share))
+      }
+      if (gone.length) await this.note()
+    })
+  }
+
   /** Every share off its grid, as the process ends: an endpoint that is gone serves nothing. */
   async stopAll(): Promise<void> {
     for (const share of [...this.running.values()]) await this.stop(share.grid, share.connectionId, share.model).catch(() => {})

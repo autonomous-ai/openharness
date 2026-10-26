@@ -698,6 +698,21 @@ describe('local model discovery and lifecycle', () => {
     expect(JSON.stringify(snapshot)).not.toContain('private detail')
   })
 
+  // 2026-10-26: a new account's own grid is made only when something needs it, while its Swarm's grid was ready. Read
+  // as "could not be checked", every Start went dark, Run for Swarm too.
+  it('an own grid this account does not have yet runs nothing: every model can start, and nothing is wrong', async () => {
+    const original = run.getMockImplementation()!
+    run.mockImplementation(async (args, output) => args.includes('ls')
+      ? ok([{ grid: 'swarm-0123456789ab', id: 'grid-swarm' }]) : original(args, output))
+    inventory.mockImplementation(async () => ({ state: 'unknown', nodes: [], status: null }))
+    const snapshot = await service.list('home', true)
+    expect(snapshot.notice).toBeUndefined()
+    expect(snapshot.models[0]).toMatchObject({ canStart: true })
+    // A grid list that did not answer a list says nothing about the grid: still unchecked.
+    run.mockImplementation(async (args, output) => args.includes('ls') ? ok({ error: 'signed out' }) : original(args, output))
+    expect((await service.list('home', true)).notice).toContain('Running models could not be checked')
+  })
+
   it.each(['stopped', 'asleep'] as const)('Start brings a %s grid up before joining it', async state => {
     gridState = state
     await service.act('home', 'org/Small-GGUF', 'start'); await service.settled()
@@ -867,6 +882,24 @@ describe('local model discovery and lifecycle', () => {
     const record = JSON.parse(await readFile(join(records, 'remote.json'), 'utf8'))
     record.media = { port: 1234 }
     await writeFile(join(records, 'remote.json'), JSON.stringify(record))
+    await service.act('home', 'org/Small-GGUF', 'stop'); await service.settled()
+    expect((await service.list('home')).models[0].operation?.error).toContain('share its engine')
+    expect(calls.some(args => args.includes('leave'))).toBe(false)
+  })
+
+  it('stops a model beside the APIs a Swarm shares, which run nothing here, and not beside another engine', async () => {
+    await service.act('home', 'org/Small-GGUF', 'start'); await service.settled()
+    const record = JSON.parse(await readFile(join(records, 'remote.json'), 'utf8'))
+    const share = { endpoint_url: `http://127.0.0.1:41001/${'a'.repeat(36)}/v1`, models: ['deepseek/x'] }
+    await writeFile(join(records, 'remote.json'), JSON.stringify({ ...record, engines: [...record.engines, share] }))
+    await service.act('home', 'org/Small-GGUF', 'stop'); await service.settled()
+    expect((await service.list('home')).models[0].operation?.error ?? '').not.toContain('share its engine')
+    expect(calls.some(args => args.includes('leave'))).toBe(true)
+    // An engine that is not a share's endpoint still is one.
+    await service.act('home', 'org/Small-GGUF', 'start'); await service.settled()
+    const again = JSON.parse(await readFile(join(records, 'remote.json'), 'utf8'))
+    await writeFile(join(records, 'remote.json'), JSON.stringify({ ...again, engines: [...again.engines, { endpoint_url: 'http://127.0.0.1:41003/v1', models: ['y'] }] }))
+    calls.length = 0
     await service.act('home', 'org/Small-GGUF', 'stop'); await service.settled()
     expect((await service.list('home')).models[0].operation?.error).toContain('share its engine')
     expect(calls.some(args => args.includes('leave'))).toBe(false)

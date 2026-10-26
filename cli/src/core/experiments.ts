@@ -168,7 +168,7 @@ export function createAgentSettingsSync(deps: {
       const changes = body && typeof body === 'object'
         ? Object.entries(body as Record<string, unknown>).filter(([key, value]) => key in AGENT_SETTING_EXPERIMENTS && typeof value === 'boolean')
         : []
-      if (!changes.length) return { status: 400, body: { error: { code: 'BAD_REQUEST', message: 'Nothing to change: send {"agentsStartAgents": true|false}, {"pullRequestLine": true|false}, {"agentMessages": true|false} or {"agentMessagesHideSummary": true|false}.' } } }
+      if (!changes.length) return { status: 400, body: { error: { code: 'BAD_REQUEST', message: 'Nothing to change: send {"agentsStartAgents": true|false}, {"pullRequestLine": true|false}, {"agentMessages": true|false}, {"agentMessagesHideSummary": true|false} or {"agentsTellAgents": true|false}.' } } }
       const asked = deps.session()
       if (!asked?.machineId) return { status: 409, body: { error: { code: 'SIGNED_OUT', message: AGENT_SETTINGS_SIGNED_OUT } } }
       const read = heard(await deps.backend('GET', EXPERIMENTAL_SETTINGS), asked)
@@ -178,6 +178,11 @@ export function createAgentSettingsSync(deps: {
         const feature = AGENT_SETTING_EXPERIMENTS[key as keyof AgentSettings]
         const written = heard(await deps.backend('PATCH', EXPERIMENTAL_SETTINGS, { accountId, feature, enabled }), asked)
         if (!agentSettingsFromAnswer(written)) return failed(written)
+      }
+      // Turned on by an agent on the person's yes (agentClient/settings.ts): Harness has only its word for that yes.
+      const byAgent = (body as Record<string, unknown>).byAgent
+      if (typeof byAgent === 'string' && byAgent.trim()) {
+        log(`[settings] ${changes.map(([key, enabled]) => `${key} ${enabled ? 'on' : 'off'}`).join(', ')} by ${byAgent.trim().slice(0, 40)}, which says the person said yes`)
       }
       return { status: 200, body: { ...readAgentSettings(deps.dataDir, deps.session()), signedIn: true } }
     },
