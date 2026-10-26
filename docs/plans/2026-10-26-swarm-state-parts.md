@@ -147,8 +147,9 @@ Every part has its own `version` (incremented on each write) and a `changedAt` s
   - **Refused when the previous release would misread the Swarm** (final review, Critical 2; Lead ruling for v1):
     - The previous release checks no audience. It filters conversations and messages by project alone, so a private
       conversation (Chat with PM) would become readable by every project reader.
-    - It ends work only on done, stopped or cancelled. A lost task, whether its status is lost or a later cancel kept
-      its lost marker, would read as active.
+    - It ends work only on done, stopped or cancelled, so a task whose status is lost would read as active. A lost
+      task cancelled later is finished there too, but that release knows no lost marker. Its fenced worker would read
+      as an ordinary finished worker awaiting a decision.
     - So `rollbackFromParts` refuses a Swarm with any private conversation or any lost task before it changes any
       row. The refusal names the Swarm and the reason.
     - The recovery path is to roll forward with a fix. The parts stay authoritative, so nothing is lost or made public.

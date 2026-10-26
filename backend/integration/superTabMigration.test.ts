@@ -256,6 +256,8 @@ describe('rolling back (design 6.4)', () => {
       const before = await rows(tabId)
       const report = await rollbackFromParts(db, tabId)
       expect([status, report]).toMatchObject([status, { tabId, ok: false, error: expect.stringContaining('lost') }])
+      // A cancelled task is finished on the previous backend too; what it loses is the lost marker (final review, Minor).
+      expect(report.error).toContain(status === 'lost' ? 'would read as active work' : 'lost and then cancelled would lose the lost marker')
       expect(report.error).toMatch(/roll forward with a fix/i)
       expect(await rows(tabId)).toEqual(before)
     }
