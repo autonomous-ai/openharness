@@ -5,6 +5,8 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/web/parts/deferred_part.dart';
 
 /// A part whose download the test finishes by hand, like a slow phone link.
+/// Asked again while a download is pending, it hands back that same download,
+/// as dart2js's loadLibrary does; [next] starts a fresh one after a failure.
 class _Download {
   var calls = 0;
   Completer<void> pending = Completer<void>();
@@ -131,24 +133,28 @@ void main() {
     }
   });
 
-  testWidgets('a download that stalls offers Retry after about 20 s', (
+  testWidgets('a download that stalls offers Reload after about 20 s', (
     tester,
   ) async {
     final download = _Download();
-    await tester.pumpWidget(_host(DeferredPart(download.call)));
+    var reloads = 0;
+    await tester.pumpWidget(
+      _host(DeferredPart(download.call), reload: () => reloads++),
+    );
 
     await tester.pump(const Duration(seconds: 19));
-    expect(find.text('Retry'), findsNothing);
+    expect(find.text('Reload'), findsNothing);
     await tester.pump(const Duration(seconds: 2));
     expect(find.text('Still loading this part of Harness'), findsOneWidget);
     expect(find.text('Loading…'), findsNothing);
+    // Asking dart2js again would only wait on the same download.
+    expect(find.text('Retry'), findsNothing);
 
-    download.next();
-    await tester.tap(find.text('Retry'));
-    await tester.pump();
-    expect(download.calls, 2);
-    expect(find.text('Loading…'), findsOneWidget);
+    await tester.tap(find.text('Reload'));
+    expect(reloads, 1);
+    expect(download.calls, 1);
 
+    // A stalled download that lands after all still draws the part.
     download.pending.complete();
     await tester.pump();
     expect(find.text('Finder'), findsOneWidget);

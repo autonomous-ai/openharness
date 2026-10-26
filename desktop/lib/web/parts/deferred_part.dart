@@ -11,6 +11,8 @@ import 'page_reload.dart' if (dart.library.js_interop) 'page_reload_web.dart';
 /// library, downloaded the first time something needs it. One download is
 /// shared by every place that asks; a failed one is forgotten, so the next ask
 /// downloads it again (dart2js has already retried it three times by then).
+/// A download still pending is not asked again: dart2js would hand back the
+/// same one.
 class DeferredPart {
   DeferredPart(this._download);
 
@@ -22,13 +24,6 @@ class DeferredPart {
   bool get loaded => _loaded;
   bool _loaded = false;
 
-  /// Asks for it again, even while a download is pending: a stalled one is
-  /// not waited on.
-  Future<void> retry() {
-    if (!_loaded) _loading = null;
-    return load();
-  }
-
   Future<void> load() => _loading ??= _download().then(
     (_) => _loaded = true,
     onError: (Object error, StackTrace stack) {
@@ -39,9 +34,11 @@ class DeferredPart {
 }
 
 /// [builder]'s widget once [part] is in. Until then a loading line in its
-/// place; if the download fails, or is still going after [stallAfter], a
-/// sentence and Retry instead of a blank. A Retry that fails too offers to
-/// reload the page: an older page cannot download a part a release replaced.
+/// place; if the download fails, a sentence and Retry instead of a blank, and
+/// a Retry that fails too offers to reload the page: an older page cannot
+/// download a part a release replaced. A download still going after
+/// [stallAfter] offers Reload alone: asked again, dart2js hands back the same
+/// pending download.
 class DeferredPartView extends StatefulWidget {
   const DeferredPartView({
     super.key,
@@ -56,7 +53,7 @@ class DeferredPartView extends StatefulWidget {
   /// Reloads the page; tests pass a recorder.
   final VoidCallback reload;
 
-  /// How long a download goes before Retry is offered beside it.
+  /// How long a download goes before Reload is offered.
   static const stallAfter = Duration(seconds: 20);
 
   @override
@@ -104,7 +101,7 @@ class _DeferredPartViewState extends State<DeferredPartView> {
 
   void _retry() {
     setState(() => _failed = _stalled = false);
-    _load(widget.part.retry());
+    _load(widget.part.load());
   }
 
   @override
@@ -130,8 +127,8 @@ class _DeferredPartViewState extends State<DeferredPartView> {
     } else if (_stalled) {
       shown = _Problem(
         title: 'Still loading this part of Harness',
-        detail: 'Check the connection, then retry.',
-        onRetry: _retry,
+        detail: 'Check the connection, then reload the page.',
+        onReload: widget.reload,
       );
     } else {
       shown = const _Loading();
@@ -169,19 +166,18 @@ class _Loading extends StatelessWidget {
   );
 }
 
-/// What went wrong in a sentence, and what to do: Retry, and Reload when a
-/// retry did not help.
+/// What went wrong in a sentence, and what to do: Retry, Reload, or both.
 class _Problem extends StatelessWidget {
   const _Problem({
     required this.title,
     required this.detail,
-    required this.onRetry,
+    this.onRetry,
     this.onReload,
   });
 
   final String title;
   final String detail;
-  final VoidCallback onRetry;
+  final VoidCallback? onRetry;
   final VoidCallback? onReload;
 
   @override
@@ -216,12 +212,13 @@ class _Problem extends StatelessWidget {
                 icon: const Icon(AppIcons.refreshCw, size: 14),
                 label: const Text('Reload'),
               ),
-            TextButton.icon(
-              style: buttonStyle,
-              onPressed: onRetry,
-              icon: const Icon(AppIcons.rotateCw, size: 14),
-              label: const Text('Retry'),
-            ),
+            if (onRetry case final retry?)
+              TextButton.icon(
+                style: buttonStyle,
+                onPressed: retry,
+                icon: const Icon(AppIcons.rotateCw, size: 14),
+                label: const Text('Retry'),
+              ),
           ],
         ),
       ],
