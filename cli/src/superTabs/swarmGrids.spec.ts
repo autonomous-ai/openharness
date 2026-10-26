@@ -78,6 +78,28 @@ describe('the owner\'s Swarm grids', () => {
     f.later(); await f.grids.tick()
     expect(f.request).toHaveBeenCalledTimes(2)
   })
+  it('leaves a grid another of the owner\'s computers keeps ready alone, when this one cannot set grid up', async () => {
+    const failed = { ready: false, error: 'Grid could not be set up on this computer. Try again.' }
+    const f = fixture([row({ ready: true })], async () => failed)
+    await f.grids.tick()
+    expect(f.request).toHaveBeenCalledOnce()
+    expect(f.posts()).toEqual([])
+    // Not asked again each minute while the other computer keeps it ready.
+    f.later(); await f.grids.tick()
+    expect(f.request).toHaveBeenCalledOnce()
+    // Once the Swarm shows it failed (the other computer could not either), this one tries and says so.
+    f.backend.mockImplementation((async (_c: unknown, method: string) => method === 'GET' ? [row({ ready: false })] : {}) as never)
+    f.later(); await f.grids.tick()
+    expect(f.posts()).toEqual([['/api/super-tabs/tab1/commands', { operationId: 'grid-id1', command: { type: 'localModels.status', grid: GRID, ...failed } }]])
+  })
+  it('still reports a failure on a grid it kept ready itself', async () => {
+    const f = fixture([row()])
+    await f.grids.tick()
+    f.request.mockResolvedValueOnce({ ready: false, error: 'grid is down' })
+    f.backend.mockImplementation((async (_c: unknown, method: string) => method === 'GET' ? [row({ ready: true, members: ['c@example.com'] })] : {}) as never)
+    f.later(); await f.grids.tick()
+    expect(f.posts()[1]![1]).toMatchObject({ command: { ready: false, error: 'grid is down' } })
+  })
   it('does not ask grid again about a refusal only the person can change, until the Swarm\'s people change', async () => {
     const f = fixture([row()], async () => ({ ready: false, error: 'Free plan allows one network', final: true }))
     await f.grids.tick()

@@ -53,8 +53,9 @@ export class SwarmGrids {
         const signature = JSON.stringify([row.grid, members])
         const last = this.synced.get(String(row.tabId))
         // A final refusal is left alone while the Swarm still shows it; turning the add-on off and on clears what the
-        // Swarm shows, even between two passes, and that asks again.
-        if (last?.signature === signature && (last.ready ? row.ready === true : last.final && row.ready === false)) continue
+        // Swarm shows, even between two passes, and that asks again. A grid ready is left alone too when this computer
+        // could not make it: another of the owner's computers keeps it.
+        if (last?.signature === signature && (row.ready === true || (last.final && row.ready === false))) continue
         local ??= await this.deps.open({ dataDir: this.core.dataDir, port: this.core.daemon.port, machineId: this.machineId })
         const result = object(await local.request('grid_swarm_sync', { grid: row.grid, members }, 180_000)
           .catch((error: unknown) => ({ ready: false, error: error instanceof Error ? error.message : 'The grid could not be reached.' })))
@@ -63,6 +64,10 @@ export class SwarmGrids {
         // A refusal only the person can change (grid's plan limit) is not asked again every minute: only once the
         // Swarm's people change, or the owner turns the add-on off and on.
         this.synced.set(String(row.tabId), { signature, ready, final: result.final === true })
+        // Every computer signed in as the owner keeps the owner's grids. One that cannot (grid not set up on it) must not
+        // undo another's ready: each would answer the other every minute, and the Swarm flip between ready and failed. One
+        // that kept the grid ready itself still reports its failure.
+        if (!ready && row.ready === true && !last?.ready) continue
         await this.deps.backend(this.core, 'POST', `/api/super-tabs/${row.tabId}/commands`, { operationId: `grid-${this.deps.newId()}`,
           command: { type: 'localModels.status', grid: row.grid, ready, ...(error ? { error } : {}) } })
       }
