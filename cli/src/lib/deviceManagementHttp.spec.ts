@@ -14,8 +14,34 @@ function fixture() {
     addonState: vi.fn().mockReturnValue({ devices: [] }),
     addonPropose: vi.fn().mockReturnValue({ proposal: { proposalId: 'p' } }),
     addonProposal: vi.fn().mockReturnValue({ proposal: null }),
+    machineAddonHello: vi.fn().mockReturnValue({ topics: 0 }),
+    machineAddonPublish: vi.fn().mockReturnValue({ topics: 1 }),
+    machineAddonDecision: vi.fn().mockReturnValue({ proposalId: 'p', state: 'kept' }),
+    machineAddonProposals: vi.fn().mockResolvedValue({ proposals: [], next: 0 }),
   } satisfies AutonomousDeviceManagement
 }
+
+describe('the device that is this machine: its own add-on service', () => {
+  it('takes a hello, a publish, a decision and a take of its proposals, and nothing else in their bodies or queries', async () => {
+    const service = fixture()
+    expect(await autonomousDeviceLocalRequest(service, 'POST', '/api/autonomous-device/machine-addon/hello')).toEqual({ status: 200, body: { topics: 0 } })
+    const values = [{ topic: 'voice/state', value: { state: 'listening' } }]
+    expect((await autonomousDeviceLocalRequest(service, 'POST', '/api/autonomous-device/machine-addon/publish', { values })).status).toBe(200)
+    expect(service.machineAddonPublish).toHaveBeenCalledWith({ values })
+    expect((await autonomousDeviceLocalRequest(service, 'POST', '/api/autonomous-device/machine-addon/publish', { values, extra: 1 })).status).toBe(400)
+    expect((await autonomousDeviceLocalRequest(service, 'POST', '/api/autonomous-device/machine-addon/decision', { proposalId: 'p', decision: 'kept', reason: 'quiet' })).status).toBe(200)
+    expect(service.machineAddonDecision).toHaveBeenCalledWith({ proposalId: 'p', decision: 'kept', reason: 'quiet' })
+    expect((await autonomousDeviceLocalRequest(service, 'POST', '/api/autonomous-device/machine-addon/decision', { proposalId: 'p', decision: 'kept', who: 'x' })).status).toBe(400)
+    expect(await autonomousDeviceLocalRequest(service, 'GET', '/api/autonomous-device/machine-addon/proposals?after=3&waitMs=20000')).toEqual({ status: 200, body: { proposals: [], next: 0 } })
+    expect(service.machineAddonProposals).toHaveBeenLastCalledWith({ after: 3, waitMs: 20000 })
+    await autonomousDeviceLocalRequest(service, 'GET', '/api/autonomous-device/machine-addon/proposals')
+    expect(service.machineAddonProposals).toHaveBeenLastCalledWith({ after: 0, waitMs: 0 })
+    for (const query of ['?after=-1', '?after=1&after=2', '?waitMs=123456', '?other=1']) {
+      expect((await autonomousDeviceLocalRequest(service, 'GET', `/api/autonomous-device/machine-addon/proposals${query}`)).status).toBe(400)
+    }
+    expect((await autonomousDeviceLocalRequest(service, 'POST', '/api/autonomous-device/machine-addon/hello', { x: 1 })).status).toBe(400)
+  })
+})
 
 describe('device local management validation', () => {
   it('passes the human-entered device code and returns service data without an extra envelope', async () => {

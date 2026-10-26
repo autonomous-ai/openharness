@@ -616,6 +616,9 @@ export interface Asker {
   accountOwner?: boolean
   /** A guest's session (RemoteClient.guest): the account it is shared with. Never `owner`. */
   guest?: string
+  /** Another of the owner's machines, when the request came over that machine's own link: its id as its pairing
+   *  record holds it, and the label it was paired under. Set by the core from the gateway's record, never the payload. */
+  machine?: { machineId: string; label: string | null }
   /** The connection it came over (a window's, a remote client's), as the core names it, and the id it
    *  asked under: what a service keys work by that belongs to one connection (the Model Manager's grid
    *  commands, which a cancel on the same connection stops; a limit on how many at once per connection).
@@ -708,6 +711,9 @@ export const SHARED_MACHINES_OFF: SharedMachinesCorePort = { guestLaunch: async 
 /** A Harness OS computer managed from the owner's phone: whether it runs Harness OS, its update, and its Wi-Fi,
  *  in the edge host (services/osDevice.ts). */
 export const OS_DEVICE_REQUESTS = ['os_device'] as const
+/** Add-ons for a device that is this Harness machine (lib/autonomous-device/machineAddons.ts): the owner's machines
+ *  read what it published and propose to it, each proposal stamped with the machine it came from. */
+export const MACHINE_ADDON_REQUESTS = ['machine_addon'] as const
 /**
  * Models (services/models.ts).
  *
@@ -1453,6 +1459,8 @@ export interface RemoteClient {
   label: string | null
   identity: string
   direct: boolean
+  /** The machine this session's identity was paired as, when it is one of the owner's machines (`kind: 'machine'`). */
+  machineId?: string
 }
 
 /** How a remote client's frame arrived: the backend's relay, or a paired client's own P2P channel. */

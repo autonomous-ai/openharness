@@ -76,9 +76,12 @@ export const AddonProposeSchema = z.strictObject({
 export type AddonPropose = z.infer<typeof AddonProposeSchema>
 
 export type ProposalState = 'sent' | 'kept' | 'dropped' | 'expired'
+/** The machine a proposal came from, as the link that carried it proves it (Asker.machine), never as its payload says. */
+export interface ProposalSource { machineId: string; label: string | null }
 export interface AddonProposal {
   proposalId: string; deviceId: string; addon: string; idempotencyKey: string
   act: string; why?: string; sure?: number; holdsMs: number; params?: Record<string, unknown>; note?: string
+  from?: ProposalSource
   state: ProposalState; reason: string | null; sentAt: number; expiresAt: number; decidedAt: number | null
 }
 export interface AddonTopicValue { value: Record<string, unknown>; at: number | null; receivedAt: number }
@@ -146,8 +149,9 @@ export class DeviceAddons {
     return { proposalId, state: p.state }
   }
 
-  /** An agent's proposal: validated, rate-limited, then sent to the device's links. */
-  propose(input: unknown): AddonProposal {
+  /** An agent's proposal: validated, rate-limited, then sent to the device's links, with the machine it came
+   *  from when the caller proved one. */
+  propose(input: unknown, from?: ProposalSource): AddonProposal {
     const parsed = AddonProposeSchema.safeParse(input)
     if (!parsed.success) fail('INVALID_REQUEST', parsed.error.issues[0]?.message ?? 'Invalid proposal')
     const req = parsed.data!
@@ -158,7 +162,7 @@ export class DeviceAddons {
     const digest = createHash('sha256').update(canonical(intent)).digest('hex')
     for (const existing of this.proposals.values()) {
       if (existing.addon !== req.addon || existing.idempotencyKey !== req.idempotencyKey) continue
-      if (existing.digest !== digest || (req.deviceId && req.deviceId !== existing.deviceId)) fail('IDEMPOTENCY_CONFLICT', 'Key already belongs to a different proposal')
+      if (existing.digest !== digest || (req.deviceId && req.deviceId !== existing.deviceId) || existing.from?.machineId !== from?.machineId) fail('IDEMPOTENCY_CONFLICT', 'Key already belongs to a different proposal')
       return this.view(existing)
     }
     const deviceId = this.target(req.deviceId)
@@ -173,6 +177,7 @@ export class DeviceAddons {
     const proposal = { proposalId: randomUUID(), deviceId, addon: req.addon, idempotencyKey: req.idempotencyKey, act: req.act,
       ...(req.why ? { why: req.why } : {}), ...(req.sure !== undefined ? { sure: req.sure } : {}), holdsMs: req.holdsMs,
       ...(req.params ? { params: structuredClone(req.params) } : {}), ...(req.note ? { note: req.note } : {}),
+      ...(from ? { from: { machineId: from.machineId, label: from.label } } : {}),
       state: 'sent' as ProposalState, reason: null, sentAt: now, expiresAt: now + req.holdsMs, decidedAt: null, digest }
     this.proposals.set(proposal.proposalId, proposal)
     const { deviceId: _d, idempotencyKey: _i, state: _s, reason: _r, sentAt: _t, decidedAt: _a, digest: _g, ...payload } = proposal

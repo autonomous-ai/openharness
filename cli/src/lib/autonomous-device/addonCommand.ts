@@ -1,12 +1,39 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { readHookCredential } from '../hookAuth.js'
 import { outsideCaller } from '../../agentClient/model.js'
+import { WebSocket } from 'ws'
+import { deviceRequest } from '../../devices/client.js'
+import { localCredentialHeaders } from '../localCredential.js'
 
 const USAGE = 'Usage: harness autonomous-device addon state [--device <id>]'
   + ' | addon propose --act <act> --holds-ms <ms> [--why <why>] [--sure <0..1>] [--params <json>] [--note <text>] [--addon <name>] [--key <key>] [--device <id>]'
-  + ' | addon proposal <proposalId> [--json]. To retry a propose that got no answer, pass the same --key, which it prints.'
+  + ' | addon proposal <proposalId> [--json]. --machine <name> instead of --device: a device that is one of your Harness machines.'
+  + ' To retry a propose that got no answer, pass the same --key, which it prints.'
 
-const VALUE_FLAGS = new Set(['--device', '--act', '--holds-ms', '--why', '--sure', '--params', '--note', '--addon', '--key'])
+const VALUE_FLAGS = new Set(['--device', '--machine', '--act', '--holds-ms', '--why', '--sure', '--params', '--note', '--addon', '--key'])
+
+/** Asks another of the owner's machines (`machine_addon`, lib/autonomous-device/machineAddons.ts): its answer, or a throw. */
+export type MachineAsk = (machine: string, op: string, input: Record<string, unknown>) => Promise<Record<string, unknown>>
+
+/** The owner's machine `--machine` names, by id or name (case-blind), as this daemon lists the account's machines. */
+async function machineIdOf(word: string, dataDir: string, port: number): Promise<string> {
+  const response = await fetch(`http://127.0.0.1:${port}/api/machines`, {
+    headers: { 'x-adapter-local': '1', ...localCredentialHeaders(dataDir) }, signal: AbortSignal.timeout(8000) })
+  if (!response.ok) throw Object.assign(new Error('Could not read the account\'s machines. Sign in and try again.'), { code: 'MACHINES_UNAVAILABLE' })
+  const body = await response.json() as { data?: { machines?: Record<string, unknown>[] }; machines?: Record<string, unknown>[] }
+  const rows = (body.data?.machines ?? body.machines ?? []).filter(row => typeof row.machineId === 'string' && !row.isShared)
+  const lower = word.toLowerCase()
+  const found = rows.find(row => row.machineId === word)
+    ?? rows.find(row => [row.name, row.hostname].some(name => typeof name === 'string' && name.toLowerCase() === lower))
+  if (!found) throw Object.assign(new Error(`None of your machines is called ${word}.`), { code: 'MACHINE_NOT_FOUND' })
+  return found.machineId as string
+}
+
+const askMachine = (dataDir: string, port: number): MachineAsk => async (machine, op, input) => {
+  const machineId = await machineIdOf(machine, dataDir, port)
+  return deviceRequest({ port, dataDir, machineId: async () => null, connect: (url, headers) => new WebSocket(url, { headers }) },
+    machineId, 'machine_addon', { op, input })
+}
 
 /**
  * The add-on's name a device is told: `--addon`, or the agent whose shell runs this, as its engine and a short
@@ -27,7 +54,8 @@ const SURE = /^(0(\.\d{1,6})?|1(\.0{1,6})?|\.\d{1,6})$/
 const WHOLE = /^\d{1,6}$/
 
 /** `harness autonomous-device addon …`: read what paired devices publish, or propose to one. */
-export async function runAddonCommand(argv: string[], dataDir: string, port: number, env: NodeJS.ProcessEnv = process.env): Promise<number> {
+export async function runAddonCommand(argv: string[], dataDir: string, port: number, env: NodeJS.ProcessEnv = process.env,
+  ask: MachineAsk = askMachine(dataDir, port)): Promise<number> {
   const json = argv.includes('--json'), args: string[] = [], flags = new Map<string, string>()
   let invalid = false
   for (let i = 0; i < argv.length; i++) {
@@ -42,8 +70,9 @@ export async function runAddonCommand(argv: string[], dataDir: string, port: num
   const print = (value: unknown) => console.log(JSON.stringify(value, null, json ? undefined : 2))
   const usage = (message = USAGE) => { print({ error: { code: 'INVALID_ARGUMENT', message } }); return 1 }
   const verb = args[0]
-  const allowed = verb === 'state' ? ['--device'] : verb === 'proposal' ? [] : verb === 'propose' ? [...VALUE_FLAGS] : null
+  const allowed = verb === 'state' ? ['--device', '--machine'] : verb === 'proposal' ? ['--machine'] : verb === 'propose' ? [...VALUE_FLAGS] : null
   if (invalid || !allowed || [...flags.keys()].some(f => !allowed.includes(f)) || args.length !== (verb === 'proposal' ? 2 : 1)) return usage()
+  if (flags.has('--machine') && flags.has('--device')) return usage('Name a paired device with --device, or a machine with --machine, not both')
 
   let path: string, method = 'GET', body: Record<string, unknown> | undefined
   if (verb === 'state') {
@@ -70,6 +99,26 @@ export async function runAddonCommand(argv: string[], dataDir: string, port: num
       ...(params !== undefined ? { params } : {}), ...(flags.has('--note') ? { note: flags.get('--note') } : {}),
       ...(flags.has('--device') ? { deviceId: flags.get('--device') } : {}) }
     path = 'addon/propose'; method = 'POST'
+  }
+  const machine = flags.get('--machine')
+  if (machine) {
+    const input = verb === 'proposal' ? { proposalId: args[1] } : verb === 'state' ? {} : body!
+    try {
+      const answer = await ask(machine, verb, input)
+      const error = answer.error as { code?: unknown } | string | undefined
+      if (error !== undefined) {
+        // An older machine answers a bare code; this one says what went wrong.
+        print({ error: typeof error === 'string' ? { code: error, message: error } : error, ...(body ? { idempotencyKey: body.idempotencyKey } : {}) })
+        return 1
+      }
+      print(answer.result ?? answer)
+      return 0
+    } catch (error) {
+      const code = (error as { code?: unknown }).code
+      print({ error: { code: typeof code === 'string' ? code : 'OUTCOME_UNKNOWN', message: error instanceof Error ? error.message : String(error) },
+        ...(body ? { idempotencyKey: body.idempotencyKey } : {}) })
+      return 1
+    }
   }
   const credential = readHookCredential(dataDir)
   if (!credential) { print({ error: { code: 'DAEMON_UNAVAILABLE', message: 'Start Harness with harness start first.' } }); return 1 }

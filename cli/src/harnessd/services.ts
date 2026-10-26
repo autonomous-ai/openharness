@@ -397,8 +397,9 @@ export const SERVICE_HOSTS: Readonly<Record<string, ServiceHostSpec>> = {
   // own as an experiment, 62 MiB resident at idle on every computer it was on, nearly all of it a second Node and
   // the bundle rather than messaging: here it costs the edge host about 1 MiB on, and 0.4 MiB off
   // (e2e/footprint.e2e.ts, 2026-10-12). The Harness OS computer's management (services/osDevice.ts) holds one
-  // timestamp and runs its commands bounded, or detached when they must outlive this process.
-  edge: { services: ['workspaces', 'usage', 'monitor', 'projects', 'handoff', 'recaps', 'windowNames', 'shell', 'connectors', 'sharedMachines', 'agentCleanup', 'messages', 'osDevice'], heapLimitMiB: 384, rssLimitMiB: 768 },
+  // timestamp and runs its commands bounded, or detached when they must outlive this process. The add-ons of a device
+  // that is this machine (services/machineAddons.ts) hold what it published, at most 32 topics of 4 KiB, and 256 proposals.
+  edge: { services: ['workspaces', 'usage', 'monitor', 'projects', 'handoff', 'recaps', 'windowNames', 'shell', 'connectors', 'sharedMachines', 'agentCleanup', 'messages', 'osDevice', 'machineAddons'], heapLimitMiB: 384, rssLimitMiB: 768 },
   // The orchestrator (services/orchestratorProcess.ts), an experiment: started only once it is on, for a
   // saved project or a request (core/api.ts `EXPERIMENTS`). Its projects' files and the frames of their
   // Directors; the agents it runs are the core's.

@@ -1028,7 +1028,9 @@ export class BackendSocket {
     // A request a service answers, in its own process or in this one: routed to it, or answered
     // SERVICE_UNAVAILABLE while it is off. Never waited on in line: the next frame is not held for it.
     // Who asked is established here, after the gates above, and the service trusts only that.
-    const asker: Asker = { local, owner, ...(!local ? { accountOwner: this.remoteClient(connId)?.accountOwner === true } : {}),
+    const client = local ? null : this.remoteClient(connId)
+    const asker: Asker = { local, owner, ...(!local ? { accountOwner: client?.accountOwner === true } : {}),
+      ...(client?.machineId ? { machine: { machineId: client.machineId, label: client.label } } : {}),
       ...(guest !== undefined ? { guest } : {}),
       connection: connId, ...(typeof requestId === 'string' ? { requestId } : {}) }
     // A window that draws row state asks for the models list with `rowState`, and the list's changes are

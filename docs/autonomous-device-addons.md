@@ -159,6 +159,48 @@ most once. A read with no answer is `UNAVAILABLE` (503).
 `RATE_LIMITED` 429, `BACKPRESSURE` 429, `UNAVAILABLE` 503 when the Wi-Fi device service is not running,
 `OUTCOME_UNKNOWN` 504 for a propose with no answer in time.
 
+## A device that is a Harness machine
+
+Some devices run Harness themselves: the lampOS V2 lamp is a signed-in Harness machine on its person's
+account, so it has no paired device channel to publish on (openharness#1654). Its add-ons go through its
+own daemon instead. The contract, bounds, rates and lifetimes are the ones above; two things are added.
+
+**The device's own service**, a process of the same OS user on that machine, uses the credential-checked
+loopback routes, like the other `autonomous-device` routes:
+
+| Route | Input / result |
+|---|---|
+| POST `/api/autonomous-device/machine-addon/hello` | `{}` → `{topics:0}`: what it published before is cleared, as a device's hello clears it. Send it at start |
+| POST `/api/autonomous-device/machine-addon/publish` | `{values}`, as `addon.publish` takes them → `{topics}` |
+| POST `/api/autonomous-device/machine-addon/decision` | `{proposalId,decision,reason?}`, as `addon.decision` → `{proposalId,state}` |
+| GET `/api/autonomous-device/machine-addon/proposals?after=<seq>&waitMs=<ms>` | `{proposals:[{seq,proposal}],next,reset?}` |
+
+`proposals` is the device's inbox in place of the `addon.proposal` event: the proposals after `after`, each
+as the event's payload with its `seq`, and `next` for the next take. With none, it waits up to `waitMs`
+(at most 20 s) for one. The inbox keeps the last 32. A cursor ahead of the inbox (the daemon restarted)
+reads from the start and says `reset: true`.
+
+**Agents** on the owner's other machines reach the device over the existing machine link, as the
+sealed `machine_addon` request (`{op:"state"|"propose"|"proposal",input}`), and the CLI takes
+`--machine` for it:
+
+```sh
+harness autonomous-device addon state --machine lamp-4ace --json
+harness autonomous-device addon propose --machine lamp-4ace --act say --holds-ms 30000 --note '…' --json
+harness autonomous-device addon proposal <proposalId> --machine lamp-4ace --json
+```
+
+- **Only the owner's machines.** A guest, a device, an observer, or a session that isn't the account's
+  own is refused `OWNER_REQUIRED`. The device's service routes are for a process on that machine alone
+  (`LOCAL_ONLY` over the link).
+- **Each proposal says the machine it came from:** `from: {machineId, label}`, taken from the pairing
+  record of the link that carried it (`Asker.machine`), never from the payload, which may not carry one.
+  A device can then ask its person's yes per computer. The owner's phone or browser may read `state`, but a
+  proposal needs a machine (`MACHINE_REQUIRED`). An agent on the device itself proposes as that machine.
+- **A machine reads back its own proposals alone.** Another machine's reads as `PROPOSAL_UNKNOWN`.
+- A proposal's target is always the device that is that machine: `deviceId` in the input is ignored.
+- It runs in the edge host (`services/machineAddons.ts`), in RAM, and a daemon restart forgets it all.
+
 ## Lifetime
 
 - A device's link closing marks it `online: false`: its values stay readable, and nothing is
@@ -173,7 +215,8 @@ most once. A read with no answer is `UNAVAILABLE` (503).
 `service.ts` advertises and routes the two requests; `services/wifi.ts`, `core/wifiLink.ts` and
 `services/wifiProcess.ts` carry the agent-facing operation across the service process boundary as
 `harness device receipt` is carried; `lib/deviceManagementHttp.ts` validates the routes;
-`addonCommand.ts` is the CLI. Unit tests cover each layer; `services/wifi.spec.ts` runs the real
+`addonCommand.ts` is the CLI. A device that is a Harness machine: `machineAddons.ts` beside them, served by
+`services/machineAddons.ts`. Unit tests cover each layer; `services/wifi.spec.ts` runs the real
 service and relay end to end with a fake core (publish, state, a proposal sealed to that device, its
 decision, unpairing). Not shown: a physical device. No device implements it yet.
 
