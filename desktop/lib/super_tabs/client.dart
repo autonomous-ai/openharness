@@ -112,6 +112,17 @@ class SuperTabClient {
     unawaited(_views.claim(_account).catchError((Object _) {}));
   }
 
+  /// Settings' Clear now: the views this device keeps go, and none waiting
+  /// for its 15 s turn is written after. A Swarm is kept again once what it
+  /// shows changes.
+  Future<void> clearSavedViews() {
+    for (final timer in _viewSaves.values) {
+      timer.cancel();
+    }
+    _viewSaves.clear();
+    return _views.clear(_account);
+  }
+
   /// How often a Swarm's view may be written while it keeps changing: each
   /// write is a few hundred KB into the browser's storage.
   static const _viewSaveEvery = Duration(seconds: 15);

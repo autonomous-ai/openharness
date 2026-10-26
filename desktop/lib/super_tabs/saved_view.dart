@@ -145,6 +145,16 @@ class SuperTabSavedViews {
     await storage.delete(_index(account));
   }
 
+  /// Clear now: every view this device keeps, for [account] and for any
+  /// account that used it before and was not forgotten yet. Whose device it
+  /// is stays as it was, so the Swarms [account] opens next are kept again.
+  Future<void> clear(String? account) => _serial(() async {
+    final owner = await storage.read(_owner);
+    for (final kept in {owner, account}.whereType<String>()) {
+      await _forgetAccount(kept);
+    }
+  });
+
   /// [account] (null when signed out) is the one using this device now: the
   /// views of any other account that used it, before a reload too, go.
   Future<void> claim(String? account) => _serial(() async {
