@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:clock/clock.dart';
+import 'package:flutter/foundation.dart';
 
 import '../core/local_key_value_store.dart';
 import 'attachment_upload.dart';
@@ -112,6 +113,11 @@ class SuperTabClient {
     unawaited(_views.claim(_account).catchError((Object _) {}));
   }
 
+  /// Moves each time a Swarm's view is kept on this device: Settings' Clear
+  /// now stops saying Cleared once one is kept again.
+  ValueListenable<int> get viewsKept => _viewsKept;
+  final _viewsKept = ValueNotifier(0);
+
   /// Settings' Clear now: the views this device keeps go, and none waiting
   /// for its 15 s turn is written after. A Swarm is kept again once what it
   /// shows changes.
@@ -149,7 +155,14 @@ class SuperTabClient {
     if (account == null || view == null) return;
     _viewSavedAt[id] = clock.now();
     _viewVersions[id] = controller!.viewVersion;
-    unawaited(_views.write(account, id, view).catchError((Object _) {}));
+    unawaited(
+      _views
+          .write(account, id, view)
+          .then((kept) {
+            if (kept) _viewsKept.value++;
+          })
+          .catchError((Object _) {}),
+    );
   }
 
   void _applyAway() {

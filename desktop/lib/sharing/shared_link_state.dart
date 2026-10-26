@@ -9,8 +9,12 @@ enum SharedLinkProblem {
   /// The link lost its owner key: copied short, or cut off in a message.
   incomplete,
 
-  /// A private link, and nobody is signed in.
-  private,
+  /// Nobody is signed in, and the server wants someone: a private link, or
+  /// one that is gone. It answers both alike, so the page only asks.
+  signIn,
+
+  /// Signed in, and the server took no session: it ended.
+  signInEnded,
 
   /// Signed in, and the server refused: expired, turned off, or shared with
   /// another email. It answers all three alike, so the page does too.
@@ -106,10 +110,15 @@ class SharedLinkState extends StatelessWidget {
       'This shared link is incomplete',
       'Ask the owner to copy the whole link again.',
     ),
-    SharedLinkProblem.private => (
+    SharedLinkProblem.signIn => (
       AppIcons.lock,
-      'This shared harness is private',
-      'Sign in with the email it was shared with.',
+      'Sign in to open this shared harness',
+      'If it was shared with you, sign in with that email.',
+    ),
+    SharedLinkProblem.signInEnded => (
+      AppIcons.lock,
+      'Your sign-in has ended',
+      'Sign in again to open this shared harness.',
     ),
     SharedLinkProblem.refused => (
       AppIcons.lock,
@@ -146,13 +155,8 @@ class SharedLinkState extends StatelessWidget {
         _filled('Open Harness', onOpenHarness),
         null,
       ),
-      SharedLinkProblem.private => (
-        _filled(
-          signingIn ? 'Signing in…' : 'Sign in',
-          signingIn ? null : onSignIn,
-        ),
-        null,
-      ),
+      SharedLinkProblem.signIn => (_signInButton('Sign in'), null),
+      SharedLinkProblem.signInEnded => (_signInButton('Sign in again'), null),
       SharedLinkProblem.refused => (
         _filled('Switch account', onSwitchAccount),
         openHarness,
@@ -162,6 +166,9 @@ class SharedLinkState extends StatelessWidget {
       SharedLinkProblem.paused => (_filled('Watch again', onRetry), null),
     };
   }
+
+  Widget _signInButton(String label) =>
+      _filled(signingIn ? 'Signing in…' : label, signingIn ? null : onSignIn);
 
   // Padded: a thumb's target on a phone, whatever the button draws.
   static const _padded = ButtonStyle(

@@ -140,9 +140,7 @@ class _ShareHarnessDialogState extends State<ShareHarnessDialog> {
   void _accept(Map<String, dynamic> response) {
     final removable = _removable;
     final recipientId =
-        _row == _ShareRow.people &&
-            _choice >= 2 &&
-            _choice - 2 < removable.length
+        _row == _ShareRow.people && _choice >= 2 && _choice - 2 < removable.length
         ? removable[_choice - 2]['id']
         : null;
     _collaboration = !widget.tabMode && response['collaboration'] == true;
@@ -154,9 +152,7 @@ class _ShareHarnessDialogState extends State<ShareHarnessDialog> {
         Map<String, dynamic>.from(row as Map),
     ];
     if (recipientId != null) {
-      final index = _removable.indexWhere(
-        (share) => share['id'] == recipientId,
-      );
+      final index = _removable.indexWhere((share) => share['id'] == recipientId);
       _choice = index < 0 ? 0 : index + 2;
       if (_picking && index < 0) _focusPane();
     }
@@ -200,8 +196,7 @@ class _ShareHarnessDialogState extends State<ShareHarnessDialog> {
         emails.length > most ||
         emails.any((e) => !RegExp(r'^[^@\s]+@[^@\s]+\.[^@\s]+$').hasMatch(e))) {
       setState(() {
-        _error =
-            'Enter up to $most valid email addresses, separated by commas.';
+        _error = 'Enter up to $most valid email addresses, separated by commas.';
         _notice = null;
       });
       return;
@@ -893,9 +888,7 @@ class _ShareHarnessDialogState extends State<ShareHarnessDialog> {
           children: [
             Expanded(
               child: Text(
-                widget.tabMode
-                    ? 'People you invite see a notice in Harness.'
-                    : 'Keep your machine online.',
+                widget.tabMode ? 'People you invite see a notice in Harness.' : 'Keep your machine online.',
                 style: DesktopChrome.metadata(),
               ),
             ),

@@ -158,14 +158,19 @@ class _SharedAgentPageState extends State<SharedAgentPage> {
     _problem = problem;
   });
 
-  Future<void> _load() async {
+  /// Reads the link. [quietly] keeps the page as it is until the answer
+  /// differs: the offline page's own re-read neither flashes Opening nor
+  /// says its state again.
+  Future<void> _load({bool quietly = false}) async {
     _offlineRetry?.cancel();
     final revision = ++_revision;
-    setState(() {
-      _loading = true;
-      _data = null;
-      _problem = null;
-    });
+    if (!quietly) {
+      setState(() {
+        _loading = true;
+        _data = null;
+        _problem = null;
+      });
+    }
     final key = widget.location.ownerKey;
     if (key == null || !RegExp(r'^[A-Za-z0-9+/]{43}=$').hasMatch(key)) {
       // Nothing to ask the server: only a whole link can open.
@@ -188,13 +193,15 @@ class _SharedAgentPageState extends State<SharedAgentPage> {
       final status = response.statusCode;
       if (status == 401 || status == 403 || status == 404) {
         _countOpen(status == 401 ? SharedOpen.private : SharedOpen.noAccess);
-        // Signed in already, a refusal is never a reason to sign in again:
+        // A refusal to someone signed in is never a reason to sign in again:
         // that would send the reader round the sign-in for the same answer.
-        _show(
-          status == 401 && !_signedIn
-              ? SharedLinkProblem.private
-              : SharedLinkProblem.refused,
-        );
+        // A 401 is not a refusal: the server took no session at all, and a
+        // fresh sign-in gets the link or a refusal, so it cannot loop.
+        _show(switch ((status, _signedIn)) {
+          (401, false) => SharedLinkProblem.signIn,
+          (401, true) => SharedLinkProblem.signInEnded,
+          _ => SharedLinkProblem.refused,
+        });
         return;
       }
       if (status != 200) throw StateError('shared link read: $status');
@@ -209,7 +216,7 @@ class _SharedAgentPageState extends State<SharedAgentPage> {
         _show(SharedLinkProblem.offline);
         _offlineRetry = Timer(
           const Duration(seconds: 10),
-          () => unawaited(_load()),
+          () => unawaited(_load(quietly: true)),
         );
         return;
       }

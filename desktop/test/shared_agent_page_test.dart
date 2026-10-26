@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:ui' as ui;
@@ -8,6 +9,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/auth/auth_session.dart';
+import 'package:harness/auth/sign_in_provider.dart';
 import 'package:harness/core/config.dart';
 import 'package:harness/measurement/hub_usage.dart';
 import 'package:harness/sharing/shared_agent_location.dart';
@@ -23,23 +25,36 @@ import 'package:url_launcher/link.dart';
 
 import 'support/real_fonts.dart';
 
+/// Counts sign-ins instead of starting one.
+class _App extends AppNotifier {
+  _App()
+    : super(
+        config: AppConfig.dev,
+        authSession: AuthSession(),
+        configStore: null,
+      );
+
+  int logins = 0;
+  @override
+  Future<void> login([SignInProvider? provider]) async => logins++;
+}
+
 void main() {
   setUpAll(loadRealFonts);
   const id = '11111111-1111-4111-8111-111111111111';
   final key = base64Encode(List.filled(32, 1));
-  late AppNotifier app;
+  late _App app;
   late Dio dio;
+  // While set, the next read waits for it: a slow answer.
+  Completer<void>? hold;
   late List<RequestOptions> requests;
   late int status;
   late Map<String, dynamic> metadata;
   late int harnessOpens;
 
   setUp(() {
-    app = AppNotifier(
-      config: AppConfig.dev,
-      authSession: AuthSession(),
-      configStore: null,
-    );
+    app = _App();
+    hold = null;
     requests = [];
     status = 200;
     metadata = {'ownerPublicKey': key, 'online': false};
@@ -47,8 +62,9 @@ void main() {
     dio = Dio()
       ..interceptors.add(
         InterceptorsWrapper(
-          onRequest: (request, handler) {
+          onRequest: (request, handler) async {
             requests.add(request);
+            if (hold case final wait?) await wait.future;
             handler.resolve(
               Response(
                 requestOptions: request,
@@ -209,26 +225,58 @@ void main() {
     await tester.pumpWidget(const SizedBox());
   });
 
-  testWidgets('a private link asks a signed-out visitor to sign in', (
+  testWidgets('a signed-out visitor is asked to sign in, not told why', (
     tester,
   ) async {
+    // A 401 to nobody signed in: private, or gone; the server says alike.
     status = 401;
     app.status = AppStatus.unauthenticated;
     await show(tester, pinnedKey: key);
-    expect(find.text('This shared harness is private'), findsOneWidget);
+    expect(find.text('Sign in to open this shared harness'), findsOneWidget);
     expect(
-      find.text('Sign in with the email it was shared with.'),
+      find.text('If it was shared with you, sign in with that email.'),
       findsOneWidget,
     );
+    expect(find.textContaining('private'), findsNothing);
     expect(find.byIcon(AppIcons.lock), findsOneWidget);
     expectThumbSized(tester, primary('Sign in'));
     expectNoRetry();
     expect(find.byType(SharedHarnessPanel), findsNothing);
+    await tester.tap(primary('Sign in'));
+    await tester.pump();
+    expect(app.logins, 1);
+    await tester.pumpWidget(const SizedBox());
+  });
+
+  testWidgets('a signed-in 401 says the sign-in ended, and signs in again', (
+    tester,
+  ) async {
+    // The server answers 401 only when it took no session at all.
+    status = 401;
+    app
+      ..status = AppStatus.authenticated
+      ..currentUser = const CurrentUserProfile(
+        name: 'Jamie',
+        email: 'jamie@example.test',
+      );
+    await show(tester, pinnedKey: key);
+    expect(find.text('Your sign-in has ended'), findsOneWidget);
+    expect(
+      find.text('Sign in again to open this shared harness.'),
+      findsOneWidget,
+    );
+    expect(find.textContaining('another email'), findsNothing);
+    expect(find.textContaining('an email other than'), findsNothing);
+    expectThumbSized(tester, primary('Sign in again'));
+    expectNoRetry();
+    await tester.tap(primary('Sign in again'));
+    await tester.pump();
+    expect(app.logins, 1);
     await tester.pumpWidget(const SizedBox());
   });
 
   group('a link refused to a signed-in reader', () {
-    for (final refusal in [403, 404, 401]) {
+    for (final refusal in [403, 404]) {
       testWidgets('($refusal) never asks to sign in again', (tester) async {
         status = refusal;
         app
@@ -272,6 +320,26 @@ void main() {
     await tester.tap(primary('Try again'));
     await tester.pump(const Duration(milliseconds: 50));
     expect(requests.length, 2);
+    await tester.pumpWidget(const SizedBox());
+  });
+
+  testWidgets('the offline page re-reads quietly, without Opening', (
+    tester,
+  ) async {
+    await show(tester, pinnedKey: key);
+    expect(find.text('The owner\u2019s computer is offline'), findsOneWidget);
+    hold = Completer<void>();
+    await tester.pump(const Duration(seconds: 10));
+    await tester.pump();
+    expect(requests.length, 2);
+    // Waiting on the second read, the page is as it was: nothing new to say.
+    expect(find.text('Opening shared harness…'), findsNothing);
+    expect(find.text('The owner\u2019s computer is offline'), findsOneWidget);
+    hold!.complete();
+    hold = null;
+    await tester.pump();
+    await tester.pump();
+    expect(find.text('The owner\u2019s computer is offline'), findsOneWidget);
     await tester.pumpWidget(const SizedBox());
   });
 
@@ -349,7 +417,10 @@ void main() {
             scale: scale,
           );
           await tester.pumpAndSettle();
-          expect(find.text('This shared harness is private'), findsOneWidget);
+          expect(
+            find.text('Sign in to open this shared harness'),
+            findsOneWidget,
+          );
           final signIn = find.widgetWithText(FilledButton, 'Sign in');
           await tester.ensureVisible(signIn);
           await tester.pumpAndSettle();
