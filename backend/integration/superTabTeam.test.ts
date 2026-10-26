@@ -12,6 +12,7 @@ import type { Command } from '../src/superTabs/commands.js'
 import type { ContributedMachine } from '../src/superTabs/machines.js'
 import * as parts from '../src/superTabs/parts/index.js'
 import type { SuperTabState } from '../src/superTabs/model.js'
+import { assignmentRows, poolRows, rosterRows } from './hostRows.test-support.js'
 
 // A team session (docs/plans/2026-10-24-swarm-team-account.md, Task 1) is the owner's account signed in on a second
 // macOS user of the owner's Mac. In a Swarm it may host its own machine and speak as the agents running there, and
@@ -71,7 +72,7 @@ async function fixture() {
   const personal = String((await run(tab, { type: 'agent.add', conversationId: personalGroup, machineId: 'personal-mac',
     harnessId: randomUUID(), name: 'Personal', configuration: config, lead: false }, person)).result.agentId)
   await run(tab, { type: 'machine.contribute', machineId: 'team-mac', name: 'MacBook Pro · Team', cwd: '/team', engines: ['codex'], maxAgents: 4 }, person)
-  const generation = (await store.hostPools(team, 'team-mac')).find(p => p.tabId === tab)!.machine.generation
+  const generation = (await poolRows(store, team, 'team-mac')).find(p => p.tabId === tab)!.machine.generation
   await store.observeMachine(team, tab, 'team-mac', reading(generation))
   const startId = String((await run(tab, { type: 'agent.start', request: { conversationId: teamGroup, machineId: 'team-mac', engine: 'codex',
     name: 'Builder', cwd: '/team', worktree: false, requirements } })).result.startId)
@@ -108,11 +109,11 @@ afterAll(async () => {
 describe('a team session hosting its own machine', () => {
   it('reads its pools, its agents\' rows, terminal requests and assignments, and reports its machine', async () => {
     const f = await fixture()
-    expect((await store.hostPools(team, 'team-mac')).map(p => p.tabId)).toContain(f.tab)
-    expect((await store.hostTabs(team, 'team-mac')).filter(r => r.tabId === f.tab).map(r => r.agent.id)).toEqual([f.builder])
+    expect((await poolRows(store, team, 'team-mac')).map(p => p.tabId)).toContain(f.tab)
+    expect((await rosterRows(store, team, 'team-mac')).filter(r => r.tabId === f.tab).map(r => r.agent.id)).toEqual([f.builder])
     expect(await store.hostTerminal(team, 'team-mac')).toEqual([])
     const assignmentId = String((await run(f.tab, { type: 'work.assign', conversationId: f.teamGroup, agentId: f.builder })).result.assignmentId)
-    expect(await store.hostAssignments(team, 'team-mac')).toContainEqual(expect.objectContaining({ tabId: f.tab, assignmentId }))
+    expect(await assignmentRows(store, team, 'team-mac')).toContainEqual(expect.objectContaining({ tabId: f.tab, assignmentId }))
     await store.observeMachine(team, f.tab, 'team-mac', reading(f.generation))
     // The reading is stamped with how the machine is signed in, from the session and never from the request.
     const pool = () => store.read(owner, f.tab).then(r => r.state.machines!.find(m => m.machineId === 'team-mac')!)
@@ -129,14 +130,14 @@ describe('a team session hosting its own machine', () => {
   it('never hosts the person\'s other machines', async () => {
     const f = await fixture()
     await run(f.tab, { type: 'machine.contribute', machineId: 'personal-mac', name: 'MacBook Pro', cwd: '/work', scope: 'swarm', engines: ['codex'], maxAgents: 2 }, person)
-    const generation = (await store.hostPools(person, 'personal-mac')).find(p => p.tabId === f.tab)!.machine.generation
+    const generation = (await poolRows(store, person, 'personal-mac')).find(p => p.tabId === f.tab)!.machine.generation
     await store.observeMachine(person, f.tab, 'personal-mac', reading(generation))
     const queued = String((await run(f.tab, { type: 'agent.start', request: { conversationId: f.personalGroup, machineId: 'personal-mac', engine: 'codex',
       name: 'Another', cwd: `/work/${f.own}`, worktree: false, requirements } }, person)).result.startId)
-    await expect(store.hostPools(team, 'personal-mac')).rejects.toMatchObject(LIMITED)
-    await expect(store.hostTabs(team, 'personal-mac')).rejects.toMatchObject(LIMITED)
+    await expect(poolRows(store, team, 'personal-mac')).rejects.toMatchObject(LIMITED)
+    await expect(rosterRows(store, team, 'personal-mac')).rejects.toMatchObject(LIMITED)
     await expect(store.hostTerminal(team, 'personal-mac')).rejects.toMatchObject(LIMITED)
-    await expect(store.hostAssignments(team, 'personal-mac')).rejects.toMatchObject(LIMITED)
+    await expect(assignmentRows(store, team, 'personal-mac')).rejects.toMatchObject(LIMITED)
     await expect(store.observeMachine(team, f.tab, 'personal-mac', reading(generation))).rejects.toMatchObject(LIMITED)
     await expect(store.start(team, f.tab, queued, undefined, 'personal-mac')).rejects.toMatchObject(LIMITED)
     await expect(hostRun(f.tab, { type: 'agent.startDispatch', startId: queued }, 'personal-mac')).rejects.toMatchObject(LIMITED)
@@ -148,7 +149,7 @@ describe('a team session hosting its own machine', () => {
     const f = await fixture()
     await db.machine.update({ where: { machineId: 'team-mac' }, data: { deletedAt: new Date() } })
     try {
-      await expect(store.hostTabs(team, 'team-mac')).rejects.toMatchObject(LIMITED)
+      await expect(rosterRows(store, team, 'team-mac')).rejects.toMatchObject(LIMITED)
       await expect(store.read(team, f.tab, f.builder)).rejects.toMatchObject(LIMITED)
     } finally { await db.machine.update({ where: { machineId: 'team-mac' }, data: { deletedAt: null } }) }
   })
@@ -299,7 +300,7 @@ describe('a teammate\'s work and the machines that take it', () => {
   /** The person's personal MacBook, contributed for every project, reporting from the person's own sign-in. */
   async function personalMac(f: Awaited<ReturnType<typeof fixture>>) {
     await run(f.tab, { type: 'machine.contribute', machineId: 'personal-mac', name: 'MacBook Pro', cwd: '/work', scope: 'swarm', engines: ['codex'], maxAgents: 2 }, person)
-    const generation = (await store.hostPools(person, 'personal-mac')).find(p => p.tabId === f.tab)!.machine.generation
+    const generation = (await poolRows(store, person, 'personal-mac')).find(p => p.tabId === f.tab)!.machine.generation
     await store.observeMachine(person, f.tab, 'personal-mac', reading(generation))
     return generation
   }
@@ -404,7 +405,7 @@ describe('a teammate\'s work and the machines that take it', () => {
     const failed = (await store.read(owner, f.tab)).state.starts!.find(s => s.id === queued)!
     expect(failed).toMatchObject({ dispatched: false, error: expect.stringContaining('is not private (gitconfig') })
     expect((await store.messages(owner, f.tab, f.teamGroup, {})).messages.at(-1)!.text).toMatch(/^Could not start Builder: The Harness Team account on MacBook Pro · Team is not private/)
-    expect((await store.hostPools(team, 'team-mac')).find(p => p.tabId === f.tab)!.starts.map(s => s.id)).not.toContain(queued)
+    expect((await poolRows(store, team, 'team-mac')).find(p => p.tabId === f.tab)!.starts.map(s => s.id)).not.toContain(queued)
     // A stale check may pass again by itself: that start keeps waiting for it.
     const passedAgain = { ...PASSED, checkedAt: Date.now() + 1 }
     await store.observeMachine(team, f.tab, 'team-mac', reading(f.generation, passedAgain))
@@ -441,8 +442,8 @@ describe('a teammate\'s work and the machines that take it', () => {
     await db.superTabRun.create({ data: { id: old, tabId: f.tab, assignmentId: 'assigned-before', machineId: 'personal-mac', harnessId: 'before-release' } })
 
     await store.observeMachine(person, f.tab, 'personal-mac', reading(generation))
-    expect((await store.hostTabs(person, 'personal-mac')).find(r => r.tabId === f.tab && r.agent.id === old)).toMatchObject({ stopRequested: false })
-    expect(await store.hostAssignments(person, 'personal-mac')).toContainEqual({ tabId: f.tab, assignmentId: 'assigned-before', harnessId: 'before-release' })
+    expect((await rosterRows(store, person, 'personal-mac')).find(r => r.tabId === f.tab && r.agent.id === old)).toMatchObject({ stopRequested: false })
+    expect(await assignmentRows(store, person, 'personal-mac')).toContainEqual({ tabId: f.tab, assignmentId: 'assigned-before', harnessId: 'before-release' })
     await run(f.tab, { type: 'work.status', conversationId: f.teamGroup, assignmentId: 'assigned-before', status: 'blocked', result: 'Needs a token.' }, person, old)
     await run(f.tab, { type: 'message.send', conversationId: f.teamGroup, text: 'Here it is.', replyTo: null, recipientIds: [old] })
     expect(await db.superTabDelivery.count({ where: { tabId: f.tab, agentId: old } })).toBeGreaterThan(0)
@@ -464,9 +465,9 @@ describe('one machine: a Mac and its Harness Team account', () => {
       await idle.execute(person, tab, { operationId: randomUUID(), command: { type: 'invite.accept', inviteId: invitation.result.inviteId as string } })
       await idle.execute(person, tab, { operationId: randomUUID(), command: { type: 'machine.contribute', machineId: 'personal-mac', name: 'MacBook Pro', cwd: '/work',
         scope: 'swarm', engines: ['codex'], maxAgents: 3 } })
-      expect((await idle.hostTabs(person, 'personal-mac')).some(r => r.tabId === tab && 'joinTeam' in r)).toBe(false)
+      expect((await rosterRows(idle, person, 'personal-mac', { teamAccountsIdle: true })).some(r => r.tabId === tab && 'joinTeam' in r)).toBe(false)
       // The same Swarm on a server with the app asks the Mac's host to add it.
-      expect((await store.hostTabs(person, 'personal-mac')).some(r => r.tabId === tab && 'joinTeam' in r)).toBe(true)
+      expect((await rosterRows(store, person, 'personal-mac')).some(r => r.tabId === tab && 'joinTeam' in r)).toBe(true)
     } finally {
       await db.machine.update({ where: { machineId: 'team-mac' }, data: { hostMachineId: null } })
     }
@@ -479,10 +480,10 @@ describe('one machine: a Mac and its Harness Team account', () => {
       const invitation = await run(tab, { type: 'invite.create', email: person.email, role: 'collaborator', conversationId: 'lead' })
       await run(tab, { type: 'invite.accept', inviteId: invitation.result.inviteId as string }, person)
       await run(tab, { type: 'machine.contribute', machineId: 'personal-mac', name: 'MacBook Pro', cwd: '/work', scope: 'swarm', engines: ['codex'], maxAgents: 3 }, person)
-      const joins = async () => (await store.hostTabs(person, 'personal-mac')).filter(r => r.tabId === tab && 'joinTeam' in r)
+      const joins = async () => (await rosterRows(store, person, 'personal-mac')).filter(r => r.tabId === tab && 'joinTeam' in r)
       expect(await joins()).toEqual([{ tabId: tab, joinTeam: { machineId: 'team-mac', name: 'MacBook Pro', maxAgents: 3 } }])
       // The team account's own daemon is never asked, and cannot add itself.
-      expect((await store.hostTabs(team, 'team-mac')).some(r => 'joinTeam' in r)).toBe(false)
+      expect((await rosterRows(store, team, 'team-mac')).some(r => 'joinTeam' in r)).toBe(false)
       await expect(store.execute(team, tab, { operationId: randomUUID(), command: { type: 'machine.contribute', machineId: 'team-mac', name: 'x', cwd: '/team',
         scope: 'swarm', engines: ['codex'], maxAgents: 1, ifMissing: true } })).rejects.toMatchObject(LIMITED)
       // The Mac's host adds it, as the person: the backend gives it the Mac's name and slots, and the Mac it lives on.
@@ -491,15 +492,15 @@ describe('one machine: a Mac and its Harness Team account', () => {
       expect(await joins()).toEqual([])
       const listed = (await store.read(owner, tab)).state.machines!.find(m => m.machineId === 'team-mac')!
       expect(listed).toMatchObject({ hostMachineId: 'personal-mac', name: 'MacBook Pro', maxAgents: 3, cwd: '/team' })
-      const generation = (await store.hostPools(team, 'team-mac')).find(p => p.tabId === tab)!.machine.generation
+      const generation = (await poolRows(store, team, 'team-mac')).find(p => p.tabId === tab)!.machine.generation
       await store.observeMachine(team, tab, 'team-mac', reading(generation))
       const group = String((await run(tab, { type: 'conversation.create', projectId: 'lead', title: 'Work', brief: 'Do it',
         checks: [{ description: 'Verified', independent: false }] })).result.conversationId)
       const started = await run(tab, { type: 'agent.start', request: { conversationId: group, machineId: 'personal-mac', engine: 'codex', name: 'Builder',
         cwd: '/work/lead', worktree: false, requirements } })
-      const queued = (await store.hostPools(team, 'team-mac')).find(p => p.tabId === tab)!.starts
+      const queued = (await poolRows(store, team, 'team-mac')).find(p => p.tabId === tab)!.starts
       expect(queued).toEqual([expect.objectContaining({ id: started.result.startId, request: expect.objectContaining({ machineId: 'team-mac', cwd: '/team/lead' }) })])
-      expect((await store.hostPools(person, 'personal-mac')).find(p => p.tabId === tab)!.starts).toEqual([])
+      expect((await poolRows(store, person, 'personal-mac')).find(p => p.tabId === tab)!.starts).toEqual([])
     } finally {
       await db.machine.update({ where: { machineId: 'team-mac' }, data: { hostMachineId: null } })
     }

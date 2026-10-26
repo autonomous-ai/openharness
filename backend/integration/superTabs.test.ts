@@ -21,6 +21,7 @@ import { ensureMentionExpiry, MENTION_EXPIRY_MS } from '../src/superTabs/mention
 import * as parts from '../src/superTabs/parts/index.js'
 import { guardedWrite, PartConflict } from '../src/superTabs/parts/write.js'
 import { ensurePartExpiry, sweepSwarms } from '../src/superTabs/sweeps.js'
+import { assignmentRows, poolRows, rosterRows } from './hostRows.test-support.js'
 
 // A fresh loopback replica set, created here. This suite never reads DATABASE_URL or an existing database.
 let replica: MongoMemoryReplSet
@@ -611,7 +612,7 @@ describe('private swarm projects on the real control API', () => {
     await expect(run(tab, { type: 'agent.start', request })).rejects.toMatchObject({ code: 'PROJECT_CONTRIBUTION' })
     await run(tab, { type: 'machine.contribute', machineId, name: 'Shared capacity', cwd: '/swarm-root',
       scope: 'swarm', engines: ['codex'], maxAgents: 2 }, host)
-    const pool = (await store.hostPools(host, machineId))[0]!
+    const pool = (await poolRows(store, host, machineId))[0]!
     await store.observeMachine(team.session, tab, machineId, { generation: pool.machine.generation,
       resources: { cpuPercent: 10, memoryTotalBytes: 32e9, memoryUsedBytes: 4e9, projectDiskFreeBytes: 100e9,
         diskFreeBytes: 100e9, diskTotalBytes: 500e9, deviceType: 'Laptop', chip: 'Fixture CPU', os: 'macOS', gpuPercent: null },
@@ -621,7 +622,7 @@ describe('private swarm projects on the real control API', () => {
       .rejects.toMatchObject({ code: 'OUTSIDE_CONTRIBUTION' })
     const secondStart = (await run(tab, { type: 'agent.start', request })).result.startId as string
     await run(tab, { type: 'agent.start', request: { ...request, conversationId: 'lead', cwd: '/swarm-root/lead' } })
-    const queued = (await store.hostPools(host, machineId))[0]!
+    const queued = (await poolRows(store, host, machineId))[0]!
     expect(queued.starts).toHaveLength(2)
     expect(queued.projects!.find(p => p.id === projectId)).toMatchObject({
       repository: { machineId: 'test-host', cwd: '/lead/second', repositoryUrl: 'https://github.com/example/second' },
@@ -651,7 +652,7 @@ describe('private swarm projects on the real control API', () => {
     await expect(store.messages(peer, tab, conversationId, {})).rejects.toMatchObject({ code: 'NOT_FOUND' })
     await expect(store.native.open(peer, tab, { operationId: randomUUID(), conversationId, agentId })).rejects.toMatchObject({ code: 'NOT_FOUND' })
     expect(await store.mayObserve(peer, tab, 'test-host', harnessId, host.sub)).toBe(false)
-    expect((await store.hostTabs(host, 'test-host')).find(t => t.agent?.id === agentId)!.observers.map(p => p.userId)).not.toContain(peer.sub)
+    expect((await rosterRows(store, host, 'test-host')).find(t => t.agent?.id === agentId)!.observers.map(p => p.userId)).not.toContain(peer.sub)
     await expect(store.messages(host, tab, 'lead', {}, agentId)).rejects.toMatchObject({ code: 'NOT_FOUND' })
 
     await run(tab, { type: 'project.sharing', projectId, visibility: 'private', memberIds: [peer.sub] })
@@ -739,7 +740,7 @@ describe('since when a worker is down', () => {
     const worker = String((await execute({ type: 'agent.add', conversationId: group, machineId: 'test-host', harnessId: workerHarness,
       name: 'Worker', configuration: config, lead: false })).result.agentId)
     const assignmentId = String((await execute({ type: 'work.assign', conversationId: group, agentId: worker })).result.assignmentId)
-    const generation = (await timed.hostPools(host, 'test-host')).find(p => p.tabId === tab)!.machine.generation
+    const generation = (await poolRows(timed, host, 'test-host')).find(p => p.tabId === tab)!.machine.generation
     const observe = (running: string[], stopped: string[] = []) => timed.observeMachine(host, tab, 'test-host', { generation,
       resources: { cpuPercent: 10, memoryTotalBytes: 32e9, memoryUsedBytes: 4e9, diskFreeBytes: 120e9, diskTotalBytes: 500e9,
         projectDiskFreeBytes: 120e9, deviceType: 'Laptop', chip: 'Fixture', os: 'macOS', gpuPercent: null },
@@ -869,7 +870,7 @@ describe('Super Tabs on a real Mongo replica set', () => {
     await expect(run(tab, contribute)).rejects.toMatchObject({ code: 'HOST_REQUIRED' })
     await run(tab, contribute, host)
     expect(await db.machineShare.findUnique({ where: { machineId: 'pool-host' } })).toBeNull()
-    const pools = await store.hostPools(host, 'pool-host')
+    const pools = await poolRows(store, host, 'pool-host')
     expect(pools).toHaveLength(1)
     const generation = pools[0]!.machine.generation
     const observation = { generation, resources: { cpuPercent: 10, memoryTotalBytes: 32e9, memoryUsedBytes: 4e9, diskFreeBytes: 120e9, diskTotalBytes: 500e9,
@@ -905,7 +906,7 @@ describe('Super Tabs on a real Mongo replica set', () => {
     expect((await store.start(owner, tab, startId)).poolSettled).toBe(true)
     expect((await store.read(owner, tab)).state.agents[0]).toMatchObject({ contributorId: host.sub, machineOwnerId: host.sub, harnessId: 'pool-builder' })
     await run(tab, { type: 'member.remove', userId: host.sub })
-    expect(await store.hostPools(host, 'pool-host')).toEqual([])
+    expect(await poolRows(store, host, 'pool-host')).toEqual([])
     // The machine stays listed while its host cleans up, but its owner left: a reading is refused as theirs no longer.
     await expect(store.observeMachine(host, tab, 'pool-host', observation)).rejects.toMatchObject({ code: 'FORBIDDEN' })
     await expect(store.start(host, tab, startId, undefined, 'pool-host')).rejects.toMatchObject({ code: 'FORBIDDEN' })
@@ -1408,7 +1409,7 @@ describe('Super Tabs on a real Mongo replica set', () => {
     const invitation = await run(tab, { type: 'invite.create', email: host.email, role: 'collaborator', conversationId: 'lead' })
     await run(tab, { type: 'invite.accept', inviteId: invitation.result.inviteId as string }, host)
     await run(tab, { type: 'machine.contribute', machineId: 'test-host', name: 'Host', cwd: '/swarm-root', scope: 'swarm', engines: ['codex'], maxAgents: 2 }, host)
-    const pool = (await store.hostPools(host, 'test-host')).find(p => p.tabId === tab)!
+    const pool = (await poolRows(store, host, 'test-host')).find(p => p.tabId === tab)!
     const team = await teamMachine('test-host')
     await store.observeMachine(team.session, tab, 'test-host', { generation: pool.machine.generation,
       resources: { cpuPercent: 10, memoryTotalBytes: 32e9, memoryUsedBytes: 4e9, projectDiskFreeBytes: 100e9,
@@ -1417,7 +1418,7 @@ describe('Super Tabs on a real Mongo replica set', () => {
     const request = { conversationId: 'lead', machineId: 'test-host', engine: 'codex', name: 'Builder', cwd: '/work/app', worktree: true,
       requirements: { memoryBytes: 0, diskBytes: 0, maxCpuPercent: 100, tools: [], devices: [], quotaRequired: false } }
     await run(tab, { type: 'agent.start', request })
-    expect((await store.hostPools(host, 'test-host')).find(p => p.tabId === tab)!.projects).toEqual([expect.objectContaining({ id: 'lead', repository })])
+    expect((await poolRows(store, host, 'test-host')).find(p => p.tabId === tab)!.projects).toEqual([expect.objectContaining({ id: 'lead', repository })])
   })
   it('lets a project\'s Lead change its skills only by quoting a message the project owner wrote there, and tells the host', async () => {
     const tab = (await store.create(owner, randomUUID(), 'Skills')).id
@@ -1427,7 +1428,7 @@ describe('Super Tabs on a real Mongo replica set', () => {
       name: 'Lead', configuration: config, lead: true }, peer)).result.agentId as string
     const legacyLead = (await run(tab, { type: 'agent.add', conversationId: 'lead', machineId: 'test-host', harnessId: randomUUID(),
       name: 'Old', configuration: config, lead: true })).result.agentId as string
-    const modes = async () => Object.fromEntries((await store.hostTabs(host, 'test-host')).filter(r => r.tabId === tab).map(r => [r.agent?.id, r.skillMode]))
+    const modes = async () => Object.fromEntries((await rosterRows(store, host, 'test-host')).filter(r => r.tabId === tab).map(r => [r.agent?.id, r.skillMode]))
     expect(await modes()).toEqual({ [lead]: 'default', [legacyLead]: 'default' })
     const say = async (text: string, user = peer) => (await run(tab, { ...message(text), conversationId: chat } as Command, user)).result.messageId as string
     const skills = (messageId: string): Command => ({ type: 'project.skills', projectId, mode: 'orchestration', askedIn: { conversationId: chat, messageId } })
@@ -1455,7 +1456,7 @@ describe('Super Tabs on a real Mongo replica set', () => {
     const roles = [{ id: 'lead', name: 'Product Manager', kind: 'lead' as const, text: 'LEAD-TEXT' },
       { id: 'dev', name: 'Engineer', kind: 'builder' as const, text: 'DEV-TEXT' }, { id: 'review', name: 'Reviewer', kind: 'reviewer' as const, text: 'REVIEW-TEXT' }]
     await run(tab, { type: 'project.roles.create', projectId: 'lead', roles })
-    const rows = async () => (await store.hostTabs(host, 'test-host')).filter(r => r.tabId === tab)
+    const rows = async () => (await rosterRows(store, host, 'test-host')).filter(r => r.tabId === tab)
     const rowOf = async (id: string) => (await rows()).find(r => r.agent.id === id)!
     expect(await rowOf(worker)).not.toHaveProperty('role')
     await run(tab, { type: 'project.skills', projectId: 'lead', mode: 'custom' })
@@ -1589,13 +1590,13 @@ describe('Super Tabs on a real Mongo replica set', () => {
     const assignmentId = (await run(one.tab, { type: 'work.assign', conversationId: 'lead', agentId: worker })).result.assignmentId as string
     await expect(run(two.tab, { type: 'work.assign', conversationId: 'lead', agentId: worker })).rejects.toMatchObject({ code: 'AGENT_BUSY' })
     await run(one.tab, { type: 'agent.remove', agentId: worker })
-    expect(await store.hostAssignments(host, 'test-host')).toContainEqual({ tabId: one.tab, assignmentId, harnessId: session })
-    await expect(store.hostAssignments(owner, 'test-host')).rejects.toMatchObject({ code: 'HOST_UNAVAILABLE' })
+    expect(await assignmentRows(store, host, 'test-host')).toContainEqual({ tabId: one.tab, assignmentId, harnessId: session })
+    await expect(assignmentRows(store, owner, 'test-host')).rejects.toMatchObject({ code: 'HOST_UNAVAILABLE' })
     await expect(store.stopped(owner, one.tab, assignmentId, 'forged')).rejects.toMatchObject({ code: 'FORBIDDEN' })
     await store.stopped(host, one.tab, assignmentId, 'native-stop-receipt')
     expect((await store.read(owner, one.tab)).state.conversations[0]!.assignment?.status).toBe('stopped')
     await store.stopped(host, one.tab, assignmentId, 'native-stop-receipt')
-    expect(await store.hostAssignments(host, 'test-host')).not.toContainEqual({ tabId: one.tab, assignmentId, harnessId: session })
+    expect(await assignmentRows(store, host, 'test-host')).not.toContainEqual({ tabId: one.tab, assignmentId, harnessId: session })
     expect(await db.superTabDelivery.count({ where: { tabId: one.tab, assignmentId, status: 'queued' } })).toBe(0)
     await run(two.tab, { type: 'work.assign', conversationId: 'lead', agentId: worker })
     await run(one.tab, define)
@@ -1738,11 +1739,11 @@ describe('Super Tabs on a real Mongo replica set', () => {
     await invite(tab, 'viewer')
     expect(await store.mayObserve(peer, tab, 'test-host', native, host.sub)).toBe(true)
     expect(await store.mayObserve(peer, tab, 'test-host', 'another-session', host.sub)).toBe(false)
-    const grants = (await store.hostTabs(host, 'test-host')).find(t => t.tabId === tab)
+    const grants = (await rosterRows(store, host, 'test-host')).find(t => t.tabId === tab)
     expect(grants?.observers).toContainEqual({ email: peer.email, userId: peer.sub })
     await run(tab, { type: 'member.remove', userId: peer.sub })
     expect(await store.mayObserve(peer, tab, 'test-host', native, host.sub)).toBe(false)
-    expect((await store.hostTabs(host, 'test-host')).find(t => t.tabId === tab)?.observers).not.toContainEqual({ email: peer.email, userId: peer.sub })
+    expect((await rosterRows(store, host, 'test-host')).find(t => t.tabId === tab)?.observers).not.toContainEqual({ email: peer.email, userId: peer.sub })
   })
 
   it('tells the execution host which of its agents need a decision or are stuck', async () => {
@@ -1751,7 +1752,7 @@ describe('Super Tabs on a real Mongo replica set', () => {
     const worker = (await run(tab, { type: 'agent.add', conversationId: group, machineId: 'test-host', harnessId: randomUUID(),
       name: 'Builder', configuration: config, lead: false })).result.agentId as string
     const assignmentId = (await run(tab, { type: 'work.assign', conversationId: group, agentId: worker })).result.assignmentId as string
-    const row = async () => (await store.hostTabs(host, 'test-host')).find(t => t.tabId === tab && t.agent.id === worker)!
+    const row = async () => (await rosterRows(store, host, 'test-host')).find(t => t.tabId === tab && t.agent.id === worker)!
     expect(await row()).toMatchObject({ tabName: 'Pilot', attention: null })
     await run(tab, { type: 'work.status', conversationId: group, assignmentId, status: 'blocked', result: 'No access to staging.' } as Command, host, worker)
     expect((await row()).attention).toEqual({ assignmentId, status: 'blocked', result: 'No access to staging.' })
@@ -1766,7 +1767,7 @@ describe('Super Tabs on a real Mongo replica set', () => {
     const group = (await run(tab, { type: 'conversation.create', title: 'Done work', brief: '', checks: [] })).result.conversationId as string
     const worker = (await run(tab, { type: 'agent.add', conversationId: group, machineId: 'test-host', harnessId: randomUUID(),
       name: 'Builder', configuration: config, lead: false })).result.agentId as string
-    const active = async () => Object.fromEntries((await store.hostTabs(host, 'test-host'))
+    const active = async () => Object.fromEntries((await rosterRows(store, host, 'test-host'))
       .filter(t => t.tabId === tab).map(t => [t.agent.id, t.active]))
     expect(await active()).toEqual({ [lead]: true, [worker]: true })
     await run(tab, { type: 'conversation.archive', conversationId: group, archived: true })
@@ -1929,7 +1930,7 @@ describe('Super Tabs on a real Mongo replica set', () => {
     const invitation = await run(tab, { type: 'invite.create', email: host.email, role: 'collaborator', conversationId: 'lead' })
     await run(tab, { type: 'invite.accept', inviteId: invitation.result.inviteId as string }, host)
     await run(tab, { type: 'machine.contribute', machineId: 'test-host', name: 'Host', cwd: '/fixture/repo', engines: ['codex'], maxAgents: 4 }, host)
-    const machine = (await store.hostPools(host, 'test-host')).find(pool => pool.tabId === tab)!.machine
+    const machine = (await poolRows(store, host, 'test-host')).find(pool => pool.tabId === tab)!.machine
     const team = await teamMachine('test-host')
     await store.observeMachine(team.session, tab, 'test-host', { generation: machine.generation,
       resources: { cpuPercent: 10, memoryTotalBytes: 32e9, memoryUsedBytes: 4e9, diskFreeBytes: 120e9, diskTotalBytes: 500e9,
@@ -2178,7 +2179,7 @@ it('releases a finished worker through its execution host, cancels deliveries an
   const group = (await run(tab, { type: 'conversation.create', title: 'Task', brief: 'Deliver it', checks: [{ description: 'Verified', independent: false }] })).result.conversationId as string
   const native = randomUUID()
   const worker = (await run(tab, { type: 'agent.add', conversationId: group, machineId: 'test-host', harnessId: native, name: 'Worker', configuration: config, lead: false })).result.agentId as string
-  const pool = (await store.hostPools(host, 'test-host')).find(p => p.tabId === tab)!.machine
+  const pool = (await poolRows(store, host, 'test-host')).find(p => p.tabId === tab)!.machine
   const oldObservation = { generation: pool.generation,
     resources: { cpuPercent: 10, memoryTotalBytes: 32e9, memoryUsedBytes: 4e9, diskFreeBytes: 120e9, diskTotalBytes: 500e9, projectDiskFreeBytes: 120e9, deviceType: 'Laptop', chip: 'Fixture', os: 'macOS', gpuPercent: null },
     quotas: [], tools: {}, runningHarnessIds: [native], stoppedHarnessIds: [] }
@@ -2191,7 +2192,7 @@ it('releases a finished worker through its execution host, cancels deliveries an
   const { machineSlots } = await import('../src/superTabs/machines.js')
   expect(machineSlots(before, before.machines![0]!)).toBe(2)
   await run(tab, { type: 'agent.release', agentId: worker, decision: 'stop' }, host, lead)
-  expect((await store.hostTabs(host, 'test-host')).find(r => r.agent?.id === worker)).toMatchObject({ stopRequested: true })
+  expect((await rosterRows(store, host, 'test-host')).find(r => r.agent?.id === worker)).toMatchObject({ stopRequested: true })
   await expect(run(tab, { type: 'agent.remove', agentId: worker }, owner, worker)).rejects.toMatchObject({ code: 'FORBIDDEN' })
   const operation = randomUUID()
   const releaseId = (await store.read(owner, tab)).state.agents.find(a => a.id === worker)!.releaseId!
@@ -2206,11 +2207,11 @@ it('releases a finished worker through its execution host, cancels deliveries an
   const delayed = (await store.read(owner, tab)).state
   expect(delayed.machines![0]!.availableSlots).toBe(3)
   expect(await db.superTabDelivery.count({ where: { tabId: tab, agentId: worker, status: { in: ['queued', 'claimed', 'uncertain'] } } })).toBe(0)
-  expect((await store.hostTabs(host, 'test-host')).some(r => r.agent?.id === worker)).toBe(false)
+  expect((await rosterRows(store, host, 'test-host')).some(r => r.agent?.id === worker)).toBe(false)
   // Re-contribution reserves a new runtime; ordinary removal must not reuse its old stop proof.
   await run(tab, { type: 'agent.add', conversationId: group, machineId: 'test-host', harnessId: native, name: 'Renewed worker', configuration: config, lead: false })
   await run(tab, { type: 'agent.remove', agentId: worker })
-  const hostPool = (await store.hostPools(host, 'test-host')).find(p => p.tabId === tab)!
+  const hostPool = (await poolRows(store, host, 'test-host')).find(p => p.tabId === tab)!
   expect(hostPool.harnessIds).toContain(native)
   const reservation = hostPool.reservations.find(r => r.harnessId === native)!
   await store.observeMachine(host, tab, 'test-host', { ...oldObservation, runningHarnessIds: [], stoppedHarnessIds: [native],
@@ -2323,7 +2324,7 @@ describe('the owner\'s Lead machine joins its Swarm', () => {
     await db.machine.create({ data: { machineId, userId: owner.sub, apiKey: `fixture-${machineId}`, managerId: 'fixture', autonomousEnv: 'prod', authMode: 'remote' } })
     const tab = (await store.create(owner, randomUUID(), 'Own machine')).id
     const lead = (await run(tab, { type: 'agent.add', conversationId: 'lead', machineId, harnessId: randomUUID(), name: 'Lead', configuration: config, lead: true })).result.agentId as string
-    expect((await store.hostTabs(owner, machineId)).map(r => r.joinSwarm)).toEqual([true])
+    expect((await rosterRows(store, owner, machineId)).map(r => r.joinSwarm)).toEqual([true])
     const request = { conversationId: 'lead', machineId, engine: 'codex', name: 'Builder', cwd: '/repo', worktree: true,
       requirements: { memoryBytes: 0, diskBytes: 0, maxCpuPercent: 100, tools: [], devices: [], quotaRequired: false } }
     const start = async () => (await run(tab, { type: 'agent.start', request })).result.startId as string
@@ -2350,7 +2351,7 @@ describe('the owner\'s Lead machine joins its Swarm', () => {
       owner, lead)).rejects.toMatchObject({ code: 'OWNER_MESSAGE_REQUIRED' })
     const added = joined.machines!.find(m => m.machineId === machineId)!
     expect(added).toMatchObject({ contributorId: owner.sub, maxAgents: 3, scope: 'swarm', cwd: '/swarm' })
-    expect((await store.hostTabs(owner, machineId)).map(r => r.joinSwarm)).toEqual([false, false])
+    expect((await rosterRows(store, owner, machineId)).map(r => r.joinSwarm)).toEqual([false, false])
     await run(tab, { ...join, maxAgents: 8, cwd: '/elsewhere' })
     expect((await store.read(owner, tab)).state.machines!.find(m => m.machineId === machineId)).toEqual(added)
   })
@@ -2359,7 +2360,7 @@ describe('the owner\'s Lead machine joins its Swarm', () => {
     const { tab } = await fixture()
     const invitation = await run(tab, { type: 'invite.create', email: host.email, role: 'collaborator', conversationId: 'lead' })
     await run(tab, { type: 'invite.accept', inviteId: invitation.result.inviteId as string }, host)
-    expect((await store.hostTabs(host, 'test-host')).filter(r => r.tabId === tab).map(r => r.joinSwarm)).toEqual([false])
+    expect((await rosterRows(store, host, 'test-host')).filter(r => r.tabId === tab).map(r => r.joinSwarm)).toEqual([false])
     const join = { type: 'machine.contribute' as const, machineId: 'test-host', name: 'Host', cwd: '/swarm', scope: 'swarm' as const, engines: ['codex'], maxAgents: 2, ifMissing: true as const }
     await expect(run(tab, join)).rejects.toMatchObject({ code: 'OWNER_REQUIRED' })
     await expect(run(tab, join, host)).rejects.toMatchObject({ code: 'OWNER_REQUIRED' })
@@ -2373,7 +2374,7 @@ describe('the owner\'s Lead machine joins its Swarm', () => {
     const tab = (await store.create(owner, randomUUID(), 'Shared Lead')).id
     await invite(tab)
     await run(tab, { type: 'agent.add', conversationId: 'lead', machineId, harnessId: randomUUID(), name: 'Peer Lead', configuration: config, lead: true }, peer)
-    expect((await store.hostTabs(owner, machineId)).map(r => [r.agent.contributorId, r.joinSwarm])).toEqual([[peer.sub, false]])
+    expect((await rosterRows(store, owner, machineId)).map(r => [r.agent.contributorId, r.joinSwarm])).toEqual([[peer.sub, false]])
   })
 })
 
@@ -2383,7 +2384,7 @@ describe('Lead safety on the host roster', () => {
     const harness = randomUUID()
     const worker = (await run(tab, { type: 'agent.add', conversationId: 'lead', machineId: 'test-host', harnessId: harness, name: 'Worker',
       configuration: config, lead: false })).result.agentId as string
-    const rows = async () => (await store.hostTabs(host, 'test-host')).filter(r => r.tabId === tab)
+    const rows = async () => (await rosterRows(store, host, 'test-host')).filter(r => r.tabId === tab)
     expect((await rows()).map(r => [r.agent.id, r.lead])).toEqual([[lead, true], [worker, false]])
     await expect(run(tab, { type: 'agent.remove', agentId: lead })).rejects.toMatchObject({ code: 'LEAD_PROTECTED',
       message: expect.stringContaining('is the Product Manager of project Pilot. Delete the project first.') })
@@ -2634,14 +2635,14 @@ describe('machine removal', () => {
     await run(tab, { type: 'invite.accept', inviteId: invitation.result.inviteId as string }, host)
     await run(tab, { type: 'machine.contribute', machineId: 'test-host', name: 'Host', cwd: '/fixture/repo', engines: ['codex'], maxAgents: 4 }, host)
     // Its host is here and reporting, so removing it waits for that host to acknowledge.
-    const machine = (await store.hostPools(host, 'test-host')).find(pool => pool.tabId === tab)!.machine
+    const machine = (await poolRows(store, host, 'test-host')).find(pool => pool.tabId === tab)!.machine
     await store.observeMachine(host, tab, 'test-host', { generation: machine.generation,
       resources: { cpuPercent: 10, memoryTotalBytes: 32e9, memoryUsedBytes: 4e9, diskFreeBytes: 120e9, diskTotalBytes: 500e9,
         projectDiskFreeBytes: 120e9, deviceType: 'Laptop', chip: 'Fixture', os: 'macOS', gpuPercent: null },
       quotas: [], tools: {}, runningHarnessIds: [], stoppedHarnessIds: [] })
     return tab
   }
-  const cleanups = async (tab: string, from = store) => (await from.hostTabs(host, 'test-host')).filter(r => r.tabId === tab && 'cleanup' in r)
+  const cleanups = async (tab: string, from = store) => (await rosterRows(from, host, 'test-host')).filter(r => r.tabId === tab && 'cleanup' in r)
   const cleaned = (tab: string, removalId: string) => app.inject({ method: 'POST', url: `/api/super-tabs/${tab}/commands`, headers: { authorization: `Bearer ${host.sub}` },
     payload: { operationId: randomUUID(), command: { type: 'machine.cleaned', machineId: 'test-host', removalId } } })
 
@@ -2659,8 +2660,8 @@ describe('machine removal', () => {
     const removalId = (await run(tab, { type: 'machine.remove', machineId: 'test-host' }, host)).result.removalId as string
     expect((await store.read(owner, tab)).state.machines!.map(m => [m.removal?.state, m.paused])).toEqual([['cleaning', true]])
     expect(await cleanups(tab)).toEqual([{ tabId: tab, cleanup: { machineId: 'test-host', removalId } }])
-    expect((await store.hostTabs(host, 'test-host')).filter(r => r.tabId === tab && r.agent?.id === worker && 'closeSession' in r)).toHaveLength(1)
-    expect((await store.hostTabs(owner, 'test-host').catch(() => []))).toEqual([])
+    expect((await rosterRows(store, host, 'test-host')).filter(r => r.tabId === tab && r.agent?.id === worker && 'closeSession' in r)).toHaveLength(1)
+    expect((await rosterRows(store, owner, 'test-host').catch(() => []))).toEqual([])
     // The machine owner's host acknowledges even after leaving the Swarm.
     await run(tab, { type: 'member.remove', userId: host.sub }, host)
     expect((await cleaned(tab, 'not-this-one')).statusCode).toBe(404)
@@ -2672,7 +2673,7 @@ describe('machine removal', () => {
 
   it('drops a machine that went silent while cleaning, and a reconnecting host gets that cleanup once before its ack', async () => {
     const tab = await contributed()
-    const generation = (await store.hostPools(host, 'test-host')).find(pool => pool.tabId === tab)!.machine.generation
+    const generation = (await poolRows(store, host, 'test-host')).find(pool => pool.tabId === tab)!.machine.generation
     const removalId = (await run(tab, { type: 'machine.remove', machineId: 'test-host' }, host)).result.removalId as string
     // Its host goes silent for longer than three beats: a read leaves the machine out, but its stored removal is still there.
     const later = new SuperTabStore(db, () => Date.now() + 60_000)
@@ -2716,7 +2717,7 @@ describe('machine removal', () => {
     await run(tab, { type: 'member.remove', userId: host.sub }, host)
     const [row] = await cleanups(tab)
     expect(row).toEqual({ tabId: tab, cleanup: { machineId: 'test-host', removalId: expect.any(String) } })
-    expect((await store.hostTabs(host, 'test-host')).filter(r => r.tabId === tab && r.agent?.id === worker && 'closeSession' in r)).toHaveLength(1)
+    expect((await rosterRows(store, host, 'test-host')).filter(r => r.tabId === tab && r.agent?.id === worker && 'closeSession' in r)).toHaveLength(1)
     expect((await store.read(owner, tab)).state.machines!.map(m => m.removal?.state)).toEqual(['cleaning'])
     expect((await cleaned(tab, (row as { cleanup: { removalId: string } }).cleanup.removalId)).statusCode).toBe(200)
     expect(await cleanups(tab)).toEqual([])
@@ -3306,7 +3307,7 @@ describe('Swarm parts under concurrent writes', () => {
     await run(tab, { type: 'invite.create', email: host.email, role: 'collaborator', conversationId: 'lead' })
       .then(r => run(tab, { type: 'invite.accept', inviteId: r.result.inviteId as string }, host))
     await run(tab, { type: 'machine.contribute', machineId: 'test-host', name: 'Host', cwd: '/fixture/repo', engines: ['codex'], maxAgents: 1 }, host)
-    const generation = (await store.hostPools(host, 'test-host')).find(p => p.tabId === tab)!.machine.generation
+    const generation = (await poolRows(store, host, 'test-host')).find(p => p.tabId === tab)!.machine.generation
     await store.observeMachine(host, tab, 'test-host', { generation, resources: { cpuPercent: 10, memoryTotalBytes: 32e9, memoryUsedBytes: 4e9,
       diskFreeBytes: 120e9, diskTotalBytes: 500e9, projectDiskFreeBytes: 120e9, deviceType: 'Laptop', chip: 'Fixture', os: 'macOS', gpuPercent: null },
       quotas: [], tools: {}, runningHarnessIds: [], stoppedHarnessIds: [] })
