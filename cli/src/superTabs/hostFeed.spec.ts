@@ -72,6 +72,15 @@ describe('the host form of a machine\'s Swarms', () => {
     expect(paths()).toEqual([FULL, SINCE(C0)])
   })
 
+  it('takes no rows from a Swarm whose lists are malformed, and still those of the others', async () => {
+    const form = readFixture<{ tabs: Json[] }>('host-full')
+    const { feed } = feedOf([ok({ ...form, tabs: [{ tabId: 'odd', roster: {}, pool: 'none', assignments: null }, ...form.tabs] })])
+    const read = await feed.refresh()
+    expect(agents(read.roster)).toEqual(['1:1', '1:2', '9:cleanup'])
+    expect(read.pools).toHaveLength(1)
+    expect(read.assignments).toHaveLength(1)
+  })
+
   it('tells the person to update Harness when the server answers in a format it cannot read', async () => {
     const { feed } = feedOf([ok({ ...readFixture<Json>('host-full'), format: 3 })])
     await expect(feed.refresh()).rejects.toMatchObject({ code: 'UPDATE_REQUIRED', status: 426 })

@@ -7,7 +7,7 @@
  */
 import type { CoreApi } from '../core/api.js'
 import type { HostChanges, HostTab } from './readContract.js'
-import { backend, readable } from './wire.js'
+import { backend, object, readable } from './wire.js'
 
 type Json = Record<string, unknown>
 export interface HostRead { roster: Json[]; pools: Json[]; assignments: Json[] }
@@ -56,9 +56,12 @@ export class HostFeed {
     return this.snapshot()
   }
 
+  /** Every Swarm's rows in one list each; a Swarm whose lists are not lists gives none, and never stops the others'. */
   private snapshot(): HostRead {
     const tabs = [...this.tabs.values()]
-    return { roster: tabs.flatMap(tab => tab.roster), pools: tabs.flatMap(tab => tab.pool ? [tab.pool] : []),
-      assignments: tabs.flatMap(tab => tab.assignments) }
+    const rows = (value: unknown) => Array.isArray(value) ? value.map(object) : []
+    const isRecord = (value: unknown): value is Json => !!value && typeof value === 'object' && !Array.isArray(value)
+    return { roster: tabs.flatMap(tab => rows(tab.roster)), pools: tabs.flatMap(tab => isRecord(tab.pool) ? [tab.pool] : []),
+      assignments: tabs.flatMap(tab => rows(tab.assignments)) }
   }
 }

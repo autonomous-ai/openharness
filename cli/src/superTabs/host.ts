@@ -227,6 +227,7 @@ export class SuperTabHost {
   private readonly endings = new Map<string, { running: boolean; closed: boolean; acked: boolean; failures: number; retryAt: number }>()
   /** Deliveries withheld from an agent that leads nothing, each said once. */
   private readonly unreadable = new Set<string>()
+  /** The machine's host form and Swarm reads: the tick, stops, releases and skill notices read Swarms only through them. */
   private readonly sources: SwarmSources
   /** Until when the host waits after an update-required answer, and whether it has said so. */
   private updateUntil = 0
