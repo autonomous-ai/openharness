@@ -23,6 +23,11 @@ String _assetOf(String family) => switch (family) {
   _ => 'fonts/${family.replaceAll(' ', '-')}.ttf',
 };
 
+/// The page `flutter build web` writes, cut down to what the script edits.
+const _index =
+    '<!DOCTYPE html><html><head><base href="/harness-web/"></head>'
+    '<body><script>/* flutter_bootstrap */</script></body></html>';
+
 /// Stands in for `flutter build web`: writes the fonts a real build lists for
 /// this app into the `--output` directory the script passes.
 String _fakeFlutter(List<String> families) {
@@ -43,6 +48,7 @@ for arg in "\$@"; do
 done
 mkdir -p "\$out/assets"
 printf '%s' '$manifest' > "\$out/assets/FontManifest.json"
+printf '%s' '$_index' > "\$out/index.html"
 for asset in $assets; do
   mkdir -p "\$out/assets/\$(dirname "\$asset")"
   echo font > "\$out/assets/\$asset"
@@ -65,9 +71,8 @@ Future<void> _git(Directory repo, List<String> args) async {
 /// whose `flutter` writes [families].
 Future<ProcessResult> _release(Directory repo, List<String> families) async {
   Directory(p.join(repo.path, 'scripts')).createSync();
-  File(
-    'scripts/build-web-release.sh',
-  ).copySync(p.join(repo.path, 'scripts', 'build-web-release.sh'));
+  File('scripts/build-web-release.sh')
+      .copySync(p.join(repo.path, 'scripts', 'build-web-release.sh'));
   final flutter = File(p.join(repo.path, 'fake-flutter.sh'))
     ..writeAsStringSync(_fakeFlutter(families));
   await Process.run('chmod', ['+x', flutter.path]);
@@ -91,6 +96,12 @@ List<String> _manifestFamilies(Directory repo) {
       (entry as Map<String, dynamic>)['family'] as String,
   ];
 }
+
+String _builtIndex(Directory repo) =>
+    File(p.join(repo.path, 'build/web-release/index.html')).readAsStringSync();
+
+String _preload(String asset) =>
+    '<link rel="preload" href="assets/$asset" as="fetch" crossorigin>';
 
 bool _shipped(Directory repo, String family) =>
     File(p.join(repo.path, 'build/web-release/assets', _assetOf(family)))
@@ -132,10 +143,37 @@ void main() {
     expect(files.where((file) => file.endsWith('lucide.ttf')), isEmpty);
   }, skip: skip);
 
-  test('a build with no Lucide 400 font fails instead of shipping blind', () async {
-    final result = await _release(repo, [..._others, ..._unusedLucide]);
+  test(
+    'the page fetches the fonts it ships beside the app, not after it',
+    () async {
+      final result = await _release(repo, [
+        ..._others,
+        ..._unusedLucide,
+        _used,
+      ]);
 
-    expect(result.exitCode, isNot(0));
-    expect('${result.stderr}', contains(_used));
-  }, skip: skip);
+      expect(result.exitCode, 0, reason: '${result.stderr}');
+      final index = _builtIndex(repo);
+      final head = index.substring(0, index.indexOf('</head>'));
+      expect(head, contains(_preload('FontManifest.json')));
+      for (final family in [..._others, _used]) {
+        expect(head, contains(_preload(_assetOf(family))), reason: family);
+      }
+      for (final family in _unusedLucide) {
+        expect(index, isNot(contains(_assetOf(family))), reason: family);
+      }
+    },
+    skip: skip,
+  );
+
+  test(
+    'a build with no Lucide 400 font fails instead of shipping blind',
+    () async {
+      final result = await _release(repo, [..._others, ..._unusedLucide]);
+
+      expect(result.exitCode, isNot(0));
+      expect('${result.stderr}', contains(_used));
+    },
+    skip: skip,
+  );
 }
