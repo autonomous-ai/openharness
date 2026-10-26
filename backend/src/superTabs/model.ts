@@ -232,6 +232,9 @@ export interface MessageDraft {
   /** People a Lead tagged (mentions.ts). */
   mentions?: string[]
 }
+/** A notice for one agent alone (a skill update): delivered to it like any message, never shown to people or other agents. */
+export const AGENT_ONLY = { kind: 'agent-only' }
+export const agentOnly = (source: unknown): boolean => (source as { kind?: unknown } | null | undefined)?.kind === AGENT_ONLY.kind
 export interface CommandEffects {
   state: SuperTabState
   messages: MessageDraft[]
@@ -362,6 +365,12 @@ export function author(state: SuperTabState, actor: Actor, write = false): Autho
   return { kind: 'agent', id: member.id, name: member.name, displayName: agentDisplayName(state.agents, member.id), membershipGeneration: member.membershipGeneration }
 }
 
+/** The Swarm's grid name: `swarm-` and 12 hex of sha256(tab id). Derived so it is reproducible when supported; the
+ * stored value is authoritative and never renamed. */
+export function swarmGridName(tabId: string): string {
+  return `swarm-${createHash('sha256').update(tabId).digest('hex').slice(0, 12)}`
+}
+
 export function createSuperTab(id: string, name: string, owner: { id: string; email: string }, environment: string, visibility?: ProjectVisibility): SuperTabState {
   const state: SuperTabState = {
     version: 1, id, name, ownerId: owner.id, environment, paused: false,
@@ -371,6 +380,10 @@ export function createSuperTab(id: string, name: string, owner: { id: string; em
   }
   // A new Swarm's first project starts in Default; only a project from before skill modes reads as Harness orchestration.
   state.projects = [{ ...projectsOf(state)[0]!, ...(visibility ? { visibility } : {}), skillMode: 'default' }]
+  // Its models are on from the start (owner, 2026-10-24): the owner's computer makes the Swarm's grid in the background
+  // (CLI `superTabs/swarmGrids.ts`) and reports how it went. Fire and forget: a grid that could not be made leaves the
+  // Swarm as it is, and the owner's first share or run in Manage models sets the models up then.
+  state.localModels = { grid: swarmGridName(id), enabled: true }
   syncLeads(state)
   return state
 }
@@ -400,8 +413,15 @@ export function visibleState(state: SuperTabState, actor: Actor, now = Date.now(
   delete visible.overlapAlerts
   // Only that machine's host roster lists them (store.ts hostTabs); a removed private agent's session is not every member's.
   delete visible.closingSessions
-  delete visible.machineCleanups
+  // A failing privacy check's detail is its contributor's: an error from the check can name paths on their Mac. Everyone
+  // else reads which item failed (machines.ts teamWorkRefusal).
+  for (const pool of visible.machines ?? []) {
+    const privacy = pool.observation?.privacy
+    if (privacy && 'detail' in privacy && !(actor.kind === 'person' && actor.userId === pool.contributorId)) delete (privacy as { detail?: string }).detail
+  }
   expireRemovals(visible, now)
+  // A read never hands out the cleanup records it just applied (store.ts hostTabs delivers them to the machine's host).
+  delete visible.machineCleanups
   delete visible.parkedConversations
   numberConversations(visible)
   delete visible.retiredConversationNumber

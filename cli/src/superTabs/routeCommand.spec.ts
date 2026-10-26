@@ -771,6 +771,79 @@ describe('routing contributed capacity', () => {
     expect(answer).toMatchObject({ ok: true, pick: { machineId: 'm1', engine: 'codex' } })
     expect((answer.alternatives as Array<{ machineId: string; engine: string }>).map(x => [x.machineId, x.engine])).toEqual([['m1', 'claude'], ['m2', 'claude'], ['m3', 'claude']])
   })
+  it('leaves out a machine that cannot take a teammate\'s project, with the backend\'s reason, and keeps its owner\'s own work there', async () => {
+    const reason = 'Contributed laptop has no Harness Team account yet, so it runs only its owner\'s projects.'
+    const refusing = (contributorId: string) => ({ ...healthy(), contributorId, teamWork: { allowed: false, code: 'TEAM_ACCOUNT_REQUIRED', reason } })
+    const owners = { id: 'lead', ownerId: 'owner' }
+    // The Swarm owner's project on a teammate's personal laptop: no new agent there, and not its member either.
+    const teammate = await runPool(refusing('mate'), true, {}, owners)
+    expect(teammate.answer).toMatchObject({ error: 'NO_CANDIDATE' })
+    expect(teammate.answer.excluded).toEqual(expect.arrayContaining([
+      expect.objectContaining({ title: expect.stringContaining('Multiply'), reason }),
+      expect.objectContaining({ title: expect.not.stringContaining('Multiply'), reason })]))
+    // The same laptop's own owner's project, as before.
+    expect((await runPool(refusing('mate'), false, {}, { id: 'lead', ownerId: 'mate' })).answer.ok).toBe(true)
+    // A Team machine that takes it, and a backend from before the rule that says nothing.
+    expect((await runPool({ ...healthy(), contributorId: 'mate', teamWork: { allowed: true } }, false, {}, owners)).answer.ok).toBe(true)
+    expect((await runPool({ ...healthy(), contributorId: 'mate' }, false, {}, owners)).answer.ok).toBe(true)
+    // Offline is said once, by the reading's own age.
+    const offline = { ...refusing('mate'), teamWork: { allowed: false, code: 'MACHINE_OFFLINE', reason: 'Contributed laptop is offline.' } }
+    offline.observation.receivedAt = 0
+    const silent = await runPool(offline, false, {}, owners)
+    expect(silent.answer.excluded).not.toEqual(expect.arrayContaining([expect.objectContaining({ reason: expect.stringContaining('Contributed laptop is offline.') })]))
+  })
+  // One machine (docs/plans/2026-10-24-swarm-team-account.md): a Mac's Harness Team account is that Mac. The Lead is offered
+  // the Mac once: a teammate's project starts in the team account, the Mac's owner's own projects stay with the owner.
+  describe('a Mac and its Harness Team account', () => {
+    const NO_ACCOUNT = 'MacBook Pro has no Harness Team account yet, so it runs only its owner\'s projects.'
+    const mac = () => ({ ...healthy(), name: 'MacBook Pro', scope: 'swarm', cwd: '/mate/swarm', contributorId: 'mate',
+      teamWork: { allowed: false, code: 'TEAM_ACCOUNT_REQUIRED', reason: NO_ACCOUNT } })
+    const team = () => ({ ...healthy(), machineId: 'm1-team', hostMachineId: 'm1', name: 'MacBook Pro', scope: 'swarm', cwd: '/team/swarm', contributorId: 'mate',
+      teamWork: { allowed: true } })
+    async function route(ownerId: string, machines: Record<string, unknown>[] = [mac(), team()], rules: unknown[] = []) {
+      const s = scoped({ context: { ok: true, value: { agentId: 'lead', tab: { state: { id: 'tab', agents: [agents[1]], conversations: conversations(), machines,
+        projects: [{ id: 'lead', ownerId, repository: { repositoryUrl: 'https://github.com/example/project' } }], ...(rules.length ? { rules } : {}) } },
+        policy: { policy, warnings: [] }, machines: [] } } })
+      const answer = await routeTask(input, s, where, opener())
+      const decision = s.mock.calls.find(c => c[0].action === 'command')?.[0].command.decision
+      return { answer, candidates: (decision?.candidates ?? []) as Array<{ machineId: string; kind: string }>,
+        excluded: (decision?.excluded ?? answer.excluded ?? []) as Array<{ reason: string }> }
+    }
+
+    it('starts a teammate\'s project in the team account, under the Mac\'s name, without calling the Mac unfit', async () => {
+      const { answer, candidates, excluded } = await route('owner')
+      expect(answer).toMatchObject({ ok: true, pick: { machineId: 'm1-team' } })
+      expect(answer.next).toContain('/team/swarm/lead')
+      expect(candidates.filter(c => c.kind === 'new').map(c => c.machineId)).toEqual(expect.arrayContaining(['m1-team']))
+      expect(candidates.some(c => c.kind === 'new' && c.machineId === 'm1')).toBe(false)
+      expect(excluded.some(e => e.reason === NO_ACCOUNT)).toBe(false)
+    })
+
+    it('keeps the Mac\'s owner\'s own project with the owner, never the team account', async () => {
+      const { answer, candidates } = await route('mate')
+      expect(answer).toMatchObject({ ok: true, pick: { machineId: 'm1' } })
+      expect(candidates.some(c => c.machineId === 'm1-team')).toBe(false)
+    })
+
+    it('says the team account\'s own reason when it cannot take the work, and still offers nothing as the owner', async () => {
+      const reason = 'The Harness Team account on MacBook Pro is not private (gitconfig: it could read its owner\'s ~/.gitconfig), so it runs only its owner\'s projects.'
+      const { answer, excluded } = await route('owner', [mac(), { ...team(), teamWork: { allowed: false, code: 'PRIVACY_CHECK_FAILED', reason } }])
+      expect(answer).toMatchObject({ error: 'NO_CANDIDATE' })
+      expect(excluded.map(e => e.reason)).toContain(reason)
+      expect(excluded.some(e => e.reason === NO_ACCOUNT)).toBe(false)
+    })
+
+    it('offers a team account whose Mac is not in the Swarm as itself, folded into nothing', async () => {
+      // Probed for new agents under its own name (here outranked on quota by the Lead's own machine), not left out as folded.
+      const { excluded } = await route('owner', [{ ...team(), hostMachineId: 'm-elsewhere' }])
+      expect(excluded).toEqual(expect.arrayContaining([expect.objectContaining({ title: 'New agent · Claude opus high · MacBook Pro' })]))
+    })
+
+    it('a machines rule naming the Mac allows its team account', async () => {
+      const rules = [{ id: 'r1', projectId: 'lead', rule: { kind: 'machines', machineIds: ['m1'] }, text: 'Only the MacBook Pro.' }]
+      expect((await route('owner', undefined, rules)).answer).toMatchObject({ ok: true, pick: { machineId: 'm1-team' } })
+    })
+  })
   it('refuses unobserved tools and devices, without probing arbitrary paths on a teammate computer', async () => {
     expect((await runPool(healthy(), false, { tools: ['docker'], devices: ['/dev/fixture'] })).answer.ok).not.toBe(true)
   })

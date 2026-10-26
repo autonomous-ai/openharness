@@ -329,6 +329,8 @@ class AgentCreationAttempt {
 
   bool get awaitingConfirmation => _awaitingConfirmation;
   bool get canCancelPending => _awaitingConfirmation && _holdReason != null;
+  bool get canFollowPending =>
+      _awaitingConfirmation && (_starting || _holdReason != null);
 
   /// The machine's code for a request it refused before launching anything,
   /// such as `SESSION_BUSY_IN_TERMINAL`: what a caller can offer next.
@@ -1890,6 +1892,39 @@ class AppNotifier extends ChangeNotifier {
       );
     }
     return result;
+  }
+
+  /// Whether this is a Mac, as the Harness Team account offer reads it. Off
+  /// under test, on a Mac too, unless a test sets it.
+  @visibleForTesting
+  bool? macOSForTest;
+  bool _teamOfferedAtStart = false;
+
+  /// The Harness Team account on this Mac (cli/src/team/autoSetup.ts),
+  /// offered while the person is here: as they join a Swarm ([reason]
+  /// `join`), add this Mac to one (`contribute`), or open the app
+  /// (`startup`). This Mac's own daemon decides whether to ask: no account
+  /// yet, not declined before, and at start only while this Mac is in a
+  /// Swarm with other people in it. macOS's administrator prompt is all the
+  /// person sees. Nothing on Windows or Linux, and never for another machine,
+  /// where nobody may be at it.
+  Future<void> offerTeamAccount(String reason) async {
+    if (!(macOSForTest ?? (Platform.isMacOS && !kUnderTest))) return;
+    final here = machineStates.values
+        .where(
+          (state) => state.isLocalMachine && !state.machine.isSharedMachine,
+        )
+        .firstOrNull;
+    if (here == null) return;
+    try {
+      await superTabMachineRequest(here.machine.machineId, {
+        'action': 'teamSetup',
+        'reason': reason,
+      });
+    } catch (error) {
+      // An older daemon, or one that cannot say: nothing is asked.
+      appLog.debug('super-tabs', 'team account not offered: $error');
+    }
   }
 
   Future<void> wakeSuperTabHost(String machineId) async {
@@ -5077,6 +5112,13 @@ class AppNotifier extends ChangeNotifier {
       // the offline poll (the one thing that would have re-probed) stopped, and the tiles sat on
       // "Offline" over a live terminal with nothing left to restore them. Measured 2026-09-18 21:50.
       machine.localEndpoint ??= _cliEndpoint;
+      // Once a launch, with the person here: a Mac that joined a Swarm before
+      // teammates' work went only to Team machines never met the join or
+      // contribute moment.
+      if (!_teamOfferedAtStart && !machine.machine.isSharedMachine) {
+        _teamOfferedAtStart = true;
+        unawaited(offerTeamAccount('startup'));
+      }
     } else {
       machine.transportMode = MachineTransportMode.cloudE2ee;
     }

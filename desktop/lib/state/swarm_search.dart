@@ -475,6 +475,32 @@ class SwarmSearchController extends ChangeNotifier {
   /// person (agents on their machines use it as it is), a download under way (the preview's Cancel).
   ({String label, String command, Future<String?> Function()? run})?
   swarmModelAction(SwarmDestination? row) {
+    final action = _swarmModelAction(row);
+    final swarm = swarmModels;
+    // Before the Swarm's models are set up, the owner's first share or run sets them up, then does it; a download needs
+    // nothing of the Swarm. Anyone else waits for the owner (the preview says so).
+    if (action == null ||
+        swarm == null ||
+        !swarm.setupNeeded ||
+        action.command == 'picker.model_download') {
+      return action;
+    }
+    final run = action.run;
+    return (
+      label: swarm.settingUp ? 'Setting up…' : action.label,
+      command: action.command,
+      run: run == null || !swarm.canSetUp || swarm.settingUp
+          ? null
+          : () async {
+              final error = await swarm.whenSetUp(run);
+              // A set up that failed is said in the preview, once; what the share or run itself answered is said here.
+              return swarm.setupNeeded ? null : error;
+            },
+    );
+  }
+
+  ({String label, String command, Future<String?> Function()? run})?
+  _swarmModelAction(SwarmDestination? row) {
     final swarm = swarmModels;
     final entry = models?.entries[row?.modelId];
     if (swarm == null || entry == null) return null;
@@ -487,16 +513,21 @@ class SwarmSearchController extends ChangeNotifier {
           owner.machine?.connectionStatus == ConnectionStatus.connected &&
           owner.machine?.needsLink == false &&
           (owner.targetMachineId == null || owner.machine?.isOffline == false);
-      Future<String?> Function() act(String action, {String? grid}) =>
+      // The Swarm's grid is read when the action runs: a first run sets the Swarm's models up, and names it then.
+      Future<String?> Function() act(String action, {bool forSwarm = false}) =>
           () async {
-            await owner.control(local, action, grid: grid);
+            await owner.control(
+              local,
+              action,
+              grid: forSwarm ? swarm.grid : null,
+            );
             return owner.error;
           };
       if (local.servedOn(swarm.grid)) {
         return (
           label: 'Stop for Swarm',
           command: 'picker.model_stop',
-          run: ready ? act('stop', grid: swarm.grid) : null,
+          run: ready ? act('stop', forSwarm: true) : null,
         );
       }
       // Too small or too slow to drive a coding agent: no Builder would be offered it, so neither Get nor Run is
@@ -515,7 +546,7 @@ class SwarmSearchController extends ChangeNotifier {
         label: 'Run for Swarm',
         command: 'picker.model_start',
         run: ready && capable && local.canStart
-            ? act('start', grid: swarm.grid)
+            ? act('start', forSwarm: true)
             : null,
       );
     }

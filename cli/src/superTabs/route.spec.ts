@@ -185,6 +185,15 @@ describe('strength, fit and effective cost', () => {
     expect(spent.shown[0].fit).toMatchObject({ status: 'short', effectiveCost: 2 })
     expect(spent.short).toBe('No candidate is expected to cover this task; its weekly quota is expected to run out partway and resets in 7 days.')
   })
+  it('a Codex account that has only a weekly window is read in full; a Claude one missing its 5-hour window is not', () => {
+    const CODEX = { engine: 'codex', model: 'default', effort: 'default', quality: 2, cost: 2 } as const
+    const weekly = quotaOf2({ known: true, windows: [{ usedPercent: 19, resetsAt: (NOW + 6 * D) / 1000, name: 'weekly' }] })
+    const r = route([on(CODEX, 'codex', weekly), on(SONNET, 'claude', windows([90, 3 * H], [80, 5 * D]))], { difficulty: 'low' })
+    expect(r.shown.map(s => [s.engine, s.fit.status])).toEqual([['claude', 'fits'], ['codex', 'fits']])
+    expect(r.excluded).toEqual([])
+    const half = route([on(SONNET, 'half', weekly), on(SONNET, 'claude', windows([90, 3 * H], [80, 5 * D]))], { difficulty: 'low' })
+    expect(half.excluded.map(e => e.title)).toEqual(['New agent · Claude sonnet medium · half'])
+  })
   it('an engine on an API key is metered: it fits with no window, beside a subscription machine and ranked after it', () => {
     const metered = quotaOf2({ known: true, windows: [] })
     expect(metered).toEqual({ known: true, leftPercent: null, resetsAt: null, metered: true })

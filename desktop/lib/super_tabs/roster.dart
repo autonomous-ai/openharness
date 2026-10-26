@@ -62,12 +62,11 @@ class _SuperTabRosterState extends State<SuperTabRoster> {
   Future<void> _remove(SuperTabAgent agent) async {
     var busy = false, attempted = false;
     final name = c.snapshot!.agentName(agent.id);
+    // The Mac, for an agent in that Mac's Harness Team account.
+    final place = c.snapshot?.placeOf(agent.machineId) ?? agent.machineId;
     final machine =
-        widget.app?.stateOf(agent.machineId)?.machine.displayName ??
-        c.snapshot?.machines
-                .where((m) => m['machineId'] == agent.machineId)
-                .firstOrNull?['name']
-            as String? ??
+        widget.app?.stateOf(place)?.machine.displayName ??
+        c.snapshot?.pool(place)?['name'] as String? ??
         'its computer';
     await showAppDialog<void>(
       context: context,

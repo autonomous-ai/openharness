@@ -15,12 +15,80 @@ class SwarmModelsTarget extends ChangeNotifier {
     required this.app,
     required this.grid,
     required this.machineId,
+    this.ready = true,
+    this.canSetUp = false,
+    this.onSetUp,
+    this.setupNote,
+    this.setupError,
+    this.setupPending = false,
   });
+
+  /// Turned on and not yet answered: the owner's computer is setting the models up in the background (a new Swarm's
+  /// are, from its creation). A share or run still sets them up at once if it has not finished.
+  final bool setupPending;
+
+  /// Whether the Swarm's models are set up, its grid made. Until they are, nothing is shared or run for it: the owner's
+  /// first share or run sets them up first ([whenSetUp]), and anyone else waits for the owner (2026-10-24: a list of
+  /// actions that could not be taken until a separate Set up read as broken).
+  bool ready;
+  bool get setupNeeded => !ready;
+
+  /// Whether this person may set them up: the Swarm's owner.
+  final bool canSetUp;
+
+  /// Sets them up from this computer; answers the Swarm's grid, or why it could not.
+  final Future<({String? grid, String? error})> Function()? onSetUp;
+
+  /// What a person who may not set them up is told instead: the owner has not, or is.
+  final String? setupNote;
+
+  /// Why the last set up failed, until another is tried.
+  String? setupError;
+
+  /// A set up under way.
+  bool settingUp = false;
+
+  /// The Swarm's models set up, once their grid is known (here, or on the owner's other computer).
+  void markReady(String swarmGrid) {
+    if (ready && grid == swarmGrid) return;
+    ready = true;
+    grid = swarmGrid;
+    setupError = null;
+    if (!_disposed) notifyListeners();
+  }
+
+  /// Runs [action] once the Swarm's models are set up, setting them up first when this person may and they are not.
+  /// Answers why it could not, or null.
+  Future<String?> whenSetUp(Future<String?> Function() action) async {
+    if (ready) return action();
+    final run = onSetUp;
+    if (run == null || !canSetUp || settingUp) return setupNote;
+    settingUp = true;
+    setupError = null;
+    if (!_disposed) notifyListeners();
+    ({String? grid, String? error}) answer;
+    try {
+      answer = await run();
+    } finally {
+      settingUp = false;
+      if (!_disposed) notifyListeners();
+    }
+    if (answer.grid case final swarmGrid? when answer.error == null) {
+      markReady(swarmGrid);
+      final error = await action();
+      await refresh();
+      return error;
+    }
+    setupError =
+        answer.error ?? 'Models could not be set up for this Swarm. Try again.';
+    if (!_disposed) notifyListeners();
+    return setupError;
+  }
 
   final AppNotifier app;
 
-  /// The Swarm's grid.
-  final String grid;
+  /// The Swarm's grid; empty until its models are set up.
+  String grid;
 
   /// This computer: the APIs are its own saved ones, and only it shares them.
   final String machineId;
@@ -43,6 +111,8 @@ class SwarmModelsTarget extends ChangeNotifier {
       shares.contains(shareKey(connectionId, model));
 
   Future<void> refresh() async {
+    // No grid yet: nothing is shared or offered there.
+    if (!ready) return;
     try {
       final answer = await app.swarmOffers(machineId, grid);
       offers = _keys(answer['offers'], 'sharedGrid');

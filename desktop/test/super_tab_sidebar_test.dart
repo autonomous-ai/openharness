@@ -481,7 +481,7 @@ void main() {
         await tester.pumpAndSettle();
         expect(find.byType(Switch), findsNothing);
         expect(
-          find.textContaining('Set up gets this computer ready'),
+          find.textContaining('Set up connects this computer to the Swarm'),
           findsOneWidget,
         );
         await tester.tap(setUp);

@@ -196,3 +196,8 @@ Use the matching backend, CLI and Desktop versions together for this feature:
 A signed internal Desktop artifact alone does not update the backend or host
 CLI. Validate the coordinated versions in an internal environment before a
 public Desktop release.
+
+When the server has the Harness GitHub App, an agent working on another person's
+project pushes and opens pull requests with a one-hour token for that project's
+repository, instead of its computer's own GitHub login. See
+[Swarm GitHub App](swarm-github-app.md) for setup.

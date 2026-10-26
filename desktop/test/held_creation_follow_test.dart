@@ -490,67 +490,79 @@ void main() {
       });
     }
 
-    testWidgets(
-      'the form opens the harness when it has started, with no press',
-      (tester) async {
-        final previous = NewHarnessFormState.heldFollowInterval;
-        NewHarnessFormState.heldFollowInterval = const Duration(seconds: 3);
-        addTearDown(() => NewHarnessFormState.heldFollowInterval = previous);
-        final machine = _Machine()..holds = 3;
-        final app = _app(machine);
-        final box = boxOn(app);
-        var created = 0;
-        await tester.pumpWidget(
-          MaterialApp(
-            theme: ThemeData.dark(),
-            home: Scaffold(
-              body: Center(
-                child: SizedBox(
-                  width: 820,
-                  height: 450,
-                  child: NewHarnessForm(
-                    controller: box,
-                    onClose: () {},
-                    onCreated: () => created++,
+    for (final starting in [false, true]) {
+      testWidgets(
+        'the form follows ${starting ? 'startup after its wait expires' : 'a held request'} with no press',
+        (tester) async {
+          final previous = NewHarnessFormState.heldFollowInterval;
+          NewHarnessFormState.heldFollowInterval = const Duration(seconds: 3);
+          addTearDown(() => NewHarnessFormState.heldFollowInterval = previous);
+          final machine = _Machine();
+          if (starting) {
+            machine.starts = 3;
+          } else {
+            machine.holds = 3;
+          }
+          final app = _app(machine)..startingCreationWait = Duration.zero;
+          final box = boxOn(app);
+          var created = 0;
+          await tester.pumpWidget(
+            MaterialApp(
+              theme: ThemeData.dark(),
+              home: Scaffold(
+                body: Center(
+                  child: SizedBox(
+                    width: 820,
+                    height: 450,
+                    child: NewHarnessForm(
+                      controller: box,
+                      onClose: () {},
+                      onCreated: () => created++,
+                    ),
                   ),
                 ),
               ),
             ),
-          ),
-        );
-        await tester.pumpAndSettle();
-        // Not through runAsync: a timer made there is a real one, which no pump moves.
-        final first = box.create();
-        await tester.pump();
-        expect(await first, NewHarnessOutcome.failed);
-        await tester.pump();
-        expect(box.error, _installing);
-        expect(find.text(_installing), findsOneWidget);
-        expect(created, 0);
+          );
+          await tester.pumpAndSettle();
+          // Not through runAsync: a timer made there is a real one, which no pump moves.
+          final first = box.create();
+          await tester.pump();
+          expect(await first, NewHarnessOutcome.failed);
+          await tester.pump();
+          final waiting = box.error!;
+          expect(
+            waiting,
+            starting ? contains('still starting your harness') : _installing,
+          );
+          expect(box.canCancelPending, !starting);
+          expect(find.text(waiting), findsOneWidget);
+          expect(created, 0);
 
-        // Twice still installing, then started: each a check nobody pressed for.
-        await tester.pump(const Duration(seconds: 3));
-        await tester.pump();
-        expect(machine.asked, hasLength(2));
-        expect(created, 0);
-        expect(find.text(_installing), findsOneWidget);
-        await tester.pump(const Duration(seconds: 3));
-        await tester.pump();
-        expect(created, 0);
-        await tester.pump(const Duration(seconds: 3));
-        await tester.pump();
-        expect(created, 1);
-        expect(machine.asked, [
-          'agent_create',
-          'agent_create_status',
-          'agent_create_status',
-          'agent_create_status',
-        ]);
+          // Twice still pending, then started: only status checks, never another create.
+          await tester.pump(const Duration(seconds: 3));
+          await tester.pump();
+          expect(machine.asked, hasLength(2));
+          expect(created, 0);
+          expect(find.text(waiting), findsOneWidget);
+          await tester.pump(const Duration(seconds: 3));
+          await tester.pump();
+          expect(created, 0);
+          await tester.pump(const Duration(seconds: 3));
+          await tester.pump();
+          expect(created, 1);
+          expect(machine.asked, [
+            'agent_create',
+            'agent_create_status',
+            'agent_create_status',
+            'agent_create_status',
+          ]);
 
-        // Nothing more is asked once it is made.
-        await tester.pump(const Duration(seconds: 10));
-        expect(machine.asked, hasLength(4));
-      },
-    );
+          // Nothing more is asked once it is made.
+          await tester.pump(const Duration(seconds: 10));
+          expect(machine.asked, hasLength(4));
+        },
+      );
+    }
   });
 }

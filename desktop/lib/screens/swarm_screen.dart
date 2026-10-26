@@ -511,6 +511,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
   Widget _startGuide() => WorkspaceWelcome(
     key: ValueKey('welcome:${app.activeSwarmId}:${app.activeSwarm.isSuperTab}'),
     onCommand: _runShortcut,
+    swarmDraft: app.activeSwarm.isSuperTab,
     composerBuilder: newHarnessOpensInBox
         ? (recent) => _newHarnessEmbedded && _newHarness != null
               ? _newHarnessContent(footer: recent)

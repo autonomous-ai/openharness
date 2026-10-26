@@ -56,6 +56,16 @@ describe('isolated observer WebSocket boundary', () => {
     handleObserverUpgrade({ url: '/api/observer-ws?link', headers: {} } as never, socket as never, Buffer.alloc(0)); await flush()
     expect(socket.destroy).toHaveBeenCalled()
   })
+  it('refuses a team sign-in (lib/teamSession.ts) before reading any grant, by link or by invitation', async () => {
+    m.auth.mockRejectedValue(Object.assign(new Error('This connection is not available to a team sign-in'), { code: 'TEAM_SESSION_LIMITED' }))
+    for (const mode of ['link', 'share']) {
+      const socket = { destroyed: false, destroy: vi.fn() }
+      handleObserverUpgrade({ url: `/api/observer-ws?${mode}=${share.id}`, headers: { 'sec-websocket-protocol': 'team-token' } } as never, socket as never, Buffer.alloc(0))
+      await flush()
+      expect(socket.destroy).toHaveBeenCalled()
+    }
+    expect(m.link).not.toHaveBeenCalled(); expect(m.grant).not.toHaveBeenCalled(); expect(m.upgrade).not.toHaveBeenCalled()
+  })
   it('does not admit a connection that closed while resolving the commenter name', async () => {
     let release!: (profile: unknown) => void
     m.profile.mockImplementationOnce(() => new Promise(resolve => { release = resolve }))

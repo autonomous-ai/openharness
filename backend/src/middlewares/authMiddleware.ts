@@ -6,6 +6,7 @@ import { parseAutonomousEnvironment, type AutonomousEnvironment } from '../lib/a
 import { countryCodeFromHeaders, stampUserCountry } from '../lib/clientGeo.js'
 import { isPublicCommunityRead } from '../lib/communityAccess.js'
 import { GRID_PROFILE_PATH } from '../lib/gridProfile.js'
+import { isTeamSession, TEAM_SESSION_LIMITED, TEAM_SESSION_MESSAGE, teamBodyAllowed, teamRequestAllowed } from '../lib/teamSession.js'
 
 /** By the matched route, not the raw URL, so an encoded spelling of the path is the same route. */
 const isGridProfileRequest = (request: FastifyRequest): boolean =>
@@ -100,8 +101,13 @@ export function registerAuthMiddleware(
     }
     // The Grid profile route reads the profile live and records it itself; a fill on top of that would
     // be a second storefront read and a second stored-versus-live line for one request.
-    const auth = await resolveSsoAuth(token, authenticate, autonomousEnv, isGridProfileRequest(request))
+    // A team session is accepted here only because the gate below holds it to its own machine.
+    const auth = await resolveSsoAuth(token, authenticate, autonomousEnv, isGridProfileRequest(request), { allowTeamSession: true })
     if ('user' in auth) {
+      // A Mac's team account (lib/teamSession.ts) reaches only what its own machine needs: deny by default.
+      if (auth.user.harnessSessionKind === 'team' && !(await teamRequestAllowed(request, auth.user))) {
+        return reply.code(403).send({ success: false, error: { code: TEAM_SESSION_LIMITED, message: TEAM_SESSION_MESSAGE } })
+      }
       request.user = auth.user
       // Where the person is, per Cloudflare (`CF-IPCountry`, absent off-Cloudflare). Every control-plane
       // call comes from their own computer, which is what makes this — and not the daemon's socket —
@@ -123,6 +129,13 @@ export function registerAuthMiddleware(
       },
     })
   })
+  // The rest of the team gate, once the body is read: a machine the body names must be the team session's own.
+  // Runs before every route's own preHandlers (its validation), as an instance hook does.
+  app.addHook('preHandler', async (request: FastifyRequest, reply: FastifyReply) => {
+    if (isTeamSession(request.user) && !teamBodyAllowed(request)) {
+      return reply.code(403).send({ success: false, error: { code: TEAM_SESSION_LIMITED, message: TEAM_SESSION_MESSAGE } })
+    }
+  })
 }
 
 export async function resolveSsoAuth(
@@ -130,24 +143,29 @@ export async function resolveSsoAuth(
   authenticate: typeof authenticateAccessToken = authenticateAccessToken,
   autonomousEnv: AutonomousEnvironment = 'prod',
   readsProfileItself = false,
+  /** Accept a team session (lib/teamSession.ts): only for a caller that then holds it to its own machine. */
+  { allowTeamSession = false }: { allowTeamSession?: boolean } = {},
 ): Promise<
   | { user: AuthUser }
   | {
     status: 401 | 403 | 503
-    code: 'UNAUTHORIZED' | 'AUTH_SERVICE_UNAVAILABLE' | 'AUTONOMOUS_ENV_MISMATCH' | 'AUTONOMOUS_ENV_NOT_ALLOWED'
+    code: 'UNAUTHORIZED' | 'AUTH_SERVICE_UNAVAILABLE' | 'AUTONOMOUS_ENV_MISMATCH' | 'AUTONOMOUS_ENV_NOT_ALLOWED' | 'TEAM_SESSION_LIMITED'
     message: string
     requiredEnv?: AutonomousEnvironment
   }
 > {
+  const options = { ...(readsProfileItself ? { learnGoogleSubject: false } : {}), ...(allowTeamSession ? { allowTeamSession } : {}) }
   try {
     return {
-      user: await (readsProfileItself
-        ? authenticate(token, autonomousEnv, { learnGoogleSubject: false })
-        : authenticate(token, autonomousEnv)),
+      user: await (Object.keys(options).length ? authenticate(token, autonomousEnv, options) : authenticate(token, autonomousEnv)),
     }
   } catch (err) {
     if (err instanceof SsoAuthError && err.code === 'AUTH_SERVICE_UNAVAILABLE') {
       return { status: 503, code: 'AUTH_SERVICE_UNAVAILABLE', message: 'Authentication service unavailable' }
+    }
+    // Refused for good, not an expired sign-in: a 401 would send the caller to refresh and try again.
+    if (err instanceof SsoAuthError && err.code === 'TEAM_SESSION_LIMITED') {
+      return { status: 403, code: 'TEAM_SESSION_LIMITED', message: err.message }
     }
     if (err instanceof SsoAuthError &&
       (err.code === 'AUTONOMOUS_ENV_MISMATCH' || err.code === 'AUTONOMOUS_ENV_NOT_ALLOWED')) {

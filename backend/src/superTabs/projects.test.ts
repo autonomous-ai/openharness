@@ -443,13 +443,14 @@ describe('custom role sets', () => {
   it('starts and assigns by a role id that exists in the custom set and matches the agent\'s kind', () => {
     const { f, p } = custom()
     f.run({ type: 'project.role.set', projectId: p.projectId, role: role('abcdefabcdef', 'Docs writer', 'builder') }, peer)
-    const start = (extra: Record<string, unknown>) => String(f.run({ type: 'agent.start', request: request(p.conversationId, extra) } as Command).startId)
+    // The project's owner starts it: a teammate's project runs only on a Team machine (machines.ts teamWorkCheck).
+    const start = (extra: Record<string, unknown>) => String(f.run({ type: 'agent.start', request: request(p.conversationId, extra) } as Command, peer).startId)
     expect(() => start({ roleId: 'review' })).toThrow('kind')
     expect(() => start({ roleId: 'lead' })).toThrow('kind')
     expect(() => start({ roleId: 'eeeeeeeeeeee' })).toThrow('not in this project')
     expect(() => start({ role: 'reviewer', roleId: 'dev' })).toThrow('kind')
     const startId = start({ roleId: 'abcdefabcdef' })
-    const worker = String(f.run({ type: 'agent.started', startId, harnessId: 'native', configuration }).agentId)
+    const worker = String(f.run({ type: 'agent.started', startId, harnessId: 'native', configuration }, peer).agentId)
     expect(f.state.agents.find(a => a.id === worker)!.roleId).toBe('abcdefabcdef')
     const group = String(f.run({ type: 'conversation.create', projectId: p.projectId, title: 'Work', brief: 'Do it', checks: [{ description: 'Done', independent: false }] }, peer).conversationId)
     expect(() => f.run({ type: 'work.assign', conversationId: group, agentId: worker, roleId: 'review' }, peer)).toThrow('kind')

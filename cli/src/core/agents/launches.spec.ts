@@ -291,6 +291,19 @@ describe('agent_create, refused before any pane exists', () => {
     expect(vi.mocked(create!).mock.calls).toHaveLength(calls)
   })
 
+  it('passes the GitHub App flag with a Swarm role only, and refuses anything else before dispatch', async () => {
+    const { ask, create } = setup()
+    await ask({ engine: 'codex', cwd: '/w', swarmRole: 'dev', swarmGitHub: true })
+    expect(vi.mocked(create!).mock.calls.at(-1)![0]).toMatchObject({ swarmRole: 'dev', swarmGitHub: true })
+    await ask({ engine: 'codex', cwd: '/w', swarmRole: 'dev' })
+    expect(vi.mocked(create!).mock.calls.at(-1)![0]).not.toHaveProperty('swarmGitHub')
+    const calls = vi.mocked(create!).mock.calls.length
+    for (const payload of [{ swarmRole: 'dev', swarmGitHub: false }, { swarmRole: 'dev', swarmGitHub: 'yes' }, { swarmGitHub: true }]) {
+      expect(await ask({ engine: 'claude', cwd: '/w', ...payload })).toMatchObject({ error: 'INVALID_SWARM_ROLE' })
+    }
+    expect(vi.mocked(create!).mock.calls).toHaveLength(calls)
+  })
+
   it('a first prompt that is not text, too long, or for an engine that cannot take one', async () => {
     const { ask, create } = setup()
     expect(await ask({ engine: 'claude', cwd: '/w', prompt: 7 })).toStrictEqual({ error: 'INVALID_PROMPT', detail: 'prompt must be a string' })
@@ -590,6 +603,20 @@ describe('agent_create with a receipt', () => {
     await ask({ engine: 'claude', projectSource: 'worktree', gitSource: '/work/repo', branchRef: 'refs/heads/main', creationId: CREATION })
     await vi.waitFor(() => expect(replies).toHaveLength(1))
     expect(vi.mocked(create!).mock.calls[0][0]).toMatchObject({ cwd: '/projects/prepared', scmLaunchRecord: { kind: 'git' } })
+  })
+
+  it('fetches nothing with this machine\'s login for another person\'s Swarm worktree: its host already fetched with the app\'s token', async () => {
+    const { ask, replies } = setup()
+    await ask({ engine: 'codex', projectSource: 'worktree', gitSource: '/swarm/project', branchName: 'super-tab/start-1', branchBase: 'default',
+      swarmRole: 'dev', swarmGitHub: true, creationId: CREATION })
+    await vi.waitFor(() => expect(replies).toHaveLength(1))
+    expect(prepareProjectFolder).toHaveBeenLastCalledWith({ source: 'worktree', gitSource: '/swarm/project', branchName: 'super-tab/start-1',
+      fromDefaultBranch: true, offline: true }, expect.anything())
+    // A Swarm start that is the machine owner's own fetches as before.
+    await ask({ engine: 'codex', projectSource: 'worktree', gitSource: '/swarm/project', branchName: 'super-tab/start-2', branchBase: 'default',
+      swarmRole: 'dev', creationId: `${CREATION}-own` })
+    await vi.waitFor(() => expect(replies).toHaveLength(2))
+    expect(vi.mocked(prepareProjectFolder).mock.calls.at(-1)![0]).not.toHaveProperty('offline')
   })
 
   it('records a folder it could not prepare as failed, in the folder\'s own words when it has them', async () => {

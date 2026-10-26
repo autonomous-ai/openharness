@@ -283,6 +283,53 @@ class SuperTabSnapshot {
   String agentName(String id, {String fallback = 'Agent'}) =>
       agent(id)?.displayName ?? agent(id)?.name ?? fallback;
 
+  /// [machineId]'s contribution to this Swarm, if it has one.
+  Map<String, dynamic>? pool(String machineId) =>
+      machines.where((m) => m['machineId'] == machineId).firstOrNull;
+
+  /// The Mac a Harness Team account's pool is part of: the machine its pool names as `hostMachineId` (stamped by the
+  /// backend), while that Mac is in this Swarm too, from the same person (docs/plans/2026-10-24-swarm-team-account.md).
+  /// Null for every other pool, a machine used only for agents included.
+  String? _macOf(Map<String, dynamic>? team) {
+    final host = team?['hostMachineId'];
+    if (host is! String || host == team!['machineId']) return null;
+    final mac = pool(host);
+    return mac != null &&
+            mac['hostMachineId'] == null &&
+            mac['contributorId'] == team['contributorId']
+        ? host
+        : null;
+  }
+
+  /// Every Harness Team account's pool in [machineId]'s row: one, or more once the account was set up again and its old
+  /// pool is still listed (backend superTabs/machines.ts `teamPoolsOf`). The backend changes them with the Mac.
+  List<Map<String, dynamic>> teamPoolsOf(String machineId) => [
+    for (final m in machines)
+      if (_macOf(m) == machineId) m,
+  ];
+
+  /// The one of them that runs teammates' work on the Mac: not being removed, and the last to report (backend
+  /// superTabs/machines.ts `teamPoolOf`). Null when there is none.
+  Map<String, dynamic>? teamPoolOf(String machineId) {
+    num reported(Map<String, dynamic> m) => switch (m['observation']) {
+      {'receivedAt': final num at} => at,
+      _ => -1,
+    };
+    Map<String, dynamic>? best;
+    for (final m in teamPoolsOf(machineId)) {
+      if (m['removal'] != null) continue;
+      if (best == null || reported(m) >= reported(best)) best = m;
+    }
+    return best;
+  }
+
+  /// The machine [machineId] is shown as in this Swarm, one row per computer: the Mac, for its Harness Team account
+  /// while that Mac is in the Swarm too; [machineId] itself otherwise.
+  String placeOf(String machineId) => _macOf(pool(machineId)) ?? machineId;
+
+  /// Whether more than one person can start work here: teammates' agents are a question only then.
+  bool get hasTeammates => people.where((p) => p.role != 'viewer').length > 1;
+
   // Resolve the person shown in chat from the same identity as the roster.
   // Recorded labels remain the fallback for agents no longer in the Swarm.
   String authorName(SuperTabMessage message) => message.fromAgent

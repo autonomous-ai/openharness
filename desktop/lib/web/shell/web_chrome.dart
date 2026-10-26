@@ -37,6 +37,7 @@ WorkspaceChrome _webWorkspaceChrome(AppNotifier app) => WorkspaceChrome(
       WebTabSwitcher(app: app, commands: commands),
   compactFooter: (context, footer) => WebFooterBar(footer: footer),
   compactBelow: kWebCompactBelow,
+  twoPaneColumnsBelow: 1000,
   firstMachine: (context) => WebFirstMachine(app: app),
   menuOnEveryTab: true,
   labelsPaneStatus: true,

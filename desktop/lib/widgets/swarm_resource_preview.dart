@@ -1448,6 +1448,43 @@ class _SwarmResourcePreviewState extends State<SwarmResourcePreview> {
             ),
           ),
         ],
+        // Not set up yet: what the first share or run does first, or who sets it up (SwarmModelsTarget.whenSetUp).
+        if (widget.search.swarmModels case final swarm?
+            when swarm.setupNeeded &&
+                const {
+                  SwarmModelKind.apiModel,
+                  SwarmModelKind.local,
+                  SwarmModelKind.live,
+                  SwarmModelKind.shared,
+                }.contains(kind)) ...[
+          const SizedBox(height: 10),
+          ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 460),
+            child: Text(
+              key: const ValueKey('swarm-model-setup-note'),
+              swarm.settingUp
+                  ? 'Setting up this Swarm\'s models… The first time can take a few minutes.'
+                  : swarm.canSetUp && swarm.setupPending
+                  ? 'This Swarm\'s models are being set up in the background. If that has not finished, your first '
+                        'share or run finishes it.'
+                  : swarm.canSetUp
+                  ? 'This Swarm\'s models are not set up yet. Your first share or run sets them up: it connects this '
+                        'computer to the Swarm with your Harness account, and everyone in the Swarm can then use them.'
+                  : swarm.setupNote ??
+                        'The Swarm owner has not set up models yet.',
+              style: DesktopChrome.metadata(),
+            ),
+          ),
+          if (!swarm.settingUp && swarm.setupError != null) ...[
+            const SizedBox(height: 8),
+            Text(
+              'Could not set up: ${swarm.setupError}',
+              style: DesktopChrome.metadata(
+                color: Theme.of(context).colorScheme.error,
+              ),
+            ),
+          ],
+        ],
         for (final line in errors) ...[
           const SizedBox(height: 10),
           Text(line, style: DesktopChrome.text(size: 12, color: error)),
@@ -1670,7 +1707,7 @@ class _SwarmResourcePreviewState extends State<SwarmResourcePreview> {
               ]
             : [
                 'More models',
-                'The rest of the models the grid catalog ranks for this machine, best first.',
+                'The rest of the models that fit this machine, best first.',
               ],
         controls: true,
       );

@@ -32,7 +32,8 @@ class SettingsNav extends StatefulWidget {
   /// raises the on-screen keyboard over half the list.
   final bool autofocusSearch;
 
-  /// True on a phone: the way back is a finger's size.
+  /// True on a phone: the way back is a finger's size, and Keyboard
+  /// shortcuts is left out.
   final bool compact;
 
   /// The machine rail's own default width, so Settings opens without the left
@@ -93,6 +94,16 @@ class _SettingsNavState extends State<SettingsNav> {
     return KeyEventResult.handled;
   }
 
+  static List<SettingsGroup> _withoutKeyboardShortcuts(
+    List<SettingsGroup> groups,
+  ) => [
+    for (final group in groups)
+      SettingsGroup(group.title, [
+        for (final section in group.sections)
+          if (section != SettingsSection.shortcuts) section,
+      ]),
+  ];
+
   /// The groups, narrowed to the query. Matching is a plain case-insensitive
   /// substring of the label or a row's keywords ([SettingsSection.matches]) —
   /// this list is short, so anything cleverer would be machinery no one can
@@ -101,8 +112,11 @@ class _SettingsNavState extends State<SettingsNav> {
   List<SettingsGroup> get _visible {
     final query = _query.trim().toLowerCase();
     // The list this build actually has: [settingsGroups] drops the developer
-    // rows a release build does not ship.
-    final all = settingsGroups;
+    // rows a release build does not ship. A phone has no keyboard to learn
+    // (audit finding S8).
+    final all = widget.compact
+        ? _withoutKeyboardShortcuts(settingsGroups)
+        : settingsGroups;
     if (query.isEmpty) return all;
     final groups = <SettingsGroup>[];
     for (final group in all) {

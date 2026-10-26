@@ -159,3 +159,34 @@ describe('device key routes', () => {
     })
   })
 })
+
+// Behind the REST gate (lib/teamSession.ts) these are refused already; the handlers refuse a team session themselves too,
+// so a gate that ever let one through still could not add an app key or vouch for one.
+describe('device key routes and a team session', () => {
+  let app: FastifyInstance
+  const team = { ...user, harnessSessionId: 'team-session', harnessSessionKind: 'team' as const, harnessComputerId: 'b'.repeat(32) }
+  beforeEach(async () => {
+    vi.resetAllMocks()
+    app = Fastify(); app.setErrorHandler(errorHandler)
+    app.addHook('onRequest', async request => { request.user = team })
+    await app.register(deviceKeyRoutes); await app.ready()
+  })
+  afterEach(async () => { await app.close() })
+
+  it('reads the log, but marks no key as seen', async () => {
+    m.read.mockResolvedValue({ acct: 'user-1', head, entries: [] })
+    const r = await app.inject({ method: 'GET', url: `/api/device-keys?since=0&self=${encodeURIComponent(Buffer.alloc(32, 1).toString('base64'))}` })
+    expect(r.statusCode).toBe(200)
+    expect(m.touch).not.toHaveBeenCalled()
+  })
+
+  it('never appends a key or an acknowledgement for it', async () => {
+    for (const [url, payload] of [['/api/device-keys', { entry: { op: 'add' } }], ['/api/device-keys/acks', { ack: { pub: 'x' } }]] as const) {
+      const r = await app.inject({ method: 'POST', url, payload })
+      expect(r.statusCode).toBe(403)
+      expect(r.json().error.code).toBe('TEAM_SESSION_LIMITED')
+    }
+    expect(m.append).not.toHaveBeenCalled()
+    expect(m.appendAck).not.toHaveBeenCalled()
+  })
+})

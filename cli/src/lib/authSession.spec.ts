@@ -136,6 +136,16 @@ describe('AuthSessionManager', () => {
     expect(readAuthSession()).not.toHaveProperty('clientId')
   })
 
+  // A Harness Team sign-in (cli/src/team/) keeps its kind through every rewrite; any other kind reads as a computer's.
+  it('keeps a team sign-in\'s kind, and reads no other', async () => {
+    writeAuthSession({ ...baseSession(), kind: 'team' })
+    expect(readAuthSession()?.kind).toBe('team')
+    new AuthSessionManager('http://backend.invalid').updateMachineId('machine-2')
+    expect(readAuthSession()).toMatchObject({ kind: 'team', machineId: 'machine-2' })
+    await writeFile(AUTH_SESSION_FILE, JSON.stringify({ ...baseSession(), kind: 'admin' }))
+    expect(readAuthSession()).not.toHaveProperty('kind')
+  })
+
   // `process.exit` skips `finally`: a daemon that exited mid-refresh left the lock for the next
   // `harness auth status` to wait out (30s), which is how long the desktop app waits for it.
   it('drops the refresh lock when the process exits while holding it, and only then', async () => {

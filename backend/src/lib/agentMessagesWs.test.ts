@@ -80,6 +80,13 @@ describe('blind shared-tab relay WebSocket', () => {
     expect(m.upgrade).not.toHaveBeenCalled(); expect(m.admits).not.toHaveBeenCalled()
   })
 
+  it('answers a team sign-in (lib/teamSession.ts) 403 before the upgrade: refused for good, not a token to refresh', async () => {
+    m.auth.mockRejectedValueOnce(new m.SsoAuthError('This connection is not available to a team sign-in', 'TEAM_SESSION_LIMITED'))
+    await connect()
+    expect(socket.write).toHaveBeenCalledWith('HTTP/1.1 403 Forbidden\r\nConnection: close\r\nContent-Length: 0\r\n\r\n')
+    expect(m.admits).not.toHaveBeenCalled(); expect(m.upgrade).not.toHaveBeenCalled()
+  })
+
   it('tells an admitted socket it is ready and subscribes to its own channel and share changes', async () => {
     await connect()
     expect(m.admits).toHaveBeenCalledWith('ken', 'ken-mac', SHARE, 'prod')

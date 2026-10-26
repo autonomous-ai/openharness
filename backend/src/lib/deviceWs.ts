@@ -341,7 +341,9 @@ export function handleDeviceUpgrade(req: IncomingMessage, socket: Duplex, head: 
     try {
       user = await authenticateAccessToken(accessToken, autonomousEnv, { allowHarnessSession: 'computer' })
     } catch (err) {
-      if (err instanceof SsoAuthError && (err.code === 'AUTONOMOUS_ENV_MISMATCH' || err.code === 'AUTONOMOUS_ENV_NOT_ALLOWED')) {
+      // A Mac's team account (lib/teamSession.ts) has no device lane: refused for good, like the wrong environment.
+      if (err instanceof SsoAuthError && (err.code === 'AUTONOMOUS_ENV_MISMATCH' || err.code === 'AUTONOMOUS_ENV_NOT_ALLOWED'
+        || err.code === 'TEAM_SESSION_LIMITED')) {
         denyWith(403, 'Forbidden')
         return
       }

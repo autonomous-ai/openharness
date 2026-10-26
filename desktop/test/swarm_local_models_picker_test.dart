@@ -21,6 +21,7 @@ class _Subscriptions extends ModelsMenuController {
 class _SwarmApp extends ModelManagerTestApp {
   _SwarmApp() : super(ModelManagerConnection());
   final shareCalls = <({String connectionId, String model, bool start})>[];
+  final shareGrids = <String>[];
   final shared = <({String connectionId, String model})>{};
   String? shareError;
   bool sharesFail = false;
@@ -75,6 +76,7 @@ class _SwarmApp extends ModelManagerTestApp {
     required bool start,
   }) async {
     shareCalls.add((connectionId: connectionId, model: model, start: start));
+    shareGrids.add(grid);
     if (shareError != null) return {'error': shareError};
     final key = (connectionId: connectionId, model: model);
     start ? shared.add(key) : shared.remove(key);
@@ -263,23 +265,25 @@ void main() {
     expect(sections, contains(ModelSearchSection.local));
     search.setModelScope(ModelSearchSection.catalog);
     expect(search.rows, isNotEmpty);
-    expect(
-      search.rows.map(search.modelSection).toSet(),
-      {ModelSearchSection.catalog},
-    );
+    expect(search.rows.map(search.modelSection).toSet(), {
+      ModelSearchSection.catalog,
+    });
     search.setModelScope(null);
     expect(search.rows.map(search.modelSection).toSet(), sections);
   });
 
-  test('offers neither Run nor Get for a model too small to drive a coding agent', () {
-    final run = search.swarmModelAction(row('tiny'))!;
-    expect(run.label, 'Run for Swarm');
-    expect(run.run, isNull);
-    final get = search.swarmModelAction(row('tiny-get'))!;
-    expect(get.label, 'Get');
-    expect(get.run, isNull);
-    expect(search.swarmModelAction(row('downloaded'))!.run, isNotNull);
-  });
+  test(
+    'offers neither Run nor Get for a model too small to drive a coding agent',
+    () {
+      final run = search.swarmModelAction(row('tiny'))!;
+      expect(run.label, 'Run for Swarm');
+      expect(run.run, isNull);
+      final get = search.swarmModelAction(row('tiny-get'))!;
+      expect(get.label, 'Get');
+      expect(get.run, isNull);
+      expect(search.swarmModelAction(row('downloaded'))!.run, isNotNull);
+    },
+  );
 
   test('stops a model running for the Swarm on the Swarm\'s grid', () async {
     await search.swarmModelAction(row('served'))!.run!();
@@ -306,5 +310,49 @@ void main() {
     app.shareError = null;
     expect(await target.share('c1', 'deepseek', start: false), isNull);
     expect(target.shared('c1', 'deepseek'), isFalse);
+  });
+
+  // 2026-10-24: a list of actions that could not be taken until a separate Set up read as broken. The owner's first
+  // share or run sets the Swarm's models up, then does it; anyone else waits for the owner.
+  test('before set up, the owner\'s first share sets the Swarm\'s models up, then shares on its grid', () async {
+    var setUps = 0;
+    final fresh = SwarmModelsTarget(
+      app: app,
+      grid: '',
+      machineId: 'm',
+      ready: false,
+      canSetUp: true,
+      onSetUp: () async {
+        setUps++;
+        return (
+          grid: setUps == 1 ? null : _grid,
+          error: setUps == 1 ? 'offline' : null,
+        );
+      },
+    );
+    addTearDown(fresh.dispose);
+    Future<String?> share() => fresh.share('c1', 'deepseek', start: true);
+    // A failed set up shares nothing and says why.
+    expect(await fresh.whenSetUp(share), 'offline');
+    expect(fresh.setupError, 'offline');
+    expect(app.shareCalls, isEmpty);
+    expect(await fresh.whenSetUp(share), isNull);
+    expect(fresh.ready, isTrue);
+    expect(app.shareGrids, [_grid]);
+    // Set up now: the action runs as it is.
+    expect(await fresh.whenSetUp(() async => 'ran'), 'ran');
+    expect(setUps, 2);
+    // Someone who may not set it up is told who does.
+    final member = SwarmModelsTarget(
+      app: app,
+      grid: '',
+      machineId: 'm',
+      ready: false,
+      setupNote: 'The owner sets it up.',
+    );
+    addTearDown(member.dispose);
+    expect(await member.whenSetUp(() async => 'ran'), 'The owner sets it up.');
+    member.markReady(_grid);
+    expect(member.grid, _grid);
   });
 }

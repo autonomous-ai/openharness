@@ -15,6 +15,7 @@ import '../widgets/desktop_chrome.dart';
 import '../widgets/key_hints.dart';
 import '../widgets/swarm_resource_preview.dart';
 import '../widgets/swarm_switcher.dart';
+import '../ws/ws_conn.dart';
 import 'controller.dart';
 import 'dialog_scope.dart';
 import 'model.dart';
@@ -60,7 +61,8 @@ class _SwarmModelsWindowState extends State<_SwarmModelsWindow> {
   /// then has this computer's Harness set grid up — installed and signed in with the Harness account if it is not —
   /// create the grid and add the Swarm's people, and tells the Swarm how that went. The owner's computers keep the
   /// members in step afterwards (CLI `superTabs/swarmGrids.ts`).
-  Future<void> _setUp() async {
+  /// Answers the Swarm's grid once it is ready, else null ([_error] says why).
+  Future<String?> _setUp() async {
     final c = widget.controller, app = widget.app;
     setState(() {
       _settingUp = true;
@@ -81,12 +83,12 @@ class _SwarmModelsWindowState extends State<_SwarmModelsWindow> {
       if (grid == null) {
         _error =
             c.operationError ?? 'The Swarm could not be reached. Try again.';
-        return;
+        return null;
       }
       final machineId = app?.modelManager.machine?.machine.machineId;
       if (app == null || machineId == null) {
         // Nothing here can run grid: the owner's other computers finish it in the background.
-        return;
+        return null;
       }
       final members = [
         for (final person in c.snapshot?.people ?? const <SuperTabPerson>[])
@@ -96,6 +98,12 @@ class _SwarmModelsWindowState extends State<_SwarmModelsWindow> {
       Map<String, dynamic> answer;
       try {
         answer = await app.swarmGridSync(machineId, grid, members);
+      } on WsRequestFailure catch (failure) {
+        // Grid's own answer, refused: its words, not "unreachable" (2026-10-24: a plan's network limit read as this
+        // computer could not be reached).
+        answer = failure.payload.isNotEmpty
+            ? {...failure.payload, 'ready': false}
+            : {'ready': false, 'error': failure.detail ?? failure.code};
       } catch (_) {
         answer = {
           'ready': false,
@@ -113,7 +121,12 @@ class _SwarmModelsWindowState extends State<_SwarmModelsWindow> {
         if (error != null)
           'error': error.length > 500 ? error.substring(0, 500) : error,
       });
-      if (!ready) _error = error ?? 'Grid could not be set up. Try again.';
+      if (!ready) {
+        _error =
+            error ?? 'Models could not be set up for this Swarm. Try again.';
+        return null;
+      }
+      return grid;
     } finally {
       if (mounted) setState(() => _settingUp = false);
     }
@@ -128,20 +141,24 @@ class _SwarmModelsWindowState extends State<_SwarmModelsWindow> {
       builder: (context, _) {
         final local = c.snapshot?.localModels;
         final on = local?.enabled == true;
-        final picker = on && local?.ready == true && app != null;
+        // The models list whenever this computer can run models, as ⌘I's is; before the Swarm's are set up it offers
+        // Set up in it, as ⌘I offers setting Grid up (owner, 2026-10-24). The panel below is for a window with no models.
+        final ready = on && local?.ready == true;
+        final picker = app != null;
         final String? failed = _settingUp
             ? null
             : _error ??
                   (on && local?.ready == false
-                      ? local?.error ?? 'grid refused the request'
+                      ? local?.error ?? 'the request was refused'
                       : null);
         final header = Padding(
           padding: EdgeInsets.fromLTRB(24, 18, 16, picker ? 14 : 4),
           child: Row(
             children: [
               Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.baseline,
+                  textBaseline: TextBaseline.alphabetic,
                   children: [
                     Text(
                       'Manage models',
@@ -151,25 +168,17 @@ class _SwarmModelsWindowState extends State<_SwarmModelsWindow> {
                         height: 1.35,
                       ).copyWith(fontWeight: FontWeight.w600),
                     ),
+                    // The computer whose models and APIs these are, beside the title.
                     if (picker) ...[
-                      const SizedBox(height: 2),
-                      Row(
-                        key: const ValueKey('super-local-models-ready'),
-                        children: [
-                          Container(
-                            width: 6,
-                            height: 6,
-                            decoration: BoxDecoration(
-                              color: grid.AppPalette.online,
-                              shape: BoxShape.circle,
-                            ),
-                          ),
-                          const SizedBox(width: 6),
-                          Text(
-                            'Swarm grid ready · ${_capitalized(thisComputerName())}',
-                            style: DesktopChrome.metadata(),
-                          ),
-                        ],
+                      const SizedBox(width: 10),
+                      Flexible(
+                        child: Text(
+                          _capitalized(thisComputerName()),
+                          key: const ValueKey('super-local-models-machine'),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: DesktopChrome.metadata(),
+                        ),
                       ),
                     ],
                   ],
@@ -206,8 +215,7 @@ class _SwarmModelsWindowState extends State<_SwarmModelsWindow> {
                     : failed != null
                     ? 'Could not set up: ${_sentence(failed)}'
                     : c.isOwner
-                    ? 'Set up gets this computer ready with your Harness account and creates the Swarm\'s grid. '
-                          'People in the Swarm are added to it, now and as they join.'
+                    ? 'Set up connects this computer to the Swarm with your Harness account. Everyone in the Swarm can then use the models you run and the APIs you share, now and as they join.'
                     : 'The Swarm owner has not set up models yet.',
                 style: DesktopChrome.metadata(
                   color: failed != null
@@ -259,7 +267,24 @@ class _SwarmModelsWindowState extends State<_SwarmModelsWindow> {
                   header,
                   if (picker) ...[
                     Expanded(
-                      child: _SwarmModelsPicker(app: app, grid: local!.grid),
+                      child: _SwarmModelsPicker(
+                        app: app,
+                        grid: local?.grid ?? '',
+                        ready: ready,
+                        canSetUp: c.isOwner,
+                        onSetUp: () async {
+                          final grid = await _setUp();
+                          return (
+                            grid: grid,
+                            error: grid == null ? _error : null,
+                          );
+                        },
+                        setupNote: on && local?.ready == null
+                            ? 'The Swarm owner is setting up its models.'
+                            : 'The Swarm owner has not set up models yet.',
+                        setupError: _settingUp ? null : failed,
+                        setupPending: on && local?.ready == null,
+                      ),
                     ),
                   ] else
                     setup,
@@ -275,10 +300,25 @@ class _SwarmModelsWindowState extends State<_SwarmModelsWindow> {
 
 /// ⌘I's Models list and preview, for the Swarm whose grid is [grid].
 class _SwarmModelsPicker extends StatefulWidget {
-  const _SwarmModelsPicker({required this.app, required this.grid});
+  const _SwarmModelsPicker({
+    required this.app,
+    required this.grid,
+    this.ready = true,
+    this.canSetUp = false,
+    this.onSetUp,
+    this.setupNote,
+    this.setupError,
+    this.setupPending = false,
+  });
 
   final AppNotifier app;
   final String grid;
+  final bool ready;
+  final bool canSetUp;
+  final Future<({String? grid, String? error})> Function()? onSetUp;
+  final String? setupNote;
+  final String? setupError;
+  final bool setupPending;
 
   @override
   State<_SwarmModelsPicker> createState() => _SwarmModelsPickerState();
@@ -304,6 +344,12 @@ class _SwarmModelsPickerState extends State<_SwarmModelsPicker> {
       app: app,
       grid: widget.grid,
       machineId: app.modelManager.machine?.machine.machineId ?? '',
+      ready: widget.ready,
+      canSetUp: widget.canSetUp,
+      onSetUp: widget.onSetUp,
+      setupNote: widget.setupNote,
+      setupError: widget.setupError,
+      setupPending: widget.setupPending,
     );
     unawaited(_target.refresh());
     // `adding`/`offersCreate`: the APIs section ends in Add API connection, as ⌘I's does.
@@ -315,6 +361,16 @@ class _SwarmModelsPickerState extends State<_SwarmModelsPicker> {
       adding: true,
       offersCreate: true,
     )..setQuery(':');
+  }
+
+  @override
+  void didUpdateWidget(covariant _SwarmModelsPicker oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    // Set up meanwhile, here or on the owner's other computer: the same list goes on, on the Swarm's grid.
+    if (widget.ready && !_target.ready && widget.grid.isNotEmpty) {
+      _target.markReady(widget.grid);
+      unawaited(_target.refresh());
+    }
   }
 
   @override
@@ -346,7 +402,6 @@ class _SwarmModelsPickerState extends State<_SwarmModelsPicker> {
 
   @override
   Widget build(BuildContext context) {
-    final hints = KeyHints.visibleOf(context);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -387,11 +442,6 @@ class _SwarmModelsPickerState extends State<_SwarmModelsPicker> {
             ),
           ),
         ),
-        if (hints)
-          ListenableBuilder(
-            listenable: Listenable.merge([_search, _target]),
-            builder: (context, _) => _SwarmModelsHints(search: _search),
-          ),
       ],
     );
   }
@@ -474,67 +524,6 @@ class _SwarmModelScopes extends StatelessWidget {
           scope('APIs', ModelSearchSection.apis),
           scope('Yours', ModelSearchSection.local),
           scope('Get', ModelSearchSection.catalog),
-        ],
-      ),
-    );
-  }
-}
-
-/// The window's keys, along its foot: Return says what it does on the chosen row.
-class _SwarmModelsHints extends StatelessWidget {
-  const _SwarmModelsHints({required this.search});
-
-  final SwarmSearchController search;
-
-  @override
-  Widget build(BuildContext context) {
-    final row = search.selected;
-    final action = row == null ? null : search.swarmModelAction(row);
-    final enter = row == null
-        ? null
-        : row.isCreate
-        ? 'Add API connection'
-        // Enter does nothing on an action that cannot run (a model too small for Builders): no hint for it.
-        : action != null
-        ? (action.run == null ? null : action.label)
-        : search.canExpandApi(row) ||
-              search.isModelDownloadsRow(row) ||
-              search.canGetModel(row)
-        ? search.actionLabel(row)
-        : null;
-    Widget hint(String key, String label) => Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 5),
-          decoration: BoxDecoration(
-            color: DesktopChrome.foreground.withValues(alpha: .07),
-            borderRadius: BorderRadius.circular(4),
-          ),
-          child: Text(key, style: DesktopChrome.text(size: 11, height: 1.45)),
-        ),
-        const SizedBox(width: 6),
-        Text(
-          label,
-          style: DesktopChrome.text(size: 11, color: DesktopChrome.muted),
-        ),
-      ],
-    );
-    return Container(
-      key: const ValueKey('super-local-models-hints'),
-      height: 36,
-      padding: const EdgeInsets.symmetric(horizontal: 20),
-      decoration: BoxDecoration(
-        border: Border(top: BorderSide(color: DesktopChrome.rim)),
-      ),
-      child: Row(
-        children: [
-          hint('↑↓', 'Select'),
-          if (enter != null) ...[const SizedBox(width: 16), hint('↵', enter)],
-          const SizedBox(width: 16),
-          hint('⇥', 'Actions'),
-          const Spacer(),
-          hint('esc', 'Close'),
         ],
       ),
     );

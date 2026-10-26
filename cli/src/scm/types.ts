@@ -70,6 +70,9 @@ export interface PrepareOptions {
   /** No `base` was named: start from the remote's default branch, brought up to date first, instead of from where
    *  the source checkout is (git: `origin`'s default branch, fetched). Absent: the SCM's own default. */
   fromDefaultBranch?: boolean
+  /** Bring nothing up to date over the network: start from what the source checkout has. A Swarm start doing another
+   *  person's work, whose host already fetched with the Harness GitHub App's token (lib/swarmGitHub.ts). */
+  offline?: boolean
   /** The name the workspace's line of work takes — git: its branch. Absent: made up. */
   name?: string
   /** `name` exists already and is taken as it is, rather than created from `base`. */

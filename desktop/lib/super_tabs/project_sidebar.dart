@@ -401,7 +401,7 @@ class ProjectSidebar extends StatelessWidget {
             _navigationRow(
               key: 'super-local-models',
               label: 'Manage models',
-              icon: AppIcons.cpu,
+              icon: AppIcons.brain,
               onTap: () =>
                   showSwarmLocalModels(context, controller, app: app, now: now),
             ),

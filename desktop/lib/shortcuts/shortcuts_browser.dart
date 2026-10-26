@@ -7,6 +7,7 @@ import 'package:flutter/services.dart';
 
 import '../shared/theme/app_theme.dart' as grid;
 import '../widgets/desktop_chrome.dart';
+import '../widgets/key_hints.dart';
 import 'app_keymap.dart';
 import 'key_cap.dart';
 import 'keymap_commands.dart';
@@ -408,23 +409,27 @@ class _ShortcutsBrowserState extends State<ShortcutsBrowser> {
                         },
                       ),
               ),
-              Divider(height: 1, color: grid.AppGlass.hair),
-              Padding(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 24,
-                  vertical: 12,
+              // The keys that drive this page, where the host shows key
+              // hints; the mouse-first web does not (audit finding S8).
+              if (KeyHints.visibleOf(context)) ...[
+                Divider(height: 1, color: grid.AppGlass.hair),
+                Padding(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 24,
+                    vertical: 12,
+                  ),
+                  child: Wrap(
+                    spacing: 24,
+                    runSpacing: 8,
+                    children: [
+                      Text('↑↓ Browse', style: DesktopChrome.metadata()),
+                      Text('Return Practice', style: DesktopChrome.metadata()),
+                      if (widget.onClose != null)
+                        Text('Esc Close', style: DesktopChrome.metadata()),
+                    ],
+                  ),
                 ),
-                child: Wrap(
-                  spacing: 24,
-                  runSpacing: 8,
-                  children: [
-                    Text('↑↓ Browse', style: DesktopChrome.metadata()),
-                    Text('Return Practice', style: DesktopChrome.metadata()),
-                    if (widget.onClose != null)
-                      Text('Esc Close', style: DesktopChrome.metadata()),
-                  ],
-                ),
-              ),
+              ],
             ],
           ),
         );

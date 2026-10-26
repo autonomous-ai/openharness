@@ -26,6 +26,59 @@ import { parseAutonomousEnvironment, type AutonomousEnvironment } from '../lib/a
 import { isHarnessRefreshToken } from '../lib/harnessTokenFormat.js'
 import { redeemHandoff, refreshHarnessSession, revokeHarnessSession, startHandoff } from '../lib/harnessSession.js'
 import { normalizeSignInAttribution, type SignInAttribution } from '../lib/signInAttribution.js'
+import { createHash } from 'node:crypto'
+import { ed25519 } from '@noble/curves/ed25519.js'
+import { normalizeComputerId } from '../lib/deviceAuth.js'
+import { activeMachineKeys } from '../lib/deviceKeyLog.js'
+import { machineAlive, prisma } from '../lib/prisma.js'
+import { pub } from '../lib/bus.js'
+import { TEAM_CONVERSION_PROOF_MS, teamConversionMessage } from '../lib/teamSession.js'
+import type { AuthUser } from '../lib/ssoAuth.js'
+
+/**
+ * Whether [user] is the computer [computerId] itself, which alone may turn itself into a team machine
+ * (lib/teamSession.ts). Its own Harness computer session says so; any other sign-in of the account must carry
+ * that computer's machine key's signature over `teamConversionMessage`, fresh, and used once.
+ */
+async function isThisComputer(user: AuthUser, computerId: string, proof: unknown): Promise<boolean> {
+  if (user.harnessSessionKind === 'computer' && user.harnessComputerId === computerId) return true
+  if (!proof || typeof proof !== 'object') return false
+  const { machineId, at, sig } = proof as { machineId?: unknown; at?: unknown; sig?: unknown }
+  if (typeof machineId !== 'string' || !machineId || machineId.length > 128 || typeof sig !== 'string' || sig.length > 128
+    || typeof at !== 'number' || !Number.isSafeInteger(at) || Math.abs(Date.now() - at) > TEAM_CONVERSION_PROOF_MS) return false
+  const machine = await prisma.machine.findFirst({ where: { machineId, userId: user.sub, computerId, autonomousEnv: user.autonomousEnv, ...machineAlive } })
+  if (!machine) return false
+  const key = (await activeMachineKeys(user.sub)).find((k) => k.kind === 'machine' && k.machineId === machineId)
+  if (!key) return false
+  let signed = false
+  try {
+    signed = ed25519.verify(Buffer.from(sig, 'base64'), new TextEncoder().encode(teamConversionMessage(user.sub, computerId, machineId, at)),
+      Buffer.from(key.pub, 'base64'))
+  } catch { signed = false }
+  if (!signed) return false
+  // Once: a proof seen on the way cannot be shown again.
+  const once = await pub.set(`hnauth:teamproof:${createHash('sha256').update(sig).digest('hex')}`, '1', 'EX', Math.ceil(2 * TEAM_CONVERSION_PROOF_MS / 1000), 'NX')
+  return once === 'OK'
+}
+
+/**
+ * The Mac a team code's account lives on ("One machine", docs/plans/2026-10-24-swarm-team-account.md): its team
+ * machine records it, so every list shows that Mac once. A Harness computer session's is its own machine, and it may
+ * name no other. Any other sign-in, an Autonomous one above all, names it ([named]): one of the account's ordinary
+ * machines in this environment, never a team machine. Null when none is known, false when [named] is not allowed.
+ */
+async function teamHostMachine(user: AuthUser, named: string | undefined): Promise<string | null | false> {
+  const ordinary = (row: { sessionKind: string | null } | null | undefined) => !!row && row.sessionKind !== 'team'
+  if (user.harnessSessionKind === 'computer' && user.harnessComputerId) {
+    const own = (await prisma.machine.findMany({ where: { userId: user.sub, computerId: user.harnessComputerId, autonomousEnv: user.autonomousEnv,
+      ...machineAlive } })).filter(ordinary)
+    if (named !== undefined) return own.some(row => row.machineId === named) ? named : false
+    return own[0]?.machineId ?? null
+  }
+  if (named === undefined) return null
+  const machine = await prisma.machine.findFirst({ where: { machineId: named, userId: user.sub, autonomousEnv: user.autonomousEnv, ...machineAlive } })
+  return ordinary(machine) ? named : false
+}
 
 /** Reporting only: a sign-in whose attribution cannot be stored still signs in. */
 async function recordAttribution(userId: string, attribution: SignInAttribution): Promise<void> {
@@ -247,12 +300,34 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
   //    its Add Phone QR; the phone that scans it redeems the code for a session of its own. An
   //    Autonomous sign-in can hand one off, and so can a computer a phone signed in by QR
   //    (routes/qrSignIn.ts) — a phone's own session cannot mint more of itself.
-  app.post('/api/auth/handoff', async (req, reply) => {
+  //    `{ kind: 'team' }` asks for a code for this Mac's team account instead (lib/teamSession.ts): same
+  //    lifetime, same answer, which names the kind minted. A team session can never mint one of either kind.
+  //    `{ kind: 'team', computerId }` is a computer turning ITSELF into a team machine (`harness team on`): only
+  //    that computer may ask (isThisComputer), and the code redeems for that computer alone.
+  //    `{ kind: 'team', hostMachineId }` names the Mac the team account lives on (teamHostMachine); a computer's own
+  //    session need not name it. A team session can never set or change it: it cannot mint.
+  app.post<{ Body: { kind?: unknown; computerId?: unknown; proof?: unknown; hostMachineId?: unknown } | undefined }>('/api/auth/handoff', async (req, reply) => {
     if (req.user!.harnessSessionId && req.user!.harnessSessionKind !== 'computer') {
       return sendError(reply, 'Add a phone from a computer signed in to Harness', 'HANDOFF_NOT_ALLOWED', 403)
     }
+    const body = req.body && typeof req.body === 'object' ? req.body as { kind?: unknown; computerId?: unknown; proof?: unknown; hostMachineId?: unknown } : {}
+    const asked = body.kind
+    if ((asked !== undefined && asked !== 'viewer' && asked !== 'team') || (body.computerId !== undefined && asked !== 'team')
+      || (body.hostMachineId !== undefined && (asked !== 'team' || body.computerId !== undefined))) {
+      return sendError(reply, 'Ask for a phone or a team sign-in code', 'INVALID_HANDOFF_KIND', 400)
+    }
+    const convert = body.computerId === undefined ? undefined : typeof body.computerId === 'string' ? normalizeComputerId(body.computerId) : null
+    if (convert === null) return sendError(reply, 'Name this computer by its id', 'INVALID_COMPUTER_ID', 400)
+    const named = body.hostMachineId === undefined ? undefined
+      : typeof body.hostMachineId === 'string' && body.hostMachineId && body.hostMachineId.length <= 128 ? body.hostMachineId : null
+    if (named === null) return sendError(reply, 'Name the machine by its id', 'INVALID_MACHINE_ID', 400)
     try {
-      return sendSuccess(reply, await startHandoff(req.user!.sub))
+      if (convert && !(await isThisComputer(req.user!, convert, body.proof))) {
+        return sendError(reply, 'Only this computer can make itself a team machine', 'HANDOFF_NOT_ALLOWED', 403)
+      }
+      const host = asked === 'team' && !convert ? await teamHostMachine(req.user!, named) : null
+      if (host === false) return sendError(reply, 'That machine is not one of this account\'s computers', 'HANDOFF_NOT_ALLOWED', 403)
+      return sendSuccess(reply, await startHandoff(req.user!.sub, asked === 'team' ? 'team' : 'viewer', convert ? { convert } : host ? { host } : {}))
     } catch (e) {
       logger.error('handoff start failed', e)
       return sendError(reply, 'Authentication service unavailable', 'AUTH_SERVICE_UNAVAILABLE', 503)
@@ -261,12 +336,14 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
 
   // Unauthenticated BY DESIGN, like /refresh: the code is the credential. It is 32 random bytes,
   // good for one redeem within 90 seconds, so there is nothing to guess and nothing to replay.
-  app.post<{ Body: { code?: string; label?: string } }>('/api/auth/handoff/redeem', async (req, reply) => {
+  // A team code also needs the redeeming daemon's `computerId`: its session is bound to that computer.
+  app.post<{ Body: { code?: string; label?: string; computerId?: string } }>('/api/auth/handoff/redeem', async (req, reply) => {
     const code = typeof req.body?.code === 'string' ? req.body.code.trim() : ''
-    const label = (typeof req.body?.label === 'string' ? req.body.label.trim() : '').slice(0, 80) || 'phone'
+    const label = (typeof req.body?.label === 'string' ? req.body.label.trim() : '').slice(0, 80)
+    const computerId = typeof req.body?.computerId === 'string' ? req.body.computerId : undefined
     try {
-      const tokens = await redeemHandoff(code, label)
-      // Expired, spent, or never ours — one answer, so a caller learns nothing from which.
+      const tokens = await redeemHandoff(code, label, computerId)
+      // Expired, spent, never ours, or a team code without its computer — one answer, so a caller learns nothing from which.
       if (!tokens) return sendError(reply, 'That code has expired. Scan the new one.', 'HANDOFF_INVALID', 401)
       logger.info('handoff redeemed', { label })
       return sendSuccess(reply, tokens)

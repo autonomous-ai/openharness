@@ -64,6 +64,7 @@ class WorkspaceChrome {
     this.compactTabs,
     this.compactFooter,
     this.compactBelow = 0,
+    this.twoPaneColumnsBelow = 0,
     this.firstMachine,
     this.menuOnEveryTab = false,
     this.labelsPaneStatus = false,
@@ -124,6 +125,15 @@ class WorkspaceChrome {
   final Widget Function(BuildContext context, WorkspaceFooter footer)?
   compactFooter;
   final double compactBelow;
+
+  /// Below [twoPaneColumnsBelow] of window width the pane grid is drawn at
+  /// most two columns wide, so a tablet's panes keep a readable header. Only
+  /// the drawing: the tab's saved layout stays the one a wider window shows.
+  /// Zero, the default, never applies. Audit finding S2.
+  final double twoPaneColumnsBelow;
+
+  /// The most pane columns a window [width] wide draws, or null for no limit.
+  int? maxPaneColumnsAt(double width) => width < twoPaneColumnsBelow ? 2 : null;
 
   /// True gives every tab a right-click menu (Rename Tab, Close Tab), not only
   /// a shared one. Audit finding S10.

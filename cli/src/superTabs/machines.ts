@@ -8,11 +8,14 @@ import { backend, SuperTabHostError } from './host.js'
 import { identifier, object } from './wire.js'
 import { readCapabilities, quotaOf, meteredEngine } from './capacity.js'
 import { startAgent, type ScopedRequest } from './start.js'
-import { prepareSwarmProject } from './projectFolder.js'
+import { prepareSwarmStart } from './projectFolder.js'
+import { readAuthSession } from '../lib/authSession.js'
 import { createSwarmCloneTrustRepair, swarmCloneRoots } from './cloneTrust.js'
 import { git } from '../lib/worktreeSweep.js'
 import { projectsRoot } from '../lib/projectFolder.js'
 import { worktreeFolderName } from '../lib/agentNames.js'
+import { teamPrivacyObserver } from '../team/observer.js'
+import type { PrivacyObservation } from '../team/privacy.js'
 
 const finite = (v: unknown) => typeof v === 'number' && Number.isFinite(v) ? v : null
 const list = (v: unknown) => Array.isArray(v) ? v.map(object) : []
@@ -20,6 +23,9 @@ const list = (v: unknown) => Array.isArray(v) ? v.map(object) : []
 // include tools from pending starts. An uncommon tool first named during routing remains unverified and is refused.
 const COMMON_TOOLS = ['git', 'node', 'npm', 'flutter', 'gh', 'cargo', 'python3']
 const VERIFIED_TOOL_TTL_MS = 10 * 60_000
+/** After a backend refuses the privacy field (one from before the Harness Team account), how long the reading goes
+ *  without it before the field is offered again: a backend deployed meanwhile is heard from within this long. */
+const PRIVACY_REFUSED_MS = 10 * 60_000
 const UNVERIFIED_TOOL_TTL_MS = 60_000
 
 /** How often the executor asks the backend what its tabs want of it (a start waiting, a pause) and compares what it
@@ -89,6 +95,15 @@ export class ContributedMachines {
   private readonly cleaning = new Map<string, Promise<void>>()
   /** Per removal whose cleanup or acknowledgement failed, how often and when it may run again. */
   private readonly cleanupRetries = new Map<string, { failures: number; at: number }>()
+  /** Until when the reading leaves out its privacy field, which the backend refused. */
+  private privacyRefusedUntil = 0
+  /** This pass's privacy reading, read once a pass (the check itself runs at most every five minutes). */
+  private privacy(): PrivacyObservation | null {
+    try { return (this.deps.privacy ?? teamPrivacyObserver)() } catch (error) {
+      // A check that could not run is not a pass: a team account reports it unchecked, never private.
+      return { mode: 'account', passed: false, item: 'unchecked', detail: `The privacy check did not run: ${error instanceof Error ? error.message : String(error)}`, checkedAt: this.deps.now() }
+    }
+  }
   /** The grids this machine reads, at most once a minute: every Swarm's reading shares it. */
   private gridModelsRead: { at: number; answer: unknown } | null = null
   private async gridModels(local: { request: (type: string, payload: Record<string, unknown>, timeoutMs: number) => Promise<unknown> }): Promise<unknown> {
@@ -101,7 +116,14 @@ export class ContributedMachines {
   }
   constructor(private readonly core: CoreApi, private readonly machineId: string,
     private readonly deps: { backend: typeof backend; open: typeof openDaemon; capabilities: typeof readCapabilities;
-      start: typeof startAgent; now: () => number; prepare?: typeof prepareSwarmProject; log?: (message: string) => void; env?: NodeJS.ProcessEnv } =
+      start: typeof startAgent; now: () => number; log?: (message: string) => void; env?: NodeJS.ProcessEnv
+      /** Readies a queued start before its agent is created (superTabs/projectFolder.ts `prepareSwarmStart`): whom the
+       *  work is for when it uses the Harness GitHub App, else null. */
+      prepare?: (core: CoreApi, row: Record<string, unknown>, start: Record<string, unknown>) => Promise<{ requester: string } | null | void>
+      /** Whether this daemon runs team work only (a Harness Team account, `harness team on`): it has no git login of its own. */
+      team?: () => boolean
+      /** The Harness Team account's privacy check (team/privacy.ts): null for the owner's own daemon. */
+      privacy?: () => PrivacyObservation | null } =
       { backend, open: openDaemon, capabilities: readCapabilities, start: startAgent, now: Date.now }) {}
   stop() { this.stopped = true }
   /** DESKTOP-0TFH0OJ, 2026-10-23: every Claude start there was refused (CLI 0.4.57 took an API-key Claude for one not
@@ -129,6 +151,7 @@ export class ContributedMachines {
     const pendingIds = new Set(pools.flatMap(row => list(row.starts).map(start => start.id)))
     for (const id of this.waiting.keys()) if (!pendingIds.has(id)) this.waiting.delete(id)
     for (const tab of this.published.keys()) if (!pools.some(row => row.tabId === tab)) this.published.delete(tab)
+    const privacy = this.privacy()
     // The local daemon is reached only for a reading to send, never for a pass that has nothing to say.
     let local: Awaited<ReturnType<typeof openDaemon>> | null = null
     let usage: Record<string, unknown> | null = null
@@ -148,7 +171,9 @@ export class ContributedMachines {
           return Array.isArray(wanted) ? wanted.filter((name): name is string => typeof name === 'string' && /^[A-Za-z0-9_.+-]{1,80}$/.test(name)) : []
         })])].slice(0, 20)
         const signature = JSON.stringify([row.reservations, pool.generation, [...running].sort(), [...stopped].sort(), row.paused === true || pool.paused === true,
-          pending.map(start => start.id).sort()])
+          pending.map(start => start.id).sort(),
+          // A privacy result that changes (a home folder opened again) is sent at once, not on the next beat.
+          privacy ? [privacy.mode, 'passed' in privacy ? privacy.passed : null, 'item' in privacy ? privacy.item : null] : null])
         const last = this.published.get(String(row.tabId))
         if (!last || last.signature !== signature || began - last.at >= MACHINE_HEARTBEAT_MS) {
         local ??= await this.deps.open(where)
@@ -199,6 +224,7 @@ export class ContributedMachines {
             await local.request('grid_swarm_offers', { grid: row.localGrid }, 10_000).catch(() => ({}))),
         ].slice(0, MAX_LOCAL_MODELS) : null
         const observation = { generation: pool.generation, tools: reportedTools, ...(localModels ? { localModels } : {}),
+          ...(privacy && began >= this.privacyRefusedUntil ? { privacy } : {}),
           ...(refusedModels.length ? { refusedModels } : {}),
           ...(Object.keys(toolProbeErrors).length ? { toolProbeErrors } : {}),
           resources: { cpuPercent: finite(resources.cpuPercent), memoryUsedBytes: finite(resources.memoryUsedBytes), memoryTotalBytes: finite(resources.memoryTotalBytes),
@@ -215,12 +241,22 @@ export class ContributedMachines {
             && identifier(r.harnessId) && identifier(r.generation)).map(r => ({ harnessId: r.harnessId, generation: r.generation })) } : {}) }
         try {
           const path = `/api/super-tabs/${row.tabId}/machines/${this.machineId}`
-          try { await this.deps.backend(this.core, 'POST', path, observation) }
-          catch (error) {
-            if (!(error instanceof SuperTabHostError) || error.status !== 400 || error.code !== 'VALIDATION_ERROR' || !('toolProbeErrors' in observation || 'localModels' in observation || 'refusedModels' in observation)) throw error
-            // Older backends reject the additive fields. Their boolean-only view still safely refuses an unverified tool.
-            const { toolProbeErrors: _probeErrors, localModels: _served, refusedModels: _refused, ...legacy } = observation
-            await this.deps.backend(this.core, 'POST', path, legacy)
+          const refused = (error: unknown) => error instanceof SuperTabHostError && error.status === 400 && error.code === 'VALIDATION_ERROR'
+          // Older backends reject the additive fields. The privacy field is the newest, so it goes alone first: a backend
+          // that takes everything else keeps the local models it reads. Their boolean-only view still safely refuses an
+          // unverified tool, and a reading without privacy is never one a Team machine passes on.
+          const { privacy: _privacy, ...withoutPrivacy } = observation
+          const { toolProbeErrors: _probeErrors, localModels: _served, refusedModels: _refused, ...legacy } = withoutPrivacy
+          const attempts = [observation, ...('privacy' in observation ? [withoutPrivacy] : []),
+            ...('toolProbeErrors' in observation || 'localModels' in observation || 'refusedModels' in observation ? [legacy] : [])]
+          for (const [index, attempt] of attempts.entries()) {
+            try {
+              await this.deps.backend(this.core, 'POST', path, attempt)
+              break
+            } catch (error) {
+              if (!refused(error) || index === attempts.length - 1) throw error
+              if (attempt === observation && 'privacy' in observation) this.privacyRefusedUntil = began + PRIVACY_REFUSED_MS
+            }
           }
           this.published.set(String(row.tabId), { at: began, signature })
         } catch (error) { this.failed = true; throw error }
@@ -241,16 +277,29 @@ export class ContributedMachines {
             input.action === 'startStatus' ? 'GET' : 'POST', path,
             input.action === 'startStatus' ? undefined : { operationId: input.operationId, command: input.command }) })
           try {
-            if (pool.scope === 'swarm' && !start.dispatched) {
-              try { await (this.deps.prepare ?? prepareSwarmProject)(this.core, row, start) }
-              catch (error) {
+            // The Harness Team account is not private (its owner's home folder opened again, say): a new start is refused
+            // here as well as by routing, and never moved to the owner's account instead.
+            if (privacy?.mode === 'account' && !privacy.passed && !start.dispatched) {
+              await scoped({ action: 'command', operationId: `privacy-failed-${start.id}`,
+                command: { type: 'agent.startFailed', startId: start.id,
+                  error: `This computer's Harness Team account is not private (${privacy.item}): ${privacy.detail} Its owner can run \`harness team setup\` to repair it.` } })
+              continue
+            }
+            // Another person's project is cloned and fetched with the Harness GitHub App's token, never this machine's own
+            // git login; a token that cannot be had fails the start (superTabs/projectFolder.ts).
+            let github: { requester: string } | null = null
+            if (!start.dispatched) {
+              try {
+                github = (await (this.deps.prepare ?? ((core, pooled, queued) => prepareSwarmStart(core, pooled, queued,
+                  { backend: this.deps.backend, team: (this.deps.team ?? (() => readAuthSession()?.kind === 'team'))() })))(this.core, row, start)) ?? null
+              } catch (error) {
                 await scoped({ action: 'command', operationId: `prepare-failed-${start.id}`,
                   command: { type: 'agent.startFailed', startId: start.id,
                     error: error instanceof Error ? error.message : 'Could not prepare this project on the machine.' } })
                 continue
               }
             }
-            const result = await this.deps.start({ tabId: row.tabId, startId: start.id, hostDispatch: true }, scoped, where, this.deps.open)
+            const result = await this.deps.start({ tabId: row.tabId, startId: start.id, hostDispatch: true, ...(github ? { github } : {}) }, scoped, where, this.deps.open)
             if (result.ok === true && identifier(result.harnessId)) {
               this.waiting.delete(start.id)
               // Before the start settles: a settled start is no longer listed, so a missed record would never be made.

@@ -1,5 +1,6 @@
 import { readCapabilities } from './capacity.js'
 import { existsSync } from 'node:fs'
+import { readAuthSession } from '../lib/authSession.js'
 import { createHash } from 'node:crypto'
 import type { CoreApi, ServiceRequests, SuperTabsPort } from '../core/api.js'
 import { backend, swarmRoleFor, hostJournalFile, identifier, object, SuperTabHost, SuperTabHostError, type SuperTabHostOptions } from './host.js'
@@ -10,6 +11,9 @@ import { CapacityReservations, type ReservationBook } from './reservations.js'
 import { ContributionPreparations, prepareContribution } from './contribution.js'
 import { messageIdOf } from './attach.js'
 import { cardId, SwarmCards } from './cards.js'
+import { GitHubTokenRefresher, githubToken } from './github.js'
+import { teamEngineReporter, type TeamEngineReporter } from '../team/engines.js'
+import { AUTO_SETUP_REASONS, realTeamAutoSetup, type AutoSetupReason, type TeamAutoSetup } from '../team/autoSetup.js'
 
 const POST_HELP = 'reply in that conversation. Use a unique ID per message and reuse it after an interrupted request. Answer a message once, with --reply-to its ID. --attach sends a file (a screenshot, a log; up to 10 files of 10 MB each), and TEXT may then be empty.'
 const HELP = {
@@ -23,7 +27,7 @@ const HELP = {
   start: 'start OPERATION_ID JSON: create one agent in a conversation on a machine in this Swarm\'s Machines list; to use another machine, a person adds it to the Swarm first. Repeat exactly after an interruption; it follows the same native creation receipt. It does not assign work. With worktree true, the agent starts from the repository\'s default branch, fetched first, unless you set branchRef (refs/heads/BRANCH, or refs/remotes/origin/BRANCH to fetch it first) to start from another branch, such as the one this work builds on. Set role "reviewer" to start a Reviewer; leave role out for a Builder. The role is kept for the session. On Custom skills, add "roleId" to the start request to start the agent in that role of its kind (a builder or reviewer role from status); without it the agent takes the first role of its kind. A Reviewer runs on claude or codex and is assigned only review groups (conversation.create with reviewOf naming the group it reviews); a review group is assigned only to a Reviewer. Add the Reviewer to the reviewed group with conversation.agent so it is told when that work is ready for review and can pass its independent check. Start one with a routeDecisionId like any agent.',
   release: 'When a Builder finishes, decide reuse, keep or stop; prefer stop unless more work is coming soon. Reuse assigns new work; agent.release records keep or requests stop. Wait for the execution host to confirm a stop. A person can withdraw a stuck stop; the session cannot receive new work in that Swarm. Its native capacity stays reserved until its host confirms stopping. Other Swarms wait up to two minutes for an in-flight close, then may reuse it.',
   resume: 'resume START_ID: finish a pending start without creating another agent.',
-  route: 'route GROUP JSON: before you start an agent or assign work to another agent, choose who does it. Work you do yourself is not routed. JSON: {"difficulty":"low|medium|high","risk":"low|medium|high","size":"small|medium|large","why":"one sentence","kind":"optional word such as ui or docs","local":"optional true, only when a person asked for a local model","model":"optional: the model a person named, in their words; only it is offered","needs":{"tools":[],"devices":[],"cwd":"/absolute/repo"}}. size is how long the work runs: small about 20 minutes, medium about an hour, large about three hours. Candidates that break the owner\'s hard rules are left out; soft rules (a preferred engine for the kind, idle agents first) rank the rest. A pick on a model served on the Swarm\'s grid starts with gridModel and gridName in place of model and effort. Start or assign the pick with its routeDecisionId; to choose otherwise, pass overrideReason. An agent\'s start or work.assign without a routeDecisionId is refused, so route first; a person can still start and assign by hand.',
+  route: 'route GROUP JSON: before you start an agent or assign work to another agent, choose who does it. Work you do yourself is not routed. JSON: {"difficulty":"low|medium|high","risk":"low|medium|high","size":"small|medium|large","why":"one sentence","kind":"optional word such as ui or docs","local":"optional true, only when a person asked for a local model","model":"optional: the model a person named, in their words; only it is offered","needs":{"tools":[],"devices":[],"cwd":"/absolute/repo"}}. size is how long the work runs: small about 20 minutes, medium about an hour, large about three hours. Candidates that break the owner\'s hard rules are left out, and so are machines that cannot take a teammate\'s project: it runs only on Team machines (a Mac\'s Harness Team account whose privacy check passed, or a machine used only for agents), and the route says why the others were left out. Soft rules (a preferred engine for the kind, idle agents first) rank the rest. A pick on a model served on the Swarm\'s grid starts with gridModel and gridName in place of model and effort. Start or assign the pick with its routeDecisionId; to choose otherwise, pass overrideReason. An agent\'s start or work.assign without a routeDecisionId is refused, so route first; a person can still start and assign by hand.',
   screen: 'screen AGENT [--scrollback N]: read a worker\'s terminal as plain text, with up to 200 lines of scrollback. Only its project\'s Lead may. Use it when a worker seems stuck.',
   type: 'type AGENT [TEXT] [--key K]...: type text, then keys (Enter, Esc, Tab, Up, Down, Left, Right, Ctrl-C, 0-9), into a worker\'s terminal. Answer prompts within its task; ask the owner before approving anything risky.',
   capacity: 'capacity MACHINE_ID JSON: inspect machine, engine and quota headroom. JSON uses the start request fields below. Unknown allowances are not reported as free tokens.',
@@ -125,6 +129,21 @@ function markAnswered(page: unknown, later: unknown[], agentId: string): unknown
   }) }
 }
 
+/** Whether this machine is in a Swarm with other people in it: a contribution of its own to a tab whose people are more
+ *  than its owner. False when that cannot be read. */
+export async function sharedSwarm(core: CoreApi): Promise<boolean> {
+  const machineId = core.daemon.machineId()
+  if (!identifier(machineId)) return false
+  const pools = await backend(core, 'GET', `/api/super-tabs/hosts/${machineId}/pools`).catch(() => [])
+  for (const row of Array.isArray(pools) ? pools.map(object) : []) {
+    if (!identifier(row.tabId)) continue
+    const tab = object(await backend(core, 'GET', `/api/super-tabs/${row.tabId}`).catch(() => ({})))
+    const people = object(tab.state).people
+    if (Array.isArray(people) && people.length > 1) return true
+  }
+  return false
+}
+
 export interface SuperTabServiceOptions {
   prepareContribution?: typeof prepareContribution
   capacity?: typeof readCapabilities
@@ -132,6 +151,14 @@ export interface SuperTabServiceOptions {
   reservations?: (core: CoreApi, machineId: string) => ReservationBook
   /** The Swarm cards' reader (superTabs/cards.ts), for a spec. */
   cards?: (core: CoreApi, machineId: string) => SwarmCards
+  /** What keeps Swarm sessions' GitHub tokens fresh (superTabs/github.ts), for a spec. */
+  githubTokens?: (core: CoreApi) => Pick<GitHubTokenRefresher, 'start' | 'stop'>
+  /** What reports the Harness Team account's own engines to its owner (team/engines.ts), for a spec. */
+  teamEngines?: () => Pick<TeamEngineReporter, 'start' | 'stop'>
+  /** What sets up the Harness Team account when Desktop asks (team/autoSetup.ts), for a spec. */
+  teamSetup?: () => Promise<Pick<TeamAutoSetup, 'offer'>>
+  /** Whether this daemon runs team work only (a Harness Team account, `harness team on`), for a spec. */
+  team?: () => boolean
 }
 export function superTabService(core: CoreApi, options: SuperTabServiceOptions = {}): { requests: ServiceRequests; port: SuperTabsPort } {
   const preparations = new ContributionPreparations(input => (options.prepareContribution ?? prepareContribution)(core, input))
@@ -163,10 +190,21 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
     }
     return swarmCards
   }
-  const disconnect = () => { preparations.clear(); host?.stop(); host = null; book?.stop(); book = null; bookMachine = null; swarmCards?.want(false); swarmCards = null; cardsMachine = null }
+  // Sessions doing another person's project work keep a live GitHub App token while their task lasts, and none after.
+  const tokens = (options.githubTokens ?? (api => new GitHubTokenRefresher(api)))(core)
+  // In the Harness Team account only: whether its Claude Code and Codex are installed and signed in, for its owner to read.
+  const engines = (options.teamEngines ?? teamEngineReporter)()
+  let autoSetup: Promise<Pick<TeamAutoSetup, 'offer'>> | null = null
+  const disconnect = () => { preparations.clear(); host?.stop(); host = null; book?.stop(); book = null; bookMachine = null; swarmCards?.want(false); swarmCards = null; cardsMachine = null; tokens.stop(); engines.stop() }
   const port = {
     connected: () => {
-      if (identifier(core.daemon.machineId()) && existsSync(hostJournalFile(core.dataDir, core.daemon.machineId()))) wake()
+      tokens.start()
+      engines.start()
+      // A daemon that runs team work only is there for its Swarms: its host runs from its first connection. Its Mac's daemon adds
+      // a Harness Team account to a Swarm without waking it (host.ts joinTeams), and a host that never ran reports no privacy
+      // check, so the Swarm read the account as offline and never sent it a teammate's work (third VM run).
+      if (identifier(core.daemon.machineId()) && (existsSync(hostJournalFile(core.dataDir, core.daemon.machineId()))
+        || (options.team ?? (() => readAuthSession()?.kind === 'team'))())) wake()
     },
     disconnected: disconnect,
     stop: disconnect,
@@ -189,6 +227,26 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
           return await wake().prepareNative(payload.tabId, payload.contextId, payload.action === 'renewNative', closed)
         }
         if (!asker.owner || (!asker.local && asker.accountOwner !== true)) return { error: 'OWNER_REQUIRED' }
+        // `harness git-credential` in a local agent's shell (superTabs/gitCredential.ts): the token of that agent's task,
+        // which goes to this computer's own processes alone, never to another machine through the relay.
+        if (payload.action === 'githubToken') {
+          if (!asker.local) return { error: 'OWNER_REQUIRED' }
+          return await githubToken(core, String(payload.harnessId ?? ''))
+        }
+        // Desktop on this Mac, as the person joins a Swarm, adds this Mac to one, or opens the app (team/autoSetup.ts): the
+        // Harness Team account, behind macOS's own administrator prompt. Never through the relay, with nobody at this Mac.
+        if (payload.action === 'teamSetup') {
+          if (!asker.local) return { error: 'OWNER_REQUIRED' }
+          if (!AUTO_SETUP_REASONS.includes(payload.reason as AutoSetupReason)) return { error: 'INVALID_REQUEST' }
+          // Desktop asks at every launch. A Mac that hosts no Swarm work, as no regular user's does, answers at once:
+          // nothing read, run or asked of the backend.
+          if (payload.reason === 'startup' && !(identifier(core.daemon.machineId()) && existsSync(hostJournalFile(core.dataDir, core.daemon.machineId())))) {
+            return { ok: true, state: 'not-shared' }
+          }
+          autoSetup ??= (options.teamSetup ?? (() => realTeamAutoSetup(core.dataDir, line => console.log(`[team] ${line}`))))()
+            .catch(error => { autoSetup = null; throw error })
+          return { ok: true, ...await (await autoSetup).offer(payload.reason as AutoSetupReason, () => sharedSwarm(core)) }
+        }
         if (payload.action === 'swarmRole') {
           const grant = await port.swarmRole(String(payload.harnessId ?? ''))
           return { ok: true, role: grant ? grant.role : grant, ...(grant ? { mode: grant.mode } : {}) }

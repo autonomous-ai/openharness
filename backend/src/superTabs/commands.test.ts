@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { applyCommand, commandSchema, PAIR_CHAIN_LIMIT, type Command, type CommandContext } from './commands.js'
+import { applyCommand, commandSchema, PAIR_CHAIN_LIMIT, swarmGridName, withoutCredentials, type Command, type CommandContext } from './commands.js'
+import { CREDENTIAL_MARKER, type CredentialKind } from './credentials.js'
 import { hostLocalGrid, machineSlots, removalPreview, swarmGridRow } from './machines.js'
 import { activeWork, agentRole, createSuperTab, visibleState, type Actor, type AgentConfiguration } from './model.js'
 import type { RouteDecision } from './routeRecord.js'
@@ -30,6 +31,18 @@ function fixture() {
   const group = () => run({ type: 'conversation.create', title: 'Offline editing', brief: 'Save edits while offline.',
     checks: [{ description: 'Reconnect preserves the edits.', independent: true }] }).result.conversationId as string
   return { run, invite, add, group, get state() { return state } }
+}
+
+/** Makes [machineId] [contributorId]'s contributed machine used only for agents (`harness team on`), reporting now, so a
+ *  teammate's agent there may take another person's project (machines.ts teamWorkCheck). */
+function teamMachine(f: ReturnType<typeof fixture>, contributorId: string, machineId = 'host') {
+  const team = { sessionKind: 'team' as const, privacy: { mode: 'dedicated' as const, seenAt: 1000 } }
+  const existing = f.state.machines?.find(m => m.machineId === machineId)
+  if (existing) return void Object.assign(existing.observation!, team)
+  f.state.machines = [...(f.state.machines ?? []), { machineId, name: 'Studio', contributorId, membershipGeneration: f.state.people.find(p => p.id === contributorId)!.generation,
+    generation: 'g1', cwd: '/repo', engines: ['claude'], maxAgents: 2, paused: false, observation: { generation: 'g1', receivedAt: 1000, ...team,
+      resources: { cpuPercent: null, memoryTotalBytes: null, memoryUsedBytes: null, diskFreeBytes: null, diskTotalBytes: null, projectDiskFreeBytes: null,
+        deviceType: null, chip: null, os: null, gpuPercent: null }, tools: {}, quotas: [], runningHarnessIds: [], stoppedHarnessIds: [] } }]
 }
 
 describe('five-part tasks', () => {
@@ -369,6 +382,7 @@ describe('Super Tab collaboration policy', () => {
   it('withdraws a departing contributor and preserves execution identity until the host confirms a stop', () => {
     const f = fixture()
     f.invite()
+    teamMachine(f, 'peer')
     const group = f.group()
     const worker = f.add('worker', 'peer', group)
     const assignmentId = f.run({ type: 'work.assign', conversationId: group, agentId: worker }).result.assignmentId as string
@@ -943,6 +957,7 @@ it('requires the exact stop request for host acknowledgement and prevents promot
 
 it('allows the contributor to keep a completed worker and refuses another project’s Lead', () => {
   const f = fixture(); f.invite()
+  teamMachine(f, 'peer')
   f.add('lead', 'owner', 'lead', true)
   const group = f.group(), worker = f.add('worker', 'peer', group)
   const assignmentId = f.run({ type: 'work.assign', conversationId: group, agentId: worker }).result.assignmentId as string
@@ -1505,10 +1520,15 @@ describe('the owner\'s rules, after review', () => {
 })
 
 describe('machine.remove', () => {
-  const contribute = (f: ReturnType<typeof fixture>, contributorId = 'owner', machineId = 'host') => {
+  const observationAt = (receivedAt: number) => ({ generation: 'g1', receivedAt,
+    resources: { cpuPercent: null, memoryTotalBytes: null, memoryUsedBytes: null, diskFreeBytes: null, diskTotalBytes: null,
+      projectDiskFreeBytes: null, deviceType: null, chip: null, os: null, gpuPercent: null },
+    tools: {}, quotas: [], runningHarnessIds: [], stoppedHarnessIds: [] })
+  /** A contributed machine, online unless it is given no reading or an old one (the fixture's now is 1000). */
+  const contribute = (f: ReturnType<typeof fixture>, contributorId = 'owner', machineId = 'host', receivedAt: number | null = 1000) => {
     const generation = f.state.people.find(p => p.id === contributorId)!.generation
     f.state.machines = [...(f.state.machines ?? []), { machineId, name: 'Studio', contributorId, membershipGeneration: generation, generation: 'g1',
-      cwd: '/repo', engines: ['claude'], maxAgents: 2, paused: false } as never]
+      cwd: '/repo', engines: ['claude'], maxAgents: 2, paused: false, ...(receivedAt === null ? {} : { observation: observationAt(receivedAt) }) } as never]
   }
   const start = (f: ReturnType<typeof fixture>, group: string, dispatched = false) => {
     f.state.starts = [...(f.state.starts ?? []), { id: `start-${(f.state.starts ?? []).length}`, creationId: 'creation', actorKey: 'agent:lead', contributorId: 'owner',
@@ -1625,6 +1645,8 @@ describe('machine.remove', () => {
   it('drops the machine\'s records after 24 hours without an acknowledgement, and keeps the cleanup for its host', () => {
     const { f, removalId } = cleaning()
     const day = 24 * 3_600_000
+    // Its host keeps reporting, so only the day-long fallback can expire it.
+    f.state.machines![0]!.observation!.receivedAt = 1000 + day - 1
     f.run({ type: 'tab.rename', name: 'Still cleaning' }, owner, { now: 1000 + day - 1 })
     expect(f.state.machines!.map(m => m.removal?.id)).toEqual([removalId])
     expect(visibleState(f.state, owner, 1000 + day).machines).toEqual([])
@@ -1635,6 +1657,69 @@ describe('machine.remove', () => {
     expect(() => f.run(add, owner, { contribution: { machineOwnerId: 'owner', contributorId: 'owner' }, now: 1000 + day })).toThrow('still cleaning up')
     f.run(cleaned(removalId), owner, { now: 1000 + day })
     expect(f.state.machineCleanups).toBeUndefined()
+  })
+
+  it.each([['has no reading', null], ['was last read long ago', 1000 - 45_001]] as const)(
+    'drops a machine that is offline (%s) at once, and keeps its cleanup for its host', (_why, receivedAt) => {
+      const f = fixture()
+      contribute(f, 'owner', 'host', receivedAt)
+      // Listed, if offline, until its owner removes it.
+      expect(visibleState(f.state, owner).machines).toHaveLength(1)
+      const effects = f.run({ type: 'machine.remove', machineId: 'host' })
+      const removalId = effects.result.removalId as string
+      expect(f.state.machines).toEqual([])
+      expect(f.state.machineCleanups).toEqual([{ machineId: 'host', removalId, machineOwnerId: 'owner' }])
+      expect(visibleState(f.state, owner).machines).toEqual([])
+      // Its host still gets the cleanup on its next connection; its later acknowledgement closes it and changes nothing else.
+      f.run(cleaned(removalId))
+      expect(f.state.machineCleanups).toBeUndefined()
+      expect(f.state.machines).toEqual([])
+    })
+
+  it('hands its cleanup to its host once when it comes back, and a second acknowledgement changes nothing', () => {
+    const f = fixture()
+    contribute(f, 'owner', 'host', null)
+    const removalId = f.run({ type: 'machine.remove', machineId: 'host' }).result.removalId as string
+    // While its host is away, more reads and changes never queue the cleanup twice.
+    const away = 1000 + 45_001
+    expect(visibleState(f.state, owner, away).machines).toEqual([])
+    f.run({ type: 'tab.rename', name: 'Still away' }, owner, { now: away })
+    f.run({ type: 'tab.rename', name: 'Away a day' }, owner, { now: 1000 + 86_400_000 })
+    expect(f.state.machineCleanups).toEqual([{ machineId: 'host', removalId, machineOwnerId: 'owner' }])
+    // It comes back, is handed that one cleanup, and acknowledges it: nothing comes back to life.
+    f.run(cleaned(removalId))
+    expect(f.state.machineCleanups).toBeUndefined()
+    expect(f.state.machines).toEqual([])
+    // A late second acknowledgement finds nothing left to undo.
+    expect(() => f.run(cleaned(removalId))).toThrow(expect.objectContaining({ code: 'NOT_FOUND' }))
+    expect(f.state.machines).toEqual([])
+    expect(f.state.machineCleanups).toBeUndefined()
+  })
+
+  it('drops a machine already cleaning once it is offline, on the next read and on the next change', () => {
+    const { f, removalId } = cleaning()
+    const later = 1000 + 45_001
+    // A read that finds it offline leaves it out without writing.
+    expect(visibleState(f.state, owner, later).machines).toEqual([])
+    expect(visibleState(f.state, owner, later).machineCleanups).toBeUndefined()
+    expect(f.state.machines).toEqual([expect.objectContaining({ machineId: 'host' })])
+    // The next change applies the same rule and keeps the cleanup for its host.
+    f.run({ type: 'tab.rename', name: 'Still cleaning' }, owner, { now: later })
+    expect(f.state.machines).toEqual([])
+    expect(f.state.machineCleanups).toEqual([{ machineId: 'host', removalId, machineOwnerId: 'owner' }])
+    f.run(cleaned(removalId))
+    expect(f.state.machineCleanups).toBeUndefined()
+  })
+
+  it('keeps a machine that is still online cleaning until its host acknowledges', () => {
+    const { f, removalId } = cleaning()
+    expect(visibleState(f.state, owner, 1000 + 45_000).machines).toEqual([
+      expect.objectContaining({ machineId: 'host', paused: true, removal: { id: removalId, state: 'cleaning', requestedAt: new Date(1000).toISOString() } })])
+    expect(f.state.machineCleanups).toBeUndefined()
+    f.run({ type: 'tab.rename', name: 'Still online' }, owner, { now: 1000 + 45_000 })
+    expect(f.state.machines!.map(m => m.removal?.id)).toEqual([removalId])
+    f.run(cleaned(removalId))
+    expect(f.state.machines).toEqual([])
   })
 
   it('takes the machine out of every project\'s machines rule, telling each project\'s chat, and removes a rule left empty', () => {
@@ -1662,6 +1747,7 @@ describe('machine.remove', () => {
     f.state.agents.find(a => a.id === lead)!.machineId = 'elsewhere'
     f.invite()
     contribute(f, 'peer')
+    teamMachine(f, 'peer')
     const worker = f.add('worker', 'peer', group), owners = f.add('owners', 'owner')
     f.run({ type: 'work.assign', conversationId: group, agentId: worker })
     f.state.rules = [{ id: 'both', projectId: 'lead', rule: { kind: 'machines', machineIds: ['host', 'elsewhere'] }, text: 'Only these two.',
@@ -1953,9 +2039,15 @@ describe('the Local models add-on', () => {
     requirements: { memoryBytes: 0, diskBytes: 0, maxCpuPercent: 100, tools: [], devices: [], quotaRequired: false } })
   const grant = { contribution: { machineOwnerId: 'host-owner', contributorId: 'owner' } }
 
-  it('is off until the owner turns it on, mints one grid name, and keeps it when turned off', () => {
+  it('is on in a new Swarm, its grid named, so the owner\'s computer sets it up in the background', () => {
     const f = fixture()
-    expect(f.state.localModels).toBeUndefined()
+    expect(f.state.localModels).toEqual({ grid: swarmGridName('tab'), enabled: true })
+    expect(swarmGridRow('tab', f.state)).toMatchObject({ grid: swarmGridName('tab'), enabled: true, ready: null })
+  })
+
+  it('is off in a Swarm from before until the owner turns it on, mints one grid name, and keeps it when turned off', () => {
+    const f = fixture()
+    delete f.state.localModels
     f.invite()
     expect(() => f.run({ type: 'localModels.set', enabled: true }, peer)).toThrow(expect.objectContaining({ code: 'OWNER_REQUIRED' }))
     const on = f.run({ type: 'localModels.set', enabled: true })
@@ -1968,6 +2060,7 @@ describe('the Local models add-on', () => {
 
   it('gives the owner\'s computer the grid and the people who may act, and a host the grid only while it is on', () => {
     const f = fixture()
+    delete f.state.localModels
     expect(swarmGridRow('tab', f.state)).toBeNull()
     expect(hostLocalGrid(f.state)).toEqual({})
     f.invite()
@@ -1980,6 +2073,7 @@ describe('the Local models add-on', () => {
     expect(hostLocalGrid(f.state)).toEqual({})
     // A viewer may not act in the Swarm, so is no member of its grid.
     const viewing = fixture()
+    delete viewing.state.localModels
     viewing.invite('viewer')
     viewing.run({ type: 'localModels.set', enabled: true })
     expect(swarmGridRow('tab', viewing.state)!.members).toEqual([])
@@ -2102,5 +2196,90 @@ describe('Lead mentions', () => {
     expect(() => f.run(done, owner, { mention })).toThrow('This mention is unavailable.')
     expect(() => f.run(done, peer)).toThrow('This mention is unavailable.')
     expect(() => f.run(done, as(lead), { mention })).toThrow('This mention is unavailable.')
+  })
+})
+
+describe('credentials in Swarm chat', () => {
+  // Assembled at run time from obviously fake parts, never a credential-shaped literal.
+  const jwt = [{ alg: 'HS256', typ: 'JWT' }, { sub: 'fixture-user' }].map(part => Buffer.from(JSON.stringify(part)).toString('base64url'))
+    .concat('Fixture0Signature1Not2Real3Value4abcdefgh').join('.')
+  const github = ['ghp', 'Fixture0Token1Not2Real3Value4abcdefgh'].join('_')
+  const notice = 'Removed 2 credentials (JWT, GitHub token) before saving. Revoke or rotate them.'
+  const pasted = `Here is my login: ${jwt}\nand the deploy token ${github} for the release.`
+  const kept = `Here is my login: ${CREDENTIAL_MARKER}\nand the deploy token ${CREDENTIAL_MARKER} for the release.`
+  const send = (text: string, conversationId = 'lead'): Command => ({ type: 'message.send', conversationId, text, replyTo: null, recipientIds: [] })
+
+  it('stores a person\'s message without the credentials, keeps the rest and tells the sender what went', () => {
+    const f = fixture(), lead = f.add('lead', 'owner', 'lead', true)
+    const input = send(pasted)
+    const sent = f.run(input)
+    expect(sent.messages).toEqual([expect.objectContaining({ text: kept, recipients: [lead] })])
+    expect(sent.result).toEqual({ messageId: sent.messages[0]!.id, credentialNotice: notice,
+      credentialsRemoved: [{ kind: 'jwt', label: 'JWT', count: 1 }, { kind: 'github', label: 'GitHub token', count: 1 }] })
+    expect(JSON.stringify([sent.messages, f.state])).not.toContain(github)
+    expect(JSON.stringify([sent.messages, f.state])).not.toContain(jwt)
+    // The caller's command is left as it was; only what is stored changes.
+    expect(input).toEqual(send(pasted))
+  })
+
+  it('treats an agent\'s post the same: agents echo credentials from their terminals', () => {
+    const f = fixture(), lead = f.add('lead', 'owner', 'lead', true), group = f.group(), worker = f.add('worker', 'owner', group)
+    f.run({ type: 'conversation.agent', conversationId: group, agentId: lead, present: true, lead: true })
+    f.run({ type: 'work.assign', conversationId: group, agentId: worker })
+    const posted = f.run(send(`npm publish failed: //registry.npmjs.org/:_authToken=${github}`, group), { kind: 'agent', agentId: worker, machineOwnerId: 'host-owner' })
+    expect(posted.messages).toEqual([expect.objectContaining({ text: `npm publish failed: //registry.npmjs.org/:_authToken=${CREDENTIAL_MARKER}`, recipients: [lead] })])
+    expect(posted.result.credentialNotice).toBe('Removed a credential (GitHub token) before saving. Revoke or rotate it.')
+  })
+
+  it('leaves a message without credentials, and its result, exactly as before', () => {
+    const f = fixture()
+    const text = 'Merged a3f1c9e27b5d4f80916e2c3b7a8d9e0f1a2b3c4d; id 123e4567-e89b-12d3-a456-426614174000, see https://github.com/example/project/pull/1680'
+    const sent = f.run(send(text))
+    expect(sent.messages[0]!.text).toBe(text)
+    expect(sent.result).toEqual({ messageId: sent.messages[0]!.id })
+  })
+
+  it('removes credentials from task words, results, evidence and reports before they reach the state or a row', () => {
+    const f = fixture(), lead = f.add('lead', 'owner', 'lead', true)
+    const created = f.run({ type: 'conversation.create', title: 'Deploy', checks: [{ description: `Login works with ${github}`, independent: false }],
+      task: { goal: 'Deploy', changes: `Use ${jwt} to call the API`, constraints: 'None', owns: ['backend'] } })
+    expect(created.result.credentialNotice).toBe(notice)
+    const group = f.state.conversations.find(c => c.id === created.result.conversationId)!
+    expect(group.task!.changes).toBe(`Use ${CREDENTIAL_MARKER} to call the API`)
+    expect(group.brief).toContain(`Use ${CREDENTIAL_MARKER} to call the API`)
+    expect(group.checks[0]!.description).toBe(`Login works with ${CREDENTIAL_MARKER}`)
+    const worker = f.add('worker', 'owner', group.id)
+    const assignmentId = f.run({ type: 'work.assign', conversationId: group.id, agentId: worker }).result.assignmentId as string
+    const as: Actor = { kind: 'agent', agentId: worker, machineOwnerId: 'host-owner' }
+    const blocked = f.run({ type: 'work.status', conversationId: group.id, assignmentId, status: 'blocked', result: `Rejected ${github}` }, as)
+    expect(blocked.messages[0]!.text).toBe(`Stuck\n\nRejected ${CREDENTIAL_MARKER}`)
+    f.run({ type: 'work.check', conversationId: group.id, assignmentId, checkId: group.checks[0]!.id, passed: true, evidence: `Signed in as ${jwt}` },
+      { kind: 'agent', agentId: lead, machineOwnerId: 'host-owner' })
+    const stored = f.state.conversations.find(c => c.id === group.id)!
+    expect([stored.assignment!.result, stored.checks[0]!.evidence]).toEqual([`Rejected ${CREDENTIAL_MARKER}`, `Signed in as ${CREDENTIAL_MARKER}`])
+    expect(JSON.stringify(f.state)).not.toMatch(new RegExp(`${github}|${jwt.replaceAll('.', '\\.')}`))
+  })
+
+  it('removes a credential from an older message when a person resends it', () => {
+    const f = fixture(), lead = f.add('lead', 'owner', 'lead', true)
+    const resent = f.run({ type: 'delivery.resolve', deliveryId: 'd', resolution: 'resend' }, owner,
+      { delivery: { id: 'd', conversationId: 'lead', agentId: lead, messageId: 'm', text: pasted } })
+    expect(resent.messages[0]).toMatchObject({ text: kept, recipients: [lead] })
+    expect(resent.result.credentialNotice).toBe(notice)
+  })
+
+  it('finds the words of every kind of command, nested and in lists', () => {
+    const removed: CredentialKind[] = []
+    const start = withoutCredentials({ type: 'agent.start', overrideReason: `faster with ${github}`, request: { name: `Builder ${github}` } } as Command, removed)
+    expect(start).toMatchObject({ overrideReason: `faster with ${CREDENTIAL_MARKER}`, request: { name: `Builder ${CREDENTIAL_MARKER}` } })
+    const route = withoutCredentials({ type: 'route.record', conversationId: 'lead', decision: { assessment: { why: `needs ${jwt}` }, why: 'ok',
+      excluded: [{ title: 'Mini', reason: `asked for ${github}` }], candidates: [{ title: 'New agent', label: 'plain' }] } } as unknown as Command, removed)
+    expect(route).toMatchObject({ decision: { assessment: { why: `needs ${CREDENTIAL_MARKER}` }, excluded: [{ reason: `asked for ${CREDENTIAL_MARKER}` }] } })
+    const owns = withoutCredentials({ type: 'work.define', conversationId: 'g', checks: [], task: { goal: 'g', changes: 'c', constraints: 'n', owns: ['src', github] } } as unknown as Command, removed)
+    expect(owns).toMatchObject({ task: { owns: ['src', CREDENTIAL_MARKER] } })
+    expect(removed).toEqual(['github', 'github', 'jwt', 'github', 'github'])
+    // Commands with no words of their own are passed through untouched.
+    const pause: Command = { type: 'tab.pause', paused: true }
+    expect(withoutCredentials(pause, removed)).toBe(pause)
   })
 })

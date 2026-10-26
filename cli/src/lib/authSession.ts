@@ -15,6 +15,9 @@ export interface AuthSession {
    *  billing's Autonomous service does not take; grid does, through the Harness backend —
    *  autonomous-grid ADR 0046); absent or `sso` — the browser. */
   method?: 'sso' | 'qr'
+  /** `team`: a Harness Team sign-in (cli/src/team/), which runs this computer's own daemon and its Swarm agents and
+   *  reaches none of the account's other computers. Absent: a computer's ordinary sign-in. */
+  kind?: 'team'
   /** The auth-service client these tokens were issued to, as the backend's exchange reported it.
    *  A refresh has to name the same one. Absent is the backend's configured client. */
   clientId?: SsoClientId
@@ -71,6 +74,7 @@ function parse(raw: string): AuthSession | null {
       computerId: value.computerId,
       ...(typeof value.machineId === 'string' && value.machineId ? { machineId: value.machineId } : {}),
       ...(value.method === 'qr' || value.method === 'sso' ? { method: value.method } : {}),
+      ...(value.kind === 'team' ? { kind: 'team' as const } : {}),
       ...(knownSsoClientId(value.clientId) ? { clientId: knownSsoClientId(value.clientId) } : {}),
       updatedAt: typeof value.updatedAt === 'number' ? value.updatedAt : 0,
       ...(typeof value.signInEpoch === 'string' && value.signInEpoch ? { signInEpoch: value.signInEpoch } : {}),
