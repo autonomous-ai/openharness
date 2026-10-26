@@ -135,6 +135,16 @@ export interface Conversation {
   lastMessageSequence: number
   /** Linked GitHub pull requests, including links older than the latest message page. Absent in older snapshots. */
   pullRequestUrls?: string[]
+  /** The last sequence given to a message here. Each conversation numbers its own messages (store by parts). */
+  messageSeq?: number
+  /** The sequence of its last message that counts toward its project's reports (projectUpdates.ts). */
+  reportSeq?: number
+  /** Out of first loads and changes: work done or cancelled and quiet for a day, or archived by hand. A message wakes it. */
+  dormant?: boolean
+  /** When its last message was written (ISO). */
+  lastActivityAt?: string
+  /** A private conversation: only these people and the project's Lead read it (projects.ts canReadGroup). */
+  audience?: import('./parts/types.js').Audience
 }
 
 export function appendPullRequestUrls(group: Conversation, texts: Iterable<string | null | undefined>): void {
@@ -196,6 +206,10 @@ export interface SuperTabState {
   /** The Local models add-on (docs/plans/2026-10-23-swarm-local-models.md): off until the owner turns it on, and only
    * then does anything call grid. The grid is kept when it is turned off, so turning it on again is instant. */
   localModels?: SwarmLocalModels
+  /** The highest workgroup number ever given (store by parts); numbers are never given twice. */
+  groupCounter?: number
+  /** The tab revision when this Swarm was split into parts; every later message sequence is above it. */
+  sequenceBase?: number
 }
 export interface SwarmLocalModels {
   /** The Swarm's own grid, minted on first turn-on and never renamed. */
