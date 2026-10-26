@@ -114,12 +114,14 @@ describe('routeTask', () => {
   // goes first to another account, never back to the one that failed.
   describe('a review whose Reviewer lost it', () => {
     const accountOn = (account: string) => ({ providers: [{ ...usage.providers[0]!, account }] })
-    const route = async (failed: boolean, machines: string[] = ['m1', 'm2']) => {
+    /** `removed`: the Lead stopped the failed Reviewer and its host removed it, so only the group remembers where it failed. */
+    const route = async (failed: boolean, machines: string[] = ['m1', 'm2'], removed = false) => {
       const state = tab()
       const reviewer = { id: 'r1', name: 'Reviewer', role: 'reviewer', machineId: 'm1', harnessId: 'hr', configuration: { engine: 'claude', model: 'sonnet', effort: 'medium' },
         ...(failed ? { lostTask: { conversationId: 'g1', assignmentId: 'x', reason: 'its model keeps failing', at: 1 } } : {}) }
-      Object.assign(state.state.conversations[1]!, { reviewOf: 'lead', ...(failed ? { assignment: { id: 'x', agentId: 'r1', status: 'lost', lost: { reason: 'its model keeps failing', at: 1 } } } : {}) })
-      state.state.agents = [...agents.filter(a => a.id !== 'a2' || machines.includes('m2')), reviewer]
+      Object.assign(state.state.conversations[1]!, { reviewOf: 'lead', ...(failed ? { assignment: { id: 'x', agentId: 'r1', status: 'lost', lost: { reason: 'its model keeps failing', at: 1 } },
+        lostAttempt: { id: 'x', agentId: 'r1', machineId: 'm1', engine: 'claude' } } : {}) })
+      state.state.agents = [...agents.filter(a => a.id !== 'a2' || machines.includes('m2')), ...removed ? [] : [reviewer]]
       const s = scoped({ tab: state, context: { ok: true, value: { agentId: 'lead', tab: state, policy: { policy, warnings: [] },
         machines: machines.map(id => ({ machineId: id, name: id === 'm1' ? 'remote-1' : 'mac' })) } } })
       const result = await routeTask(input, s, where as never, opener(id => daemon(id, { agents: ['hr'], usage: accountOn(id === 'm1' ? 'acct-1' : 'acct-2') })), () => 'op')
@@ -135,6 +137,12 @@ describe('routeTask', () => {
     })
     it('still routes to that account when no other is offered, and says so', async () => {
       const { result } = await route(true, ['m1'])
+      expect(result).toMatchObject({ ok: true, pick: { machineId: 'm1' } })
+      expect(result.warnings).toEqual(expect.arrayContaining([expect.stringContaining('the account that lost this task before')]))
+    })
+    it('remembers the failed account after the Lead stops and removes that Reviewer', async () => {
+      expect((await route(true, ['m1', 'm2'], true)).result).toMatchObject({ ok: true, pick: { kind: 'new', machineId: 'm2' } })
+      const { result } = await route(true, ['m1'], true)
       expect(result).toMatchObject({ ok: true, pick: { machineId: 'm1' } })
       expect(result.warnings).toEqual(expect.arrayContaining([expect.stringContaining('the account that lost this task before')]))
     })

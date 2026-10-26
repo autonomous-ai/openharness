@@ -160,8 +160,9 @@ export interface Conversation {
   lastActivityAt?: string
   /** A private conversation: only these people and the project's Lead read it (projects.ts canReadGroup). */
   audience?: import('./parts/types.js').Audience
-  /** The last attempt here that was lost: its agent's status and checks for it are refused, even after reassignment. */
-  lostAttempt?: { id: string; agentId: string }
+  /** The last attempt here that was lost: its agent's status and checks for it are refused, even after reassignment. Where it
+   *  ran (machine and engine) stays too, so routing the work again avoids that account even once its agent is gone. */
+  lostAttempt?: { id: string; agentId: string; machineId?: string; engine?: string }
 }
 
 export function appendPullRequestUrls(group: Conversation, texts: Iterable<string | null | undefined>): void {

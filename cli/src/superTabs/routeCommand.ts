@@ -256,9 +256,13 @@ export async function routeTask(input: { tabId: string; conversationId: string; 
   // Picks started or assigned and still at work hold part of their account's quota; the log, and so this, is per Swarm.
   const working = (decisions ?? []).filter(d => d.final && d.outcome === null && typeof d.account === 'string')
     .map(d => ({ account: d.account, spend: object(d.spend), size: d.size, createdAt: Date.parse(String(d.createdAt)) }) as Commitment)
-  // Work its last agent lost (a Reviewer whose model kept failing, v2) goes first to any other account (route.ts choose).
-  const failed = new Set(members.filter(m => object(m.lostTask).conversationId === input.conversationId).map(m => String(m.id)))
-  const avoid = probes.filter(p => p.kind === 'member' && failed.has(String(p.agentId))).map(accountOf)
+  // Work this group last lost (a Reviewer whose model kept failing, v2) goes first to any other account (route.ts choose). The
+  // group keeps where that attempt ran (backend superTabs/liveness.ts loseTask), so this holds once its agent is stopped and
+  // removed too; an attempt lost before that kept it is read from its agent, while that is still here.
+  const lostAttempt = object(group.lostAttempt), lostBy = agents.find(a => a.id === lostAttempt.agentId)
+  const failedOn = text(lostAttempt.machineId) ?? text(lostBy?.machineId), failedEngine = text(lostAttempt.engine) ?? text(object(lostBy?.configuration).engine)
+  const avoid = failedOn && failedEngine ? [...new Set([`${failedOn}:${failedEngine}`,
+    ...probes.filter(p => p.machineId === failedOn && p.engine === failedEngine && !p.gridModel).map(accountOf)])] : []
   const choice = choose(probes, policy, assessment, Date.now(), working, rules, heldLocalModels(state), avoid)
   if ('error' in choice) return choice
   const verdict = decide(choice)

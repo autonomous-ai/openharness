@@ -112,7 +112,7 @@ function loseTask(state: SuperTabState, group: Conversation, worker: Agent, reas
   const assignment = group.assignment!
   assignment.status = 'lost'
   assignment.lost = { reason, at: now }
-  group.lostAttempt = { id: assignment.id, agentId: worker.id }
+  group.lostAttempt = { id: assignment.id, agentId: worker.id, machineId: assignment.execution.machineId, engine: assignment.configuration.engine }
   worker.lostTask = { conversationId: group.id, assignmentId: assignment.id, reason, at: now }
   const sender = writtenBy(state, leadOf(state, worker) ?? worker)
   const progress = lastProgress(state, worker, assignment)

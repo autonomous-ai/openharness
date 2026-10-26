@@ -2394,6 +2394,8 @@ describe('lost work (liveness.ts)', () => {
     expect(task().assignment!.status).toBe('working')
     model(true)
     expect(task().assignment).toMatchObject({ status: 'lost', lost: { reason: 'its model keeps failing' } })
+    // Where it failed stays on the group, for routing the work again even once its agent is gone (cli routeCommand.ts).
+    expect(task().lostAttempt).toEqual({ id: task().assignment!.id, agentId: worker, machineId: 'host', engine: config.engine })
   })
 
   it('lets the Lead hand lost work to another agent without first deciding about the lost one', () => {
