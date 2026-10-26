@@ -54,6 +54,25 @@ Matcher get _finger => predicate<Size>(
   'at least 44x44',
 );
 
+/// The New tab page's rows (its recent harnesses, its commands and the
+/// phone's) and its Appearance, each at least once.
+Iterable<double> _newTabRowHeights(WidgetTester tester) {
+  final rows = find.byWidgetPredicate(
+    (w) =>
+        w is TextButton &&
+        w.key is ValueKey<String> &&
+        (w.key! as ValueKey<String>).value.startsWith('welcome-'),
+  );
+  final appearance = find.byKey(const ValueKey('welcome-customize'));
+  expect(rows, findsWidgets);
+  expect(appearance, findsOneWidget);
+  return [
+    for (var i = 0; i < rows.evaluate().length; i++)
+      tester.getSize(rows.at(i)).height,
+    tester.getSize(appearance).height,
+  ];
+}
+
 WebUxApp _withError() => withPanes(signedIn(), 2)
   ..error = 'Could not start Claude Code on Studio Mac: the folder is gone.';
 
@@ -117,6 +136,31 @@ void main() {
       expect(size.height, lessThan(44));
     }
     expect(narrow, await bar(const Size(1280, 800)));
+  });
+
+  testWidgets('a phone\'s New tab page rows are a finger tall', (tester) async {
+    await _mount(tester, const Size(360, 740), () => withPanes(signedIn(), 3));
+    await tester.tap(find.byKey(const ValueKey('web-new-tab-button')));
+    await tester.pump(const Duration(milliseconds: 500));
+    for (final height in _newTabRowHeights(tester)) {
+      expect(height, greaterThanOrEqualTo(44));
+    }
+    expect(tester.takeException(), isNull);
+    await _unmount(tester);
+  });
+
+  // Desktop sets no compactBelow: a narrow window is no phone.
+  testWidgets('Desktop at 600 keeps the New tab page\'s rows', (tester) async {
+    await _mount(
+      tester,
+      const Size(600, 800),
+      () => withPanes(signedIn(), 3)..newSwarm(newTabPage: true),
+      desktop: true,
+    );
+    for (final height in _newTabRowHeights(tester)) {
+      expect(height, lessThan(44));
+    }
+    await _unmount(tester);
   });
 
   testWidgets('a wide window keeps the mouse-sized Retry', (tester) async {

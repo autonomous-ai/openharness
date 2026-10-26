@@ -12,6 +12,7 @@ import '../state/welcome_sessions.dart';
 import '../state/workspace_chrome.dart';
 import '../state/session_activity.dart';
 import 'engine_identity.dart';
+import 'finger_target.dart';
 import 'new_tab_actions.dart';
 import 'desktop_chrome.dart';
 import 'session_activity_label.dart';
@@ -386,11 +387,14 @@ class _WorkspaceWelcomeState extends State<WorkspaceWelcome> {
             Positioned(
               right: 20,
               bottom: 16,
-              child: TerminalTextAction(
-                key: const ValueKey('welcome-customize'),
-                onPressed: () => onCommand('app.customize'),
-                label: 'Appearance',
-                overArtwork: hasArtwork,
+              child: fingerTarget(
+                enabled: workspaceIsCompact(context),
+                TerminalTextAction(
+                  key: const ValueKey('welcome-customize'),
+                  onPressed: () => onCommand('app.customize'),
+                  label: 'Appearance',
+                  overArtwork: hasArtwork,
+                ),
               ),
             ),
           ],
@@ -630,6 +634,10 @@ class _WorkspaceWelcomeState extends State<WorkspaceWelcome> {
 
   /// The commands, each with its shortcut: the whole page before there is
   /// anything to pick up, and the column beside the list after.
+  /// A row's least size: a finger's height on a phone, its text's elsewhere.
+  Size get _rowMinimum =>
+      workspaceIsCompact(context) ? const Size(0, kFingerTarget) : Size.zero;
+
   Widget _commands(
     List<({String command, String description, String? hint})> rows,
     double width,
@@ -650,7 +658,7 @@ class _WorkspaceWelcomeState extends State<WorkspaceWelcome> {
               foregroundColor: ink,
               textStyle: style,
               padding: const EdgeInsets.symmetric(vertical: 2),
-              minimumSize: Size.zero,
+              minimumSize: _rowMinimum,
               tapTargetSize: MaterialTapTargetSize.shrinkWrap,
               shape: const RoundedRectangleBorder(),
             ),
@@ -681,7 +689,7 @@ class _WorkspaceWelcomeState extends State<WorkspaceWelcome> {
             foregroundColor: ink,
             textStyle: style,
             padding: const EdgeInsets.symmetric(vertical: 2),
-            minimumSize: Size.zero,
+            minimumSize: _rowMinimum,
             tapTargetSize: MaterialTapTargetSize.shrinkWrap,
             shape: const RoundedRectangleBorder(),
           ),
@@ -777,7 +785,7 @@ class _WorkspaceWelcomeState extends State<WorkspaceWelcome> {
             : Colors.transparent,
         textStyle: style,
         padding: const EdgeInsets.symmetric(vertical: 2),
-        minimumSize: Size.zero,
+        minimumSize: _rowMinimum,
         tapTargetSize: MaterialTapTargetSize.shrinkWrap,
         shape: const RoundedRectangleBorder(),
       ),
