@@ -275,6 +275,21 @@ void main() {
       },
     );
 
+    testWidgets(
+      'the chat offers no Add agent: the Product Manager is its only agent',
+      (tester) async {
+        final c = await show(tester, swarm());
+        final addAgent = find.byTooltip('Add agent');
+        expect(addAgent, findsOneWidget);
+        await tester.tap(entry);
+        await tester.pumpAndSettle();
+
+        expect(c.selectedId, c.pmChat('lead')!.id);
+        expect(addAgent, findsNothing);
+        await close(tester, c);
+      },
+    );
+
     testWidgets('a reply from the Product Manager marks the entry unread', (
       tester,
     ) async {

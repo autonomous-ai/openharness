@@ -478,11 +478,13 @@ class _SuperTabRosterState extends State<SuperTabRoster> {
       const SizedBox(height: 16),
       SuperTabSectionHeading(
         'Agents',
-        // An agent joins the Product Managers' conversation by leading a project.
+        // An agent joins the Product Managers' conversation by leading a project,
+        // and a private conversation holds only the project's Lead.
         onAdd:
             c.canWrite &&
                 c.selected != null &&
-                c.selected!.id != c.snapshot?.leadsConversationId
+                c.selected!.id != c.snapshot?.leadsConversationId &&
+                audience == null
             ? () => widget.onAddAgent(c.selected!)
             : null,
         addTooltip: 'Add agent',
