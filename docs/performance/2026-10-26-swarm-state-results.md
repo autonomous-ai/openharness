@@ -259,11 +259,22 @@ It prints the timings and writes `swarm-parts-migration-<date>.json` to the fold
 - The stack is group 3's local backend recipe: containers, fake sign-in and the backend on port 18085.
 - The Desktop part is the opt-in test in `desktop/`:
   `SWARM_LOCAL_BACKEND=http://127.0.0.1:18085 SWARM_LOCAL_TAB=<Swarm id> flutter test --no-pub test/super_tab_local_backend_test.dart`.
-- The rest came from a one-off script in this group's chat, which is not in the repository. It uses the CLI's
-  end-to-end harness (`cli/e2e/harness/daemon.ts`, `client.ts`) under Vitest with `cli/vitest.setup.ts`:
+- The rest came from [2026-10-26-swarm-state-results-e2e.test.mts](2026-10-26-swarm-state-results-e2e.test.mts). It
+  is kept here as a reference file, outside every test suite. It uses the CLI's end-to-end harness
+  (`cli/e2e/harness/daemon.ts`, `client.ts`), after `cli/vitest.setup.ts` for test isolation:
   - it seeds the Swarm and checks each behaviour over HTTP;
-  - it starts an `IsolatedDaemon` signed in through a counting proxy, and wakes its Swarm host;
+  - it starts an `IsolatedDaemon` signed in through a counting proxy on port 18086, and wakes its Swarm host;
   - it counts the host-form replies for 60 s idle, then 60 s with a post every 5 s.
+- The fake sign-in must also accept `local-outsider-token` (outsider@local.test), for the non-member check.
+- The figures above ran at `4b8b5ea8a` (integration head `44d51aae8`). The file, as checked in, was run again on
+  `f0dfbd855` (base `1d79b4e57`, whose backend and CLI are the same). Every check passed with the same figures, except
+  that the active host-tick window held 60 reads averaging 258 B, against 59 at 257 B. Run it from `cli/`, with the
+  stack up, in about 4.5 minutes; it writes every check and its figures to the JSON file:
+
+  ```bash
+  E2E_OUT=<file.json> npx vitest run --root ../docs/performance --globals --testTimeout 900000 \
+    2026-10-26-swarm-state-results-e2e.test.mts
+  ```
 
 ## Suites
 
