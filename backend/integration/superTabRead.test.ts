@@ -331,3 +331,24 @@ describe('host form (design 4.10)', () => {
     expect([status, body.error!.code]).toEqual([403, 'HOST_UNAVAILABLE'])
   })
 })
+
+describe('a real command through the store by parts (design 4.7)', () => {
+  it('replies with the parts it wrote, and the next poll sends exactly those versions', async () => {
+    const s = await scene()
+    // The store stamps with the real clock; readers here keep to it too.
+    clock = Date.now()
+    const cursor = (await get(`/api/super-tabs/${s.tabId}/parts`, peer)).body.data.cursor
+    const response = await app.inject({ method: 'POST', url: `/api/super-tabs/${s.tabId}/commands`, headers: { authorization: `Bearer ${owner.sub}` },
+      payload: { operationId: randomUUID(), command: { type: 'conversation.rename', conversationId: s.web, title: 'Renamed for real' } } })
+    expect(response.statusCode, response.body).toBe(200)
+    const reply = response.json().data as { result: unknown; parts: Array<{ kind: string; key: string; version: number }>; lastChangedAt: number }
+    expect(Object.keys(reply).sort()).toEqual(['lastChangedAt', 'parts', 'result'])
+    const written = reply.parts.find(p => p.kind === 'group' && p.key === s.web)!
+    expect(written.version).toBeGreaterThan(R)
+    clock = Date.now()
+    const seen = (await get(`/api/super-tabs/${s.tabId}/changes?cursor=${cursor}`, peer)).body.data
+    expect(seen.groups.map((g: { key: string; version: number; data: { title: string } }) => [g.key, g.version, g.data.title]))
+      .toEqual([[s.web, written.version, 'Renamed for real']])
+    expect(seen.lastChangedAt).toBe(reply.lastChangedAt)
+  })
+})
