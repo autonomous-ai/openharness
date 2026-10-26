@@ -43,6 +43,9 @@ export interface Agent {
   downSince?: string
   /** Written by the two-hour down wake-up that lost work replaced (liveness.ts); older states may still carry it, never shown. */
   downNamed?: string
+  /** Its last task was lost (liveness.ts): routing leaves it out, even once that task is cancelled or reassigned, until it
+   *  finishes a new task, a person assigns it work by hand, or its terminal is replaced (commands.ts). */
+  lostTask?: { conversationId: string; assignmentId: string; reason: string; at: number }
   /** A usage limit seen on its terminal; routing skips the agent until then. Shown as null once passed (terminal.ts). */
   limitedUntil?: string | null
   /** Terminal alert episodes in progress, so each one posts a single row (terminal.ts). */

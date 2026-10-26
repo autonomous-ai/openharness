@@ -101,11 +101,66 @@ describe('routeTask', () => {
     expect(offered.length).toBeGreaterThan(0)
     expect(offered.some(c => /^(Lead|Multiply) ·/.test(c))).toBe(false)
   })
-  // A lost task's agent died, stalled or hit a limit: its work goes to someone else (v1 liveness), never back to it.
+  // A lost task's agent died, stalled or hit a limit: its work goes to someone else (v1 liveness), never back to it. The
+  // backend marks the agent in the same write that loses the task (backend superTabs/liveness.ts).
   it.each(['working', 'lost'])('does not offer a member whose task is %s', async status => {
-    const s = scoped({ tab: tab({ id: 'x', agentId: 'a1', status }) })
+    const state = tab({ id: 'x', agentId: 'a1', status })
+    if (status === 'lost') state.state.agents = agents.map(a => a.id === 'a1' ? { ...a, lostTask: { conversationId: 'g1', assignmentId: 'x', reason: 'stalled', at: 1 } } : a)
+    const s = scoped({ tab: state })
     await routeTask(input, s, where as never, opener(id => daemon(id, { agents: ['h1'] })))
     expect((recorded(s).command.decision.candidates as Array<{ title: string }>).some(c => c.title.startsWith('Multiply'))).toBe(false)
+  })
+  // Final review, Important 3: cancelling or reassigning lost work must not make its old worker routable again.
+  describe('a member whose last task was lost', () => {
+    const lostTask = { conversationId: 'g0', assignmentId: 'x', reason: 'no progress for 30 minutes', at: 1 }
+    const healthy = { id: 'a3', name: 'Healthy', machineId: 'm1', harnessId: 'h3', configuration: { engine: 'claude', model: 'sonnet', effort: 'medium' } }
+    const earlier = (assignment: Record<string, unknown>, more: Record<string, unknown> = {}) =>
+      ({ id: 'g0', title: 'Old', leadId: 'lead', agentIds: ['lead', 'a1'], archived: false, brief: 'Old work.', checks: [], assignment, ...more })
+    const lost = { id: 'x', agentId: 'a1', lost: { reason: lostTask.reason, at: 1 } }
+    const route = async (members: unknown[], groups: unknown[]) => {
+      const state = tab(); Object.assign(state.state, { agents: members, conversations: [...state.state.conversations, ...groups] })
+      const s = scoped({ tab: state })
+      const result = await routeTask(input, s, where as never, opener(id => daemon(id, { agents: ['h1', 'h3'] })), () => 'op')
+      const decision = recorded(s).command.decision
+      return { result, candidates: (decision.candidates as Array<{ title: string; agentId?: string }>), excluded: decision.excluded as Array<{ title: string; reason: string }> }
+    }
+    const marked = agents.map(a => a.id === 'a1' ? { ...a, lostTask } : a)
+    const reason = 'It lost its last task (no progress for 30 minutes). It takes work again once a person assigns it by hand or the Lead replaces it.'
+
+    it('stays out after the Lead cancels the lost task, and a healthy member is offered instead', async () => {
+      const { result, candidates, excluded } = await route([...marked, healthy], [earlier({ ...lost, status: 'cancelled' })])
+      expect(candidates.some(c => c.title.startsWith('Multiply'))).toBe(false)
+      expect(excluded).toContainEqual({ title: 'Multiply · Claude sonnet medium · remote-1', reason })
+      expect(result).toMatchObject({ ok: true, pick: { kind: 'member', agentId: 'a3' } })
+    })
+    it('stays out after the Lead hands the lost task to another agent', async () => {
+      const { result, candidates, excluded } = await route([...marked, healthy],
+        [earlier({ id: 'y', agentId: 'a3', status: 'working' }, { lostAttempt: { id: 'x', agentId: 'a1' } })])
+      expect(candidates.some(c => c.title.startsWith('Multiply'))).toBe(false)
+      expect(excluded).toContainEqual({ title: 'Multiply · Claude sonnet medium · remote-1', reason })
+      expect(result).toMatchObject({ ok: true, pick: { kind: 'new' } })
+    })
+    it('is offered again once it finished a new task, which clears its mark', async () => {
+      const { candidates } = await route([...agents, healthy],
+        [earlier({ ...lost, status: 'cancelled' }), earlier({ id: 'z', agentId: 'a1', status: 'done' }, { id: 'g2' })])
+      expect(candidates.some(c => c.title.startsWith('Multiply'))).toBe(true)
+    })
+    it('stays out while its task is still lost', async () => {
+      const { excluded } = await route(marked, [earlier({ ...lost, status: 'lost' })])
+      expect(excluded).toContainEqual({ title: 'Multiply · Claude sonnet medium · remote-1', reason })
+    })
+    // Re-check of #1749: recovery clears the mark while the old task may still be lost; that task alone must not refuse it.
+    it('is offered again after its terminal was replaced, though its old task is still lost', async () => {
+      const replaced = agents.map(a => a.id === 'a1' ? { ...a, harnessId: 'h1b' } : a)
+      const state = tab(); Object.assign(state.state, { agents: replaced, conversations: [...state.state.conversations, earlier({ ...lost, status: 'lost' })] })
+      const s = scoped({ tab: state })
+      await routeTask(input, s, where as never, opener(id => daemon(id, { agents: ['h1b'] })), () => 'op')
+      expect((recorded(s).command.decision.candidates as Array<{ title: string }>).some(c => c.title.startsWith('Multiply'))).toBe(true)
+    })
+    it('is offered again after it finished a newer task, though its old task is still lost', async () => {
+      const { candidates } = await route(agents, [earlier({ ...lost, status: 'lost' }), earlier({ id: 'z', agentId: 'a1', status: 'done' }, { id: 'g2' })])
+      expect(candidates.some(c => c.title.startsWith('Multiply'))).toBe(true)
+    })
   })
   it('leaves out what breaks the owner\'s rules in the tab, and ignores a rule it cannot read', async () => {
     const ruled = tab(); (ruled.state as Record<string, unknown>).rules = [{ id: 'r1', rule: { kind: 'forbidModel', model: 'sonnet' }, text: 'No Sonnet.' }, { id: 'r2', text: 7 }]

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { Assignment, SuperTabState } from './model.js'
 import { LEASE_MS, QUIET_RUNNING_MS, sweepLiveness } from './liveness.js'
+import { split } from './parts/index.js'
 
 const MINUTE = 60_000
 const assignment = (patch: Partial<Assignment> = {}): Assignment => ({ id: 'a1', agentId: 'w', status: 'working', result: null,
@@ -38,5 +39,19 @@ describe('the lease on a worker\'s task', () => {
     expect(status(swarm(task, undefined, 7000), 7000 + LEASE_MS)).toMatchObject({ status: 'working' })
     expect(task.leaseUntil).toBeUndefined()
     expect(status(swarm(task, undefined, 7000), 7000 + LEASE_MS + 1)).toMatchObject({ status: 'lost', lost: { reason: 'no progress seen' } })
+  })
+})
+
+describe('a worker whose task is lost', () => {
+  it('is marked lost in the same write that loses its task, so routing keeps it out after a cancel or reassignment', () => {
+    const state = swarm(assignment({ leaseUntil: 1 })), now = 1 + LEASE_MS + 1
+    const parts = () => split(structuredClone(state), { tabId: 't', version: 1, now: 0 })
+    const before = parts()
+    sweepLiveness(state, now)
+    const after = parts()
+    expect(after.agents[0]!.data).toMatchObject({ lostTask: { conversationId: 'g1', assignmentId: 'a1', reason: 'no progress seen', at: now } })
+    // commitParts writes every part whose data changed, all in one transaction: the worker's with the task's.
+    expect(after.agents[0]!.data).not.toEqual(before.agents[0]!.data)
+    expect(after.groups.find(g => g.key === 'g1')!.data).not.toEqual(before.groups.find(g => g.key === 'g1')!.data)
   })
 })

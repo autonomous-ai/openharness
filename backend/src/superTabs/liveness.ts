@@ -110,6 +110,7 @@ function loseTask(state: SuperTabState, group: Conversation, worker: Agent, reas
   assignment.status = 'lost'
   assignment.lost = { reason, at: now }
   group.lostAttempt = { id: assignment.id, agentId: worker.id }
+  worker.lostTask = { conversationId: group.id, assignmentId: assignment.id, reason, at: now }
   const sender = writtenBy(state, leadOf(state, worker) ?? worker)
   const progress = lastProgress(state, worker, assignment)
   const since = progress === undefined ? 'unknown' : `${plural(Math.max(0, Math.floor((now - progress) / 60_000)), 'minute')} ago`
