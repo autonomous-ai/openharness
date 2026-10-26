@@ -13,8 +13,12 @@ import { leadOf, toLead } from './terminal.js'
 
 /** How long an assignment stays its agent's without progress. */
 export const LEASE_MS = 5 * 60_000
-/** A screen or transcript change this recent counts as progress. */
-const PROGRESS_FRESH_MS = 10 * 60_000
+/** A session its machine still lists as running may go this long without a screen or transcript change before its task is
+ *  lost: a long command that prints nothing (a test suite) is still work (Product Manager, 2026-10-26). Hard failures —
+ *  offline, stopped, a usage limit — stay immediate. */
+export const QUIET_RUNNING_MS = 30 * 60_000
+/** A report renews the lease while the session's last progress is this recent, so its lease ends QUIET_RUNNING_MS after it. */
+const PROGRESS_FRESH_MS = QUIET_RUNNING_MS - LEASE_MS
 /** A machine silent this long has lost its work. */
 const OFFLINE_LOST_MS = 2 * 60_000
 /** A dispatched start not running this long after has failed. */
@@ -54,8 +58,8 @@ export function renewOwnTask(group: Conversation, agentId: string, now: number):
   if (activeWork(group) && group.assignment!.agentId === agentId) renewLease(group.assignment!, now)
 }
 
-/** The last time its machine's reports renewed a worker's lease: a report listing it running with progress in the last 10
- *  minutes renews at that report, so a lease from the last report with progress P runs from P + 10 minutes at the latest.
+/** The last time its machine's reports renewed a worker's lease: a report listing it running with recent progress renews at
+ *  that report, so a lease from the last report with progress P runs from P + PROGRESS_FRESH_MS at the latest.
  *  A host that sends no progress at all (before harnessProgress) renews by running alone; one that stopped listing the
  *  session renewed last when it went down. Undefined when no report ever showed it. */
 function reportRenewedAt(state: SuperTabState, worker: Agent): number | undefined {

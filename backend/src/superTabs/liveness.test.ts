@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { Assignment, SuperTabState } from './model.js'
-import { LEASE_MS, sweepLiveness } from './liveness.js'
+import { LEASE_MS, QUIET_RUNNING_MS, sweepLiveness } from './liveness.js'
 
 const MINUTE = 60_000
 const assignment = (patch: Partial<Assignment> = {}): Assignment => ({ id: 'a1', agentId: 'w', status: 'working', result: null,
@@ -17,14 +17,14 @@ const swarm = (task: Assignment, report?: { receivedAt: number; harnessProgress?
 const status = (state: SuperTabState, now: number) => (sweepLiveness(state, now), state.conversations[1]!.assignment!)
 
 describe('the lease on a worker\'s task', () => {
-  it('runs from the last report with progress in the last 10 minutes, and is never written by the report', () => {
+  it('runs 30 minutes from the last progress a report showed for a running session, and is never written by the report', () => {
     const progress = 1_000_000, received = progress + 30 * MINUTE
-    const lastRenewal = progress + 10 * MINUTE
+    const lastRenewal = progress + QUIET_RUNNING_MS - LEASE_MS
     // Its own lease ran out long ago; the reports keep it until 5 minutes after the last one that still had fresh progress.
     const kept = swarm(assignment({ leaseUntil: 1 }), { receivedAt: lastRenewal + LEASE_MS, harnessProgress: { h: progress } })
     expect(status(kept, lastRenewal + LEASE_MS)).toMatchObject({ status: 'working', leaseUntil: 1 })
     const lost = swarm(assignment({ leaseUntil: 1 }), { receivedAt: lastRenewal + LEASE_MS + 1, harnessProgress: { h: progress } })
-    expect(status(lost, lastRenewal + LEASE_MS + 1)).toMatchObject({ status: 'lost', lost: { reason: 'no progress for 15 minutes' } })
+    expect(status(lost, lastRenewal + LEASE_MS + 1)).toMatchObject({ status: 'lost', lost: { reason: 'no progress for 30 minutes' } })
     // A report that has no progress for the session renews nothing.
     expect(status(swarm(assignment({ leaseUntil: 1 }), { receivedAt: received, harnessProgress: {} }), received).status).toBe('lost')
   })

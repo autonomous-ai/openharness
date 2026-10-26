@@ -141,19 +141,33 @@ describe('work that loses its owner', () => {
   it('is lost when its lease runs out with no progress, though its machine keeps reporting', async () => {
     const f = await swarm()
     const assigned = f.clock.now
-    // The session is listed as running, but its screen has not changed for 11 minutes.
+    // The session is listed as running, but its screen has not changed for over half an hour.
     for (let minute = 1; minute <= 4; minute++) {
       f.clock.now = assigned + minute * MINUTE
-      await f.beat(assigned - 11 * MINUTE)
+      await f.beat(assigned - 31 * MINUTE)
     }
     f.clock.now = assigned + 5 * MINUTE
-    await f.beat(assigned - 11 * MINUTE)
+    await f.beat(assigned - 31 * MINUTE)
     expect(await f.lostRows()).toEqual([])
     await f.leadInbox()
     expect((await f.assignment()).status).toBe('working')
     f.clock.now = assigned + 5 * MINUTE + 1
     await f.leadInbox()
     expect(await f.assignment()).toMatchObject({ status: 'lost', lost: { reason: 'no progress for 5 minutes' } })
+  })
+
+  it('gives a session still running but quiet (a long silent test run) 30 minutes from its last progress', async () => {
+    const f = await swarm()
+    const progress = f.clock.now
+    for (let minute = 1; minute <= 30; minute++) {
+      f.clock.now = progress + minute * MINUTE
+      await f.beat(progress)
+      await f.leadInbox()
+    }
+    expect((await f.assignment()).status).toBe('working')
+    f.clock.now = progress + 30 * MINUTE + 1
+    await f.beat(progress)
+    expect(await f.assignment()).toMatchObject({ status: 'lost', lost: { reason: 'no progress for 30 minutes' } })
   })
 
   it('keeps its lease while the host reports progress, an older host reports it running, or the agent reports', async () => {
