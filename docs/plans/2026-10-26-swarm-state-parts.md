@@ -271,3 +271,19 @@ parallel; group 6 plus review and the release take about half a day. Launch abou
 6. Old clients get HTTP 426 `UPDATE_REQUIRED`. The old `state` field is kept read-only until you say drop it.
 7. Synthetic benchmark as the before and after measure, plus a migration dry run on a copy of production. That
    copy needs your ok and access.
+
+## Addendum, 2026-10-26: private conversations (owner decision)
+
+The owner (ken15) chose in project chat to design private conversations into this project and build their UI
+right after it ships ("chon 1 nha"). The product is a private channel for each person with the PM, under the
+project: only that person and the project's Lead see it. It is in addition to the shared project chat, which
+stays as it is ("mọi người vẫn có thể chat chung trao đổi như hiện tại").
+
+For this project, that means:
+- The storage, read API and visibility model support a conversation whose audience is an explicit set of
+  people plus the Lead. Others do not see it: not in first load, not in changes, not in message reads, not in
+  notifications or mentions, and not in `otherProjectsWork`.
+- Changing a conversation's audience is a visibility change (ruling 4). Messages, deliveries and attachments
+  in it follow its audience.
+- No UI in this project. The channel UI (one channel per person, created on first use) is the next request,
+  built on these contracts.
