@@ -33,11 +33,15 @@ Map<String, dynamic> _view({String tab = 'tab', int pad = 0}) {
   };
 }
 
+/// A view as a controller hands it over, for other tests.
+Map<String, dynamic> savedViewForTest() => _view();
+
 void main() {
   group('a controller', _controllerTests);
   group('the client', _clientTests);
   group('review of #1723', _reviewTests);
   group('re-review of #1727', _reReviewTests);
+  group('Clear now', _clearTests);
 
   test('keeps what the Swarm draws, not what it never shows', () async {
     final store = MemoryStore();
@@ -868,6 +872,62 @@ void _reviewTests() {
             ..bind(null);
       async.flushMicrotasks();
       expect(store.touched.where((k) => k.contains('super_tab.view')), isEmpty);
+      client.dispose();
+    });
+  });
+}
+
+/// Settings ▸ Account's Clear now, on the web: every copy this browser keeps
+/// goes, whoever it was kept for, and the Swarms opened next are kept again.
+void _clearTests() {
+  Iterable<String> viewKeys(MemoryStore store) =>
+      store.values.keys.where((k) => k.startsWith('super_tab.view'));
+
+  test('clears every view kept here, and keeps the next one', () async {
+    final store = MemoryStore();
+    final views = SuperTabSavedViews(store);
+    await views.claim('owner');
+    for (final tab in ['a', 'b']) {
+      await views.write('owner', tab, _view(tab: tab));
+    }
+    await views.clear('owner');
+    expect(viewKeys(store), isEmpty);
+    expect(await views.read('owner', 'a'), isNull);
+    // Still this account's device: what it opens next is kept again.
+    await views.write('owner', 'c', _view(tab: 'c'));
+    expect(await views.read('owner', 'c'), isNotNull);
+  });
+
+  test('a view left by an account before this one goes too', () async {
+    final store = MemoryStore();
+    final views = SuperTabSavedViews(store);
+    await views.claim('before');
+    await views.write('before', 'tab', _view());
+    // The next account has not claimed the device yet (a boot signed out).
+    await views.clear('owner');
+    expect(viewKeys(store), isEmpty);
+  });
+
+  test('the client clears, and nothing waiting to be written comes back', () {
+    fakeAsync((async) {
+      final server = ConversationServer()..append('Hello');
+      final store = MemoryStore();
+      final client = _client(_Transport(server), store)
+        ..bind('owner')
+        ..show('tab');
+      client.open('tab');
+      async.elapse(const Duration(seconds: 1));
+      // A change whose write waits for the 15 s pace.
+      server.append('Pending');
+      async.elapse(const Duration(seconds: 3));
+      client.clearSavedViews();
+      async.flushMicrotasks();
+      expect(viewKeys(store), isEmpty);
+      async.elapse(const Duration(seconds: 20));
+      expect(viewKeys(store), isEmpty);
+      // The Swarm still opens, and draws from its read.
+      final c = client.peek('tab')!;
+      expect(c.messages('lead').last.text, 'Pending');
       client.dispose();
     });
   });

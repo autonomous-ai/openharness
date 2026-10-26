@@ -102,13 +102,14 @@ class SuperTabSavedViews {
         }
       });
 
-  /// Keeps [view] for [tabId]; one over the cap is not kept, and the older
-  /// one goes with it rather than staying behind, older still.
-  Future<void> write(String account, String tabId, Map<String, dynamic> view) =>
+  /// Keeps [view] for [tabId], and says whether it was kept; one over the
+  /// cap is not kept, and the older one goes with it rather than staying
+  /// behind, older still.
+  Future<bool> write(String account, String tabId, Map<String, dynamic> view) =>
       _serial(() async {
         // Only for the account using this device: after a sign-out in
         // another tab, or another account's claim, a late write keeps nothing.
-        if (await storage.read(_owner) != account) return;
+        if (await storage.read(_owner) != account) return false;
         final state = view['state'] as Map<String, dynamic>;
         final text = jsonEncode({
           ...view,
@@ -119,10 +120,11 @@ class SuperTabSavedViews {
         });
         if (_utf8Length(text) > maxBytes) {
           await _forget(account, tabId);
-          return;
+          return false;
         }
         await storage.write(_key(account, tabId), text);
         await _use(account, tabId);
+        return true;
       });
 
   Future<void> forget(String account, String tabId) =>
@@ -144,6 +146,16 @@ class SuperTabSavedViews {
     }
     await storage.delete(_index(account));
   }
+
+  /// Clear now: every view this device keeps, for [account] and for any
+  /// account that used it before and was not forgotten yet. Whose device it
+  /// is stays as it was, so the Swarms [account] opens next are kept again.
+  Future<void> clear(String? account) => _serial(() async {
+    final owner = await storage.read(_owner);
+    for (final kept in {owner, account}.whereType<String>()) {
+      await _forgetAccount(kept);
+    }
+  });
 
   /// [account] (null when signed out) is the one using this device now: the
   /// views of any other account that used it, before a reload too, go.
