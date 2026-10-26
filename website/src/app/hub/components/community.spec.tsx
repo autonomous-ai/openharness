@@ -203,7 +203,7 @@ describe('community navigation', () => {
     request.mockResolvedValueOnce({ harness: { ...sample, id: sample.id }, social: { ...emptySocial, signedIn: false } });
     render(<Detail id={sample.id} initial={null} />);
     expect(await screen.findByText(/Your sign-in has expired/)).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: 'Sign in again' })).toHaveAttribute('href', '/web');
+    expect(screen.getByRole('link', { name: 'Sign in again' })).toHaveAttribute('href', '/');
     localStorage.clear();
   });
   it('reads a publication once, then refreshes only its social state', async () => {
@@ -453,6 +453,20 @@ describe('community navigation', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Restore' }));
     expect(await screen.findByText(/Restored/)).toBeInTheDocument();
     expect(request).toHaveBeenCalledWith('reports/review', { method: 'POST', body: { targetType: 'harness', targetId: 'h1', decision: 'restore' } });
+  });
+  it('signs a visitor in at the web app and brings them back to the Hub page they were on', async () => {
+    window.history.replaceState(null, '', '/hub/following');
+    try {
+      render(<Header />);
+      const signIn = await screen.findByRole('link', { name: 'Sign in' });
+      expect(signIn).toHaveAttribute('href', '/');
+      signIn.addEventListener('click', event => event.preventDefault());
+      fireEvent.click(signIn);
+      expect(sessionStorage.getItem('harness.hub.returnTo')).toBe('/hub/following');
+    } finally {
+      sessionStorage.clear();
+      window.history.replaceState(null, '', '/');
+    }
   });
   it('rings the bell with the unread count only for someone signed in', async () => {
     const { unmount } = render(<Header />);
