@@ -30,6 +30,13 @@ const VERIFIED_TOOL_TTL_MS = 10 * 60_000
  *  is heard from within this long. */
 const FIELD_REFUSED_MS = 10 * 60_000
 const UNVERIFIED_TOOL_TTL_MS = 60_000
+/** How long this machine refuses a start before failing it with its reason, so the Lead starts it elsewhere: a minute of
+ *  busy CPU or memory may pass, and routing saw this machine able a moment ago. A refusal no one reported left starts
+ *  "Queued" for hours (DESKTOP-0TFH0OJ, 2026-10-23). */
+const START_REFUSED_MS = 60_000
+/** What a start answers while its launch may already have happened or is under way: never failed from here, or an agent
+ *  could run with no start to show for it. The failures already reported say so themselves. */
+const NOT_REFUSED = new Set(['START_UNCERTAIN', 'START_PENDING', 'START_REFUSED', 'START_FAILED', 'SWARM_ENGINE'])
 
 /** How often the executor asks the backend what its tabs want of it (a start waiting, a pause) and compares what it
  *  would report with what it last did. Only this read is this frequent: the resource readers run when there is
@@ -115,6 +122,8 @@ export class ContributedMachines {
   private readonly toolCache = new Map<string, { value: boolean | null; detail?: string; until: number }>()
   /** Per waiting start, why it was last not started, so the log says it once per reason, not every pass. */
   private readonly waiting = new Map<string, string>()
+  /** Per waiting start, since when this machine has refused it without a break. */
+  private readonly refusedSince = new Map<string, number>()
   /** Removals cleaned and acknowledged by this host, and the one in progress per removal. */
   private readonly cleaned = new Set<string>()
   private readonly cleaning = new Map<string, Promise<void>>()
@@ -173,6 +182,7 @@ export class ContributedMachines {
     if (this.stopped || pools.length === 0) { this.published.clear(); this.waiting.clear(); return }
     const pendingIds = new Set(pools.flatMap(row => list(row.starts).map(start => start.id)))
     for (const id of this.waiting.keys()) if (!pendingIds.has(id)) this.waiting.delete(id)
+    for (const id of this.refusedSince.keys()) if (!pendingIds.has(id)) this.refusedSince.delete(id)
     for (const tab of this.published.keys()) if (!pools.some(row => row.tabId === tab)) this.published.delete(tab)
     const privacy = this.privacy()
     // A model run or stopped for a Swarm, or an API shared with it, is sent on this pass, not on the next beat: the
@@ -345,6 +355,8 @@ export class ContributedMachines {
               }
             }
             const result = await this.deps.start({ tabId: row.tabId, startId: start.id, hostDispatch: true, ...(github ? { github } : {}) }, scoped, where, this.deps.open)
+            const refused = result.ok !== true && !start.dispatched && !NOT_REFUSED.has(String(result.error))
+            if (!refused) this.refusedSince.delete(start.id)
             if (result.ok === true && identifier(result.harnessId)) {
               this.waiting.delete(start.id)
               // Before the start settles: a settled start is no longer listed, so a missed record would never be made.
@@ -352,11 +364,17 @@ export class ContributedMachines {
               await scoped({ action: 'command', operationId: `settled-${start.id}`,
                 command: { type: 'agent.startSettled', startId: start.id, warning: result.modelWarning ?? null } })
             } else if (result.ok !== true) {
-              this.noteWaiting(start.id, String(result.detail ?? (Array.isArray(result.reasons) ? result.reasons.join(' ') : result.error)))
+              const reason = String(result.detail ?? (Array.isArray(result.reasons) ? result.reasons.join(' ') : result.error))
+              this.noteWaiting(start.id, reason)
+              const since = this.refusedSince.get(start.id) ?? began
+              if (refused) this.refusedSince.set(start.id, since)
+              if (refused && began - since >= START_REFUSED_MS) {
+                await scoped({ action: 'command', operationId: `refused-${start.id}`, command: { type: 'agent.startFailed', startId: start.id, error: reason } })
+              }
             }
           }
           // Keep its durable receipt; another start must not be starved by this failure.
-          catch (error) { this.noteWaiting(start.id, error instanceof Error ? error.message : String(error)) }
+          catch (error) { this.refusedSince.delete(start.id); this.noteWaiting(start.id, error instanceof Error ? error.message : String(error)) }
         }
         } catch { /* Revocation or one unavailable project cannot block another contribution. */ }
       }

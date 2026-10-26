@@ -573,6 +573,43 @@ describe('contributed machine executor', () => {
       ['Swarm start start is waiting: Waiting for the launched engine.']])
   })
 
+  describe('a start this machine cannot run', () => {
+    const failures = (f: ReturnType<typeof fixture>) => f.backend.mock.calls.filter(c => c[1] === 'POST' && c[2] === '/api/super-tabs/hosts/host/starts/tab/start')
+      .map(c => c[3] as { operationId: string; command: { type: string; error?: string } }).filter(body => body.command.type === 'agent.startFailed')
+
+    it('is failed with the machine\'s own reason once it has refused it for a minute', async () => {
+      const f = fixture()
+      f.start.mockResolvedValue({ error: 'CAPACITY_UNAVAILABLE', startId: 'start', reasons: ['The selected agent engine is not installed on this machine.', 'CPU use is 97%; the requested maximum is 85%.'] } as never)
+      await f.machine.tick()
+      // A busy minute passes: CPU or memory may free up, and routing saw this machine able a moment ago.
+      f.step(30_000); await f.machine.tick()
+      expect(failures(f)).toEqual([])
+      f.step(30_000); await f.machine.tick()
+      expect(failures(f)).toEqual([{ operationId: 'refused-start', command: { type: 'agent.startFailed', startId: 'start',
+        error: 'The selected agent engine is not installed on this machine. CPU use is 97%; the requested maximum is 85%.' } }])
+    })
+
+    it('starts its minute again after a pass that did not refuse it, and never fails one whose launch is uncertain or pending', async () => {
+      const f = fixture()
+      f.start.mockResolvedValue({ error: 'CONTRIBUTION_REQUIRED', startId: 'start', detail: 'Ask the machine owner to use Add machine in this Swarm.' } as never)
+      await f.machine.tick()
+      f.start.mockRejectedValue(new Error('Could not reach the Harness backend.'))
+      f.step(30_000); await f.machine.tick()
+      f.start.mockResolvedValue({ error: 'CONTRIBUTION_REQUIRED', startId: 'start', detail: 'Ask the machine owner to use Add machine in this Swarm.' } as never)
+      f.step(30_000); await f.machine.tick()
+      expect(failures(f)).toEqual([])
+      for (const error of ['START_UNCERTAIN', 'START_PENDING', 'START_REFUSED']) {
+        f.start.mockResolvedValue({ error, startId: 'start', detail: 'The machine did not confirm.' } as never)
+        f.step(60_000); await f.machine.tick()
+        f.step(60_000); await f.machine.tick()
+      }
+      // Refused again: its minute starts now, not at the passes before.
+      f.start.mockResolvedValue({ error: 'CONTRIBUTION_REQUIRED', startId: 'start', detail: 'Ask the machine owner to use Add machine in this Swarm.' } as never)
+      f.step(60_000); await f.machine.tick()
+      expect(failures(f)).toEqual([])
+    })
+  })
+
   it('a lead queues a contributed start without connecting to that computer', async () => {
     const open = vi.fn()
     const scoped = vi.fn(async () => ({ ok: true, value: { creationId: 'creation', poolGeneration: 'grant', request: { machineId: 'host', engine: 'claude' } } }))
