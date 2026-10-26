@@ -347,11 +347,11 @@ describe('runMaster', { timeout: 60_000 }, () => {
       exit: (code) => exits.push(code), onSignal: (signal, listener) => signals.set(signal, listener),
     })
     await until('the core and a service to be running', () => supervisor.status().state === 'running' && existsSync(ran) && existsSync(`${ran}search`))
-    await until('the devices\' process the core asked for', () => existsSync(`${ran}devices,wifi`))
+    await until('the devices\' process the core asked for', () => existsSync(`${ran}devices,wifi,machineAddons`))
     const libexec = join(realpathSync(runtime), 'node-v1', 'libexec', 'harnessd')
     expect(readFileSync(ran, 'utf8')).toBe(join(libexec, 'harnessd-core'))
     expect(readFileSync(`${ran}search`, 'utf8')).toBe(join(libexec, 'harnessd-search'))
-    expect(readFileSync(`${ran}devices,wifi`, 'utf8')).toBe(join(libexec, 'harnessd-devices'))
+    expect(readFileSync(`${ran}devices,wifi,machineAddons`, 'utf8')).toBe(join(libexec, 'harnessd-devices'))
     signals.get('SIGTERM')!()
     await until('the master to finish', () => exits.length > 0)
   })

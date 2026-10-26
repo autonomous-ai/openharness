@@ -1,6 +1,6 @@
 /**
- * Add-ons for a device that is this machine, in their own process (`harness __service machineAddons`, in the edge
- * host): the same handler as in the core's process (services/machineAddons.ts). It asks the core only where this
+ * Add-ons for a device that is this machine, in their own process (`harness __service machineAddons`, in the devices'
+ * process): the same handler as in the core's process (services/machineAddons.ts). It asks the core only where this
  * daemon runs, for this machine's id; what it holds is RAM, bounded as v1's add-ons are.
  */
 import { startMachineAddons } from './machineAddons.js'

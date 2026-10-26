@@ -199,7 +199,7 @@ harness autonomous-device addon proposal <proposalId> --machine lamp-4ace --json
   proposal needs a machine (`MACHINE_REQUIRED`). An agent on the device itself proposes as that machine.
 - **A machine reads back its own proposals alone.** Another machine's reads as `PROPOSAL_UNKNOWN`.
 - A proposal's target is always the device that is that machine: `deviceId` in the input is ignored.
-- It runs in the edge host (`services/machineAddons.ts`), in RAM, and a daemon restart forgets it all.
+- It runs in the devices' process (`services/machineAddons.ts`), started at its first request, in RAM; a daemon restart forgets it all.
 
 ## Lifetime
 
