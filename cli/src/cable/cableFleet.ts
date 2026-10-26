@@ -315,7 +315,12 @@ export class CableFleet {
     // Off this call stack, as onForeignPort's own stop: the session is in the middle of deciding this.
     // Given up when the port has gone, the daemon is stopping or USB has passed to another account in the meantime:
     // the next look at the port starts over.
-    const forget = () => { if (this.unanswered.get(id) === held) this.unanswered.delete(id) }
+    // A second round's notice may already be on screen (a stopping session publishes), so withdrawing it is said too.
+    const forget = () => {
+      if (this.unanswered.get(id) !== held) return
+      this.unanswered.delete(id)
+      if (held.stage === 'told') this.publish()
+    }
     setTimeout(() => void (async () => {
       if (this.entries.get(id) !== entry) return forget()
       this.entries.delete(id)

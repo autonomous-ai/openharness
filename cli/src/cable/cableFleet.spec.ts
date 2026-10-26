@@ -845,6 +845,27 @@ describe('a Harness Pro that is silent from the moment its port opens', () => {
     }
   })
 
+  it('withdraws a notice it has shown when the second silent round is given up, and says so to the window', async () => {
+    const s = setup()
+    s.verdicts.markDial(s.port, 'pro')
+    try {
+      s.fleet.start()
+      await vi.waitFor(() => expect(Quiet.made).toHaveLength(1))
+      Quiet.made[0].silent()
+      await vi.waitFor(async () => { await s.scan(); expect(Quiet.made).toHaveLength(2) })
+      // Stopping the second, still silent, session reports it gone, which publishes the notice; then USB passes
+      // to another account before the notice is settled.
+      Quiet.made[1].stop = async () => {
+        Quiet.made[1].host.onDialStatus?.({ attached: false })
+        s.f.options.canUseUsb.mockReturnValue(false)
+      }
+      Quiet.made[1].silent()
+      await vi.waitFor(() => expect(vi.mocked(s.f.host.onDialStatus!).mock.calls.some(([st]) => st.devices?.some(d => d.problem))).toBe(true))
+      await new Promise(r => setTimeout(r, 50))
+      expect(s.rows()).toEqual([])
+    } finally { await s.fleet.stop() }
+  })
+
   it('withdraws its notice when USB passes to another account at this computer', async () => {
     const s = setup()
     s.verdicts.markDial(s.port, 'pro')
