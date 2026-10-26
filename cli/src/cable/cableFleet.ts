@@ -176,7 +176,8 @@ export class CableFleet {
       if (!this.waitingForConsole) this.host.log('cable: USB belongs to the account at this computer\'s screen — releasing this connection')
       this.waitingForConsole = true
       await Promise.allSettled([...this.entries.values()].map(entry => entry.session.stop()))
-      if (this.entries.size) { this.entries.clear(); this.publish() }
+      // A silent Pro's notice is this account's to see, and its board no longer ours to reset.
+      if (this.entries.size || this.unanswered.size) { this.entries.clear(); this.unanswered.clear(); this.publish() }
       return
     }
     this.waitingForConsole = false
@@ -312,11 +313,15 @@ export class CableFleet {
     const held: Unanswered = { port: entry.port, stage: again ? 'told' : 'resetting' }
     this.unanswered.set(id, held)
     // Off this call stack, as onForeignPort's own stop: the session is in the middle of deciding this.
+    // Given up when the port has gone, the daemon is stopping or USB has passed to another account in the meantime:
+    // the next look at the port starts over.
+    const forget = () => { if (this.unanswered.get(id) === held) this.unanswered.delete(id) }
     setTimeout(() => void (async () => {
-      if (this.entries.get(id) !== entry) return
+      if (this.entries.get(id) !== entry) return forget()
       this.entries.delete(id)
       await entry.session.stop()
       if (this.unanswered.get(id) !== held) return
+      if (this.stopped || !this.canUseUsb()) return forget()
       // Only a USB serial says which board this is; a port without one is told, never reset.
       if (!again && entry.port.serialNumber && await this.reset(entry.port.path)) {
         this.host.log(`cable: Harness Pro on ${entry.port.path} is silent — reset it over the cable, looking again [usb ${id}]`)

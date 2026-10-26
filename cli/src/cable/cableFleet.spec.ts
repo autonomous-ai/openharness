@@ -826,6 +826,40 @@ describe('a Harness Pro that is silent from the moment its port opens', () => {
     } finally { await s.fleet.stop() }
   })
 
+  it('is not reset when the daemon stops or USB passes to another account just before the reset', async () => {
+    for (const change of ['usb', 'stop'] as const) {
+      const s = setup()
+      s.verdicts.markDial(s.port, 'pro')
+      try {
+        s.fleet.start()
+        await vi.waitFor(() => expect(Quiet.made).toHaveLength(1))
+        // The change lands while the silent session is being stopped, after the decision to reset.
+        Quiet.made[0].stop = async () => {
+          if (change === 'usb') s.f.options.canUseUsb.mockReturnValue(false)
+          else void s.fleet.stop()
+        }
+        Quiet.made[0].silent()
+        await new Promise(r => setTimeout(r, 50))
+        expect(s.reset).not.toHaveBeenCalled()
+      } finally { await s.fleet.stop() }
+    }
+  })
+
+  it('withdraws its notice when USB passes to another account at this computer', async () => {
+    const s = setup()
+    s.verdicts.markDial(s.port, 'pro')
+    s.reset.mockResolvedValue(false)
+    try {
+      s.fleet.start()
+      await vi.waitFor(() => expect(Quiet.made).toHaveLength(1))
+      Quiet.made[0].silent()
+      await vi.waitFor(() => expect(s.rows()).toEqual([{ id: PRO, attached: false, board: 'pro', problem: NOTICE }]))
+      s.f.options.canUseUsb.mockReturnValue(false)
+      await s.scan()
+      expect(s.rows()).toEqual([])
+    } finally { await s.fleet.stop() }
+  })
+
   it('never resets a silent board this computer has not seen greet as a Harness Pro', async () => {
     for (const known of ['nothing', 'round dial'] as const) {
       const s = setup({ serial: 'CC:03' })
