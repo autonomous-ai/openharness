@@ -8,6 +8,8 @@ import type { CoreApi } from '../core/api.js'
 import { sharedSwarm, superTabService } from './service.js'
 import { object } from './wire.js'
 import { hostForm, swarmReply } from './fixtures/read/index.js'
+import { HostFeed } from './hostFeed.js'
+import { SwarmReads } from './swarmReads.js'
 
 const list = (value: unknown) => Array.isArray(value) ? value.map(object) : []
 import { hostJournalFile, SuperTabHostError, type SuperTabHost, type SuperTabHostOptions } from './host.js'
@@ -667,8 +669,8 @@ describe('a Lead\'s terminal result', () => {
 
 describe('GitHub App tokens through the service', () => {
   it('gives a local agent its task\'s token, never one asked for through the relay', async () => {
-    const call = vi.fn<CoreApi['account']['backend']>(async (method, path) => ({ status: 200, body: { success: true, data: method === 'GET' && path.endsWith('/machine-1')
-      ? [{ tabId: 'tab-1', agent: { id: 'agent-1', machineId: 'machine-1', harnessId: 'native' } }]
+    const call = vi.fn<CoreApi['account']['backend']>(async (method, path) => ({ status: 200, body: { success: true, data: method === 'GET' && path.includes('/hosts/machine-1/changes')
+      ? hostForm([{ tabId: 'tab-1', agent: { id: 'agent-1', machineId: 'machine-1', harnessId: 'native' } }])
       : { token: 'ghs_fixtureToken0000001', expiresAt: '2026-10-24T13:00:00.000Z', repository: 'acme/app', trailers: [] } } }))
     const service = superTabService(fakeCore({ account: { backend: call }, agents: { byAgent: vi.fn(() => ({ agentId: 'native' }) as never) } }),
       { githubTokens: () => ({ start: vi.fn(), stop: vi.fn() }) })
@@ -752,19 +754,24 @@ describe('the Harness Team account, offered by Desktop on this Mac', () => {
 
   it('at app start, counts a Swarm this Mac is in with anyone else in it', async () => {
     const answers = (pools: unknown, tabs: Record<string, unknown>) => vi.fn<CoreApi['account']['backend']>(async (_method, path) => {
-      if (path.endsWith('/pools')) return pools instanceof Error ? { status: 503, body: { success: false } } : { status: 200, body: { success: true, data: pools } }
-      const tab = tabs[path.split('/').pop()!]
-      return tab ? { status: 200, body: { success: true, data: tab } } : { status: 403, body: { success: false, error: { code: 'FORBIDDEN' } } }
+      if (path.includes('/hosts/')) return pools instanceof Error ? { status: 503, body: { success: false } }
+        : { status: 200, body: { success: true, data: Array.isArray(pools) ? hostForm([], { pools }) : pools } }
+      const tab = tabs[path.split('/')[3]!]
+      return tab ? { status: 200, body: { success: true, data: swarmReply(path, tab as Record<string, unknown>) } } : { status: 403, body: { success: false, error: { code: 'FORBIDDEN' } } }
     })
-    const core = (call: CoreApi['account']['backend'], machineId = 'machine-1') => fakeCore({ account: { backend: call }, daemon: { machineId: () => machineId } as never })
+    const sources = (call: CoreApi['account']['backend'], machineId = 'machine-1') => {
+      const core = fakeCore({ account: { backend: call }, daemon: { machineId: () => machineId } as never })
+      return { feed: new HostFeed(core, machineId), reads: new SwarmReads(core) }
+    }
     const shared = answers([{ tabId: 'solo' }, { tabId: 'gone' }, { tabId: 'team' }],
-      { solo: { state: { people: [{ id: 'me' }] } }, team: { state: { people: [{ id: 'me' }, { id: 'kim' }] } } })
-    expect(await sharedSwarm(core(shared))).toBe(true)
-    expect(shared).toHaveBeenCalledWith('GET', '/api/super-tabs/hosts/machine-1/pools', undefined)
-    expect(await sharedSwarm(core(answers([{ tabId: 'solo' }, { tabId: '../x' }], { solo: { state: { people: [{ id: 'me' }] } } })))).toBe(false)
-    expect(await sharedSwarm(core(answers(new Error('down'), {})))).toBe(false)
-    expect(await sharedSwarm(core(answers({ not: 'a list' }, {})))).toBe(false)
-    expect(await sharedSwarm(core(answers([], {}), ''))).toBe(false)
+      { solo: { people: [{ id: 'me' }] }, team: { people: [{ id: 'me' }, { id: 'kim' }] } })
+    expect(await sharedSwarm(sources(shared))).toBe(true)
+    expect(shared.mock.calls.map(c => c[1])).toEqual(['/api/super-tabs/hosts/machine-1/changes?full=1',
+      '/api/super-tabs/solo/parts', '/api/super-tabs/gone/parts', '/api/super-tabs/team/parts'])
+    expect(await sharedSwarm(sources(answers([{ tabId: 'solo' }, { tabId: '../x' }], { solo: { people: [{ id: 'me' }] } })))).toBe(false)
+    expect(await sharedSwarm(sources(answers(new Error('down'), {})))).toBe(false)
+    expect(await sharedSwarm(sources(answers({ not: 'a host form' }, {})))).toBe(false)
+    expect(await sharedSwarm(sources(answers([], {}), ''))).toBe(false)
   })
 })
 

@@ -17,6 +17,7 @@ export const HOST_FULL_MS = 60_000
 
 export class HostFeed {
   private readonly now: () => number
+  private readonly backend: typeof backend
   /** Each Swarm's rows as last returned, in the order the server first listed them. */
   private tabs = new Map<string, HostTab>()
   private cursor: string | null = null
@@ -24,8 +25,9 @@ export class HostFeed {
   private readAt = -Infinity
   private running: Promise<HostRead> | null = null
 
-  constructor(private readonly core: CoreApi, readonly machineId: string, options: { now?: () => number } = {}) {
+  constructor(private readonly core: CoreApi, readonly machineId: string, options: { now?: () => number; backend?: typeof backend } = {}) {
     this.now = options.now ?? Date.now
+    this.backend = options.backend ?? backend
   }
 
   /** One read at a time: callers that ask while it runs get its answer. */
@@ -43,7 +45,7 @@ export class HostFeed {
     const full = this.cursor === null || this.now() - this.fullAt >= HOST_FULL_MS
     const startedAt = this.now()
     const path = `/api/super-tabs/hosts/${this.machineId}/changes?${full ? 'full=1' : `cursor=${this.cursor}`}`
-    const answer = readable<HostChanges>(await backend(this.core, 'GET', path))
+    const answer = readable<HostChanges>(await this.backend(this.core, 'GET', path))
     const tabs = full ? new Map<string, HostTab>() : new Map(this.tabs)
     for (const tabId of answer.removedTabIds ?? []) tabs.delete(tabId)
     for (const tab of answer.tabs) tabs.set(tab.tabId, tab)

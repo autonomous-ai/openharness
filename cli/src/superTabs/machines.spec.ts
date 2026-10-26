@@ -9,6 +9,9 @@ import { fakeCore } from '../testing/fakeCore.js'
 import { apisOn, ContributedMachines, liveOn, localModelsStamp, offered, refusedOn, servedOn, sharedWith, swarmWorktreesFile } from './machines.js'
 import { SuperTabHostError } from './host.js'
 import { startAgent } from './start.js'
+import { hostForm, swarmReply } from './fixtures/read/index.js'
+import { HostFeed } from './hostFeed.js'
+import { SwarmReads } from './swarmReads.js'
 import type { PrivacyObservation } from '../team/privacy.js'
 
 function fixture(env: NodeJS.ProcessEnv = {}, privacy: () => PrivacyObservation | null = () => null) {
@@ -19,7 +22,7 @@ function fixture(env: NodeJS.ProcessEnv = {}, privacy: () => PrivacyObservation 
   } })
   const pool = { tabId: 'tab', machine: { machineId: 'host', generation: 'grant', cwd: '/repo', engines: ['codex'], paused: false },
     harnessIds: ['running', 'stopped'], starts: [{ id: 'start', dispatched: false }], paused: false }
-  const backend = vi.fn(async (_core: unknown, method: string, path: string, _body?: unknown): Promise<unknown> => path.endsWith('/pools') ? [pool] : { revision: 1 })
+  const backend = vi.fn(async (_core: unknown, method: string, path: string, _body?: unknown): Promise<unknown> => path.includes('/hosts/host/changes') ? hostForm([], { pools: [pool] }) : { revision: 1 })
   const request = vi.fn(async (_type: string): Promise<Record<string, unknown>> => ({ providers: [{ provider: 'codex', outcome: 'answered', httpStatus: 200,
     body: { account_email: 'private@example.com', secret: 'private-token', rate_limit: { primary_window: { used_percent: 25, reset_at: 1234567890 } } } }] }))
   const close = vi.fn(), open = vi.fn(async () => ({ machineId: 'host', request, close }))
@@ -32,6 +35,29 @@ function fixture(env: NodeJS.ProcessEnv = {}, privacy: () => PrivacyObservation 
   return { machine, pool, core, backend, open, request, close, capabilities, start, prepare, log, modelsStamp, advance: () => { now += 16000 }, step: (ms: number) => { now += ms },
     stamp: (next: string) => { stamp = next } }
 }
+
+// #1726: the pass read GET /hosts/:m/pools, up to 100 whole Swarms, every 5 s. Its pools now come with the host form.
+describe('the pools of a contributed machine', () => {
+  it('come from the host form, never the old pools roster', async () => {
+    const f = fixture()
+    await f.machine.tick()
+    const reads = f.backend.mock.calls.filter(c => c[1] === 'GET').map(c => c[2])
+    expect(reads).toEqual(['/api/super-tabs/hosts/host/changes?full=1'])
+    expect(f.start).toHaveBeenCalledWith(expect.objectContaining({ tabId: 'tab', startId: 'start' }), expect.any(Function), expect.anything(), f.open)
+  })
+  it('come from the host\'s own fresh read when it shares one, without reading again', async () => {
+    const f = fixture()
+    let now = 1000
+    const feed = new HostFeed(f.core, 'host', { now: () => now, backend: f.backend })
+    await feed.refresh()
+    const machine = new ContributedMachines(f.core, 'host', { backend: f.backend, open: f.open, capabilities: f.capabilities, start: f.start, prepare: f.prepare,
+      log: f.log, now: () => now, sources: { feed, reads: new SwarmReads(f.core, { backend: f.backend }) } } as never)
+    now += 1_999
+    await machine.tick()
+    expect(f.backend.mock.calls.filter(c => c[1] === 'GET')).toHaveLength(1)
+    expect(f.start).toHaveBeenCalledTimes(1)
+  })
+})
 
 describe('contributed machine executor', () => {
   it('reports only installed supported engines for a legacy OpenCode contribution', async () => {
@@ -100,7 +126,7 @@ describe('contributed machine executor', () => {
       const machine = new ContributedMachines(f.core, 'host', { backend: f.backend, open: f.open, capabilities: f.capabilities, start: f.start,
         log: f.log, env: {}, privacy: () => null, team: () => team, now: () => 1000 } as never)
       Object.assign(f.pool, { githubApp: true })
-      f.backend.mockImplementation(async (_core: unknown, _method: string, path: string): Promise<unknown> => path.endsWith('/pools') ? [f.pool]
+      f.backend.mockImplementation(async (_core: unknown, _method: string, path: string): Promise<unknown> => path.includes('/hosts/host/changes') ? hostForm([], { pools: [f.pool] })
         : path.endsWith('/github-token') ? { github: false } : { revision: 1 })
       await machine.tick()
       const asked = f.backend.mock.calls.find(c => String(c[2]).endsWith('/github-token'))!
@@ -141,8 +167,8 @@ describe('contributed machine executor', () => {
   it('reuses tool readings across tabs and heartbeat passes without another shell probe', async () => {
     const f = fixture()
     const original = f.backend.getMockImplementation()!
-    f.backend.mockImplementation(async (core, method, path, body) => path.endsWith('/pools')
-      ? [f.pool, { ...f.pool, tabId: 'second-tab' }]
+    f.backend.mockImplementation(async (core, method, path, body) => path.includes('/hosts/host/changes')
+      ? hostForm([], { pools: [f.pool, { ...f.pool, tabId: 'second-tab' }] })
       : original(core, method, path, body))
     await f.machine.tick()
     expect(f.capabilities.mock.calls.map(([input]) => input.tools)).toEqual([
@@ -483,7 +509,7 @@ describe('contributed machine executor', () => {
 
   it('does not connect to a daemon without an explicit contribution', async () => {
     const f = fixture()
-    f.backend.mockResolvedValue([{ tabId: 'tab', agent: { id: 'existing-agent' } }])
+    f.backend.mockResolvedValue(hostForm([{ tabId: 'tab', agent: { id: 'existing-agent' } }]))
     await f.machine.tick()
     expect(f.open).not.toHaveBeenCalled()
   })
@@ -526,7 +552,7 @@ describe('contributed machine executor', () => {
 
   describe('how soon a change is seen', () => {
     const posts = (f: ReturnType<typeof fixture>) => f.backend.mock.calls.filter(c => c[1] === 'POST' && String(c[2]).includes('/machines/'))
-    const reads = (f: ReturnType<typeof fixture>) => f.backend.mock.calls.filter(c => c[1] === 'GET' && String(c[2]).endsWith('/pools'))
+    const reads = (f: ReturnType<typeof fixture>) => f.backend.mock.calls.filter(c => c[1] === 'GET' && String(c[2]).includes('/hosts/host/changes'))
     const lastBody = (f: ReturnType<typeof fixture>) => posts(f).at(-1)![3] as { runningHarnessIds: string[]; stoppedHarnessIds: string[] }
     /** The next host tick, `ms` later. */
     const after = async (f: ReturnType<typeof fixture>, ms: number) => { f.step(ms); await f.machine.tick() }
@@ -626,7 +652,7 @@ describe('contributed machine executor', () => {
       for (const ms of [1_000, 5_000, 10_000, 20_000]) { f.step(ms); void f.machine.tick() }
       await Promise.resolve()
       expect(reads(f)).toHaveLength(1)
-      release([f.pool])
+      release(hostForm([], { pools: [f.pool] }))
       await first
       expect(reads(f)).toHaveLength(1)
       expect(posts(f)).toHaveLength(1)
@@ -643,7 +669,7 @@ describe('contributed machine executor', () => {
       await after(f, 5_000)
       expect(reads(f)).toHaveLength(2)
 
-      f.backend.mockImplementation(async (_core, method, path) => path.endsWith('/pools') ? [f.pool] : method === 'POST' ? Promise.reject(new Error('refused')) : { revision: 1 })
+      f.backend.mockImplementation(async (_core, method, path) => path.includes('/hosts/host/changes') ? hostForm([], { pools: [f.pool] }) : method === 'POST' ? Promise.reject(new Error('refused')) : { revision: 1 })
       await after(f, 15_000)
       expect(posts(f)).toHaveLength(2)
       await after(f, 5_000); await after(f, 5_000)
@@ -665,7 +691,7 @@ describe('contributed machine executor', () => {
       const f = fixture(); quiet(f)
       await f.machine.tick()
       const pools = f.backend.getMockImplementation()!
-      f.backend.mockImplementation(async (core, method, path, body) => path.endsWith('/pools') ? [] : pools(core, method, path, body))
+      f.backend.mockImplementation(async (core, method, path, body) => path.includes('/hosts/host/changes') ? hostForm([], { tabs: ['tab'] }) : pools(core, method, path, body))
       await after(f, 5_000)
       f.backend.mockImplementation(pools)
       await after(f, 5_000)
@@ -717,7 +743,7 @@ describe('removed machine cleanup', () => {
       closeStarted: vi.fn(async (agentId: string) => { live = live.filter(s => s.agentId !== agentId); return { closed: true } as never }),
     } })
     const backend = vi.fn(async (_core: unknown, method: string, path: string, _body?: unknown): Promise<unknown> =>
-      method === 'GET' && path === '/api/super-tabs/tab' ? { state: { starts } } : { revision: 1 })
+      method === 'GET' && path.startsWith('/api/super-tabs/tab/') ? swarmReply(path, { starts }) : { parts: [] })
     const log = vi.fn()
     let now = 0
     const open = () => new ContributedMachines(core, 'host', { backend, log, now: () => now } as never)
@@ -768,7 +794,7 @@ describe('removed machine cleanup', () => {
   it('waits longer after each failed acknowledgement instead of cleaning again every pass', async () => {
     const m = machine()
     const host = m.open()
-    m.backend.mockImplementationOnce(async () => ({ state: { starts: [] } })).mockRejectedValueOnce(new Error('Backend offline'))
+    m.backend.mockImplementationOnce(async (_core, _method, path) => swarmReply(path, { starts: [] })).mockRejectedValueOnce(new Error('Backend offline'))
     await expect(host.clean('tab', 'removal')).rejects.toThrow('Backend offline')
     const calls = m.backend.mock.calls.length
     await host.clean('tab', 'removal')
@@ -801,7 +827,7 @@ describe('removed machine cleanup', () => {
 
   it('finishes a cleanup after a restart that interrupted its acknowledgement', async () => {
     const m = machine()
-    m.backend.mockImplementationOnce(async () => ({ state: { starts: [] } })).mockRejectedValueOnce(new Error('Backend offline'))
+    m.backend.mockImplementationOnce(async (_core, _method, path) => swarmReply(path, { starts: [] })).mockRejectedValueOnce(new Error('Backend offline'))
     await expect(m.open().clean('tab', 'removal')).rejects.toThrow('Backend offline')
     expect(existsSync(m.recorded)).toBe(false)
     await m.open().clean('tab', 'removal')
@@ -823,7 +849,7 @@ describe('removed machine cleanup', () => {
     const core = fakeCore({ dataDir: root, agents: { byAgent: vi.fn(id => id === 'h-new' ? session('h-new', '/worktrees/project/new', 'agent') : undefined) } })
     const pool = { tabId: 'tab', machine: { machineId: 'host', generation: 'grant', cwd: '/repo', engines: ['codex'], paused: false },
       harnessIds: [], starts: [{ id: 'new', dispatched: true, request: { worktree: true, cwd: '/clone' } }], paused: false }
-    const backend = vi.fn(async (_core: unknown, _method: string, path: string, _body?: unknown): Promise<unknown> => path.endsWith('/pools') ? [pool] : { revision: 1 })
+    const backend = vi.fn(async (_core: unknown, _method: string, path: string, _body?: unknown): Promise<unknown> => path.includes('/hosts/host/changes') ? hostForm([], { pools: [pool] }) : { revision: 1 })
     const open = vi.fn(async () => ({ machineId: 'host', request: vi.fn(async () => ({})), close: vi.fn() }))
     const start = vi.fn(async () => ({ ok: true, harnessId: 'h-new' }))
     await new ContributedMachines(core, 'host', { backend, open, start, now: () => 0,

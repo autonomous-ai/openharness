@@ -7,22 +7,29 @@ import { mkdir } from 'node:fs/promises'
 import { readAuthSession } from '../lib/authSession.js'
 import { randomUUID } from 'node:crypto'
 import { repairSwarmCloneTrust, swarmCloneRoot, swarmCloneRoots } from './cloneTrust.js'
+import { SwarmReads } from './swarmReads.js'
 
 type Json = Record<string, unknown>
 
+interface ContributionDeps {
+  backend: typeof backend; open: typeof openDaemon; prepare: typeof prepareProjectFolder; capacity: typeof readCapabilities; team?: () => boolean
+  /** The daemon's Swarm reads (superTabs/swarmReads.ts); a one-off read of its own when none is given. */
+  reads?: SwarmReads
+}
+const CONTRIBUTION_DEPS = { backend, open: openDaemon, prepare: prepareProjectFolder, capacity: readCapabilities }
+
 /** Owner-only setup. Reuses the regular checkout preparation and engine probe;
  * it neither launches an agent nor grants the team access to the computer. */
-export async function prepareContribution(core: CoreApi, input: Json, deps: {
-  backend: typeof backend; open: typeof openDaemon; prepare: typeof prepareProjectFolder; capacity: typeof readCapabilities; team?: () => boolean
-} = { backend, open: openDaemon, prepare: prepareProjectFolder, capacity: readCapabilities }): Promise<Json> {
+export async function prepareContribution(core: CoreApi, input: Json, given: Partial<ContributionDeps> = {}): Promise<Json> {
+  const deps: ContributionDeps = { ...CONTRIBUTION_DEPS, ...given }
   if (!identifier(input.tabId)) throw new Error('Choose a Super Tab.')
   // A Mac's Harness Team account reads no Swarm as the person (backend lib/teamSession.ts). Its Mac's daemon adds it, as a
   // swarm workspace in its own clone root (host.ts joinTeams), so it needs no read ("One machine" in
   // docs/plans/2026-10-24-swarm-team-account.md).
   const team = (deps.team ?? (() => readAuthSession()?.kind === 'team'))()
   if (team && input.scope !== 'swarm') throw new Error('A Harness Team account joins a Swarm only as a swarm workspace.')
-  const answer = team ? {} : object(await deps.backend(core, 'GET', `/api/super-tabs/${input.tabId}`))
-  const state = object(answer.state), project = object(state.project)
+  const state = team ? {} : (await (deps.reads ?? new SwarmReads(core, { backend: deps.backend })).read(input.tabId)).state
+  const project = object(state.project)
   const machineId = core.daemon.machineId()
   const existing = (Array.isArray(state.machines) ? state.machines.map(object) : []).find(m => m.machineId === machineId)
   const swarm = input.scope === 'swarm' || Array.isArray(state.projects)

@@ -4,8 +4,10 @@ import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'nod
 import type { CoreApi } from '../core/api.js'
 import { openDaemon } from '../agentClient/daemon.js'
 import { codingRefusal } from '../lib/codingModel.js'
-import { backend, SuperTabHostError } from './host.js'
-import { identifier, object } from './wire.js'
+import { backend, identifier, object, SuperTabHostError } from './wire.js'
+import type { SwarmSources } from './host.js'
+import { HostFeed } from './hostFeed.js'
+import { SwarmReads } from './swarmReads.js'
 import { readCapabilities, quotaOf, meteredEngine } from './capacity.js'
 import { startAgent, type ScopedRequest } from './start.js'
 import { prepareSwarmStart } from './projectFolder.js'
@@ -35,6 +37,8 @@ export const MACHINE_POLL_MS = 5_000
 /** How long an observation stands before it is sent again unchanged, so the Desktop can tell a machine that is
  *  silent from one that has nothing new (its offline threshold is counted in these beats). */
 export const MACHINE_HEARTBEAT_MS = 15_000
+/** How old a host form this pass may take: the host reads one every second, so a pass beside it reads nothing itself. */
+const POOLS_FRESH_MS = 2_000
 
 /** The worktrees this machine's Swarm starts made, by tab: what a removal may delete besides the tab's Swarm folders. */
 export const swarmWorktreesFile = (dataDir: string, machineId: string) => join(dataDir, 'super-tabs', `swarm-worktrees-${machineId}.json`)
@@ -71,6 +75,23 @@ async function swarmWorktree(path: string, source: string, startId: string): Pro
     return dirname(await realpath(resolve(path, gitdir))) === join(await realpath(resolve(source, common)), 'worktrees')
   } catch { return false }
 }
+
+interface MachineDeps {
+  backend: typeof backend; open: typeof openDaemon; capabilities: typeof readCapabilities; start: typeof startAgent; now: () => number
+  log?: (message: string) => void; env?: NodeJS.ProcessEnv
+  /** Readies a queued start before its agent is created (superTabs/projectFolder.ts `prepareSwarmStart`): whom the
+   *  work is for when it uses the Harness GitHub App, else null. */
+  prepare?: (core: CoreApi, row: Record<string, unknown>, start: Record<string, unknown>) => Promise<{ requester: string } | null | void>
+  /** Whether this daemon runs team work only (a Harness Team account, `harness team on`): it has no git login of its own. */
+  team?: () => boolean
+  /** The Harness Team account's privacy check (team/privacy.ts): null for the owner's own daemon. */
+  privacy?: () => PrivacyObservation | null
+  /** What says this machine's Swarm models changed, read every pass without asking the daemon ([localModelsStamp]). */
+  modelsStamp?: () => Promise<string>
+  /** The machine's host form and Swarm reads, shared with its host (superTabs/host.ts). */
+  sources?: SwarmSources
+}
+const MACHINE_DEPS = { backend, open: openDaemon, capabilities: readCapabilities, start: startAgent, now: Date.now }
 
 /** Separate from chat delivery: slow resource readers and agent launches never
  * hold up a delivery lease. Only a tab's explicit owner grant wakes this queue. */
@@ -114,19 +135,13 @@ export class ContributedMachines {
     if (Array.isArray(object(answer).grids)) this.gridModelsRead = { at: now, answer }
     return answer
   }
-  constructor(private readonly core: CoreApi, private readonly machineId: string,
-    private readonly deps: { backend: typeof backend; open: typeof openDaemon; capabilities: typeof readCapabilities;
-      start: typeof startAgent; now: () => number; log?: (message: string) => void; env?: NodeJS.ProcessEnv
-      /** Readies a queued start before its agent is created (superTabs/projectFolder.ts `prepareSwarmStart`): whom the
-       *  work is for when it uses the Harness GitHub App, else null. */
-      prepare?: (core: CoreApi, row: Record<string, unknown>, start: Record<string, unknown>) => Promise<{ requester: string } | null | void>
-      /** Whether this daemon runs team work only (a Harness Team account, `harness team on`): it has no git login of its own. */
-      team?: () => boolean
-      /** The Harness Team account's privacy check (team/privacy.ts): null for the owner's own daemon. */
-      privacy?: () => PrivacyObservation | null
-      /** What says this machine's Swarm models changed, read every pass without asking the daemon ([localModelsStamp]). */
-      modelsStamp?: () => Promise<string> } =
-      { backend, open: openDaemon, capabilities: readCapabilities, start: startAgent, now: Date.now }) {}
+  private readonly deps: MachineDeps
+  private readonly sources: SwarmSources
+  constructor(private readonly core: CoreApi, private readonly machineId: string, deps: Partial<MachineDeps> = {}) {
+    this.deps = { ...MACHINE_DEPS, ...deps }
+    this.sources = deps.sources ?? { feed: new HostFeed(core, machineId, { now: this.deps.now, backend: this.deps.backend }),
+      reads: new SwarmReads(core, { backend: this.deps.backend }) }
+  }
   stop() { this.stopped = true }
   /** DESKTOP-0TFH0OJ, 2026-10-23: every Claude start there was refused (CLI 0.4.57 took an API-key Claude for one not
    *  signed in) and the refusal was dropped, so two starts stayed "Queued" for hours with nothing in the log. */
@@ -148,7 +163,7 @@ export class ContributedMachines {
   }
   private async poll(began: number) {
     const where = { dataDir: this.core.dataDir, port: this.core.daemon.port, machineId: this.machineId }
-    const pools = list(await this.deps.backend(this.core, 'GET', `/api/super-tabs/hosts/${this.machineId}/pools`)).filter(row => identifier(row.tabId) && object(row.machine).machineId === this.machineId && identifier(object(row.machine).generation))
+    const pools = list((await this.sources.feed.current(POOLS_FRESH_MS)).pools).filter(row => identifier(row.tabId) && object(row.machine).machineId === this.machineId && identifier(object(row.machine).generation))
     if (this.stopped || pools.length === 0) { this.published.clear(); this.waiting.clear(); return }
     const pendingIds = new Set(pools.flatMap(row => list(row.starts).map(start => start.id)))
     for (const id of this.waiting.keys()) if (!pendingIds.has(id)) this.waiting.delete(id)
@@ -366,7 +381,7 @@ export class ContributedMachines {
     // very agent the registry lists as agent-started in it. A start receipt read is required; a tab gone or no longer
     // readable by this owner leaves only the record.
     let starts: Record<string, unknown>[] = []
-    try { starts = list(object(object(await this.deps.backend(this.core, 'GET', `/api/super-tabs/${tabId}`)).state).starts) }
+    try { starts = list((await this.sources.reads.read(tabId)).state.starts) }
     catch (error) { if (!(error instanceof SuperTabHostError) || ![403, 404].includes(error.status)) throw error }
     const swarm = new Set(recorded.map(w => w.harnessId))
     const candidates = recorded.map(w => ({ source: w.source, path: w.path, startId: w.startId, proven: true }))

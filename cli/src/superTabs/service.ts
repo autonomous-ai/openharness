@@ -67,6 +67,8 @@ const list = (value: unknown) => Array.isArray(value) ? value.map(object) : []
 /** Only a project's Lead may tag people (spec 2026-10-24-lead-mentions), so only a Lead's help offers it. */
 const LEAD_HELP = { ...HELP, post: `post GROUP TEXT OPERATION_ID [--reply-to MESSAGE_ID] [--attach PATH]... [--mention PERSON]...: ${POST_HELP} --mention tags a person, by the id or email shown in status (up to 5), when you need them to act or decide; it shows in their notifications.` }
 const OTHER_WORK_FIELDS = ['conversationId', 'projectName', 'title', 'owns', 'status', 'agentName', 'pr'] as const
+/** How old a host form a one-off question about this machine's Swarms may take: the host reads one every second. */
+const POOLS_FRESH_MS = 5_000
 
 /** A project's Lead is its Lead conversation's, as the backend reads it; a Swarm from before projects has one, 'lead'. */
 function isLead(state: Record<string, unknown>, agentId: string): boolean {
@@ -133,14 +135,12 @@ function markAnswered(page: unknown, later: unknown[], agentId: string): unknown
 
 /** Whether this machine is in a Swarm with other people in it: a contribution of its own to a tab whose people are more
  *  than its owner. False when that cannot be read. */
-export async function sharedSwarm(core: CoreApi): Promise<boolean> {
-  const machineId = core.daemon.machineId()
-  if (!identifier(machineId)) return false
-  const pools = await backend(core, 'GET', `/api/super-tabs/hosts/${machineId}/pools`).catch(() => [])
-  for (const row of Array.isArray(pools) ? pools.map(object) : []) {
+export async function sharedSwarm(sources: SwarmSources): Promise<boolean> {
+  if (!identifier(sources.feed.machineId)) return false
+  const pools = await sources.feed.current(POOLS_FRESH_MS).then(read => read.pools, () => [])
+  for (const row of pools) {
     if (!identifier(row.tabId)) continue
-    const tab = object(await backend(core, 'GET', `/api/super-tabs/${row.tabId}`).catch(() => ({})))
-    const people = object(tab.state).people
+    const people = await sources.reads.read(row.tabId).then(read => read.state.people, () => null)
     if (Array.isArray(people) && people.length > 1) return true
   }
   return false
@@ -200,7 +200,7 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
     return swarmCards
   }
   // Sessions doing another person's project work keep a live GitHub App token while their task lasts, and none after.
-  const tokens = (options.githubTokens ?? (api => new GitHubTokenRefresher(api)))(core)
+  const tokens = (options.githubTokens ?? (api => new GitHubTokenRefresher(api, sources)))(core)
   // In the Harness Team account only: whether its Claude Code and Codex are installed and signed in, for its owner to read.
   const engines = (options.teamEngines ?? teamEngineReporter)()
   let autoSetup: Promise<Pick<TeamAutoSetup, 'offer'>> | null = null
@@ -240,7 +240,7 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
         // which goes to this computer's own processes alone, never to another machine through the relay.
         if (payload.action === 'githubToken') {
           if (!asker.local) return { error: 'OWNER_REQUIRED' }
-          return await githubToken(core, String(payload.harnessId ?? ''))
+          return await githubToken(core, String(payload.harnessId ?? ''), sources())
         }
         // Desktop on this Mac, as the person joins a Swarm, adds this Mac to one, or opens the app (team/autoSetup.ts): the
         // Harness Team account, behind macOS's own administrator prompt. Never through the relay, with nobody at this Mac.
@@ -254,7 +254,7 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
           }
           autoSetup ??= (options.teamSetup ?? (() => realTeamAutoSetup(core.dataDir, line => console.log(`[team] ${line}`))))()
             .catch(error => { autoSetup = null; throw error })
-          return { ok: true, ...await (await autoSetup).offer(payload.reason as AutoSetupReason, () => sharedSwarm(core)) }
+          return { ok: true, ...await (await autoSetup).offer(payload.reason as AutoSetupReason, () => sharedSwarm(sources())) }
         }
         if (payload.action === 'swarmRole') {
           const grant = await port.swarmRole(String(payload.harnessId ?? ''))

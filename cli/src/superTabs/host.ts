@@ -315,7 +315,7 @@ export class SuperTabHost {
     return this.native.prepare(tabId, contextId, renew, closed)
   }
   private pollMachines() {
-    this.machines ??= new ContributedMachines(this.core, this.machineId)
+    this.machines ??= new ContributedMachines(this.core, this.machineId, { sources: this.sources })
     void this.machines.tick().catch(error => this.log(error instanceof Error ? error.message : String(error)))
     this.grids ??= new SwarmGrids(this.core, this.machineId)
     void this.grids.tick().catch(error => this.log(`Swarm grid: ${error instanceof Error ? error.message : String(error)}`))
@@ -775,7 +775,7 @@ export class SuperTabHost {
       join.running = true
       this.joins.set(tabId, join)
       void (async () => {
-        const prepared = await this.prepareContribution(this.core, { tabId, scope: 'swarm' })
+        const prepared = await this.prepareContribution(this.core, { tabId, scope: 'swarm' }, { reads: this.sources.reads })
         await backend(this.core, 'POST', `/api/super-tabs/${tabId}/commands`, { operationId: randomUUID(), command: {
           type: 'machine.contribute', machineId: this.machineId, name: this.core.account.machineName() ?? hostname(),
           cwd: prepared.cwd, scope: 'swarm', engines: prepared.engines, maxAgents: prepared.maxAgents, ifMissing: true } })
@@ -827,7 +827,7 @@ export class SuperTabHost {
     for (const row of rows.map(object)) {
       const cleanup = object(row.cleanup)
       if (!identifier(row.tabId) || cleanup.machineId !== this.machineId || !identifier(cleanup.removalId)) continue
-      this.machines ??= new ContributedMachines(this.core, this.machineId)
+      this.machines ??= new ContributedMachines(this.core, this.machineId, { sources: this.sources })
       void this.machines.clean(row.tabId, cleanup.removalId).catch(error => this.log(error instanceof Error ? error.message : String(error)))
     }
   }

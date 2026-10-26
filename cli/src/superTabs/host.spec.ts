@@ -1109,7 +1109,7 @@ describe('adding the machine its own Lead runs on to the Swarm', () => {
   it('adds it once with the prepared slots and leaves unmarked Swarms alone', async () => {
     const t = joining()
     await t.pass(0)
-    expect(t.prepare).toHaveBeenCalledExactlyOnceWith(t.core, { tabId: 'own', scope: 'swarm' })
+    expect(t.prepare).toHaveBeenCalledExactlyOnceWith(t.core, { tabId: 'own', scope: 'swarm' }, { reads: expect.any(SwarmReads) })
     expect(t.commands).toEqual([{ path: '/api/super-tabs/own/commands', operationId: expect.any(String), command: { type: 'machine.contribute',
       machineId: 'machine-1', name: 'Ken Mac', cwd: '/data/swarm-projects/own', scope: 'swarm', engines: ['claude', 'codex'], maxAgents: 3, ifMissing: true } }])
     await t.pass(59_000)

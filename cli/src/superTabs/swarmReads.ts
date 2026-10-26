@@ -21,9 +21,11 @@ export class SwarmReads {
   /** Each reader's last read, so reads of one Swarm run one after another, each from where the last left the cursor. */
   private readonly queue = new Map<string, Promise<unknown>>()
   private readonly maxSwarms: number
+  private readonly backend: typeof backend
 
-  constructor(private readonly core: CoreApi, options: { maxSwarms?: number } = {}) {
+  constructor(private readonly core: CoreApi, options: { maxSwarms?: number; backend?: typeof backend } = {}) {
     this.maxSwarms = options.maxSwarms ?? MAX_SWARMS
+    this.backend = options.backend ?? backend
   }
 
   read(tabId: string, asAgentId?: string): Promise<SwarmRead> {
@@ -40,7 +42,7 @@ export class SwarmReads {
     let store: PartsStore | null = null
     if (held) {
       try {
-        const changes = object(await backend(this.core, 'GET', `/api/super-tabs/${tabId}/changes?cursor=${held.cursor}${as ? `&${as}` : ''}`))
+        const changes = object(await this.backend(this.core, 'GET', `/api/super-tabs/${tabId}/changes?cursor=${held.cursor}${as ? `&${as}` : ''}`))
         // The epoch moved (who sees what changed) or the cursor outlived the tombstones: only a first load is right now. The
         // answer is `{ reload: true }` alone (design 4.2), so it is read before the format of a reply with parts.
         if (changes.reload !== true) store = mergeChanges(held, readable<ChangedParts>(changes))
@@ -51,7 +53,7 @@ export class SwarmReads {
     }
     // Dropped before the first load: a refused one leaves nothing that a later read could resume from.
     this.held.delete(key)
-    store ??= storeOf(readable<FirstLoad>(await backend(this.core, 'GET', `/api/super-tabs/${tabId}/parts${as ? `?${as}` : ''}`)))
+    store ??= storeOf(readable<FirstLoad>(await this.backend(this.core, 'GET', `/api/super-tabs/${tabId}/parts${as ? `?${as}` : ''}`)))
     this.held.set(key, store)
     for (const oldest of this.held.keys()) {
       if (this.held.size <= this.maxSwarms) break
