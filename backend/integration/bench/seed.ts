@@ -10,6 +10,7 @@ export interface Worker {
   id: string
   harnessId: string
   machine: number
+  /** The group whose task it holds; its terminal is open there. */
   group: string
   assignmentId: string
   checkIds: string[]
@@ -22,6 +23,8 @@ export interface Swarm {
   tabId: string
   people: AuthUser[]
   leadId: string
+  /** Every work group's id, by its index in the plan. */
+  groups: string[]
   workers: Worker[]
   /** Each machine's contribution generation, which its reports name. */
   generations: string[]
@@ -75,13 +78,15 @@ async function seedGroups(s: Setup, rng: Random): Promise<string[]> {
   return groups
 }
 
-/** Each worker added by its machine's owner, into its active group. */
+/** Each worker added by its machine's owner into its first active group, then joined to its other active groups. */
 async function seedWorkers(s: Setup, p: Plan, groups: string[]): Promise<Array<{ id: string; harnessId: string }>> {
   const agents: Array<{ id: string; harnessId: string }> = []
   for (const w of p.workers) {
     const harnessId = `bench-worker-${w.index}`
-    agents.push({ harnessId, id: String((await s.run(s.people[w.machine]!, { type: 'agent.add', conversationId: groups[w.activeGroup]!,
-      machineId: machineId(w.machine), harnessId, name: `Engineer ${w.index}`, configuration: AGENT_CONFIGURATION, lead: false })).agentId) })
+    const id = String((await s.run(s.people[w.machine]!, { type: 'agent.add', conversationId: groups[w.groups[0]!]!,
+      machineId: machineId(w.machine), harnessId, name: `Engineer ${w.index}`, configuration: AGENT_CONFIGURATION, lead: false })).agentId)
+    for (const g of w.groups.slice(1)) await s.run(s.owner, { type: 'conversation.agent', conversationId: groups[g]!, agentId: id, present: true, lead: false })
+    agents.push({ harnessId, id })
   }
   return agents
 }
@@ -115,12 +120,12 @@ export async function seedSwarm(driver: SwarmDriver, config: BenchConfig, p: Pla
   }
   const workers: Worker[] = []
   for (const w of p.workers) {
-    const group = groups[w.activeGroup]!, agent = agents[w.index]!, host = people[w.machine]!
+    const group = groups[w.groups[0]!]!, agent = agents[w.index]!, host = people[w.machine]!
     const assignmentId = String((await s.run(s.owner, { type: 'work.assign', conversationId: group, agentId: agent.id })).assignmentId)
     const { contextId } = await s.check('native.open', driver.openNative(s.tabId, host, { operationId: s.op(), conversationId: group, agentId: agent.id }))
     workers.push({ ...agent, machine: w.machine, group, assignmentId, checkIds: checksOf(group), contextId })
   }
   const generations: string[] = []
   for (let n = 0; n < config.machines; n++) generations.push(await driver.machineGeneration(s.tabId, people[n]!, machineId(n)))
-  return { swarm: { tabId: s.tabId, people, leadId, workers, generations }, calls: s.calls }
+  return { swarm: { tabId: s.tabId, people, leadId, groups, workers, generations }, calls: s.calls }
 }

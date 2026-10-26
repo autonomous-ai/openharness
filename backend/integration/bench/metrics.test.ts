@@ -45,6 +45,15 @@ describe('Recorder', () => {
     expect(recorder.byWriter()[0]!.byOp).toEqual({ 'message.send': 2, 'work.check': 1 })
   })
 
+  it('totals by kind of writer, so a machine conflicting with group writes shows on its own line', () => {
+    const recorder = new Recorder()
+    recorder.add({ op: 'message.send', writer: 'worker-01', ms: 1, failedAttempts: ['P2034'], outcome: 'ok' })
+    recorder.add({ op: 'native.append', writer: 'worker-12', ms: 1, failedAttempts: [], outcome: 'ok' })
+    recorder.add({ op: 'observeMachine', writer: 'machine-3', ms: 1, failedAttempts: ['P2034', 'P2034'], outcome: 'ok' })
+    recorder.add({ op: 'read.desktop', writer: 'desktop:bench-0@example.com', ms: 1, failedAttempts: [], outcome: 'ok', bytes: 10 })
+    expect(recorder.byWriterKind().map(row => [row.key, row.count, row.conflicts])).toEqual([['desktop', 1, 0], ['machine', 1, 2], ['worker', 2, 1]])
+  })
+
   it('keeps operations and writers in name order', () => {
     const recorder = new Recorder()
     for (const op of ['work.status', 'message.send', 'observeMachine']) recorder.add({ op, writer: `w-${op}`, ms: 1, failedAttempts: [], outcome: 'ok' })

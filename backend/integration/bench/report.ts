@@ -15,7 +15,7 @@ export interface BenchReport {
   /** plan.ts planDigest: the same in two reports when both ran the same planned work. */
   planDigest: string
   setup: { ms: number; calls: number; workers: number; activeGroups: number; doneGroups: number }
-  load: { plannedMs: number; actualMs: number; skipped: Record<string, number>; ops: Row[]; writers: WriterRow[]; readers: Row[] }
+  load: { plannedMs: number; actualMs: number; skipped: Record<string, number>; ops: Row[]; writerKinds: Row[]; writers: WriterRow[]; readers: Row[] }
   state: { afterSetup: Size; afterLoad: Size }
   isolatedPolls: IsolatedPoll[]
 }
@@ -40,6 +40,7 @@ export function renderMarkdown(report: BenchReport): string {
     ['Started', report.startedAt],
     ['Machine', `${report.machine.cpu}, ${report.machine.cpus} cores, ${report.machine.memoryGb} GB, ${report.machine.platform} ${report.machine.release} ${report.machine.arch}`],
     ['Runtime', `Node ${report.machine.node}, MongoDB ${report.machine.mongo} (local single-node replica set)`],
+    ['Lane', config.lane === 'cross-group' ? 'cross-group (one writer per group: no Lead messages, no delivery passes)' : 'mixed'],
     ['Seed', String(config.seed)], ['Plan', `sha256 ${report.planDigest.slice(0, 16)}`],
     ['Swarm', `${config.groups} groups (${setup.doneGroups} done, ${setup.activeGroups} active), ${setup.workers} workers and a Lead, ${config.machines} machines`],
     ['Readers', `${config.desktopReaders} Desktop every ${config.every.desktopPollMs} ms, ${config.hostReaders} hosts every ${config.every.hostTickMs} ms`],
@@ -54,6 +55,8 @@ export function renderMarkdown(report: BenchReport): string {
     '## Run', '', table(['', ''], run), '',
     '## Operations', '', 'Every call during the load, by operation. A failed attempt is one database transaction the store retried (write conflict P2034, or a transient error); SWARM_BUSY is a call that ran out of retries.', '',
     table(['Operation', ...CALL_HEADER], load.ops.map(row => [row.key, ...callCells(row)])), '',
+    '## Writer kinds', '', 'Every call by kind of writer: workers (posts in their groups), terminals (turns recorded in their groups), machines (reports), hosts (delivery passes), the Lead, and readers.', '',
+    table(['Kind', ...CALL_HEADER], load.writerKinds.map(row => [row.key, ...callCells(row)])), '',
     '## Writers', '', table(['Writer', ...CALL_HEADER], load.writers.map(row => [row.key, ...callCells(row)])), '',
     '## Readers', '', 'Bytes are response bodies during the load. The isolated poll runs once each after the load, alone, and counts what MongoDB sent the backend for it.', '',
     table(['Reader', 'Polls', 'p50 ms', 'p95 ms', 'Mean KB', 'p95 KB', 'Isolated: response KB', 'Isolated: database KB'], load.readers.map(row => {

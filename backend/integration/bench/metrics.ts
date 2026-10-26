@@ -70,6 +70,8 @@ export class Recorder {
   private readonly samples: Sample[] = []
   add(sample: Sample): void { this.samples.push(sample) }
   byOp(): Row[] { return grouped(this.samples, s => s.op) }
+  /** By kind of writer: `worker-03` and `worker-11` are both `worker`, `desktop:someone` is `desktop`. */
+  byWriterKind(): Row[] { return grouped(this.samples, s => s.writer.split(':')[0]!.replace(/-\d+$/, '')) }
   byWriter(): WriterRow[] {
     return grouped(this.samples, s => s.writer).map(row => {
       const byOp: Record<string, number> = {}

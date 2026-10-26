@@ -10,18 +10,23 @@ import type { BenchReport } from './report.js'
 import { renderMarkdown } from './report.js'
 
 // A short run of the whole scenario through today's driver, on its own loopback replica set.
-const config: BenchConfig = { ...DEFAULT_CONFIG, groups: 6, doneShare: 0.5, machines: 2, durationMs: 6_000, desktopReaders: 2, hostReaders: 1,
+const config: BenchConfig = { ...DEFAULT_CONFIG, groups: 6, doneShare: 0.5, workers: 3, machines: 2, durationMs: 6_000, desktopReaders: 2, hostReaders: 1,
   every: { workerPostMs: 600, leadSendMs: 800, nativeTurnMs: 1_500, observeMs: 2_000, deliveryPassMs: 700, desktopPollMs: 1_000, hostTickMs: 500 },
   text: { briefChars: 400, resultChars: 100, messageChars: 80 } }
-let database: LocalDatabase
-let report: BenchReport
-const op = (name: string) => report.load.ops.find(row => row.key === name)
+// The cross-group lane on a hot Swarm: every group active, fewer workers than groups.
+const lane: BenchConfig = { ...config, doneShare: 0, workers: 2, lane: 'cross-group' }
+let database: LocalDatabase, laneDatabase: LocalDatabase
+let report: BenchReport, laneReport: BenchReport
+const op = (name: string, from = report) => from.load.ops.find(row => row.key === name)
 
 beforeAll(async () => {
   database = await localDatabase()
   report = await runBench(config, 'legacy', database.db)
+  // Each run seeds its own accounts, so it gets a fresh database.
+  laneDatabase = await localDatabase()
+  laneReport = await runBench(lane, 'legacy', laneDatabase.db)
 })
-afterAll(async () => { await database?.stop() })
+afterAll(async () => { await database?.stop(); await laneDatabase?.stop() })
 
 describe('the Swarm load benchmark on today\'s store', () => {
   it('runs every planned worker post, Lead message, terminal turn, machine report and poll exactly once', () => {
@@ -67,8 +72,22 @@ describe('the Swarm load benchmark on today\'s store', () => {
 
   it('writes a markdown report with the run, the operations, the writers and the readers', () => {
     const markdown = renderMarkdown(report)
-    for (const heading of ['## Run', '## Operations', '## Writers', '## Readers', '## State']) expect(markdown).toContain(heading)
+    for (const heading of ['## Run', '## Operations', '## Writer kinds', '## Writers', '## Readers', '## State']) expect(markdown).toContain(heading)
+    expect(renderMarkdown(laneReport)).toContain('| Lane | cross-group')
     expect(markdown).toContain('| work.status |')
+  })
+
+  it('runs the cross-group lane: workers in all their groups, terminals and machine reports, no Lead and no delivery passes', () => {
+    const p = plan(lane)
+    expect(p.workers.map(w => w.groups.length)).toEqual([3, 3])
+    const planned = (name: string) => p.workers.flatMap(w => w.actions).filter(a => a.op === name).length
+    for (const name of ['message.send', 'work.status', 'work.check']) expect(op(name, laneReport)?.count ?? 0, name).toBe(planned(name))
+    expect(op('native.append', laneReport)!.count + (laneReport.load.skipped['native answers'] ?? 0)).toBe(2 * p.workers.reduce((sum, w) => sum + w.turns.length, 0))
+    expect(op('observeMachine', laneReport)?.count).toBe(p.machines.reduce((sum, m) => sum + m.observations.length, 0))
+    for (const name of ['deliveries.list', 'delivery.claim', 'delivery.ack']) expect(op(name, laneReport), name).toBeUndefined()
+    expect(laneReport.load.writers.map(w => w.key)).not.toContain('lead')
+    for (const row of laneReport.load.ops) expect(row.errors, row.key).toEqual({})
+    expect(laneReport.load.writerKinds.map(k => k.key)).toEqual(['desktop', 'host', 'machine', 'terminal', 'worker'])
   })
 
   it('counts the write conflicts the store retries when commands on one Swarm run at once', async () => {

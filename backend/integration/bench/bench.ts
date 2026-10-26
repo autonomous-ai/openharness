@@ -52,7 +52,7 @@ export async function runBench(config: BenchConfig, driverName: string, db: Pris
         memoryGb: Math.round(totalmem() / 2 ** 30), node: process.versions.node, mongo: await mongoVersion(db) },
       config, planDigest: planDigest(p),
       setup: { ms: setupMs, calls, workers: p.workers.length, activeGroups: activeCount(config), doneGroups: p.doneGroups.length },
-      load: { plannedMs: config.durationMs, actualMs: load.actualMs, skipped: load.skipped, ops: load.recorder.byOp(),
+      load: { plannedMs: config.durationMs, actualMs: load.actualMs, skipped: load.skipped, ops: load.recorder.byOp(), writerKinds: load.recorder.byWriterKind(),
         writers: load.recorder.byWriter().filter(w => !readerLabels.has(w.key)), readers: load.recorder.byWriter().filter(w => readerLabels.has(w.key)) },
       state: { afterSetup, afterLoad },
       isolatedPolls: polls,

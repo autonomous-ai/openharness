@@ -10,8 +10,9 @@ conflict (goal 1), and a poll costs what changed, not the whole Swarm (goal 3). 
 From `backend/`, after `npm ci`:
 
 ```bash
-npm run bench:swarm-state                      # the default busy Swarm, about 3 minutes
-npm run bench:swarm-state -- --done-share 0    # the hot Swarm: every one of the 200 groups active, 200 workers
+npm run bench:swarm-state                         # the default busy Swarm, about 3 minutes
+npm run bench:swarm-state -- --lane cross-group   # goal 1: one writer per group, so any conflict is across groups
+npm run bench:swarm-state -- --done-share 0       # the hot Swarm: all 200 groups active, the same 20 workers spread over them
 ```
 
 It starts its own MongoDB replica set on 127.0.0.1 (as `integration/superTabs.test.ts` does), with fixture accounts and
@@ -22,7 +23,9 @@ machines, and never reads `DATABASE_URL` or any other database. It writes `<driv
 |---|---|---|
 | `--seed N` | 1726 | Seeds every choice: who posts what, when. Same seed, same plan (the report's plan fingerprint). |
 | `--groups N` | 200 | Work groups besides the Leads group. |
-| `--done-share X` | 0.9 | Share of groups done before the load. Every other group is active and has its own worker (one active task per agent). |
+| `--done-share X` | 0.9 | Share of groups done before the load; the rest are active. |
+| `--workers N` | 20 | Workers, at most one per active group. Each takes active groups in turn and holds the task of its first (an agent holds one active task at a time); its messages go to any of its groups, its status and checks to that first group. |
+| `--lane L` | mixed | `mixed`: the busy Swarm below. `cross-group`: one writer per group at a time, for goal 1 (below). |
 | `--machines N` | 6 | Contributed machines, each its own person's; machine 0 is the owner's and runs the Lead. |
 | `--duration S` | 120 | Load length in seconds. A slow store stretches it by up to a quarter (at least 10 s); work left after that is reported as skipped. |
 | `--desktop-readers N` | 3 | Desktop windows of the owner and the first machine owners, polling the full state. |
@@ -51,13 +54,18 @@ Then, all at once, each on its own seeded timeline:
 - each machine's host passes over its agents' deliveries every 3 s: lists them, claims and acknowledges each one;
 - Desktop readers poll the full state every 3 s and host readers their roster every 1 s.
 
+In the `cross-group` lane each worker's posts and terminal turns run in one sequence, and there are no Lead messages and
+no delivery passes, so no two calls ever write one group at once: every conflict between agents is between different
+groups. Machine reports stay, every 15 s: after the parts change they write only their machine's part, so they must not
+conflict with group writes either. The report's writer kinds table shows which kind of writer met the conflicts.
+
 After the load each reader polls once more, alone, as a client that is already up to date. That poll's response size
 and what MongoDB sent the backend for it (`serverStatus` bytes out, minus the status call's own reply) show what a poll
 costs the database: today a host roster reply is a few KB, but it loads the whole Swarm document.
 
 ## What it reports
 
-Per operation and per writer: calls, OK, failed transaction attempts (P2034 write conflicts and transient errors the
+Per operation, per kind of writer (worker, terminal, machine, host, Lead, readers) and per writer: calls, OK, failed transaction attempts (P2034 write conflicts and transient errors the
 store retried), calls that needed a retry, `SWARM_BUSY` (a call that ran out of retries), other errors, p50, p95 and
 max latency. Per reader: polls, latency, response bytes, and the isolated poll. The state's size (documents and BSON
 bytes) after setup and after the load. The run: commit, machine, MongoDB version, seed, plan fingerprint and settings.

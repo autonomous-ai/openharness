@@ -56,37 +56,46 @@ export async function runLoad(driver: SwarmDriver, counter: AttemptCounter, conf
   const command = (writer: string, user = owner, asAgentId?: string) => (c: Command) =>
     measure(c.type, writer, () => driver.execute(tabId, user, op(), c, asAgentId))
 
-  function workerPosts(w: Worker, i: number) {
-    const rng = random(config.seed, `worker-text-${i}`), host = people[w.machine]!
-    const post = command(`worker-${pad(i)}`, host, w.id)
-    return timeline('worker posts', p.workers[i]!.actions.map(a => a.at), async n => {
-      const kind = p.workers[i]!.actions[n]!.op, group = w.group
+  /** A worker's post in one of its groups (status and checks in the group whose task it holds). */
+  function poster(w: Worker, i: number) {
+    const rng = random(config.seed, `worker-text-${i}`), post = command(`worker-${pad(i)}`, people[w.machine]!, w.id)
+    return async (n: number) => {
+      const { op: kind, group: g } = p.workers[i]!.actions[n]!, group = swarm.groups[g]!
       if (kind === 'message.send') await post({ type: kind, conversationId: group, text: words(rng, config.text.messageChars), replyTo: null, recipientIds: [] })
       if (kind === 'work.status') await post({ type: kind, conversationId: group, assignmentId: w.assignmentId, status: 'working', result: words(rng, config.text.resultChars) })
       if (kind === 'work.check') {
         await post({ type: kind, conversationId: group, assignmentId: w.assignmentId, checkId: rng.pick(w.checkIds), passed: rng.next() < 0.5, evidence: words(rng, 200) })
       }
-    })
+    }
   }
-  function workerTurns(w: Worker, i: number) {
+  /** A worker's terminal turn, recorded by its host: the prompt, then its answer. */
+  function turner(w: Worker, i: number) {
     const rng = random(config.seed, `worker-turns-${i}`), host = people[w.machine]!
     let previousEventId: string | null = null
     const append = (turnId: string, kind: 'prompt' | 'answer') => measure('native.append', `terminal-${pad(i)}`, () => driver.appendNative(tabId, host, w.contextId,
       { turnId, kind, previousEventId, text: words(rng, config.text.messageChars), truncated: false, interrupted: false }))
-    return timeline('native turns', p.workers[i]!.turns, async n => {
+    return async (n: number) => {
       const prompt = await append(`turn-${n}`, 'prompt')
       // An answer to an unrecorded prompt is refused by design; the host records a gap instead, which the bench does not model.
       if (!prompt) { skipped['native answers'] = (skipped['native answers'] ?? 0) + 1; return }
       previousEventId = prompt.data!.eventId
       const answer = await append(`turn-${n}`, 'answer')
       if (answer) previousEventId = answer.data!.eventId
-    })
+    }
+  }
+  /** Mixed: posts and terminal side by side, as today. Cross-group lane: one sequence, so the worker's groups have one writer. */
+  function worker(w: Worker, i: number): Array<Promise<void>> {
+    const post = poster(w, i), turn = turner(w, i), { actions, turns } = p.workers[i]!
+    if (config.lane === 'mixed') return [timeline('worker posts', actions.map(a => a.at), post), timeline('native turns', turns, turn)]
+    const events = [...actions.map((a, n) => ({ at: a.at, run: () => post(n) })), ...turns.map((at, n) => ({ at, run: () => turn(n) }))]
+      .sort((a, b) => a.at - b.at)
+    return [timeline('worker posts and turns', events.map(e => e.at), n => events[n]!.run())]
   }
   function leadSends() {
     const rng = random(config.seed, 'lead-text'), send = command('lead', owner, leadId)
     return timeline('lead sends', p.lead.map(s => s.at), async n => {
-      const target = workers[p.lead[n]!.worker]!
-      await send({ type: 'message.send', conversationId: target.group, text: words(rng, config.text.messageChars), replyTo: null, recipientIds: [target.id] })
+      const { worker: index, group } = p.lead[n]!, target = workers[index]!
+      await send({ type: 'message.send', conversationId: swarm.groups[group]!, text: words(rng, config.text.messageChars), replyTo: null, recipientIds: [target.id] })
     })
   }
   const running = (m: number) => [...(m === 0 ? ['bench-lead'] : []), ...workers.filter(w => w.machine === m).map(w => w.harnessId)]
@@ -115,7 +124,7 @@ export async function runLoad(driver: SwarmDriver, counter: AttemptCounter, conf
   }))
 
   await Promise.all([
-    ...workers.flatMap((w, i) => [workerPosts(w, i), workerTurns(w, i)]), leadSends(),
+    ...workers.flatMap(worker), leadSends(),
     ...p.machines.flatMap(m => [machineReports(m.index), deliveryPasses(m.index)]), ...polls,
   ])
   return { recorder, skipped, actualMs: performance.now() - start, readers: readers.map(r => r.reader) }
