@@ -25,7 +25,7 @@ code was changed. Local models (engines on a member's machine) are out of scope.
 
 | Flow | Machine | Result | Evidence |
 | --- | --- | --- | --- |
-| 1. Local models on and ready | Swarm (owner's computers) | **fail** | Status flips between ready and "Grid could not be set up on this computer. Try again." every ~60 s; [F1](#f1) |
+| 1. Local models on and ready | Swarm (owner's computers) | **fail** | Status flipped between ready and "Grid could not be set up on this computer. Try again." every ~60 s until 09:45:45; [F1](#f1) |
 | 1. Membership and visibility | MacBooks-MacBook-Pro-19.local | pass | `grid --remote ls` lists `swarm-626d5615ecf5`; `grid --remote models swarm-626d5615ecf5` lists the DeepSeek model on node MacbookPro.local |
 | 2. Share an API: machine readings | MacbookPro.local | pass | Its reading lists the model with kind `api` (every status read 09:15–09:28) |
 | 2. Share an API: Local models window preview | MacbookPro.local | not verified | Needs a screenshot from Ken |
@@ -37,7 +37,8 @@ code was changed. Local models (engines on a member's machine) are out of scope.
 | 4. Builder on DeepSeek, through the relay | MacBooks-MacBook-Pro-19.local | pass | Nico: task done; 77/77 model replies from DeepSeek, no API error |
 | 4. Builder on DeepSeek, through the relay | MACs-Mac-Studio.local | pass | Arlo: task done with the expected answers |
 | 4. Builder on DeepSeek, through the relay | Diego's Mac | pass | Arlo (second of that name): task done; started 6 min 22 s after it was queued |
-| 5. Shared with you → Offer to Swarm | MacBooks-MacBook-Pro-19.local | pending | Needs Tony's ok and his click in Desktop |
+| 4. Builder on DeepSeek, through the relay | WIN-DELL | **fail** | Dispatched 09:38:12, never runs, no error shown; [F5](#f5) |
+| 5. Shared with you → Offer to Swarm | MacBooks-MacBook-Pro-19.local | not in this build | The Desktop hides Shared with you and Offer to Swarm on purpose; the plan still describes them; [F6](#f6) |
 | 6. Models service restart on the sharing machine | MacbookPro.local | pending | Needs Ken's ok |
 | 7. Delete the saved API (#1716) | MacbookPro.local | pending | Last; needs Ken's agreement |
 | 8. Unit tests | MacBooks-MacBook-Pro-19.local | pass | Backend 192/192, CLI 283/283, Desktop 64/64 at `7754ca93c` |
@@ -52,6 +53,10 @@ fixed rhythm — about 20 s ready, then about 40 s with
 09:19:12 ready   09:19:33 FAIL   09:20:06 ready   09:20:28 FAIL   09:21:07 ready   09:21:29 FAIL
 09:22:12 ready   09:22:33 FAIL   09:23:05 ready   09:23:27 FAIL   09:24:11 ready   09:24:33 FAIL
 ```
+
+A second watcher, reading every ~17 s from 09:32, saw the same rhythm (1–3 failed reads a minute) until the last failed
+read at 09:45:45; from 09:46:02 every read said ready (checked to 09:49). Nothing changed on the Lead's machine then;
+what changed on the owner's other computers is asked of Ken.
 
 **Which computer, and why.** Every computer signed in as the Swarm owner keeps the Swarm's grid: the daemon's Super Tab
 host runs `SwarmGrids` on each of them (`cli/src/superTabs/host.ts` `pollMachines`), `GET /api/super-tabs/grids` answers
@@ -72,9 +77,11 @@ managed grid (`cli/src/lib/runtimeInstall.ts:321-323`: "no grid is published for
 - Routing and Builder starts do not read this flag. Verified: routes 3a/3b (09:21:28, 09:21:30) and the four smoke starts
   (09:22) were made while it flipped, and Nico and Arlo ran on DeepSeek.
 - The Local models window reads it (`desktop/lib/super_tabs/local_models.dart:146-152`): while it says failed, the window
-  shows "Could not set up: Grid could not be set up on this computer. Try again." — to members too, about a computer
-  that is not theirs — and the picker treats the Swarm's models as not set up, so a member's Share with Swarm or Offer to
-  Swarm is answered with the set-up note (`desktop/lib/models/swarm_models_target.dart:62-66`). From code; not observed.
+  shows the error to members too, about a computer that is not theirs, and the picker treats the Swarm's models as not
+  set up, so a member's Share with Swarm is answered with the set-up note
+  (`desktop/lib/models/swarm_models_target.dart:62-66`). Observed on MacBooks-MacBook-Pro-19.local (Tony, a member) at
+  09:34: Manage models showed "The Swarm owner has not set up models yet." and, in red, "Could not set up: Grid could
+  not be set up on this computer. Try again." (Tony's screenshots, posted by the Lead).
 - WIN-DELL retries grid's install every minute (assumed, pending its log).
 
 ## Flow 3
@@ -138,6 +145,10 @@ Observations, not failures of this add-on:
   its host keeps asking about an agent that has left. Its readings then stopped from about 09:31:50, when its Builder
   was stopped (229 s old at 09:35:42, 246 s at 09:35:59); cause not known.
 - The retry's new worktree on MacbookPro.local already had `M CLAUDE.md` before the Builder touched it.
+- The same `This agent is no longer in the Super Tab.` line is in MacBooks-MacBook-Pro-19.local's own `harness.log`
+  27,772 times since 23 Oct 22:45 (UTC+7), still about every 6 s at 09:52 UTC: it predates this test.
+- The WIN-DELL start ([F5](#f5)): WIN-DELL's readings stopped from 09:35:42 to 09:37:55 (140 s old at the end) while it
+  readied the start, the same pause as [F4](#f4).
 
 ## Findings
 
@@ -206,6 +217,41 @@ Observed on MacbookPro.local, twice:
 The second gap starts when the retry is queued and ends 17 s before it starts. Ken's log, posted at 09:33:09, shows no
 backend error after 09:24:12; when the screenshot was taken is not known, so the network is not ruled out for the
 second gap. The answer also tells the Lead to share a model that is shared. Desktop shows such a machine as Offline after 35 s.
+
+### F5
+
+**A Builder started on the shared API model on WIN-DELL is dispatched and then never runs, with no error anywhere a
+person can see it.** The Lead started a fifth smoke Builder on DeepSeek on WIN-DELL at about 09:36 (same task as flow 4).
+WIN-DELL took it: its readings paused from 09:35:42 to 09:37:55 while it readied the project, and at 09:38:12 the Swarm
+showed the start dispatched. From then to at least 09:53:12 the start had no agent and no error, while WIN-DELL's readings
+were fresh (1–15 s) with free slots.
+
+Why, from the code: on the machine, a create with a grid model whose launch target cannot be had is saved and held with
+"Waiting for the selected model. This request is saved and will continue when it is available."
+(`cli/src/core/agents/launches.ts`, `modelHold`; the target is `modelTarget(selection)`), with no time limit. The Swarm
+start then reads as pending, and the host writes the reason only to that machine's own log
+(`cli/src/superTabs/machines.ts` `noteWaiting`: `Swarm start … is waiting: …`). WIN-DELL has no grid runtime
+(`cli/src/lib/runtimeInstall.ts:321-323`), so the target never comes. **Not verified by log**: WIN-DELL's lines for that
+start and for grid's set-up are asked of Ken.
+
+Two further effects:
+- Routing offered WIN-DELL for the shared model like every other machine (route 3a listed it), although it cannot run it.
+- The Swarm has no way to cancel a dispatched start, and the held request would start a Builder if WIN-DELL ever got a
+  grid. The Lead asked Ken to close any Builder that appears there.
+
+Reproduce: contribute a Windows machine to a Swarm with a shared API model; start a Builder on that model there; read
+the Swarm state for 20 minutes.
+
+### F6
+
+**Flow 5 (Shared with you → Offer to Swarm) is not in this build.** The Desktop hides the section and the action on
+purpose: `desktop/lib/models/swarm_models_target.dart` sets `swarmSharedWithYouShown = false` ("Hidden for now (owner,
+2026-10-23)"), checked by the Lead on `origin/main` too. The plan still describes both (Flow table row 2 and "Shared with
+you", `docs/plans/2026-10-23-swarm-local-models.md`). Observed on MacBooks-MacBook-Pro-19.local at 09:34 (Tony's
+screenshots): no Shared with you section, and a search for "0731" found only "APIs 0" and "Add API connection", while
+this computer's daemon listed `DeepSeek-V4-Flash-0731` on the autonomous.ai grid (read 09:51 with `grid_models_list`).
+The offer could be made below the Desktop, but people cannot, so it was not (Lead's ruling). To do: either turn the
+switch back on before the release or mark the section hidden in the plan.
 
 ## Flow 8: automated coverage
 
