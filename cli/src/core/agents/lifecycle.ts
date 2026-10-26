@@ -5,6 +5,7 @@
  * Moved verbatim out of `runForeground` (the core boundary, step 11: docs/design/2026-10-03-harnessd.md).
  */
 import type { clearDeleted as clearDeletedFn, markDeleted as markDeletedFn } from '../../lib/deletedSessions.js'
+import { LEAD_PROTECTED_DETAIL } from '../../lib/closeAgentService.js'
 import { PurgeAgentService } from '../../lib/purgeAgentService.js'
 import type { registry, RegisteredSession } from '../../lib/registry.js'
 import { createResumeAgentService, type ResumeAgentServiceDeps } from '../../lib/resumeAgentService.js'
@@ -60,12 +61,21 @@ export interface LifecycleDeps {
   stopped?: (agentId: string) => void
   /** An agent a move a dead daemon left may still run beside (main.ts `moveHeld`): no engine of it starts this start. */
   moveHeld?: (agentId: string) => boolean
+  /** Whether the agent is the Lead of an active Swarm project here (superTabs/retention.ts `retainedLeads`). */
+  leadProtected?: (agentId: string) => boolean
+}
+
+/** The owner, 2026-10-23: the Lead of an active project is never stopped, in any case; deleting its project closes it. */
+export class LeadProtectedError extends Error {
+  readonly code = 'LEAD_PROTECTED'
+  constructor() { super(LEAD_PROTECTED_DETAIL) }
 }
 
 export function createAgentLifecycle({
   registry, stoppedAgents, restartJobs, createBackend, noBackendCode, backendFor, agentReconciler, forgetSession, markDeleted, clearDeleted, stopNative, settlePane, cancelExternal,
   sessionCheckpoints, mirror, sessionSearch, send, pinnedControls, retainExitedSession, announceSession,
   relaunchOverrides, prepareSessionResume, refreshGridWebSearch, adoptSwarmSkill, attachDsh, attachSession, relaunchMarks, stopped, atFolderTrust, atEmptyComposer, moveHeld,
+  leadProtected,
 }: LifecycleDeps) {
   /**
    * Stop Harness (`agent_delete`) archives its conversation and launch settings, removes the live
@@ -84,6 +94,7 @@ export function createAgentLifecycle({
    */
   const stopAgent: typeof stop = (target, options) => {
     const agentId = registry.resolve(target)?.agentId ?? target
+    if (leadProtected?.(agentId)) return Promise.reject(new LeadProtectedError())
     return stop(target, options).then(() => { stopped?.(agentId) })
   }
   const purgeAgentService = new PurgeAgentService({
@@ -147,7 +158,7 @@ export function createStopRequest({ byAgent, stop }: {
     try { await stop(target) }
     catch (error) {
       if (error instanceof IdentityReadUnavailable) return { error: error.code, detail: error.message, held: true, retryable: true }
-      if (!(error instanceof AgentStopError)) throw error
+      if (!(error instanceof AgentStopError) && !(error instanceof LeadProtectedError)) throw error
       return { error: error.code, detail: error.message }
     }
     return { deleted: true }

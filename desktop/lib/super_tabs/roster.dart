@@ -56,15 +56,17 @@ class _SuperTabRosterState extends State<SuperTabRoster> {
   bool _canRemove(SuperTabAgent agent) =>
       c.canWrite && (c.isOwner || agent.contributorId == c.accountId);
 
+  String? _removeReason(SuperTabAgent agent) =>
+      c.snapshot?.leadProtectionReason(agent.id);
+
   Future<void> _remove(SuperTabAgent agent) async {
     var busy = false, attempted = false;
     final name = c.snapshot!.agentName(agent.id);
+    // The Mac, for an agent in that Mac's Harness Team account.
+    final place = c.snapshot?.placeOf(agent.machineId) ?? agent.machineId;
     final machine =
-        widget.app?.stateOf(agent.machineId)?.machine.displayName ??
-        c.snapshot?.machines
-                .where((m) => m['machineId'] == agent.machineId)
-                .firstOrNull?['name']
-            as String? ??
+        widget.app?.stateOf(place)?.machine.displayName ??
+        c.snapshot?.pool(place)?['name'] as String? ??
         'its computer';
     await showAppDialog<void>(
       context: context,
@@ -81,8 +83,10 @@ class _SuperTabRosterState extends State<SuperTabRoster> {
                   pending?['agentId'] == agent.id;
               final available = current != null || checking || busy;
               final permitted = _canRemove(current ?? agent);
+              final reason = _removeReason(current ?? agent);
               final enabled =
                   permitted &&
+                  reason == null &&
                   !busy &&
                   !c.saving &&
                   (checking || !c.hasPendingAction);
@@ -102,9 +106,10 @@ class _SuperTabRosterState extends State<SuperTabRoster> {
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           Text(
-                            available && permitted
-                                ? 'Any open task needs to be assigned again or closed. Its session on $machine is left to its owner.'
-                                : 'This action is no longer available.',
+                            reason ??
+                                (available && permitted
+                                    ? 'Any open task needs to be assigned again or closed. Its session on $machine will stop.'
+                                    : 'This action is no longer available.'),
                           ),
                           if (attempted && c.operationError != null) ...[
                             const SizedBox(height: 12),
@@ -193,71 +198,68 @@ class _SuperTabRosterState extends State<SuperTabRoster> {
     widget.onOpenAgent,
   );
 
-  Widget _agentIdentity(
-    String name,
-    String role,
-    String badge,
-  ) => LayoutBuilder(
-    builder: (context, constraints) {
-      final nameStyle = DesktopChrome.control();
-      final tagStyle = DesktopChrome.metadata();
-      final scale = MediaQuery.textScalerOf(context);
-      double measure(String text, TextStyle style) {
-        final painter = TextPainter(
-          text: TextSpan(text: text, style: style),
-          textDirection: Directionality.of(context),
-          textScaler: scale,
-          maxLines: 1,
-        )..layout();
-        final width = painter.width;
-        painter.dispose();
-        return width;
-      }
+  Widget _agentIdentity(String name, String role, String badge) =>
+      LayoutBuilder(
+        builder: (context, constraints) {
+          final nameStyle = DesktopChrome.control();
+          final tagStyle = DesktopChrome.metadata();
+          final scale = MediaQuery.textScalerOf(context);
+          double measure(String text, TextStyle style) {
+            final painter = TextPainter(
+              text: TextSpan(text: text, style: style),
+              textDirection: Directionality.of(context),
+              textScaler: scale,
+              maxLines: 1,
+            )..layout();
+            final width = painter.width;
+            painter.dispose();
+            return width;
+          }
 
-      final badgeWidth = (measure(badge, tagStyle) + 10).clamp(
-        0.0,
-        constraints.maxWidth,
-      );
-      final nameWidth = measure(name, nameStyle).clamp(
-        0.0,
-        (constraints.maxWidth - badgeWidth - 6).clamp(0.0, double.infinity),
-      );
-      Widget tag(String text) => Container(
-        padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
-        decoration: BoxDecoration(
-          color: grid.AppSurface.hoverFill,
-          borderRadius: BorderRadius.circular(4),
-        ),
-        child: Text(
-          text,
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
-          style: tagStyle,
-        ),
-      );
-      return Row(
-        children: [
-          if (nameWidth > 0) ...[
-            SizedBox(
-              width: nameWidth,
-              child: Text(
-                name,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: nameStyle,
-              ),
+          final badgeWidth = (measure(badge, tagStyle) + 10).clamp(
+            0.0,
+            constraints.maxWidth,
+          );
+          final nameWidth = measure(name, nameStyle).clamp(
+            0.0,
+            (constraints.maxWidth - badgeWidth - 6).clamp(0.0, double.infinity),
+          );
+          Widget tag(String text) => Container(
+            padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+            decoration: BoxDecoration(
+              color: grid.AppSurface.hoverFill,
+              borderRadius: BorderRadius.circular(4),
             ),
-            const SizedBox(width: 6),
-          ],
-          Semantics(
-            label: role,
-            excludeSemantics: true,
-            child: SizedBox(width: badgeWidth, child: tag(badge)),
-          ),
-        ],
+            child: Text(
+              text,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: tagStyle,
+            ),
+          );
+          return Row(
+            children: [
+              if (nameWidth > 0) ...[
+                SizedBox(
+                  width: nameWidth,
+                  child: Text(
+                    name,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: nameStyle,
+                  ),
+                ),
+                const SizedBox(width: 6),
+              ],
+              Semantics(
+                label: role,
+                excludeSemantics: true,
+                child: SizedBox(width: badgeWidth, child: tag(badge)),
+              ),
+            ],
+          );
+        },
       );
-    },
-  );
 
   Widget _agent(SuperTabAgent agent) {
     final name = c.snapshot!.agentName(agent.id), activity = _activity(agent);
@@ -265,16 +267,17 @@ class _SuperTabRosterState extends State<SuperTabRoster> {
     final project = c.snapshot!.projects
         .where((p) => p.id == _agentProjectId(agent))
         .firstOrNull;
-    final role = c.snapshot!.isLead(agent.id)
+    final customRole = c.snapshot!.activeRoleForAgent(agent);
+    final role = customRole?.name ?? (c.snapshot!.isLead(agent.id)
         ? 'Product Manager'
         : agent.isReviewer
         ? 'Reviewer'
-        : 'Engineer';
-    final badge = c.snapshot!.isLead(agent.id)
+        : 'Engineer');
+    final badge = customRole?.name ?? (c.snapshot!.isLead(agent.id)
         ? 'PM'
         : agent.isReviewer
         ? 'Rev'
-        : 'Dev';
+        : 'Dev');
     final status = info.status ?? 'Status unavailable';
     final tooltip = [
       [name, role, ?project?.name].join(' · '),
@@ -301,16 +304,27 @@ class _SuperTabRosterState extends State<SuperTabRoster> {
             items: [
               const PopupMenuItem(value: 'details', child: Text('Details')),
               if (_canRemove(c.snapshot?.agent(agent.id) ?? agent))
-                const PopupMenuItem(
+                PopupMenuItem(
                   value: 'remove',
-                  child: Text('Remove from Swarm'),
+                  enabled: _removeReason(agent) == null,
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text('Remove from Swarm'),
+                      if (_removeReason(agent) case final reason?) Text(reason),
+                    ],
+                  ),
                 ),
             ],
           );
           if (choice == 'details' && mounted) await _details(agent);
           if (choice == 'remove' && mounted) {
             final current = c.snapshot?.agent(agent.id);
-            if (current != null && _canRemove(current)) await _remove(current);
+            if (current != null &&
+                _canRemove(current) &&
+                _removeReason(current) == null) {
+              await _remove(current);
+            }
           }
         },
         child: ListTile(
@@ -369,8 +383,11 @@ class _SuperTabRosterState extends State<SuperTabRoster> {
     final state = c.snapshot;
     // The backend already scopes this snapshot to projects the person can
     // access. The roster follows the selected project; without one it keeps
-    // the full directory. Local machine inventory is not membership here.
-    final projectId = c.selected?.projectId;
+    // the full directory, as the Product Managers' conversation, which belongs
+    // to no project, does. Local machine inventory is not membership here.
+    final projectId = c.selected?.projectId == ''
+        ? null
+        : c.selected?.projectId;
     final members =
         state?.agents
             .where(
@@ -449,7 +466,11 @@ class _SuperTabRosterState extends State<SuperTabRoster> {
       const SizedBox(height: 16),
       SuperTabSectionHeading(
         'Agents',
-        onAdd: c.canWrite && c.selected != null
+        // An agent joins the Product Managers' conversation by leading a project.
+        onAdd:
+            c.canWrite &&
+                c.selected != null &&
+                c.selected!.id != c.snapshot?.leadsConversationId
             ? () => widget.onAddAgent(c.selected!)
             : null,
         addTooltip: 'Add agent',

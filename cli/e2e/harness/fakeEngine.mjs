@@ -422,13 +422,11 @@ export async function run(engine, config = {}, { native = false } = {}) {
     ? (args.includes('--dangerously-skip-permissions') ? 'bypassPermissions'
       : args.includes('--permission-mode') ? args[args.indexOf('--permission-mode') + 1] ?? 'default' : 'default')
     : (args.includes('--dangerously-bypass-approvals-and-sandbox') ? 'bypassPermissions' : 'default')
-  // The model and effort the thread runs on: what Codex writes in each turn's context, and what its
-  // `/model` picker changes (below). Its `-m`/`--model` on the command line outranks the configured one, as
-  // in the real CLI: that is how a relaunch puts an agent back on the model it had before a grid
-  // (subscriptionModel.ts).
-  const modelAt = engine === 'codex' ? args.findIndex((arg) => arg === '-m' || arg === '--model') : -1
+  // The model passed on either engine's command line outranks the fixture default, as in the real CLI.
+  // Codex writes its model and effort in each turn's context; Claude writes its model in the transcript.
+  const modelAt = args.findIndex((arg) => arg === '-m' || arg === '--model')
   let current = { model: (modelAt >= 0 && args[modelAt + 1]) || config.codexModel || 'gpt-6', effort: 'high' }
-  let claudeModel = config.claudeModel ?? 'claude-opus-5-5'
+  let claudeModel = (modelAt >= 0 && args[modelAt + 1]) || config.claudeModel || 'claude-opus-5-5'
   // Test-owned file gate, used to stop an engine worker after its command reached the live CLI.
   const modelGate = async command => {
     const log = join(config.root, 'model-control-commands')

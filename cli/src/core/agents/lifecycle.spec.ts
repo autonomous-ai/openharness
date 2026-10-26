@@ -3,7 +3,7 @@ import type { PurgeDeps } from '../../lib/purgeAgentService.js'
 import type { RegisteredSession } from '../../lib/registry.js'
 import { createResumeAgentService } from '../../lib/resumeAgentService.js'
 import { AgentStopError, createStopAgentService } from '../../lib/stopAgentService.js'
-import { createAgentLifecycle, createPurgeRequest, createStopRequest, type LifecycleDeps } from './lifecycle.js'
+import { createAgentLifecycle, createPurgeRequest, createStopRequest, LeadProtectedError, type LifecycleDeps } from './lifecycle.js'
 import { IdentityReadUnavailable } from '../../engines/kit/identityScan.js'
 import { GUEST_HARNESS_REFUSAL } from '../guestPolicy.js'
 import { moveHeldLine } from '../../lib/hostMove/moveAgent.js'
@@ -97,6 +97,23 @@ describe('stopping, purging and resuming an agent', () => {
     expect(stopped).toHaveBeenCalledTimes(2)
     // With nobody to tell, a stop is a stop.
     await expect(setup().lifecycle.stopAgent('a1')).resolves.toBeUndefined()
+  })
+
+  // The owner, 2026-10-23: the Lead of an active project is never stopped, in any case. Every stop goes through here (a
+  // window's close and Stop Harness, `harness close`, a purge, the cleanup), so one guard refuses them all.
+  it('refuses to stop a Swarm Lead, by agent or session id, and stops nothing', async () => {
+    const stopped = vi.fn(), leadProtected = vi.fn((agentId: string) => agentId === 'a1')
+    const { lifecycle } = setup({ stopped, leadProtected })
+    const stop = vi.mocked(createStopAgentService).mock.results[0].value as ReturnType<typeof vi.fn>
+    for (const target of ['a1', 's1']) {
+      const refusal = await lifecycle.stopAgent(target).catch((error: unknown) => error)
+      expect(refusal).toBeInstanceOf(LeadProtectedError)
+      expect(refusal).toMatchObject({ code: 'LEAD_PROTECTED', message: expect.stringContaining('Delete its project first') })
+    }
+    expect(stop).not.toHaveBeenCalled()
+    expect(stopped).not.toHaveBeenCalled()
+    await lifecycle.stopAgent('gone')
+    expect(stop).toHaveBeenCalledWith('gone', undefined)
   })
 
   describe('purge', () => {
@@ -226,6 +243,11 @@ describe('agent_delete', () => {
     expect(unconfirmed).toStrictEqual({ error: 'STOP_UNCONFIRMED', detail: 'The process could not be verified.' })
     expect(Object.keys(unconfirmed)).toEqual(['error', 'detail'])
     await expect(request(async () => { throw new Error('tmux gone') })({ agentId: 'a1' })).rejects.toThrow('tmux gone')
+  })
+
+  it('says why a Swarm Lead is not stopped', async () => {
+    const refused = await request(async () => { throw new LeadProtectedError() })({ agentId: 'a1' })
+    expect(refused).toStrictEqual({ error: 'LEAD_PROTECTED', detail: new LeadProtectedError().message })
   })
 
   it('returns an unavailable native identity as a retryable hold and permits the same Stop after recovery', async () => {

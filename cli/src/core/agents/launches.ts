@@ -56,7 +56,7 @@ export type ResumeAgent = (agentId: string, permissionMode?: string) => ReturnTy
 
 export interface LaunchRequestDeps {
   /** The receipts of launches asked for with a `creationId`. */
-  receipts: Pick<AgentCreationReceipts, 'run' | 'status' | 'creator' | 'has' | 'runIntent' | 'pendingIntents' | 'pendingIntent' | 'cancelIntent'>
+  receipts: Pick<AgentCreationReceipts, 'run' | 'status' | 'createdLaunchModel' | 'creator' | 'has' | 'runIntent' | 'pendingIntents' | 'pendingIntent' | 'cancelIntent'>
   /** Each launch, read when a request comes in: null on a machine that cannot launch agents. */
   createAgent: () => CreateAgent | null
   prepareCreate?: (input: Parameters<CreateAgent>[0], authority: LaunchAuthority, context?: { local: boolean }) => Promise<LaunchPreparation<Awaited<ReturnType<CreateAgent>>>>
@@ -268,7 +268,9 @@ export function createLaunchRequests({ receipts, createAgent, prepareCreate, pre
     if (!validCreationId(creationId)) { reply({ error: 'INVALID_CREATION_ID' }); return }
     try {
       if (hiddenFrom(asker, creationId)) { reply({ creationId, state: 'missing' }); return }
-      reply({ creationId, ...await creationStatusPayload(receipts.status(creationId)) })
+      const status = receipts.status(creationId)
+      const launchModel = status.state === 'created' ? receipts.createdLaunchModel(creationId) : null
+      reply({ creationId, ...await creationStatusPayload(status), ...(launchModel ? { launchModel } : {}) })
     } catch (error) {
       reply({ error: error instanceof AgentCreationReceiptError ? error.code : 'INTERNAL' })
     }
@@ -402,6 +404,15 @@ export function createLaunchRequests({ receipts, createAgent, prepareCreate, pre
     if (swarmSkillMode !== undefined && !isSwarmSkillMode(swarmSkillMode)) {
       reply({ error: 'INVALID_SWARM_ROLE', detail: 'A Swarm skill mode is default or orchestration.' }); return
     }
+    // Another person's project work: git and gh use the Harness GitHub App's token for the task (lib/swarmGitHub.ts).
+    // Only `true`, and only with a role; a start from before the app sends none and launches as it did.
+    const swarmGitHub = payload.swarmGitHub
+    if (swarmGitHub !== undefined && (swarmGitHub !== true || !isSwarmRole(swarmRole))) {
+      reply({ error: 'INVALID_SWARM_ROLE', detail: 'swarmGitHub is true, with a Swarm role.' }); return
+    }
+    // Its worktree fetches nothing with this machine's own git login: its host fetched with the app's token just before
+    // (superTabs/projectFolder.ts), or, started by a Lead on its own machine, it starts from what the checkout has.
+    if (swarmGitHub === true && projectFolder?.source === 'worktree') projectFolder = { ...projectFolder, offline: true }
     // Blank is "number it", the same as absent — a client that sends an empty field is not
     // asking for an agent with no name.
     const name = typeof payload.name === 'string' && payload.name.trim() ? payload.name.trim() : null
@@ -470,7 +481,7 @@ export function createLaunchRequests({ receipts, createAgent, prepareCreate, pre
       codexHome,
       dsh,
       prompt,
-      ...(isSwarmRole(swarmRole) ? { swarmRole, ...(swarmSkillMode ? { swarmSkillMode } : {}) } : {}),
+      ...(isSwarmRole(swarmRole) ? { swarmRole, ...(swarmSkillMode ? { swarmSkillMode } : {}), ...(swarmGitHub ? { swarmGitHub } : {}) } : {}),
       name,
       agent,
       resumeSessionId,

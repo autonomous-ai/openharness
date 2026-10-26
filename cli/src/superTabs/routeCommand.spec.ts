@@ -3,9 +3,10 @@ import type { openDaemon } from '../agentClient/daemon.js'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { routeTask } from './routeCommand.js'
+import { heldLocalModels, localProbes, routeTask } from './routeCommand.js'
 import type { describeScmProject } from '../scm/scmProjects.js'
 import { admission, quotaOf } from './capacity.js'
+import type { Assessment, Policy, Probe } from './route.js'
 
 const policy = { version: 1, floor: { low: 1, medium: 2, high: 3 }, quotaReserve: 10, notes: '', models: [
   { engine: 'claude', model: 'opus', effort: 'high', quality: 3, cost: 3, enabled: true },
@@ -332,6 +333,18 @@ describe('routeTask', () => {
     // 60% left less the 10% reserve and the 45% the open pick holds leaves 5% for a task that needs 30%.
     expect(recorded(s).command.decision.candidates.every((c: { fit: { status: string; account: string } }) => c.fit.status === 'short' && c.fit.account === 'acct')).toBe(true)
     expect(result.warnings).toEqual(['w', expect.stringMatching(/^No candidate is expected to cover this task; its 5-hour quota is expected to run out partway and resets in 3h\.$/)])
+  })
+  it('keeps a queued start in the reroute quota hold until its linked work finishes', async () => {
+    const queued = { id: 'queued', conversationId: 'g1', account: 'acct', spend: { '5-hour': 45 }, size: 'medium',
+      final: { kind: 'new', startId: 'start-1', engine: 'claude', model: 'opus' }, assignmentId: null,
+      outcome: null as string | null, createdAt: new Date().toISOString() }
+    const routeWith = async (decision: typeof queued) => {
+      const s = scoped({ history: { ok: true, value: { decisions: [decision], attempts: [] } } })
+      await routeTask(input, s, where as never, opener(), () => 'op')
+      return recorded(s).command.decision.candidates as Array<{ fit: { status: string } }>
+    }
+    expect((await routeWith(queued)).every(candidate => candidate.fit.status === 'short')).toBe(true)
+    expect((await routeWith({ ...queued, outcome: 'done' })).some(candidate => candidate.fit.status === 'fits')).toBe(true)
   })
   it('records again in the shape an older backend knows when it refuses the new fields as invalid', async () => {
     const s = scoped(), base = s.getMockImplementation()!
@@ -758,6 +771,79 @@ describe('routing contributed capacity', () => {
     expect(answer).toMatchObject({ ok: true, pick: { machineId: 'm1', engine: 'codex' } })
     expect((answer.alternatives as Array<{ machineId: string; engine: string }>).map(x => [x.machineId, x.engine])).toEqual([['m1', 'claude'], ['m2', 'claude'], ['m3', 'claude']])
   })
+  it('leaves out a machine that cannot take a teammate\'s project, with the backend\'s reason, and keeps its owner\'s own work there', async () => {
+    const reason = 'Contributed laptop has no Harness Team account yet, so it runs only its owner\'s projects.'
+    const refusing = (contributorId: string) => ({ ...healthy(), contributorId, teamWork: { allowed: false, code: 'TEAM_ACCOUNT_REQUIRED', reason } })
+    const owners = { id: 'lead', ownerId: 'owner' }
+    // The Swarm owner's project on a teammate's personal laptop: no new agent there, and not its member either.
+    const teammate = await runPool(refusing('mate'), true, {}, owners)
+    expect(teammate.answer).toMatchObject({ error: 'NO_CANDIDATE' })
+    expect(teammate.answer.excluded).toEqual(expect.arrayContaining([
+      expect.objectContaining({ title: expect.stringContaining('Multiply'), reason }),
+      expect.objectContaining({ title: expect.not.stringContaining('Multiply'), reason })]))
+    // The same laptop's own owner's project, as before.
+    expect((await runPool(refusing('mate'), false, {}, { id: 'lead', ownerId: 'mate' })).answer.ok).toBe(true)
+    // A Team machine that takes it, and a backend from before the rule that says nothing.
+    expect((await runPool({ ...healthy(), contributorId: 'mate', teamWork: { allowed: true } }, false, {}, owners)).answer.ok).toBe(true)
+    expect((await runPool({ ...healthy(), contributorId: 'mate' }, false, {}, owners)).answer.ok).toBe(true)
+    // Offline is said once, by the reading's own age.
+    const offline = { ...refusing('mate'), teamWork: { allowed: false, code: 'MACHINE_OFFLINE', reason: 'Contributed laptop is offline.' } }
+    offline.observation.receivedAt = 0
+    const silent = await runPool(offline, false, {}, owners)
+    expect(silent.answer.excluded).not.toEqual(expect.arrayContaining([expect.objectContaining({ reason: expect.stringContaining('Contributed laptop is offline.') })]))
+  })
+  // One machine (docs/plans/2026-10-24-swarm-team-account.md): a Mac's Harness Team account is that Mac. The Lead is offered
+  // the Mac once: a teammate's project starts in the team account, the Mac's owner's own projects stay with the owner.
+  describe('a Mac and its Harness Team account', () => {
+    const NO_ACCOUNT = 'MacBook Pro has no Harness Team account yet, so it runs only its owner\'s projects.'
+    const mac = () => ({ ...healthy(), name: 'MacBook Pro', scope: 'swarm', cwd: '/mate/swarm', contributorId: 'mate',
+      teamWork: { allowed: false, code: 'TEAM_ACCOUNT_REQUIRED', reason: NO_ACCOUNT } })
+    const team = () => ({ ...healthy(), machineId: 'm1-team', hostMachineId: 'm1', name: 'MacBook Pro', scope: 'swarm', cwd: '/team/swarm', contributorId: 'mate',
+      teamWork: { allowed: true } })
+    async function route(ownerId: string, machines: Record<string, unknown>[] = [mac(), team()], rules: unknown[] = []) {
+      const s = scoped({ context: { ok: true, value: { agentId: 'lead', tab: { state: { id: 'tab', agents: [agents[1]], conversations: conversations(), machines,
+        projects: [{ id: 'lead', ownerId, repository: { repositoryUrl: 'https://github.com/example/project' } }], ...(rules.length ? { rules } : {}) } },
+        policy: { policy, warnings: [] }, machines: [] } } })
+      const answer = await routeTask(input, s, where, opener())
+      const decision = s.mock.calls.find(c => c[0].action === 'command')?.[0].command.decision
+      return { answer, candidates: (decision?.candidates ?? []) as Array<{ machineId: string; kind: string }>,
+        excluded: (decision?.excluded ?? answer.excluded ?? []) as Array<{ reason: string }> }
+    }
+
+    it('starts a teammate\'s project in the team account, under the Mac\'s name, without calling the Mac unfit', async () => {
+      const { answer, candidates, excluded } = await route('owner')
+      expect(answer).toMatchObject({ ok: true, pick: { machineId: 'm1-team' } })
+      expect(answer.next).toContain('/team/swarm/lead')
+      expect(candidates.filter(c => c.kind === 'new').map(c => c.machineId)).toEqual(expect.arrayContaining(['m1-team']))
+      expect(candidates.some(c => c.kind === 'new' && c.machineId === 'm1')).toBe(false)
+      expect(excluded.some(e => e.reason === NO_ACCOUNT)).toBe(false)
+    })
+
+    it('keeps the Mac\'s owner\'s own project with the owner, never the team account', async () => {
+      const { answer, candidates } = await route('mate')
+      expect(answer).toMatchObject({ ok: true, pick: { machineId: 'm1' } })
+      expect(candidates.some(c => c.machineId === 'm1-team')).toBe(false)
+    })
+
+    it('says the team account\'s own reason when it cannot take the work, and still offers nothing as the owner', async () => {
+      const reason = 'The Harness Team account on MacBook Pro is not private (gitconfig: it could read its owner\'s ~/.gitconfig), so it runs only its owner\'s projects.'
+      const { answer, excluded } = await route('owner', [mac(), { ...team(), teamWork: { allowed: false, code: 'PRIVACY_CHECK_FAILED', reason } }])
+      expect(answer).toMatchObject({ error: 'NO_CANDIDATE' })
+      expect(excluded.map(e => e.reason)).toContain(reason)
+      expect(excluded.some(e => e.reason === NO_ACCOUNT)).toBe(false)
+    })
+
+    it('offers a team account whose Mac is not in the Swarm as itself, folded into nothing', async () => {
+      // Probed for new agents under its own name (here outranked on quota by the Lead's own machine), not left out as folded.
+      const { excluded } = await route('owner', [{ ...team(), hostMachineId: 'm-elsewhere' }])
+      expect(excluded).toEqual(expect.arrayContaining([expect.objectContaining({ title: 'New agent · Claude opus high · MacBook Pro' })]))
+    })
+
+    it('a machines rule naming the Mac allows its team account', async () => {
+      const rules = [{ id: 'r1', projectId: 'lead', rule: { kind: 'machines', machineIds: ['m1'] }, text: 'Only the MacBook Pro.' }]
+      expect((await route('owner', undefined, rules)).answer).toMatchObject({ ok: true, pick: { machineId: 'm1-team' } })
+    })
+  })
   it('refuses unobserved tools and devices, without probing arbitrary paths on a teammate computer', async () => {
     expect((await runPool(healthy(), false, { tools: ['docker'], devices: ['/dev/fixture'] })).answer.ok).not.toBe(true)
   })
@@ -770,5 +856,109 @@ describe('routing contributed capacity', () => {
     Object.assign(unverified.observation, { toolProbeErrors: { git: 'interactive shell timed out' } })
     const failed = await runPool(unverified)
     expect(failed.answer.excluded).toEqual(expect.arrayContaining([expect.objectContaining({ reason: expect.stringMatching(/Required tool not verified: git.*interactive shell timed out/) })]))
+  })
+})
+
+describe('local models on the Swarm\'s grid', () => {
+  const GRID = 'swarm-0123456789ab', NOW = 1_000_000_000
+  const served = (models: Array<Record<string, unknown>>, receivedAt: unknown = NOW - 1_000) => ({ machineId: 'm1', observation: { receivedAt, localModels: models } })
+  const state = (patch: Record<string, unknown> = {}) => ({ localModels: { grid: GRID, enabled: true }, machines: [served([{ grid: GRID, model: 'qwen3', name: 'Qwen 3' }])], agents: [], starts: [], ...patch })
+  const base = (patch: Partial<Probe> = {}): Probe => ({ kind: 'new', machineId: 'm1', machineName: 'remote-1', engine: 'claude', model: 'sonnet', effort: 'medium', quality: 2, cost: 2,
+    quota: { known: true, leftPercent: 50, resetsAt: null }, activity: 'new agent', known: true, refusals: [], ...patch })
+  const assessment = { difficulty: 'low', risk: 'low', size: 'medium', why: 'x', needs: { tools: [], devices: [] } } as Assessment
+  const routing = policy as unknown as Policy
+  const offered = (s: Record<string, unknown>, opts: { probes?: Probe[]; a?: Assessment; review?: boolean; policy?: Policy } = {}) =>
+    localProbes(s, opts.policy ?? routing, opts.probes ?? [base()], opts.a ?? assessment, opts.review ?? false, NOW)
+
+  it('offers one new agent per machine and engine on each served model, free and at the policy\'s local quality', () => {
+    const probes = [base(), base({ model: 'opus', effort: 'high' }), base({ engine: 'codex', refusals: ['Its subscription is used up.', 'Too little memory.'] }),
+      base({ kind: 'member', agentId: 'a1' }), base({ gridModel: 'other' })]
+    const rows = offered(state(), { probes, policy: { ...routing, localModels: { quality: 2, enabled: true } } })
+    expect(rows.map(r => [r.engine, r.model, r.effort, r.quality, r.cost, r.gridModel, r.gridName, r.gridLabel, r.refusals])).toEqual([
+      ['claude', 'default', 'default', 2, 1, 'qwen3', GRID, 'Qwen 3', []],
+      ['codex', 'default', 'default', 2, 1, 'qwen3', GRID, 'Qwen 3', ['Too little memory.']],
+    ])
+    expect(rows[0]!.quota).toMatchObject({ known: false })
+    // A backend before the add-on sends no policy for it: quality 1. A model with no name is called by its model.
+    const unnamed = state({ machines: [served([{ grid: GRID, model: 'qwen3' }])] })
+    expect(offered(unnamed)[0]).toMatchObject({ quality: 1, gridLabel: 'qwen3' })
+  })
+  it('offers nothing with the add-on off, for a review, or when the owner turned local models off and nobody asked for one', () => {
+    expect(offered(state({ localModels: undefined }))).toEqual([])
+    expect(offered(state({ localModels: { grid: GRID, enabled: false } }))).toEqual([])
+    expect(offered(state({ localModels: { enabled: true } }))).toEqual([])
+    expect(offered(state(), { review: true })).toEqual([])
+    const off = { ...routing, localModels: { quality: 1, enabled: false } }
+    expect(offered(state(), { policy: off })).toEqual([])
+    expect(offered(state(), { policy: off, a: { ...assessment, local: true } })).toHaveLength(1)
+  })
+  it('reads only fresh readings, and of a model on another grid only on the machine that reaches it', () => {
+    expect(offered(state({ machines: [served([{ grid: GRID, model: 'qwen3' }], NOW - 60_000)] }))).toEqual([])
+    expect(offered(state({ machines: [served([{ grid: GRID, model: 'qwen3' }], 'soon')] }))).toEqual([])
+    expect(offered(state({ machines: [served([{ grid: GRID, model: 7 }, { grid: 3, model: 'x' }])] }))).toEqual([])
+    // Shared with m1's owner on their team grid: offered on m1 alone, while one on the Swarm's grid is offered on both.
+    const reach = state({ machines: [served([{ grid: 'team-grid', model: 'team-model', kind: 'shared' }]), { machineId: 'm2', observation: { receivedAt: NOW - 1_000, localModels: [{ grid: GRID, model: 'qwen3' }] } }] })
+    const rows = offered(reach, { probes: [base(), base({ machineId: 'm2', machineName: 'mac' })] })
+    expect(rows.map(r => [r.machineId, r.gridName, r.gridModel, r.gridKind])).toEqual([
+      ['m1', 'team-grid', 'team-model', 'shared'], ['m1', GRID, 'qwen3', 'local'], ['m2', GRID, 'qwen3', 'local'],
+    ])
+    // An API a member shares, by its kind; another grid's model without one is shared with that machine's owner.
+    const kinds = state({ machines: [served([{ grid: GRID, model: 'ds', kind: 'api' }, { grid: 'team-grid', model: 'tm' }])] })
+    expect(offered(kinds).map(r => [r.gridModel, r.gridKind])).toEqual([['ds', 'api'], ['tm', 'shared']])
+    // A Builder started on the shared model takes it, by its own grid.
+    expect(offered({ ...reach, starts: [{ request: { gridModel: 'team-model', gridName: 'team-grid' } }] }, { probes: [base()] }).map(r => r.gridModel)).toEqual(['qwen3'])
+  })
+  it('keeps a model for the Builder started on it until that Builder leaves the Swarm', () => {
+    const start = (patch: Record<string, unknown>) => ({ request: { gridModel: 'qwen3' }, ...patch })
+    expect(offered(state({ starts: [start({})] }))).toEqual([])
+    expect(offered(state({ starts: [start({ harnessId: 'h9' })], agents: [{ harnessId: 'h9' }] }))).toEqual([])
+    expect(offered(state({ starts: [start({ harnessId: 'h9' })] }))).toHaveLength(1)
+    expect(offered(state({ starts: [start({ error: 'NO_CAPACITY' })] }))).toHaveLength(1)
+    expect(offered(state({ starts: [{ request: { model: 'opus' } }, {}] }))).toHaveLength(1)
+  })
+  it('lets up to four Builders share an API model, which answers several requests at once', () => {
+    const api = state({ machines: [served([{ grid: GRID, model: 'ds', name: 'DeepSeek', kind: 'api' }])] })
+    const starts = (n: number) => Array.from({ length: n }, (_, i) => ({ request: { gridModel: 'ds' }, harnessId: `h${i}` }))
+    const agents = (n: number) => Array.from({ length: n }, (_, i) => ({ harnessId: `h${i}`, name: `B${i}` }))
+    expect(offered({ ...api, starts: starts(3), agents: agents(3) })).toHaveLength(1)
+    expect(offered({ ...api, starts: starts(4), agents: agents(4) })).toEqual([])
+  })
+  it('names the Builders on each model that takes no more, so the route can say why it is not offered', () => {
+    const api = served([{ grid: GRID, model: 'ds', name: 'DeepSeek', kind: 'api' }, { grid: GRID, model: 'qwen3', name: 'Qwen 3' }])
+    const s = state({ machines: [api],
+      starts: [{ request: { gridModel: 'qwen3' }, harnessId: 'h1' }, { request: { gridModel: 'qwen3' } },
+        ...['h2', 'h3', 'h4', 'h5'].map(harnessId => ({ request: { gridModel: 'ds' }, harnessId }))],
+      agents: [{ harnessId: 'h1', displayName: 'Faye', name: 'Builder' }, { harnessId: 'h2', name: 'Wren' }, { harnessId: 'h3' }, { harnessId: 'h4', name: 'Ada' }, { harnessId: 'h5', name: 'Bo' }] })
+    expect(heldLocalModels(s, NOW)).toEqual([
+      { model: 'ds', label: 'DeepSeek', kind: 'api', holders: ['Wren', 'a Builder', 'Ada', 'Bo'] },
+      { model: 'qwen3', label: 'Qwen 3', kind: 'local', holders: ['Faye', 'a Builder that is starting'] },
+    ])
+    // Nothing is held while the add-on is off, or with a model nobody is on.
+    expect(heldLocalModels(state({ localModels: { grid: GRID, enabled: false } }), NOW)).toEqual([])
+    expect(heldLocalModels(state(), NOW)).toEqual([])
+    expect(heldLocalModels(state({ localModels: undefined }))).toEqual([])
+  })
+  it('adds the models a fresh reading says Builders are never offered, with why, once each', () => {
+    const why = 'llama3.2:3b is too small for a coding agent.'
+    const refusing = (receivedAt: unknown, refusedModels: unknown) => ({ machineId: 'm2', observation: { receivedAt, refusedModels } })
+    const s = state({ machines: [served([]), refusing(NOW - 1_000, [
+      { grid: GRID, model: 'llama3.2:3b', why }, { grid: GRID, model: 'llama3.2:3b', why }, { grid: GRID, model: 'tiny', name: 'Tiny 1B', why: 'small' },
+      { grid: 'other-grid', model: 'x', why }, { grid: GRID, model: 7, why }, { grid: GRID, model: 'no-why' }]),
+      refusing(NOW - 60_000, [{ grid: GRID, model: 'stale', why }]), refusing('soon', [{ grid: GRID, model: 'odd', why }])] })
+    expect(heldLocalModels(s, NOW)).toEqual([
+      { model: 'llama3.2:3b', label: 'llama3.2:3b', kind: 'local', holders: [], refused: why },
+      { model: 'tiny', label: 'Tiny 1B', kind: 'local', holders: [], refused: 'small' },
+    ])
+  })
+  it('routes a low task to a served model and starts it on the grid, with no subscription model', async () => {
+    const t = tab(); Object.assign(t.state, { localModels: { grid: GRID, enabled: true },
+      machines: [{ machineId: 'm1', observation: { receivedAt: Date.now(), localModels: [{ grid: GRID, model: 'qwen3', name: 'Qwen 3' }] } }] })
+    const s = scoped({ tab: t })
+    const result = await routeTask({ ...input, assessment: { ...input.assessment, difficulty: 'low', local: true } }, s, where as never, opener(), () => 'op')
+    expect(result).toMatchObject({ ok: true, pick: { kind: 'new', gridModel: 'qwen3', gridName: GRID } })
+    const hint = JSON.parse(/start OPERATION_ID (\{.*\}), then/.exec(result.next as string)![1]!)
+    expect(hint).toMatchObject({ engine: 'claude', gridModel: 'qwen3', gridName: GRID })
+    expect(hint).not.toHaveProperty('model')
+    expect(recorded(s).command.decision.candidates[0]).toMatchObject({ gridModel: 'qwen3', gridName: GRID })
   })
 })

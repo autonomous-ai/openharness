@@ -1,6 +1,6 @@
 import { screenFor } from '../engines/screens.js'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { CloseAgentService, inspectCloseActivity as inspectCloseReading, type CloseActivity, type CloseAgentServiceDeps, type AgentCloseRequest } from './closeAgentService.js'
+import { CloseAgentService, LEAD_PROTECTED_DETAIL, inspectCloseActivity as inspectCloseReading, type CloseActivity, type CloseAgentServiceDeps, type AgentCloseRequest } from './closeAgentService.js'
 import { registry, type RegisteredSession } from './registry.js'
 import { mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -35,14 +35,34 @@ beforeEach(() => {
 })
 afterEach(() => { service.dispose(); vi.useRealTimers(); vi.restoreAllMocks(); for (const s of registry.list()) registry.removeAgent(s.agentId) })
 
-it.each(['before', 'activity', 'checkpoint'] as const)('a Swarm close preserves a personally resumed worker at %s', async phase => {
+it.each(['before', 'activity', 'checkpoint'] as const)('a Swarm close preserves a worker that stopped being Swarm-started at %s', async phase => {
   row.startedBy = 'agent'
-  if (phase === 'before') row.resumeOnly = true
-  if (phase === 'activity') vi.mocked(deps.activity).mockImplementation(async () => { row.resumeOnly = true; return 'idle' })
-  if (phase === 'checkpoint') vi.mocked(deps.checkpoint).mockImplementation(async () => { row.resumeOnly = true })
+  if (phase === 'before') row.startedBy = undefined
+  if (phase === 'activity') vi.mocked(deps.activity).mockImplementation(async () => { row.startedBy = undefined; return 'idle' })
+  if (phase === 'checkpoint') vi.mocked(deps.checkpoint).mockImplementation(async () => { row.startedBy = undefined })
   const guarded = { ...request('now'), onlyIfOriginalLaunch: true }
   expect(await service.request(guarded)).toMatchObject({ error: expect.any(String) })
   expect(registry.byAgent(row.agentId)).toBe(row)
+})
+
+// A machine restart stops a Swarm worker; reopened on its own conversation it is resume-only, and is still the Swarm's
+// (2026-10-23: such a worker could no longer be stopped by the Swarm).
+it('a Swarm close closes a worker reopened on the conversation it was started with', async () => {
+  row.startedBy = 'agent'
+  row.resumeOnly = true
+  expect(await service.request({ ...request('now'), onlyIfOriginalLaunch: true })).toEqual({ closed: true })
+})
+
+// The review of #1635: Close after task answered a Swarm Lead "deferred", saved its plan, and said LEAD_PROTECTED only once
+// the task ended. A Lead is refused at once, for every kind of close, before anything is read, saved or stopped.
+it.each(['now', 'idle', 'after_task'] as const)('refuses to close a Swarm Lead (%s) at once, saving no plan', async mode => {
+  const svc = new CloseAgentService({ ...deps, leadProtected: id => id === row.agentId })
+  expect(await svc.request(request(mode))).toEqual({ error: 'LEAD_PROTECTED', detail: LEAD_PROTECTED_DETAIL })
+  expect(registry.byAgent(row.agentId)?.closePlan).toBeUndefined()
+  expect(deps.activity).not.toHaveBeenCalled()
+  expect(deps.stop).not.toHaveBeenCalled()
+  expect(await svc.request(request('inspect'))).toEqual({ activity: expect.any(String) })
+  svc.dispose()
 })
 
 it.each(['before', 'activity', 'checkpoint'] as const)('an expired native close lease preserves the worker at %s', async phase => {
@@ -282,6 +302,39 @@ it('persists a deferred close, survives a daemon restart and waits for sustained
   time += 5_000
   await service.tick()
   expect(deps.stop).toHaveBeenCalledOnce()
+})
+
+it('durably records a deferred close that arrives during a registry discovery transaction', async () => {
+  let finish!: () => void
+  const hold = new Promise<void>(resolve => { finish = resolve })
+  const transaction = registry.transaction(async () => { await hold })
+  try {
+    const closing = service.request(request('after_task'))
+    await vi.waitFor(() => expect(deps.activity).toHaveBeenCalledOnce())
+    await new Promise(resolve => setImmediate(resolve))
+    expect(row.closePlan).toBeUndefined()
+    finish()
+    await transaction
+    expect(await closing).toEqual({ deferred: true })
+    expect(registry.byAgent(row.agentId)?.closePlan?.state).toBe('waiting')
+    registry.load()
+    expect(registry.byAgent(row.agentId)?.closePlan?.state).toBe('waiting')
+  } finally { finish(); await transaction }
+})
+
+it('does not defer a close if its conversation changes before the discovery transaction commits', async () => {
+  let finish!: () => void
+  const hold = new Promise<void>(resolve => { finish = resolve })
+  const transaction = registry.transaction(async () => { await hold })
+  try {
+    const closing = service.request(request('after_task'))
+    await vi.waitFor(() => expect(deps.activity).toHaveBeenCalledOnce())
+    row.sessionId = 'another-conversation'
+    finish()
+    await transaction
+    expect(await closing).toEqual({ error: 'AGENT_CHANGED' })
+    expect(row.closePlan).toBeUndefined()
+  } finally { finish(); await transaction }
 })
 it('keeps questions and subsequent turns alive during a deferred close', async () => {
   await service.request(request('after_task'))

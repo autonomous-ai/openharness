@@ -72,28 +72,36 @@ class SuperTabAgentInfo {
       _known(agent.configuration['model'] as String?);
   String? get engine =>
       _known(agent.engine) == null ? null : engineIdentity(agent.engine).label;
-  String? get machine =>
-      _known(app?.stateOf(agent.machineId)?.machine.displayName) ??
-      _known(
-        controller.snapshot?.machines
-                .where((m) => m['machineId'] == agent.machineId)
-                .firstOrNull?['name']
-            as String?,
-      );
+
+  /// The computer it runs on: the Mac, for an agent in that Mac's Harness Team account ([SuperTabSnapshot.placeOf]).
+  String? get machine {
+    final place =
+        controller.snapshot?.placeOf(agent.machineId) ?? agent.machineId;
+    return _known(app?.stateOf(place)?.machine.displayName) ??
+        _known(controller.snapshot?.pool(place)?['name'] as String?);
+  }
+
   String? get folder => _known(native?.project?.cwd);
   DateTime? get started => native?.createdAt;
   DateTime? get lastActive => native?.lastActivityAt;
   bool get hasQuestion =>
       app?.questionFor(agent.machineId, agent.harnessId) != null;
 
+  /// The agent's machine owner, named as the sidebar Humans list names them.
+  String? get owner => _personName(agent.machineOwnerId);
+
+  String? _personName(Object? personId) {
+    final person = controller.snapshot?.people
+        .where((p) => p.id == personId)
+        .firstOrNull;
+    return _known(person == null ? null : superTabPersonName(person.email));
+  }
+
   String? get questionOwner {
     if (!hasQuestion) return null;
     final execution = taskGroup?.assignment?['execution'];
     final ownerId = execution is Map ? execution['machineOwnerId'] : null;
-    final person = controller.snapshot?.people
-        .where((p) => p.id == ownerId)
-        .firstOrNull;
-    return _known(person == null ? null : superTabPersonName(person.email)) ??
+    return _personName(ownerId) ??
         _known(app?.stateOf(agent.machineId)?.machine.machineShare?.owner) ??
         _known(app?.stateOf(agent.machineId)?.machine.ownerName);
   }
@@ -115,6 +123,12 @@ class SuperTabAgentInfo {
             HarnessActivity.failed ||
             HarnessActivity.starting) {
       return activity!.label;
+    }
+    // A usage limit holds the agent whatever its task says, until the reset.
+    if (agent.limitedUntil?.toLocal() case final until?
+        when until.isAfter(DateTime.now())) {
+      String two(int n) => n.toString().padLeft(2, '0');
+      return 'Limited until ${two(until.hour)}:${two(until.minute)}';
     }
     final workStatus = taskGroup?.assignment?['status'];
     if (hasQuestion || workStatus == 'needs_human') {
@@ -244,11 +258,12 @@ Future<void> showSuperTabAgentDetails(
                   children: [
                     _fact(
                       'Role',
-                      controller.snapshot?.isLead(agent.id) == true
-                          ? 'Product Manager'
-                          : current.isReviewer
-                          ? 'Reviewer'
-                          : 'Engineer',
+                      controller.snapshot?.activeRoleForAgent(current)?.name ??
+                          (controller.snapshot?.isLead(agent.id) == true
+                              ? 'Product Manager'
+                              : current.isReviewer
+                              ? 'Reviewer'
+                              : 'Engineer'),
                     ),
                     if (info.engine case final value?) _fact('Engine', value),
                     if (current.name != name) _fact('Agent name', current.name),
@@ -272,6 +287,7 @@ Future<void> showSuperTabAgentDetails(
                         ),
                       ),
                     if (info.machine case final value?) _fact('Machine', value),
+                    if (info.owner case final value?) _fact('Owner', value),
                     if (info.folder case final value?)
                       _fact('Working folder', value),
                     if (info.permission case final value?)

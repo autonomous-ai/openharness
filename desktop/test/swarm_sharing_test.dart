@@ -407,6 +407,69 @@ void main() {
     expect(find.text('Leave'), findsOneWidget);
   });
 
+  testWidgets('contributor of a Product Manager cannot be removed', (
+    tester,
+  ) async {
+    final server = SwarmSharingServer();
+    (server.state['people'] as List).add({
+      'id': 'peer',
+      'email': 'peer@example.com',
+      'role': 'collaborator',
+    });
+    server.state['agents'] = [
+      {
+        'id': 'pm',
+        'name': 'Quinn',
+        'machineId': 'm',
+        'harnessId': 'native-pm',
+        'contributorId': 'peer',
+        'configuration': {'engine': 'claude'},
+      },
+    ];
+    (server.state['conversations'] as List)[0]['leadId'] = 'pm';
+    await _open(tester, server);
+    await tester.tap(find.byKey(const Key('swarm-sharing-people')));
+    await tester.pumpAndSettle();
+    final remove = find.widgetWithText(TextButton, 'Remove');
+    expect(remove, findsOneWidget);
+    expect(tester.widget<TextButton>(remove).onPressed, isNull);
+    expect(
+      find.text(
+        'Quinn is the Product Manager of project Pilot. Delete the project first.',
+      ),
+      findsOneWidget,
+    );
+    expect(server.posts, isEmpty);
+  });
+
+  testWidgets('member removal shows a backend Product Manager refusal', (
+    tester,
+  ) async {
+    final server = SwarmSharingServer();
+    (server.state['people'] as List).add({
+      'id': 'peer',
+      'email': 'peer@example.com',
+      'role': 'collaborator',
+    });
+    server.refuse = {
+      'code': 'LEAD_PROTECTED',
+      'message': 'Sage is now the Product Manager of project Pilot. Delete the project first.',
+    };
+    await _open(tester, server);
+    await tester.tap(find.byKey(const Key('swarm-sharing-people')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(TextButton, 'Remove'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(FilledButton, 'Remove'));
+    await tester.pumpAndSettle();
+    expect(
+      find.text(
+        'Sage is now the Product Manager of project Pilot. Delete the project first.',
+      ),
+      findsOneWidget,
+    );
+  });
+
   testWidgets(
     'revocation removes the captured Share dialog and late settings cannot restore it',
     (tester) async {

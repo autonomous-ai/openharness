@@ -6,8 +6,10 @@ import '../core/dsh_catalog.dart';
 import '../shared/theme/app_theme.dart' as grid;
 import '../widgets/engine_identity.dart';
 import 'store_editorial.dart';
+import 'store_compact_nav.dart';
 import 'store_cover_art.dart';
 import 'store_exploration.dart';
+import 'store_host.dart';
 
 class StoreExploreHeading extends StatelessWidget {
   const StoreExploreHeading({
@@ -57,6 +59,9 @@ class StoreExploreHeading extends StatelessWidget {
             onPressed: onAction,
             style: TextButton.styleFrom(
               foregroundColor: grid.AppPalette.accentOnSurface,
+              minimumSize: storeIsCompact(context)
+                  ? const Size.square(kStoreMinHit)
+                  : null,
             ),
             child: Text(action!),
           ),

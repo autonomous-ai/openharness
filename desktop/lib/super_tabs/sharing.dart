@@ -236,6 +236,7 @@ class _SwarmSharingDialogState extends State<SwarmSharingDialog> {
   }
 
   Future<void> _remove(SuperTabPerson person) async {
+    if (_removeReason(person) != null) return;
     final leaving = person.id == c.accountId;
     final confirmed = await showAppDialog<bool>(
       context: context,
@@ -266,6 +267,18 @@ class _SwarmSharingDialogState extends State<SwarmSharingDialog> {
       'userId': person.id,
     });
     if (result != null && leaving && mounted) Navigator.pop(context);
+  }
+
+  String? _removeReason(SuperTabPerson person) {
+    final snapshot = c.snapshot;
+    if (snapshot == null) return null;
+    for (final agent in snapshot.agents) {
+      if (agent.contributorId != person.id) continue;
+      if (snapshot.leadProtectionReason(agent.id) case final reason?) {
+        return reason;
+      }
+    }
+    return null;
   }
 
   Widget _select({
@@ -330,6 +343,8 @@ class _SwarmSharingDialogState extends State<SwarmSharingDialog> {
                           : 'Can collaborate',
                       style: DesktopChrome.metadata(),
                     ),
+                    if (_removeReason(person) case final reason?)
+                      Text(reason, style: DesktopChrome.metadata()),
                   ],
                 ),
               ),
@@ -337,7 +352,9 @@ class _SwarmSharingDialogState extends State<SwarmSharingDialog> {
                   (c.isOwner || person.id == c.accountId)) ...[
                 const SizedBox(width: 8),
                 TextButton(
-                  onPressed: _busy ? null : () => _remove(person),
+                  onPressed: _busy || _removeReason(person) != null
+                      ? null
+                      : () => _remove(person),
                   child: Text(person.id == c.accountId ? 'Leave' : 'Remove'),
                 ),
               ],

@@ -22,11 +22,21 @@ import { subscribeConnectorsChanged, subscribeDeskChanged, subscribeDeviceKeysCh
  * `zoo` is the server's daemons switch (lib/daemonsSwitch.ts): off, the zoo channel is not even listened
  * on, since nothing publishes it.
  *
+ * `team`: the socket is a Mac's team account (lib/teamSession.ts), which reads none of the account's desk,
+ * zoo, machine list or connections. It hears only `device_keys_changed`, which its own trust needs.
+ *
  * Resolves to the unsubscribe for all of them.
  */
-export async function relayAccountPushes(userId: string, send: (frame: unknown) => unknown, opts: { zoo: boolean }): Promise<() => void> {
+export async function relayAccountPushes(userId: string, send: (frame: unknown) => unknown, opts: { zoo: boolean; team?: boolean }): Promise<() => void> {
   const unsubs: Array<() => void> = []
   const stop = (): void => { for (const unsub of unsubs.splice(0)) unsub() }
+  const deviceKeys = (msg: { seq: number; hash: string }): void => {
+    send({ t: 'down', connId: '', frame: { type: 'device_keys_changed', payload: { seq: msg.seq, hash: msg.hash } } })
+  }
+  if (opts.team) {
+    unsubs.push(await subscribeDeviceKeysChanged(userId, deviceKeys))
+    return stop
+  }
   try {
     unsubs.push(await subscribeDeskChanged(userId, (msg) => {
       send({ t: 'down', connId: '', frame: { type: 'desk_changed', payload: { revision: msg.revision } } })
@@ -39,9 +49,7 @@ export async function relayAccountPushes(userId: string, send: (frame: unknown) 
     unsubs.push(await subscribeDeviceMachineListChanged(userId, (msg) => {
       send({ t: 'down', connId: '', frame: { type: 'machines_changed', payload: { reason: msg.reason } } })
     }))
-    unsubs.push(await subscribeDeviceKeysChanged(userId, (msg) => {
-      send({ t: 'down', connId: '', frame: { type: 'device_keys_changed', payload: { seq: msg.seq, hash: msg.hash } } })
-    }))
+    unsubs.push(await subscribeDeviceKeysChanged(userId, deviceKeys))
     unsubs.push(await subscribeConnectorsChanged(userId, (msg) => {
       send({ t: 'down', connId: '', frame: { type: 'connectors_changed', payload: { revision: msg.revision } } })
     }))

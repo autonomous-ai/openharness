@@ -7,6 +7,8 @@
  *   and what its frame says about its harness (its viewer);
  * - `create`: create an agent, as the window's `agent_create` does;
  * - `creation_status`: read the exact native receipt without exposing its launch request;
+ * - `keep_lead_alive`, `close_member`: for the Super Tab service alone, reopen a stopped Swarm Lead and close a member
+ *   whose session its backend ended, each only as core/api.ts allows;
  * - `stop_turn`: stop an agent's turn;
  * - `windows`: a change notice for every window on this computer (`orchestrator_changed`);
  * - `daemon`: how an agent's shell reaches this daemon, for the prompts the experiment writes;
@@ -40,7 +42,7 @@ import { nativeTurnCursorIn } from '../lib/nativeTurnObservations.js'
 type Payload = Record<string, unknown>
 type Core = Pick<CoreApi, 'agents' | 'turns' | 'clients' | 'daemon' | 'account' | 'cloud' | 'superTabs' | 'transcripts'>
 
-const QUERIES: ReadonlySet<string> = new Set(['shown', 'close_swarm', 'stopped', 'gone', 'creation_status', 'native_turns', 'create', 'stop_turn', 'windows', 'daemon', 'backend', 'observer_key', 'observer_send', 'account', 'cloud_publish', 'cloud_ask', 'cloud_unask', 'super_tab_attention', 'super_tab_cards', 'super_tab_card_recap', 'super_tab_observers', 'super_tab_screen', 'super_tab_input'])
+const QUERIES: ReadonlySet<string> = new Set(['shown', 'close_swarm', 'keep_lead_alive', 'close_member', 'stopped', 'gone', 'creation_status', 'native_turns', 'create', 'stop_turn', 'windows', 'daemon', 'backend', 'observer_key', 'observer_send', 'account', 'cloud_publish', 'cloud_ask', 'cloud_unask', 'super_tab_attention', 'super_tab_cards', 'super_tab_card_recap', 'super_tab_observers', 'super_tab_screen', 'super_tab_input'])
 const METHODS: ReadonlySet<string> = new Set(['GET', 'POST', 'PUT', 'PATCH', 'DELETE'])
 const text = (value: unknown): string => (typeof value === 'string' ? value : '')
 
@@ -85,6 +87,17 @@ export async function answerExperimentQuery(core: Core, experiments: ReadonlySet
       return { ...await (core.agents.closeSwarm?.({ agentId: agentId as string,
         ...(typeof creationId === 'string' ? { creationId } : {}), ...(typeof sessionId === 'string' ? { sessionId } : {}),
         ...(typeof createdAt === 'string' ? { createdAt } : {}), ...(typeof expiresAt === 'number' ? { expiresAt } : {}) }) ?? { error: 'UNSUPPORTED' }) }
+    }
+    // The Super Tab host keeps its Leads alive and closes the sessions its backend ends; the core decides which (core/api.ts).
+    case 'keep_lead_alive':
+    case 'close_member': {
+      if (service !== 'superTabs') return { error: 'NOT_SUPER_TABS' }
+      const { agentId, creationId } = payload
+      if (typeof agentId !== 'string' || !/^[A-Za-z0-9_-]{1,160}$/.test(agentId)
+        || creationId !== undefined && (typeof creationId !== 'string' || !/^[A-Za-z0-9_-]{16,96}$/.test(creationId))) return { error: 'INVALID_REQUEST' }
+      return query === 'keep_lead_alive'
+        ? { ...await (core.agents.keepLeadAlive?.(agentId) ?? { ok: false, error: 'UNSUPPORTED' }) }
+        : { ...await (core.agents.closeMember?.(agentId, creationId as string | undefined) ?? { error: 'UNSUPPORTED' }) }
     }
     case 'stopped':
       return { stopped: !!text(payload.agentId) && await core.agents.stopped?.(text(payload.agentId)) === true }

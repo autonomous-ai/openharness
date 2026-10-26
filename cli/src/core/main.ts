@@ -1,6 +1,6 @@
 import { createSwarmSkillAdoption } from './agents/swarmSkills.js'
 import { swarmRoleThrough } from './superTabSkills.js'
-import { retainedHarnesses } from '../superTabs/retention.js'
+import { mayBeLead, retainedHarnesses, retainedLeads } from '../superTabs/retention.js'
 import { createGridAssignments } from './agents/gridAssignments.js'
 import { createQuestionControls } from './engines/questionControls.js'
 import { masterRunsEngineQuestionControl } from '../harnessd/services.js'
@@ -995,6 +995,10 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     // a harness another agent started. Read when it closes one, never now: the close service is built further down.
     closeAgent: (request) => backendRef?.closeAgentService?.request(request) ?? Promise.resolve({ error: 'UNSUPPORTED' }),
     activityAt: (session) => transcriptActivityAt(session.transcriptPath, session.engine),
+    // The Super Tab host keeps its Leads alive and closes the sessions its backend ends (superTabs/host.ts). Read when it
+    // asks, never now: the lifecycle is built further down, and one asked before then is refused, and asked again later.
+    resumeAgent: async (agentId) => lifecycle.resumeAgent(agentId),
+    swarmMembers: { leads: () => retainedLeads(env.ADAPTER_DATA_DIR), harnesses: () => retainedHarnesses(env.ADAPTER_DATA_DIR) },
     dsh: (session) => backendRef?.dshFrameProvider?.(session) ?? null,
     windows: (frame) => backendRef?.sendLocal(frame),
     daemon: { command: daemonCommand(), port: env.PORT, machineId: () => backendRef?.machineId ?? '', autonomousEnv: session?.autonomousEnv ?? env.AUTONOMOUS_ENV },
@@ -2803,6 +2807,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     // A harness closed or stopped: the harnesses it started close with it (services/agentCleanup.ts).
     stopped: (agentId) => ports.agentCleanup?.closed(agentId),
     moveHeld: (agentId) => moveHeld.has(agentId),
+    // The Lead of an active Swarm project is never stopped (owner, 2026-10-23); its host keeps the list (superTabs/retention.ts).
+    leadProtected: (agentId) => mayBeLead(env.ADAPTER_DATA_DIR, agentId),
   })
   const stopJobs = lifecycle.stopJobs
   launchCancelled = id => stopJobs.has(id)
@@ -2828,6 +2834,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     announceSession,
     engineReady: (engine, ms) => engineLinks.ready(engine, ms),
     stoppedAgents,
+    leadProtected: (agentId) => mayBeLead(env.ADAPTER_DATA_DIR, agentId),
   })
   backend.closeAgentService = closing.closeAgentService
   backend.closeAgentService.start()

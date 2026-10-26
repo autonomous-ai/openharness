@@ -4,17 +4,24 @@ import { parseProjectFolder, prepareProjectFolder } from '../lib/projectFolder.j
 import { readCapabilities, START_REQUIREMENTS } from './capacity.js'
 import { backend, identifier, object } from './host.js'
 import { mkdir } from 'node:fs/promises'
+import { readAuthSession } from '../lib/authSession.js'
+import { randomUUID } from 'node:crypto'
 import { repairSwarmCloneTrust, swarmCloneRoot, swarmCloneRoots } from './cloneTrust.js'
 
 type Json = Record<string, unknown>
 
 /** Owner-only setup. Reuses the regular checkout preparation and engine probe;
  * it neither launches an agent nor grants the team access to the computer. */
-export async function prepareContribution(core: CoreApi, input: Json, deps = {
-  backend, open: openDaemon, prepare: prepareProjectFolder, capacity: readCapabilities,
-}): Promise<Json> {
+export async function prepareContribution(core: CoreApi, input: Json, deps: {
+  backend: typeof backend; open: typeof openDaemon; prepare: typeof prepareProjectFolder; capacity: typeof readCapabilities; team?: () => boolean
+} = { backend, open: openDaemon, prepare: prepareProjectFolder, capacity: readCapabilities }): Promise<Json> {
   if (!identifier(input.tabId)) throw new Error('Choose a Super Tab.')
-  const answer = object(await deps.backend(core, 'GET', `/api/super-tabs/${input.tabId}`))
+  // A Mac's Harness Team account reads no Swarm as the person (backend lib/teamSession.ts). Its Mac's daemon adds it, as a
+  // swarm workspace in its own clone root (host.ts joinTeams), so it needs no read ("One machine" in
+  // docs/plans/2026-10-24-swarm-team-account.md).
+  const team = (deps.team ?? (() => readAuthSession()?.kind === 'team'))()
+  if (team && input.scope !== 'swarm') throw new Error('A Harness Team account joins a Swarm only as a swarm workspace.')
+  const answer = team ? {} : object(await deps.backend(core, 'GET', `/api/super-tabs/${input.tabId}`))
   const state = object(answer.state), project = object(state.project)
   const machineId = core.daemon.machineId()
   const existing = (Array.isArray(state.machines) ? state.machines.map(object) : []).find(m => m.machineId === machineId)
@@ -51,6 +58,29 @@ export async function prepareContribution(core: CoreApi, input: Json, deps = {
     const maxAvailableAgents = Math.max(1, Math.min(16, Math.floor(total / START_REQUIREMENTS.memoryBytes)))
     const maxAgents = Math.max(1, Math.min(16, Math.floor(total / (2 * START_REQUIREMENTS.memoryBytes))))
     return { ok: true, state: 'ready', cwd, engines: [...new Set(engines)], maxAgents, maxAvailableAgents, ...(swarm ? { scope: 'swarm' } : {}) }
+  } finally { connection.close() }
+}
+
+/**
+ * This Mac's Harness Team account preparing its own swarm workspace (prepareContribution, in that account's daemon), asked
+ * through the relay as Desktop asks a machine it adds: its folder and engines are its own, which this Mac's daemon cannot
+ * see. Polls the same receipt while it prepares ("One machine" in docs/plans/2026-10-24-swarm-team-account.md).
+ */
+export async function prepareTeamContribution(core: CoreApi, input: { tabId: string; machineId: string }, deps = {
+  open: openDaemon, sleep: (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms)), deadlineMs: 5 * 60_000, now: Date.now,
+}): Promise<Json> {
+  const connection = await deps.open({ dataDir: core.dataDir, port: core.daemon.port, machineId: core.daemon.machineId() }, input.machineId)
+  try {
+    const operationId = randomUUID(), deadline = deps.now() + deps.deadlineMs
+    for (;;) {
+      const answer = object(await connection.request('super_tabs', { action: 'prepareContribution', tabId: input.tabId, scope: 'swarm', operationId }, 30_000))
+      if (answer.state === 'ready' && answer.scope === 'swarm' && typeof answer.cwd === 'string') return answer
+      if (answer.state !== 'preparing') {
+        throw new Error(typeof answer.detail === 'string' ? answer.detail : `The Harness Team account could not prepare its workspace (${String(answer.error ?? 'no answer')}).`)
+      }
+      if (deps.now() >= deadline) throw new Error('The Harness Team account is still preparing its workspace.')
+      await deps.sleep(1_000)
+    }
   } finally { connection.close() }
 }
 

@@ -244,25 +244,27 @@ function tmuxEnter(pane: string): Promise<boolean> {
 export const LOAD_BUFFER_TIMEOUT_MS = 5_000
 
 /** Stage text in a NAMED tmux buffer via stdin (avoids arg-length limits + the user's default buffer). */
-function tmuxLoadBuffer(name: string, content: string): Promise<boolean> {
+type BufferLoad = 'loaded' | 'timed_out' | 'failed'
+
+function tmuxLoadBuffer(name: string, content: string): Promise<BufferLoad> {
   return new Promise((resolve) => {
     let settled = false
     let cancel = (): void => {}
-    const settle = (loaded: boolean): void => {
+    const settle = (result: BufferLoad): void => {
       if (settled) return
       settled = true
       cancel()
-      resolve(loaded)
+      resolve(result)
     }
     const c = spawn('tmux', ['load-buffer', '-b', name, '-'])
     // Answered without waiting for its pipes to close: a client killed here may leave one open behind it.
     cancel = patientDeadline(LOAD_BUFFER_TIMEOUT_MS, () => {
       c.kill('SIGKILL')
-      settle(false)
+      settle('timed_out')
     })
-    c.on('error', () => settle(false))
-    c.on('close', (code) => settle(code === 0))
-    c.stdin.on('error', () => { /* EPIPE if tmux died first — 'close' still resolves false */ })
+    c.on('error', () => settle('failed'))
+    c.on('close', (code) => settle(code === 0 ? 'loaded' : 'failed'))
+    c.stdin.on('error', () => { /* EPIPE if tmux died first — 'close' still reports failure */ })
     c.stdin.end(content)
   })
 }
@@ -433,19 +435,28 @@ function tmuxDeleteBuffer(name: string): Promise<void> {
  *
  *  A buffer set and deleted is a notification to every control client, which on a tmux before 3.7
  *  crashed the server while one was attaching: the paste waits for none to be (tmuxControlGate.ts). */
-function tmuxPasteText(pane: string, content: string, bracketed: boolean, allowed?: () => boolean): Promise<boolean> {
+type PasteResult = 'pasted' | 'not_pasted' | 'uncertain'
+
+function tmuxPasteText(pane: string, content: string, bracketed: boolean, allowed?: () => boolean): Promise<PasteResult> {
   return inTmuxRoom('notify', () => pasteThroughBuffer(pane, content, bracketed, allowed))
 }
 
-async function pasteThroughBuffer(pane: string, content: string, bracketed: boolean, allowed?: () => boolean): Promise<boolean> {
-  if (allowed && !allowed()) return false
-  const bufferName = `machinemsg-${process.pid}-${++injectBufferSequence}`
-  if (!(await tmuxLoadBuffer(bufferName, bracketed ? neutralizePasteControls(content) : content))) {
+async function pasteThroughBuffer(pane: string, content: string, bracketed: boolean, allowed?: () => boolean): Promise<PasteResult> {
+  let bufferName = ''
+  for (let attempt = 0; attempt < 2; attempt++) {
+    if (allowed && !allowed()) return 'not_pasted'
+    bufferName = `machinemsg-${process.pid}-${++injectBufferSequence}`
+    const loaded = await tmuxLoadBuffer(bufferName, bracketed ? neutralizePasteControls(content) : content)
+    if (loaded === 'loaded') break
     await tmuxDeleteBuffer(bufferName)
-    console.error(`[tmux] load-buffer for ${pane} failed`)
-    return false
+    // No paste command has run. A timed-out client may still finish loading its unique buffer,
+    // but only the next, separately named buffer can be pasted into the pane.
+    if (loaded !== 'timed_out' || attempt === 1) {
+      console.error(`[tmux] load-buffer for ${pane} failed`)
+      return 'not_pasted'
+    }
   }
-  if (allowed && !allowed()) { await tmuxDeleteBuffer(bufferName); return false }
+  if (allowed && !allowed()) { await tmuxDeleteBuffer(bufferName); return 'not_pasted' }
   const args = ['paste-buffer', '-t', pane, '-b', bufferName]
   if (bracketed) args.push('-p')
   args.push('-d')
@@ -456,7 +467,7 @@ async function pasteThroughBuffer(pane: string, content: string, bracketed: bool
     })
   })
   if (!pasted) await tmuxDeleteBuffer(bufferName)
-  return pasted
+  return pasted ? 'pasted' : 'uncertain'
 }
 
 /**
@@ -473,11 +484,13 @@ async function pasteThroughBuffer(pane: string, content: string, bracketed: bool
  * from being pressed, and comes back as `{ withheld }`, the text left typed. An engine can open a dialog
  * in that gap, mid-turn, and the Enter would answer it.
  */
-export function sendToTmux(pane: string, text: string, beforeEnter?: () => Promise<string | null>, allowed?: () => boolean): Promise<boolean | { withheld: string }> {
+export function sendToTmux(pane: string, text: string, beforeEnter?: () => Promise<string | null>, allowed?: () => boolean): Promise<boolean | { withheld: string } | { notPasted: string }> {
   const content = submitContent(text)
   return (async () => {
     const settle = submitSettleMs(content)
-    if (!(await tmuxPasteText(pane, content, true, allowed))) return false
+    const pasted = await tmuxPasteText(pane, content, true, allowed)
+    if (pasted === 'not_pasted') return { notPasted: 'tmux buffer was not pasted' }
+    if (pasted === 'uncertain') return false
     if (settle) await sleep(settle)
     const withheld = beforeEnter ? await beforeEnter() : null
     if (withheld) return { withheld }
@@ -493,7 +506,7 @@ export function sendToTmux(pane: string, text: string, beforeEnter?: () => Promi
  * land on the row that just opened and pick whatever was already highlighted.
  */
 export function sendLiteralToTmux(pane: string, text: string): Promise<boolean> {
-  return tmuxPasteText(pane, text, false)
+  return tmuxPasteText(pane, text, false).then((result) => result === 'pasted')
 }
 
 /**
@@ -509,7 +522,7 @@ export function sendLiteralToTmux(pane: string, text: string): Promise<boolean> 
  * paste into a live terminal must not auto-submit.
  */
 export function pasteRawIntoTmux(pane: string, text: string, allowed?: () => boolean): Promise<boolean> {
-  return tmuxPasteText(pane, text, true, allowed)
+  return tmuxPasteText(pane, text, true, allowed).then((result) => result === 'pasted')
 }
 
 export function sendKeyToTmux(pane: string, key: string): Promise<boolean> {

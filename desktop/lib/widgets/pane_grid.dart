@@ -1886,6 +1886,10 @@ class _PaneContent extends StatelessWidget {
           visible: visible,
           compactHeader: swarmMode,
           composerVisible: pane.composerVisible,
+          firstTask: pane.firstTask,
+          onFirstTaskSubmitted: pane.firstTask == null
+              ? null
+              : () => pane.firstTask = '',
           // Launch progress/failure describes the engine, not permission to
           // type into its terminal. Connection and control ownership still
           // gate input independently in TerminalPanel/TerminalSession.

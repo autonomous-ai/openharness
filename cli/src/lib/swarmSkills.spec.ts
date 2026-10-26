@@ -43,6 +43,13 @@ describe('built-in Swarm skills', () => {
   const sha = (text: string) => createHash('sha256').update(text).digest('hex')
   // The approved terminal line (spec/2026-10-23-lead-sees-agent-terminal.md), the Lead's alone, in both modes.
   const terminal = '- When a worker seems stuck, read its terminal; answer prompts within its task; ask the owner before approving anything risky.\n'
+  // The approved overlap line (spec/2026-10-23-leads-see-and-talk.md, call 6), the Lead's alone, in both modes.
+  const overlap = '- Before assigning, look at other projects\' active work; if your task touches the same code, say so in the Leads conversation and agree an order first.\n'
+  // The Local models line (owner, 2026-10-23: the Lead considers Builders on local models; docs/plans/2026-10-23-swarm-local-models.md).
+  const local = '- Local models: when the Swarm serves one (a member\'s model, a shared API, a model shared with a member), the route may pick it for low-difficulty, well-specified work; it costs no subscription. Set "local":true in the route only when a person asks for a local model. When a person names a model, set "model" to their words ("deepseek 4.1 flash"): the route then offers that model alone. Start the pick with the gridModel and gridName the route gives, never a model or effort.\n'
+  const localDefault = '- Local models: the route may pick one for low-difficulty, well-specified work; set "local":true only when a person asks for one, set "model" to a model a person names, and start it with the route\'s gridModel and gridName.\n'
+  // The approved mention line (spec/2026-10-24-lead-mentions.md, call 5), the Lead's alone, in both modes.
+  const mention = '- When you need a person to act or decide, tag them in the message.\n'
   const twoHours = '- A Builder or Reviewer that has been down for 2 hours (machine offline, session gone or stopped): cancel its task with the reason, route it, and assign it to another agent with what the first one left (branch, last revision, last report).\n'
   it.each([
     ['lead', '5fc83d8c43b66b44cdab27b48235dbc86b7ab11a57153edc1ae7e92831642a8e'],
@@ -57,7 +64,10 @@ describe('built-in Swarm skills', () => {
       expect(text.startsWith(`---\nname: swarm-${role}\n`)).toBe(true)
       expect(text.split(twoHours)).toHaveLength(role === 'lead' ? 2 : 1)
       expect(text.split(terminal)).toHaveLength(role === 'lead' ? 2 : 1)
-      expect(sha(text.replace(twoHours, '').replace(terminal, ''))).toBe(sha256)
+      expect(text.split(overlap)).toHaveLength(role === 'lead' ? 2 : 1)
+      expect(text.split(local)).toHaveLength(role === 'lead' ? 2 : 1)
+      expect(text.split(mention)).toHaveLength(role === 'lead' ? 2 : 1)
+      expect(sha(text.replace(twoHours, '').replace(terminal, '').replace(overlap, '').replace(local, '').replace(mention, ''))).toBe(sha256)
     }
   })
   it('adds the 2-hour line to section 7 right after the 6-hour rule', () => {
@@ -70,6 +80,18 @@ describe('built-in Swarm skills', () => {
     const plain = readFileSync(prepareSwarmSkill(fixture(), { role: 'lead', key: 'session', mode: 'default' }).file, 'utf8')
     expect(plain).toContain(`- A worker with active work that has said nothing for 20 minutes: ask it.\n${terminal}- A Builder or Reviewer`)
   })
+  it('adds the overlap line last in each Lead skill\'s "Route, start, assign"', () => {
+    const orchestration = readFileSync(prepareSwarmSkill(fixture(), { role: 'lead', key: 'session' }).file, 'utf8')
+    expect(orchestration).toContain(`Never pass your chat history; put everything needed in the brief.\n${overlap}\n## 7. Run the work`)
+    const plain = readFileSync(prepareSwarmSkill(fixture(), { role: 'lead', key: 'session', mode: 'default' }).file, 'utf8')
+    expect(plain).toContain(`- The brief is all a Builder gets; never rely on chat history.\n${overlap}\n## 4. Keep work moving`)
+  })
+  it('adds the mention line right after each Lead skill\'s needs-a-person rule', () => {
+    const orchestration = readFileSync(prepareSwarmSkill(fixture(), { role: 'lead', key: 'session' }).file, 'utf8')
+    expect(orchestration).toContain(`- Needs-human: get the person's decision now.\n${mention}- Blocked: change something.`)
+    const plain = readFileSync(prepareSwarmSkill(fixture(), { role: 'lead', key: 'session', mode: 'default' }).file, 'utf8')
+    expect(plain).toContain(`- Needs a person: get the decision now. Blocked: change something (context, model, size or plan); never resend the same thing.\n${mention}- Settle ambiguities`)
+  })
   // The owner's approved Default texts (attached to the spec, 2026-10-23), byte for byte.
   it.each([
     ['lead', 'a7b8aed240f38edda8a461d87ce83499696588b2da41ed261821985caa63e415'],
@@ -80,8 +102,48 @@ describe('built-in Swarm skills', () => {
     const prepared = prepareSwarmSkill(fixture(), { role, key: 'session', mode: 'default' })
     const text = readFileSync(prepared.file, 'utf8')
     expect(text.split(terminal)).toHaveLength(role === 'lead' ? 2 : 1)
-    expect(sha(text.replace(terminal, ''))).toBe(sha256)
+    expect(text.split(overlap)).toHaveLength(role === 'lead' ? 2 : 1)
+    expect(text.split(localDefault)).toHaveLength(role === 'lead' ? 2 : 1)
+    expect(text.split(mention)).toHaveLength(role === 'lead' ? 2 : 1)
+    expect(sha(text.replace(terminal, '').replace(overlap, '').replace(localDefault, '').replace(mention, ''))).toBe(sha256)
     expect(prepared.instructions).toBe(`Use the swarm-${role} skill for this session: the team process; otherwise work your usual way. Before working, read ${JSON.stringify(prepared.file)} with your file or shell tool.`)
+  })
+
+  // Custom roles and skills per project (spec 2026-10-23, call 14): a custom role's text is installed as the skill of its
+  // kind, under that kind's name, with the one front matter block Harness writes. Owners' texts may bring their own block.
+  describe('a project on its Custom skills', () => {
+    const skill = { role: 'lead' as const, key: 'custom' }
+    const head = (name: string) => `---\nname: swarm-lead\ndescription: ${JSON.stringify(`The ${name} role of this project's Custom skills.`)}\n---\n`
+    const shipped = () => readFileSync(prepareSwarmSkill(fixture(), { ...skill, mode: 'default' }).file, 'utf8')
+    it.each([
+      ['the shipped Default text', () => shipped(), () => shipped().replace(/^---\n[\s\S]*?\n---\n/, '')],
+      ['a text with its own front matter', () => '---\nname: my-pm\ntitle: Ours\n---\n# Our way\nShip small.\n', () => '# Our way\nShip small.\n'],
+      ['a text without front matter', () => '# Our way\n---\nShip small.\n', () => '# Our way\n---\nShip small.\n'],
+    ])('installs %s under the kind\'s skill name with one front matter block', (_case, text, body) => {
+      const workspace = fixture(), { file } = prepareSwarmSkill(workspace, { ...skill, mode: 'default' })
+      expect(refreshSwarmSkill(workspace, skill, 'default', { name: 'Planner', text: text() })).toMatchObject({ file, owed: true })
+      expect(file.endsWith(join('swarm', 'skills', 'swarm-lead', 'SKILL.md'))).toBe(true)
+      expect(readFileSync(file, 'utf8')).toBe(head('Planner') + body())
+    })
+    it('tells the agent its role\'s text once, then each time the owner changes it, overwriting its own edits', () => {
+      const workspace = fixture(), { file } = prepareSwarmSkill(workspace, { ...skill, mode: 'default' })
+      const reread = `Before your next step, read ${JSON.stringify(file)} again with your file or shell tool and follow`
+      const first = refreshSwarmSkill(workspace, skill, 'default', { name: 'Planner', text: 'Plan.\n' })!
+      expect(first).toMatchObject({ owed: true, change: 1,
+        notice: `This project now uses its Custom skills, as Planner. ${reread} it in place of your earlier swarm-lead skill.` })
+      recordSwarmSkillNotice(workspace, skill, first)
+      expect(refreshSwarmSkill(workspace, skill, 'default', { name: 'Planner', text: 'Plan.\n' })).toMatchObject({ owed: false, change: 1 })
+      writeFileSync(file, 'edited')
+      const edit = refreshSwarmSkill(workspace, skill, 'default', { name: 'Planner', text: 'Plan, then ship.\n' })!
+      expect(edit).toMatchObject({ owed: true, change: 2,
+        notice: `The project owner updated your Planner role. ${reread} the new version.` })
+      expect(readFileSync(file, 'utf8')).toBe(head('Planner') + 'Plan, then ship.\n')
+      recordSwarmSkillNotice(workspace, skill, edit)
+      // Back to a built-in set: told as a switch, not as an update.
+      expect(refreshSwarmSkill(workspace, skill, 'default')).toMatchObject({ owed: true, change: 3,
+        notice: `This project now uses the Default skills. ${reread} it in place of your earlier swarm-lead skill.` })
+      expect(readFileSync(file, 'utf8')).toBe(shipped())
+    })
   })
 
   describe('a running session after a CLI update', () => {
@@ -257,6 +319,9 @@ describe('built-in Swarm skills', () => {
     // An unknown mode is dropped, not refused: the session keeps its role and launches as before modes.
     expect(parseSwarmSkill({ role: 'dev', key: 'x', mode: 'light' })).toEqual({ role: 'dev', key: 'x' })
     expect(parseSwarmSkill({ role: 'dev', key: 'x', mode: 'orchestration' })).toEqual({ role: 'dev', key: 'x', mode: 'orchestration' })
+    // The Harness GitHub App's flag is kept for relaunches, and only as true.
+    expect(parseSwarmSkill({ role: 'dev', key: 'x', github: true })).toEqual({ role: 'dev', key: 'x', github: true })
+    expect(parseSwarmSkill({ role: 'dev', key: 'x', github: 'yes' })).toEqual({ role: 'dev', key: 'x' })
     expect(() => prepareSwarmSkill(fixture(), { role: 'lead', key: '' })).toThrow()
   })
 

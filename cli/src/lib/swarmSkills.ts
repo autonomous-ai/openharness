@@ -8,16 +8,19 @@ export type SwarmRole = 'lead' | 'dev' | 'review'
 /** A Swarm project's skill set, which its owner chooses (2026-10-23): Default is the team process alone, Harness orchestration
  * adds Harness practices. A session saved without one launched before modes, on the orchestration text. */
 export type SwarmSkillMode = 'default' | 'orchestration'
-export interface SwarmSkill { role: SwarmRole; key: string; mode?: SwarmSkillMode }
+/** `github`: git and gh in this session use the Harness GitHub App's token for its task (lib/swarmGitHub.ts), set when a
+ *  start does another person's project work (superTabs/start.ts) and kept for every relaunch. */
+export interface SwarmSkill { role: SwarmRole; key: string; mode?: SwarmSkillMode; github?: true }
 /** What a session's current Swarm membership grants it, before it has a key. */
-export type SwarmSkillGrant = Omit<SwarmSkill, 'key'>
+export type SwarmSkillGrant = Omit<SwarmSkill, 'key' | 'github'>
 export const isSwarmRole = (value: unknown): value is SwarmRole => value === 'lead' || value === 'dev' || value === 'review'
 export const isSwarmSkillMode = (value: unknown): value is SwarmSkillMode => value === 'default' || value === 'orchestration'
 
 export function parseSwarmSkill(value: unknown): SwarmSkill | undefined {
   if (!value || typeof value !== 'object') return undefined
-  const { role, key, mode } = value as Partial<SwarmSkill>
-  return isSwarmRole(role) && typeof key === 'string' && key.length > 0 ? { role, key, ...(isSwarmSkillMode(mode) ? { mode } : {}) } : undefined
+  const { role, key, mode, github } = value as Partial<SwarmSkill>
+  return isSwarmRole(role) && typeof key === 'string' && key.length > 0
+    ? { role, key, ...(isSwarmSkillMode(mode) ? { mode } : {}), ...(github === true ? { github } : {}) } : undefined
 }
 
 /** The owner's texts, used verbatim. */
@@ -108,11 +111,14 @@ For large work, post the group plan and get the owner's ok before assigning; onc
 - Route each group before starting or assigning: difficulty, risk, size, why, needs. Use the pick, or override with a reason.
 - Match strength to work: mechanical → cheaper; integration and judgment → standard; design or subtle risk → strongest. A review is at least as strong as the build. Don't go below the standard tier for Reviewers, or for Builders working from prose; the cheapest models take more turns and end up costing more.
 - Reuse an idle agent before starting a new one. Start only on the Swarm's listed machines, from the branch the work builds on.
+- Local models: when the Swarm serves one (a member's model, a shared API, a model shared with a member), the route may pick it for low-difficulty, well-specified work; it costs no subscription. Set "local":true in the route only when a person asks for a local model. When a person names a model, set "model" to their words ("deepseek 4.1 flash"): the route then offers that model alone. Start the pick with the gridModel and gridName the route gives, never a model or effort.
 - The brief is all a Builder gets. Never pass your chat history; put everything needed in the brief.
+- Before assigning, look at other projects' active work; if your task touches the same code, say so in the Leads conversation and agree an order first.
 
 ## 7. Run the work
 - When a restart interrupts active work, read the recovery notice and its last recorded checkpoint, then check the agent’s actual session and saved work. Ask it to continue from that checkpoint and report working; either you or the assigned agent can clear the recovery block. Never replay old input or commands: they may already have taken effect. A delayed recording gap after fresh progress is not a new interruption. Keep work already in review in review while you inspect the session. Ordinary typed input, an expired recording view, a missing recorded prompt, or an unclassified gap from an older recorder does not establish that work was interrupted.
 - Needs-human: get the person's decision now.
+- When you need a person to act or decide, tag them in the message.
 - Blocked: change something. Give more context, re-route to a stronger model, cut the work smaller, or fix the plan. Never resend the same thing to the same model.
 - Rulings, not stalls: when a Builder hits an ambiguity you can settle, settle it and record "Ruling: what — why — cost if wrong". Ask the person only what changes what gets built.
 - Each time you are woken, look at active work. Ask a worker with active work that has said nothing for 20 minutes; reassign work that has not moved for 6 hours; report on-screen trust, sign-in or permission questions in chat, naming the machine owner who can answer.
@@ -381,7 +387,9 @@ Keep each Builder's list a few tasks deep; do the easy, self-contained parts fir
 
 ## 3. Route, start, assign
 - Route each group; reuse an idle agent before starting one; start only on the Swarm's machines.
+- Local models: the route may pick one for low-difficulty, well-specified work; set "local":true only when a person asks for one, set "model" to a model a person names, and start it with the route's gridModel and gridName.
 - The brief is all a Builder gets; never rely on chat history.
+- Before assigning, look at other projects' active work; if your task touches the same code, say so in the Leads conversation and agree an order first.
 
 ## 4. Keep work moving
 - Each time you are woken, look at active work.
@@ -390,6 +398,7 @@ Keep each Builder's list a few tasks deep; do the easy, self-contained parts fir
 - A Builder or Reviewer that has been down for 2 hours (its machine offline, its session gone, or stopped): cancel its task with the reason, route it, and assign it to another agent with what the first one left (branch, last revision, last report).
 - Work with no progress for 6 hours goes back to you: reassign it or cut it smaller.
 - Needs a person: get the decision now. Blocked: change something (context, model, size or plan); never resend the same thing.
+- When you need a person to act or decide, tag them in the message.
 - Settle ambiguities you can and record "Ruling: what — why — cost if wrong".
 - When a worker finishes: reuse, keep or stop. Prefer stop.
 
@@ -499,6 +508,17 @@ export function swarmSkillUse(role: SwarmRole, mode: SwarmSkillMode): string {
     : `Use the built-in swarm-${role} skill for this session.`
 }
 const MODE_NAMES: Record<SwarmSkillMode, string> = { default: 'Default', orchestration: 'Harness orchestration' }
+/** Which set a session's file was last written from: a built-in mode, or the project's Custom set (spec 2026-10-23). */
+type SkillSet = SwarmSkillMode | 'custom'
+const isSkillSet = (value: unknown): value is SkillSet => isSwarmSkillMode(value) || value === 'custom'
+/** A role of the project's Custom set, its text as the project owner wrote it. */
+export interface CustomSwarmRole { name: string; text: string }
+/** Installed under the kind's own skill name, with the one front matter block Harness writes: any block the owner's text
+ *  starts with (the copied Default texts bring one) is dropped. */
+function customText(role: SwarmRole, custom: CustomSwarmRole): string {
+  const body = custom.text.replace(/^\uFEFF?---[ \t]*\r?\n[\s\S]*?\r?\n---[ \t]*(?:\r?\n|$)/, '')
+  return `---\nname: swarm-${role}\ndescription: ${JSON.stringify(`The ${custom.name} role of this project's Custom skills.`)}\n---\n${body}`
+}
 /** The mode whose current text this is; null for any other text (an older release, or the agent's own edits). */
 const modeOf = (role: SwarmRole, version: string) =>
   (['default', 'orchestration'] as const).find(mode => textVersion(skills[mode][role]) === version) ?? null
@@ -528,16 +548,16 @@ export function prepareSwarmSkill(workspace: string, saved: SwarmSkill): { file:
 /** Which built-in text a session's skill file holds and of which mode, how many times the file was rewritten, and the text,
  * mode and rewrite its agent was last confirmed told about (the launch prompt is rewrite 0). A file from before this record
  * counts as holding its own content, already told; one from before modes, as orchestration. */
-interface SkillRecord { text: string; notified: string; change?: number; mode?: SwarmSkillMode; told?: SwarmSkillMode; toldChange?: number }
+interface SkillRecord { text: string; notified: string; change?: number; mode?: SkillSet; told?: SkillSet; toldChange?: number }
 /** `change` counts rewrites, so a notice for a switch back to an earlier mode's text is a new notice, not a repeat. */
-export interface SkillRefresh { file: string; version: string; owed: boolean; change: number; notice: string }
+export interface SkillRefresh { file: string; version: string; owed: boolean; change: number; notice: string; set?: SkillSet }
 
 /** A CLI update ships new skill text while Swarm sessions run (owner, 2026-10-22), and the project's owner may switch its
  * mode (2026-10-23). Rewrite a session's file to the mode's built-in text and say whether its agent still owes a re-read
  * notice for it; recordSwarmSkillNotice clears that once the notice is sent. A file from before records gets its record
  * first, and the record moves to the new text only after the file is replaced, so an interrupted pass rewrites again and
  * the notice stays owed until it is recorded. Null when this workspace never prepared the session's skill. */
-export function refreshSwarmSkill(workspace: string, saved: SwarmSkill, mode: SwarmSkillMode): SkillRefresh | null {
+export function refreshSwarmSkill(workspace: string, saved: SwarmSkill, mode: SwarmSkillMode, custom?: CustomSwarmRole): SkillRefresh | null {
   if (!parseSwarmSkill(saved)) throw new Error('A Swarm skill needs a role and session key')
   // A removed worktree has nothing to refresh; the host would otherwise retry and log it every minute.
   if (!existsSync(workspace)) return null
@@ -545,7 +565,9 @@ export function refreshSwarmSkill(workspace: string, saved: SwarmSkill, mode: Sw
   const file = dir && join(dir, 'SKILL.md')
   if (!dir || !file || !existsSync(file)) return null
   plainFile(file)
-  const text = skills[mode][saved.role], version = textVersion(text)
+  // A Custom role's file is overwritten on each new text (call 14): the agent's own edits are kept for built-in texts only.
+  const set: SkillSet = custom ? 'custom' : mode
+  const text = custom ? customText(saved.role, custom) : skills[mode][saved.role], version = textVersion(text)
   const held = textVersion(readFileSync(file, 'utf8'))
   let record = readRecord(dir) ?? { text: held, notified: held }
   if (record.toldChange === undefined) {
@@ -557,7 +579,7 @@ export function refreshSwarmSkill(workspace: string, saved: SwarmSkill, mode: Sw
   }
   if (record.text !== version) {
     replaceFile(file, text)
-    record = { ...record, text: version, mode, change: (record.change ?? 0) + 1 }
+    record = { ...record, text: version, mode: set, change: (record.change ?? 0) + 1 }
     writeRecord(dir, record)
   } else if (held !== version && modeOf(saved.role, held)) {
     // A switch stopped after replacing the file and before its record, and the project switched back: the record already
@@ -569,17 +591,19 @@ export function refreshSwarmSkill(workspace: string, saved: SwarmSkill, mode: Sw
   // A notice counts once it is recorded: one sent whose record was lost may have moved the agent to another text, so a
   // later rewrite is owed even when it brings back the text last confirmed.
   const owed = record.toldChange !== change
-  const switched = (record.told ?? 'orchestration') !== mode || owed && record.notified === version
+  const switched = (record.told ?? 'orchestration') !== set || owed && record.notified === version
   const reread = `Before your next step, read ${JSON.stringify(file)} again with your file or shell tool and follow`
-  return { file, version, owed, change,
-    notice: switched ? `This project now uses the ${MODE_NAMES[mode]} skills. ${reread} it in place of your earlier swarm-${saved.role} skill.`
-      : `Harness updated your ${mode === 'default' ? '' : 'built-in '}swarm-${saved.role} skill. ${reread} the new version.` }
+  const instead = `${reread} it in place of your earlier swarm-${saved.role} skill.`
+  return { file, version, owed, change, set,
+    notice: custom ? switched ? `This project now uses its Custom skills, as ${custom.name}. ${instead}` : `The project owner updated your ${custom.name} role. ${reread} the new version.`
+      : switched ? `This project now uses the ${MODE_NAMES[mode]} skills. ${instead}`
+        : `Harness updated your ${mode === 'default' ? '' : 'built-in '}swarm-${saved.role} skill. ${reread} the new version.` }
 }
 /** The notice for that refresh's rewrite was sent. A later rewrite since then stays owed. */
-export function recordSwarmSkillNotice(workspace: string, saved: SwarmSkill, sent: Pick<SkillRefresh, 'version' | 'change'>): void {
+export function recordSwarmSkillNotice(workspace: string, saved: SwarmSkill, sent: Pick<SkillRefresh, 'version' | 'change' | 'set'>): void {
   const dir = skillDirectory(realpathSync(workspace), saved, false)
   const record = dir && readRecord(dir)
-  if (dir && record) writeRecord(dir, { ...record, notified: sent.version, toldChange: sent.change, told: modeOf(saved.role, sent.version) ?? record.told })
+  if (dir && record) writeRecord(dir, { ...record, notified: sent.version, toldChange: sent.change, told: sent.set ?? modeOf(saved.role, sent.version) ?? record.told })
 }
 
 const textVersion = (text: string) => createHash('sha256').update(text).digest('hex')
@@ -611,7 +635,7 @@ function readRecord(dir: string): SkillRecord | null {
   const record = JSON.parse(readFileSync(file, 'utf8')) as Partial<SkillRecord>
   return typeof record.text === 'string' && typeof record.notified === 'string'
     ? { text: record.text, notified: record.notified, ...(typeof record.change === 'number' ? { change: record.change } : {}),
-      ...(isSwarmSkillMode(record.mode) ? { mode: record.mode } : {}), ...(isSwarmSkillMode(record.told) ? { told: record.told } : {}),
+      ...(isSkillSet(record.mode) ? { mode: record.mode } : {}), ...(isSkillSet(record.told) ? { told: record.told } : {}),
       ...(typeof record.toldChange === 'number' ? { toldChange: record.toldChange } : {}) } : null
 }
 function writeRecord(dir: string, record: SkillRecord): void {

@@ -97,6 +97,7 @@ import '../core/harness_file_store.dart';
 import '../super_tabs/attachment_upload.dart';
 import '../super_tabs/client.dart';
 import '../super_tabs/controller.dart';
+import '../super_tabs/notifications.dart' show superTabMentionNotice;
 import '../measurement/setup_preference_store.dart';
 import '../devices/device_hosts.dart';
 import '../stats/harness_stats.dart';
@@ -328,6 +329,8 @@ class AgentCreationAttempt {
 
   bool get awaitingConfirmation => _awaitingConfirmation;
   bool get canCancelPending => _awaitingConfirmation && _holdReason != null;
+  bool get canFollowPending =>
+      _awaitingConfirmation && (_starting || _holdReason != null);
 
   /// The machine's code for a request it refused before launching anything,
   /// such as `SESSION_BUSY_IN_TERMINAL`: what a caller can offer next.
@@ -1153,6 +1156,8 @@ class AppNotifier extends ChangeNotifier {
   // Account and inventory replies belong to the session that requested them.
   // Signing out invalidates them before asynchronous connection cleanup.
   int _authRevision = 0;
+  /// Cancels work across account changes, independently of measurement preferences.
+  int get accountGeneration => _authRevision;
   Future<void>? _profileInFlight;
 
   bool _authWorkCurrent(int revision) =>
@@ -1251,7 +1256,7 @@ class AppNotifier extends ChangeNotifier {
       readiness.plan.any((item) => item.requiresTerminal);
 
   /// A computer new to Harness builds its first workspace behind the welcome tour, once signed in
-  /// and ready, so the agents have started and OpenCode's task is typed by the time the tour hands
+  /// and ready, so one harness and its editable task are ready when the tour hands
   /// over: OpenCode's own first start took about 12 s after the tour had ended (fresh macOS VM,
   /// 2026-10-09). The workspace joins this run when it appears ([FirstArrival.run]).
   ///
@@ -1655,6 +1660,7 @@ class AppNotifier extends ChangeNotifier {
   /// frames reach only a computer's own windows, so the browser reads on open,
   /// after its actions and every 60 s in front.
   late final sharedTabs = SharedTabsController(
+    measurement: productMeasurement,
     request: (payload) {
       final target = sharedTabsTarget;
       if (target == null) {
@@ -1712,6 +1718,8 @@ class AppNotifier extends ChangeNotifier {
   late final superTabs = SuperTabClient(
     storage: localStore ?? HarnessFileStore.shared,
     upload: uploadWith(() => api),
+    onMention: superTabMentionNotice(systemNotifications),
+    onTagCounts: notifyListeners,
     discoveryInterval: kUnderTest ? Duration.zero : const Duration(seconds: 15),
     onTabs: (tabs, hidden) {
       // Discovery can finish while an already signed-in machine is re-seating
@@ -1884,6 +1892,39 @@ class AppNotifier extends ChangeNotifier {
       );
     }
     return result;
+  }
+
+  /// Whether this is a Mac, as the Harness Team account offer reads it. Off
+  /// under test, on a Mac too, unless a test sets it.
+  @visibleForTesting
+  bool? macOSForTest;
+  bool _teamOfferedAtStart = false;
+
+  /// The Harness Team account on this Mac (cli/src/team/autoSetup.ts),
+  /// offered while the person is here: as they join a Swarm ([reason]
+  /// `join`), add this Mac to one (`contribute`), or open the app
+  /// (`startup`). This Mac's own daemon decides whether to ask: no account
+  /// yet, not declined before, and at start only while this Mac is in a
+  /// Swarm with other people in it. macOS's administrator prompt is all the
+  /// person sees. Nothing on Windows or Linux, and never for another machine,
+  /// where nobody may be at it.
+  Future<void> offerTeamAccount(String reason) async {
+    if (!(macOSForTest ?? (Platform.isMacOS && !kUnderTest))) return;
+    final here = machineStates.values
+        .where(
+          (state) => state.isLocalMachine && !state.machine.isSharedMachine,
+        )
+        .firstOrNull;
+    if (here == null) return;
+    try {
+      await superTabMachineRequest(here.machine.machineId, {
+        'action': 'teamSetup',
+        'reason': reason,
+      });
+    } catch (error) {
+      // An older daemon, or one that cannot say: nothing is asked.
+      appLog.debug('super-tabs', 'team account not offered: $error');
+    }
   }
 
   Future<void> wakeSuperTabHost(String machineId) async {
@@ -3485,7 +3526,12 @@ class AppNotifier extends ChangeNotifier {
       // A Swarm pane is only a view into shared work. This guard also covers
       // the close shortcut, native menu and whole-tab dismissal, including a
       // regular tab becoming a Swarm while a close review is pending.
-      if (tab.isSuperTab) return false;
+      // A Product Manager keeps running when its ordinary view closes too.
+      if (tab.isSuperTab ||
+          superTabs.leadProtectionReasonForHarness(machineId, agentId) !=
+              null) {
+        return false;
+      }
       if (!swarms.contains(tab) ||
           (wholeTab &&
               (tab.panes.length != closing.length ||
@@ -5066,6 +5112,13 @@ class AppNotifier extends ChangeNotifier {
       // the offline poll (the one thing that would have re-probed) stopped, and the tiles sat on
       // "Offline" over a live terminal with nothing left to restore them. Measured 2026-09-18 21:50.
       machine.localEndpoint ??= _cliEndpoint;
+      // Once a launch, with the person here: a Mac that joined a Swarm before
+      // teammates' work went only to Team machines never met the join or
+      // contribute moment.
+      if (!_teamOfferedAtStart && !machine.machine.isSharedMachine) {
+        _teamOfferedAtStart = true;
+        unawaited(offerTeamAccount('startup'));
+      }
     } else {
       machine.transportMode = MachineTransportMode.cloudE2ee;
     }
@@ -11273,14 +11326,84 @@ class AppNotifier extends ChangeNotifier {
     return connection.request('connectors', payload: payload, timeout: timeout);
   }
 
+  /// Starts or stops a local model; with [grid], on that Swarm's grid instead of the account's own
+  /// (docs/plans/2026-10-23-swarm-local-models.md).
   Future<Map<String, dynamic>> controlLocalModel(
     String machineId,
     String modelId, {
     required bool start,
+    String? grid,
   }) => _conn(machineId).request(
     start ? 'grid_fleet_model_start' : 'grid_fleet_model_stop',
-    payload: {'modelId': modelId},
+    payload: {'modelId': modelId, 'grid': ?grid},
     timeout: const Duration(seconds: 12),
+  );
+
+  /// Sets a Swarm's grid up on [machineId], this computer of the Swarm owner's (CLI `lib/swarmGrid.ts`): `grid`
+  /// installed and signed in with the Harness account when it is not, the grid created, [members] added and anyone
+  /// else removed. Minutes on a computer that has never run grid.
+  Future<Map<String, dynamic>> swarmGridSync(
+    String machineId,
+    String grid,
+    List<String> members,
+  ) => _conn(machineId).request(
+    'grid_swarm_sync',
+    payload: {'grid': grid, 'members': members},
+    timeout: const Duration(minutes: 5),
+  );
+
+  /// The models shared with this person that [machineId] offers to the Swarm whose grid is [grid] (CLI `lib/swarmOffers.ts`).
+  Future<Map<String, dynamic>> swarmOffers(String machineId, String grid) =>
+      _conn(machineId).request(
+        'grid_swarm_offers',
+        payload: {'grid': grid},
+        timeout: const Duration(seconds: 10),
+      );
+
+  /// Offers [model], shared with this person on [sharedGrid], to the Swarm whose grid is [grid], or stops: the Swarm's
+  /// Lead may then start Builders on [machineId] on it.
+  Future<Map<String, dynamic>> swarmOffer(
+    String machineId, {
+    required String grid,
+    required String sharedGrid,
+    required String model,
+    required bool start,
+  }) => _conn(machineId).request(
+    'grid_swarm_offer',
+    payload: {
+      'grid': grid,
+      'sharedGrid': sharedGrid,
+      'model': model,
+      'action': start ? 'start' : 'stop',
+    },
+    timeout: const Duration(seconds: 10),
+  );
+
+  /// The saved APIs [machineId] shares with the Swarm whose grid is [grid] (CLI `lib/swarmApiShares.ts`).
+  Future<Map<String, dynamic>> swarmApiShares(String machineId, String grid) =>
+      _conn(machineId).request(
+        'grid_swarm_api_shares',
+        payload: {'grid': grid},
+        timeout: const Duration(seconds: 10),
+      );
+
+  /// Shares [model] of the saved API [connectionId] with the Swarm whose grid is [grid], or stops: every Builder in
+  /// the Swarm may then run on it, on this computer's key and credits.
+  Future<Map<String, dynamic>> swarmApiShare(
+    String machineId, {
+    required String grid,
+    required String connectionId,
+    required String model,
+    required bool start,
+  }) => _conn(machineId).request(
+    'grid_swarm_api_share',
+    payload: {
+      'grid': grid,
+      'connectionId': connectionId,
+      'model': model,
+      'action': start ? 'start' : 'stop',
+    },
+    timeout: const Duration(minutes: 2),
   );
 
   Future<Map<String, dynamic>> downloadLocalModel(
@@ -14041,8 +14164,9 @@ class AppNotifier extends ChangeNotifier {
     String? swarmId,
     HarnessPlacement? placement,
     TakeOver? takeOver,
+    AgentCreationAttempt? attempt,
   }) async {
-    final attempt = AgentCreationAttempt();
+    final creation = attempt ?? AgentCreationAttempt();
     final error = await _create(
       machineId,
       {
@@ -14055,9 +14179,9 @@ class AppNotifier extends ChangeNotifier {
       },
       swarmId: swarmId,
       placement: placement,
-      attempt: attempt,
+      attempt: creation,
     );
-    return (error: error, refusal: error == null ? null : attempt.refusal);
+    return (error: error, refusal: error == null ? null : creation.refusal);
   }
 
   Future<String?> _create(
@@ -15470,13 +15594,29 @@ class AppNotifier extends ChangeNotifier {
         retryable: false,
       );
     }
+    final resuming = attempt.agent?.isStopped == true;
+    if (resuming && machine.connectionStatus != ConnectionStatus.connected) {
+      final connected = await connectTrusted(machineId);
+      if (!_restartCurrent(attempt, beforeSend: !attempt.awaitingConfirmation)) {
+        return const RestartAgentResult(
+          error: 'The harness changed while connecting. Select it again.',
+          retryable: false,
+        );
+      }
+      if (!connected) {
+        return RestartAgentResult(
+          error: machine.needsLink
+              ? 'Connect this computer in Machines, then open the saved harness again.'
+              : 'This computer is not connected. Bring it online and try again. Your saved conversation is kept.',
+        );
+      }
+    }
     var checking = attempt.awaitingConfirmation;
     if (!checking) {
       attempt._id = _newCreationId();
       attempt._startedRevision = machine._agentRevision;
     }
     attempt._awaitingConfirmation = true;
-    final resuming = attempt.agent?.isStopped == true;
     final measurementKey = _turnActivityKey(machineId, agentId);
     if (resuming &&
         !checking &&
@@ -15494,6 +15634,21 @@ class AppNotifier extends ChangeNotifier {
       _measurementResumes[measurementKey] = productMeasurement.begin(
         ProductFlow.resumeRecovery,
       );
+    }
+    RestartAgentResult refused(String code, Object? detail) {
+      attempt._awaitingConfirmation = false;
+      if (resuming && code == 'AGENT_BUSY') {
+        final live = machine.agents.where((a) => a.id == agentId).firstOrNull;
+        if (live?.terminalAvailable == true &&
+            live?.sessionId == attempt.agent?.sessionId &&
+            live?.launchState != 'failed' &&
+            live?.launchState != 'starting') {
+          _agentRestarts.remove((machineId, agentId));
+          return const RestartAgentResult();
+        }
+      }
+      _measurementResumes.remove(measurementKey)?.call(ProductOutcome.failed);
+      return RestartAgentResult(error: _restartFailure(code, detail, resuming: resuming));
     }
     final unknown = RestartAgentResult(
       error: resuming
@@ -15526,6 +15681,15 @@ class AppNotifier extends ChangeNotifier {
           payload: {'creationId': attempt._id, 'agentId': agentId},
         );
       }
+    } on WsRequestFailure catch (failure) {
+      // Refusals travel as exceptions in WsConn, not successful reply maps.
+      // Treating every exception as a lost reply left a rejected resume on
+      // "Check status" forever, hiding both its cause and the retry action.
+      result = {
+        ...failure.payload,
+        'error': failure.code,
+        'detail': ?failure.detail,
+      };
     } catch (_) {
       return unknown;
     }
@@ -15551,11 +15715,7 @@ class AppNotifier extends ChangeNotifier {
           ].contains(code)) {
         return unknown;
       }
-      attempt._awaitingConfirmation = false;
-      _measurementResumes.remove(measurementKey)?.call(ProductOutcome.failed);
-      return RestartAgentResult(
-        error: _restartFailure(code, result['detail'], resuming: resuming),
-      );
+      return refused(code, result['detail']);
     }
     switch (result['state']) {
       case 'pending':
@@ -15576,15 +15736,7 @@ class AppNotifier extends ChangeNotifier {
       case 'failed':
         final failure = result['failure'];
         if (failure is! Map || failure['code'] is! String) return unknown;
-        attempt._awaitingConfirmation = false;
-        _measurementResumes.remove(measurementKey)?.call(ProductOutcome.failed);
-        return RestartAgentResult(
-          error: _restartFailure(
-            failure['code'] as String,
-            failure['detail'],
-            resuming: resuming,
-          ),
-        );
+        return refused(failure['code'] as String, failure['detail']);
       case 'created':
       case null:
         break;
@@ -15656,7 +15808,15 @@ class AppNotifier extends ChangeNotifier {
   }) => code == 'PTY_HOST_UNAVAILABLE'
       // Its detail is written for the log.
       ? 'Harness could not open a terminal on this machine. Run harness start on it, then try again.'
-      : detail is String && detail.isNotEmpty
+      : detail is String && detail.isNotEmpty &&
+          !const {
+            'IDENTITY_UNAVAILABLE',
+            'CWD_NOT_FOUND',
+            'SESSION_FOLDER_GONE',
+            'GRID_CREDENTIAL_REQUIRED',
+            'ENGINE_NOT_INSTALLED',
+            'ENGINE_UNAVAILABLE',
+          }.contains(code)
       ? detail
       : switch (code) {
           'ENGINE_LAUNCH_REFUSED' =>
@@ -15671,6 +15831,14 @@ class AppNotifier extends ChangeNotifier {
           'RESUME_UNAVAILABLE' => 'The saved conversation is unavailable. The harness can still be started fresh.',
           'RESUME_SESSION_MISMATCH' => 'The harness came back on a different conversation. The saved one is still kept.',
           'RESUME_FAILED' => 'The harness did not come back. Its output and conversation are kept.',
+          'IDENTITY_UNAVAILABLE' =>
+            'The saved conversation could not be verified. Check that its agent account and project are still available, then retry. You can also start a new harness; the saved one is kept.',
+          'CWD_NOT_FOUND' || 'SESSION_FOLDER_GONE' =>
+            'The project folder is unavailable. Restore it, then retry, or start a new harness in another folder.',
+          'GRID_CREDENTIAL_REQUIRED' =>
+            'Reconnect the model provider in Models, then retry. Your saved conversation is kept.',
+          'ENGINE_NOT_INSTALLED' || 'ENGINE_UNAVAILABLE' =>
+            'Install this agent on the computer, then retry.',
           _ =>
             resuming
                 ? 'Could not open this harness: $code'
@@ -15903,6 +16071,25 @@ class AppNotifier extends ChangeNotifier {
     ).whenComplete(() => change.pending = null);
   }
 
+  /// Keep explicit protocol refusals available to the compatibility and hold
+  /// handling below. WsConn throws them; transport failures must still throw.
+  Future<Map<String, dynamic>> _agentHandoffRequest(
+    String machineId,
+    String type, {
+    required Map<String, dynamic> payload,
+    required Duration timeout,
+  }) async {
+    try {
+      return await _conn(machineId).request(
+        type,
+        payload: payload,
+        timeout: timeout,
+      );
+    } on WsRequestFailure catch (failure) {
+      return {...failure.payload, 'error': failure.code};
+    }
+  }
+
   /// Fill [change].handoff for the new agent, or return why the switch must not go on.
   ///
   /// First choice: the machine writes a record of the whole conversation into the project and the
@@ -15919,7 +16106,8 @@ class AppNotifier extends ChangeNotifier {
   ) async {
     change.handoffHeld = true;
     try {
-      final reply = await _conn(machineId).request(
+      final reply = await _agentHandoffRequest(
+        machineId,
         'agent_handoff_prepare',
         payload: {
           'agentId': source.id,
@@ -16101,7 +16289,8 @@ class AppNotifier extends ChangeNotifier {
     }
     if (!change.replacementReported && source.dsh != 'autonomous/pair') {
       try {
-        final reported = await _conn(machineId).request(
+        final reported = await _agentHandoffRequest(
+          machineId,
           'agent_handoff_complete',
           payload: {
             'agentId': source.id,
@@ -20236,6 +20425,8 @@ class AppNotifier extends ChangeNotifier {
           _eventAgentId(machine, event, payload),
         )) {
       productMeasurement.milestone(ProductHealthMeasure.funnelFirstResponse);
+      final id = _eventAgentId(machine, event, payload);
+      if (id != null) productMeasurement.firstRunResponse(machineId, id);
     }
     if (reportedActivity == null &&
         event['replay'] != true &&
@@ -20807,6 +20998,7 @@ class AppNotifier extends ChangeNotifier {
           if (type == 'turn_started' && event['replay'] != true) {
             machine.liveTurnAgents.add(agentId);
             productMeasurement.milestone(ProductHealthMeasure.funnelFirstWork);
+            productMeasurement.firstRunWork(machineId, agentId);
             _measurementResumes
                 .remove(_turnActivityKey(machineId, agentId))
                 ?.call(ProductOutcome.ok);

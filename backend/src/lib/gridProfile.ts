@@ -120,6 +120,10 @@ export async function answerGridProfile(caller: AuthUser, token: string): Promis
 
 /** A sign-in Harness issued itself: only a computer's, answered from what was last read live. */
 async function answerHarnessSession(caller: AuthUser): Promise<GridProfileAnswer> {
+  // A Mac's team account runs teammates' agents (lib/teamSession.ts): it never speaks for the person to Grid.
+  if (caller.harnessSessionKind === 'team') {
+    return refuse(403, 'TEAM_SESSION_LIMITED', 'A team sign-in cannot be used for Grid')
+  }
   // A phone never calls Grid, and a lost phone must not become a long-lived Grid session.
   if (caller.harnessSessionKind !== 'computer') {
     return refuse(403, 'PHONE_SIGN_IN', 'A phone sign-in cannot be used for Grid; sign in on a computer')

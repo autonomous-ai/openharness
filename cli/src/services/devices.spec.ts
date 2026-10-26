@@ -627,6 +627,15 @@ describe('what the windows say, reaching the dial', () => {
       for (let i = 0; i < 6; i++) expect(await seen.host.swarmCardRecap!('st1', 'lead1')).toBeNull()
     })
 
+    it('posts words for a Lead through the service; anything but said: true sends the turn instead', async () => {
+      const answers: Array<Record<string, unknown> | 'throw'> = [{ ok: true, said: true }, { ok: true, said: false }, { error: 'NOT_FOUND' }, 'throw']
+      const superTabRequest = vi.fn(async () => { const next = answers.shift()!; if (next === 'throw') throw new Error('gone'); return next })
+      withRequest(superTabRequest)
+      expect(await seen.host.swarmSay!('h1', 'ship it')).toBe(true)
+      expect(superTabRequest).toHaveBeenCalledWith({ action: 'cardSay', harnessId: 'h1', text: 'ship it' })
+      for (let i = 0; i < 3; i++) expect(await seen.host.swarmSay!('h1', 'ship it')).toBe(false)
+    })
+
     it('answers no recap when the core has no service to ask', async () => {
       start()
       expect(await seen.host.swarmCardRecap!('st1', 'lead1')).toBeNull()

@@ -633,10 +633,11 @@ if [ "$1" = "paste-buffer" ] && [ "$TMUX_SUBMIT_FAIL" = "1" ]; then exit 2; fi
 
       // A revoked engine operation must not paste after waiting for a tmux room or buffer load.
       writeFileSync(argsFile, '')
-      expect(await sendToTmux('%7', '/model next', undefined, () => false)).toBe(false)
+      expect(await sendToTmux('%7', '/model next', undefined, () => false)).toEqual({ notPasted: 'tmux buffer was not pasted' })
       expect(readFileSync(argsFile, 'utf8')).toBe('')
       writeFileSync(argsFile, '')
-      expect(await sendToTmux('%7', '/model next', undefined, () => readFileSync(argsFile, 'utf8') === '')).toBe(false)
+      expect(await sendToTmux('%7', '/model next', undefined, () => readFileSync(argsFile, 'utf8') === ''))
+        .toEqual({ notPasted: 'tmux buffer was not pasted' })
       expect(commands()).toEqual(['load-buffer -b buffer -', 'delete-buffer -b buffer'])
 
       // Revocation while the caller awaits a final admission check must withhold Enter.
@@ -655,7 +656,7 @@ if [ "$1" = "paste-buffer" ] && [ "$TMUX_SUBMIT_FAIL" = "1" ]; then exit 2; fi
       await new Promise(resolve => setTimeout(resolve, 10))
       allowed = false
       leave()
-      expect(await queued).toBe(false)
+      expect(await queued).toEqual({ notPasted: 'tmux buffer was not pasted' })
       expect(readFileSync(argsFile, 'utf8')).toBe('')
       assumeTmuxVersion(null)
 
@@ -815,6 +816,58 @@ if [ "$1" = "load-buffer" ]; then exec sleep 30; fi
       rmSync(dir, { recursive: true, force: true })
     }
   }, 20_000)
+
+  it('recovers a timed-out buffer load without pasting a late first buffer twice', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'harness-tmux-late-buffer-'))
+    const calls = join(dir, 'calls')
+    const loaded = join(dir, 'loaded')
+    const first = join(dir, 'first')
+    writeFileSync(join(dir, 'tmux'), `#!/bin/sh
+printf '%s\\n' "$*" >> "$TMUX_LATE_CALLS"
+if [ "$1" = "load-buffer" ]; then
+  cat > /dev/null
+  if [ ! -e "$TMUX_LATE_FIRST" ]; then
+    touch "$TMUX_LATE_FIRST"
+    (sleep 6; printf '%s\\n' "$3" >> "$TMUX_LATE_LOADED") < /dev/null > /dev/null 2>&1 &
+    exec sleep 30
+  fi
+  printf '%s\\n' "$3" >> "$TMUX_LATE_LOADED"
+fi
+`, { mode: 0o700 })
+    const previous = {
+      path: process.env.PATH,
+      calls: process.env.TMUX_LATE_CALLS,
+      loaded: process.env.TMUX_LATE_LOADED,
+      first: process.env.TMUX_LATE_FIRST,
+    }
+    try {
+      process.env.PATH = `${dir}:${previous.path ?? ''}`
+      process.env.TMUX_LATE_CALLS = calls
+      process.env.TMUX_LATE_LOADED = loaded
+      process.env.TMUX_LATE_FIRST = first
+      assumeTmuxVersion({ major: 3, minor: 4 })
+      expect(await sendToTmux('%7', 'one message')).toBe(true)
+      await vi.waitFor(() => expect(readFileSync(loaded, 'utf8').trim().split('\n')).toHaveLength(2), { timeout: 3_000 })
+      const commands = readFileSync(calls, 'utf8').trim().split('\n')
+      const loads = commands.filter((line) => line.startsWith('load-buffer '))
+      const pastes = commands.filter((line) => line.startsWith('paste-buffer '))
+      expect(loads).toHaveLength(2)
+      expect(pastes).toHaveLength(1)
+      expect(pastes[0]).toContain(loads[1].split(' ')[2])
+      expect(pastes[0]).not.toContain(loads[0].split(' ')[2])
+      expect(commands.filter((line) => line === 'send-keys -t %7 Enter')).toHaveLength(1)
+    } finally {
+      resetTmuxVersionCache()
+      for (const [key, value] of Object.entries({
+        PATH: previous.path, TMUX_LATE_CALLS: previous.calls,
+        TMUX_LATE_LOADED: previous.loaded, TMUX_LATE_FIRST: previous.first,
+      })) {
+        if (value === undefined) delete process.env[key]
+        else process.env[key] = value
+      }
+      rmSync(dir, { recursive: true, force: true })
+    }
+  }, 15_000)
 })
 
 describe('cleanPaneTitle', () => {

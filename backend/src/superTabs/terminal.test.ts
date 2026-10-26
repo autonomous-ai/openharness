@@ -66,6 +66,22 @@ describe('reading and typing in an agent terminal', () => {
       source: { kind: 'terminal-input', agentId: s.worker, requestId: effects.result.requestId } })])
   })
 
+  it('types a credential as given but never shows it in the group\'s row, even where the row is cut', () => {
+    const s = swarm()
+    s.run({ type: 'work.assign', conversationId: s.group, agentId: s.worker })
+    // Assembled at run time from obviously fake parts.
+    const token = ['ghp', 'Fixture0Token1Not2Real3Value4abcdefgh'].join('_')
+    const text = `${'x'.repeat(150)} gh auth login --with-token ${token} and more words after it`
+    const effects = s.run({ type: 'agent.input', agentId: s.worker, text, keys: ['Enter'] }, as(s.lead))
+    expect(effects.terminal).toMatchObject({ op: 'request', kind: 'input', text })
+    expect(effects.messages).toHaveLength(1)
+    expect(effects.messages[0]!.text).not.toContain(token.slice(0, 12))
+    // Cut at 200 first, the row would have kept the token's first 21 characters.
+    const shown = `${'x'.repeat(150)} gh auth login --with-token [credential removed] and more words after it`.slice(0, 199)
+    expect(effects.messages[0]!.text).toBe(`${name(s, s.lead)} typed \`${shown}…\` + Enter in ${name(s, s.worker)}'s terminal`)
+    expect(effects.result.credentialNotice).toBe('Removed a credential (GitHub token) before saving. Revoke or rotate it.')
+  })
+
   it('logs input to the Lead in the project\'s Lead conversation', () => {
     const s = swarm()
     expect(s.run({ type: 'agent.input', agentId: s.lead, keys: ['Esc', '2'] }).messages[0])
@@ -161,6 +177,17 @@ describe('terminal alerts', () => {
     const lead = s.run({ type: 'agent.alert', agentId: s.lead, alert: 'limit', active: true }, as(s.lead))
     expect(s.state.agents.find(a => a.id === s.lead)!.limitedUntil).toBe(new Date(1_000_000 + 3_600_000).toISOString())
     expect(lead.messages[0]).toMatchObject({ conversationId: 'lead', recipients: [] })
+  })
+
+  it('tells the Lead when an agent cannot get answers from its model, once per episode', () => {
+    const s = swarm()
+    const on = () => s.run({ type: 'agent.alert', agentId: s.worker, alert: 'model', active: true }, as(s.worker)).messages
+    expect(on()[0]).toMatchObject({ recipients: [s.lead], source: { kind: 'terminal-alert', agentId: s.worker, alert: 'model' },
+      text: `${name(s, s.worker)} can't get answers from its model: its requests keep failing. Stop it, or give the work to another model.` })
+    expect(on()).toEqual([])
+    expect(s.state.agents.find(a => a.id === s.worker)!.limitedUntil).toBeUndefined()
+    s.run({ type: 'agent.alert', agentId: s.worker, alert: 'model', active: false }, as(s.worker))
+    expect(on()).toHaveLength(1)
   })
 
   it('takes alerts only from the agent\'s own host', () => {

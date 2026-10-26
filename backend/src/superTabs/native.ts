@@ -2,10 +2,12 @@ import { createHash } from 'node:crypto'
 import type { Prisma, SuperTab, SuperTabNativeContext } from '@prisma/client'
 import { z } from 'zod'
 import type { AuthUser } from '../lib/ssoAuth.js'
-import { activeWork, agent, author, conversation, fail, isLeads, stableId, SuperTabError,
+import { isTeamSession, TEAM_SESSION_LIMITED, TEAM_SESSION_MESSAGE } from '../lib/teamSession.js'
+import { activeWork, agent, appendPullRequestUrls, author, conversation, fail, isLeads, stableId, SuperTabError,
   type Actor, type Agent, type Author, type Conversation, type SuperTabState } from './model.js'
 import { canReadProject, groupProject, readConversation } from './projects.js'
 import { noteProjectReports } from './projectUpdates.js'
+import { redactCredentials } from './credentials.js'
 
 const id = z.string().min(1).max(160).regex(/^[A-Za-z0-9_-]+$/)
 export const openNativeSchema = z.object({ operationId: id, conversationId: id, agentId: id }).strict()
@@ -27,6 +29,8 @@ interface Deps {
   row(tx: Transaction, user: AuthUser, tabId: string): Promise<{ row: SuperTab; state: SuperTabState }>
   agentGrant(tx: Transaction, state: SuperTabState, target: Agent): Promise<void>
   contribution(tx: Transaction, state: SuperTabState, actor: Actor, command: { machineId: string }): Promise<Grant>
+  /** The one machine a team session (lib/teamSession.ts) hosts for; null for any other sign-in. */
+  teamHost(tx: Transaction, user: AuthUser): Promise<string | null>
 }
 const json = (value: unknown): Prisma.InputJsonValue => JSON.parse(JSON.stringify(value)) as Prisma.InputJsonValue
 const digest = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex')
@@ -74,6 +78,8 @@ export class SuperTabNativeStore {
   }
 
   async open(user: AuthUser, tabId: string, input: z.infer<typeof openNativeSchema>) {
+    // A person opens a terminal; a team session has no person to open one as.
+    if (isTeamSession(user)) fail(TEAM_SESSION_LIMITED, TEAM_SESSION_MESSAGE, 403)
     const request = openNativeSchema.parse(input)
     return this.deps.transaction(async tx => {
       const { state } = await this.deps.row(tx, user, tabId)
@@ -107,8 +113,11 @@ export class SuperTabNativeStore {
       ?? fail('NOT_FOUND', 'This terminal context is unavailable.', 404)
     const binding = record.binding as unknown as Binding
     if (binding.machineOwnerId !== user.sub) fail('FORBIDDEN', 'Only the execution host can record this terminal.', 403)
+    // A team session records only the terminals of its own machine's agents.
+    const team = await this.deps.teamHost(tx, user)
+    if (team !== null && binding.machineId !== team) fail(TEAM_SESSION_LIMITED, TEAM_SESSION_MESSAGE, 403)
     const verified = await this.validate(tx, state, record)
-    return { ...verified, row, state, record }
+    return { ...verified, row, state, record, team: team !== null }
   }
 
   async read(user: AuthUser, tabId: string, contextId: string) {
@@ -170,7 +179,7 @@ export class SuperTabNativeStore {
   async append(user: AuthUser, tabId: string, contextId: string, input: NativeEvent) {
     const event = nativeEventSchema.parse(input)
     return this.deps.transaction(async tx => {
-      const { row, state, record, binding, target, group } = await this.hosted(tx, user, tabId, contextId)
+      const { row, state, record, binding, target, group, team } = await this.hosted(tx, user, tabId, contextId)
       const eventId = stableId('native-event', contextId, event.turnId, event.kind), requestHash = digest(event)
       const prior = await tx.superTabOperation.findUnique({ where: { id: eventId } })
       if (prior) {
@@ -186,8 +195,11 @@ export class SuperTabNativeStore {
       const recovery = await this.recovery(tx, tabId, group, target, record, event, eventId, revision)
       group.lastMessageSequence = revision
       const observedBy = author(state, { kind: 'agent', agentId: target.id, machineOwnerId: user.sub }, true)
+      // What a person typed in the terminal, or the agent answered, is recorded without any credential in it.
       const text = recovery?.source.required ? recovery.text : event.kind === 'gap'
-        ? 'Some terminal activity could not be recorded. Check the native session for the full conversation.' : event.text
+        ? 'Some terminal activity could not be recorded. Check the native session for the full conversation.' : redactCredentials(event.text).text
+      // Leave a legacy group's list absent so the next read can recover its older links too.
+      if (group.pullRequestUrls !== undefined) appendPullRequestUrls(group, [text])
       // Inform the coordinating lead without replaying this input into the agent
       // that already received it. Its resulting programmatic turn is not native input.
       const recipients = (event.kind !== 'gap' || recovery?.source.required) && group.leadId && group.leadId !== target.id ? [group.leadId] : []
@@ -200,8 +212,12 @@ export class SuperTabNativeStore {
         await tx.superTabDelivery.create({ data: { id: stableId(eventId, recipient), tabId, conversationId: group.id,
           messageId: eventId, nativeContextId: contextId, agentId: recipient, machineId: lead.machineId, machineOwnerId: lead.machineOwnerId,
           assignmentId: activeWork(group) && group.assignment?.agentId === recipient ? group.assignment.id : null,
-          membershipGeneration: lead.membershipGeneration, authorKind: 'person', authorId: binding.operator.id,
-          authorGeneration: binding.operator.membershipGeneration } })
+          membershipGeneration: lead.membershipGeneration,
+          // What a team host (lib/teamSession.ts) reports is the agent's word, never the person's: it reaches the Lead as
+          // from the agent, so a team account cannot put words in the mouth of the person who opened the terminal.
+          ...(team
+            ? { authorKind: 'agent', authorId: target.id, authorGeneration: target.membershipGeneration }
+            : { authorKind: 'person', authorId: binding.operator.id, authorGeneration: binding.operator.membershipGeneration }) } })
       }
       noteProjectReports(state, [{ id: eventId, conversationId: group.id, author: observedBy, text,
         replyTo: null, recipients }], revision, Date.now())

@@ -13,6 +13,49 @@ import 'package:harness/widgets/session_close_dialog.dart';
 import 'box_render_preview_test.dart' show loadPreviewFonts;
 
 void main() {
+  testWidgets(
+    'a protected Product Manager is explained and cannot be stopped',
+    (tester) async {
+      String? choice;
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: Builder(
+              builder: (context) => TextButton(
+                onPressed: () async => choice = await showSessionCloseDialog(
+                  context,
+                  [
+                    const SessionCloseItem(
+                      name: 'Quinn',
+                      activity: 'working',
+                      protectionReason: 'Quinn is the Product Manager of project Pilot. Delete the project first.',
+                    ),
+                  ],
+                ),
+                child: const Text('Open'),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.tap(find.text('Open'));
+      await tester.pumpAndSettle();
+      expect(
+        find.textContaining('Product Manager of project Pilot'),
+        findsOneWidget,
+      );
+      expect(
+        tester
+            .widget<FilledButton>(find.byKey(const Key('session-close-now')))
+            .onPressed,
+        isNull,
+      );
+      await tester.tap(find.byKey(const Key('session-close-view')));
+      await tester.pumpAndSettle();
+      expect(choice, 'close_view');
+    },
+  );
+
   final renderDir = kIsWeb
       ? null
       : Platform.environment['SESSION_CLOSE_RENDER_DIR'];

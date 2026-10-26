@@ -50,6 +50,7 @@ function setup(physical = false) {
   const registry = {
     byAgent: (id: string) => id === session?.agentId ? session : undefined,
     advertised: () => session ? [session] : [], list: () => session ? [session] : [],
+    afterTransaction: async <T>(action: () => T): Promise<T> => action(),
     setClosePlan: vi.fn((_id: string, plan: RegisteredSession['closePlan'] | null) => { session!.closePlan = plan ?? undefined; return session }),
   } as unknown as ClosingDeps['registry']
   const stopped = vi.fn()

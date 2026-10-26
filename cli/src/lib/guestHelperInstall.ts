@@ -169,7 +169,9 @@ export async function installGuestHelper(options: GuestHelperInstallOptions = {}
       }
     }
     if (result.code !== 0) {
-      const said = result.stderr.trim().split('\n').pop()?.replace(/^.*harness: /, '') ?? ''
+      // osascript's `do shell script` ends the script's stderr lines with CR, not LF: split on both, or a reason after an
+      // earlier line is never found, and the CR left in it makes a terminal print the line over itself.
+      const said = result.stderr.trim().split(/[\r\n]+/).pop()?.replace(/^.*harness: /, '') ?? ''
       return { ok: false, code: 'FAILED', message: said || 'Sharing could not be set up on this computer.' }
     }
     return { ok: true }

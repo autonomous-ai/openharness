@@ -84,8 +84,8 @@ it('drops names this contract does not know yet, says so once, and refuses every
   ]) expect(appProductUsageReport(refused), JSON.stringify(refused)).toBeUndefined()
 })
 
-it('announces vocabulary 4, the revision whose frame-phase and Add Phone names a Desktop waits for', () => {
-  expect(APP_USAGE_VOCABULARY).toBe(4)
+it('announces vocabulary 5 including first-arrival, invite and existing Add Phone names', () => {
+  expect(APP_USAGE_VOCABULARY).toBe(5)
   for (const measure of ['frame_slow_wait', 'frame_slow_build', 'frame_slow_raster', 'frame_long_collector']) {
     expect(appProductUsageReport({ ...native, counters: { [`health_desktop_${measure}`]: 1 } })).toBeDefined()
   }

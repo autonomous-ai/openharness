@@ -169,6 +169,52 @@ void main() {
       .message!;
 
   testWidgets(
+    'an agent whose screen showed a usage limit reads "Limited until" its reset, in local time, until it passes',
+    (tester) async {
+      final f = await fixture(tester);
+      final agents = f.server.state['agents'] as List;
+      // Working on a task, so its status would otherwise say so.
+      (f.server.state['conversations'] as List)[1]['assignment'] = {
+        'agentId': 'agent-1',
+        'status': 'working',
+      };
+      agents[1]['limitedUntil'] = DateTime(
+        2099,
+        1,
+        2,
+        9,
+        5,
+      ).toUtc().toIso8601String();
+      await f.controller.refresh();
+      await f.show(tester);
+      expect(f.inRow(1, find.text('Limited until 09:05')), findsOneWidget);
+      expect(rowTooltip(tester, f, 1), contains('Limited until 09:05'));
+      await captureBoundary(
+        tester,
+        f.boundary.currentContext!.findRenderObject()! as RenderRepaintBoundary,
+        captureDir,
+        'roster-limited',
+      );
+      // A reset already past, or none, is no limit.
+      for (final until in [DateTime(2000).toUtc().toIso8601String(), null]) {
+        if (until == null) {
+          (agents[1] as Map).remove('limitedUntil');
+        } else {
+          agents[1]['limitedUntil'] = until;
+        }
+        await f.controller.refresh();
+        await tester.pumpAndSettle();
+        expect(find.textContaining('Limited until'), findsNothing);
+        expect(
+          f.inRow(1, find.text('Assigned to "Offline editing"')),
+          findsOneWidget,
+        );
+      }
+      await f.close(tester);
+    },
+  );
+
+  testWidgets(
     'agent tooltip combines known model, machine, task and activity',
     (tester) async {
       final f = await fixture(tester);
@@ -548,7 +594,8 @@ void main() {
           of: find.byType(AlertDialog),
           matching: find.text('owner'),
         ),
-        findsOneWidget,
+        // The Owner row and Who can answer both name the machine owner.
+        findsNWidgets(2),
       );
       await tester.tap(find.widgetWithText(TextButton, 'Close'));
       await tester.pumpAndSettle();
@@ -561,28 +608,76 @@ void main() {
     },
   );
 
-  testWidgets(
-    'a replaced member keeps its identity and shows its new engine',
-    (tester) async {
-      final f = await fixture(tester);
+  group('agent details Owner', () {
+    Future<void> openDetails(WidgetTester tester, RosterFixture f) async {
       await f.show(tester);
-      final agents = f.server.state['agents'] as List;
-      agents[0]['harnessId'] = 'replacement';
-      agents[0]['configuration'] = {'engine': 'claude', 'model': 'sonnet'};
+      await tester.tap(f.row(1));
+      await tester.pumpAndSettle();
+    }
+
+    Finder inDialog(String text) => find.descendant(
+      of: find.byType(AlertDialog),
+      matching: find.text(text),
+    );
+
+    testWidgets('names a teammate who owns the machine, under Machine', (
+      tester,
+    ) async {
+      final f = await fixture(tester, account: 'ann');
+      (f.server.state['agents'] as List)[1]['machineOwnerId'] = 'ann';
       await f.controller.refresh();
-      await tester.pumpAndSettle();
-      expect(f.controller.snapshot!.agents.first.id, 'agent-0');
-      expect(f.controller.snapshot!.agents.first.harnessId, 'replacement');
-      expect(f.controller.snapshot!.agents.first.engine, 'claude');
-      await tester.tap(f.row(0));
-      await tester.pumpAndSettle();
-      expect(find.text('Claude'), findsOneWidget);
-      expect(find.text('sonnet'), findsOneWidget);
-      await tester.tap(find.widgetWithText(TextButton, 'Close'));
-      await tester.pumpAndSettle();
+      await openDetails(tester, f);
+      expect(inDialog('Owner'), findsOneWidget);
+      expect(inDialog('ann'), findsOneWidget);
+      expect(
+        tester.getTopLeft(inDialog('Owner')).dy,
+        greaterThan(tester.getTopLeft(inDialog('Machine')).dy),
+      );
       await f.close(tester);
-    },
-  );
+    });
+
+    testWidgets('names the current user the same way', (tester) async {
+      final f = await fixture(tester);
+      (f.server.state['agents'] as List)[1]['machineOwnerId'] = 'owner';
+      await f.controller.refresh();
+      await openDetails(tester, f);
+      expect(inDialog('Owner'), findsOneWidget);
+      expect(inDialog('owner'), findsOneWidget);
+      await f.close(tester);
+    });
+
+    testWidgets('hides the row when the owner is unknown', (tester) async {
+      final f = await fixture(tester);
+      (f.server.state['agents'] as List)[1]['machineOwnerId'] = 'ghost';
+      await f.controller.refresh();
+      await openDetails(tester, f);
+      expect(inDialog('Machine'), findsOneWidget);
+      expect(inDialog('Owner'), findsNothing);
+      await f.close(tester);
+    });
+  });
+
+  testWidgets('a replaced member keeps its identity and shows its new engine', (
+    tester,
+  ) async {
+    final f = await fixture(tester);
+    await f.show(tester);
+    final agents = f.server.state['agents'] as List;
+    agents[0]['harnessId'] = 'replacement';
+    agents[0]['configuration'] = {'engine': 'claude', 'model': 'sonnet'};
+    await f.controller.refresh();
+    await tester.pumpAndSettle();
+    expect(f.controller.snapshot!.agents.first.id, 'agent-0');
+    expect(f.controller.snapshot!.agents.first.harnessId, 'replacement');
+    expect(f.controller.snapshot!.agents.first.engine, 'claude');
+    await tester.tap(f.row(0));
+    await tester.pumpAndSettle();
+    expect(find.text('Claude'), findsOneWidget);
+    expect(find.text('sonnet'), findsOneWidget);
+    await tester.tap(find.widgetWithText(TextButton, 'Close'));
+    await tester.pumpAndSettle();
+    await f.close(tester);
+  });
 
   testWidgets(
     'owner confirms Remove from Swarm without stopping the native session',
@@ -628,6 +723,29 @@ void main() {
     await tester.pumpAndSettle();
     expect(f.server.posts, isEmpty);
     expect(find.byType(AlertDialog), findsNothing);
+    await f.close(tester);
+  });
+
+  testWidgets('project Product Manager cannot be removed from the roster', (
+    tester,
+  ) async {
+    final f = await fixture(tester);
+    await f.show(tester);
+    await tester.tap(f.row(0), buttons: kSecondaryMouseButton);
+    await tester.pumpAndSettle();
+    final remove = find.widgetWithText(
+      PopupMenuItem<String>,
+      'Remove from Swarm',
+    );
+    expect(remove, findsOneWidget);
+    expect(tester.widget<PopupMenuItem<String>>(remove).enabled, isFalse);
+    expect(
+      find.text(
+        'Atlas is the Product Manager of project openharness. Delete the project first.',
+      ),
+      findsOneWidget,
+    );
+    expect(f.server.posts, isEmpty);
     await f.close(tester);
   });
 
@@ -752,6 +870,46 @@ void main() {
     expect(f.inRow(1, find.text('Dev')), findsNothing);
     expect(f.inRow(3, find.text('Dev')), findsOneWidget);
     expect(f.inRow(0, find.text('PM')), findsOneWidget);
+    await f.close(tester);
+  });
+
+  testWidgets('custom role name appears in the roster and agent details', (
+    tester,
+  ) async {
+    final f = await fixture(tester);
+    final project = (f.server.state['projects'] as List).first as Map;
+    project['skillSet'] = 'custom';
+    project['roles'] = [
+      {
+        'id': 'lead',
+        'name': 'Product Manager',
+        'kind': 'lead',
+        'version': 'v1',
+      },
+      {
+        'id': 'research',
+        'name': 'Research Engineer',
+        'kind': 'builder',
+        'version': 'v1',
+      },
+    ];
+    (f.server.state['agents'] as List)[1]['roleId'] = 'research';
+    await f.controller.refresh();
+    await f.show(tester);
+    expect(f.inRow(1, find.text('Research Engineer')), findsOneWidget);
+    expect(f.inRow(1, find.text('Dev')), findsNothing);
+    final details = showSuperTabAgentDetails(
+      tester.element(f.row(1)),
+      f.controller,
+      f.app,
+      f.controller.snapshot!.agent('agent-1')!,
+      (_) {},
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('Research Engineer'), findsWidgets);
+    await tester.tap(find.widgetWithText(TextButton, 'Close'));
+    await tester.pumpAndSettle();
+    await details;
     await f.close(tester);
   });
 

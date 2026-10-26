@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -6,7 +6,7 @@ import { emptyPorts } from '../core/api.js'
 import type { AgentCloseResult } from '../lib/closeAgentService.js'
 import type { RegisteredSession } from '../lib/registry.js'
 import { fakeCore } from '../testing/fakeCore.js'
-import { retainContributions } from '../superTabs/retention.js'
+import { RETENTION_LAPSE_MS, retainContributions, retentionFile } from '../superTabs/retention.js'
 import { ASK_AGAIN_MS, CASCADE_RETRY_MS, CASCADE_TRIES, createAgentCleanup, IDLE_CLOSE_MS, JOINED_MAX, joinedPath, LOOK_EVERY_MS, startAgentCleanup, type AgentCleanupDeps } from './agentCleanup.js'
 
 const NOW = Date.parse('2026-10-12T12:00:00Z')
@@ -73,6 +73,24 @@ it('keeps idle Super Tab members through host restarts and starter closure, unti
   await restarted.cleanup.look()
   expect(restarted.closeStarted.mock.calls).toEqual([['member', 'idle']])
   restarted.cleanup.port.stop()
+})
+
+// The owner, 2026-10-23: the Lead of an active project is never stopped in any case, nor when no roster has confirmed it
+// for a week (a machine signed out), which lapses every other member to cleanup.
+it('never closes a Swarm Lead, idle or orphaned, even once its roster has lapsed', async () => {
+  const sessions = [kid('pm'), kid('member')]
+  const t = setup(sessions, { pm: 2 * IDLE_CLOSE_MS, member: 2 * IDLE_CLOSE_MS })
+  retainContributions(dir, 'machine-1', [{ tabId: 'tab', lead: true, agent: { harnessId: 'pm', machineId: 'machine-1' } },
+    { tabId: 'tab', agent: { harnessId: 'member', machineId: 'machine-1' } }])
+  const lapsed = new Date(Date.now() - RETENTION_LAPSE_MS - MIN)
+  utimesSync(retentionFile(dir), lapsed, lapsed)
+  await t.cleanup.look()
+  t.advance(IDLE_CLOSE_MS)
+  await t.cleanup.look()
+  await t.cleanup.closeStartedBy('lead')
+  expect(t.closeStarted.mock.calls).toEqual([['member', 'idle']])
+  expect(sessions.map(s => s.agentId)).toEqual(['pm'])
+  t.cleanup.port.stop()
 })
 
 it('rechecks retention after waiting on activity or another orphan close', async () => {

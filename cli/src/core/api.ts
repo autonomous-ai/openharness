@@ -207,6 +207,14 @@ export interface CoreApi {
     closeStarted?(agentId: string, mode: 'idle' | 'now'): Promise<AgentCloseResult>
     /** Close only the recorded native identity started for a Swarm. Missing live sessions are already gone. */
     closeSwarm?(request: { agentId: string; creationId?: string; sessionId?: string; createdAt?: string; expiresAt?: number }): Promise<AgentCloseResult>
+    /** Reopen a Swarm Lead whose session is gone, on its own conversation, as a resume does: nothing is typed into it
+     *  (superTabs/host.ts keeps Leads alive). Only an agent stopped here that this machine's Super Tab host keeps as the
+     *  Lead of an active project (superTabs/retention.ts); a live one is answered ok. */
+    keepLeadAlive?(agentId: string): Promise<{ ok: true } | { ok: false; error: string; detail?: string }>
+    /** Close, now and keeping its conversation, a Super Tab member whose session the backend ends (its project deleted,
+     *  the agent removed). Only a harness this machine's Super Tab host retains as a member, or one whose exact native
+     *  creation receipt [creationId] (the Swarm's start) names it; a gone one is closed. */
+    closeMember?(agentId: string, creationId?: string): Promise<AgentCloseResult>
     /** When a live agent's conversation last moved, epoch ms: the latest dated work in its transcript
      *  (lib/transcriptActivity.ts), what the apps' `updatedAt` is when there is one. Null for none live, and for an
      *  engine that keeps no dated transcript: a hook's time or the bind's is not when it last answered. Absent where
@@ -714,7 +722,7 @@ export const OS_DEVICE_REQUESTS = ['os_device'] as const
 export const MODELS_REQUESTS = [
   'grid_models_list', 'models_list',
   'grid_fleet_models_list', 'grid_fleet_model_download', 'grid_fleet_model_start', 'grid_fleet_model_stop',
-  'grid_fleet_run', 'grid_fleet_cancel',
+  'grid_fleet_run', 'grid_fleet_cancel', 'grid_swarm_sync', 'grid_swarm_api_share', 'grid_swarm_api_shares', 'grid_swarm_offer', 'grid_swarm_offers', 'grid_swarm_heal',
   'api_connections', 'codex_profiles_list', 'codex_profile_link',
 ] as const
 
@@ -1800,6 +1808,11 @@ export interface CoreApiDeps {
   closeAgent?: (request: AgentCloseRequest) => Promise<AgentCloseResult>
   /** When an agent's conversation last moved (lib/transcriptActivity.ts), for `lastActivity`. */
   activityAt?: (session: RegisteredSession) => Promise<number | null>
+  /** A resume of a stopped agent (core/agents/lifecycle.ts `resumeAgent`), for `keepLeadAlive`. */
+  resumeAgent?: (agentId: string) => Promise<{ ok: true } | { ok: false; error: string; detail?: string }>
+  /** The Swarm Leads and members this machine's Super Tab host keeps (superTabs/retention.ts), for `keepLeadAlive` and
+   *  `closeMember`; absent, neither does anything. */
+  swarmMembers?: { leads(): Set<string>; harnesses(): Set<string> }
   signedIn: CoreApi['account']['signedIn']
   environment: CoreApi['account']['environment']
   machines: CoreApi['account']['machines']
@@ -1832,7 +1845,7 @@ export function createCoreApi({
   dataDir, registry, stoppedAgents, databaseHistory, syncSession, runtimeModels, viewerChanged,
   gridNamed, gridModelsChanged, dshInstallStatus, mintGridName, accessToken, lane, observerKey, tabKey, tabRelay, connectorVault, observer, privateGridName, machineName, backend, onNotice,
   runtimeProfile, setRuntime, fork, create, creationStatus, dsh, windows, daemon, turns, questions, terminals = TERMINALS_OFF, conversations = CONVERSATIONS_OFF, viewerFrame, machine, activityText, activitySnapshot, activity, summaries,
-  closeAgent, activityAt,
+  closeAgent, activityAt, resumeAgent, swarmMembers,
   signedIn, environment, machines, sendLocal, sendToWindow, hasWindow, devicesChanged, dialWatching, wifi, cloud, superTabs, superTabRequest, cloudRows, lastTurn, nativeTurns, turnCard, turnSummary,
   log = (line) => console.warn(line),
 }: CoreApiDeps): CoreApi {
@@ -1877,16 +1890,41 @@ export function createCoreApi({
         const session = registry.byAgent(request.agentId)
         // This is the authoritative live registry, not a service's possibly old snapshot or a failed read.
         if (!session) return { closed: true }
-        if (session.startedBy !== 'agent' || session.resumeOnly || !request.creationId || typeof request.sessionId !== 'string' || !request.createdAt) return { error: 'NOT_SWARM_STARTED' }
+        // A reopen (resume-only) of the same conversation is still the Swarm's session: the identity below proves it.
+        if (session.startedBy !== 'agent' || !request.creationId || typeof request.sessionId !== 'string' || !request.createdAt) return { error: 'NOT_SWARM_STARTED' }
         if (session.sessionId !== request.sessionId || session.registeredAt !== Date.parse(request.createdAt)) return { error: 'AGENT_CHANGED' }
         if (!Number.isFinite(request.expiresAt) || request.expiresAt! <= Date.now()) return { error: 'STOP_LEASE_EXPIRED' }
         const creation = await creationStatus?.(request.creationId)
         if (creation?.state !== 'created' || creation.agentId !== request.agentId) return { error: 'NOT_SWARM_STARTED' }
         if (request.expiresAt! <= Date.now()) return { error: 'STOP_LEASE_EXPIRED' }
         const latest = registry.byAgent(request.agentId)
-        if (!latest || latest.startedBy !== 'agent' || latest.resumeOnly || latest.sessionId !== request.sessionId
+        if (!latest || latest.startedBy !== 'agent' || latest.sessionId !== request.sessionId
           || latest.registeredAt !== Date.parse(request.createdAt)) return { error: 'AGENT_CHANGED' }
         return closeAgent ? closeAgent({ agentId: request.agentId, sessionId: request.sessionId, createdAt: request.createdAt, mode: 'now', onlyIfOriginalLaunch: true, expiresAt: request.expiresAt }) : { error: 'UNSUPPORTED' }
+      },
+      keepLeadAlive: async agentId => {
+        if (!resumeAgent || !swarmMembers) return { ok: false, error: 'UNSUPPORTED' }
+        if (registry.byAgent(agentId)) return { ok: true }
+        if (!swarmMembers.leads().has(agentId) || !stoppedAgents.ids().includes(agentId)) {
+          return { ok: false, error: 'NOT_A_LEAD', detail: 'Only a stopped Product Manager of a Swarm project is reopened.' }
+        }
+        const reply = await resumeAgent(agentId)
+        return reply.ok ? { ok: true } : { ok: false, error: reply.error, ...(reply.detail ? { detail: reply.detail } : {}) }
+      },
+      closeMember: async (agentId, creationId) => {
+        if (!closeAgent || !swarmMembers) return { error: 'UNSUPPORTED' }
+        const session = registry.byAgent(agentId)
+        if (!session) return { closed: true }
+        let member = false
+        try { member = swarmMembers.harnesses().has(agentId) } catch { /* An unreadable retention names no member. */ }
+        // An agent removed before its host wrote a roster naming it: the Swarm's own start receipt proves it (the review of #1635).
+        if (!member && creationId) {
+          const creation = await creationStatus?.(creationId)
+          member = creation?.state === 'created' && creation.agentId === agentId
+        }
+        if (!member) return { error: 'NOT_A_MEMBER' }
+        // The close itself refuses a session that changed during the receipt read.
+        return closeAgent({ agentId, sessionId: session.sessionId, createdAt: new Date(session.registeredAt).toISOString(), mode: 'now' })
       },
       closeStarted: async (agentId, mode) => {
         const session = registry.byAgent(agentId)

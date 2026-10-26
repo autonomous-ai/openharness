@@ -238,7 +238,12 @@ The native desktop target uses the CLI for cloud access and SSO tokens:
   opens normally. A server-rejected session requires sign-in again; saved local work
   and running harnesses survive behind the page. A temporary network outage keeps
   an already signed-in workspace available.
-  Agent downloads still run during setup; first-arrival agents wait for an account.
+  Agent downloads still run during setup; first arrival waits for an account and opens one
+  recent usable conversation, or one configured agent with an editable, unsent starter task.
+  A person with no configured agent gets OpenCode alone. Failed opening offers explicit recovery;
+  it never starts again in a later empty tab. An uncertain start keeps its receipt and checks status.
+  The first-run draft also uses the local pane's composer; it is never sent into an installing
+  agent's terminal automatically. Other agents and tabs remain available through the usual controls.
   The page does not change while the browser is open: the same option reopens its page,
   and another option cancels and switches. Failures and cancellation keep the required
   page visible. The workspace account menu is `widgets/account_menu.dart`

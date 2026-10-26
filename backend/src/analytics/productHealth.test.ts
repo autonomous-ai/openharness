@@ -87,3 +87,12 @@ it('suppresses sparse labels, distinguishes missing from zero, and matures first
   expect(data.daily[0].requestReconciliation[0]).toMatchObject({ starts: 4, outcomes: 2, difference: 2 })
   expect(data.daily[1].firstWorkRetention[0].denominator).toBeNull()
 })
+
+it('reports first-run activation only against its own observed episode denominator', () => {
+  const row = (metric: string, value: number) => ({ dayUtc: new Date('2026-10-20'), metric: `health_desktop_${metric}`, value })
+  const report = dailyProductHealth([row('first_run_started', 10), row('first_run_ready', 9),
+    row('first_run_work', 8), row('first_run_response', 7), row('first_run_response_under_1m', 6)], new Date('2026-10-21'))
+  expect(report.daily[0].firstRun).toMatchObject({ started: 10, ready: 9, work: 8, response: 7, responsePercent: 70, mature: false })
+  expect(dailyProductHealth([row('collector_days', 5)], new Date('2026-10-23')).daily[0].firstRun.responsePercent).toBeNull()
+  expect(dailyProductHealth([row('first_run_started', 1), row('first_run_response', 2)], new Date('2026-10-23')).daily[0].firstRun.responsePercent).toBeNull()
+})

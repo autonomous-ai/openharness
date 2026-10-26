@@ -1,7 +1,7 @@
 import { stripVTControlCharacters } from 'node:util'
 import type { AgentEngine } from '../types.js'
 import type { ComposerState, MessageHold, PaneInspection, PaneModal, PaneView, ScreenReading } from '../facets/screen.js'
-import { inspectPane } from './pane.js'
+import { claudeWindowsComposer, inspectPane } from './pane.js'
 import { isApprovalDialog, parseQuestionPane } from './questionPane.js'
 const HOLDS: Record<NonNullable<PaneModal>, MessageHold> = {
   rewind: 'rewind_picker_open', transcript: 'transcript_open', search: 'search_open', trust: 'trust_open',
@@ -25,7 +25,7 @@ export function teamHold(engine: AgentEngine, capture: string, pane: PaneInspect
   // These composers permit an empty first line followed by a multiline human draft.
   // The general profile inspector only needs the first line; team delivery needs every line.
   if (['claude', 'codex', 'cursor', 'hermes'].includes(engine)) {
-    const index = lines.findLastIndex(line => /^\s*[›❯→]/u.test(line))
+    const index = Math.max(lines.findLastIndex(line => /^\s*[›❯→]/u.test(line)), engine === 'claude' ? claudeWindowsComposer(lines) : -1)
     if (index < 0) return 'team_waiting_idle'
     // Codex shows its styled placeholder only when the whole composer is empty.
     // Its configurable model/cwd/task footer below that placeholder is not draft

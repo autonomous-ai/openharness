@@ -291,6 +291,19 @@ describe('agent_create, refused before any pane exists', () => {
     expect(vi.mocked(create!).mock.calls).toHaveLength(calls)
   })
 
+  it('passes the GitHub App flag with a Swarm role only, and refuses anything else before dispatch', async () => {
+    const { ask, create } = setup()
+    await ask({ engine: 'codex', cwd: '/w', swarmRole: 'dev', swarmGitHub: true })
+    expect(vi.mocked(create!).mock.calls.at(-1)![0]).toMatchObject({ swarmRole: 'dev', swarmGitHub: true })
+    await ask({ engine: 'codex', cwd: '/w', swarmRole: 'dev' })
+    expect(vi.mocked(create!).mock.calls.at(-1)![0]).not.toHaveProperty('swarmGitHub')
+    const calls = vi.mocked(create!).mock.calls.length
+    for (const payload of [{ swarmRole: 'dev', swarmGitHub: false }, { swarmRole: 'dev', swarmGitHub: 'yes' }, { swarmGitHub: true }]) {
+      expect(await ask({ engine: 'claude', cwd: '/w', ...payload })).toMatchObject({ error: 'INVALID_SWARM_ROLE' })
+    }
+    expect(vi.mocked(create!).mock.calls).toHaveLength(calls)
+  })
+
   it('a first prompt that is not text, too long, or for an engine that cannot take one', async () => {
     const { ask, create } = setup()
     expect(await ask({ engine: 'claude', cwd: '/w', prompt: 7 })).toStrictEqual({ error: 'INVALID_PROMPT', detail: 'prompt must be a string' })
@@ -592,6 +605,20 @@ describe('agent_create with a receipt', () => {
     expect(vi.mocked(create!).mock.calls[0][0]).toMatchObject({ cwd: '/projects/prepared', scmLaunchRecord: { kind: 'git' } })
   })
 
+  it('fetches nothing with this machine\'s login for another person\'s Swarm worktree: its host already fetched with the app\'s token', async () => {
+    const { ask, replies } = setup()
+    await ask({ engine: 'codex', projectSource: 'worktree', gitSource: '/swarm/project', branchName: 'super-tab/start-1', branchBase: 'default',
+      swarmRole: 'dev', swarmGitHub: true, creationId: CREATION })
+    await vi.waitFor(() => expect(replies).toHaveLength(1))
+    expect(prepareProjectFolder).toHaveBeenLastCalledWith({ source: 'worktree', gitSource: '/swarm/project', branchName: 'super-tab/start-1',
+      fromDefaultBranch: true, offline: true }, expect.anything())
+    // A Swarm start that is the machine owner's own fetches as before.
+    await ask({ engine: 'codex', projectSource: 'worktree', gitSource: '/swarm/project', branchName: 'super-tab/start-2', branchBase: 'default',
+      swarmRole: 'dev', creationId: `${CREATION}-own` })
+    await vi.waitFor(() => expect(replies).toHaveLength(2))
+    expect(vi.mocked(prepareProjectFolder).mock.calls.at(-1)![0]).not.toHaveProperty('offline')
+  })
+
   it('records a folder it could not prepare as failed, in the folder\'s own words when it has them', async () => {
     const { ask, create, replies } = setup()
     vi.mocked(prepareProjectFolder).mockRejectedValueOnce(new ProjectFolderError('CLONE_FAILED', 'Could not clone it.')).mockRejectedValueOnce(new Error('disk full'))
@@ -820,9 +847,9 @@ describe('agent_create with a receipt', () => {
   })
 
   it('says why a receipt could not be kept, and answers INTERNAL when the answer cannot be put together', async () => {
-    const storage = setup({ receipts: { has: vi.fn(() => false), creator: vi.fn(), runIntent: vi.fn(), pendingIntents: vi.fn(), pendingIntent: vi.fn(), cancelIntent: vi.fn(), status: vi.fn(), run: vi.fn(() => { throw new AgentCreationReceiptError('CREATION_STORAGE_FAILED') }) } })
+    const storage = setup({ receipts: { has: vi.fn(() => false), creator: vi.fn(), createdLaunchModel: vi.fn(() => null), runIntent: vi.fn(), pendingIntents: vi.fn(), pendingIntent: vi.fn(), cancelIntent: vi.fn(), status: vi.fn(), run: vi.fn(() => { throw new AgentCreationReceiptError('CREATION_STORAGE_FAILED') }) } })
     expect(await storage.ask({ engine: 'claude', cwd: '/w', creationId: CREATION })).toStrictEqual({ error: 'CREATION_STORAGE_FAILED' })
-    const broken = setup({ receipts: { has: vi.fn(() => false), creator: vi.fn(), runIntent: vi.fn(), pendingIntents: vi.fn(), pendingIntent: vi.fn(), cancelIntent: vi.fn(), status: vi.fn(), run: vi.fn(() => { throw new Error('bug') }) } })
+    const broken = setup({ receipts: { has: vi.fn(() => false), creator: vi.fn(), createdLaunchModel: vi.fn(() => null), runIntent: vi.fn(), pendingIntents: vi.fn(), pendingIntent: vi.fn(), cancelIntent: vi.fn(), status: vi.fn(), run: vi.fn(() => { throw new Error('bug') }) } })
     expect(await broken.ask({ engine: 'claude', cwd: '/w', creationId: CREATION })).toStrictEqual({ error: 'INTERNAL' })
     const frameless = setup({ toProject: vi.fn(async () => { throw new Error('no frame') }) })
     await frameless.ask({ engine: 'claude', cwd: '/w', creationId: CREATION })
@@ -912,6 +939,15 @@ describe('durable model request validation', () => {
 })
 
 describe('agent_create_status', () => {
+  it('reports the model and effort flags saved by a completed native launch', async () => {
+    const { status, deps } = setup()
+    const request = { kind: 'native-create-v1', input: { launchModel: { model: 'opus', effort: 'high' } } }
+    await deps.receipts.runIntent(CREATION, creationFingerprint(request), request,
+      { service: 'launch', detail: 'Preparing.' }, async () => async () => ({ state: 'created', agentId: 'new-agent' }))
+    expect(await status({ creationId: CREATION })).toStrictEqual({ creationId: CREATION, state: 'created', agent: { id: 'new-agent' },
+      launchModel: { model: 'opus', effort: 'high' } })
+  })
+
   it('names a launch by a valid creation id, and says what became of it', async () => {
     const { status, deps } = setup()
     expect(await status({ creationId: 'short' })).toStrictEqual({ error: 'INVALID_CREATION_ID' })
@@ -930,9 +966,9 @@ describe('agent_create_status', () => {
   })
 
   it('says why a receipt could not be read', async () => {
-    const storage = setup({ receipts: { has: vi.fn(() => false), creator: vi.fn(), runIntent: vi.fn(), pendingIntents: vi.fn(), pendingIntent: vi.fn(), cancelIntent: vi.fn(), run: vi.fn(), status: vi.fn(() => { throw new AgentCreationReceiptError('CREATION_STORAGE_FAILED') }) } })
+    const storage = setup({ receipts: { has: vi.fn(() => false), creator: vi.fn(), createdLaunchModel: vi.fn(() => null), runIntent: vi.fn(), pendingIntents: vi.fn(), pendingIntent: vi.fn(), cancelIntent: vi.fn(), run: vi.fn(), status: vi.fn(() => { throw new AgentCreationReceiptError('CREATION_STORAGE_FAILED') }) } })
     expect(await storage.status({ creationId: CREATION })).toStrictEqual({ error: 'CREATION_STORAGE_FAILED' })
-    const broken = setup({ receipts: { has: vi.fn(() => false), creator: vi.fn(), runIntent: vi.fn(), pendingIntents: vi.fn(), pendingIntent: vi.fn(), cancelIntent: vi.fn(), run: vi.fn(), status: vi.fn(() => { throw new Error('bug') }) } })
+    const broken = setup({ receipts: { has: vi.fn(() => false), creator: vi.fn(), createdLaunchModel: vi.fn(() => null), runIntent: vi.fn(), pendingIntents: vi.fn(), pendingIntent: vi.fn(), cancelIntent: vi.fn(), run: vi.fn(), status: vi.fn(() => { throw new Error('bug') }) } })
     expect(await broken.status({ creationId: CREATION })).toStrictEqual({ error: 'INTERNAL' })
   })
 })
@@ -987,9 +1023,9 @@ describe('agent_resume and agent_restart', () => {
   })
 
   it('say why a receipt could not be kept, and INTERNAL when the answer cannot be put together', async () => {
-    const storage = setup({ receipts: { has: vi.fn(() => false), creator: vi.fn(), runIntent: vi.fn(), pendingIntents: vi.fn(), pendingIntent: vi.fn(), cancelIntent: vi.fn(), status: vi.fn(), run: vi.fn(() => { throw new AgentCreationReceiptError('CREATION_STORAGE_FAILED') }) } })
+    const storage = setup({ receipts: { has: vi.fn(() => false), creator: vi.fn(), createdLaunchModel: vi.fn(() => null), runIntent: vi.fn(), pendingIntents: vi.fn(), pendingIntent: vi.fn(), cancelIntent: vi.fn(), status: vi.fn(), run: vi.fn(() => { throw new AgentCreationReceiptError('CREATION_STORAGE_FAILED') }) } })
     expect(await storage.relaunch('agent_restart', { agentId: 'a1', creationId: CREATION })).toStrictEqual({ error: 'CREATION_STORAGE_FAILED' })
-    const broken = setup({ receipts: { has: vi.fn(() => false), creator: vi.fn(), runIntent: vi.fn(), pendingIntents: vi.fn(), pendingIntent: vi.fn(), cancelIntent: vi.fn(), status: vi.fn(), run: vi.fn(() => { throw new Error('bug') }) } })
+    const broken = setup({ receipts: { has: vi.fn(() => false), creator: vi.fn(), createdLaunchModel: vi.fn(() => null), runIntent: vi.fn(), pendingIntents: vi.fn(), pendingIntent: vi.fn(), cancelIntent: vi.fn(), status: vi.fn(), run: vi.fn(() => { throw new Error('bug') }) } })
     expect(await broken.relaunch('agent_restart', { agentId: 'a1', creationId: CREATION })).toStrictEqual({ error: 'INTERNAL' })
     const frameless = setup({ toProject: vi.fn(async () => { throw new Error('no frame') }) })
     await frameless.relaunch('agent_restart', { agentId: 'a1', creationId: CREATION })
@@ -1045,9 +1081,9 @@ describe('agent_fork', () => {
   })
 
   it('says why a receipt could not be kept, and INTERNAL when the answer cannot be put together', async () => {
-    const storage = setup({ receipts: { has: vi.fn(() => false), creator: vi.fn(), runIntent: vi.fn(), pendingIntents: vi.fn(), pendingIntent: vi.fn(), cancelIntent: vi.fn(), status: vi.fn(), run: vi.fn(() => { throw new AgentCreationReceiptError('CREATION_CONFLICT') }) } })
+    const storage = setup({ receipts: { has: vi.fn(() => false), creator: vi.fn(), createdLaunchModel: vi.fn(() => null), runIntent: vi.fn(), pendingIntents: vi.fn(), pendingIntent: vi.fn(), cancelIntent: vi.fn(), status: vi.fn(), run: vi.fn(() => { throw new AgentCreationReceiptError('CREATION_CONFLICT') }) } })
     expect(await storage.forkAsk({ agentId: 'a1', creationId: CREATION })).toStrictEqual({ error: 'CREATION_CONFLICT' })
-    const broken = setup({ receipts: { has: vi.fn(() => false), creator: vi.fn(), runIntent: vi.fn(), pendingIntents: vi.fn(), pendingIntent: vi.fn(), cancelIntent: vi.fn(), status: vi.fn(), run: vi.fn(() => { throw new Error('bug') }) } })
+    const broken = setup({ receipts: { has: vi.fn(() => false), creator: vi.fn(), createdLaunchModel: vi.fn(() => null), runIntent: vi.fn(), pendingIntents: vi.fn(), pendingIntent: vi.fn(), cancelIntent: vi.fn(), status: vi.fn(), run: vi.fn(() => { throw new Error('bug') }) } })
     expect(await broken.forkAsk({ agentId: 'a1', creationId: CREATION })).toStrictEqual({ error: 'INTERNAL' })
     const frameless = setup({ toProject: vi.fn(async () => { throw new Error('no frame') }) })
     await frameless.forkAsk({ agentId: 'a1', creationId: CREATION })

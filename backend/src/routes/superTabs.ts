@@ -14,6 +14,11 @@ import { nativeEventSchema, openNativeSchema } from '../superTabs/native.js'
 import { machineObservationSchema } from '../superTabs/machines.js'
 import { joinSwarmSchema, previewJoinSchema, saveSharingSchema } from '../superTabs/sharing.js'
 import { holdReason } from '../superTabs/holdNotice.js'
+import { GitHubAppError } from '../github/app.js'
+import { githubRepository } from '../github/repository.js'
+import { attribution } from '../github/attribution.js'
+import { githubTokensFromEnv, type GitHubTokens } from '../github/tokens.js'
+import { logger } from '../utils/logger.js'
 
 const id = z.string().min(1).max(160).regex(/^[A-Za-z0-9_-]+$/)
 const tabParams = z.object({ tabId: id })
@@ -28,6 +33,7 @@ const messageQuery = agentQuery.extend({ after: z.coerce.number().int().nonnegat
   before: z.coerce.number().int().nonnegative().safe().optional(), messageId: id.optional() })
   .refine(q => [q.after, q.before, q.messageId].filter(value => value !== undefined).length <= 1, 'Choose one message cursor or exact message.')
 const decisionParams = tabParams.extend({ decisionId: id })
+const roleParams = tabParams.extend({ projectId: id, roleId: id })
 const terminalParams = tabParams.extend({ requestId: id })
 const hostParams = z.object({ machineId: id })
 const hostStartParams = hostParams.extend({ tabId: id, startId: id })
@@ -39,22 +45,51 @@ const deliveryAction = z.discriminatedUnion('type', [
   z.object({ type: z.literal('ack'), claimId: id, receipt: z.string().min(1).max(2000), uncertain: z.boolean() }).strict(),
   z.object({ type: z.literal('hold'), claimId: id, reason: holdReason }).strict(),
 ])
+const mentionQuery = z.object({ state: z.enum(['waiting', 'earlier']) }).strict()
 const savePolicy = z.object({ revision: z.number().int().nonnegative().safe(), policy: routingPolicySchema }).strict()
 const stop = z.object({ assignmentId: id, receipt: z.string().min(1).max(2000) }).strict()
+const githubToken = z.object({ machineId: id }).strict()
+const githubStartToken = z.object({ always: z.boolean().optional() }).strict()
 
 
 async function respond(reply: FastifyReply, action: () => Promise<unknown>) {
   try { sendSuccess(reply, await action()) } catch (error) {
+    if (error instanceof GitHubAppError) return sendError(reply, error.message, error.code, error.status, error.details)
     if (!(error instanceof SuperTabError)) throw error
     sendError(reply, error.message, error.code, error.status)
   }
 }
 
-/** Uses the normal authenticated control API. It never accepts caller-provided host/contributor identities. */
-export async function superTabRoutes(app: FastifyInstance, options: { store?: SuperTabStore } = {}) {
-  const store = options.store ?? new SuperTabStore(prisma, Date.now, attachmentsFromEnv(env))
+/** Uses the normal authenticated control API. It never accepts caller-provided host/contributor identities.
+ *  `github` is the Harness GitHub App (github/tokens.ts): read from the environment unless given, null when off. */
+export async function superTabRoutes(app: FastifyInstance, options: { store?: SuperTabStore; github?: GitHubTokens | null } = {}) {
+  const github = options.github !== undefined ? options.github : await githubTokensFromEnv(env)
+  // A task that ends revokes the token it was given; a revoke that fails is logged inside and never blocks the write.
+  const store = options.store ?? new SuperTabStore(prisma, Date.now, attachmentsFromEnv(env),
+    { workEnded: (tabId, ended) => { void github?.release(tabId, ended).catch(error => logger.warn('[github] release failed', { tabId, error: String(error) })) },
+      // A team account has no git login of its own: without the app it takes no teammates' work.
+      teamAccountsIdle: !github })
+  app.get('/api/super-tabs/grids', (req, reply) => respond(reply, () => store.hostGrids(req.user!)))
+  // Each row says whether this server has the Harness GitHub App, so the host knows to ask for a start's token below.
   app.get<{ Params: z.infer<typeof hostParams> }>('/api/super-tabs/hosts/:machineId/pools', { preHandler: validateParams(hostParams) },
-    (req, reply) => respond(reply, () => store.hostPools(req.user!, req.params.machineId)))
+    (req, reply) => respond(reply, async () => (await store.hostPools(req.user!, req.params.machineId)).map(row => github ? { ...row, githubApp: true } : row)))
+  // A read-only token for a queued start's project repository, for its host to clone and fetch the folder before the agent
+  // exists, so that the machine owner's own git login is never used for another person's project (docs/swarm-github-app.md).
+  // The machine owner's own project answers `github: false` and the host uses its own login, unless it asks `always` (a
+  // Harness Team account, which has none).
+  app.post<{ Params: z.infer<typeof hostStartParams>; Body: z.infer<typeof githubStartToken> }>('/api/super-tabs/hosts/:machineId/starts/:tabId/:startId/github-token',
+    { preHandler: [validateParams(hostStartParams), validateBody(githubStartToken)] }, (req, reply) => respond(reply, async () => {
+      if (!github) throw new GitHubAppError('GITHUB_APP_NOT_CONFIGURED', 'This Harness server has no GitHub App configured.', 503)
+      const grant = await store.githubStart(req.user!, req.params.tabId, req.params.startId, req.params.machineId)
+      if (grant.own && req.body?.always !== true) return { github: false }
+      const repository = githubRepository(grant.repositoryUrl)
+      if (!repository) {
+        throw new SuperTabError('REPOSITORY_NOT_GITHUB', grant.repositoryUrl
+          ? 'This project\'s repository is not on github.com, so the Harness GitHub App cannot give a token for it.'
+          : 'This project has no repository address yet. Its owner or Lead can share it (project.repository).', 409)
+      }
+      return { github: true, ...await github.prepare(repository), requestedBy: grant.requester }
+    }))
   app.get<{ Params: z.infer<typeof hostStartParams> }>('/api/super-tabs/hosts/:machineId/starts/:tabId/:startId', { preHandler: validateParams(hostStartParams) },
     (req, reply) => respond(reply, () => store.start(req.user!, req.params.tabId, req.params.startId, undefined, req.params.machineId)))
   app.post<{ Params: z.infer<typeof hostStartParams>; Body: z.infer<typeof operationSchema> }>('/api/super-tabs/hosts/:machineId/starts/:tabId/:startId',
@@ -62,6 +97,8 @@ export async function superTabRoutes(app: FastifyInstance, options: { store?: Su
       if (!('startId' in req.body.command) || req.body.command.startId !== req.params.startId) throw new SuperTabError('FORBIDDEN', 'The host request must name this start.', 403)
       return store.execute(req.user!, req.params.tabId, req.body, undefined, req.params.machineId)
     }))
+  app.get<{ Params: z.infer<typeof machineParams> }>('/api/super-tabs/:tabId/machines/:machineId/removal', { preHandler: validateParams(machineParams) },
+    (req, reply) => respond(reply, () => store.machineRemoval(req.user!, req.params.tabId, req.params.machineId)))
   app.post<{ Params: z.infer<typeof machineParams>; Body: z.infer<typeof machineObservationSchema> }>('/api/super-tabs/:tabId/machines/:machineId',
     { preHandler: [validateParams(machineParams), validateBody(machineObservationSchema)] },
     (req, reply) => respond(reply, () => store.observeMachine(req.user!, req.params.tabId, req.params.machineId, req.body)))
@@ -108,9 +145,26 @@ export async function superTabRoutes(app: FastifyInstance, options: { store?: Su
     (req, reply) => respond(reply, () => store.terminalResult(req.user!, req.params.tabId, req.params.requestId, req.query.asAgentId, 20_000)))
   app.get<{ Params: z.infer<typeof hostParams> }>('/api/super-tabs/hosts/:machineId/assignments', { preHandler: validateParams(hostParams) },
     (req, reply) => respond(reply, () => store.hostAssignments(req.user!, req.params.machineId)))
+  // `githubApp` (only when the server has the app) lets a Lead's start wire its token into another person's work (cli/src/superTabs/start.ts).
   app.get<{ Params: z.infer<typeof tabParams>; Querystring: z.infer<typeof agentQuery> }>('/api/super-tabs/:tabId',
     { preHandler: [validateParams(tabParams), validateQuery(agentQuery)] },
-    (req, reply) => respond(reply, () => store.read(req.user!, req.params.tabId, req.query.asAgentId)))
+    (req, reply) => respond(reply, async () => ({ ...await store.read(req.user!, req.params.tabId, req.query.asAgentId), ...(github ? { githubApp: true } : {}) })))
+  // A one-hour installation token for the repository of the calling agent's task, for git and gh on its machine
+  // (docs/swarm-github-app.md). Only that agent's host, on the machine running it, while the task is in its hands.
+  app.post<{ Params: z.infer<typeof tabParams>; Querystring: z.infer<typeof agentQuery>; Body: z.infer<typeof githubToken> }>('/api/super-tabs/:tabId/github-token',
+    { preHandler: [validateParams(tabParams), validateQuery(agentQuery), validateBody(githubToken)] },
+    (req, reply) => respond(reply, async () => {
+      if (!github) throw new GitHubAppError('GITHUB_APP_NOT_CONFIGURED', 'This Harness server has no GitHub App configured.', 503)
+      const grant = await store.githubAssignment(req.user!, req.params.tabId, req.query.asAgentId, req.body.machineId)
+      const repository = githubRepository(grant.repositoryUrl)
+      if (!repository) {
+        throw new SuperTabError('REPOSITORY_NOT_GITHUB', grant.repositoryUrl
+          ? 'This project\'s repository is not on github.com, so the Harness GitHub App cannot give a token for it.'
+          : 'This project has no repository address yet. Its owner or Lead can share it (project.repository).', 409)
+      }
+      const issued = await github.issue({ tabId: grant.tabId, agentId: grant.agentId, assignmentId: grant.assignmentId, repository })
+      return { ...issued, ...attribution(grant) }
+    }))
   app.post<{ Params: z.infer<typeof tabParams>; Body: z.infer<typeof operation> }>('/api/super-tabs/:tabId/commands',
     { preHandler: [validateParams(tabParams), validateBody(operation, { named: true })] },
     (req, reply) => respond(reply, () => store.execute(req.user!, req.params.tabId,
@@ -147,6 +201,9 @@ export async function superTabRoutes(app: FastifyInstance, options: { store?: Su
         return uploaded ?? fail('INVALID_ATTACHMENT', 'Attach one file.', 400)
       }))
   })
+  app.get<{ Params: z.infer<typeof tabParams>; Querystring: z.infer<typeof mentionQuery> }>('/api/super-tabs/:tabId/mentions',
+    { preHandler: [validateParams(tabParams), validateQuery(mentionQuery)] },
+    (req, reply) => respond(reply, () => store.mentions(req.user!, req.params.tabId, req.query.state)))
   app.get<{ Params: z.infer<typeof startParams>; Querystring: z.infer<typeof agentQuery> }>('/api/super-tabs/:tabId/starts/:startId',
     { preHandler: [validateParams(startParams), validateQuery(agentQuery)] },
     (req, reply) => respond(reply, () => store.start(req.user!, req.params.tabId, req.params.startId, req.query.asAgentId)))
@@ -159,6 +216,9 @@ export async function superTabRoutes(app: FastifyInstance, options: { store?: Su
   app.get<{ Params: z.infer<typeof tabParams>; Querystring: z.infer<typeof agentQuery> }>('/api/super-tabs/:tabId/route-decisions',
     { preHandler: [validateParams(tabParams), validateQuery(agentQuery)] },
     (req, reply) => respond(reply, () => store.routeDecisions(req.user!, req.params.tabId, req.query.asAgentId)))
+  app.get<{ Params: z.infer<typeof roleParams>; Querystring: z.infer<typeof agentQuery> }>('/api/super-tabs/:tabId/projects/:projectId/roles/:roleId',
+    { preHandler: [validateParams(roleParams), validateQuery(agentQuery)] },
+    (req, reply) => respond(reply, () => store.roleText(req.user!, req.params.tabId, req.params.projectId, req.params.roleId, req.query.asAgentId)))
   app.get<{ Params: z.infer<typeof decisionParams>; Querystring: z.infer<typeof agentQuery> }>('/api/super-tabs/:tabId/route-decisions/:decisionId',
     { preHandler: [validateParams(decisionParams), validateQuery(agentQuery)] },
     (req, reply) => respond(reply, () => store.routeDecision(req.user!, req.params.tabId, req.params.decisionId, req.query.asAgentId)))

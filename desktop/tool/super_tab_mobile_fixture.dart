@@ -1,7 +1,8 @@
 /// No-login review fixture for the Super Tab on mobile web.
 ///
 /// Build for web with `--dart-define=HARNESS_TEST=true` and open with a
-/// `?scenario=rich|empty|one|viewer|offline` and optional `?group=<id>` query.
+/// `?scenario=rich|empty|one|viewer|offline` and optional `?group=<id>` and
+/// `?theme=dark` (Graphite; light Paper is the default) queries.
 /// This is a review-only target: it renders the real [SuperTabView] against an
 /// in-memory fake backend and never touches a real account or production data.
 library;
@@ -10,6 +11,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
+import 'package:harness/shared/theme/color_palette.dart';
 import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/view.dart';
 
@@ -21,6 +23,13 @@ Future<void> main() async {
   WidgetsBinding.instance.ensureSemantics();
   final query = Uri.base.queryParameters;
   final scenario = query['scenario'] ?? 'rich';
+  // The design tokens follow the palette, not the Material theme: set both,
+  // as the app's root does, or a light theme draws dark-palette ink.
+  final palette = query['theme'] == 'dark'
+      ? HarnessPalette.graphite
+      : HarnessPalette.paper;
+  grid.AppTheme.palette.value = palette;
+  grid.AppTheme.brightness.value = palette.brightness;
   final server = _seed(scenario);
   final controller = server.controller(
     account: scenario == 'viewer' ? 'viewer' : 'owner',
@@ -38,7 +47,7 @@ Future<void> main() async {
   runApp(
     MaterialApp(
       debugShowCheckedModeBanner: false,
-      theme: grid.buildAppTheme(brightness: Brightness.light),
+      theme: grid.buildAppTheme(brightness: palette.brightness),
       home: _Fixture(controller: controller),
     ),
   );

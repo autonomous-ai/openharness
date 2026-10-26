@@ -115,12 +115,15 @@ export function handleWebUpgrade(req: IncomingMessage, socket: Duplex, head: Buf
       const invalid = err instanceof SsoAuthError && err.code === 'INVALID_TOKEN'
       const mismatch = err instanceof SsoAuthError &&
         (err.code === 'AUTONOMOUS_ENV_MISMATCH' || err.code === 'AUTONOMOUS_ENV_NOT_ALLOWED')
-      const code = invalid ? 4401 : mismatch ? 4403 : 1013
+      // A Mac's team account (lib/teamSession.ts) never selects or attaches to a machine here: refused for good,
+      // not an expired sign-in to refresh and retry.
+      const team = err instanceof SsoAuthError && err.code === 'TEAM_SESSION_LIMITED'
+      const code = invalid ? 4401 : mismatch || team ? 4403 : 1013
       const reason = invalid
         ? 'auth expired'
         : mismatch
           ? `env:${err.requiredEnv ?? 'prod'}`
-          : 'auth service unavailable'
+          : team ? 'team sign-in' : 'auth service unavailable'
       wss.handleUpgrade(req, socket, head, (ws) => { try { ws.close(code, reason) } catch { /* ignore */ } })
     }
   })().catch((err) => { logger.warn('web-ws upgrade failed', { error: String(err) }); socket.destroy() })

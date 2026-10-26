@@ -16,6 +16,8 @@ export type AgentClosePlan = {
   state: 'waiting' | 'failed'
   detail?: string
 }
+/** Why the Lead of an active Swarm project is not closed (owner, 2026-10-23: it is never stopped, in any case). */
+export const LEAD_PROTECTED_DETAIL = 'This harness is the Product Manager of a Swarm project. Delete its project first to stop it.'
 export type AgentCloseRequest = { agentId: string; sessionId: string; createdAt: string; mode: CloseMode; onlyIfHidden?: boolean; onlyIfOriginalLaunch?: boolean; expiresAt?: number }
 /** `withoutConversation`: closed while still starting, before Harness could read its conversation, so none is kept. */
 export type AgentCloseResult = { closed?: true; withoutConversation?: true; deferred?: true; cancelled?: true; error?: string; detail?: string; activity?: CloseActivity }
@@ -93,7 +95,7 @@ function jobKey(request: AgentCloseRequest): string {
   return JSON.stringify([request.agentId, request.mode, request.onlyIfHidden === true, request.onlyIfOriginalLaunch === true, request.expiresAt])
 }
 function matches(s: RegisteredSession | undefined, request: AgentCloseRequest, at: number): s is RegisteredSession {
-  if (!s || (request.expiresAt !== undefined && request.expiresAt <= at) || (request.onlyIfOriginalLaunch && (s.startedBy !== 'agent' || s.resumeOnly)) || new Date(s.registeredAt).toISOString() !== request.createdAt) return false
+  if (!s || (request.expiresAt !== undefined && request.expiresAt <= at) || (request.onlyIfOriginalLaunch && s.startedBy !== 'agent') || new Date(s.registeredAt).toISOString() !== request.createdAt) return false
   // Asked of a harness still starting, which has bound its first conversation since the list the request was made
   // from: the same harness, and the close keeps that conversation. Refused as changed, a close sent in the seconds a
   // Codex binds was answered "changed while closing".
@@ -101,7 +103,7 @@ function matches(s: RegisteredSession | undefined, request: AgentCloseRequest, a
 }
 
 export interface CloseAgentServiceDeps {
-  registry: Pick<typeof liveRegistry, 'byAgent' | 'list' | 'setClosePlan'>
+  registry: Pick<typeof liveRegistry, 'byAgent' | 'list' | 'setClosePlan' | 'afterTransaction'>
   activity(s: RegisteredSession): Promise<CloseActivity>
   /** Cheap revocation after the final activity read, at each physical Stop boundary. */
   idleCurrent?(s: RegisteredSession): boolean
@@ -111,6 +113,8 @@ export interface CloseAgentServiceDeps {
   openTabs?: { assertHidden(s: RegisteredSession): Promise<void>; isHidden(s: RegisteredSession): boolean }
   /** Whether the conversation [request] names is closed already: no longer live, and kept as stopped. */
   closedAlready?(request: AgentCloseRequest): boolean
+  /** Whether the agent may be the Lead of an active Swarm project (superTabs/retention.ts `mayBeLead`): never closed. */
+  leadProtected?(agentId: string): boolean
   now?: () => number
   sleep?: (ms: number) => Promise<void>
 }
@@ -156,6 +160,10 @@ export class CloseAgentService {
     const current = this.deps.registry.byAgent(request.agentId)
     if (!matches(current, request, this.now())) return Promise.resolve(this.changed(request))
     if (request.mode === 'cancel') { this.cancel(request.agentId); return Promise.resolve({ cancelled: true }) }
+    // Refused before anything is read or saved: a Close after task once answered a Lead "deferred" (the review of #1635).
+    if (request.mode !== 'inspect' && this.deps.leadProtected?.(request.agentId)) {
+      return Promise.resolve({ error: 'LEAD_PROTECTED', detail: LEAD_PROTECTED_DETAIL })
+    }
     // A job answers only a request of its own kind. When any job running for the agent answered every
     // request, a close asked for while another window (or the cleanup preview) was inspecting the agent
     // was answered with that inspect's `{ activity }` and never carried out, and an inspect beside a
@@ -213,7 +221,7 @@ export class CloseAgentService {
       const s = this.deps.registry.byAgent(request.agentId)
       return !this.disposed && (this.revisions.get(request.agentId) ?? 0) === revision && s && harnessIdentity(s) === harness
         && (request.expiresAt === undefined || request.expiresAt > this.now())
-        && (!request.onlyIfOriginalLaunch || (s.startedBy === 'agent' && !s.resumeOnly)) ? s : undefined
+        && (!request.onlyIfOriginalLaunch || s.startedBy === 'agent') ? s : undefined
     }
     let tried = target, result = first, waiting = false
     for (;;) {
@@ -248,7 +256,7 @@ export class CloseAgentService {
       return !this.disposed && (this.revisions.get(request.agentId) ?? 0) === revision
         && s && identity(s) === target
         && (request.expiresAt === undefined || request.expiresAt > this.now())
-        && (!request.onlyIfOriginalLaunch || (s.startedBy === 'agent' && !s.resumeOnly))
+        && (!request.onlyIfOriginalLaunch || s.startedBy === 'agent')
         && (!request.onlyIfHidden || this.deps.openTabs?.isHidden(s)) ? s : undefined
     }
     try {
@@ -269,9 +277,18 @@ export class CloseAgentService {
       if (request.mode === 'inspect') return { activity }
       if (request.mode === 'after_task') {
         if (s.closePlan?.identity === target && s.closePlan.state === 'waiting') return { deferred: true }
-        const updated = this.deps.registry.setClosePlan(s.agentId, { id: randomUUID(), identity: target, requestedAt: this.now(), state: 'waiting' })
+        let created = false
+        const updated = await this.deps.registry.afterTransaction(() => {
+          const latest = current()
+          if (!latest) return null
+          if (latest.closePlan?.identity === target && latest.closePlan.state === 'waiting') return latest
+          const saved = this.deps.registry.setClosePlan(latest.agentId, { id: randomUUID(), identity: target, requestedAt: this.now(), state: 'waiting' })
+          created = !!saved
+          return saved
+        })
+        if (!updated) return { error: 'AGENT_CHANGED' }
         this.idleSince.delete(s.agentId)
-        if (updated) this.deps.changed(updated)
+        if (created) this.deps.changed(updated)
         this.schedule()
         return { deferred: true }
       }

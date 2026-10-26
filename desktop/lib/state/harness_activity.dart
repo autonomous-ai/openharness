@@ -94,9 +94,19 @@ HarnessActivity? harnessActivity(
   return HarnessActivity.idle;
 }
 
+/// The tags waiting for this account in a Swarm tab, for the tab's badge.
+int tabMentionsWaiting(AppNotifier app, Swarm tab) =>
+    tab.superTabId == null ? 0 : app.superTabs.waitingTags(tab.superTabId!);
+
+/// What a Swarm tab's tag count says: "Tagged in 2 messages".
+String tabMentionsLabel(int count) =>
+    'Tagged in $count ${count == 1 ? 'message' : 'messages'}';
+
 /// A viewer refers to its owner; showing the same harness twice adds no vote.
+/// A Lead's tag waiting in a Swarm tab needs the person, like a question.
 HarnessActivity? tabActivity(AppNotifier app, Swarm tab) {
   if (tab.isStore || tab.isOrchestrator) return null;
+  if (tabMentionsWaiting(app, tab) > 0) return HarnessActivity.needsInput;
   HarnessActivity? result;
   final seen = <(String, String)>{};
   for (final pane in tab.panes) {

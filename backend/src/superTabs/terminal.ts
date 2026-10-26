@@ -3,6 +3,7 @@ import { activeWork, actorKey, agent, author, conversation, fail, isLeads, stabl
   type SuperTabState } from './model.js'
 import { downSince } from './machines.js'
 import { agentProjectId, projectOf, readAgent } from './projects.js'
+import { redactCredentials } from './credentials.js'
 
 /** The Lead reads and types in an agent's terminal through the host of the agent's machine (spec/2026-10-23-lead-sees-agent-terminal.md).
  * The request and its answer live in SuperTabTerminalRequest, never in the tab state or group history, because a screen can show secrets. */
@@ -58,13 +59,15 @@ export function terminalRequest(state: SuperTabState, actor: Actor, sender: Auth
   const { type: _type, agentId: _agentId, ...detail } = command
   const effect: TerminalEffect = { op: 'request', id, kind: command.type === 'agent.screen' ? 'screen' : 'input', agentId: target.id,
     machineId: target.machineId, machineOwnerId: target.machineOwnerId, harnessId: target.harnessId, requesterKey: actorKey(actor), ...detail }
-  if (command.type === 'agent.screen') return { effect, message: null }
-  const text = command.text && `\`${command.text.length > 200 ? `${command.text.slice(0, 199)}…` : command.text}\``
-  const typed = [text, ...command.keys ?? []].filter(Boolean).join(' + ')
+  if (command.type === 'agent.screen') return { effect, message: null, removed: [] }
+  // The host types the exact text; the group's row never shows a credential in it, even one the cut at 200 would split.
+  const typed = redactCredentials(command.text ?? '')
+  const text = command.text && `\`${typed.text.length > 200 ? `${typed.text.slice(0, 199)}…` : typed.text}\``
+  const shown = [text, ...command.keys ?? []].filter(Boolean).join(' + ')
   const who = sender.displayName ?? (sender.kind === 'person' ? sender.name.split('@')[0]! : sender.name)
   const message: MessageDraft = { id, conversationId: currentGroup(state, target).id, author: sender, replyTo: null, recipients: [],
-    text: `${who} typed ${typed} in ${nameOf(target)}'s terminal`, source: { kind: 'terminal-input', agentId: target.id, requestId: id } }
-  return { effect, message }
+    text: `${who} typed ${shown} in ${nameOf(target)}'s terminal`, source: { kind: 'terminal-input', agentId: target.id, requestId: id } }
+  return { effect, message, removed: typed.removed }
 }
 
 /** Only the host of the agent's current terminal answers, once, a request it claimed. */
@@ -84,7 +87,7 @@ export function terminalResult(state: SuperTabState, actor: Actor, request: Term
 /** One row per episode: a repeated observation adds nothing, and `active: false` ends the episode. No screen text goes in the row.
  * It is delivered to the agent's project Lead, in the agent's group when the Lead is there, else by a second row in the Lead's chat. */
 export function terminalAlert(state: SuperTabState, actor: Actor, sender: Author, id: string, now: number,
-  command: { agentId: string; alert: 'prompt' | 'limit'; active: boolean; resetAt?: string }): MessageDraft[] {
+  command: { agentId: string; alert: 'prompt' | 'limit' | 'model'; active: boolean; resetAt?: string }): MessageDraft[] {
   const target = agent(state, command.agentId)
   if (actor.kind !== 'agent' || actor.agentId !== target.id) fail('HOST_REQUIRED', 'Only the host of this agent’s terminal reports its alerts.', 403)
   const alerting = target.alerting ?? []
@@ -104,6 +107,9 @@ export function terminalAlert(state: SuperTabState, actor: Actor, sender: Author
     target.limitedUntil = source.limitedUntil = new Date(reset).toISOString()
     text = `${nameOf(target)} hit a usage limit. Routing skips it until ${target.limitedUntil.slice(11, 16)} UTC.`
   }
+  // Its engine has been retrying its model for 10 minutes (2026-10-24: a Builder on a small local model retried for an
+  // hour while its Lead waited on it).
+  if (command.alert === 'model') text = `${nameOf(target)} can't get answers from its model: its requests keep failing. Stop it, or give the work to another model.`
   const here = !!lead && group.agentIds.includes(lead)
   const row = { id, conversationId: group.id, author: sender, replyTo: null, recipients: here ? [lead] : [], text, source }
   return here || !lead || !chat.agentIds.includes(lead) ? [row] : [row, { ...row, id: stableId(id, 'lead'), conversationId: chat.id, recipients: [lead] }]

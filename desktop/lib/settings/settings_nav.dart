@@ -6,6 +6,7 @@ import '../shared/layouts/widgets/rail_section_header.dart';
 import '../shared/layouts/widgets/sidebar_item.dart';
 import '../shared/theme/app_theme.dart' as grid;
 import '../shared/widgets/section_scaffold.dart';
+import '../widgets/finger_target.dart';
 import 'settings_section.dart';
 
 /// The settings list: the way back, a field that narrows the list to what you
@@ -17,6 +18,7 @@ class SettingsNav extends StatefulWidget {
     required this.onSelect,
     this.railWidth = SettingsNav.width,
     this.autofocusSearch = true,
+    this.compact = false,
   });
 
   final SettingsSection section;
@@ -29,6 +31,9 @@ class SettingsNav extends StatefulWidget {
   /// Whether the filter takes the keys on open. Not on a phone, where focus
   /// raises the on-screen keyboard over half the list.
   final bool autofocusSearch;
+
+  /// True on a phone: the way back is a finger's size.
+  final bool compact;
 
   /// The machine rail's own default width, so Settings opens without the left
   /// column jumping.
@@ -135,13 +140,19 @@ class _SettingsNavState extends State<SettingsNav> {
             // highlights and aligns exactly like them instead of being a
             // shrink-wrapped button in its own grey.
             SizedBox(
-              height: SectionScaffold.headingHeight(context),
+              height: fingerHeight(
+                SectionScaffold.headingHeight(context),
+                enabled: widget.compact,
+              ),
               child: Center(
-                child: SidebarItem(
-                  key: const Key('settings-back-button'),
-                  icon: AppIcons.arrowLeft,
-                  label: 'Back to app',
-                  onTap: () => Navigator.of(context).maybePop(),
+                child: fingerTarget(
+                  enabled: widget.compact,
+                  SidebarItem(
+                    key: const Key('settings-back-button'),
+                    icon: AppIcons.arrowLeft,
+                    label: 'Back to app',
+                    onTap: () => Navigator.of(context).maybePop(),
+                  ),
                 ),
               ),
             ),

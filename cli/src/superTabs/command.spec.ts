@@ -176,3 +176,76 @@ it('gives up after three pending reads, and passes on a refused request without 
   expect(request).toHaveBeenCalledOnce()
   expect(JSON.parse(print.mock.calls.at(-1)![0])).toMatchObject({ error: 'LEAD_REQUIRED' })
 })
+it('lets a machine owner preview and then remove their machine, as the person, without a participating harness', async () => {
+  const print = vi.fn(), close = vi.fn()
+  const request = vi.fn(async (_type: string, payload?: Record<string, unknown>) => payload?.method === 'GET'
+    ? { ok: true, value: { blockedBy: null, agents: [{ id: 'a1', name: 'Builder', projectName: 'App' }], soleSourceProjects: [] } }
+    : { ok: true, value: { revision: 2 } })
+  const deps = { where: () => where, open: async () => ({ request, close, machineId: 'machine' }), print, pane: '%99', env: {} }
+  expect(await superTabCommand(['--tab', 'tab', 'remove-machine', 'box'], deps)).toBe(0)
+  expect(request.mock.calls.filter(c => c[0] === 'super_tabs')).toHaveLength(1)
+  expect(request).toHaveBeenLastCalledWith('super_tabs', expect.objectContaining({ action: 'backend', method: 'GET', path: '/api/super-tabs/tab/machines/box/removal' }), 30_000)
+  expect(print.mock.calls.at(-1)![0]).toContain('Builder')
+  expect(await superTabCommand(['--tab', 'tab', 'remove-machine', 'box', '--yes'], deps)).toBe(0)
+  const sent = request.mock.calls.at(-1)![1]!
+  expect(sent).toMatchObject({ action: 'backend', method: 'POST', path: '/api/super-tabs/tab/commands', body: { command: { type: 'machine.remove', machineId: 'box' } } })
+  expect(String((sent.body as Record<string, unknown>).operationId)).toMatch(/^machine-remove-/)
+  request.mockImplementation(async (type: string) => (type === 'super_tabs'
+    ? { error: 'LEAD_PROTECTED', detail: 'This machine runs the Product Manager of App.' } : { agents: [] }) as never)
+  expect(await superTabCommand(['--tab', 'tab', 'remove-machine', 'box', '--yes'], deps)).toBe(1)
+  expect(print.mock.calls.at(-1)![0]).toContain('Product Manager of App')
+  for (const argv of [['--tab', 'tab', 'remove-machine'], ['--tab', 'tab', 'remove-machine', '../x'], ['--tab', 'tab', 'remove-machine', 'box', '--force']]) {
+    expect(() => parseSuperTabArgs(argv, where)).toThrow('harness super-tab')
+  }
+})
+it('refuses to remove a machine for an agent: a Swarm agent\'s pane, an outside agent\'s shell, or --agent', async () => {
+  const print = vi.fn(), close = vi.fn()
+  const request = vi.fn(async (type: string) => type === 'agents_list' ? { agents: [{ id: 'worker', engine: 'claude', tmuxPane: '%7', status: 'active' }] } : { ok: true })
+  const deps = { where: () => where, open: async () => ({ request, close, machineId: 'machine' }), print }
+  for (const [argv, extra] of [
+    [['--tab', 'tab', 'remove-machine', 'box', '--yes'], { pane: '%7', env: {} }],
+    [['--tab', 'tab', 'remove-machine', 'box', '--yes'], { pane: '%99', env: { CLAUDECODE: '1', CLAUDE_CODE_SESSION_ID: 'session' } }],
+    [['--tab', 'tab', '--agent', 'agent', 'remove-machine', 'box', '--yes'], { pane: '%99', env: {} }],
+  ] as const) {
+    expect(await superTabCommand(argv, { ...deps, ...extra })).toBe(1)
+    expect(print.mock.calls.at(-1)![0]).toContain('your own terminal')
+  }
+  expect(request.mock.calls.some(c => c[0] === 'super_tabs')).toBe(false)
+})
+// Lead mentions (spec 2026-10-24-lead-mentions): each --mention names a person by id or email; the service maps them.
+it('passes each --mention as written, and leaves a post without one unchanged', () => {
+  expect(parseSuperTabArgs([...prefix, 'post', 'lead', 'Please confirm', 'op-1', '--mention', 'ken@example.com', '--reply-to', 'm1', '--mention', 'person-2'], where).payload.command)
+    .toEqual({ type: 'message.send', conversationId: 'lead', text: 'Please confirm', replyTo: 'm1', recipientIds: [], mentions: ['ken@example.com', 'person-2'] })
+  expect(parseSuperTabArgs([...prefix, 'post', 'lead', 'Ready', 'op-1'], where).payload.command).not.toHaveProperty('mentions')
+  for (const tail of [['--mention'], ['--mention', ''], ['--mention', ' ']]) {
+    expect(() => parseSuperTabArgs([...prefix, 'post', 'lead', 'Ready', 'op-1', ...tail], where)).toThrow('harness super-tab')
+  }
+})
+it('asks for help as the calling harness, so a Lead sees its own options, and still answers outside one', async () => {
+  const request = vi.fn(async (type: string) => type === 'agents_list'
+    ? { agents: [{ id: 'native', engine: 'claude', tmuxPane: '%42', status: 'active' }] } : { ok: true, help: {} })
+  const deps = { where: () => where, pane: '%42', open: async () => ({ request, close: vi.fn(), machineId: 'machine' }), print: vi.fn() }
+  expect(await superTabCommand(['--tab', 'tab', 'help'], deps)).toBe(0)
+  expect(request).toHaveBeenLastCalledWith('super_tabs', expect.objectContaining({ action: 'help', tabId: 'tab', harnessId: 'native' }), 30_000)
+  expect(await superTabCommand(['--tab', 'tab', 'help'], { ...deps, pane: '%43' })).toBe(0)
+  expect(request).toHaveBeenLastCalledWith('super_tabs', expect.not.objectContaining({ harnessId: expect.anything() }), 30_000)
+  request.mockClear()
+  expect(await superTabCommand(['help'], deps)).toBe(0)
+  expect(request).not.toHaveBeenCalledWith('agents_list')
+})
+it('keeps the mentioned people on a post that sends files', async () => {
+  const { mkdtempSync, writeFileSync, rmSync } = await import('node:fs')
+  const { join } = await import('node:path')
+  const { tmpdir } = await import('node:os')
+  const dir = mkdtempSync(join(tmpdir(), 'super-tab-mention-'))
+  try {
+    writeFileSync(join(dir, 'shot.png'), Buffer.from([1, 2, 3]))
+    const request = vi.fn(async (_type: string, payload: Record<string, unknown> = {}): Promise<Record<string, unknown>> =>
+      payload.step === 'sent' ? { ok: true, value: { agentId: 'agent-1', attachmentIds: null } } : { ok: true, value: { revision: 9, result: { messageId: 'm' } } })
+    const fetch = vi.fn(async () => new Response(JSON.stringify({ success: true, data: { attachment: { id: 'f1' } } }), { status: 200 }))
+    const deps = { where: () => where, open: async () => ({ request, close: vi.fn(), machineId: 'machine' }), print: vi.fn(),
+      fetch: fetch as unknown as typeof globalThis.fetch }
+    expect(await superTabCommand([...prefix, 'post', 'lead', 'Please check', 'op', '--attach', join(dir, 'shot.png'), '--mention', 'person-ken'], deps)).toBe(0)
+    expect(request.mock.calls.at(-1)![1]).toMatchObject({ action: 'command', command: { type: 'message.send', attachmentIds: ['f1'], mentions: ['person-ken'] } })
+  } finally { rmSync(dir, { recursive: true, force: true }) }
+})

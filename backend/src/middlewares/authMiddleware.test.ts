@@ -57,7 +57,7 @@ describe('control-plane SSO auth middleware', () => {
     const res = await request()
     expect(res.statusCode).toBe(200)
     expect(res.json().user.sub).toBe('internal-1')
-    expect(authenticate).toHaveBeenCalledWith('sso-token', 'prod')
+    expect(authenticate).toHaveBeenCalledWith('sso-token', 'prod', { allowTeamSession: true })
   })
 
   it('keeps only the native SSO flow public and rejects legacy machine-key routes', () => {

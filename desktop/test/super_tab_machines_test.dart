@@ -14,6 +14,7 @@ import 'package:harness/state/app_state.dart';
 import 'package:harness/state/harness_activity.dart';
 import 'package:harness/widgets/harness_activity_mark.dart';
 import 'package:harness/super_tabs/machines.dart';
+import 'package:harness/super_tabs/controller.dart' show SuperTabFailure;
 import 'package:harness/super_tabs/machine_details.dart';
 import 'package:harness/super_tabs/identity.dart';
 import 'package:harness/super_tabs/model.dart';
@@ -104,6 +105,51 @@ Future<void> _openConfigureDialog(
 
 final _picker = find.byKey(const ValueKey('swarm-machine-picker'));
 
+class _RemovalServer extends ConversationServer {
+  Map<String, dynamic> preview = {
+    'blockedBy': null,
+    'agents': <dynamic>[],
+    'soleSourceProjects': <dynamic>[],
+  };
+  final previewReads = <String>[];
+  bool failPreview = false;
+
+  @override
+  Future<Map<String, dynamic>> request(
+    String method,
+    String path, {
+    Map<String, dynamic>? body,
+  }) async {
+    if (method == 'GET' && path.endsWith('/machines/studio/removal')) {
+      previewReads.add(path);
+      if (failPreview) {
+        throw const SuperTabFailure(
+          'PREVIEW_UNAVAILABLE',
+          'Could not check this machine.',
+          statusCode: 503,
+        );
+      }
+      return preview;
+    }
+    if (method == 'POST' &&
+        body?['command'] is Map &&
+        (body!['command'] as Map)['type'] == 'machine.remove' &&
+        !reject &&
+        refuse == null) {
+      final row = (state['machines'] as List)
+          .cast<Map<String, dynamic>>()
+          .singleWhere((machine) => machine['machineId'] == 'studio');
+      row['removal'] = {
+        'id': 'removal-1',
+        'state': 'cleaning',
+        'requestedAt': '2026-10-23T00:00:00Z',
+      };
+      revision++;
+    }
+    return super.request(method, path, body: body);
+  }
+}
+
 /// What hovering or focusing a machine row says.
 String _tipOf(WidgetTester tester, Finder row) => tester
     .widget<Tooltip>(
@@ -140,6 +186,33 @@ Future<void> _settleSave(WidgetTester tester) async {
 }
 
 void main() {
+  test('an allowance\'s note names its tightest window and its reset, in either detail format', () {
+    // Another machine's reading: the tightest window first.
+    expect(
+      superMachineAllowanceNote([
+        '5-hour: 44% remaining · resets in 2h 10m',
+        'Weekly: 80% remaining',
+      ]),
+      '5-hour limit · resets in 2h 10m',
+    );
+    // This computer's: the limiting window named, then each window.
+    expect(
+      superMachineAllowanceNote([
+        'Limiting window: Weekly',
+        'Read 3 min ago',
+        '5-hour — 90% remaining · resets in 1h',
+        'Weekly — 62% remaining · resets in 4d',
+      ]),
+      'Weekly limit · resets in 4d',
+    );
+    expect(
+      superMachineAllowanceNote(['Weekly: 62% remaining']),
+      'Weekly limit',
+    );
+    expect(superMachineAllowanceNote(['Usage unavailable']), isNull);
+    expect(superMachineAllowanceNote(const []), isNull);
+  });
+
   final capture = Platform.environment['HARNESS_SUPER_TAB_CAPTURE'];
   setUpAll(() => loadCaptureFonts(capture));
   test('a computer is shown by its real hostname without ".local", and a name a person chose stays as it is', () {
@@ -221,9 +294,9 @@ void main() {
       );
       await tester.pumpAndSettle();
       expect(find.byType(AlertDialog), findsNothing);
-      expect(find.text('CPU 0%'), findsOneWidget);
-      expect(find.text('RAM 0 GB'), findsOneWidget);
-      expect(find.text('SSD 141 GB'), findsOneWidget);
+      expect(_hw(tester, 'online', 'CPU'), '0%');
+      expect(_hw(tester, 'online', 'RAM'), '0 GB');
+      expect(_hw(tester, 'online', 'SSD'), '141 GB');
       expect(
         find.byKey(const ValueKey('super-machine-allowance-online-codex')),
         findsOneWidget,
@@ -249,7 +322,13 @@ void main() {
       await tester.sendKeyEvent(LogicalKeyboardKey.enter);
       await tester.pumpAndSettle();
       expect(find.text('Available capacity'), findsOneWidget);
-      expect(find.text('CPU'), findsOneWidget);
+      expect(
+        find.descendant(
+          of: find.byType(SuperTabMachineDetails),
+          matching: find.text('CPU'),
+        ),
+        findsOneWidget,
+      );
       expect(
         find.descendant(
           of: find.byType(SuperTabMachineDetails),
@@ -462,6 +541,24 @@ void main() {
         find.descendant(of: dev, matching: find.text('Dev')),
         findsOneWidget,
       );
+      server.state['projects'] = [
+        {
+          ...projectFixture('lead', 'Pilot', 'lead'),
+          'skillSet': 'custom',
+          'roles': [
+            {'id': 'lead', 'name': 'Product Manager', 'kind': 'lead', 'version': 'v1'},
+            {'id': 'research', 'name': 'Research Engineer', 'kind': 'builder', 'version': 'v1'},
+          ],
+        },
+      ];
+      (server.state['agents'] as List)[1]['roleId'] = 'research';
+      await c.refresh();
+      await show();
+      await tester.pumpAndSettle();
+      expect(
+        find.descendant(of: dev, matching: find.text('Research Engineer')),
+        findsOneWidget,
+      );
       expect(
         tester
             .widget<SuperTabAvatar>(
@@ -652,7 +749,7 @@ void main() {
       );
       expect(
         ink(chip('fine', 'claude'), '50%'),
-        statusLineInkOnSurface(DesktopChrome.muted, surface),
+        statusLineInkOnSurface(DesktopChrome.foreground, surface),
       );
       expect(
         tester
@@ -680,6 +777,16 @@ void main() {
       expect(
         claudeTip,
         startsWith('Claude Code\n5-hour: 15% remaining · resets in '),
+      );
+      // Under the figure, the window that stops work first and when it resets.
+      expect(
+        find.descendant(
+          of: chip('both', 'claude'),
+          matching: find.textContaining(
+            RegExp(r'^5-hour limit · resets in \d'),
+          ),
+        ),
+        findsOneWidget,
       );
       expect(
         find.bySemanticsLabel(RegExp('Claude Code 15% remaining')),
@@ -809,10 +916,10 @@ void main() {
             row.left + 36,
             reason: reason,
           );
-          expect(find.text('CPU 71%'), findsOneWidget, reason: reason);
-          expect(find.text('GPU 100%'), findsOneWidget, reason: reason);
-          expect(find.text('RAM 17 GB'), findsOneWidget, reason: reason);
-          expect(find.text('SSD 207 GB'), findsOneWidget, reason: reason);
+          expect(_hw(tester, 'm', 'CPU'), '71%', reason: reason);
+          expect(_hw(tester, 'm', 'GPU'), '100%', reason: reason);
+          expect(_hw(tester, 'm', 'RAM'), '17 GB', reason: reason);
+          expect(_hw(tester, 'm', 'SSD'), '207 GB', reason: reason);
           expect(
             find.byKey(const ValueKey('super-machine-allowance-m-claude')),
             findsOneWidget,
@@ -874,6 +981,147 @@ void main() {
     },
   );
 
+  group('Local models', () {
+    const swarmGrid = 'swarm-0123456789ab';
+    Map<String, dynamic> machine({
+      List<Map<String, dynamic>> served = const [],
+    }) => {
+      'machineId': 'studio',
+      'name': 'Studio',
+      'contributorId': 'owner',
+      'observation': {
+        'receivedAt': DateTime.now().millisecondsSinceEpoch,
+        'localModels': served,
+      },
+    };
+    Future<void> mount(WidgetTester tester, dynamic c) async {
+      await tester.pumpWidget(
+        MaterialApp(
+          // As the sidebar does: the section is rebuilt whenever the Swarm changes.
+          home: Scaffold(
+            body: ListenableBuilder(
+              listenable: c,
+              builder: (context, _) =>
+                  SuperTabMachines(controller: c, onAddAgent: (_) {}),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+    }
+
+    testWidgets(
+      'a machine\'s details say what it runs for the Swarm, and offer nothing to do there',
+      (tester) async {
+        final server = ConversationServer();
+        server.state['localModels'] = {
+          'grid': swarmGrid,
+          'enabled': true,
+          'ready': true,
+        };
+        server.state['machines'] = [
+          machine(
+            served: [
+              {'grid': swarmGrid, 'model': 'qwen3', 'name': 'Qwen 3'},
+              {'grid': 'swarm-ffffffffffff', 'model': 'other'},
+              {
+                'grid': swarmGrid,
+                'model': 'deepseek/deepseek-v4.1-flash',
+                'name': 'deepseek/deepseek-v4.1-flash · OpenRouter',
+                'kind': 'api',
+              },
+              {'grid': 'team', 'model': 'muse', 'kind': 'shared'},
+            ],
+          ),
+        ];
+        final c = server.controller();
+        await c.refresh();
+        await mount(tester, c);
+        // Local models live in the sidebar now, not the Machines heading.
+        expect(find.byKey(const ValueKey('super-local-models')), findsNothing);
+        // Its expanded readings list what it offers, under labels; a model shared with its owner stays hidden.
+        await tester.tap(
+          find.byKey(const ValueKey('super-machine-toggle-studio')),
+        );
+        await tester.pumpAndSettle();
+        expect(find.text('Local'), findsOneWidget);
+        expect(
+          find.byKey(const ValueKey('super-machine-local-studio-Qwen 3')),
+          findsOneWidget,
+        );
+        expect(find.text('API'), findsOneWidget);
+        expect(
+          find.byKey(
+            const ValueKey('super-machine-api-studio-deepseek-v4.1-flash'),
+          ),
+          findsOneWidget,
+        );
+        expect(find.text('muse'), findsNothing);
+        await tester.tap(find.byKey(const ValueKey('super-machine-studio')));
+        await tester.pumpAndSettle();
+        expect(find.text('Models for this Swarm'), findsOneWidget);
+        expect(
+          find.descendant(
+            of: find.byKey(const ValueKey('super-machine-local-models-studio')),
+            matching: find.text('Qwen 3'),
+          ),
+          findsOneWidget,
+        );
+        expect(
+          find.descendant(
+            of: find.byKey(const ValueKey('super-machine-local-models-studio')),
+            matching: find.text('deepseek-v4.1-flash'),
+          ),
+          findsOneWidget,
+        );
+        expect(
+          find.byKey(const ValueKey('super-machine-local-models-run')),
+          findsNothing,
+        );
+        await tester.tap(find.widgetWithText(TextButton, 'Close'));
+        await tester.pumpAndSettle();
+        await tester.pumpWidget(const SizedBox());
+        await c.flush();
+        c.dispose();
+      },
+    );
+
+    test(
+      'a reading serves models on the Swarm grid only while it is fresh',
+      () {
+        final now = DateTime.fromMillisecondsSinceEpoch(1000000);
+        Map<String, dynamic> pool(int at) => {
+          'observation': {
+            'receivedAt': at,
+            'localModels': [
+              {'grid': swarmGrid, 'model': 'qwen3'},
+              {'grid': swarmGrid, 'model': 7},
+              'junk',
+            ],
+          },
+        };
+        expect(superTabServedModels(pool(990000), swarmGrid, now: now), [
+          (model: 'qwen3', name: 'qwen3'),
+        ]);
+        expect(
+          superTabServedModels(pool(900000), swarmGrid, now: now),
+          isEmpty,
+        );
+        expect(superTabServedModels(null, swarmGrid, now: now), isEmpty);
+        expect(SuperTabLocalModels.read({'enabled': true}), isNull);
+        expect(
+          SuperTabLocalModels.read({
+            'grid': swarmGrid,
+            'enabled': true,
+            'ready': false,
+            'error': 'plan limit',
+          })!.error,
+          'plan limit',
+        );
+      },
+    );
+  });
+
   group('Remove from Swarm', () {
     Map<String, dynamic> machine(String contributorId) => {
       'machineId': 'studio',
@@ -905,9 +1153,24 @@ void main() {
     testWidgets(
       'the owner removes a machine and its agents after a yes, from its details',
       (tester) async {
-        final server = ConversationServer();
+        final server = _RemovalServer();
         server.state['machines'] = [machine('owner')];
         server.state['agents'] = [agent('a1', 'owner'), agent('a2', 'owner')];
+        server.preview = {
+          'blockedBy': null,
+          'agents': [
+            {
+              'id': 'a1',
+              'name': 'Mira',
+              'projectName': 'Pilot',
+              'task': 'Review the onboarding flow',
+            },
+            {'id': 'a2', 'name': 'River', 'projectName': 'Beacon'},
+          ],
+          'soleSourceProjects': [
+            {'id': 'beacon', 'name': 'Beacon'},
+          ],
+        };
         final c = server.controller();
         await c.refresh();
         await mount(tester, c);
@@ -916,12 +1179,23 @@ void main() {
         await tester.tap(find.byKey(const ValueKey('super-machine-remove')));
         await tester.pumpAndSettle();
         expect(find.text('Remove Studio from this Swarm?'), findsOneWidget);
+        expect(server.previewReads, [
+          '/api/super-tabs/tab/machines/studio/removal',
+        ]);
+        expect(find.textContaining('Mira'), findsWidgets);
+        expect(find.textContaining('River'), findsWidgets);
+        expect(find.textContaining('Pilot'), findsWidgets);
+        expect(find.textContaining('Beacon'), findsWidgets);
         expect(
-          find.textContaining(
-            'Mira and River leave the Swarm with it and keep running on Studio.',
-          ),
+          find.textContaining('Review the onboarding flow'),
           findsOneWidget,
         );
+        expect(find.textContaining('Product Manager'), findsWidgets);
+        expect(find.textContaining('only on this machine'), findsOneWidget);
+        expect(find.textContaining('Swarm folders'), findsOneWidget);
+        if (capture != null) {
+          await captureWindow(tester, capture, 'machine-remove-confirm');
+        }
         // Cancel sends nothing.
         await tester.tap(find.widgetWithText(TextButton, 'Cancel'));
         await tester.pumpAndSettle();
@@ -948,6 +1222,10 @@ void main() {
           {'type': 'machine.remove', 'machineId': 'studio'},
         );
         expect(find.text('Remove Studio from this Swarm?'), findsNothing);
+        expect(find.text('Cleaning up'), findsOneWidget);
+        if (capture != null) {
+          await captureWindow(tester, capture, 'machine-removal-cleaning');
+        }
         await tester.pumpWidget(const SizedBox());
         await c.flush();
         c.dispose();
@@ -957,7 +1235,7 @@ void main() {
     testWidgets('a right-click offers it to whoever may remove the machine', (
       tester,
     ) async {
-      final server = ConversationServer();
+      final server = _RemovalServer();
       server.state['machines'] = [machine('owner')];
       final c = server.controller();
       await c.refresh();
@@ -971,10 +1249,7 @@ void main() {
       await tester.tap(find.byKey(const ValueKey('super-machine-menu-remove')));
       await tester.pumpAndSettle();
       expect(find.text('Remove Studio from this Swarm?'), findsOneWidget);
-      expect(
-        find.text('The Swarm stops using it for new work.'),
-        findsOneWidget,
-      );
+      expect(find.textContaining('Swarm folders'), findsOneWidget);
       await tester.tap(find.widgetWithText(TextButton, 'Cancel'));
       await tester.pumpAndSettle();
       await tester.pumpWidget(const SizedBox());
@@ -982,7 +1257,149 @@ void main() {
       c.dispose();
     });
 
-    testWidgets('a collaborator removes only a machine that is all theirs', (
+    testWidgets('machine with a Product Manager cannot be removed', (
+      tester,
+    ) async {
+      final server = ConversationServer();
+      server.state['machines'] = [machine('owner')];
+      server.state['agents'] = [agent('a1', 'owner')];
+      (server.state['conversations'] as List)[0]['leadId'] = 'a1';
+      final c = server.controller();
+      await c.refresh();
+      await mount(tester, c);
+      await tester.tap(find.byKey(const ValueKey('super-machine-studio')));
+      await tester.pumpAndSettle();
+      final remove = find.byKey(const ValueKey('super-machine-remove'));
+      expect(remove, findsOneWidget);
+      expect(
+        find.text(
+          'Mira is the Product Manager of project Pilot. Delete the project first.',
+        ),
+        findsOneWidget,
+      );
+      expect(server.posts, isEmpty);
+      await tester.pumpWidget(const SizedBox());
+      await c.flush();
+      c.dispose();
+    });
+
+    testWidgets('the removal preview can refuse a Product Manager machine', (
+      tester,
+    ) async {
+      final server = _RemovalServer();
+      server.state['machines'] = [machine('owner')];
+      server.preview = {
+        'blockedBy': {'projectId': 'hidden', 'projectName': 'Hidden Pilot'},
+        'agents': <dynamic>[],
+        'soleSourceProjects': <dynamic>[],
+      };
+      final c = server.controller();
+      await c.refresh();
+      await mount(tester, c);
+      await tester.tap(find.byKey(const ValueKey('super-machine-studio')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('super-machine-remove')));
+      await tester.pumpAndSettle();
+      expect(
+        find.textContaining('Product Manager of project Hidden Pilot'),
+        findsOneWidget,
+      );
+      expect(
+        tester
+            .widget<FilledButton>(
+              find.byKey(const ValueKey('super-machine-remove-confirm')),
+            )
+            .onPressed,
+        isNull,
+      );
+      expect(server.posts, isEmpty);
+      await tester.pumpWidget(const SizedBox());
+      await c.flush();
+      c.dispose();
+    });
+
+    testWidgets('a failed preview cannot confirm machine removal', (
+      tester,
+    ) async {
+      final server = _RemovalServer()..failPreview = true;
+      server.state['machines'] = [machine('owner')];
+      final c = server.controller();
+      await c.refresh();
+      await mount(tester, c);
+      await tester.tap(find.byKey(const ValueKey('super-machine-studio')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('super-machine-remove')));
+      await tester.pumpAndSettle();
+      expect(find.text('Could not check this machine.'), findsOneWidget);
+      expect(
+        tester
+            .widget<FilledButton>(
+              find.byKey(const ValueKey('super-machine-remove-confirm')),
+            )
+            .onPressed,
+        isNull,
+      );
+      expect(server.posts, isEmpty);
+      await tester.pumpWidget(const SizedBox());
+      await c.flush();
+      c.dispose();
+    });
+
+    testWidgets('a pending machine removal stays visible as Cleaning up', (
+      tester,
+    ) async {
+      final server = ConversationServer();
+      server.state['machines'] = [
+        {
+          ...machine('owner'),
+          'removal': {
+            'id': 'removal-1',
+            'state': 'cleaning',
+            'requestedAt': '2026-10-23T00:00:00Z',
+          },
+        },
+      ];
+      final c = server.controller();
+      await c.refresh();
+      await mount(tester, c);
+      expect(find.text('Cleaning up'), findsOneWidget);
+      await tester.tap(find.byKey(const ValueKey('super-machine-studio')));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const ValueKey('super-machine-remove')), findsNothing);
+      await tester.pumpWidget(const SizedBox());
+      await c.flush();
+      c.dispose();
+    });
+
+    testWidgets(
+      'machine details disable Remove when its agent becomes Product Manager',
+      (tester) async {
+        final server = ConversationServer();
+        server.state['machines'] = [machine('owner')];
+        server.state['agents'] = [agent('a1', 'owner')];
+        final c = server.controller();
+        await c.refresh();
+        await mount(tester, c);
+        await tester.tap(find.byKey(const ValueKey('super-machine-studio')));
+        await tester.pumpAndSettle();
+        (server.state['conversations'] as List)[0]['leadId'] = 'a1';
+        await c.refresh();
+        await tester.pumpAndSettle();
+        expect(
+          find.textContaining('Product Manager of project Pilot'),
+          findsOneWidget,
+        );
+        final remove = tester.widget<AppIconButton>(
+          find.byKey(const ValueKey('super-machine-remove')),
+        );
+        expect(remove.onPressed, isNull);
+        await tester.pumpWidget(const SizedBox());
+        await c.flush();
+        c.dispose();
+      },
+    );
+
+    testWidgets('only the machine owner sees Remove from Swarm', (
       tester,
     ) async {
       final server = ConversationServer();
@@ -991,22 +1408,26 @@ void main() {
         'email': 'peer@example.com',
         'role': 'collaborator',
       });
-      // Their machine, running the owner's agent: the Swarm owner's to remove.
+      // Swarm ownership does not grant removal of another person's machine.
       server.state['machines'] = [machine('peer')];
       server.state['agents'] = [agent('a1', 'owner')];
-      final c = server.controller(account: 'peer');
-      await c.refresh();
-      await mount(tester, c);
+      final owner = server.controller();
+      await owner.refresh();
+      await mount(tester, owner);
       await tester.tap(find.byKey(const ValueKey('super-machine-studio')));
       await tester.pumpAndSettle();
       expect(find.byKey(const ValueKey('super-machine-remove')), findsNothing);
       await tester.tap(find.widgetWithText(TextButton, 'Close'));
       await tester.pumpAndSettle();
+      await tester.pumpWidget(const SizedBox());
+      await owner.flush();
+      owner.dispose();
 
-      // All theirs: theirs to remove.
-      server.state['agents'] = [agent('a1', 'peer')];
-      server.revision++;
+      // The machine owner can remove it even when another person placed an
+      // ordinary agent there; the preview names what will stop.
+      final c = server.controller(account: 'peer');
       await c.refresh();
+      await mount(tester, c);
       await tester.pumpAndSettle();
       await tester.tap(find.byKey(const ValueKey('super-machine-studio')));
       await tester.pumpAndSettle();
@@ -1561,6 +1982,43 @@ void main() {
       await tester.pumpAndSettle();
       expect(tester.widget<MenuItemButton>(_option('m')).onPressed, isNull);
       expect(tester.widget<MenuItemButton>(_option('m2')).onPressed, isNotNull);
+
+      await tester.pumpWidget(const SizedBox());
+      await c.flush();
+      f.app.superTabs.dispose();
+      await tester.pump();
+    },
+  );
+
+  testWidgets(
+    'Add machine: a Mac\'s Harness Team account in the Swarm is not offered beside its Mac; it joins and leaves with the Mac',
+    (tester) async {
+      final f = SuperTabLaunchFixture();
+      f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Pilot');
+      // Its pool names the Mac (stamped by the backend); the account's machine itself is an ordinary one to the app.
+      f.connection.server.state['machines'] = [
+        {'machineId': 'm', 'contributorId': 'owner'},
+        {'machineId': 'm-team', 'contributorId': 'owner', 'hostMachineId': 'm'},
+      ];
+      const team = Machine(
+        machineId: 'm-team',
+        authMode: MachineAuthMode.remote,
+        name: 'This Mac · Team',
+      );
+      f.app.machines = [...f.app.machines, team];
+      f.app.machineStates['m-team'] = MachineState(team)
+        ..nodeOnline = true
+        ..connectionStatus = ConnectionStatus.connected
+        ..agentLoadStatus = AgentLoadStatus.loaded;
+      final c = await f.app.superTabs.open(tabId);
+      await c.refresh();
+      await _openAddMachineDialog(tester, f, c);
+
+      await tester.tap(_picker);
+      await tester.pumpAndSettle();
+      expect(_option('m'), findsOneWidget);
+      expect(_option('m-team'), findsNothing);
+      expect(find.textContaining('This Mac · Team'), findsNothing);
 
       await tester.pumpWidget(const SizedBox());
       await c.flush();
@@ -2336,3 +2794,8 @@ void main() {
     await tester.pump();
   });
 }
+
+/// A hardware reading's value in a machine's expanded readings.
+String? _hw(WidgetTester tester, String id, String name) => tester
+    .widget<Text>(find.byKey(ValueKey('super-machine-hw-$id-$name')))
+    .data;

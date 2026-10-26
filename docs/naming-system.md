@@ -55,6 +55,7 @@ and **Browser**. Technical documentation may still call the terminal interface a
 | **Tab** | A workspace group of harnesses. | Frontend and Backend tabs. |
 | **Swarm** | A collaborative tab containing projects, people, agents and contributed machines. Invite-only by default; its owner can enable joining by email domain or a shared link. | Open your company Swarm beside your regular tabs. |
 | **Project in a Swarm** | An initiative with its own product manager, repository, sharing and workgroups. | Discuss Lamp OS with its product manager; expand it to follow a workgroup. |
+| **Instructions** | The visible name for a project's skill set and each role's text. System name: skill. | Open Instructions; edit Product Manager instructions. |
 | **Product Manager** | The agent coordinating a Swarm project. Use **PM** in a compact role badge. System name: lead. | Message Product Manager. |
 | **Engineer** | An agent carrying out project work. Use **Dev** in a compact role badge. System name: builder. | Atlas is an engineer on Lamp OS. |
 | **Reviewer** | An agent that reviews project work. Use **Rev** in a compact role badge. System name: reviewer. | Atlas is a reviewer on Lamp OS. |
@@ -117,6 +118,10 @@ activity summaries or infer a work timer from the session's age. Engine names be
 Chat headings and quoted replies use the same current agent identity as the roster, including
 older messages. When an agent has left, its recorded author name remains available in history.
 Machine rows show a computer icon, name, owner avatar, status and right-hand disclosure.
+In the Swarm's views, a Mac and its Harness Team account are one row, and agents in that account
+read as on the Mac. App-wide machine lists still show the team account as its own machine.
+When teammates' agents cannot run on a machine, its row adds one line, such as
+**Teammates' agents paused: privacy check failed**. There is no badge.
 Clicking the name opens labeled details; disclosure shows agents with their names, role badges
 and status, followed by known resources and model allowances. Offline machines stay in the
 same list and omit stale readings. Rows share the projects' alignment and full-width highlight.

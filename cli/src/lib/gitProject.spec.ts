@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { encryptDownFrame, encryptRpcResult } from './e2ee/applicationFrames.js'
 import { placeholderBranch, sessionBranchNames, worktreeFolderName } from './agentNames.js'
 import { nameBranchAfterSession } from './branchNaming.js'
-import { prepareGitProject, readGitProject, validGitPath } from './gitProject.js'
+import { fetchDefaultBranch, prepareGitProject, readGitProject, validGitPath } from './gitProject.js'
 import { parseProjectFolder, prepareProjectFolder } from './projectFolder.js'
 import { engineSessionTitle, namingTitle } from './sessionTitle.js'
 
@@ -410,6 +410,35 @@ describe('launch Git preparation', { timeout: 30_000 }, () => {
       await pushToOrigin('pushed')
       await inClone('remote', 'set-head', 'origin', '--delete')
       expect(await swarmStart()).toBe('pushed')
+    })
+
+    it('fetches nothing for another person\'s Swarm start: its host fetched with the app\'s token, and the worktree starts from that', async () => {
+      const before = await inClone('rev-parse', 'refs/remotes/origin/main')
+      await pushToOrigin('pushed')
+      // The daemon's own git setup is never asked: offline, the worktree starts from what the checkout has.
+      const offline = await prepareProjectFolder({ source: 'worktree', gitSource: managed, branchName: 'super-tab/start-1', fromDefaultBranch: true, offline: true }, options())
+      expect(await readFile(join(offline, 'src', 'value'), 'utf8')).toBe('main')
+      expect(await inClone('rev-parse', 'refs/remotes/origin/main')).toBe(before)
+      // Only the daemon sets it: a client cannot ask for it.
+      expect(parseProjectFolder({ projectSource: 'worktree', gitSource: managed, branchBase: 'default', offline: true })).not.toHaveProperty('offline')
+      // The host's fetch, with the environment it is given in place of the daemon's.
+      const env = { ...process.env, GIT_CONFIG_PARAMETERS: `'harness.fixture'='yes'` }
+      expect(await fetchDefaultBranch(managed, env)).toBe(true)
+      expect(await inClone('rev-parse', 'refs/remotes/origin/main')).not.toBe(before)
+      const folder = await prepareProjectFolder({ source: 'worktree', gitSource: managed, branchName: 'super-tab/start-2', fromDefaultBranch: true, offline: true }, options())
+      expect(await readFile(join(folder, 'src', 'value'), 'utf8')).toBe('pushed')
+    })
+
+    it('a host\'s fetch does nothing outside a checkout or without a default branch, and says when it could not fetch', async () => {
+      expect(await fetchDefaultBranch('relative/path', process.env)).toBe(false)
+      expect(await fetchDefaultBranch(join(root, 'nowhere'), process.env)).toBe(false)
+      const local = join(root, 'no-remote')
+      await mkdir(local)
+      await exec('git', ['-C', local, 'init', '-q', '-b', 'trunk'])
+      await exec('git', ['-C', local, ...identity, 'commit', '-q', '--allow-empty', '-m', 'initial'])
+      expect(await fetchDefaultBranch(local, process.env)).toBe(false)
+      await inClone('remote', 'set-url', 'origin', join(root, 'gone.git'))
+      expect(await fetchDefaultBranch(managed, process.env)).toBe(false)
     })
 
     it('starts from the branch it is given, not the default one', async () => {

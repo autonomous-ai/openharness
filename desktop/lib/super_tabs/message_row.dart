@@ -29,9 +29,13 @@ class SuperTabMessageRow extends StatefulWidget {
     this.onOpenAgent,
     this.references = const {},
     this.onOpenGroup,
+    this.mentions = const [],
   });
 
   final SuperTabMessage message;
+
+  /// The names of the people [message] tags.
+  final List<String> mentions;
   final Map<int, String> references;
   final ValueChanged<String>? onOpenGroup;
   final String author;
@@ -292,6 +296,7 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
                                     message.text,
                                     references: widget.references,
                                     onOpenGroup: widget.onOpenGroup,
+                                    mentions: widget.mentions,
                                   ),
                                 ),
                               if (message.attachments.isNotEmpty)

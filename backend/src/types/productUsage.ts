@@ -80,7 +80,7 @@ export const PRODUCT_USAGE_PHONE_SCREEN_METRICS = PRODUCT_USAGE_PHONE_SCREENS.fl
  * `phone_offer_away_waited` / `_finished`: the card for a person back after five minutes or more away, to a harness
  * that waited on them or finished meanwhile; vocabulary 4. docs/design/2026-10-20-desktop-phone-conversion.md. */
 export const PRODUCT_USAGE_DESKTOP_FLOWS = ['phone_offer', 'phone_offer_after_work', 'phone_offer_away_waited',
-  'phone_offer_away_finished'] as const
+  'phone_offer_away_finished', 'share_invite', 'share_accept'] as const
 /** Each time Add Phone opens on a computer, by its way in: that card (`offer`), the title bar's phone, Harness ▸
  * Add Phone… (`menu`, or a key bound to it on macOS), the account menu, the Machines picker, or the command
  * (`> add phone`, a key bound to it elsewhere). Which way in, nothing else. */

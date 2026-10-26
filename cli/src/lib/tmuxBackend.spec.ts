@@ -151,6 +151,21 @@ describe('TmuxBackend lifecycle', () => {
     expect(readFileSync(calls, 'utf8').trim().split('\n')).toEqual(['load-buffer', 'paste-buffer', 'send-keys', 'load-buffer', 'paste-buffer'])
   })
 
+  it('reports a failed buffer load as not pasted, rather than a possible submission', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'tmux-backend-load-fail-'))
+    dirs.push(dir)
+    const calls = join(dir, 'calls')
+    writeFileSync(join(dir, 'tmux'), `#!/bin/sh
+printf '%s\\n' "$1" >> "$TMUX_BACKEND_CALLS"
+if [ "$1" = "load-buffer" ]; then cat > /dev/null; exit 2; fi
+`, { mode: 0o700 })
+    process.env.PATH = `${dir}${delimiter}${originalPath ?? ''}`
+    process.env.TMUX_BACKEND_CALLS = calls
+    const result = await new TmuxBackend().submitText({ backend: 'tmux', paneId: '%42' }, 'one message')
+    expect(result).toMatchObject({ state: 'failed', dispatch: 'not_started' })
+    expect(readFileSync(calls, 'utf8').trim().split('\n')).toEqual(['load-buffer', 'delete-buffer'])
+  })
+
   it('creates a detached session and closes only its exact pane', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'tmux-backend-lifecycle-'))
     dirs.push(dir)

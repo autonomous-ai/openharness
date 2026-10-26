@@ -127,6 +127,15 @@ export function processCoreApi(dataDir: string, service: string, view: AgentsVie
       byAgent: (agentId) => live().find((session) => session.agentId === agentId),
       closeSwarm: async request => await (ask?.('close_swarm', { ...request }) ?? Promise.resolve({ error: 'SERVICE_UNAVAILABLE' }))
         .catch(() => ({ error: 'SERVICE_UNAVAILABLE' })),
+      keepLeadAlive: async agentId => {
+        const answer = await ask?.('keep_lead_alive', { agentId }).catch(() => null)
+        if (answer?.ok === true) return { ok: true }
+        return answer?.ok === false && typeof answer.error === 'string'
+          ? { ok: false, error: answer.error, ...(typeof answer.detail === 'string' ? { detail: answer.detail } : {}) }
+          : { ok: false, error: 'SERVICE_UNAVAILABLE' }
+      },
+      closeMember: async (agentId, creationId) => await (ask?.('close_member', { agentId, ...(creationId ? { creationId } : {}) }) ?? Promise.resolve({ error: 'SERVICE_UNAVAILABLE' }))
+        .catch(() => ({ error: 'SERVICE_UNAVAILABLE' })),
       stopped: async agentId => (await ask?.('stopped', { agentId }).catch(() => null))?.stopped === true,
       gone: async agentId => (await ask?.('gone', { agentId }).catch(() => null))?.gone === true,
       creationStatus: async creationId => creationObservation(creationId,
