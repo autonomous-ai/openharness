@@ -9,7 +9,8 @@
 // 3. Hover and focus: a control's pixels with and without the mouse over it,
 //    and the page after Tab presses, to see whether a focus ring shows.
 // Results go to <out-dir>/checks.json, with before/after images under
-// <out-dir>/checks/.
+// <out-dir>/checks/. FIXTURE=super-tab measures the tap targets of every
+// Super Tab flow on a build of tool/super_tab_mobile_fixture.dart instead.
 import { chromium } from './playwright.mjs';
 import { createHash } from 'node:crypto';
 import { mkdirSync, writeFileSync } from 'node:fs';
@@ -18,17 +19,20 @@ import { loadFlows } from './load-flows.mjs';
 import { VIEWPORTS, answerApi, contextFor, runStep, settle, urlFor } from './capture.mjs';
 import { serve } from './serve.mjs';
 
-const FLOWS = await loadFlows();
+const FIXTURE = process.env.FIXTURE ?? 'app';
+const FLOWS = await loadFlows(FIXTURE);
 const flow = (name) => FLOWS.find((f) => f.name === name);
 const PHONES = VIEWPORTS.filter((v) => v.width < 720);
 const COMPUTER = VIEWPORTS.find((v) => v.name === '1440');
 
-// Flows whose controls are measured for tap size on phones.
-const TAP_FLOWS = [
+// Flows whose controls are measured for tap size on phones: on the Super Tab
+// fixture, all of them.
+const TAP_FLOWS = FIXTURE !== 'app' ? FLOWS.map((f) => f.name) : [
   'signin', 'first-machine', 'computers', 'workspace', 'app-menu', 'tab-switcher',
   'footer-menu', 'notifications', 'open-harness', 'machines', 'all-commands',
   'appearance', 'split-pane', 'store', 'settings', 'settings-notifications',
   'settings-keyboard-shortcuts', 'new-tab', 'error-banner', 'new-device', 'link-password',
+  'taken-over', 'view-only',
   'shared-link', 'shared-link-private', 'shared-link-refused', 'shared-link-offline',
   'shared-link-failed', 'settings-account',
 ];
@@ -230,14 +234,14 @@ async function main() {
   const server = await serve(buildDir);
   const browser = await chromium.launch({ executablePath: process.env.CHROME_PATH });
   const blocked = new Set();
-  const results = {
-    tapTargets: await tapTargets(browser, server.origin, blocked),
-    wheel: await wheels(browser, server.origin, blocked, dir),
-    swipe: await swipes(browser, server.origin, blocked, dir),
-    hover: await hovers(browser, server.origin, blocked, dir),
-    focus: await focus(browser, server.origin, blocked, dir),
-    blocked: [...blocked],
-  };
+  const results = { tapTargets: await tapTargets(browser, server.origin, blocked) };
+  if (FIXTURE === 'app') {
+    results.wheel = await wheels(browser, server.origin, blocked, dir);
+    results.swipe = await swipes(browser, server.origin, blocked, dir);
+    results.hover = await hovers(browser, server.origin, blocked, dir);
+    results.focus = await focus(browser, server.origin, blocked, dir);
+  }
+  results.blocked = [...blocked];
   writeFileSync(join(outDir, 'checks.json'), JSON.stringify(results, null, 2));
   await browser.close();
   server.close();

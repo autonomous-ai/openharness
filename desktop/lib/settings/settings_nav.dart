@@ -202,11 +202,15 @@ class _SettingsNavState extends State<SettingsNav> {
           else if (group != visible.first)
             const SizedBox(height: 8),
           for (final target in group.sections)
-            SidebarItem(
-              icon: target.icon,
-              label: target.label,
-              selected: target == widget.section,
-              onTap: () => widget.onSelect(target),
+            // On a phone a row is a finger's height; a mouse keeps 38.
+            fingerTarget(
+              enabled: widget.compact,
+              SidebarItem(
+                icon: target.icon,
+                label: target.label,
+                selected: target == widget.section,
+                onTap: () => widget.onSelect(target),
+              ),
             ),
         ],
       ],
