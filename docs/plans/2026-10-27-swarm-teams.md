@@ -95,6 +95,7 @@ Reviewed revision: ______  Reviewer (another engine): ______
    |---|---|---|---|---|---|---|
    | SwarmOrg | New Team; migration; first Swarm created by a person with no Team | rename, `revision`+1 | – | owner deletes: only with no live Swarm; `deletedAt` | 30 days after `deletedAt` | ids are random, never reused |
    | SwarmOrgMember | invitation accepted; joining a Team Swarm; migration | role change, `version`+1 | `removedAt` set, Swarm removals follow | with its Team | 30 days after `removedAt` | rejoin writes a new `generation`, so old receipts and deliveries stay refused (the D12 rule) |
+   | SwarmOrgRemoval | a removal from the Team | `finishedAt` once every Swarm of the Team is left | – | – | 30 days after `finishedAt` | keyed by the removed generation, so each removal is its own record |
    | SwarmOrgInvitation | invite | resend moves `expiresAt` | accepted or revoked: deleted | – | at `expiresAt` | a new invitation per send |
    | SuperTab.orgId | Swarm create; migration | never (no moves in this version) | – | with the Swarm, as today | as today | – |
 
@@ -108,7 +109,9 @@ Reviewed revision: ______  Reviewer (another engine): ______
      `SwarmOrgMember` in its transaction (`store.actor()`), so every request that starts after the removal commits is
      refused. The person then leaves each Swarm of the Team through the existing leave (`member.remove` of
      themselves), one Swarm transaction each, which writes their `SwarmMember` part; the hourly sweep finishes any
-     that failed. Built: a request already in flight when the removal commits may still finish, the same window
+     that failed, paging through every open removal record (`SwarmOrgRemoval`) in id order. Nobody is brought back
+     into the Team while a removal of theirs is open: accepting an invitation finishes it first, or is refused, so
+     a Swarm the removal failed to leave never opens to them again under a new membership (review of #1811). Built: a request already in flight when the removal commits may still finish, the same window
      as a request that arrived a moment earlier (ruling while building: touching every Swarm's member part in the
      removal's transaction needs a write the parts layer has no no-op for).
    - *Exactly one owner:* transfer writes both members in one transaction.
