@@ -69,6 +69,7 @@ class SwarmPartsBackend {
           'machines',
           'starts',
           'mentionsWaiting',
+          'decisionsWaiting',
           'otherProjectsWork',
           'githubApp',
         }.contains(entry.key))
@@ -138,6 +139,8 @@ class SwarmPartsBackend {
     'machines': <String, dynamic>{},
     if (state['mentionsWaiting'] != null)
       'mentionsWaiting': state['mentionsWaiting'],
+    if (state['decisionsWaiting'] != null)
+      'decisionsWaiting': state['decisionsWaiting'],
     if (state['otherProjectsWork'] != null)
       'otherProjectsWork': state['otherProjectsWork'],
   };
@@ -388,6 +391,8 @@ class ConversationServer {
   final leaderboardReads = <String>[];
   // The reader's tags, newest last, answered by GET .../mentions?state=.
   final mentions = <Map<String, dynamic>>[];
+  // Decisions asked of the reader, newest last, answered by GET .../decisions?state=.
+  final decisions = <Map<String, dynamic>>[];
   // How many times the mentions list was read.
   int mentionReads = 0;
   // A backend from before tags: it has no list route.
@@ -525,6 +530,12 @@ class ConversationServer {
         );
         messages.last['replyTo'] = command['replyTo'];
         output['messageId'] = 'message-$revision';
+      } else if (command['type'] == 'decision.answer') {
+        decisions.firstWhere((d) => d['id'] == command['decisionId'])
+          ..['choice'] = command['choice']
+          ..['answeredAt'] = '2026-10-27T06:00:00Z';
+        state['decisionsWaiting'] = (state['decisionsWaiting'] as int) - 1;
+        revision++;
       } else if (command['type'] == 'mention.done') {
         mentions.firstWhere((m) => m['id'] == command['mentionId'])
           ..['resolvedAt'] = '2026-10-24T06:00:00Z'
@@ -676,6 +687,16 @@ class ConversationServer {
       }
       return jsonDecode(jsonEncode(board)) as Map<String, dynamic>;
     }
+    if (uri.pathSegments.last == 'decisions') {
+      final open = uri.queryParameters['state'] == 'open';
+      return jsonDecode(
+        jsonEncode({
+          'decisions': decisions.reversed
+              .where((d) => (d['answeredAt'] == null) == open)
+              .toList(),
+        }),
+      ) as Map<String, dynamic>;
+    }
     if (uri.pathSegments.last == 'routing-policy') {
       final policy = routingPolicy;
       if (policy == null) {
@@ -787,6 +808,38 @@ class ConversationServer {
         .where((g) => g['id'] == conversationId)
         .firstOrNull;
     group?['lastMessageSequence'] = revision;
+  }
+
+  /// The Lead asks the reader [questions] in one batch, as the backend records it.
+  void ask(
+    List<String> questions, {
+    String conversationId = 'lead',
+    String projectId = 'lead',
+    int recommended = 0,
+  }) {
+    final batch = 'batch-${decisions.length + 1}';
+    for (final question in questions) {
+      decisions.add({
+        'id': 'decision-${decisions.length + 1}',
+        'batchId': batch,
+        'projectId': projectId,
+        'projectName': 'web-project',
+        'conversationId': conversationId,
+        'conversationTitle': 'Lead',
+        'askerName': 'Wren',
+        'question': question,
+        'options': ['Behind a flag', 'To everyone'],
+        'recommended': recommended,
+        'unblocks': 'The release',
+        'createdAt': '2026-10-27T05:00:00Z',
+        'answeredAt': null,
+        'choice': null,
+        'note': null,
+      });
+    }
+    state['decisionsWaiting'] =
+        ((state['decisionsWaiting'] as int?) ?? 0) + questions.length;
+    revision++;
   }
 
   /// Who asks, for the reads a [controller] makes: a private conversation is

@@ -11,6 +11,7 @@ import { routingOverrideSchema } from './routingPolicy.js'
 import { agentTarget, askedInSchema, broken, MAX_RULES, RULE_MESSAGE_MS, ruleSchema, ruleTextSchema, startTarget, type RunTarget } from './rules.js'
 import { MAX_ATTACHMENTS, type Attachment } from './attachments.js'
 import { checkMentions, MAX_MENTIONS, type MentionTarget } from './mentions.js'
+import { ANSWERED_NOTICE, answerDecision, askDecisions, checkAsker, decisionChoices, decisionQuestion, MAX_QUESTIONS, type DecisionTarget } from './decisions.js'
 import { TERMINAL_KEYS, terminalAlert, terminalRequest, terminalResult, type TerminalRequest } from './terminal.js'
 import { loseTasks, renewLease, renewOwnTask } from './liveness.js'
 import { credentialResult, redactCredentials, type CredentialKind } from './credentials.js'
@@ -126,13 +127,17 @@ export const commandSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('message.send'), conversationId: id, text: z.string().trim().max(32_000), replyTo: id.nullable(), recipientIds: z.array(id).max(16),
     attachmentIds: z.array(id).max(MAX_ATTACHMENTS).optional(), mentions: z.array(id).max(MAX_MENTIONS).optional(), agentOnly: z.literal(true).optional() }).strict(),
   z.object({ type: z.literal('mention.done'), mentionId: id }).strict(),
+  z.object({ type: z.literal('decision.ask'), conversationId: id, personId: id, questions: z.array(decisionQuestion).min(1).max(MAX_QUESTIONS) }).strict(),
+  z.object({ type: z.literal('decision.answer'), decisionId: id, choice: z.number().int().min(0), note: z.string().trim().min(1).max(2000).optional() }).strict(),
   z.object({ type: z.literal('delivery.resolve'), deliveryId: id, resolution: z.enum(['received', 'resend', 'cancel']) }).strict(),
   z.object({ type: z.literal('work.define'), conversationId: id, brief: text.optional(), task: task.optional(), checks: z.array(check).min(1).max(40) }).strict()
     .refine(c => c.task !== undefined || c.brief !== undefined, 'Provide a task or brief.')
     .refine(c => !c.task || renderWorkTask(c.task).length <= 32_000, 'Keep the rendered task within 32,000 characters.'),
   z.object({ type: z.literal('work.assign'), conversationId: id, agentId: id, roleId: roleId.optional(), routeDecisionId: id.optional(), overrideReason: reason.optional() }).strict(),
   z.object({ type: z.literal('work.status'), conversationId: id, assignmentId: id,
-    status: z.enum(['working', 'needs_human', 'blocked', 'review', 'done', 'stopped']), result: text.nullable() }).strict(),
+    status: z.enum(['working', 'needs_human', 'blocked', 'review', 'done', 'stopped']), result: text.nullable(),
+    // A worker's question for one named person, opened as a decision (decisions.ts); the result is the question.
+    ask: decisionChoices.extend({ personId: id }).strict().optional() }).strict(),
   z.object({ type: z.literal('work.cancel'), conversationId: id, assignmentId: id, reason }).strict(),
   z.object({ type: z.literal('route.record'), conversationId: id, decision: routeRecordSchema }).strict(),
   z.object({ type: z.literal('route.override'), decisionId: id, candidateId: z.string().regex(/^c\d{1,2}$/), reason }).strict(),
@@ -235,6 +240,8 @@ export interface CommandContext {
   terminalRequest?: TerminalRequest
   /** The mention `mention.done` names, read from SuperTabMention by the store. */
   mention?: MentionTarget
+  /** The decision `decision.answer` names, read from SuperTabDecision by the store. */
+  decision?: DecisionTarget
   /** The tab's contributed machines whose account row is signed in as a Harness Team account (`Machine.sessionKind`),
    *  read by the store for the commands that start, assign or route work (machines.ts teamWorkCheck). */
   teamMachines?: string[]
@@ -348,7 +355,8 @@ function dropClosing(state: SuperTabState, keep: (request: NonNullable<SuperTabS
 export function authorizeCommandAccess(state: SuperTabState, actor: Actor, command: Command, context: Partial<CommandContext> = {}) {
   if (command.type === 'invite.accept' || command.type === 'agent.sessionClosed' || command.type === 'machine.cleaned') return
   // Marking one's own tag done changes only one's own list, so a viewer may do it too.
-  if (command.type === 'mention.done') return void author(state, actor)
+  // Answering a decision asked of oneself changes only that decision, so a viewer may do it too.
+  if (command.type === 'mention.done' || command.type === 'decision.answer') return void author(state, actor)
   const leaving = command.type === 'member.remove' && actor.kind === 'person' && command.userId === actor.userId
   author(state, actor, !leaving)
   // An invitation's group is only where the person lands, and invite.create replaces a deleted one (inviteLanding).
@@ -456,7 +464,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
   }
 
   const leaving = command.type === 'member.remove' && actor.kind === 'person' && command.userId === actor.userId
-  const sender = author(state, actor, !leaving)
+  const sender = author(state, actor, !leaving && command.type !== 'decision.answer')
   authorizeCommandAccess(state, actor, command, context)
   const rememberAttempt = (group: ReturnType<typeof conversation>) => {
     if (group.assignment) effects.previousAttempts.push(structuredClone({ conversationId: group.id,
@@ -988,6 +996,20 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       result.conversationId = operationId
       result.number = number
       if (brief) message(operationId, brief, [], null, SYSTEM_ROW)
+      break
+    }
+    case 'decision.ask': {
+      const group = open(state, command.conversationId)
+      effects.decisions = askDecisions(state, group, command.personId, command.questions,
+        { operationId, askerAgentId: checkAsker(state, actor, group), assignmentId: null })
+      result.decisionIds = effects.decisions.map(d => d.id)
+      break
+    }
+    case 'decision.answer': {
+      const { answer, recipients, source } = answerDecision(state, actor, context.decision, command.choice, command.note ?? null)
+      effects.decisionAnswer = answer
+      if (recipients.length) message(context.decision!.conversationId, ANSWERED_NOTICE, recipients, null, source)
+      result.decisionId = answer.id
       break
     }
     case 'conversation.rename':
@@ -1578,7 +1600,15 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       if (command.status === 'done' && (!command.result || !group.checks.every(c => c.passedBy && c.evidence))) {
         fail('CHECKS_PENDING', 'Completion needs a result and evidence for every acceptance check.')
       }
-      const changed = assignment.status !== command.status || assignment.result !== command.result, previous = assignment.status
+      if (command.ask) {
+        if (command.status !== 'needs_human' || !command.result || actor.kind !== 'agent') {
+          fail('INVALID_DECISION', 'An agent asks a person for a decision only when its work needs a human, with the question as its result.', 400)
+        }
+        const { personId, ...choices } = command.ask
+        effects.decisions = askDecisions(state, group, personId, [{ question: command.result, ...choices }],
+          { operationId, askerAgentId: actor.agentId, assignmentId: assignment.id })
+      }
+      const changed = assignment.status !== command.status || assignment.result !== command.result || !!command.ask, previous = assignment.status
       assignment.status = command.status
       assignment.result = command.result
       recordStatus(group, assignment, previous, context.now, changed ? operationId : null)
@@ -1594,7 +1624,8 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
         // Ready for review also wakes the group's Reviewers, whoever marked it.
         const reviewers = command.status !== 'review' ? [] : group.agentIds.filter(id => id !== lead &&
           (actor.kind !== 'agent' || id !== actor.agentId) && state.agents.some(a => a.id === id && agentRole(a) === 'reviewer' && a.workDecision !== 'stop'))
-        message(group.id, `${label}${command.result ? `\n\n${command.result}` : ''}`, [...(tellLead ? [lead] : []), ...reviewers], null, SYSTEM_ROW)
+        const asked = command.ask ? `\n\nAsked ${person(state, command.ask.personId).email}.` : ''
+        message(group.id, `${label}${command.result ? `\n\n${command.result}` : ''}${asked}`, [...(tellLead ? [lead] : []), ...reviewers], null, SYSTEM_ROW)
       }
       if (actor.kind === 'agent') renewOwnTask(group, actor.agentId, context.now)
       break

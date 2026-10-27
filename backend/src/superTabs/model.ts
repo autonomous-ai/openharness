@@ -280,6 +280,9 @@ export interface CommandEffects {
   result: Record<string, unknown>
   /** A terminal request or its answer, written outside the tab state by the store (terminal.ts). */
   terminal?: import('./terminal.js').TerminalEffect
+  /** Decisions asked, and a decision answered, written outside the tab state by the store (decisions.ts). */
+  decisions?: import('./decisions.js').DecisionDraft[]
+  decisionAnswer?: import('./decisions.js').DecisionAnswer
 }
 export class SuperTabError extends Error {
   constructor(readonly code: string, message: string, readonly status = 409) {

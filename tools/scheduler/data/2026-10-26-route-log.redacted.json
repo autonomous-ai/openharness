@@ -1,0 +1,1104 @@
+[
+ {
+  "group": "9e7e516b4e7e1f90d7c9ca43",
+  "at": "2026-10-26T09:12:38.357Z",
+  "request": {
+   "difficulty": "medium",
+   "risk": "medium",
+   "size": "large",
+   "why": "Release-gating regression of Swarm API-model flows across several machines; needs judgment to diagnose a live grid fault and run tests, no product code changes.",
+   "kind": "testing",
+   "needs": {
+    "tools": [
+     "git",
+     "gh"
+    ],
+    "devices": []
+   }
+  }
+ },
+ {
+  "group": "9e7e516b4e7e1f90d7c9ca43",
+  "at": null,
+  "request": {
+   "difficulty": "medium",
+   "risk": "medium",
+   "size": "large",
+   "why": "Release-gating regression of Swarm API-model flows across several machines; needs judgment to diagnose a live grid fault and run tests, no product code changes.",
+   "kind": "testing",
+   "needs": {
+    "tools": [
+     "git",
+     "gh"
+    ],
+    "devices": []
+   }
+  }
+ },
+ {
+  "group": "9e7e516b4e7e1f90d7c9ca43",
+  "at": "2026-10-26T09:21:26.294Z",
+  "request": {
+   "difficulty": "low",
+   "risk": "low",
+   "size": "small",
+   "why": "Regression flow 3a: route naming the shared API model",
+   "model": "deepseek 4.1 flash"
+  }
+ },
+ {
+  "group": "9e7e516b4e7e1f90d7c9ca43",
+  "at": "2026-10-26T09:21:26.294Z",
+  "request": {
+   "difficulty": "low",
+   "risk": "low",
+   "size": "small",
+   "why": "Regression flow 3b: route without a model name"
+  }
+ },
+ {
+  "group": "9e7e516b4e7e1f90d7c9ca43",
+  "at": null,
+  "request": {
+   "difficulty": "low",
+   "risk": "low",
+   "size": "small",
+   "why": "Regression flow 3a: route naming the shared API model",
+   "model": "deepseek 4.1 flash"
+  }
+ },
+ {
+  "group": "9e7e516b4e7e1f90d7c9ca43",
+  "at": null,
+  "request": {
+   "difficulty": "low",
+   "risk": "low",
+   "size": "small",
+   "why": "Regression flow 3b: route without a model name"
+  }
+ },
+ {
+  "group": "9e7e516b4e7e1f90d7c9ca43",
+  "at": "2026-10-26T09:22:47.722Z",
+  "request": {
+   "difficulty": "low",
+   "risk": "low",
+   "size": "small",
+   "why": "Regression flow 3a (record)",
+   "model": "deepseek 4.1 flash"
+  }
+ },
+ {
+  "group": "9e7e516b4e7e1f90d7c9ca43",
+  "at": "2026-10-26T09:22:47.722Z",
+  "request": {
+   "difficulty": "low",
+   "risk": "low",
+   "size": "small",
+   "why": "Regression flow 3b (record)"
+  }
+ },
+ {
+  "group": "9e7e516b4e7e1f90d7c9ca43",
+  "at": null,
+  "request": {
+   "difficulty": "low",
+   "risk": "low",
+   "size": "small",
+   "why": "Regression flow 3a (record)",
+   "model": "deepseek 4.1 flash"
+  }
+ },
+ {
+  "group": "9e7e516b4e7e1f90d7c9ca43",
+  "at": null,
+  "request": {
+   "difficulty": "low",
+   "risk": "low",
+   "size": "small",
+   "why": "Regression flow 3b (record)"
+  }
+ },
+ {
+  "group": "274baf5b89089a604ebbff4b",
+  "at": "2026-10-26T09:29:39.499Z",
+  "request": {
+   "difficulty": "low",
+   "risk": "low",
+   "size": "small",
+   "why": "Retry smoke test on the sharing machine after a clone timeout",
+   "model": "deepseek 4.1 flash"
+  }
+ },
+ {
+  "group": "274baf5b89089a604ebbff4b",
+  "at": null,
+  "request": {
+   "difficulty": "low",
+   "risk": "low",
+   "size": "small",
+   "why": "Retry smoke test on the sharing machine after a clone timeout",
+   "model": "deepseek 4.1 flash"
+  }
+ },
+ {
+  "group": "$gid",
+  "at": "2026-10-26T09:32:34.201Z",
+  "request": {
+   "difficulty": "low",
+   "risk": "low",
+   "size": "small",
+   "why": "Smoke test of the shared DeepSeek API model on WIN-DELL",
+   "model": "deepseek 4.1 flash"
+  }
+ },
+ {
+  "group": "$gid",
+  "at": null,
+  "request": {
+   "difficulty": "low",
+   "risk": "low",
+   "size": "small",
+   "why": "Smoke test of the shared DeepSeek API model on WIN-DELL",
+   "model": "deepseek 4.1 flash"
+  }
+ },
+ {
+  "group": "837f400f3252d7491843ecff",
+  "at": "2026-10-26T09:32:41.697Z",
+  "request": {
+   "difficulty": "low",
+   "risk": "low",
+   "size": "small",
+   "why": "Smoke test of the shared DeepSeek API model on WIN-DELL",
+   "model": "deepseek 4.1 flash"
+  }
+ },
+ {
+  "group": "837f400f3252d7491843ecff",
+  "at": null,
+  "request": {
+   "difficulty": "low",
+   "risk": "low",
+   "size": "small",
+   "why": "Smoke test of the shared DeepSeek API model on WIN-DELL",
+   "model": "deepseek 4.1 flash"
+  }
+ },
+ {
+  "group": "9e7e516b4e7e1f90d7c9ca43",
+  "at": "2026-10-26T09:33:47.127Z",
+  "request": {
+   "difficulty": "low",
+   "risk": "low",
+   "size": "small",
+   "why": "Regression: route during the sharing machine clone",
+   "model": "deepseek 4.1 flash"
+  }
+ },
+ {
+  "group": "9e7e516b4e7e1f90d7c9ca43",
+  "at": null,
+  "request": {
+   "difficulty": "low",
+   "risk": "low",
+   "size": "small",
+   "why": "Regression: route during the sharing machine clone",
+   "model": "deepseek 4.1 flash"
+  }
+ },
+ {
+  "group": "837f400f3252d7491843ecff",
+  "at": "2026-10-26T09:35:13.722Z",
+  "request": {
+   "difficulty": "low",
+   "risk": "low",
+   "size": "small",
+   "why": "Smoke test of the shared DeepSeek API model on WIN-DELL",
+   "model": "deepseek 4.1 flash"
+  }
+ },
+ {
+  "group": "837f400f3252d7491843ecff",
+  "at": null,
+  "request": {
+   "difficulty": "low",
+   "risk": "low",
+   "size": "small",
+   "why": "Smoke test of the shared DeepSeek API model on WIN-DELL",
+   "model": "deepseek 4.1 flash"
+  }
+ },
+ {
+  "group": "$gid",
+  "at": "2026-10-26T09:41:14.651Z",
+  "request": {
+   "difficulty": "medium",
+   "risk": "low",
+   "size": "medium",
+   "why": "Browser performance measurement of the Flutter web Super Tab with a local fixture and DevTools throttling; judgment needed to rebuild the fixture and explain the waterfall.",
+   "kind": "performance",
+   "needs": {
+    "tools": [
+     "git",
+     "node"
+    ],
+    "devices": []
+   }
+  }
+ },
+ {
+  "group": "$gid",
+  "at": null,
+  "request": {
+   "difficulty": "medium",
+   "risk": "low",
+   "size": "medium",
+   "why": "Browser performance measurement of the Flutter web Super Tab with a local fixture and DevTools throttling; judgment needed to rebuild the fixture and explain the waterfall.",
+   "kind": "performance",
+   "needs": {
+    "tools": [
+     "git",
+     "node"
+    ],
+    "devices": []
+   }
+  }
+ },
+ {
+  "group": "659a6cc93b944bd24cae2884",
+  "at": "2026-10-26T10:16:48.078Z",
+  "request": {
+   "difficulty": "medium",
+   "risk": "low",
+   "size": "medium",
+   "why": "Integration benchmark against the real store on MongoMemoryReplSet; test-only code, needs care to be deterministic and pluggable.",
+   "kind": "backend",
+   "needs": {
+    "tools": [
+     "git",
+     "node"
+    ]
+   }
+  }
+ },
+ {
+  "group": "aeef05a35995ca9f7cca7060",
+  "at": "2026-10-26T10:16:48.078Z",
+  "request": {
+   "difficulty": "high",
+   "risk": "high",
+   "size": "medium",
+   "why": "Concurrency and migration design for the core Swarm store; mistakes are costly and subtle, needs the strongest model.",
+   "kind": "design",
+   "needs": {
+    "tools": [
+     "git",
+     "node"
+    ]
+   }
+  }
+ },
+ {
+  "group": "659a6cc93b944bd24cae2884",
+  "at": null,
+  "request": {
+   "difficulty": "medium",
+   "risk": "low",
+   "size": "medium",
+   "why": "Integration benchmark against the real store on MongoMemoryReplSet; test-only code, needs care to be deterministic and pluggable.",
+   "kind": "backend",
+   "needs": {
+    "tools": [
+     "git",
+     "node"
+    ]
+   }
+  }
+ },
+ {
+  "group": "aeef05a35995ca9f7cca7060",
+  "at": null,
+  "request": {
+   "difficulty": "high",
+   "risk": "high",
+   "size": "medium",
+   "why": "Concurrency and migration design for the core Swarm store; mistakes are costly and subtle, needs the strongest model.",
+   "kind": "design",
+   "needs": {
+    "tools": [
+     "git",
+     "node"
+    ]
+   }
+  }
+ },
+ {
+  "group": "aeef05a35995ca9f7cca7060",
+  "at": "2026-10-26T10:16:56.173Z",
+  "request": {
+   "difficulty": "high",
+   "risk": "high",
+   "size": "medium",
+   "why": "Concurrency and migration design for the core Swarm store; mistakes are costly and subtle, needs the strongest model.",
+   "kind": "design",
+   "needs": {
+    "tools": [
+     "git",
+     "node"
+    ]
+   }
+  }
+ },
+ {
+  "group": "aeef05a35995ca9f7cca7060",
+  "at": null,
+  "request": {
+   "difficulty": "high",
+   "risk": "high",
+   "size": "medium",
+   "why": "Concurrency and migration design for the core Swarm store; mistakes are costly and subtle, needs the strongest model.",
+   "kind": "design",
+   "needs": {
+    "tools": [
+     "git",
+     "node"
+    ]
+   }
+  }
+ },
+ {
+  "group": "$gid",
+  "at": "2026-10-26T10:45:11.476Z",
+  "request": {
+   "difficulty": "high",
+   "risk": "high",
+   "size": "medium",
+   "why": "Independent review of a concurrency/migration design for the core Swarm store; must be at least as strong as the Opus author, different engine preferred.",
+   "kind": "review",
+   "needs": {
+    "tools": [
+     "git"
+    ]
+   }
+  }
+ },
+ {
+  "group": "$gid",
+  "at": null,
+  "request": {
+   "difficulty": "high",
+   "risk": "high",
+   "size": "medium",
+   "why": "Independent review of a concurrency/migration design for the core Swarm store; must be at least as strong as the Opus author, different engine preferred.",
+   "kind": "review",
+   "needs": {
+    "tools": [
+     "git"
+    ]
+   }
+  }
+ },
+ {
+  "group": "$g",
+  "at": "2026-10-26T10:56:13.249Z",
+  "request": {
+   "difficulty": "high",
+   "risk": "high",
+   "size": "large",
+   "why": "Core Swarm read path / client rewrite against a reviewed design; correctness of cursors, visibility and migration matters a lot.",
+   "kind": "backend",
+   "needs": {
+    "tools": [
+     "git",
+     "node"
+    ]
+   }
+  }
+ },
+ {
+  "group": "$g",
+  "at": null,
+  "request": {
+   "difficulty": "high",
+   "risk": "high",
+   "size": "large",
+   "why": "Core Swarm read path / client rewrite against a reviewed design; correctness of cursors, visibility and migration matters a lot.",
+   "kind": "backend",
+   "needs": {
+    "tools": [
+     "git",
+     "node"
+    ]
+   }
+  }
+ },
+ {
+  "group": "$gid",
+  "at": "2026-10-26T10:57:29.841Z",
+  "request": {
+   "difficulty": "high",
+   "risk": "medium",
+   "size": "large",
+   "why": "Flutter client rewrite of Swarm reads against a reviewed contract, Desktop and web.",
+   "kind": "ui",
+   "needs": {
+    "tools": [
+     "git",
+     "flutter"
+    ]
+   }
+  }
+ },
+ {
+  "group": "$gid",
+  "at": null,
+  "request": {
+   "difficulty": "high",
+   "risk": "medium",
+   "size": "large",
+   "why": "Flutter client rewrite of Swarm reads against a reviewed contract, Desktop and web.",
+   "kind": "ui",
+   "needs": {
+    "tools": [
+     "git",
+     "flutter"
+    ]
+   }
+  }
+ },
+ {
+  "group": "df0940f037c9f6eef1b92b67",
+  "at": "2026-10-26T11:00:51.800Z",
+  "request": {
+   "difficulty": "high",
+   "risk": "high",
+   "size": "large",
+   "why": "Core Swarm store rewrite with concurrency invariants; reuse the design author who knows it best.",
+   "kind": "backend",
+   "needs": {
+    "tools": [
+     "git",
+     "node"
+    ]
+   }
+  }
+ },
+ {
+  "group": "df0940f037c9f6eef1b92b67",
+  "at": null,
+  "request": {
+   "difficulty": "high",
+   "risk": "high",
+   "size": "large",
+   "why": "Core Swarm store rewrite with concurrency invariants; reuse the design author who knows it best.",
+   "kind": "backend",
+   "needs": {
+    "tools": [
+     "git",
+     "node"
+    ]
+   }
+  }
+ },
+ {
+  "group": "df0940f037c9f6eef1b92b67",
+  "at": "2026-10-26T11:00:58.840Z",
+  "request": {
+   "difficulty": "high",
+   "risk": "high",
+   "size": "large",
+   "why": "Core Swarm store rewrite with concurrency invariants; reuse the design author who knows it best.",
+   "kind": "backend",
+   "needs": {
+    "tools": [
+     "git",
+     "node"
+    ]
+   }
+  }
+ },
+ {
+  "group": "df0940f037c9f6eef1b92b67",
+  "at": null,
+  "request": {
+   "difficulty": "high",
+   "risk": "high",
+   "size": "large",
+   "why": "Core Swarm store rewrite with concurrency invariants; reuse the design author who knows it best.",
+   "kind": "backend",
+   "needs": {
+    "tools": [
+     "git",
+     "node"
+    ]
+   }
+  }
+ },
+ {
+  "group": "df0940f037c9f6eef1b92b67",
+  "at": "2026-10-26T11:01:11.235Z",
+  "request": {
+   "difficulty": "high",
+   "risk": "high",
+   "size": "large",
+   "why": "Core Swarm store rewrite with concurrency invariants; reuse the design author who knows it best.",
+   "kind": "backend",
+   "needs": {
+    "tools": [
+     "git",
+     "node"
+    ]
+   }
+  }
+ },
+ {
+  "group": "df0940f037c9f6eef1b92b67",
+  "at": null,
+  "request": {
+   "difficulty": "high",
+   "risk": "high",
+   "size": "large",
+   "why": "Core Swarm store rewrite with concurrency invariants; reuse the design author who knows it best.",
+   "kind": "backend",
+   "needs": {
+    "tools": [
+     "git",
+     "node"
+    ]
+   }
+  }
+ },
+ {
+  "group": "$gid",
+  "at": "2026-10-26T11:06:31.615Z",
+  "request": {
+   "difficulty": "medium",
+   "risk": "low",
+   "size": "small",
+   "why": "Review of a test-only benchmark PR; reuse the idle Codex reviewer.",
+   "kind": "review"
+  }
+ },
+ {
+  "group": "$gid",
+  "at": null,
+  "request": {
+   "difficulty": "medium",
+   "risk": "low",
+   "size": "small",
+   "why": "Review of a test-only benchmark PR; reuse the idle Codex reviewer.",
+   "kind": "review"
+  }
+ },
+ {
+  "group": "6bc636fa6713886102b9cbfa",
+  "at": "2026-10-26T11:42:28.030Z",
+  "request": {
+   "difficulty": "medium",
+   "risk": "low",
+   "size": "small",
+   "why": "Re-review of three fixes on the test-only benchmark PR; same Reviewer.",
+   "kind": "review"
+  }
+ },
+ {
+  "group": "6bc636fa6713886102b9cbfa",
+  "at": null,
+  "request": {
+   "difficulty": "medium",
+   "risk": "low",
+   "size": "small",
+   "why": "Re-review of three fixes on the test-only benchmark PR; same Reviewer.",
+   "kind": "review"
+  }
+ },
+ {
+  "group": "$gid",
+  "at": "2026-10-26T11:47:56.476Z",
+  "request": {
+   "difficulty": "high",
+   "risk": "medium",
+   "size": "medium",
+   "why": "Independent review of the CLI read-path rewrite; at least as strong as the Opus author, different engine preferred.",
+   "kind": "review",
+   "needs": {
+    "tools": [
+     "git",
+     "node"
+    ]
+   }
+  }
+ },
+ {
+  "group": "$gid",
+  "at": null,
+  "request": {
+   "difficulty": "high",
+   "risk": "medium",
+   "size": "medium",
+   "why": "Independent review of the CLI read-path rewrite; at least as strong as the Opus author, different engine preferred.",
+   "kind": "review",
+   "needs": {
+    "tools": [
+     "git",
+     "node"
+    ]
+   }
+  }
+ },
+ {
+  "group": "0da3404ca7a4a33f57d4c871",
+  "at": null,
+  "request": {
+   "difficulty": "high",
+   "risk": "high",
+   "size": "small",
+   "why": "Round-3 re-review of the legacy default-project revocation fix.",
+   "kind": "review"
+  }
+ },
+ {
+  "group": "0da3404ca7a4a33f57d4c871",
+  "at": "2026-10-26T13:29:12.135Z",
+  "request": {
+   "difficulty": "high",
+   "risk": "high",
+   "size": "small",
+   "why": "Round-3 re-review of the legacy default-project revocation fix.",
+   "kind": "review"
+  }
+ },
+ {
+  "group": "$g",
+  "at": "2026-10-26T14:21:03.691Z",
+  "request": {
+   "difficulty": "high",
+   "risk": "high",
+   "size": "medium",
+   "why": "Rework the read API so it loads only changed parts; the read API owner knows this code best.",
+   "kind": "backend",
+   "needs": {
+    "tools": [
+     "git"
+    ]
+   }
+  }
+ },
+ {
+  "group": "45e5e3322e966e128a7d0f3d",
+  "at": "2026-10-26T14:21:14.836Z",
+  "request": {
+   "difficulty": "high",
+   "risk": "high",
+   "size": "medium",
+   "why": "Rework the read API so it loads only changed parts; the read API owner knows this code best.",
+   "kind": "backend",
+   "needs": {
+    "tools": [
+     "git"
+    ]
+   }
+  }
+ },
+ {
+  "group": "f3a620e144116d08c3a68338",
+  "at": "2026-10-26T14:50:13.055Z",
+  "request": {
+   "difficulty": "high",
+   "risk": "high",
+   "size": "large",
+   "why": "Desktop/web private PM channel; Reed built the Desktop client.",
+   "kind": "ui",
+   "needs": {
+    "tools": [
+     "git"
+    ]
+   }
+  }
+ },
+ {
+  "group": "f3a620e144116d08c3a68338",
+  "at": "2026-10-26T14:50:21.398Z",
+  "request": {
+   "difficulty": "high",
+   "risk": "high",
+   "size": "large",
+   "why": "Desktop/web private PM channel; Reed built the Desktop client.",
+   "kind": "ui",
+   "needs": {
+    "tools": [
+     "git"
+    ]
+   }
+  }
+ },
+ {
+  "group": "f3a620e144116d08c3a68338",
+  "at": "2026-10-26T14:50:31.668Z",
+  "request": {
+   "difficulty": "high",
+   "risk": "high",
+   "size": "large",
+   "why": "Desktop/web private PM channel; Reed built the Desktop client.",
+   "kind": "ui",
+   "needs": {
+    "tools": [
+     "git"
+    ]
+   }
+  }
+ },
+ {
+  "group": "b0b28597aa6be5ef38defa6e",
+  "at": "2026-10-26T14:51:05.634Z",
+  "request": {
+   "difficulty": "high",
+   "risk": "high",
+   "size": "medium",
+   "why": "Routing readiness; assign to Nico, started for it.",
+   "kind": "cli",
+   "needs": {
+    "tools": [
+     "git"
+    ]
+   }
+  }
+ },
+ {
+  "group": "$rg",
+  "at": "2026-10-26T15:12:17.992Z",
+  "request": {
+   "difficulty": "high",
+   "risk": "high",
+   "size": "small",
+   "why": "Independent review by a different model family.",
+   "kind": "review",
+   "needs": {
+    "tools": [
+     "git"
+    ]
+   }
+  }
+ },
+ {
+  "group": "$rg",
+  "at": "2026-10-26T15:16:01.265Z",
+  "request": {
+   "difficulty": "high",
+   "risk": "high",
+   "size": "small",
+   "why": "Independent review by a different model family.",
+   "kind": "review",
+   "needs": {
+    "tools": [
+     "git"
+    ]
+   }
+  }
+ },
+ {
+  "group": "$rg",
+  "at": "2026-10-26T15:18:15.220Z",
+  "request": {
+   "difficulty": "high",
+   "risk": "high",
+   "size": "small",
+   "why": "Independent review by a different model family.",
+   "kind": "review",
+   "needs": {
+    "tools": [
+     "git"
+    ]
+   }
+  }
+ },
+ {
+  "group": "$rg",
+  "at": "2026-10-26T15:19:55.427Z",
+  "request": {
+   "difficulty": "high",
+   "risk": "high",
+   "size": "small",
+   "why": "Independent review by a different model family.",
+   "kind": "review",
+   "needs": {
+    "tools": [
+     "git"
+    ]
+   }
+  }
+ },
+ {
+  "group": "b483494ef289e282021b1e2a",
+  "at": "2026-10-26T15:33:18.163Z",
+  "request": {
+   "difficulty": "high",
+   "risk": "high",
+   "size": "small",
+   "why": "Independent review; Mac Studio Codex account is rate limited.",
+   "kind": "review",
+   "needs": {
+    "tools": [
+     "git"
+    ]
+   }
+  }
+ },
+ {
+  "group": "$g",
+  "at": "2026-10-26T15:35:45.014Z",
+  "request": {
+   "difficulty": "high",
+   "risk": "high",
+   "size": "small",
+   "why": "Independent review by a different model family.",
+   "kind": "review",
+   "needs": {
+    "tools": [
+     "git"
+    ]
+   }
+  }
+ },
+ {
+  "group": "f3a620e144116d08c3a68338",
+  "at": "2026-10-26T15:37:30.000Z",
+  "request": {
+   "difficulty": "high",
+   "risk": "high",
+   "size": "medium",
+   "why": "Continue the private PM chat after the builder session stopped; its unpushed work is on [person]s Mac.",
+   "kind": "ui",
+   "needs": {
+    "tools": [
+     "git"
+    ]
+   }
+  }
+ },
+ {
+  "group": "f3a620e144116d08c3a68338",
+  "at": "2026-10-26T15:38:58.006Z",
+  "request": {
+   "difficulty": "high",
+   "risk": "high",
+   "size": "medium",
+   "why": "Continue the private PM chat on [person]s Mac.",
+   "kind": "ui",
+   "needs": {
+    "tools": [
+     "git"
+    ]
+   }
+  }
+ },
+ {
+  "group": "4f49c22420c3c3fc57dda058",
+  "at": "2026-10-26T15:41:39.037Z",
+  "request": {
+   "difficulty": "high",
+   "risk": "high",
+   "size": "small",
+   "why": "Re-check by the same reviewer.",
+   "kind": "review",
+   "needs": {
+    "tools": [
+     "git"
+    ]
+   }
+  }
+ },
+ {
+  "group": "4f49c22420c3c3fc57dda058",
+  "at": "2026-10-26T15:45:38.876Z",
+  "request": {
+   "difficulty": "high",
+   "risk": "high",
+   "size": "small",
+   "why": "Re-check by the same reviewer.",
+   "kind": "review",
+   "needs": {
+    "tools": [
+     "git"
+    ]
+   }
+  }
+ },
+ {
+  "group": "4f49c22420c3c3fc57dda058",
+  "at": "2026-10-26T15:45:53.937Z",
+  "request": {
+   "difficulty": "high",
+   "risk": "high",
+   "size": "small",
+   "why": "Re-check by the same reviewer.",
+   "kind": "review",
+   "needs": {
+    "tools": [
+     "git"
+    ]
+   }
+  }
+ },
+ {
+  "group": "4f49c22420c3c3fc57dda058",
+  "at": "2026-10-26T15:46:14.682Z",
+  "request": {
+   "difficulty": "high",
+   "risk": "high",
+   "size": "small",
+   "why": "Re-check by the same reviewer.",
+   "kind": "review",
+   "needs": {
+    "tools": [
+     "git"
+    ]
+   }
+  }
+ },
+ {
+  "group": "$g",
+  "at": "2026-10-26T16:11:46.748Z",
+  "request": {
+   "difficulty": "high",
+   "risk": "high",
+   "size": "small",
+   "why": "Independent review by a different model family.",
+   "kind": "review",
+   "needs": {
+    "tools": [
+     "git"
+    ]
+   }
+  }
+ },
+ {
+  "group": "$rg",
+  "at": "2026-10-26T17:06:13.468Z",
+  "request": {
+   "difficulty": "medium",
+   "risk": "medium",
+   "size": "small",
+   "why": "Independent review of a results doc.",
+   "kind": "review",
+   "needs": {
+    "tools": [
+     "git"
+    ]
+   }
+  }
+ },
+ {
+  "group": "$g",
+  "at": "2026-10-26T17:31:41.223Z",
+  "request": {
+   "difficulty": "medium",
+   "risk": "high",
+   "size": "medium",
+   "why": "Merge main into the feature branch; Theo knows the CLI side and his machine has Flutter.",
+   "kind": "merge",
+   "needs": {
+    "tools": [
+     "git"
+    ]
+   }
+  }
+ },
+ {
+  "group": "$g",
+  "at": "2026-10-26T17:33:15.525Z",
+  "request": {
+   "difficulty": "high",
+   "risk": "high",
+   "size": "medium",
+   "why": "Whole-branch release review by a different model family than the builders.",
+   "kind": "review",
+   "needs": {
+    "tools": [
+     "git"
+    ]
+   }
+  }
+ },
+ {
+  "group": "$g",
+  "at": "2026-10-26T17:34:27.675Z",
+  "request": {
+   "difficulty": "high",
+   "risk": "high",
+   "size": "medium",
+   "why": "Whole-branch release review by a different model family than the builders.",
+   "kind": "review",
+   "needs": {
+    "tools": [
+     "git"
+    ]
+   }
+  }
+ },
+ {
+  "group": "$rg",
+  "at": "2026-10-26T17:49:46.000Z",
+  "request": {
+   "difficulty": "medium",
+   "risk": "high",
+   "size": "small",
+   "why": "Independent review of the main merge.",
+   "kind": "review",
+   "needs": {
+    "tools": [
+     "git"
+    ]
+   }
+  }
+ },
+ {
+  "group": "8718795de795e643c928d3cc",
+  "at": "2026-10-26T17:50:18.606Z",
+  "request": {
+   "difficulty": "medium",
+   "risk": "high",
+   "size": "small",
+   "why": "Independent review of the main merge.",
+   "kind": "review",
+   "needs": {
+    "tools": [
+     "git"
+    ]
+   }
+  }
+ },
+ {
+  "group": "$g",
+  "at": "2026-10-26T18:29:05.891Z",
+  "request": {
+   "difficulty": "high",
+   "risk": "high",
+   "size": "medium",
+   "why": "Release-blocking fix from the final review.",
+   "kind": "fix",
+   "needs": {
+    "tools": [
+     "git"
+    ]
+   }
+  }
+ },
+ {
+  "group": "$rg",
+  "at": "2026-10-26T18:38:49.686Z",
+  "request": {
+   "difficulty": "high",
+   "risk": "high",
+   "size": "small",
+   "why": "Focused re-check by the reviewer who found the issue.",
+   "kind": "review",
+   "needs": {
+    "tools": [
+     "git"
+    ]
+   }
+  }
+ }
+]
