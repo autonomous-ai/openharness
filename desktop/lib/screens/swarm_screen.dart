@@ -540,7 +540,8 @@ class _SwarmScreenState extends State<SwarmScreen> {
                             onRetry: app.firstArrival.canRetry
                                 ? _retryFirstArrival
                                 : null,
-                            onStartNew: app.firstArrival.canRetry &&
+                            onStartNew:
+                                app.firstArrival.canRetry &&
                                     !app.firstArrival.checkingStatus
                                 ? _startFreshAfterArrival
                                 : null,
@@ -610,8 +611,12 @@ class _SwarmScreenState extends State<SwarmScreen> {
     final tab = app.activeSwarmId;
     final work = app.firstArrival.retry(
       app,
-      stillCurrent: () => mounted && app.activeSwarmId == tab &&
-          _newHarness == null && _search == null && !_pickingFolder,
+      stillCurrent: () =>
+          mounted &&
+          app.activeSwarmId == tab &&
+          _newHarness == null &&
+          _search == null &&
+          !_pickingFolder,
     );
     setState(() {});
     await work;
@@ -623,12 +628,14 @@ class _SwarmScreenState extends State<SwarmScreen> {
     final session = arrival.selectedSession;
     final engine = arrival.selectedEngine;
     arrival.dismiss();
-    unawaited(_newAgent(
-      machineId: app.localMachineState?.machine.machineId,
-      folder: session?.cwd,
-      engine: engine,
-      task: session == null ? FirstArrival.starterTask : null,
-    ));
+    unawaited(
+      _newAgent(
+        machineId: app.localMachineState?.machine.machineId,
+        folder: session?.cwd,
+        engine: engine,
+        task: session == null ? FirstArrival.starterTask : null,
+      ),
+    );
   }
 
   void _scheduleWelcomeComposer() {
@@ -2190,6 +2197,9 @@ class _SwarmScreenState extends State<SwarmScreen> {
           app,
           colorForActivity: activityInk,
         ),
+      // The Dock's badge: what needs the person in their Swarms. AppKit clears
+      // it at zero and whenever an update leaves it out.
+      if (_native) 'dockBadge': swarmsNeedYou(app),
       // The fallback bell and the macOS menu use the same unread ledger.
       'unread': _unread,
       'sessionsOpen': _harnessesVisible,
@@ -2242,13 +2252,14 @@ class _SwarmScreenState extends State<SwarmScreen> {
             'iconAsset': swarm.isStore
                 ? kStoreMarkAsset
                 : engineIdentity(_tabEngine(swarm)).asset,
-            'attention': swarm.panes
-                .where(
-                  (p) =>
-                      p.agentId != null &&
-                      app.questionFor(p.machineId, p.agentId!) != null,
-                )
-                .length +
+            'attention':
+                swarm.panes
+                    .where(
+                      (p) =>
+                          p.agentId != null &&
+                          app.questionFor(p.machineId, p.agentId!) != null,
+                    )
+                    .length +
                 tabWaiting(app, swarm),
             if (tabActivity(app, swarm) case final activity?)
               'activity': nativeActivityPayload(
@@ -7461,7 +7472,8 @@ class _SwarmScreenState extends State<SwarmScreen> {
   Widget? _asleepBand() => _showsAsleepBand
       ? _AsleepBand(
           names: [
-            for (final machine in app.asleepComputers) machine.machine.displayName,
+            for (final machine in app.asleepComputers)
+              machine.machine.displayName,
           ],
         )
       : null;

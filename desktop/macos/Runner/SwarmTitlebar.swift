@@ -112,6 +112,10 @@ final class SwarmTitlebar: NSObject, NSMenuItemValidation, NSMenuDelegate {
         self.updateHistory(state["history"] as? [[String: Any]] ?? [], closed: state["closedHistory"] as? [[String: Any]] ?? [])
         self.strip.update(state)
         self.statusMenu?.update(state)
+        // What needs the person in their Swarms; none, or no workspace, clears it.
+        let badge = state["dockBadge"] as? Int ?? 0
+        let label: String? = badge > 0 ? String(badge) : nil
+        if NSApp.dockTile.badgeLabel != label { NSApp.dockTile.badgeLabel = label }
         self.statusBarHeight?.constant = self.strip.preferredStatusBarHeight
         // A new background repaints the whole window, title bar included: only on a change.
         if let window = self.window, window.backgroundColor != self.strip.palette.tabBar {
