@@ -2607,6 +2607,8 @@ class AppNotifier extends ChangeNotifier {
     if (nextStatus == ConnectionStatus.connected) {
       // The first computer to answer ends the launch.
       launchMeasurement?.ready();
+      // Back with a new sign-in, maybe: a Swarm read it refused may be asked of it again.
+      _swarmRefused.remove(machineId);
       _refreshDeviceLogAfterReconnect();
       machine.needsLink = false;
       // Let in: a later refusal is a new story ([_redialOnceVouched], [_settleTrust]).
@@ -6302,15 +6304,27 @@ class AppNotifier extends ChangeNotifier {
   /// screen do not hop between computers.
   String? _swarmMachineId;
 
+  /// Machines that refused a Swarm read another machine did not refuse: passed over until they
+  /// reconnect ([_onConnectionStatus]).
+  ///
+  /// ⚠️ Kept up, a refusing machine was asked for every read. On the owner's iPhone (2026-10-27)
+  /// the phone moved to a Team sign-in computer while the owner's Mac was briefly offline, then
+  /// read through it from 14:26 to 14:37 while the server refused every read, the Mac connected
+  /// all along — until the Team computer itself was marked offline.
+  final _swarmRefused = <String>{};
+
   /// The machine the phone asks the Swarm through: one of the account's own whose socket is up —
   /// the one asked last while it stays so, else the first by id, as the web build picks
-  /// (`desktop/lib/state/app_state.dart` `sharedTabsTarget`). Null with none up.
-  MachineState? _swarmMachine() {
+  /// (`desktop/lib/state/app_state.dart` `sharedTabsTarget`) — never one that refused. Null with
+  /// none up, or none but [except].
+  MachineState? _swarmMachine({MachineState? except}) {
     bool usable(MachineState? machine) =>
         machine != null &&
+        machine != except &&
         machine.connectionStatus == ConnectionStatus.connected &&
         !machine.needsLink &&
-        machine.nodeOnline != false;
+        machine.nodeOnline != false &&
+        !_swarmRefused.contains(machine.machine.machineId);
     final kept = machineStates[_swarmMachineId];
     if (usable(kept)) return kept;
     MachineState? best;
@@ -6321,7 +6335,8 @@ class AppNotifier extends ChangeNotifier {
         best = machine;
       }
     }
-    _swarmMachineId = best?.machine.machineId;
+    // Looking past [except] chooses nothing yet: the read through it decides.
+    if (except == null) _swarmMachineId = best?.machine.machineId;
     return best;
   }
 
@@ -6331,11 +6346,55 @@ class AppNotifier extends ChangeNotifier {
   /// this connection is its owner's, and the backend what that account may read. Answers the
   /// backend's value; a refusal — the backend's, the machine's, or none to ask — is a
   /// [SuperTabFailure], and an answer that lands after the account changed is dropped.
+  ///
+  /// A refusal is asked again through another machine that is up: one that answers, or refuses
+  /// otherwise, shows the refusal was the first machine's — a Team sign-in the server will not
+  /// read the person's Swarm for, say — and that machine is passed over until it reconnects. One
+  /// every machine gives is the read's own (a Swarm the person left), and passes over none: it
+  /// must still reach the screen as it is. A command asked twice is the same command, under its
+  /// operation id.
   Future<Object?> swarmRequest(
     String method,
     String path, {
     Map<String, dynamic>? body,
   }) async {
+    final machine = _swarmMachine();
+    if (machine == null) {
+      throw const SuperTabFailure(
+        'MACHINE_UNAVAILABLE',
+        'Connect one of your computers to open Swarm.',
+      );
+    }
+    try {
+      return await _swarmRequestVia(machine, method, path, body);
+    } on SuperTabFailure catch (refusal) {
+      if (refusal.code == 'ACCOUNT_CHANGED') rethrow;
+      final other = _swarmMachine(except: machine);
+      if (other == null) rethrow;
+      try {
+        final value = await _swarmRequestVia(other, method, path, body);
+        _passOverSwarmMachine(machine, other);
+        return value;
+      } on SuperTabFailure catch (second) {
+        if (second.code != refusal.code && second.code != 'ACCOUNT_CHANGED') {
+          _passOverSwarmMachine(machine, other);
+        }
+        rethrow;
+      }
+    }
+  }
+
+  void _passOverSwarmMachine(MachineState refused, MachineState instead) {
+    _swarmRefused.add(refused.machine.machineId);
+    _swarmMachineId = instead.machine.machineId;
+  }
+
+  Future<Object?> _swarmRequestVia(
+    MachineState machine,
+    String method,
+    String path,
+    Map<String, dynamic>? body,
+  ) async {
     final revision = _authRevision;
     void stillThisAccount() {
       if (!_authWorkCurrent(revision)) {
@@ -6346,13 +6405,6 @@ class AppNotifier extends ChangeNotifier {
       }
     }
 
-    final machine = _swarmMachine();
-    if (machine == null) {
-      throw const SuperTabFailure(
-        'MACHINE_UNAVAILABLE',
-        'Connect one of your computers to open Swarm.',
-      );
-    }
     final Map<String, dynamic> answer;
     try {
       answer = await _conn(machine.machine.machineId).request(

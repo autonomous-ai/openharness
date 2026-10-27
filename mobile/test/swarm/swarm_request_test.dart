@@ -123,6 +123,122 @@ void main() {
     );
   });
 
+  // Mira's run on the owner's iPhone, 2026-10-27: the phone read the
+  // person's Swarm through a Team sign-in computer from 14:26:00 to 14:36:55
+  // and the server refused every read, while the owner's Mac was connected
+  // all along but for 14:27:24 to 14:29:06. The phone kept the Team computer
+  // because it stayed connected, and moved only once that computer was
+  // marked offline.
+  test('a computer that refuses a read is passed over at once, and stays '
+      'passed over until it reconnects', () async {
+    final rig = await signedInWith({'mac': [], 'team': []});
+    addTearDown(rig.app.dispose);
+    Map<String, dynamic> teamRefuses(_) => {
+      'error': 'TEAM_SESSION_LIMITED',
+      'detail': 'A team sign-in can only run Swarm agents on its own machine.',
+      'status': 403,
+    };
+    rig.conn('team').answers['super_tabs'] = teamRefuses;
+    rig.conn('mac').answers['super_tabs'] = (_) => forwarded({'tabs': []});
+    int reads(String id) => rig.conn(id).payloadsOf('super_tabs').length;
+
+    // 14:27:24: the Mac is marked offline; the Team computer is the only one
+    // up, and its refusal is all there is to show.
+    rig.app.connectionStatusForTest('mac', ConnectionStatus.disconnected);
+    await settle();
+    await expectLater(
+      rig.app.swarmRequest('GET', '/api/super-tabs/list'),
+      throwsA(
+        isA<SuperTabFailure>().having(
+          (f) => f.code,
+          'code',
+          'TEAM_SESSION_LIMITED',
+        ),
+      ),
+    );
+    expect(reads('team'), 1);
+
+    // 14:29:06: the Mac is back. The Team computer refuses the next read, and
+    // the same read is answered through the Mac at once.
+    rig.app.connectionStatusForTest('mac', ConnectionStatus.connected);
+    await settle();
+    expect(await rig.app.swarmRequest('GET', '/api/super-tabs/list'), {
+      'tabs': <Object>[],
+    });
+    expect(reads('team'), 2);
+    expect(reads('mac'), 1);
+
+    // Until 14:36:39 every read goes through the Mac alone.
+    for (var i = 0; i < 3; i++) {
+      await rig.app.swarmRequest('GET', '/api/super-tabs/list');
+    }
+    expect(reads('team'), 2);
+    expect(reads('mac'), 4);
+
+    // 14:36:39: the Team computer drops and comes back; with the Mac away it
+    // is asked again.
+    rig.app.connectionStatusForTest('team', ConnectionStatus.disconnected);
+    rig.app.connectionStatusForTest('team', ConnectionStatus.connected);
+    rig.app.connectionStatusForTest('mac', ConnectionStatus.disconnected);
+    rig.conn('team').answers['super_tabs'] = (_) => forwarded({'tabs': []});
+    await settle();
+    await rig.app.swarmRequest('GET', '/api/super-tabs/list');
+    expect(reads('team'), 3);
+  });
+
+  // Mira's clean repeat, 14:41:00 to 14:41:37: both computers connected the
+  // whole time, the phone reading through the Team computer, and every read
+  // refused until the kept computer was cleared by hand.
+  test('a kept computer that refuses while it stays connected is left for '
+      'one that answers, in the same read', () async {
+    // The Team computer sorts first, so it is the one kept from the start.
+    final rig = await signedInWith({'a-team': [], 'b-mac': []});
+    addTearDown(rig.app.dispose);
+    rig.conn('a-team').answers['super_tabs'] = (_) => {
+      'error': 'TEAM_SESSION_LIMITED',
+      'detail': 'A team sign-in can only run Swarm agents on its own machine.',
+      'status': 403,
+    };
+    rig.conn('b-mac').answers['super_tabs'] = (_) => forwarded({'tabs': []});
+
+    for (var i = 0; i < 3; i++) {
+      expect(await rig.app.swarmRequest('GET', '/api/super-tabs/list'), {
+        'tabs': <Object>[],
+      });
+    }
+
+    expect(rig.conn('a-team').payloadsOf('super_tabs'), hasLength(1));
+    expect(rig.conn('b-mac').payloadsOf('super_tabs'), hasLength(3));
+  });
+
+  test(
+    "a refusal every computer gives is the read's own, and passes over none",
+    () async {
+      final rig = await signedInWith({'a': [], 'b': []});
+      addTearDown(rig.app.dispose);
+      Map<String, dynamic> left(_) => {
+        'error': 'FORBIDDEN',
+        'detail': 'You are not in this Swarm.',
+        'status': 403,
+      };
+      rig.conn('a').answers['super_tabs'] = left;
+      rig.conn('b').answers['super_tabs'] = left;
+
+      await expectLater(
+        rig.app.swarmRequest('GET', '/api/super-tabs/t/parts'),
+        throwsA(
+          isA<SuperTabFailure>()
+              .having((f) => f.code, 'code', 'FORBIDDEN')
+              .having((f) => f.statusCode, 'statusCode', 403),
+        ),
+      );
+
+      rig.conn('a').answers['super_tabs'] = (_) => forwarded({'tabs': []});
+      await rig.app.swarmRequest('GET', '/api/super-tabs/list');
+      expect(rig.conn('a').payloadsOf('super_tabs'), hasLength(2));
+    },
+  );
+
   test('an answer that lands after sign-out is dropped', () async {
     final rig = await signedInWith({'m': []});
     addTearDown(rig.app.dispose);
