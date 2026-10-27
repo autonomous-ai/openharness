@@ -174,7 +174,7 @@ class SwarmDecisionCard extends StatelessWidget {
             Align(
               alignment: Alignment.centerLeft,
               child: TtyTextButton(
-                label: 'Open conversation',
+                label: 'Open chat',
                 size: TtySize.meta,
                 color: tty.dim,
                 onPressed: onOpen,

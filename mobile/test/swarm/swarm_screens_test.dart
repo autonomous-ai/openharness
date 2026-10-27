@@ -144,6 +144,11 @@ void main() {
         lessThan(tester.getTopLeft(key('swarm-project-$tab-$project')).dy),
       );
       expect(find.text('phone swarm'), findsOneWidget, reason: 'its caption');
+      expect(
+        find.text('Open chat'),
+        findsOneWidget,
+        reason: 'the Naming System: a Swarm chat, not a conversation',
+      );
       expect(find.text('1 waiting'), findsOneWidget, reason: 'the team line');
     });
 
@@ -356,6 +361,10 @@ void main() {
       expect(find.text('Which name should the flag have?'), findsOneWidget);
       expect(key('swarm-send'), findsNothing);
       expect(key('swarm-read-only'), findsOneWidget);
+      expect(
+        find.text('You can read this chat, not post in it.'),
+        findsOneWidget,
+      );
     });
   });
 

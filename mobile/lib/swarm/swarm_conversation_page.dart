@@ -216,7 +216,7 @@ class _SwarmConversationPageState extends State<SwarmConversationPage> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   TtyText(
-                    group?.label ?? 'Conversation',
+                    group?.label ?? 'Chat',
                     size: TtySize.row,
                     weight: FontWeight.w600,
                   ),
@@ -232,7 +232,7 @@ class _SwarmConversationPageState extends State<SwarmConversationPage> {
               ? Padding(
                   padding: const EdgeInsets.all(Tty.origin),
                   child: Text(
-                    c.error ?? 'This conversation is not open to you.',
+                    c.error ?? 'This chat is not open to you.',
                     style: tty.style(color: tty.dim),
                   ),
                 )
@@ -322,8 +322,8 @@ class _SwarmConversationPageState extends State<SwarmConversationPage> {
             padding: const EdgeInsets.all(Tty.origin),
             child: Text(
               group.archived
-                  ? 'This conversation is archived.'
-                  : 'You can read this conversation, not post in it.',
+                  ? 'This chat is archived.'
+                  : 'You can read this chat, not post in it.',
               key: const ValueKey('swarm-read-only'),
               style: tty.style(color: tty.dim, size: TtySize.meta),
             ),
