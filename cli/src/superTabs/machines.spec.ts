@@ -459,6 +459,52 @@ describe('contributed machine executor', () => {
     expect(f.backend.mock.calls.filter(c => c[1] === 'POST').at(-1)![3]).not.toHaveProperty('harnessProgress')
   })
 
+  it('says whether each running session\'s folder has uncommitted changes, leaving out any git could not read', async () => {
+    const f = fixture()
+    const folders: Record<string, string> = { running: '/work/running', clean: '/work/clean', broken: '/work/broken' }
+    vi.mocked(f.core.agents.byAgent).mockImplementation(id => folders[id] ? { agentId: id, cwd: folders[id] } as never : undefined)
+    f.pool.harnessIds = ['running', 'clean', 'broken', 'stopped']
+    const git = vi.fn(async (cwd: string, args: string[]) => cwd === '/work/broken' ? { ok: false, stdout: '', stderr: 'fatal' }
+      : { ok: args.join(' ') === 'status --porcelain', stdout: cwd === '/work/running' ? ' M src/a.ts\n' : '', stderr: '' })
+    const machine = new ContributedMachines(f.core, 'host', { ...f.deps, git } as never)
+    await machine.tick()
+    const body = f.backend.mock.calls.find(c => c[1] === 'POST')![3] as Record<string, unknown>
+    expect(body.harnessUncommitted).toEqual({ running: true, clean: false })
+    expect(git.mock.calls.map(c => c[0]).sort()).toEqual(['/work/broken', '/work/clean', '/work/running'])
+  })
+
+  it('reads each session\'s folder at most once a minute', async () => {
+    const f = fixture()
+    vi.mocked(f.core.agents.byAgent).mockImplementation(id => id === 'running' ? { agentId: id, cwd: '/work/running' } as never : undefined)
+    const git = vi.fn(async () => ({ ok: true, stdout: '', stderr: '' }))
+    const machine = new ContributedMachines(f.core, 'host', { ...f.deps, git } as never)
+    await machine.tick()
+    f.advance(); await machine.tick()
+    expect(git).toHaveBeenCalledTimes(1)
+    f.step(60_000); await machine.tick()
+    expect(git).toHaveBeenCalledTimes(2)
+  })
+
+  it('drops uncommitted changes alone for a backend that refuses them, and offers them again ten minutes later', async () => {
+    const f = fixture()
+    vi.mocked(f.core.agents.byAgent).mockImplementation(id => id === 'running' ? { agentId: id, cwd: '/work/running' } as never : undefined)
+    const original = f.backend.getMockImplementation()!
+    f.backend.mockImplementation(async (core, method, path, body) => {
+      if (method === 'POST' && (body as Record<string, unknown>)?.harnessUncommitted) throw new SuperTabHostError('VALIDATION_ERROR', 'Unrecognized key: harnessUncommitted', 400)
+      return original(core, method, path, body)
+    })
+    const git = vi.fn(async () => ({ ok: true, stdout: '', stderr: '' }))
+    const machine = new ContributedMachines(f.core, 'host', { ...f.deps, git, progress: () => ({ running: 900 }) } as never)
+    const posts = () => f.backend.mock.calls.filter(c => c[1] === 'POST' && String(c[2]).includes('/machines/')).map(c => c[3] as Record<string, unknown>)
+    const fields = (post: Record<string, unknown>) => ['harnessUncommitted', 'harnessProgress'].filter(key => key in post)
+    await machine.tick()
+    expect(posts().map(fields)).toEqual([['harnessUncommitted', 'harnessProgress'], ['harnessProgress']])
+    f.advance(); await machine.tick()
+    expect(posts().map(fields).at(-1)).toEqual(['harnessProgress'])
+    f.step(600_000); await machine.tick()
+    expect(posts().map(fields).slice(-2)).toEqual([['harnessUncommitted', 'harnessProgress'], ['harnessProgress']])
+  })
+
   it('drops progress for a backend that refuses it, and offers it again ten minutes later', async () => {
     const f = fixture()
     const original = f.backend.getMockImplementation()!

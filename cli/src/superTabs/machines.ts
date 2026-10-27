@@ -33,6 +33,9 @@ const VERIFIED_TOOL_TTL_MS = 10 * 60_000
  *  is heard from within this long. */
 const FIELD_REFUSED_MS = 10 * 60_000
 const UNVERIFIED_TOOL_TTL_MS = 60_000
+/** How long a session's folder stands as clean or not before git is asked again: a minute bounds the work to one
+ *  `git status` per running session a minute, and the backend stops an idle worker only on a report under 2 minutes old. */
+const UNCOMMITTED_TTL_MS = 60_000
 /** How long this machine refuses a start before failing it with its reason, so the Lead starts it elsewhere: a minute of
  *  busy CPU or memory may pass, and routing saw this machine able a moment ago. A refusal no one reported left starts
  *  "Queued" for hours (DESKTOP-0TFH0OJ, 2026-10-23). */
@@ -141,6 +144,9 @@ export class ContributedMachines {
   private privacyRefusedUntil = 0
   /** Until when the reading leaves out its progress, which the backend refused. */
   private progressRefusedUntil = 0
+  private uncommittedRefusedUntil = 0
+  /** Per running session, whether its folder had uncommitted changes when last read, and until when that stands. */
+  private readonly uncommittedCache = new Map<string, { cwd: string; dirty: boolean; until: number }>()
   /** Until when the reading leaves out its readiness field, which the backend refused. */
   private readinessRefusedUntil = 0
   /** Whether each engine is installed and signed in, and until when that stands: one probe starts login shells and reads
@@ -325,7 +331,9 @@ export class ContributedMachines {
         const readiness = { ...(readyEngines ? { engines: readyEngines } : {}), ...(checkouts ? { checkouts } : {}) }
         const shown = began >= this.progressRefusedUntil ? this.deps.progress?.(running) ?? {} : {}
         const progress = Object.fromEntries(running.flatMap(id => typeof shown[id] === 'number' ? [[id, shown[id]]] : []))
+        const uncommitted = began >= this.uncommittedRefusedUntil ? await this.uncommitted(running, began) : {}
         const observation = { generation: pool.generation, tools: reportedTools,
+          ...(Object.keys(uncommitted).length ? { harnessUncommitted: uncommitted } : {}),
           ...(Object.keys(progress).length ? { harnessProgress: progress } : {}), ...(localModels ? { localModels } : {}),
           ...((readyEngines || checkouts) && began >= this.readinessRefusedUntil ? { readiness } : {}),
           ...(privacy && began >= this.privacyRefusedUntil ? { privacy } : {}),
@@ -349,14 +357,15 @@ export class ContributedMachines {
           // Older backends reject the additive fields. The newest go alone first, readiness, progress, then privacy: a backend
           // that takes everything else keeps the local models it reads. Their boolean-only view still safely refuses an
           // unverified tool, and a reading without privacy is never one a Team machine passes on.
-          const { readiness: _readiness, ...ready } = observation
+          const { harnessUncommitted: _uncommitted, ...known } = observation
+          const { readiness: _readiness, ...ready } = known
           const { harnessProgress: _progress, ...withoutProgress } = ready
           const { privacy: _privacy, ...withoutPrivacy } = withoutProgress
           const { toolProbeErrors: _probeErrors, localModels: _served, refusedModels: _refused, ...legacy } = withoutPrivacy
           // A backend before `starting` refuses it: it gets the models the grid lists, as before, not none at all.
           const listedOnly = localModels?.some(m => m.starting)
             ? [{ ...withoutPrivacy, localModels: localModels.filter(m => !m.starting) }] : []
-          const attempts = [...('readiness' in observation ? [observation] : []), ready, ...('harnessProgress' in ready ? [withoutProgress] : []),
+          const attempts = [...('harnessUncommitted' in observation ? [observation] : []), ...('readiness' in known ? [known] : []), ready, ...('harnessProgress' in ready ? [withoutProgress] : []),
             ...('privacy' in withoutProgress ? [withoutPrivacy] : []), ...listedOnly,
             ...('toolProbeErrors' in observation || 'localModels' in observation || 'refusedModels' in observation ? [legacy] : [])]
           for (const [index, attempt] of attempts.entries()) {
@@ -365,7 +374,8 @@ export class ContributedMachines {
               break
             } catch (error) {
               if (!refused(error) || index === attempts.length - 1) throw error
-              if ('readiness' in attempt) this.readinessRefusedUntil = began + FIELD_REFUSED_MS
+              if ('harnessUncommitted' in attempt) this.uncommittedRefusedUntil = began + FIELD_REFUSED_MS
+              else if ('readiness' in attempt) this.readinessRefusedUntil = began + FIELD_REFUSED_MS
               else if ('harnessProgress' in attempt) this.progressRefusedUntil = began + FIELD_REFUSED_MS
               else if ('privacy' in attempt) this.privacyRefusedUntil = began + FIELD_REFUSED_MS
             }
@@ -437,6 +447,27 @@ export class ContributedMachines {
       }
     } finally { local?.close() }
   }
+  /** Whether each running session's folder has uncommitted changes (git status), for the sessions git could read: the
+   *  backend stops a worker idle for 15 minutes only when its host says it is clean (backend superTabs/tidy.ts). */
+  private async uncommitted(running: readonly string[], now: number): Promise<Record<string, boolean>> {
+    const read: Record<string, boolean> = {}
+    for (const id of running) {
+      const cwd = this.core.agents.byAgent(id)?.cwd
+      if (!cwd) continue
+      let known = this.uncommittedCache.get(id)
+      if (!known || known.cwd !== cwd || known.until <= now) {
+        const status = await (this.deps.git ?? quietGit)(cwd, ['status', '--porcelain'])
+        known = status.ok ? { cwd, dirty: status.stdout.trim() !== '', until: now + UNCOMMITTED_TTL_MS } : undefined
+        if (known) this.uncommittedCache.set(id, known)
+        else this.uncommittedCache.delete(id)
+      }
+      if (known) read[id] = known.dirty
+    }
+    // Sessions of every tab share it, so only what expired goes: a session that left is never read again.
+    for (const [id, entry] of this.uncommittedCache) if (entry.until <= now) this.uncommittedCache.delete(id)
+    return read
+  }
+
   /** A removal deletes only what is provably the Swarm's: the record says which worktree each start made. */
   private recordWorktree(tabId: string, startId: string, harnessId: string, request: Record<string, unknown>) {
     const path = this.core.agents.byAgent(harnessId)?.cwd
