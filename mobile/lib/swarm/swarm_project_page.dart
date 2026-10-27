@@ -220,10 +220,10 @@ class _SwarmProjectPageState extends State<SwarmProjectPage> {
           if (lead != null)
             SettingsRow(
               key: const ValueKey('swarm-lead-chat'),
-              title: 'Lead',
+              title: 'Product Manager',
               detail: lead.leadId == null
-                  ? null
-                  : snapshot.agentName(lead.leadId!),
+                  ? 'With the whole project'
+                  : '${snapshot.agentName(lead.leadId!)}, with the whole project',
               onTap: () => _open(lead.id),
             ),
         ],

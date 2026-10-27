@@ -225,6 +225,14 @@ void main() {
 
         double y(String k) => tester.getTopLeft(key(k)).dy;
         expect(y('swarm-pm-chat'), lessThan(y('swarm-lead-chat')));
+        expect(
+          find.descendant(
+            of: key('swarm-lead-chat'),
+            matching: find.text('Product Manager'),
+          ),
+          findsOneWidget,
+          reason: 'the Naming System: Product Manager on screen, never Lead',
+        );
         expect(y('swarm-lead-chat'), lessThan(y('swarm-conversation-g-busy')));
         expect(
           y('swarm-conversation-g-busy'),
