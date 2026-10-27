@@ -39,7 +39,7 @@ Variables: a boolean *x_tmk* per option, and integer *start_t* and *end_t*.
 - Model limits: a cumulative constraint per model with a limit, capacity *L_k*.
 - Review independence: for each *u ∈ I_t* and family *F*, at most one of *t* and *u* uses a model of *F*.
 - Quota: for each account, *Σ x_tmk · s_t · c_k / 2 ≤ B_a* over the options that spend it (the route's
-  `sizeUp` scaling).
+  `sizeUp` scaling). This is the weekly window only; the exact plan has no 5-hour constraint.
 
 Objectives, lexicographic: first minimise *M = max_t end_t*. Then fix *M ≤ M\** and minimise
 *Σ x_tmk · c_k · e_t*. Both phases share one time limit (10 s by default), and each reports its bound. A
@@ -63,7 +63,7 @@ the tightest window, then the candidate's title. Effective cost is the route's:
 
 The quota is read at the moment the task is routed. Work run since the start has used it, open picks hold the rest of
 their expected spend (decaying over their run time, as in the route), and a 5-hour window refills to 100% at each
-reset, every 5 hours, which is how the exact plan treats it too. A review leaves out the family its build was given,
+reset, every 5 hours. The exact plan does not model 5-hour windows at all: it budgets the weekly quota only. A review leaves out the family its build was given,
 as the Lead asks the route for. Then the task starts as early as its machine's slots and model limit allow.
 
 Left out: members (every pick is a new agent) and soft rules (this Swarm has none). The owner's hard machine rule
