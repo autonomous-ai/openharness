@@ -905,7 +905,8 @@ class _SuperTabViewState extends State<SuperTabView>
                 (widget.app?.questionFor(agent.machineId, agent.harnessId) !=
                         null ||
                     (superTabWorkWaits(group.assignment?['status']) &&
-                        group.assignment?['agentId'] == agent.id)),
+                        group.assignment?['agentId'] == agent.id &&
+                        group.waitsOn(c.accountId))),
           )
           .toList() ??
       const [];

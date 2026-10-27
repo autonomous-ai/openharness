@@ -122,6 +122,10 @@ class SuperTabConversation {
           : null,
       lastMessageSequence = (row['lastMessageSequence'] as num?)?.toInt() ?? 0,
       partnerId = row['partnerId'] as String?,
+      askedPersonIds = List.unmodifiable(
+        (row['askedPersonIds'] as List?)?.whereType<String>() ??
+            const <String>[],
+      ),
       assignment = row['assignment'] == null
           ? null
           : Map.unmodifiable(superTabMap(row['assignment']));
@@ -136,6 +140,15 @@ class SuperTabConversation {
   /// The person the work needs for judgement, taste, knowledge or hands,
   /// named by its Lead or a writer (collaboration protocol); null when none.
   final String? partnerId;
+
+  /// The people with an open decision or hands-on request here, oldest
+  /// first: only they are told the work waits on a person. Empty when nobody
+  /// was named, and then every reader is, as before.
+  final List<String> askedPersonIds;
+
+  /// Whether work here waiting on a person waits on [personId].
+  bool waitsOn(String? personId) =>
+      askedPersonIds.isEmpty || askedPersonIds.contains(personId);
 
   /// A private conversation's people, who read it with the project's Lead
   /// and nobody else; null for a conversation the project shares.
