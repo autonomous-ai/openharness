@@ -239,6 +239,8 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     },
     // The Pro picked a Lead: the window opens that Swarm tab and project. Harmless with no window.
     superTabSelected: (superTabId, projectId) => core.clients.sendLocal({ type: 'dial_super_tab', payload: { superTabId, projectId } }),
+    // What waits on the person in that Swarm: the window opens its Notifications. Harmless with no window.
+    superTabNotifications: (superTabId) => core.clients.sendLocal({ type: 'dial_super_tab', payload: { superTabId, notifications: true } }),
     scrolled: (phase, dy, velocity, superTabId) => core.clients.sendLocal({ type: 'dial_scroll', payload: { phase, dy, velocity, ...(superTabId ? { superTabId } : {}) } }),
     // Gestures stay at this desk. The device inventory and its settings also reach the owner's other
     // machines, through the encrypted device-management event.

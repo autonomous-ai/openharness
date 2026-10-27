@@ -366,6 +366,8 @@ export interface CableHost {
   conversationSay?(tabId: string, conversationId: string, text: string, operationId: string): Promise<{ ok: true } | { ok: false; error: string }>
   /** A device picked a Lead: the window opens that Swarm tab and project. */
   superTabSelected?(superTabId: string, projectId: string): void
+  /** A device pressed what waits on the person in a Swarm: the window opens that Swarm's Notifications. */
+  superTabNotifications?(superTabId: string): void
   /** The Swarm tab the window has on screen and the project open in it; null when the active tab is not a Swarm or there is no window. */
   activeSwarmProject?(): { superTabId: string; projectId: string; fromDevice: boolean } | null
   appName(): string
@@ -1381,6 +1383,13 @@ export class CableSession {
       case 'supertab.select':
         await this.onSuperTab(msg.t, str('tab') ?? '', str('lead') ?? '')
         return
+      case 'supertab.needs': {
+        // The person pressed what waits on them in a Swarm (its card's `needsYou`): the window shows its Notifications, where their
+        // decisions are listed first. Only a Swarm this device was shown, so a device cannot have the window open any tab id it likes.
+        const tab = str('tab') ?? ''
+        if (this.swarmCard && CARD_ID.test(tab) && this.host.swarmCards?.().some((c) => c.id === tab)) this.host.superTabNotifications?.(tab)
+        return
+      }
       case 'swarm.select':
         // Not answered here: the window switches, its desk changes, and the new `swarms` and ring
         // pushes are the answer — the same shape as `machine.select`, minus the refusal, because the

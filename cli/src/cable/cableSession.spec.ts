@@ -3839,7 +3839,7 @@ describe('swarm cards', () => {
       swarmCards: () => state.cards,
       listSwarms: () => state.desk ?? desk(),
       activeSwarmProject: () => state.open ?? null,
-      swarmCardsWanted: vi.fn(), swarmCardOpen: vi.fn(), superTabSelected: vi.fn(),
+      swarmCardsWanted: vi.fn(), swarmCardOpen: vi.fn(), superTabSelected: vi.fn(), superTabNotifications: vi.fn(),
       swarmCardRecap: vi.fn(async (tabId: string, leadId: string) => ({ tabId, leadId, text: 'Shipped it.', at: 1792560000, none: false })),
       ...over,
     })
@@ -3857,12 +3857,14 @@ describe('swarm cards', () => {
       port.say({ t: 'supertab.recap.get', tab: 'st1', lead: 'lead1' })
       port.say({ t: 'supertab.open', tab: 'st1', lead: 'lead1' })
       port.say({ t: 'supertab.select', tab: 'st1', lead: 'lead1' })
+      port.say({ t: 'supertab.needs', tab: 'st1' })
       await settle(); await settle()
       expect(port.types().filter((t) => t.startsWith('supertab'))).toEqual([])
       expect(host.swarmCardsWanted).not.toHaveBeenCalled()
       expect(host.swarmCardRecap).not.toHaveBeenCalled()
       expect(host.swarmCardOpen).not.toHaveBeenCalled()
       expect(host.superTabSelected).not.toHaveBeenCalled()
+      expect(host.superTabNotifications).not.toHaveBeenCalled()
     } finally { await session.stop() }
   })
 
@@ -3906,6 +3908,25 @@ describe('swarm cards', () => {
       await vi.waitFor(() => expect(ofType(port, 'supertab')).toHaveLength(3))
       expect(ofType(port, 'supertab')[2]).toMatchObject({ id: 'st1' })
       expect(ofType(port, 'supertab')[2]).not.toHaveProperty('needsYou')
+    } finally { await session.stop() }
+  })
+
+  it('opens a Swarm\'s Notifications in the window when the person presses what waits on them, and only for a Swarm it was shown', async () => {
+    const superTabNotifications = vi.fn()
+    const host = cardHost({ cards: [{ ...card('st1'), needsYou: 1 }, card('st2')] }, { superTabNotifications })
+    const { session, port } = await connect(host)
+    try {
+      port.say(PRO)
+      await vi.waitFor(() => expect(ofType(port, 'supertab')).toHaveLength(2))
+      port.say({ t: 'supertab.needs', tab: 'st1' })
+      await vi.waitFor(() => expect(superTabNotifications).toHaveBeenCalledExactlyOnceWith('st1'))
+      // A card with nothing waiting is still the person's Swarm: Notifications is where they look again.
+      port.say({ t: 'supertab.needs', tab: 'st2' })
+      port.say({ t: 'supertab.needs', tab: 'gone' })
+      port.say({ t: 'supertab.needs', tab: 'bad id' })
+      port.say({ t: 'supertab.needs' })
+      await settle(); await settle()
+      expect(superTabNotifications.mock.calls).toEqual([['st1'], ['st2']])
     } finally { await session.stop() }
   })
 

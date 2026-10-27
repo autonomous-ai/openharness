@@ -117,6 +117,7 @@ export interface CableHostWiring {
   conversationSay?: (tabId: string, conversationId: string, text: string, operationId: string) => Promise<{ ok: true } | { ok: false; error: string }>
   /** A device picked a Lead: the window opens that Swarm tab and project. */
   superTabSelected?: (superTabId: string, projectId: string) => void
+  superTabNotifications?: (superTabId: string) => void
   /** A finger on the dial's glass, in pieces, while it is down; `superTabId` when it scrolls that Swarm's chat (a Pro's Lead view). */
   scrolled?: (phase: 'down' | 'move' | 'up', dy: number, velocity: number, superTabId?: string) => void
   /** The dial came, went, or started taking an update — see CableSession's onDialStatus. */
@@ -452,6 +453,10 @@ export class DaemonCableHost implements CableHost {
 
   superTabSelected(superTabId: string, projectId: string): void {
     this.wiring.superTabSelected?.(superTabId, projectId)
+  }
+
+  superTabNotifications(superTabId: string): void {
+    this.wiring.superTabNotifications?.(superTabId)
   }
 
   /** The active tab when it is a Swarm with an open project; `fromDevice` when the announce was a device's own pick. */

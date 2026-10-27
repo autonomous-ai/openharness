@@ -1021,7 +1021,7 @@ describe('Swarm cards', () => {
 
   it('hands the wiring what a device asks, and answers nothing when the wiring has none', async () => {
     const w = wiring({
-      swarmCardsWanted: vi.fn(), swarmCardOpen: vi.fn(), superTabSelected: vi.fn(),
+      swarmCardsWanted: vi.fn(), swarmCardOpen: vi.fn(), superTabSelected: vi.fn(), superTabNotifications: vi.fn(),
       swarmCardRecap: vi.fn(async (tabId: string, leadId: string) => ({ tabId, leadId, text: 'hi', at: 1, none: false })),
     })
     const host = new DaemonCableHost(w)
@@ -1029,9 +1029,11 @@ describe('Swarm cards', () => {
     expect(w.swarmCardsWanted).toHaveBeenCalledWith(true)
     expect(w.swarmCardOpen).toHaveBeenCalledWith('c1', 'st1', 'l1')
     expect(w.superTabSelected).toHaveBeenCalledWith('st1', 'p1')
+    host.superTabNotifications('st1')
+    expect(w.superTabNotifications).toHaveBeenCalledWith('st1')
     expect(await host.swarmCardRecap('st1', 'l1')).toEqual({ tabId: 'st1', leadId: 'l1', text: 'hi', at: 1, none: false })
     const bare = new DaemonCableHost(wiring())
-    bare.swarmCardsWanted(false); bare.swarmCardOpen('c1', 'st1', null); bare.superTabSelected('st1', 'p1')
+    bare.swarmCardsWanted(false); bare.swarmCardOpen('c1', 'st1', null); bare.superTabSelected('st1', 'p1'); bare.superTabNotifications('st1')
     expect(await bare.swarmCardRecap('st1', 'l1')).toBeNull()
   })
 })

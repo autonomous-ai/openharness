@@ -665,6 +665,8 @@ describe('what the windows say, reaching the dial', () => {
         [{ action: 'cardOpen', session: 'c1', tabId: 'st1', leadId: 'lead1' }], [{ action: 'cardOpen', session: 'c1', tabId: 'st1', leadId: null }]])
       seen.host.superTabSelected!('st1', 'proj1')
       expect(vi.mocked(core.clients.sendLocal)).toHaveBeenCalledWith({ type: 'dial_super_tab', payload: { superTabId: 'st1', projectId: 'proj1' } })
+      seen.host.superTabNotifications!('st1')
+      expect(vi.mocked(core.clients.sendLocal)).toHaveBeenLastCalledWith({ type: 'dial_super_tab', payload: { superTabId: 'st1', notifications: true } })
     })
   })
 
