@@ -1,6 +1,5 @@
 import '../measurement/product_measurement.dart';
 import '../measurement/task_feedback.dart';
-
 import 'dart:async';
 import 'dart:ui' as ui;
 
@@ -2846,11 +2845,8 @@ class _TerminalPageState extends State<TerminalPage>
                                   // terminal drew** — see `reconnecting` above. Then the
                                   // screen stays and only [_Reconnecting] lies over it.
                                   if (reconnecting)
-                                    const Positioned.fill(
-                                      child: _Reconnecting(),
-                                    )
-                                  else if (session != null &&
-                                      !session.hasScreen)
+                                    const Positioned.fill(child: _Reconnecting())
+                                  else if (session != null && !session.hasScreen)
                                     Positioned.fill(child: placeholder),
                                   // The mic and Search, floating in the
                                   // terminal's bottom-right corner — see
@@ -3244,11 +3240,9 @@ class _TerminalPageState extends State<TerminalPage>
               PhoneSheetAction(
                 icon: LucideIcons.messageSquareText300,
                 label: 'Rate task outcome',
-                onTap: () => showTaskFeedback(
-                  context,
+                onTap: () => showTaskFeedback(context,
                   choice: () => widget.notifier.api.productUsageSettings(),
-                  send: widget.notifier.api.productUsageFeedback,
-                ),
+                  send: widget.notifier.api.productUsageFeedback),
               ),
             PhoneSheetAction(
               icon: LucideIcons.settings300,
@@ -4000,8 +3994,7 @@ class _ReconnectingState extends State<_Reconnecting> {
         child: TweenAnimationBuilder<double>(
           tween: Tween(begin: 0, end: 1),
           duration: still ? Duration.zero : const Duration(milliseconds: 180),
-          builder: (context, fade, child) =>
-              Opacity(opacity: fade, child: child),
+          builder: (context, fade, child) => Opacity(opacity: fade, child: child),
           child: Stack(
             fit: StackFit.expand,
             children: [

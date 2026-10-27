@@ -160,6 +160,24 @@ void main() {
     expect(notices.shown.single.title, 'River asks you');
   });
 
+  testWidgets('Home dropped while out of sight (Swarm turned off) leaves '
+      'another Swarm screen muting them', (tester) async {
+    await pump(tester);
+    final session = host.session!;
+    final need = session.inbox.needs.single;
+    choice.showHarness();
+    await tester.pumpAndSettle();
+    // Another Swarm screen up meanwhile (a chat).
+    session.enter();
+
+    choice.features.value = const {};
+    await tester.pumpAndSettle();
+    expect(find.byType(SwarmPage, skipOffstage: false), findsNothing);
+    session.announce(need);
+
+    expect(notices.shown, isEmpty, reason: 'Home left once, when hidden');
+  });
+
   testWidgets('Home in sight mutes them, as before', (tester) async {
     await pump(tester);
 
