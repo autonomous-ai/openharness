@@ -1456,7 +1456,7 @@ class _Ask extends StatelessWidget {
                 SwarmDecisionAnswer(
                   session: session,
                   need: need,
-                  sideBySide: true,
+                  fillRecommended: true,
                 ),
               ],
             ),

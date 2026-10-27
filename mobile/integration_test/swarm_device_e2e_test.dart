@@ -15,8 +15,8 @@ import 'package:harness_mobile/swarm/swarm_need_rows.dart';
 /// otherwise, so no CI or simulator run reaches a real account.
 ///
 /// It reads: Swarm on (in memory only; the saved switch is left as it was),
-/// the mark on Home, the Swarm page, the first project, its Product Manager
-/// chat. It writes only when `SWARM_E2E_CHAT` names a test chat whose open
+/// Swarm Home, Harness from its drawer and the terminal's mark back to Swarm
+/// Home, the first project, its project chat. It writes only when `SWARM_E2E_CHAT` names a test chat whose open
 /// decision asks this person: there it posts one short line and answers that
 /// decision with its first option. Nothing else is written.
 ///
@@ -82,8 +82,13 @@ void main() {
       );
 
       await app.main();
-      // Home, with a harness on it; or the welcome, which this run cannot pass.
-      final home = key('terminal-title');
+      // Home, with a harness on it (or Swarm Home, Swarm saved on); or the
+      // welcome, which this run cannot pass.
+      final home = find.byWidgetPredicate(
+        (widget) =>
+            widget.key == const ValueKey('terminal-title') ||
+            widget.key == const ValueKey('swarm-menu'),
+      );
       for (var i = 0; i < 900 && home.evaluate().isEmpty; i++) {
         if (find.text(OnboardingCopy.welcome).evaluate().isNotEmpty) {
           fail('Sign in on the phone first, then run this again.');
@@ -97,12 +102,18 @@ void main() {
       addTearDown(() => experimentalFeaturesStore.value = saved);
       experimentalFeaturesStore.value = {...saved, PhoneExperiment.swarm};
 
-      // ① The mark on Home, then the Swarm page: needs first, then Swarms.
+      // ① Swarm Home at the root: needs first, Chat with PM, the projects.
+      // Harness from its drawer; the terminal's mark goes back to Swarm Home.
+      await waitFor(keyStarting('swarm-project-'), seconds: 60);
+      await shot('swarm');
+      await tester.tap(key('swarm-menu'));
+      await waitFor(key('swarm-drawer-harness'));
+      await shot('drawer');
+      await tester.tap(key('swarm-drawer-harness'));
       await waitFor(key('swarm-mark'));
       await shot('home-mark');
       await tester.tap(key('swarm-mark'));
       await waitFor(keyStarting('swarm-project-'), seconds: 60);
-      await shot('swarm');
 
       // ② The first project, then its Product Manager chat: read only.
       await tester.tap(keyStarting('swarm-project-').first);
@@ -115,8 +126,8 @@ void main() {
 
       if (chat.isEmpty) return;
 
-      // ③ The named test chat, from its decision on the Swarm page: one
-      // line posted, and the decision answered with its first option.
+      // ③ The named test chat, from its decision on Swarm Home: one line
+      // posted, and the decision answered with its first option.
       // Back twice, as the pages' own chevrons do: the shell's navigator.
       tester.state<NavigatorState>(
           find
@@ -129,14 +140,39 @@ void main() {
         ..pop()
         ..pop();
       await wait(1500);
-      final card = find.ancestor(
-        of: find.textContaining(chat),
-        matching: find.byType(SwarmDecisionCard),
+      final card = find.byWidgetPredicate(
+        (w) =>
+            w is SwarmDecisionCard && w.need.decision.conversationTitle == chat,
       );
+      // Swarm Home opens one need at a time: each decision in turn, until
+      // the test chat's.
+      final tried = <String>{};
+      while (card.evaluate().isEmpty) {
+        final next = keyStarting('swarm-need-row-decision:')
+            .evaluate()
+            .map((e) => (e.widget.key! as ValueKey<String>).value)
+            .where((k) => !tried.contains(k))
+            .firstOrNull;
+        if (next == null) break;
+        tried.add(next);
+        await tester.ensureVisible(key(next));
+        await tester.tap(key(next));
+        await wait();
+      }
       await waitFor(card);
       await shot('test-decision');
+      // Who asks, at the top of the card, opens the chat it was asked in.
       await tester.tap(
-        find.descendant(of: card.first, matching: find.text('Open chat')),
+        find.descendant(
+          of: card.first,
+          matching: find.byWidgetPredicate(
+            (w) =>
+                w.key is ValueKey<String> &&
+                (w.key! as ValueKey<String>).value.startsWith(
+                  'swarm-need-open-',
+                ),
+          ),
+        ),
       );
       await waitFor(key('swarm-send'));
       final now = DateTime.now();

@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
-import 'package:harness_mobile/phone/phone_navigation.dart';
 import 'package:harness_mobile/phone/tty.dart';
 import 'package:harness_mobile/phone/tty_controls.dart';
 
@@ -11,7 +10,8 @@ import 'swarm_session.dart';
 
 /// Swarm on Home's title ([swarmHomeMark]): its mark, and how many things the
 /// Swarms ask of the person, in the terminal's yellow while any do. A tap
-/// opens the Swarm page. Nothing while Swarm is off or outside the shell.
+/// goes back to Swarm Home ([openSwarmHome]). Nothing while Swarm is off or
+/// outside the shell.
 class SwarmMark extends StatelessWidget {
   const SwarmMark({super.key, this.margin = EdgeInsets.zero});
 
@@ -34,9 +34,7 @@ class SwarmMark extends StatelessWidget {
             semanticsLabel: count == 0
                 ? 'Swarm'
                 : 'Swarm, $count ${count == 1 ? 'needs' : 'need'} you',
-            onTap: () => Navigator.of(
-              context,
-            ).push(phoneRoute((_) => const SwarmPage())),
+            onTap: () => openSwarmHome(context),
             child: Padding(
               padding: const EdgeInsets.symmetric(horizontal: 4),
               child: Row(

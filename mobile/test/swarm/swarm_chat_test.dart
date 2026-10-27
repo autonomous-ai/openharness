@@ -568,7 +568,7 @@ void main() {
 
     await tester.tap(key('swarm-option-d1-1'));
     await tester.pump();
-    expect(find.text('Sending “Everyone”…'), findsOneWidget);
+    expect(find.text('Sending “Everyone”'), findsOneWidget);
     await tester.pump(const Duration(seconds: 10));
     await tester.pumpAndSettle();
   });
