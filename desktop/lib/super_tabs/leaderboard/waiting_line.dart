@@ -38,30 +38,31 @@ class LeaderboardWaitingLine extends StatelessWidget {
               'No agent is waiting on a person.',
               style: DesktopChrome.metadata(),
             )
-          : Row(
+          : Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        '⏳ Agents waiting on a person now: ${waiting.total}',
-                        style: DesktopChrome.control(),
-                      ),
-                      Text(
+                // The whole width, so the count never wraps beside Answer.
+                Text(
+                  '⏳ Agents waiting on a person now: ${waiting.total}',
+                  style: DesktopChrome.control(),
+                ),
+                Row(
+                  children: [
+                    Expanded(
+                      child: Text(
                         waiting.people
                             .map((p) => '${nameOf(p.personId)} ${p.count}')
                             .join(' · '),
                         style: DesktopChrome.metadata(),
                       ),
-                    ],
-                  ),
+                    ),
+                    if (target != null)
+                      TextButton(
+                        onPressed: () => onAnswer(target),
+                        child: const Text('Answer'),
+                      ),
+                  ],
                 ),
-                if (target != null)
-                  TextButton(
-                    onPressed: () => onAnswer(target),
-                    child: const Text('Answer'),
-                  ),
               ],
             ),
     );

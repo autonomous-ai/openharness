@@ -320,7 +320,7 @@ void main() {
           findsOneWidget,
         );
         expect(
-          find.text('14 answered · median 6 min · 28 agent-hours freed'),
+          find.text('14 answered · median 6 min · 28 h of agent time freed'),
           findsOneWidget,
         );
         expect(find.text('2 machines · 31 slot-hours'), findsOneWidget);

@@ -156,7 +156,10 @@ class _Header extends StatelessWidget {
         Expanded(
           child: Text(
             'Humans · ${weekName(week, current)}',
-            style: DesktopChrome.heading(),
+            // As the People pane's section headings, beside it.
+            style: DesktopChrome.metadata().copyWith(
+              fontWeight: FontWeight.w600,
+            ),
           ),
         ),
         AppSelectField<int>(

@@ -123,7 +123,7 @@ class _Detail extends StatelessWidget {
         '🔓 Unblocked',
         score.unblocked == 0
             ? 'Nothing answered yet'
-            : '${score.unblocked} answered${median(score.medianAnswerMs, '')} · ${leaderboardHours(score.unblockedMs)} agent-hours freed',
+            : '${score.unblocked} answered${median(score.medianAnswerMs, '')} · ${leaderboardDuration(score.unblockedMs)} of agent time freed',
       ),
       (
         '⚡ Lent',
@@ -157,7 +157,7 @@ class _Detail extends StatelessWidget {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   SizedBox(
-                    width: 96,
+                    width: 88,
                     child: Text(
                       label,
                       style: DesktopChrome.metadata(
