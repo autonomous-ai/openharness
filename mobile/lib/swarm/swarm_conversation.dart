@@ -36,6 +36,12 @@ class SwarmConversation extends ChangeNotifier {
   /// A post is on its way.
   bool sending = false;
 
+  /// Tells the composer what changed in it — the draft, the message it
+  /// answers, a post leaving it — while this notifier itself tells the
+  /// messages: a letter typed draws none of them again.
+  Listenable get composer => _composer;
+  final _composer = _Changes();
+
   SuperTabPage? _before;
   bool _read = false, _lost = false, _disposed = false;
   Future<void>? _reading, _readingOlder, _locating;
@@ -87,7 +93,7 @@ class SwarmConversation extends ChangeNotifier {
   SuperTabMessage? get replyingTo => _replyingTo;
   set replyingTo(SuperTabMessage? message) {
     _replyingTo = message;
-    notifyListeners();
+    _composer.changed();
   }
 
   /// The person may post here: a writer of the Swarm, in a conversation that
@@ -107,7 +113,7 @@ class SwarmConversation extends ChangeNotifier {
   set draft(String value) {
     _draft = value;
     _mentions.removeWhere((_, token) => !containsMention(value, token));
-    notifyListeners();
+    _composer.changed();
   }
 
   /// Whether [text] names [token] as a word of its own: the desktop's rule.
@@ -138,7 +144,7 @@ class SwarmConversation extends ChangeNotifier {
     final spaced = _draft.isEmpty || RegExp(r'\s$').hasMatch(_draft);
     _draft = '$_draft${spaced ? '' : ' '}$token ';
     _mentions[agentId] = token;
-    notifyListeners();
+    _composer.changed();
   }
 
   /// The agents a post can mention: those in this conversation.
@@ -212,7 +218,7 @@ class SwarmConversation extends ChangeNotifier {
     _sent = null;
     _replyingTo = null;
     error = null;
-    if (held) notifyListeners();
+    if (held) _tell();
   }
 
   /// The latest page the first time, then what came after the newest shown;
@@ -260,16 +266,29 @@ class SwarmConversation extends ChangeNotifier {
       if (incoming.any((m) => m.conversationId != id)) {
         throw const FormatException('A different conversation was returned.');
       }
-      final combined = {
-        for (final m in messages) m.id: m,
-        for (final m in incoming) m.id: m,
-      };
-      messages = List.unmodifiable(
-        combined.values.toList()..sort(superTabMessageOrder),
-      );
-      if (older || !_read) _before = SuperTabPage.read(answer['next']);
+      // A message read again as it was stays the one shown, and a read that
+      // brings nothing new tells no one: the chat draws nothing again.
+      final byId = {for (final m in messages) m.id: m};
+      var changed = !_read || error != null;
+      for (final m in incoming) {
+        if (byId[m.id] case final shown? when _same(shown, m)) continue;
+        byId[m.id] = m;
+        changed = true;
+      }
+      if (changed) {
+        messages = List.unmodifiable(
+          byId.values.toList()..sort(superTabMessageOrder),
+        );
+      }
+      if (older || !_read) {
+        final before = SuperTabPage.read(answer['next']);
+        changed |=
+            before?.sequence != _before?.sequence || before?.id != _before?.id;
+        _before = before;
+      }
       _read = true;
       error = null;
+      if (!changed) return;
     } on SuperTabFailure catch (failure) {
       if (_disposed || epoch != _epoch) return;
       if (const {'FORBIDDEN', 'NOT_FOUND'}.contains(failure.code)) _lose();
@@ -302,7 +321,7 @@ class SwarmConversation extends ChangeNotifier {
     _pending = pending;
     sending = true;
     error = null;
-    notifyListeners();
+    _tell();
     try {
       await reader.request(
         'POST',
@@ -325,7 +344,7 @@ class SwarmConversation extends ChangeNotifier {
       return false;
     } finally {
       sending = false;
-      if (!_disposed) notifyListeners();
+      if (!_disposed) _tell();
     }
     unawaited(reader.refresh());
     // Shown as on its way until the read that brings it back.
@@ -333,9 +352,24 @@ class SwarmConversation extends ChangeNotifier {
     if (_disposed || !identical(_pending, pending)) return true;
     _pending = null;
     _sent = null;
-    notifyListeners();
+    _tell();
     return true;
   }
+
+  /// A post moved between the composer and the messages: both are told.
+  void _tell() {
+    notifyListeners();
+    _composer.changed();
+  }
+
+  /// What a row draws of a message, the same in [a] as in [b].
+  static bool _same(SuperTabMessage a, SuperTabMessage b) =>
+      a.sequence == b.sequence &&
+      a.text == b.text &&
+      a.replyTo == b.replyTo &&
+      a.authorName == b.authorName &&
+      a.createdAt == b.createdAt &&
+      a.attachments.length == b.attachments.length;
 
   /// A refused post's text back in the draft, before anything typed since.
   void _restore() {
@@ -373,8 +407,14 @@ class SwarmConversation extends ChangeNotifier {
     _disposed = true;
     reader.removeListener(_swarmChanged);
     reader.reads.removeListener(_swarmChanged);
+    _composer.dispose();
     super.dispose();
   }
+}
+
+/// A notifier told from outside it: the conversation's [composer].
+class _Changes extends ChangeNotifier {
+  void changed() => notifyListeners();
 }
 
 /// The person's private chat with [projectId]'s Product Manager: that
