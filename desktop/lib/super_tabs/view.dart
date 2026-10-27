@@ -391,7 +391,10 @@ class _SuperTabViewState extends State<SuperTabView>
         // Not sent: its paths are still offered as zips, in a new record
         // so the zip that was running is still let go.
         final now = _droppedFolders.putIfAbsent(id, () => []);
-        now.insertAll(0, dropped.where((path) => !now.contains(path)));
+        now.insertAll(0, [
+          for (final path in dropped)
+            if (!now.contains(path)) path,
+        ]);
       }
     });
   }
