@@ -35,6 +35,13 @@ export class HostFeed {
     return this.running ??= this.read().finally(() => { this.running = null })
   }
 
+  /** A read sent after this call. One already out may have been sent before what the caller must see, such as a takeover
+   *  before a resume's answer (cli limitResume.ts, #1757 re-check), so it is waited out, never joined. */
+  async fresh(): Promise<HostRead> {
+    await this.running?.catch(() => {})
+    return this.refresh()
+  }
+
   /** The last read while it is at most `maxAgeMs` old, else a new one: for readers off the host's own one-second tick. */
   current(maxAgeMs: number): Promise<HostRead> {
     if (!this.running && this.now() - this.readAt < maxAgeMs) return Promise.resolve(this.snapshot())

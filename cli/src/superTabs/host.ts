@@ -19,6 +19,7 @@ import { prepareContribution, prepareTeamContribution } from './contribution.js'
 import { hostname } from 'node:os'
 import { replacementObservations } from './replacements.js'
 import { TerminalHost } from './terminal.js'
+import { LimitResume } from './limitResume.js'
 import { HostFeed } from './hostFeed.js'
 import { SwarmReads } from './swarmReads.js'
 import { UPDATE_REQUIRED } from './readContract.js'
@@ -239,6 +240,8 @@ export class SuperTabHost {
   private updateSaid = false
   /** A Lead's reads of and typing into this machine's agents' terminals, and the stuck and usage-limit alerts. */
   private readonly terminal: TerminalHost
+  /** Gives a task lost to a usage limit back to its session once the limit has reset. */
+  private readonly limitResume: LimitResume
 
   constructor(private readonly core: CoreApi, readonly machineId: string, options: SuperTabHostOptions = {}) {
     if (!identifier(machineId)) throw new SuperTabHostError('MACHINE_UNAVAILABLE', 'This machine is not signed in.')
@@ -254,6 +257,9 @@ export class SuperTabHost {
     this.write = options.write ?? writeJournal
     this.log = options.log ?? (message => console.warn(`[super-tabs] ${message}`))
     this.terminal = new TerminalHost(core, machineId, { now: this.now, log: this.log })
+    this.limitResume = new LimitResume(core, machineId, { now: this.now, log: this.log,
+      owns: async (tabId, assignmentId, harnessId) => (await this.sources.feed.fresh()).assignments
+        .some(a => a.tabId === tabId && a.assignmentId === assignmentId && a.harnessId === harnessId) })
     this.sources = options.sources ?? { feed: new HostFeed(core, machineId, { now: this.now }), reads: new SwarmReads(core) }
     this.journal = { version: 1, machineId, entries: {} }
     if (existsSync(this.file)) {
@@ -538,7 +544,7 @@ export class SuperTabHost {
     this.joinTeams(data)
     this.cleanRemoved(data)
     // Off the poll: a screen read waits on the core, and never delays the input leases below.
-    if (this.core.superTabs) void this.terminal.tick(data)
+    if (this.core.superTabs) { void this.terminal.tick(data); void this.limitResume.tick(data) }
     // Recovery can wait on a native receipt. Run it beside leases, so another worker's input
     // never expires while an old Change agent is being reconciled.
     if (!this.replacementsRunning && this.now() >= this.nextReplacementsAt) {

@@ -12,8 +12,9 @@ import { agentTarget, askedInSchema, broken, MAX_RULES, RULE_MESSAGE_MS, ruleSch
 import { MAX_ATTACHMENTS, type Attachment } from './attachments.js'
 import { checkMentions, MAX_MENTIONS, type MentionTarget } from './mentions.js'
 import { ANSWERED_NOTICE, answerDecision, askDecisions, checkAsker, decisionChoices, decisionQuestion, MAX_QUESTIONS, type DecisionTarget } from './decisions.js'
-import { TERMINAL_KEYS, terminalAlert, terminalRequest, terminalResult, type TerminalRequest } from './terminal.js'
+import { TERMINAL_KEYS, terminalAlert, terminalRequest, terminalResult, toLead, type TerminalRequest } from './terminal.js'
 import { loseTasks, renewLease, renewOwnTask } from './liveness.js'
+import { digestStartsAfter, knownTimeZone } from './digest.js'
 import { credentialResult, redactCredentials, type CredentialKind } from './credentials.js'
 import { dirtyGroups, reportGroups, summarize } from './projectUpdates.js'
 import { recordAnswer, recordAsked, recordStatus } from './leaderboard/record.js'
@@ -83,6 +84,8 @@ export const commandSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('project.delete'), projectId: id }).strict(),
   z.object({ type: z.literal('project.sharing'), projectId: id, visibility: z.enum(['public', 'private']), memberIds: z.array(id).max(200) }).strict(),
   z.object({ type: z.literal('project.cadence'), projectId: id, minutes: z.union([z.literal(1), z.literal(5), z.literal(15), z.literal(30)]) }).strict(),
+  // A local time of day ("08:00") in an IANA zone; null turns the digest off.
+  z.object({ type: z.literal('project.digest'), projectId: id, time: z.string().regex(/^(?:[01]\d|2[0-3]):[0-5]\d$/).nullable(), timeZone: z.string().min(1).max(64) }).strict(),
   // `through`: each conversation's sequence the Lead read, as its wake-up names them. `throughRevision` is the tab revision a
   // wake-up from before the store by parts named; it is accepted only up to that split (projectUpdates.ts).
   z.object({ type: z.literal('project.report'), projectId: id, through: z.record(id, z.number().int().nonnegative().safe()).optional(),
@@ -139,6 +142,8 @@ export const commandSchema = z.discriminatedUnion('type', [
     // A worker's question for one named person, opened as a decision (decisions.ts); the result is the question.
     ask: decisionChoices.extend({ personId: id }).strict().optional() }).strict(),
   z.object({ type: z.literal('work.cancel'), conversationId: id, assignmentId: id, reason }).strict(),
+  // `lostAt` names the loss being resumed (Assignment.lost.at): one task can be lost to a limit, resumed and lost again.
+  z.object({ type: z.literal('work.resume'), conversationId: id, assignmentId: id, lostAt: z.number().int().nonnegative().safe() }).strict(),
   z.object({ type: z.literal('route.record'), conversationId: id, decision: routeRecordSchema }).strict(),
   z.object({ type: z.literal('route.override'), decisionId: id, candidateId: z.string().regex(/^c\d{1,2}$/), reason }).strict(),
   z.object({ type: z.literal('route.modelResult'), decisionId: id, startId: id, model: z.string().min(1).max(200), effort: z.string().min(1).max(80) }).strict(),
@@ -681,7 +686,12 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
     case 'agent.alert': {
       effects.messages.push(...terminalAlert(state, actor, sender, operationId, context.now, command))
       // A usage limit or a model that keeps failing loses its task at once (liveness.ts); a waiting prompt does not.
-      if (command.alert !== 'prompt' && command.active) effects.messages.push(...loseTasks(state, context.now, worker => worker.id === command.agentId))
+      if (command.alert !== 'prompt' && command.active) {
+        // A reset time the limit screen gave is when the task resumes in this same session unless it is handed on first.
+        const resumeAt = command.alert === 'limit' && command.resetAt && Date.parse(command.resetAt) > context.now
+          ? agent(state, command.agentId).limitedUntil ?? undefined : undefined
+        effects.messages.push(...loseTasks(state, context.now, worker => worker.id === command.agentId, resumeAt))
+      }
       break
     }
     case 'project.report': {
@@ -818,6 +828,21 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       if (actor.kind !== 'person') fail('HUMAN_REQUIRED', 'A person chooses the update cadence.', 403)
       mutableProjects(state)
       projectOf(state, project.id).updateMinutes = command.minutes
+      break
+    }
+    case 'project.digest': {
+      const project = readProject(state, actor, command.projectId)
+      const lead = conversation(state, project.leadConversationId).leadId
+      if (actor.kind !== 'person' && !(actor.kind === 'agent' && actor.agentId === lead)) fail('FORBIDDEN', 'A person or the project’s Lead sets its morning digest.', 403)
+      if (!knownTimeZone(command.timeZone)) fail('TIME_ZONE', 'Name a time zone such as Asia/Ho_Chi_Minh.', 400)
+      mutableProjects(state)
+      const stored = projectOf(state, project.id)
+      if (command.time === null) delete stored.digest
+      else {
+        // Set after today's time, the first digest comes tomorrow rather than at once.
+        const lastOn = digestStartsAfter(command.time, command.timeZone, context.now)
+        stored.digest = { time: command.time, timeZone: command.timeZone, ...lastOn ? { lastOn } : {} }
+      }
       break
     }
     case 'tab.project': {
@@ -1651,6 +1676,31 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       if (!lost) finishWorker(state, assignment.agentId, group)
       message(group.id, `${isLead ? 'The Lead' : 'The tab owner'} cancelled this task: ${command.reason.replace(/[.\s]+$/, '')}.${gone ? '' : ' Stop working on it.'}`,
         gone ? [] : [assignment.agentId], null, SYSTEM_ROW)
+      break
+    }
+    case 'work.resume': {
+      // Its usage limit has reset: the session that lost this task to it takes it back, unless it was handed on first. Its
+      // host asks here before typing into the session (cli superTabs/limitResume.ts), so a task handed on never resumes.
+      const group = open(state, command.conversationId)
+      const assignment = group.assignment
+      if (assignment?.id !== command.assignmentId || assignment.status !== 'lost' || assignment.lost?.at !== command.lostAt) {
+        fail('TASK_MOVED', 'This task was handed on or closed, so it does not resume.')
+      }
+      if (actor.kind !== 'agent' || actor.agentId !== assignment.agentId) fail('FORBIDDEN', 'Only the agent that lost this task resumes it.', 403)
+      const worker = agent(state, assignment.agentId)
+      const resumeAt = assignment.lost?.resumeAt
+      if (!resumeAt) fail('NO_RESUME', 'This task was not lost to a usage limit with a reset time.')
+      if (context.now < Date.parse(resumeAt)) fail('LIMIT_NOT_RESET', 'Its usage limit has not reset yet.')
+      if (worker.harnessId !== assignment.execution.harnessId) fail('SESSION_CHANGED', 'This agent runs in another session now, so the task does not resume.')
+      if (state.conversations.some(c => activeWork(c) && c.assignment?.agentId === worker.id)) fail('AGENT_BUSY', 'This agent already owns an active assignment.')
+      assignment.status = 'working'
+      delete assignment.lost
+      delete group.lostAttempt
+      delete worker.lostTask
+      renewLease(assignment, context.now)
+      effects.messages.push(...toLead(state, worker, { id: stableId(operationId, 'resumed'), conversationId: group.id, author: sender, replyTo: null,
+        recipients: [], text: `${worker.displayName ?? worker.name} resumed its task after its usage limit reset.`,
+        source: { kind: 'work-resumed', agentId: worker.id, assignmentId: assignment.id } }))
       break
     }
     case 'work.check': {

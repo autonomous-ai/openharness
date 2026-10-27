@@ -11,7 +11,7 @@ import { SuperTabStore } from '../src/superTabs/store.js'
 import type { Command } from '../src/superTabs/commands.js'
 import type { MachineObservation } from '../src/superTabs/machines.js'
 import * as parts from '../src/superTabs/parts/index.js'
-import { poolRows } from './hostRows.test-support.js'
+import { assignmentRows, poolRows, rosterRows } from './hostRows.test-support.js'
 import { beforeFirstWrite } from './interleave.test-support.js'
 import { SwarmReads } from '../src/superTabs/read/service.js'
 
@@ -201,6 +201,55 @@ describe('work that loses its owner', () => {
     expect((await f.leadInbox()).some(m => (m.source as { kind?: string }).kind === 'work-lost')).toBe(true)
   })
 
+  // Night shift: a task lost to a usage limit whose screen gave a reset time resumes in that same session after the reset.
+  it('tells the worker\'s host when its lost task resumes, and gives it back to the same session after the reset', async () => {
+    const f = await swarm()
+    const resetAt = new Date(f.clock.now + 30 * MINUTE).toISOString(), lostAt = f.clock.now
+    await f.execute({ type: 'agent.alert', agentId: f.worker, alert: 'limit', active: true, resetAt }, host, f.worker)
+    const row = async () => (await rosterRows(f.timed, host, 'test-host')).find(t => t.tabId === f.tab && t.agent?.id === f.worker)!
+    expect((await row()).resume).toEqual({ conversationId: f.group, assignmentId: f.assignmentId, lostAt, at: resetAt })
+    const resume = () => f.execute({ type: 'work.resume', conversationId: f.group, assignmentId: f.assignmentId, lostAt }, host, f.worker)
+    await expect(resume()).rejects.toThrow('Its usage limit has not reset yet.')
+    f.clock.now += 30 * MINUTE
+    await resume()
+    expect(await f.assignment()).toMatchObject({ id: f.assignmentId, agentId: f.worker, status: 'working' })
+    expect((await row()).resume).toBeNull()
+    expect((await f.leadInbox()).map(m => m.text)).toContain(`${await f.name(f.worker)} resumed its task after its usage limit reset.`)
+  })
+
+  // #1757 review, 2: a receipt replays the first answer, so it never says who holds the task now; the host's assignment
+  // rows do (cli superTabs/limitResume.ts reads them before typing).
+  it('replays a resume whose answer was lost even after a takeover, while its host\'s assignment rows no longer list it', async () => {
+    const f = await swarm()
+    const lostAt = f.clock.now
+    await f.execute({ type: 'agent.alert', agentId: f.worker, alert: 'limit', active: true, resetAt: new Date(f.clock.now + 30 * MINUTE).toISOString() }, host, f.worker)
+    f.clock.now += 30 * MINUTE
+    const resume = { operationId: `limit-resume-${f.assignmentId}-${lostAt}`, command: { type: 'work.resume', conversationId: f.group, assignmentId: f.assignmentId, lostAt } as Command }
+    const listed = async () => (await assignmentRows(f.timed, host, 'test-host')).some(a => a.tabId === f.tab && a.assignmentId === f.assignmentId && a.harnessId === f.harness.worker)
+    await f.timed.execute(host, f.tab, resume, f.worker)
+    expect(await listed()).toBe(true)
+    // Its answer never reached the host. The Product Manager cancels the task and hands it to another agent.
+    await f.execute({ type: 'work.cancel', conversationId: f.group, assignmentId: f.assignmentId, reason: 'Moving it on' })
+    const other = await f.add(f.group, 'test-host', f.harness.other, 'Other')
+    await f.execute({ type: 'work.assign', conversationId: f.group, agentId: other })
+    expect((await f.timed.execute(host, f.tab, resume, f.worker)).result).toEqual({})
+    expect(await listed()).toBe(false)
+  })
+
+  it('does not resume a task handed to another agent before the reset, and its host is no longer asked to', async () => {
+    const f = await swarm()
+    const lostAt = f.clock.now
+    await f.execute({ type: 'agent.alert', agentId: f.worker, alert: 'limit', active: true, resetAt: new Date(f.clock.now + 30 * MINUTE).toISOString() }, host, f.worker)
+    const other = await f.add(f.group, 'test-host', f.harness.other, 'Other')
+    const handedOn = String((await f.execute({ type: 'work.assign', conversationId: f.group, agentId: other })).result.assignmentId)
+    const row = async () => (await rosterRows(f.timed, host, 'test-host')).find(t => t.tabId === f.tab && t.agent?.id === f.worker)!
+    expect((await row()).resume).toBeNull()
+    f.clock.now += 30 * MINUTE
+    await expect(f.execute({ type: 'work.resume', conversationId: f.group, assignmentId: f.assignmentId, lostAt }, host, f.worker))
+      .rejects.toThrow('This task was handed on or closed, so it does not resume.')
+    expect(await f.assignment()).toMatchObject({ id: handedOn, agentId: other, status: 'working' })
+  })
+
   it('is lost when its lease runs out with no progress, though its machine keeps reporting', async () => {
     const f = await swarm()
     const assigned = f.clock.now
@@ -319,5 +368,55 @@ describe('a start that never runs', () => {
     expect(told).toMatchObject({ conversationId: 'lead', text: 'Could not start Builder: Worker Mac did not start it within 3 minutes.' })
     await expect(onMachine({ type: 'agent.started', startId, harnessId: randomUUID(), configuration: config }))
       .rejects.toMatchObject({ code: 'START_FAILED' })
+  })
+})
+
+describe('the morning digest', () => {
+  it('is sent once when two of the Lead\'s polls run at the same moment', async () => {
+    const f = await swarm()
+    const projectId = (await f.timed.read(owner, f.tab)).state.projects![0]!.id
+    await f.execute({ type: 'project.digest', projectId, time: '03:00', timeZone: 'UTC' })
+    f.clock.now = 3 * 60 * 60_000
+    await Promise.all([f.leadInbox(), f.leadInbox()])
+    expect((await db.superTabMessage.findMany({ where: { tabId: f.tab } })).filter(m => (m.source as { kind?: string } | null)?.kind === 'digest-request')).toHaveLength(1)
+  })
+
+  it('lists work that shipped and was archived before the digest (#1757 review, 4)', async () => {
+    const f = await swarm()
+    const projectId = (await f.timed.read(owner, f.tab)).state.projects![0]!.id
+    await f.execute({ type: 'project.digest', projectId, time: '03:00', timeZone: 'UTC' })
+    const checkId = (await f.timed.read(owner, f.tab)).state.conversations.find(c => c.id === f.group)!.checks[0]!.id
+    await f.execute({ type: 'work.check', conversationId: f.group, assignmentId: f.assignmentId, checkId, passed: true, evidence: 'Verified' })
+    await f.execute({ type: 'work.status', conversationId: f.group, assignmentId: f.assignmentId, status: 'done',
+      result: 'Merged https://github.com/example/project/pull/9' }, host, f.worker)
+    await f.execute({ type: 'conversation.archive', conversationId: f.group, archived: true })
+    // Overnight the sweep puts it to sleep (sweeps.ts sleepQuietGroups, once its Lead acknowledged its reports): ordinary
+    // loads no longer read it.
+    await db.swarmGroup.updateMany({ where: { tabId: f.tab, key: f.group }, data: { dormant: true } })
+    expect((await f.timed.read(owner, f.tab)).state.conversations.some(c => c.id === f.group)).toBe(false)
+    f.clock.now = 3 * 60 * 60_000
+    await f.leadInbox()
+    const digest = (await db.superTabMessage.findMany({ where: { tabId: f.tab } })).find(m => (m.source as { kind?: string } | null)?.kind === 'digest-request')!
+    expect(digest.text.split('\n\n')[1]).toBe('Shipped:\n- #1 Ship the parser: https://github.com/example/project/pull/9')
+  })
+
+  it('wakes the Lead once at the project\'s local time with what its work is doing, and again the next day', async () => {
+    const f = await swarm()
+    const projectId = (await f.timed.read(owner, f.tab)).state.projects![0]!.id
+    // The swarm's clock starts at 02:46 UTC.
+    await f.execute({ type: 'project.digest', projectId, time: '03:00', timeZone: 'UTC' })
+    const digests = async () => (await db.superTabMessage.findMany({ where: { tabId: f.tab }, orderBy: { sequence: 'asc' } }))
+      .filter(m => (m.source as { kind?: string } | null)?.kind === 'digest-request')
+    await f.leadInbox()
+    expect(await digests()).toEqual([])
+    f.clock.now = 3 * 60 * 60_000
+    const inbox = await f.leadInbox()
+    await f.leadInbox()
+    // The same poll's time checks ran first: 13 minutes without progress lost the task, so the digest names it held up.
+    expect((await digests()).map(m => m.text.split('\n\n')[1])).toEqual([`Blocked:\n- #1 Ship the parser: lost (${await f.name(f.worker)}): no progress for 13 minutes`])
+    expect(inbox.map(m => m.id)).toContain((await digests())[0]!.id)
+    f.clock.now += 24 * 60 * 60_000
+    await f.leadInbox()
+    expect(await digests()).toHaveLength(2)
   })
 })
