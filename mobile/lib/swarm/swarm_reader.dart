@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:isolate';
 
 import 'package:flutter/foundation.dart';
 
@@ -6,6 +7,45 @@ import 'model.dart';
 import 'parts.dart';
 import 'swarm_request.dart';
 import 'waiting_work.dart';
+
+/// A Swarm of this many groups and agents or more is made into what the
+/// screens draw off the UI isolate: on the owner's iPhone 14 a 1.3 MB Swarm took 73 to 93 ms
+/// there, several frames (Mira's Profile numbers, 2026-10-27). A small one
+/// takes less than sending it away does.
+const swarmParseOffThreadParts = 100;
+
+/// What the screens draw of a Swarm, worked out from its parts.
+typedef _View = ({SuperTabSnapshot snapshot, Map<String, String> partners});
+
+_View _viewOf(SuperTabParts parts) {
+  final state = parts.state;
+  return (
+    snapshot: SuperTabSnapshot.fromJson(state),
+    partners: swarmPartners(state),
+  );
+}
+
+/// Whether a Swarm whose first load is [answer] is big enough to be worked
+/// out off the UI isolate: its groups and agents are nearly all of it.
+bool _big(Map<String, dynamic> answer) =>
+    ((answer['groups'] as List?)?.length ?? 0) +
+        ((answer['agents'] as List?)?.length ?? 0) >=
+    swarmParseOffThreadParts;
+
+/// [work], off the UI isolate when [big]. Top-level, so its closures carry
+/// only what they are handed, never a reader.
+Future<T> _offThread<T>(bool big, T Function() work) =>
+    big ? Isolate.run(work) : Future.sync(work);
+
+Future<_View> _view(SuperTabParts parts, {required bool big}) =>
+    _offThread(big, () => _viewOf(parts));
+
+Future<({SuperTabParts parts, _View view})> _load(
+  Map<String, dynamic> answer,
+) => _offThread(_big(answer), () {
+  final parts = SuperTabParts.firstLoad(answer);
+  return (parts: parts, view: _viewOf(parts));
+});
 
 /// One Swarm as this phone keeps it current: a first load, then only the parts
 /// that changed since its cursor (docs/design/2026-10-26-swarm-state-parts.md,
@@ -72,6 +112,14 @@ class SwarmReader extends ChangeNotifier {
   int _heldLoad = 0;
 
   SuperTabParts? _parts;
+
+  /// The first load held was big ([swarmParseOffThreadParts]): its changes
+  /// are drawn off the UI isolate too.
+  bool _bigParts = false;
+
+  /// Counts what was drawn: one worked out off the UI isolate is not shown
+  /// over one drawn meanwhile from the parts as they are now.
+  int _views = 0;
   Future<void>? _refreshing;
   Timer? _poll;
   bool _shown = false, _disposed = false;
@@ -114,15 +162,17 @@ class SwarmReader extends ChangeNotifier {
       if (_disposed || accessRevoked) return;
       final parts = _parts!;
       if (read.changed || snapshot == null) {
-        final state = parts.state;
-        final next = SuperTabSnapshot.fromJson(state);
-        if (next.id != tabId) {
+        final views = _views;
+        final view = read.view ?? await _view(parts, big: _bigParts);
+        if (_disposed || accessRevoked) return;
+        if (view.snapshot.id != tabId) {
           _parts = null;
           throw const FormatException('A different Swarm was returned.');
         }
-        snapshot = next;
-        partners = swarmPartners(state);
-        changed = true;
+        if (views == _views && identical(parts, _parts)) {
+          _show(view);
+          changed = true;
+        }
       }
       // Moved alone, it is a change this reader cannot see: nothing to draw
       // again. What waits on it hears of it through [reads].
@@ -161,7 +211,7 @@ class SwarmReader extends ChangeNotifier {
   /// Changes since the cursor once a first load is held, else a first load. A
   /// reload answer, or a change read refused for access (the Swarm or the
   /// reader's access moved), loads in full at once.
-  Future<({bool changed})> _readParts() async {
+  Future<({bool changed, _View? view})> _readParts() async {
     final held = _parts;
     if (held != null) {
       try {
@@ -178,7 +228,7 @@ class SwarmReader extends ChangeNotifier {
             rethrow;
           }
           final stale = await _refreshStale(held);
-          return (changed: change.changed || stale);
+          return (changed: change.changed || stale, view: null);
         }
       } on SuperTabFailure catch (failure) {
         if (!const {'FORBIDDEN', 'NOT_FOUND'}.contains(failure.code)) rethrow;
@@ -187,16 +237,24 @@ class SwarmReader extends ChangeNotifier {
     }
     final asked = _get('$_path/parts');
     final number = ++_firstLoads.value;
-    final load = await asked;
+    final answer = await asked;
+    final load = await _load(answer);
     // Revoked meanwhile: what was read is not kept.
-    if (_disposed || accessRevoked) return (changed: false);
-    _parts = SuperTabParts.firstLoad(load);
+    if (_disposed || accessRevoked) return (changed: false, view: null);
+    _parts = load.parts;
+    _bigParts = _big(answer);
     _heldLoad = number;
     generation++;
     // A new store holds no closed conversations: they are read again.
     _dormantPages.clear();
     _dormantReads.clear();
-    return (changed: true);
+    return (changed: true, view: load.view);
+  }
+
+  void _show(_View view) {
+    snapshot = view.snapshot;
+    partners = view.partners;
+    _views++;
   }
 
   /// The reader may no longer read this Swarm — a first load was refused, or
@@ -285,9 +343,7 @@ class SwarmReader extends ChangeNotifier {
     // Read again from nothing meanwhile: that read is the one to ask.
     if (!identical(parts, _parts)) return loadConversation(id);
     if (!readable) return false;
-    final state = parts.state;
-    snapshot = SuperTabSnapshot.fromJson(state);
-    partners = swarmPartners(state);
+    _show(_viewOf(parts));
     notifyListeners();
     return snapshot?.conversation(id) != null;
   }
@@ -340,11 +396,7 @@ class SwarmReader extends ChangeNotifier {
     if (_disposed || accessRevoked || !identical(parts, _parts)) return;
     final change = parts.addDormant(answer['groups'] as List);
     _dormantPages[projectId] = answer['next'] as String?;
-    if (change.changed) {
-      final state = parts.state;
-      snapshot = SuperTabSnapshot.fromJson(state);
-      partners = swarmPartners(state);
-    }
+    if (change.changed) _show(_viewOf(parts));
   }
 
   @override
