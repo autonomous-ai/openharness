@@ -1377,7 +1377,7 @@ describe('a task that requires a machine or a device', () => {
   it('refuses an agent\'s start on another machine, even with an override reason, and starts on the required one', () => {
     const f = routed()
     requiring(f, { machines: ['machine'] })
-    expect(() => startOn(f, 'host', f.leadActor)).toThrow(NOT_HERE)
+    expect(() => startOn(f, 'host', f.leadActor)).toThrow(expect.objectContaining({ code: 'REQUIREMENT_UNMET', status: 403, message: `${NOT_HERE} Route again.` }))
     expect(startOn(f, 'machine', f.leadActor).result.startId).toBeTruthy()
   })
   it('refuses an agent\'s assignment of a member on another machine and a recorded pick there', () => {
@@ -1400,7 +1400,7 @@ describe('a task that requires a machine or a device', () => {
   it('refuses an agent\'s start that does not ask its machine for the required devices', () => {
     const f = routed()
     requiring(f, { devices: ['/dev/cu.usbmodem1'] })
-    expect(() => startOn(f, 'machine', f.leadActor)).toThrow('This task needs /dev/cu.usbmodem1')
+    expect(() => startOn(f, 'machine', f.leadActor)).toThrow(expect.objectContaining({ code: 'REQUIREMENT_UNMET', message: expect.stringContaining('This task needs /dev/cu.usbmodem1') }))
     expect(startOn(f, 'machine', f.leadActor, ['/dev/cu.usbmodem1']).result.startId).toBeTruthy()
   })
   it('counts a Mac\'s Harness Team account as that Mac', () => {

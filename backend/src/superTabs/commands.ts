@@ -514,13 +514,19 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
     const seen = seenMachineIds(visibleState(state, actor, context.now))
     if (machines.some(m => !seen.has(m))) fail('MACHINE_UNKNOWN', 'Name a machine of this Swarm that you can see.', 400)
   }
-  /** The owner's rules for the group's project, then the group's own requirement. */
-  const refusal = (target: RunTarget, conversationId: string) =>
-    broken(groupRules(conversationId), target, machineName, macOf) ?? unmet(conversation(state, conversationId).task?.requires, target, macOf)
+  /** The owner's rules for the group's project, then the group's own requirement, each with its own code so a caller can tell
+   *  an owner's rule from where the task can be done at all. */
+  const refusal = (target: RunTarget, conversationId: string): { code: string; why: string } | null => {
+    const rule = broken(groupRules(conversationId), target, machineName, macOf)
+    if (rule) return { code: 'RULE_BROKEN', why: rule }
+    const requirement = unmet(conversation(state, conversationId).task?.requires, target, macOf)
+    return requirement ? { code: 'REQUIREMENT_UNMET', why: requirement } : null
+  }
   const ruled = (target: RunTarget, conversationId: string, done: string, personChose = false) => {
-    const why = refusal(target, conversationId)
-    if (!why) return
-    if (actor.kind === 'agent' && !personChose) fail('RULE_BROKEN', `${why} Route again.`, 403)
+    const refused = refusal(target, conversationId)
+    if (!refused) return
+    const { code, why } = refused
+    if (actor.kind === 'agent' && !personChose) fail(code, `${why} Route again.`, 403)
     result.warnings = [why]
     effects.messages.push({ id: stableId(operationId, 'rule'), conversationId, author: sender, text: `${done} anyway. ${why}`, replyTo: null, recipients: [], source: RULE_ROW })
   }
@@ -1227,7 +1233,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
         }
         // A start recorded before a rule was added is not launched past it, unless a person asked for it by hand.
         const why = actor.kind === 'agent' && !(start.routeDecisionId && context.routeDecision?.override?.by === 'person') && refusal(startTarget(start.request), start.request.conversationId)
-        if (why) fail('RULE_BROKEN', `${why} This start was not launched. Route again.`, 403)
+        if (why) fail(why.code, `${why.why} This start was not launched. Route again.`, 403)
         requireWorkerDecisions(state, actor, open(state, start.request.conversationId))
         const grant = context.contribution ?? fail('HOST_REQUIRED', 'The original machine grant is unavailable.', 403)
         if (grant.machineOwnerId !== start.machineOwnerId || (grant.hostGrant ?? null) !== start.hostGrant) {
