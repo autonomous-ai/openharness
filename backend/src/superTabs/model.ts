@@ -160,8 +160,9 @@ export interface Conversation {
   lastActivityAt?: string
   /** A private conversation: only these people and the project's Lead read it (projects.ts canReadGroup). */
   audience?: import('./parts/types.js').Audience
-  /** The last attempt here that was lost: its agent's status and checks for it are refused, even after reassignment. */
-  lostAttempt?: { id: string; agentId: string }
+  /** The last attempt here that was lost: its agent's status and checks for it are refused, even after reassignment. Where it
+   *  ran (machine and engine) stays too, so routing the work again avoids that account even once its agent is gone. */
+  lostAttempt?: { id: string; agentId: string; machineId?: string; engine?: string }
 }
 
 export function appendPullRequestUrls(group: Conversation, texts: Iterable<string | null | undefined>): void {
@@ -291,8 +292,10 @@ export const activeWork = (group: Conversation): boolean => !!group.assignment &
 /** Old states derive pending decisions from their closed assignments; new states persist them on the worker. */
 export function awaitingWorkers(state: SuperTabState, projectId: string): Agent[] {
   return state.agents.filter(a => {
-    if (state.conversations.some(c => c.leadId === a.id) || state.conversations.some(c => activeWork(c) && c.assignment?.agentId === a.id)
-      || reviewing(state, a.id)) return false
+    // A Reviewer never waits for a decision: a finished one is kept until the Lead stops it (finishWorker), and one an older
+    // release left waiting must not hold up routing either.
+    if (agentRole(a) === 'reviewer' || state.conversations.some(c => c.leadId === a.id)
+      || state.conversations.some(c => activeWork(c) && c.assignment?.agentId === a.id)) return false
     // A lost task's agent is not waiting for a decision, even once the task is cancelled: it may be gone, and it must not
     // hold up the next assignment.
     const groups = state.conversations.filter(c => c.assignment?.agentId === a.id && !c.assignment.lost)
@@ -307,12 +310,14 @@ export function requireWorkerDecisions(state: SuperTabState, actor: Actor, group
     .filter(a => a.id !== reuseId && !(agentRole(a) === 'reviewer' && group.agentIds.includes(a.id)))
   if (waiting.length) fail('WORKER_DECISION_REQUIRED', `Decide what to do with ${waiting.map(a => a.displayName ?? a.name).join(', ')}: reuse, keep or stop. Prefer stop unless more work is coming soon.`)
 }
-/** A group's work ended: its worker, and each of its Reviewers not reviewing other active work, await the Lead's decision. */
+/** A group's work ended: its worker awaits the Lead's decision. A finished Reviewer, and each of the group's Reviewers not
+ *  reviewing other active work, is kept instead: the Lead never has to decide about one, only stop it when it wants. */
 export function finishWorker(state: SuperTabState, workerId: string, group?: Conversation): void {
   const ids = [workerId, ...(group?.agentIds ?? []).filter(id => id !== workerId &&
     state.agents.some(a => a.id === id && agentRole(a) === 'reviewer') && !reviewing(state, id))]
   for (const target of state.agents.filter(a => ids.includes(a.id))) {
-    if (!state.conversations.some(c => c.leadId === target.id) && target.workDecision !== 'stop') target.workDecision = 'awaiting'
+    if (state.conversations.some(c => c.leadId === target.id) || target.workDecision === 'stop') continue
+    target.workDecision = agentRole(target) === 'reviewer' ? 'keep' : 'awaiting'
   }
 }
 /** A Reviewer is busy while any group it is in has active work. */

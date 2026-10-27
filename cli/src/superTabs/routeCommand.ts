@@ -7,7 +7,7 @@ import { openDaemon, type Daemon, type Where } from '../agentClient/daemon.js'
 import { requiredToolReason, startRequirements } from './capacity.js'
 import { inspectCapacity, type ScopedRequest } from './start.js'
 import { ENDED_WORK, object, within } from './wire.js'
-import { API_BUILDERS, choose, decide, parseAssessment, quotaOf2, rateFor, recordOf, repoMatch, repositoryKey, type Assessment, type Commitment, type HeldModel, type MemberFrame, type Policy, type Probe, type SwarmRule, type TaskFolder } from './route.js'
+import { accountOf, API_BUILDERS, choose, decide, parseAssessment, quotaOf2, rateFor, recordOf, repoMatch, repositoryKey, type Assessment, type Commitment, type HeldModel, type MemberFrame, type Policy, type Probe, type SwarmRule, type TaskFolder } from './route.js'
 import { stat } from 'node:fs/promises'
 import { describeScmProject } from '../scm/scmProjects.js'
 
@@ -256,7 +256,14 @@ export async function routeTask(input: { tabId: string; conversationId: string; 
   // Picks started or assigned and still at work hold part of their account's quota; the log, and so this, is per Swarm.
   const working = (decisions ?? []).filter(d => d.final && d.outcome === null && typeof d.account === 'string')
     .map(d => ({ account: d.account, spend: object(d.spend), size: d.size, createdAt: Date.parse(String(d.createdAt)) }) as Commitment)
-  const choice = choose(probes, policy, assessment, Date.now(), working, rules, heldLocalModels(state))
+  // Work this group last lost (a Reviewer whose model kept failing, v2) goes first to any other account (route.ts choose). The
+  // group keeps where that attempt ran (backend superTabs/liveness.ts loseTask), so this holds once its agent is stopped and
+  // removed too; an attempt lost before that kept it is read from its agent, while that is still here.
+  const lostAttempt = object(group.lostAttempt), lostBy = agents.find(a => a.id === lostAttempt.agentId)
+  const failedOn = text(lostAttempt.machineId) ?? text(lostBy?.machineId), failedEngine = text(lostAttempt.engine) ?? text(object(lostBy?.configuration).engine)
+  const avoid = failedOn && failedEngine ? [...new Set([`${failedOn}:${failedEngine}`,
+    ...probes.filter(p => p.machineId === failedOn && p.engine === failedEngine && !p.gridModel).map(accountOf)])] : []
+  const choice = choose(probes, policy, assessment, Date.now(), working, rules, heldLocalModels(state), avoid)
   if ('error' in choice) return choice
   const verdict = decide(choice)
   const operationId = `route-${newId()}`
@@ -276,7 +283,7 @@ export async function routeTask(input: { tabId: string; conversationId: string; 
     alternatives: alternativesTo(verdict.pick, choice.shown).map(publicOf),
     warnings: [...(Array.isArray(effective.warnings) ? effective.warnings : []), ...(value.machinesUnreadable === true ? [MACHINES_UNREADABLE] : []),
       ...(choice.shown.some(p => p.kind === 'member' && p.terminalUnverified) ? ["A member's terminal could not be verified from its machine's snapshot. Check it before assignment."] : []),
-      ...(choice.short ? [choice.short] : [])],
+      ...(choice.short ? [choice.short] : []), ...(choice.avoided ? [choice.avoided] : [])],
     next: verdict.pick.kind === 'member'
       ? `Assign with: command OPERATION_ID {"type":"work.assign","conversationId":"${input.conversationId}","agentId":"${verdict.pick.agentId}"${decision}}`
       : `Start with: start OPERATION_ID ${JSON.stringify({ conversationId: input.conversationId, name: review ? 'Reviewer' : 'Builder', ...(review ? { role: 'reviewer' } : {}), cwd: text(machines.get(verdict.pick.machineId)?.pool?.cwd) ?? assessment.needs.cwd ?? '/absolute/repo/on/that/machine',
