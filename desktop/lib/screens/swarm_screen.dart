@@ -700,8 +700,6 @@ class _SwarmScreenState extends State<SwarmScreen> {
     _recordNavigation();
     app.addListener(_recordNavigation);
     app.addListener(_observeLearning);
-    _syncMachineListWatch();
-    app.addListener(_syncMachineListWatch);
     // Its own notifier, so marking one agent does not rebuild the workspace —
     // which means the badge has to ask for its own redraw.
     app.agentUnread.addListener(_unreadChanged);
@@ -1008,8 +1006,6 @@ class _SwarmScreenState extends State<SwarmScreen> {
     terminalFontStore.removeListener(_fontChanged);
     app.removeListener(_recordNavigation);
     app.removeListener(_observeLearning);
-    app.removeListener(_syncMachineListWatch);
-    _machineListWatch?.cancel();
     app.removeListener(_followTabStripFocus);
     _tabStripFocus.removeListener(_tabStripFocusChanged);
     _tabStripFocus.dispose();
@@ -7456,12 +7452,12 @@ class _SwarmScreenState extends State<SwarmScreen> {
   /// No computer of the account's is connected, and none is on its way: the
   /// inventory has answered, and every one is missing, offline or waiting to
   /// be linked — what the host's [WorkspaceChrome.firstMachine] is for. Not
-  /// when every one is only asleep ([_asleepComputers]): that account has set
-  /// one up, and keeps its panes.
+  /// when every one is only asleep ([AppNotifier.asleepComputers]): that
+  /// account has set one up, and keeps its panes.
   bool get _needsFirstConnection =>
       _machineInventorySettled &&
       !_computerConnectedOrComing &&
-      _asleepComputers.isEmpty;
+      app.asleepComputers.isEmpty;
 
   /// A computer of the account's is connected, or on its way.
   bool get _computerConnectedOrComing =>
@@ -7474,23 +7470,6 @@ class _SwarmScreenState extends State<SwarmScreen> {
             (machine.connectionStatus == ConnectionStatus.connecting ||
                 machine.connectionStatus == ConnectionStatus.reconnecting),
       );
-
-  /// The account's own computers, all of them offline and none waiting on this
-  /// one to be linked: set up before, asleep now. Empty for an account with
-  /// none (a computer taken out of it does not count) — that one needs setting
-  /// up — and while any is connected, on its way, or waiting to be linked.
-  List<MachineState> get _asleepComputers {
-    final own = [
-      for (final machine in app.machineStates.values)
-        if (!machine.machine.isShared &&
-            !app.removedMachines.containsKey(machine.machine.machineId))
-          machine,
-    ];
-    if (own.any((machine) => machine.needsLink || !machine.isOffline)) {
-      return const [];
-    }
-    return own;
-  }
 
   /// The host's connect page covers the canvas: before the machine list first
   /// answers — the page says it is looking, instead of a New tab page that
@@ -7519,35 +7498,15 @@ class _SwarmScreenState extends State<SwarmScreen> {
   bool get _showsAsleepBand =>
       widget.chrome?.firstMachine != null &&
       _machineInventorySettled &&
-      _asleepComputers.isNotEmpty;
+      app.asleepComputers.isNotEmpty;
 
   Widget? _asleepBand() => _showsAsleepBand
       ? _AsleepBand(
           names: [
-            for (final machine in _asleepComputers) machine.machine.displayName,
+            for (final machine in app.asleepComputers) machine.machine.displayName,
           ],
         )
       : null;
-
-  /// The one timer asking for the machine list while the host's connect page
-  /// or the asleep band shows: a browser with no computer connected hears of
-  /// one signing in, or waking up, no other way — its connections to
-  /// computers are what carry that news. Stopped once one is connected or on
-  /// its way, and with the workspace.
-  Timer? _machineListWatch;
-  static const _machineListWatchEvery = Duration(seconds: 4);
-
-  void _syncMachineListWatch() {
-    if (!_firstMachineCovers && !_showsAsleepBand) {
-      _machineListWatch?.cancel();
-      _machineListWatch = null;
-      return;
-    }
-    _machineListWatch ??= Timer.periodic(
-      _machineListWatchEvery,
-      (_) => unawaited(app.rereadMachines()),
-    );
-  }
 
   /// The shared error banner shows — except when its only message is the
   /// machine list's failure, which the host's connect page already shows with

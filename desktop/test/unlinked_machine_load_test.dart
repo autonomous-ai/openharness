@@ -228,7 +228,7 @@ void main() {
         // The connect page's watch, or any other machine-list reader.
         final watch = Timer.periodic(
           const Duration(seconds: 4),
-          (_) => rig.app.rereadMachines(),
+          (_) => rig.app.refreshMachines(),
         );
         lines.clear();
         final dials = rig.dials;
