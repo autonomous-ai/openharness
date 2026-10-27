@@ -28,11 +28,20 @@ class _App extends AppNotifier {
 
   String? login;
   bool waiting = false;
+
+  /// The GitHub CLI gone: Sign in installs it first, until [installed].
+  bool missing = false;
+  bool installing = false;
   final asked = <String>[];
 
   void enter() {
     waiting = false;
     login = 'octo';
+  }
+
+  void installed() {
+    missing = installing = false;
+    waiting = true;
   }
 
   @override
@@ -44,6 +53,13 @@ class _App extends AppNotifier {
     if (payload['action'] != 'github') return {'error': 'BAD_REQUEST'};
     final state = payload['state'] as String;
     asked.add(state);
+    if (state == 'sign_in' && missing) installing = true;
+    if (installing || missing) {
+      return {
+        'login': null,
+        if (installing) 'installing': true else 'missing': true,
+      };
+    }
     if (state == 'sign_in' && login == null) waiting = true;
     if (state == 'sign_out') login = null;
     return {
@@ -110,6 +126,55 @@ void main() {
       expect(app.asked, contains('sign_in'));
     },
   );
+
+  testWidgets(
+    'a computer without the GitHub CLI installs it, then shows the code',
+    (tester) async {
+      final app = _App()..missing = true;
+      addTearDown(app.dispose);
+      await tester.pumpWidget(
+        MaterialApp(
+          home: ComputerGithubPage(notifier: app, machineId: 'box'),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(
+        find.textContaining('signing in installs it first'),
+        findsOneWidget,
+      );
+
+      await tester.tap(find.byKey(const Key('github-sign-in')));
+      await tester.pump();
+      await tester.pump();
+      expect(find.byKey(const Key('github-installing')), findsOneWidget);
+
+      // Installed on the computer: the page, following it, comes to the code.
+      app.installed();
+      await tester.pump(const Duration(seconds: 3));
+      await tester.pump();
+      expect(find.text('AB12-CD34'), findsOneWidget);
+    },
+  );
+
+  testWidgets('back from GitHub\'s page, it asks at once', (tester) async {
+    final (app, _) = await pump(tester);
+    await tester.tap(find.byKey(const Key('github-sign-in')));
+    await tester.pump();
+    await tester.pump();
+    expect(find.text('AB12-CD34'), findsOneWidget);
+
+    // Behind the browser while the code is entered, then back.
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.hidden);
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.paused);
+    app.enter();
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.hidden);
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+    await tester.pump();
+    await tester.pump();
+    expect(find.text('@octo'), findsOneWidget);
+  });
 
   testWidgets('signs out, once asked', (tester) async {
     final (app, _) = await pump(tester, login: 'octo');

@@ -42,36 +42,57 @@ class _ComputerGithubPageState extends State<ComputerGithubPage> {
   /// Asking again while a code waits to be entered, to see the sign-in through.
   Timer? _follow;
 
+  /// Back from GitHub's page in the browser: asked at once. The ask that was under way when the app
+  /// went behind the browser can hang on the connection Android closed, for its whole timeout.
+  late final AppLifecycleListener _back;
+
+  /// Each ask's number: an answer only counts while no later ask was sent ([_ask]).
+  int _asks = 0;
+
   AppNotifier get _app => widget.notifier;
   String get _name =>
       _app.stateOf(widget.machineId)?.machine.displayName ?? 'The computer';
   String? get _login => _state?['login'] as String?;
   Map? get _waiting => _state?['signingIn'] as Map?;
 
+  /// The GitHub CLI was gone and is being put back, for the sign-in that follows (os/setup.py install-gh).
+  bool get _installing => _state?['installing'] == true;
+
   @override
   void initState() {
     super.initState();
+    _back = AppLifecycleListener(
+      onResume: () {
+        if (_waiting != null || _installing) {
+          unawaited(_ask('status', quiet: true));
+        }
+      },
+    );
     unawaited(_ask('status'));
   }
 
   @override
   void dispose() {
+    _back.dispose();
     _follow?.cancel();
     super.dispose();
   }
 
   Future<void> _ask(String state, {bool quiet = false}) async {
+    final ask = ++_asks;
     if (!quiet) {
       setState(() {
         _busy = true;
         _error = '';
       });
     }
-    final reply = await _app.osDevice(widget.machineId, {
-      'action': 'github',
-      'state': state,
-    }, timeout: const Duration(seconds: 40));
-    if (!mounted) return;
+    final reply = await _app.osDevice(
+      widget.machineId,
+      {'action': 'github', 'state': state},
+      // Following a sign-in, briefly: the next look comes 3 s later anyway.
+      timeout: Duration(seconds: quiet ? 10 : 40),
+    );
+    if (!mounted || ask != _asks) return;
     setState(() {
       _busy = false;
       if (reply.containsKey('login')) {
@@ -84,7 +105,7 @@ class _ComputerGithubPageState extends State<ComputerGithubPage> {
       }
     });
     _follow?.cancel();
-    if (_waiting != null) {
+    if (_waiting != null || _installing) {
       _follow = Timer(
         const Duration(seconds: 3),
         () => unawaited(_ask('status', quiet: true)),
@@ -212,10 +233,24 @@ class _ComputerGithubPageState extends State<ComputerGithubPage> {
                       ),
                       const SizedBox(height: 12),
                       say('Waiting for GitHub…'),
+                    ] else if (_installing) ...[
+                      say(
+                        'The GitHub CLI was not on $_name, so it is installing it now. The '
+                        'code to enter on GitHub shows here once it is done — a minute or two.',
+                      ),
+                      const SizedBox(height: 20),
+                      const Center(
+                        key: Key('github-installing'),
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      ),
                     ] else ...[
                       say(
-                        'Sign $_name in to GitHub so its agents can clone private repositories, '
-                        'push and open pull requests — with a Swarm too.',
+                        _state?['missing'] == true
+                            ? 'Sign $_name in to GitHub so its agents can clone private repositories, '
+                                  'push and open pull requests — with a Swarm too. The GitHub CLI is '
+                                  'not on it: signing in installs it first.'
+                            : 'Sign $_name in to GitHub so its agents can clone private repositories, '
+                                  'push and open pull requests — with a Swarm too.',
                       ),
                       if (failed != null) ...[
                         const SizedBox(height: 8),
