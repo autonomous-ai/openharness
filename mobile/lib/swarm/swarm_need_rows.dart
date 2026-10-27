@@ -168,7 +168,13 @@ class SwarmDecisionCard extends StatelessWidget {
                 ),
               ],
             )
-          else
+          else ...[
+            if (session.dropped(need))
+              Text(
+                'Not sent, choose again.',
+                key: ValueKey('swarm-dropped-${decision.id}'),
+                style: tty.style(color: tty.yellow, size: TtySize.meta),
+              ),
             for (final (index, option) in decision.options.indexed)
               Padding(
                 padding: const EdgeInsets.only(top: 6),
@@ -180,6 +186,7 @@ class SwarmDecisionCard extends StatelessWidget {
                   onTap: () => session.hold(need, index),
                 ),
               ),
+          ],
           if (asks?.error case final error?) ...[
             const SizedBox(height: 6),
             Text(

@@ -46,6 +46,10 @@ class SwarmSession extends ChangeNotifier {
   int _screens = 0;
   final _watching = <String, int>{};
   final _held = <String, ({int choice, Timer timer})>{};
+
+  /// Needs whose held answer was dropped unsent: their card says so until
+  /// another answer is held.
+  final _dropped = <String>{};
   bool _foreground = false, _disposed = false;
 
   /// Harness is in front: the Swarms are read every poll, and those a screen
@@ -91,11 +95,16 @@ class SwarmSession extends ChangeNotifier {
   /// The option held for [need], while its Undo window runs.
   int? held(SwarmDecisionNeed need) => _held[need.key]?.choice;
 
+  /// [need]'s held answer was dropped before it was sent: it left the list
+  /// meanwhile (the Swarm read again in full) and came back.
+  bool dropped(SwarmDecisionNeed need) => _dropped.contains(need.key);
+
   /// Answers [need] with option [choice] once [undoWindow] has passed,
   /// unless [undo] takes it back first.
   void hold(SwarmDecisionNeed need, int choice) {
     if (_disposed) return;
     _held.remove(need.key)?.timer.cancel();
+    _dropped.remove(need.key);
     if (undoWindow <= Duration.zero) {
       _send(need, choice);
       return;
@@ -125,7 +134,8 @@ class SwarmSession extends ChangeNotifier {
   void _needsChanged() {
     _show();
     _announcer.settle(inbox.needs);
-    // Answered somewhere else meanwhile: there is nothing left to send.
+    // Answered somewhere else meanwhile, or out of the list while the Swarm
+    // is read again: nothing is sent, and a card that comes back says so.
     final open = {for (final need in inbox.needs) need.key};
     final gone = [
       for (final key in _held.keys)
@@ -133,6 +143,7 @@ class SwarmSession extends ChangeNotifier {
     ];
     for (final key in gone) {
       _held.remove(key)!.timer.cancel();
+      _dropped.add(key);
     }
     if (gone.isNotEmpty) notifyListeners();
   }

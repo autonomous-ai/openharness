@@ -189,6 +189,44 @@ void main() {
       expect(key('swarm-option-d1-0'), findsOneWidget);
     });
 
+    testWidgets(
+      'an answer dropped before it was sent says so, and offers the options '
+      'again',
+      (tester) async {
+        final fake = backend();
+        final host = await pump(tester, fake, const SwarmPage());
+        await tester.tap(key('swarm-option-d1-0'));
+        await tester.pump();
+        expect(find.text('Sending “Yes”…'), findsOneWidget);
+
+        // Read again in full within the Undo window: what waits for the
+        // person is read again, and that read is slow to answer.
+        const decisions = '/api/super-tabs/$tab/decisions?state=open';
+        final open = fake.routes[decisions]!(null);
+        final stalled = Completer<Object?>();
+        fake.routes[decisions] = (_) => stalled.future;
+        fake.routes['/api/super-tabs/$tab/changes'] = (_) => {'reload': true};
+        await host.session!.inbox.refresh();
+        await tester.pump();
+        expect(find.text('Sending “Yes”…'), findsNothing);
+
+        stalled.complete(open);
+        await tester.pump(const Duration(seconds: 5));
+        await tester.pumpAndSettle();
+
+        expect(fake.commands, isEmpty);
+        expect(find.text('Not sent, choose again.'), findsOneWidget);
+        expect(key('swarm-option-d1-0'), findsOneWidget);
+
+        await tester.tap(key('swarm-option-d1-1'));
+        await tester.pump();
+        expect(find.text('Not sent, choose again.'), findsNothing);
+        expect(find.text('Sending “No”…'), findsOneWidget);
+        await tester.tap(key('swarm-undo-d1'));
+        await tester.pump();
+      },
+    );
+
     testWidgets('one tap answers once the Undo window has passed', (
       tester,
     ) async {
