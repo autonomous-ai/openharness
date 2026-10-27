@@ -827,25 +827,29 @@ describe('cable session', () => {
       port.say({ t: 'voice.begin', ...begin }); port.pcm(Buffer.alloc(3200)); port.say({ t: 'voice.end', ...end })
     }
 
-    it('posts the words as the person in the conversation the device showed, never into a terminal', async () => {
+    it('never posts words for a chat the device did not review, and does not even transcribe them', async () => {
       const { host, conversationSay, route, routeInWindow, swarmSay } = conversationHost()
       const { session, port } = await connect(host)
       try {
         port.say({ t: 'hello', product: 'harness', mac: 'aa:bb' }); await settle()
         expect(port.sent.find(m => m.t === 'welcome')?.features).toContain('voice.conversation')
-        speak(port, { uploadId: 'u1', conversationId: 'c1' })
-        await vi.waitFor(() => expect(port.types()).toContain('voice.transcript'))
-        expect(port.sent.find(m => m.t === 'voice.transcript')).toEqual({ t: 'voice.transcript', uploadId: 'u1', routeId: '', text: 'ship it',
-          agentId: '', agentName: 'Chat with PM', conversationId: 'c1', needsConfirm: false })
-        expect(conversationSay).toHaveBeenCalledExactlyOnceWith('st1', 'c1', 'ship it', 'u1')
+        speak(port, { uploadId: 'u1', tabId: 'st1', conversationId: 'c1' })
+        await vi.waitFor(() => expect(port.types()).toContain('voice.error'))
+        expect(port.sent.find(m => m.t === 'voice.error')).toMatchObject({ uploadId: 'u1', message: 'Review the words before they go to the Swarm chat.' })
+        expect(host.transcribe).not.toHaveBeenCalled(); expect(conversationSay).not.toHaveBeenCalled()
         expect(host.sendTurn).not.toHaveBeenCalled(); expect(route).not.toHaveBeenCalled()
         expect(routeInWindow).not.toHaveBeenCalled(); expect(swarmSay).not.toHaveBeenCalled()
+        expect(port.types()).not.toContain('voice.transcript')
       } finally { await session.stop() }
     })
 
     it.each([
       ['the window has no conversation in front', { voiceConversation: () => null }, {}, 'The chat changed. Check the device and try again.'],
       ['the window moved to another conversation', { voiceConversation: () => ({ ...PM, conversationId: 'c2' }) }, {}, 'The chat changed. Check the device and try again.'],
+      // Every Swarm has a Lead chat, and two Swarms' ids can be the same: the Swarm is half of what the device showed.
+      ['the window has a chat of the same id in another Swarm', { voiceConversation: () => ({ ...PM, superTabId: 'st2' }) }, {}, 'The chat changed. Check the device and try again.'],
+      ['it names no Swarm', {}, { tabId: undefined }, 'The chat changed. Check the device and try again.'],
+      ['the Swarm is not an id', {}, { tabId: 7 }, 'The chat changed. Check the device and try again.'],
       ['the person cannot post there', { voiceConversation: () => ({ ...PM, canPost: false }) }, {}, "You can't post in this chat."],
       ['the id is not one', {}, { conversationId: 7 }, 'The chat changed. Check the device and try again.'],
       ['it also names an agent', {}, { agentId: 'a2' }, 'The chat changed. Check the device and try again.'],
@@ -855,7 +859,7 @@ describe('cable session', () => {
       const { host, conversationSay, route } = conversationHost(over as Partial<CableHost>)
       const { session, port } = await connect(host)
       try {
-        speak(port, { uploadId: 'u1', conversationId: 'c1', ...extra })
+        speak(port, { uploadId: 'u1', tabId: 'st1', conversationId: 'c1', ...extra })
         await vi.waitFor(() => expect(port.types()).toContain('voice.error'))
         expect(port.sent.find(m => m.t === 'voice.error')).toMatchObject({ uploadId: 'u1', message: error })
         expect(host.transcribe).not.toHaveBeenCalled()
@@ -868,20 +872,14 @@ describe('cable session', () => {
       const { host, conversationSay } = conversationHost({ voiceConversation: () => inFront })
       const { session, port } = await connect(host)
       try {
-        port.say({ t: 'voice.begin', uploadId: 'u1', conversationId: 'c1' }); await settle()
+        port.say({ t: 'voice.begin', uploadId: 'u1', tabId: 'st1', conversationId: 'c1' }); await settle()
         inFront = { ...PM, conversationId: 'c2', title: 'Other' }
-        port.pcm(Buffer.alloc(3200)); port.say({ t: 'voice.end' })
-        await vi.waitFor(() => expect(conversationSay).toHaveBeenCalledWith('st1', 'c1', 'ship it', 'u1'))
-      } finally { await session.stop() }
-    })
-
-    it('shows the Swarm\'s refusal on the device', async () => {
-      const { host } = conversationHost({ conversationSay: vi.fn(async () => ({ ok: false as const, error: 'That chat is archived.' })) })
-      const { session, port } = await connect(host)
-      try {
-        speak(port, { uploadId: 'u1', conversationId: 'c1' })
-        await vi.waitFor(() => expect(port.sent.find(m => m.t === 'voice.error')).toMatchObject({ uploadId: 'u1', message: 'That chat is archived.' }))
-        expect(port.types()).not.toContain('voice.transcript')
+        port.pcm(Buffer.alloc(3200)); port.say({ t: 'voice.end', review: true })
+        await vi.waitFor(() => expect(port.types()).toContain('voice.draft'))
+        const page = port.sent.find(m => m.t === 'voice.draft')!
+        expect(page).toMatchObject({ agentId: 'c1', name: 'Chat with PM' })
+        port.say({ t: 'draft.command', draftId: page.id, revision: page.revision, requestId: 'draft-1', op: 'send' })
+        await vi.waitFor(() => expect(conversationSay).toHaveBeenCalledWith('st1', 'c1', 'ship it', page.id))
       } finally { await session.stop() }
     })
 
@@ -889,7 +887,7 @@ describe('cable session', () => {
       const { host, conversationSay } = conversationHost()
       const { session, port } = await connect(host)
       try {
-        speak(port, { uploadId: 'u1', conversationId: 'c1' }, { review: true })
+        speak(port, { uploadId: 'u1', tabId: 'st1', conversationId: 'c1' }, { review: true })
         await vi.waitFor(() => expect(port.types()).toContain('voice.draft'))
         const page = port.sent.find(m => m.t === 'voice.draft')!
         expect(page).toMatchObject({ ok: true, active: true, agentId: 'c1', name: 'Chat with PM', text: 'ship it', context: 'Swarm chat' })
@@ -906,13 +904,13 @@ describe('cable session', () => {
       const { host } = conversationHost({ conversationSay })
       const { session, port } = await connect(host)
       try {
-        speak(port, { uploadId: 'u1', conversationId: 'c1' }, { review: true })
+        speak(port, { uploadId: 'u1', tabId: 'st1', conversationId: 'c1' }, { review: true })
         await vi.waitFor(() => expect(port.types()).toContain('voice.draft'))
         let page = port.sent.find(m => m.t === 'voice.draft')!
         port.say({ t: 'draft.command', draftId: page.id, revision: page.revision, requestId: 'draft-1', op: 'discard' })
         await vi.waitFor(() => expect(port.sent.find(m => m.t === 'draft.state')).toMatchObject({ ok: true, active: false }))
         expect(conversationSay).not.toHaveBeenCalled()
-        speak(port, { uploadId: 'u2', conversationId: 'c1' }, { review: true })
+        speak(port, { uploadId: 'u2', tabId: 'st1', conversationId: 'c1' }, { review: true })
         await vi.waitFor(() => expect(port.sent.filter(m => m.t === 'voice.draft')).toHaveLength(2))
         page = port.sent.filter(m => m.t === 'voice.draft')[1]
         port.say({ t: 'draft.command', draftId: page.id, revision: page.revision, requestId: 'draft-2', op: 'send' })

@@ -22,7 +22,6 @@ import { readCompanionIdentity, type CompanionIdentity } from './companionProtoc
 //   3. SAY NOTHING WHEN NOTHING CHANGED. That is what keeps the link idle during a long turn, and it is
 //      why rule 2 has to exist at all.
 
-import { randomUUID } from 'node:crypto'
 import { CABLE_MAX_PAYLOAD, CableDecoder, CableType, encodeCableFrame } from './cableFrame.js'
 import { DialLog } from './dialLog.js'
 import { FirmwareTransfer, otaKeyFor } from './fwPush.js'
@@ -1635,7 +1634,9 @@ export class CableSession {
         if (conversationVoice) {
           const inFront = this.host.voiceConversation?.() ?? null
           const mixed = CONVERSATION_EXCLUSIVE.some(key => key in msg)
-          conversation = { pin: !mixed && typeof msg.conversationId === 'string' && inFront?.conversationId === msg.conversationId ? inFront : undefined }
+          // The Swarm and the chat both: every Swarm has a Lead chat, and two Swarms' chat ids can be the same.
+          conversation = { pin: !mixed && typeof msg.conversationId === 'string' && typeof msg.tabId === 'string' &&
+            inFront?.conversationId === msg.conversationId && inFront.superTabId === msg.tabId ? inFront : undefined }
         }
         const carry: CarryRead | undefined = !formVoice && !questionVoice && !draftVoice && !searchVoice && carryVoice
           ? (typeof msg.carryId === 'string' && str('agentId') && !('cmd' in msg) && !('selectionId' in msg)
@@ -2126,6 +2127,11 @@ export class CableSession {
     if (turn?.conversation && !turn.conversation.pin!.canPost) {
       await reply({ t: 'voice.error', message: "You can't post in this chat." }); return
     }
+    // Words for a chat everyone in the Swarm reads are only ever posted from the device's Send, never straight from speech:
+    // refused before they are even transcribed.
+    if (turn?.conversation && !review) {
+      await reply({ t: 'voice.error', message: 'Review the words before they go to the Swarm chat.' }); return
+    }
     if (turn?.draft && (!turn.draft.pin || !this.voiceDraft.current(turn.draft.pin))) {
       await reply({ t: 'voice.error', message: 'That draft changed. Review it again.' }); return
     }
@@ -2186,7 +2192,7 @@ export class CableSession {
     }
 
     if (turn.conversation) {
-      await this.sayInConversation(turn.conversation.pin!, transcript, review, uploadId, reply); return
+      await this.sayInConversation(turn.conversation.pin!, transcript, uploadId, reply); return
     }
     if (turn.search) {
       // Speech service punctuation is not part of a remembered phrase. Preserve
@@ -2351,31 +2357,20 @@ export class CableSession {
   }
 
   /**
-   * Words for a Swarm conversation, posted as the person (superTabs/cards.ts `post`): never typed into a terminal, never routed.
-   *
-   * In review the device shows the words and the conversation, and only Send posts them, under the draft's id, so a Send whose answer
-   * was lost is not a second message. Without review they go at once, as words for an agent do: the device showed the target before
-   * recording, and the recording itself can be cancelled.
+   * Words for a Swarm conversation, posted as the person (superTabs/cards.ts `post`): never typed into a terminal, never routed,
+   * and only from review. The device shows the words and the chat, and only Send posts them, under the draft's id, so a Send whose
+   * answer was lost is not a second message.
    */
-  private async sayInConversation(pin: VoiceConversation, transcript: string, review: boolean, uploadId: string,
+  private async sayInConversation(pin: VoiceConversation, transcript: string, uploadId: string,
                                   reply: (message: Message) => Promise<boolean>): Promise<void> {
-    const post = (text: string, operationId: string) => this.host.conversationSay?.(pin.superTabId, pin.conversationId, text, operationId)
-      ?? Promise.resolve({ ok: false as const, error: 'Update Harness to post in the Swarm chat.' })
-    if (review) {
-      let id = ''
-      const state = this.voiceDraft.create({ agentId: pin.conversationId, name: pin.title, text: transcript, context: 'Swarm chat',
-        submit: words => post(words, id) })
-      if (!state.ok) { await reply({ t: 'voice.error', message: state.error }); return }
-      id = state.id
-      this.voiceDraftCreation = { uploadId, id }
-      await reply({ t: 'voice.draft', ...state }); return
-    }
-    // The recording's own id, so the Swarm takes a repeated post of it once; one the backend would not take as an id is replaced.
-    const posted = await post(transcript, /^[A-Za-z0-9_-]{1,64}$/.test(uploadId) ? uploadId : randomUUID())
-    if (!posted.ok) { await reply({ t: 'voice.error', message: posted.error }); return }
-    this.log(`cable: voice → Swarm conversation ${pin.conversationId.slice(0, 8)}`)
-    await reply({ t: 'voice.transcript', routeId: '', text: transcript, agentId: '', agentName: pin.title, conversationId: pin.conversationId,
-      needsConfirm: false })
+    let id = ''
+    const state = this.voiceDraft.create({ agentId: pin.conversationId, name: pin.title, text: transcript, context: 'Swarm chat',
+      submit: words => this.host.conversationSay?.(pin.superTabId, pin.conversationId, words, id)
+        ?? Promise.resolve({ ok: false as const, error: 'Update Harness to post in the Swarm chat.' }) })
+    if (!state.ok) { await reply({ t: 'voice.error', message: state.error }); return }
+    id = state.id
+    this.voiceDraftCreation = { uploadId, id }
+    await reply({ t: 'voice.draft', ...state })
   }
 
   private cancelSearchVoice(): void {
