@@ -1,4 +1,4 @@
-import { contributedEngines, expireRemovals, LASTING_TEAM_REFUSALS, machineContribution, machineObservationSchema, machineSlots, observedPrivacy, recordAgentPresence, removalPreview, swarmGridRow, teamWorkRefusal, type MachineObservation } from './machines.js'
+import { contributedEngines, expireRemovals, LASTING_TEAM_REFUSALS, machineContribution, machineObservationSchema, machineSlots, observedPrivacy, recordAgentPresence, removalPreview, swarmGridRow, teamAccountRequired, teamWorkRefusal, type MachineObservation } from './machines.js'
 import { createHash } from 'node:crypto'
 import type { Prisma, PrismaClient, SuperTab, SuperTabDelivery, SuperTabMessage } from '@prisma/client'
 import type { AuthUser } from '../lib/ssoAuth.js'
@@ -26,7 +26,7 @@ import {
   activeWork, actorKey, agent, agentOnly, appendPullRequestUrls, author, conversation, createSuperTab, fail, person, stableId, visibleState, finishWorker,
   SuperTabError, isLeads, parkLaterConversations, syncLeads, type Actor, type Agent, type Assignment, type Author, type MessageDraft, type SuperTabState,
 } from './model.js'
-import { holdNoticeText, type HoldReason } from './holdNotice.js'
+import type { HoldReason } from './holdReason.js'
 import { agentDisplayName } from './agentNames.js'
 import { endedHolds, HOLDING, type WorkHold } from '../github/holds.js'
 import { accrueLent } from './leaderboard/lent.js'
@@ -568,7 +568,7 @@ export class SuperTabStore {
         const stored = state.machines!.find(m => m.machineId === pool.machineId)!
         // Whether it takes teammates' projects now, and if not why (machines.ts teamWorkRefusal): what routing leaves it
         // out for, and what Desktop can show on the machine.
-        const refusal = teamWorkRefusal(stored, now, teamMachines.includes(pool.machineId))
+        const refusal = teamWorkRefusal(stored, now, teamMachines.includes(pool.machineId), teamAccountRequired(state))
         return { ...pool, availableSlots: Math.max(0, pool.maxAgents - machineSlots(state, stored)),
           teamWork: refusal ? { allowed: false as const, ...refusal } : { allowed: true as const } }
       }) } }
@@ -1667,7 +1667,7 @@ export class SuperTabStore {
       }
       if (delivery.claimId && delivery.claimId !== action.claimId) fail('CLAIM_CONFLICT', 'Reconcile the existing delivery before claiming it again.')
       if (action.type !== 'claim' && !delivery.claimId) fail('NOT_CLAIMED', 'Claim this instruction before acknowledging it.')
-      if (action.type === 'hold') return this.holdNotice(tx, loaded, delivery, action.reason)
+      if (action.type === 'hold') return this.hold(tx, delivery, action.reason)
       const status = action.type === 'claim' ? delivery.status === 'queued' ? 'claimed' : delivery.status : action.uncertain ? 'uncertain' : 'delivered'
       if (delivery.status === 'delivered' && action.type === 'ack' && (action.uncertain || delivery.receipt !== action.receipt)) {
         fail('RECEIPT_CONFLICT', 'A delivered instruction keeps its original host receipt.')
@@ -1683,40 +1683,14 @@ export class SuperTabStore {
     })
   }
 
-  /** The host cannot type a claimed instruction yet. Say so once in the group, as the waiting agent; nobody is asked to act on it. */
-  private async holdNotice(tx: Transaction, loaded: Loaded, delivery: SuperTabDelivery, reason: HoldReason) {
-    const state = structuredClone(loaded.state)
-    const id = stableId('hold-notice', delivery.tabId, delivery.id)
-    if (delivery.status !== 'claimed') return { noticed: false }
-    // Nobody can see an agent-only notice, so nobody is told it waits; the host keeps holding it.
-    if (agentOnly((await tx.superTabMessage.findUnique({ where: { id: delivery.messageId }, select: { source: true } }))?.source)) return { noticed: false }
-    const notice = await tx.superTabMessage.findUnique({ where: { id } })
-    if (notice && delivery.holdReason === reason && delivery.holdSince) return { noticed: false }
-    // The notice is only sent once for older Desktops; the inline receipt keeps the current reason.
-    await tx.superTabDelivery.update({ where: { id: delivery.id }, data: {
-      holdReason: reason, holdSince: delivery.holdSince ?? new Date(this.now()),
-    } })
-    const group = conversation(state, delivery.conversationId), waiting = agent(state, delivery.agentId)
-    const sender = author(state, { kind: 'agent', agentId: waiting.id, machineOwnerId: waiting.machineOwnerId })
-    // The Lead gets it too, like a host-stop notice; a waiting Lead has no one above it to tell.
-    const lead = group.leadId && group.leadId !== waiting.id && group.agentIds.includes(group.leadId) ? group.leadId : null
-    const host = !notice && reason === 'team_waiting_user' ? await this.holdHost(tx, state, waiting) : undefined
-    const notices: MessageDraft[] = notice ? [] : [{ id, conversationId: group.id, replyTo: null, recipients: lead ? [lead] : [],
-      source: { kind: 'delivery-hold', messageId: delivery.messageId, deliveryId: delivery.id, agentId: delivery.agentId },
-      text: holdNoticeText(sender.displayName ?? sender.name, reason, host), author: sender }]
-    const sequences = numberMessages(state, notices, this.now())
-    await this.save(tx, loaded, state, clock.next(), deliveryTouches(delivery))
-    await this.writeMessages(tx, loaded.row.id, state, notices, sequences)
-    return { noticed: !notice }
-  }
-
-  /** The machine's name and its owner's name for a hold notice; left out when unknown rather than guessed. */
-  private async holdHost(tx: Transaction, state: SuperTabState, waiting: Agent) {
-    const contributed = state.machines?.find(m => m.machineId === waiting.machineId)?.name
-    const machine = contributed ?? (await tx.machine.findFirst({ where: { machineId: waiting.machineId, userId: waiting.machineOwnerId },
-      select: { name: true, hostname: true } }).then(m => m?.name ?? m?.hostname ?? null))
-    const owner = await tx.user.findUnique({ where: { id: waiting.machineOwnerId }, select: { name: true } })
-    return { machine: machine?.trim() || null, owner: owner?.name?.trim() || null }
+  /** The host cannot type a claimed instruction yet. Recorded on the delivery for logs; nothing is posted, nobody is told it waits. */
+  private async hold(tx: Transaction, delivery: SuperTabDelivery, reason: HoldReason) {
+    if (delivery.status !== 'claimed') return { held: false }
+    if (agentOnly((await tx.superTabMessage.findUnique({ where: { id: delivery.messageId }, select: { source: true } }))?.source)) return { held: false }
+    if (delivery.holdReason !== reason || !delivery.holdSince) {
+      await tx.superTabDelivery.update({ where: { id: delivery.id }, data: { holdReason: reason, holdSince: delivery.holdSince ?? new Date(this.now()) } })
+    }
+    return { held: true }
   }
 
   /** Only the recorded execution host may attest that the actual session/attempt has stopped. */

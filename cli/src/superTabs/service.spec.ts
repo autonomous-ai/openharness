@@ -695,7 +695,7 @@ describe('GitHub App tokens through the service', () => {
   })
 
   it('runs a team daemon\'s Swarm host from its first connection, and a person\'s only once it hosts Swarm work', () => {
-    const quiet = { githubTokens: () => ({ start: vi.fn(), stop: vi.fn() }), teamEngines: () => ({ start: vi.fn(), stop: vi.fn() }) }
+    const quiet = { githubTokens: () => ({ start: vi.fn(), stop: vi.fn() }), teamEngines: () => ({ start: vi.fn(), stop: vi.fn() }), teamRelay: () => ({ start: vi.fn(), stop: vi.fn(async () => {}) }) }
     const started = (team: boolean) => {
       const start = vi.fn()
       const service = superTabService(fakeCore({ dataDir: mkdtempSync(join(tmpdir(), 'team-wake-')) }),
@@ -723,13 +723,27 @@ describe('GitHub App tokens through the service', () => {
   })
 })
 
+describe('the owner\'s subscriptions for the Harness Team account', () => {
+  it('start with the service\'s first connection and stop only with the service, not a lost connection', async () => {
+    const relay = { start: vi.fn(), stop: vi.fn(async () => {}) }
+    const service = superTabService(fakeCore(), { githubTokens: () => ({ start: vi.fn(), stop: vi.fn() }) as never,
+      teamEngines: () => ({ start: vi.fn(), stop: vi.fn() }) as never, teamRelay: () => relay })
+    service.port.connected()
+    expect(relay.start).toHaveBeenCalledOnce()
+    service.port.disconnected()
+    expect(relay.stop).not.toHaveBeenCalled()
+    service.port.stop()
+    expect(relay.stop).toHaveBeenCalledOnce()
+  })
+})
+
 describe('the Harness Team account, offered by Desktop on this Mac', () => {
   it('runs only for the local owner, for a moment the person is there, and says whether it started', async () => {
     const offer = vi.fn(async (_reason: string, _shared: () => Promise<boolean>) => ({ state: 'started' as const }))
-    const make = vi.fn(async () => ({ offer }))
+    const make = vi.fn(async () => ({ offer, decline: vi.fn() }))
     const service = superTabService(fakeCore(), { teamSetup: make })
     expect(await service.requests.super_tabs({ action: 'teamSetup', reason: 'join' }, owner)).toEqual({ ok: true, state: 'started' })
-    expect(offer).toHaveBeenCalledWith('join', expect.any(Function))
+    expect(offer).toHaveBeenCalledWith('join', expect.any(Function), false)
     for (const asker of [visitor, { local: false, owner: true, accountOwner: true }]) {
       expect(await service.requests.super_tabs({ action: 'teamSetup', reason: 'join' }, asker as never)).toEqual({ error: 'OWNER_REQUIRED' })
     }
@@ -743,7 +757,7 @@ describe('the Harness Team account, offered by Desktop on this Mac', () => {
 
   it('at app start, answers at once on a Mac that hosts no Swarm work, as no regular user\'s does', async () => {
     const offer = vi.fn(async (_reason: string, _shared: () => Promise<boolean>) => ({ state: 'not-shared' as const }))
-    const make = vi.fn(async () => ({ offer }))
+    const make = vi.fn(async () => ({ offer, decline: vi.fn() }))
     const dataDir = mkdtempSync(join(tmpdir(), 'team-startup-'))
     const service = superTabService(fakeCore({ dataDir }), { teamSetup: make })
     expect(await service.requests.super_tabs({ action: 'teamSetup', reason: 'startup' }, owner)).toEqual({ ok: true, state: 'not-shared' })
@@ -752,11 +766,27 @@ describe('the Harness Team account, offered by Desktop on this Mac', () => {
     mkdirSync(dirname(hostJournalFile(dataDir, 'machine-1')), { recursive: true })
     writeFileSync(hostJournalFile(dataDir, 'machine-1'), '{}')
     await service.requests.super_tabs({ action: 'teamSetup', reason: 'startup' }, owner)
-    expect(offer).toHaveBeenCalledWith('startup', expect.any(Function))
+    expect(offer).toHaveBeenCalledWith('startup', expect.any(Function), false)
+  })
+
+  it('says whether it is wanted without asking macOS, runs it when the person asks, and remembers "Not now"', async () => {
+    const offer = vi.fn(async (_reason: string, _shared: () => Promise<boolean>, check?: boolean) => ({ state: check ? 'wanted' as const : 'started' as const }))
+    const decline = vi.fn()
+    const service = superTabService(fakeCore(), { teamSetup: async () => ({ offer, decline }) })
+    expect(await service.requests.super_tabs({ action: 'teamSetupCheck', reason: 'join' }, owner)).toEqual({ ok: true, state: 'wanted' })
+    expect(offer).toHaveBeenLastCalledWith('join', expect.any(Function), true)
+    expect(await service.requests.super_tabs({ action: 'teamSetup', reason: 'manual' }, owner)).toEqual({ ok: true, state: 'started' })
+    expect(offer).toHaveBeenLastCalledWith('manual', expect.any(Function), false)
+    expect(await service.requests.super_tabs({ action: 'teamSetupDecline' }, owner)).toEqual({ ok: true })
+    expect(decline).toHaveBeenCalledOnce()
+    for (const action of ['teamSetupCheck', 'teamSetupDecline']) {
+      expect(await service.requests.super_tabs({ action, reason: 'join' }, visitor)).toEqual({ error: 'OWNER_REQUIRED' })
+    }
+    expect(await service.requests.super_tabs({ action: 'teamSetupCheck', reason: 'later' }, owner)).toEqual({ error: 'INVALID_REQUEST' })
   })
 
   it('tries again to make its setup when making it failed', async () => {
-    const make = vi.fn().mockRejectedValueOnce(new Error('import failed')).mockResolvedValueOnce({ offer: async () => ({ state: 'exists' }) })
+    const make = vi.fn().mockRejectedValueOnce(new Error('import failed')).mockResolvedValueOnce({ offer: async () => ({ state: 'exists' }), decline: vi.fn() })
     const service = superTabService(fakeCore(), { teamSetup: make })
     expect(await service.requests.super_tabs({ action: 'teamSetup', reason: 'join' }, owner)).toMatchObject({ error: 'SUPER_TAB_UNAVAILABLE' })
     expect(await service.requests.super_tabs({ action: 'teamSetup', reason: 'join' }, owner)).toEqual({ ok: true, state: 'exists' })

@@ -77,6 +77,7 @@ import '../state/harness_launch_integration.dart';
 import '../super_tabs/launch.dart';
 import '../super_tabs/pm_chat.dart' show countText;
 import '../super_tabs/pm_chat_shortcut.dart';
+import '../super_tabs/team_account_setup.dart';
 import '../super_tabs/workspace.dart';
 import '../super_tabs/actions.dart';
 import 'swarm_menu_bus.dart';
@@ -294,6 +295,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
   bool _deviceRevealInFlight = false;
   StreamSubscription<void>? _modelsRequests;
   StreamSubscription<String>? _superTabClosures;
+  StreamSubscription<String>? _teamSetupAsks;
   // The one Swarm notice: whether it exists (queued or shown), whether it
   // is on screen, and the closed tab its Reopen restores.
   int _superTabNoticeSerial = 0;
@@ -837,6 +839,10 @@ class _SwarmScreenState extends State<SwarmScreen> {
       }
     });
     _superTabClosures = app.superTabClosures.listen(_offerSuperTabReopen);
+    // The Harness Team account, explained before macOS asks for the password (super_tabs/team_account_setup.dart).
+    _teamSetupAsks = app.teamSetupAsks.listen((_) {
+      if (mounted) unawaited(showTeamAccountSetup(context, app, asked: true));
+    });
     if (!kUnderTest) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!mounted) return;
@@ -991,6 +997,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
     app.modelManager.setPanelVisible(false);
     _modelsRequests?.cancel();
     _superTabClosures?.cancel();
+    _teamSetupAsks?.cancel();
     _keymap.removeListener(_keymapChanged);
     _defaultKeymap.dispose();
     grid.AppTheme.palette.removeListener(_paletteChanged);
