@@ -1465,15 +1465,9 @@ class _SuperTabViewState extends State<SuperTabView>
           (m) => !m.fromAgent && !m.fromTerminal && m.authorId == c.accountId,
         )
         .firstOrNull;
-    // Older Desktops still show this plain notice. The inline receipt owns the
-    // same explanation here, including after delivery settles, so it never resurfaces stale.
+    // A message waiting for an agent is never announced; notices older backends stored stay hidden.
     final messages = allMessages
-        .where(
-          (m) =>
-              !(m.source['kind'] == 'delivery-hold' &&
-                  m.source['messageId'] == latestOwn?.id &&
-                  m.source['deliveryId'] == latestOwn?.receiptDelivery?.id),
-        )
+        .where((m) => m.source['kind'] != 'delivery-hold')
         .toList();
     final entries = superTabTranscriptEntries(messages);
     final byId = {for (final message in messages) message.id: message};
