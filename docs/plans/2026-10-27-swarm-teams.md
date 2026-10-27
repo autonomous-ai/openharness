@@ -70,7 +70,8 @@ Swarm's Team. The Team never grants access to a Swarm by itself; it limits who m
 - **Joining a Swarm from outside the Team** (an email invitation, a shared link or an email domain) also adds the person
   to its Team as a **guest**, never higher. A domain join is limited to the Team that owns the Swarm.
 - **Removing someone from a Team** removes them from every Swarm of that Team (see Concurrency).
-- **Exactly one owner.** Ownership transfers only to an admin, who must accept.
+- **Exactly one owner.** Ownership transfers only to an admin, at once (ruling while building: an admin is already
+  trusted, so no accept step; the old owner stays an admin).
 
 ## Shown on each platform
 
@@ -103,11 +104,13 @@ Reviewed revision: ______  Reviewer (another engine): ______
 
 2. **Concurrency.** A Team write locks one document: a role change or removal locks that person's
    `SwarmOrgMember` (version compare); a Team rename locks `SwarmOrg`. Invariants and their keepers:
-   - *A removed person never acts again in a Team Swarm.* Every Swarm command reads the caller's `SwarmOrgMember` in its
-     transaction. The removal's transaction sets `removedAt` **and** touches that person's `SwarmMember` part in each
-     Swarm of the Team (at most the Team's Swarm count, 10 today), so a command in flight conflicts and retries into
-     the refusal, as a Swarm removal does today. The per-Swarm cleanup (agents, contributions, private grants) then
-     runs through the existing person-removal path, one Swarm transaction each; a sweep finishes any that failed.
+   - *A removed person never acts again in a Team Swarm.* Every Swarm read and command reads the caller's
+     `SwarmOrgMember` in its transaction (`store.actor()`), so every request that starts after the removal commits is
+     refused. The person then leaves each Swarm of the Team through the existing leave (`member.remove` of
+     themselves), one Swarm transaction each, which writes their `SwarmMember` part; the hourly sweep finishes any
+     that failed. Built: a request already in flight when the removal commits may still finish, the same window
+     as a request that arrived a moment earlier (ruling while building: touching every Swarm's member part in the
+     removal's transaction needs a write the parts layer has no no-op for).
    - *Exactly one owner:* transfer writes both members in one transaction.
    - *A guest is never a Swarm owner:* checked in Swarm ownership transfer and in Team role changes (demoting a
      Swarm owner to guest is refused until that Swarm has another owner).
@@ -184,12 +187,17 @@ Reviewed revision: ______  Reviewer (another engine): ______
      person whose Team membership is removed (a test each).
    - Agents' terminals and scrollback: delivered only inside a Swarm, as today; removal stops the removed person's
      agents through the existing person-removal path.
-   - Shares (`mayOpenShare`) of a Swarm agent: also require the opener's Team membership.
-   - The same session in another Swarm: `SuperTabSessionScope` already keeps a confidential session to one Swarm;
-     a session's Swarms must also belong to one Team, checked at registration.
+   - Shares (`mayOpenShare`) of a Swarm agent: also require the opener's Team membership. For an agent, the check is
+     on its contributor, not its machine's owner, who need not be in the Swarm today either.
+   - The same session in another Swarm: `SuperTabSessionScope` already keeps a confidential session to one Swarm; see
+     the next line for sessions in Swarms of two Teams.
    - **The same machine for two Teams:** a Team account runs every teammate's work as one macOS user, so Team A's
-     agents could read Team B's worktrees there. A machine takes teammates' work for one Team at a time
-     (`MACHINE_IN_OTHER_TEAM`); its owner's own projects run as the owner in any Team, as today.
+     agents could read Team B's worktrees there. A machine contributed to Swarms of two Teams takes teammates' work
+     in neither (`MACHINE_IN_OTHER_TEAM`, and routing leaves it out with that reason) until it leaves one; its owner's
+     own projects run as the owner in any Team, as today. Ruling while building: neither Team wins, so nothing
+     depends on which was first; the migration's dry run lists such machines first. This also covers a teammate's
+     session in Swarms of two Teams, since teammates' sessions run in the Team account; a person's own session in two
+     Teams is their own choice, and is not refused.
    - Logs and stored observations: Team ids and roles only, no emails in logs.
    - A rolled-back release: see 6; it shows no more than today.
 
