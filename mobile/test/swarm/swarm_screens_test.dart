@@ -182,7 +182,7 @@ void main() {
       expect(
         find.descendant(
           of: key('swarm-project-$tab-$project'),
-          matching: find.textContaining('1 waiting', findRichText: true),
+          matching: find.textContaining('1\u00A0waiting', findRichText: true),
         ),
         findsOneWidget,
         reason: 'the team line',

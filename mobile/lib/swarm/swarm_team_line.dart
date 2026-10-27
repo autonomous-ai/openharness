@@ -7,7 +7,9 @@ import 'team_glance.dart';
 
 /// A team in one line, as the approved prototype draws it: each count after
 /// a dot of its state — working green, waiting yellow, down red, its words
-/// red too. Nothing counted reads "All idle" or "No agents yet".
+/// red too. Nothing counted reads "All idle" or "No agents yet". Too long for
+/// its row (the drawer's), it wraps between its parts, never inside one, so
+/// no part — down least of all — is cut off.
 class SwarmTeamLine extends StatelessWidget {
   const SwarmTeamLine(this.glance, {super.key});
 
@@ -57,7 +59,7 @@ class SwarmTeamLine extends StatelessWidget {
               ),
             ),
             TextSpan(
-              text: part.text,
+              text: part.text.replaceAll(' ', '\u00A0'),
               style: part.state == SwarmAgentState.down
                   ? TextStyle(color: tty.red)
                   : null,
@@ -65,8 +67,6 @@ class SwarmTeamLine extends StatelessWidget {
           ],
         ],
       ),
-      maxLines: 1,
-      overflow: TextOverflow.ellipsis,
       semanticsLabel: glance.line,
     );
   }

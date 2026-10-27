@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:harness_mobile/notify/system_notices.dart';
@@ -619,7 +620,9 @@ void main() {
             )
             .text
             .visitChildren((span) {
-              if (span is TextSpan && span.text == words) {
+              // A part's words never part: its spaces do not break.
+              if (span is TextSpan &&
+                  span.text?.replaceAll('\u00A0', ' ') == words) {
                 found = span.style?.color;
               }
               return true;
@@ -630,6 +633,47 @@ void main() {
       expect(colorOf('1 down'), tty.red);
       expect(colorOf('1 waiting'), isNot(tty.red));
       expect(find.textContaining('Atlas'), findsNothing);
+    });
+
+    testWidgets('too long for its row, it wraps between its parts and never '
+        'cuts one: down always shows', (tester) async {
+      final fake = backend();
+      final parts = fake.routes['/api/super-tabs/$tab/parts']!;
+      fake.routes['/api/super-tabs/$tab/parts'] = (body) {
+        final load = parts(body)! as Map<String, dynamic>;
+        return {
+          ...load,
+          'agents': [
+            ...load['agents'] as List,
+            part('agent-kai', 1, agent('agent-kai', displayName: 'Kai')),
+          ],
+          'groups': [
+            ...load['groups'] as List,
+            part(
+              'g-kai',
+              40,
+              groupData('g-kai', status: 'working', workerId: 'agent-kai'),
+            ),
+          ],
+        };
+      };
+      await pump(tester, fake);
+      await openDrawer(tester);
+
+      final text = find.descendant(
+        of: find.descendant(
+          of: key('swarm-drawer-project-$tab-$project'),
+          matching: find.byType(SwarmTeamLine),
+        ),
+        matching: find.byType(RichText),
+      );
+      final paragraph = tester.renderObject<RenderParagraph>(text);
+      expect(paragraph.didExceedMaxLines, isFalse, reason: 'nothing cut');
+      expect(
+        paragraph.text.toPlainText(),
+        allOf(contains('1\u00A0working'), contains('1\u00A0down')),
+        reason: 'each part whole, on one line',
+      );
     });
   });
 }
