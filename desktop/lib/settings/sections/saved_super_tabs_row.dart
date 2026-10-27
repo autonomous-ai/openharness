@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 
 import '../../shared/theme/app_theme.dart' as grid;
 import '../../shared/widgets/setting_row.dart';
+import '../../state/browser_copies.dart';
 import '../../super_tabs/client.dart';
 
 /// Where views of Super Tabs are kept on this device (the web's reading,
@@ -11,9 +12,16 @@ import '../../super_tabs/client.dart';
 /// they go, and clears them now. It says Cleared only when they went, and
 /// only until a Super Tab is kept again.
 class SavedSuperTabsRow extends StatefulWidget {
-  const SavedSuperTabsRow({super.key, required this.superTabs});
+  const SavedSuperTabsRow({
+    super.key,
+    required this.superTabs,
+    required this.copies,
+  });
 
   final SuperTabClient superTabs;
+
+  /// The host's other copies (the web's computer list), cleared with the views.
+  final BrowserCopies copies;
 
   @override
   State<SavedSuperTabsRow> createState() => _SavedSuperTabsRowState();
@@ -44,7 +52,10 @@ class _SavedSuperTabsRowState extends State<SavedSuperTabsRow> {
     setState(() => _state = _Clearing.busy);
     var cleared = true;
     try {
-      await widget.superTabs.clearSavedViews();
+      await Future.wait([
+        widget.superTabs.clearSavedViews(),
+        widget.copies.clear(),
+      ]);
     } catch (_) {
       // A browser that refuses its storage (full, private mode).
       cleared = false;
@@ -57,8 +68,8 @@ class _SavedSuperTabsRowState extends State<SavedSuperTabsRow> {
   Widget build(BuildContext context) => SettingRow(
     title: 'Super Tabs in this browser',
     detail:
-        'This browser keeps a copy of the Super Tabs you open, so they show '
-        'at once. Signing out removes it.',
+        'This browser keeps a copy of the Super Tabs you open and the names '
+        'of your computers, so they show at once. Signing out removes it.',
     control: OutlinedButton(
       key: const Key('settings-clear-saved-super-tabs'),
       // A thumb's target on a phone.

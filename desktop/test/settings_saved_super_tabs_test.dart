@@ -12,6 +12,7 @@ import 'package:harness/core/config.dart';
 import 'package:harness/settings/sections/account_section.dart';
 import 'package:harness/settings/sections/saved_super_tabs_row.dart';
 import 'package:harness/state/app_state.dart';
+import 'package:harness/state/browser_copies.dart';
 import 'package:harness/state/pane_layout_store.dart';
 import 'package:harness/super_tabs/client.dart';
 import 'package:harness/super_tabs/reading.dart';
@@ -53,8 +54,8 @@ void main() {
     expect(find.text('Super Tabs in this browser'), findsOneWidget);
     expect(
       find.text(
-        'This browser keeps a copy of the Super Tabs you open, so they show '
-        'at once. Signing out removes it.',
+        'This browser keeps a copy of the Super Tabs you open and the names '
+        'of your computers, so they show at once. Signing out removes it.',
       ),
       findsOneWidget,
     );
@@ -86,12 +87,49 @@ void main() {
     expect(find.text('Your Harness sign-in on this computer.'), findsOneWidget);
   });
 
+  testWidgets('Clear now clears the browser\'s other copies too', (
+    tester,
+  ) async {
+    final app = await mount(tester);
+    var cleared = 0;
+    app.browserCopies.add(() async => cleared++);
+
+    await tester.tap(find.widgetWithText(OutlinedButton, 'Clear now'));
+    await tester.runAsync(() => Future<void>.delayed(Duration.zero));
+    await tester.pump();
+
+    expect(cleared, 1);
+    expect(find.widgetWithText(OutlinedButton, 'Cleared'), findsOneWidget);
+  });
+
+  testWidgets('a copy that cannot be cleared says so, and keeps Clear now', (
+    tester,
+  ) async {
+    final app = await mount(tester);
+    app.browserCopies.add(() => Future.error(StateError('quota')));
+
+    await tester.tap(find.widgetWithText(OutlinedButton, 'Clear now'));
+    await tester.runAsync(() => Future<void>.delayed(Duration.zero));
+    await tester.pump();
+
+    expect(find.widgetWithText(OutlinedButton, 'Clear now'), findsOneWidget);
+    expect(
+      find.text('This browser did not let Harness clear it. Try again.'),
+      findsOneWidget,
+    );
+  });
+
   group('Clear now says only what happened', () {
     /// The row on its own, over [client].
     Future<void> row(WidgetTester tester, SuperTabClient client) =>
         tester.pumpWidget(
           MaterialApp(
-            home: Scaffold(body: SavedSuperTabsRow(superTabs: client)),
+            home: Scaffold(
+              body: SavedSuperTabsRow(
+                superTabs: client,
+                copies: BrowserCopies(),
+              ),
+            ),
           ),
         );
 

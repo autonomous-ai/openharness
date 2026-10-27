@@ -17,5 +17,9 @@ export function configureReleaseAssets(html, release) {
   };
   // The host serves online workspaces. Do not start the deprecated generated
   // service worker, which can independently retain an older application.
-  return html.replace(startup, `_flutter.loader.load(${JSON.stringify({ config })});\n`);
+  return html
+    .replace(startup, `_flutter.loader.load(${JSON.stringify({ config })});\n`)
+    // The release script preloads the fonts Flutter asks for (build-web-release.sh); it asks
+    // for them under assetBase, so a preload of the unversioned copy would only fetch them twice.
+    .replace(/(<link rel="preload" href=")(?![/a-z]+:|\/)/g, `$1${assetBase}`);
 }
