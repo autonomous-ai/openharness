@@ -88,6 +88,36 @@ void main() {
     },
   );
 
+  testWidgets(
+    'with a request and a decision open, both cards fit in a laptop window',
+    (tester) async {
+      final server = swarm()
+        ..askHandsOn(
+          'Put the dial in flashing mode',
+          steps: [
+            'Plug the dial into the Mac Studio with USB-C',
+            'Hold the button while it powers on',
+            'Let go when the ring turns blue',
+          ],
+          conversationId: 'pm-chat',
+        )
+        ..ask([
+          'Keep the old firmware as a fallback?',
+        ], conversationId: 'pm-chat');
+      tester.view
+        ..physicalSize = const Size(1280, 860)
+        ..devicePixelRatio = 1;
+      addTearDown(tester.view.reset);
+      await showView(tester, server);
+      await tester.tap(find.byKey(const ValueKey('super-pm-chat-lead')));
+      await tester.pumpAndSettle();
+      expect(
+        find.byKey(const ValueKey('super-decision-decision-1-0')).hitTestable(),
+        findsOneWidget,
+      );
+    },
+  );
+
   testWidgets("Can't now takes an optional time and note", (tester) async {
     final server = swarm()..askHandsOn('Plug in the dial');
     await showView(tester, server);

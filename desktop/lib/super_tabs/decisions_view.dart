@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 
@@ -101,7 +102,11 @@ class SuperTabDecisionsPanel extends StatelessWidget {
       final requests = decisions.handsOnIn(projectId);
       if (open.isEmpty && requests.isEmpty) return const SizedBox.shrink();
       return ConstrainedBox(
-        constraints: const BoxConstraints(maxHeight: 320),
+        // Up to half the window: a request and a decision both fit whole
+        // on a laptop, and the chat keeps the other half.
+        constraints: BoxConstraints(
+          maxHeight: math.max(320, MediaQuery.sizeOf(context).height / 2),
+        ),
         child: ListView(
           key: const ValueKey('super-pm-decisions'),
           shrinkWrap: true,
