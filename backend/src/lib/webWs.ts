@@ -73,6 +73,10 @@ const wss = createWss(WS_LIMITS.web, { echoFirstProtocol: true })
 const DEVICE_RESEED_MS = 30_000
 // Trailing debounce for list re-derivations poked by machines_watch (see scheduleWatchAgents).
 const WATCH_DEBOUNCE_MS = 250
+/** How long a relay refused for an offline machine waits before it selects that machine again: a daemon's relay
+ *  re-dialled offline machines every few seconds, 68% of 1,884 selects in 10 minutes (prod, 2026-10-27, #314). The
+ *  Desktop's own longest reconnect backoff, so a machine coming back is seen no later than it was. */
+export const OFFLINE_RETRY_AFTER_MS = 30_000
 
 /** Who is on the other end of a per-user socket, as the client declares it: the surface (`?client=`), and
  *  for the phone the release (`?release=`, the public x.y.z) and whether the build is a debug or simulator
@@ -327,7 +331,7 @@ function attachUserClient(ws: WebSocket, user: AuthUser, surface: 'mobile' | 'we
       send({ type: 'node_status', payload: { online, status: online ? 'running' : lifecycle === 'unknown' ? 'offline' : lifecycle } })
     })(), 'web-ws seed node_status', { userId: user.sub, machineId })
   }
-  const bindAgent = async (machineIdRaw: unknown): Promise<void> => {
+  const bindAgent = async (machineIdRaw: unknown, refuseOffline: boolean): Promise<void> => {
     if (typeof machineIdRaw !== 'string' || !machineIdRaw) return
     const machineId = machineIdRaw
     const gen = ++selectGen
@@ -369,6 +373,15 @@ function attachUserClient(ws: WebSocket, user: AuthUser, surface: 'mobile' | 'we
     // Idempotent same-agent re-select keeps the connId, but still passed through ensureMachineReady so
     // selecting a deliberately stopped machine wakes it before the readiness ack.
     if (client && machineId === currentAgentId) { currentBinding = binding; ack(machineId); return }
+    // A relay that cannot use an offline machine says so (`offline: 'refuse'`, the daemon's relay) and is refused here,
+    // before a hub client and an ack it would hang up on. Others (a phone, an older daemon) wait attached, as before.
+    if (refuseOffline && !await machineOnline(machineId, !!await getAgentPresence(machineId))) {
+      if (!closed && gen === selectGen) {
+        send({ type: 'machine_select_error', payload: { machineId, error: 'MACHINE_OFFLINE', retryAfterMs: OFFLINE_RETRY_AFTER_MS } })
+      }
+      return
+    }
+    if (closed || gen !== selectGen) return
     client?.detach()
     // A guest never hears the machine's broadcasts, only what the machine addresses to it (lib/hub.ts).
     client = attachHubClient(ws, machineId, 'web', { guest: !!shared })
@@ -481,8 +494,8 @@ function attachUserClient(ws: WebSocket, user: AuthUser, surface: 'mobile' | 'we
       }
     }
     if (type === 'machine_select') {
-      const machineId = (frame.payload as { machineId?: unknown } | undefined)?.machineId
-      await bindAgent(machineId)
+      const payload = frame.payload as { machineId?: unknown; offline?: unknown } | undefined
+      await bindAgent(payload?.machineId, payload?.offline === 'refuse')
       return
     }
     if (type === 'machine_deselect') {
