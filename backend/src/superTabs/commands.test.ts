@@ -972,7 +972,9 @@ it('blocks routing and starts until a finished worker is kept or stopped', () =>
     requirements: { memoryBytes: 0, diskBytes: 0, maxCpuPercent: 100, tools: [], devices: [], quotaRequired: false } }
   expect(() => f.run(route, f.leadActor)).toThrow('reuse, keep or stop')
   expect(() => f.run({ type: 'agent.start', request, ...via }, f.leadActor, { contribution: f.contribution, ...decisionIn(group) })).toThrow('reuse, keep or stop')
-  f.run({ type: 'agent.release', agentId: f.worker, decision: 'keep' }, f.leadActor)
+  f.run({ type: 'agent.release', agentId: f.worker, decision: 'keep' }, f.leadActor, { now: 5000 })
+  // A kept worker is idle from the keep, not from its task's end (tidy.ts).
+  expect(f.state.agents.find(a => a.id === f.worker)!.keptAt).toBe(5000)
   expect(f.run(route, f.leadActor).routeDecisions).toHaveLength(1)
   expect(f.run({ type: 'agent.start', request, ...via }, f.leadActor, { contribution: f.contribution, ...decisionIn(group) }).result.startId).toBeTruthy()
 })

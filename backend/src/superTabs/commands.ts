@@ -1310,6 +1310,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       if (target.workDecision === 'stop' && command.decision !== 'stop') fail('STOP_REQUESTED', 'This worker is stopping. Wait for its execution host.')
       if (command.decision === 'stop' && target.workDecision !== 'stop') target.releaseId = operationId
       target.workDecision = command.decision
+      if (command.decision === 'keep') target.keptAt = context.now
       break
     }
     case 'agent.stopLease': {

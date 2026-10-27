@@ -31,6 +31,8 @@ export interface Agent {
   roleId?: string | null
   /** A finished worker stays undecided even when its group receives a new brief. */
   workDecision?: 'awaiting' | 'keep' | 'stop'
+  /** When its Lead last decided keep: a kept worker is idle from then (tidy.ts). */
+  keptAt?: number
   releaseId?: string
   /** Captured from the original Swarm launch, never inferred from a later live session with the same id. */
   startedSession?: { creationId: string; sessionId: string; createdAt: string }
