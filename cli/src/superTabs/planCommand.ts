@@ -3,8 +3,8 @@
  * decision; the Lead routes each group and passes the plan's pick as the override. The solver is Python with OR-Tools on the
  * Lead's machine; without either the command says how to install it, and the route works as before. */
 import { spawn } from 'node:child_process'
-import { createHash } from 'node:crypto'
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { createHash, randomUUID } from 'node:crypto'
+import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { delimiter, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { parsePlanRequest, planSetup } from './planInput.js'
@@ -30,15 +30,27 @@ export function schedulerFiles(): Record<string, string> {
   return Object.fromEntries(readdirSync(dir).filter(f => f.endsWith('.py')).sort().map(f => [f, readFileSync(join(dir, f), 'utf8')]))
 }
 
+/** Puts the package at [root] only whole: two Leads' CLIs may plan at once, and one that stops while writing must not leave
+ *  a package the other runs half of. The files go to a folder of this process's own, which is renamed into place in one step;
+ *  a folder missing any file is replaced. */
+function writeWhole(root: string, files: Record<string, string>): void {
+  if (Object.keys(files).every(name => existsSync(join(root, 'scheduler', name)))) return
+  const draft = `${root}.${process.pid}.${randomUUID()}`
+  mkdirSync(join(draft, 'scheduler'), { recursive: true })
+  for (const [name, text] of Object.entries(files)) writeFileSync(join(draft, 'scheduler', name), text)
+  rmSync(root, { recursive: true, force: true })
+  try { renameSync(draft, root) } catch {
+    // Another process put its whole copy in place first; this one is the same files.
+    rmSync(draft, { recursive: true, force: true })
+  }
+}
+
 /** Runs `python -m scheduler plan` on [instance], with the package written once per version under the data folder. */
 export async function runSolver(instance: Json, options: { dataDir: string; python?: string; pythonPath?: string[] }): ReturnType<SolverRun> {
   const files = schedulerFiles()
   const version = createHash('sha256').update(JSON.stringify(files)).digest('hex').slice(0, 16)
-  const root = join(options.dataDir, 'scheduler', version), pkg = join(root, 'scheduler')
-  if (!existsSync(join(pkg, '__main__.py'))) {
-    mkdirSync(pkg, { recursive: true })
-    for (const [name, text] of Object.entries(files)) writeFileSync(join(pkg, name), text)
-  }
+  const root = join(options.dataDir, 'scheduler', version)
+  writeWhole(root, files)
   const python = options.python ?? 'python3'
   return new Promise(resolve => {
     const child = spawn(python, ['-m', 'scheduler', 'plan', '--time-limit', String(TIME_LIMIT_SECONDS)], {

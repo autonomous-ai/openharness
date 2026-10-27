@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process'
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -104,6 +104,17 @@ describe('runSolver', () => {
   it('says when Python is not installed', async () => {
     expect(await runSolver(instance, { dataDir: temp(), python: join(temp(), 'no-python3') }))
       .toEqual({ error: 'PYTHON_MISSING', detail: expect.stringContaining('Python 3 is not installed') })
+  })
+
+  it('never trusts a solver folder another plan left half-written, and leaves only whole ones', async () => {
+    const dataDir = temp(), python = process.platform === 'win32' ? 'cmd' : 'false'
+    await runSolver(instance, { dataDir, python })
+    const [version] = readdirSync(join(dataDir, 'scheduler')), pkg = join(dataDir, 'scheduler', version!, 'scheduler')
+    // Another CLI process stopped while writing: the package has its entry point but not the solver.
+    rmSync(join(pkg, 'solver.py'))
+    await Promise.all([runSolver(instance, { dataDir, python }), runSolver(instance, { dataDir, python })])
+    expect(readdirSync(pkg).sort()).toEqual(Object.keys(schedulerFiles()).sort())
+    expect(readdirSync(join(dataDir, 'scheduler'))).toEqual([version])
   })
 
   it('says when the solver stops without a plan', async () => {
