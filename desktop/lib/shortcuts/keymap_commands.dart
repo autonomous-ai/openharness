@@ -1,6 +1,7 @@
 import 'package:flutter/foundation.dart';
 
 import '../logging/debug_surface.dart';
+import '../super_tabs/pm_chat.dart' show kChatWithPm;
 import 'app_shortcuts.dart';
 import 'keymap.dart';
 import 'keymap_keyboard.dart';
@@ -218,6 +219,15 @@ final harnessCommands = <HarnessCommand>[
     ShortcutGroup.navigate,
     action: ShortcutAction.showAttention,
     nativeAction: 'notifications',
+  ),
+  // The current project's Chat with PM, in a Swarm tab. K for "talk": free on
+  // every platform (Alt+Shift+K on Linux, the web and Windows).
+  const HarnessCommand(
+    'swarm.chat_with_pm',
+    kChatWithPm,
+    ShortcutGroup.navigate,
+    extraKeys: ['cmd+shift+k'],
+    keywords: ['product manager', 'PM', 'Swarm'],
   ),
   for (var i = 1; i <= 9; i++)
     HarnessCommand(

@@ -14,7 +14,9 @@ import 'controller.dart';
 import 'local_models.dart';
 import 'machines.dart';
 import 'model.dart';
+import 'pm_chat_rows.dart';
 import 'section_heading.dart';
+import 'workgroup_name.dart';
 
 class ProjectSidebar extends StatelessWidget {
   const ProjectSidebar({
@@ -30,6 +32,7 @@ class ProjectSidebar extends StatelessWidget {
     this.onNotifications,
     this.notificationsSelected = false,
     this.onOpenAgent,
+    this.onOpenPmChat,
     this.readLocal,
     this.now = DateTime.now,
   });
@@ -46,6 +49,10 @@ class ProjectSidebar extends StatelessWidget {
   final VoidCallback? onNotifications;
   final bool notificationsSelected;
   final ValueChanged<SuperTabAgent>? onOpenAgent;
+
+  /// Opens a project's Chat with PM, by project id; the controller's
+  /// [SuperTabController.openPmChat] when not given.
+  final ValueChanged<String>? onOpenPmChat;
 
   /// Forwarded to the embedded [SuperTabMachines]; a test gives it to have
   /// the Machines group's readings taken without a real machine.
@@ -118,21 +125,7 @@ class ProjectSidebar extends StatelessWidget {
               if (badge > 0)
                 Padding(
                   padding: const EdgeInsets.only(right: 10),
-                  child: Container(
-                    constraints: const BoxConstraints(minWidth: 18),
-                    padding: const EdgeInsets.symmetric(horizontal: 5),
-                    decoration: BoxDecoration(
-                      color: grid.AppPalette.warn.withValues(alpha: .16),
-                      borderRadius: BorderRadius.circular(9),
-                    ),
-                    child: Text(
-                      '$badge',
-                      textAlign: TextAlign.center,
-                      style: DesktopChrome.metadata(
-                        color: grid.AppPalette.warn,
-                      ),
-                    ),
-                  ),
+                  child: SuperTabCountBadge(badge),
                 ),
             ],
           ),
@@ -140,6 +133,17 @@ class ProjectSidebar extends StatelessWidget {
       ),
     ),
   );
+
+  /// A project reads as a channel: "# openharness".
+  Widget _channelMark() => Text(
+    '#',
+    textAlign: TextAlign.center,
+    style: DesktopChrome.control(color: DesktopChrome.muted, medium: true),
+  );
+
+  void _openPmChat(String projectId) => onOpenPmChat != null
+      ? onOpenPmChat!(projectId)
+      : unawaited(controller.openPmChat(projectId));
 
   /// Project names open their PM chat; only the trailing control expands them.
   Widget _row(
@@ -159,9 +163,21 @@ class ProjectSidebar extends StatelessWidget {
             (g) => g.projectId == project.id && !g.closed,
           );
     final waiting = groups.any((g) => needsHuman(g) > 0);
-    final unread = groups.any(controller.unread);
+    // A project's PM chat shows its own count rather than the dot.
+    final pmChat = project == null ? null : controller.pmChat(project.id);
+    final projectPmUnread = pmChat == null ? 0 : controller.unreadCount(pmChat);
+    final unread = groups.any(
+      (g) =>
+          controller.unread(g) && (projectPmUnread == 0 || g.id != pmChat?.id),
+    );
     final expanded =
         project != null && controller.expandedProjects.contains(project.id);
+    final style = DesktopChrome.control(
+      medium: unread || selected,
+      color: selected || unread || project != null || label != null
+          ? DesktopChrome.foreground
+          : DesktopChrome.muted,
+    );
     return Padding(
       padding: const EdgeInsets.only(bottom: 2),
       child: Material(
@@ -179,11 +195,12 @@ class ProjectSidebar extends StatelessWidget {
               SizedBox(width: SuperTabSectionHeading.indentFor(0)),
               SizedBox(
                 width: _iconColumn,
-                child: project == null && icon == null
+                child: project != null
+                    ? _channelMark()
+                    : icon == null
                     ? null
                     : Icon(
-                        icon ??
-                            (expanded ? AppIcons.folderOpen : AppIcons.folder),
+                        icon,
                         size: AppIcons.inlineSize,
                         color: DesktopChrome.muted,
                       ),
@@ -193,7 +210,10 @@ class ProjectSidebar extends StatelessWidget {
                   label: project?.isPrivate == true ? 'Private project' : null,
                   selected: selected,
                   child: Tooltip(
-                    message: label ?? project?.name ?? group.label,
+                    message:
+                        label ??
+                        project?.name ??
+                        SuperTabWorkgroupName.plain(group),
                     child: ConstrainedBox(
                       constraints: const BoxConstraints(minHeight: 36),
                       child: Padding(
@@ -201,21 +221,14 @@ class ProjectSidebar extends StatelessWidget {
                         child: Row(
                           children: [
                             Expanded(
-                              child: Text(
-                                label ?? project?.name ?? group.label,
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: DesktopChrome.control(
-                                  medium: unread || selected,
-                                  color:
-                                      selected ||
-                                          unread ||
-                                          project != null ||
-                                          label != null
-                                      ? DesktopChrome.foreground
-                                      : DesktopChrome.muted,
-                                ),
-                              ),
+                              child: label == null && project == null
+                                  ? SuperTabWorkgroupName(group, style: style)
+                                  : Text(
+                                      label ?? project!.name,
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: style,
+                                    ),
                             ),
                             if (project?.isPrivate == true) ...[
                               const SizedBox(width: 8),
@@ -235,6 +248,15 @@ class ProjectSidebar extends StatelessWidget {
                   ),
                 ),
               ),
+              if (projectPmUnread > 0)
+                Padding(
+                  padding: const EdgeInsets.only(left: 4),
+                  child: SuperTabPmUnread(
+                    projectPmUnread,
+                    key: ValueKey('super-project-pm-unread-${project!.id}'),
+                    onTap: () => _openPmChat(project.id),
+                  ),
+                ),
               SizedBox(
                 width: _iconColumn,
                 child: Center(
@@ -371,22 +393,38 @@ class ProjectSidebar extends StatelessWidget {
     ];
   }
 
-  /// The signed-in person's private chat with the project's Product Manager,
-  /// above its workgroups; the first click opens it.
-  Widget? _pmChat(SuperTabProject project) {
-    const label = 'Chat with PM';
-    final key = 'super-pm-chat-${project.id}';
-    if (controller.pmChat(project.id) case final chat?) {
-      return _row(chat, label: label, icon: AppIcons.messageSquare, key: key);
-    }
-    if (!controller.canWrite) return null;
-    return _navigationRow(
-      key: key,
-      label: label,
-      icon: AppIcons.messageSquare,
-      onTap: controller.saving || controller.hasPendingAction
+  /// The signed-in person's private chat with each project's Product
+  /// Manager, as direct messages pinned above the projects so a collapsed
+  /// project never hides them; the first click opens one.
+  List<Widget> _pmChats(List<SuperTabProject> projects) => [
+    for (final project in projects)
+      ?_pmChat(project, named: projects.length > 1),
+  ];
+
+  Widget? _pmChat(SuperTabProject project, {required bool named}) {
+    final snapshot = controller.snapshot!;
+    final pmId = snapshot.conversation(project.leadConversationId)?.leadId;
+    final chat = controller.pmChat(project.id);
+    if (chat == null && !controller.canWrite) return null;
+    return SuperTabPmChatRow(
+      key: ValueKey('super-pm-chat-${project.id}'),
+      agentId: pmId,
+      name: pmId == null
+          ? 'Product Manager'
+          : snapshot.agentName(pmId, fallback: 'Product Manager'),
+      project: named ? project.name : null,
+      selected:
+          chat != null &&
+          !devicesSelected &&
+          !notificationsSelected &&
+          controller.selectedId == chat.id,
+      unread: chat != null && controller.unread(chat),
+      unreadCount: chat == null ? 0 : controller.unreadCount(chat),
+      onTap: chat != null
+          ? () => onSelect(chat.id)
+          : controller.saving || controller.hasPendingAction
           ? null
-          : () => unawaited(controller.openPmChat(project.id)),
+          : () => _openPmChat(project.id),
     );
   }
 
@@ -423,11 +461,21 @@ class ProjectSidebar extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final snapshot = controller.snapshot;
+    final pmChats = _pmChats(snapshot?.projects ?? const []);
     return Material(
       color: DesktopChrome.surface,
       child: ListView(
         padding: const EdgeInsets.all(8),
         children: [
+          if (pmChats.isNotEmpty) ...[
+            SuperTabSectionHeading(
+              'Direct messages',
+              endInset: 0,
+              startInset: SuperTabSectionHeading.indentFor(0),
+            ),
+            ...pmChats,
+            const SizedBox(height: 16),
+          ],
           if (onNewProject != null)
             _navigationRow(
               key: 'super-new-project',
@@ -494,7 +542,6 @@ class ProjectSidebar extends StatelessWidget {
                   children: [
                     _row(lead, project: project),
                     if (controller.expandedProjects.contains(project.id)) ...[
-                      ?_pmChat(project),
                       ..._workgroups(project),
                       ..._closed(project),
                     ],

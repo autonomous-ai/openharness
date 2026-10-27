@@ -98,11 +98,16 @@ no CLI keeps its maker's name (Fo).
 A pane is a view, so closing a pane or tab closes views. **Stop Harness** ends the
 running harness. Adding harnesses to a tab groups them without a separate team
 setup. A **Swarm** occupies one tab in that same tab bar. A person can belong to several Swarms.
-Its sidebar starts with **New project** and **Your devices**. Projects and Machines have
-section headings with disclosure after the label and an add action at the right. Project rows
-show their project icon at the left, then their name, status and a right-hand disclosure.
-Project names open their product manager chats; disclosure reveals workgroups whose names
-align with the project name. An expanded project without workgroups says **No workgroups yet**.
+Its sidebar reads like a chat app's. It starts with **Direct messages**: the person's
+**Chat with PM** for each project, listed by the product manager's name and avatar, with the
+project's name in grey when the Swarm has several and a count of new messages. Hovering says
+**Chat with PM**, and ⇧⌘K opens the current project's. **New project** and **Your devices**
+follow. Projects and Machines have section headings with disclosure after the label and an add
+action at the right. Project rows read as channels: **#** at the left, then their name, status
+and a right-hand disclosure. Project names open their product manager chats; disclosure reveals
+workgroups, shown by their number in grey with no **#** and then their title
+(`12  Offline editing`), aligned with the project name. An expanded project without workgroups
+says **No workgroups yet**.
 **Your devices** opens the Devices dashboard and its existing agent conversation inside the
 current Swarm, preserving project drafts and the selected workgroup. Ordinary tabs retain
 their standalone Devices workspace. The navigation, conversation and people panes have
@@ -117,7 +122,8 @@ tags retain their full text on hover. Reuse observed status and assignment data;
 activity summaries or infer a work timer from the session's age. Engine names belong in details.
 Chat headings and quoted replies use the same current agent identity as the roster, including
 older messages. When an agent has left, its recorded author name remains available in history.
-Machine rows show a computer icon, name, owner avatar, status and right-hand disclosure.
+Machine rows show **~** at the left, then the name the person gave the machine (else the
+Swarm's name for it), owner avatar, status and right-hand disclosure.
 In the Swarm's views, a Mac and its Harness Team account are one row, and agents in that account
 read as on the Mac. App-wide machine lists still show the team account as its own machine.
 When teammates' agents cannot run on a machine, its row adds one line, such as

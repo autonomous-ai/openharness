@@ -9,6 +9,7 @@ import '../widgets/desktop_chrome.dart';
 import 'controller.dart';
 import 'machine_status.dart' show superTabAgo;
 import 'model.dart';
+import 'pm_chat.dart';
 import 'section_heading.dart';
 
 /// A Lead's tag of the reader in one message (spec 2026-10-24-lead-mentions.md).
@@ -230,7 +231,7 @@ class _SuperTabNotificationsState extends State<SuperTabNotifications> {
     final place =
         widget.mentions.controller.pmChat(mention.projectId)?.id ==
             mention.conversationId
-        ? 'Chat with PM'
+        ? kChatWithPm
         : mention.conversationTitle;
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 1),

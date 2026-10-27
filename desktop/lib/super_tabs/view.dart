@@ -20,6 +20,8 @@ import 'pull_requests.dart';
 import 'controller.dart';
 import 'dialog_scope.dart';
 import 'model.dart';
+import 'pm_chat.dart';
+import 'workgroup_name.dart';
 import 'message_row.dart';
 import 'message_receipt.dart';
 import 'notifications.dart';
@@ -136,6 +138,7 @@ class _SuperTabViewState extends State<SuperTabView>
     WidgetsBinding.instance.addObserver(this);
     _composer.addListener(_composerMoved);
     c.addListener(_changed);
+    c.pmChatOpener = _openPmChat;
     _registerDial();
     _changed();
   }
@@ -163,7 +166,11 @@ class _SuperTabViewState extends State<SuperTabView>
     }
     if (oldWidget.controller != c) {
       oldWidget.controller.removeListener(_changed);
+      if (oldWidget.controller.pmChatOpener == _openPmChat) {
+        oldWidget.controller.pmChatOpener = null;
+      }
       c.addListener(_changed);
+      c.pmChatOpener = _openPmChat;
       for (final scroll in _scroll.values) {
         scroll.dispose();
       }
@@ -327,6 +334,7 @@ class _SuperTabViewState extends State<SuperTabView>
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     c.removeListener(_changed);
+    if (c.pmChatOpener == _openPmChat) c.pmChatOpener = null;
     _unregisterDial?.call();
     _dial.cancel();
     _composer.dispose();
@@ -794,7 +802,20 @@ class _SuperTabViewState extends State<SuperTabView>
       c.select(id);
       _closeSidebar();
     },
+    onOpenPmChat: (projectId) => unawaited(_openPmChat(projectId)),
   );
+
+  /// Opens [projectId]'s PM chat in front of Notifications, pull requests and
+  /// a terminal: the sidebar's way in and ⇧⌘K's ([SuperTabController.pmChatOpener]).
+  Future<bool> _openPmChat(String projectId) {
+    setState(() {
+      _showNotifications = false;
+      _showPullRequests = false;
+    });
+    widget.onCloseTerminal?.call();
+    _closeSidebar();
+    return c.openPmChat(projectId);
+  }
 
   bool get _notificationsVisible =>
       _showNotifications && !_devicesVisible && !c.accessRevoked;
@@ -904,9 +925,11 @@ class _SuperTabViewState extends State<SuperTabView>
   bool _isPmChat(SuperTabConversation group) =>
       c.pmChat(group.projectId)?.id == group.id;
 
-  /// The open conversation's name, or what the pane shows instead of one.
-  Widget _title(SuperTabConversation? group) => Text(
-    _devicesVisible
+  /// The open conversation's name, or what the pane shows instead of one. A
+  /// workgroup's is named as the sidebar names it ([SuperTabWorkgroupName]).
+  Widget _title(SuperTabConversation? group) {
+    final style = DesktopChrome.text(medium: true);
+    final name = _devicesVisible
         ? 'Your devices'
         : _notificationsVisible
         ? 'Notifications'
@@ -919,12 +942,16 @@ class _SuperTabViewState extends State<SuperTabView>
         : group.id == c.snapshot!.leadsConversationId
         ? 'Product Managers'
         : _isPmChat(group)
-        ? 'Chat with PM'
-        : group.label,
-    maxLines: 1,
-    overflow: TextOverflow.ellipsis,
-    style: DesktopChrome.text(medium: true),
-  );
+        ? kChatWithPm
+        : null;
+    if (name == null) return SuperTabWorkgroupName(group!, style: style);
+    return Text(
+      name,
+      maxLines: 1,
+      overflow: TextOverflow.ellipsis,
+      style: style,
+    );
+  }
 
   Widget _boardButton() {
     final shown = _boardRoomy && _boardOpen;

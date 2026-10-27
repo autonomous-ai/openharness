@@ -988,7 +988,11 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
           })
         : null;
     final value = direct ? sample?.$1 : observed;
+    // The name the person gave it in their own Machines list (Rename) wins
+    // over the one the Swarm recorded, often its hostname.
+    final given = app?.stateOf(id)?.machine.name;
     final name =
+        (given == null || given.isEmpty ? null : given) ??
         shared?['name'] as String? ??
         app?.stateOf(id)?.machine.displayName ??
         'Unavailable machine';
@@ -2068,12 +2072,17 @@ class _MachineLine extends StatelessWidget {
       child: Row(
         children: [
           const SizedBox(width: 4),
+          // A machine reads as a home directory, "~ Diego's Mac", beside the
+          // sidebar's "# project" channels.
           SizedBox(
             width: 32,
-            child: Icon(
-              AppIcons.monitor,
-              size: AppIcons.inlineSize,
-              color: DesktopChrome.muted,
+            child: Text(
+              '~',
+              textAlign: TextAlign.center,
+              style: DesktopChrome.control(
+                color: DesktopChrome.muted,
+                medium: true,
+              ),
             ),
           ),
           Expanded(

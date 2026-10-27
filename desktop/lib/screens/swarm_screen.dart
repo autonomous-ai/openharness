@@ -75,6 +75,8 @@ import '../state/harness_placement.dart';
 import '../state/new_harness.dart';
 import '../state/harness_launch_integration.dart';
 import '../super_tabs/launch.dart';
+import '../super_tabs/pm_chat.dart' show countText;
+import '../super_tabs/pm_chat_shortcut.dart';
 import '../super_tabs/workspace.dart';
 import '../super_tabs/actions.dart';
 import 'swarm_menu_bus.dart';
@@ -2244,7 +2246,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
                       app.questionFor(p.machineId, p.agentId!) != null,
                 )
                 .length +
-                tabMentionsWaiting(app, swarm),
+                tabWaiting(app, swarm),
             if (tabActivity(app, swarm) case final activity?)
               'activity': nativeActivityPayload(
                 activity,
@@ -7691,6 +7693,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
     for (var i = 1; i <= 9; i++)
       'pane.focus_$i': () => app.focusPaneByIndex(i - 1),
     'navigation.commands': _showSearchCommands,
+    'swarm.chat_with_pm': () => unawaited(openActivePmChat(app)),
     'agent_messages.show': () => _showAgentMessages(app.activeSwarmId),
     'agent_messages.activity': _toggleTabActivity,
     'agent_messages.make_leader': _toggleFocusedLeader,
@@ -9069,7 +9072,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
                       final swarm = shown[index];
                       final selected = app.activeSwarmId == swarm.id;
                       final activity = activities[index];
-                      final tags = tabMentionsWaiting(app, swarm);
+                      final tags = tabWaiting(app, swarm);
                       // A status cell animates only while its tab is in view.
                       Widget tabStatus(Widget Function(bool visible) mark) =>
                           ListenableBuilder(
@@ -9155,9 +9158,9 @@ class _SwarmScreenState extends State<SwarmScreen> {
                                 label: labels[index],
                                 selected: selected,
                                 tooltip: tabHint.isEmpty ? null : tabHint,
-                                activityLabel: tags > 0
-                                    ? tabMentionsLabel(tags)
-                                    : activity?.label,
+                                activityLabel:
+                                    tabWaitingLabel(app, swarm) ??
+                                    activity?.label,
                                 sharedCount: share.count,
                                 onInvitePeople: menus && share.invite
                                     ? () => unawaited(_invitePeople(swarm.id))
@@ -9187,7 +9190,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
                                     : null,
                                 activity: tags > 0
                                     ? Text(
-                                        '$tags',
+                                        countText(tags),
                                         key: ValueKey('tab-tags:${swarm.id}'),
                                         style: DesktopChrome.metadata(
                                           color: grid.AppPalette.warn,

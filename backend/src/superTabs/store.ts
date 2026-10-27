@@ -866,17 +866,16 @@ export class SuperTabStore {
       if (command.type === 'work.assign') {
         const assigned = conversation(effects.state, command.conversationId).assignment!
         const running = await tx.superTabRun.findUnique({ where: { id: assigned.agentId } })
-        if (running) fail('AGENT_BUSY', 'This agent already owns active work in a Super Tab.')
+        // A record of this Swarm's for work that has ended here is stale (endRuns): it goes, by its own assignment, and the agent
+        // is free. A record of another Swarm's, or a stopping agent's, still means busy.
+        if (running && (running.tabId !== tabId || !(await this.staleRuns(tx, tabId, original)).includes(running.assignmentId))) {
+          fail('AGENT_BUSY', 'This agent already owns active work in a Super Tab.')
+        }
+        if (running) await this.releaseRuns(tx, tabId, [running.assignmentId])
         await tx.superTabRun.create({ data: { id: assigned.agentId, tabId, assignmentId: assigned.id,
           machineId: assigned.execution.machineId, harnessId: assigned.execution.harnessId } })
       }
-      for (const group of original.conversations.filter(activeWork)) {
-        const changed = conversation(effects.state, group.id)
-        if (activeWork(changed)) continue
-        await tx.superTabRun.deleteMany({ where: { tabId, assignmentId: group.assignment!.id } })
-        await tx.superTabDelivery.updateMany({ where: { tabId, assignmentId: group.assignment!.id,
-          status: { in: ['queued', 'claimed', 'uncertain'] } }, data: { status: 'cancelled', holdReason: null, holdSince: null } })
-      }
+      await this.endRuns(tx, tabId, original, effects.state)
       const committed = await this.save(tx, loaded, effects.state, stamp, touchesFor(command, actor, original, effects, context))
       if (command.type === 'agent.add' || command.type === 'agent.started' || command.type === 'agent.configuration' || command.type === 'agent.rebind') {
         for (const target of effects.state.agents) {
@@ -1234,6 +1233,42 @@ export class SuperTabStore {
     return null
   }
 
+  /** Frees the agents of work that ended in this write, wherever it ended: a command, the liveness checks on a machine's report
+   *  or on the Lead's poll (a lost task), or a cancel of work already lost. Their run record goes, so the agent can take work
+   *  again, and whatever was still queued for that work is dropped. Until 2026-10-27 only a command that ended active work did
+   *  this, so the 16 tasks a release's update outage lost kept their agents busy for good. */
+  private async endRuns(tx: Transaction, tabId: string, before: SuperTabState, after: SuperTabState) {
+    const ended = new Set<string>()
+    for (const group of after.conversations) {
+      const now = group.assignment, was = before.conversations.find(c => c.id === group.id)?.assignment
+      if (now && !activeWork(group) && (now.id !== was?.id || now.status !== was.status)) ended.add(now.id)
+    }
+    for (const group of before.conversations.filter(activeWork)) {
+      const changed = after.conversations.find(c => c.id === group.id)
+      if (!changed || !activeWork(changed) || changed.assignment!.id !== group.assignment!.id) ended.add(group.assignment!.id)
+    }
+    await this.releaseRuns(tx, tabId, [...ended])
+  }
+
+  /** For these ended assignments of this Swarm, by their exact ids: their run records go, and their deliveries still queued,
+   *  claimed or uncertain are cancelled, so a returning worker never receives a lost task's old instructions after new work
+   *  (review of #1781). Exact ids never match the record or deliveries of an assignment made since. */
+  private async releaseRuns(tx: Transaction, tabId: string, assignmentIds: string[]) {
+    if (!assignmentIds.length) return
+    const assignmentId = { in: assignmentIds }
+    await tx.superTabRun.deleteMany({ where: { tabId, assignmentId } })
+    await tx.superTabDelivery.updateMany({ where: { tabId, assignmentId, status: { in: ['queued', 'claimed', 'uncertain'] } },
+      data: { status: 'cancelled', holdReason: null, holdSince: null } })
+  }
+
+  /** Run records an older server left in this Swarm for work that is no longer active here (see endRuns). Only this Swarm's,
+   *  whose work it can see has ended; never one of another Swarm's, nor a stopping agent's (its record is the stop's fence). */
+  private async staleRuns(tx: Transaction, tabId: string, state: SuperTabState): Promise<string[]> {
+    const active = new Set(state.conversations.filter(activeWork).map(c => c.assignment!.id))
+    const rows = await tx.superTabRun.findMany({ where: { tabId }, select: { assignmentId: true } })
+    return rows.map(r => r.assignmentId).filter(id => !id.startsWith('release-') && !active.has(id))
+  }
+
   /** Records committed messages, each at the sequence its conversation gave it, and one delivery per recipient. */
   private async writeMessages(tx: Transaction, tabId: string, state: SuperTabState, messages: MessageDraft[], sequences: ReadonlyMap<string, number>) {
     for (const message of messages) {
@@ -1426,6 +1461,7 @@ export class SuperTabStore {
       const saved = async (lost: MessageDraft[] = []) => {
         const sequences = numberMessages(state, lost, now)
         const touches = judgedMachines(state, lost).filter(t => t.key !== machineId)
+        await this.endRuns(tx, tabId, loaded.state, state)
         const version = (await this.save(tx, loaded, state, stamp, touches)).versions.get(`machine:${machineId}`) ?? 0
         await this.writeMessages(tx, tabId, state, lost, sequences)
         return { version }
@@ -1553,7 +1589,13 @@ export class SuperTabStore {
         project.digest = { ...project.digest!, lastOn: digest.source!.on as string, lastAt: this.now() }
         written.push(digest)
       }
-      // One write for all: the time checks' changes and the wake-ups'.
+      // The poll also frees agents whose task the checks just lost, and any an older server left marked running (each poll; a
+      // second finds none).
+      await this.endRuns(tx, tabId, loaded.state, state)
+      if (ledProject(state, agentId)) {
+        await this.releaseRuns(tx, tabId, await this.staleRuns(tx, tabId, state))
+      }
+      // One write for all: the time checks' changes, the digest and the wake-ups'.
       const sequences = numberMessages(state, written, this.now())
       await this.save(tx, loaded, state, clock.next(), [...judgedMachines(state, written), ...woken ? [{ kind: 'agent' as const, key: agentId }] : []])
       await this.writeMessages(tx, tabId, state, written, sequences)
