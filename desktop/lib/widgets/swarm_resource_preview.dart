@@ -59,6 +59,16 @@ const resourcePickerCommands = {
   'picker.machine_cli',
 };
 
+/// Whether the focused control is in a form the preview has open — Rename…,
+/// Share…, an API's — which takes Escape for itself before anything around it.
+bool resourcePreviewFormFocused() {
+  final context = FocusManager.instance.primaryFocus?.context;
+  return context != null &&
+      (context.findAncestorWidgetOfExactType<MachinePickerForm>() != null ||
+          context.findAncestorWidgetOfExactType<MachineSharingForm>() != null ||
+          context.findAncestorWidgetOfExactType<ApiPickerForm>() != null);
+}
+
 /// Shortcuts act on the current result without moving focus out of search.
 class SearchPreviewControls {
   bool Function(String command)? dispatch;

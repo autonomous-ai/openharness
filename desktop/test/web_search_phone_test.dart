@@ -1,6 +1,8 @@
-// The search overlay on a phone (the web below compactBelow): its Close and
-// preview buttons, its scope chips and its command rows are a finger's size
-// (audit finding S1). A wide window keeps the mouse's 32 px.
+// The search overlay on a phone (the web below compactBelow): its Clear and
+// Close buttons, its scope chips and its command rows are a finger's size
+// (audit finding S1). A wide window keeps the mouse's 32 px. A phone has no
+// Preview toggle: its preview is a page of its own
+// (web_search_drill_down_test.dart).
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -39,19 +41,19 @@ Future<void> _close(WidgetTester tester) async {
   await tester.pump(const Duration(seconds: 1));
 }
 
-const _controls = [
+const _phoneControls = [
   'search-close',
-  'search-toggle-preview',
   'search-category-Harnesses',
   'search-category-Commands',
 ];
+const _controls = [..._phoneControls, 'search-toggle-preview'];
 
 void main() {
   setUpAll(loadRealFonts);
 
   testWidgets('a phone\'s search is pressed with a finger', (tester) async {
     await _openSearch(tester, const Size(390, 844));
-    for (final key in _controls) {
+    for (final key in _phoneControls) {
       final size = tester.getSize(find.byKey(ValueKey(key)));
       expect(size.width, greaterThanOrEqualTo(44), reason: key);
       expect(size.height, greaterThanOrEqualTo(44), reason: key);
@@ -88,11 +90,7 @@ void main() {
       (w) => w is Icon || w is AppPaneIcon,
     );
     final sizes = {
-      for (final key in [
-        'search-clear-query',
-        'search-toggle-preview',
-        'search-close',
-      ])
+      for (final key in ['search-clear-query', 'search-close'])
         glyphOf(key).width,
     };
     expect(sizes, {20.0});

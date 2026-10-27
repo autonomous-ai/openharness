@@ -564,6 +564,56 @@ describe('the delivery poll of an agent with nothing waiting', () => {
 })
 
 describe('the morning digest', () => {
+  // #1772 review: every open decision counts, however many there are, and private ones never crowd out shared ones.
+  it('counts every decision waiting, past 200, and is not crowded out by newer private ones', async () => {
+    const f = await swarm()
+    const projectId = (await f.timed.read(owner, f.tab)).state.projects![0]!.id
+    await f.execute({ type: 'project.digest', projectId, time: '03:00', timeZone: 'UTC' })
+    const secret = String((await f.execute({ type: 'conversation.create', title: 'Salaries', brief: '', checks: [], audience: { personIds: [owner.sub] } } as Command)).result.conversationId)
+    const asked = (conversationId: string, count: number, from: number) => Array.from({ length: count }, (_, i) => ({ id: randomUUID(), tabId: f.tab,
+      batchId: 'batch', projectId, conversationId, assignmentId: null, personId: owner.sub, askerAgentId: f.lead, question: `Question ${i}?`,
+      options: ['Yes', 'No'], recommended: 0, unblocks: 'Work', createdAt: new Date(from + i) }))
+    const digestText = async () => {
+      f.clock.now += 24 * 60 * 60_000
+      await f.leadInbox()
+      return (await db.superTabMessage.findMany({ where: { tabId: f.tab }, orderBy: { sequence: 'desc' } })).find(m => (m.source as { kind?: string } | null)?.kind === 'digest-request')!.text
+    }
+    // One shared decision, older than 200 private ones.
+    await db.superTabDecision.createMany({ data: [...asked(f.group, 1, 1_000), ...asked(secret, 200, 5_000)] })
+    f.clock.now = 3 * 60 * 60_000 - 24 * 60 * 60_000
+    expect(await digestText()).toMatch(/\nDecisions waiting:\n- #1 Ship the parser: 1 for owner@example\.com$/)
+    await db.superTabDecision.createMany({ data: asked(f.group, 200, 10_000) })
+    expect(await digestText()).toMatch(/\nDecisions waiting:\n- #1 Ship the parser: 201 for owner@example\.com$/)
+  })
+
+  it('lists a decision still waiting in a conversation that has gone quiet', async () => {
+    const f = await swarm()
+    const projectId = (await f.timed.read(owner, f.tab)).state.projects![0]!.id
+    await f.execute({ type: 'project.digest', projectId, time: '03:00', timeZone: 'UTC' })
+    await f.execute({ type: 'decision.ask', conversationId: f.group, personId: owner.sub,
+      questions: [{ question: 'Keep the old parser?', options: ['Keep it', 'Drop it'], recommended: 1, unblocks: 'The cleanup' }] }, host, f.lead)
+    // Ordinary loads no longer read it (sweeps.ts puts quiet conversations to sleep), and it has been quiet since before the
+    // digest's day, so nothing it shipped brings it back.
+    await db.swarmGroup.updateMany({ where: { tabId: f.tab, key: f.group }, data: { dormant: true, lastActivityAt: new Date(0) } })
+    f.clock.now = 3 * 60 * 60_000 + 2 * 24 * 60 * 60_000
+    await f.leadInbox()
+    const digest = (await db.superTabMessage.findMany({ where: { tabId: f.tab } })).find(m => (m.source as { kind?: string } | null)?.kind === 'digest-request')!
+    expect(digest.text).toMatch(/\nDecisions waiting:\n- #1 Ship the parser: 1 for owner@example\.com$/)
+  })
+
+  it('lists the decisions waiting, by conversation and person, never their questions', async () => {
+    const f = await swarm()
+    const projectId = (await f.timed.read(owner, f.tab)).state.projects![0]!.id
+    await f.execute({ type: 'project.digest', projectId, time: '03:00', timeZone: 'UTC' })
+    const question = (text: string) => ({ question: text, options: ['Behind a flag', 'To everyone'], recommended: 0, unblocks: 'The release' })
+    await f.execute({ type: 'decision.ask', conversationId: f.group, personId: owner.sub, questions: [question('Secret launch plan?'), question('Price it?')] }, host, f.lead)
+    f.clock.now = 3 * 60 * 60_000
+    await f.leadInbox()
+    const digest = (await db.superTabMessage.findMany({ where: { tabId: f.tab } })).find(m => (m.source as { kind?: string } | null)?.kind === 'digest-request')!
+    expect(digest.text).toMatch(/\nDecisions waiting:\n- #1 Ship the parser: 2 for owner@example\.com$/)
+    expect(digest.text).not.toMatch(/Secret launch plan|Price it|Behind a flag/)
+  })
+
   it('is sent once when two of the Lead\'s polls run at the same moment', async () => {
     const f = await swarm()
     const projectId = (await f.timed.read(owner, f.tab)).state.projects![0]!.id

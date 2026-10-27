@@ -11,7 +11,9 @@ cd "$(dirname "$0")"
 CADGEN_VERSION="$(cat CADGEN_VERSION)"
 harness_venv .venv 3.12 3.11 3.15 || exit 1
 echo "     installing cadgen $CADGEN_VERSION (this pulls OpenCascade; a few minutes the first time)"
-harness_pip .venv "cadgen==${CADGEN_VERSION}"
+# cadgen names cadquery-ocp and build123d without versions, and cadquery-ocp 8 drops TDF_LabelSequence,
+# which cadgen's STEP loader imports: pinned to the pair Autonomous Workshop builds with.
+harness_pip .venv "cadgen==${CADGEN_VERSION}" "cadquery-ocp==7.9.3.1.1" "build123d==0.11.1"
 echo "ok   $(.venv/bin/cadgen --version 2>/dev/null || echo "cadgen $CADGEN_VERSION")"
 # The doctor's check, once here: the first load of a fresh OpenCascade is slow on macOS (every new
 # library is scanned once, minutes on a busy machine), and setup has the time a doctor or a pane has not.

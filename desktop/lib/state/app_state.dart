@@ -113,6 +113,7 @@ import '../widgets/engine_identity.dart'
     show allEngines, engineIdentity, isCloudAgentId, isTerminalEngine;
 import '../store/store_screen.dart' show openStoreAgent;
 import 'dial_status.dart';
+import 'machine_list_watch.dart';
 import 'grid_pictures.dart';
 import 'model_start_watch.dart';
 import 'harness_placement.dart';
@@ -970,11 +971,19 @@ class AppNotifier extends ChangeNotifier {
 
   bool get inForeground => foreground.value;
 
+  /// Whether the window can be seen at all: in front, or in sight behind the window that has focus
+  /// (`inactive`). A browser tab behind others, or a minimised window, cannot.
+  bool _inSight = true;
+
   /// Fed by the workspace's [AppLifecycleListener]. A null state is unknown, read as foreground.
   void appLifecycleChanged(AppLifecycleState? state) {
     if (_disposed) return;
     final wasForeground = foreground.value;
     foreground.value = state == null || state == AppLifecycleState.resumed;
+    _inSight =
+        state == null ||
+        state == AppLifecycleState.resumed ||
+        state == AppLifecycleState.inactive;
     // Every transition, not only the three the listener has callbacks for: hidden -> inactive fires
     // onShow, and a window shown again without focus must not keep telling the daemon it shows nothing.
     _announceVisibleAgents();
@@ -999,8 +1008,9 @@ class AppNotifier extends ChangeNotifier {
       }
       _refreshDeviceLogAfterReconnect();
       // ...and, hearing no machine at all, looks again for one: the person most likely just went to
-      // their computer to sign it in.
-      _rereadMachinesWhileDeaf();
+      // their computer to sign it in. The wait for the next read starts over too.
+      _deafMachineListWatch.reset();
+      unawaited(_rereadMachinesWhileDeaf());
     }
   }
 
@@ -1112,7 +1122,17 @@ class AppNotifier extends ChangeNotifier {
   Timer? _sharingDiscoveryTimer;
   // A viewer with no machine socket open hears no push at all — a machine that joins the account is
   // only found by this. See [_rereadMachinesWhileDeaf].
-  Timer? _deafMachineListTimer;
+  late final _deafMachineListWatch = MachineListWatch(
+    wanted: () => _deafReadWanted,
+    read: _rereadMachinesWhileDeaf,
+    pace: () =>
+        deafMachineListPaceForTest ??
+        (waitsForFirstComputer
+            ? firstComputerMachineListPace
+            : asleepComputers.isNotEmpty
+            ? asleepComputersMachineListPace
+            : deafMachineListPace),
+  );
   bool _sharingDiscoveryBusy = false;
   bool _sharingDiscoveryAgain = false;
   int _machineRecoveryAttempts = 0;
@@ -4733,8 +4753,27 @@ class AppNotifier extends ChangeNotifier {
   /// running `harness login` on their computer — nothing tells it that computer has joined, and the
   /// safety net above would leave the person staring at an empty list for five minutes. Only while
   /// it is deaf, so the traffic note above holds for every window that has a machine.
+  ///
+  /// Every 20 s, except under the browser's connect page and asleep band: there it backs off, soon
+  /// at first and then less often while nothing changes, and soon again on a push, a return to the
+  /// tab or the person's Retry ([MachineListWatch]). An account waiting for its first computer
+  /// ([waitsForFirstComputer]) has a person at the connect page while it installs, which can take
+  /// minutes, so it never waits long; one whose computers are all asleep ([asleepComputers]) can
+  /// wait longer.
+  static const deafMachineListPace = <Duration>[Duration(seconds: 20)];
+  static const firstComputerMachineListPace = <Duration>[
+    Duration(seconds: 4),
+    Duration(seconds: 8),
+    Duration(seconds: 10),
+  ];
+  static const asleepComputersMachineListPace = <Duration>[
+    Duration(seconds: 4),
+    Duration(seconds: 8),
+    Duration(seconds: 15),
+    Duration(seconds: 30),
+  ];
   @visibleForTesting
-  Duration deafMachineListInterval = const Duration(seconds: 20);
+  List<Duration>? deafMachineListPaceForTest;
 
   MachineState? stateOf(String machineId) => machineStates[machineId];
 
@@ -7324,8 +7363,7 @@ class AppNotifier extends ChangeNotifier {
     _daemonSupervisionTimer = null;
     _sharingDiscoveryTimer?.cancel();
     _sharingDiscoveryTimer = null;
-    _deafMachineListTimer?.cancel();
-    _deafMachineListTimer = null;
+    _deafMachineListWatch.stop();
     _groupSyncedAt.clear();
     _sharingDiscoveryBusy = false;
     _sharingDiscoveryAgain = false;
@@ -9067,6 +9105,8 @@ class AppNotifier extends ChangeNotifier {
     final revision = _authRevision;
     if (!_authWorkCurrent(revision)) return null;
     final request = ++_machineInventoryRevision;
+    // From the first read on, answered or not: a list that failed is looked for again too.
+    if (viewer != null) _deafMachineListWatch.start();
     if (localManualFixture != null) {
       _machineInventoryLoaded = true;
       notifyListeners();
@@ -9462,16 +9502,54 @@ class AppNotifier extends ChangeNotifier {
       }
       unawaited(_rereadMachinesInBackground(pushed: false));
     });
-    if (viewer != null) {
-      // Only while the tab is in front: a tab left open behind others, its machines all off,
-      // would otherwise ask every 20s for as long as the browser runs. Coming back to it asks at once.
-      _deafMachineListTimer ??= Timer.periodic(deafMachineListInterval, (_) {
-        if (foreground.value) _rereadMachinesWhileDeaf();
-      });
-    }
     notifyListeners();
     // A grant that has just arrived places what waited for it (R2).
     _placeSharedPanesSoon();
+  }
+
+  /// The inventory has answered, and answered for now: loaded, not loading,
+  /// not stale, no error. What the account HAS, independent of what is open.
+  bool get machineInventorySettled =>
+      machineInventoryLoaded &&
+      !machinesLoading &&
+      !machinesAreStale &&
+      machineListError == null;
+
+  /// A computer of the account's is connected, or on its way.
+  bool get computerConnectedOrComing => machineStates.values.any(
+    (machine) =>
+        !machine.machine.isShared &&
+        !machine.needsLink &&
+        machine.nodeOnline != false &&
+        (machine.connectionStatus == ConnectionStatus.connected ||
+            machine.connectionStatus == ConnectionStatus.connecting ||
+            machine.connectionStatus == ConnectionStatus.reconnecting),
+  );
+
+  /// What a host's connect page is for: before the machine list first
+  /// answers, and once it has, while no computer of the account's is
+  /// connected or on its way and none is only asleep ([asleepComputers]) —
+  /// every one is missing, offline or waiting to be linked.
+  bool get waitsForFirstComputer =>
+      !computerConnectedOrComing &&
+      (!machineInventoryLoaded ||
+          (machineInventorySettled && asleepComputers.isEmpty));
+
+  /// The account's own computers, all of them offline and none waiting on this
+  /// one to be linked: set up before, asleep now. Empty for an account with
+  /// none (a computer taken out of it does not count) — that one needs setting
+  /// up — and while any is connected, on its way, or waiting to be linked.
+  List<MachineState> get asleepComputers {
+    final own = [
+      for (final machine in machineStates.values)
+        if (!machine.machine.isShared &&
+            !removedMachines.containsKey(machine.machine.machineId))
+          machine,
+    ];
+    if (own.any((machine) => machine.needsLink || !machine.isOffline)) {
+      return const [];
+    }
+    return own;
   }
 
   /// Whether this viewer has no machine socket open, so no push can reach it.
@@ -9483,13 +9561,24 @@ class AppNotifier extends ChangeNotifier {
             m.connectionStatus == ConnectionStatus.connected,
       );
 
+  /// Whether the deaf watch's next tick reads: a viewer that hears nothing, in sight — a tab left
+  /// open behind others, its machines all off, would otherwise ask for as long as the browser runs;
+  /// the 5-minute safety net ([machineListSafetyNetInterval]) is the one read it still makes —
+  /// and not while recovery is the one asking (a failed or stale list, see
+  /// [_scheduleMachineRecovery]) or a reload is open, so two never read side by side.
+  bool get _deafReadWanted =>
+      _inSight &&
+      _viewerIsDeaf &&
+      _machineRecoveryTimer == null &&
+      _retryInFlight == null;
+
   /// A viewer that hears nothing re-reads the machine list: the computer the person is signing in
   /// on right now appears, and the dial that follows reads the device log for its key first.
-  void _rereadMachinesWhileDeaf() {
+  Future<void> _rereadMachinesWhileDeaf() async {
     if (_disposed || status != AppStatus.authenticated || !_viewerIsDeaf) {
       return;
     }
-    unawaited(_rereadMachinesInBackground(pushed: false));
+    await _rereadMachinesInBackground(pushed: false);
   }
 
   /// Re-read the machine list because something other than the person asked:
@@ -9500,14 +9589,9 @@ class AppNotifier extends ChangeNotifier {
   /// exactly one more follows it. A bulk rename pushes once per machine;
   /// without this each push would be its own pair of requests. A timer tick
   /// that finds a read open has nothing to add and is dropped.
-  /// Read the machine list again quietly — no loading state, the rows on
-  /// screen stay — as a missed `machines_changed` push would. For a screen
-  /// waiting on a computer this window has no connection to hear that push
-  /// through: an account with none connected yet (the browser's connect page).
-  Future<void> rereadMachines() => _rereadMachinesInBackground(pushed: false);
-
   Future<void> _rereadMachinesInBackground({required bool pushed}) async {
     if (_disposed || status != AppStatus.authenticated) return;
+    if (pushed) _deafMachineListWatch.reset();
     if (_sharingDiscoveryBusy) {
       if (pushed) _sharingDiscoveryAgain = true;
       return;
@@ -11062,7 +11146,10 @@ class AppNotifier extends ChangeNotifier {
   /// the error strip's own retry.
   Future<void>? _retryInFlight;
 
-  Future<void> retryMachines() => _retryMachines(automatic: false);
+  Future<void> retryMachines() {
+    _deafMachineListWatch.reset();
+    return _retryMachines(automatic: false);
+  }
 
   Future<void> _retryMachines({required bool automatic}) {
     if (_disposed) return Future<void>.value();
@@ -21524,7 +21611,7 @@ class AppNotifier extends ChangeNotifier {
     _disposed = true;
     _closeAttachmentSessions();
     _sharingDiscoveryTimer?.cancel();
-    _deafMachineListTimer?.cancel();
+    _deafMachineListWatch.stop();
     _stopMachineRecovery();
     if (signingIn) cliLogin.cancel();
     _closedHistory.clear();

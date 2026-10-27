@@ -996,9 +996,8 @@ describe('Super Tabs on a real Mongo replica set', () => {
     expect(await db.superTabConfiguration.count({ where: { tabId: tab } })).toBe(3)
   })
 
-  it('tells the group once, in plain words, that a claimed delivery is waiting, and only for the claim holder', async () => {
+  it('records a claimed delivery hold for the claim holder only and posts nothing in the conversation', async () => {
     const { tab, lead } = await fixture()
-    const displayName = (await store.read(owner, tab)).state.agents.find(a => a.id === lead)!.displayName!
     await run(tab, message('Please start.'))
     const delivery = (await store.deliveries(host, tab, lead))[0]!
     await expect(store.delivery(host, tab, lead, delivery.id, { type: 'hold', claimId: 'claim', reason: 'team_waiting_draft' }))
@@ -1006,48 +1005,11 @@ describe('Super Tabs on a real Mongo replica set', () => {
     await store.delivery(host, tab, lead, delivery.id, { type: 'claim', claimId: 'claim' })
     await expect(store.delivery(host, tab, lead, delivery.id, { type: 'hold', claimId: 'another', reason: 'team_waiting_draft' }))
       .rejects.toMatchObject({ code: 'CLAIM_CONFLICT' })
-    expect(await store.delivery(host, tab, lead, delivery.id, { type: 'hold', claimId: 'claim', reason: 'team_waiting_draft' })).toEqual({ noticed: true })
-    expect(await store.delivery(host, tab, lead, delivery.id, { type: 'hold', claimId: 'claim', reason: 'team_waiting_idle' })).toEqual({ noticed: false })
-    const rows = (await store.messages(owner, tab, 'lead', {})).messages
-    expect(rows).toHaveLength(2)
-    expect(rows[1]).toMatchObject({ author: { kind: 'agent', id: lead, displayName }, recipientIds: [], deliveries: [],
-      text: expect.stringContaining(`A message for ${displayName} is waiting. There is unsent text in ${displayName}'s input box.`) })
+    expect(await store.delivery(host, tab, lead, delivery.id, { type: 'hold', claimId: 'claim', reason: 'team_waiting_user' })).toEqual({ held: true })
+    expect(await db.superTabDelivery.findUnique({ where: { id: delivery.id } })).toMatchObject({ holdReason: 'team_waiting_user' })
+    expect((await store.messages(owner, tab, 'lead', {})).messages.map(m => m.text)).toEqual(['Please start.'])
     await store.delivery(host, tab, lead, delivery.id, { type: 'ack', claimId: 'claim', receipt: 'done', uncertain: false })
-    expect(await store.delivery(host, tab, lead, delivery.id, { type: 'hold', claimId: 'claim', reason: 'team_waiting_idle' })).toEqual({ noticed: false })
-    // A Lead leaves only with its project; its stored rows keep its name.
-    await run(tab, { type: 'project.delete', projectId: 'lead' })
-    expect((await db.superTabMessage.findUnique({ where: { id: rows[1]!.id } }))!.author).toMatchObject({ displayName })
-  })
-
-  it('names the machine and its owner for a question on screen and sends the notice to the Lead, once', async () => {
-    const { tab, lead } = await fixture()
-    await db.user.update({ where: { id: host.sub }, data: { name: 'Huy' } })
-    await db.machine.update({ where: { machineId: 'test-host' }, data: { name: 'MacBookPro2021' } })
-    const worker = (await run(tab, { type: 'agent.add', conversationId: 'lead', machineId: 'test-host', harnessId: randomUUID(), name: 'Release builder',
-      configuration: config, lead: false })).result.agentId as string
-    const displayName = (await store.read(owner, tab)).state.agents.find(a => a.id === worker)!.displayName!
-    await run(tab, { type: 'message.send', conversationId: 'lead', text: 'Please start.', replyTo: null, recipientIds: [worker] })
-    const delivery = (await store.deliveries(host, tab, worker))[0]!
-    await store.delivery(host, tab, worker, delivery.id, { type: 'claim', claimId: 'claim' })
-    expect(await store.delivery(host, tab, worker, delivery.id, { type: 'hold', claimId: 'claim', reason: 'team_waiting_user' })).toEqual({ noticed: true })
-    expect(await store.delivery(host, tab, worker, delivery.id, { type: 'hold', claimId: 'claim', reason: 'team_waiting_user' })).toEqual({ noticed: false })
-    const notices = (await store.messages(owner, tab, 'lead', {})).messages.filter(m => m.source?.kind === 'delivery-hold')
-    expect(notices).toHaveLength(1)
-    expect(notices[0]).toMatchObject({ author: { id: worker }, recipientIds: [lead],
-      text: expect.stringContaining(`${displayName} is on MacBookPro2021. Only Huy (owner of that machine) can answer it.`) })
-    expect(notices[0]!.text).not.toContain(owner.email)
-    // An owner with no name is left out, never replaced by an email address.
-    await db.user.update({ where: { id: host.sub }, data: { name: null } })
-    const second = await fixture()
-    const quiet = (await run(second.tab, { type: 'agent.add', conversationId: 'lead', machineId: 'test-host', harnessId: randomUUID(), name: 'Quiet builder',
-      configuration: config, lead: false })).result.agentId as string
-    await run(second.tab, { type: 'message.send', conversationId: 'lead', text: 'Please start.', replyTo: null, recipientIds: [quiet] })
-    const held = (await store.deliveries(host, second.tab, quiet))[0]!
-    await store.delivery(host, second.tab, quiet, held.id, { type: 'claim', claimId: 'claim' })
-    await store.delivery(host, second.tab, quiet, held.id, { type: 'hold', claimId: 'claim', reason: 'team_waiting_user' })
-    const text = (await store.messages(owner, second.tab, 'lead', {})).messages.find(m => m.source?.kind === 'delivery-hold')!.text
-    expect(text).toContain('is on MacBookPro2021.')
-    expect(text).not.toMatch(/Only|@/)
+    expect(await store.delivery(host, tab, lead, delivery.id, { type: 'hold', claimId: 'claim', reason: 'team_waiting_idle' })).toEqual({ held: false })
   })
 
   it('delivers a Lead\'s agent-only notice to the Lead once and shows it to no person in the project chat', async () => {
@@ -1069,7 +1031,7 @@ describe('Super Tabs on a real Mongo replica set', () => {
     // Typed through the normal claim; a hold while the input box is busy writes no row people would see.
     const claimed = await store.delivery(host, tab, lead, deliveries[0]!.id, { type: 'claim', claimId: 'claim' })
     expect(claimed.message).toMatchObject({ text: 'Harness updated your built-in swarm-lead skill.', source: { kind: 'agent-only' } })
-    expect(await store.delivery(host, tab, lead, deliveries[0]!.id, { type: 'hold', claimId: 'claim', reason: 'team_waiting_draft' })).toEqual({ noticed: false })
+    expect(await store.delivery(host, tab, lead, deliveries[0]!.id, { type: 'hold', claimId: 'claim', reason: 'team_waiting_draft' })).toEqual({ held: false })
     expect((await store.messages(owner, tab, 'lead', {})).messages).toEqual([])
   })
 
@@ -1141,7 +1103,7 @@ describe('Super Tabs on a real Mongo replica set', () => {
     expect((await store.messages(owner, tab, 'lead', {})).messages).toEqual([])
   })
 
-  it('stores the current delivery hold and its first time even after the compatibility notice exists', async () => {
+  it('stores the current delivery hold and its first time without a conversation notice', async () => {
     const { tab, lead } = await fixture()
     let now = Date.now()
     const timed = new SuperTabStore(db, () => now)
@@ -1153,10 +1115,8 @@ describe('Super Tabs on a real Mongo replica set', () => {
       await timed.delivery(host, tab, lead, delivery.id, { type: 'hold', claimId: 'claim', reason })
       expect(await db.superTabDelivery.findUnique({ where: { id: delivery.id } })).toMatchObject({ holdReason: reason, holdSince: since })
       const rows = (await timed.messages(owner, tab, 'lead', {})).messages
-      expect(rows).toHaveLength(2)
+      expect(rows).toHaveLength(1)
       expect(rows[0]!.deliveries[0]).toMatchObject({ holdReason: reason, holdSince: since })
-      expect(rows[1]).toMatchObject({ source: { kind: 'delivery-hold', messageId: delivery.messageId, deliveryId: delivery.id, agentId: lead },
-        text: expect.stringContaining('It stays queued and goes in by itself') })
       now += 5000
     }
   })
