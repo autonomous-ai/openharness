@@ -251,6 +251,89 @@ describe('Super Tab native delivery handoff', () => {
     expect(vi.mocked(t.core.turns.deliver).mock.calls[0]?.[1]).toContain('Leads coordinate: assign multi-part or 15+ minute work to Swarm agent groups; do only answers, lookups and work under 15 minutes yourself; your subagents only read/look up.')
   })
 
+  describe('the replied-to message', () => {
+    const earlier = (fields: Record<string, unknown> = {}) => ({ id: 'question-2', tabId: 'tab', conversationId: 'lead', sequence: 7,
+      author: { kind: 'agent', id: 'lead-agent', name: 'Lead', displayName: 'River' }, source: null,
+      text: 'Plan B: ship the reply quote, then the cleanup.', attachments: [{ id: 'f1', name: 'plan.md', mime: 'text/markdown', size: 9, url: 'https://files/plan.md' }],
+      replyTo: null, recipientIds: [], mentions: [], createdAt: '2026-10-27T08:07:27.418Z', deliveries: [], ...fields })
+    /** The conversation's one-message read answers with `read`; every other call keeps the setup's answer. */
+    const serve = (t: ReturnType<typeof setup>, read: () => unknown) => {
+      const original = vi.mocked(t.call).getMockImplementation()!
+      const reads: string[] = []
+      vi.mocked(t.call).mockImplementation(async (method, path, body) => {
+        if (method === 'GET' && path.includes('/messages?')) { reads.push(path); return { status: 200, body: { success: true, data: read() } } }
+        return original(method, path, body)
+      })
+      return reads
+    }
+    const delivered = (t: ReturnType<typeof setup>) => String(vi.mocked(t.core.turns.deliver).mock.calls[0]?.[1])
+
+    it('quotes it, as this agent may read it in that conversation, before the answer', async () => {
+      const t = setup({ replyTo: 'question-2', text: 'GO' })
+      const reads = serve(t, () => ({ messages: [earlier()], next: null }))
+      await t.open().tick()
+      expect(reads).toEqual(['/api/super-tabs/tab/conversations/lead/messages?asAgentId=agent&messageId=question-2'])
+      expect(delivered(t)).toContain('Replying to Lead (2026-10-27 08:07 UTC): Plan B: ship the reply quote, then the cleanup.\n'
+        + 'Its attachments: plan.md\n\nMessage message from Collaborator:\nGO')
+      expect(delivered(t)).not.toContain('Read it before interpreting the answer')
+    })
+    it('cuts a long one at 600 characters and says how to read the rest', async () => {
+      const t = setup({ replyTo: 'question-2', text: 'GO' })
+      serve(t, () => ({ messages: [earlier({ text: `${'a'.repeat(600)}THE-END`, attachments: null })], next: null }))
+      await t.open().tick()
+      expect(delivered(t)).toContain(`Replying to Lead (2026-10-27 08:07 UTC): ${'a'.repeat(600)}… (cut; read it all: `)
+      expect(delivered(t)).toContain(`message 'lead' 'question-2')\n\nMessage message from Collaborator:\nGO`)
+      expect(delivered(t)).not.toContain('THE-END')
+    })
+    it('falls back to the command when the read fails, and reads again for the next try', async () => {
+      const t = setup({ replyTo: 'question-2', text: 'GO' })
+      let fail = true
+      const reads = serve(t, () => { if (fail) throw new Error('backend down'); return { messages: [earlier()], next: null } })
+      const host = t.open()
+      await host.tick()
+      expect(delivered(t)).toContain(`In reply to message question-2. Read it before interpreting the answer: `)
+      expect(delivered(t)).not.toContain('Replying to')
+      fail = false
+      t.event('rejected', 'team_waiting_busy')
+      await host.tick()
+      expect(reads).toHaveLength(2)
+      expect(String(vi.mocked(t.core.turns.deliver).mock.calls[1]?.[1])).toContain('Replying to Lead')
+    })
+    it('reads it once per delivery while the terminal holds the input', async () => {
+      const t = setup({ replyTo: 'question-2', text: 'GO' })
+      const reads = serve(t, () => ({ messages: [earlier()], next: null }))
+      const host = t.open()
+      await host.tick()
+      t.event('rejected', 'team_waiting_busy')
+      await host.tick()
+      expect(t.core.turns.deliver).toHaveBeenCalledTimes(2)
+      expect(reads).toHaveLength(1)
+      expect(String(vi.mocked(t.core.turns.deliver).mock.calls[1]?.[1])).toContain('Replying to Lead')
+    })
+    it.each([
+      ['the server does not show it to this agent', { messages: [], next: null }],
+      ['it is another agent\'s private notice', { messages: [earlier({ source: { kind: 'agent-only' }, recipientIds: ['someone-else'] })], next: null }],
+      ['it belongs to another conversation', { messages: [earlier({ conversationId: 'elsewhere' })], next: null }],
+      ['it is another message', { messages: [earlier({ id: 'question-3' })], next: null }],
+    ])('never quotes it when %s', async (_case, page) => {
+      const t = setup({ replyTo: 'question-2', text: 'GO' })
+      serve(t, () => page)
+      await t.open().tick()
+      expect(delivered(t)).not.toContain('Replying to')
+      expect(delivered(t)).not.toContain('Plan B')
+      expect(delivered(t)).toContain('In reply to message question-2. Read it before interpreting the answer: ')
+    })
+    it('reads nothing for a message that replies to nothing, or for an agent-only notice', async () => {
+      for (const fields of [{}, { replyTo: 'question-2', source: { kind: 'agent-only' } }]) {
+        const t = setup(fields)
+        const reads = serve(t, () => ({ messages: [earlier()], next: null }))
+        await t.open().tick()
+        expect(reads).toEqual([])
+        expect(delivered(t)).not.toContain('Replying to')
+      }
+    })
+  })
+
   it('types only the notice for an agent-only delivery, with no invitation to reply in the conversation', async () => {
     const t = setup({ text: 'Harness updated your built-in swarm-lead skill.', source: { kind: 'agent-only' } })
     await t.open().tick()
