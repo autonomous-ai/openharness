@@ -1,0 +1,531 @@
+import 'dart:async';
+
+import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:lucide_icons_flutter/lucide_icons.dart';
+import 'package:url_launcher/url_launcher.dart';
+
+import 'package:harness_mobile/phone/tty.dart';
+import 'package:harness_mobile/phone/tty_controls.dart';
+import 'package:harness_mobile/shared/theme/app_theme.dart';
+
+import 'model.dart';
+
+/// The host the backend serves message files from: a link anywhere else is
+/// not opened (the desktop's `attachmentLink`).
+const swarmAttachmentHost = String.fromEnvironment(
+  'SUPER_TAB_ATTACHMENTS_HOST',
+  defaultValue: 'cdn.harness.autonomous.ai',
+);
+
+/// [url] as a link to open, or null unless it is https on
+/// [swarmAttachmentHost]: a message's url is whatever its sender's row says.
+Uri? swarmAttachmentLink(String url) {
+  final link = Uri.tryParse(url);
+  return link != null &&
+          link.scheme == 'https' &&
+          link.host == swarmAttachmentHost
+      ? link
+      : null;
+}
+
+/// The chat's prose in the app's own face, as prototype v2 draws it: the
+/// messages, quotes, names and the field. Times, roles and day dividers stay
+/// in the terminal's.
+TextStyle swarmChatText(
+  double size, {
+  Color? color,
+  FontWeight weight = FontWeight.w400,
+  double height = 1.35,
+}) => TextStyle(
+  fontSize: size,
+  height: height,
+  color: color ?? AppPalette.textPrimary,
+  fontWeight: weight,
+);
+
+/// The hairline around the chat's cards, picker and field.
+Color swarmChatHair(Tty tty) => tty.text.withValues(alpha: 0.12);
+
+/// The ground of a card in the chat: a decision, the picker, a file.
+Color swarmChatCard(Tty tty) =>
+    Color.alphaBlend(tty.text.withValues(alpha: 0.05), tty.ground);
+
+/// [text] with each @mention of one of [names] marked, as the desktop and
+/// the prototype mark them.
+TextSpan swarmMentionSpan(String text, List<String> names, TextStyle style) {
+  if (names.isEmpty || !text.contains('@')) {
+    return TextSpan(text: text, style: style);
+  }
+  // Longest first, so "@Nova2" is not read as "@Nova".
+  final sorted = [...names]..sort((a, b) => b.length.compareTo(a.length));
+  final pattern = RegExp(
+    '(?<![\\w@])@(?:${sorted.map(RegExp.escape).join('|')})(?![\\w])',
+    caseSensitive: false,
+  );
+  final spans = <InlineSpan>[];
+  var at = 0;
+  for (final match in pattern.allMatches(text)) {
+    if (match.start > at) {
+      spans.add(TextSpan(text: text.substring(at, match.start)));
+    }
+    spans.add(
+      TextSpan(
+        text: match[0],
+        style: TextStyle(
+          color: AppPalette.accentOnSurface,
+          backgroundColor: AppPalette.accentOnSurface.withValues(alpha: 0.13),
+          fontWeight: FontWeight.w500,
+        ),
+      ),
+    );
+    at = match.end;
+  }
+  if (at < text.length) spans.add(TextSpan(text: text.substring(at)));
+  return TextSpan(style: style, children: spans);
+}
+
+/// A message's frame: avatar, then who wrote it, their role and [trailing]
+/// (its time) — none of it for a follow-up — then [body].
+class SwarmMessageFrame extends StatelessWidget {
+  const SwarmMessageFrame({
+    super.key,
+    required this.avatar,
+    required this.grouped,
+    required this.header,
+    required this.body,
+  });
+
+  final Widget avatar;
+  final bool grouped;
+  final Widget header;
+  final List<Widget> body;
+
+  @override
+  Widget build(BuildContext context) => Row(
+    crossAxisAlignment: CrossAxisAlignment.start,
+    children: [
+      grouped ? const SizedBox(width: SwarmChatAvatar.size) : avatar,
+      const SizedBox(width: 10),
+      Expanded(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [if (!grouped) header, ...body],
+        ),
+      ),
+    ],
+  );
+}
+
+/// One message: avatar, who wrote it, their role and when — none of it for a
+/// follow-up — then what it answers, its text and its files. A tap opens
+/// its actions; lit for a moment when a quote leads to it.
+class SwarmMessageRow extends StatelessWidget {
+  const SwarmMessageRow({
+    super.key,
+    required this.message,
+    required this.name,
+    required this.role,
+    required this.names,
+    required this.grouped,
+    required this.lit,
+    required this.quote,
+    required this.actions,
+    required this.onTap,
+    required this.onReply,
+  });
+
+  final SuperTabMessage message;
+  final String name;
+  final String? role;
+
+  /// The names an @mention in it is marked for.
+  final List<String> names;
+  final bool grouped, lit, actions;
+  final Widget? quote;
+  final VoidCallback onTap;
+
+  /// Null where the person cannot post.
+  final VoidCallback? onReply;
+
+  @override
+  Widget build(BuildContext context) {
+    final tty = Tty.of(context);
+    final at = message.createdAt?.toLocal();
+    String two(int n) => n.toString().padLeft(2, '0');
+    return AnimatedContainer(
+      key: ValueKey('swarm-message-${message.id}'),
+      duration: const Duration(milliseconds: 600),
+      curve: Curves.easeOut,
+      padding: EdgeInsets.fromLTRB(6, grouped ? 0 : 7, 6, 7),
+      decoration: BoxDecoration(
+        color: lit
+            ? AppPalette.accentOnSurface.withValues(alpha: 0.16)
+            : Colors.transparent,
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: SwarmMessageFrame(
+        grouped: grouped,
+        avatar: SwarmChatAvatar(
+          name: name,
+          id: message.authorId,
+          agent: message.fromAgent,
+          pm: role == 'PM',
+        ),
+        header: SwarmMessageHeader(
+          name: name,
+          agent: message.fromAgent,
+          role: role,
+          trailing: at == null
+              ? null
+              : Text(
+                  '${two(at.hour)}:${two(at.minute)}',
+                  style: tty.style(color: AppPalette.textFaint, size: 12.5),
+                ),
+        ),
+        body: [
+          if (lit) SizedBox(key: ValueKey('swarm-lit-${message.id}')),
+          ?quote,
+          if (message.text.isNotEmpty)
+            Semantics(
+              button: true,
+              hint: 'Reply to this message',
+              child: GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onTap: onTap,
+                child: Padding(
+                  padding: const EdgeInsets.only(top: 2),
+                  child: SizedBox(
+                    width: double.infinity,
+                    child: Text.rich(
+                      swarmMentionSpan(
+                        message.text,
+                        names,
+                        swarmChatText(16, height: 1.42),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          for (final file in message.attachments)
+            SwarmFileChip(file: file, link: swarmAttachmentLink(file.url)),
+          if (actions)
+            Padding(
+              padding: const EdgeInsets.only(top: 8),
+              child: Wrap(
+                spacing: 6,
+                runSpacing: 6,
+                children: [
+                  if (onReply case final reply?)
+                    SwarmSmallButton(
+                      key: ValueKey('swarm-reply-${message.id}'),
+                      icon: LucideIcons.reply,
+                      label: 'Reply',
+                      onTap: reply,
+                    ),
+                  SwarmSmallButton(
+                    icon: LucideIcons.copy,
+                    label: 'Copy',
+                    onTap: () => unawaited(
+                      Clipboard.setData(ClipboardData(text: message.text)),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+/// A message's first line: who, in what role, then [trailing] — its time,
+/// or how its post is going.
+class SwarmMessageHeader extends StatelessWidget {
+  const SwarmMessageHeader({
+    super.key,
+    required this.name,
+    required this.agent,
+    this.role,
+    this.trailing,
+  });
+
+  final String name;
+  final bool agent;
+  final String? role;
+  final Widget? trailing;
+
+  @override
+  Widget build(BuildContext context) {
+    final tty = Tty.of(context);
+    return Wrap(
+      spacing: 6,
+      crossAxisAlignment: WrapCrossAlignment.center,
+      children: [
+        Text(
+          name,
+          style: swarmChatText(
+            13.5,
+            color: agent ? tty.cyan : tty.green,
+            weight: FontWeight.w600,
+          ),
+        ),
+        if (role case final role?) SwarmRoleBadge(role),
+        ?trailing,
+      ],
+    );
+  }
+}
+
+/// A role's compact badge: PM, Dev, Rev.
+class SwarmRoleBadge extends StatelessWidget {
+  const SwarmRoleBadge(this.label, {super.key});
+
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    final tty = Tty.of(context);
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 4),
+      decoration: BoxDecoration(
+        border: Border.all(color: swarmChatHair(tty)),
+        borderRadius: BorderRadius.circular(4),
+      ),
+      child: Text(
+        label,
+        style: tty
+            .style(
+              color: AppPalette.textSecondary,
+              weight: FontWeight.w600,
+              size: 11,
+            )
+            .copyWith(height: 16 / 11, letterSpacing: 0.44),
+      ),
+    );
+  }
+}
+
+/// Who wrote a message, in a circle: an agent's initial on its own deep
+/// colour — blue for a Product Manager, as the prototype has River — the
+/// person's on theirs, white on each.
+class SwarmChatAvatar extends StatelessWidget {
+  const SwarmChatAvatar({
+    super.key,
+    required this.name,
+    required this.id,
+    required this.agent,
+    this.pm = false,
+  });
+
+  static const double size = 32;
+
+  /// Deep enough under a white initial in either theme.
+  static const _agents = [
+    Color(0xFF1D5BD6),
+    Color(0xFF0F766E),
+    Color(0xFF6D28D9),
+    Color(0xFFA65A08),
+    Color(0xFFBE123C),
+    Color(0xFF15803D),
+    Color(0xFF4E5D78),
+  ];
+  static const _person = Color(0xFF4B5F9B);
+
+  final String name, id;
+  final bool agent;
+
+  /// A project's Product Manager: the prototype's blue, kept for them alone.
+  final bool pm;
+
+  @override
+  Widget build(BuildContext context) {
+    final fill = !agent
+        ? _person
+        : pm
+        ? _agents.first
+        : _agents[1 +
+              id.codeUnits.fold(0, (a, b) => a + b) % (_agents.length - 1)];
+    final initial = name.trim().isEmpty
+        ? '?'
+        : name.trim().characters.first.toUpperCase();
+    return Container(
+      width: size,
+      height: size,
+      alignment: Alignment.center,
+      decoration: BoxDecoration(color: fill, shape: BoxShape.circle),
+      child: Text(
+        initial,
+        style: swarmChatText(
+          13.5,
+          color: Colors.white,
+          weight: FontWeight.w600,
+        ),
+      ),
+    );
+  }
+}
+
+/// What a reply answers: its author and the start of its text, or that it
+/// is not loaded. A tap leads to it.
+class SwarmQuote extends StatelessWidget {
+  const SwarmQuote({super.key, this.author, this.text, this.onTap});
+
+  /// Null while the original is not loaded.
+  final String? author, text;
+  final VoidCallback? onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final tty = Tty.of(context);
+    final quote = Container(
+      width: double.infinity,
+      margin: const EdgeInsets.only(top: 5, bottom: 3),
+      padding: const EdgeInsets.fromLTRB(10, 7, 10, 8),
+      decoration: BoxDecoration(
+        color: tty.text.withValues(alpha: 0.05),
+        border: Border(left: BorderSide(color: AppPalette.textFaint, width: 3)),
+        borderRadius: const BorderRadius.horizontal(
+          left: Radius.circular(4),
+          right: Radius.circular(10),
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          if (author case final author?)
+            Text(
+              author,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: swarmChatText(13.5, weight: FontWeight.w600),
+            ),
+          Text(
+            text ?? "The original message isn't loaded.",
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+            style: swarmChatText(14, color: AppPalette.textSecondary),
+          ),
+        ],
+      ),
+    );
+    if (onTap == null) return quote;
+    return Semantics(
+      button: true,
+      label: 'Go to the quoted message',
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: onTap,
+        child: quote,
+      ),
+    );
+  }
+}
+
+/// A message's action — Reply, Copy, Send again: small, rounded, raised.
+class SwarmSmallButton extends StatelessWidget {
+  const SwarmSmallButton({
+    super.key,
+    required this.icon,
+    required this.label,
+    required this.onTap,
+  });
+
+  final IconData icon;
+  final String label;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final tty = Tty.of(context);
+    return Semantics(
+      button: true,
+      label: label,
+      excludeSemantics: true,
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: onTap,
+        child: Container(
+          constraints: const BoxConstraints(minHeight: 36),
+          padding: const EdgeInsets.symmetric(horizontal: 12),
+          decoration: BoxDecoration(
+            color: ttyRaised(tty),
+            border: Border.all(color: swarmChatHair(tty)),
+            borderRadius: BorderRadius.circular(10),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(icon, size: 16, color: AppPalette.textPrimary),
+              const SizedBox(width: 8),
+              Text(label, style: swarmChatText(14, weight: FontWeight.w500)),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// A message's file: opened in the browser when its link is the backend's.
+class SwarmFileChip extends StatelessWidget {
+  const SwarmFileChip({super.key, required this.file, required this.link});
+
+  final SuperTabAttachment file;
+  final Uri? link;
+
+  @override
+  Widget build(BuildContext context) {
+    final tty = Tty.of(context);
+    final kb = (file.size / 1024).ceil();
+    final size = kb < 1024 ? '$kb KB' : '${(kb / 1024).toStringAsFixed(1)} MB';
+    final url = link;
+    final color = url == null ? AppPalette.textFaint : tty.blue;
+    return Padding(
+      padding: const EdgeInsets.only(top: 8),
+      child: Semantics(
+        button: url != null,
+        label: 'File: ${file.name}, $size',
+        excludeSemantics: true,
+        child: GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onTap: url == null
+              ? null
+              : () => unawaited(
+                  launchUrl(url, mode: LaunchMode.inAppBrowserView),
+                ),
+          child: Container(
+            constraints: const BoxConstraints(minHeight: 40),
+            padding: const EdgeInsets.symmetric(horizontal: 12),
+            decoration: BoxDecoration(
+              color: swarmChatCard(tty),
+              border: Border.all(color: swarmChatHair(tty)),
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(LucideIcons.file, size: 16, color: color),
+                const SizedBox(width: 8),
+                Flexible(
+                  child: Text(
+                    file.name,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: swarmChatText(14, color: color),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Text(
+                  size,
+                  style: swarmChatText(13, color: AppPalette.textFaint),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}

@@ -2,9 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
-import 'package:url_launcher/url_launcher.dart';
 
 import 'package:harness_mobile/phone/composing_keyboard.dart';
 import 'package:harness_mobile/phone/phone_navigation.dart';
@@ -16,6 +14,7 @@ import 'model.dart';
 import 'swarm_choices.dart';
 import 'swarm_conversation.dart';
 import 'swarm_inbox.dart';
+import 'swarm_message_row.dart';
 import 'swarm_need_rows.dart';
 import 'swarm_session.dart';
 import 'team_glance.dart';
@@ -35,24 +34,6 @@ void openSwarmConversation(
     ),
   ),
 );
-
-/// The host the backend serves message files from: a link anywhere else is
-/// not opened (the desktop's `attachmentLink`).
-const swarmAttachmentHost = String.fromEnvironment(
-  'SUPER_TAB_ATTACHMENTS_HOST',
-  defaultValue: 'cdn.harness.autonomous.ai',
-);
-
-/// [url] as a link to open, or null unless it is https on
-/// [swarmAttachmentHost]: a message's url is whatever its sender's row says.
-Uri? swarmAttachmentLink(String url) {
-  final link = Uri.tryParse(url);
-  return link != null &&
-          link.scheme == 'https' &&
-          link.host == swarmAttachmentHost
-      ? link
-      : null;
-}
 
 /// One conversation: its messages, newest at the foot, older ones on demand —
 /// each with who wrote it, their role and when, follow-ups grouped, a reply's
@@ -421,7 +402,7 @@ class _SwarmConversationPageState extends State<SwarmConversationPage> {
                       project,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
-                      style: _sans(13, color: AppPalette.textSecondary),
+                      style: swarmChatText(13, color: AppPalette.textSecondary),
                     ),
                 ],
               ),
@@ -448,7 +429,7 @@ class _SwarmConversationPageState extends State<SwarmConversationPage> {
                   child: Text(
                     note,
                     key: const ValueKey('swarm-find-note'),
-                    style: _sans(13.5, color: AppPalette.textSecondary),
+                    style: swarmChatText(13.5, color: AppPalette.textSecondary),
                   ),
                 ),
               // Unless the body says it already: no conversation and nothing
@@ -460,7 +441,7 @@ class _SwarmConversationPageState extends State<SwarmConversationPage> {
                   child: Text(
                     error,
                     key: const ValueKey('swarm-post-error'),
-                    style: _sans(13.5, color: tty.red),
+                    style: swarmChatText(13.5, color: tty.red),
                   ),
                 ),
             ],
@@ -480,7 +461,7 @@ class _SwarmConversationPageState extends State<SwarmConversationPage> {
                 ? 'This chat is archived.'
                 : 'You can read this chat, not post in it.',
             key: const ValueKey('swarm-read-only'),
-            style: _sans(13.5, color: AppPalette.textSecondary),
+            style: swarmChatText(13.5, color: AppPalette.textSecondary),
           ),
         ),
     ],
@@ -522,7 +503,7 @@ class _SwarmConversationPageState extends State<SwarmConversationPage> {
     Widget message(_MessageEntry entry) {
       final m = entry.message;
       final reply = m.replyTo == null ? null : byId[m.replyTo];
-      return _Message(
+      return SwarmMessageRow(
         key: m.id == _target ? _targetKey : null,
         message: m,
         name: _nameOf(c, m),
@@ -532,7 +513,7 @@ class _SwarmConversationPageState extends State<SwarmConversationPage> {
         lit: _lit == m.id,
         quote: m.replyTo == null
             ? null
-            : _Quote(
+            : SwarmQuote(
                 key: ValueKey('swarm-quote-${m.id}'),
                 author: reply == null ? null : _quoted(c, reply),
                 text: reply?.text,
@@ -567,7 +548,7 @@ class _SwarmConversationPageState extends State<SwarmConversationPage> {
         padding: const EdgeInsets.all(Tty.origin),
         child: Text(
           c.error ?? 'This chat is not open to you.',
-          style: _sans(15, color: AppPalette.textSecondary),
+          style: swarmChatText(15, color: AppPalette.textSecondary),
         ),
       );
     }
@@ -590,7 +571,7 @@ class _SwarmConversationPageState extends State<SwarmConversationPage> {
             sending: c.sending,
             quote: pending.replyTo == null
                 ? null
-                : _Quote(
+                : SwarmQuote(
                     author: reply == null ? null : _quoted(c, reply),
                     text: reply?.text,
                   ),
@@ -615,7 +596,7 @@ class _SwarmConversationPageState extends State<SwarmConversationPage> {
                   child: Center(
                     child: Text(
                       'Loading earlier messages…',
-                      style: _sans(13.5, color: AppPalette.textFaint),
+                      style: swarmChatText(13.5, color: AppPalette.textFaint),
                     ),
                   ),
                 ),
@@ -636,7 +617,7 @@ class _SwarmConversationPageState extends State<SwarmConversationPage> {
     return Container(
       decoration: BoxDecoration(
         color: Color.alphaBlend(tty.text.withValues(alpha: 0.02), tty.ground),
-        border: Border(top: BorderSide(color: _hair(tty))),
+        border: Border(top: BorderSide(color: swarmChatHair(tty))),
       ),
       padding: const EdgeInsets.fromLTRB(10, 8, 10, 8),
       child: Column(
@@ -687,7 +668,10 @@ class _SwarmConversationPageState extends State<SwarmConversationPage> {
                         ),
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
-                        style: _sans(13.5, color: AppPalette.textSecondary),
+                        style: swarmChatText(
+                          13.5,
+                          color: AppPalette.textSecondary,
+                        ),
                       ),
                     ),
                   ),
@@ -741,28 +725,6 @@ class _SwarmConversationPageState extends State<SwarmConversationPage> {
     );
   }
 }
-
-/// The chat's prose in the app's own face, as prototype v2 draws it: the
-/// messages, quotes, names and the field. Times, roles and day dividers stay
-/// in the terminal's.
-TextStyle _sans(
-  double size, {
-  Color? color,
-  FontWeight weight = FontWeight.w400,
-  double height = 1.35,
-}) => TextStyle(
-  fontSize: size,
-  height: height,
-  color: color ?? AppPalette.textPrimary,
-  fontWeight: weight,
-);
-
-/// The hairline around the chat's cards, picker and field.
-Color _hair(Tty tty) => tty.text.withValues(alpha: 0.12);
-
-/// The ground of a card in the chat: a decision, the picker, a file.
-Color _card(Tty tty) =>
-    Color.alphaBlend(tty.text.withValues(alpha: 0.05), tty.ground);
 
 /// What the chat draws of its Swarm's read and of what is asked of the
 /// person in it: its header, whether they can post, the names an @mention is
@@ -1095,367 +1057,6 @@ SuperTabAgent? swarmAsker(SuperTabSnapshot snapshot, SwarmDecisionNeed need) =>
         .where((a) => snapshot.agentName(a.id) == need.decision.askerName)
         .firstOrNull;
 
-/// [text] with each @mention of one of [names] marked, as the desktop and
-/// the prototype mark them.
-TextSpan _mentions(String text, List<String> names, TextStyle style) {
-  if (names.isEmpty || !text.contains('@')) {
-    return TextSpan(text: text, style: style);
-  }
-  // Longest first, so "@Nova2" is not read as "@Nova".
-  final sorted = [...names]..sort((a, b) => b.length.compareTo(a.length));
-  final pattern = RegExp(
-    '(?<![\\w@])@(?:${sorted.map(RegExp.escape).join('|')})(?![\\w])',
-    caseSensitive: false,
-  );
-  final spans = <InlineSpan>[];
-  var at = 0;
-  for (final match in pattern.allMatches(text)) {
-    if (match.start > at) {
-      spans.add(TextSpan(text: text.substring(at, match.start)));
-    }
-    spans.add(
-      TextSpan(
-        text: match[0],
-        style: TextStyle(
-          color: AppPalette.accentOnSurface,
-          backgroundColor: AppPalette.accentOnSurface.withValues(alpha: 0.13),
-          fontWeight: FontWeight.w500,
-        ),
-      ),
-    );
-    at = match.end;
-  }
-  if (at < text.length) spans.add(TextSpan(text: text.substring(at)));
-  return TextSpan(style: style, children: spans);
-}
-
-/// A message's frame: avatar, then who wrote it, their role and [trailing]
-/// (its time) — none of it for a follow-up — then [body].
-class _Row extends StatelessWidget {
-  const _Row({
-    required this.avatar,
-    required this.grouped,
-    required this.header,
-    required this.body,
-  });
-
-  final Widget avatar;
-  final bool grouped;
-  final Widget header;
-  final List<Widget> body;
-
-  @override
-  Widget build(BuildContext context) => Row(
-    crossAxisAlignment: CrossAxisAlignment.start,
-    children: [
-      grouped ? const SizedBox(width: _Avatar.size) : avatar,
-      const SizedBox(width: 10),
-      Expanded(
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [if (!grouped) header, ...body],
-        ),
-      ),
-    ],
-  );
-}
-
-/// One message: avatar, who wrote it, their role and when — none of it for a
-/// follow-up — then what it answers, its text and its files. A tap opens
-/// its actions; lit for a moment when a quote leads to it.
-class _Message extends StatelessWidget {
-  const _Message({
-    super.key,
-    required this.message,
-    required this.name,
-    required this.role,
-    required this.names,
-    required this.grouped,
-    required this.lit,
-    required this.quote,
-    required this.actions,
-    required this.onTap,
-    required this.onReply,
-  });
-
-  final SuperTabMessage message;
-  final String name;
-  final String? role;
-
-  /// The names an @mention in it is marked for.
-  final List<String> names;
-  final bool grouped, lit, actions;
-  final Widget? quote;
-  final VoidCallback onTap;
-
-  /// Null where the person cannot post.
-  final VoidCallback? onReply;
-
-  @override
-  Widget build(BuildContext context) {
-    final tty = Tty.of(context);
-    final at = message.createdAt?.toLocal();
-    String two(int n) => n.toString().padLeft(2, '0');
-    return AnimatedContainer(
-      key: ValueKey('swarm-message-${message.id}'),
-      duration: const Duration(milliseconds: 600),
-      curve: Curves.easeOut,
-      padding: EdgeInsets.fromLTRB(6, grouped ? 0 : 7, 6, 7),
-      decoration: BoxDecoration(
-        color: lit
-            ? AppPalette.accentOnSurface.withValues(alpha: 0.16)
-            : Colors.transparent,
-        borderRadius: BorderRadius.circular(10),
-      ),
-      child: _Row(
-        grouped: grouped,
-        avatar: _Avatar(
-          name: name,
-          id: message.authorId,
-          agent: message.fromAgent,
-          pm: role == 'PM',
-        ),
-        header: _Header(
-          name: name,
-          agent: message.fromAgent,
-          role: role,
-          trailing: at == null
-              ? null
-              : Text(
-                  '${two(at.hour)}:${two(at.minute)}',
-                  style: tty.style(color: AppPalette.textFaint, size: 12.5),
-                ),
-        ),
-        body: [
-          if (lit) SizedBox(key: ValueKey('swarm-lit-${message.id}')),
-          ?quote,
-          if (message.text.isNotEmpty)
-            Semantics(
-              button: true,
-              hint: 'Reply to this message',
-              child: GestureDetector(
-                behavior: HitTestBehavior.opaque,
-                onTap: onTap,
-                child: Padding(
-                  padding: const EdgeInsets.only(top: 2),
-                  child: SizedBox(
-                    width: double.infinity,
-                    child: Text.rich(
-                      _mentions(message.text, names, _sans(16, height: 1.42)),
-                    ),
-                  ),
-                ),
-              ),
-            ),
-          for (final file in message.attachments)
-            _File(file: file, link: swarmAttachmentLink(file.url)),
-          if (actions)
-            Padding(
-              padding: const EdgeInsets.only(top: 8),
-              child: Wrap(
-                spacing: 6,
-                runSpacing: 6,
-                children: [
-                  if (onReply case final reply?)
-                    _SmallButton(
-                      key: ValueKey('swarm-reply-${message.id}'),
-                      icon: LucideIcons.reply,
-                      label: 'Reply',
-                      onTap: reply,
-                    ),
-                  _SmallButton(
-                    icon: LucideIcons.copy,
-                    label: 'Copy',
-                    onTap: () => unawaited(
-                      Clipboard.setData(ClipboardData(text: message.text)),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-        ],
-      ),
-    );
-  }
-}
-
-/// A message's first line: who, in what role, then [trailing] — its time,
-/// or how its post is going.
-class _Header extends StatelessWidget {
-  const _Header({
-    required this.name,
-    required this.agent,
-    this.role,
-    this.trailing,
-  });
-
-  final String name;
-  final bool agent;
-  final String? role;
-  final Widget? trailing;
-
-  @override
-  Widget build(BuildContext context) {
-    final tty = Tty.of(context);
-    return Wrap(
-      spacing: 6,
-      crossAxisAlignment: WrapCrossAlignment.center,
-      children: [
-        Text(
-          name,
-          style: _sans(
-            13.5,
-            color: agent ? tty.cyan : tty.green,
-            weight: FontWeight.w600,
-          ),
-        ),
-        if (role case final role?) _Role(role),
-        ?trailing,
-      ],
-    );
-  }
-}
-
-/// A role's compact badge: PM, Dev, Rev.
-class _Role extends StatelessWidget {
-  const _Role(this.label);
-
-  final String label;
-
-  @override
-  Widget build(BuildContext context) {
-    final tty = Tty.of(context);
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 4),
-      decoration: BoxDecoration(
-        border: Border.all(color: _hair(tty)),
-        borderRadius: BorderRadius.circular(4),
-      ),
-      child: Text(
-        label,
-        style: tty
-            .style(
-              color: AppPalette.textSecondary,
-              weight: FontWeight.w600,
-              size: 11,
-            )
-            .copyWith(height: 16 / 11, letterSpacing: 0.44),
-      ),
-    );
-  }
-}
-
-/// Who wrote a message, in a circle: an agent's initial on its own deep
-/// colour — blue for a Product Manager, as the prototype has River — the
-/// person's on theirs, white on each.
-class _Avatar extends StatelessWidget {
-  const _Avatar({
-    required this.name,
-    required this.id,
-    required this.agent,
-    this.pm = false,
-  });
-
-  static const double size = 32;
-
-  /// Deep enough under a white initial in either theme.
-  static const _agents = [
-    Color(0xFF1D5BD6),
-    Color(0xFF0F766E),
-    Color(0xFF6D28D9),
-    Color(0xFFA65A08),
-    Color(0xFFBE123C),
-    Color(0xFF15803D),
-    Color(0xFF4E5D78),
-  ];
-  static const _person = Color(0xFF4B5F9B);
-
-  final String name, id;
-  final bool agent;
-
-  /// A project's Product Manager: the prototype's blue, kept for them alone.
-  final bool pm;
-
-  @override
-  Widget build(BuildContext context) {
-    final fill = !agent
-        ? _person
-        : pm
-        ? _agents.first
-        : _agents[1 +
-              id.codeUnits.fold(0, (a, b) => a + b) % (_agents.length - 1)];
-    final initial = name.trim().isEmpty
-        ? '?'
-        : name.trim().characters.first.toUpperCase();
-    return Container(
-      width: size,
-      height: size,
-      alignment: Alignment.center,
-      decoration: BoxDecoration(color: fill, shape: BoxShape.circle),
-      child: Text(
-        initial,
-        style: _sans(13.5, color: Colors.white, weight: FontWeight.w600),
-      ),
-    );
-  }
-}
-
-/// What a reply answers: its author and the start of its text, or that it
-/// is not loaded. A tap leads to it.
-class _Quote extends StatelessWidget {
-  const _Quote({super.key, this.author, this.text, this.onTap});
-
-  /// Null while the original is not loaded.
-  final String? author, text;
-  final VoidCallback? onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    final tty = Tty.of(context);
-    final quote = Container(
-      width: double.infinity,
-      margin: const EdgeInsets.only(top: 5, bottom: 3),
-      padding: const EdgeInsets.fromLTRB(10, 7, 10, 8),
-      decoration: BoxDecoration(
-        color: tty.text.withValues(alpha: 0.05),
-        border: Border(left: BorderSide(color: AppPalette.textFaint, width: 3)),
-        borderRadius: const BorderRadius.horizontal(
-          left: Radius.circular(4),
-          right: Radius.circular(10),
-        ),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          if (author case final author?)
-            Text(
-              author,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: _sans(13.5, weight: FontWeight.w600),
-            ),
-          Text(
-            text ?? "The original message isn't loaded.",
-            maxLines: 2,
-            overflow: TextOverflow.ellipsis,
-            style: _sans(14, color: AppPalette.textSecondary),
-          ),
-        ],
-      ),
-    );
-    if (onTap == null) return quote;
-    return Semantics(
-      button: true,
-      label: 'Go to the quoted message',
-      child: GestureDetector(
-        behavior: HitTestBehavior.opaque,
-        onTap: onTap,
-        child: quote,
-      ),
-    );
-  }
-}
-
 /// The person's post on its way: "Sending…", then — its answer lost — "Not
 /// confirmed" with Send again, until it is read back.
 class _Pending extends StatelessWidget {
@@ -1480,10 +1081,10 @@ class _Pending extends StatelessWidget {
     return Padding(
       key: const ValueKey('swarm-pending'),
       padding: const EdgeInsets.fromLTRB(6, 7, 6, 7),
-      child: _Row(
+      child: SwarmMessageFrame(
         grouped: false,
-        avatar: _Avatar(name: name, id: '', agent: false),
-        header: _Header(
+        avatar: SwarmChatAvatar(name: name, id: '', agent: false),
+        header: SwarmMessageHeader(
           name: name,
           agent: false,
           trailing: Text(
@@ -1499,10 +1100,10 @@ class _Pending extends StatelessWidget {
           Padding(
             padding: const EdgeInsets.only(top: 2),
             child: Text.rich(
-              _mentions(
+              swarmMentionSpan(
                 text,
                 names,
-                _sans(
+                swarmChatText(
                   16,
                   height: 1.42,
                   color: sending
@@ -1515,7 +1116,7 @@ class _Pending extends StatelessWidget {
           if (!sending)
             Padding(
               padding: const EdgeInsets.only(top: 8),
-              child: _SmallButton(
+              child: SwarmSmallButton(
                 key: const ValueKey('swarm-resend-post'),
                 icon: LucideIcons.rotateCw,
                 label: 'Send again',
@@ -1555,15 +1156,15 @@ class _Ask extends StatelessWidget {
     return Padding(
       key: ValueKey('swarm-ask-${decision.id}'),
       padding: EdgeInsets.fromLTRB(6, grouped ? 0 : 7, 6, 7),
-      child: _Row(
+      child: SwarmMessageFrame(
         grouped: grouped,
-        avatar: _Avatar(
+        avatar: SwarmChatAvatar(
           name: decision.askerName,
           id: asker?.id ?? decision.askerName,
           agent: true,
           pm: role == 'PM',
         ),
-        header: _Header(
+        header: SwarmMessageHeader(
           name: decision.askerName,
           agent: true,
           role: role,
@@ -1580,19 +1181,19 @@ class _Ask extends StatelessWidget {
             margin: const EdgeInsets.only(top: 8),
             padding: const EdgeInsets.fromLTRB(14, 12, 14, 14),
             decoration: BoxDecoration(
-              color: _card(tty),
-              border: Border.all(color: _hair(tty)),
+              color: swarmChatCard(tty),
+              border: Border.all(color: swarmChatHair(tty)),
               borderRadius: BorderRadius.circular(14),
             ),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                Text(decision.question, style: _sans(16, height: 1.4)),
+                Text(decision.question, style: swarmChatText(16, height: 1.4)),
                 if (decision.unblocks.isNotEmpty) ...[
                   const SizedBox(height: 4),
                   Text(
                     'Unblocks: ${decision.unblocks}',
-                    style: _sans(13.5, color: AppPalette.textSecondary),
+                    style: swarmChatText(13.5, color: AppPalette.textSecondary),
                   ),
                 ],
                 const SizedBox(height: 14),
@@ -1652,8 +1253,8 @@ class _MentionPicker extends StatelessWidget {
       constraints: const BoxConstraints(maxHeight: 220),
       clipBehavior: Clip.antiAlias,
       decoration: BoxDecoration(
-        color: _card(tty),
-        border: Border.all(color: _hair(tty)),
+        color: swarmChatCard(tty),
+        border: Border.all(color: swarmChatHair(tty)),
         borderRadius: BorderRadius.circular(14),
         boxShadow: const [
           BoxShadow(
@@ -1668,7 +1269,7 @@ class _MentionPicker extends StatelessWidget {
               padding: const EdgeInsets.all(14),
               child: Text(
                 'No agent by that name.',
-                style: _sans(14, color: AppPalette.textSecondary),
+                style: swarmChatText(14, color: AppPalette.textSecondary),
               ),
             )
           : ListView(
@@ -1685,7 +1286,7 @@ class _MentionPicker extends StatelessWidget {
                       padding: const EdgeInsets.symmetric(horizontal: 14),
                       child: Row(
                         children: [
-                          _Avatar(
+                          SwarmChatAvatar(
                             name: snapshot.agentName(agent.id),
                             id: agent.id,
                             agent: true,
@@ -1700,13 +1301,16 @@ class _MentionPicker extends StatelessWidget {
                                     snapshot.agentName(agent.id),
                                     maxLines: 1,
                                     overflow: TextOverflow.ellipsis,
-                                    style: _sans(16, weight: FontWeight.w500),
+                                    style: swarmChatText(
+                                      16,
+                                      weight: FontWeight.w500,
+                                    ),
                                   ),
                                 ),
                                 if (swarmAgentRole(snapshot, agent.id)
                                     case final role?) ...[
                                   const SizedBox(width: 6),
-                                  _Role(role),
+                                  SwarmRoleBadge(role),
                                 ],
                               ],
                             ),
@@ -1723,7 +1327,10 @@ class _MentionPicker extends StatelessWidget {
                             const SizedBox(width: 6),
                             Text(
                               glance.label,
-                              style: _sans(13, color: AppPalette.textSecondary),
+                              style: swarmChatText(
+                                13,
+                                color: AppPalette.textSecondary,
+                              ),
                             ),
                           ],
                         ],
@@ -1767,7 +1374,7 @@ class _MessageField extends StatelessWidget {
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
         decoration: BoxDecoration(
           color: ttyRaised(tty),
-          border: Border.all(color: _hair(tty)),
+          border: Border.all(color: swarmChatHair(tty)),
           borderRadius: BorderRadius.circular(22),
         ),
         child: TextSelectionTheme(
@@ -1792,7 +1399,7 @@ class _MessageField extends StatelessWidget {
             smartQuotesType: SmartQuotesType.disabled,
             cursorColor: AppPalette.accentOnSurface,
             cursorWidth: 2,
-            style: _sans(16, height: 22 / 16),
+            style: swarmChatText(16, height: 22 / 16),
             decoration: InputDecoration(
               isCollapsed: true,
               // No minimum of its own: the pill's 44 is the field's height.
@@ -1804,7 +1411,7 @@ class _MessageField extends StatelessWidget {
               disabledBorder: InputBorder.none,
               contentPadding: EdgeInsets.zero,
               hintText: 'Message',
-              hintStyle: _sans(
+              hintStyle: swarmChatText(
                 16,
                 height: 22 / 16,
                 color: AppPalette.textFaint,
@@ -1852,51 +1459,6 @@ class _Round extends StatelessWidget {
   );
 }
 
-/// A message's action — Reply, Copy, Send again: small, rounded, raised.
-class _SmallButton extends StatelessWidget {
-  const _SmallButton({
-    super.key,
-    required this.icon,
-    required this.label,
-    required this.onTap,
-  });
-
-  final IconData icon;
-  final String label;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    final tty = Tty.of(context);
-    return Semantics(
-      button: true,
-      label: label,
-      excludeSemantics: true,
-      child: GestureDetector(
-        behavior: HitTestBehavior.opaque,
-        onTap: onTap,
-        child: Container(
-          constraints: const BoxConstraints(minHeight: 36),
-          padding: const EdgeInsets.symmetric(horizontal: 12),
-          decoration: BoxDecoration(
-            color: ttyRaised(tty),
-            border: Border.all(color: _hair(tty)),
-            borderRadius: BorderRadius.circular(10),
-          ),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(icon, size: 16, color: AppPalette.textPrimary),
-              const SizedBox(width: 8),
-              Text(label, style: _sans(14, weight: FontWeight.w500)),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
-
 /// A link in the accent: Earlier messages.
 class _Link extends StatelessWidget {
   const _Link({super.key, required this.label, required this.onTap});
@@ -1910,66 +1472,10 @@ class _Link extends StatelessWidget {
     onTap: onTap,
     child: Padding(
       padding: const EdgeInsets.symmetric(horizontal: 14),
-      child: Text(label, style: _sans(15, color: AppPalette.accentOnSurface)),
+      child: Text(
+        label,
+        style: swarmChatText(15, color: AppPalette.accentOnSurface),
+      ),
     ),
   );
-}
-
-/// A message's file: opened in the browser when its link is the backend's.
-class _File extends StatelessWidget {
-  const _File({required this.file, required this.link});
-
-  final SuperTabAttachment file;
-  final Uri? link;
-
-  @override
-  Widget build(BuildContext context) {
-    final tty = Tty.of(context);
-    final kb = (file.size / 1024).ceil();
-    final size = kb < 1024 ? '$kb KB' : '${(kb / 1024).toStringAsFixed(1)} MB';
-    final url = link;
-    final color = url == null ? AppPalette.textFaint : tty.blue;
-    return Padding(
-      padding: const EdgeInsets.only(top: 8),
-      child: Semantics(
-        button: url != null,
-        label: 'File: ${file.name}, $size',
-        excludeSemantics: true,
-        child: GestureDetector(
-          behavior: HitTestBehavior.opaque,
-          onTap: url == null
-              ? null
-              : () => unawaited(
-                  launchUrl(url, mode: LaunchMode.inAppBrowserView),
-                ),
-          child: Container(
-            constraints: const BoxConstraints(minHeight: 40),
-            padding: const EdgeInsets.symmetric(horizontal: 12),
-            decoration: BoxDecoration(
-              color: _card(tty),
-              border: Border.all(color: _hair(tty)),
-              borderRadius: BorderRadius.circular(10),
-            ),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Icon(LucideIcons.file, size: 16, color: color),
-                const SizedBox(width: 8),
-                Flexible(
-                  child: Text(
-                    file.name,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: _sans(14, color: color),
-                  ),
-                ),
-                const SizedBox(width: 8),
-                Text(size, style: _sans(13, color: AppPalette.textFaint)),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
-  }
 }
