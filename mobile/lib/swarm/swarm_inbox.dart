@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 import 'model.dart';
 import 'swarm_asks.dart';
 import 'swarm_home_cache.dart';
+import 'swarm_home_keeper.dart';
 import 'swarm_reader.dart';
 import 'swarm_request.dart';
 import 'waiting_work.dart';
@@ -85,7 +86,7 @@ class SwarmInbox extends ChangeNotifier {
     required this.request,
     this.pollInterval = const Duration(seconds: 15),
     SwarmHomeCache? homeCache,
-    Duration homeWait = const Duration(seconds: 2),
+    Duration homeWait = const Duration(seconds: 30),
   }) : _home = homeCache == null
            ? null
            : SwarmHomeKeeper(homeCache, accountId, wait: homeWait) {
