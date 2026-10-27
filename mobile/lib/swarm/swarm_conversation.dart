@@ -1,0 +1,304 @@
+import 'dart:async';
+
+import 'package:flutter/foundation.dart';
+
+import 'model.dart';
+import 'swarm_reader.dart';
+import 'swarm_request.dart';
+
+/// One conversation on the phone: its messages and what the person posts to
+/// it — the desktop's `SuperTabController` messages and composer, for one
+/// conversation at a time.
+///
+/// Messages are read as the latest page when opened, older pages on demand,
+/// and new ones when the Swarm's read says the conversation moved past the
+/// last one shown (`lastMessageSequence`): no read of its own while nothing
+/// was posted. Keep the [reader] shown while this is on screen.
+class SwarmConversation extends ChangeNotifier {
+  SwarmConversation(this.reader, this.id) {
+    reader.addListener(_swarmChanged);
+  }
+
+  final SwarmReader reader;
+  final String id;
+
+  /// Oldest first.
+  List<SuperTabMessage> messages = const [];
+
+  /// What the last read or post could not do, as a sentence.
+  String? error;
+
+  /// A post is on its way.
+  bool sending = false;
+
+  SuperTabPage? _before;
+  bool _read = false, _disposed = false;
+  Future<void>? _reading, _readingOlder;
+  String _draft = '';
+
+  /// Agents mentioned in the draft, by id, with the token that names them.
+  final _mentions = <String, String>{};
+
+  /// A post sent whose answer never came: retried under the same operation
+  /// id, so the backend runs it once.
+  Map<String, dynamic>? _pending;
+
+  String get _path =>
+      '/api/super-tabs/${Uri.encodeComponent(reader.tabId)}'
+      '/conversations/${Uri.encodeComponent(id)}/messages';
+
+  SuperTabConversation? get conversation => reader.snapshot?.conversation(id);
+
+  /// Earlier messages wait to be read.
+  bool get hasOlder => _before != null;
+
+  /// A post was sent and not confirmed: [send] retries it.
+  bool get unconfirmed => _pending != null;
+
+  /// The person may post here: a writer of the Swarm, in a conversation that
+  /// is not archived.
+  bool get canPost {
+    final snapshot = reader.snapshot;
+    final group = conversation;
+    if (snapshot == null || group == null || group.archived) return false;
+    return snapshot.people
+            .where((p) => p.id == reader.accountId)
+            .firstOrNull
+            ?.canWrite ??
+        false;
+  }
+
+  String get draft => _draft;
+  set draft(String value) {
+    _draft = value;
+    _mentions.removeWhere((_, token) => !containsMention(value, token));
+    notifyListeners();
+  }
+
+  /// Whether [text] names [token] as a word of its own: the desktop's rule.
+  static bool containsMention(String text, String token) =>
+      RegExp('(?:^|\\s)${RegExp.escape(token)}(?=\$|\\s|[.,!?;:])')
+          .hasMatch(text);
+
+  /// Adds [agentId]'s name to the draft; the post goes to it while the name
+  /// stays in the text.
+  void mention(String agentId) {
+    final snapshot = reader.snapshot;
+    if (snapshot == null) return;
+    final token = '@${snapshot.agentName(agentId)}';
+    final spaced = _draft.isEmpty || RegExp(r'\s$').hasMatch(_draft);
+    _draft = '$_draft${spaced ? '' : ' '}$token ';
+    _mentions[agentId] = token;
+    notifyListeners();
+  }
+
+  /// The agents a post can mention: those in this conversation.
+  List<SuperTabAgent> get mentionable {
+    final snapshot = reader.snapshot;
+    final group = conversation;
+    if (snapshot == null || group == null) return const [];
+    return [for (final agentId in group.agentIds) ?snapshot.agent(agentId)];
+  }
+
+  void _swarmChanged() {
+    if (_disposed) return;
+    final group = conversation;
+    if (group == null) {
+      // Gone, or no longer the person's: nothing of it stays shown.
+      if (messages.isNotEmpty &&
+          (reader.snapshot == null || reader.accessRevoked)) {
+        _forget();
+        notifyListeners();
+      }
+      return;
+    }
+    final tail = messages.lastOrNull?.sequence ?? 0;
+    if (_read && group.lastMessageSequence > tail) unawaited(load());
+  }
+
+  void _forget() {
+    messages = const [];
+    _before = null;
+    _read = false;
+  }
+
+  /// The latest page the first time, then what came after the newest shown.
+  /// Joins a read under way.
+  Future<void> load() =>
+      _reading ??= _load(older: false).whenComplete(() => _reading = null);
+
+  /// The page before the oldest shown.
+  Future<void> loadOlder() {
+    if (!hasOlder) return Future.value();
+    return _readingOlder ??= _load(older: true)
+        .whenComplete(() => _readingOlder = null);
+  }
+
+  Future<void> _load({required bool older}) async {
+    try {
+      final tail = messages.lastOrNull?.sequence;
+      final before = _before;
+      final query = older
+          ? '?before=${before!.sequence}'
+                '&beforeId=${Uri.encodeQueryComponent(before.id)}'
+          : tail == null
+          ? ''
+          : '?after=$tail';
+      final answer = superTabMap(await reader.request('GET', '$_path$query'));
+      if (_disposed) return;
+      final incoming = [
+        for (final row in answer['messages'] as List)
+          SuperTabMessage.fromJson(superTabMap(row)),
+      ];
+      if (incoming.any((m) => m.conversationId != id)) {
+        throw const FormatException('A different conversation was returned.');
+      }
+      final combined = {
+        for (final m in messages) m.id: m,
+        for (final m in incoming) m.id: m,
+      };
+      messages = List.unmodifiable(
+        combined.values.toList()..sort(superTabMessageOrder),
+      );
+      if (older || !_read) _before = SuperTabPage.read(answer['next']);
+      _read = true;
+      error = null;
+    } on SuperTabFailure catch (failure) {
+      if (_disposed) return;
+      if (const {'FORBIDDEN', 'NOT_FOUND'}.contains(failure.code)) _forget();
+      error = failure.message;
+    } catch (_) {
+      if (_disposed) return;
+      error = 'Could not load messages. Try again.';
+    }
+    notifyListeners();
+  }
+
+  /// Posts the draft, to the agents mentioned in it — or, while a post is
+  /// [unconfirmed], sends that one again. True once the backend took it.
+  Future<bool> send() async {
+    if (sending || _disposed || !canPost) return false;
+    final pending = _pending ?? _compose();
+    if (pending == null) return false;
+    _pending = pending;
+    sending = true;
+    error = null;
+    notifyListeners();
+    try {
+      await reader.request(
+        'POST',
+        '/api/super-tabs/${Uri.encodeComponent(reader.tabId)}/commands',
+        body: pending,
+      );
+    } on SuperTabFailure catch (failure) {
+      // A definitive refusal made no change: the draft stays to correct. A
+      // lost answer keeps its receipt, so a retry is the same post.
+      final status = failure.statusCode;
+      if (status >= 400 && status < 500 && status != 408 && status != 429) {
+        _pending = null;
+      }
+      error = failure.message;
+      return false;
+    } catch (_) {
+      error = 'Your message is not confirmed. Send again to check it.';
+      return false;
+    } finally {
+      sending = false;
+      if (!_disposed) notifyListeners();
+    }
+    _pending = null;
+    final text = (pending['command'] as Map)['text'];
+    if (_draft.trim() == text) {
+      _draft = '';
+      _mentions.clear();
+    }
+    notifyListeners();
+    unawaited(reader.refresh());
+    unawaited(load());
+    return true;
+  }
+
+  Map<String, dynamic>? _compose() {
+    final text = _draft.trim();
+    final group = conversation;
+    if (text.isEmpty || group == null) return null;
+    return {
+      'operationId': superTabOperationId(),
+      'command': {
+        'type': 'message.send',
+        'conversationId': id,
+        'text': text,
+        'replyTo': null,
+        'recipientIds': [
+          for (final MapEntry(key: agentId, value: token) in _mentions.entries)
+            if (containsMention(text, token) &&
+                group.agentIds.contains(agentId))
+              agentId,
+        ],
+      },
+    };
+  }
+
+  @override
+  void dispose() {
+    _disposed = true;
+    reader.removeListener(_swarmChanged);
+    super.dispose();
+  }
+}
+
+/// The person's private chat with [projectId]'s Product Manager: that
+/// project's private conversation whose audience is them alone (the
+/// desktop's `SuperTabController.pmChat`).
+SuperTabConversation? swarmPmChat(SwarmReader reader, String projectId) =>
+    reader.snapshot?.conversations
+        .where(
+          (g) =>
+              g.projectId == projectId &&
+              g.audience?.length == 1 &&
+              g.audience!.single == reader.accountId,
+        )
+        .firstOrNull;
+
+/// Opens [swarmPmChat], creating it on first use: chat only, for this person
+/// alone, named after them, with the project's Lead in it. The create is one
+/// fixed operation per person, membership and project, so a second tap or
+/// another device gets the same conversation back, while a person who left
+/// and rejoined gets a new one (the desktop's `openPmChat`). Answers its id,
+/// or null when it could not be read back; a refusal throws.
+Future<String?> openSwarmPmChat(SwarmReader reader, String projectId) async {
+  if (swarmPmChat(reader, projectId) case final chat?) return chat.id;
+  final me = reader.snapshot?.people
+      .where((p) => p.id == reader.accountId)
+      .firstOrNull;
+  final email = me?.email;
+  var operation =
+      'pm-chat-$projectId-${reader.accountId}-${me?.generation ?? ''}';
+  // The backend's operation ids are at most 160 characters.
+  if (operation.length > 160) operation = operation.substring(0, 160);
+  final answer = superTabMap(
+    await reader.request(
+      'POST',
+      '/api/super-tabs/${Uri.encodeComponent(reader.tabId)}/commands',
+      body: {
+        'operationId': operation,
+        'command': {
+          'type': 'conversation.create',
+          'projectId': projectId,
+          'title': email == null || email.isEmpty
+              ? 'Chat with PM'
+              : email.split('@').first,
+          'brief': '',
+          'checks': <Object>[],
+          'audience': {
+            'personIds': [reader.accountId],
+          },
+        },
+      },
+    ),
+  );
+  final id = superTabMap(answer['result'] ?? const {})['conversationId'];
+  if (id is! String) return null;
+  await reader.refresh();
+  return await reader.loadConversation(id) ? id : null;
+}
