@@ -8,7 +8,8 @@ import { machineShareGrant, sharedVia } from '../lib/machineSharePolicy.js'
 import { machineBillingAllowsDataPlane } from '../lib/billingState.js'
 import { applyCommand, authorizeCommandAccess, operationSchema, PAIR_CHAIN_LIMIT, postable, type Command, type CommandContext } from './commands.js'
 import { redactCredentials } from './credentials.js'
-import { attachmentMime, attachmentName, AttachmentTooLarge, checkedType, MAX_ATTACHMENT_BYTES, objectKeyFor, publicUrl, type Attachment, type Attachments } from './attachments.js'
+import { attachmentMime, attachmentName, AttachmentTooLarge, AVATAR_PURPOSE, AVATAR_TYPES, checkedType, MAX_ATTACHMENT_BYTES, MAX_AVATAR_BYTES, objectKeyFor, peekType, publicUrl,
+  type Attachment, type Attachments } from './attachments.js'
 import { randomBytes } from 'node:crypto'
 import type { Readable } from 'node:stream'
 import { logger } from '../utils/logger.js'
@@ -1022,30 +1023,63 @@ export class SuperTabStore {
     // A file's name is shown in the chat like its message, so it never keeps a credential either.
     const name = attachmentName.transform(value => redactCredentials(value).text).safeParse(file.name), mime = attachmentMime.safeParse(file.mime)
     if (!name.success || !mime.success) fail('INVALID_ATTACHMENT', 'Attach a file with a printable name and a content type.', 400)
-    const key = await transaction(this.db, async tx => {
-      const { actor } = await this.poster(tx, user, tabId, conversationId, asAgentId)
-      const key = actorKey(actor)
-      // Unsent files cost bucket space, so one actor gets a bounded number an hour.
+    const key = await this.uploader(tabId, tx => this.poster(tx, user, tabId, conversationId, asAgentId).then(p => p.actor))
+    const row = await this.keep(attachments, tabId, key, { name: name.data, conversationId },
+      async () => checkedType(mime.data, file.body), file.body, MAX_ATTACHMENT_BYTES)
+    return { attachment: { id: row.id, name: row.name, mime: row.mime, size: row.size, url: row.url } satisfies Attachment }
+  }
+
+  /** A picture for a person's or an agent's avatar (profile.ts): png, jpg or webp by its real bytes, at most 1 MB. Any
+   *  member who may write uploads one; the command that sets it decides whose it becomes. */
+  async uploadAvatar(user: AuthUser, tabId: string, file: { body: Readable }, asAgentId?: string) {
+    const attachments = this.attachments ?? fail('ATTACHMENTS_UNAVAILABLE', 'Avatars are not available on this server.', 503)
+    const key = await this.uploader(tabId, async tx => {
+      const { state } = await this.load(tx, user, tabId, {})
+      const actor = await this.actor(tx, user, state, asAgentId)
+      author(state, actor, true)
+      return actor
+    })
+    const row = await this.keep(attachments, tabId, key, { name: 'avatar', conversationId: '', purpose: AVATAR_PURPOSE }, async () => {
+      const peeked = await peekType(file.body)
+      if (!peeked.type || !AVATAR_TYPES.has(peeked.type)) fail('AVATAR_TYPE', 'Use a PNG, JPEG or WebP picture.', 415)
+      return { mime: peeked.type, body: peeked.body }
+    }, file.body, MAX_AVATAR_BYTES)
+    return { avatar: { id: row.id, url: row.url } }
+  }
+
+  /** The uploading actor's key, once it may upload and is under its hourly allowance: unsent files cost bucket space. */
+  private async uploader(tabId: string, allowed: (tx: Transaction) => Promise<Actor>): Promise<string> {
+    return transaction(this.db, async tx => {
+      const key = actorKey(await allowed(tx))
       const recent = await tx.superTabAttachment.count({ where: { tabId, actorKey: key, createdAt: { gte: new Date(this.now() - 3_600_000) } } })
       if (recent >= 200) fail('RATE_LIMITED', 'You attached 200 files in the last hour. Wait before attaching more.', 429)
       return key
     })
-    const objectKey = objectKeyFor(attachments.prefix, tabId, name.data)
-    let size: number, stored = mime.data
+  }
+
+  /** Streams one file into the bucket under a random key, as the type `typed` decides from its first bytes, and records it. */
+  private async keep(attachments: Attachments, tabId: string, actorKey: string, file: { name: string; conversationId: string; purpose?: string },
+    typed: () => Promise<{ mime: string; body: Readable }>, original: Readable, cap: number) {
+    const objectKey = objectKeyFor(attachments.prefix, tabId, file.name)
+    let size: number, mime: string
     try {
-      const checked = await checkedType(mime.data, file.body)
-      stored = checked.mime
-      size = await attachments.store.put(objectKey, { name: name.data, mime: stored }, checked.body, MAX_ATTACHMENT_BYTES)
+      const checked = await typed()
+      mime = checked.mime
+      size = await attachments.store.put(objectKey, { name: file.name, mime }, checked.body, cap)
     } catch (error) {
-      if (error instanceof AttachmentTooLarge) fail('ATTACHMENT_TOO_LARGE', error.message, 413)
+      if (error instanceof SuperTabError) throw error
+      if (error instanceof AttachmentTooLarge) {
+        if (file.purpose === AVATAR_PURPOSE) fail('AVATAR_TOO_LARGE', 'An avatar can be at most 1 MB.', 413)
+        fail('ATTACHMENT_TOO_LARGE', error.message, 413)
+      }
       // The client's own stream breaking is the request's; anything else is the bucket's, and the person can try again.
-      if (file.body.errored || (error && typeof error === 'object' && 'code' in error && String(error.code).startsWith('FST_'))) throw error
+      if (original.errored || (error && typeof error === 'object' && 'code' in error && String(error.code).startsWith('FST_'))) throw error
       logger.error('super-tab attachment storage failed', { tabId, error: error instanceof Error ? error.message : String(error) })
       fail('ATTACHMENTS_UNAVAILABLE', 'Could not store the file just now. Try again.', 503)
     }
-    const row = await this.db.superTabAttachment.create({ data: { id: randomBytes(12).toString('hex'), tabId, conversationId,
-      actorKey: key, name: name.data, mime: stored, size, objectKey } })
-    return { attachment: { id: row.id, name: row.name, mime: row.mime, size: row.size, url: publicUrl(attachments.publicBase, objectKey) } satisfies Attachment }
+    const row = await this.db.superTabAttachment.create({ data: { id: randomBytes(12).toString('hex'), tabId, conversationId: file.conversationId,
+      actorKey, name: file.name, mime, size, objectKey, ...(file.purpose ? { purpose: file.purpose } : {}) } })
+    return { ...row, url: publicUrl(attachments.publicBase, objectKey) }
   }
 
   /** The actor, once it may post in this conversation. */
@@ -1064,7 +1098,7 @@ export class SuperTabStore {
     const rows = await tx.superTabAttachment.findMany({ where: { tabId, id: { in: ids } } })
     return ids.map(id => {
       const row = rows.find(r => r.id === id)
-      if (!row || row.actorKey !== actorKey(actor) || row.conversationId !== command.conversationId) {
+      if (!row || row.actorKey !== actorKey(actor) || row.conversationId !== command.conversationId || row.purpose) {
         fail('ATTACHMENT_UNAVAILABLE', 'Attach this file again before sending it.', 400)
       }
       if (row.usedBy) fail('ATTACHMENT_USED', 'This file was already sent. Attach it again to send it in another message.')

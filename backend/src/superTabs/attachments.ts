@@ -8,13 +8,18 @@ export interface Attachment { id: string; name: string; mime: string; size: numb
 
 export const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024
 export const MAX_ATTACHMENTS = 10
+/** An avatar is a small picture: Desktop resizes it before upload, and the backend still holds it to this. */
+export const MAX_AVATAR_BYTES = 1024 * 1024
+export const AVATAR_TYPES: ReadonlySet<string> = new Set(['image/png', 'image/jpeg', 'image/webp'])
+/** The `purpose` of an avatar upload (schema.prisma SuperTabAttachment): never sendable as a chat file. */
+export const AVATAR_PURPOSE = 'avatar'
 
 // Control, format (bidi overrides, zero-width) and line/paragraph separators: a name that hides its real shape.
 export const attachmentName = z.string().trim().min(1).max(255).refine(value => !/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u.test(value), 'Use a printable file name.')
 export const attachmentMime = z.string().trim().toLowerCase().max(200).regex(/^[a-z0-9][a-z0-9!#$&^_.+-]*\/[a-z0-9][a-z0-9!#$&^_.+-]*$/)
 
 export class AttachmentTooLarge extends Error {
-  constructor() { super(`A file can be at most ${MAX_ATTACHMENT_BYTES / 1024 / 1024} MB.`) }
+  constructor(cap = MAX_ATTACHMENT_BYTES) { super(`A file can be at most ${cap / 1024 / 1024} MB.`) }
 }
 
 /** The bucket behind the CDN. Tests and the local rig use the in-memory store below. */
@@ -51,11 +56,9 @@ export function imageTypeOf(head: Buffer): string | null {
   return null
 }
 
-/** A file that claims to be an image is served as one only when its first bytes agree, and then as what they say: a
- * renamed page or script never opens inline, and a .png that is really a JPEG still shows. `body` is handed back with
- * those bytes in front, so the store still reads the whole file as a stream. */
-export async function checkedType(mime: string, body: Readable): Promise<{ mime: string; body: Readable }> {
-  if (!INLINE.has(mime)) return { mime, body }
+/** The raster type `body`'s first bytes are, or null, and `body` handed back with those bytes in front, so the store
+ * still reads the whole file as a stream. */
+export async function peekType(body: Readable): Promise<{ type: string | null; body: Readable }> {
   // One iterator for the whole read: leaving a `for await` early would destroy the request stream.
   const source = body[Symbol.asyncIterator]()
   const parts: Buffer[] = []
@@ -74,7 +77,15 @@ export async function checkedType(mime: string, body: Readable): Promise<{ mime:
       yield Buffer.from(next.value)
     }
   }
-  return { mime: imageTypeOf(head) ?? 'application/octet-stream', body: Readable.from(rest()) }
+  return { type: imageTypeOf(head), body: Readable.from(rest()) }
+}
+
+/** A file that claims to be an image is served as one only when its first bytes agree, and then as what they say: a
+ * renamed page or script never opens inline, and a .png that is really a JPEG still shows. */
+export async function checkedType(mime: string, body: Readable): Promise<{ mime: string; body: Readable }> {
+  if (!INLINE.has(mime)) return { mime, body }
+  const peeked = await peekType(body)
+  return { mime: peeked.type ?? 'application/octet-stream', body: peeked.body }
 }
 
 /** Counts what passes and fails the stream past `cap`, so a writer never commits more. */
@@ -82,7 +93,7 @@ async function capped(body: Readable, cap: number, sink: Writable): Promise<numb
   let size = 0
   await pipeline(body, new Transform({ transform(chunk: Buffer, _encoding, done) {
     size += chunk.byteLength
-    done(size > cap ? new AttachmentTooLarge() : null, chunk)
+    done(size > cap ? new AttachmentTooLarge(cap) : null, chunk)
   } }), sink)
   return size
 }

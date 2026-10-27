@@ -29,6 +29,19 @@ const read = async (tab: string, user: AuthUser, path = 'parts') => {
   const response = await app.inject({ method: 'GET', url: `/api/super-tabs/${tab}/${path}`, headers: { authorization: `Bearer ${user.sub}` } })
   return { status: response.statusCode, body: response.json(), text: response.body }
 }
+type Uploaded = { id: string; url: string }
+const upload = async (tab: string, bytes: Uint8Array, name = 'me.png', mime = 'image/png', user = owner, asAgentId?: string) => {
+  const form = new FormData()
+  form.append('file', new Blob([bytes], { type: mime }), name)
+  const encoded = new Request('http://upload.test', { method: 'POST', body: form })
+  const response = await app.inject({ method: 'POST', url: `/api/super-tabs/${tab}/avatars${asAgentId ? `?asAgentId=${asAgentId}` : ''}`,
+    headers: { authorization: `Bearer ${user.sub}`, 'content-type': encoded.headers.get('content-type')! }, payload: Buffer.from(await encoded.arrayBuffer()) })
+  const body = response.json()
+  return { status: response.statusCode, code: body.error?.code ?? body.code, avatar: body.data?.avatar as Uploaded }
+}
+const PNG = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]
+const image = (size: number, head: number[] = PNG) => { const bytes = new Uint8Array(size).map((_, i) => i % 251); bytes.set(head); return bytes }
+const objectKey = (url: string) => url.slice('https://cdn.example.test/'.length)
 async function swarm() {
   const tab = (await store.create(owner, randomUUID(), 'Office')).id
   const invitation = await run(tab, { type: 'invite.create', email: peer.email, role: 'collaborator', conversationId: 'lead' })
@@ -90,5 +103,49 @@ describe('status line', () => {
     const members = (await read(tab, owner)).body.data.members as Array<{ key: string; data: { status?: { text: string } } }>
     expect(members.find(m => m.key === owner.sub)!.data.status!.text).toBe('Coffee')
     expect(members.find(m => m.key === peer.sub)!.data.status!.text).toBe('Reviewing')
+  })
+})
+
+describe('avatar uploads', () => {
+  it('stores a png, jpg or webp of at most 1 MB as the image its bytes are', async () => {
+    const tab = await swarm()
+    const png = await upload(tab, image(1024 * 1024))
+    expect(png.status).toBe(200)
+    expect(png.avatar.url).toMatch(/^https:\/\/cdn\.example\.test\/super-tabs\//)
+    expect(files.objects.get(objectKey(png.avatar.url))).toMatchObject({ contentType: 'image/png' })
+    // A .png that is really a JPEG still shows, as what it is.
+    const jpeg = await upload(tab, image(2048, [0xff, 0xd8, 0xff]), 'me.png', 'image/png', peer)
+    expect(jpeg.status).toBe(200)
+    expect(files.objects.get(objectKey(jpeg.avatar.url))).toMatchObject({ contentType: 'image/jpeg' })
+    const webp = await upload(tab, image(64, [...Buffer.from('RIFF'), 0, 0, 0, 0, ...Buffer.from('WEBP')]), 'me.webp', 'image/webp')
+    expect(webp.status).toBe(200)
+  })
+
+  it('refuses a file over 1 MB, a gif, and a page or script that says it is an image', async () => {
+    const tab = await swarm()
+    const before = files.objects.size
+    expect(await upload(tab, image(1024 * 1024 + 1))).toMatchObject({ status: 413, code: 'AVATAR_TOO_LARGE' })
+    expect(await upload(tab, image(64, [...Buffer.from('GIF89a')]), 'me.gif', 'image/gif')).toMatchObject({ status: 415, code: 'AVATAR_TYPE' })
+    expect(await upload(tab, new TextEncoder().encode('<html><script>alert(1)</script></html>'), 'me.png', 'image/png'))
+      .toMatchObject({ status: 415, code: 'AVATAR_TYPE' })
+    expect(await upload(tab, new TextEncoder().encode('<svg xmlns="http://www.w3.org/2000/svg"/>'), 'me.svg', 'image/svg+xml'))
+      .toMatchObject({ status: 415, code: 'AVATAR_TYPE' })
+    expect(files.objects.size).toBe(before)
+  })
+
+  it('is refused outside the Swarm and for a viewer', async () => {
+    const tab = await swarm()
+    expect((await upload(tab, image(64), 'me.png', 'image/png', outsider)).status).toBe(403)
+    const viewing = (await store.create(owner, randomUUID(), 'Read only')).id
+    const invitation = await run(viewing, { type: 'invite.create', email: peer.email, role: 'viewer', conversationId: 'lead' })
+    await run(viewing, { type: 'invite.accept', inviteId: invitation.result.inviteId as string }, peer)
+    expect(await upload(viewing, image(64), 'me.png', 'image/png', peer)).toMatchObject({ status: 403, code: 'READ_ONLY' })
+  })
+
+  it('is never sendable as a chat file', async () => {
+    const tab = await swarm()
+    const { avatar } = await upload(tab, image(64))
+    await expect(run(tab, { type: 'message.send', conversationId: 'lead', text: '', replyTo: null, recipientIds: [], attachmentIds: [avatar.id] }))
+      .rejects.toMatchObject({ code: 'ATTACHMENT_UNAVAILABLE' })
   })
 })
