@@ -255,16 +255,19 @@ void main() {
 
   testWidgets('an original further back is read in from earlier pages, then '
       'shown', (tester) async {
+    // A first page taller than the screen: nothing earlier is read until
+    // the quote asks for it.
     final fake = backend(
       [
-        for (var i = 30; i < 40; i++) message('m$i', i, minute: i),
+        for (var i = 10; i < 40; i++)
+          message('m$i', i, text: 'Line $i\nof the log', minute: i),
         message('m40', 40, author: me, text: 'Yes', replyTo: 'm1', minute: 50),
       ],
-      next: {'sequence': 30, 'id': 'm30'},
+      next: {'sequence': 10, 'id': 'm10'},
     );
-    fake.routes['$messages?before=30&beforeId=m30'] = (_) => {
+    fake.routes['$messages?before=10&beforeId=m10'] = (_) => {
       'messages': [
-        for (var i = 29; i > 1; i--) message('m$i', i, minute: i),
+        for (var i = 9; i > 1; i--) message('m$i', i, minute: i),
         message('m1', 1, author: 'agent-lead', text: 'The very first plan'),
       ],
       'next': null,
@@ -275,7 +278,7 @@ void main() {
     await tester.tap(key('swarm-quote-m40'));
     await tester.pumpAndSettle();
 
-    expect(fake.paths, contains('$messages?before=30&beforeId=m30'));
+    expect(fake.paths, contains('$messages?before=10&beforeId=m10'));
     final row = find.descendant(
       of: key('swarm-message-m1'),
       matching: find.text('The very first plan'),
@@ -559,8 +562,11 @@ void main() {
     await pump(
       tester,
       backend(
-        [for (var i = 30; i < 34; i++) message('m$i', i, minute: i)],
-        next: {'sequence': 30, 'id': 'm30'},
+        [
+          for (var i = 10; i < 34; i++)
+            message('m$i', i, text: 'Line $i\nof the log', minute: i),
+        ],
+        next: {'sequence': 10, 'id': 'm10'},
         decisions: [decision('d1')],
       ),
     );
@@ -676,6 +682,134 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(inView(tester, key('swarm-pending')), isTrue);
+  });
+
+  group('earlier messages', () {
+    /// A first page of [count] two-line messages, m[first] onwards, with more
+    /// before it.
+    FakeSwarm long({int first = 10, int count = 30}) => backend(
+      [
+        for (var i = first; i < first + count; i++)
+          message('m$i', i, text: 'Line $i\nof the log', minute: i % 60),
+      ],
+      next: {'sequence': first, 'id': 'm$first'},
+    );
+    final older = '$messages?before=10&beforeId=m10';
+    List<Map<String, dynamic>> earlier() => [
+      for (var i = 9; i > 0; i--)
+        message('m$i', i, text: 'Earlier $i', minute: i),
+    ];
+
+    Future<void> nearTop(WidgetTester tester) async {
+      // The list runs from the foot: a drag down goes up the chat, here to
+      // its top.
+      await tester.drag(key('swarm-messages'), const Offset(0, 4000));
+      // Past the bounce at the edge.
+      await tester.pumpAndSettle();
+    }
+
+    testWidgets('are read on their own near the top, with no tap, and what '
+        'is read stays where it is', (tester) async {
+      final fake = long();
+      final page = Completer<Object?>();
+      fake.routes[older] = (_) => page.future;
+      await pump(tester, fake);
+      expect(fake.paths, isNot(contains(older)), reason: 'not at the top yet');
+
+      await nearTop(tester);
+      expect(fake.paths, contains(older));
+      expect(key('swarm-older-loading'), findsOneWidget);
+      expect(key('swarm-older-messages'), findsNothing);
+      final reading = find.text('Line 12\nof the log');
+      final before = tester.getRect(reading).top;
+
+      page.complete({'messages': earlier(), 'next': null});
+      await tester.pumpAndSettle();
+
+      expect(tester.getRect(reading).top, moreOrLessEquals(before, epsilon: 1));
+      expect(key('swarm-message-m9'), findsOneWidget);
+      expect(key('swarm-older-loading'), findsNothing);
+    });
+
+    testWidgets('that fail to load offer Earlier messages, which reads them '
+        'again', (tester) async {
+      final fake = long();
+      var down = true;
+      fake.routes[older] = (_) => down
+          ? throw const SuperTabFailure('MACHINE_UNAVAILABLE', 'No computer.')
+          : {'messages': earlier(), 'next': null};
+      await pump(tester, fake);
+
+      await nearTop(tester);
+      await tester.pumpAndSettle();
+      expect(key('swarm-older-messages'), findsOneWidget);
+      final reads = fake.paths.where((p) => p == older).length;
+
+      // Not read over and over on its own while it fails.
+      await tester.drag(key('swarm-messages'), const Offset(0, -100));
+      await nearTop(tester);
+      await tester.pumpAndSettle();
+      expect(fake.paths.where((p) => p == older), hasLength(reads));
+
+      down = false;
+      await tester.tap(key('swarm-older-messages'));
+      await tester.pumpAndSettle();
+      expect(key('swarm-message-m9'), findsOneWidget);
+      expect(key('swarm-older-messages'), findsNothing);
+    });
+
+    testWidgets('a first page shorter than the screen reads the one before '
+        'it at once', (tester) async {
+      final fake = long(count: 2);
+      fake.routes[older] = (_) => {'messages': earlier(), 'next': null};
+      await pump(tester, fake);
+
+      expect(fake.paths, contains(older));
+      expect(find.text('Earlier 9'), findsOneWidget);
+    });
+
+    testWidgets('a read that brings nothing new is not read again on its own', (
+      tester,
+    ) async {
+      final fake = long(count: 2);
+      fake.routes[older] = (_) => {
+        'messages': <Object>[],
+        'next': {'sequence': 10, 'id': 'm10'},
+      };
+      await pump(tester, fake);
+
+      expect(fake.paths.where((p) => p == older), hasLength(1));
+      expect(key('swarm-older-messages'), findsOneWidget);
+    });
+  });
+
+  testWidgets('a Product Manager\'s avatar is the prototype\'s blue; another '
+      'agent\'s is not', (tester) async {
+    await pump(
+      tester,
+      backend([
+        message('m1', 1, author: 'agent-lead', text: 'Plan'),
+        message('m2', 2, text: 'On it?', minute: 1),
+      ]),
+    );
+
+    Color fill(String id) {
+      final avatar = find.descendant(
+        of: key('swarm-message-$id'),
+        matching: find.byWidgetPredicate(
+          (w) =>
+              w is Container &&
+              w.decoration is BoxDecoration &&
+              (w.decoration! as BoxDecoration).shape == BoxShape.circle,
+        ),
+      );
+      return ((tester.widget<Container>(avatar.first).decoration!
+              as BoxDecoration)
+          .color)!;
+    }
+
+    expect(fill('m1'), const Color(0xFF1D5BD6));
+    expect(fill('m2'), isNot(const Color(0xFF1D5BD6)));
   });
 
   group('a day divider says', () {

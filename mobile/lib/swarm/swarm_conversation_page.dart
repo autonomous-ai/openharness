@@ -92,6 +92,10 @@ class _SwarmConversationPageState extends State<SwarmConversationPage> {
   bool _finding = false;
   String? _note;
 
+  /// Earlier messages are read on their own as the person nears the top;
+  /// "Earlier messages" is offered only once that read failed.
+  bool _loadingOlder = false, _olderFailed = false;
+
   /// No other screen covers this one.
   bool _visible = true;
   bool _watching = false;
@@ -100,6 +104,7 @@ class _SwarmConversationPageState extends State<SwarmConversationPage> {
   void initState() {
     super.initState();
     _text.addListener(_typed);
+    _scroll.addListener(_nearTop);
   }
 
   @override
@@ -193,6 +198,45 @@ class _SwarmConversationPageState extends State<SwarmConversationPage> {
     final spaced = draft.isEmpty || RegExp(r'\s$').hasMatch(draft);
     c.draft = '$draft${spaced ? '' : ' '}@';
     _focus.requestFocus();
+  }
+
+  /// How close to the oldest message shown the earlier ones start to be
+  /// read: a screen's height ahead, so they are there before the person is.
+  void _nearTop() {
+    final c = _conversation;
+    if (c == null ||
+        !c.hasOlder ||
+        _loadingOlder ||
+        _olderFailed ||
+        _finding ||
+        !_scroll.hasClients) {
+      return;
+    }
+    final position = _scroll.position;
+    // The list runs from the foot: what is after the view is above it.
+    if (position.extentAfter < position.viewportDimension) {
+      unawaited(_loadOlder(c));
+    }
+  }
+
+  /// Reads the page before the oldest message shown. The list is drawn from
+  /// its foot, so what arrives above leaves what the person reads in place.
+  Future<void> _loadOlder(SwarmConversation c) async {
+    if (_loadingOlder || !c.hasOlder) return;
+    setState(() {
+      _loadingOlder = true;
+      _olderFailed = false;
+    });
+    final shown = c.messages.length;
+    await c.loadOlder();
+    if (!mounted || _conversation != c) return;
+    setState(() {
+      _loadingOlder = false;
+      // A read that failed, or brought nothing new while more is said to be
+      // there, is not tried again on its own: it would be read over and over.
+      _olderFailed =
+          c.hasOlder && (c.error != null || c.messages.length == shown);
+    });
   }
 
   /// Sends the draft, back at the foot of the chat where the post shows.
@@ -361,6 +405,12 @@ class _SwarmConversationPageState extends State<SwarmConversationPage> {
       hasOlder: c.hasOlder,
     ).reversed.toList();
     _shown = entries;
+    // A page shorter than the screen never scrolls: look once it is drawn.
+    if (c.hasOlder && !_loadingOlder && !_olderFailed) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _nearTop();
+      });
+    }
     final lead = pending == null ? 0 : 1;
     final title = group == null
         ? 'Chat'
@@ -405,9 +455,9 @@ class _SwarmConversationPageState extends State<SwarmConversationPage> {
       final _MessageEntry m => message(m),
       _AskEntry(:final need, :final grouped) => _Ask(
         session: session,
+        snapshot: snapshot,
         need: need,
         grouped: grouped,
-        role: snapshot == null ? null : swarmAskerRole(snapshot, need),
       ),
     };
 
@@ -489,12 +539,28 @@ class _SwarmConversationPageState extends State<SwarmConversationPage> {
                     if (index - lead < entries.length) {
                       return entry(entries[index - lead]);
                     }
+                    // Read on their own near the top; the link only once
+                    // that read failed.
                     return Center(
-                      child: _Link(
-                        key: const ValueKey('swarm-older-messages'),
-                        label: 'Earlier messages',
-                        onTap: () => unawaited(c.loadOlder()),
-                      ),
+                      child: _olderFailed
+                          ? _Link(
+                              key: const ValueKey('swarm-older-messages'),
+                              label: 'Earlier messages',
+                              onTap: () => unawaited(_loadOlder(c)),
+                            )
+                          : SizedBox(
+                              key: const ValueKey('swarm-older-loading'),
+                              height: 44,
+                              child: Center(
+                                child: Text(
+                                  'Loading earlier messages…',
+                                  style: _sans(
+                                    13.5,
+                                    color: AppPalette.textFaint,
+                                  ),
+                                ),
+                              ),
+                            ),
                     );
                   },
                 ),
@@ -879,14 +945,12 @@ String? swarmAgentRole(SuperTabSnapshot snapshot, String agentId) {
   return agent.isReviewer ? 'Rev' : 'Dev';
 }
 
-/// The role of the agent asking [need], found by the name it asked under: a
-/// decision names its asker, not their id.
-String? swarmAskerRole(SuperTabSnapshot snapshot, SwarmDecisionNeed need) {
-  final asker = snapshot.agents
-      .where((a) => snapshot.agentName(a.id) == need.decision.askerName)
-      .firstOrNull;
-  return asker == null ? null : swarmAgentRole(snapshot, asker.id);
-}
+/// The agent asking [need], found by the name it asked under: a decision
+/// names its asker, not their id.
+SuperTabAgent? swarmAsker(SuperTabSnapshot snapshot, SwarmDecisionNeed need) =>
+    snapshot.agents
+        .where((a) => snapshot.agentName(a.id) == need.decision.askerName)
+        .firstOrNull;
 
 /// [text] with each @mention of one of [names] marked, as the desktop and
 /// the prototype mark them.
@@ -1006,6 +1070,7 @@ class _Message extends StatelessWidget {
           name: name,
           id: message.authorId,
           agent: message.fromAgent,
+          pm: role == 'PM',
         ),
         header: _Header(
           name: name,
@@ -1138,9 +1203,15 @@ class _Role extends StatelessWidget {
 }
 
 /// Who wrote a message, in a circle: an agent's initial on its own deep
-/// colour, the person's on theirs — white on each, as the prototype has it.
+/// colour — blue for a Product Manager, as the prototype has River — the
+/// person's on theirs, white on each.
 class _Avatar extends StatelessWidget {
-  const _Avatar({required this.name, required this.id, required this.agent});
+  const _Avatar({
+    required this.name,
+    required this.id,
+    required this.agent,
+    this.pm = false,
+  });
 
   static const double size = 32;
 
@@ -1159,11 +1230,17 @@ class _Avatar extends StatelessWidget {
   final String name, id;
   final bool agent;
 
+  /// A project's Product Manager: the prototype's blue, kept for them alone.
+  final bool pm;
+
   @override
   Widget build(BuildContext context) {
-    final fill = agent
-        ? _agents[id.codeUnits.fold(0, (a, b) => a + b) % _agents.length]
-        : _person;
+    final fill = !agent
+        ? _person
+        : pm
+        ? _agents.first
+        : _agents[1 +
+              id.codeUnits.fold(0, (a, b) => a + b) % (_agents.length - 1)];
     final initial = name.trim().isEmpty
         ? '?'
         : name.trim().characters.first.toUpperCase();
@@ -1313,20 +1390,23 @@ class _Pending extends StatelessWidget {
 class _Ask extends StatelessWidget {
   const _Ask({
     required this.session,
+    required this.snapshot,
     required this.need,
     required this.grouped,
-    required this.role,
   });
 
   final SwarmSession session;
+  final SuperTabSnapshot? snapshot;
   final SwarmDecisionNeed need;
   final bool grouped;
-  final String? role;
 
   @override
   Widget build(BuildContext context) {
     final tty = Tty.of(context);
     final decision = need.decision;
+    final snapshot = this.snapshot;
+    final asker = snapshot == null ? null : swarmAsker(snapshot, need);
+    final role = asker == null ? null : swarmAgentRole(snapshot!, asker.id);
     final at = decision.createdAt?.toLocal();
     String two(int n) => n.toString().padLeft(2, '0');
     return Padding(
@@ -1336,8 +1416,9 @@ class _Ask extends StatelessWidget {
         grouped: grouped,
         avatar: _Avatar(
           name: decision.askerName,
-          id: decision.askerName,
+          id: asker?.id ?? decision.askerName,
           agent: true,
+          pm: role == 'PM',
         ),
         header: _Header(
           name: decision.askerName,
@@ -1457,6 +1538,7 @@ class _MentionPicker extends StatelessWidget {
                             name: snapshot.agentName(agent.id),
                             id: agent.id,
                             agent: true,
+                            pm: snapshot.isLead(agent.id),
                           ),
                           const SizedBox(width: 10),
                           Expanded(
