@@ -4,7 +4,6 @@
 import 'dart:async';
 import 'dart:io';
 import 'dart:math';
-import 'dart:typed_data';
 
 import 'package:archive/archive.dart';
 import 'package:flutter/material.dart';
@@ -459,6 +458,49 @@ void main() {
     expect(find.text('src.zip is over 10 MB.'), findsOneWidget);
     expect(names(controller), isEmpty);
     expect(field(tester).text, '${src.path} ');
+    await close(tester, controller);
+  });
+
+  testWidgets('a path a shell would read differently goes in quoted, its '
+      'quotes, dollars, backticks and backslashes escaped', (tester) async {
+    final controller = await open(tester);
+    final quoted = folder('my "notes"'),
+        dollar = folder(r'cost$HOME'),
+        tick = folder('run`date`'),
+        slash = folder(r'back\slash'),
+        apostrophe = folder("it's");
+    final r = root.path;
+
+    await drop(tester, [
+      quoted.path,
+      dollar.path,
+      tick.path,
+      slash.path,
+      apostrophe.path,
+    ], until: () => field(tester).text.contains('it'));
+
+    expect(
+      field(tester).text,
+      '"$r/my \\"notes\\"" "$r/cost\\\$HOME" "$r/run\\`date\\`" '
+      '"$r/back\\\\slash" "$r/it\'s" ',
+    );
+    await close(tester, controller);
+  });
+
+  testWidgets('Attach as zip takes out a path it escaped', (tester) async {
+    final controller = await open(tester, machineId: 'studio');
+    final quoted = folder('my "notes"');
+    File('${quoted.path}/a.txt').writeAsStringSync('a');
+    await tester.enterText(composer, 'See');
+    await drop(tester, [
+      quoted.path,
+    ], until: () => field(tester).text.contains('notes'));
+
+    await tester.tap(find.text('Attach as zip'));
+    await settle(tester, () => names(controller).isNotEmpty);
+
+    expect(names(controller), ['my "notes".zip']);
+    expect(field(tester).text, 'See ');
     await close(tester, controller);
   });
 }

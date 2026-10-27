@@ -396,9 +396,13 @@ class _SuperTabViewState extends State<SuperTabView>
     });
   }
 
-  /// [path] as it goes into a message: quoted when it holds a space.
+  /// [path] as it goes into a message: as it is, or in double quotes when it
+  /// holds a space or anything else a shell reads specially, with `"`, `\`,
+  /// `$` and `` ` `` escaped, so it reads back as the same path.
   static String _pathText(String path) =>
-      path.contains(RegExp(r'\s')) ? '"$path"' : path;
+      path.contains(RegExp(r'''[\s"'$`\\!*?\[\]{}()<>|&;]'''))
+      ? '"${path.replaceAllMapped(RegExp(r'["\\$`]'), (m) => '\\${m[0]}')}"'
+      : path;
 
   /// Puts dropped folders' paths into chat [id]'s message at the cursor,
   /// space-separated, as a terminal takes a dropped folder.
