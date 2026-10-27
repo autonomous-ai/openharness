@@ -5,7 +5,7 @@
  * (routeCommand.ts), so the plan never offers what the route would refuse. Only new agents are planned, not idle members. */
 import { requiredToolReason, startRequirements } from './capacity.js'
 import { API_BUILDERS, breaks, floorFor, KIND_WORD, liftEffort, quotaOf2, SIZES, type Assessment, type Level, type Policy, type Size, type SwarmRule } from './route.js'
-import { LOCAL_FRESH_MS, OFFLINE, servedModels, STALLED, stalled, takesBuilder, unreadyPool } from './routeCommand.js'
+import { LOCAL_FRESH_MS, OFFLINE, servedModels, STALLED, stalled, takesBuilder, taskRequirement, unreadyPool } from './routeCommand.js'
 import { identifier, object } from './wire.js'
 
 type Json = Record<string, unknown>
@@ -168,6 +168,9 @@ export function planSetup(input: { state: Json; policy: Policy; leadId: string; 
       const teamPool = list(state.machines).find(m => m.machineId === team)
       return teamPool && list(state.machines).some(m => m.machineId === mac) ? [projectOwner === teamPool.contributorId ? team : mac] : []
     }))
+    // The group's own requirement, as the route reads it. A required device rules out every machine here: a machine reports
+    // its devices only to a capacity probe the route makes, never in the reading the plan has.
+    const required = taskRequirement(c)
     const allowed = [...pools].filter(([machineId, pool]) => {
       const repository = object(project?.repository)
       const teamWork = object(pool.teamWork)
@@ -177,6 +180,7 @@ export function planSetup(input: { state: Json; policy: Policy; leadId: string; 
         && !(pool.scope !== 'swarm' && projectId !== 'lead')
         && !(pool.scope === 'swarm' && repository.machineId !== machineId && typeof repository.repositoryUrl !== 'string')
         && !breaks(rules.filter(r => r.rule.kind === 'machines'), { machineId, engine: '', model: '', effort: '' })
+        && (!required.machines || required.machines.has(machineId) || required.machines.has(macOf.get(machineId) ?? '')) && !required.devices.length
     }).map(([machineId]) => machineId)
     const modelRules = rules.filter(r => r.rule.kind !== 'machines')
     const allowedModels = Object.entries(rows).filter(([rowId, row]) => !(review && gridRows.has(rowId))
