@@ -14,10 +14,15 @@ export interface TerminalOpenerDeps {
   /** What it answers when no backend is ready: the configured backend's own code (terminalBackend.ts
    *  `noBackendCode`); `TMUX_UNAVAILABLE`, as before, by default. */
   noBackendCode?: string
+  /** Rechecks a backend missing at boot, as an agent's create does (core/agents/create.ts): a terminal asked for after
+   *  tmux was installed while the daemon ran (a Harness Team account installs its own, team/tmux.ts) was refused until
+   *  the daemon restarted, while an agent created at the same moment started. */
+  recoverBackend?: () => Promise<TerminalOpenerDeps['createBackend']>
 }
 
-export function createTerminalOpener({ createBackend, registry, announceSession, blocksFolder, noBackendCode = 'TMUX_UNAVAILABLE' }: TerminalOpenerDeps): Pick<TerminalsPort, 'open'> {
+export function createTerminalOpener({ createBackend, recoverBackend, registry, announceSession, blocksFolder, noBackendCode = 'TMUX_UNAVAILABLE' }: TerminalOpenerDeps): Pick<TerminalsPort, 'open'> {
   return { open: async ({ argv, cwd }) => {
+    createBackend ??= await recoverBackend?.() ?? null
     if (!createBackend) return { ok: false, error: noBackendCode }
     if (blocksFolder(cwd)) return { ok: false, error: 'WORKTREE_BUSY' }
     const result = await createAndRegisterPane({
