@@ -17,7 +17,8 @@ write the request, and choose the project's visibility. Store uses
 
 Use **+ Project** in the left sidebar to create another project in the current
 Swarm. It uses the same form and creates a separate lead session. Clicking a
-project name opens its lead chat. Its chevron expands numbered workgroups.
+project row opens its lead chat and expands its numbered workgroups; a second
+click on the open project hides them.
 The lead can create and coordinate those workgroups; people usually work
 through the project lead.
 
@@ -97,7 +98,7 @@ a report every 15 seconds, so that a silent machine can be told from a quiet one
 that fails waits a whole 15 seconds before the next.
 
 Each machine in the sidebar is one line, at a project row's height and on its columns: a
-status dot where the project chevrons sit, the name where project names start (a computer's
+status dot at the right edge, where project rows show theirs, the name where project names start (a computer's
 real hostname without `.local`, such as `MacBookPro2021`, or the name a person gave it), then three
 columns every row shares, so their figures line up down the list: Claude's allowance, Codex's,
 and the agents, whose avatars stand 16 points clear of the figures. An allowance is the engine's mark and the share left of its tightest window,
@@ -182,6 +183,56 @@ included, never receive it, its messages or its notifications. The chat is
 chat only: no work is assigned in it, and only the product manager joins it
 among agents. As with any session, the owner of the machine running the
 product manager can see what its terminal shows.
+
+## Leaderboard
+
+The leaderboard shows how each person helped the team ship this week. People
+compete for fun, but the reward is shared: the team's goal is on top, and
+everyone's points count toward it. In Desktop and the web app it is the right
+pane's Humans section; there is no separate view. The team goal is one line at
+the top, beside a small week picker. Below it, everyone is listed, with no
+cut-off and most points first. Each person is one row: avatar, name and points
+in fixed columns, with a quiet line of their Shipped, Unblocked and Lent under it.
+It shows the project of the open conversation to the people who can read that
+project. A server without a leaderboard leaves the names without numbers.
+
+Each person has three numbers:
+
+- **Shipped**: requests the person asked for whose pull request merged. A group
+  records its requester when it is opened. A person's own new group names them,
+  and a product manager names the person who asked in the project chat or in
+  their Chat with PM. Right after merging, the product manager records the merge
+  with the group and the PR link (and the merge time, for one recorded later, up
+  to four weeks back). The request ships at the merge, even if its work is lost
+  or cancelled afterwards. A group that is Done with a linked PR ships too; the
+  earlier of the merge and Done is when it shipped. 3 points each.
+- **Unblocked**: items needing a person that the person answered. An answer counts
+  when it comes from the person the item waits on, or when it replies to the
+  question itself. That person is the group's requester, or the project's owner
+  when the group has none. 1 point each, plus 1 point for every 2 hours the agents
+  waited for those answers.
+- **Lent**: hours Swarm agents ran on the person's contributed machines, added up
+  from each machine's readings. A product manager's session doesn't count: it
+  coordinates in confidence and doesn't build. 1 point for every 10 hours.
+
+People with the same points share a place. A streak counts the days in a row,
+up to today, with a shipped request. Tapping a name shows that person's week:
+their place, the median time from asking to shipping, the median time to answer,
+the hours freed and lent, and their streak. The team goal line shows what
+shipped, everyone's points and the project's open requests; hovering it compares
+what shipped with the week before and gives the median time from asking to
+shipping. Weeks run from Monday 00:00 UTC, and the week
+picker reaches back three weeks.
+
+**Agents waiting on a person now** lists who agents are waiting on and how many
+items each, in name order. An item leaves the list as soon as it is answered. It is never ranked and never earns points. **Answer**
+opens the reader's own waiting item, or the first one when none waits on them.
+
+Only facts count, never text. The leaderboard records when work was asked for and
+shipped, who answered and how long agents waited. It never records what anyone
+wrote. Private conversations, Chat with PM among them, never count and never
+appear in it. Decisions asked of a person will count toward Unblocked once
+decisions ship.
 
 ## Lead updates
 

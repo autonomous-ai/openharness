@@ -1,4 +1,4 @@
-import { AUTOMATIC_POLL_ACTIONS, HEALTH_FAILURES, HEALTH_MEASURES, type HealthSource, type ResumeReason } from './productHealthContract.js'
+import { AUTOMATIC_POLL_ACTIONS, HEALTH_FAILURES, HEALTH_MEASURES, RESUME_PREPARATION_KINDS, type HealthSource, type ResumeReason } from './productHealthContract.js'
 import type { MessageOutcome, MessageReceipt } from './sessionInput.js'
 import { LAUNCH_ERROR_CODES, PRODUCT_USAGE_FLOWS, PRODUCT_USAGE_LAUNCH_ENGINES, PRODUCT_USAGE_USER_OPENED_ACTIONS,
   type LaunchErrorCode, type ProductUsageLaunchEngine, type ProductUsageMetric } from './productUsageContract.js'
@@ -55,13 +55,20 @@ export function launchErrorCode(error: unknown): LaunchErrorCode {
 export function launchEngine(engine: unknown): ProductUsageLaunchEngine {
   return (PRODUCT_USAGE_LAUNCH_ENGINES as readonly unknown[]).includes(engine) ? engine as ProductUsageLaunchEngine : 'other'
 }
+/** A create turned down because the request was wrong, not because Harness failed: opening a conversation that is
+ *  already a harness or open elsewhere (core/agents/adopt.ts), a cloud agent with no task or repository
+ *  (cloud/service.ts). The Oct 26 report counted them as launch failures. */
+export const LAUNCH_REFUSALS: ReadonlySet<string> = new Set(['SESSION_IN_HARNESS', 'SESSION_OPEN_ELSEWHERE', 'SESSION_OPEN_IN_TERMINAL',
+  'SESSION_BUSY_IN_TERMINAL', 'INVALID_REQUEST'])
 export interface ProductUsageLaunchSignal {
   /** Local RAM only, discarded on stop/choice change; never part of a report or persisted queue. */
   id: string
-  phase: 'start' | 'pending' | 'created' | 'failed' | 'cancelled' | 'unconfirmed' | 'work_requested'
+  phase: 'start' | 'pending' | 'created' | 'failed' | 'refused' | 'cancelled' | 'unconfirmed' | 'work_requested'
+  /** On `start`: an agent or a Swarm asked for this launch (the create's `startedBy`), not a person. */
+  agentStarted?: true
   origin?: 'interactive' | 'tool'
   failure?: Failure
-  /** The listed code of an `other` or setup failure, or of a created launch's late one (`late`). */
+  /** The listed code of an `other` or setup failure, of a refusal, or of a created launch's late one (`late`). */
   code?: LaunchErrorCode
   wait?: 'install' | 'model' | 'native' | 'other'
   /** The engine a new launch asked for (`start`), as a fixed name: an installation's first launch counts it. */
@@ -84,17 +91,19 @@ function createdSignal(agent: unknown): Omit<ProductUsageLaunchSignal, 'id'> {
 }
 
 /** Observe an actual new-harness receipt through subsequent status polls. Polling adds no attempts.
- * [engine] is the request's `engine`; the reply's [agent] is its agent frame, or whether it had one. */
-export function productUsageLaunch(type: string, id: unknown, emit: (signal: ProductUsageLaunchSignal) => void, engine?: unknown) {
+ * [engine] is the request's `engine`; the reply's [agent] is its agent frame, or whether it had one.
+ * [agentStarted]: the create says an agent started it (`startedBy: 'agent'`). */
+export function productUsageLaunch(type: string, id: unknown, emit: (signal: ProductUsageLaunchSignal) => void, engine?: unknown, agentStarted = false) {
   const known = ['agent_create', 'agent_create_status', 'agent_create_cancel'].includes(type)
     && typeof id === 'string' && /^[a-zA-Z0-9_-]{16,96}$/.test(id)
   if (!known) return unmeasured
   const send = (signal: Omit<ProductUsageLaunchSignal, 'id'>) => {
     if (known) { try { emit({ id: id as string, ...signal }) } catch { /* Optional measurement. */ } }
   }
-  if (type === 'agent_create') send({ phase: 'start', engine: launchEngine(engine) })
+  if (type === 'agent_create') send({ phase: 'start', engine: launchEngine(engine), ...(agentStarted ? { agentStarted: true } : {}) })
   return (error: unknown, state: unknown, agent: unknown, held: unknown) => {
-    if (error != null || state === 'failed') {
+    if (typeof error === 'string' && LAUNCH_REFUSALS.has(error)) send({ phase: 'refused', code: launchErrorCode(error) })
+    else if (error != null || state === 'failed') {
       const failure = failureKind(error)
       send({ phase: 'failed', failure, ...(failure === 'other' || failure === 'setup' ? { code: launchErrorCode(error) } : {}) })
     }
@@ -143,12 +152,17 @@ export function productUsageRequest(type: string, emit: (metric: ProductUsageMet
   count('requests'); detail('started')
   if (userAction && (PRODUCT_USAGE_USER_OPENED_ACTIONS as readonly string[]).includes(action)) count('user_requests')
   // [failure]: the kind of a refusal its caller already knows (a message's, [messageReceipt]), not read off a code.
-  return (error: unknown, state: unknown, hasAgent: boolean, ok?: unknown, failure?: typeof HEALTH_FAILURES[number]) => {
+  // [preparation]: the reply's `reason` — for a resume whose history could not be prepared, which check refused it.
+  return (error: unknown, state: unknown, hasAgent: boolean, ok?: unknown, failure?: typeof HEALTH_FAILURES[number], preparation?: unknown) => {
     if (!action || answered) return
     answered = true
     if (action === 'resume' && (error != null || ok === false || ['failed', 'cancelled', 'unconfirmed', 'unavailable'].some(value => state === value))) {
       const reason = typeof error === 'string' ? resumeReasons.get(error) : undefined
       detail(`reason_${reason ?? (state === 'unconfirmed' ? 'unconfirmed' : 'other')}`)
+      // Only a name from the fixed list leaves here: a kind this build does not know is `other`.
+      if (reason === 'preparation_failed' && preparation !== undefined) {
+        detail(`preparation_${(RESUME_PREPARATION_KINDS as readonly unknown[]).includes(preparation) ? preparation : 'other'}`)
+      }
     }
     // A runtime we cannot verify is unknown; a harness changed during the request is cancelled.
     // Neither proves a launch failure. Older clients classified these two codes as failures.

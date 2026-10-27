@@ -57,6 +57,12 @@ function agentRow(tabId: string, state: SuperTabState, machineId: string, user: 
   const closed = lookups.confidential.has(target.id)
   const waiting = state.conversations.find(c => activeWork(c) && c.assignment!.agentId === target.id &&
     c.assignment!.execution.machineId === machineId && ['needs_human', 'blocked'].includes(c.assignment!.status))?.assignment
+  // A task it lost to a usage limit that gave a reset time, while nobody has handed it on: its host resumes it then
+  // (cli superTabs/limitResume.ts), and the backend still decides (commands.ts work.resume).
+  const marked = target.lostTask
+  const lost = marked?.resumeAt ? state.conversations.find(c => c.id === marked.conversationId)?.assignment : undefined
+  const resume = marked?.resumeAt && lost?.id === marked.assignmentId && lost.status === 'lost' && lost.lost?.at === marked.at
+    ? { conversationId: marked.conversationId, assignmentId: marked.assignmentId, lostAt: marked.at, at: marked.resumeAt } : null
   const home = projectsOf(state).find(p => p.id === agentProjectId(state, target))
   const custom = home && skillSetOf(home) === 'custom' ? home : null
   const chosen = custom ? agentSetRole(state, custom, target) : null
@@ -65,6 +71,7 @@ function agentRow(tabId: string, state: SuperTabState, machineId: string, user: 
     // `active` lets the host release members that are only in archived groups to automatic cleanup.
     active: state.conversations.some(c => !c.archived && c.agentIds.includes(target.id)),
     attention: waiting ? { assignmentId: waiting.id, status: waiting.status, result: waiting.result?.slice(0, 500) ?? null } : null,
+    resume,
     agent: target,
     joinSwarm: state.ownerId === user.sub && target.contributorId === user.sub && !state.machines?.some(m => m.machineId === machineId)
       && state.conversations.some(c => !c.archived && c.leadId === target.id),

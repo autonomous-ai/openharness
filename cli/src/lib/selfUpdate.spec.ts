@@ -77,6 +77,11 @@ describe('shouldAutoUpdate', () => {
     expect(shouldAutoUpdate('9.9.9', '0.1.56-dev.a1b2c3d.dirty')).toBe(false)
   })
 
+  it('takes releases over a local build in the Harness Team account, which nobody develops in', () => {
+    expect(shouldAutoUpdate('0.1.57', '0.1.56-dev.a1b2c3d.dirty', true)).toBe(true)
+    expect(shouldAutoUpdate('0.1.56', '0.1.56-dev.a1b2c3d', true)).toBe(false)
+  })
+
   it('leaves a released install on the release train', () => {
     expect(shouldAutoUpdate('0.1.57', '0.1.56')).toBe(true)
     expect(shouldAutoUpdate('0.1.56', '0.1.56')).toBe(false)

@@ -10,6 +10,7 @@ import '../state/harness_attachments.dart';
 import 'attachment_upload.dart';
 import 'identity.dart';
 import 'model.dart';
+import 'pm_chat.dart';
 import 'parts.dart';
 import 'reading.dart';
 import 'review_verdict.dart';
@@ -236,6 +237,11 @@ class SuperTabController extends ChangeNotifier {
   int _uploadRun = 0;
   final _messages = <String, List<SuperTabMessage>>{};
 
+  /// Originals of replies quoted from outside the pages read, one message
+  /// each, never part of the list: null when it is gone. Asked for once.
+  final _quoted = <String, Map<String, SuperTabMessage?>>{};
+  final _quoting = <String, Set<String>>{};
+
   /// Where each conversation's older history continues: the oldest message
   /// read, as the backend's page cursor names it (section 4.6). Null at the
   /// start of the conversation.
@@ -388,11 +394,57 @@ class SuperTabController extends ChangeNotifier {
     _changed();
   }
 
+  /// The original [messageId] of a reply in [id] whose page is not read:
+  /// read by itself the first time it is asked for. Null until it is known;
+  /// a record holding null when the conversation no longer has it.
+  ({SuperTabMessage? message})? quoted(String id, String messageId) {
+    final known = _quoted[id];
+    if (known != null && known.containsKey(messageId)) {
+      return (message: known[messageId]);
+    }
+    if ((_quoting[id] ??= {}).add(messageId)) {
+      scheduleMicrotask(() => _readQuoted(id, messageId));
+    }
+    return null;
+  }
+
+  /// Reads one message of [id] only: the backend checks the reader may read
+  /// that conversation, as for its pages. A failed read leaves the quote
+  /// saying the original isn't loaded.
+  Future<void> _readQuoted(String id, String messageId) async {
+    if (_disposed || accessRevoked || snapshot?.conversation(id) == null) {
+      return;
+    }
+    try {
+      final answer = await request(
+        'GET',
+        '${_messagesPath(id)}?messageId=${Uri.encodeComponent(messageId)}',
+      );
+      if (_disposed ||
+          accessRevoked ||
+          snapshot?.conversation(id) == null ||
+          _quoting[id]?.contains(messageId) != true) {
+        return;
+      }
+      final rows = (answer['messages'] as List)
+          .map((m) => SuperTabMessage.fromJson(superTabMap(m)))
+          .toList();
+      if (rows.length > 1 ||
+          rows.any((m) => m.id != messageId || m.conversationId != id)) {
+        return;
+      }
+      // A row the list never lists is no original to quote either.
+      (_quoted[id] ??= {})[messageId] = rows.where(_listed).firstOrNull;
+      _changed();
+    } catch (_) {}
+  }
+
   List<SuperTabMessage> messages(String id) => List.unmodifiable(
-    (_messages[id] ?? const <SuperTabMessage>[]).where(
-      (m) => m.source['kind'] != 'update-request',
-    ),
+    (_messages[id] ?? const <SuperTabMessage>[]).where(_listed),
   );
+
+  static bool _listed(SuperTabMessage m) =>
+      m.source['kind'] != 'update-request';
 
   /// "Reviewer: Ada · Ready: yes on 1a2b3c4d5", from the newest `Ready:` message a
   /// reviewer of [group] posted in the loaded history. Null without a reviewer.
@@ -514,7 +566,8 @@ class SuperTabController extends ChangeNotifier {
 
   /// Draws a [savedView] kept from an earlier visit while the first read is
   /// on its way, and holds its parts: the first read asks only for what
-  /// changed since, and replaces it. One for another Swarm, one too old for
+  /// changed since, and replaces it. With [SuperTabReading.confirmsSaved] it
+  /// only holds them, for that read to draw. One for another Swarm, one too old for
   /// its cursor, one that no longer parses, or one after a read has landed,
   /// draws nothing.
   void drawSaved(Map<String, dynamic> view) {
@@ -535,6 +588,14 @@ class SuperTabController extends ChangeNotifier {
       ];
       final messages = rows.map(SuperTabMessage.fromJson).toList();
       final changedAt = (view['lastChangedAt'] as num).toInt();
+      if (_policy.confirmsSaved) {
+        // Held for the first read to start from, drawn once it answers; the
+        // conversation it showed is read beside it.
+        _parts = parts;
+        _partsReadAt = savedAt;
+        if (id == selectedId) _savedSelection = true;
+        return;
+      }
       snapshot = saved;
       lastChangedAt = changedAt;
       _parts = parts;
@@ -563,6 +624,8 @@ class SuperTabController extends ChangeNotifier {
     _parts = null;
     _partsReadAt = null;
     _messages.clear();
+    _quoted.clear();
+    _quoting.clear();
     _rows.clear();
     _before.clear();
   }
@@ -593,6 +656,8 @@ class SuperTabController extends ChangeNotifier {
     snapshot = null;
     _parts = null;
     _messages.clear();
+    _quoted.clear();
+    _quoting.clear();
     _poll?.cancel();
     _changed();
   }
@@ -692,6 +757,109 @@ class SuperTabController extends ChangeNotifier {
       )
       .firstOrNull;
 
+  /// How many of [group]'s messages from others came after the reader's read
+  /// mark: exact once the messages held reach back to the mark
+  /// ([_heldSinceRead]), else a lower bound, one at least, while more are read
+  /// ([_readUnreadPmChats]).
+  int unreadCount(SuperTabConversation group) {
+    if (!unread(group)) return 0;
+    final readAt = _readAt[group.id] ?? 0;
+    final count = messages(group.id)
+        .where((m) => m.sequence > readAt && !_ownMessage(m))
+        .length;
+    return _heldSinceRead(group) ? count : max(count, 1);
+  }
+
+  bool _ownMessage(SuperTabMessage m) =>
+      !m.fromAgent && !m.fromTerminal && m.authorId == accountId;
+
+  /// Whether the messages held of [group] run from its read mark (or its
+  /// first message) to its newest, update requests included.
+  bool _heldSinceRead(SuperTabConversation group) {
+    final held = _messages[group.id];
+    if (held == null || held.isEmpty) return false;
+    return held.last.sequence >= group.lastMessageSequence &&
+        (held.first.sequence <= (_readAt[group.id] ?? 0) ||
+            !hasOlder(group.id));
+  }
+
+  /// The unread messages in the reader's own PM chats, for the Swarm badge.
+  int get pmUnread => [
+    for (final project in snapshot?.projects ?? const <SuperTabProject>[])
+      if (pmChat(project.id) case final chat?) unreadCount(chat),
+  ].fold(0, (a, b) => a + b);
+
+  /// Reads each PM chat whose count is still open ([_pmCountOpen]), page by
+  /// page, so the count is exact up to [kCountCap]; nothing once every chat's
+  /// count is known.
+  void _readUnreadPmChats() {
+    for (final project in snapshot?.projects ?? const <SuperTabProject>[]) {
+      final chat = pmChat(project.id);
+      if (chat == null || !_pmCountOpen(chat) || !_pmCounting.add(chat.id)) {
+        continue;
+      }
+      unawaited(
+        _countPmChat(chat.id).whenComplete(() {
+          _pmCounting.remove(chat.id);
+        }),
+      );
+    }
+  }
+
+  final _pmCounting = <String>{};
+
+  /// A PM chat off screen, unread, under [kCountCap] and not held back to its
+  /// read mark: past the cap the badge says "99+" whatever the rest holds, so
+  /// a device with no read mark never reads the whole history.
+  bool _pmCountOpen(SuperTabConversation chat) =>
+      chat.id != selectedId &&
+      unread(chat) &&
+      unreadCount(chat) < kCountCap &&
+      !_heldSinceRead(chat);
+
+  /// Newer pages until the newest message is held, then older ones back to
+  /// the read mark; stops when a read brings nothing (no more, or it failed:
+  /// the next state read tries again).
+  Future<void> _countPmChat(String id) async {
+    while (!_disposed) {
+      final chat = snapshot?.conversation(id);
+      if (chat == null || !_pmCountOpen(chat)) return;
+      final held = _messages[id];
+      final before = (held?.firstOrNull?.sequence, held?.lastOrNull?.sequence);
+      final newer =
+          held == null ||
+          held.isEmpty ||
+          held.last.sequence < chat.lastMessageSequence;
+      await _readMessages(id, older: !newer, light: newer);
+      final after = _messages[id];
+      if ((after?.firstOrNull?.sequence, after?.lastOrNull?.sequence) ==
+          before) {
+        return;
+      }
+    }
+  }
+
+  /// The project of the conversation on screen, else the first one.
+  String? get currentProjectId {
+    final state = snapshot;
+    if (state == null) return null;
+    final selected = state.conversation(selectedId)?.projectId;
+    return state.projects.any((p) => p.id == selected)
+        ? selected
+        : state.projects.firstOrNull?.id;
+  }
+
+  /// Set by the Swarm view on screen: opens a project's PM chat in front of
+  /// whatever covers the conversation, Notifications or a terminal.
+  Future<bool> Function(String projectId)? pmChatOpener;
+
+  /// Opens the [currentProjectId]'s PM chat, through the view on screen
+  /// ([pmChatOpener]) when there is one, else [openPmChat].
+  Future<bool> openCurrentPmChat() async {
+    final project = currentProjectId;
+    return project != null && await (pmChatOpener ?? openPmChat)(project);
+  }
+
   /// Opens [pmChat], creating it on first use: chat only, for this person
   /// alone, named after them, with the project's Lead in it. The create is one
   /// fixed request per person, membership and project, so a second click or
@@ -706,7 +874,7 @@ class SuperTabController extends ChangeNotifier {
       'type': 'conversation.create',
       'projectId': projectId,
       'title': email == null || email.isEmpty
-          ? 'Chat with PM'
+          ? kChatWithPm
           : superTabPersonName(email),
       'brief': '',
       'checks': <dynamic>[],
@@ -734,8 +902,10 @@ class SuperTabController extends ChangeNotifier {
     if (id == selectedId && !devicesSelected) return true;
     devicesSelected = false;
     _acted();
-    if (!snapshot!.isProjectLead(id)) {
-      final group = snapshot!.conversation(id)!;
+    final group = snapshot!.conversation(id)!;
+    // A workgroup is shown under its project, so its project opens. A Chat with
+    // PM has its own row under Direct messages and leaves projects as they were.
+    if (!snapshot!.isProjectLead(id) && pmChat(group.projectId)?.id != id) {
       expandedProjects.add(group.projectId);
       unawaited(loadDormant(group.projectId));
       if (group.closed) closedOpenProjects.add(group.projectId);
@@ -793,8 +963,10 @@ class SuperTabController extends ChangeNotifier {
             ..ignore())
         : null;
     try {
+      final heldSaved = _parts != null && stateReads == 0;
       final read = await _readParts();
       if (_disposed || accessRevoked) return;
+      final stateMs = took.elapsedMilliseconds;
       final parts = _parts!;
       _refreshFailing = false;
       unreachableSince = null;
@@ -811,7 +983,7 @@ class SuperTabController extends ChangeNotifier {
       // A part or a value worked out at read time (an agent seen down, a
       // limit that ran out) changed: the snapshot is built again. The first
       // read over a saved view wins, whatever it saved.
-      final moved = read.changed || _showingSaved;
+      final moved = read.changed || _showingSaved || snapshot == null;
       if (moved) {
         // A closed group named by the saved selection is read by id: a first
         // load has only the active groups.
@@ -846,6 +1018,8 @@ class SuperTabController extends ChangeNotifier {
               (id) => !next.projects.any((project) => project.id == id),
             );
         _messages.removeWhere((id, _) => !allowed.contains(id));
+        _quoted.removeWhere((id, _) => !allowed.contains(id));
+        _quoting.removeWhere((id, _) => !allowed.contains(id));
         _rows.removeWhere((id, _) => !allowed.contains(id));
         _drafts.removeWhere((id, _) => removed.contains(id));
         _attachments.removeWhere((id, files) {
@@ -875,7 +1049,13 @@ class SuperTabController extends ChangeNotifier {
           }
         }
       }
+      // A first open draws its sidebar now, not once its chat answers.
+      if (stateReads == 1) _changed();
+      final sidebarMs = took.elapsedMilliseconds;
       lastChangedAt = parts.lastChangedAt;
+      // Every state read, a quiet one too: a count a failed read left open is
+      // finished; one that is known reads nothing.
+      _readUnreadPmChats();
       _partsReadAt = clock.now();
       error = null;
       await (selectedId == earlyId && messagesRead != null
@@ -886,6 +1066,15 @@ class SuperTabController extends ChangeNotifier {
                   ? (query: earlyQuery!, page: early)
                   : null,
             ));
+      if (stateReads == 1) {
+        // Where a first open's time went, from the tab asking to the chat it shows.
+        appLog.debug(
+          'swarm',
+          'first open: sidebar after $sidebarMs ms, chat after ${took.elapsedMilliseconds} ms '
+              '(state read $stateMs ms, ${read.full ? 'first load' : 'changes since the saved view'}'
+              '${heldSaved ? '' : ', no saved view'})',
+        );
+      }
       if (_showingSaved) {
         // Read now: the saved view, and its Updating line, give way.
         _showingSaved = false;
@@ -1173,6 +1362,8 @@ class SuperTabController extends ChangeNotifier {
       snapshot = null;
       _parts = null;
       _messages.clear();
+      _quoted.clear();
+      _quoting.clear();
       _poll?.cancel();
     }
   }
@@ -1314,6 +1505,8 @@ class SuperTabController extends ChangeNotifier {
       if (failure is SuperTabFailure &&
           const {'FORBIDDEN', 'NOT_FOUND'}.contains(failure.code)) {
         _messages.remove(id);
+        _quoted.remove(id);
+        _quoting.remove(id);
         unawaited(refresh());
       }
       _changed();

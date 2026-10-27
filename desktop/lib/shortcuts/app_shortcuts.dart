@@ -584,6 +584,9 @@ const windowsCommandKeys = <String, List<String>>{
   'picker.refresh': ['ctrl+r'],
   // Ctrl+Shift+Backspace removes the selected resource in the picker.
   'picker.delete': ['alt+shift+backspace'],
+  // Ctrl+Shift+K is Focus Pane Above (⌘K); ⇧⌘K takes Alt+Shift like the
+  // other shifted twins.
+  'swarm.chat_with_pm': ['alt+shift+k'],
 };
 
 /// Where "⌘ becomes Alt" would take a key a Linux terminal program already

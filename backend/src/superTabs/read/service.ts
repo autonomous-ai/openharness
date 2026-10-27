@@ -5,13 +5,19 @@
 import type { Prisma, PrismaClient } from '@prisma/client'
 import type { AuthUser } from '../../lib/ssoAuth.js'
 import { isTeamSession, TEAM_SESSION_LIMITED, TEAM_SESSION_MESSAGE } from '../../lib/teamSession.js'
-import { author, fail, type Actor, type AgentStart } from '../model.js'
+import { author, fail, isLeads, visibleState, type Actor, type AgentStart } from '../model.js'
 import { mentionsWaiting } from '../mentions.js'
+import { decisionsWaiting } from '../decisions.js'
 import { transaction, type SuperTabStore } from '../store.js'
 import { migrateSwarm } from '../migration/migrate.js'
 import * as parts from '../parts/index.js'
 import type { SwarmParts } from '../parts/index.js'
-import { canReadGroup } from '../projects.js'
+import { canReadGroup, readProject } from '../projects.js'
+import type { Leaderboard } from '../leaderboard/contract.js'
+import { readableWeek, recentDormantGroups } from '../leaderboard/read.js'
+import { LEDGER_WEEKS } from '../leaderboard/record.js'
+import { leaderboard } from '../leaderboard/stats.js'
+import { WEEK_MS } from '../leaderboard/week.js'
 import { READ_FORMAT, SWARM_MIGRATING, type Changes, type DormantGroups, type FirstLoad, type OneGroup, type SwarmList } from './contract.js'
 import { cursorFor, readCursor } from './cursor.js'
 import { changesFor } from './changes.js'
@@ -45,6 +51,7 @@ export class SwarmReads {
     return this.read(user, tabId, async tx => {
       // Light (parts/light.ts): changed parts come whole from the change feed; the rest is read only to check visibility and
       // derive values: the Lead conversations, those with running work, and those a person's mentions are in (their count).
+      // Open decisions count their conversations themselves (decisions.ts).
       const mentioned = asAgentId ? [] : (await tx.superTabMention.findMany({ where: { tabId, personId: user.sub }, select: { conversationId: true },
         distinct: ['conversationId'] })).map(m => m.conversationId)
       const light = { includeRecentStarts: true, groups: 'working' as const, groupIds: mentioned }
@@ -88,6 +95,21 @@ export class SwarmReads {
     })
   }
 
+  /** One project's leaderboard for a week (leaderboard/stats.ts), for the people who read the project. It sums only the
+   *  groups the reader may read, dormant ones of the kept weeks included, and never a private conversation. */
+  async leaderboard(user: AuthUser, tabId: string, projectId: string, week?: number): Promise<Leaderboard> {
+    if (isTeamSession(user)) fail(TEAM_SESSION_LIMITED, TEAM_SESSION_MESSAGE, 403)
+    const now = this.now(), start = readableWeek(week, now)
+    return this.read(user, tabId, async tx => {
+      const state = parts.reassemble(await parts.loadActive(tx, tabId))
+      const actor = await this.store.actor(tx, user, state)
+      readProject(state, actor, projectId)
+      const dormant = await recentDormantGroups(tx, tabId, projectId, now - LEDGER_WEEKS * WEEK_MS)
+      const groups = [...state.conversations.filter(g => !g.dormant), ...dormant].filter(g => !isLeads(g) && canReadGroup(state, actor, g))
+      return leaderboard({ state, groups, machines: visibleState(state, actor, now).machines ?? [], projectId, week: start, now })
+    })
+  }
+
   async list(user: AuthUser, after?: string): Promise<SwarmList> {
     if (isTeamSession(user)) fail(TEAM_SESSION_LIMITED, TEAM_SESSION_MESSAGE, 403)
     const rows = await this.db.superTab.findMany({ where: { autonomousEnv: user.autonomousEnv, memberIds: { has: user.sub },
@@ -119,12 +141,12 @@ export class SwarmReads {
     const loaded = await loader(tx, tabId, opts)
     const state = parts.reassemble(loaded)
     const actor = await this.store.actor(tx, user, state, asAgentId)
-    const [teamMachines, mentions, newest] = await Promise.all([
+    const [teamMachines, counts, newest] = await Promise.all([
       state.machines?.length ? this.store.teamMachines(tx, state) : [],
-      actor.kind === 'person' ? mentionsWaiting(tx, tabId, state, actor, t0) : undefined,
+      actor.kind === 'person' ? Promise.all([mentionsWaiting(tx, tabId, state, actor, t0), decisionsWaiting(tx, tabId, state, actor)]) : undefined,
       parts.lastChangedAt(tx, [tabId]),
     ])
     return { parts: loaded, actor, lastChangedAt: newest.get(tabId) ?? null,
-      view: readerView(loaded, actor, t0, { teamMachines, ...(mentions !== undefined ? { mentionsWaiting: mentions } : {}) }) }
+      view: readerView(loaded, actor, t0, { teamMachines, ...(counts ? { mentionsWaiting: counts[0], decisionsWaiting: counts[1] } : {}) }) }
   }
 }

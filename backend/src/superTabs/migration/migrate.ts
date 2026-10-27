@@ -57,8 +57,11 @@ async function migrateIn(tx: Prisma.TransactionClient, tabId: string, at: number
   const differs = stateDifference(parts.toLegacyState(state), parts.toLegacyState(parts.reassemble(stored)))
   if (differs) fail(`its parts would not reassemble into its state: ${differs}`)
   const groups = new Set(stored.groups.map(g => g.key))
-  const orphaned = [...before.conversationIds].filter(id => !groups.has(id))
-  if (orphaned.length) fail(`${orphaned.length} message${orphaned.length === 1 ? '' : 's'} in a conversation it does not have: ${orphaned.join(', ')}`)
+  // Deleted conversations may have left message history behind in the old store. Keep those messages untouched and
+  // inaccessible, but do not allow the split to orphan a conversation that is still present after normalization.
+  const activeGroups = new Set(state.conversations.map(group => group.id))
+  const newlyOrphaned = [...before.conversationIds].filter(id => activeGroups.has(id) && !groups.has(id))
+  if (newlyOrphaned.length) fail(`${newlyOrphaned.length} existing conversation${newlyOrphaned.length === 1 ? '' : 's'} lost its message group: ${newlyOrphaned.join(', ')}`)
   const touched = fingerprintDifference(before, await fingerprint(tx, tabId))
   if (touched) fail(touched)
   const fenced = await tx.superTab.updateMany({ where: { id: tabId, revision: row.revision, format: 1 },

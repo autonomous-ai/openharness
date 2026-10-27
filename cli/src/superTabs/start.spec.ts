@@ -681,6 +681,37 @@ describe('a routed Claude start launches with the model instead of switching it 
     expect(commands.find(c => c.type === 'agent.started')).toMatchObject({ startId: 'start', harnessId: 'native', configuration: { engine: 'claude' } })
   })
 
+  // Builders started with opus and effort high read as effort 'auto' (Dee, 2026-10-27): Claude Code does not report an
+  // effort it was launched with, so the frame says auto, and the start stored that.
+  const launchedAsAuto = (f: ReturnType<typeof fixture>) => {
+    const request = f.request.getMockImplementation()!
+    f.request.mockImplementation(async (type, payload, ms) => {
+      const answer = await request(type, payload, ms)
+      const agent = answer.agent as Record<string, unknown> | undefined
+      return agent ? { ...answer, agent: { ...agent, selectedModel: 'runtime-v1:native:claude:opus@auto' } } : answer
+    })
+  }
+  const started = (f: ReturnType<typeof fixture>) => f.scoped.mock.calls.map(c => c[0].command as Record<string, unknown>).find(c => c?.type === 'agent.started')
+
+  it('records the effort it launched with when the engine reads it as auto', async () => {
+    const f = fixture({ launchModel: ['claude'] }); launchedAsAuto(f)
+    await begin(f)
+    expect(started(f)).toMatchObject({ configuration: { engine: 'claude', model: 'opus', effort: 'high' } })
+  })
+
+  it('records the effort the machine accepted at launch when a resumed start reads it as auto', async () => {
+    const f = fixture({ launchModel: ['claude'], acceptedLaunchModel: { model: 'opus', effort: 'high' } }); launchedAsAuto(f)
+    Object.assign(f.start.request, routed)
+    await startAgent({ action: 'resume', tabId: 'tab', startId: 'start' }, f.scoped, where, f.open)
+    expect(started(f)).toMatchObject({ configuration: { model: 'opus', effort: 'high' } })
+  })
+
+  it('keeps auto when nothing was launched with an effort', async () => {
+    const f = fixture({ launchModel: ['claude'] }); launchedAsAuto(f)
+    await begin(f, { model: 'default', effort: 'default' })
+    expect(started(f)).toMatchObject({ configuration: { model: 'opus', effort: 'auto' } })
+  })
+
   it('sends neither for default and default', async () => {
     const f = fixture({ launchModel: ['claude'] })
     await begin(f, { model: 'default', effort: 'default' })

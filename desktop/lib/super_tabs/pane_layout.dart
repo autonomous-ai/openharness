@@ -33,6 +33,7 @@ class SuperTabPaneLayout extends StatefulWidget {
   static double drawerWidth(double available) =>
       (available * drawerMaxFraction).clamp(0, rightWidth).toDouble();
   final Widget? left, right;
+
   final Widget center;
   final VoidCallback onLeave;
   final LocalKeyValueStore? storage;
@@ -91,7 +92,9 @@ class _SuperTabPaneLayoutState extends State<SuperTabPaneLayout> {
   }
 
   @override
-  Widget build(BuildContext context) => LayoutBuilder(
+  Widget build(BuildContext context) => _panes();
+
+  Widget _panes() => LayoutBuilder(
     builder: (context, constraints) {
       final width = constraints.maxWidth;
       final scale = MediaQuery.textScalerOf(context);

@@ -5,33 +5,12 @@ import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/project_sidebar.dart';
 import 'package:harness/super_tabs/view.dart';
 
+import 'support/pm_chat_fixture.dart';
 import 'support/super_tab_fixture.dart';
 
 /// Each person's private chat with a project's Product Manager: one per person
 /// and project, read by that person and the Lead alone.
 void main() {
-  ConversationServer swarm() {
-    final server = ConversationServer();
-    server.state['people'] = [
-      {'id': 'owner', 'email': 'owner@example.com', 'role': 'owner'},
-      {'id': 'peer', 'email': 'ken.tran@example.com', 'role': 'collaborator'},
-    ];
-    server.state['agents'] = [
-      {
-        'id': 'lead-agent',
-        'name': 'Lead',
-        'machineId': 'm1',
-        'harnessId': 'h1',
-        'contributorId': 'owner',
-        'configuration': {'engine': 'claude', 'model': 'opus'},
-      },
-    ];
-    (server.state['conversations'] as List).first
-      ..['leadId'] = 'lead-agent'
-      ..['agentIds'] = ['lead-agent'];
-    return server;
-  }
-
   List<Map<String, dynamic>> creates(ConversationServer server) => [
     for (final post in server.posts)
       if ((post['command'] as Map)['type'] == 'conversation.create') post,
@@ -39,7 +18,7 @@ void main() {
 
   group('the controller', () {
     test('the first open creates a private conversation for the person alone, named after them', () async {
-      final server = swarm();
+      final server = pmChatSwarm();
       final c = server.controller(account: 'peer');
       addTearDown(c.dispose);
       await c.refresh();
@@ -68,7 +47,7 @@ void main() {
     test(
       'a later open reopens the same conversation and sends nothing',
       () async {
-        final server = swarm();
+        final server = pmChatSwarm();
         final c = server.controller(account: 'peer');
         addTearDown(c.dispose);
         await c.refresh();
@@ -85,7 +64,7 @@ void main() {
     );
 
     test('two windows opening it at once get one conversation: the create repeats one request', () async {
-      final server = swarm();
+      final server = pmChatSwarm();
       final first = server.controller(account: 'peer');
       final second = server.controller(account: 'peer');
       addTearDown(first.dispose);
@@ -111,7 +90,7 @@ void main() {
     });
 
     test('each person and project has its own create request', () async {
-      final server = swarm();
+      final server = pmChatSwarm();
       final peer = server.controller(account: 'peer');
       final owner = server.controller(account: 'owner');
       addTearDown(peer.dispose);
@@ -128,7 +107,7 @@ void main() {
     });
 
     test('a person who left and rejoined gets a new chat, not the one they can no longer read', () async {
-      final server = swarm();
+      final server = pmChatSwarm();
       final people = (server.state['people'] as List).cast<Map>();
       people.firstWhere((p) => p['id'] == 'peer')['generation'] = 'first';
       final c = server.controller(account: 'peer');
@@ -158,7 +137,7 @@ void main() {
     });
 
     test("another member, the owner included, does not see a person's chat and opens their own", () async {
-      final server = swarm();
+      final server = pmChatSwarm();
       final peer = server.controller(account: 'peer');
       addTearDown(peer.dispose);
       await peer.refresh();
@@ -176,7 +155,7 @@ void main() {
     test(
       'a private conversation shared with someone else too is not the PM chat',
       () async {
-        final server = swarm();
+        final server = pmChatSwarm();
         (server.state['conversations'] as List).add({
           ...conversationFixture('pair', 'Ken and owner'),
           'projectId': 'lead',
@@ -235,19 +214,19 @@ void main() {
 
     final entry = find.byKey(const ValueKey('super-pm-chat-lead'));
 
-    testWidgets('a project shows Chat with PM above its workgroups', (
+    testWidgets('Chat with PM is listed below a project\'s workgroups', (
       tester,
     ) async {
-      final c = await show(tester, swarm());
+      final c = await show(tester, pmChatSwarm());
       expect(entry, findsOneWidget);
       expect(
-        find.descendant(of: entry, matching: find.text('Chat with PM')),
+        find.descendant(of: entry, matching: find.text('Lead')),
         findsOneWidget,
       );
       final workgroup = find.byKey(const ValueKey('super-group-offline'));
       expect(
-        tester.getTopLeft(entry).dy,
-        lessThan(tester.getTopLeft(workgroup).dy),
+        tester.getTopLeft(workgroup).dy,
+        lessThan(tester.getTopLeft(entry).dy),
       );
       await close(tester, c);
     });
@@ -255,7 +234,7 @@ void main() {
     testWidgets(
       'the first click opens a new chat, named Chat with PM in the header, not listed again among the workgroups',
       (tester) async {
-        final server = swarm();
+        final server = pmChatSwarm();
         final c = await show(tester, server);
         await tester.tap(entry);
         await tester.pumpAndSettle();
@@ -264,8 +243,9 @@ void main() {
         final chat = c.pmChat('lead')!;
         expect(c.selectedId, chat.id);
         expect(find.byKey(ValueKey('super-group-${chat.id}')), findsNothing);
-        expect(find.text('Chat with PM'), findsNWidgets(2));
-        expect(find.text('Message Product Manager'), findsOneWidget);
+        // The header names the chat; the sidebar names its Product Manager.
+        expect(find.text('Chat with PM'), findsOneWidget);
+        expect(find.text('Message Lead'), findsOneWidget);
 
         await tester.tap(find.byKey(const ValueKey('super-group-offline')));
         await tester.pumpAndSettle();
@@ -280,7 +260,7 @@ void main() {
     testWidgets(
       'the chat lists only its own people: the person and the Product Manager',
       (tester) async {
-        final server = swarm();
+        final server = pmChatSwarm();
         (server.state['agents'] as List).add({
           'id': 'builder',
           'name': 'Builder',
@@ -308,7 +288,7 @@ void main() {
     testWidgets(
       'the chat offers no Add agent: the Product Manager is its only agent',
       (tester) async {
-        final c = await show(tester, swarm());
+        final c = await show(tester, pmChatSwarm());
         final addAgent = find.byTooltip('Add agent');
         expect(addAgent, findsOneWidget);
         await tester.tap(entry);
@@ -320,10 +300,10 @@ void main() {
       },
     );
 
-    testWidgets('a reply from the Product Manager marks the entry unread', (
+    testWidgets('a reply from the Product Manager counts on the entry', (
       tester,
     ) async {
-      final server = swarm();
+      final server = pmChatSwarm();
       final c = await show(tester, server);
       await tester.tap(entry);
       await tester.pumpAndSettle();
@@ -336,12 +316,11 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(c.unread(c.pmChat('lead')!), isTrue);
+      expect(find.descendant(of: entry, matching: find.text('1')), findsOne);
       expect(
         find.descendant(
           of: entry,
-          matching: find.byWidgetPredicate(
-            (w) => w is Semantics && w.properties.label == 'Unread messages',
-          ),
+          matching: find.byTooltip('1 new in Chat with PM'),
         ),
         findsOneWidget,
       );
@@ -351,7 +330,7 @@ void main() {
     testWidgets(
       "a Product Manager's tag in the chat is in Notifications under Chat with PM, and opens it",
       (tester) async {
-        final server = swarm();
+        final server = pmChatSwarm();
         final c = await show(tester, server);
         await tester.tap(entry);
         await tester.pumpAndSettle();
@@ -388,7 +367,7 @@ void main() {
     testWidgets("the owner's sidebar never lists a member's chat", (
       tester,
     ) async {
-      final server = swarm();
+      final server = pmChatSwarm();
       final peer = server.controller(account: 'peer');
       await peer.refresh();
       await peer.openPmChat('lead');

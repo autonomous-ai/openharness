@@ -28,6 +28,8 @@ export interface ContributedMachine {
    *  the host says it cleaned up (machine.cleaned) or REMOVAL_FALLBACK_MS passes. An offline one leaves the list at once and
    *  its cleanup waits for its host (expireRemovals). */
   removal?: { id: string; state: 'cleaning'; requestedAt: string }
+  /** Agent-time Swarm agents ran here, by leaderboard week, kept by its readings (leaderboard/lent.ts). */
+  lent?: import('./leaderboard/lent.js').LentWeek[]
 }
 /** A removed machine whose host never acknowledged in time: its records are gone, its host still cleans up on its next poll. */
 export interface MachineCleanup { machineId: string; removalId: string; machineOwnerId: string }
@@ -151,19 +153,28 @@ const PRIVACY_ITEMS: Record<string, string> = {
 const ONLY_OWN = 'so it runs only its owner\'s projects'
 
 /**
- * Whether a teammate's work needs a Harness Team account on every machine (`SWARM_TEAM_ACCOUNT_REQUIRED=1`). Until the
- * CLI that makes team accounts is released, it does not: a machine without one takes a teammate's work as it did before
- * team accounts, while a machine with one already follows the rule. Read on every call, so a test can set it.
+ * Whether a teammate's work needs a Harness Team account on every machine of [state]'s Swarm
+ * (`SWARM_TEAM_ACCOUNT_REQUIRED=1`). Until the CLI that makes team accounts is released, it does not: a machine without
+ * one takes a teammate's work as it did before team accounts, while a machine with one already follows the rule.
+ *
+ * `SWARM_TEAM_ACCOUNT_OWNERS`, comma-separated emails, holds the switch to the Swarms those people own, so it can be tried
+ * on production with one's own Swarm first and no other Swarm changes (2026-10-27). Empty, it is every Swarm's. Both are
+ * read on every call, so a test can set them.
  */
-export function teamAccountRequired(): boolean {
-  return process.env.SWARM_TEAM_ACCOUNT_REQUIRED === '1'
+export function teamAccountRequired(state?: Pick<SuperTabState, 'ownerId' | 'people'>): boolean {
+  if (process.env.SWARM_TEAM_ACCOUNT_REQUIRED !== '1') return false
+  const owners = (process.env.SWARM_TEAM_ACCOUNT_OWNERS ?? '').split(',').map(email => email.trim().toLowerCase()).filter(Boolean)
+  if (!owners.length) return true
+  const owner = state?.people.find(person => person.id === state.ownerId)?.email.toLowerCase()
+  return !!owner && owners.includes(owner)
 }
 
 /** Why this contributed machine may not run a teammate's project now, or null when it may. `teamRow`: its account row
- *  says it is signed in as a team account (`Machine.sessionKind`), read by the store. */
-export function teamWorkRefusal(pool: ContributedMachine, now: number, teamRow = false): TeamWorkRefusal | null {
+ *  says it is signed in as a team account (`Machine.sessionKind`), read by the store. `required`: whether the Swarm it is
+ *  in needs a team account on every machine ([teamAccountRequired] of that Swarm). */
+export function teamWorkRefusal(pool: ContributedMachine, now: number, teamRow = false, required = teamAccountRequired()): TeamWorkRefusal | null {
   const reading = pool.observation, name = pool.name
-  if (!teamRow && reading?.sessionKind !== 'team' && !teamAccountRequired()) return null
+  if (!teamRow && reading?.sessionKind !== 'team' && !required) return null
   if (!reading || now - reading.receivedAt > MACHINE_FRESH_MS) {
     // A Mac's team account goes by its Mac's name ("One machine"), and the Mac itself may well be online.
     return { code: 'MACHINE_OFFLINE', reason: pool.hostMachineId
@@ -198,10 +209,10 @@ export function teamWorkCheck(state: SuperTabState, machineId: string, contribut
   const pool = state.machines?.find(m => m.machineId === machineId)
   if (!pool) {
     // Off the Machines list nothing reports a team account (store.ts teamMachines), so this is the switch alone.
-    if (!teamAccountRequired()) return null
+    if (!teamAccountRequired(state)) return null
     return { code: 'TEAM_ACCOUNT_REQUIRED', reason: `This machine is not a Team machine of this Swarm, ${ONLY_OWN}.` }
   }
-  return teamWorkRefusal(pool, now, teamMachines.includes(machineId))
+  return teamWorkRefusal(pool, now, teamMachines.includes(machineId), teamAccountRequired(state))
 }
 
 // ── One machine: a Mac and its Harness Team account ─────────────────────────────────────────────────────────────────

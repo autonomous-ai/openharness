@@ -75,6 +75,9 @@ import '../state/harness_placement.dart';
 import '../state/new_harness.dart';
 import '../state/harness_launch_integration.dart';
 import '../super_tabs/launch.dart';
+import '../super_tabs/pm_chat.dart' show countText;
+import '../super_tabs/pm_chat_shortcut.dart';
+import '../super_tabs/team_account_setup.dart';
 import '../super_tabs/workspace.dart';
 import '../super_tabs/actions.dart';
 import 'swarm_menu_bus.dart';
@@ -292,6 +295,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
   bool _deviceRevealInFlight = false;
   StreamSubscription<void>? _modelsRequests;
   StreamSubscription<String>? _superTabClosures;
+  StreamSubscription<String>? _teamSetupAsks;
   // The one Swarm notice: whether it exists (queued or shown), whether it
   // is on screen, and the closed tab its Reopen restores.
   int _superTabNoticeSerial = 0;
@@ -696,8 +700,6 @@ class _SwarmScreenState extends State<SwarmScreen> {
     _recordNavigation();
     app.addListener(_recordNavigation);
     app.addListener(_observeLearning);
-    _syncMachineListWatch();
-    app.addListener(_syncMachineListWatch);
     // Its own notifier, so marking one agent does not rebuild the workspace —
     // which means the badge has to ask for its own redraw.
     app.agentUnread.addListener(_unreadChanged);
@@ -835,6 +837,10 @@ class _SwarmScreenState extends State<SwarmScreen> {
       }
     });
     _superTabClosures = app.superTabClosures.listen(_offerSuperTabReopen);
+    // The Harness Team account, explained before macOS asks for the password (super_tabs/team_account_setup.dart).
+    _teamSetupAsks = app.teamSetupAsks.listen((_) {
+      if (mounted) unawaited(showTeamAccountSetup(context, app, asked: true));
+    });
     if (!kUnderTest) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!mounted) return;
@@ -989,6 +995,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
     app.modelManager.setPanelVisible(false);
     _modelsRequests?.cancel();
     _superTabClosures?.cancel();
+    _teamSetupAsks?.cancel();
     _keymap.removeListener(_keymapChanged);
     _defaultKeymap.dispose();
     grid.AppTheme.palette.removeListener(_paletteChanged);
@@ -999,8 +1006,6 @@ class _SwarmScreenState extends State<SwarmScreen> {
     terminalFontStore.removeListener(_fontChanged);
     app.removeListener(_recordNavigation);
     app.removeListener(_observeLearning);
-    app.removeListener(_syncMachineListWatch);
-    _machineListWatch?.cancel();
     app.removeListener(_followTabStripFocus);
     _tabStripFocus.removeListener(_tabStripFocusChanged);
     _tabStripFocus.dispose();
@@ -2244,7 +2249,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
                       app.questionFor(p.machineId, p.agentId!) != null,
                 )
                 .length +
-                tabMentionsWaiting(app, swarm),
+                tabWaiting(app, swarm),
             if (tabActivity(app, swarm) case final activity?)
               'activity': nativeActivityPayload(
                 activity,
@@ -6799,8 +6804,11 @@ class _SwarmScreenState extends State<SwarmScreen> {
       return;
     }
     if (choice.destination.isModel) return;
-    if (_search!.setupLayout &&
-        (choice.destination.isMachine || choice.destination.isAccountDevice)) {
+    // A machine, a device or Add machine is chosen to use its preview's actions: the click lands on
+    // the row it clicked, and the keys go to those actions. Focusing the actions alone left the
+    // row selected before it in charge, so clicking Add machine after a machine did nothing
+    // (2026-10-15). A phone shows the same row's page (swarmSearchRowSelectsOnly).
+    if (swarmSearchRowSelectsOnly(_search!, choice.destination)) {
       final index = _search!.rows.indexWhere(
         (row) => row.id == choice.destination.id,
       );
@@ -6829,21 +6837,6 @@ class _SwarmScreenState extends State<SwarmScreen> {
       return;
     }
     if (choice.destination.isCreate) {
-      if (_search!.isMachineMode) {
-        // A click lands on the row it clicked, as a machine row's does: focusing the actions alone
-        // left the machine selected before it in charge, so clicking Add machine after a machine
-        // did nothing (2026-10-15).
-        final index = _search!.rows.indexWhere(
-          (row) => row.id == choice.destination.id,
-        );
-        if (index >= 0) _search!.move(index - _search!.cursor);
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          if (mounted && _search?.selected?.id == choice.destination.id) {
-            _previewControls.invoke('picker.focus_actions');
-          }
-        });
-        return;
-      }
       if (_search!.isModelMode) {
         _previewControls.invoke('picker.resource_add_api');
         return;
@@ -7420,16 +7413,8 @@ class _SwarmScreenState extends State<SwarmScreen> {
         machine.connectionStatus == ConnectionStatus.connected,
   );
 
-  /// The inventory has answered, and answered for now: loaded, not loading,
-  /// not stale, no error. What the account HAS, independent of what is open.
-  bool get _machineInventorySettled =>
-      app.machineInventoryLoaded &&
-      !app.machinesLoading &&
-      !app.machinesAreStale &&
-      app.machineListError == null;
-
   bool get _browserMachineSetupReady =>
-      _machineInventorySettled &&
+      app.machineInventorySettled &&
       !app.machineStates.values.any(
         (machine) =>
             !machine.machine.isShared &&
@@ -7444,53 +7429,14 @@ class _SwarmScreenState extends State<SwarmScreen> {
       _search == null &&
       _routeIsCurrent;
 
-  /// No computer of the account's is connected, and none is on its way: the
-  /// inventory has answered, and every one is missing, offline or waiting to
-  /// be linked — what the host's [WorkspaceChrome.firstMachine] is for. Not
-  /// when every one is only asleep ([_asleepComputers]): that account has set
-  /// one up, and keeps its panes.
-  bool get _needsFirstConnection =>
-      _machineInventorySettled &&
-      !_computerConnectedOrComing &&
-      _asleepComputers.isEmpty;
-
-  /// A computer of the account's is connected, or on its way.
-  bool get _computerConnectedOrComing =>
-      _hasConnectedBrowserMachine ||
-      app.machineStates.values.any(
-        (machine) =>
-            !machine.machine.isShared &&
-            !machine.needsLink &&
-            machine.nodeOnline != false &&
-            (machine.connectionStatus == ConnectionStatus.connecting ||
-                machine.connectionStatus == ConnectionStatus.reconnecting),
-      );
-
-  /// The account's own computers, all of them offline and none waiting on this
-  /// one to be linked: set up before, asleep now. Empty for an account with
-  /// none (a computer taken out of it does not count) — that one needs setting
-  /// up — and while any is connected, on its way, or waiting to be linked.
-  List<MachineState> get _asleepComputers {
-    final own = [
-      for (final machine in app.machineStates.values)
-        if (!machine.machine.isShared &&
-            !app.removedMachines.containsKey(machine.machine.machineId))
-          machine,
-    ];
-    if (own.any((machine) => machine.needsLink || !machine.isOffline)) {
-      return const [];
-    }
-    return own;
-  }
-
   /// The host's connect page covers the canvas: before the machine list first
   /// answers — the page says it is looking, instead of a New tab page that
-  /// then gives way — and while there is no computer to use. Never over a
-  /// computer that is connected or on its way.
+  /// then gives way — and while there is no computer to use
+  /// ([AppNotifier.waitsForFirstComputer]). Never over a computer that is
+  /// connected or on its way, nor when every one is only asleep: that account
+  /// has set one up, and keeps its panes.
   bool get _firstMachineCovers =>
-      widget.chrome?.firstMachine != null &&
-      (_needsFirstConnection ||
-          (!app.machineInventoryLoaded && !_computerConnectedOrComing));
+      widget.chrome?.firstMachine != null && app.waitsForFirstComputer;
 
   /// Under the host's connect page, the canvas is out of sight, out of the
   /// accessibility tree and out of Tab's reach: its buttons cannot be pressed.
@@ -7509,36 +7455,16 @@ class _SwarmScreenState extends State<SwarmScreen> {
   /// that their panes come back with them. Never on Desktop.
   bool get _showsAsleepBand =>
       widget.chrome?.firstMachine != null &&
-      _machineInventorySettled &&
-      _asleepComputers.isNotEmpty;
+      app.machineInventorySettled &&
+      app.asleepComputers.isNotEmpty;
 
   Widget? _asleepBand() => _showsAsleepBand
       ? _AsleepBand(
           names: [
-            for (final machine in _asleepComputers) machine.machine.displayName,
+            for (final machine in app.asleepComputers) machine.machine.displayName,
           ],
         )
       : null;
-
-  /// The one timer asking for the machine list while the host's connect page
-  /// or the asleep band shows: a browser with no computer connected hears of
-  /// one signing in, or waking up, no other way — its connections to
-  /// computers are what carry that news. Stopped once one is connected or on
-  /// its way, and with the workspace.
-  Timer? _machineListWatch;
-  static const _machineListWatchEvery = Duration(seconds: 4);
-
-  void _syncMachineListWatch() {
-    if (!_firstMachineCovers && !_showsAsleepBand) {
-      _machineListWatch?.cancel();
-      _machineListWatch = null;
-      return;
-    }
-    _machineListWatch ??= Timer.periodic(
-      _machineListWatchEvery,
-      (_) => unawaited(app.rereadMachines()),
-    );
-  }
 
   /// The shared error banner shows — except when its only message is the
   /// machine list's failure, which the host's connect page already shows with
@@ -7691,6 +7617,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
     for (var i = 1; i <= 9; i++)
       'pane.focus_$i': () => app.focusPaneByIndex(i - 1),
     'navigation.commands': _showSearchCommands,
+    'swarm.chat_with_pm': () => unawaited(openActivePmChat(app)),
     'agent_messages.show': () => _showAgentMessages(app.activeSwarmId),
     'agent_messages.activity': _toggleTabActivity,
     'agent_messages.make_leader': _toggleFocusedLeader,
@@ -8630,7 +8557,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
   /// answered, and none of the account's own is in it. Never while it loads.
   bool get _subscriptionsWaitForComputer =>
       widget.chrome?.subscriptionsNeedComputer == true &&
-      _machineInventorySettled &&
+      app.machineInventorySettled &&
       !app.machineStates.values.any(
         (machine) =>
             !machine.machine.isShared &&
@@ -9069,7 +8996,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
                       final swarm = shown[index];
                       final selected = app.activeSwarmId == swarm.id;
                       final activity = activities[index];
-                      final tags = tabMentionsWaiting(app, swarm);
+                      final tags = tabWaiting(app, swarm);
                       // A status cell animates only while its tab is in view.
                       Widget tabStatus(Widget Function(bool visible) mark) =>
                           ListenableBuilder(
@@ -9155,9 +9082,9 @@ class _SwarmScreenState extends State<SwarmScreen> {
                                 label: labels[index],
                                 selected: selected,
                                 tooltip: tabHint.isEmpty ? null : tabHint,
-                                activityLabel: tags > 0
-                                    ? tabMentionsLabel(tags)
-                                    : activity?.label,
+                                activityLabel:
+                                    tabWaitingLabel(app, swarm) ??
+                                    activity?.label,
                                 sharedCount: share.count,
                                 onInvitePeople: menus && share.invite
                                     ? () => unawaited(_invitePeople(swarm.id))
@@ -9187,7 +9114,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
                                     : null,
                                 activity: tags > 0
                                     ? Text(
-                                        '$tags',
+                                        countText(tags),
                                         key: ValueKey('tab-tags:${swarm.id}'),
                                         style: DesktopChrome.metadata(
                                           color: grid.AppPalette.warn,

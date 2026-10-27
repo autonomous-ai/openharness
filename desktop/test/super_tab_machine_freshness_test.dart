@@ -240,7 +240,7 @@ void main() {
       expect(tipOf(tester, 'm'), tip);
       expect(labelOf(tester, 'm'), 'Studio Mac, Live, $tip');
       // Collapsed: name and owner avatar, with readings reserved for disclosure.
-      expect(textsOf('m'), ['Studio Mac', 'O']);
+      expect(textsOf('m'), ['~', 'Studio Mac', 'O']);
       expect(nameInkOf(tester, 'm'), isNot(DesktopChrome.muted));
       expect(find.byType(SuperTabMachinesPill), findsNothing);
 
@@ -264,7 +264,7 @@ void main() {
         labelOf(tester, 'm'),
         startsWith('Studio Mac, Late, Owned by owner'),
       );
-      expect(textsOf('m'), ['Studio Mac', 'O']);
+      expect(textsOf('m'), ['~', 'Studio Mac', 'O']);
 
       semantics.dispose();
       await tester.pumpWidget(const SizedBox());
@@ -305,7 +305,7 @@ void main() {
         final semantics = tester.ensureSemantics();
         await show(tester, c);
         expect(rowOf('m'), findsOneWidget);
-        await tester.tap(find.byKey(const ValueKey('super-machine-toggle-m')));
+        await tester.tap(find.byKey(const ValueKey('super-machine-m')));
         await tester.pump();
         expect(
           find.byKey(const ValueKey('super-machine-readings-m')),
@@ -318,7 +318,7 @@ void main() {
         const tip = 'Offline · Owned by owner';
         expect(tipOf(tester, 'm'), tip);
         expect(labelOf(tester, 'm'), 'Studio Mac, Offline, $tip');
-        expect(textsOf('m'), ['Studio Mac', 'O']);
+        expect(textsOf('m'), ['~', 'Studio Mac', 'O']);
         expect(find.byType(SuperTabMachinesPill), findsNothing);
 
         // Opened, it stays open: saved with the Swarm's other sidebar state.
@@ -429,7 +429,7 @@ void main() {
         const tip = 'Refreshing… · Owned by owner';
         expect(tipOf(tester, 'far'), tip);
         expect(labelOf(tester, 'far'), 'Far Mac, Refreshing, $tip');
-        expect(textsOf('far'), ['Far Mac', 'O']);
+        expect(textsOf('far'), ['~', 'Far Mac', 'O']);
 
         gate.complete();
         await landed(tester);
@@ -818,26 +818,34 @@ void main() {
       addTearDown(() => appLog = previous);
     });
 
-    test(
-      'records how long a read took, its kind and last change, nothing it said',
-      () async {
-        final server = ConversationServer();
-        server.state['name'] = 'PRIVATE_SWARM_NAME';
-        final c = server.controller();
-        await c.refresh();
-        final read = log.lines.where((l) => l.startsWith('debug swarm')).single;
-        expect(
-          read,
-          matches(
-            RegExp(
-              r'^debug swarm state read in \d+ ms '
-              r'\((first load|changes), last changed \d+\)$',
-            ),
+    test('records how long a read took, its kind and last change, nothing it said', () async {
+      final server = ConversationServer();
+      server.state['name'] = 'PRIVATE_SWARM_NAME';
+      final c = server.controller();
+      await c.refresh();
+      final lines = log.lines.where((l) => l.startsWith('debug swarm'));
+      expect(lines, hasLength(2));
+      expect(
+        lines.first,
+        matches(
+          RegExp(
+            r'^debug swarm state read in \d+ ms '
+            r'\((first load|changes), last changed \d+\)$',
           ),
-        );
-        expect(log.lines.join('\n'), isNot(contains('PRIVATE')));
-      },
-    );
+        ),
+      );
+      // A first open also says where its time went.
+      expect(
+        lines.last,
+        matches(
+          RegExp(
+            r'^debug swarm first open: sidebar after \d+ ms, chat after \d+ ms '
+            r'\(state read \d+ ms, first load, no saved view\)$',
+          ),
+        ),
+      );
+      expect(log.lines.join('\n'), isNot(contains('PRIVATE')));
+    });
 
     test('records a failure with how long it took and what kind, not what was said', () async {
       final server = ConversationServer();

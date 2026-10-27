@@ -27,6 +27,7 @@ class SuperTabClient {
   SuperTabClient({
     required this.transport,
     required this.storage,
+    LocalKeyValueStore? viewStorage,
     this.onSnapshot,
     this.onTabs,
     this.onSelection,
@@ -34,9 +35,13 @@ class SuperTabClient {
     this.onTagCounts,
     this.upload = refuseUpload,
     this.discoveryInterval = const Duration(seconds: 15),
-  });
+  }) : viewStorage = viewStorage ?? storage;
   final SuperTabTransport transport;
   final LocalKeyValueStore storage;
+
+  /// Where each Swarm's saved view is kept ([SuperTabSavedViews]): a few
+  /// hundred KB each, so Desktop keeps them out of [storage]'s small file.
+  final LocalKeyValueStore viewStorage;
   final void Function(SuperTabController)? onSnapshot;
   final void Function(List<SuperTabListing>, Set<String> hidden)? onTabs;
 
@@ -60,6 +65,10 @@ class SuperTabClient {
     if (counted != null && _paused(id)) return counted;
     return _loaded[id]?.snapshot?.mentionsWaiting ?? _tagCounts[id] ?? 0;
   }
+
+  /// The unread messages in this account's own PM chats in a Swarm open
+  /// here ([SuperTabController.pmUnread]); none for one not open.
+  int waitingPm(String id) => _loaded[id]?.pmUnread ?? 0;
 
   /// Open here, but not polling: not on screen while the reading pauses.
   bool _paused(String id) =>
@@ -102,7 +111,7 @@ class SuperTabClient {
 
   bool _isAway(String id) => !_pageVisible || id != _shown;
 
-  late final _views = SuperTabSavedViews(storage);
+  late final _views = SuperTabSavedViews(viewStorage);
   final _viewSaves = <String, Timer>{};
   final _viewSavedAt = <String, DateTime>{};
   final _viewVersions = <String, int>{};
@@ -447,7 +456,7 @@ class SuperTabClient {
       upload: upload,
       reading: _reading,
     )..away = _isAway(id);
-    var seenChange = (lastChangedAt: -1, mentionsWaiting: -1);
+    var seenChange = (lastChangedAt: -1, mentionsWaiting: -1, pmUnread: -1);
     var seenSelected = controller.selectedId;
     controller.addListener(() {
       if (_reading.drawsSaved && generation == _generation) {
@@ -468,6 +477,8 @@ class SuperTabClient {
         final change = (
           lastChangedAt: controller.lastChangedAt,
           mentionsWaiting: snapshot.mentionsWaiting,
+          // A read mark or a PM chat's messages move the Swarm badge too.
+          pmUnread: controller.pmUnread,
         );
         if (change != seenChange) {
           seenChange = change;
@@ -481,10 +492,7 @@ class SuperTabClient {
       ..onArrived = onMention;
     _tagCounts.remove(id);
     _loaded[id] = controller;
-    controller.start();
-    // After the first read is asked for: reading and drawing a saved view
-    // takes the main thread a moment a phone's first read need not wait on.
-    if (_reading.drawsSaved) {
+    Future<void> drawSaved() async {
       // Behind the lock shared with this browser's other tabs: one iOS has
       // suspended may hold it. Past a short wait, open with no saved view.
       final view = await _views
@@ -494,6 +502,14 @@ class SuperTabClient {
         controller.drawSaved(view);
       }
     }
+
+    // Desktop's saved view is a local file, read before the first read so
+    // that read asks only for what changed since it.
+    if (_reading.drawsSaved && _reading.confirmsSaved) await drawSaved();
+    controller.start();
+    // After the first read is asked for: reading and drawing a saved view
+    // takes the main thread a moment a phone's first read need not wait on.
+    if (_reading.drawsSaved && !_reading.confirmsSaved) await drawSaved();
     return controller;
   }
 

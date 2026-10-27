@@ -104,6 +104,9 @@ export interface LaunchOverridesDeps {
    * file. See `ownProvider` in `engines/codex/launch.ts`.
    */
   readCodexConfig?: (path: string) => string | null
+  /** In the Harness Team account, for an engine it has not signed in itself: the owner's subscription through the
+   *  owner's relay (team/relay.ts `teamRelayLaunch`), null otherwise. Absent ⇒ never. */
+  ownerRelay?: (engine: AgentEngine) => Promise<{ env: Record<string, string>; args: string[] } | null>
   /** Prepare the saved harness context before restarting. Missing or broken packages refuse the
    * relaunch: starting a plain agent would silently change the user's chosen harness. */
   dshLaunch?: (dsh: string, workspace: string, engine: AgentEngine, runtimeKey: string) => Promise<DshLaunchAnswer>
@@ -326,12 +329,16 @@ async function prepareBaseLaunchOverrides(
   let ownLogin: LaunchOverrides | null = null
   if (!source.gridLaunch) {
     const restored = subscriptionModelLaunch(engine, source.subscriptionModel, (await deps.machine(engine)).opencodeMajor ?? null)
+    // In the Harness Team account, an engine it has not signed in itself spends the owner's subscription through the
+    // owner's relay, on every relaunch as on its first: Codex keeps the relay's provider per thread, so it is named again
+    // here in place of its own login's (two `-c model_provider` would leave Codex to pick one).
+    const relay = await deps.ownerRelay?.(engine) ?? null
     // Ahead of the model on the command line: `-c` configures, `-m` selects, and Codex resolves the
     // model against the provider it has been given.
-    const provider = ownLoginProviderArgs(engine, source.codexHome, { read: deps.readCodexConfig })
-    if (restored || provider.length) {
+    const provider = relay ? relay.args : ownLoginProviderArgs(engine, source.codexHome, { read: deps.readCodexConfig })
+    if (restored || provider.length || relay) {
       ownLogin = {
-        env: { ...(restored?.env ?? {}) },
+        env: { ...(relay?.env ?? {}), ...(restored?.env ?? {}) },
         extraArgs: [...provider, ...(restored?.args ?? [])],
         clearEnv: [],
         ...(restored?.sessionModel ? { sessionModel: restored.sessionModel } : {}),
