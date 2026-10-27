@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -19,6 +20,7 @@ import 'recording_notice.dart';
 import 'pull_requests.dart';
 import 'controller.dart';
 import 'dialog_scope.dart';
+import 'folder_zip.dart';
 import 'model.dart';
 import 'pm_chat.dart';
 import 'workgroup_name.dart';
@@ -48,6 +50,7 @@ class SuperTabView extends StatefulWidget {
     required this.onAddAgent,
     required this.onOpenTerminal,
     required this.machineName,
+    this.isThisComputer,
     this.terminal,
     this.onCloseTerminal,
     this.onOpenGroupTerminals,
@@ -61,6 +64,10 @@ class SuperTabView extends StatefulWidget {
   final ValueChanged<SuperTabConversation> onAddAgent;
   final ValueChanged<SuperTabAgent> onOpenTerminal;
   final String Function(String machineId) machineName;
+
+  /// Whether [machineId] is the computer this app runs on, where a folder
+  /// dropped on the composer is. Unknown (null) counts as another computer.
+  final bool Function(String machineId)? isThisComputer;
   final Widget? terminal;
   final VoidCallback? onCloseTerminal, onOpenGroupTerminals;
   final bool terminalsVisible;
@@ -104,6 +111,13 @@ class _SuperTabViewState extends State<SuperTabView>
   int _mentionIndex = 0;
   String? _dismissedMention;
   String? _completionPrefix;
+
+  /// The folders whose paths were dropped into each chat's message: what
+  /// Attach as zip offers while those paths are still in it.
+  final _droppedFolders = <String, List<String>>{};
+
+  /// The chats whose dropped folders are being zipped.
+  final _zipping = <String>{};
   final _completionKeys = List.generate(6, (_) => GlobalKey());
   SuperTabController get c => widget.controller;
 
@@ -366,7 +380,112 @@ class _SuperTabViewState extends State<SuperTabView>
     }
     final id = c.selectedId;
     final result = await c.send(replyTo: _replies[id]?.id);
-    if (mounted && result != null) setState(() => _replies.remove(id));
+    if (mounted && result != null) {
+      setState(() {
+        _replies.remove(id);
+        _droppedFolders.remove(id);
+      });
+    }
+  }
+
+  /// [path] as it goes into a message: quoted when it holds a space.
+  static String _pathText(String path) =>
+      path.contains(RegExp(r'\s')) ? '"$path"' : path;
+
+  /// Puts dropped folders' paths into chat [id]'s message at the cursor,
+  /// space-separated, as a terminal takes a dropped folder.
+  void _pasteFolders(String id, List<String> paths) {
+    if (!mounted) return;
+    final shown = c.selectedId == id;
+    final text = shown ? _composer.text : c.draft(id);
+    final selection = shown && _composer.selection.isValid
+        ? _composer.selection
+        : TextSelection.collapsed(offset: text.length);
+    final before = text.substring(0, selection.start);
+    final after = text.substring(selection.end);
+    final pasted =
+        '${before.isEmpty || RegExp(r'\s$').hasMatch(before) ? '' : ' '}'
+        '${paths.map(_pathText).join(' ')}'
+        '${after.startsWith(RegExp(r'\s')) ? '' : ' '}';
+    final next = before + pasted + after;
+    c.setDraft(id, next);
+    final dropped = _droppedFolders.putIfAbsent(id, () => []);
+    setState(() => dropped.addAll(paths.where((p) => !dropped.contains(p))));
+    if (!shown) return;
+    _composer.value = TextEditingValue(
+      text: next,
+      selection: TextSelection.collapsed(offset: before.length + pasted.length),
+    );
+    _focus.requestFocus();
+  }
+
+  /// The dropped folders whose paths are still in chat [id]'s message.
+  List<String> _foldersInMessage(String id) => [
+    for (final path in _droppedFolders[id] ?? const <String>[])
+      if (_composer.text.contains(_pathText(path))) path,
+  ];
+
+  /// Whether an agent of [group] runs on another computer than this one,
+  /// where a path dropped here means nothing.
+  bool _agentsElsewhere(SuperTabConversation group) =>
+      group.agentIds.any((agentId) {
+        final agent = c.snapshot?.agent(agentId);
+        return agent != null &&
+            !(widget.isThisComputer?.call(agent.machineId) ?? false);
+      });
+
+  /// Attaches each of [folders] to chat [id]'s message as a zip in place of
+  /// its path. A message sent meanwhile keeps its paths, and the zips are not
+  /// attached to the next one.
+  Future<void> _attachFoldersAsZip(String id, List<String> folders) async {
+    final dropped = _droppedFolders[id];
+    if (dropped == null || !_zipping.add(id)) return;
+    setState(() {});
+    final files = c.attachments(id);
+    final zipped = <String, Uint8List>{};
+    final oversized = <String>[], failed = <String>[];
+    for (final folder in folders) {
+      try {
+        final bytes = await zipFolder(folder, limitBytes: files.limitBytes);
+        bytes == null
+            ? oversized.add(folderName(folder))
+            : zipped[folder] = bytes;
+      } on Exception {
+        // Unreadable, or gone since the drop.
+        failed.add(folderName(folder));
+      }
+    }
+    if (!mounted) return;
+    setState(() => _zipping.remove(id));
+    if (!identical(_droppedFolders[id], dropped)) return;
+    final problem = files.add([
+      for (final MapEntry(key: folder, value: bytes) in zipped.entries)
+        HarnessAttachment('${folderName(folder)}.zip', bytes),
+    ], oversized: oversized);
+    final shown = c.selectedId == id;
+    var text = shown ? _composer.text : c.draft(id);
+    for (final folder in zipped.keys) {
+      final path = _pathText(folder);
+      text = text.contains('$path ')
+          ? text.replaceFirst('$path ', '')
+          : text.contains(' $path')
+          ? text.replaceFirst(' $path', '')
+          : text.replaceFirst(path, '');
+    }
+    dropped.removeWhere(zipped.containsKey);
+    c.setDraft(id, text);
+    if (shown && _composer.text != text) {
+      _composer.value = TextEditingValue(
+        text: text,
+        selection: TextSelection.collapsed(offset: text.length),
+      );
+    }
+    setState(() {});
+    reportAttachProblem(
+      context,
+      problem ??
+          (failed.isEmpty ? null : '${failed.join(', ')} could not be zipped.'),
+    );
   }
 
   void _composerMoved() {
@@ -1484,6 +1603,10 @@ class _SuperTabViewState extends State<SuperTabView>
         : messages.where((message) => message.sequence > newAfter).length;
     final reply = _replies[c.selectedId];
     final choices = _completionChoices;
+    final chatId = c.selectedId;
+    final pastedFolders = group != null && _agentsElsewhere(group)
+        ? _foldersInMessage(chatId)
+        : const <String>[];
     // No conversation read yet: its error is the page itself, not a line over "Loading".
     final unread = _readsFirst && c.snapshot == null;
     return Column(
@@ -1789,7 +1912,12 @@ class _SuperTabViewState extends State<SuperTabView>
           )
         else
           Padding(
-            padding: const EdgeInsets.fromLTRB(24, 12, 24, 16),
+            padding: EdgeInsets.fromLTRB(
+              24,
+              12,
+              24,
+              pastedFolders.isEmpty ? 16 : 6,
+            ),
             child: Focus(
               onKeyEvent: (node, event) {
                 final keys = HardwareKeyboard.instance;
@@ -1853,6 +1981,11 @@ class _SuperTabViewState extends State<SuperTabView>
                 child: NewHarnessDropZone(
                   attachments: _files,
                   enabled: writable && !busy,
+                  // A browser has no path to give; there a folder is not
+                  // taken, as before.
+                  onFolders: kIsWeb
+                      ? null
+                      : (paths) => _pasteFolders(chatId, paths),
                   child: GestureDetector(
                     behavior: HitTestBehavior.translucent,
                     onTap: writable ? _focus.requestFocus : null,
@@ -1995,6 +2128,35 @@ class _SuperTabViewState extends State<SuperTabView>
                   ),
                 ),
               ),
+            ),
+          ),
+        if (pastedFolders.isNotEmpty && !(group?.archived ?? true))
+          Padding(
+            key: const ValueKey('super-folder-path-hint'),
+            padding: const EdgeInsets.fromLTRB(28, 0, 24, 10),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    pastedFolders.length == 1
+                        ? "This path is on this computer. Agents on other "
+                              "computers can't open it."
+                        : "These paths are on this computer. Agents on "
+                              "other computers can't open them.",
+                    style: DesktopChrome.metadata(),
+                  ),
+                ),
+                TextButton(
+                  onPressed: _zipping.contains(chatId) || !writable || busy
+                      ? null
+                      : () => unawaited(
+                          _attachFoldersAsZip(chatId, pastedFolders),
+                        ),
+                  child: Text(
+                    _zipping.contains(chatId) ? 'Zipping…' : 'Attach as zip',
+                  ),
+                ),
+              ],
             ),
           ),
       ],
