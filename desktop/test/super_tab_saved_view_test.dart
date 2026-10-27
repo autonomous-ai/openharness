@@ -278,6 +278,30 @@ void _controllerTests() {
     });
   });
 
+  // Review of #1791, 2: the saved read is no longer bounded.
+  test('a saved view read after the Swarm was refused draws nothing', () {
+    final server = ConversationServer()..append('Hello');
+    final view = _saved(server);
+    fakeAsync((async) {
+      final c = SuperTabController(
+        tabId: 'tab',
+        accountId: 'owner',
+        request: (method, path, {body}) => Future.error(
+          const SuperTabFailure('FORBIDDEN', 'You no longer have access.'),
+        ),
+        save: server.save,
+        initial: {'tabId': 'tab', 'accountId': 'owner', 'selectedId': 'lead'},
+        reading: _web,
+      )..start();
+      async.flushMicrotasks();
+      expect(c.accessRevoked, isTrue);
+      c.drawSaved(view);
+      expect(c.snapshot, isNull);
+      expect(c.showingSaved, isFalse);
+      c.dispose();
+    });
+  });
+
   test('with no machine yet the saved view stays, without the error', () {
     final server = ConversationServer()..append('Hello');
     final view = _saved(server);
@@ -818,10 +842,65 @@ void _followUpTests() {
     expect(store.values['super_tab.view.owner.gone'], isNotNull);
     pages.refuseLast = false;
     await client.refreshTabs();
+    await pumpEventQueue();
     expect(client.discoveryError, isNull);
     expect(store.values['super_tab.view.owner.gone'], isNull);
     expect(store.values[_viewKey], isNotNull);
     expect(jsonDecode(store.values['super_tab.views.owner']!), ['tab']);
+  });
+
+  // Review of #1791, 1: an iPhone suspending the tab that holds the lock.
+  test('a lock another tab holds neither delays a discovery nor its tags, '
+      'and the forget runs once it is free', () async {
+    final kept = MemoryStore();
+    final before = SuperTabSavedViews(kept);
+    await before.claim('owner');
+    await before.write('owner', 'gone', _view(tab: 'gone'));
+    final store = _StuckLockStore()..values.addAll(kept.values);
+    final pages = _Pages()..refuseLast = false;
+    final paths = <String>[];
+    final client = SuperTabClient(
+      transport: (method, path, {body}) {
+        paths.add(path);
+        return pages(method, path, body: body);
+      },
+      storage: store,
+      onTabs: (tabs, hidden) {},
+      discoveryInterval: Duration.zero,
+    )..reading = _web;
+    addTearDown(client.dispose);
+    client.bind('owner');
+    await client.refreshTabs().timeout(const Duration(seconds: 1));
+    expect(client.discoveryError, isNull);
+    expect(paths, contains('/api/super-tabs/tab/mentions?state=waiting'));
+    expect(store.values['super_tab.view.owner.gone'], isNotNull);
+    store.release.complete();
+    await pumpEventQueue();
+    expect(store.values['super_tab.view.owner.gone'], isNull);
+  });
+
+  // Review of #1791, 3.
+  test('a Swarm being created keeps its view through a discovery that does '
+      'not list it yet', () async {
+    final store = MemoryStore();
+    final views = SuperTabSavedViews(store);
+    await views.claim('owner');
+    await views.write('owner', 'new', _view(tab: 'new'));
+    final client = SuperTabClient(
+      transport: (_Pages()..refuseLast = false).call,
+      storage: store,
+      onTabs: (tabs, hidden) {},
+      discoveryInterval: Duration.zero,
+    )..reading = _web;
+    addTearDown(client.dispose);
+    client
+      ..bind('owner')
+      ..deferTabDiscovery('new');
+    await client.refreshTabs();
+    await pumpEventQueue();
+    expect(client.discoveryError, isNull);
+    expect(store.values['super_tab.view.owner.new'], isNotNull);
+    expect(jsonDecode(store.values['super_tab.views.owner']!), ['new']);
   });
 
   test('Desktop: a discovery reads and deletes no saved view', () async {

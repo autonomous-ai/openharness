@@ -362,10 +362,13 @@ class SuperTabClient {
         final hidden = Set<String>.unmodifiable({..._hidden, ..._creating});
         onTabs!(tabs.values.toList(), hidden);
         // Every page read: a Swarm not listed is no longer this account's.
+        // In the background: the lock another tab holds never delays tags.
         if (_reading.drawsSaved) {
-          await _views
-              .keepOnly(account, {...tabs.keys, ..._creating})
-              .catchError((Object _) {});
+          unawaited(
+            _views
+                .keepOnly(account, {...tabs.keys, ..._creating})
+                .catchError((Object _) {}),
+          );
         }
         await _readTags([
           for (final id in tabs.keys)
