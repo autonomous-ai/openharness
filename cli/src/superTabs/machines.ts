@@ -18,6 +18,7 @@ import { git } from '../lib/worktreeSweep.js'
 import { projectsRoot } from '../lib/projectFolder.js'
 import { worktreeFolderName } from '../lib/agentNames.js'
 import { teamPrivacyObserver } from '../team/observer.js'
+import { teamRelayed } from '../team/relay.js'
 import type { PrivacyObservation } from '../team/privacy.js'
 import { repositoryKey } from './route.js'
 
@@ -105,6 +106,9 @@ export interface MachineDeps {
   /** When each of these harnesses' screens last changed, epoch ms (superTabs/terminal.ts `progressOf`): the backend
    *  renews a task's lease from it, so work never sits with a dead owner (docs: swarm-never-stops). */
   progress?: (harnessIds: readonly string[]) => Record<string, number>
+  /** In the Harness Team account: whether its engines can spend the owner's subscription through the owner's relay
+   *  (team/relay.ts), so one it has not signed in itself is ready all the same. */
+  relayed?: () => boolean
 }
 const MACHINE_DEPS = { backend, open: openDaemon, capabilities: readCapabilities, start: startAgent, now: Date.now }
 
@@ -154,8 +158,12 @@ export class ContributedMachines {
     // An engine that says nothing of its sign-in (an older daemon, an engine not installed) is unknown, never signed out.
     // Not installed is unknown too: the probe answers the same for a login shell that timed out (lib/engineProbe.ts), and
     // such a machine fails its first start loudly instead (review of #1743).
+    // A Harness Team account that has not signed an engine in spends its owner's subscription through the owner's relay
+    // (team/relay.ts): the Lead routed nothing to it while it read as signed out (routeCommand.ts `unreadyPool`).
+    const relayed = (this.deps.relayed ?? teamRelayed)()
     const value = Array.isArray(engines) ? list(engines).filter(e => e.engine === 'claude' || e.engine === 'codex')
-      .map((e): ReadyEngine => ({ engine: String(e.engine), installed: e.installed === true ? true : null, signedIn: e.installed === true && typeof e.signedIn === 'boolean' ? e.signedIn : null })) : null
+      .map((e): ReadyEngine => ({ engine: String(e.engine), installed: e.installed === true ? true : null,
+        signedIn: e.installed === true && typeof e.signedIn === 'boolean' ? e.signedIn || relayed : null })) : null
     this.engineRead = { value, until: now + (value ? READINESS_MS : READINESS_RETRY_MS) }
     return value
   }

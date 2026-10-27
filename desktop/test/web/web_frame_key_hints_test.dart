@@ -10,6 +10,7 @@ import 'package:harness/auth/auth_session.dart';
 import 'package:harness/core/config.dart';
 import 'package:harness/state/app_state.dart';
 import 'package:harness/shortcuts/shortcuts_browser.dart';
+import 'package:harness/web/parts/terminal_fonts.dart';
 import 'package:harness/web/web_entry.dart';
 import 'package:harness/widgets/key_hints.dart';
 
@@ -57,5 +58,8 @@ void main() {
     expect(find.byKey(const ValueKey('shortcuts-search')), findsOneWidget);
     expect(find.text('↑↓ Browse'), findsNothing);
     expect(find.text('Return Practice'), findsNothing);
+    // The frame started the workspace's download, which waits for the terminal
+    // font a test browser never sends: let its grace run out.
+    await tester.pump(terminalFontsGrace);
   });
 }

@@ -31,6 +31,7 @@ import '../models/swarm_models_target.dart' show swarmSharedWithYouShown;
 import 'machine_details.dart';
 import 'machine_status.dart';
 import 'model.dart';
+import 'team_account_setup.dart';
 import 'section_heading.dart';
 
 export 'machine_status.dart';
@@ -1139,12 +1140,21 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
         }
       }
     }
+    final problem = _teammatesLine(shared, team, contributor);
     return _MachineView(
       apiModels: apiModels,
       localModels: localModels,
       id: id,
       name: name,
-      problem: _teammatesLine(shared, team, contributor),
+      problem: problem,
+      setUpTeam:
+          problem != null &&
+          team == null &&
+          (shared?['teamWork'] as Map?)?['code'] == 'TEAM_ACCOUNT_REQUIRED' &&
+          contributor == c.accountId &&
+          app != null &&
+          app.canSetUpTeamAccount &&
+          app.stateOf(id)?.isLocalMachine == true,
       owner: person,
       contributor: contributor,
       shared: shared,
@@ -1553,9 +1563,15 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
       color: selected ? grid.AppSurface.selectedFill : Colors.transparent,
       borderRadius: BorderRadius.circular(DesktopChrome.rowRadius),
       clipBehavior: Clip.antiAlias,
+      // No chevron (Dee, 2026-10-27): a click expands the machine, and its
+      // details are in the right-click menu, or a long press on a touch screen.
       child: InkWell(
         key: ValueKey('super-machine-${view.id}'),
-        onTap: () => unawaited(_openDetails(view)),
+        onTap: () {
+          c.toggleMachineExpanded(view.id);
+          _changed();
+        },
+        onLongPress: () => unawaited(_openDetails(view)),
         onSecondaryTapUp: (event) =>
             unawaited(_menu(view, event.globalPosition)),
         hoverColor: grid.AppSurface.hoverFill,
@@ -1570,13 +1586,14 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
             Tooltip.dismissAllToolTips();
           }
         },
-        child: _MachineLine(
-          view: view,
+        child: Semantics(
           expanded: expanded,
-          onToggle: () {
-            c.toggleMachineExpanded(view.id);
-            _changed();
-          },
+          child: _MachineLine(
+            view: view,
+            onSetUpTeam: view.setUpTeam
+                ? () => showTeamAccountSetup(context, widget.app!)
+                : null,
+          ),
         ),
       ),
     );
@@ -1941,11 +1958,15 @@ class _MachineView {
     required this.allowances,
     required this.tip,
     this.problem,
+    this.setUpTeam = false,
     this.apiModels = const [],
     this.localModels = const [],
   });
 
   final String id, name, details, tip;
+
+  /// Its [problem] is this Mac's, its own person looking: no Harness Team account yet, which they can set up here.
+  final bool setUpTeam;
 
   /// Its one line when teammates' agents cannot run there ([superTabTeammatesPaused]); null otherwise.
   final String? problem;
@@ -2048,17 +2069,14 @@ class _Allowance {
   );
 }
 
-/// The same leading icon/name and trailing status/disclosure columns as projects.
+/// The same leading icon/name and trailing status column as projects.
 class _MachineLine extends StatelessWidget {
-  const _MachineLine({
-    required this.view,
-    required this.expanded,
-    required this.onToggle,
-  });
+  const _MachineLine({required this.view, this.onSetUpTeam});
 
   final _MachineView view;
-  final bool expanded;
-  final VoidCallback onToggle;
+
+  /// This Mac's row, without its Harness Team account: Set up under the paused line.
+  final VoidCallback? onSetUpTeam;
 
   @override
   Widget build(BuildContext context) {
@@ -2134,6 +2152,18 @@ class _MachineLine extends StatelessWidget {
                         overflow: TextOverflow.ellipsis,
                         style: DesktopChrome.metadata(),
                       ),
+                      if (onSetUpTeam != null)
+                        TextButton(
+                          key: ValueKey('super-machine-team-setup-${view.id}'),
+                          onPressed: onSetUpTeam,
+                          style: TextButton.styleFrom(
+                            padding: EdgeInsets.zero,
+                            minimumSize: const Size(0, 22),
+                            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                            alignment: Alignment.centerLeft,
+                          ),
+                          child: const Text('Set up'),
+                        ),
                     ],
                   );
                 },
@@ -2170,28 +2200,6 @@ class _MachineLine extends StatelessWidget {
                   arrived: view.arrived,
                 ),
               ),
-            ),
-          ),
-          Semantics(
-            expanded: expanded,
-            button: true,
-            child: IconButton(
-              key: ValueKey('super-machine-toggle-${view.id}'),
-              icon: Icon(
-                expanded ? AppIcons.chevronDown : AppIcons.chevronRight,
-                size: AppIcons.inlineSize,
-              ),
-              color: DesktopChrome.muted,
-              style: const ButtonStyle(
-                minimumSize: WidgetStatePropertyAll(Size.square(32)),
-                padding: WidgetStatePropertyAll(EdgeInsets.all(6)),
-                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                visualDensity: VisualDensity.standard,
-                overlayColor: WidgetStatePropertyAll(Colors.transparent),
-                backgroundColor: WidgetStatePropertyAll(Colors.transparent),
-              ),
-              tooltip: '${expanded ? 'Collapse' : 'Expand'} $name',
-              onPressed: onToggle,
             ),
           ),
         ],

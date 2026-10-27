@@ -18,6 +18,9 @@ export interface FakeCall { method: string; path: string; auth: string; body: un
 export function fakeGitHub(options: { publicKey: KeyObject; appId: string; now?: () => number }) {
   const now = options.now ?? Date.now
   const installed = new Map<string, number>()
+  /** The app's installation on an owner (`owner`, lower case), and repositories renamed (old `owner/name` → new), lower case. */
+  const owners = new Map<string, number>()
+  const renamed = new Map<string, string>()
   const protection = new Map<string, { rules?: unknown[]; protected?: boolean; branch?: string; fail?: boolean }>()
   const calls: FakeCall[] = []
   const issued = new Set<string>()
@@ -47,6 +50,11 @@ export function fakeGitHub(options: { publicKey: KeyObject; appId: string; now?:
       const id = installed.get(`${match[1]}/${match[2]}`.toLowerCase())
       return id === undefined ? json(404, { message: 'Not Found' }) : json(200, { id, account: { login: match[1] } })
     }
+    if (method === 'GET' && (match = /^\/(?:orgs|users)\/([^/]+)\/installation$/.exec(url.pathname))) {
+      if (!jwtValid(auth)) return json(401, { message: 'Bad credentials' })
+      const id = owners.get(match[1]!.toLowerCase())
+      return id === undefined ? json(404, { message: 'Not Found' }) : json(200, { id })
+    }
     if (method === 'POST' && (match = /^\/app\/installations\/(\d+)\/access_tokens$/.exec(url.pathname))) {
       if (!jwtValid(auth)) return json(401, { message: 'Bad credentials' })
       if (control.tokenStatus !== 201) return json(control.tokenStatus, { message: control.tokenMessage })
@@ -68,13 +76,14 @@ export function fakeGitHub(options: { publicKey: KeyObject; appId: string; now?:
       const known = protection.get(`${repoPath[1]}/${repoPath[2]}`.toLowerCase()) ?? {}
       if (known.fail) return json(500, { message: 'Server Error' })
       const branch = known.branch ?? 'main'
-      if (!repoPath[3]) return json(200, { full_name: `${repoPath[1]}/${repoPath[2]}`, default_branch: branch })
+      // A renamed repository: GitHub redirects its old name to its id, and fetch follows, so the body names it as it is now.
+      if (!repoPath[3]) return json(200, { full_name: renamed.get(`${repoPath[1]}/${repoPath[2]}`.toLowerCase()) ?? `${repoPath[1]}/${repoPath[2]}`, default_branch: branch })
       if (repoPath[3] === `/rules/branches/${encodeURIComponent(branch)}`) return json(200, known.rules ?? [])
       if (repoPath[3] === `/branches/${encodeURIComponent(branch)}`) return json(200, { name: branch, protected: known.protected ?? false })
     }
     return json(404, { message: 'Not Found' })
   }) as typeof globalThis.fetch
-  return { fetch, calls, installed, protection, revoked, issued, control }
+  return { fetch, calls, installed, owners, renamed, protection, revoked, issued, control }
 }
 
 /** A configured app talking to [github]. */

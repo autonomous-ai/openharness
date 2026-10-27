@@ -45,9 +45,13 @@ class _Api extends ApiClient {
   _Api() : super(config: AppConfig.dev, session: AuthSession());
 
   int logReads = 0;
+  int machineReads = 0;
 
   @override
-  Future<List<Machine>> machines() async => const [_reachable, _unlinked];
+  Future<List<Machine>> machines() async {
+    machineReads++;
+    return const [_reachable, _unlinked];
+  }
 
   @override
   Future<DeviceLogFetched?> deviceKeys(int since, {String? self}) async {
@@ -225,21 +229,39 @@ void main() {
     test('$host: four idle minutes load nothing and print nothing', () {
       fakeAsync((clock) {
         final rig = _Rig(clock, browser: browser)..start();
-        // The connect page's watch, or any other machine-list reader.
-        final watch = Timer.periodic(
-          const Duration(seconds: 4),
-          (_) => rig.app.rereadMachines(),
-        );
+        Timer? pushes;
+        if (browser) {
+          // Its other computer gone too, the browser hears nothing and reads the list itself —
+          // the connect page's case — every 4 s here.
+          rig.app.connectionStatusForTest(
+            _reachable.machineId,
+            ConnectionStatus.disconnected,
+          );
+          rig.app.deafMachineListPaceForTest = const [Duration(seconds: 4)];
+        } else {
+          // Desktop reads it quietly when told it changed.
+          pushes = Timer.periodic(
+            const Duration(seconds: 4),
+            (_) => rig.app.handleEventForTest(_reachable.machineId, {
+              'type': 'machines_changed',
+              'payload': <String, dynamic>{},
+            }),
+          );
+        }
+        clock.flushMicrotasks();
         lines.clear();
         final dials = rig.dials;
+        final reads = rig.api.machineReads;
 
         clock.elapse(const Duration(minutes: 4));
 
+        // The list really was read, every 4 s.
+        expect(rig.api.machineReads - reads, greaterThanOrEqualTo(60));
         expect(loads(), 0);
         expect(lines, isEmpty);
         // The link retry alone, 30 s apart by now.
         expect(rig.dials - dials, 8);
-        watch.cancel();
+        pushes?.cancel();
         rig.dispose();
       });
     });

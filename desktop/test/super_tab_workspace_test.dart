@@ -11,6 +11,53 @@ import 'super_tab_launch_test.dart' show SuperTabLaunchFixture, tabId;
 
 void main() {
   testWidgets(
+    'a signed-in person never sees Sign in while their account is still read',
+    (tester) async {
+      final f = SuperTabLaunchFixture();
+      f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Pilot');
+      // A restored Swarm tab draws before the account's profile has answered.
+      final profile = f.app.currentUser;
+      f.app.currentUser = null;
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: ListenableBuilder(
+              listenable: f.app,
+              builder: (_, _) => SuperTabWorkspace(
+                app: f.app,
+                canvas: PaneGrid(notifier: f.app, swarmMode: true),
+                onAddAgent: (_) {},
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 50));
+      expect(find.textContaining('Sign in'), findsNothing);
+      expect(find.byType(CircularProgressIndicator), findsOneWidget);
+
+      f.app.currentUser = profile;
+      // The account is known: the Swarm opens and reads as it always has.
+      final c = await f.app.superTabs.open(tabId);
+      await c.refresh();
+      for (
+        var i = 0;
+        i < 40 && find.byType(SuperTabView).evaluate().isEmpty;
+        i++
+      ) {
+        await tester.pump(const Duration(milliseconds: 50));
+        expect(find.textContaining('Sign in'), findsNothing);
+      }
+      expect(find.byType(SuperTabView), findsOneWidget);
+      await tester.pumpWidget(const SizedBox());
+      await c.flush();
+      f.app.superTabs.dispose();
+      await tester.pump();
+    },
+  );
+
+  testWidgets(
     'a stopped native stream keeps its Resume action after a chat round trip',
     (tester) async {
       await tester.binding.setSurfaceSize(const Size(1280, 800));

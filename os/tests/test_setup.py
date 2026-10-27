@@ -458,6 +458,68 @@ class Ssh(unittest.TestCase):
                                   'addresses': [{'interface': 'wlo1', 'address': '172.168.21.13'}]})
 
 
+class Name(unittest.TestCase):
+    def name(self, hostname):
+        with tempfile.TemporaryDirectory() as folder:
+            etc = Path(folder)
+            (etc / 'hostname').write_text(hostname + '\n')
+            (etc / 'hosts').write_text(f'127.0.0.1 localhost\n::1 localhost\n127.0.1.1 {hostname}\n')
+            calls = []
+            with patch.object(setup, 'HOSTNAME', etc / 'hostname'), patch.object(setup, 'HOSTS', etc / 'hosts'), \
+                 patch.object(setup, 'hotspot_name', return_value='Harness-BD19'), \
+                 patch.object(setup.subprocess, 'run', side_effect=lambda command, **_: calls.append(command) or result()):
+                setup.name_computer('wlan0')
+            return calls, (etc / 'hosts').read_text()
+
+    def test_the_installers_name_becomes_the_hotspots(self):
+        calls, hosts = self.name('harness')
+        self.assertEqual(calls, [['hostnamectl', 'set-hostname', 'Harness-BD19']])
+        self.assertIn('127.0.1.1 Harness-BD19\n', hosts)
+
+    def test_a_name_somebody_chose_stays(self):
+        calls, hosts = self.name('studio')
+        self.assertEqual(calls, [])
+        self.assertIn('127.0.1.1 studio\n', hosts)
+
+
+class InstallGh(unittest.TestCase):
+    def install(self, present, *answers):
+        """install_gh with gh [present] or not, pacman exiting with each of [answers] in turn (0 puts gh there)."""
+        calls = []
+        replies = iter(answers)
+        with tempfile.TemporaryDirectory() as folder:
+            gh = Path(folder) / 'gh'
+            if present:
+                gh.touch()
+            def run(command, **_):
+                calls.append(command)
+                code = next(replies)
+                if code == 0:
+                    gh.touch()
+                return result(code, '', '' if code == 0 else 'error: failed retrieving file\n')
+            with patch.object(setup, 'GH', gh), patch.object(setup.subprocess, 'run', side_effect=run), \
+                 patch.object(setup, 'log'):
+                return setup.install_gh(), calls
+
+    def test_present_it_installs_nothing(self):
+        self.assertEqual(self.install(True), ({'installed': True}, []))
+
+    def test_gone_it_is_put_back_from_the_computers_repositories(self):
+        answer, calls = self.install(False, 0)
+        self.assertEqual(answer, {'installed': True})
+        self.assertEqual(calls, [['pacman', '-S', '--needed', '--noconfirm', 'github-cli']])
+
+    def test_with_its_databases_refreshed_from_the_same_snapshot_when_they_fall_short(self):
+        answer, calls = self.install(False, 1, 0)
+        self.assertEqual(answer, {'installed': True})
+        self.assertEqual(calls[1], ['pacman', '-S', '-y', '--needed', '--noconfirm', 'github-cli'])
+
+    def test_says_why_it_could_not(self):
+        answer, _ = self.install(False, 1, 1)
+        self.assertEqual(answer, {'installed': False,
+                                  'message': 'The GitHub CLI could not be installed: error: failed retrieving file'})
+
+
 class Server:
     def shutdown(self): pass
     def server_close(self): pass
