@@ -1,6 +1,6 @@
 import { createPublicKey, generateKeyPairSync, verify } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
-import { cacheSecret, githubAppConfig, GitHubAppError, readPrivateKey, TOKEN_PERMISSIONS } from './app.js'
+import { cacheSecret, githubAppConfig, GitHubAppError, PULL_READ_PERMISSIONS, readPrivateKey, TOKEN_PERMISSIONS } from './app.js'
 import { FAKE_API, fakeApp, fakeGitHub, throwawayKey } from './fakeGitHub.js'
 import { githubRepository } from './repository.js'
 
@@ -194,6 +194,29 @@ describe('default branch protection', () => {
     github.control.down = false
     github.protection.set('acme/app', {})
     expect(await app.defaultBranch(repo, token)).toEqual({ branch: 'main', protection: 'none' })
+  })
+
+  it('reads whether a pull request is open, merged or closed, with a token for its repository alone', async () => {
+    const { app, github } = setup()
+    const { token } = await app.createToken(77, repo, PULL_READ_PERMISSIONS)
+    expect(github.calls.at(-1)!.body).toMatchObject({ repositories: ['app'], permissions: { pull_requests: 'read', metadata: 'read' } })
+    github.pulls.set('acme/app#1', { state: 'open', merged_at: null })
+    github.pulls.set('acme/app#2', { state: 'closed', merged_at: '2026-10-27T08:00:00Z' })
+    github.pulls.set('acme/app#3', { state: 'closed', merged_at: null })
+    expect(await app.pullRequestState(repo, 1, token)).toBe('open')
+    expect(await app.pullRequestState(repo, 2, token)).toBe('merged')
+    expect(await app.pullRequestState(repo, 3, token)).toBe('closed')
+    expect(github.calls.at(-1)).toMatchObject({ method: 'GET', path: '/repos/acme/app/pulls/3', auth: `Bearer ${token}` })
+  })
+
+  it('answers null, never a guess, when GitHub cannot say', async () => {
+    const { app, github } = setup()
+    const { token } = await app.createToken(77, repo, PULL_READ_PERMISSIONS)
+    expect(await app.pullRequestState(repo, 9, token)).toBeNull()
+    github.pulls.set('acme/app#9', { state: 'open', merged_at: null })
+    expect(await app.pullRequestState(repo, 9, 'ghs_not_issued')).toBeNull()
+    github.control.down = true
+    expect(await app.pullRequestState(repo, 9, token)).toBeNull()
   })
 
   it('never talks to the real GitHub in these tests', () => {

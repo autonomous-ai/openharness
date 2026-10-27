@@ -33,6 +33,21 @@ it('distinguishes complete absence from inaccessible or ambiguous candidates', a
   vi.stubEnv('PATH', 'relative')
   expect(await captureLaunchExecutable('opencode', '')).toMatchObject({ state: 'held' })
 })
+it('looks past a search-path folder this account may not enter, and still never installs with nothing found after it', async () => {
+  // A Harness Team account: Homebrew's bin is on every account's PATH (/etc/paths.d/homebrew), its owner's alone (770).
+  // The folder beside Harness's Node is left out: it is the machine's own, and could hold a real engine.
+  vi.doMock('../../lib/engineLaunch.js', async (actual) => ({ ...await actual<object>(), npmRuntimeBins: () => [] }))
+  const { bin, captureLaunchExecutable } = await fixture()
+  vi.doUnmock('../../lib/engineLaunch.js')
+  const locked = join(root, 'locked'); mkdirSync(locked); writeFileSync(join(locked, 'opencode'), 'theirs', { mode: 0o700 }); chmodSync(locked, 0o000)
+  try {
+    vi.stubEnv('PATH', [locked, bin].join(':'))
+    // Nothing it can run after it: held, never installed over what the locked folder may hold.
+    expect(await captureLaunchExecutable('opencode', '')).toMatchObject({ state: 'held', detail: 'Waiting to confirm access to the selected engine executable.' })
+    const file = join(bin, 'opencode'); writeFileSync(file, 'its own', { mode: 0o700 })
+    expect(await captureLaunchExecutable('opencode', '')).toMatchObject({ state: 'ready', executable: { command: file } })
+  } finally { chmodSync(locked, 0o700) }
+})
 it('searches the absolute folders of a PATH that also lists what is not one', async () => {
   // The login PATH of a Mac with the .NET SDK: `~/.dotnet/tools`, unexpanded. An empty entry and `.` are as common.
   const { bin, captureLaunchExecutable } = await fixture()

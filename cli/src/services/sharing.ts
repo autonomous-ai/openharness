@@ -17,7 +17,8 @@
  *   wants are derived from (sharing/rosterGrants.ts): the messages process is that file's only writer.
  * The observers' frames reach it through its port, as the relay hands them over.
  */
-import { observerSource } from '../superTabs/observers.js'
+import { withoutSwarm } from '../sharing/swarmMarks.js'
+import type { observerSource } from '../superTabs/observers.js'
 import { join } from 'node:path'
 import type { CoreApi, CorePorts, ServiceRequests, TerminalWatch } from '../core/api.js'
 import { SHARE_REQUESTS } from '../core/api.js'
@@ -36,6 +37,10 @@ export { SHARE_REQUESTS } from '../core/api.js'
 export interface SharingOptions {
   /** The pool that captures a shared viewer; swapped in tests for one that starts no browser. */
   viewers?: Pick<SharedViewerPool, 'watch' | 'stop'>
+  /** Who a Super Tab's roster lets watch a harness here (superTabs/observers.ts, through superTabs/inServices.ts): absent
+   *  while the Swarm is off, when its observers watch nothing and confidential sessions still refuse every share
+   *  (sharing/swarmMarks.ts `withoutSwarm`). */
+  observers?: typeof observerSource
 }
 
 /** The core's read-only streams, as the owner's own stream manager was: frames in, what each observer is shown out. */
@@ -57,9 +62,14 @@ export const viewerPage = (core: Pick<CoreApi, 'agents'>) => (agentId: string): 
   return agent ? core.agents.dsh(agent)?.viewerUrl ?? null : null
 }
 
+/** Who a Super Tab's roster lets watch a harness here: the Swarm's own source while it is on, and with it off none of its
+ *  observers and no confidential session (sharing/swarmMarks.ts). */
+export const shareObservers = (core: Pick<CoreApi, 'dataDir' | 'daemon'>, observers?: SharingOptions['observers']) =>
+  (observers ?? withoutSwarm)(core.dataDir, () => core.daemon.machineId())
+
 export function startSharing(core: CoreApi, ports: CorePorts, options: SharingOptions = {}): ServiceRequests {
   const viewers = options.viewers ?? new SharedViewerPool(viewerPage(core))
-  const superTabs = observerSource(core.dataDir, () => core.daemon.machineId())
+  const superTabs = shareObservers(core, options.observers)
   const owner = new HarnessShareOwner({
     derivedGrants: superTabs.known,
     allowsGrant: superTabs.allows,

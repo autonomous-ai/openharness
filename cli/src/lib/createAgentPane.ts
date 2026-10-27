@@ -1,4 +1,4 @@
-import type { SwarmSkill } from './swarmSkills.js'
+import type { SwarmSkill } from './savedSkill.js'
 /**
  * Open a tmux pane for a new agent and claim it in the registry, retrying the claim up to
  * `maxAttempts` times.

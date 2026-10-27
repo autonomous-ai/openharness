@@ -559,6 +559,38 @@ describe('tab.routingPolicy', () => {
   })
 })
 
+describe('tab.tidy', () => {
+  it('is on until the Swarm owner turns it off, and back on', () => {
+    const f = fixture()
+    expect(f.state.tidy).toBeUndefined()
+    f.run({ type: 'tab.tidy', enabled: false })
+    expect(f.state.tidy).toBe(false)
+    f.run({ type: 'tab.tidy', enabled: true })
+    expect(f.state.tidy).toBeUndefined()
+  })
+  it('refuses a collaborator and a Lead that quotes no message of the owner', () => {
+    const f = fixture()
+    f.invite('collaborator')
+    expect(() => f.run({ type: 'tab.tidy', enabled: false }, peer)).toThrow('Only the Swarm owner')
+    const lead = f.add('lead-harness', 'owner', 'lead', true)
+    expect(() => f.run({ type: 'tab.tidy', enabled: false }, { kind: 'agent', agentId: lead, machineOwnerId: 'host-owner' })).toThrow('Only the Swarm owner')
+    expect(f.state.tidy).toBeUndefined()
+  })
+  it('lets a Lead pass on a chat message the owner wrote in the last day, and no older one', () => {
+    const f = fixture()
+    const lead = f.add('lead-harness', 'owner', 'lead', true)
+    const asLead: Actor = { kind: 'agent', agentId: lead, machineOwnerId: 'host-owner' }
+    const ownerAuthor = { kind: 'person' as const, id: 'owner', name: 'owner', membershipGeneration: f.state.people[0]!.generation }
+    const askedIn = { conversationId: 'lead', messageId: 'm1' }
+    expect(() => f.run({ type: 'tab.tidy', enabled: false, askedIn }, asLead,
+      { askedIn: { author: ownerAuthor, source: false, createdAt: 1000 - 25 * 3_600_000 } })).toThrow('Only the Swarm owner')
+    expect(() => f.run({ type: 'tab.tidy', enabled: false, askedIn }, asLead,
+      { askedIn: { author: { ...ownerAuthor, kind: 'agent', id: lead }, source: false, createdAt: 900 } })).toThrow('Only the Swarm owner')
+    f.run({ type: 'tab.tidy', enabled: false, askedIn }, asLead, { askedIn: { author: ownerAuthor, source: false, createdAt: 900 } })
+    expect(f.state.tidy).toBe(false)
+  })
+})
+
 const candidate = (id: string, patch: Record<string, unknown> = {}) => ({ id, kind: 'new', machineId: 'machine', engine: 'claude',
   model: 'opus', effort: 'high', quality: 3, cost: 3, title: `Title ${id}`, label: `Label ${id}`, ...patch })
 const record = (patch: Record<string, unknown> = {}) => ({ assessment: { difficulty: 'high', risk: 'low', why: 'Schema change.' },
@@ -940,7 +972,9 @@ it('blocks routing and starts until a finished worker is kept or stopped', () =>
     requirements: { memoryBytes: 0, diskBytes: 0, maxCpuPercent: 100, tools: [], devices: [], quotaRequired: false } }
   expect(() => f.run(route, f.leadActor)).toThrow('reuse, keep or stop')
   expect(() => f.run({ type: 'agent.start', request, ...via }, f.leadActor, { contribution: f.contribution, ...decisionIn(group) })).toThrow('reuse, keep or stop')
-  f.run({ type: 'agent.release', agentId: f.worker, decision: 'keep' }, f.leadActor)
+  f.run({ type: 'agent.release', agentId: f.worker, decision: 'keep' }, f.leadActor, { now: 5000 })
+  // A kept worker is idle from the keep, not from its task's end (tidy.ts).
+  expect(f.state.agents.find(a => a.id === f.worker)!.keptAt).toBe(5000)
   expect(f.run(route, f.leadActor).routeDecisions).toHaveLength(1)
   expect(f.run({ type: 'agent.start', request, ...via }, f.leadActor, { contribution: f.contribution, ...decisionIn(group) }).result.startId).toBeTruthy()
 })
@@ -2603,5 +2637,40 @@ describe('the morning digest setting (digest.ts)', () => {
     expect(() => f.run({ type: 'project.digest', projectId: 'lead', time: '08:00', timeZone: 'Mars/Olympus' })).toThrow('Name a time zone such as Asia/Ho_Chi_Minh.')
     expect(() => f.run(commandSchema.parse({ type: 'project.digest', projectId: 'lead', time: '24:00', timeZone: 'UTC' }))).toThrow()
     expect(digest()).toBeUndefined()
+  })
+})
+
+describe('agent.stopRefused', () => {
+  /** A worker the idle check marked for stopping (tidy.ts), as it was before: awaiting its Lead's decision. */
+  function idleStopped() {
+    const f = fixture(), lead = f.add('lead', 'owner', 'lead', true), worker = f.add('worker', 'owner', f.group())
+    const target = f.state.agents.find(a => a.id === worker)!
+    Object.assign(target, { workDecision: 'stop', releaseId: 'idle-release', idleStop: { previous: 'awaiting' } })
+    const asWorker: Actor = { kind: 'agent', agentId: worker, machineOwnerId: 'host-owner' }
+    return { f, lead, worker, asWorker, member: () => f.state.agents.find(a => a.id === worker)! }
+  }
+
+  it('lets the worker\'s own host withdraw an idle stop its folder\'s changes forbid, restarting its idle time', () => {
+    const t = idleStopped()
+    t.f.run({ type: 'agent.stopRefused', agentId: t.worker, releaseId: 'idle-release' }, t.asWorker, { now: 7000 })
+    expect(t.member()).toMatchObject({ workDecision: 'awaiting', keptAt: 7000 })
+    expect(t.member().releaseId).toBeUndefined()
+    expect(t.member().idleStop).toBeUndefined()
+  })
+
+  it('refuses another agent, a stale stop, and a stop its Lead asked for', () => {
+    const t = idleStopped()
+    expect(() => t.f.run({ type: 'agent.stopRefused', agentId: t.worker, releaseId: 'idle-release' }, { kind: 'agent', agentId: t.lead, machineOwnerId: 'host-owner' })).toThrow('Only the execution host')
+    expect(() => t.f.run({ type: 'agent.stopRefused', agentId: t.worker, releaseId: 'older' }, t.asWorker)).toThrow('Only the execution host')
+    delete t.member().idleStop
+    expect(() => t.f.run({ type: 'agent.stopRefused', agentId: t.worker, releaseId: 'idle-release' }, t.asWorker)).toThrow('Only the execution host')
+    expect(t.member().workDecision).toBe('stop')
+  })
+
+  it('keeps a stop its Lead asked for after the idle check made it', () => {
+    const t = idleStopped()
+    t.f.run({ type: 'agent.release', agentId: t.worker, decision: 'stop' }, { kind: 'agent', agentId: t.lead, machineOwnerId: 'host-owner' })
+    expect(() => t.f.run({ type: 'agent.stopRefused', agentId: t.worker, releaseId: 'idle-release' }, t.asWorker)).toThrow('Only the execution host')
+    expect(t.member().workDecision).toBe('stop')
   })
 })
