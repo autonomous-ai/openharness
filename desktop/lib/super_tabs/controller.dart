@@ -272,6 +272,16 @@ class SuperTabController extends ChangeNotifier {
     _changed();
   }
 
+  /// Whether a drawer of the view (the narrow sidebar, the roster) lies over
+  /// the chat. Only the view knows its width, so it says so after each layout.
+  bool chatCovered = false;
+
+  void coverChat(bool covered) {
+    if (_disposed || chatCovered == covered) return;
+    chatCovered = covered;
+    _changed();
+  }
+
   void openNotifications() {
     if (_disposed || accessRevoked || notificationsOpen) return;
     notificationsOpen = true;
@@ -721,14 +731,15 @@ class SuperTabController extends ChangeNotifier {
 
   /// The open conversation, for a device's voice: its id, its name and
   /// whether this person can post there. Null while something covers the chat
-  /// (Your devices, Notifications, pull requests, the group's terminals) or
-  /// nothing is open. The daemon checks again before it posts.
+  /// (Your devices, Notifications, pull requests, the group's terminals, a
+  /// drawer) or nothing is open. The daemon checks again before it posts.
   Map<String, Object>? get voiceConversation {
     final group = selected;
     if (group == null ||
         devicesSelected ||
         notificationsOpen ||
         pullRequestsOpen ||
+        chatCovered ||
         accessRevoked ||
         terminalAgents(group.id).isNotEmpty) {
       return null;

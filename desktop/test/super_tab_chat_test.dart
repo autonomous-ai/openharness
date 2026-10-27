@@ -308,6 +308,35 @@ void main() {
     });
   }
 
+  for (final drawer in ['Conversations', 'Members and machines']) {
+    testWidgets(
+      '$drawer over the chat takes it from a device\'s voice until it closes or the window widens',
+      (tester) async {
+        await tester.binding.setSurfaceSize(const Size(600, 700));
+        addTearDown(() => tester.binding.setSurfaceSize(null));
+        final c = await show(tester, ConversationServer());
+        expect(c.voiceConversation, isNotNull);
+
+        await tester.tap(find.byTooltip(drawer));
+        await tester.pumpAndSettle();
+        expect(c.voiceConversation, isNull);
+
+        await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+        await tester.pumpAndSettle();
+        expect(c.voiceConversation, isNotNull);
+
+        await tester.tap(find.byTooltip(drawer));
+        await tester.pumpAndSettle();
+        expect(c.voiceConversation, isNull);
+        // Wide enough for the side panes, the drawer no longer covers the chat.
+        await tester.binding.setSurfaceSize(const Size(1200, 700));
+        await tester.pumpAndSettle();
+        expect(c.voiceConversation, isNotNull);
+        await closeReadView(tester, c);
+      },
+    );
+  }
+
   testWidgets('a project stays unread until its unread workgroup is visited', (
     tester,
   ) async {

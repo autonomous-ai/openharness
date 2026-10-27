@@ -1864,6 +1864,13 @@ class _SuperTabViewState extends State<SuperTabView>
         _readVisibleTailAfterFrame();
       }
       _chatCovered = chatCovered;
+      // A drawer over the chat takes it from a device's voice; the controller
+      // is told after this frame, never while it is being built.
+      if (c.chatCovered != chatCovered) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) c.coverChat(_chatCovered);
+        });
+      }
       _boardRoomy =
           constraints.maxWidth >=
           MediaQuery.textScalerOf(context).scale(SuperTabSwarmBoard.columnFrom);
