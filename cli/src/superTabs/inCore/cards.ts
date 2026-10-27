@@ -9,11 +9,11 @@
  * later is shown it (`replay`). A list is taken whole or not at all: one item that is not one drops the list and the last
  * good one stays, so a device never shows half a Swarm. A recap is one Lead's and is forwarded as it comes.
  *
- * The core also owns whether the cards are wanted at all (like core/superTabAttention.ts owns its waits): the devices say
+ * The core also owns whether the cards are wanted at all (like attention.ts owns its waits): the devices say
  * whether a capable Pro is attached and which Swarms the desktop has tabs for (`want`), and the core says it to the Super Tab
  * service, again whenever that service (re)connects (`serviceUp`), and takes it back when the devices go (`devicesGone`).
  */
-import type { LeadRecap, SwarmCard, SwarmLead } from '../superTabs/cards.js'
+import type { LeadRecap, SwarmCard, SwarmLead } from '../../core/api.js'
 
 export interface SuperTabCardsDeps {
   /** The devices' door for the list (`ports.devices.swarmCards`). */

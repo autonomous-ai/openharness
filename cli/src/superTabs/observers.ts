@@ -1,13 +1,14 @@
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { DerivedGrant, HarnessGrant } from '../sharing/grants.js'
+import { observerSnapshotFile, savedConfidential, superTabOf } from '../sharing/swarmMarks.js'
 import { identifier, object } from './wire.js'
+
+// Which grants are a Super Tab's, and the confidential marks: read by Share with the Swarm off too (sharing/swarmMarks.ts).
+export { observerSnapshotFile, superTabOf }
 
 type Wanted = Omit<DerivedGrant, 'ownerPublicKey'>
 const PREFIX = 'super:'
-export function superTabOf(grant: Pick<HarnessGrant, 'tab'>): string | null {
-  return grant.tab?.startsWith(PREFIX) ? grant.tab.slice(PREFIX.length) : null
-}
 /** How long a published roster authorizes its observers, counted from the roster read that answered: the host's
  *  refresh cadence (superTabs/host.ts reads the roster each second) plus a margin for a slow read. It was 2.5 s from
  *  the moment a read was ASKED, while the roster read took 1 to 2.8 s: measured 2026-10-23 on MacBookPro2021, the
@@ -17,16 +18,6 @@ export function superTabOf(grant: Pick<HarnessGrant, 'tab'>): string | null {
  *  them, and the backend checks membership again for every observer connection (routes/harnessShares.ts). */
 export const OBSERVER_REFRESH_MS = 1_000, OBSERVER_SLOW_READ_MS = 10_000
 export const OBSERVER_VALID_MS = OBSERVER_REFRESH_MS + OBSERVER_SLOW_READ_MS
-export function observerSnapshotFile(dataDir: string, machineId: string) {
-  return join(dataDir, 'super-tabs', `observers-${machineId}.json`)
-}
-/** The sessions the last snapshot recorded as confidential (a Lead, or in a private chat, in some Swarm). */
-function savedConfidential(file: string, machineId: string): string[] {
-  try {
-    const saved = object(JSON.parse(readFileSync(file, 'utf8')))
-    return saved.machineId === machineId && Array.isArray(saved.confidential) ? saved.confidential.filter(identifier) : []
-  } catch { return [] }
-}
 
 /** Ephemeral authorization, not a durable grant. A stalled or dead producer's
  * snapshot expires; restarting Share never extends it from the clock alone.
