@@ -460,7 +460,9 @@ class ProjectSidebar extends StatelessWidget {
               icon: AppIcons.bell,
               onTap: onNotifications,
               selected: notificationsSelected,
-              badge: snapshot?.mentionsWaiting ?? 0,
+              badge:
+                  (snapshot?.mentionsWaiting ?? 0) +
+                  (snapshot?.decisionsWaiting ?? 0),
             ),
           if (onNewProject != null ||
               onYourDevices != null ||

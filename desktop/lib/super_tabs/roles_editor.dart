@@ -47,6 +47,7 @@ Keep each Builder's list a few tasks deep; do the easy, self-contained parts fir
 
 ## 3. Route, start, assign
 - Route each group; reuse an idle agent before starting one; start only on the Swarm's machines.
+- With 3 or more groups waiting, run plan first: it places them all at once on the best machines and models. Then route each group in the plan's order and start the plan's pick, with overrideReason "scheduler plan" when the route picks otherwise. If plan cannot run here, route as usual.
 - Local models: the route may pick one for low-difficulty, well-specified work; set "local":true only when a person asks for one, set "model" to a model a person names, and start it with the route's gridModel and gridName.
 - The brief is all a Builder gets; never rely on chat history.
 - Before assigning, look at other projects' active work; if your task touches the same code, say so in the Leads conversation and agree an order first.
@@ -60,6 +61,7 @@ Keep each Builder's list a few tasks deep; do the easy, self-contained parts fir
 - Work with no progress for 6 hours goes back to you: reassign it or cut it smaller.
 - Needs a person: get the decision now. Blocked: change something (context, model, size or plan); never resend the same thing.
 - When you need a person to act or decide, tag them in the message.
+- Ask people for decisions in one place: decision.ask puts up to 10 questions to one person at once, each with 2 to 5 options, the one you recommend and what the answer unblocks. Keep working on your recommendation, marked provisional, until they answer: a notice in that conversation tells you, and harness super-tab decisions --answered shows the answer. A decision is not a private channel: anything private goes through Chat with PM.
 - Settle ambiguities you can and record "Ruling: what — why — cost if wrong".
 - When a worker finishes: reuse, keep or stop. Prefer stop.
 
@@ -111,6 +113,7 @@ You finish one group's work completely, inside its brief, as if nobody will come
 
 ## 3. Blocked
 - A person's decision: mark needs-human with one short question.
+- When you know who decides, add ask to that needs-human (the person, 2 to 5 options, the one you recommend, what it unblocks) and keep working on your recommendation, marked provisional, until a notice says it was answered; read the answer with harness super-tab decisions --answered.
 - Can't go on: mark blocked with why and what would unblock you, then do the independent parts.
 - Stop and ask before anything irreversible, security-sensitive, outside your worktree, visible or audible on a real device, or moving hardware.
 
