@@ -611,9 +611,10 @@ bool cable_client_voice_begin(const char *agent_id, const char *cmd, const char 
     if (!root) return false;
     // For the Swarm conversation the desktop has in front: that conversation alone, the one this dial showed. The daemon
     // refuses a conversation beside any other purpose, so none rides along, whatever another slot still holds.
-    char conversation[48];
-    audio_client_copy_conversation(conversation, sizeof conversation);
+    char conversation[48], swarm[48];
+    audio_client_copy_conversation(conversation, sizeof conversation, swarm, sizeof swarm);
     if (conversation[0]) {
+        msg_string(&root, "tabId", swarm);   // its Swarm too: every Swarm has a Lead chat, and their ids can be the same
         msg_string(&root, "conversationId", conversation);
         msg_string(&root, "lang", lang && lang[0] ? lang : "en");
         msg_number(&root, "sr", sample_rate);

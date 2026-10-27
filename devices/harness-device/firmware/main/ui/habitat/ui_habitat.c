@@ -2906,11 +2906,12 @@ static void dispatch(action_t a)
             if (s.view == HOME || s.view == AGENT) {
                 // The desktop has a Swarm conversation in front: plain dictation is for it, never the agent on the face. A goal
                 // is a command for an agent and stays with it. Only a daemon that posts in conversations is told one.
-                if (a.value == 0 && !a.text[0] && conv.valid && cable_client_supports(CABLE_FEATURE_CONVERSATION)) {
+                // And only to one that can review a draft: words for a chat are never posted unseen.
+                if (a.value == 0 && !a.text[0] && conv.valid && cable_client_supports(CABLE_FEATURE_CONVERSATION | CABLE_FEATURE_DRAFT)) {
                     if (!conv.can_post) {
                         COPY(s.title, "Swarm chat"); COPY(s.message, "You can't post in this chat."); view(MESSAGE); break;
                     }
-                    a.value = 8; a.id[0] = 0; COPY(a.text, conv.id);
+                    a.value = 8; COPY(a.id, conv.tab); COPY(a.text, conv.id);
                 } else if (!a.id[0] || s.loading) break;
             }
             if (a.value==4) {
@@ -2929,8 +2930,9 @@ static void dispatch(action_t a)
             s.voice_draft_revision = (uint32_t)a.dy;
             s.nap = false;
             s.voice_return = s.view;
-            int target = find(a.id);
-            const ht_lead_t *lead = voice_lead(a.id, a.value);
+            // A chat's recording carries its Swarm in `id`, which names no agent and no Lead.
+            int target = a.value == 8 ? -1 : find(a.id);
+            const ht_lead_t *lead = a.value == 8 ? NULL : voice_lead(a.id, a.value);
             if (lead) target = -1;
             if (a.value == 2) snprintf(s.voice_target, sizeof s.voice_target, "Find %.48s",
                 !strcmp(form.page.title, "Find Harness") ? "Harness" :
@@ -3209,7 +3211,7 @@ static void worker(void *unused)
             display_lock();
             if (s.connected && s.voice_open && s.voice_start_pending &&
                 a.revision == s.voice_generation) {
-                if (a.value == 8) audio_client_start_conversation(a.text);
+                if (a.value == 8) audio_client_start_conversation(a.id, a.text);
                 else if (a.value == 7) audio_client_start_search(a.id, a.text, (unsigned)a.dy);
                 else if (a.value == 5 || a.value == 6) audio_client_start_draft(a.text, (unsigned)a.dy, a.value == 6);
                 else if (a.value == 4) audio_client_start_question(a.id,a.text,(unsigned)a.dy);
@@ -3958,6 +3960,8 @@ void ui_set_connected(bool value)
         if (question_view(s.view)) view(HOME);
         ht_visit_close(&visit);
         ht_carry_close(&carry);
+        // The chat it was told of belongs to that connection: the next daemon says its own, or none.
+        memset(&conv, 0, sizeof conv);
     }
     s.connected = value;
     if (!value && form.id[0]) { ht_form_reset(&form); view(HOME); }

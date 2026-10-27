@@ -90,7 +90,7 @@ void audio_client_stop(void) { stops++; }
 void audio_client_request_review(void) { reviews++; }
 void audio_client_abort(void) { aborts++; abort_requested = true; }
 void audio_client_copy_upload_id(char *dst, size_t cap) { snprintf(dst, cap, "capture-%d", starts); }
-static char started_for[64], started_conversation[64];
+static char started_for[64], started_conversation[64], started_tab[64];
 void audio_client_start_cable(const char *id, int cmd) {
     (void)cmd; snprintf(started_for, sizeof started_for, "%s", id ? id : ""); starts++; audio_active = recording = true; abort_requested = false;
 }
@@ -107,8 +107,9 @@ void audio_client_start_draft(const char *id, unsigned revision, bool append) {
     assert(!strcmp(id,"draft-test") && revision==3); (void)append; audio_client_start_cable(NULL,VOICE_CMD_NONE);
 }
 void cable_client_voice_cancel(const char *id) { assert(id[0]); cancels++; }
-void audio_client_start_conversation(const char *id) {
-    snprintf(started_conversation, sizeof started_conversation, "%s", id); started_for[0] = 0; starts++; audio_active = recording = true; abort_requested = false;
+void audio_client_start_conversation(const char *tab, const char *id) {
+    snprintf(started_tab, sizeof started_tab, "%s", tab); snprintf(started_conversation, sizeof started_conversation, "%s", id);
+    started_for[0] = 0; starts++; audio_active = recording = true; abort_requested = false;
 }
 void audio_client_start_selection(const char *id, const char *selected, unsigned revision) {
     assert(selected && selected[0] && revision); audio_client_start_cable(id, VOICE_CMD_NONE);
@@ -142,7 +143,7 @@ static void reset(void) {
     strcpy(s.agents[0].name, "Agent");
     audio_active = recording = abort_requested = queue_full = false;
     starts = stops = aborts = cancels = confirms = 0;
-    memset(&conv, 0, sizeof conv); started_for[0] = started_conversation[0] = 0;
+    memset(&conv, 0, sizeof conv); started_for[0] = started_conversation[0] = started_tab[0] = 0;
 }
 static void speak(void) { dispatch((action_t){.kind = A_VOICE, .id = "agent"}); }
 static void done(void) { dispatch((action_t){.kind = A_VOICE_STOP}); }
@@ -179,7 +180,7 @@ int main(void) {
     reset(); host_features = 31 | CABLE_FEATURE_CONVERSATION; strcpy(s.agents[0].engine, "claude");
     ui_voice_target(true, "st1", "c1", "Chat with PM", true);
     begin();
-    assert(!strcmp(started_conversation, "c1") && !started_for[0]);
+    assert(!strcmp(started_conversation, "c1") && !strcmp(started_tab, "st1") && !started_for[0]);
     assert(!strcmp(s.voice_target, "Chat with PM") && !s.voice_engine[0] && s.voice_conversation);
     done(); assert(reviews == 1 && s.voice_review && s.voice_waiting);
     finish_audio(); ui_voice_routed(true, false, "", "", "Chat with PM", 1);
@@ -193,6 +194,13 @@ int main(void) {
     // A daemon that does not post in conversations: the words go to the agent on the face, as before.
     reset(); ui_voice_target(true, "st1", "c1", "Chat with PM", true); begin();
     assert(!strcmp(started_for, "agent") && !started_conversation[0] && !s.voice_conversation);
+    // A daemon that cannot review a draft never gets words for a chat: they would be posted unseen.
+    reset(); host_features = CABLE_FEATURE_CONVERSATION; ui_voice_target(true, "st1", "c1", "Chat with PM", true); begin();
+    assert(!strcmp(started_for, "agent") && !started_conversation[0] && !s.voice_conversation);
+    // Unplugged, the chat it was told of is gone: a dial that comes back records for its agent until told again.
+    reset(); host_features = 31 | CABLE_FEATURE_CONVERSATION; ui_voice_target(true, "st1", "c1", "Chat with PM", true);
+    ui_set_connected(false); s.connected = true; s.view = HOME; begin();
+    assert(!strcmp(started_for, "agent") && !started_conversation[0] && !conv.valid);
     // A goal is for an agent: it stays with the face's agent, whatever chat is open.
     reset(); host_features = 31 | CABLE_FEATURE_CONVERSATION; ui_voice_target(true, "st1", "c1", "Chat with PM", true);
     dispatch((action_t){.kind = A_VOICE, .id = "agent", .value = 1}); work(queued);

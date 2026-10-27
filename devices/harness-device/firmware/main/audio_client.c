@@ -16,7 +16,11 @@ void audio_client_copy_question(char *out, size_t capacity, unsigned *index)
 }
 
 void audio_client_copy_carry(char *out, size_t capacity) { if (capacity) out[0] = 0; }
-void audio_client_copy_conversation(char *out, size_t capacity) { if (capacity) out[0] = 0; }
+void audio_client_copy_conversation(char *out, size_t capacity, char *swarm, size_t swarm_capacity)
+{
+    if (capacity) out[0] = 0;
+    if (swarm_capacity) swarm[0] = 0;
+}
 
 void audio_client_copy_form(char *out, size_t capacity, unsigned *revision)
 {

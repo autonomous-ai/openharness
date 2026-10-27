@@ -67,8 +67,10 @@ static void audio_client_copy_selection(char *out,size_t n,unsigned *revision) {
     snprintf(out,n,"selection-1234");*revision=8;
 }
 static bool audio_client_review_requested(void) {return review;}
-static char conversation[48];
-static void audio_client_copy_conversation(char *out,size_t n) {snprintf(out,n,"%s",conversation);}
+static char conversation[48], conversation_tab[48];
+static void audio_client_copy_conversation(char *out,size_t n,char *tab,size_t tn) {
+    snprintf(out,n,"%s",conversation);snprintf(tab,tn,"%s",conversation_tab);
+}
 '''
 code += defines('ID_MAX', 'CABLE_READ_TOKEN_MAX')
 for name in ['cable_client_supports', 'send_json', 'msg']:
@@ -113,8 +115,8 @@ static void run(unsigned which) {
     case 23:cable_client_carry("carry-1234",NULL,NULL,0,0,true);break;
     case 24:cable_client_voice_begin(NULL,NULL,NULL,16000);break;
     case 25:cable_client_notification_read("target-agent","notice-42");break;
-    case 26:snprintf(conversation,sizeof conversation,"conversation-1234");
-        cable_client_voice_begin(NULL,NULL,"en",16000);conversation[0]=0;break;
+    case 26:snprintf(conversation,sizeof conversation,"conversation-1234");snprintf(conversation_tab,sizeof conversation_tab,"swarm-1234");
+        cable_client_voice_begin(NULL,NULL,"en",16000);conversation[0]=conversation_tab[0]=0;break;
     default:assert(false);
     }
 }
@@ -139,6 +141,9 @@ int main(void) {
             cJSON *begin=cJSON_Parse(expected);assert(begin);
             const cJSON *id=cJSON_GetObjectItemCaseSensitive(begin,"conversationId");
             assert(cJSON_IsString(id)&&!strcmp(id->valuestring,"conversation-1234"));
+            // And its Swarm: two Swarms' chats can share an id.
+            const cJSON *tab=cJSON_GetObjectItemCaseSensitive(begin,"tabId");
+            assert(cJSON_IsString(tab)&&!strcmp(tab->valuestring,"swarm-1234"));
             static const char *others[]={"agentId","cmd","carryId","formId","formRevision","draftId","draftRevision","draftOp",
                 "questionToken","questionIndex","searchId","searchRevision","selectionId","selectionRevision"};
             for(unsigned i=0;i<sizeof others/sizeof others[0];i++) assert(!cJSON_HasObjectItem(begin,others[i]));
