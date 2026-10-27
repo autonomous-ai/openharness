@@ -60,6 +60,8 @@ beforeAll(async () => {
   store = new SuperTabStore(db, Date.now, { store: files, prefix: 'super-tabs', publicBase: 'https://cdn.example.test' })
   for (const user of [owner, peer, outsider]) await db.user.create({ data: { id: user.sub, externalId: `fixture-${user.sub}`,
     email: user.email, autonomousEnv: user.autonomousEnv } })
+  // The owner's own machine runs the agents, so acting as one needs no machine share.
+  await db.machine.create({ data: { machineId: 'host', userId: owner.sub, apiKey: 'fixture-only', managerId: 'fixture', autonomousEnv: 'prod', authMode: 'remote' } })
   app = Fastify()
   app.setErrorHandler(errorHandler)
   // External SSO is replaced with fixture accounts; every permission and transaction below is real.
@@ -239,5 +241,32 @@ describe('reactions', () => {
     const group = (await run(tab, { type: 'conversation.create', title: 'Side', brief: 'Side work.', checks: [] })).result.conversationId as string
     const side = (await run(tab, { type: 'message.send', conversationId: group, text: 'here', replyTo: null, recipientIds: [] })).result.messageId as string
     await expect(react(tab, side, true)).rejects.toMatchObject({ code: 'NOT_FOUND' })
+  })
+})
+
+describe('the ship moment', () => {
+  const config = { engine: 'claude', model: 'opus', effort: 'high', contextWindow: null, engineVersion: null }
+  it('posts one celebration in the project chat when linked work is Done, waking nobody', async () => {
+    const tab = await swarm()
+    await run(tab, { type: 'agent.add', conversationId: 'lead', machineId: 'host', harnessId: randomUUID(), name: 'River', configuration: config, lead: true })
+    const group = (await run(tab, { type: 'conversation.create', title: 'Avatars', brief: 'Add avatars.',
+      checks: [{ description: 'Tests pass', independent: false }] })).result.conversationId as string
+    const builder = (await run(tab, { type: 'agent.add', conversationId: group, machineId: 'host', harnessId: randomUUID(), name: 'Kai',
+      configuration: config, lead: false })).result.agentId as string
+    await run(tab, { type: 'work.assign', conversationId: group, agentId: builder })
+    const state = (await store.read(owner, tab)).state
+    const work = state.conversations.find(c => c.id === group)!
+    await run(tab, { type: 'work.check', conversationId: group, assignmentId: work.assignment!.id, checkId: work.checks[0]!.id, passed: true,
+      evidence: 'npm test: 12 passed' }, owner, builder)
+    const operationId = randomUUID()
+    const done: Command = { type: 'work.status', conversationId: group, assignmentId: work.assignment!.id, status: 'done',
+      result: 'Merged https://github.com/example/app/pull/7' }
+    await run(tab, done, owner, builder, operationId)
+    await run(tab, done, owner, builder, operationId)
+    const rows = await db.superTabMessage.findMany({ where: { tabId: tab, conversationId: 'lead' } })
+    const ships = rows.filter(m => (m.source as { kind?: string } | null)?.kind === 'ship')
+    expect(ships).toHaveLength(1)
+    expect(ships[0]).toMatchObject({ text: '🎉 Shipped: Avatars, built by Kai. https://github.com/example/app/pull/7', recipientIds: [] })
+    expect(await db.superTabDelivery.count({ where: { tabId: tab, messageId: ships[0]!.id } })).toBe(0)
   })
 })

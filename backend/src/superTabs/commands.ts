@@ -3,7 +3,7 @@ import { assignAgentDisplayNames } from './agentNames.js'
 import { z } from 'zod'
 import {
   activeWork, actorKey, agent, agentRole, author, conversation, crossProjectActive, fail, isLeads, person, stableId, syncLeads, numberConversations, nextConversationNumber, renderWorkTask,
-  finishWorker, requireWorkerDecisions, reviewing, swarmGridName, AGENT_ONLY,
+  finishWorker, requireWorkerDecisions, reviewing, swarmGridName, AGENT_ONLY, appendPullRequestUrls,
   type Actor, type Agent, type Author, type CommandEffects, type Conversation, type SuperTabState,
 } from './model.js'
 import { routeRecordSchema, routeTitle, startedAs, type RouteCandidate, type RouteDecision, type RouteFinal, type RouteOverride } from './routeRecord.js'
@@ -16,6 +16,7 @@ import { loseTasks, renewLease, renewOwnTask } from './liveness.js'
 import { credentialResult, redactCredentials, type CredentialKind } from './credentials.js'
 import { dirtyGroups, reportGroups, summarize } from './projectUpdates.js'
 import { react, reactionSchema, type ReactionTarget } from './reactions.js'
+import { shipNotice } from './ship.js'
 import { avatarChoice, setAgentAvatar, setMemberAvatar, setStatus, statusSchema, type AvatarUpload } from './profile.js'
 import { agentKind, agentProjectId, audienceOf, agentSetRole, deleteProject, markConfidential, requireSingleRegistration, groupProject, inviteLanding, ledProject, manageProject, MAX_ROLES, mutableProjects, placeRules, projectMembers, projectOf, projectRules, projectsOf, readAgent, readConversation, readProject, roleVersion, sameProject, sharedWithLeads, SKILL_SET_NAMES, skillSetOf, type ProjectRole, type RoleKind, type SwarmProject } from './projects.js'
 
@@ -1597,6 +1598,11 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
         const reviewers = command.status !== 'review' ? [] : group.agentIds.filter(id => id !== lead &&
           (actor.kind !== 'agent' || id !== actor.agentId) && state.agents.some(a => a.id === id && agentRole(a) === 'reviewer' && a.workDecision !== 'stop'))
         message(group.id, `${label}${command.result ? `\n\n${command.result}` : ''}`, [...(tellLead ? [lead] : []), ...reviewers], null, SYSTEM_ROW)
+        if (command.status === 'done') {
+          appendPullRequestUrls(group, [command.result, ...group.checks.map(check => check.evidence)])
+          const shipped = shipNotice(state, group, sender, operationId)
+          if (shipped) effects.messages.push(shipped)
+        }
       }
       if (actor.kind === 'agent') renewOwnTask(group, actor.agentId, context.now)
       break
