@@ -1,4 +1,4 @@
-import { stableId, type Author, type Conversation, type MessageDraft, type SuperTabState, type WorkStatus } from './model.js'
+import { stableId, type Actor, type Author, type Conversation, type MessageDraft, type SuperTabState, type WorkStatus } from './model.js'
 import { agentDisplayName } from './agentNames.js'
 import { canReadProject, projectsOf, type SwarmProject } from './projects.js'
 import { reportGroups } from './projectUpdates.js'
@@ -75,12 +75,13 @@ export function standupCard(state: SuperTabState, project: SwarmProject, on: str
  *  UTC, as at 08:00 in Auckland, the week `now` is in would be last week, and the recap would go two weeks back. */
 export const recapWeek = (on: string): number => weekStart(Date.parse(`${on}T00:00:00Z`)) - WEEK_MS
 
-/** The machines every person reading the project chat may see (model.ts visibleState): the card is read by all of them, so
- *  its Lent counts no machine one of them could not see on the leaderboard. A machine the Lead project alone was given is
- *  seen only by that project's readers. */
+/** The machines every person and agent reading the project chat may see (model.ts visibleState): the card is read by all of
+ *  them, so its Lent counts no machine one of them could not see on the leaderboard. A machine the Lead project alone was
+ *  given is seen only by that project's readers; another project's agents never read it (review of #1763). */
 function cardMachines(state: SuperTabState, project: SwarmProject): ContributedMachine[] {
   const leadProject = projectsOf(state).find(p => p.id === 'lead')
-  const readers = state.people.map(p => ({ kind: 'person' as const, userId: p.id, email: p.email })).filter(p => canReadProject(state, p, project))
+  const readers: Actor[] = [...state.people.map(p => ({ kind: 'person' as const, userId: p.id, email: p.email })),
+    ...state.agents.map(a => ({ kind: 'agent' as const, agentId: a.id, machineOwnerId: a.machineOwnerId }))].filter(r => canReadProject(state, r, project))
   const allSeeLead = !!leadProject && readers.every(p => canReadProject(state, p, leadProject))
   return (state.machines ?? []).filter(m => allSeeLead || m.scope === 'swarm')
 }

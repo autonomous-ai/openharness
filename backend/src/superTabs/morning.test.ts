@@ -118,11 +118,22 @@ describe('Lent on the recap, read by everyone in the project chat', () => {
     expect(deePoints(state)).toBe(4)
   })
 
-  it('counts the Lead project\'s machines too when everyone reading the chat reads that project', () => {
+  it('leaves a public Lead project\'s machine off another project\'s recap: that project\'s agents read the card but not the Lead project', () => {
     const state = fixture()
     state.machines = [machine('swarm-mac', 10, 'swarm'), machine('lead-mac', 30)]
     state.projects!.push({ id: 'lead', name: 'Swarm', ownerId: 'owner', leadConversationId: 'lead', visibility: 'public', members: [], updateMinutes: 5 })
-    expect(deePoints(state)).toBe(7)
+    expect(deePoints(state)).toBe(4)
+  })
+
+  it('counts the Lead project\'s machines on the Lead project\'s own recap, where every reader reads that project', () => {
+    const state = fixture()
+    state.machines = [machine('swarm-mac', 10, 'swarm'), machine('lead-mac', 30)]
+    // lampOS is the Lead project here: its chat, its work and its agents.
+    state.projects = state.projects!.map(p => p.id === 'p1' ? { ...p, id: 'lead' } : p)
+    state.conversations = state.conversations.map(c => c.projectId === 'p1' ? { ...c, projectId: 'lead' } : c)
+    const lead = state.projects.find(p => p.id === 'lead')!
+    // 3 for the shipped request, 1 for the swarm machine's 10 hours and 3 for the Lead project's 30.
+    expect(recapCard(state, lead, '2026-11-02', MONDAY).top.find(t => t.personId === 'dee')!.points).toBe(7)
   })
 })
 
