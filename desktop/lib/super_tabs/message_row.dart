@@ -21,6 +21,7 @@ class SuperTabMessageRow extends StatefulWidget {
     required this.onReturnToComposer,
     required this.receipts,
     this.agent,
+    this.person,
     this.machineName,
     this.reply,
     this.replyAuthor,
@@ -40,6 +41,9 @@ class SuperTabMessageRow extends StatefulWidget {
   final ValueChanged<String>? onOpenGroup;
   final String author;
   final SuperTabAgent? agent;
+
+  /// The person who wrote it, while they are in the Swarm.
+  final SuperTabPerson? person;
   final String? machineName;
   final SuperTabMessage? reply;
   final String? replyAuthor;
@@ -138,6 +142,30 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
     ].join(' · ');
   }
 
+  Widget _avatar(SuperTabMessage message) {
+    const size = SuperTabMessageRow.avatarSize;
+    if (widget.agent case final agent?) {
+      return SuperTabAvatar.agent(
+        agent,
+        name: widget.author,
+        size: size,
+        engineBadge: false,
+      );
+    }
+    if (widget.person case final person? when !message.fromAgent) {
+      return SuperTabAvatar.person(person, size: size);
+    }
+    // Someone no longer in the Swarm keeps the face their recorded name gives.
+    return SuperTabAvatar(
+      identity: '${message.author['kind']}:${message.authorId}',
+      name: message.fromAgent
+          ? widget.author
+          : superTabPersonName(message.authorName),
+      size: size,
+      pattern: message.fromAgent,
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     grid.AppTheme.watch(context);
@@ -207,16 +235,7 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
                               : ExcludeSemantics(
                                   child: Tooltip(
                                     message: _identityDetails,
-                                    child: SuperTabAvatar(
-                                      identity:
-                                          '${message.author['kind']}:${message.authorId}',
-                                      name: message.fromAgent
-                                          ? widget.author
-                                          : superTabPersonName(
-                                              message.authorName,
-                                            ),
-                                      size: SuperTabMessageRow.avatarSize,
-                                    ),
+                                    child: _avatar(message),
                                   ),
                                 ),
                         ),

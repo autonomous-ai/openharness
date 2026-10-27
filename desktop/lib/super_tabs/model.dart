@@ -1,3 +1,7 @@
+import 'profile_model.dart';
+
+export 'profile_model.dart';
+
 /// Backend records are independent of the desktop's visible panes and tab layout.
 Map<String, dynamic> superTabMap(Object? value) => value is Map
     ? Map<String, dynamic>.from(value)
@@ -27,8 +31,16 @@ class SuperTabPerson {
     : id = _text(row, 'id'),
       email = _text(row, 'email'),
       role = _text(row, 'role'),
-      generation = row['generation'] as String?;
+      generation = row['generation'] as String?,
+      avatar = SuperTabAvatarPicture.fromJson(row['avatar']),
+      status = SuperTabPersonStatus.fromJson(row['status']);
   final String id, email, role;
+  final SuperTabAvatarPicture? avatar;
+  final SuperTabPersonStatus? status;
+
+  /// Their status while it lasts.
+  SuperTabPersonStatus? statusAt(DateTime now) =>
+      status?.shownAt(now) == true ? status : null;
 
   /// This membership: a new one each time the person joins the Swarm. Null
   /// from a backend that does not send it.
@@ -51,8 +63,12 @@ class SuperTabAgent {
       role = row['role'] as String?,
       roleId = row['roleId'] as String?,
       limitedUntil = DateTime.tryParse(row['limitedUntil'] as String? ?? ''),
+      avatar = SuperTabAvatarPicture.fromJson(row['avatar']),
       configuration = Map.unmodifiable(superTabMap(row['configuration']));
   final String id, projectId, name, machineId, harnessId, contributorId;
+
+  /// Set by its contributor or its project's Lead; null draws its pattern.
+  final SuperTabAvatarPicture? avatar;
 
   /// Until when routing skips it: its machine saw a usage limit on its screen
   /// (spec/2026-10-23-lead-sees-agent-terminal.md). Null when none was seen.
@@ -646,6 +662,9 @@ class SuperTabMessage {
       source = Map.unmodifiable(superTabMap(row['source'] ?? const {})),
       createdAt = DateTime.tryParse(row['createdAt'] as String? ?? ''),
       attachments = _attachments(row['attachments']),
+      reactions = List.unmodifiable(
+        SuperTabReactionCount.listFromJson(row['reactions']),
+      ),
       mentions = List.unmodifiable(
         (row['mentions'] as List?)?.whereType<String>() ?? const <String>[],
       ),
@@ -660,6 +679,7 @@ class SuperTabMessage {
   final Map<String, dynamic> source;
   final DateTime? createdAt;
   final List<SuperTabAttachment> attachments;
+  final List<SuperTabReactionCount> reactions;
 
   /// The people a Lead tagged in this message, by person id.
   final List<String> mentions;

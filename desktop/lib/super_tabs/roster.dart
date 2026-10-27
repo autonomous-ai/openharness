@@ -1,3 +1,5 @@
+import 'package:clock/clock.dart';
+
 import 'dart:async';
 
 import 'package:flutter/material.dart';
@@ -339,10 +341,11 @@ class _SuperTabRosterState extends State<SuperTabRoster> {
           contentPadding: const EdgeInsets.symmetric(horizontal: 16),
           title: Row(
             children: [
-              SuperTabAvatar(
-                identity: 'agent:${agent.id}',
+              SuperTabAvatar.agent(
+                agent,
                 name: name,
                 size: 24,
+                engineBadge: false,
               ),
               const SizedBox(width: 8),
               Expanded(child: _agentIdentity(name, role, badge)),
@@ -427,15 +430,20 @@ class _SuperTabRosterState extends State<SuperTabRoster> {
           minLeadingWidth: 24,
           contentPadding: const EdgeInsets.symmetric(horizontal: 16),
           horizontalTitleGap: 8,
-          leading: SuperTabAvatar(
-            identity: 'person:${person.id}',
-            name: superTabPersonName(person.email),
-            size: 24,
-          ),
+          leading: SuperTabAvatar.person(person, size: 24),
           title: Tooltip(
             message: person.email,
-            child: Text(
-              superTabPersonName(person.email),
+            child: Text.rich(
+              TextSpan(
+                text: superTabPersonName(person.email),
+                children: [
+                  if (person.statusAt(clock.now()) case final status?)
+                    TextSpan(
+                      text: '  ${status.text}',
+                      style: DesktopChrome.metadata(),
+                    ),
+                ],
+              ),
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
               style: DesktopChrome.control(),

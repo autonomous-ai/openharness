@@ -86,7 +86,7 @@ export async function listMentions(tx: Tx, tabId: string, state: SuperTabState, 
     const author = message?.author as { name?: string; displayName?: string } | undefined
     return { id: row.id, projectId: row.projectId, projectName: projectOf(state, group.projectId ?? 'lead').name,
       conversationId: row.conversationId, conversationTitle: group.title, messageId: row.messageId,
-      leadName: author?.displayName ?? author?.name ?? 'Lead', text: (message?.text ?? '').slice(0, 200),
+      leadId: row.authorAgentId, leadName: author?.displayName ?? author?.name ?? 'Lead', text: (message?.text ?? '').slice(0, 200),
       createdAt: row.createdAt, resolvedAt: row.resolvedAt, resolvedBy: row.resolvedBy }
   })
 }

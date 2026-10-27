@@ -362,6 +362,34 @@ void main() {
       );
     });
 
+    testWidgets('a tag shows the Lead’s avatar beside its name', (
+      tester,
+    ) async {
+      final server = ConversationServer()
+        ..append('Ship it?')
+        ..tag('message-1', text: 'Ship it?', leadId: 'lead-agent');
+      server.state['agents'] = [
+        {
+          'id': 'lead-agent',
+          'name': 'Lead',
+          'displayName': 'Wren',
+          'machineId': 'm',
+          'harnessId': 'h',
+          'contributorId': 'owner',
+          'configuration': {'engine': 'claude'},
+          'avatar': {'kind': 'preset', 'key': 'owl'},
+        },
+      ];
+      await showView(tester, server);
+      await tester.tap(notificationsEntry());
+      await tester.pumpAndSettle();
+      final row = find.byKey(const ValueKey('super-mention-mention-1'));
+      expect(
+        find.descendant(of: row, matching: find.text('🦉')),
+        findsOneWidget,
+      );
+    });
+
     testWidgets('mark done moves the tag to Earlier and clears the count', (
       tester,
     ) async {

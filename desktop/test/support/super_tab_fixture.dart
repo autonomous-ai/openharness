@@ -753,8 +753,10 @@ class ConversationServer {
     String conversationId = 'lead',
     String text = 'Please confirm the release.',
     String createdAt = '2026-10-24T05:00:00Z',
+    String? leadId,
   }) {
     mentions.add({
+      'leadId': ?leadId,
       'id': 'mention-${mentions.length + 1}',
       'projectId': 'lead',
       'projectName': 'web-project',

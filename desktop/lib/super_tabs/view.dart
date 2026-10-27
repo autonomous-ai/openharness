@@ -1175,6 +1175,11 @@ class _SuperTabViewState extends State<SuperTabView>
         c.selectTerminal(id, null);
       },
       agent: agent,
+      person: message.fromAgent
+          ? null
+          : c.snapshot?.people
+                .where((p) => p.id == message.authorId)
+                .firstOrNull,
       onOpenAgent: agent == null ? null : () => _openAgent(agent),
       machineName: agent == null ? null : widget.machineName(agent.machineId),
       grouped: grouped,
