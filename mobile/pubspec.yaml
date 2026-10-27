@@ -61,6 +61,11 @@ dependencies:
   # are re-encoded to PNG before they leave — see `terminal/image_transcode.dart`
   # for why the whole pipe past this point accepts nothing else.
   image_picker: ^1.2.3
+  # Pictures in a Swarm chat shown in place (`swarm/swarm_attachment.dart`): each file kept in the
+  # app's private temporary folder, one folder per account, for at most 7 days unopened and 200
+  # files, and emptied on sign-out, Swarm off, account change and a Swarm's removal. Pinned
+  # exactly: it decides where the account's files lie on the phone.
+  flutter_cache_manager: 3.4.5
   # Sending any other file to an agent — a PDF, a log, a zip — from the same key: the system's own
   # document picker (Files on iOS, the Storage Access Framework on Android), which hands over one
   # file the person chose and asks for no storage permission. The bytes go out as the CLI's
@@ -98,6 +103,9 @@ dev_dependencies:
   flutter_test:
     sdk: flutter
   flutter_lints: ^6.0.0
+  # The cache's own file abstraction, which `flutter_cache_manager` already brings in: tests keep
+  # Swarm's image files in a temporary folder through it (`test/swarm/swarm_attachment_*`).
+  file: 7.0.1
   # The p2p routing is all timers (retry, migration sweep, upgrade) — tests drive
   # them without waiting them out.
   fake_async: ^1.3.1
