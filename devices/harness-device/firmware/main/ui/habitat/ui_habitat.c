@@ -690,10 +690,14 @@ static void swarm_enter(const ht_supertab_t *t, const char *lead, bool select)
 /*
  * TABS lists the desk tabs, then every Swarm the desktop has not opened, in the `supertabs` order. A desk tab linked
  * to a Swarm keeps its place and name and enters that Swarm; a Swarm whose desk tab is not listed counts as unopened.
+ *
+ * ONLY WHILE NO DESKTOP WINDOW IS OPEN. The desktop opens a tab for every Super Tab its owner has not closed, so with a
+ * window an unopened Swarm is a closed one, and listing it kept a closed tab on the dial (2026-10-27, "PR merge").
  */
+static int desk_row_count;   // the last `swarms` list's length, kept with it below (swarms_apply): 0 is no window
 static bool swarm_unopened(const ht_supertab_t *t)
 {
-    return !t->tab[0] || workspace_index(t->tab) < 0;
+    return !desk_row_count && (!t->tab[0] || workspace_index(t->tab) < 0);
 }
 static const ht_supertab_t *tab_swarm(int i)
 {

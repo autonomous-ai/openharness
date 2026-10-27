@@ -41,7 +41,10 @@ answering or posting to a Lead on another machine; answering a Super Tab wait on
 
 1. **The Swarm tab looks like any tab.** Same font and colour in TABS. No badge, capsule or colour of its own; people
    tell it apart by its name (1a–1c).
-2. **Swarms not open on the desktop are listed too**, after the desktop's tabs (1d).
+2. **Swarms not open on the desktop are listed too**, after the desktop's tabs (1d), **only while no desktop window
+   is open.** Changed 2026-10-27 (Diego): the desktop opens a tab for every Super Tab its owner has not closed, so with
+   a window open an unopened Swarm is a closed one, and the dial kept showing a closed tab ("PR merge"). With the
+   desktop open, TABS is exactly the desktop's tabs.
 3. **Projects keep a fixed order**: the Swarm's project order, the same as in the app, never sorted by state. Swiping
    never jumps (2a–2h, 3a–3c).
 4. **A Lead on another machine that needs you, or is stuck, also beeps** (2e′, 4e).
@@ -134,7 +137,8 @@ The TABS carousel lists, in order:
 1. The desk tabs, as today, from `swarms`. A desk tab linked to a Swarm (some Swarm's `tab` equals its id) stays at its
    desk position and keeps its name. It is listed even when its `agents` is 0 (today `ui_swarms_replace` hides such a
    tab; a Swarm tab whose selected project's Lead runs elsewhere may report 0).
-2. Then every Swarm whose `tab` is empty, in `supertabs.ids` order (1d), drawn with the Swarm's `name`.
+2. Then, only when the last `swarms` list is empty (no desktop window), every Swarm whose `tab` is empty, in
+   `supertabs.ids` order (1d), drawn with the Swarm's `name` (decision 2).
 
 Every entry uses the same `tab_name`/`tab_split` drawing, the same ink and the same fade (decision 1). The list can
 hold 24 desk tabs + 16 Swarms; the carousel takes the count and needs no paging.
