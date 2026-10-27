@@ -5,7 +5,14 @@ import { downSince, expireRemovals } from './machines.js'
 import { agentProjectId, agentSetRole, canReadAgent, canReadGroup, canReadProject, groupProject, ledProject, placeRules, projectsOf, sharedWithLeads, skillSetOf, type ProjectVisibility, type SwarmProject } from './projects.js'
 
 export type Role = 'owner' | 'collaborator' | 'viewer'
-export interface Person { id: string; email: string; role: Role; generation: string }
+export interface Person {
+  id: string
+  email: string
+  role: Role
+  generation: string
+  /** Their own short status (profile.ts); only Swarm members read it. */
+  status?: import('./profile.js').PersonStatus
+}
 export interface AgentConfiguration {
   engine: string
   model: string | null
