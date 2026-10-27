@@ -1912,8 +1912,34 @@ class AppNotifier extends ChangeNotifier {
   @visibleForTesting
   Duration teamOfferRetryForTest = const Duration(seconds: 30);
   static const _teamOfferTries = 5;
+
+  /// Which daemon process answers this Mac, for a spec; the daemon's own
+  /// status otherwise.
+  @visibleForTesting
+  Future<String?> Function()? daemonIdentityForTest;
   bool _teamOfferBusy = false;
   Timer? _teamOfferRetry;
+
+  /// The daemon process the start offer's budget is for, its tries, and
+  /// whether it answered. A socket reconnect to the same process keeps them;
+  /// only a new process starts over (review of #1790).
+  bool _teamOfferStarted = false;
+  String? _teamOfferDaemon;
+  int _teamOfferTried = 0;
+  bool _teamOfferAnswered = false;
+
+  /// This Mac's daemon process as its own status says it: its pid and
+  /// version, so a restart or an update reads as a new one. Null when it
+  /// cannot say.
+  Future<String?> _daemonIdentity() async {
+    if (daemonIdentityForTest case final read?) return read();
+    try {
+      final probe = await _discovery.probe();
+      return probe.pid == null ? null : '${probe.pid}:${probe.version ?? ''}';
+    } catch (_) {
+      return null;
+    }
+  }
 
   /// The Harness Team account on this Mac (cli/src/team/autoSetup.ts),
   /// offered while the person is here: as they join a Swarm ([reason]
@@ -1948,23 +1974,46 @@ class AppNotifier extends ChangeNotifier {
     }
   }
 
-  /// The start offer, at each start of this Mac's daemon: Macs already in a
-  /// Swarm meet no join or contribute moment, and one ask a launch went to
-  /// whichever daemon answered first, one still starting or the version from
-  /// before an update, so nobody saw the prompt (2026-10-27). The daemon
-  /// decides, and remembers a cancel. One ask at a time; a daemon that could
-  /// not say is asked again a few times.
-  Future<void> _offerTeamAccountAtStart({int tried = 0}) async {
-    if (_teamOfferBusy) return;
+  /// The start offer, once for each process of this Mac's daemon: Macs
+  /// already in a Swarm meet no join or contribute moment, and one ask a
+  /// launch went to whichever daemon answered first, one still starting or the
+  /// version from before an update, so nobody saw the prompt (2026-10-27).
+  /// The daemon decides, and remembers a cancel. One ask at a time; a daemon
+  /// that could not say is asked again a few times, with a growing wait, and
+  /// a reconnect to it neither restarts the count nor cuts the wait short.
+  Future<void> _offerTeamAccountAtStart() async {
+    if (_disposed || _teamOfferBusy) return;
+    if (!(macOSForTest ?? (Platform.isMacOS && !kUnderTest))) return;
     _teamOfferBusy = true;
-    _teamOfferRetry?.cancel();
     try {
-      if (await offerTeamAccount('startup')) return;
-      if (tried + 1 >= _teamOfferTries) return;
-      _teamOfferRetry = Timer(
-        teamOfferRetryForTest * (tried + 1),
-        () => unawaited(_offerTeamAccountAtStart(tried: tried + 1)),
-      );
+      final daemon = await _daemonIdentity();
+      if (_disposed) return;
+      if (!_teamOfferStarted || daemon != _teamOfferDaemon) {
+        _teamOfferRetry?.cancel();
+        _teamOfferRetry = null;
+        _teamOfferStarted = true;
+        _teamOfferDaemon = daemon;
+        _teamOfferTried = 0;
+        _teamOfferAnswered = false;
+      }
+      if (_teamOfferAnswered ||
+          _teamOfferTried >= _teamOfferTries ||
+          _teamOfferRetry != null) {
+        return;
+      }
+      final answered = await offerTeamAccount('startup');
+      // A request still out at dispose must not schedule another.
+      if (_disposed) return;
+      if (answered) {
+        _teamOfferAnswered = true;
+        return;
+      }
+      _teamOfferTried++;
+      if (_teamOfferTried >= _teamOfferTries) return;
+      _teamOfferRetry = Timer(teamOfferRetryForTest * _teamOfferTried, () {
+        _teamOfferRetry = null;
+        if (!_disposed) unawaited(_offerTeamAccountAtStart());
+      });
     } finally {
       _teamOfferBusy = false;
     }

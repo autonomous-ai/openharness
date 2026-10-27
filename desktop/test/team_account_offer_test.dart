@@ -46,11 +46,21 @@ void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
   late _Daemon daemon;
   late AppNotifier app;
-  setUp(() {
-    daemon = _Daemon();
-    app = createApp(connectionForTest: (_) => daemon, connected: true);
+  /// Which daemon process answers this Mac: a new one after a restart.
+  var running = 'pid-1';
+  AppNotifier make(_Daemon daemon) {
+    final app = createApp(connectionForTest: (_) => daemon, connected: true);
     app.machineStates['m']!.localOnly = true;
     app.macOSForTest = true;
+    app.daemonIdentityForTest = () async => running;
+    app.teamOfferRetryForTest = const Duration(milliseconds: 1);
+    return app;
+  }
+
+  setUp(() {
+    running = 'pid-1';
+    daemon = _Daemon();
+    app = make(daemon);
   });
   tearDown(() => app.dispose());
 
@@ -87,16 +97,15 @@ void main() {
   // Macs already in a Swarm met no join or contribute moment, and the one ask
   // a launch went to whichever daemon answered first: one still starting, or
   // the version from before an update, so nobody saw the prompt (2026-10-27).
-  test('asks at each start of this Mac\'s daemon, which decides', () async {
+  test('asks again when this Mac\'s daemon has restarted, which decides', () async {
     app.onMachineConnectedForTest('m');
+    await until(() => daemon.asked.length == 1);
     await pumpEventQueue();
-    // The daemon restarted, after an update for instance: asked again.
+    // A new daemon process, after an update for instance: asked again.
+    running = 'pid-2';
     app.onMachineConnectedForTest('m');
-    await pumpEventQueue();
-    expect(daemon.asked, [
-      {'action': 'teamSetup', 'reason': 'startup'},
-      {'action': 'teamSetup', 'reason': 'startup'},
-    ]);
+    await until(() => daemon.asked.length == 2);
+    expect(daemon.asked, everyElement({'action': 'teamSetup', 'reason': 'startup'}));
   });
 
   test('asks one at a time', () async {
@@ -104,6 +113,7 @@ void main() {
     daemon.queued.add(pending);
     app.onMachineConnectedForTest('m');
     app.onMachineConnectedForTest('m');
+    await until(() => daemon.asked.isNotEmpty);
     await pumpEventQueue();
     expect(daemon.asked, hasLength(1));
     pending.complete({'ok': true, 'state': 'not-shared'});
@@ -111,23 +121,55 @@ void main() {
     expect(daemon.asked, hasLength(1));
   });
 
+  // Review of #1790: every socket reconnect started a fresh budget, so a
+  // daemon that could not answer was asked at the reconnect rate for good.
+  test('keeps its budget across reconnects to the same daemon, and asks nothing more once it answered', () async {
+    daemon.answer = {'error': 'SERVICE_UNAVAILABLE'};
+    for (var i = 0; i < 20; i++) {
+      app.onMachineConnectedForTest('m');
+      await Future<void>.delayed(const Duration(milliseconds: 2));
+    }
+    await until(() => daemon.asked.length == 5);
+    await Future<void>.delayed(const Duration(milliseconds: 30));
+    // Five tries for one daemon, however often its socket reconnected.
+    expect(daemon.asked, hasLength(5));
+    // The same daemon, once it answered, is not asked on a reconnect.
+    running = 'pid-2';
+    daemon.answer = {'ok': true, 'state': 'not-shared'};
+    app.onMachineConnectedForTest('m');
+    await until(() => daemon.asked.length == 6);
+    for (var i = 0; i < 5; i++) {
+      app.onMachineConnectedForTest('m');
+      await pumpEventQueue();
+    }
+    await Future<void>.delayed(const Duration(milliseconds: 20));
+    expect(daemon.asked, hasLength(6));
+  });
+
   test('asks again, a few times, a daemon that could not answer yet', () async {
-    app.teamOfferRetryForTest = const Duration(milliseconds: 1);
     daemon.queued.addAll([
       {'error': 'SERVICE_UNAVAILABLE'},
       {'error': 'SERVICE_UNAVAILABLE'},
     ]);
     app.onMachineConnectedForTest('m');
-    // Two that could not say, then an answer, which is let finish: a start
-    // while an ask is out is left to it.
+    // Two that could not say, then an answer.
     await until(() => daemon.asked.length == 3);
-    await pumpEventQueue();
-    daemon.answer = {'error': 'UNKNOWN_ACTION'};
-    app.onMachineConnectedForTest('m');
-    // A daemon that never answers is asked a bounded number of times: five
-    // tries, the last one waiting four steps of a millisecond.
-    await until(() => daemon.asked.length == 3 + 5);
+    await Future<void>.delayed(const Duration(milliseconds: 20));
+    expect(daemon.asked, hasLength(3));
+  });
+
+  // Review of #1790: a request still out at dispose resumed and scheduled a
+  // retry on a disposed app.
+  test('schedules nothing after it is disposed, though a request was out', () async {
+    final own = _Daemon();
+    final other = make(own);
+    final pending = Completer<Map<String, dynamic>>();
+    own.queued.add(pending);
+    other.onMachineConnectedForTest('m');
+    await until(() => own.asked.isNotEmpty);
+    other.dispose();
+    pending.complete({'error': 'ACCOUNT_CHANGED'});
     await Future<void>.delayed(const Duration(milliseconds: 30));
-    expect(daemon.asked, hasLength(3 + 5));
+    expect(own.asked, hasLength(1));
   });
 }
