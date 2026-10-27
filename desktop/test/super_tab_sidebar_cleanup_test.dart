@@ -2,22 +2,26 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/super_tabs/controller.dart';
+import 'package:harness/super_tabs/project_sidebar.dart';
 import 'package:harness/super_tabs/view.dart';
 
 import 'support/super_tab_fixture.dart';
 import 'swarm_state_test.dart' show createApp;
 
-/// The top navigation rows' labels, top to bottom: everything above Projects.
+/// The sidebar's top navigation rows, top to bottom: everything above Projects.
 List<String> topRows(WidgetTester tester) {
   final projects = tester.getTopLeft(find.text('Projects')).dy;
   final rows =
       tester
           .widgetList<InkWell>(
-            find.byWidgetPredicate(
-              (w) =>
-                  w is InkWell &&
-                  w.key is ValueKey<String> &&
-                  (w.key! as ValueKey<String>).value.startsWith('super-'),
+            find.descendant(
+              of: find.byType(ProjectSidebar),
+              matching: find.byWidgetPredicate(
+                (w) =>
+                    w is InkWell &&
+                    w.key is ValueKey<String> &&
+                    (w.key! as ValueKey<String>).value.startsWith('super-'),
+              ),
             ),
           )
           .map((w) => find.byWidget(w))
