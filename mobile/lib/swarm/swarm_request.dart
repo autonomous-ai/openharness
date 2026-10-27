@@ -2,12 +2,11 @@ import 'dart:math';
 
 /// One Swarm backend call: what `AppNotifier.swarmRequest` does, and what the
 /// readers here are handed so their tests need no machine.
-typedef SwarmRequest =
-    Future<Object?> Function(
-      String method,
-      String path, {
-      Map<String, dynamic>? body,
-    });
+typedef SwarmRequest = Future<Object?> Function(
+  String method,
+  String path, {
+  Map<String, dynamic>? body,
+});
 
 /// A Swarm call that did not answer: the backend's refusal, the forwarding
 /// machine's, or none to forward through. [code] is for the code to branch on;
