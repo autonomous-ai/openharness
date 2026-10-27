@@ -515,7 +515,8 @@ class SuperTabController extends ChangeNotifier {
 
   /// Draws a [savedView] kept from an earlier visit while the first read is
   /// on its way, and holds its parts: the first read asks only for what
-  /// changed since, and replaces it. One for another Swarm, one too old for
+  /// changed since, and replaces it. With [SuperTabReading.confirmsSaved] it
+  /// only holds them, for that read to draw. One for another Swarm, one too old for
   /// its cursor, one that no longer parses, or one after a read has landed,
   /// draws nothing.
   void drawSaved(Map<String, dynamic> view) {
@@ -536,6 +537,14 @@ class SuperTabController extends ChangeNotifier {
       ];
       final messages = rows.map(SuperTabMessage.fromJson).toList();
       final changedAt = (view['lastChangedAt'] as num).toInt();
+      if (_policy.confirmsSaved) {
+        // Held for the first read to start from, drawn once it answers; the
+        // conversation it showed is read beside it.
+        _parts = parts;
+        _partsReadAt = savedAt;
+        if (id == selectedId) _savedSelection = true;
+        return;
+      }
       snapshot = saved;
       lastChangedAt = changedAt;
       _parts = parts;
@@ -897,8 +906,10 @@ class SuperTabController extends ChangeNotifier {
             ..ignore())
         : null;
     try {
+      final heldSaved = _parts != null && stateReads == 0;
       final read = await _readParts();
       if (_disposed || accessRevoked) return;
+      final stateMs = took.elapsedMilliseconds;
       final parts = _parts!;
       _refreshFailing = false;
       unreachableSince = null;
@@ -915,7 +926,7 @@ class SuperTabController extends ChangeNotifier {
       // A part or a value worked out at read time (an agent seen down, a
       // limit that ran out) changed: the snapshot is built again. The first
       // read over a saved view wins, whatever it saved.
-      final moved = read.changed || _showingSaved;
+      final moved = read.changed || _showingSaved || snapshot == null;
       if (moved) {
         // A closed group named by the saved selection is read by id: a first
         // load has only the active groups.
@@ -979,6 +990,7 @@ class SuperTabController extends ChangeNotifier {
           }
         }
       }
+      final sidebarMs = took.elapsedMilliseconds;
       lastChangedAt = parts.lastChangedAt;
       // Every state read, a quiet one too: a count a failed read left open is
       // finished; one that is known reads nothing.
@@ -993,6 +1005,15 @@ class SuperTabController extends ChangeNotifier {
                   ? (query: earlyQuery!, page: early)
                   : null,
             ));
+      if (stateReads == 1) {
+        // Where a first open's time went, from the tab asking to the chat it shows.
+        appLog.debug(
+          'swarm',
+          'first open: sidebar after $sidebarMs ms, chat after ${took.elapsedMilliseconds} ms '
+              '(state read $stateMs ms, ${read.full ? 'first load' : 'changes since the saved view'}'
+              '${heldSaved ? '' : ', no saved view'})',
+        );
+      }
       if (_showingSaved) {
         // Read now: the saved view, and its Updating line, give way.
         _showingSaved = false;

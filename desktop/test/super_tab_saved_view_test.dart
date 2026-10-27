@@ -47,6 +47,7 @@ void main() {
   group('review of #1723', _reviewTests);
   group('re-review of #1727', _reReviewTests);
   group('Clear now', _clearTests);
+  group('Desktop', _desktopTests);
 
   test('keeps what the Swarm draws, not what it never shows', () async {
     final store = MemoryStore();
@@ -1001,6 +1002,112 @@ void _clearTests() {
       // The Swarm still opens, and draws from its read.
       final c = client.peek('tab')!;
       expect(c.messages('lead').last.text, 'Pending');
+      client.dispose();
+    });
+  });
+}
+
+void _desktopTests() {
+  test('a saved view is drawn only once the first read says what the '
+      'reader may still see', () {
+    final server = ConversationServer()..append('Hello');
+    final view = _saved(server);
+    fakeAsync((async) {
+      // Since the save, the reader lost one of its groups.
+      (server.state['conversations'] as List).removeWhere(
+        (g) => g['id'] == 'offline',
+      );
+      server.holdReads = Completer<void>();
+      final reads = _Reads(server);
+      final c = _controller(reads, reading: SuperTabReading.desktop)
+        ..drawSaved(view);
+      expect(c.snapshot, isNull);
+      c.start();
+      async.flushMicrotasks();
+      expect(c.snapshot, isNull);
+      expect(c.showingSaved, isFalse);
+      // Only what changed since the save, beside the open conversation.
+      expect(reads.paths, [
+        '/api/super-tabs/tab/conversations/lead/messages',
+        startsWith('/api/super-tabs/tab/changes?cursor='),
+      ]);
+      server.holdReads!.complete();
+      server.holdReads = null;
+      async.flushMicrotasks();
+      expect(c.snapshot!.name, 'Pilot');
+      expect(c.snapshot!.conversation('offline'), isNull);
+      expect(c.messages('lead').single.text, 'Hello');
+      c.dispose();
+    });
+  });
+
+  test('a Swarm opened again reads what changed since, with its chat beside '
+      'it, and draws once that answers', () {
+    fakeAsync((async) {
+      final server = ConversationServer()..append('Hello');
+      final store = MemoryStore();
+      final first =
+          _client(_Transport(server), store, reading: SuperTabReading.desktop)
+            ..bind('owner')
+            ..show('tab');
+      first.open('tab');
+      async.elapse(const Duration(seconds: 1));
+      first.show(null);
+      async.flushMicrotasks();
+      first.dispose();
+      // The app started again on this computer.
+      final transport = _Transport(server)..hold = Completer<void>();
+      final paths = <String>[];
+      final second = SuperTabClient(
+        transport: (method, path, {body}) {
+          paths.add(path);
+          return transport.call(method, path, body: body);
+        },
+        storage: store,
+        discoveryInterval: Duration.zero,
+      )..reading = SuperTabReading.desktop;
+      second
+        ..bind('owner')
+        ..show('tab');
+      SuperTabController? c;
+      second.open('tab').then((opened) => c = opened);
+      async.flushMicrotasks();
+      expect(c!.snapshot, isNull);
+      expect(paths.where((p) => p.contains('/api/super-tabs/tab/')), [
+        '/api/super-tabs/tab/conversations/lead/messages',
+        startsWith('/api/super-tabs/tab/changes?cursor='),
+      ]);
+      transport.hold!.complete();
+      transport.hold = null;
+      async.flushMicrotasks();
+      expect(c!.snapshot!.name, 'Pilot');
+      expect(c!.messages('lead').single.text, 'Hello');
+      second.dispose();
+    });
+  });
+
+  test('saved views go to their own store, apart from the app\'s state', () {
+    fakeAsync((async) {
+      final server = ConversationServer()..append('Hello');
+      final store = MemoryStore(), views = MemoryStore();
+      final client = SuperTabClient(
+        transport: _Transport(server).call,
+        storage: store,
+        viewStorage: views,
+        discoveryInterval: Duration.zero,
+      )..reading = SuperTabReading.desktop;
+      client
+        ..bind('owner')
+        ..show('tab');
+      client.open('tab');
+      async.elapse(const Duration(seconds: 1));
+      client.show(null);
+      async.flushMicrotasks();
+      expect(views.values[_viewKey], isNotNull);
+      expect(
+        store.values.keys.where((k) => k.contains('super_tab.view')),
+        isEmpty,
+      );
       client.dispose();
     });
   });
