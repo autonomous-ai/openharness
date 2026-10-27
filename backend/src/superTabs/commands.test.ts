@@ -2176,7 +2176,7 @@ describe('the Local models add-on', () => {
   })
 })
 
-describe('Lead mentions', () => {
+describe('mentions of people', () => {
   const as = (agentId: string): Actor => ({ kind: 'agent', agentId, machineOwnerId: 'host-owner' })
   const send = (conversationId: string, mentions: string[]): Command => ({ type: 'message.send', conversationId, text: 'Please confirm the copy.',
     replyTo: null, recipientIds: [], mentions })
@@ -2193,12 +2193,29 @@ describe('Lead mentions', () => {
     expect(f.run(send('lead', []), as(lead)).messages[0]).not.toHaveProperty('mentions')
   })
 
-  it('refuses a person, a non-Lead agent and another project’s Lead', () => {
-    const { f, lead, secret } = swarm(), group = f.group(), worker = f.add('worker', 'owner', group)
-    expect(() => f.run(send(group, ['peer']))).toThrow('Only a project’s Lead can tag people.')
-    expect(() => f.run(send(group, ['peer']), as(worker))).toThrow('Only a project’s Lead can tag people.')
+  it('lets anyone who posts in a conversation mention its readers: a person, a worker in it, the Lead (collaboration protocol)', () => {
+    const { f, lead } = swarm(), group = f.group(), worker = f.add('worker', 'owner', group)
+    expect(f.run(send(group, ['peer'])).messages[0]!.mentions).toEqual(['peer'])
+    expect(f.run(send(group, ['owner']), peer).messages[0]!.mentions).toEqual(['owner'])
+    expect(f.run(send(group, ['peer', 'owner']), as(worker)).messages[0]!.mentions).toEqual(['peer', 'owner'])
+    expect(f.run(send(group, ['peer']), as(lead)).messages[0]!.mentions).toEqual(['peer'])
+  })
+
+  it('refuses another project’s Lead and any mention in the Leads conversation', () => {
+    const { f, lead, secret } = swarm(), group = f.group()
     expect(() => f.run(send(group, ['owner']), as(secret.lead))).toThrow('This project is unavailable.')
-    expect(() => f.run(send(f.state.leadsConversationId!, ['owner']), as(lead))).toThrow('A Lead can tag people only in its own project’s conversations.')
+    expect(() => f.run(send(f.state.leadsConversationId!, ['owner']), as(lead))).toThrow('People can be mentioned only in a project’s conversations.')
+    expect(() => f.run(send(f.state.leadsConversationId!, ['owner']))).toThrow('People can be mentioned only in a project’s conversations.')
+  })
+
+  it('refuses a person mentioning someone who cannot read their private conversation, without naming anything in it', () => {
+    const { f, secret } = swarm()
+    const chat = f.run({ type: 'conversation.create', title: 'Peer and PM', brief: '', checks: [], audience: { personIds: ['peer'] } }, peer)
+      .result.conversationId as string
+    let refusal = ''
+    try { f.run(send(chat, ['owner']), peer) } catch (error) { refusal = (error as Error).message }
+    expect(refusal).toBe('owner@example.com cannot read this conversation.')
+    expect(() => f.run(send(secret.conversationId, ['peer']))).toThrow('peer@example.com cannot read this conversation.')
   })
 
   it('refuses a person who cannot read the conversation or is not in the Swarm', () => {

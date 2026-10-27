@@ -74,8 +74,8 @@ describe('what each action reads of the Swarm', () => {
     const s = swarm()
     const lead = await s.ask({ action: 'help', tabId: T, agentId: FIXTURE.leadId }, owner)
     const builder = await s.ask({ action: 'help', tabId: T, agentId: FIXTURE.builderId }, owner)
-    expect(String(object(lead.help).post)).toContain('--mention')
-    expect(String(object(builder.help).post)).not.toContain('--mention')
+    expect(JSON.stringify(object(lead.help).commands)).toContain('"decision.ask"')
+    expect(JSON.stringify(object(builder.help).commands)).not.toContain('"decision.ask"')
     expect(s.reads()).toEqual([])
   })
   it('reads the roster as it is now for every call, so an agent started a moment ago is known at once', async () => {

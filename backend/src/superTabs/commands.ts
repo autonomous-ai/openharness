@@ -1375,7 +1375,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       const ids = [...new Set(command.attachmentIds ?? [])]
       const attachments = ids.map(id => context.attachments?.find(a => a.id === id) ?? fail('ATTACHMENT_UNAVAILABLE', 'Upload this file again before sending it.', 400))
       if (!command.text && !attachments.length) fail('TEXT_REQUIRED', 'Write a message or attach a file.', 400)
-      const mentions = checkMentions(state, actor, group, command.mentions ?? [])
+      const mentions = checkMentions(state, group, command.mentions ?? [])
       if (command.replyTo && (!context.reply || context.reply.id !== command.replyTo || context.reply.conversationId !== group.id)) {
         fail('INVALID_REPLY', 'Reply to a message in this conversation.', 400)
       }

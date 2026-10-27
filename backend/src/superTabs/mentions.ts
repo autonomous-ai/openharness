@@ -1,9 +1,9 @@
-/** A Lead tags people in its message; each tag waits in the person's Swarm-wide list until they reply in that
+/** A message tags people; each tag waits in the person's Swarm-wide list until they reply in that
  *  conversation or mark it done. Tags live in SuperTabMention, never in the tab state, so an older backend still
  *  reads and writes a tab that has them. Called inside SuperTabStore's transactions. */
 import type { Prisma, PrismaClient } from '@prisma/client'
 import { fail, isLeads, person, stableId, type Actor, type Conversation, type MessageDraft, type SuperTabState } from './model.js'
-import { canReadGroup, groupProject, ledProject, projectOf } from './projects.js'
+import { canReadGroup, projectOf } from './projects.js'
 
 type Tx = Prisma.TransactionClient
 export const MAX_MENTIONS = 5
@@ -20,13 +20,12 @@ export async function ensureMentionExpiry(db: PrismaClient): Promise<void> {
     expireAfterSeconds: MENTION_EXPIRY_MS / 1000 }] })
 }
 
-/** Only the project's Lead tags, only in that project's conversations, and only people who can read the conversation. */
-export function checkMentions(state: SuperTabState, actor: Actor, group: Conversation, personIds: string[]): string[] {
+/** Anyone who posts in a project's conversation mentions people who can read it (collaboration protocol): the poster's
+ *  own access is checked by message.send. Never in the Leads conversation, which no person's list shows. */
+export function checkMentions(state: SuperTabState, group: Conversation, personIds: string[]): string[] {
   const ids = [...new Set(personIds)]
   if (!ids.length) return ids
-  const led = actor.kind === 'agent' ? ledProject(state, actor.agentId) : undefined
-  if (!led) fail('MENTION_FORBIDDEN', 'Only a project’s Lead can tag people.', 403)
-  if (isLeads(group) || groupProject(state, group).id !== led.id) fail('MENTION_FORBIDDEN', 'A Lead can tag people only in its own project’s conversations.', 403)
+  if (isLeads(group)) fail('MENTION_FORBIDDEN', 'People can be mentioned only in a project’s conversations.', 403)
   for (const id of ids) {
     const member = state.people.find(p => p.id === id) ?? fail('INVALID_MENTION', 'Tag a person in this Swarm.', 400)
     if (!canReadGroup(state, { kind: 'person', userId: member.id, email: member.email }, group)) {
