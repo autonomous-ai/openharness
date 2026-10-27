@@ -913,13 +913,7 @@ class _SuperTabViewState extends State<SuperTabView>
         ? c.snapshot?.projects.isEmpty == true
               ? c.snapshot!.name
               : 'Choose a project'
-        : c.snapshot!.isProjectLead(group.id)
-        ? c.snapshot!.projectFor(group.id)!.name
-        : group.id == c.snapshot!.leadsConversationId
-        ? 'Product Managers'
-        : _isPmChat(group)
-        ? 'Chat with PM'
-        : group.label,
+        : c.conversationName(group),
     maxLines: 1,
     overflow: TextOverflow.ellipsis,
     style: DesktopChrome.text(medium: true),

@@ -681,6 +681,28 @@ class SuperTabController extends ChangeNotifier {
     return !_disposed && snapshot?.conversation(id) != null;
   }
 
+  /// [group]'s name as the chat header shows it.
+  String conversationName(SuperTabConversation group) {
+    final shot = snapshot!;
+    if (shot.isProjectLead(group.id)) return shot.projectFor(group.id)!.name;
+    if (group.id == shot.leadsConversationId) return 'Product Managers';
+    if (pmChat(group.projectId)?.id == group.id) return 'Chat with PM';
+    return group.label;
+  }
+
+  /// The open conversation, for a device's voice: its id, its name and
+  /// whether this person can post there. Null while Your devices is open or
+  /// nothing is. The daemon checks again before it posts.
+  Map<String, Object>? get voiceConversation {
+    final group = selected;
+    if (group == null || devicesSelected || accessRevoked) return null;
+    return {
+      'id': group.id,
+      'title': conversationName(group),
+      'canPost': canWrite && !group.archived,
+    };
+  }
+
   /// The signed-in person's private chat with [projectId]'s Product Manager:
   /// that project's private conversation whose audience is them alone.
   SuperTabConversation? pmChat(String projectId) => snapshot?.conversations
@@ -724,6 +746,11 @@ class SuperTabController extends ChangeNotifier {
     return id.length > 160 ? id.substring(0, 160) : id;
   }
 
+  /// How many times a conversation was chosen, the one already open included:
+  /// choosing it again is how a person who went to a terminal says the chat is
+  /// where their voice goes ([AppNotifier]'s Swarm announce).
+  int choices = 0;
+
   /// Opens conversation [id], reading it first when it is not held
   /// ([loadGroup]); false when it cannot be read.
   Future<bool> select(String id) async {
@@ -731,7 +758,11 @@ class SuperTabController extends ChangeNotifier {
     if (snapshot?.conversation(id) == null && !await loadGroup(id)) {
       return false;
     }
-    if (id == selectedId && !devicesSelected) return true;
+    choices++;
+    if (id == selectedId && !devicesSelected) {
+      _changed();
+      return true;
+    }
     devicesSelected = false;
     _acted();
     if (!snapshot!.isProjectLead(id)) {

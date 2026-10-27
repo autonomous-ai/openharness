@@ -5,6 +5,7 @@ import 'package:harness/super_tabs/controller.dart';
 
 import 'support/super_tab_fixture.dart';
 import 'super_tab_launch_test.dart' show SuperTabLaunchFixture, tabId;
+import 'swarm_screen_test.dart' show terminal;
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
@@ -54,6 +55,99 @@ void main() {
     c.select('design-lead');
     await settle();
     expect(row(announces(f).last)['projectId'], 'design');
+  });
+
+  test('a Swarm row names the conversation it has open, as the chat header does, and whether the person can post', () async {
+    final (f, c) = await open();
+    f.app.announceWindowForeground();
+    await settle();
+    // The project's Lead chat is shown by the project's name.
+    expect(row(announces(f).last)['conversation'], {
+      'id': 'lead',
+      'title': 'Lamp OS',
+      'canPost': true,
+    });
+    c.select('design-lead');
+    await settle();
+    expect(row(announces(f).last)['conversation'], {
+      'id': 'design-lead',
+      'title': 'Design',
+      'canPost': true,
+    });
+    // Your devices is not a conversation: nothing for a voice to go to.
+    c.selectDevices();
+    f.app.announceWindowForeground();
+    await settle();
+    expect(row(announces(f).last).containsKey('conversation'), isFalse);
+  });
+
+  test(
+    'an archived conversation, or a person who only reads, cannot be posted in',
+    () async {
+      final (f, c) = await open();
+      final server = f.connection.server;
+      final old = {
+        ...conversationFixture('old', 'Old work'),
+        'projectId': 'lead',
+      };
+      (server.state['conversations'] as List).add(old);
+      await c.refresh();
+      expect(await c.select('old'), isTrue);
+      await settle();
+      expect(row(announces(f).last)['conversation'], {
+        'id': 'old',
+        'title': 'Old work',
+        'canPost': true,
+      });
+      old['archived'] = true;
+      await c.refresh();
+      f.app.announceWindowForeground();
+      await settle();
+      expect(row(announces(f).last)['conversation'], {
+        'id': 'old',
+        'title': 'Old work',
+        'canPost': false,
+      });
+      old['archived'] = false;
+      for (final person
+          in (server.state['people'] as List).cast<Map<String, dynamic>>()) {
+        if (person['id'] == 'owner') person['role'] = 'viewer';
+      }
+      await c.refresh();
+      f.app.announceWindowForeground();
+      await settle();
+      expect(row(announces(f).last)['conversation'], {
+        'id': 'old',
+        'title': 'Old work',
+        'canPost': false,
+      });
+    },
+  );
+
+  test('choosing a terminal takes the voice from the conversation, and choosing a conversation gives it back', () async {
+    final (f, c) = await open();
+    final pane = f.app.adoptSessionForTest(terminal('a0', []));
+    f.app.focusPane(pane.id);
+    await settle();
+    expect(row(announces(f).last).containsKey('conversation'), isFalse);
+    c.select('design-lead');
+    await settle();
+    expect(row(announces(f).last)['conversation'], {
+      'id': 'design-lead',
+      'title': 'Design',
+      'canPost': true,
+    });
+    f.app.focusPane(pane.id);
+    await settle();
+    expect(row(announces(f).last).containsKey('conversation'), isFalse);
+    // Selecting the conversation already open is still a choice of it.
+    c.select('design-lead');
+    await settle();
+    expect(row(announces(f).last)['conversation'], {
+      'id': 'design-lead',
+      'title': 'Design',
+      'canPost': true,
+    });
   });
 
   test('a draft tab has no tab id', () async {

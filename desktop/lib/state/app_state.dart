@@ -1767,6 +1767,8 @@ class AppNotifier extends ChangeNotifier {
     },
     onSelection: (controller) {
       if (_disposed || controller.accountId != currentUser?.id) return;
+      // Choosing a conversation is choosing where a device's voice goes.
+      _conversationChosen = true;
       // The Harness Pro shows the open project's Leads, so a project change
       // is a change to the desk it was told about.
       _announceOpenPanesToDial();
@@ -5050,9 +5052,20 @@ class AppNotifier extends ChangeNotifier {
     // real position (`agentId === this.dialFocus` in cableSession), which is the
     // only side that can judge, because only it knows where the dial is.
     _announceAppFocus();
+    // The last choice wins: a terminal chosen after the Swarm chat takes a
+    // device's voice to that agent, until a conversation is chosen again.
+    if (_conversationChosen) {
+      _conversationChosen = false;
+      _announceOpenPanesToDial();
+    }
     if (moved) _persistLayout();
     if (moved || reveal) notifyListeners();
   }
+
+  /// Whether the person chose the Swarm chat after any terminal: then the
+  /// active Swarm tab names its open conversation, and a device's voice is
+  /// posted there instead of typed into the focused agent (`app_swarms`).
+  bool _conversationChosen = true;
 
   String? _announcedFocusMachineId;
   String? _deviceFocusRevision;
@@ -5471,10 +5484,15 @@ class AppNotifier extends ChangeNotifier {
           // while the tab has not loaded: a project is not guessed.
           if (swarm.superTabId case final tabId?) ...{
             'superTabId': tabId,
-            if (superTabs.peek(tabId) case final controller?)
+            if (superTabs.peek(tabId) case final controller?) ...{
               if (controller.snapshot?.projectFor(controller.selectedId)
                   case final project?)
                 'projectId': project.id,
+              // Only the tab on screen, and only while its chat is the
+              // person's last choice: where a device's voice goes.
+              if (swarm.id == activeSwarmId && _conversationChosen)
+                'conversation': ?controller.voiceConversation,
+            },
           },
           'agentIds': [
             for (final pane in swarm.panes)
