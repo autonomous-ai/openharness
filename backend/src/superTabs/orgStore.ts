@@ -22,14 +22,28 @@ export async function activeMember(tx: Transaction | PrismaClient, orgId: string
   return row && !row.removedAt ? row : null
 }
 
+/** Answers already read in a transaction: a host read checks every agent's contributor, mostly the same few people. */
+const checked = new WeakMap<object, Map<string, boolean>>()
+
+/** Whether the person is still in the Swarm's Team; a Swarm from before Teams passes until the switch is on. Read once
+ *  per person per transaction, which reads one snapshot. */
+export async function hasOrgAccess(tx: Transaction, state: Pick<SuperTabState, 'orgId'>, userId: string): Promise<boolean> {
+  if (!state.orgId) return !orgsRequired()
+  const answers = checked.get(tx) ?? new Map<string, boolean>()
+  checked.set(tx, answers)
+  const key = memberId(state.orgId, userId)
+  const known = answers.get(key)
+  if (known !== undefined) return known
+  const answer = !!await activeMember(tx, state.orgId, userId)
+  answers.set(key, answer)
+  return answer
+}
+
 /** The one Team check of every Swarm read and command (design, Audience): the person must still be in the Swarm's Team.
  *  Reading the Swarm needs its own membership as well, which the caller checks as before. */
 export async function requireOrgAccess(tx: Transaction, state: Pick<SuperTabState, 'orgId'>, userId: string): Promise<void> {
-  if (!state.orgId) {
-    if (orgsRequired()) fail(ORG_ACCESS_REVOKED, `This Swarm has no ${ORG_LABEL} yet.`, 403)
-    return
-  }
-  if (!await activeMember(tx, state.orgId, userId)) fail(ORG_ACCESS_REVOKED, `You are no longer in this Swarm's ${ORG_LABEL}.`, 403)
+  if (await hasOrgAccess(tx, state, userId)) return
+  fail(ORG_ACCESS_REVOKED, state.orgId ? `You are no longer in this Swarm's ${ORG_LABEL}.` : `This Swarm has no ${ORG_LABEL} yet.`, 403)
 }
 
 /** The member, who must be allowed `action`. Not being in the Team at all reads as the Team being unavailable. */
@@ -45,6 +59,7 @@ export async function requireOrgRole(tx: Transaction, orgId: string, userId: str
 export async function addMember(tx: Transaction, orgId: string, person: { id: string; email: string }, role: OrgRole, addedBy: string,
   generation: string): Promise<SwarmOrgMember> {
   const id = memberId(orgId, person.id)
+  checked.get(tx)?.delete(id)
   const prior = await tx.swarmOrgMember.findUnique({ where: { id } })
   if (prior && !prior.removedAt) return prior
   const data = { email: person.email.trim().toLowerCase(), role, generation, addedBy, addedAt: new Date(), removedAt: null, removedBy: null, purgeAt: null }

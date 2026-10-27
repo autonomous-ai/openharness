@@ -22,7 +22,7 @@ import { clock, insertParts, lastChangedAt, loadActive, reassemble, split, type 
 import { commitParts, indexesOf, numberMessages, type Touch, type Written } from './parts/commit.js'
 import { touchesFor } from './parts/touches.js'
 import { revokeNativeContexts, SuperTabNativeStore } from './native.js'
-import { addMember, listOrgs, memberId, ORG_ACCESS_REVOKED, orgForNewSwarm, requireOrgAccess, requireOrgRole, SwarmOrgs } from './orgStore.js'
+import { addMember, hasOrgAccess, listOrgs, memberId, ORG_ACCESS_REVOKED, orgForNewSwarm, requireOrgAccess, requireOrgRole, SwarmOrgs } from './orgStore.js'
 import { ORG_LABEL } from './orgs.js'
 import {
   activeWork, actorKey, agent, agentOnly, appendPullRequestUrls, author, conversation, createSuperTab, fail, person, stableId, visibleState, finishWorker,
@@ -405,13 +405,14 @@ export class SuperTabStore {
     // ...and as an agent only one running on its own machine, never the person's agents elsewhere.
     if (team !== null && target.machineId !== team) fail(TEAM_SESSION_LIMITED, TEAM_SESSION_MESSAGE, 403)
     await this.agentGrant(tx, state, target)
-    // An agent acts for its contributor, who must still be in the Team; its host need not be, as it need not be in the Swarm.
-    await requireOrgAccess(tx, state, target.contributorId)
     return { kind: 'agent', agentId, machineOwnerId: user.sub }
   }
 
   /** Shared with the read API (superTabs/read, design section 7.2). */
+  /** Every path that serves an agent's host checks this, so it also holds the Team check: the agent acts for its
+   *  contributor, who must still be in the Swarm's Team. Its host need not be, as it need not be in the Swarm. */
   async agentGrant(tx: Transaction, state: SuperTabState, target: Agent): Promise<void> {
+    await requireOrgAccess(tx, state, target.contributorId)
     const machine = await tx.machine.findFirst({ where: { machineId: target.machineId, userId: target.machineOwnerId,
       autonomousEnv: state.environment, ...machineAlive } })
     if (!machine || !machineBillingAllowsDataPlane(machine)) fail('HOST_UNAVAILABLE', 'This execution host is unavailable.', 403)
@@ -1207,7 +1208,8 @@ export class SuperTabStore {
       } else if (team !== null) {
         // A team session is never the project's owner: it reads a text only for an agent its own machine hosts.
         if (!await this.hostsProject(tx, state, user, project.id, team)) unavailable()
-      } else if (!(user.sub === project.ownerId && state.people.some(p => p.id === user.sub)) && !await this.hostsProject(tx, state, user, project.id)) {
+      } else if (!(user.sub === project.ownerId && state.people.some(p => p.id === user.sub) && await hasOrgAccess(tx, state, user.sub))
+        && !await this.hostsProject(tx, state, user, project.id)) {
         unavailable()
       }
       const stored = await tx.superTabRoleText.findUnique({ where: { id: stableId(tabId, projectId, roleId) } })

@@ -13,6 +13,7 @@ import { SuperTabStore } from '../src/superTabs/store.js'
 import type { AuthUser } from '../src/lib/ssoAuth.js'
 import type { Command } from '../src/superTabs/commands.js'
 import { migrateOrgs, rollbackOrgs } from '../src/superTabs/migration/orgs.js'
+import { hasOrgAccess } from '../src/superTabs/orgStore.js'
 
 // Teams above Swarms (docs/plans/2026-10-27-swarm-teams.md): every route, authorization and Mongo transaction is real.
 let replica: MongoMemoryReplSet, db: PrismaClient, store: SuperTabStore, app: FastifyInstance
@@ -336,5 +337,23 @@ describe('the migration of today\'s Swarms into Teams, and its undo', () => {
     expect(dry.anomalies.machinesInTwoTeams).toContainEqual({ machineId: 'both-mac', tabIds: [mine, theirs].sort() })
     await migrateOrgs(db, { apply: true })
     await rollbackOrgs(db, { apply: true })
+  })
+})
+
+describe('what the Team check costs', () => {
+  it('reads one small Team row per person per request, once however many agents that person contributed', async () => {
+    let reads = 0
+    const counted = db.$extends({ query: { swarmOrgMember: { async findUnique({ args, query }) { reads++; return query(args) } } } }) as unknown as PrismaClient
+    const counting = new SuperTabStore(counted)
+    const tab = await create(owner, 'Counted')
+    reads = 0
+    await counting.read(owner, tab)
+    expect(reads).toBe(1)
+    reads = 0
+    await counted.$transaction(async tx => {
+      const { state } = await counting.load(tx, owner, tab)
+      for (let i = 0; i < 5; i++) expect(await hasOrgAccess(tx, state, owner.sub)).toBe(true)
+    })
+    expect(reads).toBe(1)
   })
 })

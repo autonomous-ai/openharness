@@ -1398,6 +1398,27 @@ describe('Super Tabs on a real Mongo replica set', () => {
     await run(tab, { type: 'project.delete', projectId: other })
     expect(await db.superTabRoleText.count({ where: { tabId: tab, projectId: other } })).toBe(0)
   })
+  it('serves no role text once the reader, or the hosted agent\'s contributor, left the Swarm\'s Team, before that removal reaches the Swarm', async () => {
+    const { tab } = await fixture()
+    await invite(tab)
+    await run(tab, { type: 'agent.add', conversationId: 'lead', machineId: 'test-host', harnessId: randomUUID(), name: 'Worker', configuration: config, lead: false })
+    await run(tab, { type: 'project.roles.create', projectId: 'lead', roles: [{ id: 'lead', name: 'Product Manager', kind: 'lead' as const, text: 'LEAD-TEXT' },
+      { id: 'dev', name: 'Engineer', kind: 'builder' as const, text: 'DEV-TEXT' }] })
+    await run(tab, { type: 'project.skills', projectId: 'lead', mode: 'custom' })
+    const text = (user: AuthUser) => app.inject({ method: 'GET', url: `/api/super-tabs/${tab}/projects/lead/roles/dev`, headers: { authorization: `Bearer ${user.sub}` } })
+    expect((await text(owner)).statusCode).toBe(200)
+    expect((await text(host)).statusCode).toBe(200)
+    // The owner, who is the project's owner and the Worker's contributor, is marked removed as a removal leaves it before its cleanup.
+    const row = await db.superTab.findUniqueOrThrow({ where: { id: tab } })
+    await db.swarmOrgMember.update({ where: { id: `${row.orgId}:${owner.sub}` }, data: { removedAt: new Date() } })
+    try {
+      for (const user of [owner, host]) {
+        const answer = await text(user)
+        expect(answer.statusCode, user.email).not.toBe(200)
+        expect(answer.body).not.toContain('DEV-TEXT')
+      }
+    } finally { await db.swarmOrgMember.update({ where: { id: `${row.orgId}:${owner.sub}` }, data: { removedAt: null } }) }
+  })
   it('closes the replying agent\'s own deliveries of a message as answered, and nobody else\'s', async () => {
     const { tab, lead } = await fixture()
     const helper = (await run(tab, { type: 'agent.add', conversationId: 'lead', machineId: 'test-host', harnessId: randomUUID(),
