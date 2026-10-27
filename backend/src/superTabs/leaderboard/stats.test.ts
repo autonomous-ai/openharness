@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import type { ContributedMachine } from '../machines.js'
 import { createSuperTab, type Assignment, type Conversation, type SuperTabState, type WorkStatus } from '../model.js'
 import type { GroupLedger } from './record.js'
+import type { AnsweredDecision, ResolvedWait } from './stats.js'
 import { leaderboard } from './stats.js'
 import { DAY_MS, WEEK_MS } from './week.js'
 
@@ -34,8 +35,11 @@ function machine(contributorId: string, lent: Array<[week: number, agentMs: numb
   return { machineId, name: machineId, contributorId, membershipGeneration: 'g', generation: 'g1', cwd: '/repo', scope: 'swarm', engines: ['claude'],
     maxAgents: 2, paused: false, lent: lent.map(([week, agentMs]) => ({ week, agentMs })) }
 }
-const board = (state: SuperTabState, groups: Conversation[], week = WEEK, now = NOW, machines = state.machines ?? []) =>
-  leaderboard({ state, groups, machines, projectId: 'lead', week, now })
+const board = (state: SuperTabState, groups: Conversation[], week = WEEK, now = NOW, machines = state.machines ?? [], decisions: AnsweredDecision[] = [],
+  resolvedWaits: ResolvedWait[] = []) => leaderboard({ state, groups, machines, decisions, resolvedWaits, projectId: 'lead', week, now })
+/** An answered decision: asked at [createdAt] in [group], of [personId], answered at [answeredAt]. */
+const decided = (group: Conversation, personId: string, createdAt: number, answeredAt: number, batchId = `batch-${group.id}`): AnsweredDecision =>
+  ({ batchId, conversationId: group.id, personId, createdAt, answeredAt })
 const person = (view: ReturnType<typeof board>, id: string) => view.people.find(p => p.personId === id)!
 
 describe('Shipped: requests a person asked for, done with a linked PR, 3 points each', () => {
@@ -76,6 +80,67 @@ describe('Unblocked: waiting items a person answered, 1 point each plus 1 per 2 
     const view = board(swarm(), [answered(['tony', WEEK + HOUR, 3 * HOUR], ['tony', WEEK + 2 * HOUR, 90 * 60_000]), answered(['tony', LAST, 10 * HOUR])])
     // Two answers this week, 4.5 agent-hours between them: 2 + 2.
     expect(person(view, 'tony')).toMatchObject({ points: 4, unblocked: { count: 2, agentMs: 4.5 * HOUR, medianAnswerMs: 2.25 * HOUR } })
+  })
+})
+
+describe('Unblocked: answered decisions count like needs-human answers (v2 C)', () => {
+  it('counts each answered decision for the person who answered it, with the time its asker waited', () => {
+    const g = group({ status: 'working' })
+    const view = board(swarm(), [g], WEEK, NOW, [], [decided(g, 'tony', WEEK, WEEK + 4 * HOUR)])
+    expect(person(view, 'tony')).toMatchObject({ points: 3, unblocked: { count: 1, agentMs: 4 * HOUR, medianAnswerMs: 4 * HOUR } })
+  })
+
+  it('counts each question of one ask, but the asker\'s wait only once', () => {
+    const g = group({ status: 'working' })
+    const asked = [1, 2, 3].map(h => decided(g, 'tony', WEEK, WEEK + h * HOUR, 'one-ask'))
+    // Three answers, one wait of 3 hours: 3 + 1.
+    expect(person(board(swarm(), [g], WEEK, NOW, [], asked), 'tony')).toMatchObject({ points: 4, unblocked: { count: 3, agentMs: 3 * HOUR } })
+  })
+
+  it('credits a needs-human item that asked a decision once, through its decision', () => {
+    const g = group({ status: 'working', ledger: { unblocks: [{ personId: 'ken', at: WEEK + HOUR, waitedMs: HOUR, waitId: 'asked' }] } })
+    const view = board(swarm(), [g], WEEK, NOW, [], [decided(g, 'tony', WEEK, WEEK + 2 * HOUR, 'asked')])
+    expect(person(view, 'tony').unblocked.count).toBe(1)
+    expect(person(view, 'ken').unblocked.count).toBe(0)
+  })
+
+  it('credits once an answer saved before answers were linked, next to its answered decision (review of #1771)', () => {
+    // The wait began when the decision was asked: the old answer came an hour later and says it waited an hour.
+    const g = group({ status: 'working', ledger: { unblocks: [{ personId: 'ken', at: WEEK + HOUR, waitedMs: HOUR }] } })
+    const view = board(swarm(), [g], WEEK, NOW, [], [decided(g, 'tony', WEEK, WEEK + 2 * HOUR, 'asked')])
+    expect([person(view, 'tony').unblocked.count, person(view, 'ken').unblocked.count]).toEqual([1, 0])
+  })
+
+  it('still counts an old answer to another wait in the same group', () => {
+    const g = group({ status: 'working', ledger: { unblocks: [{ personId: 'ken', at: WEEK + 5 * HOUR, waitedMs: HOUR }] } })
+    const view = board(swarm(), [g], WEEK, NOW, [], [decided(g, 'tony', WEEK, WEEK + 2 * HOUR, 'asked')])
+    expect([person(view, 'tony').unblocked.count, person(view, 'ken').unblocked.count]).toEqual([1, 1])
+  })
+
+  it('keeps an answered item off the waiting line after its decision leaves the kept weeks (review of #1771)', () => {
+    const g = group({ status: 'needs_human' })
+    g.ledger = { waiting: { assignmentId: g.assignment!.id, since: LAST - 6 * WEEK_MS, messageId: 'asked' } }
+    // No answered decision in the scoring window any more; the resolution is read on its own.
+    expect(board(swarm(), [g], WEEK, NOW, [], [], [{ batchId: 'asked', conversationId: g.id }]).waiting.total).toBe(0)
+  })
+
+  it('drops an item from the waiting line once its decision is answered', () => {
+    const g = group({ status: 'needs_human' })
+    g.ledger = { waiting: { assignmentId: g.assignment!.id, since: WEEK, messageId: 'asked' } }
+    expect(board(swarm(), [g], WEEK, NOW, [], [decided(g, 'tony', WEEK, WEEK + HOUR, 'asked')]).waiting.total).toBe(0)
+  })
+
+  it('never counts a decision from a group the reader cannot read, or a private conversation', () => {
+    const chat = group({ status: 'working', audience: { people: [{ id: 'tony', generation: 'g' }] } }), hidden = group({ status: 'working' })
+    const view = board(swarm(), [chat], WEEK, NOW, [], [decided(chat, 'tony', WEEK, WEEK + HOUR), decided(hidden, 'tony', WEEK, WEEK + HOUR)])
+    expect(person(view, 'tony').unblocked.count).toBe(0)
+  })
+
+  it('counts a decision in the week it was answered', () => {
+    const g = group({ status: 'working' })
+    const view = board(swarm(), [g], WEEK, NOW, [], [decided(g, 'tony', LAST, LAST + HOUR)])
+    expect(person(view, 'tony').unblocked.count).toBe(0)
+    expect(view.goal.lastWeek.points).toBe(1)
   })
 })
 

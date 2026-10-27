@@ -14,8 +14,8 @@ import * as parts from '../parts/index.js'
 import type { SwarmParts } from '../parts/index.js'
 import { canReadGroup, readProject } from '../projects.js'
 import type { Leaderboard } from '../leaderboard/contract.js'
-import { readableWeek, recentDormantGroups } from '../leaderboard/read.js'
-import { LEDGER_WEEKS } from '../leaderboard/record.js'
+import { answeredDecisions, readableWeek, recentDormantGroups, resolvedWaits } from '../leaderboard/read.js'
+import { LEDGER_WEEKS, waitsNow } from '../leaderboard/record.js'
 import { leaderboard } from '../leaderboard/stats.js'
 import { WEEK_MS } from '../leaderboard/week.js'
 import { READ_FORMAT, SWARM_MIGRATING, type Changes, type DormantGroups, type FirstLoad, type OneGroup, type SwarmList } from './contract.js'
@@ -106,7 +106,9 @@ export class SwarmReads {
       readProject(state, actor, projectId)
       const dormant = await recentDormantGroups(tx, tabId, projectId, now - LEDGER_WEEKS * WEEK_MS)
       const groups = [...state.conversations.filter(g => !g.dormant), ...dormant].filter(g => !isLeads(g) && canReadGroup(state, actor, g))
-      return leaderboard({ state, groups, machines: visibleState(state, actor, now).machines ?? [], projectId, week: start, now })
+      const waits = groups.filter(waitsNow).flatMap(g => g.ledger?.waiting ? [g.ledger.waiting.messageId] : [])
+      const [decisions, resolved] = await Promise.all([answeredDecisions(tx, tabId, projectId, now - LEDGER_WEEKS * WEEK_MS), resolvedWaits(tx, tabId, waits)])
+      return leaderboard({ state, groups, machines: visibleState(state, actor, now).machines ?? [], decisions, resolvedWaits: resolved, projectId, week: start, now })
     })
   }
 

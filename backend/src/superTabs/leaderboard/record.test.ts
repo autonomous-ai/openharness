@@ -285,7 +285,8 @@ describe('who unblocks waiting work', () => {
     expect(f.group(id).ledger?.waiting).toEqual({ assignmentId, since: 10_000, messageId: expect.any(String) })
     f.at(10_000 + 3 * 3_600_000)
     f.say(id, owner)
-    expect(f.group(id).ledger?.unblocks).toEqual([{ personId: 'owner', at: 10_000 + 3 * 3_600_000, waitedMs: 3 * 3_600_000 }])
+    const asked = f.group(id).ledger!.waiting!.messageId
+    expect(f.group(id).ledger?.unblocks).toEqual([{ personId: 'owner', at: 10_000 + 3 * 3_600_000, waitedMs: 3 * 3_600_000, waitId: asked }])
     expect(f.group(id).ledger?.waiting).toEqual({ assignmentId, since: 10_000, messageId: expect.any(String), answeredAt: 10_000 + 3 * 3_600_000 })
   })
 
