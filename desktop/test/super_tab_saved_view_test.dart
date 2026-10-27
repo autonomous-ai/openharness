@@ -46,6 +46,7 @@ void main() {
   group('the client', _clientTests);
   group('review of #1723', _reviewTests);
   group('re-review of #1727', _reReviewTests);
+  group('follow-ups of #1727', _followUpTests);
   group('Clear now', _clearTests);
 
   test('keeps what the Swarm draws, not what it never shows', () async {
@@ -363,12 +364,16 @@ class _Transport {
   final ConversationServer server;
   Completer<void>? hold;
   SuperTabFailure? refuse;
+
+  /// How long the backend takes to answer each read.
+  Duration delay = Duration.zero;
   Future<Object?> call(
     String method,
     String path, {
     Map<String, dynamic>? body,
   }) async {
     if (hold case final wait?) await wait.future;
+    if (delay > Duration.zero) await Future<void>.delayed(delay);
     if (refuse case final failure?) throw failure;
     if (Uri.parse(path).path == '/api/super-tabs/list') {
       return {
@@ -714,6 +719,159 @@ void _reReviewTests() {
     await views.claim('someone-else');
     await views.write('owner', 'tab', _view());
     expect(store.values[_viewKey], isNull);
+  });
+}
+
+/// An account's Swarm list in two pages, the second refused until a test
+/// lets it answer: a discovery that fails partway.
+class _Pages {
+  bool refuseLast = true;
+  Future<Object?> call(
+    String method,
+    String path, {
+    Map<String, dynamic>? body,
+  }) async {
+    final uri = Uri.parse(path);
+    if (uri.path.endsWith('/mentions')) return {'mentions': <Object>[]};
+    if (uri.queryParameters['after'] == null) {
+      return {
+        'tabs': [
+          {'id': 'tab', 'name': 'Pilot'},
+        ],
+        'next': 'second',
+      };
+    }
+    if (refuseLast) {
+      throw const SuperTabFailure(
+        'MACHINE_UNAVAILABLE',
+        'Connect one of your machines to open Swarm.',
+      );
+    }
+    return {'tabs': <Object>[], 'next': null};
+  }
+}
+
+void _followUpTests() {
+  // Finding 7.
+  test('a complete discovery forgets the views of Swarms it no longer lists, '
+      'a failed one forgets none', () async {
+    final store = MemoryStore();
+    final views = SuperTabSavedViews(store);
+    await views.claim('owner');
+    await views.write('owner', 'gone', _view(tab: 'gone'));
+    await views.write('owner', 'tab', _view());
+    final pages = _Pages();
+    final client = SuperTabClient(
+      transport: pages.call,
+      storage: store,
+      onTabs: (tabs, hidden) {},
+      discoveryInterval: Duration.zero,
+    )..reading = _web;
+    addTearDown(client.dispose);
+    client.bind('owner');
+    // A slow network fails the second page: the list is not known.
+    await client.refreshTabs();
+    expect(client.discoveryError, isNotNull);
+    expect(store.values['super_tab.view.owner.gone'], isNotNull);
+    pages.refuseLast = false;
+    await client.refreshTabs();
+    expect(client.discoveryError, isNull);
+    expect(store.values['super_tab.view.owner.gone'], isNull);
+    expect(store.values[_viewKey], isNotNull);
+    expect(jsonDecode(store.values['super_tab.views.owner']!), ['tab']);
+  });
+
+  test('Desktop: a discovery reads and deletes no saved view', () async {
+    final store = _TouchStore();
+    final client = SuperTabClient(
+      transport: (_Pages()..refuseLast = false).call,
+      storage: store,
+      onTabs: (tabs, hidden) {},
+      discoveryInterval: Duration.zero,
+    )..bind('owner');
+    addTearDown(client.dispose);
+    await client.refreshTabs();
+    expect(client.discoveryError, isNull);
+    expect(store.touched.where((k) => k.contains('super_tab.view')), isEmpty);
+  });
+
+  // Minor a, left of it: what the open stopped waiting for.
+  test('a read that missed the lock leaves the views as they were once it '
+      'gets it', () {
+    fakeAsync((async) {
+      final kept = MemoryStore();
+      final views = SuperTabSavedViews(kept);
+      () async {
+        await views.claim('owner');
+        // This Swarm is the least recent of the three kept.
+        for (final tab in ['tab', 'c', 'b']) {
+          await views.write('owner', tab, _view(tab: tab));
+        }
+      }();
+      async.flushMicrotasks();
+      final store = _StuckLockStore()..values.addAll(kept.values);
+      final transport = _Transport(ConversationServer()..append('Hello'))
+        ..hold = Completer<void>();
+      final client = _client(transport, store)
+        ..bind('owner')
+        ..show('tab');
+      client.open('tab');
+      async.elapse(const Duration(milliseconds: 300));
+      final before = Map.of(store.values);
+      store.release.complete();
+      async.flushMicrotasks();
+      expect(store.values, before);
+      client.dispose();
+    });
+  });
+
+  // Minor b, left of it.
+  test('signing out forgets the account leaving, whoever the device names', () {
+    fakeAsync((async) {
+      final server = ConversationServer()..append('Hello');
+      final store = MemoryStore();
+      final client = _client(_Transport(server), store)
+        ..bind('owner')
+        ..show('tab');
+      client.open('tab');
+      async.elapse(const Duration(seconds: 1));
+      client.show(null);
+      async.flushMicrotasks();
+      expect(store.values[_viewKey], isNotNull);
+      // Another browser tab signed out, and this view was kept after it
+      // cleared whose device this is.
+      store.values.remove('super_tab.saved_by');
+      client.bind(null);
+      async.flushMicrotasks();
+      expect(
+        store.values.keys.where((k) => k.startsWith('super_tab.view')),
+        isEmpty,
+      );
+    });
+  });
+
+  // The 1.3.76 re-score: a warm boot waited for the server.
+  test('a view slower than 250 ms to read still draws before a 5 s first '
+      'read', () {
+    fakeAsync((async) {
+      final server = ConversationServer()..append('Hello');
+      final store = _OrderStore();
+      _visit(async, server, store);
+      // A phone's boot keeps the main thread busy while the view is read.
+      store.viewDelay = const Duration(milliseconds: 400);
+      final transport = _Transport(server)..delay = const Duration(seconds: 5);
+      final client = _client(transport, store)
+        ..bind('owner')
+        ..show('tab');
+      SuperTabController? c;
+      client.open('tab').then((opened) => c = opened);
+      async.elapse(const Duration(milliseconds: 500));
+      expect(c!.showingSaved, isTrue);
+      expect(c!.messages('lead').single.text, 'Hello');
+      async.elapse(const Duration(seconds: 5));
+      expect(c!.showingSaved, isFalse);
+      client.dispose();
+    });
   });
 }
 

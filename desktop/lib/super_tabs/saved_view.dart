@@ -117,6 +117,15 @@ class SuperTabSavedViews {
     await storage.write(_index(account), jsonEncode(tabs));
   }
 
+  /// A complete discovery listed [tabIds]: the views of the account's other
+  /// Swarms go, one it lost while not open included.
+  Future<void> keepOnly(String account, Set<String> tabIds) =>
+      _serial(() async {
+        for (final tab in await _tabs(account)) {
+          if (!tabIds.contains(tab)) await _forget(account, tab);
+        }
+      });
+
   /// Signing out, or another account: nothing of this one stays behind.
   Future<void> forgetAccount(String account) =>
       _serial(() => _forgetAccount(account));
@@ -139,9 +148,14 @@ class SuperTabSavedViews {
   });
 
   /// [account] (null when signed out) is the one using this device now: the
-  /// views of any other account that used it, before a reload too, go.
-  Future<void> claim(String? account) => _serial(() async {
+  /// views of any other account that used it, before a reload too, go, and
+  /// those of [leaving]: another tab may have kept one after it cleared
+  /// whose device this is.
+  Future<void> claim(String? account, {String? leaving}) => _serial(() async {
     final owner = await storage.read(_owner);
+    if (leaving != null && leaving != account && leaving != owner) {
+      await _forgetAccount(leaving);
+    }
     if (owner == account) return;
     if (owner != null) await _forgetAccount(owner);
     if (account == null) {

@@ -113,9 +113,11 @@ class SuperTabClient {
 
   /// Only the account using this device keeps views on it: any other one,
   /// after a reload too, is forgotten ([SuperTabSavedViews.claim]).
-  void _claimViews() {
+  void _claimViews({String? leaving}) {
     if (!_reading.drawsSaved) return;
-    unawaited(_views.claim(_account).catchError((Object _) {}));
+    unawaited(
+      _views.claim(_account, leaving: leaving).catchError((Object _) {}),
+    );
   }
 
   /// Moves each time a Swarm's view is kept on this device: Settings' Clear
@@ -240,9 +242,10 @@ class SuperTabClient {
     _viewSaves.clear();
     _viewSavedAt.clear();
     _viewVersions.clear();
+    final leaving = _account;
     _account = account;
     // Nothing of an account that left stays on this device.
-    _claimViews();
+    _claimViews(leaving: leaving);
     _generation++;
     _discoveryTimer?.cancel();
     _discovering = null;
@@ -361,6 +364,12 @@ class SuperTabClient {
         discoveryError = null;
         final hidden = Set<String>.unmodifiable({..._hidden, ..._creating});
         onTabs!(tabs.values.toList(), hidden);
+        // Every page read: a Swarm not listed is no longer this account's.
+        if (_reading.drawsSaved) {
+          await _views
+              .keepOnly(account, {...tabs.keys, ..._creating})
+              .catchError((Object _) {});
+        }
         await _readTags([
           for (final id in tabs.keys)
             if (!hidden.contains(id) &&
