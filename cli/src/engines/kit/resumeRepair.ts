@@ -9,6 +9,7 @@ import { createHash, randomUUID } from 'node:crypto'
 import { closeSync, constants, fsyncSync, fstatSync, lstatSync, openSync, readSync, realpathSync, renameSync, rmSync, writeSync, type Stats } from 'node:fs'
 import { isAbsolute, join, relative } from 'node:path'
 import type { ResumeRepairContract } from '../facets/launch.js'
+import type { ResumePreparationKind } from '../../lib/productHealthContract.js'
 import { findSessionFile } from './sessionRecords.js'
 
 type JsonObject = Record<string, unknown>
@@ -51,6 +52,18 @@ function valueAt(record: JsonObject, path: readonly string[]): unknown {
   return value
 }
 
+/**
+ * Why a history could not be prepared, by which check refused it: the resume reply and its counters carry the kind
+ * (lib/resumeAgentService.ts). On 2026-10-26, 10 of 17 failed resumes were a preparation failure and nothing said
+ * which. The message names the file and a line number only, never conversation text.
+ */
+export class ResumePreparationError extends Error {
+  constructor(readonly kind: ResumePreparationKind, message: string) {
+    super(message)
+    this.name = 'ResumePreparationError'
+  }
+}
+
 /** Shared by the string helper and the file reader, which retains only one record at a time. */
 function historyRepair(contract: ResumeRepairContract, sessionId: string) {
   const repair = REPAIRS[contract.repair]
@@ -58,19 +71,24 @@ function historyRepair(contract: ResumeRepairContract, sessionId: string) {
   let sawFirst = false
   let repairedItems = 0
   let lineNumber = 0
-  const line = (line: string): string => {
+  let partialTail = false
+  /** `last`: the final line, with no newline after it. */
+  const line = (line: string, last = false): string => {
     lineNumber++
     if (!line.trim()) return line
     let record: unknown
     try { record = JSON.parse(line) } catch {
+      // An interrupted engine leaves its last record half written, and refusing it refused the whole
+      // conversation (Oct 26 report). It is kept byte for byte: the engine reads its own file as it left it.
+      if (last) { partialTail = true; return line }
       // JSON.parse's own error can quote conversation text; keep it out of daemon logs.
-      throw new Error(`invalid JSON in ${file} at line ${lineNumber}`)
+      throw new ResumePreparationError('invalid_json', `invalid JSON in ${file} at line ${lineNumber}`)
     }
-    if (!object(record)) throw new Error(`invalid ${file} record`)
+    if (!object(record)) throw new ResumePreparationError('invalid_json', `invalid ${file} record`)
     if (!sawFirst) {
       // The id is never empty (the caller returns before), so a record with no such field never matches.
       if (record.type !== contract.first.type || valueAt(record, contract.first.id) !== sessionId) {
-        throw new Error(`${file} does not belong to the session being resumed`)
+        throw new ResumePreparationError('foreign_session', `${file} does not belong to the session being resumed`)
       }
       sawFirst = true
     }
@@ -83,22 +101,24 @@ function historyRepair(contract: ResumeRepairContract, sessionId: string) {
     }
     return changed ? JSON.stringify(record) + (line.endsWith('\r') ? '\r' : '') : line
   }
-  return { line, finish: () => {
-    if (!sawFirst) throw new Error(`${file} has no session metadata`)
+  return { line, partialTail: () => partialTail, finish: () => {
+    if (!sawFirst) throw new ResumePreparationError('foreign_session', `${file} has no session metadata`)
     return repairedItems
   } }
 }
 
 /** Only replayed items are repaired. Other records (including readable event history) and unchanged lines
- *  retain their exact bytes. Invalid JSON aborts the whole repair. */
+ *  retain their exact bytes. Invalid JSON aborts the whole repair, except in a final line with no newline. */
 export function repairHistoryText(contract: ResumeRepairContract, history: string, sessionId: string): { history: string; repairedItems: number } {
   const repair = historyRepair(contract, sessionId)
-  const lines = history.split('\n').map(repair.line)
+  const parts = history.split('\n')
+  const lines = parts.map((line, index) => repair.line(line, index === parts.length - 1))
   return { history: lines.join('\n'), repairedItems: repair.finish() }
 }
 
 const READ_BYTES = 64 * 1024
-const changedDuring = (contract: ResumeRepairContract) => new Error(`${contract.names.file} changed during resume preparation; retry after its writer stops`)
+const changedDuring = (contract: ResumeRepairContract) =>
+  new ResumePreparationError('changed_during', `${contract.names.file} changed during resume preparation; retry after its writer stops`)
 
 function sameFile(a: Stats, b: Stats): boolean {
   return b.isFile() && a.ino === b.ino && a.dev === b.dev && a.size === b.size
@@ -118,7 +138,7 @@ function scanHistory(contract: ResumeRepairContract, fd: number, size: number, s
   const line = (bytes: Buffer) => {
     const newline = bytes.at(-1) === 10
     const original = bytes.subarray(0, bytes.length - (newline ? 1 : 0)).toString('utf8')
-    const repaired = repair.line(original)
+    const repaired = repair.line(original, !newline)
     const output = repaired === original ? bytes : Buffer.from(repaired + (newline ? '\n' : ''))
     repairedBytes += output.length
     emit?.(bytes, output)
@@ -144,14 +164,14 @@ function scanHistory(contract: ResumeRepairContract, fd: number, size: number, s
     if (start < count) fragments.push(Buffer.from(chunk.subarray(start, count)))
   }
   if (fragments.length) line(Buffer.concat(fragments))
-  return { repairedItems: repair.finish(), repairedBytes, digest: hash.digest('hex') }
+  return { repairedItems: repair.finish(), repairedBytes, digest: hash.digest('hex'), partialTail: repair.partialTail() }
 }
 
 function writeAll(contract: ResumeRepairContract, fd: number, bytes: Buffer): void {
   let written = 0
   while (written < bytes.length) {
     const count = writeSync(fd, bytes, written, bytes.length - written)
-    if (!count) throw new Error(`Could not write the prepared ${contract.names.history}`)
+    if (!count) throw new ResumePreparationError('other', `Could not write the prepared ${contract.names.history}`)
     written += count
   }
 }
@@ -188,7 +208,7 @@ export function repairHistory(contract: ResumeRepairContract, sessionId: string,
   })
   if (!before.isFile() || before.isSymbolicLink() || !inside
     || (typeof process.getuid === 'function' && before.uid !== process.getuid())) {
-    throw new Error(`${contract.names.file} is outside the session profile or is not an owned regular file`)
+    throw new ResumePreparationError('not_owned_file', `${contract.names.file} is outside the session profile or is not an owned regular file`)
   }
   const input = openSync(file, constants.O_RDONLY | constants.O_NOFOLLOW)
   try {
@@ -198,6 +218,7 @@ export function repairHistory(contract: ResumeRepairContract, sessionId: string,
     unchanged()
     const inspected = scanHistory(contract, input, before.size, sessionId)
     unchanged()
+    if (inspected.partialTail) console.log(`[resume] ${contract.names.file} ended in a partial line; kept as is`)
     if (!inspected.repairedItems) return { repairedItems: 0 }
 
     const suffix = randomUUID()

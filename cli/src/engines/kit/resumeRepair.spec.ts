@@ -8,7 +8,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { launch as codex } from '../codex/launch.js'
 import { prepareResume as prepareCodexResume } from '../launchPrep.js'
-import { repairHistoryText } from './resumeRepair.js'
+import { repairHistoryText, ResumePreparationError } from './resumeRepair.js'
 
 // The former engines/codex/portableHistory.spec.ts, its cases unchanged, against Codex's declared repair
 // (`resumeRepair` in codex/launch.ts) applied by the kit, through the composition the resume calls.
@@ -26,6 +26,14 @@ const badReasoning = () => ({ type: 'reasoning', id: BAD_ID, summary, content: [
 const message = { type: 'message', id: BAD_ID, role: 'assistant', content: [{ type: 'output_text', text: 'Hello.' }] }
 const history = (...items: unknown[]) => [meta, ...items.map(item => record('response_item', item)), ''].join('\n')
 const payloads = (value: string) => value.trim().split('\n').slice(1).map(line => JSON.parse(line).payload)
+/** The typed refusal `run` throws: its kind says which check refused, for the resume reply and its counters. */
+function refusal(run: () => unknown): ResumePreparationError {
+  try { run() } catch (error) {
+    expect(error).toBeInstanceOf(ResumePreparationError)
+    return error as ResumePreparationError
+  }
+  throw new Error('expected a refusal')
+}
 
 describe('Codex reasoning history portability', () => {
   it('repairs the screenshot pair without changing the answer, its id, or the reasoning summary', () => {
@@ -69,6 +77,19 @@ describe('Codex reasoning history portability', () => {
     expect(result.repairedItems).toBe(1)
     expect(payloads(result.history)[0].replacement_history).toEqual([{ type: 'reasoning', summary, content: [] }, message])
     expect(result.history.split('\n')[2]).toBe(event)
+  })
+})
+
+describe('a half-written last line in history text', () => {
+  it('passes it through and repairs the lines before it', () => {
+    const tail = '{"type":"respo'
+    const result = portableCodexHistory(history(badReasoning()) + tail, SESSION)
+    expect(result.repairedItems).toBe(1)
+    expect(result.history.endsWith('\n' + tail)).toBe(true)
+  })
+
+  it('still refuses it once a newline follows', () => {
+    expect(() => portableCodexHistory(history(badReasoning()) + '{"type":"respo\n', SESSION)).toThrow(ResumePreparationError)
   })
 })
 
@@ -162,7 +183,7 @@ describe('preparing a stopped Codex session for resume', () => {
       if (!changed) { changed = true; writeFileSync(file, appended, { flag: 'a' }) }
       return read
     })
-    expect(() => prepareCodexResume(source())).toThrow('changed during resume preparation')
+    expect(refusal(() => prepareCodexResume(source()))).toMatchObject({ kind: 'changed_during', message: expect.stringContaining('changed during resume preparation') })
     expect(readFileSync(file, 'utf8')).toBe(history(badReasoning()) + appended)
     expect(readdirSync(join(profile, 'sessions', '2026', '09', '15'))).toHaveLength(1)
   })
@@ -178,12 +199,61 @@ describe('preparing a stopped Codex session for resume', () => {
     expect(payloads(readFileSync(file, 'utf8'))[0]).not.toHaveProperty('id')
   })
 
-  it.each(['invalid JSON', '{"type":"response_item","payload":'])('does not rewrite or back up a partial or invalid rollout (%s)', (invalid) => {
-    const original = history(badReasoning()) + invalid
+  // A broken record that ends in a newline was finished that way: not what an interrupted writer leaves.
+  it.each(['invalid JSON', '{"type":"response_item","payload":'])('does not rewrite or back up a rollout with a broken complete line (%s)', (invalid) => {
+    const original = history(badReasoning()) + invalid + '\n'
     writeFileSync(file, original)
-    expect(() => prepareCodexResume(source())).toThrow()
+    expect(refusal(() => prepareCodexResume(source()))).toMatchObject({ kind: 'invalid_json', message: `invalid JSON in Codex rollout at line 3` })
     expect(readFileSync(file, 'utf8')).toBe(original)
     expect(readdirSync(join(profile, 'sessions', '2026', '09', '15'))).toHaveLength(1)
+  })
+
+  it('refuses invalid JSON in the middle of a rollout, whatever its end', () => {
+    const original = [meta, 'not json', record('response_item', badReasoning()), '{"type":"respo'].join('\n')
+    writeFileSync(file, original)
+    expect(refusal(() => prepareCodexResume(source()))).toMatchObject({ kind: 'invalid_json', message: 'invalid JSON in Codex rollout at line 2' })
+    expect(readFileSync(file, 'utf8')).toBe(original)
+  })
+
+  // An interrupted Codex leaves its last record half written; that refused the whole conversation (Oct 26 report).
+  it('keeps a half-written last line as it is and repairs the rest', () => {
+    const tail = '{"type":"respo'
+    const original = history(badReasoning(), message) + tail
+    writeFileSync(file, original)
+    const logged = vi.spyOn(console, 'log').mockImplementation(() => {})
+    const result = prepareCodexResume(source())
+    expect(result.repairedItems).toBe(1)
+    const repaired = readFileSync(file, 'utf8')
+    expect(repaired.endsWith('\n' + tail)).toBe(true)
+    expect(payloads(repaired.slice(0, -tail.length))).toEqual([{ type: 'reasoning', summary, content: [] }, message])
+    expect(readFileSync(result.backupPath!, 'utf8')).toBe(original)
+    expect(logged.mock.calls.map(call => String(call[0]))).toEqual(['[resume] Codex rollout ended in a partial line; kept as is'])
+  })
+
+  it('keeps a half-written last line of a rollout that needs no repair, without rewriting it', () => {
+    const original = history(message) + '{"type":"response_item","payload":{"type":"message","content":"secret'
+    writeFileSync(file, original)
+    const logged = vi.spyOn(console, 'log').mockImplementation(() => {})
+    const before = statSync(file)
+    expect(prepareCodexResume(source())).toEqual({ repairedItems: 0 })
+    expect(statSync(file).ino).toBe(before.ino)
+    expect(readFileSync(file, 'utf8')).toBe(original)
+    // The log names the file, never the conversation's text.
+    expect(logged.mock.calls.flat().join(' ')).not.toContain('secret')
+  })
+
+  it('leaves a complete last record without a newline alone', () => {
+    const original = history(message).trimEnd()
+    writeFileSync(file, original)
+    const logged = vi.spyOn(console, 'log').mockImplementation(() => {})
+    expect(prepareCodexResume(source())).toEqual({ repairedItems: 0 })
+    expect(readFileSync(file, 'utf8')).toBe(original)
+    expect(logged).not.toHaveBeenCalled()
+  })
+
+  it('still refuses a rollout whose only line is half written: it has no session record', () => {
+    writeFileSync(file, '{"timestamp":"2026-09-15T06:43:10.580Z","type":"session_me')
+    expect(refusal(() => prepareCodexResume(source()))).toMatchObject({ kind: 'foreign_session', message: 'Codex rollout has no session metadata' })
   })
 
   // A person who moved CODEX_HOME in their shell profile keeps their rollouts there, and an agent of theirs
@@ -215,7 +285,7 @@ describe('preparing a stopped Codex session for resume', () => {
   it('refuses a different session instead of modifying the wrong history', () => {
     const original = history(badReasoning())
     writeFileSync(file, original)
-    expect(() => prepareCodexResume({ ...source(), sessionId: 'another-session' })).toThrow('does not belong')
+    expect(refusal(() => prepareCodexResume({ ...source(), sessionId: 'another-session' }))).toMatchObject({ kind: 'foreign_session', message: 'Codex rollout does not belong to the session being resumed' })
     expect(readFileSync(file, 'utf8')).toBe(original)
   })
 
@@ -224,9 +294,28 @@ describe('preparing a stopped Codex session for resume', () => {
     const original = history(badReasoning())
     writeFileSync(outside, original)
     symlinkSync(outside, file)
-    expect(() => prepareCodexResume(source())).toThrow('outside the session profile')
-    expect(() => prepareCodexResume({ ...source(), transcriptPath: outside })).toThrow('outside the session profile')
+    expect(refusal(() => prepareCodexResume(source()))).toMatchObject({ kind: 'not_owned_file', message: expect.stringContaining('outside the session profile') })
+    expect(refusal(() => prepareCodexResume({ ...source(), transcriptPath: outside }))).toMatchObject({ kind: 'not_owned_file' })
     expect(readFileSync(outside, 'utf8')).toBe(original)
+  })
+
+  it('refuses a rollout whose first record is not its session record', () => {
+    writeFileSync(file, [record('response_item', message), meta, ''].join('\n'))
+    expect(refusal(() => prepareCodexResume(source()))).toMatchObject({ kind: 'foreign_session' })
+  })
+
+  it('refuses a record that is JSON but not an object', () => {
+    writeFileSync(file, [meta, '[1,2]', ''].join('\n'))
+    expect(refusal(() => prepareCodexResume(source()))).toMatchObject({ kind: 'invalid_json', message: 'invalid Codex rollout record' })
+  })
+
+  it('names a failed write as another kind of refusal, and keeps the original', () => {
+    const original = history(badReasoning())
+    writeFileSync(file, original)
+    vi.spyOn(fs, 'writeSync').mockReturnValue(0)
+    expect(refusal(() => prepareCodexResume(source()))).toMatchObject({ kind: 'other', message: 'Could not write the prepared Codex history' })
+    expect(readFileSync(file, 'utf8')).toBe(original)
+    expect(readdirSync(join(profile, 'sessions', '2026', '09', '15'))).toHaveLength(1)
   })
 
   it('leaves other engines, fresh sessions, and missing histories to the existing launch path', () => {

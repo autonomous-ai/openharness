@@ -16,8 +16,17 @@ import { cardId, SwarmCards } from './cards.js'
 import { GitHubTokenRefresher, githubToken } from './github.js'
 import { teamEngineReporter, type TeamEngineReporter } from '../team/engines.js'
 import { AUTO_SETUP_REASONS, realTeamAutoSetup, type AutoSetupReason, type TeamAutoSetup } from '../team/autoSetup.js'
+import { openDaemon } from '../agentClient/daemon.js'
 import { readTeamConfig } from '../team/config.js'
 import { realTeamRelayPublisher, type TeamRelayPublisher } from '../team/relay.js'
+import { readLastTry, refreshCreationId, refreshTeamAccount, teamRefreshFile, writeLastTry, type TeamRefreshDeps } from '../team/refresh.js'
+import { readTeamStatus } from '../team/privacy.js'
+import { ensureTeamTmux, TMUX_MANIFEST_URL, tmuxRunsAt, untarGz, type TeamTmuxDeps, type TeamTmuxOutcome } from '../team/tmux.js'
+import { downloadVerified } from '../lib/selfUpdate.js'
+import { managedTmuxPath, tmuxInstallDirectories } from '../lib/tmuxOnPath.js'
+import { env as appEnv } from '../config/env.js'
+import { homedir, userInfo } from 'node:os'
+import { delimiter, isAbsolute, join } from 'node:path'
 import { createOwnerSubscriptions } from '../lib/ownerSubscriptions.js'
 import { startSubscriptionRelay } from '../lib/subscriptionRelay.js'
 
@@ -180,6 +189,8 @@ export interface SuperTabServiceOptions {
   teamSetup?: () => Promise<Pick<TeamAutoSetup, 'offer' | 'decline'>>
   /** Whether this daemon runs team work only (a Harness Team account, `harness team on`), for a spec. */
   team?: () => boolean
+  /** The Harness Team account's own tmux (team/tmux.ts), for a spec. */
+  teamTmux?: () => Promise<TeamTmuxOutcome>
   /** The owner's subscriptions for the Harness Team account (team/relay.ts), for a spec. */
   teamRelay?: () => Pick<TeamRelayPublisher, 'start' | 'stop'>
 }
@@ -228,14 +239,26 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
   // relay of its own (team/relay.ts). Kept through a lost backend connection, which running agents do not need.
   const relay = (options.teamRelay ?? (() => realTeamRelayPublisher(
     () => startSubscriptionRelay({ owner: createOwnerSubscriptions(), log: line => console.log(`[team] relay · ${line}`) }),
-    () => readTeamConfig(), options.team ?? (() => readAuthSession()?.kind === 'team'), line => console.log(`[team] ${line}`))))()
+    () => readTeamConfig(), options.team ?? (() => readAuthSession()?.kind === 'team'), line => console.log(`[team] ${line}`),
+    // A team account still on a build that cannot use the relay is updated from here (team/refresh.ts).
+    (publishedAt) => refreshTeamAccount(realTeamRefreshDeps(core, publishedAt)))))()
   let autoSetup: Promise<Pick<TeamAutoSetup, 'offer' | 'decline'>> | null = null
+  // In the Harness Team account: a tmux of its own when it has none it can run (team/tmux.ts). Looked at as it connects,
+  // and a failed install again half an hour later.
+  let tmuxCheckedAt = -Infinity
+  const ensureTmux = options.teamTmux ?? (() => ensureTeamTmux(realTeamTmuxDeps()))
+  const checkTmux = () => {
+    if (Date.now() - tmuxCheckedAt < 30 * 60_000) return
+    tmuxCheckedAt = Date.now()
+    void ensureTmux().then(outcome => { if (outcome === 'present' || outcome === 'installed' || outcome === 'not-team') tmuxCheckedAt = Infinity })
+  }
   const disconnect = () => { preparations.clear(); host?.stop(); host = null; held = null; book?.stop(); book = null; bookMachine = null; swarmCards?.want(false); swarmCards = null; cardsMachine = null; tokens.stop(); engines.stop() }
   const port = {
     connected: () => {
       tokens.start()
       engines.start()
       relay.start()
+      checkTmux()
       // A daemon that runs team work only is there for its Swarms: its host runs from its first connection. Its Mac's daemon adds
       // a Harness Team account to a Swarm without waking it (host.ts joinTeams), and a host that never ran reports no privacy
       // check, so the Swarm read the account as offline and never sent it a teammate's work (third VM run).
@@ -465,4 +488,59 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
     },
   }
   return { requests, port }
+}
+
+/** The team daemon's own: its account, its PATH and Homebrew's places, the published manifest (team/tmux.ts). */
+function realTeamTmuxDeps(): TeamTmuxDeps {
+  return {
+    team: () => { try { return readTeamConfig()?.user === userInfo().username } catch { return false } },
+    platform: process.platform,
+    arch: process.arch,
+    candidates: () => {
+      const managed = managedTmuxPath()
+      const dirs = [...(process.env.PATH ?? '').split(delimiter).filter(isAbsolute), ...tmuxInstallDirectories()]
+      return [...(managed ? [managed] : []), ...dirs.map(dir => join(dir, 'tmux'))].filter(path => existsSync(path))
+    },
+    runs: tmuxRunsAt,
+    manifest: async () => {
+      const reply = await fetch(process.env.HARNESS_TMUX_METADATA_URL || TMUX_MANIFEST_URL, { signal: AbortSignal.timeout(30_000) })
+      if (!reply.ok) throw new Error(`the tmux manifest answered HTTP ${reply.status}`)
+      return reply.json()
+    },
+    download: (build) => downloadVerified({ url: build.url, sha256: build.sha256, ...(build.size ? { size: build.size } : {}) }),
+    untar: untarGz,
+    runtimeDir: appEnv.ADAPTER_RUNTIME_DIR,
+    binDir: join(homedir(), '.local', 'bin'),
+    log: (line) => console.log(`[team] ${line}`),
+  }
+}
+
+/** The owner's daemon's own: its account's machine list, and the link to its Mac's team account (team/refresh.ts). */
+function realTeamRefreshDeps(core: CoreApi, publishedAt: number | null): TeamRefreshDeps {
+  const file = teamRefreshFile(core.dataDir)
+  return {
+    config: () => readTeamConfig(),
+    status: readTeamStatus,
+    publishedAt: () => publishedAt,
+    machines: async () => {
+      const reply = await core.account.backend('GET', '/api/machines')
+      const body = object(reply.body), data = object(body.data)
+      const rows = Array.isArray(data.machines) ? data.machines : Array.isArray(body.machines) ? body.machines : []
+      return rows.map(object).filter(m => typeof m.machineId === 'string')
+        .map(m => ({ machineId: m.machineId as string, sessionKind: typeof m.sessionKind === 'string' ? m.sessionKind : null,
+          hostMachineId: typeof m.hostMachineId === 'string' ? m.hostMachineId : null }))
+    },
+    machineId: () => core.daemon.machineId(),
+    run: async (machineId, argv, cwd) => {
+      const link = await openDaemon({ dataDir: core.dataDir, port: core.daemon.port, machineId: core.daemon.machineId() }, machineId)
+      try {
+        const answer = object(await link.request('shell_open', { argv, cwd, creationId: refreshCreationId() }, 30_000))
+        return answer.state === 'created' ? { ok: true } : { ok: false, error: String(answer.error ?? answer.state ?? 'no answer') }
+      } finally { link.close() }
+    },
+    lastTry: () => readLastTry(file),
+    remember: (at) => writeLastTry(file, at),
+    now: () => Date.now(),
+    log: (line) => console.log(`[team] ${line}`),
+  }
 }

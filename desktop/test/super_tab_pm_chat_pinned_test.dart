@@ -332,7 +332,7 @@ void main() {
     final projectRow = find.byKey(const ValueKey('super-group-lead'));
 
     testWidgets(
-      'pins Chat with PM as a direct message above the projects, shown with the project and the list collapsed',
+      'lists Chat with PM as a direct message below the projects, shown with the project and the list collapsed',
       (tester) async {
         final c = await show(tester, riverSwarm());
         expect(c.expandedProjects, isNot(contains('lead')));
@@ -350,16 +350,16 @@ void main() {
           findsOne,
         );
         expect(
-          tester.getTopLeft(find.text('Direct messages')).dy,
-          lessThan(tester.getTopLeft(entry).dy),
+          tester.getTopLeft(find.text('Projects')).dy,
+          lessThan(tester.getTopLeft(find.text('Direct messages')).dy),
         );
         expect(
           tester.getTopLeft(find.text('Direct messages')).dx,
           tester.getTopLeft(find.text('Projects')).dx,
         );
         expect(
-          tester.getTopLeft(entry).dy,
-          lessThan(tester.getTopLeft(find.text('Projects')).dy),
+          tester.getTopLeft(find.text('Direct messages')).dy,
+          lessThan(tester.getTopLeft(entry).dy),
         );
 
         c.toggleProjectsGroup();
@@ -443,12 +443,13 @@ void main() {
         Future<void> shortcutOverNotifications() async {
           await tester.tap(find.byKey(const ValueKey('super-notifications')));
           await tester.pumpAndSettle();
-          expect(find.text('Message Product Manager'), findsNothing);
+          expect(find.text('Message River'), findsNothing);
           // What ⇧⌘K runs (openActivePmChat).
           expect(await c.openCurrentPmChat(), isTrue);
           await tester.pumpAndSettle();
           expect(c.selectedId, c.pmChat('lead')?.id);
-          expect(find.text('Message Product Manager'), findsOneWidget);
+          // The composer names the direct message as its row does.
+          expect(find.text('Message River'), findsOneWidget);
         }
 
         await shortcutOverNotifications();
@@ -495,13 +496,13 @@ void main() {
       final c = await show(tester, pmChatSwarm());
       await tester.tap(find.byKey(const ValueKey('super-notifications')));
       await tester.pumpAndSettle();
-      expect(find.text('Message Product Manager'), findsNothing);
+      expect(find.text('Message Lead'), findsNothing);
 
       await tester.tap(entry);
       await tester.pumpAndSettle();
 
       expect(c.selectedId, c.pmChat('lead')!.id);
-      expect(find.text('Message Product Manager'), findsOneWidget);
+      expect(find.text('Message Lead'), findsOneWidget);
       await close(tester, c);
     });
 
@@ -519,7 +520,7 @@ void main() {
       ]) {
         expect(find.descendant(of: row, matching: find.text(pm)), findsOne);
         expect(
-          find.descendant(of: row, matching: find.text(project)),
+          find.descendant(of: row, matching: find.text('($project)')),
           findsOne,
         );
         expect(

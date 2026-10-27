@@ -39,6 +39,18 @@ describe('the core terminal launch call', () => {
     expect(await setup({ blocksFolder: () => true }).open({ argv: ['/bin/sh'], cwd: '/work' })).toEqual({ ok: false, error: 'WORKTREE_BUSY' })
     expect(createAndRegisterPane).not.toHaveBeenCalled()
   })
+  it('opens on a backend recovered after boot, as an agent\'s create does, and keeps refusing while there is none', async () => {
+    const backend = { create: vi.fn(), kill: vi.fn(), releaseHold: vi.fn(async () => {}) }
+    const recoverBackend = vi.fn(async () => backend)
+    const { open } = setup({ createBackend: null, recoverBackend })
+    expect(await open({ argv: ['/bin/sh'], cwd: '/work' })).toEqual({ ok: true, agentId: 'shell' })
+    expect(vi.mocked(createAndRegisterPane).mock.calls[0]![0].tmuxBackend).toBe(backend)
+    // Recovered once: the next terminal uses it without asking again.
+    await open({ argv: ['/bin/sh'], cwd: '/work' })
+    expect(recoverBackend).toHaveBeenCalledOnce()
+    const none = setup({ createBackend: null, recoverBackend: async () => null })
+    expect(await none.open({ argv: ['/bin/sh'], cwd: '/work' })).toEqual({ ok: false, error: 'TMUX_UNAVAILABLE' })
+  })
   it('preserves a failed launch and never announces it', async () => {
     const { deps, open } = setup()
     vi.mocked(createAndRegisterPane).mockResolvedValueOnce({ ok: false, error: 'SPAWN_FAILED', detail: 'gone' })

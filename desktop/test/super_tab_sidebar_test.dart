@@ -245,6 +245,68 @@ void main() {
     });
   }
 
+  testWidgets('reads like a chat app: utilities, Projects A to Z with their '
+      'workgroups and # product-managers, Direct messages, then Machines', (
+    tester,
+  ) async {
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final app = createApp(connected: true);
+    addTearDown(app.dispose);
+    final server = ConversationServer();
+    (server.state['conversations'] as List).add({
+      ...conversationFixture('leads', 'Leads'),
+      'kind': 'leads',
+    });
+    server.state['leadsConversationId'] = 'leads';
+    final controller = await projectSidebar(server);
+    controller
+      ..toggleProject('lead')
+      ..toggleProject('empty');
+    await pumpSidebar(tester, controller, app);
+
+    final order = [
+      find.byKey(const ValueKey('super-new-project')),
+      find.byKey(const ValueKey('super-local-models')),
+      find.byKey(const ValueKey('super-your-devices')),
+      find.text('Projects'),
+      find.byKey(const ValueKey('super-group-leads')),
+      find.byKey(const ValueKey('super-group-empty-lead')),
+      find.text('No workgroups yet'),
+      find.byKey(const ValueKey('super-group-lead')),
+      find.byKey(const ValueKey('super-group-offline')),
+      find.text('Direct messages'),
+      find.byKey(const ValueKey('super-pm-chat-lead')),
+      find.byKey(const ValueKey('super-pm-chat-empty')),
+      find.text('Machines'),
+    ];
+    for (var i = 1; i < order.length; i++) {
+      expect(
+        tester.getTopLeft(order[i - 1]).dy,
+        lessThan(tester.getTopLeft(order[i]).dy),
+        reason: '${order[i - 1]} above ${order[i]}',
+      );
+    }
+    for (final (key, name) in [
+      ('leads', 'product-managers'),
+      ('empty-lead', 'sample-project'),
+      ('lead', 'web-project'),
+    ]) {
+      expect(inRow('super-group-$key', find.text('#')), findsOneWidget);
+      expect(inRow('super-group-$key', find.text(name)), findsOneWidget);
+    }
+    // The product managers' channel has no workgroups to disclose.
+    expect(
+      inRow('super-group-leads', find.byIcon(AppIcons.chevronRight)),
+      findsNothing,
+    );
+    expect(
+      inRow('super-pm-chat-lead', find.text('(web-project)')),
+      findsOneWidget,
+    );
+    expect(tester.takeException(), isNull);
+    await disposeSidebar(tester, controller);
+  });
+
   testWidgets('section disclosure follows its label and + aligns with the '
       'right disclosure column', (tester) async {
     addTearDown(() => tester.binding.setSurfaceSize(null));
