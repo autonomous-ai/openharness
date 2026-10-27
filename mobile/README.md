@@ -82,9 +82,11 @@ held to them by `test/swarm/desktop_parity_test.dart`.
 - **Choices.** `swarm_choices.dart` holds the six UX answers (the way in, the first screen, a
   project's layout, posting, notices, Undo), each the recommended one until the app's owner decides.
 
-`integration_test/swarm_local_review_test.dart` walks these screens on a simulator against an
-isolated local backend (fake SSO, in-memory MongoDB and Redis, no daemon) for review screenshots;
-it skips without `SWARM_LOCAL_BACKEND` and reads only 127.0.0.1.
+`integration_test/swarm_local_review_test.dart` walks the real shell's ways in (Settings ▸
+Experimental, the mark on Home, Find) and these screens on a simulator against an isolated local
+backend (fake SSO, in-memory MongoDB and Redis, no daemon), through the app's own Swarm path to a
+stand-in machine, for review screenshots. It skips without `SWARM_LOCAL_BACKEND` and reads only
+127.0.0.1.
 
 ## It is a VIEWER build, always
 

@@ -251,6 +251,16 @@ void main() {
         find.descendant(of: row, matching: find.text('Swarm')),
         findsOneWidget,
       );
+      expect(
+        find.descendant(
+          of: row,
+          matching: find.text(
+            'Open your Swarms from Home or Find. Still taking shape.',
+          ),
+        ),
+        findsOneWidget,
+        reason: 'both ways in, as the app has them',
+      );
       Switch toggle() => tester.widget<Switch>(
         find.descendant(of: row, matching: find.byType(Switch)),
       );
