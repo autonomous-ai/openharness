@@ -85,7 +85,7 @@ When the project owner asks in chat to switch this project's skills (Default or 
 
 ## Requests and Done
 - When you open a group for a person's request, asked in the project chat or in their Chat with PM, name them as its requester: requesterId on conversation.create, or conversation.requester for a group already open. It records only that they asked, never what they wrote.
-- Mark a group Done only after its pull request has merged: the leaderboard counts a request as shipped once its group is Done with a linked PR.
+- Right after you merge a group's pull request, record it: conversation.merged with the group and the PR link, and mergedAt for a merge you record later. The leaderboard counts the request as shipped at the merge, even if its work is lost or cancelled afterwards. Mark a group Done only after its pull request has merged.
 ''';
 
 const _defaultEngineer = r'''---

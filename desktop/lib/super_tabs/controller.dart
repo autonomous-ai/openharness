@@ -143,6 +143,10 @@ class SuperTabController extends ChangeNotifier {
 
   /// The Swarm's parts as last read: what the next read asks changes for, and what [snapshot] is built from.
   SuperTabParts? _parts;
+
+  /// The visibility epoch of the last read: it moves when who may read what changes (backend parts/commit.ts
+  /// `visibilityChanged`). Null before a read.
+  int? get visibilityEpoch => _parts?.epoch;
   String? error, operationError, operationErrorCode;
 
   /// One line for the sender after a command succeeds, from the backend: that a
@@ -583,11 +587,16 @@ class SuperTabController extends ChangeNotifier {
   /// Draws a [savedView] kept from an earlier visit while the first read is
   /// on its way, and holds its parts: the first read asks only for what
   /// changed since, and replaces it. With [SuperTabReading.confirmsSaved] it
-  /// only holds them, for that read to draw. One for another Swarm, one too old for
-  /// its cursor, one that no longer parses, or one after a read has landed,
-  /// draws nothing.
+  /// only holds them, for that read to draw. One for another Swarm, one too
+  /// old for its cursor, one that no longer parses, or one after a read has
+  /// landed or been refused, draws nothing.
   void drawSaved(Map<String, dynamic> view) {
-    if (!_policy.drawsSaved || snapshot != null || stateReads > 0) return;
+    if (!_policy.drawsSaved ||
+        accessRevoked ||
+        snapshot != null ||
+        stateReads > 0) {
+      return;
+    }
     try {
       if (view['format'] != superTabReadFormat) return;
       final savedAt = DateTime.fromMillisecondsSinceEpoch(
@@ -919,8 +928,10 @@ class SuperTabController extends ChangeNotifier {
     if (id == selectedId && !devicesSelected) return true;
     devicesSelected = false;
     _acted();
-    if (!snapshot!.isProjectLead(id)) {
-      final group = snapshot!.conversation(id)!;
+    final group = snapshot!.conversation(id)!;
+    // A workgroup is shown under its project, so its project opens. A Chat with
+    // PM has its own row under Direct messages and leaves projects as they were.
+    if (!snapshot!.isProjectLead(id) && pmChat(group.projectId)?.id != id) {
       expandedProjects.add(group.projectId);
       unawaited(loadDormant(group.projectId));
       if (group.closed) closedOpenProjects.add(group.projectId);

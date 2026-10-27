@@ -73,6 +73,9 @@ export function touchesFor(command: Command, actor: Actor, before: SuperTabState
       member(command.requesterId)
       break
     }
+    case 'conversation.merged':
+      leadCheck(projectOfGroup(command.conversationId)?.id)
+      break
     case 'conversation.requester':
       leadCheck(projectOfGroup(command.conversationId)?.id)
       member(command.personId ?? undefined)

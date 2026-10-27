@@ -37,8 +37,11 @@ class SuperTabDecision {
 }
 
 /// The reader's decisions in one Swarm: open and answered, read from the
-/// backend whenever the open count moves or the Swarm changes while one is
-/// open. One per controller, as the reader's tags are (notifications.dart).
+/// backend when the open ones change (their digest, or the count from a
+/// backend before it), when who may read what changes, and when the reader
+/// answers one. Not on every Swarm change: machine readings and messages change
+/// it every few seconds, and each read costs the backend a load. One per
+/// controller, as the reader's tags are (notifications.dart).
 class SuperTabDecisions extends ChangeNotifier {
   SuperTabDecisions._(this.controller) {
     controller.addListener(_changed);
@@ -56,7 +59,10 @@ class SuperTabDecisions extends ChangeNotifier {
   /// Decisions being answered: their buttons wait for the backend.
   final Set<String> answering = {};
   int? _count;
-  int _lastChangedAt = -1;
+  String? _digest;
+  int? _epoch;
+  // The Swarm change a failed read saw: the next one tries again.
+  int? _failedAt;
   Future<void>? _loading;
   bool _dirty = false;
 
@@ -72,13 +78,22 @@ class SuperTabDecisions extends ChangeNotifier {
   void _changed() {
     final snapshot = controller.snapshot;
     if (snapshot == null) return;
-    final count = snapshot.decisionsWaiting;
-    final moved = count != _count;
-    if (!moved && controller.lastChangedAt == _lastChangedAt) return;
-    _lastChangedAt = controller.lastChangedAt;
-    _count = count;
-    // Nothing open and nothing just answered: an idle Swarm reads nothing.
-    if (count == 0 && !moved) return;
+    final epoch = controller.visibilityEpoch;
+    if (epoch != null && epoch != _epoch) {
+      // Who may read what changed: nothing read before shows until read again
+      // (review of #1820), even while the count stays.
+      if (_epoch != null && (open.isNotEmpty || answered.isNotEmpty)) {
+        open = answered = const [];
+        notifyListeners();
+      }
+      _epoch = epoch;
+    } else if (snapshot.decisionsWaiting == _count &&
+        snapshot.decisionsDigest == _digest &&
+        (_failedAt == null || _failedAt == controller.lastChangedAt)) {
+      return;
+    }
+    _count = snapshot.decisionsWaiting;
+    _digest = snapshot.decisionsDigest;
     unawaited(load());
   }
 
@@ -112,16 +127,22 @@ class SuperTabDecisions extends ChangeNotifier {
   }
 
   Future<void> _read() async {
+    final epoch = _epoch;
     try {
       final [nextOpen, nextAnswered] = await Future.wait([
         _list('open'),
         _list('answered'),
       ]);
+      // Read before who may read what changed: the read asked again since
+      // replaces it.
+      if (epoch != _epoch) return;
       open = nextOpen;
       answered = nextAnswered;
       error = null;
+      _failedAt = null;
     } catch (_) {
       error = 'Could not load decisions. Try again.';
+      _failedAt = controller.lastChangedAt;
     }
     notifyListeners();
   }

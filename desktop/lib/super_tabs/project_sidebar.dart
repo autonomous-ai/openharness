@@ -6,7 +6,6 @@ import '../core/machine_resources.dart';
 import '../shared/theme/app_icons.dart';
 import '../shared/theme/app_theme.dart' as grid;
 import '../shared/theme/appearance_prefs_store.dart';
-import '../shared/widgets/app_icon_button.dart';
 import '../state/app_state.dart';
 import '../terminal/terminal_theme_store.dart';
 import '../widgets/desktop_chrome.dart';
@@ -156,7 +155,8 @@ class ProjectSidebar extends StatelessWidget {
       ? onOpenPmChat!(projectId)
       : unawaited(controller.openPmChat(projectId));
 
-  /// Project names open their PM chat; only the trailing control expands them.
+  /// A project row opens the project's chat and shows its workgroups; clicked
+  /// again while open, it hides them. It has no chevron (Dee, 2026-10-27).
   Widget _row(
     SuperTabConversation group, {
     SuperTabProject? project,
@@ -196,7 +196,14 @@ class ProjectSidebar extends StatelessWidget {
         clipBehavior: Clip.antiAlias,
         child: InkWell(
           key: ValueKey(key ?? 'super-group-${group.id}'),
-          onTap: () => onSelect(group.id),
+          onTap: project == null
+              ? () => onSelect(group.id)
+              : () {
+                  if (selected || !expanded) {
+                    controller.toggleProject(project.id);
+                  }
+                  if (!selected) onSelect(group.id);
+                },
           hoverColor: grid.AppSurface.hoverFill,
           focusColor: grid.AppSurface.hoverFill,
           borderRadius: BorderRadius.circular(DesktopChrome.rowRadius),
@@ -211,6 +218,7 @@ class ProjectSidebar extends StatelessWidget {
                 child: Semantics(
                   label: project?.isPrivate == true ? 'Private project' : null,
                   selected: selected,
+                  expanded: project == null ? null : expanded,
                   child: Tooltip(
                     message:
                         label ??
@@ -288,23 +296,6 @@ class ProjectSidebar extends StatelessWidget {
                       : null,
                 ),
               ),
-              if (project != null)
-                Semantics(
-                  expanded: expanded,
-                  child: AppIconButton(
-                    key: ValueKey('super-project-expand-${project.id}'),
-                    icon: expanded
-                        ? AppIcons.chevronDown
-                        : AppIcons.chevronRight,
-                    color: DesktopChrome.muted,
-                    hoverFill: Colors.transparent,
-                    tooltip:
-                        '${expanded ? 'Collapse' : 'Expand'} ${project.name}',
-                    onPressed: () => controller.toggleProject(project.id),
-                  ),
-                )
-              else
-                const SizedBox(width: _iconColumn),
             ],
           ),
         ),

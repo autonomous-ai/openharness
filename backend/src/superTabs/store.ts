@@ -1338,10 +1338,11 @@ export class SuperTabStore {
   }
 
   /** The caller's decisions in this Swarm, newest first: a person's asked of them, an agent's asked by it (a Lead's also
-   *  those asked in its project), still open or answered. */
+   *  those asked in its project), still open or answered. A light load: the quiet conversations its decisions are in are
+   *  read with them (decisions.ts conversationsOf), never the Swarm's whole history, read again on every change. */
   async decisions(user: AuthUser, tabId: string, state: 'open' | 'answered', asAgentId?: string) {
     return transaction(this.db, async tx => {
-      const { state: tab } = await this.load(tx, user, tabId, { allGroups: true })
+      const { state: tab } = await this.load(tx, user, tabId)
       const actor = await this.actor(tx, user, tab, asAgentId)
       author(tab, actor)
       return { decisions: await listDecisions(tx, tabId, tab, actor, state === 'open') }

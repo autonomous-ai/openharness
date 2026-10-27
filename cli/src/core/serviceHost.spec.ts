@@ -301,6 +301,26 @@ describe('hosting services so one that fails cannot take the core down', () => {
       expect(h.lines.at(-1)).toBe('[services] catalog switched off after 1 failures in 60s · it stays off until the daemon restarts')
     })
 
+    it('leaves a service the computer switched off off: its requests answered SERVICE_UNAVAILABLE, its port empty, nothing started', () => {
+      const h = host()
+      h.ports.search = new FakeSearch() as unknown as SearchPort
+      h.services.leaveOff('search', ['session_search'])
+      h.services.leaveOff('catalog', ['dsh_list'])
+      const { got, reply } = collect()
+      h.services.route('session_search', {}, ASKER, reply)
+      h.services.route('dsh_list', {}, ASKER, reply)
+      expect(got).toEqual([
+        { error: 'SERVICE_UNAVAILABLE', service: 'search', retryable: false },
+        { error: 'SERVICE_UNAVAILABLE', service: 'catalog', retryable: false },
+      ])
+      expect(h.ports.search).toBeNull()
+      expect(h.services.isOff('search')).toBe(true)
+      expect(h.lines).toEqual(['[services] search is turned off on this computer', '[services] catalog is turned off on this computer'])
+      // Its types stay its own: another service declaring them is the mistake it always was.
+      h.services.serve('other', () => ({ dsh_list: () => ({}) }), fakeCore(), ['dsh_list'])
+      expect(h.lines.at(-1)).toBe('[services] other did not start · dsh_list is answered by catalog · the core runs without it')
+    })
+
     it('answers a handler that throws, rejects or replies with nothing SERVICE_FAILED, and counts each against its service', async () => {
       const h = host({ maxFailures: 3 })
       h.services.serve('catalog', () => ({
