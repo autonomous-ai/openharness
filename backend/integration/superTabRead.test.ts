@@ -896,6 +896,19 @@ describe('escalation and the device hook (collaboration protocol)', () => {
     expect(told[0]!.text).toContain('asked in “Done work” 2 hours ago')
   })
 
+  it('does not remind a person who can no longer read the conversation, and still tells the Lead', async () => {
+    const s = await scene(), t = timed()
+    await keepWorker(s)
+    const asked = await t.store.execute(owner, s.tabId, { operationId: randomUUID(), command: { type: 'handsOn.ask', conversationId: s.privateId,
+      personId: peer.sub, ...plugIn } }, s.lead)
+    await writeGroup(s.tabId, s.privateId, Date.now(), group => { group.audience = { people: [] } })
+    t.heard.length = 0
+    t.later(121 * MINUTE)
+    await t.store.deliveries(owner, s.tabId, s.lead)
+    expect(t.heard).toEqual([])
+    expect((await escalations(s.tabId)).map(m => (m.source as { escalated: string }).escalated)).toEqual([asked.result.requestId])
+  })
+
   it('never fails a write or a sweep on a failing device hook', async () => {
     const s = await scene()
     await keepWorker(s)
