@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/cupertino.dart' show CupertinoPageRoute;
 import 'package:flutter/material.dart';
 
 import 'package:harness_mobile/state/app_state.dart';
@@ -272,6 +273,7 @@ class _PhoneShellState extends State<PhoneShell> with WidgetsBindingObserver {
             swarmId: target.swarmId,
             conversationId: target.conversationId,
           ),
+          listensForItself: true,
         ),
       ),
     );
@@ -394,6 +396,18 @@ class _PhoneShellState extends State<PhoneShell> with WidgetsBindingObserver {
     await confirmExitApp(context);
   }
 
+  /// The pages on the stack that count on being rebuilt from here — see [_LeansOnShell].
+  final _leaning = _LeansOnShell();
+
+  /// The page stack, made once and handed through every rebuild of the shell untouched, so that
+  /// nothing on the stack is rebuilt from here unless a page there needs it ([build]).
+  ///
+  /// ⚠️ **Not made afresh in [build], and it used to be.** The shell rebuilds itself whenever a
+  /// push or pop changes whether it can go back ([_syncCanPop]) — that is, on every push, during
+  /// the push's own animation. A fresh stack each time told every route on it that the world had
+  /// changed, so opening a project or a chat built Swarm Home again under the page sliding in.
+  late final Widget _stack = _pages();
+
   /// The page stack. A fresh widget each call — what makes the [Navigator] tell every route on it
   /// that the world may have changed (`Route.changedExternalState`), and so rebuild every page.
   // Under [SwarmScope], so every page on the stack can reach the account's Swarm.
@@ -409,7 +423,12 @@ class _PhoneShellState extends State<PhoneShell> with WidgetsBindingObserver {
         // trips "A HeroController can not be shared by multiple Navigators" — which
         // reads like a sharing bug and is really a double-subscription by one
         // navigator.
-        onGenerateRoute: (_) => MaterialPageRoute<void>(
+        observers: [_leaning],
+        // ⚠️ **The same kind of route as every page pushed over it ([phoneRoute]).** The root was
+        // a `MaterialPageRoute` under Cupertino pages, and the two hand their transition to each
+        // other: each push and pop changed the shape of the tree around the root's page, so
+        // Swarm Home was taken out and put back — and built again — as a project or chat slid in.
+        onGenerateRoute: (_) => CupertinoPageRoute<void>(
           builder: (_) => SwarmHomeRoot(
             choice: _home,
             harness: AgentHome(
@@ -430,9 +449,6 @@ class _PhoneShellState extends State<PhoneShell> with WidgetsBindingObserver {
 
   @override
   Widget build(BuildContext context) {
-    // Made once per build of the shell, and handed through the [ListenableBuilder] below — see the
-    // note there.
-    final pages = _pages();
     return PhoneShellScope(
       onMachineLinked: _followLinkedMachine,
       onOpenAgent: _openAgentAtHome,
@@ -467,10 +483,13 @@ class _PhoneShellState extends State<PhoneShell> with WidgetsBindingObserver {
             // burst. The home screen listens to the notifier for itself ([AgentHome]), so at the
             // root the stack is handed through untouched. A page PUSHED over it may not listen —
             // it may read the notifier in `build` and count on being rebuilt — so while one is up
-            // the stack is rebuilt on every tick exactly as before.
+            // the stack is rebuilt on every tick exactly as before, unless it was pushed as one
+            // that listens for itself (Swarm's project and chat pages, [phoneRoute]). Opening a
+            // project or a chat then rebuilds nothing under it: on Tony's iPhone 14 those pushes
+            // were the slowest frames of the app (20–42 ms of layout and paint, 2026-10-27).
             body: ListenableBuilder(
               listenable: widget.notifier,
-              child: pages,
+              child: _stack,
               builder: (context, pages) => Column(
                 children: [
                   // A device this phone had never trusted joined the account (device key log).
@@ -495,9 +514,7 @@ class _PhoneShellState extends State<PhoneShell> with WidgetsBindingObserver {
                       builder: (context) => MediaQuery.removePadding(
                         context: context,
                         removeTop: NewDeviceBanner.showing(widget.notifier),
-                        child: (_navigator.currentState?.canPop() ?? false)
-                            ? _pages()
-                            : pages!,
+                        child: _leaning.any ? _pages() : pages!,
                       ),
                     ),
                   ),
@@ -508,5 +525,42 @@ class _PhoneShellState extends State<PhoneShell> with WidgetsBindingObserver {
         ),
       ),
     );
+  }
+}
+
+/// The pages pushed over the stack's root that may read the app in `build` without listening to
+/// it, and so count on the shell rebuilding the stack on every tick: every pushed page but those
+/// that listen for themselves ([phoneRouteListensForItself]). The root listens for itself.
+///
+/// Told by the [Navigator] of every route that comes and goes. Read by the shell on each tick; it
+/// rebuilds nothing by itself.
+class _LeansOnShell extends NavigatorObserver {
+  final _pushed = <Route<Object?>>{};
+
+  /// A page that needs the stack rebuilt from above is on it.
+  bool get any => _pushed.isNotEmpty;
+
+  void _add(Route<Object?>? route) {
+    if (route == null || route.isFirst) return;
+    if (phoneRouteListensForItself(route)) return;
+    _pushed.add(route);
+  }
+
+  @override
+  void didPush(Route<Object?> route, Route<Object?>? previousRoute) =>
+      _add(route);
+
+  @override
+  void didPop(Route<Object?> route, Route<Object?>? previousRoute) =>
+      _pushed.remove(route);
+
+  @override
+  void didRemove(Route<Object?> route, Route<Object?>? previousRoute) =>
+      _pushed.remove(route);
+
+  @override
+  void didReplace({Route<Object?>? newRoute, Route<Object?>? oldRoute}) {
+    _pushed.remove(oldRoute);
+    _add(newRoute);
   }
 }

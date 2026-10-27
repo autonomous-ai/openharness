@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
+import 'package:harness_mobile/phone/out_of_sight.dart';
 import 'package:harness_mobile/phone/phone_navigation.dart';
 import 'package:harness_mobile/phone/phone_shell_scope.dart';
 import 'package:harness_mobile/phone/tty.dart';
@@ -58,19 +59,28 @@ class SwarmPage extends StatefulWidget {
 class _SwarmPageState extends State<SwarmPage> {
   SwarmSession? _session;
 
+  /// Kept out of sight under Harness ([OutOfSight]), as it was left: it is no
+  /// Swarm screen meanwhile — a notice still tells what arrives — and draws
+  /// nothing new. Shown again, it reads the Swarms as on any return to Home.
+  bool _hidden = false;
+
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
     final session = SwarmScope.of(context);
-    if (session == _session) return;
-    _session?.leave();
-    _session = session?..enter();
-    if (session != null) unawaited(session.inbox.refresh());
+    final hidden = OutOfSight.of(context);
+    if (session == _session && hidden == _hidden) return;
+    if (!_hidden) _session?.leave();
+    _session = session;
+    _hidden = hidden;
+    if (hidden || session == null) return;
+    session.enter();
+    unawaited(session.inbox.refresh());
   }
 
   @override
   void dispose() {
-    _session?.leave();
+    if (!_hidden) _session?.leave();
     super.dispose();
   }
 
@@ -79,6 +89,7 @@ class _SwarmPageState extends State<SwarmPage> {
         Navigator.of(context).push(
           phoneRoute(
             (_) => SwarmProjectPage(swarmId: swarmId, projectId: projectId),
+            listensForItself: true,
           ),
         ),
       );
@@ -116,8 +127,9 @@ class _SwarmPageState extends State<SwarmPage> {
     return Scaffold(
       backgroundColor: tty.ground,
       // Home's drawer; a Swarm page pushed over another page has its back
-      // button instead.
-      drawer: pushed
+      // button instead. None out of sight: one closing as Harness took the
+      // screen would stop there, its animation off, and be found half open.
+      drawer: pushed || _hidden
           ? null
           : ListenableBuilder(
               listenable: Listenable.merge([?session, ?session?.inbox]),
@@ -149,11 +161,11 @@ class _SwarmPageState extends State<SwarmPage> {
             Expanded(
               child: session == null
                   ? const _Unavailable()
-                  : ListenableBuilder(
+                  : ListenWhileInSight(
                       listenable: Listenable.merge([session, session.inbox]),
                       // Before there is a Swarm to show, a start screen in
                       // place of the body, under the same top bar.
-                      builder: (context, _) =>
+                      builder: (context) =>
                           swarmStartView(context, session) ??
                           RefreshIndicator(
                             onRefresh: session.inbox.refresh,

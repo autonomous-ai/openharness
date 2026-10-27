@@ -31,6 +31,7 @@ void openSwarmConversation(
         swarmId: swarmId,
         conversationId: conversationId,
       ),
+      listensForItself: true,
     ),
   ),
 );

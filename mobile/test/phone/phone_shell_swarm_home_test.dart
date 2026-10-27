@@ -95,12 +95,17 @@ void main() {
   });
 
   testWidgets('Harness in the drawer puts the terminal at the root; back goes '
-      'to Swarm Home and keeps the terminal', (tester) async {
+      'to Swarm Home; each keeps the other out of sight', (tester) async {
     await open(tester);
 
     await drawerTo(tester, 'swarm-drawer-harness');
     expect(find.byType(AgentHome), findsOneWidget);
-    expect(find.byType(SwarmPage, skipOffstage: false), findsNothing);
+    expect(find.byType(SwarmPage), findsNothing);
+    expect(
+      find.byType(SwarmPage, skipOffstage: false),
+      findsOneWidget,
+      reason: 'Home waits out of sight, as it was left',
+    );
 
     await tester.binding.handlePopRoute();
     await frames(tester);
@@ -176,6 +181,6 @@ void main() {
     await frames(tester);
 
     expect(find.byType(AgentHome), findsOneWidget);
-    expect(find.byType(SwarmPage, skipOffstage: false), findsNothing);
+    expect(find.byType(SwarmPage), findsNothing);
   });
 }
