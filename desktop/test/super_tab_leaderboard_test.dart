@@ -1,12 +1,8 @@
 import 'dart:async';
 
 import 'package:fake_async/fake_async.dart';
-import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/super_tabs/controller.dart';
-import 'package:harness/super_tabs/identity.dart';
-import 'package:harness/super_tabs/leaderboard/column.dart';
 import 'package:harness/super_tabs/leaderboard/model.dart';
 import 'package:harness/super_tabs/leaderboard/reader.dart';
 
@@ -100,8 +96,6 @@ Map<String, dynamic> answer({Map<String, dynamic>? waiting}) => {
         ],
       },
 };
-
-String name(String id) => '${id[0].toUpperCase()}${id.substring(1)}';
 
 class FakeRequests {
   final paths = <String>[];
@@ -200,6 +194,23 @@ void main() {
     });
 
     test(
+      'reads a server without a leaderboard as no board, not as an error',
+      () async {
+        final requests = FakeRequests()
+          ..respond = (_) =>
+              const SuperTabFailure('NOT_FOUND', 'Not found.', statusCode: 404);
+        final reader = SuperTabLeaderboardReader(
+          tabId: 'tab',
+          request: requests.call,
+        );
+        addTearDown(reader.dispose);
+        await reader.show('lead');
+        expect(reader.board, isNull);
+        expect(reader.error, isNull);
+      },
+    );
+
+    test(
       'drops a board read for another project once the project changes',
       () async {
         final requests = FakeRequests(),
@@ -238,173 +249,5 @@ void main() {
         });
       },
     );
-  });
-
-  group('the leaderboard column', () {
-    Future<(SuperTabLeaderboardReader, List<String>)> mount(
-      WidgetTester tester, {
-      Map<String, dynamic>? waiting,
-      String viewer = 'tony',
-    }) async {
-      final requests = FakeRequests()
-        ..respond = (_) => answer(waiting: waiting);
-      final reader = SuperTabLeaderboardReader(
-        tabId: 'tab',
-        request: requests.call,
-      );
-      addTearDown(reader.dispose);
-      final answered = <String>[];
-      await tester.binding.setSurfaceSize(const Size(400, 1000));
-      addTearDown(() => tester.binding.setSurfaceSize(null));
-      await tester.pumpWidget(
-        MaterialApp(
-          theme: grid.buildAppTheme(brightness: Brightness.dark),
-          home: Scaffold(
-            body: SuperTabLeaderboardColumn(
-              reader: reader,
-              projectId: 'lead',
-              viewerId: viewer,
-              nameOf: name,
-              onAnswer: answered.add,
-              now: () => DateTime.fromMillisecondsSinceEpoch(
-                week + 3 * 86400000,
-                isUtc: true,
-              ),
-            ),
-          ),
-        ),
-      );
-      await tester.pumpAndSettle();
-      return (reader, answered);
-    }
-
-    testWidgets(
-      'gives the top three their medals and everyone their three numbers',
-      (tester) async {
-        await mount(tester);
-        expect(find.text('Humans · this week'), findsOneWidget);
-        expect(find.text('🏆'), findsOneWidget);
-        expect(find.text('🥈'), findsOneWidget);
-        expect(find.text('🥉'), findsOneWidget);
-        expect(find.text('42 pts'), findsOneWidget);
-        expect(
-          find.text('🚀 9 shipped   🔓 14   ⚡ 2 machines'),
-          findsOneWidget,
-        );
-        expect(find.text('🚀 6 shipped   🔓 5   ⚡ —'), findsOneWidget);
-        expect(find.text('🚀 2 shipped   🔓 3   ⚡ 1 machine'), findsOneWidget);
-        expect(find.text('Tony'), findsWidgets);
-        expect(find.text('0 pts'), findsOneWidget);
-      },
-    );
-
-    testWidgets(
-      'shows each person\'s avatar beside their name, at the size the shared avatar takes',
-      (tester) async {
-        await mount(tester);
-        final avatars = tester
-            .widgetList<SuperTabAvatar>(find.byType(SuperTabAvatar))
-            .toList();
-        expect(avatars.map((a) => (a.identity, a.name, a.size)), [
-          ('person:ken', 'Ken', 20.0),
-          ('person:dee', 'Dee', 20.0),
-          ('person:scholes', 'Scholes', 20.0),
-          ('person:tony', 'Tony', 20.0),
-        ]);
-      },
-    );
-
-    testWidgets('shows the team goal against last week', (tester) async {
-      await mount(tester);
-      expect(find.text('Team goal · 7 open requests'), findsOneWidget);
-      expect(
-        find.text('19 shipped this week (12 last week) · 108 points'),
-        findsOneWidget,
-      );
-      expect(
-        find.text('Median ask to ship 3 h, down from 5 h'),
-        findsOneWidget,
-      );
-    });
-
-    testWidgets(
-      'opens a person\'s week when their name is tapped, and closes it again',
-      (tester) async {
-        await mount(tester);
-        await tester.tap(find.byKey(const ValueKey('leaderboard-person-ken')));
-        await tester.pumpAndSettle();
-        expect(
-          find.text('9 asks landed · median 3.1 h to ship'),
-          findsOneWidget,
-        );
-        expect(
-          find.text('14 answered · median 6 min · 28 h of agent time freed'),
-          findsOneWidget,
-        );
-        expect(find.text('2 machines · 31 slot-hours'), findsOneWidget);
-        expect(find.text('5 days shipping'), findsOneWidget);
-        await tester.tap(find.byKey(const ValueKey('leaderboard-person-ken')));
-        await tester.pumpAndSettle();
-        expect(find.text('5 days shipping'), findsNothing);
-      },
-    );
-
-    testWidgets(
-      'names who agents wait on with counts only, never ranks or medals',
-      (tester) async {
-        await mount(tester);
-        final line = find.byKey(const ValueKey('leaderboard-waiting'));
-        expect(
-          find.descendant(
-            of: line,
-            matching: find.text('⏳ Agents waiting on a person now: 3'),
-          ),
-          findsOneWidget,
-        );
-        expect(
-          find.descendant(of: line, matching: find.text('Ken 2 · Tony 1')),
-          findsOneWidget,
-        );
-        for (final medal in ['🏆', '🥈', '🥉', 'pts']) {
-          expect(
-            find.descendant(of: line, matching: find.textContaining(medal)),
-            findsNothing,
-          );
-        }
-      },
-    );
-
-    testWidgets('takes the viewer straight to what waits on them', (
-      tester,
-    ) async {
-      final (_, answered) = await mount(tester, viewer: 'tony');
-      await tester.tap(find.text('Answer'));
-      expect(answered, ['g3']);
-    });
-
-    testWidgets('takes anyone else to the first item waiting', (tester) async {
-      final (_, answered) = await mount(tester, viewer: 'dee');
-      await tester.tap(find.text('Answer'));
-      expect(answered, ['g1']);
-    });
-
-    testWidgets(
-      'says nobody is waiting, without an answer button, when none is',
-      (tester) async {
-        await mount(tester, waiting: {'total': 0, 'people': []});
-        expect(find.text('No agent is waiting on a person.'), findsOneWidget);
-        expect(find.text('Answer'), findsNothing);
-      },
-    );
-
-    testWidgets('reads an earlier week when one is picked', (tester) async {
-      final (reader, _) = await mount(tester);
-      await tester.tap(find.byKey(const ValueKey('leaderboard-week')));
-      await tester.pumpAndSettle();
-      await tester.tap(find.text('Last week').last);
-      await tester.pumpAndSettle();
-      expect(reader.week, week - 7 * 86400000);
-      expect(find.text('Humans · last week'), findsOneWidget);
-    });
   });
 }

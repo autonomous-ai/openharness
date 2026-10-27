@@ -106,7 +106,7 @@ void main() {
       expect(_row('mac'), findsOneWidget);
       expect(_row('mac-team'), findsNothing);
       expect(find.text('MacBook Pro · Team'), findsNothing);
-      await tester.tap(find.byKey(const ValueKey('super-machine-toggle-mac')));
+      await tester.tap(find.byKey(const ValueKey('super-machine-mac')));
       await tester.pumpAndSettle();
       expect(
         find.byKey(const ValueKey('super-machine-agent-mac-a1')),
@@ -145,7 +145,7 @@ void main() {
       expect(_row('mac-team-old'), findsNothing);
       expect(_state('mac', 'live'), findsOneWidget);
       expect(c.snapshot!.teamPoolOf('mac')!['machineId'], 'mac-team-new');
-      await tester.tap(find.byKey(const ValueKey('super-machine-toggle-mac')));
+      await tester.tap(find.byKey(const ValueKey('super-machine-mac')));
       await tester.pumpAndSettle();
       for (final agent in ['a1', 'a2']) {
         expect(
