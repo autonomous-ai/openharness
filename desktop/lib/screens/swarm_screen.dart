@@ -6804,8 +6804,11 @@ class _SwarmScreenState extends State<SwarmScreen> {
       return;
     }
     if (choice.destination.isModel) return;
-    if (_search!.setupLayout &&
-        (choice.destination.isMachine || choice.destination.isAccountDevice)) {
+    // A machine, a device or Add machine is chosen to use its preview's actions: the click lands on
+    // the row it clicked, and the keys go to those actions. Focusing the actions alone left the
+    // row selected before it in charge, so clicking Add machine after a machine did nothing
+    // (2026-10-15). A phone shows the same row's page (swarmSearchRowSelectsOnly).
+    if (swarmSearchRowSelectsOnly(_search!, choice.destination)) {
       final index = _search!.rows.indexWhere(
         (row) => row.id == choice.destination.id,
       );
@@ -6834,21 +6837,6 @@ class _SwarmScreenState extends State<SwarmScreen> {
       return;
     }
     if (choice.destination.isCreate) {
-      if (_search!.isMachineMode) {
-        // A click lands on the row it clicked, as a machine row's does: focusing the actions alone
-        // left the machine selected before it in charge, so clicking Add machine after a machine
-        // did nothing (2026-10-15).
-        final index = _search!.rows.indexWhere(
-          (row) => row.id == choice.destination.id,
-        );
-        if (index >= 0) _search!.move(index - _search!.cursor);
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          if (mounted && _search?.selected?.id == choice.destination.id) {
-            _previewControls.invoke('picker.focus_actions');
-          }
-        });
-        return;
-      }
       if (_search!.isModelMode) {
         _previewControls.invoke('picker.resource_add_api');
         return;

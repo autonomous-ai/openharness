@@ -33,7 +33,7 @@ import { accrueLent } from './leaderboard/lent.js'
 import { mayDrive, TERMINAL_ANSWER_MS, TERMINAL_EXPIRY_MS, TERMINAL_PICKUP_MS, type TerminalEffect } from './terminal.js'
 import { closeAssignment, closeUnassignedStart, readDecision, recentRoutes, timedDecisionOf, writeRouteEffects } from './routeDecisions.js'
 import { listMentions, markDone, mentionsWaiting, readMention, resolveByReply, writeMentions } from './mentions.js'
-import { answerable, listDecisions, readAskedDecision, recordAnswer, writeDecisions } from './decisions.js'
+import { answerable, listDecisions, readAskedDecision, recordAnswer, waitingInProject, writeDecisions } from './decisions.js'
 import { DEFAULT_ROUTING_POLICY, effectivePolicy, routingPolicySchema, type RoutingPolicy } from './routingPolicy.js'
 import { authenticatedEmail, authorizeSwarmJoin, configureSharing, joinSwarmSchema, requireSharingOwner,
   saveSharingSchema, sharingDetails, type JoinSwarm, type SaveSharing } from './sharing.js'
@@ -1579,10 +1579,14 @@ export class SuperTabStore {
       // Work finished since the last digest and archived or asleep since still shipped, but ordinary loads leave it out
       // (#1757 review, 4): a due digest loads it.
       const led = ledProject(loaded.state, agentId)
+      let asked: Array<{ conversationId: string; personId: string; count: number }> = []
       if (led && digestDue(led, this.now())) {
         const finished = await tx.swarmGroup.findMany({ where: { tabId, deleted: false, dormant: true, lastActivityAt: { gte: new Date(digestSince(led, this.now())) },
           OR: [{ projectId: led.id }, ...led.id === 'lead' ? [{ projectId: null }] : []] }, select: { key: true } })
-        if (finished.length) loaded = await this.ensure(tx, loaded, { groupIds: finished.map(g => g.key) })
+        // A decision waits in its conversation even once that conversation went quiet.
+        asked = await waitingInProject(tx, tabId, led.id)
+        const groupIds = [...new Set([...finished.map(g => g.key), ...asked.map(d => d.conversationId)])]
+        if (groupIds.length) loaded = await this.ensure(tx, loaded, { groupIds })
       }
       const state = structuredClone(loaded.state)
       author(state, await this.actor(tx, user, state, agentId), true)
@@ -1606,7 +1610,7 @@ export class SuperTabStore {
         }
       }
       // The morning digest is due once a day; recording it as sent is part of this same write, so it is sent once.
-      const digest = digestRequest(state, target, this.now())
+      const digest = digestRequest(state, target, this.now(), asked)
       if (digest) {
         const project = projectOf(state, digest.source!.projectId as string)
         project.digest = { ...project.digest!, lastOn: digest.source!.on as string, lastAt: this.now() }
