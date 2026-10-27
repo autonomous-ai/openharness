@@ -147,6 +147,82 @@ void main() {
     expect(i.error, isNull);
   });
 
+  // Review of #1802 at bd73842: after an empty Swarm list, an invitations
+  // read that failed was taken for "no invitation", and the person was told
+  // to start a Swarm rather than that Join could not be loaded.
+  group('invitations that cannot be read', () {
+    final failures = <String, Object? Function(Map<String, dynamic>?)>{
+      'refused': (_) => throw const SuperTabFailure(
+        'INTERNAL',
+        'Something went wrong.',
+        statusCode: 500,
+      ),
+      'lost on the way': (_) => throw Exception('socket closed'),
+      'not a list': (_) => {'invitations': <Object>[]},
+      'a row without its Swarm': (_) => [
+        {'name': 'Design Lab', 'inviteId': 'invite-t-lab', 'role': 'viewer'},
+      ],
+    };
+    for (final MapEntry(key: how, value: fails) in failures.entries) {
+      test('on the first read ($how): not "No Swarm yet", but invitations '
+          'not checked', () async {
+        final fake = backend();
+        fake.routes['/api/super-tabs/invitations'] = fails;
+        final i = inbox(fake);
+
+        await i.refresh();
+
+        expect(i.loaded, isTrue);
+        expect(i.invitations, isEmpty);
+        expect(i.invitationsFailed, isTrue);
+        expect(swarmStart(i, const [mac]), SwarmStart.invitesFailed);
+      });
+    }
+
+    test('on a later read: the invitation already shown stays', () async {
+      final fake = backend(invites: [invite('t-lab', 'Design Lab')]);
+      final i = inbox(fake);
+      await i.refresh();
+      expect(swarmStart(i, const [mac]), SwarmStart.invited);
+
+      fake.routes['/api/super-tabs/invitations'] = failures['refused']!;
+      await i.refresh();
+
+      expect(i.invitations.single.name, 'Design Lab');
+      expect(i.invitationsFailed, isTrue);
+      expect(swarmStart(i, const [mac]), SwarmStart.invited);
+    });
+
+    test('for want of a computer: read again soon', () async {
+      final fake = backend();
+      fake.routes['/api/super-tabs/invitations'] = (_) =>
+          throw const SuperTabFailure(
+            'MACHINE_UNAVAILABLE',
+            'Connect one of your computers to open Swarm.',
+          );
+      final i = inbox(fake);
+
+      await i.refresh();
+
+      expect(i.noComputer, isTrue, reason: 'the quick retry is on');
+      expect(swarmStart(i, const [mac]), SwarmStart.invitesFailed);
+    });
+
+    test('read again: what they say, and the failure is gone', () async {
+      final fake = backend(invites: [invite('t-lab', 'Design Lab')]);
+      final read = fake.routes['/api/super-tabs/invitations']!;
+      fake.routes['/api/super-tabs/invitations'] = failures['refused']!;
+      final i = inbox(fake);
+      await i.refresh();
+
+      fake.routes['/api/super-tabs/invitations'] = read;
+      await i.refresh();
+
+      expect(i.invitationsFailed, isFalse);
+      expect(swarmStart(i, const [mac]), SwarmStart.invited);
+    });
+  });
+
   test('Join accepts the invitation once, under one receipt, then the Swarm '
       'is read', () async {
     var joined = false;

@@ -76,11 +76,15 @@ void main() {
     return fake;
   }
 
-  Map<String, dynamic> invite(String tabId, String name) => {
+  Map<String, dynamic> invite(
+    String tabId,
+    String name, {
+    String role = 'collaborator',
+  }) => {
     'tabId': tabId,
     'name': name,
     'inviteId': 'invite-$tabId',
-    'role': 'collaborator',
+    'role': role,
     'expiresAt': 1893456000000,
   };
 
@@ -250,7 +254,9 @@ void main() {
     expect(find.text('No Swarm yet'), findsOneWidget);
   });
 
-  testWidgets('invited: the Swarm by name alone, and Join', (tester) async {
+  testWidgets('invited: the Swarm by name, the role offered, and Join', (
+    tester,
+  ) async {
     final fake = backend(invites: [invite('t-lab', 'Design Lab')]);
     final accepted = Completer<Object?>();
     var joined = false;
@@ -272,6 +278,7 @@ void main() {
 
     expect(find.text("You're invited to"), findsOneWidget);
     expect(find.text('Design Lab'), findsOneWidget);
+    expect(find.text('You can collaborate'), findsOneWidget);
     expect(primary(), findsOneWidget);
 
     await tester.tap(find.text('Join Design Lab'));
@@ -283,6 +290,53 @@ void main() {
 
     expect(fake.commands.single['type'], 'invite.accept');
     expect(find.text('Your Swarms'), findsOneWidget);
+  });
+
+  // Review of #1802 at bd73842: the ruling was the Swarm's name and the role.
+  testWidgets('invited to view: says so; a role it does not know: says '
+      'nothing of it', (tester) async {
+    final fake = backend(
+      invites: [invite('t-lab', 'Design Lab', role: 'viewer')],
+    );
+    await pump(tester, fake, FakeComputers([mac]));
+
+    expect(find.text('You can view'), findsOneWidget);
+    expect(find.text('You can collaborate'), findsNothing);
+
+    await tester.pumpWidget(const SizedBox());
+    await pump(
+      tester,
+      backend(invites: [invite('t-lab', 'Design Lab', role: 'auditor')]),
+      FakeComputers([mac]),
+    );
+
+    expect(find.text('Design Lab'), findsOneWidget);
+    expect(find.textContaining('You can'), findsNothing);
+  });
+
+  // Review of #1802 at bd73842: invitations that could not be read showed
+  // "No Swarm yet", as if there were none.
+  testWidgets('invitations that could not be read: says so, and Try again '
+      'reads them again', (tester) async {
+    final fake = backend(invites: [invite('t-lab', 'Design Lab')]);
+    final read = fake.routes['/api/super-tabs/invitations']!;
+    fake.routes['/api/super-tabs/invitations'] = (_) =>
+        throw const SuperTabFailure(
+          'INTERNAL',
+          'Something went wrong.',
+          statusCode: 500,
+        );
+    await pump(tester, fake, FakeComputers([mac]));
+
+    expect(find.text("Couldn't check invitations"), findsOneWidget);
+    expect(find.text('No Swarm yet'), findsNothing);
+    expect(primary(), findsOneWidget);
+
+    fake.routes['/api/super-tabs/invitations'] = read;
+    await tester.tap(find.text('Try again'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Join Design Lab'), findsOneWidget);
   });
 
   testWidgets('a long Swarm name wraps, and is never cut', (tester) async {

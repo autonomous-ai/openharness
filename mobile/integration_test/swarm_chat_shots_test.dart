@@ -261,6 +261,17 @@ void main() {
             },
           ],
       ),
+      (
+        'invites-failed',
+        [(name: 'MacBook Pro', away: false)],
+        () => _empty()
+          ..routes['/api/super-tabs/invitations'] = (_) =>
+              throw const SuperTabFailure(
+                'INTERNAL',
+                'Something went wrong.',
+                statusCode: 500,
+              ),
+      ),
     ];
     for (final (name, list, backend) in cases) {
       final features = ExperimentalFeaturesStore(storage: MemoryKeyValueStore())

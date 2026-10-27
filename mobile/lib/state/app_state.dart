@@ -6304,7 +6304,7 @@ class AppNotifier extends ChangeNotifier {
   /// screen do not hop between computers.
   String? _swarmMachineId;
 
-  /// Machines that refused a Swarm read another machine did not refuse: passed over until they
+  /// Machines that refused a Swarm read another machine then answered: passed over until they
   /// reconnect ([_onConnectionStatus]).
   ///
   /// ⚠️ Kept up, a refusing machine was asked for every read. On the owner's iPhone (2026-10-27)
@@ -6321,11 +6321,11 @@ class AppNotifier extends ChangeNotifier {
   /// The machine the phone asks the Swarm through: one of the account's own whose socket is up —
   /// the one asked last while it stays so, else the first by id, as the web build picks
   /// (`desktop/lib/state/app_state.dart` `sharedTabsTarget`) — never one that refused. Null with
-  /// none up, or none but [except].
-  MachineState? _swarmMachine({MachineState? except}) {
+  /// none up, or none but those in [except].
+  MachineState? _swarmMachine({Set<MachineState> except = const {}}) {
     bool usable(MachineState? machine) =>
         machine != null &&
-        machine != except &&
+        !except.contains(machine) &&
         machine.connectionStatus == ConnectionStatus.connected &&
         !machine.needsLink &&
         machine.nodeOnline != false &&
@@ -6341,7 +6341,7 @@ class AppNotifier extends ChangeNotifier {
       }
     }
     // Looking past [except] chooses nothing yet: the read through it decides.
-    if (except == null) _swarmMachineId = best?.machine.machineId;
+    if (except.isEmpty) _swarmMachineId = best?.machine.machineId;
     return best;
   }
 
@@ -6352,19 +6352,21 @@ class AppNotifier extends ChangeNotifier {
   /// backend's value; a refusal — the backend's, the machine's, or none to ask — is a
   /// [SuperTabFailure], and an answer that lands after the account changed is dropped.
   ///
-  /// A refusal is asked again through another machine that is up: one that answers, or refuses
-  /// otherwise, shows the refusal was the first machine's — a Team sign-in the server will not
-  /// read the person's Swarm for, say — and that machine is passed over until it reconnects. One
-  /// every machine gives is the read's own (a Swarm the person left), and passes over none: it
-  /// must still reach the screen as it is. A command asked twice is the same command, under its
-  /// operation id.
+  /// A refusal is asked again through each other machine that is up, one after another, up to
+  /// [_swarmAsksPerCall] in all. One that answers shows the refusals before it were those
+  /// machines' own — a Team sign-in the server will not read the person's Swarm for, say — and
+  /// they are passed over until they reconnect. Refusals alone pass over none: on #1802's review
+  /// a Team computer's refusal of its own once passed over the Mac that had said the person left
+  /// the Swarm. A command asked twice is the same command, under its operation id.
   ///
-  /// With no other machine up to ask, one on its way back is waited for as below. With none, a
-  /// refusal from the only machine up while another of the account's is away tells nothing yet:
-  /// it is no computer, so the list is read again and Swarm soon retries ([SwarmInbox]). On the
-  /// owner's iPhone (2026-10-27, 15:06) Swarm showed a Team sign-in's refusal instead, and stayed
-  /// on it until its next 15-second read, 14 seconds after the Mac was back. A refusal saying the
-  /// person lost the Swarm stays what it is, as everywhere: what was read of it must go.
+  /// With none answering, a refusal saying the person lost the Swarm stands over every other,
+  /// as everywhere: what was read of it must go. Otherwise, with no other machine up to ask, one
+  /// on its way back is waited for as below. With none, refusals from every machine up while
+  /// another of the account's is away tell nothing yet: no computer, so the list is read again
+  /// and Swarm soon retries ([SwarmInbox]). On the owner's iPhone (2026-10-27, 15:06) Swarm
+  /// showed a Team sign-in's refusal instead, and stayed on it until its next 15-second read,
+  /// 14 seconds after the Mac was back. With no other machine of the account, the last refusal
+  /// is the read's own.
   ///
   /// Nor is one read lost on the way — a timeout, a socket dropped — the end of it: it is asked
   /// again through another computer that is up. With none up but one redialling, the call waits
@@ -6375,38 +6377,47 @@ class AppNotifier extends ChangeNotifier {
     String path, {
     Map<String, dynamic>? body,
   }) async {
-    final machine = _swarmMachine() ?? await _swarmMachineBack();
+    var machine = _swarmMachine() ?? await _swarmMachineBack();
     if (machine == null) throw _swarmNoComputer();
-    try {
-      return await _swarmRequestVia(machine, method, path, body);
-    } on SuperTabFailure catch (refusal) {
-      if (refusal.code == 'ACCOUNT_CHANGED') rethrow;
-      final other =
-          _swarmMachine(except: machine) ??
-          await _swarmMachineBack(except: machine);
-      if (other == null) {
-        final lost = const {'FORBIDDEN', 'NOT_FOUND'}.contains(refusal.code);
-        if (lost || !_swarmAnyOther(machine)) rethrow;
-        throw _swarmNoComputer();
-      }
+    final asked = <MachineState>{}, refused = <MachineState>[];
+    SuperTabFailure? lost;
+    late Object failure;
+    late StackTrace trace;
+    while (machine != null) {
+      asked.add(machine);
       try {
-        final value = await _swarmRequestVia(other, method, path, body);
-        _passOverSwarmMachine(machine, other);
+        final value = await _swarmRequestVia(machine, method, path, body);
+        _swarmRefused.addAll([for (final m in refused) m.machine.machineId]);
+        _swarmMachineId = machine.machine.machineId;
         return value;
-      } on SuperTabFailure catch (second) {
-        if (second.code != refusal.code && second.code != 'ACCOUNT_CHANGED') {
-          _passOverSwarmMachine(machine, other);
+      } on SuperTabFailure catch (refusal, stack) {
+        if (refusal.code == 'ACCOUNT_CHANGED') rethrow;
+        (failure, trace) = (refusal, stack);
+        refused.add(machine);
+        if (const {'FORBIDDEN', 'NOT_FOUND'}.contains(refusal.code)) {
+          lost ??= refusal;
         }
-        rethrow;
+      } catch (error, stack) {
+        (failure, trace) = (error, stack);
       }
-    } catch (_) {
-      final other = _swarmMachine(except: machine);
-      if (other == null) rethrow;
-      final value = await _swarmRequestVia(other, method, path, body);
-      _swarmMachineId = other.machine.machineId;
-      return value;
+      if (asked.length == _swarmAsksPerCall) break;
+      machine =
+          _swarmMachine(except: asked) ??
+          (failure is SuperTabFailure
+              ? await _swarmMachineBack(except: asked)
+              : null);
     }
+    if (lost != null) throw lost;
+    if (machine == null &&
+        failure is SuperTabFailure &&
+        _swarmAnyOther(asked)) {
+      throw _swarmNoComputer();
+    }
+    Error.throwWithStackTrace(failure, trace);
   }
+
+  /// How many machines one Swarm call asks at most, one after another.
+  static const _swarmAsksPerCall = 5;
 
   /// No computer to ask the Swarm through, with the list read again.
   SuperTabFailure _swarmNoComputer() {
@@ -6417,11 +6428,11 @@ class AppNotifier extends ChangeNotifier {
     );
   }
 
-  /// Another of the account's machines than [machine] could be asked once it is up: linked, and
-  /// not passed over.
-  bool _swarmAnyOther(MachineState machine) => machineStates.values.any(
+  /// Another of the account's machines than those [asked] could be asked once it is up: linked,
+  /// and not passed over.
+  bool _swarmAnyOther(Set<MachineState> asked) => machineStates.values.any(
     (other) =>
-        other != machine &&
+        !asked.contains(other) &&
         !other.needsLink &&
         !_swarmRefused.contains(other.machine.machineId),
   );
@@ -6443,10 +6454,12 @@ class AppNotifier extends ChangeNotifier {
   }
 
   /// A computer that comes up within [swarmReconnectWait], when one is on its way: dialling or
-  /// redialling, linked, not reported off, and not passed over — nor [except]. Null otherwise.
-  Future<MachineState?> _swarmMachineBack({MachineState? except}) async {
+  /// redialling, linked, not reported off, and not passed over — nor in [except]. Null otherwise.
+  Future<MachineState?> _swarmMachineBack({
+    Set<MachineState> except = const {},
+  }) async {
     bool coming(MachineState machine) =>
-        machine != except &&
+        !except.contains(machine) &&
         (machine.connectionStatus == ConnectionStatus.connecting ||
             machine.connectionStatus == ConnectionStatus.reconnecting) &&
         !machine.needsLink &&
@@ -6472,11 +6485,6 @@ class AppNotifier extends ChangeNotifier {
       timer.cancel();
       removeListener(look);
     }
-  }
-
-  void _passOverSwarmMachine(MachineState refused, MachineState instead) {
-    _swarmRefused.add(refused.machine.machineId);
-    _swarmMachineId = instead.machine.machineId;
   }
 
   Future<Object?> _swarmRequestVia(

@@ -31,6 +31,10 @@ enum SwarmStart {
 
   /// No Swarm, and an invitation to one waiting: Join.
   invited,
+
+  /// No Swarm, and the invitations could not be read: Try again. Not "No
+  /// Swarm yet", which would send the person to start one (#1802's review).
+  invitesFailed,
 }
 
 /// Which start screen applies, from what the phone already knows: [computers]
@@ -49,7 +53,8 @@ SwarmStart? swarmStart(SwarmInbox inbox, List<SwarmComputer>? computers) {
     return away || inbox.noComputer ? SwarmStart.offline : null;
   }
   if (inbox.swarms.isNotEmpty) return null;
-  return inbox.invitations.isEmpty ? SwarmStart.none : SwarmStart.invited;
+  if (inbox.invitations.isNotEmpty) return SwarmStart.invited;
+  return inbox.invitationsFailed ? SwarmStart.invitesFailed : SwarmStart.none;
 }
 
 /// The person's computers as the start screens need them: the app's machine
@@ -81,7 +86,8 @@ SwarmStartView? swarmStartView(BuildContext context, SwarmSession session) {
 /// One start screen ([SwarmStart]), the whole of Home's body under its own
 /// top bar: what is the matter in a title and a line, and one button. Shows
 /// only what the phone already has: the computers' names, and an
-/// invitation's Swarm by name — nothing of the Swarm is read before Join.
+/// invitation's Swarm by name with the role offered — nothing of the Swarm is
+/// read before Join.
 class SwarmStartView extends StatefulWidget {
   const SwarmStartView({
     super.key,
@@ -193,6 +199,20 @@ class _SwarmStartViewState extends State<SwarmStartView> {
           ),
         ),
         SwarmStart.invited => _invited(tty),
+        SwarmStart.invitesFailed => _StartScreen(
+          key: const ValueKey('swarm-start-invites-failed'),
+          mark: const _Mark(icon: LucideIcons.mailWarning300),
+          title: "Couldn't check invitations",
+          line:
+              "Swarm couldn't read the invitations to your email just now. "
+              'You may have one waiting.',
+          primary: TtyPrimaryButton(
+            label: 'Try again',
+            busy: _looking,
+            busyLabel: 'Checking…',
+            onPressed: () => unawaited(_tryAgain()),
+          ),
+        ),
       };
     },
   );
@@ -208,6 +228,11 @@ class _SwarmStartViewState extends State<SwarmStartView> {
       mark: _Mark(letter: name.isEmpty ? '?' : name.characters.first),
       eyebrow: "You're invited to",
       title: name,
+      line: switch (invitation.role) {
+        'collaborator' => 'You can collaborate',
+        'viewer' => 'You can view',
+        _ => null,
+      },
       more: [
         if (_inbox.joinError case final error?)
           Text(

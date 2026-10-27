@@ -104,6 +104,10 @@ class SwarmInbox extends ChangeNotifier {
   /// Invitations waiting for the person, read only while they have no Swarm.
   List<SwarmInvitation> invitations = const [];
 
+  /// The last read of the invitations failed, while there is no Swarm: not "no invitation".
+  /// Those read before stay meanwhile.
+  bool invitationsFailed = false;
+
   /// Invitations being accepted.
   final Set<String> joining = {};
 
@@ -157,31 +161,41 @@ class SwarmInbox extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// The person's invitations; none from a server without the list, or
-  /// when it cannot be read — "No Swarm yet" stays true either way.
+  /// The person's invitations; none from a server without the list, which
+  /// reads "invitations" as a Swarm's id and answers that it is not found. A
+  /// read that fails, or answers anything but the list, throws: it is not "no
+  /// invitation" (#1802's review).
   Future<List<SwarmInvitation>> _invitations() async {
+    final Object? answer;
     try {
-      final answer = await request('GET', '/api/super-tabs/invitations');
-      if (answer is! List) return const [];
-      return [
-        for (final raw in answer)
-          if (raw
-              case {
-                'tabId': final String tabId,
-                'name': final String name,
-                'inviteId': final String inviteId,
-              }
-              when !_putOff.contains(inviteId))
-            (
-              tabId: tabId,
-              name: name,
-              inviteId: inviteId,
-              role: raw['role'] as String? ?? '',
-            ),
-      ];
-    } catch (_) {
-      return const [];
+      answer = await request('GET', '/api/super-tabs/invitations');
+    } on SuperTabFailure catch (failure) {
+      // A server with the invitations never answers them "not found".
+      if (failure.statusCode == 404) return const [];
+      rethrow;
     }
+    if (answer is! List) throw const FormatException('Missing invitations');
+    final invitations = <SwarmInvitation>[];
+    for (final raw in answer) {
+      if (raw
+          case {
+            'tabId': final String tabId,
+            'name': final String name,
+            'inviteId': final String inviteId,
+          }
+          when raw['role'] is String?) {
+        if (_putOff.contains(inviteId)) continue;
+        invitations.add((
+          tabId: tabId,
+          name: name,
+          inviteId: inviteId,
+          role: raw['role'] as String? ?? '',
+        ));
+      } else {
+        throw const FormatException('Invalid invitation');
+      }
+    }
+    return invitations;
   }
 
   /// An ask or waiting work that arrived after its Swarm's first read: what a
@@ -237,15 +251,25 @@ class SwarmInbox extends ChangeNotifier {
   Future<void> _read() async {
     try {
       final listed = await _list();
-      final invited = listed.isEmpty
-          ? await _invitations()
-          : const <SwarmInvitation>[];
+      List<SwarmInvitation>? invited = const [];
+      Object? unread;
+      if (listed.isEmpty) {
+        try {
+          invited = await _invitations();
+        } catch (failure) {
+          (invited, unread) = (null, failure);
+        }
+      }
       if (_disposed) return;
       swarms = listed;
-      invitations = invited;
+      // What was read of them stays while they cannot be read again.
+      if (invited != null) invitations = invited;
+      invitationsFailed = unread != null;
       loaded = true;
       error = null;
-      _away = null;
+      _away = unread is SuperTabFailure && unread.code == 'MACHINE_UNAVAILABLE'
+          ? _sooner()
+          : null;
       final ids = {for (final swarm in listed) swarm.id};
       for (final id in _readers.keys.toList()) {
         if (!ids.contains(id)) _drop(id);
@@ -257,18 +281,19 @@ class SwarmInbox extends ChangeNotifier {
     } on SuperTabFailure catch (failure) {
       if (_disposed) return;
       error = failure.message;
-      final next = _away == null ? const Duration(seconds: 2) : _away! * 2;
-      _away = failure.code != 'MACHINE_UNAVAILABLE'
-          ? null
-          : next < pollInterval
-          ? next
-          : pollInterval;
+      _away = failure.code == 'MACHINE_UNAVAILABLE' ? _sooner() : null;
     } catch (_) {
       if (_disposed) return;
       error = 'Could not load your Swarms. Try again.';
       _away = null;
     }
     _rebuild();
+  }
+
+  /// The next quick read while no computer can be asked ([_away]).
+  Duration _sooner() {
+    final next = _away == null ? const Duration(seconds: 2) : _away! * 2;
+    return next < pollInterval ? next : pollInterval;
   }
 
   /// Every page of the list before any is applied: a failed page cannot drop

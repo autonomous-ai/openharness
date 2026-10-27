@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness_mobile/notify/system_notices.dart';
 import 'package:harness_mobile/settings/experimental_features.dart';
@@ -188,6 +189,16 @@ void main() {
   testWidgets('no button attaches a file; a file in a message opens', (
     tester,
   ) async {
+    // Review of #1802 at bd73842: this test once passed with opening off.
+    final opened = <Object?>[];
+    const launcher = MethodChannel('plugins.flutter.io/url_launcher');
+    final messenger =
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+    messenger.setMockMethodCallHandler(launcher, (call) async {
+      opened.add((call.arguments as Map)['url']);
+      return true;
+    });
+    addTearDown(() => messenger.setMockMethodCallHandler(launcher, null));
     await pump(
       tester,
       backend([
@@ -220,6 +231,11 @@ void main() {
       ),
       findsNothing,
     );
+
+    await tester.tap(find.textContaining('plan.md'));
+    await tester.pump();
+
+    expect(opened, ['https://cdn.harness.autonomous.ai/f1/plan.md']);
   });
 
   testWidgets('a reply quotes its original; tapping the quote brings the '
