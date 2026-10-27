@@ -837,6 +837,13 @@ describe('mentions on a post', () => {
     swarm(t, 'new-lead')
     expect(String((await help(t, { tabId: 'tab', agentId: t.agentId })).post)).not.toContain('--mention')
   })
+  it('offers plan in help to a project\'s Lead only', async () => {
+    const t = setup()
+    swarm(t, t.agentId)
+    expect(String((await help(t, { tabId: 'tab', agentId: t.agentId })).plan)).toContain('plan [JSON]: the best plan for all your open groups')
+    swarm(t, 'new-lead')
+    expect((await help(t, { tabId: 'tab', agentId: t.agentId })).plan).toBeUndefined()
+  })
 
   it('tells every agent how to read its decisions and ask one through needs_human, and only a Lead how to ask a batch', async () => {
     const t = setup()

@@ -47,6 +47,7 @@ Keep each Builder's list a few tasks deep; do the easy, self-contained parts fir
 
 ## 3. Route, start, assign
 - Route each group; reuse an idle agent before starting one; start only on the Swarm's machines.
+- With 3 or more groups waiting, run plan first: it places them all at once on the best machines and models. Then route each group in the plan's order and start the plan's pick, with overrideReason "scheduler plan" when the route picks otherwise. If plan cannot run here, route as usual.
 - Local models: the route may pick one for low-difficulty, well-specified work; set "local":true only when a person asks for one, set "model" to a model a person names, and start it with the route's gridModel and gridName.
 - The brief is all a Builder gets; never rely on chat history.
 - Before assigning, look at other projects' active work; if your task touches the same code, say so in the Leads conversation and agree an order first.

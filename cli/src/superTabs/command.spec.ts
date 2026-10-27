@@ -59,6 +59,23 @@ it('routes through the caller and prints the decision, or the parse failure as a
   expect(await superTabCommand(['--tab', 'tab', 'route', 'g1', '{nope'], deps)).toBe(1)
   expect(JSON.parse(print.mock.calls.at(-1)![0]).error).toMatch(/JSON/)
 })
+it('parses plan, with or without the Lead\'s assessments, and refuses anything more', () => {
+  expect(parseSuperTabArgs([...prefix, 'plan'], where).payload).toMatchObject({ action: 'plan' })
+  expect(parseSuperTabArgs([...prefix, 'plan', '{"groups":{}}'], where).payload).toMatchObject({ action: 'plan', request: { groups: {} } })
+  expect(() => parseSuperTabArgs([...prefix, 'plan', '{}', 'extra'], where)).toThrow('harness super-tab')
+})
+it('plans through the caller with its data folder, and prints the plan or why there is none', async () => {
+  const print = vi.fn(), close = vi.fn()
+  const request = vi.fn(async (type: string, payload: Record<string, unknown> = {}) => {
+    if (type === 'agents_list') return { agents: [{ id: 'native', engine: 'claude', tmuxPane: '%42', status: 'active' }] }
+    if (payload.action === 'routeContext') return { error: 'LEAD_REQUIRED', detail: 'x' }
+    return { ok: true }
+  })
+  const deps = { where: () => where, pane: '%42', open: async () => ({ request, close, machineId: 'machine' }), print }
+  expect(await superTabCommand(['--tab', 'tab', 'plan'], deps)).toBe(1)
+  expect(request).toHaveBeenCalledWith('super_tabs', expect.objectContaining({ action: 'routeContext', tabId: 'tab', harnessId: 'native' }), 30_000)
+  expect(JSON.parse(print.mock.calls.at(-1)![0])).toMatchObject({ error: 'LEAD_REQUIRED' })
+})
 it('posts a reply to one message with --reply-to, and rejects a bad id', () => {
   expect(parseSuperTabArgs([...prefix, 'post', 'lead', 'Ready', 'op-1', '--reply-to', 'msg-1'], where).payload.command)
     .toMatchObject({ type: 'message.send', conversationId: 'lead', text: 'Ready', replyTo: 'msg-1' })

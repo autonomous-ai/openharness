@@ -44,15 +44,16 @@ def _ordered(instance: Instance) -> List[Task]:
 
 def _place(instance: Instance, plan: Dict[str, Placement], t: Task, machine_id: str, model_id: str, ready: int) -> Placement:
     """The earliest start at or after `ready` with a free slot on the machine and room on the model."""
-    model, machine = instance.model(model_id), instance.machine(machine_id)
+    model = instance.model(model_id)
     length = duration(t, model)
-    same_machine = [p for p in plan.values() if p.machine == machine_id]
+    pool = instance.slot_pool(machine_id)
+    same_machine = [p for p in plan.values() if instance.slot_pool(p.machine) == pool]
     same_model = [p for p in plan.values() if p.model == model_id]
 
     def free(start: int) -> bool:
         end = start + length
         # Usage only rises at a start, so checking each start inside the window (and the window's own) is enough.
-        for group, limit in ((same_machine, machine.slots), (same_model, model.concurrency)):
+        for group, limit in ((same_machine, instance.pool_slots(pool)), (same_model, model.concurrency)):
             if limit is None:
                 continue
             for s in [start] + [p.start for p in group if start < p.start < end]:

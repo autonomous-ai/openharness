@@ -25,6 +25,11 @@ class Task:
     difficulty: str = 'medium'
     # Tasks whose model family this one must not share: a review is done by another family than the work it reviews.
     independent_of: Tuple[str, ...] = ()
+    # Families the task may not use at all: a review whose build has already run is done by another family.
+    avoid_families: Tuple[str, ...] = ()
+    # The machines and models the owner's rules leave for the task's project; None is every one.
+    machines: Optional[Tuple[str, ...]] = None
+    models: Optional[Tuple[str, ...]] = None
 
 
 @dataclass(frozen=True)
@@ -33,6 +38,8 @@ class Machine:
     name: str
     slots: int
     engines: Tuple[str, ...]
+    # The machine whose slots this one shares: a Mac's Harness Team account runs on the Mac (One machine). None is its own.
+    pool: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -97,6 +104,13 @@ class Instance:
     def machine(self, id: str) -> Machine:
         return next(m for m in self.machines if m.id == id)
 
+    def slot_pool(self, id: str) -> str:
+        return self.machine(id).pool or id
+
+    def pool_slots(self, pool: str) -> int:
+        """Free slots of a machine and the accounts on it: each reports the slots left on the one machine, so the fewest hold."""
+        return min(m.slots for m in self.machines if (m.pool or m.id) == pool)
+
     def model(self, id: str) -> Model:
         return next(m for m in self.models if m.id == id)
 
@@ -160,9 +174,13 @@ def load(data: dict) -> Instance:
     tasks = [Task(id=str(t['id']), title=str(t.get('title', t['id'])), minutes=int(t['minutes']), floor=int(t.get('floor', 1)),
                   kind=str(t.get('kind') or 'default'), deps=tuple(str(d) for d in t.get('deps', ())),
                   spend={str(k): float(v) for k, v in t.get('spend', {}).items()}, difficulty=str(t.get('difficulty', 'medium')),
-                  independent_of=tuple(str(d) for d in t.get('independent_of', ())))
+                  independent_of=tuple(str(d) for d in t.get('independent_of', ())),
+                  avoid_families=tuple(str(f) for f in t.get('avoid_families', ())),
+                  machines=None if t.get('machines') is None else tuple(str(m) for m in t['machines']),
+                  models=None if t.get('models') is None else tuple(str(m) for m in t['models']))
              for t in data['tasks']]
-    machines = [Machine(id=str(m['id']), name=str(m.get('name', m['id'])), slots=int(m['slots']), engines=tuple(m['engines']))
+    machines = [Machine(id=str(m['id']), name=str(m.get('name', m['id'])), slots=int(m['slots']), engines=tuple(m['engines']),
+                        pool=None if m.get('pool') is None else str(m['pool']))
                 for m in data['machines']]
     models = [Model(id=str(m['id']), engine=str(m['engine']), cost=int(m['cost']), quality={str(k): int(v) for k, v in m['quality'].items()},
                     speed=float(m.get('speed', 1.0)), concurrency=m.get('concurrency'),
@@ -187,6 +205,17 @@ def load(data: dict) -> Instance:
                 raise InstanceError(f'{t.id} must differ from unknown task {other}')
     _check_acyclic(tasks)
     machine_ids = {m.id for m in machines}
+    model_ids = {m.id for m in models}
+    for m in machines:
+        if m.pool is not None and m.pool not in machine_ids:
+            raise InstanceError(f'{m.id} shares slots with unknown machine {m.pool}')
+    for t in tasks:
+        for mid in t.machines or ():
+            if mid not in machine_ids:
+                raise InstanceError(f'{t.id} names unknown machine {mid}')
+        for kid in t.models or ():
+            if kid not in model_ids:
+                raise InstanceError(f'{t.id} names unknown model {kid}')
     for m in models:
         if 'default' not in m.quality:
             raise InstanceError(f'{m.id} has no default quality')
@@ -211,4 +240,6 @@ def options(instance: Instance, task: Task, floor: bool = True) -> List[Option]:
     quality meets the floor."""
     return [Option(task=task.id, machine=m.id, model=k.id, minutes=duration(task, k))
             for m in instance.machines for k in instance.models
-            if k.engine in m.engines and (k.machines is None or m.id in k.machines) and (not floor or k.quality_for(task.kind) >= task.floor)]
+            if k.engine in m.engines and (k.machines is None or m.id in k.machines) and k.family not in task.avoid_families
+            and (task.machines is None or m.id in task.machines) and (task.models is None or k.id in task.models)
+            and (not floor or k.quality_for(task.kind) >= task.floor)]

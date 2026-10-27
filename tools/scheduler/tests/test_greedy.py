@@ -20,6 +20,10 @@ class EvaluateTest(unittest.TestCase):
         self.assertEqual(result.makespan, 90)
         self.assertEqual(result.cost, 3 * (60 + 30 + 20))
 
+    def test_two_accounts_of_one_machine_queue_on_its_slots(self):
+        inst = load(instance([task('a'), task('b')], [machine('mac', slots=1), {**machine('team', slots=1), 'pool': 'mac'}], [model('opus')]))
+        self.assertEqual(evaluate(inst, {'a': ('mac', 'opus'), 'b': ('team', 'opus')}).makespan, 120)
+
     def test_a_model_limited_to_one_task_queues_the_second(self):
         inst = load(instance([task('a'), task('b')], [machine('m', slots=2), machine('n', slots=2)], [model('local', concurrency=1)]))
         result = evaluate(inst, {'a': ('m', 'local'), 'b': ('n', 'local')})

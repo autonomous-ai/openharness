@@ -55,12 +55,14 @@ describe('built-in Swarm skills', () => {
   // the Builder's alone, in both modes.
   const lost = '- When you are told a task is lost, hand it on at once: route it and assign it to another agent, avoiding what failed (another machine if its machine died, another account or engine if it hit a usage limit). The new brief tells the successor to continue from the lost attempt\'s pushed branch and last result, not to start over.\n'
   const checkpoint = '- Push your work branch at least every 30 minutes, and set your work status to working with a one-line note of what is done and what is next, so another agent can continue if you stop.\n'
+  // The plan line (Lead's brief for v2 M, 2026-10-27; docs/plans/2026-10-27-swarm-scheduler.md): the Lead's alone, in both modes.
+  const plan = '- With 3 or more groups waiting, run plan first: it places them all at once on the best machines and models. Then route each group in the plan\'s order and start the plan\'s pick, with overrideReason "scheduler plan" when the route picks otherwise. If plan cannot run here, route as usual.\n'
   // The decision lines (Lead's brief for v2 decisions, 2026-10-27): the Lead's and the Builder's alone, in both modes.
   const decision = '- Ask people for decisions in one place: decision.ask puts up to 10 questions to one person at once, each with 2 to 5 options, the one you recommend and what the answer unblocks. Keep working on your recommendation, marked provisional, until they answer: a notice in that conversation tells you, and harness super-tab decisions --answered shows the answer. A decision is not a private channel: anything private goes through Chat with PM.\n'
   const ask = '- When you know who decides, add ask to that needs-human (the person, 2 to 5 options, the one you recommend, what it unblocks) and keep working on your recommendation, marked provisional, until a notice says it was answered; read the answer with harness super-tab decisions --answered.\n'
   const twoHours = '- A Builder or Reviewer that has been down for 2 hours (machine offline, session gone or stopped): cancel its task with the reason, route it, and assign it to another agent with what the first one left (branch, last revision, last report).\n'
   it.each([
-    ['lead', '5fc83d8c43b66b44cdab27b48235dbc86b7ab11a57153edc1ae7e92831642a8e'],
+    ['lead', 'b9254e4bb5c633a73e1b87e6ca6690915e1c3a7bb55db0d3d093e6710dd719db'],
     ['dev', 'e78ce31a71f169d8956a2acd46e8bb43b79bd654b80b0fe3c33dbced9d2c3c75'],
     ['review', '424dc9db5642ed7093128525f30877ffc301eb6957b33e8234916de0f0eaa208'],
   ] as const)('writes the owner\'s Harness orchestration %s skill byte for byte', (role, sha256) => {
@@ -74,6 +76,7 @@ describe('built-in Swarm skills', () => {
       expect(text.split(terminal)).toHaveLength(role === 'lead' ? 2 : 1)
       expect(text.split(overlap)).toHaveLength(role === 'lead' ? 2 : 1)
       expect(text.split(local)).toHaveLength(role === 'lead' ? 2 : 1)
+      expect(text.split(plan)).toHaveLength(role === 'lead' ? 2 : 1)
       expect(text.split(mention)).toHaveLength(role === 'lead' ? 2 : 1)
       expect(text.split(lost)).toHaveLength(role === 'lead' ? 2 : 1)
       expect(text.split(checkpoint)).toHaveLength(role === 'dev' ? 2 : 1)
@@ -98,6 +101,12 @@ describe('built-in Swarm skills', () => {
     expect(orchestration).toContain(`Never pass your chat history; put everything needed in the brief.\n${overlap}\n## 7. Run the work`)
     const plain = readFileSync(prepareSwarmSkill(fixture(), { role: 'lead', key: 'session', mode: 'default' }).file, 'utf8')
     expect(plain).toContain(`- The brief is all a Builder gets; never rely on chat history.\n${overlap}\n## 4. Keep work moving`)
+  })
+  it('adds the plan line right after each Lead skill\'s first routing rule', () => {
+    const orchestration = readFileSync(prepareSwarmSkill(fixture(), { role: 'lead', key: 'session' }).file, 'utf8')
+    expect(orchestration).toContain(`- Route each group before starting or assigning: difficulty, risk, size, why, needs. Use the pick, or override with a reason.\n${plan}`)
+    const plain = readFileSync(prepareSwarmSkill(fixture(), { role: 'lead', key: 'session', mode: 'default' }).file, 'utf8')
+    expect(plain).toContain(`- Route each group; reuse an idle agent before starting one; start only on the Swarm's machines.\n${plan}`)
   })
   it('adds the mention line right after each Lead skill\'s needs-a-person rule', () => {
     const orchestration = readFileSync(prepareSwarmSkill(fixture(), { role: 'lead', key: 'session' }).file, 'utf8')
@@ -128,7 +137,7 @@ describe('built-in Swarm skills', () => {
   })
   // The owner's approved Default texts (attached to the spec, 2026-10-23), byte for byte.
   it.each([
-    ['lead', 'a7b8aed240f38edda8a461d87ce83499696588b2da41ed261821985caa63e415'],
+    ['lead', '8de53bf338b564fe1cec581a302280b778d1e62e788f8e310b36b5ad1d8f3309'],
     ['dev', '9294ae0dfe48a5c9185638ecb8f7cb2c2903253e5e823eb69592f3eb85455f12'],
     ['review', '56c1a9bfbe7cf2ff9ded4c83cebe9e801f8846250ec80849aa6afe41685db7d9'],
   ] as const)('writes the owner\'s Default %s skill byte for byte, with a prompt line that fits it', (role, sha256) => {
@@ -138,6 +147,7 @@ describe('built-in Swarm skills', () => {
     expect(text.split(terminal)).toHaveLength(role === 'lead' ? 2 : 1)
     expect(text.split(overlap)).toHaveLength(role === 'lead' ? 2 : 1)
     expect(text.split(localDefault)).toHaveLength(role === 'lead' ? 2 : 1)
+    expect(text.split(plan)).toHaveLength(role === 'lead' ? 2 : 1)
     expect(text.split(mention)).toHaveLength(role === 'lead' ? 2 : 1)
     expect(text.split(lost)).toHaveLength(role === 'lead' ? 2 : 1)
     expect(text.split(checkpoint)).toHaveLength(role === 'dev' ? 2 : 1)
