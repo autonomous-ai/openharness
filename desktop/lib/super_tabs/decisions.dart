@@ -25,7 +25,8 @@ class SuperTabDecision {
       unblocks = row['unblocks'] as String? ?? '',
       choice = (row['choice'] as num?)?.toInt(),
       note = row['note'] as String?,
-      createdAt = DateTime.tryParse(row['createdAt'] as String? ?? '');
+      createdAt = DateTime.tryParse(row['createdAt'] as String? ?? ''),
+      remindedAt = DateTime.tryParse(row['remindedAt'] as String? ?? '');
   final String id, batchId, projectId, projectName, conversationId;
   final String conversationTitle, askerName, question, unblocks;
   final List<String> options;
@@ -34,8 +35,21 @@ class SuperTabDecision {
   /// The option the reader chose; null while it is open.
   final int? choice;
   final String? note;
-  final DateTime? createdAt;
+
+  /// When the backend reminded the reader of it; null until it did.
+  final DateTime? createdAt, remindedAt;
 }
+
+/// An open request of the reader's that the backend reminded them of at
+/// [at] (ms since the epoch), after 30 minutes unanswered.
+typedef SuperTabReminder = ({
+  String id,
+  int at,
+  String askerName,
+  String projectName,
+  String conversationTitle,
+  String text,
+});
 
 /// The reader's decisions and hands-on requests in one Swarm: open and
 /// answered, read from the backend whenever an open count moves or the Swarm
@@ -52,6 +66,12 @@ class SuperTabDecisions extends ChangeNotifier {
       _all[controller] ??= SuperTabDecisions._(controller);
 
   final SuperTabController controller;
+
+  /// Told once each time the backend reminds the reader again while this
+  /// Swarm is open; a reminder already there at the first reading is not.
+  void Function(SuperTabReminder)? onReminded;
+  int? _remindedAt, _reminder;
+  bool _remindedRead = false;
   List<SuperTabDecision> open = const [], answered = const [];
   List<SuperTabHandsOn> handsOnOpen = const [], handsOnAnswered = const [];
   String? error;
@@ -82,6 +102,13 @@ class SuperTabDecisions extends ChangeNotifier {
   void _changed() {
     final snapshot = controller.snapshot;
     if (snapshot == null) return;
+    final reminded = snapshot.requestRemindedAt;
+    if (_remindedRead && reminded != null && reminded != _remindedAt) {
+      _reminder = reminded;
+      unawaited(load());
+    }
+    _remindedRead = true;
+    _remindedAt = reminded;
     final count = snapshot.decisionsWaiting + snapshot.handsOnWaiting;
     final moved = count != _count;
     if (!moved && controller.lastChangedAt == _lastChangedAt) return;
@@ -153,10 +180,41 @@ class SuperTabDecisions extends ChangeNotifier {
       handsOnOpen = requestsOpen;
       handsOnAnswered = requestsAnswered;
       error = null;
+      _remind();
     } catch (_) {
       error = 'Could not load decisions. Try again.';
     }
     notifyListeners();
+  }
+
+  /// Tells [onReminded] of the open request reminded last, once per move.
+  void _remind() {
+    final at = _reminder;
+    if (at == null) return;
+    _reminder = null;
+    final reminders = <SuperTabReminder>[
+      for (final r in handsOnOpen)
+        if (r.remindedAt case final reminded?)
+          (
+            id: r.id,
+            at: reminded.millisecondsSinceEpoch,
+            askerName: r.askerName,
+            projectName: r.projectName,
+            conversationTitle: r.conversationTitle,
+            text: r.request,
+          ),
+      for (final d in open)
+        if (d.remindedAt case final reminded?)
+          (
+            id: d.id,
+            at: reminded.millisecondsSinceEpoch,
+            askerName: d.askerName,
+            projectName: d.projectName,
+            conversationTitle: d.conversationTitle,
+            text: d.question,
+          ),
+    ]..sort((a, b) => b.at.compareTo(a.at));
+    if (reminders.firstOrNull case final latest?) onReminded?.call(latest);
   }
 
   /// The reader's one-tap answer. Any reader may answer what was asked of

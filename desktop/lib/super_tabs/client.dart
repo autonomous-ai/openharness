@@ -6,6 +6,7 @@ import 'package:clock/clock.dart';
 import '../core/local_key_value_store.dart';
 import 'attachment_upload.dart';
 import 'controller.dart';
+import 'decisions.dart';
 import 'model.dart';
 import 'notifications.dart';
 import 'parts.dart';
@@ -30,6 +31,7 @@ class SuperTabClient {
     this.onTabs,
     this.onSelection,
     this.onMention,
+    this.onReminder,
     this.onTagCounts,
     this.upload = refuseUpload,
     this.discoveryInterval = const Duration(seconds: 15),
@@ -44,6 +46,9 @@ class SuperTabClient {
 
   /// A Lead tagged this account in one of its Swarms while the app was open.
   final void Function(SuperTabMention)? onMention;
+
+  /// The backend reminded this account of an open request in an open Swarm.
+  final void Function(SuperTabReminder)? onReminder;
 
   /// The waiting tags of a Swarm that is not open changed ([waitingTags]).
   final void Function()? onTagCounts;
@@ -455,6 +460,7 @@ class SuperTabClient {
     SuperTabMentions.of(controller)
       ..seen(_tagsSeen.remove(id))
       ..onArrived = onMention;
+    SuperTabDecisions.of(controller).onReminded = onReminder;
     _tagCounts.remove(id);
     _loaded[id] = controller;
     controller.start();

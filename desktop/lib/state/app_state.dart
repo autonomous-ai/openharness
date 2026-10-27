@@ -97,7 +97,8 @@ import '../core/harness_file_store.dart';
 import '../super_tabs/attachment_upload.dart';
 import '../super_tabs/client.dart';
 import '../super_tabs/controller.dart';
-import '../super_tabs/notifications.dart' show superTabMentionNotice;
+import '../super_tabs/notifications.dart'
+    show superTabMentionNotice, superTabReminderNotice;
 import '../measurement/setup_preference_store.dart';
 import '../devices/device_hosts.dart';
 import '../stats/harness_stats.dart';
@@ -1719,6 +1720,7 @@ class AppNotifier extends ChangeNotifier {
     storage: localStore ?? HarnessFileStore.shared,
     upload: uploadWith(() => api),
     onMention: superTabMentionNotice(systemNotifications),
+    onReminder: superTabReminderNotice(systemNotifications),
     onTagCounts: notifyListeners,
     discoveryInterval: kUnderTest ? Duration.zero : const Duration(seconds: 15),
     onTabs: (tabs, hidden) {

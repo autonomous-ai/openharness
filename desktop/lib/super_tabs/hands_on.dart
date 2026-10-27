@@ -16,7 +16,8 @@ class SuperTabHandsOn {
       next = row['next'] as String? ?? '',
       answer = SuperTabHandsOnAnswer.of(row['answer']),
       note = row['note'] as String?,
-      until = DateTime.tryParse(row['until'] as String? ?? '');
+      until = DateTime.tryParse(row['until'] as String? ?? ''),
+      remindedAt = DateTime.tryParse(row['remindedAt'] as String? ?? '');
   final String id, projectId, projectName, conversationId, conversationTitle;
   final String askerName, request, next;
   final List<String> steps;
@@ -27,6 +28,9 @@ class SuperTabHandsOn {
 
   /// Until when the reader can't, with a "can't now" answer.
   final DateTime? until;
+
+  /// When the backend reminded the reader of it; null until it did.
+  final DateTime? remindedAt;
 }
 
 /// The three answers to a hands-on request, by their backend names.

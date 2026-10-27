@@ -7,6 +7,7 @@ import '../notify/system_notifications.dart';
 import '../shared/theme/app_theme.dart' as grid;
 import '../widgets/desktop_chrome.dart';
 import 'controller.dart';
+import 'decisions.dart' show SuperTabReminder;
 import 'machine_status.dart' show superTabAgo;
 import 'model.dart';
 import 'section_heading.dart';
@@ -46,6 +47,21 @@ void Function(SuperTabMention)? superTabMentionNotice(
         body:
             '${mention.projectName} · ${mention.conversationTitle}: '
             '${mention.text}',
+      );
+
+/// What tells the person, as a new tag does, that a request is still waiting
+/// on them: one notice per reminder, so a later one shows again.
+void Function(SuperTabReminder)? superTabReminderNotice(
+  SystemNotifications system, {
+  bool web = kIsWeb,
+}) => web
+    ? null
+    : (reminder) => system.postNotice(
+        id: 'harness-request-reminder:${reminder.id}:${reminder.at}',
+        title: '${reminder.askerName} is still waiting on you',
+        body:
+            '${reminder.projectName} · ${reminder.conversationTitle}: '
+            '${reminder.text}',
       );
 
 /// The reader's tags in one Swarm: Waiting and Earlier, read from the backend
