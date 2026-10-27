@@ -9,6 +9,7 @@ import 'package:harness_mobile/phone/phone_navigation.dart';
 import 'package:harness_mobile/phone/tty.dart';
 import 'package:harness_mobile/phone/tty_controls.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart';
+import 'package:harness_mobile/shared/widgets/skeleton.dart';
 
 import 'model.dart';
 import 'swarm_choices.dart';
@@ -125,11 +126,16 @@ class _SwarmConversationPageState extends State<SwarmConversationPage> {
 
   /// Opens the conversation once its Swarm has been read: at once, or when
   /// the account's Swarms are first read — a notice tapped at launch opens
-  /// this page before then.
+  /// this page before then. Until then the chat is a skeleton, or not open
+  /// once the Swarms read do not have its own.
   void _attach({bool rebuild = true}) {
     final session = _session;
-    final reader = session?.inbox.reader(widget.swarmId);
-    if (session == null || reader == null || _conversation != null) return;
+    if (session == null || _conversation != null) return;
+    final reader = session.inbox.reader(widget.swarmId);
+    if (reader == null) {
+      if (rebuild && mounted) setState(() {});
+      return;
+    }
     session.inbox.removeListener(_attach);
     final c = _conversation = SwarmConversation(reader, widget.conversationId);
     c.composer.addListener(_drafted);
@@ -301,25 +307,15 @@ class _SwarmConversationPageState extends State<SwarmConversationPage> {
       _finding = true;
       _note = null;
     });
-    bool has() => c.messages.any((m) => m.id == messageId);
-    var pages = 0;
-    var failed = false;
-    while (!has() && c.hasOlder && pages < _findPages) {
-      await c.loadOlder();
-      pages++;
-      if (!mounted || _conversation != c) return;
-      if (c.error != null) {
-        failed = true;
-        break;
-      }
-    }
-    if (!mounted) return;
-    final found = has();
+    // Read back page by page with no redraw between them: the chat is drawn
+    // once, with the original among the messages.
+    final found = await c.readBackTo(messageId, pages: _findPages);
+    if (!mounted || _conversation != c) return;
     setState(() {
       _finding = false;
       _note = found
           ? null
-          : failed
+          : c.error != null
           ? "Couldn't read the original message. Try again."
           : c.hasOlder
           ? 'The original message is too far back.'
@@ -381,13 +377,15 @@ class _SwarmConversationPageState extends State<SwarmConversationPage> {
     return Scaffold(
       backgroundColor: tty.ground,
       body: SafeArea(
-        child: session == null || c == null
+        child: session == null
             ? Align(
                 alignment: Alignment.topLeft,
                 child: TtyBackButton(
                   onPressed: () => Navigator.of(context).maybePop(),
                 ),
               )
+            : c == null
+            ? _unopened(context, session, tty)
             : ValueListenableBuilder(
                 valueListenable: _view,
                 builder: (context, view, _) =>
@@ -397,8 +395,100 @@ class _SwarmConversationPageState extends State<SwarmConversationPage> {
     );
   }
 
-  /// The header and the composer follow [view]; the messages, and what is
-  /// said under them, follow [c]; the composer follows what is typed.
+  /// Before the account's Swarms are read: a skeleton under a placeholder
+  /// header — or, once they are read without this chat's Swarm, not open.
+  Widget _unopened(BuildContext context, SwarmSession session, Tty tty) {
+    final inbox = session.inbox;
+    final error = inbox.error;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        _header(context, tty, title: inbox.loaded ? 'Chat' : null),
+        Expanded(
+          child: inbox.loaded
+              ? _said(_notOpen)
+              : error != null
+              ? _said(error)
+              : const _ChatSkeleton(),
+        ),
+      ],
+    );
+  }
+
+  static const _notOpen = 'This chat is not open to you.';
+
+  /// What the chat says in place of its messages.
+  Widget _said(String text, {Key? key}) => Padding(
+    padding: const EdgeInsets.all(Tty.origin),
+    child: Text(
+      text,
+      key: key,
+      style: swarmChatText(15, color: AppPalette.textSecondary),
+    ),
+  );
+
+  /// The back button, then the chat's name and its project under it — or,
+  /// while the chat is not known yet ([title] null), placeholders of their
+  /// size.
+  Widget _header(
+    BuildContext context,
+    Tty tty, {
+    required String? title,
+    String? project,
+  }) => Padding(
+    key: const ValueKey('swarm-chat-header'),
+    padding: const EdgeInsets.fromLTRB(0, 2, 8, 2),
+    child: Row(
+      children: [
+        TtyBackButton(onPressed: () => Navigator.of(context).maybePop()),
+        Expanded(
+          child: title == null
+              ? Column(
+                  key: const ValueKey('swarm-header-placeholder'),
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    SkeletonText(
+                      style: tty.style(
+                        size: TtySize.title,
+                        weight: FontWeight.w600,
+                      ),
+                      width: 140,
+                    ),
+                    SkeletonText(style: swarmChatText(13), width: 72),
+                  ],
+                )
+              : Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      title,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: tty.style(
+                        size: TtySize.title,
+                        weight: FontWeight.w600,
+                      ),
+                    ),
+                    if (project != null)
+                      Text(
+                        project,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: swarmChatText(
+                          13,
+                          color: AppPalette.textSecondary,
+                        ),
+                      ),
+                  ],
+                ),
+        ),
+      ],
+    ),
+  );
+
+  /// The header and the composer follow [view] — the header [c] too, until
+  /// the chat is known; the messages, and what is said under them, follow
+  /// [c]; the composer follows what is typed.
   Widget _page(
     BuildContext context,
     SwarmSession session,
@@ -408,35 +498,16 @@ class _SwarmConversationPageState extends State<SwarmConversationPage> {
   ) => Column(
     crossAxisAlignment: CrossAxisAlignment.stretch,
     children: [
-      Padding(
-        padding: const EdgeInsets.fromLTRB(0, 2, 8, 2),
-        child: Row(
-          children: [
-            TtyBackButton(onPressed: () => Navigator.of(context).maybePop()),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    view.title,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: tty.style(
-                      size: TtySize.title,
-                      weight: FontWeight.w600,
-                    ),
-                  ),
-                  if (view.project case final project?)
-                    Text(
-                      project,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: swarmChatText(13, color: AppPalette.textSecondary),
-                    ),
-                ],
-              ),
-            ),
-          ],
+      // Placeholders until the chat is known, unless it is not open.
+      ListenableBuilder(
+        listenable: c,
+        builder: (context, _) => _header(
+          context,
+          tty,
+          title: view.known || c.state == SwarmChatState.lost
+              ? view.title
+              : null,
+          project: view.project,
         ),
       ),
       Expanded(
@@ -482,10 +553,11 @@ class _SwarmConversationPageState extends State<SwarmConversationPage> {
                     style: swarmChatText(13.5, color: AppPalette.textSecondary),
                   ),
                 ),
-              // Unless the body says it already: no conversation and nothing
-              // read.
+              // Unless the body says it already: not open, or no conversation
+              // and nothing read.
               if (c.error case final error?
-                  when view.known || c.messages.isNotEmpty)
+                  when c.state != SwarmChatState.lost &&
+                      (view.known || c.messages.isNotEmpty))
                 Padding(
                   padding: const EdgeInsets.fromLTRB(16, 6, 16, 0),
                   child: Text(
@@ -529,6 +601,9 @@ class _SwarmConversationPageState extends State<SwarmConversationPage> {
   /// The entries are made again only when what they are made from changed,
   /// and each row is the one built before while it draws the same ([_row]):
   /// a new message builds its own row alone.
+  ///
+  /// Until the first page is read, skeleton bubbles; "not open" only once
+  /// the backend refused the chat; a chat read with nothing in it says so.
   Widget _messages(
     BuildContext context,
     SwarmSession session,
@@ -536,14 +611,23 @@ class _SwarmConversationPageState extends State<SwarmConversationPage> {
     _ChatView view,
     Tty tty,
   ) {
-    if (!view.known && c.messages.isEmpty) {
-      return Padding(
-        padding: const EdgeInsets.all(Tty.origin),
-        child: Text(
-          c.error ?? 'This chat is not open to you.',
-          style: swarmChatText(15, color: AppPalette.textSecondary),
-        ),
-      );
+    final state = c.state;
+    if (state == SwarmChatState.lost) return _said(c.error ?? _notOpen);
+    if (c.messages.isEmpty && c.pending == null) {
+      if (state != SwarmChatState.loaded) {
+        // A first read that failed: said under the chat once it is known,
+        // here until then.
+        if (c.error case final error?) {
+          return view.known ? const SizedBox.shrink() : _said(error);
+        }
+        return const _ChatSkeleton();
+      }
+      if (view.decisions.isEmpty) {
+        return _said(
+          'No messages yet.',
+          key: const ValueKey('swarm-chat-empty'),
+        );
+      }
     }
     final snapshot = c.reader.snapshot;
     final messages = c.messages;
@@ -689,24 +773,26 @@ class _SwarmConversationPageState extends State<SwarmConversationPage> {
         if (index - lead < entries.length) {
           return entry(entries[index - lead]);
         }
-        // Read on their own near the top; the link only once that read
-        // failed.
-        return Center(
+        // Read on their own near the top, behind skeleton bubbles; the link
+        // only once that read failed.
+        return KeyedSubtree(
           key: const ValueKey(_olderKey),
           child: _olderFailed
-              ? _Link(
-                  key: const ValueKey('swarm-older-messages'),
-                  label: 'Earlier messages',
-                  onTap: () => unawaited(_loadOlder(c)),
+              ? Center(
+                  child: _Link(
+                    key: const ValueKey('swarm-older-messages'),
+                    label: 'Earlier messages',
+                    onTap: () => unawaited(_loadOlder(c)),
+                  ),
                 )
-              : SizedBox(
-                  key: const ValueKey('swarm-older-loading'),
-                  height: 44,
-                  child: Center(
-                    child: Text(
-                      'Loading earlier messages…',
-                      style: swarmChatText(13.5, color: AppPalette.textFaint),
-                    ),
+              : Semantics(
+                  label: 'Loading earlier messages',
+                  child: const Column(
+                    key: ValueKey('swarm-older-loading'),
+                    children: [
+                      _SkeletonBubble(lines: 2, width: 0.7),
+                      _SkeletonBubble(lines: 1, width: 0.45),
+                    ],
                   ),
                 ),
         );
@@ -1212,6 +1298,87 @@ SuperTabAgent? swarmAsker(SuperTabSnapshot snapshot, SwarmDecisionNeed need) =>
     snapshot.agents
         .where((a) => snapshot.agentName(a.id) == need.decision.askerName)
         .firstOrNull;
+
+/// The chat's first page on its way: bubbles in the shape of messages, at
+/// the foot where they will show. Each has a fixed number of lines, so none
+/// changes height as it breathes.
+class _ChatSkeleton extends StatelessWidget {
+  const _ChatSkeleton();
+
+  /// Each bubble's lines and its last line's width, newest last.
+  static const _bubbles = [
+    (2, 0.6),
+    (1, 0.4),
+    (3, 0.75),
+    (1, 0.55),
+    (2, 0.35),
+    (1, 0.65),
+    (2, 0.5),
+  ];
+
+  @override
+  Widget build(BuildContext context) => Semantics(
+    label: 'Loading messages',
+    child: SingleChildScrollView(
+      key: const ValueKey('swarm-chat-skeleton'),
+      // From the foot, as the messages are; those that do not fit are cut
+      // off at the top.
+      reverse: true,
+      physics: const NeverScrollableScrollPhysics(),
+      padding: const EdgeInsets.fromLTRB(12, 4, 12, 12),
+      child: Column(
+        children: [
+          for (final (lines, width) in _bubbles)
+            _SkeletonBubble(lines: lines, width: width),
+        ],
+      ),
+    ),
+  );
+}
+
+/// A message in outline: avatar, name, then [lines] lines of text, the last
+/// [width] of the row wide — in the metrics of a real one.
+class _SkeletonBubble extends StatelessWidget {
+  const _SkeletonBubble({required this.lines, required this.width});
+
+  final int lines;
+  final double width;
+
+  @override
+  Widget build(BuildContext context) {
+    final text = swarmChatText(16, height: 1.42);
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(6, 7, 6, 7),
+      child: SwarmMessageFrame(
+        key: const ValueKey('swarm-skeleton-bubble'),
+        grouped: false,
+        avatar: const Skeleton(
+          width: SwarmChatAvatar.size,
+          height: SwarmChatAvatar.size,
+          shape: BoxShape.circle,
+        ),
+        header: SkeletonText(
+          style: swarmChatText(13.5, weight: FontWeight.w600),
+          width: 88,
+        ),
+        body: [
+          Padding(
+            padding: const EdgeInsets.only(top: 2),
+            child: Column(
+              children: [
+                for (var line = 1; line <= lines; line++)
+                  SkeletonText(
+                    style: text,
+                    widthFactor: line == lines ? width : 0.92,
+                  ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
 
 /// Where a day starts: Today, Yesterday, the weekday or the date.
 class _Day extends StatelessWidget {

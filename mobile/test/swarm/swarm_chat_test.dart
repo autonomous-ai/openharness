@@ -6,6 +6,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:harness_mobile/notify/system_notices.dart';
 import 'package:harness_mobile/settings/experimental_features.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart' as grid;
+import 'package:harness_mobile/swarm/swarm_chat_cache.dart';
 import 'package:harness_mobile/swarm/swarm_conversation_page.dart';
 import 'package:harness_mobile/swarm/swarm_message_row.dart';
 import 'package:harness_mobile/swarm/swarm_request.dart';
@@ -119,10 +120,50 @@ void main() {
     return fake;
   }
 
-  Future<SwarmHost> pump(WidgetTester tester, FakeSwarm fake) async {
-    final features = ExperimentalFeaturesStore(storage: MemoryKeyValueStore())
+  /// Who is signed in, and Settings ▸ Experimental, of the last [pump].
+  late ValueNotifier<String?> account;
+  late ExperimentalFeaturesStore features;
+
+  /// A few frames, for reads answered at once to land, never settling: a
+  /// skeleton breathes for as long as it shows.
+  Future<void> frames(WidgetTester tester) async {
+    for (var i = 0; i < 5; i++) {
+      await tester.pump();
+    }
+  }
+
+  /// Chat [conversation] of [host]'s Swarm on screen.
+  Future<void> show(
+    WidgetTester tester,
+    SwarmHost host, {
+    String conversation = 'g1',
+    bool settle = true,
+  }) async {
+    await tester.pumpWidget(
+      // The app's own theme, as the shell sets it: its field defaults are
+      // what the composer has to hold back.
+      MaterialApp(
+        theme: grid.buildAppTheme(brightness: Brightness.dark),
+        builder: (context, child) => SwarmScope(notifier: host, child: child!),
+        home: SwarmConversationPage(swarmId: tab, conversationId: conversation),
+      ),
+    );
+    if (settle) {
+      await tester.pumpAndSettle();
+    } else {
+      await frames(tester);
+    }
+  }
+
+  Future<SwarmHost> pump(
+    WidgetTester tester,
+    FakeSwarm fake, {
+    String conversation = 'g1',
+    bool settle = true,
+  }) async {
+    features = ExperimentalFeaturesStore(storage: MemoryKeyValueStore())
       ..value = {PhoneExperiment.swarm};
-    final account = ValueNotifier<String?>(me);
+    account = ValueNotifier<String?>(me);
     final host = SwarmHost(
       accountId: () => account.value,
       account: account,
@@ -131,16 +172,7 @@ void main() {
       features: features,
     )..foreground = false;
     addTearDown(host.dispose);
-    await tester.pumpWidget(
-      // The app's own theme, as the shell sets it: its field defaults are
-      // what the composer has to hold back.
-      MaterialApp(
-        theme: grid.buildAppTheme(brightness: Brightness.dark),
-        builder: (context, child) => SwarmScope(notifier: host, child: child!),
-        home: const SwarmConversationPage(swarmId: tab, conversationId: 'g1'),
-      ),
-    );
-    await tester.pumpAndSettle();
+    await show(tester, host, conversation: conversation, settle: settle);
     return host;
   }
 
@@ -740,9 +772,36 @@ void main() {
       // The list runs from the foot: a drag down goes up the chat, here to
       // its top.
       await tester.drag(key('swarm-messages'), const Offset(0, 4000));
-      // Past the bounce at the edge.
-      await tester.pumpAndSettle();
+      // Past the stretch at the edge, pumped as a settle would be but not
+      // settled: the earlier messages being read breathe as skeletons
+      // meanwhile.
+      for (var i = 0; i < 20; i++) {
+        await tester.pump(const Duration(milliseconds: 100));
+      }
     }
+
+    testWidgets('are read behind skeleton bubbles, not a line of text', (
+      tester,
+    ) async {
+      final fake = long();
+      final page = Completer<Object?>();
+      fake.routes[older] = (_) => page.future;
+      await pump(tester, fake);
+
+      await nearTop(tester);
+
+      expect(
+        find.descendant(
+          of: key('swarm-older-loading'),
+          matching: key('swarm-skeleton-bubble'),
+        ),
+        findsWidgets,
+      );
+      expect(find.text('Loading earlier messages…'), findsNothing);
+      page.complete({'messages': earlier(), 'next': null});
+      await tester.pumpAndSettle();
+      expect(key('swarm-older-loading'), findsNothing);
+    });
 
     testWidgets('are read on their own near the top, with no tap, and what '
         'is read stays where it is', (tester) async {
@@ -1003,7 +1062,10 @@ void main() {
 
       expect(tester.getRect(reading).top, moreOrLessEquals(before, epsilon: 1));
       expect(
-        find.descendant(of: key('swarm-new-pill'), matching: find.text('1 new')),
+        find.descendant(
+          of: key('swarm-new-pill'),
+          matching: find.text('1 new'),
+        ),
         findsOneWidget,
       );
 
@@ -1012,6 +1074,250 @@ void main() {
 
       expect(inView(tester, find.text('Fresh news')), isTrue);
       expect(key('swarm-new-pill'), findsNothing);
+    });
+  });
+
+  group('while it loads', () {
+    const parts = '/api/super-tabs/$tab/parts';
+    const notOpen = 'This chat is not open to you.';
+
+    /// Skeleton bubbles fill the chat: six to eight of them.
+    void skeleton(WidgetTester tester) {
+      expect(key('swarm-chat-skeleton'), findsOneWidget);
+      expect(
+        tester.widgetList(key('swarm-skeleton-bubble')).length,
+        inInclusiveRange(6, 8),
+      );
+    }
+
+    testWidgets('the first page shows skeleton bubbles, and nothing says the '
+        'chat is empty or not open', (tester) async {
+      final fake = backend([message('m1', 1, text: 'The plan')]);
+      final page = Completer<Object?>();
+      fake.routes[messages] = (_) => page.future;
+
+      await pump(tester, fake, settle: false);
+
+      skeleton(tester);
+      expect(find.text(notOpen), findsNothing);
+      expect(find.text('No messages yet.'), findsNothing);
+
+      page.complete({
+        'messages': [message('m1', 1, text: 'The plan')],
+        'next': null,
+      });
+      await tester.pumpAndSettle();
+      expect(find.text('The plan'), findsOneWidget);
+      expect(key('swarm-chat-skeleton'), findsNothing);
+    });
+
+    testWidgets('before the account\'s Swarms are read, the chat is a '
+        'skeleton under a placeholder header', (tester) async {
+      final fake = backend([message('m1', 1)]);
+      final list = Completer<Object?>();
+      final listed = fake.routes['/api/super-tabs/list']!;
+      fake.routes['/api/super-tabs/list'] = (_) => list.future;
+
+      await pump(tester, fake, settle: false);
+
+      skeleton(tester);
+      expect(key('swarm-header-placeholder'), findsOneWidget);
+      expect(find.text(notOpen), findsNothing);
+
+      list.complete(listed(null));
+      await tester.pumpAndSettle();
+      expect(find.text('Fix login'), findsOneWidget);
+      expect(key('swarm-header-placeholder'), findsNothing);
+    });
+
+    testWidgets('before its Swarm is read, the header is a placeholder of the '
+        'same height and nothing says the chat is not open', (tester) async {
+      final fake = backend([message('m1', 1, text: 'The plan')]);
+      final swarm = Completer<Object?>(), page = Completer<Object?>();
+      final read = fake.routes[parts]!;
+      fake.routes[parts] = (_) => swarm.future;
+      fake.routes[messages] = (_) => page.future;
+
+      await pump(tester, fake, settle: false);
+
+      skeleton(tester);
+      expect(key('swarm-header-placeholder'), findsOneWidget);
+      expect(find.text(notOpen), findsNothing);
+      expect(find.text('Chat'), findsNothing);
+      final height = tester.getSize(key('swarm-chat-header')).height;
+
+      swarm.complete(read(null));
+      page.complete({
+        'messages': [message('m1', 1, text: 'The plan')],
+        'next': null,
+      });
+      await tester.pumpAndSettle();
+      expect(find.text('Fix login'), findsOneWidget);
+      expect(find.text('The plan'), findsOneWidget);
+      expect(tester.getSize(key('swarm-chat-header')).height, height);
+    });
+
+    testWidgets('a chat looked for by id is a skeleton until the lookup '
+        'refuses it; only then is it not open', (tester) async {
+      final fake = backend([]);
+      final lookup = Completer<Object?>(), page = Completer<Object?>();
+      fake.routes['/api/super-tabs/$tab/groups/g9'] = (_) => lookup.future;
+      fake.routes['/api/super-tabs/$tab/conversations/g9/messages'] = (_) =>
+          page.future;
+
+      await pump(tester, fake, conversation: 'g9', settle: false);
+
+      expect(fake.paths, contains('/api/super-tabs/$tab/groups/g9'));
+      skeleton(tester);
+      expect(find.text(notOpen), findsNothing);
+
+      lookup.completeError(
+        const SuperTabFailure('FORBIDDEN', 'Not yours.', statusCode: 403),
+      );
+      await frames(tester);
+      expect(find.text(notOpen), findsOneWidget);
+      expect(key('swarm-chat-skeleton'), findsNothing);
+      expect(key('swarm-header-placeholder'), findsNothing);
+
+      page.completeError(
+        const SuperTabFailure('FORBIDDEN', 'Not yours.', statusCode: 403),
+      );
+      await tester.pumpAndSettle();
+      expect(find.text(notOpen), findsOneWidget);
+    });
+
+    testWidgets('a chat with no message yet says so', (tester) async {
+      await pump(tester, backend([]));
+
+      expect(find.text('No messages yet.'), findsOneWidget);
+      expect(key('swarm-chat-skeleton'), findsNothing);
+      expect(find.text(notOpen), findsNothing);
+    });
+  });
+
+  group('opened again', () {
+    const parts = '/api/super-tabs/$tab/parts';
+
+    FakeSwarm read() => backend([
+      message('m1', 1, author: 'agent-lead', text: 'The plan'),
+      message('m2', 2, text: 'On it'),
+    ]);
+
+    /// The chat closed, its Swarm still read.
+    Future<void> close(WidgetTester tester) =>
+        tester.pumpWidget(const SizedBox());
+
+    testWidgets('shows at once what was read, then reads only what is newer', (
+      tester,
+    ) async {
+      final fake = read();
+      final host = await pump(tester, fake);
+      await close(tester);
+      final newer = Completer<Object?>();
+      fake.routes['$messages?after=2'] = (_) => newer.future;
+
+      await show(tester, host, settle: false);
+
+      expect(find.text('The plan'), findsOneWidget);
+      expect(find.text('On it'), findsOneWidget);
+      expect(key('swarm-chat-skeleton'), findsNothing);
+      expect(
+        fake.paths.where((p) => p.startsWith(messages)).last,
+        '$messages?after=2',
+      );
+
+      newer.complete({
+        'messages': [message('m3', 3, text: 'Done')],
+        'next': null,
+      });
+      await tester.pumpAndSettle();
+      expect(find.text('Done'), findsOneWidget);
+    });
+
+    testWidgets('signing out forgets every chat kept', (tester) async {
+      final fake = read();
+      final host = await pump(tester, fake);
+      await close(tester);
+      expect(SwarmChatCache.length, 1);
+
+      account.value = null;
+
+      expect(SwarmChatCache.length, 0);
+      account.value = me;
+      fake.calls.clear();
+      // Harness is behind in these tests: the new session's Swarms are read
+      // here.
+      await host.session!.inbox.refresh();
+      await show(tester, host);
+      expect(fake.paths, contains(messages));
+      expect(
+        fake.paths.where((p) => p.startsWith('$messages?after=')),
+        isEmpty,
+        reason: 'read from the start, as a first open',
+      );
+    });
+
+    testWidgets('turning Swarm off forgets every chat kept', (tester) async {
+      final host = await pump(tester, read());
+      await close(tester);
+      expect(SwarmChatCache.length, 1);
+
+      features.value = {};
+
+      expect(host.session, isNull);
+      expect(SwarmChatCache.length, 0);
+    });
+
+    testWidgets('a chat the person can no longer read is forgotten, open or '
+        'closed', (tester) async {
+      final fake = read();
+      final host = await pump(tester, fake);
+      await close(tester);
+      expect(SwarmChatCache.length, 1);
+      final reader = host.session!.inbox.reader(tab)!;
+
+      // Closed: taken out of g1, the Swarm is read again without it.
+      final full = fake.routes[parts]!(null)! as Map;
+      void leaveOut() {
+        fake.routes[parts] = (_) => {
+          ...full,
+          'groups': [
+            for (final g in full['groups'] as List)
+              if ((g as Map)['key'] != 'g1') g,
+          ],
+        };
+        fake.routes['/api/super-tabs/$tab/changes'] = (_) => {'reload': true};
+      }
+
+      leaveOut();
+      await reader.refresh();
+      expect(SwarmChatCache.length, 0);
+
+      await show(tester, host);
+      expect(find.text('The plan'), findsNothing);
+      expect(find.text('This chat is not open to you.'), findsOneWidget);
+      await close(tester);
+      expect(SwarmChatCache.length, 0);
+
+      // Open: kept from before, then taken out while on screen.
+      fake.routes[parts] = (_) => full;
+      fake.routes['/api/super-tabs/$tab/changes'] = (_) => {'reload': true};
+      await reader.refresh();
+      await show(tester, host);
+      await close(tester);
+      expect(SwarmChatCache.length, 1);
+      await show(tester, host);
+      expect(find.text('The plan'), findsOneWidget);
+
+      leaveOut();
+      await reader.refresh();
+      await tester.pumpAndSettle();
+
+      expect(find.text('The plan'), findsNothing);
+      expect(find.text('This chat is not open to you.'), findsOneWidget);
+      expect(SwarmChatCache.length, 0);
+      await close(tester);
+      expect(SwarmChatCache.length, 0);
     });
   });
 

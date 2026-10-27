@@ -558,6 +558,182 @@ void main() {
     );
   });
 
+  group('where it stands', () {
+    const lookup = '/api/super-tabs/$tab/groups/g-old';
+    const old = '/api/super-tabs/$tab/conversations/g-old/messages';
+
+    test('loading, then loaded', () async {
+      final r = rig();
+      r.swarm.routes[messages] = (_) => {
+        'messages': [message('m1', 1)],
+        'next': null,
+      };
+      await r.reader.refresh();
+      final c = SwarmConversation(r.reader, 'g1');
+      addTearDown(c.dispose);
+      expect(c.state, SwarmChatState.loading);
+
+      await c.load();
+
+      expect(c.state, SwarmChatState.loaded);
+    });
+
+    test('a chat no full read has is looked for, its messages read '
+        'meanwhile', () async {
+      final r = rig();
+      final found = Completer<Object?>(), page = Completer<Object?>();
+      r.swarm.routes[lookup] = (_) => found.future;
+      r.swarm.routes[old] = (_) => page.future;
+      await r.reader.refresh();
+      final c = SwarmConversation(r.reader, 'g-old');
+      addTearDown(c.dispose);
+
+      final loading = c.load();
+      await settle();
+
+      expect(c.state, SwarmChatState.locating);
+      expect(r.swarm.paths, containsAll([lookup, old]));
+
+      page.complete({
+        'messages': [
+          message('m1', 1, text: 'old plan', conversationId: 'g-old'),
+        ],
+        'next': null,
+      });
+      found.complete({
+        'group': part(
+          'g-old',
+          9,
+          groupData(
+            'g-old',
+            title: 'Old work',
+            lastMessageSequence: 1,
+            dormant: true,
+          ),
+        ),
+      });
+      await loading;
+      await settle();
+
+      expect(c.conversation?.closed, isTrue);
+      expect(c.messages.single.text, 'old plan');
+      expect(c.state, SwarmChatState.loaded);
+    });
+
+    test('not open to the person only once the lookup refuses it', () async {
+      final r = rig();
+      final found = Completer<Object?>();
+      r.swarm.routes[lookup] = (_) => found.future;
+      r.swarm.routes[old] = (_) =>
+          throw const SuperTabFailure('MACHINE_UNAVAILABLE', 'No computer.');
+      await r.reader.refresh();
+      final c = SwarmConversation(r.reader, 'g-old');
+      addTearDown(c.dispose);
+      var told = 0;
+      c.addListener(() => told++);
+
+      final loading = c.load();
+      await settle();
+      expect(c.state, isNot(SwarmChatState.lost));
+
+      found.completeError(
+        const SuperTabFailure('FORBIDDEN', 'Not yours.', statusCode: 403),
+      );
+      await loading;
+      await settle();
+
+      expect(c.state, SwarmChatState.lost);
+      expect(told, greaterThan(0), reason: 'the page is told');
+    });
+  });
+
+  test('reading back to a quoted message tells the chat once, not at each '
+      'page', () async {
+    final r = rig(sequence: 30);
+    r.swarm.routes[messages] = (_) => {
+      'messages': [message('m30', 30)],
+      'next': {'sequence': 30, 'id': 'm30'},
+    };
+    for (var top = 30; top > 26; top--) {
+      r.swarm.routes['$messages?before=$top&beforeId=m$top'] = (_) => {
+        'messages': [message('m${top - 1}', top - 1)],
+        'next': {'sequence': top - 1, 'id': 'm${top - 1}'},
+      };
+    }
+    final c = await open(r.reader);
+    var told = 0;
+    c.addListener(() => told++);
+
+    expect(await c.readBackTo('m27'), isTrue);
+
+    expect(told, 1);
+    expect([for (final m in c.messages) m.id], ['m27', 'm28', 'm29', 'm30']);
+    expect(r.swarm.paths.where((p) => p.contains('?before=')), hasLength(3));
+
+    told = 0;
+    expect(await c.readBackTo('m1', pages: 1), isFalse);
+    expect(told, 1);
+    expect(c.hasOlder, isTrue);
+  });
+
+  group('opened again', () {
+    /// g1 read once and closed.
+    Future<void> readAndClose(SwarmReader reader) async {
+      await reader.refresh();
+      final first = SwarmConversation(reader, 'g1');
+      await first.load();
+      first.dispose();
+    }
+
+    test('shows at once what was read, and reads only what came after', () async {
+      final r = rig();
+      r.swarm.routes[messages] = (_) => {
+        'messages': [message('m2', 2), message('m1', 1)],
+        'next': {'sequence': 1, 'id': 'm1'},
+      };
+      await readAndClose(r.reader);
+
+      final c = SwarmConversation(r.reader, 'g1');
+      addTearDown(c.dispose);
+
+      expect([for (final m in c.messages) m.id], ['m1', 'm2']);
+      expect(c.hasOlder, isTrue);
+      expect(c.state, SwarmChatState.loaded);
+      r.swarm.routes['$messages?after=2'] = (_) => {
+        'messages': [message('m3', 3)],
+        'next': null,
+      };
+      await c.load();
+      expect(r.swarm.paths.last, '$messages?after=2');
+      expect([for (final m in c.messages) m.id], ['m1', 'm2', 'm3']);
+    });
+
+    test('more than a page newer reads the latest page instead', () async {
+      final r = rig();
+      r.swarm.routes[messages] = (_) => {
+        'messages': [message('m2', 2), message('m1', 1)],
+        'next': null,
+      };
+      await readAndClose(r.reader);
+      r.swarm.routes['$messages?after=2'] = (_) => {
+        'messages': [for (var i = 3; i < 103; i++) message('m$i', i)],
+        'next': {'sequence': 102, 'id': 'm102'},
+      };
+      r.swarm.routes[messages] = (_) => {
+        'messages': [message('m300', 300), message('m299', 299)],
+        'next': {'sequence': 299, 'id': 'm299'},
+      };
+
+      final c = SwarmConversation(r.reader, 'g1');
+      addTearDown(c.dispose);
+      await c.load();
+
+      expect(r.swarm.paths.last, messages);
+      expect([for (final m in c.messages) m.id], ['m299', 'm300']);
+      expect(c.hasOlder, isTrue);
+    });
+  });
+
   group('Chat with PM', () {
     test(
       "is the project's conversation whose audience is the person alone",
@@ -576,7 +752,8 @@ void main() {
       },
     );
 
-    test('opening it the first time creates it, once per membership', () async {
+    test('opening it the first time creates it, once per membership, and '
+        'answers it at once: the chat reads it as it opens', () async {
       final r = rig();
       var created = false;
       r.swarm.routes['/api/super-tabs/$tab/commands'] = (_) {
@@ -594,9 +771,15 @@ void main() {
             : const [],
       );
       await r.reader.refresh();
+      final read = r.swarm.calls.length;
 
       expect(await openSwarmPmChat(r.reader, project), 'pm-1');
 
+      expect(
+        r.swarm.calls.skip(read).map((call) => call.method),
+        ['POST'],
+        reason: 'nothing read before the chat opens',
+      );
       final sent = r.swarm.calls.singleWhere((call) => call.method == 'POST');
       expect(sent.body!['operationId'], 'pm-chat-$project-$me-gen-$me');
       expect(sent.body!['command'], {
@@ -609,6 +792,7 @@ void main() {
           'personIds': [me],
         },
       });
+      await r.reader.refresh();
       expect(swarmPmChat(r.reader, project)?.id, 'pm-1');
     });
   });
