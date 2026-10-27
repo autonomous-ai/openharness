@@ -567,7 +567,7 @@ void main() {
     expect(field('API key'), findsOneWidget);
     expect(find.text('Qwen3.8-27B'), findsNothing);
     expect(find.text('Subscriptions'), findsNothing);
-    expect(find.text('Manage models'), findsNothing);
+    expect(find.text('Your models'), findsNothing);
     await tester.tap(find.byKey(const ValueKey('models-tab-all')));
     await tester.pump();
     expect(field('API key'), findsOneWidget);

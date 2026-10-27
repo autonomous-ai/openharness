@@ -133,7 +133,7 @@ void main() {
       'DeepSeek-V4-Flash',
       'scholes-60001',
       'Select models in a harness’s model picker.',
-      'Manage models',
+      'Your models',
     ]);
   });
 
