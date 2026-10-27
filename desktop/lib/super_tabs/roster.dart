@@ -15,6 +15,7 @@ import '../widgets/desktop_chrome.dart';
 import '../widgets/engine_identity.dart';
 import '../widgets/harness_activity_mark.dart';
 import 'agent_details.dart';
+import 'areas.dart';
 import 'controller.dart';
 import 'dialog_scope.dart';
 import 'identity.dart';
@@ -451,26 +452,8 @@ class _SuperTabRosterState extends State<SuperTabRoster> {
               style: DesktopChrome.control(),
             ),
           ),
-          onTap: () => showAppDialog<void>(
-            context: context,
-            builder: (context) => AlertDialog(
-              title: Text(superTabPersonName(person.email)),
-              content: Text('${person.email}\n${person.role}'),
-              actions: [
-                TextButton(
-                  onPressed: () {
-                    Navigator.pop(context);
-                    widget.onInvite();
-                  },
-                  child: const Text('Manage people'),
-                ),
-                TextButton(
-                  onPressed: () => Navigator.pop(context),
-                  child: const Text('Close'),
-                ),
-              ],
-            ),
-          ),
+          onTap: () =>
+              showSuperTabPerson(context, c, person, onManage: widget.onInvite),
         ),
       if (people.length > _peopleShown)
         ListTile(

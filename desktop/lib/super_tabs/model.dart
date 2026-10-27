@@ -186,6 +186,12 @@ class SuperTabProject {
         for (final member in row['members'] as List? ?? const [])
           superTabMap(member)['id'] as String,
       ],
+      areas = {
+        if (row['areas'] case final Map areas)
+          for (final MapEntry(:key, :value) in superTabMap(areas).entries)
+            if (value is List)
+              key: List<String>.unmodifiable(value.whereType<String>()),
+      },
       updateMinutes = (row['updateMinutes'] as num?)?.toInt() ?? 5,
       repository = row['repository'] is Map
           ? Map.unmodifiable(superTabMap(row['repository']))
@@ -196,6 +202,9 @@ class SuperTabProject {
   final List<SuperTabRole>? roles;
   final bool isPrivate;
   final List<String> memberIds;
+
+  /// What each person covers here (devices, mobile...), by person id.
+  final Map<String, List<String>> areas;
   final int updateMinutes;
   final Map<String, dynamic>? repository;
 }

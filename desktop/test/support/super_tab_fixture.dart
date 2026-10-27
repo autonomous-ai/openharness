@@ -604,6 +604,15 @@ class ConversationServer {
                 )['archived'] =
             command['archived'];
         revision++;
+      } else if (command['type'] == 'project.areas') {
+        final project = (state['projects'] as List)
+            .cast<Map<String, dynamic>>()
+            .firstWhere((p) => p['id'] == command['projectId']);
+        project['areas'] = {
+          ...?project['areas'] as Map?,
+          command['personId']: command['areas'],
+        };
+        revision++;
       } else if (command['type'] == 'conversation.partner') {
         final group = (state['conversations'] as List)
             .cast<Map<String, dynamic>>()

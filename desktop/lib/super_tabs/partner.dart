@@ -34,6 +34,9 @@ Future<void> showSuperTabPartner(
   SuperTabConversation group,
 ) async {
   final readers = c.snapshot?.readersOf(group) ?? const <SuperTabPerson>[];
+  final project = c.snapshot?.projects
+      .where((p) => p.id == group.projectId)
+      .firstOrNull;
   Widget option(String? id, String name, String? detail) => SimpleDialogOption(
     onPressed: () => Navigator.pop(context, (id: id)),
     child: Row(
@@ -62,7 +65,12 @@ Future<void> showSuperTabPartner(
         children: [
           option(null, 'No partner', null),
           for (final person in readers)
-            option(person.id, superTabPersonName(person.email), person.email),
+            option(
+              person.id,
+              superTabPersonName(person.email),
+              // What they cover, to pick by; else who they are.
+              project?.areas[person.id]?.join(', ') ?? person.email,
+            ),
         ],
       ),
     ),
