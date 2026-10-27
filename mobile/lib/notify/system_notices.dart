@@ -132,6 +132,9 @@ const _devicePayload = 'device:';
 /// URI-encoded, with no newline — so it never reads as an agent's or a device's.
 const _swarmPayload = 'swarm:';
 
+/// The Android channel, iOS thread and iOS category of Swarm notices.
+const _swarmChannel = 'swarm-needs-you';
+
 /// The real centre, through flutter_local_notifications.
 ///
 /// Started lazily on first use, so a launch that never needs it — and every
@@ -187,6 +190,17 @@ class LocalSystemNotices implements SystemNotices, SwarmNotices {
           requestAlertPermission: false,
           requestBadgePermission: false,
           requestSoundPermission: false,
+          // A Swarm notice on a phone that hides previews still says who asks
+          // and where.
+          notificationCategories: [
+            DarwinNotificationCategory(
+              _swarmChannel,
+              options: {
+                DarwinNotificationCategoryOption.hiddenPreviewShowTitle,
+                DarwinNotificationCategoryOption.hiddenPreviewShowSubtitle,
+              },
+            ),
+          ],
         ),
       ),
       onDidReceiveNotificationResponse: (response) => _open(response.payload),
@@ -324,17 +338,20 @@ class LocalSystemNotices implements SystemNotices, SwarmNotices {
         payload: encodeSwarmPayload(message.target),
         notificationDetails: NotificationDetails(
           android: AndroidNotificationDetails(
-            'swarm-needs-you',
+            _swarmChannel,
             'Swarm needs you',
             channelDescription:
                 'A Swarm asks you to decide, tags you, or has work waiting on you.',
             importance: Importance.high,
             priority: Priority.high,
             subText: message.subtitle,
+            // Hidden on a secure lock screen set to hide private content.
+            visibility: NotificationVisibility.private,
           ),
           iOS: DarwinNotificationDetails(
             subtitle: message.subtitle,
-            threadIdentifier: 'swarm-needs-you',
+            threadIdentifier: _swarmChannel,
+            categoryIdentifier: _swarmChannel,
           ),
         ),
       );

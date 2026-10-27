@@ -11,6 +11,9 @@ import 'swarm_fixture.dart';
 
 /// What the phone's notices say about the Swarm: a decision asked of the
 /// person, a Lead's tag, work waiting on them — and where a tap leads.
+///
+/// A notice can be read on a locked phone, so it says only who asks and in
+/// which project; what they ask is read in the app (Lead, 2026-10-27).
 void main() {
   SwarmDecisionNeed decision() => SwarmDecisionNeed(
     'tab-b',
@@ -59,31 +62,45 @@ void main() {
     return SwarmWorkNeed(tab, swarmWaitingWork(snapshot, me).single);
   }
 
-  test('a decision says who asks, and the question', () {
+  /// Nothing the notice shows: what was asked, or where.
+  void keepsItsContent(SwarmNoticeMessage notice, List<String> private) {
+    for (final text in private) {
+      for (final line in [notice.title, notice.subtitle, notice.body]) {
+        expect(line, isNot(contains(text)), reason: '"$text" in "$line"');
+      }
+    }
+  }
+
+  test('a decision says who asks and in which project, not the question', () {
     final notice = swarmNotice(decision());
 
     expect(notice.title, 'River asks you');
-    expect(notice.subtitle, 'Mobile · Fix login');
-    expect(notice.body, 'Ship it behind a flag?');
+    expect(notice.subtitle, 'Mobile');
+    expect(notice.body, 'Open Harness to answer.');
     expect(notice.target, (swarmId: 'tab-b', conversationId: 'g9'));
+    keepsItsContent(notice, ['Ship it', 'Yes', 'Fix login']);
   });
 
-  test("a tag says who tagged, and the Lead's words", () {
+  test("a tag says who tagged, not the Lead's words", () {
     final notice = swarmNotice(mention());
 
     expect(notice.title, 'River tagged you');
-    expect(notice.body, 'Can you check the copy?');
+    expect(notice.subtitle, 'Mobile');
+    expect(notice.body, 'Open Harness to read it.');
+    keepsItsContent(notice, ['check the copy', 'Fix login']);
   });
 
-  test("waiting work says who waits and why, in the worker's words", () {
+  test("waiting work says who waits, not the worker's words", () {
     final needs = swarmNotice(work('needs_human', result: 'Which name?'));
     expect(needs.title, 'Nova needs you');
-    expect(needs.subtitle, 'Mobile · #4 Sync');
-    expect(needs.body, 'Which name?');
+    expect(needs.subtitle, 'Mobile');
+    expect(needs.body, 'Open Harness to answer.');
+    keepsItsContent(needs, ['Which name', 'Sync']);
 
-    final stuck = swarmNotice(work('blocked'));
+    final stuck = swarmNotice(work('blocked', result: 'No access to the repo'));
     expect(stuck.title, 'Nova is stuck');
-    expect(stuck.body, 'Open it to see why.');
+    expect(stuck.body, 'Open Harness to see why.');
+    keepsItsContent(stuck, ['No access', 'Sync']);
   });
 
   test('each need is its own notice, and the same need replaces itself', () {

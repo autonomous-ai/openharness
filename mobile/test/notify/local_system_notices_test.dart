@@ -74,8 +74,8 @@ void main() {
     const swarm = (
       key: 'decision:d1',
       title: 'River asks you',
-      subtitle: 'Mobile · Fix login',
-      body: 'Ship it behind a flag?',
+      subtitle: 'Mobile',
+      body: 'Open Harness to answer.',
       target: target,
     );
 
@@ -86,12 +86,29 @@ void main() {
       expect(plugin.shown.map((n) => n.id).toSet(), {swarmNoticeIdFor('decision:d1')});
       final shown = plugin.shown.first;
       expect(shown.title, 'River asks you');
-      expect(shown.body, 'Ship it behind a flag?');
+      expect(shown.body, 'Open Harness to answer.');
       expect(shown.details!.android!.channelId, 'swarm-needs-you');
-      expect(shown.details!.android!.subText, 'Mobile · Fix login');
-      expect(shown.details!.iOS!.subtitle, 'Mobile · Fix login');
+      expect(shown.details!.android!.subText, 'Mobile');
+      expect(shown.details!.iOS!.subtitle, 'Mobile');
       expect(shown.details!.iOS!.threadIdentifier, 'swarm-needs-you');
       expect(decodeAgentPayload(shown.payload), isNull);
+    });
+
+    test('a locked phone that hides private content hides it', () async {
+      await notices.showSwarm(swarm);
+      final shown = plugin.shown.single;
+
+      // Android: content hidden on a secure lock screen that hides it.
+      expect(shown.details!.android!.visibility, NotificationVisibility.private);
+      // iOS: when previews are hidden, who asks and where still show.
+      expect(shown.details!.iOS!.categoryIdentifier, 'swarm-needs-you');
+      final category = plugin.settings!.iOS!.notificationCategories.singleWhere(
+        (c) => c.identifier == 'swarm-needs-you',
+      );
+      expect(category.options, {
+        DarwinNotificationCategoryOption.hiddenPreviewShowTitle,
+        DarwinNotificationCategoryOption.hiddenPreviewShowSubtitle,
+      });
     });
 
     test('a tap opens that conversation, and no agent or device', () async {

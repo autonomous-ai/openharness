@@ -3,43 +3,44 @@ import 'dart:async';
 import '../notify/system_notices.dart';
 import 'swarm_inbox.dart';
 
-/// The notice that tells the person about [need]: who asks, where, and what —
-/// the desktop's tag notice in the phone's three lines.
+/// The notice that tells the person about [need]: who asks, and in which
+/// project.
+///
+/// A notice can be read on a locked phone, and neither platform lets this app
+/// hide one part of it there for sure: so what is asked, and the conversation
+/// it is in, are read in the app only (Lead, 2026-10-27). The one place to
+/// change if notices may say more.
 SwarmNoticeMessage swarmNotice(SwarmNeed need) {
-  final target = (swarmId: need.swarmId, conversationId: need.conversationId);
-  return switch (need) {
+  final (title, project, body) = switch (need) {
     SwarmDecisionNeed(:final decision) => (
-      key: need.key,
-      title: '${decision.askerName} asks you',
-      subtitle: _where(decision.projectName, decision.conversationTitle),
-      body: decision.question,
-      target: target,
+      '${decision.askerName} asks you',
+      decision.projectName,
+      'Open Harness to answer.',
     ),
     SwarmMentionNeed(:final mention) => (
-      key: need.key,
-      title: '${mention.leadName} tagged you',
-      subtitle: _where(mention.projectName, mention.conversationTitle),
-      body: mention.text,
-      target: target,
+      '${mention.leadName} tagged you',
+      mention.projectName,
+      'Open Harness to read it.',
+    ),
+    SwarmWorkNeed(:final work) when work.status == 'blocked' => (
+      '${work.agentName} is stuck',
+      work.project.name,
+      'Open Harness to see why.',
     ),
     SwarmWorkNeed(:final work) => (
-      key: need.key,
-      title: work.status == 'blocked'
-          ? '${work.agentName} is stuck'
-          : '${work.agentName} needs you',
-      subtitle: _where(work.project.name, work.conversation.label),
-      body:
-          work.question ??
-          (work.status == 'blocked'
-              ? 'Open it to see why.'
-              : 'Open it to answer.'),
-      target: target,
+      '${work.agentName} needs you',
+      work.project.name,
+      'Open Harness to answer.',
     ),
   };
+  return (
+    key: need.key,
+    title: title,
+    subtitle: project,
+    body: body,
+    target: (swarmId: need.swarmId, conversationId: need.conversationId),
+  );
 }
-
-String _where(String project, String conversation) =>
-    [project, conversation].where((part) => part.isNotEmpty).join(' · ');
 
 /// Posts a notice for each need that arrives ([SwarmInbox.onArrived]) unless
 /// the person is already looking at it ([quiet]), and takes it down once the
