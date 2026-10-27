@@ -6359,6 +6359,13 @@ class AppNotifier extends ChangeNotifier {
   /// must still reach the screen as it is. A command asked twice is the same command, under its
   /// operation id.
   ///
+  /// With no other machine up to ask, one on its way back is waited for as below. With none, a
+  /// refusal from the only machine up while another of the account's is away tells nothing yet:
+  /// it is no computer, so the list is read again and Swarm soon retries ([SwarmInbox]). On the
+  /// owner's iPhone (2026-10-27, 15:06) Swarm showed a Team sign-in's refusal instead, and stayed
+  /// on it until its next 15-second read, 14 seconds after the Mac was back. A refusal saying the
+  /// person lost the Swarm stays what it is, as everywhere: what was read of it must go.
+  ///
   /// Nor is one read lost on the way — a timeout, a socket dropped — the end of it: it is asked
   /// again through another computer that is up. With none up but one redialling, the call waits
   /// [swarmReconnectWait] for it: Swarm said "Connect one of your computers" for 10 to 25 seconds
@@ -6369,19 +6376,19 @@ class AppNotifier extends ChangeNotifier {
     Map<String, dynamic>? body,
   }) async {
     final machine = _swarmMachine() ?? await _swarmMachineBack();
-    if (machine == null) {
-      _swarmListAgain();
-      throw const SuperTabFailure(
-        'MACHINE_UNAVAILABLE',
-        'Connect one of your computers to open Swarm.',
-      );
-    }
+    if (machine == null) throw _swarmNoComputer();
     try {
       return await _swarmRequestVia(machine, method, path, body);
     } on SuperTabFailure catch (refusal) {
       if (refusal.code == 'ACCOUNT_CHANGED') rethrow;
-      final other = _swarmMachine(except: machine);
-      if (other == null) rethrow;
+      final other =
+          _swarmMachine(except: machine) ??
+          await _swarmMachineBack(except: machine);
+      if (other == null) {
+        final lost = const {'FORBIDDEN', 'NOT_FOUND'}.contains(refusal.code);
+        if (lost || !_swarmAnyOther(machine)) rethrow;
+        throw _swarmNoComputer();
+      }
       try {
         final value = await _swarmRequestVia(other, method, path, body);
         _passOverSwarmMachine(machine, other);
@@ -6401,6 +6408,24 @@ class AppNotifier extends ChangeNotifier {
     }
   }
 
+  /// No computer to ask the Swarm through, with the list read again.
+  SuperTabFailure _swarmNoComputer() {
+    _swarmListAgain();
+    return const SuperTabFailure(
+      'MACHINE_UNAVAILABLE',
+      'Connect one of your computers to open Swarm.',
+    );
+  }
+
+  /// Another of the account's machines than [machine] could be asked once it is up: linked, and
+  /// not passed over.
+  bool _swarmAnyOther(MachineState machine) => machineStates.values.any(
+    (other) =>
+        other != machine &&
+        !other.needsLink &&
+        !_swarmRefused.contains(other.machine.machineId),
+  );
+
   /// When the computer list was last read again for Swarm: at most once in [_swarmListGap].
   DateTime? _swarmListedAt;
   static const _swarmListGap = Duration(seconds: 2);
@@ -6418,9 +6443,10 @@ class AppNotifier extends ChangeNotifier {
   }
 
   /// A computer that comes up within [swarmReconnectWait], when one is on its way: dialling or
-  /// redialling, linked, not reported off, and not passed over. Null otherwise.
-  Future<MachineState?> _swarmMachineBack() async {
+  /// redialling, linked, not reported off, and not passed over — nor [except]. Null otherwise.
+  Future<MachineState?> _swarmMachineBack({MachineState? except}) async {
     bool coming(MachineState machine) =>
+        machine != except &&
         (machine.connectionStatus == ConnectionStatus.connecting ||
             machine.connectionStatus == ConnectionStatus.reconnecting) &&
         !machine.needsLink &&
@@ -6430,7 +6456,7 @@ class AppNotifier extends ChangeNotifier {
     final back = Completer<MachineState?>();
     void look() {
       if (back.isCompleted) return;
-      final machine = _swarmMachine();
+      final machine = _swarmMachine(except: except);
       if (machine != null || !machineStates.values.any(coming)) {
         back.complete(machine);
       }

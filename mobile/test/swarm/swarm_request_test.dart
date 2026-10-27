@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness_mobile/core/models.dart';
+import 'package:harness_mobile/swarm/swarm_inbox.dart';
 import 'package:harness_mobile/swarm/swarm_request.dart';
 import 'package:harness_mobile/ws/ws_conn.dart';
 
@@ -144,7 +145,7 @@ void main() {
     int reads(String id) => rig.conn(id).payloadsOf('super_tabs').length;
 
     // 14:27:24: the Mac is marked offline; the Team computer is the only one
-    // up, and its refusal is all there is to show.
+    // up, and nothing tells whose refusal it is: no computer, for now.
     rig.app.connectionStatusForTest('mac', ConnectionStatus.disconnected);
     await settle();
     await expectLater(
@@ -153,7 +154,7 @@ void main() {
         isA<SuperTabFailure>().having(
           (f) => f.code,
           'code',
-          'TEAM_SESSION_LIMITED',
+          'MACHINE_UNAVAILABLE',
         ),
       ),
     );
@@ -185,6 +186,131 @@ void main() {
     await settle();
     await rig.app.swarmRequest('GET', '/api/super-tabs/list');
     expect(reads('team'), 3);
+  });
+
+  // Mira's run of ac7ce77 on the owner's iPhone, 2026-10-27: at 15:06:19 the
+  // Mac was marked offline and the read went to the Team computer, whose
+  // refusal Swarm showed from 15:06:23. The Mac was back at 15:06:27, but
+  // Swarm stayed on the refusal until its normal read at 15:06:41: neither
+  // the quick retry nor the computer list's re-read had started.
+  test('a refusal from the only computer up, with the Mac away, is no '
+      'computer: the list is read again and Swarm retries soon', () async {
+    final rig = await signedInWith({'mac': [], 'team': []});
+    addTearDown(rig.app.dispose);
+    var listed = 0;
+    rig.api.onMachines = () async {
+      listed++;
+      return [remoteMachine('mac'), remoteMachine('team')];
+    };
+    rig.conn('team').answers['super_tabs'] = (_) => {
+      'error': 'TEAM_SESSION_LIMITED',
+      'detail': 'A team sign-in can only run Swarm agents on its own machine.',
+      'status': 403,
+    };
+    // The list, with no Swarm yet; then the invitations, with none.
+    rig.conn('mac').answers['super_tabs'] = (payload) =>
+        payload['path'] == '/api/super-tabs/list'
+        ? forwarded({'tabs': <Object>[], 'next': null})
+        : forwarded(<Object>[]);
+    int reads(String id) => rig.conn(id).payloadsOf('super_tabs').length;
+    final inbox = SwarmInbox(accountId: 'u', request: rig.app.swarmRequest);
+    addTearDown(inbox.dispose);
+
+    // 15:06:19: the Mac is marked offline; the read goes to the Team
+    // computer, which refuses it.
+    rig.app.connectionStatusForTest('mac', ConnectionStatus.disconnected);
+    await settle();
+    final before = listed;
+    await inbox.refresh();
+    await settle();
+
+    expect(reads('team'), 1);
+    expect(inbox.noComputer, isTrue, reason: 'the quick retry is on');
+    expect(inbox.error, 'Connect one of your computers to open Swarm.');
+    expect(listed, before + 1, reason: 'the computer list is read again');
+
+    // 15:06:27: the Mac is back. The next read, the quick retry's, is
+    // refused by the Team computer and answered through the Mac at once.
+    rig.app.connectionStatusForTest('mac', ConnectionStatus.connected);
+    await settle();
+    await inbox.refresh();
+
+    expect(inbox.loaded, isTrue);
+    expect(inbox.error, isNull);
+    expect(inbox.noComputer, isFalse);
+    expect(reads('team'), 2);
+    expect(reads('mac'), greaterThan(0));
+  });
+
+  test('a refusal from the only computer up waits for one on its way back, '
+      'and is answered through it', () async {
+    final rig = await signedInWith({'mac': [], 'team': []});
+    addTearDown(rig.app.dispose);
+    rig.conn('team').answers['super_tabs'] = (_) => {
+      'error': 'TEAM_SESSION_LIMITED',
+      'detail': 'A team sign-in can only run Swarm agents on its own machine.',
+      'status': 403,
+    };
+    rig.conn('mac').answers['super_tabs'] = (_) => forwarded({'tabs': []});
+    rig.app.connectionStatusForTest('mac', ConnectionStatus.reconnecting);
+    await settle();
+
+    Object? value;
+    final read = rig.app
+        .swarmRequest('GET', '/api/super-tabs/list')
+        .then((v) => value = v);
+    await settle();
+    expect(rig.conn('team').payloadsOf('super_tabs'), hasLength(1));
+    expect(value, isNull, reason: 'waiting for the Mac');
+
+    rig.app.connectionStatusForTest('mac', ConnectionStatus.connected);
+    await read;
+
+    expect(value, {'tabs': <Object>[]});
+    await rig.app.swarmRequest('GET', '/api/super-tabs/list');
+    expect(
+      rig.conn('team').payloadsOf('super_tabs'),
+      hasLength(1),
+      reason: 'the Team computer is passed over',
+    );
+  });
+
+  test('a refusal that says the person lost the Swarm is never taken for no '
+      'computer: what was read of it must go', () async {
+    final rig = await signedInWith({'mac': [], 'team': []});
+    addTearDown(rig.app.dispose);
+    rig.conn('team').answers['super_tabs'] = (_) => {
+      'error': 'NOT_FOUND',
+      'detail': 'This Swarm is unavailable.',
+      'status': 404,
+    };
+    rig.app.connectionStatusForTest('mac', ConnectionStatus.disconnected);
+    await settle();
+
+    await expectLater(
+      rig.app.swarmRequest('GET', '/api/super-tabs/t/parts'),
+      throwsA(
+        isA<SuperTabFailure>().having((f) => f.code, 'code', 'NOT_FOUND'),
+      ),
+    );
+  });
+
+  test("the only computer of the account refusing: its refusal is the read's "
+      'own, as it was', () async {
+    final rig = await signedInWith({'m': []});
+    addTearDown(rig.app.dispose);
+    rig.conn('m').answers['super_tabs'] = (_) => {
+      'error': 'SWARM_PAUSED',
+      'detail': 'This Swarm is paused.',
+      'status': 409,
+    };
+
+    await expectLater(
+      rig.app.swarmRequest('GET', '/api/super-tabs/list'),
+      throwsA(
+        isA<SuperTabFailure>().having((f) => f.code, 'code', 'SWARM_PAUSED'),
+      ),
+    );
   });
 
   // Mira's clean repeat, 14:41:00 to 14:41:37: both computers connected the
