@@ -2,6 +2,8 @@ import { describe, expect, it, vi } from 'vitest'
 import { inspectCapacity, startAgent } from './start.js'
 import { buildEngineCommandArgv } from '../lib/engineLaunch.js'
 const where = { port: 14001, machineId: 'lead-machine', dataDir: '/fixture' }
+/** A queued start is watched before the Lead moves on (startAgent); these tests read the queued answer at once. */
+const noPause = async () => {}
 function fixture(options: { state?: Record<string, unknown> | Error; githubApp?: boolean; refuse?: string; loseCancel?: boolean; loseFailure?: boolean; launchModel?: string[]; acceptedLaunchModel?: { model: string | null; effort: string | null }; refuseModel?: string; frame?: string; guest?: boolean; identity?: { sessionId: string; createdAt: string } } = {}) {
   const start = { creationId: 'super-native-receipt', error: null as string | null, request: { machineId: 'target', conversationId: 'group', engine: 'claude', name: 'Builder', cwd: '/repo', worktree: true,
     requirements: { memoryBytes: 100, diskBytes: 200, maxCpuPercent: 80, tools: ['git'], devices: [], quotaRequired: false } }, dispatched: false }
@@ -122,7 +124,7 @@ describe('Swarm permission mode', () => {
     })
     const input = { action: 'start', tabId: 'tab', operationId: 'same-op', request: f.start.request }
     await expect(startAgent(input, f.scoped, where, f.open)).rejects.toThrow('Accepted reply lost')
-    expect(await startAgent(input, f.scoped, where, f.open)).toMatchObject({ ok: true, queued: true, startId: 'start' })
+    expect(await startAgent(input, f.scoped, where, f.open, noPause)).toMatchObject({ ok: true, queued: true, startId: 'start' })
     expect(accepted).toBe(1)
     expect(f.open).not.toHaveBeenCalled()
   })
@@ -138,7 +140,7 @@ describe('Swarm permission mode', () => {
     const f = fixture()
     Object.assign(f.start, { poolGeneration: 'pool', ...(settled ? { harnessId: 'existing', poolSettled: true } : {}) })
     f.scoped.mockResolvedValueOnce({ error: 'OPERATION_REUSED', detail: 'Use a new operation ID for a different request.' })
-    const result = await startAgent({ action: 'start', tabId: 'tab', operationId: 'same-op', request: f.start.request }, f.scoped, where, f.open)
+    const result = await startAgent({ action: 'start', tabId: 'tab', operationId: 'same-op', request: f.start.request }, f.scoped, where, f.open, noPause)
     expect(result).toMatchObject({ ok: true, ...(settled ? { harnessId: 'existing' } : { queued: true }) })
     expect(result).not.toHaveProperty('permissionWarning')
     const attempts = f.scoped.mock.calls.map(c => c[0]).filter(c => (c.command as any)?.type === 'agent.start')
@@ -157,7 +159,7 @@ describe('Swarm permission mode', () => {
       }
       return scoped(payload)
     })
-    const result = await startAgent({ action: 'start', tabId: 'tab', operationId: 'same-op', request: f.start.request }, f.scoped, where, f.open)
+    const result = await startAgent({ action: 'start', tabId: 'tab', operationId: 'same-op', request: f.start.request }, f.scoped, where, f.open, noPause)
     expect(result).toMatchObject({ ok: true, ...(settled ? { harnessId: 'existing' } : { queued: true }), permissionWarning: expect.stringContaining("machine's default") })
     const attempts = f.scoped.mock.calls.map(c => c[0]).filter(c => (c.command as any)?.type === 'agent.start')
     expect(attempts).toHaveLength(2)
@@ -885,5 +887,143 @@ describe('Swarm starts for another person\'s project', () => {
       expect(payload).not.toHaveProperty('swarmGitHub')
       expect(String(payload.prompt)).not.toContain('GitHub App')
     }
+  })
+})
+
+describe('a Lead\'s start that fails before its agent exists', () => {
+  const requirements = { memoryBytes: 100, diskBytes: 200, maxCpuPercent: 80, tools: ['git'], devices: ['round'], quotaRequired: false }
+  const candidate = (id: string, machineId: string, kind = 'new') => ({ id, kind, ...(kind === 'member' ? { agentId: `agent-${machineId}` } : {}), machineId,
+    engine: 'claude', model: 'opus', effort: 'high', quality: 3, cost: 10, title: `Builder · Claude opus high · ${machineId}`, label: machineId })
+  const decision = (candidates: ReturnType<typeof candidate>[]) => ({ id: 'decision-1', conversationId: 'group', outcome: 'failed', final: null,
+    record: { assessment: { difficulty: 'medium', risk: 'low', why: 'Queued Lead routing.', size: 'medium' }, candidates, excluded: [],
+      floor: 2, notes: false, pick: candidates[0]!.id, via: 'order', p: null, belowFloor: false, why: 'Policy order.' } })
+  const swarm = (rules: unknown[] = []) => ({
+    conversations: [{ id: 'group', projectId: 'project', leadId: 'lead', requesterId: 'person-1' }],
+    projects: [{ id: 'project', ownerId: 'owner-1', repository: { machineId: 'repo-mac', cwd: '/repo' } }],
+    machines: [{ machineId: 'mac-one', name: 'Mac One', scope: 'swarm', cwd: '/one/swarm' }, { machineId: 'mac-two', name: 'Mac Two', scope: 'swarm', cwd: '/two/swarm/' }],
+    rules,
+  })
+  const TOKEN = 'The Harness GitHub App token is not in the form GitHub gives.'
+  /** A backend with contributed machines whose hosts fail a start in preparation, as the round-device group saw. */
+  function backend(options: { candidates?: ReturnType<typeof candidate>[]; rules?: unknown[]; fails?: string[] } = {}) {
+    const starts = new Map<string, Record<string, unknown>>()
+    const fails = new Set(options.fails ?? ['mac-one'])
+    const commands: Record<string, unknown>[] = []
+    const scoped = vi.fn(async (payload: Record<string, unknown>): Promise<Record<string, unknown>> => {
+      if (payload.action === 'startStatus') {
+        const start = starts.get(String(payload.startId))!
+        // The host readies a queued start on its next pass: a machine whose app token cannot be had fails it there.
+        const request = start.request as Record<string, unknown>
+        if (start.read && fails.has(String(request.machineId))) start.error = TOKEN
+        start.read = true
+        return { ok: true, value: structuredClone(start) }
+      }
+      if (payload.action === 'routeDecision') return { ok: true, value: decision(options.candidates ?? [candidate('c0', 'mac-one'), candidate('c1', 'mac-one', 'member'), candidate('c2', 'mac-two')]) }
+      if (payload.action === 'status') return { ok: true, value: { state: swarm(options.rules) } }
+      const cmd = payload.command as Record<string, unknown>
+      commands.push({ operationId: payload.operationId, ...cmd })
+      if (cmd.type === 'agent.start') {
+        starts.set(String(payload.operationId), { id: payload.operationId, creationId: `super-${String(payload.operationId)}`, poolGeneration: 'pool',
+          routeDecisionId: cmd.routeDecisionId, request: cmd.request, harnessId: null, dispatched: false, error: null })
+        return { ok: true, value: { result: { startId: payload.operationId } } }
+      }
+      if (cmd.type === 'route.record') return { ok: true, value: { result: { routeDecisionId: payload.operationId } } }
+      return { ok: true, value: { result: { messageId: payload.operationId } } }
+    })
+    const open = vi.fn(async () => { throw new Error('A queued start is dispatched by its host, not the Lead.') })
+    const pause = vi.fn(async () => {})
+    const lead = (input: Record<string, unknown>) => startAgent(input, scoped, where, open, pause)
+    const first = { action: 'start', tabId: 'tab', operationId: 'first-start', request: { conversationId: 'group', machineId: 'mac-one', engine: 'claude',
+      model: 'opus', effort: 'high', name: 'Builder', cwd: '/one/swarm/project', worktree: true, requirements, routeDecisionId: 'decision-1' } }
+    return { starts, commands, scoped, pause, lead, first, of: (type: string) => commands.filter(c => c.type === type) }
+  }
+
+  it('starts once on the route\'s next machine when the first machine fails it in preparation', async () => {
+    const b = backend()
+    const result = await b.lead(b.first)
+    const [, retry] = b.of('agent.start')
+    const [rerouted] = b.of('route.record')
+    // The retry is routed again from the stored decision: without the failed machine, picking the next new agent.
+    expect(rerouted).toMatchObject({ conversationId: 'group', decision: { pick: 'c2', via: 'order', candidates: [candidate('c2', 'mac-two')],
+      excluded: [{ title: 'Builder · Claude opus high · mac-one', reason: 'Its machine could not start this task.' }, { title: 'Builder · Claude opus high · mac-one', reason: 'Its machine could not start this task.' }] } })
+    expect(retry).toMatchObject({ routeDecisionId: rerouted!.operationId, request: { machineId: 'mac-two', cwd: '/two/swarm/project', engine: 'claude',
+      model: 'opus', effort: 'high', name: 'Builder', worktree: true, requirements, conversationId: 'group' } })
+    expect(b.of('agent.start')).toHaveLength(2)
+    expect(result).toMatchObject({ ok: true, queued: true, startId: retry!.operationId, retriedFrom: 'first-start' })
+    expect(b.of('message.send')).toEqual([])
+  })
+
+  it('a resumed failed start is retried the same way, once, under the same operations', async () => {
+    const b = backend()
+    await b.lead(b.first)
+    const before = b.commands.length
+    // The Lead, woken by the failure, resumes the first start: the retry already exists, so nothing new is sent.
+    expect(await b.lead({ action: 'resume', tabId: 'tab', startId: 'first-start' })).toMatchObject({ queued: true, retriedFrom: 'first-start' })
+    expect(b.commands.slice(before).map(c => c.operationId)).toEqual(b.commands.slice(before - 2, before).map(c => c.operationId))
+  })
+
+  it('with no other machine, tells the group and its requester that the task has no worker, without the raw error', async () => {
+    const b = backend({ candidates: [candidate('c0', 'mac-one'), candidate('c1', 'mac-one', 'member')] })
+    const result = await b.lead(b.first)
+    expect(b.of('agent.start')).toHaveLength(1)
+    const [notice] = b.of('message.send')
+    expect(notice).toMatchObject({ conversationId: 'group', mentions: ['person-1'], recipientIds: [],
+      text: 'Builder could not start on Mac One, and no other machine allowed for this task could take it. This task has no worker until that machine is fixed or another one is added.' })
+    expect(String(notice!.text)).not.toContain('token')
+    expect(result).toMatchObject({ error: 'START_BLOCKED', startId: 'first-start', detail: expect.stringContaining(TOKEN) })
+  })
+
+  it('reports instead of trying a third machine when the retry fails as well', async () => {
+    const b = backend({ fails: ['mac-one', 'mac-two'] })
+    const result = await b.lead(b.first)
+    expect(b.of('agent.start')).toHaveLength(2)
+    expect(b.of('message.send')).toHaveLength(1)
+    expect(b.of('message.send')[0]!.text).toMatch(/^Builder could not start on Mac Two, and no other machine/)
+    expect(result).toMatchObject({ error: 'START_BLOCKED' })
+    // Resuming the failed retry later reports the same notice again, never a further start.
+    const retryId = String(b.of('agent.start')[1]!.operationId)
+    expect(await b.lead({ action: 'resume', tabId: 'tab', startId: retryId })).toMatchObject({ error: 'START_BLOCKED' })
+    expect(b.of('agent.start')).toHaveLength(2)
+    expect(new Set(b.of('message.send').map(c => c.operationId)).size).toBe(1)
+  })
+
+  it('keeps a task bound by a hard rule this client does not know where it is, and reports it', async () => {
+    const b = backend({ rules: [{ id: 'rule-1', projectId: 'project', rule: { kind: 'machines', machineIds: ['mac-one', 'mac-two'] } },
+      { id: 'rule-2', projectId: 'project', rule: { kind: 'requiresMachine', machineId: 'mac-one' } }] })
+    expect(await b.lead(b.first)).toMatchObject({ error: 'START_BLOCKED' })
+    expect(b.of('route.record')).toEqual([])
+    expect(b.of('agent.start')).toHaveLength(1)
+  })
+
+  it('a rule of another project does not hold the task back', async () => {
+    const b = backend({ rules: [{ id: 'rule-2', projectId: 'other', rule: { kind: 'requiresMachine', machineId: 'mac-one' } }] })
+    expect(await b.lead(b.first)).toMatchObject({ ok: true, queued: true })
+  })
+
+  it('reports when the backend refuses the new pick, for a hard rule it knows', async () => {
+    const b = backend()
+    const answer = b.scoped.getMockImplementation()!
+    b.scoped.mockImplementation(async payload => (payload.command as Record<string, unknown> | undefined)?.type === 'route.record'
+      ? { error: 'RULE_BROKEN', detail: 'Only these machines.' } : answer(payload))
+    expect(await b.lead(b.first)).toMatchObject({ error: 'START_BLOCKED' })
+    expect(b.of('agent.start')).toHaveLength(1)
+  })
+
+  it('returns a start still queued after the watch as before, without retrying it', async () => {
+    const b = backend({ fails: [] })
+    expect(await b.lead(b.first)).toMatchObject({ ok: true, queued: true, startId: 'first-start' })
+    expect(b.pause).toHaveBeenCalledTimes(10)
+    expect(b.of('route.record')).toEqual([])
+  })
+
+  it('never retries on the host side, nor a start that was not routed', async () => {
+    const b = backend()
+    await b.lead(b.first)
+    const hosted = await startAgent({ action: 'resume', tabId: 'tab', startId: 'first-start', hostDispatch: true }, b.scoped, where, vi.fn(), b.pause)
+    expect(hosted).toMatchObject({ error: 'START_FAILED' })
+    const unrouted = backend()
+    const { routeDecisionId: _id, ...request } = unrouted.first.request
+    expect(await unrouted.lead({ ...unrouted.first, request })).toMatchObject({ error: 'START_FAILED', detail: TOKEN })
+    expect(unrouted.of('route.record')).toEqual([])
   })
 })

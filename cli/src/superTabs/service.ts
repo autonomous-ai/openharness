@@ -377,6 +377,10 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
         if (payload.action === 'startStatus' && identifier(payload.startId)) {
           return { ok: true, value: await backend(core, 'GET', `${path}/starts/${payload.startId}?${identity}`) }
         }
+        // The route a Lead's failed start is tried again from (start.ts): the backend lets only who may read its group.
+        if (payload.action === 'routeDecision' && identifier(payload.decisionId)) {
+          return { ok: true, value: await backend(core, 'GET', `${path}/route-decisions/${payload.decisionId}?${identity}`) }
+        }
         if (payload.action === 'status') return { ok: true, value: statusView(answerOf(await swarm()), agentId) }
         // A Lead's terminal read or typing (`screen`, `type`): the backend answers only the agent that asked.
         if (payload.action === 'terminalResult') {
