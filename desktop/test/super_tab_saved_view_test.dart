@@ -908,6 +908,49 @@ void _followUpTests() {
     expect(jsonDecode(store.values['super_tab.views.owner']!), ['new']);
   });
 
+  // The web's forgets only: Desktop forgets as main does since #1803.
+  test(
+    'Desktop keeps the view of a Swarm a discovery no longer lists',
+    () async {
+      final store = MemoryStore();
+      final views = SuperTabSavedViews(store);
+      await views.claim('owner');
+      await views.write('owner', 'gone', _view(tab: 'gone'));
+      final client = SuperTabClient(
+        transport: (_Pages()..refuseLast = false).call,
+        storage: store,
+        onTabs: (tabs, hidden) {},
+        discoveryInterval: Duration.zero,
+      )..reading = SuperTabReading.desktop;
+      addTearDown(client.dispose);
+      client.bind('owner');
+      await client.refreshTabs();
+      await pumpEventQueue();
+      expect(client.discoveryError, isNull);
+      expect(store.values['super_tab.view.owner.gone'], isNotNull);
+    },
+  );
+
+  test('Desktop keeps the view of the account leaving when the device names '
+      'nobody', () async {
+    final store = MemoryStore();
+    final views = SuperTabSavedViews(store);
+    await views.claim('owner');
+    await views.write('owner', 'tab', _view());
+    final client = SuperTabClient(
+      transport: (_Pages()..refuseLast = false).call,
+      storage: store,
+      discoveryInterval: Duration.zero,
+    )..reading = SuperTabReading.desktop;
+    addTearDown(client.dispose);
+    client.bind('owner');
+    await pumpEventQueue();
+    store.values.remove('super_tab.saved_by');
+    client.bind(null);
+    await pumpEventQueue();
+    expect(store.values[_viewKey], isNotNull);
+  });
+
   test('Desktop: a discovery reads and deletes no saved view', () async {
     final store = _TouchStore();
     final client = SuperTabClient(

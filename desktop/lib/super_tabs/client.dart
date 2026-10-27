@@ -116,6 +116,10 @@ class SuperTabClient {
   final _viewSavedAt = <String, DateTime>{};
   final _viewVersions = <String, int>{};
 
+  /// The web's forgets beyond Desktop's: the Swarms a discovery no longer
+  /// lists, and the account leaving. Desktop forgets as it did with #1803.
+  bool get _forgetsWebOnly => _reading.drawsSaved && !_reading.confirmsSaved;
+
   /// Only the account using this device keeps views on it: any other one,
   /// after a reload too, is forgotten ([SuperTabSavedViews.claim]).
   void _claimViews({String? leaving}) {
@@ -247,7 +251,7 @@ class SuperTabClient {
     final leaving = _account;
     _account = account;
     // Nothing of an account that left stays on this device.
-    _claimViews(leaving: leaving);
+    _claimViews(leaving: _forgetsWebOnly ? leaving : null);
     _generation++;
     _discoveryTimer?.cancel();
     _discovering = null;
@@ -368,7 +372,7 @@ class SuperTabClient {
         onTabs!(tabs.values.toList(), hidden);
         // Every page read: a Swarm not listed is no longer this account's.
         // In the background: the lock another tab holds never delays tags.
-        if (_reading.drawsSaved) {
+        if (_forgetsWebOnly) {
           unawaited(
             _views
                 .keepOnly(account, {...tabs.keys, ..._creating})
