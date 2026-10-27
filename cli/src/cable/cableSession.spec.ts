@@ -844,13 +844,13 @@ describe('cable session', () => {
     })
 
     it.each([
-      ['the window has no conversation in front', { voiceConversation: () => null }, {}, 'The conversation changed. Check the device and try again.'],
-      ['the window moved to another conversation', { voiceConversation: () => ({ ...PM, conversationId: 'c2' }) }, {}, 'The conversation changed. Check the device and try again.'],
-      ['the person cannot post there', { voiceConversation: () => ({ ...PM, canPost: false }) }, {}, 'You cannot post in this conversation.'],
-      ['the id is not one', {}, { conversationId: 7 }, 'The conversation changed. Check the device and try again.'],
-      ['it also names an agent', {}, { agentId: 'a2' }, 'The conversation changed. Check the device and try again.'],
-      ['it also carries a command', {}, { cmd: 'plan' }, 'The conversation changed. Check the device and try again.'],
-      ['it also edits a draft', {}, { draftId: 'd1', draftRevision: 1, draftOp: 'replace' }, 'The conversation changed. Check the device and try again.'],
+      ['the window has no conversation in front', { voiceConversation: () => null }, {}, 'The chat changed. Check the device and try again.'],
+      ['the window moved to another conversation', { voiceConversation: () => ({ ...PM, conversationId: 'c2' }) }, {}, 'The chat changed. Check the device and try again.'],
+      ['the person cannot post there', { voiceConversation: () => ({ ...PM, canPost: false }) }, {}, "You can't post in this chat."],
+      ['the id is not one', {}, { conversationId: 7 }, 'The chat changed. Check the device and try again.'],
+      ['it also names an agent', {}, { agentId: 'a2' }, 'The chat changed. Check the device and try again.'],
+      ['it also carries a command', {}, { cmd: 'plan' }, 'The chat changed. Check the device and try again.'],
+      ['it also edits a draft', {}, { draftId: 'd1', draftRevision: 1, draftOp: 'replace' }, 'The chat changed. Check the device and try again.'],
     ])('posts nothing and types nothing when %s', async (_why, over, extra, error) => {
       const { host, conversationSay, route } = conversationHost(over as Partial<CableHost>)
       const { session, port } = await connect(host)
@@ -876,11 +876,11 @@ describe('cable session', () => {
     })
 
     it('shows the Swarm\'s refusal on the device', async () => {
-      const { host } = conversationHost({ conversationSay: vi.fn(async () => ({ ok: false as const, error: 'That conversation is archived.' })) })
+      const { host } = conversationHost({ conversationSay: vi.fn(async () => ({ ok: false as const, error: 'That chat is archived.' })) })
       const { session, port } = await connect(host)
       try {
         speak(port, { uploadId: 'u1', conversationId: 'c1' })
-        await vi.waitFor(() => expect(port.sent.find(m => m.t === 'voice.error')).toMatchObject({ uploadId: 'u1', message: 'That conversation is archived.' }))
+        await vi.waitFor(() => expect(port.sent.find(m => m.t === 'voice.error')).toMatchObject({ uploadId: 'u1', message: 'That chat is archived.' }))
         expect(port.types()).not.toContain('voice.transcript')
       } finally { await session.stop() }
     })

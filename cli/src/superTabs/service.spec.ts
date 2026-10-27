@@ -648,8 +648,8 @@ describe('the Swarm cards the devices ask for', () => {
     const ask = { action: 'conversationSay', tabId: 't1', conversationId: 'c1', text: '  ship it  ', operationId: 'u-1' }
     expect(await t.ask(ask, owner)).toEqual({ ok: true, posted: true })
     expect(t.cards.post).toHaveBeenLastCalledWith('t1', 'c1', 'ship it', 'u-1')
-    t.cards.post.mockResolvedValueOnce({ ok: false, error: 'That conversation is archived.' })
-    expect(await t.ask(ask, owner)).toEqual({ ok: true, posted: false, error: 'That conversation is archived.' })
+    t.cards.post.mockResolvedValueOnce({ ok: false, error: 'That chat is archived.' })
+    expect(await t.ask(ask, owner)).toEqual({ ok: true, posted: false, error: 'That chat is archived.' })
     for (const bad of [{ tabId: 'bad id' }, { conversationId: 'x'.repeat(48) }, { conversationId: undefined }, { text: '   ' }, { text: 7 },
       { text: 'x'.repeat(16_001) }, { operationId: 'has space' }, { operationId: 'x'.repeat(65) }]) {
       expect(await t.ask({ ...ask, ...bad }, owner)).toEqual({ error: 'INVALID_REQUEST' })

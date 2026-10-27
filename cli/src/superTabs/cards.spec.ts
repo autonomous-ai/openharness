@@ -429,9 +429,9 @@ describe('SwarmCards.post', () => {
       out: { lastChangedAt: 1, state: swarm({ people: [people[1]] }) },
     })
     expect(await t.cards.post('ro', 'lead-web', 'x', 'u1')).toEqual({ ok: false, error: 'You can only read this Swarm.' })
-    expect(await t.cards.post('t1', 'old', 'x', 'u2')).toEqual({ ok: false, error: 'That conversation is archived.' })
-    expect(await t.cards.post('t1', 'pm-sam', 'x', 'u3')).toEqual({ ok: false, error: 'That conversation is not yours to post in.' })
-    expect(await t.cards.post('t1', 'gone', 'x', 'u4')).toEqual({ ok: false, error: 'That conversation is no longer there.' })
+    expect(await t.cards.post('t1', 'old', 'x', 'u2')).toEqual({ ok: false, error: 'That chat is archived.' })
+    expect(await t.cards.post('t1', 'pm-sam', 'x', 'u3')).toEqual({ ok: false, error: 'That chat is not yours to post in.' })
+    expect(await t.cards.post('t1', 'gone', 'x', 'u4')).toEqual({ ok: false, error: 'That chat is no longer there.' })
     expect(await t.cards.post('out', 'lead-web', 'x', 'u5')).toEqual({ ok: false, error: 'You are no longer in this Swarm.' })
     t.failing.set('t1', 403)
     expect(await t.cards.post('t1', 'lead-web', 'x', 'u6')).toEqual({ ok: false, error: 'Could not read the Swarm. Try again.' })

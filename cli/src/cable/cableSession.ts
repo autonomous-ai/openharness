@@ -2121,10 +2121,10 @@ export class CableSession {
       : Promise.resolve(false)
     this.voice = null
     if (turn?.conversation && !turn.conversation.pin) {
-      await reply({ t: 'voice.error', message: 'The conversation changed. Check the device and try again.' }); return
+      await reply({ t: 'voice.error', message: 'The chat changed. Check the device and try again.' }); return
     }
     if (turn?.conversation && !turn.conversation.pin!.canPost) {
-      await reply({ t: 'voice.error', message: 'You cannot post in this conversation.' }); return
+      await reply({ t: 'voice.error', message: "You can't post in this chat." }); return
     }
     if (turn?.draft && (!turn.draft.pin || !this.voiceDraft.current(turn.draft.pin))) {
       await reply({ t: 'voice.error', message: 'That draft changed. Review it again.' }); return

@@ -639,13 +639,13 @@ describe('what the windows say, reaching the dial', () => {
     })
 
     it('posts words in a Swarm conversation through the service and hands back why one did not go', async () => {
-      const answers: Array<Record<string, unknown> | 'throw'> = [{ ok: true, posted: true }, { ok: true, posted: false, error: 'That conversation is archived.' },
+      const answers: Array<Record<string, unknown> | 'throw'> = [{ ok: true, posted: true }, { ok: true, posted: false, error: 'That chat is archived.' },
         { ok: true, posted: false }, { error: 'OWNER_REQUIRED' }, 'throw']
       const superTabRequest = vi.fn(async () => { const next = answers.shift()!; if (next === 'throw') throw new Error('gone'); return next })
       withRequest(superTabRequest)
       expect(await seen.host.conversationSay!('st1', 'c1', 'ship it', 'u1')).toEqual({ ok: true })
       expect(superTabRequest).toHaveBeenCalledWith({ action: 'conversationSay', tabId: 'st1', conversationId: 'c1', text: 'ship it', operationId: 'u1' })
-      expect(await seen.host.conversationSay!('st1', 'c1', 'ship it', 'u2')).toEqual({ ok: false, error: 'That conversation is archived.' })
+      expect(await seen.host.conversationSay!('st1', 'c1', 'ship it', 'u2')).toEqual({ ok: false, error: 'That chat is archived.' })
       // No reason, a refusal of the request itself, or no service: nothing says it went, and nothing says it surely did not.
       for (let i = 0; i < 3; i++) expect(await seen.host.conversationSay!('st1', 'c1', 'ship it', `u${i + 3}`)).toEqual({ ok: false, error: 'Could not post. Check the Swarm chat.' })
     })

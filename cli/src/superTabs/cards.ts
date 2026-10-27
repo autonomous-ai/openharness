@@ -335,12 +335,12 @@ export class SwarmCards {
     if (!person) return { ok: false, error: 'You are no longer in this Swarm.' }
     if (person.role === 'viewer') return { ok: false, error: 'You can only read this Swarm.' }
     const group = list(state.conversations).find(c => c.id === conversationId)
-    if (!group) return { ok: false, error: 'That conversation is no longer there.' }
-    if (group.archived === true) return { ok: false, error: 'That conversation is archived.' }
+    if (!group) return { ok: false, error: 'That chat is no longer there.' }
+    if (group.archived === true) return { ok: false, error: 'That chat is archived.' }
     // A private conversation (a Chat with PM) admits its audience alone; the read should not even show another person's, but a post
     // there would put one person's words in someone else's private chat, so it is checked here as well.
     const audience = group.audience === undefined || group.audience === null ? null : list(object(group.audience).people)
-    if (audience && !audience.some(p => p.id === me)) return { ok: false, error: 'That conversation is not yours to post in.' }
+    if (audience && !audience.some(p => p.id === me)) return { ok: false, error: 'That chat is not yours to post in.' }
     try {
       await backend(this.core, 'POST', `/api/super-tabs/${tabId}/commands`, { operationId: `device-voice-${operationId}`,
         command: { type: 'message.send', conversationId, text, replyTo: null, recipientIds: [] } })
