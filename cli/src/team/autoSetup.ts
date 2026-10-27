@@ -12,6 +12,11 @@
  * A cancelled prompt is remembered, so the next join does not ask again: only `harness team setup`, run by the person,
  * offers it again. Removing the account (`harness team remove`) is remembered the same way. A setup that failed is not
  * tried again on its own for a day.
+ *
+ * Desktop explains the account before macOS asks (the prompt is titled "osascript", which read as a surprise on
+ * 2026-10-27): it first asks whether the setup is wanted (`check`), shows why, and only then runs it (`manual`), or
+ * remembers "Not now" (`decline`). `manual` is also the machine row's Set up button: the person asked, so a cancel or
+ * failure remembered from before does not stand in the way.
  */
 import { readFileSync, renameSync, writeFileSync, mkdirSync, rmSync } from 'node:fs'
 import { dirname, join } from 'node:path'
@@ -48,11 +53,12 @@ export function writeTeamSetupDecision(file: string, decision: TeamSetupDecision
 /** A failed setup is offered again on its own after this long. */
 export const AUTO_SETUP_RETRY_MS = 24 * 60 * 60_000
 
-export type AutoSetupState = 'unsupported' | 'signed-out' | 'dedicated' | 'running' | 'exists' | 'declined' | 'waiting' | 'not-shared' | 'started'
+export type AutoSetupState = 'unsupported' | 'signed-out' | 'dedicated' | 'running' | 'exists' | 'declined' | 'waiting' | 'not-shared' | 'wanted' | 'started'
 
-/** The moment the person is at this Mac: they joined a Swarm, added this Mac to one, or opened the app (`startup`). */
-export type AutoSetupReason = 'join' | 'contribute' | 'startup'
-export const AUTO_SETUP_REASONS: readonly AutoSetupReason[] = ['join', 'contribute', 'startup']
+/** The moment the person is at this Mac: they joined a Swarm, added this Mac to one, or opened the app (`startup`); or
+ *  they asked for it (`manual`: Desktop's explanation was accepted, or the machine row's Set up button). */
+export type AutoSetupReason = 'join' | 'contribute' | 'startup' | 'manual'
+export const AUTO_SETUP_REASONS: readonly AutoSetupReason[] = ['join', 'contribute', 'startup', 'manual']
 
 export interface AutoSetupDeps {
   platform: NodeJS.Platform
@@ -77,8 +83,9 @@ export class TeamAutoSetup {
   /**
    * Starts the setup when it is wanted, and answers at once with why it did or did not; the prompt is macOS's. At `startup`
    * it is wanted only while [sharedSwarm] says this Mac is in a Swarm with other people in it (false when it cannot say).
+   * With [check] it starts nothing and answers `wanted` instead, for Desktop to explain the account first.
    */
-  async offer(reason: AutoSetupReason, sharedSwarm: () => Promise<boolean> = async () => false): Promise<{ state: AutoSetupState }> {
+  async offer(reason: AutoSetupReason, sharedSwarm: () => Promise<boolean> = async () => false, check = false): Promise<{ state: AutoSetupState }> {
     const { deps } = this
     if (deps.platform !== 'darwin') return { state: 'unsupported' }
     const session = deps.session()
@@ -86,13 +93,21 @@ export class TeamAutoSetup {
     if (session.kind === 'team') return { state: 'dedicated' }
     if (this.running) return { state: 'running' }
     if (deps.readConfig() || await deps.accountExists(TEAM_USER)) return { state: 'exists' }
-    const decision = deps.readDecision()
-    if (decision?.state === 'declined') return { state: 'declined' }
-    if (decision?.state === 'failed' && deps.now() - decision.at < AUTO_SETUP_RETRY_MS && deps.now() >= decision.at) return { state: 'waiting' }
-    if (reason === 'startup' && !await sharedSwarm().catch(() => false)) return { state: 'not-shared' }
+    if (reason !== 'manual') {
+      const decision = deps.readDecision()
+      if (decision?.state === 'declined') return { state: 'declined' }
+      if (decision?.state === 'failed' && deps.now() - decision.at < AUTO_SETUP_RETRY_MS && deps.now() >= decision.at) return { state: 'waiting' }
+      if (reason === 'startup' && !await sharedSwarm().catch(() => false)) return { state: 'not-shared' }
+    }
+    if (check) return { state: 'wanted' }
     if (this.running) return { state: 'running' }
     this.running = this.run().finally(() => { this.running = null })
     return { state: 'started' }
+  }
+
+  /** "Not now" in Desktop's explanation: not offered again on its own, as a cancelled prompt is not. */
+  decline(): void {
+    this.deps.writeDecision({ state: 'declined', at: this.deps.now() })
   }
 
   /** Waits for a setup this started, for a spec. */

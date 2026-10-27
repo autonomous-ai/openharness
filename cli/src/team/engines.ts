@@ -3,9 +3,9 @@
  *
  * With the owner's home folder private, the engines installed under it are out of the team account's reach. Setup has
  * the team account install its own (./script.ts `TEAM_ENGINES`), with the vendors' npm packages, its own copy of
- * Harness's Node and a prefix in its own home, never as root. Signing them in is one step the owner takes once, in a
- * terminal on the team machine in Harness: nothing of the owner's sign-ins is copied, and each engine bills the
- * account it is signed in with.
+ * Harness's Node and a prefix in its own home, never as root. An engine it has not signed in spends the owner's
+ * subscription through the owner's relay (./relay.ts): nothing of the owner's sign-ins is copied into it. One signed in
+ * there (in a terminal on the team machine) still bills the account it is signed in with.
  *
  * The owner cannot look inside the team account's home, so the team daemon reports what it finds (installed, signed in)
  * in its status file, as it starts and every minute after, and `harness team status` reads it there.
@@ -16,6 +16,7 @@ import { join } from 'node:path'
 import { engineAccount, type EngineAccount } from '../lib/engineAccount.js'
 import { readTeamConfig, type TeamConfig } from './config.js'
 import { readTeamStatus, writeTeamStatus, type TeamStatus } from './privacy.js'
+import { teamRelayed } from './relay.js'
 
 export type TeamEngine = 'claude' | 'codex'
 
@@ -33,7 +34,8 @@ export const TEAM_ENGINES: readonly TeamEngineInfo[] = [
   { engine: 'codex', name: 'Codex', packageName: '@openai/codex', signIn: 'codex login --device-auth' },
 ]
 
-export interface EngineReadiness { installed: boolean; signedIn: boolean | null }
+/** [relayed]: not signed in itself, it spends the owner's subscription through the owner's relay (team/relay.ts). */
+export interface EngineReadiness { installed: boolean; signedIn: boolean | null; relayed?: boolean }
 export type TeamEngines = { checkedAt: number } & Record<TeamEngine, EngineReadiness>
 
 /** Where the team account's engines are: its npm prefix's bin folder, on its daemon's PATH (./script.ts). */
@@ -44,6 +46,8 @@ export interface EngineCheckDeps {
   executable(path: string): boolean
   account(engine: TeamEngine): Promise<EngineAccount>
   now(): number
+  /** Whether the owner's relay is there for the team account's engines (team/relay.ts `teamRelayed`). */
+  relayed?(): boolean
 }
 
 /** What the team account has of each engine: installed in its own home, and signed in (null when it cannot say). */
@@ -53,7 +57,7 @@ export async function checkTeamEngines(deps: EngineCheckDeps): Promise<TeamEngin
     const installed = deps.executable(teamEngineBin(deps.home, engine))
     let signedIn: boolean | null = null
     try { signedIn = (await deps.account(engine)).signedIn } catch { /* cannot say */ }
-    result[engine] = { installed, signedIn }
+    result[engine] = { installed, signedIn, ...(signedIn !== true && deps.relayed?.() ? { relayed: true } : {}) }
   }
   return result
 }
@@ -64,6 +68,7 @@ export const realEngineCheckDeps = (home: string, env: NodeJS.ProcessEnv = proce
   // Only presence is read, never a secret (lib/engineAccount.ts). The team daemon has no login shell of the owner's to read.
   account: (engine) => engineAccount(engine, { home, env, lastUsed: false }),
   now: () => Date.now(),
+  relayed: teamRelayed,
 })
 
 /** How often the team daemon looks again: an engine signed in shows in `harness team status` within this long. */
@@ -109,7 +114,8 @@ export class TeamEngineReporter {
       const engines = await this.deps.check(config)
       const before = this.deps.read(config.statusFile)?.engines
       const same = before && TEAM_ENGINES.every(({ engine }) =>
-        before[engine].installed === engines[engine].installed && before[engine].signedIn === engines[engine].signedIn)
+        before[engine].installed === engines[engine].installed && before[engine].signedIn === engines[engine].signedIn
+        && !before[engine].relayed === !engines[engine].relayed)
       // Unchanged, the file is left alone, but a stamp more than ten minutes old is renewed so status can say it is current.
       if (same && engines.checkedAt - before.checkedAt < 10 * ENGINE_RECHECK_MS) return
       this.deps.write(config.statusFile, { engines })
@@ -138,11 +144,12 @@ export function engineLines(engines: TeamEngines | undefined, ago: (at: number) 
     const e = engines[engine]
     const state = !e.installed ? '✗ not installed · harness team setup installs it'
       : e.signedIn === true ? '✓ installed · ✓ signed in'
-        : e.signedIn === false ? '✓ installed · ✗ not signed in' : '✓ installed · ? sign-in unknown'
+        : e.relayed ? '✓ installed · ✓ uses your subscription'
+          : e.signedIn === false ? '✓ installed · ✗ not signed in' : '✓ installed · ? sign-in unknown'
     return `  ${index === 0 ? 'engines' : '       '}     ${name.padEnd(12)}${state}`
   })
   lines.push(`              (checked ${ago(engines.checkedAt)})`)
-  const unsigned = TEAM_ENGINES.filter(({ engine }) => engines[engine].installed && engines[engine].signedIn !== true)
+  const unsigned = TEAM_ENGINES.filter(({ engine }) => engines[engine].installed && engines[engine].signedIn !== true && !engines[engine].relayed)
   if (unsigned.length) {
     lines.push('', '  To sign the team account\'s engines in, once: in Harness, open a terminal on this Mac\'s Harness Team machine',
       '  (it is listed among your machines), and run there:')

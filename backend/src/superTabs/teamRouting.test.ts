@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { applyCommand, type Command, type CommandContext } from './commands.js'
-import { admitMachineStart, machineObservationSchema, machineSlots, observedPrivacy, PRIVACY_FRESH_MS, removalPreview, teamWorkRefusal, type ContributedMachine, type MachinePrivacy } from './machines.js'
+import { admitMachineStart, machineObservationSchema, machineSlots, observedPrivacy, PRIVACY_FRESH_MS, removalPreview, teamAccountRequired, teamWorkRefusal, type ContributedMachine, type MachinePrivacy } from './machines.js'
 import { createSuperTab, SuperTabError, visibleState, type Actor, type AgentConfiguration, type AgentStart, type SuperTabState } from './model.js'
 import type { RouteDecision } from './routeRecord.js'
 
@@ -370,6 +370,38 @@ describe('until a team account is required everywhere', () => {
     const f = swarm(), group = f.group()
     f.machine('mate-team').observation = reading('team', FAILED)
     expect(refusal(() => f.run({ type: 'agent.start', request: f.request(group, 'mate-team') }, owner, f.pooled('mate-team')))?.code).toBe('PRIVACY_CHECK_FAILED')
+  })
+})
+
+// Tried on production with one person's Swarms first (2026-10-27): SWARM_TEAM_ACCOUNT_OWNERS holds the switch to the
+// Swarms those people own, and every other Swarm stays as it is with the switch off.
+describe('the switch held to the Swarms of listed owners', () => {
+  afterEach(() => { delete process.env.SWARM_TEAM_ACCOUNT_OWNERS })
+
+  it('requires a team account in a listed owner\'s Swarm, and in no other', () => {
+    const f = swarm(), group = f.group()
+    process.env.SWARM_TEAM_ACCOUNT_OWNERS = ' someone@example.com, OWNER@example.com '
+    expect(teamAccountRequired(f.state)).toBe(true)
+    expect(refusal(() => f.run({ type: 'agent.start', request: f.request(group, 'mate-mac') }, owner, f.pooled('mate-mac')))?.code)
+      .toBe('TEAM_ACCOUNT_REQUIRED')
+    process.env.SWARM_TEAM_ACCOUNT_OWNERS = 'someone@example.com'
+    expect(teamAccountRequired(f.state)).toBe(false)
+    f.run({ type: 'agent.start', request: f.request(group, 'mate-mac') }, owner, f.pooled('mate-mac'))
+    expect(f.state.starts).toHaveLength(1)
+    // A Team machine follows the rule in every Swarm, as it does with the switch off.
+    f.machine('mate-team').observation = reading('team', FAILED)
+    expect(refusal(() => f.run({ type: 'agent.start', request: f.request(group, 'mate-team') }, owner, f.pooled('mate-team')))?.code).toBe('PRIVACY_CHECK_FAILED')
+  })
+
+  it('is every Swarm\'s with no list, and none with the switch off, list or not', () => {
+    const f = swarm()
+    process.env.SWARM_TEAM_ACCOUNT_OWNERS = ' , '
+    expect(teamAccountRequired(f.state)).toBe(true)
+    expect(teamAccountRequired()).toBe(true)
+    process.env.SWARM_TEAM_ACCOUNT_OWNERS = 'owner@example.com'
+    expect(teamAccountRequired()).toBe(false)
+    delete process.env.SWARM_TEAM_ACCOUNT_REQUIRED
+    expect(teamAccountRequired(f.state)).toBe(false)
   })
 })
 

@@ -14,7 +14,7 @@ import { HostFeed } from './hostFeed.js'
 import { SwarmReads } from './swarmReads.js'
 import type { PrivacyObservation } from '../team/privacy.js'
 
-function fixture(env: NodeJS.ProcessEnv = {}, privacy: () => PrivacyObservation | null = () => null) {
+function fixture(env: NodeJS.ProcessEnv = {}, privacy: () => PrivacyObservation | null = () => null, relayed: () => boolean = () => false) {
   let now = 1000, stamp = 's0'
   const core = fakeCore({ dataDir: '/isolated-pool-fixture', agents: {
     byAgent: vi.fn(id => id === 'running' ? { agentId: id } as never : undefined),
@@ -31,7 +31,7 @@ function fixture(env: NodeJS.ProcessEnv = {}, privacy: () => PrivacyObservation 
   const prepare = vi.fn(async () => {})
   const log = vi.fn()
   const modelsStamp = vi.fn(async () => stamp)
-  const deps = { backend, open, capabilities, start, prepare, log, env, privacy, modelsStamp, now: () => now }
+  const deps = { backend, open, capabilities, start, prepare, log, env, privacy, modelsStamp, relayed, now: () => now }
   const machine = new ContributedMachines(core, 'host', deps as never)
   return { deps, machine, pool, core, backend, open, request, close, capabilities, start, prepare, log, modelsStamp, advance: () => { now += 16000 }, step: (ms: number) => { now += ms },
     stamp: (next: string) => { stamp = next } }
@@ -222,6 +222,13 @@ describe('contributed machine executor', () => {
       expect(probes(f)).toHaveLength(1)
       f.step(10 * 60_000); await f.machine.tick()
       expect(probes(f)).toHaveLength(2)
+    })
+
+    it('reads a Harness Team account\'s engine it has not signed in as ready when its owner\'s relay is there', async () => {
+      const f = fixture({}, () => null, () => true)
+      withEngines(f)
+      await f.machine.tick()
+      expect(readings(f)[0]!.readiness?.engines).toEqual([{ engine: 'claude', installed: true, signedIn: true }, { engine: 'codex', installed: true, signedIn: null }])
     })
 
     it('reads an engine the probe calls not installed as unknown, since a timed-out shell probe says the same (review of #1743)', async () => {

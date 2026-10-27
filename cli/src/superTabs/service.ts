@@ -16,6 +16,10 @@ import { cardId, SwarmCards } from './cards.js'
 import { GitHubTokenRefresher, githubToken } from './github.js'
 import { teamEngineReporter, type TeamEngineReporter } from '../team/engines.js'
 import { AUTO_SETUP_REASONS, realTeamAutoSetup, type AutoSetupReason, type TeamAutoSetup } from '../team/autoSetup.js'
+import { readTeamConfig } from '../team/config.js'
+import { realTeamRelayPublisher, type TeamRelayPublisher } from '../team/relay.js'
+import { createOwnerSubscriptions } from '../lib/ownerSubscriptions.js'
+import { startSubscriptionRelay } from '../lib/subscriptionRelay.js'
 
 const POST_HELP = 'reply in that conversation. Use a unique ID per message and reuse it after an interrupted request. Answer a message once, with --reply-to its ID. --attach sends a file (a screenshot, a log; up to 10 files of 10 MB each), and TEXT may then be empty.'
 const HELP = {
@@ -173,9 +177,11 @@ export interface SuperTabServiceOptions {
   /** What reports the Harness Team account's own engines to its owner (team/engines.ts), for a spec. */
   teamEngines?: () => Pick<TeamEngineReporter, 'start' | 'stop'>
   /** What sets up the Harness Team account when Desktop asks (team/autoSetup.ts), for a spec. */
-  teamSetup?: () => Promise<Pick<TeamAutoSetup, 'offer'>>
+  teamSetup?: () => Promise<Pick<TeamAutoSetup, 'offer' | 'decline'>>
   /** Whether this daemon runs team work only (a Harness Team account, `harness team on`), for a spec. */
   team?: () => boolean
+  /** The owner's subscriptions for the Harness Team account (team/relay.ts), for a spec. */
+  teamRelay?: () => Pick<TeamRelayPublisher, 'start' | 'stop'>
 }
 export function superTabService(core: CoreApi, options: SuperTabServiceOptions = {}): { requests: ServiceRequests; port: SuperTabsPort } {
   const preparations = new ContributionPreparations(input => (options.prepareContribution ?? prepareContribution)(core, input))
@@ -218,12 +224,18 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
   const tokens = (options.githubTokens ?? (api => new GitHubTokenRefresher(api, sources)))(core)
   // In the Harness Team account only: whether its Claude Code and Codex are installed and signed in, for its owner to read.
   const engines = (options.teamEngines ?? teamEngineReporter)()
-  let autoSetup: Promise<Pick<TeamAutoSetup, 'offer'>> | null = null
+  // On the Mac's owner's daemon, while a Harness Team account exists here: the owner's subscriptions for it, through a
+  // relay of its own (team/relay.ts). Kept through a lost backend connection, which running agents do not need.
+  const relay = (options.teamRelay ?? (() => realTeamRelayPublisher(
+    () => startSubscriptionRelay({ owner: createOwnerSubscriptions(), log: line => console.log(`[team] relay · ${line}`) }),
+    () => readTeamConfig(), options.team ?? (() => readAuthSession()?.kind === 'team'), line => console.log(`[team] ${line}`))))()
+  let autoSetup: Promise<Pick<TeamAutoSetup, 'offer' | 'decline'>> | null = null
   const disconnect = () => { preparations.clear(); host?.stop(); host = null; held = null; book?.stop(); book = null; bookMachine = null; swarmCards?.want(false); swarmCards = null; cardsMachine = null; tokens.stop(); engines.stop() }
   const port = {
     connected: () => {
       tokens.start()
       engines.start()
+      relay.start()
       // A daemon that runs team work only is there for its Swarms: its host runs from its first connection. Its Mac's daemon adds
       // a Harness Team account to a Swarm without waking it (host.ts joinTeams), and a host that never ran reports no privacy
       // check, so the Swarm read the account as offline and never sent it a teammate's work (third VM run).
@@ -231,7 +243,7 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
         || (options.team ?? (() => readAuthSession()?.kind === 'team'))())) wake()
     },
     disconnected: disconnect,
-    stop: disconnect,
+    stop: () => { disconnect(); void relay.stop() },
     swarmRole: async (harnessId: string) => (await within(swarmRoleFor(sources(), harnessId).then(grant => ({ grant }))))?.grant,
   }
   const requests: ServiceRequests = {
@@ -259,17 +271,21 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
         }
         // Desktop on this Mac, as the person joins a Swarm, adds this Mac to one, or opens the app (team/autoSetup.ts): the
         // Harness Team account, behind macOS's own administrator prompt. Never through the relay, with nobody at this Mac.
-        if (payload.action === 'teamSetup') {
+        // `teamSetupCheck` only says whether it is wanted, so Desktop explains it before macOS asks; `teamSetupDecline` is
+        // that explanation's "Not now". Both are new names, so an older daemon refuses them rather than asking unexplained.
+        if (payload.action === 'teamSetup' || payload.action === 'teamSetupCheck' || payload.action === 'teamSetupDecline') {
           if (!asker.local) return { error: 'OWNER_REQUIRED' }
+          const setup = () => autoSetup ??= (options.teamSetup ?? (() => realTeamAutoSetup(core.dataDir, line => console.log(`[team] ${line}`))))()
+            .catch(error => { autoSetup = null; throw error })
+          if (payload.action === 'teamSetupDecline') { (await setup()).decline(); return { ok: true } }
           if (!AUTO_SETUP_REASONS.includes(payload.reason as AutoSetupReason)) return { error: 'INVALID_REQUEST' }
           // Desktop asks at every launch. A Mac that hosts no Swarm work, as no regular user's does, answers at once:
           // nothing read, run or asked of the backend.
           if (payload.reason === 'startup' && !(identifier(core.daemon.machineId()) && existsSync(hostJournalFile(core.dataDir, core.daemon.machineId())))) {
             return { ok: true, state: 'not-shared' }
           }
-          autoSetup ??= (options.teamSetup ?? (() => realTeamAutoSetup(core.dataDir, line => console.log(`[team] ${line}`))))()
-            .catch(error => { autoSetup = null; throw error })
-          return { ok: true, ...await (await autoSetup).offer(payload.reason as AutoSetupReason, () => sharedSwarm(sources())) }
+          return { ok: true, ...await (await setup()).offer(payload.reason as AutoSetupReason, () => sharedSwarm(sources()),
+            payload.action === 'teamSetupCheck') }
         }
         if (payload.action === 'swarmRole') {
           const grant = await port.swarmRole(String(payload.harnessId ?? ''))

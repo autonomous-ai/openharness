@@ -229,6 +229,21 @@ describe('creating an agent', () => {
     expect(vi.mocked(buildEngineLaunchArgv).mock.calls.at(-1)![1]?.clearEnv).toContain('GH_TOKEN')
   })
 
+  it('in the Harness Team account, points an engine it has not signed in at the owner\'s relay; never one on a grid', async () => {
+    const ownerRelay = vi.fn(async () => ({ env: { HARNESS_RELAY_TOKEN: 't' }, args: ['-c', 'model_provider="harness_owner"'] }))
+    expect(await setup({ ownerRelay }).create(request({ engine: 'codex', cwd: folder() }))).toMatchObject({ ok: true })
+    expect(ownerRelay).toHaveBeenCalledWith('codex')
+    expect(vi.mocked(createAndRegisterPane).mock.calls.at(-1)![0].env).toMatchObject({ HARNESS_RELAY_TOKEN: 't' })
+    expect(vi.mocked(buildEngineLaunchArgv).mock.calls.at(-1)![1]?.extraArgs).toEqual(expect.arrayContaining(['model_provider="harness_owner"']))
+    // No relay there (signed in, or not a team account): the launch is as before.
+    const none = vi.fn(async () => null)
+    await setup({ ownerRelay: none }).create(request({ cwd: folder() }))
+    expect(vi.mocked(createAndRegisterPane).mock.calls.at(-1)![0].env ?? {}).not.toHaveProperty('HARNESS_RELAY_TOKEN')
+    ownerRelay.mockClear()
+    await setup({ ownerRelay }).create(request({ cwd: folder(), grid: { baseUrl: 'https://grid.example/relay/v1', networkName: 'g', model: 'm' } }))
+    expect(ownerRelay).not.toHaveBeenCalled()
+  })
+
   it('launches as before where the GitHub App does not apply, and without a role never asks', async () => {
     await setup().create(request({ cwd: folder(), swarmRole: 'dev', swarmGitHub: true }))
     const pane = vi.mocked(createAndRegisterPane).mock.calls.at(-1)![0]
