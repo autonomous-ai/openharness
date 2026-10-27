@@ -101,7 +101,7 @@ describe('built-in Swarm skills', () => {
       expect(text.split(callLead)).toHaveLength(role === 'lead' ? 2 : 1)
       expect(text.split(callBuilder)).toHaveLength(role === 'dev' ? 2 : 1)
       expect(sha(text.replace(twoHours, '').replace(terminal, '').replace(overlap, '').replace(local, '').replace(mention, '').replace(lost, '').replace(checkpoint, '')
-        .replace(limit, '').replace(digest, '').replace(decision, '').replace(ask, '').replace(requests, ''.replace(callLead, '').replace(callBuilder, ''))).toBe(sha256)
+        .replace(limit, '').replace(digest, '').replace(decision, '').replace(ask, '').replace(requests, '').replace(callLead, '').replace(callBuilder, ''))).toBe(sha256)
     }
   })
   it('adds the 2-hour line to section 7 right after the 6-hour rule', () => {
@@ -196,7 +196,7 @@ describe('built-in Swarm skills', () => {
     expect(text.split(callLead)).toHaveLength(role === 'lead' ? 2 : 1)
     expect(text.split(callBuilder)).toHaveLength(role === 'dev' ? 2 : 1)
     expect(sha(text.replace(terminal, '').replace(overlap, '').replace(localDefault, '').replace(mention, '').replace(lost, '').replace(checkpoint, '')
-      .replace(limit, '').replace(digest, '').replace(decision, '').replace(ask, '').replace(requestsLast, ''.replace(callLead, '').replace(callBuilder, ''))).toBe(sha256)
+      .replace(limit, '').replace(digest, '').replace(decision, '').replace(ask, '').replace(requestsLast, '').replace(callLead, '').replace(callBuilder, ''))).toBe(sha256)
     expect(prepared.instructions).toBe(`Use the swarm-${role} skill for this session: the team process; otherwise work your usual way. Before working, read ${JSON.stringify(prepared.file)} with your file or shell tool.`)
   })
 
