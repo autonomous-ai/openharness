@@ -1534,7 +1534,8 @@ export class SuperTabStore {
           woken = true
         }
       }
-      // The poll also frees agents whose task the checks just lost, and, once, those an older server left marked running.
+      // The poll also frees agents whose task the checks just lost, and any an older server left marked running (each poll; a
+      // second finds none).
       await this.endRuns(tx, tabId, loaded.state, state)
       if (ledProject(state, agentId)) {
         const stale = await this.staleRuns(tx, tabId, state)
