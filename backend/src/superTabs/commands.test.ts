@@ -2484,6 +2484,14 @@ describe('lost work (liveness.ts)', () => {
     expect(lead.text).not.toContain('Assign it to another agent now')
   })
 
+  it('records no resume time for a task lost to a model that keeps failing, though its alert names a reset time', () => {
+    const { f, worker, as, task } = lostFixture()
+    f.run({ type: 'agent.alert', agentId: worker, alert: 'model', active: true, resetAt: new Date(3_600_000).toISOString() }, as(worker))
+    expect(task().assignment).toMatchObject({ status: 'lost', lost: { reason: 'its model keeps failing' } })
+    expect(task().assignment!.lost).not.toHaveProperty('resumeAt')
+    expect(f.state.agents.find(a => a.id === worker)!.lostTask).not.toHaveProperty('resumeAt')
+  })
+
   it('records no resume time for a usage limit whose screen gave no reset time', () => {
     const { f, worker, as, task } = lostFixture()
     const rows = f.run({ type: 'agent.alert', agentId: worker, alert: 'limit', active: true }, as(worker)).messages
