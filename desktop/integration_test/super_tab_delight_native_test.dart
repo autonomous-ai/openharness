@@ -78,5 +78,5 @@ void main() {
       c.dispose();
     }
     grid.AppTheme.brightness.value = Brightness.dark;
-  });
+  }, variant: TargetPlatformVariant.only(TargetPlatform.macOS));
 }

@@ -21,15 +21,13 @@ extension SuperTabProfileActions on SuperTabController {
   });
 
   /// [agentId]'s avatar when given (its contributor's or Lead's to change),
-  /// else the reader's own. Null [avatar] goes back to the default.
-  Future<String?> setAvatar(SuperTabAvatarPicture? avatar, {String? agentId}) =>
+  /// else the reader's own: [preset], or back to the default when null.
+  /// An upload goes through [uploadAvatar].
+  Future<String?> setAvatar(SuperTabPresetAvatar? preset, {String? agentId}) =>
       _profile({
         'type': agentId == null ? 'member.avatar' : 'agent.avatar',
         'agentId': ?agentId,
-        'avatar': switch (avatar) {
-          SuperTabPresetAvatar(:final key) => {'kind': 'preset', 'key': key},
-          _ => null,
-        },
+        'avatar': preset == null ? null : {'kind': 'preset', 'key': preset.key},
       });
 
   /// Resizes [picked] here, uploads it and makes it the avatar.

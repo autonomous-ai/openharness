@@ -38,6 +38,13 @@ describe('the parts a command touches (design section 1.2, column T)', () => {
     expect(has(f.run({ type: 'message.send', conversationId: a.id, text: 'Hi', replyTo: null, recipientIds: [] }, f.agentActor(a.worker)).touches, 'agent', a.worker)).toBe(true)
   })
 
+  it('makes a Lead\'s change to an agent\'s avatar meet on the Lead conversation its check reads', () => {
+    const f = swarm(), a = f.group('A')
+    const { touches } = f.run({ type: 'agent.avatar', agentId: a.worker, avatar: { kind: 'preset', key: 'owl' } }, f.agentActor(f.lead))
+    expect(has(touches, 'group', 'lead')).toBe(true)
+    expect(has(touches, 'agent', a.worker)).toBe(true)
+  })
+
   it('leaves a post\'s recipients alone, so workers posting to their Lead in different groups never meet on the Lead', () => {
     const f = swarm(), a = f.group('A')
     const { effects, touches } = f.run({ type: 'message.send', conversationId: a.id, text: 'Report', replyTo: null, recipientIds: [] }, f.agentActor(a.worker))
