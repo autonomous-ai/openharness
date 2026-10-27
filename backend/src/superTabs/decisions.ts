@@ -5,8 +5,9 @@
  *  through Chat with PM. Called inside SuperTabStore's transactions. */
 import type { Prisma } from '@prisma/client'
 import { z } from 'zod'
-import { activeWork, AGENT_ONLY, fail, isLeads, person, stableId, type Actor, type Conversation, type SuperTabState } from './model.js'
-import { canReadGroup, groupProject, ledProject, projectOf } from './projects.js'
+import { activeWork, AGENT_ONLY, fail, isLeads, person, stableId, type Actor, type Agent, type Author, type Conversation, type MessageDraft, type SuperTabState } from './model.js'
+import type { PersonSignal } from './signals.js'
+import { canReadGroup, groupProject, ledProject, projectOf, projectsOf } from './projects.js'
 
 type Tx = Prisma.TransactionClient
 export const MAX_QUESTIONS = 10
@@ -229,4 +230,48 @@ export async function listDecisions(tx: Tx, tabId: string, state: SuperTabState,
     return { ...common, batchId: row.batchId, question: row.question, options: row.options, recommended: row.recommended, unblocks: row.unblocks,
       choice: row.choice ?? null }
   })
+}
+
+/** Escalation by time (collaboration protocol): an open request reminds its person after 30 minutes, and tells the Lead after
+ *  2 hours to ask someone else or go on with the recommendation. */
+export const REMIND_AFTER_MS = 30 * 60_000
+export const ESCALATE_AFTER_MS = 2 * 60 * 60_000
+const unset = (field: 'remindedAt' | 'escalatedAt'): Prisma.SuperTabDecisionWhereInput => ({ OR: [{ [field]: null }, { [field]: { isSet: false } }] })
+
+/** The escalations due now, each recorded on its request by a write that only one sweep wins, so a restarted server or two
+ *  sweeps at once never remind or tell twice. Run with the liveness time checks, in their transaction; the reminders are for
+ *  the device hook once it commits. ponytail: 200 due requests per sweep; the rest wait for the next one. */
+export async function sweepRequests(tx: Tx, tabId: string, state: SuperTabState, now: number,
+  writer: (lead: Agent) => Author): Promise<{ messages: MessageDraft[]; signals: PersonSignal[] }> {
+  const rows = await tx.superTabDecision.findMany({ where: { tabId, AND: [waiting, { createdAt: { lte: new Date(now - REMIND_AFTER_MS) } },
+    { OR: [unset('remindedAt'), { AND: [unset('escalatedAt'), { createdAt: { lte: new Date(now - ESCALATE_AFTER_MS) } }] }] }] },
+    orderBy: { createdAt: 'asc' }, take: 200 })
+  const groups = await conversationsOf(tx, tabId, state, rows.map(r => r.conversationId))
+  const claim = async (id: string, field: 'remindedAt' | 'escalatedAt') =>
+    (await tx.superTabDecision.updateMany({ where: { id, tabId, AND: [waiting, unset(field)] }, data: { [field]: new Date(now) } })).count === 1
+  const messages: MessageDraft[] = [], signals: PersonSignal[] = []
+  for (const row of rows) {
+    const kind = row.kind === 'handsOn' ? 'handsOn' as const : 'decision' as const
+    const group = groups.get(row.conversationId)
+    if (!row.remindedAt && await claim(row.id, 'remindedAt')) {
+      const asked = state.people.find(p => p.id === row.personId)
+      if (asked && group && canReadGroup(state, { kind: 'person', userId: asked.id, email: asked.email }, group)) {
+        signals.push({ tabId, personId: asked.id, requestId: row.id, kind, reason: 'reminder' })
+      }
+    }
+    if (row.createdAt.getTime() > now - ESCALATE_AFTER_MS || row.escalatedAt) continue
+    const project = projectsOf(state).find(p => p.id === row.projectId)
+    const lead = project && state.agents.find(a => a.id === state.conversations.find(c => c.id === project.leadConversationId)?.leadId)
+    // Told where it was asked when the Lead is there and that conversation is loaded to write in; else in the Lead's own.
+    const home = state.conversations.find(c => c.id === row.conversationId && lead && c.agentIds.includes(lead.id))
+      ?? state.conversations.find(c => c.id === project?.leadConversationId)
+    if (!lead || !home || !await claim(row.id, 'escalatedAt')) continue
+    const what = kind === 'handsOn' ? 'A hands-on request' : 'A decision'
+    const where = home.id === row.conversationId ? 'here' : `in “${group?.title ?? 'a conversation'}”`
+    messages.push({ id: stableId('request-escalated', row.id), conversationId: home.id, author: writer(lead), replyTo: null, recipients: [lead.id],
+      source: { ...AGENT_ONLY, escalated: row.id },
+      text: `${what} asked ${where} 2 hours ago is still unanswered. Ask someone else, or go on with your recommendation. `
+        + `Read it with: harness super-tab decisions${kind === 'handsOn' ? ' --hands-on' : ''}` })
+  }
+  return { messages, signals }
 }
