@@ -4,6 +4,7 @@ import { agentRole } from '../model.js'
 import type { ContributedMachine } from '../machines.js'
 import { agentProjectId, canReadProject, groupProject, projectsOf } from '../projects.js'
 import type { Touch } from './commit.js'
+import { waitsNow } from '../leaderboard/record.js'
 
 /**
  * The parts a command relies on without writing them (design section 1.2, column T). A part the command also writes is
@@ -69,6 +70,18 @@ export function touchesFor(command: Command, actor: Actor, before: SuperTabState
       const projectId = command.projectId ?? (actor.kind === 'agent' ? agentProject(actor.agentId) : 'lead')
       group(leadGroupOf(projectId))
       group(command.reviewOf)
+      member(command.requesterId)
+      break
+    }
+    case 'conversation.requester':
+      leadCheck(projectOfGroup(command.conversationId)?.id)
+      member(command.personId ?? undefined)
+      break
+    case 'message.send': {
+      // An answer to waiting work is credited to the person it waits on (leaderboard/record.ts): a concurrent change to who
+      // that is meets the answer here.
+      const waiting = before.conversations.find(c => c.id === command.conversationId)
+      if (waiting && waitsNow(waiting)) member(waiting.requesterId)
       break
     }
     case 'agent.add': {

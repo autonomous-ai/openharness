@@ -163,6 +163,10 @@ export interface Conversation {
   /** The last attempt here that was lost: its agent's status and checks for it are refused, even after reassignment. Where it
    *  ran (machine and engine) stays too, so routing the work again avoids that account even once its agent is gone. */
   lostAttempt?: { id: string; agentId: string; machineId?: string; engine?: string }
+  /** The person who asked for this work: whoever opened it, or the person its Lead named (leaderboard/record.ts). */
+  requesterId?: string
+  /** What the leaderboard counts here (leaderboard/record.ts); bookkeeping readers never get whole. */
+  ledger?: import('./leaderboard/record.js').GroupLedger
 }
 
 export function appendPullRequestUrls(group: Conversation, texts: Iterable<string | null | undefined>): void {

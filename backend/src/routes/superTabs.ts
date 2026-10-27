@@ -31,6 +31,7 @@ const operation = operationSchema.extend({ asAgentId: id.optional() })
 const listQuery = z.object({ after: id.optional() }).strict()
 const cursor = z.string().min(1).max(512).regex(/^[A-Za-z0-9_-]+$/)
 const changesQuery = agentQuery.extend({ cursor })
+const leaderboardQuery = z.object({ projectId: id, week: z.coerce.number().int().nonnegative().safe().optional() }).strict()
 const dormantQuery = agentQuery.extend({ dormant: z.literal('1'), projectId: id.optional(), before: cursor.optional() })
 const groupParams = tabParams.extend({ conversationId: id })
 const hostChangesQuery = z.object({ cursor: cursor.optional(), full: z.literal('1').optional() }).strict()
@@ -181,6 +182,9 @@ export async function superTabRoutes(app: FastifyInstance, options: { store?: Su
   app.get<{ Params: z.infer<typeof tabParams>; Querystring: z.infer<typeof changesQuery> }>('/api/super-tabs/:tabId/changes',
     { preHandler: [validateParams(tabParams), validateQuery(changesQuery)] },
     (req, reply) => respond(reply, () => reads.changes(req.user!, req.params.tabId, req.query.cursor, req.query.asAgentId)))
+  app.get<{ Params: z.infer<typeof tabParams>; Querystring: z.infer<typeof leaderboardQuery> }>('/api/super-tabs/:tabId/leaderboard',
+    { preHandler: [validateParams(tabParams), validateQuery(leaderboardQuery)] },
+    (req, reply) => respond(reply, () => reads.leaderboard(req.user!, req.params.tabId, req.query.projectId, req.query.week)))
   app.get<{ Params: z.infer<typeof tabParams>; Querystring: z.infer<typeof dormantQuery> }>('/api/super-tabs/:tabId/groups',
     { preHandler: [validateParams(tabParams), validateQuery(dormantQuery)] },
     (req, reply) => respond(reply, () => reads.dormant(req.user!, req.params.tabId, { projectId: req.query.projectId, before: req.query.before }, req.query.asAgentId)))

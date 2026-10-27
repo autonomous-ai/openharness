@@ -57,6 +57,27 @@ describe('the parts a command touches (design section 1.2, column T)', () => {
     expect(has(f.run({ type: 'work.assign', conversationId: next, agentId: a.worker }).touches, 'progress', 'lead')).toBe(true)
   })
 
+  it('makes naming a requester meet that person\'s removal on their member part', () => {
+    const f = swarm()
+    const invited = f.run({ type: 'invite.create', email: 'peer@example.com', role: 'collaborator', conversationId: 'lead' }).effects.result.inviteId as string
+    f.run({ type: 'invite.accept', inviteId: invited }, { kind: 'person', userId: 'peer', email: 'peer@example.com' })
+    const opened = f.run({ type: 'conversation.create', title: 'R', brief: 'Do it', checks: [{ description: 'Done', independent: false }], requesterId: 'peer' },
+      f.agentActor(f.lead))
+    expect(has(opened.touches, 'member', 'peer')).toBe(true)
+    const id = opened.effects.result.conversationId as string
+    const named = f.run({ type: 'conversation.requester', conversationId: id, personId: 'peer' }, f.agentActor(f.lead))
+    expect(has(named.touches, 'member', 'peer')).toBe(true)
+    expect(has(named.touches, 'group', 'lead')).toBe(true)
+  })
+
+  it('makes an answer to waiting work meet a change to whom it waits on', () => {
+    const f = swarm(), a = f.group('A')
+    f.run({ type: 'conversation.requester', conversationId: a.id, personId: 'owner' })
+    f.run({ type: 'work.status', conversationId: a.id, assignmentId: a.assignmentId, status: 'needs_human', result: 'Flag?' }, f.agentActor(a.worker))
+    const answer = f.run({ type: 'message.send', conversationId: a.id, text: 'Flag.', replyTo: null, recipientIds: [] }, f.agentActor(f.lead))
+    expect(has(answer.touches, 'member', 'owner')).toBe(true)
+  })
+
   it('makes two starts on one machine meet on its slot ledger and on the head', () => {
     const f = swarm()
     const request = { conversationId: 'lead', machineId: 'host', engine: 'codex', name: 'New', cwd: '/w', worktree: false,
