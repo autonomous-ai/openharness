@@ -187,18 +187,24 @@ product manager can see what its terminal shows.
 
 The leaderboard shows how each person helped the team ship this week. People
 compete for fun, but the reward is shared: the team's goal is on top, and
-everyone's points count toward it. In Desktop and the web app, the trophy in the
-conversation header opens it. On a wide window it opens as a column at the far
-right, beside People. On a narrower one it opens as a dialog. It shows the project
-of the open conversation to the people who can read that project.
+everyone's points count toward it. In Desktop and the web app it is the right
+pane's Humans section; there is no separate view. The team goal is one line at
+the top, beside a small week picker. Below it, everyone is listed, with no
+cut-off and most points first. Each person is one row: avatar, name and points
+in fixed columns, with a quiet line of their Shipped, Unblocked and Lent under it.
+It shows the project of the open conversation to the people who can read that
+project. A server without a leaderboard leaves the names without numbers.
 
 Each person has three numbers:
 
-- **Shipped**: requests the person asked for whose work is Done with a linked
-  pull request. A group records its requester when it is opened. A person's own
-  new group names them, and a product manager names the person who asked in the
-  project chat or in their Chat with PM. Product managers mark a group Done only
-  after its pull request has merged. 3 points each.
+- **Shipped**: requests the person asked for whose pull request merged. A group
+  records its requester when it is opened. A person's own new group names them,
+  and a product manager names the person who asked in the project chat or in
+  their Chat with PM. Right after merging, the product manager records the merge
+  with the group and the PR link (and the merge time, for one recorded later, up
+  to four weeks back). The request ships at the merge, even if its work is lost
+  or cancelled afterwards. A group that is Done with a linked PR ships too; the
+  earlier of the merge and Done is when it shipped. 3 points each.
 - **Unblocked**: items needing a person that the person answered. An answer counts
   when it comes from the person the item waits on, or when it replies to the
   question itself. That person is the group's requester, or the project's owner
@@ -208,12 +214,13 @@ Each person has three numbers:
   from each machine's readings. A product manager's session doesn't count: it
   coordinates in confidence and doesn't build. 1 point for every 10 hours.
 
-The top three get medals, and people with the same points share a place. A
-streak counts the days in a row, up to today, with a shipped request. Tapping a
-name shows that person's week: the median time from asking to shipping, the
-median time to answer, and the hours freed and lent. The team goal compares the
-project's open requests, what shipped and the median time from asking to
-shipping with the week before. Weeks run from Monday 00:00 UTC, and the week
+People with the same points share a place. A streak counts the days in a row,
+up to today, with a shipped request. Tapping a name shows that person's week:
+their place, the median time from asking to shipping, the median time to answer,
+the hours freed and lent, and their streak. The team goal line shows what
+shipped, everyone's points and the project's open requests; hovering it compares
+what shipped with the week before and gives the median time from asking to
+shipping. Weeks run from Monday 00:00 UTC, and the week
 picker reaches back three weeks.
 
 **Agents waiting on a person now** lists who agents are waiting on and how many
