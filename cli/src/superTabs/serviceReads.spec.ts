@@ -74,8 +74,8 @@ describe('what each action reads of the Swarm', () => {
     const s = swarm()
     const lead = await s.ask({ action: 'help', tabId: T, agentId: FIXTURE.leadId }, owner)
     const builder = await s.ask({ action: 'help', tabId: T, agentId: FIXTURE.builderId }, owner)
-    expect(String(object(lead.help).post)).toContain('--mention')
-    expect(String(object(builder.help).post)).not.toContain('--mention')
+    expect(JSON.stringify(object(lead.help).commands)).toContain('"decision.ask"')
+    expect(JSON.stringify(object(builder.help).commands)).not.toContain('"decision.ask"')
     expect(s.reads()).toEqual([])
   })
   it('reads the roster as it is now for every call, so an agent started a moment ago is known at once', async () => {
@@ -162,5 +162,12 @@ describe('decisions', () => {
       expect(await s.ask({ action: 'decisions', tabId: T, agentId: FIXTURE.leadId, state }, owner)).toEqual({ ok: true, value: listed })
       expect(s.call).toHaveBeenCalledWith('GET', `/api/super-tabs/${T}/decisions?state=${state}&asAgentId=${FIXTURE.leadId}`, undefined)
     }
+  })
+
+  it('reads the hands-on requests the caller asked with kind=handsOn', async () => {
+    const listed = { handsOn: [{ id: 'h1', kind: 'handsOn', request: 'Plug in the device', steps: ['Plug it in'], next: 'I test it', answer: null }] }
+    const s = swarm((method, path) => path.startsWith(`/api/super-tabs/${T}/decisions?`) ? ok(listed) : undefined)
+    expect(await s.ask({ action: 'decisions', tabId: T, agentId: FIXTURE.builderId, state: 'answered', kind: 'handsOn' }, owner)).toEqual({ ok: true, value: listed })
+    expect(s.call).toHaveBeenCalledWith('GET', `/api/super-tabs/${T}/decisions?state=answered&kind=handsOn&asAgentId=${FIXTURE.builderId}`, undefined)
   })
 })

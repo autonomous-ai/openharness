@@ -1099,6 +1099,17 @@ model SuperTabDecision {
   answeredAt     DateTime?
   choice         Int?
   note           String?
+  /// 'handsOn' for a hands-on request (collaboration protocol); absent on a decision. A request keeps its ask in question,
+  /// what happens next in unblocks, and no options.
+  kind           String?
+  steps          String[]  @default([])
+  /// A hands-on answer: 'done', 'cant' or 'note'.
+  answer         String?
+  /// "Can't now" until then.
+  until          DateTime?
+  /// Escalation, each recorded once (decisions.ts sweepRequests): the person reminded after 30 minutes, the Lead told after 2 hours.
+  remindedAt     DateTime?
+  escalatedAt    DateTime?
 
   @@index([tabId, personId, createdAt])
   @@index([tabId, askerAgentId, createdAt])

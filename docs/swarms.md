@@ -234,6 +234,60 @@ wrote. Private conversations, Chat with PM among them, never count and never
 appear in it. Decisions asked of a person will count toward Unblocked once
 decisions ship.
 
+## Calling a person
+
+Agents do all the work they can. They call a person only for judgement (a
+decision with trade-offs), taste (how it should look or feel), knowledge
+(something only that person knows) or hands (a device, a sign-in, an approval).
+Every call names one person and asks one clear thing, so nobody has to watch
+the chat to find out they are needed.
+
+**Roles on a piece of work.** The requester asked for it and gets the result.
+The partner, when the work needs one, is the person it needs for judgement,
+taste, knowledge or hands; the product manager names them on the group, next to
+the Engineer, and picks them from the areas each person covers in the project
+(devices, mobile, product and so on). Each person sets their own areas, or the
+project's owner does, and members see them. The Engineer does the work, a
+Reviewer from another model family checks it, and the product manager routes it
+and keeps people out of the details unless they are needed.
+
+**Three ways to reach a person.**
+
+| Kind | When | What the person gets | How they answer |
+|---|---|---|---|
+| Decision | judgement, taste, knowledge | A batch of questions, each with 2 to 5 options, the agent's recommendation and what it unblocks | One tap per question, and an optional note |
+| Hands-on | a device, a sign-in, an approval | The steps to take and what the agent does next | Done, Can't now (until a time, with a note), or a note |
+| Mention | anything else | An @mention in a message | A normal reply |
+
+Decisions and hands-on requests wait at the top of the person's Chat with PM
+and count on their badge; their device shows hands-on requests, and decisions
+and mentions if they opt in. A group records who it is waiting on, so a phone
+or Desktop alerts that person rather than the project's owner. The product manager or
+the Engineer on its own task asks; the asking agent and the product manager
+get a notice when it is answered, and read the answer through their own decisions read.
+
+**Escalation.** An agent keeps working on its recommendation, marked
+provisional, while it waits, and never asks the same thing twice. A request
+still open after 30 minutes reminds its person, on their devices too; after 2
+hours the product manager is told to ask someone else or go on with the recommendation.
+Each step happens once, however many servers check. The checks run while the
+Swarm is working, whenever one of its machines reports or its product manager
+checks in; a Swarm with neither has no agent waiting on an answer.
+
+**Mentions.** Anyone who can post in a project's conversation can mention a
+person or an agent there. A mentioned person is notified and finds the
+conversation in their Notifications. Mentioning someone who cannot read the
+conversation is refused with a reason, and never shows them the conversation.
+
+**For people.** Answer from wherever you are: Desktop, the web, your phone or
+your device. "Can't now" is a fine answer: the agent waits or asks someone
+else. Set your status ("focus", "out until 2pm") so agents and the product manager
+route around you.
+
+Nothing private goes in a decision or a hands-on request; private matters go
+through Chat with PM. A device hears only that a person is needed (the
+request, the person and its kind), never what was asked.
+
 ## Lead updates
 
 The default update cadence is five minutes; the project menu also offers one,

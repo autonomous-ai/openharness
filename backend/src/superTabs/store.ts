@@ -17,7 +17,8 @@ import { bindSession, makeProjectPrivate } from './sessionScope.js'
 import { confidentialSessions, otherRegistrations, recordConfidential } from './confidential.js'
 import { answersRequest, noteProjectReports, projectUpdateRequest } from './projectUpdates.js'
 import { digestDue, digestRequest, digestSince } from './digest.js'
-import { judgedMachines, loseTasks, sweepLiveness, SWEEP_EVERY_MS } from './liveness.js'
+import { judgedMachines, loseTasks, sweepLiveness, SWEEP_EVERY_MS, writtenBy } from './liveness.js'
+import type { PersonSignal } from './signals.js'
 import { clock, insertParts, lastChangedAt, loadActive, reassemble, split, type HeadData, type SwarmParts } from './parts/index.js'
 import { commitParts, indexesOf, numberMessages, type Touch, type Written } from './parts/commit.js'
 import { touchesFor } from './parts/touches.js'
@@ -33,7 +34,7 @@ import { accrueLent } from './leaderboard/lent.js'
 import { mayDrive, TERMINAL_ANSWER_MS, TERMINAL_EXPIRY_MS, TERMINAL_PICKUP_MS, type TerminalEffect } from './terminal.js'
 import { closeAssignment, closeUnassignedStart, readDecision, timedDecisionOf, writeRouteEffects } from './routeDecisions.js'
 import { listMentions, markDone, mentionsWaiting, readMention, resolveByReply, writeMentions } from './mentions.js'
-import { answerable, listDecisions, readAskedDecision, recordAnswer, waitingInProject, writeDecisions } from './decisions.js'
+import { answerable, listDecisions, noteAsked, readAskedDecision, recordAnswer, recordHandsOnAnswer, sweepRequests, waitingInProject, writeDecisions, type RequestKind } from './decisions.js'
 import { DEFAULT_ROUTING_POLICY, effectivePolicy, routingPolicySchema, type RoutingPolicy } from './routingPolicy.js'
 import { authenticatedEmail, authorizeSwarmJoin, configureSharing, joinSwarmSchema, requireSharingOwner,
   saveSharingSchema, sharingDetails, type JoinSwarm, type SaveSharing } from './sharing.js'
@@ -173,6 +174,9 @@ export interface SuperTabStoreHooks {
   /** No Harness GitHub App on this server: a Mac's Harness Team account joins no Swarm and takes no teammates' work, since
    *  it has no git login to fetch or push with (commands.ts `teamAccountsIdle`). */
   teamAccountsIdle?: boolean
+  /** A person is needed (signals.ts): a request or mention for them committed, or a request's reminder fired. For the person's
+   *  device; it carries no content. Called after the write commits; a throw is logged, never fails the write. */
+  personNeeded?: (signal: PersonSignal) => void
 }
 
 /** Persistent coordination. Host adapters own execution and must confirm their local session grants. */
@@ -340,8 +344,8 @@ export class SuperTabStore {
       if (decision?.final?.kind === 'new') startIds.push(decision.final.startId)
     }
     // A person's decision may sit in a quiet or archived conversation: it is loaded to answer it (review of #1753).
-    if (command.type === 'decision.answer') {
-      const asked = await readAskedDecision(tx, tabId, command.decisionId)
+    if (command.type === 'decision.answer' || command.type === 'handsOn.answer') {
+      const asked = await readAskedDecision(tx, tabId, command.type === 'decision.answer' ? command.decisionId : command.requestId)
       if (asked) groupIds.push(asked.conversationId)
     }
     if (command.type === 'delivery.resolve') {
@@ -620,10 +624,11 @@ export class SuperTabStore {
 
   private async executeOnce(user: AuthUser, tabId: string, input: { operationId: string; command: Command }, asAgentId?: string, hostMachineId?: string) {
     const { operationId, command } = operationSchema.parse(input)
-    let ended: WorkHold[] = []
+    let ended: WorkHold[] = [], needed: PersonSignal[] = []
     const done = await transaction(this.db, async tx => {
       // A retried attempt starts again: only the attempt that commits says which tasks ended.
       ended = []
+      needed = []
       const stamp = clock.next()
       const first = await this.load(tx, user, tabId, namedFor(command))
       const loaded = await this.ensure(tx, first, await this.moreNamed(tx, tabId, first.state, command))
@@ -669,6 +674,7 @@ export class SuperTabStore {
           }
           // A retried answer is checked again: the person must still read the decision's conversation (review of #1753).
           if (command.type === 'decision.answer') answerable(original, actor, await readAskedDecision(tx, tabId, command.decisionId))
+          else if (command.type === 'handsOn.answer') answerable(original, actor, await readAskedDecision(tx, tabId, command.requestId), 'handsOn')
           else if ('decisionId' in command) {
             const decision = await readDecision(tx, tabId, command.decisionId) ?? fail('NOT_FOUND', 'This routing decision is unavailable.', 404)
             readConversation(original, actor, decision.conversationId)
@@ -739,6 +745,7 @@ export class SuperTabStore {
       }
       if (command.type === 'mention.done') context.mention = await readMention(tx, tabId, command.mentionId)
       if (command.type === 'decision.answer') context.decision = await readAskedDecision(tx, tabId, command.decisionId)
+      if (command.type === 'handsOn.answer') context.decision = await readAskedDecision(tx, tabId, command.requestId)
       if (command.type === 'message.send' && command.attachmentIds?.length) context.attachments = await this.sendable(tx, tabId, actor, command)
       if (TEAM_WORK_COMMANDS.has(command.type)) {
         context.teamMachines = await this.teamMachines(tx, original)
@@ -879,6 +886,9 @@ export class SuperTabStore {
           machineId: assigned.execution.machineId, harnessId: assigned.execution.harnessId } })
       }
       await this.endRuns(tx, tabId, original, effects.state)
+      // Who the group waits on moves with each request asked or answered there (decisions.ts noteAsked).
+      const waitsIn = effects.decisions?.[0]?.conversationId ?? (effects.decisionAnswer || effects.handsOnAnswer ? context.decision?.conversationId : undefined)
+      if (waitsIn) await noteAsked(tx, tabId, effects.state, waitsIn, effects.decisions ?? [], (effects.decisionAnswer ?? effects.handsOnAnswer)?.id)
       const committed = await this.save(tx, loaded, effects.state, stamp, touchesFor(command, actor, original, effects, context))
       if (command.type === 'agent.add' || command.type === 'agent.started' || command.type === 'agent.configuration' || command.type === 'agent.rebind') {
         for (const target of effects.state.agents) {
@@ -925,12 +935,19 @@ export class SuperTabStore {
       await this.writeMessages(tx, tabId, effects.state, effects.messages, sequences)
       if (command.type === 'message.send' && actor.kind === 'person') await resolveByReply(tx, tabId, command.conversationId, actor.userId, context.now)
       await writeMentions(tx, tabId, effects.state, effects.messages, context.now)
+      needed.push(...effects.messages.flatMap(m => (m.mentions ?? []).map(personId =>
+        ({ tabId, personId, requestId: stableId(tabId, m.id, personId), kind: 'mention' as const, reason: 'asked' as const }))))
       if (command.type === 'mention.done') await markDone(tx, tabId, command.mentionId, context.mention!.personId, context.now)
       if (effects.decisions) {
         const ids = await writeDecisions(tx, tabId, effects.decisions, context.now)
+        // Only a request asked now: an exact repeat is the open one again, and its person was told already.
+        needed.push(...effects.decisions.filter((d, i) => ids[i] === d.id).map(d =>
+          ({ tabId, personId: d.personId, requestId: d.id, kind: d.kind ?? 'decision' as const, reason: 'asked' as const })))
         if (command.type === 'decision.ask') effects.result.decisionIds = ids
+        if (command.type === 'handsOn.ask') effects.result.requestId = ids[0]
       }
       if (effects.decisionAnswer) await recordAnswer(tx, tabId, effects.decisionAnswer, context.now)
+      if (effects.handsOnAnswer) await recordHandsOnAnswer(tx, tabId, effects.handsOnAnswer, context.now)
       if (context.attachments?.length) {
         // Conflicts with a concurrent send of the same file: only one message can take it.
         const taken = await tx.superTabAttachment.updateMany({ where: { tabId, id: { in: context.attachments.map(a => a.id) }, ...unused },
@@ -972,7 +989,26 @@ export class SuperTabStore {
       return { result: effects.result, parts: committed.written, lastChangedAt: stamp }
     })
     this.endWork(tabId, ended)
+    this.signal(needed)
     return done
+  }
+
+  private signal(signals: PersonSignal[]): void {
+    if (!this.hooks.personNeeded) return
+    for (const each of signals) {
+      try { this.hooks.personNeeded(each) } catch (error) {
+        logger.warn('[super-tab] person-needed hook failed', { tabId: each.tabId, error: error instanceof Error ? error.message : String(error) })
+      }
+    }
+  }
+
+  /** When each Swarm's requests were last swept on a Lead's poll, on this server: a query, so not on every poll. */
+  private readonly requestsSwept = new Map<string, number>()
+  private requestSweepDue(tabId: string, now: number): boolean {
+    const last = this.requestsSwept.get(tabId)
+    if (last !== undefined && now - last < SWEEP_EVERY_MS) return false
+    this.requestsSwept.set(tabId, now)
+    return true
   }
 
   private endWork(tabId: string, ended: WorkHold[]): void {
@@ -1337,12 +1373,13 @@ export class SuperTabStore {
 
   /** The caller's decisions in this Swarm, newest first: a person's asked of them, an agent's asked by it (a Lead's also
    *  those asked in its project), still open or answered. */
-  async decisions(user: AuthUser, tabId: string, state: 'open' | 'answered', asAgentId?: string) {
+  async decisions(user: AuthUser, tabId: string, state: 'open' | 'answered', asAgentId?: string, kind: RequestKind = 'decision') {
     return transaction(this.db, async tx => {
       const { state: tab } = await this.load(tx, user, tabId, { allGroups: true })
       const actor = await this.actor(tx, user, tab, asAgentId)
       author(tab, actor)
-      return { decisions: await listDecisions(tx, tabId, tab, actor, state === 'open') }
+      const rows = await listDecisions(tx, tabId, tab, actor, state === 'open', kind)
+      return kind === 'handsOn' ? { handsOn: rows } : { decisions: rows }
     })
   }
 
@@ -1447,7 +1484,9 @@ export class SuperTabStore {
   async observeMachine(user: AuthUser, tabId: string, machineId: string, input: MachineObservation) {
     const observation = machineObservationSchema.parse(input)
     const sweep = this.sweepDue(tabId, this.now())
-    return transaction(this.db, async tx => {
+    let reminded: PersonSignal[] = []
+    const observed = await transaction(this.db, async tx => {
+      reminded = []
       await this.hostFor(tx, user, machineId)
       const loaded = await this.load(tx, user, tabId), state = structuredClone(loaded.state)
       const pool = machineContribution(state, machineId)
@@ -1495,8 +1534,12 @@ export class SuperTabStore {
       }
       // Its own agents lose their tasks at once (a stopped session); every 30 seconds it runs the Swarm's time checks too, so
       // they keep running when the Lead's own machine is the one that died.
-      return saved([...loseTasks(state, now, worker => worker.machineId === machineId), ...sweep ? sweepLiveness(state, now) : []])
+      const requests = sweep ? await sweepRequests(tx, tabId, state, now, lead => writtenBy(state, lead)) : { messages: [], signals: [] }
+      reminded = requests.signals
+      return saved([...loseTasks(state, now, worker => worker.machineId === machineId), ...sweep ? sweepLiveness(state, now) : [], ...requests.messages])
     })
+    this.signal(reminded)
+    return observed
   }
 
   async mayObserve(user: AuthUser, tabId: string, machineId: string, harnessId: string, machineOwnerId: string): Promise<boolean> {
@@ -1573,7 +1616,12 @@ export class SuperTabStore {
   }
 
   private async fullDeliveries(user: AuthUser, tabId: string, agentId: string) {
-    return transaction(this.db, async tx => {
+    let reminded: PersonSignal[] = []
+    // Claimed once, by a Lead's poll that will sweep, and kept for a retried attempt: a worker's poll never uses up the
+    // slot (review of #1769).
+    let sweepRequestsNow: boolean | undefined
+    const allowed = await transaction(this.db, async tx => {
+      reminded = []
       let loaded = await this.load(tx, user, tabId)
       // Work finished since the last digest and archived or asleep since still shipped, but ordinary loads leave it out
       // (#1757 review, 4): a due digest loads it.
@@ -1590,8 +1638,16 @@ export class SuperTabStore {
       const state = structuredClone(loaded.state)
       author(state, await this.actor(tx, user, state, agentId), true)
       const target = agent(state, agentId)
-      // A Lead's poll runs the time checks (liveness.ts): lost work wakes it in this same poll.
-      const written = ledProject(state, agentId) ? sweepLiveness(state, this.now()) : []
+      // A Lead's poll runs the time checks (liveness.ts): lost work wakes it in this same poll. Requests waiting on a person
+      // escalate with them (decisions.ts sweepRequests).
+      const leads = !!ledProject(state, agentId)
+      const written = leads ? sweepLiveness(state, this.now()) : []
+      if (leads) sweepRequestsNow ??= this.requestSweepDue(tabId, this.now())
+      if (leads && sweepRequestsNow) {
+        const swept = await sweepRequests(tx, tabId, state, this.now(), lead => writtenBy(state, lead))
+        written.push(...swept.messages)
+        reminded = swept.signals
+      }
       const update = projectUpdateRequest(state, target, this.now())
       let woken = false
       if (update) {
@@ -1633,6 +1689,8 @@ export class SuperTabStore {
       }
       return allowed
     })
+    this.signal(reminded)
+    return allowed
   }
 
   /** A withdrawn host can retire its own journal without regaining shared

@@ -69,6 +69,10 @@ describe('built-in Swarm skills', () => {
   const requests = '## Requests and Done\n- When you open a group for a person\'s request, asked in the project chat or in their Chat with PM, name them as its requester: requesterId on conversation.create, or conversation.requester for a group already open. It records only that they asked, never what they wrote.\n- Right after you merge a group\'s pull request, record it: conversation.merged with the group and the PR link, and mergedAt for a merge you record later. The leaderboard counts the request as shipped at the merge, even if its work is lost or cancelled afterwards. Mark a group Done only after its pull request has merged.\n\n'
   // Last in the Default Lead text, which has no red flags: after a blank line, ending the text.
   const requestsLast = `\n${requests.trimEnd()}\n`
+  // The collaboration protocol lines (v2 K, 2026-10-27, docs/swarms.md "Calling a person"): the Lead's and the Builder's alone,
+  // in both modes, each right after that role's decision line.
+  const callLead = '- Call a person only for judgement, taste, knowledge or hands, one named person per call: decision.ask for a choice, handsOn.ask for a device, a sign-in or an approval (the steps and what you do next), a mention for anything else. Give a group that needs a person a partner (conversation.partner), picked from the areas in status. Nothing private goes in a request; that goes through Chat with PM. Told a request has waited 2 hours: ask someone else or go on with the recommendation, and say which.\n'
+  const callBuilder = '- A question for a person always mentions them (--mention) or goes to them as a decision or a hands-on request; a question in chat that mentions nobody notifies nobody. For a device, a sign-in or an approval, ask with handsOn.ask (the steps and what you do next) and keep working on the rest; never ask the same thing twice.\n'
   const twoHours = '- A Builder or Reviewer that has been down for 2 hours (machine offline, session gone or stopped): cancel its task with the reason, route it, and assign it to another agent with what the first one left (branch, last revision, last report).\n'
   it.each([
     ['lead', 'b9254e4bb5c633a73e1b87e6ca6690915e1c3a7bb55db0d3d093e6710dd719db'],
@@ -94,8 +98,10 @@ describe('built-in Swarm skills', () => {
       expect(text.split(mention + decision)).toHaveLength(role === 'lead' ? 2 : 1)
       expect(text.split(ask)).toHaveLength(role === 'dev' ? 2 : 1)
       expect(text.split(requests)).toHaveLength(role === 'lead' ? 2 : 1)
+      expect(text.split(callLead)).toHaveLength(role === 'lead' ? 2 : 1)
+      expect(text.split(callBuilder)).toHaveLength(role === 'dev' ? 2 : 1)
       expect(sha(text.replace(twoHours, '').replace(terminal, '').replace(overlap, '').replace(local, '').replace(mention, '').replace(lost, '').replace(checkpoint, '')
-        .replace(limit, '').replace(digest, '').replace(decision, '').replace(ask, '').replace(requests, ''))).toBe(sha256)
+        .replace(limit, '').replace(digest, '').replace(decision, '').replace(ask, '').replace(requests, ''.replace(callLead, '').replace(callBuilder, ''))).toBe(sha256)
     }
   })
   it('adds the 2-hour line to section 7 right after the 6-hour rule', () => {
@@ -122,14 +128,22 @@ describe('built-in Swarm skills', () => {
   })
   it('adds the mention line right after each Lead skill\'s needs-a-person rule', () => {
     const orchestration = readFileSync(prepareSwarmSkill(fixture(), { role: 'lead', key: 'session' }).file, 'utf8')
-    expect(orchestration).toContain(`- Needs-human: get the person's decision now.\n${mention}${decision}- Blocked: change something.`)
+    expect(orchestration).toContain(`- Needs-human: get the person's decision now.\n${mention}${decision}${callLead}- Blocked: change something.`)
     const plain = readFileSync(prepareSwarmSkill(fixture(), { role: 'lead', key: 'session', mode: 'default' }).file, 'utf8')
-    expect(plain).toContain(`- Needs a person: get the decision now. Blocked: change something (context, model, size or plan); never resend the same thing.\n${mention}${decision}- Settle ambiguities`)
+    expect(plain).toContain(`- Needs a person: get the decision now. Blocked: change something (context, model, size or plan); never resend the same thing.\n${mention}${decision}${callLead}- Settle ambiguities`)
   })
   it('adds the decision lines right after the mention line for the Lead, and after the needs-human rule for the Builder', () => {
     for (const mode of ['orchestration', 'default'] as const) {
       const builder = readFileSync(prepareSwarmSkill(fixture(), { role: 'dev', key: 'session', mode }).file, 'utf8')
-      expect(builder).toContain(`- A person's decision: mark needs-human with one short question.\n${ask}- Can't go on`)
+      expect(builder).toContain(`- A person's decision: mark needs-human with one short question.\n${ask}${callBuilder}- Can't go on`)
+    }
+  })
+  it('adds the collaboration protocol right after each role\'s decision line, in both modes', () => {
+    for (const mode of ['orchestration', 'default'] as const) {
+      const lead = readFileSync(prepareSwarmSkill(fixture(), { role: 'lead', key: 'session', mode }).file, 'utf8')
+      expect(lead).toContain(`${mention}${decision}${callLead}`)
+      const builder = readFileSync(prepareSwarmSkill(fixture(), { role: 'dev', key: 'session', mode }).file, 'utf8')
+      expect(builder).toContain(`${ask}${callBuilder}- Can't go on`)
     }
   })
   it('gives each Lead skill its requests section of its own: before the red flags, or last where there are none', () => {
@@ -179,8 +193,10 @@ describe('built-in Swarm skills', () => {
     expect(text.split(mention + decision)).toHaveLength(role === 'lead' ? 2 : 1)
     expect(text.split(ask)).toHaveLength(role === 'dev' ? 2 : 1)
     expect(text.split(requestsLast)).toHaveLength(role === 'lead' ? 2 : 1)
+    expect(text.split(callLead)).toHaveLength(role === 'lead' ? 2 : 1)
+    expect(text.split(callBuilder)).toHaveLength(role === 'dev' ? 2 : 1)
     expect(sha(text.replace(terminal, '').replace(overlap, '').replace(localDefault, '').replace(mention, '').replace(lost, '').replace(checkpoint, '')
-      .replace(limit, '').replace(digest, '').replace(decision, '').replace(ask, '').replace(requestsLast, ''))).toBe(sha256)
+      .replace(limit, '').replace(digest, '').replace(decision, '').replace(ask, '').replace(requestsLast, ''.replace(callLead, '').replace(callBuilder, ''))).toBe(sha256)
     expect(prepared.instructions).toBe(`Use the swarm-${role} skill for this session: the team process; otherwise work your usual way. Before working, read ${JSON.stringify(prepared.file)} with your file or shell tool.`)
   })
 

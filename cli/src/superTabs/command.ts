@@ -10,7 +10,9 @@ import { uploadAttachments } from './attach.js'
 import { keyName } from './terminal.js'
 import { randomUUID } from 'node:crypto'
 
-const USAGE = 'harness super-tab --tab ID [--agent ID] [--port N --machine ID] status | messages GROUP | message GROUP MESSAGE_ID | decisions [--answered] | post GROUP TEXT OPERATION_ID [--reply-to MESSAGE_ID] [--attach PATH]... [--mention PERSON]... | command OPERATION_ID JSON | start OPERATION_ID JSON | resume START_ID | capacity MACHINE_ID JSON | route GROUP JSON | plan [JSON] | remove-machine MACHINE_ID [--yes] | screen AGENT [--scrollback N] | type AGENT [TEXT] [--key K]... | help'
+const USAGE = 'harness super-tab --tab ID [--agent ID] [--port N --machine ID] status | messages GROUP | message GROUP MESSAGE_ID | decisions [--answered] [--hands-on] | post GROUP TEXT OPERATION_ID [--reply-to MESSAGE_ID] [--attach PATH]... [--mention PERSON]... | command OPERATION_ID JSON | start OPERATION_ID JSON | resume START_ID | capacity MACHINE_ID JSON | route GROUP JSON | plan [JSON] | remove-machine MACHINE_ID [--yes] | screen AGENT [--scrollback N] | type AGENT [TEXT] [--key K]... | help'
+/** decisions takes --answered and --hands-on, each at most once, in any order. */
+const decisionFlags = (flags: string[]) => flags.every(f => f === '--answered' || f === '--hands-on') && new Set(flags).size === flags.length
 export function parseSuperTabArgs(argv: readonly string[], where: Where) {
   const positional: string[] = []
   let tabId = '', agentId = ''
@@ -28,7 +30,11 @@ export function parseSuperTabArgs(argv: readonly string[], where: Where) {
   if (action !== 'help' && (!identifier(tabId) || (agentId && !identifier(agentId)))) throw new Error(USAGE)
   const payload: Record<string, unknown> = { action, tabId, agentId }
   if (action === 'messages' && identifier(first) && positional.length === 2) payload.conversationId = first
-  else if (action === 'decisions' && (positional.length === 1 || (positional.length === 2 && first === '--answered'))) payload.state = first ? 'answered' : 'open'
+  else if (action === 'decisions' && decisionFlags(positional.slice(1))) {
+    const flags = positional.slice(1)
+    payload.state = flags.includes('--answered') ? 'answered' : 'open'
+    if (flags.includes('--hands-on')) payload.kind = 'handsOn'
+  }
   else if (action === 'message' && identifier(first) && identifier(second) && positional.length === 3) {
     Object.assign(payload, { conversationId: first, messageId: second })
   }
