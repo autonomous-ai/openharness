@@ -1068,8 +1068,12 @@ class WsConn {
     // A viewer's relay connection holds that session itself, so for it this is simply a fresh dial
     // — and with it a fresh session.
     if (_closing || (!isLocal && relayCodecs == null)) return;
-    _observerHandshakeTimer?.cancel();
     _forceRelayReconnect = true;
+    // A link that is not up holds no session to refresh, only its backoff: its next dial carries
+    // the hint. Dialling now zeroed that backoff on every timed-out request to an offline machine,
+    // ~100 backend dials per machine per 10 min instead of ~20 (prod, 2026-10-27, #314).
+    if (!_ready) return;
+    _observerHandshakeTimer?.cancel();
     _reconnectTimer?.cancel();
     _ready = false;
     _codec = null;

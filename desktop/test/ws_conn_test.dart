@@ -547,6 +547,42 @@ void main() {
     },
   );
 
+  test(
+    'a forced relay redial of a link that never came up keeps the backoff',
+    () async {
+      // An offline relayed machine: the daemon closes each select (1013 there; any code but the
+      // special ones takes the same reconnect path, and Dart's server allows only 1000). A timed-out request or a
+      // stalled pane forces a redial at most every 30 s, and that used to zero the backoff — so the
+      // retries ran 1, 2, 4, 8, 16 s and started over, ~100 backend dials per machine per 10 min
+      // (prod, 2026-10-27, #314).
+      hub = await FakeHub.start(closeCodeOnSelect: 1000);
+      int selects() =>
+          hub.frames.where((f) => f['type'] == 'machine_select').length;
+      conn = WsConn(
+        wsBaseUrl: 'wss://unused.example',
+        autonomousEnv: 'prod',
+        machineId: 'm1',
+        accessTokenProvider: (_, _) async => 'sso-token',
+        onAuthFailure: (_) {},
+        onEvent: (_) {},
+        onStatus: (_) {},
+        transportKind: WsTransportKind.localPlaintext,
+        allowLocalTcpFixture: true,
+        localWsUri: Uri.parse('ws://127.0.0.1:${hub.port}/api/local-ws'),
+      );
+      await conn!.connect();
+      // The first select, then the retry one second later; the next is due two seconds after it.
+      while (selects() < 2) {
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+      }
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+      await conn!.forceReconnect();
+      await Future<void>.delayed(const Duration(milliseconds: 1000));
+      expect(selects(), 2, reason: 'a forced redial must not jump the backoff');
+    },
+    timeout: const Timeout(Duration(seconds: 20)),
+  );
+
   test('4403 on a local socket is reported, and the retry goes on', () async {
     // "machine mismatch": the daemon serves another id than the one selected. The app is told so it
     // can find out which; the socket keeps retrying (the answer may be a re-key of this very row)
