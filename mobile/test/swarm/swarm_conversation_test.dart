@@ -86,6 +86,43 @@ void main() {
     expect(r.swarm.paths.last, messages);
   });
 
+  // The chat page redraws on what its conversation says: a read that brings
+  // nothing, or a letter typed, is not news for its messages.
+  test('a read that brings nothing new tells no one', () async {
+    final r = rig();
+    r.swarm.routes[messages] = (_) => {
+      'messages': [message('m2', 2), message('m1', 1)],
+      'next': {'sequence': 1, 'id': 'm1'},
+    };
+    final c = await open(r.reader);
+    final shown = c.messages;
+    var told = 0;
+    c.addListener(() => told++);
+
+    await c.load();
+
+    expect(told, 0);
+    expect(c.messages, same(shown));
+    expect(c.hasOlder, isTrue);
+  });
+
+  test('a draft typed is told to the composer, not to the messages', () async {
+    final r = rig();
+    r.swarm.routes[messages] = (_) => {
+      'messages': [message('m1', 1)],
+      'next': null,
+    };
+    final c = await open(r.reader);
+    var told = 0;
+    c.addListener(() => told++);
+
+    c.draft = 'Hel';
+    c.draft = 'Hello';
+
+    expect(told, 0);
+    expect(c.draft, 'Hello');
+  });
+
   test(
     'older messages are read before the oldest shown, until there are none',
     () async {

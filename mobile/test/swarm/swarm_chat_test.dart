@@ -118,7 +118,7 @@ void main() {
     return fake;
   }
 
-  Future<void> pump(WidgetTester tester, FakeSwarm fake) async {
+  Future<SwarmHost> pump(WidgetTester tester, FakeSwarm fake) async {
     final features = ExperimentalFeaturesStore(storage: MemoryKeyValueStore())
       ..value = {PhoneExperiment.swarm};
     final account = ValueNotifier<String?>(me);
@@ -140,9 +140,30 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
+    return host;
   }
 
   Finder key(String value) => find.byKey(ValueKey(value));
+
+  /// The message rows built while [act] runs, by message id: a row drawn as
+  /// it was is not built at all.
+  Future<List<String>> rowsBuilt(Future<void> Function() act) async {
+    const prefix = 'swarm-message-';
+    final built = <String>[];
+    final before = debugOnRebuildDirtyWidget;
+    debugOnRebuildDirtyWidget = (element, _) {
+      final key = element.widget.key;
+      if (key is ValueKey<String> && key.value.startsWith(prefix)) {
+        built.add(key.value.substring(prefix.length));
+      }
+    };
+    try {
+      await act();
+    } finally {
+      debugOnRebuildDirtyWidget = before;
+    }
+    return built;
+  }
 
   String time(int minute) {
     final at = DateTime.utc(2026, 10, 27, 1, minute).toLocal();
@@ -826,6 +847,72 @@ void main() {
 
     expect(fill('m1'), const Color(0xFF1D5BD6));
     expect(fill('m2'), isNot(const Color(0xFF1D5BD6)));
+  });
+
+  // Tony's iPhone 14, Profile, 44d284f65: the whole chat was built again on
+  // each keystroke, and in 25 ms mid-scroll when the 5 s read answered.
+  group('drawn again', () {
+    List<Map<String, dynamic>> page() => [
+      message('m1', 1, author: 'agent-lead', text: 'The plan'),
+      message('m2', 2, text: 'On it @River', minute: 1),
+      message('m3', 3, author: me, text: 'Thanks', replyTo: 'm1', minute: 2),
+    ];
+
+    testWidgets('a keystroke: the composer, and no message', (tester) async {
+      final fake = backend(page());
+      fake.routes[commands] = (_) => Completer<Object?>().future;
+      await pump(tester, fake);
+
+      final built = await rowsBuilt(() async {
+        await tester.enterText(find.byType(TextField), 'S');
+        await tester.pump();
+        await tester.enterText(find.byType(TextField), 'Sh');
+        await tester.pump();
+      });
+
+      expect(built, isEmpty);
+      // The composer did follow the typing: Send posts what was typed.
+      await tester.tap(key('swarm-send'));
+      await tester.pump();
+      expect(
+        find.descendant(of: key('swarm-pending'), matching: find.text('Sh')),
+        findsOneWidget,
+      );
+    });
+
+    testWidgets('a read of the Swarm that changes nothing in this chat: no '
+        'message', (tester) async {
+      final fake = backend(page());
+      final host = await pump(tester, fake);
+      // The Lead's chat moved on: the Swarm, its asks and the inbox all
+      // say so, and nothing this chat draws changed.
+      fake.routes['/api/super-tabs/$tab/changes'] = (_) => changes(
+        cursor: 'c3',
+        lastChangedAt: 200,
+        derived: {'decisionsWaiting': 0},
+        groups: [
+          part(
+            leadChat,
+            9,
+            groupData(
+              leadChat,
+              title: 'Mobile',
+              agentIds: ['agent-lead'],
+              leadId: 'agent-lead',
+              status: 'working',
+            ),
+          ),
+        ],
+      );
+
+      final built = await rowsBuilt(() async {
+        await host.session!.inbox.reader(tab)!.refresh();
+        await tester.pumpAndSettle();
+      });
+
+      expect(built, isEmpty);
+      expect(find.text('On it @River'), findsOneWidget);
+    });
   });
 
   group('a day divider says', () {
