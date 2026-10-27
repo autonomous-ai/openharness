@@ -69,6 +69,70 @@ void main() {
     expect(notices.openedDevice.value, isNull);
   });
 
+  group('a Swarm notice', () {
+    const target = (swarmId: 'tab-1', conversationId: 'g9');
+    const swarm = (
+      key: 'decision:d1',
+      title: 'River asks you',
+      subtitle: 'Mobile · Fix login',
+      body: 'Ship it behind a flag?',
+      target: target,
+    );
+
+    test('its own channel, where it is on the second line, replaced by its own key', () async {
+      await notices.showSwarm(swarm);
+      await notices.showSwarm(swarm);
+
+      expect(plugin.shown.map((n) => n.id).toSet(), {swarmNoticeIdFor('decision:d1')});
+      final shown = plugin.shown.first;
+      expect(shown.title, 'River asks you');
+      expect(shown.body, 'Ship it behind a flag?');
+      expect(shown.details!.android!.channelId, 'swarm-needs-you');
+      expect(shown.details!.android!.subText, 'Mobile · Fix login');
+      expect(shown.details!.iOS!.subtitle, 'Mobile · Fix login');
+      expect(shown.details!.iOS!.threadIdentifier, 'swarm-needs-you');
+      expect(decodeAgentPayload(shown.payload), isNull);
+    });
+
+    test('a tap opens that conversation, and no agent or device', () async {
+      await notices.showSwarm(swarm);
+      plugin.onResponse!(
+        NotificationResponse(
+          notificationResponseType: NotificationResponseType.selectedNotification,
+          payload: plugin.shown.single.payload,
+        ),
+      );
+      expect(notices.openedSwarm.value, target);
+      expect(notices.opened.value, isNull);
+      expect(notices.openedDevice.value, isNull);
+    });
+
+    test('the tap that launched the app from cold opens it too', () async {
+      plugin.launch = NotificationAppLaunchDetails(
+        true,
+        notificationResponse: NotificationResponse(
+          notificationResponseType: NotificationResponseType.selectedNotification,
+          payload: encodeSwarmPayload(target),
+        ),
+      );
+      await notices.requestPermission();
+      expect(notices.openedSwarm.value, target);
+    });
+
+    test('taking it down cancels its own id', () async {
+      await notices.cancelSwarm('decision:d1');
+      expect(plugin.cancelled, [swarmNoticeIdFor('decision:d1')]);
+    });
+
+    test('a plugin that fails never throws into the Swarm', () async {
+      plugin.failShow = true;
+      plugin.failCancel = true;
+      await notices.showSwarm(swarm);
+      await notices.cancelSwarm('decision:d1');
+      expect(plugin.shown, isEmpty);
+    });
+  });
+
   test('nothing starts until a notice is first needed', () {
     expect(plugin.initialized, 0);
     // The app's own, over the real plugin: building it reaches no platform.

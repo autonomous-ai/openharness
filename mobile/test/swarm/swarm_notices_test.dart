@@ -1,0 +1,176 @@
+import 'package:flutter_test/flutter_test.dart';
+import 'package:harness_mobile/notify/system_notices.dart';
+import 'package:harness_mobile/swarm/model.dart';
+import 'package:harness_mobile/swarm/parts.dart';
+import 'package:harness_mobile/swarm/swarm_asks.dart';
+import 'package:harness_mobile/swarm/swarm_inbox.dart';
+import 'package:harness_mobile/swarm/swarm_notices.dart';
+import 'package:harness_mobile/swarm/waiting_work.dart';
+
+import 'swarm_fixture.dart';
+
+/// What the phone's notices say about the Swarm: a decision asked of the
+/// person, a Lead's tag, work waiting on them — and where a tap leads.
+void main() {
+  SwarmDecisionNeed decision() => SwarmDecisionNeed(
+    'tab-b',
+    SuperTabDecision.fromJson({
+      'id': 'd1',
+      'projectName': 'Mobile',
+      'conversationId': 'g9',
+      'conversationTitle': 'Fix login',
+      'askerName': 'River',
+      'question': 'Ship it behind a flag?',
+      'options': ['Yes', 'No'],
+    }),
+  );
+
+  SwarmMentionNeed mention() => SwarmMentionNeed(
+    'tab-b',
+    SuperTabMention.fromJson({
+      'id': 'm1',
+      'projectName': 'Mobile',
+      'conversationId': 'g9',
+      'conversationTitle': 'Fix login',
+      'messageId': 'msg-1',
+      'leadName': 'River',
+      'text': 'Can you check the copy?',
+    }),
+  );
+
+  SwarmWorkNeed work(String status, {String? result}) {
+    final snapshot = SuperTabSnapshot.fromJson(
+      SuperTabParts.firstLoad(
+        firstLoad(
+          groups: [
+            {
+              ...groupData('g1', title: 'Sync', number: 4, status: status),
+              'assignment': {
+                'id': 'attempt-g1',
+                'agentId': 'agent-builder',
+                'status': status,
+                'result': result,
+              },
+            },
+          ],
+        ),
+      ).state,
+    );
+    return SwarmWorkNeed(tab, swarmWaitingWork(snapshot, me).single);
+  }
+
+  test('a decision says who asks, and the question', () {
+    final notice = swarmNotice(decision());
+
+    expect(notice.title, 'River asks you');
+    expect(notice.subtitle, 'Mobile · Fix login');
+    expect(notice.body, 'Ship it behind a flag?');
+    expect(notice.target, (swarmId: 'tab-b', conversationId: 'g9'));
+  });
+
+  test("a tag says who tagged, and the Lead's words", () {
+    final notice = swarmNotice(mention());
+
+    expect(notice.title, 'River tagged you');
+    expect(notice.body, 'Can you check the copy?');
+  });
+
+  test("waiting work says who waits and why, in the worker's words", () {
+    final needs = swarmNotice(work('needs_human', result: 'Which name?'));
+    expect(needs.title, 'Nova needs you');
+    expect(needs.subtitle, 'Mobile · #4 Sync');
+    expect(needs.body, 'Which name?');
+
+    final stuck = swarmNotice(work('blocked'));
+    expect(stuck.title, 'Nova is stuck');
+    expect(stuck.body, 'Open it to see why.');
+  });
+
+  test('each need is its own notice, and the same need replaces itself', () {
+    expect(swarmNotice(decision()).key, swarmNotice(decision()).key);
+    expect(swarmNotice(decision()).key, isNot(swarmNotice(mention()).key));
+  });
+
+  test('nothing is posted while the Swarm is on screen', () {
+    final notices = _Recording();
+    var onScreen = true;
+    final announcer = SwarmAnnouncer(notices, quiet: (_) => onScreen);
+
+    announcer.announce(decision());
+    expect(notices.shown, isEmpty);
+
+    onScreen = false;
+    announcer.announce(decision());
+    expect(notices.shown.single.title, 'River asks you');
+  });
+
+  test('a notice is taken down once its need is gone, and only then', () {
+    final notices = _Recording();
+    final announcer = SwarmAnnouncer(notices, quiet: (_) => false);
+    announcer.announce(decision());
+    announcer.announce(mention());
+
+    announcer.settle([decision(), mention()]);
+    expect(notices.cancelled, isEmpty);
+
+    // Answered on the desktop: the lock screen must stop asking.
+    announcer.settle([mention()]);
+    expect(notices.cancelled, [decision().key]);
+
+    // Signed out: nothing of the account stays on the lock screen.
+    announcer.clear();
+    expect(notices.cancelled, [decision().key, mention().key]);
+  });
+
+  test('a need never shown is never taken down', () {
+    final notices = _Recording();
+    final announcer = SwarmAnnouncer(notices, quiet: (_) => true);
+    announcer.announce(decision());
+
+    announcer.settle(const []);
+
+    expect(notices.cancelled, isEmpty);
+  });
+
+  group('the tap', () {
+    test('leads to the Swarm and conversation, never read as an agent', () {
+      const target = (swarmId: 'tab-b', conversationId: 'g9');
+      final payload = encodeSwarmPayload(target);
+
+      expect(decodeSwarmPayload(payload), target);
+      expect(decodeAgentPayload(payload), isNull);
+      expect(
+        decodeSwarmPayload(encodeAgentPayload((machineId: 'm', agentId: 'a'))),
+        isNull,
+      );
+    });
+
+    test('a damaged payload opens nothing', () {
+      expect(decodeSwarmPayload('swarm:%E0%A4%A/g9'), isNull);
+      expect(decodeSwarmPayload('swarm:tab-b'), isNull);
+      expect(decodeSwarmPayload('swarm:/g9'), isNull);
+      expect(decodeSwarmPayload('device:tab-b/g9'), isNull);
+    });
+
+    test('a notice id is stable and never an agent notice id', () {
+      expect(swarmNoticeIdFor('decision:d1'), swarmNoticeIdFor('decision:d1'));
+      expect(
+        swarmNoticeIdFor('decision:d1'),
+        isNot(swarmNoticeIdFor('decision:d2')),
+      );
+      expect(swarmNoticeIdFor('decision:d1'), greaterThan(0));
+    });
+  });
+}
+
+class _Recording extends SilentSystemNotices {
+  final shown = <SwarmNoticeMessage>[];
+  final cancelled = <String>[];
+
+  @override
+  Future<void> showSwarm(SwarmNoticeMessage message) async =>
+      shown.add(message);
+
+  @override
+  Future<void> cancelSwarm(String key) async => cancelled.add(key);
+}
