@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:collection';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
@@ -11,6 +12,7 @@ import 'package:harness_mobile/swarm/swarm_conversation_page.dart';
 import 'package:harness_mobile/swarm/swarm_drawer.dart';
 import 'package:harness_mobile/swarm/swarm_page.dart';
 import 'package:harness_mobile/swarm/swarm_project_page.dart';
+import 'package:harness_mobile/swarm/swarm_request.dart';
 import 'package:harness_mobile/swarm/swarm_session.dart';
 import 'package:harness_mobile/swarm/swarm_start.dart';
 import 'package:harness_mobile/swarm/swarm_style.dart';
@@ -40,6 +42,43 @@ class _Computers extends ChangeNotifier implements SwarmComputers {
 
   @override
   void add(BuildContext context) {}
+}
+
+/// A list that counts how often what it holds is read, in turn or one by one;
+/// its length is not a read.
+class _Reads<E> extends ListBase<E> {
+  _Reads(this._items);
+
+  final List<E> _items;
+  var reads = 0;
+
+  @override
+  int get length => _items.length;
+
+  @override
+  set length(int value) => throw UnsupportedError('Read only');
+
+  @override
+  E operator [](int index) {
+    reads++;
+    return _items[index];
+  }
+
+  @override
+  void operator []=(int index, E value) => throw UnsupportedError('Read only');
+
+  @override
+  Iterator<E> get iterator {
+    reads++;
+    return _items.iterator;
+  }
+}
+
+/// Half a second of frames, for a screen that cannot settle.
+Future<void> frames(WidgetTester tester) async {
+  for (var i = 0; i < 5; i++) {
+    await tester.pump(const Duration(milliseconds: 100));
+  }
 }
 
 /// Swarm Home and its drawer, over a scripted backend: one Swarm with two
@@ -177,6 +216,7 @@ void main() {
     VoidCallback? onHarness,
     void Function(BuildContext context)? onSettings,
     SwarmComputers? computers,
+    bool settle = true,
   }) async {
     tester.view.physicalSize = const Size(1170, 2532);
     tester.view.devicePixelRatio = 3;
@@ -199,7 +239,8 @@ void main() {
         home: SwarmPage(onHarness: onHarness, onSettings: onSettings),
       ),
     );
-    await tester.pumpAndSettle();
+    // A skeleton breathes for as long as it shows: nothing settles under it.
+    settle ? await tester.pumpAndSettle() : await frames(tester);
     return host;
   }
 
@@ -1126,6 +1167,289 @@ void main() {
         final words = plain.indexOf('1', dot.start);
         expect(middle(dot.start), closeTo(middle(words), 4), reason: plain);
       }
+    });
+  });
+
+  group('while Home reads', () {
+    /// [path] answers only once the returned gate is opened.
+    Completer<void> hold(FakeSwarm fake, String path) {
+      final gate = Completer<void>();
+      final answer = fake.routes[path]!;
+      fake.routes[path] = (body) async {
+        await gate.future;
+        return answer(body);
+      };
+      return gate;
+    }
+
+    double height(WidgetTester tester, String k) =>
+        tester.getSize(key(k)).height;
+
+    const decision = {
+      'id': 'd1',
+      'projectName': 'Mobile',
+      'conversationId': leadChat,
+      'conversationTitle': 'Mobile',
+      'askerName': 'River',
+      'question': 'Ship it behind a flag?',
+      'options': ['Yes', 'No'],
+    };
+
+    /// One Swarm whose counts say a decision waits, with no work waiting:
+    /// what waits on the person is the decision alone.
+    FakeSwarm deciding() {
+      final fake = backend();
+      fake.routes['/api/super-tabs/$tab/parts'] = (_) =>
+          firstLoad(derived: const {'decisionsWaiting': 1});
+      fake.routes['/api/super-tabs/$tab/mentions?state=waiting'] = (_) => {
+        'mentions': <Object>[],
+      };
+      return fake;
+    }
+
+    testWidgets('before the list answers, Needs you, Chat with PM and the '
+        'projects are skeleton rows, and nothing says it is reading', (
+      tester,
+    ) async {
+      final fake = backend();
+      final listed = hold(fake, '/api/super-tabs/list');
+      await pump(tester, fake, settle: false);
+
+      for (final k in [
+        'swarm-needs-loading',
+        'swarm-pm-loading',
+        'swarm-projects-loading',
+      ]) {
+        expect(key(k), findsOneWidget, reason: k);
+      }
+      expect(
+        y(tester, 'swarm-needs-loading'),
+        lessThan(y(tester, 'swarm-pm-loading')),
+      );
+      expect(
+        y(tester, 'swarm-pm-loading'),
+        lessThan(y(tester, 'swarm-projects-loading')),
+      );
+      expect(find.text('Chat with PM'), findsOneWidget);
+      expect(find.text('Projects'), findsOneWidget);
+      expect(find.text('Nothing needs you.'), findsNothing);
+      expect(find.textContaining('Reading'), findsNothing);
+
+      listed.complete();
+      await tester.pumpAndSettle();
+
+      expect(key('swarm-needs-loading'), findsNothing);
+      expect(key('swarm-projects-loading'), findsNothing);
+      expect(key('swarm-project-$tab-$project'), findsOneWidget);
+    });
+
+    for (final scale in [1.0, 1.3]) {
+      testWidgets('skeleton rows are as tall as the rows that replace them '
+          '(text at $scale)', (tester) async {
+        tester.platformDispatcher.textScaleFactorTestValue = scale;
+        addTearDown(tester.platformDispatcher.clearTextScaleFactorTestValue);
+        final fake = backend();
+        final listed = hold(fake, '/api/super-tabs/list');
+        await pump(tester, fake, settle: false);
+        final pm = height(tester, 'swarm-pm-loading-0');
+        final row = height(tester, 'swarm-projects-loading-0');
+
+        listed.complete();
+        await tester.pumpAndSettle();
+
+        expect(height(tester, 'swarm-home-pm-$tab-$project'), closeTo(pm, .01));
+        expect(
+          height(tester, 'swarm-project-$tab-$web'),
+          closeTo(row, .01),
+          reason: 'a team line on one line, as the skeleton draws it',
+        );
+      });
+    }
+
+    testWidgets('of two Swarms, the one still to be read has its rows on '
+        'their way under its name, on Home and in the drawer', (tester) async {
+      const second = 'tab-2';
+      final fake = backend();
+      fake.routes['/api/super-tabs/list'] = (_) => {
+        'tabs': [
+          {'id': tab, 'name': 'Phone Swarm', 'ownerId': me},
+          {'id': second, 'name': 'Second Swarm', 'ownerId': me},
+        ],
+        'next': null,
+      };
+      fake.routes['/api/super-tabs/$second/parts'] = (_) => firstLoad(
+        tabId: second,
+        head: headData(id: second, name: 'Second Swarm'),
+      );
+      final read = hold(fake, '/api/super-tabs/$tab/parts');
+      await pump(tester, fake, settle: false);
+
+      expect(key('swarm-project-$second-$project'), findsOneWidget);
+      expect(key('swarm-home-pm-$second-$project'), findsOneWidget);
+      expect(key('swarm-pm-loading-$tab'), findsOneWidget);
+      expect(key('swarm-projects-loading-$tab'), findsOneWidget);
+      expect(
+        y(tester, 'swarm-projects-loading-$tab'),
+        greaterThan(tester.getTopLeft(find.text('Phone Swarm').first).dy),
+        reason: 'under its own name',
+      );
+      expect(key('swarm-needs-loading'), findsOneWidget);
+      expect(find.text('Nothing needs you.'), findsNothing);
+      await tester.tap(key('swarm-menu'));
+      await frames(tester);
+      expect(key('swarm-drawer-loading-$tab'), findsOneWidget);
+      expect(key('swarm-drawer-project-$second-$project'), findsOneWidget);
+
+      read.complete();
+      await tester.pumpAndSettle();
+
+      expect(key('swarm-drawer-loading-$tab'), findsNothing);
+      expect(key('swarm-drawer-project-$tab-$project'), findsOneWidget);
+      expect(key('swarm-projects-loading-$tab'), findsNothing);
+      expect(key('swarm-project-$tab-$project'), findsOneWidget);
+    });
+
+    testWidgets('what waits is read before Home says nothing needs you', (
+      tester,
+    ) async {
+      final fake = deciding()
+        ..routes['/api/super-tabs/$tab/decisions?state=open'] = (_) => {
+          'decisions': [decision],
+        };
+      final asked = hold(fake, '/api/super-tabs/$tab/decisions?state=open');
+      await pump(tester, fake, settle: false);
+
+      expect(key('swarm-project-$tab-$project'), findsOneWidget);
+      expect(key('swarm-needs-loading'), findsOneWidget);
+      expect(find.text('Nothing needs you.'), findsNothing);
+
+      asked.complete();
+      await tester.pumpAndSettle();
+
+      expect(key('swarm-needs-loading'), findsNothing);
+      expect(key('swarm-need-decision:d1'), findsOneWidget);
+    });
+
+    testWidgets('a tag marked done leaves "Nothing needs you", with no '
+        'skeleton between', (tester) async {
+      final fake = deciding();
+      fake.routes['/api/super-tabs/$tab/parts'] = (_) =>
+          firstLoad(derived: const {'mentionsWaiting': 1});
+      fake.routes['/api/super-tabs/$tab/decisions?state=open'] = (_) => {
+        'decisions': <Object>[],
+      };
+      var waiting = true;
+      fake.routes['/api/super-tabs/$tab/mentions?state=waiting'] = (_) => {
+        'mentions': [
+          if (waiting)
+            {
+              'id': 'm1',
+              'projectName': 'Mobile',
+              'conversationId': leadChat,
+              'conversationTitle': 'Mobile',
+              'messageId': 'msg-1',
+              'leadName': 'River',
+              'text': 'Can you check the copy?',
+            },
+        ],
+      };
+      final read = hold(fake, '/api/super-tabs/$tab/changes');
+      fake.routes['/api/super-tabs/$tab/commands'] = (_) {
+        waiting = false;
+        return {'result': <String, dynamic>{}};
+      };
+      await pump(tester, fake);
+
+      await tester.tap(key('swarm-done-m1'));
+      await frames(tester);
+
+      expect(
+        key('swarm-needs-loading'),
+        findsNothing,
+        reason: 'what waits was read; only the Swarm count is behind',
+      );
+      expect(find.text('Nothing needs you.'), findsOneWidget);
+      read.complete();
+      await tester.pumpAndSettle();
+    });
+
+    testWidgets('what waits that could not be read says so, not that '
+        'nothing needs you', (tester) async {
+      final fake = deciding()
+        ..routes['/api/super-tabs/$tab/decisions?state=open'] = (_) =>
+            throw SuperTabFailure('INTERNAL', 'Broken', statusCode: 500);
+      await pump(tester, fake);
+
+      expect(key('swarm-needs-loading'), findsNothing);
+      expect(find.text('Nothing needs you.'), findsNothing);
+      expect(
+        tester.widget<Text>(key('swarm-needs-unread')).data,
+        'Could not load what is waiting for you. Try again.',
+      );
+    });
+
+    testWidgets('a Swarm that could not be read says so, with no skeleton '
+        'left and no "Nothing needs you"', (tester) async {
+      final fake = backend()
+        ..routes['/api/super-tabs/$tab/parts'] = (_) =>
+            throw SuperTabFailure('INTERNAL', 'Broken', statusCode: 500);
+      await pump(tester, fake);
+
+      expect(key('swarm-needs-loading'), findsNothing);
+      expect(key('swarm-projects-loading-$tab'), findsNothing);
+      expect(find.text('Nothing needs you.'), findsNothing);
+      expect(key('swarm-needs-unread'), findsOneWidget);
+      expect(find.text('Pull down to try again.'), findsOneWidget);
+    });
+
+    testWidgets('the drawer has skeleton project rows before the list, as '
+        'tall as the rows that replace them', (tester) async {
+      final fake = backend();
+      final listed = hold(fake, '/api/super-tabs/list');
+      await pump(tester, fake, settle: false);
+      await tester.tap(key('swarm-menu'));
+      await frames(tester);
+
+      expect(
+        find.descendant(
+          of: find.byType(SwarmDrawer),
+          matching: find.text('Projects'),
+        ),
+        findsOneWidget,
+      );
+      final row = height(tester, 'swarm-drawer-loading-0');
+      listed.complete();
+      await tester.pumpAndSettle();
+
+      expect(key('swarm-drawer-loading'), findsNothing);
+      expect(
+        height(tester, 'swarm-drawer-project-$tab-$web'),
+        closeTo(row, .01),
+      );
+    });
+
+    testWidgets("a closed project in the drawer works out none of its chats", (
+      tester,
+    ) async {
+      final host = await pump(tester, backend());
+      final inbox = host.session!.inbox;
+      final needs = _Reads(inbox.needs);
+      inbox.needs = needs;
+
+      await openDrawer(tester);
+      expect(needs.reads, 0, reason: 'both projects are closed');
+
+      await tester.tap(key('swarm-drawer-chats-$tab-$project'));
+      await tester.pumpAndSettle();
+      expect(
+        needs.reads,
+        greaterThan(0),
+        reason: 'the open one lists what waits on the person first',
+      );
+      expect(
+        y(tester, 'swarm-drawer-chat-g1'),
+        lessThan(y(tester, 'swarm-drawer-chat-g-busy')),
+      );
     });
   });
 
