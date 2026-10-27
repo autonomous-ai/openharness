@@ -15,12 +15,13 @@ Map<String, dynamic> part(String key, int version, Map<String, dynamic> data) =>
     {'key': key, 'version': version, 'changedAt': version, 'data': data};
 
 Map<String, dynamic> headData({
+  String id = tab,
   String name = 'Phone Swarm',
   String ownerId = me,
   List<Map<String, dynamic>>? projects,
 }) => {
   'version': 1,
-  'id': tab,
+  'id': id,
   'name': name,
   'ownerId': ownerId,
   'paused': false,
@@ -105,6 +106,7 @@ Map<String, dynamic> groupData(
 
 /// A first load of a Swarm with one project, its Lead's conversation and [groups] besides.
 Map<String, dynamic> firstLoad({
+  String tabId = tab,
   String cursor = 'c1',
   Map<String, dynamic>? head,
   List<Map<String, dynamic>> groups = const [],
@@ -113,12 +115,12 @@ Map<String, dynamic> firstLoad({
   int lastChangedAt = 100,
 }) => {
   'format': 2,
-  'tabId': tab,
+  'tabId': tabId,
   'cursor': cursor,
   'epoch': 1,
   'lastChangedAt': lastChangedAt,
   'githubApp': false,
-  'head': part('head', 1, head ?? headData()),
+  'head': part('head', 1, head ?? headData(id: tabId)),
   'members': [part(me, 1, person(me))],
   'agents': [
     for (final a
