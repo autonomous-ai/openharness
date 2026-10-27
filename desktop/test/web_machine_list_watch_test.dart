@@ -219,6 +219,21 @@ void main() {
     await unmount(tester);
   });
 
+  testWidgets('a computer stuck connecting: every 20 s, as before', (
+    tester,
+  ) async {
+    await mount(tester, machines: const [_online]);
+    // What the pool reports while its dial is under way.
+    app.connectionStatusForTest(_studioId, ConnectionStatus.connecting);
+    await tester.pump();
+    expect(find.byKey(_connectPage), findsNothing);
+
+    // The first wait was set while the list had not answered (the connect page, looking); from
+    // then on, every 20 s, as on main.
+    expect(await readsIn(tester, 64), [4, 24, 44, 64]);
+    await unmount(tester);
+  });
+
   testWidgets('a hidden tab reads nothing; coming back reads at once', (
     tester,
   ) async {

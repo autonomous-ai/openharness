@@ -7425,16 +7425,8 @@ class _SwarmScreenState extends State<SwarmScreen> {
         machine.connectionStatus == ConnectionStatus.connected,
   );
 
-  /// The inventory has answered, and answered for now: loaded, not loading,
-  /// not stale, no error. What the account HAS, independent of what is open.
-  bool get _machineInventorySettled =>
-      app.machineInventoryLoaded &&
-      !app.machinesLoading &&
-      !app.machinesAreStale &&
-      app.machineListError == null;
-
   bool get _browserMachineSetupReady =>
-      _machineInventorySettled &&
+      app.machineInventorySettled &&
       !app.machineStates.values.any(
         (machine) =>
             !machine.machine.isShared &&
@@ -7449,36 +7441,14 @@ class _SwarmScreenState extends State<SwarmScreen> {
       _search == null &&
       _routeIsCurrent;
 
-  /// No computer of the account's is connected, and none is on its way: the
-  /// inventory has answered, and every one is missing, offline or waiting to
-  /// be linked — what the host's [WorkspaceChrome.firstMachine] is for. Not
-  /// when every one is only asleep ([AppNotifier.asleepComputers]): that
-  /// account has set one up, and keeps its panes.
-  bool get _needsFirstConnection =>
-      _machineInventorySettled &&
-      !_computerConnectedOrComing &&
-      app.asleepComputers.isEmpty;
-
-  /// A computer of the account's is connected, or on its way.
-  bool get _computerConnectedOrComing =>
-      _hasConnectedBrowserMachine ||
-      app.machineStates.values.any(
-        (machine) =>
-            !machine.machine.isShared &&
-            !machine.needsLink &&
-            machine.nodeOnline != false &&
-            (machine.connectionStatus == ConnectionStatus.connecting ||
-                machine.connectionStatus == ConnectionStatus.reconnecting),
-      );
-
   /// The host's connect page covers the canvas: before the machine list first
   /// answers — the page says it is looking, instead of a New tab page that
-  /// then gives way — and while there is no computer to use. Never over a
-  /// computer that is connected or on its way.
+  /// then gives way — and while there is no computer to use
+  /// ([AppNotifier.waitsForFirstComputer]). Never over a computer that is
+  /// connected or on its way, nor when every one is only asleep: that account
+  /// has set one up, and keeps its panes.
   bool get _firstMachineCovers =>
-      widget.chrome?.firstMachine != null &&
-      (_needsFirstConnection ||
-          (!app.machineInventoryLoaded && !_computerConnectedOrComing));
+      widget.chrome?.firstMachine != null && app.waitsForFirstComputer;
 
   /// Under the host's connect page, the canvas is out of sight, out of the
   /// accessibility tree and out of Tab's reach: its buttons cannot be pressed.
@@ -7497,7 +7467,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
   /// that their panes come back with them. Never on Desktop.
   bool get _showsAsleepBand =>
       widget.chrome?.firstMachine != null &&
-      _machineInventorySettled &&
+      app.machineInventorySettled &&
       app.asleepComputers.isNotEmpty;
 
   Widget? _asleepBand() => _showsAsleepBand
@@ -8599,7 +8569,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
   /// answered, and none of the account's own is in it. Never while it loads.
   bool get _subscriptionsWaitForComputer =>
       widget.chrome?.subscriptionsNeedComputer == true &&
-      _machineInventorySettled &&
+      app.machineInventorySettled &&
       !app.machineStates.values.any(
         (machine) =>
             !machine.machine.isShared &&

@@ -1001,7 +1001,7 @@ class AppNotifier extends ChangeNotifier {
       // ...and, hearing no machine at all, looks again for one: the person most likely just went to
       // their computer to sign it in. The wait for the next read starts over too.
       _deafMachineListWatch.reset();
-      _rereadMachinesWhileDeaf();
+      unawaited(_rereadMachinesWhileDeaf());
     }
   }
 
@@ -1118,9 +1118,11 @@ class AppNotifier extends ChangeNotifier {
     read: _rereadMachinesWhileDeaf,
     pace: () =>
         deafMachineListPaceForTest ??
-        (asleepComputers.isEmpty
+        (waitsForFirstComputer
             ? firstComputerMachineListPace
-            : asleepComputersMachineListPace),
+            : asleepComputers.isNotEmpty
+            ? asleepComputersMachineListPace
+            : deafMachineListPace),
   );
   bool _sharingDiscoveryBusy = false;
   bool _sharingDiscoveryAgain = false;
@@ -4743,11 +4745,13 @@ class AppNotifier extends ChangeNotifier {
   /// safety net above would leave the person staring at an empty list for five minutes. Only while
   /// it is deaf, so the traffic note above holds for every window that has a machine.
   ///
-  /// Not at a fixed rate: soon at first, then less often while nothing changes, and soon again on a
-  /// push, a return to the tab or the person's Retry ([MachineListWatch]). An account with no
-  /// computer set up yet has a person at the connect page waiting for the one they are installing,
-  /// which can take minutes, so it never waits long; one whose computers are all asleep
-  /// ([asleepComputers]) can wait longer.
+  /// Every 20 s, except under the browser's connect page and asleep band: there it backs off, soon
+  /// at first and then less often while nothing changes, and soon again on a push, a return to the
+  /// tab or the person's Retry ([MachineListWatch]). An account waiting for its first computer
+  /// ([waitsForFirstComputer]) has a person at the connect page while it installs, which can take
+  /// minutes, so it never waits long; one whose computers are all asleep ([asleepComputers]) can
+  /// wait longer.
+  static const deafMachineListPace = <Duration>[Duration(seconds: 20)];
   static const firstComputerMachineListPace = <Duration>[
     Duration(seconds: 4),
     Duration(seconds: 8),
@@ -9494,6 +9498,34 @@ class AppNotifier extends ChangeNotifier {
     _placeSharedPanesSoon();
   }
 
+  /// The inventory has answered, and answered for now: loaded, not loading,
+  /// not stale, no error. What the account HAS, independent of what is open.
+  bool get machineInventorySettled =>
+      machineInventoryLoaded &&
+      !machinesLoading &&
+      !machinesAreStale &&
+      machineListError == null;
+
+  /// A computer of the account's is connected, or on its way.
+  bool get computerConnectedOrComing => machineStates.values.any(
+    (machine) =>
+        !machine.machine.isShared &&
+        !machine.needsLink &&
+        machine.nodeOnline != false &&
+        (machine.connectionStatus == ConnectionStatus.connected ||
+            machine.connectionStatus == ConnectionStatus.connecting ||
+            machine.connectionStatus == ConnectionStatus.reconnecting),
+  );
+
+  /// What a host's connect page is for: before the machine list first
+  /// answers, and once it has, while no computer of the account's is
+  /// connected or on its way and none is only asleep ([asleepComputers]) —
+  /// every one is missing, offline or waiting to be linked.
+  bool get waitsForFirstComputer =>
+      !computerConnectedOrComing &&
+      (!machineInventoryLoaded ||
+          (machineInventorySettled && asleepComputers.isEmpty));
+
   /// The account's own computers, all of them offline and none waiting on this
   /// one to be linked: set up before, asleep now. Empty for an account with
   /// none (a computer taken out of it does not count) — that one needs setting
@@ -9521,7 +9553,8 @@ class AppNotifier extends ChangeNotifier {
       );
 
   /// Whether the deaf watch's next tick reads: a viewer that hears nothing, in sight — a tab left
-  /// open behind others, its machines all off, would otherwise ask for as long as the browser runs —
+  /// open behind others, its machines all off, would otherwise ask for as long as the browser runs;
+  /// the 5-minute safety net ([machineListSafetyNetInterval]) is the one read it still makes —
   /// and not while recovery is the one asking (a failed or stale list, see
   /// [_scheduleMachineRecovery]) or a reload is open, so two never read side by side.
   bool get _deafReadWanted =>
@@ -9532,11 +9565,11 @@ class AppNotifier extends ChangeNotifier {
 
   /// A viewer that hears nothing re-reads the machine list: the computer the person is signing in
   /// on right now appears, and the dial that follows reads the device log for its key first.
-  void _rereadMachinesWhileDeaf() {
+  Future<void> _rereadMachinesWhileDeaf() async {
     if (_disposed || status != AppStatus.authenticated || !_viewerIsDeaf) {
       return;
     }
-    unawaited(_rereadMachinesInBackground(pushed: false));
+    await _rereadMachinesInBackground(pushed: false);
   }
 
   /// Re-read the machine list because something other than the person asked:
