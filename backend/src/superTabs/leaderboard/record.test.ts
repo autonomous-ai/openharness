@@ -239,7 +239,7 @@ describe('the model behind each assignment, and its first review (roadmap, Dec: 
     expect(f.group(id).ledger!.runs).toEqual([{ assignmentId, engine: 'claude', model: 'opus', at: 5_000 }])
   })
 
-  it('names the grid model an agent was started on, which its engine does not report', () => {
+  it('names the grid model from the start of an agent from before agents kept it, while that start is loaded', () => {
     const f = fixture()
     const id = f.create(owner, { checks: independent })
     const worker = f.add('grid-worker', id)
@@ -266,6 +266,30 @@ describe('the model behind each assignment, and its first review (roadmap, Dec: 
     const second = f.assign(id)
     verdict(f, id, second.assignmentId, true)
     expect(f.group(id).ledger!.runs!.map(r => [r.assignmentId, r.firstReview])).toEqual([[assignmentId, false], [second.assignmentId, true]])
+  })
+
+  it('passes a first review only when every independent check passed its first verdict, and later repairs never rewrite a failure', () => {
+    // Review of #1808: two independent checks, the first passed and the second failed, counted as a pass.
+    const two = [{ description: 'Code review', independent: true }, { description: 'Security review', independent: true }]
+    const f = fixture()
+    const id = f.create(owner, { checks: two })
+    const { assignmentId } = f.assign(id)
+    const [code, security] = f.group(id).checks
+    const check = (checkId: string, passed: boolean) =>
+      f.run({ type: 'work.check', conversationId: id, assignmentId, checkId, passed, evidence: 'rev abc' })
+    check(code!.id, true)
+    // One check still waits for its verdict: the review is not over.
+    expect(f.group(id).ledger!.runs![0]).not.toHaveProperty('firstReview')
+    check(security!.id, false)
+    check(security!.id, true)
+    check(code!.id, false)
+    check(code!.id, true)
+    expect(f.group(id).ledger!.runs![0]).toMatchObject({ firstReview: false, firstVerdicts: { [code!.id]: true, [security!.id]: false } })
+    const g = fixture()
+    const both = g.create(owner, { checks: two })
+    const attempt = g.assign(both).assignmentId
+    for (const c of g.group(both).checks) g.run({ type: 'work.check', conversationId: both, assignmentId: attempt, checkId: c.id, passed: true, evidence: 'rev abc' })
+    expect(g.group(both).ledger!.runs![0]).toMatchObject({ firstReview: true })
   })
 
   it('keeps the last 20 assignments of a group', () => {

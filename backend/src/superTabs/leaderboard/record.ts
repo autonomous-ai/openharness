@@ -9,8 +9,10 @@ import { WEEK_MS } from './week.js'
 export interface Unblock { personId: string; at: number; waitedMs: number }
 /** One attempt at a group's work: what it ran on and whether its first review passed (roadmap, Dec: about 30% of work on
  *  cheaper models without lower quality). `grid`: a model served on the Swarm's grid, named by its start, since the engine
- *  reports none of its own. `firstReview`: the first verdict on an independent check during this attempt. */
-export interface Run { assignmentId: string; engine: string; model: string | null; grid?: true; at: number; firstReview?: boolean }
+ *  reports none of its own. `firstVerdicts`: each independent check's first verdict during this attempt, by check id.
+ *  `firstReview`: false once any of them failed, true once every independent check passed its first, absent until then. */
+export interface Run { assignmentId: string; engine: string; model: string | null; grid?: true; at: number
+  firstVerdicts?: Record<string, boolean>; firstReview?: boolean }
 /** A group's leaderboard bookkeeping; readers never get it whole (read/views.ts groupView). */
 export interface GroupLedger {
   askedAt?: number
@@ -73,17 +75,26 @@ export function waitsNow(group: Conversation): boolean {
   return group.assignment?.status === 'needs_human' && !(waiting?.assignmentId === group.assignment.id && waiting.answeredAt != null)
 }
 
-/** An assignment records the model its agent runs: the grid model its start named, else what its engine reports. */
+/** An assignment records the model its agent runs: the grid model its start named, else what its engine reports. An agent
+ *  started before it kept its grid model has it only on its start, which is here while that start is not finished. */
 export function recordRun(state: SuperTabState, group: Conversation, assignment: Assignment, worker: Agent, now: number): void {
-  const gridModel = state.starts?.find(s => s.harnessId === worker.harnessId && s.request.machineId === worker.machineId)?.request.gridModel
+  const gridModel = worker.gridModel
+    ?? state.starts?.find(s => s.harnessId === worker.harnessId && s.request.machineId === worker.machineId)?.request.gridModel
   const run: Run = { assignmentId: assignment.id, engine: assignment.configuration.engine,
     model: gridModel ?? assignment.configuration.model, ...(gridModel ? { grid: true as const } : {}), at: now }
   const ledger = group.ledger ??= {}
   ledger.runs = [...ledger.runs ?? [], run].slice(-MAX_RUNS)
 }
 
-/** The first verdict on an independent check during an attempt is its first review; later verdicts are fixes. */
+/** Each independent check's first verdict during an attempt is its first review; later verdicts are repairs and never
+ *  rewrite it. The attempt passed its first review only when every independent check passed the first time (review of
+ *  #1808: one check passing first used to count as a pass while another failed). */
 export function recordReview(group: Conversation, check: Check, passed: boolean): void {
   const run = group.ledger?.runs?.find(r => r.assignmentId === group.assignment?.id)
-  if (check.independent && run && run.firstReview === undefined) run.firstReview = passed
+  if (!check.independent || !run) return
+  const verdicts = run.firstVerdicts ??= {}
+  verdicts[check.id] ??= passed
+  const firsts = group.checks.filter(c => c.independent).map(c => verdicts[c.id])
+  if (firsts.includes(false)) run.firstReview = false
+  else if (firsts.every(v => v === true)) run.firstReview = true
 }

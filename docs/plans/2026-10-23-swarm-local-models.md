@@ -72,8 +72,11 @@ Roadmap (Dec): about 30% of work runs on cheaper models without lower quality.
 - **Opt-out:** the owner's soft rule `noGridFirst` (backend `rules.ts`). It only ranks and never refuses a start.
   To stop using grid models entirely, the owner still has the policy's `localModels.enabled`.
 - **Recording** (backend `leaderboard/record.ts`): every `work.assign` appends a run to its group's ledger: the
-  assignment, the engine, the model (the grid model named by the agent's start, else the model its engine reports)
-  and the time. The first verdict on an independent check during that attempt is its `firstReview`.
+  assignment, the engine, the model and the time. The model is the grid model the agent was started on, else the one
+  its engine reports. An agent keeps its grid model from its start (`Agent.gridModel`), because a command does not load
+  a finished start, and loses it when Change agent gives it a new terminal. Each independent check's first verdict
+  during the attempt is kept (`firstVerdicts`), and later repairs never rewrite it. `firstReview` becomes false once any
+  first verdict fails, and true once every independent check passed its first.
 - **Report:** the leaderboard read returns `models` for this week and last week: the attempts at requests, how many
   ran on the grid, and how many of each kind passed their first review.
 
