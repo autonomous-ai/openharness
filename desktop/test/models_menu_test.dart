@@ -10,6 +10,7 @@ import 'package:harness/core/dsh_catalog.dart';
 import 'package:harness/widgets/agent_picker.dart';
 import 'package:harness/core/config.dart';
 import 'package:harness/auth/auth_session.dart';
+import 'package:harness/auth/cli_login.dart';
 import 'package:harness/screens/swarm_screen.dart';
 import 'package:harness/state/app_state.dart';
 import 'package:harness/state/harness_placement.dart';
@@ -107,6 +108,14 @@ _GridApp _gridApp({
       ..agentLoadStatus = AgentLoadStatus.loaded;
   }
   return app;
+}
+
+class _NoopLogin extends CliLogin {
+  int logoutCalls = 0;
+  @override
+  Future<void> logout() async {
+    logoutCalls++;
+  }
 }
 
 class _Source implements UsageSource {
@@ -272,7 +281,14 @@ void main() {
     for (final expires in [false, true]) {
       test('${expires ? 'expiry' : 'sign-out'} resets the window\'s Models '
           'menu', () async {
-        final app = createApp();
+        // Never the real CLI: its logout would sign this computer out.
+        final login = _NoopLogin();
+        final app = AppNotifier(
+          config: AppConfig.dev,
+          authSession: AuthSession(),
+          configStore: null,
+          cliLogin: login,
+        );
         addTearDown(app.dispose);
         final menu = app.modelsMenu;
         var told = 0;
@@ -282,6 +298,7 @@ void main() {
         } else {
           await app.logout();
         }
+        expect(login.logoutCalls, expires ? 0 : 1);
         expect(told, greaterThan(0));
         expect(app.modelsMenu, same(menu), reason: 'pickers keep listening');
         expect(menu.rows.where(remoteRow), isEmpty);
