@@ -67,19 +67,20 @@ export function projectDigest(state: SuperTabState, project: SwarmProject, since
 }
 
 /**
- * The decisions waiting in a project, one line per conversation: how many wait for whom. Decisions are read only by the
+ * The decisions waiting in a project (`waiting`: how many per conversation and person), one line per conversation: how
+ * many wait for whom. Decisions are read only by the
  * person asked, the agent that asked and the Lead (decisions.ts readerWhere), while the digest goes to the whole project,
  * so it never says what is asked, and leaves out private conversations and people who no longer read the conversation.
  */
-export function decisionLines(state: SuperTabState, project: SwarmProject, waiting: ReadonlyArray<{ conversationId: string; personId: string }>): string[] {
+export function decisionLines(state: SuperTabState, project: SwarmProject, waiting: ReadonlyArray<{ conversationId: string; personId: string; count: number }>): string[] {
   const chat = state.conversations.find(c => c.id === project.leadConversationId)
   const groups = [...chat ? [chat] : [], ...reportGroups(state, project).filter(g => g.number !== undefined).sort((a, b) => a.number! - b.number!)]
   const counts = new Map<string, Map<string, number>>()
-  for (const { conversationId, personId } of waiting) {
+  for (const { conversationId, personId, count } of waiting) {
     const group = groups.find(g => g.id === conversationId), asked = state.people.find(p => p.id === personId)
     if (!group || !asked || !canReadGroup(state, { kind: 'person', userId: asked.id, email: asked.email }, group)) continue
     const people = counts.get(group.id) ?? new Map<string, number>()
-    counts.set(group.id, people.set(asked.email, (people.get(asked.email) ?? 0) + 1))
+    counts.set(group.id, people.set(asked.email, (people.get(asked.email) ?? 0) + count))
   }
   return groups.filter(g => counts.has(g.id)).map(g => `- ${g === chat ? 'This chat' : `#${g.number} ${g.title}`}: `
     + [...counts.get(g.id)!].map(([email, n]) => `${n} for ${email}`).join(', '))
@@ -87,7 +88,7 @@ export function decisionLines(state: SuperTabState, project: SwarmProject, waiti
 
 /** The Lead's wake-up for its project's digest when one is due, or null. The caller records it as sent (store.ts). */
 export function digestRequest(state: SuperTabState, target: Agent, now: number,
-  waiting: ReadonlyArray<{ conversationId: string; personId: string }> = []): MessageDraft | null {
+  waiting: ReadonlyArray<{ conversationId: string; personId: string; count: number }> = []): MessageDraft | null {
   if (state.paused) return null
   const project = ledProject(state, target.id)
   const on = project && digestDue(project, now)

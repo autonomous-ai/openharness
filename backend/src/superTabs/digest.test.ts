@@ -72,10 +72,10 @@ describe('a project\'s morning digest', () => {
   // goes to the whole project, so it says where and whom, never what is asked, and nothing of a private conversation.
   it('lists the decisions waiting by conversation and person, without their questions, from conversations the project reads', () => {
     const state = fixture()
-    expect(decisionLines(state, lampOS(state), [{ conversationId: 'g7', personId: 'owner' }, { conversationId: 'g7', personId: 'owner' },
-      { conversationId: 'g3', personId: 'ann' }, { conversationId: 'g7', personId: 'ann' }, { conversationId: 'g11', personId: 'owner' },
-      { conversationId: 'g9', personId: 'owner' }, { conversationId: 'g3', personId: 'gone' }, { conversationId: 'deleted', personId: 'owner' },
-      { conversationId: 'lead-p1', personId: 'ann' }])).toEqual([
+    expect(decisionLines(state, lampOS(state), [{ conversationId: 'g7', personId: 'owner', count: 1 }, { conversationId: 'g7', personId: 'owner', count: 1 },
+      { conversationId: 'g3', personId: 'ann', count: 1 }, { conversationId: 'g7', personId: 'ann', count: 1 }, { conversationId: 'g11', personId: 'owner', count: 1 },
+      { conversationId: 'g9', personId: 'owner', count: 1 }, { conversationId: 'g3', personId: 'gone', count: 1 }, { conversationId: 'deleted', personId: 'owner', count: 1 },
+      { conversationId: 'lead-p1', personId: 'ann', count: 1 }])).toEqual([
       '- This chat: 1 for ann@example.com',
       '- #3 Lexer: 1 for ann@example.com',
       '- #7 Pricing: 2 for owner@example.com, 1 for ann@example.com',
@@ -85,7 +85,7 @@ describe('a project\'s morning digest', () => {
 
   it('puts the decisions waiting in the Lead\'s digest wake-up only when there are some', () => {
     const state = fixture(), lead = state.agents.find(a => a.id === 'lead')!
-    expect(digestRequest(state, lead, EIGHT, [{ conversationId: 'g7', personId: 'ann' }])!.text).toMatch(/\nDecisions waiting:\n- #7 Pricing: 1 for ann@example\.com$/)
+    expect(digestRequest(state, lead, EIGHT, [{ conversationId: 'g7', personId: 'ann', count: 1 }])!.text).toMatch(/\nDecisions waiting:\n- #7 Pricing: 1 for ann@example\.com$/)
     expect(digestRequest(state, lead, EIGHT, [])!.text).not.toContain('Decisions waiting')
   })
 

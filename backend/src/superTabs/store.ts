@@ -1579,7 +1579,7 @@ export class SuperTabStore {
       // Work finished since the last digest and archived or asleep since still shipped, but ordinary loads leave it out
       // (#1757 review, 4): a due digest loads it.
       const led = ledProject(loaded.state, agentId)
-      let asked: Array<{ conversationId: string; personId: string }> = []
+      let asked: Array<{ conversationId: string; personId: string; count: number }> = []
       if (led && digestDue(led, this.now())) {
         const finished = await tx.swarmGroup.findMany({ where: { tabId, deleted: false, dormant: true, lastActivityAt: { gte: new Date(digestSince(led, this.now())) },
           OR: [{ projectId: led.id }, ...led.id === 'lead' ? [{ projectId: null }] : []] }, select: { key: true } })
