@@ -46,6 +46,12 @@ class SlotTest(unittest.TestCase):
             running = sum(1 for p in result.plan if p.start <= t < p.end)
             self.assertLessEqual(running, 2)
 
+    def test_two_accounts_of_one_machine_share_its_slots(self):
+        # A Mac and its Harness Team account are one machine: one free slot between them runs one task at a time.
+        inst = load(instance([task('a', machines=['mac']), task('b', machines=['team'])],
+                             [machine('mac', slots=1), {**machine('team', slots=1), 'pool': 'mac'}], [model('opus')]))
+        self.assertEqual(solve(inst).makespan, 120)
+
     def test_a_local_model_serves_one_task_at_a_time_whatever_the_slots(self):
         inst = load(instance([task('a'), task('b')], [machine('m', slots=4)], [model('local', concurrency=1)]))
         self.assertEqual(solve(inst).makespan, 120)

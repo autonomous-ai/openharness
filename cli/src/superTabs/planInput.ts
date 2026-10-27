@@ -119,6 +119,9 @@ export function planSetup(input: { state: Json; policy: Policy; leadId: string; 
     pools.set(id, pool)
   }
 
+  // A Mac's Harness Team account runs on the Mac, so the two share the Mac's slots (backend machines.ts machineSlots).
+  for (const m of machines) if (macOf.has(String(m.id)) && pools.has(macOf.get(String(m.id))!)) m.pool = macOf.get(String(m.id))
+
   // Models: the policy's enabled rows, and each model served on the grid that still takes a Builder (never for a review).
   const rows: Record<string, ModelRow> = {}, models: Json[] = []
   for (const m of policy.models) {
@@ -159,11 +162,17 @@ export function planSetup(input: { state: Json; policy: Policy; leadId: string; 
     const deps = [...new Set([...(buildOpen ? [String(build!.id)] : []), ...after])]
     const builtWith = build && !buildOpen ? familyOf(object(object(build.assignment).configuration), gridModels) : null
     const projectOwner = project?.ownerId ?? state.ownerId
+    // One machine (routeTask): a Mac's owner's own projects start on the Mac, a teammate's in its team account, so only one of
+    // the two is offered for this group.
+    const folded = new Set([...macOf].flatMap(([team, mac]) => {
+      const teamPool = list(state.machines).find(m => m.machineId === team)
+      return teamPool && list(state.machines).some(m => m.machineId === mac) ? [projectOwner === teamPool.contributorId ? team : mac] : []
+    }))
     const allowed = [...pools].filter(([machineId, pool]) => {
       const repository = object(project?.repository)
       const teamWork = object(pool.teamWork)
       const unready = unreadyPool(pool, project, projectId, !review, githubApp, projectOwner)
-      return !unready.all.length && !unready.push
+      return !folded.has(machineId) && !unready.all.length && !unready.push
         && !(teamWork.allowed === false && teamWork.code !== 'MACHINE_OFFLINE' && pool.contributorId !== projectOwner)
         && !(pool.scope !== 'swarm' && projectId !== 'lead')
         && !(pool.scope === 'swarm' && repository.machineId !== machineId && typeof repository.repositoryUrl !== 'string')

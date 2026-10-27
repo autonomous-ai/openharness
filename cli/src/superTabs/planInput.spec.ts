@@ -43,10 +43,28 @@ describe('planSetup', () => {
     expect(taskOf(setup(state({ rules })), 'g1').machines).toEqual(['m2'])
   })
 
+  // A Mac (m1, its owner's) and its Harness Team account (m1-team) are one machine (docs/plans/2026-10-24-swarm-team-account.md).
+  const mac = () => [machine('m1'), machine('m1-team', { hostMachineId: 'm1' }), machine('m2')]
+  const projects = [{ id: 'p1', ownerId: 'owner', repository: { machineId: 'm1', cwd: '/repo', repositoryUrl: 'https://github.com/o/r' } },
+    { id: 'p2', ownerId: 'mate', repository: { machineId: 'm2', cwd: '/repo', repositoryUrl: 'https://github.com/o/r2' } }]
+
   it('lets a machines rule naming a Mac allow its Harness Team account too, as the route does', () => {
-    const rules = [{ projectId: 'p1', rule: { kind: 'machines', machineIds: ['m1'] }, text: 'Only m1.' }]
-    const s = setup(state({ rules, machines: [machine('m1'), machine('m1-team', { hostMachineId: 'm1' }), machine('m2')] }))
-    expect(taskOf(s, 'g1').machines).toEqual(['m1', 'm1-team'])
+    // A teammate's project runs in the team account, which the rule allows only through the Mac it names.
+    const rules = [{ projectId: 'p2', rule: { kind: 'machines', machineIds: ['m1'] }, text: 'Only m1.' }]
+    const s = setup(state({ rules, projects, machines: mac(), conversations: [group('t1', { projectId: 'p2' })] }))
+    expect(taskOf(s, 't1').machines).toEqual(['m1-team'])
+  })
+
+  it('offers a Mac\'s own projects on the Mac and a teammate\'s in its team account, never both', () => {
+    const s = setup(state({ projects, machines: mac(), conversations: [group('o1', { projectId: 'p1' }), group('t1', { projectId: 'p2' })] }))
+    expect(taskOf(s, 'o1').machines).toEqual(['m1', 'm2'])
+    expect(taskOf(s, 't1').machines).toEqual(['m1-team', 'm2'])
+  })
+
+  it('has a Mac and its team account share the Mac\'s slots', () => {
+    const s = setup(state({ projects, machines: mac() }))
+    expect((s.instance.machines as Json[]).find(m => m.id === 'm1-team')).toMatchObject({ pool: 'm1' })
+    expect((s.instance.machines as Json[]).find(m => m.id === 'm1')).not.toHaveProperty('pool')
   })
 
   it('leaves out a forbidden model and a row below the minimum effort, lifting a row that leaves the effort to the engine', () => {

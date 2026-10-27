@@ -38,6 +38,8 @@ class Machine:
     name: str
     slots: int
     engines: Tuple[str, ...]
+    # The machine whose slots this one shares: a Mac's Harness Team account runs on the Mac (One machine). None is its own.
+    pool: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -101,6 +103,13 @@ class Instance:
 
     def machine(self, id: str) -> Machine:
         return next(m for m in self.machines if m.id == id)
+
+    def slot_pool(self, id: str) -> str:
+        return self.machine(id).pool or id
+
+    def pool_slots(self, pool: str) -> int:
+        """Free slots of a machine and the accounts on it: each reports the slots left on the one machine, so the fewest hold."""
+        return min(m.slots for m in self.machines if (m.pool or m.id) == pool)
 
     def model(self, id: str) -> Model:
         return next(m for m in self.models if m.id == id)
@@ -170,7 +179,8 @@ def load(data: dict) -> Instance:
                   machines=None if t.get('machines') is None else tuple(str(m) for m in t['machines']),
                   models=None if t.get('models') is None else tuple(str(m) for m in t['models']))
              for t in data['tasks']]
-    machines = [Machine(id=str(m['id']), name=str(m.get('name', m['id'])), slots=int(m['slots']), engines=tuple(m['engines']))
+    machines = [Machine(id=str(m['id']), name=str(m.get('name', m['id'])), slots=int(m['slots']), engines=tuple(m['engines']),
+                        pool=None if m.get('pool') is None else str(m['pool']))
                 for m in data['machines']]
     models = [Model(id=str(m['id']), engine=str(m['engine']), cost=int(m['cost']), quality={str(k): int(v) for k, v in m['quality'].items()},
                     speed=float(m.get('speed', 1.0)), concurrency=m.get('concurrency'),
@@ -196,6 +206,9 @@ def load(data: dict) -> Instance:
     _check_acyclic(tasks)
     machine_ids = {m.id for m in machines}
     model_ids = {m.id for m in models}
+    for m in machines:
+        if m.pool is not None and m.pool not in machine_ids:
+            raise InstanceError(f'{m.id} shares slots with unknown machine {m.pool}')
     for t in tasks:
         for mid in t.machines or ():
             if mid not in machine_ids:

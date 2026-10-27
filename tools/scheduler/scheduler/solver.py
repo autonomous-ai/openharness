@@ -74,7 +74,7 @@ class Formulation:
                 m.Add(self.end[t.id] == self.start[t.id] + o.minutes).OnlyEnforceIf(x)
                 self.pick[o] = x
                 picks.append(x)
-                by_machine.setdefault(o.machine, []).append(interval)
+                by_machine.setdefault(instance.slot_pool(o.machine), []).append(interval)
                 by_model.setdefault(o.model, []).append(interval)
             m.AddExactlyOne(picks)
             for dep in t.deps:
@@ -85,8 +85,8 @@ class Formulation:
                     same = [x for o, x in self.pick.items() if o.task in (t.id, other) and instance.model(o.model).family == family]
                     if same:
                         m.Add(sum(same) <= 1)
-        for mid, intervals in by_machine.items():
-            slots = instance.machine(mid).slots
+        for pool, intervals in by_machine.items():
+            slots = instance.pool_slots(pool)
             if slots < len(intervals):
                 m.AddCumulative(intervals, [1] * len(intervals), slots)
         for kid, intervals in by_model.items():
