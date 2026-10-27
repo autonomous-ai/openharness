@@ -17,6 +17,15 @@ typedef SwarmListing = ({String id, String name});
 const swarmServerTooOld =
     'Your Harness server does not support Swarm on the phone yet.';
 
+/// An invitation to a Swarm, as the person's invitations list it: the
+/// Swarm's name and the role offered, nothing read of the Swarm itself.
+typedef SwarmInvitation = ({
+  String tabId,
+  String name,
+  String inviteId,
+  String role,
+});
+
 /// Something a Swarm asks of the person, with the Swarm it is in.
 sealed class SwarmNeed {
   SwarmNeed(this.swarmId);
@@ -92,6 +101,72 @@ class SwarmInbox extends ChangeNotifier {
   /// True once the list has been read.
   bool loaded = false;
 
+  /// Invitations waiting for the person, read only while they have no Swarm.
+  List<SwarmInvitation> invitations = const [];
+
+  /// Invitations being accepted.
+  final Set<String> joining = {};
+
+  /// What the last [join] could not do; null once one succeeds.
+  String? joinError;
+
+  /// The last read of the list failed for want of a computer to ask.
+  bool get noComputer => _away != null;
+
+  /// Accepts [invitation] (the desktop's Tab invites), under one receipt per
+  /// invitation so a retry is the same accept, then reads the list.
+  Future<bool> join(SwarmInvitation invitation) async {
+    if (_disposed || !joining.add(invitation.inviteId)) return false;
+    joinError = null;
+    notifyListeners();
+    try {
+      await request(
+        'POST',
+        '/api/super-tabs/${Uri.encodeComponent(invitation.tabId)}/commands',
+        body: {
+          'operationId': 'accept-${invitation.inviteId}',
+          'command': {'type': 'invite.accept', 'inviteId': invitation.inviteId},
+        },
+      );
+    } on SuperTabFailure catch (failure) {
+      joinError = failure.message;
+      return false;
+    } catch (_) {
+      joinError = 'Could not join. Try again.';
+      return false;
+    } finally {
+      joining.remove(invitation.inviteId);
+      if (!_disposed) notifyListeners();
+    }
+    await refresh();
+    return true;
+  }
+
+  /// The person's invitations; none from a server without the list, or
+  /// when it cannot be read — "No Swarm yet" stays true either way.
+  Future<List<SwarmInvitation>> _invitations() async {
+    try {
+      final answer = await request('GET', '/api/super-tabs/invitations');
+      if (answer is! List) return const [];
+      return [
+        for (final raw in answer)
+          if (raw case {
+            'tabId': final String tabId,
+            'name': final String name,
+            'inviteId': final String inviteId,
+          })
+            (
+              tabId: tabId,
+              name: name,
+              inviteId: inviteId,
+              role: raw['role'] as String? ?? '',
+            ),
+      ];
+    } catch (_) {
+      return const [];
+    }
+  }
+
   /// An ask or waiting work that arrived after its Swarm's first read: what a
   /// phone notice tells.
   void Function(SwarmNeed need)? onArrived;
@@ -145,8 +220,12 @@ class SwarmInbox extends ChangeNotifier {
   Future<void> _read() async {
     try {
       final listed = await _list();
+      final invited = listed.isEmpty
+          ? await _invitations()
+          : const <SwarmInvitation>[];
       if (_disposed) return;
       swarms = listed;
+      invitations = invited;
       loaded = true;
       error = null;
       _away = null;
