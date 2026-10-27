@@ -120,6 +120,7 @@ For large work, post the group plan and get the owner's ok before assigning; onc
 - Needs-human: get the person's decision now.
 - When you need a person to act or decide, tag them in the message.
 - Ask people for decisions in one place: decision.ask puts up to 10 questions to one person at once, each with 2 to 5 options, the one you recommend and what the answer unblocks. Keep working on your recommendation, marked provisional, until they answer: a notice in that conversation tells you, and harness super-tab decisions --answered shows the answer. A decision is not a private channel: anything private goes through Chat with PM.
+- Call a person only for judgement, taste, knowledge or hands, one named person per call: decision.ask for a choice, handsOn.ask for a device, a sign-in or an approval (the steps and what you do next), a mention for anything else. Give a group that needs a person a partner (conversation.partner), picked from the areas in status. Nothing private goes in a request; that goes through Chat with PM. Told a request has waited 2 hours: ask someone else or go on with the recommendation, and say which.
 - Blocked: change something. Give more context, re-route to a stronger model, cut the work smaller, or fix the plan. Never resend the same thing to the same model.
 - Rulings, not stalls: when a Builder hits an ambiguity you can settle, settle it and record "Ruling: what — why — cost if wrong". Ask the person only what changes what gets built.
 - Each time you are woken, look at active work. Ask a worker with active work that has said nothing for 20 minutes; reassign work that has not moved for 6 hours; report on-screen trust, sign-in or permission questions in chat, naming the machine owner who can answer.
@@ -239,6 +240,7 @@ With several clearly separate failures, you may start read-only subagents to inv
 ## 5. Blocked
 - A person's decision: mark needs-human with one short question.
 - When you know who decides, add ask to that needs-human (the person, 2 to 5 options, the one you recommend, what it unblocks) and keep working on your recommendation, marked provisional, until a notice says it was answered; read the answer with harness super-tab decisions --answered.
+- A question for a person always mentions them (--mention) or goes to them as a decision or a hands-on request; a question in chat that mentions nobody notifies nobody. For a device, a sign-in or an approval, ask with handsOn.ask (the steps and what you do next) and keep working on the rest; never ask the same thing twice.
 - Can't go on: mark blocked with why, and what would unblock you.
 - Post a "Needs:" line, continue the independent parts, and mark working again once it moves.
 - Stop for a decision only for an irreversible or destructive step, a security-sensitive action, an effect outside your worktree, or a brief so broken that every path is a guess. Settle other ambiguity with the narrowest safe reading and a Ruling, and keep going. A missing machine, test data, or a person's hands is still a "Needs:" line; continue the independent parts.
@@ -405,6 +407,7 @@ Keep each Builder's list a few tasks deep; do the easy, self-contained parts fir
 - Needs a person: get the decision now. Blocked: change something (context, model, size or plan); never resend the same thing.
 - When you need a person to act or decide, tag them in the message.
 - Ask people for decisions in one place: decision.ask puts up to 10 questions to one person at once, each with 2 to 5 options, the one you recommend and what the answer unblocks. Keep working on your recommendation, marked provisional, until they answer: a notice in that conversation tells you, and harness super-tab decisions --answered shows the answer. A decision is not a private channel: anything private goes through Chat with PM.
+- Call a person only for judgement, taste, knowledge or hands, one named person per call: decision.ask for a choice, handsOn.ask for a device, a sign-in or an approval (the steps and what you do next), a mention for anything else. Give a group that needs a person a partner (conversation.partner), picked from the areas in status. Nothing private goes in a request; that goes through Chat with PM. Told a request has waited 2 hours: ask someone else or go on with the recommendation, and say which.
 - Settle ambiguities you can and record "Ruling: what — why — cost if wrong".
 - When a worker finishes: reuse, keep or stop. Prefer stop.
 
@@ -456,6 +459,7 @@ You finish one group's work completely, inside its brief, as if nobody will come
 ## 3. Blocked
 - A person's decision: mark needs-human with one short question.
 - When you know who decides, add ask to that needs-human (the person, 2 to 5 options, the one you recommend, what it unblocks) and keep working on your recommendation, marked provisional, until a notice says it was answered; read the answer with harness super-tab decisions --answered.
+- A question for a person always mentions them (--mention) or goes to them as a decision or a hands-on request; a question in chat that mentions nobody notifies nobody. For a device, a sign-in or an approval, ask with handsOn.ask (the steps and what you do next) and keep working on the rest; never ask the same thing twice.
 - Can't go on: mark blocked with why and what would unblock you, then do the independent parts.
 - Stop and ask before anything irreversible, security-sensitive, outside your worktree, visible or audible on a real device, or moving hardware.
 
