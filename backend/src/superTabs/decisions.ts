@@ -140,6 +140,12 @@ async function readable(tx: Tx, tabId: string, state: SuperTabState, actor: Acto
   })
 }
 
+/** Where a project's open decisions wait and for whom, for its digest (digest.ts decisionLines): never what they ask. */
+export async function waitingInProject(tx: Tx, tabId: string, projectId: string): Promise<Array<{ conversationId: string; personId: string }>> {
+  return tx.superTabDecision.findMany({ where: { tabId, projectId, ...waiting }, select: { conversationId: true, personId: true },
+    orderBy: { createdAt: 'desc' }, take: 200 })
+}
+
 export async function decisionsWaiting(tx: Tx, tabId: string, state: SuperTabState, actor: Extract<Actor, { kind: 'person' }>): Promise<number> {
   return (await readable(tx, tabId, state, actor, true)).length
 }

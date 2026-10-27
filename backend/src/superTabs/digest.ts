@@ -1,6 +1,6 @@
 import { activeWork, author, stableId, type Agent, type Conversation, type MessageDraft, type SuperTabState } from './model.js'
 import { agentDisplayName } from './agentNames.js'
-import { ledProject, type SwarmProject } from './projects.js'
+import { canReadGroup, ledProject, type SwarmProject } from './projects.js'
 import { reportGroups } from './projectUpdates.js'
 
 // Night shift (v2 B): people wake to one message per project saying what the Swarm did overnight. At the project's local
@@ -61,13 +61,33 @@ export function projectDigest(state: SuperTabState, project: SwarmProject, since
     const why = g.assignment!.status === 'lost' ? g.assignment!.lost?.reason : g.assignment!.result
     return `- ${named(g)}: ${HELD_UP[g.assignment!.status]} (${who(g)})${why ? `: ${why.replace(/\s+/g, ' ').slice(0, 300)}` : ''}`
   })
-  const parts = [['Shipped', shipped], ['In progress', moving], ['Blocked', held], ['Decisions waiting', decisions.map(d => `- ${d}`)]] as const
+  const parts = [['Shipped', shipped], ['In progress', moving], ['Blocked', held], ['Decisions waiting', decisions]] as const
   const text = parts.filter(([, lines]) => lines.length).map(([title, lines]) => [`${title}:`, ...lines].join('\n')).join('\n')
   return text || 'Nothing shipped, in progress or blocked.'
 }
 
+/**
+ * The decisions waiting in a project, one line per conversation: how many wait for whom. Decisions are read only by the
+ * person asked, the agent that asked and the Lead (decisions.ts readerWhere), while the digest goes to the whole project,
+ * so it never says what is asked, and leaves out private conversations and people who no longer read the conversation.
+ */
+export function decisionLines(state: SuperTabState, project: SwarmProject, waiting: ReadonlyArray<{ conversationId: string; personId: string }>): string[] {
+  const chat = state.conversations.find(c => c.id === project.leadConversationId)
+  const groups = [...chat ? [chat] : [], ...reportGroups(state, project).filter(g => g.number !== undefined).sort((a, b) => a.number! - b.number!)]
+  const counts = new Map<string, Map<string, number>>()
+  for (const { conversationId, personId } of waiting) {
+    const group = groups.find(g => g.id === conversationId), asked = state.people.find(p => p.id === personId)
+    if (!group || !asked || !canReadGroup(state, { kind: 'person', userId: asked.id, email: asked.email }, group)) continue
+    const people = counts.get(group.id) ?? new Map<string, number>()
+    counts.set(group.id, people.set(asked.email, (people.get(asked.email) ?? 0) + 1))
+  }
+  return groups.filter(g => counts.has(g.id)).map(g => `- ${g === chat ? 'This chat' : `#${g.number} ${g.title}`}: `
+    + [...counts.get(g.id)!].map(([email, n]) => `${n} for ${email}`).join(', '))
+}
+
 /** The Lead's wake-up for its project's digest when one is due, or null. The caller records it as sent (store.ts). */
-export function digestRequest(state: SuperTabState, target: Agent, now: number): MessageDraft | null {
+export function digestRequest(state: SuperTabState, target: Agent, now: number,
+  waiting: ReadonlyArray<{ conversationId: string; personId: string }> = []): MessageDraft | null {
   if (state.paused) return null
   const project = ledProject(state, target.id)
   const on = project && digestDue(project, now)
@@ -76,8 +96,7 @@ export function digestRequest(state: SuperTabState, target: Agent, now: number):
   const text = `Morning digest for project ${JSON.stringify(project.name)} (${digest.time}, ${digest.timeZone}). This is a scheduled request, not a new task. `
     + 'Check that each pull request under Shipped is merged, and move one that is not to In progress. Then post one message to the people in this chat '
     + 'with these parts, in plain words, without commands or internal IDs.\n\n'
-    // Decision packets (Echo's group) are not stored yet: until they are, the decisions part is left out.
-    + projectDigest(state, project, digestSince(project, now))
+    + projectDigest(state, project, digestSince(project, now), decisionLines(state, project, waiting))
   return { id: stableId('digest', state.id, project.id, on), conversationId: project.leadConversationId,
     author: author(state, { kind: 'agent', agentId: target.id, machineOwnerId: target.machineOwnerId }),
     text, replyTo: null, recipients: [target.id], source: { kind: 'digest-request', projectId: project.id, on } }

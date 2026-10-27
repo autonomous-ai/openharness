@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { Agent, Assignment, Conversation, SuperTabState, WorkStatus } from './model.js'
-import { digestDue, digestRequest, projectDigest } from './digest.js'
+import { decisionLines, digestDue, digestRequest, projectDigest } from './digest.js'
 
 const HOUR = 60 * 60_000
 /** 08:00 on 27 October in Vietnam (UTC+7), the project's digest time. */
@@ -20,7 +20,7 @@ const group = (number: number, title: string, assignment: Assignment | null, ove
 function fixture(): SuperTabState {
   return {
     version: 1, id: 'tab', name: 'Swarm', ownerId: 'owner', environment: 'prod', paused: false, invitations: [],
-    people: [{ id: 'owner', email: 'owner@example.com', role: 'owner', generation: 'g' }] as SuperTabState['people'],
+    people: [{ id: 'owner', email: 'owner@example.com', role: 'owner', generation: 'g' }, { id: 'ann', email: 'ann@example.com', role: 'collaborator', generation: 'g' }] as SuperTabState['people'],
     agents: [agent('lead', 'Lead'), agent('nico', 'Nico'), agent('ana', 'Ana'), agent('bo', 'Bo'), agent('cy', 'Cy'), agent('di', 'Di'), agent('ed', 'Ed')],
     projects: [
       { id: 'p1', name: 'lampOS', ownerId: 'owner', leadConversationId: 'lead-p1', visibility: 'public', members: [], updateMinutes: 5,
@@ -41,6 +41,7 @@ function fixture(): SuperTabState {
       // Merged and archived overnight: it still shipped (#1757 review, 4).
       group(10, 'Release notes', work('bo', 'done'), { archived: true, dormant: true, pullRequestUrls: ['https://github.com/example/lampos/pull/15'] }),
       group(9, 'Bootloader', work('nico', 'working'), { projectId: 'p2', leadId: 'lead-2' }),
+      group(11, 'Salaries', null, { audience: { people: [{ id: 'owner', generation: 'g' }] } as Conversation['audience'] }),
     ],
   } as SuperTabState
 }
@@ -63,8 +64,29 @@ describe('a project\'s morning digest', () => {
   })
 
   it('shows the decisions waiting only when there are some', () => {
-    expect(projectDigest(fixture(), lampOS(fixture()), LAST, ['Ship the night shift to every Swarm?'])).toMatch(/\nDecisions waiting:\n- Ship the night shift to every Swarm\?$/)
+    expect(projectDigest(fixture(), lampOS(fixture()), LAST, ['- Ship the night shift to every Swarm?'])).toMatch(/\nDecisions waiting:\n- Ship the night shift to every Swarm\?$/)
     expect(projectDigest(fixture(), lampOS(fixture()), LAST, [])).not.toContain('Decisions waiting')
+  })
+
+  // Decisions are read only by the person asked, the agent that asked and the Lead (decisions.ts readerWhere); the digest
+  // goes to the whole project, so it says where and whom, never what is asked, and nothing of a private conversation.
+  it('lists the decisions waiting by conversation and person, without their questions, from conversations the project reads', () => {
+    const state = fixture()
+    expect(decisionLines(state, lampOS(state), [{ conversationId: 'g7', personId: 'owner' }, { conversationId: 'g7', personId: 'owner' },
+      { conversationId: 'g3', personId: 'ann' }, { conversationId: 'g7', personId: 'ann' }, { conversationId: 'g11', personId: 'owner' },
+      { conversationId: 'g9', personId: 'owner' }, { conversationId: 'g3', personId: 'gone' }, { conversationId: 'deleted', personId: 'owner' },
+      { conversationId: 'lead-p1', personId: 'ann' }])).toEqual([
+      '- This chat: 1 for ann@example.com',
+      '- #3 Lexer: 1 for ann@example.com',
+      '- #7 Pricing: 2 for owner@example.com, 1 for ann@example.com',
+    ])
+    expect(decisionLines(state, lampOS(state), [])).toEqual([])
+  })
+
+  it('puts the decisions waiting in the Lead\'s digest wake-up only when there are some', () => {
+    const state = fixture(), lead = state.agents.find(a => a.id === 'lead')!
+    expect(digestRequest(state, lead, EIGHT, [{ conversationId: 'g7', personId: 'ann' }])!.text).toMatch(/\nDecisions waiting:\n- #7 Pricing: 1 for ann@example\.com$/)
+    expect(digestRequest(state, lead, EIGHT, [])!.text).not.toContain('Decisions waiting')
   })
 
   it('says so when nothing moved', () => {
