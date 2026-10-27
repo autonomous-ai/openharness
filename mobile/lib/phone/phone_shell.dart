@@ -6,6 +6,7 @@ import 'package:harness_mobile/state/app_state.dart';
 
 import '../notify/system_notices.dart';
 import '../p2p/phone_terminal_p2p.dart';
+import '../swarm/swarm_computers.dart';
 import '../swarm/swarm_conversation_page.dart';
 import '../swarm/swarm_home_root.dart';
 import '../swarm/swarm_page.dart';
@@ -56,6 +57,10 @@ class _PhoneShellState extends State<PhoneShell> with WidgetsBindingObserver {
   /// read while the app is in front, for every page under this shell ([SwarmScope]).
   late final SwarmHost _swarm;
 
+  /// The app's computers as Swarm's start screens read them; they hear only a computer coming,
+  /// going or changing state.
+  late final _swarmComputers = AppSwarmComputers(widget.notifier);
+
   /// What the stack's root shows: Swarm Home while Swarm is on, until the person goes to Harness.
   late final _home = SwarmHomeChoice(_swarm.features);
 
@@ -89,6 +94,9 @@ class _PhoneShellState extends State<PhoneShell> with WidgetsBindingObserver {
       account: widget.notifier,
       request: widget.notifier.swarmRequest,
       notices: _swarmNotices,
+      // Swarm Home's start screens: which computers the account has, and
+      // whether any is online.
+      computers: _swarmComputers,
     )..foreground = state == null || _inFront(state);
     _swarmNotices.openedSwarm.addListener(_openNoticedSwarm);
     // A tap that launched the app is read before this shell exists, so its value is already set and
@@ -129,6 +137,7 @@ class _PhoneShellState extends State<PhoneShell> with WidgetsBindingObserver {
     _swarmNotices.openedSwarm.removeListener(_openNoticedSwarm);
     _home.dispose();
     _swarm.dispose();
+    _swarmComputers.dispose();
     _linkedMachineId.dispose();
     _openAgentRequest.dispose();
     _heroController.dispose();

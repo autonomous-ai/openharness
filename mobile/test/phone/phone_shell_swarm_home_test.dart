@@ -8,7 +8,9 @@ import 'package:harness_mobile/phone/phone_shell.dart';
 import 'package:harness_mobile/phone/phone_shell_scope.dart';
 import 'package:harness_mobile/phone/settings_page.dart';
 import 'package:harness_mobile/settings/experimental_features.dart';
+import 'package:harness_mobile/swarm/swarm_computers.dart';
 import 'package:harness_mobile/swarm/swarm_page.dart';
+import 'package:harness_mobile/swarm/swarm_session.dart';
 
 import 'devices_fixture.dart';
 
@@ -62,6 +64,24 @@ void main() {
     expect(key('swarm-menu'), findsOneWidget);
     expect(key('tty-back'), findsNothing, reason: 'Home has nothing under it');
     expect(find.byType(AgentHome, skipOffstage: false), findsNothing);
+  });
+
+  testWidgets("the shell hands the app's computers to Swarm, for the start "
+      'screens, and lets go of them with itself', (tester) async {
+    await open(tester);
+
+    final computers = tester
+        .widget<SwarmScope>(find.byType(SwarmScope))
+        .notifier!
+        .computers;
+    expect(computers, isA<AppSwarmComputers>());
+
+    await tester.pumpWidget(const SizedBox());
+    expect(
+      () => computers!.addListener(() {}),
+      throwsFlutterError,
+      reason: 'disposed with the shell',
+    );
   });
 
   testWidgets('with Swarm off, it opens on the terminal, as it always has', (

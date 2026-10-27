@@ -12,12 +12,35 @@ import 'package:harness_mobile/swarm/swarm_drawer.dart';
 import 'package:harness_mobile/swarm/swarm_page.dart';
 import 'package:harness_mobile/swarm/swarm_project_page.dart';
 import 'package:harness_mobile/swarm/swarm_session.dart';
+import 'package:harness_mobile/swarm/swarm_start.dart';
 import 'package:harness_mobile/swarm/swarm_style.dart';
 import 'package:harness_mobile/swarm/swarm_team_line.dart';
 import 'package:harness_mobile/theme/app_theme.dart' show AppColors;
 
 import '../voice_fakes.dart';
 import 'swarm_fixture.dart';
+
+/// The person's computers as a test sets them.
+class _Computers extends ChangeNotifier implements SwarmComputers {
+  _Computers(this.computers);
+
+  @override
+  List<SwarmComputer>? computers;
+
+  @override
+  bool get rechecking => false;
+
+  void set(List<SwarmComputer>? next) {
+    computers = next;
+    notifyListeners();
+  }
+
+  @override
+  Future<void> recheck() async {}
+
+  @override
+  void add(BuildContext context) {}
+}
 
 /// Swarm Home and its drawer, over a scripted backend: one Swarm with two
 /// projects. Mobile has River as its Product Manager, Nova waiting on the
@@ -153,6 +176,7 @@ void main() {
     FakeSwarm fake, {
     VoidCallback? onHarness,
     void Function(BuildContext context)? onSettings,
+    SwarmComputers? computers,
   }) async {
     tester.view.physicalSize = const Size(1170, 2532);
     tester.view.devicePixelRatio = 3;
@@ -166,6 +190,7 @@ void main() {
       request: fake.request,
       notices: SilentSystemNotices(),
       features: features,
+      computers: computers,
     )..foreground = false;
     addTearDown(host.dispose);
     await tester.pumpWidget(
@@ -1101,6 +1126,41 @@ void main() {
         final words = plain.indexOf('1', dot.start);
         expect(middle(dot.start), closeTo(middle(words), 4), reason: plain);
       }
+    });
+  });
+
+  group('the start screens', () {
+    const mac = (name: 'MacBook Pro', away: false);
+
+    testWidgets('with no computer, Home draws its start screen in place of '
+        'its body, under its own top bar', (tester) async {
+      await pump(tester, backend(), computers: _Computers(const []));
+
+      expect(find.byType(SwarmStartView), findsOneWidget);
+      expect(key('swarm-menu'), findsOneWidget, reason: 'the drawer stays');
+      expect(tester.widget<Text>(key('swarm-title')).data, 'Swarm');
+      expect(find.text('Needs you'), findsNothing);
+    });
+
+    testWidgets('a computer coming back brings Home back', (tester) async {
+      final computers = _Computers(const []);
+      await pump(tester, backend(), computers: computers);
+      expect(find.byType(SwarmStartView), findsOneWidget);
+
+      computers.set(const [mac]);
+      await tester.pumpAndSettle();
+
+      expect(find.byType(SwarmStartView), findsNothing);
+      expect(find.text('Needs you'), findsOneWidget);
+    });
+
+    testWidgets('with a computer and a Swarm, Home is as it was', (
+      tester,
+    ) async {
+      await pump(tester, backend(), computers: _Computers(const [mac]));
+
+      expect(find.byType(SwarmStartView), findsNothing);
+      expect(find.text('Needs you'), findsOneWidget);
     });
   });
 }

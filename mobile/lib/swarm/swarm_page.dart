@@ -17,6 +17,7 @@ import 'swarm_need_rows.dart';
 import 'swarm_project_page.dart';
 import 'swarm_row.dart';
 import 'swarm_session.dart';
+import 'swarm_start.dart';
 import 'swarm_style.dart';
 import 'swarm_team_line.dart';
 import 'team_glance.dart';
@@ -150,19 +151,23 @@ class _SwarmPageState extends State<SwarmPage> {
                   ? const _Unavailable()
                   : ListenableBuilder(
                       listenable: Listenable.merge([session, session.inbox]),
-                      builder: (context, _) => RefreshIndicator(
-                        onRefresh: session.inbox.refresh,
-                        child: ListView(
-                          physics: const AlwaysScrollableScrollPhysics(),
-                          padding: EdgeInsets.fromLTRB(
-                            12,
-                            0,
-                            12,
-                            MediaQuery.paddingOf(context).bottom + 28,
+                      // Before there is a Swarm to show, a start screen in
+                      // place of the body, under the same top bar.
+                      builder: (context, _) =>
+                          swarmStartView(context, session) ??
+                          RefreshIndicator(
+                            onRefresh: session.inbox.refresh,
+                            child: ListView(
+                              physics: const AlwaysScrollableScrollPhysics(),
+                              padding: EdgeInsets.fromLTRB(
+                                12,
+                                0,
+                                12,
+                                MediaQuery.paddingOf(context).bottom + 28,
+                              ),
+                              children: _body(context, session, tty),
+                            ),
                           ),
-                          children: _body(context, session, tty),
-                        ),
-                      ),
                     ),
             ),
           ],
