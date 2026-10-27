@@ -10,6 +10,7 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import '../core/harness_file_store.dart';
 import '../e2ee/bytes.dart';
 import 'model.dart';
+import 'swarm_reader.dart';
 
 /// One Swarm of the Home kept: its listing and its view.
 typedef SwarmHomeEntry = ({String id, String name, SwarmHomeSwarm view});
@@ -195,6 +196,65 @@ class SwarmHomeCache {
           ),
     ];
   }
+}
+
+/// What keeps an inbox's Home in its [SwarmHomeCache]: at once when a Swarm
+/// was read again from nothing, left the list, or its access ended — what was
+/// kept may hold what the person can no longer read — else [wait] after the
+/// last change, so a busy Swarm costs one write in a while, not one a read.
+class SwarmHomeKeeper {
+  SwarmHomeKeeper(this.cache, this.accountId, {required this.wait});
+
+  final SwarmHomeCache cache;
+  final String accountId;
+  final Duration wait;
+
+  /// Each Swarm's [SwarmReader.generation] as last kept.
+  var _kept = <String, int>{};
+  Timer? _soon;
+
+  /// The account's Home as kept, or null.
+  Future<List<SwarmHomeEntry>?> restore() => cache.read(accountId);
+
+  /// The Swarms listed now ([swarms]) as their [readers] hold them. Nothing
+  /// while all that is held is what was kept, and nothing has left.
+  void keep(
+    Map<String, SwarmReader> readers,
+    List<({String id, String name})> Function() swarms,
+  ) {
+    final read = readers.entries.any(
+      (e) => e.value.generation != (_kept[e.key] ?? 0),
+    );
+    final left = _kept.keys.any((id) => !readers.containsKey(id));
+    if (!read && !left && readers.values.every((r) => r.generation == 0)) {
+      return;
+    }
+    _soon?.cancel();
+    void write() {
+      _soon = null;
+      _kept = {for (final e in readers.entries) e.key: e.value.generation};
+      unawaited(
+        cache.write(accountId, [
+          for (final swarm in swarms())
+            if (readers[swarm.id] case final reader?
+                when !reader.accessRevoked && reader.snapshot != null)
+              (
+                id: swarm.id,
+                name: swarm.name,
+                view: swarmHomeSwarm(reader.snapshot!, reader.partners),
+              ),
+        ]),
+      );
+    }
+
+    if (read || left) {
+      write();
+    } else {
+      _soon = Timer(wait, write);
+    }
+  }
+
+  void dispose() => _soon?.cancel();
 }
 
 /// One Swarm as Home last drew it: a state [SuperTabSnapshot.fromJson] reads,

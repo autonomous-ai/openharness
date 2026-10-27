@@ -1,5 +1,9 @@
 import 'dart:async';
+import 'dart:io';
 
+import 'package:flutter_test/flutter_test.dart';
+
+import 'package:harness_mobile/swarm/swarm_home_cache.dart';
 import 'package:harness_mobile/swarm/swarm_request.dart';
 
 /// Swarm answers as the backend sends them (docs/design/2026-10-26-swarm-state-parts.md, section 4), built by hand so a
@@ -209,4 +213,44 @@ Future<void> settle() async {
   for (var i = 0; i < 20; i++) {
     await Future<void>.delayed(Duration.zero);
   }
+}
+
+/// The Keychain item the kept Home is sealed under, held in memory; [refuses]
+/// as a locked or broken Keychain does.
+class MemorySwarmHomeKey implements SwarmHomeKey {
+  String? value;
+  bool refuses = false;
+
+  @override
+  Future<String?> read() async => refuses ? throw StateError('locked') : value;
+
+  @override
+  Future<void> write(String next) async {
+    if (refuses) throw StateError('locked');
+    value = next;
+  }
+
+  @override
+  Future<void> delete() async {
+    if (refuses) throw StateError('locked');
+    value = null;
+  }
+}
+
+/// A kept Home in a folder of its own, gone after the test.
+SwarmHomeCache memoryHomeCache() {
+  final dir = Directory.systemTemp.createTempSync('swarm-home');
+  addTearDown(() => dir.deleteSync(recursive: true));
+  return SwarmHomeCache(
+    key: MemorySwarmHomeKey(),
+    file: File('${dir.path}/home.bin'),
+  );
+}
+
+/// Waits, in real time, until [done] holds: at most a few seconds.
+Future<void> until(bool Function() done) async {
+  for (var i = 0; i < 500 && !done(); i++) {
+    await Future<void>.delayed(const Duration(milliseconds: 10));
+  }
+  if (!done()) throw StateError('never happened');
 }

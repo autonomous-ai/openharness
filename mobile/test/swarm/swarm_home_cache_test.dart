@@ -93,13 +93,13 @@ void main() {
 
   group('kept on the phone', () {
     late Directory dir;
-    late _Key key;
+    late MemorySwarmHomeKey key;
     late SwarmHomeCache cache;
 
     setUp(() {
       dir = Directory.systemTemp.createTempSync('swarm-home');
       addTearDown(() => dir.deleteSync(recursive: true));
-      key = _Key();
+      key = MemorySwarmHomeKey();
       cache = SwarmHomeCache(key: key, file: File('${dir.path}/home.bin'));
     });
 
@@ -191,26 +191,4 @@ void main() {
       expect(await cache.read(me), isNull);
     });
   });
-}
-
-/// The Keychain item, held in memory; [refuses] as a locked or broken
-/// Keychain does.
-class _Key implements SwarmHomeKey {
-  String? value;
-  bool refuses = false;
-
-  @override
-  Future<String?> read() async => refuses ? throw StateError('locked') : value;
-
-  @override
-  Future<void> write(String next) async {
-    if (refuses) throw StateError('locked');
-    value = next;
-  }
-
-  @override
-  Future<void> delete() async {
-    if (refuses) throw StateError('locked');
-    value = null;
-  }
 }
