@@ -95,6 +95,9 @@ function lostReason(state: SuperTabState, group: Conversation, worker: Agent, as
   if (worker.alerting?.includes('limit') && worker.limitedUntil && Date.parse(worker.limitedUntil) > now) {
     return `it hit a usage limit until ${worker.limitedUntil.slice(11, 16)} UTC`
   }
+  // Its host alerts only after ten minutes of retries without an answer (cli superTabs/terminal.ts MODEL_WAIT_MS), so a
+  // short burst of failures that recovers never gets here.
+  if (worker.alerting?.includes('model')) return 'its model keeps failing'
   const end = leaseEnd(group, assignment, reportRenewedAt(state, worker))
   if (end !== undefined && now > end) {
     const progress = lastProgress(state, worker, assignment)
@@ -109,7 +112,7 @@ function loseTask(state: SuperTabState, group: Conversation, worker: Agent, reas
   const assignment = group.assignment!
   assignment.status = 'lost'
   assignment.lost = { reason, at: now }
-  group.lostAttempt = { id: assignment.id, agentId: worker.id }
+  group.lostAttempt = { id: assignment.id, agentId: worker.id, machineId: assignment.execution.machineId, engine: assignment.configuration.engine }
   worker.lostTask = { conversationId: group.id, assignmentId: assignment.id, reason, at: now }
   const sender = writtenBy(state, leadOf(state, worker) ?? worker)
   const progress = lastProgress(state, worker, assignment)
