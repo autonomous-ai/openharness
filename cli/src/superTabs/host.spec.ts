@@ -1025,6 +1025,36 @@ it.each([['changed', { ok: true, stdout: ' M src/a.ts\n', stderr: '' }], ['unrea
   expect(close).not.toHaveBeenCalled()
 })
 
+it('retries a withdrawal the backend refused, reading the folder again after its backoff, and never closes meanwhile', async () => {
+  const git = vi.fn(async () => ({ ok: true, stdout: ' M src/a.ts\n', stderr: '' }))
+  const t = setup(), host = t.open({ machines: { git } })
+  vi.mocked(t.core.agents.byAgent).mockReturnValue({ agentId: 'harness', sessionId: 'native', registeredAt: 0, startedBy: 'agent', cwd: '/work/harness' } as never)
+  const target = { id: 'agent', harnessId: 'harness', machineId: 'machine-1', workDecision: 'stop', releaseId: 'idle-1', idleStop: { previous: 'awaiting' },
+    startedSession: { creationId: 'super-original-creation', sessionId: 'native', createdAt: new Date(0).toISOString() } }
+  const close = vi.fn(async () => ({ closed: true as const }))
+  t.core.agents.closeSwarm = close
+  let attempts = 0, withdrawn = false
+  t.core.account.backend = async (method, path, body) => {
+    if (path.includes('/hosts/')) return { status: 200, body: { data: hostForm(withdrawn ? [] : [{ tabId: 'tab', agent: target, stopRequested: true }], { tabs: ['tab'] }) } }
+    if (method === 'GET') return { status: 200, body: { data: swarmReply(path, { agents: [target], conversations: [] }) } }
+    if ((body as any)?.command?.type === 'agent.stopRefused' && ++attempts === 1) return { status: 503, body: { error: 'SWARM_BUSY', message: 'Busy' } }
+    if ((body as any)?.command?.type === 'agent.stopRefused') withdrawn = true
+    return { status: 200, body: { data: {} } }
+  }
+  await host.tick()
+  await vi.waitFor(() => expect(attempts).toBe(1))
+  await vi.waitFor(() => expect(t.log.mock.calls.flat().join('\n')).toContain('Busy'))
+  // Within the first 5-second backoff nothing is tried again.
+  t.wait(4_000); await host.tick()
+  await new Promise(resolve => setTimeout(resolve, 20))
+  expect(attempts).toBe(1)
+  t.wait(2_000); await host.tick()
+  await vi.waitFor(() => expect(withdrawn).toBe(true))
+  expect(attempts).toBe(2)
+  expect(git).toHaveBeenCalledTimes(2)
+  expect(close).not.toHaveBeenCalled()
+})
+
 it('closes an idle stop whose folder is still clean', async () => {
   const git = vi.fn(async () => ({ ok: true, stdout: '', stderr: '' }))
   const t = setup(), host = t.open({ machines: { git } })
