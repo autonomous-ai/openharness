@@ -176,7 +176,7 @@ class SwarmHost extends ChangeNotifier {
   }) : features = features ?? experimentalFeaturesStore {
     account.addListener(_update);
     this.features.addListener(_update);
-    computers?.addListener(notifyListeners);
+    computers?.addListener(_computersChanged);
     _update();
   }
 
@@ -201,6 +201,12 @@ class SwarmHost extends ChangeNotifier {
     session?.foreground = value;
   }
 
+  /// A computer may have come up: a Swarm waiting for one reads at once.
+  void _computersChanged() {
+    session?.inbox.computerUp();
+    notifyListeners();
+  }
+
   void _update() {
     final id = features.isOn(PhoneExperiment.swarm) ? accountId() : null;
     if (id == session?.accountId) return;
@@ -216,7 +222,7 @@ class SwarmHost extends ChangeNotifier {
   void dispose() {
     account.removeListener(_update);
     features.removeListener(_update);
-    computers?.removeListener(notifyListeners);
+    computers?.removeListener(_computersChanged);
     session?.dispose();
     session = null;
     super.dispose();

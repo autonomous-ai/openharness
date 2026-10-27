@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/widgets.dart';
 
+import '../core/models.dart';
 import '../phone/phone_navigation.dart';
 import '../phone/phone_status.dart';
 import '../phone/welcome/your_computer.dart';
@@ -13,8 +14,10 @@ import 'swarm_start.dart';
 /// machine list: each one's name, and whether it is away for real
 /// ([phoneMachineAway]) — the socket down and the account's list agreeing.
 ///
-/// Tells only when that changes, not at every change of the app's state,
-/// which moves with every frame a terminal sends.
+/// Tells only when that changes, or one more computer's socket is up (what
+/// a Swarm read waiting for a computer needs, `SwarmInbox.computerUp`) — not
+/// at every change of the app's state, which moves with every frame a
+/// terminal sends.
 class AppSwarmComputers extends ChangeNotifier implements SwarmComputers {
   AppSwarmComputers(this.notifier) {
     notifier.addListener(_changed);
@@ -25,6 +28,9 @@ class AppSwarmComputers extends ChangeNotifier implements SwarmComputers {
 
   List<SwarmComputer>? _computers;
   bool _rechecking = false;
+
+  /// How many computers' sockets are up.
+  int _up = 0;
 
   @override
   List<SwarmComputer>? get computers => _computers;
@@ -43,7 +49,16 @@ class AppSwarmComputers extends ChangeNotifier implements SwarmComputers {
           ])
         : null;
     final rechecking = notifier.machinesRefreshing;
-    if (listEquals(computers, _computers) && rechecking == _rechecking) return;
+    final up = notifier.machineStates.values
+        .where((m) => m.connectionStatus == ConnectionStatus.connected)
+        .length;
+    final cameUp = up > _up;
+    _up = up;
+    if (!cameUp &&
+        listEquals(computers, _computers) &&
+        rechecking == _rechecking) {
+      return;
+    }
     _computers = computers;
     _rechecking = rechecking;
     notifyListeners();
@@ -56,9 +71,8 @@ class AppSwarmComputers extends ChangeNotifier implements SwarmComputers {
   /// The machines tab's Add computer (`welcome/your_computer.dart`).
   @override
   void add(BuildContext context) => unawaited(
-    Navigator.of(
-      context,
-    ).push(phoneRoute((_) => YourComputerPage(notifier: notifier))),
+    Navigator.of(context)
+        .push(phoneRoute((_) => YourComputerPage(notifier: notifier))),
   );
 
   @override

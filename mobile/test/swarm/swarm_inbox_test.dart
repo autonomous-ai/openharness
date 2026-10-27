@@ -690,6 +690,58 @@ void main() {
     });
   });
 
+  test(
+    'a computer up while it has none reads at once, not at the next try',
+    () {
+      fakeAsync((async) {
+        final fake = backend({'a': []});
+        final listed = fake.routes['/api/super-tabs/list']!;
+        var away = true;
+        fake.routes['/api/super-tabs/list'] = (q) => away
+            ? throw const SuperTabFailure('MACHINE_UNAVAILABLE', 'No computer.')
+            : listed(q);
+        final i = SwarmInbox(accountId: me, request: fake.request);
+        int lists() => fake.paths.where((p) => p.endsWith('/list')).length;
+        i.shown = true;
+        async.flushMicrotasks();
+        expect(i.noComputer, isTrue);
+
+        away = false;
+        async.elapse(const Duration(milliseconds: 500));
+        i.computerUp();
+        async.flushMicrotasks();
+
+        expect(lists(), 2);
+        expect(i.loaded, isTrue);
+        expect(i.noComputer, isFalse);
+
+        // Back on the poll: no quick try left behind.
+        async.elapse(const Duration(seconds: 14));
+        expect(lists(), 2);
+        i.dispose();
+      });
+    },
+  );
+
+  test('a computer up reads nothing while it has one, or is hidden', () {
+    fakeAsync((async) {
+      final fake = backend({'a': []});
+      final i = SwarmInbox(accountId: me, request: fake.request);
+      int lists() => fake.paths.where((p) => p.endsWith('/list')).length;
+
+      i.computerUp();
+      async.flushMicrotasks();
+      expect(lists(), 0, reason: 'hidden');
+
+      i.shown = true;
+      async.flushMicrotasks();
+      i.computerUp();
+      async.flushMicrotasks();
+      expect(lists(), 1, reason: 'it had one: the poll reads');
+      i.dispose();
+    });
+  });
+
   test('while shown it reads every poll; hidden, it reads nothing', () {
     fakeAsync((async) {
       final fake = backend({'a': []});

@@ -1,10 +1,12 @@
 import 'package:fake_async/fake_async.dart';
-import 'package:flutter/foundation.dart';
+import 'package:flutter/widgets.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness_mobile/notify/system_notices.dart';
 import 'package:harness_mobile/settings/experimental_features.dart';
 import 'package:harness_mobile/swarm/swarm_inbox.dart';
+import 'package:harness_mobile/swarm/swarm_request.dart';
 import 'package:harness_mobile/swarm/swarm_session.dart';
+import 'package:harness_mobile/swarm/swarm_start.dart';
 
 import '../voice_fakes.dart';
 import 'swarm_fixture.dart';
@@ -114,6 +116,42 @@ void main() {
       account.value = 'person-other';
 
       expect(notices.cancelled, [notices.shown.single.key]);
+    });
+  });
+
+  test('a computer coming up while Swarm has none reads at once', () {
+    fakeAsync((async) {
+      final fake = backend();
+      final listed = fake.routes['/api/super-tabs/list']!;
+      var away = true;
+      fake.routes['/api/super-tabs/list'] = (q) => away
+          ? throw const SuperTabFailure('MACHINE_UNAVAILABLE', 'No computer.')
+          : listed(q);
+      final features = ExperimentalFeaturesStore(
+        storage: MemoryKeyValueStore(),
+      );
+      features.set(PhoneExperiment.swarm, true);
+      async.flushMicrotasks();
+      final computers = _Computers();
+      final host = SwarmHost(
+        accountId: () => me,
+        account: ValueNotifier(me),
+        request: fake.request,
+        notices: _Notices(),
+        features: features,
+        computers: computers,
+      );
+      async.flushMicrotasks();
+      final inbox = host.session!.inbox;
+      expect(inbox.noComputer, isTrue);
+
+      away = false;
+      async.elapse(const Duration(milliseconds: 300));
+      computers.up();
+      async.flushMicrotasks();
+
+      expect(inbox.loaded, isTrue);
+      host.dispose();
     });
   });
 
@@ -273,6 +311,24 @@ void main() {
       s.dispose();
     });
   });
+}
+
+/// The account's computers, told by hand.
+class _Computers extends ChangeNotifier implements SwarmComputers {
+  @override
+  List<SwarmComputer>? computers = const [(name: 'Studio Mac', away: false)];
+
+  @override
+  bool get rechecking => false;
+
+  @override
+  Future<void> recheck() async {}
+
+  @override
+  void add(BuildContext context) {}
+
+  /// A computer came up.
+  void up() => notifyListeners();
 }
 
 class _Notices extends SilentSystemNotices {

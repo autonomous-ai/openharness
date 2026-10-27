@@ -232,6 +232,21 @@ class SwarmInbox extends ChangeNotifier {
 
   bool get shown => _shown;
 
+  /// One of the account's computers came up: while none could be asked, the
+  /// list is read now, not at the next quick try ([_away]) — at a cold start
+  /// the socket comes up after the first read failed, and that try was 2 to
+  /// 8 seconds off. A read under way is read again once it ends.
+  void computerUp() {
+    if (_disposed || !_shown || !noComputer) return;
+    if (_refreshing case final reading?) {
+      unawaited(reading.whenComplete(computerUp));
+      return;
+    }
+    _poll?.cancel();
+    _poll = null;
+    unawaited(_tick());
+  }
+
   /// On screen (or wanted for notices): reads at once and every
   /// [pollInterval] after. Otherwise reads nothing.
   set shown(bool value) {
