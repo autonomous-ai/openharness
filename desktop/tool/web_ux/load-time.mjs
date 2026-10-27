@@ -19,6 +19,13 @@
 // requests that failed and the page's console errors, and whether the loading
 // screen was gone by the end. The last screen of each profile is saved in
 // [out-dir], beside results.json.
+//
+// CHROME_ARGS adds flags to the browser, space-separated. The page is timed
+// with DevTools attached, as a person measuring with DevTools has it, and that
+// costs a cold load on the phone profiles about 0.8 s that nobody else pays:
+// V8 re-parses all of main.dart.js for source positions while the script
+// starts. CHROME_ARGS=--js-flags=--no-enable-lazy-source-positions times it
+// as a page nobody inspects runs.
 import { chromium } from './playwright.mjs';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -158,7 +165,10 @@ if (outDir) mkdirSync(outDir, { recursive: true });
 const server = await serveRelease(root);
 // Requests off the page fail at name lookup rather than through Playwright's
 // routing, which would turn the browser's HTTP cache off and every warm load cold.
-const args = ['--host-resolver-rules=MAP * ~NOTFOUND, EXCLUDE 127.0.0.1'];
+const args = [
+  '--host-resolver-rules=MAP * ~NOTFOUND, EXCLUDE 127.0.0.1',
+  ...(process.env.CHROME_ARGS ?? '').split(' ').filter(Boolean),
+];
 const browser = await chromium.launch({ executablePath: process.env.CHROME_PATH, args });
 // One load nobody times, so the server has compressed every file before the first timed one.
 const prime = await browser.newContext();
