@@ -1058,6 +1058,11 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       controls(state, actor, command.conversationId)
       // An archived group still takes the record: a backfill names work finished days ago.
       const group = conversation(state, command.conversationId)
+      // It awards points, so only the group's Lead or an owner records it; reading the group is not enough.
+      const owners = [state.ownerId, groupProject(state, group).ownerId]
+      if (!(actor.kind === 'agent' && group.leadId === actor.agentId) && !(actor.kind === 'person' && owners.includes(actor.userId))) {
+        fail('MERGE_RECORDER', 'Only the Lead or an owner records a merge.', 403)
+      }
       if (group.reviewOf) fail('REVIEW_SHIPS_NOTHING', 'A review group ships nothing. Record the merge on the group it reviews.', 400)
       const mergedAt = command.mergedAt === undefined ? context.now : Date.parse(command.mergedAt)
       if (mergedAt > context.now || mergedAt <= context.now - (LEDGER_WEEKS - 1) * WEEK_MS) {

@@ -210,6 +210,59 @@ describe('when the Lead records a merge', () => {
     expect(parse('https://github.com/o/r/issues/1')).toThrow()
   })
 
+  it('keeps the record to the Lead and owners: a collaborator who reads the group cannot ship it', () => {
+    const { f, id } = setup()
+    f.invitePeer()
+    expect(() => f.run(merged(id), peer)).toThrow('Lead or an owner')
+    expect(f.group(id).ledger?.shippedAt).toBeUndefined()
+    expect(f.group(id).pullRequestUrls).toBeUndefined()
+  })
+
+  it('takes the record from the Swarm and project owner', () => {
+    const { f, id } = setup()
+    f.run(merged(id), owner)
+    expect(f.group(id).ledger?.shippedAt).toBe(NOW)
+  })
+
+  it('ships in the week of the merge when Done was marked the Sunday before', () => {
+    const { f, lead, id } = setup(), { worker, assignmentId } = f.assign(id)
+    // Sunday 2026-11-01 23:00 UTC, then Monday 2026-11-02 01:00 UTC: the next leaderboard week.
+    const sunday = Date.UTC(2026, 10, 1, 23), monday = Date.UTC(2026, 10, 2, 1)
+    f.passChecks(id, assignmentId)
+    f.at(sunday)
+    f.status(id, assignmentId, worker, 'done', 'Done')
+    f.at(monday)
+    f.run(merged(id), lead)
+    expect(f.group(id).ledger?.shippedAt).toBe(monday)
+    const board = (week: number) => leaderboard({ state: f.state, groups: f.state.conversations, machines: [], projectId: 'lead', week, now: monday })
+    expect(board(weekStart(monday)).goal.thisWeek.shipped).toBe(1)
+    expect(board(weekStart(sunday)).goal.thisWeek.shipped).toBe(0)
+  })
+
+  it('keeps the earliest of two merge records, whatever order they come in', () => {
+    const { f, lead, id } = setup()
+    f.run(merged(id, { mergedAt: new Date(NOW - 3_600_000).toISOString() }), lead)
+    f.run(merged(id, { mergedAt: new Date(NOW - 2 * 3_600_000).toISOString() }), lead)
+    expect(f.group(id).ledger?.shippedAt).toBe(NOW - 2 * 3_600_000)
+    f.run(merged(id, { mergedAt: new Date(NOW - 3_600_000).toISOString() }), lead)
+    expect(f.group(id).ledger?.shippedAt).toBe(NOW - 2 * 3_600_000)
+  })
+
+  it('keeps the merge as the ship time when Done came first and the work is cancelled later', () => {
+    const { f, lead, id } = setup(), { worker, assignmentId } = f.assign(id)
+    f.passChecks(id, assignmentId)
+    f.at(NOW - DAY_MS + 3_600_000)
+    f.status(id, assignmentId, worker, 'done', 'Done')
+    f.at(NOW)
+    f.run(merged(id), lead)
+    f.run({ type: 'work.define', conversationId: id, brief: 'More', checks })
+    const again = f.assign(id, worker)
+    f.at(NOW + 3_600_000)
+    f.run({ type: 'work.cancel', conversationId: id, assignmentId: again.assignmentId, reason: 'Not needed' })
+    expect(f.group(id).ledger?.shippedAt).toBe(NOW)
+    expect(shippedFor(f, 'owner').shipped.count).toBe(1)
+  })
+
   it('keeps the record to the Lead: a worker in the group cannot ship it', () => {
     const { f, id } = setup(), worker = f.add('worker', id)
     expect(() => f.run(merged(id), f.asAgent(worker))).toThrow('coordinating lead')

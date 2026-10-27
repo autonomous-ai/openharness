@@ -10,8 +10,11 @@ export interface Unblock { personId: string; at: number; waitedMs: number }
 /** A group's leaderboard bookkeeping; readers never get it whole (read/views.ts groupView). */
 export interface GroupLedger {
   askedAt?: number
-  /** The first time its work was done; a group is one request, so finishing it again ships nothing new. */
+  /** When it shipped: its earliest recorded merge, or without one the first time its work was done. A group is one request,
+   *  so finishing it again ships nothing new. */
   shippedAt?: number
+  /** The earliest merge the Lead recorded (recordMerged); once there is one, it is the ship time. */
+  mergedAt?: number
   /** The item waiting on a person: the attempt, since when, the "Needs a human" row it posted, and once a person answered it,
    *  when. An answered item no longer waits, though its worker has not moved on yet. */
   waiting?: { assignmentId: string; since: number; messageId: string; answeredAt?: number }
@@ -43,11 +46,12 @@ export function recordStatus(group: Conversation, assignment: Assignment, previo
 /** One GitHub pull request link, as a merge record names it (model.ts appendPullRequestUrls finds the same in text). */
 export const PULL_REQUEST_URL = /^https:\/\/github\.com\/[A-Za-z0-9_-]+\/[A-Za-z0-9_.-]+\/pull\/[1-9][0-9]*$/
 
-/** The Lead's record that a request's PR merged (Lead, 2026-10-27): the request ships at the merge whatever its work does
- *  next, so work lost or cancelled after the merge still counts. Merge or Done, the earlier one is when it shipped. */
+/** The Lead's record that a request's PR merged (Lead, 2026-10-27): the request ships at its earliest recorded merge, even
+ *  when Done came first, and whatever its work does next, so work lost or cancelled after the merge still counts. */
 export function recordMerged(group: Conversation, mergedAt: number): void {
   const ledger = group.ledger ??= {}
-  ledger.shippedAt = Math.min(ledger.shippedAt ?? mergedAt, mergedAt)
+  ledger.mergedAt = Math.min(ledger.mergedAt ?? mergedAt, mergedAt)
+  ledger.shippedAt = ledger.mergedAt
 }
 
 /** The person a waiting item waits on: its requester while still a member, otherwise the project's owner. */
