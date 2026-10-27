@@ -289,9 +289,16 @@ describe('an agent whose task was lost', () => {
   const backOnline = async (f: Fixture) => { f.clock.now += MINUTE; await f.beat(f.clock.now) }
   const runOf = (agentId: string) => db.superTabRun.findUnique({ where: { id: agentId } })
   const pending = (tabId: string, assignmentId: string) => db.superTabDelivery.findMany({ where: { tabId, assignmentId, status: { in: ['queued', 'claimed', 'uncertain'] } } })
-  /** The record an older server left behind when a task was lost outside a command. */
-  const leftBehind = (f: Fixture, assignmentId = f.assignmentId, tabId = f.tab) => db.superTabRun.upsert({ where: { id: f.worker },
-    create: { id: f.worker, tabId, assignmentId, machineId: 'test-host', harnessId: f.harness.worker }, update: { tabId, assignmentId } })
+  /** What an older server left behind when a task was lost outside a command: the agent's run record, and the lost task's
+   *  deliveries still pending (one claimed, the rest queued), which the loss on this server has already cancelled. */
+  async function leftBehind(f: Fixture, assignmentId = f.assignmentId, tabId = f.tab) {
+    await db.superTabRun.upsert({ where: { id: f.worker },
+      create: { id: f.worker, tabId, assignmentId, machineId: 'test-host', harnessId: f.harness.worker }, update: { tabId, assignmentId } })
+    const rows = await db.superTabDelivery.findMany({ where: { tabId, assignmentId } })
+    await db.superTabDelivery.updateMany({ where: { tabId, assignmentId }, data: { status: 'queued' } })
+    if (rows[0]) await db.superTabDelivery.update({ where: { id: rows[0].id }, data: { status: 'claimed' } })
+    return rows.length
+  }
 
   it.each(['report', 'poll'] as const)('takes work again once its machine is back, the loss found by a %s', async foundBy => {
     const f = await swarm()
@@ -332,13 +339,17 @@ describe('an agent whose task was lost', () => {
     expect(await f.assignment()).toMatchObject({ agentId: f.worker, status: 'working' })
   })
 
-  it('is assigned past a record an older server left for its lost task, which is then replaced', async () => {
+  it('is assigned past a record an older server left for its lost task, which is then replaced, its old deliveries dropped', async () => {
     const f = await swarm()
     await loseByOffline(f)
-    await leftBehind(f)
+    expect(await leftBehind(f)).toBeGreaterThan(0)
+    expect(await pending(f.tab, f.assignmentId)).not.toEqual([])
     await backOnline(f)
     const next = String((await f.execute({ type: 'work.assign', conversationId: f.group, agentId: f.worker })).result.assignmentId)
     expect(await runOf(f.worker)).toMatchObject({ tabId: f.tab, assignmentId: next })
+    // The lost task's old instructions never reach the worker after its new assignment.
+    expect(await pending(f.tab, f.assignmentId)).toEqual([])
+    expect(await pending(f.tab, next)).not.toEqual([])
   })
 
   it('has records left for ended work removed on the Lead\'s poll, keeping those for active work and stopping agents', async () => {
@@ -351,8 +362,12 @@ describe('an agent whose task was lost', () => {
     await loseByOffline(f)
     await leftBehind(f)
     const stopping = await db.superTabRun.create({ data: { id: randomUUID(), tabId: f.tab, assignmentId: `release-${randomUUID()}`, machineId: 'test-host', harnessId: randomUUID() } })
+    const live = await pending(f.tab, active)
+    expect(live).not.toEqual([])
     await f.leadInbox()
     expect(await runOf(f.worker)).toBeNull()
+    expect(await pending(f.tab, f.assignmentId)).toEqual([])
+    expect(await pending(f.tab, active)).toEqual(live)
     expect(await runOf(other)).toMatchObject({ assignmentId: active })
     expect(await runOf(stopping.id)).not.toBeNull()
     // Removing them again changes nothing.
@@ -383,10 +398,15 @@ describe('an agent whose task was lost', () => {
     await backOnline(f)
     // The same session is a member of a second Swarm and holds active work there, which this Swarm cannot read.
     const elsewhere = await swarm()
-    await leftBehind(f, randomUUID(), elsewhere.tab)
+    // It is that Swarm's worker: its record there is this agent's.
+    await db.superTabRun.delete({ where: { id: elsewhere.worker } })
+    await leftBehind(f, elsewhere.assignmentId, elsewhere.tab)
+    const theirs = await pending(elsewhere.tab, elsewhere.assignmentId)
+    expect(theirs).not.toEqual([])
     await expect(f.execute({ type: 'work.assign', conversationId: f.group, agentId: f.worker })).rejects.toMatchObject({ code: 'AGENT_BUSY' })
     await f.leadInbox()
     expect(await runOf(f.worker)).toMatchObject({ tabId: elsewhere.tab })
+    expect(await pending(elsewhere.tab, elsewhere.assignmentId)).toEqual(theirs)
   })
 })
 

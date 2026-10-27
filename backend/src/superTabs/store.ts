@@ -856,7 +856,7 @@ export class SuperTabStore {
         if (running && (running.tabId !== tabId || !(await this.staleRuns(tx, tabId, original)).includes(running.assignmentId))) {
           fail('AGENT_BUSY', 'This agent already owns active work in a Super Tab.')
         }
-        if (running) await tx.superTabRun.deleteMany({ where: { id: running.id, tabId, assignmentId: running.assignmentId } })
+        if (running) await this.releaseRuns(tx, tabId, [running.assignmentId])
         await tx.superTabRun.create({ data: { id: assigned.agentId, tabId, assignmentId: assigned.id,
           machineId: assigned.execution.machineId, harnessId: assigned.execution.harnessId } })
       }
@@ -1227,8 +1227,15 @@ export class SuperTabStore {
       const changed = after.conversations.find(c => c.id === group.id)
       if (!changed || !activeWork(changed) || changed.assignment!.id !== group.assignment!.id) ended.add(group.assignment!.id)
     }
-    if (!ended.size) return
-    const assignmentId = { in: [...ended] }
+    await this.releaseRuns(tx, tabId, [...ended])
+  }
+
+  /** For these ended assignments of this Swarm, by their exact ids: their run records go, and their deliveries still queued,
+   *  claimed or uncertain are cancelled, so a returning worker never receives a lost task's old instructions after new work
+   *  (review of #1781). Exact ids never match the record or deliveries of an assignment made since. */
+  private async releaseRuns(tx: Transaction, tabId: string, assignmentIds: string[]) {
+    if (!assignmentIds.length) return
+    const assignmentId = { in: assignmentIds }
     await tx.superTabRun.deleteMany({ where: { tabId, assignmentId } })
     await tx.superTabDelivery.updateMany({ where: { tabId, assignmentId, status: { in: ['queued', 'claimed', 'uncertain'] } },
       data: { status: 'cancelled', holdReason: null, holdSince: null } })
@@ -1538,8 +1545,7 @@ export class SuperTabStore {
       // second finds none).
       await this.endRuns(tx, tabId, loaded.state, state)
       if (ledProject(state, agentId)) {
-        const stale = await this.staleRuns(tx, tabId, state)
-        if (stale.length) await tx.superTabRun.deleteMany({ where: { tabId, assignmentId: { in: stale } } })
+        await this.releaseRuns(tx, tabId, await this.staleRuns(tx, tabId, state))
       }
       // One write for both: the time checks' changes and the wake-up's.
       const sequences = numberMessages(state, written, this.now())
