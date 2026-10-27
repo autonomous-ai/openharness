@@ -139,6 +139,10 @@ class SuperTabController extends ChangeNotifier {
 
   /// The Swarm's parts as last read: what the next read asks changes for, and what [snapshot] is built from.
   SuperTabParts? _parts;
+
+  /// The visibility epoch of the last read: it moves when who may read what changes (backend parts/commit.ts
+  /// `visibilityChanged`). Null before a read.
+  int? get visibilityEpoch => _parts?.epoch;
   String? error, operationError, operationErrorCode;
 
   /// One line for the sender after a command succeeds, from the backend: that a

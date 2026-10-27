@@ -147,6 +147,7 @@ export class SwarmReads {
       parts.lastChangedAt(tx, [tabId]),
     ])
     return { parts: loaded, actor, lastChangedAt: newest.get(tabId) ?? null,
-      view: readerView(loaded, actor, t0, { teamMachines, ...(counts ? { mentionsWaiting: counts[0], decisionsWaiting: counts[1] } : {}) }) }
+      view: readerView(loaded, actor, t0, { teamMachines,
+        ...(counts ? { mentionsWaiting: counts[0], decisionsWaiting: counts[1].count, decisionsDigest: counts[1].digest } : {}) }) }
   }
 }
