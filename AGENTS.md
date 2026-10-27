@@ -78,7 +78,7 @@ Details, incidents and a checklist to copy: [docs/feature-design-rules.md](docs/
    - read cost: read only what changed;
    - scale: 10x, and the metric that warns first;
    - compatibility: old and new clients;
-   - migration and rollback;
+   - migration + rollback;
    - audience: the server enforces it;
    - identity: never use the machine owner's login;
    - failure: nothing breaks without saying so;
