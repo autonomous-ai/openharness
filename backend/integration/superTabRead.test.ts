@@ -700,6 +700,24 @@ describe('decisions asked of one person (v2)', () => {
     expect(await decisions(s.tabId, peer)).toEqual([expect.objectContaining({ id: first })])
   })
 
+  it('keeps a decision of its own for another asker, another task, or other options with the same question text', async () => {
+    const s = await scene()
+    clock = Date.now()
+    const [lead] = (await post(s.tabId, { type: 'decision.ask', conversationId: s.web, personId: peer.sub, questions: [question('Ship how?')] }, owner, s.lead))
+      .body.data.result.decisionIds as string[]
+    const [other] = (await post(s.tabId, { type: 'decision.ask', conversationId: s.web, personId: peer.sub,
+      questions: [{ ...question('Ship how?'), options: ['Today', 'Next week'] }] }, owner, s.lead)).body.data.result.decisionIds as string[]
+    const assignmentId = (await get(`/api/super-tabs/${s.tabId}/parts`, owner)).body.data.groups.find((g: { key: string }) => g.key === s.web).data.assignment.id
+    expect((await post(s.tabId, { type: 'work.status', conversationId: s.web, assignmentId, status: 'needs_human', result: 'Ship how?',
+      ask: { personId: peer.sub, options: ['Behind a flag', 'To everyone'], recommended: 0, unblocks: 'The release' } }, owner, s.worker)).status).toBe(200)
+    const open = await decisions(s.tabId, peer)
+    expect(open).toHaveLength(3)
+    expect(new Set([lead, other, ...open.map(d => d.id)]).size).toBe(3)
+    // The worker reads its own question, and its answer reaches it.
+    const [mine] = await decisions(s.tabId, owner, 'open', s.worker)
+    expect(mine).toMatchObject({ askerAgentId: s.worker, assignmentId, options: ['Behind a flag', 'To everyone'] })
+  })
+
   it('counts an open decision in a quiet conversation on a change read, which loads only some conversations', async () => {
     const s = await scene()
     clock = Date.now()

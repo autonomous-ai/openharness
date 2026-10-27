@@ -76,16 +76,22 @@ export function answerDecision(state: SuperTabState, actor: Actor, decision: Dec
 /** Mongo omits unset fields, so `answeredAt: null` alone would miss a row written without it. */
 const waiting: Prisma.SuperTabDecisionWhereInput = { OR: [{ answeredAt: null }, { answeredAt: { isSet: false } }] }
 
-/** Writes the questions asked and returns the decision each one is: an open decision asking the same person the same
- *  question in the same conversation is that question again, not a second one. Read and written in the command's
- *  transaction; two identical asks committing at the same moment can still both be written. */
+/** What makes an ask a repeat: the same asker, task, person, conversation, question, options, recommendation and what it
+ *  unblocks. Another asker, another task or other options with the same text is a decision of its own (review of #1753). */
+const repeatKey = (d: Pick<DecisionDraft, 'askerAgentId' | 'assignmentId' | 'personId' | 'conversationId' | 'question' | 'options' | 'recommended' | 'unblocks'>) =>
+  JSON.stringify([d.askerAgentId, d.assignmentId ?? null, d.personId, d.conversationId, d.question, d.options, d.recommended, d.unblocks])
+
+/** Writes the questions asked and returns the decision each one is: an open decision that this ask exactly repeats is that
+ *  decision again, not a second one. Read and written in the command's transaction; two identical asks committing at the
+ *  same moment can still both be written. */
 export async function writeDecisions(tx: Tx, tabId: string, drafts: DecisionDraft[], now: number): Promise<string[]> {
   if (!drafts.length) return []
   const open = await tx.superTabDecision.findMany({ where: { tabId, personId: drafts[0]!.personId, conversationId: drafts[0]!.conversationId,
-    question: { in: drafts.map(d => d.question) }, ...waiting }, select: { id: true, question: true } })
-  const fresh = drafts.filter(d => !open.some(o => o.question === d.question))
+    askerAgentId: drafts[0]!.askerAgentId, question: { in: drafts.map(d => d.question) }, ...waiting } })
+  const held = new Map(open.map(o => [repeatKey(o), o.id]))
+  const fresh = drafts.filter(d => !held.has(repeatKey(d)))
   if (fresh.length) await tx.superTabDecision.createMany({ data: fresh.map(d => ({ ...d, tabId, createdAt: new Date(now) })) })
-  return drafts.map(d => open.find(o => o.question === d.question)?.id ?? d.id)
+  return drafts.map(d => held.get(repeatKey(d)) ?? d.id)
 }
 
 export async function readAskedDecision(tx: Tx, tabId: string, id: string): Promise<DecisionTarget | undefined> {

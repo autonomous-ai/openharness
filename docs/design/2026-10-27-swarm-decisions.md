@@ -27,7 +27,9 @@ question in chat. A decision now has one shape and one place:
     reads it. Other readers of the conversation see nothing: no message, no unread mark, no link (review of #1753).
   - The person must still be in the Swarm and still read that conversation, when answering and when an answer is
     retried. An answer in a quiet or archived conversation works like any other.
-  - Asking the same open question again is the same decision, not a second one.
+  - An exact repeat of an open ask is the same decision, not a second one: the same asker, task, question, options,
+    recommendation and what it unblocks. Another asker, another task or other options with the same text is a decision of
+    its own.
 - **Provisional work:** the asker keeps working on its recommendation, marked provisional, until the answer arrives.
   The Lead and Builder skills say so.
 - **Who reads a decision:**
