@@ -13,8 +13,16 @@ FolderFiles openFolder(String path) => IoFolderFiles(path);
 /// the folder; a link swapped in between that check and the open is not
 /// caught.
 final class IoFolderFiles implements FolderFiles {
-  IoFolderFiles(String path)
-    : _root = Directory(path).resolveSymbolicLinksSync();
+  /// Refuses a dropped folder that is a link by now, as a link inside it is
+  /// left out.
+  IoFolderFiles(String path) : _root = _unlinked(path);
+
+  static String _unlinked(String path) {
+    if (FileSystemEntity.isLinkSync(path)) {
+      throw FileSystemException('The folder is a link now', path);
+    }
+    return Directory(path).resolveSymbolicLinksSync();
+  }
 
   final String _root;
 

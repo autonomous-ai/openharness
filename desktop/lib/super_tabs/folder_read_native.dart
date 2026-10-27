@@ -17,8 +17,10 @@ FolderFiles openFolder(String path) => Platform.isMacOS || Platform.isLinux
     : IoFolderFiles(path);
 
 final class _PosixFolderFiles implements FolderFiles {
+  /// The dropped folder itself is not followed either: one swapped for a
+  /// link before the zip opens it is refused (ELOOP), not read through.
   _PosixFolderFiles(String path)
-    : _fd = _libc.open(path, _flags.directory, path);
+    : _fd = _libc.open(path, _flags.directory | _flags.noFollow, path);
 
   final int _fd;
 

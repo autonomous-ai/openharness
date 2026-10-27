@@ -82,6 +82,18 @@ void main() {
     });
   });
 
+  test('a dropped folder swapped for a link before the zip opens it is '
+      'refused', () {
+    File('${outside.path}/secret.txt').writeAsStringSync('secret');
+    src.deleteSync();
+    Link(src.path).createSync(outside.path);
+
+    expect(
+      () => zipFolderNow(src.path, limitBytes: 1 << 20),
+      throwsA(isA<FileSystemException>()),
+    );
+  });
+
   group('read by path, as on Windows', () {
     test('a link in place of the file is not read', () {
       File('${outside.path}/secret.txt').writeAsStringSync('secret');
@@ -95,6 +107,16 @@ void main() {
       Link('${src.path}/lib').createSync(outside.path);
 
       expect(IoFolderFiles(src.path).read(['lib', 'a.dart'], 100), isNull);
+    });
+
+    test('a dropped folder that is now a link is refused', () {
+      src.deleteSync();
+      Link(src.path).createSync(outside.path);
+
+      expect(
+        () => IoFolderFiles(src.path),
+        throwsA(isA<FileSystemException>()),
+      );
     });
 
     test('reads one byte past what is left, no more', () {
