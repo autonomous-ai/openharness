@@ -319,6 +319,53 @@ void main() {
     expect(i.error, 'This Swarm is being moved. Try again in a moment.');
   });
 
+  test('without a computer it asks again within seconds, on a backoff, '
+      'not at the next poll', () {
+    fakeAsync((async) {
+      final fake = backend({'a': []});
+      final listed = fake.routes['/api/super-tabs/list']!;
+      var away = true;
+      fake.routes['/api/super-tabs/list'] = (q) => away
+          ? throw const SuperTabFailure(
+              'MACHINE_UNAVAILABLE',
+              'Connect one of your computers to open Swarm.',
+            )
+          : listed(q);
+      final i = SwarmInbox(
+        accountId: me,
+        request: fake.request,
+        pollInterval: const Duration(seconds: 15),
+      );
+      int lists() => fake.paths.where((p) => p.endsWith('/list')).length;
+
+      i.shown = true;
+      async.flushMicrotasks();
+      expect(i.error, 'Connect one of your computers to open Swarm.');
+
+      // Asked again after 2, 4 and 8 seconds.
+      async.elapse(const Duration(milliseconds: 14500));
+      expect(lists(), 4);
+
+      away = false;
+      async.elapse(const Duration(seconds: 16));
+      expect(i.loaded, isTrue);
+      expect(i.error, isNull);
+
+      // Read, it is back on the poll.
+      final read = lists();
+      async.elapse(const Duration(seconds: 13));
+      expect(lists(), read);
+
+      // Back in front after a while away: asked at once.
+      i.shown = false;
+      async.elapse(const Duration(minutes: 5));
+      i.shown = true;
+      async.flushMicrotasks();
+      expect(lists(), read + 1);
+      i.dispose();
+    });
+  });
+
   test('while shown it reads every poll; hidden, it reads nothing', () {
     fakeAsync((async) {
       final fake = backend({'a': []});

@@ -48,9 +48,15 @@ class SwarmConversation extends ChangeNotifier {
   /// Agents mentioned in the draft, by id, with the token that names them.
   final _mentions = <String, String>{};
 
-  /// A post sent whose answer never came: retried under the same operation
-  /// id, so the backend runs it once.
+  /// The post on its way, then — while its answer never came — retried under
+  /// the same operation id, so the backend runs it once.
   Map<String, dynamic>? _pending;
+
+  /// What the draft was when [_pending] left it: a refusal puts it back.
+  ({String draft, Map<String, String> mentions, SuperTabMessage? replyTo})?
+  _sent;
+
+  SuperTabMessage? _replyingTo;
 
   String get _path =>
       '/api/super-tabs/${Uri.encodeComponent(reader.tabId)}'
@@ -62,7 +68,27 @@ class SwarmConversation extends ChangeNotifier {
   bool get hasOlder => _before != null;
 
   /// A post was sent and not confirmed: [send] retries it.
-  bool get unconfirmed => _pending != null;
+  bool get unconfirmed => _pending != null && !sending;
+
+  /// The post on its way or not confirmed, out of the draft: drawn at the
+  /// foot of the chat, "Sending…" and then [unconfirmed], until it is read
+  /// back.
+  ({String text, String? replyTo})? get pending {
+    final command = _pending?['command'] as Map?;
+    if (command == null) return null;
+    return (
+      text: command['text'] as String,
+      replyTo: command['replyTo'] as String?,
+    );
+  }
+
+  /// The message the draft answers: the reply bar over the composer, and the
+  /// post's `replyTo`.
+  SuperTabMessage? get replyingTo => _replyingTo;
+  set replyingTo(SuperTabMessage? message) {
+    _replyingTo = message;
+    notifyListeners();
+  }
 
   /// The person may post here: a writer of the Swarm, in a conversation that
   /// is not archived.
@@ -88,6 +114,20 @@ class SwarmConversation extends ChangeNotifier {
   static bool containsMention(String text, String token) =>
       RegExp('(?:^|\\s)${RegExp.escape(token)}(?=\$|\\s|[.,!?;:])')
           .hasMatch(text);
+
+  /// The name typed after an @ that ends the draft — what the mention picker
+  /// narrows to; null while the draft does not end in one.
+  String? get mentionQuery =>
+      RegExp(r'(?:^|\s)@(\S*)$').firstMatch(_draft)?.group(1);
+
+  /// [agentId]'s name in place of the @ being typed ([mentionQuery]), as
+  /// [mention] adds it.
+  void completeMention(String agentId) {
+    if (mentionQuery case final query?) {
+      _draft = _draft.substring(0, _draft.length - query.length - 1);
+    }
+    mention(agentId);
+  }
 
   /// Adds [agentId]'s name to the draft; the post goes to it while the name
   /// stays in the text.
@@ -163,11 +203,14 @@ class SwarmConversation extends ChangeNotifier {
         _read ||
         _draft.isNotEmpty ||
         _pending != null ||
+        _replyingTo != null ||
         error != null;
     _forget();
     _draft = '';
     _mentions.clear();
     _pending = null;
+    _sent = null;
+    _replyingTo = null;
     error = null;
     if (held) notifyListeners();
   }
@@ -238,12 +281,24 @@ class SwarmConversation extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Posts the draft, to the agents mentioned in it — or, while a post is
-  /// [unconfirmed], sends that one again. True once the backend took it.
+  /// Posts the draft, to the agents mentioned in it and as a reply to
+  /// [replyingTo] — or, while a post is [unconfirmed], sends that one again.
+  /// The post leaves the draft at once and shows as [pending] until it is
+  /// read back. True once the backend took it.
   Future<bool> send() async {
     if (sending || _disposed || !canPost) return false;
     final pending = _pending ?? _compose();
     if (pending == null) return false;
+    if (_pending == null) {
+      _sent = (
+        draft: _draft,
+        mentions: Map.of(_mentions),
+        replyTo: _replyingTo,
+      );
+      _draft = '';
+      _mentions.clear();
+      _replyingTo = null;
+    }
     _pending = pending;
     sending = true;
     error = null;
@@ -255,11 +310,13 @@ class SwarmConversation extends ChangeNotifier {
         body: pending,
       );
     } on SuperTabFailure catch (failure) {
-      // A definitive refusal made no change: the draft stays to correct. A
-      // lost answer keeps its receipt, so a retry is the same post.
+      // A definitive refusal made no change: the text goes back to the draft
+      // to correct. A lost answer keeps its receipt, so a retry is the same
+      // post.
       final status = failure.statusCode;
       if (status >= 400 && status < 500 && status != 408 && status != 429) {
         _pending = null;
+        _restore();
       }
       error = failure.message;
       return false;
@@ -270,16 +327,24 @@ class SwarmConversation extends ChangeNotifier {
       sending = false;
       if (!_disposed) notifyListeners();
     }
-    _pending = null;
-    final text = (pending['command'] as Map)['text'];
-    if (_draft.trim() == text) {
-      _draft = '';
-      _mentions.clear();
-    }
-    notifyListeners();
     unawaited(reader.refresh());
-    unawaited(load());
+    // Shown as on its way until the read that brings it back.
+    await load();
+    if (_disposed || !identical(_pending, pending)) return true;
+    _pending = null;
+    _sent = null;
+    notifyListeners();
     return true;
+  }
+
+  /// A refused post's text back in the draft, before anything typed since.
+  void _restore() {
+    final sent = _sent;
+    _sent = null;
+    if (sent == null) return;
+    _draft = _draft.trim().isEmpty ? sent.draft : '${sent.draft}\n$_draft';
+    _mentions.addAll(sent.mentions);
+    _replyingTo ??= sent.replyTo;
   }
 
   Map<String, dynamic>? _compose() {
@@ -292,7 +357,7 @@ class SwarmConversation extends ChangeNotifier {
         'type': 'message.send',
         'conversationId': id,
         'text': text,
-        'replyTo': null,
+        'replyTo': _replyingTo?.id,
         'recipientIds': [
           for (final MapEntry(key: agentId, value: token) in _mentions.entries)
             if (containsMention(text, token) &&

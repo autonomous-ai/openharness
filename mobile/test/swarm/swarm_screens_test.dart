@@ -310,6 +310,51 @@ void main() {
       expect(fake.commands.single, {'type': 'mention.done', 'mentionId': 'm1'});
     });
 
+    testWidgets('Done says so at once, and the tag row goes once confirmed', (
+      tester,
+    ) async {
+      final fake = backend();
+      await pump(tester, fake, const SwarmPage());
+      final confirmed = Completer<Object?>();
+      fake.routes['/api/super-tabs/$tab/commands'] = (_) => confirmed.future;
+      await tester.tap(key('swarm-need-row-mention:m1'));
+      await tester.pumpAndSettle();
+
+      await tester.tap(key('swarm-done-m1'));
+      await tester.pump();
+
+      expect(find.text('Done…'), findsOneWidget);
+      final tag = find.textContaining('River tagged you', findRichText: true);
+      expect(tag, findsOneWidget);
+
+      confirmed.complete({'result': <String, dynamic>{}});
+      await tester.pumpAndSettle();
+
+      expect(tag, findsNothing);
+    });
+
+    testWidgets('a Done that fails says so on its row', (tester) async {
+      final fake = backend();
+      await pump(tester, fake, const SwarmPage());
+      fake.routes['/api/super-tabs/$tab/commands'] = (_) =>
+          throw const SuperTabFailure('MACHINE_UNAVAILABLE', 'No computer.');
+      await tester.tap(key('swarm-need-row-mention:m1'));
+      await tester.pumpAndSettle();
+
+      await tester.tap(key('swarm-done-m1'));
+      await tester.pumpAndSettle();
+
+      expect(
+        find.textContaining('Not marked done. Try again.'),
+        findsOneWidget,
+      );
+      expect(
+        find.textContaining('River tagged you', findRichText: true),
+        findsOneWidget,
+      );
+      expect(key('swarm-done-m1'), findsOneWidget);
+    });
+
     testWidgets('a need opens the conversation it was asked in', (
       tester,
     ) async {

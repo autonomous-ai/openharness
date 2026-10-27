@@ -6,6 +6,7 @@ import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import '../shared/theme/app_theme.dart';
 import '../theme/app_theme.dart' show AppColors;
+import 'swarm_asks.dart';
 import 'swarm_inbox.dart';
 import 'swarm_row.dart';
 import 'swarm_session.dart';
@@ -32,7 +33,8 @@ String _projectOf(SwarmNeed need) => switch (need) {
 /// One thing a Swarm asks of the person, open on Swarm Home: its glyph, who
 /// asks and in which project — a tap there opens where it was asked — what
 /// they ask, and what the person can do: a decision's options, Done on a
-/// tag, Open chat on work waiting on them.
+/// tag ("Done…" until confirmed, a failure said under it), Open chat on work
+/// waiting on them.
 class SwarmNeedRow extends StatelessWidget {
   const SwarmNeedRow({
     super.key,
@@ -55,32 +57,7 @@ class SwarmNeedRow extends StatelessWidget {
       need: decision,
       onOpen: _open,
     ),
-    SwarmMentionNeed(:final mention) => _NeedCard(
-      key: ValueKey('swarm-need-${need.key}'),
-      need: need,
-      onOpen: _open,
-      body: mention.text.isNotEmpty ? mention.text : mention.conversationTitle,
-      actions: Row(
-        children: [
-          Expanded(
-            child: SwarmButton(
-              key: ValueKey('swarm-done-${mention.id}'),
-              label: 'Done',
-              style: SwarmButtonStyle.fill,
-              onPressed: () =>
-                  unawaited(session.inbox.asks(need.swarmId)?.done(mention)),
-            ),
-          ),
-          const SizedBox(width: 8),
-          SwarmButton(
-            key: ValueKey('swarm-need-chat-${need.key}'),
-            label: 'Open chat',
-            style: SwarmButtonStyle.link,
-            onPressed: _open,
-          ),
-        ],
-      ),
-    ),
+    SwarmMentionNeed(:final mention) => _mention(mention),
     SwarmWorkNeed(:final work) => _NeedCard(
       key: ValueKey('swarm-need-${need.key}'),
       need: need,
@@ -95,6 +72,56 @@ class SwarmNeedRow extends StatelessWidget {
       ),
     ),
   };
+
+  /// A Lead's tag: Done says "Done…" the moment it is tapped, the tag goes
+  /// once confirmed, and a failure is said under it.
+  Widget _mention(SuperTabMention mention) {
+    final asks = session.inbox.asks(need.swarmId);
+    return _NeedCard(
+      key: ValueKey('swarm-need-${need.key}'),
+      need: need,
+      onOpen: _open,
+      body: mention.text.isNotEmpty ? mention.text : mention.conversationTitle,
+      actions: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: SwarmButton(
+                  key: ValueKey('swarm-done-${mention.id}'),
+                  label: 'Done',
+                  style: SwarmButtonStyle.fill,
+                  busy: asks?.finishing(mention) ?? false,
+                  busyLabel: 'Done…',
+                  onPressed: () => unawaited(asks?.done(mention)),
+                ),
+              ),
+              const SizedBox(width: 8),
+              SwarmButton(
+                key: ValueKey('swarm-need-chat-${need.key}'),
+                label: 'Open chat',
+                style: SwarmButtonStyle.link,
+                onPressed: _open,
+              ),
+            ],
+          ),
+          if (asks?.notDone(mention) case final failure?) ...[
+            const SizedBox(height: 8),
+            Text(
+              failure,
+              key: ValueKey('swarm-not-done-${mention.id}'),
+              style: TextStyle(
+                color: AppColors.danger,
+                fontSize: 13.5,
+                height: 1.35,
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
 }
 
 /// Who asks, in a few words: "River asks you", "Nova is stuck".
@@ -265,10 +292,8 @@ TextSpan _mentions(String text) {
   return TextSpan(children: spans);
 }
 
-/// A decision asked of the person: who asks, the question, and its options
-/// side by side. One tap on an option holds it for the session's Undo window
-/// — a bar drains while it waits — then sends it; an answer cannot be
-/// changed once sent.
+/// A decision asked of the person: who asks, the question, and what can be
+/// done with it ([SwarmDecisionAnswer]).
 class SwarmDecisionCard extends StatelessWidget {
   const SwarmDecisionCard({
     super.key,
@@ -282,6 +307,32 @@ class SwarmDecisionCard extends StatelessWidget {
 
   /// Opens the conversation it was asked in; null where it is already open.
   final VoidCallback? onOpen;
+
+  @override
+  Widget build(BuildContext context) => _NeedCard(
+    need: need,
+    onOpen: onOpen,
+    body: need.decision.question,
+    actions: SwarmDecisionAnswer(session: session, need: need),
+  );
+}
+
+/// What can be done with an open decision, as the prototype draws it on
+/// Swarm Home and in a chat alike: its options side by side. One tap holds
+/// the answer for the session's Undo window — a bar drains while it waits —
+/// then sends it; an answer cannot be changed once sent. In a chat's card
+/// ([fillRecommended]) the recommended option is filled.
+class SwarmDecisionAnswer extends StatelessWidget {
+  const SwarmDecisionAnswer({
+    super.key,
+    required this.session,
+    required this.need,
+    this.fillRecommended = false,
+  });
+
+  final SwarmSession session;
+  final SwarmDecisionNeed need;
+  final bool fillRecommended;
 
   @override
   Widget build(BuildContext context) {
@@ -336,26 +387,23 @@ class SwarmDecisionCard extends StatelessWidget {
           ],
           _Options(
             labels: decision.options,
+            filled: fillRecommended ? decision.recommended : null,
             keyOf: (index) => ValueKey('swarm-option-${decision.id}-$index'),
             onTap: (index) => session.hold(need, index),
           ),
         ],
       );
     }
-    return _NeedCard(
-      need: need,
-      onOpen: onOpen,
-      body: decision.question,
-      actions: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          actions,
-          if (asks?.error case final error?) ...[
-            const SizedBox(height: 8),
-            Text(error, style: note.copyWith(color: AppColors.danger)),
-          ],
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        actions,
+        if (asks?.error case final error?) ...[
+          const SizedBox(height: 8),
+          Text(error, style: note.copyWith(color: AppColors.danger)),
         ],
-      ),
+      ],
     );
   }
 }
@@ -364,17 +412,20 @@ String _option(List<String> options, int index) =>
     index >= 0 && index < options.length ? options[index] : 'Option $index';
 
 /// A decision's options, as many to a line as fit at 120 points or more,
-/// sharing it evenly; a long one wraps inside its button.
+/// sharing it evenly; a long one wraps inside its button. The [filled] one,
+/// if any, is filled and read as recommended.
 class _Options extends StatelessWidget {
   const _Options({
     required this.labels,
     required this.keyOf,
     required this.onTap,
+    this.filled,
   });
 
   final List<String> labels;
   final Key Function(int index) keyOf;
   final void Function(int index) onTap;
+  final int? filled;
 
   static const _gap = 8.0, _least = 120.0;
 
@@ -408,11 +459,23 @@ class _Options extends StatelessWidget {
                   for (final (j, index) in line.indexed) ...[
                     if (j > 0) const SizedBox(width: _gap),
                     Expanded(
-                      child: SwarmButton(
+                      child: switch (SwarmButton(
                         key: keyOf(index),
                         label: labels[index],
+                        style: index == filled
+                            ? SwarmButtonStyle.fill
+                            : SwarmButtonStyle.plain,
                         onPressed: () => onTap(index),
-                      ),
+                      )) {
+                        final button when index == filled => Semantics(
+                          button: true,
+                          label: '${labels[index]} (recommended)',
+                          onTap: () => onTap(index),
+                          excludeSemantics: true,
+                          child: button,
+                        ),
+                        final button => button,
+                      },
                     ),
                   ],
                 ],
