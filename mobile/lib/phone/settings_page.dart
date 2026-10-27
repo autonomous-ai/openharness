@@ -251,7 +251,7 @@ class _Body extends StatelessWidget {
           // this account through its setup hotspot.
           SettingsRow(
             key: const Key('settings-add-device'),
-            title: 'Set up a device',
+            title: 'Set up Intern 3',
             onTap: () => Navigator.of(context).push(
               phoneRoute((_) => AddDevicePage(notifier: notifier)),
             ),

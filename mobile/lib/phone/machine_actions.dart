@@ -45,7 +45,7 @@ Future<void> signOutComputer(
     title: 'Sign out $name?',
     message:
         'It signs out of this account and forgets its Wi-Fi, then opens its own Wi-Fi "$hotspot" '
-        'to be set up again — with Set up a device, on this account or another. Its harnesses, '
+        'to be set up again — with Set up Intern 3, on this account or another. Its harnesses, '
         'projects and files stay on it.',
     confirmLabel: 'Sign out',
   );
@@ -57,7 +57,7 @@ Future<void> signOutComputer(
     SnackBar(
       content: Text(
         reply['started'] == true
-            ? '$name is signing out. Set it up again from Set up a device, near it.'
+            ? '$name is signing out. Set it up again from Set up Intern 3, near it.'
             : 'Could not reach $name. Try again.',
       ),
     ),

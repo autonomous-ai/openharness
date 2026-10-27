@@ -8,7 +8,7 @@ import 'package:harness_mobile/phone/add_device/add_device_page.dart';
 import 'package:harness_mobile/phone/add_device/setup_hotspot.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart' as grid;
 
-/// Set up a device that is locked as it starts, in the real app on a simulator, against a stand-in
+/// Set up Intern 3 for a computer locked as it starts, in the real app on a simulator, against a stand-in
 /// device on the Mac (`fake_device.py`, which runs the startup's own page,
 /// os/root/usr/lib/harness-os/unlock/http, until "harness" opens it). A screenshot each step.
 ///

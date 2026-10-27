@@ -6257,7 +6257,7 @@ class AppNotifier extends ChangeNotifier {
   }
 
   /// Signed out from here: no Unlock for it any more. Its unlock would open the disk of a computer
-  /// that is set up again — with a sign-in, Set up a device — before it is online anywhere.
+  /// that is set up again — with a sign-in, Set up Intern 3 — before it is online anywhere.
   void forgetHarnessOs(String machineId) {
     if (harnessOsComputers.remove(machineId) == null) return;
     _saveHarnessOs();
@@ -7082,7 +7082,7 @@ class AppNotifier extends ChangeNotifier {
   /// `backend/src/routes/machines.ts` refuses anything longer.
   static const machineNameMaxLength = 40;
 
-  /// Computers this phone just set up (Settings ▸ Set up a device): Computers marks them "new" until
+  /// Computers this phone just set up (Settings ▸ Set up Intern 3): Computers marks them "new" until
   /// one is opened. This run only.
   final Set<String> _newMachines = {};
 
