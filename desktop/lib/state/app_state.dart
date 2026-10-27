@@ -1937,7 +1937,41 @@ class AppNotifier extends ChangeNotifier {
   /// under test, on a Mac too, unless a test sets it.
   @visibleForTesting
   bool? macOSForTest;
-  bool _teamOfferedAtStart = false;
+
+  /// How long before asking again a daemon that could not answer the start
+  /// offer; each further try waits one more step.
+  @visibleForTesting
+  Duration teamOfferRetryForTest = const Duration(seconds: 30);
+  static const _teamOfferTries = 5;
+
+  /// Which daemon process answers this Mac, for a spec; the daemon's own
+  /// status otherwise.
+  @visibleForTesting
+  Future<String?> Function()? daemonIdentityForTest;
+  bool _teamOfferBusy = false;
+  Timer? _teamOfferRetry;
+
+  /// The daemon process the start offer's budget is for, its tries, and
+  /// whether it answered. A socket reconnect to the same process keeps them;
+  /// only a new process starts over (review of #1790).
+  bool _teamOfferStarted = false;
+  String? _teamOfferDaemon;
+  int _teamOfferTried = 0;
+  bool _teamOfferAnswered = false;
+  bool _teamStartExplained = false;
+
+  /// This Mac's daemon process as its own status says it: its pid and
+  /// version, so a restart or an update reads as a new one. Null when it
+  /// cannot say.
+  Future<String?> _daemonIdentity() async {
+    if (daemonIdentityForTest case final read?) return read();
+    try {
+      final probe = await _discovery.probe();
+      return probe.pid == null ? null : '${probe.pid}:${probe.version ?? ''}';
+    } catch (_) {
+      return null;
+    }
+  }
 
   /// The Harness Team account on this Mac (cli/src/team/autoSetup.ts),
   /// offered while the person is here: as they join a Swarm ([reason]
@@ -1948,18 +1982,82 @@ class AppNotifier extends ChangeNotifier {
   /// ([teamSetupAsks]): macOS's prompt is titled "osascript", which nobody
   /// recognised as Harness (2026-10-27). Nothing on Windows or Linux, and never
   /// for another machine, where nobody may be at it.
-  Future<void> offerTeamAccount(String reason) async {
+  ///
+  /// True when the daemon answered, whatever it decided; false when it was not
+  /// asked or could not say.
+  Future<bool> offerTeamAccount(String reason) async {
     final here = _teamAccountHere();
-    if (here == null) return;
+    if (here == null) return false;
     try {
       final answer = await superTabMachineRequest(here, {
         'action': 'teamSetupCheck',
         'reason': reason,
       });
-      if (answer['state'] == 'wanted') _teamSetupAsks.add(reason);
+      appLog.info('super-tabs', 'team account offer ($reason): ${answer['state']}');
+      if (answer['state'] == 'wanted') {
+        // The start check runs once for each daemon process, so a restart
+        // with the explanation still open must not show it again: once a
+        // launch at start. A join, a contribution or the machine row's Set up
+        // is the person asking, and always explains.
+        if (reason != 'startup' || !_teamStartExplained) _teamSetupAsks.add(reason);
+        if (reason == 'startup') _teamStartExplained = true;
+      }
+      return true;
     } catch (error) {
       // An older daemon, or one that cannot say: nothing is asked.
-      appLog.debug('super-tabs', 'team account not offered: $error');
+      appLog.info('super-tabs', 'team account not offered ($reason): $error');
+      return false;
+    }
+  }
+
+  /// The start offer, once for each process of this Mac's daemon: Macs
+  /// already in a Swarm meet no join or contribute moment, and one ask a
+  /// launch went to whichever daemon answered first, one still starting or the
+  /// version from before an update, so nobody saw the prompt (2026-10-27).
+  /// The daemon decides, and remembers a cancel. One ask at a time; a daemon
+  /// that could not say is asked again a few times, with a growing wait, and
+  /// a reconnect to it neither restarts the count nor cuts the wait short.
+  Future<void> _offerTeamAccountAtStart() async {
+    if (_disposed || _teamOfferBusy) return;
+    if (!(macOSForTest ?? (Platform.isMacOS && !kUnderTest))) return;
+    _teamOfferBusy = true;
+    try {
+      final daemon = await _daemonIdentity();
+      if (_disposed) return;
+      // Only a confirmed process other than the last confirmed one starts
+      // over. A status read that could not say (a timeout) is no evidence of
+      // a restart, and counting it as one asked without end (re-check of
+      // #1790); the first identity read after an unknown one is taken as the
+      // same process.
+      final restarted = daemon != null && _teamOfferDaemon != null && daemon != _teamOfferDaemon;
+      if (!_teamOfferStarted || restarted) {
+        _teamOfferRetry?.cancel();
+        _teamOfferRetry = null;
+        _teamOfferStarted = true;
+        _teamOfferTried = 0;
+        _teamOfferAnswered = false;
+      }
+      _teamOfferDaemon = daemon ?? _teamOfferDaemon;
+      if (_teamOfferAnswered ||
+          _teamOfferTried >= _teamOfferTries ||
+          _teamOfferRetry != null) {
+        return;
+      }
+      final answered = await offerTeamAccount('startup');
+      // A request still out at dispose must not schedule another.
+      if (_disposed) return;
+      if (answered) {
+        _teamOfferAnswered = true;
+        return;
+      }
+      _teamOfferTried++;
+      if (_teamOfferTried >= _teamOfferTries) return;
+      _teamOfferRetry = Timer(teamOfferRetryForTest * _teamOfferTried, () {
+        _teamOfferRetry = null;
+        if (!_disposed) unawaited(_offerTeamAccountAtStart());
+      });
+    } finally {
+      _teamOfferBusy = false;
     }
   }
 
@@ -5270,12 +5368,11 @@ class AppNotifier extends ChangeNotifier {
       // the offline poll (the one thing that would have re-probed) stopped, and the tiles sat on
       // "Offline" over a live terminal with nothing left to restore them. Measured 2026-09-18 21:50.
       machine.localEndpoint ??= _cliEndpoint;
-      // Once a launch, with the person here: a Mac that joined a Swarm before
-      // teammates' work went only to Team machines never met the join or
-      // contribute moment.
-      if (!_teamOfferedAtStart && !machine.machine.isSharedMachine) {
-        _teamOfferedAtStart = true;
-        unawaited(offerTeamAccount('startup'));
+      // With the person here, at each start of this Mac's daemon: a Mac that
+      // joined a Swarm before teammates' work went only to Team machines never
+      // met the join or contribute moment.
+      if (!machine.machine.isSharedMachine) {
+        unawaited(_offerTeamAccountAtStart());
       }
     } else {
       machine.transportMode = MachineTransportMode.cloudE2ee;
@@ -21562,6 +21659,7 @@ class AppNotifier extends ChangeNotifier {
 
   @override
   void dispose() {
+    _teamOfferRetry?.cancel();
     if (identical(CrashLog.healthError, _measurementError)) {
       CrashLog.healthError = null;
     }

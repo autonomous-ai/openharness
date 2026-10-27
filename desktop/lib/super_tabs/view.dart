@@ -34,7 +34,6 @@ import 'work_details.dart';
 import 'project_sidebar.dart';
 import 'project_options.dart';
 import 'pane_layout.dart';
-import 'leaderboard/swarm_board.dart';
 import '../widgets/dial_list_scroll.dart';
 
 typedef _ComposerChoice = ({String label, String? detail, VoidCallback choose});
@@ -90,11 +89,6 @@ class _SuperTabViewState extends State<SuperTabView>
   bool _rosterOpen = false;
   bool _showPullRequests = false;
 
-  /// The human leaderboard (v2 G), read only once it is first opened; a column
-  /// when the window has room for it ([_boardRoomy], set by build), else a dialog.
-  bool _boardOpen = false, _boardRoomy = false;
-  SuperTabSwarmBoard? _boardRead;
-  SuperTabSwarmBoard get _board => _boardRead ??= SuperTabSwarmBoard(c);
   bool _showNotifications = false;
   // The message a tag opened, scrolled to once it is laid out.
   String? _target;
@@ -386,7 +380,6 @@ class _SuperTabViewState extends State<SuperTabView>
     _composer.dispose();
     _focus.dispose();
     _pullRequestsFocus.dispose();
-    _boardRead?.dispose();
     for (final scroll in _scroll.values) {
       scroll.dispose();
     }
@@ -1255,21 +1248,6 @@ class _SuperTabViewState extends State<SuperTabView>
     return 'Message ${group.title}';
   }
 
-  Widget _boardButton() {
-    final shown = _boardRoomy && _boardOpen;
-    return AppIconButton(
-      key: const ValueKey('super-leaderboard'),
-      icon: AppIcons.trophy,
-      size: AppIcons.inlineSize,
-      tooltip: 'Leaderboard',
-      selected: shown,
-      color: shown ? DesktopChrome.foreground : DesktopChrome.muted,
-      onPressed: _boardRoomy
-          ? () => setState(() => _boardOpen = !_boardOpen)
-          : () => unawaited(_board.openDialog(context)),
-    );
-  }
-
   /// On a phone the header's bar holds Chat and ⋮, each a finger's size, and
   /// ⋮ names the rest (terminals, pull requests, people) instead of five bare
   /// icons. Desktop, which sets no [WorkspaceChrome.compactBelow], never.
@@ -1459,7 +1437,6 @@ class _SuperTabViewState extends State<SuperTabView>
               _options(group, views: _menuNamesViews),
             ),
         ],
-        fingerTarget(enabled: _phone, _boardButton()),
         if (!showRoster)
           fingerTarget(
             enabled: _phone,
@@ -2459,9 +2436,6 @@ class _SuperTabViewState extends State<SuperTabView>
         _readVisibleTailAfterFrame();
       }
       _chatCovered = chatCovered;
-      _boardRoomy =
-          constraints.maxWidth >=
-          MediaQuery.textScalerOf(context).scale(SuperTabSwarmBoard.columnFrom);
       final roster = SuperTabRoster(
         controller: c,
         app: widget.app,
@@ -2477,6 +2451,13 @@ class _SuperTabViewState extends State<SuperTabView>
           setState(() => _rosterOpen = false);
           widget.onAddAgent(group);
         },
+        onAnswer: (id) {
+          setState(() {
+            _showPullRequests = false;
+            _rosterOpen = false;
+          });
+          unawaited(c.select(id));
+        },
       );
       return Stack(
         children: [
@@ -2487,14 +2468,6 @@ class _SuperTabViewState extends State<SuperTabView>
               onLeave: _leaveResize,
               left: narrow ? null : _sidebar(),
               right: showRoster ? roster : null,
-              board: _boardRoomy && _boardOpen
-                  ? _board.column(
-                      onAnswer: (id) {
-                        setState(() => _showPullRequests = false);
-                        unawaited(c.select(id));
-                      },
-                    )
-                  : null,
               center: Column(
                 children: [
                   _header(c.selected, narrow, showRoster),

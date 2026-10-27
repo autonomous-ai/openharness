@@ -305,7 +305,7 @@ void main() {
         final semantics = tester.ensureSemantics();
         await show(tester, c);
         expect(rowOf('m'), findsOneWidget);
-        await tester.tap(find.byKey(const ValueKey('super-machine-toggle-m')));
+        await tester.tap(find.byKey(const ValueKey('super-machine-m')));
         await tester.pump();
         expect(
           find.byKey(const ValueKey('super-machine-readings-m')),
