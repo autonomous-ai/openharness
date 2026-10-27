@@ -2058,6 +2058,27 @@ describe('BackendSocket outbound queue', () => {
     }
   })
 
+  it('tells the gateway a launch an agent started, apart from a person\'s', async () => {
+    const socket = relaySocket('token')
+    bindLaunchRequests(socket)
+    const signals: Array<Record<string, unknown>> = []
+    vi.spyOn(gatewayOf(socket), 'usageLaunch').mockImplementation((signal) => { signals.push(signal as never) })
+    socket.onCreateAgent = vi.fn(async () => ({ ok: false as const, error: 'SPAWN_FAILED' }))
+    socket.registerLocalClient('local:started-by', { sendFrame: () => true, sendBinary: () => true })
+    try {
+      const agentId = randomUUID(), personId = randomUUID()
+      socket.handleLocalFrame('local:started-by', { type: 'agent_create', payload: { requestId: 'agent', creationId: agentId, engine: 'codex',
+        cwd: '/tmp/work', startedBy: 'agent', parentAgentId: 'parent-agent' } })
+      socket.handleLocalFrame('local:started-by', { type: 'agent_create', payload: { requestId: 'person', creationId: personId, engine: 'codex', cwd: '/tmp/work' } })
+      await vi.waitFor(() => expect(signals.filter(signal => signal.phase === 'start')).toHaveLength(2))
+      expect(signals).toContainEqual({ id: agentId, phase: 'start', engine: 'codex', agentStarted: true })
+      expect(signals).toContainEqual({ id: personId, phase: 'start', engine: 'codex' })
+    } finally {
+      await socket.unregisterLocalClient('local:started-by')
+      await socket.stop()
+    }
+  })
+
   it('tells the gateway a launch\'s engine and the agent it created, and then that agent\'s start failing', async () => {
     // A create whose engine then did not start was counted as a launch that worked: the reply had said created
     // (core/agents/newPane.ts; production counters, 2026-10-16). Only fixed names and the agent's id leave here.

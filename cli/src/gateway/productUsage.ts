@@ -117,7 +117,7 @@ export function createProductUsage(deps: ProductUsageDeps) {
   let choiceKnown = false, tuiHeld: ProductUsageMetric[] = [], tuiRefusedDay: string | null = null
   const tuiRefused = (): boolean => tuiRefusedDay === key(now())
   const running = new Map<string, { started: number; response: boolean; error: boolean; waited: boolean }>()
-  const launches = new Map<string, { started: number; done: boolean; waits: Set<string> }>()
+  const launches = new Map<string, { started: number; done: boolean; waits: Set<string>; agent: boolean }>()
   /** The agents of created launches still starting, by agent id (RAM only), with when each was created. */
   const starting = new Map<string, number>()
   const forget = (): void => { running.clear(); launches.clear(); starting.clear() }
@@ -440,7 +440,10 @@ export function createProductUsage(deps: ProductUsageDeps) {
           if (!launches.get(oldest)!.done) add('launch_unobserved')
           launches.delete(oldest)
         }
-        launches.set(signal.id, { started: now(), done: false, waits: new Set() }); add('launch_started'); return
+        const agent = signal.agentStarted === true
+        launches.set(signal.id, { started: now(), done: false, waits: new Set(), agent }); add('launch_started')
+        if (agent) add('launch_agent_started')
+        return
       }
       const launch = launches.get(signal.id)
       if (!launch || launch.done) return
@@ -449,9 +452,13 @@ export function createProductUsage(deps: ProductUsageDeps) {
         if (!launch.waits.has(wait)) { launch.waits.add(wait); add(`launch_wait_${wait}` as ProductUsageMetric) }
         return
       }
-      if (!['created', 'failed', 'cancelled', 'unconfirmed'].includes(signal.phase)) return
+      if (!['created', 'failed', 'refused', 'cancelled', 'unconfirmed'].includes(signal.phase)) return
       launch.done = true
       add(`launch_${signal.phase}` as ProductUsageMetric)
+      // Agents' and Swarms' launches, counted again: since Oct 21 there are many more of them, and they moved a rate
+      // people read as a person's. A person's own are the total less these.
+      if (launch.agent && ['created', 'failed', 'refused'].includes(signal.phase)) add(`launch_agent_${signal.phase}` as ProductUsageMetric)
+      if (signal.phase === 'refused') add(`launch_refused_code_${listed(signal.code)}`)
       if (signal.phase === 'failed') {
         const kind = ['setup', 'auth', 'unavailable', 'invalid'].includes(signal.failure ?? '') ? signal.failure! : 'other'
         add(`launch_failed_${kind}` as ProductUsageMetric)
