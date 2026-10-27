@@ -110,6 +110,10 @@ class SwarmInbox extends ChangeNotifier {
   /// What the last [join] could not do; null once one succeeds.
   String? joinError;
 
+  /// Invitations put off with Not now: not offered again this session, and
+  /// left as they are on the server.
+  final _putOff = <String>{};
+
   /// The last read of the list failed for want of a computer to ask.
   bool get noComputer => _away != null;
 
@@ -142,6 +146,17 @@ class SwarmInbox extends ChangeNotifier {
     return true;
   }
 
+  /// Leaves [invitation] for now: it stays on the server, and the start
+  /// screen goes on to what else there is.
+  void notNow(SwarmInvitation invitation) {
+    if (!_putOff.add(invitation.inviteId)) return;
+    invitations = List.unmodifiable(
+      invitations.where((other) => other.inviteId != invitation.inviteId),
+    );
+    joinError = null;
+    notifyListeners();
+  }
+
   /// The person's invitations; none from a server without the list, or
   /// when it cannot be read — "No Swarm yet" stays true either way.
   Future<List<SwarmInvitation>> _invitations() async {
@@ -150,11 +165,13 @@ class SwarmInbox extends ChangeNotifier {
       if (answer is! List) return const [];
       return [
         for (final raw in answer)
-          if (raw case {
-            'tabId': final String tabId,
-            'name': final String name,
-            'inviteId': final String inviteId,
-          })
+          if (raw
+              case {
+                'tabId': final String tabId,
+                'name': final String name,
+                'inviteId': final String inviteId,
+              }
+              when !_putOff.contains(inviteId))
             (
               tabId: tabId,
               name: name,
