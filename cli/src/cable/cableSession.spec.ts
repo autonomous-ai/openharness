@@ -814,6 +814,142 @@ describe('cable session', () => {
     } finally { await session.stop() }
   })
 
+  describe('voice to the Swarm conversation the window has open', () => {
+    const PM = { superTabId: 'st1', conversationId: 'c1', title: 'Chat with PM', canPost: true }
+    const conversationHost = (over: Partial<CableHost> = {}) => {
+      const conversationSay = vi.fn<NonNullable<CableHost['conversationSay']>>(async () => ({ ok: true }))
+      const route = vi.fn(), routeInWindow = vi.fn(), swarmSay = vi.fn(async () => true)
+      const host = makeHost({ transcribe: vi.fn(async () => 'ship it'), route, routeInWindow, swarmSay, conversationSay,
+        voiceConversation: () => PM, appFocus: () => ({ machineId: 'mac-local', agentId: 'a2' }), ...over })
+      return { host, conversationSay, route, routeInWindow, swarmSay }
+    }
+    const speak = (port: Awaited<ReturnType<typeof connect>>['port'], begin: Record<string, unknown>, end: Record<string, unknown> = {}) => {
+      port.say({ t: 'voice.begin', ...begin }); port.pcm(Buffer.alloc(3200)); port.say({ t: 'voice.end', ...end })
+    }
+
+    it('posts the words as the person in the conversation the device showed, never into a terminal', async () => {
+      const { host, conversationSay, route, routeInWindow, swarmSay } = conversationHost()
+      const { session, port } = await connect(host)
+      try {
+        port.say({ t: 'hello', product: 'harness', mac: 'aa:bb' }); await settle()
+        expect(port.sent.find(m => m.t === 'welcome')?.features).toContain('voice.conversation')
+        speak(port, { uploadId: 'u1', conversationId: 'c1' })
+        await vi.waitFor(() => expect(port.types()).toContain('voice.transcript'))
+        expect(port.sent.find(m => m.t === 'voice.transcript')).toEqual({ t: 'voice.transcript', uploadId: 'u1', routeId: '', text: 'ship it',
+          agentId: '', agentName: 'Chat with PM', conversationId: 'c1', needsConfirm: false })
+        expect(conversationSay).toHaveBeenCalledExactlyOnceWith('st1', 'c1', 'ship it', 'u1')
+        expect(host.sendTurn).not.toHaveBeenCalled(); expect(route).not.toHaveBeenCalled()
+        expect(routeInWindow).not.toHaveBeenCalled(); expect(swarmSay).not.toHaveBeenCalled()
+      } finally { await session.stop() }
+    })
+
+    it.each([
+      ['the window has no conversation in front', { voiceConversation: () => null }, {}, 'The conversation changed. Check the device and try again.'],
+      ['the window moved to another conversation', { voiceConversation: () => ({ ...PM, conversationId: 'c2' }) }, {}, 'The conversation changed. Check the device and try again.'],
+      ['the person cannot post there', { voiceConversation: () => ({ ...PM, canPost: false }) }, {}, 'You cannot post in this conversation.'],
+      ['the id is not one', {}, { conversationId: 7 }, 'The conversation changed. Check the device and try again.'],
+      ['it also names an agent', {}, { agentId: 'a2' }, 'The conversation changed. Check the device and try again.'],
+      ['it also carries a command', {}, { cmd: 'plan' }, 'The conversation changed. Check the device and try again.'],
+      ['it also edits a draft', {}, { draftId: 'd1', draftRevision: 1, draftOp: 'replace' }, 'The conversation changed. Check the device and try again.'],
+    ])('posts nothing and types nothing when %s', async (_why, over, extra, error) => {
+      const { host, conversationSay, route } = conversationHost(over as Partial<CableHost>)
+      const { session, port } = await connect(host)
+      try {
+        speak(port, { uploadId: 'u1', conversationId: 'c1', ...extra })
+        await vi.waitFor(() => expect(port.types()).toContain('voice.error'))
+        expect(port.sent.find(m => m.t === 'voice.error')).toMatchObject({ uploadId: 'u1', message: error })
+        expect(host.transcribe).not.toHaveBeenCalled()
+        expect(conversationSay).not.toHaveBeenCalled(); expect(host.sendTurn).not.toHaveBeenCalled(); expect(route).not.toHaveBeenCalled()
+      } finally { await session.stop() }
+    })
+
+    it('keeps the conversation shown when recording began, even if the window moves while the person speaks', async () => {
+      let inFront: ReturnType<NonNullable<CableHost['voiceConversation']>> = PM
+      const { host, conversationSay } = conversationHost({ voiceConversation: () => inFront })
+      const { session, port } = await connect(host)
+      try {
+        port.say({ t: 'voice.begin', uploadId: 'u1', conversationId: 'c1' }); await settle()
+        inFront = { ...PM, conversationId: 'c2', title: 'Other' }
+        port.pcm(Buffer.alloc(3200)); port.say({ t: 'voice.end' })
+        await vi.waitFor(() => expect(conversationSay).toHaveBeenCalledWith('st1', 'c1', 'ship it', 'u1'))
+      } finally { await session.stop() }
+    })
+
+    it('shows the Swarm\'s refusal on the device', async () => {
+      const { host } = conversationHost({ conversationSay: vi.fn(async () => ({ ok: false as const, error: 'That conversation is archived.' })) })
+      const { session, port } = await connect(host)
+      try {
+        speak(port, { uploadId: 'u1', conversationId: 'c1' })
+        await vi.waitFor(() => expect(port.sent.find(m => m.t === 'voice.error')).toMatchObject({ uploadId: 'u1', message: 'That conversation is archived.' }))
+        expect(port.types()).not.toContain('voice.transcript')
+      } finally { await session.stop() }
+    })
+
+    it('in review, shows the words and the conversation first and posts only on Send', async () => {
+      const { host, conversationSay } = conversationHost()
+      const { session, port } = await connect(host)
+      try {
+        speak(port, { uploadId: 'u1', conversationId: 'c1' }, { review: true })
+        await vi.waitFor(() => expect(port.types()).toContain('voice.draft'))
+        const page = port.sent.find(m => m.t === 'voice.draft')!
+        expect(page).toMatchObject({ ok: true, active: true, agentId: 'c1', name: 'Chat with PM', text: 'ship it', context: 'Swarm chat' })
+        expect(conversationSay).not.toHaveBeenCalled()
+        port.say({ t: 'draft.command', draftId: page.id, revision: page.revision, requestId: 'draft-1', op: 'send' })
+        await vi.waitFor(() => expect(port.sent.find(m => m.t === 'draft.state')).toMatchObject({ ok: true, sent: true }))
+        expect(conversationSay).toHaveBeenCalledExactlyOnceWith('st1', 'c1', 'ship it', page.id)
+        expect(host.sendTurn).not.toHaveBeenCalled()
+      } finally { await session.stop() }
+    })
+
+    it('in review, Discard posts nothing, and a refused Send says why on the draft', async () => {
+      const conversationSay = vi.fn<NonNullable<CableHost['conversationSay']>>(async () => ({ ok: false, error: 'You can only read this Swarm.' }))
+      const { host } = conversationHost({ conversationSay })
+      const { session, port } = await connect(host)
+      try {
+        speak(port, { uploadId: 'u1', conversationId: 'c1' }, { review: true })
+        await vi.waitFor(() => expect(port.types()).toContain('voice.draft'))
+        let page = port.sent.find(m => m.t === 'voice.draft')!
+        port.say({ t: 'draft.command', draftId: page.id, revision: page.revision, requestId: 'draft-1', op: 'discard' })
+        await vi.waitFor(() => expect(port.sent.find(m => m.t === 'draft.state')).toMatchObject({ ok: true, active: false }))
+        expect(conversationSay).not.toHaveBeenCalled()
+        speak(port, { uploadId: 'u2', conversationId: 'c1' }, { review: true })
+        await vi.waitFor(() => expect(port.sent.filter(m => m.t === 'voice.draft')).toHaveLength(2))
+        page = port.sent.filter(m => m.t === 'voice.draft')[1]
+        port.say({ t: 'draft.command', draftId: page.id, revision: page.revision, requestId: 'draft-2', op: 'send' })
+        await vi.waitFor(() => expect(port.sent.find(m => m.t === 'draft.state' && m.requestId === 'draft-2')).toMatchObject({ ok: false, error: 'You can only read this Swarm.' }))
+      } finally { await session.stop() }
+    })
+
+    it('tells a device that asks which conversation its voice would go to, and when that changes', async () => {
+      let inFront: ReturnType<NonNullable<CableHost['voiceConversation']>> = { ...PM, title: `Chat ${'é'.repeat(40)}` }
+      const host = makeHost({ voiceConversation: () => inFront })
+      const { session, port } = await connect(host)
+      try {
+        port.say({ t: 'hello', product: 'harness', mac: 'aa:bb', voiceTarget: 'conversation-v1' })
+        await vi.waitFor(() => expect(port.types()).toContain('voice.target'))
+        // The name is cut on a character to what the device's target line holds (39 bytes and its NUL).
+        expect(port.sent.find(m => m.t === 'voice.target')).toEqual({ t: 'voice.target',
+          target: { kind: 'conversation', tabId: 'st1', id: 'c1', name: `Chat ${'é'.repeat(17)}`, canPost: true } })
+        inFront = null
+        await vi.waitFor(() => expect(port.sent.filter(m => m.t === 'voice.target')).toHaveLength(2), NEXT_TICKS)
+        expect(port.sent.filter(m => m.t === 'voice.target')[1]).toEqual({ t: 'voice.target', target: null })
+        await new Promise(resolve => setTimeout(resolve, 300))
+        expect(port.sent.filter(m => m.t === 'voice.target')).toHaveLength(2)   // nothing changed, nothing sent
+      } finally { await session.stop() }
+    })
+
+    it('says nothing new to a device that did not ask', async () => {
+      const host = makeHost({ voiceConversation: () => PM })
+      const { session, port } = await connect(host)
+      try {
+        port.say({ t: 'hello', product: 'harness', mac: 'aa:bb' })
+        await vi.waitFor(() => expect(port.types()).toContain('swarms'))
+        await new Promise(resolve => setTimeout(resolve, 300))
+        expect(port.types()).not.toContain('voice.target')
+      } finally { await session.stop() }
+    })
+  })
+
   it('delivers a turn through the host, not through the protocol', async () => {
     const host = makeHost()
     const { session, port } = await connect(host)

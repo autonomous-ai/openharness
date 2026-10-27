@@ -253,7 +253,12 @@ function appSwarmsFrom(payload: unknown): AppSwarms | null {
     // links to the tab by the first and follows the second. Ids only: anything else is dropped, not trusted.
     const superTabId = typeof r.superTabId === 'string' && CARD_ID.test(r.superTabId) ? r.superTabId : undefined
     const projectId = typeof r.projectId === 'string' && CARD_ID.test(r.projectId) ? r.projectId : undefined
-    swarms.push({ id: r.id, name: r.name.slice(0, 80), agentIds, panes, ...(superTabId ? { superTabId } : {}), ...(projectId ? { projectId } : {}) })
+    // The conversation it has open, only on a Swarm tab and only whole: an id, a title and whether the person can post.
+    const c = superTabId && r.conversation && typeof r.conversation === 'object' ? r.conversation as Record<string, unknown> : undefined
+    const conversation = c && typeof c.id === 'string' && CARD_ID.test(c.id) && typeof c.title === 'string'
+      ? { id: c.id, title: c.title.slice(0, 80), canPost: c.canPost === true } : undefined
+    swarms.push({ id: r.id, name: r.name.slice(0, 80), agentIds, panes, ...(superTabId ? { superTabId } : {}), ...(projectId ? { projectId } : {}),
+      ...(conversation ? { conversation } : {}) })
     if (swarms.length === 24) break   // the window's own ceiling
   }
   if (swarms.length === 0) return null

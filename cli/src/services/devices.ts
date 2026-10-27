@@ -231,6 +231,12 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     swarmCardOpen: (session, tabId, leadId) => { void askCards({ action: 'cardOpen', session, tabId, leadId }) },
     // An error (no service, a refused post) is not `said`: the words go to the harness instead, never lost.
     swarmSay: async (harnessId, text) => (await askCards({ action: 'cardSay', harnessId, text })).said === true,
+    // Shown on the device as it comes back. Without the service's own reason, nothing proves the words did not go.
+    conversationSay: async (tabId, conversationId, text, operationId) => {
+      const r = await askCards({ action: 'conversationSay', tabId, conversationId, text, operationId })
+      if (r.posted === true) return { ok: true }
+      return { ok: false, error: r.posted === false && typeof r.error === 'string' ? r.error.slice(0, 120) : 'Could not post. Check the Swarm chat.' }
+    },
     // The Pro picked a Lead: the window opens that Swarm tab and project. Harmless with no window.
     superTabSelected: (superTabId, projectId) => core.clients.sendLocal({ type: 'dial_super_tab', payload: { superTabId, projectId } }),
     scrolled: (phase, dy, velocity, superTabId) => core.clients.sendLocal({ type: 'dial_scroll', payload: { phase, dy, velocity, ...(superTabId ? { superTabId } : {}) } }),

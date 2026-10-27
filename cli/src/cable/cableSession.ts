@@ -22,6 +22,7 @@ import { readCompanionIdentity, type CompanionIdentity } from './companionProtoc
 //   3. SAY NOTHING WHEN NOTHING CHANGED. That is what keeps the link idle during a long turn, and it is
 //      why rule 2 has to exist at all.
 
+import { randomUUID } from 'node:crypto'
 import { CABLE_MAX_PAYLOAD, CableDecoder, CableType, encodeCableFrame } from './cableFrame.js'
 import { DialLog } from './dialLog.js'
 import { FirmwareTransfer, otaKeyFor } from './fwPush.js'
@@ -137,6 +138,11 @@ const DEFAULT_VOICE_RATE = 16_000
 
 /** A voice turn longer than this is a stuck dial, not a person talking. 16 kHz mono 16-bit ≈ 32 KB/s. */
 const VOICE_MAX_BYTES = 10 * 60 * 32_000
+/** The round dial's target line (`voice_target[CABLE_NAME_MAX]`, 40 with its NUL). */
+const VOICE_TARGET_NAME_BYTES = 39
+/** Keys of every other voice purpose and of agent targeting. Any of them beside a `conversationId` makes the recording unsound. */
+const CONVERSATION_EXCLUSIVE = ['agentId', 'cmd', 'selectionId', 'selectionRevision', 'formId', 'formRevision', 'searchId', 'searchRevision',
+  'draftId', 'draftRevision', 'draftOp', 'questionToken', 'questionIndex', 'carryId']
 
 /** What a `swarms` item's `members` says about one member id (see CableSession.memberMeta). */
 export interface SwarmMemberMeta { id: string; name: string; engine: string; machine: string; online: boolean }
@@ -270,6 +276,9 @@ export interface CableTile {
   agentId: string
 }
 
+/** A Swarm conversation the window has open, as it described it. */
+export interface SwarmConversationFocus { id: string; title: string; canPost: boolean }
+
 /** The window's swarms as it last described them, or null while no window is connected. */
 export interface AppSwarms {
   active: string
@@ -277,6 +286,9 @@ export interface AppSwarms {
     id: string; name: string; agentIds: string[]; panes: number
     /** A Super Tab (Swarm) tab: which Swarm it shows and the project the window has open in it. Absent on any other tab. */
     superTabId?: string; projectId?: string
+    /** The Swarm conversation this tab shows, while the person last chose it over a terminal: where a device's voice is
+     *  posted. `canPost` is the window's reading, for what the device shows; the post itself is checked again as the person. */
+    conversation?: SwarmConversationFocus
   }>
   /** The ACTIVE swarm's grid. Empty from a window that predates the field, or one with no panes. */
   tiles: CableTile[]
@@ -292,6 +304,9 @@ export type CableMachineSource = 'backend' | 'local' | 'signed-out'
  * read the words alone. Nobody answers it on a device.
  */
 export interface SuperTabAsk { superTab: string; attention: 'decision' | 'stuck' }
+
+/** A Swarm conversation as a voice target: the Swarm, the conversation, its title and whether the window says the person can post. */
+export interface VoiceConversation { superTabId: string; conversationId: string; title: string; canPost: boolean }
 
 /** Why the dial sent an `agent.open`: a tap (absent) or a question screen that came up on its own. */
 export type OpenReason = 'question'
@@ -345,6 +360,10 @@ export interface CableHost {
   swarmCardOpen?(session: string, tabId: string, leadId: string | null): void
   /** Words for a Lead that runs here: posted as the person in its Swarm chat. False: not a Lead, send the turn as before. */
   swarmSay?(harnessId: string, text: string): Promise<boolean>
+  /** The Swarm conversation the window has in front (the person chose it over a terminal), or null. */
+  voiceConversation?(): VoiceConversation | null
+  /** Words posted as the person in that conversation, with the command typing uses; the error is shown on the device. */
+  conversationSay?(tabId: string, conversationId: string, text: string, operationId: string): Promise<{ ok: true } | { ok: false; error: string }>
   /** A device picked a Lead: the window opens that Swarm tab and project. */
   superTabSelected?(superTabId: string, projectId: string): void
   /** The Swarm tab the window has on screen and the project open in it; null when the active tab is not a Swarm or there is no window. */
@@ -660,6 +679,10 @@ export class CableSession {
   private superTabWaits = false
   /** `swarmCard: 'v1'` (a Pro): the Swarm cards, their Leads' recaps and the Swarm focus travel on the cable. */
   private swarmCard = false
+  /** `voiceTarget: 'conversation-v1'`: told the Swarm conversation the window has in front (`voice.target`), which its voice goes to. */
+  private voiceTargets = false
+  /** What `voice.target` last said, so it is sent on a change only; null forces the next. */
+  private voiceTargetKey: string | null = null
   private playerOffset = 0
   private playerRequest = 0
   private playerLibraryKey = ''
@@ -681,6 +704,7 @@ export class CableSession {
   private resetCapabilities(): void {
     this.swarmMembers = this.longRecap = this.stepsActivity = this.statsTurn = this.playerCapable = this.superTabWaits = false
     this.swarmCard = false
+    this.voiceTargets = false
     this.dropCards()
     this.seqOn = false
     this.seq = 0
@@ -799,6 +823,7 @@ export class CableSession {
     carry?: CarryRead;
     question?: { pin?: QuestionSpeech };
     draft?: { pin?: DraftPin };
+    conversation?: { pin?: VoiceConversation };
     search?: { command?: SelectionCommand; pin: Promise<SelectionResult> };
     form?: { command?: FormCommand; pin: Promise<FormResult> } } | null = null
   private voiceSearch?: SelectionCommand
@@ -1242,6 +1267,8 @@ export class CableSession {
         this.playerCapable = str('player') === 'library-v1'
         this.superTabWaits = str('superTab') === 'wait-v1'
         this.swarmCard = str('swarmCard') === 'v1'
+        this.voiceTargets = str('voiceTarget') === 'conversation-v1'
+        this.voiceTargetKey = null
         this.wantCards(this.swarmCard)
         this.seqOn = str('board') === 'pro'
         this.seq = 0
@@ -1262,6 +1289,9 @@ export class CableSession {
           // with an older daemon instead of waiting on commands it ignores.
           features: [
             'voice.draft',
+            // Voice for a Swarm conversation: a device names the one it shows in `voice.begin` only to a daemon that lists this, since an
+            // older one would ignore the name and send the words to the focused terminal.
+            ...(this.host.voiceConversation && this.host.conversationSay ? ['voice.conversation'] : []),
             'agents.refresh',
             ...(this.playerCapable && this.host.playerLibrary ? ['player.library'] : []),
             // Only a Pro numbers its frames and asks for `resync`; a round dial's feature list stays as it was.
@@ -1582,11 +1612,22 @@ export class CableSession {
         this.voiceCarryId = str('carryId')
         // Presence, even malformed, selects this purpose. It can never fall back
         // to task routing or an agent's terminal.
-        const formVoice = 'formId' in msg || 'formRevision' in msg
-        const searchVoice = 'searchId' in msg || 'searchRevision' in msg
-        const draftVoice = 'draftId' in msg || 'draftRevision' in msg || 'draftOp' in msg
-        const questionVoice = 'questionToken' in msg || 'questionIndex' in msg
-        const carryVoice = 'carryId' in msg
+        // A Swarm conversation comes first and alone: words the device said would go to a chat everyone in the
+        // Swarm reads must never land in a draft, a field or a terminal because another key rode along.
+        const conversationVoice = 'conversationId' in msg
+        const formVoice = !conversationVoice && ('formId' in msg || 'formRevision' in msg)
+        const searchVoice = !conversationVoice && ('searchId' in msg || 'searchRevision' in msg)
+        const draftVoice = !conversationVoice && ('draftId' in msg || 'draftRevision' in msg || 'draftOp' in msg)
+        const questionVoice = !conversationVoice && ('questionToken' in msg || 'questionIndex' in msg)
+        const carryVoice = !conversationVoice && 'carryId' in msg
+        // Pinned to what the window has in front as capture starts, and only when that is the conversation the device
+        // showed: a window that moved since the device drew its target must not take the words somewhere else.
+        let conversation: { pin?: VoiceConversation } | undefined
+        if (conversationVoice) {
+          const inFront = this.host.voiceConversation?.() ?? null
+          const mixed = CONVERSATION_EXCLUSIVE.some(key => key in msg)
+          conversation = { pin: !mixed && typeof msg.conversationId === 'string' && inFront?.conversationId === msg.conversationId ? inFront : undefined }
+        }
         const carry: CarryRead | undefined = !formVoice && !questionVoice && !draftVoice && !searchVoice && carryVoice
           ? (typeof msg.carryId === 'string' && str('agentId') && !('cmd' in msg) && !('selectionId' in msg)
             ? this.passageCarry.read(msg.carryId)
@@ -1636,7 +1677,7 @@ export class CableSession {
         // The dial can still name the previous pane while a focus frame is in flight, or after the
         // devices process restarted. Ordinary dictation belongs to the window's selection at capture
         // start. Quoted text, carried text, questions and edits already have their own pinned targets.
-        const focused = str('agentId') && !formVoice && !searchVoice && !draftVoice && !questionVoice &&
+        const focused = str('agentId') && !conversationVoice && !formVoice && !searchVoice && !draftVoice && !questionVoice &&
           !carryVoice && !('selectionId' in msg) ? this.host.appFocus?.() : undefined
         this.voice = {
           agentId: focused?.agentId ?? str('agentId'),
@@ -1652,8 +1693,9 @@ export class CableSession {
           carry,
           question,
           draft,
+          conversation,
           search,
-          ...(!formVoice && !carryVoice && !questionVoice && !draftVoice && !searchVoice && str('selectionId') ? {
+          ...(!conversationVoice && !formVoice && !carryVoice && !questionVoice && !draftVoice && !searchVoice && str('selectionId') ? {
             selectionId: str('selectionId'),
             selection: (str('agentId') && this.host.selectPassage
               ? this.host.selectPassage({ op: 'pin', agentId: str('agentId')!, selectionId: str('selectionId'),
@@ -2069,6 +2111,12 @@ export class CableSession {
       ? this.send({ ...message, ...(uploadId ? { uploadId } : {}) })
       : Promise.resolve(false)
     this.voice = null
+    if (turn?.conversation && !turn.conversation.pin) {
+      await reply({ t: 'voice.error', message: 'The conversation changed. Check the device and try again.' }); return
+    }
+    if (turn?.conversation && !turn.conversation.pin!.canPost) {
+      await reply({ t: 'voice.error', message: 'You cannot post in this conversation.' }); return
+    }
     if (turn?.draft && (!turn.draft.pin || !this.voiceDraft.current(turn.draft.pin))) {
       await reply({ t: 'voice.error', message: 'That draft changed. Review it again.' }); return
     }
@@ -2128,6 +2176,9 @@ export class CableSession {
       return
     }
 
+    if (turn.conversation) {
+      await this.sayInConversation(turn.conversation.pin!, transcript, review, uploadId, reply); return
+    }
     if (turn.search) {
       // Speech service punctuation is not part of a remembered phrase. Preserve
       // all internal punctuation (paths, identifiers, and code) literally.
@@ -2288,6 +2339,34 @@ export class CableSession {
     }
     await reply({ t: 'voice.transcript', routeId: '', text: transcript, agentId, agentName, needsConfirm: false,
       ...(carried ? { carryId: carried.id } : {}) })
+  }
+
+  /**
+   * Words for a Swarm conversation, posted as the person (superTabs/cards.ts `post`): never typed into a terminal, never routed.
+   *
+   * In review the device shows the words and the conversation, and only Send posts them, under the draft's id, so a Send whose answer
+   * was lost is not a second message. Without review they go at once, as words for an agent do: the device showed the target before
+   * recording, and the recording itself can be cancelled.
+   */
+  private async sayInConversation(pin: VoiceConversation, transcript: string, review: boolean, uploadId: string,
+                                  reply: (message: Message) => Promise<boolean>): Promise<void> {
+    const post = (text: string, operationId: string) => this.host.conversationSay?.(pin.superTabId, pin.conversationId, text, operationId)
+      ?? Promise.resolve({ ok: false as const, error: 'Update Harness to post in the Swarm chat.' })
+    if (review) {
+      let id = ''
+      const state = this.voiceDraft.create({ agentId: pin.conversationId, name: pin.title, text: transcript, context: 'Swarm chat',
+        submit: words => post(words, id) })
+      if (!state.ok) { await reply({ t: 'voice.error', message: state.error }); return }
+      id = state.id
+      this.voiceDraftCreation = { uploadId, id }
+      await reply({ t: 'voice.draft', ...state }); return
+    }
+    // The recording's own id, so the Swarm takes a repeated post of it once; one the backend would not take as an id is replaced.
+    const posted = await post(transcript, /^[A-Za-z0-9_-]{1,64}$/.test(uploadId) ? uploadId : randomUUID())
+    if (!posted.ok) { await reply({ t: 'voice.error', message: posted.error }); return }
+    this.log(`cable: voice → Swarm conversation ${pin.conversationId.slice(0, 8)}`)
+    await reply({ t: 'voice.transcript', routeId: '', text: transcript, agentId: '', agentName: pin.title, conversationId: pin.conversationId,
+      needsConfirm: false })
   }
 
   private cancelSearchVoice(): void {
@@ -2736,6 +2815,7 @@ export class CableSession {
   }
 
   private async syncSwarmsNow(force: boolean): Promise<void> {
+    await this.syncVoiceTarget(force)
     const { selected, swarms, tiles } = this.host.listSwarms()
     const meta = await this.memberMeta(swarms)
     // `panes` belongs in the key as much as `agents` does. Opening a terminal on a tab that holds no
@@ -2758,6 +2838,20 @@ export class CableSession {
     // ONE frame, not a begin/row/end stream: two dozen rows of an id, a name and a count fit in a
     // kilobyte, and the dial replaces the whole list on arrival either way.
     await this.send(this.swarmsMessage(selected, swarms, tiles, key, meta))
+  }
+
+  /**
+   * Where this device's voice goes when the window has a Swarm conversation in front, so the device can show it before anyone speaks,
+   * and names it back in `voice.begin`. It rides the swarms' sync because it changes with the same window announce.
+   */
+  private async syncVoiceTarget(force: boolean): Promise<void> {
+    if (!this.voiceTargets) return
+    const inFront = this.host.voiceConversation?.() ?? null
+    const target = inFront ? { kind: 'conversation', tabId: inFront.superTabId, id: inFront.conversationId,
+      name: truncateUtf8(inFront.title, VOICE_TARGET_NAME_BYTES), canPost: inFront.canPost } : null
+    const key = JSON.stringify(target)
+    if (!force && key === this.voiceTargetKey) return
+    if (await this.send({ t: 'voice.target', target })) this.voiceTargetKey = key
   }
 
   /**

@@ -279,7 +279,8 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
         // The devices' (core/devicesLink.ts): a Harness Pro that shows the Swarm cards is attached or gone, wants a Lead's recap, or
         // has one open. They read the account's Swarms as the person, and need no agent.
         // Only this computer's own devices ask: an account owner on another machine does not make this one read the Swarms.
-        if (payload.action === 'cardsWanted' || payload.action === 'cardRecap' || payload.action === 'cardOpen' || payload.action === 'cardSay') {
+        if (payload.action === 'cardsWanted' || payload.action === 'cardRecap' || payload.action === 'cardOpen' || payload.action === 'cardSay'
+          || payload.action === 'conversationSay') {
           if (!asker.local) return { error: 'OWNER_REQUIRED' }
           if (payload.action === 'cardsWanted') {
             const include = Array.isArray(payload.include) ? payload.include.filter(cardId) : []
@@ -289,6 +290,12 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
           if (payload.action === 'cardRecap' && cardId(payload.tabId) && cardId(payload.leadId)) return { ok: true, ...await cards().recap(payload.tabId, payload.leadId) }
           if (payload.action === 'cardSay' && cardId(payload.harnessId) && typeof payload.text === 'string' && payload.text.trim() && payload.text.length <= 32_000) {
             return { ok: true, said: await cards().say(payload.harnessId, payload.text.trim()) }
+          }
+          // Words spoken on a device to the Swarm conversation the window has open (cable/cableSession.ts), at most what a draft holds.
+          if (payload.action === 'conversationSay' && cardId(payload.tabId) && cardId(payload.conversationId) && typeof payload.text === 'string'
+            && payload.text.trim() && payload.text.length <= 16_000 && typeof payload.operationId === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(payload.operationId)) {
+            const posted = await cards().post(payload.tabId, payload.conversationId, payload.text.trim(), payload.operationId)
+            return posted.ok ? { ok: true, posted: true } : { ok: true, posted: false, error: posted.error }
           }
           if (payload.action === 'cardOpen' && cardId(payload.session) && cardId(payload.tabId) && (payload.leadId === null || cardId(payload.leadId))) {
             cards().open(payload.session, payload.tabId, payload.leadId)

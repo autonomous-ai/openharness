@@ -320,6 +320,35 @@ export class SwarmCards {
     return false
   }
 
+  /** Words spoken on a device to the Swarm conversation the window has open: posted as the person with the command typing uses, after a
+   *  fresh read as the person says they may post there. The window's own reading only chose the target; access can change after it.
+   *  `operationId` is the recording's, so a retried post of the same words is one message. Errors are shown on the device as they are. */
+  async post(tabId: string, conversationId: string, text: string, operationId: string): Promise<{ ok: true } | { ok: false; error: string }> {
+    const me = (await this.core.account.identity().catch(() => null))?.accountId
+    const state = me ? await this.reads.read(tabId).then(read => read.state, () => null) : null
+    if (!state) return { ok: false, error: 'Could not read the Swarm. Try again.' }
+    const person = list(state.people).find(p => p.id === me)
+    if (!person) return { ok: false, error: 'You are no longer in this Swarm.' }
+    if (person.role === 'viewer') return { ok: false, error: 'You can only read this Swarm.' }
+    const group = list(state.conversations).find(c => c.id === conversationId)
+    if (!group) return { ok: false, error: 'That conversation is no longer there.' }
+    if (group.archived === true) return { ok: false, error: 'That conversation is archived.' }
+    // A private conversation (a Chat with PM) admits its audience alone; the read should not even show another person's, but a post
+    // there would put one person's words in someone else's private chat, so it is checked here as well.
+    const audience = group.audience === undefined || group.audience === null ? null : list(object(group.audience).people)
+    if (audience && !audience.some(p => p.id === me)) return { ok: false, error: 'That conversation is not yours to post in.' }
+    try {
+      await backend(this.core, 'POST', `/api/super-tabs/${tabId}/commands`, { operationId: `device-voice-${operationId}`,
+        command: { type: 'message.send', conversationId, text, replyTo: null, recipientIds: [] } })
+      return { ok: true }
+    } catch (error) {
+      // A 4xx is the Swarm's answer: nothing was written. Anything else may have been, so the person looks before saying it again.
+      return error instanceof SuperTabHostError && error.status >= 400 && error.status < 500
+        ? { ok: false, error: 'The Swarm refused that message.' }
+        : { ok: false, error: 'Could not confirm it was posted. Check the Swarm chat.' }
+    }
+  }
+
   /** Remembered recaps are kept only for Leads that are still in a tab. */
   private prune(): void {
     for (const [key, held] of this.recaps) if (!this.leadConversation(held.recap.tabId, held.recap.leadId)) this.recaps.delete(key)

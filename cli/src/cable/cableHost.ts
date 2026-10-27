@@ -113,6 +113,8 @@ export interface CableHostWiring {
   swarmCardOpen?: (session: string, tabId: string, leadId: string | null) => void
   /** Words for a Lead that runs here, posted as the person in its Swarm chat; false when the harness leads no project. */
   swarmSay?: (harnessId: string, text: string) => Promise<boolean>
+  /** Words for the Swarm conversation the window has open, posted as the person; the error is shown on the device. */
+  conversationSay?: (tabId: string, conversationId: string, text: string, operationId: string) => Promise<{ ok: true } | { ok: false; error: string }>
   /** A device picked a Lead: the window opens that Swarm tab and project. */
   superTabSelected?: (superTabId: string, projectId: string) => void
   /** A finger on the dial's glass, in pieces, while it is down; `superTabId` when it scrolls that Swarm's chat (a Pro's Lead view). */
@@ -433,6 +435,19 @@ export class DaemonCableHost implements CableHost {
 
   swarmSay(harnessId: string, text: string): Promise<boolean> {
     return this.wiring.swarmSay?.(harnessId, text) ?? Promise.resolve(false)
+  }
+
+  /** The Swarm conversation in front: the active tab's, while the window says the person chose it over a terminal. */
+  voiceConversation(): { superTabId: string; conversationId: string; title: string; canPost: boolean } | null {
+    const app = this.swarms
+    const tab = app?.swarms.find((s) => s.id === app.active)
+    return tab?.superTabId && tab.conversation
+      ? { superTabId: tab.superTabId, conversationId: tab.conversation.id, title: tab.conversation.title, canPost: tab.conversation.canPost } : null
+  }
+
+  conversationSay(tabId: string, conversationId: string, text: string, operationId: string): Promise<{ ok: true } | { ok: false; error: string }> {
+    return this.wiring.conversationSay?.(tabId, conversationId, text, operationId)
+      ?? Promise.resolve({ ok: false, error: 'Could not post. Check the Swarm chat.' })
   }
 
   superTabSelected(superTabId: string, projectId: string): void {

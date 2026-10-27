@@ -600,7 +600,7 @@ it('documents finished worker decisions and explains an older backend without re
 
 describe('the Swarm cards the devices ask for', () => {
   function withCards() {
-    const cards = { want: vi.fn(), open: vi.fn(), recap: vi.fn(async (tabId: string, leadId: string) => ({ tabId, leadId, text: 'Shipped', at: 5, none: false })), onCards: undefined as unknown, onRecap: undefined as unknown }
+    const cards = { want: vi.fn(), open: vi.fn(), post: vi.fn(async (..._: unknown[]) => ({ ok: true } as { ok: boolean; error?: string })), recap: vi.fn(async (tabId: string, leadId: string) => ({ tabId, leadId, text: 'Shipped', at: 5, none: false })), onCards: undefined as unknown, onRecap: undefined as unknown }
     const superTabs = { attention: vi.fn(), cards: vi.fn(), cardRecap: vi.fn(), shareObservers: vi.fn(), screen: vi.fn(), input: vi.fn() }
     const core = fakeCore({ superTabs })
     const make = vi.fn(() => cards as never)
@@ -642,6 +642,21 @@ describe('the Swarm cards the devices ask for', () => {
       { action: 'cardOpen', tabId: 't1', leadId: null }, { action: 'cardRecap', tabId: 'x'.repeat(48), leadId: 'l1' }]) {
       expect(await t.ask(bad, owner)).toEqual({ error: 'INVALID_REQUEST' })
     }
+  })
+  it('posts a device\'s words in the Swarm conversation the window has open, and says why one did not go', async () => {
+    const t = withCards()
+    const ask = { action: 'conversationSay', tabId: 't1', conversationId: 'c1', text: '  ship it  ', operationId: 'u-1' }
+    expect(await t.ask(ask, owner)).toEqual({ ok: true, posted: true })
+    expect(t.cards.post).toHaveBeenLastCalledWith('t1', 'c1', 'ship it', 'u-1')
+    t.cards.post.mockResolvedValueOnce({ ok: false, error: 'That conversation is archived.' })
+    expect(await t.ask(ask, owner)).toEqual({ ok: true, posted: false, error: 'That conversation is archived.' })
+    for (const bad of [{ tabId: 'bad id' }, { conversationId: 'x'.repeat(48) }, { conversationId: undefined }, { text: '   ' }, { text: 7 },
+      { text: 'x'.repeat(16_001) }, { operationId: 'has space' }, { operationId: 'x'.repeat(65) }]) {
+      expect(await t.ask({ ...ask, ...bad }, owner)).toEqual({ error: 'INVALID_REQUEST' })
+    }
+    expect(t.cards.post).toHaveBeenCalledTimes(2)
+    expect(await t.ask(ask, visitor)).toEqual({ error: 'OWNER_REQUIRED' })
+    expect(await t.ask(ask, { local: false, owner: true, accountOwner: true } as never)).toEqual({ error: 'OWNER_REQUIRED' })
   })
   it('answers a backend refusal while reading a recap as the service does any other', async () => {
     const t = withCards()

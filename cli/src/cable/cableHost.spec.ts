@@ -980,6 +980,27 @@ describe('Swarm cards', () => {
     ])
   })
 
+  it('says which Swarm conversation the window has in front, only on the active Swarm tab, and posts to it through the wiring', async () => {
+    const conversationSay = vi.fn(async () => ({ ok: true as const }))
+    const host = new DaemonCableHost(wiring({ conversationSay }))
+    expect(host.voiceConversation()).toBeNull()   // no window
+    const chat = { id: 'c1', title: 'Chat with PM', canPost: true }
+    const swarms = [
+      { id: 't1', name: 'Work', agentIds: [], panes: 0 },
+      { id: 't2', name: 'Swarm', agentIds: [], panes: 1, superTabId: 'st1', projectId: 'p1', conversation: chat },
+      { id: 't3', name: 'Swarm, a terminal chosen', agentIds: [], panes: 1, superTabId: 'st1', projectId: 'p1' },
+    ]
+    host.setSwarms({ active: 't1', swarms, tiles: [] })
+    expect(host.voiceConversation()).toBeNull()
+    host.setSwarms({ active: 't2', swarms, tiles: [] })
+    expect(host.voiceConversation()).toEqual({ superTabId: 'st1', conversationId: 'c1', title: 'Chat with PM', canPost: true })
+    host.setSwarms({ active: 't3', swarms, tiles: [] })
+    expect(host.voiceConversation()).toBeNull()
+    expect(await host.conversationSay('st1', 'c1', 'ship it', 'u1')).toEqual({ ok: true })
+    expect(conversationSay).toHaveBeenCalledWith('st1', 'c1', 'ship it', 'u1')
+    expect(await new DaemonCableHost(wiring()).conversationSay('st1', 'c1', 'x', 'u2')).toEqual({ ok: false, error: 'Could not post. Check the Swarm chat.' })
+  })
+
   it('says which Swarm project the window has open: only on a Swarm tab that names one, with the device mark', () => {
     const host = new DaemonCableHost(wiring())
     expect(host.activeSwarmProject()).toBeNull()   // no window

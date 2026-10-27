@@ -786,6 +786,42 @@ describe('local CLI WebSocket', () => {
     ws.close()
   })
 
+  it('keeps the Swarm conversation a Swarm tab has open, cut to its sizes, and drops one that is not sound', async () => {
+    const backend = new FakeBackend()
+    const seen: unknown[] = []
+    server = http.createServer((_req, res) => { res.statusCode = 404; res.end() })
+    local = attachLocalWsServer(server, { machineId, backend, onAppSwarms: (swarms) => seen.push(swarms) })
+    await new Promise<void>((resolve) => server!.listen(0, '127.0.0.1', resolve))
+    const ws = new WebSocket(`ws://127.0.0.1:${(server.address() as AddressInfo).port}/api/local-ws`)
+    await onceOpen(ws)
+    const connected = onceMessage(ws)
+    ws.send(JSON.stringify({ type: 'machine_select', payload: { machineId, localProtocolVersion: 1 } }))
+    await connected
+    ws.send(JSON.stringify({ type: 'app_swarms', payload: {
+      active: 's1',
+      swarms: [
+        { id: 's1', name: 'Swarm', agentIds: [], panes: 0, superTabId: 'st_1', conversation: { id: 'c-1', title: 'T'.repeat(100), canPost: true } },
+        // Not a Swarm tab: a conversation means nothing without its Swarm.
+        { id: 's2', name: 'Plain', agentIds: [], panes: 0, conversation: { id: 'c-2', title: 'Chat', canPost: true } },
+        // Only a literal true lets a person post.
+        { id: 's3', name: 'Read', agentIds: [], panes: 0, superTabId: 'st_3', conversation: { id: 'c-3', title: 'Watch', canPost: 'yes' } },
+        { id: 's4', name: 'Bad id', agentIds: [], panes: 0, superTabId: 'st_4', conversation: { id: 'no spaces', title: 'X', canPost: true } },
+        { id: 's5', name: 'No title', agentIds: [], panes: 0, superTabId: 'st_5', conversation: { id: 'c-5', canPost: true } },
+        { id: 's6', name: 'Junk', agentIds: [], panes: 0, superTabId: 'st_6', conversation: 'c-6' },
+      ],
+    } }))
+    await vi.waitFor(() => expect(seen).toHaveLength(1))
+    expect(seen).toEqual([{ active: 's1', tiles: [], swarms: [
+      { id: 's1', name: 'Swarm', agentIds: [], panes: 0, superTabId: 'st_1', conversation: { id: 'c-1', title: 'T'.repeat(80), canPost: true } },
+      { id: 's2', name: 'Plain', agentIds: [], panes: 0 },
+      { id: 's3', name: 'Read', agentIds: [], panes: 0, superTabId: 'st_3', conversation: { id: 'c-3', title: 'Watch', canPost: false } },
+      { id: 's4', name: 'Bad id', agentIds: [], panes: 0, superTabId: 'st_4' },
+      { id: 's5', name: 'No title', agentIds: [], panes: 0, superTabId: 'st_5' },
+      { id: 's6', name: 'Junk', agentIds: [], panes: 0, superTabId: 'st_6' },
+    ] }])
+    ws.close()
+  })
+
   for (const latestCloses of [false, true]) {
     it(`keeps the device's desk when a ${latestCloses ? 'latest' : 'background'} machine connection closes`, async () => {
       const backend = new FakeBackend(), panes = vi.fn(), swarms = vi.fn(), tabs = vi.fn()

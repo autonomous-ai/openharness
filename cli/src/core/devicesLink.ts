@@ -125,9 +125,10 @@ export function createDevicesLink(deps: DevicesLinkDeps) {
     // The Swarm cards' requests (core/main.ts `superTabRequest` allows those and no other action of the Super Tab service).
     super_tabs: async (payload) => {
       if (!core.superTabRequest) return { error: 'SERVICE_UNAVAILABLE' }
-      const { action, tabId, leadId, on, include, session, harnessId, text } = payload
+      const { action, tabId, leadId, on, include, session, harnessId, text, conversationId, operationId } = payload
       return core.superTabRequest(action === 'cardsWanted' ? { action, on: on === true, include }
-        : action === 'cardSay' ? { action, harnessId, text } : { action, tabId, leadId, session })
+        : action === 'cardSay' ? { action, harnessId, text }
+        : action === 'conversationSay' ? { action, tabId, conversationId, text, operationId } : { action, tabId, leadId, session })
     },
     // The transcriber's and the fleet's lane's sign-in, and the lane's sealing, asked of the core at every
     // use as every service in its own process asks them (core/accountQueries.ts): the devices hold no

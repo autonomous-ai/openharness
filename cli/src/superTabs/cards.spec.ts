@@ -390,6 +390,54 @@ describe('SwarmCards.say', () => {
   })
 })
 
+describe('SwarmCards.post', () => {
+  const people = [{ id: 'me', email: 'me@x.io', role: 'owner' }, { id: 'sam', email: 'sam@x.io', role: 'collaborator' }]
+  const chat = (id: string, over: Record<string, unknown> = {}) => conv(id, null, { projectId: 'web', ...over })
+  const posts = (t: ReturnType<typeof setup>) => t.call.mock.calls.filter(c => c[0] === 'POST')
+
+  it('posts spoken words as the person in a conversation they can post in, under the device\'s own operation id', async () => {
+    const t = setup({ t1: { lastChangedAt: 1, state: swarm({ people, conversations: [...swarm().conversations,
+      chat('pm-me', { audience: { people: [{ id: 'me', generation: 'g1' }] } })] }) } })
+    expect(await t.cards.post('t1', 'lead-web', 'ship it', 'u1')).toEqual({ ok: true })
+    expect(await t.cards.post('t1', 'pm-me', 'only for the PM', 'u2')).toEqual({ ok: true })
+    expect(posts(t).map(c => [c[1], c[2]])).toEqual([
+      ['/api/super-tabs/t1/commands', { operationId: 'device-voice-u1',
+        command: { type: 'message.send', conversationId: 'lead-web', text: 'ship it', replyTo: null, recipientIds: [] } }],
+      ['/api/super-tabs/t1/commands', { operationId: 'device-voice-u2',
+        command: { type: 'message.send', conversationId: 'pm-me', text: 'only for the PM', replyTo: null, recipientIds: [] } }],
+    ])
+  })
+
+  it('refuses, without posting, where the person cannot post: read-only, archived, someone else\'s private chat, gone', async () => {
+    const t = setup({
+      ro: { lastChangedAt: 1, state: swarm({ people: [{ id: 'me', email: 'me@x.io', role: 'viewer' }, people[1]] }) },
+      t1: { lastChangedAt: 1, state: swarm({ people, conversations: [...swarm().conversations, chat('old', { archived: true }),
+        chat('pm-sam', { audience: { people: [{ id: 'sam', generation: 'g1' }] } })] }) },
+      out: { lastChangedAt: 1, state: swarm({ people: [people[1]] }) },
+    })
+    expect(await t.cards.post('ro', 'lead-web', 'x', 'u1')).toEqual({ ok: false, error: 'You can only read this Swarm.' })
+    expect(await t.cards.post('t1', 'old', 'x', 'u2')).toEqual({ ok: false, error: 'That conversation is archived.' })
+    expect(await t.cards.post('t1', 'pm-sam', 'x', 'u3')).toEqual({ ok: false, error: 'That conversation is not yours to post in.' })
+    expect(await t.cards.post('t1', 'gone', 'x', 'u4')).toEqual({ ok: false, error: 'That conversation is no longer there.' })
+    expect(await t.cards.post('out', 'lead-web', 'x', 'u5')).toEqual({ ok: false, error: 'You are no longer in this Swarm.' })
+    t.failing.set('t1', 403)
+    expect(await t.cards.post('t1', 'lead-web', 'x', 'u6')).toEqual({ ok: false, error: 'Could not read the Swarm. Try again.' })
+    expect(posts(t)).toEqual([])
+  })
+
+  it('says a refused post did not go, and an unconfirmed one may have', async () => {
+    const t = setup({ t1: { lastChangedAt: 1, state: swarm({ people }) } })
+    const read = t.call.getMockImplementation()!
+    let answer: () => Promise<unknown> = async () => ({ status: 403, body: { success: false, error: { code: 'READ_ONLY', message: 'no' } } })
+    t.call.mockImplementation((async (method: string, path: string, body?: unknown) => method === 'POST' ? answer() : read(method, path, body)) as typeof read)
+    expect(await t.cards.post('t1', 'lead-web', 'x', 'u1')).toEqual({ ok: false, error: 'The Swarm refused that message.' })
+    answer = async () => { throw new Error('socket hang up') }
+    expect(await t.cards.post('t1', 'lead-web', 'x', 'u2')).toEqual({ ok: false, error: 'Could not confirm it was posted. Check the Swarm chat.' })
+    answer = async () => ({ status: 502, body: { success: false, error: { code: 'BACKEND_UNAVAILABLE', message: 'no' } } })
+    expect(await t.cards.post('t1', 'lead-web', 'x', 'u3')).toEqual({ ok: false, error: 'Could not confirm it was posted. Check the Swarm chat.' })
+  })
+})
+
 describe('SwarmCards.want', () => {
   it('polls every interval while wanted and not at all after want(false)', async () => {
     vi.useFakeTimers()
