@@ -15,7 +15,8 @@ import { TERMINAL_KEYS, terminalAlert, terminalRequest, terminalResult, type Ter
 import { loseTasks, renewLease, renewOwnTask } from './liveness.js'
 import { credentialResult, redactCredentials, type CredentialKind } from './credentials.js'
 import { dirtyGroups, reportGroups, summarize } from './projectUpdates.js'
-import { agentKind, agentProjectId, audienceOf, agentSetRole, deleteProject, markConfidential, requireSingleRegistration, groupProject, inviteLanding, ledProject, manageProject, MAX_ROLES, mutableProjects, placeRules, projectMembers, projectOf, projectRules, projectsOf, readAgent, readConversation, readProject, roleVersion, sameProject, sharedWithLeads, SKILL_SET_NAMES, skillSetOf, type ProjectRole, type RoleKind, type SwarmProject } from './projects.js'
+import { recordAnswer, recordAsked, recordStatus } from './leaderboard/record.js'
+import { agentKind, agentProjectId, audienceOf, agentSetRole, canReadProject, deleteProject, markConfidential, requireSingleRegistration, groupProject, inviteLanding, ledProject, manageProject, MAX_ROLES, mutableProjects, placeRules, projectMembers, projectOf, projectRules, projectsOf, readAgent, readConversation, readProject, roleVersion, sameProject, sharedWithLeads, SKILL_SET_NAMES, skillSetOf, type ProjectRole, type RoleKind, type SwarmProject } from './projects.js'
 
 const id = z.string().min(1).max(160).regex(/^[A-Za-z0-9_-]+$/)
 const title = z.string().trim().min(1).max(160)
@@ -94,12 +95,13 @@ export const commandSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('project.roles.reset'), projectId: id, roles: roleSet }).strict(),
   // `audience`: a private conversation that only these people and the project's Lead read (projects.ts canReadGroup).
   z.object({ type: z.literal('conversation.create'), projectId: id.optional(), title, brief: z.string().trim().max(8000).optional(), task: task.optional(), reviewOf: id.optional(), checks: z.array(check).max(40),
-    audience: z.object({ personIds: z.array(id).max(200) }).strict().optional() }).strict()
+    audience: z.object({ personIds: z.array(id).max(200) }).strict().optional(), requesterId: id.optional() }).strict()
     .refine(c => c.task !== undefined || c.brief !== undefined, 'Provide a task or brief.')
     .refine(c => !c.task || renderWorkTask(c.task).length <= 8000, 'Keep the rendered task within 8,000 characters.'),
   z.object({ type: z.literal('conversation.rename'), conversationId: id, title }).strict(),
   z.object({ type: z.literal('conversation.archive'), conversationId: id, archived: z.boolean() }).strict(),
   z.object({ type: z.literal('conversation.audience'), conversationId: id, personIds: z.array(id).max(200) }).strict(),
+  z.object({ type: z.literal('conversation.requester'), conversationId: id, personId: id.nullable() }).strict(),
   z.object({ type: z.literal('agent.add'), conversationId: id, machineId: id, harnessId: id, name: title, configuration, lead: z.boolean(), project: project.optional(), roleId: roleId.optional(), initialMessage: text.optional() }).strict(),
   z.object({ type: z.literal('agent.start'), request: startRequestSchema, routeDecisionId: id.optional(), overrideReason: reason.optional() }).strict(),
   z.object({ type: z.literal('agent.startDispatch'), startId: id }).strict(),
@@ -380,6 +382,12 @@ export function postable(state: SuperTabState, actor: Actor, conversationId: str
 }
 function owner(state: SuperTabState, actor: Actor): void {
   if (actor.kind !== 'person' || actor.userId !== state.ownerId) fail('OWNER_REQUIRED', 'Only the Super Tab owner can manage invitations.', 403)
+}
+/** A requester is a member who can read the project the work is in. */
+function requester(state: SuperTabState, project: SwarmProject, personId: string): string {
+  const member = person(state, personId)
+  if (!canReadProject(state, { kind: 'person', userId: member.id, email: member.email }, project)) fail('REQUESTER_UNAVAILABLE', 'Name a person who can read this project.', 400)
+  return member.id
 }
 function open(state: SuperTabState, conversationId: string) {
   const group = conversation(state, conversationId)
@@ -949,7 +957,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       if (state.paused) fail('PAUSED', 'New work is paused in this Super Tab.')
       if (command.audience) {
         // A private conversation is chat only: no task, checks or review, so private work never reaches other Leads.
-        if (command.task || command.checks.length || command.reviewOf) fail('AUDIENCE_CHAT_ONLY', 'A private conversation is chat only.', 400)
+        if (command.task || command.checks.length || command.reviewOf || command.requesterId) fail('AUDIENCE_CHAT_ONLY', 'A private conversation is chat only.', 400)
         if (actor.kind === 'person' && !command.audience.personIds.includes(actor.userId)) {
           fail('AUDIENCE_SELF', 'Open a private conversation with yourself in it.', 403)
         }
@@ -965,6 +973,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
         }
         requireCustomRole(project, 'reviewer')
       }
+      const requesterId = command.requesterId ? requester(state, project, command.requesterId) : actor.kind === 'person' ? actor.userId : undefined
       const number = nextConversationNumber(state)
       state.groupCounter = number
       state.conversations.push({ id: operationId, ...(state.projects ? { projectId: project.id } : {}),
@@ -974,6 +983,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
         assignment: null, lastMessageSequence: 0,
         checks: command.checks.map((c, i) => ({ ...c, id: stableId(operationId, String(i)), evidence: null, passedBy: null })),
       })
+      recordAsked(state.conversations.at(-1)!, requesterId, context.now)
       result.conversationId = operationId
       result.number = number
       if (brief) message(operationId, brief, [], null, SYSTEM_ROW)
@@ -983,6 +993,14 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       controls(state, actor, command.conversationId)
       open(state, command.conversationId).title = command.title
       break
+    case 'conversation.requester': {
+      chatOnly(command.conversationId)
+      controls(state, actor, command.conversationId)
+      const group = open(state, command.conversationId)
+      if (command.personId) group.requesterId = requester(state, groupProject(state, group), command.personId)
+      else delete group.requesterId
+      break
+    }
     case 'conversation.audience': {
       // Who may read it already passed (readConversation): only its listed people and the project's Lead get here.
       const group = open(state, command.conversationId)
@@ -1383,6 +1401,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       }
       // The transcript still accepts a human message while the lead is unavailable. The UI can say why no delivery was created.
       message(group.id, command.text, recipients, command.replyTo, command.agentOnly ? AGENT_ONLY : undefined, attachments, mentions)
+      recordAnswer(state, group, actor, command.replyTo, context.now)
       if (actor.kind === 'agent') renewOwnTask(group, actor.agentId, context.now)
       break
     }
@@ -1558,9 +1577,10 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       if (command.status === 'done' && (!command.result || !group.checks.every(c => c.passedBy && c.evidence))) {
         fail('CHECKS_PENDING', 'Completion needs a result and evidence for every acceptance check.')
       }
-      const changed = assignment.status !== command.status || assignment.result !== command.result
+      const changed = assignment.status !== command.status || assignment.result !== command.result, previous = assignment.status
       assignment.status = command.status
       assignment.result = command.result
+      recordStatus(group, assignment, previous, context.now, changed ? operationId : null)
       if (['done', 'stopped'].includes(command.status)) finishWorker(state, assignment.agentId, group)
       // Finished work shows the worker recovered from a task it lost before.
       if (command.status === 'done') delete state.agents.find(a => a.id === assignment.agentId)?.lostTask

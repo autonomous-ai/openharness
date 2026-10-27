@@ -69,6 +69,18 @@ export function touchesFor(command: Command, actor: Actor, before: SuperTabState
       const projectId = command.projectId ?? (actor.kind === 'agent' ? agentProject(actor.agentId) : 'lead')
       group(leadGroupOf(projectId))
       group(command.reviewOf)
+      member(command.requesterId)
+      break
+    }
+    case 'conversation.requester':
+      leadCheck(projectOfGroup(command.conversationId)?.id)
+      member(command.personId ?? undefined)
+      break
+    case 'message.send': {
+      // An answer to waiting work is credited to the person it waits on (leaderboard/record.ts): a concurrent change to who
+      // that is meets the answer here.
+      const waiting = before.conversations.find(c => c.id === command.conversationId)
+      if (waiting?.ledger?.waiting) member(waiting.requesterId)
       break
     }
     case 'agent.add': {
