@@ -256,7 +256,12 @@ export async function startAgent(input: Json, scoped: ScopedRequest, where: Wher
     // Reports what the engine launched with; the routed model, once launched or switched, is observed afterwards.
     const profile = parseRuntimeProfile(frame.selectedModel)
     const matched = profile && profile.sessionId === nativeId && profile.engine === frame.engine ? profile : null
-    const configuration = { engine: text(frame.engine) ?? String(request.engine), model: matched?.model ?? null, effort: matched?.effort ?? null,
+    // Claude Code does not report an effort it was launched with, so its frame reads auto: the agent runs the effort this
+    // start launched it with (a resumed start: the one the machine accepted at launch). Builders started with opus high
+    // were stored as auto until 2026-10-27.
+    const launchedEffort = launched ? effort : launched === undefined ? text(object(native.launchModel).effort) : null
+    const configuration = { engine: text(frame.engine) ?? String(request.engine), model: matched?.model ?? null,
+      effort: matched?.effort === 'auto' && launchedEffort ? launchedEffort : matched?.effort ?? null,
       contextWindow: number(frame.contextWindow), engineVersion: text(frame.engineVersion) }
     const startedSession = typeof frame.sessionId === 'string' && frame.sessionId && typeof frame.createdAt === 'string' && Number.isFinite(Date.parse(frame.createdAt))
       ? { sessionId: frame.sessionId, createdAt: frame.createdAt } : undefined

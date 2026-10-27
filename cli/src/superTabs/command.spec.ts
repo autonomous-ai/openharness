@@ -249,3 +249,10 @@ it('keeps the mentioned people on a post that sends files', async () => {
     expect(request.mock.calls.at(-1)![1]).toMatchObject({ action: 'command', command: { type: 'message.send', attachmentIds: ['f1'], mentions: ['person-ken'] } })
   } finally { rmSync(dir, { recursive: true, force: true }) }
 })
+
+// Decisions (v2): the Lead, or a worker, reads the decisions it asked and their answers.
+it('reads the caller\'s open decisions, or with --answered the answered ones', () => {
+  expect(parseSuperTabArgs([...prefix, 'decisions'], where).payload).toMatchObject({ action: 'decisions', state: 'open' })
+  expect(parseSuperTabArgs([...prefix, 'decisions', '--answered'], where).payload).toMatchObject({ action: 'decisions', state: 'answered' })
+  for (const argv of [[...prefix, 'decisions', 'extra'], [...prefix, 'decisions', '--answered', 'extra']]) expect(() => parseSuperTabArgs(argv, where)).toThrow('harness super-tab')
+})

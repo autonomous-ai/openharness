@@ -41,3 +41,21 @@ it('refuses an unknown, mismatched, unavailable or unrelated native reading', ()
   core.agents.terminalAvailable = () => false
   expect(configurationObservation(core, 'machine', row)).toBeNull()
 })
+
+// Builders started with opus and effort high read as effort 'auto' (Dee, 2026-10-27): Claude Code never reports an effort
+// it was launched with (--effort), so its reading falls back to 'auto', and that overwrote the effort the start stored.
+it('keeps a known effort when the same model reads as auto, and reports auto only with another model', () => {
+  const core = fixture()
+  vi.mocked(core.agents.runtimeProfile).mockReturnValue('runtime-v1:harness:claude:opus@auto')
+  expect(configurationObservation(core, 'machine', row)).toBeNull()
+  // A real change of effort is still reported.
+  vi.mocked(core.agents.runtimeProfile).mockReturnValue('runtime-v1:harness:claude:opus@max')
+  expect(configurationObservation(core, 'machine', row)!.body.command.configuration.effort).toBe('max')
+  // Another model: the stored effort was that model's, so the reading stands as it is.
+  vi.mocked(core.agents.runtimeProfile).mockReturnValue('runtime-v1:harness:claude:sonnet@auto')
+  expect(configurationObservation(core, 'machine', row)!.body.command.configuration).toMatchObject({ model: 'sonnet', effort: 'auto' })
+  // Nothing known yet: auto is all there is to say.
+  const unknown = { ...row, agent: { ...row.agent, configuration: { ...previous, effort: 'auto' } } }
+  vi.mocked(core.agents.runtimeProfile).mockReturnValue('runtime-v1:harness:claude:opus@auto')
+  expect(configurationObservation(core, 'machine', unknown)).toBeNull()
+})

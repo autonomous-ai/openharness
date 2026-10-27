@@ -159,6 +159,27 @@ describe('work that loses its owner', () => {
     expect(await f.lostRows()).toEqual([])
   })
 
+  it('is not lost for a failing model when its host says the model recovered between the time checks\' read and their write', async () => {
+    const f = await swarm()
+    await f.beat(f.clock.now)
+    // An agent whose model alert is on before it has a task: the time checks, not the alert, would lose its next task.
+    const group = String((await f.execute({ type: 'conversation.create', title: 'Second task', brief: 'Do it', checks: [{ description: 'Done', independent: false }] })).result.conversationId)
+    const other = await f.add(group, 'test-host', f.harness.other, 'Other')
+    await f.observe('test-host', [f.harness.worker, f.harness.other])
+    await f.execute({ type: 'agent.alert', agentId: other, alert: 'model', active: true }, host, other)
+    await f.execute({ type: 'work.assign', conversationId: group, agentId: other })
+    // The Lead's poll reads the alert as on; just before it writes the loss, the host reports the model answering again.
+    let raced = false
+    const racing = new SuperTabStore(beforeFirstWrite(db, async () => {
+      if (raced) return
+      raced = true
+      await f.execute({ type: 'agent.alert', agentId: other, alert: 'model', active: false }, host, other)
+    }), () => f.clock.now)
+    await racing.deliveries(host, f.tab, f.lead)
+    expect(raced).toBe(true)
+    expect((await f.timed.read(owner, f.tab)).state.conversations.find(c => c.id === group)!.assignment!.status).toBe('working')
+  })
+
   it('is lost at once when the host reports its session stopped, and the Lead is woken with who, why and the last result', async () => {
     const f = await swarm()
     await f.beat(f.clock.now)

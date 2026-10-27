@@ -185,10 +185,14 @@ class SuperTabNotifications extends StatefulWidget {
     required this.mentions,
     required this.onOpen,
     this.now = DateTime.now,
+    this.leading,
   });
   final SuperTabMentions mentions;
   final ValueChanged<SuperTabMention> onOpen;
   final DateTime Function() now;
+
+  /// Shown first in the same list: the reader's decisions (decisions_view.dart).
+  final Widget? leading;
 
   @override
   State<SuperTabNotifications> createState() => _SuperTabNotificationsState();
@@ -324,6 +328,7 @@ class _SuperTabNotificationsState extends State<SuperTabNotifications> {
                 ],
               ),
             ),
+          ?widget.leading,
           _heading('Waiting'),
           if (m.waiting.isEmpty) _empty('Nothing waiting for you.'),
           for (final mention in m.waiting) _row(mention, waiting: true),

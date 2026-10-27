@@ -198,6 +198,20 @@ describe('the stuck and usage-limit alerts', () => {
     expect(t.alerts()[1]).toEqual({ type: 'agent.alert', agentId: 'a1', alert: 'model', active: false })
   })
 
+  it('raises nothing for a burst of failures that recovers before ten minutes, so its task is never lost for it', async () => {
+    // Last night's reviewer failures came and went (429 bursts): nine minutes of retries, then answers for ten.
+    const failing = (): SuperTabScreen => ({ ok: true, text: '✻ Waiting for API response · will retry in 2m 38s · check your network\n❯ ', hold: null })
+    const t = setup({ screen: failing })
+    await t.host.tick([row()])
+    t.wait(539_000); await t.host.tick([row()])
+    t.showing(idle)
+    for (let second = 0; second < 600; second += 15) { t.wait(15_000); await t.host.tick([row()]) }
+    // A second burst starts its own ten minutes.
+    t.showing(failing); t.wait(15_000); await t.host.tick([row()])
+    t.wait(539_000); await t.host.tick([row()])
+    expect(t.alerts()).toEqual([])
+  })
+
   it('counts retries with fresh attempts between them as one failing stretch', async () => {
     // Claude Code shows its countdown, then a plain spinner for the minutes each new attempt takes.
     const failing = (): SuperTabScreen => ({ ok: true, text: '✻ Waiting for API response · will retry in 1m 18s · check your network\n❯ ', hold: null })

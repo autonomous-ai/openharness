@@ -59,6 +59,9 @@ describe('built-in Swarm skills', () => {
   const limit = '- A task lost to a usage limit resumes by itself in the same session when the limit resets (its wake-up says when). Hand it on at once only to another account or engine with allowance now, with its pushed branch and last progress note.\n'
   const digest = '- Morning digest: when a person asks for one, set the project\'s digest to their local time and time zone ("project.digest" with time "08:00" and timeZone "Asia/Ho_Chi_Minh"). When it wakes you, check that each pull request under Shipped is merged, then post one message to the people in the project chat.\n'
   const checkpoint = '- Push your work branch at least every 30 minutes, and set your work status to working with a one-line note of what is done and what is next, so another agent can continue if you stop.\n'
+  // The decision lines (Lead's brief for v2 decisions, 2026-10-27): the Lead's and the Builder's alone, in both modes.
+  const decision = '- Ask people for decisions in one place: decision.ask puts up to 10 questions to one person at once, each with 2 to 5 options, the one you recommend and what the answer unblocks. Keep working on your recommendation, marked provisional, until they answer: a notice in that conversation tells you, and harness super-tab decisions --answered shows the answer. A decision is not a private channel: anything private goes through Chat with PM.\n'
+  const ask = '- When you know who decides, add ask to that needs-human (the person, 2 to 5 options, the one you recommend, what it unblocks) and keep working on your recommendation, marked provisional, until a notice says it was answered; read the answer with harness super-tab decisions --answered.\n'
   const twoHours = '- A Builder or Reviewer that has been down for 2 hours (machine offline, session gone or stopped): cancel its task with the reason, route it, and assign it to another agent with what the first one left (branch, last revision, last report).\n'
   it.each([
     ['lead', '5fc83d8c43b66b44cdab27b48235dbc86b7ab11a57153edc1ae7e92831642a8e'],
@@ -80,8 +83,10 @@ describe('built-in Swarm skills', () => {
       expect(text.split(checkpoint)).toHaveLength(role === 'dev' ? 2 : 1)
       expect(text.split(limit)).toHaveLength(role === 'lead' ? 2 : 1)
       expect(text.split(digest)).toHaveLength(role === 'lead' ? 2 : 1)
+      expect(text.split(mention + decision)).toHaveLength(role === 'lead' ? 2 : 1)
+      expect(text.split(ask)).toHaveLength(role === 'dev' ? 2 : 1)
       expect(sha(text.replace(twoHours, '').replace(terminal, '').replace(overlap, '').replace(local, '').replace(mention, '').replace(lost, '').replace(checkpoint, '')
-        .replace(limit, '').replace(digest, ''))).toBe(sha256)
+        .replace(limit, '').replace(digest, '').replace(decision, '').replace(ask, ''))).toBe(sha256)
     }
   })
   it('adds the 2-hour line to section 7 right after the 6-hour rule', () => {
@@ -102,9 +107,15 @@ describe('built-in Swarm skills', () => {
   })
   it('adds the mention line right after each Lead skill\'s needs-a-person rule', () => {
     const orchestration = readFileSync(prepareSwarmSkill(fixture(), { role: 'lead', key: 'session' }).file, 'utf8')
-    expect(orchestration).toContain(`- Needs-human: get the person's decision now.\n${mention}- Blocked: change something.`)
+    expect(orchestration).toContain(`- Needs-human: get the person's decision now.\n${mention}${decision}- Blocked: change something.`)
     const plain = readFileSync(prepareSwarmSkill(fixture(), { role: 'lead', key: 'session', mode: 'default' }).file, 'utf8')
-    expect(plain).toContain(`- Needs a person: get the decision now. Blocked: change something (context, model, size or plan); never resend the same thing.\n${mention}- Settle ambiguities`)
+    expect(plain).toContain(`- Needs a person: get the decision now. Blocked: change something (context, model, size or plan); never resend the same thing.\n${mention}${decision}- Settle ambiguities`)
+  })
+  it('adds the decision lines right after the mention line for the Lead, and after the needs-human rule for the Builder', () => {
+    for (const mode of ['orchestration', 'default'] as const) {
+      const builder = readFileSync(prepareSwarmSkill(fixture(), { role: 'dev', key: 'session', mode }).file, 'utf8')
+      expect(builder).toContain(`- A person's decision: mark needs-human with one short question.\n${ask}- Can't go on`)
+    }
   })
   it('adds the lost-work line right after each Lead skill\'s 2-hour rule', () => {
     const orchestration = readFileSync(prepareSwarmSkill(fixture(), { role: 'lead', key: 'session' }).file, 'utf8')
@@ -143,8 +154,10 @@ describe('built-in Swarm skills', () => {
     expect(text.split(checkpoint)).toHaveLength(role === 'dev' ? 2 : 1)
     expect(text.split(limit)).toHaveLength(role === 'lead' ? 2 : 1)
     expect(text.split(digest)).toHaveLength(role === 'lead' ? 2 : 1)
+    expect(text.split(mention + decision)).toHaveLength(role === 'lead' ? 2 : 1)
+    expect(text.split(ask)).toHaveLength(role === 'dev' ? 2 : 1)
     expect(sha(text.replace(terminal, '').replace(overlap, '').replace(localDefault, '').replace(mention, '').replace(lost, '').replace(checkpoint, '')
-      .replace(limit, '').replace(digest, ''))).toBe(sha256)
+      .replace(limit, '').replace(digest, '').replace(decision, '').replace(ask, ''))).toBe(sha256)
     expect(prepared.instructions).toBe(`Use the swarm-${role} skill for this session: the team process; otherwise work your usual way. Before working, read ${JSON.stringify(prepared.file)} with your file or shell tool.`)
   })
 
