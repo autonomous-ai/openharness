@@ -1906,7 +1906,14 @@ class AppNotifier extends ChangeNotifier {
   /// under test, on a Mac too, unless a test sets it.
   @visibleForTesting
   bool? macOSForTest;
-  bool _teamOfferedAtStart = false;
+
+  /// How long before asking again a daemon that could not answer the start
+  /// offer; each further try waits one more step.
+  @visibleForTesting
+  Duration teamOfferRetryForTest = const Duration(seconds: 30);
+  static const _teamOfferTries = 5;
+  bool _teamOfferBusy = false;
+  Timer? _teamOfferRetry;
 
   /// The Harness Team account on this Mac (cli/src/team/autoSetup.ts),
   /// offered while the person is here: as they join a Swarm ([reason]
@@ -1916,22 +1923,50 @@ class AppNotifier extends ChangeNotifier {
   /// Swarm with other people in it. macOS's administrator prompt is all the
   /// person sees. Nothing on Windows or Linux, and never for another machine,
   /// where nobody may be at it.
-  Future<void> offerTeamAccount(String reason) async {
-    if (!(macOSForTest ?? (Platform.isMacOS && !kUnderTest))) return;
+  ///
+  /// True when the daemon answered, whatever it decided; false when it was not
+  /// asked or could not say.
+  Future<bool> offerTeamAccount(String reason) async {
+    if (!(macOSForTest ?? (Platform.isMacOS && !kUnderTest))) return false;
     final here = machineStates.values
         .where(
           (state) => state.isLocalMachine && !state.machine.isSharedMachine,
         )
         .firstOrNull;
-    if (here == null) return;
+    if (here == null) return false;
     try {
-      await superTabMachineRequest(here.machine.machineId, {
+      final answer = await superTabMachineRequest(here.machine.machineId, {
         'action': 'teamSetup',
         'reason': reason,
       });
+      appLog.info('super-tabs', 'team account offer ($reason): ${answer['state']}');
+      return true;
     } catch (error) {
       // An older daemon, or one that cannot say: nothing is asked.
-      appLog.debug('super-tabs', 'team account not offered: $error');
+      appLog.info('super-tabs', 'team account not offered ($reason): $error');
+      return false;
+    }
+  }
+
+  /// The start offer, at each start of this Mac's daemon: Macs already in a
+  /// Swarm meet no join or contribute moment, and one ask a launch went to
+  /// whichever daemon answered first, one still starting or the version from
+  /// before an update, so nobody saw the prompt (2026-10-27). The daemon
+  /// decides, and remembers a cancel. One ask at a time; a daemon that could
+  /// not say is asked again a few times.
+  Future<void> _offerTeamAccountAtStart({int tried = 0}) async {
+    if (_teamOfferBusy) return;
+    _teamOfferBusy = true;
+    _teamOfferRetry?.cancel();
+    try {
+      if (await offerTeamAccount('startup')) return;
+      if (tried + 1 >= _teamOfferTries) return;
+      _teamOfferRetry = Timer(
+        teamOfferRetryForTest * (tried + 1),
+        () => unawaited(_offerTeamAccountAtStart(tried: tried + 1)),
+      );
+    } finally {
+      _teamOfferBusy = false;
     }
   }
 
@@ -5168,12 +5203,11 @@ class AppNotifier extends ChangeNotifier {
       // the offline poll (the one thing that would have re-probed) stopped, and the tiles sat on
       // "Offline" over a live terminal with nothing left to restore them. Measured 2026-09-18 21:50.
       machine.localEndpoint ??= _cliEndpoint;
-      // Once a launch, with the person here: a Mac that joined a Swarm before
-      // teammates' work went only to Team machines never met the join or
-      // contribute moment.
-      if (!_teamOfferedAtStart && !machine.machine.isSharedMachine) {
-        _teamOfferedAtStart = true;
-        unawaited(offerTeamAccount('startup'));
+      // With the person here, at each start of this Mac's daemon: a Mac that
+      // joined a Swarm before teammates' work went only to Team machines never
+      // met the join or contribute moment.
+      if (!machine.machine.isSharedMachine) {
+        unawaited(_offerTeamAccountAtStart());
       }
     } else {
       machine.transportMode = MachineTransportMode.cloudE2ee;
@@ -21412,6 +21446,7 @@ class AppNotifier extends ChangeNotifier {
 
   @override
   void dispose() {
+    _teamOfferRetry?.cancel();
     if (identical(CrashLog.healthError, _measurementError)) {
       CrashLog.healthError = null;
     }
