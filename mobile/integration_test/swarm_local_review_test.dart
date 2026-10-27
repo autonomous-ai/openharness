@@ -22,10 +22,11 @@ import 'package:harness_mobile/ws/ws_conn.dart';
 
 /// Swarm on the phone against an isolated local backend, a screenshot at each
 /// step. First the real shell: Home without Swarm, Settings ▸ Experimental,
-/// the Swarm mark on Home and Find's Swarm command, all through the app's own
-/// Swarm path to one account machine. Then the screens: what needs the person
-/// and the Swarms, a project, a chat, a post with a mention, and a decision
-/// answered with one tap and its Undo.
+/// then Swarm Home at the root, Harness from its drawer, and the terminal's
+/// Swarm mark and Find's Swarm command back to Swarm Home, all through the
+/// app's own Swarm path to one account machine. Then the screens: what needs
+/// the person and the Swarms, a project, a chat, a post with a mention, and a
+/// decision answered with one tap and its Undo.
 ///
 /// The backend is the local backend recipe's (in-memory MongoDB and Redis, a
 /// fake SSO, no daemon), seeded with one Swarm whose open decision and tag are
@@ -136,19 +137,32 @@ void main() {
       expect(experimentalFeaturesStore.isOn(PhoneExperiment.swarm), isTrue);
       await walk.shot('settings-experimental');
 
-      // ③ Back on Home: the mark, with how many things need the person.
+      // ③ Back: Swarm Home is the root now, what needs the person first.
       await back();
       // The menu, if it stayed under Settings.
       if (find.text('Settings').evaluate().isNotEmpty) await back();
-      await walk.waitFor(walk.key('swarm-mark-count'));
+      await walk.waitFor(find.text('River asks you'));
+      await walk.shot('swarm-home');
+
+      // ④ Harness from its drawer: the terminal, its mark with how many
+      // things need the person; the mark goes back to Swarm Home.
+      Future<void> harness() async {
+        await tester.tap(walk.key('swarm-menu'));
+        await walk.waitFor(walk.key('swarm-drawer-harness'));
+        await walk.wait();
+        await tester.tap(walk.key('swarm-drawer-harness'));
+        await walk.waitFor(walk.key('swarm-mark-count'));
+      }
+
+      await harness();
       expect(find.text('3'), findsOneWidget);
       await walk.shot('home-mark');
       await tester.tap(walk.key('swarm-mark'));
       await walk.waitFor(find.text('River asks you'));
       await walk.shot('swarm-from-home');
-      await back();
+      await harness();
 
-      // ④ Find, a swipe right on the terminal: its Swarm command.
+      // ⑤ Find, a swipe right on the terminal: its Swarm command.
       await tester.timedDrag(
         find.byType(TerminalPage),
         const Offset(260, 0),
