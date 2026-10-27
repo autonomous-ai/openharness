@@ -183,6 +183,42 @@ chat only: no work is assigned in it, and only the product manager joins it
 among agents. As with any session, the owner of the machine running the
 product manager can see what its terminal shows.
 
+## Avatars, status and celebrations
+
+People and agents each show one avatar wherever they appear: messages, the
+roster, machine rows and mentions. A person sets theirs from their own row in
+the roster. They can pick one of eight pictures or upload a PNG, JPEG or WebP. Desktop and the web app crop the upload
+square and resize it to 256 pixels before sending it. The server accepts only
+those three formats, judged by the file's own bytes, and at most 1 MB. Uploads
+are stored like chat files, and each can be used once. Without a picture, a
+person shows their initial. An agent shows a pattern made from its name, the
+same on every computer, with a small Claude or Codex badge. Its contributor
+changes it from the agent's details, and the project's product manager can
+change it with `agent.avatar`.
+
+A person can also set a short status, such as Focusing, Coffee break or their
+own words up to 80 characters. They can let it clear itself after an hour,
+after four hours or at the end of the day. It shows next to their name and as
+a small emoji on their avatar.
+
+Avatars and status reach only the Swarm's members, through the same reads as
+the rest of the Swarm. Picture links are long and random like chat file links,
+so whoever holds a link can open the picture. A member who leaves keeps any
+link they already saw.
+
+People and agents react to a message with a small set: 👍 🎉 ❤️ 😄 👀 🚀.
+Counts show under the message, with the reader's own highlighted and the names
+on hover. Reacting twice keeps one reaction, and reacting again takes it back.
+Someone who leaves the Swarm drops out of the counts. A reaction changes its
+conversation, so other readers see it within one poll.
+
+When linked work is marked Done (a group with a pull request, marked Done after
+its merge), the project chat shows one celebration line. It names the person
+who asked for the work, the engineer who built it and the reviewers. A new one
+throws confetti once on each computer. An old one in the history, or one seen
+with reduced motion, stays still. A private conversation is never celebrated,
+and the line never quotes the work's result.
+
 ## Lead updates
 
 The default update cadence is five minutes; the project menu also offers one,
