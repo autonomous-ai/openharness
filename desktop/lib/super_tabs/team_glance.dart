@@ -175,8 +175,9 @@ class SuperTabTeamGlance {
   }) {
     final at = now ?? DateTime.now();
     final snapshot = c.snapshot;
-    if (snapshot == null)
+    if (snapshot == null) {
       return SuperTabTeamGlance._(const [], const [], const []);
+    }
     final machines = <String, SuperTabGlanceMachine>{};
     for (final pool in snapshot.machines) {
       final id = pool['machineId'] as String? ?? '';
@@ -228,8 +229,9 @@ class SuperTabTeamGlance {
         warnings.add('$name is busy on ${machine.name}, which is offline.');
       }
     }
-    if (_pileUp(machines.values.toList()) case final warning?)
+    if (_pileUp(machines.values.toList()) case final warning?) {
       warnings.insert(0, warning);
+    }
     return SuperTabTeamGlance._(
       machines.values.toList(),
       (models.entries.map((e) => (e.key, e.value)).toList()
