@@ -98,6 +98,20 @@ class SwarmAsks extends ChangeNotifier {
   /// the answer once and no other is offered meanwhile.
   final _unconfirmed = <String, ({String operationId, int choice})>{};
 
+  /// Tags being marked done, tags whose Done failed (with what to say on
+  /// them), and tags confirmed done that a list read before then may still
+  /// hold: a Done shows the moment it is tapped, and the tag goes the moment
+  /// it is confirmed, not at the next read — on the owner's iPhone
+  /// (2026-10-27) it took 10 seconds, with no sign the tap counted.
+  final _finishing = <String>{}, _done = <String>{};
+  final _notDone = <String, String>{};
+
+  /// [mention] is being marked done.
+  bool finishing(SuperTabMention mention) => _finishing.contains(mention.id);
+
+  /// What to say on [mention] after its Done failed; null otherwise.
+  String? notDone(SuperTabMention mention) => _notDone[mention.id];
+
   /// The option sent for [decision] and not confirmed: [answer] sends it
   /// again.
   int? unconfirmed(SuperTabDecision decision) =>
@@ -163,6 +177,8 @@ class SwarmAsks extends ChangeNotifier {
     mentions = const [];
     error = null;
     _unconfirmed.clear();
+    _done.clear();
+    _notDone.clear();
     _counts = null;
     _failed = false;
     if (held) notifyListeners();
@@ -208,7 +224,15 @@ class SwarmAsks extends ChangeNotifier {
       ]);
       if (_disposed || reader.generation != generation) return;
       decisions = List.unmodifiable(openRows.map(SuperTabDecision.fromJson));
-      mentions = List.unmodifiable(waitingRows.map(SuperTabMention.fromJson));
+      final waitingIds = {for (final row in waitingRows) row['id']};
+      // Done here and no longer waiting there: the backend caught up.
+      _done.removeWhere((id) => !waitingIds.contains(id));
+      _notDone.removeWhere((id, _) => !waitingIds.contains(id));
+      mentions = List.unmodifiable(
+        waitingRows
+            .map(SuperTabMention.fromJson)
+            .where((m) => !_done.contains(m.id)),
+      );
       error = null;
       _failed = false;
       // No longer open: answered, by this answer or another.
@@ -284,15 +308,27 @@ class SwarmAsks extends ChangeNotifier {
     return true;
   }
 
-  /// The reader is finished with [mention].
+  /// The reader is finished with [mention]: [finishing] at once, out of
+  /// [mentions] once the backend confirms it. A failure says so on that tag
+  /// alone ([notDone]); the tag stays, to be marked again.
   Future<bool> done(SuperTabMention mention) async {
+    if (_disposed || !_finishing.add(mention.id)) return false;
+    _notDone.remove(mention.id);
+    notifyListeners();
     try {
       await _command({'type': 'mention.done', 'mentionId': mention.id});
     } catch (_) {
-      error = 'Could not mark it done. Try again.';
-      if (!_disposed) notifyListeners();
+      if (_disposed) return false;
+      _finishing.remove(mention.id);
+      _notDone[mention.id] = 'Not marked done. Try again.';
+      notifyListeners();
       return false;
     }
+    if (_disposed) return false;
+    _finishing.remove(mention.id);
+    _done.add(mention.id);
+    mentions = List.unmodifiable(mentions.where((m) => m.id != mention.id));
+    notifyListeners();
     await load();
     unawaited(reader.refresh());
     return true;

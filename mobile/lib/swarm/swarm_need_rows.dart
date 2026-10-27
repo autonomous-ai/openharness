@@ -6,6 +6,7 @@ import '../phone/settings_row.dart';
 import '../phone/tty.dart';
 import '../phone/tty_controls.dart';
 import '../shared/theme/app_theme.dart';
+import 'swarm_asks.dart';
 import 'swarm_inbox.dart';
 import 'swarm_session.dart';
 
@@ -37,22 +38,7 @@ class SwarmNeedRow extends StatelessWidget {
       need: decision,
       onOpen: _open,
     ),
-    SwarmMentionNeed(:final mention) => SettingsRow(
-      key: ValueKey('swarm-need-${need.key}'),
-      title: '${mention.leadName} tagged you',
-      detail: [
-        _where(mention.projectName, mention.conversationTitle),
-        if (mention.text.isNotEmpty) mention.text,
-      ].join('\n'),
-      detailLines: 3,
-      trailing: TtyTextButton(
-        key: ValueKey('swarm-done-${mention.id}'),
-        label: 'Done',
-        onPressed: () =>
-            unawaited(session.inbox.asks(need.swarmId)?.done(mention)),
-      ),
-      onTap: _open,
-    ),
+    SwarmMentionNeed(:final mention) => _mentionRow(mention),
     SwarmWorkNeed(:final work) => SettingsRow(
       key: ValueKey('swarm-need-${need.key}'),
       title: work.status == 'blocked'
@@ -66,6 +52,29 @@ class SwarmNeedRow extends StatelessWidget {
       onTap: _open,
     ),
   };
+
+  /// A Lead's tag with Done: "Done…" the moment it is tapped, gone once
+  /// confirmed, and a failure said on the row.
+  Widget _mentionRow(SuperTabMention mention) {
+    final asks = session.inbox.asks(need.swarmId);
+    final finishing = asks?.finishing(mention) ?? false;
+    return SettingsRow(
+      key: ValueKey('swarm-need-${need.key}'),
+      title: '${mention.leadName} tagged you',
+      detail: [
+        _where(mention.projectName, mention.conversationTitle),
+        if (mention.text.isNotEmpty) mention.text,
+        ?asks?.notDone(mention),
+      ].join('\n'),
+      detailLines: 4,
+      trailing: TtyTextButton(
+        key: ValueKey('swarm-done-${mention.id}'),
+        label: finishing ? 'Done…' : 'Done',
+        onPressed: finishing ? null : () => unawaited(asks?.done(mention)),
+      ),
+      onTap: _open,
+    );
+  }
 }
 
 String _where(String project, String conversation) =>
