@@ -581,6 +581,56 @@ describe('a delivery poll or claim that keeps failing', () => {
     expect(t.core.turns.deliver).toHaveBeenCalledTimes(1)
   })
 
+  it('keeps a claim\'s growing wait through a failed list, until a list that is read says the delivery is gone', async () => {
+    const t = setup(), host = t.open()
+    let refuseList = false, refuseClaim = true
+    const claims = { n: 0 }
+    const original = vi.mocked(t.core.account.backend).getMockImplementation()!
+    vi.mocked(t.core.account.backend).mockImplementation(async (method, path, body) => {
+      const list = method === 'GET' && path.endsWith('/deliveries'), claim = method === 'POST' && path.endsWith('/deliveries/delivery')
+      if ((list && refuseList) || (claim && refuseClaim)) {
+        if (claim) claims.n++
+        return { status: 503, body: { success: false, error: { code: 'SWARM_BUSY', message: 'This Swarm is busy. Try again in a moment.' } } }
+      }
+      return original(method, path, body)
+    })
+    await host.tick()
+    expect(claims.n).toBe(1)
+    // The list fails while the claim waits 1 s, then waits 1 s itself.
+    refuseList = true; t.wait(1_000); await host.tick()
+    refuseList = false; t.wait(1_000); await host.tick()
+    expect(claims.n).toBe(2)
+    // Two failures in a row: 2 s, not 1 s again.
+    t.wait(1_999); await host.tick()
+    expect(claims.n).toBe(2)
+    t.wait(1); await host.tick()
+    expect(claims.n).toBe(3)
+  })
+
+  it('drops a claim\'s wait once a list that is read no longer has the delivery', async () => {
+    const t = setup(), host = t.open()
+    const claims = { n: 0 }
+    let gone = false
+    const original = vi.mocked(t.core.account.backend).getMockImplementation()!
+    vi.mocked(t.core.account.backend).mockImplementation(async (method, path, body) => {
+      if (method === 'GET' && path.endsWith('/deliveries') && gone) return { status: 200, body: { success: true, data: [] } }
+      if (method === 'POST' && path.endsWith('/deliveries/delivery')) {
+        claims.n++
+        return { status: 503, body: { success: false, error: { code: 'SWARM_BUSY', message: 'This Swarm is busy. Try again in a moment.' } } }
+      }
+      return original(method, path, body)
+    })
+    await host.tick()
+    t.wait(1_000); await host.tick()
+    expect(claims.n).toBe(2)
+    gone = true; t.wait(2_000); await host.tick()
+    gone = false; t.wait(0); await host.tick()
+    // Back again as a new delivery: asked at once, with a fresh 1 s wait.
+    expect(claims.n).toBe(3)
+    t.wait(1_000); await host.tick()
+    expect(claims.n).toBe(4)
+  })
+
   it('asks again for a delivery list the backend refuses only after the same growing wait', async () => {
     const t = setup(), host = t.open()
     const lists = failing(t, (method, path) => method === 'GET' && path.endsWith('/deliveries'))

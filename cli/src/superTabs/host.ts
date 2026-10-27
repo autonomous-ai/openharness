@@ -209,7 +209,7 @@ export class SuperTabHost {
   private nextReplacementsAt = 0
   private timer: ReturnType<typeof setTimeout> | null = null
   /** Per agent's delivery list and per delivery's claim, the failures in a row and when it may be asked again. */
-  private readonly deliveryRetries = new Map<string, { failures: number; retryAt: number }>()
+  private readonly deliveryRetries = new Map<string, { failures: number; retryAt: number; list?: string }>()
   private native: NativeRecorder | null = null
   private machines: ContributedMachines | null = null
   private readonly machineDeps: Partial<MachineDeps>
@@ -526,8 +526,8 @@ export class SuperTabHost {
     const retry = this.deliveryRetries.get(key)
     return !!retry && this.now() < retry.retryAt
   }
-  private retryLater(key: string): void {
-    const retry = this.deliveryRetries.get(key) ?? { failures: 0, retryAt: 0 }
+  private retryLater(key: string, list?: string): void {
+    const retry = this.deliveryRetries.get(key) ?? { failures: 0, retryAt: 0, ...(list ? { list } : {}) }
     retry.retryAt = this.now() + Math.min(DELIVERY_RETRY_MAX_MS, DELIVERY_RETRY_MS * 2 ** retry.failures++)
     this.deliveryRetries.set(key, retry)
   }
@@ -582,6 +582,8 @@ export class SuperTabHost {
     const stopKeys = new Set(data.filter(item => object(item).stopRequested === true).map(item => { const row = object(item); return `${row.tabId}:${object(row.agent).id}` }))
     for (const key of this.releaseAttempts.keys()) if (!stopKeys.has(key)) this.releaseAttempts.delete(key)
     const seen = new Set<string>()
+    /** The agents whose delivery list was read in this poll: only such a list can say a delivery is gone. */
+    const listsRead = new Set<string>()
     const running: HostAgent[] = []
     const leads = new Set<string>(), ended = new Set<string>()
     for (const item of data) {
@@ -615,6 +617,7 @@ export class SuperTabHost {
         if (this.stopped) return
         if (!Array.isArray(deliveries)) throw new Error('Invalid Super Tab delivery list.')
         listed = true
+        listsRead.add(listKey)
         this.deliveryRetries.delete(listKey)
         for (const item of deliveries) {
           const delivery = object(item)
@@ -629,7 +632,7 @@ export class SuperTabHost {
           try { await this.accept(target, delivery, path); this.deliveryRetries.delete(claimKey) } catch (error) {
             // Answered (or resolved by a person) between the roster read and this call: nothing is owed, and the
             // agent's other deliveries go on.
-            if (!(error instanceof SuperTabHostError) || error.code !== 'DELIVERY_RESOLVED') { this.retryLater(claimKey); throw error }
+            if (!(error instanceof SuperTabHostError) || error.code !== 'DELIVERY_RESOLVED') { this.retryLater(claimKey, listKey); throw error }
             this.deliveryRetries.delete(claimKey)
             this.retire(delivery.id as string)
           }
@@ -645,8 +648,12 @@ export class SuperTabHost {
     for (const [harnessId, state] of this.keepAlives) if (!leads.has(harnessId) && !state.running) this.keepAlives.delete(harnessId)
     for (const [key, state] of this.endings) if (!ended.has(key) && !state.running) this.endings.delete(key)
     for (const deliveryId of this.unreadable) if (!seen.has(deliveryId)) this.unreadable.delete(deliveryId)
-    for (const key of this.deliveryRetries.keys()) {
-      if (key.startsWith('claim:') ? !seen.has(key.slice('claim:'.length)) : !running.some(r => `list:${r.tabId}:${r.agent.id}` === key)) this.deliveryRetries.delete(key)
+    // A wait outlives a list that failed or was skipped: that says nothing of the delivery. It goes when a list that was read no
+    // longer has the delivery, or when its agent is no longer here.
+    for (const [key, retry] of this.deliveryRetries) {
+      const agentKey = retry.list ?? key
+      if (!running.some(r => `list:${r.tabId}:${r.agent.id}` === agentKey)) this.deliveryRetries.delete(key)
+      else if (key.startsWith('claim:') && listsRead.has(agentKey) && !seen.has(key.slice('claim:'.length))) this.deliveryRetries.delete(key)
     }
     for (const deliveryId of this.files.keys()) if (!this.journal.entries[deliveryId]) this.files.delete(deliveryId)
     for (const entry of Object.values(this.journal.entries)) {
