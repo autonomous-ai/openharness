@@ -2058,6 +2058,27 @@ describe('BackendSocket outbound queue', () => {
     }
   })
 
+  it('tells the gateway a launch an agent started, apart from a person\'s', async () => {
+    const socket = relaySocket('token')
+    bindLaunchRequests(socket)
+    const signals: Array<Record<string, unknown>> = []
+    vi.spyOn(gatewayOf(socket), 'usageLaunch').mockImplementation((signal) => { signals.push(signal as never) })
+    socket.onCreateAgent = vi.fn(async () => ({ ok: false as const, error: 'SPAWN_FAILED' }))
+    socket.registerLocalClient('local:started-by', { sendFrame: () => true, sendBinary: () => true })
+    try {
+      const agentId = randomUUID(), personId = randomUUID()
+      socket.handleLocalFrame('local:started-by', { type: 'agent_create', payload: { requestId: 'agent', creationId: agentId, engine: 'codex',
+        cwd: '/tmp/work', startedBy: 'agent', parentAgentId: 'parent-agent' } })
+      socket.handleLocalFrame('local:started-by', { type: 'agent_create', payload: { requestId: 'person', creationId: personId, engine: 'codex', cwd: '/tmp/work' } })
+      await vi.waitFor(() => expect(signals.filter(signal => signal.phase === 'start')).toHaveLength(2))
+      expect(signals).toContainEqual({ id: agentId, phase: 'start', engine: 'codex', agentStarted: true })
+      expect(signals).toContainEqual({ id: personId, phase: 'start', engine: 'codex' })
+    } finally {
+      await socket.unregisterLocalClient('local:started-by')
+      await socket.stop()
+    }
+  })
+
   it('tells the gateway a launch\'s engine and the agent it created, and then that agent\'s start failing', async () => {
     // A create whose engine then did not start was counted as a launch that worked: the reply had said created
     // (core/agents/newPane.ts; production counters, 2026-10-16). Only fixed names and the agent's id leave here.
@@ -2979,6 +3000,19 @@ describe('agent_restart RPC', () => {
       requestId: 'stale-stop', error: 'SESSION_CHANGED', detail: 'This conversation changed. Refresh and review it before stopping.',
     } }))
     expect(stop).not.toHaveBeenCalled()
+    await socket.unregisterLocalClient('local:restart'); await socket.stop()
+  })
+
+  it.each([false, true])('counts which check refused a resume\'s preparation (receipt: %s)', async withReceipt => {
+    const { socket } = localSocket()
+    const counted: string[] = []
+    vi.spyOn(gatewayOf(socket), 'usageCounter').mockImplementation(metric => { counted.push(metric) })
+    bindLaunchRequests(socket, { resume: vi.fn(async () => ({ ok: false as const, error: 'RESUME_PREPARATION_FAILED', reason: 'changed_during', detail: 'PRIVATE' })) })
+    socket.handleLocalFrame('local:restart', { type: 'agent_resume', payload: { requestId: 'prepare', agentId: 'agent-1',
+      ...(withReceipt ? { creationId: `resume-${randomUUID()}` } : {}) } })
+    await vi.waitFor(() => expect(counted).toContain('request_app_resume_preparation_changed_during'))
+    expect(counted).toContain('request_app_resume_reason_preparation_failed')
+    expect(JSON.stringify(counted)).not.toContain('PRIVATE')
     await socket.unregisterLocalClient('local:restart'); await socket.stop()
   })
 

@@ -818,26 +818,34 @@ void main() {
       addTearDown(() => appLog = previous);
     });
 
-    test(
-      'records how long a read took, its kind and last change, nothing it said',
-      () async {
-        final server = ConversationServer();
-        server.state['name'] = 'PRIVATE_SWARM_NAME';
-        final c = server.controller();
-        await c.refresh();
-        final read = log.lines.where((l) => l.startsWith('debug swarm')).single;
-        expect(
-          read,
-          matches(
-            RegExp(
-              r'^debug swarm state read in \d+ ms '
-              r'\((first load|changes), last changed \d+\)$',
-            ),
+    test('records how long a read took, its kind and last change, nothing it said', () async {
+      final server = ConversationServer();
+      server.state['name'] = 'PRIVATE_SWARM_NAME';
+      final c = server.controller();
+      await c.refresh();
+      final lines = log.lines.where((l) => l.startsWith('debug swarm'));
+      expect(lines, hasLength(2));
+      expect(
+        lines.first,
+        matches(
+          RegExp(
+            r'^debug swarm state read in \d+ ms '
+            r'\((first load|changes), last changed \d+\)$',
           ),
-        );
-        expect(log.lines.join('\n'), isNot(contains('PRIVATE')));
-      },
-    );
+        ),
+      );
+      // A first open also says where its time went.
+      expect(
+        lines.last,
+        matches(
+          RegExp(
+            r'^debug swarm first open: sidebar after \d+ ms, chat after \d+ ms '
+            r'\(state read \d+ ms, first load, no saved view\)$',
+          ),
+        ),
+      );
+      expect(log.lines.join('\n'), isNot(contains('PRIVATE')));
+    });
 
     test('records a failure with how long it took and what kind, not what was said', () async {
       final server = ConversationServer();

@@ -48,7 +48,7 @@ export type ForkAgent = NonNullable<BackendSocket['onForkAgent']>
  *  actually resumed the prior conversation or had to fall back to a fresh one (core/agents/restart.ts). */
 export type RestartAgent = (agentId: string) => Promise<
   { ok: true; session: RegisteredSession; resumed: boolean }
-  | { ok: false; error: string; detail?: string }
+  | { ok: false; error: string; detail?: string; reason?: string }
 >
 /** Resumes stopped work directly, or attaches if it is already running. Never replaces a live process
  *  and never falls back to a fresh conversation (core/agents/lifecycle.ts). */
@@ -259,7 +259,8 @@ export function createLaunchRequests({ receipts, createAgent, prepareCreate, pre
     // so clients can distinguish "safe to correct the choices" from "outcome still unknown".
     if (status.state === 'failed') {
       return { state: 'failed', ...(status.preparedFolder ? { preparedFolder: status.preparedFolder } : {}), failure: { code: status.error,
-        ...(status.detail ? { detail: status.detail } : {}), ...(status.existingFolder ? { existingFolder: status.existingFolder } : {}) } }
+        ...(status.reason ? { reason: status.reason } : {}), ...(status.detail ? { detail: status.detail } : {}),
+        ...(status.existingFolder ? { existingFolder: status.existingFolder } : {}) } }
     }
     return status
   }
@@ -575,7 +576,8 @@ export function createLaunchRequests({ receipts, createAgent, prepareCreate, pre
           // RESTART_FAILED can follow an unobserved relaunch. Never silently
           // replace that process again when a caller checks this intent.
           if (result.error === 'RESTART_FAILED' || result.error === 'RESUME_UNCONFIRMED') return { state: 'unconfirmed' }
-          return { state: 'failed', error: result.error, ...(result.detail ? { detail: result.detail.slice(0, 2000) } : {}) }
+          return { state: 'failed', error: result.error, ...(result.reason ? { reason: result.reason } : {}),
+            ...(result.detail ? { detail: result.detail.slice(0, 2000) } : {}) }
         }).then(async (status) => {
           reply({ creationId, ...await creationStatusPayload(status) })
         }).catch(() => reply({ error: 'INTERNAL' }))
@@ -586,7 +588,7 @@ export function createLaunchRequests({ receipts, createAgent, prepareCreate, pre
     }
     const result = await invoke()
     if (!result.ok) {
-      reply(result.detail ? { error: result.error, detail: result.detail } : { error: result.error })
+      reply({ error: result.error, ...(result.reason ? { reason: result.reason } : {}), ...(result.detail ? { detail: result.detail } : {}) })
       return
     }
     reply({ agent: await toProject(result.session), resumed: result.resumed })

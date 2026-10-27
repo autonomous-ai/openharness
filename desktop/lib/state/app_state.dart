@@ -98,6 +98,7 @@ import '../core/harness_file_store.dart';
 import '../super_tabs/attachment_upload.dart';
 import '../super_tabs/client.dart';
 import '../super_tabs/controller.dart';
+import '../super_tabs/view_store.dart';
 import '../super_tabs/notifications.dart' show superTabMentionNotice;
 import '../measurement/setup_preference_store.dart';
 import '../devices/device_hosts.dart';
@@ -330,6 +331,15 @@ class AgentCreationAttempt {
   bool _codexHomeTrusted = false;
 
   bool get awaitingConfirmation => _awaitingConfirmation;
+
+  /// What the machine answered a create, for a test's fake `createAgent`: the harness it made, or that the
+  /// start is still being confirmed.
+  @visibleForTesting
+  void answeredForTest({String? agentId, bool awaitingConfirmation = false}) {
+    _agentId = agentId;
+    _awaitingConfirmation = awaitingConfirmation;
+  }
+
   bool get canCancelPending => _awaitingConfirmation && _holdReason != null;
   bool get canFollowPending =>
       _awaitingConfirmation && (_starting || _holdReason != null);
@@ -1742,6 +1752,7 @@ class AppNotifier extends ChangeNotifier {
 
   late final superTabs = SuperTabClient(
     storage: localStore ?? HarnessFileStore.shared,
+    viewStorage: localStore ?? swarmViewStore(),
     upload: uploadWith(() => api),
     onMention: superTabMentionNotice(systemNotifications),
     onTagCounts: notifyListeners,

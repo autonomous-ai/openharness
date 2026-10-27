@@ -1024,6 +1024,17 @@ describe('agent_resume and agent_restart', () => {
     expect(await bare.relaunch('agent_restart', { agentId: 'a1' })).toStrictEqual({ error: 'AGENT_NOT_FOUND' })
   })
 
+  // Which check refused a resume's history (lib/resumeAgentService.ts) reaches the reply, so its counter can name it.
+  it('pass a refusal\'s reason on, directly and through a receipt', async () => {
+    const refused = { ok: false as const, error: 'RESUME_PREPARATION_FAILED', reason: 'invalid_json', detail: 'Could not prepare the saved conversation.' }
+    const direct = setup({}, { resume: vi.fn(async () => refused) })
+    expect(await direct.relaunch('agent_resume', { agentId: 'a1' })).toStrictEqual({ error: 'RESUME_PREPARATION_FAILED', reason: 'invalid_json', detail: 'Could not prepare the saved conversation.' })
+    const kept = setup({}, { resume: vi.fn(async () => refused) })
+    await kept.relaunch('agent_resume', { agentId: 'a1', creationId: CREATION })
+    await vi.waitFor(() => expect(kept.replies).toStrictEqual([{ creationId: CREATION, state: 'failed',
+      failure: { code: 'RESUME_PREPARATION_FAILED', reason: 'invalid_json', detail: 'Could not prepare the saved conversation.' } }]))
+  })
+
   it('keep a receipt: one relaunch per creation id, an unobserved one unconfirmed, a refusal failed and cut short', async () => {
     const { relaunch, replies, resume } = setup()
     await relaunch('agent_resume', { agentId: 'a1', creationId: CREATION, permissionMode: 'auto' })

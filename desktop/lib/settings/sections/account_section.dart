@@ -83,9 +83,12 @@ class AccountSection extends StatelessWidget {
             ? 'Your Harness sign-in in this browser.'
             : 'Your Harness sign-in on this computer.',
         child: SingleChildScrollView(
-          // Only where Super Tabs are kept on this device (the web's) does
-          // Account say so; Desktop keeps none and its page is as it was.
-          child: notifier.superTabs.reading.drawsSaved
+          // Only the browser's reading, which draws a kept view at once, says
+          // it keeps Super Tabs; Desktop's, drawn once confirmed and another
+          // account's forgotten at sign-in, leaves its page as it was.
+          child:
+              notifier.superTabs.reading.drawsSaved &&
+                  !notifier.superTabs.reading.confirmsSaved
               ? Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
