@@ -1015,13 +1015,14 @@ it.each([['changed', { ok: true, stdout: ' M src/a.ts\n', stderr: '' }], ['unrea
     if (path.includes('/hosts/')) return { status: 200, body: { data: hostForm(withdrawn ? [] : [{ tabId: 'tab', agent: target, stopRequested: true }], { tabs: ['tab'] }) } }
     if (method === 'GET') return { status: 200, body: { data: swarmReply(path, { agents: [target], conversations: [] }) } }
     commands.push((body as any)?.command)
+    if ((body as any)?.command?.type === 'agent.stopLease') return { status: 200, body: { data: { result: { expiresAt: Date.now() + 120_000, durationMs: 120_000 } } } }
     if ((body as any)?.command?.type === 'agent.stopRefused') withdrawn = true
     return { status: 200, body: { data: {} } }
   }
   await host.tick()
   await vi.waitFor(() => expect(withdrawn).toBe(true))
   expect(git).toHaveBeenCalledWith('/work/harness', ['status', '--porcelain'])
-  expect(commands).toEqual([{ type: 'agent.stopRefused', agentId: 'agent', releaseId: 'idle-1' }])
+  expect(commands).toEqual([{ type: 'agent.stopLease', agentId: 'agent', releaseId: 'idle-1' }, { type: 'agent.stopRefused', agentId: 'agent', releaseId: 'idle-1' }])
   expect(close).not.toHaveBeenCalled()
 })
 
@@ -1037,6 +1038,7 @@ it('retries a withdrawal the backend refused, reading the folder again after its
   t.core.account.backend = async (method, path, body) => {
     if (path.includes('/hosts/')) return { status: 200, body: { data: hostForm(withdrawn ? [] : [{ tabId: 'tab', agent: target, stopRequested: true }], { tabs: ['tab'] }) } }
     if (method === 'GET') return { status: 200, body: { data: swarmReply(path, { agents: [target], conversations: [] }) } }
+    if ((body as any)?.command?.type === 'agent.stopLease') return { status: 200, body: { data: { result: { expiresAt: Date.now() + 120_000, durationMs: 120_000 } } } }
     if ((body as any)?.command?.type === 'agent.stopRefused' && ++attempts === 1) return { status: 503, body: { error: 'SWARM_BUSY', message: 'Busy' } }
     if ((body as any)?.command?.type === 'agent.stopRefused') withdrawn = true
     return { status: 200, body: { data: {} } }
@@ -1052,6 +1054,36 @@ it('retries a withdrawal the backend refused, reading the folder again after its
   await vi.waitFor(() => expect(withdrawn).toBe(true))
   expect(attempts).toBe(2)
   expect(git).toHaveBeenCalledTimes(2)
+  expect(close).not.toHaveBeenCalled()
+})
+
+// Review of #1807: the lease answer can take up to its two minutes, so the folder is read after it, right before the close.
+it('withdraws an idle stop whose folder changed while the close lease was being granted', async () => {
+  let status = { ok: true, stdout: '', stderr: '' }
+  const git = vi.fn(async () => status)
+  const t = setup(), host = t.open({ machines: { git } })
+  vi.mocked(t.core.agents.byAgent).mockReturnValue({ agentId: 'harness', sessionId: 'native', registeredAt: 0, startedBy: 'agent', cwd: '/work/harness' } as never)
+  const target = { id: 'agent', harnessId: 'harness', machineId: 'machine-1', workDecision: 'stop', releaseId: 'idle-1', idleStop: { previous: 'awaiting' },
+    startedSession: { creationId: 'super-original-creation', sessionId: 'native', createdAt: new Date(0).toISOString() } }
+  const close = vi.fn(async () => ({ closed: true as const }))
+  t.core.agents.closeSwarm = close
+  let grant = () => {}, asked = false, withdrawn = false
+  t.core.account.backend = async (method, path, body) => {
+    if ((body as any)?.command?.type === 'agent.stopLease') {
+      asked = true
+      await new Promise<void>(resolve => { grant = resolve })
+      return { status: 200, body: { data: { result: { expiresAt: Date.now() + 120_000, durationMs: 120_000 } } } }
+    }
+    if (path.includes('/hosts/')) return { status: 200, body: { data: hostForm(withdrawn ? [] : [{ tabId: 'tab', agent: target, stopRequested: true }], { tabs: ['tab'] }) } }
+    if (method === 'GET') return { status: 200, body: { data: swarmReply(path, { agents: [target], conversations: [] }) } }
+    if ((body as any)?.command?.type === 'agent.stopRefused') withdrawn = true
+    return { status: 200, body: { data: {} } }
+  }
+  await host.tick()
+  await vi.waitFor(() => expect(asked).toBe(true))
+  status = { ok: true, stdout: ' M src/a.ts\n', stderr: '' }
+  grant()
+  await vi.waitFor(() => expect(withdrawn).toBe(true))
   expect(close).not.toHaveBeenCalled()
 })
 

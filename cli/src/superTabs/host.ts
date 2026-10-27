@@ -470,15 +470,6 @@ export class SuperTabHost {
             return
           }
           if (creation?.state !== 'created') throw new Error('The original Swarm launch could not be confirmed. Stop will retry with backoff.')
-          // The idle check's stop trusted a report up to a minute old (machines.ts): an edit since, or a folder git cannot
-          // read now, withdraws it instead (review of #1807). A stop its Lead asked for closes as before.
-          if (member.idleStop && (!native.cwd || await uncommittedIn(native.cwd, this.machineDeps.git) !== false)) {
-            // A failed withdrawal retries with backoff, reading the folder again.
-            await backend(this.core, 'POST', `/api/super-tabs/${tabId}/commands`, { operationId: `idle-stop-withdrawn-${agent.releaseId ?? agent.id}`,
-              asAgentId: agent.id, command: { type: 'agent.stopRefused', agentId: agent.id, releaseId: agent.releaseId } })
-            attempt.retryAt = Infinity
-            return
-          }
           if (this.stopped) return
           // Start locally before asking: server clock skew cannot extend authority, and network delay consumes it.
           const leaseRequestedAt = Date.now()
@@ -487,6 +478,16 @@ export class SuperTabHost {
             command: { type: 'agent.stopLease', agentId: agent.id, releaseId: agent.releaseId },
           })).result)
           if (typeof leased.durationMs !== 'number' || !Number.isFinite(leased.durationMs) || leased.durationMs <= 0 || leased.durationMs > 120_000) throw new Error('The host could not reserve this native close. Remove a stuck contribution or update its backend.')
+          // The idle check's stop trusted a report up to a minute old (machines.ts): an edit since, or a folder git cannot
+          // read now, withdraws it instead (review of #1807). Read after the lease, whose answer can take minutes, so it
+          // is the last thing before the close. A stop its Lead asked for closes as before.
+          if (member.idleStop && (!native.cwd || await uncommittedIn(native.cwd, this.machineDeps.git) !== false)) {
+            // A failed withdrawal retries with backoff, reading the folder again; the unused lease simply expires.
+            await backend(this.core, 'POST', `/api/super-tabs/${tabId}/commands`, { operationId: `idle-stop-withdrawn-${agent.releaseId ?? agent.id}`,
+              asAgentId: agent.id, command: { type: 'agent.stopRefused', agentId: agent.id, releaseId: agent.releaseId } })
+            attempt.retryAt = Infinity
+            return
+          }
           result = await this.core.agents.closeSwarm({ agentId: agent.harnessId, expiresAt: leaseRequestedAt + leased.durationMs,
             creationId: identity.creationId, sessionId: identity.sessionId, createdAt: identity.createdAt })
         }
