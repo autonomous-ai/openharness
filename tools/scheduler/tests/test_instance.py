@@ -77,6 +77,18 @@ class OptionsTest(unittest.TestCase):
                              [model('opus'), model('gpt', engine='codex')]))
         self.assertEqual([o.model for o in options(inst, inst.tasks[0])], ['opus'])
 
+    def test_a_task_limited_to_some_machines_and_models_is_offered_only_those(self):
+        # The owner's rules for the task's project: only machine m2, and no Sonnet.
+        inst = load(instance([task('a', machines=['m2'], models=['opus'])], [machine('m1'), machine('m2')],
+                             [model('opus'), model('sonnet')]))
+        self.assertEqual([(o.machine, o.model) for o in options(inst, inst.tasks[0])], [('m2', 'opus')])
+
+    def test_refuses_a_task_limited_to_an_unknown_machine_or_model(self):
+        with self.assertRaisesRegex(InstanceError, 'a names unknown machine z'):
+            load(instance([task('a', machines=['z'])], [machine('m')], [model('opus')]))
+        with self.assertRaisesRegex(InstanceError, 'a names unknown model z'):
+            load(instance([task('a', models=['z'])], [machine('m')], [model('opus')]))
+
     def test_a_model_limited_to_some_machines_is_offered_only_there(self):
         inst = load(instance([task('a')], [machine('m1'), machine('m2')], [model('local', machines=['m2'])]))
         self.assertEqual([o.machine for o in options(inst, inst.tasks[0])], ['m2'])
