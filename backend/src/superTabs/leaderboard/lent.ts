@@ -1,6 +1,7 @@
 /**
  * Lent: agent-hours Swarm agents ran on a person's contributed machine, added up from that machine's readings and kept on
- * its contribution by week (docs/swarms.md, Leaderboard). Agents of private chats never count.
+ * its contribution by week (docs/swarms.md, Leaderboard). Agents of private chats never count, nor Leads: a Lead's session is
+ * confidential coordination, not lent build work (Lead's ruling on the review of #1762).
  */
 import { MACHINE_FRESH_MS, type ContributedMachine } from '../machines.js'
 import type { SuperTabState } from '../model.js'
@@ -19,7 +20,7 @@ export function accrueLent(state: SuperTabState, pool: ContributedMachine, now: 
   const running = new Set(previous.runningHarnessIds)
   const privateChats = state.conversations.filter(c => c.audience)
   const counted = state.agents.filter(a => a.machineId === pool.machineId && running.has(a.harnessId)
-    && (!!ledProject(state, a.id) || !privateChats.some(c => c.agentIds.includes(a.id))))
+    && !ledProject(state, a.id) && !privateChats.some(c => c.agentIds.includes(a.id)))
   if (!elapsed || !counted.length) return
   const week = weekStart(now)
   const kept = (pool.lent ?? []).filter(l => l.week > week - LEDGER_WEEKS * WEEK_MS)

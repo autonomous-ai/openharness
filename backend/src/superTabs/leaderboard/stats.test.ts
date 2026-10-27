@@ -160,6 +160,16 @@ describe('agents waiting on a person now', () => {
     expect(Object.keys(view.waiting.people[0]!).sort()).toEqual(['conversationIds', 'count', 'personId'])
   })
 
+  it('drops an answered item at once, though its worker has not moved on yet (review of #1762)', () => {
+    const answered = group({ status: 'needs_human' }), open = group({ status: 'needs_human' })
+    answered.ledger = { waiting: { assignmentId: answered.assignment!.id, since: WEEK, messageId: 'm', answeredAt: WEEK + HOUR } }
+    expect(board(swarm(), [answered, open]).waiting).toEqual({ total: 1, people: [{ personId: 'ken', count: 1, conversationIds: [open.id] }] })
+  })
+
+  it('keeps showing an item that was waiting before answers were recorded', () => {
+    expect(board(swarm(), [group({ status: 'needs_human', ledger: { askedAt: WEEK } })]).waiting.total).toBe(1)
+  })
+
   it('waits on the project owner once the requester has left the Swarm', () => {
     const state = swarm()
     state.people = state.people.filter(p => p.id !== 'tony')

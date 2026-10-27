@@ -127,7 +127,18 @@ describe('who unblocks waiting work', () => {
     f.at(10_000 + 3 * 3_600_000)
     f.say(id, owner)
     expect(f.group(id).ledger?.unblocks).toEqual([{ personId: 'owner', at: 10_000 + 3 * 3_600_000, waitedMs: 3 * 3_600_000 }])
-    expect(f.group(id).ledger?.waiting).toBeUndefined()
+    expect(f.group(id).ledger?.waiting).toEqual({ assignmentId, since: 10_000, messageId: expect.any(String), answeredAt: 10_000 + 3 * 3_600_000 })
+  })
+
+  it('opens a new wait when the agent asks again after an answer', () => {
+    const f = fixture(), id = f.create(), { worker, assignmentId } = f.assign(id)
+    f.status(id, assignmentId, worker, 'needs_human', 'Flag?')
+    f.say(id, owner)
+    f.at(50_000)
+    f.status(id, assignmentId, worker, 'needs_human', 'And the default?')
+    expect(f.group(id).ledger?.waiting).toEqual({ assignmentId, since: 50_000, messageId: expect.any(String) })
+    f.say(id, owner, 'Off.')
+    expect(f.group(id).ledger?.unblocks).toHaveLength(2)
   })
 
   it('counts one answer per wait: a second post earns nothing more', () => {
@@ -178,6 +189,15 @@ describe('who unblocks waiting work', () => {
     const f = fixture(), id = f.create(), { worker, assignmentId } = f.assign(id)
     f.status(id, assignmentId, worker, 'needs_human', 'Flag?')
     f.run({ type: 'work.cancel', conversationId: id, assignmentId, reason: 'Not needed' })
+    f.say(id, owner)
+    expect(f.group(id).ledger?.unblocks).toBeUndefined()
+  })
+
+  it('credits nothing against a wait left from an earlier attempt', () => {
+    const f = fixture(), id = f.create(), { worker, assignmentId } = f.assign(id)
+    f.status(id, assignmentId, worker, 'needs_human', 'Flag?')
+    // As a group from before answers were recorded reads: the wait on record is another attempt's.
+    f.group(id).ledger!.waiting!.assignmentId = 'earlier-attempt'
     f.say(id, owner)
     expect(f.group(id).ledger?.unblocks).toBeUndefined()
   })

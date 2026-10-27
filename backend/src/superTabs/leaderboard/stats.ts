@@ -6,7 +6,7 @@
 import type { ContributedMachine } from '../machines.js'
 import { isLeads, type Conversation, type SuperTabState } from '../model.js'
 import { canReadProject, projectOf } from '../projects.js'
-import { waitedOn } from './record.js'
+import { waitedOn, waitsNow } from './record.js'
 import { DAY_MS, WEEK_MS } from './week.js'
 import type { Leaderboard, Medal, PersonScore, WeekGoal } from './contract.js'
 
@@ -79,7 +79,7 @@ const open = (group: Conversation): boolean => !group.archived && group.ledger?.
 /** Who agents wait on now and how many items each: in name order, never ranked (the mockup's "Kind" rule). */
 function waitingNow(state: SuperTabState, shared: Conversation[]): Leaderboard['waiting'] {
   const byPerson = new Map<string, string[]>()
-  for (const group of shared.filter(g => !g.archived && g.assignment?.status === 'needs_human')) {
+  for (const group of shared.filter(g => !g.archived && waitsNow(g))) {
     const personId = waitedOn(state, group)
     byPerson.set(personId, [...byPerson.get(personId) ?? [], group.id])
   }

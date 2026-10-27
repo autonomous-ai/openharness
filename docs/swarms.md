@@ -205,7 +205,8 @@ Each person has three numbers:
   when the group has none. 1 point each, plus 1 point for every 2 hours the agents
   waited for those answers.
 - **Lent**: hours Swarm agents ran on the person's contributed machines, added up
-  from each machine's readings. 1 point for every 10 hours.
+  from each machine's readings. A product manager's session doesn't count: it
+  coordinates in confidence and doesn't build. 1 point for every 10 hours.
 
 The top three get medals, and people with the same points share a place. A
 streak counts the days in a row, up to today, with a shipped request. Tapping a
@@ -216,7 +217,7 @@ shipping with the week before. Weeks run from Monday 00:00 UTC, and the week
 picker reaches back three weeks.
 
 **Agents waiting on a person now** lists who agents are waiting on and how many
-items each, in name order. It is never ranked and never earns points. **Answer**
+items each, in name order. An item leaves the list as soon as it is answered. It is never ranked and never earns points. **Answer**
 opens the reader's own waiting item, or the first one when none waits on them.
 
 Only facts count, never text. The leaderboard records when work was asked for and

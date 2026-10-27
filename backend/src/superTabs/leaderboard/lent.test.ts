@@ -55,10 +55,8 @@ describe('lent agent-hours from machine readings', () => {
     expect(pool.lent).toBeUndefined()
   })
 
-  it('still counts a project\'s Lead, which every private chat of its project includes', () => {
-    const chat: Conversation = { id: 'chat', title: 'Chat', leadId: 'lead-agent', agentIds: ['lead-agent'], archived: false, brief: '', checks: [], assignment: null,
-      lastMessageSequence: 0, audience: { people: [{ id: 'owner', generation: 'tab' }] } }
-    const pool = machine(['h-lead-agent'], MONDAY), state = swarm(pool, [agent('lead-agent')], [chat])
+  it('leaves out a project\'s Lead: its session is confidential coordination, not lent build work (review of #1762)', () => {
+    const pool = machine(['h-lead-agent', 'h-builder'], MONDAY), state = swarm(pool, [agent('lead-agent'), agent('builder')])
     state.conversations.find(c => c.id === 'lead')!.leadId = 'lead-agent'
     accrueLent(state, pool, MONDAY + 10_000)
     expect(pool.lent).toEqual([{ week: MONDAY, agentMs: 10_000 }])
