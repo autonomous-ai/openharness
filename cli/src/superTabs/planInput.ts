@@ -206,8 +206,12 @@ export function planSetup(input: { state: Json; policy: Policy; leadId: string; 
   }
 
   const byGroup = new Map(open.map(c => [String(c.id), rulesOf(projectOf(c))]))
+  // Diego's issue, 2026-10-27: an assessed group that is not open (a typo, a finished group) was dropped without a word, and
+  // a group two others wait for was listed twice.
+  ignored.push(...Object.keys(request).filter(id => !openIds.has(id)))
   return {
-    instance: { tasks, machines, models, accounts: [...accounts.values()] }, rows, titles, machineNames, estimates, ignored, leftOut,
+    instance: { tasks, machines, models, accounts: [...accounts.values()] }, rows, titles, machineNames, estimates,
+    ignored: [...new Set(ignored)], leftOut,
     effortFor: (group, row) => liftEffort(byGroup.get(group) ?? [], rows[row]!.engine, rows[row]!.effort),
   }
 }

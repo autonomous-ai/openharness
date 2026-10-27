@@ -76,6 +76,16 @@ describe('models in its own process', () => {
     expect(service.stop).toHaveBeenCalled()
   })
 
+  // HARNESS_SWARM: a Swarm's grid and shares come from the Swarm's side, which its process loads only while it is on.
+  it('hands models the Swarm\'s side while it is on, and none without it', () => {
+    const given: unknown[] = []
+    const start = (_core: CoreApi, ports: CorePorts, swarm?: unknown) => { given.push(swarm); ports.models = fakeModels().port; return {} }
+    const swarm = { SwarmApiShares: vi.fn() } as never
+    setup({ start, swarm })
+    setup({ start })
+    expect(given).toEqual([swarm, undefined])
+  })
+
   it('a start that fills no port is no models at all', () => {
     expect(() => runModelsService({ dataDir: '/data', socketPath: '/s', machineId: 'm', token: 't', run: () => ({ stop: vi.fn() }), start: () => ({}) }))
       .toThrow('models did not start')

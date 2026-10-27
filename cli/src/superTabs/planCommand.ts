@@ -50,7 +50,7 @@ function packageFolder(root: string, files: Record<string, string>): { dir: stri
 }
 
 /** Runs `python -m scheduler plan` on [instance], with the package written once per version under the data folder. */
-export async function runSolver(instance: Json, options: { dataDir: string; python?: string; pythonPath?: string[] }): ReturnType<SolverRun> {
+export async function runSolver(instance: Json, options: { dataDir: string; python?: string; pythonPath?: string[]; timeoutMs?: number }): ReturnType<SolverRun> {
   const files = schedulerFiles()
   const version = createHash('sha256').update(JSON.stringify(files)).digest('hex').slice(0, 16)
   const { dir: root, own } = packageFolder(join(options.dataDir, 'scheduler', version), files)
@@ -59,13 +59,23 @@ export async function runSolver(instance: Json, options: { dataDir: string; pyth
     const child = spawn(python, ['-m', 'scheduler', 'plan', '--time-limit', String(TIME_LIMIT_SECONDS)], {
       cwd: root, env: { ...process.env, PYTHONPATH: [...(options.pythonPath ?? []), root].join(delimiter) }, stdio: ['pipe', 'pipe', 'pipe'],
     })
+    // Diego's issue, 2026-10-27: --time-limit is the solver's own promise; a python3 stuck on an import or in a deadlock left
+    // the command waiting forever and its private package copy on disk. Past the limit and a margin to start, it is killed.
+    const timer = setTimeout(() => {
+      child.kill('SIGKILL')
+      resolve({ error: 'SOLVER_FAILED', detail: 'timed out' })
+    }, options.timeoutMs ?? TIME_LIMIT_SECONDS * 1000 + 20_000)
     let out = '', err = ''
     child.stdout.on('data', chunk => { out += chunk })
     child.stderr.on('data', chunk => { err += chunk })
-    child.on('error', (error: NodeJS.ErrnoException) => resolve(error.code === 'ENOENT'
-      ? { error: 'PYTHON_MISSING', detail: `Python 3 is not installed on this machine (${python}). ${INSTALL}` }
-      : { error: 'SOLVER_FAILED', detail: error.message }))
+    child.on('error', (error: NodeJS.ErrnoException) => {
+      clearTimeout(timer)
+      resolve(error.code === 'ENOENT'
+        ? { error: 'PYTHON_MISSING', detail: `Python 3 is not installed on this machine (${python}). ${INSTALL}` }
+        : { error: 'SOLVER_FAILED', detail: error.message })
+    })
     child.on('close', code => {
+      clearTimeout(timer)
       let value: Json | null = null
       try { value = object(JSON.parse(out)) } catch { /* Not JSON: said below with the solver's own words. */ }
       if (value && typeof value.error === 'string') resolve({ error: value.error, detail: String(value.detail ?? '') })

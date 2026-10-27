@@ -23,7 +23,6 @@ import type { NativeTurnRead } from '../lib/nativeTurnObservations.js'
 import type { ReviewedAnswer } from '../cable/questionInbox.js'
 import type { AgentEngine } from '../engines/types.js'
 import type { AppSwarms } from '../cable/cableSession.js'
-import type { LeadRecap, SwarmCard } from '../superTabs/cards.js'
 import type { UnreadNotification } from '../lib/notificationRead.js'
 import type { AutonomousDeviceAgent, AutonomousDeviceDelivery, AutonomousDeviceReceipt } from '../lib/autonomous-device/service.js'
 import type { StoreAgent } from '../lib/autonomous-device/store.js'
@@ -1190,12 +1189,47 @@ export interface SuperTabAttention {
   text: string
 }
 
-/** The Super Tab service's door into the core (core/superTabAttention.ts): the waits of its members here. */
+/** What the core hands the Swarm's own close and reopen (superTabs/inCore/agents.ts): the live registry, the stopped
+ *  records, and the core's close, resume and creation receipts. */
+export interface SwarmAgentDeps {
+  byAgent(agentId: string): RegisteredSession | undefined
+  stoppedIds(): string[]
+  closeAgent?: (request: AgentCloseRequest) => Promise<AgentCloseResult>
+  resumeAgent?: (agentId: string) => Promise<{ ok: true } | { ok: false; error: string; detail?: string }>
+  creationStatus?: (creationId: string) => Promise<CreationObservation | null>
+}
+export type SwarmAgents = Required<Pick<CoreApi['agents'], 'closeSwarm' | 'keepLeadAlive' | 'closeMember'>>
+
+type SwarmSkill = NonNullable<RegisteredSession['swarmSkill']>
+/** The Swarm's part of an agent's start (superTabs/inCore/launch.ts), handed to the launches while the Swarm is on: the
+ *  roles and skill modes a start may ask for, the role's skill written into the project folder (what the engine is told
+ *  to read), and the Harness GitHub App's git and gh for another person's project work (null where it has none). */
+export interface SwarmLaunch {
+  role(value: unknown): value is SwarmSkill['role']
+  mode(value: unknown): value is NonNullable<SwarmSkill['mode']>
+  prepare(cwd: string, skill: SwarmSkill): { instructions: string }
+  github(key: string): { env: Record<string, string>; clearEnv: string[] } | null
+}
+
+/** Fill a missing Swarm role of an older Swarm session at its restart or resume (superTabs/inCore/adoption.ts): the row
+ *  to launch, or null when the launch is no longer this one's. Absent while the Swarm is off. */
+export type AdoptSwarmSkill = (session: RegisteredSession, current: () => boolean) => Promise<RegisteredSession | null>
+
+export type LeadState = 'ask' | 'stuck' | 'work' | 'done'
+/** One Swarm's Lead on a Harness Pro's card (superTabs/cards.ts). `order`: the project's index in the Swarm (the app's
+ *  order), so a dial can show the Leads as the app does whatever their urgency. */
+export interface SwarmLead { id: string; projectId: string; project: string; engine: string; owner: string; local: string; state: LeadState; order: number; since?: number }
+/** One Swarm this account is in, as a Harness Pro's card: its Leads, most urgent first. */
+export interface SwarmCard { id: string; name: string; count: number; leads: SwarmLead[] }
+/** A Lead's last message, for its card. */
+export interface LeadRecap { tabId: string; leadId: string; text: string; at: number; none: boolean }
+
+/** The Super Tab service's door into the core (superTabs/inCore/attention.ts): the waits of its members here. */
 export interface SuperTabsCore {
   /** Every wait, replacing the last set: the core raises what is new on the devices and closes what is gone. */
   attention(items: SuperTabAttention[]): void
   /** Every Swarm this account is in, whole, each time it changes: the core keeps the last list for a dial that attaches
-   *  later and hands it to the devices (core/superTabCards.ts). */
+   *  later and hands it to the devices (superTabs/inCore/cards.ts). */
   cards(items: SwarmCard[]): void
   /** What one Lead last said, pushed when the recap on a Harness Pro's screen moved on. */
   cardRecap(recap: LeadRecap): void
@@ -1203,7 +1237,7 @@ export interface SuperTabsCore {
    *  state wakes it only as the core starts, so a machine that joined a Swarm while running never invited anyone and
    *  each member's pane read "must be online" (River on a contributed machine, 2026-10-23). */
   shareObservers(): void
-  /** A member's terminal as plain text for its Lead (core/superTabTerminal.ts): the visible screen, with up to 200 lines
+  /** A member's terminal as plain text for its Lead (superTabs/inCore/terminal.ts): the visible screen, with up to 200 lines
    *  of scrollback when asked, and what the screen reader says it waits on (a permission prompt, a question). */
   screen(agentId: string, scrollback: number): Promise<SuperTabScreen>
   /** Text, then each key by its tmux name, typed into a member's terminal under the pane's write lock. */
@@ -1285,7 +1319,7 @@ export interface DevicesPort {
   desk(agentIds: string[], foreground: boolean): void
   /** The window's tabs, or null once it has gone. */
   swarms(swarms: AppSwarms | null): void
-  /** The Swarms' cards for a Harness Pro (core/superTabCards.ts), whole; replayed to a dial that attaches. */
+  /** The Swarms' cards for a Harness Pro (superTabs/inCore/cards.ts), whole; replayed to a dial that attaches. */
   swarmCards(items: SwarmCard[]): void
   /** One Lead's last message, for the recap a Harness Pro has open. */
   swarmCardRecap(recap: LeadRecap): void
@@ -1820,9 +1854,9 @@ export interface CoreApiDeps {
   activityAt?: (session: RegisteredSession) => Promise<number | null>
   /** A resume of a stopped agent (core/agents/lifecycle.ts `resumeAgent`), for `keepLeadAlive`. */
   resumeAgent?: (agentId: string) => Promise<{ ok: true } | { ok: false; error: string; detail?: string }>
-  /** The Swarm Leads and members this machine's Super Tab host keeps (superTabs/retention.ts), for `keepLeadAlive` and
-   *  `closeMember`; absent, neither does anything. */
-  swarmMembers?: { leads(): Set<string>; harnesses(): Set<string> }
+  /** The Swarm's `closeSwarm`, `keepLeadAlive` and `closeMember` (superTabs/inCore/agents.ts), built on what the core
+   *  reads its agents by; absent while the Swarm is off, and then the core offers none of them. */
+  swarmAgents?: (deps: SwarmAgentDeps) => SwarmAgents
   signedIn: CoreApi['account']['signedIn']
   environment: CoreApi['account']['environment']
   machines: CoreApi['account']['machines']
@@ -1837,7 +1871,7 @@ export interface CoreApiDeps {
   wifi: CoreApi['wifi']
   /** The cloud agents' doors (core/agents/cloud.ts). */
   cloud?: CloudCore
-  /** The Super Tab service's door (core/superTabAttention.ts). */
+  /** The Super Tab service's door (superTabs/inCore/attention.ts). */
   superTabs?: SuperTabsCore
   /** The devices' way to the Super Tab service's card requests. */
   superTabRequest?: CoreApi['superTabRequest']
@@ -1855,7 +1889,7 @@ export function createCoreApi({
   dataDir, registry, stoppedAgents, databaseHistory, syncSession, runtimeModels, viewerChanged,
   gridNamed, gridModelsChanged, dshInstallStatus, mintGridName, accessToken, lane, observerKey, tabKey, tabRelay, connectorVault, observer, privateGridName, machineName, backend, onNotice,
   runtimeProfile, setRuntime, fork, create, creationStatus, dsh, windows, daemon, turns, questions, terminals = TERMINALS_OFF, conversations = CONVERSATIONS_OFF, viewerFrame, machine, activityText, activitySnapshot, activity, summaries,
-  closeAgent, activityAt, resumeAgent, swarmMembers,
+  closeAgent, activityAt, resumeAgent, swarmAgents,
   signedIn, environment, machines, sendLocal, sendToWindow, hasWindow, devicesChanged, dialWatching, wifi, cloud, superTabs, superTabRequest, cloudRows, lastTurn, nativeTurns, turnCard, turnSummary,
   log = (line) => console.warn(line),
 }: CoreApiDeps): CoreApi {
@@ -1894,48 +1928,10 @@ export function createCoreApi({
       activitySnapshot,
       activity: activity ?? (async () => ({})),
       summaries: summaries ?? (async () => ({})),
+      // The Swarm's own close and reopen (superTabs/inCore/agents.ts), handed in while it is on.
+      ...swarmAgents?.({ byAgent: id => registry.byAgent(id), stoppedIds: () => stoppedAgents.ids(), closeAgent, resumeAgent, creationStatus }),
       // Decided here, not in the service: whatever the cleanup asks, from its process or this one, the core closes only
       // a harness another agent started, the conversation it reviewed (`agent_close`'s identity), and keeps it.
-      closeSwarm: async request => {
-        const session = registry.byAgent(request.agentId)
-        // This is the authoritative live registry, not a service's possibly old snapshot or a failed read.
-        if (!session) return { closed: true }
-        // A reopen (resume-only) of the same conversation is still the Swarm's session: the identity below proves it.
-        if (session.startedBy !== 'agent' || !request.creationId || typeof request.sessionId !== 'string' || !request.createdAt) return { error: 'NOT_SWARM_STARTED' }
-        if (session.sessionId !== request.sessionId || session.registeredAt !== Date.parse(request.createdAt)) return { error: 'AGENT_CHANGED' }
-        if (!Number.isFinite(request.expiresAt) || request.expiresAt! <= Date.now()) return { error: 'STOP_LEASE_EXPIRED' }
-        const creation = await creationStatus?.(request.creationId)
-        if (creation?.state !== 'created' || creation.agentId !== request.agentId) return { error: 'NOT_SWARM_STARTED' }
-        if (request.expiresAt! <= Date.now()) return { error: 'STOP_LEASE_EXPIRED' }
-        const latest = registry.byAgent(request.agentId)
-        if (!latest || latest.startedBy !== 'agent' || latest.sessionId !== request.sessionId
-          || latest.registeredAt !== Date.parse(request.createdAt)) return { error: 'AGENT_CHANGED' }
-        return closeAgent ? closeAgent({ agentId: request.agentId, sessionId: request.sessionId, createdAt: request.createdAt, mode: 'now', onlyIfOriginalLaunch: true, expiresAt: request.expiresAt }) : { error: 'UNSUPPORTED' }
-      },
-      keepLeadAlive: async agentId => {
-        if (!resumeAgent || !swarmMembers) return { ok: false, error: 'UNSUPPORTED' }
-        if (registry.byAgent(agentId)) return { ok: true }
-        if (!swarmMembers.leads().has(agentId) || !stoppedAgents.ids().includes(agentId)) {
-          return { ok: false, error: 'NOT_A_LEAD', detail: 'Only a stopped Product Manager of a Swarm project is reopened.' }
-        }
-        const reply = await resumeAgent(agentId)
-        return reply.ok ? { ok: true } : { ok: false, error: reply.error, ...(reply.detail ? { detail: reply.detail } : {}) }
-      },
-      closeMember: async (agentId, creationId) => {
-        if (!closeAgent || !swarmMembers) return { error: 'UNSUPPORTED' }
-        const session = registry.byAgent(agentId)
-        if (!session) return { closed: true }
-        let member = false
-        try { member = swarmMembers.harnesses().has(agentId) } catch { /* An unreadable retention names no member. */ }
-        // An agent removed before its host wrote a roster naming it: the Swarm's own start receipt proves it (the review of #1635).
-        if (!member && creationId) {
-          const creation = await creationStatus?.(creationId)
-          member = creation?.state === 'created' && creation.agentId === agentId
-        }
-        if (!member) return { error: 'NOT_A_MEMBER' }
-        // The close itself refuses a session that changed during the receipt read.
-        return closeAgent({ agentId, sessionId: session.sessionId, createdAt: new Date(session.registeredAt).toISOString(), mode: 'now' })
-      },
       closeStarted: async (agentId, mode) => {
         const session = registry.byAgent(agentId)
         if (!session) return { error: 'AGENT_CHANGED' }

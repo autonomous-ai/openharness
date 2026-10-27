@@ -90,6 +90,20 @@ describe('planSetup', () => {
     expect(s.ignored).toEqual(['gone'])
   })
 
+  // Diego's issue, 2026-10-27: an assessment of a group that is not open (a typo, a finished group) was dropped without a word,
+  // and the group meant was planned at the default.
+  it('lists an assessed group that is not open', () => {
+    const s = setup(state(), { typo: { difficulty: 'high', risk: 'high', size: 'large' } })
+    expect(s.ignored).toEqual(['typo'])
+    expect(s.estimates).toEqual(['g1', 'g2'])
+  })
+
+  it('lists a group that is not open once, however many name it', () => {
+    const low = { difficulty: 'low', risk: 'low', size: 'small' } as const
+    const s = setup(state(), { g1: { ...low, after: ['gone'] }, g2: { ...low, after: ['gone'] }, gone: low })
+    expect(s.ignored).toEqual(['gone'])
+  })
+
   it('leaves out machines that cannot take a new agent now, saying why', () => {
     const s = setup(state({ machines: [machine('m1'), machine('old', {}, { receivedAt: NOW - 60_000 }), machine('paused', { paused: true }),
       machine('full', { availableSlots: 0 }), machine('win', {}, { resources: { memoryTotalBytes: 68_719_476_736, memoryUsedBytes: 1, projectDiskFreeBytes: 132_155_797_504, os: 'Windows' } }),

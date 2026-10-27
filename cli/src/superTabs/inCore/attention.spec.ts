@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
-import type { SuperTabAttention } from './api.js'
-import { createSuperTabAttention } from './superTabAttention.js'
+import type { SuperTabAttention } from '../../core/api.js'
+import { createSuperTabAttention } from './attention.js'
 
 const wait = (agentId: string, over: Partial<SuperTabAttention> = {}): SuperTabAttention =>
   ({ agentId, requestId: `supertab:as-${agentId}:needs_human`, superTab: 'Pilot', attention: 'decision', text: 'Ship it?', ...over })

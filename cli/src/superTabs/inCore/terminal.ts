@@ -6,10 +6,10 @@
  * pane as every other writer does, under the pane's write lock.
  */
 import { stripVTControlCharacters } from 'node:util'
-import type { ScreenReading } from '../engines/facets/screen.js'
-import type { RegisteredSession } from '../lib/registry.js'
-import type { TerminalCaptureOptions, TerminalReadResult } from '../lib/terminalTypes.js'
-import type { SuperTabScreen, SuperTabTyped } from './api.js'
+import type { ScreenReading } from '../../engines/facets/screen.js'
+import type { RegisteredSession } from '../../lib/registry.js'
+import type { TerminalCaptureOptions, TerminalReadResult } from '../../lib/terminalTypes.js'
+import type { SuperTabScreen, SuperTabTyped } from '../../core/api.js'
 
 export interface SuperTabTerminalDeps {
   resolve(agentId: string): RegisteredSession | undefined
