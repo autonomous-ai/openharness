@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../shared/widgets/app_dialog.dart';
@@ -9,6 +11,16 @@ import 'message_text.dart';
 import 'model.dart';
 
 Future<void> showSuperTabWork(
+  BuildContext context,
+  SuperTabController c,
+  String groupId,
+) {
+  // A closed group stays readable here: one not held yet is read by id.
+  unawaited(c.loadGroup(groupId));
+  return _showWork(context, c, groupId);
+}
+
+Future<void> _showWork(
   BuildContext context,
   SuperTabController c,
   String groupId,

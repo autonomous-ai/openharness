@@ -164,6 +164,25 @@ from being reused for private work after removal.
 Private projects control application access. Contributing machine owners are
 trusted execution hosts and can access work running on their computers.
 
+## Chat with PM
+
+Each person has a private chat with each project's product manager, next to the
+shared project chat, for their own questions and answers. In Desktop and the
+web app it is **Chat with PM**, the first entry under an expanded project. The
+first click opens a private conversation for that person alone, named after
+them, with the project's product manager in it. Later clicks, other windows and
+other devices open the same one: the request that creates it is the same for
+each person and project, and the server answers a repeat with the conversation
+it already made.
+
+It behaves like the project chat: replies, attachments, the unread mark and the
+product manager's tags in Notifications. Only that person and the product
+manager read it. Other members, the project's owner and the Swarm's owner
+included, never receive it, its messages or its notifications. The chat is
+chat only: no work is assigned in it, and only the product manager joins it
+among agents. As with any session, the owner of the machine running the
+product manager can see what its terminal shows.
+
 ## Lead updates
 
 The default update cadence is five minutes; the project menu also offers one,

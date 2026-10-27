@@ -12,8 +12,27 @@ import { errorHandler } from '../src/middlewares/errorHandler.js'
 import { SuperTabStore } from '../src/superTabs/store.js'
 import type { AuthUser } from '../src/lib/ssoAuth.js'
 import type { GeneralAccess } from '../src/superTabs/sharing.js'
+import * as parts from '../src/superTabs/parts/index.js'
+import type { SuperTabState } from '../src/superTabs/model.js'
 
 let replica: MongoMemoryReplSet, db: PrismaClient, store: SuperTabStore, app: FastifyInstance
+
+/** A Swarm's whole state as its parts hold it (test helper: the store keeps no single document). */
+async function storedState(tab: string): Promise<SuperTabState> {
+  return parts.reassemble(await db.$transaction(tx => parts.loadAll(tx, tab)))
+}
+/** Replaces a Swarm's parts with `state`, as an older release would have left them. Versions keep rising. */
+async function saveState(tab: string, state: SuperTabState) {
+  await db.$transaction(async tx => {
+    const current = await parts.loadAll(tx, tab)
+    const version = Math.max(current.head.version, ...[...current.members, ...current.agents, ...current.groups, ...current.machines,
+      ...current.starts, ...current.progress].map(p => p.version)) + 1
+    for (const model of [tx.swarmHead, tx.swarmMember, tx.swarmAgent, tx.swarmGroup, tx.swarmMachine, tx.swarmStart, tx.swarmProgress] as unknown as
+      Array<{ deleteMany(args: unknown): Promise<unknown> }>) await model.deleteMany({ where: { tabId: tab } })
+    await parts.insertParts(tx, { ...parts.split(state, { tabId: tab, version, now: Date.now(), visibilityEpoch: current.visibilityEpoch }),
+      sequenceBase: current.sequenceBase })
+  })
+}
 const owner: AuthUser = { sub: '200000000000000000000001', email: 'owner@example.com', autonomousEnv: 'prod', role: 'user' }
 const peer: AuthUser = { sub: '200000000000000000000002', email: 'peer@example.com', autonomousEnv: 'prod', role: 'user' }
 const outsider: AuthUser = { sub: '200000000000000000000003', email: 'outsider@elsewhere.test', autonomousEnv: 'prod', role: 'user' }
@@ -116,7 +135,7 @@ describe('Swarm sharing on the authenticated control API', () => {
     expect((await request(tab, 'join', { operationId: randomUUID(), token }, peer)).json().data).toMatchObject({ role: 'viewer', alreadyMember: true })
     const join = { operationId: randomUUID(), token }
     expect((await request(tab, 'join', join, outsider)).json().data.role).toBe('collaborator')
-    const stored = await db.superTab.findUniqueOrThrow({ where: { id: tab } })
+    const stored = [await db.superTab.findUniqueOrThrow({ where: { id: tab } }), await storedState(tab)]
     expect(JSON.stringify(stored)).not.toContain(token)
     expect(JSON.stringify(await db.superTabOperation.findMany({ where: { tabId: tab } }))).not.toContain(token)
     expect((await store.read(owner, tab)).state.sharing).toBeUndefined()
@@ -155,10 +174,10 @@ describe('Swarm sharing on the authenticated control API', () => {
   it('keeps legacy members without a generation stable without restoring them after removal', async () => {
     const tab = await create()
     await save(tab, { mode: 'domain', domain: 'example.com', role: 'collaborator' })
-    const row = await db.superTab.findUniqueOrThrow({ where: { id: tab } })
-    const state = JSON.parse(JSON.stringify(row.state))
-    state.people.push({ id: peer.sub, email: peer.email, role: 'viewer' })
-    await db.superTab.update({ where: { id: tab }, data: { state, memberIds: [owner.sub, peer.sub] } })
+    const state = await storedState(tab)
+    state.people.push({ id: peer.sub, email: peer.email, role: 'viewer' } as SuperTabState['people'][number])
+    await saveState(tab, state)
+    await db.superTab.update({ where: { id: tab }, data: { memberIds: [owner.sub, peer.sub] } })
     const join = { operationId: randomUUID() }
     const result = await store.join(peer, tab, join)
     expect(result).toMatchObject({ role: 'viewer', alreadyMember: true })

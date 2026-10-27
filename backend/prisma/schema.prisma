@@ -1004,6 +1004,11 @@ model SuperTab {
   cleanupMachineIds String[] @default([])
   revision       Int      @default(0)
   state          Json
+  /// 1: the whole Swarm in `state`. 2: split into the Swarm* part collections (docs/design/2026-10-26-swarm-state-parts.md);
+  /// `state` is then `{ version: 2 }`, which every older backend refuses before writing, and the old state is kept in `legacyState`.
+  format         Int      @default(1)
+  migratedAt     DateTime?
+  legacyState    Json?
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
@@ -1024,6 +1029,9 @@ model SuperTabSessionScope {
   closeLeaseGeneration String?
   /// Serializes contribution changes with stop intent across public Swarms.
   stopReleaseId String?
+  /// Set when the session first became confidential (a Lead or in a private conversation): the write a concurrent
+  /// registration in another Swarm conflicts with, so a confidential session keeps one registration (final review C1).
+  confidential Boolean?
   id           String   @id @map("_id")
   scopeIds     String[]
   privateScope String?
@@ -1047,7 +1055,8 @@ model SuperTabMessage {
   mentions        String[]
   createdAt       DateTime @default(now())
 
-  @@index([tabId, conversationId, sequence])
+  /// Pages read by (sequence, id): older rows of one command share a sequence.
+  @@index([tabId, conversationId, sequence, id])
 }
 
 /// A Lead's tag of a person, waiting until they reply in that conversation or mark it done (superTabs/mentions.ts).
@@ -1092,6 +1101,8 @@ model SuperTabOperation {
   requestHash  String
   revision     Int
   result       Json
+  /// The parts a command wrote, with their versions, returned again on a replay. Absent on receipts from before parts.
+  parts        Json?
   createdAt    DateTime @default(now())
 
   @@index([tabId])
@@ -1259,6 +1270,168 @@ model SuperTabTerminalRequest {
 
   @@index([machineId, status])
   @@index([tabId, createdAt])
+}
+
+// Swarm state by parts (docs/design/2026-10-26-swarm-state-parts.md). Each part is one record of a Swarm, written only
+// by the commands that change it. `version` moves on every write and every guarded touch and never resets; `changedAt`
+// moves only when `data` changes, and is what readers ask for changes by. A removed part stays as a tombstone
+// (`deleted`) until `purgeAt`, so readers learn it is gone. `data` keeps the record's shape from `SuperTab.state`.
+
+/// The Swarm's scalars and settings: projects (without progress), rules, invitations, sharing, routing, Local models.
+model SwarmHead {
+  id              String    @id @map("_id")
+  tabId           String
+  key             String
+  version         Int
+  changedAt       DateTime
+  deleted         Boolean   @default(false)
+  purgeAt         DateTime?
+  ordinal         Float
+  data            Json
+  /// Workgroup numbers are never given twice, whatever was deleted or went dormant.
+  groupCounter    Int       @default(0)
+  /// Moves when who may see what changes; a reader with an older epoch loads in full.
+  visibilityEpoch Int       @default(1)
+  /// The tab revision when it was split into parts (0 for a Swarm born in parts). Every later message sequence is above it.
+  sequenceBase    Int       @default(0)
+
+  @@unique([tabId, key])
+  @@index([tabId, changedAt])
+}
+
+/// One person in the Swarm. Every command of theirs touches it, so removing them and their in-flight action cannot both win.
+model SwarmMember {
+  id        String    @id @map("_id")
+  tabId     String
+  key       String
+  version   Int
+  changedAt DateTime
+  deleted   Boolean   @default(false)
+  purgeAt   DateTime?
+  ordinal   Float
+  data      Json
+
+  @@unique([tabId, key])
+  @@index([tabId, changedAt])
+}
+
+/// One conversation: its work, checks, assignment, members and message counter.
+model SwarmGroup {
+  id                 String    @id @map("_id")
+  tabId              String
+  key                String
+  version            Int
+  changedAt          DateTime
+  deleted            Boolean   @default(false)
+  purgeAt            DateTime?
+  ordinal            Float
+  data               Json
+  projectId          String?
+  kind               String?
+  archived           Boolean   @default(false)
+  /// Out of first loads and changes: work done or cancelled and quiet for a day, or archived by hand. A message wakes it.
+  dormant            Boolean   @default(false)
+  agentIds           String[]
+  /// The machine running its active assignment, for the host's change read.
+  executionMachineId String?
+  messageSeq         Int       @default(0)
+  reportSeq          Int       @default(0)
+  lastActivityAt     DateTime
+  /// The machines whose hosts this group's last write concerned: its agents' and its work's, before and after (host reads).
+  hostMachineIds     String[]  @default([])
+  /// A short hash of the fields host rows read (read/hostRows.ts); a post leaves it. Missing on a part written before it.
+  hostDigest         String?
+
+  @@unique([tabId, key])
+  @@index([tabId, changedAt])
+  @@index([tabId, dormant, changedAt])
+  @@index([tabId, agentIds])
+  @@index([tabId, projectId, dormant, lastActivityAt])
+  @@index([tabId, projectId, dormant, reportSeq])
+  @@index([dormant, lastActivityAt])
+  @@index([executionMachineId])
+}
+
+model SwarmAgent {
+  id             String    @id @map("_id")
+  tabId          String
+  key            String
+  version        Int
+  changedAt      DateTime
+  deleted        Boolean   @default(false)
+  purgeAt        DateTime?
+  ordinal        Float
+  data           Json
+  machineId      String
+  machineOwnerId String
+  contributorId  String
+
+  @@unique([tabId, key])
+  @@index([tabId, changedAt])
+  @@index([machineId, deleted])
+  @@index([tabId, contributorId])
+}
+
+/// One machine the Swarm references, contributed or not: its contribution and observation, and its slot ledger.
+model SwarmMachine {
+  id              String    @id @map("_id")
+  tabId           String
+  key             String
+  version         Int
+  changedAt       DateTime
+  deleted         Boolean   @default(false)
+  purgeAt         DateTime?
+  ordinal         Float
+  data            Json
+  machineId       String
+  contributed     Boolean   @default(false)
+  cleanupOwnerIds String[]
+  /// The last change to its settings or ledger, never its own reading (host reads wake on this, not on changedAt).
+  hostChangedAt   DateTime?
+
+  @@unique([tabId, key])
+  @@index([tabId, changedAt])
+  @@index([machineId, deleted])
+}
+
+model SwarmStart {
+  id             String    @id @map("_id")
+  tabId          String
+  key            String
+  version        Int
+  changedAt      DateTime
+  deleted        Boolean   @default(false)
+  purgeAt        DateTime?
+  ordinal        Float
+  data           Json
+  machineId      String
+  conversationId String
+  /// The agent it started, once it has a harness: an agent's own removal and a routed assignment find it by this.
+  agentId        String?
+  /// Failed, or started and settled: out of command state, still loadable by key or agent until it expires 7 days later.
+  finishedAt     DateTime?
+
+  @@unique([tabId, key])
+  @@index([tabId, changedAt])
+  @@index([tabId, finishedAt])
+  @@index([machineId, finishedAt])
+  @@index([tabId, agentId])
+}
+
+/// One project's report watermark, and the fence a Lead's worker decisions serialize on.
+model SwarmProgress {
+  id        String    @id @map("_id")
+  tabId     String
+  key       String
+  version   Int
+  changedAt DateTime
+  deleted   Boolean   @default(false)
+  purgeAt   DateTime?
+  ordinal   Float
+  data      Json
+
+  @@unique([tabId, key])
+  @@index([tabId, changedAt])
 }
 
 model ExperimentalSettings {

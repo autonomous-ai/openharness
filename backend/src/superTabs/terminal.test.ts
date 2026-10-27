@@ -84,8 +84,13 @@ describe('reading and typing in an agent terminal', () => {
 
   it('logs input to the Lead in the project\'s Lead conversation', () => {
     const s = swarm()
-    expect(s.run({ type: 'agent.input', agentId: s.lead, keys: ['Esc', '2'] }).messages[0])
-      .toMatchObject({ conversationId: 'lead', text: `owner typed Esc + 2 in ${name(s, s.lead)}'s terminal` })
+    // Only the person whose machine runs the Lead may type in it (final review, Critical 1).
+    const machineOwner: Actor = { kind: 'person', userId: 'host-owner', email: 'host@example.com' }
+    const invited = s.run({ type: 'invite.create', email: 'host@example.com', role: 'collaborator', conversationId: 'lead' })
+    s.run({ type: 'invite.accept', inviteId: invited.result.inviteId as string }, machineOwner)
+    expect(s.run({ type: 'agent.input', agentId: s.lead, keys: ['Esc', '2'] }, machineOwner).messages[0])
+      .toMatchObject({ conversationId: 'lead', text: `host typed Esc + 2 in ${name(s, s.lead)}'s terminal` })
+    expect(() => s.run({ type: 'agent.input', agentId: s.lead, keys: ['Esc'] })).toThrow('Only the person whose machine runs this agent')
   })
 
   it('accepts only printable text and named keys, and needs one of them', () => {

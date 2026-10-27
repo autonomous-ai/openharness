@@ -69,12 +69,24 @@ export const machinePrivacySchema = z.union([
 export type MachinePrivacy = z.infer<typeof machinePrivacySchema>
 /** As a pool keeps it: `seenAt` is when this server first received that check's result, on the server's clock. */
 export type StoredPrivacy = MachinePrivacy & { seenAt: number }
+/** What the machine is ready for (cli/src/superTabs/machines.ts readiness), for the route to leave out one that cannot do
+ *  the work: per engine whether it is installed and signed in, and per folder in its Swarm workspace (one per project)
+ *  the repository it checks out (an address without credentials), whether it is a git checkout, and whether this
+ *  machine's own login can push to it. Absent from hosts before it; null and absent entries are unknown. */
+const readiness = z.object({
+  engines: z.array(z.object({ engine: z.string().regex(/^[a-z][a-z0-9_-]{0,79}$/), installed: z.boolean().nullable(), signedIn: z.boolean().nullable() }).strict()).max(8).optional(),
+  checkouts: z.array(z.object({ folder: z.string().min(1).max(160).regex(/^[^/\\]+$/).refine(f => f !== '.' && f !== '..'),
+    repository: z.string().max(300).nullable(), git: z.boolean(), push: z.boolean().nullable() }).strict()).max(64).optional(),
+}).strict()
 export const machineObservationSchema = z.object({ generation: z.string().max(160), resources: resource,
   tools: z.record(z.string().max(80), z.boolean()).refine(v => Object.keys(v).length <= 20),
   toolProbeErrors: z.record(z.string().max(80), z.string().max(200)).refine(v => Object.keys(v).length <= 20).optional(),
   quotas: z.array(quota).max(32), runningHarnessIds: z.array(z.string().max(160)).max(1000),
   stoppedHarnessIds: z.array(z.string().max(160)).max(1000),
   stoppedReservations: z.array(z.object({ harnessId: z.string().min(1).max(160), generation: z.string().min(1).max(160) }).strict()).max(1000).optional(),
+  /** When each running agent's screen or transcript last changed (epoch ms); its lease renews on recent progress
+   *  (liveness.ts). Absent from hosts before it, whose agents renew by running alone. */
+  harnessProgress: z.record(z.string().max(160), z.number().int().nonnegative()).refine(v => Object.keys(v).length <= 1000).optional(),
   /** The Local models add-on (docs/plans/2026-10-23-swarm-local-models.md); absent from hosts before it. On the Swarm's
    *  grid: what this machine serves there (`local` an engine of its own, `api` a saved API it shares), usable by agents on
    *  any machine. On any other grid: a model its owner may use there (`shared`, shared with them), usable only by agents
@@ -91,6 +103,7 @@ export const machineObservationSchema = z.object({ generation: z.string().max(16
   /** A Harness Team daemon's privacy check; absent from the owner's own daemon and from hosts before it. The store keeps
    *  it only when a team session reported it (observedPrivacy). */
   privacy: machinePrivacySchema.optional(),
+  readiness: readiness.optional(),
 }).strict()
 export type MachineObservation = z.infer<typeof machineObservationSchema>
 

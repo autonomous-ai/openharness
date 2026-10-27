@@ -14,6 +14,7 @@ import { errorHandler } from '../src/middlewares/errorHandler.js'
 import type { Command } from '../src/superTabs/commands.js'
 import { GitHubTokens, MemoryTokenCache } from '../src/github/tokens.js'
 import { fakeApp, fakeGitHub, throwawayKey } from '../src/github/fakeGitHub.js'
+import { poolRows } from './hostRows.test-support.js'
 
 // The Harness GitHub App's token endpoint on the real control API: a fresh loopback MongoDB and a fake GitHub. This suite
 // never reads DATABASE_URL, an existing database or github.com.
@@ -104,7 +105,7 @@ describe('the GitHub token endpoint', () => {
     // The same task gets the same token back.
     expect((await ask(env, tab, worker)).json().data.token).toBe('ghs_fixture_1')
     // The tab tells a Lead's start that this server has the app.
-    const read = await env.app.inject({ method: 'GET', url: `/api/super-tabs/${tab}`, headers: { authorization: `Bearer ${owner.sub}` } })
+    const read = await env.app.inject({ method: 'GET', url: `/api/super-tabs/${tab}/parts`, headers: { authorization: `Bearer ${owner.sub}` } })
     expect(read.json().data.githubApp).toBe(true)
   })
 
@@ -172,12 +173,18 @@ describe('the GitHub token endpoint', () => {
     const response = await ask(env, tab, worker)
     expect(response.statusCode).toBe(503)
     expect(response.json().error.code).toBe('GITHUB_APP_NOT_CONFIGURED')
-    const read = await env.app.inject({ method: 'GET', url: `/api/super-tabs/${tab}`, headers: { authorization: `Bearer ${owner.sub}` } })
+    const read = await env.app.inject({ method: 'GET', url: `/api/super-tabs/${tab}/parts`, headers: { authorization: `Bearer ${owner.sub}` } })
     expect(read.json().data).not.toHaveProperty('githubApp')
   })
 })
 
 describe('a queued start\'s preparation token', () => {
+  /** The host's pool rows, now each Swarm's `pool` in the host form (design 4.10), in the shape the old pools route answered. */
+  const hostPools = async (env: Env) => {
+    const response = await env.app.inject({ method: 'GET', url: '/api/super-tabs/hosts/gh-pool/changes?full=1', headers: { authorization: `Bearer ${host.sub}` } })
+    const rows = (response.json().data.tabs as Array<{ pool: unknown }>).flatMap(tab => tab.pool ? [tab.pool] : [])
+    return { json: () => ({ data: rows }) }
+  }
   const observed = { resources: { cpuPercent: 10, memoryTotalBytes: 32e9, memoryUsedBytes: 4e9, diskFreeBytes: 120e9, diskTotalBytes: 500e9,
     projectDiskFreeBytes: 120e9, deviceType: 'Laptop', chip: 'Fixture CPU', os: 'macOS', gpuPercent: null }, quotas: [], tools: { git: true },
     runningHarnessIds: [], stoppedHarnessIds: [] }
@@ -191,7 +198,7 @@ describe('a queued start\'s preparation token', () => {
       await env.run(tab, { type: 'invite.accept', inviteId: invitation.result.inviteId as string } as Command, contributor)
     }
     await env.run(tab, { type: 'machine.contribute', machineId, name: 'Pool', cwd: '/swarm-root', scope: 'swarm', engines: ['codex'], maxAgents: 2 } as Command, contributor)
-    const pool = (await env.store.hostPools(contributor, machineId)).find(p => p.tabId === tab)!
+    const pool = (await poolRows(env.store, contributor, machineId)).find(p => p.tabId === tab)!
     if (contributor === owner) await env.store.observeMachine(contributor, tab, machineId, { generation: pool.machine.generation, ...observed })
     else {
       // Another person's project runs only on a Team machine (#1694): this one is used only for agents (`harness team on`).
@@ -211,7 +218,7 @@ describe('a queued start\'s preparation token', () => {
   it('gives the host of another person\'s start a token that only reads the project\'s repository, and says whom the work is for', async () => {
     const env = await fresh()
     const { tab, startId } = await queued(env)
-    const pools = await env.app.inject({ method: 'GET', url: '/api/super-tabs/hosts/gh-pool/pools', headers: { authorization: `Bearer ${host.sub}` } })
+    const pools = await hostPools(env)
     expect(pools.json().data.find((row: { tabId: string }) => row.tabId === tab)).toMatchObject({ githubApp: true })
     const response = await prepare(env, tab, startId)
     expect(response.statusCode, response.body).toBe(200)
@@ -253,7 +260,7 @@ describe('a queued start\'s preparation token', () => {
     const response = await prepare(env, tab, startId)
     expect(response.statusCode).toBe(503)
     expect(response.json().error.code).toBe('GITHUB_APP_NOT_CONFIGURED')
-    const pools = await env.app.inject({ method: 'GET', url: '/api/super-tabs/hosts/gh-pool/pools', headers: { authorization: `Bearer ${host.sub}` } })
+    const pools = await hostPools(env)
     expect(pools.json().data.find((row: { tabId: string }) => row.tabId === tab)).not.toHaveProperty('githubApp')
   })
 })

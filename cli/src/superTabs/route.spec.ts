@@ -1,6 +1,6 @@
 // cli/src/superTabs/route.spec.ts
 import { describe, expect, it } from 'vitest'
-import { API_BUILDERS, LOCAL_NONE, breaks, choose, decide, floorFor, parseAssessment, quotaOf2, rateFor, recordOf, repoMatch, type Assessment, type Commitment, type MemberFrame, type Policy, type Probe, type SwarmRule, type TaskFolder } from './route.js'
+import { API_BUILDERS, LOCAL_NONE, breaks, choose, decide, floorFor, parseAssessment, quotaOf2, rateFor, recordOf, repoMatch, repositoryKey, type Assessment, type Commitment, type MemberFrame, type Policy, type Probe, type SwarmRule, type TaskFolder } from './route.js'
 
 const object = (v: unknown) => v as Record<string, unknown>
 
@@ -400,6 +400,22 @@ describe('candidate labels', () => {
       { name: '5-hour', leftPercent: 40, resetsAt: now + 2 * 3_600_000 }, { name: 'weekly', leftPercent: 90, resetsAt: now + 5 * 86_400_000 }, { name: null, leftPercent: 75, resetsAt: null }] }
     const label = ok(choose([probe({ quota })], policy, a(), now)).shown[0].label
     expect(label).toContain('quota 5-hour 40% left (resets in 2h), weekly 90% left (resets in 5 days), window 75% left')
+  })
+})
+
+describe('repositoryKey', () => {
+  it('names a repository the same way over HTTPS and SSH, without credentials or case', () => {
+    for (const url of ['https://github.com/Acme/App.git', 'https://someone:secret@github.com/acme/app/', 'git@github.com:Acme/App.git',
+      'ssh://git@github.com:22/acme/app.git', ' HTTPS://GitHub.com/acme/app ']) expect(repositoryKey(url)).toBe('github.com/acme/app')
+  })
+  it('keeps nothing of a query or fragment, where a credential can be too', () => {
+    for (const url of ['https://example.test/Acme/Repo.git?access_token=SYNTHETIC_SECRET', 'https://example.test/acme/repo#token=SYNTHETIC_SECRET',
+      'git@example.test:acme/repo.git?access_token=SYNTHETIC_SECRET', 'ssh://git@example.test/acme/repo.git#SYNTHETIC_SECRET']) {
+      expect(repositoryKey(url)).toBe('example.test/acme/repo')
+    }
+  })
+  it('names nothing for a folder on disk or an address it cannot read', () => {
+    for (const url of ['/srv/remote.git', 'file:///srv/remote.git', '', 'https://github.com', 'not a url']) expect(repositoryKey(url)).toBeNull()
   })
 })
 

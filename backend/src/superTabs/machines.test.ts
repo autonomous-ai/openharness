@@ -37,6 +37,19 @@ it('accepts the served models Builders are not offered, with why', () => {
   expect(machineObservationSchema.safeParse({ ...sent, refusedModels: Array(17).fill(refused) }).success).toBe(false)
 })
 
+it('accepts what a machine is ready for, and a reading from before it', () => {
+  const { receivedAt: _receivedAt, ...sent } = observation
+  const readiness = { engines: [{ engine: 'claude', installed: true, signedIn: false }, { engine: 'codex', installed: null, signedIn: null }],
+    checkouts: [{ folder: 'p1', repository: 'github.com/acme/app', git: true, push: false }, { folder: 'p2', repository: null, git: false, push: null }] }
+  expect(machineObservationSchema.safeParse(sent).success).toBe(true)
+  expect(machineObservationSchema.safeParse({ ...sent, readiness }).success).toBe(true)
+  expect(machineObservationSchema.safeParse({ ...sent, readiness: {} }).success).toBe(true)
+  expect(machineObservationSchema.safeParse({ ...sent, readiness: { ...readiness, extra: 1 } }).success).toBe(false)
+  expect(machineObservationSchema.safeParse({ ...sent, readiness: { checkouts: [{ ...readiness.checkouts[0], folder: '../p1' }] } }).success).toBe(false)
+  expect(machineObservationSchema.safeParse({ ...sent, readiness: { checkouts: Array(65).fill(readiness.checkouts[0]) } }).success).toBe(false)
+  expect(machineObservationSchema.safeParse({ ...sent, readiness: { engines: [{ engine: 'claude', installed: 'yes', signedIn: null }] } }).success).toBe(false)
+})
+
 function setup(machine: Partial<ContributedMachine> = {}) {
   const state: SuperTabState = createSuperTab('tab', 'Team', { id: 'owner', email: 'owner@example.com' }, 'test')
   state.machines = [{ machineId: 'host', name: 'Studio Mac', contributorId: 'owner', membershipGeneration: 'tab', generation: 'g1',

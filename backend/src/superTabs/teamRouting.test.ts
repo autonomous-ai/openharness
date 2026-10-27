@@ -533,7 +533,7 @@ describe('one machine: the Mac\'s agent slots', () => {
 
 describe('one machine: a Mac whose Harness Team account was made again', () => {
   // `harness team remove`, then `harness team setup`: a new account, computer and machine, while the old team machine's
-  // pool is still in the Swarm, silent. The Mac joins with the new one too (store.ts hostTabs).
+  // pool is still in the Swarm, silent. The Mac joins with the new one too (read/hostRows.ts).
   function remade() {
     const f = swarm()
     Object.assign(f.machine('mate-team'), { hostMachineId: 'mate-mac', name: 'MacBook Pro', cwd: '/old-team', observation: reading('team', PASSED, NOW - 3_600_000) })

@@ -324,7 +324,8 @@ it('closes a refused start only after the machine durably fences its creation re
   const input = { action: 'resume', tabId: 'tab', startId: 'start' }
   expect(await startAgent(input, f.scoped, where, f.open)).toMatchObject({ error: 'START_FAILED', detail: 'This agent does not support that permission mode.' })
   expect(f.request.mock.calls.map(c => c[0]).filter(type => type.startsWith('agent_create'))).toEqual(['agent_create_status', 'agent_create', 'agent_create_cancel'])
-  expect(f.start.error).toContain('before starting an agent')
+  // The Lead is told the machine's own reason, so it can start the work elsewhere.
+  expect(f.start.error).toBe('This agent does not support that permission mode.')
   expect(await startAgent(input, f.scoped, where, f.open)).toMatchObject({ error: 'START_FAILED' })
   expect(f.open).toHaveBeenCalledOnce()
   expect(f.scoped.mock.calls.some(c => (c[0].command as any)?.type === 'agent.started')).toBe(false)
@@ -340,14 +341,16 @@ it('recovers a lost cancellation reply without dispatching another start', async
   expect(f.close).toHaveBeenCalledTimes(2)
 })
 
-it('retries the exact shared failure command after a lost acknowledgement', async () => {
+it('fails the start after a lost acknowledgement of its refusal, with only the fenced receipt left to say why', async () => {
   const f = fixture({ refuse: 'INVALID_PERMISSION_MODE', loseFailure: true })
   const input = { action: 'resume', tabId: 'tab', startId: 'start' }
   await expect(startAgent(input, f.scoped, where, f.open)).rejects.toThrow('Failure receipt interrupted')
   expect(await startAgent(input, f.scoped, where, f.open)).toMatchObject({ error: 'START_FAILED' })
   const failures = f.scoped.mock.calls.map(c => c[0]).filter(p => (p.command as any)?.type === 'agent.startFailed')
-  expect(failures).toHaveLength(2)
-  expect(failures[0]).toEqual(failures[1])
+  // Each under its own operation: the refusal is known only to the invocation that saw it.
+  expect(failures.map(p => [p.operationId, (p.command as any).error])).toEqual([
+    ['refused-start', 'This agent does not support that permission mode.'],
+    ['failed-start', 'The machine cancelled this request before starting an agent. Review its settings and create a new start request.']])
   expect(f.request.mock.calls.filter(c => c[0] === 'agent_create')).toHaveLength(1)
 })
 

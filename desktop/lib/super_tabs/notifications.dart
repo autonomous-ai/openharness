@@ -69,7 +69,7 @@ class SuperTabMentions extends ChangeNotifier {
   List<SuperTabMention> waiting = const [], earlier = const [];
   String? error;
   int? _count;
-  int _revision = -1;
+  int _lastChangedAt = -1;
   // Null until the first read: tags waiting then are not news.
   Set<String>? _seen;
   Future<void>? _loading;
@@ -93,8 +93,8 @@ class SuperTabMentions extends ChangeNotifier {
     // A tag that expires moves the count without changing the Swarm.
     final count = snapshot.mentionsWaiting;
     final moved = count != _count;
-    if (!moved && controller.revision == _revision) return;
-    _revision = controller.revision;
+    if (!moved && controller.lastChangedAt == _lastChangedAt) return;
+    _lastChangedAt = controller.lastChangedAt;
     _count = count;
     if (count == 0 && (!moved || _seen == null)) {
       _seen ??= {};
@@ -221,6 +221,13 @@ class _SuperTabNotificationsState extends State<SuperTabNotifications> {
 
   Widget _row(SuperTabMention mention, {required bool waiting}) {
     final time = mention.createdAt;
+    // The reader's own chat with the Product Manager is named as the sidebar
+    // names it, not by the reader's own name.
+    final place =
+        widget.mentions.controller.pmChat(mention.projectId)?.id ==
+            mention.conversationId
+        ? 'Chat with PM'
+        : mention.conversationTitle;
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 1),
       child: Material(
@@ -260,7 +267,7 @@ class _SuperTabNotificationsState extends State<SuperTabNotifications> {
                         ],
                       ),
                       Text(
-                        '${mention.projectName} · ${mention.conversationTitle}',
+                        '${mention.projectName} · $place',
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         style: DesktopChrome.metadata(),

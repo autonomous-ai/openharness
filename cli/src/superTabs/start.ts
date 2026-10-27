@@ -227,10 +227,12 @@ export async function startAgent(input: Json, scoped: ScopedRequest, where: Wher
     if (native.state === 'failed' || native.state === 'cancelled') {
       await target.request('super_tabs', { action: 'observeCapacity', creationId }, 10_000).catch(() => {})
       const failure = object(native.failure)
-      // The shared command stays byte-identical if its reply is lost and the
-      // next invocation sees only the durable cancellation tombstone.
       const detail = native.state === 'cancelled' ? CANCELLED_START : String(failure.detail ?? failure.code ?? 'Native creation failed.')
-      requireSuccess(await scoped({ action: 'command', operationId: `failed-${startId}`, command: { type: 'agent.startFailed', startId, error: detail } }))
+      // The machine's own refusal tells the Lead where else the work can run. Only the invocation that saw it knows it,
+      // so it goes under its own operation; one that finds only the durable cancellation tombstone sends the generic
+      // text under the other, byte-identical on every retry. Whichever the backend records first fails the start.
+      const command = refusal ? { operationId: `refused-${startId}`, error: refusal } : { operationId: `failed-${startId}`, error: detail }
+      requireSuccess(await scoped({ action: 'command', operationId: command.operationId, command: { type: 'agent.startFailed', startId, error: command.error } }))
       return { error: 'START_FAILED', startId, detail: refusal ?? detail }
     }
     const frame = object(native.agent)

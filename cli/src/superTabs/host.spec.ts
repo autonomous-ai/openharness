@@ -7,28 +7,33 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { CoreApi, TurnDelivery } from '../core/api.js'
 import { fakeCore } from '../testing/fakeCore.js'
 import { backend, swarmRoleFor, hostJournalFile, SuperTabHost, type SuperTabHostOptions } from './host.js'
+import { hostForm, swarmReply } from './fixtures/read/index.js'
+import { HostFeed } from './hostFeed.js'
+import { SwarmReads } from './swarmReads.js'
 import { retainedHarnesses, retentionFile } from './retention.js'
 import { observerSource } from './observers.js'
 
 const roots: string[] = []
 const hosts: SuperTabHost[] = []
+/** The machine's host form and Swarm reads, as the service hands them to the host and the role lookup. */
+const sourcesOf = (core: CoreApi) => ({ feed: new HostFeed(core, 'machine-1'), reads: new SwarmReads(core) })
 afterEach(() => { for (const host of hosts.splice(0)) host.stop(); for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }) })
 
 function setup(messageFields: Record<string, unknown> = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'super-tab-host-')); roots.push(dir)
   const listeners = new Set<(e: TurnDelivery) => void>()
-  const row: { tabId: string; agent: { id: string; harnessId: string; machineId: string }; lead?: boolean } = { tabId: 'tab', agent: { id: 'agent', harnessId: 'harness', machineId: 'machine-1' } }
-  /** The conversation the delivery comes from, and the ones the agent's own view of the tab lists. */
+  const row: { tabId: string; agent: { id: string; harnessId: string; machineId: string }; lead?: boolean; leadsConversationId: string } =
+    { tabId: 'tab', agent: { id: 'agent', harnessId: 'harness', machineId: 'machine-1' }, leadsConversationId: 'leads' }
+  /** The conversation the delivery comes from. */
   let from = 'lead'
-  const views = ['lead']
   let removed = false, revoked = false, status = 'queued', claimId: string | null = null
   const receipts: Record<string, unknown>[] = []
   const holds: Record<string, unknown>[] = []
   let clock = 0
   const call: CoreApi['account']['backend'] = vi.fn(async (method, path, body) => {
     let data: unknown
-    if (path.includes('/hosts/')) data = removed ? [] : [row]
-    else if (path.includes('?asAgentId=')) data = { state: { conversations: views.map(id => ({ id })) } }
+    if (path.includes('/hosts/')) data = hostForm(removed ? [] : [row], { tabs: ['tab'] })
+    else if (path.includes('asAgentId=')) data = swarmReply(path, { conversations: [{ id: 'lead' }] })
     else if (revoked) return { status: 403, body: { success: false, error: { code: 'FORBIDDEN', message: 'Grant removed' } } }
     else if (method === 'GET') data = status === 'delivered' ? [] : [{ id: 'delivery', conversationId: from, claimId, status }]
     else {
@@ -51,7 +56,7 @@ function setup(messageFields: Record<string, unknown> = {}) {
     for (const fn of listeners) fn({ deliveryId: 'team:service:superTabs:delivery', sessionId: 'harness', state, reason })
   }
   const saved = () => JSON.parse(readFileSync(hostJournalFile(dir, 'machine-1'), 'utf8'))
-  return { core, call, open, event, receipts, holds, log, row, wait: (ms: number) => { clock += ms }, saved, dir, remove: () => { removed = true }, revoke: (value = true) => { revoked = value }, foreignClaim: () => { claimId = 'another-process' }, from: (id: string) => { from = id }, views }
+  return { core, call, open, event, receipts, holds, log, row, wait: (ms: number) => { clock += ms }, saved, dir, remove: () => { removed = true }, revoke: (value = true) => { revoked = value }, foreignClaim: () => { claimId = 'another-process' }, from: (id: string) => { from = id } }
 }
 
 describe('current Swarm role lookup', () => {
@@ -60,10 +65,11 @@ describe('current Swarm role lookup', () => {
     const agent = { id: 'agent', harnessId: 'harness', machineId: 'machine-1', role: 'reviewer' }
     let groups = [{ leadId: 'other', agentIds: ['agent'] }]
     vi.mocked(t.call).mockImplementation(async (_method, path) => ({ status: 200, body: { success: true, data:
-      path.includes('/hosts/') ? [{ tabId: 'tab', agent }] : { state: { agents: [agent], conversations: groups } } } }))
-    expect(await swarmRoleFor(t.core, 'machine-1', 'harness')).toEqual({ role: 'review', mode: 'orchestration' })
+      path.includes('/hosts/') ? hostForm([{ tabId: 'tab', agent }]) : swarmReply(path, { agents: [agent], conversations: groups }) } }))
+    const sources = sourcesOf(t.core)
+    expect(await swarmRoleFor(sources, 'harness')).toEqual({ role: 'review', mode: 'orchestration' })
     groups = []
-    expect(await swarmRoleFor(t.core, 'machine-1', 'harness')).toBeNull()
+    expect(await swarmRoleFor(sources, 'harness')).toBeNull()
   })
   it.each(['lead', 'member', 'assigned'] as const)('derives an old %s from current groups on its machine', async kind => {
     const t = setup()
@@ -71,9 +77,10 @@ describe('current Swarm role lookup', () => {
     const group = { leadId: kind === 'lead' ? 'agent' : 'other', agentIds: kind === 'member' ? ['agent'] : [],
       assignment: kind === 'assigned' ? { agentId: 'agent', execution: { machineId: 'machine-1' } } : null }
     vi.mocked(t.call).mockImplementation(async (_method, path) => ({ status: 200, body: { success: true, data:
-      path.includes('/hosts/') ? [{ tabId: 'tab', agent }] : { state: { agents: [agent], conversations: [group] } } } }))
-    expect(await swarmRoleFor(t.core, 'machine-1', 'harness')).toEqual({ role: kind === 'lead' ? 'lead' : 'dev', mode: 'orchestration' })
-    expect(await swarmRoleFor(t.core, 'machine-1', 'personal')).toBeNull()
+      path.includes('/hosts/') ? hostForm([{ tabId: 'tab', agent }]) : swarmReply(path, { agents: [agent], conversations: [group] }) } }))
+    const sources = sourcesOf(t.core)
+    expect(await swarmRoleFor(sources, 'harness')).toEqual({ role: kind === 'lead' ? 'lead' : 'dev', mode: 'orchestration' })
+    expect(await swarmRoleFor(sources, 'personal')).toBeNull()
   })
   it('gives the mode of the project whose group made the role, Lead first', async () => {
     const t = setup()
@@ -81,34 +88,60 @@ describe('current Swarm role lookup', () => {
     const projects = [{ id: 'lead', skillMode: 'default' }, { id: 'p2', skillMode: 'orchestration' }, { id: 'p3', skillMode: 'default' }]
     let conversations: unknown[] = [{ projectId: 'p2', leadId: 'other', agentIds: ['agent'] }, { projectId: 'p3', leadId: 'agent', agentIds: [] }]
     vi.mocked(t.call).mockImplementation(async (_method, path) => ({ status: 200, body: { success: true, data:
-      path.includes('/hosts/') ? [{ tabId: 'tab', agent }] : { state: { agents: [agent], conversations, projects } } } }))
-    expect(await swarmRoleFor(t.core, 'machine-1', 'harness')).toEqual({ role: 'lead', mode: 'default' })
+      path.includes('/hosts/') ? hostForm([{ tabId: 'tab', agent }]) : swarmReply(path, { agents: [agent], conversations, projects }) } }))
+    const sources = sourcesOf(t.core)
+    expect(await swarmRoleFor(sources, 'harness')).toEqual({ role: 'lead', mode: 'default' })
     conversations = [{ projectId: 'p2', leadId: 'other', agentIds: ['agent'] }]
-    expect(await swarmRoleFor(t.core, 'machine-1', 'harness')).toEqual({ role: 'dev', mode: 'orchestration' })
+    expect(await swarmRoleFor(sources, 'harness')).toEqual({ role: 'dev', mode: 'orchestration' })
     // A group from before projects is in the first project.
     conversations = [{ leadId: 'other', agentIds: ['agent'] }]
-    expect(await swarmRoleFor(t.core, 'machine-1', 'harness')).toEqual({ role: 'dev', mode: 'default' })
+    expect(await swarmRoleFor(sources, 'harness')).toEqual({ role: 'dev', mode: 'default' })
   })
   it.each(['removed-roster', 'foreign', 'removed-state', 'archived', 'released', 'none', 'malformed'] as const)
     ('never adopts a session whose membership is %s', async kind => {
       const t = setup()
       const agent = { id: 'agent', harnessId: 'harness', machineId: kind === 'foreign' ? 'other' : 'machine-1' }
       vi.mocked(t.call).mockImplementation(async (_method, path) => ({ status: 200, body: { success: true, data: path.includes('/hosts/')
-        ? kind === 'malformed' ? {} : kind === 'removed-roster' ? [] : [{ tabId: 'tab', agent, stopRequested: kind === 'released' }]
-        : { state: { agents: kind === 'removed-state' ? [] : [agent], conversations:
-          kind === 'none' ? [] : [{ leadId: 'agent', agentIds: ['agent'], archived: kind === 'archived' }] } } } }))
-      expect(await swarmRoleFor(t.core, 'machine-1', 'harness')).toBeNull()
+        ? kind === 'malformed' ? { ...hostForm([]), tabs: [{ tabId: 'tab', roster: {} }] }
+          : hostForm(kind === 'removed-roster' ? [] : [{ tabId: 'tab', agent, stopRequested: kind === 'released' }], { tabs: ['tab'] })
+        : swarmReply(path, { agents: kind === 'removed-state' ? [] : [agent], conversations:
+          kind === 'none' ? [] : [{ leadId: 'agent', agentIds: ['agent'], archived: kind === 'archived' }] }) } }))
+      expect(await swarmRoleFor(sourcesOf(t.core), 'harness')).toBeNull()
     })
   it('prefers Lead when a session also works in another group and never reuses a stale roster', async () => {
     const t = setup(), agent = { id: 'agent', harnessId: 'harness', machineId: 'machine-1' }
     let present = true
     vi.mocked(t.call).mockImplementation(async (_method, path) => ({ status: 200, body: { success: true, data: path.includes('/hosts/')
-      ? present ? [{ tabId: 'tab', agent }] : []
-      : { state: { agents: [agent], conversations: [{ agentIds: ['agent'] }, { leadId: 'agent' }] } } } }))
-    expect(await swarmRoleFor(t.core, 'machine-1', 'harness')).toEqual({ role: 'lead', mode: 'orchestration' })
+      ? hostForm(present ? [{ tabId: 'tab', agent }] : [], { tabs: ['tab'] })
+      : swarmReply(path, { agents: [agent], conversations: [{ agentIds: ['agent'] }, { leadId: 'agent' }] }) } }))
+    const sources = sourcesOf(t.core)
+    expect(await swarmRoleFor(sources, 'harness')).toEqual({ role: 'lead', mode: 'orchestration' })
     present = false
-    expect(await swarmRoleFor(t.core, 'machine-1', 'harness')).toBeNull()
-    expect(await swarmRoleFor(t.core, 'machine-1', 'harness')).toBeNull()
+    expect(await swarmRoleFor(sources, 'harness')).toBeNull()
+    expect(await swarmRoleFor(sources, 'harness')).toBeNull()
+  })
+})
+
+// #1726: a tick read up to 100 whole Swarms every second. It reads the host form: in full first, then only what changed.
+describe('the host tick on the host form', () => {
+  it('reads every Swarm in full first and then by change, never the old rosters', async () => {
+    const t = setup(), host = t.open()
+    await host.tick()
+    await host.tick()
+    const reads = vi.mocked(t.call).mock.calls.map(([, path]) => path).filter(path => path.includes('/hosts/'))
+    expect(reads).toEqual(['/api/super-tabs/hosts/machine-1/changes?full=1', expect.stringMatching(/^\/api\/super-tabs\/hosts\/machine-1\/changes\?cursor=host-\d+$/)])
+    expect(t.core.turns.deliver).toHaveBeenCalledTimes(1)
+  })
+  it('says once that Harness needs an update, and asks again only a minute later', async () => {
+    const t = setup(), host = t.open()
+    vi.mocked(t.call).mockImplementation(async () => ({ status: 426, body: { success: false, error: { code: 'UPDATE_REQUIRED' } } }))
+    for (let i = 0; i < 3; i++) { await host.tick(); t.wait(1_000) }
+    expect(t.log.mock.calls.map(([line]) => line)).toEqual(['Update Harness to keep using this Swarm.'])
+    expect(vi.mocked(t.call).mock.calls.filter(([, path]) => path.includes('/hosts/'))).toHaveLength(1)
+    t.wait(57_000)
+    await host.tick()
+    expect(vi.mocked(t.call).mock.calls.filter(([, path]) => path.includes('/hosts/'))).toHaveLength(2)
+    expect(t.log).toHaveBeenCalledTimes(1)
   })
 })
 
@@ -137,7 +170,7 @@ describe('Super Tab native delivery handoff', () => {
     expect(t.core.turns.deliver).toHaveBeenCalledTimes(2)
   })
   // Leads see each other's work and talk (spec 2026-10-23): the Leads conversation reaches Leads alone. The server
-  // delivers it only to them; this host also types into an agent that leads nothing only what its own view can read.
+  // delivers it only to them; this host also never types it into an agent that leads nothing.
   it('never types a Leads conversation message into an agent that leads nothing, and says so once', async () => {
     const t = setup(), host = t.open()
     t.from('leads')
@@ -145,7 +178,7 @@ describe('Super Tab native delivery handoff', () => {
     expect(t.core.turns.deliver).not.toHaveBeenCalled()
     expect(t.call).not.toHaveBeenCalledWith('POST', expect.stringContaining('/deliveries/delivery'), expect.anything())
     expect(t.log.mock.calls.filter(([line]) => String(line).includes('not in a conversation'))).toHaveLength(1)
-    t.views.push('leads')
+    t.row.lead = true
     await host.tick()
     expect(t.core.turns.deliver).toHaveBeenCalledTimes(1)
   })
@@ -163,21 +196,20 @@ describe('Super Tab native delivery handoff', () => {
     expect(t.core.turns.deliver).toHaveBeenCalledTimes(1)
     expect(t.saved().entries.delivery.stage).toBe('prepared')
   })
-  it('reads an agent\'s view once for its own conversation, and never for a Lead', async () => {
+  // The design of #1726 (section 5.3): the roster names the Leads conversation, so no delivery costs a read of the Swarm.
+  it('reads no Swarm to judge a delivery, for an agent that leads nothing or a Lead', async () => {
     const t = setup(), host = t.open()
     await host.tick()
     expect(t.core.turns.deliver).toHaveBeenCalledTimes(1)
-    const views = () => vi.mocked(t.call).mock.calls.filter(([, path]) => path === '/api/super-tabs/tab?asAgentId=agent').length
-    expect(views()).toBe(1)
     t.event('rejected', 'team_waiting_busy')
     await host.tick()
-    expect(views()).toBe(1)
+    expect(vi.mocked(t.call).mock.calls.some(([, path]) => path.includes('asAgentId='))).toBe(false)
     const lead = setup()
     lead.row.lead = true
     lead.from('leads')
     await lead.open().tick()
     expect(lead.core.turns.deliver).toHaveBeenCalledTimes(1)
-    expect(vi.mocked(lead.call).mock.calls.some(([, path]) => path.includes('?asAgentId='))).toBe(false)
+    expect(vi.mocked(lead.call).mock.calls.some(([, path]) => path.includes('asAgentId='))).toBe(false)
   })
   it('names all five task parts in the worker delivery header', async () => {
     const t = setup()
@@ -506,11 +538,11 @@ it('confirms a stopped assignment only with fresh native evidence, including aft
   t.core.agents.stopped = stopped
   const proof: unknown[] = []
   vi.mocked(t.core.account.backend).mockImplementation(async (method, path, body) => {
-    if (method === 'GET') return { status: 200, body: { data: [
+    if (method === 'GET') return { status: 200, body: { data: hostForm([], { assignments: [
       { tabId: 'tab', assignmentId: 'work-1', harnessId: 'gone' },
       { tabId: 'tab', assignmentId: 'work-2', harnessId: 'unconfirmed' },
       { tabId: '', assignmentId: 'bad', harnessId: 'gone' },
-    ] } }
+    ] }) } }
     expect(path).toBe('/api/super-tabs/tab/stopped'); proof.push(body)
     return { status: 200, body: { data: { confirmed: true } } }
   })
@@ -522,6 +554,34 @@ it('confirms a stopped assignment only with fresh native evidence, including aft
   host.stop()
   await host.reconcileStops()
   expect(proof).toHaveLength(1)
+})
+
+describe('a private chat delivered to the PM (final review, Critical 1)', () => {
+  it('types the secret into the PM\'s terminal, then refuses every share of that session until it closes here', async () => {
+    const secret = 'Only for the PM: the launch slips a week.'
+    const t = setup({ conversationId: 'chat', text: secret })
+    t.from('chat')
+    // The roster as the backend sends it for a PM: no observers, and marked confidential.
+    Object.assign(t.row, { lead: true, confidential: true, observers: [] })
+    const host = t.open()
+    await host.tick()
+    expect(vi.mocked(t.core.turns.deliver).mock.calls[0]?.[0]).toBe('harness')
+    expect(vi.mocked(t.core.turns.deliver).mock.calls[0]?.[1]).toContain(secret)
+    const cache = observerSource(t.dir, () => 'machine-1', () => 1)
+    const ordinary = { tab: null, agentId: 'harness', recipientEmail: 'carol@example.com' } as never
+    const swarm = { tab: 'super:tab', agentId: 'harness', recipientEmail: 'bob@example.com' } as never
+    expect(cache.allows(ordinary)).toBe(false)
+    expect(cache.allows(swarm)).toBe(false)
+    // Its registration is removed while the session still runs on this machine: still refused.
+    t.remove()
+    await host.tick()
+    t.wait(201)
+    expect(observerSource(t.dir, () => 'machine-1', () => 300).allows(ordinary)).toBe(false)
+    // The session closes here: only now may it be shared again.
+    vi.mocked(t.core.agents.byAgent).mockReturnValue(undefined as never)
+    await host.tick()
+    expect(observerSource(t.dir, () => 'machine-1', () => 600).allows(ordinary)).toBe(true)
+  })
 })
 
 describe('the super-tab command in delivered input', () => {
@@ -608,7 +668,7 @@ describe('Super Tab waits for the Harness Pro', () => {
     let rows: unknown[] = [waiting], offline = false
     const call: CoreApi['account']['backend'] = vi.fn(async (_method, path) => {
       if (offline) throw new Error('Host offline')
-      return { status: 200, body: { success: true, data: path.includes('/hosts/') ? rows : [] } }
+      return { status: 200, body: { success: true, data: path.includes('/hosts/') ? hostForm(rows, { tabs: ['tab'] }) : [] } }
     })
     const superTabs = { attention: vi.fn(), cards: vi.fn(), cardRecap: vi.fn(), shareObservers: vi.fn(), screen: vi.fn(), input: vi.fn() }
     const core = fakeCore({ dataDir: dir, superTabs, account: { backend: call },
@@ -645,7 +705,7 @@ describe('Super Tab waits for the Harness Pro', () => {
     const dir = mkdtempSync(join(tmpdir(), 'super-tab-host-')); roots.push(dir)
     const rows = [{ tabId: 'tab', tabName: 'Pilot', attention: { assignmentId: 'as-1', status: 'needs_human', result: 'Ship it?' },
       agent: { id: 'agent', harnessId: 'harness', machineId: 'machine-1' } }]
-    const call: CoreApi['account']['backend'] = vi.fn(async (_method, path) => ({ status: 200, body: { success: true, data: path.includes('/hosts/') ? rows : [] } }))
+    const call: CoreApi['account']['backend'] = vi.fn(async (_method, path) => ({ status: 200, body: { success: true, data: path.includes('/hosts/') ? hostForm(rows, { tabs: ['tab'] }) : [] } }))
     let here = true, clock = 0
     const superTabs = { attention: vi.fn(), cards: vi.fn(), cardRecap: vi.fn(), shareObservers: vi.fn(), screen: vi.fn(), input: vi.fn() }
     const core = fakeCore({ dataDir: dir, superTabs, account: { backend: call },
@@ -682,8 +742,8 @@ it('stops a requested worker once, confirms removal, and releases retention on t
   t.core.agents.closeSwarm = async request => { expect(request.agentId).toBe('harness'); expect(request.expiresAt).toBeLessThanOrEqual(Date.now() + 120_000); closed = true; return { closed: true } }
   t.core.account.backend = async (method, path, body) => {
     if ((body as any)?.command?.type === 'agent.stopLease') return { status: 200, body: { data: { result: { expiresAt: Date.now() + 3_600_000, durationMs: 120_000 } } } }
-    if (path.includes('/hosts/')) return { status: 200, body: { data: removed ? [] : [{ tabId: 'tab', agent: target, stopRequested: true }] } }
-    if (method === 'GET') return { status: 200, body: { data: { state: { agents: [target], conversations: [] } } } }
+    if (path.includes('/hosts/')) return { status: 200, body: { data: hostForm(removed ? [] : [{ tabId: 'tab', agent: target, stopRequested: true }], { tabs: ['tab'] }) } }
+    if (method === 'GET') return { status: 200, body: { data: swarmReply(path, { agents: [target], conversations: [] }) } }
     acknowledgements++; removed = true
     return { status: 200, body: { data: {} } }
   }
@@ -696,7 +756,9 @@ it('stops a requested worker once, confirms removal, and releases retention on t
   expect(acknowledgements).toBe(1)
 })
 
-it('closes the session of a worker whose assignment the Lead cancelled', async () => {
+// A lost task (the backend's v1 liveness) has ended for its agent, as a cancelled one has: a stalled agent the Lead stops
+// is closed, never kept for work it no longer holds.
+it.each(['cancelled', 'lost'])('closes the session of a worker whose assignment is %s', async status => {
   const t = setup(), host = t.open()
   vi.mocked(t.core.agents.byAgent).mockReturnValue({ agentId: 'harness', sessionId: 'native', registeredAt: 0, startedBy: 'agent' } as never)
   let closed = false, removed = false
@@ -705,8 +767,8 @@ it('closes the session of a worker whose assignment the Lead cancelled', async (
   t.core.agents.closeSwarm = async () => { closed = true; return { closed: true } }
   t.core.account.backend = async (method, path, body) => {
     if ((body as any)?.command?.type === 'agent.stopLease') return { status: 200, body: { data: { result: { expiresAt: Date.now() + 3_600_000, durationMs: 120_000 } } } }
-    if (path.includes('/hosts/')) return { status: 200, body: { data: removed ? [] : [{ tabId: 'tab', agent: target, stopRequested: true }] } }
-    if (method === 'GET') return { status: 200, body: { data: { state: { agents: [target], conversations: [{ id: 'g', assignment: { id: 'a', agentId: 'agent', status: 'cancelled' } }] } } } }
+    if (path.includes('/hosts/')) return { status: 200, body: { data: hostForm(removed ? [] : [{ tabId: 'tab', agent: target, stopRequested: true }], { tabs: ['tab'] }) } }
+    if (method === 'GET') return { status: 200, body: { data: swarmReply(path, { agents: [target], conversations: [{ id: 'g', assignment: { id: 'a', agentId: 'agent', status } }] }) } }
     removed = true
     return { status: 200, body: { data: {} } }
   }
@@ -725,11 +787,11 @@ it.each(['active', 'foreign', 'changed', 'missing', 'refused', 'unconfirmed', 'u
   t.core.agents.stopped = async () => false
   t.core.account.backend = async (method, path, body) => {
     if ((body as any)?.command?.type === 'agent.stopLease') return { status: 200, body: { data: { result: { expiresAt: Date.now() + 3_600_000, durationMs: 120_000 } } } }
-    if (path.includes('/hosts/')) return { status: 200, body: { data: [{ tabId: 'tab', agent: target, stopRequested: true }] } }
-    if (method === 'GET') return { status: 200, body: { data: { state: {
+    if (path.includes('/hosts/')) return { status: 200, body: { data: hostForm([{ tabId: 'tab', agent: target, stopRequested: true }], { tabs: ['tab'] }) } }
+    if (method === 'GET') return { status: 200, body: { data: swarmReply(path, {
       agents: kind === 'missing' ? [] : [{ ...target, machineId: kind === 'foreign' ? 'foreign' : target.machineId, releaseId: kind === 'changed' ? 'release-2' : 'release-1' }],
       conversations: [{ assignment: { agentId: 'agent', status: kind === 'active' ? 'working' : 'done' } }],
-    } } } }
+    }) } }
     acknowledge(); return { status: 200, body: { data: {} } }
   }
   await host.tick()
@@ -751,8 +813,8 @@ it('retries a lost removal acknowledgement from native stopped evidence without 
   t.core.agents.stopped = async () => stopped
   t.core.account.backend = async (method, path, body) => {
     if ((body as any)?.command?.type === 'agent.stopLease') return { status: 200, body: { data: { result: { expiresAt: Date.now() + 3_600_000, durationMs: 120_000 } } } }
-    if (path.includes('/hosts/')) return { status: 200, body: { data: [{ tabId: 'tab', agent: target, stopRequested: true }] } }
-    if (method === 'GET') return { status: 200, body: { data: { state: { agents: [target], conversations: [] } } } }
+    if (path.includes('/hosts/')) return { status: 200, body: { data: hostForm([{ tabId: 'tab', agent: target, stopRequested: true }], { tabs: ['tab'] }) } }
+    if (method === 'GET') return { status: 200, body: { data: swarmReply(path, { agents: [target], conversations: [] }) } }
     attempts++
     if (attempts === 1) throw new Error('Lost acknowledgement')
     return { status: 200, body: { data: {} } }
@@ -780,8 +842,8 @@ function releaseFixture(nativeKind = 'swarm', result: Record<string, unknown> = 
     if (command?.type === 'agent.stopLease') { lease(); return { status: 200, body: { data: { result: { durationMs: 120_000 } } } } }
     if (command?.type === 'agent.remove') { remove(); return { status: 200, body: { data: {} } } }
     if (command?.type === 'message.send') { sent(body); return { status: 200, body: { data: {} } } }
-    if (path.includes('/hosts/')) return { status: 200, body: { data: [{ tabId: 'tab', agent: target, stopRequested: true }] } }
-    return { status: 200, body: { data: { state: { agents: [target], conversations: [], ...extra } } } }
+    if (path.includes('/hosts/')) return { status: 200, body: { data: hostForm([{ tabId: 'tab', agent: target, stopRequested: true }], { tabs: ['tab'] }) } }
+    return { status: 200, body: { data: swarmReply(path, { agents: [target], conversations: [], ...extra }) } }
   }
   const poll = async (advance = 0) => { t.wait(advance); await host.tick(); await new Promise(resolve => setImmediate(resolve)) }
   return { ...t, host, target, native, lookup, close, lease, remove, sent, poll }
@@ -998,6 +1060,25 @@ describe('a Lead\'s terminal requests', () => {
   })
 })
 
+describe('the progress a host reports', () => {
+  it('sends with its machine\'s reading when each agent\'s screen last changed', async () => {
+    const t = setup()
+    Object.assign(t.core, { superTabs: { attention: vi.fn(), cards: vi.fn(), cardRecap: vi.fn(), shareObservers: vi.fn(), input: vi.fn(),
+      screen: vi.fn(async () => ({ ok: true as const, text: '✻ Editing host.ts…\n❯ ', hold: null })) } })
+    const pool = { tabId: 'tab', machine: { machineId: 'machine-1', generation: 'grant', cwd: '/repo', engines: ['claude'] }, harnessIds: ['harness'], starts: [] }
+    const roster = vi.mocked(t.call).getMockImplementation()!
+    vi.mocked(t.call).mockImplementation(async (method, path, body) => path.includes('/hosts/machine-1/changes')
+      ? { status: 200, body: { success: true, data: hostForm([t.row], { pools: [pool] }) } } : roster(method, path, body))
+    const local = { machineId: 'machine-1', request: vi.fn(async () => ({})), close: vi.fn() }
+    const host = t.open({ machines: { open: async () => local, capabilities: async () => ({ ok: true, resources: {}, tools: {} }) as never } })
+    host.start()
+    // The first reading may go before the first screen read; the next beat carries it.
+    t.wait(16_000)
+    await vi.waitFor(() => expect(vi.mocked(t.call).mock.calls.some(([method, path, body]) => method === 'POST'
+      && path === '/api/super-tabs/tab/machines/machine-1' && typeof (body as { harnessProgress?: Record<string, unknown> }).harnessProgress?.harness === 'number')).toBe(true), { timeout: 3_000 })
+  })
+})
+
 describe('the members a host lets watch its agents', () => {
   it('keeps them watching through a 3 s roster read, wakes Share once, and lets a removed member go at once', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'super-tab-host-')); roots.push(dir)
@@ -1007,7 +1088,7 @@ describe('the members a host lets watch its agents', () => {
     const call: CoreApi['account']['backend'] = vi.fn(async (_method, path) => {
       // The roster read takes 3 s when asked to (seen up to 2.8 s, 2026-10-23); everything else answers at once.
       if (path.includes('/hosts/') && answer === null) await new Promise<void>(resolve => { answer = resolve })
-      return { status: 200, body: { success: true, data: path.includes('/hosts/') ? rows : [] } }
+      return { status: 200, body: { success: true, data: path.includes('/hosts/') ? hostForm(rows, { tabs: ['tab'] }) : [] } }
     })
     const superTabs = { attention: vi.fn(), cards: vi.fn(), cardRecap: vi.fn(), shareObservers: vi.fn(), screen: vi.fn(), input: vi.fn() }
     const core = fakeCore({ dataDir: dir, superTabs, account: { backend: call },
@@ -1058,7 +1139,7 @@ describe('adding the machine its own Lead runs on to the Swarm', () => {
         if (code) return { status: 409, body: { success: false, error: { code, message: `Refused: ${code}` } } }
         return { status: 200, body: { success: true, data: {} } }
       }
-      return { status: 200, body: { success: true, data: path.includes('/hosts/') ? rows : [] } }
+      return { status: 200, body: { success: true, data: path.includes('/hosts/') ? hostForm(rows, { tabs: ['tab'] }) : [] } }
     })
     const core = fakeCore({ dataDir: dir, account: { backend: call, machineName: vi.fn(() => 'Ken Mac') } })
     const prepare = vi.fn(async () => ({ ok: true, state: 'ready', cwd: '/data/swarm-projects/own', engines: ['claude', 'codex'], maxAgents: 3, scope: 'swarm' }))
@@ -1077,7 +1158,7 @@ describe('adding the machine its own Lead runs on to the Swarm', () => {
   it('adds it once with the prepared slots and leaves unmarked Swarms alone', async () => {
     const t = joining()
     await t.pass(0)
-    expect(t.prepare).toHaveBeenCalledExactlyOnceWith(t.core, { tabId: 'own', scope: 'swarm' })
+    expect(t.prepare).toHaveBeenCalledExactlyOnceWith(t.core, { tabId: 'own', scope: 'swarm' }, { reads: expect.any(SwarmReads) })
     expect(t.commands).toEqual([{ path: '/api/super-tabs/own/commands', operationId: expect.any(String), command: { type: 'machine.contribute',
       machineId: 'machine-1', name: 'Ken Mac', cwd: '/data/swarm-projects/own', scope: 'swarm', engines: ['claude', 'codex'], maxAgents: 3, ifMissing: true } }])
     await t.pass(59_000)
@@ -1137,7 +1218,7 @@ describe('adding this Mac\'s Harness Team account where this Mac was added', () 
         if (code) return { status: 409, body: { success: false, error: { code, message: `Refused: ${code}` } } }
         return { status: 200, body: { success: true, data: {} } }
       }
-      return { status: 200, body: { success: true, data: path.includes('/hosts/') ? rows : [] } }
+      return { status: 200, body: { success: true, data: path.includes('/hosts/') ? hostForm(rows, { tabs: ['tab'] }) : [] } }
     })
     const core = fakeCore({ dataDir: dir, account: { backend: call, machineName: vi.fn(() => 'MacBook Pro') } })
     const prepareTeam = vi.fn(async () => ({ ok: true, state: 'ready', cwd: '/Users/harnessteam/harnesses/swarms/own', engines: ['claude'], maxAgents: 8, scope: 'swarm' }))
@@ -1220,8 +1301,8 @@ describe('built-in skill text after a CLI update', () => {
       await Promise.resolve()
       inFlight--
       const request = body as any
-      if (path.includes('/hosts/')) return { status: 200, body: { data: agents.map(agent => ({ tabId: 'tab', agent, ...(skillMode ? { skillMode } : {}),
-        ...(agent.id in rowRoles ? { role: rowRoles[agent.id] } : {}) })) } }
+      if (path.includes('/hosts/')) return { status: 200, body: { data: hostForm(agents.map(agent => ({ tabId: 'tab', agent, ...(skillMode ? { skillMode } : {}),
+        ...(agent.id in rowRoles ? { role: rowRoles[agent.id] } : {}) })), { tabs: ['tab'] }) } }
       const role = /^\/api\/super-tabs\/tab\/projects\/pilot\/roles\/([a-z0-9]+)$/.exec(path)?.[1]
       if (role) {
         fetched.push(role)
@@ -1237,7 +1318,7 @@ describe('built-in skill text after a CLI update', () => {
         if (prior === undefined) { receipts.set(request.operationId, same); sent.push(request) }
         return { status: 200, body: { data: {} } }
       }
-      return { status: 200, body: { data: { state: { agents, conversations: groups } } } }
+      return { status: 200, body: { data: swarmReply(path, { agents, conversations: groups }) } }
     })
     // The refresh runs beside the poll: wait until no backend call is in flight and the host's own work has had its turn.
     const pass = async (host = t.open(), advance = 0) => {
@@ -1310,7 +1391,7 @@ describe('built-in skill text after a CLI update', () => {
     // meanwhile must not get its old text installed, nor a re-read notice after the backend's role-gone one.
     it.each([
       ['its text is fetched', (path: string) => path.includes('/roles/'), false],
-      ['its notice is about to be sent', (path: string, body: any) => path.includes('?asAgentId=a-lead') && !body, true],
+      ['its notice is about to be sent', (path: string, body: any) => path.includes('asAgentId=a-lead') && !body, true],
     ])('drops a refresh whose role is gone while %s', async (_case, match, installed) => {
       const f = syncFixture(false, 'default')
       custom(f, 'Plan the work.\n')
@@ -1492,7 +1573,7 @@ function lifeFixture(rows: Record<string, unknown>[], options: SuperTabHostOptio
   t.core.agents.closeMember = closeMember
   t.core.account.backend = async (_method, path, body) => {
     if ((body as any)?.command) { commands.push(body as Record<string, unknown>); return { status: 200, body: { data: {} } } }
-    if (path.includes('/hosts/')) return { status: 200, body: { data: rows } }
+    if (path.includes('/hosts/')) return { status: 200, body: { data: hostForm(rows, { tabs: ['tab'] }) } }
     return { status: 200, body: { data: [] } }
   }
   const poll = async (advance = 0) => { t.wait(advance); await host.tick(); for (let i = 0; i < 5; i++) await new Promise(resolve => setImmediate(resolve)) }
@@ -1665,11 +1746,11 @@ describe('a machine its owner removed from a Swarm', () => {
     mkdirSync(folder, { recursive: true }); mkdirSync(other, { recursive: true })
     const sent: unknown[] = []
     vi.mocked(t.call).mockImplementation(async (method, path, body) => {
-      if (path.includes('/hosts/')) return { status: 200, body: { success: true, data: [
+      if (path.includes('/hosts/')) return { status: 200, body: { success: true, data: hostForm([
         { tabId: 'tab', cleanup: { machineId: 'machine-1', removalId: 'removal' } },
-        { tabId: 'other-tab', cleanup: { machineId: 'machine-2', removalId: 'theirs' } }] } }
+        { tabId: 'other-tab', cleanup: { machineId: 'machine-2', removalId: 'theirs' } }]) } }
       if (method === 'POST') sent.push(body)
-      return { status: 200, body: { success: true, data: method === 'GET' ? { state: { starts: [] } } : { revision: 1 } } }
+      return { status: 200, body: { success: true, data: method === 'GET' ? swarmReply(path, { starts: [] }) : { parts: [] } } }
     })
     const host = t.open()
     await host.tick()

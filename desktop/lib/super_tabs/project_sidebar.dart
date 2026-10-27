@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../core/machine_resources.dart';
@@ -145,6 +147,7 @@ class ProjectSidebar extends StatelessWidget {
     SuperTabProject? project,
     String? label,
     IconData? icon,
+    String? key,
   }) {
     final selected =
         !devicesSelected &&
@@ -153,7 +156,7 @@ class ProjectSidebar extends StatelessWidget {
     final groups = project == null
         ? [group]
         : controller.snapshot!.conversations.where(
-            (g) => g.projectId == project.id && !g.archived,
+            (g) => g.projectId == project.id && !g.closed,
           );
     final waiting = groups.any((g) => needsHuman(g) > 0);
     final unread = groups.any(controller.unread);
@@ -166,7 +169,7 @@ class ProjectSidebar extends StatelessWidget {
         borderRadius: BorderRadius.circular(DesktopChrome.rowRadius),
         clipBehavior: Clip.antiAlias,
         child: InkWell(
-          key: ValueKey('super-group-${group.id}'),
+          key: ValueKey(key ?? 'super-group-${group.id}'),
           onTap: () => onSelect(group.id),
           hoverColor: grid.AppSurface.hoverFill,
           focusColor: grid.AppSurface.hoverFill,
@@ -285,14 +288,16 @@ class ProjectSidebar extends StatelessWidget {
     );
   }
 
-  /// A project's "Closed (N)" row and, when it is open, the archived groups under it.
+  /// A project's "Closed (N)" row and, when it is open, the closed groups under it: archived ones and finished
+  /// ones that left the active set, as read for the project so far.
   List<Widget> _closed(SuperTabProject project) {
     final groups = controller.snapshot!.conversations
         .where(
           (g) =>
               g.projectId == project.id &&
               g.id != project.leadConversationId &&
-              g.archived,
+              g.id != controller.pmChat(project.id)?.id &&
+              g.closed,
         )
         .toList();
     if (groups.isEmpty) return const [];
@@ -347,17 +352,52 @@ class ProjectSidebar extends StatelessWidget {
           ),
         ),
       ),
-      if (open)
+      if (open) ...[
         for (final group in groups) _row(group),
+        if (controller.hasEarlierDormant(project.id))
+          _navigationRow(
+            key: 'super-closed-earlier-${project.id}',
+            label: controller.dormantLoading(project.id)
+                ? 'Loading…'
+                : 'Show earlier',
+            icon: AppIcons.chevronDown,
+            onTap: controller.dormantLoading(project.id)
+                ? null
+                : () => unawaited(
+                    controller.loadDormant(project.id, earlier: true),
+                  ),
+          ),
+      ],
     ];
   }
 
+  /// The signed-in person's private chat with the project's Product Manager,
+  /// above its workgroups; the first click opens it.
+  Widget? _pmChat(SuperTabProject project) {
+    const label = 'Chat with PM';
+    final key = 'super-pm-chat-${project.id}';
+    if (controller.pmChat(project.id) case final chat?) {
+      return _row(chat, label: label, icon: AppIcons.messageSquare, key: key);
+    }
+    if (!controller.canWrite) return null;
+    return _navigationRow(
+      key: key,
+      label: label,
+      icon: AppIcons.messageSquare,
+      onTap: controller.saving || controller.hasPendingAction
+          ? null
+          : () => unawaited(controller.openPmChat(project.id)),
+    );
+  }
+
   List<Widget> _workgroups(SuperTabProject project) {
+    final pmChat = controller.pmChat(project.id)?.id;
     final groups = controller.snapshot!.conversations.where(
       (g) =>
           g.projectId == project.id &&
           g.id != project.leadConversationId &&
-          !g.archived,
+          g.id != pmChat &&
+          !g.closed,
     );
     return groups.isEmpty
         ? [
@@ -452,6 +492,7 @@ class ProjectSidebar extends StatelessWidget {
                   children: [
                     _row(lead, project: project),
                     if (controller.expandedProjects.contains(project.id)) ...[
+                      ?_pmChat(project),
                       ..._workgroups(project),
                       ..._closed(project),
                     ],

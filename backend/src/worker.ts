@@ -17,6 +17,7 @@ import { prisma } from './lib/prisma.js'
 import { ensureProductUsageExpiry } from './lib/productUsage.js'
 import { ensureTerminalExpiry } from './superTabs/terminal.js'
 import { ensureMentionExpiry } from './superTabs/mentions.js'
+import { ensurePartExpiry, startSwarmSweeps } from './superTabs/sweeps.js'
 import { machineBillingWorkerService } from './services/MachineBillingWorkerService.js'
 import { productUsagePeopleRollupService } from './services/ProductUsagePeopleRollupService.js'
 import { logger } from './utils/logger.js'
@@ -34,6 +35,7 @@ async function start(): Promise<void> {
   await ensureProductUsageExpiry()
   await ensureTerminalExpiry(prisma)
   await ensureMentionExpiry(prisma)
+  await ensurePartExpiry(prisma)
   // AFTER the push: it creates the new collections + their unique indexes, and the copy uses $merge
   // so those indexes survive. Copying first would leave the unique index build to fail silently.
   await migrateMachineRename()
@@ -46,12 +48,14 @@ async function start(): Promise<void> {
   await backfillMachinePresenceTurnsStarted()
   await reconcileCommunityLikeCounts()
 
+  let stopSweeps = (): void => {}
   const shutdown = (signal: string): void => {
     logger.info(`Received ${signal}, stopping backend worker...`)
     const hardExit = setTimeout(() => process.exit(0), 5000)
     hardExit.unref()
     machineBillingWorkerService.stop()
     productUsagePeopleRollupService.stop()
+    stopSweeps()
     void Promise.allSettled([prisma.$disconnect(), closeBus()]).finally(() => process.exit(0))
   }
   process.on('SIGINT', () => shutdown('SIGINT'))
@@ -59,6 +63,7 @@ async function start(): Promise<void> {
 
   machineBillingWorkerService.start()
   productUsagePeopleRollupService.start()
+  stopSweeps = startSwarmSweeps(prisma)
   // PM2 wait_ready gates the singleton worker's "online" state on schema/catalog/backfill startup.
   // Plain node/tsx runs do not provide process.send and simply continue.
   process.send?.('ready')

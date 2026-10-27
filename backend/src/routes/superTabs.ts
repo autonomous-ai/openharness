@@ -19,6 +19,9 @@ import { githubRepository } from '../github/repository.js'
 import { attribution } from '../github/attribution.js'
 import { githubTokensFromEnv, type GitHubTokens } from '../github/tokens.js'
 import { logger } from '../utils/logger.js'
+import { SwarmReads } from '../superTabs/read/service.js'
+import { HostReads } from '../superTabs/read/host.js'
+import { UPDATE_REQUIRED } from '../superTabs/read/contract.js'
 
 const id = z.string().min(1).max(160).regex(/^[A-Za-z0-9_-]+$/)
 const tabParams = z.object({ tabId: id })
@@ -26,12 +29,22 @@ const agentQuery = z.object({ asAgentId: id.optional() }).strict()
 const create = z.object({ operationId: id, name: z.string().trim().min(1).max(160), projectVisibility: z.enum(['public', 'private']).optional() }).strict()
 const operation = operationSchema.extend({ asAgentId: id.optional() })
 const listQuery = z.object({ after: id.optional() }).strict()
+const cursor = z.string().min(1).max(512).regex(/^[A-Za-z0-9_-]+$/)
+const changesQuery = agentQuery.extend({ cursor })
+const dormantQuery = agentQuery.extend({ dormant: z.literal('1'), projectId: id.optional(), before: cursor.optional() })
+const groupParams = tabParams.extend({ conversationId: id })
+const hostChangesQuery = z.object({ cursor: cursor.optional(), full: z.literal('1').optional() }).strict()
+const etag = z.string().regex(/^[A-Za-z0-9_-]{1,64}$/)
+const hostChangesBody = z.object({ cursor: cursor.optional(), full: z.boolean().optional(),
+  held: z.record(id, etag).refine(held => Object.keys(held).length <= 500, 'At most 500 Swarms.').optional() }).strict()
 const startParams = tabParams.extend({ startId: id })
 const nativeParams = tabParams.extend({ contextId: id })
 const messageParams = tabParams.extend({ conversationId: id })
+// Pages by (sequence, id) (design 4.6): `afterId`/`beforeId` go with `after`/`before`, from the previous page's `next`.
 const messageQuery = agentQuery.extend({ after: z.coerce.number().int().nonnegative().safe().optional(),
-  before: z.coerce.number().int().nonnegative().safe().optional(), messageId: id.optional() })
+  before: z.coerce.number().int().nonnegative().safe().optional(), messageId: id.optional(), afterId: id.optional(), beforeId: id.optional() })
   .refine(q => [q.after, q.before, q.messageId].filter(value => value !== undefined).length <= 1, 'Choose one message cursor or exact message.')
+  .refine(q => (q.afterId === undefined || q.after !== undefined) && (q.beforeId === undefined || q.before !== undefined), 'Send afterId with after, beforeId with before.')
 const decisionParams = tabParams.extend({ decisionId: id })
 const roleParams = tabParams.extend({ projectId: id, roleId: id })
 const terminalParams = tabParams.extend({ requestId: id })
@@ -62,17 +75,31 @@ async function respond(reply: FastifyReply, action: () => Promise<unknown>) {
 
 /** Uses the normal authenticated control API. It never accepts caller-provided host/contributor identities.
  *  `github` is the Harness GitHub App (github/tokens.ts): read from the environment unless given, null when off. */
-export async function superTabRoutes(app: FastifyInstance, options: { store?: SuperTabStore; github?: GitHubTokens | null } = {}) {
+/** Full-state reads of clients from before Swarms were stored by parts (design 4.11): every old client reads one of them
+ *  before or right after any action, so it meets this at once. */
+const updateRequired = (_req: unknown, reply: FastifyReply) => sendError(reply, UPDATE_REQUIRED.message, UPDATE_REQUIRED.code, UPDATE_REQUIRED.status)
+
+export async function superTabRoutes(app: FastifyInstance, options: { store?: SuperTabStore; github?: GitHubTokens | null; reads?: SwarmReads; hosts?: HostReads } = {}) {
   const github = options.github !== undefined ? options.github : await githubTokensFromEnv(env)
   // A task that ends revokes the token it was given; a revoke that fails is logged inside and never blocks the write.
   const store = options.store ?? new SuperTabStore(prisma, Date.now, attachmentsFromEnv(env),
     { workEnded: (tabId, ended) => { void github?.release(tabId, ended).catch(error => logger.warn('[github] release failed', { tabId, error: String(error) })) },
       // A team account has no git login of its own: without the app it takes no teammates' work.
       teamAccountsIdle: !github })
+  const reads = options.reads ?? new SwarmReads(store, { githubApp: !!github })
+  const hosts = options.hosts ?? new HostReads(store, { githubApp: !!github, teamAccountsIdle: !github })
   app.get('/api/super-tabs/grids', (req, reply) => respond(reply, () => store.hostGrids(req.user!)))
   // Each row says whether this server has the Harness GitHub App, so the host knows to ask for a start's token below.
-  app.get<{ Params: z.infer<typeof hostParams> }>('/api/super-tabs/hosts/:machineId/pools', { preHandler: validateParams(hostParams) },
-    (req, reply) => respond(reply, async () => (await store.hostPools(req.user!, req.params.machineId)).map(row => github ? { ...row, githubApp: true } : row)))
+  app.get('/api/super-tabs/hosts/:machineId/pools', updateRequired)
+  // Replaces the three host reads above and below: every Swarm of the machine with `full=1` (at start and at least every
+  // 60 s), else only those with a change that concerns it since the cursor (design 4.10).
+  app.get<{ Params: z.infer<typeof hostParams>; Querystring: z.infer<typeof hostChangesQuery> }>('/api/super-tabs/hosts/:machineId/changes',
+    { preHandler: [validateParams(hostParams), validateQuery(hostChangesQuery)] },
+    (req, reply) => respond(reply, () => hosts.changes(req.user!, req.params.machineId, { cursor: req.query.cursor, full: req.query.full === '1' })))
+  // The same read for a host that holds etags (`held`, design 4.10): too many for a URL, so in a body.
+  app.post<{ Params: z.infer<typeof hostParams>; Body: z.infer<typeof hostChangesBody> }>('/api/super-tabs/hosts/:machineId/changes',
+    { preHandler: [validateParams(hostParams), validateBody(hostChangesBody)] },
+    (req, reply) => respond(reply, () => hosts.changes(req.user!, req.params.machineId, req.body)))
   // A read-only token for a queued start's project repository, for its host to clone and fetch the folder before the agent
   // exists, so that the machine owner's own git login is never used for another person's project (docs/swarm-github-app.md).
   // The machine owner's own project answers `github: false` and the host uses its own login, unless it asks `always` (a
@@ -117,8 +144,9 @@ export async function superTabRoutes(app: FastifyInstance, options: { store?: Su
   app.get<{ Params: z.infer<typeof tabParams>; Querystring: z.infer<typeof agentQuery> }>('/api/super-tabs/:tabId/routing-policy',
     { preHandler: [validateParams(tabParams), validateQuery(agentQuery)] },
     (req, reply) => respond(reply, () => store.tabPolicy(req.user!, req.params.tabId, req.query.asAgentId)))
-  app.get<{ Querystring: z.infer<typeof listQuery> }>('/api/super-tabs', { preHandler: validateQuery(listQuery) },
-    (req, reply) => respond(reply, () => store.list(req.user!, req.query.after)))
+  app.get('/api/super-tabs', updateRequired)
+  app.get<{ Querystring: z.infer<typeof listQuery> }>('/api/super-tabs/list', { preHandler: validateQuery(listQuery) },
+    (req, reply) => respond(reply, () => reads.list(req.user!, req.query.after)))
   app.post<{ Body: z.infer<typeof create> }>('/api/super-tabs', { preHandler: validateBody(create) },
     (req, reply) => respond(reply, () => store.create(req.user!, req.body.operationId, req.body.name, req.body.projectVisibility)))
   app.get('/api/super-tabs/invitations', (req, reply) => respond(reply, () => store.invitations(req.user!)))
@@ -135,20 +163,29 @@ export async function superTabRoutes(app: FastifyInstance, options: { store?: Su
   app.post<{ Params: z.infer<typeof tabParams>; Body: z.infer<typeof joinSwarmSchema> }>('/api/super-tabs/:tabId/join',
     { preHandler: [validateParams(tabParams), validateBody(joinSwarmSchema)] },
     (req, reply) => respond(reply, () => store.join(req.user!, req.params.tabId, req.body)))
-  app.get<{ Params: z.infer<typeof hostParams> }>('/api/super-tabs/hosts/:machineId', { preHandler: validateParams(hostParams) },
-    (req, reply) => respond(reply, () => store.hostTabs(req.user!, req.params.machineId)))
+  app.get('/api/super-tabs/hosts/:machineId', updateRequired)
   app.post<{ Params: z.infer<typeof hostParams> }>('/api/super-tabs/hosts/:machineId/terminal', { preHandler: validateParams(hostParams) },
     (req, reply) => respond(reply, () => store.hostTerminal(req.user!, req.params.machineId)))
   // Long-polls about 20 seconds; a request still waiting then answers `pending` and is read again.
   app.get<{ Params: z.infer<typeof terminalParams>; Querystring: z.infer<typeof agentQuery> }>('/api/super-tabs/:tabId/terminal/:requestId',
     { preHandler: [validateParams(terminalParams), validateQuery(agentQuery)] },
     (req, reply) => respond(reply, () => store.terminalResult(req.user!, req.params.tabId, req.params.requestId, req.query.asAgentId, 20_000)))
-  app.get<{ Params: z.infer<typeof hostParams> }>('/api/super-tabs/hosts/:machineId/assignments', { preHandler: validateParams(hostParams) },
-    (req, reply) => respond(reply, () => store.hostAssignments(req.user!, req.params.machineId)))
-  // `githubApp` (only when the server has the app) lets a Lead's start wire its token into another person's work (cli/src/superTabs/start.ts).
-  app.get<{ Params: z.infer<typeof tabParams>; Querystring: z.infer<typeof agentQuery> }>('/api/super-tabs/:tabId',
+  app.get('/api/super-tabs/hosts/:machineId/assignments', updateRequired)
+  app.get('/api/super-tabs/:tabId', updateRequired)
+  // The read API by parts (design section 4, superTabs/read/contract.ts). `githubApp` on a first load (only when the server
+  // has the app) lets a Lead's start wire its token into another person's work (cli/src/superTabs/start.ts).
+  app.get<{ Params: z.infer<typeof tabParams>; Querystring: z.infer<typeof agentQuery> }>('/api/super-tabs/:tabId/parts',
     { preHandler: [validateParams(tabParams), validateQuery(agentQuery)] },
-    (req, reply) => respond(reply, async () => ({ ...await store.read(req.user!, req.params.tabId, req.query.asAgentId), ...(github ? { githubApp: true } : {}) })))
+    (req, reply) => respond(reply, () => reads.firstLoad(req.user!, req.params.tabId, req.query.asAgentId)))
+  app.get<{ Params: z.infer<typeof tabParams>; Querystring: z.infer<typeof changesQuery> }>('/api/super-tabs/:tabId/changes',
+    { preHandler: [validateParams(tabParams), validateQuery(changesQuery)] },
+    (req, reply) => respond(reply, () => reads.changes(req.user!, req.params.tabId, req.query.cursor, req.query.asAgentId)))
+  app.get<{ Params: z.infer<typeof tabParams>; Querystring: z.infer<typeof dormantQuery> }>('/api/super-tabs/:tabId/groups',
+    { preHandler: [validateParams(tabParams), validateQuery(dormantQuery)] },
+    (req, reply) => respond(reply, () => reads.dormant(req.user!, req.params.tabId, { projectId: req.query.projectId, before: req.query.before }, req.query.asAgentId)))
+  app.get<{ Params: z.infer<typeof groupParams>; Querystring: z.infer<typeof agentQuery> }>('/api/super-tabs/:tabId/groups/:conversationId',
+    { preHandler: [validateParams(groupParams), validateQuery(agentQuery)] },
+    (req, reply) => respond(reply, () => reads.group(req.user!, req.params.tabId, req.params.conversationId, req.query.asAgentId)))
   // A one-hour installation token for the repository of the calling agent's task, for git and gh on its machine
   // (docs/swarm-github-app.md). Only that agent's host, on the machine running it, while the task is in its hands.
   app.post<{ Params: z.infer<typeof tabParams>; Querystring: z.infer<typeof agentQuery>; Body: z.infer<typeof githubToken> }>('/api/super-tabs/:tabId/github-token',

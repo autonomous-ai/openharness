@@ -26,8 +26,13 @@ class SuperTabPerson {
   SuperTabPerson.fromJson(Map<String, dynamic> row)
     : id = _text(row, 'id'),
       email = _text(row, 'email'),
-      role = _text(row, 'role');
+      role = _text(row, 'role'),
+      generation = row['generation'] as String?;
   final String id, email, role;
+
+  /// This membership: a new one each time the person joins the Swarm. Null
+  /// from a backend that does not send it.
+  final String? generation;
   bool get canWrite => role == 'owner' || role == 'collaborator';
 }
 
@@ -89,6 +94,15 @@ class SuperTabConversation {
       leadId = row['leadId'] as String?,
       agentIds = List.unmodifiable((row['agentIds'] as List).cast<String>()),
       archived = row['archived'] == true,
+      dormant = row['dormant'] == true,
+      audience = row['audience'] is Map
+          ? List.unmodifiable([
+              for (final person
+                  in superTabMap(row['audience'])['people'] as List? ??
+                      const [])
+                if (person is Map && person['id'] is String) person['id'],
+            ])
+          : null,
       checks = _list(
         row['checks'] ?? const [],
         (check) => Map<String, dynamic>.unmodifiable(check),
@@ -112,6 +126,17 @@ class SuperTabConversation {
   final String? leadId;
   final List<String> agentIds;
   final bool archived;
+
+  /// A private conversation's people, who read it with the project's Lead
+  /// and nobody else; null for a conversation the project shares.
+  final List<String>? audience;
+
+  /// Out of the Swarm's active groups: archived, or finished and quiet for a
+  /// day. Read on demand; a new message brings it back.
+  final bool dormant;
+
+  /// Listed with the project's closed groups, not its active ones.
+  bool get closed => archived || dormant;
   final List<Map<String, dynamic>> checks;
 
   /// Persisted links may be absent on older backends; loaded messages still supply links.
@@ -549,6 +574,35 @@ SuperTabAttachment? _tryAttachment(Object? row) {
   } catch (_) {
     return null;
   }
+}
+
+/// Messages in the order a conversation shows them: by sequence, then id, as
+/// the backend pages them (messages from before the parts migration can share
+/// a sequence).
+int superTabMessageOrder(SuperTabMessage a, SuperTabMessage b) {
+  final bySequence = a.sequence.compareTo(b.sequence);
+  return bySequence != 0 ? bySequence : a.id.compareTo(b.id);
+}
+
+/// Where a conversation's older history continues: the message a page ended
+/// on (docs/design/2026-10-26-swarm-state-parts.md, section 4.6).
+class SuperTabPage {
+  const SuperTabPage(this.sequence, this.id);
+  SuperTabPage.of(SuperTabMessage message) : this(message.sequence, message.id);
+
+  /// The backend's `next`, or null at the start of the conversation.
+  static SuperTabPage? read(Object? next) => switch (next) {
+    {'sequence': final num sequence, 'id': final String id} => SuperTabPage(
+      sequence.toInt(),
+      id,
+    ),
+    null => null,
+    _ => throw const FormatException('Invalid Swarm page.'),
+  };
+
+  final int sequence;
+  final String id;
+  Map<String, dynamic> toJson() => {'sequence': sequence, 'id': id};
 }
 
 /// Optional timing/hold fields keep messages from older backends readable.

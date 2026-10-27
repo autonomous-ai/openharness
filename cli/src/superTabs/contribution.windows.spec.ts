@@ -5,6 +5,7 @@ import { mkdir } from 'node:fs/promises'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { fakeCore } from '../testing/fakeCore.js'
 import { prepareContribution } from './contribution.js'
+import { swarmReply } from './fixtures/read/index.js'
 
 vi.mock('node:path', async (original) => {
   const real = await original<typeof nodePath>()
@@ -19,7 +20,7 @@ function fixture(existing?: string) {
   const request = vi.fn(async () => ({ engines: [{ engine: 'claude', installed: true, signedIn: true }] }))
   const close = vi.fn()
   const machines = existing ? [{ machineId: core.daemon.machineId(), cwd: existing }] : []
-  const deps = { backend: vi.fn(async () => ({ state: { machines } })), open: vi.fn(async () => ({ request, close })), prepare: vi.fn(),
+  const deps = { backend: vi.fn(async (_core: unknown, _method: string, path: string) => swarmReply(path, { machines })), open: vi.fn(async () => ({ request, close })), prepare: vi.fn(),
     capacity: vi.fn(async () => ({ ok: true, resources: { memoryTotalBytes: 8 * 1024 ** 3, memoryUsedBytes: 0, projectDiskFreeBytes: 1e11 } })) }
   return { core, deps, close }
 }

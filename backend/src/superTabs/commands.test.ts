@@ -817,8 +817,10 @@ it('assigns stable workgroup numbers through old snapshots, rename, archive and 
   const f = fixture(), first = f.group(), second = f.group()
   // The Lead and Leads conversations have no number.
   expect(f.state.conversations.map(c => c.number)).toEqual([undefined, 1, 2, undefined])
+  // An old snapshot has neither the numbers nor the counter the store by parts keeps.
   delete f.state.conversations[1]!.number
   delete f.state.conversations[2]!.number
+  delete f.state.groupCounter
   expect(visibleState(f.state, owner).conversations.map(c => c.number)).toEqual([undefined, 1, 2, undefined])
   expect(f.state.conversations[1]!.number).toBeUndefined()
   f.run({ type: 'conversation.rename', conversationId: first, title: 'Renamed' })
@@ -2281,5 +2283,167 @@ describe('credentials in Swarm chat', () => {
     // Commands with no words of their own are passed through untouched.
     const pause: Command = { type: 'tab.pause', paused: true }
     expect(withoutCredentials(pause, removed)).toBe(pause)
+  })
+})
+
+describe('private conversations (an explicit audience)', () => {
+  /** A Swarm with a Lead, a worker, and the peer as a collaborator; the peer opens a private conversation with the Lead. */
+  function privateFixture() {
+    const f = fixture()
+    f.invite()
+    const lead = f.add('lead-harness', 'owner', 'lead', true)
+    const worker = f.add('worker-harness')
+    const group = f.run({ type: 'conversation.create', title: 'Peer and PM', brief: '', checks: [], audience: { personIds: ['peer'] } }, peer)
+      .result.conversationId as string
+    const agentActor = (agentId: string): Actor => ({ kind: 'agent', agentId, machineOwnerId: 'host-owner' })
+    // Object.assign keeps the fixture's live `state` getter; a spread would copy today's state.
+    return Object.assign(f, { lead, worker, group, agentActor })
+  }
+  const sees = (state: Parameters<typeof visibleState>[0], actor: Actor, group: string) => visibleState(state, actor).conversations.some(c => c.id === group)
+
+  it('shows it to the people listed and the project Lead only, not to the owners or other agents', () => {
+    const f = privateFixture()
+    expect(f.state.conversations.find(c => c.id === f.group)).toMatchObject({ audience: { people: [{ id: 'peer', generation: expect.any(String) }] },
+      agentIds: [f.lead], leadId: f.lead })
+    expect(sees(f.state, peer, f.group)).toBe(true)
+    expect(sees(f.state, f.agentActor(f.lead), f.group)).toBe(true)
+    expect(sees(f.state, owner, f.group)).toBe(false)
+    expect(sees(f.state, f.agentActor(f.worker), f.group)).toBe(false)
+    expect(() => f.run({ type: 'message.send', conversationId: f.group, text: 'Hello', replyTo: null, recipientIds: [] })).toThrow('unavailable')
+    expect(f.run({ type: 'message.send', conversationId: f.group, text: 'Hello', replyTo: null, recipientIds: [] }, peer).messages[0]!.recipients).toEqual([f.lead])
+  })
+
+  it('lets a person open one only with themselves in it, and a Lead with any project reader', () => {
+    const f = privateFixture()
+    expect(() => f.run({ type: 'conversation.create', title: 'Not mine', brief: '', checks: [], audience: { personIds: ['owner'] } }, peer))
+      .toThrow('yourself')
+    const opened = f.run({ type: 'conversation.create', title: 'Owner and PM', brief: '', checks: [], audience: { personIds: ['owner'] } }, f.agentActor(f.lead))
+    expect(sees(f.state, owner, opened.result.conversationId as string)).toBe(true)
+    expect(() => f.run({ type: 'conversation.create', title: 'Stranger', brief: '', checks: [], audience: { personIds: ['nobody'] } }, f.agentActor(f.lead)))
+      .toThrow()
+  })
+
+  it('lets only the Lead or a listed person change who is in it, and never makes it public', () => {
+    const f = privateFixture()
+    expect(() => f.run({ type: 'conversation.audience', conversationId: f.group, personIds: ['peer', 'owner'] })).toThrow('unavailable')
+    f.run({ type: 'conversation.audience', conversationId: f.group, personIds: ['peer', 'owner'] }, peer)
+    expect(sees(f.state, owner, f.group)).toBe(true)
+    f.run({ type: 'conversation.audience', conversationId: f.group, personIds: [] }, f.agentActor(f.lead))
+    expect(sees(f.state, peer, f.group)).toBe(false)
+    expect(sees(f.state, f.agentActor(f.lead), f.group)).toBe(true)
+    const shared = f.group === 'lead' ? '' : f.run({ type: 'conversation.create', title: 'Shared', brief: '', checks: [] }).result.conversationId as string
+    expect(() => f.run({ type: 'conversation.audience', conversationId: shared, personIds: ['owner'] })).toThrow('stays')
+  })
+
+  it('holds only messages and the project Lead', () => {
+    const f = privateFixture()
+    expect(() => f.run({ type: 'conversation.agent', conversationId: f.group, agentId: f.worker, present: true, lead: false }, peer)).toThrow()
+    expect(() => f.run({ type: 'conversation.agent', conversationId: f.group, agentId: f.worker, present: true, lead: false }, f.agentActor(f.lead)))
+      .toThrow('only the Lead')
+    expect(() => f.run({ type: 'work.define', conversationId: f.group, brief: 'Work', checks: [{ description: 'Done', independent: false }] }, f.agentActor(f.lead)))
+      .toThrow('chat')
+  })
+
+  it('never puts its work or titles in front of other projects\' Leads', () => {
+    const f = privateFixture()
+    expect(visibleState(f.state, f.agentActor(f.lead)).otherProjectsWork ?? []).toEqual([])
+  })
+})
+
+describe('lost work (liveness.ts)', () => {
+  /** A Lead, and a group with two workers, the first assigned; the clock is at 1000 in every command. */
+  const lostFixture = () => {
+    const f = fixture()
+    const lead = f.add('lead', 'owner', 'lead', true)
+    const group = f.group(), worker = f.add('worker', 'owner', group), other = f.add('other', 'owner', group)
+    const as = (agentId: string): Actor => ({ kind: 'agent', agentId, machineOwnerId: 'host-owner' })
+    f.run({ type: 'work.assign', conversationId: group, agentId: worker })
+    const task = () => f.state.conversations.find(c => c.id === group)!
+    const limit = () => f.run({ type: 'agent.alert', agentId: worker, alert: 'limit', active: true, resetAt: new Date(3_600_000).toISOString() }, as(worker))
+    return { f, lead, group, worker, other, as, task, limit }
+  }
+
+  it('lets the Lead hand lost work to another agent without first deciding about the lost one', () => {
+    const { f, lead, group, other, as, task, limit } = lostFixture()
+    limit()
+    expect(task().assignment!.status).toBe('lost')
+    f.run({ type: 'work.assign', conversationId: group, agentId: other, ...via }, as(lead), decisionIn(group))
+    expect(task().assignment).toMatchObject({ agentId: other, status: 'working', leaseUntil: 1000 + 5 * 60_000 })
+  })
+
+  it('leaves the lost agent undecided when the Lead cancels lost work, without telling it twice or blocking the next assignment', () => {
+    const { f, lead, group, worker, other, as, task, limit } = lostFixture()
+    limit()
+    const cancelled = f.run({ type: 'work.cancel', conversationId: group, assignmentId: task().assignment!.id, reason: 'Not needed' }, as(lead))
+    expect(task().assignment!.status).toBe('cancelled')
+    expect(cancelled.messages[0]!.recipients).toEqual([])
+    expect(f.state.agents.find(a => a.id === worker)!.workDecision).toBeUndefined()
+    // The Lead's next assignment in the project goes to a healthy worker without deciding about the dead one first.
+    const next = f.group()
+    f.run({ type: 'work.assign', conversationId: next, agentId: other, ...via }, as(lead), decisionIn(next))
+    expect(f.state.conversations.find(c => c.id === next)!.assignment).toMatchObject({ agentId: other, status: 'working' })
+  })
+
+  it('renews the lease on the worker\'s own post in its task\'s group, not on anyone else\'s', () => {
+    const { f, lead, group, worker, as, task } = lostFixture()
+    task().assignment!.leaseUntil = 0
+    f.run({ type: 'message.send', conversationId: group, text: 'Halfway.', replyTo: null, recipientIds: [] }, as(lead))
+    expect(task().assignment!.leaseUntil).toBe(0)
+    f.run({ type: 'message.send', conversationId: group, text: 'Halfway.', replyTo: null, recipientIds: [] }, as(worker))
+    expect(task().assignment).toMatchObject({ leaseUntil: 1000 + 5 * 60_000, progressAt: 1000 })
+  })
+
+  it('keeps the lost worker marked when the Lead cancels its task or hands it to another agent (final review, Important 3)', () => {
+    const marked = { conversationId: expect.any(String), assignmentId: expect.any(String), reason: expect.stringContaining('usage limit'), at: 1000 }
+    for (const close of ['cancel', 'reassign'] as const) {
+      const { f, lead, group, worker, other, as, task, limit } = lostFixture()
+      limit()
+      const lostId = task().assignment!.id
+      expect(f.state.agents.find(a => a.id === worker)!.lostTask).toEqual({ ...marked, conversationId: group, assignmentId: lostId })
+      if (close === 'cancel') f.run({ type: 'work.cancel', conversationId: group, assignmentId: lostId, reason: 'Not needed' }, as(lead))
+      else f.run({ type: 'work.assign', conversationId: group, agentId: other, ...via }, as(lead), decisionIn(group))
+      expect(f.state.agents.find(a => a.id === worker)!.lostTask).toEqual({ ...marked, conversationId: group, assignmentId: lostId })
+    }
+  })
+
+  it('clears the mark once the worker finishes a new task, but not when the Lead merely assigns it one', () => {
+    const { f, lead, group, worker, as, task, limit } = lostFixture()
+    limit()
+    f.run({ type: 'work.cancel', conversationId: group, assignmentId: task().assignment!.id, reason: 'Not needed' }, as(lead))
+    const next = f.group()
+    const assignmentId = f.run({ type: 'work.assign', conversationId: next, agentId: worker, ...via }, as(lead), decisionIn(next)).result.assignmentId as string
+    expect(f.state.agents.find(a => a.id === worker)!.lostTask).toBeDefined()
+    f.run({ type: 'work.status', conversationId: next, assignmentId, status: 'review', result: 'Ready' }, as(worker))
+    expect(f.state.agents.find(a => a.id === worker)!.lostTask).toBeDefined()
+    const checkId = f.state.conversations.find(c => c.id === next)!.checks[0]!.id
+    f.run({ type: 'work.check', conversationId: next, assignmentId, checkId, passed: true, evidence: 'Verified' })
+    f.run({ type: 'work.status', conversationId: next, assignmentId, status: 'done', result: 'Delivered' }, as(worker))
+    expect(f.state.agents.find(a => a.id === worker)!.lostTask).toBeUndefined()
+  })
+
+  it('clears the mark when a person assigns the worker by hand', () => {
+    const { f, lead, group, worker, as, task, limit } = lostFixture()
+    limit()
+    f.run({ type: 'work.cancel', conversationId: group, assignmentId: task().assignment!.id, reason: 'Not needed' }, as(lead))
+    const next = f.group()
+    f.run({ type: 'work.assign', conversationId: next, agentId: worker })
+    expect(f.state.agents.find(a => a.id === worker)!.lostTask).toBeUndefined()
+  })
+
+  it('clears the mark when the worker\'s terminal is replaced (Change agent)', () => {
+    const { f, group, worker, as, limit } = lostFixture()
+    limit()
+    f.run({ type: 'agent.rebind', agentId: worker, machineId: 'host', projectId: 'lead', previousHarnessId: 'worker', harnessId: 'worker-2', configuration: config }, as(worker))
+    expect(f.state.agents.find(a => a.id === worker)).toMatchObject({ harnessId: 'worker-2' })
+    expect(f.state.agents.find(a => a.id === worker)!.lostTask).toBeUndefined()
+    expect(f.state.conversations.find(c => c.id === group)!.lostAttempt).toMatchObject({ agentId: worker })
+  })
+
+  it('does not lose work a Lead holds: Leads are not covered here', () => {
+    const { f, lead, as } = lostFixture()
+    const own = f.group()
+    f.run({ type: 'work.assign', conversationId: own, agentId: lead })
+    f.run({ type: 'agent.alert', agentId: lead, alert: 'limit', active: true }, as(lead))
+    expect(f.state.conversations.find(c => c.id === own)!.assignment!.status).toBe('working')
   })
 })

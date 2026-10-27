@@ -6,13 +6,15 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/core/local_key_value_store.dart';
 import 'package:harness/super_tabs/client.dart';
 import 'package:harness/super_tabs/controller.dart';
+import 'package:harness/super_tabs/model.dart';
+import 'package:harness/super_tabs/parts.dart';
 import 'package:harness/super_tabs/reading.dart';
 import 'package:harness/super_tabs/saved_view.dart';
 
 import 'support/super_tab_fixture.dart';
 import 'swarm_state_test.dart' show MemoryStore;
 
-/// A view as a controller hands it over: the state as read, the open
+/// A view as a controller hands it over: the Swarm's parts as read, the open
 /// conversation and its last page.
 Map<String, dynamic> _view({String tab = 'tab', int pad = 0}) {
   final server = ConversationServer()..append('Hello');
@@ -24,9 +26,12 @@ Map<String, dynamic> _view({String tab = 'tab', int pad = 0}) {
     },
   ];
   if (pad > 0) server.state['name'] = 'x' * pad;
+  final load = server.parts.read('/api/super-tabs/$tab/parts', server.state)!;
   return {
-    'revision': 7,
-    'state': server.state,
+    'format': 2,
+    'savedAt': DateTime.now().millisecondsSinceEpoch,
+    'lastChangedAt': 7,
+    'parts': SuperTabParts.firstLoad(load).toJson(),
     'conversationId': 'lead',
     'messages': server.messages,
     'next': null,
@@ -49,13 +54,30 @@ void main() {
     await views.claim('owner');
     await views.write('owner', 'tab', _view());
     final read = (await views.read('owner', 'tab'))!;
-    expect(read['revision'], 7);
+    expect(read['lastChangedAt'], 7);
     expect(read['conversationId'], 'lead');
     expect((read['messages'] as List).single['text'], 'Hello');
-    final state = read['state'] as Map<String, dynamic>;
+    final state = SuperTabParts.fromJson(superTabMap(read['parts'])).state;
     expect(state['name'], 'Pilot');
-    expect(state.containsKey('starts'), isFalse);
+    expect(state['starts'], isEmpty);
     expect(store.values.values.join(), isNot(contains('never draws')));
+  });
+
+  test('a view an older build saved is not drawn', () async {
+    final store = MemoryStore();
+    final views = SuperTabSavedViews(store);
+    await views.claim('owner');
+    await store.write(
+      'super_tab.view.owner.tab',
+      jsonEncode({
+        'revision': 7,
+        'state': ConversationServer().state,
+        'conversationId': 'lead',
+        'messages': <dynamic>[],
+        'next': null,
+      }),
+    );
+    expect(await views.read('owner', 'tab'), isNull);
   });
 
   test('a view over the size cap is not kept, and an older one goes', () async {
@@ -200,10 +222,11 @@ void _controllerTests() {
       c.start();
       async.flushMicrotasks();
       expect(c.loading, isFalse);
-      // The state and the latest page: receipts and new messages in one read.
+      // What changed since the view was saved, and the latest page:
+      // receipts and new messages in one read.
       expect(reads.paths, [
         '/api/super-tabs/tab/conversations/lead/messages',
-        '/api/super-tabs/tab',
+        startsWith('/api/super-tabs/tab/changes?cursor='),
       ]);
       server.holdReads!.complete();
       server.holdReads = null;
@@ -243,7 +266,9 @@ void _controllerTests() {
       final broken = _controller(_Reads(server))
         ..drawSaved({
           ...view,
-          'state': {'id': 'tab'},
+          'parts': {
+            'load': {'format': 2},
+          },
         });
       expect(broken.snapshot, isNull);
       expect(broken.showingSaved, isFalse);
@@ -268,6 +293,51 @@ void _controllerTests() {
       unawaited(c.machineAvailable());
       async.flushMicrotasks();
       expect(c.showingSaved, isFalse);
+      c.dispose();
+    });
+  });
+
+  test(
+    'a saved view from another epoch draws, then the first read loads in full',
+    () {
+      final server = ConversationServer()..append('Hello');
+      final view = _saved(server);
+      fakeAsync((async) {
+        server.parts.epoch++;
+        final reads = _Reads(server);
+        final c = _controller(reads)..drawSaved(view);
+        expect(c.showingSaved, isTrue);
+        c.start();
+        async.flushMicrotasks();
+        expect(reads.paths.where((p) => !p.contains('/messages')), [
+          startsWith('/api/super-tabs/tab/changes?cursor='),
+          '/api/super-tabs/tab/parts',
+        ]);
+        expect(c.showingSaved, isFalse);
+        expect(c.snapshot!.name, 'Pilot');
+        c.dispose();
+      });
+    },
+  );
+
+  test('a saved view older than seven days is not drawn', () {
+    final server = ConversationServer()..append('Hello');
+    final view = _saved(server);
+    fakeAsync((async) {
+      final reads = _Reads(server);
+      final c = _controller(reads)
+        ..drawSaved({
+          ...view,
+          'savedAt': DateTime.now()
+              .subtract(const Duration(days: 7))
+              .millisecondsSinceEpoch,
+        });
+      expect(c.snapshot, isNull);
+      c.start();
+      async.flushMicrotasks();
+      expect(reads.paths.where((p) => !p.contains('/messages')), [
+        '/api/super-tabs/tab/parts',
+      ]);
       c.dispose();
     });
   });
@@ -300,7 +370,7 @@ class _Transport {
   }) async {
     if (hold case final wait?) await wait.future;
     if (refuse case final failure?) throw failure;
-    if (Uri.parse(path).path == '/api/super-tabs') {
+    if (Uri.parse(path).path == '/api/super-tabs/list') {
       return {
         'tabs': [
           {'id': 'tab', 'name': 'Pilot'},
@@ -721,7 +791,10 @@ void _reviewTests() {
         final client =
             SuperTabClient(
                 transport: (method, path, {body}) {
-                  if (path == '/api/super-tabs/tab') reads.add(path);
+                  if (path == '/api/super-tabs/tab/parts' ||
+                      path.startsWith('/api/super-tabs/tab/changes?')) {
+                    reads.add(path);
+                  }
                   return transport.call(method, path, body: body);
                 },
                 storage: store,
@@ -824,7 +897,7 @@ void _reviewTests() {
   // Finding 6.
   test('the first read wins over a saved view, whatever its revision', () {
     final server = ConversationServer()..append('Hello');
-    final view = _saved(server)..['revision'] = 999;
+    final view = _saved(server)..['lastChangedAt'] = 1 << 50;
     fakeAsync((async) {
       server.state['name'] = 'Pilot, renamed';
       final c = _controller(_Reads(server))

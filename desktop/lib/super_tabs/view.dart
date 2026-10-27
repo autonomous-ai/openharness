@@ -425,7 +425,7 @@ class _SuperTabViewState extends State<SuperTabView>
           )
           .toList();
       groups.sort((a, b) {
-        final active = (a.archived ? 1 : 0).compareTo(b.archived ? 1 : 0);
+        final active = (a.closed ? 1 : 0).compareTo(b.closed ? 1 : 0);
         if (active != 0) return active;
         final project = (a.projectId == projectId ? 0 : 1).compareTo(
           b.projectId == projectId ? 0 : 1,
@@ -647,6 +647,9 @@ class _SuperTabViewState extends State<SuperTabView>
   Future<void> _archived() async {
     final c = this.c;
     var query = '';
+    // Archived groups are out of the active set: read the project's now.
+    final projectId = c.selected?.projectId;
+    if (projectId != null) unawaited(c.loadDormant(projectId));
     final selected = await showAppDialog<String>(
       context: context,
       builder: (context) => SuperTabDialogScope(
@@ -684,8 +687,13 @@ class _SuperTabViewState extends State<SuperTabView>
                       const SizedBox(height: 12),
                       Expanded(
                         child: groups.isEmpty
-                            ? const Center(
-                                child: Text('No archived conversations.'),
+                            ? Center(
+                                child: Text(
+                                  projectId != null &&
+                                          c.dormantLoading(projectId)
+                                      ? 'Loading archived conversations…'
+                                      : 'No archived conversations.',
+                                ),
                               )
                             : ListView(
                                 children: [
@@ -701,6 +709,26 @@ class _SuperTabViewState extends State<SuperTabView>
                                 ],
                               ),
                       ),
+                      // Older closed groups are a page away whatever the
+                      // rows above show: newer finished groups or a search
+                      // can leave none of them archived or matching.
+                      if (projectId != null && c.hasEarlierDormant(projectId))
+                        ListTile(
+                          key: const ValueKey('super-archived-earlier'),
+                          title: Text(
+                            c.dormantLoading(projectId)
+                                ? 'Loading…'
+                                : 'Show earlier',
+                            style: DesktopChrome.control(
+                              color: DesktopChrome.muted,
+                            ),
+                          ),
+                          onTap: c.dormantLoading(projectId)
+                              ? null
+                              : () => unawaited(
+                                  c.loadDormant(projectId, earlier: true),
+                                ),
+                        ),
                     ],
                   ),
                 ),
@@ -862,6 +890,10 @@ class _SuperTabViewState extends State<SuperTabView>
   bool get _terminalsVisible =>
       !_devicesVisible && (widget.terminalsVisible || widget.terminal != null);
 
+  /// The reader's own private chat with its project's Product Manager.
+  bool _isPmChat(SuperTabConversation group) =>
+      c.pmChat(group.projectId)?.id == group.id;
+
   /// The open conversation's name, or what the pane shows instead of one.
   Widget _title(SuperTabConversation? group) => Text(
     _devicesVisible
@@ -876,6 +908,8 @@ class _SuperTabViewState extends State<SuperTabView>
         ? c.snapshot!.projectFor(group.id)!.name
         : group.id == c.snapshot!.leadsConversationId
         ? 'Product Managers'
+        : _isPmChat(group)
+        ? 'Chat with PM'
         : group.label,
     maxLines: 1,
     overflow: TextOverflow.ellipsis,
@@ -1138,7 +1172,9 @@ class _SuperTabViewState extends State<SuperTabView>
           if (editable && project?.ownerId == c.accountId)
             item('Delete Project', () => _groupAction('delete', group)),
         ] else ...[
-          item('Work details', () => _groupAction('work', group)),
+          // A private conversation is chat only: it has no work.
+          if (group.audience == null)
+            item('Work details', () => _groupAction('work', group)),
           if (editable) ...[
             item('Rename', () => _groupAction('rename', group)),
             item(
@@ -1154,10 +1190,14 @@ class _SuperTabViewState extends State<SuperTabView>
             ),
           ],
         ],
-        if (c.snapshot?.conversations.any(
-              (g) => g.archived && g.projectId == group.projectId,
-            ) ==
-            true)
+        // Until all of the project's closed groups are read, it may have
+        // archived ones: the list reads them when it opens.
+        if (!c.dormantLoaded(group.projectId) ||
+            c.hasEarlierDormant(group.projectId) ||
+            c.snapshot?.conversations.any(
+                  (g) => g.archived && g.projectId == group.projectId,
+                ) ==
+                true)
           item('Archived conversations', () => _groupAction('archived', group)),
       ],
       builder: (context, menu, _) => AppIconButton(
@@ -1298,7 +1338,7 @@ class _SuperTabViewState extends State<SuperTabView>
             textAlign: TextAlign.center,
             style: DesktopChrome.text(color: DesktopChrome.muted),
           ),
-          if (!c.accessRevoked) ...[
+          if (!c.accessRevoked && !c.updateRequired) ...[
             const SizedBox(height: 12),
             TextButton(
               style: _thumb,
@@ -1401,7 +1441,7 @@ class _SuperTabViewState extends State<SuperTabView>
             child: Row(
               children: [
                 Expanded(child: Text(c.error!, style: DesktopChrome.control())),
-                if (!c.accessRevoked)
+                if (!c.accessRevoked && !c.updateRequired)
                   TextButton(
                     onPressed: () => unawaited(c.refresh()),
                     child: const Text('Retry'),
@@ -1423,6 +1463,8 @@ class _SuperTabViewState extends State<SuperTabView>
                         ? 'Loading conversation…'
                         : c.snapshot!.isProjectLead(group.id)
                         ? 'Discuss the plan with your product manager.'
+                        : _isPmChat(group)
+                        ? 'Only you and the Product Manager read this chat.'
                         : 'Start the conversation.',
                     style: DesktopChrome.text(color: DesktopChrome.muted),
                   ),
@@ -1826,8 +1868,9 @@ class _SuperTabViewState extends State<SuperTabView>
                                             ? 'Loading conversation…'
                                             : c.canWrite
                                             ? c.snapshot!.isProjectLead(
-                                                    group.id,
-                                                  )
+                                                        group.id,
+                                                      ) ||
+                                                      _isPmChat(group)
                                                   ? 'Message Product Manager'
                                                   : group.id ==
                                                         c

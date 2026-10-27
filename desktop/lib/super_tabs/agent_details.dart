@@ -40,7 +40,7 @@ class SuperTabAgentInfo {
          controller.snapshot?.conversations
              .where(
                (g) =>
-                   !g.archived &&
+                   !g.closed &&
                    g.assignment?['agentId'] == agent.id &&
                    !const {
                      'done',
