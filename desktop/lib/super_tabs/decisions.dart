@@ -37,8 +37,10 @@ class SuperTabDecision {
 }
 
 /// The reader's decisions in one Swarm: open and answered, read from the
-/// backend whenever the open count moves or the Swarm changes while one is
-/// open. One per controller, as the reader's tags are (notifications.dart).
+/// backend when the open count moves or the reader answers one. Not on every
+/// Swarm change: machine readings and messages change it every few seconds,
+/// and each read costs the backend a load. One per controller, as the
+/// reader's tags are (notifications.dart).
 class SuperTabDecisions extends ChangeNotifier {
   SuperTabDecisions._(this.controller) {
     controller.addListener(_changed);
@@ -56,7 +58,6 @@ class SuperTabDecisions extends ChangeNotifier {
   /// Decisions being answered: their buttons wait for the backend.
   final Set<String> answering = {};
   int? _count;
-  int _lastChangedAt = -1;
   Future<void>? _loading;
   bool _dirty = false;
 
@@ -73,12 +74,8 @@ class SuperTabDecisions extends ChangeNotifier {
     final snapshot = controller.snapshot;
     if (snapshot == null) return;
     final count = snapshot.decisionsWaiting;
-    final moved = count != _count;
-    if (!moved && controller.lastChangedAt == _lastChangedAt) return;
-    _lastChangedAt = controller.lastChangedAt;
+    if (count == _count) return;
     _count = count;
-    // Nothing open and nothing just answered: an idle Swarm reads nothing.
-    if (count == 0 && !moved) return;
     unawaited(load());
   }
 

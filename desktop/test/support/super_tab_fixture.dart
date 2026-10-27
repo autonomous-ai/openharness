@@ -393,6 +393,8 @@ class ConversationServer {
   final mentions = <Map<String, dynamic>>[];
   // Decisions asked of the reader, newest last, answered by GET .../decisions?state=.
   final decisions = <Map<String, dynamic>>[];
+  // How many times a decisions list was read (open and answered each count).
+  int decisionReads = 0;
   // How many times the mentions list was read.
   int mentionReads = 0;
   // A backend from before tags: it has no list route.
@@ -688,6 +690,7 @@ class ConversationServer {
       return jsonDecode(jsonEncode(board)) as Map<String, dynamic>;
     }
     if (uri.pathSegments.last == 'decisions') {
+      decisionReads++;
       final open = uri.queryParameters['state'] == 'open';
       return jsonDecode(
         jsonEncode({

@@ -121,6 +121,46 @@ void main() {
     );
   });
 
+  group('reading the reader\'s decisions', () {
+    test(
+      'a Swarm change that leaves the waiting count alone reads no decisions',
+      () async {
+        final server = swarm()..ask(['Ship how?']);
+        final controller = server.controller(account: 'peer');
+        addTearDown(controller.dispose);
+        final decisions = SuperTabDecisions.of(controller);
+        await controller.refresh();
+        await pumpEventQueue();
+        expect(decisions.open.single.question, 'Ship how?');
+        final reads = server.decisionReads;
+        final before = controller.lastChangedAt;
+
+        // A message, a machine reading: the Swarm changed, the count did not.
+        (server.state['conversations'] as List).first['title'] = 'Lead room';
+        await controller.refresh();
+        await pumpEventQueue();
+
+        expect(controller.lastChangedAt, isNot(before));
+        expect(server.decisionReads, reads);
+      },
+    );
+
+    test('reads again when the waiting count moves', () async {
+      final server = swarm()..ask(['Ship how?']);
+      final controller = server.controller(account: 'peer');
+      addTearDown(controller.dispose);
+      final decisions = SuperTabDecisions.of(controller);
+      await controller.refresh();
+      await pumpEventQueue();
+
+      server.ask(['Name it?']);
+      await controller.refresh();
+      await pumpEventQueue();
+
+      expect(decisions.open.map((d) => d.question), ['Name it?', 'Ship how?']);
+    });
+  });
+
   group('the Decisions list', () {
     testWidgets(
       'lists one batch per ask, marks the recommendation, and answers with one tap',
