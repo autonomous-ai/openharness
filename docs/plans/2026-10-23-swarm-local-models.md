@@ -59,3 +59,40 @@ The ⌘I Models picker made for the Swarm (`SwarmModelsTarget` on `SwarmSearchCo
   whose fresh reading lists the model.
 - A shared API is never counted as a running local model, so your models can run for the Swarm beside shared APIs.
 - A click only selects a row; the preview's button (or Return) acts.
+
+## Grid models first for simple work (2026-10-27)
+
+Roadmap (Dec): about 30% of work runs on cheaper models without lower quality.
+
+- **Routing** (`cli/src/superTabs/route.ts` `softOf`, `compare`): a task of low difficulty and low risk that is not a
+  review ranks a model served on the Swarm's grid above every subscription candidate. Only the owner's preferred engine
+  comes before it, since those are the owner's own words, and a grid model runs on Claude Code or Codex anyway. Hard
+  rules and the policy floor apply first, as before. Without this, a grid model (cost 1, like Haiku) lost to an
+  account whose 5-hour window was about to reset (effective cost 0) and to idle members under `preferIdle`.
+- **Opt-out:** the owner's soft rule `noGridFirst` (backend `rules.ts`). It only ranks and never refuses a start.
+  To stop using grid models entirely, the owner still has the policy's `localModels.enabled`.
+- **Recording** (backend `leaderboard/record.ts`): every `work.assign` appends a run to its group's ledger: the
+  assignment, the engine, the model (the grid model named by the agent's start, else the model its engine reports)
+  and the time. The first verdict on an independent check during that attempt is its `firstReview`.
+- **Report:** the leaderboard read returns `models` for this week and last week: the attempts at requests, how many
+  ran on the grid, and how many of each kind passed their first review.
+
+### Design
+
+- **Growth:** at most 20 runs per group (`MAX_RUNS`, the oldest are dropped), about 150 bytes each. The runs live and
+  go with their group's ledger. Reviews and private conversations are never counted.
+- **Concurrency:** written inside the command that assigns or checks, under the group part's existing lock. There is
+  no new lock.
+- **Read cost:** the leaderboard already reads the project's groups. Counting their runs adds no read.
+- **Scale:** at 10x (about 3,000 attempts a week) it is still one pass over at most 20 runs per group. The group part
+  size (4 MB limit) would warn first, and 20 runs use under 0.1% of it.
+- **Compatibility:** `models` is a new field in the leaderboard response, and Desktop's parser ignores fields it does
+  not know. A CLI from before this change does not know `noGridFirst` and ranks as before. A backend from before it
+  refuses the rule as invalid.
+- **Migration + rollback:** none. Old groups have no `runs` and count as zero. A rollback leaves `runs` in ledgers,
+  where the old code never reads them.
+- **Audience:** the ledger is never sent to clients (`read/views.ts` strips it). The leaderboard read keeps its
+  per-project access check.
+- **Identity:** N/A because no work runs as anyone. Only the agent's own configuration and start are read.
+- **Failure:** a start the backend no longer holds is recorded with the model its engine reports, never dropped.
+- **Platforms:** backend and CLI only. Desktop shows nothing new yet.

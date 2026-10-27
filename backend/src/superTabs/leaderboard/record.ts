@@ -2,11 +2,15 @@
  * What the leaderboard counts, recorded as it happens on the group it happened in (docs/swarms.md, Leaderboard): when a
  * request was asked and first shipped, which item waits on a person, and who answered it. Only facts and times, never text.
  */
-import type { Actor, Assignment, Conversation, SuperTabState, WorkStatus } from '../model.js'
+import type { Actor, Agent, Assignment, Check, Conversation, SuperTabState, WorkStatus } from '../model.js'
 import { groupProject } from '../projects.js'
 import { WEEK_MS } from './week.js'
 
 export interface Unblock { personId: string; at: number; waitedMs: number }
+/** One attempt at a group's work: what it ran on and whether its first review passed (roadmap, Dec: about 30% of work on
+ *  cheaper models without lower quality). `grid`: a model served on the Swarm's grid, named by its start, since the engine
+ *  reports none of its own. `firstReview`: the first verdict on an independent check during this attempt. */
+export interface Run { assignmentId: string; engine: string; model: string | null; grid?: true; at: number; firstReview?: boolean }
 /** A group's leaderboard bookkeeping; readers never get it whole (read/views.ts groupView). */
 export interface GroupLedger {
   askedAt?: number
@@ -17,10 +21,14 @@ export interface GroupLedger {
   waiting?: { assignmentId: string; since: number; messageId: string; answeredAt?: number }
   /** Answers within the last LEDGER_WEEKS, oldest first. */
   unblocks?: Unblock[]
+  /** The last MAX_RUNS attempts, oldest first. */
+  runs?: Run[]
 }
 
 /** The leaderboard reads this week and last; a little more keeps a streak and week boundaries safe. */
 export const LEDGER_WEEKS = 5
+/** A group is one request; more attempts than this are a stuck task, and the oldest say nothing new. */
+export const MAX_RUNS = 20
 
 /** A shared group is asked when it is opened. A private conversation is chat only and never counts. */
 export function recordAsked(group: Conversation, requesterId: string | undefined, now: number): void {
@@ -63,4 +71,19 @@ export function recordAnswer(state: SuperTabState, group: Conversation, actor: A
 export function waitsNow(group: Conversation): boolean {
   const waiting = group.ledger?.waiting
   return group.assignment?.status === 'needs_human' && !(waiting?.assignmentId === group.assignment.id && waiting.answeredAt != null)
+}
+
+/** An assignment records the model its agent runs: the grid model its start named, else what its engine reports. */
+export function recordRun(state: SuperTabState, group: Conversation, assignment: Assignment, worker: Agent, now: number): void {
+  const gridModel = state.starts?.find(s => s.harnessId === worker.harnessId && s.request.machineId === worker.machineId)?.request.gridModel
+  const run: Run = { assignmentId: assignment.id, engine: assignment.configuration.engine,
+    model: gridModel ?? assignment.configuration.model, ...(gridModel ? { grid: true as const } : {}), at: now }
+  const ledger = group.ledger ??= {}
+  ledger.runs = [...ledger.runs ?? [], run].slice(-MAX_RUNS)
+}
+
+/** The first verdict on an independent check during an attempt is its first review; later verdicts are fixes. */
+export function recordReview(group: Conversation, check: Check, passed: boolean): void {
+  const run = group.ledger?.runs?.find(r => r.assignmentId === group.assignment?.id)
+  if (check.independent && run && run.firstReview === undefined) run.firstReview = passed
 }

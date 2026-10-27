@@ -222,3 +222,63 @@ describe('who unblocks waiting work', () => {
     expect(f.group(id).ledger?.unblocks?.map(u => u.at)).toEqual([4 * week + 2_000, 6 * week + 2_000])
   })
 })
+
+describe('the model behind each assignment, and its first review (roadmap, Dec: about 30% of work on cheaper models)', () => {
+  const independent = [{ description: 'Works', independent: false }, { description: 'Independent review', independent: true }]
+  /** Reads a check by its kind, so the order of the checks does not matter. */
+  const verdict = (f: ReturnType<typeof fixture>, id: string, assignmentId: string, passed: boolean, isIndependent = true, actor: Actor = owner) => {
+    const check = f.group(id).checks.find(c => c.independent === isIndependent)!
+    f.run({ type: 'work.check', conversationId: id, assignmentId, checkId: check.id, passed, evidence: 'rev abc' }, actor)
+  }
+
+  it('records the engine and model each assignment runs on', () => {
+    const f = fixture()
+    f.at(5_000)
+    const id = f.create(owner, { checks: independent })
+    const { assignmentId } = f.assign(id)
+    expect(f.group(id).ledger!.runs).toEqual([{ assignmentId, engine: 'claude', model: 'opus', at: 5_000 }])
+  })
+
+  it('names the grid model an agent was started on, which its engine does not report', () => {
+    const f = fixture()
+    const id = f.create(owner, { checks: independent })
+    const worker = f.add('grid-worker', id)
+    f.state.starts = [{ id: 's1', creationId: 'c1', actorKey: 'agent:lead', contributorId: 'owner', membershipGeneration: 'g', machineOwnerId: 'host-owner',
+      hostGrant: null, harnessId: 'grid-worker', dispatched: true, error: null,
+      request: { conversationId: id, machineId: 'host', engine: 'claude', model: 'default', effort: 'default', name: 'Builder', cwd: '/repo', worktree: true,
+        gridModel: 'moonshotai/kimi-k3', gridName: 'swarm-0123456789ab',
+        requirements: { memoryBytes: 1, diskBytes: 1, maxCpuPercent: 80, tools: [], devices: [], quotaRequired: false } } }]
+    const { assignmentId } = f.assign(id, worker)
+    expect(f.group(id).ledger!.runs).toEqual([{ assignmentId, engine: 'claude', model: 'moonshotai/kimi-k3', grid: true, at: 1_000 }])
+  })
+
+  it('keeps the first verdict on an independent check as the assignment\'s first review, and ignores later and other checks', () => {
+    const f = fixture()
+    const id = f.create(owner, { checks: independent })
+    const { assignmentId } = f.assign(id)
+    verdict(f, id, assignmentId, true, false)
+    expect(f.group(id).ledger!.runs![0]).not.toHaveProperty('firstReview')
+    verdict(f, id, assignmentId, false)
+    verdict(f, id, assignmentId, true)
+    expect(f.group(id).ledger!.runs![0]).toMatchObject({ assignmentId, firstReview: false })
+    // A new attempt is reviewed on its own.
+    f.run({ type: 'work.cancel', conversationId: id, assignmentId, reason: 'Again.' })
+    const second = f.assign(id)
+    verdict(f, id, second.assignmentId, true)
+    expect(f.group(id).ledger!.runs!.map(r => [r.assignmentId, r.firstReview])).toEqual([[assignmentId, false], [second.assignmentId, true]])
+  })
+
+  it('keeps the last 20 assignments of a group', () => {
+    const f = fixture()
+    const id = f.create(owner, { checks: independent })
+    const worker = f.add('worker', id)
+    let first = ''
+    for (let i = 0; i < 21; i++) {
+      const { assignmentId } = f.assign(id, worker)
+      if (i === 0) first = assignmentId
+      f.run({ type: 'work.cancel', conversationId: id, assignmentId, reason: 'Again.' })
+    }
+    expect(f.group(id).ledger!.runs).toHaveLength(20)
+    expect(f.group(id).ledger!.runs!.map(r => r.assignmentId)).not.toContain(first)
+  })
+})

@@ -17,7 +17,7 @@ import { loseTasks, renewLease, renewOwnTask } from './liveness.js'
 import { digestStartsAfter, knownTimeZone } from './digest.js'
 import { credentialResult, redactCredentials, type CredentialKind } from './credentials.js'
 import { dirtyGroups, reportGroups, summarize } from './projectUpdates.js'
-import { recordAnswer, recordAsked, recordStatus } from './leaderboard/record.js'
+import { recordAnswer, recordAsked, recordReview, recordRun, recordStatus } from './leaderboard/record.js'
 import { agentKind, agentProjectId, audienceOf, agentSetRole, canReadProject, deleteProject, markConfidential, requireSingleRegistration, groupProject, inviteLanding, ledProject, manageProject, MAX_ROLES, mutableProjects, placeRules, projectMembers, projectOf, projectRules, projectsOf, readAgent, readConversation, readProject, roleVersion, sameProject, sharedWithLeads, SKILL_SET_NAMES, skillSetOf, type ProjectRole, type RoleKind, type SwarmProject } from './projects.js'
 
 const id = z.string().min(1).max(160).regex(/^[A-Za-z0-9_-]+$/)
@@ -1593,6 +1593,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       group.assignment = { id: operationId, agentId: worker.id, status: 'working', configuration: structuredClone(worker.configuration),
         execution: { machineId: worker.machineId, harnessId: worker.harnessId, machineOwnerId: worker.machineOwnerId }, result: null }
       renewLease(group.assignment, context.now)
+      recordRun(state, group, group.assignment, worker, context.now)
       group.checks.forEach(c => { c.evidence = null; c.passedBy = null })
       result.assignmentId = operationId
       let routeNote: { decisionId: string; text: string } | null = null, personChose = false
@@ -1714,6 +1715,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       if (check.independent && actor.kind === 'agent' && actor.agentId === group.assignment.agentId) fail('INDEPENDENT_REVIEW', 'Another agent or a person must perform this check.')
       check.evidence = command.evidence
       check.passedBy = command.passed ? actorKey(actor) : null
+      recordReview(group, check, command.passed)
       if (actor.kind === 'agent') renewOwnTask(group, actor.agentId, context.now)
       break
     }
