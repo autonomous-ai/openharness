@@ -1,4 +1,4 @@
-import { contributedEngines, expireRemovals, LASTING_TEAM_REFUSALS, machineContribution, machineObservationSchema, machineSlots, observedPrivacy, recordAgentPresence, removalPreview, swarmGridRow, teamAccountRequired, teamWorkRefusal, type MachineObservation } from './machines.js'
+import { contributedEngines, expireRemovals, LASTING_TEAM_REFUSALS, machineContribution, machineObservationSchema, machineSlots, observedPrivacy, recordAgentPresence, removalPreview, startPreparing, swarmGridRow, teamAccountRequired, teamWorkRefusal, type MachineObservation } from './machines.js'
 import { createHash } from 'node:crypto'
 import type { Prisma, PrismaClient, SuperTab, SuperTabDelivery, SuperTabMessage } from '@prisma/client'
 import type { AuthUser } from '../lib/ssoAuth.js'
@@ -593,7 +593,8 @@ export class SuperTabStore {
       if (grant.machineOwnerId !== start.machineOwnerId || (grant.hostGrant ?? null) !== start.hostGrant) {
         fail('CONTRIBUTION_REVOKED', 'This start belongs to a machine grant that was revoked.', 403)
       }
-      return start
+      // The Lead reads that its machine is still preparing it, and waits instead of starting another (liveness.ts).
+      return startPreparing(state, start, this.now()) ? { ...start, preparing: true as const } : start
     })
   }
 
@@ -1476,13 +1477,17 @@ export class SuperTabStore {
       const team = isTeamSession(user)
       // Its privacy check counts only from the Harness Team account's own session; an ordinary sign-in's claim is dropped.
       // Progress is kept for running sessions only: their leases are read from it (liveness.ts).
-      const { privacy: reported, harnessProgress, ...reading } = observation
+      const { privacy: reported, harnessProgress, preparingStartIds, ...reading } = observation
       const progress = harnessProgress && Object.fromEntries(Object.entries(harnessProgress).filter(([id]) => observation.runningHarnessIds.includes(id)))
+      // A machine says preparing only of the starts it launched that are neither running nor failed (liveness.ts).
+      const preparing = preparingStartIds?.filter(id => state.starts?.some(s => s.id === id && s.request.machineId === machineId
+        && s.dispatched && !s.harnessId && !s.error))
       const privacy = observedPrivacy(pool.observation?.privacy, reported, team, now)
       accrueLent(state, pool, now)
       pool.observation = { ...reading, quotas: observation.quotas.filter(q => contributedEngines(pool, observation).includes(q.engine)), receivedAt: now,
         // How the machine is signed in, from the session that reported and never from the report (lib/teamSession.ts).
-        sessionKind: team ? 'team' : 'computer', ...(privacy ? { privacy } : {}), ...(progress ? { harnessProgress: progress } : {}) }
+        sessionKind: team ? 'team' : 'computer', ...(privacy ? { privacy } : {}), ...(progress ? { harnessProgress: progress } : {}),
+        ...(preparing ? { preparingStartIds: preparing } : {}) }
       // Current-generation physical stop proof also finishes a close whose membership was already withdrawn.
       for (const proof of observation.stoppedReservations ?? []) {
         if (!observation.stoppedHarnessIds.includes(proof.harnessId)) continue

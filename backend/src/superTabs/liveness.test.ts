@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { Assignment, SuperTabState } from './model.js'
-import { LEASE_MS, QUIET_RUNNING_MS, startPreparing, sweepLiveness } from './liveness.js'
+import { LEASE_MS, QUIET_RUNNING_MS, sweepLiveness } from './liveness.js'
+import { MACHINE_FRESH_MS, startPreparing } from './machines.js'
 import { split } from './parts/index.js'
 
 const MINUTE = 60_000
@@ -94,10 +95,10 @@ describe('a start its machine has launched', () => {
       told: ['Could not start Builder: Worker Mac was still preparing it after 15 minutes.'] })
   })
 
-  it('fails a minute after the reports saying it is preparing stop', () => {
+  it('fails once its machine\'s reports saying it is preparing have stopped for three beats', () => {
     const now = LAUNCHED + 6 * MINUTE
-    expect(sweep(launched([{ receivedAt: now - MINUTE, preparingStartIds: ['s1'] }]), now).error).toBeNull()
-    expect(sweep(launched([{ receivedAt: now - MINUTE - 1, preparingStartIds: ['s1'] }]), now)).toEqual({
+    expect(sweep(launched([{ receivedAt: now - MACHINE_FRESH_MS, preparingStartIds: ['s1'] }]), now).error).toBeNull()
+    expect(sweep(launched([{ receivedAt: now - MACHINE_FRESH_MS - 1, preparingStartIds: ['s1'] }]), now)).toEqual({
       error: 'Worker Mac stopped reporting while preparing it', told: ['Could not start Builder: Worker Mac stopped reporting while preparing it.'] })
     // The latest report no longer lists it: preparing is over without a start, so the 3 minutes apply.
     expect(sweep(launched([{ receivedAt: now, preparingStartIds: [] }]), now).error).toBe('Worker Mac did not start it within 3 minutes')
@@ -117,6 +118,6 @@ describe('a start its machine has launched', () => {
     expect(preparing(launched([{ receivedAt: now, preparingStartIds: ['s1'] }], { error: 'Could not prepare' }))).toBe(false)
     expect(preparing(launched([{ receivedAt: now, preparingStartIds: ['s1'] }], { dispatched: false, dispatchedAt: undefined }))).toBe(false)
     expect(preparing(launched([{ machineId: 'x', receivedAt: now, preparingStartIds: ['s1'] }]))).toBe(false)
-    expect(preparing(launched([{ receivedAt: now - MINUTE - 1, preparingStartIds: ['s1'] }]))).toBe(false)
+    expect(preparing(launched([{ receivedAt: now - MACHINE_FRESH_MS - 1, preparingStartIds: ['s1'] }]))).toBe(false)
   })
 })

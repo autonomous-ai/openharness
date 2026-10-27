@@ -481,9 +481,8 @@ describe('an agent whose task was lost', () => {
 })
 
 describe('a start that never runs', () => {
-  it('fails 3 minutes after dispatch, naming its machine, and tells the Lead in its group', async () => {
-    const f = await swarm()
-    await f.beat(f.clock.now)
+  /** The Lead starts "Builder" on Worker Mac, and Worker Mac launches it. */
+  const launch = async (f: Awaited<ReturnType<typeof swarm>>) => {
     const decision = { assessment: { difficulty: 'low', risk: 'low', why: 'Small task.' },
       candidates: [{ id: 'c0', kind: 'new', machineId: 'test-host', engine: 'codex', model: 'fixture-model', effort: 'high',
         quality: 2, cost: 2, title: 'New agent', label: 'New agent' }],
@@ -495,6 +494,13 @@ describe('a start that never runs', () => {
     // The start's own machine dispatches and confirms it.
     const onMachine = (command: Command) => f.timed.execute(host, f.tab, { operationId: randomUUID(), command }, undefined, 'test-host')
     await onMachine({ type: 'agent.startDispatch', startId })
+    return { startId, onMachine }
+  }
+
+  it('fails 3 minutes after dispatch, naming its machine, and tells the Lead in its group', async () => {
+    const f = await swarm()
+    await f.beat(f.clock.now)
+    const { startId, onMachine } = await launch(f)
     const dispatched = f.clock.now
     f.clock.now = dispatched + 3 * MINUTE
     await f.leadInbox()
@@ -504,6 +510,35 @@ describe('a start that never runs', () => {
     expect(told).toMatchObject({ conversationId: 'lead', text: 'Could not start Builder: Worker Mac did not start it within 3 minutes.' })
     await expect(onMachine({ type: 'agent.started', startId, harnessId: randomUUID(), configuration: config }))
       .rejects.toMatchObject({ code: 'START_FAILED' })
+  })
+
+  it('waits while its own machine reports it preparing, shows the Lead it is preparing, and fails it after 15 minutes', async () => {
+    const f = await swarm()
+    await f.beat(f.clock.now)
+    const { startId } = await launch(f)
+    const dispatched = f.clock.now
+    const ownerState = async () => (await f.timed.read(owner, f.tab)).state
+    // Another machine cannot keep it waiting, and a machine keeps only its own launched starts in its report.
+    await f.observe('lead-host', [f.harness.lead], { preparingStartIds: [startId] })
+    await f.observe('test-host', [f.harness.worker], { preparingStartIds: [startId, 'someone-elses-start'] })
+    const machines = (await ownerState()).machines!
+    expect(machines.find(m => m.machineId === 'lead-host')!.observation!.preparingStartIds).toEqual([])
+    expect(machines.find(m => m.machineId === 'test-host')!.observation!.preparingStartIds).toEqual([startId])
+    for (const minutes of [3, 8, 14]) {
+      f.clock.now = dispatched + minutes * MINUTE + 1
+      // Its machine reports first: this jump spans many of its 15-second beats.
+      await f.observe('test-host', [f.harness.worker], { preparingStartIds: [startId] })
+      await f.observe('lead-host', [f.harness.lead])
+      expect((await f.leadInbox()).filter(m => (m.source as { kind?: string }).kind === 'start-timeout')).toEqual([])
+      expect(await f.timed.start(host, f.tab, startId, f.lead)).toMatchObject({ error: null, preparing: true })
+      expect((await ownerState()).starts!.find(s => s.id === startId)).toMatchObject({ error: null, preparing: true })
+    }
+    f.clock.now = dispatched + 15 * MINUTE + 1
+    await f.observe('test-host', [f.harness.worker], { preparingStartIds: [startId] })
+    await f.observe('lead-host', [f.harness.lead])
+    const told = (await f.leadInbox()).find(m => (m.source as { kind?: string }).kind === 'start-timeout')!
+    expect(told).toMatchObject({ conversationId: 'lead', text: 'Could not start Builder: Worker Mac was still preparing it after 15 minutes.' })
+    expect((await ownerState()).starts!.find(s => s.id === startId)).not.toHaveProperty('preparing')
   })
 })
 

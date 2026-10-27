@@ -109,11 +109,23 @@ export const machineObservationSchema = z.object({ generation: z.string().max(16
    *  it only when a team session reported it (observedPrivacy). */
   privacy: machinePrivacySchema.optional(),
   readiness: readiness.optional(),
+  /** The starts this machine launched and is still preparing (fetching the project, checking its worktree out, starting
+   *  the engine), as of this report. Such a start waits past the 3 minutes while reports keep naming it (liveness.ts);
+   *  the store keeps only this machine's own launched starts. Absent from hosts before it, whose starts get 3 minutes. */
+  preparingStartIds: z.array(z.string().min(1).max(160)).max(100).optional(),
 }).strict()
 export type MachineObservation = z.infer<typeof machineObservationSchema>
 
 /** A machine reports every 15 seconds (cli/src/superTabs/machines.ts); three missed beats is offline. */
 export const MACHINE_FRESH_MS = 45_000
+
+/** Whether [start] is preparing now: launched, neither running nor failed, and named by a fresh report of its own machine.
+ *  Read from that report, never written into the start, so a report a minute per start writes nothing more. */
+export function startPreparing(state: SuperTabState, start: AgentStart, now: number): boolean {
+  if (!start.dispatched || start.harnessId || start.error || start.dispatchedAt === undefined) return false
+  const report = state.machines?.find(m => m.machineId === start.request.machineId)?.observation
+  return !!report?.preparingStartIds?.includes(start.id) && now - report.receivedAt <= MACHINE_FRESH_MS
+}
 
 // ── Teammates' work runs only on Team machines (docs/plans/2026-10-24-swarm-team-account.md, Task 3) ──────────────
 // A start or an assignment for a project whose owner is not the person whose grant runs the machine is a teammate's
