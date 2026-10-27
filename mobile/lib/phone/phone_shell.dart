@@ -4,13 +4,18 @@ import 'package:flutter/material.dart';
 
 import 'package:harness_mobile/state/app_state.dart';
 
+import '../notify/system_notices.dart';
 import '../p2p/phone_terminal_p2p.dart';
+import '../swarm/swarm_conversation_page.dart';
+import '../swarm/swarm_page.dart';
+import '../swarm/swarm_session.dart';
 import 'agent_home.dart';
 import 'approve_sign_in.dart';
 import 'browser_handoff.dart';
 import 'devices_page.dart';
 import 'exit_app.dart';
 import 'new_device_banner.dart';
+import 'phone_navigation.dart';
 import 'phone_shell_scope.dart';
 import 'welcome/connect_code.dart';
 
@@ -42,6 +47,18 @@ class _PhoneShellState extends State<PhoneShell> with WidgetsBindingObserver {
   /// The nested navigator's own — see the note at the `HeroControllerScope` below.
   final _heroController = HeroController();
 
+  /// Swarm, while Settings ▸ Experimental ▸ Swarm is on: one session for the signed-in account,
+  /// read while the app is in front, for every page under this shell ([SwarmScope]).
+  late final SwarmHost _swarm;
+
+  /// The centre's Swarm notices: the app's own centre carries them; a stand-in that does not
+  /// (a test's) gets a silent one.
+  late final SwarmNotices _swarmNotices =
+      switch (widget.notifier.agentNotices.system) {
+        final SwarmNotices notices => notices,
+        _ => SilentSystemNotices(),
+      };
+
   @override
   void initState() {
     super.initState();
@@ -58,13 +75,24 @@ class _PhoneShellState extends State<PhoneShell> with WidgetsBindingObserver {
     final notices = widget.notifier.agentNotices.system;
     notices.opened.addListener(_openNoticedAgent);
     notices.openedDevice.addListener(_openNoticedDevice);
+    final state = WidgetsBinding.instance.lifecycleState;
+    _swarm = SwarmHost(
+      accountId: () => widget.notifier.currentUser?.id,
+      account: widget.notifier,
+      request: widget.notifier.swarmRequest,
+      notices: _swarmNotices,
+    )..foreground = state == null || _inFront(state);
+    _swarmNotices.openedSwarm.addListener(_openNoticedSwarm);
     // A tap that launched the app is read before this shell exists, so its value is already set and
     // no listener will ever fire for it: take it once the navigator is up.
-    if (notices.opened.value != null || notices.openedDevice.value != null) {
+    if (notices.opened.value != null ||
+        notices.openedDevice.value != null ||
+        _swarmNotices.openedSwarm.value != null) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!mounted) return;
         _openNoticedAgent();
         _openNoticedDevice();
+        _openNoticedSwarm();
       });
     }
     // A computer's sign-in QR read before this phone was signed in: the sign-in was the way to
@@ -90,6 +118,8 @@ class _PhoneShellState extends State<PhoneShell> with WidgetsBindingObserver {
     widget.notifier.agentNotices.system.openedDevice.removeListener(
       _openNoticedDevice,
     );
+    _swarmNotices.openedSwarm.removeListener(_openNoticedSwarm);
+    _swarm.dispose();
     _linkedMachineId.dispose();
     _openAgentRequest.dispose();
     _heroController.dispose();
@@ -192,6 +222,31 @@ class _PhoneShellState extends State<PhoneShell> with WidgetsBindingObserver {
     unawaited(_showDevice(pub));
   }
 
+  /// A tapped Swarm notice: the Swarm page, and over it the conversation the notice was about —
+  /// back from it is the rest of what Swarm asks of the person.
+  void _openNoticedSwarm() {
+    final opened = _swarmNotices.openedSwarm;
+    final target = opened.value;
+    final navigator = _navigator.currentState;
+    if (target == null || navigator == null) return;
+    opened.value = null;
+    unawaited(navigator.push(phoneRoute((_) => const SwarmPage())));
+    unawaited(
+      navigator.push(
+        phoneRoute(
+          (_) => SwarmConversationPage(
+            swarmId: target.swarmId,
+            conversationId: target.conversationId,
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// In front of the person: resumed, or only covered for a moment (the app switcher, a call).
+  static bool _inFront(AppLifecycleState state) =>
+      state == AppLifecycleState.resumed || state == AppLifecycleState.inactive;
+
   Future<void> _showDevice(String key) async {
     final navigator = _navigator.currentState;
     if (navigator == null) return;
@@ -218,6 +273,8 @@ class _PhoneShellState extends State<PhoneShell> with WidgetsBindingObserver {
   /// who was looking straight at it, with a network that would have answered at once.
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
+    // Swarm is read only in front of the person.
+    _swarm.foreground = _inFront(state);
     if (state == AppLifecycleState.inactive) {
       // The app switcher coming up is `inactive`, and a swipe there can end the app without it
       // ever reaching `paused` — so the machine cache is written here as well. See
@@ -299,21 +356,25 @@ class _PhoneShellState extends State<PhoneShell> with WidgetsBindingObserver {
 
   /// The page stack. A fresh widget each call — what makes the [Navigator] tell every route on it
   /// that the world may have changed (`Route.changedExternalState`), and so rebuild every page.
-  Widget _pages() => HeroControllerScope(
-    controller: _heroController,
-    child: Navigator(
-      key: _navigator,
-      // ⚠️ The controller goes in the SCOPE ONLY, never also in `observers`.
-      // `NavigatorState._updateEffectiveObservers` appends the scope's controller
-      // to `widget.observers` itself, so listing it here registers it twice and
-      // trips "A HeroController can not be shared by multiple Navigators" — which
-      // reads like a sharing bug and is really a double-subscription by one
-      // navigator.
-      onGenerateRoute: (_) => MaterialPageRoute<void>(
-        builder: (_) => AgentHome(
-          notifier: widget.notifier,
-          openMachineId: _linkedMachineId,
-          openAgent: _openAgentRequest,
+  // Under [SwarmScope], so every page on the stack can reach the account's Swarm.
+  Widget _pages() => SwarmScope(
+    notifier: _swarm,
+    child: HeroControllerScope(
+      controller: _heroController,
+      child: Navigator(
+        key: _navigator,
+        // ⚠️ The controller goes in the SCOPE ONLY, never also in `observers`.
+        // `NavigatorState._updateEffectiveObservers` appends the scope's controller
+        // to `widget.observers` itself, so listing it here registers it twice and
+        // trips "A HeroController can not be shared by multiple Navigators" — which
+        // reads like a sharing bug and is really a double-subscription by one
+        // navigator.
+        onGenerateRoute: (_) => MaterialPageRoute<void>(
+          builder: (_) => AgentHome(
+            notifier: widget.notifier,
+            openMachineId: _linkedMachineId,
+            openAgent: _openAgentRequest,
+          ),
         ),
       ),
     ),

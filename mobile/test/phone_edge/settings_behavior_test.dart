@@ -7,9 +7,11 @@ import 'package:harness_mobile/phone/machines_tab.dart';
 import 'package:harness_mobile/phone/privacy_policy.dart';
 import 'package:harness_mobile/phone/settings_page.dart';
 import 'package:harness_mobile/phone/welcome/how_it_works.dart';
+import 'package:harness_mobile/settings/experimental_features.dart';
 import 'package:harness_mobile/state/app_state.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 
+import '../voice_fakes.dart' show MemoryKeyValueStore;
 import 'edge_fixture.dart';
 
 /// Settings as somebody goes through it: every row that opens something, opened and put away.
@@ -34,6 +36,7 @@ void main() {
     bool sample = false,
     CurrentUserProfile? user,
     ProductMeasurement? usage,
+    ExperimentalFeaturesStore? experiments,
   }) async {
     setPhone(tester, largePhone);
     final app = edgeApp(productMeasurement: usage);
@@ -44,7 +47,11 @@ void main() {
           name: 'Ada Lovelace',
           email: 'ada@example.com',
         );
-    final page = SettingsPage(notifier: app, large: large);
+    final page = SettingsPage(
+      notifier: app,
+      large: large,
+      experiments: experiments,
+    );
     await tester.pumpWidget(
       phoneApp(
         Builder(
@@ -226,6 +233,55 @@ void main() {
     expect(find.text('?'), findsOneWidget);
     await close(tester, app);
   });
+
+  testWidgets(
+    'Experimental: Swarm is off until switched, by the row or its switch',
+    (tester) async {
+      final storage = MemoryKeyValueStore();
+      final experiments = ExperimentalFeaturesStore(storage: storage);
+      final app = await openSettings(tester, experiments: experiments);
+      final row = find.byKey(const ValueKey('settings-experiment-swarm'));
+      await tester.scrollUntilVisible(
+        row,
+        200,
+        scrollable: find.byType(Scrollable).last,
+      );
+      expect(find.text('experimental'), findsOneWidget);
+      expect(
+        find.descendant(of: row, matching: find.text('Swarm')),
+        findsOneWidget,
+      );
+      expect(
+        find.descendant(
+          of: row,
+          matching: find.text(
+            'Open your Swarms from Home or Find. Still taking shape.',
+          ),
+        ),
+        findsOneWidget,
+        reason: 'both ways in, as the app has them',
+      );
+      Switch toggle() => tester.widget<Switch>(
+        find.descendant(of: row, matching: find.byType(Switch)),
+      );
+      expect(toggle().value, isFalse);
+
+      // Anywhere on the row turns it on, and the choice is written for the next launch.
+      await tester.tap(find.descendant(of: row, matching: find.text('Swarm')));
+      await frames(tester);
+      expect(toggle().value, isTrue);
+      expect(experiments.isOn(PhoneExperiment.swarm), isTrue);
+      expect(storage.values['experimental_features'], '["swarm"]');
+
+      // The switch itself turns it off again.
+      await tester.tap(find.descendant(of: row, matching: find.byType(Switch)));
+      await frames(tester);
+      expect(toggle().value, isFalse);
+      expect(experiments.isOn(PhoneExperiment.swarm), isFalse);
+      expect(storage.values['experimental_features'], '[]');
+      await close(tester, app);
+    },
+  );
 
   testWidgets('inside the sample: the way out, and no sample to try', (
     tester,

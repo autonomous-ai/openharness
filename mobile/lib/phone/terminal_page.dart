@@ -81,6 +81,7 @@ import 'welcome/focus_hints.dart';
 
 import 'package:harness_mobile/demo/sample_mode.dart';
 import 'package:harness_mobile/notify/notifications_ask.dart';
+import 'package:harness_mobile/swarm/swarm_mark.dart';
 
 import 'voice_input_controller.dart';
 
@@ -2940,8 +2941,14 @@ class _TerminalPageState extends State<TerminalPage>
                               // The paired daemon at the title's right end: its
                               // sprite, a tap from its sheet. Nothing outside the
                               // signed-in shell (the sample). See `daemon_chip.dart`.
-                              daemon: const DaemonChip(
-                                margin: EdgeInsets.only(left: 12),
+                              // Before it, while Swarm is on: what the Swarms ask of
+                              // the person, a tap from them. See `swarm_mark.dart`.
+                              daemon: const Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  SwarmMark(margin: EdgeInsets.only(left: 12)),
+                                  DaemonChip(margin: EdgeInsets.only(left: 12)),
+                                ],
                               ),
                               // Only over a screen: with none, [_MachineAway] says it
                               // in the terminal's place, and saying it twice is noise.

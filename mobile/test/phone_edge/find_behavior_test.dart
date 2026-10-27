@@ -9,7 +9,9 @@ import 'package:harness_mobile/phone/settings_page.dart';
 import 'package:harness_mobile/phone/terminal_search.dart';
 import 'package:harness_mobile/phone/tty_controls.dart' show TtyFieldMic;
 import 'package:harness_mobile/phone/voice_input_controller.dart';
+import 'package:harness_mobile/settings/experimental_features.dart';
 import 'package:harness_mobile/state/app_state.dart';
+import 'package:harness_mobile/swarm/swarm_page.dart';
 
 import '../voice_fakes.dart';
 import 'edge_fixture.dart';
@@ -266,6 +268,28 @@ void main() {
     await frames(tester, count: 6);
     expect(closes, isNotEmpty);
     expect(find.byType(SettingsPage), findsOneWidget);
+    await close(tester, app);
+  });
+
+  testWidgets('Swarm is a command only while its experiment is on', (
+    tester,
+  ) async {
+    // In memory only: the value, not the store's write, so nothing reaches the state file.
+    addTearDown(() => experimentalFeaturesStore.value = const {});
+    final (:app, :closes, opened: _, voice: _, stt: _) = await openFind(tester);
+    await tester.enterText(find.byType(TextField), 'swarm');
+    await frames(tester);
+    expect(find.text('Swarm', findRichText: true), findsNothing);
+
+    experimentalFeaturesStore.value = {PhoneExperiment.swarm};
+    await tester.enterText(find.byType(TextField), 'swar');
+    await frames(tester);
+    await tester.tap(find.text('Swarm', findRichText: true).last);
+    await frames(tester, count: 6);
+    expect(closes, isNotEmpty);
+    expect(find.byType(SwarmPage), findsOneWidget);
+    // Outside a signed-in shell there is no account's Swarm to read: the page says so.
+    expect(find.byKey(const ValueKey('swarm-unavailable')), findsOneWidget);
     await close(tester, app);
   });
 
