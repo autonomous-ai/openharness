@@ -1,5 +1,9 @@
+import 'dart:io';
+import 'dart:ui' as ui;
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
@@ -14,14 +18,22 @@ import 'package:harness/super_tabs/pm_chat_shortcut.dart';
 import 'package:harness/super_tabs/project_sidebar.dart';
 import 'package:harness/super_tabs/view.dart';
 
+import 'box_render_preview_test.dart' show loadPreviewFonts;
 import 'super_tab_launch_test.dart' show SuperTabLaunchFixture, tabId;
 import 'swarm_screen_test.dart' show mount;
 import 'support/pm_chat_fixture.dart';
 import 'support/super_tab_fixture.dart';
 
+/// Set to a folder to write the PR's screenshots there.
+final shots = Platform.environment['SUPER_TAB_PM_CHAT_SHOTS'];
+
 /// Chat with PM pinned at the top of the Swarm sidebar, with its unread count
 /// on the row, the project and the Swarm tab, and a shortcut that opens it.
 void main() {
+  setUpAll(() async {
+    if (shots != null) await loadPreviewFonts();
+  });
+
   /// [account]'s controller with their PM chat opened once and then left for
   /// a workgroup, so the Product Manager's replies arrive unread.
   Future<(SuperTabController, String)> awayFromChat(
@@ -468,4 +480,65 @@ void main() {
       expect(c.selectedId, c.pmChat('lead')!.id);
     });
   });
+
+  for (final brightness in Brightness.values) {
+    testWidgets('screenshots for review (${brightness.name})', (tester) async {
+      final picture = GlobalKey();
+      final server = pmChatSwarm();
+      secondProject(server);
+      final c = server.controller(account: 'peer');
+      addTearDown(c.dispose);
+      await c.refresh();
+      await c.openPmChat('lead');
+      final chat = c.pmChat('lead')!.id;
+      await c.select('offline');
+      pmReply(server, chat, 'Here is the plan.');
+      pmReply(server, chat, 'Shall I ship it?');
+      await c.refresh();
+      grid.AppTheme.brightness.value = brightness;
+      addTearDown(() => grid.AppTheme.brightness.value = Brightness.light);
+      await tester.binding.setSurfaceSize(const Size(1200, 760));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: grid.buildAppTheme(brightness: brightness),
+          builder: (context, child) =>
+              RepaintBoundary(key: picture, child: child),
+          home: Scaffold(
+            body: SuperTabView(
+              controller: c,
+              onInvite: () {},
+              onAddAgent: (_) {},
+              onOpenTerminal: (_) {},
+              machineName: (_) => 'Team Mac',
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      Future<void> shot(String name) => tester.runAsync(() async {
+        final boundary =
+            picture.currentContext!.findRenderObject()!
+                as RenderRepaintBoundary;
+        final image = await boundary.toImage(pixelRatio: 1.5);
+        final bytes = await image.toByteData(format: ui.ImageByteFormat.png);
+        await Directory(shots!).create(recursive: true);
+        await File('$shots/pm-chat-$name-${brightness.name}.png')
+            .writeAsBytes(bytes!.buffer.asUint8List());
+        image.dispose();
+      });
+
+      c.expandedProjects.clear();
+      if (c.projectsGroupOpen) c.toggleProjectsGroup();
+      await tester.pumpAndSettle();
+      await shot('collapsed');
+      c.toggleProjectsGroup();
+      c.toggleProject('lead');
+      await tester.pumpAndSettle();
+      await shot('expanded');
+      await tester.pumpWidget(const SizedBox());
+      await c.flush();
+    }, skip: shots == null);
+  }
 }
