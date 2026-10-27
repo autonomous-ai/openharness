@@ -675,6 +675,10 @@ export class SuperTabHost {
     for (const [harnessId, state] of this.keepAlives) if (!leads.has(harnessId) && !state.running) this.keepAlives.delete(harnessId)
     for (const [key, state] of this.endings) if (!ended.has(key) && !state.running) this.endings.delete(key)
     for (const deliveryId of this.unreadable) if (!seen.has(deliveryId)) this.unreadable.delete(deliveryId)
+    // Diego's issue, 2026-10-27: kept for every session ever seen, a daemon running for weeks held each Custom role's text.
+    for (const skills of [this.skillChecks, this.skillModes, this.roleTexts]) {
+      for (const harnessId of skills.keys()) if (!this.rosterSkills.has(harnessId)) skills.delete(harnessId)
+    }
     // A wait outlives a list that failed or was skipped: that says nothing of the delivery. It goes when a list that was read no
     // longer has the delivery, or when its agent is no longer here.
     for (const [key, retry] of this.deliveryRetries) {
