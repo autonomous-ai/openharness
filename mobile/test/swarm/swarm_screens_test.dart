@@ -702,6 +702,54 @@ void main() {
             'which this page does not show',
       );
     });
+
+    testWidgets('a change in another Swarm does not build it', (tester) async {
+      const other = 'tab-2';
+      final fake = backend();
+      fake.routes['/api/super-tabs/list'] = (_) => {
+        'tabs': [
+          {'id': tab, 'name': 'Phone Swarm', 'ownerId': me},
+          {'id': other, 'name': 'Web Swarm', 'ownerId': me},
+        ],
+        'next': null,
+      };
+      fake.routes['/api/super-tabs/$other/parts'] = (_) => firstLoad(
+        tabId: other,
+        head: headData(id: other, name: 'Web Swarm'),
+      );
+      fake.routes['/api/super-tabs/$other/decisions?state=open'] = (_) => {
+        'decisions': <Object>[],
+      };
+      fake.routes['/api/super-tabs/$other/mentions?state=waiting'] = (_) => {
+        'mentions': <Object>[],
+      };
+      fake.routes['/api/super-tabs/$other/changes'] = (_) => changes(
+        cursor: 'c2',
+        lastChangedAt: 200,
+        groups: [
+          part(
+            'g-web',
+            30,
+            groupData('g-web', title: 'Web work', lastMessageSequence: 3),
+          ),
+        ],
+      );
+      await pump(tester, fake, page);
+      // With two Swarms, the page names its own under the project.
+      expect(find.text('Phone Swarm'), findsOneWidget);
+      var builds = 0;
+      debugOnRebuildDirtyWidget = (element, _) {
+        if (element.widget is SwarmTopBar) builds++;
+      };
+      addTearDown(() => debugOnRebuildDirtyWidget = null);
+
+      final web = host(tester).session!.inbox.reader(other)!;
+      unawaited(web.refresh());
+      await tester.pumpAndSettle();
+
+      expect(web.snapshot!.conversation('g-web'), isNotNull);
+      expect(builds, 0);
+    });
   });
 
   group('a conversation', () {
