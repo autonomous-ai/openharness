@@ -66,6 +66,11 @@ class SuperTabClient {
     return _loaded[id]?.snapshot?.mentionsWaiting ?? _tagCounts[id] ?? 0;
   }
 
+  /// The open decisions asked of this account in a Swarm open here; none for
+  /// one not open.
+  int waitingDecisions(String id) =>
+      _loaded[id]?.snapshot?.decisionsWaiting ?? 0;
+
   /// The unread messages in this account's own PM chats in a Swarm open
   /// here ([SuperTabController.pmUnread]); none for one not open.
   int waitingPm(String id) => _loaded[id]?.pmUnread ?? 0;
@@ -472,7 +477,12 @@ class SuperTabClient {
       upload: upload,
       reading: _reading,
     )..away = _isAway(id);
-    var seenChange = (lastChangedAt: -1, mentionsWaiting: -1, pmUnread: -1);
+    var seenChange = (
+      lastChangedAt: -1,
+      mentionsWaiting: -1,
+      decisionsWaiting: -1,
+      pmUnread: -1,
+    );
     var seenSelected = controller.selectedId;
     controller.addListener(() {
       if (_reading.drawsSaved && generation == _generation) {
@@ -493,6 +503,8 @@ class SuperTabClient {
         final change = (
           lastChangedAt: controller.lastChangedAt,
           mentionsWaiting: snapshot.mentionsWaiting,
+          // What needs the person moves the Dock's badge.
+          decisionsWaiting: snapshot.decisionsWaiting,
           // A read mark or a PM chat's messages move the Swarm badge too.
           pmUnread: controller.pmUnread,
         );
