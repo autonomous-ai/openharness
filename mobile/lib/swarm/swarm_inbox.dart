@@ -264,7 +264,7 @@ class SwarmInbox extends ChangeNotifier {
     final before = _face;
     _polling = true;
     try {
-      final listed = await _list();
+      final (:listed, :changedAt) = await _list();
       List<SwarmInvitation>? invited = const [];
       Object? unread;
       if (listed.isEmpty) {
@@ -293,7 +293,11 @@ class SwarmInbox extends ChangeNotifier {
       for (final swarm in listed) {
         _readers.putIfAbsent(swarm.id, () => _open(swarm.id));
       }
-      await Future.wait([for (final r in _readers.values) r.refresh()]);
+      await Future.wait([
+        for (final swarm in listed)
+          if (_due(swarm.id, changedAt[swarm.id] ?? 0))
+            _readers[swarm.id]!.refresh(),
+      ]);
     } on SuperTabFailure catch (failure) {
       if (_disposed) return;
       error = failure.message;
@@ -314,10 +318,32 @@ class SwarmInbox extends ChangeNotifier {
     return next < pollInterval ? next : pollInterval;
   }
 
+  /// Whether a poll reads Swarm [id] again, listed as last changed at
+  /// [listedAt]: only when there may be something new. Its last change
+  /// moved; it holds no Swarm yet, or its last read failed; or an ask waits
+  /// in it, or its asks could not be read — decisions and tags are not
+  /// parts, and one answered or done on another device moves no last-change
+  /// time.
+  bool _due(String id, int listedAt) {
+    final reader = _readers[id]!, asks = _asks[id]!;
+    final snapshot = reader.snapshot;
+    return snapshot == null ||
+        reader.error != null ||
+        reader.lastChangedAt != listedAt ||
+        snapshot.decisionsWaiting > 0 ||
+        snapshot.mentionsWaiting > 0 ||
+        asks.decisions.isNotEmpty ||
+        asks.mentions.isNotEmpty ||
+        asks.error != null;
+  }
+
   /// Every page of the list before any is applied: a failed page cannot drop
-  /// Swarms (the desktop's `refreshTabs`).
-  Future<List<SwarmListing>> _list() async {
+  /// Swarms (the desktop's `refreshTabs`). With each Swarm's last change, 0
+  /// for one never changed.
+  Future<({List<SwarmListing> listed, Map<String, int> changedAt})>
+  _list() async {
     final listed = <String, SwarmListing>{};
+    final changedAt = <String, int>{};
     final cursors = <String>{};
     String? after;
     do {
@@ -346,13 +372,14 @@ class SwarmInbox extends ChangeNotifier {
         }
         final id = row['id'] as String;
         listed[id] = (id: id, name: row['name'] as String);
+        changedAt[id] = (row['lastChangedAt'] as num?)?.toInt() ?? 0;
       }
       after = page['next'] as String?;
       if (after != null && !cursors.add(after)) {
         throw const FormatException('Repeated tab cursor');
       }
     } while (after != null);
-    return listed.values.toList();
+    return (listed: listed.values.toList(), changedAt: changedAt);
   }
 
   SwarmReader _open(String id) {
