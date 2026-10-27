@@ -299,8 +299,14 @@ The native desktop target uses the CLI for cloud access and SSO tokens:
   showing the machine as connecting; only a refusal that outlasts two rounds (~15s), or a frozen
   log, asks for the password. The desk frames (`app_focus`, `app_panes`, `app_swarms`, `app_unread`,
   `agent_seen`) are for this computer's daemon and only ride a loopback connection. A viewer with no
-  machine connected hears no push, so it re-reads the machine list every 20s while that lasts
-  (`deafMachineListInterval`) and when the tab comes back to the front.
+  machine connected hears no push, so it re-reads the machine list itself while that lasts
+  (`state/machine_list_watch.dart`): after 4 s, 8 s, then every 10 s under the connect page
+  (`waitsForFirstComputer`), or 15 s then every 30 s under the asleep band, and every 20 s
+  otherwise (a computer still connecting). A push, the tab coming back to the front (which reads
+  at once) and Retry start that pace over, and while recovery retries a failed or stale list it is
+  the only one asking. A hidden tab reads nothing on this pace; the one read it still makes is the
+  5-minute safety net every window keeps (`machineListSafetyNetInterval`). The browser's connect
+  page and asleep band keep no timer of their own.
 - **Both REST and the local WS prefer the daemon's Unix socket** (`lib/ws/local_daemon_transport.dart`;
   CLI `lib/localSocket.ts`): `~/.harness/cli/data/daemon-<port>.sock`, 0600, named for the port in
   `localCliBaseUrl` so it always leads to the same daemon as the TCP fallback. The loopback port takes

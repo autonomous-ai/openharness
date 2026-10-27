@@ -171,10 +171,11 @@ export type LaunchErrorCode = typeof LAUNCH_ERROR_CODES[number]
  * and resume requests' `other` refusals, and every delete and restart refusal — from any client, and again,
  * apart, those the phone asked for (`phone_`), which a daemon's report otherwise carries mixed with the
  * Desktop's, the TUI's and tools'. Setup reasons have their own families, adding up to `launch_failed_setup`,
- * `create_error_setup` and `request_phone_create_error_setup`; existing `other` families keep their meaning. */
+ * `create_error_setup` and `request_phone_create_error_setup`; existing `other` families keep their meaning.
+ * `launch_refused_code` names which correct refusal a `launch_refused` was (cli/src/lib/productUsageSignals.ts). */
 export const LAUNCH_ERROR_FAMILIES = ['launch_failed_code', 'launch_late_failed_code', 'create_error_code', 'resume_error_code',
   'delete_error_code', 'restart_error_code', 'phone_delete_error_code', 'phone_restart_error_code',
-  'launch_failed_setup_code', 'create_error_setup_code', 'phone_create_error_setup_code'] as const
+  'launch_failed_setup_code', 'create_error_setup_code', 'phone_create_error_setup_code', 'launch_refused_code'] as const
 /** The engine an installation's first launch asked for; any other engine is `other`. */
 export const PRODUCT_USAGE_LAUNCH_ENGINES = ['opencode', 'claude', 'codex', 'other'] as const
 export type ProductUsageLaunchEngine = typeof PRODUCT_USAGE_LAUNCH_ENGINES[number]
@@ -200,6 +201,11 @@ export const PRODUCT_USAGE_METRICS = [
   'launch_started', 'launch_created', 'launch_failed', 'launch_cancelled', 'launch_unconfirmed', 'launch_unobserved',
   // A created launch whose engine then did not start: one of the launch_created, never also a launch_failed.
   'launch_late_failed',
+  // A create turned down because the request was wrong, not because Harness failed (the Oct 26 report counted
+  // opening a conversation that is already a harness, and a cloud agent with no task, as failures): never also
+  // a launch_failed. The agent twins count the launches an agent or a Swarm started (the create's `startedBy`),
+  // so a person's own launches are the total less those.
+  'launch_refused', 'launch_agent_started', 'launch_agent_created', 'launch_agent_failed', 'launch_agent_refused',
   'launch_wait_install', 'launch_wait_model', 'launch_wait_native', 'launch_wait_other',
   'launch_failed_setup', 'launch_failed_auth', 'launch_failed_unavailable', 'launch_failed_invalid', 'launch_failed_other',
   'launch_under_10s', 'launch_10s_to_1m', 'launch_1m_to_5m', 'launch_over_5m',

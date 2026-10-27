@@ -22,7 +22,7 @@
  */
 import { userInfo } from 'node:os'
 import { env } from '../config/env.js'
-import { readTeamConfig } from '../team/config.js'
+import { isTeamAccount, readTeamConfig } from '../team/config.js'
 import { SERVICE_EXIT_RESTART, type StagedUpdate, type UpdaterMessage } from '../harnessd/protocol.js'
 import { describeSpawnLockOwner, withSpawnLock } from '../lib/daemonSpawnLock.js'
 import { DOWNLOAD_LIMITS, downloadVerified, isLocalDevBuild, retireCliVersions, startSelfUpdater } from '../lib/selfUpdate.js'
@@ -213,6 +213,6 @@ function startPty(
 
 /** This process runs as the Harness Team account its Mac's root-owned config names. An account whose name cannot be read
  *  is not it. */
-export function inTeamAccount(config = readTeamConfig, user = () => userInfo().username): boolean {
-  try { return config()?.user === user() } catch { return false }
+export function inTeamAccount(config: () => ReturnType<typeof readTeamConfig> = () => readTeamConfig(), user = () => userInfo().username): boolean {
+  return isTeamAccount(config, user)
 }

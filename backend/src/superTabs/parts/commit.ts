@@ -90,10 +90,11 @@ export function capReleased(state: SuperTabState): void {
  * counters or the visibility epoch move, and the index row when a person, invitation or machine reference was added or
  * removed. Every write is guarded by the version it was read at.
  */
-/** A machine part without its machine's own reading: what that machine's host needs to hear about. */
+/** A machine part without its machine's own reading, nor the Lent hours each reading credits (leaderboard/lent.ts): what
+ *  that machine's host needs to hear about. */
 const withoutReading = (data: unknown) => {
   const machine = data as MachineData | undefined
-  return machine && { ...machine, contribution: machine.contribution && { ...machine.contribution, observation: undefined } }
+  return machine && { ...machine, contribution: machine.contribution && { ...machine.contribution, observation: undefined, lent: undefined } }
 }
 
 /**
