@@ -157,12 +157,16 @@ class _Reads {
   final ConversationServer server;
   final paths = <String>[];
   bool missing = false;
+  Completer<void>? holdMessages;
   Future<Map<String, dynamic>> call(
     String method,
     String path, {
     Map<String, dynamic>? body,
-  }) {
+  }) async {
     if (method == 'GET') paths.add(path);
+    if (holdMessages case final hold? when path.endsWith('/messages')) {
+      await hold.future;
+    }
     if (missing) {
       return Future.error(
         const SuperTabFailure(
@@ -1083,6 +1087,23 @@ void _desktopTests() {
       expect(c!.snapshot!.name, 'Pilot');
       expect(c!.messages('lead').single.text, 'Hello');
       second.dispose();
+    });
+  });
+
+  test('a first open shows its sidebar before its chat answers', () {
+    fakeAsync((async) {
+      final server = ConversationServer()..append('Hello');
+      final reads = _Reads(server)..holdMessages = Completer<void>();
+      final c = _controller(reads, reading: SuperTabReading.desktop);
+      String? drawn;
+      c.addListener(() => drawn ??= c.snapshot?.name);
+      c.start();
+      async.flushMicrotasks();
+      expect(drawn, 'Pilot');
+      reads.holdMessages!.complete();
+      async.flushMicrotasks();
+      expect(c.messages('lead').single.text, 'Hello');
+      c.dispose();
     });
   });
 

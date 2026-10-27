@@ -990,6 +990,8 @@ class SuperTabController extends ChangeNotifier {
           }
         }
       }
+      // A first open draws its sidebar now, not once its chat answers.
+      if (stateReads == 1) _changed();
       final sidebarMs = took.elapsedMilliseconds;
       lastChangedAt = parts.lastChangedAt;
       // Every state read, a quiet one too: a count a failed read left open is
