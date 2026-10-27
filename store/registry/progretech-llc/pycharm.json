@@ -1,0 +1,26 @@
+{
+  "id": "progretech-llc/pycharm",
+  "name": "PyCharm",
+  "category": "Coding",
+  "description": "Work on Python projects with an AI agent and open the workspace in the installed PyCharm IDE.",
+  "author": "Edwin Rodriguez (ProgreTech; AI-assisted)",
+  "repo": "https://github.com/progretech-llc/openharness",
+  "ref": "3fcd58149bfaa85ba494cbbbcd0ff0bc9bfe876a",
+  "path": "store/agents/progretech-pycharm",
+  "homepage": "https://www.jetbrains.com/pycharm/",
+  "upstream": "https://www.jetbrains.com/pycharm/",
+  "license": "MIT",
+  "engine": "codex",
+  "tier": 2,
+  "verified": false,
+  "screenshots": [
+    "https://raw.githubusercontent.com/progretech-llc/openharness/3fcd58149bfaa85ba494cbbbcd0ff0bc9bfe876a/store/agents/progretech-pycharm/assets/example-run.png"
+  ],
+  "examples": [
+    {
+      "prompt": "Run python3 /mnt/PT-Storage/Projects/pycharm-harness-demo/hello.py and show the actual output. Then open /mnt/PT-Storage/Projects/pycharm-harness-demo in the installed PyCharm IDE, so both windows show the same project.",
+      "image": "https://raw.githubusercontent.com/progretech-llc/openharness/3fcd58149bfaa85ba494cbbbcd0ff0bc9bfe876a/store/agents/progretech-pycharm/assets/example-run.png",
+      "caption": "Grok + local Qwen3 Coder 30B runs the demo and opens its folder in the separate PyCharm IDE."
+    }
+  ]
+}
