@@ -166,6 +166,24 @@ void main() {
       expect(reader.board?.week, week);
     });
 
+    test('shows no numbers while another week is read, so one week never wears another\'s name', () async {
+      final requests = FakeRequests();
+      final pending = Completer<Map<String, dynamic>>();
+      final reader = SuperTabLeaderboardReader(
+        tabId: 'tab',
+        request: (method, path, {body}) => path.contains('&week=')
+            ? pending.future
+            : requests.call(method, path),
+      );
+      addTearDown(reader.dispose);
+      await reader.show('lead');
+      final earlier = reader.showWeek(week - 7 * 86400000);
+      expect(reader.board, isNull);
+      pending.complete({...answer(), 'week': week - 7 * 86400000});
+      await earlier;
+      expect(reader.board?.week, week - 7 * 86400000);
+    });
+
     test('keeps the last board when a refresh fails, and says it could not refresh', () async {
       final requests = FakeRequests();
       final reader = SuperTabLeaderboardReader(

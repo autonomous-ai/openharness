@@ -934,7 +934,7 @@ class _SuperTabViewState extends State<SuperTabView>
       color: shown ? DesktopChrome.foreground : DesktopChrome.muted,
       onPressed: _boardRoomy
           ? () => setState(() => _boardOpen = !_boardOpen)
-          : () => unawaited(_board.showDialog(context)),
+          : () => unawaited(_board.openDialog(context)),
     );
   }
 

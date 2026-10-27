@@ -21,7 +21,6 @@ class SuperTabLeaderboardReader extends ChangeNotifier {
 
   SuperTabLeaderboard? board;
   String? error;
-  bool loading = false;
   String? _projectId;
   int? _week;
   int _read = 0;
@@ -35,6 +34,9 @@ class SuperTabLeaderboardReader extends ChangeNotifier {
   Future<void> showWeek(int? week) {
     if (week == _week) return Future.value();
     _week = week;
+    // Another week's numbers under this week's name would mislead until the read lands.
+    board = null;
+    _notify();
     return refresh();
   }
 
@@ -59,8 +61,6 @@ class SuperTabLeaderboardReader extends ChangeNotifier {
     final projectId = _projectId;
     if (projectId == null || _disposed) return;
     final read = ++_read, week = _week;
-    loading = true;
-    _notify();
     try {
       final answer = await request(
         'GET',
@@ -77,7 +77,6 @@ class SuperTabLeaderboardReader extends ChangeNotifier {
           ? failure.message
           : "Couldn't read the leaderboard.";
     }
-    loading = false;
     _notify();
   }
 

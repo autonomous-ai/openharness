@@ -45,7 +45,7 @@ class SuperTabSwarmBoard {
       );
 
   /// For a window without room for the column.
-  Future<void> showDialog(BuildContext context) => showAppDialog<void>(
+  Future<void> openDialog(BuildContext context) => showAppDialog<void>(
     context: context,
     builder: (dialog) => Dialog(
       shape: DesktopChrome.shape(),
