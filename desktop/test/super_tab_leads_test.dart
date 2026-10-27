@@ -149,7 +149,7 @@ void main() {
         lessThan(tester.getTopLeft(leadsRow).dy),
       );
       // It belongs to no project: never listed again as a workgroup of the first one.
-      await tester.tap(find.byKey(const ValueKey('super-project-expand-lead')));
+      await tester.tap(find.byKey(const ValueKey('super-group-lead')));
       await tester.pumpAndSettle();
       expect(find.text('Leads'), findsNothing);
       expect(leadsRow, findsOneWidget);
@@ -235,7 +235,7 @@ void main() {
       });
       final controller = await show(tester, server, account: 'viewer');
       // "This project" chosen in a workgroup does not follow into it.
-      await tester.tap(find.byKey(const ValueKey('super-project-expand-lead')));
+      await tester.tap(find.byKey(const ValueKey('super-group-lead')));
       await tester.pumpAndSettle();
       await tester.tap(find.byKey(const ValueKey('super-group-offline')));
       await tester.pumpAndSettle();

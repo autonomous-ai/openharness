@@ -838,8 +838,10 @@ class SuperTabController extends ChangeNotifier {
     if (id == selectedId && !devicesSelected) return true;
     devicesSelected = false;
     _acted();
-    if (!snapshot!.isProjectLead(id)) {
-      final group = snapshot!.conversation(id)!;
+    final group = snapshot!.conversation(id)!;
+    // A workgroup is shown under its project, so its project opens. A Chat with
+    // PM has its own row under Direct messages and leaves projects as they were.
+    if (!snapshot!.isProjectLead(id) && pmChat(group.projectId)?.id != id) {
       expandedProjects.add(group.projectId);
       unawaited(loadDormant(group.projectId));
       if (group.closed) closedOpenProjects.add(group.projectId);

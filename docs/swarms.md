@@ -17,7 +17,8 @@ write the request, and choose the project's visibility. Store uses
 
 Use **+ Project** in the left sidebar to create another project in the current
 Swarm. It uses the same form and creates a separate lead session. Clicking a
-project name opens its lead chat. Its chevron expands numbered workgroups.
+project row opens its lead chat and expands its numbered workgroups; a second
+click on the open project hides them.
 The lead can create and coordinate those workgroups; people usually work
 through the project lead.
 
@@ -97,7 +98,7 @@ a report every 15 seconds, so that a silent machine can be told from a quiet one
 that fails waits a whole 15 seconds before the next.
 
 Each machine in the sidebar is one line, at a project row's height and on its columns: a
-status dot where the project chevrons sit, the name where project names start (a computer's
+status dot at the right edge, where project rows show theirs, the name where project names start (a computer's
 real hostname without `.local`, such as `MacBookPro2021`, or the name a person gave it), then three
 columns every row shares, so their figures line up down the list: Claude's allowance, Codex's,
 and the agents, whose avatars stand 16 points clear of the figures. An allowance is the engine's mark and the share left of its tightest window,

@@ -15,7 +15,8 @@ final shots = Platform.environment['SUPER_TAB_HUMANS_SHOTS'];
 
 /// The Swarm's Humans section and sidebar as the PR shows them: the right
 /// pane with everyone's week, the leaderboard column where one still exists,
-/// and the sidebar after a direct message is opened from collapsed projects.
+/// the sidebar after a direct message is opened from collapsed projects, and
+/// a project and a machine opened by a click on their rows.
 void main() {
   setUpAll(() async {
     if (shots != null) await loadPreviewFonts();
@@ -77,6 +78,11 @@ void main() {
       await tester.tap(find.byKey(const ValueKey('super-pm-chat-lead')));
       await tester.pumpAndSettle();
       await shot('dm');
+      await tester.tap(find.byKey(const ValueKey('super-group-lead')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('super-machine-studio')));
+      await tester.pumpAndSettle();
+      await shot('project');
       await tester.pumpWidget(const SizedBox());
       await c.flush();
     }, skip: shots == null);
