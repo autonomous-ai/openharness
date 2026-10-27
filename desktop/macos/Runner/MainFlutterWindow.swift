@@ -427,9 +427,10 @@ class MainFlutterWindow: NSWindow {
     guard let bitmap = NSBitmapImageRep(
       bitmapDataPlanes: nil, pixelsWide: pixels, pixelsHigh: pixels, bitsPerSample: 8,
       samplesPerPixel: 4, hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB,
-      bytesPerRow: 0, bitsPerPixel: 0),
-          let context = NSGraphicsContext(bitmapImageRep: bitmap) else { return nil }
+      bytesPerRow: 0, bitsPerPixel: 0) else { return nil }
+    // Points before the context: it draws at the bitmap's scale only once it knows its size.
     bitmap.size = NSSize(width: size, height: size)
+    guard let context = NSGraphicsContext(bitmapImageRep: bitmap) else { return nil }
     let fit = min(size / symbol.size.width, size / symbol.size.height)
     let drawn = NSSize(width: symbol.size.width * fit, height: symbol.size.height * fit)
     NSGraphicsContext.saveGraphicsState()
