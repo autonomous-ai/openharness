@@ -92,6 +92,12 @@ it('keeps the client and server vocabulary identical', () => {
     .toBe(readFileSync(new URL('../types/productUsage.ts', import.meta.url), 'utf8'))
 })
 
+it('names launch refusals and agent-started launches', () => {
+  const metrics = new Set<string>(PRODUCT_USAGE_METRICS)
+  for (const m of ['launch_refused', 'launch_agent_started', 'launch_agent_created', 'launch_agent_failed', 'launch_agent_refused',
+    'launch_refused_code_session_in_harness', 'launch_refused_code_invalid_request']) expect(metrics.has(m), m).toBe(true)
+})
+
 it('names every launch code in each of its families, once, as a fixed word that can carry no message', () => {
   const metrics = new Set<string>(PRODUCT_USAGE_METRICS)
   expect(metrics.size).toBe(PRODUCT_USAGE_METRICS.length)
