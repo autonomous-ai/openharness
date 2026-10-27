@@ -120,14 +120,18 @@ describe('migrating one Swarm to parts (design 6.1.2)', () => {
     expect(await partCount(tabId)).toBe(0)
   })
 
-  it('refuses to migrate a Swarm with a message whose conversation it does not have', async () => {
+  it('preserves messages whose conversations were already deleted before migration', async () => {
     const { tabId } = await legacySwarm()
     await db.superTabMessage.create({ data: { id: `${tabId}-orphan`, tabId, conversationId: 'gone', sequence: 7, author: {}, text: 'lost',
       recipientIds: [], mentions: [] } })
+    const before = await db.superTabMessage.findMany({ where: { tabId }, select: { id: true, conversationId: true, sequence: true },
+      orderBy: [{ conversationId: 'asc' }, { sequence: 'asc' }, { id: 'asc' }] })
     const report = await migrateSwarm(db, tabId, { now: () => NOW })
-    expect(report).toMatchObject({ ok: false })
-    expect(report.error).toContain('1 message in a conversation it does not have: gone')
-    expect(await partCount(tabId)).toBe(0)
+    expect(report).toMatchObject({ tabId, ok: true, messages: before.length })
+    expect(await db.superTab.findUnique({ where: { id: tabId }, select: { format: true } })).toEqual({ format: 2 })
+    expect((await db.$transaction(tx => parts.loadAll(tx, tabId))).groups.map(group => group.key)).not.toContain('gone')
+    expect(await db.superTabMessage.findMany({ where: { tabId }, select: { id: true, conversationId: true, sequence: true },
+      orderBy: [{ conversationId: 'asc' }, { sequence: 'asc' }, { id: 'asc' }] })).toEqual(before)
   })
 })
 

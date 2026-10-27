@@ -143,11 +143,22 @@ describe('first load (design 4.3)', () => {
     expect(await db.superTab.findUnique({ where: { id: tabId } })).toMatchObject({ format: 2 })
   })
 
-  it('answers "being upgraded" when a Swarm cannot be migrated yet, and every client retries that', async () => {
+  it('opens a legacy Swarm with deleted-conversation history without exposing that history', async () => {
     const s = swarm(MIGRATED)
     const tabId = `tab-${randomUUID()}`
     await writeLegacySwarm(db, { state: { ...structuredClone(s.state), id: tabId }, revision: 3 })
     await db.superTabMessage.create({ data: { id: `${tabId}-orphan`, tabId, conversationId: 'gone', sequence: 1, author: {}, text: 'x', recipientIds: [], mentions: [] } })
+    const { status, body } = await get(`/api/super-tabs/${tabId}/parts`)
+    expect(status).toBe(200)
+    expect(keys(body.data.groups)).not.toContain('gone')
+    expect((await get(`/api/super-tabs/${tabId}/conversations/gone/messages`)).status).toBe(404)
+    expect((await db.superTabMessage.findUnique({ where: { id: `${tabId}-orphan` } }))?.text).toBe('x')
+  })
+
+  it('answers "being upgraded" when a Swarm cannot be migrated yet, and every client retries that', async () => {
+    const s = swarm(MIGRATED)
+    const tabId = `tab-${randomUUID()}`
+    await writeLegacySwarm(db, { state: { ...structuredClone(s.state), id: tabId, version: 2 as 1 }, revision: 3 })
     const { status, body } = await get(`/api/super-tabs/${tabId}/parts`)
     expect(status).toBe(503)
     expect(body.error!.code).toBe('SWARM_MIGRATING')
