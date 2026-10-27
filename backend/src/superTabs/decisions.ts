@@ -208,9 +208,9 @@ async function readable(tx: Tx, tabId: string, state: SuperTabState, actor: Acto
 
 /** How many of a project's open decisions wait in each conversation for each person, for its digest (digest.ts
  *  decisionLines): never what they ask. Counted by the database, so every one counts, however many there are, and private
- *  ones filtered out later never crowd out shared ones (review of #1772). */
+ *  ones filtered out later never crowd out shared ones (review of #1772). Hands-on requests are not decisions. */
 export async function waitingInProject(tx: Tx, tabId: string, projectId: string): Promise<Array<{ conversationId: string; personId: string; count: number }>> {
-  const groups = await tx.superTabDecision.groupBy({ by: ['conversationId', 'personId'], where: { tabId, projectId, ...waiting }, _count: { _all: true } })
+  const groups = await tx.superTabDecision.groupBy({ by: ['conversationId', 'personId'], where: { tabId, projectId, AND: [waiting, ofKind('decision')] }, _count: { _all: true } })
   return groups.map(g => ({ conversationId: g.conversationId, personId: g.personId, count: g._count._all }))
 }
 

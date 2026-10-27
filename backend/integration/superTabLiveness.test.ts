@@ -614,6 +614,21 @@ describe('the morning digest', () => {
     expect(digest.text).not.toMatch(/Secret launch plan|Price it|Behind a flag/)
   })
 
+  // Hands-on requests ride the decisions collection (v2 K) but are never counted as decisions.
+  it('counts decisions only, not hands-on requests waiting beside them', async () => {
+    const f = await swarm()
+    const projectId = (await f.timed.read(owner, f.tab)).state.projects![0]!.id
+    await f.execute({ type: 'project.digest', projectId, time: '03:00', timeZone: 'UTC' })
+    await f.execute({ type: 'decision.ask', conversationId: f.group, personId: owner.sub,
+      questions: [{ question: 'Keep the old parser?', options: ['Keep it', 'Drop it'], recommended: 1, unblocks: 'The cleanup' }] }, host, f.lead)
+    await f.execute({ type: 'handsOn.ask', conversationId: f.group, personId: owner.sub, request: 'Plug in the voice device',
+      steps: ['Plug it into the Mac Studio'], next: 'I run the voice test' }, host, f.lead)
+    f.clock.now = 3 * 60 * 60_000
+    await f.leadInbox()
+    const digest = (await db.superTabMessage.findMany({ where: { tabId: f.tab } })).find(m => (m.source as { kind?: string } | null)?.kind === 'digest-request')!
+    expect(digest.text).toMatch(/\nDecisions waiting:\n- #1 Ship the parser: 1 for owner@example\.com$/)
+  })
+
   it('is sent once when two of the Lead\'s polls run at the same moment', async () => {
     const f = await swarm()
     const projectId = (await f.timed.read(owner, f.tab)).state.projects![0]!.id
