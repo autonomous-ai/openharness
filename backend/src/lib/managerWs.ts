@@ -10,6 +10,7 @@
  *   - on `up`   → publishUp(machineId) so every client-holding backend fans it to its clients.
  */
 import type { IncomingMessage } from 'http'
+import { markCpuKind } from './selfProfile.js'
 import type { Duplex } from 'stream'
 import { randomUUID } from 'crypto'
 import { WebSocket, type RawData } from 'ws'
@@ -226,6 +227,7 @@ export function attachManager(ws: WebSocket, managerId: string, poolKind: 'contr
     const rawBytes = Buffer.isBuffer(raw) ? raw.length : Array.isArray(raw) ? raw.reduce((n, b) => n + b.length, 0) : raw.byteLength
     let frame: ManagerFrame
     try { frame = JSON.parse(raw.toString()) as ManagerFrame } catch { return }
+    markCpuKind(`manager-ws ${String(frame.t)}`)
     switch (frame.t) {
       case 'up': {
         // Tap project lifecycle to maintain machine_agents (plan cap) — replaces the old /proxy
