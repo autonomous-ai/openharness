@@ -131,11 +131,13 @@ void main() {
     expect(swarm.done, ['m1']);
     await walk.shot('tag-done');
 
-    // ⑤ The drawer: Swarm Home, Chat with PM, the projects as # channels,
-    // Harness and Settings; a project's arrow lists its chats.
+    // ⑤ The drawer: Swarm Home, the projects with their initial and team
+    // line, Harness and Settings; a project's arrow lists its chats, Chat
+    // with PM first.
     await drawer();
     await walk.shot('drawer');
     await tester.tap(walk.key('swarm-drawer-chats-$tab-$project'));
+    await walk.waitFor(walk.key('swarm-drawer-pm-$tab-$project'));
     await walk.waitFor(walk.key('swarm-drawer-chat-$leadChat'));
     await walk.shot('drawer-chats');
 
@@ -144,6 +146,14 @@ void main() {
     await walk.waitFor(walk.key('swarm-pm-chat'));
     expect(find.byType(SwarmProjectPage), findsOneWidget);
     await walk.shot('project');
+
+    // ⑥½ The team card: each agent in a sheet over the project.
+    await tester.tap(walk.key('swarm-team-line'));
+    await walk.waitFor(walk.key('swarm-team-close'));
+    await walk.wait();
+    await walk.shot('team');
+    await tester.tap(walk.key('swarm-team-close'));
+    await walk.waitGone(walk.key('swarm-team-close'));
 
     // ⑦ Chat with PM: the person and the Product Manager alone.
     await tester.tap(walk.key('swarm-pm-chat'));

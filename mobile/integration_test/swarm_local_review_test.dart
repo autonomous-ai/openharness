@@ -141,7 +141,7 @@ void main() {
       await back();
       // The menu, if it stayed under Settings.
       if (find.text('Settings').evaluate().isNotEmpty) await back();
-      await walk.waitFor(find.text('River asks you'));
+      await walk.waitFor(find.textContaining('River asks you'));
       await walk.shot('swarm-home');
 
       // ④ Harness from its drawer: the terminal, its mark with how many
@@ -158,7 +158,7 @@ void main() {
       expect(find.text('3'), findsOneWidget);
       await walk.shot('home-mark');
       await tester.tap(walk.key('swarm-mark'));
-      await walk.waitFor(find.text('River asks you'));
+      await walk.waitFor(find.textContaining('River asks you'));
       await walk.shot('swarm-from-home');
       await harness();
 
@@ -176,7 +176,7 @@ void main() {
       FocusManager.instance.primaryFocus?.unfocus();
       await walk.shot('find');
       await tester.tap(command.last);
-      await walk.waitFor(find.text('River asks you'));
+      await walk.waitFor(find.textContaining('River asks you'));
       await walk.shot('swarm-from-find');
     },
     skip: backend.isEmpty,
@@ -211,7 +211,7 @@ void main() {
       );
 
       // ① What needs the person, across every Swarm, then the Swarms.
-      await walk.waitFor(find.text('River asks you'));
+      await walk.waitFor(find.textContaining('River asks you'));
       await walk.waitFor(walk.keyStarting('swarm-project-'));
       await walk.shot('swarm');
 

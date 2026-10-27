@@ -1,68 +1,116 @@
 import 'package:flutter/material.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
-import 'package:harness_mobile/phone/settings_row.dart';
+import 'package:harness_mobile/phone/tty.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart';
 
-/// A [SettingsRow] whose line under the title is a widget of its own — a
-/// team line with its coloured dots ([SwarmTeamLine]) — in the same card, at
-/// the same height and margins, with the same chevron.
+/// One row of a Swarm card ([SwarmGroup]), as the approved prototype draws
+/// it: maybe a mark at its left (an avatar, a project's tile, a need's
+/// glyph), its title — after a work number in the terminal's face — and a
+/// line under it, then at its right what it holds or a chevron. Never under
+/// 56 points.
 class SwarmRow extends StatelessWidget {
   const SwarmRow({
     super.key,
+    this.leading,
     required this.title,
+    this.number,
     this.detail,
+    this.trailing,
+    this.chevron = LucideIcons.chevronRight300,
     required this.onTap,
   });
 
+  final Widget? leading;
   final String title;
+
+  /// A work's number, "#4", before its title.
+  final String? number;
+
+  /// The line under the title: words ([line]) or a team line.
   final Widget? detail;
+
+  /// What the row holds at its right, in place of the chevron.
+  final Widget? trailing;
+
+  /// The chevron of a row that opens something; null draws none.
+  final IconData? chevron;
   final VoidCallback? onTap;
+
+  /// Every row clears this, for a thumb.
+  static const double height = 56;
+
+  /// A row's line under its title, in the secondary ink.
+  static Widget line(String text, {Key? key, int lines = 1, Color? color}) =>
+      Text(
+        text,
+        key: key,
+        maxLines: lines,
+        overflow: TextOverflow.ellipsis,
+        style: TextStyle(
+          color: color ?? AppPalette.textSecondary,
+          fontSize: 13.5,
+          height: 1.35,
+        ),
+      );
 
   @override
   Widget build(BuildContext context) {
     AppTheme.watch(context);
-    final row = Container(
-      constraints: const BoxConstraints(minHeight: kSettingsRowHeight),
-      padding: const EdgeInsets.fromLTRB(13, 8, 13, 8),
-      child: Row(
-        children: [
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Text(
-                  title,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    color: AppPalette.textPrimary,
-                    fontSize: 15,
-                    fontWeight: FontWeight.w500,
+    final tty = Tty.of(context);
+    final end =
+        trailing ??
+        (onTap == null || chevron == null
+            ? null
+            : Icon(chevron, size: 18, color: AppPalette.textFaint));
+    final row = ConstrainedBox(
+      constraints: const BoxConstraints(minHeight: height),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+        child: Row(
+          children: [
+            if (leading case final leading?) ...[
+              leading,
+              const SizedBox(width: 12),
+            ],
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text.rich(
+                    TextSpan(
+                      children: [
+                        if (number case final number?)
+                          TextSpan(
+                            text: '$number ',
+                            style: tty.style(
+                              size: 13.5,
+                              color: AppPalette.textSecondary,
+                            ),
+                          ),
+                        TextSpan(text: title),
+                      ],
+                    ),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      color: AppPalette.textPrimary,
+                      fontSize: 16,
+                      fontWeight: FontWeight.w500,
+                      height: 1.3,
+                    ),
                   ),
-                ),
-                if (detail case final detail?) ...[
-                  const SizedBox(height: 3),
-                  detail,
+                  if (detail case final detail?) ...[
+                    const SizedBox(height: 3),
+                    detail,
+                  ],
                 ],
-              ],
-            ),
-          ),
-          if (onTap != null)
-            Padding(
-              padding: const EdgeInsets.only(left: 4),
-              child: Transform.translate(
-                // The glyph's own trailing blank, as [SettingsRow] cancels it.
-                offset: const Offset(kChevronInk, 0),
-                child: Icon(
-                  LucideIcons.chevronRight300,
-                  size: 20,
-                  color: AppPalette.textFaint,
-                ),
               ),
             ),
-        ],
+            if (end != null) ...[const SizedBox(width: 12), end],
+          ],
+        ),
       ),
     );
     if (onTap == null) return row;

@@ -162,18 +162,23 @@ void main() {
       addTearDown(tester.view.reset);
       await pump(tester, backend(), const SwarmPage());
 
-      expect(find.text('River asks you'), findsOneWidget);
+      // The open decision says who asks and where in one line.
+      final asks = find.textContaining('River asks you', findRichText: true);
+      expect(asks, findsOneWidget);
       expect(find.text('River tagged you'), findsOneWidget);
       expect(find.text('Nova needs you'), findsOneWidget);
       expect(
-        tester.getTopLeft(find.text('River asks you')).dy,
+        tester.getTopLeft(asks).dy,
         lessThan(tester.getTopLeft(key('swarm-project-$tab-$project')).dy),
       );
       expect(
-        find.text('projects'),
+        find.text('Projects'),
         findsOneWidget,
         reason: 'one Swarm: its projects, not its name',
       );
+
+      await tester.tap(find.text('River tagged you'));
+      await tester.pumpAndSettle();
       expect(
         find.text('Open chat'),
         findsOneWidget,
@@ -197,7 +202,7 @@ void main() {
 
       await tester.tap(key('swarm-option-d1-0'));
       await tester.pump();
-      expect(find.text('Sending “Yes”…'), findsOneWidget);
+      expect(find.text('Sending “Yes”'), findsOneWidget);
 
       await tester.tap(key('swarm-undo-d1'));
       await tester.pump(const Duration(seconds: 5));
@@ -213,7 +218,7 @@ void main() {
         final host = await pump(tester, fake, const SwarmPage());
         await tester.tap(key('swarm-option-d1-0'));
         await tester.pump();
-        expect(find.text('Sending “Yes”…'), findsOneWidget);
+        expect(find.text('Sending “Yes”'), findsOneWidget);
 
         // Read again in full within the Undo window: what waits for the
         // person is read again, and that read is slow to answer.
@@ -224,7 +229,7 @@ void main() {
         fake.routes['/api/super-tabs/$tab/changes'] = (_) => {'reload': true};
         await host.session!.inbox.refresh();
         await tester.pump();
-        expect(find.text('Sending “Yes”…'), findsNothing);
+        expect(find.text('Sending “Yes”'), findsNothing);
 
         stalled.complete(open);
         await tester.pump(const Duration(seconds: 5));
@@ -237,7 +242,7 @@ void main() {
         await tester.tap(key('swarm-option-d1-1'));
         await tester.pump();
         expect(find.text('Not sent, choose again.'), findsNothing);
-        expect(find.text('Sending “No”…'), findsOneWidget);
+        expect(find.text('Sending “No”'), findsOneWidget);
         await tester.tap(key('swarm-undo-d1'));
         await tester.pump();
       },
@@ -317,7 +322,10 @@ void main() {
         reason: 'the first tap opens it on Home, where another was open',
       );
 
-      await tester.tap(find.text('Nova needs you'));
+      // Open, it says who asks and where in one line, and that opens it.
+      await tester.tap(
+        find.textContaining('Nova needs you', findRichText: true),
+      );
       await tester.pumpAndSettle();
 
       expect(find.byType(SwarmConversationPage), findsOneWidget);
@@ -357,11 +365,11 @@ void main() {
           findsNothing,
           reason: 'the Naming System: Product Manager on screen, never Lead',
         );
-        expect(y('swarm-lead-chat'), lessThan(y('swarm-conversation-g-busy')));
+        expect(y('swarm-lead-chat'), lessThan(y('swarm-conversation-g1')));
         expect(
-          y('swarm-conversation-g-busy'),
-          lessThan(y('swarm-conversation-g1')),
-          reason: 'the latest activity first',
+          y('swarm-conversation-g1'),
+          lessThan(y('swarm-conversation-g-busy')),
+          reason: 'what waits on the person first, then the latest activity',
         );
         expect(key('swarm-conversation-g-old'), findsNothing);
         expect(
@@ -380,6 +388,9 @@ void main() {
         expect(key('swarm-conversation-g-old'), findsOneWidget);
         expect(key('swarm-conversation-g-spike'), findsNothing);
 
+        // Rows are 56 points tall: below the fold of the test's screen.
+        await tester.ensureVisible(key('swarm-older-earlier'));
+        await tester.pumpAndSettle();
         await tester.tap(key('swarm-older-earlier'));
         await tester.pumpAndSettle();
         expect(key('swarm-conversation-g-spike'), findsOneWidget);
@@ -387,7 +398,7 @@ void main() {
       },
     );
 
-    testWidgets('the team line opens each agent in a word', (tester) async {
+    testWidgets('the team card opens each agent in a word', (tester) async {
       await pump(
         tester,
         backend(),
@@ -398,9 +409,15 @@ void main() {
       await tester.tap(key('swarm-team-line'));
       await tester.pumpAndSettle();
 
-      expect(find.byType(SwarmTeamPage), findsOneWidget);
+      expect(find.byType(SwarmTeamSheet), findsOneWidget);
       expect(key('swarm-agent-agent-builder'), findsOneWidget);
-      expect(find.text('Waiting'), findsOneWidget);
+      expect(
+        find.descendant(
+          of: key('swarm-agent-agent-builder'),
+          matching: find.textContaining('Waiting', findRichText: true),
+        ),
+        findsOneWidget,
+      );
     });
   });
 

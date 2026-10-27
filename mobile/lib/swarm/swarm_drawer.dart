@@ -3,24 +3,24 @@ import 'package:flutter/services.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import 'package:harness_mobile/phone/tty.dart';
-import 'package:harness_mobile/phone/tty_controls.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart';
 
 import 'model.dart';
 import 'swarm_conversation.dart';
 import 'swarm_inbox.dart';
-import 'swarm_pm_chat.dart';
 import 'swarm_project_page.dart';
 import 'swarm_session.dart';
+import 'swarm_style.dart';
 import 'swarm_team_line.dart';
 import 'team_glance.dart';
 
-/// Swarm Home's drawer, from the left edge like the desktop's sidebar: Swarm
-/// Home with what waits on the person; Chat with PM, one per project; the
-/// projects as # channels, each with its team in a line — its name opens the
-/// project, its arrow lists its chats; then the way back to Harness (the
-/// terminals), and Settings at its foot. A row closes the drawer before it
-/// opens anything.
+/// Swarm Home's drawer, from the left edge like the desktop's sidebar, as the
+/// approved prototype draws it: its title and a close button; Swarm Home
+/// with what waits on the person; the projects, each with its initial and
+/// its team in a line — its name opens the project, its arrow lists its
+/// chats: Chat with PM, the project chat, then its work, what waits on the
+/// person first; then the way back to Harness (the terminals), and Settings
+/// at its foot. A row closes the drawer before it opens anything.
 class SwarmDrawer extends StatefulWidget {
   const SwarmDrawer({
     super.key,
@@ -64,8 +64,9 @@ class _SwarmDrawerState extends State<SwarmDrawer> {
     final tty = Tty.of(context);
     final session = widget.session;
     final inbox = session?.inbox;
+    void close() => Scaffold.of(context).closeDrawer();
     void then(VoidCallback action) {
-      Scaffold.of(context).closeDrawer();
+      close();
       action();
     }
 
@@ -75,67 +76,46 @@ class _SwarmDrawerState extends State<SwarmDrawer> {
           (swarm: swarm, snapshot: snapshot),
     ];
     final several = swarms.length > 1;
-    final secondary = TextStyle(
-      color: AppPalette.textSecondary,
-      fontSize: 12.5,
-      height: 1.4,
-    );
+    final waiting = inbox?.needs.length ?? 0;
     return Drawer(
+      width: MediaQuery.sizeOf(context).width * .86,
       backgroundColor: AppPalette.panelBg,
-      shape: const RoundedRectangleBorder(),
+      shape: Border(right: BorderSide(color: AppGlass.hair)),
       child: SafeArea(
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            const Padding(
-              padding: EdgeInsets.fromLTRB(Tty.origin, 12, Tty.origin, 8),
-              child: TtyText(
-                'Swarm',
-                size: TtySize.title,
-                weight: FontWeight.w600,
+            Padding(
+              padding: const EdgeInsets.fromLTRB(18, 4, 8, 8),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      'Swarm',
+                      style: tty.style(size: 17, weight: FontWeight.w600),
+                    ),
+                  ),
+                  SwarmIconButton(
+                    key: const ValueKey('swarm-drawer-close'),
+                    icon: LucideIcons.x300,
+                    label: 'Close menu',
+                    onPressed: close,
+                  ),
+                ],
               ),
             ),
             Expanded(
               child: ListView(
-                padding: const EdgeInsets.symmetric(vertical: 4),
+                padding: const EdgeInsets.fromLTRB(8, 0, 8, 12),
                 children: [
                   SwarmDrawerRow(
                     key: const ValueKey('swarm-drawer-home'),
-                    icon: LucideIcons.network300,
+                    leading: const _Glyph(LucideIcons.network300),
                     title: 'Swarm Home',
                     selected: true,
-                    badge: switch (inbox?.needs.length ?? 0) {
-                      0 => null,
-                      final count => '$count',
-                    },
-                    badgeColor: tty.yellow,
-                    onTap: () => Scaffold.of(context).closeDrawer(),
+                    badge: waiting > 0 ? SwarmBadge(waiting, warn: true) : null,
+                    onTap: close,
                   ),
-                  if (swarms.any((s) => s.snapshot.projects.isNotEmpty))
-                    const _Caption('Chat with PM'),
-                  for (final (:swarm, :snapshot) in swarms)
-                    for (final project in snapshot.projects)
-                      SwarmDrawerRow(
-                        key: ValueKey(
-                          'swarm-drawer-pm-${swarm.id}-${project.id}',
-                        ),
-                        icon: LucideIcons.messageSquare300,
-                        title: project.name,
-                        detail: switch ([
-                          ?swarmPmName(snapshot, project),
-                          if (several) swarm.name,
-                        ]) {
-                          [] => null,
-                          final words => Text(
-                            words.join(' · '),
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: secondary,
-                          ),
-                        },
-                        onTap: () =>
-                            then(() => widget.onPm(swarm.id, project.id)),
-                      ),
                   for (final (:swarm, :snapshot) in swarms)
                     if (snapshot.projects.isNotEmpty) ...[
                       _Caption(several ? swarm.name : 'Projects'),
@@ -149,10 +129,10 @@ class _SwarmDrawerState extends State<SwarmDrawer> {
                         ),
                     ],
                   if (widget.onHarness case final harness?) ...[
-                    const SizedBox(height: 12),
+                    const _Caption(''),
                     SwarmDrawerRow(
                       key: const ValueKey('swarm-drawer-harness'),
-                      icon: LucideIcons.squareTerminal300,
+                      leading: const _Glyph(LucideIcons.squareTerminal300),
                       title: 'Harness',
                       onTap: () => then(harness),
                     ),
@@ -160,23 +140,30 @@ class _SwarmDrawerState extends State<SwarmDrawer> {
                 ],
               ),
             ),
-            if (widget.onSettings case final settings?) ...[
-              Divider(height: 1, thickness: 1, color: AppGlass.hair),
-              SwarmDrawerRow(
-                key: const ValueKey('swarm-drawer-settings'),
-                icon: LucideIcons.settings300,
-                title: 'Settings',
-                onTap: () => then(() => settings(context)),
+            if (widget.onSettings case final settings?)
+              DecoratedBox(
+                decoration: BoxDecoration(
+                  border: Border(top: BorderSide(color: AppGlass.hair)),
+                ),
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(8, 6, 8, 6),
+                  child: SwarmDrawerRow(
+                    key: const ValueKey('swarm-drawer-settings'),
+                    leading: const _Glyph(LucideIcons.settings2300),
+                    title: 'Settings',
+                    onTap: () => then(() => settings(context)),
+                  ),
+                ),
               ),
-            ],
           ],
         ),
       ),
     );
   }
 
-  /// A project's row, and while its arrow is open, its chats: the project
-  /// chat, then its work by latest activity (Chat with PM has its own row).
+  /// A project's row, and while its arrow is open, its chats: Chat with PM,
+  /// the project chat, then its work — what waits on the person first, the
+  /// rest by latest activity.
   List<Widget> _project(
     SwarmSession session,
     String swarmId,
@@ -194,35 +181,68 @@ class _SwarmDrawerState extends State<SwarmDrawer> {
       session.accountId,
       pmChatId: reader == null ? null : swarmPmChat(reader, project.id)?.id,
     ).active;
+    final waits = swarmWaitingOnYou(session.inbox, swarmId);
     SwarmDrawerRow chat(SuperTabConversation g, String title) => SwarmDrawerRow(
       key: ValueKey('swarm-drawer-chat-${g.id}'),
       title: title,
-      indent: true,
+      sub: true,
       onTap: () => then(() => widget.onChat(swarmId, g.id)),
     );
     return [
-      SwarmDrawerRow(
-        key: ValueKey('swarm-drawer-project-$swarmId-${project.id}'),
-        icon: LucideIcons.hash300,
-        title: project.name,
-        detail: SwarmTeamLine(swarmTeamGlance(snapshot, projectId: project.id)),
-        onTap: () => then(() => widget.onProject(swarmId, project.id)),
-        trailing: _Disclosure(
-          key: ValueKey('swarm-drawer-chats-$swarmId-${project.id}'),
-          open: open,
-          label: '${open ? 'Hide' : 'Show'} the chats of ${project.name}',
-          onTap: () => setState(() => open ? _open.remove(id) : _open.add(id)),
-        ),
+      Row(
+        children: [
+          Expanded(
+            child: SwarmDrawerRow(
+              key: ValueKey('swarm-drawer-project-$swarmId-${project.id}'),
+              leading: SwarmProjectTile(project.name),
+              title: project.name,
+              detail: SwarmTeamLine(
+                swarmTeamGlance(snapshot, projectId: project.id),
+                size: 13,
+              ),
+              onTap: () => then(() => widget.onProject(swarmId, project.id)),
+            ),
+          ),
+          _Disclosure(
+            key: ValueKey('swarm-drawer-chats-$swarmId-${project.id}'),
+            open: open,
+            label: '${open ? 'Hide' : 'Show'} the chats of ${project.name}',
+            onTap: () =>
+                setState(() => open ? _open.remove(id) : _open.add(id)),
+          ),
+        ],
       ),
       if (open) ...[
+        SwarmDrawerRow(
+          key: ValueKey('swarm-drawer-pm-$swarmId-${project.id}'),
+          title: 'Chat with PM',
+          sub: true,
+          onTap: () => then(() => widget.onPm(swarmId, project.id)),
+        ),
         if (lead != null) chat(lead, 'Project chat'),
-        for (final g in work) chat(g, g.label),
+        for (final g in work)
+          if (waits.contains(g.id)) chat(g, g.label),
+        for (final g in work)
+          if (!waits.contains(g.id)) chat(g, g.label),
       ],
     ];
   }
 }
 
-/// A caption over a run of the drawer's rows, as Settings heads its groups.
+/// A row's glyph, in a 32-point box so titles line up with a project's tile.
+class _Glyph extends StatelessWidget {
+  const _Glyph(this.icon);
+
+  final IconData icon;
+
+  @override
+  Widget build(BuildContext context) => SizedBox(
+    width: 32,
+    child: Icon(icon, size: 22, color: AppPalette.textSecondary),
+  );
+}
+
+/// A caption over a run of the drawer's rows; empty, a gap.
 class _Caption extends StatelessWidget {
   const _Caption(this.text);
 
@@ -230,12 +250,13 @@ class _Caption extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Padding(
-    padding: const EdgeInsets.fromLTRB(Tty.origin, 18, Tty.origin, 6),
+    padding: const EdgeInsets.fromLTRB(10, 18, 10, 6),
     child: Text(
-      text.toLowerCase(),
+      text,
       style: TextStyle(
         color: Color.lerp(AppPalette.textFaint, AppPalette.textSecondary, .5),
         fontSize: 13,
+        height: 1.2,
       ),
     ),
   );
@@ -266,11 +287,11 @@ class _Disclosure extends StatelessWidget {
         onTap();
       },
       child: SizedBox(
-        width: 52,
+        width: 44,
         height: SwarmDrawerRow.height,
         child: Icon(
           open ? LucideIcons.chevronDown300 : LucideIcons.chevronRight300,
-          size: 20,
+          size: 18,
           color: AppPalette.textFaint,
         ),
       ),
@@ -278,43 +299,42 @@ class _Disclosure extends StatelessWidget {
   );
 }
 
-/// One row of the drawer: a glyph, a title and maybe a line under it, a
-/// count, and at the right an optional control of its own.
+/// One row of the drawer: a glyph or a project's tile, a title and maybe a
+/// line under it, a count; selected, it sits on a rounded fill. A chat under
+/// its project ([sub]) is shorter, quieter, and lined up with the project's
+/// name.
 class SwarmDrawerRow extends StatelessWidget {
   const SwarmDrawerRow({
     super.key,
-    this.icon,
+    this.leading,
     required this.title,
     this.detail,
     this.badge,
-    this.badgeColor,
     this.selected = false,
-    this.indent = false,
-    this.trailing,
+    this.sub = false,
     required this.onTap,
   });
 
-  final IconData? icon;
+  final Widget? leading;
   final String title;
   final Widget? detail;
-  final String? badge;
-  final Color? badgeColor;
+  final Widget? badge;
   final bool selected;
 
-  /// A chat under its project: lined up with the project's name.
-  final bool indent;
-  final Widget? trailing;
+  /// A chat under its project.
+  final bool sub;
   final VoidCallback? onTap;
 
-  /// Every row clears this, for a thumb.
+  /// Every row but a chat under its project clears this, for a thumb.
   static const double height = 52;
 
   @override
   Widget build(BuildContext context) {
     AppTheme.watch(context);
-    final tty = Tty.of(context);
     return Material(
       color: selected ? AppSurface.selectedFill : Colors.transparent,
+      borderRadius: BorderRadius.circular(10),
+      clipBehavior: Clip.antiAlias,
       child: InkWell(
         onTap: onTap == null
             ? null
@@ -323,54 +343,46 @@ class SwarmDrawerRow extends StatelessWidget {
                 onTap!();
               },
         child: ConstrainedBox(
-          constraints: const BoxConstraints(minHeight: height),
+          constraints: BoxConstraints(minHeight: sub ? 44 : height),
           child: Padding(
-            padding: EdgeInsets.only(
-              left: indent ? Tty.origin + 22 + 14 : Tty.origin,
-              right: trailing == null ? Tty.origin : 0,
-            ),
+            padding: EdgeInsets.fromLTRB(sub ? 54 : 10, 6, 10, 6),
             child: Row(
               children: [
-                if (icon case final icon?) ...[
-                  Icon(icon, size: 22, color: AppPalette.textSecondary),
-                  const SizedBox(width: 14),
+                if (leading case final leading?) ...[
+                  leading,
+                  const SizedBox(width: 12),
                 ],
                 Expanded(
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(vertical: 8),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Text(
-                          title,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(
-                            color: AppPalette.textPrimary,
-                            fontSize: 15,
-                            fontWeight: FontWeight.w500,
-                          ),
-                        ),
-                        if (detail case final detail?) ...[
-                          const SizedBox(height: 2),
-                          detail,
-                        ],
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        title,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: sub
+                            ? TextStyle(
+                                color: AppPalette.textSecondary,
+                                fontSize: 15,
+                              )
+                            : TextStyle(
+                                color: AppPalette.textPrimary,
+                                fontSize: 16,
+                                fontWeight: FontWeight.w500,
+                              ),
+                      ),
+                      if (detail case final detail?) ...[
+                        const SizedBox(height: 2),
+                        detail,
                       ],
-                    ),
+                    ],
                   ),
                 ),
-                if (badge case final badge?)
-                  Padding(
-                    padding: const EdgeInsets.only(left: 8),
-                    child: TtyText(
-                      badge,
-                      color: badgeColor ?? tty.text,
-                      weight: FontWeight.w600,
-                      size: TtySize.meta,
-                    ),
-                  ),
-                ?trailing,
+                if (badge case final badge?) ...[
+                  const SizedBox(width: 12),
+                  badge,
+                ],
               ],
             ),
           ),

@@ -1,16 +1,13 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import 'package:harness_mobile/phone/phone_navigation.dart';
 import 'package:harness_mobile/phone/phone_shell_scope.dart';
-import 'package:harness_mobile/phone/settings_row.dart';
 import 'package:harness_mobile/phone/tty.dart';
-import 'package:harness_mobile/phone/tty_controls.dart';
-import 'package:harness_mobile/settings/experimental_features.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart';
+import 'package:harness_mobile/theme/app_theme.dart' show AppColors;
 
 import 'swarm_choices.dart';
 import 'swarm_conversation_page.dart';
@@ -20,6 +17,7 @@ import 'swarm_need_rows.dart';
 import 'swarm_project_page.dart';
 import 'swarm_row.dart';
 import 'swarm_session.dart';
+import 'swarm_style.dart';
 import 'swarm_team_line.dart';
 import 'team_glance.dart';
 
@@ -39,10 +37,10 @@ void openSwarmHome(BuildContext context) {
 /// projects, each with its team in a line ([swarmNeedsFirst] orders needs and
 /// the rest). Its drawer ([SwarmDrawer]) is the way to everything else.
 ///
-/// The phone's Home while Settings ▸ Experimental ▸ Swarm is on
-/// ([PhoneExperiment.swarm]); pushed over another page it has a back button
-/// instead of the drawer. Reads the account's [SwarmSession] from the shell;
-/// with none, says why.
+/// The phone's Home while Settings ▸ Experimental ▸ Swarm is on; pushed over
+/// another page it has a back button instead of the drawer. Its top bar holds
+/// the menu and its title in one line, as the approved prototype draws it.
+/// Reads the account's [SwarmSession] from the shell; with none, says why.
 class SwarmPage extends StatefulWidget {
   const SwarmPage({super.key, this.onHarness, this.onSettings});
 
@@ -139,17 +137,17 @@ class _SwarmPageState extends State<SwarmPage> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            Align(
-              alignment: Alignment.centerLeft,
-              child: pushed
-                  ? TtyBackButton(
+            SwarmTopBar(
+              leading: pushed
+                  ? SwarmBackButton(
                       onPressed: () => Navigator.of(context).maybePop(),
                     )
                   : const _MenuButton(),
+              title: 'Swarm',
             ),
             Expanded(
               child: session == null
-                  ? _Unavailable(tty: tty)
+                  ? const _Unavailable()
                   : ListenableBuilder(
                       listenable: Listenable.merge([session, session.inbox]),
                       builder: (context, _) => RefreshIndicator(
@@ -157,10 +155,10 @@ class _SwarmPageState extends State<SwarmPage> {
                         child: ListView(
                           physics: const AlwaysScrollableScrollPhysics(),
                           padding: EdgeInsets.fromLTRB(
-                            Tty.origin,
-                            8,
-                            Tty.origin,
-                            MediaQuery.paddingOf(context).bottom + 24,
+                            12,
+                            0,
+                            12,
+                            MediaQuery.paddingOf(context).bottom + 28,
                           ),
                           children: _body(context, session, tty),
                         ),
@@ -176,80 +174,91 @@ class _SwarmPageState extends State<SwarmPage> {
   List<Widget> _body(BuildContext context, SwarmSession session, Tty tty) {
     final inbox = session.inbox;
     final several = inbox.swarms.length > 1;
-    final needs = [
-      const SettingsCaption('Needs you'),
+    List<Widget> needs({required bool first}) => [
+      SwarmCaption('Needs you', count: inbox.needs.length, first: first),
       if (inbox.needs.isEmpty)
         Padding(
           padding: const EdgeInsets.symmetric(horizontal: 4),
-          child: Text(
+          child: SwarmRow.line(
             inbox.loaded ? 'Nothing needs you.' : 'Reading your Swarms…',
             key: const ValueKey('swarm-needs-none'),
-            style: tty.style(color: tty.dim),
           ),
         )
       else
-        SettingsGroup(children: _needs(context, session)),
+        SwarmGroup(children: _needs(context, session)),
     ];
     final pm = [
       for (final swarm in inbox.swarms)
         if (inbox.reader(swarm.id)?.snapshot case final snapshot?)
           for (final project in snapshot.projects)
-            SettingsRow(
+            SwarmRow(
               key: ValueKey('swarm-home-pm-${swarm.id}-${project.id}'),
+              leading: switch (swarmPmId(snapshot, project)) {
+                final id? => SwarmAvatar(id: id, name: snapshot.agentName(id)),
+                null => SwarmProjectTile(project.name),
+              },
               title: project.name,
               detail: switch ([
                 ?swarmPmName(snapshot, project),
                 if (several) swarm.name,
               ]) {
                 [] => null,
-                final words => words.join(' · '),
+                final words => SwarmRow.line(words.join(' · ')),
               },
-              value: _pmOpening == '${swarm.id}/${project.id}'
-                  ? 'Opening…'
+              trailing: _pmOpening == '${swarm.id}/${project.id}'
+                  ? SwarmRow.line('Opening…')
                   : null,
+              chevron: null,
               onTap: () => unawaited(_openPm(swarm.id, project.id)),
             ),
     ];
-    final swarms = [
+    List<Widget> swarms({required bool first}) => [
       if (pm.isNotEmpty) ...[
-        const SettingsCaption('Chat with PM'),
-        SettingsGroup(children: pm),
+        SwarmCaption('Chat with PM', first: first),
+        SwarmGroup(children: pm),
       ],
       if (_pmError case final error?)
         Padding(
           padding: const EdgeInsets.fromLTRB(4, 8, 4, 0),
-          child: Text(
+          child: SwarmRow.line(
             error,
             key: const ValueKey('swarm-pm-error'),
-            style: tty.style(color: tty.red, size: TtySize.meta),
+            lines: 3,
+            color: AppColors.danger,
           ),
         ),
-      for (final swarm in inbox.swarms) ...[
-        SettingsCaption(several ? swarm.name : 'Projects'),
-        SettingsGroup(children: _projects(context, session, swarm.id)),
+      for (final (i, swarm) in inbox.swarms.indexed) ...[
+        SwarmCaption(
+          several ? swarm.name : 'Projects',
+          first: first && pm.isEmpty && i == 0,
+        ),
+        SwarmGroup(children: _projects(context, session, swarm.id)),
       ],
       if (inbox.loaded && inbox.swarms.isEmpty) ...[
-        const SettingsCaption('Your Swarms'),
+        SwarmCaption('Your Swarms', first: first && pm.isEmpty),
         Padding(
           padding: const EdgeInsets.symmetric(horizontal: 4),
-          child: Text(
+          child: SwarmRow.line(
             'No Swarm yet. Start one on your computer.',
-            style: tty.style(color: tty.dim),
+            lines: 2,
           ),
         ),
       ],
     ];
     return [
-      const TtyText('Swarm', size: TtySize.title, weight: FontWeight.w600),
-      if (inbox.error case final error?) ...[
-        const SizedBox(height: 8),
-        Text(
-          error,
-          key: const ValueKey('swarm-error'),
-          style: tty.style(color: tty.red),
+      if (inbox.error case final error?)
+        Padding(
+          padding: const EdgeInsets.fromLTRB(4, 6, 4, 0),
+          child: SwarmRow.line(
+            error,
+            key: const ValueKey('swarm-error'),
+            lines: 3,
+            color: AppColors.danger,
+          ),
         ),
-      ],
-      ...swarmNeedsFirst ? [...needs, ...swarms] : [...swarms, ...needs],
+      ...swarmNeedsFirst
+          ? [...needs(first: true), ...swarms(first: false)]
+          : [...swarms(first: true), ...needs(first: false)],
     ];
   }
 
@@ -290,19 +299,23 @@ class _SwarmPageState extends State<SwarmPage> {
     final snapshot = reader?.snapshot;
     if (snapshot == null) {
       return [
-        SettingsRow(
+        SwarmRow(
           title: reader?.error ?? 'Reading…',
-          destructive: reader?.error != null,
+          detail: reader?.error == null
+              ? null
+              : SwarmRow.line('Pull down to try again.'),
+          onTap: null,
         ),
       ];
     }
     if (snapshot.projects.isEmpty) {
-      return [const SettingsRow(title: 'No project yet')];
+      return [const SwarmRow(title: 'No project yet', onTap: null)];
     }
     return [
       for (final project in snapshot.projects)
         SwarmRow(
           key: ValueKey('swarm-project-$swarmId-${project.id}'),
+          leading: SwarmProjectTile(project.name),
           title: project.name,
           detail: SwarmTeamLine(
             swarmTeamGlance(snapshot, projectId: project.id),
@@ -315,60 +328,36 @@ class _SwarmPageState extends State<SwarmPage> {
 
 /// No session: Swarm is off, or nobody is signed in on this phone.
 class _Unavailable extends StatelessWidget {
-  const _Unavailable({required this.tty});
-
-  final Tty tty;
+  const _Unavailable();
 
   @override
   Widget build(BuildContext context) => ListView(
-    padding: const EdgeInsets.fromLTRB(Tty.origin, 8, Tty.origin, 24),
+    padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
     children: [
-      TtyText(
-        PhoneExperiment.swarm.label,
-        size: TtySize.title,
-        weight: FontWeight.w600,
-      ),
-      const SizedBox(height: 16),
       Text(
         'Swarm is off on this phone, or you are signed out. '
         'Turn it on in Settings ▸ Experimental.',
         key: const ValueKey('swarm-unavailable'),
-        style: tty.style(color: tty.faint, size: TtySize.row),
+        style: TextStyle(
+          color: AppPalette.textSecondary,
+          fontSize: 16,
+          height: 1.45,
+        ),
       ),
     ],
   );
 }
 
-/// Opens Home's drawer: the back button's box, the drawer's mark.
+/// Opens Home's drawer: the top bar's 44-point box, the drawer's mark.
 class _MenuButton extends StatelessWidget {
   const _MenuButton();
 
   @override
-  Widget build(BuildContext context) {
-    final tty = Tty.of(context);
-    return Semantics(
-      button: true,
-      label: 'Menu',
-      excludeSemantics: true,
-      child: GestureDetector(
-        key: const ValueKey('swarm-menu'),
-        behavior: HitTestBehavior.opaque,
-        onTap: () {
-          HapticFeedback.selectionClick();
-          Scaffold.of(context).openDrawer();
-        },
-        child: SizedBox(
-          width: 52,
-          height: 44,
-          child: Padding(
-            padding: const EdgeInsets.only(left: Tty.origin - 3),
-            child: Align(
-              alignment: Alignment.centerLeft,
-              child: Icon(LucideIcons.menu300, size: 24, color: tty.text),
-            ),
-          ),
-        ),
-      ),
-    );
-  }
+  Widget build(BuildContext context) => SwarmIconButton(
+    key: const ValueKey('swarm-menu'),
+    icon: LucideIcons.menu300,
+    size: 24,
+    label: 'Menu',
+    onPressed: () => Scaffold.of(context).openDrawer(),
+  );
 }

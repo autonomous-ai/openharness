@@ -140,9 +140,9 @@ void main() {
         ..pop()
         ..pop();
       await wait(1500);
-      final card = find.ancestor(
-        of: find.textContaining(chat),
-        matching: find.byType(SwarmDecisionCard),
+      final card = find.byWidgetPredicate(
+        (w) =>
+            w is SwarmDecisionCard && w.need.decision.conversationTitle == chat,
       );
       // Swarm Home opens one need at a time: each decision in turn, until
       // the test chat's.
@@ -161,8 +161,18 @@ void main() {
       }
       await waitFor(card);
       await shot('test-decision');
+      // Who asks, at the top of the card, opens the chat it was asked in.
       await tester.tap(
-        find.descendant(of: card.first, matching: find.text('Open chat')),
+        find.descendant(
+          of: card.first,
+          matching: find.byWidgetPredicate(
+            (w) =>
+                w.key is ValueKey<String> &&
+                (w.key! as ValueKey<String>).value.startsWith(
+                  'swarm-need-open-',
+                ),
+          ),
+        ),
       );
       await waitFor(key('swarm-send'));
       final now = DateTime.now();
