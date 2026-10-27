@@ -46,8 +46,9 @@ void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
   late _Daemon daemon;
   late AppNotifier app;
-  /// Which daemon process answers this Mac: a new one after a restart.
-  var running = 'pid-1';
+  /// Which daemon process answers this Mac: a new one after a restart, null
+  /// when its status could not be read.
+  String? running = 'pid-1';
   AppNotifier make(_Daemon daemon) {
     final app = createApp(connectionForTest: (_) => daemon, connected: true);
     app.machineStates['m']!.localOnly = true;
@@ -144,6 +145,26 @@ void main() {
     }
     await Future<void>.delayed(const Duration(milliseconds: 20));
     expect(daemon.asked, hasLength(6));
+  });
+
+  // Re-check of #1790: a status read that timed out has no identity, which
+  // counted as a new process, so a daemon whose status read now and then
+  // timed out was asked without end.
+  test('keeps its budget when the daemon\'s identity cannot be read', () async {
+    daemon.answer = {'error': 'SERVICE_UNAVAILABLE'};
+    for (var i = 0; i < 20; i++) {
+      running = i.isEven ? 'pid-1' : null;
+      app.onMachineConnectedForTest('m');
+      await Future<void>.delayed(const Duration(milliseconds: 2));
+    }
+    await until(() => daemon.asked.length == 5);
+    await Future<void>.delayed(const Duration(milliseconds: 30));
+    // Five tries for the one daemon whose status read timed out in between.
+    expect(daemon.asked, hasLength(5));
+    // Only a different confirmed process starts over.
+    running = 'pid-2';
+    app.onMachineConnectedForTest('m');
+    await until(() => daemon.asked.length == 6);
   });
 
   test('asks again, a few times, a daemon that could not answer yet', () async {

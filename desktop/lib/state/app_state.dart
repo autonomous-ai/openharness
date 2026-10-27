@@ -1988,14 +1988,20 @@ class AppNotifier extends ChangeNotifier {
     try {
       final daemon = await _daemonIdentity();
       if (_disposed) return;
-      if (!_teamOfferStarted || daemon != _teamOfferDaemon) {
+      // Only a confirmed process other than the last confirmed one starts
+      // over. A status read that could not say (a timeout) is no evidence of
+      // a restart, and counting it as one asked without end (re-check of
+      // #1790); the first identity read after an unknown one is taken as the
+      // same process.
+      final restarted = daemon != null && _teamOfferDaemon != null && daemon != _teamOfferDaemon;
+      if (!_teamOfferStarted || restarted) {
         _teamOfferRetry?.cancel();
         _teamOfferRetry = null;
         _teamOfferStarted = true;
-        _teamOfferDaemon = daemon;
         _teamOfferTried = 0;
         _teamOfferAnswered = false;
       }
+      _teamOfferDaemon = daemon ?? _teamOfferDaemon;
       if (_teamOfferAnswered ||
           _teamOfferTried >= _teamOfferTries ||
           _teamOfferRetry != null) {
