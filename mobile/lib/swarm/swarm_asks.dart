@@ -81,7 +81,7 @@ class SuperTabMention implements SwarmAskItem {
 class SwarmAsks extends ChangeNotifier {
   SwarmAsks(this.reader) {
     reader.addListener(_changed);
-    reader.reads.addListener(_retry);
+    reader.reads.addListener(_swarmRead);
     _changed();
   }
 
@@ -165,9 +165,11 @@ class SwarmAsks extends ChangeNotifier {
     unawaited(load());
   }
 
-  /// A read that failed is tried again at the Swarm's next read, which tells
-  /// nothing when the Swarm stayed as it was.
-  void _retry() {
+  /// Each read of the Swarm, changed or not: a move of its last-change time
+  /// alone tells only here ([SwarmReader.lastChangedAt]), and a read that
+  /// failed is tried again, as the Swarm staying as it was tells nothing.
+  void _swarmRead() {
+    _changed();
     if (_failed && _loading == null) unawaited(load());
   }
 
@@ -338,7 +340,7 @@ class SwarmAsks extends ChangeNotifier {
   void dispose() {
     _disposed = true;
     reader.removeListener(_changed);
-    reader.reads.removeListener(_retry);
+    reader.reads.removeListener(_swarmRead);
     super.dispose();
   }
 }

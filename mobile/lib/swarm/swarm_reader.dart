@@ -37,7 +37,8 @@ class SwarmReader extends ChangeNotifier {
   String? error;
 
   /// The newest change of any part, as the last read said: what tells a list
-  /// this Swarm changed. -1 before the first read.
+  /// this Swarm changed. -1 before the first read. A move of it alone is no
+  /// notify, only a [reads] count.
   int lastChangedAt = -1;
 
   /// The reader may no longer read this Swarm: it left, or was removed.
@@ -113,10 +114,9 @@ class SwarmReader extends ChangeNotifier {
         partners = swarmPartners(state);
         changed = true;
       }
-      if (lastChangedAt != parts.lastChangedAt) {
-        lastChangedAt = parts.lastChangedAt;
-        changed = true;
-      }
+      // Moved alone, it is a change this reader cannot see: nothing to draw
+      // again. What waits on it hears of it through [reads].
+      lastChangedAt = parts.lastChangedAt;
       error = null;
       _reads.value++;
     } on SuperTabFailure catch (failure) {

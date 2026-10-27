@@ -145,6 +145,33 @@ void main() {
     expect(r.asks.error, isNull);
   });
 
+  test('while an ask waits, a read that moves only the last-change time '
+      'reads the asks again', () async {
+    final r = rig(decisions: 1);
+    var open = [decisionRow('d1')];
+    r.swarm.routes['/api/super-tabs/$tab/decisions?state=open'] = (_) => {
+      'decisions': open,
+    };
+    r.swarm.routes['/api/super-tabs/$tab/mentions?state=waiting'] = (_) => {
+      'mentions': <Object>[],
+    };
+    await r.reader.refresh();
+    await settle();
+    expect(r.asks.decisions.single.id, 'd1');
+
+    // d1 answered on the desktop and d2 asked: the count stays at one.
+    open = [decisionRow('d2')];
+    r.swarm.routes['/api/super-tabs/$tab/changes'] = (_) => changes(
+      cursor: 'c3',
+      derived: {'decisionsWaiting': 1, 'mentionsWaiting': 0},
+      lastChangedAt: 300,
+    );
+    await r.reader.refresh();
+    await settle();
+
+    expect(r.asks.decisions.single.id, 'd2');
+  });
+
   test(
     'a Swarm the reader may no longer read keeps none of its asks',
     () async {

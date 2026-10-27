@@ -190,6 +190,31 @@ void main() {
     expect(redraws, 0);
   });
 
+  // A change the reader cannot see (another person's private chat) moves
+  // only the last-change time: Home, the drawer and Project drew the same
+  // Swarm again on every such read (audit of 44d284f65, item 4).
+  test('a read that moves only the last-change time redraws nothing, '
+      'and is still counted as a read', () async {
+    final swarm = FakeSwarm();
+    swarm.routes['/api/super-tabs/$tab/parts'] = (_) => firstLoad();
+    swarm.routes['/api/super-tabs/$tab/changes'] = (_) =>
+        changes(cursor: 'c2', lastChangedAt: 250);
+    final r = reader(swarm);
+    addTearDown(r.dispose);
+    await r.refresh();
+    final shown = r.snapshot;
+    var redraws = 0;
+    r.addListener(() => redraws++);
+    final reads = r.reads.value;
+
+    await r.refresh();
+
+    expect(redraws, 0);
+    expect(r.lastChangedAt, 250);
+    expect(r.reads.value, reads + 1);
+    expect(r.snapshot, same(shown));
+  });
+
   test('a closed conversation is read by id when it is opened', () async {
     final swarm = FakeSwarm();
     swarm.routes['/api/super-tabs/$tab/parts'] = (_) => firstLoad();
