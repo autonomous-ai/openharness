@@ -89,7 +89,7 @@ function cardMachines(state: SuperTabState, project: SwarmProject): ContributedM
 /** Last week by the project's local date `on`, as the leaderboard counts it. */
 export function recapCard(state: SuperTabState, project: SwarmProject, on: string, now: number): RecapCard {
   const week = recapWeek(on)
-  const board = leaderboard({ state, groups: state.conversations, machines: cardMachines(state, project), projectId: project.id, week, now })
+  const board = leaderboard({ state, groups: state.conversations, machines: cardMachines(state, project), decisions: [], resolvedWaits: [], projectId: project.id, week, now })
   const shipped = requests(state, project).filter(g => g.ledger?.shippedAt != null && g.ledger.shippedAt >= week && g.ledger.shippedAt < week + WEEK_MS)
     .map(g => shippedItem(state, g))
   return {
