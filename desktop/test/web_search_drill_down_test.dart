@@ -372,6 +372,101 @@ void main() {
     await _close(tester);
   });
 
+  testWidgets('every row whose tap only selects it drills in on a phone', (
+    tester,
+  ) async {
+    await _openSearch(tester, _phone);
+    await _type(tester, '@');
+    final titles = [
+      for (final row in _search(tester).rows)
+        if (row.isMachine || row.isAccountDevice || row.isCreate) row.title,
+    ];
+    expect(titles, containsAll(['Studio Mac', 'Add machine']));
+    for (final title in titles) {
+      await _tapRow(tester, title);
+      expect(_onDetails(tester), isTrue, reason: title);
+      expect(tester.widget<Text>(find.byKey(_title)).data, title);
+      await tester.tap(find.byKey(_back));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 400));
+    }
+    await _close(tester);
+  });
+
+  test('Add machine drills in wherever its tap only selects it', () {
+    // A picker that is not the main Open Harness one (a pane's split) still
+    // only selects Add machine when it is tapped in the '@' scope: a phone
+    // must show its page, or the tap does nothing visible.
+    final app = withPanes(signedIn(), 1);
+    addTearDown(app.dispose);
+    final search = SwarmSearchController(
+      app,
+      const [],
+      adding: true,
+      offersCreate: true,
+    );
+    addTearDown(search.dispose);
+    search.setQuery('@');
+    final add = search.rows.firstWhere((row) => row.isCreate);
+    expect(search.setupLayout, isFalse);
+    expect(swarmSearchRowSelectsOnly(search, add), isTrue);
+  });
+
+  testWidgets('a preview hidden on a wide window is shown on a phone', (
+    tester,
+  ) async {
+    await _openSearch(tester, const Size(1280, 800));
+    await tester.tap(find.byKey(const ValueKey('search-toggle-preview')));
+    await tester.pump(const Duration(milliseconds: 300));
+    expect(_search(tester).previewVisible, isFalse);
+    tester.view.physicalSize = _phone;
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 300));
+    // Harness rows keep their way to their details…
+    final id = _rowId(tester, 'Docs pass');
+    expect(find.byKey(ValueKey('swarm-row-details:$id')), findsOneWidget);
+    // …and a machine's page is never blank.
+    await _type(tester, '@');
+    await _tapRow(tester, 'Studio Mac');
+    expect(_onDetails(tester), isTrue);
+    expect(find.text('Rename').hitTestable(), findsOneWidget);
+    await _close(tester);
+  });
+
+  testWidgets('a row picked by its number drills in like a tap', (
+    tester,
+  ) async {
+    await _openSearch(tester, _phone);
+    await _type(tester, '@');
+    final index = _search(tester).rows
+        .indexWhere((row) => row.title == 'Studio Mac');
+    final digit = [
+      LogicalKeyboardKey.digit1,
+      LogicalKeyboardKey.digit2,
+      LogicalKeyboardKey.digit3,
+    ][index];
+    await tester.sendKeyDownEvent(LogicalKeyboardKey.altLeft);
+    await tester.sendKeyEvent(digit);
+    await tester.sendKeyUpEvent(LogicalKeyboardKey.altLeft);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 400));
+    expect(_onDetails(tester), isTrue);
+    expect(tester.widget<Text>(find.byKey(_title)).data, 'Studio Mac');
+    await _close(tester);
+  });
+
+  testWidgets('a chevron names the row it opens', (tester) async {
+    final semantics = tester.ensureSemantics();
+    await _openSearch(tester, _phone);
+    final id = _rowId(tester, 'Docs pass');
+    expect(
+      tester.getSemantics(find.byKey(ValueKey('swarm-row-details:$id'))),
+      isSemantics(tooltip: 'Details for Docs pass'),
+    );
+    await _close(tester);
+    semantics.dispose();
+  });
+
   testWidgets('every control on both pages takes a finger', (tester) async {
     await _openSearch(tester, _phone);
     await _type(tester, '@');
