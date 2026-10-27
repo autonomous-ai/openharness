@@ -214,7 +214,7 @@ void main() {
 
     final entry = find.byKey(const ValueKey('super-pm-chat-lead'));
 
-    testWidgets('a project shows Chat with PM above its workgroups', (
+    testWidgets('Chat with PM is listed below a project\'s workgroups', (
       tester,
     ) async {
       final c = await show(tester, pmChatSwarm());
@@ -225,8 +225,8 @@ void main() {
       );
       final workgroup = find.byKey(const ValueKey('super-group-offline'));
       expect(
-        tester.getTopLeft(entry).dy,
-        lessThan(tester.getTopLeft(workgroup).dy),
+        tester.getTopLeft(workgroup).dy,
+        lessThan(tester.getTopLeft(entry).dy),
       );
       await close(tester, c);
     });

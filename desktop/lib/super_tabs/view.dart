@@ -925,8 +925,9 @@ class _SuperTabViewState extends State<SuperTabView>
   bool _isPmChat(SuperTabConversation group) =>
       c.pmChat(group.projectId)?.id == group.id;
 
-  /// The open conversation's name, or what the pane shows instead of one. A
-  /// workgroup's is named as the sidebar names it ([SuperTabWorkgroupName]).
+  /// The open conversation's name, or what the pane shows instead of one,
+  /// named as the sidebar names it: "# openharness", or a workgroup's
+  /// [SuperTabWorkgroupName].
   Widget _title(SuperTabConversation? group) {
     final style = DesktopChrome.text(medium: true);
     final name = _devicesVisible
@@ -938,9 +939,9 @@ class _SuperTabViewState extends State<SuperTabView>
               ? c.snapshot!.name
               : 'Choose a project'
         : c.snapshot!.isProjectLead(group.id)
-        ? c.snapshot!.projectFor(group.id)!.name
+        ? '# ${c.snapshot!.projectFor(group.id)!.name}'
         : group.id == c.snapshot!.leadsConversationId
-        ? 'Product Managers'
+        ? '# $kProductManagersChannel'
         : _isPmChat(group)
         ? kChatWithPm
         : null;
