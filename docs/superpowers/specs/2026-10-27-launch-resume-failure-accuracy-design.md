@@ -36,10 +36,10 @@ first), the phone relay spike (back to normal).
   session folders, a symlink, not owned), `changed_during` (still being written), `other`. The
   message stays as today: file name and line number, never conversation text.
 - `resumeAgentService` returns `RESUME_PREPARATION_FAILED` with that kind in the reply
-  (`reason: <kind>`) and logs `resume preparation failed: <kind>: <message>` to the daemon log.
+  (`reason: <kind>`; the core's resume reply and its receipt carry it on, `failure.reason` in a receipt's status) and logs `resume preparation failed: <kind>: <message>` to the daemon log.
 - New counters `request_<source>_resume_preparation_<kind>` (one per kind), counted once per
   resume reply, beside the existing `resume_reason_preparation_failed`.
-- Desktop's text for the refusal names the cause for `changed_during` ("Codex is still writing this
+- The reply's detail names the cause for `changed_during` ("Codex is still writing this
   conversation. Try again once it stops.") and keeps today's text otherwise.
 
 ### 2. A half-written last line does not refuse the resume

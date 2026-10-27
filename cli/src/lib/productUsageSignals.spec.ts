@@ -351,6 +351,21 @@ it.each([
   for (const name of names) expect(PRODUCT_USAGE_METRICS).toContain(name)
   expect(JSON.stringify(names)).not.toContain(error)
 })
+it('counts which check refused a resume\'s preparation, once, by a fixed name', () => {
+  const counted = (preparation?: unknown) => {
+    const emit = vi.fn(), done = productUsageRequest('agent_resume', emit, () => 0, 'app')
+    done('RESUME_PREPARATION_FAILED', undefined, false, false, undefined, preparation)
+    done('RESUME_PREPARATION_FAILED', undefined, false, false, undefined, preparation)
+    return emit.mock.calls.flat().filter(name => String(name).startsWith('request_app_resume_preparation_') || name === 'request_app_resume_reason_preparation_failed')
+  }
+  expect(counted('invalid_json')).toEqual(['request_app_resume_reason_preparation_failed', 'request_app_resume_preparation_invalid_json'])
+  expect(counted('/PRIVATE/path')).toEqual(['request_app_resume_reason_preparation_failed', 'request_app_resume_preparation_other'])
+  expect(counted()).toEqual(['request_app_resume_reason_preparation_failed'])
+  // Only a preparation failure names a kind: another refusal's reason is not one.
+  const emit = vi.fn()
+  productUsageRequest('agent_resume', emit, () => 0, 'app')('AGENT_BUSY', undefined, false, false, undefined, 'invalid_json')
+  expect(emit.mock.calls.flat().filter(name => String(name).includes('_preparation_'))).toEqual([])
+})
 it.each([
   ['RESUME_UNCONFIRMED', undefined, 'unconfirmed', 'unknown'],
   [undefined, 'unconfirmed', 'unconfirmed', 'unknown'],

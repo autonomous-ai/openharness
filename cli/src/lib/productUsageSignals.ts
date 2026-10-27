@@ -1,4 +1,4 @@
-import { AUTOMATIC_POLL_ACTIONS, HEALTH_FAILURES, HEALTH_MEASURES, type HealthSource, type ResumeReason } from './productHealthContract.js'
+import { AUTOMATIC_POLL_ACTIONS, HEALTH_FAILURES, HEALTH_MEASURES, RESUME_PREPARATION_KINDS, type HealthSource, type ResumeReason } from './productHealthContract.js'
 import type { MessageOutcome, MessageReceipt } from './sessionInput.js'
 import { LAUNCH_ERROR_CODES, PRODUCT_USAGE_FLOWS, PRODUCT_USAGE_LAUNCH_ENGINES, PRODUCT_USAGE_USER_OPENED_ACTIONS,
   type LaunchErrorCode, type ProductUsageLaunchEngine, type ProductUsageMetric } from './productUsageContract.js'
@@ -143,12 +143,17 @@ export function productUsageRequest(type: string, emit: (metric: ProductUsageMet
   count('requests'); detail('started')
   if (userAction && (PRODUCT_USAGE_USER_OPENED_ACTIONS as readonly string[]).includes(action)) count('user_requests')
   // [failure]: the kind of a refusal its caller already knows (a message's, [messageReceipt]), not read off a code.
-  return (error: unknown, state: unknown, hasAgent: boolean, ok?: unknown, failure?: typeof HEALTH_FAILURES[number]) => {
+  // [preparation]: the reply's `reason` — for a resume whose history could not be prepared, which check refused it.
+  return (error: unknown, state: unknown, hasAgent: boolean, ok?: unknown, failure?: typeof HEALTH_FAILURES[number], preparation?: unknown) => {
     if (!action || answered) return
     answered = true
     if (action === 'resume' && (error != null || ok === false || ['failed', 'cancelled', 'unconfirmed', 'unavailable'].some(value => state === value))) {
       const reason = typeof error === 'string' ? resumeReasons.get(error) : undefined
       detail(`reason_${reason ?? (state === 'unconfirmed' ? 'unconfirmed' : 'other')}`)
+      // Only a name from the fixed list leaves here: a kind this build does not know is `other`.
+      if (reason === 'preparation_failed' && preparation !== undefined) {
+        detail(`preparation_${(RESUME_PREPARATION_KINDS as readonly unknown[]).includes(preparation) ? preparation : 'other'}`)
+      }
     }
     // A runtime we cannot verify is unknown; a harness changed during the request is cancelled.
     // Neither proves a launch failure. Older clients classified these two codes as failures.

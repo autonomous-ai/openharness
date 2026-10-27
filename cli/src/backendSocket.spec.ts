@@ -2982,6 +2982,19 @@ describe('agent_restart RPC', () => {
     await socket.unregisterLocalClient('local:restart'); await socket.stop()
   })
 
+  it.each([false, true])('counts which check refused a resume\'s preparation (receipt: %s)', async withReceipt => {
+    const { socket } = localSocket()
+    const counted: string[] = []
+    vi.spyOn(gatewayOf(socket), 'usageCounter').mockImplementation(metric => { counted.push(metric) })
+    bindLaunchRequests(socket, { resume: vi.fn(async () => ({ ok: false as const, error: 'RESUME_PREPARATION_FAILED', reason: 'changed_during', detail: 'PRIVATE' })) })
+    socket.handleLocalFrame('local:restart', { type: 'agent_resume', payload: { requestId: 'prepare', agentId: 'agent-1',
+      ...(withReceipt ? { creationId: `resume-${randomUUID()}` } : {}) } })
+    await vi.waitFor(() => expect(counted).toContain('request_app_resume_preparation_changed_during'))
+    expect(counted).toContain('request_app_resume_reason_preparation_failed')
+    expect(JSON.stringify(counted)).not.toContain('PRIVATE')
+    await socket.unregisterLocalClient('local:restart'); await socket.stop()
+  })
+
   it('delegates a resume-only intent and retains its original receipt', async () => {
     const { socket, frames } = localSocket()
     const creationId = `resume-${randomUUID()}`

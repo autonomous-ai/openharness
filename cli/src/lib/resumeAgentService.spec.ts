@@ -8,6 +8,7 @@ import { registry, type RegisteredSession } from './registry.js'
 import { controlTranscriptEvidence } from '../engines/transcriptBindings.js'
 import { materializeResumeTranscript } from '../engines/resumeTranscript.js'
 import { IdentityReadUnavailable } from '../engines/kit/identityScan.js'
+import { ResumePreparationError } from '../engines/kit/resumeRepair.js'
 import { env } from '../config/env.js'
 import { StoppedAgentStore } from './stoppedAgents.js'
 import { AgentRestartCoordinator } from './restartAgent.js'
@@ -552,6 +553,27 @@ describe('production resume handler', () => {
     expect(deps.stoppedAgents.beginResume(saved.agentId) === null).toBe(reason !== 'tmux is unavailable')
     expect(registry.byAgent(saved.agentId)).toBeUndefined()
   })
+  // On 2026-10-26, 10 of 17 failed resumes were a preparation failure, and nothing said which check refused.
+  it('reports why preparation failed, in the reply and the daemon log', async () => {
+    const warned = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    vi.mocked(deps.prepareSessionResume).mockImplementationOnce(() => {
+      throw new ResumePreparationError('changed_during', 'Codex rollout changed during resume preparation; retry after its writer stops')
+    })
+    expect(await start()).toEqual({ ok: false, error: 'RESUME_PREPARATION_FAILED', reason: 'changed_during',
+      detail: 'Codex is still writing this conversation. Try again once it stops.' })
+    expect(warned.mock.calls.map(call => call.join(' '))).toContainEqual(expect.stringContaining(
+      'resume preparation failed: changed_during: Codex rollout changed during resume preparation; retry after its writer stops'))
+    expect(create).not.toHaveBeenCalled()
+  })
+
+  it('names a preparation failure of no known kind as other, with the usual words', async () => {
+    const warned = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    vi.mocked(deps.prepareSessionResume).mockImplementationOnce(() => { throw new Error('EACCES: permission denied') })
+    expect(await start()).toEqual({ ok: false, error: 'RESUME_PREPARATION_FAILED', reason: 'other',
+      detail: 'Could not prepare the saved conversation. Its history has been retained.' })
+    expect(warned.mock.calls.map(call => call.join(' '))).toContainEqual(expect.stringContaining('resume preparation failed: other: EACCES: permission denied'))
+  })
+
   it('retains a typed native hold from synchronous history repair and releases its reservation', async () => {
     vi.mocked(deps.prepareSessionResume).mockImplementationOnce(() => { throw new IdentityReadUnavailable('the native store is incomplete') })
     expect(await start()).toMatchObject({ ok: false, error: 'IDENTITY_UNAVAILABLE' })

@@ -7,6 +7,7 @@ import { engineKeepsTranscriptFile, registry as liveRegistry, type RegisteredSes
 import { controlTranscriptEvidence } from '../engines/transcriptBindings.js'
 import { materializeResumeTranscript } from '../engines/resumeTranscript.js'
 import { IdentityReadUnavailable } from '../engines/kit/identityScan.js'
+import { ResumePreparationError } from '../engines/kit/resumeRepair.js'
 import type { StoppedAgentStore } from './stoppedAgents.js'
 import { resumeStoppedAgent, waitForResumedAgent, resumeChanged, resumeUnconfirmed, RESUME_READINESS_BUDGET_MS } from './resumeStoppedAgent.js'
 import { checkPidRuntime } from './deleteAgentFallback.js'
@@ -53,6 +54,17 @@ export interface ResumeAgentServiceDeps {
   attachSession(session: RegisteredSession): Promise<boolean>
   /** Where the relaunched engine's own writing begins, for the attach that follows (core/transcripts/relaunch.ts). */
   relaunchMarks?: Pick<RelaunchMarks, 'note'>
+}
+
+/** A history that could not be prepared, and which check refused it: on 2026-10-26, 10 of 17 failed resumes were
+ *  this and nothing said why. The kind goes in the reply for its counter; the message (a file name and a line
+ *  number, never conversation text) only to this daemon's log. */
+function preparationFailed(agent: string, error: unknown) {
+  const reason = error instanceof ResumePreparationError ? error.kind : 'other'
+  console.warn(`[resume] ${agent} · resume preparation failed: ${reason}: ${error instanceof Error ? error.message : String(error)}`)
+  return { ok: false as const, error: 'RESUME_PREPARATION_FAILED', reason,
+    detail: reason === 'changed_during' ? 'Codex is still writing this conversation. Try again once it stops.'
+      : 'Could not prepare the saved conversation. Its history has been retained.' }
 }
 
 export function createResumeAgentService(deps: ResumeAgentServiceDeps) {
@@ -275,7 +287,7 @@ export function createResumeAgentService(deps: ResumeAgentServiceDeps) {
         if (resumeSessionId) {
           try { prepareSessionResume(saved) } catch (error) {
             if (error instanceof IdentityReadUnavailable) throw error
-            return { ok: false, error: 'RESUME_PREPARATION_FAILED', detail: 'Could not prepare the saved conversation. Its history has been retained.' }
+            return preparationFailed(sid(saved.agentId), error)
           }
           // The confirmed synchronous repair may atomically replace this file.
           // Earn a new proof of the same conversation before the next await.

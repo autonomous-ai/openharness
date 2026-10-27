@@ -946,7 +946,8 @@ export class BackendSocket {
       signal => this.toGateway('usage', gateway => gateway.usageLaunch?.(signal)))
     const reply = (t: string, rid: unknown, p: Record<string, unknown>): void => {
       if (t === type) {
-        measured(p.error ?? (p.failure as { code?: unknown } | undefined)?.code, p.state, !!p.agent, p.ok)
+        const failure = p.failure as { code?: unknown; reason?: unknown } | undefined
+        measured(p.error ?? failure?.code, p.state, !!p.agent, p.ok, undefined, p.reason ?? failure?.reason)
         // The agent frame itself: a created launch's agent is watched until it starts (gateway/productUsage.ts).
         launchMeasured(p.error ?? (p.failure as { code?: unknown } | undefined)?.code, p.state, p.agent, (p.held as { service?: unknown } | undefined)?.service)
       }
