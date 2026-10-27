@@ -14,6 +14,8 @@ export const ruleSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('minEffort'), engine: engine.optional(), effort: z.enum(EFFORTS) }).strict(),
   z.object({ kind: z.literal('preferEngine'), taskKind: z.string().regex(/^[a-z][a-z0-9-]{0,39}$/).nullable(), engine }).strict(),
   z.object({ kind: z.literal('preferIdle') }).strict(),
+  // Simple work goes to a model on the Swarm's grid first (cli/src/superTabs/route.ts softOf); this owner says not to.
+  z.object({ kind: z.literal('noGridFirst') }).strict(),
 ])
 export const ruleTextSchema = z.string().trim().min(1).max(200)
 export const askedInSchema = z.object({ conversationId: id, messageId: id }).strict()

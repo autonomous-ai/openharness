@@ -1500,6 +1500,13 @@ describe('the owner\'s rules, after review', () => {
     expect(byHand.messages[0]).toMatchObject({ text: 'owner added worker anyway. The owner\'s rule "No test model." rules out Codex test-model.' })
     expect(f.run({ type: 'conversation.agent', conversationId: 'lead', agentId: f.worker, present: false, lead: false }, f.leadActor).messages).toEqual([])
   })
+  it('keeps the owner\'s opt-out from grid models first, which only ranks and refuses no start', () => {
+    const f = routed()
+    f.run(set({ kind: 'noGridFirst' }, 'Subscriptions first.'))
+    expect(f.state.rules!.map(r => r.rule)).toEqual([{ kind: 'noGridFirst' }])
+    expect(f.run({ type: 'agent.start', request: request(), ...via } as Command, f.leadActor, { contribution: f.contribution, ...decisionIn() }).result.startId).toEqual(expect.any(String))
+    expect(() => f.run(set({ kind: 'noGridFirst', engine: 'claude' }))).toThrow()
+  })
   it('does not launch a start recorded before a rule, unless a person chose it', () => {
     const f = routed()
     const startId = f.run({ type: 'agent.start', request: request(), ...via } as Command, f.leadActor, { contribution: f.contribution, ...decisionIn() }).result.startId as string
