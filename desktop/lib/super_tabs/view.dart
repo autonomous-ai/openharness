@@ -1035,14 +1035,16 @@ class _SuperTabViewState extends State<SuperTabView>
     notificationsSelected: _notificationsVisible,
     // On a Mac what needs the person is in the menu bar's Harness menu and on
     // the Dock's badge, so the sidebar keeps no Notifications row.
-    onNotifications: superTabNoticesInMenuBar ? null : () {
-      _closeSidebar();
-      setState(() {
-        _showNotifications = true;
-        _showPullRequests = false;
-      });
-      widget.onCloseTerminal?.call();
-    },
+    onNotifications: superTabNoticesInMenuBar
+        ? null
+        : () {
+            _closeSidebar();
+            setState(() {
+              _showNotifications = true;
+              _showPullRequests = false;
+            });
+            widget.onCloseTerminal?.call();
+          },
     onOpenAgent: (agent) {
       _closeSidebar();
       setState(() {

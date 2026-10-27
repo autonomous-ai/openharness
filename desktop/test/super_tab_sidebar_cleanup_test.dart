@@ -29,7 +29,9 @@ List<String> topRows(WidgetTester tester) {
   return [
     for (final row in rows)
       tester
-          .widgetList<Text>(find.descendant(of: row, matching: find.byType(Text)))
+          .widgetList<Text>(
+            find.descendant(of: row, matching: find.byType(Text)),
+          )
           .map((t) => t.data)
           .join(),
   ];

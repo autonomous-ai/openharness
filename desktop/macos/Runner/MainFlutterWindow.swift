@@ -20,11 +20,17 @@ private let kClipboardImageChannel = "harness/clipboard_image"
 /// `system_profiler SPFontsDataType` takes ~10s, and it can say which families are monospaced.
 private let kFontsChannel = "harness/fonts"
 
+/// Channel Dart asks for an SF Symbol drawn as a one-ink PNG, which it tints itself
+/// (`lib/core/system_symbols.dart`): a Swarm's machine rows show each Mac's own shape. A name
+/// this macOS lacks answers nil, and Dart draws its catalogue icon instead.
+private let kSystemSymbolsChannel = "harness/system_symbols"
+
 class MainFlutterWindow: NSWindow {
   private var swarmTitlebar: SwarmTitlebar?
   private var menuChannel: FlutterMethodChannel?
   private var clipboardImageChannel: FlutterMethodChannel?
   private var fontsChannel: FlutterMethodChannel?
+  private var systemSymbolsChannel: FlutterMethodChannel?
   private var notifications: HarnessNotifications?
 
   override func awakeFromNib() {
@@ -48,6 +54,7 @@ class MainFlutterWindow: NSWindow {
     swarmTitlebar = SwarmTitlebar(window: self, messenger: flutterViewController.engine.binaryMessenger)
     installClipboardImageChannel(messenger: flutterViewController.engine.binaryMessenger)
     installFontsChannel(messenger: flutterViewController.engine.binaryMessenger)
+    installSystemSymbolsChannel(messenger: flutterViewController.engine.binaryMessenger)
     notifications = HarnessNotifications(messenger: flutterViewController.engine.binaryMessenger)
 
     // Flutter's own theme does not reach AppKit — every native surface (the
@@ -385,6 +392,52 @@ class MainFlutterWindow: NSWindow {
     CTFontGetAdvancesForGlyphs(font, .horizontal, glyphs, &advances, glyphs.count)
     guard let first = advances.first?.width, first > 0 else { return false }
     return advances.allSatisfy { abs($0.width - first) < 0.01 }
+  }
+
+  private func installSystemSymbolsChannel(messenger: FlutterBinaryMessenger) {
+    let channel = FlutterMethodChannel(name: kSystemSymbolsChannel, binaryMessenger: messenger)
+    channel.setMethodCallHandler { call, result in
+      guard call.method == "png" else {
+        result(FlutterMethodNotImplemented)
+        return
+      }
+      let args = call.arguments as? [String: Any] ?? [:]
+      guard let name = args["name"] as? String, !name.isEmpty, name.count <= 64,
+            let size = args["size"] as? Double, size > 0, size <= 64,
+            let scale = args["scale"] as? Double, scale > 0, scale <= 4,
+            let png = MainFlutterWindow.systemSymbolPng(name, size: CGFloat(size), scale: CGFloat(scale))
+      else {
+        result(nil)
+        return
+      }
+      result(FlutterStandardTypedData(bytes: png))
+    }
+    systemSymbolsChannel = channel
+  }
+
+  /// [name] in one ink (black on clear), fitted and centred in a [size]-point square at [scale]
+  /// pixels a point, as a PNG. Nil when this macOS has no such symbol.
+  static func systemSymbolPng(_ name: String, size: CGFloat, scale: CGFloat) -> Data? {
+    var configuration = NSImage.SymbolConfiguration(pointSize: size, weight: .regular)
+    if #available(macOS 13.0, *) { configuration = configuration.applying(.preferringMonochrome()) }
+    guard let symbol = NSImage(systemSymbolName: name, accessibilityDescription: nil)?
+            .withSymbolConfiguration(configuration),
+          symbol.size.width > 0, symbol.size.height > 0 else { return nil }
+    let pixels = Int((size * scale).rounded())
+    guard let bitmap = NSBitmapImageRep(
+      bitmapDataPlanes: nil, pixelsWide: pixels, pixelsHigh: pixels, bitsPerSample: 8,
+      samplesPerPixel: 4, hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB,
+      bytesPerRow: 0, bitsPerPixel: 0),
+          let context = NSGraphicsContext(bitmapImageRep: bitmap) else { return nil }
+    bitmap.size = NSSize(width: size, height: size)
+    let fit = min(size / symbol.size.width, size / symbol.size.height)
+    let drawn = NSSize(width: symbol.size.width * fit, height: symbol.size.height * fit)
+    NSGraphicsContext.saveGraphicsState()
+    NSGraphicsContext.current = context
+    symbol.draw(in: NSRect(x: (size - drawn.width) / 2, y: (size - drawn.height) / 2,
+                           width: drawn.width, height: drawn.height))
+    NSGraphicsContext.restoreGraphicsState()
+    return bitmap.representation(using: .png, properties: [:])
   }
 
   private func installClipboardImageChannel(messenger: FlutterBinaryMessenger) {
