@@ -20,15 +20,18 @@ Map<String, dynamic> _machine(
   int max = 4,
   int? free,
   int age = 0,
+  bool paused = false,
+  String? host,
 }) => {
   'machineId': id,
   'name': name,
   'contributorId': 'owner',
+  'hostMachineId': ?host,
   'scope': 'swarm',
   'cwd': '/swarm',
   'engines': ['claude', 'codex'],
   'maxAgents': max,
-  'paused': false,
+  'paused': paused,
   'availableSlots': ?free,
   'observation': {'receivedAt': DateTime.now().millisecondsSinceEpoch - age},
 };
@@ -78,15 +81,23 @@ Future<ConversationServer> _swarm(
   List<Map<String, dynamic>>? machines,
   List<Map<String, dynamic>> tasks = const [],
   List<Map<String, dynamic>> starts = const [],
+  String account = 'owner',
 }) async {
   final server = ConversationServer();
+  if (account != 'owner') {
+    (server.state['people'] as List).add({
+      'id': account,
+      'email': '$account@example.com',
+      'role': 'collaborator',
+    });
+  }
   server.state['machines'] =
       machines ?? [_machine('m1', 'Mac Studio'), _machine('m2', 'MacBook Pro')];
   server.state['agents'] = [_agent('Lead', 'm1'), ...agents];
   (server.state['conversations'] as List)[0]['leadId'] = 'Lead';
   (server.state['conversations'] as List).addAll(tasks);
   server.state['starts'] = starts;
-  final c = server.controller();
+  final c = server.controller(account: account);
   await c.refresh();
   addTearDown(c.dispose);
   await tester.binding.setSurfaceSize(const Size(320, 1600));
@@ -375,6 +386,59 @@ void main() {
         await _openGlance(tester);
         expect(find.textContaining('busy agents are on'), findsNothing);
         expect(find.text('Nothing looks wrong.'), findsOneWidget);
+      },
+    );
+
+    // Review of #1759: a paused machine takes no new work, so its free slots are no room.
+    testWidgets('does not count a paused machine as room', (tester) async {
+      await _swarm(
+        tester,
+        machines: [
+          _machine('m1', 'Mac Studio', free: 0),
+          _machine('m2', 'MacBook Pro', free: 3, paused: true),
+        ],
+        agents: [_agent('Atlas', 'm1'), _agent('Sage', 'm1')],
+        tasks: [_task('Atlas', 'working'), _task('Sage', 'working')],
+      );
+      await _openGlance(tester);
+      expect(find.textContaining('busy agents are on'), findsNothing);
+      expect(find.text('Nothing looks wrong.'), findsOneWidget);
+    });
+
+    // Review of #1759: a teammate reads a Mac by its Harness Team account, as the Machines view does; a stale reading
+    // of the Mac's own pool beside a live Team account is not an offline machine.
+    testWidgets(
+      'reads a Mac by its Team account for a teammate, as the Machines view does',
+      (tester) async {
+        await _swarm(
+          tester,
+          account: 'peer',
+          machines: [
+            _machine('m1', 'Mac Studio', age: _offline),
+            _machine('m1-team', 'Mac Studio (team)', free: 3, host: 'm1'),
+            _machine('m2', 'MacBook Pro'),
+          ],
+          agents: [_agent('Finn', 'm1-team')],
+          tasks: [_task('Finn', 'working')],
+        );
+        await _openGlance(tester);
+        final studio = find.byKey(const ValueKey('glance-machine-m1'));
+        expect(
+          find.descendant(
+            of: studio,
+            matching: find.text('Online · 1 of 4 slots used'),
+          ),
+          findsOneWidget,
+        );
+        expect(
+          find.descendant(of: studio, matching: find.text('Finn · Assigned')),
+          findsOneWidget,
+        );
+        expect(find.textContaining('which is offline'), findsNothing);
+        expect(
+          find.byKey(const ValueKey('glance-machine-m1-team')),
+          findsNothing,
+        );
       },
     );
 

@@ -148,10 +148,18 @@ SuperTabAgentGlance superTabAgentGlance(
 
 /// A machine of the Swarm with the agents on it. [status] is null for a machine the Swarm has no reading of.
 class SuperTabGlanceMachine {
-  SuperTabGlanceMachine(this.id, this.name, this.status, this.total, this.free);
+  SuperTabGlanceMachine(
+    this.id,
+    this.name,
+    this.status,
+    this.total,
+    this.free, {
+    this.paused = false,
+  });
   final String id, name;
   final SuperTabMachineStatus? status;
   final int? total, free;
+  final bool paused;
   final agents = <(String, SuperTabAgentGlance)>[];
   bool get online =>
       status == SuperTabMachineStatus.live ||
@@ -183,8 +191,10 @@ class SuperTabTeamGlance {
       final id = pool['machineId'] as String? ?? '';
       // A Mac's Harness Team account is that Mac (SuperTabSnapshot.placeOf).
       if (id.isEmpty || snapshot.placeOf(id) != id) continue;
-      final received = (pool['observation'] as Map?)?['receivedAt'];
-      final total = (pool['maxAgents'] as num?)?.toInt();
+      // As the Machines view reads it: a teammate reads a Mac by its Harness Team account (review of #1759).
+      final reading = snapshot.readingPoolOf(id, c.accountId) ?? pool;
+      final received = (reading['observation'] as Map?)?['receivedAt'];
+      final total = (reading['maxAgents'] as num?)?.toInt();
       machines[id] = SuperTabGlanceMachine(
         id,
         pool['name'] as String? ?? 'Unnamed machine',
@@ -196,7 +206,12 @@ class SuperTabTeamGlance {
               : null,
         ),
         total,
-        (pool['availableSlots'] as num?)?.toInt(),
+        (reading['availableSlots'] as num?)?.toInt(),
+        // A paused machine, or a paused Swarm, takes no new work.
+        paused:
+            snapshot.paused ||
+            pool['paused'] == true ||
+            reading['paused'] == true,
       );
     }
     final models = <String, int>{};
@@ -241,7 +256,7 @@ class SuperTabTeamGlance {
   }
 }
 
-/// More than half the busy agents on one machine while an online one has free slots.
+/// More than half the busy agents on one machine while an online one, not paused, has free slots.
 String? _pileUp(List<SuperTabGlanceMachine> machines) {
   final busy = machines.fold(0, (sum, m) => sum + m.busy);
   if (busy < 2) return null;
@@ -250,7 +265,9 @@ String? _pileUp(List<SuperTabGlanceMachine> machines) {
   int free(SuperTabGlanceMachine m) =>
       m.free ?? ((m.total ?? 0) - m.agents.length).clamp(0, 1 << 30);
   final room =
-      machines.where((m) => m != crowded && m.online && free(m) > 0).toList()
+      machines
+          .where((m) => m != crowded && m.online && !m.paused && free(m) > 0)
+          .toList()
         ..sort((a, b) => free(b).compareTo(free(a)));
   if (room.isEmpty) return null;
   final slots = free(room.first);

@@ -366,6 +366,20 @@ class SuperTabSnapshot {
     return best;
   }
 
+  /// The pool whose reading [accountId] sees for the machine row [machineId]: the Mac's Harness Team account for
+  /// everyone but the Mac's own contributor, since it runs their agents, also while the owner is away from the Mac; the
+  /// machine's own pool otherwise. The Machines view and Team at a glance read a machine by this one rule.
+  Map<String, dynamic>? readingPoolOf(String machineId, String? accountId) {
+    final own = pool(machineId), team = teamPoolOf(machineId);
+    final contributor =
+        own?['contributorId'] as String? ??
+        agents
+            .where((a) => placeOf(a.machineId) == machineId)
+            .firstOrNull
+            ?.contributorId;
+    return team != null && contributor != accountId ? team : own;
+  }
+
   /// The machine [machineId] is shown as in this Swarm, one row per computer: the Mac, for its Harness Team account
   /// while that Mac is in the Swarm too; [machineId] itself otherwise.
   String placeOf(String machineId) => _macOf(pool(machineId)) ?? machineId;
