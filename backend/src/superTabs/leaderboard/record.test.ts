@@ -134,7 +134,7 @@ describe('when the Lead records a merge', () => {
     return { f, lead: f.asAgent(lead), id }
   }
   const shippedFor = (f: ReturnType<typeof fixture>, personId: string) =>
-    leaderboard({ state: f.state, groups: f.state.conversations, machines: [], projectId: 'lead', week: weekStart(NOW), now: NOW })
+    leaderboard({ state: f.state, groups: f.state.conversations, machines: [], decisions: [], resolvedWaits: [], projectId: 'lead', week: weekStart(NOW), now: NOW })
       .people.find(p => p.personId === personId)!
 
   it('ships the request when its PR merged, links the PR and says so in the group', () => {
@@ -234,7 +234,7 @@ describe('when the Lead records a merge', () => {
     f.at(monday)
     f.run(merged(id), lead)
     expect(f.group(id).ledger?.shippedAt).toBe(monday)
-    const board = (week: number) => leaderboard({ state: f.state, groups: f.state.conversations, machines: [], projectId: 'lead', week, now: monday })
+    const board = (week: number) => leaderboard({ state: f.state, groups: f.state.conversations, machines: [], decisions: [], resolvedWaits: [], projectId: 'lead', week, now: monday })
     expect(board(weekStart(monday)).goal.thisWeek.shipped).toBe(1)
     expect(board(weekStart(sunday)).goal.thisWeek.shipped).toBe(0)
   })
