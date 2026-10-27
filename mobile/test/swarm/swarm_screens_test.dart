@@ -347,9 +347,13 @@ void main() {
         expect(
           find.descendant(
             of: key('swarm-lead-chat'),
-            matching: find.text('Product Manager'),
+            matching: find.text('Project chat'),
           ),
           findsOneWidget,
+        );
+        expect(
+          find.textContaining('Lead'),
+          findsNothing,
           reason: 'the Naming System: Product Manager on screen, never Lead',
         );
         expect(y('swarm-lead-chat'), lessThan(y('swarm-conversation-g-busy')));

@@ -1,8 +1,11 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:harness_mobile/notify/system_notices.dart';
 import 'package:harness_mobile/phone/tty.dart';
+import 'package:harness_mobile/phone/tty_controls.dart';
 import 'package:harness_mobile/settings/experimental_features.dart';
 import 'package:harness_mobile/swarm/swarm_conversation_page.dart';
 import 'package:harness_mobile/swarm/swarm_page.dart';
@@ -480,6 +483,118 @@ void main() {
         find.byType(SwarmProjectPage),
       );
       expect((page.swarmId, page.projectId), (tab, web));
+    });
+  });
+
+  group('a project', () {
+    Future<void> openProject(WidgetTester tester, String id) async {
+      await tester.tap(key('swarm-project-$tab-$id'));
+      await tester.pumpAndSettle();
+    }
+
+    testWidgets('Chat with PM is its one main button, then the project chat, '
+        'then work by latest', (tester) async {
+      await pump(tester, backend());
+      await openProject(tester, project);
+
+      expect(find.byType(TtyPrimaryButton), findsOneWidget);
+      expect(
+        find.descendant(
+          of: key('swarm-pm-chat'),
+          matching: find.text('Chat with PM'),
+        ),
+        findsOneWidget,
+      );
+      expect(
+        find.descendant(
+          of: key('swarm-team-line'),
+          matching: find.byType(SwarmTeamLine),
+        ),
+        findsOneWidget,
+        reason: 'the team in one line, down in red',
+      );
+      expect(
+        y(tester, 'swarm-team-line'),
+        lessThan(y(tester, 'swarm-pm-chat')),
+      );
+      expect(
+        y(tester, 'swarm-pm-chat'),
+        lessThan(y(tester, 'swarm-lead-chat')),
+      );
+      expect(
+        y(tester, 'swarm-lead-chat'),
+        lessThan(y(tester, 'swarm-conversation-g-busy')),
+      );
+      for (final words in ['Project chat', 'River and everyone']) {
+        expect(
+          find.descendant(
+            of: key('swarm-lead-chat'),
+            matching: find.text(words),
+          ),
+          findsOneWidget,
+        );
+      }
+
+      await tester.tap(key('swarm-pm-chat'));
+      await tester.pumpAndSettle();
+      final page = tester.widget<SwarmConversationPage>(
+        find.byType(SwarmConversationPage),
+      );
+      expect((page.swarmId, page.conversationId), (tab, 'g-pm'));
+    });
+
+    testWidgets('Chat with PM says Opening… while it opens, and says why it '
+        'did not', (tester) async {
+      final fake = backend();
+      final answer = Completer<Object?>();
+      fake.routes['/api/super-tabs/$tab/commands'] = (_) => answer.future;
+      await pump(tester, fake);
+      await openProject(tester, web);
+
+      await tester.tap(key('swarm-pm-chat'));
+      await tester.pump();
+      expect(
+        find.descendant(
+          of: key('swarm-pm-chat'),
+          matching: find.text('Opening…'),
+        ),
+        findsOneWidget,
+      );
+      await tester.tap(key('swarm-pm-chat'));
+      await tester.pump();
+      expect(fake.commands, hasLength(1), reason: 'one tap, one chat');
+
+      answer.complete({'result': <String, dynamic>{}});
+      await tester.pumpAndSettle();
+      expect(find.byType(SwarmConversationPage), findsNothing);
+      expect(
+        find.descendant(
+          of: key('swarm-pm-error'),
+          matching: find.text('Chat with PM is not ready yet. Try again.'),
+          matchRoot: true,
+        ),
+        findsOneWidget,
+      );
+      expect(
+        find.descendant(
+          of: key('swarm-pm-chat'),
+          matching: find.text('Chat with PM'),
+        ),
+        findsOneWidget,
+      );
+    });
+
+    testWidgets('the project chat opens', (tester) async {
+      await pump(tester, backend());
+      await openProject(tester, web);
+
+      await tester.tap(key('swarm-lead-chat'));
+      await tester.pumpAndSettle();
+
+      final page = tester.widget<SwarmConversationPage>(
+        find.byType(SwarmConversationPage),
+      );
+      expect((page.swarmId, page.conversationId), (tab, webLead));
     });
   });
 

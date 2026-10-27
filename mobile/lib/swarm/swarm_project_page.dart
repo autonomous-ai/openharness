@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import 'package:harness_mobile/phone/phone_navigation.dart';
 import 'package:harness_mobile/phone/settings_row.dart';
@@ -12,8 +13,10 @@ import 'model.dart';
 import 'swarm_choices.dart';
 import 'swarm_conversation.dart';
 import 'swarm_conversation_page.dart';
-import 'swarm_request.dart';
+import 'swarm_pm_chat.dart';
+import 'swarm_row.dart';
 import 'swarm_session.dart';
+import 'swarm_team_line.dart';
 import 'team_glance.dart';
 
 /// The conversations of one project the person may read, as the project page
@@ -53,10 +56,11 @@ swarmProjectWork(
   );
 }
 
-/// One project: its team in a line ([swarmTeamLine]), Chat with PM and the
-/// Lead's chat pinned first, then its work by latest activity, older work
-/// folded under "Older" — read from the Swarm's closed work when opened, as
-/// no first load has it ([SwarmReader.loadDormant]).
+/// One project: its team in a line ([swarmTeamLine]), Chat with PM as its
+/// one main button, the project chat (its Product Manager and everyone), then
+/// its work by latest activity, older work folded under "Older" — read from
+/// the Swarm's closed work when opened, as no first load has it
+/// ([SwarmReader.loadDormant]).
 class SwarmProjectPage extends StatefulWidget {
   const SwarmProjectPage({
     super.key,
@@ -119,18 +123,17 @@ class _SwarmProjectPageState extends State<SwarmProjectPage> {
       _openingPm = true;
       _error = null;
     });
-    String? id;
-    try {
-      id = await openSwarmPmChat(reader, widget.projectId);
-      if (id == null) _error = 'Chat with PM is not ready yet. Try again.';
-    } on SuperTabFailure catch (failure) {
-      _error = failure.message;
-    } catch (_) {
-      _error = 'Could not open Chat with PM. Try again.';
-    }
+    final error = await openSwarmPm(
+      context,
+      reader,
+      widget.swarmId,
+      widget.projectId,
+    );
     if (!mounted) return;
-    setState(() => _openingPm = false);
-    if (id != null) _open(id);
+    setState(() {
+      _openingPm = false;
+      _error = error;
+    });
   }
 
   @override
@@ -213,10 +216,10 @@ class _SwarmProjectPageState extends State<SwarmProjectPage> {
         const SizedBox(height: 12),
         SettingsGroup(
           children: [
-            SettingsRow(
+            SwarmRow(
               key: const ValueKey('swarm-team-line'),
               title: 'Team',
-              detail: glance.line,
+              detail: SwarmTeamLine(glance),
               onTap: () => Navigator.of(context).push(
                 phoneRoute(
                   (_) => SwarmTeamPage(
@@ -229,30 +232,38 @@ class _SwarmProjectPageState extends State<SwarmProjectPage> {
           ],
         ),
       ],
-      const SizedBox(height: 12),
-      SettingsGroup(
-        children: [
-          SettingsRow(
-            key: const ValueKey('swarm-pm-chat'),
-            title: 'Chat with PM',
-            detail: pm == null ? 'Just you and the Product Manager' : null,
-            value: _openingPm ? 'Opening…' : null,
-            onTap: _openingPm ? null : () => unawaited(_openPm()),
-          ),
-          if (lead != null)
-            SettingsRow(
-              key: const ValueKey('swarm-lead-chat'),
-              title: 'Product Manager',
-              detail: lead.leadId == null
-                  ? 'With the whole project'
-                  : '${snapshot.agentName(lead.leadId!)}, with the whole project',
-              onTap: () => _open(lead.id),
-            ),
-        ],
+      const SizedBox(height: 16),
+      TtyPrimaryButton(
+        key: const ValueKey('swarm-pm-chat'),
+        icon: LucideIcons.messageSquare300,
+        label: 'Chat with PM',
+        busy: _openingPm,
+        busyLabel: 'Opening…',
+        onPressed: () => unawaited(_openPm()),
       ),
       if (_error case final error?) ...[
         const SizedBox(height: 8),
-        Text(error, style: tty.style(color: tty.red)),
+        Text(
+          error,
+          key: const ValueKey('swarm-pm-error'),
+          style: tty.style(color: tty.red),
+        ),
+      ],
+      if (lead != null) ...[
+        const SizedBox(height: 12),
+        SettingsGroup(
+          children: [
+            SettingsRow(
+              key: const ValueKey('swarm-lead-chat'),
+              title: 'Project chat',
+              detail: switch (lead.leadId) {
+                final id? => '${snapshot.agentName(id)} and everyone',
+                null => 'Everyone in the project',
+              },
+              onTap: () => _open(lead.id),
+            ),
+          ],
+        ),
       ],
       const SettingsCaption('Work'),
       if (work.active.isEmpty)
