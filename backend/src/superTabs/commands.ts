@@ -1236,7 +1236,11 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       if (command.type === 'agent.startFailed') {
         if (start.harnessId) fail('ALREADY_STARTED', 'This agent already started.')
         start.error = command.error
-        message(start.request.conversationId, `Could not start ${start.request.name}: ${command.error}`, [], null, SYSTEM_ROW)
+        // The Lead is woken, so it starts the work elsewhere once or reports it (cli superTabs/start.ts): written in its own
+        // name for nobody, this notice left the round-device group without a worker for an hour (2026-10-27).
+        const group = conversation(state, start.request.conversationId)
+        const lead = group.leadId && group.agentIds.includes(group.leadId) ? group.leadId : null
+        message(group.id, `Could not start ${start.request.name}: ${command.error}`, lead ? [lead] : [], null, SYSTEM_ROW)
         break
       }
       if (start.error) fail('START_FAILED', 'This start failed. Use a new start request.')

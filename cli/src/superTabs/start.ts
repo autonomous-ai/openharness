@@ -157,21 +157,24 @@ async function startElsewhere(input: Json, failed: Json, scoped: ScopedRequest, 
     const pool = machines.find(m => m.machineId === machineId)
     return pool?.scope === 'swarm' && text(pool.cwd) && identifier(project?.id) ? `${String(pool.cwd).replace(/\/+$/, '')}/${project.id}` : null
   }
+  // A Mac's Harness Team account is that Mac (backend machines.ts teamStartRequest): neither runs the retry.
+  const failedOn = new Set([request.machineId, machines.find(m => m.machineId === request.machineId)?.hostMachineId].filter(identifier))
   const all = Array.isArray(record.candidates) ? record.candidates.map(object) : []
-  const others = all.filter(c => c.machineId !== request.machineId)
+  const others = all.filter(c => !failedOn.has(String(c.machineId)))
   const pick = others.find(c => c.kind === 'new' && folder(c.machineId))
   if (!pick) return blocked(failed)
   const reason = 'Its machine could not start this task.'
   const why = `Retry: ${String(request.name)} could not start on ${machineName(request.machineId)}.`.slice(0, 300)
   const rerouted = await scoped({ action: 'command', operationId: derived('reroute', startId), command: { type: 'route.record',
     conversationId: request.conversationId, decision: { ...record, assessment: { ...object(record.assessment), why }, candidates: others,
-      excluded: [...all.filter(c => c.machineId === request.machineId).map(c => ({ title: c.title, reason })),
+      excluded: [...all.filter(c => failedOn.has(String(c.machineId))).map(c => ({ title: c.title, reason })),
         ...(Array.isArray(record.excluded) ? record.excluded : [])].slice(0, 200),
       pick: pick.id, via: 'order', fallback: undefined, p: null, belowFloor: false, why } } })
   // The backend refuses a pick that breaks a hard rule or cannot take a teammate's work: then nothing else may run it.
   const routeDecisionId = rerouted.ok === true ? object(object(rerouted.value).result).routeDecisionId : null
   if (!identifier(routeDecisionId)) return blocked(failed)
-  const { permissionMode: _mode, model: _model, effort: _effort, gridModel: _grid, gridName: _name, ...kept } = request
+  // What named the failed machine's own setup stays with it; the pick says what runs on the new one.
+  const { permissionMode: _mode, model: _model, effort: _effort, gridModel: _grid, gridName: _name, codexHome: _home, ...kept } = request
   const retry = await startOnce({ action: 'start', tabId: input.tabId, operationId: derived('retry', startId), request: { ...kept,
     machineId: pick.machineId, engine: pick.engine, cwd: folder(pick.machineId),
     ...(pick.gridModel ? { gridModel: pick.gridModel, gridName: pick.gridName } : { model: pick.model, effort: pick.effort }), routeDecisionId } },

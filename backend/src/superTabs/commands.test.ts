@@ -1486,6 +1486,23 @@ it('marks every row the system writes in the owner\'s name, so a Lead cannot quo
   expect(rows.filter(r => !r.source).map(r => r.text)).toEqual([])
 })
 
+// The round-device group, 2026-10-27: the host failed a queued start, the notice went to nobody, and the group sat without a
+// worker for an hour. The Lead is woken to start it elsewhere once or report it (cli superTabs/start.ts).
+it('delivers a failed start\'s notice to the Lead of its group, and to nobody when the group has no Lead in it', () => {
+  const f = fixture(); f.invite()
+  const lead = f.add('lead', 'owner', 'lead', true)
+  const group = f.run({ type: 'conversation.create', title: 'Drafts', brief: 'Save drafts.', checks: [{ description: 'Saved.', independent: false }] }, owner)
+    .result.conversationId as string
+  const start = (id: string, conversationId: string) => ({ id, actorKey: 'person:owner', contributorId: 'owner', membershipGeneration: f.state.people[0]!.generation,
+    request: { conversationId, machineId: 'mac', name: 'Builder' }, error: null })
+  f.state.starts = [start('s1', 'lead'), start('s2', group)] as never
+  expect(f.run({ type: 'agent.startFailed', startId: 's1', error: 'Launch refused.' }, owner).messages)
+    .toMatchObject([{ conversationId: 'lead', text: 'Could not start Builder: Launch refused.', recipients: [lead] }])
+  // A Lead that left the group's members is not told there, as a removed machine's notice is not (removeMachine).
+  Object.assign(f.state.conversations.find(c => c.id === group)!, { leadId: lead, agentIds: [] })
+  expect(f.run({ type: 'agent.startFailed', startId: 's2', error: 'Launch refused.' }, owner).messages).toMatchObject([{ conversationId: group, recipients: [] }])
+})
+
 describe('the owner\'s rules, after review', () => {
   const set = (rule: Record<string, unknown>, text = 'Rule.') => ({ type: 'rule.set', rule, text } as Command)
   const request = (patch: Record<string, unknown> = {}) => ({ conversationId: 'lead', machineId: 'machine', engine: 'claude', model: 'opus', effort: 'high', name: 'Builder',

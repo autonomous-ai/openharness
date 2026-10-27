@@ -953,6 +953,22 @@ describe('a Lead\'s start that fails before its agent exists', () => {
     expect(b.of('message.send')).toEqual([])
   })
 
+  it('counts a Mac\'s Harness Team account as that Mac, and leaves the failed machine\'s own settings behind', async () => {
+    const b = backend({ fails: ['team-one'] })
+    const answer = b.scoped.getMockImplementation()!
+    b.scoped.mockImplementation(async payload => {
+      if (payload.action !== 'status') return answer(payload)
+      const state = swarm()
+      state.machines.push({ machineId: 'team-one', name: 'Mac One (Team)', scope: 'swarm', cwd: '/team/swarm', hostMachineId: 'mac-one' } as never)
+      return { ok: true, value: { state } }
+    })
+    // The backend moved the Lead's start on Mac One to its team account (machines.ts teamStartRequest).
+    const result = await b.lead({ ...b.first, request: { ...b.first.request, machineId: 'team-one', codexHome: '/one/.codex' } })
+    expect(b.of('route.record')[0]).toMatchObject({ decision: { pick: 'c2', candidates: [candidate('c2', 'mac-two')] } })
+    expect(b.of('agent.start')[1]!.request).toMatchObject({ machineId: 'mac-two' })
+    expect(b.of('agent.start')[1]!.request).not.toHaveProperty('codexHome')
+    expect(result).toMatchObject({ queued: true, retriedFrom: 'first-start' })
+  })
   it('a resumed failed start is retried the same way, once, under the same operations', async () => {
     const b = backend()
     await b.lead(b.first)
