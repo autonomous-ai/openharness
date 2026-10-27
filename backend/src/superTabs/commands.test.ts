@@ -2499,3 +2499,44 @@ describe('lost work (liveness.ts)', () => {
     expect(f.state.conversations.find(c => c.id === own)!.assignment!.status).toBe('working')
   })
 })
+
+describe('partner on a group (collaboration protocol)', () => {
+  const as = (agentId: string): Actor => ({ kind: 'agent', agentId, machineOwnerId: 'host-owner' })
+  const partner = (conversationId: string, personId: string | null): Command => ({ type: 'conversation.partner', conversationId, personId })
+  const swarm = () => {
+    const f = fixture(), lead = f.add('lead', 'owner', 'lead', true)
+    f.invite()
+    const group = f.group(), worker = f.add('worker', 'owner', group)
+    f.run({ type: 'conversation.agent', conversationId: group, agentId: lead, present: true, lead: true })
+    return { f, lead, group, worker, partnerOf: () => f.state.conversations.find(c => c.id === group)!.partnerId }
+  }
+
+  it('lets the Lead name a reader as the partner, replace them and clear them', () => {
+    const { f, lead, group, partnerOf } = swarm()
+    f.run(partner(group, 'peer'), as(lead))
+    expect(partnerOf()).toBe('peer')
+    f.run(partner(group, 'owner'), as(lead))
+    expect(partnerOf()).toBe('owner')
+    f.run(partner(group, null), as(lead))
+    expect(f.state.conversations.find(c => c.id === group)).not.toHaveProperty('partnerId')
+  })
+
+  it('lets a person with write access name one too, but not the worker', () => {
+    const { f, group, worker, partnerOf } = swarm()
+    f.run(partner(group, 'peer'), peer)
+    expect(partnerOf()).toBe('peer')
+    expect(() => f.run(partner(group, 'owner'), as(worker))).toThrow('The coordinating lead owns this action.')
+  })
+
+  it('refuses someone who cannot read the group, someone outside the Swarm, and a private chat', () => {
+    const { f, lead, group } = swarm()
+    expect(() => f.run(partner(group, 'stranger'), as(lead))).toThrow('Name a person in this Swarm.')
+    const secret = f.run({ type: 'project.create', name: 'Secret', visibility: 'private', brief: 'Secret' }).result as { conversationId: string }
+    const secretLead = f.add('secret-lead', 'owner', secret.conversationId, true)
+    expect(() => f.run(partner(secret.conversationId, 'peer'), as(secretLead))).toThrow('Name a partner who can read this conversation.')
+    const chat = f.run({ type: 'conversation.create', title: 'Peer and PM', brief: '', checks: [], audience: { personIds: ['peer'] } }, peer)
+      .result.conversationId as string
+    expect(() => f.run(partner(chat, 'peer'), peer)).toThrow('A private conversation is chat only.')
+    expect(f.state.conversations.find(c => c.id === group)).not.toHaveProperty('partnerId')
+  })
+})

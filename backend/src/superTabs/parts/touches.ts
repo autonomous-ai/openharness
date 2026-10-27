@@ -71,6 +71,9 @@ export function touchesFor(command: Command, actor: Actor, before: SuperTabState
       group(command.reviewOf)
       break
     }
+    case 'conversation.partner':
+      member(command.personId ?? undefined)
+      break
     case 'agent.add': {
       head()
       const target = effects.state.agents.find(a => a.machineId === command.machineId && a.harnessId === command.harnessId)

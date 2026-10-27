@@ -163,6 +163,8 @@ export interface Conversation {
   /** The last attempt here that was lost: its agent's status and checks for it are refused, even after reassignment. Where it
    *  ran (machine and engine) stays too, so routing the work again avoids that account even once its agent is gone. */
   lostAttempt?: { id: string; agentId: string; machineId?: string; engine?: string }
+  /** The person the work needs for judgement, taste, knowledge or hands, named by its Lead (collaboration protocol). */
+  partnerId?: string
 }
 
 export function appendPullRequestUrls(group: Conversation, texts: Iterable<string | null | undefined>): void {

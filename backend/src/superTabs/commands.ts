@@ -16,7 +16,7 @@ import { TERMINAL_KEYS, terminalAlert, terminalRequest, terminalResult, type Ter
 import { loseTasks, renewLease, renewOwnTask } from './liveness.js'
 import { credentialResult, redactCredentials, type CredentialKind } from './credentials.js'
 import { dirtyGroups, reportGroups, summarize } from './projectUpdates.js'
-import { agentKind, agentProjectId, audienceOf, agentSetRole, deleteProject, markConfidential, requireSingleRegistration, groupProject, inviteLanding, ledProject, manageProject, MAX_ROLES, mutableProjects, placeRules, projectMembers, projectOf, projectRules, projectsOf, readAgent, readConversation, readProject, roleVersion, sameProject, sharedWithLeads, SKILL_SET_NAMES, skillSetOf, type ProjectRole, type RoleKind, type SwarmProject } from './projects.js'
+import { agentKind, agentProjectId, audienceOf, agentSetRole, canReadGroup, deleteProject, markConfidential, requireSingleRegistration, groupProject, inviteLanding, ledProject, manageProject, MAX_ROLES, mutableProjects, placeRules, projectMembers, projectOf, projectRules, projectsOf, readAgent, readConversation, readProject, roleVersion, sameProject, sharedWithLeads, SKILL_SET_NAMES, skillSetOf, type ProjectRole, type RoleKind, type SwarmProject } from './projects.js'
 
 const id = z.string().min(1).max(160).regex(/^[A-Za-z0-9_-]+$/)
 const title = z.string().trim().min(1).max(160)
@@ -101,6 +101,8 @@ export const commandSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('conversation.rename'), conversationId: id, title }).strict(),
   z.object({ type: z.literal('conversation.archive'), conversationId: id, archived: z.boolean() }).strict(),
   z.object({ type: z.literal('conversation.audience'), conversationId: id, personIds: z.array(id).max(200) }).strict(),
+  // The person the work needs for judgement, taste, knowledge or hands (collaboration protocol); null clears it.
+  z.object({ type: z.literal('conversation.partner'), conversationId: id, personId: id.nullable() }).strict(),
   z.object({ type: z.literal('agent.add'), conversationId: id, machineId: id, harnessId: id, name: title, configuration, lead: z.boolean(), project: project.optional(), roleId: roleId.optional(), initialMessage: text.optional() }).strict(),
   z.object({ type: z.literal('agent.start'), request: startRequestSchema, routeDecisionId: id.optional(), overrideReason: reason.optional() }).strict(),
   z.object({ type: z.literal('agent.startDispatch'), startId: id }).strict(),
@@ -388,6 +390,14 @@ export function postable(state: SuperTabState, actor: Actor, conversationId: str
 }
 function owner(state: SuperTabState, actor: Actor): void {
   if (actor.kind !== 'person' || actor.userId !== state.ownerId) fail('OWNER_REQUIRED', 'Only the Super Tab owner can manage invitations.', 403)
+}
+/** A partner is a person in the Swarm who can read the group. */
+function partnerOf(state: SuperTabState, group: Conversation, personId: string): string {
+  const member = state.people.find(p => p.id === personId) ?? fail('INVALID_PERSON', 'Name a person in this Swarm.', 400)
+  if (!canReadGroup(state, { kind: 'person', userId: member.id, email: member.email }, group)) {
+    fail('INVALID_PERSON', 'Name a partner who can read this conversation.', 400)
+  }
+  return member.id
 }
 function open(state: SuperTabState, conversationId: string) {
   const group = conversation(state, conversationId)
@@ -1006,6 +1016,14 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       controls(state, actor, command.conversationId)
       open(state, command.conversationId).title = command.title
       break
+    case 'conversation.partner': {
+      chatOnly(command.conversationId)
+      controls(state, actor, command.conversationId)
+      const group = open(state, command.conversationId)
+      if (command.personId) group.partnerId = partnerOf(state, group, command.personId)
+      else delete group.partnerId
+      break
+    }
     case 'conversation.audience': {
       // Who may read it already passed (readConversation): only its listed people and the project's Lead get here.
       const group = open(state, command.conversationId)
