@@ -14,7 +14,7 @@ import { randomBytes } from 'node:crypto'
 import { appendFileSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { CloudCore, CloudPort, CloudResult, ServiceRequests } from '../core/api.js'
-import { CLOUD_AGENT_IDS, CLOUD_AGENTS, SAID_MAX, cloudAgentFrame, isCloudAgent, type CloudAgentId, type CloudAgentInfo, type CloudHarness } from '../lib/cloudAgents.js'
+import { CLOUD_AGENT_IDS, CLOUD_AGENTS, SAID_MAX, cloudAgentFrame, cloudRequestRefusal, isCloudAgent, repositoryOf, type CloudAgentId, type CloudHarness } from '../lib/cloudAgents.js'
 import { connectionFor, connectionsBridge, type Bridge } from './bridge.js'
 import { cursorAdapter } from './cursor.js'
 import { devinAdapter } from './devin.js'
@@ -58,13 +58,6 @@ const QUIET_MS = 24 * 60 * 60_000
  *  never be asked again at once, for a day. */
 const LOOK_MIN_MS = 5_000
 const TRANSCRIPT_MAX = 500
-
-/** `owner/name` from a GitHub address or the pair itself, or null. */
-export function repositoryOf(value: unknown): string | null {
-  if (typeof value !== 'string') return null
-  const match = /^(?:https:\/\/github\.com\/|git@github\.com:)?([\w.-]+)\/([\w.-]+?)(?:\.git)?\/?$/.exec(value.trim())
-  return match ? `${match[1]}/${match[2]}` : null
-}
 
 /** A harness's name from its task: its first line, short. */
 export function nameFor(task: string, agent: CloudAgentId): string {
@@ -245,12 +238,9 @@ export function startCloudService(options: CloudServiceOptions) {
     const agent = request.engine
     if (!isCloudAgent(agent)) return { ok: false, error: 'INVALID_ENGINE', detail: 'That is not a cloud agent.' }
     const task = typeof request.prompt === 'string' ? request.prompt.trim() : ''
-    if (!task) return { ok: false, error: 'INVALID_REQUEST', detail: `Tell ${CLOUD_AGENTS[agent].name} what to do.` }
+    const refusal = cloudRequestRefusal(agent, task, [request.repositoryUrl, request.repository])
+    if (refusal) return { ok: false, error: 'INVALID_REQUEST', detail: refusal }
     const repository = repositoryOf(request.repositoryUrl) ?? repositoryOf(request.repository)
-    // A repository given but not read (a GitLab address, a typo) is refused: started without it, the agent would work blind.
-    if (!repository && (request.repositoryUrl || request.repository)) return { ok: false, error: 'INVALID_REQUEST', detail: 'That is not a GitHub repository: give owner/name or https://github.com/owner/name.' }
-    const info: CloudAgentInfo = CLOUD_AGENTS[agent]
-    if (info.kind === 'coding' && !info.repositoryOptional && !repository) return { ok: false, error: 'INVALID_REQUEST', detail: `Choose a GitHub repository for ${CLOUD_AGENTS[agent].name}.` }
     const acuLimit = typeof request.acuLimit === 'number' && Number.isInteger(request.acuLimit) && request.acuLimit > 0 && request.acuLimit <= 1000 ? request.acuLimit : undefined
     const model = typeof request.model === 'string' && request.model ? request.model.slice(0, 120) : undefined
     let started: Awaited<ReturnType<CloudAdapter['start']>>

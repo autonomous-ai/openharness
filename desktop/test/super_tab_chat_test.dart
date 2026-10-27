@@ -324,7 +324,7 @@ void main() {
     );
     expect(c.unread(c.selected!), isFalse);
     expect(projectDot(), findsOneWidget);
-    await tester.tap(find.byKey(const ValueKey('super-project-expand-lead')));
+    await tester.tap(find.byKey(const ValueKey('super-group-lead')));
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const ValueKey('super-group-offline')));
     await tester.pumpAndSettle();

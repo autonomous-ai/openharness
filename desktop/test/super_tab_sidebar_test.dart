@@ -112,8 +112,8 @@ Future<SuperTabController> projectSidebar(ConversationServer server) async {
 
 void main() {
   for (final scale in [1.0, 2.0]) {
-    testWidgets('flat navigation shares text and selection bounds; disclosure does not '
-        'switch chats at ${scale}x', (tester) async {
+    testWidgets('flat navigation shares text and selection bounds; a project row '
+        'opens its chat and shows its workgroups at ${scale}x', (tester) async {
       addTearDown(() => tester.binding.setSurfaceSize(null));
       final app = createApp(connected: true);
       addTearDown(app.dispose);
@@ -129,8 +129,8 @@ void main() {
         onNewProject: () => created++,
         onYourDevices: () => openedDevices++,
       );
-      final expand = find.byKey(const ValueKey('super-project-expand-lead'));
-      final empty = find.byKey(const ValueKey('super-project-expand-empty'));
+      final project = find.byKey(const ValueKey('super-group-lead'));
+      final empty = find.byKey(const ValueKey('super-group-empty-lead'));
       final devices = find.byKey(const ValueKey('super-your-devices'));
       final newProject = find.byKey(const ValueKey('super-new-project'));
       expect(find.byType(OutlinedButton), findsNothing);
@@ -152,9 +152,9 @@ void main() {
       await tester.tap(sample);
       await tester.pumpAndSettle();
       expect(controller.selectedId, 'empty-lead');
-      await tester.tap(expand);
+      await tester.tap(project);
       await tester.pumpAndSettle();
-      expect(controller.selectedId, 'empty-lead');
+      expect(controller.selectedId, 'lead');
       expect(inRow('super-group-lead', find.text('#')), findsOneWidget);
       final work = find.byKey(const ValueKey('super-group-offline'));
       expect(work, findsOneWidget);
@@ -174,10 +174,6 @@ void main() {
         tester.getCenter(unreadDot('offline')).dx,
         tester.getCenter(unreadDot('lead')).dx,
       );
-      expect(
-        tester.getCenter(unreadDot('lead')).dx,
-        lessThan(tester.getTopLeft(expand).dx),
-      );
       for (final row in [newProject, devices, work]) {
         final bounds = tester.getRect(row);
         final projectBounds = tester.getRect(
@@ -192,12 +188,13 @@ void main() {
       expect(controller.selectedId, 'offline');
       await tester.tap(empty);
       await tester.pumpAndSettle();
-      expect(controller.selectedId, 'offline');
+      expect(controller.selectedId, 'empty-lead');
       expect(find.text('No workgroups yet'), findsOneWidget);
       expect(tester.getTopLeft(find.text('No workgroups yet')).dx, textX);
-      expect(find.byTooltip('Collapse sample-project'), findsOneWidget);
+      // A second click on the open project hides its workgroups again.
       await tester.tap(empty);
       await tester.pumpAndSettle();
+      expect(controller.selectedId, 'empty-lead');
       expect(find.text('No workgroups yet'), findsNothing);
 
       // The plain top actions retain keyboard operation and do not create tabs.
@@ -216,7 +213,7 @@ void main() {
       await tester.pumpAndSettle();
       expect(openedDevices, 1);
       expect(controller.devicesSelected, isTrue);
-      expect(controller.selectedId, 'offline');
+      expect(controller.selectedId, 'empty-lead');
       expect(app.swarms, hasLength(tabsBefore));
       expect(
         rowMaterial(tester, 'super-your-devices').color,
@@ -245,8 +242,70 @@ void main() {
     });
   }
 
+  testWidgets('reads like a chat app: utilities, Projects A to Z with their '
+      'workgroups and # product-managers, Direct messages, then Machines', (
+    tester,
+  ) async {
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final app = createApp(connected: true);
+    addTearDown(app.dispose);
+    final server = ConversationServer();
+    (server.state['conversations'] as List).add({
+      ...conversationFixture('leads', 'Leads'),
+      'kind': 'leads',
+    });
+    server.state['leadsConversationId'] = 'leads';
+    final controller = await projectSidebar(server);
+    controller
+      ..toggleProject('lead')
+      ..toggleProject('empty');
+    await pumpSidebar(tester, controller, app);
+
+    final order = [
+      find.byKey(const ValueKey('super-new-project')),
+      find.byKey(const ValueKey('super-local-models')),
+      find.byKey(const ValueKey('super-your-devices')),
+      find.text('Projects'),
+      find.byKey(const ValueKey('super-group-leads')),
+      find.byKey(const ValueKey('super-group-empty-lead')),
+      find.text('No workgroups yet'),
+      find.byKey(const ValueKey('super-group-lead')),
+      find.byKey(const ValueKey('super-group-offline')),
+      find.text('Direct messages'),
+      find.byKey(const ValueKey('super-pm-chat-lead')),
+      find.byKey(const ValueKey('super-pm-chat-empty')),
+      find.text('Machines'),
+    ];
+    for (var i = 1; i < order.length; i++) {
+      expect(
+        tester.getTopLeft(order[i - 1]).dy,
+        lessThan(tester.getTopLeft(order[i]).dy),
+        reason: '${order[i - 1]} above ${order[i]}',
+      );
+    }
+    for (final (key, name) in [
+      ('leads', 'product-managers'),
+      ('empty-lead', 'sample-project'),
+      ('lead', 'web-project'),
+    ]) {
+      expect(inRow('super-group-$key', find.text('#')), findsOneWidget);
+      expect(inRow('super-group-$key', find.text(name)), findsOneWidget);
+    }
+    // The product managers' channel has no workgroups to disclose.
+    expect(
+      inRow('super-group-leads', find.byIcon(AppIcons.chevronRight)),
+      findsNothing,
+    );
+    expect(
+      inRow('super-pm-chat-lead', find.text('(web-project)')),
+      findsOneWidget,
+    );
+    expect(tester.takeException(), isNull);
+    await disposeSidebar(tester, controller);
+  });
+
   testWidgets('section disclosure follows its label and + aligns with the '
-      'right disclosure column', (tester) async {
+      'rows\' right status column', (tester) async {
     addTearDown(() => tester.binding.setSurfaceSize(null));
     final app = createApp(connected: true);
     addTearDown(app.dispose);
@@ -273,9 +332,8 @@ void main() {
       }
       expect(
         tester.getCenter(find.byTooltip('New project')).dx,
-        tester
-            .getCenter(find.byKey(const ValueKey('super-project-expand-lead')))
-            .dx,
+        tester.getRect(find.byKey(const ValueKey('super-group-lead'))).right -
+            16,
       );
       expect(tester.takeException(), isNull);
     }

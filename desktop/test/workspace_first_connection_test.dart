@@ -31,10 +31,16 @@ class _App extends AppNotifier {
   @override
   String? get lastError => listError ?? super.lastError;
 
-  /// The quiet machine-list reads asked for while waiting on a computer.
+  /// The machine-list reads asked for.
   var rereads = 0;
   @override
-  Future<void> rereadMachines() async => rereads++;
+  Future<bool> refreshMachines() async {
+    rereads++;
+    return true;
+  }
+
+  @override
+  Future<void> retryMachines() async => rereads++;
 }
 
 const _connectPage = Key('connect-page');
@@ -229,50 +235,25 @@ void main() {
     await unmount(tester, app);
   });
 
-  // One timer asks for the machine list, every four seconds, while the
-  // connect page or the asleep band shows: a second one would double the
-  // reads, and one left running would read forever.
+  // The page and the band ask for nothing on their own: the app's one watch
+  // reads for them (test/web_machine_list_watch_test.dart). A timer here too
+  // would read beside it.
   const every = Duration(seconds: 4);
 
-  testWidgets('the connect page: one read every four seconds', (tester) async {
-    final app = await mount(tester);
-    final before = app.rereads;
-
-    await tester.pump(every * 3);
-
-    expect(app.rereads - before, 3);
-    await unmount(tester, app);
-  });
-
-  testWidgets('the band: one read every four seconds, none once it is back', (
+  testWidgets('the connect page and the band read nothing of their own', (
     tester,
   ) async {
-    final app = await mount(tester, machine: asleep, pane: true);
-    final before = app.rereads;
+    final page = await mount(tester);
+    final before = page.rereads;
+    await tester.pump(every * 15);
+    expect(page.rereads, before);
+    await unmount(tester, page);
 
-    await tester.pump(every * 3);
-    expect(app.rereads - before, 3);
-
-    app.machineStates['mac']!
-      ..nodeOnline = true
-      ..connectionStatus = ConnectionStatus.connected;
-    app.notifyListeners();
-    await tester.pump();
-    final woken = app.rereads;
-    await tester.pump(every * 3);
-    expect(app.rereads, woken);
-    await unmount(tester, app);
-  });
-
-  testWidgets('no read once the workspace is gone', (tester) async {
-    final app = await mount(tester, machine: asleep, pane: true);
-    await tester.pumpWidget(const SizedBox.shrink());
-    final gone = app.rereads;
-
-    await tester.pump(every * 3);
-
-    expect(app.rereads, gone);
-    app.dispose();
+    final band = await mount(tester, machine: asleep, pane: true);
+    final asleepBefore = band.rereads;
+    await tester.pump(every * 15);
+    expect(band.rereads, asleepBefore);
+    await unmount(tester, band);
   });
 
   testWidgets('two asleep: the band names both', (tester) async {

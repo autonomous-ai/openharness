@@ -26,14 +26,14 @@ import {
   activeWork, actorKey, agent, agentOnly, appendPullRequestUrls, author, conversation, createSuperTab, fail, person, stableId, visibleState, finishWorker,
   SuperTabError, isLeads, parkLaterConversations, syncLeads, type Actor, type Agent, type Assignment, type Author, type MessageDraft, type SuperTabState,
 } from './model.js'
-import { holdNoticeText, type HoldReason } from './holdNotice.js'
+import type { HoldReason } from './holdReason.js'
 import { agentDisplayName } from './agentNames.js'
 import { endedHolds, HOLDING, type WorkHold } from '../github/holds.js'
 import { accrueLent } from './leaderboard/lent.js'
 import { mayDrive, TERMINAL_ANSWER_MS, TERMINAL_EXPIRY_MS, TERMINAL_PICKUP_MS, type TerminalEffect } from './terminal.js'
-import { closeAssignment, closeUnassignedStart, readDecision, recentRoutes, timedDecisionOf, writeRouteEffects } from './routeDecisions.js'
+import { closeAssignment, closeUnassignedStart, readDecision, timedDecisionOf, writeRouteEffects } from './routeDecisions.js'
 import { listMentions, markDone, mentionsWaiting, readMention, resolveByReply, writeMentions } from './mentions.js'
-import { answerable, listDecisions, readAskedDecision, recordAnswer, writeDecisions } from './decisions.js'
+import { answerable, listDecisions, readAskedDecision, recordAnswer, waitingInProject, writeDecisions } from './decisions.js'
 import { DEFAULT_ROUTING_POLICY, effectivePolicy, routingPolicySchema, type RoutingPolicy } from './routingPolicy.js'
 import { authenticatedEmail, authorizeSwarmJoin, configureSharing, joinSwarmSchema, requireSharingOwner,
   saveSharingSchema, sharingDetails, type JoinSwarm, type SaveSharing } from './sharing.js'
@@ -740,7 +740,6 @@ export class SuperTabStore {
       if (command.type === 'mention.done') context.mention = await readMention(tx, tabId, command.mentionId)
       if (command.type === 'decision.answer') context.decision = await readAskedDecision(tx, tabId, command.decisionId)
       if (command.type === 'message.send' && command.attachmentIds?.length) context.attachments = await this.sendable(tx, tabId, actor, command)
-      if (command.type === 'route.record') context.recentRoutes = await recentRoutes(tx, tabId, context.now)
       if (TEAM_WORK_COMMANDS.has(command.type)) {
         context.teamMachines = await this.teamMachines(tx, original)
         if (this.hooks.teamAccountsIdle) context.teamAccountsIdle = true
@@ -1579,10 +1578,14 @@ export class SuperTabStore {
       // Work finished since the last digest and archived or asleep since still shipped, but ordinary loads leave it out
       // (#1757 review, 4): a due digest loads it.
       const led = ledProject(loaded.state, agentId)
+      let asked: Array<{ conversationId: string; personId: string; count: number }> = []
       if (led && digestDue(led, this.now())) {
         const finished = await tx.swarmGroup.findMany({ where: { tabId, deleted: false, dormant: true, lastActivityAt: { gte: new Date(digestSince(led, this.now())) },
           OR: [{ projectId: led.id }, ...led.id === 'lead' ? [{ projectId: null }] : []] }, select: { key: true } })
-        if (finished.length) loaded = await this.ensure(tx, loaded, { groupIds: finished.map(g => g.key) })
+        // A decision waits in its conversation even once that conversation went quiet.
+        asked = await waitingInProject(tx, tabId, led.id)
+        const groupIds = [...new Set([...finished.map(g => g.key), ...asked.map(d => d.conversationId)])]
+        if (groupIds.length) loaded = await this.ensure(tx, loaded, { groupIds })
       }
       const state = structuredClone(loaded.state)
       author(state, await this.actor(tx, user, state, agentId), true)
@@ -1606,7 +1609,7 @@ export class SuperTabStore {
         }
       }
       // The morning digest is due once a day; recording it as sent is part of this same write, so it is sent once.
-      const digest = digestRequest(state, target, this.now())
+      const digest = digestRequest(state, target, this.now(), asked)
       if (digest) {
         const project = projectOf(state, digest.source!.projectId as string)
         project.digest = { ...project.digest!, lastOn: digest.source!.on as string, lastAt: this.now() }
@@ -1667,7 +1670,7 @@ export class SuperTabStore {
       }
       if (delivery.claimId && delivery.claimId !== action.claimId) fail('CLAIM_CONFLICT', 'Reconcile the existing delivery before claiming it again.')
       if (action.type !== 'claim' && !delivery.claimId) fail('NOT_CLAIMED', 'Claim this instruction before acknowledging it.')
-      if (action.type === 'hold') return this.holdNotice(tx, loaded, delivery, action.reason)
+      if (action.type === 'hold') return this.hold(tx, delivery, action.reason)
       const status = action.type === 'claim' ? delivery.status === 'queued' ? 'claimed' : delivery.status : action.uncertain ? 'uncertain' : 'delivered'
       if (delivery.status === 'delivered' && action.type === 'ack' && (action.uncertain || delivery.receipt !== action.receipt)) {
         fail('RECEIPT_CONFLICT', 'A delivered instruction keeps its original host receipt.')
@@ -1683,40 +1686,14 @@ export class SuperTabStore {
     })
   }
 
-  /** The host cannot type a claimed instruction yet. Say so once in the group, as the waiting agent; nobody is asked to act on it. */
-  private async holdNotice(tx: Transaction, loaded: Loaded, delivery: SuperTabDelivery, reason: HoldReason) {
-    const state = structuredClone(loaded.state)
-    const id = stableId('hold-notice', delivery.tabId, delivery.id)
-    if (delivery.status !== 'claimed') return { noticed: false }
-    // Nobody can see an agent-only notice, so nobody is told it waits; the host keeps holding it.
-    if (agentOnly((await tx.superTabMessage.findUnique({ where: { id: delivery.messageId }, select: { source: true } }))?.source)) return { noticed: false }
-    const notice = await tx.superTabMessage.findUnique({ where: { id } })
-    if (notice && delivery.holdReason === reason && delivery.holdSince) return { noticed: false }
-    // The notice is only sent once for older Desktops; the inline receipt keeps the current reason.
-    await tx.superTabDelivery.update({ where: { id: delivery.id }, data: {
-      holdReason: reason, holdSince: delivery.holdSince ?? new Date(this.now()),
-    } })
-    const group = conversation(state, delivery.conversationId), waiting = agent(state, delivery.agentId)
-    const sender = author(state, { kind: 'agent', agentId: waiting.id, machineOwnerId: waiting.machineOwnerId })
-    // The Lead gets it too, like a host-stop notice; a waiting Lead has no one above it to tell.
-    const lead = group.leadId && group.leadId !== waiting.id && group.agentIds.includes(group.leadId) ? group.leadId : null
-    const host = !notice && reason === 'team_waiting_user' ? await this.holdHost(tx, state, waiting) : undefined
-    const notices: MessageDraft[] = notice ? [] : [{ id, conversationId: group.id, replyTo: null, recipients: lead ? [lead] : [],
-      source: { kind: 'delivery-hold', messageId: delivery.messageId, deliveryId: delivery.id, agentId: delivery.agentId },
-      text: holdNoticeText(sender.displayName ?? sender.name, reason, host), author: sender }]
-    const sequences = numberMessages(state, notices, this.now())
-    await this.save(tx, loaded, state, clock.next(), deliveryTouches(delivery))
-    await this.writeMessages(tx, loaded.row.id, state, notices, sequences)
-    return { noticed: !notice }
-  }
-
-  /** The machine's name and its owner's name for a hold notice; left out when unknown rather than guessed. */
-  private async holdHost(tx: Transaction, state: SuperTabState, waiting: Agent) {
-    const contributed = state.machines?.find(m => m.machineId === waiting.machineId)?.name
-    const machine = contributed ?? (await tx.machine.findFirst({ where: { machineId: waiting.machineId, userId: waiting.machineOwnerId },
-      select: { name: true, hostname: true } }).then(m => m?.name ?? m?.hostname ?? null))
-    const owner = await tx.user.findUnique({ where: { id: waiting.machineOwnerId }, select: { name: true } })
-    return { machine: machine?.trim() || null, owner: owner?.name?.trim() || null }
+  /** The host cannot type a claimed instruction yet. Recorded on the delivery for logs; nothing is posted, nobody is told it waits. */
+  private async hold(tx: Transaction, delivery: SuperTabDelivery, reason: HoldReason) {
+    if (delivery.status !== 'claimed') return { held: false }
+    if (agentOnly((await tx.superTabMessage.findUnique({ where: { id: delivery.messageId }, select: { source: true } }))?.source)) return { held: false }
+    if (delivery.holdReason !== reason || !delivery.holdSince) {
+      await tx.superTabDelivery.update({ where: { id: delivery.id }, data: { holdReason: reason, holdSince: delivery.holdSince ?? new Date(this.now()) } })
+    }
+    return { held: true }
   }
 
   /** Only the recorded execution host may attest that the actual session/attempt has stopped. */

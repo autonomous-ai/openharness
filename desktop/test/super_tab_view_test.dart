@@ -209,7 +209,7 @@ void main() {
       await tester.tap(find.byTooltip('Conversations'));
       await tester.pumpAndSettle();
     }
-    await tester.tap(find.byKey(const ValueKey('super-project-expand-lead')));
+    await tester.tap(find.byKey(const ValueKey('super-group-lead')));
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const ValueKey('super-group-offline')));
     await tester.pumpAndSettle();
@@ -298,7 +298,7 @@ void main() {
       expect(server.posts, isEmpty);
       await tester.tap(find.byTooltip('Conversations'));
       await tester.pumpAndSettle();
-      await tester.tap(find.byKey(const ValueKey('super-project-expand-lead')));
+      await tester.tap(find.byKey(const ValueKey('super-group-lead')));
       await tester.pumpAndSettle();
       await tester.tap(find.byKey(const ValueKey('super-group-offline')));
       await tester.pumpAndSettle();
@@ -335,7 +335,8 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
-    expect(find.text('Pilot'), findsNWidgets(2));
+    expect(find.text('Pilot'), findsOneWidget);
+    expect(find.text('# Pilot'), findsOneWidget);
     expect(find.text('CHATS'), findsNothing);
     expect(find.byKey(const ValueKey('super-group-lead')), findsOneWidget);
     expect(find.byKey(const ValueKey('super-group-offline')), findsNothing);

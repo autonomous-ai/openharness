@@ -417,7 +417,6 @@ void main() {
         await mouse.addPointer(location: Offset.zero);
         for (final target in [
           ('project-hover', const ValueKey('super-group-lead')),
-          ('disclosure-hover', const ValueKey('super-project-expand-lead')),
           ('workgroup-hover', const ValueKey('super-group-offline')),
         ]) {
           await mouse.moveTo(tester.getCenter(find.byKey(target.$2)));

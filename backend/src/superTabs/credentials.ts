@@ -89,6 +89,9 @@ const ASSIGN = String.raw`["']?[ \t]*(?:=>|:=|[:=])[ \t]*["'\x60]?`
 
 /** Most specific first: a GitHub token inside `token=…` is a GitHub token. */
 const RULES: Rule[] = [
+  // A stateless GitHub App installation token, ghs_APPID_ and a JWT: before the JWT rule, which would miss it.
+  { kind: 'github', pattern: /(?<![A-Za-z0-9_])ghs_\d+_[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}(?![A-Za-z0-9_-])/dg,
+    accept: token => random(token.slice(token.lastIndexOf('.') + 1)) },
   { kind: 'jwt', pattern: /(?<![A-Za-z0-9_\-.+/])[A-Za-z0-9_-]{10,}(?:\.[A-Za-z0-9_-]*){2,5}(?![A-Za-z0-9_\-+/=])/dg, accept: token => {
     // A full stop after the token ends the sentence; three segments are signed (JWS), five encrypted (JWE).
     const trimmed = token.endsWith('.') ? token.slice(0, -1) : token
