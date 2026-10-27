@@ -674,6 +674,21 @@ void main() {
         allOf(contains('1\u00A0working'), contains('1\u00A0down')),
         reason: 'each part whole, on one line',
       );
+      // And each dot on the line of its words.
+      final plain = paragraph.text.toPlainText();
+      expect('●'.allMatches(plain), hasLength(3));
+      double middle(int offset) => paragraph
+          .getBoxesForSelection(
+            TextSelection(baseOffset: offset, extentOffset: offset + 1),
+          )
+          .first
+          .toRect()
+          .center
+          .dy;
+      for (final dot in '●'.allMatches(plain)) {
+        final words = plain.indexOf('1', dot.start);
+        expect(middle(dot.start), closeTo(middle(words), 4), reason: plain);
+      }
     });
   });
 }

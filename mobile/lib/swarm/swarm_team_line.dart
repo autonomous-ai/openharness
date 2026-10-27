@@ -45,18 +45,11 @@ class SwarmTeamLine extends StatelessWidget {
         children: [
           for (final (i, part) in parts.indexed) ...[
             if (i > 0) const TextSpan(text: '   '),
-            WidgetSpan(
-              alignment: PlaceholderAlignment.middle,
-              child: Padding(
-                padding: const EdgeInsets.only(right: 5),
-                child: DecoratedBox(
-                  decoration: BoxDecoration(
-                    color: dot(part.state),
-                    shape: BoxShape.circle,
-                  ),
-                  child: const SizedBox.square(dimension: 7),
-                ),
-              ),
+            // The dot is a glyph, not a widget: a line may break around a
+            // widget, while no-break spaces hold the dot and its words as one.
+            TextSpan(
+              text: '●\u00A0',
+              style: TextStyle(color: dot(part.state)),
             ),
             TextSpan(
               text: part.text.replaceAll(' ', '\u00A0'),
