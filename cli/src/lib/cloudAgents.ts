@@ -47,6 +47,29 @@ export function isCloudAgent(id: unknown): id is CloudAgentId {
   return typeof id === 'string' && Object.hasOwn(CLOUD_AGENTS, id)
 }
 
+/** `owner/name` from a GitHub address or the pair itself, or null. */
+export function repositoryOf(value: unknown): string | null {
+  if (typeof value !== 'string') return null
+  const match = /^(?:https:\/\/github\.com\/|git@github\.com:)?([\w.-]+)\/([\w.-]+?)(?:\.git)?\/?$/.exec(value.trim())
+  return match ? `${match[1]}/${match[2]}` : null
+}
+
+/**
+ * Why a cloud agent cannot start this task, in the words a person reads, or null when it can. The cloud service
+ * answers with it (cloud/service.ts) and `harness new` refuses with it before sending (lib/newCommand.ts): a typo
+ * there reached the service and came back a counted launch failure (Oct 26 report). [repositories] are the ways a
+ * request names one, the first that reads winning.
+ */
+export function cloudRequestRefusal(agent: CloudAgentId, task: string, repositories: readonly unknown[]): string | null {
+  const info: CloudAgentInfo = CLOUD_AGENTS[agent]
+  if (!task.trim()) return `Tell ${info.name} what to do.`
+  const repository = repositories.map(repositoryOf).find(Boolean)
+  // A repository given but not read (a GitLab address, a typo) is refused: started without it, the agent would work blind.
+  if (!repository && repositories.some(Boolean)) return 'That is not a GitHub repository: give owner/name or https://github.com/owner/name.'
+  if (info.kind === 'coding' && !info.repositoryOptional && !repository) return `Choose a GitHub repository for ${info.name}.`
+  return null
+}
+
 /** Where a cloud harness is: working, waiting on the person, done with its turn, failed, or stopped. */
 export type CloudState = 'starting' | 'working' | 'needs_input' | 'idle' | 'failed' | 'stopped'
 export const CLOUD_STATES: readonly CloudState[] = ['starting', 'working', 'needs_input', 'idle', 'failed', 'stopped']

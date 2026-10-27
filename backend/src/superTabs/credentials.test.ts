@@ -22,6 +22,8 @@ const fake = {
   jwe: () => [b64url({ alg: 'RSA-OAEP', enc: 'A256GCM' }), noise(40, B64URL, 2), noise(16, B64URL, 3), noise(30, B64URL, 4), noise(22, B64URL, 5)].join('.'),
   harness: (prefix: string, seed = 11) => `${prefix}_${noise(43, B64URL, seed)}`,
   github: (prefix: string, seed = 12) => `${prefix}_${noise(36, ALNUM, seed)}`,
+  // GitHub's stateless installation token: ghs_, the app id, and a signed JWT of about 520 characters in all.
+  githubStateless: () => `ghs_123456_${fake.jwt(20)}${noise(380, B64URL, 21)}`,
   githubPat: () => ['github', 'pat', `${noise(22, ALNUM, 13)}_${noise(59, ALNUM, 14)}`].join('_'),
   anthropic: () => ['sk', 'ant', 'api03', noise(93, B64URL, 15)].join('-'),
   openai: (kind = '') => ['sk', ...(kind ? [kind] : []), noise(48, ALNUM, 16)].join('-'),
@@ -49,6 +51,7 @@ describe('findCredentials: every kind it removes', () => {
     ['github', 'a GitHub user-to-server token', fake.github('ghu')],
     ['github', 'a GitHub server-to-server token', fake.github('ghs')],
     ['github', 'a GitHub refresh token', fake.github('ghr')],
+    ['github', 'a stateless GitHub App installation token', fake.githubStateless()],
     ['github', 'a fine-grained GitHub token', fake.githubPat()],
     ['anthropic', 'an Anthropic key', fake.anthropic()],
     ['openai', 'a legacy OpenAI key', fake.openai()],
@@ -114,6 +117,7 @@ describe('findCredentials: every kind it removes', () => {
     expect(redactCredentials(`GITHUB_TOKEN=${fake.github('ghp')}`)).toEqual({ text: `GITHUB_TOKEN=${CREDENTIAL_MARKER}`, removed: ['github'] })
     expect(redactCredentials(`Authorization: Bearer ${fake.jwt()}`)).toEqual({ text: `Authorization: Bearer ${CREDENTIAL_MARKER}`, removed: ['jwt'] })
     expect(redactCredentials(`git clone https://x-access-token:${fake.github('ghs')}@github.com/example/repo`).removed).toEqual(['github'])
+    expect(redactCredentials(`GH_TOKEN=${fake.githubStateless()}`)).toEqual({ text: `GH_TOKEN=${CREDENTIAL_MARKER}`, removed: ['github'] })
     expect(redactCredentials(`aws_access_key_id = ${fake.awsKeyId()}`).removed).toEqual(['aws-key-id'])
   })
 
