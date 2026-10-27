@@ -220,7 +220,7 @@ void main() {
       final c = await show(tester, pmChatSwarm());
       expect(entry, findsOneWidget);
       expect(
-        find.descendant(of: entry, matching: find.text('Chat with PM')),
+        find.descendant(of: entry, matching: find.text('Lead')),
         findsOneWidget,
       );
       final workgroup = find.byKey(const ValueKey('super-group-offline'));
@@ -243,7 +243,8 @@ void main() {
         final chat = c.pmChat('lead')!;
         expect(c.selectedId, chat.id);
         expect(find.byKey(ValueKey('super-group-${chat.id}')), findsNothing);
-        expect(find.text('Chat with PM'), findsNWidgets(2));
+        // The header names the chat; the sidebar names its Product Manager.
+        expect(find.text('Chat with PM'), findsOneWidget);
         expect(find.text('Message Product Manager'), findsOneWidget);
 
         await tester.tap(find.byKey(const ValueKey('super-group-offline')));

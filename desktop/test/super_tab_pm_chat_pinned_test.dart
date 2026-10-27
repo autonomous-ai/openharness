@@ -6,17 +6,23 @@ import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:harness/core/models.dart';
+import 'package:harness/shared/theme/app_icons.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/shortcuts/app_keymap.dart';
 import 'package:harness/shortcuts/keyboard_practice.dart';
 import 'package:harness/shortcuts/keymap.dart';
 import 'package:harness/shortcuts/keymap_commands.dart';
 import 'package:harness/shortcuts/keymap_edit.dart';
+import 'package:harness/state/app_state.dart';
 import 'package:harness/state/harness_activity.dart';
 import 'package:harness/super_tabs/controller.dart';
+import 'package:harness/super_tabs/identity.dart';
+import 'package:harness/super_tabs/machines.dart';
 import 'package:harness/super_tabs/pm_chat_shortcut.dart';
 import 'package:harness/super_tabs/project_sidebar.dart';
 import 'package:harness/super_tabs/view.dart';
+import 'package:harness/widgets/desktop_chrome.dart';
 
 import 'box_render_preview_test.dart' show loadPreviewFonts;
 import 'super_tab_launch_test.dart' show SuperTabLaunchFixture, tabId;
@@ -50,15 +56,34 @@ void main() {
     return (c, chat);
   }
 
+  /// A second project, Mobile, whose Product Manager is Wren.
   void secondProject(ConversationServer server) {
     server.state['projects'] = [
       projectFixture('lead', 'Pilot', 'lead'),
       projectFixture('mobile', 'Mobile', 'mobile-lead'),
     ];
+    (server.state['agents'] as List).add({
+      'id': 'mobile-pm',
+      'name': 'Lead',
+      'displayName': 'Wren',
+      'machineId': 'm1',
+      'harnessId': 'h2',
+      'contributorId': 'owner',
+      'configuration': {'engine': 'claude', 'model': 'opus'},
+    });
     (server.state['conversations'] as List).add({
       ...conversationFixture('mobile-lead', 'Lead'),
       'projectId': 'mobile',
+      'leadId': 'mobile-pm',
+      'agentIds': ['mobile-pm'],
     });
+  }
+
+  /// [pmChatSwarm] with its Product Manager called River.
+  ConversationServer riverSwarm() {
+    final server = pmChatSwarm();
+    (server.state['agents'] as List).first['displayName'] = 'River';
+    return server;
   }
 
   group('the unread count', () {
@@ -205,15 +230,33 @@ void main() {
 
     final entry = find.byKey(const ValueKey('super-pm-chat-lead'));
     final sidebar = find.byType(ProjectSidebar);
+    final projectRow = find.byKey(const ValueKey('super-group-lead'));
 
     testWidgets(
-      'pins Chat with PM above the projects, shown with the project and the list collapsed',
+      'pins Chat with PM as a direct message above the projects, shown with the project and the list collapsed',
       (tester) async {
-        final c = await show(tester, pmChatSwarm());
+        final c = await show(tester, riverSwarm());
         expect(c.expandedProjects, isNot(contains('lead')));
+        // Listed by the Product Manager's name and avatar, like a direct message.
         expect(
-          find.descendant(of: entry, matching: find.text('Chat with PM')),
-          findsOneWidget,
+          find.descendant(of: entry, matching: find.text('River')),
+          findsOne,
+        );
+        expect(
+          find.descendant(of: entry, matching: find.byType(SuperTabAvatar)),
+          findsOne,
+        );
+        expect(
+          find.descendant(of: entry, matching: find.byTooltip('Chat with PM')),
+          findsOne,
+        );
+        expect(
+          tester.getTopLeft(find.text('Direct messages')).dy,
+          lessThan(tester.getTopLeft(entry).dy),
+        );
+        expect(
+          tester.getTopLeft(find.text('Direct messages')).dx,
+          tester.getTopLeft(find.text('Projects')).dx,
         );
         expect(
           tester.getTopLeft(entry).dy,
@@ -230,12 +273,80 @@ void main() {
         c.toggleProject('lead');
         await tester.pumpAndSettle();
         expect(
-          find.descendant(of: sidebar, matching: find.text('Chat with PM')),
+          find.descendant(of: sidebar, matching: find.text('River')),
           findsOneWidget,
         );
         await close(tester, c);
       },
     );
+
+    testWidgets(
+      'lists projects as channels: a # before the name, open or not',
+      (tester) async {
+        final c = await show(tester, riverSwarm());
+        expect(
+          find.descendant(of: projectRow, matching: find.text('#')),
+          findsOne,
+        );
+        expect(
+          find.descendant(
+            of: projectRow,
+            matching: find.byIcon(AppIcons.folder),
+          ),
+          findsNothing,
+        );
+        c.toggleProject('lead');
+        await tester.pumpAndSettle();
+        expect(
+          find.descendant(of: projectRow, matching: find.text('#')),
+          findsOne,
+        );
+        expect(
+          find.descendant(
+            of: projectRow,
+            matching: find.byIcon(AppIcons.folderOpen),
+          ),
+          findsNothing,
+        );
+        await close(tester, c);
+      },
+    );
+
+    testWidgets('shows a workgroup by its number in grey, with no #', (
+      tester,
+    ) async {
+      final server = riverSwarm();
+      (server.state['conversations'] as List).last['number'] = 196;
+      final c = await show(tester, server);
+      c.toggleProject('lead');
+      await tester.pumpAndSettle();
+      final row = find.byKey(const ValueKey('super-group-offline'));
+      final name = find.descendant(
+        of: row,
+        matching: find.text('196  Offline editing'),
+      );
+      expect(name, findsOne);
+      expect(
+        find.descendant(of: row, matching: find.textContaining('#')),
+        findsNothing,
+      );
+      final number =
+          (tester.widget<Text>(name).textSpan! as TextSpan).children!.first;
+      expect(number.toPlainText(), '196  ');
+      expect(number.style?.color, DesktopChrome.muted);
+      await close(tester, c);
+    });
+
+    testWidgets('names the Product Manager role while a project has none', (
+      tester,
+    ) async {
+      final c = await show(tester, ConversationServer(), account: 'owner');
+      expect(
+        find.descendant(of: entry, matching: find.text('Product Manager')),
+        findsOne,
+      );
+      await close(tester, c);
+    });
 
     testWidgets('the first open leaves Notifications for the new chat', (
       tester,
@@ -253,22 +364,31 @@ void main() {
       await close(tester, c);
     });
 
-    testWidgets('has one row per project, named after it', (tester) async {
-      final server = pmChatSwarm();
+    testWidgets('has one row per project, with its project named', (
+      tester,
+    ) async {
+      final server = riverSwarm();
       secondProject(server);
       final c = await show(tester, server);
+      final mobile = find.byKey(const ValueKey('super-pm-chat-mobile'));
 
-      expect(
-        find.descendant(of: entry, matching: find.text('Chat with PM · Pilot')),
-        findsOneWidget,
-      );
-      expect(
-        find.descendant(
-          of: find.byKey(const ValueKey('super-pm-chat-mobile')),
-          matching: find.text('Chat with PM · Mobile'),
-        ),
-        findsOneWidget,
-      );
+      for (final (row, pm, project) in [
+        (entry, 'River', 'Pilot'),
+        (mobile, 'Wren', 'Mobile'),
+      ]) {
+        expect(find.descendant(of: row, matching: find.text(pm)), findsOne);
+        expect(
+          find.descendant(of: row, matching: find.text(project)),
+          findsOne,
+        );
+        expect(
+          find.descendant(
+            of: row,
+            matching: find.byTooltip('Chat with PM · $project'),
+          ),
+          findsOne,
+        );
+      }
 
       await tester.tap(find.byKey(const ValueKey('super-pm-chat-mobile')));
       await tester.pumpAndSettle();
@@ -428,6 +548,70 @@ void main() {
     });
   }
 
+  testWidgets(
+    "machines read as '~ name', with the name the person gave it when set",
+    (tester) async {
+      final f = SuperTabLaunchFixture();
+      f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Pilot');
+      const renamed = Machine(
+        machineId: 'm2',
+        authMode: MachineAuthMode.remote,
+        name: "Diego's Mac",
+      );
+      f.app.machines = [...f.app.machines, renamed];
+      f.app.machineStates['m2'] = MachineState(renamed)
+        ..nodeOnline = true
+        ..connectionStatus = ConnectionStatus.connected
+        ..agentLoadStatus = AgentLoadStatus.loaded;
+      f.connection.server.state['machines'] = [
+        {
+          'machineId': 'm2',
+          'name': 'MacBookPro2021.local',
+          'contributorId': 'owner',
+        },
+        // A teammate's: only the Swarm's name for it is known here.
+        {
+          'machineId': 'studio',
+          'name': 'Studio.local',
+          'contributorId': 'owner',
+        },
+      ];
+      final c = await f.app.superTabs.open(tabId);
+      await c.refresh();
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: SuperTabMachines(
+              controller: c,
+              app: f.app,
+              onAddAgent: (_) {},
+            ),
+          ),
+        ),
+      );
+      await tester.pump();
+
+      String name(String id) => tester
+          .widget<Text>(find.byKey(ValueKey('super-machine-name-$id')))
+          .data!;
+      expect(name('m2'), "Diego's Mac");
+      expect(name('studio'), 'Studio');
+      final row = find.byKey(const ValueKey('super-machine-m2'));
+      expect(find.descendant(of: row, matching: find.text('~')), findsOne);
+      expect(
+        find.descendant(of: row, matching: find.byIcon(AppIcons.monitor)),
+        findsNothing,
+      );
+      expect(
+        find.descendant(of: row, matching: find.byType(SuperTabMachineDot)),
+        findsOne,
+      );
+      await tester.pumpWidget(const SizedBox());
+      await c.flush();
+      f.app.superTabs.dispose();
+    },
+  );
+
   group('the shortcut', () {
     HarnessCommand command() =>
         harnessCommands.singleWhere((c) => c.id == 'swarm.chat_with_pm');
@@ -484,7 +668,11 @@ void main() {
   for (final brightness in Brightness.values) {
     testWidgets('screenshots for review (${brightness.name})', (tester) async {
       final picture = GlobalKey();
-      final server = pmChatSwarm();
+      final server = riverSwarm();
+      (server.state['conversations'] as List).last['number'] = 196;
+      server.state['machines'] = [
+        {'machineId': 'diego', 'name': "Diego's Mac", 'contributorId': 'owner'},
+      ];
       secondProject(server);
       final c = server.controller(account: 'peer');
       addTearDown(c.dispose);

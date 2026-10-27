@@ -240,7 +240,7 @@ void main() {
       expect(tipOf(tester, 'm'), tip);
       expect(labelOf(tester, 'm'), 'Studio Mac, Live, $tip');
       // Collapsed: name and owner avatar, with readings reserved for disclosure.
-      expect(textsOf('m'), ['Studio Mac', 'O']);
+      expect(textsOf('m'), ['~', 'Studio Mac', 'O']);
       expect(nameInkOf(tester, 'm'), isNot(DesktopChrome.muted));
       expect(find.byType(SuperTabMachinesPill), findsNothing);
 
@@ -264,7 +264,7 @@ void main() {
         labelOf(tester, 'm'),
         startsWith('Studio Mac, Late, Owned by owner'),
       );
-      expect(textsOf('m'), ['Studio Mac', 'O']);
+      expect(textsOf('m'), ['~', 'Studio Mac', 'O']);
 
       semantics.dispose();
       await tester.pumpWidget(const SizedBox());
@@ -318,7 +318,7 @@ void main() {
         const tip = 'Offline · Owned by owner';
         expect(tipOf(tester, 'm'), tip);
         expect(labelOf(tester, 'm'), 'Studio Mac, Offline, $tip');
-        expect(textsOf('m'), ['Studio Mac', 'O']);
+        expect(textsOf('m'), ['~', 'Studio Mac', 'O']);
         expect(find.byType(SuperTabMachinesPill), findsNothing);
 
         // Opened, it stays open: saved with the Swarm's other sidebar state.
@@ -429,7 +429,7 @@ void main() {
         const tip = 'Refreshing… · Owned by owner';
         expect(tipOf(tester, 'far'), tip);
         expect(labelOf(tester, 'far'), 'Far Mac, Refreshing, $tip');
-        expect(textsOf('far'), ['Far Mac', 'O']);
+        expect(textsOf('far'), ['~', 'Far Mac', 'O']);
 
         gate.complete();
         await landed(tester);
