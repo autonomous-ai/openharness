@@ -310,6 +310,21 @@ describe('Super Tab native delivery handoff', () => {
       expect(reads).toHaveLength(1)
       expect(String(vi.mocked(t.core.turns.deliver).mock.calls[1]?.[1])).toContain('Replying to Lead')
     })
+    it('never types a kept quote once the server refuses the held input, as when the agent left the conversation', async () => {
+      const t = setup({ replyTo: 'question-2', text: 'GO' })
+      serve(t, () => ({ messages: [earlier()], next: null }))
+      const host = t.open()
+      await host.tick()
+      expect(delivered(t)).toContain('Replying to Lead')
+      // Each try claims again; the server refuses a claim for an agent no longer in the conversation (deliveryAllowed).
+      const original = vi.mocked(t.call).getMockImplementation()!
+      vi.mocked(t.call).mockImplementation(async (method, path, body) => (body as Record<string, unknown> | undefined)?.type === 'claim'
+        ? { status: 403, body: { success: false, error: { code: 'DELIVERY_REVOKED', message: 'This instruction is no longer authorized.' } } }
+        : original(method, path, body))
+      t.event('rejected', 'team_waiting_busy')
+      await host.tick().catch(() => {})
+      expect(t.core.turns.deliver).toHaveBeenCalledTimes(1)
+    })
     it.each([
       ['the server does not show it to this agent', { messages: [], next: null }],
       ['it is another agent\'s private notice', { messages: [earlier({ source: { kind: 'agent-only' }, recipientIds: ['someone-else'] })], next: null }],
