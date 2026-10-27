@@ -79,6 +79,7 @@ class _SwarmPageState extends State<SwarmPage> {
         Navigator.of(context).push(
           phoneRoute(
             (_) => SwarmProjectPage(swarmId: swarmId, projectId: projectId),
+            listensForItself: true,
           ),
         ),
       );
