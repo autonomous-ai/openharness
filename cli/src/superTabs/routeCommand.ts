@@ -74,7 +74,7 @@ function memberRefusals(running: boolean | null, quota: Probe['quota'], tools: s
     ...(quota.leftPercent === 0 ? [EXHAUSTED_WINDOW] : []),
   ]
 }
-export const active = (assignment: unknown) => { const a = object(assignment); return !!a.id && !ENDED_WORK.includes(String(a.status)) }
+const active = (assignment: unknown) => { const a = object(assignment); return !!a.id && !ENDED_WORK.includes(String(a.status)) }
 const list = (value: unknown) => Array.isArray(value) ? value.map(object) : []
 /** The Lead's machine, for the task's folder; replaced in tests. */
 interface FolderReader { describe: typeof describeScmProject; isDirectory: (path: string) => Promise<boolean> }

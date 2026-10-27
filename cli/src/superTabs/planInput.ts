@@ -5,7 +5,7 @@
  * (routeCommand.ts), so the plan never offers what the route would refuse. Only new agents are planned, not idle members. */
 import { requiredToolReason, startRequirements } from './capacity.js'
 import { API_BUILDERS, breaks, floorFor, KIND_WORD, liftEffort, quotaOf2, SIZES, type Assessment, type Level, type Policy, type Size, type SwarmRule } from './route.js'
-import { active, LOCAL_FRESH_MS, OFFLINE, servedModels, STALLED, stalled, takesBuilder, unreadyPool } from './routeCommand.js'
+import { LOCAL_FRESH_MS, OFFLINE, servedModels, STALLED, stalled, takesBuilder, unreadyPool } from './routeCommand.js'
 import { identifier, object } from './wire.js'
 
 type Json = Record<string, unknown>
@@ -76,7 +76,10 @@ function familyOf(configuration: Json, gridModels: Set<string>): string | null {
 export function planSetup(input: { state: Json; policy: Policy; leadId: string; request: PlanRequest; githubApp: boolean; now: number }): PlanSetup {
   const { state, policy, leadId, request, githubApp, now } = input
   const conversations = list(state.conversations)
-  const open = conversations.filter(c => c.leadId === leadId && c.id !== 'lead' && c.archived !== true && c.task && !active(c.assignment))
+  // Open work: a defined group no one has been given yet, or whose agent was lost, which the Lead hands on. Finished, cancelled
+  // and stopped work is not planned again, nor work still running or in review.
+  const waiting = (assignment: unknown) => { const a = object(assignment); return !a.id || a.status === 'lost' }
+  const open = conversations.filter(c => c.leadId === leadId && c.id !== 'lead' && c.archived !== true && c.task && waiting(c.assignment))
   const openIds = new Set(open.map(c => String(c.id)))
   // Rules bind only their own project's groups; a Mac's Harness Team account is that Mac, so a machines rule naming the Mac
   // allows it too (routeTask).

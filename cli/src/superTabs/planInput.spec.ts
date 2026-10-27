@@ -22,11 +22,12 @@ describe('parsePlanRequest', () => {
 })
 
 describe('planSetup', () => {
-  it('plans the Lead\'s open groups: not archived, defined, with no work running', () => {
+  it('plans the Lead\'s open groups: defined and not archived, never assigned or with their agent lost', () => {
+    const work = (status: string) => ({ assignment: { id: status, agentId: 'x', status } })
     const s = setup(state({ conversations: [{ id: 'lead', leadId: 'lead1', title: 'Lead' }, group('g1'),
-      group('g2', { assignment: { id: 'a', agentId: 'x', status: 'working' } }), group('g3', { archived: true }),
-      group('g4', { task: null }), group('g5', { leadId: 'someone else' }), group('g6', { assignment: { id: 'b', agentId: 'y', status: 'done' } })] }))
-    expect((s.instance.tasks as Json[]).map(t => t.id)).toEqual(['g1', 'g6'])
+      group('g2', work('working')), group('g3', { archived: true }), group('g4', { task: null }), group('g5', { leadId: 'someone else' }),
+      group('g6', work('done')), group('g7', work('lost')), group('g8', work('cancelled')), group('g9', work('review'))] }))
+    expect((s.instance.tasks as Json[]).map(t => t.id)).toEqual(['g1', 'g7'])
   })
 
   it('takes the Lead\'s assessment, and marks a group without one as an estimate at medium', () => {
