@@ -12,6 +12,7 @@ import { errorHandler } from '../src/middlewares/errorHandler.js'
 import { SuperTabStore } from '../src/superTabs/store.js'
 import type { AuthUser } from '../src/lib/ssoAuth.js'
 import type { Command } from '../src/superTabs/commands.js'
+import { migrateOrgs, rollbackOrgs } from '../src/superTabs/migration/orgs.js'
 
 // Teams above Swarms (docs/plans/2026-10-27-swarm-teams.md): every route, authorization and Mongo transaction is real.
 let replica: MongoMemoryReplSet, db: PrismaClient, store: SuperTabStore, app: FastifyInstance
@@ -19,7 +20,8 @@ let replica: MongoMemoryReplSet, db: PrismaClient, store: SuperTabStore, app: Fa
 const user = (n: number, email: string): AuthUser => ({ sub: `30000000000000000000000${n}`, email, autonomousEnv: 'prod', role: 'user' })
 const owner = user(1, 'owner@example.com'), peer = user(2, 'peer@example.com'), other = user(3, 'other@elsewhere.test'),
   admin = user(4, 'admin@example.com'), member = user(5, 'member@example.com')
-const accounts = [owner, peer, other, admin, member]
+const legacyOwner = user(6, 'legacy-owner@example.com'), legacyPeer = user(7, 'legacy-peer@example.com')
+const accounts = [owner, peer, other, admin, member, legacyOwner, legacyPeer]
 const call = (method: 'GET' | 'POST' | 'DELETE', url: string, as: AuthUser, body?: object) =>
   app.inject({ method, url, headers: { authorization: `Bearer ${as.sub}` }, ...(body ? { payload: body } : {}) })
 const run = async (tab: string, command: Command, as = owner) => {
@@ -260,5 +262,77 @@ describe('a machine contributed to Swarms of two Teams', () => {
     expect(await lookup(here, 'shared-mac')).toEqual([])
     await contribute(elsewhere, 'shared-mac')
     expect(await lookup(here, 'shared-mac')).toEqual(['shared-mac'])
+  })
+})
+
+describe('the migration of today\'s Swarms into Teams, and its undo', () => {
+  /** A Swarm as it was before Teams: no Team on its row or head, and no Team of its owner. */
+  async function legacy(as: AuthUser, name: string) {
+    const tab = await create(as, name)
+    const head = await db.swarmHead.findUniqueOrThrow({ where: { id: `${tab}:head` } })
+    const { orgId: _orgId, ...data } = head.data as Record<string, unknown>
+    await db.swarmHead.update({ where: { id: head.id }, data: { data: data as never } })
+    await db.superTab.update({ where: { id: tab }, data: { orgId: null } })
+    await db.swarmOrgMember.deleteMany({ where: { userId: as.sub } })
+    await db.swarmOrg.deleteMany({ where: { ownerId: as.sub } })
+    return tab
+  }
+
+  it('dry-runs without writing, then puts each owner\'s Swarms in one Team with everyone else a guest, once; the undo restores today', async () => {
+    const first = await legacy(legacyOwner, 'Legacy one'), second = await legacy(legacyOwner, 'Legacy two')
+    await invite(first, legacyPeer, legacyOwner)
+    const before = await call('GET', `/api/super-tabs/${second}/parts`, legacyOwner)
+
+    const dry = await migrateOrgs(db, { apply: false })
+    expect(dry.swarms).toBe(2)
+    expect(dry.orgsCreated).toBe(1)
+    expect(await db.superTab.count({ where: { id: { in: [first, second] }, orgId: { not: null } } })).toBe(0)
+    expect(await db.swarmOrg.count({ where: { ownerId: legacyOwner.sub } })).toBe(0)
+
+    const applied = await migrateOrgs(db, { apply: true })
+    expect(applied).toMatchObject({ swarms: 2, orgsCreated: 1, guestsAdded: 1, failed: [] })
+    const [ownerOrg] = await orgsOf(legacyOwner)
+    expect(ownerOrg).toMatchObject({ name: 'Legacy one', role: 'owner' })
+    expect(ownerOrg!.swarms.map(s => s.id).sort()).toEqual([first, second].sort())
+    const peerOrgs = await orgsOf(legacyPeer)
+    expect(peerOrgs.map(o => [o.id, o.role, o.swarms.map(s => s.id)])).toEqual([[ownerOrg!.id, 'guest', [first]]])
+    // Nobody gains or loses access.
+    expect((await call('GET', `/api/super-tabs/${first}/parts`, legacyPeer)).statusCode).toBe(200)
+    expect((await call('GET', `/api/super-tabs/${second}/parts`, legacyPeer)).statusCode).toBe(403)
+    expect((await call('GET', `/api/super-tabs/${second}/parts`, legacyOwner)).json().data.members).toEqual(before.json().data.members)
+    expect((await call('GET', `/api/super-tabs/${second}/parts`, legacyOwner)).json().data.head.data.orgId).toBe(ownerOrg!.id)
+
+    expect(await migrateOrgs(db, { apply: true })).toMatchObject({ swarms: 0, orgsCreated: 0, guestsAdded: 0 })
+
+    const undone = await rollbackOrgs(db, { apply: true })
+    expect(undone.failed).toEqual([])
+    expect(await db.superTab.count({ where: { id: { in: [first, second] }, orgId: { not: null } } })).toBe(0)
+    expect((await call('GET', `/api/super-tabs/${second}/parts`, legacyOwner)).json().data.head.data.orgId).toBeUndefined()
+    expect(await db.swarmOrgMember.count({ where: { userId: { in: [legacyOwner.sub, legacyPeer.sub] } } })).toBe(0)
+    expect((await call('GET', `/api/super-tabs/${first}/parts`, legacyPeer)).statusCode).toBe(200)
+  })
+
+  it('serves a Swarm without a Team by its own membership until the switch is on, then refuses and stops listing it', async () => {
+    const tab = await legacy(legacyOwner, 'Before Teams')
+    expect((await call('GET', `/api/super-tabs/${tab}/parts`, legacyOwner)).statusCode).toBe(200)
+    process.env.SWARM_TEAMS_REQUIRED = '1'
+    try {
+      const reply = await call('GET', `/api/super-tabs/${tab}/parts`, legacyOwner)
+      expect(reply.statusCode).toBe(403)
+      expect(JSON.stringify(reply.json())).toContain('ORG_ACCESS_REVOKED')
+      expect((await listed(legacyOwner)).map(r => r.id)).not.toContain(tab)
+    } finally { delete process.env.SWARM_TEAMS_REQUIRED }
+    await migrateOrgs(db, { apply: true })
+    await rollbackOrgs(db, { apply: true })
+  })
+
+  it('lists the machines that would serve two Teams afterwards, before anything is written', async () => {
+    const mine = await legacy(legacyOwner, 'Mine'), theirs = await legacy(legacyPeer, 'Theirs')
+    for (const tabId of [mine, theirs]) await db.swarmMachine.create({ data: { id: `${tabId}:machine:both`, tabId, key: 'both-mac', version: 1,
+      changedAt: new Date(), ordinal: 0, data: {}, machineId: 'both-mac', contributed: true, cleanupOwnerIds: [] } })
+    const dry = await migrateOrgs(db, { apply: false })
+    expect(dry.anomalies.machinesInTwoTeams).toContainEqual({ machineId: 'both-mac', tabIds: [mine, theirs].sort() })
+    await migrateOrgs(db, { apply: true })
+    await rollbackOrgs(db, { apply: true })
   })
 })
