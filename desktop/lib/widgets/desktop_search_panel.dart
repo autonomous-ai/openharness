@@ -94,8 +94,12 @@ class DesktopSearchPanel extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     grid.AppTheme.watch(context);
-    // A phone's buttons are a finger's size; a mouse keeps 32.
-    final button = workspaceIsCompact(context) ? kFingerTarget : 32.0;
+    // A phone's buttons are a finger's size; a mouse keeps 32. On a phone the
+    // three glyphs share one size, and the row's right inset puts Close's glyph
+    // as far from the edge as the search glyph is on the left.
+    final compact = workspaceIsCompact(context);
+    final button = compact ? kFingerTarget : 32.0;
+    final glyph = compact ? 20.0 : 18.0;
     return DesktopChrome(
       child: Align(
         alignment: Alignment.topCenter,
@@ -150,7 +154,12 @@ class DesktopSearchPanel extends StatelessWidget {
                     ),
                   ),
                 Padding(
-                  padding: const EdgeInsets.fromLTRB(24, 12, 16, 8),
+                  padding: EdgeInsets.fromLTRB(
+                    24,
+                    12,
+                    compact ? 24 - (kFingerTarget - glyph) / 2 : 16,
+                    8,
+                  ),
                   child: Row(
                     children: [
                       Icon(
@@ -190,7 +199,7 @@ class DesktopSearchPanel extends StatelessWidget {
                                 },
                                 icon: Icon(
                                   AppIcons.circleX,
-                                  size: 16,
+                                  size: compact ? glyph : 16,
                                   color: DesktopChrome.muted,
                                 ),
                               ),
@@ -211,9 +220,9 @@ class DesktopSearchPanel extends StatelessWidget {
                                     onRefocus();
                                   }
                                 : null,
-                            icon: const AppPaneIcon(
+                            icon: AppPaneIcon(
                               AppPaneSymbol.splitRight,
-                              size: 18,
+                              size: glyph,
                             ),
                           ),
                         ),
@@ -222,7 +231,7 @@ class DesktopSearchPanel extends StatelessWidget {
                         key: const ValueKey('search-close'),
                         tooltip: 'Close search',
                         onPressed: onClose,
-                        icon: const Icon(AppIcons.close, size: 18),
+                        icon: Icon(AppIcons.close, size: glyph),
                       ),
                     ],
                   ),
