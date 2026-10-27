@@ -5,6 +5,7 @@ import 'package:flutter/services.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import 'package:harness_mobile/phone/phone_navigation.dart';
+import 'package:harness_mobile/phone/phone_shell_scope.dart';
 import 'package:harness_mobile/phone/settings_row.dart';
 import 'package:harness_mobile/phone/tty.dart';
 import 'package:harness_mobile/phone/tty_controls.dart';
@@ -21,6 +22,17 @@ import 'swarm_row.dart';
 import 'swarm_session.dart';
 import 'swarm_team_line.dart';
 import 'team_glance.dart';
+
+/// Swarm Home from anywhere in the shell: every page closed and Swarm Home
+/// the root again ([PhoneShellScope.onShowSwarm]). Without the shell — a
+/// page pumped on its own — a Swarm page over [context]'s.
+void openSwarmHome(BuildContext context) {
+  if (PhoneShellScope.maybeOf(context)?.onShowSwarm case final show?) {
+    show();
+    return;
+  }
+  unawaited(Navigator.of(context).push(phoneRoute((_) => const SwarmPage())));
+}
 
 /// Swarm Home: what every Swarm of the account asks of the person ("Needs
 /// you"), one thing open at a time; Chat with PM, one per project; then the

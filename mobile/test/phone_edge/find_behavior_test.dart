@@ -57,7 +57,11 @@ void main() {
       FakeTranscriber stt,
     })
   >
-  openFind(WidgetTester tester, {bool handshaken = false}) async {
+  openFind(
+    WidgetTester tester, {
+    bool handshaken = false,
+    VoidCallback? onShowSwarm,
+  }) async {
     setPhone(tester, largePhone);
     final app = edgeApp(
       conn: EdgeConn(const {}, machine)..handshaken = handshaken,
@@ -93,6 +97,7 @@ void main() {
       PhoneShellScope(
         onMachineLinked: (_) {},
         onOpenAgent: (machineId, agentId) => opened.add((machineId, agentId)),
+        onShowSwarm: onShowSwarm,
         child: phoneApp(
           Scaffold(
             body: TerminalSearchOverlay(
@@ -290,6 +295,27 @@ void main() {
     expect(find.byType(SwarmPage), findsOneWidget);
     // Outside a signed-in shell there is no account's Swarm to read: the page says so.
     expect(find.byKey(const ValueKey('swarm-unavailable')), findsOneWidget);
+    await close(tester, app);
+  });
+
+  testWidgets('in the shell, Swarm goes back to Swarm Home, the root', (
+    tester,
+  ) async {
+    addTearDown(() => experimentalFeaturesStore.value = const {});
+    experimentalFeaturesStore.value = {PhoneExperiment.swarm};
+    var shown = 0;
+    final (:app, :closes, opened: _, voice: _, stt: _) = await openFind(
+      tester,
+      onShowSwarm: () => shown++,
+    );
+    await tester.enterText(find.byType(TextField), 'swar');
+    await frames(tester);
+    await tester.tap(find.text('Swarm', findRichText: true).last);
+    await frames(tester, count: 6);
+
+    expect(closes, isNotEmpty);
+    expect(shown, 1);
+    expect(find.byType(SwarmPage), findsNothing, reason: 'not a page over it');
     await close(tester, app);
   });
 

@@ -1,8 +1,11 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness_mobile/core/models.dart';
 import 'package:harness_mobile/phone/agent_home.dart';
 import 'package:harness_mobile/phone/phone_shell.dart';
+import 'package:harness_mobile/phone/phone_shell_scope.dart';
 import 'package:harness_mobile/phone/settings_page.dart';
 import 'package:harness_mobile/settings/experimental_features.dart';
 import 'package:harness_mobile/swarm/swarm_page.dart';
@@ -116,6 +119,29 @@ void main() {
     await frames(tester);
     expect(find.byType(SwarmPage), findsOneWidget);
     expect(find.byType(AgentHome), findsNothing);
+  });
+
+  testWidgets('Swarm asked for from the terminal (its mark, Find) closes '
+      'every page and puts Swarm Home at the root', (tester) async {
+    await open(tester);
+    await drawerTo(tester, 'swarm-drawer-harness');
+    final terminal = tester.element(find.byType(AgentHome));
+    unawaited(
+      Navigator.of(terminal).push(
+        MaterialPageRoute<void>(builder: (_) => const Text('a page over it')),
+      ),
+    );
+    await frames(tester);
+    expect(find.text('a page over it'), findsOneWidget);
+
+    PhoneShellScope.maybeOf(terminal)!.onShowSwarm!();
+    await frames(tester);
+
+    expect(find.text('a page over it'), findsNothing);
+    expect(find.byType(SwarmPage), findsOneWidget);
+    expect(key('swarm-menu'), findsOneWidget, reason: 'the root, not pushed');
+    expect(find.byType(AgentHome), findsNothing);
+    expect(find.byType(AgentHome, skipOffstage: false), findsOneWidget);
   });
 
   testWidgets('an agent opened from its notice opens on the terminal', (

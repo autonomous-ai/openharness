@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness_mobile/notify/system_notices.dart';
+import 'package:harness_mobile/phone/phone_shell_scope.dart';
 import 'package:harness_mobile/settings/experimental_features.dart';
 import 'package:harness_mobile/swarm/swarm_conversation_page.dart';
 import 'package:harness_mobile/swarm/swarm_mark.dart';
@@ -615,6 +616,30 @@ void main() {
       await tester.tap(key('swarm-mark'));
       await tester.pumpAndSettle();
       expect(find.byType(SwarmPage), findsOneWidget);
+    });
+
+    testWidgets('in the shell, goes back to Swarm Home rather than over it', (
+      tester,
+    ) async {
+      var shown = 0;
+      final host = await pump(
+        tester,
+        backend(),
+        PhoneShellScope(
+          onMachineLinked: (_) {},
+          onOpenAgent: (_, _) {},
+          onShowSwarm: () => shown++,
+          child: const Scaffold(body: Center(child: SwarmMark())),
+        ),
+      );
+      await host.session!.inbox.refresh();
+      await tester.pumpAndSettle();
+
+      await tester.tap(key('swarm-mark'));
+      await tester.pumpAndSettle();
+
+      expect(shown, 1);
+      expect(find.byType(SwarmPage), findsNothing);
     });
 
     testWidgets('is not there while Swarm is off', (tester) async {

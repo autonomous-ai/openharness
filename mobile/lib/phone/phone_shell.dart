@@ -198,6 +198,12 @@ class _PhoneShellState extends State<PhoneShell> with WidgetsBindingObserver {
     _home.showHarness();
   }
 
+  /// Swarm Home, from the terminal's Swarm mark or Find: back to the root.
+  void _showSwarm() {
+    _navigator.currentState?.popUntil((route) => route.isFirst);
+    _home.showSwarm();
+  }
+
   /// The computer whose sign-in QR (`harness login --qr`) the welcome screen read before this phone
   /// was signed in ([AppNotifier.pendingComputerSignIn]): the approval it asked for, now that it can
   /// be given. Spent here whatever the answer — a code is one computer's sign-in, once.
@@ -421,6 +427,7 @@ class _PhoneShellState extends State<PhoneShell> with WidgetsBindingObserver {
     return PhoneShellScope(
       onMachineLinked: _followLinkedMachine,
       onOpenAgent: _openAgentAtHome,
+      onShowSwarm: _showSwarm,
       // Rebuilt when the root switches, so back from Harness can reach Swarm Home.
       child: ListenableBuilder(
         listenable: _home,
