@@ -258,7 +258,7 @@ export class SuperTabHost {
     this.log = options.log ?? (message => console.warn(`[super-tabs] ${message}`))
     this.terminal = new TerminalHost(core, machineId, { now: this.now, log: this.log })
     this.limitResume = new LimitResume(core, machineId, { now: this.now, log: this.log,
-      owns: async (tabId, assignmentId, harnessId) => (await this.sources.feed.refresh()).assignments
+      owns: async (tabId, assignmentId, harnessId) => (await this.sources.feed.fresh()).assignments
         .some(a => a.tabId === tabId && a.assignmentId === assignmentId && a.harnessId === harnessId) })
     this.sources = options.sources ?? { feed: new HostFeed(core, machineId, { now: this.now }), reads: new SwarmReads(core) }
     this.journal = { version: 1, machineId, entries: {} }
