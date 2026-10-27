@@ -76,7 +76,15 @@ async function swarm() {
   const member = async () => (await timed.read(owner, tab)).state.agents.find(a => a.id === worker)!
   const lines = async () => (await db.superTabMessage.findMany({ where: { tabId: tab }, orderBy: { sequence: 'asc' } }))
     .filter(m => (m.source as { kind?: string } | null)?.kind === 'idle-stop')
-  return { timed, tab, execute, lead, group, worker, harness, observe, member, lines,
+  /** Marks an agent as the Swarm started it, with [patch] (a role), as agent.started and agent.start record them. */
+  const started = async (agentId: string, patch: Record<string, unknown> = {}) => {
+    const part = await db.swarmAgent.findFirstOrThrow({ where: { tabId: tab, key: agentId } })
+    await db.swarmAgent.update({ where: { id: part.id }, data: { data: { ...part.data as object, ...patch,
+      startedSession: { creationId: `creation-${agentId}`, sessionId: `session-${agentId}`, createdAt: new Date(now).toISOString() } } } })
+  }
+  /** Its host took every message queued so far, as a running host does. */
+  const delivered = () => db.superTabDelivery.updateMany({ where: { tabId: tab, status: 'queued' }, data: { status: 'delivered' } })
+  return { timed, tab, execute, lead, group, worker, harness, observe, member, lines, add, started, delivered,
     clock: { get now() { return now }, set now(value: number) { now = value } } }
 }
 
@@ -121,6 +129,40 @@ describe('a worker left idle', () => {
       machineId: 'test-host', machineOwnerId: host.sub, assignmentId: null, membershipGeneration: 'g', authorKind: 'person', authorId: owner.sub, authorGeneration: 'g' } })
     await f.timed.deliveries(host, f.tab, f.lead)
     expect((await f.member()).workDecision).toBe('awaiting')
+  })
+
+  it('is kept, as a Reviewer, while the work it reviews is open, even once its review group was archived', async () => {
+    const f = await swarm()
+    const reviewed = String((await f.execute({ type: 'conversation.create', title: 'Parser v2', brief: 'More parsing',
+      checks: [{ description: 'Verified', independent: false }] })).result.conversationId)
+    const builder = await f.add(reviewed, 'test-host', randomUUID(), 'Builder')
+    const work = String((await f.execute({ type: 'work.assign', conversationId: reviewed, agentId: builder })).result.assignmentId)
+    const review = String((await f.execute({ type: 'conversation.create', title: 'Review: Parser v2', brief: 'Review it', reviewOf: reviewed,
+      checks: [{ description: 'Verdict', independent: false }] })).result.conversationId)
+    const reviewerHarness = randomUUID()
+    const reviewer = await f.add(review, 'test-host', reviewerHarness, 'Reviewer')
+    await f.started(reviewer, { role: 'reviewer' })
+    const verdict = String((await f.execute({ type: 'work.assign', conversationId: review, agentId: reviewer })).result.assignmentId)
+    await f.execute({ type: 'work.cancel', conversationId: review, assignmentId: verdict, reason: 'Verdict given' })
+    await f.execute({ type: 'conversation.archive', conversationId: review, archived: true })
+    // Asleep, as the hourly sweep leaves an archived group once its Lead read its reports: ordinary loads leave it out.
+    const part = await db.swarmGroup.findFirstOrThrow({ where: { tabId: f.tab, key: review } })
+    await db.swarmGroup.update({ where: { id: part.id }, data: { dormant: true, data: { ...part.data as object, dormant: true } } })
+    await f.delivered()
+    const reviewerOf = async () => (await f.timed.read(owner, f.tab)).state.agents.find(a => a.id === reviewer)!
+    const poll = async () => {
+      await f.observe('test-host', [f.harness.worker, reviewerHarness], { harnessUncommitted: { [f.harness.worker]: false, [reviewerHarness]: false } })
+      await f.timed.deliveries(host, f.tab, f.lead)
+    }
+    f.clock.now += 20 * MINUTE
+    await poll()
+    expect((await reviewerOf()).workDecision).not.toBe('stop')
+    // The reviewed work ends: no re-check can come, and the Reviewer has been idle long enough.
+    await f.execute({ type: 'work.cancel', conversationId: reviewed, assignmentId: work, reason: 'Dropped' })
+    await f.delivered()
+    f.clock.now += MINUTE
+    await poll()
+    expect((await reviewerOf()).workDecision).toBe('stop')
   })
 
   it('is kept once the owner turned tidying off', async () => {

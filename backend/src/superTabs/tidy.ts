@@ -14,9 +14,10 @@ const REPORT_FRESH_MS = 2 * 60_000
 const FINISHED = ['done', 'cancelled', 'stopped', 'lost']
 const time = (value: string | undefined) => value === undefined ? undefined : Date.parse(value)
 
-/** The groups a worker belongs to or worked in. */
-const groupsOf = (state: SuperTabState, worker: Agent) =>
-  state.conversations.filter(c => c.agentIds.includes(worker.id) || c.assignment?.agentId === worker.id)
+/** The groups a worker belongs to or worked in, with those asleep that the caller read for it (`asleep`). */
+const groupsOf = (state: SuperTabState, worker: Agent, asleep: readonly Conversation[]) =>
+  [...state.conversations, ...asleep.filter(g => !state.conversations.some(c => c.id === g.id))]
+    .filter(c => c.agentIds.includes(worker.id) || c.assignment?.agentId === worker.id)
 
 /** When the worker last had anything to do: its start, its Lead's keep, its own progress, or a message in one of its groups. */
 function idleSince(state: SuperTabState, worker: Agent, groups: Conversation[]): number {
@@ -34,6 +35,15 @@ function recheckPending(state: SuperTabState, reviewer: Agent, groups: Conversat
   })
 }
 
+/** A worker whose task a usage limit took waits to take it back (work.resume) until that task is resumed, handed on or
+ *  cancelled, however late the resume comes after the reset (review of #1807). A task not loaded is taken as waiting. */
+function waitingToResume(state: SuperTabState, worker: Agent): boolean {
+  const lost = worker.lostTask
+  if (!lost?.resumeAt) return false
+  const group = state.conversations.find(c => c.id === lost.conversationId)
+  return !group || (group.assignment?.id === lost.assignmentId && group.assignment.status === 'lost')
+}
+
 /** Only a host that said, in a fresh report, that the session runs with nothing uncommitted vouches for stopping it. */
 function reportedClean(state: SuperTabState, worker: Agent, now: number): boolean {
   const report = state.machines?.find(m => m.machineId === worker.machineId)?.observation
@@ -45,9 +55,12 @@ function reportedClean(state: SuperTabState, worker: Agent, now: number): boolea
  * Marks for stopping every worker of the project idle for IDLE_STOP_MS: started by the Swarm (a person's own session is
  * theirs to close), not a Lead, with no active task, no message waiting for it (`busy`), its host reporting nothing
  * uncommitted, not waiting to resume after a usage limit, and, for a Reviewer, no re-check pending. Each gets one quiet
- * line, to nobody, in its most recent group. Run on its Lead's poll, which knows what is waiting.
+ * line, to nobody, in its most recent group. Run on its Lead's poll, which knows what is waiting. `asleep` are the groups
+ * of its Reviewers that ordinary loads leave out: an archived review group still says whose re-check may come (review of
+ * #1807).
  */
-export function stopIdleWorkers(state: SuperTabState, projectId: string, now: number, busy: ReadonlySet<string>): MessageDraft[] {
+export function stopIdleWorkers(state: SuperTabState, projectId: string, now: number, busy: ReadonlySet<string>,
+  asleep: readonly Conversation[] = []): MessageDraft[] {
   if (state.tidy === false) return []
   const project = projectsOf(state).find(p => p.id === projectId)
   const leadId = project && state.conversations.find(c => c.id === project.leadConversationId)?.leadId
@@ -57,8 +70,8 @@ export function stopIdleWorkers(state: SuperTabState, projectId: string, now: nu
   for (const worker of state.agents) {
     if (!worker.startedSession || worker.workDecision === 'stop' || busy.has(worker.id) || agentProjectId(state, worker) !== projectId) continue
     if (state.conversations.some(c => c.leadId === worker.id || (activeWork(c) && c.assignment!.agentId === worker.id))) continue
-    if (worker.lostTask?.resumeAt && Date.parse(worker.lostTask.resumeAt) > now) continue
-    const groups = groupsOf(state, worker)
+    if (waitingToResume(state, worker)) continue
+    const groups = groupsOf(state, worker, asleep)
     const since = idleSince(state, worker, groups)
     if (!(now - since >= IDLE_STOP_MS) || recheckPending(state, worker, groups) || !reportedClean(state, worker, now)) continue
     worker.workDecision = 'stop'

@@ -87,8 +87,22 @@ describe('stopping idle workers', () => {
     const stopping = swarm({ agents: [worker({ workDecision: 'stop', releaseId: 'r1' })] })
     expect(stopIdleWorkers(stopping, 'lead', at, new Set())).toEqual([])
     expect(target(stopping).releaseId).toBe('r1')
-    const limited = swarm({ agents: [worker({ lostTask: { conversationId: 'g1', assignmentId: 'a1', reason: 'limit', at: START, resumeAt: iso(at + MINUTE) } })] })
+    const limited = swarm({ agents: [worker({ lostTask: { conversationId: 'g1', assignmentId: 'a1', reason: 'limit', at: START, resumeAt: iso(at + MINUTE) } })],
+      groups: [group({ assignment: done({ status: 'lost' }) })] })
     expect(stopIdleWorkers(limited, 'lead', at, new Set())).toEqual([])
+  })
+
+  it('keeps a worker waiting out a usage limit past its reset time, until its task resumes or is handed on', () => {
+    const lostTask = { conversationId: 'g1', assignmentId: 'a1', reason: 'limit', at: START, resumeAt: iso(START + MINUTE) }
+    const lost = () => group({ assignment: done({ status: 'lost', lost: { reason: 'limit', at: START, resumeAt: iso(START + MINUTE) } }) })
+    // The reset passed long ago and the resume is late: its task still waits for it.
+    const late = swarm({ agents: [worker({ lostTask })], groups: [lost()], reportAt: at + 10 * MINUTE })
+    expect(stopIdleWorkers(late, 'lead', at + 10 * MINUTE, new Set())).toEqual([])
+    // Handed on to another attempt, or cancelled: nothing waits for it any more.
+    const handed = swarm({ agents: [worker({ lostTask })], groups: [group({ assignment: done({ id: 'a2', agentId: 'other', status: 'done' }) })] })
+    expect(stopIdleWorkers(handed, 'lead', at, new Set())).toHaveLength(1)
+    const cancelled = swarm({ agents: [worker({ lostTask })], groups: [group({ assignment: done({ status: 'cancelled' }) })] })
+    expect(stopIdleWorkers(cancelled, 'lead', at, new Set())).toHaveLength(1)
   })
 
   it('keeps a Reviewer while the work it reviews is still open, and stops it once that work is finished', () => {
