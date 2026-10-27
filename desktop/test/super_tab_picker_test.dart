@@ -1,7 +1,9 @@
+
 import 'dart:convert';
 import 'dart:io';
 import 'dart:ui' as ui;
 
+import 'package:flutter/gestures.dart' show kSecondaryMouseButton;
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
@@ -152,7 +154,10 @@ void main() {
     }
     await tester.ensureVisible(machine);
     await tester.pumpAndSettle();
-    await tester.tap(machine);
+    // A machine's details are in its right-click menu; a click expands it.
+    await tester.tap(machine, buttons: kSecondaryMouseButton);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Details').last);
     await tester.pumpAndSettle();
     await tester.tap(find.text('Attach running agent'));
     await tester.pumpAndSettle();

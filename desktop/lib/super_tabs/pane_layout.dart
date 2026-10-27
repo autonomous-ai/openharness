@@ -18,7 +18,6 @@ class SuperTabPaneLayout extends StatefulWidget {
     required this.onLeave,
     this.left,
     this.right,
-    this.board,
     this.storage,
   });
 
@@ -35,10 +34,6 @@ class SuperTabPaneLayout extends StatefulWidget {
       (available * drawerMaxFraction).clamp(0, rightWidth).toDouble();
   final Widget? left, right;
 
-  /// The leaderboard, a fixed column at the far right beside [right]; the
-  /// resizable panes share what is left.
-  final Widget? board;
-  static const boardWidth = 300.0;
   final Widget center;
   final VoidCallback onLeave;
   final LocalKeyValueStore? storage;
@@ -97,25 +92,7 @@ class _SuperTabPaneLayoutState extends State<SuperTabPaneLayout> {
   }
 
   @override
-  Widget build(BuildContext context) {
-    final board = widget.board;
-    if (board == null) return _panes();
-    return Row(
-      children: [
-        Expanded(child: _panes()),
-        SizedBox(
-          width: 1,
-          height: double.infinity,
-          child: ColoredBox(color: DesktopChrome.rim),
-        ),
-        SizedBox(
-          key: const ValueKey('super-board-pane'),
-          width: SuperTabPaneLayout.boardWidth,
-          child: board,
-        ),
-      ],
-    );
-  }
+  Widget build(BuildContext context) => _panes();
 
   Widget _panes() => LayoutBuilder(
     builder: (context, constraints) {
