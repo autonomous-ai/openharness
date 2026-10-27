@@ -197,9 +197,12 @@ class _SwarmConversationPageState extends State<SwarmConversationPage> {
     final project = snapshot?.projects
         .where((p) => p.id == group?.projectId)
         .firstOrNull;
+    // A chat not open to the person shows none of its questions either, even
+    // while the decisions read has not caught up.
     final decisions = [
       for (final need in session.inbox.needs)
-        if (need is SwarmDecisionNeed &&
+        if (group != null &&
+            need is SwarmDecisionNeed &&
             need.swarmId == widget.swarmId &&
             need.conversationId == widget.conversationId)
           need,

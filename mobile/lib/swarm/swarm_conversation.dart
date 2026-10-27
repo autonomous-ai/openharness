@@ -14,9 +14,14 @@ import 'swarm_request.dart';
 /// and new ones when the Swarm's read says the conversation moved past the
 /// last one shown (`lastMessageSequence`): no read of its own while nothing
 /// was posted. Keep the [reader] shown while this is on screen.
+///
+/// A conversation the Swarm's read no longer has hides its messages at once
+/// and is asked for by id, as a closed one is in no full read. One the person
+/// cannot read keeps nothing here: messages, draft and a post not confirmed.
 class SwarmConversation extends ChangeNotifier {
   SwarmConversation(this.reader, this.id) {
     reader.addListener(_swarmChanged);
+    reader.reads.addListener(_swarmChanged);
   }
 
   final SwarmReader reader;
@@ -32,8 +37,12 @@ class SwarmConversation extends ChangeNotifier {
   bool sending = false;
 
   SuperTabPage? _before;
-  bool _read = false, _disposed = false;
-  Future<void>? _reading, _readingOlder;
+  bool _read = false, _lost = false, _disposed = false;
+  Future<void>? _reading, _readingOlder, _locating;
+
+  /// Moves when what was read is dropped: a read asked for before then
+  /// answers nothing.
+  int _epoch = 0;
   String _draft = '';
 
   /// Agents mentioned in the draft, by id, with the token that names them.
@@ -100,41 +109,96 @@ class SwarmConversation extends ChangeNotifier {
     return [for (final agentId in group.agentIds) ?snapshot.agent(agentId)];
   }
 
+  /// The Swarm was read, changed or not.
   void _swarmChanged() {
     if (_disposed) return;
+    if (reader.accessRevoked) {
+      _lose();
+      return;
+    }
+    if (reader.snapshot == null) return;
     final group = conversation;
     if (group == null) {
-      // Gone, or no longer the person's: nothing of it stays shown.
-      if (messages.isNotEmpty &&
-          (reader.snapshot == null || reader.accessRevoked)) {
+      if (messages.isNotEmpty || _read) {
         _forget();
         notifyListeners();
       }
+      // Asked for by id until it is known unreadable; an ask that failed is
+      // made again at the Swarm's next read.
+      if (!_lost) unawaited(_locate());
       return;
     }
+    _lost = false;
     final tail = messages.lastOrNull?.sequence ?? 0;
-    if (_read && group.lastMessageSequence > tail) unawaited(load());
+    if (!_read || group.lastMessageSequence > tail) unawaited(load());
   }
 
+  /// Asks the reader for this conversation by id: a closed one comes back,
+  /// and [_swarmChanged] reads it; one the person cannot read is lost.
+  Future<void> _locate() => _locating ??= () async {
+    try {
+      if (!await reader.loadConversation(id) && !_disposed) {
+        _lost = true;
+        _lose();
+      }
+    } catch (_) {
+      // Not known either way: asked again at the Swarm's next read.
+    }
+  }().whenComplete(() => _locating = null);
+
+  /// Drops the messages read, and the answer of any read under way.
   void _forget() {
     messages = const [];
     _before = null;
     _read = false;
+    _epoch++;
+    _reading = null;
+    _readingOlder = null;
   }
 
-  /// The latest page the first time, then what came after the newest shown.
+  /// The person cannot read this conversation: nothing of it stays.
+  void _lose() {
+    final held =
+        messages.isNotEmpty ||
+        _read ||
+        _draft.isNotEmpty ||
+        _pending != null ||
+        error != null;
+    _forget();
+    _draft = '';
+    _mentions.clear();
+    _pending = null;
+    error = null;
+    if (held) notifyListeners();
+  }
+
+  /// The latest page the first time, then what came after the newest shown;
+  /// a conversation the Swarm's read does not have is asked for by id first.
   /// Joins a read under way.
-  Future<void> load() =>
-      _reading ??= _load(older: false).whenComplete(() => _reading = null);
+  Future<void> load() {
+    if (_disposed) return Future.value();
+    if (reader.snapshot != null && conversation == null) return _locate();
+    if (_reading case final reading?) return reading;
+    late final Future<void> reading;
+    reading = _load(older: false).whenComplete(() {
+      if (identical(_reading, reading)) _reading = null;
+    });
+    return _reading = reading;
+  }
 
   /// The page before the oldest shown.
   Future<void> loadOlder() {
     if (!hasOlder) return Future.value();
-    return _readingOlder ??= _load(older: true)
-        .whenComplete(() => _readingOlder = null);
+    if (_readingOlder case final reading?) return reading;
+    late final Future<void> reading;
+    reading = _load(older: true).whenComplete(() {
+      if (identical(_readingOlder, reading)) _readingOlder = null;
+    });
+    return _readingOlder = reading;
   }
 
   Future<void> _load({required bool older}) async {
+    final epoch = _epoch;
     try {
       final tail = messages.lastOrNull?.sequence;
       final before = _before;
@@ -145,7 +209,7 @@ class SwarmConversation extends ChangeNotifier {
           ? ''
           : '?after=$tail';
       final answer = superTabMap(await reader.request('GET', '$_path$query'));
-      if (_disposed) return;
+      if (_disposed || epoch != _epoch) return;
       final incoming = [
         for (final row in answer['messages'] as List)
           SuperTabMessage.fromJson(superTabMap(row)),
@@ -164,11 +228,11 @@ class SwarmConversation extends ChangeNotifier {
       _read = true;
       error = null;
     } on SuperTabFailure catch (failure) {
-      if (_disposed) return;
-      if (const {'FORBIDDEN', 'NOT_FOUND'}.contains(failure.code)) _forget();
+      if (_disposed || epoch != _epoch) return;
+      if (const {'FORBIDDEN', 'NOT_FOUND'}.contains(failure.code)) _lose();
       error = failure.message;
     } catch (_) {
-      if (_disposed) return;
+      if (_disposed || epoch != _epoch) return;
       error = 'Could not load messages. Try again.';
     }
     notifyListeners();
@@ -243,6 +307,7 @@ class SwarmConversation extends ChangeNotifier {
   void dispose() {
     _disposed = true;
     reader.removeListener(_swarmChanged);
+    reader.reads.removeListener(_swarmChanged);
     super.dispose();
   }
 }

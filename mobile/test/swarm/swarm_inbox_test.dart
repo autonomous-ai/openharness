@@ -1,5 +1,6 @@
 import 'package:fake_async/fake_async.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:harness_mobile/swarm/swarm_conversation.dart';
 import 'package:harness_mobile/swarm/swarm_inbox.dart';
 import 'package:harness_mobile/swarm/swarm_request.dart';
 
@@ -145,6 +146,45 @@ void main() {
     expect(i.reader('a'), isNull);
     expect(i.needs, isEmpty);
   });
+
+  test(
+    'a Swarm the person left takes its chat off a screen still holding it',
+    () async {
+      final fake = backend({
+        'a': [groupData('g1', title: 'Login', lastMessageSequence: 1)],
+      });
+      fake.routes['/api/super-tabs/a/conversations/g1/messages'] = (_) => {
+        'messages': [
+          {
+            'id': 'm1',
+            'conversationId': 'g1',
+            'text': 'private plan',
+            'sequence': 1,
+            'author': {'kind': 'agent', 'id': 'agent-builder', 'name': 'Nova'},
+          },
+        ],
+        'next': null,
+      };
+      final i = inbox(fake);
+      await i.refresh();
+      final held = i.reader('a')!;
+      final chat = SwarmConversation(held, 'g1');
+      addTearDown(chat.dispose);
+      await chat.load();
+      chat.draft = 'my reply';
+      expect(chat.messages, hasLength(1));
+
+      fake.routes['/api/super-tabs/list'] = (_) => {
+        'tabs': <Object>[],
+        'next': null,
+      };
+      await i.refresh();
+
+      expect(held.snapshot, isNull);
+      expect(chat.messages, isEmpty);
+      expect(chat.draft, isEmpty);
+    },
+  );
 
   test('work that starts waiting after the first read is news', () async {
     var status = 'working';

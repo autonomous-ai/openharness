@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness_mobile/swarm/swarm_conversation.dart';
 import 'package:harness_mobile/swarm/swarm_reader.dart';
@@ -277,6 +279,112 @@ void main() {
       expect(c.messages, isEmpty);
     },
   );
+
+  group('a chat a full read leaves out', () {
+    /// g1 as the first load lists it while [listed]; a change read answers
+    /// with a reload, as when the person's access moved.
+    ({FakeSwarm swarm, SwarmReader reader, void Function() leaveOut})
+    reloadRig() {
+      final r = rig();
+      var listed = true;
+      r.swarm.routes['/api/super-tabs/$tab/parts'] = (_) => {
+        ...firstLoad(
+          groups: [
+            if (listed)
+              groupData(
+                'g1',
+                title: 'Fix login',
+                agentIds: ['agent-lead', 'agent-builder'],
+                audience: [me, 'person-other'],
+                lastMessageSequence: 1,
+              ),
+          ],
+        ),
+        'members': [part(me, 1, person(me))],
+      };
+      r.swarm.routes[messages] = (_) => {
+        'messages': [message('m1', 1, text: 'private plan')],
+        'next': null,
+      };
+      return (
+        swarm: r.swarm,
+        reader: r.reader,
+        leaveOut: () {
+          listed = false;
+          r.swarm.routes['/api/super-tabs/$tab/changes'] = (_) => {
+            'reload': true,
+          };
+        },
+      );
+    }
+
+    test('and the person can no longer read loses its messages, draft and '
+        'unconfirmed post, and a late answer brings none back', () async {
+      final r = reloadRig();
+      r.swarm.routes['/api/super-tabs/$tab/commands'] = (_) =>
+          throw const SuperTabFailure('MACHINE_UNAVAILABLE', 'No computer.');
+      final c = await open(r.reader);
+      expect(c.messages.single.text, 'private plan');
+      c.draft = 'my reply';
+      await c.send();
+      expect(c.unconfirmed, isTrue);
+      final late = Completer<Object?>();
+      r.swarm.routes['$messages?after=1'] = (_) => late.future;
+      final reading = c.load();
+
+      r.leaveOut();
+      await r.reader.refresh();
+      await settle();
+
+      expect(c.conversation, isNull);
+      expect(
+        r.swarm.paths,
+        contains('/api/super-tabs/$tab/groups/g1'),
+        reason: 'a closed chat is left out too, so it is asked by id',
+      );
+      expect(c.messages, isEmpty);
+      expect(c.draft, isEmpty);
+      expect(c.unconfirmed, isFalse);
+
+      late.complete({
+        'messages': [message('m2', 2, text: 'more of the plan')],
+        'next': null,
+      });
+      await reading;
+      await settle();
+      expect(c.messages, isEmpty);
+    });
+
+    test(
+      'but can still read, as a closed one, keeps its draft and messages',
+      () async {
+        final r = reloadRig();
+        r.swarm.routes['/api/super-tabs/$tab/groups/g1'] = (_) => {
+          'group': part(
+            'g1',
+            9,
+            groupData(
+              'g1',
+              title: 'Fix login',
+              audience: [me, 'person-other'],
+              lastMessageSequence: 1,
+              dormant: true,
+            ),
+          ),
+        };
+        final c = await open(r.reader);
+        c.draft = 'my reply';
+
+        r.leaveOut();
+        await r.reader.refresh();
+        await settle();
+
+        expect(c.conversation?.closed, isTrue);
+        expect(c.messages.single.text, 'private plan');
+        expect(c.draft, 'my reply');
+      },
+    );
+  });
 
   group('Chat with PM', () {
     test(

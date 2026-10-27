@@ -366,6 +366,63 @@ void main() {
         findsOneWidget,
       );
     });
+
+    testWidgets('one the person can no longer read shows nothing of it, '
+        'its decision included', (tester) async {
+      final fake = backend();
+      final host = await pump(
+        tester,
+        fake,
+        const SwarmConversationPage(swarmId: tab, conversationId: 'g1'),
+      );
+      await tester.pumpAndSettle();
+      await tester.enterText(find.byType(TextField), 'my reply');
+      expect(find.text('Which name should the flag have?'), findsOneWidget);
+      expect(find.text('Ship it behind a flag?'), findsOneWidget);
+
+      // Taken out of g1: the Swarm is read again in full without it, and
+      // the decision list has not caught up yet.
+      final full = fake.routes['/api/super-tabs/$tab/parts']!(null)! as Map;
+      fake.routes['/api/super-tabs/$tab/parts'] = (_) => {
+        ...full,
+        'groups': [
+          for (final g in full['groups'] as List)
+            if ((g as Map)['key'] != 'g1') g,
+        ],
+      };
+      fake.routes['/api/super-tabs/$tab/changes'] = (_) => {'reload': true};
+      await host.session!.inbox.refresh();
+      await tester.pumpAndSettle();
+
+      expect(find.text('Which name should the flag have?'), findsNothing);
+      expect(find.text('Ship it behind a flag?'), findsNothing);
+      expect(find.text('my reply'), findsNothing);
+      expect(find.text('This chat is not open to you.'), findsOneWidget);
+    });
+
+    testWidgets('one in a Swarm the person left shows nothing of it', (
+      tester,
+    ) async {
+      final fake = backend();
+      final host = await pump(
+        tester,
+        fake,
+        const SwarmConversationPage(swarmId: tab, conversationId: 'g1'),
+      );
+      await tester.pumpAndSettle();
+      await tester.enterText(find.byType(TextField), 'my reply');
+
+      fake.routes['/api/super-tabs/list'] = (_) => {
+        'tabs': <Object>[],
+        'next': null,
+      };
+      await host.session!.inbox.refresh();
+      await tester.pumpAndSettle();
+
+      expect(find.text('Which name should the flag have?'), findsNothing);
+      expect(find.text('my reply'), findsNothing);
+      expect(find.text('This chat is not open to you.'), findsOneWidget);
+    });
   });
 
   group("Home's Swarm mark", () {

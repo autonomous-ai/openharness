@@ -219,9 +219,14 @@ class SwarmInbox extends ChangeNotifier {
     return reader;
   }
 
+  /// A Swarm off the list: what a screen still holds of it is taken back
+  /// ([SwarmReader.revoke]) before it is dropped.
   void _drop(String id) {
     _asks.remove(id)?.dispose();
-    _readers.remove(id)?.dispose();
+    _readers.remove(id)
+      ?..removeListener(_rebuild)
+      ..revoke()
+      ..dispose();
     _workSeen.remove(id);
   }
 

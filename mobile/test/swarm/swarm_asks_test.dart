@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness_mobile/swarm/swarm_asks.dart';
 import 'package:harness_mobile/swarm/swarm_reader.dart';
@@ -142,6 +144,69 @@ void main() {
     expect(r.asks.decisions.single.id, 'd1');
     expect(r.asks.error, isNull);
   });
+
+  test(
+    'a Swarm the reader may no longer read keeps none of its asks',
+    () async {
+      final r = rig(decisions: 1);
+      r.swarm.routes['/api/super-tabs/$tab/decisions?state=open'] = (_) => {
+        'decisions': [decisionRow('d1')],
+      };
+      r.swarm.routes['/api/super-tabs/$tab/mentions?state=waiting'] = (_) => {
+        'mentions': <Object>[],
+      };
+      await r.reader.refresh();
+      await settle();
+      expect(r.asks.decisions, hasLength(1));
+
+      const refused = SuperTabFailure(
+        'FORBIDDEN',
+        'Not yours.',
+        statusCode: 403,
+      );
+      r.swarm.routes['/api/super-tabs/$tab/changes'] = (_) => throw refused;
+      r.swarm.routes['/api/super-tabs/$tab/parts'] = (_) => throw refused;
+      await r.reader.refresh();
+      await settle();
+
+      expect(r.reader.accessRevoked, isTrue);
+      expect(r.asks.decisions, isEmpty);
+    },
+  );
+
+  test(
+    'asks read before a full read of the Swarm are never shown after it',
+    () async {
+      final r = rig(decisions: 1);
+      final before = Completer<Object?>();
+      Object? open = before.future;
+      r.swarm.routes['/api/super-tabs/$tab/decisions?state=open'] = (_) => open;
+      r.swarm.routes['/api/super-tabs/$tab/mentions?state=waiting'] = (_) => {
+        'mentions': <Object>[],
+      };
+      await r.reader.refresh();
+      await settle();
+      final shown = <List<String>>[];
+      r.asks.addListener(
+        () => shown.add([for (final d in r.asks.decisions) d.id]),
+      );
+
+      // The person left the chat d1 was asked in; the Swarm is read again
+      // in full, and still has one decision for them elsewhere.
+      open = {
+        'decisions': [decisionRow('d2')],
+      };
+      r.swarm.routes['/api/super-tabs/$tab/changes'] = (_) => {'reload': true};
+      await r.reader.refresh();
+      before.complete({
+        'decisions': [decisionRow('d1')],
+      });
+      await settle();
+
+      expect(shown.expand((ids) => ids), isNot(contains('d1')));
+      expect([for (final d in r.asks.decisions) d.id], ['d2']);
+    },
+  );
 
   test('answering sends the choice once, then reads again', () async {
     final r = rig(decisions: 1);

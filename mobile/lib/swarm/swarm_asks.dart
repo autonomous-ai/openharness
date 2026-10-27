@@ -97,7 +97,7 @@ class SwarmAsks extends ChangeNotifier {
   void Function(SwarmAskItem item)? onArrived;
 
   ({int decisions, int mentions})? _counts;
-  int _lastChangedAt = -1;
+  int _lastChangedAt = -1, _generation = -1;
 
   // Null until the first read: asks waiting then are not news.
   Set<String>? _seen;
@@ -108,17 +108,23 @@ class SwarmAsks extends ChangeNotifier {
 
   /// An ask can arrive while another is answered, leaving a count as it was,
   /// so any change of the Swarm is read while one waits. With none waiting
-  /// and none just answered, nothing is.
+  /// and none just answered, nothing is. A Swarm read again from nothing is
+  /// read again here too: the reader's access may have moved; and one the
+  /// reader may no longer read keeps nothing here.
   void _changed() {
     final snapshot = reader.snapshot;
-    if (snapshot == null) return;
+    if (snapshot == null) {
+      if (reader.accessRevoked) _clear();
+      return;
+    }
     final counts = (
       decisions: snapshot.decisionsWaiting,
       mentions: snapshot.mentionsWaiting,
     );
-    final moved = counts != _counts;
+    final moved = counts != _counts || reader.generation != _generation;
     if (!moved && reader.lastChangedAt == _lastChangedAt) return;
     _lastChangedAt = reader.lastChangedAt;
+    _generation = reader.generation;
     _counts = counts;
     if (counts.decisions == 0 && counts.mentions == 0) {
       _seen ??= {};
@@ -133,8 +139,19 @@ class SwarmAsks extends ChangeNotifier {
     if (_failed && _loading == null) unawaited(load());
   }
 
+  void _clear() {
+    final held = decisions.isNotEmpty || mentions.isNotEmpty || error != null;
+    decisions = const [];
+    mentions = const [];
+    error = null;
+    _counts = null;
+    _failed = false;
+    if (held) notifyListeners();
+  }
+
   /// Joins a read under way, and has it read once more when asked again.
   Future<void> load() {
+    if (_disposed || reader.accessRevoked) return Future.value();
     if (_loading case final running?) {
       _dirty = true;
       return running;
@@ -162,12 +179,15 @@ class SwarmAsks extends ChangeNotifier {
   }
 
   Future<void> _read() async {
+    // An answer from before the Swarm was read again from nothing, or taken
+    // away, may hold asks the reader can no longer see: it is not applied.
+    final generation = reader.generation;
     try {
       final [openRows, waitingRows] = await Future.wait([
         _rows('decisions?state=open', 'decisions'),
         _rows('mentions?state=waiting', 'mentions'),
       ]);
-      if (_disposed) return;
+      if (_disposed || reader.generation != generation) return;
       decisions = List.unmodifiable(openRows.map(SuperTabDecision.fromJson));
       mentions = List.unmodifiable(waitingRows.map(SuperTabMention.fromJson));
       error = null;
@@ -181,7 +201,7 @@ class SwarmAsks extends ChangeNotifier {
         }
       }
     } catch (_) {
-      if (_disposed) return;
+      if (_disposed || reader.generation != generation) return;
       error = 'Could not load what is waiting for you. Try again.';
       _failed = true;
     }

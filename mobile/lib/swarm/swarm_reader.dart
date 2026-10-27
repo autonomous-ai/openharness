@@ -43,6 +43,11 @@ class SwarmReader extends ChangeNotifier {
   /// The reader may no longer read this Swarm: it left, or was removed.
   bool accessRevoked = false;
 
+  /// Moves each time what this reader holds is read again from nothing (a
+  /// first load) or taken away: an answer asked for under an earlier one may
+  /// carry what the reader can no longer see, and is not applied.
+  int generation = 0;
+
   /// The backend needs a newer build: no read can succeed, so none is tried.
   bool updateRequired = false;
 
@@ -95,7 +100,7 @@ class SwarmReader extends ChangeNotifier {
     final failedBefore = error;
     try {
       final read = await _readParts();
-      if (_disposed) return;
+      if (_disposed || accessRevoked) return;
       final parts = _parts!;
       if (read.changed || snapshot == null) {
         final state = parts.state;
@@ -115,7 +120,7 @@ class SwarmReader extends ChangeNotifier {
       error = null;
       _reads.value++;
     } on SuperTabFailure catch (failure) {
-      if (_disposed) return;
+      if (_disposed || accessRevoked) return;
       if (failure.statusCode == 426 ||
           (failure.code == 'UPDATE_REQUIRED' && failure.statusCode != 400)) {
         updateRequired = true;
@@ -123,24 +128,20 @@ class SwarmReader extends ChangeNotifier {
         _poll?.cancel();
       } else if (const {'FORBIDDEN', 'NOT_FOUND'}.contains(failure.code)) {
         // Refused a first load: nothing of a Swarm it left stays on screen.
-        accessRevoked = true;
-        snapshot = null;
-        partners = const {};
-        _parts = null;
+        _forget();
         error = failure.message;
-        _poll?.cancel();
       } else {
         error = failure.message;
       }
       changed = true;
     } on FormatException catch (failure) {
-      if (_disposed) return;
+      if (_disposed || accessRevoked) return;
       error = failure.message.isEmpty
           ? 'Could not read this Swarm.'
           : failure.message;
       changed = true;
     } catch (_) {
-      if (_disposed) return;
+      if (_disposed || accessRevoked) return;
       error = 'Could not reach this Swarm. Try again.';
       changed = true;
     }
@@ -174,8 +175,31 @@ class SwarmReader extends ChangeNotifier {
       }
       _parts = null;
     }
-    _parts = SuperTabParts.firstLoad(await _get('$_path/parts'));
+    final load = await _get('$_path/parts');
+    // Revoked meanwhile: what was read is not kept.
+    if (_disposed || accessRevoked) return (changed: false);
+    _parts = SuperTabParts.firstLoad(load);
+    generation++;
     return (changed: true);
+  }
+
+  /// The reader may no longer read this Swarm — a first load was refused, or
+  /// it left the account's list: nothing read of it stays, and it reads no
+  /// more. Its listeners hear of it, so a screen holding it lets go too.
+  void revoke() {
+    if (_disposed || accessRevoked) return;
+    _forget();
+    error = null;
+    notifyListeners();
+  }
+
+  void _forget() {
+    accessRevoked = true;
+    snapshot = null;
+    partners = const {};
+    _parts = null;
+    generation++;
+    _poll?.cancel();
   }
 
   /// A dormant stub says a held group closed, not how: its data is read again
@@ -212,19 +236,36 @@ class SwarmReader extends ChangeNotifier {
 
   /// Makes conversation [id] part of [snapshot]: one a first load leaves out
   /// (closed, or quiet for a day) is read by id, as a decision or a tag can
-  /// point at one. False when it cannot be read.
+  /// point at one. False when the reader cannot read it; a read that failed
+  /// throws, as it says nothing of whether it could.
   Future<bool> loadConversation(String id) async {
     if (snapshot?.conversation(id) != null) return true;
-    final parts = _parts;
-    if (parts == null) return false;
-    try {
-      if (!await _readGroup(parts, id)) return false;
-    } on SuperTabFailure catch (failure) {
-      error = failure.message;
-      notifyListeners();
-      return false;
+    if (_parts == null) {
+      await refresh();
+      if (snapshot?.conversation(id) != null) return true;
     }
-    if (_disposed || !identical(parts, _parts)) return false;
+    if (_disposed || accessRevoked) return false;
+    final parts = _parts;
+    if (parts == null) {
+      throw SuperTabFailure(
+        'UNAVAILABLE',
+        error ?? 'Could not read this Swarm.',
+      );
+    }
+    final bool readable;
+    try {
+      readable = await _readGroup(parts, id);
+    } on SuperTabFailure catch (failure) {
+      if (!_disposed) {
+        error = failure.message;
+        notifyListeners();
+      }
+      rethrow;
+    }
+    if (_disposed || accessRevoked) return false;
+    // Read again from nothing meanwhile: that read is the one to ask.
+    if (!identical(parts, _parts)) return loadConversation(id);
+    if (!readable) return false;
     final state = parts.state;
     snapshot = SuperTabSnapshot.fromJson(state);
     partners = swarmPartners(state);
