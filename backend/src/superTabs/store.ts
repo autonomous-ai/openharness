@@ -133,6 +133,10 @@ export async function transaction<T>(db: Pick<PrismaClient, '$transaction'>, bod
   }
 }
 const TRANSACTION_OPTIONS = { maxWait: 5_000, timeout: 15_000 }
+/** The deliveries a host is still told about (the rest are answered, cancelled or confirmed). */
+const OPEN_DELIVERY = ['queued', 'claimed', 'uncertain'] as const
+/** Callers kept for the quiet delivery poll before the stale ones are dropped. */
+const POLLED_CAP = 5_000
 const TRANSACTION_ATTEMPTS = 8
 const TRANSACTION_BACKOFF_MS = 50
 const TRANSACTION_BACKOFF_CAP_MS = 1_500
@@ -1482,7 +1486,26 @@ export class SuperTabStore {
     catch (error) { if (error instanceof SuperTabError) return false; throw error }
   }
 
+  /** When each caller's full delivery poll last succeeded for an agent, on this server: key is tab, agent and caller. */
+  private readonly polled = new Map<string, number>()
+
+  /**
+   * Every running agent's host polls this each second. With nothing waiting and the full poll (which loads the Swarm and
+   * runs the Lead's time checks) done within SWEEP_EVERY_MS, the answer is one indexed read: 15 agents were ~180 queries
+   * a second and a whole-Swarm rewrite check each, on 2026-10-27 the backend at 5 pods. Only a caller whose full poll
+   * succeeded is ever answered this way, so a stranger or a revoked host meets the authority checks every time.
+   */
   async deliveries(user: AuthUser, tabId: string, agentId: string) {
+    const key = `${tabId}:${agentId}:${user.sub}`, last = this.polled.get(key)
+    if (last !== undefined && this.now() - last < SWEEP_EVERY_MS
+      && !await this.db.superTabDelivery.findFirst({ where: { tabId, agentId, status: { in: [...OPEN_DELIVERY] } }, select: { id: true } })) return []
+    const rows = await this.fullDeliveries(user, tabId, agentId)
+    this.polled.set(key, this.now())
+    if (this.polled.size > POLLED_CAP) for (const [k, at] of this.polled) if (this.now() - at >= SWEEP_EVERY_MS) this.polled.delete(k)
+    return rows
+  }
+
+  private async fullDeliveries(user: AuthUser, tabId: string, agentId: string) {
     return transaction(this.db, async tx => {
       const loaded = await this.load(tx, user, tabId), state = structuredClone(loaded.state)
       author(state, await this.actor(tx, user, state, agentId), true)
@@ -1509,7 +1532,7 @@ export class SuperTabStore {
       const sequences = numberMessages(state, written, this.now())
       await this.save(tx, loaded, state, clock.next(), [...judgedMachines(state, written), ...woken ? [{ kind: 'agent' as const, key: agentId }] : []])
       await this.writeMessages(tx, tabId, state, written, sequences)
-      const rows = await tx.superTabDelivery.findMany({ where: { tabId, agentId, status: { in: ['queued', 'claimed', 'uncertain'] } },
+      const rows = await tx.superTabDelivery.findMany({ where: { tabId, agentId, status: { in: [...OPEN_DELIVERY] } },
         orderBy: { createdAt: 'asc' }, take: 100 })
       const allowed: SuperTabDelivery[] = []
       for (const delivery of rows) {

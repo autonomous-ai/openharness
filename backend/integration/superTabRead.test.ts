@@ -667,4 +667,32 @@ describe('what a read costs the database (group 3b)', () => {
     // From version columns alone: building the rows from light conversations costs about 39 KB here, this about 10 KB.
     expect(bytes).toBeLessThan(20_000)
   })
+
+  // Every host reads each second (a production backend went to 5 pods on it, 2026-10-27): a Swarm with no change for it
+  // must not cost the newest-change aggregate, seven groupBy over all its parts.
+  it('the host form asks for the newest change only of the Swarms it answers for', async () => {
+    const machineId = `m-${randomUUID().slice(0, 8)}`
+    await db.machine.create({ data: { machineId, userId: owner.sub, apiKey: 'fixture-only', managerId: 'fixture', autonomousEnv: 'prod', authMode: 'remote' } })
+    const s = await scene(f => { f.contribute(machineId, 'swarm') }, machineId)
+    const ops: string[] = []
+    const client = db.$extends({ query: { $allModels: { async $allOperations({ model, operation, args, query }) {
+      ops.push(`${model}.${operation}`)
+      return query(args)
+    } } } }) as unknown as PrismaClient
+    const hosts = new HostReads(new SuperTabStore(client), { now: () => clock })
+    clock = Date.now()
+    const first = await hosts.changes(owner, machineId, { full: true })
+    expect(ops.filter(op => op.endsWith('.groupBy'))).toHaveLength(7)
+    ops.length = 0
+    clock = Date.now()
+    const idle = await hosts.changes(owner, machineId, { cursor: first.cursor })
+    expect(idle.tabs).toEqual([])
+    expect(ops.filter(op => op.endsWith('.groupBy'))).toEqual([])
+    await new SuperTabStore(db).execute(owner, s.tabId, { operationId: randomUUID(),
+      command: { type: 'message.send', conversationId: s.web, text: 'Busy', replyTo: null, recipientIds: [] } })
+    clock = Date.now()
+    const woken = (await hosts.changes(owner, machineId, { cursor: idle.cursor })).tabs
+    const posted = (await db.swarmGroup.findFirst({ where: { tabId: s.tabId, key: s.web } }))!.changedAt.getTime()
+    expect(woken).toMatchObject([{ tabId: s.tabId, lastChangedAt: posted }])
+  })
 })

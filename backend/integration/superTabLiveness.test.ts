@@ -44,9 +44,9 @@ afterAll(async () => {
 })
 
 /** A Swarm whose Lead runs on one of host's machines and whose worker runs on another, assigned "Ship the parser". */
-async function swarm({ legacy = false } = {}) {
+async function swarm({ legacy = false, client = db }: { legacy?: boolean; client?: PrismaClient } = {}) {
   let now = 10_000_000
-  const timed = new SuperTabStore(db, () => now)
+  const timed = new SuperTabStore(client, () => now)
   const tab = (await timed.create(owner, randomUUID(), 'Liveness', legacy ? undefined : 'public')).id
   if (legacy) await dropProjects(tab)
   const execute = (command: Command, user = owner, asAgentId?: string) => timed.execute(user, tab, { operationId: randomUUID(), command }, asAgentId)
@@ -298,5 +298,61 @@ describe('a start that never runs', () => {
     expect(told).toMatchObject({ conversationId: 'lead', text: 'Could not start Builder: Worker Mac did not start it within 3 minutes.' })
     await expect(onMachine({ type: 'agent.started', startId, harnessId: randomUUID(), configuration: config }))
       .rejects.toMatchObject({ code: 'START_FAILED' })
+  })
+})
+
+/** Counts every Prisma operation a store makes through this client, as "Model.operation". */
+function counting() {
+  const ops: string[] = []
+  const client = db.$extends({ query: { $allModels: { async $allOperations({ model, operation, args, query }) {
+    ops.push(`${model}.${operation}`)
+    return query(args)
+  } } } }) as unknown as PrismaClient
+  return { client, ops }
+}
+
+// Every running agent's host polls its deliveries each second (a production backend went to 5 pods on this, 2026-10-27):
+// with nothing waiting the answer must cost one indexed read, and the Swarm is loaded only for the time checks, every 30 s.
+describe('the delivery poll of an agent with nothing waiting', () => {
+  it('reads one row, not the Swarm, until 30 seconds after its last full poll', async () => {
+    const counted = counting()
+    const f = await swarm({ client: counted.client })
+    expect(await f.timed.deliveries(host, f.tab, f.lead)).toEqual([])
+    counted.ops.length = 0
+    f.clock.now += 29_999
+    expect(await f.timed.deliveries(host, f.tab, f.lead)).toEqual([])
+    expect(counted.ops).toEqual(['SuperTabDelivery.findFirst'])
+    counted.ops.length = 0
+    f.clock.now += 1
+    expect(await f.timed.deliveries(host, f.tab, f.lead)).toEqual([])
+    expect(counted.ops).toContain('SwarmGroup.findMany')
+  })
+
+  it('still runs the Lead\'s time checks: the five-minute update request arrives once 30 seconds have passed', async () => {
+    const f = await swarm()
+    await f.leadInbox()
+    f.clock.now += 5 * MINUTE
+    const told = await f.leadInbox()
+    expect(told.map(m => (m.source as { kind?: string }).kind)).toEqual(['update-request'])
+  })
+
+  it('delivers a message on the very next poll, within a second of the last one', async () => {
+    const counted = counting()
+    const f = await swarm({ client: counted.client })
+    await f.timed.deliveries(host, f.tab, f.lead)
+    f.clock.now += 1_000
+    const sent = await f.execute({ type: 'message.send', conversationId: 'lead', text: 'Status?', replyTo: null, recipientIds: [] })
+    f.clock.now += 1_000
+    const rows = await f.timed.deliveries(host, f.tab, f.lead)
+    expect(rows.map(d => d.messageId)).toEqual([sent.result.messageId])
+  })
+
+  it('never answers a caller who is not the agent\'s host from another caller\'s quiet poll, before or after it fails', async () => {
+    const f = await swarm()
+    await f.timed.deliveries(host, f.tab, f.lead)
+    f.clock.now += 1_000
+    for (let attempt = 0; attempt < 2; attempt++) {
+      await expect(f.timed.deliveries(owner, f.tab, f.lead)).rejects.toMatchObject({ code: 'FORBIDDEN' })
+    }
   })
 })
