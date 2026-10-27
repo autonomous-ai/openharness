@@ -61,6 +61,16 @@ class SwarmReader extends ChangeNotifier {
   ValueListenable<int> get reads => _reads;
   final _reads = ValueNotifier(0);
 
+  /// Counts the first loads asked for, each told once its request is out:
+  /// what is read alongside one answers no earlier than it does.
+  ValueListenable<int> get firstLoads => _firstLoads;
+  final _firstLoads = ValueNotifier(0);
+
+  /// Which of [firstLoads] what this reader holds came from; 0 while it holds
+  /// none.
+  int get heldLoad => _heldLoad;
+  int _heldLoad = 0;
+
   SuperTabParts? _parts;
   Future<void>? _refreshing;
   Timer? _poll;
@@ -175,10 +185,13 @@ class SwarmReader extends ChangeNotifier {
       }
       _parts = null;
     }
-    final load = await _get('$_path/parts');
+    final asked = _get('$_path/parts');
+    final number = ++_firstLoads.value;
+    final load = await asked;
     // Revoked meanwhile: what was read is not kept.
     if (_disposed || accessRevoked) return (changed: false);
     _parts = SuperTabParts.firstLoad(load);
+    _heldLoad = number;
     generation++;
     // A new store holds no closed conversations: they are read again.
     _dormantPages.clear();
@@ -201,6 +214,7 @@ class SwarmReader extends ChangeNotifier {
     snapshot = null;
     partners = const {};
     _parts = null;
+    _heldLoad = 0;
     generation++;
     _dormantPages.clear();
     _dormantReads.clear();
@@ -338,6 +352,7 @@ class SwarmReader extends ChangeNotifier {
     _disposed = true;
     _poll?.cancel();
     _reads.dispose();
+    _firstLoads.dispose();
     super.dispose();
   }
 }

@@ -83,6 +83,7 @@ class SwarmAsks extends ChangeNotifier {
   SwarmAsks(this.reader) {
     reader.addListener(_changed);
     reader.reads.addListener(_swarmRead);
+    reader.firstLoads.addListener(_loadAsked);
     _changed();
   }
 
@@ -90,6 +91,20 @@ class SwarmAsks extends ChangeNotifier {
   List<SuperTabDecision> decisions = const [];
   List<SuperTabMention> mentions = const [];
   String? error;
+
+  /// What waits for the person here is not read yet since the Swarm was last
+  /// read from nothing: Home shows its skeleton meanwhile, never a false
+  /// "Nothing needs you". False once that read answers, either way; when the
+  /// Swarm's counts say nothing waits; when the Swarm itself could not be
+  /// read; and when the reader may no longer read it.
+  bool get loading =>
+      !reader.accessRevoked &&
+      !reader.updateRequired &&
+      !(reader.snapshot == null && reader.error != null) &&
+      _settled != reader.generation;
+
+  /// The [SwarmReader.generation] whose asks were read, or need none.
+  int _settled = -1;
 
   /// Decisions being answered: their buttons wait for the backend.
   final Set<String> answering = {};
@@ -129,6 +144,11 @@ class SwarmAsks extends ChangeNotifier {
   static const _same = DeepCollectionEquality();
   int _lastChangedAt = -1, _generation = -1;
 
+  /// The lists asked for alongside a first load ([SwarmReader.firstLoads]),
+  /// so they need not wait behind it: used for the Swarm that load reads, and
+  /// for no other.
+  ({int load, Future<List<List<Map<String, dynamic>>>> rows})? _along;
+
   // Null until the first read: asks waiting then are not news.
   Set<String>? _seen;
   Future<void>? _loading;
@@ -152,6 +172,8 @@ class SwarmAsks extends ChangeNotifier {
       mentions: snapshot.mentionsWaiting,
     );
     final reloaded = reader.generation != _generation;
+    final along = _along;
+    if (reloaded) _along = null;
     final moved = counts != _counts || reloaded;
     if (!moved && reader.lastChangedAt == _lastChangedAt) return;
     _lastChangedAt = reader.lastChangedAt;
@@ -165,9 +187,24 @@ class SwarmAsks extends ChangeNotifier {
     }
     if (counts.decisions == 0 && counts.mentions == 0) {
       _seen ??= {};
-      if (!moved || (decisions.isEmpty && mentions.isEmpty)) return;
+      if (!moved || (decisions.isEmpty && mentions.isEmpty)) return _settle();
     }
-    unawaited(load());
+    final rows = reloaded && along?.load == reader.heldLoad ? along : null;
+    unawaited(load(along: rows?.rows));
+  }
+
+  /// A first load is asked for: the lists are asked with it.
+  void _loadAsked() {
+    if (_disposed || reader.accessRevoked) return;
+    final rows = _fetch()..ignore();
+    _along = (load: reader.firstLoads.value, rows: rows);
+  }
+
+  /// Nothing to read for the Swarm as it is: [loading] ends.
+  void _settle() {
+    if (_settled == reader.generation) return;
+    _settled = reader.generation;
+    notifyListeners();
   }
 
   /// Each read of the Swarm, changed or not: a move of its last-change time
@@ -197,19 +234,28 @@ class SwarmAsks extends ChangeNotifier {
   }
 
   /// Joins a read under way, and has it read once more when asked again.
-  Future<void> load() {
+  /// [along] is what was read alongside the Swarm's first load, used in
+  /// place of a first read of the lists.
+  Future<void> load({Future<List<List<Map<String, dynamic>>>>? along}) {
     if (_disposed || reader.accessRevoked) return Future.value();
     if (_loading case final running?) {
       _dirty = true;
       return running;
     }
     return _loading = () async {
+      var rows = along;
       do {
         _dirty = false;
-        await _read();
+        if (!await _read(rows)) _dirty = true;
+        rows = null;
       } while (_dirty && !_disposed);
     }().whenComplete(() => _loading = null);
   }
+
+  Future<List<List<Map<String, dynamic>>>> _fetch() => Future.wait([
+    _rows('decisions?state=open', 'decisions'),
+    _rows('mentions?state=waiting', 'mentions'),
+  ]);
 
   Future<List<Map<String, dynamic>>> _rows(String path, String key) async {
     final Object? answer;
@@ -225,16 +271,21 @@ class SwarmAsks extends ChangeNotifier {
     ];
   }
 
-  Future<void> _read() async {
+  /// False when lists read [along] a first load disagree with its counts:
+  /// something moved between the two answers, so they are read again.
+  Future<bool> _read(Future<List<List<Map<String, dynamic>>>>? along) async {
     // An answer from before the Swarm was read again from nothing, or taken
     // away, may hold asks the reader can no longer see: it is not applied.
     final generation = reader.generation;
+    final counts = _counts;
     try {
-      final [openRows, waitingRows] = await Future.wait([
-        _rows('decisions?state=open', 'decisions'),
-        _rows('mentions?state=waiting', 'mentions'),
-      ]);
-      if (_disposed || reader.generation != generation) return;
+      final [openRows, waitingRows] = await (along ?? _fetch());
+      if (_disposed || reader.generation != generation) return true;
+      if (along != null &&
+          (openRows.length != counts?.decisions ||
+              waitingRows.length != counts?.mentions)) {
+        return false;
+      }
       final waitingIds = {for (final row in waitingRows) row['id']};
       // Done here and no longer waiting there: the backend caught up.
       _done.removeWhere((id) => !waitingIds.contains(id));
@@ -244,7 +295,9 @@ class SwarmAsks extends ChangeNotifier {
         for (final row in waitingRows)
           if (!_done.contains(row['id'])) row,
       ];
-      var changed = error != null || notDone != _notDone.length;
+      var changed =
+          error != null || notDone != _notDone.length || _settled != generation;
+      _settled = generation;
       if (!_same.equals(openRows, _openRows)) {
         _openRows = openRows;
         decisions = List.unmodifiable(openRows.map(SuperTabDecision.fromJson));
@@ -269,13 +322,15 @@ class SwarmAsks extends ChangeNotifier {
       }
       if (changed) notifyListeners();
     } catch (_) {
-      if (_disposed || reader.generation != generation) return;
+      if (_disposed || reader.generation != generation) return true;
       const failed = 'Could not load what is waiting for you. Try again.';
-      final told = error == failed && _failed;
+      final told = error == failed && _failed && _settled == generation;
       error = failed;
       _failed = true;
+      _settled = generation;
       if (!told) notifyListeners();
     }
+    return true;
   }
 
   Future<void> _command(Map<String, dynamic> command, {String? operationId}) =>
@@ -368,6 +423,7 @@ class SwarmAsks extends ChangeNotifier {
     _disposed = true;
     reader.removeListener(_changed);
     reader.reads.removeListener(_swarmRead);
+    reader.firstLoads.removeListener(_loadAsked);
     super.dispose();
   }
 }

@@ -67,15 +67,223 @@ void main() {
     return (swarm: swarm, reader: reader, asks: asks);
   }
 
-  test('a Swarm with nothing waiting reads no lists', () async {
+  test('a Swarm with nothing waiting reads its lists only with its first '
+      'load', () async {
     final r = rig();
 
     await r.reader.refresh();
     await settle();
+    await r.reader.refresh();
+    await settle();
 
-    expect(r.swarm.paths, ['/api/super-tabs/$tab/parts']);
+    expect(r.swarm.paths, [
+      '/api/super-tabs/$tab/parts',
+      '/api/super-tabs/$tab/decisions?state=open',
+      '/api/super-tabs/$tab/mentions?state=waiting',
+      '/api/super-tabs/$tab/changes?cursor=c1',
+    ]);
     expect(r.asks.decisions, isEmpty);
     expect(r.asks.mentions, isEmpty);
+  });
+
+  // Read after the first load, they waited a round trip through the
+  // computer behind the whole 1.3 MB Swarm (Mira's iPhone 14 numbers).
+  test('decisions and tags are read alongside the first load, once', () async {
+    final r = rig(decisions: 1);
+    final load = Completer<Object?>();
+    r.swarm.routes['/api/super-tabs/$tab/parts'] = (_) => load.future;
+    r.swarm.routes['/api/super-tabs/$tab/decisions?state=open'] = (_) => {
+      'decisions': [decisionRow('d1')],
+    };
+    r.swarm.routes['/api/super-tabs/$tab/mentions?state=waiting'] = (_) => {
+      'mentions': <Object>[],
+    };
+
+    final reading = r.reader.refresh();
+    await settle();
+    expect(
+      r.swarm.paths,
+      containsAll([
+        '/api/super-tabs/$tab/decisions?state=open',
+        '/api/super-tabs/$tab/mentions?state=waiting',
+      ]),
+    );
+    expect(r.asks.decisions, isEmpty, reason: 'not before the Swarm is read');
+    expect(r.asks.loading, isTrue);
+
+    load.complete(
+      firstLoad(derived: {'decisionsWaiting': 1, 'mentionsWaiting': 0}),
+    );
+    await reading;
+    await settle();
+
+    expect(r.asks.decisions.single.id, 'd1');
+    expect(r.asks.loading, isFalse);
+    expect(r.swarm.paths.where((p) => p.contains('decisions')), hasLength(1));
+  });
+
+  test(
+    'asks read alongside a first load that failed are never shown',
+    () async {
+      final r = rig(decisions: 1);
+      var failing = true;
+      var open = [decisionRow('d-old')];
+      r.swarm.routes['/api/super-tabs/$tab/parts'] = (_) => failing
+          ? throw const SuperTabFailure('MACHINE_UNAVAILABLE', 'No computer.')
+          : firstLoad(derived: {'decisionsWaiting': 1, 'mentionsWaiting': 0});
+      r.swarm.routes['/api/super-tabs/$tab/decisions?state=open'] = (_) => {
+        'decisions': open,
+      };
+      r.swarm.routes['/api/super-tabs/$tab/mentions?state=waiting'] = (_) => {
+        'mentions': <Object>[],
+      };
+      final shown = <String>[];
+      r.asks.addListener(() => shown.addAll(r.asks.decisions.map((d) => d.id)));
+      await r.reader.refresh();
+      await settle();
+
+      failing = false;
+      open = [decisionRow('d-new')];
+      await r.reader.refresh();
+      await settle();
+
+      expect(shown, isNot(contains('d-old')));
+      expect(r.asks.decisions.single.id, 'd-new');
+    },
+  );
+
+  test('asks read alongside the first load that disagree with its counts '
+      'are read again, not shown', () async {
+    final r = rig();
+    var open = [decisionRow('d1'), decisionRow('d2')];
+    r.swarm.routes['/api/super-tabs/$tab/decisions?state=open'] = (_) => {
+      'decisions': open,
+    };
+    r.swarm.routes['/api/super-tabs/$tab/mentions?state=waiting'] = (_) => {
+      'mentions': <Object>[],
+    };
+    final load = Completer<Object?>();
+    r.swarm.routes['/api/super-tabs/$tab/parts'] = (_) => load.future;
+    final shown = <String>[];
+    r.asks.addListener(() => shown.addAll(r.asks.decisions.map((d) => d.id)));
+
+    final reading = r.reader.refresh();
+    await settle();
+    // d1 answered elsewhere between the two answers: the Swarm counts one.
+    open = [decisionRow('d2')];
+    load.complete(
+      firstLoad(derived: {'decisionsWaiting': 1, 'mentionsWaiting': 0}),
+    );
+    await reading;
+    await settle();
+
+    expect(shown, isNot(contains('d1')));
+    expect(r.asks.decisions.single.id, 'd2');
+    expect(r.swarm.paths.where((p) => p.contains('decisions')), hasLength(2));
+  });
+
+  group('loading', () {
+    test('until decisions and tags are read, then not', () async {
+      final r = rig(decisions: 1);
+      final open = Completer<Object?>();
+      r.swarm.routes['/api/super-tabs/$tab/decisions?state=open'] = (_) =>
+          open.future;
+      r.swarm.routes['/api/super-tabs/$tab/mentions?state=waiting'] = (_) => {
+        'mentions': <Object>[],
+      };
+      expect(r.asks.loading, isTrue, reason: 'nothing is read yet');
+
+      await r.reader.refresh();
+      await settle();
+      expect(r.reader.snapshot, isNotNull);
+      expect(r.asks.loading, isTrue, reason: 'the Swarm is read, not its asks');
+
+      var told = 0;
+      r.asks.addListener(() => told++);
+      open.complete({
+        'decisions': [decisionRow('d1')],
+      });
+      await settle();
+
+      expect(r.asks.loading, isFalse);
+      expect(told, 1);
+    });
+
+    test('ends with the first load when nothing waits', () async {
+      final r = rig();
+      var told = 0;
+      r.asks.addListener(() => told++);
+
+      await r.reader.refresh();
+      await settle();
+
+      expect(r.asks.loading, isFalse);
+      expect(told, 1, reason: 'Home hears that loading ended');
+    });
+
+    test('ends when the read of the asks fails, with its error', () async {
+      final r = rig(decisions: 1);
+      r.swarm.routes['/api/super-tabs/$tab/decisions?state=open'] = (_) =>
+          throw const SuperTabFailure('MACHINE_UNAVAILABLE', 'No computer.');
+      r.swarm.routes['/api/super-tabs/$tab/mentions?state=waiting'] = (_) => {
+        'mentions': <Object>[],
+      };
+
+      await r.reader.refresh();
+      await settle();
+
+      expect(r.asks.loading, isFalse);
+      expect(r.asks.error, isNotNull);
+    });
+
+    test('ends when the Swarm itself could not be read', () async {
+      final r = rig();
+      r.swarm.routes['/api/super-tabs/$tab/parts'] = (_) =>
+          throw const SuperTabFailure('MACHINE_UNAVAILABLE', 'No computer.');
+
+      await r.reader.refresh();
+      await settle();
+
+      expect(r.reader.error, isNotNull);
+      expect(r.asks.loading, isFalse);
+    });
+
+    test('starts again while a Swarm read again in full has its asks read '
+        'again', () async {
+      final r = rig(decisions: 1);
+      Object? open = {
+        'decisions': [decisionRow('d1')],
+      };
+      r.swarm.routes['/api/super-tabs/$tab/decisions?state=open'] = (_) => open;
+      r.swarm.routes['/api/super-tabs/$tab/mentions?state=waiting'] = (_) => {
+        'mentions': <Object>[],
+      };
+      await r.reader.refresh();
+      await settle();
+      expect(r.asks.loading, isFalse);
+
+      final again = Completer<Object?>();
+      open = again.future;
+      r.swarm.routes['/api/super-tabs/$tab/changes'] = (_) => {'reload': true};
+      await r.reader.refresh();
+      await settle();
+      expect(r.asks.decisions, isEmpty);
+      expect(r.asks.loading, isTrue);
+
+      again.complete({
+        'decisions': [decisionRow('d1')],
+      });
+      await settle();
+      expect(r.asks.loading, isFalse);
+      expect(r.asks.decisions.single.id, 'd1');
+    });
+
+    test('is not while the reader may no longer read the Swarm', () async {
+      final r = rig();
+      r.reader.revoke();
+
+      expect(r.asks.loading, isFalse);
+    });
   });
 
   test(
