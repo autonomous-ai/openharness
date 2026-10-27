@@ -32,6 +32,7 @@ import 'machine_details.dart';
 import 'machine_status.dart';
 import 'model.dart';
 import 'team_account_setup.dart';
+import 'teams.dart';
 import 'section_heading.dart';
 
 export 'machine_status.dart';
@@ -2030,6 +2031,7 @@ String? superTabTeammatesPaused(Object? code) {
     'PRIVACY_UNCHECKED' => 'privacy not checked yet',
     'PRIVACY_CHECK_FAILED' => 'privacy check failed',
     'PRIVACY_CHECK_STALE' => 'privacy check out of date',
+    'MACHINE_IN_OTHER_TEAM' => 'also serves another $kTeamLabel',
     _ => null,
   };
   return why == null ? null : "Teammates' agents paused: $why";

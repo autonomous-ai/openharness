@@ -219,6 +219,8 @@ class SuperTabSnapshot {
         (row) => Map<String, dynamic>.unmodifiable(row),
       ),
       leadsConversationId = row['leadsConversationId'] as String?,
+      orgId = row['orgId'] as String?,
+      openToTeam = row['orgVisibility'] == 'org',
       startEfforts = Map.unmodifiable({
         for (final start
             in row['starts'] is List ? row['starts'] as List : const [])
@@ -268,6 +270,13 @@ class SuperTabSnapshot {
   /// Where the projects' Product Managers talk, Swarm-wide; null in a Swarm
   /// from before it (spec 2026-10-23-leads-see-and-talk.md).
   final String? leadsConversationId;
+
+  /// The Team the Swarm belongs to (teams.dart); null for a Swarm from before
+  /// Teams, or from an older backend.
+  final String? orgId;
+
+  /// Whether its Team's members may find and join it by themselves.
+  final bool openToTeam;
 
   /// The Local models add-on, once the owner has turned it on; null before.
   final SuperTabLocalModels? localModels;

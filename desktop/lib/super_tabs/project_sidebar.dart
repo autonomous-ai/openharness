@@ -16,6 +16,7 @@ import 'machines.dart';
 import 'model.dart';
 import 'pm_chat_rows.dart';
 import 'section_heading.dart';
+import 'teams.dart';
 import 'workgroup_name.dart';
 
 /// The Swarm's Product Managers' conversation, listed as a channel among the projects.
@@ -490,6 +491,16 @@ class ProjectSidebar extends StatelessWidget {
       child: ListView(
         padding: const EdgeInsets.all(8),
         children: [
+          // A Swarm in a Team names it, and switches to the person's other
+          // Swarms (teams.dart). A Swarm from before Teams has none to show.
+          if (snapshot?.orgId != null && app != null) ...[
+            SuperTabTeamMenu(
+              key: ValueKey('super-team-${snapshot!.orgId}'),
+              controller: controller,
+              onOpenSwarm: (id, name) => app!.openSuperTab(id, name),
+            ),
+            const SizedBox(height: 8),
+          ],
           if (onNewProject != null)
             _navigationRow(
               key: 'super-new-project',
