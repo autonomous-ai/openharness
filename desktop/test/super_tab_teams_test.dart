@@ -310,7 +310,7 @@ void main() {
   test('a machine row says when its Team account serves another Team', () {
     expect(
       superTabTeammatesPaused('MACHINE_IN_OTHER_TEAM'),
-      "Teammates' agents paused: also serves another $kTeamLabel",
+      "Teammates' agents paused: in two ${kTeamLabel}s",
     );
   });
 }

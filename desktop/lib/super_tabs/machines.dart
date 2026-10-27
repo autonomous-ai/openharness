@@ -2031,7 +2031,7 @@ String? superTabTeammatesPaused(Object? code) {
     'PRIVACY_UNCHECKED' => 'privacy not checked yet',
     'PRIVACY_CHECK_FAILED' => 'privacy check failed',
     'PRIVACY_CHECK_STALE' => 'privacy check out of date',
-    'MACHINE_IN_OTHER_TEAM' => 'also serves another $kTeamLabel',
+    'MACHINE_IN_OTHER_TEAM' => 'in two ${kTeamLabel}s',
     _ => null,
   };
   return why == null ? null : "Teammates' agents paused: $why";

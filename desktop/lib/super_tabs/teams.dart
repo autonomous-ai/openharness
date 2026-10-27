@@ -158,7 +158,12 @@ class _SuperTabTeamMenuState extends State<SuperTabTeamMenu> {
         MenuAnchor(
           controller: _menu,
           consumeOutsideTap: true,
-          style: grid.AppMenu.style(minWidth: 240, maxWidth: 320),
+          // Every Team and its Swarms in one list, with room for several Teams before it scrolls.
+          style: grid.AppMenu.style(
+            minWidth: 240,
+            maxWidth: 320,
+            maxHeight: 520,
+          ),
           menuChildren: [
             for (final team in teams) ...[
               _heading(team.name),
@@ -325,70 +330,74 @@ class _SuperTabTeamSettingsState extends State<SuperTabTeamSettings> {
     return Padding(
       key: ValueKey('team-member-$id'),
       padding: const EdgeInsets.symmetric(vertical: 4),
-      child: Row(
-        children: [
-          Expanded(
-            child: Text(
-              person['email'] as String? ?? id,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: DesktopChrome.control(),
+      // One height whether or not the row has controls, so the list reads evenly.
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(minHeight: 40),
+        child: Row(
+          children: [
+            Expanded(
+              child: Text(
+                person['email'] as String? ?? id,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: DesktopChrome.control(),
+              ),
             ),
-          ),
-          if (!manageable)
-            Text(_roleLabels[role] ?? role, style: DesktopChrome.metadata())
-          else ...[
-            AppSelectField<String>(
-              key: ValueKey('team-role-$id'),
-              value: role,
-              width: 110,
-              semanticLabel: 'Role',
-              options: [
-                for (final option in _gives)
-                  SelectOption(value: option, label: _roleLabels[option]!),
-              ],
-              onChanged: (value) {
-                if (value == role) return;
-                unawaited(
-                  _run('POST', '$_path/members/${Uri.encodeComponent(id)}', {
-                    'role': value,
-                  }),
-                );
-              },
-            ),
-            const SizedBox(width: 8),
-            if (_confirming == id)
-              Tooltip(
-                message:
-                    'Also removes them from every Swarm of the $kTeamLabel',
-                child: TextButton(
-                  key: ValueKey('team-remove-confirm-$id'),
+            if (!manageable)
+              Text(_roleLabels[role] ?? role, style: DesktopChrome.metadata())
+            else ...[
+              AppSelectField<String>(
+                key: ValueKey('team-role-$id'),
+                value: role,
+                width: 110,
+                semanticLabel: 'Role',
+                options: [
+                  for (final option in _gives)
+                    SelectOption(value: option, label: _roleLabels[option]!),
+                ],
+                onChanged: (value) {
+                  if (value == role) return;
+                  unawaited(
+                    _run('POST', '$_path/members/${Uri.encodeComponent(id)}', {
+                      'role': value,
+                    }),
+                  );
+                },
+              ),
+              const SizedBox(width: 8),
+              if (_confirming == id)
+                Tooltip(
+                  message:
+                      'Also removes them from every Swarm of the $kTeamLabel',
+                  child: TextButton(
+                    key: ValueKey('team-remove-confirm-$id'),
+                    onPressed: _busy
+                        ? null
+                        : () {
+                            setState(() => _confirming = null);
+                            unawaited(
+                              _run(
+                                'POST',
+                                '$_path/members/${Uri.encodeComponent(id)}/remove',
+                                {},
+                              ),
+                            );
+                          },
+                    child: const Text('Remove'),
+                  ),
+                )
+              else
+                IconButton(
+                  key: ValueKey('team-remove-$id'),
+                  tooltip: 'Remove from the $kTeamLabel',
+                  icon: Icon(AppIcons.trash2, size: AppIcons.inlineSize),
                   onPressed: _busy
                       ? null
-                      : () {
-                          setState(() => _confirming = null);
-                          unawaited(
-                            _run(
-                              'POST',
-                              '$_path/members/${Uri.encodeComponent(id)}/remove',
-                              {},
-                            ),
-                          );
-                        },
-                  child: const Text('Remove'),
+                      : () => setState(() => _confirming = id),
                 ),
-              )
-            else
-              IconButton(
-                key: ValueKey('team-remove-$id'),
-                tooltip: 'Remove from the $kTeamLabel',
-                icon: Icon(AppIcons.trash2, size: AppIcons.inlineSize),
-                onPressed: _busy
-                    ? null
-                    : () => setState(() => _confirming = id),
-              ),
+            ],
           ],
-        ],
+        ),
       ),
     );
   }
