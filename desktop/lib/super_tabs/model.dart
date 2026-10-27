@@ -51,12 +51,17 @@ class SuperTabAgent {
       role = row['role'] as String?,
       roleId = row['roleId'] as String?,
       limitedUntil = DateTime.tryParse(row['limitedUntil'] as String? ?? ''),
+      downSince = DateTime.tryParse(row['downSince'] as String? ?? ''),
       configuration = Map.unmodifiable(superTabMap(row['configuration']));
   final String id, projectId, name, machineId, harnessId, contributorId;
 
   /// Until when routing skips it: its machine saw a usage limit on its screen
   /// (spec/2026-10-23-lead-sees-agent-terminal.md). Null when none was seen.
   final DateTime? limitedUntil;
+
+  /// Since when its machine has reported its session gone, or its host confirmed a stop (backend machines.ts). Null
+  /// while it runs.
+  final DateTime? downSince;
 
   /// The account whose computer runs it; a contributor may run agents on a computer another account shared with them.
   final String machineOwnerId;
@@ -214,6 +219,15 @@ class SuperTabSnapshot {
         (row) => Map<String, dynamic>.unmodifiable(row),
       ),
       leadsConversationId = row['leadsConversationId'] as String?,
+      startEfforts = Map.unmodifiable({
+        for (final start
+            in row['starts'] is List ? row['starts'] as List : const [])
+          if (start case {
+            'harnessId': final String harness,
+            'request': {'effort': final String effort},
+          })
+            harness: effort,
+      }),
       localModels = SuperTabLocalModels.read(row['localModels']),
       mentionsWaiting = (row['mentionsWaiting'] as num?)?.toInt() ?? 0 {
     if (row['version'] != 1) {
@@ -245,6 +259,10 @@ class SuperTabSnapshot {
   final List<SuperTabConversation> conversations;
   late final List<SuperTabProject> projects;
   final List<Map<String, dynamic>> invitations;
+
+  /// The effort each started agent's start asked for, by harness id. Empty where the starts are not read (a view
+  /// kept on this device leaves them out).
+  final Map<String, String> startEfforts;
 
   /// Where the projects' Product Managers talk, Swarm-wide; null in a Swarm
   /// from before it (spec 2026-10-23-leads-see-and-talk.md).
