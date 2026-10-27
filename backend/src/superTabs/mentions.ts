@@ -20,10 +20,11 @@ export async function ensureMentionExpiry(db: PrismaClient): Promise<void> {
     expireAfterSeconds: MENTION_EXPIRY_MS / 1000 }] })
 }
 
-/** Anyone who posts in a project's conversation mentions people who can read it (collaboration protocol): the poster's
+/** Anyone who posts in a project's conversation mentions other people who can read it (collaboration protocol): the poster's
  *  own access is checked by message.send. Never in the Leads conversation, which no person's list shows. */
-export function checkMentions(state: SuperTabState, group: Conversation, personIds: string[]): string[] {
-  const ids = [...new Set(personIds)]
+export function checkMentions(state: SuperTabState, actor: Actor, group: Conversation, personIds: string[]): string[] {
+  // A person's mention of themselves would only wait in their own list.
+  const ids = [...new Set(personIds)].filter(id => actor.kind !== 'person' || id !== actor.userId)
   if (!ids.length) return ids
   if (isLeads(group)) fail('MENTION_FORBIDDEN', 'People can be mentioned only in a project’s conversations.', 403)
   for (const id of ids) {

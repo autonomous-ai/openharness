@@ -2201,11 +2201,17 @@ describe('mentions of people', () => {
     expect(f.run(send(group, ['peer']), as(lead)).messages[0]!.mentions).toEqual(['peer'])
   })
 
+  it('drops a person’s mention of themselves: it would wait in their own list', () => {
+    const { f } = swarm(), group = f.group()
+    expect(f.run(send(group, ['peer', 'owner']), peer).messages[0]!.mentions).toEqual(['owner'])
+    expect(f.run(send(group, ['peer']), peer).messages[0]).not.toHaveProperty('mentions')
+  })
+
   it('refuses another project’s Lead and any mention in the Leads conversation', () => {
     const { f, lead, secret } = swarm(), group = f.group()
     expect(() => f.run(send(group, ['owner']), as(secret.lead))).toThrow('This project is unavailable.')
     expect(() => f.run(send(f.state.leadsConversationId!, ['owner']), as(lead))).toThrow('People can be mentioned only in a project’s conversations.')
-    expect(() => f.run(send(f.state.leadsConversationId!, ['owner']))).toThrow('People can be mentioned only in a project’s conversations.')
+    expect(() => f.run(send(f.state.leadsConversationId!, ['peer']))).toThrow('People can be mentioned only in a project’s conversations.')
   })
 
   it('refuses a person mentioning someone who cannot read their private conversation, without naming anything in it', () => {
