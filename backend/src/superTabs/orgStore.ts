@@ -73,7 +73,8 @@ export async function orgForNewSwarm(tx: Transaction, user: AuthUser, swarmName:
 
 export interface OrgSummary {
   id: string; name: string; role: OrgRole; revision: number
-  swarms: Array<{ id: string; name: string; orgVisibility: 'invite-only' | 'org' }>
+  /** `member`: the person is in it; otherwise it is open to the Team, or listed for its owners and admins. */
+  swarms: Array<{ id: string; name: string; orgVisibility: 'invite-only' | 'org'; member: boolean }>
 }
 
 /** The person's Teams, each with the Swarms they may see there: their own, those open to the Team (members and up), and
@@ -92,8 +93,9 @@ export async function listOrgs(db: PrismaClient, user: AuthUser): Promise<OrgSum
       const head = headOf.get(row.id)
       if (!head) return []
       const orgVisibility = head.orgVisibility ?? 'invite-only'
-      const visible = row.memberIds.includes(user.sub) || orgCan(role, 'swarms.listAll') || (orgVisibility === 'org' && orgCan(role, 'swarm.joinOpen'))
-      return visible ? [{ id: row.id, name: head.name ?? '', orgVisibility }] : []
+      const member = row.memberIds.includes(user.sub)
+      const visible = member || orgCan(role, 'swarms.listAll') || (orgVisibility === 'org' && orgCan(role, 'swarm.joinOpen'))
+      return visible ? [{ id: row.id, name: head.name ?? '', orgVisibility, member }] : []
     })
     return { id: org.id, name: org.name, role, revision: org.revision, swarms }
   })

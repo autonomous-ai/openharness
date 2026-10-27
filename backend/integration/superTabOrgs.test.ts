@@ -35,7 +35,7 @@ const create = async (as = owner, name = 'Fixture Swarm', orgId?: string) => {
   return reply.json().data.id as string
 }
 const orgsOf = async (as: AuthUser) => (await call('GET', '/api/super-tabs/orgs', as)).json().data.orgs as
-  Array<{ id: string; name: string; role: string; swarms: Array<{ id: string; name: string }> }>
+  Array<{ id: string; name: string; role: string; swarms: Array<{ id: string; name: string; member: boolean }> }>
 const listed = async (as: AuthUser) => ((await call('GET', '/api/super-tabs/list', as)).json().data.tabs as Array<{ id: string; orgId: string | null }>)
 /** Adds `who` to the Swarm the way an owner does today: an invitation, accepted. */
 const invite = async (tab: string, who: AuthUser, by = owner) => {
@@ -185,6 +185,8 @@ describe('Swarms open to the Team', () => {
     expect((await call('POST', `/api/super-tabs/${tab}/org-visibility`, member, { visibility: 'org' })).statusCode).toBe(403)
     expect((await call('POST', `/api/super-tabs/${tab}/org-visibility`, owner, { visibility: 'org' })).statusCode).toBe(200)
     expect(await names(member)).toContain(tab)
+    const joinedOf = async (who: AuthUser) => (await orgsOf(who)).find(o => o.id === orgId)!.swarms.find(s => s.id === tab)!.member
+    expect([await joinedOf(member), await joinedOf(owner)]).toEqual([false, true])
     expect(await names(peer)).not.toContain(tab)
     expect((await call('POST', `/api/super-tabs/${tab}/org-join`, peer, { operationId: randomUUID() })).statusCode).toBe(403)
     const joined = await call('POST', `/api/super-tabs/${tab}/org-join`, member, { operationId: randomUUID() })
