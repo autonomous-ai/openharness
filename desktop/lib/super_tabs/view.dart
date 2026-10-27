@@ -18,6 +18,7 @@ import 'recording_notice.dart';
 import 'pull_requests.dart';
 import 'controller.dart';
 import 'dialog_scope.dart';
+import 'identity.dart';
 import 'model.dart';
 import 'message_row.dart';
 import 'message_receipt.dart';
@@ -94,7 +95,16 @@ class _SuperTabViewState extends State<SuperTabView>
   int _mentionIndex = 0;
   String? _dismissedMention;
   String? _completionPrefix;
-  final _completionKeys = List.generate(6, (_) => GlobalKey());
+  // One per picker row, made as rows appear: agents and then people can
+  // outnumber any fixed count.
+  final _completionKeys = <GlobalKey>[];
+  GlobalKey _completionKey(int index) {
+    while (_completionKeys.length <= index) {
+      _completionKeys.add(GlobalKey());
+    }
+    return _completionKeys[index];
+  }
+
   SuperTabController get c => widget.controller;
 
   /// A device with a Lead of this Swarm open scrolls the chat on screen.
@@ -454,6 +464,18 @@ class _SuperTabViewState extends State<SuperTabView>
             choose: () => _chooseMention(agent),
           ),
         )
+        .followedBy(
+          _personChoices.map(
+            (person) => (
+              label: superTabPersonName(person.email),
+              detail: person.email,
+              choose: () => _insertMention(
+                SuperTabController.personMention(person.id),
+                superTabPersonName(person.email),
+              ),
+            ),
+          ),
+        )
         .toList();
   }
 
@@ -477,7 +499,7 @@ class _SuperTabViewState extends State<SuperTabView>
   void _moveCompletion(int index) {
     setState(() => _mentionIndex = index);
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      final context = _completionKeys[index].currentContext;
+      final context = _completionKey(index).currentContext;
       if (mounted && context != null) {
         Scrollable.ensureVisible(context, alignment: .5);
       }
@@ -537,13 +559,32 @@ class _SuperTabViewState extends State<SuperTabView>
         const [];
   }
 
-  void _chooseMention(SuperTabAgent agent) {
+  /// After the agents, the people who read the conversation, the writer aside.
+  List<SuperTabPerson> get _personChoices {
+    final mention = _mentionAtCursor, group = c.selected;
+    if (mention == null || group == null) return const [];
+    return c.snapshot
+            ?.readersOf(group)
+            .where(
+              (person) =>
+                  person.id != c.accountId &&
+                  person.email.toLowerCase().contains(mention.query),
+            )
+            .take(6)
+            .toList() ??
+        const [];
+  }
+
+  void _chooseMention(SuperTabAgent agent) =>
+      _insertMention(agent.id, _agentName(agent));
+
+  void _insertMention(String id, String name) {
     final at = _mentionAtCursor;
     if (at == null) return;
-    final token = '@${_agentName(agent)}';
+    final token = '@$name';
     final text = _composer.text.replaceRange(at.start, at.end, '$token ');
     c.setDraft(c.selectedId, text);
-    c.mention(c.selectedId, agent.id, token);
+    c.mention(c.selectedId, id, token);
     _composer.value = TextEditingValue(
       text: text,
       selection: TextSelection.collapsed(offset: at.start + token.length + 1),
@@ -1579,7 +1620,7 @@ class _SuperTabViewState extends State<SuperTabView>
                   children: [
                     for (var i = 0; i < choices.length; i++)
                       ListTile(
-                        key: _completionKeys[i],
+                        key: _completionKey(i),
                         dense: true,
                         selected:
                             i == _mentionIndex.clamp(0, choices.length - 1),

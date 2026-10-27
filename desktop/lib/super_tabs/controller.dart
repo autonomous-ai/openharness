@@ -652,9 +652,15 @@ class SuperTabController extends ChangeNotifier {
       RegExp('(?:^|\\s)${RegExp.escape(token)}(?=\$|\\s|[.,!?;:])')
           .hasMatch(text);
 
-  void mention(String conversationId, String agentId, String token) {
+  /// How a mentioned person is kept among a draft's mentions, apart from its
+  /// agents: the person goes as a mention, an agent as a recipient.
+  static String personMention(String personId) => '$_person$personId';
+  static const _person = 'person:';
+
+  /// [id] is an agent's id, or a [personMention].
+  void mention(String conversationId, String id, String token) {
     if (containsMention(draft(conversationId), token)) {
-      (_mentions[conversationId] ??= {})[agentId] = token;
+      (_mentions[conversationId] ??= {})[id] = token;
       _saveSoon();
       _changed();
     }
@@ -1461,11 +1467,16 @@ class SuperTabController extends ChangeNotifier {
         _pending != null) {
       return null;
     }
+    final mentioned = [
+      for (final entry in mentions(selectedId).entries)
+        if (containsMention(text, entry.value)) entry.key,
+    ];
+    final people = [
+      for (final id in mentioned)
+        if (id.startsWith(_person)) id.substring(_person.length),
+    ];
     final addressed = recipients.isEmpty
-        ? mentions(selectedId).entries
-              .where((entry) => containsMention(text, entry.value))
-              .map((entry) => entry.key)
-              .toList()
+        ? mentioned.where((id) => !id.startsWith(_person)).toList()
         : recipients;
     if (addressed.any((id) => !selected!.agentIds.contains(id))) {
       operationError = 'A mentioned agent is no longer in this conversation. Remove its mention or choose another agent.';
@@ -1481,6 +1492,7 @@ class SuperTabController extends ChangeNotifier {
       'text': text,
       'replyTo': replyTo,
       'recipientIds': addressed,
+      if (people.isNotEmpty) 'mentions': people,
       if (ids.isNotEmpty) 'attachmentIds': ids,
     });
     // A refusal of the files themselves sends them up once more; one of the

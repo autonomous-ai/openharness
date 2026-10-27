@@ -284,6 +284,22 @@ class SuperTabSnapshot {
   SuperTabAgent? agent(String id) =>
       agents.where((a) => a.id == id).firstOrNull;
 
+  /// The people who read [group], as the backend decides it (canReadGroup): a
+  /// private conversation's people, else a private project's members and
+  /// owner, else everyone in the Swarm. None for the Product Managers'
+  /// conversation, where nobody is mentioned.
+  List<SuperTabPerson> readersOf(SuperTabConversation group) {
+    if (group.id == leadsConversationId) return const [];
+    final audience = group.audience;
+    final project = projects.where((p) => p.id == group.projectId).firstOrNull;
+    bool reads(SuperTabPerson person) => audience != null
+        ? audience.contains(person.id)
+        : project?.isPrivate != true ||
+              person.id == project!.ownerId ||
+              project.memberIds.contains(person.id);
+    return people.where(reads).toList();
+  }
+
   SuperTabProject? projectFor(String conversationId) {
     final group = conversation(conversationId);
     return projects.where((p) => p.id == group?.projectId).firstOrNull;
