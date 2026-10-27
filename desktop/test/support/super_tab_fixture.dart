@@ -389,6 +389,10 @@ class ConversationServer {
   final mentions = <Map<String, dynamic>>[];
   // Decisions asked of the reader, newest last, answered by GET .../decisions?state=.
   final decisions = <Map<String, dynamic>>[];
+  // The reader's hands-on requests, as the backend lists them.
+  final handsOn = <Map<String, dynamic>>[];
+  // A backend from before hands-on requests refuses any kind in its query.
+  bool handsOnMissing = false;
   // How many times the mentions list was read.
   int mentionReads = 0;
   // A backend from before tags: it has no list route.
@@ -531,6 +535,14 @@ class ConversationServer {
           ..['choice'] = command['choice']
           ..['answeredAt'] = '2026-10-27T06:00:00Z';
         state['decisionsWaiting'] = (state['decisionsWaiting'] as int) - 1;
+        revision++;
+      } else if (command['type'] == 'handsOn.answer') {
+        handsOn.firstWhere((r) => r['id'] == command['requestId'])
+          ..['answer'] = command['answer']
+          ..['note'] = command['note']
+          ..['until'] = command['until']
+          ..['answeredAt'] = '2026-10-27T06:00:00Z';
+        state['handsOnWaiting'] = (state['handsOnWaiting'] as int) - 1;
         revision++;
       } else if (command['type'] == 'mention.done') {
         mentions.firstWhere((m) => m['id'] == command['mentionId'])
@@ -694,6 +706,24 @@ class ConversationServer {
         }),
       ) as Map<String, dynamic>;
     }
+    if (uri.pathSegments.last == 'decisions' &&
+        uri.queryParameters.containsKey('kind')) {
+      if (handsOnMissing) {
+        throw const SuperTabFailure(
+          'VALIDATION_ERROR',
+          'Invalid query.',
+          statusCode: 400,
+        );
+      }
+      final open = uri.queryParameters['state'] == 'open';
+      return jsonDecode(
+        jsonEncode({
+          'handsOn': handsOn.reversed
+              .where((r) => (r['answeredAt'] == null) == open)
+              .toList(),
+        }),
+      ) as Map<String, dynamic>;
+    }
     if (uri.pathSegments.last == 'decisions') {
       final open = uri.queryParameters['state'] == 'open';
       return jsonDecode(
@@ -846,6 +876,36 @@ class ConversationServer {
     }
     state['decisionsWaiting'] =
         ((state['decisionsWaiting'] as int?) ?? 0) + questions.length;
+    revision++;
+  }
+
+  /// An agent asks the reader for hands-on help, as the backend records it.
+  void askHandsOn(
+    String request, {
+    List<String> steps = const ['Plug in the device', 'Press its button'],
+    String next = 'I flash the firmware',
+    String conversationId = 'lead',
+    String projectId = 'lead',
+  }) {
+    handsOn.add({
+      'id': 'request-${handsOn.length + 1}',
+      'kind': 'handsOn',
+      'projectId': projectId,
+      'projectName': 'web-project',
+      'conversationId': conversationId,
+      'conversationTitle': 'Lead',
+      'askerName': 'Wren',
+      'request': request,
+      'steps': steps,
+      'next': next,
+      'createdAt': '2026-10-27T05:00:00Z',
+      'remindedAt': null,
+      'answeredAt': null,
+      'answer': null,
+      'note': null,
+      'until': null,
+    });
+    state['handsOnWaiting'] = ((state['handsOnWaiting'] as int?) ?? 0) + 1;
     revision++;
   }
 

@@ -462,7 +462,8 @@ class ProjectSidebar extends StatelessWidget {
               selected: notificationsSelected,
               badge:
                   (snapshot?.mentionsWaiting ?? 0) +
-                  (snapshot?.decisionsWaiting ?? 0),
+                  (snapshot?.decisionsWaiting ?? 0) +
+                  (snapshot?.handsOnWaiting ?? 0),
             ),
           if (onNewProject != null ||
               onYourDevices != null ||

@@ -244,7 +244,9 @@ class SuperTabSnapshot {
       }),
       localModels = SuperTabLocalModels.read(row['localModels']),
       mentionsWaiting = (row['mentionsWaiting'] as num?)?.toInt() ?? 0,
-      decisionsWaiting = (row['decisionsWaiting'] as num?)?.toInt() ?? 0 {
+      decisionsWaiting = (row['decisionsWaiting'] as num?)?.toInt() ?? 0,
+      handsOnWaiting = (row['handsOnWaiting'] as num?)?.toInt() ?? 0,
+      requestRemindedAt = (row['requestRemindedAt'] as num?)?.toInt() {
     if (row['version'] != 1) {
       throw const FormatException('Update Harness to open this Swarm.');
     }
@@ -293,6 +295,14 @@ class SuperTabSnapshot {
   /// Decisions asked of the reader and not yet answered, Swarm-wide; 0 from a
   /// backend before decisions (backend superTabs/decisions.ts).
   final int decisionsWaiting;
+
+  /// Hands-on requests asked of the reader, still open (collaboration
+  /// protocol); the badge counts them with decisions.
+  final int handsOnWaiting;
+
+  /// When the latest of the reader's open requests was reminded, in ms since
+  /// the epoch; null while none was. A move raises a fresh notification.
+  final int? requestRemindedAt;
   SuperTabConversation? conversation(String id) =>
       conversations.where((c) => c.id == id).firstOrNull;
   SuperTabAgent? agent(String id) =>

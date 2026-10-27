@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 
 import 'controller.dart';
+import 'hands_on.dart';
 import 'model.dart';
 
 /// One question an agent asked the reader: options, the one it recommends and
@@ -36,9 +37,10 @@ class SuperTabDecision {
   final DateTime? createdAt;
 }
 
-/// The reader's decisions in one Swarm: open and answered, read from the
-/// backend whenever the open count moves or the Swarm changes while one is
-/// open. One per controller, as the reader's tags are (notifications.dart).
+/// The reader's decisions and hands-on requests in one Swarm: open and
+/// answered, read from the backend whenever an open count moves or the Swarm
+/// changes while one is open. One per controller, as the reader's tags are
+/// (notifications.dart).
 class SuperTabDecisions extends ChangeNotifier {
   SuperTabDecisions._(this.controller) {
     controller.addListener(_changed);
@@ -51,9 +53,11 @@ class SuperTabDecisions extends ChangeNotifier {
 
   final SuperTabController controller;
   List<SuperTabDecision> open = const [], answered = const [];
+  List<SuperTabHandsOn> handsOnOpen = const [], handsOnAnswered = const [];
   String? error;
 
-  /// Decisions being answered: their buttons wait for the backend.
+  /// Decisions and requests being answered: their buttons wait for the
+  /// backend.
   final Set<String> answering = {};
   int? _count;
   int _lastChangedAt = -1;
@@ -69,10 +73,16 @@ class SuperTabDecisions extends ChangeNotifier {
       if (d.projectId == projectId) d,
   ];
 
+  /// The open hands-on requests asked in [projectId]'s conversations.
+  List<SuperTabHandsOn> handsOnIn(String projectId) => [
+    for (final r in handsOnOpen)
+      if (r.projectId == projectId) r,
+  ];
+
   void _changed() {
     final snapshot = controller.snapshot;
     if (snapshot == null) return;
-    final count = snapshot.decisionsWaiting;
+    final count = snapshot.decisionsWaiting + snapshot.handsOnWaiting;
     final moved = count != _count;
     if (!moved && controller.lastChangedAt == _lastChangedAt) return;
     _lastChangedAt = controller.lastChangedAt;
@@ -96,29 +106,52 @@ class SuperTabDecisions extends ChangeNotifier {
     }().whenComplete(() => _loading = null);
   }
 
-  Future<List<SuperTabDecision>> _list(String state) async {
+  Future<List<T>> _list<T>(
+    String state,
+    String kind,
+    T Function(Map<String, dynamic>) read,
+  ) async {
     final Map<String, dynamic> answer;
     try {
-      answer = await controller.request('GET', '$_path/decisions?state=$state');
+      answer = await controller.request(
+        'GET',
+        // Decisions are the default kind, and a backend from before hands-on
+        // requests refuses any kind at all.
+        '$_path/decisions?state=$state${kind == 'handsOn' ? '&kind=$kind' : ''}',
+      );
     } on SuperTabFailure catch (failure) {
-      // A backend from before decisions has no list: there is nothing to show.
-      if (failure.statusCode == 404) return const [];
+      // A backend from before decisions has no list, and one from before
+      // hands-on requests refuses the kind: there is nothing to show.
+      if (failure.statusCode == 404 ||
+          (kind == 'handsOn' && failure.statusCode == 400)) {
+        return const [];
+      }
       rethrow;
     }
     return List.unmodifiable([
-      for (final row in answer['decisions'] as List)
-        SuperTabDecision.fromJson(superTabMap(row)),
+      for (final row
+          in answer[kind == 'handsOn' ? 'handsOn' : 'decisions'] as List)
+        read(superTabMap(row)),
     ]);
   }
 
   Future<void> _read() async {
     try {
-      final [nextOpen, nextAnswered] = await Future.wait([
-        _list('open'),
-        _list('answered'),
-      ]);
-      open = nextOpen;
-      answered = nextAnswered;
+      final (
+        decisionsOpen,
+        decisionsAnswered,
+        requestsOpen,
+        requestsAnswered,
+      ) = await (
+        _list('open', 'decision', SuperTabDecision.fromJson),
+        _list('answered', 'decision', SuperTabDecision.fromJson),
+        _list('open', 'handsOn', SuperTabHandsOn.fromJson),
+        _list('answered', 'handsOn', SuperTabHandsOn.fromJson),
+      ).wait;
+      open = decisionsOpen;
+      answered = decisionsAnswered;
+      handsOnOpen = requestsOpen;
+      handsOnAnswered = requestsAnswered;
       error = null;
     } catch (_) {
       error = 'Could not load decisions. Try again.';
@@ -128,27 +161,41 @@ class SuperTabDecisions extends ChangeNotifier {
 
   /// The reader's one-tap answer. Any reader may answer what was asked of
   /// them, so this does not wait behind the composer's pending send.
-  Future<bool> answer(SuperTabDecision decision, int choice) async {
-    answering.add(decision.id);
+  Future<bool> answer(SuperTabDecision decision, int choice) => _send(
+    decision.id,
+    {'type': 'decision.answer', 'decisionId': decision.id, 'choice': choice},
+  );
+
+  /// The reader's answer to a hands-on request: a note is required with
+  /// [SuperTabHandsOnAnswer.note], and [until] goes only with "can't now".
+  Future<bool> answerHandsOn(
+    SuperTabHandsOn request,
+    SuperTabHandsOnAnswer answer, {
+    String? note,
+    DateTime? until,
+  }) => _send(request.id, {
+    'type': 'handsOn.answer',
+    'requestId': request.id,
+    'answer': answer.name,
+    if (note != null && note.trim().isNotEmpty) 'note': note.trim(),
+    if (until != null && answer == SuperTabHandsOnAnswer.cant)
+      'until': until.toUtc().toIso8601String(),
+  });
+
+  Future<bool> _send(String id, Map<String, dynamic> command) async {
+    answering.add(id);
     notifyListeners();
     try {
       await controller.request(
         'POST',
         '$_path/commands',
-        body: {
-          'operationId': superTabOperationId(),
-          'command': {
-            'type': 'decision.answer',
-            'decisionId': decision.id,
-            'choice': choice,
-          },
-        },
+        body: {'operationId': superTabOperationId(), 'command': command},
       );
     } catch (_) {
       error = 'Could not send your answer. Try again.';
       return false;
     } finally {
-      answering.remove(decision.id);
+      answering.remove(id);
       notifyListeners();
     }
     await load();

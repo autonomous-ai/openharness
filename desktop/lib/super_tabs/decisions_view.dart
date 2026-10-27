@@ -5,10 +5,12 @@ import 'package:flutter/material.dart';
 import '../shared/theme/app_theme.dart' as grid;
 import '../widgets/desktop_chrome.dart';
 import 'decisions.dart';
+import 'hands_on_view.dart';
 import 'section_heading.dart';
 
-/// The reader's decisions in the Notifications pane: what is open first, one
-/// batch per ask, then the last few answered.
+/// The reader's hands-on requests and decisions in the Notifications pane:
+/// what is open first, decisions one batch per ask, then the last few
+/// answered. Requests show only when there are any.
 class SuperTabDecisionList extends StatelessWidget {
   const SuperTabDecisionList({super.key, required this.decisions});
   final SuperTabDecisions decisions;
@@ -25,6 +27,17 @@ class SuperTabDecisionList extends StatelessWidget {
       return Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
+          if (d.handsOnOpen.isNotEmpty || d.handsOnAnswered.isNotEmpty) ...[
+            const Padding(
+              padding: EdgeInsets.fromLTRB(12, 16, 12, 4),
+              child: SuperTabSectionHeading('Hands-on requests', endInset: 0),
+            ),
+            for (final request in [
+              ...d.handsOnOpen,
+              ...d.handsOnAnswered.take(answeredShown),
+            ])
+              SuperTabHandsOnCard(decisions: d, request: request),
+          ],
           const Padding(
             padding: EdgeInsets.fromLTRB(12, 16, 12, 4),
             child: SuperTabSectionHeading('Decisions', endInset: 0),
@@ -68,7 +81,8 @@ class SuperTabDecisionList extends StatelessWidget {
   );
 }
 
-/// The open decisions asked in one project, above its Chat with PM.
+/// The open hands-on requests and decisions asked in one project, above its
+/// Chat with PM: requests first, since a person's hands block the work.
 class SuperTabDecisionsPanel extends StatelessWidget {
   const SuperTabDecisionsPanel({
     super.key,
@@ -84,7 +98,8 @@ class SuperTabDecisionsPanel extends StatelessWidget {
     builder: (context, _) {
       grid.AppTheme.watch(context);
       final open = decisions.openIn(projectId);
-      if (open.isEmpty) return const SizedBox.shrink();
+      final requests = decisions.handsOnIn(projectId);
+      if (open.isEmpty && requests.isEmpty) return const SizedBox.shrink();
       return ConstrainedBox(
         constraints: const BoxConstraints(maxHeight: 320),
         child: ListView(
@@ -92,10 +107,19 @@ class SuperTabDecisionsPanel extends StatelessWidget {
           shrinkWrap: true,
           padding: const EdgeInsets.only(bottom: 8),
           children: [
-            const Padding(
-              padding: EdgeInsets.fromLTRB(12, 12, 12, 4),
-              child: SuperTabSectionHeading('Decisions for you', endInset: 0),
-            ),
+            if (requests.isNotEmpty) ...[
+              const Padding(
+                padding: EdgeInsets.fromLTRB(12, 12, 12, 4),
+                child: SuperTabSectionHeading('Hands-on for you', endInset: 0),
+              ),
+              for (final request in requests)
+                SuperTabHandsOnCard(decisions: decisions, request: request),
+            ],
+            if (open.isNotEmpty)
+              const Padding(
+                padding: EdgeInsets.fromLTRB(12, 12, 12, 4),
+                child: SuperTabSectionHeading('Decisions for you', endInset: 0),
+              ),
             for (final decision in open)
               SuperTabDecisionCard(decisions: decisions, decision: decision),
           ],

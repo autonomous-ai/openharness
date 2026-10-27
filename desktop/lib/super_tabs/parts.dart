@@ -259,8 +259,12 @@ class SuperTabParts {
     if (_derived['mentionsWaiting'] case final num waiting) {
       state['mentionsWaiting'] = waiting.toInt();
     }
-    if (_derived['decisionsWaiting'] case final num waiting) {
-      state['decisionsWaiting'] = waiting.toInt();
+    for (final count in const [
+      'decisionsWaiting',
+      'handsOnWaiting',
+      'requestRemindedAt',
+    ]) {
+      if (_derived[count] case final num value) state[count] = value.toInt();
     }
     return state;
   }
