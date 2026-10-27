@@ -93,6 +93,16 @@ class SwarmAsks extends ChangeNotifier {
   /// Decisions being answered: their buttons wait for the backend.
   final Set<String> answering = {};
 
+  /// Answers sent whose reply never came, by decision: sent again under the
+  /// same receipt and choice until one is confirmed, so the backend applies
+  /// the answer once and no other is offered meanwhile.
+  final _unconfirmed = <String, ({String operationId, int choice})>{};
+
+  /// The option sent for [decision] and not confirmed: [answer] sends it
+  /// again.
+  int? unconfirmed(SuperTabDecision decision) =>
+      _unconfirmed[decision.id]?.choice;
+
   /// An ask that arrived after the first read: what a phone notice tells.
   void Function(SwarmAskItem item)? onArrived;
 
@@ -144,6 +154,7 @@ class SwarmAsks extends ChangeNotifier {
     decisions = const [];
     mentions = const [];
     error = null;
+    _unconfirmed.clear();
     _counts = null;
     _failed = false;
     if (held) notifyListeners();
@@ -192,6 +203,8 @@ class SwarmAsks extends ChangeNotifier {
       mentions = List.unmodifiable(waitingRows.map(SuperTabMention.fromJson));
       error = null;
       _failed = false;
+      // No longer open: answered, by this answer or another.
+      _unconfirmed.removeWhere((id, _) => !decisions.any((d) => d.id == id));
       final seen = _seen;
       final now = <SwarmAskItem>[...decisions, ...mentions];
       _seen = {...?seen, for (final ask in now) ask.id};
@@ -208,26 +221,47 @@ class SwarmAsks extends ChangeNotifier {
     notifyListeners();
   }
 
-  Future<bool> _command(Map<String, dynamic> command) async {
-    await reader.request(
-      'POST',
-      '$_path/commands',
-      body: {'operationId': superTabOperationId(), 'command': command},
-    );
-    return true;
-  }
+  Future<void> _command(Map<String, dynamic> command, {String? operationId}) =>
+      reader.request(
+        'POST',
+        '$_path/commands',
+        body: {
+          'operationId': operationId ?? superTabOperationId(),
+          'command': command,
+        },
+      );
 
   /// The reader's one-tap answer, sent once. Any reader may answer what was
-  /// asked of them, viewers included.
+  /// asked of them, viewers included. An answer not confirmed is sent again
+  /// as it was, whatever [choice] says; a decision the backend has answered
+  /// already (by this answer, its reply lost, or another device) is read
+  /// back.
   Future<bool> answer(SuperTabDecision decision, int choice) async {
-    if (!answering.add(decision.id)) return false;
+    if (_disposed || !answering.add(decision.id)) return false;
+    final sent = _unconfirmed[decision.id] ??= (
+      operationId: superTabOperationId(),
+      choice: choice,
+    );
     notifyListeners();
     try {
       await _command({
         'type': 'decision.answer',
         'decisionId': decision.id,
-        'choice': choice,
-      });
+        'choice': sent.choice,
+      }, operationId: sent.operationId);
+    } on SuperTabFailure catch (failure) {
+      if (failure.code != 'DECISION_ANSWERED') {
+        // A definitive refusal changed nothing: another answer may be sent.
+        // A lost reply keeps its receipt, so a retry is the same answer.
+        final status = failure.statusCode;
+        final refused =
+            status >= 400 && status < 500 && status != 408 && status != 429;
+        if (refused) _unconfirmed.remove(decision.id);
+        error = refused
+            ? failure.message
+            : 'Could not send your answer. Try again.';
+        return false;
+      }
     } catch (_) {
       error = 'Could not send your answer. Try again.';
       return false;
@@ -235,6 +269,8 @@ class SwarmAsks extends ChangeNotifier {
       answering.remove(decision.id);
       if (!_disposed) notifyListeners();
     }
+    _unconfirmed.remove(decision.id);
+    error = null;
     await load();
     unawaited(reader.refresh());
     return true;

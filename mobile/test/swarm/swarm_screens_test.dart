@@ -187,6 +187,37 @@ void main() {
       });
     });
 
+    testWidgets(
+      'an answer not confirmed offers only to send the same one again',
+      (tester) async {
+        final fake = backend();
+        var lost = true;
+        fake.routes['/api/super-tabs/$tab/commands'] = (_) => lost
+            ? throw const SuperTabFailure('MACHINE_UNAVAILABLE', 'No computer.')
+            : {'result': <String, dynamic>{}};
+        await pump(tester, fake, const SwarmPage());
+
+        await tester.tap(key('swarm-option-d1-1'));
+        await tester.pump(const Duration(seconds: 4));
+        await tester.pumpAndSettle();
+
+        expect(key('swarm-option-d1-0'), findsNothing);
+        expect(key('swarm-option-d1-1'), findsNothing);
+        expect(find.text('“No” is not confirmed.'), findsOneWidget);
+
+        lost = false;
+        await tester.tap(key('swarm-resend-d1'));
+        await tester.pumpAndSettle();
+
+        expect([for (final c in fake.commands) c['choice']], [1, 1]);
+        final operations = {
+          for (final call in fake.calls)
+            if (call.method == 'POST') call.body!['operationId'],
+        };
+        expect(operations, hasLength(1));
+      },
+    );
+
     testWidgets('a tag is marked done from its row', (tester) async {
       final fake = backend();
       await pump(tester, fake, const SwarmPage());

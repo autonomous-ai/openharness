@@ -252,6 +252,91 @@ void main() {
     expect(r.asks.error, 'Could not send your answer. Try again.');
   });
 
+  /// The backend's commands route as it treats answers: one answer per
+  /// decision, and a receipt per operation that replays its reply.
+  ({List<Map<String, dynamic>> sent, void Function() loseReplies}) answers(
+    FakeSwarm swarm,
+    List<Map<String, dynamic>> Function() open,
+    void Function() answered,
+  ) {
+    final sent = <Map<String, dynamic>>[];
+    final receipts = <String>{};
+    var lose = false;
+    swarm.routes['/api/super-tabs/$tab/commands'] = (body) {
+      sent.add(body!);
+      final operation = body['operationId'] as String;
+      if (!receipts.contains(operation)) {
+        if (open().isEmpty) {
+          throw const SuperTabFailure(
+            'DECISION_ANSWERED',
+            'This decision is already answered.',
+            statusCode: 409,
+          );
+        }
+        receipts.add(operation);
+        answered();
+      }
+      if (lose) {
+        lose = false;
+        throw const SuperTabFailure('MACHINE_UNAVAILABLE', 'No computer.');
+      }
+      return {'result': <String, dynamic>{}};
+    };
+    return (sent: sent, loseReplies: () => lose = true);
+  }
+
+  test('an answer taken whose reply was lost is sent again as the same answer, '
+      'and no other is offered meanwhile', () async {
+    final r = rig(decisions: 1);
+    var open = [decisionRow('d1')];
+    r.swarm.routes['/api/super-tabs/$tab/decisions?state=open'] = (_) => {
+      'decisions': open,
+    };
+    final backend = answers(r.swarm, () => open, () => open = []);
+    await r.reader.refresh();
+    await settle();
+    final decision = r.asks.decisions.single;
+
+    backend.loseReplies();
+    expect(await r.asks.answer(decision, 1), isFalse);
+    expect(r.asks.unconfirmed(decision), 1);
+
+    expect(await r.asks.answer(decision, 0), isTrue);
+
+    expect(backend.sent, hasLength(2));
+    expect(
+      {for (final body in backend.sent) body['operationId']},
+      hasLength(1),
+      reason: 'the retry is the same command, so its receipt answers it',
+    );
+    expect(
+      [for (final body in backend.sent) (body['command'] as Map)['choice']],
+      [1, 1],
+    );
+    expect(r.asks.unconfirmed(decision), isNull);
+    expect(r.asks.decisions, isEmpty);
+    expect(r.asks.error, isNull);
+  });
+
+  test('an answer to a decision answered already reads it back', () async {
+    final r = rig(decisions: 1);
+    var open = [decisionRow('d1')];
+    r.swarm.routes['/api/super-tabs/$tab/decisions?state=open'] = (_) => {
+      'decisions': open,
+    };
+    answers(r.swarm, () => open, () => open = []);
+    await r.reader.refresh();
+    await settle();
+    final decision = r.asks.decisions.single;
+    open = []; // Answered on another device meanwhile.
+
+    await r.asks.answer(decision, 0);
+
+    expect(r.asks.decisions, isEmpty);
+    expect(r.asks.unconfirmed(decision), isNull);
+    expect(r.asks.error, isNull);
+  });
+
   test('done with a tag sends it once, then reads again', () async {
     final r = rig(mentions: 1);
     var waiting = [mentionRow('m1')];

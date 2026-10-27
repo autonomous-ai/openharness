@@ -151,6 +151,23 @@ class SwarmDecisionCard extends StatelessWidget {
               'Sending…',
               style: tty.style(color: tty.dim, size: TtySize.meta),
             )
+          // Sent, and maybe taken: only the same answer may go again.
+          else if (asks?.unconfirmed(decision) case final choice?)
+            Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    '“${_option(decision.options, choice)}” is not confirmed.',
+                    style: tty.style(color: tty.yellow, size: TtySize.meta),
+                  ),
+                ),
+                TtyTextButton(
+                  key: ValueKey('swarm-resend-${decision.id}'),
+                  label: 'Send again',
+                  onPressed: () => unawaited(asks!.answer(decision, choice)),
+                ),
+              ],
+            )
           else
             for (final (index, option) in decision.options.indexed)
               Padding(
