@@ -199,6 +199,13 @@ void main() {
           findsOneWidget,
         );
         expect(_line('Lark', 'Lost · Mac Studio · opus high'), findsOneWidget);
+        final tip = tester
+            .widgetList<Tooltip>(
+              find.ancestor(of: _row('Lark'), matching: find.byType(Tooltip)),
+            )
+            .single
+            .message!;
+        expect(tip, contains('Lost "Task of Lark"'));
         expect(_line('Kite', 'Down · MacBook Pro · opus high'), findsOneWidget);
         expect(
           _line(
