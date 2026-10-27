@@ -22,7 +22,7 @@ import { clock, insertParts, lastChangedAt, loadActive, reassemble, split, type 
 import { commitParts, indexesOf, numberMessages, type Touch, type Written } from './parts/commit.js'
 import { touchesFor } from './parts/touches.js'
 import { revokeNativeContexts, SuperTabNativeStore } from './native.js'
-import { addMember, listOrgs, memberId, ORG_ACCESS_REVOKED, orgForNewSwarm, requireOrgAccess } from './orgStore.js'
+import { addMember, listOrgs, memberId, ORG_ACCESS_REVOKED, orgForNewSwarm, requireOrgAccess, requireOrgRole, SwarmOrgs } from './orgStore.js'
 import { ORG_LABEL } from './orgs.js'
 import {
   activeWork, actorKey, agent, agentOnly, appendPullRequestUrls, author, conversation, createSuperTab, fail, person, stableId, visibleState, finishWorker,
@@ -184,6 +184,7 @@ const routeDecisionOf = (command: Command): string | undefined => command.type =
 
 export class SuperTabStore {
   readonly native: SuperTabNativeStore
+  readonly orgs: SwarmOrgs
   constructor(readonly db: PrismaClient, readonly now: () => number = Date.now,
     private readonly attachments: Attachments | null = null, private readonly hooks: SuperTabStoreHooks = {}) {
     this.native = new SuperTabNativeStore({
@@ -195,6 +196,12 @@ export class SuperTabStore {
       contribution: (tx, state, actor, command) => this.contribution(tx, state, actor, command),
       teamHost: (tx, user) => this.teamHost(tx, user),
       orgAccess: (tx, state, userId) => requireOrgAccess(tx, state, userId),
+    })
+    this.orgs = new SwarmOrgs(db, {
+      transaction: body => transaction(db, body),
+      leave: (person, tabId, operationId) => this.executeOnce(person, tabId, { operationId, command: { type: 'member.remove', userId: person.sub } },
+        undefined, undefined, true),
+      now,
     })
   }
 
@@ -371,12 +378,13 @@ export class SuperTabStore {
   }
 
   /** Shared with the read API (superTabs/read, design section 7.2). */
-  async actor(tx: Transaction, user: AuthUser, state: SuperTabState, agentId?: string): Promise<Actor> {
+  /** `orgLeave` is a Team removal leaving this Swarm for the person (orgStore.ts SwarmOrgs.remove): past the Team check. */
+  async actor(tx: Transaction, user: AuthUser, state: SuperTabState, agentId?: string, orgLeave = false): Promise<Actor> {
     const team = await this.teamHost(tx, user)
     if (!agentId) {
       // A team session never speaks or reads as the person.
       if (team !== null) fail(TEAM_SESSION_LIMITED, TEAM_SESSION_MESSAGE, 403)
-      await requireOrgAccess(tx, state, user.sub)
+      if (!orgLeave) await requireOrgAccess(tx, state, user.sub)
       return { kind: 'person', userId: user.sub, email: user.email }
     }
     const target = agent(state, agentId)
@@ -466,9 +474,41 @@ export class SuperTabStore {
     }), next: rows.length > 100 ? rows[99]!.id : null }
   }
 
-  async orgs(user: AuthUser) {
+  async orgList(user: AuthUser) {
     this.personOnly(user)
     return { orgs: await listOrgs(this.db, user) }
+  }
+
+  /** Opens a Swarm to its Team's members, or closes it again: its owner (not a guest) or the Team's owners and admins,
+   *  who need not be in the Swarm. Closing it leaves everyone who joined. */
+  async setOrgVisibility(user: AuthUser, tabId: string, visibility: 'invite-only' | 'org') {
+    this.personOnly(user)
+    return transaction(this.db, async tx => {
+      const loaded = await this.load(tx, user, tabId), state = structuredClone(loaded.state)
+      if (!state.orgId) fail('ORG_REQUIRED', `This Swarm has no ${ORG_LABEL} yet.`, 409)
+      const own = await tx.swarmOrgMember.findUnique({ where: { id: memberId(state.orgId, user.sub) } })
+      if (!(state.ownerId === user.sub && own && !own.removedAt && own.role !== 'guest')) await requireOrgRole(tx, state.orgId, user.sub, 'swarm.manage')
+      state.orgVisibility = visibility
+      await this.save(tx, loaded, state, clock.next(), [{ kind: 'head', key: 'head' }])
+      return { id: tabId, orgVisibility: visibility }
+    })
+  }
+
+  /** A member or above joins a Swarm open to their Team, as a collaborator. A guest never does (design, Roles). */
+  async orgJoin(user: AuthUser, tabId: string, operationId: string) {
+    this.personOnly(user)
+    return transaction(this.db, async tx => {
+      const loaded = await this.load(tx, user, tabId), state = structuredClone(loaded.state)
+      if (!state.orgId || state.orgVisibility !== 'org') fail('FORBIDDEN', 'This Swarm is not open to its Team.', 403)
+      await requireOrgRole(tx, state.orgId, user.sub, 'swarm.joinOpen')
+      const existing = state.people.find(p => p.id === user.sub)
+      if (existing) return { id: tabId, role: existing.role, alreadyMember: true }
+      const member = { id: user.sub, email: authenticatedEmail(user.email)!, role: 'collaborator' as const, generation: stableId('org-join', tabId, user.sub, operationId) }
+      state.people.push(member)
+      // As a link join does: the open visibility it relied on lives on the head, so closing it at once conflicts.
+      await this.save(tx, loaded, state, clock.next(), [{ kind: 'head', key: 'head' }])
+      return { id: tabId, role: member.role, alreadyMember: false }
+    })
   }
 
   async invitations(user: AuthUser) {
@@ -638,7 +678,8 @@ export class SuperTabStore {
     }
   }
 
-  private async executeOnce(user: AuthUser, tabId: string, input: { operationId: string; command: Command }, asAgentId?: string, hostMachineId?: string) {
+  private async executeOnce(user: AuthUser, tabId: string, input: { operationId: string; command: Command }, asAgentId?: string, hostMachineId?: string,
+    orgLeave = false) {
     const { operationId, command } = operationSchema.parse(input)
     let ended: WorkHold[] = []
     const done = await transaction(this.db, async tx => {
@@ -672,7 +713,7 @@ export class SuperTabStore {
       const actor: Actor = command.type === 'agent.sessionClosed' || command.type === 'machine.cleaned' ? { kind: 'person', userId: user.sub, email: user.email }
         : hostMachineId && 'startId' in command
           ? await this.poolHostActor(tx, user, original, hostMachineId, command.startId)
-          : await this.actor(tx, user, original, asAgentId)
+          : await this.actor(tx, user, original, asAgentId, orgLeave && command.type === 'member.remove' && command.userId === user.sub && !asAgentId)
       const receiptId = stableId(tabId, actorKey(actor), operationId)
       const requestHash = hash(command)
       const prior = await tx.superTabOperation.findUnique({ where: { id: receiptId } })

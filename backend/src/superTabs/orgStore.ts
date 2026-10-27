@@ -1,7 +1,8 @@
 import type { Prisma, PrismaClient, SwarmOrgMember } from '@prisma/client'
 import type { AuthUser } from '../lib/ssoAuth.js'
 import { fail, stableId, type SuperTabState } from './model.js'
-import { ORG_LABEL, orgCan, type OrgAction, type OrgRole } from './orgs.js'
+import { mayAssignRole, mayManageMember, ORG_LABEL, orgCan, type OrgAction, type OrgRole } from './orgs.js'
+import { logger } from '../utils/logger.js'
 
 type Transaction = Prisma.TransactionClient
 
@@ -96,4 +97,190 @@ export async function listOrgs(db: PrismaClient, user: AuthUser): Promise<OrgSum
     })
     return { id: org.id, name: org.name, role, revision: org.revision, swarms }
   })
+}
+
+/** How long a removed person's row and a deleted Team stay before they are purged (design, Growth). */
+export const ORG_PURGE_MS = 30 * 24 * 60 * 60 * 1000
+const INVITATION_MS = 14 * 24 * 60 * 60 * 1000
+
+interface OrgDeps {
+  transaction<T>(body: (tx: Transaction) => Promise<T>): Promise<T>
+  /** The person leaves one Swarm, as a leave of their own does (`member.remove` of themselves), past the Team check. */
+  leave(person: AuthUser, tabId: string, operationId: string): Promise<unknown>
+  now(): number
+}
+
+const personOf = (row: Pick<SwarmOrgMember, 'userId' | 'email'>, environment: string): AuthUser =>
+  ({ sub: row.userId, email: row.email, autonomousEnv: environment as AuthUser['autonomousEnv'], role: 'user' })
+
+/** Team actions: people, roles, invitations, ownership. Every one is the signed-in person's own (design, Identity). */
+export class SwarmOrgs {
+  constructor(private readonly db: PrismaClient, private readonly deps: OrgDeps) {}
+
+  private async org(tx: Transaction, user: AuthUser, orgId: string) {
+    const org = await tx.swarmOrg.findUnique({ where: { id: orgId } })
+    if (!org || org.deletedAt || org.autonomousEnv !== user.autonomousEnv) fail('NOT_FOUND', `This ${ORG_LABEL} is unavailable.`, 404)
+    return org
+  }
+
+  async create(user: AuthUser, operationId: string, name: string) {
+    const id = stableId('swarm-org', user.autonomousEnv, user.sub, operationId)
+    return this.deps.transaction(async tx => {
+      const prior = await tx.swarmOrg.findUnique({ where: { id } })
+      if (prior) {
+        if (prior.ownerId !== user.sub || prior.name !== name) fail('OPERATION_REUSED', 'Use a new operation ID for a different request.')
+        return { id }
+      }
+      await tx.swarmOrg.create({ data: { id, autonomousEnv: user.autonomousEnv, name, ownerId: user.sub, deletedAt: null, purgeAt: null } })
+      await addMember(tx, id, { id: user.sub, email: user.email }, 'owner', user.sub, id)
+      return { id }
+    })
+  }
+
+  async rename(user: AuthUser, orgId: string, name: string) {
+    return this.deps.transaction(async tx => {
+      await this.org(tx, user, orgId)
+      await requireOrgRole(tx, orgId, user.sub, 'org.rename')
+      const org = await tx.swarmOrg.update({ where: { id: orgId }, data: { name, revision: { increment: 1 } } })
+      return { id: org.id, name: org.name, revision: org.revision }
+    })
+  }
+
+  /** The Team's people for members and up; owners and admins also see open invitations. */
+  async members(user: AuthUser, orgId: string) {
+    return this.deps.transaction(async tx => {
+      await this.org(tx, user, orgId)
+      const me = await requireOrgRole(tx, orgId, user.sub, 'people.list')
+      const rows = await tx.swarmOrgMember.findMany({ where: { orgId, removedAt: null }, orderBy: { addedAt: 'asc' }, take: 1000 })
+      const invitations = orgCan(me.role, 'org.invite')
+        ? (await tx.swarmOrgInvitation.findMany({ where: { orgId }, take: 1000 })).filter(i => i.expiresAt.getTime() > this.deps.now())
+          .map(i => ({ email: i.email, role: i.role, expiresAt: i.expiresAt.getTime() }))
+        : []
+      return { members: rows.map(m => ({ userId: m.userId, email: m.email, role: m.role })), invitations }
+    })
+  }
+
+  async invite(user: AuthUser, orgId: string, email: string, role: OrgRole) {
+    const address = email.trim().toLowerCase()
+    return this.deps.transaction(async tx => {
+      await this.org(tx, user, orgId)
+      const me = await requireOrgRole(tx, orgId, user.sub, 'org.invite')
+      if (!mayAssignRole(me.role, role)) fail('ORG_ROLE_REQUIRED', `Your role in this ${ORG_LABEL} cannot invite as ${role}.`, 403)
+      const id = `${orgId}:${address}`, expiresAt = new Date(this.deps.now() + INVITATION_MS)
+      await tx.swarmOrgInvitation.upsert({ where: { id }, create: { id, orgId, email: address, role, invitedBy: user.sub, expiresAt },
+        update: { role, invitedBy: user.sub, expiresAt } })
+      return { email: address, role, expiresAt: expiresAt.getTime() }
+    })
+  }
+
+  /** Invitations waiting for the signed-in person. */
+  async invitationsFor(user: AuthUser) {
+    const rows = await this.db.swarmOrgInvitation.findMany({ where: { email: user.email.trim().toLowerCase(), expiresAt: { gt: new Date(this.deps.now()) } }, take: 100 })
+    const orgs = await this.db.swarmOrg.findMany({ where: { id: { in: rows.map(r => r.orgId) }, autonomousEnv: user.autonomousEnv } })
+    return { invitations: rows.flatMap(row => {
+      const org = orgs.find(o => o.id === row.orgId && !o.deletedAt)
+      return org ? [{ orgId: org.id, name: org.name, role: row.role, expiresAt: row.expiresAt.getTime() }] : []
+    }) }
+  }
+
+  /** Accepting brings a person in with the invited role, or raises a guest to it; it never lowers a role. */
+  async accept(user: AuthUser, orgId: string) {
+    const address = user.email.trim().toLowerCase()
+    return this.deps.transaction(async tx => {
+      await this.org(tx, user, orgId)
+      const invitation = await tx.swarmOrgInvitation.findUnique({ where: { id: `${orgId}:${address}` } })
+      if (!invitation || invitation.expiresAt.getTime() <= this.deps.now()) fail('NOT_FOUND', 'This invitation is unavailable.', 404)
+      await tx.swarmOrgInvitation.delete({ where: { id: invitation.id } })
+      const role = invitation.role as OrgRole
+      const current = await activeMember(tx, orgId, user.sub)
+      if (current && current.role === 'guest' && role !== 'guest') {
+        await tx.swarmOrgMember.update({ where: { id: current.id }, data: { role, version: { increment: 1 } } })
+        return { orgId, role }
+      }
+      const added = await addMember(tx, orgId, { id: user.sub, email: address }, role, invitation.invitedBy, stableId('org-accept', invitation.id, String(invitation.expiresAt.getTime())))
+      return { orgId, role: added.role }
+    })
+  }
+
+  /** Someone who owns one of the Team's Swarms stays at least a member, and cannot be removed until it moves. */
+  private async ownsTeamSwarm(tx: Transaction, orgId: string, userId: string): Promise<boolean> {
+    return !!await tx.superTab.findFirst({ where: { orgId, ownerId: userId }, select: { id: true } })
+  }
+
+  async setRole(user: AuthUser, orgId: string, userId: string, role: OrgRole) {
+    return this.deps.transaction(async tx => {
+      await this.org(tx, user, orgId)
+      const me = await requireOrgRole(tx, orgId, user.sub, 'people.list')
+      const target = await activeMember(tx, orgId, userId) ?? fail('NOT_FOUND', 'This person is not in the Team.', 404)
+      if (userId === user.sub || !mayManageMember(me.role, target.role as OrgRole) || !mayAssignRole(me.role, role)) {
+        fail('ORG_ROLE_REQUIRED', `Your role in this ${ORG_LABEL} cannot give that role.`, 403)
+      }
+      if (role === 'guest' && await this.ownsTeamSwarm(tx, orgId, userId)) {
+        fail('SWARM_OWNER', 'This person owns a Swarm of this Team, so they stay a member or above.', 409)
+      }
+      await tx.swarmOrgMember.update({ where: { id: target.id }, data: { role, version: { increment: 1 } } })
+      return { userId, role }
+    })
+  }
+
+  /** Ownership moves to an admin at once; the old owner stays as an admin. */
+  async transfer(user: AuthUser, orgId: string, userId: string) {
+    return this.deps.transaction(async tx => {
+      await this.org(tx, user, orgId)
+      const me = await requireOrgRole(tx, orgId, user.sub, 'org.transfer')
+      const target = await activeMember(tx, orgId, userId)
+      if (!target || target.role !== 'admin') fail('ADMIN_REQUIRED', `Ownership moves only to an admin of the ${ORG_LABEL}.`, 409)
+      await tx.swarmOrgMember.update({ where: { id: target.id }, data: { role: 'owner', version: { increment: 1 } } })
+      await tx.swarmOrgMember.update({ where: { id: me.id }, data: { role: 'admin', version: { increment: 1 } } })
+      await tx.swarmOrg.update({ where: { id: orgId }, data: { ownerId: userId, revision: { increment: 1 } } })
+      return { ownerId: userId }
+    })
+  }
+
+  /** Removes a person (or lets them leave), then from every Swarm of the Team. The Team check refuses them everywhere
+   *  from the moment the first transaction commits; the Swarm removals follow, and `finishRemovals` retries any that
+   *  failed (design, Concurrency). */
+  async remove(user: AuthUser, orgId: string, userId: string) {
+    const removed = await this.deps.transaction(async tx => {
+      const org = await this.org(tx, user, orgId)
+      const target = await activeMember(tx, orgId, userId) ?? fail('NOT_FOUND', 'This person is not in the Team.', 404)
+      if (target.role === 'owner') fail('OWNER_REQUIRED', `The ${ORG_LABEL}'s owner cannot leave it; transfer it first.`, 409)
+      if (userId !== user.sub) {
+        const me = await requireOrgRole(tx, orgId, user.sub, 'people.list')
+        if (!mayManageMember(me.role, target.role as OrgRole)) fail('ORG_ROLE_REQUIRED', `Your role in this ${ORG_LABEL} cannot remove them.`, 403)
+      }
+      if (await this.ownsTeamSwarm(tx, orgId, userId)) fail('SWARM_OWNER', 'This person owns a Swarm of this Team. Move or delete it first.', 409)
+      const now = this.deps.now()
+      await tx.swarmOrgMember.update({ where: { id: target.id }, data: { removedAt: new Date(now), removedBy: user.sub,
+        purgeAt: new Date(now + ORG_PURGE_MS), version: { increment: 1 } } })
+      return { target, environment: org.autonomousEnv }
+    })
+    const pending = await this.leaveSwarms(removed.target, removed.environment)
+    return { userId, pending }
+  }
+
+  /** The removed person leaves each Swarm of the Team they are still in. Returns how many could not be left now. */
+  private async leaveSwarms(target: SwarmOrgMember, environment: string): Promise<number> {
+    const rows = await this.db.superTab.findMany({ where: { autonomousEnv: environment, orgId: target.orgId, memberIds: { has: target.userId } }, select: { id: true } })
+    let pending = 0
+    for (const row of rows) {
+      try { await this.deps.leave(personOf(target, environment), row.id, stableId('org-removal', target.id, target.generation)) } catch (error) {
+        pending++
+        logger.warn('[swarm-orgs] a removal could not leave a Swarm yet', { orgId: target.orgId, tabId: row.id, error: error instanceof Error ? error.message : String(error) })
+      }
+    }
+    return pending
+  }
+
+  /** The sweep: removals whose Swarm removals did not all finish. */
+  async finishRemovals(): Promise<number> {
+    const since = new Date(this.deps.now() - ORG_PURGE_MS)
+    const removed = await this.db.swarmOrgMember.findMany({ where: { removedAt: { gt: since } }, take: 500 })
+    let pending = 0
+    for (const target of removed) {
+      const org = await this.db.swarmOrg.findUnique({ where: { id: target.orgId }, select: { autonomousEnv: true } })
+      if (org) pending += await this.leaveSwarms(target, org.autonomousEnv)
+    }
+    return pending
+  }
 }

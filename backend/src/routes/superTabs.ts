@@ -22,6 +22,8 @@ import { logger } from '../utils/logger.js'
 import { SwarmReads } from '../superTabs/read/service.js'
 import { HostReads } from '../superTabs/read/host.js'
 import { UPDATE_REQUIRED } from '../superTabs/read/contract.js'
+import { isTeamSession, TEAM_SESSION_LIMITED, TEAM_SESSION_MESSAGE } from '../lib/teamSession.js'
+import type { AuthUser } from '../lib/ssoAuth.js'
 
 const id = z.string().min(1).max(160).regex(/^[A-Za-z0-9_-]+$/)
 const tabParams = z.object({ tabId: id })
@@ -29,6 +31,18 @@ const agentQuery = z.object({ asAgentId: id.optional() }).strict()
 const create = z.object({ operationId: id, name: z.string().trim().min(1).max(160), projectVisibility: z.enum(['public', 'private']).optional(),
   orgId: id.optional() }).strict()
 const operation = operationSchema.extend({ asAgentId: id.optional() })
+// Teams (superTabs/orgStore.ts). A Team session (lib/teamSession.ts) never acts on a Team: only the signed-in person does.
+const orgParams = z.object({ orgId: id })
+const orgMemberParams = z.object({ orgId: id, userId: id })
+const orgName = z.string().trim().min(1).max(160)
+const orgCreate = z.object({ operationId: id, name: orgName }).strict()
+const orgRename = z.object({ name: orgName }).strict()
+const orgInvite = z.object({ email: z.email().max(320), role: z.enum(['admin', 'member', 'guest']) }).strict()
+const orgRole = z.object({ role: z.enum(['admin', 'member', 'guest']) }).strict()
+const orgTransfer = z.object({ userId: id }).strict()
+const orgVisibility = z.object({ visibility: z.enum(['invite-only', 'org']) }).strict()
+const orgJoin = z.object({ operationId: id }).strict()
+const personOnly = (user: AuthUser) => { if (isTeamSession(user)) fail(TEAM_SESSION_LIMITED, TEAM_SESSION_MESSAGE, 403) }
 const listQuery = z.object({ after: id.optional() }).strict()
 const cursor = z.string().min(1).max(512).regex(/^[A-Za-z0-9_-]+$/)
 const changesQuery = agentQuery.extend({ cursor })
@@ -153,7 +167,34 @@ export async function superTabRoutes(app: FastifyInstance, options: { store?: Su
   app.post<{ Body: z.infer<typeof create> }>('/api/super-tabs', { preHandler: validateBody(create) },
     (req, reply) => respond(reply, () => store.create(req.user!, req.body.operationId, req.body.name, req.body.projectVisibility, req.body.orgId)))
   // Teams (docs/plans/2026-10-27-swarm-teams.md): the person's Teams and the Swarms they may see in each.
-  app.get('/api/super-tabs/orgs', (req, reply) => respond(reply, () => store.orgs(req.user!)))
+  app.get('/api/super-tabs/orgs', (req, reply) => respond(reply, () => store.orgList(req.user!)))
+  app.post<{ Body: z.infer<typeof orgCreate> }>('/api/super-tabs/orgs', { preHandler: validateBody(orgCreate) },
+    (req, reply) => respond(reply, () => { personOnly(req.user!); return store.orgs.create(req.user!, req.body.operationId, req.body.name) }))
+  app.get('/api/super-tabs/org-invitations', (req, reply) => respond(reply, () => { personOnly(req.user!); return store.orgs.invitationsFor(req.user!) }))
+  app.post<{ Params: z.infer<typeof orgParams>; Body: z.infer<typeof orgRename> }>('/api/super-tabs/orgs/:orgId',
+    { preHandler: [validateParams(orgParams), validateBody(orgRename)] },
+    (req, reply) => respond(reply, () => { personOnly(req.user!); return store.orgs.rename(req.user!, req.params.orgId, req.body.name) }))
+  app.get<{ Params: z.infer<typeof orgParams> }>('/api/super-tabs/orgs/:orgId/members', { preHandler: validateParams(orgParams) },
+    (req, reply) => respond(reply, () => { personOnly(req.user!); return store.orgs.members(req.user!, req.params.orgId) }))
+  app.post<{ Params: z.infer<typeof orgParams>; Body: z.infer<typeof orgInvite> }>('/api/super-tabs/orgs/:orgId/invitations',
+    { preHandler: [validateParams(orgParams), validateBody(orgInvite)] },
+    (req, reply) => respond(reply, () => { personOnly(req.user!); return store.orgs.invite(req.user!, req.params.orgId, req.body.email, req.body.role) }))
+  app.post<{ Params: z.infer<typeof orgParams> }>('/api/super-tabs/orgs/:orgId/accept', { preHandler: validateParams(orgParams) },
+    (req, reply) => respond(reply, () => { personOnly(req.user!); return store.orgs.accept(req.user!, req.params.orgId) }))
+  app.post<{ Params: z.infer<typeof orgMemberParams>; Body: z.infer<typeof orgRole> }>('/api/super-tabs/orgs/:orgId/members/:userId',
+    { preHandler: [validateParams(orgMemberParams), validateBody(orgRole)] },
+    (req, reply) => respond(reply, () => { personOnly(req.user!); return store.orgs.setRole(req.user!, req.params.orgId, req.params.userId, req.body.role) }))
+  app.delete<{ Params: z.infer<typeof orgMemberParams> }>('/api/super-tabs/orgs/:orgId/members/:userId', { preHandler: validateParams(orgMemberParams) },
+    (req, reply) => respond(reply, () => { personOnly(req.user!); return store.orgs.remove(req.user!, req.params.orgId, req.params.userId) }))
+  app.post<{ Params: z.infer<typeof orgParams>; Body: z.infer<typeof orgTransfer> }>('/api/super-tabs/orgs/:orgId/transfer',
+    { preHandler: [validateParams(orgParams), validateBody(orgTransfer)] },
+    (req, reply) => respond(reply, () => { personOnly(req.user!); return store.orgs.transfer(req.user!, req.params.orgId, req.body.userId) }))
+  app.post<{ Params: z.infer<typeof tabParams>; Body: z.infer<typeof orgVisibility> }>('/api/super-tabs/:tabId/org-visibility',
+    { preHandler: [validateParams(tabParams), validateBody(orgVisibility)] },
+    (req, reply) => respond(reply, () => store.setOrgVisibility(req.user!, req.params.tabId, req.body.visibility)))
+  app.post<{ Params: z.infer<typeof tabParams>; Body: z.infer<typeof orgJoin> }>('/api/super-tabs/:tabId/org-join',
+    { preHandler: [validateParams(tabParams), validateBody(orgJoin)] },
+    (req, reply) => respond(reply, () => store.orgJoin(req.user!, req.params.tabId, req.body.operationId)))
   app.get('/api/super-tabs/invitations', (req, reply) => respond(reply, () => store.invitations(req.user!)))
   app.get<{ Params: z.infer<typeof tabParams> }>('/api/super-tabs/:tabId/sharing',
     { preHandler: validateParams(tabParams) },
