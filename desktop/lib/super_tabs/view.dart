@@ -91,7 +91,6 @@ class _SuperTabViewState extends State<SuperTabView>
   bool _boardOpen = false, _boardRoomy = false;
   SuperTabSwarmBoard? _boardRead;
   SuperTabSwarmBoard get _board => _boardRead ??= SuperTabSwarmBoard(c);
-  bool _showNotifications = false;
   // The message a tag opened, scrolled to once it is laid out.
   String? _target;
   final _targetKey = GlobalKey();
@@ -270,7 +269,7 @@ class _SuperTabViewState extends State<SuperTabView>
         _devicesVisible ||
         _terminalsVisible ||
         _showPullRequests ||
-        _showNotifications) {
+        c.notificationsOpen) {
       return false;
     }
     final lifecycle = WidgetsBinding.instance.lifecycleState;
@@ -766,37 +765,33 @@ class _SuperTabViewState extends State<SuperTabView>
     notificationsSelected: _notificationsVisible,
     onNotifications: () {
       _closeSidebar();
-      setState(() {
-        _showNotifications = true;
-        _showPullRequests = false;
-      });
+      setState(() => _showPullRequests = false);
+      c.openNotifications();
       widget.onCloseTerminal?.call();
     },
     onOpenAgent: (agent) {
       _closeSidebar();
-      setState(() {
-        _showPullRequests = false;
-        _showNotifications = false;
-      });
+      setState(() => _showPullRequests = false);
+      c.closeNotifications();
       (widget.onChooseAgentTerminal ?? widget.onOpenTerminal)(agent);
     },
     onYourDevices: widget.app?.devicesEnabled != true
         ? null
         : () {
             _closeSidebar();
-            setState(() => _showNotifications = false);
+            c.closeNotifications();
             widget.app!.openDevices();
           },
     needsHuman: (group) => _needsHuman(group).length,
     onSelect: (id) {
-      setState(() => _showNotifications = false);
+      c.closeNotifications();
       c.select(id);
       _closeSidebar();
     },
   );
 
   bool get _notificationsVisible =>
-      _showNotifications && !_devicesVisible && !c.accessRevoked;
+      c.notificationsOpen && !_devicesVisible && !c.accessRevoked;
 
   /// Opens the conversation a tag is in, at its message, replying to it. Older
   /// pages are read first, until the message is among them; one that is not
@@ -827,8 +822,8 @@ class _SuperTabViewState extends State<SuperTabView>
       );
       return;
     }
-    if (!_showNotifications) return;
-    _showNotifications = false;
+    if (!c.notificationsOpen) return;
+    c.closeNotifications();
     c.select(id);
     setState(() {
       if (c.canWrite && c.selected?.archived == false) _replies[id] = message!;

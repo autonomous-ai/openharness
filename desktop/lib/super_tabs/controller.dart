@@ -256,7 +256,26 @@ class SuperTabController extends ChangeNotifier {
 
   /// Devices is personal navigation inside this Swarm. The selected workgroup,
   /// its draft and terminal choice stay available when the person returns.
+  /// Whether the Notifications pane is in front of the chat. Choosing a
+  /// conversation, or Your devices, closes it. Held here rather than in the
+  /// view so a device can open it ([AppNotifier]'s `dial_super_tab`) and so a
+  /// hidden chat is never where a device's voice goes ([voiceConversation]).
+  bool notificationsOpen = false;
+
+  void openNotifications() {
+    if (_disposed || accessRevoked || notificationsOpen) return;
+    notificationsOpen = true;
+    _changed();
+  }
+
+  void closeNotifications() {
+    if (!notificationsOpen) return;
+    notificationsOpen = false;
+    _changed();
+  }
+
   void selectDevices() {
+    notificationsOpen = false;
     if (_disposed || accessRevoked || devicesSelected) return;
     devicesSelected = true;
     _saveSoon();
@@ -691,11 +710,17 @@ class SuperTabController extends ChangeNotifier {
   }
 
   /// The open conversation, for a device's voice: its id, its name and
-  /// whether this person can post there. Null while Your devices is open or
-  /// nothing is. The daemon checks again before it posts.
+  /// whether this person can post there. Null while Your devices or
+  /// Notifications is in front, or nothing is open. The daemon checks again
+  /// before it posts.
   Map<String, Object>? get voiceConversation {
     final group = selected;
-    if (group == null || devicesSelected || accessRevoked) return null;
+    if (group == null ||
+        devicesSelected ||
+        notificationsOpen ||
+        accessRevoked) {
+      return null;
+    }
     return {
       'id': group.id,
       'title': conversationName(group),
@@ -759,6 +784,7 @@ class SuperTabController extends ChangeNotifier {
       return false;
     }
     choices++;
+    notificationsOpen = false;
     if (id == selectedId && !devicesSelected) {
       _changed();
       return true;

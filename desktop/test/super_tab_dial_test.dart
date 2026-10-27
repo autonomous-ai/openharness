@@ -150,6 +150,46 @@ void main() {
     });
   });
 
+  test('Notifications in front of the chat hide its conversation from a device\'s voice', () async {
+    final (f, c) = await open();
+    c.openNotifications();
+    await settle();
+    expect(c.notificationsOpen, isTrue);
+    expect(row(announces(f).last).containsKey('conversation'), isFalse);
+    // Choosing a conversation closes Notifications and is where the voice goes again.
+    c.select('lead');
+    await settle();
+    expect(c.notificationsOpen, isFalse);
+    expect(row(announces(f).last)['conversation'], {
+      'id': 'lead',
+      'title': 'Lamp OS',
+      'canPost': true,
+    });
+  });
+
+  test('a device\'s press on what waits on the person opens that Swarm\'s Notifications', () async {
+    final (f, c) = await open();
+    final tab = f.app.activeSwarmId;
+    f.app.newSwarm(newTabPage: true);
+    expect(f.app.activeSwarmId, isNot(tab));
+    await f.app.handleEventForTest('m', {
+      'type': 'dial_super_tab',
+      'payload': {'superTabId': tabId, 'notifications': true},
+    });
+    await settle();
+    expect(f.app.activeSwarmId, tab);
+    expect(c.notificationsOpen, isTrue);
+    // A Swarm this account is not in opens nothing.
+    f.app.newSwarm(newTabPage: true);
+    final other = f.app.activeSwarmId;
+    await f.app.handleEventForTest('m', {
+      'type': 'dial_super_tab',
+      'payload': {'superTabId': 'not-mine', 'notifications': true},
+    });
+    await settle();
+    expect(f.app.activeSwarmId, other);
+  });
+
   test('a draft tab has no tab id', () async {
     final (f, _) = await open();
     f.app.newSwarm(newTabPage: true);

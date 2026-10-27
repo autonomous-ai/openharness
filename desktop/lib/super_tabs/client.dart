@@ -425,6 +425,7 @@ class SuperTabClient {
     )..away = _isAway(id);
     var seenChange = (lastChangedAt: -1, mentionsWaiting: -1);
     var seenSelected = controller.selectedId, seenChoices = controller.choices;
+    var seenNotifications = controller.notificationsOpen;
     controller.addListener(() {
       if (_reading.drawsSaved && generation == _generation) {
         if (controller.accessRevoked) {
@@ -437,9 +438,11 @@ class SuperTabClient {
         }
       }
       if (controller.selectedId != seenSelected ||
-          controller.choices != seenChoices) {
+          controller.choices != seenChoices ||
+          controller.notificationsOpen != seenNotifications) {
         seenSelected = controller.selectedId;
         seenChoices = controller.choices;
+        seenNotifications = controller.notificationsOpen;
         onSelection?.call(controller);
       }
       if (controller.snapshot case final snapshot?) {

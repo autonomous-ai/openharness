@@ -4109,10 +4109,11 @@ class AppNotifier extends ChangeNotifier {
     }
   }
 
+  /// With a null [projectId], the Swarm's Notifications instead of a project.
   Future<void> _openSuperTabProject(
     MachineState source,
     String tabId,
-    String projectId,
+    String? projectId,
   ) async {
     final open = swarms.where((s) => s.superTabId == tabId).firstOrNull;
     final name = open?.name ?? _superTabNames[tabId];
@@ -4136,6 +4137,10 @@ class AppNotifier extends ChangeNotifier {
       if (_disposed || _devicePick != pick || !_announceFromDevice) return;
       if (controller.snapshot == null) await controller.refresh();
       if (_disposed || _devicePick != pick || !_announceFromDevice) return;
+      if (projectId == null) {
+        controller.openNotifications();
+        return;
+      }
       final project = controller.snapshot?.projects
           .where((p) => p.id == projectId)
           .firstOrNull;
@@ -20811,7 +20816,11 @@ class AppNotifier extends ChangeNotifier {
         // project's Lead chat as a click on its row in the sidebar does.
         final tabId = payload['superTabId'];
         final projectId = payload['projectId'];
-        if (tabId is String && projectId is String) {
+        // Or a press on what waits on the person (their open decisions):
+        // that Swarm's Notifications, where they are listed first.
+        if (tabId is String && payload['notifications'] == true) {
+          await _openSuperTabProject(machine, tabId, null);
+        } else if (tabId is String && projectId is String) {
           await _openSuperTabProject(machine, tabId, projectId);
         }
         break;
