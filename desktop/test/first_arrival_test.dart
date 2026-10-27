@@ -154,7 +154,10 @@ class _AnsweredApp extends _OpeningApp {
   }) async {
     starts.add((engine: engine, folder: folder, prompt: prompt));
     attempts.add(attempt);
-    attempt!.answeredForTest(agentId: awaiting ? null : 'first', awaitingConfirmation: awaiting);
+    attempt!.answeredForTest(
+      agentId: awaiting ? null : 'first',
+      awaitingConfirmation: awaiting,
+    );
     return awaiting ? 'Still starting. Check again in a moment.' : null;
   }
 }
@@ -369,33 +372,46 @@ void main() {
     test('retry after the harness was made but not shown waits for that harness, and creates nothing', () async {
       final app = _AnsweredApp();
       addTearDown(app.dispose);
-      final arrival = _PreparingArrival(_MemoryStore())..begin(downloads: false);
+      final arrival = _PreparingArrival(_MemoryStore())
+        ..begin(downloads: false);
       await arrival.restore();
       arrival.index.complete([]);
       expect(await arrival.run(app), isFalse);
-      expect(arrival.error, 'The harness has not opened yet. Try again to check it.');
+      expect(
+        arrival.error,
+        'The harness has not opened yet. Try again to check it.',
+      );
       // Still not shown: the same answer again, and still no second create.
       expect(await arrival.retry(app), isFalse);
-      expect(arrival.error, 'The harness has not opened yet. Try again to check it.');
-      app.activeSwarm.panes.add(TerminalPane(id: 1, machineId: 'local', agentId: 'first'));
+      expect(
+        arrival.error,
+        'The harness has not opened yet. Try again to check it.',
+      );
+      app.activeSwarm.panes.add(
+        TerminalPane(id: 1, machineId: 'local', agentId: 'first'),
+      );
       expect(await arrival.retry(app), isTrue);
       expect(app.starts, hasLength(1));
       expect(app.allPanes.single.firstTask, FirstArrival.starterTask);
       expect(arrival.needsRecovery, isFalse);
     });
 
-    test('retry while a start is being confirmed asks about the same start again', () async {
-      final app = _AnsweredApp(awaiting: true);
-      addTearDown(app.dispose);
-      final arrival = _PreparingArrival(_MemoryStore())..begin(downloads: false);
-      await arrival.restore();
-      arrival.index.complete([]);
-      expect(await arrival.run(app), isFalse);
-      expect(arrival.checkingStatus, isTrue);
-      expect(await arrival.retry(app), isFalse);
-      expect(app.attempts, hasLength(2));
-      expect(app.attempts.last, same(app.attempts.first));
-    });
+    test(
+      'retry while a start is being confirmed asks about the same start again',
+      () async {
+        final app = _AnsweredApp(awaiting: true);
+        addTearDown(app.dispose);
+        final arrival = _PreparingArrival(_MemoryStore())
+          ..begin(downloads: false);
+        await arrival.restore();
+        arrival.index.complete([]);
+        expect(await arrival.run(app), isFalse);
+        expect(arrival.checkingStatus, isTrue);
+        expect(await arrival.retry(app), isFalse);
+        expect(app.attempts, hasLength(2));
+        expect(app.attempts.last, same(app.attempts.first));
+      },
+    );
 
     test('the index and engine check start together and both finish before planning', () async {
       final app = _PreparingApp();

@@ -159,7 +159,9 @@ class FirstArrival {
     String? tab;
     // The last create made its harness and only its pane was missing: look for that pane again. Creating again
     // resumed the same session and was refused as already a harness (SESSION_IN_HARNESS, the Oct 26 report).
-    final made = _attempt?.awaitingConfirmation == true ? null : _attempt?.agentId;
+    final made = _attempt?.awaitingConfirmation == true
+        ? null
+        : _attempt?.agentId;
     bool otherPanes() => app.allPanes.any((p) => p.agentId != made);
     bool current() =>
         _state != 'done' &&
