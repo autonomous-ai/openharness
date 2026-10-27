@@ -7,7 +7,7 @@ import { formatNext, type NextStep } from '../agentClient/next.js'
 import { folderTrust } from '../engines/launchPrep.js'
 import { ENGINES, type AgentEngine } from '../engines/types.js'
 import { engineName } from '../messages/model.js'
-import { isCloudAgent } from './cloudAgents.js'
+import { cloudRequestRefusal, isCloudAgent } from './cloudAgents.js'
 import { projectFolderSlug } from './agentNames.js'
 import { permissionModeFlags } from './engineLaunch.js'
 import { projectsRoot } from './projectFolder.js'
@@ -171,6 +171,9 @@ export function parseNewArgs(argv: string[], env: { cwd: string; home: string; p
   if ((repo !== null || acuLimit !== null) && !isCloudAgent(words[0])) {
     throw new NewUsageError(`${repo !== null ? '--repo' : '--acu-limit'} is for a cloud agent: harness new devin-cloud ${repo !== null ? '--repo owner/name' : '--acu-limit 10'} -- <task>`)
   }
+  // What the cloud service would refuse, refused before anything is sent, in its words.
+  const cloudRefusal = isCloudAgent(words[0]) ? cloudRequestRefusal(words[0], prompt ?? '', [repo]) : null
+  if (cloudRefusal) throw new NewUsageError(cloudRefusal)
   if (!MODES.has(mode)) throw new NewUsageError(`--mode is one of ${[...MODES].join(', ')}.`)
   if (words.length > 2) throw new NewUsageError(`Too many words: ${words.slice(2).join(' ')}.`)
   if (words[1] !== undefined) {

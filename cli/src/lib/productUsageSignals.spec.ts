@@ -81,6 +81,8 @@ it('ignores arbitrary RPC names and status polling and survives unavailable repo
   expect(() => productUsageRequest('agent_create', () => { throw Error('offline') })(undefined, 'created', true)).not.toThrow()
 })
 
+const ID = 'fixture-creation-one'
+
 it('reduces durable launch statuses to fixed categories without forwarding error or hold text', () => {
   const emit = vi.fn(), id = 'fixture-creation-one'
   productUsageLaunch('agent_create', id, emit)(undefined, 'pending', false, 'install')
@@ -105,6 +107,28 @@ it.each(['ENGINE_LAUNCH_REFUSED', 'PTY_HOST_UNAVAILABLE', 'GIT_PROJECT_UNAVAILAB
   'INVALID_BRANCH', 'BRANCH_SWITCH_FAILED', 'BRANCH_IN_USE', 'WORKTREE_FAILED'])('names the launch helper refusal %s', code => {
   expect(launchErrorCode(code)).toBe(code.toLowerCase())
 })
+// Opening a conversation that is already a harness, or a cloud agent with no task, is the request turned down, not
+// Harness failing: the Oct 26 report counted them as launch failures.
+it.each(['SESSION_IN_HARNESS', 'SESSION_OPEN_ELSEWHERE', 'SESSION_OPEN_IN_TERMINAL', 'SESSION_BUSY_IN_TERMINAL', 'INVALID_REQUEST'])(
+  'counts the correct refusal %s as refused, not as a launch failure', error => {
+    const emit = vi.fn()
+    productUsageLaunch('agent_create', ID, emit)(error, undefined, false, undefined)
+    productUsageLaunch('agent_create_status', ID, emit)(error, 'failed', false, undefined)
+    const refused = { id: ID, phase: 'refused', code: error.toLowerCase() }
+    expect(emit.mock.calls.flat().slice(1)).toEqual([refused, refused])
+  })
+it('still counts a failure that is no refusal as failed', () => {
+  const emit = vi.fn()
+  productUsageLaunch('agent_create_status', ID, emit)('SPAWN_FAILED', 'failed', false, undefined)
+  expect(emit).toHaveBeenCalledWith({ id: ID, phase: 'failed', failure: 'setup', code: 'spawn_failed' })
+})
+it('marks a launch an agent started, and only that one', () => {
+  const emit = vi.fn()
+  productUsageLaunch('agent_create', ID, emit, 'claude', true)
+  productUsageLaunch('agent_create', ID, emit, 'claude')
+  expect(emit.mock.calls.flat()).toEqual([{ id: ID, phase: 'start', engine: 'claude', agentStarted: true }, { id: ID, phase: 'start', engine: 'claude' }])
+})
+
 it('keeps a setup refusal\'s fixed code for the separate setup diagnostic, leaving other kinds alone', () => {
   const emit = vi.fn()
   productUsageLaunch('agent_create_status', 'fixture-creation-one', emit)('TMUX_UNAVAILABLE', 'failed', false, undefined)
@@ -350,6 +374,21 @@ it.each([
   expect(names).toContain('request_app_resume_failed')
   for (const name of names) expect(PRODUCT_USAGE_METRICS).toContain(name)
   expect(JSON.stringify(names)).not.toContain(error)
+})
+it('counts which check refused a resume\'s preparation, once, by a fixed name', () => {
+  const counted = (preparation?: unknown) => {
+    const emit = vi.fn(), done = productUsageRequest('agent_resume', emit, () => 0, 'app')
+    done('RESUME_PREPARATION_FAILED', undefined, false, false, undefined, preparation)
+    done('RESUME_PREPARATION_FAILED', undefined, false, false, undefined, preparation)
+    return emit.mock.calls.flat().filter(name => String(name).startsWith('request_app_resume_preparation_') || name === 'request_app_resume_reason_preparation_failed')
+  }
+  expect(counted('invalid_json')).toEqual(['request_app_resume_reason_preparation_failed', 'request_app_resume_preparation_invalid_json'])
+  expect(counted('/PRIVATE/path')).toEqual(['request_app_resume_reason_preparation_failed', 'request_app_resume_preparation_other'])
+  expect(counted()).toEqual(['request_app_resume_reason_preparation_failed'])
+  // Only a preparation failure names a kind: another refusal's reason is not one.
+  const emit = vi.fn()
+  productUsageRequest('agent_resume', emit, () => 0, 'app')('AGENT_BUSY', undefined, false, false, undefined, 'invalid_json')
+  expect(emit.mock.calls.flat().filter(name => String(name).includes('_preparation_'))).toEqual([])
 })
 it.each([
   ['RESUME_UNCONFIRMED', undefined, 'unconfirmed', 'unknown'],
