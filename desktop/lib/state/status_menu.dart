@@ -1,4 +1,6 @@
 import '../notify/alert_sounds.dart';
+import '../super_tabs/decisions.dart';
+import '../super_tabs/notifications.dart';
 import 'app_state.dart';
 import 'harness_activity.dart';
 import 'harness_sessions.dart';
@@ -191,4 +193,71 @@ void clearStatusMenuNotifications(AppNotifier app, List receipts) {
       readToken: receipt['readToken'] as String?,
     );
   }
+}
+
+/// The menu bar's Swarm section: in each open Swarm tab, the decisions asked
+/// of this account, then the tags waiting for it, newest first in each, as its
+/// Notifications page lists them. None from a Swarm it lost, none signed out.
+/// Choosing one opens it there (`SuperTabController.openNotice`).
+List<Map<String, Object?>> statusMenuSwarmEntries(AppNotifier app) {
+  if (app.currentUser == null) return [];
+  final needs = nativeActivityPayload(HarnessActivity.needsInput);
+  final rows = <Map<String, Object?>>[];
+  for (final id in {for (final tab in app.swarms) ?tab.superTabId}) {
+    final controller = app.superTabs.peek(id);
+    final snapshot = controller?.snapshot;
+    if (controller == null || snapshot == null || controller.accessRevoked) {
+      continue;
+    }
+    Map<String, Object?> row(
+      String kind,
+      String noticeId,
+      String title,
+      String message,
+      String projectName,
+      String conversationTitle,
+      DateTime? createdAt,
+    ) => {
+      'swarmTabId': id,
+      'kind': kind,
+      'id': noticeId,
+      'title': title,
+      'message': statusMenuMessage(message),
+      'unread': true,
+      'activity': needs,
+      'tabName': snapshot.name,
+      'detail': [
+        projectName,
+        conversationTitle,
+      ].where((part) => part.isNotEmpty).join(' · '),
+      'receivedAt': createdAt?.millisecondsSinceEpoch,
+    };
+    for (final d in SuperTabDecisions.of(controller).open) {
+      rows.add(
+        row(
+          'decision',
+          d.id,
+          '${d.askerName} asks you',
+          d.question,
+          d.projectName,
+          d.conversationTitle,
+          d.createdAt,
+        ),
+      );
+    }
+    for (final m in SuperTabMentions.of(controller).waiting) {
+      rows.add(
+        row(
+          'mention',
+          m.id,
+          '${m.leadName} tagged you',
+          m.text,
+          m.projectName,
+          m.conversationTitle,
+          m.createdAt,
+        ),
+      );
+    }
+  }
+  return rows;
 }

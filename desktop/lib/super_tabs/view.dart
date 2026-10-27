@@ -218,6 +218,7 @@ class _SuperTabViewState extends State<SuperTabView>
 
   void _changed() {
     if (!mounted) return;
+    _takeNotice();
     if (c.accessRevoked) {
       _replies.clear();
       _newAfter.clear();
@@ -1079,6 +1080,24 @@ class _SuperTabViewState extends State<SuperTabView>
     widget.onCloseTerminal?.call();
     _closeSidebar();
     return c.openPmChat(projectId);
+  }
+
+  /// What the menu bar asked to open ([SuperTabController.openNotice]): a tag
+  /// at its message, a decision on the Notifications page where it is answered.
+  void _takeNotice() {
+    final request = c.noticeRequest;
+    if (request == null || c.snapshot == null) return;
+    c.noticeRequest = null;
+    widget.onCloseTerminal?.call();
+    setState(() {
+      _showNotifications = true;
+      _showPullRequests = false;
+    });
+    if (request.kind != 'mention') return;
+    final mention = SuperTabMentions.of(c).waiting
+        .where((m) => m.id == request.id)
+        .firstOrNull;
+    if (mention != null) unawaited(_openMention(mention));
   }
 
   bool get _notificationsVisible =>

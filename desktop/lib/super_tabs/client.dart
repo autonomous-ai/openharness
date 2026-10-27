@@ -7,6 +7,7 @@ import 'package:flutter/foundation.dart';
 import '../core/local_key_value_store.dart';
 import 'attachment_upload.dart';
 import 'controller.dart';
+import 'decisions.dart';
 import 'model.dart';
 import 'notifications.dart';
 import 'parts.dart';
@@ -33,6 +34,7 @@ class SuperTabClient {
     this.onSelection,
     this.onMention,
     this.onTagCounts,
+    this.onNotices,
     this.upload = refuseUpload,
     this.discoveryInterval = const Duration(seconds: 15),
   }) : viewStorage = viewStorage ?? storage;
@@ -53,6 +55,10 @@ class SuperTabClient {
 
   /// The waiting tags of a Swarm that is not open changed ([waitingTags]).
   final void Function()? onTagCounts;
+
+  /// An open Swarm's list of the reader's tags or decisions changed: what the
+  /// menu bar lists.
+  final void Function()? onNotices;
   final _tagCounts = <String, int>{};
   final _tagsSeen = <String, Set<String>>{};
 
@@ -518,6 +524,10 @@ class SuperTabClient {
     SuperTabMentions.of(controller)
       ..seen(_tagsSeen.remove(id))
       ..onArrived = onMention;
+    if (onNotices case final changed?) {
+      SuperTabMentions.of(controller).addListener(changed);
+      SuperTabDecisions.of(controller).addListener(changed);
+    }
     _tagCounts.remove(id);
     _loaded[id] = controller;
     void drawSaved(Map<String, dynamic>? view) {

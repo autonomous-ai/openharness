@@ -28,8 +28,19 @@ let bindings: [[String: Any]] = [
 ]
 let map = HarnessNativeKeymap(["version": 1, "contexts": ["workspace": bindings, "terminal": [], "picker": [], "project": []]])!
 
+let swarm: [[String: Any]] = [
+  ["swarmTabId": "pilot", "kind": "decision", "id": "d1", "title": "Wren asks you",
+   "message": "Ship the sidebar cleanup behind a flag first?", "unread": true, "tabName": "Pilot",
+   "detail": "openharness · Desktop sidebar cleanup", "receivedAt": timestamp - 90_000,
+   "activity": ["mark": "?", "label": "Needs input", "working": false]],
+  ["swarmTabId": "pilot", "kind": "mention", "id": "m1", "title": "River tagged you",
+   "message": "Screenshots of the new sidebar are in the PR. Can you check the dark ones?", "unread": true,
+   "tabName": "Pilot", "detail": "openharness · Lead", "receivedAt": timestamp - 600_000,
+   "activity": ["mark": "?", "label": "Needs input", "working": false]],
+]
+
 func render(_ name: String, dark: Bool, entries: [[String: Any]], work: [[String: Any]],
-            highlight: Bool = false) {
+            swarmEntries: [[String: Any]] = [], highlight: Bool = false) {
   app.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
   let status = HarnessStatusMenu(installStatusItem: false, showWindow: {}, emit: { _, _ in })
   status.menu.appearance = app.appearance
@@ -46,7 +57,8 @@ func render(_ name: String, dark: Bool, entries: [[String: Any]], work: [[String
     return row
   }
   status.update(["enabled": true, "statusMenuEntries": entries.map { styled($0) },
-                 "statusMenuWorkingEntries": work.map { styled($0, working: true) }])
+                 "statusMenuWorkingEntries": work.map { styled($0, working: true) },
+                 "statusMenuSwarmEntries": swarmEntries.map { styled($0) }])
   var captured = false
   let timer = Timer(timeInterval: 0.2, repeats: false) { _ in
     if highlight {
@@ -100,3 +112,5 @@ let long = news("long", String(repeating: "Long session title ", count: 6),
 var offline = notifications[1]
 offline["unavailable"] = "Offline"
 render("notification-overview-long", dark: false, entries: [long, offline], work: working, highlight: true)
+render("notification-swarm-light", dark: false, entries: notifications, work: working, swarmEntries: swarm)
+render("notification-swarm-dark", dark: true, entries: notifications, work: working, swarmEntries: swarm)

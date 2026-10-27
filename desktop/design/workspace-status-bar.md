@@ -341,6 +341,26 @@ Tab, machine, project and full status descriptions remain in tooltips and
 accessibility text. Unavailable
 rows remain visible and disabled. An empty inbox says “No unread notifications.”
 
+A Swarm section follows, on a Mac only, and disappears when empty: what needs
+the person in their open Swarm tabs, which the Swarm sidebar's Notifications
+row listed before (`statusMenuSwarmEntries`). Each Swarm's open decisions come
+first, then the tags waiting for them, newest first within each, as its
+Notifications page lists them: who asks or tagged them, the question or the
+message, and when it was asked; the Swarm, project and conversation are in the
+tooltip and accessibility text. Show at most five, then View all, which opens
+the first row's Swarm on its Notifications page. Choosing a tag opens its
+conversation at the message; choosing a decision opens that Swarm's
+Notifications page, where it is answered. A row answered while the menu is open
+does nothing. Mark all read leaves them: a tag is done when it is replied to or
+marked done, a decision when it is answered. They add to the menu bar badge,
+and their count, the tags plus open decisions across every Swarm tab, counted
+for this account alone by the Swarm, is the badge on the Dock's app icon,
+cleared at zero and when the workspace leaves.
+
+![The Swarm section between Ready and Working](images/notification-swarm-light.png)
+
+![The Swarm section in dark appearance](images/notification-swarm-dark.png)
+
 Working starts expanded and disappears when empty. It shows active, known sessions that
 are not already in Notifications, with elapsed time only when the app observed
 their turn start. Exclude idle shells, paused/offline sessions, and waiting
