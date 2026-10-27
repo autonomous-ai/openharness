@@ -20,6 +20,7 @@ import 'pull_requests.dart';
 import 'controller.dart';
 import 'dialog_scope.dart';
 import 'model.dart';
+import 'pm_chat.dart';
 import 'message_row.dart';
 import 'message_receipt.dart';
 import 'notifications.dart';
@@ -784,6 +785,11 @@ class _SuperTabViewState extends State<SuperTabView>
       c.select(id);
       _closeSidebar();
     },
+    onOpenPmChat: (projectId) {
+      setState(() => _showNotifications = false);
+      unawaited(c.openPmChat(projectId));
+      _closeSidebar();
+    },
   );
 
   bool get _notificationsVisible =>
@@ -909,7 +915,7 @@ class _SuperTabViewState extends State<SuperTabView>
         : group.id == c.snapshot!.leadsConversationId
         ? 'Product Managers'
         : _isPmChat(group)
-        ? 'Chat with PM'
+        ? kChatWithPm
         : group.label,
     maxLines: 1,
     overflow: TextOverflow.ellipsis,

@@ -10,6 +10,7 @@ import '../state/harness_attachments.dart';
 import 'attachment_upload.dart';
 import 'identity.dart';
 import 'model.dart';
+import 'pm_chat.dart';
 import 'parts.dart';
 import 'reading.dart';
 import 'review_verdict.dart';
@@ -692,6 +693,62 @@ class SuperTabController extends ChangeNotifier {
       )
       .firstOrNull;
 
+  /// How many of [group]'s messages from others came after the reader's read
+  /// mark. One at least while its newest messages are not read yet.
+  int unreadCount(SuperTabConversation group) {
+    if (!unread(group)) return 0;
+    final readAt = _readAt[group.id] ?? 0;
+    final count = messages(group.id)
+        .where((m) => m.sequence > readAt && !_ownMessage(m))
+        .length;
+    return _heldThrough(group.id) < group.lastMessageSequence
+        ? max(count, 1)
+        : count;
+  }
+
+  bool _ownMessage(SuperTabMessage m) =>
+      !m.fromAgent && !m.fromTerminal && m.authorId == accountId;
+
+  /// The newest message held of [id], update requests included.
+  int _heldThrough(String id) => _messages[id]?.lastOrNull?.sequence ?? 0;
+
+  /// The unread messages in the reader's own PM chats, for the Swarm badge.
+  int get pmUnread => [
+    for (final project in snapshot?.projects ?? const <SuperTabProject>[])
+      if (pmChat(project.id) case final chat?) unreadCount(chat),
+  ].fold(0, (a, b) => a + b);
+
+  /// Reads the messages of each PM chat whose newest ones are not held yet,
+  /// so its count is exact; nothing for a chat whose messages are all held.
+  void _readUnreadPmChats() {
+    for (final project in snapshot?.projects ?? const <SuperTabProject>[]) {
+      final chat = pmChat(project.id);
+      if (chat == null ||
+          chat.id == selectedId ||
+          !unread(chat) ||
+          _heldThrough(chat.id) >= chat.lastMessageSequence) {
+        continue;
+      }
+      unawaited(_readMessages(chat.id, light: true));
+    }
+  }
+
+  /// The project of the conversation on screen, else the first one.
+  String? get currentProjectId {
+    final state = snapshot;
+    if (state == null) return null;
+    final selected = state.conversation(selectedId)?.projectId;
+    return state.projects.any((p) => p.id == selected)
+        ? selected
+        : state.projects.firstOrNull?.id;
+  }
+
+  /// Opens the [currentProjectId]'s PM chat ([openPmChat]).
+  Future<bool> openCurrentPmChat() async {
+    final project = currentProjectId;
+    return project != null && await openPmChat(project);
+  }
+
   /// Opens [pmChat], creating it on first use: chat only, for this person
   /// alone, named after them, with the project's Lead in it. The create is one
   /// fixed request per person, membership and project, so a second click or
@@ -706,7 +763,7 @@ class SuperTabController extends ChangeNotifier {
       'type': 'conversation.create',
       'projectId': projectId,
       'title': email == null || email.isEmpty
-          ? 'Chat with PM'
+          ? kChatWithPm
           : superTabPersonName(email),
       'brief': '',
       'checks': <dynamic>[],
@@ -864,6 +921,7 @@ class SuperTabController extends ChangeNotifier {
           selectedId = next.projects.firstOrNull?.leadConversationId ?? 'lead';
         }
         if (localAccessChanged) _saveSoon();
+        _readUnreadPmChats();
         // A new store holds no closed groups yet, nor one a saved view drew:
         // the open projects read theirs.
         if (read.full || stateReads == 1) {

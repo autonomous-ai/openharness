@@ -37,7 +37,7 @@ class WebTabSwitcher extends StatelessWidget {
     final index = app.swarms.indexWhere((tab) => tab.id == app.activeSwarmId);
     final name = workspaceTabNames(app)[app.activeSwarmId] ?? '';
     final activity = tabActivity(app, app.activeSwarm);
-    final tags = tabMentionsWaiting(app, app.activeSwarm);
+    final tags = tabWaiting(app, app.activeSwarm);
     final panes = app.panes;
     final shown = panes.indexWhere((pane) => pane.id == soloPaneId(app));
     final label = [
