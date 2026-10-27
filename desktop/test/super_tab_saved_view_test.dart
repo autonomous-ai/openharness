@@ -717,6 +717,24 @@ void _reReviewTests() {
     });
   });
 
+  test('a view read while its Swarm is being forgotten is not listed '
+      'again', () async {
+    final kept = MemoryStore();
+    final before = SuperTabSavedViews(kept);
+    await before.claim('owner');
+    await before.write('owner', 'tab', _view());
+    final store = _StuckLockStore()..values.addAll(kept.values);
+    final views = SuperTabSavedViews(store);
+    // Lost access: the forget waits for the lock, the read does not.
+    final forgot = views.forget('owner', 'tab');
+    expect(await views.read('owner', 'tab'), isNotNull);
+    store.release.complete();
+    await forgot;
+    await pumpEventQueue();
+    expect(store.values[_viewKey], isNull);
+    expect(jsonDecode(store.values['super_tab.views.owner']!), isEmpty);
+  });
+
   // Minor b.
   test('after a sign-out elsewhere, a late write keeps nothing', () async {
     final store = MemoryStore();

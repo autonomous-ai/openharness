@@ -48,9 +48,8 @@ class SuperTabSavedViews {
     }
   }
 
-  /// Puts [tabId] first in the account's index, if its view is still kept.
+  /// Puts [tabId] first in the account's index.
   Future<void> _use(String account, String tabId) async {
-    if (await storage.read(_key(account, tabId)) == null) return;
     final tabs = (await _tabs(account))..remove(tabId);
     tabs.insert(0, tabId);
     for (final gone in tabs.skip(maxTabs)) {
@@ -79,7 +78,14 @@ class SuperTabSavedViews {
           view['lastChangedAt'] is! int) {
         return null;
       }
-      unawaited(_serial(() => _use(account, tabId)).catchError((Object _) {}));
+      // Unless it was forgotten meanwhile (lost access, another account).
+      unawaited(
+        _serial(() async {
+          if (await storage.read(_key(account, tabId)) != null) {
+            await _use(account, tabId);
+          }
+        }).catchError((Object _) {}),
+      );
       return view;
     } catch (_) {
       return null;
