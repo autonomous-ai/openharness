@@ -65,6 +65,14 @@ describe('planWork', () => {
     expect(run).not.toHaveBeenCalled()
   })
 
+  it('runs the solver on this machine by default, and says when it cannot', async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'plan-')), python = join(dataDir, 'no-python3')
+    try {
+      const out = await planWork({ request: undefined }, scoped(state()), { now: () => NOW, dataDir, python })
+      expect(out).toEqual({ error: 'PYTHON_MISSING', detail: expect.stringMatching(/^Python 3 is not installed on this machine.*Route each group as usual meanwhile\.$/) })
+    } finally { rmSync(dataDir, { recursive: true, force: true }) }
+  })
+
   it('refuses a bad request and passes on a failed read', async () => {
     const run = vi.fn<SolverRun>()
     expect(await planWork({ request: { groups: { g1: { difficulty: 'hard' } } } }, scoped(state()), { run, now: () => NOW, dataDir: '/unused' }))
@@ -96,6 +104,12 @@ describe('runSolver', () => {
   it('says when Python is not installed', async () => {
     expect(await runSolver(instance, { dataDir: temp(), python: join(temp(), 'no-python3') }))
       .toEqual({ error: 'PYTHON_MISSING', detail: expect.stringContaining('Python 3 is not installed') })
+  })
+
+  it('says when the solver stops without a plan', async () => {
+    // A program that exits 1 and prints nothing stands in for a solver that crashed.
+    expect(await runSolver(instance, { dataDir: temp(), python: process.platform === 'win32' ? 'cmd' : 'false' }))
+      .toEqual({ error: 'SOLVER_FAILED', detail: expect.stringContaining('The scheduler stopped (exit 1)') })
   })
 
   it.skipIf(!hasPython('python3'))('says when OR-Tools is not installed', async () => {

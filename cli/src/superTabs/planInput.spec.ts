@@ -43,6 +43,12 @@ describe('planSetup', () => {
     expect(taskOf(setup(state({ rules })), 'g1').machines).toEqual(['m2'])
   })
 
+  it('lets a machines rule naming a Mac allow its Harness Team account too, as the route does', () => {
+    const rules = [{ projectId: 'p1', rule: { kind: 'machines', machineIds: ['m1'] }, text: 'Only m1.' }]
+    const s = setup(state({ rules, machines: [machine('m1'), machine('m1-team', { hostMachineId: 'm1' }), machine('m2')] }))
+    expect(taskOf(s, 'g1').machines).toEqual(['m1', 'm1-team'])
+  })
+
   it('leaves out a forbidden model and a row below the minimum effort, lifting a row that leaves the effort to the engine', () => {
     const rules = [{ projectId: 'p1', rule: { kind: 'forbidModel', model: 'opus' }, text: 'No Opus.' },
       { projectId: 'p1', rule: { kind: 'minEffort', effort: 'high' }, text: 'At least high.' }]
@@ -105,5 +111,11 @@ describe('planSetup', () => {
     expect(taskOf(s, 'g1').models).toContain('grid:deepseek/flash')
     expect(taskOf(s, 'r1').models).not.toContain('grid:deepseek/flash')
     expect(s.rows['grid:deepseek/flash']).toEqual({ engine: 'claude', model: 'default', effort: 'default', gridModel: 'deepseek/flash', gridName: 'swarm-g' })
+  })
+
+  it('offers a model shared from another grid only on the machines it was shared with', () => {
+    const shared = { localModels: [{ grid: 'other-grid', model: 'qwen/coder', name: 'Qwen' }] }
+    const s = setup(state({ machines: [machine('m1', {}, shared), machine('m2')] }))
+    expect((s.instance.models as Json[]).find(m => m.id === 'grid:qwen/coder')).toMatchObject({ machines: ['m1'], concurrency: 1, remote: true, label: 'Claude on Qwen (shared)' })
   })
 })
