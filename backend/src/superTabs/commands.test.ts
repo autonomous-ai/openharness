@@ -559,6 +559,38 @@ describe('tab.routingPolicy', () => {
   })
 })
 
+describe('tab.tidy', () => {
+  it('is on until the Swarm owner turns it off, and back on', () => {
+    const f = fixture()
+    expect(f.state.tidy).toBeUndefined()
+    f.run({ type: 'tab.tidy', enabled: false })
+    expect(f.state.tidy).toBe(false)
+    f.run({ type: 'tab.tidy', enabled: true })
+    expect(f.state.tidy).toBeUndefined()
+  })
+  it('refuses a collaborator and a Lead that quotes no message of the owner', () => {
+    const f = fixture()
+    f.invite('collaborator')
+    expect(() => f.run({ type: 'tab.tidy', enabled: false }, peer)).toThrow('Only the Swarm owner')
+    const lead = f.add('lead-harness', 'owner', 'lead', true)
+    expect(() => f.run({ type: 'tab.tidy', enabled: false }, { kind: 'agent', agentId: lead, machineOwnerId: 'host-owner' })).toThrow('Only the Swarm owner')
+    expect(f.state.tidy).toBeUndefined()
+  })
+  it('lets a Lead pass on a chat message the owner wrote in the last day, and no older one', () => {
+    const f = fixture()
+    const lead = f.add('lead-harness', 'owner', 'lead', true)
+    const asLead: Actor = { kind: 'agent', agentId: lead, machineOwnerId: 'host-owner' }
+    const ownerAuthor = { kind: 'person' as const, id: 'owner', name: 'owner', membershipGeneration: f.state.people[0]!.generation }
+    const askedIn = { conversationId: 'lead', messageId: 'm1' }
+    expect(() => f.run({ type: 'tab.tidy', enabled: false, askedIn }, asLead,
+      { askedIn: { author: ownerAuthor, source: false, createdAt: 1000 - 25 * 3_600_000 } })).toThrow('Only the Swarm owner')
+    expect(() => f.run({ type: 'tab.tidy', enabled: false, askedIn }, asLead,
+      { askedIn: { author: { ...ownerAuthor, kind: 'agent', id: lead }, source: false, createdAt: 900 } })).toThrow('Only the Swarm owner')
+    f.run({ type: 'tab.tidy', enabled: false, askedIn }, asLead, { askedIn: { author: ownerAuthor, source: false, createdAt: 900 } })
+    expect(f.state.tidy).toBe(false)
+  })
+})
+
 const candidate = (id: string, patch: Record<string, unknown> = {}) => ({ id, kind: 'new', machineId: 'machine', engine: 'claude',
   model: 'opus', effort: 'high', quality: 3, cost: 3, title: `Title ${id}`, label: `Label ${id}`, ...patch })
 const record = (patch: Record<string, unknown> = {}) => ({ assessment: { difficulty: 'high', risk: 'low', why: 'Schema change.' },

@@ -208,6 +208,8 @@ export interface SuperTabState {
   /** Owner-only sharing configuration; visibleState always removes it. */
   sharing?: import('./sharing.js').SwarmSharing
   paused: boolean
+  /** Idle workers stop and finished groups archive by themselves (tidy.ts); false once the owner turns it off. */
+  tidy?: false
   people: Person[]
   agents: Agent[]
   conversations: Conversation[]
