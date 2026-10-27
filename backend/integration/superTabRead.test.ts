@@ -675,6 +675,27 @@ describe('decisions asked of one person (v2)', () => {
     expect((await get(`/api/super-tabs/${s.tabId}/parts`, peer)).body.data.derived.decisionsWaiting).toBe(0)
   })
 
+  it('reads only the conversations its decisions are in: a quiet one the reader still reads, not one they left, and no other quiet history', async () => {
+    const s = await scene()
+    clock = Date.now()
+    const ask = async (conversationId: string, text: string) => (await post(s.tabId, { type: 'decision.ask', conversationId, personId: peer.sub,
+      questions: [question(text)] }, owner, s.lead)).body.data.result.decisionIds as string[]
+    const [kept] = await ask(s.web, 'Ship how?')
+    await ask(s.privateId, 'Keep it?')
+    // Both go quiet; the peer then leaves the private one.
+    await writeGroup(s.tabId, s.web, Date.now(), group => { group.archived = true; group.dormant = true })
+    await writeGroup(s.tabId, s.privateId, Date.now(), group => { group.dormant = true; group.audience = { people: [] } })
+    const read: string[] = []
+    const counted = new SuperTabStore(db.$extends({ query: { swarmGroup: { async findMany({ args, query }) {
+      const rows = await query(args)
+      read.push(...rows.map(row => row.key))
+      return rows
+    } } } }) as unknown as PrismaClient)
+    expect((await counted.decisions(peer, s.tabId, 'open')).decisions.map(d => d.id)).toEqual([kept])
+    // The finished work stays quiet and holds no decision: the list does not read it, as it would by loading every conversation.
+    expect(read).not.toContain(s.done)
+  })
+
   it('keeps one answer when two arrive at once, returns the same receipt for a retried answer, and refuses a person removed from the Swarm', async () => {
     const s = await scene()
     clock = Date.now()
