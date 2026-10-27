@@ -33,6 +33,9 @@ export interface Agent {
   workDecision?: 'awaiting' | 'keep' | 'stop'
   /** When its Lead last decided keep: a kept worker is idle from then (tidy.ts). */
   keptAt?: number
+  /** Set while its stop is the idle check's (tidy.ts), with the decision it had before: its host withdraws that stop when
+   *  the session's folder has changes by the time it would close it (agent.stopRefused). */
+  idleStop?: { previous: 'awaiting' | 'keep' | null }
   releaseId?: string
   /** Captured from the original Swarm launch, never inferred from a later live session with the same id. */
   startedSession?: { creationId: string; sessionId: string; createdAt: string }

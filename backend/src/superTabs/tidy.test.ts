@@ -37,6 +37,8 @@ describe('stopping idle workers', () => {
     const rows = stopIdleWorkers(state, 'lead', at, new Set())
     expect(target(state)).toMatchObject({ workDecision: 'stop' })
     expect(target(state).releaseId).toEqual(expect.any(String))
+    // Marked as the idle check's, so its host may withdraw it if its folder changed since (agent.stopRefused).
+    expect(target(state).idleStop).toEqual({ previous: null })
     expect(rows).toEqual([expect.objectContaining({ conversationId: 'g1', recipients: [], replyTo: null,
       author: expect.objectContaining({ kind: 'agent', id: 'L' }), text: 'Rowan stopped: no work for 15 minutes.',
       source: { kind: 'idle-stop', agentId: 'w' } })])

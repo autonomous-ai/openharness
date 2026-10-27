@@ -74,6 +74,7 @@ export function stopIdleWorkers(state: SuperTabState, projectId: string, now: nu
     const groups = groupsOf(state, worker, asleep)
     const since = idleSince(state, worker, groups)
     if (!(now - since >= IDLE_STOP_MS) || recheckPending(state, worker, groups) || !reportedClean(state, worker, now)) continue
+    worker.idleStop = { previous: worker.workDecision ?? null }
     worker.workDecision = 'stop'
     worker.releaseId = stableId('idle-stop', worker.id, String(since))
     const last = groups.filter(g => !g.archived).sort((a, b) => (time(b.lastActivityAt) ?? 0) - (time(a.lastActivityAt) ?? 0))[0]

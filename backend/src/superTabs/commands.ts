@@ -115,6 +115,7 @@ export const commandSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('agent.startSettled'), startId: id, warning: z.string().max(2000).nullable() }).strict(),
   z.object({ type: z.literal('agent.startFailed'), startId: id, error: text }).strict(),
   z.object({ type: z.literal('agent.stopLease'), agentId: id, releaseId: id }).strict(),
+  z.object({ type: z.literal('agent.stopRefused'), agentId: id, releaseId: id }).strict(),
   z.object({ type: z.literal('agent.remove'), agentId: id, releaseId: id.optional() }).strict(),
   z.object({ type: z.literal('agent.release'), agentId: id, decision: z.enum(['keep', 'stop']) }).strict(),
   z.object({ type: z.literal('agent.sessionClosed'), agentId: id, harnessId: id }).strict(),
@@ -1309,8 +1310,24 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       }
       if (target.workDecision === 'stop' && command.decision !== 'stop') fail('STOP_REQUESTED', 'This worker is stopping. Wait for its execution host.')
       if (command.decision === 'stop' && target.workDecision !== 'stop') target.releaseId = operationId
+      // A stop its Lead or a person asks for is theirs, even over the idle check's: its host no longer withdraws it.
+      if (command.decision === 'stop') delete target.idleStop
       target.workDecision = command.decision
       if (command.decision === 'keep') target.keptAt = context.now
+      break
+    }
+    case 'agent.stopRefused': {
+      // Only the idle check's stop, and only its host: the session's folder had changes by the time it would close it
+      // (review of #1807). The worker is as it was, idle again from now. A stop its Lead or a person asked for stays.
+      const target = agent(state, command.agentId)
+      if (actor.kind !== 'agent' || actor.agentId !== target.id || target.workDecision !== 'stop' || command.releaseId !== target.releaseId || !target.idleStop) {
+        fail('STALE_RELEASE', 'Only the execution host can withdraw the current idle stop.', 403)
+      }
+      if (target.idleStop.previous) target.workDecision = target.idleStop.previous
+      else delete target.workDecision
+      delete target.releaseId
+      delete target.idleStop
+      target.keptAt = context.now
       break
     }
     case 'agent.stopLease': {

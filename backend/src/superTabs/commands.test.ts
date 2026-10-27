@@ -2639,3 +2639,38 @@ describe('the morning digest setting (digest.ts)', () => {
     expect(digest()).toBeUndefined()
   })
 })
+
+describe('agent.stopRefused', () => {
+  /** A worker the idle check marked for stopping (tidy.ts), as it was before: awaiting its Lead's decision. */
+  function idleStopped() {
+    const f = fixture(), lead = f.add('lead', 'owner', 'lead', true), worker = f.add('worker', 'owner', f.group())
+    const target = f.state.agents.find(a => a.id === worker)!
+    Object.assign(target, { workDecision: 'stop', releaseId: 'idle-release', idleStop: { previous: 'awaiting' } })
+    const asWorker: Actor = { kind: 'agent', agentId: worker, machineOwnerId: 'host-owner' }
+    return { f, lead, worker, asWorker, member: () => f.state.agents.find(a => a.id === worker)! }
+  }
+
+  it('lets the worker\'s own host withdraw an idle stop its folder\'s changes forbid, restarting its idle time', () => {
+    const t = idleStopped()
+    t.f.run({ type: 'agent.stopRefused', agentId: t.worker, releaseId: 'idle-release' }, t.asWorker, { now: 7000 })
+    expect(t.member()).toMatchObject({ workDecision: 'awaiting', keptAt: 7000 })
+    expect(t.member().releaseId).toBeUndefined()
+    expect(t.member().idleStop).toBeUndefined()
+  })
+
+  it('refuses another agent, a stale stop, and a stop its Lead asked for', () => {
+    const t = idleStopped()
+    expect(() => t.f.run({ type: 'agent.stopRefused', agentId: t.worker, releaseId: 'idle-release' }, { kind: 'agent', agentId: t.lead, machineOwnerId: 'host-owner' })).toThrow('Only the execution host')
+    expect(() => t.f.run({ type: 'agent.stopRefused', agentId: t.worker, releaseId: 'older' }, t.asWorker)).toThrow('Only the execution host')
+    delete t.member().idleStop
+    expect(() => t.f.run({ type: 'agent.stopRefused', agentId: t.worker, releaseId: 'idle-release' }, t.asWorker)).toThrow('Only the execution host')
+    expect(t.member().workDecision).toBe('stop')
+  })
+
+  it('keeps a stop its Lead asked for after the idle check made it', () => {
+    const t = idleStopped()
+    t.f.run({ type: 'agent.release', agentId: t.worker, decision: 'stop' }, { kind: 'agent', agentId: t.lead, machineOwnerId: 'host-owner' })
+    expect(() => t.f.run({ type: 'agent.stopRefused', agentId: t.worker, releaseId: 'idle-release' }, t.asWorker)).toThrow('Only the execution host')
+    expect(t.member().workDecision).toBe('stop')
+  })
+})

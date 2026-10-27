@@ -998,6 +998,53 @@ it('stops a requested worker once, confirms removal, and releases retention on t
   expect(acknowledgements).toBe(1)
 })
 
+// Review of #1807: the clean report the idle check trusted can be a minute old. An edit since, or a folder git cannot read,
+// withdraws the idle stop instead of closing the session; a stop its Lead asked for closes as before.
+it.each([['changed', { ok: true, stdout: ' M src/a.ts\n', stderr: '' }], ['unreadable', { ok: false, stdout: '', stderr: 'fatal' }]] as const)(
+  'withdraws an idle stop whose folder is %s when it would close it', async (_kind, status) => {
+  const git = vi.fn(async () => status)
+  const t = setup(), host = t.open({ machines: { git } })
+  vi.mocked(t.core.agents.byAgent).mockReturnValue({ agentId: 'harness', sessionId: 'native', registeredAt: 0, startedBy: 'agent', cwd: '/work/harness' } as never)
+  const target = { id: 'agent', harnessId: 'harness', machineId: 'machine-1', workDecision: 'stop', releaseId: 'idle-1', idleStop: { previous: 'awaiting' },
+    startedSession: { creationId: 'super-original-creation', sessionId: 'native', createdAt: new Date(0).toISOString() } }
+  const close = vi.fn(async () => ({ closed: true as const }))
+  t.core.agents.closeSwarm = close
+  const commands: unknown[] = []
+  let withdrawn = false
+  t.core.account.backend = async (method, path, body) => {
+    if (path.includes('/hosts/')) return { status: 200, body: { data: hostForm(withdrawn ? [] : [{ tabId: 'tab', agent: target, stopRequested: true }], { tabs: ['tab'] }) } }
+    if (method === 'GET') return { status: 200, body: { data: swarmReply(path, { agents: [target], conversations: [] }) } }
+    commands.push((body as any)?.command)
+    if ((body as any)?.command?.type === 'agent.stopRefused') withdrawn = true
+    return { status: 200, body: { data: {} } }
+  }
+  await host.tick()
+  await vi.waitFor(() => expect(withdrawn).toBe(true))
+  expect(git).toHaveBeenCalledWith('/work/harness', ['status', '--porcelain'])
+  expect(commands).toEqual([{ type: 'agent.stopRefused', agentId: 'agent', releaseId: 'idle-1' }])
+  expect(close).not.toHaveBeenCalled()
+})
+
+it('closes an idle stop whose folder is still clean', async () => {
+  const git = vi.fn(async () => ({ ok: true, stdout: '', stderr: '' }))
+  const t = setup(), host = t.open({ machines: { git } })
+  vi.mocked(t.core.agents.byAgent).mockReturnValue({ agentId: 'harness', sessionId: 'native', registeredAt: 0, startedBy: 'agent', cwd: '/work/harness' } as never)
+  const target = { id: 'agent', harnessId: 'harness', machineId: 'machine-1', workDecision: 'stop', releaseId: 'idle-1', idleStop: { previous: null },
+    startedSession: { creationId: 'super-original-creation', sessionId: 'native', createdAt: new Date(0).toISOString() } }
+  let removed = false
+  t.core.agents.closeSwarm = async () => ({ closed: true })
+  t.core.account.backend = async (method, path, body) => {
+    if ((body as any)?.command?.type === 'agent.stopLease') return { status: 200, body: { data: { result: { expiresAt: Date.now() + 3_600_000, durationMs: 120_000 } } } }
+    if (path.includes('/hosts/')) return { status: 200, body: { data: hostForm(removed ? [] : [{ tabId: 'tab', agent: target, stopRequested: true }], { tabs: ['tab'] }) } }
+    if (method === 'GET') return { status: 200, body: { data: swarmReply(path, { agents: [target], conversations: [] }) } }
+    if ((body as any)?.command?.type === 'agent.remove') removed = true
+    return { status: 200, body: { data: {} } }
+  }
+  await host.tick()
+  await vi.waitFor(() => expect(removed).toBe(true))
+  expect(git).toHaveBeenCalledOnce()
+})
+
 it('removes a stopped worker\'s worktree only once its removal is acknowledged, and a failed removal stays in the log', async () => {
   const t = setup(), host = t.open()
   const removeWorktree = vi.spyOn(ContributedMachines.prototype, 'removeStoppedWorktree').mockRejectedValue(new Error('git refused'))

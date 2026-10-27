@@ -456,8 +456,8 @@ export class ContributedMachines {
       if (!cwd) continue
       let known = this.uncommittedCache.get(id)
       if (!known || known.cwd !== cwd || known.until <= now) {
-        const status = await (this.deps.git ?? quietGit)(cwd, ['status', '--porcelain'])
-        known = status.ok ? { cwd, dirty: status.stdout.trim() !== '', until: now + UNCOMMITTED_TTL_MS } : undefined
+        const dirty = await uncommittedIn(cwd, this.deps.git)
+        known = dirty === null ? undefined : { cwd, dirty, until: now + UNCOMMITTED_TTL_MS }
         if (known) this.uncommittedCache.set(id, known)
         else this.uncommittedCache.delete(id)
       }
@@ -602,6 +602,12 @@ export function createQuietGit(timeoutMs = 15_000): GitRun {
   })
 }
 const quietGit = createQuietGit()
+
+/** Whether a session's folder has uncommitted changes (git status), or null when git could not say. */
+export async function uncommittedIn(cwd: string, run: GitRun = quietGit): Promise<boolean | null> {
+  const status = await run(cwd, ['status', '--porcelain'])
+  return status.ok ? status.stdout.trim() !== '' : null
+}
 
 /** What git or the remote says when this login may not push: refused, signed out, or a credential it could not ask for.
  *  Anything else (a host it could not reach, a timeout) says nothing about access. */

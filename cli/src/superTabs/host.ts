@@ -1,5 +1,5 @@
 import { OBSERVER_VALID_MS, publishObservers } from './observers.js'
-import { ContributedMachines, type MachineDeps } from './machines.js'
+import { ContributedMachines, uncommittedIn, type MachineDeps } from './machines.js'
 import { SwarmGrids } from './swarmGrids.js'
 import { retainContributions } from './retention.js'
 import { configurationObservation } from './configuration.js'
@@ -470,6 +470,15 @@ export class SuperTabHost {
             return
           }
           if (creation?.state !== 'created') throw new Error('The original Swarm launch could not be confirmed. Stop will retry with backoff.')
+          // The idle check's stop trusted a report up to a minute old (machines.ts): an edit since, or a folder git cannot
+          // read now, withdraws it instead (review of #1807). A stop its Lead asked for closes as before.
+          if (member.idleStop && (!native.cwd || await uncommittedIn(native.cwd, this.machineDeps.git) !== false)) {
+            // A failed withdrawal retries with backoff, reading the folder again.
+            await backend(this.core, 'POST', `/api/super-tabs/${tabId}/commands`, { operationId: `idle-stop-withdrawn-${agent.releaseId ?? agent.id}`,
+              asAgentId: agent.id, command: { type: 'agent.stopRefused', agentId: agent.id, releaseId: agent.releaseId } })
+            attempt.retryAt = Infinity
+            return
+          }
           if (this.stopped) return
           // Start locally before asking: server clock skew cannot extend authority, and network delay consumes it.
           const leaseRequestedAt = Date.now()
