@@ -136,6 +136,28 @@ describe('the leaderboard read', () => {
     expect((await get(`/api/super-tabs/${s.tabId}/leaderboard?projectId=lead&week=${WEEK + WEEK_MS}`)).status).toBe(400)
   })
 
+  it('counts an answered decision for whoever answered it, never one in a private chat, and never its words', async () => {
+    const s = await scene()
+    const decision = (id: string, conversationId: string) => ({ id, tabId: s.tabId, batchId: `${id}-ask`, projectId: 'lead', conversationId,
+      assignmentId: null, personId: outsider.sub, askerAgentId: s.lead, question: 'Ship the secret plan?', options: ['Yes', 'No'], recommended: 0,
+      unblocks: 'the rollout', createdAt: new Date(NOW - 3 * HOUR), answeredAt: new Date(NOW - HOUR), choice: 0, note: 'confidential note' })
+    await db.superTabDecision.createMany({ data: [decision(`d1-${s.tabId}`, s.fresh), decision(`d2-${s.tabId}`, s.chat)] })
+    const { body } = await get(`/api/super-tabs/${s.tabId}/leaderboard?projectId=lead`, peer)
+    expect(score(body, outsider.sub).unblocked).toEqual({ count: 1, agentMs: 2 * HOUR, medianAnswerMs: 2 * HOUR })
+    expect(JSON.stringify(body.data)).not.toMatch(/secret plan|confidential note|the rollout/)
+  })
+
+  it('keeps an item answered by decision off the waiting line long after the kept weeks (review of #1771)', async () => {
+    const s = await scene()
+    const part = await db.swarmGroup.findFirst({ where: { tabId: s.tabId, key: s.waiting } })
+    const asked = (part!.data as { ledger: { waiting: { messageId: string } } }).ledger.waiting.messageId
+    await db.superTabDecision.create({ data: { id: `old-${s.tabId}`, tabId: s.tabId, batchId: asked, projectId: 'lead', conversationId: s.waiting,
+      assignmentId: null, personId: owner.sub, askerAgentId: s.lead, question: 'Flag?', options: ['Yes', 'No'], recommended: 0, unblocks: 'rollout',
+      createdAt: new Date(NOW - 8 * WEEK_MS), answeredAt: new Date(NOW - 7 * WEEK_MS), choice: 0 } })
+    const { body } = await get(`/api/super-tabs/${s.tabId}/leaderboard?projectId=lead`)
+    expect(body.data.waiting).toEqual({ total: 0, people: [] })
+  })
+
   it('leaves the ledger out of the groups every reader loads', async () => {
     const s = await scene()
     const { body } = await get(`/api/super-tabs/${s.tabId}/parts`, peer)

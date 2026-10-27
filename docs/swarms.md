@@ -206,11 +206,14 @@ Each person has three numbers:
   to four weeks back). The request ships at the merge, even if its work is lost
   or cancelled afterwards. A group that is Done with a linked PR ships too; the
   earlier of the merge and Done is when it shipped. 3 points each.
-- **Unblocked**: items needing a person that the person answered. An answer counts
-  when it comes from the person the item waits on, or when it replies to the
-  question itself. That person is the group's requester, or the project's owner
+- **Unblocked**: items needing a person that the person answered, and decisions
+  they answered. An answer counts when it comes from the person the item waits
+  on, or when it replies to the question itself. That person is the group's requester, or the project's owner
   when the group has none. 1 point each, plus 1 point for every 2 hours the agents
-  waited for those answers.
+  waited for those answers. Each answered question of a decision earns its point.
+  The asker's wait counts once per ask, from the ask to its last answer. An item
+  that asked a decision counts once, through the decision, and leaves the waiting
+  list when the decision is answered.
 - **Lent**: hours Swarm agents ran on the person's contributed machines, added up
   from each machine's readings. A product manager's session doesn't count: it
   coordinates in confidence and doesn't build. 1 point for every 10 hours.
@@ -230,9 +233,8 @@ opens the reader's own waiting item, or the first one when none waits on them.
 
 Only facts count, never text. The leaderboard records when work was asked for and
 shipped, who answered and how long agents waited. It never records what anyone
-wrote. Private conversations, Chat with PM among them, never count and never
-appear in it. Decisions asked of a person will count toward Unblocked once
-decisions ship.
+wrote, and it never reads a decision's question, options or note. Private
+conversations, Chat with PM among them, never count and never appear in it.
 
 ## Lead updates
 
