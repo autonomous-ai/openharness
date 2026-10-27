@@ -1,6 +1,8 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import 'package:harness_mobile/phone/phone_navigation.dart';
 import 'package:harness_mobile/phone/settings_row.dart';
@@ -11,6 +13,7 @@ import 'package:harness_mobile/shared/theme/app_theme.dart';
 
 import 'swarm_choices.dart';
 import 'swarm_conversation_page.dart';
+import 'swarm_drawer.dart';
 import 'swarm_need_rows.dart';
 import 'swarm_project_page.dart';
 import 'swarm_session.dart';
@@ -25,7 +28,13 @@ import 'team_glance.dart';
 /// ([PhoneExperiment.swarm]). Reads the account's [SwarmSession] from the
 /// shell; with none, says why.
 class SwarmPage extends StatefulWidget {
-  const SwarmPage({super.key});
+  const SwarmPage({super.key, this.onHarness, this.onSettings});
+
+  /// Harness at the root of the stack, from the drawer ([SwarmDrawer]).
+  final VoidCallback? onHarness;
+
+  /// Settings over Swarm Home, from the drawer.
+  final void Function(BuildContext context)? onSettings;
 
   @override
   State<SwarmPage> createState() => _SwarmPageState();
@@ -55,20 +64,34 @@ class _SwarmPageState extends State<SwarmPage> {
     AppTheme.watch(context);
     final tty = Tty.of(context);
     final session = _session;
+    final pushed = Navigator.of(context).canPop();
     return Scaffold(
       backgroundColor: tty.ground,
+      // Home's drawer; a Swarm page pushed over another page has its back
+      // button instead.
+      drawer: pushed
+          ? null
+          : ListenableBuilder(
+              listenable: Listenable.merge([?session, ?session?.inbox]),
+              builder: (context, _) => SwarmDrawer(
+                needs: session?.inbox.needs.length ?? 0,
+                onHarness: widget.onHarness,
+                onSettings: widget.onSettings,
+              ),
+            ),
       body: SafeArea(
         bottom: false,
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            if (Navigator.of(context).canPop())
-              Align(
-                alignment: Alignment.centerLeft,
-                child: TtyBackButton(
-                  onPressed: () => Navigator.of(context).maybePop(),
-                ),
-              ),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: pushed
+                  ? TtyBackButton(
+                      onPressed: () => Navigator.of(context).maybePop(),
+                    )
+                  : const _MenuButton(),
+            ),
             Expanded(
               child: session == null
                   ? _Unavailable(tty: tty)
@@ -209,4 +232,38 @@ class _Unavailable extends StatelessWidget {
       ),
     ],
   );
+}
+
+/// Opens Home's drawer: the back button's box, the drawer's mark.
+class _MenuButton extends StatelessWidget {
+  const _MenuButton();
+
+  @override
+  Widget build(BuildContext context) {
+    final tty = Tty.of(context);
+    return Semantics(
+      button: true,
+      label: 'Menu',
+      excludeSemantics: true,
+      child: GestureDetector(
+        key: const ValueKey('swarm-menu'),
+        behavior: HitTestBehavior.opaque,
+        onTap: () {
+          HapticFeedback.selectionClick();
+          Scaffold.of(context).openDrawer();
+        },
+        child: SizedBox(
+          width: 52,
+          height: 44,
+          child: Padding(
+            padding: const EdgeInsets.only(left: Tty.origin - 3),
+            child: Align(
+              alignment: Alignment.centerLeft,
+              child: Icon(LucideIcons.menu300, size: 24, color: tty.text),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
 }
