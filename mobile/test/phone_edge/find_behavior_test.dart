@@ -288,7 +288,8 @@ void main() {
     await frames(tester, count: 6);
     expect(closes, isNotEmpty);
     expect(find.byType(SwarmPage), findsOneWidget);
-    expect(find.byKey(const ValueKey('swarm-building')), findsOneWidget);
+    // Outside a signed-in shell there is no account's Swarm to read: the page says so.
+    expect(find.byKey(const ValueKey('swarm-unavailable')), findsOneWidget);
     await close(tester, app);
   });
 
