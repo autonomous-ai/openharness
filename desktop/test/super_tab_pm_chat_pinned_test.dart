@@ -443,12 +443,13 @@ void main() {
         Future<void> shortcutOverNotifications() async {
           await tester.tap(find.byKey(const ValueKey('super-notifications')));
           await tester.pumpAndSettle();
-          expect(find.text('Message Product Manager'), findsNothing);
+          expect(find.text('Message River'), findsNothing);
           // What ⇧⌘K runs (openActivePmChat).
           expect(await c.openCurrentPmChat(), isTrue);
           await tester.pumpAndSettle();
           expect(c.selectedId, c.pmChat('lead')?.id);
-          expect(find.text('Message Product Manager'), findsOneWidget);
+          // The composer names the direct message as its row does.
+          expect(find.text('Message River'), findsOneWidget);
         }
 
         await shortcutOverNotifications();
@@ -495,13 +496,13 @@ void main() {
       final c = await show(tester, pmChatSwarm());
       await tester.tap(find.byKey(const ValueKey('super-notifications')));
       await tester.pumpAndSettle();
-      expect(find.text('Message Product Manager'), findsNothing);
+      expect(find.text('Message Lead'), findsNothing);
 
       await tester.tap(entry);
       await tester.pumpAndSettle();
 
       expect(c.selectedId, c.pmChat('lead')!.id);
-      expect(find.text('Message Product Manager'), findsOneWidget);
+      expect(find.text('Message Lead'), findsOneWidget);
       await close(tester, c);
     });
 

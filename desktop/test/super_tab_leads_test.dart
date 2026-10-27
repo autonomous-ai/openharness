@@ -135,8 +135,9 @@ void main() {
       };
       server.messages.last['source'] = {'kind': 'overlap'};
       final controller = await show(tester, server);
-      // An open project's heading reads as its row too.
+      // An open project's heading and composer read as its row too.
       expect(find.text('# openharness'), findsOneWidget);
+      expect(find.text('Message #openharness'), findsOneWidget);
 
       expect(leadsRow, findsOneWidget);
       expect(
@@ -202,7 +203,7 @@ void main() {
       expect(
         find.descendant(
           of: composer,
-          matching: find.text('Message Product Managers'),
+          matching: find.text('Message #product-managers'),
         ),
         findsOneWidget,
       );

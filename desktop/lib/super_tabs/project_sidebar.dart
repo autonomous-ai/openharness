@@ -21,6 +21,14 @@ import 'workgroup_name.dart';
 /// The Swarm's Product Managers' conversation, listed as a channel among the projects.
 const kProductManagersChannel = 'product-managers';
 
+/// A project's Product Manager by name, as its Chat with PM is listed.
+String pmChatName(SuperTabSnapshot snapshot, SuperTabProject project) {
+  final pmId = snapshot.conversation(project.leadConversationId)?.leadId;
+  return pmId == null
+      ? 'Product Manager'
+      : snapshot.agentName(pmId, fallback: 'Product Manager');
+}
+
 class ProjectSidebar extends StatelessWidget {
   const ProjectSidebar({
     super.key,
@@ -403,9 +411,7 @@ class ProjectSidebar extends StatelessWidget {
     return SuperTabPmChatRow(
       key: ValueKey('super-pm-chat-${project.id}'),
       agentId: pmId,
-      name: pmId == null
-          ? 'Product Manager'
-          : snapshot.agentName(pmId, fallback: 'Product Manager'),
+      name: pmChatName(snapshot, project),
       project: named ? project.name : null,
       selected:
           chat != null &&

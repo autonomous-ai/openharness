@@ -245,7 +245,7 @@ void main() {
         expect(find.byKey(ValueKey('super-group-${chat.id}')), findsNothing);
         // The header names the chat; the sidebar names its Product Manager.
         expect(find.text('Chat with PM'), findsOneWidget);
-        expect(find.text('Message Product Manager'), findsOneWidget);
+        expect(find.text('Message Lead'), findsOneWidget);
 
         await tester.tap(find.byKey(const ValueKey('super-group-offline')));
         await tester.pumpAndSettle();

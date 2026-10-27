@@ -954,6 +954,22 @@ class _SuperTabViewState extends State<SuperTabView>
     );
   }
 
+  /// The composer's hint, naming the open conversation as its sidebar row
+  /// does: "Message #openharness", "Message #product-managers", "Message Wren".
+  String _messageHint(SuperTabConversation group) {
+    final snapshot = c.snapshot!;
+    if (snapshot.isProjectLead(group.id)) {
+      return 'Message #${snapshot.projectFor(group.id)!.name}';
+    }
+    if (group.id == snapshot.leadsConversationId) {
+      return 'Message #$kProductManagersChannel';
+    }
+    if (_isPmChat(group)) {
+      return 'Message ${pmChatName(snapshot, snapshot.projectFor(group.id)!)}';
+    }
+    return 'Message ${group.title}';
+  }
+
   Widget _boardButton() {
     final shown = _boardRoomy && _boardOpen;
     return AppIconButton(
@@ -1927,17 +1943,7 @@ class _SuperTabViewState extends State<SuperTabView>
                                             : group == null
                                             ? 'Loading conversation…'
                                             : c.canWrite
-                                            ? c.snapshot!.isProjectLead(
-                                                        group.id,
-                                                      ) ||
-                                                      _isPmChat(group)
-                                                  ? 'Message Product Manager'
-                                                  : group.id ==
-                                                        c
-                                                            .snapshot!
-                                                            .leadsConversationId
-                                                  ? 'Message Product Managers'
-                                                  : 'Message ${group.title}'
+                                            ? _messageHint(group)
                                             : 'Read-only conversation',
                                         border: InputBorder.none,
                                         enabledBorder: InputBorder.none,
