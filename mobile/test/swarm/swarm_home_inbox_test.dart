@@ -236,30 +236,46 @@ void main() {
     expect(await keptTitles(cache), isNot(contains('Pay review')));
   });
 
-  test('other changes are kept a moment after they settle', () async {
-    final cache = memoryHomeCache();
-    final fake = backend(groups: [groupData('g2', title: 'Fresh work')]);
-    final i = inbox(fake, cache, homeWait: const Duration(milliseconds: 50));
-    await i.refresh();
-    await settle();
+  group('any other change', () {
+    /// Swarm `a` read once, then renamed by its next change read.
+    Future<SwarmInbox> renamed(SwarmHomeCache cache, Duration wait) async {
+      final fake = backend(groups: [groupData('g2', title: 'Fresh work')]);
+      final i = inbox(fake, cache, homeWait: wait)..shown = true;
+      await until(() => i.reader('a')?.generation == 1);
+      await settle();
+      fake.routes['/api/super-tabs/list'] = (_) => {
+        'tabs': [
+          {'id': 'a', 'name': 'Swarm a', 'ownerId': me, 'lastChangedAt': 200},
+        ],
+        'next': null,
+      };
+      fake.routes['/api/super-tabs/a/changes'] = (_) => changes(
+        cursor: 'c2',
+        groups: [part('g2', 9, groupData('g2', title: 'Renamed work'))],
+        lastChangedAt: 200,
+      );
+      await i.refresh();
+      await settle();
+      return i;
+    }
 
-    fake.routes['/api/super-tabs/list'] = (_) => {
-      'tabs': [
-        {'id': 'a', 'name': 'Swarm a', 'ownerId': me, 'lastChangedAt': 200},
-      ],
-      'next': null,
-    };
-    fake.routes['/api/super-tabs/a/changes'] = (_) => changes(
-      cursor: 'c2',
-      groups: [part('g2', 9, groupData('g2', title: 'Renamed work'))],
-      lastChangedAt: 200,
-    );
-    await i.refresh();
-    await settle();
-    expect(await keptTitles(cache), isNot(contains('Renamed work')));
+    test('is kept when Harness goes behind', () async {
+      final cache = memoryHomeCache();
+      final i = await renamed(cache, const Duration(hours: 1));
+      expect(await keptTitles(cache), isNot(contains('Renamed work')));
 
-    await Future<void>.delayed(const Duration(milliseconds: 150));
-    expect(await keptTitles(cache), contains('Renamed work'));
+      i.shown = false;
+
+      expect(await keptTitles(cache), contains('Renamed work'));
+    });
+
+    test('is kept at once once a while has passed since the last', () async {
+      final cache = memoryHomeCache();
+
+      await renamed(cache, Duration.zero);
+
+      expect(await keptTitles(cache), contains('Renamed work'));
+    });
   });
 
   test("another account's Home is never drawn", () async {

@@ -287,7 +287,11 @@ class SwarmInbox extends ChangeNotifier {
     _shown = value;
     _poll?.cancel();
     _poll = null;
-    if (value) unawaited(_tick());
+    if (value) {
+      unawaited(_tick());
+    } else {
+      _home?.flush(_readers, swarms);
+    }
   }
 
   Future<void> _tick() async {
@@ -512,7 +516,7 @@ class SwarmInbox extends ChangeNotifier {
     _below = false;
     if (!tell) return;
     notifyListeners();
-    _home?.keep(_readers, () => swarms);
+    _home?.keep(_readers, swarms);
   }
 
   /// The same asks of the same reads, in the same order: decisions and tags
@@ -550,7 +554,6 @@ class SwarmInbox extends ChangeNotifier {
   void dispose() {
     _disposed = true;
     _poll?.cancel();
-    _home?.dispose();
     for (final id in _readers.keys.toList()) {
       _drop(id);
     }
