@@ -743,6 +743,29 @@ describe('the owner\'s subscriptions for the Harness Team account', () => {
   })
 })
 
+describe('the Harness Team account\'s own tmux', () => {
+  it('is looked at as the service connects, and not again once there or installed; a failure again later', async () => {
+    const quiet = { githubTokens: () => ({ start: vi.fn(), stop: vi.fn() }) as never, teamEngines: () => ({ start: vi.fn(), stop: vi.fn() }) as never,
+      teamRelay: () => ({ start: vi.fn(), stop: vi.fn(async () => {}) }) }
+    const installed = vi.fn(async () => 'installed' as const)
+    const service = superTabService(fakeCore(), { ...quiet, teamTmux: installed })
+    service.port.connected()
+    await Promise.resolve()
+    service.port.connected()
+    expect(installed).toHaveBeenCalledOnce()
+    const failed = vi.fn(async () => 'failed' as const)
+    const retried = superTabService(fakeCore(), { ...quiet, teamTmux: failed })
+    retried.port.connected()
+    await Promise.resolve()
+    retried.port.connected()
+    expect(failed).toHaveBeenCalledOnce()
+    vi.useFakeTimers({ now: Date.now() + 31 * 60_000 })
+    retried.port.connected()
+    vi.useRealTimers()
+    expect(failed).toHaveBeenCalledTimes(2)
+  })
+})
+
 describe('the Harness Team account, offered by Desktop on this Mac', () => {
   it('runs only for the local owner, for a moment the person is there, and says whether it started', async () => {
     const offer = vi.fn(async (_reason: string, _shared: () => Promise<boolean>) => ({ state: 'started' as const }))
