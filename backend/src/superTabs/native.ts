@@ -37,6 +37,8 @@ interface Deps {
   contribution(tx: Transaction, state: SuperTabState, actor: Actor, command: { machineId: string }): Promise<Grant>
   /** The one machine a team session (lib/teamSession.ts) hosts for; null for any other sign-in. */
   teamHost(tx: Transaction, user: AuthUser): Promise<string | null>
+  /** Refuses a person no longer in the Swarm's Team (orgStore.ts requireOrgAccess). */
+  orgAccess(tx: Transaction, state: SuperTabState, userId: string): Promise<void>
 }
 const json = (value: unknown): Prisma.InputJsonValue => JSON.parse(JSON.stringify(value)) as Prisma.InputJsonValue
 const digest = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex')
@@ -72,6 +74,7 @@ export class SuperTabNativeStore {
       fail('NATIVE_CONTEXT_REVOKED', 'This terminal context no longer belongs to the current contribution.', 403)
     }
     await this.deps.agentGrant(tx, state, target)
+    await this.deps.orgAccess(tx, state, binding.operator.id)
     // Read the person's current identity, rather than trusting a name supplied by
     // a terminal client or reusing an old email after an account change.
     const user = await tx.user.findUnique({ where: { id: operator.id }, select: { email: true, autonomousEnv: true } })
@@ -89,6 +92,7 @@ export class SuperTabNativeStore {
     const request = openNativeSchema.parse(input)
     return this.deps.transaction(async tx => {
       const { state } = await this.deps.load(tx, user, tabId, [request.conversationId])
+      await this.deps.orgAccess(tx, state, user.sub)
       const operator = author(state, { kind: 'person', userId: user.sub, email: user.email }, true)
       const target = agent(state, request.agentId)
       const group = readConversation(state, { kind: 'person', userId: user.sub, email: user.email }, request.conversationId)

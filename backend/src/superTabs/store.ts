@@ -22,6 +22,8 @@ import { clock, insertParts, lastChangedAt, loadActive, reassemble, split, type 
 import { commitParts, indexesOf, numberMessages, type Touch, type Written } from './parts/commit.js'
 import { touchesFor } from './parts/touches.js'
 import { revokeNativeContexts, SuperTabNativeStore } from './native.js'
+import { addMember, listOrgs, memberId, ORG_ACCESS_REVOKED, orgForNewSwarm, requireOrgAccess } from './orgStore.js'
+import { ORG_LABEL } from './orgs.js'
 import {
   activeWork, actorKey, agent, agentOnly, appendPullRequestUrls, author, conversation, createSuperTab, fail, person, stableId, visibleState, finishWorker,
   SuperTabError, isLeads, parkLaterConversations, syncLeads, type Actor, type Agent, type Assignment, type Author, type MessageDraft, type SuperTabState,
@@ -192,6 +194,7 @@ export class SuperTabStore {
       agentGrant: (tx, state, target) => this.agentGrant(tx, state, target),
       contribution: (tx, state, actor, command) => this.contribution(tx, state, actor, command),
       teamHost: (tx, user) => this.teamHost(tx, user),
+      orgAccess: (tx, state, userId) => requireOrgAccess(tx, state, userId),
     })
   }
 
@@ -373,6 +376,7 @@ export class SuperTabStore {
     if (!agentId) {
       // A team session never speaks or reads as the person.
       if (team !== null) fail(TEAM_SESSION_LIMITED, TEAM_SESSION_MESSAGE, 403)
+      await requireOrgAccess(tx, state, user.sub)
       return { kind: 'person', userId: user.sub, email: user.email }
     }
     const target = agent(state, agentId)
@@ -380,6 +384,8 @@ export class SuperTabStore {
     // ...and as an agent only one running on its own machine, never the person's agents elsewhere.
     if (team !== null && target.machineId !== team) fail(TEAM_SESSION_LIMITED, TEAM_SESSION_MESSAGE, 403)
     await this.agentGrant(tx, state, target)
+    // An agent acts for its contributor, who must still be in the Team; its host need not be, as it need not be in the Swarm.
+    await requireOrgAccess(tx, state, target.contributorId)
     return { kind: 'agent', agentId, machineOwnerId: user.sub }
   }
 
@@ -428,10 +434,10 @@ export class SuperTabStore {
     return { machineOwnerId: machine.userId, contributorId, hostGrant, ...host }
   }
 
-  async create(user: AuthUser, operationId: string, name: string, projectVisibility?: ProjectVisibility) {
+  async create(user: AuthUser, operationId: string, name: string, projectVisibility?: ProjectVisibility, orgId?: string) {
     this.personOnly(user)
     const id = stableId('super-tab', user.autonomousEnv, user.sub, operationId)
-    const requestHash = hash({ name, ...(projectVisibility ? { projectVisibility } : {}) })
+    const requestHash = hash({ name, ...(projectVisibility ? { projectVisibility } : {}), ...(orgId ? { orgId } : {}) })
     return transaction(this.db, async tx => {
       const prior = await tx.superTabOperation.findUnique({ where: { id } })
       if (prior) {
@@ -439,8 +445,10 @@ export class SuperTabStore {
         return { id, revision: prior.revision }
       }
       const state = createSuperTab(id, name, { id: user.sub, email: user.email }, user.autonomousEnv, projectVisibility)
+      // Every new Swarm is in a Team, invite-only there until its owner or the Team's admins open it (orgStore.ts).
+      state.orgId = await orgForNewSwarm(tx, user, name, id, orgId)
       // Born in parts: its state lives in the Swarm* parts, and `state` only fences older backends (schema.prisma).
-      await tx.superTab.create({ data: { id, ownerId: user.sub, autonomousEnv: user.autonomousEnv, ...indexesOf(state), format: 2, state: { version: 2 } } })
+      await tx.superTab.create({ data: { id, ownerId: user.sub, autonomousEnv: user.autonomousEnv, orgId: state.orgId, ...indexesOf(state), format: 2, state: { version: 2 } } })
       await insertParts(tx, split({ ...state, sequenceBase: 0 }, { tabId: id, version: 1, now: clock.next() }))
       await tx.superTabOperation.create({ data: { id, tabId: id, actorKey: `person:${user.sub}`, requestHash, revision: 0, result: { id } } })
       return { id, revision: 0 }
@@ -456,6 +464,11 @@ export class SuperTabStore {
       const head = heads.get(row.id)
       return head ? [{ id: row.id, name: head.name, ownerId: row.ownerId, revision: row.revision, paused: head.paused }] : []
     }), next: rows.length > 100 ? rows[99]!.id : null }
+  }
+
+  async orgs(user: AuthUser) {
+    this.personOnly(user)
+    return { orgs: await listOrgs(this.db, user) }
   }
 
   async invitations(user: AuthUser) {
@@ -540,6 +553,13 @@ export class SuperTabStore {
         return { id: tabId, role: member.role, alreadyMember: result.alreadyMember === true }
       }
       const alreadyMember = !!member
+      if (!member && state.orgId) {
+        // A link or an email domain makes a guest of the Team, never higher. Someone the Team removed comes back only by
+        // an invitation, never by a general link (design, Roles).
+        const prior = await tx.swarmOrgMember.findUnique({ where: { id: memberId(state.orgId, user.sub) } })
+        if (prior?.removedAt) fail(ORG_ACCESS_REVOKED, `You were removed from this Swarm's ${ORG_LABEL}. Ask its owner to invite you.`, 403)
+        await addMember(tx, state.orgId, { id: user.sub, email: user.email }, 'guest', state.ownerId, receiptId)
+      }
       if (!member) {
         member = { id: user.sub, email: authenticatedEmail(user.email)!, role: sharing.access.role, generation: receiptId }
         state.people.push(member)
@@ -641,6 +661,13 @@ export class SuperTabStore {
       }
       if (hostMachineId && !['agent.startDispatch', 'agent.started', 'agent.startFailed', 'agent.startSettled', 'route.modelResult'].includes(command.type)) fail('FORBIDDEN', 'A host can only settle its queued starts.', 403)
       if (team !== null && !hostMachineId) this.teamCommand(original, team, user, command)
+      // Accepting a Swarm's invitation from outside its Team makes the person a guest of the Team first (design, Roles).
+      if (command.type === 'invite.accept' && !hostMachineId && original.orgId) {
+        const email = user.email.trim().toLowerCase()
+        const invite = original.invitations.find(i => i.id === command.inviteId && i.email === email && i.expiresAt > this.now())
+        // Only the Swarm's owner invites (invite.create), so the guest is added on the owner's authority.
+        if (invite) await addMember(tx, original.orgId, { id: user.sub, email }, 'guest', original.ownerId, stableId('org-guest', tabId, user.sub, operationId))
+      }
       // A removed agent's or machine's host confirms its close or cleanup as the machine owner, who may have left the Swarm with it.
       const actor: Actor = command.type === 'agent.sessionClosed' || command.type === 'machine.cleaned' ? { kind: 'person', userId: user.sub, email: user.email }
         : hostMachineId && 'startId' in command
@@ -1332,6 +1359,7 @@ export class SuperTabStore {
     this.personOnly(user)
     return transaction(this.db, async tx => {
       const { state: tab } = await this.load(tx, user, tabId, { allGroups: true })
+      await this.actor(tx, user, tab)
       return { mentions: await listMentions(tx, tabId, tab, { kind: 'person', userId: user.sub, email: user.email }, this.now(), state === 'waiting') }
     })
   }
@@ -1507,6 +1535,7 @@ export class SuperTabStore {
       return await transaction(this.db, async tx => {
         const { state } = await this.load(tx, user, tabId)
         person(state, user.sub)
+        await requireOrgAccess(tx, state, user.sub)
         const target = state.agents.find(a => a.machineId === machineId && a.harnessId === harnessId && a.machineOwnerId === machineOwnerId)
         if (!target) return false
         agent(state, target.id)

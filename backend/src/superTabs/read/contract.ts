@@ -125,7 +125,8 @@ export interface CommandReply {
 
 /** GET /api/super-tabs/list[?after=] */
 export interface SwarmList {
-  tabs: Array<{ id: string; name: string; ownerId: string; paused: boolean; lastChangedAt: number | null }>
+  /** `orgId` names its Team (null before the migration); a Swarm whose Team the person left is not listed. */
+  tabs: Array<{ id: string; name: string; ownerId: string; orgId: string | null; paused: boolean; lastChangedAt: number | null }>
   next: string | null
 }
 

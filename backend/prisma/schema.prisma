@@ -1009,9 +1009,12 @@ model SuperTab {
   format         Int      @default(1)
   migratedAt     DateTime?
   legacyState    Json?
+  /// The Team (SwarmOrg) it belongs to, also on its head part. Null only on a Swarm from before Teams, until migrated.
+  orgId          String?
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
+  @@index([autonomousEnv, orgId])
   @@index([autonomousEnv, memberIds])
   @@index([autonomousEnv, invitedEmails])
   @@index([autonomousEnv, machineIds])
@@ -1305,6 +1308,53 @@ model SuperTabTerminalRequest {
 // (`deleted`) until `purgeAt`, so readers learn it is gone. `data` keeps the record's shape from `SuperTab.state`.
 
 /// The Swarm's scalars and settings: projects (without progress), rules, invitations, sharing, routing, Local models.
+/// A Team: Swarms and the people who may be in them (docs/plans/2026-10-27-swarm-teams.md). `org` in code, so `team` keeps
+/// meaning the Harness Team account. It never grants reading a Swarm: that needs the Swarm's own membership too.
+model SwarmOrg {
+  id            String    @id @map("_id")
+  autonomousEnv String
+  name          String
+  ownerId       String
+  revision      Int       @default(0)
+  createdAt     DateTime  @default(now())
+  deletedAt     DateTime?
+  purgeAt       DateTime?
+}
+
+/// One person of a Team. A removal keeps the row with `removedAt` until it is purged; a rejoin writes a new generation.
+model SwarmOrgMember {
+  /// `orgId:userId`
+  id         String    @id @map("_id")
+  orgId      String
+  userId     String
+  email      String
+  role       String
+  generation String
+  version    Int       @default(1)
+  addedBy    String
+  addedAt    DateTime  @default(now())
+  removedAt  DateTime?
+  removedBy  String?
+  purgeAt    DateTime?
+
+  @@index([orgId, removedAt])
+  @@index([userId, removedAt])
+}
+
+/// An invitation to a Team, by email; deleted when accepted or revoked, purged when it expires.
+model SwarmOrgInvitation {
+  /// `orgId:email`
+  id        String   @id @map("_id")
+  orgId     String
+  email     String
+  role      String
+  invitedBy String
+  expiresAt DateTime
+
+  @@index([email, expiresAt])
+  @@index([orgId])
+}
+
 model SwarmHead {
   id              String    @id @map("_id")
   tabId           String

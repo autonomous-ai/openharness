@@ -26,7 +26,8 @@ import { UPDATE_REQUIRED } from '../superTabs/read/contract.js'
 const id = z.string().min(1).max(160).regex(/^[A-Za-z0-9_-]+$/)
 const tabParams = z.object({ tabId: id })
 const agentQuery = z.object({ asAgentId: id.optional() }).strict()
-const create = z.object({ operationId: id, name: z.string().trim().min(1).max(160), projectVisibility: z.enum(['public', 'private']).optional() }).strict()
+const create = z.object({ operationId: id, name: z.string().trim().min(1).max(160), projectVisibility: z.enum(['public', 'private']).optional(),
+  orgId: id.optional() }).strict()
 const operation = operationSchema.extend({ asAgentId: id.optional() })
 const listQuery = z.object({ after: id.optional() }).strict()
 const cursor = z.string().min(1).max(512).regex(/^[A-Za-z0-9_-]+$/)
@@ -150,7 +151,9 @@ export async function superTabRoutes(app: FastifyInstance, options: { store?: Su
   app.get<{ Querystring: z.infer<typeof listQuery> }>('/api/super-tabs/list', { preHandler: validateQuery(listQuery) },
     (req, reply) => respond(reply, () => reads.list(req.user!, req.query.after)))
   app.post<{ Body: z.infer<typeof create> }>('/api/super-tabs', { preHandler: validateBody(create) },
-    (req, reply) => respond(reply, () => store.create(req.user!, req.body.operationId, req.body.name, req.body.projectVisibility)))
+    (req, reply) => respond(reply, () => store.create(req.user!, req.body.operationId, req.body.name, req.body.projectVisibility, req.body.orgId)))
+  // Teams (docs/plans/2026-10-27-swarm-teams.md): the person's Teams and the Swarms they may see in each.
+  app.get('/api/super-tabs/orgs', (req, reply) => respond(reply, () => store.orgs(req.user!)))
   app.get('/api/super-tabs/invitations', (req, reply) => respond(reply, () => store.invitations(req.user!)))
   app.get<{ Params: z.infer<typeof tabParams> }>('/api/super-tabs/:tabId/sharing',
     { preHandler: validateParams(tabParams) },

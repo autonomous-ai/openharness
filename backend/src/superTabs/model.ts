@@ -200,6 +200,10 @@ export interface SuperTabState {
   /** Read-only, for a Lead's own reads (visibleState): the active work of the other projects it may know about. */
   otherProjectsWork?: OtherProjectWork[]
   ownerId: string
+  /** The Team it belongs to (orgStore.ts); absent on a Swarm from before Teams until the migration gives it one. */
+  orgId?: string
+  /** Who in the Team may find and join it by themselves: `org` lets members and up join; absent reads as invite-only. */
+  orgVisibility?: 'invite-only' | 'org'
   environment: string
   /** Fields this tab overrides from its owner's account routing policy (routingPolicy.ts). */
   routingPolicy?: import('./routingPolicy.js').RoutingOverride
