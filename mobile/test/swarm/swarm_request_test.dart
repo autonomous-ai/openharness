@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness_mobile/core/models.dart';
 import 'package:harness_mobile/swarm/swarm_request.dart';
+import 'package:harness_mobile/ws/ws_conn.dart';
 
 import '../viewer_app_fixture.dart';
 
@@ -238,6 +239,128 @@ void main() {
       expect(rig.conn('a').payloadsOf('super_tabs'), hasLength(2));
     },
   );
+
+  // Mira's run on the owner's iPhone, 2026-10-27: Swarm said "Connect one of
+  // your computers" for 10 to 25 seconds mid-session while the computer
+  // stayed connected — its socket was redialling, and the read gave up at
+  // once.
+  test('a read while the only computer reconnects waits for it, and goes '
+      'through once it is back', () async {
+    final rig = await signedInWith({'m': []});
+    addTearDown(rig.app.dispose);
+    rig.conn('m').answers['super_tabs'] = (_) => forwarded({'tabs': []});
+    rig.app.connectionStatusForTest('m', ConnectionStatus.reconnecting);
+    await settle();
+
+    Object? value;
+    final read = rig.app
+        .swarmRequest('GET', '/api/super-tabs/list')
+        .then((v) => value = v);
+    await settle();
+    expect(value, isNull);
+    expect(rig.conn('m').payloadsOf('super_tabs'), isEmpty);
+
+    rig.app.connectionStatusForTest('m', ConnectionStatus.connected);
+    await read;
+
+    expect(value, {'tabs': <Object>[]});
+  });
+
+  test('a computer still away after the wait: no computer', () async {
+    final rig = await signedInWith({'m': []});
+    addTearDown(rig.app.dispose);
+    rig.app.swarmReconnectWait = const Duration(milliseconds: 50);
+    rig.app.connectionStatusForTest('m', ConnectionStatus.reconnecting);
+    await settle();
+
+    await expectLater(
+      rig.app.swarmRequest('GET', '/api/super-tabs/list'),
+      throwsA(
+        isA<SuperTabFailure>().having(
+          (f) => f.code,
+          'code',
+          'MACHINE_UNAVAILABLE',
+        ),
+      ),
+    );
+  });
+
+  test('a read lost on the way is asked again through another computer, '
+      'quietly', () async {
+    final rig = await signedInWith({'a': [], 'b': []});
+    addTearDown(rig.app.dispose);
+    rig.conn('a').answers['super_tabs'] = (_) =>
+        throw const WsRequestTimeout('super_tabs');
+    rig.conn('b').answers['super_tabs'] = (_) => forwarded({'tabs': []});
+
+    expect(await rig.app.swarmRequest('GET', '/api/super-tabs/list'), {
+      'tabs': <Object>[],
+    });
+    expect(rig.conn('a').payloadsOf('super_tabs'), hasLength(1));
+    expect(rig.conn('b').payloadsOf('super_tabs'), hasLength(1));
+  });
+
+  // The owner's iPhone, 2026-10-27: after a restart Swarm said "Connect one
+  // of your computers" for minutes with a computer online again, and every
+  // read failed until the computer list was refreshed by hand.
+  test('with no computer up, a read asks for the computer list again: '
+      'offline at launch, then online', () async {
+    final rig = await signedInWith({'m': []});
+    addTearDown(rig.app.dispose);
+    var status = 'offline', listed = 0;
+    rig.api.onMachines = () async {
+      listed++;
+      return [remoteMachine('m', status: status)];
+    };
+    await rig.app.refreshMachines();
+    rig.app.connectionStatusForTest('m', ConnectionStatus.disconnected);
+    await settle();
+    rig.conn('m').answers['super_tabs'] = (_) => forwarded({'tabs': []});
+    final before = listed;
+
+    status = 'online';
+    await expectLater(
+      rig.app.swarmRequest('GET', '/api/super-tabs/list'),
+      throwsA(
+        isA<SuperTabFailure>().having(
+          (f) => f.code,
+          'code',
+          'MACHINE_UNAVAILABLE',
+        ),
+      ),
+    );
+    await settle();
+    expect(listed, before + 1);
+
+    // The list says it is up; its socket comes back, and Swarm reads.
+    rig.app.connectionStatusForTest('m', ConnectionStatus.connected);
+    await settle();
+    expect(await rig.app.swarmRequest('GET', '/api/super-tabs/list'), {
+      'tabs': <Object>[],
+    });
+  });
+
+  test('reads failing one after another ask for the list once in a while, '
+      'not each time', () async {
+    final rig = await signedInWith({'m': []});
+    addTearDown(rig.app.dispose);
+    var listed = 0;
+    rig.api.onMachines = () async {
+      listed++;
+      return [remoteMachine('m', status: 'offline')];
+    };
+    rig.app.connectionStatusForTest('m', ConnectionStatus.disconnected);
+    await settle();
+
+    for (var i = 0; i < 4; i++) {
+      await rig.app
+          .swarmRequest('GET', '/api/super-tabs/list')
+          .catchError((Object _) => null);
+      await settle();
+    }
+
+    expect(listed, 1);
+  });
 
   test('an answer that lands after sign-out is dropped', () async {
     final rig = await signedInWith({'m': []});

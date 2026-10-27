@@ -106,6 +106,11 @@ class SwarmInbox extends ChangeNotifier {
   Timer? _poll;
   bool _shown = false, _disposed = false;
 
+  /// While no computer can be asked, the next read comes this soon — 2 seconds, doubling up to
+  /// [pollInterval] — so Swarm is back within seconds of one coming up, not at the next poll.
+  /// Null once a read gets through.
+  Duration? _away;
+
   /// [id]'s reader, while it is listed.
   SwarmReader? reader(String id) => _readers[id];
 
@@ -128,7 +133,7 @@ class SwarmInbox extends ChangeNotifier {
     await refresh();
     if (_disposed || !_shown) return;
     _poll?.cancel();
-    _poll = Timer(pollInterval, () => unawaited(_tick()));
+    _poll = Timer(_away ?? pollInterval, () => unawaited(_tick()));
   }
 
   /// One read now, joining one under way.
@@ -144,6 +149,7 @@ class SwarmInbox extends ChangeNotifier {
       swarms = listed;
       loaded = true;
       error = null;
+      _away = null;
       final ids = {for (final swarm in listed) swarm.id};
       for (final id in _readers.keys.toList()) {
         if (!ids.contains(id)) _drop(id);
@@ -155,9 +161,16 @@ class SwarmInbox extends ChangeNotifier {
     } on SuperTabFailure catch (failure) {
       if (_disposed) return;
       error = failure.message;
+      final next = _away == null ? const Duration(seconds: 2) : _away! * 2;
+      _away = failure.code != 'MACHINE_UNAVAILABLE'
+          ? null
+          : next < pollInterval
+          ? next
+          : pollInterval;
     } catch (_) {
       if (_disposed) return;
       error = 'Could not load your Swarms. Try again.';
+      _away = null;
     }
     _rebuild();
   }

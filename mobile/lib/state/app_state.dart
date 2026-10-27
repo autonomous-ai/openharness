@@ -6313,6 +6313,11 @@ class AppNotifier extends ChangeNotifier {
   /// all along — until the Team computer itself was marked offline.
   final _swarmRefused = <String>{};
 
+  /// How long a Swarm call waits for a computer on its way back — a socket redialling — before it
+  /// says there is none.
+  @visibleForTesting
+  Duration swarmReconnectWait = const Duration(seconds: 8);
+
   /// The machine the phone asks the Swarm through: one of the account's own whose socket is up —
   /// the one asked last while it stays so, else the first by id, as the web build picks
   /// (`desktop/lib/state/app_state.dart` `sharedTabsTarget`) — never one that refused. Null with
@@ -6353,13 +6358,19 @@ class AppNotifier extends ChangeNotifier {
   /// every machine gives is the read's own (a Swarm the person left), and passes over none: it
   /// must still reach the screen as it is. A command asked twice is the same command, under its
   /// operation id.
+  ///
+  /// Nor is one read lost on the way — a timeout, a socket dropped — the end of it: it is asked
+  /// again through another computer that is up. With none up but one redialling, the call waits
+  /// [swarmReconnectWait] for it: Swarm said "Connect one of your computers" for 10 to 25 seconds
+  /// at a time on the owner's iPhone (2026-10-27) while the computer stayed connected.
   Future<Object?> swarmRequest(
     String method,
     String path, {
     Map<String, dynamic>? body,
   }) async {
-    final machine = _swarmMachine();
+    final machine = _swarmMachine() ?? await _swarmMachineBack();
     if (machine == null) {
+      _swarmListAgain();
       throw const SuperTabFailure(
         'MACHINE_UNAVAILABLE',
         'Connect one of your computers to open Swarm.',
@@ -6381,6 +6392,59 @@ class AppNotifier extends ChangeNotifier {
         }
         rethrow;
       }
+    } catch (_) {
+      final other = _swarmMachine(except: machine);
+      if (other == null) rethrow;
+      final value = await _swarmRequestVia(other, method, path, body);
+      _swarmMachineId = other.machine.machineId;
+      return value;
+    }
+  }
+
+  /// When the computer list was last read again for Swarm: at most once in [_swarmListGap].
+  DateTime? _swarmListedAt;
+  static const _swarmListGap = Duration(seconds: 2);
+
+  /// No computer to ask: the list is read again, as a refresh by hand would. What it says of each
+  /// one can be stale — a computer reported off at launch whose socket waits parked for a word
+  /// that it is back — and with any socket up, nothing else reads it again ([_rereadMachinesWhileDeaf]).
+  /// Swarm's own retries set the pace ([SwarmInbox]).
+  void _swarmListAgain() {
+    final now = DateTime.now();
+    final last = _swarmListedAt;
+    if (last != null && now.difference(last) < _swarmListGap) return;
+    _swarmListedAt = now;
+    _rereadMachines();
+  }
+
+  /// A computer that comes up within [swarmReconnectWait], when one is on its way: dialling or
+  /// redialling, linked, not reported off, and not passed over. Null otherwise.
+  Future<MachineState?> _swarmMachineBack() async {
+    bool coming(MachineState machine) =>
+        (machine.connectionStatus == ConnectionStatus.connecting ||
+            machine.connectionStatus == ConnectionStatus.reconnecting) &&
+        !machine.needsLink &&
+        machine.nodeOnline != false &&
+        !_swarmRefused.contains(machine.machine.machineId);
+    if (!machineStates.values.any(coming)) return null;
+    final back = Completer<MachineState?>();
+    void look() {
+      if (back.isCompleted) return;
+      final machine = _swarmMachine();
+      if (machine != null || !machineStates.values.any(coming)) {
+        back.complete(machine);
+      }
+    }
+
+    addListener(look);
+    final timer = Timer(swarmReconnectWait, () {
+      if (!back.isCompleted) back.complete(null);
+    });
+    try {
+      return await back.future;
+    } finally {
+      timer.cancel();
+      removeListener(look);
     }
   }
 
