@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness_mobile/notify/system_notices.dart';
@@ -429,6 +431,37 @@ void main() {
       expect(find.text('Ship it behind a flag?'), findsNothing);
       expect(find.text('my reply'), findsNothing);
       expect(find.text('This chat is not open to you.'), findsOneWidget);
+    });
+
+    testWidgets('its Swarm is read often only while the chat is on screen '
+        'and Harness is in front', (tester) async {
+      final host = await pump(
+        tester,
+        backend(),
+        const SwarmConversationPage(swarmId: tab, conversationId: 'g1'),
+      );
+      await tester.pumpAndSettle();
+      final reader = host.session!.inbox.reader(tab)!;
+      expect(reader.shown, isFalse, reason: 'Harness is behind');
+
+      host.foreground = true;
+      expect(reader.shown, isTrue);
+
+      final navigator = tester.state<NavigatorState>(find.byType(Navigator));
+      unawaited(
+        navigator.push(
+          MaterialPageRoute<void>(builder: (_) => const Scaffold()),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(reader.shown, isFalse, reason: 'another screen covers it');
+
+      navigator.pop();
+      await tester.pumpAndSettle();
+      expect(reader.shown, isTrue);
+
+      host.foreground = false;
+      expect(reader.shown, isFalse);
     });
 
     testWidgets('one in a Swarm the person left shows nothing of it', (

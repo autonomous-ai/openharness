@@ -74,6 +74,10 @@ class _SwarmConversationPageState extends State<SwarmConversationPage> {
   SwarmConversation? _conversation;
   final _text = TextEditingController();
 
+  /// No other screen covers this one.
+  bool _visible = true;
+  bool _watching = false;
+
   @override
   void initState() {
     super.initState();
@@ -83,8 +87,13 @@ class _SwarmConversationPageState extends State<SwarmConversationPage> {
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
+    // Off while a screen pushed over this one covers it.
+    _visible = TickerMode.valuesOf(context).enabled;
     final session = SwarmScope.of(context);
-    if (session == _session) return;
+    if (session == _session) {
+      _watch();
+      return;
+    }
     _close();
     _session = session?..enter();
     session?.inbox.addListener(_attach);
@@ -99,11 +108,24 @@ class _SwarmConversationPageState extends State<SwarmConversationPage> {
     final reader = session?.inbox.reader(widget.swarmId);
     if (session == null || reader == null || _conversation != null) return;
     session.inbox.removeListener(_attach);
-    session.watch(widget.swarmId);
     _conversation = SwarmConversation(reader, widget.conversationId)
       ..addListener(_drafted);
+    _watch();
     unawaited(_conversation!.load());
     if (rebuild && mounted) setState(() {});
+  }
+
+  /// Its Swarm is watched while the chat is open and visible, so it is read
+  /// every few seconds only then ([SwarmSession.watch]).
+  void _watch() {
+    final watch = _conversation != null && _visible;
+    if (watch == _watching) return;
+    _watching = watch;
+    if (watch) {
+      _session?.watch(widget.swarmId);
+    } else {
+      _session?.unwatch(widget.swarmId);
+    }
   }
 
   void _close() {
@@ -113,8 +135,9 @@ class _SwarmConversationPageState extends State<SwarmConversationPage> {
       c
         ..removeListener(_drafted)
         ..dispose();
-      session?.unwatch(widget.swarmId);
     }
+    if (_watching) session?.unwatch(widget.swarmId);
+    _watching = false;
     _conversation = null;
     session?.leave();
     _session = null;

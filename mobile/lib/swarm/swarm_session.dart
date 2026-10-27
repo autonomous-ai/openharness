@@ -46,10 +46,15 @@ class SwarmSession extends ChangeNotifier {
   int _screens = 0;
   final _watching = <String, int>{};
   final _held = <String, ({int choice, Timer timer})>{};
-  bool _disposed = false;
+  bool _foreground = false, _disposed = false;
 
-  /// Harness is in front: the Swarms are read every poll. Behind, nothing is.
-  set foreground(bool value) => inbox.shown = value;
+  /// Harness is in front: the Swarms are read every poll, and those a screen
+  /// watches every few seconds. Behind, nothing is.
+  set foreground(bool value) {
+    _foreground = value;
+    inbox.shown = value;
+    _show();
+  }
 
   /// A Swarm screen is up: what arrives shows there, so no notice tells it.
   void enter() => _screens++;
@@ -59,10 +64,10 @@ class SwarmSession extends ChangeNotifier {
   void announce(SwarmNeed need) => _announcer.announce(need);
 
   /// A screen shows Swarm [swarmId] closely (a conversation): it is read
-  /// every few seconds until no screen does.
+  /// every few seconds while Harness is in front, until no screen does.
   void watch(String swarmId) {
     _watching[swarmId] = (_watching[swarmId] ?? 0) + 1;
-    inbox.reader(swarmId)?.shown = true;
+    _show();
   }
 
   void unwatch(String swarmId) {
@@ -73,6 +78,14 @@ class SwarmSession extends ChangeNotifier {
     }
     _watching.remove(swarmId);
     inbox.reader(swarmId)?.shown = false;
+  }
+
+  /// Each watched Swarm's reader reads on its own only while Harness is in
+  /// front; one listed again after it left is a new reader, shown here too.
+  void _show() {
+    for (final id in _watching.keys) {
+      inbox.reader(id)?.shown = _foreground;
+    }
   }
 
   /// The option held for [need], while its Undo window runs.
@@ -110,6 +123,7 @@ class SwarmSession extends ChangeNotifier {
   }
 
   void _needsChanged() {
+    _show();
     _announcer.settle(inbox.needs);
     // Answered somewhere else meanwhile: there is nothing left to send.
     final open = {for (final need in inbox.needs) need.key};

@@ -229,7 +229,7 @@ void main() {
   test(
     'a Swarm watched by a screen is read often, until no screen watches it',
     () async {
-      final s = session(backend());
+      final s = session(backend())..foreground = true;
       await s.inbox.refresh();
       final reader = s.inbox.reader('a')!;
 
@@ -244,6 +244,35 @@ void main() {
       expect(reader.shown, isFalse);
     },
   );
+
+  test('a watched Swarm reads nothing while Harness is behind, '
+      'and reads at once when it is in front again', () {
+    fakeAsync((async) {
+      final fake = backend();
+      final s = SwarmSession(
+        accountId: me,
+        request: fake.request,
+        notices: _Notices(),
+      )..foreground = true;
+      async.flushMicrotasks();
+      int reads() => fake.paths
+          .where((p) => p.startsWith('/api/super-tabs/a/changes'))
+          .length;
+      s.watch('a');
+      async.elapse(const Duration(seconds: 6));
+      final watched = reads();
+      expect(watched, greaterThan(0));
+
+      s.foreground = false;
+      async.elapse(const Duration(minutes: 2));
+      expect(reads(), watched, reason: 'behind, the watched Swarm too');
+
+      s.foreground = true;
+      async.flushMicrotasks();
+      expect(reads(), greaterThan(watched));
+      s.dispose();
+    });
+  });
 }
 
 class _Notices extends SilentSystemNotices {
