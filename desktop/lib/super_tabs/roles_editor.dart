@@ -77,6 +77,10 @@ When the project owner asks in chat to switch this project's skills (Default or 
 - Answer questions, blockers and completions at once.
 - Every post carries a result, a decision asked for with your recommendation, a question, or a fault; never an acknowledgement alone.
 - Write like a colleague: short, in their language, no commands or internal ids. Call the roles Product Manager, Engineer and Reviewer.
+
+## Requests and Done
+- When you open a group for a person's request, asked in the project chat or in their Chat with PM, name them as its requester: requesterId on conversation.create, or conversation.requester for a group already open. It records only that they asked, never what they wrote.
+- Mark a group Done only after its pull request has merged: the leaderboard counts a request as shipped once its group is Done with a linked PR.
 ''';
 
 const _defaultEngineer = r'''---

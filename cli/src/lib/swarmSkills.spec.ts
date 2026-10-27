@@ -55,6 +55,11 @@ describe('built-in Swarm skills', () => {
   // the Builder's alone, in both modes.
   const lost = '- When you are told a task is lost, hand it on at once: route it and assign it to another agent, avoiding what failed (another machine if its machine died, another account or engine if it hit a usage limit). The new brief tells the successor to continue from the lost attempt\'s pushed branch and last result, not to start over.\n'
   const checkpoint = '- Push your work branch at least every 30 minutes, and set your work status to working with a one-line note of what is done and what is next, so another agent can continue if you stop.\n'
+  // The requests section (Lead's ruling for v2 G, the human leaderboard, 2026-10-27): the Lead's alone, in both modes, in a
+  // section of its own so other groups' edits to the Lead text merge cleanly.
+  const requests = '## Requests and Done\n- When you open a group for a person\'s request, asked in the project chat or in their Chat with PM, name them as its requester: requesterId on conversation.create, or conversation.requester for a group already open. It records only that they asked, never what they wrote.\n- Mark a group Done only after its pull request has merged: the leaderboard counts a request as shipped once its group is Done with a linked PR.\n\n'
+  // Last in the Default Lead text, which has no red flags: after a blank line, ending the text.
+  const requestsLast = `\n${requests.trimEnd()}\n`
   const twoHours = '- A Builder or Reviewer that has been down for 2 hours (machine offline, session gone or stopped): cancel its task with the reason, route it, and assign it to another agent with what the first one left (branch, last revision, last report).\n'
   it.each([
     ['lead', '5fc83d8c43b66b44cdab27b48235dbc86b7ab11a57153edc1ae7e92831642a8e'],
@@ -74,7 +79,8 @@ describe('built-in Swarm skills', () => {
       expect(text.split(mention)).toHaveLength(role === 'lead' ? 2 : 1)
       expect(text.split(lost)).toHaveLength(role === 'lead' ? 2 : 1)
       expect(text.split(checkpoint)).toHaveLength(role === 'dev' ? 2 : 1)
-      expect(sha(text.replace(twoHours, '').replace(terminal, '').replace(overlap, '').replace(local, '').replace(mention, '').replace(lost, '').replace(checkpoint, ''))).toBe(sha256)
+      expect(text.split(requests)).toHaveLength(role === 'lead' ? 2 : 1)
+      expect(sha(text.replace(twoHours, '').replace(terminal, '').replace(overlap, '').replace(local, '').replace(mention, '').replace(lost, '').replace(checkpoint, '').replace(requests, ''))).toBe(sha256)
     }
   })
   it('adds the 2-hour line to section 7 right after the 6-hour rule', () => {
@@ -98,6 +104,12 @@ describe('built-in Swarm skills', () => {
     expect(orchestration).toContain(`- Needs-human: get the person's decision now.\n${mention}- Blocked: change something.`)
     const plain = readFileSync(prepareSwarmSkill(fixture(), { role: 'lead', key: 'session', mode: 'default' }).file, 'utf8')
     expect(plain).toContain(`- Needs a person: get the decision now. Blocked: change something (context, model, size or plan); never resend the same thing.\n${mention}- Settle ambiguities`)
+  })
+  it('gives each Lead skill its requests section of its own: before the red flags, or last where there are none', () => {
+    const orchestration = readFileSync(prepareSwarmSkill(fixture(), { role: 'lead', key: 'session' }).file, 'utf8')
+    expect(orchestration).toContain(`\n\n${requests}## Red flags`)
+    const plain = readFileSync(prepareSwarmSkill(fixture(), { role: 'lead', key: 'session', mode: 'default' }).file, 'utf8')
+    expect(plain.endsWith(`Call the roles Product Manager, Engineer and Reviewer.\n${requestsLast}`)).toBe(true)
   })
   it('adds the lost-work line right after each Lead skill\'s 2-hour rule', () => {
     const orchestration = readFileSync(prepareSwarmSkill(fixture(), { role: 'lead', key: 'session' }).file, 'utf8')
@@ -129,7 +141,8 @@ describe('built-in Swarm skills', () => {
     expect(text.split(mention)).toHaveLength(role === 'lead' ? 2 : 1)
     expect(text.split(lost)).toHaveLength(role === 'lead' ? 2 : 1)
     expect(text.split(checkpoint)).toHaveLength(role === 'dev' ? 2 : 1)
-    expect(sha(text.replace(terminal, '').replace(overlap, '').replace(localDefault, '').replace(mention, '').replace(lost, '').replace(checkpoint, ''))).toBe(sha256)
+    expect(text.split(requestsLast)).toHaveLength(role === 'lead' ? 2 : 1)
+    expect(sha(text.replace(terminal, '').replace(overlap, '').replace(localDefault, '').replace(mention, '').replace(lost, '').replace(checkpoint, '').replace(requestsLast, ''))).toBe(sha256)
     expect(prepared.instructions).toBe(`Use the swarm-${role} skill for this session: the team process; otherwise work your usual way. Before working, read ${JSON.stringify(prepared.file)} with your file or shell tool.`)
   })
 
