@@ -3,11 +3,10 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import '../../core/models.dart';
-import '../../shared/theme/app_icons.dart';
 import '../../shared/theme/app_theme.dart' as grid;
 import '../../state/app_state.dart';
-import '../../widgets/desktop_chrome.dart';
 import '../../widgets/machine_picker_form.dart';
+import 'computer_row.dart';
 
 /// The account's computers this browser is not connected to. One waiting on
 /// this browser connects with a click — a computer trusts the account's other
@@ -178,61 +177,27 @@ class _ComputerRow extends StatelessWidget {
     final busy =
         link == ComputerLinkState.linking ||
         link == ComputerLinkState.connecting;
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-      decoration: BoxDecoration(
-        color: DesktopChrome.field,
-        border: Border.all(color: DesktopChrome.rim),
-        borderRadius: BorderRadius.circular(DesktopChrome.dialogRadius),
-      ),
-      child: Row(
-        children: [
-          Icon(
-            link == ComputerLinkState.offline ||
-                    link == ComputerLinkState.removed
-                ? AppIcons.monitorOff
-                : AppIcons.laptop,
-            size: 18,
-            color: DesktopChrome.foreground,
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  state.machine.displayName,
-                  style: DesktopChrome.text(medium: true),
-                ),
-                Semantics(
-                  liveRegion: true,
-                  child: Text(status, style: DesktopChrome.metadata()),
-                ),
-              ],
-            ),
-          ),
-          if (busy)
-            SizedBox.square(
-              dimension: 14,
-              child: CircularProgressIndicator(
-                strokeWidth: 1.5,
-                color: DesktopChrome.muted,
+    return ComputerRow(
+      name: state.machine.displayName,
+      status: status,
+      offline:
+          link == ComputerLinkState.offline ||
+          link == ComputerLinkState.removed,
+      trailing: busy
+          ? const ComputerRowSpinner()
+          : switch (link) {
+              ComputerLinkState.ready => FilledButton(
+                style: webOnboardingButton,
+                onPressed: onConnect,
+                child: const Text('Connect'),
               ),
-            )
-          else if (link == ComputerLinkState.ready)
-            FilledButton(
-              style: webOnboardingButton,
-              onPressed: onConnect,
-              child: const Text('Connect'),
-            )
-          else if (link == ComputerLinkState.failed)
-            FilledButton(
-              style: webOnboardingButton,
-              onPressed: onConnect,
-              child: const Text('Try again'),
-            ),
-        ],
-      ),
+              ComputerLinkState.failed => FilledButton(
+                style: webOnboardingButton,
+                onPressed: onConnect,
+                child: const Text('Try again'),
+              ),
+              _ => null,
+            },
     );
   }
 }

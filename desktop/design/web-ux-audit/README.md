@@ -55,23 +55,25 @@ export PLAYWRIGHT_DIR=~/.cache/web-ux-playwright      # CHROME_PATH may name an 
 node tool/web_ux/capture.mjs /tmp/web-ux out                          # out/screens/<flow>/<width>-<theme>.png
 FIXTURE=super-tab node tool/web_ux/capture.mjs /tmp/web-ux-super-tab out   # the super-tab-* flows
 node tool/web_ux/checks.mjs /tmp/web-ux out                           # tap sizes, wheel, swipe, hover, focus
-flutter build web --release --no-wasm-dry-run --no-web-resources-cdn \
-  --base-href=/harness-web/ -o /tmp/web-release
-node tool/web_ux/load-time.mjs /tmp/web-release out                   # first load, three network profiles
+bash scripts/build-web-release.sh 1.0.0                              # build/web-release, as released
+node tool/web_ux/load-time.mjs build/web-release out                  # cold, second and returning visits, three profiles
+node tool/web_ux/deferred-parts.mjs /tmp/web-ux build/web-release out  # the parts main.dart.js leaves out, online and off
 ```
 
 | File | What it is |
 | --- | --- |
 | `tool/web_ux_fixture.dart` | Runs the real `HarnessApp` (store bar, `RootShell`, browser workspace) on a fake account |
 | `tool/web_ux_scenarios.dart` | Merges every fix group's scenarios into the `?scenario=` names |
-| `tool/web_ux/scenarios/<group>.dart` | One file per fix group (`menus`, `store`, `first_computer`, `first_load`, `pane`, `welcome`, `states`) plus `base`: the state each scenario seeds |
+| `tool/web_ux/scenarios/<group>.dart` | One file per fix group (`menus`, `store`, `first_computer`, `first_load`, `pane`, `welcome`, `states`, `speed`) plus `base`: the state each scenario seeds |
 | `tool/web_ux_seed.dart` | Fake person, computers, tabs and terminal text |
 | `test/support/web_ux_app.dart` | The fake `AppNotifier`: never signs in, reads or dials; API base is a closed loopback port |
 | `test/web_ux_app_test.dart` | Its test |
 | `tool/web_ux/flows/<group>.mjs` | One file per fix group, same keys: each flow is a scenario plus the clicks a person makes, by accessible name. `load-flows.mjs` reads every file in the folder |
 | `tool/web_ux/capture.mjs`, `serve.mjs` | Screenshots; blocks every request that leaves the page (`blocked*.json` is empty) |
 | `tool/web_ux/checks.mjs` | Cross-cutting interaction checks, results in `checks.json` and `checks/` |
-| `tool/web_ux/load-time.mjs` | First load of a release build; results in `load-time.json` |
+| `tool/web_ux/load-time.mjs` | Cold, second and returning visits of a release build (the last two in a profile kept on disk: Chrome keeps no compiled script in a private window); results in `results.json` |
+| `tool/web_ux/serve-release.mjs` | Serves a release build as the website does: versioned folder, cache headers, pre-compressed brotli |
+| `tool/web_ux/deferred-parts.mjs` | The deferred parts (`lib/web/parts/`) in a real build: served immutable, downloaded, and Retry after a failed download |
 | `tool/web_ux/playwright.mjs` | Finds Playwright in `PLAYWRIGHT_DIR` |
 
 A fix group adds its scenarios and flows to its own two files and edits nothing else; a name

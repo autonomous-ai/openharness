@@ -159,6 +159,27 @@ void main() {
     }
   }, skip: skip);
 
+  test('the page connects to the API while the app downloads', () async {
+    final result = await _release(repo, [..._others, ..._unusedLucide, _used]);
+
+    expect(result.exitCode, 0, reason: '${result.stderr}');
+    final index = _builtIndex(repo);
+    final head = index.substring(0, index.indexOf('</head>'));
+    // Anonymous, as the app's requests are: a credentialed preconnect would
+    // open a connection they never use.
+    expect(
+      head,
+      contains(
+        '<link rel="preconnect" href="https://harness-api.autonomous.ai" crossorigin>',
+      ),
+    );
+    final release = jsonDecode(
+      File(p.join(repo.path, 'build', 'web-release', 'release.json'))
+          .readAsStringSync(),
+    );
+    expect(release['apiUrl'], 'https://harness-api.autonomous.ai');
+  }, skip: skip);
+
   test('a build with no Lucide 400 font fails instead of shipping blind', () async {
     final result = await _release(repo, [..._others, ..._unusedLucide]);
 

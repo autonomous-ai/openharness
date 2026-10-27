@@ -30,6 +30,18 @@ describe('release asset caching', () => {
     expect(options.serviceWorkerSettings).toBeUndefined();
   });
 
+  it('preloads the fonts from the archive namespace Flutter fetches them from', () => {
+    const preloads = '<link rel="preload" href="assets/FontManifest.json" as="fetch" crossorigin>\n'
+      + '<link rel="preload" href="assets/fonts/MaterialIcons-Regular.otf" as="fetch" crossorigin>\n';
+    const output = configureReleaseAssets(html.replace('<html>', `<html><head>${preloads}</head>`), release);
+    const root = 'https://harness.example/harness-web/';
+    const hrefs = [...output.matchAll(/<link rel="preload" href="([^"]+)"/g)].map((m) => new URL(m[1], root).href);
+    expect(hrefs).toEqual([
+      `${root}releases/0.1.4-aaaaaaaaaaaa/assets/FontManifest.json`,
+      `${root}releases/0.1.4-aaaaaaaaaaaa/assets/fonts/MaterialIcons-Regular.otf`,
+    ]);
+  });
+
   it('changes all browser cache keys when the version or archive changes', () => {
     const before = startup(release).options.config;
     for (const next of [{ ...release, version: '0.1.5' }, { ...release, sha256: 'b'.repeat(64) }]) {

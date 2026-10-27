@@ -161,6 +161,14 @@ without touching zoom or the synced layout, so the same desk keeps its grid on a
 arrangement (`Swarm.arranged`), because that is what a split divides: without it the menu's Split pane could never run on a phone. Do not change desktop behavior for the
 web, and do not copy shared screens into `lib/web/` — add a seam instead.
 
+**A browser downloads the app in parts** (`lib/web/parts/`, `DeferredPart`/`DeferredPartView`): the
+signed-in workspace (`web_entry.dart` → `workspace_part.dart`, fetched once the first frame is up, so a
+first visit's sign-in page skips its 4.4 MB), the Finder and its editor (`pane_grid.dart`), and the chat's
+text viewer (`attachment_chips.dart`). Shared code reaches the last two through a compile-time import
+switch (`if (dart.library.js_interop)`, as `main.dart` picks the web entry), so a computer compiles the
+same files as ever (`test/pane_grid_finder_test.dart`). Importing one of these libraries directly from
+shared code puts it back in `main.dart.js`. Check a real build with `tool/web_ux/deferred-parts.mjs`.
+
 A browser on a phone or tablet (iOS, Android by `defaultTargetPlatform`, whatever the window's width) gets a bar over
 every screen, sign-in and shared harnesses included, sending it to the Harness app in its store
 (`web/shell/web_store_banner.dart`). It is the app's frame — `startHarness(frame:)`, which `main.dart` takes from the

@@ -5,6 +5,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/screens/swarm_screen.dart';
+import 'package:harness/shared/theme/app_icons.dart';
+import 'package:harness/shared/theme/app_pane_icon.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/web/shell/web_chrome.dart';
 
@@ -63,6 +65,47 @@ void main() {
     await tester.pump(const Duration(milliseconds: 300));
     final row = find.byType(ListTile);
     expect(tester.getSize(row.first).height, greaterThanOrEqualTo(44));
+    await _close(tester);
+  });
+
+  testWidgets('a phone\'s search row draws its glyphs alike and evenly', (
+    tester,
+  ) async {
+    await _openSearch(tester, const Size(390, 844));
+    await tester.enterText(
+      find.byKey(const ValueKey('swarm-search-input')),
+      '@',
+    );
+    await tester.pump(const Duration(milliseconds: 300));
+    Rect glyphIn(Finder parent, bool Function(Widget) isGlyph) =>
+        tester.getRect(
+          find
+              .descendant(of: parent, matching: find.byWidgetPredicate(isGlyph))
+              .first,
+        );
+    Rect glyphOf(String key) => glyphIn(
+      find.byKey(ValueKey(key)),
+      (w) => w is Icon || w is AppPaneIcon,
+    );
+    final sizes = {
+      for (final key in [
+        'search-clear-query',
+        'search-toggle-preview',
+        'search-close',
+      ])
+        glyphOf(key).width,
+    };
+    expect(sizes, {20.0});
+    final panel = find.byKey(const ValueKey('swarm-search-results'));
+    final edges = tester.getRect(panel);
+    final search = glyphIn(
+      panel,
+      (w) => w is Icon && w.icon == AppIcons.search,
+    );
+    expect(
+      edges.right - glyphOf('search-close').right,
+      closeTo(search.left - edges.left, 0.5),
+    );
     await _close(tester);
   });
 

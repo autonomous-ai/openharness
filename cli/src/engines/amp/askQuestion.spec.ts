@@ -74,4 +74,43 @@ describe('amp approval dialog', () => {
     const view = parseAmpQuestionPane(twice) as QuestionView
     expect(view.question).toBe('Approve shell_command: echo second')
   })
+
+  /**
+   * The same pane as `capture-pane -e` hands it over: SGR attributes kept, which is how every OTHER
+   * engine's dialog arrives — 23 of the 33 captures in `lib/__fixtures__` carry them, up to 505 sequences
+   * in one. `PANE` itself is trimmed to plain text, so nothing above can see this.
+   *
+   * Without the ESC in the strip pattern the attributes go and a BARE ESC is left where each colour was,
+   * so the anchored row pattern cannot see past it: the highlighted row is dropped from the list and the
+   * `tool:` line no longer reads, leaving the generic `Approval required`. A device user is then offered
+   * three answers to a four-way approval, none of them the highlighted one.
+   */
+  const STYLED = PANE
+    .replace(/^(\s*)│/gm, '$1\u001b[38;5;244m│')
+    .replace(/╭─+╮/g, '\u001b[1m╭─+╮\u001b[0m')
+    .replace(/╰[^╯]*╯/g, (line) => `\u001b[38;5;244m${line}\u001b[0m`)
+    .replace(/‣ /g, '\u001b[7m‣ \u001b[0m')
+    .replace(/█/g, '\u001b[38;5;240m█\u001b[0m')
+    .replace(/Allow Once/g, '\u001b[38;2;255;255;255mAllow Once\u001b[39m')
+
+  it('reads every option off a pane that still carries its SGR attributes', () => {
+    const view = parseAmpQuestionPane(STYLED) as QuestionView
+    expect(view?.kind).toBe('question')
+    expect(view.rows.map((r) => r.label)).toEqual([
+      'Allow Once', 'Reject with feedback', 'Allow All for This Session', 'Allow All for Every Session',
+    ])
+  })
+
+  it('names what is being approved on a styled pane too, not just the generic prompt', () => {
+    // The `‣ Allow Once` row is styled separately from its border, which is what dropped it before.
+    const view = parseAmpQuestionPane(STYLED) as QuestionView
+    expect(view.question).toBe('Approve shell_command: echo probe123')
+  })
+
+  it('does not eat bracketed text that is not an escape sequence', () => {
+    // A path or a glob in the approved command is content, not styling: `[0m` must survive it.
+    const bracketed = PANE.replace('echo probe123', 'cat log[0m].txt')
+    const view = parseAmpQuestionPane(bracketed) as QuestionView
+    expect(view.question).toBe('Approve shell_command: cat log[0m].txt')
+  })
 })

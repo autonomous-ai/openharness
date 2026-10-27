@@ -47,9 +47,19 @@ const ROW_RE = /^\s*[‣>›]?\s{0,3}([A-Z][\w ]{2,60}?)\s*$/
 /** `"command": "echo hi"` — one complete pair on one line. A wrapped value simply does not match. */
 const ARG_RE = /"(?:command|path|file_path|name|query|url)"\s*:\s*"([^"]{1,120})"/
 
+/**
+ * The pane is read from `capture-pane -e`, which keeps the SGR attributes tmux already rendered, so every
+ * styled run arrives as `ESC [ … m`. The ESC must be PART OF THE MATCH, as it is in the six other copies
+ * (`kit/pane`, `kit/runtime`, `kit/questionPane`, devin, grok, cursor): without it the parameters are
+ * dropped and a BARE ESC is left standing where the colour was, which no `^\s*`-anchored row pattern can
+ * see past. Measured against the captured dialogs in `lib/__fixtures__` — 23 of the 23 that carry SGR
+ * disagree with that consensus, by up to 505 stray ESC characters each.
+ *
+ * The same commit that introduced this regex added the same note in `lib/askQuestion.ts` `unframe`, where
+ * a missing strip left hermes reading as "no dialog open" with its dialog plainly on screen.
+ */
 function stripAnsi(text: string): string {
-  // eslint-disable-next-line no-control-regex
-  return text.replace(/\[[0-9;?]*[A-Za-z]/g, '')
+  return text.replace(/\u001b\[[0-9;:]*[A-Za-z]/g, '')
 }
 
 /**

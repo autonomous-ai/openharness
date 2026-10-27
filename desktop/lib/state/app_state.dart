@@ -6,6 +6,7 @@ import '../core/crash_log.dart';
 import '../core/guest_folders.dart';
 import '../measurement/desktop_setup_report.dart';
 import 'attached_task_delivery.dart';
+import 'browser_copies.dart';
 import 'harness_attachments.dart';
 import 'task_route.dart';
 import '../core/permission_modes.dart';
@@ -1714,6 +1715,10 @@ class AppNotifier extends ChangeNotifier {
     }
     return best;
   }
+
+  /// What a host keeps of the account on this device beside the Super Tab
+  /// views; Settings ▸ Account's Clear now clears it with them.
+  final browserCopies = BrowserCopies();
 
   late final superTabs = SuperTabClient(
     storage: localStore ?? HarnessFileStore.shared,
