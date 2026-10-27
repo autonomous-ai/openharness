@@ -382,6 +382,10 @@ class ConversationServer {
   final messages = <Map<String, dynamic>>[];
   // Route decisions by id, answered by GET .../route-decisions/:id.
   final routeDecisions = <String, Map<String, dynamic>>{};
+
+  /// The leaderboard read's answer; reads of it are listed in [leaderboardReads].
+  Map<String, dynamic>? leaderboard;
+  final leaderboardReads = <String>[];
   // The reader's tags, newest last, answered by GET .../mentions?state=.
   final mentions = <Map<String, dynamic>>[];
   // How many times the mentions list was read.
@@ -663,6 +667,14 @@ class ConversationServer {
               .toList(),
         }),
       ) as Map<String, dynamic>;
+    }
+    if (uri.pathSegments.last == 'leaderboard') {
+      leaderboardReads.add(path);
+      final board = leaderboard;
+      if (board == null) {
+        throw const SuperTabFailure('NOT_FOUND', 'Not found.', statusCode: 404);
+      }
+      return jsonDecode(jsonEncode(board)) as Map<String, dynamic>;
     }
     if (uri.pathSegments.last == 'routing-policy') {
       final policy = routingPolicy;

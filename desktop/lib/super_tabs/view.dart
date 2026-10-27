@@ -28,6 +28,7 @@ import 'work_details.dart';
 import 'project_sidebar.dart';
 import 'project_options.dart';
 import 'pane_layout.dart';
+import 'leaderboard/swarm_board.dart';
 import '../widgets/dial_list_scroll.dart';
 
 typedef _ComposerChoice = ({String label, String? detail, VoidCallback choose});
@@ -82,6 +83,12 @@ class _SuperTabViewState extends State<SuperTabView>
   bool _sidebarOpen = false;
   bool _rosterOpen = false;
   bool _showPullRequests = false;
+
+  /// The human leaderboard (v2 G), read only once it is first opened; a column
+  /// when the window has room for it ([_boardRoomy], set by build), else a dialog.
+  bool _boardOpen = false, _boardRoomy = false;
+  SuperTabSwarmBoard? _boardRead;
+  SuperTabSwarmBoard get _board => _boardRead ??= SuperTabSwarmBoard(c);
   bool _showNotifications = false;
   // The message a tag opened, scrolled to once it is laid out.
   String? _target;
@@ -322,6 +329,7 @@ class _SuperTabViewState extends State<SuperTabView>
     _composer.dispose();
     _focus.dispose();
     _pullRequestsFocus.dispose();
+    _boardRead?.dispose();
     for (final scroll in _scroll.values) {
       scroll.dispose();
     }
@@ -915,6 +923,21 @@ class _SuperTabViewState extends State<SuperTabView>
     style: DesktopChrome.text(medium: true),
   );
 
+  Widget _boardButton() {
+    final shown = _boardRoomy && _boardOpen;
+    return AppIconButton(
+      key: const ValueKey('super-leaderboard'),
+      icon: AppIcons.trophy,
+      size: AppIcons.inlineSize,
+      tooltip: 'Leaderboard',
+      selected: shown,
+      color: shown ? DesktopChrome.foreground : DesktopChrome.muted,
+      onPressed: _boardRoomy
+          ? () => setState(() => _boardOpen = !_boardOpen)
+          : () => unawaited(_board.showDialog(context)),
+    );
+  }
+
   Widget _header(SuperTabConversation? group, bool narrow, bool showRoster) =>
       Container(
         constraints: const BoxConstraints(minHeight: 52),
@@ -1024,6 +1047,7 @@ class _SuperTabViewState extends State<SuperTabView>
               // Not a workgroup: nothing to rename, archive or detail.
               if (group.id != c.snapshot!.leadsConversationId) _options(group),
             ],
+            _boardButton(),
             if (!showRoster)
               AppIconButton(
                 icon: AppIcons.users,
@@ -1846,6 +1870,9 @@ class _SuperTabViewState extends State<SuperTabView>
         _readVisibleTailAfterFrame();
       }
       _chatCovered = chatCovered;
+      _boardRoomy =
+          constraints.maxWidth >=
+          MediaQuery.textScalerOf(context).scale(SuperTabSwarmBoard.columnFrom);
       final roster = SuperTabRoster(
         controller: c,
         app: widget.app,
@@ -1871,6 +1898,14 @@ class _SuperTabViewState extends State<SuperTabView>
               onLeave: _leaveResize,
               left: narrow ? null : _sidebar(),
               right: showRoster ? roster : null,
+              board: _boardRoomy && _boardOpen
+                  ? _board.column(
+                      onAnswer: (id) {
+                        setState(() => _showPullRequests = false);
+                        unawaited(c.select(id));
+                      },
+                    )
+                  : null,
               center: Column(
                 children: [
                   _header(c.selected, narrow, showRoster),

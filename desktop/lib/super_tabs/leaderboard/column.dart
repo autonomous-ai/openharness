@@ -6,6 +6,7 @@ import '../../shared/theme/app_theme.dart' as grid;
 import '../../shared/widgets/app_select_field.dart';
 import '../../shared/widgets/skeleton.dart';
 import '../../widgets/desktop_chrome.dart';
+import '../pane_layout.dart';
 import 'format.dart';
 import 'goal_bar.dart';
 import 'person_row.dart';
@@ -26,7 +27,7 @@ class SuperTabLeaderboardColumn extends StatefulWidget {
     this.now = DateTime.now,
   });
 
-  static const width = 300.0;
+  static const width = SuperTabPaneLayout.boardWidth;
 
   final SuperTabLeaderboardReader reader;
   final String projectId, viewerId;
