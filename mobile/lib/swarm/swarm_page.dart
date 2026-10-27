@@ -14,6 +14,7 @@ import 'package:harness_mobile/shared/theme/app_theme.dart';
 import 'swarm_choices.dart';
 import 'swarm_conversation_page.dart';
 import 'swarm_drawer.dart';
+import 'swarm_pm_chat.dart';
 import 'swarm_need_rows.dart';
 import 'swarm_project_page.dart';
 import 'swarm_session.dart';
@@ -59,6 +60,22 @@ class _SwarmPageState extends State<SwarmPage> {
     super.dispose();
   }
 
+  void _openProject(BuildContext context, String swarmId, String projectId) =>
+      unawaited(
+        Navigator.of(context).push(
+          phoneRoute(
+            (_) => SwarmProjectPage(swarmId: swarmId, projectId: projectId),
+          ),
+        ),
+      );
+
+  /// The person's Chat with PM of [projectId], created on first use.
+  Future<void> _openPm(String swarmId, String projectId) async {
+    final reader = _session?.inbox.reader(swarmId);
+    if (reader == null) return;
+    await openSwarmPm(context, reader, swarmId, projectId);
+  }
+
   @override
   Widget build(BuildContext context) {
     AppTheme.watch(context);
@@ -74,7 +91,13 @@ class _SwarmPageState extends State<SwarmPage> {
           : ListenableBuilder(
               listenable: Listenable.merge([?session, ?session?.inbox]),
               builder: (context, _) => SwarmDrawer(
-                needs: session?.inbox.needs.length ?? 0,
+                session: session,
+                onProject: (swarmId, projectId) =>
+                    _openProject(context, swarmId, projectId),
+                onPm: (swarmId, projectId) =>
+                    unawaited(_openPm(swarmId, projectId)),
+                onChat: (swarmId, conversationId) =>
+                    openSwarmConversation(context, swarmId, conversationId),
                 onHarness: widget.onHarness,
                 onSettings: widget.onSettings,
               ),

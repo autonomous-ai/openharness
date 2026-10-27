@@ -35,16 +35,22 @@ class SwarmTeamGlance {
   int get down => _count(const {SwarmAgentState.down});
   int get limited => _count(const {SwarmAgentState.limited});
 
+  /// What [line] counts, part by part, each with the state it counts: "2
+  /// working", "1 down". Leaves out what is none.
+  List<({String text, SwarmAgentState state})> get parts => [
+    if (working > 0) (text: '$working working', state: SwarmAgentState.working),
+    if (waiting > 0) (text: '$waiting waiting', state: SwarmAgentState.waiting),
+    if (down > 0) (text: '$down down', state: SwarmAgentState.down),
+    if (limited > 0) (text: '$limited limited', state: SwarmAgentState.limited),
+  ];
+
   /// "2 working · 1 waiting · 1 down", leaving out what is none.
   String get line {
     if (agents.isEmpty) return 'No agents yet';
-    final parts = [
-      if (working > 0) '$working working',
-      if (waiting > 0) '$waiting waiting',
-      if (down > 0) '$down down',
-      if (limited > 0) '$limited limited',
-    ];
-    return parts.isEmpty ? 'All idle' : parts.join(' · ');
+    final parts = this.parts;
+    return parts.isEmpty
+        ? 'All idle'
+        : parts.map((part) => part.text).join(' · ');
   }
 }
 
