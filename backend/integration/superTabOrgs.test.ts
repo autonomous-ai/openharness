@@ -22,7 +22,7 @@ const owner = user(1, 'owner@example.com'), peer = user(2, 'peer@example.com'), 
   admin = user(4, 'admin@example.com'), member = user(5, 'member@example.com')
 const legacyOwner = user(6, 'legacy-owner@example.com'), legacyPeer = user(7, 'legacy-peer@example.com')
 const accounts = [owner, peer, other, admin, member, legacyOwner, legacyPeer]
-const call = (method: 'GET' | 'POST' | 'DELETE', url: string, as: AuthUser, body?: object) =>
+const call = (method: 'GET' | 'POST', url: string, as: AuthUser, body?: object) =>
   app.inject({ method, url, headers: { authorization: `Bearer ${as.sub}` }, ...(body ? { payload: body } : {}) })
 const run = async (tab: string, command: Command, as = owner) => {
   const reply = await call('POST', `/api/super-tabs/${tab}/commands`, as, { operationId: randomUUID(), command })
@@ -214,7 +214,7 @@ describe('removing someone from a Team', () => {
     for (const tab of [a, b]) await invite(tab, member)
     const elsewhere = await create(other, 'Their own')
     await invite(elsewhere, member, other)
-    const removed = await call('DELETE', `/api/super-tabs/orgs/${orgId}/members/${member.sub}`, admin)
+    const removed = await call('POST', `/api/super-tabs/orgs/${orgId}/members/${member.sub}/remove`, admin, {})
     expect(removed.statusCode).toBe(200)
     for (const tab of [a, b]) {
       expect(await swarmPeople(tab)).not.toContain(member.sub)
@@ -226,10 +226,10 @@ describe('removing someone from a Team', () => {
 
   it('never removes the owner, nor someone who owns one of the Team\'s Swarms, and lets a person leave by themselves', async () => {
     const orgId = await team('Guards')
-    expect((await call('DELETE', `/api/super-tabs/orgs/${orgId}/members/${owner.sub}`, owner)).statusCode).toBe(409)
+    expect((await call('POST', `/api/super-tabs/orgs/${orgId}/members/${owner.sub}/remove`, owner, {})).statusCode).toBe(409)
     await create(member, 'Member owned', orgId)
-    expect((await call('DELETE', `/api/super-tabs/orgs/${orgId}/members/${member.sub}`, owner)).statusCode).toBe(409)
-    expect((await call('DELETE', `/api/super-tabs/orgs/${orgId}/members/${peer.sub}`, peer)).statusCode).toBe(200)
+    expect((await call('POST', `/api/super-tabs/orgs/${orgId}/members/${member.sub}/remove`, owner, {})).statusCode).toBe(409)
+    expect((await call('POST', `/api/super-tabs/orgs/${orgId}/members/${peer.sub}/remove`, peer, {})).statusCode).toBe(200)
     expect((await orgsOf(peer)).map(o => o.id)).not.toContain(orgId)
   })
 
@@ -239,7 +239,7 @@ describe('removing someone from a Team', () => {
     const sharing = await store.sharing(owner, tab)
     const saved = await store.saveSharing(owner, tab, { operationId: randomUUID(), revision: sharing.revision, access: { mode: 'link', role: 'collaborator' } })
     const token = new URL(saved.joinUrl!).searchParams.get('token')!
-    expect((await call('DELETE', `/api/super-tabs/orgs/${orgId}/members/${peer.sub}`, owner)).statusCode).toBe(200)
+    expect((await call('POST', `/api/super-tabs/orgs/${orgId}/members/${peer.sub}/remove`, owner, {})).statusCode).toBe(200)
     const again = await call('POST', `/api/super-tabs/${tab}/join`, peer, { operationId: randomUUID(), token })
     expect(again.statusCode).toBe(403)
     expect((await call('POST', `/api/super-tabs/orgs/${orgId}/invitations`, owner, { email: peer.email, role: 'guest' })).statusCode).toBe(200)

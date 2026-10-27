@@ -184,7 +184,8 @@ export async function superTabRoutes(app: FastifyInstance, options: { store?: Su
   app.post<{ Params: z.infer<typeof orgMemberParams>; Body: z.infer<typeof orgRole> }>('/api/super-tabs/orgs/:orgId/members/:userId',
     { preHandler: [validateParams(orgMemberParams), validateBody(orgRole)] },
     (req, reply) => respond(reply, () => { personOnly(req.user!); return store.orgs.setRole(req.user!, req.params.orgId, req.params.userId, req.body.role) }))
-  app.delete<{ Params: z.infer<typeof orgMemberParams> }>('/api/super-tabs/orgs/:orgId/members/:userId', { preHandler: validateParams(orgMemberParams) },
+  // A POST, not a DELETE: Desktop reaches the backend through the daemon, which forwards only GET and POST (cli superTabs/service.ts).
+  app.post<{ Params: z.infer<typeof orgMemberParams> }>('/api/super-tabs/orgs/:orgId/members/:userId/remove', { preHandler: validateParams(orgMemberParams) },
     (req, reply) => respond(reply, () => { personOnly(req.user!); return store.orgs.remove(req.user!, req.params.orgId, req.params.userId) }))
   app.post<{ Params: z.infer<typeof orgParams>; Body: z.infer<typeof orgTransfer> }>('/api/super-tabs/orgs/:orgId/transfer',
     { preHandler: [validateParams(orgParams), validateBody(orgTransfer)] },
