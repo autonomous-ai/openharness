@@ -57,11 +57,13 @@ export interface ResumeAgentServiceDeps {
 }
 
 /** A history that could not be prepared, and which check refused it: on 2026-10-26, 10 of 17 failed resumes were
- *  this and nothing said why. The kind goes in the reply for its counter; the message (a file name and a line
- *  number, never conversation text) only to this daemon's log. */
+ *  this and nothing said why. The kind goes in the reply for its counter; the message of a typed failure (an engine's
+ *  file label and a line number, never conversation text) only to this daemon's log. Any other error is logged by
+ *  its class alone: its message can carry a profile path, a token or a line of the conversation (review of #1777). */
 function preparationFailed(agent: string, error: unknown) {
   const reason = error instanceof ResumePreparationError ? error.kind : 'other'
-  console.warn(`[resume] ${agent} · resume preparation failed: ${reason}: ${error instanceof Error ? error.message : String(error)}`)
+  const said = error instanceof ResumePreparationError ? error.message : error instanceof Error ? error.name : typeof error
+  console.warn(`[resume] ${agent} · resume preparation failed: ${reason}: ${said}`)
   return { ok: false as const, error: 'RESUME_PREPARATION_FAILED', reason,
     detail: reason === 'changed_during' ? 'Codex is still writing this conversation. Try again once it stops.'
       : 'Could not prepare the saved conversation. Its history has been retained.' }

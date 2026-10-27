@@ -571,7 +571,29 @@ describe('production resume handler', () => {
     vi.mocked(deps.prepareSessionResume).mockImplementationOnce(() => { throw new Error('EACCES: permission denied') })
     expect(await start()).toEqual({ ok: false, error: 'RESUME_PREPARATION_FAILED', reason: 'other',
       detail: 'Could not prepare the saved conversation. Its history has been retained.' })
-    expect(warned.mock.calls.map(call => call.join(' '))).toContainEqual(expect.stringContaining('resume preparation failed: other: EACCES: permission denied'))
+    expect(warned.mock.calls.map(call => call.join(' '))).toContainEqual(expect.stringContaining('resume preparation failed: other: Error'))
+  })
+
+  // An error of no known kind can carry anything: a profile path, a token, a line of the conversation.
+  it('logs a preparation failure of no known kind by its class only, never its message', async () => {
+    const warned = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const printed = vi.spyOn(console, 'log').mockImplementation(() => {})
+    const secret = 'SECRET-SENTINEL /Users/someone/.codex/sessions/rollout.jsonl user said: my password is hunter2'
+    vi.mocked(deps.prepareSessionResume).mockImplementationOnce(() => { throw new TypeError(secret) })
+    expect(await start()).toMatchObject({ ok: false, error: 'RESUME_PREPARATION_FAILED', reason: 'other' })
+    const logged = [...warned.mock.calls, ...printed.mock.calls].map(call => call.join(' ')).join('\n')
+    expect(logged).toContain('resume preparation failed: other: TypeError')
+    expect(logged).not.toContain('SECRET-SENTINEL')
+    expect(logged).not.toContain('hunter2')
+  })
+
+  it('logs a non-Error throw as its type only', async () => {
+    const warned = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    vi.mocked(deps.prepareSessionResume).mockImplementationOnce(() => { throw 'SECRET-SENTINEL thrown as a string' })
+    expect(await start()).toMatchObject({ ok: false, error: 'RESUME_PREPARATION_FAILED', reason: 'other' })
+    const logged = warned.mock.calls.map(call => call.join(' ')).join('\n')
+    expect(logged).toContain('resume preparation failed: other: string')
+    expect(logged).not.toContain('SECRET-SENTINEL')
   })
 
   it('retains a typed native hold from synchronous history repair and releases its reservation', async () => {
