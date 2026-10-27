@@ -26,6 +26,7 @@ import 'leaderboard/person_row.dart';
 import 'leaderboard/reader.dart';
 import 'leaderboard/waiting_line.dart';
 import 'model.dart';
+import 'profile_sheet.dart';
 import 'section_heading.dart';
 import 'team_glance.dart';
 import 'team_glance_panel.dart';
@@ -424,10 +425,11 @@ class _SuperTabRosterState extends State<SuperTabRoster> {
           contentPadding: const EdgeInsets.symmetric(horizontal: 16),
           title: Row(
             children: [
-              SuperTabAvatar(
-                identity: 'agent:${agent.id}',
+              SuperTabAvatar.agent(
+                agent,
                 name: name,
                 size: 24,
+                engineBadge: false,
               ),
               const SizedBox(width: 8),
               Expanded(child: _agentIdentity(name, role, badge)),
@@ -550,11 +552,12 @@ class _SuperTabRosterState extends State<SuperTabRoster> {
         ),
       for (final person in ranked)
         LeaderboardPersonRow(
-          personId: person.id,
-          name: superTabPersonName(person.email),
-          email: person.email,
+          person: person,
           score: scores[person.id],
-          onTap: () => _person(person, scores[person.id]),
+          // One's own row is where one's avatar and status are changed.
+          onTap: () => person.id == c.accountId && c.canWrite
+              ? showSuperTabProfile(context, c)
+              : _person(person, scores[person.id]),
         ),
       if (board != null && board.waiting.total > 0)
         LeaderboardWaitingLine(

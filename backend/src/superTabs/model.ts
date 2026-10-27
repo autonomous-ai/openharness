@@ -1,11 +1,21 @@
 import { createHash } from 'node:crypto'
 import type { RouteDecisionEffect } from './routeRecord.js'
 import { agentDisplayName, assignAgentDisplayNames } from './agentNames.js'
+import { withAvatarView } from './profile.js'
 import { downSince, expireRemovals } from './machines.js'
 import { agentProjectId, agentSetRole, canReadAgent, canReadGroup, canReadProject, groupProject, ledProject, placeRules, projectsOf, sharedWithLeads, skillSetOf, type ProjectVisibility, type SwarmProject } from './projects.js'
 
 export type Role = 'owner' | 'collaborator' | 'viewer'
-export interface Person { id: string; email: string; role: Role; generation: string }
+export interface Person {
+  id: string
+  email: string
+  role: Role
+  generation: string
+  /** Their own short status (profile.ts); only Swarm members read it. */
+  status?: import('./profile.js').PersonStatus
+  /** Their own avatar (profile.ts); only Swarm members read it. */
+  avatar?: import('./profile.js').Avatar
+}
 export interface AgentConfiguration {
   engine: string
   model: string | null
@@ -58,6 +68,8 @@ export interface Agent {
   /** Set once its session is a Lead or in a private conversation, and kept until the session leaves: nobody but its
    *  machine's person watches it (projects.ts canWatchAgent). */
   confidential?: true
+  /** Set by its contributor or its project's Lead (profile.ts); absent shows the pattern Desktop draws from its name. */
+  avatar?: import('./profile.js').Avatar
 }
 export type AgentRole = 'builder' | 'reviewer'
 export const agentRole = (agent: Pick<Agent, 'role'>): AgentRole => agent.role ?? 'builder'
@@ -169,6 +181,8 @@ export interface Conversation {
   /** The last attempt here that was lost: its agent's status and checks for it are refused, even after reassignment. Where it
    *  ran (machine and engine) stays too, so routing the work again avoids that account even once its agent is gone. */
   lostAttempt?: { id: string; agentId: string; machineId?: string; engine?: string }
+  /** Counts reaction changes here (reactions.ts), so readers see a new reaction on an older message. */
+  reactionSeq?: number
   /** The person who asked for this work: whoever opened it, or the person its Lead named (leaderboard/record.ts). */
   requesterId?: string
   /** What the leaderboard counts here (leaderboard/record.ts); bookkeeping readers never get whole. */
@@ -510,6 +524,9 @@ export function visibleState(state: SuperTabState, actor: Actor, now = Date.now(
   }
   for (const project of projectsOf(visible)) for (const target of awaitingWorkers(visible, project.id)) target.workDecision = 'awaiting'
   for (const project of visible.projects ?? []) project.skillSet = skillSetOf(project)
+  // An uploaded avatar's stored key stays on the server; readers get a signed link with each parts read (avatarLinks.ts).
+  visible.people = visible.people.map(withAvatarView) as Person[]
+  visible.agents = visible.agents.map(withAvatarView) as Agent[]
   // On Custom every agent shows the role it runs, null when its kind has none; elsewhere a role id means nothing yet.
   for (const target of visible.agents) {
     const home = projectsOf(state).find(p => p.id === agentProjectId(state, target))

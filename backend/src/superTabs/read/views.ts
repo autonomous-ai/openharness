@@ -8,6 +8,7 @@ import { machineSlots, teamAccountRequired, teamWorkRefusal, type ContributedMac
 import * as store from '../parts/index.js'
 import type { Part, SwarmParts } from '../parts/index.js'
 import { canReadGroup } from '../projects.js'
+import { withAvatarView } from '../profile.js'
 import type { AgentView, Derived, GroupView, HeadView, LivePart, MachineView, MemberView, ProgressView, StartView } from './contract.js'
 
 export interface ReaderParts {
@@ -56,7 +57,7 @@ export function visibleGroupView(group: Conversation, visibleAgents: ReadonlySet
 
 export function agentView(agent: Agent): AgentView {
   const { downNamed: _named, downSince: _since, limitedUntil: _limit, roleId: _role, ...rest } = agent
-  return rest
+  return withAvatarView(rest) as AgentView
 }
 
 export function readerView(parts: SwarmParts, actor: Actor, now: number, extras: ReadExtras): ReaderView {
@@ -74,7 +75,7 @@ export function readerView(parts: SwarmParts, actor: Actor, now: number, extras:
     state,
     parts: {
       head: envelope(parts.head, head),
-      members: parts.members.filter(m => !m.deleted).map(m => envelope(m, m.data!)),
+      members: parts.members.filter(m => !m.deleted).map(m => envelope(m, withAvatarView(m.data!) as MemberView)),
       agents: visible.agents.map(a => envelope(agentPart(a.id), agentView(state.agents.find(s => s.id === a.id)!))),
       groups: groups.map(g => envelope(groupPart(g.id), groupView(g))),
       machines: (visible.machines ?? []).map(m => envelope(machinePart(m.machineId), m)),

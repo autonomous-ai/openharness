@@ -2662,7 +2662,7 @@ describe('Lead mentions', () => {
     const [mention, ...rest] = await list(tab, peer, 'waiting')
     expect(rest).toEqual([])
     expect(mention).toEqual({ id: expect.any(String), projectId: 'lead', projectName: 'Pilot', conversationId: group, conversationTitle: 'Copy review',
-      messageId, leadName: expect.any(String), text: text.slice(0, 200), createdAt: expect.any(String), resolvedAt: null, resolvedBy: null })
+      messageId, leadId: lead, leadName: expect.any(String), text: text.slice(0, 200), createdAt: expect.any(String), resolvedAt: null, resolvedBy: null })
     expect(mention!.leadName).toBe((await waiting(tab, owner)).agents.find(a => a.id === lead)!.displayName)
     expect(await list(tab, owner, 'waiting')).toEqual([])
     expect(await list(tab, peer, 'earlier')).toEqual([])
