@@ -1350,6 +1350,76 @@ describe('the owner\'s rules', () => {
   })
 })
 
+describe('a task that requires a machine or a device', () => {
+  // 2026-10-27: a task to check a device plugged into one person's Mac was routed to another machine by policy order.
+  const task = { goal: 'Check the round device', changes: 'None', constraints: 'On the Mac it is plugged into', owns: ['devices'] }
+  const checks = [{ description: 'It answers.', independent: false }]
+  const requiring = (f: ReturnType<typeof routed>, requires: Record<string, unknown>, actor: Actor = owner) =>
+    f.run({ type: 'work.define', conversationId: 'lead', task: { ...task, requires }, checks } as Command, actor)
+  const startOn = (f: ReturnType<typeof routed>, machineId: string, actor: Actor, devices: string[] = []) => f.run({ type: 'agent.start', request: { conversationId: 'lead', machineId,
+    engine: 'claude', model: 'opus', effort: 'high', name: 'Builder', cwd: '/repo', worktree: true,
+    requirements: { memoryBytes: 1, diskBytes: 1, maxCpuPercent: 80, tools: [], devices, quotaRequired: false } }, ...via } as Command, actor, { contribution: f.contribution, ...decisionIn() })
+  const NOT_HERE = 'This task runs only on the machine it requires, and this is another machine.'
+
+  it('keeps the requirement on the task, without naming the machine in the brief', () => {
+    const f = routed()
+    requiring(f, { machines: ['machine'], devices: ['/dev/cu.usbmodem1'] })
+    expect(f.state.conversations[0]!.task!.requires).toEqual({ machines: ['machine'], devices: ['/dev/cu.usbmodem1'] })
+    expect(f.state.conversations[0]!.brief).not.toContain('machine')
+  })
+  it('takes only machines of the Swarm the setter can see, and at least one machine or device', () => {
+    const f = routed()
+    expect(() => requiring(f, { machines: ['nowhere'] })).toThrow('Name a machine of this Swarm')
+    expect(() => requiring(f, {})).toThrow()
+    expect(() => requiring(f, { machines: [] })).toThrow()
+    expect(() => requiring(f, { devices: ['dev/relative'] })).toThrow()
+  })
+  it('refuses an agent\'s start on another machine, even with an override reason, and starts on the required one', () => {
+    const f = routed()
+    requiring(f, { machines: ['machine'] })
+    expect(() => startOn(f, 'host', f.leadActor)).toThrow(NOT_HERE)
+    expect(startOn(f, 'machine', f.leadActor).result.startId).toBeTruthy()
+  })
+  it('refuses an agent\'s assignment of a member on another machine and a recorded pick there', () => {
+    const f = routed()
+    requiring(f, { machines: ['machine'] })
+    // The worker runs on 'host'.
+    expect(() => f.run({ type: 'work.assign', conversationId: 'lead', agentId: f.worker, ...via }, f.leadActor, decisionIn())).toThrow(NOT_HERE)
+    expect(() => f.run({ type: 'route.record', conversationId: 'lead', decision: record({ candidates: [candidate('c0', { machineId: 'host' })] }) } as Command, f.leadActor, {}))
+      .toThrow(NOT_HERE)
+    expect(f.run({ type: 'route.record', conversationId: 'lead', decision: record({ candidates: [candidate('c0', { machineId: 'machine' })] }) } as Command, f.leadActor, {})
+      .result.routeDecisionId).toBeTruthy()
+  })
+  it('lets a person through with a warning that does not name the machine', () => {
+    const f = routed()
+    requiring(f, { machines: ['machine'] })
+    const effects = startOn(f, 'host', owner)
+    expect(effects.result.warnings).toEqual([NOT_HERE])
+    expect(effects.messages.map(m => m.text)).toContain(`owner started Builder anyway. ${NOT_HERE}`)
+  })
+  it('refuses an agent\'s start that does not ask its machine for the required devices', () => {
+    const f = routed()
+    requiring(f, { devices: ['/dev/cu.usbmodem1'] })
+    expect(() => startOn(f, 'machine', f.leadActor)).toThrow('This task needs /dev/cu.usbmodem1')
+    expect(startOn(f, 'machine', f.leadActor, ['/dev/cu.usbmodem1']).result.startId).toBeTruthy()
+  })
+  it('counts a Mac\'s Harness Team account as that Mac', () => {
+    const f = routed()
+    teamMachine(f, 'owner', 'team')
+    f.state.machines!.find(m => m.machineId === 'team')!.hostMachineId = 'machine'
+    requiring(f, { machines: ['machine'] })
+    expect(startOn(f, 'team', f.leadActor).result.startId).toBeTruthy()
+  })
+  it('shows a reader who cannot see the machine only that the task waits for one', () => {
+    const f = routed()
+    requiring(f, { machines: ['machine', 'host'] })
+    expect(visibleState(f.state, owner).conversations[0]!.task!.requires).toEqual({ machines: ['machine', 'host'] })
+    // No machine record and no agent the reader sees runs there any more.
+    f.state.agents = f.state.agents.filter(a => a.machineId !== 'machine')
+    expect(visibleState(f.state, owner).conversations[0]!.task!.requires).toEqual({ machines: ['host'], unseenMachines: 1 })
+  })
+})
+
 describe('the owner\'s rules in a Swarm of projects', () => {
   // Backend v1.3.14: once the original 'lead' project is gone, every Lead rule.set failed NOT_FOUND.
   const said = (patch: Record<string, unknown> = {}) => ({ askedIn: { author: { kind: 'person', id: 'owner', name: owner.email, membershipGeneration: 'tab' },

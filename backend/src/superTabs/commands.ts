@@ -3,12 +3,12 @@ import { assignAgentDisplayNames } from './agentNames.js'
 import { z } from 'zod'
 import {
   activeWork, actorKey, agent, agentRole, appendPullRequestUrls, author, conversation, crossProjectActive, fail, isLeads, person, stableId, syncLeads, numberConversations, nextConversationNumber, renderWorkTask,
-  finishWorker, requireWorkerDecisions, reviewing, swarmGridName, AGENT_ONLY,
-  type Actor, type Agent, type Author, type CommandEffects, type Conversation, type SuperTabState,
+  finishWorker, requireWorkerDecisions, reviewing, seenMachineIds, swarmGridName, visibleState, AGENT_ONLY,
+  type Actor, type WorkTask, type Agent, type Author, type CommandEffects, type Conversation, type SuperTabState,
 } from './model.js'
 import { routeRecordSchema, routeTitle, startedAs, type RouteCandidate, type RouteDecision, type RouteFinal, type RouteOverride } from './routeRecord.js'
 import { routingOverrideSchema } from './routingPolicy.js'
-import { agentTarget, askedInSchema, broken, MAX_RULES, RULE_MESSAGE_MS, ruleSchema, ruleTextSchema, startTarget, type RunTarget } from './rules.js'
+import { agentTarget, askedInSchema, broken, MAX_RULES, RULE_MESSAGE_MS, ruleSchema, ruleTextSchema, startTarget, unmet, type RunTarget } from './rules.js'
 import { MAX_ATTACHMENTS, type Attachment } from './attachments.js'
 import { checkMentions, MAX_MENTIONS, type MentionTarget } from './mentions.js'
 import { ANSWERED_NOTICE, answerDecision, askDecisions, checkAsker, decisionChoices, decisionQuestion, MAX_QUESTIONS, type DecisionTarget } from './decisions.js'
@@ -64,6 +64,9 @@ const check = z.object({ description: z.string().trim().min(1).max(1000), indepe
 const task = z.object({
   goal: z.string().trim().min(1).max(8000), changes: z.string().trim().min(1).max(8000),
   constraints: z.string().trim().min(1).max(8000), owns: z.array(z.string().trim().min(1).max(4096)).min(1).max(40),
+  /** model.ts TaskRequirement; `unseenMachines` is only ever read back, never set. */
+  requires: z.object({ machines: z.array(id).min(1).max(20).optional(), devices: z.array(path).min(1).max(20).optional() }).strict()
+    .refine(r => r.machines || r.devices, 'Require at least one machine or device.').optional(),
 }).strict()
 
 export const commandSchema = z.discriminatedUnion('type', [
@@ -504,8 +507,18 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
   /** The Mac a Harness Team account's machine is, for a machines rule naming the Mac (machines.ts teamStartRequest). */
   const macOf = (id: string) => state.machines?.find(m => m.machineId === id)?.hostMachineId
   const groupRules = (conversationId: string) => projectRules(state, groupProject(state, conversation(state, conversationId)).id)
+  /** A requirement names only machines its setter sees, so it never names one to a reader who could not (model.ts TaskRequirement). */
+  const requirable = (task: WorkTask | undefined) => {
+    const machines = task?.requires?.machines
+    if (!machines) return
+    const seen = seenMachineIds(visibleState(state, actor, context.now))
+    if (machines.some(m => !seen.has(m))) fail('MACHINE_UNKNOWN', 'Name a machine of this Swarm that you can see.', 400)
+  }
+  /** The owner's rules for the group's project, then the group's own requirement. */
+  const refusal = (target: RunTarget, conversationId: string) =>
+    broken(groupRules(conversationId), target, machineName, macOf) ?? unmet(conversation(state, conversationId).task?.requires, target, macOf)
   const ruled = (target: RunTarget, conversationId: string, done: string, personChose = false) => {
-    const why = broken(groupRules(conversationId), target, machineName, macOf)
+    const why = refusal(target, conversationId)
     if (!why) return
     if (actor.kind === 'agent' && !personChose) fail('RULE_BROKEN', `${why} Route again.`, 403)
     result.warnings = [why]
@@ -992,6 +1005,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
         (actor.kind === 'agent' ? agentProjectId(state, agent(state, actor.agentId)) : 'lead'))
       controls(state, actor, project.leadConversationId)
       if (state.paused) fail('PAUSED', 'New work is paused in this Super Tab.')
+      requirable(command.task)
       if (command.audience) {
         // A private conversation is chat only: no task, checks or review, so private work never reaches other Leads.
         if (command.task || command.checks.length || command.reviewOf || command.requesterId) fail('AUDIENCE_CHAT_ONLY', 'A private conversation is chat only.', 400)
@@ -1212,7 +1226,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
           fail('SWARM_ENGINE', 'A Swarm agent runs only Claude Code or Codex.', 400)
         }
         // A start recorded before a rule was added is not launched past it, unless a person asked for it by hand.
-        const why = actor.kind === 'agent' && !(start.routeDecisionId && context.routeDecision?.override?.by === 'person') && broken(groupRules(start.request.conversationId), startTarget(start.request), machineName, macOf)
+        const why = actor.kind === 'agent' && !(start.routeDecisionId && context.routeDecision?.override?.by === 'person') && refusal(startTarget(start.request), start.request.conversationId)
         if (why) fail('RULE_BROKEN', `${why} This start was not launched. Route again.`, 403)
         requireWorkerDecisions(state, actor, open(state, start.request.conversationId))
         const grant = context.contribution ?? fail('HOST_REQUIRED', 'The original machine grant is unavailable.', 403)
@@ -1568,6 +1582,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       controls(state, actor, command.conversationId)
       const group = open(state, command.conversationId)
       if (activeWork(group)) fail('WORK_ACTIVE', 'Finish or stop the current assignment before changing its acceptance checks.')
+      requirable(command.task)
       if (group.assignment) {
         const worker = state.agents.find(a => a.id === group.assignment!.agentId)
         if (worker && !worker.workDecision && group.assignment.status !== 'lost') finishWorker(state, worker.id)

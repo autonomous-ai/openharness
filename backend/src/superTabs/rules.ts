@@ -3,7 +3,7 @@
  * Soft rules only rank candidates in the CLI's route. They replaced Jev in routing after the Lead overrode its pick about
  * half the time on 2026-10-22 (Haiku, a stopping agent, low effort) because it did not know the owner's rules. */
 import { z } from 'zod'
-import type { Agent, SuperTabState } from './model.js'
+import type { Agent, SuperTabState, TaskRequirement } from './model.js'
 
 const id = z.string().min(1).max(160).regex(/^[A-Za-z0-9_-]+$/)
 const engine = z.enum(['claude', 'codex'])
@@ -35,8 +35,9 @@ export interface SwarmRule {
   addedBy: string
   createdAt: string
 }
-/** What would run: a start request, an agent's configuration, or a routed pick. Null when not known. */
-export interface RunTarget { machineId: string; engine: string; model: string | null; effort: string | null }
+/** What would run: a start request, an agent's configuration, or a routed pick. Null when not known. `devices` are those a
+ *  start asks its machine to check; absent for an agent already running or a pick. */
+export interface RunTarget { machineId: string; engine: string; model: string | null; effort: string | null; devices?: string[] }
 
 const ENGINE: Record<string, string> = { claude: 'Claude', codex: 'Codex' }
 /** `default` and `auto` say nothing about the effort, so they never meet a minimum. */
@@ -69,8 +70,21 @@ export function broken(rules: SwarmRule[] | undefined, target: RunTarget, machin
   return null
 }
 
-export const startTarget = (request: { machineId: string; engine: string; model?: string; effort?: string }): RunTarget =>
-  ({ machineId: request.machineId, engine: request.engine, model: request.model ?? null, effort: request.effort ?? null })
+/** Said wherever the requirement's machines are not: it never names them, since a reader may not see them. */
+export const ANOTHER_MACHINE = 'This task runs only on the machine it requires, and this is another machine.'
+
+/** Why the task's requirement rules the target out, or null when it does not (model.ts TaskRequirement). A Mac's Harness Team
+ *  account is that Mac, as for a machines rule. A device is judged only on a start, which the machine checks before it runs. */
+export function unmet(requires: TaskRequirement | undefined, target: RunTarget, macOf: (id: string) => string | undefined = () => undefined): string | null {
+  const mac = macOf(target.machineId)
+  if (requires?.machines && !requires.machines.includes(target.machineId) && !(mac && requires.machines.includes(mac))) return ANOTHER_MACHINE
+  const missing = target.devices ? (requires?.devices ?? []).filter(d => !target.devices!.includes(d)) : []
+  return missing.length ? `This task needs ${missing.join(', ')}: name ${missing.length === 1 ? 'it' : 'them'} in the start's required devices, so its machine checks ${missing.length === 1 ? 'it is' : 'they are'} connected.` : null
+}
+
+export const startTarget = (request: { machineId: string; engine: string; model?: string; effort?: string; requirements?: { devices: string[] } }): RunTarget =>
+  ({ machineId: request.machineId, engine: request.engine, model: request.model ?? null, effort: request.effort ?? null,
+    ...(request.requirements ? { devices: request.requirements.devices } : {}) })
 
 /** A started agent was launched with `--effort`, which Claude never reports back, so its configuration may say `auto`; its
  * start record still holds what it was launched with (manual run 2026-10-19). */
