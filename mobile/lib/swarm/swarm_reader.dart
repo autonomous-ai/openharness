@@ -49,6 +49,12 @@ class SwarmReader extends ChangeNotifier {
   /// True until the first read answers, either way.
   bool get loading => snapshot == null && error == null && !accessRevoked;
 
+  /// Counts the reads that answered, changed or not: what tells a read that
+  /// failed beside this one to try again, where the Swarm itself stays as it
+  /// was and so tells nothing.
+  ValueListenable<int> get reads => _reads;
+  final _reads = ValueNotifier(0);
+
   SuperTabParts? _parts;
   Future<void>? _refreshing;
   Timer? _poll;
@@ -107,6 +113,7 @@ class SwarmReader extends ChangeNotifier {
         changed = true;
       }
       error = null;
+      _reads.value++;
     } on SuperTabFailure catch (failure) {
       if (_disposed) return;
       if (failure.statusCode == 426 ||
@@ -229,6 +236,7 @@ class SwarmReader extends ChangeNotifier {
   void dispose() {
     _disposed = true;
     _poll?.cancel();
+    _reads.dispose();
     super.dispose();
   }
 }

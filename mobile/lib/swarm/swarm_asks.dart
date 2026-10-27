@@ -81,6 +81,7 @@ class SuperTabMention implements SwarmAskItem {
 class SwarmAsks extends ChangeNotifier {
   SwarmAsks(this.reader) {
     reader.addListener(_changed);
+    reader.reads.addListener(_retry);
     _changed();
   }
 
@@ -101,7 +102,7 @@ class SwarmAsks extends ChangeNotifier {
   // Null until the first read: asks waiting then are not news.
   Set<String>? _seen;
   Future<void>? _loading;
-  bool _dirty = false, _disposed = false;
+  bool _dirty = false, _failed = false, _disposed = false;
 
   String get _path => '/api/super-tabs/${Uri.encodeComponent(reader.tabId)}';
 
@@ -124,6 +125,12 @@ class SwarmAsks extends ChangeNotifier {
       if (!moved || (decisions.isEmpty && mentions.isEmpty)) return;
     }
     unawaited(load());
+  }
+
+  /// A read that failed is tried again at the Swarm's next read, which tells
+  /// nothing when the Swarm stayed as it was.
+  void _retry() {
+    if (_failed && _loading == null) unawaited(load());
   }
 
   /// Joins a read under way, and has it read once more when asked again.
@@ -164,6 +171,7 @@ class SwarmAsks extends ChangeNotifier {
       decisions = List.unmodifiable(openRows.map(SuperTabDecision.fromJson));
       mentions = List.unmodifiable(waitingRows.map(SuperTabMention.fromJson));
       error = null;
+      _failed = false;
       final seen = _seen;
       final now = <SwarmAskItem>[...decisions, ...mentions];
       _seen = {...?seen, for (final ask in now) ask.id};
@@ -175,6 +183,7 @@ class SwarmAsks extends ChangeNotifier {
     } catch (_) {
       if (_disposed) return;
       error = 'Could not load what is waiting for you. Try again.';
+      _failed = true;
     }
     notifyListeners();
   }
@@ -229,6 +238,7 @@ class SwarmAsks extends ChangeNotifier {
   void dispose() {
     _disposed = true;
     reader.removeListener(_changed);
+    reader.reads.removeListener(_retry);
     super.dispose();
   }
 }

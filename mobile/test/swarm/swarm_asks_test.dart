@@ -118,6 +118,31 @@ void main() {
     expect(r.asks.error, isNull);
   });
 
+  test('a failed read is tried again at the next read of the Swarm, '
+      'even one that changed nothing', () async {
+    final r = rig(decisions: 1);
+    var failing = true;
+    r.swarm.routes['/api/super-tabs/$tab/decisions?state=open'] = (_) => failing
+        ? throw const SuperTabFailure('MACHINE_UNAVAILABLE', 'No computer.')
+        : {
+            'decisions': [decisionRow('d1')],
+          };
+    r.swarm.routes['/api/super-tabs/$tab/mentions?state=waiting'] = (_) => {
+      'mentions': <Object>[],
+    };
+    await r.reader.refresh();
+    await settle();
+    expect(r.asks.decisions, isEmpty);
+    expect(r.asks.error, isNotNull);
+
+    failing = false;
+    await r.reader.refresh();
+    await settle();
+
+    expect(r.asks.decisions.single.id, 'd1');
+    expect(r.asks.error, isNull);
+  });
+
   test('answering sends the choice once, then reads again', () async {
     final r = rig(decisions: 1);
     var open = [decisionRow('d1')];
