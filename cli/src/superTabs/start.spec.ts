@@ -894,7 +894,7 @@ describe('a Lead\'s start that fails before its agent exists', () => {
   const requirements = { memoryBytes: 100, diskBytes: 200, maxCpuPercent: 80, tools: ['git'], devices: ['round'], quotaRequired: false }
   const candidate = (id: string, machineId: string, kind = 'new') => ({ id, kind, ...(kind === 'member' ? { agentId: `agent-${machineId}` } : {}), machineId,
     engine: 'claude', model: 'opus', effort: 'high', quality: 3, cost: 10, title: `Builder · Claude opus high · ${machineId}`, label: machineId })
-  const decision = (candidates: ReturnType<typeof candidate>[]) => ({ id: 'decision-1', conversationId: 'group', outcome: 'failed', final: null,
+  const decision = (candidates: ReturnType<typeof candidate>[], override: unknown = null) => ({ id: 'decision-1', conversationId: 'group', outcome: 'failed', final: null, override,
     record: { assessment: { difficulty: 'medium', risk: 'low', why: 'Queued Lead routing.', size: 'medium' }, candidates, excluded: [],
       floor: 2, notes: false, pick: candidates[0]!.id, via: 'order', p: null, belowFloor: false, why: 'Policy order.' } })
   const swarm = (rules: unknown[] = []) => ({
@@ -905,32 +905,51 @@ describe('a Lead\'s start that fails before its agent exists', () => {
   })
   const TOKEN = 'The Harness GitHub App token is not in the form GitHub gives.'
   /** A backend with contributed machines whose hosts fail a start in preparation, as the round-device group saw. */
-  function backend(options: { candidates?: ReturnType<typeof candidate>[]; rules?: unknown[]; fails?: string[] } = {}) {
+  function backend(options: { candidates?: ReturnType<typeof candidate>[]; rules?: unknown[]; fails?: string[]; override?: unknown
+    /** What happens to the retry's start: the backend refuses it, or its reply is lost after or before the backend recorded it. */
+    retry?: 'refused' | 'lost' | 'lostUnrecorded'
+    /** Machines off the contributed list: the Lead's own start launches there, and this one refuses for its owner's sharing. */
+    direct?: string[] } = {}) {
     const starts = new Map<string, Record<string, unknown>>()
     const fails = new Set(options.fails ?? ['mac-one'])
     const commands: Record<string, unknown>[] = []
     const scoped = vi.fn(async (payload: Record<string, unknown>): Promise<Record<string, unknown>> => {
       if (payload.action === 'startStatus') {
-        const start = starts.get(String(payload.startId))!
+        const start = starts.get(String(payload.startId))
+        if (!start) return { error: 'NOT_FOUND', detail: 'This agent start is unavailable.' }
         // The host readies a queued start on its next pass: a machine whose app token cannot be had fails it there.
         const request = start.request as Record<string, unknown>
         if (start.read && fails.has(String(request.machineId))) start.error = TOKEN
         start.read = true
         return { ok: true, value: structuredClone(start) }
       }
-      if (payload.action === 'routeDecision') return { ok: true, value: decision(options.candidates ?? [candidate('c0', 'mac-one'), candidate('c1', 'mac-one', 'member'), candidate('c2', 'mac-two')]) }
+      if (payload.action === 'routeDecision') return { ok: true, value: decision(options.candidates ?? [candidate('c0', 'mac-one'), candidate('c1', 'mac-one', 'member'), candidate('c2', 'mac-two')], options.override) }
       if (payload.action === 'status') return { ok: true, value: { state: swarm(options.rules) } }
       const cmd = payload.command as Record<string, unknown>
       commands.push({ operationId: payload.operationId, ...cmd })
       if (cmd.type === 'agent.start') {
-        starts.set(String(payload.operationId), { id: payload.operationId, creationId: `super-${String(payload.operationId)}`, poolGeneration: 'pool',
+        const retry = payload.operationId !== 'first-start' ? options.retry : undefined
+        if (retry === 'refused') return { error: 'MACHINE_NOT_LISTED', detail: 'Add this machine to the Swarm first.' }
+        if (retry === 'lostUnrecorded') { options.retry = undefined; throw new Error('The reply was lost.') }
+        const machineId = String((cmd.request as Record<string, unknown>).machineId)
+        starts.set(String(payload.operationId), { id: payload.operationId, creationId: `super-${String(payload.operationId)}`,
+          ...(options.direct?.includes(machineId) ? {} : { poolGeneration: 'pool' }),
           routeDecisionId: cmd.routeDecisionId, request: cmd.request, harnessId: null, dispatched: false, error: null })
+        if (retry === 'lost') { options.retry = undefined; throw new Error('The reply was lost.') }
         return { ok: true, value: { result: { startId: payload.operationId } } }
       }
+      if (cmd.type === 'agent.startFailed') starts.get(String(cmd.startId))!.error = cmd.error
       if (cmd.type === 'route.record') return { ok: true, value: { result: { routeDecisionId: payload.operationId } } }
       return { ok: true, value: { result: { messageId: payload.operationId } } }
     })
-    const open = vi.fn(async () => { throw new Error('A queued start is dispatched by its host, not the Lead.') })
+    const daemon = { request: vi.fn(async (type: string): Promise<Record<string, unknown>> => type === 'agent_create_status'
+      ? { creationId: `super-${derived}`, state: 'missing' } : type === 'super_tabs' ? { error: 'GUEST_NOT_ALLOWED' } : {}), close: vi.fn() }
+    let derived = ''
+    const open = vi.fn(async (_where: unknown, machineId?: string) => {
+      if (!options.direct?.includes(String(machineId))) throw new Error('A queued start is dispatched by its host, not the Lead.')
+      derived = [...starts.keys()].at(-1)!
+      return daemon as never
+    })
     const pause = vi.fn(async () => {})
     const lead = (input: Record<string, unknown>) => startAgent(input, scoped, where, open, pause)
     const first = { action: 'start', tabId: 'tab', operationId: 'first-start', request: { conversationId: 'group', machineId: 'mac-one', engine: 'claude',
@@ -968,6 +987,52 @@ describe('a Lead\'s start that fails before its agent exists', () => {
     expect(b.of('agent.start')[1]!.request).toMatchObject({ machineId: 'mac-two' })
     expect(b.of('agent.start')[1]!.request).not.toHaveProperty('codexHome')
     expect(result).toMatchObject({ queued: true, retriedFrom: 'first-start' })
+  })
+  it('reports when the backend refuses the retry\'s start after its route was recorded', async () => {
+    const b = backend({ retry: 'refused' })
+    expect(await b.lead(b.first)).toMatchObject({ error: 'START_BLOCKED', startId: expect.stringMatching(/^retry-/) })
+    expect(b.of('route.record')).toHaveLength(1)
+    expect(b.of('agent.start')).toHaveLength(2)
+    expect(b.of('message.send')).toMatchObject([{ text: expect.stringMatching(/^Builder could not start on Mac Two, and no other machine/) }])
+  })
+  it('reconciles the retry\'s own start when its reply is lost after the backend recorded it, never making another', async () => {
+    const b = backend({ retry: 'lost' })
+    expect(await b.lead(b.first)).toMatchObject({ ok: true, queued: true, startId: b.of('agent.start')[1]!.operationId, retriedFrom: 'first-start' })
+    expect(b.of('agent.start')).toHaveLength(2)
+    expect(b.of('message.send')).toEqual([])
+  })
+  it('says the retry is unconfirmed when its reply is lost before it was recorded, and a resume sends the same one', async () => {
+    const b = backend({ retry: 'lostUnrecorded' })
+    expect(await b.lead(b.first)).toMatchObject({ error: 'START_UNCERTAIN', retriedFrom: 'first-start' })
+    expect(b.of('message.send')).toEqual([])
+    expect(await b.lead({ action: 'resume', tabId: 'tab', startId: 'first-start' })).toMatchObject({ ok: true, queued: true, retriedFrom: 'first-start' })
+    const retries = b.of('agent.start').slice(1)
+    expect(retries).toHaveLength(2)
+    expect(retries[1]!.operationId).toBe(retries[0]!.operationId)
+  })
+  it('fails and reports a retry its machine refuses before launching it', async () => {
+    const b = backend({ direct: ['mac-two'] })
+    expect(await b.lead(b.first)).toMatchObject({ error: 'START_BLOCKED' })
+    const retryId = b.of('agent.start')[1]!.operationId
+    expect(b.of('agent.startFailed')).toMatchObject([{ startId: retryId, error: expect.stringContaining('machine owner') }])
+    expect(b.of('message.send')).toHaveLength(1)
+  })
+  it('never moves to the candidate a Lead\'s override moved the task away from, and keeps what it chose to run', async () => {
+    const overridden = { by: 'lead', actorKey: 'agent:lead', reason: 'Spread off the Mac Studio.' }
+    // The policy put the Mac Studio first; the Lead started opus on Mac One instead, which failed.
+    const studio = { ...candidate('c0', 'mac-studio'), model: 'sonnet', effort: 'medium' }
+    const b = backend({ override: overridden, candidates: [studio, { ...candidate('c1', 'mac-two'), model: 'sonnet', effort: 'medium' }, candidate('c2', 'mac-one'), candidate('c3', 'mac-two')] })
+    await b.lead(b.first)
+    expect(b.of('route.record')[0]).toMatchObject({ decision: { pick: 'c3' } })
+    expect(b.of('agent.start')[1]!.request).toMatchObject({ machineId: 'mac-two', model: 'opus', effort: 'high' })
+    const none = backend({ override: overridden, candidates: [studio, candidate('c2', 'mac-one')] })
+    expect(await none.lead(none.first)).toMatchObject({ error: 'START_BLOCKED' })
+    expect(none.of('route.record')).toEqual([])
+  })
+  it('reports instead of moving a task a person chose the machine for', async () => {
+    const b = backend({ override: { by: 'person', actorKey: 'person:owner', candidateId: 'c0', reason: 'Mine.' } })
+    expect(await b.lead(b.first)).toMatchObject({ error: 'START_BLOCKED' })
+    expect(b.of('route.record')).toEqual([])
   })
   it('a resumed failed start is retried the same way, once, under the same operations', async () => {
     const b = backend()
