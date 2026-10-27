@@ -6,7 +6,9 @@
 // downloading. No preload, or one that fails, starts the loader as before. A preload already done
 // (from the cache, before this script was parsed) has marked itself in index.html. A browser that
 // has loaded this release's script before has both in its cache and nothing to wait for: waiting
-// for the script there only delays the engine, so the loader starts at once.
+// for the script there only delays the engine, so the loader starts at once. A preload that never
+// reports back holds the loader 30 s at most. Not until the page's load event: Chrome fires that
+// without waiting for a preload, a quarter second in, and the engine shared the line again.
 (function () {
   var link = document.getElementById('harness-main-preload');
   var key = 'harness.web.v1.main_script_loaded';
@@ -25,6 +27,7 @@
     }
     link.addEventListener('load', function () { remember(); resolve(); });
     link.addEventListener('error', resolve);
+    setTimeout(resolve, 30000);
   });
   var load = _flutter.loader.load.bind(_flutter.loader);
   _flutter.loader.load = function (options) {

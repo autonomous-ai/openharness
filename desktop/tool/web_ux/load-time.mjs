@@ -26,6 +26,10 @@
 // V8 re-parses all of main.dart.js for source positions while the script
 // starts. CHROME_ARGS=--js-flags=--no-enable-lazy-source-positions times it
 // as a page nobody inspects runs.
+//
+// ALLOW_HOSTS names hosts, space-separated, that the page reaches for real
+// (fonts.gstatic.com, where the engine finds fallback fonts). Each run lists
+// what it fetched from them under `elsewhere`, in KB as sent.
 import { chromium } from './playwright.mjs';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -142,6 +146,8 @@ async function once(context, origin, profile) {
       .map((r) => [name(r.url), +(r.bytes / 1e3).toFixed(1)])),
     fetchedTwice: [...counts].filter(([, n]) => n > 1).map(([file]) => file),
     revalidated: fetched.filter((r) => r.status === 304).map((r) => name(r.url)),
+    elsewhere: Object.fromEntries([...requests.values()].filter((r) => !r.url.startsWith(origin) && r.bytes > 0)
+      .map((r) => [r.url, +(r.bytes / 1e3).toFixed(1)])),
     failed, consoleErrors, splashRemoved, shot,
   };
 }
@@ -165,8 +171,9 @@ if (outDir) mkdirSync(outDir, { recursive: true });
 const server = await serveRelease(root);
 // Requests off the page fail at name lookup rather than through Playwright's
 // routing, which would turn the browser's HTTP cache off and every warm load cold.
+const allowed = (process.env.ALLOW_HOSTS ?? '').split(' ').filter(Boolean);
 const args = [
-  '--host-resolver-rules=MAP * ~NOTFOUND, EXCLUDE 127.0.0.1',
+  `--host-resolver-rules=${['MAP * ~NOTFOUND', ...['127.0.0.1', ...allowed].map((h) => `EXCLUDE ${h}`)].join(', ')}`,
   ...(process.env.CHROME_ARGS ?? '').split(' ').filter(Boolean),
 ];
 const browser = await chromium.launch({ executablePath: process.env.CHROME_PATH, args });
