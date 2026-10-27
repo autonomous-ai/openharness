@@ -568,7 +568,7 @@ describe('post --attach steps', () => {
 it('teaches agents to say when their work needs a person or is stuck', async () => {
   const t = setup()
   const help = (await t.ask({ action: 'help' }, owner)) as { help: { command: string; commands: Array<Record<string, unknown>> } }
-  expect(help.help.commands.filter(c => c.type === 'work.status').map(c => c.status)).toEqual(['working', 'needs_human', 'blocked', 'done'])
+  expect(help.help.commands.filter(c => c.type === 'work.status').map(c => c.status)).toEqual(['working', 'needs_human', 'needs_human', 'blocked', 'done'])
   expect(help.help.command).toContain('needs_human')
 })
 
@@ -836,6 +836,21 @@ describe('mentions on a post', () => {
     // A former Lead still named on an older work group is not one, as in status.
     swarm(t, 'new-lead')
     expect(String((await help(t, { tabId: 'tab', agentId: t.agentId })).post)).not.toContain('--mention')
+  })
+
+  it('tells every agent how to read its decisions and ask one through needs_human, and only a Lead how to ask a batch', async () => {
+    const t = setup()
+    swarm(t, t.agentId)
+    const lead = await help(t, { tabId: 'tab', agentId: t.agentId })
+    const plain = await help(t, {})
+    for (const each of [lead, plain]) {
+      expect(each.decisions).toContain('decisions [--answered]: the decisions you asked of people')
+      expect(each.decisions).toContain('A decision is not a private channel')
+      expect(each.commands).toContainEqual(expect.objectContaining({ type: 'work.status', status: 'needs_human',
+        ask: { personId: 'PERSON', options: ['Option A', 'Option B'], recommended: 0, unblocks: 'What the answer unblocks' } }))
+    }
+    expect(lead.commands).toContainEqual(expect.objectContaining({ type: 'decision.ask', conversationId: 'GROUP', personId: 'PERSON' }))
+    expect(plain.commands).not.toContainEqual(expect.objectContaining({ type: 'decision.ask' }))
   })
 
   it('answers help without --mention outside a tab, or when the caller cannot be read', async () => {
