@@ -208,6 +208,63 @@ void main() {
     },
   );
 
+  testWidgets('Discard asks before dropping a request on an unreachable '
+      'machine, and Keep request keeps it', (tester) async {
+    late SuperTabLaunchFixture f;
+    late NewHarnessController box;
+    await tester.runAsync(() async {
+      f = await stuckProject();
+      box = await reopen(f);
+    });
+    f.connection.creationRecovery = (_, _) async =>
+        throw StateError('Connection lost');
+    var closed = 0;
+    await tester.binding.setSurfaceSize(const Size(1200, 800));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: Center(
+            child: SizedBox(
+              width: 850,
+              height: 500,
+              child: NewHarnessForm(
+                controller: box,
+                desktop: true,
+                onClose: () => closed++,
+                onCreated: () {},
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+    const question =
+        'Could not reach Test host, so it may still start the Lead. '
+        'Discard anyway?';
+
+    await tester.tap(find.text('Discard request'));
+    await tester.runAsync(pumpEventQueue);
+    await tester.pumpAndSettle();
+    expect(find.text(question), findsOneWidget);
+    await tester.tap(find.text('Keep request'));
+    await tester.pumpAndSettle();
+    expect(find.text(question), findsNothing);
+    expect(closed, 0);
+    expect(journal(f), isNotNull);
+
+    await tester.tap(find.text('Discard request'));
+    await tester.runAsync(pumpEventQueue);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Discard anyway'));
+    await tester.runAsync(pumpEventQueue);
+    await tester.pumpAndSettle();
+    expect(closed, 1);
+    expect(journal(f), isNull);
+    await tester.pumpWidget(const SizedBox());
+  });
+
   test('a deleted project offers Discard instead of a stuck request', () async {
     final f = await stuckProject();
     final projectId = journal(f)!['projectId'];
