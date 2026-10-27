@@ -607,6 +607,34 @@ describe('a delivery poll or claim that keeps failing', () => {
     expect(claims.n).toBe(3)
   })
 
+  it('keeps the wait of a delivery later in the list when an earlier one\'s claim throws', async () => {
+    const t = setup(), host = t.open()
+    const claims: Record<string, number> = { first: 0, second: 0 }
+    const original = vi.mocked(t.core.account.backend).getMockImplementation()!
+    vi.mocked(t.core.account.backend).mockImplementation(async (method, path, body) => {
+      if (method === 'GET' && path.endsWith('/deliveries')) {
+        return { status: 200, body: { success: true, data: ['first', 'second'].map(id => ({ id, conversationId: 'lead', claimId: null, status: 'queued' })) } }
+      }
+      const claim = /\/deliveries\/(first|second)$/.exec(path)
+      if (method === 'POST' && claim) {
+        claims[claim[1]!]!++
+        return { status: 503, body: { success: false, error: { code: 'SWARM_BUSY', message: 'This Swarm is busy. Try again in a moment.' } } }
+      }
+      return original(method, path, body)
+    })
+    // The first claim throws and ends the poll; while it waits, the second is tried and waits 1 s.
+    await host.tick(); await host.tick()
+    expect(claims).toEqual({ first: 1, second: 1 })
+    // Both are due; the first throws again before the second is reached, and the second is then tried and fails a second time.
+    t.wait(1_000); await host.tick(); await host.tick()
+    expect(claims).toEqual({ first: 2, second: 2 })
+    // The second waits 2 s now, not 1 s again.
+    t.wait(1_000); await host.tick()
+    expect(claims.second).toBe(2)
+    t.wait(1_000); await host.tick(); await host.tick()
+    expect(claims.second).toBe(3)
+  })
+
   it('drops a claim\'s wait once a list that is read no longer has the delivery', async () => {
     const t = setup(), host = t.open()
     const claims = { n: 0 }

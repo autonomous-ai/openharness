@@ -584,6 +584,8 @@ export class SuperTabHost {
     const seen = new Set<string>()
     /** The agents whose delivery list was read in this poll: only such a list can say a delivery is gone. */
     const listsRead = new Set<string>()
+    /** Every delivery of those lists, also those after one whose claim threw: only a list read without it says it is gone. */
+    const listed = new Set<string>()
     const running: HostAgent[] = []
     const leads = new Set<string>(), ended = new Set<string>()
     for (const item of data) {
@@ -611,13 +613,14 @@ export class SuperTabHost {
       const path = `/api/super-tabs/${target.tabId}/agents/${target.agent.id}/deliveries`
       const listKey = `list:${target.tabId}:${target.agent.id}`
       if (this.backedOff(listKey)) continue
-      let listed = false
+      let listRead = false
       try {
         const deliveries = await backend(this.core, 'GET', path)
         if (this.stopped) return
         if (!Array.isArray(deliveries)) throw new Error('Invalid Super Tab delivery list.')
-        listed = true
+        listRead = true
         listsRead.add(listKey)
+        for (const item of deliveries) { const id = object(item).id; if (identifier(id)) listed.add(id) }
         this.deliveryRetries.delete(listKey)
         for (const item of deliveries) {
           const delivery = object(item)
@@ -638,7 +641,7 @@ export class SuperTabHost {
           }
         }
       } catch (error) {
-        if (!listed) this.retryLater(listKey)
+        if (!listRead) this.retryLater(listKey)
         // Authority checks and network failures both withhold input. A later fresh read may grant it again.
         this.log(error instanceof Error ? error.message : String(error))
       }
@@ -653,7 +656,7 @@ export class SuperTabHost {
     for (const [key, retry] of this.deliveryRetries) {
       const agentKey = retry.list ?? key
       if (!running.some(r => `list:${r.tabId}:${r.agent.id}` === agentKey)) this.deliveryRetries.delete(key)
-      else if (key.startsWith('claim:') && listsRead.has(agentKey) && !seen.has(key.slice('claim:'.length))) this.deliveryRetries.delete(key)
+      else if (key.startsWith('claim:') && listsRead.has(agentKey) && !listed.has(key.slice('claim:'.length))) this.deliveryRetries.delete(key)
     }
     for (const deliveryId of this.files.keys()) if (!this.journal.entries[deliveryId]) this.files.delete(deliveryId)
     for (const entry of Object.values(this.journal.entries)) {
