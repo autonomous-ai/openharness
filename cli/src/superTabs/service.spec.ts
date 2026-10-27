@@ -837,13 +837,28 @@ describe('mentions on a post', () => {
     expect((await help(t, {})).post).toBe(lead.post)
   })
 
+  it('tells every agent how to ask a person for hands-on help and read the answer, and only a Lead how to name a partner', async () => {
+    const t = setup()
+    swarm(t, t.agentId)
+    const lead = await help(t, { tabId: 'tab', agentId: t.agentId })
+    const plain = await help(t, {})
+    for (const each of [lead, plain]) {
+      expect(each.decisions).toContain('decisions [--answered] [--hands-on]')
+      expect(each.decisions).toContain('--hands-on: the hands-on requests you asked')
+      expect(each.commands).toContainEqual({ type: 'handsOn.ask', conversationId: 'GROUP', personId: 'PERSON', request: 'What you need the person to do, in one line',
+        steps: ['One physical step', 'The next step'], next: 'What you do once it is done' })
+    }
+    expect(lead.commands).toContainEqual({ type: 'conversation.partner', conversationId: 'GROUP', personId: 'PERSON' })
+    expect(plain.commands).not.toContainEqual(expect.objectContaining({ type: 'conversation.partner' }))
+  })
+
   it('tells every agent how to read its decisions and ask one through needs_human, and only a Lead how to ask a batch', async () => {
     const t = setup()
     swarm(t, t.agentId)
     const lead = await help(t, { tabId: 'tab', agentId: t.agentId })
     const plain = await help(t, {})
     for (const each of [lead, plain]) {
-      expect(each.decisions).toContain('decisions [--answered]: the decisions you asked of people')
+      expect(each.decisions).toContain('decisions [--answered] [--hands-on]: the decisions you asked of people')
       expect(each.decisions).toContain('A decision is not a private channel')
       expect(each.commands).toContainEqual(expect.objectContaining({ type: 'work.status', status: 'needs_human',
         ask: { personId: 'PERSON', options: ['Option A', 'Option B'], recommended: 0, unblocks: 'What the answer unblocks' } }))

@@ -25,7 +25,7 @@ const HELP = {
   leadOptions: 'Leads: run help with --tab ID for options only a Lead has.',
   messages: 'messages GROUP: read recent messages in a conversation.',
   message: 'message GROUP MESSAGE_ID: read one exact message, including an earlier question or result referenced by a reply.',
-  decisions: 'decisions [--answered]: the decisions you asked of people, still open, or with --answered those answered (each with its choice and note). A Lead also sees those asked in its project. When your work needs a person to decide, ask through work.status needs_human with ask: the question as its result, 2 to 5 options, the one you recommend and what the answer unblocks. Keep working on your recommendation, marked provisional, until a notice in that conversation says it was answered; then read the answer here with --answered. The notice carries none of the answer. A decision is not a private channel: anything private goes through Chat with PM.',
+  decisions: 'decisions [--answered] [--hands-on]: the decisions you asked of people, still open, or with --answered those answered (each with its choice and note). A Lead also sees those asked in its project. When your work needs a person to decide, ask through work.status needs_human with ask: the question as its result, 2 to 5 options, the one you recommend and what the answer unblocks. Keep working on your recommendation, marked provisional, until a notice in that conversation says it was answered; then read the answer here with --answered. The notice carries none of the answer. A decision is not a private channel: anything private goes through Chat with PM. --hands-on: the hands-on requests you asked instead (a device, a sign-in, an approval only that person can do), asked with handsOn.ask; each answer is done, cant (can\'t now, maybe with until and a note) or note. An unanswered request reminds its person after 30 minutes; after 2 hours the Lead is told to ask someone else or go on with the recommendation.',
   post: `post GROUP TEXT OPERATION_ID [--reply-to MESSAGE_ID] [--attach PATH]... [--mention PERSON]...: ${POST_HELP} --mention tags a person who can read the conversation, by the id or email shown in status (up to 5), when you need them to act or decide; it shows in their notifications.`,
   start: 'start OPERATION_ID JSON: create one agent in a conversation on a machine in this Swarm\'s Machines list; to use another machine, a person adds it to the Swarm first. Repeat exactly after an interruption; it follows the same native creation receipt. It does not assign work. With worktree true, the agent starts from the repository\'s default branch, fetched first, unless you set branchRef (refs/heads/BRANCH, or refs/remotes/origin/BRANCH to fetch it first) to start from another branch, such as the one this work builds on. Set role "reviewer" to start a Reviewer; leave role out for a Builder. The role is kept for the session. On Custom skills, add "roleId" to the start request to start the agent in that role of its kind (a builder or reviewer role from status); without it the agent takes the first role of its kind. A Reviewer runs on claude or codex and is assigned only review groups (conversation.create with reviewOf naming the group it reviews); a review group is assigned only to a Reviewer. Add the Reviewer to the reviewed group with conversation.agent so it is told when that work is ready for review and can pass its independent check. Start one with a routeDecisionId like any agent.',
   release: 'When a Builder finishes, decide reuse, keep or stop; prefer stop unless more work is coming soon. Reuse assigns new work; agent.release records keep or requests stop. Wait for the execution host to confirm a stop. A person can withdraw a stuck stop; the session cannot receive new work in that Swarm. Its native capacity stays reserved until its host confirms stopping. Other Swarms wait up to two minutes for an in-flight close, then may reuse it.',
@@ -61,6 +61,9 @@ const HELP = {
     // The same, opened as a decision for one person in the conversation (decisions in help).
     { type: 'work.status', conversationId: 'GROUP', assignmentId: 'ATTEMPT', status: 'needs_human', result: 'The question, in one sentence',
       ask: { personId: 'PERSON', options: ['Option A', 'Option B'], recommended: 0, unblocks: 'What the answer unblocks' } },
+    // Physical steps, a sign-in or an approval for one person who reads the conversation: the Lead, or the worker on its own task.
+    { type: 'handsOn.ask', conversationId: 'GROUP', personId: 'PERSON', request: 'What you need the person to do, in one line',
+      steps: ['One physical step', 'The next step'], next: 'What you do once it is done' },
     { type: 'work.status', conversationId: 'GROUP', assignmentId: 'ATTEMPT', status: 'blocked', result: 'Why you are stuck and what would unblock you, in one or two sentences' },
     { type: 'work.check', conversationId: 'GROUP', assignmentId: 'ATTEMPT', checkId: 'CHECK', passed: true, evidence: 'Exact test command, revision and observed result' },
     { type: 'work.status', conversationId: 'GROUP', assignmentId: 'ATTEMPT', status: 'done', result: 'Exact revision, evidence and deliverable links' },
@@ -74,7 +77,10 @@ const OFF_ROSTER = 'This agent is not on this machine\'s Swarm roster right now.
 /** A Lead's help adds what only a Lead does. */
 const LEAD_HELP = { ...HELP,
   // Only a project's Lead asks a batch: up to 10 questions for one person, in one of its project's conversations.
-  commands: [...HELP.commands, { type: 'decision.ask', conversationId: 'GROUP', personId: 'PERSON', questions: [{ question: 'One question a person decides',
+  commands: [...HELP.commands,
+    // The person a group's work needs for judgement, taste, knowledge or hands; null clears it. Pick from the areas in status.
+    { type: 'conversation.partner', conversationId: 'GROUP', personId: 'PERSON' },
+    { type: 'decision.ask', conversationId: 'GROUP', personId: 'PERSON', questions: [{ question: 'One question a person decides',
     options: ['Option A', 'Option B'], recommended: 0, unblocks: 'What the answer unblocks' }] }] }
 const OTHER_WORK_FIELDS = ['conversationId', 'projectName', 'title', 'owns', 'status', 'agentName', 'pr'] as const
 /** How old a host form a one-off question about this machine's Swarms may take: the host reads one every second. */
@@ -380,7 +386,8 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
           return { ok: true, value: { ...(decisions ? { decisions } : { decisionsUnreadable: true }), ...(attempts ? { attempts } : { attemptsUnreadable: true }) } }
         }
         if (payload.action === 'decisions' && (payload.state === 'open' || payload.state === 'answered')) {
-          return { ok: true, value: await backend(core, 'GET', `${path}/decisions?state=${payload.state}&${identity}`) }
+          const kind = payload.kind === 'handsOn' ? '&kind=handsOn' : ''
+          return { ok: true, value: await backend(core, 'GET', `${path}/decisions?state=${payload.state}${kind}&${identity}`) }
         }
         if (payload.action === 'messages' && identifier(payload.conversationId)) {
           const page = await backend(core, 'GET', `${path}/conversations/${payload.conversationId}/messages?${identity}`)

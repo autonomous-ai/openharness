@@ -256,3 +256,12 @@ it('reads the caller\'s open decisions, or with --answered the answered ones', (
   expect(parseSuperTabArgs([...prefix, 'decisions', '--answered'], where).payload).toMatchObject({ action: 'decisions', state: 'answered' })
   for (const argv of [[...prefix, 'decisions', 'extra'], [...prefix, 'decisions', '--answered', 'extra']]) expect(() => parseSuperTabArgs(argv, where)).toThrow('harness super-tab')
 })
+
+it('reads the caller\'s hands-on requests with --hands-on, open or answered, in either order', () => {
+  expect(parseSuperTabArgs([...prefix, 'decisions', '--hands-on'], where).payload).toMatchObject({ action: 'decisions', state: 'open', kind: 'handsOn' })
+  for (const flags of [['--hands-on', '--answered'], ['--answered', '--hands-on']]) {
+    expect(parseSuperTabArgs([...prefix, 'decisions', ...flags], where).payload).toMatchObject({ action: 'decisions', state: 'answered', kind: 'handsOn' })
+  }
+  expect(parseSuperTabArgs([...prefix, 'decisions'], where).payload).not.toHaveProperty('kind')
+  expect(() => parseSuperTabArgs([...prefix, 'decisions', '--hands-on', '--hands-on'], where)).toThrow('harness super-tab')
+})

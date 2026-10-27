@@ -163,4 +163,11 @@ describe('decisions', () => {
       expect(s.call).toHaveBeenCalledWith('GET', `/api/super-tabs/${T}/decisions?state=${state}&asAgentId=${FIXTURE.leadId}`, undefined)
     }
   })
+
+  it('reads the hands-on requests the caller asked with kind=handsOn', async () => {
+    const listed = { handsOn: [{ id: 'h1', kind: 'handsOn', request: 'Plug in the device', steps: ['Plug it in'], next: 'I test it', answer: null }] }
+    const s = swarm((method, path) => path.startsWith(`/api/super-tabs/${T}/decisions?`) ? ok(listed) : undefined)
+    expect(await s.ask({ action: 'decisions', tabId: T, agentId: FIXTURE.builderId, state: 'answered', kind: 'handsOn' }, owner)).toEqual({ ok: true, value: listed })
+    expect(s.call).toHaveBeenCalledWith('GET', `/api/super-tabs/${T}/decisions?state=answered&kind=handsOn&asAgentId=${FIXTURE.builderId}`, undefined)
+  })
 })
