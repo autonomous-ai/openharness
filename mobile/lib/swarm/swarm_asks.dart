@@ -131,11 +131,19 @@ class SwarmAsks extends ChangeNotifier {
       decisions: snapshot.decisionsWaiting,
       mentions: snapshot.mentionsWaiting,
     );
-    final moved = counts != _counts || reader.generation != _generation;
+    final reloaded = reader.generation != _generation;
+    final moved = counts != _counts || reloaded;
     if (!moved && reader.lastChangedAt == _lastChangedAt) return;
     _lastChangedAt = reader.lastChangedAt;
     _generation = reader.generation;
     _counts = counts;
+    // What was read before may be of chats the reader can no longer see:
+    // none of it stays while the new read runs, nor if that read fails.
+    if (reloaded && (decisions.isNotEmpty || mentions.isNotEmpty)) {
+      decisions = const [];
+      mentions = const [];
+      notifyListeners();
+    }
     if (counts.decisions == 0 && counts.mentions == 0) {
       _seen ??= {};
       if (!moved || (decisions.isEmpty && mentions.isEmpty)) return;

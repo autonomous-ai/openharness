@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:fake_async/fake_async.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness_mobile/swarm/swarm_conversation.dart';
@@ -183,6 +185,63 @@ void main() {
       expect(held.snapshot, isNull);
       expect(chat.messages, isEmpty);
       expect(chat.draft, isEmpty);
+    },
+  );
+
+  test(
+    'a private question is out of the list from the moment the Swarm is '
+    'read again in full, even when the new read of what waits fails',
+    () async {
+      const derived = {'decisionsWaiting': 1, 'mentionsWaiting': 0};
+      final fake = backend(
+        {
+          'a': [
+            groupData(
+              'g-private',
+              title: 'Pair',
+              audience: [me, 'person-other'],
+            ),
+          ],
+        },
+        derived: {'a': derived},
+      );
+      Object? open = {
+        'decisions': [
+          {
+            'id': 'd1',
+            'conversationId': 'g-private',
+            'question': 'Rotate the keys?',
+            'options': ['Yes', 'No'],
+          },
+        ],
+      };
+      fake.routes['/api/super-tabs/a/decisions?state=open'] = (_) => open;
+      fake.routes['/api/super-tabs/a/mentions?state=waiting'] = (_) => {
+        'mentions': <Object>[],
+      };
+      final i = inbox(fake);
+      await i.refresh();
+      await settle();
+      expect(i.needs.whereType<SwarmDecisionNeed>(), hasLength(1));
+
+      // Taken out of the private chat: the Swarm is read again without it,
+      // and the read of what waits for the person stalls.
+      fake.routes['/api/super-tabs/a/parts'] = (_) =>
+          firstLoad(tabId: 'a', derived: derived);
+      fake.routes['/api/super-tabs/a/changes'] = (_) => {'reload': true};
+      final stalled = Completer<Object?>();
+      open = stalled.future;
+      await i.refresh();
+      await settle();
+
+      expect(i.needs.whereType<SwarmDecisionNeed>(), isEmpty);
+
+      stalled.completeError(
+        const SuperTabFailure('MACHINE_UNAVAILABLE', 'No computer.'),
+      );
+      await settle();
+
+      expect(i.needs.whereType<SwarmDecisionNeed>(), isEmpty);
     },
   );
 
