@@ -212,6 +212,13 @@ class SwarmInbox extends ChangeNotifier {
   Timer? _poll;
   bool _shown = false, _disposed = false;
 
+  /// A read of the list is under way: what its Swarms tell meanwhile is
+  /// told once, at its end.
+  bool _polling = false;
+
+  /// A Swarm's reader or asks told of a change since the last notify.
+  bool _below = false;
+
   /// While no computer can be asked, the next read comes this soon — 2 seconds, doubling up to
   /// [pollInterval] — so Swarm is back within seconds of one coming up, not at the next poll.
   /// Null once a read gets through.
@@ -224,6 +231,21 @@ class SwarmInbox extends ChangeNotifier {
   SwarmAsks? asks(String id) => _asks[id];
 
   bool get shown => _shown;
+
+  /// One of the account's computers came up: while none could be asked, the
+  /// list is read now, not at the next quick try ([_away]) — at a cold start
+  /// the socket comes up after the first read failed, and that try was 2 to
+  /// 8 seconds off. A read under way is read again once it ends.
+  void computerUp() {
+    if (_disposed || !_shown || !noComputer) return;
+    if (_refreshing case final reading?) {
+      unawaited(reading.whenComplete(computerUp));
+      return;
+    }
+    _poll?.cancel();
+    _poll = null;
+    unawaited(_tick());
+  }
 
   /// On screen (or wanted for notices): reads at once and every
   /// [pollInterval] after. Otherwise reads nothing.
@@ -248,9 +270,16 @@ class SwarmInbox extends ChangeNotifier {
     return _refreshing ??= _read().whenComplete(() => _refreshing = null);
   }
 
+  /// What a screen draws of the inbox itself: a read that leaves it as it
+  /// was tells nobody.
+  Object get _face =>
+      (swarms, error, loaded, invitations, invitationsFailed, noComputer);
+
   Future<void> _read() async {
+    final before = _face;
+    _polling = true;
     try {
-      final listed = await _list();
+      final (:listed, :changedAt) = await _list();
       List<SwarmInvitation>? invited = const [];
       Object? unread;
       if (listed.isEmpty) {
@@ -261,9 +290,11 @@ class SwarmInbox extends ChangeNotifier {
         }
       }
       if (_disposed) return;
-      swarms = listed;
+      if (!listEquals(listed, swarms)) swarms = listed;
       // What was read of them stays while they cannot be read again.
-      if (invited != null) invitations = invited;
+      if (invited != null && !listEquals(invited, invitations)) {
+        invitations = invited;
+      }
       invitationsFailed = unread != null;
       loaded = true;
       error = null;
@@ -277,7 +308,11 @@ class SwarmInbox extends ChangeNotifier {
       for (final swarm in listed) {
         _readers.putIfAbsent(swarm.id, () => _open(swarm.id));
       }
-      await Future.wait([for (final r in _readers.values) r.refresh()]);
+      await Future.wait([
+        for (final swarm in listed)
+          if (_due(swarm.id, changedAt[swarm.id] ?? 0))
+            _readers[swarm.id]!.refresh(),
+      ]);
     } on SuperTabFailure catch (failure) {
       if (_disposed) return;
       error = failure.message;
@@ -286,8 +321,10 @@ class SwarmInbox extends ChangeNotifier {
       if (_disposed) return;
       error = 'Could not load your Swarms. Try again.';
       _away = null;
+    } finally {
+      _polling = false;
     }
-    _rebuild();
+    _rebuild(told: _face != before);
   }
 
   /// The next quick read while no computer can be asked ([_away]).
@@ -296,10 +333,32 @@ class SwarmInbox extends ChangeNotifier {
     return next < pollInterval ? next : pollInterval;
   }
 
+  /// Whether a poll reads Swarm [id] again, listed as last changed at
+  /// [listedAt]: only when there may be something new. Its last change
+  /// moved; it holds no Swarm yet, or its last read failed; or an ask waits
+  /// in it, or its asks could not be read — decisions and tags are not
+  /// parts, and one answered or done on another device moves no last-change
+  /// time.
+  bool _due(String id, int listedAt) {
+    final reader = _readers[id]!, asks = _asks[id]!;
+    final snapshot = reader.snapshot;
+    return snapshot == null ||
+        reader.error != null ||
+        reader.lastChangedAt != listedAt ||
+        snapshot.decisionsWaiting > 0 ||
+        snapshot.mentionsWaiting > 0 ||
+        asks.decisions.isNotEmpty ||
+        asks.mentions.isNotEmpty ||
+        asks.error != null;
+  }
+
   /// Every page of the list before any is applied: a failed page cannot drop
-  /// Swarms (the desktop's `refreshTabs`).
-  Future<List<SwarmListing>> _list() async {
+  /// Swarms (the desktop's `refreshTabs`). With each Swarm's last change, 0
+  /// for one never changed.
+  Future<({List<SwarmListing> listed, Map<String, int> changedAt})>
+  _list() async {
     final listed = <String, SwarmListing>{};
+    final changedAt = <String, int>{};
     final cursors = <String>{};
     String? after;
     do {
@@ -328,13 +387,14 @@ class SwarmInbox extends ChangeNotifier {
         }
         final id = row['id'] as String;
         listed[id] = (id: id, name: row['name'] as String);
+        changedAt[id] = (row['lastChangedAt'] as num?)?.toInt() ?? 0;
       }
       after = page['next'] as String?;
       if (after != null && !cursors.add(after)) {
         throw const FormatException('Repeated tab cursor');
       }
     } while (after != null);
-    return listed.values.toList();
+    return (listed: listed.values.toList(), changedAt: changedAt);
   }
 
   SwarmReader _open(String id) {
@@ -342,14 +402,14 @@ class SwarmInbox extends ChangeNotifier {
       tabId: id,
       accountId: accountId,
       request: request,
-    )..addListener(_rebuild);
+    )..addListener(_relay);
     _asks[id] = SwarmAsks(reader)
       ..onArrived = ((ask) => onArrived?.call(switch (ask) {
         final SuperTabDecision decision => SwarmDecisionNeed(id, decision),
         final SuperTabMention mention => SwarmMentionNeed(id, mention),
         _ => throw StateError('Unknown ask $ask'),
       }))
-      ..addListener(_rebuild);
+      ..addListener(_relay);
     return reader;
   }
 
@@ -358,13 +418,23 @@ class SwarmInbox extends ChangeNotifier {
   void _drop(String id) {
     _asks.remove(id)?.dispose();
     _readers.remove(id)
-      ?..removeListener(_rebuild)
+      ?..removeListener(_relay)
       ..revoke()
       ..dispose();
     _workSeen.remove(id);
   }
 
-  void _rebuild() {
+  /// A Swarm's reader or asks told of a change: what they hold is drawn
+  /// through the inbox (Home's projects, a decision's buttons), so it is
+  /// told on, once per list read at most.
+  void _relay() {
+    _below = true;
+    if (!_polling) _rebuild();
+  }
+
+  /// Works out [needs] again; notifies when they, the inbox itself ([told])
+  /// or a Swarm below it changed.
+  void _rebuild({bool told = false}) {
     if (_disposed) return;
     final decisions = <SwarmNeed>[], mentions = <SwarmNeed>[];
     final work = <SwarmNeed>[];
@@ -395,12 +465,41 @@ class SwarmInbox extends ChangeNotifier {
     }
     int newest(SwarmNeed a, SwarmNeed b) =>
         (_at(b) ?? DateTime(0)).compareTo(_at(a) ?? DateTime(0));
-    needs = List.unmodifiable([
+    final next = [
       ...decisions..sort(newest),
       ...mentions..sort(newest),
       ...work,
-    ]);
-    notifyListeners();
+    ];
+    final same = _sameNeeds(next, needs);
+    if (!same) needs = List.unmodifiable(next);
+    final tell = told || !same || _below;
+    _below = false;
+    if (tell) notifyListeners();
+  }
+
+  /// The same asks of the same reads, in the same order: decisions and tags
+  /// as their [SwarmAsks] keeps them, work of the same snapshot.
+  static bool _sameNeeds(List<SwarmNeed> a, List<SwarmNeed> b) {
+    if (a.length != b.length) return false;
+    for (var n = 0; n < a.length; n++) {
+      final same = switch ((a[n], b[n])) {
+        (
+          SwarmDecisionNeed(decision: final x),
+          SwarmDecisionNeed(decision: final y),
+        ) =>
+          identical(x, y),
+        (
+          SwarmMentionNeed(mention: final x),
+          SwarmMentionNeed(mention: final y),
+        ) =>
+          identical(x, y),
+        (final SwarmWorkNeed x, final SwarmWorkNeed y) =>
+          x.key == y.key && identical(x.work.snapshot, y.work.snapshot),
+        _ => false,
+      };
+      if (!same || a[n].swarmId != b[n].swarmId) return false;
+    }
+    return true;
   }
 
   static DateTime? _at(SwarmNeed need) => switch (need) {

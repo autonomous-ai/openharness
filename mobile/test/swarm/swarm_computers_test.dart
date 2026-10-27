@@ -53,6 +53,29 @@ void main() {
     expect(told, 1);
   });
 
+  // At a cold start the socket comes up after the list, away all along: a
+  // Swarm read that failed for want of a computer waited 2 to 8 s for its
+  // next try (audit of 44d284f65, item 6).
+  test('tells when a computer comes up, and not when it goes', () async {
+    final rig = await signedInWith({'a': []});
+    addTearDown(rig.app.dispose);
+    rig.app.connectionStatusForTest('a', ConnectionStatus.connecting);
+    await settle();
+    final computers = AppSwarmComputers(rig.app);
+    addTearDown(computers.dispose);
+    var told = 0;
+    computers.addListener(() => told++);
+
+    rig.app.connectionStatusForTest('a', ConnectionStatus.connected);
+    await settle();
+    expect(told, 1);
+    expect(computers.computers, [(name: 'Machine a', away: false)]);
+
+    rig.app.connectionStatusForTest('a', ConnectionStatus.reconnecting);
+    await settle();
+    expect(told, 1, reason: 'still listed as up: nothing to tell');
+  });
+
   test('Try again reads the list again', () async {
     final rig = await signedInWith({'a': []});
     addTearDown(rig.app.dispose);

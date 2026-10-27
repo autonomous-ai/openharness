@@ -190,6 +190,139 @@ void main() {
     expect(redraws, 0);
   });
 
+  // A change the reader cannot see (another person's private chat) moves
+  // only the last-change time: Home, the drawer and Project drew the same
+  // Swarm again on every such read (audit of 44d284f65, item 4).
+  test('a read that moves only the last-change time redraws nothing, '
+      'and is still counted as a read', () async {
+    final swarm = FakeSwarm();
+    swarm.routes['/api/super-tabs/$tab/parts'] = (_) => firstLoad();
+    swarm.routes['/api/super-tabs/$tab/changes'] = (_) =>
+        changes(cursor: 'c2', lastChangedAt: 250);
+    final r = reader(swarm);
+    addTearDown(r.dispose);
+    await r.refresh();
+    final shown = r.snapshot;
+    var redraws = 0;
+    r.addListener(() => redraws++);
+    final reads = r.reads.value;
+
+    await r.refresh();
+
+    expect(redraws, 0);
+    expect(r.lastChangedAt, 250);
+    expect(r.reads.value, reads + 1);
+    expect(r.snapshot, same(shown));
+  });
+
+  group('a big Swarm', () {
+    /// [n] groups besides the Lead's, each with a partner.
+    List<Map<String, dynamic>> work(int n, {String title = 'Work'}) => [
+      for (var g = 0; g < n; g++)
+        {
+          ...groupData('g$g', title: '$title $g', number: g),
+          'partnerId': 'person-$g',
+        },
+    ];
+
+    /// How many turns the UI's event loop took while [read] ran: none while
+    /// a parse holds it.
+    Future<int> turnsDuring(Future<void> Function() read) async {
+      var turns = 0, counting = true;
+      final counted = () async {
+        while (counting) {
+          await Future<void>.delayed(Duration.zero);
+          if (counting) turns++;
+        }
+      }();
+      await read();
+      final during = turns;
+      counting = false;
+      await counted;
+      return during;
+    }
+
+    // 73 to 93 ms on the owner's iPhone 14 for a 1.3 MB Swarm: several
+    // frames dropped at every first load (Mira's Profile numbers).
+    test('is parsed off the UI isolate at its first load', () async {
+      final swarm = FakeSwarm();
+      swarm.routes['/api/super-tabs/$tab/parts'] = (_) =>
+          firstLoad(groups: work(swarmParseOffThreadParts));
+      final r = reader(swarm);
+      addTearDown(r.dispose);
+      expect(await turnsDuring(r.refresh), greaterThan(0));
+      expect(
+        r.snapshot!.conversations,
+        hasLength(swarmParseOffThreadParts + 1),
+      );
+      expect(r.partners['g7'], 'person-7');
+      expect(r.error, isNull);
+    });
+
+    test('is drawn again off the UI isolate when it changes', () async {
+      final swarm = FakeSwarm();
+      swarm.routes['/api/super-tabs/$tab/parts'] = (_) =>
+          firstLoad(groups: work(swarmParseOffThreadParts));
+      swarm.routes['/api/super-tabs/$tab/changes'] = (_) => changes(
+        cursor: 'c2',
+        groups: [part('g3', 900, groupData('g3', title: 'Renamed'))],
+        lastChangedAt: 300,
+      );
+      final r = reader(swarm);
+      addTearDown(r.dispose);
+      await r.refresh();
+      var redraws = 0;
+      r.addListener(() => redraws++);
+      expect(await turnsDuring(r.refresh), greaterThan(0));
+      expect(r.snapshot!.conversation('g3')!.title, 'Renamed');
+      expect(redraws, 1);
+    });
+
+    test('of another format says so, as a small one does', () async {
+      final swarm = FakeSwarm();
+      swarm.routes['/api/super-tabs/$tab/parts'] = (_) => {
+        ...firstLoad(groups: work(swarmParseOffThreadParts)),
+        'format': 3,
+      };
+      final r = reader(swarm);
+      addTearDown(r.dispose);
+
+      await r.refresh();
+
+      expect(r.snapshot, isNull);
+      expect(r.error, 'Update Harness to open this Swarm.');
+    });
+
+    test('a conversation read by id while it is drawn again is kept', () async {
+      final swarm = FakeSwarm();
+      swarm.routes['/api/super-tabs/$tab/parts'] = (_) =>
+          firstLoad(groups: work(swarmParseOffThreadParts));
+      swarm.routes['/api/super-tabs/$tab/changes'] = (_) => changes(
+        cursor: 'c2',
+        groups: [part('g3', 900, groupData('g3', title: 'Renamed'))],
+        lastChangedAt: 300,
+      );
+      swarm.routes['/api/super-tabs/$tab/groups/old'] = (_) => {
+        'group': part(
+          'old',
+          5,
+          groupData('old', title: 'Closed', dormant: true),
+        ),
+      };
+      final r = reader(swarm);
+      addTearDown(r.dispose);
+      await r.refresh();
+
+      final changing = r.refresh();
+      await Future<void>.delayed(Duration.zero);
+      expect(await r.loadConversation('old'), isTrue);
+      await changing;
+
+      expect(r.snapshot!.conversation('old'), isNotNull);
+      expect(r.snapshot!.conversation('g3')!.title, 'Renamed');
+    });
+  });
+
   test('a closed conversation is read by id when it is opened', () async {
     final swarm = FakeSwarm();
     swarm.routes['/api/super-tabs/$tab/parts'] = (_) => firstLoad();
