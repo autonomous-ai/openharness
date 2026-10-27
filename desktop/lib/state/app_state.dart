@@ -329,6 +329,15 @@ class AgentCreationAttempt {
   bool _codexHomeTrusted = false;
 
   bool get awaitingConfirmation => _awaitingConfirmation;
+
+  /// What the machine answered a create, for a test's fake `createAgent`: the harness it made, or that the
+  /// start is still being confirmed.
+  @visibleForTesting
+  void answeredForTest({String? agentId, bool awaitingConfirmation = false}) {
+    _agentId = agentId;
+    _awaitingConfirmation = awaitingConfirmation;
+  }
+
   bool get canCancelPending => _awaitingConfirmation && _holdReason != null;
   bool get canFollowPending =>
       _awaitingConfirmation && (_starting || _holdReason != null);

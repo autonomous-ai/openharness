@@ -157,6 +157,10 @@ class FirstArrival {
     final generation = app.accountGeneration;
     var opened = false;
     String? tab;
+    // The last create made its harness and only its pane was missing: look for that pane again. Creating again
+    // resumed the same session and was refused as already a harness (SESSION_IN_HARNESS, the Oct 26 report).
+    final made = _attempt?.awaitingConfirmation == true ? null : _attempt?.agentId;
+    bool otherPanes() => app.allPanes.any((p) => p.agentId != made);
     bool current() =>
         _state != 'done' &&
         app.signedIn &&
@@ -170,8 +174,36 @@ class FirstArrival {
       return false;
     }
 
+    /// Focuses the harness this run made, with the starter draft its plan asks for.
+    bool open(String machineId, FirstArrivalPlan plan) {
+      final panes = app.swarms.where((s) => s.id == tab).firstOrNull?.panes;
+      final createdId = _attempt?.agentId;
+      final pane = panes
+          ?.where(
+            (p) =>
+                p.machineId == machineId &&
+                (createdId == null
+                    ? panes.length == 1
+                    : p.agentId == createdId),
+          )
+          .firstOrNull;
+      if (pane == null) {
+        return fail('The harness has not opened yet. Try again to check it.');
+      }
+      if (plan.typesStarterTask) {
+        // An editable Flutter draft, not keystrokes sent to a terminal that may still be signing in.
+        pane.firstTask = starterTask;
+        pane.composerVisible = true;
+      }
+      app.focusPane(pane.id, reveal: true);
+      app.productMeasurement.firstRunReady(machineId, pane.agentId);
+      opened = true;
+      dismiss();
+      return true;
+    }
+
     try {
-      if (!current() || app.allPanes.isNotEmpty) {
+      if (!current() || otherPanes()) {
         dismiss();
         return false;
       }
@@ -191,6 +223,10 @@ class FirstArrival {
         return fail(
           'The computer changed. Choose a harness on the computer you want to use.',
         );
+      }
+      if (made != null && _plan != null) {
+        tab = app.activeSwarmId;
+        return open(machineId, _plan!);
       }
       final (sessions, _) = await (
         recentSessions(app, machineId, budget: indexWait),
@@ -273,30 +309,7 @@ class FirstArrival {
         return false;
       }
       if (failure != null) return fail(failure);
-      final panes = app.swarms.where((s) => s.id == tab).firstOrNull?.panes;
-      final createdId = _attempt?.agentId;
-      final pane = panes
-          ?.where(
-            (p) =>
-                p.machineId == machineId &&
-                (createdId == null
-                    ? panes.length == 1
-                    : p.agentId == createdId),
-          )
-          .firstOrNull;
-      if (pane == null) {
-        return fail('The harness has not opened yet. Try again to check it.');
-      }
-      if (plan.typesStarterTask) {
-        // An editable Flutter draft, not keystrokes sent to a terminal that may still be signing in.
-        pane.firstTask = starterTask;
-        pane.composerVisible = true;
-      }
-      app.focusPane(pane.id, reveal: true);
-      app.productMeasurement.firstRunReady(machineId, pane.agentId);
-      opened = true;
-      dismiss();
-      return true;
+      return open(machineId, plan);
     } catch (_) {
       if (!current()) {
         dismiss();
