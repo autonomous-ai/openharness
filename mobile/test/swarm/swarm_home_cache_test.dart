@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness_mobile/swarm/model.dart';
@@ -89,4 +90,127 @@ void main() {
       expect(back.conversation('g1')!.lastMessageSequence, 0);
     });
   });
+
+  group('kept on the phone', () {
+    late Directory dir;
+    late _Key key;
+    late SwarmHomeCache cache;
+
+    setUp(() {
+      dir = Directory.systemTemp.createTempSync('swarm-home');
+      addTearDown(() => dir.deleteSync(recursive: true));
+      key = _Key();
+      cache = SwarmHomeCache(key: key, file: File('${dir.path}/home.bin'));
+    });
+
+    List<SwarmHomeEntry> home() {
+      final (:snapshot, :partners) = read();
+      return [
+        (
+          id: tab,
+          name: 'Phone Swarm',
+          view: swarmHomeSwarm(snapshot, partners),
+        ),
+      ];
+    }
+
+    test('reads back for its account', () async {
+      await cache.write(me, home());
+
+      final back = await cache.read(me);
+
+      expect([for (final s in back!) s.name], ['Phone Swarm']);
+      final snapshot = SuperTabSnapshot.fromJson(back.single.view.state);
+      expect(snapshot.projects.single.name, 'Mobile');
+      expect(back.single.view.partners, {'g1': me});
+    });
+
+    test('is sealed on disk under a key kept in the Keychain', () async {
+      await cache.write(me, home());
+
+      final bytes = File('${dir.path}/home.bin').readAsBytesSync();
+      final text = utf8.decode(bytes, allowMalformed: true);
+      expect(text, isNot(contains('Mobile')));
+      expect(text, isNot(contains('Rotate the keys')));
+      expect(text, isNot(contains(me)));
+      expect(key.value, isNotNull);
+    });
+
+    test('another account reads nothing, and the view goes', () async {
+      await cache.write(me, home());
+
+      expect(await cache.read('person-other'), isNull);
+      expect(await cache.read(me), isNull);
+    });
+
+    test(
+      'without its key it reads nothing, and the sealed file goes',
+      () async {
+        await cache.write(me, home());
+        key.value = null;
+
+        expect(await cache.read(me), isNull);
+        expect(File('${dir.path}/home.bin').existsSync(), isFalse);
+      },
+    );
+
+    test('a file that does not open reads nothing, never an error', () async {
+      await cache.write(me, home());
+      final file = File('${dir.path}/home.bin');
+      final bytes = file.readAsBytesSync();
+      bytes[bytes.length ~/ 2] ^= 0xff;
+      file.writeAsBytesSync(bytes);
+
+      expect(await cache.read(me), isNull);
+      expect(file.existsSync(), isFalse);
+    });
+
+    test(
+      'a Keychain that refuses reads and keeps nothing, never throws',
+      () async {
+        key.refuses = true;
+
+        await cache.write(me, home());
+
+        expect(await cache.read(me), isNull);
+        expect(File('${dir.path}/home.bin').existsSync(), isFalse);
+      },
+    );
+
+    test('clear leaves neither the view nor its key', () async {
+      await cache.write(me, home());
+
+      await cache.clear();
+
+      expect(File('${dir.path}/home.bin').existsSync(), isFalse);
+      expect(key.value, isNull);
+      expect(await cache.read(me), isNull);
+    });
+
+    test('nothing read before any was kept', () async {
+      expect(await cache.read(me), isNull);
+    });
+  });
+}
+
+/// The Keychain item, held in memory; [refuses] as a locked or broken
+/// Keychain does.
+class _Key implements SwarmHomeKey {
+  String? value;
+  bool refuses = false;
+
+  @override
+  Future<String?> read() async => refuses ? throw StateError('locked') : value;
+
+  @override
+  Future<void> write(String next) async {
+    if (refuses) throw StateError('locked');
+    value = next;
+  }
+
+  @override
+  Future<void> delete() async {
+    if (refuses) throw StateError('locked');
+    value = null;
+  }
 }
