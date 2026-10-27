@@ -79,20 +79,28 @@ export class TeamAutoSetup {
    * it is wanted only while [sharedSwarm] says this Mac is in a Swarm with other people in it (false when it cannot say).
    */
   async offer(reason: AutoSetupReason, sharedSwarm: () => Promise<boolean> = async () => false): Promise<{ state: AutoSetupState }> {
+    const state = await this.decide(reason, sharedSwarm)
+    // Every answer is said, not only a setup that starts: Macs in a Swarm went without the prompt and nothing on them said
+    // why (2026-10-27).
+    if (state !== 'started') this.deps.log(`the Harness Team account was not offered (${reason}): ${state}`)
+    return { state }
+  }
+
+  private async decide(reason: AutoSetupReason, sharedSwarm: () => Promise<boolean>): Promise<AutoSetupState> {
     const { deps } = this
-    if (deps.platform !== 'darwin') return { state: 'unsupported' }
+    if (deps.platform !== 'darwin') return 'unsupported'
     const session = deps.session()
-    if (!session) return { state: 'signed-out' }
-    if (session.kind === 'team') return { state: 'dedicated' }
-    if (this.running) return { state: 'running' }
-    if (deps.readConfig() || await deps.accountExists(TEAM_USER)) return { state: 'exists' }
+    if (!session) return 'signed-out'
+    if (session.kind === 'team') return 'dedicated'
+    if (this.running) return 'running'
+    if (deps.readConfig() || await deps.accountExists(TEAM_USER)) return 'exists'
     const decision = deps.readDecision()
-    if (decision?.state === 'declined') return { state: 'declined' }
-    if (decision?.state === 'failed' && deps.now() - decision.at < AUTO_SETUP_RETRY_MS && deps.now() >= decision.at) return { state: 'waiting' }
-    if (reason === 'startup' && !await sharedSwarm().catch(() => false)) return { state: 'not-shared' }
-    if (this.running) return { state: 'running' }
+    if (decision?.state === 'declined') return 'declined'
+    if (decision?.state === 'failed' && deps.now() - decision.at < AUTO_SETUP_RETRY_MS && deps.now() >= decision.at) return 'waiting'
+    if (reason === 'startup' && !await sharedSwarm().catch(() => false)) return 'not-shared'
+    if (this.running) return 'running'
     this.running = this.run().finally(() => { this.running = null })
-    return { state: 'started' }
+    return 'started'
   }
 
   /** Waits for a setup this started, for a spec. */
