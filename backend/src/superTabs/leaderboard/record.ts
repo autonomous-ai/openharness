@@ -4,6 +4,7 @@
  */
 import type { Actor, Assignment, Conversation, SuperTabState, WorkStatus } from '../model.js'
 import { groupProject } from '../projects.js'
+import { WEEK_MS } from './week.js'
 
 export interface Unblock { personId: string; at: number; waitedMs: number }
 /** A group's leaderboard bookkeeping; readers never get it whole (read/views.ts groupView). */
@@ -17,7 +18,6 @@ export interface GroupLedger {
   unblocks?: Unblock[]
 }
 
-export const WEEK_MS = 7 * 86_400_000
 /** The leaderboard reads this week and last; a little more keeps a streak and week boundaries safe. */
 export const LEDGER_WEEKS = 5
 
