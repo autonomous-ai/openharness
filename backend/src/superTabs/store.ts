@@ -272,6 +272,19 @@ export class SuperTabStore {
     return rows.map(r => r.machineId)
   }
 
+  /** This Swarm's contributed machines that are also contributed to a Swarm of another Team: their Harness Team account
+   *  takes no teammate's work here (machines.ts teamWorkRefusal). One indexed read of the machines' parts, one of rows. */
+  async otherOrgMachines(tx: Transaction, state: SuperTabState): Promise<string[]> {
+    const ids = (state.machines ?? []).map(m => m.machineId)
+    if (!state.orgId || !ids.length) return []
+    const elsewhere = await tx.swarmMachine.findMany({ where: { machineId: { in: ids }, deleted: false, contributed: true, tabId: { not: state.id } },
+      select: { tabId: true, machineId: true } })
+    if (!elsewhere.length) return []
+    const rows = await tx.superTab.findMany({ where: { id: { in: [...new Set(elsewhere.map(e => e.tabId))] } }, select: { id: true, orgId: true } })
+    const other = new Set(rows.filter(r => r.orgId && r.orgId !== state.orgId).map(r => r.id))
+    return [...new Set(elsewhere.filter(e => other.has(e.tabId)).map(e => e.machineId))]
+  }
+
   private policyId(user: AuthUser) { return stableId('routing-policy', user.sub, user.autonomousEnv) }
 
   async accountPolicy(user: AuthUser) {
@@ -624,11 +637,12 @@ export class SuperTabStore {
       const visible = visibleState(state, actor, now)
       const mentions = actor.kind === 'person' ? { mentionsWaiting: await mentionsWaiting(tx, tabId, state, actor, now) } : {}
       const teamMachines = visible.machines?.length ? await this.teamMachines(tx, state) : []
+      const otherOrg = visible.machines?.length ? await this.otherOrgMachines(tx, state) : []
       return { lastChangedAt: (await lastChangedAt(tx, [tabId])).get(tabId) ?? 0, state: { ...visible, ...mentions, machines: visible.machines?.map(pool => {
         const stored = state.machines!.find(m => m.machineId === pool.machineId)!
         // Whether it takes teammates' projects now, and if not why (machines.ts teamWorkRefusal): what routing leaves it
         // out for, and what Desktop can show on the machine.
-        const refusal = teamWorkRefusal(stored, now, teamMachines.includes(pool.machineId), teamAccountRequired(state))
+        const refusal = teamWorkRefusal(stored, now, teamMachines.includes(pool.machineId), teamAccountRequired(state), otherOrg.includes(pool.machineId))
         return { ...pool, availableSlots: Math.max(0, pool.maxAgents - machineSlots(state, stored)),
           teamWork: refusal ? { allowed: false as const, ...refusal } : { allowed: true as const } }
       }) } }
@@ -811,6 +825,7 @@ export class SuperTabStore {
       if (command.type === 'route.record') context.recentRoutes = await recentRoutes(tx, tabId, context.now)
       if (TEAM_WORK_COMMANDS.has(command.type)) {
         context.teamMachines = await this.teamMachines(tx, original)
+        context.otherOrgMachines = await this.otherOrgMachines(tx, original)
         if (this.hooks.teamAccountsIdle) context.teamAccountsIdle = true
       }
       if (command.type === 'agent.screen' || command.type === 'agent.input') {

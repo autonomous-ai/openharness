@@ -146,12 +146,13 @@ export class SwarmReads {
     const loaded = await loader(tx, tabId, opts)
     const state = parts.reassemble(loaded)
     const actor = await this.store.actor(tx, user, state, asAgentId)
-    const [teamMachines, counts, newest] = await Promise.all([
+    const [teamMachines, otherOrgMachines, counts, newest] = await Promise.all([
       state.machines?.length ? this.store.teamMachines(tx, state) : [],
+      state.machines?.length ? this.store.otherOrgMachines(tx, state) : [],
       actor.kind === 'person' ? Promise.all([mentionsWaiting(tx, tabId, state, actor, t0), decisionsWaiting(tx, tabId, state, actor)]) : undefined,
       parts.lastChangedAt(tx, [tabId]),
     ])
     return { parts: loaded, actor, lastChangedAt: newest.get(tabId) ?? null,
-      view: readerView(loaded, actor, t0, { teamMachines, ...(counts ? { mentionsWaiting: counts[0], decisionsWaiting: counts[1] } : {}) }) }
+      view: readerView(loaded, actor, t0, { teamMachines, otherOrgMachines, ...(counts ? { mentionsWaiting: counts[0], decisionsWaiting: counts[1] } : {}) }) }
   }
 }

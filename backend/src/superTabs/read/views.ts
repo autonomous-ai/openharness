@@ -28,6 +28,8 @@ export interface ReaderView {
 export interface ReadExtras {
   /** Machines whose account row is a Harness Team account (store read helper). */
   teamMachines: string[]
+  /** Machines also contributed to a Swarm of another Team (store.ts otherOrgMachines). */
+  otherOrgMachines?: string[]
   /** A person's open mentions, counted by the store. */
   mentionsWaiting?: number
   /** A person's open decisions (decisions.ts). */
@@ -89,7 +91,8 @@ export const progressView = (data: NonNullable<SwarmParts['progress'][number]['d
 function derive(state: SuperTabState, visible: SuperTabState, actor: Actor, now: number, extras: ReadExtras): Derived {
   const machine = (pool: ContributedMachine) => {
     const stored = state.machines!.find(m => m.machineId === pool.machineId)!
-    const refusal = teamWorkRefusal(stored, now, extras.teamMachines.includes(pool.machineId), teamAccountRequired(state))
+    const refusal = teamWorkRefusal(stored, now, extras.teamMachines.includes(pool.machineId), teamAccountRequired(state),
+      !!extras.otherOrgMachines?.includes(pool.machineId))
     return [pool.machineId, { availableSlots: Math.max(0, pool.maxAgents - machineSlots(state, stored)),
       teamWork: refusal ? { allowed: false as const, ...refusal } : { allowed: true as const } }] as const
   }

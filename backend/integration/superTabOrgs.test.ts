@@ -103,6 +103,10 @@ describe('the Team check on every Swarm read and command', () => {
     expect((await listed(peer)).map(r => r.id)).not.toContain(tab)
     // The Swarm's own people are untouched.
     expect((await call('GET', `/api/super-tabs/${tab}/parts`, owner)).statusCode).toBe(200)
+    // The sweep finishes the Swarm removal that did not run.
+    expect(await swarmPeople(tab)).toContain(peer.sub)
+    expect(await store.orgs.finishRemovals()).toBe(0)
+    expect(await swarmPeople(tab)).not.toContain(peer.sub)
   })
 
   it('keeps a person of one Team out of another Team\'s Swarm', async () => {
@@ -237,5 +241,24 @@ describe('removing someone from a Team', () => {
     expect((await call('POST', `/api/super-tabs/orgs/${orgId}/invitations`, owner, { email: peer.email, role: 'guest' })).statusCode).toBe(200)
     expect((await call('POST', `/api/super-tabs/orgs/${orgId}/accept`, peer, {})).statusCode).toBe(200)
     expect((await call('POST', `/api/super-tabs/${tab}/join`, peer, { operationId: randomUUID(), token })).statusCode).toBe(200)
+  })
+})
+
+describe('a machine contributed to Swarms of two Teams', () => {
+  /** A contributed machine as the Swarm's parts hold it (only the fields this lookup reads). */
+  const contribute = (tabId: string, machineId: string) => db.swarmMachine.create({ data: { id: `${tabId}:machine:${machineId}`, tabId,
+    key: machineId, version: 1, changedAt: new Date(), ordinal: 0, data: {}, machineId, contributed: true, cleanupOwnerIds: [] } })
+  const lookup = async (tabId: string, machineId: string) => db.$transaction(async tx => {
+    const state = { ...(await store.load(tx, owner, tabId)).state }
+    return store.otherOrgMachines(tx, { ...state, machines: [{ machineId } as never] })
+  })
+
+  it('is named for this Swarm only when the other Swarm is in another Team', async () => {
+    const orgId = await team('Machines')
+    const here = await create(owner, 'Here', orgId), sameTeam = await create(owner, 'Same Team', orgId), elsewhere = await create(other, 'Other Team')
+    await contribute(sameTeam, 'shared-mac')
+    expect(await lookup(here, 'shared-mac')).toEqual([])
+    await contribute(elsewhere, 'shared-mac')
+    expect(await lookup(here, 'shared-mac')).toEqual(['shared-mac'])
   })
 })

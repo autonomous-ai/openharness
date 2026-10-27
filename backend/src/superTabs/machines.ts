@@ -1,5 +1,6 @@
 import { z } from 'zod'
 import { activeWork, fail, person, type Actor, type Agent, type AgentStart, type AgentStartRequest, type SuperTabState } from './model.js'
+import { ORG_LABEL } from './orgs.js'
 import { agentProjectId, groupProject, ledProject, projectsOf, type SwarmProject } from './projects.js'
 import { conversation } from './model.js'
 
@@ -139,9 +140,10 @@ export function observedPrivacy(previous: StoredPrivacy | undefined, reported: M
 }
 
 export type TeamWorkCode = 'MACHINE_OFFLINE' | 'TEAM_ACCOUNT_REQUIRED' | 'PRIVACY_UNCHECKED' | 'PRIVACY_CHECK_FAILED' | 'PRIVACY_CHECK_STALE'
+  | 'MACHINE_IN_OTHER_TEAM'
 export interface TeamWorkRefusal { code: TeamWorkCode; reason: string }
 /** Refusals that hold until a person acts on the machine; a stale check or an offline machine may pass again by itself. */
-export const LASTING_TEAM_REFUSALS: readonly string[] = ['TEAM_ACCOUNT_REQUIRED', 'PRIVACY_UNCHECKED', 'PRIVACY_CHECK_FAILED']
+export const LASTING_TEAM_REFUSALS: readonly string[] = ['TEAM_ACCOUNT_REQUIRED', 'PRIVACY_UNCHECKED', 'PRIVACY_CHECK_FAILED', 'MACHINE_IN_OTHER_TEAM']
 
 /** What each item of the privacy check (cli/src/team/privacy.ts) could reach when it failed. */
 const PRIVACY_ITEMS: Record<string, string> = {
@@ -172,9 +174,12 @@ export function teamAccountRequired(state?: Pick<SuperTabState, 'ownerId' | 'peo
 /** Why this contributed machine may not run a teammate's project now, or null when it may. `teamRow`: its account row
  *  says it is signed in as a team account (`Machine.sessionKind`), read by the store. `required`: whether the Swarm it is
  *  in needs a team account on every machine ([teamAccountRequired] of that Swarm). */
-export function teamWorkRefusal(pool: ContributedMachine, now: number, teamRow = false, required = teamAccountRequired()): TeamWorkRefusal | null {
+/** `otherOrg`: the machine is contributed to a Swarm of another Team too (store.ts otherOrgMachines). Its Team account
+ *  runs every teammate's work as one macOS user, so it serves one Team's teammates at a time (swarm-teams design). */
+export function teamWorkRefusal(pool: ContributedMachine, now: number, teamRow = false, required = teamAccountRequired(), otherOrg = false): TeamWorkRefusal | null {
   const reading = pool.observation, name = pool.name
   if (!teamRow && reading?.sessionKind !== 'team' && !required) return null
+  if (otherOrg) return { code: 'MACHINE_IN_OTHER_TEAM', reason: `The Harness Team account on ${name} also serves another ${ORG_LABEL}'s Swarms, ${ONLY_OWN} here.` }
   if (!reading || now - reading.receivedAt > MACHINE_FRESH_MS) {
     // A Mac's team account goes by its Mac's name ("One machine"), and the Mac itself may well be online.
     return { code: 'MACHINE_OFFLINE', reason: pool.hostMachineId
@@ -204,7 +209,7 @@ export function teamWorkRefusal(pool: ContributedMachine, now: number, teamRow =
  * row is signed in as a team account, read by the store.
  */
 export function teamWorkCheck(state: SuperTabState, machineId: string, contributorId: string, project: SwarmProject, now: number,
-  teamMachines: readonly string[] = []): TeamWorkRefusal | null {
+  teamMachines: readonly string[] = [], otherOrgMachines: readonly string[] = []): TeamWorkRefusal | null {
   if (project.ownerId === contributorId) return null
   const pool = state.machines?.find(m => m.machineId === machineId)
   if (!pool) {
@@ -212,7 +217,7 @@ export function teamWorkCheck(state: SuperTabState, machineId: string, contribut
     if (!teamAccountRequired(state)) return null
     return { code: 'TEAM_ACCOUNT_REQUIRED', reason: `This machine is not a Team machine of this Swarm, ${ONLY_OWN}.` }
   }
-  return teamWorkRefusal(pool, now, teamMachines.includes(machineId), teamAccountRequired(state))
+  return teamWorkRefusal(pool, now, teamMachines.includes(machineId), teamAccountRequired(state), otherOrgMachines.includes(machineId))
 }
 
 // ── One machine: a Mac and its Harness Team account ─────────────────────────────────────────────────────────────────
@@ -418,7 +423,8 @@ export function localModelAllowed(state: SuperTabState, request: AgentStartReque
 
 /** `teamMachines`: the tab's machines whose account row is signed in as a team account, read by the store. A start is
  *  admitted again when its host launches it, so a Team machine whose check failed or went stale since never launches it. */
-export function admitMachineStart(state: SuperTabState, request: AgentStartRequest, now: number, start?: AgentStart, teamMachines: readonly string[] = []) {
+export function admitMachineStart(state: SuperTabState, request: AgentStartRequest, now: number, start?: AgentStart, teamMachines: readonly string[] = [],
+  otherOrgMachines: readonly string[] = []) {
   const pool = machineContribution(state, request.machineId)
   if (!pool) return null
   if (pool.removal) fail('MACHINE_REMOVED', 'This machine is being removed from the Swarm.')
@@ -427,7 +433,7 @@ export function admitMachineStart(state: SuperTabState, request: AgentStartReque
   const project = groupProject(state, conversation(state, request.conversationId))
   if (!pool.scope && project.id !== 'lead') fail('PROJECT_CONTRIBUTION', 'Ask its owner to add this machine to the swarm again to support other projects.')
   // Before the request's own fields: a machine that takes none of this project's work says so first.
-  requireTeamWork(state, pool.machineId, pool.contributorId, project, now, teamMachines)
+  requireTeamWork(state, pool.machineId, pool.contributorId, project, now, teamMachines, otherOrgMachines)
   const cwd = projectFolder(pool, project)
   // Every refused field is named, with what the machine does accept. Values the caller sent are not echoed: an account
   // setting can be a path or a name of the caller's own.

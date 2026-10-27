@@ -18,6 +18,7 @@ import { ensureProductUsageExpiry } from './lib/productUsage.js'
 import { ensureTerminalExpiry } from './superTabs/terminal.js'
 import { ensureMentionExpiry } from './superTabs/mentions.js'
 import { ensurePartExpiry, startSwarmSweeps } from './superTabs/sweeps.js'
+import { SuperTabStore } from './superTabs/store.js'
 import { machineBillingWorkerService } from './services/MachineBillingWorkerService.js'
 import { productUsagePeopleRollupService } from './services/ProductUsagePeopleRollupService.js'
 import { logger } from './utils/logger.js'
@@ -63,7 +64,8 @@ async function start(): Promise<void> {
 
   machineBillingWorkerService.start()
   productUsagePeopleRollupService.start()
-  stopSweeps = startSwarmSweeps(prisma)
+  const swarms = new SuperTabStore(prisma)
+  stopSweeps = startSwarmSweeps(prisma, undefined, () => swarms.orgs.finishRemovals())
   // PM2 wait_ready gates the singleton worker's "online" state on schema/catalog/backfill startup.
   // Plain node/tsx runs do not provide process.send and simply continue.
   process.send?.('ready')
