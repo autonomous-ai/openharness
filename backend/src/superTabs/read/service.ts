@@ -5,7 +5,7 @@
 import type { Prisma, PrismaClient } from '@prisma/client'
 import type { AuthUser } from '../../lib/ssoAuth.js'
 import { isTeamSession, TEAM_SESSION_LIMITED, TEAM_SESSION_MESSAGE } from '../../lib/teamSession.js'
-import { author, fail, isLeads, type Actor, type AgentStart } from '../model.js'
+import { author, fail, isLeads, visibleState, type Actor, type AgentStart } from '../model.js'
 import { mentionsWaiting } from '../mentions.js'
 import { transaction, type SuperTabStore } from '../store.js'
 import { migrateSwarm } from '../migration/migrate.js'
@@ -104,7 +104,7 @@ export class SwarmReads {
       readProject(state, actor, projectId)
       const dormant = await recentDormantGroups(tx, tabId, projectId, now - LEDGER_WEEKS * WEEK_MS)
       const groups = [...state.conversations.filter(g => !g.dormant), ...dormant].filter(g => !isLeads(g) && canReadGroup(state, actor, g))
-      return leaderboard({ state, groups, projectId, week: start, now })
+      return leaderboard({ state, groups, machines: visibleState(state, actor, now).machines ?? [], projectId, week: start, now })
     })
   }
 

@@ -3,6 +3,7 @@
  * Lent, their points, a shipping streak, the team goal, and who agents wait on now. Pure: the read decides who may see it and
  * hands in only the groups that reader may read. Private conversations are left out here too.
  */
+import type { ContributedMachine } from '../machines.js'
 import { isLeads, type Conversation, type SuperTabState } from '../model.js'
 import { canReadProject, projectOf } from '../projects.js'
 import { waitedOn } from './record.js'
@@ -21,13 +22,15 @@ export interface LeaderboardInput {
   state: SuperTabState
   /** Every group of the Swarm the reader may read, dormant ones of the last weeks included. */
   groups: Conversation[]
+  /** The contributed machines the reader may see (model.ts visibleState): Lent sums no other. */
+  machines: ContributedMachine[]
   projectId: string
   /** The Monday 00:00 UTC the week starts (week.ts). */
   week: number
   now: number
 }
 
-export function leaderboard({ state, groups, projectId, week, now }: LeaderboardInput): Leaderboard {
+export function leaderboard({ state, groups, machines: visibleMachines, projectId, week, now }: LeaderboardInput): Leaderboard {
   const project = projectOf(state, projectId)
   const shared = groups.filter(g => !isLeads(g) && !g.audience && (g.projectId ?? 'lead') === projectId && g.id !== project.leadConversationId)
   const requests = shared.filter(g => !g.reviewOf)
@@ -37,7 +40,7 @@ export function leaderboard({ state, groups, projectId, week, now }: Leaderboard
   const score = (personId: string, start: number) => {
     const shippedHere = landed.filter(g => g.requesterId === personId && inWeek(g.ledger!.shippedAt!, start))
     const answers = shared.flatMap(g => g.ledger?.unblocks ?? []).filter(u => u.personId === personId && inWeek(u.at, start))
-    const machines = (state.machines ?? []).filter(m => m.contributorId === personId)
+    const machines = visibleMachines.filter(m => m.contributorId === personId)
       .map(m => m.lent?.find(l => l.week === start)?.agentMs ?? 0).filter(ms => ms > 0)
     const freedMs = sum(answers.map(u => u.waitedMs)), lentMs = sum(machines)
     const points = shippedHere.length * SHIPPED_POINTS + answers.length * UNBLOCK_POINTS

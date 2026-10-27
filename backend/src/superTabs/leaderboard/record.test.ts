@@ -174,6 +174,14 @@ describe('who unblocks waiting work', () => {
     expect(f.group(id).ledger?.unblocks).toBeUndefined()
   })
 
+  it('earns nothing for a post after the waiting task was cancelled', () => {
+    const f = fixture(), id = f.create(), { worker, assignmentId } = f.assign(id)
+    f.status(id, assignmentId, worker, 'needs_human', 'Flag?')
+    f.run({ type: 'work.cancel', conversationId: id, assignmentId, reason: 'Not needed' })
+    f.say(id, owner)
+    expect(f.group(id).ledger?.unblocks).toBeUndefined()
+  })
+
   it('does not credit an agent that posts while work waits', () => {
     const f = fixture(), id = f.create(), { worker, assignmentId } = f.assign(id)
     f.status(id, assignmentId, worker, 'needs_human', 'Flag?')

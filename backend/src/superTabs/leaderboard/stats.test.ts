@@ -34,8 +34,8 @@ function machine(contributorId: string, lent: Array<[week: number, agentMs: numb
   return { machineId, name: machineId, contributorId, membershipGeneration: 'g', generation: 'g1', cwd: '/repo', scope: 'swarm', engines: ['claude'],
     maxAgents: 2, paused: false, lent: lent.map(([week, agentMs]) => ({ week, agentMs })) }
 }
-const board = (state: SuperTabState, groups: Conversation[], week = WEEK, now = NOW) =>
-  leaderboard({ state, groups, projectId: 'lead', week, now })
+const board = (state: SuperTabState, groups: Conversation[], week = WEEK, now = NOW, machines = state.machines ?? []) =>
+  leaderboard({ state, groups, machines, projectId: 'lead', week, now })
 const person = (view: ReturnType<typeof board>, id: string) => view.people.find(p => p.personId === id)!
 
 describe('Shipped: requests a person asked for, done with a linked PR, 3 points each', () => {
@@ -86,6 +86,12 @@ describe('Lent: agent-hours run on a person\'s machines, 1 point per 10', () => 
     const view = board(state, [])
     expect(person(view, 'scholes')).toMatchObject({ points: 2, lent: { machines: 2, agentMs: 21 * HOUR } })
     expect(person(view, 'ken')).toMatchObject({ points: 0, lent: { machines: 0, agentMs: 0 } })
+  })
+
+  it('sums only the machines the reader may see', () => {
+    const state = swarm()
+    state.machines = [machine('scholes', [[WEEK, 14 * HOUR]]), machine('scholes', [[WEEK, 30 * HOUR]], 'project-mac')]
+    expect(person(board(state, [], WEEK, NOW, [state.machines[0]!]), 'scholes').lent).toEqual({ machines: 1, agentMs: 14 * HOUR })
   })
 })
 
