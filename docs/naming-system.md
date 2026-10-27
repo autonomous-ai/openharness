@@ -98,16 +98,19 @@ no CLI keeps its maker's name (Fo).
 A pane is a view, so closing a pane or tab closes views. **Stop Harness** ends the
 running harness. Adding harnesses to a tab groups them without a separate team
 setup. A **Swarm** occupies one tab in that same tab bar. A person can belong to several Swarms.
-Its sidebar reads like a chat app's. It starts with **Direct messages**: the person's
-**Chat with PM** for each project, listed by the product manager's name and avatar, with the
-project's name in grey when the Swarm has several and a count of new messages. Hovering says
-**Chat with PM**, and ⇧⌘K opens the current project's. **New project** and **Your devices**
-follow. Projects and Machines have section headings with disclosure after the label and an add
-action at the right. Project rows read as channels: **#** at the left, then their name, status
-and a right-hand disclosure. Project names open their product manager chats; disclosure reveals
-workgroups, shown by their number in grey with no **#** and then their title
-(`12  Offline editing`), aligned with the project name. An expanded project without workgroups
-says **No workgroups yet**.
+Its sidebar reads like a chat app's. It starts with **New project**, **Manage models**,
+**Your devices** and **Notifications**, then three sections in this order: **Projects**,
+**Direct messages** and **Machines**. Projects and Machines have section headings with disclosure
+after the label and an add action at the right. Project rows read as channels, from A to Z:
+**#** at the left, then their name, status and a right-hand disclosure. The Product Managers'
+conversation is one of them, **# product-managers**, with no workgroups. Project names open their
+product manager chats; disclosure reveals workgroups, shown by their number in grey with no **#**
+and then their title (`12  Offline editing`), aligned with the project name. An expanded project
+without workgroups says **No workgroups yet**. An open channel's heading reads as its row
+(`# openharness`). **Direct messages** holds the person's **Chat with PM** for each project,
+listed by the product manager's name and avatar, with the project's name in grey brackets when
+the Swarm has several (`Finn (web-2)`) and a count of new messages. Hovering says
+**Chat with PM**, and ⇧⌘K opens the current project's.
 **Your devices** opens the Devices dashboard and its existing agent conversation inside the
 current Swarm, preserving project drafts and the selected workgroup. Ordinary tabs retain
 their standalone Devices workspace. The navigation, conversation and people panes have

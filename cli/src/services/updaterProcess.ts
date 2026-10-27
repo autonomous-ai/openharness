@@ -20,7 +20,9 @@
  * if that build then fails to stage, the host is taken back out and nothing is told (lib/windows/ptyUpdate.ts
  * `takeBackPty`).
  */
+import { userInfo } from 'node:os'
 import { env } from '../config/env.js'
+import { readTeamConfig } from '../team/config.js'
 import { SERVICE_EXIT_RESTART, type StagedUpdate, type UpdaterMessage } from '../harnessd/protocol.js'
 import { describeSpawnLockOwner, withSpawnLock } from '../lib/daemonSpawnLock.js'
 import { DOWNLOAD_LIMITS, downloadVerified, isLocalDevBuild, retireCliVersions, startSelfUpdater } from '../lib/selfUpdate.js'
@@ -54,6 +56,8 @@ export interface UpdaterServiceDeps {
   /** Windows: the protocol of the installed host, which a CLI build must not need more than (lib/selfUpdate.ts
    *  `installedPtyProtocol`). Left out elsewhere. */
   installedPtyProtocol?: () => number | null
+  /** Whether this daemon is a Mac's Harness Team account (team/config.ts names its user); real by default. */
+  inTeamAccount?: () => boolean
 }
 
 /** [cliDir]: the CLI folder the retirement looks at, this user's own unless a test names one of its own. */
@@ -116,6 +120,8 @@ export function runUpdaterService(_options?: unknown, deps: UpdaterServiceDeps =
   let ptyTaken: StagedHost | null = null
   const cli = deps.startCli({
     currentVersion: VERSION,
+    // The Harness Team account takes releases even over the local build setup may have copied into it (selfUpdate.ts).
+    ...((deps.inTeamAccount ?? inTeamAccount)() ? { followReleases: true } : {}),
     url: env.ADAPTER_UPDATE_URL,
     key: env.ADAPTER_UPDATE_KEY,
     dir: env.ADAPTER_CLI_DIR,
@@ -203,4 +209,10 @@ function startPty(
     onStaged: (ptyVersion) => handOver({ ptyVersion }),
     deps: { prepare: (entry, runtimeDir, verified) => preparePtyPayload(entry, runtimeDir, { download: (ref) => downloadVerified(ref, limits) }, verified) },
   })
+}
+
+/** This process runs as the Harness Team account its Mac's root-owned config names. An account whose name cannot be read
+ *  is not it. */
+export function inTeamAccount(config = readTeamConfig, user = () => userInfo().username): boolean {
+  try { return config()?.user === user() } catch { return false }
 }

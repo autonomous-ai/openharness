@@ -77,6 +77,7 @@ import '../state/harness_launch_integration.dart';
 import '../super_tabs/launch.dart';
 import '../super_tabs/pm_chat.dart' show countText;
 import '../super_tabs/pm_chat_shortcut.dart';
+import '../super_tabs/team_account_setup.dart';
 import '../super_tabs/workspace.dart';
 import '../super_tabs/actions.dart';
 import 'swarm_menu_bus.dart';
@@ -294,6 +295,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
   bool _deviceRevealInFlight = false;
   StreamSubscription<void>? _modelsRequests;
   StreamSubscription<String>? _superTabClosures;
+  StreamSubscription<String>? _teamSetupAsks;
   // The one Swarm notice: whether it exists (queued or shown), whether it
   // is on screen, and the closed tab its Reopen restores.
   int _superTabNoticeSerial = 0;
@@ -837,6 +839,10 @@ class _SwarmScreenState extends State<SwarmScreen> {
       }
     });
     _superTabClosures = app.superTabClosures.listen(_offerSuperTabReopen);
+    // The Harness Team account, explained before macOS asks for the password (super_tabs/team_account_setup.dart).
+    _teamSetupAsks = app.teamSetupAsks.listen((_) {
+      if (mounted) unawaited(showTeamAccountSetup(context, app, asked: true));
+    });
     if (!kUnderTest) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!mounted) return;
@@ -991,6 +997,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
     app.modelManager.setPanelVisible(false);
     _modelsRequests?.cancel();
     _superTabClosures?.cancel();
+    _teamSetupAsks?.cancel();
     _keymap.removeListener(_keymapChanged);
     _defaultKeymap.dispose();
     grid.AppTheme.palette.removeListener(_paletteChanged);
@@ -6801,8 +6808,11 @@ class _SwarmScreenState extends State<SwarmScreen> {
       return;
     }
     if (choice.destination.isModel) return;
-    if (_search!.setupLayout &&
-        (choice.destination.isMachine || choice.destination.isAccountDevice)) {
+    // A machine, a device or Add machine is chosen to use its preview's actions: the click lands on
+    // the row it clicked, and the keys go to those actions. Focusing the actions alone left the
+    // row selected before it in charge, so clicking Add machine after a machine did nothing
+    // (2026-10-15). A phone shows the same row's page (swarmSearchRowSelectsOnly).
+    if (swarmSearchRowSelectsOnly(_search!, choice.destination)) {
       final index = _search!.rows.indexWhere(
         (row) => row.id == choice.destination.id,
       );
@@ -6831,21 +6841,6 @@ class _SwarmScreenState extends State<SwarmScreen> {
       return;
     }
     if (choice.destination.isCreate) {
-      if (_search!.isMachineMode) {
-        // A click lands on the row it clicked, as a machine row's does: focusing the actions alone
-        // left the machine selected before it in charge, so clicking Add machine after a machine
-        // did nothing (2026-10-15).
-        final index = _search!.rows.indexWhere(
-          (row) => row.id == choice.destination.id,
-        );
-        if (index >= 0) _search!.move(index - _search!.cursor);
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          if (mounted && _search?.selected?.id == choice.destination.id) {
-            _previewControls.invoke('picker.focus_actions');
-          }
-        });
-        return;
-      }
       if (_search!.isModelMode) {
         _previewControls.invoke('picker.resource_add_api');
         return;

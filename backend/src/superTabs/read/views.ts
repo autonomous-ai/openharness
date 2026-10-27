@@ -4,7 +4,7 @@
  * in `derived`, so a part never changes without a new version (Lead's ruling).
  */
 import { isLeads, visibleState, type Actor, type Agent, type Conversation, type SuperTabState } from '../model.js'
-import { machineSlots, teamWorkRefusal, type ContributedMachine } from '../machines.js'
+import { machineSlots, teamAccountRequired, teamWorkRefusal, type ContributedMachine } from '../machines.js'
 import * as store from '../parts/index.js'
 import type { Part, SwarmParts } from '../parts/index.js'
 import { canReadGroup } from '../projects.js'
@@ -89,7 +89,7 @@ export const progressView = (data: NonNullable<SwarmParts['progress'][number]['d
 function derive(state: SuperTabState, visible: SuperTabState, actor: Actor, now: number, extras: ReadExtras): Derived {
   const machine = (pool: ContributedMachine) => {
     const stored = state.machines!.find(m => m.machineId === pool.machineId)!
-    const refusal = teamWorkRefusal(stored, now, extras.teamMachines.includes(pool.machineId))
+    const refusal = teamWorkRefusal(stored, now, extras.teamMachines.includes(pool.machineId), teamAccountRequired(state))
     return [pool.machineId, { availableSlots: Math.max(0, pool.maxAgents - machineSlots(state, stored)),
       teamWork: refusal ? { allowed: false as const, ...refusal } : { allowed: true as const } }] as const
   }

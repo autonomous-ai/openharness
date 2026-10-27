@@ -114,6 +114,30 @@ describe('the Harness Team account, set up on its own', () => {
     expect(shared.deps.setup).toHaveBeenCalledTimes(1)
   })
 
+  it('says it is wanted without asking macOS, so Desktop can explain it first; "Not now" is remembered', async () => {
+    const f = fake()
+    expect(await f.auto.offer('startup', async () => true, true)).toEqual({ state: 'wanted' })
+    expect(await f.auto.offer('startup', async () => false, true)).toEqual({ state: 'not-shared' })
+    expect(f.deps.setup).not.toHaveBeenCalled()
+    f.auto.decline()
+    expect(f.decision()).toEqual({ state: 'declined', at: 1_000_000 })
+    expect(await f.auto.offer('join', undefined, true)).toEqual({ state: 'declined' })
+    const there = fake({ accountExists: vi.fn(async () => true) })
+    expect(await there.auto.offer('manual', undefined, true)).toEqual({ state: 'exists' })
+  })
+
+  it('runs when the person asks, past a cancel or a failure remembered from before, and alone in a Swarm', async () => {
+    const f = fake()
+    f.setDecision({ state: 'declined', at: 1 })
+    expect(await f.auto.offer('manual', undefined, true)).toEqual({ state: 'wanted' })
+    expect(await f.auto.offer('manual')).toEqual({ state: 'started' })
+    await f.auto.settled()
+    f.setDecision({ state: 'failed', at: 1_000_000 })
+    expect(await f.auto.offer('manual')).toEqual({ state: 'started' })
+    await f.auto.settled()
+    expect(f.deps.setup).toHaveBeenCalledTimes(2)
+  })
+
   it('keeps its memory in the daemon\'s own folder, private, and reads nothing it did not write', () => {
     const dir = mkdtempSync(join(tmpdir(), 'team-setup-'))
     cleanup.push(dir)

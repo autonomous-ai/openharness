@@ -56,6 +56,17 @@ describe('the team account\'s engines', () => {
     expect(ready).toContain('(checked 1000s ago)')
     expect(ready).not.toContain('To sign')
     expect(engineLines(undefined, ago)).toEqual(['  engines     ? not reported yet: the team daemon reports them once it runs'])
+    // Not signed in, but its owner's relay is there: nothing to sign in.
+    const relayed = engineLines(engines({ claude: { installed: true, signedIn: false, relayed: true }, codex: { installed: true, signedIn: null, relayed: true } }), ago).join('\n')
+    expect(relayed).toContain('Claude Code ✓ installed · ✓ uses your subscription')
+    expect(relayed).not.toContain('To sign')
+  })
+
+  it('says an engine it has not signed in uses the owner\'s subscription when the owner\'s relay is there', async () => {
+    const result = await checkTeamEngines({ home: '/h', executable: () => true, now: () => 1, relayed: () => true,
+      account: async (engine) => ({ signedIn: engine === 'codex', lastUsedAt: null }) })
+    expect(result.claude).toEqual({ installed: true, signedIn: false, relayed: true })
+    expect(result.codex).toEqual({ installed: true, signedIn: true })
   })
 })
 

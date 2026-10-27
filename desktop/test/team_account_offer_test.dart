@@ -1,7 +1,9 @@
 import 'dart:async';
 
+import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/state/app_state.dart';
+import 'package:harness/super_tabs/team_account_setup.dart';
 
 import 'support/rename_connection.dart';
 import 'swarm_state_test.dart' show createApp;
@@ -9,7 +11,7 @@ import 'swarm_state_test.dart' show createApp;
 /// Records what this Mac's daemon is asked; no socket is opened.
 class _Daemon extends RenameConnection {
   final asked = <Map<String, dynamic>>[];
-  Map<String, dynamic> answer = {'ok': true, 'state': 'started'};
+  Map<String, dynamic> answer = {'ok': true, 'state': 'wanted'};
   /// Answers in turn before [answer]; a Completer's future is awaited.
   final queued = <Object>[];
 
@@ -19,7 +21,8 @@ class _Daemon extends RenameConnection {
     Map<String, dynamic> payload = const {},
     Duration timeout = const Duration(seconds: 20),
   }) {
-    if (type == 'super_tabs' && payload['action'] == 'teamSetup') {
+    if (type == 'super_tabs' &&
+        '${payload['action']}'.startsWith('teamSetup')) {
       asked.add(Map.of(payload));
       if (queued.isNotEmpty) {
         final next = queued.removeAt(0);
@@ -41,6 +44,8 @@ Future<void> until(bool Function() ok) async {
     await Future<void>.delayed(const Duration(milliseconds: 1));
   }
 }
+
+const startCheck = {'action': 'teamSetupCheck', 'reason': 'startup'};
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
@@ -65,17 +70,39 @@ void main() {
   });
   tearDown(() => app.dispose());
 
-  test(
-    'asks this Mac\'s own daemon, with the moment the person is here',
-    () async {
-      await app.offerTeamAccount('join');
-      await app.offerTeamAccount('contribute');
-      expect(daemon.asked, [
-        {'action': 'teamSetup', 'reason': 'join'},
-        {'action': 'teamSetup', 'reason': 'contribute'},
-      ]);
-    },
-  );
+  test('asks this Mac\'s own daemon whether it is wanted, and explains it only then', () async {
+    final explained = <String>[];
+    final listening = app.teamSetupAsks.listen(explained.add);
+    await app.offerTeamAccount('join');
+    daemon.answer = {'ok': true, 'state': 'declined'};
+    await app.offerTeamAccount('contribute');
+    await pumpEventQueue();
+    expect(daemon.asked, [
+      {'action': 'teamSetupCheck', 'reason': 'join'},
+      {'action': 'teamSetupCheck', 'reason': 'contribute'},
+    ]);
+    expect(explained, ['join']);
+    await listening.cancel();
+  });
+
+  test('sets it up when the person asks, and remembers "Not now"', () async {
+    daemon.answer = {'ok': true, 'state': 'started'};
+    expect(await app.setUpTeamAccount(), 'started');
+    await app.declineTeamAccount();
+    expect(daemon.asked, [
+      {'action': 'teamSetup', 'reason': 'manual'},
+      {'action': 'teamSetupDecline'},
+    ]);
+    expect(app.canSetUpTeamAccount, isTrue);
+    app.macOSForTest = false;
+    expect(app.canSetUpTeamAccount, isFalse);
+    expect(await app.setUpTeamAccount(), 'unsupported');
+  });
+
+  test('a daemon too old to set it up from here says so', () async {
+    daemon.answer = {'error': 'INVALID_REQUEST'};
+    expect(await app.setUpTeamAccount(), 'update');
+  });
 
   test(
     'asks nothing off a Mac, or when the only machine here is another one',
@@ -95,10 +122,18 @@ void main() {
     expect(daemon.asked, hasLength(1));
   });
 
+  test('checks once for each process of this Mac\'s daemon, as it connects', () async {
+    app.onMachineConnectedForTest('m');
+    app.onMachineConnectedForTest('m');
+    await until(() => daemon.asked.isNotEmpty);
+    await pumpEventQueue();
+    expect(daemon.asked, [startCheck]);
+  });
+
   // Macs already in a Swarm met no join or contribute moment, and the one ask
   // a launch went to whichever daemon answered first: one still starting, or
   // the version from before an update, so nobody saw the prompt (2026-10-27).
-  test('asks again when this Mac\'s daemon has restarted, which decides', () async {
+  test('checks again when this Mac\'s daemon has restarted, which decides', () async {
     app.onMachineConnectedForTest('m');
     await until(() => daemon.asked.length == 1);
     await pumpEventQueue();
@@ -106,10 +141,30 @@ void main() {
     running = 'pid-2';
     app.onMachineConnectedForTest('m');
     await until(() => daemon.asked.length == 2);
-    expect(daemon.asked, everyElement({'action': 'teamSetup', 'reason': 'startup'}));
+    expect(daemon.asked, everyElement(startCheck));
   });
 
-  test('asks one at a time', () async {
+  // A start check runs for each daemon process, so a restart while the
+  // explanation is still open must not show it a second time.
+  test('explains at start once a launch, though a restarted daemon still wants it', () async {
+    final explained = <String>[];
+    final listening = app.teamSetupAsks.listen(explained.add);
+    app.onMachineConnectedForTest('m');
+    await until(() => daemon.asked.length == 1);
+    await pumpEventQueue();
+    running = 'pid-2';
+    app.onMachineConnectedForTest('m');
+    await until(() => daemon.asked.length == 2);
+    await pumpEventQueue();
+    expect(explained, ['startup']);
+    // The person asking, by joining, is always explained.
+    await app.offerTeamAccount('join');
+    await pumpEventQueue();
+    expect(explained, ['startup', 'join']);
+    await listening.cancel();
+  });
+
+  test('checks one at a time', () async {
     final pending = Completer<Map<String, dynamic>>();
     daemon.queued.add(pending);
     app.onMachineConnectedForTest('m');
@@ -167,7 +222,7 @@ void main() {
     await until(() => daemon.asked.length == 6);
   });
 
-  test('asks again, a few times, a daemon that could not answer yet', () async {
+  test('checks again, a few times, a daemon that could not answer yet', () async {
     daemon.queued.addAll([
       {'error': 'SERVICE_UNAVAILABLE'},
       {'error': 'SERVICE_UNAVAILABLE'},
@@ -192,5 +247,57 @@ void main() {
     pending.complete({'error': 'ACCOUNT_CHANGED'});
     await Future<void>.delayed(const Duration(milliseconds: 30));
     expect(own.asked, hasLength(1));
+  });
+
+  Future<void> open(WidgetTester tester, {bool asked = false}) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Builder(
+          builder: (context) => TextButton(
+            onPressed: () => showTeamAccountSetup(context, app, asked: asked),
+            child: const Text('open'),
+          ),
+        ),
+      ),
+    );
+    await tester.tap(find.text('open'));
+    await tester.pumpAndSettle();
+  }
+
+  testWidgets(
+    'explains the account and the "osascript" prompt before macOS asks',
+    (tester) async {
+      daemon.answer = {'ok': true, 'state': 'started'};
+      await open(tester);
+      expect(find.textContaining('separate macOS account'), findsOneWidget);
+      expect(find.textContaining('titled “osascript”'), findsOneWidget);
+      expect(daemon.asked, isEmpty);
+      await tester.tap(find.byKey(const Key('team-account-setup-continue')));
+      await tester.pumpAndSettle();
+      expect(daemon.asked, [
+        {'action': 'teamSetup', 'reason': 'manual'},
+      ]);
+      expect(
+        find.byKey(const Key('team-account-setup-outcome')),
+        findsOneWidget,
+      );
+      await tester.tap(find.byKey(const Key('team-account-setup-done')));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('team-account-setup')), findsNothing);
+    },
+  );
+
+  testWidgets('"Not now" on an offer is remembered; Cancel on Set up is not', (
+    tester,
+  ) async {
+    await open(tester, asked: true);
+    await tester.tap(find.text('Not now'));
+    await tester.pumpAndSettle();
+    await open(tester);
+    await tester.tap(find.text('Cancel'));
+    await tester.pumpAndSettle();
+    expect(daemon.asked, [
+      {'action': 'teamSetupDecline'},
+    ]);
   });
 }

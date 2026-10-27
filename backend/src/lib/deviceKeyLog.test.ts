@@ -18,8 +18,9 @@ const m = vi.hoisted(() => ({
 vi.mock('./prisma.js', () => ({
   prisma: {
     deviceKeyLogEntry: {
-      findMany: vi.fn(async ({ where }: { where: { userId: string; seq?: { gt: number } } }) =>
-        m.rows.filter(r => r.userId === where.userId && r.seq > (where.seq?.gt ?? 0)).sort((a, b) => a.seq - b.seq)),
+      findMany: vi.fn(async ({ where }: { where: { userId: string; seq?: { gt: number; lte?: number } } }) =>
+        m.rows.filter(r => r.userId === where.userId && r.seq > (where.seq?.gt ?? 0) && r.seq <= (where.seq?.lte ?? Infinity))
+          .sort((a, b) => a.seq - b.seq)),
       findFirst: vi.fn(async ({ where }: { where: { userId: string } }) =>
         m.rows.filter(r => r.userId === where.userId).sort((a, b) => b.seq - a.seq)[0] ?? null),
       create: vi.fn(async ({ data }: { data: Row }) => {
@@ -313,6 +314,22 @@ describe('appendDeviceKey', () => {
     expect(page.head.seq).toBe(2)
     expect(page.entries).toHaveLength(1)
     expect((await readDeviceKeyLog('nobody', 0)).head.seq).toBe(0)
+  })
+
+  it('never answers a head past the entries it carries, when an append lands between its reads', async () => {
+    await appendDeviceKey(USER, await addEntry(box1, 'machine', MID1, 'box1'), { kind: 'machine', machineId: MID1 })
+    const late = await addEntry(phone, 'viewer', '', 'phone')
+    const row = { userId: USER, seq: 2, hash: applyDevLogEntries(await state(), [late]).state.head.hash, entry: JSON.stringify(late), sessionId: null }
+    // Whichever of the two reads comes first, the append lands right after it.
+    let landed = false
+    const land = () => { if (!landed) { landed = true; m.rows.push(row) } }
+    const findMany = vi.mocked(prisma.deviceKeyLogEntry.findMany), findFirst = vi.mocked(prisma.deviceKeyLogEntry.findFirst)
+    const many = findMany.getMockImplementation()!, first = findFirst.getMockImplementation()!
+    findMany.mockImplementationOnce((args) => { const out = many(args); land(); return out })
+    findFirst.mockImplementationOnce((args) => { const out = first(args); land(); return out })
+    const page = await readDeviceKeyLog(USER, 0)
+    expect(landed).toBe(true)
+    expect(page.entries).toHaveLength(page.head.seq)
   })
 })
 

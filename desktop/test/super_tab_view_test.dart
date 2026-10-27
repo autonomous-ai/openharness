@@ -335,7 +335,8 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
-    expect(find.text('Pilot'), findsNWidgets(2));
+    expect(find.text('Pilot'), findsOneWidget);
+    expect(find.text('# Pilot'), findsOneWidget);
     expect(find.text('CHATS'), findsNothing);
     expect(find.byKey(const ValueKey('super-group-lead')), findsOneWidget);
     expect(find.byKey(const ValueKey('super-group-offline')), findsNothing);
