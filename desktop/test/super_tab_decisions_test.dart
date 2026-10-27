@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 import 'dart:ui' as ui;
 
@@ -5,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
+import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/decisions.dart';
 import 'package:harness/super_tabs/model.dart';
 import 'package:harness/super_tabs/view.dart';
@@ -53,7 +55,10 @@ ConversationServer swarm() {
   return server;
 }
 
-Future<void> showView(WidgetTester tester, ConversationServer server) async {
+Future<SuperTabController> showView(
+  WidgetTester tester,
+  ConversationServer server,
+) async {
   await tester.binding.setSurfaceSize(const Size(1200, 900));
   addTearDown(() => tester.binding.setSurfaceSize(null));
   final c = server.controller(account: 'peer');
@@ -78,6 +83,7 @@ Future<void> showView(WidgetTester tester, ConversationServer server) async {
   // The project's rows, Chat with PM among them, show once it is expanded.
   if (!c.expandedProjects.contains('lead')) c.toggleProject('lead');
   await tester.pumpAndSettle();
+  return c;
 }
 
 Finder notificationsEntry() =>
@@ -146,7 +152,10 @@ void main() {
     );
 
     test('reads again when the waiting count moves', () async {
-      final server = swarm()..ask(['Ship how?']);
+      // A backend from before the digest: the count alone tells.
+      final server = swarm()
+        ..decisionsDigestMissing = true
+        ..ask(['Ship how?']);
       final controller = server.controller(account: 'peer');
       addTearDown(controller.dispose);
       final decisions = SuperTabDecisions.of(controller);
@@ -159,6 +168,49 @@ void main() {
 
       expect(decisions.open.map((d) => d.question), ['Name it?', 'Ship how?']);
     });
+
+    test('reads again when one is answered elsewhere and another asked, though the count stays', () async {
+      final server = swarm()..ask(['Ship how?']);
+      final controller = server.controller(account: 'peer');
+      addTearDown(controller.dispose);
+      final decisions = SuperTabDecisions.of(controller);
+      await controller.refresh();
+      await pumpEventQueue();
+      expect(decisions.open.single.question, 'Ship how?');
+
+      server
+        ..answerDecision('decision-1', 0)
+        ..ask(['Name it?']);
+      await controller.refresh();
+      await pumpEventQueue();
+
+      expect(controller.snapshot!.decisionsWaiting, 1);
+      expect(decisions.open.single.question, 'Name it?');
+      expect(decisions.answered.single.question, 'Ship how?');
+    });
+
+    test(
+      'a read that failed is tried again on the next Swarm change',
+      () async {
+        final server = swarm()
+          ..failDecisions = true
+          ..ask(['Ship how?']);
+        final controller = server.controller(account: 'peer');
+        addTearDown(controller.dispose);
+        final decisions = SuperTabDecisions.of(controller);
+        await controller.refresh();
+        await pumpEventQueue();
+        expect(decisions.error, isNotNull);
+
+        server.failDecisions = false;
+        (server.state['conversations'] as List).first['title'] = 'Lead room';
+        await controller.refresh();
+        await pumpEventQueue();
+
+        expect(decisions.error, isNull);
+        expect(decisions.open.single.question, 'Ship how?');
+      },
+    );
   });
 
   group('the Decisions list', () {
@@ -194,6 +246,41 @@ void main() {
           find.text('Wren asked 1 question · web-project · Lead'),
           findsOneWidget,
         );
+      },
+    );
+
+    testWidgets(
+      'drops the decisions of a conversation the reader leaves at once, though another keeps the count',
+      (tester) async {
+        final server = swarm()..ask(['Ship how?'], conversationId: 'pm-chat');
+        final c = await showView(tester, server);
+        await tester.tap(notificationsEntry());
+        await tester.pumpAndSettle();
+        expect(find.text('Ship how?'), findsOneWidget);
+
+        // The reader leaves the private chat and the Lead asks elsewhere:
+        // still one waiting. The new list is slow to come.
+        final pmChat = (server.state['conversations'] as List)
+            .cast<Map<String, dynamic>>()
+            .firstWhere((g) => g['id'] == 'pm-chat');
+        pmChat['audience'] = {'people': <Object>[]};
+        server
+          ..hideDecision('decision-1')
+          ..ask(['Name it?']);
+        server.parts.epoch++;
+        final slow = server.holdDecisions = Completer<void>();
+        await c.refresh();
+        await tester.pump();
+
+        expect(c.snapshot!.decisionsWaiting, 1);
+        expect(find.text('Ship how?'), findsNothing);
+        expect(find.text('Behind a flag · Recommended'), findsNothing);
+
+        server.holdDecisions = null;
+        slow.complete();
+        await tester.pumpAndSettle();
+        expect(find.text('Name it?'), findsOneWidget);
+        expect(find.text('Ship how?'), findsNothing);
       },
     );
 

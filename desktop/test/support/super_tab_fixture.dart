@@ -70,6 +70,7 @@ class SwarmPartsBackend {
           'starts',
           'mentionsWaiting',
           'decisionsWaiting',
+          'decisionsDigest',
           'otherProjectsWork',
           'githubApp',
         }.contains(entry.key))
@@ -141,6 +142,8 @@ class SwarmPartsBackend {
       'mentionsWaiting': state['mentionsWaiting'],
     if (state['decisionsWaiting'] != null)
       'decisionsWaiting': state['decisionsWaiting'],
+    if (state['decisionsDigest'] != null)
+      'decisionsDigest': state['decisionsDigest'],
     if (state['otherProjectsWork'] != null)
       'otherProjectsWork': state['otherProjectsWork'],
   };
@@ -395,6 +398,12 @@ class ConversationServer {
   final decisions = <Map<String, dynamic>>[];
   // How many times a decisions list was read (open and answered each count).
   int decisionReads = 0;
+  // While set, every read of a decisions list waits for it.
+  Completer<void>? holdDecisions;
+  // Every read of a decisions list fails, as offline.
+  bool failDecisions = false;
+  // A backend from before the decisions digest: it sends the count alone.
+  bool decisionsDigestMissing = false;
   // How many times the mentions list was read.
   int mentionReads = 0;
   // A backend from before tags: it has no list route.
@@ -533,11 +542,10 @@ class ConversationServer {
         messages.last['replyTo'] = command['replyTo'];
         output['messageId'] = 'message-$revision';
       } else if (command['type'] == 'decision.answer') {
-        decisions.firstWhere((d) => d['id'] == command['decisionId'])
-          ..['choice'] = command['choice']
-          ..['answeredAt'] = '2026-10-27T06:00:00Z';
-        state['decisionsWaiting'] = (state['decisionsWaiting'] as int) - 1;
-        revision++;
+        answerDecision(
+          command['decisionId'] as String,
+          command['choice'] as int,
+        );
       } else if (command['type'] == 'mention.done') {
         mentions.firstWhere((m) => m['id'] == command['mentionId'])
           ..['resolvedAt'] = '2026-10-24T06:00:00Z'
@@ -691,6 +699,8 @@ class ConversationServer {
     }
     if (uri.pathSegments.last == 'decisions') {
       decisionReads++;
+      if (holdDecisions case final hold?) await hold.future;
+      if (failDecisions) throw StateError('Offline');
       final open = uri.queryParameters['state'] == 'open';
       return jsonDecode(
         jsonEncode({
@@ -842,7 +852,39 @@ class ConversationServer {
     }
     state['decisionsWaiting'] =
         ((state['decisionsWaiting'] as int?) ?? 0) + questions.length;
+    _digestDecisions();
     revision++;
+  }
+
+  /// The reader answers one, here or on another device.
+  void answerDecision(String id, int choice) {
+    decisions.firstWhere((d) => d['id'] == id)
+      ..['choice'] = choice
+      ..['answeredAt'] = '2026-10-27T06:00:00Z';
+    state['decisionsWaiting'] = (state['decisionsWaiting'] as int) - 1;
+    _digestDecisions();
+    revision++;
+  }
+
+  /// The reader can no longer read the conversation of decision [id]: the
+  /// backend leaves it out of its lists and its count.
+  void hideDecision(String id) {
+    final hidden = decisions.firstWhere((d) => d['id'] == id);
+    decisions.remove(hidden);
+    if (hidden['answeredAt'] == null) {
+      state['decisionsWaiting'] = (state['decisionsWaiting'] as int) - 1;
+    }
+    _digestDecisions();
+    revision++;
+  }
+
+  /// Which decisions are open, as the backend digests them.
+  void _digestDecisions() {
+    if (decisionsDigestMissing) return;
+    state['decisionsDigest'] = [
+      for (final d in decisions)
+        if (d['answeredAt'] == null) d['id'],
+    ].join(',');
   }
 
   /// Who asks, for the reads a [controller] makes: a private conversation is
