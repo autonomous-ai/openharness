@@ -439,6 +439,81 @@ class ConversationServer {
     )['lastMessageSequence'] = revision;
   }
 
+  // Avatar pictures uploaded, as the backend's avatar route keeps them.
+  final avatarUploads = <Uint8List>[];
+
+  /// What the backend's avatar route does with a picture.
+  Future<Map<String, dynamic>> uploadAvatar({
+    required String tabId,
+    required Uint8List png,
+  }) async {
+    avatarUploads.add(png);
+    final id = 'avatar-${avatarUploads.length}';
+    return {
+      'avatar': {'id': id, 'url': 'https://cdn.harness.autonomous.ai/$id'},
+    };
+  }
+
+  /// A person's own status or avatar, or an agent's avatar, as the backend
+  /// stores it (profile.ts).
+  void _profile(Map command, String reader) {
+    Map<String, dynamic> avatar(Map choice) => choice['kind'] == 'upload'
+        ? {
+            'kind': 'upload',
+            'url': 'https://cdn.harness.autonomous.ai/${choice['id']}',
+          }
+        : Map<String, dynamic>.from(choice);
+    final (key, id) = command['type'] == 'agent.avatar'
+        ? ('agents', command['agentId'])
+        : ('people', reader);
+    state[key] = <dynamic>[
+      for (final row in state[key] as List)
+        if ((row as Map)['id'] != id)
+          row
+        else
+          <String, dynamic>{
+            ...row,
+            if (command['type'] == 'member.status')
+              'status': command['status']
+            else
+              'avatar': command['avatar'] == null
+                  ? null
+                  : avatar(command['avatar'] as Map),
+          },
+    ];
+    revision++;
+  }
+
+  /// A reaction as the backend keeps it (reactions.ts): one per reactor and
+  /// emoji, and the group bumped only on a change.
+  bool _react(Map command, String reader) {
+    final message = messages.firstWhere((m) => m['id'] == command['messageId']);
+    final counts = [
+      for (final row in message['reactions'] as List? ?? const [])
+        Map<String, dynamic>.from(row as Map),
+    ];
+    final row = counts.where((r) => r['emoji'] == command['emoji']).firstOrNull;
+    final by = [...(row?['by'] as List? ?? const [])];
+    final mine = by.any((who) => (who as Map)['id'] == reader);
+    if (mine == command['on']) return false;
+    if (command['on'] == true) {
+      by.add({'kind': 'person', 'id': reader});
+    } else {
+      by.removeWhere((who) => (who as Map)['id'] == reader);
+    }
+    counts.removeWhere((r) => r['emoji'] == command['emoji']);
+    if (by.isNotEmpty) {
+      counts.add({'emoji': command['emoji'], 'count': by.length, 'by': by});
+    }
+    message['reactions'] = counts;
+    final group = (state['conversations'] as List)
+        .cast<Map<String, dynamic>>()
+        .firstWhere((g) => g['id'] == command['conversationId']);
+    group['reactionSeq'] = ((group['reactionSeq'] as int?) ?? 0) + 1;
+    revision++;
+    return true;
+  }
+
   /// What the backend does with a file sent to its upload route.
   Future<Map<String, dynamic>> upload({
     required String tabId,
@@ -521,6 +596,12 @@ class ConversationServer {
         );
         messages.last['replyTo'] = command['replyTo'];
         output['messageId'] = 'message-$revision';
+      } else if (command['type'] == 'member.status' ||
+          command['type'] == 'member.avatar' ||
+          command['type'] == 'agent.avatar') {
+        _profile(command, reader ?? 'owner');
+      } else if (command['type'] == 'message.react') {
+        output['changed'] = _react(command, reader ?? 'owner');
       } else if (command['type'] == 'mention.done') {
         mentions.firstWhere((m) => m['id'] == command['mentionId'])
           ..['resolvedAt'] = '2026-10-24T06:00:00Z'
@@ -789,6 +870,7 @@ class ConversationServer {
     String account = 'owner',
     SuperTabUpload? upload,
   }) => SuperTabController(
+    avatarUpload: uploadAvatar,
     tabId: 'tab',
     accountId: account,
     request: (method, path, {body}) => runZoned(

@@ -9,7 +9,10 @@ void main() {
       'id': 'p1',
       'email': 'dee@example.com',
       'role': 'owner',
-      'avatar': {'kind': 'upload', 'url': 'https://cdn.example.test/a.png'},
+      'avatar': {
+        'kind': 'upload',
+        'url': 'https://cdn.harness.autonomous.ai/a.png',
+      },
       'status': {
         'text': 'Out until 2pm',
         'emoji': '🌴',
@@ -19,7 +22,7 @@ void main() {
     expect(person.avatar, isA<SuperTabUploadedAvatar>());
     expect(
       (person.avatar! as SuperTabUploadedAvatar).url,
-      Uri.parse('https://cdn.example.test/a.png'),
+      Uri.parse('https://cdn.harness.autonomous.ai/a.png'),
     );
     expect(person.status!.label, '🌴 Out until 2pm');
     expect(person.statusAt(now)?.text, 'Out until 2pm');
@@ -47,8 +50,8 @@ void main() {
         isNull,
       );
       expect(
-        read({'kind': 'upload', 'url': 'http://127.0.0.1:9000/a.png'}),
-        isA<SuperTabUploadedAvatar>(),
+        read({'kind': 'upload', 'url': 'https://elsewhere.example/a.png'}),
+        isNull,
       );
       expect(read('fox'), isNull);
     },

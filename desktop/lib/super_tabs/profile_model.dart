@@ -3,6 +3,8 @@
 /// them; a value this build does not know reads as absent.
 library;
 
+import 'attachment_upload.dart' show attachmentLink;
+
 /// What a member or agent shows instead of the default.
 sealed class SuperTabAvatarPicture {
   const SuperTabAvatarPicture();
@@ -18,19 +20,17 @@ sealed class SuperTabAvatarPicture {
   };
 }
 
-/// A picture someone uploaded. The backend only ever hands out its own
-/// bucket's https links; a local stack serves them from loopback.
+/// A picture someone uploaded: only ever a link on the attachments host, as
+/// a chat file's is ([attachmentLink]).
 class SuperTabUploadedAvatar extends SuperTabAvatarPicture {
   const SuperTabUploadedAvatar._(this.url);
   final Uri url;
 
-  static SuperTabUploadedAvatar? of(String value) {
-    final url = Uri.tryParse(value);
-    if (url == null || url.host.isEmpty) return null;
-    final loopback = const {'127.0.0.1', 'localhost', '::1'}.contains(url.host);
-    final served = url.scheme == 'https' || (url.scheme == 'http' && loopback);
-    return served ? SuperTabUploadedAvatar._(url) : null;
-  }
+  static SuperTabUploadedAvatar? of(String value) =>
+      switch (attachmentLink(value)) {
+        final url? => SuperTabUploadedAvatar._(url),
+        null => null,
+      };
 }
 
 class SuperTabPresetAvatar extends SuperTabAvatarPicture {

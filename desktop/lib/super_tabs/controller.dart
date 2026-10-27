@@ -8,6 +8,7 @@ import 'package:flutter/foundation.dart';
 import '../logging/app_log.dart';
 import '../state/harness_attachments.dart';
 import 'attachment_upload.dart';
+import 'avatar_upload.dart';
 import 'identity.dart';
 import 'model.dart';
 import 'parts.dart';
@@ -48,6 +49,7 @@ class SuperTabController extends ChangeNotifier {
     required this.request,
     required this.save,
     this.upload = refuseUpload,
+    this.avatarUpload = refuseAvatarUpload,
     this.uploadTimeout = const Duration(minutes: 2),
     Map<String, dynamic> initial = const {},
     this.pollInterval = const Duration(seconds: 3),
@@ -119,6 +121,9 @@ class SuperTabController extends ChangeNotifier {
 
   /// Sends one file to the backend.
   final SuperTabUpload upload;
+
+  /// Sends an avatar picture (profile_actions.dart).
+  final SuperTabAvatarUpload avatarUpload;
 
   /// How long an upload may go without a byte moving before the send gives up.
   final Duration uploadTimeout;

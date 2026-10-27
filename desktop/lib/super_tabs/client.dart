@@ -5,6 +5,7 @@ import 'package:clock/clock.dart';
 
 import '../core/local_key_value_store.dart';
 import 'attachment_upload.dart';
+import 'avatar_upload.dart';
 import 'controller.dart';
 import 'model.dart';
 import 'notifications.dart';
@@ -32,6 +33,7 @@ class SuperTabClient {
     this.onMention,
     this.onTagCounts,
     this.upload = refuseUpload,
+    this.avatarUpload = refuseAvatarUpload,
     this.discoveryInterval = const Duration(seconds: 15),
   });
   final SuperTabTransport transport;
@@ -64,6 +66,7 @@ class SuperTabClient {
   bool _paused(String id) =>
       _reading.pausesAway && (_loaded[id]?.away ?? false);
   final SuperTabUpload upload;
+  final SuperTabAvatarUpload avatarUpload;
   final Duration discoveryInterval;
 
   /// How every Swarm tab here keeps itself current. Desktop's unless the host
@@ -421,6 +424,7 @@ class SuperTabClient {
       },
       save: (state) => storage.write(key, jsonEncode(state)),
       upload: upload,
+      avatarUpload: avatarUpload,
       reading: _reading,
     )..away = _isAway(id);
     var seenChange = (lastChangedAt: -1, mentionsWaiting: -1);

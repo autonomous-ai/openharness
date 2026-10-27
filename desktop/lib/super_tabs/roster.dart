@@ -18,6 +18,7 @@ import 'agent_details.dart';
 import 'controller.dart';
 import 'dialog_scope.dart';
 import 'identity.dart';
+import 'profile_sheet.dart';
 import 'model.dart';
 import 'section_heading.dart';
 
@@ -449,26 +450,29 @@ class _SuperTabRosterState extends State<SuperTabRoster> {
               style: DesktopChrome.control(),
             ),
           ),
-          onTap: () => showAppDialog<void>(
-            context: context,
-            builder: (context) => AlertDialog(
-              title: Text(superTabPersonName(person.email)),
-              content: Text('${person.email}\n${person.role}'),
-              actions: [
-                TextButton(
-                  onPressed: () {
-                    Navigator.pop(context);
-                    widget.onInvite();
-                  },
-                  child: const Text('Manage people'),
+          // One's own row is where one's avatar and status are changed.
+          onTap: () => person.id == c.accountId && c.canWrite
+              ? showSuperTabProfile(context, c)
+              : showAppDialog<void>(
+                  context: context,
+                  builder: (context) => AlertDialog(
+                    title: Text(superTabPersonName(person.email)),
+                    content: Text('${person.email}\n${person.role}'),
+                    actions: [
+                      TextButton(
+                        onPressed: () {
+                          Navigator.pop(context);
+                          widget.onInvite();
+                        },
+                        child: const Text('Manage people'),
+                      ),
+                      TextButton(
+                        onPressed: () => Navigator.pop(context),
+                        child: const Text('Close'),
+                      ),
+                    ],
+                  ),
                 ),
-                TextButton(
-                  onPressed: () => Navigator.pop(context),
-                  child: const Text('Close'),
-                ),
-              ],
-            ),
-          ),
         ),
       if (people.length > _peopleShown)
         ListTile(

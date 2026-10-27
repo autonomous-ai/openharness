@@ -90,7 +90,7 @@ void main() {
           personWith(
             avatar: {
               'kind': 'upload',
-              'url': 'https://cdn.example.test/me.png',
+              'url': 'https://cdn.harness.autonomous.ai/me.png',
             },
           ),
         ),
@@ -99,7 +99,7 @@ void main() {
     final image = tester.widget<Image>(find.byType(Image));
     expect(
       (image.image as NetworkImage).url,
-      'https://cdn.example.test/me.png',
+      'https://cdn.harness.autonomous.ai/me.png',
     );
   });
 
