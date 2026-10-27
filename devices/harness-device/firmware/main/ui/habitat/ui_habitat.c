@@ -232,6 +232,7 @@ static EXT_RAM_BSS_ATTR struct {
     uint32_t voice_started;
     bool voice_open, voice_start_pending, voice_waiting, voice_carry;
     bool voice_review, voice_review_preview, voice_draft_append, voice_search;
+    bool voice_conversation;   // this recording is for the Swarm conversation in `conv`, posted as the person
     uint32_t voice_draft_revision;
     int draft_drag;
     uint32_t voice_generation, voice_question_revision;
@@ -574,6 +575,7 @@ static void voice_close(void)
     s.voice_open = s.voice_start_pending = s.voice_waiting = false;
     s.voice_carry = false;
     s.voice_review = s.voice_review_preview = false;
+    s.voice_conversation = false;
     s.voice_generation++; // invalidate a start still queued behind another cable action
 }
 static int workspace_index(const char *id)
@@ -599,6 +601,9 @@ static EXT_RAM_BSS_ATTR struct {
     // Super Tab waits from this machine's harnesses, shown only through the Lead whose `local` names the harness.
     struct { char agent[ID_MAX], request[80], swarm[HT_SUPERTAB_NAME], text[240]; bool stuck, shown; } waits[SWARM_WAITS];
 } sw;
+// The Swarm conversation the desktop has in front, as the daemon's `voice.target` names it: where voice from the face goes,
+// posted as the person, instead of the agent on the face. `name` is the recipient line (CABLE_NAME_MAX, 40 with its NUL).
+static EXT_RAM_BSS_ATTR struct { bool valid, can_post; char tab[ID_MAX], id[ID_MAX], name[40]; } conv;
 static bool swarm_mode(void)
 {
     return sw.tab[0] != 0;
@@ -2196,7 +2201,7 @@ static void render_voice(ht_scene_t *f)
         .clock_ms = (s.quiet || display_is_asleep()) ? 0 : (ms() | 1),   // the listening scene's step (Focus)
         .mood = !s.voice_start_pending && !s.voice_waiting && audio_client_recording() ? HT_CHARACTER_LISTENING : HT_CHARACTER_WORKING,
         .pose = character.motion.reaction.pose, .ink = FG, .foreground = FG, .dim = DIM, .primary_title = true,
-        .detail = s.voice_search ? "Say a phrase from the output" : s.voice_return == DRAFT ? draft_detail :
+        .detail = s.voice_search ? "Say a phrase from the output" : s.voice_conversation ? "Swarm chat" : s.voice_return == DRAFT ? draft_detail :
             question_view(s.voice_return) ? "Your answer" :
             s.voice_carry ? carry.excerpt : selection.active ? selection.excerpt : NULL,
         .carrying = s.voice_carry, .voice = true};
@@ -2899,7 +2904,14 @@ static void dispatch(action_t a)
         if (s.connected && !visit.pending) {
             // Main-surface voice always has an explicit recipient. Home orchestration is deferred.
             if (s.view == HOME || s.view == AGENT) {
-                if (!a.id[0] || s.loading) break;
+                // The desktop has a Swarm conversation in front: plain dictation is for it, never the agent on the face. A goal
+                // is a command for an agent and stays with it. Only a daemon that posts in conversations is told one.
+                if (a.value == 0 && !a.text[0] && conv.valid && cable_client_supports(CABLE_FEATURE_CONVERSATION)) {
+                    if (!conv.can_post) {
+                        COPY(s.title, "Swarm chat"); COPY(s.message, "You can't post in this chat."); view(MESSAGE); break;
+                    }
+                    a.value = 8; a.id[0] = 0; COPY(a.text, conv.id);
+                } else if (!a.id[0] || s.loading) break;
             }
             if (a.value==4) {
                 s.voice_question_revision=s.q.revision; s.voice_question_index=s.q.index;
@@ -2911,6 +2923,7 @@ static void dispatch(action_t a)
             s.voice_open = s.voice_start_pending = true;
             s.voice_carry = a.value == 3;
             s.voice_search = a.value == 7;
+            s.voice_conversation = a.value == 8;
             s.voice_review = a.value == 5 || a.value == 6;
             s.voice_draft_append = a.value == 6;
             s.voice_draft_revision = (uint32_t)a.dy;
@@ -2924,8 +2937,9 @@ static void dispatch(action_t a)
                 !strcmp(form.page.title, "New Harness") ? form.page.label : form.page.title);
             else if (a.value == 7) COPY(s.voice_target, "Find in output");
             else if (a.value == 5 || a.value == 6) COPY(s.voice_target, draft.page.name);
+            else if (a.value == 8) COPY(s.voice_target, conv.name);
             else COPY(s.voice_target, lead ? lead->project : target >= 0 ? s.agents[target].name : "harness");
-            COPY(s.voice_engine, lead ? lead->engine : target >= 0 && a.value != 2 && a.value != 5 && a.value != 6 && a.value != 7 ?
+            COPY(s.voice_engine, lead ? lead->engine : target >= 0 && a.value != 2 && a.value != 5 && a.value != 6 && a.value != 7 && a.value != 8 ?
                 s.agents[target].engine : "");
             s.voice_started = ms();
             view(VOICE);
@@ -2934,7 +2948,11 @@ static void dispatch(action_t a)
         break;
     case A_VOICE_STOP:
         if (s.voice_open && !s.voice_start_pending && !s.voice_waiting && audio_client_recording()) {
-            if (a.value == 1 && cable_client_supports(CABLE_FEATURE_DRAFT) && !s.voice_search && (s.voice_return == HOME || s.voice_return == AGENT || s.voice_return == SELECTION)) {
+            // Words for a Swarm conversation are always reviewed: everyone in the Swarm reads them, so the person sees the
+            // words and the conversation, and Send or Discard, before anything is posted.
+            if (s.voice_conversation && cable_client_supports(CABLE_FEATURE_DRAFT)) {
+                s.voice_review = true; audio_client_request_review();
+            } else if (a.value == 1 && cable_client_supports(CABLE_FEATURE_DRAFT) && !s.voice_search && (s.voice_return == HOME || s.voice_return == AGENT || s.voice_return == SELECTION)) {
                 s.voice_review = true; audio_client_request_review();
             }
             audio_client_stop();
@@ -3191,7 +3209,8 @@ static void worker(void *unused)
             display_lock();
             if (s.connected && s.voice_open && s.voice_start_pending &&
                 a.revision == s.voice_generation) {
-                if (a.value == 7) audio_client_start_search(a.id, a.text, (unsigned)a.dy);
+                if (a.value == 8) audio_client_start_conversation(a.text);
+                else if (a.value == 7) audio_client_start_search(a.id, a.text, (unsigned)a.dy);
                 else if (a.value == 5 || a.value == 6) audio_client_start_draft(a.text, (unsigned)a.dy, a.value == 6);
                 else if (a.value == 4) audio_client_start_question(a.id,a.text,(unsigned)a.dy);
                 else if (a.value == 2) audio_client_start_form(a.text, (unsigned)a.dy);
@@ -5625,6 +5644,17 @@ void ui_voice_routed(bool auto_sent, bool need_new, const char *route, const cha
     display_unlock();
     if (!auto_sent && route && *route && id && *id)
         cable_client_voice_confirm(route, id);
+}
+void ui_voice_target(bool valid, const char *tab, const char *id, const char *name, bool can_post)
+{
+    display_lock();
+    // An id the daemon could not have sent (empty, or longer than an id holds) is no target: the face's agent keeps the words.
+    conv.valid = valid && id && id[0] && strlen(id) < sizeof conv.id && tab && strlen(tab) < sizeof conv.tab;
+    conv.can_post = conv.valid && can_post;
+    COPY(conv.tab, conv.valid ? tab : "");
+    COPY(conv.id, conv.valid ? id : "");
+    COPY(conv.name, conv.valid && name && name[0] ? name : conv.valid ? "Swarm chat" : "");
+    display_unlock();
 }
 void ui_voice_route_abort(void)
 {

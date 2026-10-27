@@ -81,10 +81,15 @@ static bool ui_question_show(const char *a,const char *n,const char *m,const cha
     (void)a;(void)n;(void)m;(void)r;(void)q;question_calls++;return beep_next;
 }
 static void ui_question_close(const char *a,const char *r) { (void)a;(void)r;qclose_calls++; }
+static unsigned target_calls; static bool got_valid, got_post; static char got_id[ID_MAX], got_name[64];
+static void ui_voice_target(bool valid,const char *tab,const char *id,const char *name,bool can_post) {
+    target_calls++;got_valid=valid;got_post=can_post;snprintf(got_tab,sizeof got_tab,"%s",tab?tab:"");
+    snprintf(got_id,sizeof got_id,"%s",id?id:"");snprintf(got_name,sizeof got_name,"%s",name?name:"");
+}
 '''
 for name in ['str_of', 'msg', 'msg_check', 'msg_string', 'msg_number', 'msg_array', 'send_hello', 'id_fits',
              'handle_supertabs', 'handle_supertab', 'handle_supertab_recap', 'handle_supertab_focus',
-             'handle_question', 'handle_question_close', 'cable_client_supertab_send']:
+             'handle_question', 'handle_question_close', 'cable_client_supertab_send', 'handle_voice_target']:
     code += function(name)
 code += r'''
 static cJSON *parse(const char *json) { cJSON *p=cJSON_Parse(json);assert(p);return p; }
@@ -102,6 +107,20 @@ int main(void) {
     send_hello();
     assert(sends==1 && !strcmp(field(wire[0],"swarmCard"),"v1") && !strcmp(field(wire[0],"superTab"),"wait-v1"));
     assert(!strcmp(field(wire[0],"product"),"harness"));
+    // And that it shows where its voice goes, so the daemon says which Swarm conversation the desktop has in front.
+    assert(!strcmp(field(wire[0],"voiceTarget"),"conversation-v1"));
+
+    // voice.target: a conversation, whole; anything else clears it, so the words go to the face's agent as before.
+    feed(handle_voice_target,"{\"target\":{\"kind\":\"conversation\",\"tabId\":\"st1\",\"id\":\"c1\",\"name\":\"Chat with PM\",\"canPost\":true}}");
+    assert(target_calls==1 && got_valid && got_post && !strcmp(got_tab,"st1") && !strcmp(got_id,"c1") && !strcmp(got_name,"Chat with PM"));
+    feed(handle_voice_target,"{\"target\":{\"kind\":\"conversation\",\"tabId\":\"st1\",\"id\":\"c1\",\"name\":\"Watch\",\"canPost\":\"yes\"}}");
+    assert(target_calls==2 && got_valid && !got_post);
+    static const char *cleared[]={"{\"target\":null}","{}","{\"target\":{\"kind\":\"agent\",\"tabId\":\"st1\",\"id\":\"c1\",\"name\":\"x\",\"canPost\":true}}",
+        "{\"target\":{\"kind\":\"conversation\",\"tabId\":\"st1\",\"name\":\"x\",\"canPost\":true}}",
+        "{\"target\":{\"kind\":\"conversation\",\"tabId\":\"st1\",\"id\":7,\"name\":\"x\",\"canPost\":true}}"};
+    for (unsigned i=0;i<sizeof cleared/sizeof cleared[0];i++) {
+        feed(handle_voice_target,cleared[i]);assert(target_calls==3+i && !got_valid && !got_post);
+    }
 
     // supertabs: ids in order, the bad and the repeated skipped, at most 16.
     feed(handle_supertabs,"{\"ids\":[\"s1\",\"\",7,\"s2\",\"s1\",\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"]}");

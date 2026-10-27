@@ -36,6 +36,7 @@ static unsigned form_revision;
 static char question_token[48];
 static unsigned question_index;
 static char draft_id[48];
+static char conversation_id[48];   // the Swarm conversation this recording is for (voice.begin `conversationId`)
 static unsigned draft_revision;
 static bool draft_append;
 static atomic_bool review_requested;
@@ -195,7 +196,7 @@ void audio_client_init(void)
     }
     ESP_LOGI(TAG, "10ms PCM capture; independent sender; %d-byte ring", BUFFER_BYTES);
 }
-static void start_context(const char *id, voice_cmd_t cmd, const char *selected, unsigned revision, const char *form, unsigned form_rev, const char *carried, const char *question, unsigned index, const char *draft, unsigned draft_rev, bool append, const char *search, unsigned search_rev)
+static void start_context(const char *id, voice_cmd_t cmd, const char *selected, unsigned revision, const char *form, unsigned form_rev, const char *carried, const char *question, unsigned index, const char *draft, unsigned draft_rev, bool append, const char *search, unsigned search_rev, const char *conversation)
 {
     if (!capture_task || !sender_task) {
         ESP_LOGE(TAG, "Audio unavailable");
@@ -219,6 +220,7 @@ static void start_context(const char *id, voice_cmd_t cmd, const char *selected,
     snprintf(question_token, sizeof(question_token), "%s", question ? question : "");
     question_index = index;
     snprintf(draft_id, sizeof(draft_id), "%s", draft ? draft : "");
+    snprintf(conversation_id, sizeof conversation_id, "%s", conversation ? conversation : "");
     draft_revision = draft_rev; draft_append = append;
     atomic_store(&review_requested, false);
     command = cmd;
@@ -234,24 +236,24 @@ static void start_context(const char *id, voice_cmd_t cmd, const char *selected,
     portEXIT_CRITICAL(&state_lock);
     xTaskNotifyGive(sender_task);
 }
-void audio_client_start_cable(const char *id, voice_cmd_t cmd) { start_context(id, cmd, NULL, 0, NULL, 0, NULL, NULL, 0, NULL, 0, false, NULL, 0); }
+void audio_client_start_cable(const char *id, voice_cmd_t cmd) { start_context(id, cmd, NULL, 0, NULL, 0, NULL, NULL, 0, NULL, 0, false, NULL, 0, NULL); }
 void audio_client_start_selection(const char *id, const char *selected, unsigned revision)
 {
-    if (id && *id && selected && *selected && revision) start_context(id, VOICE_CMD_NONE, selected, revision, NULL, 0, NULL, NULL, 0, NULL, 0, false, NULL, 0);
+    if (id && *id && selected && *selected && revision) start_context(id, VOICE_CMD_NONE, selected, revision, NULL, 0, NULL, NULL, 0, NULL, 0, false, NULL, 0, NULL);
 }
 void audio_client_start_form(const char *id, unsigned revision)
 {
-    if (id && *id) start_context(NULL, VOICE_CMD_NONE, NULL, 0, id, revision, NULL, NULL, 0, NULL, 0, false, NULL, 0);
+    if (id && *id) start_context(NULL, VOICE_CMD_NONE, NULL, 0, id, revision, NULL, NULL, 0, NULL, 0, false, NULL, 0, NULL);
 }
 void audio_client_start_carry(const char *id, const char *carried)
 {
-    if (id && *id && carried && *carried) start_context(id, VOICE_CMD_NONE, NULL, 0, NULL, 0, carried, NULL, 0, NULL, 0, false, NULL, 0);
+    if (id && *id && carried && *carried) start_context(id, VOICE_CMD_NONE, NULL, 0, NULL, 0, carried, NULL, 0, NULL, 0, false, NULL, 0, NULL);
 }
 void audio_client_request_review(void) { atomic_store(&review_requested,true); }
 bool audio_client_review_requested(void) { return atomic_load(&review_requested); }
 void audio_client_start_draft(const char *id,unsigned revision,bool append)
 {
-    if (id && *id) start_context(NULL,VOICE_CMD_NONE,NULL,0,NULL,0,NULL,NULL,0,id,revision,append,NULL,0);
+    if (id && *id) start_context(NULL,VOICE_CMD_NONE,NULL,0,NULL,0,NULL,NULL,0,id,revision,append,NULL,0, NULL);
 }
 void audio_client_copy_draft(char *out,size_t capacity,unsigned *revision,bool *append)
 {
@@ -264,13 +266,23 @@ void audio_client_copy_draft(char *out,size_t capacity,unsigned *revision,bool *
 void audio_client_start_question(const char *id, const char *token, unsigned index)
 {
     if (id && *id && token && *token && index < 4)
-        start_context(id, VOICE_CMD_NONE, NULL, 0, NULL, 0, NULL, token, index, NULL, 0, false, NULL, 0);
+        start_context(id, VOICE_CMD_NONE, NULL, 0, NULL, 0, NULL, token, index, NULL, 0, false, NULL, 0, NULL);
 }
 void audio_client_copy_question(char *out, size_t capacity, unsigned *index)
 {
     portENTER_CRITICAL(&state_lock);
     if (capacity) snprintf(out, capacity, "%s", question_token);
     if (index) *index = question_index;
+    portEXIT_CRITICAL(&state_lock);
+}
+void audio_client_start_conversation(const char *id)
+{
+    if (id && *id) start_context(NULL, VOICE_CMD_NONE, NULL, 0, NULL, 0, NULL, NULL, 0, NULL, 0, false, NULL, 0, id);
+}
+void audio_client_copy_conversation(char *out, size_t capacity)
+{
+    portENTER_CRITICAL(&state_lock);
+    if (capacity) snprintf(out, capacity, "%s", conversation_id);
     portEXIT_CRITICAL(&state_lock);
 }
 void audio_client_copy_carry(char *out, size_t capacity)
@@ -331,7 +343,7 @@ bool audio_client_upload_matches(const char *id)
 void audio_client_start_search(const char *id, const char *selected, unsigned revision)
 {
     if (id && *id && selected && *selected && revision)
-        start_context(id,VOICE_CMD_NONE,NULL,0,NULL,0,NULL,NULL,0,NULL,0,false,selected,revision);
+        start_context(id,VOICE_CMD_NONE,NULL,0,NULL,0,NULL,NULL,0,NULL,0,false,selected,revision, NULL);
 }
 void audio_client_copy_search(char *out,size_t capacity,unsigned *revision)
 {

@@ -29,6 +29,9 @@ void audio_client_copy_form(char *out, size_t capacity, unsigned *revision);
 void audio_client_start_selection(const char *agent_id, const char *selection_id, unsigned revision);
 void audio_client_start_carry(const char *agent_id, const char *carry_id);
 void audio_client_copy_carry(char *out, size_t capacity);
+// Record for the Swarm conversation the desktop has in front (the daemon's voice.target): no agent, no command.
+void audio_client_start_conversation(const char *conversation_id);
+void audio_client_copy_conversation(char *out, size_t capacity);
 void audio_client_copy_selection(char *out, size_t capacity, unsigned *revision);
 
 void audio_client_stop(void);

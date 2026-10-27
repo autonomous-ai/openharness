@@ -324,6 +324,9 @@ void ui_focus_project(const char *project_id);
 // commander_route_confirm. `need_new` = no agent fit. Runs on the commander-WS task (takes the display lock).
 void ui_voice_routed(bool auto_sent, bool need_new, const char *route_id, const char *agent_id,
                      const char *agent_name, double confidence);
+// The Swarm conversation the desktop has in front (`voice.target`), or none (`valid` false): where voice from the face goes,
+// posted as the person. Runs on the cable task (takes the display lock).
+void ui_voice_target(bool valid, const char *tab, const char *id, const char *name, bool can_post);
 // Backend abandoned an Overview route voice (empty transcript / STT or router error) → drop the loading
 // overlay now instead of waiting out the routing watchdog. No-op unless a route voice is waiting.
 void ui_voice_route_abort(void);

@@ -67,6 +67,8 @@ static void audio_client_copy_selection(char *out,size_t n,unsigned *revision) {
     snprintf(out,n,"selection-1234");*revision=8;
 }
 static bool audio_client_review_requested(void) {return review;}
+static char conversation[48];
+static void audio_client_copy_conversation(char *out,size_t n) {snprintf(out,n,"%s",conversation);}
 '''
 code += defines('ID_MAX', 'CABLE_READ_TOKEN_MAX')
 for name in ['cable_client_supports', 'send_json', 'msg']:
@@ -80,7 +82,7 @@ for name in ['select_machine', 'select_swarm', 'send_turn', 'stop_turn', 'send_f
     code += function('cable_client_' + name)
 code += function('cable_client_request_agents')
 code += r'''
-enum { CASES=26 };
+enum { CASES=27 };
 static void run(unsigned which) {
     static const uint8_t choices[]={1,2,4,8};
     static const char drafts[4][48]={"Keep the quoted \"text\".","", "Line 1\nLine 2", "é ↗"};
@@ -111,6 +113,8 @@ static void run(unsigned which) {
     case 23:cable_client_carry("carry-1234",NULL,NULL,0,0,true);break;
     case 24:cable_client_voice_begin(NULL,NULL,NULL,16000);break;
     case 25:cable_client_notification_read("target-agent","notice-42");break;
+    case 26:snprintf(conversation,sizeof conversation,"conversation-1234");
+        cable_client_voice_begin(NULL,NULL,"en",16000);conversation[0]=0;break;
     default:assert(false);
     }
 }
@@ -130,6 +134,18 @@ int main(void) {
             assert(!sends||(wire_size==expected_size&&!memcmp(wire,expected,wire_size)));
         }
         fail_at=0;
+        if(which==26) {
+            // A conversation's recording names the conversation and nothing that could route it anywhere else.
+            cJSON *begin=cJSON_Parse(expected);assert(begin);
+            const cJSON *id=cJSON_GetObjectItemCaseSensitive(begin,"conversationId");
+            assert(cJSON_IsString(id)&&!strcmp(id->valuestring,"conversation-1234"));
+            static const char *others[]={"agentId","cmd","carryId","formId","formRevision","draftId","draftRevision","draftOp",
+                "questionToken","questionIndex","searchId","searchRevision","selectionId","selectionRevision"};
+            for(unsigned i=0;i<sizeof others/sizeof others[0];i++) assert(!cJSON_HasObjectItem(begin,others[i]));
+            const cJSON *upload=cJSON_GetObjectItemCaseSensitive(begin,"uploadId");
+            assert(cJSON_IsString(upload)&&!strcmp(upload->valuestring,"upload-1234"));
+            cJSON_Delete(begin);
+        }
         if(which==0) {
             cJSON *begin=cJSON_Parse(expected);assert(begin);
             const cJSON *id=cJSON_GetObjectItemCaseSensitive(begin,"agentId");

@@ -321,6 +321,8 @@ static void send_hello(void)
     // a wait back from this dial, which once had to: a wait is never an answer screen here.
     msg_string(&root, "swarmCard", "v1");
     msg_string(&root, "superTab", "wait-v1");
+    // Where its voice goes when the desktop has a Swarm conversation in front (handle_voice_target), so the face can say so.
+    msg_string(&root, "voiceTarget", "conversation-v1");
     // Which of the two dials this is (board.h) — informational, so a log or a bug report can say. A
     // daemon that predates the field ignores it.
     msg_string(&root, "hw", board()->name);
@@ -607,6 +609,19 @@ bool cable_client_voice_begin(const char *agent_id, const char *cmd, const char 
 {
     cJSON *root = msg("voice.begin");
     if (!root) return false;
+    // For the Swarm conversation the desktop has in front: that conversation alone, the one this dial showed. The daemon
+    // refuses a conversation beside any other purpose, so none rides along, whatever another slot still holds.
+    char conversation[48];
+    audio_client_copy_conversation(conversation, sizeof conversation);
+    if (conversation[0]) {
+        msg_string(&root, "conversationId", conversation);
+        msg_string(&root, "lang", lang && lang[0] ? lang : "en");
+        msg_number(&root, "sr", sample_rate);
+        char upload[24];
+        audio_client_copy_upload_id(upload, sizeof upload);
+        msg_string(&root, "uploadId", upload);
+        return send_json(root);
+    }
     // OMITTED, not empty, when there is no agent: absence is what tells the daemon it has to route the
     // transcript itself. An empty string would read as "this agent", and there is no agent called "".
     if (agent_id && agent_id[0]) msg_string(&root, "agentId", agent_id);
@@ -938,6 +953,18 @@ static void handle_supertabs(const cJSON *p)
     ESP_LOGI(TAG, "supertabs: %d", n);
     ui_supertabs_ids((const char (*)[ID_MAX])rows, n);
 }
+// The Swarm conversation the desktop has in front, or null. Read whole or not at all: anything else clears it, and voice
+// from the face goes to its agent as it always has.
+static void handle_voice_target(const cJSON *p)
+{
+    const cJSON *t = cJSON_GetObjectItemCaseSensitive(p, "target");
+    const char *kind = cJSON_IsObject(t) ? str_of(t, "kind") : NULL;
+    const char *tab = kind ? str_of(t, "tabId") : NULL, *id = kind ? str_of(t, "id") : NULL, *name = kind ? str_of(t, "name") : NULL;
+    bool valid = kind && !strcmp(kind, "conversation") && tab && id && name;
+    ui_voice_target(valid, valid ? tab : "", valid ? id : "", valid ? name : "",
+        valid && cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(t, "canPost")));
+}
+
 static void handle_supertab(const cJSON *p)
 {
     static EXT_RAM_BSS_ATTR ht_supertab_t card;   // 3.4 KB: too large for the reader task's stack
@@ -1370,6 +1397,7 @@ static void handle_message(const cJSON *root)
     if (strcmp(t, "swarms") == 0) { handle_swarms(p); return; }
     if (strcmp(t, "supertabs") == 0) { handle_supertabs(p); return; }
     if (strcmp(t, "supertab") == 0) { handle_supertab(p); return; }
+    if (strcmp(t, "voice.target") == 0) { handle_voice_target(p); return; }
     if (strcmp(t, "supertab.recap") == 0) { handle_supertab_recap(p); return; }
     if (strcmp(t, "supertab.focus") == 0) { handle_supertab_focus(p); return; }
 

@@ -56,7 +56,7 @@ code += source[source.index('typedef enum {'):source.index('static EXT_RAM_BSS_A
 code += typedef('cable_swarm_t') + typedef('cable_notif_t')
 code += r'''
 static struct {
-    bool ready, connected, loading, voice_open, voice_start_pending, voice_waiting, voice_carry, voice_review, voice_draft_append, voice_review_preview, voice_search;
+    bool ready, connected, loading, voice_open, voice_start_pending, voice_waiting, voice_carry, voice_review, voice_draft_append, voice_review_preview, voice_search, voice_conversation;
     bool coasting, touch_brake, touch_down, touch_cancelled, quiet, nap, focus_face, straight_title, muted;
     ht_rect_t pressed_rect;
     int brightness;
@@ -222,6 +222,9 @@ code += function('settings_item') + function('settings_count') + function('hit_c
 code += function('find')
 code += 'static void notice_expire(uint32_t now);\n'
 swarm_core = source[source.index('/*\n * THE SWARMS'):source.index('static void tabs_open(void)')]
+# The voice target lives with the Swarm state; this harness drives no voice, so nothing else reads it.
+swarm_core = swarm_core.replace('static EXT_RAM_BSS_ATTR struct { bool valid, can_post;',
+                                'static EXT_RAM_BSS_ATTR __attribute__((unused)) struct { bool valid, can_post;')
 swarm_parts = {
     'swarm_core': swarm_core,
     'render_swarm_face': 'static void render_focus_panes(ht_scene_t *f);\n' + function('render_swarm_face'),

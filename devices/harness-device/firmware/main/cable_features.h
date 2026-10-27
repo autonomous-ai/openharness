@@ -13,6 +13,9 @@ enum {
     // device that does not see it keeps its own settings screens; nothing here is load-bearing for a
     // session, so an older daemon simply never asks.
     CABLE_FEATURE_SETTINGS = 1u << 6,
+    // The daemon posts voice in the Swarm conversation the desktop has open, named in voice.begin. Never named to a daemon
+    // without it: an older one ignores the name and types the words into the focused terminal.
+    CABLE_FEATURE_CONVERSATION = 1u << 7,
 };
 
 // Optional welcome field. Older daemons omit it and retain the core voice,

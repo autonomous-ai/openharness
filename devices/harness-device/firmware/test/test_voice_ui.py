@@ -58,7 +58,7 @@ static void select_companion(void) {}
 static ht_tab_carousel_t tab_carousel;
 #define PANE_PITCH 60
 static struct {
-    bool quick_open, coasting, ready, connected, loading, nap, voice_open, voice_start_pending, voice_waiting, voice_carry, voice_review, voice_review_preview, voice_draft_append, voice_search, touch_down, touch_cancelled;
+    bool quick_open, coasting, ready, connected, loading, nap, voice_open, voice_start_pending, voice_waiting, voice_carry, voice_review, voice_review_preview, voice_draft_append, voice_search, voice_conversation, touch_down, touch_cancelled;
     int pet_pose, view, voice_return, offset, pressed, active, pane_pos;
     uint32_t error_until;
     uint32_t pet_until, nap_until, voice_retry_until, voice_started, voice_wait_until, voice_generation, voice_question_revision, voice_draft_revision;
@@ -90,7 +90,7 @@ void audio_client_stop(void) { stops++; }
 void audio_client_request_review(void) { reviews++; }
 void audio_client_abort(void) { aborts++; abort_requested = true; }
 void audio_client_copy_upload_id(char *dst, size_t cap) { snprintf(dst, cap, "capture-%d", starts); }
-static char started_for[64];
+static char started_for[64], started_conversation[64];
 void audio_client_start_cable(const char *id, int cmd) {
     (void)cmd; snprintf(started_for, sizeof started_for, "%s", id ? id : ""); starts++; audio_active = recording = true; abort_requested = false;
 }
@@ -107,6 +107,9 @@ void audio_client_start_draft(const char *id, unsigned revision, bool append) {
     assert(!strcmp(id,"draft-test") && revision==3); (void)append; audio_client_start_cable(NULL,VOICE_CMD_NONE);
 }
 void cable_client_voice_cancel(const char *id) { assert(id[0]); cancels++; }
+void audio_client_start_conversation(const char *id) {
+    snprintf(started_conversation, sizeof started_conversation, "%s", id); started_for[0] = 0; starts++; audio_active = recording = true; abort_requested = false;
+}
 void audio_client_start_selection(const char *id, const char *selected, unsigned revision) {
     assert(selected && selected[0] && revision); audio_client_start_cable(id, VOICE_CMD_NONE);
 }
@@ -128,7 +131,7 @@ harness += 'static void dispatch(action_t a) { switch (a.kind) { case A_VOICE:\n
 worker = source.split('static void worker(', 1)[1].split('case A_VOICE:\n', 1)[1].split('case A_STOP_YES:', 1)[0]
 harness += 'static void work(action_t a) { switch (a.kind) { case A_VOICE:\n' + worker + '} }\n'
 for name in ['habitat_tick', 'ui_set_connected', 'ui_show_error', 'ui_cable_toast',
-             'ui_voice_error', 'ui_voice_routed', 'ui_voice_route_abort']:
+             'ui_voice_error', 'ui_voice_routed', 'ui_voice_route_abort', 'ui_voice_target']:
     harness += function(name)
 harness += r'''
 static void reset(void) {
@@ -139,6 +142,7 @@ static void reset(void) {
     strcpy(s.agents[0].name, "Agent");
     audio_active = recording = abort_requested = queue_full = false;
     starts = stops = aborts = cancels = confirms = 0;
+    memset(&conv, 0, sizeof conv); started_for[0] = started_conversation[0] = 0;
 }
 static void speak(void) { dispatch((action_t){.kind = A_VOICE, .id = "agent"}); }
 static void done(void) { dispatch((action_t){.kind = A_VOICE_STOP}); }
@@ -170,6 +174,35 @@ int main(void) {
         assert(!strcmp(started_for, "agent") && !strcmp(s.voice_engine, "claude"));
         ht_supertabs_reset(&swarm); memset(&sw, 0, sizeof sw);
     }
+    // The desktop has a Swarm conversation in front: voice from the face records for it, by its name and never the tile's
+    // agent, and always opens the review screen, since the words are posted where everyone in the Swarm reads them.
+    reset(); host_features = 31 | CABLE_FEATURE_CONVERSATION; strcpy(s.agents[0].engine, "claude");
+    ui_voice_target(true, "st1", "c1", "Chat with PM", true);
+    begin();
+    assert(!strcmp(started_conversation, "c1") && !started_for[0]);
+    assert(!strcmp(s.voice_target, "Chat with PM") && !s.voice_engine[0] && s.voice_conversation);
+    done(); assert(reviews == 1 && s.voice_review && s.voice_waiting);
+    finish_audio(); ui_voice_routed(true, false, "", "", "Chat with PM", 1);
+    assert(s.voice_open && s.voice_waiting);   // only the review screen, or a discard, ends it
+    discard(); assert(!s.voice_open && !s.voice_review && !s.voice_conversation);
+    // The target is the daemon's to clear: none in front, and the face's agent has the words again.
+    ui_voice_target(false, "", "", "", false); begin(); assert(!strcmp(started_for, "agent") && !s.voice_conversation);
+    // Read only: nothing records, and the face says why.
+    reset(); host_features = 31 | CABLE_FEATURE_CONVERSATION; ui_voice_target(true, "st1", "c1", "Watch", false);
+    speak(); assert(!s.voice_open && !starts && s.view == MESSAGE && strstr(s.message, "can't post"));
+    // A daemon that does not post in conversations: the words go to the agent on the face, as before.
+    reset(); ui_voice_target(true, "st1", "c1", "Chat with PM", true); begin();
+    assert(!strcmp(started_for, "agent") && !started_conversation[0] && !s.voice_conversation);
+    // A goal is for an agent: it stays with the face's agent, whatever chat is open.
+    reset(); host_features = 31 | CABLE_FEATURE_CONVERSATION; ui_voice_target(true, "st1", "c1", "Chat with PM", true);
+    dispatch((action_t){.kind = A_VOICE, .id = "agent", .value = 1}); work(queued);
+    assert(recording && !strcmp(started_for, "agent") && !started_conversation[0]);
+    // An oversized or empty id is no target at all.
+    reset(); host_features = 31 | CABLE_FEATURE_CONVERSATION;
+    ui_voice_target(true, "st1", "0123456789012345678901234567890123456789012345678", "Long", true); begin();
+    assert(!strcmp(started_for, "agent"));
+    ui_voice_target(true, "st1", "", "Empty", true); begin(); assert(!strcmp(started_for, "agent"));
+
     reset(); host_features=0; begin(); dispatch((action_t){.kind=A_VOICE_STOP,.value=1});
     assert(!reviews && !s.voice_review && s.voice_waiting);
     reset(); begin(); dispatch((action_t){.kind=A_VOICE_STOP,.value=1});

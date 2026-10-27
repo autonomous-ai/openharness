@@ -31,6 +31,9 @@ int main(void)
     check("{\"features\":[\"form\",{}]}", 0);
     check("{\"features\":[\"form\",[\"visit\"]]}", 0);
     check("{\"features\":[\"agents.refresh\"]}", CABLE_FEATURE_AGENTS_REFRESH);
+    // Voice for a Swarm conversation: only a daemon that lists it is told a conversation's id in voice.begin.
+    check("{\"features\":[\"voice.conversation\"]}", CABLE_FEATURE_CONVERSATION);
+    check("{\"features\":[\"voice.draft\",\"voice.conversation\"]}", CABLE_FEATURE_DRAFT | CABLE_FEATURE_CONVERSATION);
     static const char *names[] = {"form", "selection", "visit", "voice.draft", "question.review", "agents.refresh"};
     for (unsigned mask=0; mask<64; mask++) {
         cJSON *root=cJSON_CreateObject(), *array=cJSON_AddArrayToObject(root,"features");
