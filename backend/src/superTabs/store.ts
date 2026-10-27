@@ -32,7 +32,7 @@ import { endedHolds, HOLDING, type WorkHold } from '../github/holds.js'
 import { mayDrive, TERMINAL_ANSWER_MS, TERMINAL_EXPIRY_MS, TERMINAL_PICKUP_MS, type TerminalEffect } from './terminal.js'
 import { closeAssignment, closeUnassignedStart, readDecision, recentRoutes, timedDecisionOf, writeRouteEffects } from './routeDecisions.js'
 import { listMentions, markDone, mentionsWaiting, readMention, resolveByReply, writeMentions } from './mentions.js'
-import { answerable, listDecisions, readAskedDecision, recordAnswer, recordHandsOnAnswer, sweepRequests, writeDecisions, type RequestKind } from './decisions.js'
+import { answerable, listDecisions, noteAsked, readAskedDecision, recordAnswer, recordHandsOnAnswer, sweepRequests, writeDecisions, type RequestKind } from './decisions.js'
 import { DEFAULT_ROUTING_POLICY, effectivePolicy, routingPolicySchema, type RoutingPolicy } from './routingPolicy.js'
 import { authenticatedEmail, authorizeSwarmJoin, configureSharing, joinSwarmSchema, requireSharingOwner,
   saveSharingSchema, sharingDetails, type JoinSwarm, type SaveSharing } from './sharing.js'
@@ -882,6 +882,9 @@ export class SuperTabStore {
         await tx.superTabDelivery.updateMany({ where: { tabId, assignmentId: group.assignment!.id,
           status: { in: ['queued', 'claimed', 'uncertain'] } }, data: { status: 'cancelled', holdReason: null, holdSince: null } })
       }
+      // Who the group waits on moves with each request asked or answered there (decisions.ts noteAsked).
+      const waitsIn = effects.decisions?.[0]?.conversationId ?? (effects.decisionAnswer || effects.handsOnAnswer ? context.decision?.conversationId : undefined)
+      if (waitsIn) await noteAsked(tx, tabId, effects.state, waitsIn, effects.decisions ?? [], (effects.decisionAnswer ?? effects.handsOnAnswer)?.id)
       const committed = await this.save(tx, loaded, effects.state, stamp, touchesFor(command, actor, original, effects, context))
       if (command.type === 'agent.add' || command.type === 'agent.started' || command.type === 'agent.configuration' || command.type === 'agent.rebind') {
         for (const target of effects.state.agents) {

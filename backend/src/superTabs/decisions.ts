@@ -275,3 +275,16 @@ export async function sweepRequests(tx: Tx, tabId: string, state: SuperTabState,
   }
   return { messages, signals }
 }
+
+/** Who a group waits on (collaboration protocol): the people with an open decision or hands-on request there, oldest first,
+ *  recorded on the group so a phone or Desktop alerts only them rather than the project's owner. Recomputed from the open
+ *  requests in the command's transaction, with the ones this command asks and without the one it answers. */
+export async function noteAsked(tx: Tx, tabId: string, state: SuperTabState, conversationId: string, asked: DecisionDraft[], answeredId?: string): Promise<void> {
+  const group = state.conversations.find(c => c.id === conversationId)
+  if (!group) return
+  const open = await tx.superTabDecision.findMany({ where: { tabId, conversationId, ...waiting, ...answeredId ? { id: { not: answeredId } } : {} },
+    orderBy: { createdAt: 'asc' }, select: { personId: true }, take: 500 })
+  const people = [...new Set([...open.map(r => r.personId), ...asked.map(d => d.personId)])]
+  if (people.length) group.askedPersonIds = people
+  else delete group.askedPersonIds
+}

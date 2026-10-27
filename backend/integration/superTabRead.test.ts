@@ -770,6 +770,23 @@ describe('hands-on requests (collaboration protocol)', () => {
     expect((await post(s.tabId, { type: 'handsOn.answer', requestId: id, answer: 'done' }, owner)).status).toBe(404)
   })
 
+  it('records on the group who it waits on while their request is open, for a phone or Desktop to alert only them', async () => {
+    const s = await scene()
+    clock = Date.now()
+    const asked = async () => (await get(`/api/super-tabs/${s.tabId}/parts`, owner)).body.data.groups.find((g: { key: string }) => g.key === s.web).data.askedPersonIds
+    expect(await asked()).toBeUndefined()
+    const assignmentId = (await get(`/api/super-tabs/${s.tabId}/parts`, owner)).body.data.groups.find((g: { key: string }) => g.key === s.web).data.assignment.id
+    await post(s.tabId, { type: 'work.status', conversationId: s.web, assignmentId, status: 'needs_human', result: 'Ship how?',
+      ask: { personId: peer.sub, options: ['A', 'B'], recommended: 0, unblocks: 'The release' } }, owner, s.worker)
+    const hands = (await post(s.tabId, { type: 'handsOn.ask', conversationId: s.web, personId: owner.sub, ...plugIn }, owner, s.lead)).body.data.result.requestId as string
+    expect(await asked()).toEqual([peer.sub, owner.sub])
+    await post(s.tabId, { type: 'handsOn.answer', requestId: hands, answer: 'done' }, owner)
+    expect(await asked()).toEqual([peer.sub])
+    const [decision] = (await list(s.tabId, peer, 'open', undefined, 'decision')).decisions
+    await post(s.tabId, { type: 'decision.answer', decisionId: decision.id, choice: 0 }, peer)
+    expect(await asked()).toBeUndefined()
+  })
+
   it('asks once however often the same request is repeated, and refuses a person who cannot read the conversation', async () => {
     const s = await scene()
     clock = Date.now()

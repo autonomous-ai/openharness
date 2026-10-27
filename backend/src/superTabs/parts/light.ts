@@ -22,7 +22,7 @@ const running = { $and: [{ $ne: [{ $type: '$data.assignment.status' }, 'missing'
  * model.ts gains a field this does not place.
  */
 export const GROUP_FIELDS = {
-  always: ['id', 'kind', 'projectId', 'leadId', 'agentIds', 'archived', 'audience', 'dormant', 'assignment.agentId', 'assignment.status', 'assignment.lost'],
+  always: ['id', 'kind', 'projectId', 'leadId', 'agentIds', 'archived', 'audience', 'dormant', 'askedPersonIds', 'assignment.agentId', 'assignment.status', 'assignment.lost'],
   whenRunning: ['title', 'task.owns', 'assignment.id', 'assignment.execution', 'assignment.result'],
   unread: ['number', 'brief', 'reviewOf', 'checks', 'lastMessageSequence', 'pullRequestUrls', 'messageSeq', 'reportSeq', 'lastActivityAt', 'lostAttempt', 'partnerId',
     'assignment.configuration', 'assignment.recordingProgress', 'assignment.leaseUntil', 'assignment.progressAt'],

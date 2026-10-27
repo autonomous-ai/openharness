@@ -165,6 +165,8 @@ export interface Conversation {
   lostAttempt?: { id: string; agentId: string; machineId?: string; engine?: string }
   /** The person the work needs for judgement, taste, knowledge or hands, named by its Lead (collaboration protocol). */
   partnerId?: string
+  /** The people with an open decision or hands-on request here, oldest first (decisions.ts noteAsked): whom to alert. */
+  askedPersonIds?: string[]
 }
 
 export function appendPullRequestUrls(group: Conversation, texts: Iterable<string | null | undefined>): void {
