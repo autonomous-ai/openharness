@@ -12,7 +12,7 @@
  * engine's question comes first: ours is taken down before it shows (`before`) and put back once it is gone (`after`),
  * and one raised while an engine's question is open waits for that question to close.
  */
-import { SUPER_TAB_REQUEST_PREFIX, type SuperTabAttention } from './api.js'
+import { SUPER_TAB_REQUEST_PREFIX, type SuperTabAttention } from '../../core/api.js'
 
 type Frame = Record<string, unknown>
 

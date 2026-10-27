@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { CoreApi, CorePorts, SharingPort } from '../core/api.js'
+import type { startSharing } from './sharing.js'
 import type { RegisteredSession } from '../lib/registry.js'
 import type { CoreConnection, ServiceProcessOptions } from './process.js'
 import { AGENTS_FRESH_MS, runSharingService } from './sharingProcess.js'
@@ -133,6 +134,19 @@ describe('Share in its own process', () => {
     await service.stop()
     expect(ports[1].stop).toHaveBeenCalledOnce()
     expect(stop).toHaveBeenCalledOnce()
+  })
+
+  // HARNESS_SWARM: who a Super Tab lets watch comes from the Swarm's side, which its process loads only while it is on.
+  it('hands Share the Swarm\'s observers while it is on, and none without it', () => {
+    const given: Array<Parameters<typeof startSharing>[2]> = []
+    const start = (_core: CoreApi, ports: CorePorts, options?: Parameters<typeof startSharing>[2]) => {
+      given.push(options); ports.sharing = { observer: vi.fn(), linkDown: vi.fn(), stop: vi.fn() } as never; return {}
+    }
+    const observerSource = vi.fn() as never
+    const base = { dataDir: '/data', socketPath: '/s', machineId: 'm', token: 't', run: () => ({ stop: vi.fn() }), start }
+    runSharingService({ ...base, swarm: { observerSource } })
+    runSharingService(base)
+    expect(given).toEqual([{ observers: observerSource }, {}])
   })
 
   it('runs the real Share and process when given neither', async () => {

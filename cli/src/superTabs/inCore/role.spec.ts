@@ -1,5 +1,5 @@
 import { expect, it, vi } from 'vitest'
-import { swarmRoleThrough } from './superTabSkills.js'
+import { swarmRoleThrough } from './role.js'
 
 it('reads only validated role answers, with their project\'s skill mode, through the Super Tab process', async () => {
   const answers = [{ ok: true, role: 'lead', mode: 'default' }, { ok: true, role: 'dev', mode: 'orchestration' }, { ok: true, role: 'review', mode: 'light' },

@@ -3,6 +3,7 @@
  *  with one tap, and the answer reaches the asking agent and the Lead in the conversation it came from. Decisions live in
  *  SuperTabDecision, never in the tab state, as mentions do. A decision is not a private channel: anything private goes
  *  through Chat with PM. Called inside SuperTabStore's transactions. */
+import { createHash } from 'node:crypto'
 import type { Prisma } from '@prisma/client'
 import { z } from 'zod'
 import { activeWork, AGENT_ONLY, fail, isLeads, person, stableId, type Actor, type Agent, type Author, type Conversation, type MessageDraft, type SuperTabState } from './model.js'
@@ -217,7 +218,8 @@ export async function waitingInProject(tx: Tx, tabId: string, projectId: string)
 /** A person's badge: their open decisions and hands-on requests, counted apart (an older Desktop counts decisions alone), and
  *  when the latest open one was reminded (escalation), so a client sees a reminder though no count moved. Counted
  *  exactly per kind over the conversations the person still reads, with no page between them, so neither kind crowds the
- *  other out (review of #1769). */
+ *  other out (review of #1769). With a digest of which decisions are open: a client reads its list again when it moves,
+ *  as when one is answered elsewhere and another asked, which leaves the count alone (review of #1820). Never what they ask. */
 export async function requestsWaiting(tx: Tx, tabId: string, state: SuperTabState, actor: Extract<Actor, { kind: 'person' }>) {
   const open: Prisma.SuperTabDecisionWhereInput = { tabId, AND: [readerWhere(state, actor), waiting] }
   const ids = (await tx.superTabDecision.findMany({ where: open, distinct: ['conversationId'], select: { conversationId: true } })).map(r => r.conversationId)
@@ -225,8 +227,10 @@ export async function requestsWaiting(tx: Tx, tabId: string, state: SuperTabStat
   const where = { ...open, conversationId: { in: ids.filter(id => { const group = groups.get(id); return !!group && canReadGroup(state, actor, group) }) } }
   const all = await tx.superTabDecision.count({ where })
   const handsOn = await tx.superTabDecision.count({ where: { ...where, kind: 'handsOn' } })
+  const asked = (await tx.superTabDecision.findMany({ where: { ...where, ...ofKind('decision') }, select: { id: true } })).map(r => r.id).sort()
   const latest = await tx.superTabDecision.findFirst({ where: { ...where, remindedAt: { not: null } }, orderBy: { remindedAt: 'desc' }, select: { remindedAt: true } })
-  return { decisionsWaiting: all - handsOn, handsOnWaiting: handsOn, ...latest?.remindedAt ? { remindedAt: latest.remindedAt.getTime() } : {} }
+  return { decisionsWaiting: all - handsOn, decisionsDigest: createHash('sha256').update(asked.join('\n')).digest('base64url').slice(0, 16),
+    handsOnWaiting: handsOn, ...latest?.remindedAt ? { remindedAt: latest.remindedAt.getTime() } : {} }
 }
 
 export async function listDecisions(tx: Tx, tabId: string, state: SuperTabState, actor: Actor, open: boolean, kind: RequestKind = 'decision') {

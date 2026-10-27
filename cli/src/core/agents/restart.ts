@@ -3,7 +3,7 @@
  *
  * Moved verbatim out of `runForeground` (the core boundary, step 11: docs/design/2026-10-03-harnessd.md).
  */
-import type { AdoptSwarmSkill } from './swarmSkills.js'
+import type { AdoptSwarmSkill } from '../api.js'
 import { homedir } from 'node:os'
 import { isTerminalEngine, type AgentEngine } from '../../engines/types.js'
 import { engineBin, enginePathOverride } from '../../lib/engineBin.js'
