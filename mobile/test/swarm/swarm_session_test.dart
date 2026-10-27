@@ -1,0 +1,259 @@
+import 'package:fake_async/fake_async.dart';
+import 'package:flutter/foundation.dart';
+import 'package:flutter_test/flutter_test.dart';
+import 'package:harness_mobile/notify/system_notices.dart';
+import 'package:harness_mobile/settings/experimental_features.dart';
+import 'package:harness_mobile/swarm/swarm_inbox.dart';
+import 'package:harness_mobile/swarm/swarm_session.dart';
+
+import '../voice_fakes.dart';
+import 'swarm_fixture.dart';
+
+/// The account's Swarm on the phone: made while Swarm is turned on and someone
+/// is signed in, read while Harness is in front, telling the person what
+/// arrives unless they are looking at it, and holding a decision's answer
+/// for Undo.
+void main() {
+  /// One Swarm `a` whose open decision is d1, asked in conversation g9.
+  FakeSwarm backend() {
+    final fake = FakeSwarm();
+    fake.routes['/api/super-tabs/list'] = (_) => {
+      'tabs': [
+        {'id': 'a', 'name': 'Swarm a', 'ownerId': me, 'lastChangedAt': 100},
+      ],
+      'next': null,
+    };
+    const derived = {'decisionsWaiting': 1, 'mentionsWaiting': 0};
+    fake.routes['/api/super-tabs/a/parts'] = (_) =>
+        firstLoad(tabId: 'a', derived: derived);
+    fake.routes['/api/super-tabs/a/changes'] = (_) =>
+        changes(cursor: 'c2', derived: derived);
+    fake.routes['/api/super-tabs/a/decisions?state=open'] = (_) => {
+      'decisions': [
+        {
+          'id': 'd1',
+          'conversationId': 'g9',
+          'askerName': 'River',
+          'question': 'Ship it?',
+          'options': ['Yes', 'No'],
+        },
+      ],
+    };
+    fake.routes['/api/super-tabs/a/mentions?state=waiting'] = (_) => {
+      'mentions': <Object>[],
+    };
+    fake.routes['/api/super-tabs/a/commands'] = (_) => {
+      'result': <String, dynamic>{},
+    };
+    return fake;
+  }
+
+  SwarmSession session(FakeSwarm fake, {_Notices? notices}) {
+    final s = SwarmSession(
+      accountId: me,
+      request: fake.request,
+      notices: notices ?? _Notices(),
+    );
+    addTearDown(s.dispose);
+    return s;
+  }
+
+  group('SwarmHost', () {
+    late ExperimentalFeaturesStore features;
+    late ValueNotifier<String?> account;
+    late _Notices notices;
+
+    SwarmHost host() {
+      final h = SwarmHost(
+        accountId: () => account.value,
+        account: account,
+        request: backend().request,
+        notices: notices,
+        features: features,
+      );
+      addTearDown(h.dispose);
+      return h;
+    }
+
+    setUp(() {
+      features = ExperimentalFeaturesStore(storage: MemoryKeyValueStore());
+      account = ValueNotifier(me);
+      notices = _Notices();
+    });
+
+    test(
+      'has a session only while Swarm is on and someone is signed in',
+      () async {
+        final h = host();
+        expect(h.session, isNull, reason: 'Swarm is off');
+
+        await features.set(PhoneExperiment.swarm, true);
+        expect(h.session?.accountId, me);
+
+        account.value = null;
+        expect(h.session, isNull, reason: 'signed out');
+
+        account.value = 'person-other';
+        expect(h.session?.accountId, 'person-other');
+
+        await features.set(PhoneExperiment.swarm, false);
+        expect(h.session, isNull);
+      },
+    );
+
+    test('a session dropped takes its notices off the lock screen', () async {
+      await features.set(PhoneExperiment.swarm, true);
+      final h = host();
+      final s = h.session!;
+      s.foreground = false;
+      await s.inbox.refresh();
+      await settle();
+      s.announce(s.inbox.needs.single);
+      expect(notices.shown, hasLength(1));
+
+      account.value = 'person-other';
+
+      expect(notices.cancelled, [notices.shown.single.key]);
+    });
+  });
+
+  test('reads only while Harness is in front', () {
+    fakeAsync((async) {
+      final fake = backend();
+      final s = SwarmSession(
+        accountId: me,
+        request: fake.request,
+        notices: _Notices(),
+      );
+      int lists() => fake.paths.where((p) => p.endsWith('/list')).length;
+
+      s.foreground = true;
+      async.flushMicrotasks();
+      expect(lists(), 1);
+
+      s.foreground = false;
+      async.elapse(const Duration(minutes: 2));
+      expect(lists(), 1);
+      s.dispose();
+    });
+  });
+
+  test('tells what arrives, unless a Swarm screen is up', () async {
+    final notices = _Notices();
+    final s = session(backend(), notices: notices);
+    await s.inbox.refresh();
+    await settle();
+    final need = s.inbox.needs.single;
+
+    s.enter();
+    s.announce(need);
+    expect(notices.shown, isEmpty);
+
+    s.leave();
+    s.announce(need);
+    expect(notices.shown.single.title, 'River asks you');
+  });
+
+  group('an answer', () {
+    test('is held for Undo, then sent once', () {
+      fakeAsync((async) {
+        final fake = backend();
+        final s = SwarmSession(
+          accountId: me,
+          request: fake.request,
+          notices: _Notices(),
+        );
+        s.inbox.refresh();
+        async.flushMicrotasks();
+        final need = s.inbox.needs.whereType<SwarmDecisionNeed>().single;
+
+        s.hold(need, 0);
+        expect(s.held(need), 0);
+        async.elapse(const Duration(seconds: 2));
+        expect(fake.commands, isEmpty, reason: 'still in its Undo window');
+
+        async.elapse(const Duration(seconds: 2));
+        expect(fake.commands.single, {
+          'type': 'decision.answer',
+          'decisionId': 'd1',
+          'choice': 0,
+        });
+        expect(s.held(need), isNull);
+        s.dispose();
+      });
+    });
+
+    test('undone in time is never sent', () {
+      fakeAsync((async) {
+        final fake = backend();
+        final s = SwarmSession(
+          accountId: me,
+          request: fake.request,
+          notices: _Notices(),
+        );
+        s.inbox.refresh();
+        async.flushMicrotasks();
+        final need = s.inbox.needs.whereType<SwarmDecisionNeed>().single;
+
+        s.hold(need, 1);
+        async.elapse(const Duration(seconds: 1));
+        s.undo(need);
+        async.elapse(const Duration(seconds: 10));
+
+        expect(fake.commands, isEmpty);
+        expect(s.held(need), isNull);
+        s.dispose();
+      });
+    });
+
+    test('held when the account leaves is dropped, not sent', () {
+      fakeAsync((async) {
+        final fake = backend();
+        final s = SwarmSession(
+          accountId: me,
+          request: fake.request,
+          notices: _Notices(),
+        );
+        s.inbox.refresh();
+        async.flushMicrotasks();
+        s.hold(s.inbox.needs.whereType<SwarmDecisionNeed>().single, 0);
+
+        s.dispose();
+        async.elapse(const Duration(seconds: 10));
+
+        expect(fake.commands, isEmpty);
+      });
+    });
+  });
+
+  test(
+    'a Swarm watched by a screen is read often, until no screen watches it',
+    () async {
+      final s = session(backend());
+      await s.inbox.refresh();
+      final reader = s.inbox.reader('a')!;
+
+      s.watch('a');
+      s.watch('a');
+      expect(reader.shown, isTrue);
+
+      s.unwatch('a');
+      expect(reader.shown, isTrue, reason: 'one screen still watches it');
+
+      s.unwatch('a');
+      expect(reader.shown, isFalse);
+    },
+  );
+}
+
+class _Notices extends SilentSystemNotices {
+  final shown = <SwarmNoticeMessage>[];
+  final cancelled = <String>[];
+
+  @override
+  Future<void> showSwarm(SwarmNoticeMessage message) async =>
+      shown.add(message);
+
+  @override
+  Future<void> cancelSwarm(String key) async => cancelled.add(key);
+}

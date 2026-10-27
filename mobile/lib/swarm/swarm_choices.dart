@@ -1,0 +1,32 @@
+/// How Swarm looks and behaves on the phone, one choice per question asked of
+/// the mobile app's owner (2026-10-27). Each is the recommended answer, taken
+/// while the owner had not answered (Lead's call); a different answer is a
+/// change here, and in the one place each names.
+library;
+
+/// 1. The way in. True: Find, and a Swarm mark on Home's title with how many
+/// things wait on the person (`swarm_mark.dart`). False: Find only.
+const swarmHomeMark = true;
+
+/// 2. The first screen. True: what needs the person across every Swarm comes
+/// first, the Swarms under it. False: the Swarms first, needs after them
+/// (`swarm_page.dart`).
+const swarmNeedsFirst = true;
+
+/// 3. A project: Chat with PM pinned first, then the Lead's chat, then work
+/// by latest activity, with quiet and archived work behind "Older"; the team
+/// in one line at the top (`swarm_project_page.dart`). True shows the team
+/// line.
+const swarmTeamLine = true;
+
+/// 4. Posting: text and @mentions. False: files are opened, not sent
+/// (`swarm_conversation_page.dart`).
+const swarmSendsFiles = false;
+
+/// 5. Notices: on the phone while Harness is open; push to a closed app is
+/// backend work for later. False posts none (`swarm_session.dart`).
+const swarmLocalNotices = true;
+
+/// 6. A decision's answer cannot be changed once sent: one tap holds it this
+/// long, with Undo, before it goes. Zero sends at once.
+const swarmUndoWindow = Duration(seconds: 3);
