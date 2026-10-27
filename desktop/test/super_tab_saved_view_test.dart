@@ -698,6 +698,11 @@ void _reReviewTests() {
       final server = ConversationServer()..append('Hello');
       final kept = MemoryStore();
       _visit(async, server, kept);
+      // Two Swarms opened since: this one is the least recent.
+      for (final tab in ['b', 'c']) {
+        SuperTabSavedViews(kept).write('owner', tab, _view(tab: tab));
+        async.flushMicrotasks();
+      }
       final store = _StuckLockStore()..values.addAll(kept.values);
       final transport = _Transport(server)..hold = Completer<void>();
       final client = _client(transport, store)
@@ -708,11 +713,17 @@ void _reReviewTests() {
       async.flushMicrotasks();
       expect(c!.showingSaved, isTrue);
       expect(c!.messages('lead').single.text, 'Hello');
+      // Nothing is changed outside the lock: the index waits for it.
+      expect(store.values, kept.values);
       // The other tab lets go: what waited for it runs, one at a time.
       store.release.complete();
       async.flushMicrotasks();
       expect(store.values[_viewKey], kept.values[_viewKey]);
-      expect(jsonDecode(store.values['super_tab.views.owner']!), ['tab']);
+      expect(jsonDecode(store.values['super_tab.views.owner']!), [
+        'tab',
+        'c',
+        'b',
+      ]);
       client.dispose();
     });
   });
