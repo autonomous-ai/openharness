@@ -110,6 +110,14 @@ class ModelsMenuController extends ChangeNotifier {
     }
   }
 
+  /// Forgets the signed-out account: its other computers' rows go, and the next account reads at
+  /// once instead of waiting out the old one's minute.
+  void reset() {
+    if (_disposed) return;
+    _lastAttempt = null;
+    _usage.forgetRemote();
+  }
+
   void _changed() {
     if (!_disposed) notifyListeners();
   }

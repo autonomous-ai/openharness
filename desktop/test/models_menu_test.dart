@@ -212,6 +212,83 @@ void main() {
     },
   );
 
+  group('sign-out', () {
+    List<MachineUsage> otherAccount() => [
+      MachineUsage(
+        machineName: 'Other Mac',
+        readings: [
+          reading(account: '1122334455667788', email: 'work@example.com'),
+        ],
+      ),
+    ];
+    bool remoteRow(Map<String, Object?> row) => row['local'] == false;
+
+    test('sign-out forgets remote usage rows', () async {
+      final usage = UsageController(
+        sources: [_Source(UsageProvider.claude, () async => reading())],
+        autoStart: false,
+        remote: () async => otherAccount(),
+      );
+      final menu = ModelsMenuController(usage: usage, now: () => instant);
+      addTearDown(usage.dispose);
+      addTearDown(menu.dispose);
+      await menu.refresh();
+      expect(menu.rows.where(remoteRow), hasLength(1));
+
+      menu.reset();
+
+      expect(menu.rows.where(remoteRow), isEmpty);
+      expect(menu.rows.single['account'], 'dev@example.com');
+    });
+
+    test('a remote read the old account started lands nowhere', () async {
+      final answers = <Completer<List<MachineUsage>>>[];
+      final source = _Source(UsageProvider.claude, () async => reading());
+      final usage = UsageController(
+        sources: [source],
+        autoStart: false,
+        remote: () {
+          answers.add(Completer());
+          return answers.last.future;
+        },
+      );
+      final menu = ModelsMenuController(usage: usage, now: () => instant);
+      addTearDown(usage.dispose);
+      addTearDown(menu.dispose);
+      final asked = menu.refresh();
+
+      menu.reset();
+      answers.single.complete(otherAccount());
+      await asked;
+
+      expect(menu.rows.where(remoteRow), isEmpty);
+      // The next account reads at once, not a minute after the old one did.
+      final next = menu.refresh();
+      expect(source.calls, 2);
+      answers.last.complete(const []);
+      await next;
+    });
+
+    for (final expires in [false, true]) {
+      test('${expires ? 'expiry' : 'sign-out'} resets the window\'s Models '
+          'menu', () async {
+        final app = createApp();
+        addTearDown(app.dispose);
+        final menu = app.modelsMenu;
+        var told = 0;
+        menu.addListener(() => told++);
+        if (expires) {
+          app.expireSessionForTest('Session expired.');
+        } else {
+          await app.logout();
+        }
+        expect(told, greaterThan(0));
+        expect(app.modelsMenu, same(menu), reason: 'pickers keep listening');
+        expect(menu.rows.where(remoteRow), isEmpty);
+      });
+    }
+  });
+
   test(
     'readings without email do not expose their internal account key',
     () async {
