@@ -1130,7 +1130,7 @@ class _SuperTabViewState extends State<SuperTabView>
               _options(group, views: _menuNamesViews),
             ),
         ],
-        _boardButton(),
+        fingerTarget(enabled: _phone, _boardButton()),
         if (!showRoster)
           fingerTarget(
             enabled: _phone,
