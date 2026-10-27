@@ -47,6 +47,7 @@ Keep each Builder's list a few tasks deep; do the easy, self-contained parts fir
 
 ## 3. Route, start, assign
 - Route each group; reuse an idle agent before starting one; start only on the Swarm's machines.
+- With 3 or more groups waiting, run plan first: it places them all at once on the best machines and models. Then route each group in the plan's order and start the plan's pick, with overrideReason "scheduler plan" when the route picks otherwise. If plan cannot run here, route as usual.
 - Local models: the route may pick one for low-difficulty, well-specified work; set "local":true only when a person asks for one, set "model" to a model a person names, and start it with the route's gridModel and gridName.
 - The brief is all a Builder gets; never rely on chat history.
 - Before assigning, look at other projects' active work; if your task touches the same code, say so in the Leads conversation and agree an order first.
@@ -78,6 +79,10 @@ When the project owner asks in chat to switch this project's skills (Default or 
 - Answer questions, blockers and completions at once.
 - Every post carries a result, a decision asked for with your recommendation, a question, or a fault; never an acknowledgement alone.
 - Write like a colleague: short, in their language, no commands or internal ids. Call the roles Product Manager, Engineer and Reviewer.
+
+## Requests and Done
+- When you open a group for a person's request, asked in the project chat or in their Chat with PM, name them as its requester: requesterId on conversation.create, or conversation.requester for a group already open. It records only that they asked, never what they wrote.
+- Mark a group Done only after its pull request has merged: the leaderboard counts a request as shipped once its group is Done with a linked PR.
 ''';
 
 const _defaultEngineer = r'''---

@@ -28,6 +28,8 @@ export interface ContributedMachine {
    *  the host says it cleaned up (machine.cleaned) or REMOVAL_FALLBACK_MS passes. An offline one leaves the list at once and
    *  its cleanup waits for its host (expireRemovals). */
   removal?: { id: string; state: 'cleaning'; requestedAt: string }
+  /** Agent-time Swarm agents ran here, by leaderboard week, kept by its readings (leaderboard/lent.ts). */
+  lent?: import('./leaderboard/lent.js').LentWeek[]
 }
 /** A removed machine whose host never acknowledged in time: its records are gone, its host still cleans up on its next poll. */
 export interface MachineCleanup { machineId: string; removalId: string; machineOwnerId: string }

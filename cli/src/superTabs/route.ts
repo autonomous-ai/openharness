@@ -68,7 +68,7 @@ export interface Verdict { pick: Shown; via: 'order' | 'only'; p: null; why: str
 
 const LEVELS: Level[] = ['low', 'medium', 'high']
 /** Run time and spend per window by task size, for a policy row of cost 2 (owner's table, 2026-10-21); not in the policy yet. */
-const SIZES: Record<Size, { minutes: number; spend: Record<Window, number> }> = {
+export const SIZES: Record<Size, { minutes: number; spend: Record<Window, number> }> = {
   small: { minutes: 20, spend: { '5-hour': 10, weekly: 1 } },
   medium: { minutes: 60, spend: { '5-hour': 30, weekly: 4 } },
   large: { minutes: 180, spend: { '5-hour': 50, weekly: 8 } },
@@ -101,9 +101,15 @@ export function breaks(rules: SwarmRule[], p: { machineId: string; engine: strin
 /** A new agent whose policy row leaves the effort to the engine starts at the owner's minimum instead (Lead, 2026-10-22), so
  * a minimum does not rule out the Codex `default` row. */
 function lifted(rules: SwarmRule[], p: Probe): Probe {
-  if (p.kind !== 'new' || rank(p.effort) >= 0) return p
-  const least = Math.max(-1, ...rules.flatMap(({ rule }) => rule.kind === 'minEffort' && applies(rule, p.engine) ? [rank(rule.effort)] : []))
-  return least < 0 ? p : { ...p, effort: EFFORTS[least] }
+  // The same probe when nothing is lifted: `choose` tells a lifted row from its original by identity.
+  const effort = p.kind === 'new' ? liftEffort(rules, p.engine, p.effort) : p.effort
+  return effort === p.effort ? p : { ...p, effort }
+}
+/** The effort a new agent on this row starts at: the row's own, or the owner's minimum when the row leaves it to the engine. */
+export function liftEffort(rules: SwarmRule[], engine: string, effort: string): string {
+  if (rank(effort) >= 0) return effort
+  const least = Math.max(-1, ...rules.flatMap(({ rule }) => rule.kind === 'minEffort' && applies(rule, engine) ? [rank(rule.effort)] : []))
+  return least < 0 ? effort : EFFORTS[least]
 }
 /** The soft rules for this task: the engine preferred for its kind (a rule for the kind before one for every task), and
  * whether idle agents come first. */
@@ -199,7 +205,7 @@ export function rateFor(policy: Policy, engine: string, model: string | null, ef
   return row ? { quality: row.quality, cost: row.cost } : { quality: 1, cost: 1 }
 }
 
-const KIND_WORD = { local: 'local', api: 'API', shared: 'shared' } as const
+export const KIND_WORD = { local: 'local', api: 'API', shared: 'shared' } as const
 const runs = (p: Probe) => p.gridModel ? `${ENGINE[p.engine]} on ${p.gridLabel ?? p.gridModel} (${KIND_WORD[p.gridKind ?? 'local']})` : `${ENGINE[p.engine]} ${p.model} ${p.effort}`
 /** A name's words for matching: lowercase letters and digits, "4.1" read as "41". */
 const words = (text: string) => text.toLowerCase().split(/[^a-z0-9.]+/).map(w => w.replace(/\./g, '')).filter(Boolean)

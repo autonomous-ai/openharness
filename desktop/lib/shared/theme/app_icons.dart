@@ -187,6 +187,7 @@ abstract final class AppIcons {
   static const terminal = LucideIcons.terminal400;
   static const trash2 = LucideIcons.trash2400;
   static const triangleAlert = LucideIcons.triangleAlert400;
+  static const trophy = LucideIcons.trophy400;
   static const type = LucideIcons.type400;
   static const undo2 = LucideIcons.undo2400;
   static const unlink = LucideIcons.unlink400;
