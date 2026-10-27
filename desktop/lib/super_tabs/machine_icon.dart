@@ -90,6 +90,9 @@ class _SuperTabMachineIconState extends State<SuperTabMachineIcon> {
       colorBlendMode: BlendMode.srcIn,
       gaplessPlayback: true,
       excludeFromSemantics: true,
+      // Until its first frame decodes, the catalogue's icon holds the place.
+      frameBuilder: (_, child, frame, synchronous) =>
+          frame == null && !synchronous ? fallback : child,
       errorBuilder: (_, _, _) => fallback,
     );
   }

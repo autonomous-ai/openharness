@@ -105,6 +105,18 @@ void main() {
   }, variant: TargetPlatformVariant.only(TargetPlatform.macOS));
 
   testWidgets(
+    'while AppKit\'s picture decodes, the catalogue\'s icon holds its place',
+    (tester) async {
+      fakeAppKit();
+      await showIcon(tester, 'Mac Studio', SystemSymbols());
+      // A widget test never decodes an image outside runAsync: still decoding.
+      expect(find.byType(Image), findsOneWidget);
+      expect(find.byIcon(AppIcons.monitor), findsOneWidget);
+    },
+    variant: TargetPlatformVariant.only(TargetPlatform.macOS),
+  );
+
+  testWidgets(
     'a symbol this macOS lacks, or a channel that fails, draws the catalogue\'s',
     (tester) async {
       fakeAppKit(missing: {'macstudio'});
