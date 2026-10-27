@@ -3,6 +3,7 @@
  *  with one tap, and the answer reaches the asking agent and the Lead in the conversation it came from. Decisions live in
  *  SuperTabDecision, never in the tab state, as mentions do. A decision is not a private channel: anything private goes
  *  through Chat with PM. Called inside SuperTabStore's transactions. */
+import { createHash } from 'node:crypto'
 import type { Prisma } from '@prisma/client'
 import { z } from 'zod'
 import { AGENT_ONLY, fail, isLeads, person, stableId, type Actor, type Conversation, type SuperTabState } from './model.js'
@@ -153,8 +154,12 @@ export async function waitingInProject(tx: Tx, tabId: string, projectId: string)
   return groups.map(g => ({ conversationId: g.conversationId, personId: g.personId, count: g._count._all }))
 }
 
-export async function decisionsWaiting(tx: Tx, tabId: string, state: SuperTabState, actor: Extract<Actor, { kind: 'person' }>): Promise<number> {
-  return (await readable(tx, tabId, state, actor, true)).length
+/** A person's open decisions: how many, and a digest of which. A client reads its list again when the digest moves, as
+ *  when one is answered elsewhere and another asked, which leaves the count alone (review of #1820). Never what they ask. */
+export async function decisionsWaiting(tx: Tx, tabId: string, state: SuperTabState,
+  actor: Extract<Actor, { kind: 'person' }>): Promise<{ count: number; digest: string }> {
+  const ids = (await readable(tx, tabId, state, actor, true)).map(({ row }) => row.id).sort()
+  return { count: ids.length, digest: createHash('sha256').update(ids.join('\n')).digest('base64url').slice(0, 16) }
 }
 
 export async function listDecisions(tx: Tx, tabId: string, state: SuperTabState, actor: Actor, open: boolean) {

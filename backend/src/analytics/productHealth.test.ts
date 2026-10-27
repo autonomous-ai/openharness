@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs'
 import { expect, it } from 'vitest'
-import { cleanUsageContext, HEALTH_MEASURES, HEALTH_FLOWS } from '../types/productHealthContract.js'
+import { cleanUsageContext, HEALTH_MEASURES, HEALTH_FLOWS, PRODUCT_HEALTH_METRICS } from '../types/productHealthContract.js'
 import { PRODUCT_USAGE_ADD_PHONE_OPENINGS, PRODUCT_USAGE_DESKTOP_FLOWS } from '../types/productUsage.js'
 import { dailyProductHealth, healthBreakdowns } from './productHealth.js'
 
@@ -95,4 +95,9 @@ it('reports first-run activation only against its own observed episode denominat
   expect(report.daily[0].firstRun).toMatchObject({ started: 10, ready: 9, work: 8, response: 7, responsePercent: 70, mature: false })
   expect(dailyProductHealth([row('collector_days', 5)], new Date('2026-10-23')).daily[0].firstRun.responsePercent).toBeNull()
   expect(dailyProductHealth([row('first_run_started', 1), row('first_run_response', 2)], new Date('2026-10-23')).daily[0].firstRun.responsePercent).toBeNull()
+})
+
+it('names each resume preparation kind per source', () => {
+  for (const kind of ['invalid_json', 'foreign_session', 'not_owned_file', 'changed_during', 'other'])
+    expect((PRODUCT_HEALTH_METRICS as readonly string[]).includes(`request_app_resume_preparation_${kind}`), kind).toBe(true)
 })

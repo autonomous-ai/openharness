@@ -28,7 +28,6 @@ void main() {
     for (final control in [
       find.byTooltip('Conversations'),
       find.byKey(const ValueKey('super-chat')),
-      find.byKey(const ValueKey('super-leaderboard')),
       _people,
       _options,
     ]) {

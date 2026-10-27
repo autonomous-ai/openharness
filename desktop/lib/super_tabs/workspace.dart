@@ -433,6 +433,19 @@ class _SuperTabWorkspaceState extends State<SuperTabWorkspace> {
       _terminalRequest = null;
       return canvas;
     }
+    Widget waiting(Object? error) => Stack(
+      children: [
+        Offstage(child: canvas),
+        Center(
+          child: error != null
+              ? Text(error.toString())
+              : const CircularProgressIndicator(),
+        ),
+      ],
+    );
+    // A restored Swarm draws before the signed-in account's profile answers:
+    // it waits for the account rather than opening as nobody's.
+    if (app.currentUser == null) return waiting(null);
     return FutureBuilder<SuperTabController>(
       future: app.superTabs.open(id),
       builder: (context, state) {
@@ -440,16 +453,7 @@ class _SuperTabWorkspaceState extends State<SuperTabWorkspace> {
         if (controller == null ||
             controller.tabId != id ||
             controller.accountId != app.currentUser?.id) {
-          return Stack(
-            children: [
-              Offstage(child: canvas),
-              Center(
-                child: state.hasError
-                    ? Text(state.error.toString())
-                    : const CircularProgressIndicator(),
-              ),
-            ],
-          );
+          return waiting(state.hasError ? state.error : null);
         }
         return ListenableBuilder(
           listenable: controller,
@@ -537,6 +541,8 @@ class _SuperTabWorkspaceState extends State<SuperTabWorkspace> {
                   machineName: (machine) =>
                       app.stateOf(machine)?.machine.displayName ??
                       'Offline machine',
+                  isThisComputer: (machine) =>
+                      app.stateOf(machine)?.isLocalMachine == true,
                   terminal: showTerminal
                       ? terminal
                       : devices || agents.isNotEmpty

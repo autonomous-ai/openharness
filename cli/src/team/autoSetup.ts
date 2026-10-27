@@ -86,23 +86,31 @@ export class TeamAutoSetup {
    * With [check] it starts nothing and answers `wanted` instead, for Desktop to explain the account first.
    */
   async offer(reason: AutoSetupReason, sharedSwarm: () => Promise<boolean> = async () => false, check = false): Promise<{ state: AutoSetupState }> {
+    const state = await this.decide(reason, sharedSwarm, check)
+    // Every answer is said, not only a setup that starts: Macs in a Swarm went without the prompt and nothing on them said
+    // why (2026-10-27). A check that finds it wanted starts nothing: that is Desktop's question, not an answer.
+    if (state !== 'started' && state !== 'wanted') this.deps.log(`the Harness Team account was not offered (${reason}): ${state}`)
+    return { state }
+  }
+
+  private async decide(reason: AutoSetupReason, sharedSwarm: () => Promise<boolean>, check: boolean): Promise<AutoSetupState> {
     const { deps } = this
-    if (deps.platform !== 'darwin') return { state: 'unsupported' }
+    if (deps.platform !== 'darwin') return 'unsupported'
     const session = deps.session()
-    if (!session) return { state: 'signed-out' }
-    if (session.kind === 'team') return { state: 'dedicated' }
-    if (this.running) return { state: 'running' }
-    if (deps.readConfig() || await deps.accountExists(TEAM_USER)) return { state: 'exists' }
+    if (!session) return 'signed-out'
+    if (session.kind === 'team') return 'dedicated'
+    if (this.running) return 'running'
+    if (deps.readConfig() || await deps.accountExists(TEAM_USER)) return 'exists'
     if (reason !== 'manual') {
       const decision = deps.readDecision()
-      if (decision?.state === 'declined') return { state: 'declined' }
-      if (decision?.state === 'failed' && deps.now() - decision.at < AUTO_SETUP_RETRY_MS && deps.now() >= decision.at) return { state: 'waiting' }
-      if (reason === 'startup' && !await sharedSwarm().catch(() => false)) return { state: 'not-shared' }
+      if (decision?.state === 'declined') return 'declined'
+      if (decision?.state === 'failed' && deps.now() - decision.at < AUTO_SETUP_RETRY_MS && deps.now() >= decision.at) return 'waiting'
+      if (reason === 'startup' && !await sharedSwarm().catch(() => false)) return 'not-shared'
     }
-    if (check) return { state: 'wanted' }
-    if (this.running) return { state: 'running' }
+    if (check) return 'wanted'
+    if (this.running) return 'running'
     this.running = this.run().finally(() => { this.running = null })
-    return { state: 'started' }
+    return 'started'
   }
 
   /** "Not now" in Desktop's explanation: not offered again on its own, as a cancelled prompt is not. */

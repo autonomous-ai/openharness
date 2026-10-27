@@ -8,7 +8,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { CloudCore } from '../core/api.js'
 import type { CloudHarness } from '../lib/cloudAgents.js'
 import type { Bridge } from './bridge.js'
-import { nameFor, repositoryOf, startCloudService } from './service.js'
+import { repositoryOf } from '../lib/cloudAgents.js'
+import { nameFor, startCloudService } from './service.js'
 import { CloudError, type CloudAdapter, type CloudUpdate } from './types.js'
 
 const owner = { local: true, owner: true }

@@ -1,8 +1,9 @@
-/// How a Swarm tab keeps itself current. The defaults are Desktop's: a full
-/// read every poll, whether or not the tab is on screen, the first read's
-/// failure shown at once, and the messages read after the state. The web
-/// build turns on the rest (`lib/web/shell/web_chrome.dart`), because a phone
-/// pays for every read in data, battery and main-thread time (#180's report).
+/// How a Swarm tab keeps itself current. The defaults: a full read every poll,
+/// whether or not the tab is on screen, the first read's failure shown at
+/// once, and the messages read after the state. Desktop reads with [desktop];
+/// the web build turns on the rest (`lib/web/shell/web_chrome.dart`), because
+/// a phone pays for every read in data, battery and main-thread time (#180's
+/// report).
 class SuperTabReading {
   const SuperTabReading({
     this.quietPoll,
@@ -12,7 +13,17 @@ class SuperTabReading {
     this.connectGrace = Duration.zero,
     this.messagesWithState = false,
     this.drawsSaved = false,
+    this.confirmsSaved = false,
   });
+
+  /// Desktop's: a first open asks for the state and the open conversation at
+  /// once, and a Swarm seen before asks only for what changed since, drawing
+  /// nothing kept until that read has said what the reader may still see.
+  static const desktop = SuperTabReading(
+    messagesWithState: true,
+    drawsSaved: true,
+    confirmsSaved: true,
+  );
 
   /// Null keeps a full read every poll. Otherwise, once the open conversation
   /// has had no new message and the person has done nothing for [quietAfter],
@@ -42,6 +53,11 @@ class SuperTabReading {
   /// it at once on the next open, until the first read replaces it
   /// (`SuperTabSavedViews`).
   final bool drawsSaved;
+
+  /// With [drawsSaved], true holds a saved view's parts for the first read
+  /// to start from but draws them only once that read has answered, so a
+  /// conversation the reader lost since is never on screen.
+  final bool confirmsSaved;
 
   /// Whether the poll adapts at all; false is Desktop's fixed period.
   bool get adapts => quietPoll != null || pausesAway;

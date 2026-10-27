@@ -7,7 +7,8 @@ import type { LaunchModel } from './launchModel.js'
 
 export type AgentCreationOutcome =
   | { state: 'created'; agentId: string; level?: 'native' | 'handoff'; resumed?: boolean }
-  | { state: 'failed'; error: string; detail?: string; preparedFolder?: string; existingFolder?: string }
+  // `reason`: which check a refusal failed, where its code has several (a resume's RESUME_PREPARATION_FAILED).
+  | { state: 'failed'; error: string; detail?: string; reason?: string; preparedFolder?: string; existingFolder?: string }
   | { state: 'unconfirmed' }
 
 export type AgentCreationStatus = AgentCreationOutcome

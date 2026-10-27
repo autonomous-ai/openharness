@@ -622,7 +622,7 @@ function routed() {
 describe('route.record and route.override', () => {
   it('records a lead decision as a route message with its id', () => {
     const f = routed()
-    const effects = f.run({ type: 'route.record', conversationId: 'lead', decision: record() } as Command, f.leadActor, { recentRoutes: 0 })
+    const effects = f.run({ type: 'route.record', conversationId: 'lead', decision: record() } as Command, f.leadActor, {})
     expect(effects.result.routeDecisionId).toBeTruthy()
     expect(effects.routeDecisions).toEqual([{ op: 'create', id: effects.result.routeDecisionId, conversationId: 'lead', record: expect.objectContaining({ pick: 'c0' }) }])
     expect(effects.messages[0]).toMatchObject({ text: 'Routed to Title c0 — Jev 82% · "Schema change."',
@@ -631,7 +631,7 @@ describe('route.record and route.override', () => {
   })
   it('keeps the context Jev was given with the record, bounded, and still takes a record without it', () => {
     const f = routed()
-    const run = (decision: unknown) => f.run({ type: 'route.record', conversationId: 'lead', decision } as Command, f.leadActor, { recentRoutes: 0 })
+    const run = (decision: unknown) => f.run({ type: 'route.record', conversationId: 'lead', decision } as Command, f.leadActor, {})
     expect(run(record({ context: { chars: 9000, missing: ['messages', 'activity'] } })).routeDecisions[0]).toMatchObject({ record: { context: { chars: 9000, missing: ['messages', 'activity'] } } })
     expect(run(record()).routeDecisions[0]).toMatchObject({ record: { pick: 'c0' } })
     for (const context of [{ chars: -1, missing: [] }, { chars: 1.5, missing: [] }, { chars: 40_000, missing: [] }, { chars: 10 },
@@ -642,7 +642,7 @@ describe('route.record and route.override', () => {
   })
   it('keeps the size and each candidate\'s quota fit, and still takes a record without them', () => {
     const f = routed()
-    const run = (decision: unknown) => f.run({ type: 'route.record', conversationId: 'lead', decision } as Command, f.leadActor, { recentRoutes: 0 })
+    const run = (decision: unknown) => f.run({ type: 'route.record', conversationId: 'lead', decision } as Command, f.leadActor, {})
     const fit = { status: 'short', coverage: -0.2, effectiveCost: 1.5, expiring: 0, spend: { '5-hour': 45, weekly: 6 }, account: 'remote-1:codex' }
     const sized = (size: unknown, patch: Record<string, unknown> = {}) => record({ assessment: { difficulty: 'high', risk: 'low', why: 'Schema change.', size },
       candidates: [candidate('c0', { fit: { ...fit, ...patch } }), candidate('c1', { model: 'sonnet', quality: 2, cost: 2, fit: { status: 'unknown', coverage: null, effectiveCost: 2, expiring: 0, spend: {} } })] })
@@ -658,9 +658,9 @@ describe('route.record and route.override', () => {
     const f = routed()
     const route = (decision: unknown, actor: Actor, context: Partial<CommandContext>) =>
       f.run({ type: 'route.record', conversationId: 'lead', decision } as Command, actor, context)
-    expect(() => route(record({ pick: 'c5' }), f.leadActor, { recentRoutes: 0 })).toThrow()
-    expect(() => route(record(), f.workerActor, { recentRoutes: 0 })).toThrow('coordinating lead')
-    expect(() => route(record(), f.leadActor, { recentRoutes: 30 })).toThrow('30 tasks')
+    expect(() => route(record({ pick: 'c5' }), f.leadActor, {})).toThrow()
+    expect(() => route(record(), f.workerActor, {})).toThrow('coordinating lead')
+    expect(() => route(record(), f.leadActor, {})).not.toThrow()
   })
   it('lets a writer change an open decision with a reason and tells the lead', () => {
     const f = routed()
@@ -740,7 +740,7 @@ describe('decisions linked to work', () => {
   it('gives the policy-order row the Lead’s reason and why the order decided', () => {
     const f = routed()
     const order = (patch: Record<string, unknown>) => f.run({ type: 'route.record', conversationId: 'lead', decision: record({ via: 'order', p: null, ...patch }) } as Command,
-      f.leadActor, { recentRoutes: 0 }).messages[0]!
+      f.leadActor, {}).messages[0]!
     expect(order({ fallback: 'unavailable', why: 'Jev unavailable (BUSY); first in the policy order.' })).toMatchObject({
       text: 'Routed to Title c0 — by policy order · "Schema change."', source: { why: 'Schema change.', fallback: 'unavailable' } })
     expect(order({ fallback: 'unsure' }).source).toMatchObject({ fallback: 'unsure' })
@@ -1366,7 +1366,7 @@ describe('the owner\'s rules', () => {
   })
   it('refuses a recorded pick that breaks a hard rule, but not a ruled-out candidate that was not picked', () => {
     const f = routed()
-    const route = (decision: unknown) => f.run({ type: 'route.record', conversationId: 'lead', decision } as Command, f.leadActor, { recentRoutes: 0 })
+    const route = (decision: unknown) => f.run({ type: 'route.record', conversationId: 'lead', decision } as Command, f.leadActor, {})
     f.run(set({ kind: 'forbidModel', model: 'sonnet' }, 'No Sonnet.'))
     expect(route(record()).result.routeDecisionId).toBeTruthy()
     expect(() => route(record({ pick: 'c1' }))).toThrow('The owner\'s rule "No Sonnet." rules out Claude sonnet.')
@@ -1432,7 +1432,7 @@ describe('the owner\'s rules in a Swarm of projects', () => {
     const f = projects(), app = projectIdOf(f, f.app)
     f.run(forbid(app, 'sonnet')); f.run(forbid(app, 'test-model'))
     expect(f.state.rules!.map(r => r.projectId)).toEqual([app, app])
-    const route = (conversationId: string, actor: Actor) => f.run({ type: 'route.record', conversationId, decision: record({ pick: 'c1' }) } as Command, actor, { recentRoutes: 0 })
+    const route = (conversationId: string, actor: Actor) => f.run({ type: 'route.record', conversationId, decision: record({ pick: 'c1' }) } as Command, actor, {})
     expect(route(f.site, f.siteLead).result.routeDecisionId).toBeTruthy()
     expect(() => route(f.app, f.lead)).toThrow('The owner\'s rule "No sonnet." rules out Claude sonnet.')
     const siteWorker = f.add('site-worker', 'owner', f.site)

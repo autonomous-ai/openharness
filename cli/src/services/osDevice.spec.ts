@@ -362,12 +362,72 @@ describe('the Harness OS computer, managed from the phone', () => {
       expect(exec).toHaveBeenCalledWith(GH, ['auth', 'logout', '--hostname', 'github.com', '--user', 'octo'], { timeout: 15_000 })
     })
 
-    it('says so on a computer without the GitHub CLI', async () => {
-      const { ask, githubSignIn } = github({ exists: (path) => path !== GH })
-      const missing = { error: 'GH_MISSING', message: 'The GitHub CLI is not on this computer yet: update it first.' }
-      expect(await ask({ action: 'github' })).toEqual(missing)
-      expect(await ask({ action: 'github', state: 'sign_in' })).toEqual(missing)
+    /** A computer whose gh is gone, and the setup's install-gh answering [answer] (and putting gh back on `installed`). */
+    function withoutGh(answer: () => Promise<string>) {
+      let there = false
+      let installed!: () => void
+      const done = new Promise<void>((resolve) => { installed = resolve })
+      const base = github()
+      const exec = vi.fn(async (file: string, args: readonly string[], _options?: { timeout: number }) => {
+        if (file === 'sudo') {
+          try {
+            const out = await answer()
+            there = out.includes('"installed": true')
+            return out
+          } finally { installed() }
+        }
+        return base.exec(file, args)
+      })
+      const githubSignIn = vi.fn(() => base.login.run)
+      const { ask } = service({ exec, githubSignIn, exists: (path) => path !== GH || there })
+      return { ask, exec, githubSignIn, done, signInAs: base.signInAs }
+    }
+
+    it('puts a GitHub CLI that is gone back from the OS, then signs in, answering at once', async () => {
+      vi.spyOn(console, 'log').mockImplementation(() => {})
+      let finish!: (out: string) => void
+      const { ask, exec, githubSignIn, done } = withoutGh(() => new Promise((resolve) => { finish = resolve }))
+      expect(await ask({ action: 'github' })).toEqual({ login: null, missing: true })
+      expect(await ask({ action: 'github', state: 'sign_in' })).toEqual({ login: null, installing: true })
+      // Asked again while it installs: the same install.
+      expect(await ask({ action: 'github', state: 'sign_in' })).toEqual({ login: null, installing: true })
+      expect(exec).toHaveBeenCalledWith('sudo', ['-n', '/usr/bin/python3', SETUP, 'install-gh'], { timeout: 300_000 })
+      expect(exec.mock.calls.filter(([file]) => file === 'sudo')).toHaveLength(1)
+      finish('{"installed": true}')
+      await done
+      await vi.waitFor(async () => expect(await ask({ action: 'github' }))
+        .toEqual({ login: null, signingIn: { code: 'AB12-CD34', url: 'https://github.com/login/device' } }))
+      expect(githubSignIn).toHaveBeenCalledTimes(1)
+    })
+
+    it('puts the GitHub CLI back without signing in again where its sign-in stayed', async () => {
+      vi.spyOn(console, 'log').mockImplementation(() => {})
+      const { ask, githubSignIn, done, signInAs } = withoutGh(async () => '{"installed": true}')
+      signInAs('octo')
+      await ask({ action: 'github', state: 'sign_in' })
+      await done
+      await vi.waitFor(async () => expect(await ask({ action: 'github' })).toEqual({ login: 'octo' }))
       expect(githubSignIn).not.toHaveBeenCalled()
+    })
+
+    it('says why the GitHub CLI could not be put back', async () => {
+      vi.spyOn(console, 'log').mockImplementation(() => {})
+      const { ask, githubSignIn, done } = withoutGh(async () => '{"installed": false, "message": "The GitHub CLI could not be installed: error: failed retrieving file"}')
+      await ask({ action: 'github', state: 'sign_in' })
+      await done
+      await vi.waitFor(async () => expect(await ask({ action: 'github' }))
+        .toEqual({ login: null, missing: true, signInError: 'The GitHub CLI could not be installed: error: failed retrieving file' }))
+      expect(githubSignIn).not.toHaveBeenCalled()
+    })
+
+    it('asks for an update on an OS from before install-gh, whose sudo refuses it', async () => {
+      vi.spyOn(console, 'log').mockImplementation(() => {})
+      vi.spyOn(console, 'error').mockImplementation(() => {})
+      const { ask, done } = withoutGh(async () => { throw new Error('sudo: a password is required') })
+      await ask({ action: 'github', state: 'sign_in' })
+      await done.catch(() => {})
+      await vi.waitFor(async () => expect(await ask({ action: 'github' }))
+        .toEqual({ login: null, missing: true, signInError: 'The GitHub CLI could not be installed here: update this computer, then try again.' }))
     })
 
     it('finds the code and the page in what gh prints', () => {
