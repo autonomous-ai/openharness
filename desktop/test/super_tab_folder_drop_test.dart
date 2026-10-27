@@ -3,6 +3,8 @@
 // another computer the box says so and offers the folder as a zip instead.
 import 'dart:async';
 import 'dart:io';
+import 'dart:math';
+import 'dart:typed_data';
 
 import 'package:archive/archive.dart';
 import 'package:flutter/material.dart';
@@ -11,6 +13,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/super_tabs/attachment_upload.dart';
 import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/view.dart';
+import 'package:harness/state/harness_attachments.dart';
 
 import 'support/super_tab_fixture.dart';
 
@@ -387,6 +390,75 @@ void main() {
       find.descendant(of: hint, matching: find.text('Attach as zip')),
       findsOneWidget,
     );
+    await close(tester, controller);
+  });
+
+  testWidgets('two folders of one name are both attached, the second '
+      'numbered', (tester) async {
+    final controller = await open(tester, machineId: 'studio');
+    final first = Directory('${root.path}/a/src')..createSync(recursive: true);
+    final second = Directory('${root.path}/b/src')..createSync(recursive: true);
+    File('${first.path}/one.txt').writeAsStringSync('1');
+    File('${second.path}/two.txt').writeAsStringSync('2');
+    await drop(tester, [
+      first.path,
+      second.path,
+    ], until: () => field(tester).text.contains(second.path));
+
+    await tester.tap(find.text('Attach as zip'));
+    await settle(tester, () => names(controller).length == 2);
+
+    expect(names(controller), ['src.zip', 'src-2.zip']);
+    expect(field(tester).text, isEmpty);
+    await close(tester, controller);
+  });
+
+  testWidgets('a zip the message has no room for keeps its path', (
+    tester,
+  ) async {
+    final controller = await open(tester, machineId: 'studio');
+    controller.attachments('lead').add([
+      for (var i = 0; i < kSuperTabAttachmentMaxFiles; i++)
+        HarnessAttachment('file-$i.txt', Uint8List.fromList([i + 1])),
+    ]);
+    final src = folder('src');
+    File('${src.path}/main.dart').writeAsStringSync('void main() {}');
+    await drop(tester, [
+      src.path,
+    ], until: () => field(tester).text.contains(src.path));
+
+    await tester.tap(find.text('Attach as zip'));
+    await settle(tester, () => find.byType(SnackBar).evaluate().isNotEmpty);
+
+    expect(find.text('Attach at most 10 files.'), findsOneWidget);
+    expect(names(controller), isNot(contains('src.zip')));
+    expect(field(tester).text, '${src.path} ');
+    expect(hint, findsOneWidget);
+    await close(tester, controller);
+  });
+
+  testWidgets('a folder whose zip comes out over the limit keeps its path', (
+    tester,
+  ) async {
+    final controller = await open(tester, machineId: 'studio');
+    final src = folder('src');
+    // Under the limit as files, over it once zipped: random bytes do not
+    // compress, and the archive adds its headers.
+    final random = Random(1);
+    File('${src.path}/noise.bin').writeAsBytesSync([
+      for (var i = 0; i < kSuperTabAttachmentMaxBytes - 16; i++)
+        random.nextInt(256),
+    ]);
+    await drop(tester, [
+      src.path,
+    ], until: () => field(tester).text.contains(src.path));
+
+    await tester.tap(find.text('Attach as zip'));
+    await settle(tester, () => find.byType(SnackBar).evaluate().isNotEmpty);
+
+    expect(find.text('src.zip is over 10 MB.'), findsOneWidget);
+    expect(names(controller), isEmpty);
+    expect(field(tester).text, '${src.path} ');
     await close(tester, controller);
   });
 }

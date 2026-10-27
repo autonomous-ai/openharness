@@ -466,13 +466,19 @@ class _SuperTabViewState extends State<SuperTabView>
     if (!mounted) return;
     setState(() => _zipping.remove(id));
     if (!identical(_droppedFolders[id], dropped)) return;
-    final problem = files.add([
+    // Numbered, so two folders of one name are both attached.
+    final problem = files.addPasted([
       for (final MapEntry(key: folder, value: bytes) in zipped.entries)
         HarnessAttachment('${folderName(folder)}.zip', bytes),
     ], oversized: oversized);
+    // Only a folder whose zip was taken gives up its path.
+    final attached = [
+      for (final MapEntry(key: folder, value: bytes) in zipped.entries)
+        if (files.files.any((file) => identical(file.bytes, bytes))) folder,
+    ];
     final shown = c.selectedId == id;
     var text = shown ? _composer.text : c.draft(id);
-    for (final folder in zipped.keys) {
+    for (final folder in attached) {
       final path = _pathText(folder);
       text = text.contains('$path ')
           ? text.replaceFirst('$path ', '')
@@ -480,7 +486,7 @@ class _SuperTabViewState extends State<SuperTabView>
           ? text.replaceFirst(' $path', '')
           : text.replaceFirst(path, '');
     }
-    dropped.removeWhere(zipped.containsKey);
+    dropped.removeWhere(attached.contains);
     c.setDraft(id, text);
     if (shown && _composer.text != text) {
       _composer.value = TextEditingValue(
