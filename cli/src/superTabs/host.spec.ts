@@ -1641,7 +1641,7 @@ describe('built-in skill text after a CLI update', () => {
       holds.push({ match, until: new Promise<void>(resolve => { release = resolve }) })
       return release
     }
-    return { t, files, sent, refused, pass, rowRoles, texts, fetched, holdNext, setRefuse: (next: typeof refuse) => { refuse = next }, setGroups: (next: typeof groups) => { groups = next }, setMode: (next: typeof mode) => { skillMode = next } }
+    return { t, files, sent, refused, pass, agents, rowRoles, texts, fetched, holdNext, setRefuse: (next: typeof refuse) => { refuse = next }, setGroups: (next: typeof groups) => { groups = next }, setMode: (next: typeof mode) => { skillMode = next } }
   }
 
   // Custom roles and skills per project (spec 2026-10-23): on Custom the roster names each agent's role and its text's
@@ -1744,6 +1744,18 @@ describe('built-in skill text after a CLI update', () => {
       await poll
       await f.pass(host, 1_000)
       expect(f.sent).toEqual([])
+    })
+    // Diego's issue, 2026-10-27: nothing deleted a session's skill state, so a daemon running for weeks kept an entry, with
+    // the full Custom role text, for every Swarm agent it ever ran.
+    it('forgets a session\'s skill state once it leaves the roster', async () => {
+      const f = syncFixture(false, 'default')
+      custom(f, 'Plan the work.\n')
+      const host = await f.pass()
+      const state = host as unknown as Record<'skillChecks' | 'skillModes' | 'roleTexts', Map<string, unknown>>
+      expect(state.roleTexts.has('h-lead')).toBe(true)
+      f.agents.splice(0, f.agents.length)
+      await f.pass(host, 1_000)
+      expect([state.skillChecks.size, state.skillModes.size, state.roleTexts.size]).toEqual([0, 0, 0])
     })
     it('leaves an agent whose role is gone on its file, fetching and telling nothing: the backend tells it', async () => {
       const f = syncFixture(false, 'default')
