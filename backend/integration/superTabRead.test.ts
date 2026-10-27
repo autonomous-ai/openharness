@@ -728,6 +728,60 @@ describe('decisions asked of one person (v2)', () => {
   })
 })
 
+describe('hands-on requests (collaboration protocol)', () => {
+  const post = async (tabId: string, command: Record<string, unknown>, as: AuthUser = owner, asAgentId?: string, operationId = randomUUID()) => {
+    const response = await app.inject({ method: 'POST', url: `/api/super-tabs/${tabId}/commands`, headers: { authorization: `Bearer ${as.sub}` },
+      payload: { operationId, command, ...(asAgentId ? { asAgentId } : {}) } })
+    return { status: response.statusCode, body: response.json() as { data: { result: Record<string, unknown> }; error?: { code: string } } }
+  }
+  const list = async (tabId: string, as: AuthUser, state = 'open', agent?: string, kind = 'handsOn') =>
+    (await get(`/api/super-tabs/${tabId}/decisions?state=${state}&kind=${kind}${agent ? `&asAgentId=${agent}` : ''}`, as)).body.data
+  const plugIn = { request: 'Plug in the voice device', steps: ['Plug it into the Mac Studio', 'Press its button'], next: 'I run the voice test' }
+
+  it('runs from the worker’s ask to the person’s answer: listed apart from decisions, counted on the badge, answered once', async () => {
+    const s = await scene()
+    clock = Date.now()
+    const asked = await post(s.tabId, { type: 'handsOn.ask', conversationId: s.web, personId: peer.sub, ...plugIn }, owner, s.worker)
+    expect(asked.status, JSON.stringify(asked.body)).toBe(200)
+    const id = asked.body.data.result.requestId as string
+    const assignmentId = (await get(`/api/super-tabs/${s.tabId}/parts`, owner)).body.data.groups.find((g: { key: string }) => g.key === s.web).data.assignment.id
+    expect((await list(s.tabId, peer)).handsOn).toEqual([expect.objectContaining({ id, kind: 'handsOn', request: plugIn.request, steps: plugIn.steps,
+      next: plugIn.next, askerAgentId: s.worker, assignmentId, conversationTitle: 'Web', answer: null, remindedAt: null })])
+    // Not a decision: an older Desktop's list and count stay decisions only.
+    expect((await get(`/api/super-tabs/${s.tabId}/decisions?state=open`, peer)).body.data.decisions).toEqual([])
+    const derived = (await get(`/api/super-tabs/${s.tabId}/parts`, peer)).body.data.derived
+    expect([derived.decisionsWaiting, derived.handsOnWaiting]).toEqual([0, 1])
+    expect(derived).not.toHaveProperty('requestRemindedAt')
+    // Nobody else sees it but the asker and the Lead.
+    expect((await list(s.tabId, owner)).handsOn).toEqual([])
+    expect((await list(s.tabId, outsider)).handsOn).toEqual([])
+    expect((await list(s.tabId, owner, 'open', s.lead)).handsOn).toHaveLength(1)
+    // A decision answer cannot take it.
+    expect((await post(s.tabId, { type: 'decision.answer', decisionId: id, choice: 0 }, peer)).status).toBe(404)
+    const answered = await post(s.tabId, { type: 'handsOn.answer', requestId: id, answer: 'cant', until: '2026-10-27T14:00:00.000Z', note: 'In a meeting' }, peer)
+    expect(answered.status, JSON.stringify(answered.body)).toBe(200)
+    expect((await list(s.tabId, owner, 'answered', s.worker)).handsOn).toEqual([expect.objectContaining({ id, answer: 'cant', note: 'In a meeting',
+      until: '2026-10-27T14:00:00.000Z' })])
+    expect((await get(`/api/super-tabs/${s.tabId}/parts`, peer)).body.data.derived.handsOnWaiting).toBe(0)
+    const notice = await db.superTabMessage.findUnique({ where: { id: answered.body.data.result.messageId as string } })
+    expect(notice).toMatchObject({ conversationId: s.web, recipientIds: [s.worker, s.lead], source: { kind: 'agent-only', handsOnId: id } })
+    expect(notice!.text).not.toContain('meeting')
+    expect((await post(s.tabId, { type: 'handsOn.answer', requestId: id, answer: 'done' }, peer)).body.error?.code).toBe('DECISION_ANSWERED')
+    expect((await post(s.tabId, { type: 'handsOn.answer', requestId: id, answer: 'done' }, owner)).status).toBe(404)
+  })
+
+  it('asks once however often the same request is repeated, and refuses a person who cannot read the conversation', async () => {
+    const s = await scene()
+    clock = Date.now()
+    const ask = async (conversationId = s.web) => post(s.tabId, { type: 'handsOn.ask', conversationId, personId: peer.sub, ...plugIn }, owner, s.lead)
+    const first = (await ask()).body.data.result.requestId
+    expect((await ask()).body.data.result.requestId).toBe(first)
+    expect((await list(s.tabId, peer)).handsOn).toHaveLength(1)
+    const refused = await post(s.tabId, { type: 'handsOn.ask', conversationId: s.secretGroup, personId: peer.sub, ...plugIn }, owner, s.lead)
+    expect([400, 403, 404]).toContain(refused.status)
+  })
+})
+
 describe('routes given only a store', () => {
   it('read from that store\'s database, not the app-wide client', async () => {
     const s = await scene()

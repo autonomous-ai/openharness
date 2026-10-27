@@ -7,7 +7,7 @@ import type { AuthUser } from '../../lib/ssoAuth.js'
 import { isTeamSession, TEAM_SESSION_LIMITED, TEAM_SESSION_MESSAGE } from '../../lib/teamSession.js'
 import { author, fail, type Actor, type AgentStart } from '../model.js'
 import { mentionsWaiting } from '../mentions.js'
-import { decisionsWaiting } from '../decisions.js'
+import { requestsWaiting } from '../decisions.js'
 import { transaction, type SuperTabStore } from '../store.js'
 import { migrateSwarm } from '../migration/migrate.js'
 import * as parts from '../parts/index.js'
@@ -123,10 +123,10 @@ export class SwarmReads {
     const actor = await this.store.actor(tx, user, state, asAgentId)
     const [teamMachines, counts, newest] = await Promise.all([
       state.machines?.length ? this.store.teamMachines(tx, state) : [],
-      actor.kind === 'person' ? Promise.all([mentionsWaiting(tx, tabId, state, actor, t0), decisionsWaiting(tx, tabId, state, actor)]) : undefined,
+      actor.kind === 'person' ? Promise.all([mentionsWaiting(tx, tabId, state, actor, t0), requestsWaiting(tx, tabId, state, actor)]) : undefined,
       parts.lastChangedAt(tx, [tabId]),
     ])
     return { parts: loaded, actor, lastChangedAt: newest.get(tabId) ?? null,
-      view: readerView(loaded, actor, t0, { teamMachines, ...(counts ? { mentionsWaiting: counts[0], decisionsWaiting: counts[1] } : {}) }) }
+      view: readerView(loaded, actor, t0, { teamMachines, ...(counts ? { mentionsWaiting: counts[0], ...counts[1] } : {}) }) }
   }
 }

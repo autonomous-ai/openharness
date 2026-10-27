@@ -108,3 +108,76 @@ describe('answering a decision', () => {
     expect(answered.messages[0]!.recipients).toEqual([s.lead])
   })
 })
+
+describe('hands-on requests (collaboration protocol)', () => {
+  const plugIn = { request: 'Plug in the voice device', steps: ['Plug the device into the Mac Studio', 'Press its button and say "hello"'],
+    next: 'I run the voice test on it' }
+  const ask = (s: ReturnType<typeof swarm>, actor: Actor, personId = 'peer', conversationId = s.group) =>
+    s.run({ type: 'handsOn.ask', conversationId, personId, ...plugIn }, actor)
+
+  it('lets the Lead ask one person for physical steps, with what happens next, and pings nobody in the transcript', () => {
+    const s = swarm()
+    const asked = ask(s, asAgent(s.lead))
+    expect(asked.decisions).toEqual([expect.objectContaining({ kind: 'handsOn', conversationId: s.group, projectId: 'lead', personId: 'peer',
+      askerAgentId: s.lead, assignmentId: null, question: plugIn.request, steps: plugIn.steps, unblocks: plugIn.next, options: [], recommended: 0 })])
+    expect(asked.messages).toEqual([])
+    expect(asked.result.requestId).toBe(asked.decisions![0]!.id)
+  })
+
+  it('lets the assigned worker ask on its own task, and nobody else but the Lead', () => {
+    const s = swarm()
+    expect(ask(s, asAgent(s.worker)).decisions![0]).toMatchObject({ askerAgentId: s.worker, assignmentId: s.assignmentId })
+    const other = s.run({ type: 'conversation.create', title: 'Other', brief: 'Other', checks: [] }).result.conversationId as string
+    expect(() => ask(s, asAgent(s.worker), 'peer', other)).toThrow('Only the project’s Lead, or the worker on its own task, asks for hands-on help.')
+    expect(() => ask(s, owner)).toThrow('Only the project’s Lead, or the worker on its own task, asks for hands-on help.')
+    expect(() => ask(s, asAgent(s.lead), 'stranger')).toThrow('person in this Swarm')
+    const hidden = s.run({ type: 'conversation.create', title: 'Owner only', brief: '', checks: [], audience: { personIds: ['owner'] } }).result.conversationId as string
+    expect(() => ask(s, asAgent(s.lead), 'peer', hidden)).toThrow('peer@example.com cannot read this conversation.')
+  })
+
+  it('takes one to ten short steps', () => {
+    const s = swarm()
+    const parse = (steps: string[]) => commandSchema.safeParse({ type: 'handsOn.ask', conversationId: s.group, personId: 'peer', ...plugIn, steps }).success
+    expect(parse([])).toBe(false)
+    expect(parse(Array.from({ length: 11 }, (_, i) => `Step ${i}`))).toBe(false)
+    expect(parse(['x'.repeat(301)])).toBe(false)
+    expect(parse(['Plug it in'])).toBe(true)
+  })
+
+  const open = (s: ReturnType<typeof swarm>, overrides: Partial<DecisionTarget> = {}): DecisionTarget => ({ id: 'request-1', kind: 'handsOn', personId: 'peer',
+    conversationId: s.group, askerAgentId: s.worker, question: plugIn.request, options: [], answeredAt: null, ...overrides })
+  const answer = (s: ReturnType<typeof swarm>, body: Record<string, unknown>, actor: Actor = peer, target: DecisionTarget | null = open(s)) =>
+    s.run({ type: 'handsOn.answer', requestId: 'request-1', ...body } as Command, actor, target ? { decision: target } : {})
+
+  it('records done, can’t now with until and a note, or a note, and tells the asker and the Lead with a notice carrying none of it', () => {
+    const s = swarm()
+    const done = answer(s, { answer: 'done' })
+    expect(done.handsOnAnswer).toEqual({ id: 'request-1', answer: 'done', note: null, until: null })
+    expect(done.messages).toEqual([expect.objectContaining({ conversationId: s.group, recipients: [s.worker, s.lead],
+      source: { kind: 'agent-only', handsOnId: 'request-1' } })])
+    expect(done.result.requestId).toBe('request-1')
+    const later = answer(s, { answer: 'cant', until: '2026-10-27T14:00:00.000Z', note: 'In a meeting' })
+    expect(later.handsOnAnswer).toEqual({ id: 'request-1', answer: 'cant', note: 'In a meeting', until: Date.parse('2026-10-27T14:00:00.000Z') })
+    const noted = answer(s, { answer: 'note', note: 'The device is at home today' })
+    expect(noted.handsOnAnswer).toMatchObject({ answer: 'note', note: 'The device is at home today' })
+    for (const each of [done, later, noted]) {
+      for (const text of ['voice device', 'In a meeting', 'at home']) expect(each.messages[0]!.text).not.toContain(text)
+    }
+  })
+
+  it('takes a note with a note answer, and until only with can’t now', () => {
+    const s = swarm()
+    expect(() => answer(s, { answer: 'note' })).toThrow('Write the note.')
+    expect(() => answer(s, { answer: 'done', until: '2026-10-27T14:00:00.000Z' })).toThrow('Only “can’t now” takes an until.')
+  })
+
+  it('takes an answer only from the person asked, once, and never through a decision answer', () => {
+    const s = swarm()
+    expect(() => answer(s, { answer: 'done' }, owner)).toThrow('unavailable')
+    expect(() => answer(s, { answer: 'done' }, peer, null)).toThrow('unavailable')
+    expect(() => answer(s, { answer: 'done' }, peer, open(s, { answeredAt: 5 }))).toThrow('already answered')
+    // A decision is not a hands-on request, nor the other way round.
+    expect(() => answer(s, { answer: 'done' }, peer, open(s, { kind: undefined, options: ['A', 'B'] }))).toThrow('unavailable')
+    expect(() => s.run({ type: 'decision.answer', decisionId: 'request-1', choice: 0 }, peer, { decision: open(s) })).toThrow('unavailable')
+  })
+})

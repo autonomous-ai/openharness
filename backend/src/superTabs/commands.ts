@@ -11,7 +11,7 @@ import { routingOverrideSchema } from './routingPolicy.js'
 import { agentTarget, askedInSchema, broken, MAX_RULES, RULE_MESSAGE_MS, ruleSchema, ruleTextSchema, startTarget, type RunTarget } from './rules.js'
 import { MAX_ATTACHMENTS, type Attachment } from './attachments.js'
 import { checkMentions, MAX_MENTIONS, type MentionTarget } from './mentions.js'
-import { ANSWERED_NOTICE, answerDecision, askDecisions, checkAsker, decisionChoices, decisionQuestion, MAX_QUESTIONS, type DecisionTarget } from './decisions.js'
+import { ANSWERED_NOTICE, answerDecision, answerHandsOn, askDecisions, askHandsOn, checkAsker, checkHandsOnAsker, decisionChoices, decisionQuestion, HANDS_ON_NOTICE, handsOnRequest, MAX_QUESTIONS, type DecisionTarget } from './decisions.js'
 import { TERMINAL_KEYS, terminalAlert, terminalRequest, terminalResult, type TerminalRequest } from './terminal.js'
 import { loseTasks, renewLease, renewOwnTask } from './liveness.js'
 import { credentialResult, redactCredentials, type CredentialKind } from './credentials.js'
@@ -130,6 +130,9 @@ export const commandSchema = z.discriminatedUnion('type', [
     attachmentIds: z.array(id).max(MAX_ATTACHMENTS).optional(), mentions: z.array(id).max(MAX_MENTIONS).optional(), agentOnly: z.literal(true).optional() }).strict(),
   z.object({ type: z.literal('mention.done'), mentionId: id }).strict(),
   z.object({ type: z.literal('decision.ask'), conversationId: id, personId: id, questions: z.array(decisionQuestion).min(1).max(MAX_QUESTIONS) }).strict(),
+  z.object({ type: z.literal('handsOn.ask'), conversationId: id, personId: id }).merge(handsOnRequest).strict(),
+  z.object({ type: z.literal('handsOn.answer'), requestId: id, answer: z.enum(['done', 'cant', 'note']), note: z.string().trim().min(1).max(2000).optional(),
+    until: z.string().datetime().optional() }).strict(),
   z.object({ type: z.literal('decision.answer'), decisionId: id, choice: z.number().int().min(0), note: z.string().trim().min(1).max(2000).optional() }).strict(),
   z.object({ type: z.literal('delivery.resolve'), deliveryId: id, resolution: z.enum(['received', 'resend', 'cancel']) }).strict(),
   z.object({ type: z.literal('work.define'), conversationId: id, brief: text.optional(), task: task.optional(), checks: z.array(check).min(1).max(40) }).strict()
@@ -358,7 +361,7 @@ export function authorizeCommandAccess(state: SuperTabState, actor: Actor, comma
   if (command.type === 'invite.accept' || command.type === 'agent.sessionClosed' || command.type === 'machine.cleaned') return
   // Marking one's own tag done changes only one's own list, so a viewer may do it too.
   // Answering a decision asked of oneself changes only that decision, so a viewer may do it too.
-  if (command.type === 'mention.done' || command.type === 'decision.answer') return void author(state, actor)
+  if (command.type === 'mention.done' || command.type === 'decision.answer' || command.type === 'handsOn.answer') return void author(state, actor)
   const leaving = command.type === 'member.remove' && actor.kind === 'person' && command.userId === actor.userId
   author(state, actor, !leaving)
   // An invitation's group is only where the person lands, and invite.create replaces a deleted one (inviteLanding).
@@ -468,7 +471,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
   }
 
   const leaving = command.type === 'member.remove' && actor.kind === 'person' && command.userId === actor.userId
-  const sender = author(state, actor, !leaving && command.type !== 'decision.answer')
+  const sender = author(state, actor, !leaving && command.type !== 'decision.answer' && command.type !== 'handsOn.answer')
   authorizeCommandAccess(state, actor, command, context)
   const rememberAttempt = (group: ReturnType<typeof conversation>) => {
     if (group.assignment) effects.previousAttempts.push(structuredClone({ conversationId: group.id,
@@ -1022,6 +1025,21 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       effects.decisions = askDecisions(state, group, command.personId, command.questions,
         { operationId, askerAgentId: checkAsker(state, actor, group), assignmentId: null })
       result.decisionIds = effects.decisions.map(d => d.id)
+      break
+    }
+    case 'handsOn.ask': {
+      const group = open(state, command.conversationId)
+      const draft = askHandsOn(state, group, command.personId, { request: command.request, steps: command.steps, next: command.next },
+        { operationId, ...checkHandsOnAsker(state, actor, group) })
+      effects.decisions = [draft]
+      result.requestId = draft.id
+      break
+    }
+    case 'handsOn.answer': {
+      const { answer, recipients, source } = answerHandsOn(state, actor, context.decision, command.answer, command.note ?? null, command.until ?? null)
+      effects.handsOnAnswer = answer
+      if (recipients.length) message(context.decision!.conversationId, HANDS_ON_NOTICE, recipients, null, source)
+      result.requestId = answer.id
       break
     }
     case 'decision.answer': {
