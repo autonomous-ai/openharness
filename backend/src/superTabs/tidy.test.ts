@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { Agent, Assignment, Conversation, SuperTabState } from './model.js'
-import { IDLE_STOP_MS, stopIdleWorkers } from './tidy.js'
+import { ARCHIVE_QUIET_MS, archivable, IDLE_STOP_MS, stopIdleWorkers } from './tidy.js'
 
 const MINUTE = 60_000
 const START = Date.parse('2026-10-27T08:00:00.000Z')
@@ -105,5 +105,31 @@ describe('stopping idle workers', () => {
     off.tidy = false
     expect(stopIdleWorkers(off, 'lead', at, new Set())).toEqual([])
     expect(stopIdleWorkers(swarm({ agents: [worker({ projectId: 'other' })] }), 'lead', at, new Set())).toEqual([])
+  })
+})
+
+describe('which finished groups archive', () => {
+  const quiet = START + ARCHIVE_QUIET_MS
+  it('is a group whose task is done or cancelled and that has been quiet for 30 minutes', () => {
+    const state = swarm()
+    expect(archivable(state, state.conversations[1]!, quiet)).toBe(true)
+    expect(archivable(state, state.conversations[1]!, quiet - 1)).toBe(false)
+    const cancelled = swarm({ groups: [group({ assignment: done({ status: 'cancelled' }) })] })
+    expect(archivable(cancelled, cancelled.conversations[1]!, quiet)).toBe(true)
+  })
+
+  it('is never a group with work still going, lost or stopped, or no task at all', () => {
+    for (const assignment of [done({ status: 'working' }), done({ status: 'review' }), done({ status: 'lost' }), done({ status: 'stopped' }), null]) {
+      const state = swarm({ groups: [group({ assignment })] })
+      expect(archivable(state, state.conversations[1]!, quiet)).toBe(false)
+    }
+  })
+
+  it('is never a Lead conversation, a private chat, the Leads conversation, an archived group, or any once tidying is off', () => {
+    const state = swarm({ groups: [group({ audience: { people: [] } as never }), group({ id: 'leads', kind: 'leads' }), group({ id: 'old', archived: true })] })
+    for (const g of state.conversations) expect(archivable(state, g, quiet)).toBe(false)
+    const off = swarm()
+    off.tidy = false
+    expect(archivable(off, off.conversations[1]!, quiet)).toBe(false)
   })
 })

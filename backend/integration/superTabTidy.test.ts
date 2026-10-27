@@ -11,6 +11,7 @@ import { SuperTabStore } from '../src/superTabs/store.js'
 import type { Command } from '../src/superTabs/commands.js'
 import type { MachineObservation } from '../src/superTabs/machines.js'
 import { poolRows, rosterRows } from './hostRows.test-support.js'
+import { archiveFinishedGroups, type PullRequestState } from '../src/superTabs/archive.js'
 
 // Nobody tidies a Swarm by hand: a worker idle for 15 minutes is stopped on its Lead's poll and its host is asked to close
 // it. A fresh loopback replica set, created here.
@@ -129,5 +130,64 @@ describe('a worker left idle', () => {
     await f.observe('test-host', [f.harness.worker], { harnessUncommitted: { [f.harness.worker]: false } })
     await f.timed.deliveries(host, f.tab, f.lead)
     expect((await f.member()).workDecision).toBe('awaiting')
+  })
+})
+
+describe('a finished group', () => {
+  const PR = 'https://github.com/acme/app/pull/7'
+  /** GitHub as the sweep reads it: each pull request's state, null when it cannot say. */
+  const github = (states: Record<string, PullRequestState>) => ({ read: [] as string[], closed: false,
+    async state(url: string) { this.read.push(url); return states[url] ?? null }, async done() { this.closed = true } })
+  const archived = async (f: Awaited<ReturnType<typeof swarm>>) => (await db.swarmGroup.findFirstOrThrow({ where: { tabId: f.tab, key: f.group } })).archived
+  const archiveLines = async (f: Awaited<ReturnType<typeof swarm>>) => (await db.superTabMessage.findMany({ where: { tabId: f.tab, conversationId: f.group } }))
+    .filter(m => (m.source as { kind?: string } | null)?.kind === 'auto-archive')
+  const linkPr = (f: Awaited<ReturnType<typeof swarm>>) => f.execute({ type: 'message.send', conversationId: f.group, text: `Pull request: ${PR}`, replyTo: null, recipientIds: [] })
+
+  it('archives 30 minutes after its last message once every pull request is merged or closed, with one quiet line', async () => {
+    const f = await swarm()
+    await linkPr(f)
+    const prs = github({ [PR]: 'merged' })
+    f.clock.now += 29 * MINUTE
+    await archiveFinishedGroups(db, f.timed, prs, f.clock.now)
+    expect(await archived(f)).toBe(false)
+    f.clock.now += MINUTE
+    await archiveFinishedGroups(db, f.timed, prs, f.clock.now)
+    expect(await archived(f)).toBe(true)
+    expect(prs.read).toContain(PR)
+    expect(prs.closed).toBe(true)
+    expect(await archiveLines(f)).toEqual([expect.objectContaining({ recipientIds: [],
+      text: 'Archived: the work is cancelled and its pull requests are merged or closed.' })])
+    // It never archives twice.
+    f.clock.now += 40 * MINUTE
+    await archiveFinishedGroups(db, f.timed, prs, f.clock.now)
+    expect(await archiveLines(f)).toHaveLength(1)
+  })
+
+  it('stays open while a pull request is open or GitHub cannot say', async () => {
+    for (const state of ['open', null] as const) {
+      const f = await swarm()
+      await linkPr(f)
+      f.clock.now += 40 * MINUTE
+      await archiveFinishedGroups(db, f.timed, github({ [PR]: state }), f.clock.now)
+      expect(await archived(f)).toBe(false)
+    }
+  })
+
+  it('stays open while a person\'s decision asked there waits', async () => {
+    const f = await swarm()
+    await db.superTabDecision.create({ data: { id: randomUUID(), tabId: f.tab, batchId: 'b', conversationId: f.group, projectId: 'p', personId: owner.sub,
+      askerAgentId: f.lead, assignmentId: null, question: 'Ship it?', options: ['Yes', 'No'], recommended: 0, unblocks: 'Release', createdAt: new Date(f.clock.now) } })
+    f.clock.now += 40 * MINUTE
+    await archiveFinishedGroups(db, f.timed, github({}), f.clock.now)
+    expect(await archived(f)).toBe(false)
+  })
+
+  it('stays open once the owner turned tidying off, and never archives the Lead conversation', async () => {
+    const f = await swarm()
+    await f.execute({ type: 'tab.tidy', enabled: false })
+    f.clock.now += 40 * MINUTE
+    await archiveFinishedGroups(db, f.timed, github({}), f.clock.now)
+    expect(await archived(f)).toBe(false)
+    expect((await db.swarmGroup.findMany({ where: { tabId: f.tab, archived: true } }))).toEqual([])
   })
 })

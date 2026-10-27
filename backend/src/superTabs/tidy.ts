@@ -1,6 +1,6 @@
 import { agentDisplayName } from './agentNames.js'
 import { activeWork, agentRole, stableId, type Agent, type Conversation, type MessageDraft, type SuperTabState } from './model.js'
-import { agentProjectId, projectsOf } from './projects.js'
+import { agentProjectId, groupProject, projectsOf } from './projects.js'
 
 // Nobody has to tidy a Swarm by hand (roadmap, December). A Builder left with nothing to do for 15 minutes is stopped, as
 // its Lead's agent.release stop would: its host closes the session and frees the machine slot (host.ts). Whatever the
@@ -75,4 +75,30 @@ export function stopIdleWorkers(state: SuperTabState, projectId: string, now: nu
 export function stoppedMachines(state: SuperTabState, rows: MessageDraft[]): Array<{ kind: 'machine'; key: string }> {
   const stopped = new Set(rows.map(r => r.source?.agentId))
   return [...new Set(state.agents.filter(a => stopped.has(a.id)).map(a => a.machineId))].map(key => ({ kind: 'machine' as const, key }))
+}
+
+/** How long a finished group stays open after its last message: an archived group refuses posts, and the Lead still talks
+ *  to its worker for a while after the task ends (ruling in the plan, 2026-10-27). */
+export const ARCHIVE_QUIET_MS = 30 * 60_000
+
+/** Whether a group may archive by itself, as far as the Swarm alone can tell: its task done or cancelled, quiet for
+ *  ARCHIVE_QUIET_MS, and not a Lead conversation, a private chat with people or the Leads conversation. Its pull requests
+ *  and decisions are checked by the caller (archive.ts). */
+export function archivable(state: SuperTabState, group: Conversation, now: number): boolean {
+  if (state.tidy === false || group.archived || group.kind || group.audience) return false
+  if (projectsOf(state).some(p => p.leadConversationId === group.id)) return false
+  if (!['done', 'cancelled'].includes(group.assignment?.status ?? '')) return false
+  const last = time(group.lastActivityAt)
+  return last !== undefined && now - last >= ARCHIVE_QUIET_MS
+}
+
+/** The one quiet line an archived group gets, to nobody, written as its project's Lead; none when the project has no Lead. */
+export function archiveLine(state: SuperTabState, group: Conversation, now: number): MessageDraft | null {
+  const leadId = state.conversations.find(c => c.id === groupProject(state, group).leadConversationId)?.leadId
+  const lead = leadId ? state.agents.find(a => a.id === leadId) : undefined
+  if (!lead) return null
+  const prs = group.pullRequestUrls?.length ? ' and its pull requests are merged or closed' : ''
+  return { id: stableId('auto-archive', group.id, String(now)), conversationId: group.id, replyTo: null, recipients: [],
+    author: { kind: 'agent', id: lead.id, name: lead.name, displayName: agentDisplayName(state.agents, lead.id), membershipGeneration: lead.membershipGeneration },
+    text: `Archived: the work is ${group.assignment!.status}${prs}.`, source: { kind: 'auto-archive' } }
 }

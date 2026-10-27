@@ -76,6 +76,11 @@ export function answerDecision(state: SuperTabState, actor: Actor, decision: Dec
 /** Mongo omits unset fields, so `answeredAt: null` alone would miss a row written without it. */
 const waiting: Prisma.SuperTabDecisionWhereInput = { OR: [{ answeredAt: null }, { answeredAt: { isSet: false } }] }
 
+/** Whether a person's decision asked in this conversation still waits: a group that has one is never archived by itself. */
+export async function waitingIn(tx: Tx, tabId: string, conversationId: string): Promise<boolean> {
+  return !!await tx.superTabDecision.findFirst({ where: { tabId, conversationId, ...waiting }, select: { id: true } })
+}
+
 /** What makes an ask a repeat: the same asker, task, person, conversation, question, options, recommendation and what it
  *  unblocks. Another asker, another task or other options with the same text is a decision of its own (review of #1753). */
 const repeatKey = (d: Pick<DecisionDraft, 'askerAgentId' | 'assignmentId' | 'personId' | 'conversationId' | 'question' | 'options' | 'recommended' | 'unblocks'>) =>

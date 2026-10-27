@@ -15,10 +15,10 @@ import { logger } from '../utils/logger.js'
 import { canReadAgent, canReadGroup, canWatchAgent, groupProject, ledProject, projectOf, projectsOf, agentProjectId, readConversation, roleVersion, type ProjectVisibility } from './projects.js'
 import { bindSession, makeProjectPrivate } from './sessionScope.js'
 import { confidentialSessions, otherRegistrations, recordConfidential } from './confidential.js'
-import { answersRequest, noteProjectReports, projectUpdateRequest } from './projectUpdates.js'
+import { answersRequest, dirtyGroups, noteProjectReports, projectUpdateRequest } from './projectUpdates.js'
 import { digestDue, digestRequest, digestSince } from './digest.js'
 import { judgedMachines, loseTasks, sweepLiveness, SWEEP_EVERY_MS } from './liveness.js'
-import { stopIdleWorkers, stoppedMachines } from './tidy.js'
+import { archivable, archiveLine, stopIdleWorkers, stoppedMachines } from './tidy.js'
 import { clock, insertParts, lastChangedAt, loadActive, reassemble, split, type HeadData, type SwarmParts } from './parts/index.js'
 import { commitParts, indexesOf, numberMessages, type Touch, type Written } from './parts/commit.js'
 import { touchesFor } from './parts/touches.js'
@@ -34,7 +34,7 @@ import { accrueLent } from './leaderboard/lent.js'
 import { mayDrive, TERMINAL_ANSWER_MS, TERMINAL_EXPIRY_MS, TERMINAL_PICKUP_MS, type TerminalEffect } from './terminal.js'
 import { closeAssignment, closeUnassignedStart, readDecision, recentRoutes, timedDecisionOf, writeRouteEffects } from './routeDecisions.js'
 import { listMentions, markDone, mentionsWaiting, readMention, resolveByReply, writeMentions } from './mentions.js'
-import { answerable, listDecisions, readAskedDecision, recordAnswer, waitingInProject, writeDecisions } from './decisions.js'
+import { answerable, listDecisions, readAskedDecision, recordAnswer, waitingIn, waitingInProject, writeDecisions } from './decisions.js'
 import { DEFAULT_ROUTING_POLICY, effectivePolicy, routingPolicySchema, type RoutingPolicy } from './routingPolicy.js'
 import { authenticatedEmail, authorizeSwarmJoin, configureSharing, joinSwarmSchema, requireSharingOwner,
   saveSharingSchema, sharingDetails, type JoinSwarm, type SaveSharing } from './sharing.js'
@@ -1702,6 +1702,30 @@ export class SuperTabStore {
       await tx.superTabDelivery.update({ where: { id: delivery.id }, data: { holdReason: reason, holdSince: delivery.holdSince ?? new Date(this.now()) } })
     }
     return { held: true }
+  }
+
+  /** Archives a finished group whose pull requests `checked` were all read merged or closed (archive.ts), only if it still
+   *  qualifies inside this write: no message since, no decision waiting and no pull request linked since the read. Its
+   *  queued deliveries are kept for when it reopens, as a person's archive keeps them. True when it archived. */
+  async archiveFinished(tabId: string, groupId: string, checked: readonly string[]): Promise<boolean> {
+    return transaction(this.db, async tx => {
+      const row = await tx.superTab.findUnique({ where: { id: tabId } })
+      if (!row) return false
+      const loaded = await loadRow(tx, requireParts(row), { groupIds: [groupId] }), state = structuredClone(loaded.state)
+      const group = state.conversations.find(c => c.id === groupId)
+      const now = this.now()
+      if (!group || !archivable(state, group, now) || (group.pullRequestUrls ?? []).some(url => !checked.includes(url))) return false
+      if (await waitingIn(tx, tabId, groupId)) return false
+      group.archived = true
+      const line = archiveLine(state, group, now), rows = line ? [line] : []
+      const sequences = numberMessages(state, rows, now)
+      if (!dirtyGroups(state, groupProject(state, group)).includes(group)) group.dormant = true
+      // As a person's archive does (execute): a claim of a delivery here conflicts with this write.
+      await tx.superTabDelivery.updateMany({ where: { tabId, conversationId: groupId, status: { in: [...OPEN_DELIVERY] } }, data: { updatedAt: new Date(now) } })
+      await this.save(tx, loaded, state, clock.next())
+      await this.writeMessages(tx, tabId, state, rows, sequences)
+      return true
+    })
   }
 
   /** Only the recorded execution host may attest that the actual session/attempt has stopped. */
