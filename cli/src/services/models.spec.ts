@@ -29,6 +29,11 @@ import { compactRuntimePickerModels, launchTarget, MODELS_REQUESTS, startModels,
 import { gridExec } from '../lib/gridExec.js'
 import { syncSwarmGrid } from '../lib/swarmGrid.js'
 import { SwarmApiShares } from '../lib/swarmApiShares.js'
+import { liveModels, SwarmHeal } from '../lib/swarmHeal.js'
+import { SwarmOffers } from '../lib/swarmOffers.js'
+
+/** The Swarm's side of models, as its process hands it in while the Swarm is on (superTabs/inServices.ts). */
+const SWARM = { syncSwarmGrid, SwarmApiShares, SwarmHeal, liveModels, SwarmOffers }
 
 const access = vi.hoisted(() => ({ ensure: vi.fn(async (_request?: { ownGrid?: boolean }): Promise<GridAttachResult> => ({ status: 'converged', name: 'grid-1', detail: 'ok' })) }))
 vi.mock('../lib/gridAttach.js', () => ({
@@ -124,11 +129,11 @@ type AttemptDeps = Parameters<typeof reconcileGridAttach>[0]
 type Over = Parameters<typeof fakeCore>[0]
 const onGrid = (agentId: string, state: string) => ({ agentId, grid: { state } }) as unknown as RegisteredSession
 
-function setup(advertised: RegisteredSession[] = [], over: Over = {}) {
+function setup(advertised: RegisteredSession[] = [], over: Over = {}, swarm: typeof SWARM | null = SWARM) {
   const list = [...advertised]
   const core = fakeCore({ ...over, agents: { advertised: vi.fn(() => list), sync: vi.fn(), ...over.agents } })
   const ports = emptyPorts()
-  const requests = startModels(core, ports)
+  const requests = startModels(core, ports, swarm ?? undefined)
   const options = vi.mocked(createGridAccess).mock.calls.at(-1)![0]
   const changed = vi.mocked(onGridModelsChanged).mock.calls.at(-1)![0]
   /** Ask one request as a local window would. */
@@ -491,6 +496,27 @@ describe('the models service', () => {
       expect(swarmOffers.list).toHaveBeenLastCalledWith('swarm-0123456789ab')
       requests.grid_swarm_offers!({}, asker)
       expect(swarmOffers.list).toHaveBeenLastCalledWith(undefined)
+    })
+
+    // HARNESS_SWARM=off: its process hands in no Swarm. Nothing of it starts (no API is restored or served to a Swarm's
+    // grid), its requests are answered as its own service's are, and a deleted API has no share to come off.
+    it('with the Swarm off, serves nothing to a Swarm and answers its requests unavailable', async () => {
+      vi.mocked(SwarmApiShares).mockClear()
+      vi.mocked(SwarmOffers).mockClear()
+      const { requests } = setup([], {}, null)
+      expect(SwarmApiShares).not.toHaveBeenCalled()
+      expect(SwarmOffers).not.toHaveBeenCalled()
+      for (const type of ['grid_swarm_sync', 'grid_swarm_api_share', 'grid_swarm_api_shares', 'grid_swarm_offer', 'grid_swarm_offers', 'grid_swarm_heal']) {
+        expect(await requests[type]!({ grid: 'swarm-0123456789ab', members: [], connectionId: 'c1', model: 'm', action: 'start' }, asker), type)
+          .toEqual({ error: 'SERVICE_UNAVAILABLE', service: 'superTabs', retryable: false })
+      }
+      expect(syncSwarmGrid).not.toHaveBeenCalled()
+      expect(apiShares.share).not.toHaveBeenCalled()
+      expect(apiShares.restore).not.toHaveBeenCalled()
+      await requests.api_connections!({ action: 'remove', id: 'c1' }, asker)
+      expect(apiShares.stopConnection).not.toHaveBeenCalled()
+      // The rest of models is as it is with the Swarm on.
+      expect(await requests.grid_fleet_run!(COMMAND, asker)).toMatchObject({ ok: true })
     })
 
     it('refuses a command it cannot read, or one with no connection or request to belong to', async () => {

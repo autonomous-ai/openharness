@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { createSuperTabCards } from './superTabCards.js'
+import { createSuperTabCards } from './cards.js'
 
 const lead = (id: string, over: Record<string, unknown> = {}) =>
   ({ id, projectId: `p-${id}`, project: 'mobile', engine: 'claude', owner: '', local: 'h1', state: 'work', order: 0, since: 12, ...over })
