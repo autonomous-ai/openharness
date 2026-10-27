@@ -1,9 +1,13 @@
 import 'package:flutter/material.dart';
 
 import '../../widgets/desktop_chrome.dart';
+import '../identity.dart';
 import 'format.dart';
 import 'model.dart';
 import 'progress_bar.dart';
+
+/// Where the name starts: after the medal (24) and the avatar (20) with its gap (6).
+const _nameInset = 50.0;
 
 const _medals = {
   SuperTabMedal.gold: '🏆',
@@ -27,6 +31,13 @@ class LeaderboardPersonRow extends StatelessWidget {
   final bool open;
   final VoidCallback onTap;
 
+  /// Today's Swarm avatar, sized for the shared avatar widget (v2 H) to drop in here.
+  Widget _avatar() => SuperTabAvatar(
+    identity: 'person:${score.personId}',
+    name: name,
+    size: 20,
+  );
+
   @override
   Widget build(BuildContext context) {
     final lent = score.lentMachines == 0
@@ -44,6 +55,8 @@ class LeaderboardPersonRow extends StatelessWidget {
             Row(
               children: [
                 SizedBox(width: 24, child: Text(_medals[score.medal] ?? '')),
+                _avatar(),
+                const SizedBox(width: 6),
                 Flexible(
                   child: Text(
                     name,
@@ -69,7 +82,7 @@ class LeaderboardPersonRow extends StatelessWidget {
               ],
             ),
             Padding(
-              padding: const EdgeInsets.only(left: 24, top: 2),
+              padding: const EdgeInsets.only(left: _nameInset, top: 2),
               child: Text(
                 '🚀 ${score.shipped} shipped   🔓 ${score.unblocked}   ⚡ $lent',
                 style: DesktopChrome.metadata(),
@@ -127,7 +140,7 @@ class _Detail extends StatelessWidget {
     ];
     return Container(
       width: double.infinity,
-      margin: const EdgeInsets.only(left: 24, top: 8),
+      margin: const EdgeInsets.only(left: _nameInset, top: 8),
       padding: const EdgeInsets.all(10),
       decoration: BoxDecoration(
         color: DesktopChrome.field,

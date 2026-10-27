@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/super_tabs/controller.dart';
+import 'package:harness/super_tabs/identity.dart';
 import 'package:harness/super_tabs/leaderboard/column.dart';
 import 'package:harness/super_tabs/leaderboard/model.dart';
 import 'package:harness/super_tabs/leaderboard/reader.dart';
@@ -276,6 +277,22 @@ void main() {
         expect(find.text('🚀 2 shipped   🔓 3   ⚡ 1 machine'), findsOneWidget);
         expect(find.text('Tony'), findsWidgets);
         expect(find.text('0 pts'), findsOneWidget);
+      },
+    );
+
+    testWidgets(
+      'shows each person\'s avatar beside their name, at the size the shared avatar takes',
+      (tester) async {
+        await mount(tester);
+        final avatars = tester
+            .widgetList<SuperTabAvatar>(find.byType(SuperTabAvatar))
+            .toList();
+        expect(avatars.map((a) => (a.identity, a.name, a.size)), [
+          ('person:ken', 'Ken', 20.0),
+          ('person:dee', 'Dee', 20.0),
+          ('person:scholes', 'Scholes', 20.0),
+          ('person:tony', 'Tony', 20.0),
+        ]);
       },
     );
 
