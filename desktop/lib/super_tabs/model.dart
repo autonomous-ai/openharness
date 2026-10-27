@@ -1,3 +1,4 @@
+import 'identity.dart' show superTabPersonName;
 import 'profile_model.dart';
 
 export 'profile_model.dart';
@@ -407,7 +408,7 @@ class SuperTabSnapshot {
   // Recorded labels remain the fallback for agents no longer in the Swarm.
   String authorName(SuperTabMessage message) => message.fromAgent
       ? agentName(message.authorId, fallback: message.authorName)
-      : message.authorName;
+      : superTabPersonName(message.authorName);
 }
 
 /// The Swarm's Local models add-on (docs/plans/2026-10-23-swarm-local-models.md): its grid, whether it is on, and what the

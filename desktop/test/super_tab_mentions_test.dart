@@ -463,7 +463,7 @@ void main() {
       await tester.tap(find.byKey(const ValueKey('super-mention-mention-1')));
       await tester.pumpAndSettle();
       expect(c.selectedId, 'group');
-      expect(find.text('Replying to owner@example.com'), findsOneWidget);
+      expect(find.text('Replying to owner'), findsOneWidget);
       expect(
         find.byKey(const ValueKey('super-message-message-100')).hitTestable(),
         findsOneWidget,
