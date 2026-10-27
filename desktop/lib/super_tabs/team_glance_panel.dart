@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../shared/theme/app_theme.dart' as grid;
+import '../shared/theme/app_icons.dart';
 import '../shared/widgets/app_dialog.dart';
 import '../state/app_state.dart';
 import '../widgets/desktop_chrome.dart';
@@ -87,11 +88,7 @@ class _Warning extends StatelessWidget {
     child: Row(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Icon(
-          Icons.warning_amber_rounded,
-          size: 16,
-          color: grid.AppPalette.warn,
-        ),
+        Icon(AppIcons.triangleAlert, size: 16, color: grid.AppPalette.warn),
         const SizedBox(width: 6),
         Expanded(child: Text(text, style: DesktopChrome.control())),
       ],

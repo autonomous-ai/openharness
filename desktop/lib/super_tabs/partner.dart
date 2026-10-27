@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../shared/theme/app_icons.dart';
 import '../shared/widgets/app_dialog.dart';
 import '../widgets/desktop_chrome.dart';
 import 'controller.dart';
@@ -50,7 +51,7 @@ Future<void> showSuperTabPartner(
             ],
           ),
         ),
-        if (id == group.partnerId) const Icon(Icons.check, size: 16),
+        if (id == group.partnerId) const Icon(AppIcons.check, size: 16),
       ],
     ),
   );
