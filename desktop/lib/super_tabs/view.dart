@@ -379,13 +379,21 @@ class _SuperTabViewState extends State<SuperTabView>
       return;
     }
     final id = c.selectedId;
+    // From here a zip still running belongs to neither this message, which
+    // took its files already, nor the next.
+    final dropped = _droppedFolders.remove(id);
     final result = await c.send(replyTo: _replies[id]?.id);
-    if (mounted && result != null) {
-      setState(() {
+    if (!mounted) return;
+    setState(() {
+      if (result != null) {
         _replies.remove(id);
-        _droppedFolders.remove(id);
-      });
-    }
+      } else if (dropped != null) {
+        // Not sent: its paths are still offered as zips, in a new record
+        // so the zip that was running is still let go.
+        final now = _droppedFolders.putIfAbsent(id, () => []);
+        now.insertAll(0, dropped.where((path) => !now.contains(path)));
+      }
+    });
   }
 
   /// [path] as it goes into a message: quoted when it holds a space.

@@ -1,6 +1,7 @@
 // Folders dropped on a Swarm chat's composer: their paths go into the message
 // at the cursor, dropped files still attach, and when the chat's agents run on
 // another computer the box says so and offers the folder as a zip instead.
+import 'dart:async';
 import 'dart:io';
 
 import 'package:archive/archive.dart';
@@ -19,6 +20,7 @@ void main() {
   final surface = find.byKey(const ValueKey('super-message-composer-surface'));
 
   late Directory root;
+  late ConversationServer server;
   setUp(() => root = Directory.systemTemp.createTempSync('swarm-folder-drop'));
   tearDown(() => root.deleteSync(recursive: true));
 
@@ -35,7 +37,7 @@ void main() {
     // needs no scaling on any host.
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.resetDevicePixelRatio);
-    final server = ConversationServer();
+    server = ConversationServer();
     (server.state['agents'] as List).add({
       'id': 'lead-agent',
       'name': 'Lead',
@@ -338,6 +340,53 @@ void main() {
     expect(names(controller), isEmpty);
     expect(find.text('big is over 10 MB.'), findsOneWidget);
     expect(field(tester).text, '${big.path} ');
+    await close(tester, controller);
+  });
+
+  testWidgets('a zip that lands while its message is sending is not kept '
+      'for the next one', (tester) async {
+    final controller = await open(tester, machineId: 'studio');
+    final src = folder('src');
+    File('${src.path}/main.dart').writeAsStringSync('void main() {}');
+    await tester.enterText(composer, 'Look at');
+    await drop(tester, [
+      src.path,
+    ], until: () => field(tester).text.contains(src.path));
+
+    await tester.tap(find.text('Attach as zip'));
+    server.holdReads = Completer<void>();
+    await tester.tap(find.byTooltip('Send message'));
+    await tester.pump();
+    // The zip has its answer while the send still waits on the server.
+    await settle(tester, () => names(controller).isNotEmpty);
+    server.holdReads!.complete();
+    server.holdReads = null;
+    await tester.pumpAndSettle();
+
+    expect(
+      (server.posts.single['command'] as Map)['text'],
+      'Look at ${src.path}',
+    );
+    expect(names(controller), isEmpty);
+    await close(tester, controller);
+  });
+
+  testWidgets('a message that fails to send keeps offering its folder as a '
+      'zip', (tester) async {
+    final controller = await open(tester, machineId: 'studio');
+    await drop(tester, [
+      folder('src').path,
+    ], until: () => field(tester).text.isNotEmpty);
+
+    server.refuse = {'code': 'CONFLICT', 'message': 'Try again.'};
+    await tester.tap(find.byTooltip('Send message'));
+    await tester.pumpAndSettle();
+
+    expect(hint, findsOneWidget);
+    expect(
+      find.descendant(of: hint, matching: find.text('Attach as zip')),
+      findsOneWidget,
+    );
     await close(tester, controller);
   });
 }
