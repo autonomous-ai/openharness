@@ -17,6 +17,7 @@
  *    the external identity service.
  */
 import type { IncomingMessage } from 'http'
+import { markCpuKind } from './selfProfile.js'
 import type { Duplex } from 'stream'
 import { WebSocket, type RawData } from 'ws'
 import { createWss, WS_LIMITS } from './wsServer.js'
@@ -569,6 +570,7 @@ function attachUserClient(ws: WebSocket, user: AuthUser, surface: 'mobile' | 'we
     }
     let frame: Frame
     try { frame = JSON.parse(raw.toString()) as Frame } catch { return }
+    markCpuKind(`web-ws ${String(frame.type)}`)
     inbox.enqueue(frame)
   })
 
@@ -628,6 +630,7 @@ function attachWebClient(ws: WebSocket, machineId: string): void {
     let frame: Frame
     try { frame = JSON.parse(raw.toString()) as Frame } catch { return }
     const type = frame.type as string | undefined
+    markCpuKind(`web-ws ${String(type)}`)
     // The same backend-only refusal as the per-user path: a key holder is a client, not the backend.
     if (isBackendOnlyDownType(type)) return
     if (typeof type === 'string' && type.startsWith('terminal_') && !TERMINAL_DOWN_TYPES.has(type)) return
