@@ -97,6 +97,24 @@ void main() {
     );
   });
 
+  test('fonts that never arrive hold the workspace only so long', () async {
+    final stalled = Completer<void>();
+    var done = false;
+    unawaited(
+      downloadWorkspace(
+        library: () async {},
+        fonts: () => stalled.future,
+        fontsGrace: const Duration(milliseconds: 50),
+      ).then((_) => done = true),
+    );
+
+    await pumpEventQueue();
+    expect(done, isFalse);
+
+    await Future<void>.delayed(const Duration(milliseconds: 100));
+    expect(done, isTrue);
+  });
+
   test('a workspace library that fails fails the part', () async {
     await expectLater(
       downloadWorkspace(

@@ -23,14 +23,20 @@ Future<void> loadTerminalFonts() {
   return loader.load();
 }
 
+/// How long the workspace waits for [terminalFontAssets] once its library is in.
+const terminalFontsGrace = Duration(seconds: 3);
+
 /// The workspace's [library] and the terminal's [fonts], side by side. The
-/// workspace waits for the fonts so no terminal is measured in a fallback
-/// face, but fonts that fail do not keep it away: the fallback still draws.
+/// workspace waits for the fonts so no terminal is first drawn in a fallback
+/// face, but fonts that fail, or are still on their way [fontsGrace] after the
+/// library, do not keep it away: the fallback draws, and xterm re-measures its
+/// cells when the fonts land.
 Future<void> downloadWorkspace({
   required Future<void> Function() library,
   required Future<void> Function() fonts,
+  Duration fontsGrace = terminalFontsGrace,
 }) async {
   final fontsIn = fonts().then((_) {}, onError: (Object _) {});
   await library();
-  await fontsIn;
+  await fontsIn.timeout(fontsGrace, onTimeout: () {});
 }
