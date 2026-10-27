@@ -12,10 +12,11 @@ import { attachmentMime, attachmentName, AttachmentTooLarge, checkedType, MAX_AT
 import { randomBytes } from 'node:crypto'
 import type { Readable } from 'node:stream'
 import { logger } from '../utils/logger.js'
-import { canReadAgent, canReadGroup, canWatchAgent, groupProject, ledProject, projectsOf, agentProjectId, readConversation, roleVersion, type ProjectVisibility } from './projects.js'
+import { canReadAgent, canReadGroup, canWatchAgent, groupProject, ledProject, projectOf, projectsOf, agentProjectId, readConversation, roleVersion, type ProjectVisibility } from './projects.js'
 import { bindSession, makeProjectPrivate } from './sessionScope.js'
 import { confidentialSessions, otherRegistrations, recordConfidential } from './confidential.js'
 import { answersRequest, noteProjectReports, projectUpdateRequest } from './projectUpdates.js'
+import { digestDue, digestRequest, digestSince } from './digest.js'
 import { judgedMachines, loseTasks, sweepLiveness, SWEEP_EVERY_MS } from './liveness.js'
 import { clock, insertParts, lastChangedAt, loadActive, reassemble, split, type HeadData, type SwarmParts } from './parts/index.js'
 import { commitParts, indexesOf, numberMessages, type Touch, type Written } from './parts/commit.js'
@@ -1515,7 +1516,16 @@ export class SuperTabStore {
 
   async deliveries(user: AuthUser, tabId: string, agentId: string) {
     return transaction(this.db, async tx => {
-      const loaded = await this.load(tx, user, tabId), state = structuredClone(loaded.state)
+      let loaded = await this.load(tx, user, tabId)
+      // Work finished since the last digest and archived or asleep since still shipped, but ordinary loads leave it out
+      // (#1757 review, 4): a due digest loads it.
+      const led = ledProject(loaded.state, agentId)
+      if (led && digestDue(led, this.now())) {
+        const finished = await tx.swarmGroup.findMany({ where: { tabId, deleted: false, dormant: true, lastActivityAt: { gte: new Date(digestSince(led, this.now())) },
+          OR: [{ projectId: led.id }, ...led.id === 'lead' ? [{ projectId: null }] : []] }, select: { key: true } })
+        if (finished.length) loaded = await this.ensure(tx, loaded, { groupIds: finished.map(g => g.key) })
+      }
+      const state = structuredClone(loaded.state)
       author(state, await this.actor(tx, user, state, agentId), true)
       const target = agent(state, agentId)
       // A Lead's poll runs the time checks (liveness.ts): lost work wakes it in this same poll.
@@ -1536,7 +1546,14 @@ export class SuperTabStore {
           woken = true
         }
       }
-      // One write for both: the time checks' changes and the wake-up's.
+      // The morning digest is due once a day; recording it as sent is part of this same write, so it is sent once.
+      const digest = digestRequest(state, target, this.now())
+      if (digest) {
+        const project = projectOf(state, digest.source!.projectId as string)
+        project.digest = { ...project.digest!, lastOn: digest.source!.on as string, lastAt: this.now() }
+        written.push(digest)
+      }
+      // One write for all: the time checks' changes and the wake-ups'.
       const sequences = numberMessages(state, written, this.now())
       await this.save(tx, loaded, state, clock.next(), [...judgedMachines(state, written), ...woken ? [{ kind: 'agent' as const, key: agentId }] : []])
       await this.writeMessages(tx, tabId, state, written, sequences)

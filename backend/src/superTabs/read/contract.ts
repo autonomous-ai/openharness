@@ -184,6 +184,9 @@ export interface HostAgentRow {
   paused: boolean
   active: boolean
   attention: { assignmentId: string; status: WorkStatus; result: string | null } | null
+  /** Its task lost to a usage limit, still waiting for it: when its host types it back into the same session. `lostAt`
+   *  names that loss, since one task can be lost, resumed and lost again. */
+  resume: { conversationId: string; assignmentId: string; lostAt: number; at: string } | null
   agent: Agent
   joinSwarm: boolean
   skillMode: 'default' | 'orchestration'
