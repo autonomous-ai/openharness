@@ -499,7 +499,8 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
   const sender = author(state, actor, !leaving && command.type !== 'decision.answer')
   authorizeCommandAccess(state, actor, command, context)
   if (command.type === 'kudos.give') {
-    const to = kudosFor(state, actor, conversation(state, command.conversationId), context.kudos)
+    // Only who may post in the conversation thanks in it: an open conversation, and an agent taking part in it.
+    const to = kudosFor(state, actor, postable(state, actor, command.conversationId), context.kudos)
     effects.kudos = { conversationId: command.conversationId, messageId: command.messageId, from: sender, to, note: command.note || null }
     return effects
   }

@@ -3583,6 +3583,25 @@ describe('kudos', () => {
     expect(await counts(tab, owner)).toEqual({})
   })
 
+  it('refuses thanks from an agent that does not take part in the conversation', async () => {
+    const { tab, lead } = await fixture()
+    const group = String((await run(tab, { type: 'conversation.create', title: 'Without the Lead', brief: '', checks: [] })).result.conversationId)
+    await run(tab, { type: 'conversation.agent', conversationId: group, agentId: lead, present: false, lead: false })
+    const message = await send(tab, group, 'Shipped.')
+    await expect(thank(tab, group, message, host, lead)).rejects.toMatchObject({ code: 'FORBIDDEN' })
+    expect(await counts(tab, owner)).toEqual({})
+  })
+
+  it('refuses thanks in an archived conversation', async () => {
+    const { tab } = await fixture()
+    await invite(tab)
+    const group = String((await run(tab, { type: 'conversation.create', title: 'Archived', brief: '', checks: [] })).result.conversationId)
+    const message = await send(tab, group, 'Shipped.')
+    await run(tab, { type: 'conversation.archive', conversationId: group, archived: true })
+    await expect(thank(tab, group, message, peer)).rejects.toMatchObject({ code: 'ARCHIVED' })
+    expect(await counts(tab, owner)).toEqual({})
+  })
+
   it('shows and counts kudos only for people who can read the conversation, rechecked on every read', async () => {
     const { tab, lead, messageId } = await thanked()
     await thank(tab, 'lead', messageId)
