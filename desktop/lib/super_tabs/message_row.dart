@@ -11,6 +11,7 @@ import 'identity.dart';
 import 'message_text.dart';
 import 'model.dart';
 import 'pull_requests.dart';
+import 'reactions.dart';
 
 /// Presentation only. Message identity and reply routing use backend IDs.
 class SuperTabMessageRow extends StatefulWidget {
@@ -31,6 +32,9 @@ class SuperTabMessageRow extends StatefulWidget {
     this.references = const {},
     this.onOpenGroup,
     this.mentions = const [],
+    this.readerId = '',
+    this.reactorName,
+    this.onReact,
   });
 
   final SuperTabMessage message;
@@ -51,6 +55,12 @@ class SuperTabMessageRow extends StatefulWidget {
   final VoidCallback? onReply, onOpenAgent;
   final VoidCallback onReturnToComposer;
   final List<Widget> receipts;
+
+  /// The reader, whose own reactions are marked; [reactorName] names the
+  /// others. Without [onReact] the counts only show.
+  final String readerId;
+  final SuperTabReactorName? reactorName;
+  final ValueChanged<SuperTabReactionEmoji>? onReact;
 
   // Routing notes share the message body column, including grouped messages.
   static const horizontalInset = 24.0;
@@ -328,6 +338,12 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
                                   ),
                                 ),
                               SuperTabPullRequestLinks(message.text),
+                              SuperTabReactionBar(
+                                message: message,
+                                readerId: widget.readerId,
+                                nameOf: widget.reactorName ?? (_, id) => id,
+                                onReact: widget.onReact,
+                              ),
                               ...widget.receipts,
                             ],
                           ),
@@ -352,6 +368,8 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
                         child: Row(
                           mainAxisSize: MainAxisSize.min,
                           children: [
+                            if (widget.onReact case final react?)
+                              SuperTabReactionPicker(onReact: react),
                             if (widget.onReply != null)
                               AppIconButton(
                                 icon: AppIcons.reply,

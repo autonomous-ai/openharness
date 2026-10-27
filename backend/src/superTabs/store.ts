@@ -1316,7 +1316,7 @@ export class SuperTabStore {
     return transaction(this.db, async tx => {
       const { state } = await this.load(tx, user, tabId, { groupIds: [conversationId] })
       const actor = await this.actor(tx, user, state, asAgentId)
-      readConversation(state, actor, conversationId)
+      const group = readConversation(state, actor, conversationId)
       const forward = cursor.after !== undefined
       const past = (sequence: number, id: string | undefined, direction: 'gt' | 'lt') => id === undefined ? { sequence: { [direction]: sequence } }
         : { OR: [{ sequence: { [direction]: sequence } }, { sequence, id: { [direction]: id } }] }
@@ -1341,7 +1341,9 @@ export class SuperTabStore {
         select: { id: true, messageId: true, agentId: true, status: true, receipt: true,
           holdReason: true, holdSince: true, deliveredAt: true, answeredAt: true, createdAt: true, updatedAt: true } }) : []
       return { messages: page.map(m => ({ ...m, mentions: m.mentions ?? [], reactions: reactions.get(m.id) ?? [],
-        deliveries: deliveries.filter(d => d.messageId === m.id) })), next }
+        deliveries: deliveries.filter(d => d.messageId === m.id) })), next,
+        // A poll for new messages learns here that a reaction changed on a message it already shows (reactions.ts).
+        reactionSeq: group.reactionSeq ?? 0 }
     })
   }
 

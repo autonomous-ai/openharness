@@ -417,6 +417,9 @@ class SuperTabController extends ChangeNotifier {
   }
 
   bool hasOlder(String id) => _before[id] != null;
+
+  /// Each conversation's reaction counter as its last page said it.
+  final _reactionSeq = <String, int>{};
   int _loadedMessageSequence(String id) =>
       _messages[id]?.reversed
           .where((m) => m.source['kind'] != 'update-request')
@@ -1106,6 +1109,17 @@ class SuperTabController extends ChangeNotifier {
   }
 
   /// The same messages with the same receipts: posted text does not change.
+  /// Whether [answer] says a reaction changed in [id] since its last page:
+  /// a poll for new messages then reads the page shown again (backend
+  /// reactions.ts). The first answer only records where it stands.
+  bool _reactionsMoved(String id, Map<String, dynamic> answer) {
+    final seq = answer['reactionSeq'];
+    if (seq is! int) return false;
+    final known = _reactionSeq[id];
+    _reactionSeq[id] = seq;
+    return known != null && known != seq;
+  }
+
   static bool _sameMessages(
     List<SuperTabMessage>? shown,
     List<SuperTabMessage> next,
@@ -1113,7 +1127,9 @@ class SuperTabController extends ChangeNotifier {
     if (shown == null || shown.length != next.length) return false;
     for (var i = 0; i < next.length; i++) {
       final a = shown[i], b = next[i];
-      if (a.id != b.id || a.deliveries.length != b.deliveries.length) {
+      if (a.id != b.id ||
+          a.deliveries.length != b.deliveries.length ||
+          !_sameReactions(a.reactions, b.reactions)) {
         return false;
       }
       for (var j = 0; j < b.deliveries.length; j++) {
@@ -1122,6 +1138,20 @@ class SuperTabController extends ChangeNotifier {
     }
     return true;
   }
+
+  static bool _sameReactions(
+    List<SuperTabReactionCount> a,
+    List<SuperTabReactionCount> b,
+  ) =>
+      a.length == b.length &&
+      [
+        for (var i = 0; i < a.length; i++)
+          a[i].emoji == b[i].emoji &&
+              listEquals(
+                [for (final who in a[i].by) '${who.kind}:${who.id}'],
+                [for (final who in b[i].by) '${who.kind}:${who.id}'],
+              ),
+      ].every((same) => same);
 
   String _messagesPath(String id) =>
       '$_path/conversations/${Uri.encodeComponent(id)}/messages';
@@ -1227,12 +1257,14 @@ class SuperTabController extends ChangeNotifier {
           : await request('GET', '${_messagesPath(id)}$query');
       final arrived =
           !older && tail != null && (answer['messages'] as List).isNotEmpty;
+      final reacted = !older && _reactionsMoved(id, answer);
       if (!_disposed &&
           !older &&
-          !light &&
+          (!light || reacted) &&
           tail != null &&
           (answer['messages'] as List).isEmpty) {
-        // No new text: refresh delivery receipts in the page already shown.
+        // No new text: refresh delivery receipts in the page already shown,
+        // and on a light read the counts of a reaction that changed there.
         answer = await request(
           'GET',
           '$_path/conversations/${Uri.encodeComponent(id)}/messages?before=${tail + 1}',

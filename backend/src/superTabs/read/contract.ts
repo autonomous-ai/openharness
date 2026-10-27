@@ -133,7 +133,13 @@ export interface SwarmList {
  *  newest row the same way. `next` is null at the end. `after` alone (no `afterId`) means strictly after that sequence,
  *  which is all a poll for new messages needs. */
 export interface MessagePageCursor { sequence: number; id: string }
-export interface MessagePage<M = Record<string, unknown>> { messages: M[]; next: MessagePageCursor | null }
+export interface MessagePage<M = Record<string, unknown>> {
+  messages: M[]
+  next: MessagePageCursor | null
+  /** The conversation's reaction counter (reactions.ts): when it moved, read the page shown again for its counts. Each
+   *  message carries `reactions: [{ emoji, count, by: [{ kind, id }] }]`, current members only. */
+  reactionSeq: number
+}
 
 /** GET /api/super-tabs/hosts/:machineId/changes?cursor=[&full=1], or POST to the same path with this body when the host
  *  holds etags (up to 500 Swarms do not fit in a URL). Ask `full` at start and at least every 60 s. */

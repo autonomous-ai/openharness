@@ -15,6 +15,8 @@ import '../state/harness_attachments.dart';
 import '../state/workspace_chrome.dart';
 import 'roster.dart';
 import 'recording_notice.dart';
+import 'identity.dart' show superTabPersonName;
+import 'profile_actions.dart';
 import 'pull_requests.dart';
 import 'controller.dart';
 import 'dialog_scope.dart';
@@ -1129,6 +1131,16 @@ class _SuperTabViewState extends State<SuperTabView>
     });
   }
 
+  Future<void> _react(
+    SuperTabMessage message,
+    SuperTabReactionEmoji emoji,
+  ) async {
+    final failure = await c.react(message, emoji);
+    if (failure == null || !mounted) return;
+    ScaffoldMessenger.maybeOf(context)
+        ?.showSnackBar(SnackBar(content: Text(failure)));
+  }
+
   Widget _message(
     SuperTabMessage message,
     bool grouped,
@@ -1192,6 +1204,17 @@ class _SuperTabViewState extends State<SuperTabView>
             }
           : null,
       onReturnToComposer: _focus.requestFocus,
+      readerId: c.accountId,
+      reactorName: (kind, id) => kind == 'agent'
+          ? c.snapshot?.agentName(id) ?? 'Agent'
+          : c.snapshot?.people
+                    .where((p) => p.id == id)
+                    .map((p) => superTabPersonName(p.email))
+                    .firstOrNull ??
+                'Someone',
+      onReact: c.canWrite && c.selected?.archived == false
+          ? (emoji) => unawaited(_react(message, emoji))
+          : null,
       receipts: [
         if (message.source['truncated'] == true ||
             message.source['interrupted'] == true)

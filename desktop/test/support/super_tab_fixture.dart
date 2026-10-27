@@ -804,6 +804,12 @@ class ConversationServer {
         jsonEncode({
           'messages': after == null ? page.reversed.toList() : page,
           'next': next,
+          'reactionSeq':
+              (state['conversations'] as List)
+                  .cast<Map>()
+                  .where((g) => g['id'] == conversationId)
+                  .firstOrNull?['reactionSeq'] ??
+              0,
         }),
       ) as Map<String, dynamic>;
     }

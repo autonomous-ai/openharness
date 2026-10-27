@@ -233,6 +233,15 @@ describe('reactions', () => {
     await expect(react(tab, messageId, true, peer)).rejects.toMatchObject({ status: 403 })
   })
 
+  it('tells a poll for new messages that reactions changed, so it reads the page again', async () => {
+    const tab = await swarm()
+    const messageId = await post(tab)
+    const poll = async () => (await read(tab, peer, 'conversations/lead/messages?after=1000000')).body.data as { messages: unknown[]; reactionSeq: number }
+    expect(await poll()).toEqual({ messages: [], next: null, reactionSeq: 0 })
+    await react(tab, messageId, true)
+    expect((await poll()).reactionSeq).toBe(1)
+  })
+
   it('refuses a message from another conversation or another Swarm', async () => {
     const tab = await swarm()
     const other = await swarm()
