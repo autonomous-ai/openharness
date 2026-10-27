@@ -20,7 +20,7 @@ class SuperTabCountBadge extends StatelessWidget {
       borderRadius: BorderRadius.circular(9),
     ),
     child: Text(
-      '$count',
+      countText(count),
       textAlign: TextAlign.center,
       style: DesktopChrome.metadata(color: grid.AppPalette.warn),
     ),

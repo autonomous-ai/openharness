@@ -19,6 +19,7 @@ import 'package:harness/state/harness_activity.dart';
 import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/identity.dart';
 import 'package:harness/super_tabs/machines.dart';
+import 'package:harness/super_tabs/pm_chat.dart';
 import 'package:harness/super_tabs/pm_chat_shortcut.dart';
 import 'package:harness/super_tabs/project_sidebar.dart';
 import 'package:harness/super_tabs/view.dart';
@@ -162,6 +163,104 @@ void main() {
 
       expect(owner.pmUnread, 0);
       expect(reads.where((p) => p.contains(peerChat)), isEmpty);
+    });
+  });
+
+  group('the unread count past a page', () {
+    /// [awayFromChat] with one reply read first, so the read mark sits at it,
+    /// and pages of [page] messages.
+    Future<(SuperTabController, String)> readOnce(
+      ConversationServer server, {
+      int page = 10,
+    }) async {
+      server.messagePage = page;
+      final (c, chat) = await awayFromChat(server);
+      pmReply(server, chat, 'Earlier, already read.');
+      await c.refresh();
+      await c.select(chat);
+      await pumpEventQueue(times: 100);
+      c.markRead(chat);
+      await c.select('offline');
+      return (c, chat);
+    }
+
+    List<String> readsOf(ConversationServer server, String chat) {
+      final reads = <String>[];
+      server.onRead = (path) {
+        if (path.contains('/conversations/$chat/')) reads.add(path);
+      };
+      return reads;
+    }
+
+    test('counts every unread message of a chat not held yet, then reads nothing more', () async {
+      final server = pmChatSwarm();
+      final (c, chat) = await readOnce(server);
+      for (var i = 1; i <= 25; i++) {
+        pmReply(server, chat, 'Update $i');
+      }
+      await c.flush();
+      // Another window: the same read mark, no messages held.
+      final fresh = server.controller(account: 'peer', initial: server.saved);
+      addTearDown(fresh.dispose);
+      final reads = readsOf(server, chat);
+
+      await fresh.refresh();
+      await pumpEventQueue(times: 100);
+      expect(fresh.unreadCount(fresh.pmChat('lead')!), 25);
+      expect(reads, hasLength(3));
+
+      reads.clear();
+      await fresh.refresh();
+      await pumpEventQueue(times: 100);
+      expect(fresh.unreadCount(fresh.pmChat('lead')!), 25);
+      expect(reads, isEmpty);
+    });
+
+    test(
+      'counts a burst of new messages past a page, then reads nothing more',
+      () async {
+        final server = pmChatSwarm();
+        final (c, chat) = await readOnce(server);
+        final reads = readsOf(server, chat);
+        for (var i = 1; i <= 25; i++) {
+          pmReply(server, chat, 'Update $i');
+        }
+
+        await c.refresh();
+        await pumpEventQueue(times: 100);
+        expect(c.unreadCount(c.pmChat('lead')!), 25);
+        expect(reads, hasLength(3));
+
+        reads.clear();
+        await c.refresh();
+        await pumpEventQueue(times: 100);
+        expect(reads, isEmpty);
+      },
+    );
+
+    test('stops at 99+ rather than reading a whole history it has no read mark for', () async {
+      final server = pmChatSwarm();
+      server.messagePage = 10;
+      final (c, chat) = await awayFromChat(server);
+      for (var i = 1; i <= 150; i++) {
+        pmReply(server, chat, 'Update $i');
+      }
+      await c.flush();
+      final fresh = server.controller(account: 'peer');
+      addTearDown(fresh.dispose);
+      final reads = readsOf(server, chat);
+
+      await fresh.refresh();
+      await pumpEventQueue(times: 200);
+      final count = fresh.unreadCount(fresh.pmChat('lead')!);
+      expect(count, greaterThanOrEqualTo(100));
+      expect(pmUnreadLabel(count), '99+ new in Chat with PM');
+      expect(reads, hasLength(10));
+
+      reads.clear();
+      await fresh.refresh();
+      await pumpEventQueue(times: 100);
+      expect(reads, isEmpty);
     });
   });
 
@@ -336,6 +435,48 @@ void main() {
       expect(number.style?.color, DesktopChrome.muted);
       await close(tester, c);
     });
+
+    testWidgets(
+      'the shortcut leaves Notifications for the chat, first opened or already selected',
+      (tester) async {
+        final c = await show(tester, riverSwarm());
+        Future<void> shortcutOverNotifications() async {
+          await tester.tap(find.byKey(const ValueKey('super-notifications')));
+          await tester.pumpAndSettle();
+          expect(find.text('Message Product Manager'), findsNothing);
+          // What ⇧⌘K runs (openActivePmChat).
+          expect(await c.openCurrentPmChat(), isTrue);
+          await tester.pumpAndSettle();
+          expect(c.selectedId, c.pmChat('lead')?.id);
+          expect(find.text('Message Product Manager'), findsOneWidget);
+        }
+
+        await shortcutOverNotifications();
+        await shortcutOverNotifications();
+        await close(tester, c);
+      },
+    );
+
+    testWidgets(
+      'the header names a workgroup as the sidebar does: its number in grey, no #',
+      (tester) async {
+        final server = riverSwarm();
+        (server.state['conversations'] as List).last['number'] = 196;
+        final c = await show(tester, server);
+        await c.select('offline');
+        await tester.pumpAndSettle();
+
+        expect(find.text('#196 Offline editing'), findsNothing);
+        final names = find.text('196  Offline editing');
+        // The header's and the sidebar row's.
+        expect(names, findsNWidgets(2));
+        for (final name in tester.widgetList<Text>(names)) {
+          final number = (name.textSpan! as TextSpan).children!.first;
+          expect(number.style?.color, DesktopChrome.muted);
+        }
+        await close(tester, c);
+      },
+    );
 
     testWidgets('names the Product Manager role while a project has none', (
       tester,

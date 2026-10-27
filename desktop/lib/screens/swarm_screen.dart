@@ -75,6 +75,7 @@ import '../state/harness_placement.dart';
 import '../state/new_harness.dart';
 import '../state/harness_launch_integration.dart';
 import '../super_tabs/launch.dart';
+import '../super_tabs/pm_chat.dart' show countText;
 import '../super_tabs/pm_chat_shortcut.dart';
 import '../super_tabs/workspace.dart';
 import '../super_tabs/actions.dart';
@@ -9189,7 +9190,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
                                     : null,
                                 activity: tags > 0
                                     ? Text(
-                                        '$tags',
+                                        countText(tags),
                                         key: ValueKey('tab-tags:${swarm.id}'),
                                         style: DesktopChrome.metadata(
                                           color: grid.AppPalette.warn,

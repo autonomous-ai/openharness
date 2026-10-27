@@ -16,6 +16,7 @@ import 'machines.dart';
 import 'model.dart';
 import 'pm_chat_rows.dart';
 import 'section_heading.dart';
+import 'workgroup_name.dart';
 
 class ProjectSidebar extends StatelessWidget {
   const ProjectSidebar({
@@ -140,25 +141,6 @@ class ProjectSidebar extends StatelessWidget {
     style: DesktopChrome.control(color: DesktopChrome.muted, medium: true),
   );
 
-  /// A workgroup's name, its number in grey before it and no #, so it does
-  /// not read as another channel: "196  Regression…".
-  Widget _workgroupName(SuperTabConversation group, TextStyle style) =>
-      Text.rich(
-        TextSpan(
-          children: [
-            if (group.number case final number?)
-              TextSpan(
-                text: '$number  ',
-                style: style.copyWith(color: DesktopChrome.muted),
-              ),
-            TextSpan(text: group.title),
-          ],
-        ),
-        maxLines: 1,
-        overflow: TextOverflow.ellipsis,
-        style: style,
-      );
-
   void _openPmChat(String projectId) => onOpenPmChat != null
       ? onOpenPmChat!(projectId)
       : unawaited(controller.openPmChat(projectId));
@@ -231,7 +213,7 @@ class ProjectSidebar extends StatelessWidget {
                     message:
                         label ??
                         project?.name ??
-                        [?group.number, group.title].join(' '),
+                        SuperTabWorkgroupName.plain(group),
                     child: ConstrainedBox(
                       constraints: const BoxConstraints(minHeight: 36),
                       child: Padding(
@@ -240,7 +222,7 @@ class ProjectSidebar extends StatelessWidget {
                           children: [
                             Expanded(
                               child: label == null && project == null
-                                  ? _workgroupName(group, style)
+                                  ? SuperTabWorkgroupName(group, style: style)
                                   : Text(
                                       label ?? project!.name,
                                       maxLines: 1,

@@ -694,23 +694,30 @@ class SuperTabController extends ChangeNotifier {
       .firstOrNull;
 
   /// How many of [group]'s messages from others came after the reader's read
-  /// mark. One at least while its newest messages are not read yet.
+  /// mark: exact once the messages held reach back to the mark
+  /// ([_heldSinceRead]), else a lower bound, one at least, while more are read
+  /// ([_readUnreadPmChats]).
   int unreadCount(SuperTabConversation group) {
     if (!unread(group)) return 0;
     final readAt = _readAt[group.id] ?? 0;
     final count = messages(group.id)
         .where((m) => m.sequence > readAt && !_ownMessage(m))
         .length;
-    return _heldThrough(group.id) < group.lastMessageSequence
-        ? max(count, 1)
-        : count;
+    return _heldSinceRead(group) ? count : max(count, 1);
   }
 
   bool _ownMessage(SuperTabMessage m) =>
       !m.fromAgent && !m.fromTerminal && m.authorId == accountId;
 
-  /// The newest message held of [id], update requests included.
-  int _heldThrough(String id) => _messages[id]?.lastOrNull?.sequence ?? 0;
+  /// Whether the messages held of [group] run from its read mark (or its
+  /// first message) to its newest, update requests included.
+  bool _heldSinceRead(SuperTabConversation group) {
+    final held = _messages[group.id];
+    if (held == null || held.isEmpty) return false;
+    return held.last.sequence >= group.lastMessageSequence &&
+        (held.first.sequence <= (_readAt[group.id] ?? 0) ||
+            !hasOlder(group.id));
+  }
 
   /// The unread messages in the reader's own PM chats, for the Swarm badge.
   int get pmUnread => [
@@ -718,18 +725,53 @@ class SuperTabController extends ChangeNotifier {
       if (pmChat(project.id) case final chat?) unreadCount(chat),
   ].fold(0, (a, b) => a + b);
 
-  /// Reads the messages of each PM chat whose newest ones are not held yet,
-  /// so its count is exact; nothing for a chat whose messages are all held.
+  /// Reads each PM chat whose count is still open ([_pmCountOpen]), page by
+  /// page, so the count is exact up to [kCountCap]; nothing once every chat's
+  /// count is known.
   void _readUnreadPmChats() {
     for (final project in snapshot?.projects ?? const <SuperTabProject>[]) {
       final chat = pmChat(project.id);
-      if (chat == null ||
-          chat.id == selectedId ||
-          !unread(chat) ||
-          _heldThrough(chat.id) >= chat.lastMessageSequence) {
+      if (chat == null || !_pmCountOpen(chat) || !_pmCounting.add(chat.id)) {
         continue;
       }
-      unawaited(_readMessages(chat.id, light: true));
+      unawaited(
+        _countPmChat(chat.id).whenComplete(() {
+          _pmCounting.remove(chat.id);
+        }),
+      );
+    }
+  }
+
+  final _pmCounting = <String>{};
+
+  /// A PM chat off screen, unread, under [kCountCap] and not held back to its
+  /// read mark: past the cap the badge says "99+" whatever the rest holds, so
+  /// a device with no read mark never reads the whole history.
+  bool _pmCountOpen(SuperTabConversation chat) =>
+      chat.id != selectedId &&
+      unread(chat) &&
+      unreadCount(chat) < kCountCap &&
+      !_heldSinceRead(chat);
+
+  /// Newer pages until the newest message is held, then older ones back to
+  /// the read mark; stops when a read brings nothing (no more, or it failed:
+  /// the next state read tries again).
+  Future<void> _countPmChat(String id) async {
+    while (!_disposed) {
+      final chat = snapshot?.conversation(id);
+      if (chat == null || !_pmCountOpen(chat)) return;
+      final held = _messages[id];
+      final before = (held?.firstOrNull?.sequence, held?.lastOrNull?.sequence);
+      final newer =
+          held == null ||
+          held.isEmpty ||
+          held.last.sequence < chat.lastMessageSequence;
+      await _readMessages(id, older: !newer, light: newer);
+      final after = _messages[id];
+      if ((after?.firstOrNull?.sequence, after?.lastOrNull?.sequence) ==
+          before) {
+        return;
+      }
     }
   }
 
@@ -743,10 +785,15 @@ class SuperTabController extends ChangeNotifier {
         : state.projects.firstOrNull?.id;
   }
 
-  /// Opens the [currentProjectId]'s PM chat ([openPmChat]).
+  /// Set by the Swarm view on screen: opens a project's PM chat in front of
+  /// whatever covers the conversation, Notifications or a terminal.
+  Future<bool> Function(String projectId)? pmChatOpener;
+
+  /// Opens the [currentProjectId]'s PM chat, through the view on screen
+  /// ([pmChatOpener]) when there is one, else [openPmChat].
   Future<bool> openCurrentPmChat() async {
     final project = currentProjectId;
-    return project != null && await openPmChat(project);
+    return project != null && await (pmChatOpener ?? openPmChat)(project);
   }
 
   /// Opens [pmChat], creating it on first use: chat only, for this person
@@ -921,7 +968,6 @@ class SuperTabController extends ChangeNotifier {
           selectedId = next.projects.firstOrNull?.leadConversationId ?? 'lead';
         }
         if (localAccessChanged) _saveSoon();
-        _readUnreadPmChats();
         // A new store holds no closed groups yet, nor one a saved view drew:
         // the open projects read theirs.
         if (read.full || stateReads == 1) {
@@ -934,6 +980,9 @@ class SuperTabController extends ChangeNotifier {
         }
       }
       lastChangedAt = parts.lastChangedAt;
+      // Every state read, a quiet one too: a count a failed read left open is
+      // finished; one that is known reads nothing.
+      _readUnreadPmChats();
       _partsReadAt = clock.now();
       error = null;
       await (selectedId == earlyId && messagesRead != null
