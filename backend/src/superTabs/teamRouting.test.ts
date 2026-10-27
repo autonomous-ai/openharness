@@ -266,7 +266,7 @@ describe('routing a teammate\'s work', () => {
     const f = routed()
     const effects = f.run({ type: 'route.record', conversationId: f.group, decision: record([candidate('c0', 'mate-team'), candidate('c1', 'mate-mac'),
       candidate('c2', 'mate-mac', { kind: 'member', agentId: f.personal, title: 'personal on mate-mac' }), candidate('c3', 'owner-mac')]) } as Command,
-    f.leadActor, { recentRoutes: 0 })
+    f.leadActor, {})
     expect(effects.routeDecisions[0]).toMatchObject({ op: 'create', record: {
       candidates: [{ id: 'c0' }, { id: 'c3' }],
       excluded: [
@@ -283,7 +283,7 @@ describe('routing a teammate\'s work', () => {
       observation: reading('team', PASSED, NOW, NOW - 30 * MINUTE) })
     f.machine('mate-team').observation = reading('team', FAILED)
     const effects = f.run({ type: 'route.record', conversationId: f.group, decision: record([candidate('c0', 'owner-mac'), candidate('c1', 'mate-team'),
-      candidate('c2', 'mate-stale')]) } as Command, f.leadActor, { recentRoutes: 0 })
+      candidate('c2', 'mate-stale')]) } as Command, f.leadActor, {})
     expect((effects.routeDecisions[0] as { record: { excluded: { reason: string }[] } }).record.excluded.map(e => e.reason)).toEqual([
       'The Harness Team account on MacBook Pro · Team is not private (gitconfig: it could read its owner\'s ~/.gitconfig), so it runs only its owner\'s projects.',
       'The privacy check on Mini · Team last passed 30 minutes ago, so it runs only its owner\'s projects until it passes again.',
@@ -294,7 +294,7 @@ describe('routing a teammate\'s work', () => {
   it('refuses a pick that cannot take it, so no decision names it', () => {
     const f = routed()
     expect(refusal(() => f.run({ type: 'route.record', conversationId: f.group, decision: record([candidate('c0', 'mate-mac'), candidate('c1', 'mate-team')]) } as Command,
-      f.leadActor, { recentRoutes: 0 }))).toMatchObject({ code: 'TEAM_ACCOUNT_REQUIRED',
+      f.leadActor, {}))).toMatchObject({ code: 'TEAM_ACCOUNT_REQUIRED',
       message: 'MacBook Pro has no Harness Team account yet, so it runs only its owner\'s projects. Route again.' })
   })
 
@@ -312,7 +312,7 @@ describe('routing a teammate\'s work', () => {
 
   it('keeps a person\'s own project routing as it was', () => {
     const f = routed()
-    const effects = f.run({ type: 'route.record', conversationId: f.group, decision: record([candidate('c0', 'owner-mac')]) } as Command, f.leadActor, { recentRoutes: 0 })
+    const effects = f.run({ type: 'route.record', conversationId: f.group, decision: record([candidate('c0', 'owner-mac')]) } as Command, f.leadActor, {})
     expect(effects.routeDecisions[0]).toMatchObject({ record: { candidates: [{ id: 'c0' }], excluded: [{ title: 'Owner Mac · claude' }] } })
   })
 })
@@ -494,7 +494,7 @@ describe('one machine: a Mac and its Harness Team account', () => {
       title: 'Builder on MacBook Pro', label: 'Codex' }
     const effects = f.run({ type: 'route.record', conversationId: group, decision: { assessment: { difficulty: 'medium', risk: 'low', why: 'A small change.' },
       candidates: [candidate], excluded: [], floor: 2, notes: false, pick: 'c0', via: 'order', p: null, belowFloor: false, why: 'Policy order.' } } as Command,
-    leadActor, { recentRoutes: 0 })
+    leadActor, {})
     const recorded = effects.routeDecisions[0] as unknown as { id: string; record: RouteDecision['record'] }
     expect(recorded.record.candidates).toEqual([expect.objectContaining({ id: 'c0' })])
     const decision = { id: recorded.id, conversationId: group, record: recorded.record, final: null, override: null, assignmentId: null, outcome: null } as unknown as RouteDecision
