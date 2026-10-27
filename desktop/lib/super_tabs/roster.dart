@@ -241,7 +241,8 @@ class _SuperTabRosterState extends State<SuperTabRoster> {
     return native ?? HarnessActivity.unknown;
   }
 
-  /// A person's email and role, and their week when the board has them.
+  /// A person's email and role, and their week when the board has them. One's
+  /// own also opens the profile sheet, where one's avatar and status change.
   Future<void> _person(SuperTabPerson person, SuperTabPersonScore? score) =>
       showAppDialog<void>(
         context: context,
@@ -259,6 +260,15 @@ class _SuperTabRosterState extends State<SuperTabRoster> {
             ],
           ),
           actions: [
+            if (person.id == c.accountId && c.canWrite)
+              TextButton(
+                key: const ValueKey('super-profile-edit'),
+                onPressed: () {
+                  Navigator.pop(context);
+                  showSuperTabProfile(this.context, c);
+                },
+                child: const Text('Edit profile'),
+              ),
             TextButton(
               onPressed: () {
                 Navigator.pop(context);
@@ -554,10 +564,7 @@ class _SuperTabRosterState extends State<SuperTabRoster> {
         LeaderboardPersonRow(
           person: person,
           score: scores[person.id],
-          // One's own row is where one's avatar and status are changed.
-          onTap: () => person.id == c.accountId && c.canWrite
-              ? showSuperTabProfile(context, c)
-              : _person(person, scores[person.id]),
+          onTap: () => _person(person, scores[person.id]),
         ),
       if (board != null && board.waiting.total > 0)
         LeaderboardWaitingLine(

@@ -49,12 +49,16 @@ Future<SuperTabController> openSheet(
 }
 
 void main() {
-  testWidgets('tapping your own row opens your profile', (tester) async {
+  testWidgets('your own row opens your profile from Edit profile', (
+    tester,
+  ) async {
     final f = RosterFixture();
     addTearDown(f.dispose);
     await f.initialize();
     await f.show(tester);
     await tester.tap(find.byKey(const ValueKey('super-person-owner')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('super-profile-edit')));
     await tester.pumpAndSettle();
     expect(find.text('Your profile'), findsOneWidget);
     expect(find.byKey(const ValueKey('super-status-text')), findsOneWidget);
