@@ -7,7 +7,7 @@ import { openDaemon, type Daemon, type Where } from '../agentClient/daemon.js'
 import { requiredToolReason, startRequirements } from './capacity.js'
 import { inspectCapacity, type ScopedRequest } from './start.js'
 import { ENDED_WORK, object, within } from './wire.js'
-import { API_BUILDERS, choose, decide, parseAssessment, quotaOf2, rateFor, recordOf, repoMatch, repositoryKey, type Assessment, type Commitment, type HeldModel, type MemberFrame, type Policy, type Probe, type SwarmRule, type TaskFolder } from './route.js'
+import { accountOf, API_BUILDERS, choose, decide, parseAssessment, quotaOf2, rateFor, recordOf, repoMatch, repositoryKey, type Assessment, type Commitment, type HeldModel, type MemberFrame, type Policy, type Probe, type SwarmRule, type TaskFolder } from './route.js'
 import { stat } from 'node:fs/promises'
 import { describeScmProject } from '../scm/scmProjects.js'
 
@@ -19,31 +19,31 @@ const TRANSPORT = new Set(['AGENT_UNAVAILABLE', 'SUPER_TAB_UNAVAILABLE', 'BACKEN
 const MACHINES_UNREADABLE = "The account's machine list could not be read; only known machines were considered."
 const DISK_UNVERIFIED = 'Project disk space could not be verified.'
 const NO_PROJECT_FOLDER = 'This machine does not have the project folder. Add it to the Swarm so it can clone the project.'
-const OFFLINE = 'Machine is offline or unreachable.'
+export const OFFLINE = 'Machine is offline or unreachable.'
 const UNKNOWN_QUOTA: Probe['quota'] = { known: false, leftPercent: null, resetsAt: null }
 const UNKNOWN_LOAD: NonNullable<Probe['load']> = { agents: null, freeMemoryBytes: null, hasFolder: null }
 const EXHAUSTED_WINDOW = 'The subscription has an exhausted usage window. Wait for a fresh allowance reading or choose another account.'
 /** Temporary (Scholes, 2026-10-26): grid's CLI does not run on Windows yet, so a Swarm agent started there never comes up
  *  (WIN-DELL took starts that silently never ran). Lifting it is emptying this list. Compared with the OS every reading
  *  has (lib/machineHardware.ts names it `Windows`), so a host from before readiness is left out too. */
-const NO_SWARM_AGENTS_ON: readonly string[] = ['Windows']
+export const NO_SWARM_AGENTS_ON: readonly string[] = ['Windows']
 const ENGINE_NAME: Record<string, string> = { claude: 'Claude Code', codex: 'Codex' }
 const NO_PUSH = "This machine's git login cannot push to the project repository. Its owner can sign in to GitHub there (gh auth login, then gh auth setup-git)."
-const STALLED = 'Its last 2 starts on this machine started no agent (they failed or were never picked up), so it is left out until a start there succeeds. Its owner can check the machine.'
+export const STALLED = 'Its last 2 starts on this machine started no agent (they failed or were never picked up), so it is left out until a start there succeeds. Its owner can check the machine.'
 /** What a machine says it cannot do for this task (#229 v1 routing): `all` keeps out its new agents, `engines` those of an
  *  engine, `push` its new agents and members alike. Only a known failure is said; anything unknown says nothing. */
-interface Unready { all: string[]; engines: Record<string, string>; push: string | null }
+export interface Unready { all: string[]; engines: Record<string, string>; push: string | null }
 const READY: Unready = { all: [], engines: {}, push: null }
 /** Whether the Swarm's last 2 starts on [machineId] both started nothing: failed, or queued and never picked up. A start
  *  being created (dispatched, no agent yet) is not counted, nor is a machine with fewer than 2 starts. */
-function stalled(starts: Json[], machineId: string): boolean {
+export function stalled(starts: Json[], machineId: string): boolean {
   const last = starts.filter(s => object(s.request).machineId === machineId).slice(-2)
   return last.length === 2 && last.every(s => !s.harnessId && (!!s.error || s.dispatched !== true))
 }
 /** What a contributed machine's reading says it is not ready for, for work in [projectId] ([needsPush] unless a review).
  *  Its own login's push access counts only when it is the one that pushes: not for a teammate's project where the server
  *  has the Harness GitHub App, whose token the agent pushes with (start.ts). */
-function unreadyPool(pool: Json, project: Json | undefined, projectId: string, needsPush: boolean, githubApp: boolean, projectOwner: unknown): Unready {
+export function unreadyPool(pool: Json, project: Json | undefined, projectId: string, needsPush: boolean, githubApp: boolean, projectOwner: unknown): Unready {
   const observed = object(pool.observation), readiness = object(observed.readiness), repository = object(project?.repository)
   const engines: Record<string, string> = {}
   for (const e of list(readiness.engines)) {
@@ -256,7 +256,14 @@ export async function routeTask(input: { tabId: string; conversationId: string; 
   // Picks started or assigned and still at work hold part of their account's quota; the log, and so this, is per Swarm.
   const working = (decisions ?? []).filter(d => d.final && d.outcome === null && typeof d.account === 'string')
     .map(d => ({ account: d.account, spend: object(d.spend), size: d.size, createdAt: Date.parse(String(d.createdAt)) }) as Commitment)
-  const choice = choose(probes, policy, assessment, Date.now(), working, rules, heldLocalModels(state))
+  // Work this group last lost (a Reviewer whose model kept failing, v2) goes first to any other account (route.ts choose). The
+  // group keeps where that attempt ran (backend superTabs/liveness.ts loseTask), so this holds once its agent is stopped and
+  // removed too; an attempt lost before that kept it is read from its agent, while that is still here.
+  const lostAttempt = object(group.lostAttempt), lostBy = agents.find(a => a.id === lostAttempt.agentId)
+  const failedOn = text(lostAttempt.machineId) ?? text(lostBy?.machineId), failedEngine = text(lostAttempt.engine) ?? text(object(lostBy?.configuration).engine)
+  const avoid = failedOn && failedEngine ? [...new Set([`${failedOn}:${failedEngine}`,
+    ...probes.filter(p => p.machineId === failedOn && p.engine === failedEngine && !p.gridModel).map(accountOf)])] : []
+  const choice = choose(probes, policy, assessment, Date.now(), working, rules, heldLocalModels(state), avoid)
   if ('error' in choice) return choice
   const verdict = decide(choice)
   const operationId = `route-${newId()}`
@@ -276,7 +283,7 @@ export async function routeTask(input: { tabId: string; conversationId: string; 
     alternatives: alternativesTo(verdict.pick, choice.shown).map(publicOf),
     warnings: [...(Array.isArray(effective.warnings) ? effective.warnings : []), ...(value.machinesUnreadable === true ? [MACHINES_UNREADABLE] : []),
       ...(choice.shown.some(p => p.kind === 'member' && p.terminalUnverified) ? ["A member's terminal could not be verified from its machine's snapshot. Check it before assignment."] : []),
-      ...(choice.short ? [choice.short] : [])],
+      ...(choice.short ? [choice.short] : []), ...(choice.avoided ? [choice.avoided] : [])],
     next: verdict.pick.kind === 'member'
       ? `Assign with: command OPERATION_ID {"type":"work.assign","conversationId":"${input.conversationId}","agentId":"${verdict.pick.agentId}"${decision}}`
       : `Start with: start OPERATION_ID ${JSON.stringify({ conversationId: input.conversationId, name: review ? 'Reviewer' : 'Builder', ...(review ? { role: 'reviewer' } : {}), cwd: text(machines.get(verdict.pick.machineId)?.pool?.cwd) ?? assessment.needs.cwd ?? '/absolute/repo/on/that/machine',
@@ -294,15 +301,15 @@ function alternativesTo<T extends { id: string; machineId: string }>(pick: T, sh
 }
 
 /** A reading this old says nothing is served (backend `MACHINE_FRESH_MS`). */
-const LOCAL_FRESH_MS = 45_000
+export const LOCAL_FRESH_MS = 45_000
 /** Refusals about a subscription's allowance, which a local model does not spend. */
 const SUBSCRIPTION = /subscription/i
 
-interface Served { grid: string; model: string; label: string; kind: 'local' | 'api' | 'shared'; machines: Set<string> | null; holders: string[] }
+export interface Served { grid: string; model: string; label: string; kind: 'local' | 'api' | 'shared'; machines: Set<string> | null; holders: string[] }
 
 /** The models served for the Swarm while the owner has the add-on on and a fresh reading lists them, by grid and model, each
  * with the Builders on it: one started on a model, or starting on it, holds it until it leaves the Swarm. */
-function servedModels(state: Json, swarm: string, now: number): Map<string, Served> {
+export function servedModels(state: Json, swarm: string, now: number): Map<string, Served> {
   // By grid and model: its label, and the machines that may run it (null: any).
   const served = new Map<string, Served>()
   for (const machine of list(state.machines)) {
@@ -329,7 +336,7 @@ function servedModels(state: Json, swarm: string, now: number): Map<string, Serv
 }
 
 /** Whether [m] can take another Builder: a local engine or a model shared with a member takes one, an API model up to [API_BUILDERS]. */
-const takesBuilder = (m: Served) => m.holders.length < (m.kind === 'api' ? API_BUILDERS : 1)
+export const takesBuilder = (m: Served) => m.holders.length < (m.kind === 'api' ? API_BUILDERS : 1)
 
 /** The Swarm's served models that take no more Builders, and who is on them, then those a fresh reading says Builders are
  *  never offered, and why (superTabs/machines.ts refusedOn): what the route says when it offers none. */

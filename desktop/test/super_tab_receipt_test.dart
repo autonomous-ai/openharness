@@ -182,7 +182,7 @@ void main() {
     ('team_waiting_control', "Lead can't take messages right now"),
     ('team_waiting_unavailable', "Lead can't take messages right now"),
   ]) {
-    testWidgets('receipt: $reason explains the held message inline', (
+    testWidgets('receipt: $reason held message reads only Sent', (
       tester,
     ) async {
       final f = ReceiptFixture(tester);
@@ -195,15 +195,9 @@ void main() {
         },
       );
       expect(find.text('Sent'), findsOneWidget);
-      expect(find.textContaining('$label · waiting 0:3'), findsOneWidget);
-      if (reason == 'team_waiting_idle') {
-        expect(
-          find.text(
-            "Lead is finishing another task. Your message goes in by itself when it's done.",
-          ),
-          findsOneWidget,
-        );
-      }
+      expect(find.textContaining(label), findsNothing);
+      expect(find.textContaining('waiting'), findsNothing);
+      expect(find.textContaining('by itself'), findsNothing);
       await f.close();
     });
   }
@@ -232,11 +226,11 @@ void main() {
   );
 
   for (final (direct, shown) in [
-    (true, "Lead is busy"),
+    (true, 'Sent'),
     (false, "Lead's computer is offline"),
   ]) {
     testWidgets(
-      'receipt: a held message to a computer with no Swarm reading ${direct ? 'connected directly shows why' : 'read through the Swarm says offline'}',
+      'receipt: a held message to a computer with no Swarm reading ${direct ? 'connected directly reads Sent' : 'read through the Swarm says offline'}',
       (tester) async {
         final app = createApp(connected: true);
         addTearDown(app.dispose);
@@ -251,6 +245,7 @@ void main() {
           },
         );
         expect(find.textContaining(shown), findsOneWidget);
+        expect(find.textContaining('busy'), findsNothing);
         expect(
           find.textContaining('offline'),
           direct ? findsNothing : findsWidgets,
@@ -363,7 +358,7 @@ void main() {
   );
 
   testWidgets(
-    'receipt: matching compatibility notice is hidden while other agent messages stay',
+    'receipt: stored hold notices stay hidden while other agent messages stay',
     (tester) async {
       final f = ReceiptFixture(tester);
       await f.show(
@@ -389,6 +384,8 @@ void main() {
             'id': 'lead-agent',
             'name': 'Lead',
           };
+          // A newer own message: the old notice is no longer about the latest one.
+          f.server.append('My next question.');
         },
       );
       expect(
@@ -396,7 +393,7 @@ void main() {
         findsNothing,
       );
       expect(find.text('A real update.'), findsOneWidget);
-      expect(find.textContaining('Lead is busy'), findsOneWidget);
+      expect(find.textContaining('Lead is busy'), findsNothing);
       await f.close();
     },
   );

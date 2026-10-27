@@ -13,7 +13,7 @@ import { routingPolicySchema } from '../superTabs/routingPolicy.js'
 import { nativeEventSchema, openNativeSchema } from '../superTabs/native.js'
 import { machineObservationSchema } from '../superTabs/machines.js'
 import { joinSwarmSchema, previewJoinSchema, saveSharingSchema } from '../superTabs/sharing.js'
-import { holdReason } from '../superTabs/holdNotice.js'
+import { holdReason } from '../superTabs/holdReason.js'
 import { GitHubAppError } from '../github/app.js'
 import { githubRepository } from '../github/repository.js'
 import { attribution } from '../github/attribution.js'
@@ -31,6 +31,7 @@ const operation = operationSchema.extend({ asAgentId: id.optional() })
 const listQuery = z.object({ after: id.optional() }).strict()
 const cursor = z.string().min(1).max(512).regex(/^[A-Za-z0-9_-]+$/)
 const changesQuery = agentQuery.extend({ cursor })
+const leaderboardQuery = z.object({ projectId: id, week: z.coerce.number().int().nonnegative().safe().optional() }).strict()
 const dormantQuery = agentQuery.extend({ dormant: z.literal('1'), projectId: id.optional(), before: cursor.optional() })
 const groupParams = tabParams.extend({ conversationId: id })
 const hostChangesQuery = z.object({ cursor: cursor.optional(), full: z.literal('1').optional() }).strict()
@@ -59,6 +60,7 @@ const deliveryAction = z.discriminatedUnion('type', [
   z.object({ type: z.literal('hold'), claimId: id, reason: holdReason }).strict(),
 ])
 const mentionQuery = z.object({ state: z.enum(['waiting', 'earlier']) }).strict()
+const personDecisionQuery = agentQuery.extend({ state: z.enum(['open', 'answered']) }).strict()
 const savePolicy = z.object({ revision: z.number().int().nonnegative().safe(), policy: routingPolicySchema }).strict()
 const stop = z.object({ assignmentId: id, receipt: z.string().min(1).max(2000) }).strict()
 const githubToken = z.object({ machineId: id }).strict()
@@ -180,6 +182,9 @@ export async function superTabRoutes(app: FastifyInstance, options: { store?: Su
   app.get<{ Params: z.infer<typeof tabParams>; Querystring: z.infer<typeof changesQuery> }>('/api/super-tabs/:tabId/changes',
     { preHandler: [validateParams(tabParams), validateQuery(changesQuery)] },
     (req, reply) => respond(reply, () => reads.changes(req.user!, req.params.tabId, req.query.cursor, req.query.asAgentId)))
+  app.get<{ Params: z.infer<typeof tabParams>; Querystring: z.infer<typeof leaderboardQuery> }>('/api/super-tabs/:tabId/leaderboard',
+    { preHandler: [validateParams(tabParams), validateQuery(leaderboardQuery)] },
+    (req, reply) => respond(reply, () => reads.leaderboard(req.user!, req.params.tabId, req.query.projectId, req.query.week)))
   app.get<{ Params: z.infer<typeof tabParams>; Querystring: z.infer<typeof dormantQuery> }>('/api/super-tabs/:tabId/groups',
     { preHandler: [validateParams(tabParams), validateQuery(dormantQuery)] },
     (req, reply) => respond(reply, () => reads.dormant(req.user!, req.params.tabId, { projectId: req.query.projectId, before: req.query.before }, req.query.asAgentId)))
@@ -241,6 +246,9 @@ export async function superTabRoutes(app: FastifyInstance, options: { store?: Su
   app.get<{ Params: z.infer<typeof tabParams>; Querystring: z.infer<typeof mentionQuery> }>('/api/super-tabs/:tabId/mentions',
     { preHandler: [validateParams(tabParams), validateQuery(mentionQuery)] },
     (req, reply) => respond(reply, () => store.mentions(req.user!, req.params.tabId, req.query.state)))
+  app.get<{ Params: z.infer<typeof tabParams>; Querystring: z.infer<typeof personDecisionQuery> }>('/api/super-tabs/:tabId/decisions',
+    { preHandler: [validateParams(tabParams), validateQuery(personDecisionQuery)] },
+    (req, reply) => respond(reply, () => store.decisions(req.user!, req.params.tabId, req.query.state, req.query.asAgentId)))
   app.get<{ Params: z.infer<typeof startParams>; Querystring: z.infer<typeof agentQuery> }>('/api/super-tabs/:tabId/starts/:startId',
     { preHandler: [validateParams(startParams), validateQuery(agentQuery)] },
     (req, reply) => respond(reply, () => store.start(req.user!, req.params.tabId, req.params.startId, req.query.asAgentId)))

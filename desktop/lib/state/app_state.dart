@@ -1911,27 +1911,79 @@ class AppNotifier extends ChangeNotifier {
   /// The Harness Team account on this Mac (cli/src/team/autoSetup.ts),
   /// offered while the person is here: as they join a Swarm ([reason]
   /// `join`), add this Mac to one (`contribute`), or open the app
-  /// (`startup`). This Mac's own daemon decides whether to ask: no account
-  /// yet, not declined before, and at start only while this Mac is in a
-  /// Swarm with other people in it. macOS's administrator prompt is all the
-  /// person sees. Nothing on Windows or Linux, and never for another machine,
-  /// where nobody may be at it.
+  /// (`startup`). This Mac's own daemon decides whether it is wanted: no
+  /// account yet, not declined before, and at start only while this Mac is in
+  /// a Swarm with other people in it. It is then explained before macOS asks
+  /// ([teamSetupAsks]): macOS's prompt is titled "osascript", which nobody
+  /// recognised as Harness (2026-10-27). Nothing on Windows or Linux, and never
+  /// for another machine, where nobody may be at it.
   Future<void> offerTeamAccount(String reason) async {
-    if (!(macOSForTest ?? (Platform.isMacOS && !kUnderTest))) return;
-    final here = machineStates.values
-        .where(
-          (state) => state.isLocalMachine && !state.machine.isSharedMachine,
-        )
-        .firstOrNull;
+    final here = _teamAccountHere();
     if (here == null) return;
     try {
-      await superTabMachineRequest(here.machine.machineId, {
-        'action': 'teamSetup',
+      final answer = await superTabMachineRequest(here, {
+        'action': 'teamSetupCheck',
         'reason': reason,
       });
+      if (answer['state'] == 'wanted') _teamSetupAsks.add(reason);
     } catch (error) {
       // An older daemon, or one that cannot say: nothing is asked.
       appLog.debug('super-tabs', 'team account not offered: $error');
+    }
+  }
+
+  /// This Mac's own machine, when the Harness Team account can be made here.
+  String? _teamAccountHere() {
+    if (!(macOSForTest ?? (Platform.isMacOS && !kUnderTest))) return null;
+    return machineStates.values
+        .where(
+          (state) => state.isLocalMachine && !state.machine.isSharedMachine,
+        )
+        .firstOrNull
+        ?.machine
+        .machineId;
+  }
+
+  /// Whether this Mac can make its Harness Team account: the machine row's
+  /// Set up button shows only then.
+  bool get canSetUpTeamAccount => _teamAccountHere() != null;
+
+  final StreamController<String> _teamSetupAsks =
+      StreamController<String>.broadcast();
+
+  /// Each moment the Harness Team account is wanted on this Mac, by its
+  /// reason: the screen explains it, then [setUpTeamAccount] or
+  /// [declineTeamAccount].
+  Stream<String> get teamSetupAsks => _teamSetupAsks.stream;
+
+  /// Starts the Harness Team account's setup on this Mac, the person having
+  /// asked: macOS's administrator prompt follows. Answers the daemon's state
+  /// (`started`, `exists`, `running`, ...), or `update` from a daemon too old
+  /// to set it up from here.
+  Future<String> setUpTeamAccount() async {
+    final here = _teamAccountHere();
+    if (here == null) return 'unsupported';
+    try {
+      final answer = await superTabMachineRequest(here, {
+        'action': 'teamSetup',
+        'reason': 'manual',
+      });
+      return answer['state']?.toString() ?? 'started';
+    } on SuperTabFailure catch (failure) {
+      if (failure.code == 'INVALID_REQUEST') return 'update';
+      rethrow;
+    }
+  }
+
+  /// "Not now": not offered again on its own. The machine row keeps its Set
+  /// up button.
+  Future<void> declineTeamAccount() async {
+    final here = _teamAccountHere();
+    if (here == null) return;
+    try {
+      await superTabMachineRequest(here, {'action': 'teamSetupDecline'});
+    } catch (error) {
+      appLog.debug('super-tabs', 'team account decline not saved: $error');
     }
   }
 
@@ -21490,6 +21542,7 @@ class AppNotifier extends ChangeNotifier {
     unawaited(_daemonFrames.close());
     unawaited(_modelsRequests.close());
     unawaited(_superTabClosures.close());
+    unawaited(_teamSetupAsks.close());
     super.dispose();
   }
 }

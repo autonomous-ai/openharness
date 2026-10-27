@@ -24,7 +24,7 @@ const PROMPT_WAIT_MS = 3 * 60_000
 /** The spec's cap on what a screen read returns. */
 const MAX_SCREEN_BYTES = 64 * 1024
 /** What the screen reader says a prompt or a question is waiting on; a popup or a hidden prompt is not one. */
-const WAITING: ReadonlySet<MessageHold> = new Set(['permission_open', 'question_open', 'menu_open', 'trust_open', 'update_prompt_open', 'model_prompt_open', 'sign_in_open'])
+export const WAITING: ReadonlySet<MessageHold> = new Set(['permission_open', 'question_open', 'menu_open', 'trust_open', 'update_prompt_open', 'model_prompt_open', 'sign_in_open'])
 /** The spec's named keys, in any case: the name the Lead's request carries, and the terminal's own (core/superTabTerminal.ts).
  *  Ctrl-D and the like are left out: one closes an engine. */
 const KEYS: Record<string, [string, string]> = { enter: ['Enter', 'Enter'], esc: ['Esc', 'Escape'], escape: ['Esc', 'Escape'], tab: ['Tab', 'Tab'],
@@ -250,7 +250,9 @@ export class TerminalHost {
       state.limit = await this.episode(agent, 'limit', state.limit, limit !== null, now, () => true, limit ?? {})
       if (modelFailing(read.text)) state.retried = now
       const retrying = state.retried !== undefined && now - state.retried < MODEL_CLEAR_MS
-      state.model = await this.episode(agent, 'model', state.model, retrying, now, since => now - since >= MODEL_WAIT_MS, {})
+      // Ten minutes up to the last retry seen, not up to now: the quiet minutes that confirm answers came again are not
+      // failure, so a burst that recovers before ten minutes never alerts (and its task is never lost for it).
+      state.model = await this.episode(agent, 'model', state.model, retrying, now, since => state.retried! - since >= MODEL_WAIT_MS, {})
     }
   }
 

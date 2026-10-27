@@ -80,7 +80,7 @@ void main() {
       await tester.tap(find.byKey(const ValueKey('super-project-expand-lead')));
       await tester.pumpAndSettle();
       expect(c.selectedId, 'lead');
-      expect(find.text('#12 Offline editing'), findsOneWidget);
+      expect(find.text('12  Offline editing'), findsOneWidget);
       await tester.tap(find.byKey(const ValueKey('super-group-offline')));
       await tester.pumpAndSettle();
       expect(c.selectedId, 'offline');
@@ -127,7 +127,7 @@ void main() {
       );
       // Workgroups share the project name column in the compact sidebar.
       expect(
-        tester.getTopLeft(find.text('#12 Offline editing')).dx,
+        tester.getTopLeft(find.text('12  Offline editing')).dx,
         tester.getTopLeft(projectName).dx,
       );
 

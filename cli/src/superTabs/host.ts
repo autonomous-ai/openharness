@@ -19,6 +19,7 @@ import { prepareContribution, prepareTeamContribution } from './contribution.js'
 import { hostname } from 'node:os'
 import { replacementObservations } from './replacements.js'
 import { TerminalHost } from './terminal.js'
+import { LimitResume } from './limitResume.js'
 import { HostFeed } from './hostFeed.js'
 import { SwarmReads } from './swarmReads.js'
 import { UPDATE_REQUIRED } from './readContract.js'
@@ -130,6 +131,10 @@ const STOPS_FRESH_MS = 5_000
 const JOIN_FINAL = new Set(['MACHINES_FULL', 'OWNER_REQUIRED'])
 /** A Lead's reopen that failed (an engine that cannot start, a busy pane) waits this long, doubling up to half an hour, so a
  *  crash loop never spins; one the core took waits a minute for its session to show before it is asked again. */
+/** A delivery poll or claim the backend refused is asked again after 1 s, doubling to 30 s: every host retried each second, which
+ *  added to an overloaded backend (production at 5 pods, 2026-10-27). */
+const DELIVERY_RETRY_MS = 1_000
+const DELIVERY_RETRY_MAX_MS = 30_000
 const LEAD_RETRY_MS = 5_000
 const LEAD_RETRY_MAX_MS = 30 * 60_000
 const LEAD_REOPEN_WAIT_MS = 60_000
@@ -204,6 +209,8 @@ export class SuperTabHost {
   private replacementsRunning: Promise<void> | null = null
   private nextReplacementsAt = 0
   private timer: ReturnType<typeof setTimeout> | null = null
+  /** Per agent's delivery list and per delivery's claim, the failures in a row and when it may be asked again. */
+  private readonly deliveryRetries = new Map<string, { failures: number; retryAt: number; list?: string }>()
   private native: NativeRecorder | null = null
   private machines: ContributedMachines | null = null
   private readonly machineDeps: Partial<MachineDeps>
@@ -239,6 +246,8 @@ export class SuperTabHost {
   private updateSaid = false
   /** A Lead's reads of and typing into this machine's agents' terminals, and the stuck and usage-limit alerts. */
   private readonly terminal: TerminalHost
+  /** Gives a task lost to a usage limit back to its session once the limit has reset. */
+  private readonly limitResume: LimitResume
 
   constructor(private readonly core: CoreApi, readonly machineId: string, options: SuperTabHostOptions = {}) {
     if (!identifier(machineId)) throw new SuperTabHostError('MACHINE_UNAVAILABLE', 'This machine is not signed in.')
@@ -254,6 +263,9 @@ export class SuperTabHost {
     this.write = options.write ?? writeJournal
     this.log = options.log ?? (message => console.warn(`[super-tabs] ${message}`))
     this.terminal = new TerminalHost(core, machineId, { now: this.now, log: this.log })
+    this.limitResume = new LimitResume(core, machineId, { now: this.now, log: this.log,
+      owns: async (tabId, assignmentId, harnessId) => (await this.sources.feed.fresh()).assignments
+        .some(a => a.tabId === tabId && a.assignmentId === assignmentId && a.harnessId === harnessId) })
     this.sources = options.sources ?? { feed: new HostFeed(core, machineId, { now: this.now }), reads: new SwarmReads(core) }
     this.journal = { version: 1, machineId, entries: {} }
     if (existsSync(this.file)) {
@@ -516,6 +528,15 @@ export class SuperTabHost {
   private async leases(): Promise<boolean> {
     return this.core.turns.leaseDeliveries('superTabs', Object.fromEntries(this.authorized))
   }
+  private backedOff(key: string): boolean {
+    const retry = this.deliveryRetries.get(key)
+    return !!retry && this.now() < retry.retryAt
+  }
+  private retryLater(key: string, list?: string): void {
+    const retry = this.deliveryRetries.get(key) ?? { failures: 0, retryAt: 0, ...(list ? { list } : {}) }
+    retry.retryAt = this.now() + Math.min(DELIVERY_RETRY_MAX_MS, DELIVERY_RETRY_MS * 2 ** retry.failures++)
+    this.deliveryRetries.set(key, retry)
+  }
   private async poll(): Promise<void> {
     const data = (await this.sources.feed.refresh()).roster
     if (this.stopped) return
@@ -538,7 +559,7 @@ export class SuperTabHost {
     this.joinTeams(data)
     this.cleanRemoved(data)
     // Off the poll: a screen read waits on the core, and never delays the input leases below.
-    if (this.core.superTabs) void this.terminal.tick(data)
+    if (this.core.superTabs) { void this.terminal.tick(data); void this.limitResume.tick(data) }
     // Recovery can wait on a native receipt. Run it beside leases, so another worker's input
     // never expires while an old Change agent is being reconciled.
     if (!this.replacementsRunning && this.now() >= this.nextReplacementsAt) {
@@ -567,6 +588,10 @@ export class SuperTabHost {
     const stopKeys = new Set(data.filter(item => object(item).stopRequested === true).map(item => { const row = object(item); return `${row.tabId}:${object(row.agent).id}` }))
     for (const key of this.releaseAttempts.keys()) if (!stopKeys.has(key)) this.releaseAttempts.delete(key)
     const seen = new Set<string>()
+    /** The agents whose delivery list was read in this poll: only such a list can say a delivery is gone. */
+    const listsRead = new Set<string>()
+    /** Every delivery of those lists, also those after one whose claim threw: only a list read without it says it is gone. */
+    const listed = new Set<string>()
     const running: HostAgent[] = []
     const leads = new Set<string>(), ended = new Set<string>()
     for (const item of data) {
@@ -592,26 +617,37 @@ export class SuperTabHost {
       if (!this.core.agents.byAgent(target.agent.harnessId) || !this.core.agents.terminalAvailable(target.agent.harnessId)) continue
       running.push(target)
       const path = `/api/super-tabs/${target.tabId}/agents/${target.agent.id}/deliveries`
+      const listKey = `list:${target.tabId}:${target.agent.id}`
+      if (this.backedOff(listKey)) continue
+      let listRead = false
       try {
         const deliveries = await backend(this.core, 'GET', path)
         if (this.stopped) return
         if (!Array.isArray(deliveries)) throw new Error('Invalid Super Tab delivery list.')
+        listRead = true
+        listsRead.add(listKey)
+        for (const item of deliveries) { const id = object(item).id; if (identifier(id)) listed.add(id) }
+        this.deliveryRetries.delete(listKey)
         for (const item of deliveries) {
           const delivery = object(item)
           if (!identifier(delivery.id)) continue
           seen.add(delivery.id)
+          const claimKey = `claim:${delivery.id}`
+          if (this.backedOff(claimKey)) continue
           // Checked before anything is typed: a new delivery, or one held while its agent may since have stopped leading. A
           // claimed one with no journal is never typed, only reported as uncertain; a delivered one only acknowledged.
           const entry = this.journal.entries[delivery.id]
           if ((entry ? entry.stage === 'prepared' : !delivery.claimId) && !this.mayRead(target, delivery)) continue
-          try { await this.accept(target, delivery, path) } catch (error) {
+          try { await this.accept(target, delivery, path); this.deliveryRetries.delete(claimKey) } catch (error) {
             // Answered (or resolved by a person) between the roster read and this call: nothing is owed, and the
             // agent's other deliveries go on.
-            if (!(error instanceof SuperTabHostError) || error.code !== 'DELIVERY_RESOLVED') throw error
+            if (!(error instanceof SuperTabHostError) || error.code !== 'DELIVERY_RESOLVED') { this.retryLater(claimKey, listKey); throw error }
+            this.deliveryRetries.delete(claimKey)
             this.retire(delivery.id as string)
           }
         }
       } catch (error) {
+        if (!listRead) this.retryLater(listKey)
         // Authority checks and network failures both withhold input. A later fresh read may grant it again.
         this.log(error instanceof Error ? error.message : String(error))
       }
@@ -621,6 +657,13 @@ export class SuperTabHost {
     for (const [harnessId, state] of this.keepAlives) if (!leads.has(harnessId) && !state.running) this.keepAlives.delete(harnessId)
     for (const [key, state] of this.endings) if (!ended.has(key) && !state.running) this.endings.delete(key)
     for (const deliveryId of this.unreadable) if (!seen.has(deliveryId)) this.unreadable.delete(deliveryId)
+    // A wait outlives a list that failed or was skipped: that says nothing of the delivery. It goes when a list that was read no
+    // longer has the delivery, or when its agent is no longer here.
+    for (const [key, retry] of this.deliveryRetries) {
+      const agentKey = retry.list ?? key
+      if (!running.some(r => `list:${r.tabId}:${r.agent.id}` === agentKey)) this.deliveryRetries.delete(key)
+      else if (key.startsWith('claim:') && listsRead.has(agentKey) && !listed.has(key.slice('claim:'.length))) this.deliveryRetries.delete(key)
+    }
     for (const deliveryId of this.files.keys()) if (!this.journal.entries[deliveryId]) this.files.delete(deliveryId)
     for (const entry of Object.values(this.journal.entries)) {
       const id = typedId(entry)

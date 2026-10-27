@@ -23,6 +23,8 @@ export interface SwarmProject {
   visibility: ProjectVisibility
   members: Array<{ id: string; generation: string }>
   updateMinutes: 1 | 5 | 15 | 30
+  /** The morning digest (digest.ts): its local time ("08:00") and zone, and the local date and time of the last one sent. */
+  digest?: { time: string; timeZone: string; lastOn?: string; lastAt?: number }
   /** Report watermark per conversation (projectUpdates.ts); kept in its own part (store by parts). */
   progress?: import('./parts/types.js').ProgressData
   repository?: { machineId: string; cwd: string; repositoryUrl: string | null }

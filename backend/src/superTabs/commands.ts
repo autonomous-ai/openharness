@@ -11,11 +11,14 @@ import { routingOverrideSchema } from './routingPolicy.js'
 import { agentTarget, askedInSchema, broken, MAX_RULES, RULE_MESSAGE_MS, ruleSchema, ruleTextSchema, startTarget, type RunTarget } from './rules.js'
 import { MAX_ATTACHMENTS, type Attachment } from './attachments.js'
 import { checkMentions, MAX_MENTIONS, type MentionTarget } from './mentions.js'
-import { TERMINAL_KEYS, terminalAlert, terminalRequest, terminalResult, type TerminalRequest } from './terminal.js'
+import { ANSWERED_NOTICE, answerDecision, askDecisions, checkAsker, decisionChoices, decisionQuestion, MAX_QUESTIONS, type DecisionTarget } from './decisions.js'
+import { TERMINAL_KEYS, terminalAlert, terminalRequest, terminalResult, toLead, type TerminalRequest } from './terminal.js'
 import { loseTasks, renewLease, renewOwnTask } from './liveness.js'
+import { digestStartsAfter, knownTimeZone } from './digest.js'
 import { credentialResult, redactCredentials, type CredentialKind } from './credentials.js'
 import { dirtyGroups, reportGroups, summarize } from './projectUpdates.js'
-import { agentKind, agentProjectId, audienceOf, agentSetRole, deleteProject, markConfidential, requireSingleRegistration, groupProject, inviteLanding, ledProject, manageProject, MAX_ROLES, mutableProjects, placeRules, projectMembers, projectOf, projectRules, projectsOf, readAgent, readConversation, readProject, roleVersion, sameProject, sharedWithLeads, SKILL_SET_NAMES, skillSetOf, type ProjectRole, type RoleKind, type SwarmProject } from './projects.js'
+import { recordAnswer, recordAsked, recordStatus } from './leaderboard/record.js'
+import { agentKind, agentProjectId, audienceOf, agentSetRole, canReadProject, deleteProject, markConfidential, requireSingleRegistration, groupProject, inviteLanding, ledProject, manageProject, MAX_ROLES, mutableProjects, placeRules, projectMembers, projectOf, projectRules, projectsOf, readAgent, readConversation, readProject, roleVersion, sameProject, sharedWithLeads, SKILL_SET_NAMES, skillSetOf, type ProjectRole, type RoleKind, type SwarmProject } from './projects.js'
 
 const id = z.string().min(1).max(160).regex(/^[A-Za-z0-9_-]+$/)
 const title = z.string().trim().min(1).max(160)
@@ -81,6 +84,8 @@ export const commandSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('project.delete'), projectId: id }).strict(),
   z.object({ type: z.literal('project.sharing'), projectId: id, visibility: z.enum(['public', 'private']), memberIds: z.array(id).max(200) }).strict(),
   z.object({ type: z.literal('project.cadence'), projectId: id, minutes: z.union([z.literal(1), z.literal(5), z.literal(15), z.literal(30)]) }).strict(),
+  // A local time of day ("08:00") in an IANA zone; null turns the digest off.
+  z.object({ type: z.literal('project.digest'), projectId: id, time: z.string().regex(/^(?:[01]\d|2[0-3]):[0-5]\d$/).nullable(), timeZone: z.string().min(1).max(64) }).strict(),
   // `through`: each conversation's sequence the Lead read, as its wake-up names them. `throughRevision` is the tab revision a
   // wake-up from before the store by parts named; it is accepted only up to that split (projectUpdates.ts).
   z.object({ type: z.literal('project.report'), projectId: id, through: z.record(id, z.number().int().nonnegative().safe()).optional(),
@@ -94,12 +99,13 @@ export const commandSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('project.roles.reset'), projectId: id, roles: roleSet }).strict(),
   // `audience`: a private conversation that only these people and the project's Lead read (projects.ts canReadGroup).
   z.object({ type: z.literal('conversation.create'), projectId: id.optional(), title, brief: z.string().trim().max(8000).optional(), task: task.optional(), reviewOf: id.optional(), checks: z.array(check).max(40),
-    audience: z.object({ personIds: z.array(id).max(200) }).strict().optional() }).strict()
+    audience: z.object({ personIds: z.array(id).max(200) }).strict().optional(), requesterId: id.optional() }).strict()
     .refine(c => c.task !== undefined || c.brief !== undefined, 'Provide a task or brief.')
     .refine(c => !c.task || renderWorkTask(c.task).length <= 8000, 'Keep the rendered task within 8,000 characters.'),
   z.object({ type: z.literal('conversation.rename'), conversationId: id, title }).strict(),
   z.object({ type: z.literal('conversation.archive'), conversationId: id, archived: z.boolean() }).strict(),
   z.object({ type: z.literal('conversation.audience'), conversationId: id, personIds: z.array(id).max(200) }).strict(),
+  z.object({ type: z.literal('conversation.requester'), conversationId: id, personId: id.nullable() }).strict(),
   z.object({ type: z.literal('agent.add'), conversationId: id, machineId: id, harnessId: id, name: title, configuration, lead: z.boolean(), project: project.optional(), roleId: roleId.optional(), initialMessage: text.optional() }).strict(),
   z.object({ type: z.literal('agent.start'), request: startRequestSchema, routeDecisionId: id.optional(), overrideReason: reason.optional() }).strict(),
   z.object({ type: z.literal('agent.startDispatch'), startId: id }).strict(),
@@ -124,14 +130,20 @@ export const commandSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('message.send'), conversationId: id, text: z.string().trim().max(32_000), replyTo: id.nullable(), recipientIds: z.array(id).max(16),
     attachmentIds: z.array(id).max(MAX_ATTACHMENTS).optional(), mentions: z.array(id).max(MAX_MENTIONS).optional(), agentOnly: z.literal(true).optional() }).strict(),
   z.object({ type: z.literal('mention.done'), mentionId: id }).strict(),
+  z.object({ type: z.literal('decision.ask'), conversationId: id, personId: id, questions: z.array(decisionQuestion).min(1).max(MAX_QUESTIONS) }).strict(),
+  z.object({ type: z.literal('decision.answer'), decisionId: id, choice: z.number().int().min(0), note: z.string().trim().min(1).max(2000).optional() }).strict(),
   z.object({ type: z.literal('delivery.resolve'), deliveryId: id, resolution: z.enum(['received', 'resend', 'cancel']) }).strict(),
   z.object({ type: z.literal('work.define'), conversationId: id, brief: text.optional(), task: task.optional(), checks: z.array(check).min(1).max(40) }).strict()
     .refine(c => c.task !== undefined || c.brief !== undefined, 'Provide a task or brief.')
     .refine(c => !c.task || renderWorkTask(c.task).length <= 32_000, 'Keep the rendered task within 32,000 characters.'),
   z.object({ type: z.literal('work.assign'), conversationId: id, agentId: id, roleId: roleId.optional(), routeDecisionId: id.optional(), overrideReason: reason.optional() }).strict(),
   z.object({ type: z.literal('work.status'), conversationId: id, assignmentId: id,
-    status: z.enum(['working', 'needs_human', 'blocked', 'review', 'done', 'stopped']), result: text.nullable() }).strict(),
+    status: z.enum(['working', 'needs_human', 'blocked', 'review', 'done', 'stopped']), result: text.nullable(),
+    // A worker's question for one named person, opened as a decision (decisions.ts); the result is the question.
+    ask: decisionChoices.extend({ personId: id }).strict().optional() }).strict(),
   z.object({ type: z.literal('work.cancel'), conversationId: id, assignmentId: id, reason }).strict(),
+  // `lostAt` names the loss being resumed (Assignment.lost.at): one task can be lost to a limit, resumed and lost again.
+  z.object({ type: z.literal('work.resume'), conversationId: id, assignmentId: id, lostAt: z.number().int().nonnegative().safe() }).strict(),
   z.object({ type: z.literal('route.record'), conversationId: id, decision: routeRecordSchema }).strict(),
   z.object({ type: z.literal('route.override'), decisionId: id, candidateId: z.string().regex(/^c\d{1,2}$/), reason }).strict(),
   z.object({ type: z.literal('route.modelResult'), decisionId: id, startId: id, model: z.string().min(1).max(200), effort: z.string().min(1).max(80) }).strict(),
@@ -233,6 +245,8 @@ export interface CommandContext {
   terminalRequest?: TerminalRequest
   /** The mention `mention.done` names, read from SuperTabMention by the store. */
   mention?: MentionTarget
+  /** The decision `decision.answer` names, read from SuperTabDecision by the store. */
+  decision?: DecisionTarget
   /** The tab's contributed machines whose account row is signed in as a Harness Team account (`Machine.sessionKind`),
    *  read by the store for the commands that start, assign or route work (machines.ts teamWorkCheck). */
   teamMachines?: string[]
@@ -346,7 +360,8 @@ function dropClosing(state: SuperTabState, keep: (request: NonNullable<SuperTabS
 export function authorizeCommandAccess(state: SuperTabState, actor: Actor, command: Command, context: Partial<CommandContext> = {}) {
   if (command.type === 'invite.accept' || command.type === 'agent.sessionClosed' || command.type === 'machine.cleaned') return
   // Marking one's own tag done changes only one's own list, so a viewer may do it too.
-  if (command.type === 'mention.done') return void author(state, actor)
+  // Answering a decision asked of oneself changes only that decision, so a viewer may do it too.
+  if (command.type === 'mention.done' || command.type === 'decision.answer') return void author(state, actor)
   const leaving = command.type === 'member.remove' && actor.kind === 'person' && command.userId === actor.userId
   author(state, actor, !leaving)
   // An invitation's group is only where the person lands, and invite.create replaces a deleted one (inviteLanding).
@@ -380,6 +395,12 @@ export function postable(state: SuperTabState, actor: Actor, conversationId: str
 }
 function owner(state: SuperTabState, actor: Actor): void {
   if (actor.kind !== 'person' || actor.userId !== state.ownerId) fail('OWNER_REQUIRED', 'Only the Super Tab owner can manage invitations.', 403)
+}
+/** A requester is a member who can read the project the work is in. */
+function requester(state: SuperTabState, project: SwarmProject, personId: string): string {
+  const member = person(state, personId)
+  if (!canReadProject(state, { kind: 'person', userId: member.id, email: member.email }, project)) fail('REQUESTER_UNAVAILABLE', 'Name a person who can read this project.', 400)
+  return member.id
 }
 function open(state: SuperTabState, conversationId: string) {
   const group = conversation(state, conversationId)
@@ -448,7 +469,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
   }
 
   const leaving = command.type === 'member.remove' && actor.kind === 'person' && command.userId === actor.userId
-  const sender = author(state, actor, !leaving)
+  const sender = author(state, actor, !leaving && command.type !== 'decision.answer')
   authorizeCommandAccess(state, actor, command, context)
   const rememberAttempt = (group: ReturnType<typeof conversation>) => {
     if (group.assignment) effects.previousAttempts.push(structuredClone({ conversationId: group.id,
@@ -664,7 +685,13 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       break
     case 'agent.alert': {
       effects.messages.push(...terminalAlert(state, actor, sender, operationId, context.now, command))
-      if (command.alert === 'limit' && command.active) effects.messages.push(...loseTasks(state, context.now, worker => worker.id === command.agentId))
+      // A usage limit or a model that keeps failing loses its task at once (liveness.ts); a waiting prompt does not.
+      if (command.alert !== 'prompt' && command.active) {
+        // A reset time the limit screen gave is when the task resumes in this same session unless it is handed on first.
+        const resumeAt = command.alert === 'limit' && command.resetAt && Date.parse(command.resetAt) > context.now
+          ? agent(state, command.agentId).limitedUntil ?? undefined : undefined
+        effects.messages.push(...loseTasks(state, context.now, worker => worker.id === command.agentId, resumeAt))
+      }
       break
     }
     case 'project.report': {
@@ -801,6 +828,21 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       if (actor.kind !== 'person') fail('HUMAN_REQUIRED', 'A person chooses the update cadence.', 403)
       mutableProjects(state)
       projectOf(state, project.id).updateMinutes = command.minutes
+      break
+    }
+    case 'project.digest': {
+      const project = readProject(state, actor, command.projectId)
+      const lead = conversation(state, project.leadConversationId).leadId
+      if (actor.kind !== 'person' && !(actor.kind === 'agent' && actor.agentId === lead)) fail('FORBIDDEN', 'A person or the project’s Lead sets its morning digest.', 403)
+      if (!knownTimeZone(command.timeZone)) fail('TIME_ZONE', 'Name a time zone such as Asia/Ho_Chi_Minh.', 400)
+      mutableProjects(state)
+      const stored = projectOf(state, project.id)
+      if (command.time === null) delete stored.digest
+      else {
+        // Set after today's time, the first digest comes tomorrow rather than at once.
+        const lastOn = digestStartsAfter(command.time, command.timeZone, context.now)
+        stored.digest = { time: command.time, timeZone: command.timeZone, ...lastOn ? { lastOn } : {} }
+      }
       break
     }
     case 'tab.project': {
@@ -949,7 +991,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       if (state.paused) fail('PAUSED', 'New work is paused in this Super Tab.')
       if (command.audience) {
         // A private conversation is chat only: no task, checks or review, so private work never reaches other Leads.
-        if (command.task || command.checks.length || command.reviewOf) fail('AUDIENCE_CHAT_ONLY', 'A private conversation is chat only.', 400)
+        if (command.task || command.checks.length || command.reviewOf || command.requesterId) fail('AUDIENCE_CHAT_ONLY', 'A private conversation is chat only.', 400)
         if (actor.kind === 'person' && !command.audience.personIds.includes(actor.userId)) {
           fail('AUDIENCE_SELF', 'Open a private conversation with yourself in it.', 403)
         }
@@ -965,6 +1007,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
         }
         requireCustomRole(project, 'reviewer')
       }
+      const requesterId = command.requesterId ? requester(state, project, command.requesterId) : actor.kind === 'person' ? actor.userId : undefined
       const number = nextConversationNumber(state)
       state.groupCounter = number
       state.conversations.push({ id: operationId, ...(state.projects ? { projectId: project.id } : {}),
@@ -974,15 +1017,38 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
         assignment: null, lastMessageSequence: 0,
         checks: command.checks.map((c, i) => ({ ...c, id: stableId(operationId, String(i)), evidence: null, passedBy: null })),
       })
+      recordAsked(state.conversations.at(-1)!, requesterId, context.now)
       result.conversationId = operationId
       result.number = number
       if (brief) message(operationId, brief, [], null, SYSTEM_ROW)
+      break
+    }
+    case 'decision.ask': {
+      const group = open(state, command.conversationId)
+      effects.decisions = askDecisions(state, group, command.personId, command.questions,
+        { operationId, askerAgentId: checkAsker(state, actor, group), assignmentId: null })
+      result.decisionIds = effects.decisions.map(d => d.id)
+      break
+    }
+    case 'decision.answer': {
+      const { answer, recipients, source } = answerDecision(state, actor, context.decision, command.choice, command.note ?? null)
+      effects.decisionAnswer = answer
+      if (recipients.length) message(context.decision!.conversationId, ANSWERED_NOTICE, recipients, null, source)
+      result.decisionId = answer.id
       break
     }
     case 'conversation.rename':
       controls(state, actor, command.conversationId)
       open(state, command.conversationId).title = command.title
       break
+    case 'conversation.requester': {
+      chatOnly(command.conversationId)
+      controls(state, actor, command.conversationId)
+      const group = open(state, command.conversationId)
+      if (command.personId) group.requesterId = requester(state, groupProject(state, group), command.personId)
+      else delete group.requesterId
+      break
+    }
     case 'conversation.audience': {
       // Who may read it already passed (readConversation): only its listed people and the project's Lead get here.
       const group = open(state, command.conversationId)
@@ -1222,8 +1288,8 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       if (!isLead && !isOwner) fail('FORBIDDEN', 'Only this project’s Lead, the contributor or tab owner can release a worker.', 403)
       protectLead(state, target.id)
       if (state.conversations.some(c => c.leadId === target.id)) fail('LEAD_REQUIRED', 'Release workers only; keep the Lead running.')
+      // Only its own active work holds a decision back, not the active work of a group it sits in (a Reviewer's).
       if (state.conversations.some(c => activeWork(c) && c.assignment?.agentId === target.id)) fail('WORK_ACTIVE', 'Finish active work before releasing this worker.')
-      if (reviewing(state, target.id)) fail('WORK_ACTIVE', 'This Reviewer is reviewing active work. Remove it from that group or wait for the work to end.')
       // A Reviewer is never assigned work, so the Lead may keep or stop it at any time.
       if (!target.workDecision && agentRole(target) !== 'reviewer' && !state.conversations.some(c => c.assignment?.agentId === target.id)) {
         fail('WORK_REQUIRED', 'This worker has no finished assignment to release.')
@@ -1383,6 +1449,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       }
       // The transcript still accepts a human message while the lead is unavailable. The UI can say why no delivery was created.
       message(group.id, command.text, recipients, command.replyTo, command.agentOnly ? AGENT_ONLY : undefined, attachments, mentions)
+      recordAnswer(state, group, actor, command.replyTo, context.now)
       if (actor.kind === 'agent') renewOwnTask(group, actor.agentId, context.now)
       break
     }
@@ -1558,9 +1625,18 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       if (command.status === 'done' && (!command.result || !group.checks.every(c => c.passedBy && c.evidence))) {
         fail('CHECKS_PENDING', 'Completion needs a result and evidence for every acceptance check.')
       }
-      const changed = assignment.status !== command.status || assignment.result !== command.result
+      if (command.ask) {
+        if (command.status !== 'needs_human' || !command.result || actor.kind !== 'agent') {
+          fail('INVALID_DECISION', 'An agent asks a person for a decision only when its work needs a human, with the question as its result.', 400)
+        }
+        const { personId, ...choices } = command.ask
+        effects.decisions = askDecisions(state, group, personId, [{ question: command.result, ...choices }],
+          { operationId, askerAgentId: actor.agentId, assignmentId: assignment.id })
+      }
+      const changed = assignment.status !== command.status || assignment.result !== command.result || !!command.ask, previous = assignment.status
       assignment.status = command.status
       assignment.result = command.result
+      recordStatus(group, assignment, previous, context.now, changed ? operationId : null)
       if (['done', 'stopped'].includes(command.status)) finishWorker(state, assignment.agentId, group)
       // Finished work shows the worker recovered from a task it lost before.
       if (command.status === 'done') delete state.agents.find(a => a.id === assignment.agentId)?.lostTask
@@ -1573,7 +1649,8 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
         // Ready for review also wakes the group's Reviewers, whoever marked it.
         const reviewers = command.status !== 'review' ? [] : group.agentIds.filter(id => id !== lead &&
           (actor.kind !== 'agent' || id !== actor.agentId) && state.agents.some(a => a.id === id && agentRole(a) === 'reviewer' && a.workDecision !== 'stop'))
-        message(group.id, `${label}${command.result ? `\n\n${command.result}` : ''}`, [...(tellLead ? [lead] : []), ...reviewers], null, SYSTEM_ROW)
+        const asked = command.ask ? `\n\nAsked ${person(state, command.ask.personId).email}.` : ''
+        message(group.id, `${label}${command.result ? `\n\n${command.result}` : ''}${asked}`, [...(tellLead ? [lead] : []), ...reviewers], null, SYSTEM_ROW)
       }
       if (actor.kind === 'agent') renewOwnTask(group, actor.agentId, context.now)
       break
@@ -1599,6 +1676,31 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       if (!lost) finishWorker(state, assignment.agentId, group)
       message(group.id, `${isLead ? 'The Lead' : 'The tab owner'} cancelled this task: ${command.reason.replace(/[.\s]+$/, '')}.${gone ? '' : ' Stop working on it.'}`,
         gone ? [] : [assignment.agentId], null, SYSTEM_ROW)
+      break
+    }
+    case 'work.resume': {
+      // Its usage limit has reset: the session that lost this task to it takes it back, unless it was handed on first. Its
+      // host asks here before typing into the session (cli superTabs/limitResume.ts), so a task handed on never resumes.
+      const group = open(state, command.conversationId)
+      const assignment = group.assignment
+      if (assignment?.id !== command.assignmentId || assignment.status !== 'lost' || assignment.lost?.at !== command.lostAt) {
+        fail('TASK_MOVED', 'This task was handed on or closed, so it does not resume.')
+      }
+      if (actor.kind !== 'agent' || actor.agentId !== assignment.agentId) fail('FORBIDDEN', 'Only the agent that lost this task resumes it.', 403)
+      const worker = agent(state, assignment.agentId)
+      const resumeAt = assignment.lost?.resumeAt
+      if (!resumeAt) fail('NO_RESUME', 'This task was not lost to a usage limit with a reset time.')
+      if (context.now < Date.parse(resumeAt)) fail('LIMIT_NOT_RESET', 'Its usage limit has not reset yet.')
+      if (worker.harnessId !== assignment.execution.harnessId) fail('SESSION_CHANGED', 'This agent runs in another session now, so the task does not resume.')
+      if (state.conversations.some(c => activeWork(c) && c.assignment?.agentId === worker.id)) fail('AGENT_BUSY', 'This agent already owns an active assignment.')
+      assignment.status = 'working'
+      delete assignment.lost
+      delete group.lostAttempt
+      delete worker.lostTask
+      renewLease(assignment, context.now)
+      effects.messages.push(...toLead(state, worker, { id: stableId(operationId, 'resumed'), conversationId: group.id, author: sender, replyTo: null,
+        recipients: [], text: `${worker.displayName ?? worker.name} resumed its task after its usage limit reset.`,
+        source: { kind: 'work-resumed', agentId: worker.id, assignmentId: assignment.id } }))
       break
     }
     case 'work.check': {

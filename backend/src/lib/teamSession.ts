@@ -129,6 +129,8 @@ export const TEAM_ROUTES: readonly TeamRoute[] = [
   { method: 'GET', url: '/api/super-tabs/:tabId/routing-policy', scope: 'agent' },
   { method: 'GET', url: '/api/super-tabs/:tabId/route-decisions', scope: 'agent' },
   { method: 'GET', url: '/api/super-tabs/:tabId/route-decisions/:decisionId', scope: 'agent' },
+  // The decisions its agent asked of people, and their answers (superTabs/decisions.ts).
+  { method: 'GET', url: '/api/super-tabs/:tabId/decisions', scope: 'agent' },
   { method: 'GET', url: '/api/super-tabs/:tabId/conversations/:conversationId/messages', scope: 'agent' },
   { method: 'GET', url: '/api/super-tabs/:tabId/conversations/:conversationId/attempts', scope: 'agent' },
   { method: 'GET', url: '/api/super-tabs/:tabId/terminal/:requestId', scope: 'agent' },

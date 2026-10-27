@@ -15,6 +15,7 @@ class SuperTabSectionHeading extends StatelessWidget {
     this.trailing,
     this.actions = const [],
     this.endInset = 12,
+    this.startInset,
     this.collapsed,
     this.onToggleCollapsed,
   });
@@ -33,6 +34,11 @@ class SuperTabSectionHeading extends StatelessWidget {
   /// The space after the last action. The left sidebar passes 0 to align +
   /// with its rows' trailing disclosure controls.
   final double endInset;
+
+  /// The space before the title; a collapsible heading's own inset when not
+  /// given, else 16. The left sidebar passes [indentFor] 0 for a heading that
+  /// does not collapse, to align it with the ones that do.
+  final double? startInset;
 
   /// Whether a collapsible group's body is currently hidden. Ignored unless
   /// [onToggleCollapsed] is set.
@@ -67,7 +73,7 @@ class SuperTabSectionHeading extends StatelessWidget {
     final addWidth = phone ? kFingerTarget : actionWidth;
     return Padding(
       padding: EdgeInsets.fromLTRB(
-        collapsible ? _leadingInset : 16,
+        startInset ?? (collapsible ? _leadingInset : 16),
         0,
         endInset,
         4,
