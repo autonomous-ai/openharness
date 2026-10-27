@@ -1,0 +1,1411 @@
+{
+ "value": {
+  "state": {
+   "people": [
+    {
+     "id": "6a86d24c2ea251076eb4eebe",
+     "role": "owner"
+    },
+    {
+     "id": "6a87d2540fc799caad5cf805",
+     "role": "collaborator"
+    },
+    {
+     "id": "6a9115f9d79b582a980a37a6",
+     "role": "collaborator"
+    },
+    {
+     "id": "6a9115a7b60eaba7239195e8",
+     "role": "collaborator"
+    },
+    {
+     "id": "6a8fe4fcf1a6b5972eed0103",
+     "role": "collaborator"
+    },
+    {
+     "id": "6aabb7bb349df514229c0a12",
+     "role": "collaborator"
+    }
+   ],
+   "agents": [
+    {
+     "id": "0fcbb3107d5336e0f5f8abdc",
+     "machineId": "e5c123a616155ce517f24c414cf57180",
+     "projectId": "5701099db2a04f605ac0d4d4",
+     "name": "Lead",
+     "configuration": {
+      "engine": "claude",
+      "model": "opus",
+      "effort": "auto"
+     }
+    },
+    {
+     "id": "fa8fc7a462989d9335bb1367",
+     "machineId": "ebedf81ba6a1ab03c324f4e8f58b094a",
+     "projectId": "5701099db2a04f605ac0d4d4",
+     "name": "Builder",
+     "configuration": {
+      "engine": "claude",
+      "model": "opus",
+      "effort": "auto"
+     }
+    },
+    {
+     "id": "60d89b4d55170d5a5f2819d7",
+     "machineId": "ebedf81ba6a1ab03c324f4e8f58b094a",
+     "projectId": "5701099db2a04f605ac0d4d4",
+     "name": "Builder",
+     "configuration": {
+      "engine": "claude",
+      "model": "opus",
+      "effort": "auto"
+     }
+    },
+    {
+     "id": "0540dbb44cdd4c2e2be7b512",
+     "machineId": "78351f130fd7a6e04a93c47790767040",
+     "projectId": "5701099db2a04f605ac0d4d4",
+     "name": "Builder",
+     "configuration": {
+      "engine": "claude",
+      "model": "opus",
+      "effort": "xhigh"
+     }
+    },
+    {
+     "id": "71331283f7e086e201e08684",
+     "machineId": "78351f130fd7a6e04a93c47790767040",
+     "projectId": "5701099db2a04f605ac0d4d4",
+     "name": "Builder",
+     "configuration": {
+      "engine": "claude",
+      "model": "opus",
+      "effort": "xhigh"
+     }
+    },
+    {
+     "id": "930adcb914795fa8be059096",
+     "machineId": "78351f130fd7a6e04a93c47790767040",
+     "projectId": "5701099db2a04f605ac0d4d4",
+     "name": "Builder",
+     "configuration": {
+      "engine": "claude",
+      "model": "opus",
+      "effort": "xhigh"
+     }
+    },
+    {
+     "id": "37afea9df555a4cd3467e36c",
+     "machineId": "e5c123a616155ce517f24c414cf57180",
+     "projectId": "5701099db2a04f605ac0d4d4",
+     "name": "Builder",
+     "configuration": {
+      "engine": "claude",
+      "model": "sonnet",
+      "effort": "auto"
+     }
+    },
+    {
+     "id": "dda0b17957d93620adad7b53",
+     "machineId": "e5c123a616155ce517f24c414cf57180",
+     "projectId": "5701099db2a04f605ac0d4d4",
+     "name": "Builder",
+     "configuration": {
+      "engine": "claude",
+      "model": "sonnet",
+      "effort": "medium"
+     }
+    },
+    {
+     "id": "96b2fe87fbc4df4ad29e57b4",
+     "machineId": "e5c123a616155ce517f24c414cf57180",
+     "projectId": "5701099db2a04f605ac0d4d4",
+     "name": "Reviewer",
+     "configuration": {
+      "engine": "codex",
+      "model": "gpt-6.1-sol",
+      "effort": "auto"
+     }
+    },
+    {
+     "id": "d236d1b58cc13dc360595eda",
+     "machineId": "e5c123a616155ce517f24c414cf57180",
+     "projectId": "5701099db2a04f605ac0d4d4",
+     "name": "Reviewer",
+     "configuration": {
+      "engine": "codex",
+      "model": "gpt-6.1-sol",
+      "effort": "auto"
+     }
+    },
+    {
+     "id": "937f9dbfee4a7f66a1bdb13b",
+     "machineId": "e5c123a616155ce517f24c414cf57180",
+     "projectId": "5701099db2a04f605ac0d4d4",
+     "name": "Reviewer",
+     "configuration": {
+      "engine": "codex",
+      "model": "gpt-6.1-sol",
+      "effort": "auto"
+     }
+    },
+    {
+     "id": "656329a6635d3b25bb81eac5",
+     "machineId": "e5c123a616155ce517f24c414cf57180",
+     "projectId": "5701099db2a04f605ac0d4d4",
+     "name": "Builder",
+     "configuration": {
+      "engine": "claude",
+      "model": "opus",
+      "effort": "auto"
+     }
+    },
+    {
+     "id": "d02c33080defd819f206b24e",
+     "machineId": "383ce46764d8cbf68d598ec77827a6a2",
+     "projectId": "5701099db2a04f605ac0d4d4",
+     "name": "Reviewer",
+     "configuration": {
+      "engine": "codex",
+      "model": "gpt-6-sol",
+      "effort": "high"
+     }
+    },
+    {
+     "id": "93bbf6fffaa8f7a7f0c757f1",
+     "machineId": "e5c123a616155ce517f24c414cf57180",
+     "projectId": "5701099db2a04f605ac0d4d4",
+     "name": "Builder",
+     "configuration": {
+      "engine": "claude",
+      "model": "opus",
+      "effort": "auto"
+     }
+    },
+    {
+     "id": "cda6a1e03d3ac133a46c3fc0",
+     "machineId": "e5c123a616155ce517f24c414cf57180",
+     "projectId": "5701099db2a04f605ac0d4d4",
+     "name": "Builder",
+     "configuration": {
+      "engine": "claude",
+      "model": "opus",
+      "effort": "auto"
+     }
+    }
+   ],
+   "machines": [
+    {
+     "machineId": "383ce46764d8cbf68d598ec77827a6a2",
+     "maxAgents": 16,
+     "engines": [
+      "claude",
+      "codex",
+      "cursor",
+      "opencode",
+      "pi",
+      "hermes",
+      "commandcode",
+      "devin",
+      "muse",
+      "amp",
+      "kilo",
+      "grok",
+      "agy",
+      "copilot"
+     ],
+     "name": "MacbookPro.local",
+     "observation": {
+      "receivedAt": 1793056351373,
+      "quotas": [
+       {
+        "engine": "claude",
+        "known": false,
+        "windows": []
+       },
+       {
+        "engine": "codex",
+        "known": true,
+        "windows": [
+         {
+          "name": "weekly",
+          "usedPercent": 67,
+          "resetsAt": 1793599668
+         }
+        ]
+       }
+      ],
+      "localModels": [
+       {
+        "grid": "swarm-626d5615ecf5",
+        "model": "deepseek/deepseek-v4.1-flash-1017",
+        "kind": "api",
+        "name": "deepseek/deepseek-v4.1-flash-1017 · OpenRouter"
+       }
+      ]
+     }
+    },
+    {
+     "machineId": "001bcba1e7e9deb6f8756c053a951ce2",
+     "maxAgents": 8,
+     "engines": [
+      "claude",
+      "codex",
+      "cursor",
+      "opencode",
+      "hermes",
+      "devin",
+      "muse",
+      "kilo",
+      "grok",
+      "agy"
+     ],
+     "name": "[person]'s Mac",
+     "observation": {
+      "receivedAt": 1793040578701,
+      "quotas": [
+       {
+        "engine": "claude",
+        "known": true,
+        "windows": [
+         {
+          "name": "5-hour",
+          "usedPercent": 3,
+          "resetsAt": "2026-10-26T21:59:59.739398+00:00"
+         },
+         {
+          "name": "weekly",
+          "usedPercent": 72,
+          "resetsAt": "2026-10-30T14:59:59.739417+00:00"
+         }
+        ]
+       },
+       {
+        "engine": "codex",
+        "known": true,
+        "windows": [
+         {
+          "name": "weekly",
+          "usedPercent": 100,
+          "resetsAt": 1794982274
+         }
+        ]
+       }
+      ],
+      "localModels": []
+     }
+    },
+    {
+     "machineId": "78351f130fd7a6e04a93c47790767040",
+     "maxAgents": 8,
+     "engines": [
+      "claude",
+      "codex",
+      "cursor",
+      "opencode",
+      "hermes"
+     ],
+     "name": "MacBookPro2021.local",
+     "observation": {
+      "receivedAt": 1793056351192,
+      "quotas": [
+       {
+        "engine": "claude",
+        "known": true,
+        "windows": [
+         {
+          "name": "5-hour",
+          "usedPercent": 2,
+          "resetsAt": "2026-10-27T03:29:59.883314+00:00"
+         },
+         {
+          "name": "weekly",
+          "usedPercent": 30,
+          "resetsAt": "2026-11-01T18:59:59.883335+00:00"
+         }
+        ]
+       },
+       {
+        "engine": "codex",
+        "known": true,
+        "windows": [
+         {
+          "name": "5-hour",
+          "usedPercent": 0,
+          "resetsAt": 1795648349
+         }
+        ]
+       }
+      ],
+      "localModels": []
+     }
+    },
+    {
+     "machineId": "d4a1916eb08cc2ececc17e4f90dae498",
+     "maxAgents": 8,
+     "engines": [
+      "claude",
+      "codex"
+     ],
+     "name": "WIN-DELL",
+     "observation": {
+      "receivedAt": 1793012659392,
+      "quotas": [
+       {
+        "engine": "claude",
+        "known": true,
+        "windows": [
+         {
+          "name": "5-hour",
+          "usedPercent": 25,
+          "resetsAt": "2026-10-26T11:50:00.464054+00:00"
+         },
+         {
+          "name": "weekly",
+          "usedPercent": 64,
+          "resetsAt": "2026-10-30T15:00:00.464076+00:00"
+         }
+        ]
+       },
+       {
+        "engine": "codex",
+        "known": true,
+        "windows": [
+         {
+          "name": "weekly",
+          "usedPercent": 33,
+          "resetsAt": 1793599668
+         }
+        ]
+       }
+      ],
+      "localModels": []
+     }
+    },
+    {
+     "machineId": "e5c123a616155ce517f24c414cf57180",
+     "maxAgents": 16,
+     "engines": [
+      "claude",
+      "codex"
+     ],
+     "name": "MACs-Mac-Studio.local",
+     "observation": {
+      "receivedAt": 1793056345878,
+      "quotas": [
+       {
+        "engine": "claude",
+        "known": false,
+        "windows": []
+       },
+       {
+        "engine": "codex",
+        "known": true,
+        "windows": [
+         {
+          "name": "weekly",
+          "usedPercent": 67,
+          "resetsAt": 1793599668
+         }
+        ]
+       }
+      ],
+      "localModels": []
+     }
+    },
+    {
+     "machineId": "ebedf81ba6a1ab03c324f4e8f58b094a",
+     "maxAgents": 1,
+     "engines": [
+      "claude",
+      "codex"
+     ],
+     "name": "MacBooks-MacBook-Pro-19.local",
+     "observation": {
+      "receivedAt": 1793056347164,
+      "quotas": [
+       {
+        "engine": "claude",
+        "known": false,
+        "windows": []
+       },
+       {
+        "engine": "codex",
+        "known": true,
+        "windows": [
+         {
+          "name": "5-hour",
+          "usedPercent": 0,
+          "resetsAt": 1793074344
+         },
+         {
+          "name": "weekly",
+          "usedPercent": 5,
+          "resetsAt": 1793602151
+         }
+        ]
+       }
+      ],
+      "localModels": []
+     }
+    },
+    {
+     "machineId": "0caa2f6c73e8123baf0705c76b35420d",
+     "maxAgents": 4,
+     "engines": [
+      "claude",
+      "codex"
+     ],
+     "name": "MacBooks-MacBook-Pro-10.local",
+     "observation": {
+      "receivedAt": 1793016835604,
+      "quotas": [
+       {
+        "engine": "claude",
+        "known": true,
+        "windows": [
+         {
+          "name": "5-hour",
+          "usedPercent": 16,
+          "resetsAt": "2026-10-26T14:59:59.648298+00:00"
+         },
+         {
+          "name": "weekly",
+          "usedPercent": 19,
+          "resetsAt": "2026-11-01T03:59:59.648321+00:00"
+         }
+        ]
+       },
+       {
+        "engine": "codex",
+        "known": true,
+        "windows": [
+         {
+          "name": "weekly",
+          "usedPercent": 3,
+          "resetsAt": 1795163925
+         }
+        ]
+       }
+      ],
+      "localModels": []
+     }
+    }
+   ],
+   "conversations": [
+    {
+     "id": "project-5701099db2a04f605ac0d4d4",
+     "projectId": "5701099db2a04f605ac0d4d4",
+     "title": "Lead",
+     "assignment": null
+    },
+    {
+     "id": "9e7e516b4e7e1f90d7c9ca43",
+     "projectId": "5701099db2a04f605ac0d4d4",
+     "title": "Regression: API models in the Swarm",
+     "assignment": {
+      "id": "1f0964cfb3e5c7d38b7806a2",
+      "agentId": "fa8fc7a462989d9335bb1367",
+      "status": "working",
+      "configuration": {
+       "engine": "claude",
+       "model": "opus",
+       "effort": "auto"
+      },
+      "execution": {
+       "machineId": "ebedf81ba6a1ab03c324f4e8f58b094a"
+      }
+     }
+    },
+    {
+     "id": "274baf5b89089a604ebbff4b",
+     "projectId": "5701099db2a04f605ac0d4d4",
+     "title": "Smoke: DeepSeek API on MacbookPro.local",
+     "assignment": {
+      "id": "fb5dcd8981e91928ca52fee2",
+      "agentId": "b9bd74aa495ad91bfb5e6481",
+      "status": "done",
+      "configuration": {
+       "engine": "claude",
+       "model": "deepseek/deepseek-v4.1-flash-1017",
+       "effort": "high"
+      },
+      "execution": {
+       "machineId": "383ce46764d8cbf68d598ec77827a6a2"
+      }
+     }
+    },
+    {
+     "id": "aa409e467756f366f8ec67d4",
+     "projectId": "5701099db2a04f605ac0d4d4",
+     "title": "Smoke: DeepSeek API on MacBooks-MacBook-Pro-19.local",
+     "assignment": {
+      "id": "fd17f229181721cac69beaab",
+      "agentId": "4253d47271da4bc84eef9edb",
+      "status": "done",
+      "configuration": {
+       "engine": "claude",
+       "model": "deepseek/deepseek-v4.1-flash-1017",
+       "effort": "auto"
+      },
+      "execution": {
+       "machineId": "ebedf81ba6a1ab03c324f4e8f58b094a"
+      }
+     }
+    },
+    {
+     "id": "feb85d3aef2375b81b4275eb",
+     "projectId": "5701099db2a04f605ac0d4d4",
+     "title": "Smoke: DeepSeek API on MACs-Mac-Studio.local",
+     "assignment": {
+      "id": "10b24f331a33a2b014e3ecd5",
+      "agentId": "090e9ec08116ca53444ca7b1",
+      "status": "done",
+      "configuration": {
+       "engine": "claude",
+       "model": "deepseek/deepseek-v4.1-flash-1017",
+       "effort": "auto"
+      },
+      "execution": {
+       "machineId": "e5c123a616155ce517f24c414cf57180"
+      }
+     }
+    },
+    {
+     "id": "d80142e540abade0e9ac21de",
+     "projectId": "5701099db2a04f605ac0d4d4",
+     "title": "Smoke: DeepSeek API on [person]'s Mac",
+     "assignment": {
+      "id": "62ec6337a87ba8f6c82b97f9",
+      "agentId": "51addee11e2be5413fa35cb8",
+      "status": "done",
+      "configuration": {
+       "engine": "claude",
+       "model": "deepseek/deepseek-v4.1-flash-1017",
+       "effort": "xhigh"
+      },
+      "execution": {
+       "machineId": "001bcba1e7e9deb6f8756c053a951ce2"
+      }
+     }
+    },
+    {
+     "id": "837f400f3252d7491843ecff",
+     "projectId": "5701099db2a04f605ac0d4d4",
+     "title": "Smoke: DeepSeek API on WIN-DELL",
+     "assignment": null
+    },
+    {
+     "id": "2b8a76771f8d6e8380101ad0",
+     "projectId": "5701099db2a04f605ac0d4d4",
+     "title": "Measure: Super Tab load and message time on the web",
+     "assignment": {
+      "id": "7d801f4ade75bbbcff9dd016",
+      "agentId": "60d89b4d55170d5a5f2819d7",
+      "status": "working",
+      "configuration": {
+       "engine": "claude",
+       "model": "opus",
+       "effort": "auto"
+      },
+      "execution": {
+       "machineId": "ebedf81ba6a1ab03c324f4e8f58b094a"
+      }
+     }
+    },
+    {
+     "id": "659a6cc93b944bd24cae2884",
+     "projectId": "5701099db2a04f605ac0d4d4",
+     "title": "1726 G0: Swarm load benchmark (baseline)",
+     "assignment": {
+      "id": "2cfd6ca673a31100abc117eb",
+      "agentId": "91b91e3786d8278afc40a96e",
+      "status": "done",
+      "configuration": {
+       "engine": "claude",
+       "model": "opus",
+       "effort": "high"
+      },
+      "execution": {
+       "machineId": "78351f130fd7a6e04a93c47790767040"
+      }
+     }
+    },
+    {
+     "id": "aeef05a35995ca9f7cca7060",
+     "projectId": "5701099db2a04f605ac0d4d4",
+     "title": "1726 G1: design doc for Swarm state by parts",
+     "assignment": {
+      "id": "09d0977df3acafae56af6178",
+      "agentId": "0540dbb44cdd4c2e2be7b512",
+      "status": "done",
+      "configuration": {
+       "engine": "claude",
+       "model": "opus",
+       "effort": "high"
+      },
+      "execution": {
+       "machineId": "78351f130fd7a6e04a93c47790767040"
+      }
+     }
+    },
+    {
+     "id": "8c0d038efe1b63d3b6628552",
+     "projectId": "5701099db2a04f605ac0d4d4",
+     "title": "Smoke: DeepSeek API after CLI 0.4.73 (Mac Studio)",
+     "assignment": {
+      "id": "6a6287f70a5d2ba89403a66d",
+      "agentId": "5d67c7f4f62ad5c54b7d5123",
+      "status": "done",
+      "configuration": {
+       "engine": "claude",
+       "model": "deepseek/deepseek-v4.1-flash-1017",
+       "effort": "auto"
+      },
+      "execution": {
+       "machineId": "e5c123a616155ce517f24c414cf57180"
+      }
+     }
+    },
+    {
+     "id": "424ee80b74789dcde33b6ade",
+     "projectId": "5701099db2a04f605ac0d4d4",
+     "title": "Check: CLI version and grid log on WIN-DELL",
+     "assignment": null
+    },
+    {
+     "id": "e37ffff373d0afd7fc763726",
+     "projectId": "5701099db2a04f605ac0d4d4",
+     "title": "Check: CLI version and grid log on MacbookPro.local",
+     "assignment": {
+      "id": "c9e64b2deb153a552d673c2d",
+      "agentId": "5dae1e8475f7813d88b5ce46",
+      "status": "done",
+      "configuration": {
+       "engine": "claude",
+       "model": "sonnet",
+       "effort": "medium"
+      },
+      "execution": {
+       "machineId": "383ce46764d8cbf68d598ec77827a6a2"
+      }
+     }
+    },
+    {
+     "id": "5c48779c71d5111602eab51f",
+     "projectId": "5701099db2a04f605ac0d4d4",
+     "title": "Review: 1726 G1 design doc",
+     "assignment": {
+      "id": "15cf42e5c2ee5348dfd5ac41",
+      "agentId": "7f5c2be98dc9c51b35af5de1",
+      "status": "done",
+      "configuration": {
+       "engine": "codex",
+       "model": "gpt-6-sol",
+       "effort": "high"
+      },
+      "execution": {
+       "machineId": "383ce46764d8cbf68d598ec77827a6a2"
+      }
+     }
+    },
+    {
+     "id": "df0940f037c9f6eef1b92b67",
+     "projectId": "5701099db2a04f605ac0d4d4",
+     "title": "1726 G2: backend storage and commands by parts",
+     "assignment": {
+      "id": "730c4929c97838e2f82d794c",
+      "agentId": "0540dbb44cdd4c2e2be7b512",
+      "status": "done",
+      "configuration": {
+       "engine": "claude",
+       "model": "opus",
+       "effort": "xhigh"
+      },
+      "execution": {
+       "machineId": "78351f130fd7a6e04a93c47790767040"
+      }
+     }
+    },
+    {
+     "id": "c2e38ce017f6f8e65ef8bdce",
+     "projectId": "5701099db2a04f605ac0d4d4",
+     "title": "1726 G3: backend read API and migration",
+     "assignment": {
+      "id": "390110f40abeb1f249ce092e",
+      "agentId": "71331283f7e086e201e08684",
+      "status": "done",
+      "configuration": {
+       "engine": "claude",
+       "model": "opus",
+       "effort": "xhigh"
+      },
+      "execution": {
+       "machineId": "78351f130fd7a6e04a93c47790767040"
+      }
+     }
+    },
+    {
+     "id": "0a84ea687a435833d1649933",
+     "projectId": "5701099db2a04f605ac0d4d4",
+     "title": "1726 G5: CLI on the new read API",
+     "assignment": {
+      "id": "f86275af026cfb5950ce0b4b",
+      "agentId": "930adcb914795fa8be059096",
+      "status": "done",
+      "configuration": {
+       "engine": "claude",
+       "model": "opus",
+       "effort": "xhigh"
+      },
+      "execution": {
+       "machineId": "78351f130fd7a6e04a93c47790767040"
+      }
+     }
+    },
+    {
+     "id": "2e2d726a3ff6196c26d44f8f",
+     "projectId": "5701099db2a04f605ac0d4d4",
+     "title": "1726 G4: Desktop and web on the new read API",
+     "assignment": {
+      "id": "be2d0c47157ea5746f5944cc",
+      "agentId": "7fc7f10cd2dc8496cf371522",
+      "status": "cancelled",
+      "configuration": {
+       "engine": "claude",
+       "model": "opus",
+       "effort": "high"
+      },
+      "execution": {
+       "machineId": "001bcba1e7e9deb6f8756c053a951ce2"
+      }
+     }
+    },
+    {
+     "id": "6bc636fa6713886102b9cbfa",
+     "projectId": "5701099db2a04f605ac0d4d4",
+     "title": "Review: 1726 G0 benchmark",
+     "assignment": {
+      "id": "8794d7b972c87d5edf506511",
+      "agentId": "d6d32b222b48616ae05c3231",
+      "status": "done",
+      "configuration": {
+       "engine": "codex",
+       "model": "gpt-6.1-sol",
+       "effort": "auto"
+      },
+      "execution": {
+       "machineId": "e5c123a616155ce517f24c414cf57180"
+      }
+     }
+    },
+    {
+     "id": "5f0d3516fb850999cb824c90",
+     "projectId": "5701099db2a04f605ac0d4d4",
+     "title": "Review: 1726 G5 CLI",
+     "assignment": {
+      "id": "660481291dd501f3b1a1a19e",
+      "agentId": "96b2fe87fbc4df4ad29e57b4",
+      "status": "done",
+      "configuration": {
+       "engine": "codex",
+       "model": "gpt-6.1-sol",
+       "effort": "auto"
+      },
+      "execution": {
+       "machineId": "e5c123a616155ce517f24c414cf57180"
+      }
+     }
+    },
+    {
+     "id": "7a23487b3220d1564f9c7522",
+     "projectId": "5701099db2a04f605ac0d4d4",
+     "title": "Review: 1726 G3 read API and migration",
+     "assignment": {
+      "id": "667f6d47cc52db17fbcdc3c7",
+      "agentId": "d236d1b58cc13dc360595eda",
+      "status": "done",
+      "configuration": {
+       "engine": "codex",
+       "model": "gpt-6.1-sol",
+       "effort": "auto"
+      },
+      "execution": {
+       "machineId": "e5c123a616155ce517f24c414cf57180"
+      }
+     }
+    },
+    {
+     "id": "e6115d403f62dd42d5cf3ab3",
+     "projectId": "5701099db2a04f605ac0d4d4",
+     "title": "Swarm plan R1: how the lampOS team works",
+     "assignment": {
+      "id": "9ab6da931320eefbe45b745f",
+      "agentId": "eb9d56c53b3590475cde4b69",
+      "status": "done",
+      "configuration": {
+       "engine": "claude",
+       "model": "opus",
+       "effort": "auto"
+      },
+      "execution": {
+       "machineId": "e5c123a616155ce517f24c414cf57180"
+      }
+     }
+    },
+    {
+     "id": "acdc5546b9fcc601abb8b22c",
+     "projectId": "5701099db2a04f605ac0d4d4",
+     "title": "Swarm plan R2: pain points of fast agent teams",
+     "assignment": {
+      "id": "301bb40071b2f3df218c110f",
+      "agentId": "dae0591e7300285ce9489f2d",
+      "status": "done",
+      "configuration": {
+       "engine": "claude",
+       "model": "opus",
+       "effort": "auto"
+      },
+      "execution": {
+       "machineId": "e5c123a616155ce517f24c414cf57180"
+      }
+     }
+    },
+    {
+     "id": "e141b9c91ab56d8509789a49",
+     "projectId": "5701099db2a04f605ac0d4d4",
+     "title": "Review: 1726 G4 Desktop and web",
+     "assignment": {
+      "id": "cdc7b7ae3a73da133dbb0d56",
+      "agentId": "937f9dbfee4a7f66a1bdb13b",
+      "status": "done",
+      "configuration": {
+       "engine": "codex",
+       "model": "gpt-6.1-sol",
+       "effort": "auto"
+      },
+      "execution": {
+       "machineId": "e5c123a616155ce517f24c414cf57180"
+      }
+     }
+    },
+    {
+     "id": "0da3404ca7a4a33f57d4c871",
+     "projectId": "5701099db2a04f605ac0d4d4",
+     "title": "Review: 1726 G2 backend storage and commands",
+     "assignment": {
+      "id": "4f39d45dc4228a882a7d39fb",
+      "agentId": "d6d32b222b48616ae05c3231",
+      "status": "done",
+      "configuration": {
+       "engine": "codex",
+       "model": "gpt-6.1-sol",
+       "effort": "auto"
+      },
+      "execution": {
+       "machineId": "e5c123a616155ce517f24c414cf57180"
+      }
+     }
+    },
+    {
+     "id": "8f099aef658fa637127c3482",
+     "projectId": "5701099db2a04f605ac0d4d4",
+     "title": "1726 G6: integrate, measure, migration dry run",
+     "assignment": {
+      "id": "13f2b2141a18213b77706cec",
+      "agentId": "91b91e3786d8278afc40a96e",
+      "status": "done",
+      "configuration": {
+       "engine": "claude",
+       "model": "opus",
+       "effort": "xhigh"
+      },
+      "execution": {
+       "machineId": "78351f130fd7a6e04a93c47790767040"
+      }
+     }
+    },
+    {
+     "id": "45e5e3322e966e128a7d0f3d",
+     "projectId": "5701099db2a04f605ac0d4d4",
+     "title": "1726 G3b: reads load only the parts that changed",
+     "assignment": {
+      "id": "064685631159620099640a44",
+      "agentId": "71331283f7e086e201e08684",
+      "status": "done",
+      "configuration": {
+       "engine": "claude",
+       "model": "opus",
+       "effort": "xhigh"
+      },
+      "execution": {
+       "machineId": "78351f130fd7a6e04a93c47790767040"
+      }
+     }
+    },
+    {
+     "id": "4c650945b01ab59703017bfb",
+     "projectId": "5701099db2a04f605ac0d4d4",
+     "title": "v1 liveness A: lost work and takeover (backend)",
+     "assignment": {
+      "id": "3add6df9ddc2585193bd9de5",
+      "agentId": "0540dbb44cdd4c2e2be7b512",
+      "status": "done",
+      "configuration": {
+       "engine": "claude",
+       "model": "opus",
+       "effort": "xhigh"
+      },
+      "execution": {
+       "machineId": "78351f130fd7a6e04a93c47790767040"
+      }
+     }
+    },
+    {
+     "id": "b27e3b7574be0b1bf4a76986",
+     "projectId": "5701099db2a04f605ac0d4d4",
+     "title": "v1 liveness B: host progress and Lead takeover (CLI)",
+     "assignment": {
+      "id": "0b55a76d3300dc52e1ac1e93",
+      "agentId": "930adcb914795fa8be059096",
+      "status": "done",
+      "configuration": {
+       "engine": "claude",
+       "model": "opus",
+       "effort": "xhigh"
+      },
+      "execution": {
+       "machineId": "78351f130fd7a6e04a93c47790767040"
+      }
+     }
+    },
+    {
+     "id": "b0b28597aa6be5ef38defa6e",
+     "projectId": "5701099db2a04f605ac0d4d4",
+     "title": "v1 routing: only machines that can do the work",
+     "assignment": {
+      "id": "7c3b8bc188554881c2f347c6",
+      "agentId": "656329a6635d3b25bb81eac5",
+      "status": "done",
+      "configuration": {
+       "engine": "claude",
+       "model": "opus",
+       "effort": "high"
+      },
+      "execution": {
+       "machineId": "e5c123a616155ce517f24c414cf57180"
+      }
+     }
+    },
+    {
+     "id": "f3a620e144116d08c3a68338",
+     "projectId": "5701099db2a04f605ac0d4d4",
+     "title": "v1 DM: a private chat with the PM for each person (Desktop and web)",
+     "assignment": {
+      "id": "da35660a3cb92945634d4733",
+      "agentId": "0a4f57d20d8002c862db5493",
+      "status": "done",
+      "configuration": {
+       "engine": "claude",
+       "model": "opus",
+       "effort": "high"
+      },
+      "execution": {
+       "machineId": "001bcba1e7e9deb6f8756c053a951ce2"
+      }
+     }
+    },
+    {
+     "id": "4f49c22420c3c3fc57dda058",
+     "projectId": "5701099db2a04f605ac0d4d4",
+     "title": "Review: v1 routing: only machines that can do the work",
+     "assignment": {
+      "id": "a0079d1d37cb9fe0bf8199b8",
+      "agentId": "d236d1b58cc13dc360595eda",
+      "status": "done",
+      "configuration": {
+       "engine": "codex",
+       "model": "gpt-6.1-sol",
+       "effort": "auto"
+      },
+      "execution": {
+       "machineId": "e5c123a616155ce517f24c414cf57180"
+      }
+     }
+    },
+    {
+     "id": "1e43f418b6c92f435689581d",
+     "projectId": "5701099db2a04f605ac0d4d4",
+     "title": "Review: v1 liveness B: host progress and Lead takeover (CLI)",
+     "assignment": {
+      "id": "d9d53c7460d1368639a7e079",
+      "agentId": "937f9dbfee4a7f66a1bdb13b",
+      "status": "done",
+      "configuration": {
+       "engine": "codex",
+       "model": "gpt-6.1-sol",
+       "effort": "auto"
+      },
+      "execution": {
+       "machineId": "e5c123a616155ce517f24c414cf57180"
+      }
+     }
+    },
+    {
+     "id": "d71cdb0a2ab3181904d5eb3d",
+     "projectId": "5701099db2a04f605ac0d4d4",
+     "title": "Review: v1 liveness A: lost work and takeover (backend)",
+     "assignment": {
+      "id": "12f71646335e00691c0cd47c",
+      "agentId": "96b2fe87fbc4df4ad29e57b4",
+      "status": "done",
+      "configuration": {
+       "engine": "codex",
+       "model": "gpt-6.1-sol",
+       "effort": "auto"
+      },
+      "execution": {
+       "machineId": "e5c123a616155ce517f24c414cf57180"
+      }
+     }
+    },
+    {
+     "id": "b483494ef289e282021b1e2a",
+     "projectId": "5701099db2a04f605ac0d4d4",
+     "title": "Review: 1726 G3b: reads load only the parts that changed",
+     "assignment": {
+      "id": "c9a56d7db0615ff05124f36e",
+      "agentId": "d02c33080defd819f206b24e",
+      "status": "done",
+      "configuration": {
+       "engine": "codex",
+       "model": "gpt-6-sol",
+       "effort": "high"
+      },
+      "execution": {
+       "machineId": "383ce46764d8cbf68d598ec77827a6a2"
+      }
+     }
+    },
+    {
+     "id": "32777a379c1fd8cccfde3e85",
+     "projectId": "5701099db2a04f605ac0d4d4",
+     "title": "Review: v1 DM: Chat with PM (Desktop and web)",
+     "assignment": {
+      "id": "b701a992577f1bc09e7abfcd",
+      "agentId": "937f9dbfee4a7f66a1bdb13b",
+      "status": "done",
+      "configuration": {
+       "engine": "codex",
+       "model": "gpt-6.1-sol",
+       "effort": "auto"
+      },
+      "execution": {
+       "machineId": "e5c123a616155ce517f24c414cf57180"
+      }
+     }
+    },
+    {
+     "id": "400c47daa5f4e2be6ab1c2e3",
+     "projectId": "5701099db2a04f605ac0d4d4",
+     "title": "Review: 1726 G6 results doc",
+     "assignment": {
+      "id": "d53957ff36c9c72fc6988049",
+      "agentId": "d02c33080defd819f206b24e",
+      "status": "done",
+      "configuration": {
+       "engine": "codex",
+       "model": "gpt-6-sol",
+       "effort": "high"
+      },
+      "execution": {
+       "machineId": "383ce46764d8cbf68d598ec77827a6a2"
+      }
+     }
+    },
+    {
+     "id": "4bc913c9bf52f96cadbcd419",
+     "projectId": "5701099db2a04f605ac0d4d4",
+     "title": "1726 final: merge main into the feature branch",
+     "assignment": {
+      "id": "9a6fd6fc993820e88eef0724",
+      "agentId": "930adcb914795fa8be059096",
+      "status": "review",
+      "configuration": {
+       "engine": "claude",
+       "model": "opus",
+       "effort": "xhigh"
+      },
+      "execution": {
+       "machineId": "78351f130fd7a6e04a93c47790767040"
+      }
+     }
+    },
+    {
+     "id": "04c39494afc5fb4c5a867455",
+     "projectId": "5701099db2a04f605ac0d4d4",
+     "title": "1726 final: whole-branch review before main",
+     "assignment": null
+    },
+    {
+     "id": "42f34fffe4223cab2ff79e69",
+     "projectId": "5701099db2a04f605ac0d4d4",
+     "title": "Review: 1726 final whole-branch review before main",
+     "assignment": {
+      "id": "25fc5065489973fc8761ffd0",
+      "agentId": "d236d1b58cc13dc360595eda",
+      "status": "done",
+      "configuration": {
+       "engine": "codex",
+       "model": "gpt-6.1-sol",
+       "effort": "auto"
+      },
+      "execution": {
+       "machineId": "e5c123a616155ce517f24c414cf57180"
+      }
+     }
+    },
+    {
+     "id": "8718795de795e643c928d3cc",
+     "projectId": "5701099db2a04f605ac0d4d4",
+     "title": "Review: 1726 final merge of main",
+     "assignment": {
+      "id": "4cd52095135d1cbc2d04afe3",
+      "agentId": "96b2fe87fbc4df4ad29e57b4",
+      "status": "done",
+      "configuration": {
+       "engine": "codex",
+       "model": "gpt-6.1-sol",
+       "effort": "auto"
+      },
+      "execution": {
+       "machineId": "e5c123a616155ce517f24c414cf57180"
+      }
+     }
+    },
+    {
+     "id": "977d937c468e7720151c780e",
+     "projectId": "5701099db2a04f605ac0d4d4",
+     "title": "1726 final fix C1: private PM chat must not reach terminal observers",
+     "assignment": {
+      "id": "b35233a8367efb08c180c09b",
+      "agentId": "0540dbb44cdd4c2e2be7b512",
+      "status": "done",
+      "configuration": {
+       "engine": "claude",
+       "model": "opus",
+       "effort": "xhigh"
+      },
+      "execution": {
+       "machineId": "78351f130fd7a6e04a93c47790767040"
+      }
+     }
+    },
+    {
+     "id": "b365e73faae5aa84b1b4d544",
+     "projectId": "5701099db2a04f605ac0d4d4",
+     "title": "1726 final fix C2: rollback must not expose private chats or lost work",
+     "assignment": {
+      "id": "e071da9fdc831304b37a4f27",
+      "agentId": "71331283f7e086e201e08684",
+      "status": "done",
+      "configuration": {
+       "engine": "claude",
+       "model": "opus",
+       "effort": "xhigh"
+      },
+      "execution": {
+       "machineId": "78351f130fd7a6e04a93c47790767040"
+      }
+     }
+    },
+    {
+     "id": "3f97d137a02c078abfdc7d74",
+     "projectId": "5701099db2a04f605ac0d4d4",
+     "title": "1726 final fix I3: a lost worker stays out of routing after cancel or reassign",
+     "assignment": {
+      "id": "bd546c8f6f4df12b9cab38d6",
+      "agentId": "656329a6635d3b25bb81eac5",
+      "status": "done",
+      "configuration": {
+       "engine": "claude",
+       "model": "opus",
+       "effort": "auto"
+      },
+      "execution": {
+       "machineId": "e5c123a616155ce517f24c414cf57180"
+      }
+     }
+    },
+    {
+     "id": "42095c031091b32d2d5e163b",
+     "projectId": "5701099db2a04f605ac0d4d4",
+     "title": "Review: 1726 final fix C2 rollback",
+     "assignment": {
+      "id": "da09821d0cb7183cc98b57da",
+      "agentId": "d236d1b58cc13dc360595eda",
+      "status": "done",
+      "configuration": {
+       "engine": "codex",
+       "model": "gpt-6.1-sol",
+       "effort": "auto"
+      },
+      "execution": {
+       "machineId": "e5c123a616155ce517f24c414cf57180"
+      }
+     }
+    },
+    {
+     "id": "a8c17a1e4fb9b75f771b67a7",
+     "projectId": "5701099db2a04f605ac0d4d4",
+     "title": "Review: 1726 final fix I3 lost worker routing",
+     "assignment": {
+      "id": "4e43fcdb8990a1d8600bac36",
+      "agentId": "d236d1b58cc13dc360595eda",
+      "status": "done",
+      "configuration": {
+       "engine": "codex",
+       "model": "gpt-6.1-sol",
+       "effort": "auto"
+      },
+      "execution": {
+       "machineId": "e5c123a616155ce517f24c414cf57180"
+      }
+     }
+    },
+    {
+     "id": "5c6b795d846d44bfb7591837",
+     "projectId": "5701099db2a04f605ac0d4d4",
+     "title": "Review: 1726 final fix C1 PM terminal observers",
+     "assignment": {
+      "id": "4a92a6812ce76d9b9fbdf150",
+      "agentId": "937f9dbfee4a7f66a1bdb13b",
+      "status": "done",
+      "configuration": {
+       "engine": "codex",
+       "model": "gpt-6.1-sol",
+       "effort": "auto"
+      },
+      "execution": {
+       "machineId": "e5c123a616155ce517f24c414cf57180"
+      }
+     }
+    },
+    {
+     "id": "fa552b26cc36df06a9145405",
+     "projectId": "5701099db2a04f605ac0d4d4",
+     "title": "v2 A: Swarm as a switchable subsystem (out of the daemon core)",
+     "assignment": {
+      "id": "e8724477c81fb0db1326db62",
+      "agentId": "93bbf6fffaa8f7a7f0c757f1",
+      "status": "working",
+      "configuration": {
+       "engine": "claude",
+       "model": "opus",
+       "effort": "auto"
+      },
+      "execution": {
+       "machineId": "e5c123a616155ce517f24c414cf57180"
+      }
+     }
+    },
+    {
+     "id": "88a2196381c696b3b458543f",
+     "projectId": "5701099db2a04f605ac0d4d4",
+     "title": "v2 B: night shift (usage limits never stop the Swarm)",
+     "assignment": {
+      "id": "1fc590d9b4c8d5ac5a5fc1c4",
+      "agentId": "656329a6635d3b25bb81eac5",
+      "status": "working",
+      "configuration": {
+       "engine": "claude",
+       "model": "opus",
+       "effort": "auto"
+      },
+      "execution": {
+       "machineId": "e5c123a616155ce517f24c414cf57180"
+      }
+     }
+    },
+    {
+     "id": "04f4dd68dc6273061f4e6194",
+     "projectId": "5701099db2a04f605ac0d4d4",
+     "title": "v2 C: decision packets (batched questions to people)",
+     "assignment": {
+      "id": "4960383ef28bb41d77bb62ab",
+      "agentId": "71331283f7e086e201e08684",
+      "status": "working",
+      "configuration": {
+       "engine": "claude",
+       "model": "opus",
+       "effort": "xhigh"
+      },
+      "execution": {
+       "machineId": "78351f130fd7a6e04a93c47790767040"
+      }
+     }
+    },
+    {
+     "id": "9109dbd1ee0f97b1f12ce4f5",
+     "projectId": "5701099db2a04f605ac0d4d4",
+     "title": "v2 D: review never waits on one reviewer (and no reviewer deadlocks)",
+     "assignment": {
+      "id": "e62849b8e36015b11ca858d0",
+      "agentId": "0540dbb44cdd4c2e2be7b512",
+      "status": "working",
+      "configuration": {
+       "engine": "claude",
+       "model": "opus",
+       "effort": "xhigh"
+      },
+      "execution": {
+       "machineId": "78351f130fd7a6e04a93c47790767040"
+      }
+     }
+    },
+    {
+     "id": "1dace4d8419a80177f226de1",
+     "projectId": "5701099db2a04f605ac0d4d4",
+     "title": "v2 E: scheduler prototype (global assignment of tasks to machines and models)",
+     "assignment": {
+      "id": "d6510a3429a3da95dc3913ab",
+      "agentId": "cda6a1e03d3ac133a46c3fc0",
+      "status": "working",
+      "configuration": {
+       "engine": "claude",
+       "model": "opus",
+       "effort": "auto"
+      },
+      "execution": {
+       "machineId": "e5c123a616155ce517f24c414cf57180"
+      }
+     }
+    },
+    {
+     "id": "27ecc522fbe3759f8e2d70cf",
+     "title": "Leads",
+     "assignment": null
+    }
+   ],
+   "rules": [
+    {
+     "id": "ac7486d7cb068ba952f5a9bf",
+     "projectId": "5701099db2a04f605ac0d4d4",
+     "rule": {
+      "kind": "machines",
+      "machineIds": [
+       "001bcba1e7e9deb6f8756c053a951ce2",
+       "78351f130fd7a6e04a93c47790767040",
+       "ebedf81ba6a1ab03c324f4e8f58b094a",
+       "e5c123a616155ce517f24c414cf57180",
+       "0caa2f6c73e8123baf0705c76b35420d",
+       "383ce46764d8cbf68d598ec77827a6a2"
+      ]
+     },
+     "createdAt": "2026-10-26T14:07:07.215Z",
+     "text": "Owner: no WIN-DELL until it is fixed. MacbookPro.local takes work again from 21:00 Vietnam time (\"Mac [person] tạm ko nhận việc đến 21H VN nha\")."
+    }
+   ]
+  }
+ }
+}

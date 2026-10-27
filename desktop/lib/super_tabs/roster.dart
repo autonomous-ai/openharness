@@ -4,9 +4,11 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import '../shared/theme/app_icons.dart';
 import '../shared/theme/app_theme.dart' as grid;
 import '../shared/theme/appearance_prefs_store.dart';
 import '../shared/widgets/app_dialog.dart';
+import '../shared/widgets/app_icon_button.dart';
 import '../state/app_state.dart';
 import '../state/harness_activity.dart';
 import '../terminal/terminal_theme.dart';
@@ -21,6 +23,8 @@ import 'identity.dart';
 import 'profile_sheet.dart';
 import 'model.dart';
 import 'section_heading.dart';
+import 'team_glance.dart';
+import 'team_glance_panel.dart';
 
 /// The current Swarm's authorized people, with agents from the selected project.
 class SuperTabRoster extends StatefulWidget {
@@ -267,6 +271,8 @@ class _SuperTabRosterState extends State<SuperTabRoster> {
   Widget _agent(SuperTabAgent agent) {
     final name = c.snapshot!.agentName(agent.id), activity = _activity(agent);
     final info = SuperTabAgentInfo(c, widget.app, agent, activity: activity);
+    // One line, readable in a second (Dee, 2026-10-27): state, machine, model and effort. The task is in the tooltip.
+    final glance = superTabAgentGlance(info);
     final project = c.snapshot!.projects
         .where((p) => p.id == _agentProjectId(agent))
         .firstOrNull;
@@ -371,7 +377,8 @@ class _SuperTabRosterState extends State<SuperTabRoster> {
                 const SizedBox(width: 6),
                 Expanded(
                   child: Text(
-                    status,
+                    glance.line,
+                    key: ValueKey('super-member-line-${agent.id}'),
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: DesktopChrome.metadata(),
@@ -500,6 +507,14 @@ class _SuperTabRosterState extends State<SuperTabRoster> {
             ? () => widget.onAddAgent(c.selected!)
             : null,
         addTooltip: 'Add agent',
+        actions: [
+          AppIconButton(
+            icon: AppIcons.layoutGrid,
+            tooltip: 'Team at a glance',
+            onPressed: () =>
+                unawaited(showSuperTabTeamGlance(context, c, widget.app)),
+          ),
+        ],
       ),
       for (final agent in [...leads, ...agents]) _agent(agent),
     ];

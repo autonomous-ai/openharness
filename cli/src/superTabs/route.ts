@@ -61,7 +61,9 @@ export interface Fit { status: 'fits' | 'unknown' | 'short'; coverage: number | 
 export interface Commitment { account: string; spend: Partial<Record<Window, number>>; size: Size; createdAt: number }
 export interface Shown extends Probe { id: string; title: string; label: string; fit: Fit }
 /** `short` is set when no candidate is expected to cover the task, to tell the Lead. */
-export interface Choice { shown: Shown[]; excluded: Array<{ title: string; reason: string }>; floor: number; belowFloor: boolean; short?: string }
+export interface Choice { shown: Shown[]; excluded: Array<{ title: string; reason: string }>; floor: number; belowFloor: boolean; short?: string
+  /** Every candidate left runs on an account the route was asked to avoid (`choose` `avoid`). */
+  avoided?: string }
 export interface Verdict { pick: Shown; via: 'order' | 'only'; p: null; why: string }
 
 const LEVELS: Level[] = ['low', 'medium', 'high']
@@ -273,15 +275,23 @@ interface Sized { fit: Fit; tight: Measured | null; text: string }
 const pct = (n: number) => `${Math.round(n)}%`
 const round = (n: number) => Math.round(n * 100) / 100
 
+/** The account a probe's work spends: a local model's node, its quota reading's account, else its machine's engine. */
+export function accountOf(p: Probe): string {
+  return p.gridModel ? `local:${p.gridName ?? ''}:${p.gridModel}` : p.quota.account ?? `${p.machineId}:${p.engine}`
+}
+
+const AVOIDED = 'Its account lost this task before (a model that kept failing, a limit or a stall), and another account is free.'
+const AVOIDED_ONLY = 'Every candidate runs on the account that lost this task before; check it is answering before you assign.'
+
 /** How the probe's account would carry a task of this size (phase 1 §2–3). */
 function sizeUp(p: Probe, policy: Policy, a: Assessment, now: number, open: Commitment[]): Sized {
   // A local model spends no subscription: it always fits, at its policy cost, and its node is its account.
   if (p.gridModel) {
     return { fit: { status: 'fits', coverage: null, effectiveCost: p.cost, expiring: 0, spend: { '5-hour': 0, weekly: 0 },
-      account: `local:${p.gridName ?? ''}:${p.gridModel}` }, tight: null, text: 'fits: a local model on the Swarm\'s grid uses no subscription' }
+      account: accountOf(p) }, tight: null, text: 'fits: a local model on the Swarm\'s grid uses no subscription' }
   }
   const { minutes, spend: base } = SIZES[a.size], runMs = minutes * 60_000
-  const account = p.quota.account ?? `${p.machineId}:${p.engine}`
+  const account = accountOf(p)
   const spend = { '5-hour': base['5-hour'] * p.cost / 2, weekly: base.weekly * p.cost / 2 }
   if (p.quota.metered) return { fit: { status: 'fits', coverage: null, effectiveCost: p.cost, expiring: 0, spend, account }, tight: null, text: 'fits: metered, no usage window to run out' }
   // Picks still at work hold what they were expected to spend, less the part of their run time already over.
@@ -347,7 +357,9 @@ function withEveryMachine<T extends { machineId: string }>(ranked: T[]): T[] {
   return ranked.filter(p => keep.has(p))
 }
 
-export function choose(probes: Probe[], policy: Policy, a: Assessment, now: number = Date.now(), open: Commitment[] = [], rules: SwarmRule[] = [], held: HeldModel[] = []): Choice | { error: 'NO_CANDIDATE'; excluded: Array<{ title: string; reason: string }> } {
+/** `avoid`: accounts of agents that lost this task (a review's Reviewer whose model kept failing): any other account goes first. */
+export function choose(probes: Probe[], policy: Policy, a: Assessment, now: number = Date.now(), open: Commitment[] = [], rules: SwarmRule[] = [], held: HeldModel[] = [],
+  avoid: string[] = []): Choice | { error: 'NO_CANDIDATE'; excluded: Array<{ title: string; reason: string }> } {
   // A lifted row can equal another row on the same machine (Codex `default` lifted to high beside Codex high); one is kept.
   // A person asking for a local model considers local models alone, whatever their strength.
   if (a.local) probes = probes.filter(p => p.gridModel)
@@ -374,7 +386,11 @@ export function choose(probes: Probe[], policy: Policy, a: Assessment, now: numb
   const byFloor = meeting.length ? meeting : viable
   // Strength beats fit (owner, 2026-10-21): a hard task never goes to a weaker model because the strong ones are short of quota.
   const top = Math.max(...byFloor.map(p => p.quality))
-  const sized = (a.difficulty === 'high' ? byFloor.filter(p => p.quality === top) : byFloor).map(p => ({ ...p, ...sizeUp(p, policy, a, now, open) }))
+  const strongest = (a.difficulty === 'high' ? byFloor.filter(p => p.quality === top) : byFloor).map(p => ({ ...p, ...sizeUp(p, policy, a, now, open) }))
+  // An account whose model kept failing this task waits while any other account is offered.
+  const fresh = strongest.filter(p => !avoid.includes(p.fit.account))
+  const sized = fresh.length ? fresh : strongest
+  if (fresh.length) excluded.push(...strongest.filter(p => !fresh.includes(p)).map(p => ({ title: titleOf(p), reason: AVOIDED })))
   // Only the first group that has anyone is shown: those that fit, then those whose quota is not fully known, then the short.
   const status = (['fits', 'unknown', 'short'] as const).find(s => sized.some(p => p.fit.status === s))!
   excluded.push(...sized.filter(p => p.fit.status !== status).map(p => ({ title: titleOf(p), reason: p.fit.status === 'unknown' ? UNREAD : runsOut(p.tight!) })))
@@ -383,7 +399,7 @@ export function choose(probes: Probe[], policy: Policy, a: Assessment, now: numb
   const set = sized.filter(p => p.fit.status === status).sort((x, y) => status === 'short' ? y.fit.coverage! - x.fit.coverage! || compare(x, y, soft) : compare(x, y, soft))
   const shown = withEveryMachine(set).map(({ tight, text, ...p }, i) => ({ ...p, id: `c${i}`, title: titleOf(p), label: labelOf({ ...p, tight, text }, now) }))
   const first = set[0].tight!
-  return { shown, excluded, floor, belowFloor: !meeting.length, ...(status === 'short'
+  return { shown, excluded, floor, belowFloor: !meeting.length, ...(avoid.length && !fresh.length && strongest.some(p => avoid.includes(p.fit.account)) ? { avoided: AVOIDED_ONLY } : {}), ...(status === 'short'
     ? { short: `No candidate is expected to cover this task; its ${first.name} quota is expected to run out partway${first.resetsIn === null ? '' : ` and resets in ${span(first.resetsIn)}`}.` } : {}) }
 }
 

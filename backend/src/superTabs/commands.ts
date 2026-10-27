@@ -676,7 +676,8 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       break
     case 'agent.alert': {
       effects.messages.push(...terminalAlert(state, actor, sender, operationId, context.now, command))
-      if (command.alert === 'limit' && command.active) effects.messages.push(...loseTasks(state, context.now, worker => worker.id === command.agentId))
+      // A usage limit or a model that keeps failing loses its task at once (liveness.ts); a waiting prompt does not.
+      if (command.alert !== 'prompt' && command.active) effects.messages.push(...loseTasks(state, context.now, worker => worker.id === command.agentId))
       break
     }
     case 'project.report': {
@@ -1234,8 +1235,8 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       if (!isLead && !isOwner) fail('FORBIDDEN', 'Only this project’s Lead, the contributor or tab owner can release a worker.', 403)
       protectLead(state, target.id)
       if (state.conversations.some(c => c.leadId === target.id)) fail('LEAD_REQUIRED', 'Release workers only; keep the Lead running.')
+      // Only its own active work holds a decision back, not the active work of a group it sits in (a Reviewer's).
       if (state.conversations.some(c => activeWork(c) && c.assignment?.agentId === target.id)) fail('WORK_ACTIVE', 'Finish active work before releasing this worker.')
-      if (reviewing(state, target.id)) fail('WORK_ACTIVE', 'This Reviewer is reviewing active work. Remove it from that group or wait for the work to end.')
       // A Reviewer is never assigned work, so the Lead may keep or stop it at any time.
       if (!target.workDecision && agentRole(target) !== 'reviewer' && !state.conversations.some(c => c.assignment?.agentId === target.id)) {
         fail('WORK_REQUIRED', 'This worker has no finished assignment to release.')

@@ -64,6 +64,7 @@ class SuperTabAgent {
       roleId = row['roleId'] as String?,
       limitedUntil = DateTime.tryParse(row['limitedUntil'] as String? ?? ''),
       avatar = SuperTabAvatarPicture.fromJson(row['avatar']),
+      downSince = DateTime.tryParse(row['downSince'] as String? ?? ''),
       configuration = Map.unmodifiable(superTabMap(row['configuration']));
   final String id, projectId, name, machineId, harnessId, contributorId;
 
@@ -73,6 +74,10 @@ class SuperTabAgent {
   /// Until when routing skips it: its machine saw a usage limit on its screen
   /// (spec/2026-10-23-lead-sees-agent-terminal.md). Null when none was seen.
   final DateTime? limitedUntil;
+
+  /// Since when its machine has reported its session gone, or its host confirmed a stop (backend machines.ts). Null
+  /// while it runs.
+  final DateTime? downSince;
 
   /// The account whose computer runs it; a contributor may run agents on a computer another account shared with them.
   final String machineOwnerId;
@@ -230,6 +235,15 @@ class SuperTabSnapshot {
         (row) => Map<String, dynamic>.unmodifiable(row),
       ),
       leadsConversationId = row['leadsConversationId'] as String?,
+      startEfforts = Map.unmodifiable({
+        for (final start
+            in row['starts'] is List ? row['starts'] as List : const [])
+          if (start case {
+            'harnessId': final String harness,
+            'request': {'effort': final String effort},
+          })
+            harness: effort,
+      }),
       localModels = SuperTabLocalModels.read(row['localModels']),
       mentionsWaiting = (row['mentionsWaiting'] as num?)?.toInt() ?? 0 {
     if (row['version'] != 1) {
@@ -261,6 +275,10 @@ class SuperTabSnapshot {
   final List<SuperTabConversation> conversations;
   late final List<SuperTabProject> projects;
   final List<Map<String, dynamic>> invitations;
+
+  /// The effort each started agent's start asked for, by harness id. Empty where the starts are not read (a view
+  /// kept on this device leaves them out).
+  final Map<String, String> startEfforts;
 
   /// Where the projects' Product Managers talk, Swarm-wide; null in a Swarm
   /// from before it (spec 2026-10-23-leads-see-and-talk.md).
@@ -362,6 +380,20 @@ class SuperTabSnapshot {
       if (best == null || reported(m) >= reported(best)) best = m;
     }
     return best;
+  }
+
+  /// The pool whose reading [accountId] sees for the machine row [machineId]: the Mac's Harness Team account for
+  /// everyone but the Mac's own contributor, since it runs their agents, also while the owner is away from the Mac; the
+  /// machine's own pool otherwise. The Machines view and Team at a glance read a machine by this one rule.
+  Map<String, dynamic>? readingPoolOf(String machineId, String? accountId) {
+    final own = pool(machineId), team = teamPoolOf(machineId);
+    final contributor =
+        own?['contributorId'] as String? ??
+        agents
+            .where((a) => placeOf(a.machineId) == machineId)
+            .firstOrNull
+            ?.contributorId;
+    return team != null && contributor != accountId ? team : own;
   }
 
   /// The machine [machineId] is shown as in this Swarm, one row per computer: the Mac, for its Harness Team account

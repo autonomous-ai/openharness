@@ -110,6 +110,44 @@ describe('routeTask', () => {
     await routeTask(input, s, where as never, opener(id => daemon(id, { agents: ['h1'] })))
     expect((recorded(s).command.decision.candidates as Array<{ title: string }>).some(c => c.title.startsWith('Multiply'))).toBe(false)
   })
+  // v2: one Codex account answered 429 for 40 minutes and stalled reviews. A review whose Reviewer lost it to a failing model
+  // goes first to another account, never back to the one that failed.
+  describe('a review whose Reviewer lost it', () => {
+    const accountOn = (account: string) => ({ providers: [{ ...usage.providers[0]!, account }] })
+    /** `removed`: the Lead stopped the failed Reviewer and its host removed it, so only the group remembers where it failed. */
+    const route = async (failed: boolean, machines: string[] = ['m1', 'm2'], removed = false) => {
+      const state = tab()
+      const reviewer = { id: 'r1', name: 'Reviewer', role: 'reviewer', machineId: 'm1', harnessId: 'hr', configuration: { engine: 'claude', model: 'sonnet', effort: 'medium' },
+        ...(failed ? { lostTask: { conversationId: 'g1', assignmentId: 'x', reason: 'its model keeps failing', at: 1 } } : {}) }
+      Object.assign(state.state.conversations[1]!, { reviewOf: 'lead', ...(failed ? { assignment: { id: 'x', agentId: 'r1', status: 'lost', lost: { reason: 'its model keeps failing', at: 1 } },
+        lostAttempt: { id: 'x', agentId: 'r1', machineId: 'm1', engine: 'claude' } } : {}) })
+      state.state.agents = [...agents.filter(a => a.id !== 'a2' || machines.includes('m2')), ...removed ? [] : [reviewer]]
+      const s = scoped({ tab: state, context: { ok: true, value: { agentId: 'lead', tab: state, policy: { policy, warnings: [] },
+        machines: machines.map(id => ({ machineId: id, name: id === 'm1' ? 'remote-1' : 'mac' })) } } })
+      const result = await routeTask(input, s, where as never, opener(id => daemon(id, { agents: ['hr'], usage: accountOn(id === 'm1' ? 'acct-1' : 'acct-2') })), () => 'op')
+      return { result, s }
+    }
+    it('goes to another account than the one whose model failed', async () => {
+      // Without the failure the first machine's account is first.
+      expect((await route(false)).result).toMatchObject({ ok: true, pick: { machineId: 'm1' } })
+      const { result, s } = await route(true)
+      expect(result).toMatchObject({ ok: true, pick: { kind: 'new', machineId: 'm2' } })
+      expect(recorded(s).command.decision.excluded).toEqual(expect.arrayContaining([expect.objectContaining({ title: expect.stringContaining('remote-1'),
+        reason: expect.stringContaining('another account is free') })]))
+    })
+    it('still routes to that account when no other is offered, and says so', async () => {
+      const { result } = await route(true, ['m1'])
+      expect(result).toMatchObject({ ok: true, pick: { machineId: 'm1' } })
+      expect(result.warnings).toEqual(expect.arrayContaining([expect.stringContaining('the account that lost this task before')]))
+    })
+    it('remembers the failed account after the Lead stops and removes that Reviewer', async () => {
+      expect((await route(true, ['m1', 'm2'], true)).result).toMatchObject({ ok: true, pick: { kind: 'new', machineId: 'm2' } })
+      const { result } = await route(true, ['m1'], true)
+      expect(result).toMatchObject({ ok: true, pick: { machineId: 'm1' } })
+      expect(result.warnings).toEqual(expect.arrayContaining([expect.stringContaining('the account that lost this task before')]))
+    })
+  })
+
   // Final review, Important 3: cancelling or reassigning lost work must not make its old worker routable again.
   describe('a member whose last task was lost', () => {
     const lostTask = { conversationId: 'g0', assignmentId: 'x', reason: 'no progress for 30 minutes', at: 1 }

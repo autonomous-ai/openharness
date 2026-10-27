@@ -142,6 +142,8 @@ class SuperTabAgentInfo {
         'blocked' => 'Stuck on "${group.title}"',
         'review' => 'Waiting for review on "${group.title}"',
         'reconciling' => 'Checking "${group.title}"',
+        // Its machine died, it stalled or hit a limit, and the Lead hands it on (backend liveness.ts).
+        'lost' => 'Lost "${group.title}"',
         'working' when activity == HarnessActivity.working =>
           'Working on "${group.title}"',
         // An assignment can outlive a native turn or connection. Keep the

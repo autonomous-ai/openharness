@@ -931,8 +931,8 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
     final person = snapshot.people
         .where((p) => p.id == contributor)
         .firstOrNull;
-    final teammateView = team != null && contributor != c.accountId;
-    final reading = teammateView ? team : shared;
+    final reading = snapshot.readingPoolOf(id, c.accountId);
+    final teammateView = team != null && identical(reading, team);
     final readId = teammateView ? teamId! : id;
     final state = app?.stateOf(readId);
     final observation = superTabMap(
