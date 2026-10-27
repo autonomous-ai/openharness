@@ -1403,6 +1403,30 @@ describe('a task that requires a machine or a device', () => {
     expect(() => startOn(f, 'machine', f.leadActor)).toThrow(expect.objectContaining({ code: 'REQUIREMENT_UNMET', message: expect.stringContaining('This task needs /dev/cu.usbmodem1') }))
     expect(startOn(f, 'machine', f.leadActor, ['/dev/cu.usbmodem1']).result.startId).toBeTruthy()
   })
+  it('refuses assigning a worker whose start never had its machine check the required device, with or without an override', () => {
+    const f = routed()
+    requiring(f, { devices: ['/dev/cu.usbmodem1'] })
+    const worker = f.state.agents.find(a => a.id === f.worker)!
+    const picked = { routeDecision: { id: 'd1', conversationId: 'lead', final: null, override: null, assignmentId: null, outcome: null,
+      record: record({ candidates: [candidate('c0', { kind: 'member', agentId: f.worker, machineId: 'host' })] }) } as unknown as RouteDecision }
+    const assign = (patch: Record<string, unknown>, context: Partial<CommandContext>) =>
+      f.run({ type: 'work.assign', conversationId: 'lead', agentId: f.worker, ...patch } as Command, f.leadActor, context)
+    const refused = expect.objectContaining({ code: 'REQUIREMENT_UNMET', status: 403, message: expect.stringContaining('This task needs /dev/cu.usbmodem1') })
+    expect(() => assign({ routeDecisionId: 'd1' }, picked)).toThrow(refused)
+    expect(() => assign(via, decisionIn())).toThrow(refused)
+    expect(() => f.run({ type: 'route.record', conversationId: 'lead', decision: picked.routeDecision.record } as Command, f.leadActor, {})).toThrow(refused)
+    // A start that asked for other devices is no evidence either.
+    f.state.starts = [{ harnessId: worker.harnessId, request: { machineId: 'host', requirements: { devices: ['/dev/other'] } } } as never]
+    expect(() => assign({ routeDecisionId: 'd1' }, picked)).toThrow(refused)
+    f.state.starts = [{ harnessId: worker.harnessId, request: { machineId: 'host', requirements: { devices: ['/dev/cu.usbmodem1'] } } } as never]
+    expect(assign({ routeDecisionId: 'd1' }, picked).result.assignmentId).toBeTruthy()
+  })
+  it('lets a person assign a worker without device evidence, with a warning', () => {
+    const f = routed()
+    requiring(f, { devices: ['/dev/cu.usbmodem1'] })
+    const effects = f.run({ type: 'work.assign', conversationId: 'lead', agentId: f.worker })
+    expect(effects.result.warnings).toEqual([expect.stringContaining('This task needs /dev/cu.usbmodem1')])
+  })
   it('counts a Mac\'s Harness Team account as that Mac', () => {
     const f = routed()
     teamMachine(f, 'owner', 'team')

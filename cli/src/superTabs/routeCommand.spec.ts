@@ -979,6 +979,32 @@ describe('routing contributed capacity', () => {
       expect(answer).toMatchObject({ ok: true })
     })
   })
+  describe('a task that requires a device', () => {
+    const requiring = (starts: unknown[] = []) => {
+      const groups = conversations()
+      Object.assign(groups[1]!, { task: { goal: 'g', changes: 'c', constraints: 'k', owns: ['o'], requires: { devices: ['/dev/cu.usbmodem1'] } } })
+      return { revision: 3, state: { id: 'tab', agents, conversations: groups, starts } }
+    }
+    it('waits when no machine has the device connected', async () => {
+      const answer = await routeTask(input, scoped({ tab: requiring() }), where as never, opener(id => daemon(id, { agents: id === 'm1' ? ['h1'] : [] })), () => 'op')
+      expect(answer).toMatchObject({ error: 'NO_CANDIDATE', waiting: true,
+        detail: 'This task waits for the machine it requires; route it again once that machine can take it.' })
+    })
+    it('offers a member only when its own start had its machine check the device, as the server requires', async () => {
+      const connected = opener(id => daemon(id, { agents: id === 'm1' ? ['h1'] : [], devices: { '/dev/cu.usbmodem1': true } }))
+      const members = async (starts: unknown[]) => {
+        const s = scoped({ tab: requiring(starts) })
+        await routeTask(input, s, where as never, connected, () => 'op')
+        return recorded(s).command.decision
+      }
+      const unchecked = await members([])
+      expect(unchecked.candidates.some((c: { kind: string }) => c.kind === 'member')).toBe(false)
+      expect(unchecked.excluded).toEqual(expect.arrayContaining([{ title: 'Multiply · Claude sonnet medium · remote-1',
+        reason: 'Its start did not have its machine check the device this task requires. Start a new agent for it.' }]))
+      const checked = await members([{ harnessId: 'h1', request: { machineId: 'm1', requirements: { devices: ['/dev/cu.usbmodem1'] } } }])
+      expect(checked.candidates.some((c: { kind: string }) => c.kind === 'member')).toBe(true)
+    })
+  })
   it('asks the machine for the devices the group\'s task requires, beside those the Lead names', async () => {
     const groups = conversations()
     Object.assign(groups[1]!, { task: { goal: 'g', changes: 'c', constraints: 'k', owns: ['o'], requires: { devices: ['/dev/cu.usbmodem1'] } } })

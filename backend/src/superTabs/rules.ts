@@ -35,8 +35,9 @@ export interface SwarmRule {
   addedBy: string
   createdAt: string
 }
-/** What would run: a start request, an agent's configuration, or a routed pick. Null when not known. `devices` are those a
- *  start asks its machine to check; absent for an agent already running or a pick. */
+/** What would run: a start request, an agent's configuration, or a routed pick. Null when not known. `devices` are those its
+ *  machine checked are connected: a start's, or the start that launched an agent; absent only for a new agent's pick, whose
+ *  start is checked when it is made. */
 export interface RunTarget { machineId: string; engine: string; model: string | null; effort: string | null; devices?: string[] }
 
 const ENGINE: Record<string, string> = { claude: 'Claude', codex: 'Codex' }
@@ -74,12 +75,14 @@ export function broken(rules: SwarmRule[] | undefined, target: RunTarget, machin
 export const ANOTHER_MACHINE = 'This task runs only on the machine it requires, and this is another machine.'
 
 /** Why the task's requirement rules the target out, or null when it does not (model.ts TaskRequirement). A Mac's Harness Team
- *  account is that Mac, as for a machines rule. A device is judged only on a start, which the machine checks before it runs. */
+ *  account is that Mac, as for a machines rule. No machine reports its devices to the server, so the only evidence of a device
+ *  is a start that asked its machine to check it: an agent without such a start is refused (review of #1829). */
 export function unmet(requires: TaskRequirement | undefined, target: RunTarget, macOf: (id: string) => string | undefined = () => undefined): string | null {
   const mac = macOf(target.machineId)
   if (requires?.machines && !requires.machines.includes(target.machineId) && !(mac && requires.machines.includes(mac))) return ANOTHER_MACHINE
   const missing = target.devices ? (requires?.devices ?? []).filter(d => !target.devices!.includes(d)) : []
-  return missing.length ? `This task needs ${missing.join(', ')}: name ${missing.length === 1 ? 'it' : 'them'} in the start's required devices, so its machine checks ${missing.length === 1 ? 'it is' : 'they are'} connected.` : null
+  const one = missing.length === 1
+  return missing.length ? `This task needs ${missing.join(', ')}: only an agent whose start names ${one ? 'it' : 'them'} in its required devices, so its machine checks ${one ? 'it is' : 'they are'} connected, may take it.` : null
 }
 
 export const startTarget = (request: { machineId: string; engine: string; model?: string; effort?: string; requirements?: { devices: string[] } }): RunTarget =>
@@ -90,7 +93,8 @@ export const startTarget = (request: { machineId: string; engine: string; model?
  * start record still holds what it was launched with (manual run 2026-10-19). */
 export function agentTarget(state: SuperTabState, worker: Agent): RunTarget {
   const reported = worker.configuration.effort
-  const launched = state.starts?.find(s => s.harnessId === worker.harnessId && s.request.machineId === worker.machineId)?.request.effort
+  const start = state.starts?.find(s => s.harnessId === worker.harnessId && s.request.machineId === worker.machineId)
+  const launched = start?.request.effort
   return { machineId: worker.machineId, engine: worker.configuration.engine, model: worker.configuration.model,
-    effort: reported && reported !== 'auto' ? reported : launched ?? reported }
+    effort: reported && reported !== 'auto' ? reported : launched ?? reported, devices: start?.request.requirements?.devices ?? [] }
 }

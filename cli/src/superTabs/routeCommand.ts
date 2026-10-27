@@ -31,6 +31,7 @@ const ENGINE_NAME: Record<string, string> = { claude: 'Claude Code', codex: 'Cod
 const NO_PUSH = "This machine's git login cannot push to the project repository. Its owner can sign in to GitHub there (gh auth login, then gh auth setup-git)."
 /** Said of a candidate where the task cannot be done: it never names the required machine, which the Lead may not see. */
 export const ELSEWHERE = 'This task runs only on the machine it requires.'
+const UNCHECKED_DEVICE = 'Its start did not have its machine check the device this task requires. Start a new agent for it.'
 const WAITING = 'This task waits for the machine it requires; route it again once that machine can take it.'
 /** What a group's task requires of where it runs (backend superTabs/model.ts TaskRequirement): the machines it runs on, null
  *  when it names none, and the devices every start for it asks its machine to check. A Lead who does not see a required
@@ -269,7 +270,18 @@ export async function routeTask(input: { tabId: string; conversationId: string; 
   probes.push(...localProbes(state, policy, probes, assessment, review))
   // A Mac's Harness Team account is that Mac, as for the owner's machines rule.
   const outside = (machineId: string) => !!required.machines && !required.machines.has(machineId) && !required.machines.has(macOf.get(machineId) ?? '')
-  for (const [i, p] of probes.entries()) if (outside(p.machineId)) probes[i] = { ...p, refusals: [...p.refusals, ELSEWHERE] }
+  // The server takes a member for a task that requires a device only when the start that launched it had its machine check
+  // that device (backend superTabs/rules.ts unmet): no machine reports its devices to it (review of #1829).
+  const checked = (agentId: string | undefined) => {
+    const member = members.find(m => m.id === agentId)
+    const start = list(state.starts).find(s => s.harnessId === member?.harnessId && object(s.request).machineId === member?.machineId)
+    const devices = object(object(start?.request).requirements).devices
+    return required.devices.every(d => Array.isArray(devices) && devices.includes(d))
+  }
+  for (const [i, p] of probes.entries()) {
+    const refusals = [...(outside(p.machineId) ? [ELSEWHERE] : []), ...(p.kind === 'member' && !checked(p.agentId) ? [UNCHECKED_DEVICE] : [])]
+    if (refusals.length) probes[i] = { ...p, refusals: [...p.refusals, ...refusals] }
+  }
   // Picks started or assigned and still at work hold part of their account's quota; the log, and so this, is per Swarm.
   const working = (decisions ?? []).filter(d => d.final && d.outcome === null && typeof d.account === 'string')
     .map(d => ({ account: d.account, spend: object(d.spend), size: d.size, createdAt: Date.parse(String(d.createdAt)) }) as Commitment)
@@ -282,7 +294,7 @@ export async function routeTask(input: { tabId: string; conversationId: string; 
     ...probes.filter(p => p.machineId === failedOn && p.engine === failedEngine && !p.gridModel).map(accountOf)])] : []
   const choice = choose(probes, policy, assessment, Date.now(), working, rules, heldLocalModels(state), avoid)
   // The task stays in the Lead's queue rather than going where it cannot be done.
-  if ('error' in choice) return required.machines ? { ...choice, waiting: true, detail: WAITING } : choice
+  if ('error' in choice) return required.machines || required.devices.length ? { ...choice, waiting: true, detail: WAITING } : choice
   const verdict = decide(choice)
   const operationId = `route-${newId()}`
   const record = (v1: boolean) => scoped({ action: 'command', operationId,
