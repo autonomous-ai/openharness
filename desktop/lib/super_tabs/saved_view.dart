@@ -67,6 +67,32 @@ class SuperTabSavedViews {
   /// suspended), and a phone's busy boot grants it a second late. One value
   /// reads whole; only the index update after it takes the lock, best effort.
   Future<Map<String, dynamic>?> read(String account, String tabId) async {
+    final view = await _readView(account, tabId);
+    if (view == null) return null;
+    // Unless it was forgotten meanwhile (lost access, another account).
+    unawaited(
+      _serial(() async {
+        if (await storage.read(_key(account, tabId)) != null) {
+          await _use(account, tabId);
+        }
+      }).catchError((Object _) {}),
+    );
+    return view;
+  }
+
+  /// [read] in turn, after the saved-view work already queued, with the
+  /// index update in that turn: Desktop's, as #1803 made it.
+  Future<Map<String, dynamic>?> readInTurn(String account, String tabId) =>
+      _serial(() async {
+        final view = await _readView(account, tabId);
+        if (view == null) return null;
+        try {
+          await _use(account, tabId);
+        } catch (_) {}
+        return view;
+      });
+
+  Future<Map<String, dynamic>?> _readView(String account, String tabId) async {
     try {
       final raw = await storage.read(_key(account, tabId));
       if (raw == null) return null;
@@ -78,14 +104,6 @@ class SuperTabSavedViews {
           view['lastChangedAt'] is! int) {
         return null;
       }
-      // Unless it was forgotten meanwhile (lost access, another account).
-      unawaited(
-        _serial(() async {
-          if (await storage.read(_key(account, tabId)) != null) {
-            await _use(account, tabId);
-          }
-        }).catchError((Object _) {}),
-      );
       return view;
     } catch (_) {
       return null;

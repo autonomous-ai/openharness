@@ -149,6 +149,9 @@ class SuperTabClient {
   /// write is a few hundred KB into the browser's storage.
   static const _viewSaveEvery = Duration(seconds: 15);
 
+  /// How long an open waits for a saved view before drawing without one.
+  static const _viewLockWait = Duration(milliseconds: 250);
+
   void _saveViewSoon(String id) {
     if (_viewSaves.containsKey(id)) return;
     final last = _viewSavedAt[id];
@@ -505,22 +508,30 @@ class SuperTabClient {
       ..onArrived = onMention;
     _tagCounts.remove(id);
     _loaded[id] = controller;
-    Future<void> drawSaved() async {
-      final view = await _views.read(account, id);
+    void drawSaved(Map<String, dynamic>? view) {
       if (view != null && generation == _generation) {
         controller.drawSaved(view);
       }
     }
 
     // Desktop's saved view is a local file, read before the first read so
-    // that read asks only for what changed since it.
-    if (_reading.drawsSaved && _reading.confirmsSaved) await drawSaved();
+    // that read asks only for what changed since it. It waits its turn
+    // behind the views' other work; past a short wait, it opens with none.
+    if (_reading.drawsSaved && _reading.confirmsSaved) {
+      drawSaved(
+        await _views
+            .readInTurn(account, id)
+            .timeout(_viewLockWait, onTimeout: () => null),
+      );
+    }
     controller.start();
     // After the first read is asked for: reading and drawing a saved view
     // takes the main thread a moment a phone's first read need not wait on.
     // Drawn when it is read, unless that read landed first; the open waits
     // for neither.
-    if (_reading.drawsSaved && !_reading.confirmsSaved) unawaited(drawSaved());
+    if (_reading.drawsSaved && !_reading.confirmsSaved) {
+      unawaited(_views.read(account, id).then(drawSaved));
+    }
     return controller;
   }
 

@@ -686,6 +686,16 @@ class _TouchStore extends MemoryStore {
   }
 }
 
+/// A computer whose saved views read slowly: a busy disk, or the views'
+/// work queued ahead of this read.
+class _SlowViewStore extends MemoryStore {
+  @override
+  Future<String?> read(String key) => key.startsWith('super_tab.view.')
+      ? Future<void>.delayed(const Duration(seconds: 5))
+            .then((_) => super.read(key))
+      : super.read(key);
+}
+
 /// Saves [server]'s Swarm as `owner` through a client on [store], then
 /// leaves it, as a person does before closing the page.
 void _visit(FakeAsync async, ConversationServer server, MemoryStore store) {
@@ -908,6 +918,40 @@ void _followUpTests() {
     expect(jsonDecode(store.values['super_tab.views.owner']!), ['new']);
   });
 
+  // As main since #1803: Desktop's read waits its turn, at most 250 ms.
+  test('Desktop: a slow saved-view read still starts the open within '
+      '250 ms', () {
+    fakeAsync((async) {
+      final server = ConversationServer()..append('Hello');
+      final kept = MemoryStore();
+      _visit(async, server, kept);
+      final store = _SlowViewStore()..values.addAll(kept.values);
+      final paths = <String>[];
+      final transport = _Transport(server);
+      final client = SuperTabClient(
+        transport: (method, path, {body}) {
+          paths.add(path);
+          return transport.call(method, path, body: body);
+        },
+        storage: store,
+        discoveryInterval: Duration.zero,
+      )..reading = SuperTabReading.desktop;
+      client
+        ..bind('owner')
+        ..show('tab');
+      SuperTabController? c;
+      client.open('tab').then((opened) => c = opened);
+      async.elapse(const Duration(milliseconds: 250));
+      expect(c, isNotNull);
+      expect(
+        paths,
+        contains('/api/super-tabs/tab/conversations/lead/messages'),
+      );
+      client.dispose();
+      async.elapse(const Duration(seconds: 5));
+    });
+  });
+
   // The web's forgets only: Desktop forgets as main does since #1803.
   test(
     'Desktop keeps the view of a Swarm a discovery no longer lists',
@@ -953,12 +997,15 @@ void _followUpTests() {
 
   test('Desktop: a discovery reads and deletes no saved view', () async {
     final store = _TouchStore();
-    final client = SuperTabClient(
-      transport: (_Pages()..refuseLast = false).call,
-      storage: store,
-      onTabs: (tabs, hidden) {},
-      discoveryInterval: Duration.zero,
-    )..bind('owner');
+    final client =
+        SuperTabClient(
+            transport: (_Pages()..refuseLast = false).call,
+            storage: store,
+            onTabs: (tabs, hidden) {},
+            discoveryInterval: Duration.zero,
+          )
+          ..reading = SuperTabReading.desktop
+          ..bind('owner');
     addTearDown(client.dispose);
     await client.refreshTabs();
     expect(client.discoveryError, isNull);
