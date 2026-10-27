@@ -550,6 +550,73 @@ describe('launch Git preparation', { timeout: 30_000 }, () => {
       expect(await git('branch', '--list', 'again')).toBe('')
     })
 
+    it('never deletes a branch a person made at their own commit after the first check and before the add', async () => {
+      vi.spyOn(console, 'error').mockImplementation(() => {})
+      // git, as the daemon runs it, with the person's own `git branch mine feature` landing just after the name was checked.
+      const realGit = (await exec('sh', ['-c', 'command -v git'])).stdout.trim()
+      const bin = join(root, 'bin'), made = join(root, 'person-made-it')
+      await mkdir(bin)
+      await writeFile(join(bin, 'git'), `#!/bin/sh\nfor arg in "$@"; do if [ "$arg" = check-ref-format ] && [ ! -e '${made}' ]; then\n`
+        + `  : > '${made}'; '${realGit}' -C '${repo}' branch mine feature\nfi; done\nexec '${realGit}' "$@"\n`, { mode: 0o755 })
+      vi.stubEnv('PATH', `${bin}:${process.env.PATH}`)
+      await expect(prepareGitProject(repo, { root: harnesses(), worktree: true, branchName: 'mine' })).rejects.toMatchObject({ code: 'BRANCH_EXISTS' })
+      expect(await git('rev-parse', 'mine')).toBe(await git('rev-parse', 'feature'))
+      await expect(realpath(join(worktrees(), 'mine'))).rejects.toThrow()
+      expect(await listed()).not.toContain('worktrees/project with spaces/mine')
+    })
+
+    it('logs none of a stateless GitHub token git printed', async () => {
+      const said = vi.spyOn(console, 'error').mockImplementation(() => {})
+      const payload = 'eyJpc3MiOiIxMjM0NTYifQ', signature = `${'s'.repeat(470)}-x_y`
+      await filtered('leaky', `echo 'remote refused (token "ghs_123456_eyJhbGciOiJSUzI1NiJ9.${payload}.${signature}"), retry.' >&2; exit 1`)
+      await expect(prepareGitProject(repo, { root: harnesses(), worktree: true, branchName: 'leaky' })).rejects.toMatchObject({ code: 'WORKTREE_FAILED' })
+      const line = said.mock.calls.map(call => call.join(' ')).find(text => text.startsWith('[worktree]'))!
+      expect(line).toContain('remote refused (token "')
+      expect(line).not.toContain('ghs_123456_')
+      expect(line).not.toContain(payload)
+      expect(line).not.toContain('ssssssss')
+      expect(line).not.toContain('-x_y')
+    })
+
+    describe('on Windows, where taskkill cannot stop what git started', () => {
+      const platform = process.platform
+      beforeEach(async () => {
+        Object.defineProperty(process, 'platform', { value: 'win32', configurable: true })
+        const bin = join(root, 'bin')
+        await mkdir(bin)
+        await writeFile(join(bin, 'taskkill'), '#!/bin/sh\necho \'ERROR: The process with PID 1 could not be terminated.\' >&2\nexit 1\n', { mode: 0o755 })
+        vi.stubEnv('PATH', `${bin}:${process.env.PATH}`)
+      })
+      afterEach(() => { Object.defineProperty(process, 'platform', { value: platform, configurable: true }) })
+      /** git checks out and exits; its post-checkout hook leaves a process behind, holding git's stderr, that ends after
+       *  [seconds] by touching `ended`. */
+      const leftBehind = async (seconds: number) => {
+        const hooks = join(root, 'hooks')
+        await mkdir(hooks)
+        await writeFile(join(hooks, 'post-checkout'), `#!/bin/sh\n(sleep ${seconds}; : > '${join(root, 'ended')}') &\nexit 0\n`, { mode: 0o755 })
+        await git('config', 'core.hooksPath', hooks)
+      }
+
+      it('waits for what git left running to end before it looks at the checkout, and says taskkill failed', async () => {
+        const said = vi.spyOn(console, 'error').mockImplementation(() => {})
+        await leftBehind(2)
+        const path = await prepareGitProject(repo, { root: harnesses(), worktree: true, branchName: 'outlived', worktreeTimeout: 1_500 })
+        expect(await readFile(join(root, 'ended'), 'utf8')).toBe('')
+        expect(await readFile(join(path, 'src', 'value'), 'utf8')).toBe('main')
+        expect(said.mock.calls.map(call => call.join(' ')).join('\n')).toMatch(/\[worktree\] could not stop git.*could not be terminated/)
+      }, 20_000)
+
+      it('removes nothing while something git started may still be writing', async () => {
+        const said = vi.spyOn(console, 'error').mockImplementation(() => {})
+        await leftBehind(8)
+        await expect(prepareGitProject(repo, { root: harnesses(), worktree: true, branchName: 'still-running', worktreeTimeout: 1_500 }))
+          .rejects.toMatchObject({ code: 'WORKTREE_FAILED' })
+        await expect(readFile(join(root, 'ended'))).rejects.toThrow()
+        expect(await readFile(join(worktrees(), 'still-running', 'src', 'value'), 'utf8')).toBe('main')
+        expect(said.mock.calls.map(call => call.join(' ')).join('\n')).toMatch(/\[worktree\] .*still running.*left as it is/)
+      }, 20_000)
+    })
+
     it('never deletes a branch that existed before the failed start', async () => {
       vi.spyOn(console, 'error').mockImplementation(() => {})
       await filtered('broken', 'exit 1')
