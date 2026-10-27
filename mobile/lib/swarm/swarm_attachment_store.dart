@@ -4,6 +4,8 @@ import 'dart:io';
 
 import 'package:flutter_cache_manager/flutter_cache_manager.dart';
 
+import 'package:harness_mobile/logging/app_log.dart';
+
 import 'swarm_session.dart';
 
 /// The folder, under the app's private temporary folder, that the phone keeps
@@ -183,7 +185,7 @@ class SwarmAttachmentKeeper {
       _listed = null;
       session?.inbox.addListener(_listChanged);
     }
-    unawaited(store.keepOnly(session?.accountId));
+    _logged(store.keepOnly(session?.accountId));
     _listChanged();
   }
 
@@ -194,9 +196,21 @@ class SwarmAttachmentKeeper {
     final before = _listed;
     _listed = listed;
     if (before != null && !listed.containsAll(before)) {
-      unawaited(store.clear());
+      _logged(store.clear());
     }
   }
+
+  /// Emptying runs on its own; one that fails says so in the app's log.
+  static void _logged(Future<void> emptying) => unawaited(
+    emptying.catchError(
+      (Object error, StackTrace stack) => appLog.failure(
+        'swarm',
+        'Swarm files could not be emptied',
+        error: error,
+        stackTrace: stack,
+      ),
+    ),
+  );
 
   void dispose() {
     host.removeListener(_hostChanged);

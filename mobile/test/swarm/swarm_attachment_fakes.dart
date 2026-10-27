@@ -27,6 +27,9 @@ class FakeFileStorage implements FileService {
   /// The status every answer carries.
   int status = 200;
 
+  /// What every answer carries.
+  List<int> bytes = pixelPng;
+
   @override
   Future<FileServiceResponse> get(
     String url, {
@@ -34,7 +37,7 @@ class FakeFileStorage implements FileService {
   }) async {
     asked.add((url: url, headers: headers));
     await hold?.future;
-    return _Answer(status, pixelPng);
+    return _Answer(status, bytes);
   }
 }
 

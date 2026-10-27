@@ -2,6 +2,7 @@ import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:harness_mobile/logging/app_log.dart';
 import 'package:harness_mobile/notify/system_notices.dart';
 import 'package:harness_mobile/settings/experimental_features.dart';
 import 'package:harness_mobile/swarm/swarm_attachment_store.dart';
@@ -135,6 +136,22 @@ void main() {
     await until(() => keptUnder(root).isEmpty);
   });
 
+  test('files that cannot be emptied are logged, never thrown', () async {
+    final log = _Log();
+    final before = appLog;
+    appLog = log;
+    addTearDown(() => appLog = before);
+    final broken = SwarmAttachmentStore(
+      root: () async => throw const FileSystemException('no folder'),
+    );
+
+    final keeper = SwarmAttachmentKeeper(host, store: broken);
+    addTearDown(keeper.dispose);
+
+    await until(() => log.failures.isNotEmpty);
+    expect(log.failures.single, contains('Swarm files'));
+  });
+
   test('let go of, it hears nothing more', () async {
     final keeper = await keeping();
     keeper.dispose();
@@ -145,4 +162,19 @@ void main() {
 
     expect(storage.asked, hasLength(1));
   });
+}
+
+class _Log implements AppLog {
+  final failures = <String>[];
+
+  @override
+  void record(
+    AppLogLevel level,
+    String category,
+    String message, {
+    Object? error,
+    StackTrace? stackTrace,
+  }) {
+    if (level == AppLogLevel.error) failures.add(message);
+  }
 }
