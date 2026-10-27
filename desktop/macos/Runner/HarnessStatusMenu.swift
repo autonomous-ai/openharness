@@ -176,21 +176,36 @@ final class HarnessStatusMenu: NSObject, NSMenuDelegate {
       }
     }
     if workspaceAvailable && !swarm.isEmpty {
-      menu.addItem(.separator())
-      let heading = NSMenuItem(title: "Swarm (\(swarm.count))", action: nil, keyEquivalent: "")
-      heading.identifier = NSUserInterfaceItemIdentifier("swarmHeading")
-      heading.isEnabled = false
-      heading.view = HarnessStatusMenuRow(item: heading, heading: "Swarm", count: swarm.count)
-      menu.addItem(heading)
-      for entry in swarm.prefix(5) {
-        let item = addSession(entry, to: menu)
-        item.identifier = NSUserInterfaceItemIdentifier("openSwarmNotice")
-        item.isEnabled = enabled
+      // By Swarm, in Dart's order: each its own five rows and View all, so a
+      // second Swarm's items are never behind the first's overflow.
+      var groups: [[[String: Any]]] = []
+      for entry in swarm {
+        if let last = groups.last?.last, last["swarmTabId"] as? String == entry["swarmTabId"] as? String {
+          groups[groups.count - 1].append(entry)
+        } else {
+          groups.append([entry])
+        }
       }
-      if swarm.count > 5, let first = swarm.first {
-        // The first row's Swarm, on its Notifications page, which lists them all.
-        let all = add("View all \(swarm.count) in Swarm…", "openSwarmNotice", enabled: enabled)
-        all.representedObject = ["swarmTabId": first["swarmTabId"] ?? "", "kind": "all", "id": ""]
+      menu.addItem(.separator())
+      for group in groups {
+        // One Swarm reads "Swarm"; several are told apart by name.
+        let name = groups.count == 1 ? "Swarm" : group.first?["tabName"] as? String ?? "Swarm"
+        let heading = NSMenuItem(title: "\(name) (\(group.count))", action: nil, keyEquivalent: "")
+        heading.identifier = NSUserInterfaceItemIdentifier("swarmHeading")
+        heading.isEnabled = false
+        heading.view = HarnessStatusMenuRow(item: heading, heading: name, count: group.count)
+        menu.addItem(heading)
+        for entry in group.prefix(5) {
+          let item = addSession(entry, to: menu)
+          item.identifier = NSUserInterfaceItemIdentifier("openSwarmNotice")
+          item.isEnabled = enabled
+        }
+        if group.count > 5, let first = group.first {
+          // That Swarm's Notifications page, which lists them all.
+          let swarmName = first["tabName"] as? String ?? "Swarm"
+          let all = add("View all \(group.count) in \(swarmName)…", "openSwarmNotice", enabled: enabled)
+          all.representedObject = ["swarmTabId": first["swarmTabId"] ?? "", "kind": "all", "id": ""]
+        }
       }
     }
     if workspaceAvailable && !working.isEmpty {

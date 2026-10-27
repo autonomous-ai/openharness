@@ -114,3 +114,18 @@ offline["unavailable"] = "Offline"
 render("notification-overview-long", dark: false, entries: [long, offline], work: working, highlight: true)
 render("notification-swarm-light", dark: false, entries: notifications, work: working, swarmEntries: swarm)
 render("notification-swarm-dark", dark: true, entries: notifications, work: working, swarmEntries: swarm)
+// Two Swarms, the first with more than five: each its own heading and View all.
+let pilot = (1...6).map { index -> [String: Any] in
+  var row = swarm[index % 2]
+  row["id"] = "p\(index)"
+  row["receivedAt"] = timestamp - Double(index) * 120_000
+  return row
+}
+var atlas = swarm[0]
+atlas["swarmTabId"] = "atlas"
+atlas["tabName"] = "Atlas"
+atlas["id"] = "a1"
+atlas["title"] = "Juno asks you"
+atlas["message"] = "Keep the old Linux build for one more release?"
+render("notification-swarms-light", dark: false, entries: [], work: [], swarmEntries: pilot + [atlas])
+render("notification-swarms-dark", dark: true, entries: [], work: [], swarmEntries: pilot + [atlas])

@@ -347,8 +347,12 @@ row listed before (`statusMenuSwarmEntries`). Each Swarm's open decisions come
 first, then the tags waiting for them, newest first within each, as its
 Notifications page lists them: who asks or tagged them, the question or the
 message, and when it was asked; the Swarm, project and conversation are in the
-tooltip and accessibility text. Show at most five, then View all, which opens
-the first row's Swarm on its Notifications page. Choosing a tag opens its
+tooltip and accessibility text. Each Swarm shows at most five, then its own
+View all, which opens that Swarm's Notifications page; with several Swarms each
+has a heading with its name and count, so a second Swarm's items are never
+behind the first's overflow. Only rows whose conversation the person can read
+now are listed: when access changes, the lists clear and are read again, and a
+read that started before is dropped. Choosing a tag opens its
 conversation at the message; choosing a decision opens that Swarm's
 Notifications page, where it is answered. A row answered while the menu is open
 does nothing. Mark all read leaves them: a tag is done when it is replied to or
@@ -360,6 +364,10 @@ cleared at zero and when the workspace leaves.
 ![The Swarm section between Ready and Working](images/notification-swarm-light.png)
 
 ![The Swarm section in dark appearance](images/notification-swarm-dark.png)
+
+![Two Swarms, each with its own heading and View all](images/notification-swarms-light.png)
+
+![Two Swarms in dark appearance](images/notification-swarms-dark.png)
 
 Working starts expanded and disappears when empty. It shows active, known sessions that
 are not already in Notifications, with elapsed time only when the app observed

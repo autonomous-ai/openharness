@@ -9,9 +9,46 @@ import 'package:harness/super_tabs/decisions.dart';
 import 'package:harness/super_tabs/notifications.dart';
 import 'package:harness/super_tabs/view.dart';
 
-import 'super_tab_launch_test.dart' show SuperTabLaunchFixture, tabId;
+import 'super_tab_launch_test.dart'
+    show SuperTabFixtureConnection, SuperTabLaunchFixture, tabId;
 import 'support/super_tab_fixture.dart';
 import 'swarm_screen_test.dart' show mount;
+
+const otherId = 'fedcba9876543210fedcba98';
+
+/// The fixture's machine, answering a second Swarm, [otherId], from a server
+/// of its own: a tag and a decision wait there too.
+class TwoSwarms extends SuperTabFixtureConnection {
+  TwoSwarms(super.store) : super(local: true) {
+    other.state['id'] = otherId;
+    other
+      ..tag('message-1', text: 'In Atlas')
+      ..ask(['Atlas question?']);
+  }
+  final other = ConversationServer();
+
+  @override
+  Future<Map<String, dynamic>> request(
+    String type, {
+    Map<String, dynamic> payload = const {},
+    Duration timeout = const Duration(seconds: 20),
+  }) async {
+    if (type == 'super_tabs' &&
+        payload['action'] == 'backend' &&
+        (payload['path'] as String).startsWith('/api/super-tabs/$otherId')) {
+      final body = payload['body'];
+      return {
+        'ok': true,
+        'value': await other.request(
+          payload['method'] as String,
+          payload['path'] as String,
+          body: body is Map ? Map<String, dynamic>.from(body) : null,
+        ),
+      };
+    }
+    return super.request(type, payload: payload, timeout: timeout);
+  }
+}
 
 /// A Swarm open in a tab of [f]'s app, with a tag and a decision waiting.
 Future<void> openWithNotices(SuperTabLaunchFixture f) async {
@@ -108,6 +145,63 @@ void main() {
       expect(statusMenuSwarmEntries(f.app), isEmpty);
     });
   });
+
+  testWidgets(
+    'with two Swarms, each one\'s rows and View all open in that Swarm',
+    (tester) async {
+      const channel = MethodChannel('harness/swarm_tabs');
+      final updates = <Map>[];
+      final messenger = tester.binding.defaultBinaryMessenger;
+      messenger.setMockMethodCallHandler(channel, (call) async {
+        if (call.method == 'update') updates.add(call.arguments as Map);
+        return true;
+      });
+      addTearDown(() => messenger.setMockMethodCallHandler(channel, null));
+      final f = SuperTabLaunchFixture(connectionFactory: TwoSwarms.new);
+      await tester.runAsync(() => openWithNotices(f));
+      final first = f.app.activeSwarmId;
+      f.app.newSwarm(name: 'Second');
+      f.app.bindSuperTab(f.app.activeSwarmId, otherId, 'Atlas');
+      final second = f.app.activeSwarmId;
+      await tester.runAsync(() async {
+        final c = await f.app.superTabs.open(otherId);
+        await c.refresh();
+        await SuperTabMentions.of(c).load();
+        await SuperTabDecisions.of(c).load();
+      });
+      f.app.newSwarm(name: 'Desktop');
+      await mount(tester, f.app, nativeTabs: true);
+      await tester.pump();
+      final rows = (updates.last['statusMenuSwarmEntries'] as List).cast<Map>();
+      expect(rows.map((r) => r['swarmTabId']), [
+        tabId,
+        tabId,
+        otherId,
+        otherId,
+      ]);
+      Future<void> choose(Map receipt) async {
+        messenger.handlePlatformMessage(
+          channel.name,
+          const StandardMethodCodec().encodeMethodCall(
+            MethodCall('openSwarmNotice', receipt),
+          ),
+          (_) {},
+        );
+        await tester.pump();
+        await tester.pump();
+      }
+
+      await choose(rows.last);
+      expect(f.app.activeSwarmId, second);
+      await choose({'swarmTabId': tabId, 'kind': 'all', 'id': ''});
+      expect(f.app.activeSwarmId, first);
+      await choose({'swarmTabId': otherId, 'kind': 'all', 'id': ''});
+      expect(f.app.activeSwarmId, second);
+      await tester.pumpWidget(const SizedBox());
+      f.dispose();
+    },
+    variant: TargetPlatformVariant.only(TargetPlatform.macOS),
+  );
 
   test('none from a Swarm this account lost, and none signed out', () async {
     final f = SuperTabLaunchFixture(local: true);
