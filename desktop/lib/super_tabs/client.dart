@@ -29,6 +29,7 @@ class SuperTabClient {
     this.onSnapshot,
     this.onTabs,
     this.onSelection,
+    this.onVoiceTarget,
     this.onMention,
     this.onTagCounts,
     this.upload = refuseUpload,
@@ -41,6 +42,10 @@ class SuperTabClient {
 
   /// A tab's selected conversation changed, by a click here or by a device.
   final void Function(SuperTabController)? onSelection;
+
+  /// Where a device's voice would go in a tab changed without a new choice: a
+  /// pane covered the chat or left it, or the chat was renamed or archived.
+  final void Function(SuperTabController)? onVoiceTarget;
 
   /// A Lead tagged this account in one of its Swarms while the app was open.
   final void Function(SuperTabMention)? onMention;
@@ -425,7 +430,7 @@ class SuperTabClient {
     )..away = _isAway(id);
     var seenChange = (lastChangedAt: -1, mentionsWaiting: -1);
     var seenSelected = controller.selectedId, seenChoices = controller.choices;
-    var seenNotifications = controller.notificationsOpen;
+    var seenVoice = jsonEncode(controller.voiceConversation);
     controller.addListener(() {
       if (_reading.drawsSaved && generation == _generation) {
         if (controller.accessRevoked) {
@@ -437,13 +442,16 @@ class SuperTabClient {
           _saveViewSoon(id);
         }
       }
+      final voice = jsonEncode(controller.voiceConversation);
       if (controller.selectedId != seenSelected ||
-          controller.choices != seenChoices ||
-          controller.notificationsOpen != seenNotifications) {
+          controller.choices != seenChoices) {
         seenSelected = controller.selectedId;
         seenChoices = controller.choices;
-        seenNotifications = controller.notificationsOpen;
+        seenVoice = voice;
         onSelection?.call(controller);
+      } else if (voice != seenVoice) {
+        seenVoice = voice;
+        onVoiceTarget?.call(controller);
       }
       if (controller.snapshot case final snapshot?) {
         final change = (

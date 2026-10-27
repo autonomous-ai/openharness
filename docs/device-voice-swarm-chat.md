@@ -21,8 +21,9 @@ person's last choice:
 - `title` is what the chat header shows: the project's name for its Product Manager chat, `Chat with PM`, `Product
   Managers`, or the workgroup's label.
 - `canPost` is the window's reading: a member who is not read-only, and a chat that is not archived.
-- Absent while Your devices or Notifications is in front, and once the person focuses a terminal. Choosing a chat again,
-  even the one already open, brings it back. The last choice wins.
+- Absent while anything covers the chat (Your devices, Notifications, the pull requests, the group's terminals), and
+  once the person focuses a terminal. Choosing a chat again, even the one already open, brings it back: the last choice
+  wins. A chat that is uncovered, renamed or archived is announced again, but only a choice gives the voice back to it.
 
 ## Cable
 
@@ -70,5 +71,3 @@ daemon that lists `voice.conversation`: an older one would ignore the name and t
   how the device shows it is the device owner's choice, still open.
 - The Harness Pro, which has no review screen yet.
 - Hands-on requests addressed to one person join `needsYou` when the protocol that carries them lands.
-- Pull requests and the group terminals view also cover the chat, but do not yet take its voice target away. The device
-  still names the chat it will post to.

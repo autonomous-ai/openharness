@@ -84,7 +84,6 @@ class _SuperTabViewState extends State<SuperTabView>
   bool _jumpingToEnd = false;
   bool _sidebarOpen = false;
   bool _rosterOpen = false;
-  bool _showPullRequests = false;
 
   /// The human leaderboard (v2 G), read only once it is first opened; a column
   /// when the window has room for it ([_boardRoomy], set by build), else a dialog.
@@ -268,7 +267,7 @@ class _SuperTabViewState extends State<SuperTabView>
         c.accessRevoked ||
         _devicesVisible ||
         _terminalsVisible ||
-        _showPullRequests ||
+        c.pullRequestsOpen ||
         c.notificationsOpen) {
       return false;
     }
@@ -503,7 +502,7 @@ class _SuperTabViewState extends State<SuperTabView>
           !_sidebarOpen &&
           !_devicesVisible &&
           !_terminalsVisible &&
-          !_showPullRequests) {
+          !c.pullRequestsOpen) {
         _focus.requestFocus();
       }
     });
@@ -765,13 +764,13 @@ class _SuperTabViewState extends State<SuperTabView>
     notificationsSelected: _notificationsVisible,
     onNotifications: () {
       _closeSidebar();
-      setState(() => _showPullRequests = false);
+      c.showPullRequests(false);
       c.openNotifications();
       widget.onCloseTerminal?.call();
     },
     onOpenAgent: (agent) {
       _closeSidebar();
-      setState(() => _showPullRequests = false);
+      c.showPullRequests(false);
       c.closeNotifications();
       (widget.onChooseAgentTerminal ?? widget.onOpenTerminal)(agent);
     },
@@ -872,10 +871,8 @@ class _SuperTabViewState extends State<SuperTabView>
       const [];
 
   void _openAgent(SuperTabAgent agent) {
-    setState(() {
-      _showPullRequests = false;
-      _rosterOpen = false;
-    });
+    c.showPullRequests(false);
+    setState(() => _rosterOpen = false);
     widget.onOpenTerminal(agent);
   }
 
@@ -884,7 +881,7 @@ class _SuperTabViewState extends State<SuperTabView>
       FocusManager.instance.primaryFocus?.unfocus();
       final app = widget.app, paneId = widget.app?.focusedPaneId;
       if (app != null && paneId != null) app.focusPane(paneId, reveal: true);
-    } else if (_showPullRequests) {
+    } else if (c.pullRequestsOpen) {
       _pullRequestsFocus.requestFocus();
     } else {
       _focus.requestFocus();
@@ -988,12 +985,12 @@ class _SuperTabViewState extends State<SuperTabView>
                 icon: AppIcons.messageSquare,
                 size: AppIcons.inlineSize,
                 tooltip: 'Chat',
-                selected: !_terminalsVisible && !_showPullRequests,
-                color: !_terminalsVisible && !_showPullRequests
+                selected: !_terminalsVisible && !c.pullRequestsOpen,
+                color: !_terminalsVisible && !c.pullRequestsOpen
                     ? DesktopChrome.foreground
                     : DesktopChrome.muted,
                 onPressed: () {
-                  setState(() => _showPullRequests = false);
+                  c.showPullRequests(false);
                   widget.onCloseTerminal?.call();
                   _readVisibleTailAfterFrame();
                   WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -1014,7 +1011,7 @@ class _SuperTabViewState extends State<SuperTabView>
                 // A read-only viewer's terminal reads are refused.
                 onPressed: group.agentIds.isNotEmpty && c.canWrite
                     ? () {
-                        setState(() => _showPullRequests = false);
+                        c.showPullRequests(false);
                         widget.onOpenGroupTerminals?.call();
                       }
                     : null,
@@ -1026,13 +1023,13 @@ class _SuperTabViewState extends State<SuperTabView>
                 icon: AppIcons.gitPullRequest,
                 size: AppIcons.inlineSize,
                 tooltip: 'Pull requests',
-                selected: !_terminalsVisible && _showPullRequests,
-                color: !_terminalsVisible && _showPullRequests
+                selected: !_terminalsVisible && c.pullRequestsOpen,
+                color: !_terminalsVisible && c.pullRequestsOpen
                     ? DesktopChrome.foreground
                     : DesktopChrome.muted,
                 onPressed: () {
                   widget.onCloseTerminal?.call();
-                  setState(() => _showPullRequests = true);
+                  c.showPullRequests(true);
                 },
               ),
               // Not a workgroup: nothing to rename, archive or detail.
@@ -1185,7 +1182,7 @@ class _SuperTabViewState extends State<SuperTabView>
           if (g.number != null) g.number!: g.id,
       },
       onOpenGroup: (id) {
-        setState(() => _showPullRequests = false);
+        c.showPullRequests(false);
         c.select(id);
         c.selectTerminal(id, null);
       },
@@ -1875,10 +1872,8 @@ class _SuperTabViewState extends State<SuperTabView>
         app: widget.app,
         onInvite: widget.onInvite,
         onOpenAgent: (agent) {
-          setState(() {
-            _showPullRequests = false;
-            _rosterOpen = false;
-          });
+          c.showPullRequests(false);
+          setState(() => _rosterOpen = false);
           (widget.onChooseAgentTerminal ?? widget.onOpenTerminal)(agent);
         },
         onAddAgent: (group) {
@@ -1898,7 +1893,7 @@ class _SuperTabViewState extends State<SuperTabView>
               board: _boardRoomy && _boardOpen
                   ? _board.column(
                       onAnswer: (id) {
-                        setState(() => _showPullRequests = false);
+                        c.showPullRequests(false);
                         unawaited(c.select(id));
                       },
                     )
@@ -1916,13 +1911,13 @@ class _SuperTabViewState extends State<SuperTabView>
                           ? 0
                           : _terminalsVisible
                           ? 1
-                          : _showPullRequests
+                          : c.pullRequestsOpen
                           ? 2
                           : 0,
                       children: [
                         _conversation(narrow),
                         terminal ?? const SizedBox.shrink(),
-                        _showPullRequests
+                        c.pullRequestsOpen
                             ? SuperTabPullRequests(
                                 controller: c,
                                 app: widget.app,

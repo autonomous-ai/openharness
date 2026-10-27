@@ -190,6 +190,60 @@ void main() {
     expect(f.app.activeSwarmId, other);
   });
 
+  test('pull requests or the group terminals in front of the chat hide its conversation from a device\'s voice', () async {
+    final (f, c) = await open();
+    final server = f.connection.server;
+    server.state['agents'] = [
+      {
+        'id': 'agent',
+        'projectId': 'lead',
+        'name': 'Lead',
+        'machineId': 'm',
+        'harnessId': 'native',
+        'contributorId': 'owner',
+        'configuration': {'engine': 'codex'},
+      },
+    ];
+    for (final group in server.state['conversations'] as List) {
+      group['agentIds'] = ['agent'];
+    }
+    await c.refresh();
+    const lamp = {'id': 'lead', 'title': 'Lamp OS', 'canPost': true};
+    c.showPullRequests(true);
+    await settle();
+    expect(c.pullRequestsOpen, isTrue);
+    expect(row(announces(f).last).containsKey('conversation'), isFalse);
+    c.showPullRequests(false);
+    await settle();
+    expect(row(announces(f).last)['conversation'], lamp);
+    c.selectGroupTerminals('lead');
+    await settle();
+    expect(row(announces(f).last).containsKey('conversation'), isFalse);
+    // Back to the chat, as its Chat button does.
+    c.selectTerminal('lead', null);
+    await settle();
+    expect(row(announces(f).last)['conversation'], lamp);
+  });
+
+  test('a later read of the Swarm never takes the voice back from a terminal the person chose', () async {
+    final (f, c) = await open();
+    final pane = f.app.adoptSessionForTest(terminal('a0', []));
+    f.app.focusPane(pane.id);
+    await settle();
+    expect(row(announces(f).last).containsKey('conversation'), isFalse);
+    // The Lead chat is shown by its project's name: renaming the project
+    // changes the voice target, and that is no choice of the chat.
+    (f.connection.server.state['projects'] as List)
+            .cast<Map<String, dynamic>>()
+            .singleWhere((p) => p['id'] == 'lead')['name'] =
+        'Renamed';
+    await c.refresh();
+    expect(c.voiceConversation?['title'], 'Renamed');
+    f.app.announceWindowForeground();
+    await settle();
+    expect(row(announces(f).last).containsKey('conversation'), isFalse);
+  });
+
   test('a draft tab has no tab id', () async {
     final (f, _) = await open();
     f.app.newSwarm(newTabPage: true);

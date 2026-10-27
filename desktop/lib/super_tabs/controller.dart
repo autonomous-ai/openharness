@@ -262,6 +262,16 @@ class SuperTabController extends ChangeNotifier {
   /// hidden chat is never where a device's voice goes ([voiceConversation]).
   bool notificationsOpen = false;
 
+  /// Whether the project's pull requests are in front of the chat; held here
+  /// for the same reason as [notificationsOpen].
+  bool pullRequestsOpen = false;
+
+  void showPullRequests(bool open) {
+    if (_disposed || pullRequestsOpen == open) return;
+    pullRequestsOpen = open;
+    _changed();
+  }
+
   void openNotifications() {
     if (_disposed || accessRevoked || notificationsOpen) return;
     notificationsOpen = true;
@@ -710,15 +720,17 @@ class SuperTabController extends ChangeNotifier {
   }
 
   /// The open conversation, for a device's voice: its id, its name and
-  /// whether this person can post there. Null while Your devices or
-  /// Notifications is in front, or nothing is open. The daemon checks again
-  /// before it posts.
+  /// whether this person can post there. Null while something covers the chat
+  /// (Your devices, Notifications, pull requests, the group's terminals) or
+  /// nothing is open. The daemon checks again before it posts.
   Map<String, Object>? get voiceConversation {
     final group = selected;
     if (group == null ||
         devicesSelected ||
         notificationsOpen ||
-        accessRevoked) {
+        pullRequestsOpen ||
+        accessRevoked ||
+        terminalAgents(group.id).isNotEmpty) {
       return null;
     }
     return {

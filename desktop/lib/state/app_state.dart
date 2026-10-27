@@ -1765,6 +1765,12 @@ class AppNotifier extends ChangeNotifier {
       // The closed list is read from these names, so it can change on its own.
       if (changed || namesChanged) notifyListeners();
     },
+    onVoiceTarget: (controller) {
+      // Not a choice: the chat was covered or uncovered, or changed. The
+      // device is told; a terminal the person chose keeps the voice.
+      if (_disposed || controller.accountId != currentUser?.id) return;
+      _announceOpenPanesToDial();
+    },
     onSelection: (controller) {
       if (_disposed || controller.accountId != currentUser?.id) return;
       // Choosing a conversation is choosing where a device's voice goes.
