@@ -2,6 +2,7 @@
 // in web/index.html is done even when that finished first. Here the page's HTML stops for 0.5 s
 // after </head>, as a slow network can deliver it, while main.dart.js is already in the browser's
 // cache. The app must still draw on every visit; exits 1 on a visit that never draws.
+// Each visit forgets the mark that lets a browser skip the wait, so every one of them waits.
 //
 //   node tool/web_ux/loader-hold.mjs <release-build> [visits]
 //
@@ -38,7 +39,11 @@ await new Promise((r) => proxy.listen(0, '127.0.0.1', r));
 const origin = `http://127.0.0.1:${proxy.address().port}`;
 const dir = mkdtempSync(join(tmpdir(), 'split-'));
 const context = await chromium.launchPersistentContext(dir, { executablePath: process.env.CHROME_PATH, args: ['--host-resolver-rules=MAP * ~NOTFOUND, EXCLUDE 127.0.0.1'] });
-await context.addInitScript(() => addEventListener('flutter-first-frame', () => { window.__ff = 1; }, { once: true }));
+await context.addInitScript(() => {
+  addEventListener('flutter-first-frame', () => { window.__ff = 1; }, { once: true });
+  // Forget that this browser loaded the script before, so the loader waits for it every visit.
+  try { localStorage.removeItem('harness.web.v1.main_script_loaded'); } catch (e) { /* about:blank */ }
+});
 let stuck = 0;
 for (let i = 0; i < Number(visitsArg); i++) {
   const page = await context.newPage();
