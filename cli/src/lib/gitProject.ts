@@ -1,5 +1,5 @@
-import { execFile } from 'node:child_process'
-import { cp, lstat, mkdir, realpath, stat, writeFile } from 'node:fs/promises'
+import { execFile, spawn } from 'node:child_process'
+import { cp, lstat, mkdir, readdir, readFile, realpath, rm, stat, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { basename, dirname, isAbsolute, join, normalize } from 'node:path'
 import { promisify } from 'node:util'
@@ -26,15 +26,19 @@ export function validGitPath(path: unknown): path is string {
 /** [base]: the environment git starts from, the daemon's own unless a caller gives the one it must use instead
  *  (lib/swarmGitHub.ts `swarmGitPrepareEnv`). */
 async function git(path: string, args: string[], timeout = 4000, base: NodeJS.ProcessEnv = process.env): Promise<string> {
-  const env = { ...base, GIT_TERMINAL_PROMPT: '0', GCM_INTERACTIVE: 'Never', GIT_OPTIONAL_LOCKS: '0' }
-  for (const key of ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_COMMON_DIR', 'GIT_INDEX_FILE', 'GIT_NAMESPACE', 'GIT_PREFIX']) delete (env as NodeJS.ProcessEnv)[key]
-  // core.fsmonitor names a program git runs on status/diff; a repository's own config must not choose
-  // one for the daemon (same guard as projectPreview.ts).
-  return (await exec('git', ['--no-optional-locks', '-c', 'core.fsmonitor=false', '-C', path, ...args], {
+  return (await exec('git', gitArgs(path, args), {
     timeout, killSignal: 'SIGKILL', maxBuffer: 1024 * 1024,
-    env,
+    env: gitEnv(base),
   })).stdout.replace(/\r?\n$/, '')
 }
+function gitEnv(base: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const env = { ...base, GIT_TERMINAL_PROMPT: '0', GCM_INTERACTIVE: 'Never', GIT_OPTIONAL_LOCKS: '0' }
+  for (const key of ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_COMMON_DIR', 'GIT_INDEX_FILE', 'GIT_NAMESPACE', 'GIT_PREFIX']) delete (env as NodeJS.ProcessEnv)[key]
+  return env
+}
+// core.fsmonitor names a program git runs on status/diff; a repository's own config must not choose
+// one for the daemon (same guard as projectPreview.ts).
+const gitArgs = (path: string, args: string[]) => ['--no-optional-locks', '-c', 'core.fsmonitor=false', '-C', path, ...args]
 
 /** `git worktree list --porcelain`, main checkout first. A bare repository has no files and a
  *  prunable entry lost its folder, so neither is somewhere to work. */
@@ -235,6 +239,8 @@ export type GitProjectOptions = {
   /** `branchName` was made up (`brave-otter`): the session's name replaces it once there is one. */
   placeholder?: boolean
   pick?: (n: number) => number
+  /** How long `git worktree add` may run, in ms: `WORKTREE_ADD_TIMEOUT` unless a test gives a shorter one. */
+  worktreeTimeout?: number
 }
 
 /** Worktree on: a new worktree under `<root>/worktrees/<repository>`, on `branchName` — created from
@@ -366,16 +372,24 @@ export async function prepareGitProject(source: string, options: GitProjectOptio
         await git(source, ['config', '--add', key, remote.refspec])
       }
     }
-    await git(source, existing
-      ? ['worktree', 'add', '--', destination, branch]
-      // A remote branch checked out under its own name tracks it; a new branch from one must not,
-      // or it would push onto the base.
-      : remote && remote.branch === branch
-        ? ['worktree', 'add', '--track', '-b', branch, '--', destination, options.ref!]
-        : ['worktree', 'add', '--no-track', '-b', branch, '--', destination, head], 120_000)
   } catch (error) {
-    // Keep any partial checkout and branch available for recovery.
     if (diskFull(error)) throw new GitProjectError('WORKTREE_FAILED', worktreeDiskFull)
+    throw new GitProjectError('WORKTREE_FAILED', `Could not create the worktree at ${destination}. Check Git and folder permissions, then retry.`)
+  }
+  const admin = await worktreeAdmin(source)
+  const registered = new Set(await readdir(admin).catch(() => [] as string[]))
+  const added = await worktreeAdd(source, existing
+    ? ['worktree', 'add', '--', destination, branch]
+    // A remote branch checked out under its own name tracks it; a new branch from one must not,
+    // or it would push onto the base.
+    : remote && remote.branch === branch
+      ? ['worktree', 'add', '--track', '-b', branch, '--', destination, options.ref!]
+      : ['worktree', 'add', '--no-track', '-b', branch, '--', destination, head], options.worktreeTimeout ?? WORKTREE_ADD_TIMEOUT)
+  if (!added.ok && !(added.timedOut && await finishedCheckout(source, destination, branch))) {
+    console.error(`[worktree] git worktree add failed (${added.reason}) at ${destination}: ${gitReason(added.stderr)}`)
+    // A retry starts clean. The folder is this start's own (reserved above) and so is the branch unless it existed.
+    await removePartialWorktree(source, destination, existing ? null : branch, admin, registered)
+    if (added.diskFull) throw new GitProjectError('WORKTREE_FAILED', worktreeDiskFull)
     throw new GitProjectError('WORKTREE_FAILED', `Could not create the worktree at ${destination}. Check Git and folder permissions, then retry.`)
   }
   // Harness made this branch: its cleanup may remove it, and a made-up name gives way to the session's.
@@ -384,6 +398,95 @@ export async function prepareGitProject(source: string, options: GitProjectOptio
   }
   await copyIncluded(root, destination)
   return inside(destination)
+}
+
+/** Ten minutes for `git worktree add`. 120 s failed 2 of 4 Swarm starts on a busy Mac Studio (2026-10-27): the
+ *  checkout of the whole repository was still writing when the time ran out. */
+export const WORKTREE_ADD_TIMEOUT = 10 * 60_000
+
+type WorktreeAddFailure = { ok: false; reason: string; stderr: string; timedOut: boolean; diskFull: boolean }
+type WorktreeAdd = { ok: true } | WorktreeAddFailure
+
+/** `git worktree add`, in a process group of its own. git checks the files out in a child (`git reset --hard`)
+ *  and runs hooks and filters below that: killing only git at the timeout left the child writing the folder after
+ *  the start had given up, and the worktree registered as locked "initializing" with its branch (2026-10-27). At
+ *  the timeout the whole group is killed, so nothing writes the folder once this returns. */
+function worktreeAdd(source: string, args: string[], timeout: number): Promise<WorktreeAdd> {
+  return new Promise(resolve => {
+    let stderr = '', timedOut = false, exited = false, settled = false
+    const done = (result: WorktreeAdd) => { if (!settled) { settled = true; clearTimeout(timer); resolve(result) } }
+    const failed = (reason: string): WorktreeAddFailure => ({ ok: false, reason, stderr, timedOut, diskFull: diskFull({ stderr }) })
+    const child = spawn('git', gitArgs(source, args), {
+      env: gitEnv(process.env), stdio: ['ignore', 'ignore', 'pipe'], detached: process.platform !== 'win32', windowsHide: true,
+    })
+    child.stderr.on('data', (chunk: Buffer) => { if (stderr.length < 64 * 1024) stderr += chunk.toString() })
+    const timer = setTimeout(() => {
+      timedOut = true
+      killGroup(child.pid)
+      // Anything that left the group keeps stderr open; the exit is enough to decide.
+      if (exited) done(failed(`timed out after ${Math.round(timeout / 1000)} s`))
+      else child.once('exit', () => done(failed(`timed out after ${Math.round(timeout / 1000)} s`)))
+    }, timeout)
+    child.once('exit', () => { exited = true })
+    child.once('error', error => done({ ...failed((error as NodeJS.ErrnoException).code ?? 'could not run git'), diskFull: diskFull(error) }))
+    child.once('close', (code, signal) => done(timedOut ? failed(`timed out after ${Math.round(timeout / 1000)} s`)
+      : code === 0 ? { ok: true } : failed(code === null ? `signal ${signal}` : `exit ${code}`)))
+  })
+}
+
+function killGroup(pid: number | undefined): void {
+  if (pid === undefined) return
+  if (process.platform === 'win32') {
+    spawn('taskkill', ['/pid', String(pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true }).once('error', () => {})
+    return
+  }
+  try { process.kill(-pid, 'SIGKILL') } catch { try { process.kill(pid, 'SIGKILL') } catch { /* already gone */ } }
+}
+
+/** Whether git, stopped at the timeout, had already checked the worktree out: registered on its branch, every
+ *  tracked file as the branch has it (the index is written after the files). Then it is used, unlocked. */
+async function finishedCheckout(source: string, destination: string, branch: string): Promise<boolean> {
+  const here = await real(destination)
+  let registered = false
+  for (const tree of await worktrees(source)) registered ||= tree.ref === `refs/heads/${branch}` && await real(tree.path) === here
+  if (!registered) return false
+  const changed = await git(destination, ['status', '--porcelain', '--untracked-files=no'], 120_000).catch(() => null)
+  if (changed !== '') return false
+  await git(source, ['worktree', 'unlock', '--', destination]).catch(() => '')
+  return true
+}
+
+/** `<common git dir>/worktrees`, where git registers each linked worktree in a folder of its own. */
+async function worktreeAdmin(source: string): Promise<string> {
+  const common = await git(source, ['rev-parse', '--git-common-dir']).catch(() => '')
+  return join(isAbsolute(common) ? common : join(source, common), 'worktrees')
+}
+
+/** Removes what a failed `worktree add` left: its registration (locked or not), the folder, and `branch` when this
+ *  start made it. A registration in [registered] was there before and stays, whatever folder it names. `git branch
+ *  -D` refuses a branch any other worktree has checked out. */
+async function removePartialWorktree(source: string, destination: string, branch: string | null, admin: string, registered: Set<string>): Promise<void> {
+  const here = await real(destination)
+  try {
+    for (const entry of await readdir(admin).catch(() => [] as string[])) {
+      if (registered.has(entry)) continue
+      const gitdir = (await readFile(join(admin, entry, 'gitdir'), 'utf8').catch(() => '')).trim()
+      if (gitdir && await real(dirname(gitdir)) === here) await rm(join(admin, entry), { recursive: true, force: true })
+    }
+    await rm(destination, { recursive: true, force: true })
+    if (branch) await git(source, ['branch', '-D', branch]).catch(() => '')
+  } catch (error) {
+    console.error(`[worktree] could not remove the partial worktree at ${destination}: ${error instanceof Error ? error.message : String(error)}`)
+  }
+}
+
+/** git's last words, short and without credentials: a remote URL's user and password, GitHub tokens. */
+function gitReason(stderr: string): string {
+  const lines = stderr.split(/\r?\n/).map(line => line.trim()).filter(Boolean).slice(-3).join(' / ')
+  return (lines || 'no output')
+    .replace(/([a-z][a-z0-9+.-]*:\/\/)[^\s/@]+@/gi, '$1***@')
+    .replace(/\b(gh[pousr]_|github_pat_)[A-Za-z0-9_]+/g, '$1***')
+    .slice(0, 500)
 }
 
 /** `.worktreeinclude` (gitignore syntax) in the repository names ignored files a new worktree needs
