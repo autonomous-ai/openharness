@@ -169,6 +169,7 @@ class DialStatus {
     this.hw,
     this.board,
     this.updating,
+    this.problem,
   });
 
   static const none = DialStatus(attached: false);
@@ -210,6 +211,10 @@ class DialStatus {
   /// window, because it is the minute in which people unplug the thing.
   final String? updating;
 
+  /// Something the person has to do about this device, in the daemon's words, shown as they are: a Harness
+  /// Pro that stayed silent after a reset over its cable is asked to be unplugged and plugged back in.
+  final String? problem;
+
   /// What to call this robot on screen.
   ///
   /// `hw` is what the firmware detected itself as at boot — `cst816s`, `cst9217+axp2101` — which is a
@@ -245,6 +250,9 @@ class DialStatus {
     updating:
         json['updating'] is String && (json['updating'] as String).isNotEmpty
         ? json['updating'] as String
+        : null,
+    problem: json['problem'] is String && (json['problem'] as String).isNotEmpty
+        ? json['problem'] as String
         : null,
   );
 }

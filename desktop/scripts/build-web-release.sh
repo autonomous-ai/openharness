@@ -14,6 +14,8 @@ if [[ -n "$(git status --porcelain -- .)" ]]; then
   exit 1
 fi
 source_commit="$(git rev-parse HEAD)"
+# The backend a release talks to: AppConfig.defaultApiUrl, which a release build does not override.
+api_url='https://harness-api.autonomous.ai'
 "${FLUTTER_BIN:-flutter}" build web --release --no-wasm-dry-run \
   --no-web-resources-cdn --base-href=/harness-web/ \
   --output=build/web-release --build-name="$version"
@@ -44,12 +46,14 @@ PY
 # Flutter asks for the font manifest, then its fonts, only once main.dart.js has run: a step in
 # series after the app's 3 MB on a phone (0.7 s on fast 4G, 3.3 s on slow 4G, #180's report).
 # Preloaded with the same fetch Flutter makes, they come beside main.dart.js and Flutter reuses them.
-python3 - <<'PY'
+# The website moves these hrefs into the release's own folder (website/scripts/harness-web-assets.mjs).
+python3 - "$api_url" <<'PY'
 import html
 import json
 from pathlib import Path
 import sys
 
+api_url = sys.argv[1]
 root = Path('build/web-release')
 index_path = root / 'index.html'
 index = index_path.read_text()
@@ -61,24 +65,28 @@ links = ''.join(
     f'  <link rel="preload" href="assets/{html.escape(asset)}" as="fetch" crossorigin>\n'
     for asset in assets
 )
+# The first API call (who is signed in, then the machines) would otherwise open its connection
+# only after the app has run: DNS, TCP and TLS, three round trips, in series after it.
+# Anonymous, as the app's requests are, so the browser can hand them this connection.
+links += f'  <link rel="preconnect" href="{html.escape(api_url)}" crossorigin>\n'
 index_path.write_text(index.replace('</head>', links + '</head>', 1))
-print(f"Preloaded the font manifest and {len(assets) - 1} fonts.")
+print(f"Preloaded the font manifest and {len(assets) - 1} fonts; preconnected to {api_url}.")
 PY
 
-python3 - "$version" "$source_commit" <<'PY'
+python3 - "$version" "$source_commit" "$api_url" <<'PY'
 import hashlib
 import json
 from pathlib import Path
 import tarfile
 import sys
 
-version, commit = sys.argv[1:]
+version, commit, api_url = sys.argv[1:]
 root = Path('build/web-release')
 release = {
     'version': version,
     'sourceCommit': commit,
     'baseHref': '/harness-web/',
-    'apiUrl': 'https://harness-api.autonomous.ai',
+    'apiUrl': api_url,
 }
 (root / 'release.json').write_text(json.dumps(release, indent=2) + '\n')
 output = Path('build/web-dist')

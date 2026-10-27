@@ -5,6 +5,7 @@ import '../../screens/login_screen.dart';
 import '../../shared/widgets/section_scaffold.dart';
 import '../../shared/widgets/setting_row.dart';
 import '../../state/app_state.dart';
+import 'saved_super_tabs_row.dart';
 
 class AccountSection extends StatelessWidget {
   const AccountSection({super.key, required this.notifier});
@@ -55,6 +56,24 @@ class AccountSection extends StatelessWidget {
           ),
         );
       }
+      final account = SettingRow(
+        // An account with no name is called by its email, and the email is
+        // the line under it: signing up by email showed the address twice.
+        title: profile != null && profile.displayName != profile.email
+            ? profile.displayName
+            : (local && profile == null ? 'Local session' : 'Signed in'),
+        detail:
+            profile?.email ??
+            (local ? 'Loopback backend' : 'Profile unavailable'),
+        control: OutlinedButton(
+          key: const Key('settings-sign-out-button'),
+          onPressed: () {
+            Navigator.of(context).pop();
+            notifier.logout();
+          },
+          child: Text(local ? 'Disconnect local session' : 'Sign out'),
+        ),
+      );
       return SectionScaffold(
         title: 'Account',
         subtitle: local
@@ -64,24 +83,21 @@ class AccountSection extends StatelessWidget {
             ? 'Your Harness sign-in in this browser.'
             : 'Your Harness sign-in on this computer.',
         child: SingleChildScrollView(
-          child: SettingRow(
-            // An account with no name is called by its email, and the email is
-            // the line under it: signing up by email showed the address twice.
-            title: profile != null && profile.displayName != profile.email
-                ? profile.displayName
-                : (local && profile == null ? 'Local session' : 'Signed in'),
-            detail:
-                profile?.email ??
-                (local ? 'Loopback backend' : 'Profile unavailable'),
-            control: OutlinedButton(
-              key: const Key('settings-sign-out-button'),
-              onPressed: () {
-                Navigator.of(context).pop();
-                notifier.logout();
-              },
-              child: Text(local ? 'Disconnect local session' : 'Sign out'),
-            ),
-          ),
+          // Only where Super Tabs are kept on this device (the web's) does
+          // Account say so; Desktop keeps none and its page is as it was.
+          child: notifier.superTabs.reading.drawsSaved
+              ? Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    account,
+                    const SizedBox(height: 12),
+                    SavedSuperTabsRow(
+                      superTabs: notifier.superTabs,
+                      copies: notifier.browserCopies,
+                    ),
+                  ],
+                )
+              : account,
         ),
       );
     },

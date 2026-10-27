@@ -1,6 +1,7 @@
 import '../../state/app_state.dart';
 import '../../super_tabs/reading.dart';
 import '../../state/workspace_chrome.dart';
+import '../onboarding/saved_computers.dart';
 import '../onboarding/web_first_machine.dart';
 import '../footer/web_footer_bar.dart';
 import '../tabs/web_tab_switcher.dart';
@@ -39,7 +40,8 @@ WorkspaceChrome _webWorkspaceChrome(AppNotifier app) => WorkspaceChrome(
   compactFooter: (context, footer) => WebFooterBar(footer: footer),
   compactBelow: kWebCompactBelow,
   twoPaneColumnsBelow: 1000,
-  firstMachine: (context) => WebFirstMachine(app: app),
+  firstMachine: (context) =>
+      WebFirstMachine(app: app, saved: savedComputersOf(app)),
   menuOnEveryTab: true,
   labelsPaneStatus: true,
   compactPaneHeader: true,
@@ -56,4 +58,5 @@ WorkspaceChrome _webWorkspaceChrome(AppNotifier app) => WorkspaceChrome(
     messagesWithState: true,
     drawsSaved: true,
   ),
+  subscriptionsNeedComputer: true,
 );

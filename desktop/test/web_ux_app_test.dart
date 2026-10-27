@@ -77,4 +77,45 @@ void main() {
     expect(app.lastError, 'Could not start Claude Code.');
     expect(app.sessionExpired, isTrue);
   });
+
+  /// The rows of [session]'s screen, as drawn.
+  List<String> rows(TerminalSession session) => [
+    for (final line in session.terminal.buffer.lines.toList())
+      line.toString().trimRight(),
+  ];
+
+  test('a resize is answered with the screen redrawn at that size, as a computer does', () async {
+    final app = WebUxApp()..addMachine('m1', 'Studio Mac');
+    addTearDown(app.dispose);
+    final session = app.openTerminal(
+      'm1',
+      _agent,
+      screen: '${'x' * 60}\r\nend',
+    );
+
+    // A pane narrower and shorter than the 80x24 the screen was written at
+    // reports its size, as the view does: it never resizes the grid itself.
+    session.terminal.onResize!(45, 20, 0, 0);
+    await pumpEventQueue();
+
+    expect((session.terminal.viewWidth, session.terminal.viewHeight), (45, 20));
+    expect(rows(session).take(3), ['x' * 45, 'x' * 15, 'end']);
+  });
+
+  test('a view-only terminal keeps the grid another app drew', () async {
+    final app = WebUxApp()..addMachine('m1', 'Studio Mac');
+    addTearDown(app.dispose);
+    final session = app.openTerminal(
+      'm1',
+      _agent,
+      screen: '${'x' * 60}\r\nend',
+      readOnly: true,
+    );
+
+    session.terminal.onResize!(45, 20, 0, 0);
+    await pumpEventQueue();
+
+    // No input, so no resize reaches the computer: its grid stays.
+    expect((session.terminal.viewWidth, session.terminal.viewHeight), (80, 24));
+  });
 }

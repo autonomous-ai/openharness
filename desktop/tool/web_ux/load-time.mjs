@@ -1,79 +1,59 @@
-// First load of a release build of the web app, as a new visitor sees it.
+// First load of a release build of the web app, as a new visitor and a
+// returning one see it.
 //
-//   node tool/web_ux/load-time.mjs <release-build-dir> [screenshot-dir]
+//   node tool/web_ux/load-time.mjs <release-build-dir> [out-dir] [runs]
 //
-// <release-build-dir> is `flutter build web --release --no-wasm-dry-run
-// --no-web-resources-cdn --base-href=/harness-web/` (scripts/build-web-release.sh
-// without packaging). It is served at /harness-web/ with gzip, like a static
-// host, with every request off the page blocked, so the app stops at the
-// sign-in page. Each profile loads with an empty cache three times; the
-// median is reported: time until the loading screen from web/index.html is
-// visible (null when there is none), time until Flutter's view is in the page,
-// time until the screen stops changing (the sign-in page drawn; a release build
-// has no accessibility tree to wait on), and bytes transferred. Every run also
-// lists the fonts it fetched, the requests that failed and the console errors
-// from the page itself, and whether the loading screen was gone by the end.
-// The last screen of each profile is saved beside the results so the end state
-// can be checked.
+// <release-build-dir> is build/web-release from scripts/build-web-release.sh,
+// served as the website serves a release (serve-release.mjs). Every request
+// off the page fails, so the app stops at the sign-in page.
+//
+// Each profile loads [runs] times (3) with an empty cache (cold), and [runs]
+// times comes back to it in a browser profile kept on disk, as a person's is:
+// once after a first visit (second), and once more (returning). Chrome keeps
+// the compiled script only from the second visit on, and never in a private
+// window, which Playwright's own contexts are. The median of each is
+// reported: time until the loading screen from web/index.html is visible
+// (null when there is none), until Flutter's first frame, until the screen
+// stops changing (the sign-in page drawn), and the bytes transferred. Every run
+// also lists the files it fetched, any fetched twice, the revalidations, the
+// requests that failed and the page's console errors, and whether the loading
+// screen was gone by the end. The last screen of each profile is saved in
+// [out-dir], beside results.json.
 import { chromium } from './playwright.mjs';
-import { createServer } from 'node:http';
-import { readFile } from 'node:fs/promises';
-import { extname, join, normalize } from 'node:path';
-import { gzipSync } from 'node:zlib';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { createHash } from 'node:crypto';
-import { writeFileSync } from 'node:fs';
-
-const TYPES = {
-  '.html': 'text/html', '.js': 'text/javascript', '.json': 'application/json',
-  '.wasm': 'application/wasm', '.png': 'image/png', '.ttf': 'font/ttf',
-  '.otf': 'font/otf', '.webp': 'image/webp', '.jpg': 'image/jpeg', '.bin': 'application/octet-stream',
-};
+import { serveRelease } from './serve-release.mjs';
 
 // How long a page without a loading screen is waited on before it is reported as having none.
 const SPLASH_LIMIT_MS = 5000;
 
+// A phone as #180 and #1710 measured it: 390x844 at 3x, touch, an iPhone's
+// user agent, 4x CPU, and Chrome DevTools' own network presets
+// (front_end/core/sdk/NetworkManager.ts: latency and throughput scaled as there).
+const PHONE = {
+  viewport: { width: 390, height: 844 },
+  deviceScaleFactor: 3,
+  isMobile: true,
+  hasTouch: true,
+  userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1',
+};
 const PROFILES = [
-  { name: 'computer, cable', viewport: { width: 1440, height: 900 }, network: null, cpu: 1 },
-  // Lighthouse's mobile preset: 1.6 Mbps down, 750 kbps up, 150 ms RTT, 4x CPU.
-  {
-    name: 'phone, slow 4G',
-    viewport: { width: 390, height: 844 },
-    network: { latency: 150, downloadThroughput: 1.6e6 / 8, uploadThroughput: 750e3 / 8 },
-    cpu: 4,
-  },
-  // A good phone connection: 9 Mbps down, 40 ms RTT, 2x CPU.
+  { name: 'computer, cable', context: { viewport: { width: 1440, height: 900 } }, network: null, cpu: 1 },
   {
     name: 'phone, fast 4G',
-    viewport: { width: 390, height: 844 },
-    network: { latency: 40, downloadThroughput: 9e6 / 8, uploadThroughput: 1.5e6 / 8 },
-    cpu: 2,
+    context: PHONE,
+    network: { latency: 60 * 2.75, downloadThroughput: (9e6 / 8) * 0.9, uploadThroughput: (1.5e6 / 8) * 0.9 },
+    cpu: 4,
+  },
+  {
+    name: 'phone, slow 4G',
+    context: PHONE,
+    network: { latency: 150 * 3.75, downloadThroughput: (1.6e6 / 8) * 0.9, uploadThroughput: (750e3 / 8) * 0.9 },
+    cpu: 4,
   },
 ];
-
-function serve(root) {
-  const cache = new Map();
-  const server = createServer(async (req, res) => {
-    let path = normalize(decodeURIComponent(new URL(req.url, 'http://x').pathname));
-    if (!path.startsWith('/harness-web/')) { res.writeHead(404); return res.end(); }
-    path = path.slice('/harness-web/'.length) || 'index.html';
-    const file = join(root, path);
-    let body = cache.get(file);
-    if (!body) {
-      // Unknown paths get index.html, as /s/… links do on the host, but a missing
-      // asset is a 404 so a manifest naming a deleted file shows in the request log.
-      const fallback = extname(file) === '' || extname(file) === '.html';
-      const raw = await readFile(file).catch(() =>
-        fallback ? readFile(join(root, 'index.html')) : null);
-      if (!raw) { res.writeHead(404); return res.end(); }
-      body = gzipSync(raw, { level: 6 });
-      cache.set(file, body);
-    }
-    res.writeHead(200, { 'content-type': TYPES[extname(file)] ?? 'text/html', 'content-encoding': 'gzip' });
-    res.end(body);
-  });
-  return new Promise((resolve) => server.listen(0, '127.0.0.1', () =>
-    resolve({ origin: `http://127.0.0.1:${server.address().port}`, close: () => server.close() })));
-}
 
 /// When the page last changed, once it has held still for [quietMs]. A page
 /// that keeps animating is cut off after [limitMs] and reported as such.
@@ -90,33 +70,43 @@ async function settled(page, start, quietMs = 2000, limitMs = 120000) {
   }
 }
 
-async function once(browser, origin, profile) {
-  const context = await browser.newContext({ viewport: profile.viewport, deviceScaleFactor: 1 });
-  await context.route('**/*', (route) =>
-    route.request().url().startsWith(origin) ? route.continue() : route.abort());
+async function once(context, origin, profile) {
   const page = await context.newPage();
   const cdp = await context.newCDPSession(page);
   await cdp.send('Network.enable');
-  await cdp.send('Network.setCacheDisabled', { cacheDisabled: true });
   if (profile.network) {
     await cdp.send('Network.emulateNetworkConditions', { offline: false, ...profile.network });
   }
   await cdp.send('Emulation.setCPUThrottlingRate', { rate: profile.cpu });
-  let bytes = 0;
-  const urls = new Map();
+  const requests = new Map();
   const failed = [];
   const consoleErrors = [];
-  cdp.on('Network.loadingFinished', (e) => { bytes += e.encodedDataLength; });
-  cdp.on('Network.requestWillBeSent', (e) => urls.set(e.requestId, e.request.url));
+  cdp.on('Network.requestWillBeSent', (e) => requests.set(e.requestId, { url: e.request.url, bytes: 0 }));
   cdp.on('Network.responseReceived', (e) => {
+    const request = requests.get(e.requestId);
+    if (request) {
+      request.status = e.response.status;
+      request.fromCache = e.response.fromDiskCache || e.response.fromServiceWorker || false;
+    }
     if (e.response.status >= 400) failed.push(`${e.response.status} ${e.response.url}`);
   });
+  cdp.on('Network.requestServedFromCache', (e) => {
+    const request = requests.get(e.requestId);
+    if (request) request.fromCache = true;
+  });
+  cdp.on('Network.loadingFinished', (e) => {
+    const request = requests.get(e.requestId);
+    if (request) request.bytes = e.encodedDataLength;
+  });
   cdp.on('Network.loadingFailed', (e) => {
-    const url = urls.get(e.requestId);
+    const url = requests.get(e.requestId)?.url;
     if (url?.startsWith(origin)) failed.push(`${e.errorText} ${url}`);
   });
   page.on('console', (msg) => {
     if (msg.type() === 'error' && msg.location().url.startsWith(origin)) consoleErrors.push(msg.text());
+  });
+  await page.addInitScript(() => {
+    addEventListener('flutter-first-frame', () => { window.__firstFrame = performance.now(); }, { once: true });
   });
   const start = Date.now();
   const splash = page
@@ -125,16 +115,27 @@ async function once(browser, origin, profile) {
       return !!el && el.getBoundingClientRect().width > 0 && el.innerText.includes('Opening Harness…');
     }, null, { polling: 50, timeout: SPLASH_LIMIT_MS })
     .then(() => Date.now() - start, () => null);
-  await page.goto(`${origin}/harness-web/`);
-  await page.waitForSelector('flutter-view', { timeout: 180000 });
-  const firstFrame = Date.now() - start;
+  // Not the load event: the page's preloads hold it back, and on slow 4G past any sane timeout.
+  await page.goto(`${origin}/harness-web/`, { waitUntil: 'commit' });
+  await page.waitForFunction(() => window.__firstFrame !== undefined, null, { polling: 50, timeout: 180000 });
+  const firstFrame = Math.round(await page.evaluate(() => window.__firstFrame));
   const { at: signIn, shot } = await settled(page, start);
   const splashRemoved = await page.evaluate(() => !document.getElementById('harness-splash'));
-  const fonts = [...new Set([...urls.values()].filter((u) => /\.(ttf|otf)$/.test(u)).map((u) => u.split('/harness-web/')[1]))].sort();
-  await context.close();
+  await page.close();
+  const fetched = [...requests.values()].filter((r) => r.url.startsWith(origin));
+  const name = (url) => url.slice(origin.length).replace(/^\/harness-web\/(releases\/[^/]+\/)?/, '');
+  const counts = new Map();
+  for (const r of fetched) if (!r.fromCache && r.status === 200) counts.set(name(r.url), (counts.get(name(r.url)) ?? 0) + 1);
   return {
-    splash: await splash, firstFrame, signIn, megabytes: +(bytes / 1e6).toFixed(2),
-    fonts, failed, consoleErrors, splashRemoved, shot,
+    splash: await splash,
+    firstFrame,
+    signIn,
+    megabytes: +(fetched.reduce((sum, r) => sum + r.bytes, 0) / 1e6).toFixed(2),
+    files: Object.fromEntries(fetched.filter((r) => r.bytes > 0 && r.status === 200)
+      .map((r) => [name(r.url), +(r.bytes / 1e3).toFixed(1)])),
+    fetchedTwice: [...counts].filter(([, n]) => n > 1).map(([file]) => file),
+    revalidated: fetched.filter((r) => r.status === 304).map((r) => name(r.url)),
+    failed, consoleErrors, splashRemoved, shot,
   };
 }
 
@@ -142,24 +143,56 @@ const median = (xs) => xs.includes(null)
   ? null
   : [...xs].sort((a, b) => a - b)[Math.floor(xs.length / 2)];
 
-const [root, shotDir] = process.argv.slice(2);
-const server = await serve(root);
-const browser = await chromium.launch({ executablePath: process.env.CHROME_PATH });
-const results = [];
-for (const profile of PROFILES) {
-  const runs = [];
-  for (let i = 0; i < 3; i++) runs.push(await once(browser, server.origin, profile));
-  if (shotDir) writeFileSync(`${shotDir}/load-${profile.name.replace(/\W+/g, '-')}.jpg`, runs.at(-1).shot);
-  for (const run of runs) delete run.shot;
-  results.push({
-    profile: profile.name,
+function summary(runs) {
+  return {
     splashMs: median(runs.map((r) => r.splash)),
     firstFrameMs: median(runs.map((r) => r.firstFrame)),
     settledMs: median(runs.map((r) => r.signIn)),
     transferredMB: median(runs.map((r) => r.megabytes)),
-    runs,
+  };
+}
+
+const [root, outDir, runsArg] = process.argv.slice(2);
+const count = Number(runsArg ?? 3);
+if (outDir) mkdirSync(outDir, { recursive: true });
+const server = await serveRelease(root);
+// Requests off the page fail at name lookup rather than through Playwright's
+// routing, which would turn the browser's HTTP cache off and every warm load cold.
+const args = ['--host-resolver-rules=MAP * ~NOTFOUND, EXCLUDE 127.0.0.1'];
+const browser = await chromium.launch({ executablePath: process.env.CHROME_PATH, args });
+// One load nobody times, so the server has compressed every file before the first timed one.
+const prime = await browser.newContext();
+await once(prime, server.origin, { ...PROFILES[0], network: null, cpu: 1 });
+await prime.close();
+const results = [];
+for (const profile of PROFILES) {
+  const cold = [], second = [], returning = [];
+  for (let i = 0; i < count; i++) {
+    const context = await browser.newContext(profile.context);
+    cold.push(await once(context, server.origin, profile));
+    await context.close();
+  }
+  for (let i = 0; i < count; i++) {
+    const dir = mkdtempSync(join(tmpdir(), 'load-time-'));
+    const context = await chromium.launchPersistentContext(dir, {
+      executablePath: process.env.CHROME_PATH, args, ...profile.context,
+    });
+    await once(context, server.origin, { ...profile, network: null, cpu: 1 });
+    second.push(await once(context, server.origin, profile));
+    returning.push(await once(context, server.origin, profile));
+    await context.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+  if (outDir) writeFileSync(join(outDir, `load-${profile.name.replace(/\W+/g, '-')}.jpg`), returning.at(-1).shot);
+  for (const run of [...cold, ...second, ...returning]) delete run.shot;
+  results.push({
+    profile: profile.name,
+    cold: summary(cold), second: summary(second), returning: summary(returning),
+    runs: { cold, second, returning },
   });
 }
-console.log(JSON.stringify(results, null, 2));
+const text = JSON.stringify(results, null, 2);
+if (outDir) writeFileSync(join(outDir, 'results.json'), text);
+console.log(JSON.stringify(results.map(({ runs, ...medians }) => medians), null, 2));
 await browser.close();
 server.close();

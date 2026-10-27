@@ -9,6 +9,7 @@ import '../shortcuts/keymap.dart';
 import '../state/swarm_navigation.dart';
 import '../state/swarm_search.dart';
 import 'desktop_chrome.dart';
+import 'finger_target.dart';
 import 'box_chrome.dart' show ReadlineKeys;
 import 'swarm_switcher.dart';
 import 'swarm_search_input.dart';
@@ -93,6 +94,12 @@ class DesktopSearchPanel extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     grid.AppTheme.watch(context);
+    // A phone's buttons are a finger's size; a mouse keeps 32. On a phone the
+    // three glyphs share one size, and the row's right inset puts Close's glyph
+    // as far from the edge as the search glyph is on the left.
+    final compact = workspaceIsCompact(context);
+    final button = compact ? kFingerTarget : 32.0;
+    final glyph = compact ? 20.0 : 18.0;
     return DesktopChrome(
       child: Align(
         alignment: Alignment.topCenter,
@@ -147,7 +154,12 @@ class DesktopSearchPanel extends StatelessWidget {
                     ),
                   ),
                 Padding(
-                  padding: const EdgeInsets.fromLTRB(24, 12, 16, 8),
+                  padding: EdgeInsets.fromLTRB(
+                    24,
+                    12,
+                    compact ? 24 - (kFingerTarget - glyph) / 2 : 16,
+                    8,
+                  ),
                   child: Row(
                     children: [
                       Icon(
@@ -175,7 +187,7 @@ class DesktopSearchPanel extends StatelessWidget {
                       ValueListenableBuilder<TextEditingValue>(
                         valueListenable: editing,
                         builder: (context, value, _) => value.text.isEmpty
-                            ? const SizedBox(width: 32, height: 32)
+                            ? SizedBox.square(dimension: button)
                             : _toolbarButton(
                                 context,
                                 key: const ValueKey('search-clear-query'),
@@ -187,7 +199,7 @@ class DesktopSearchPanel extends StatelessWidget {
                                 },
                                 icon: Icon(
                                   AppIcons.circleX,
-                                  size: 16,
+                                  size: compact ? glyph : 16,
                                   color: DesktopChrome.muted,
                                 ),
                               ),
@@ -208,9 +220,9 @@ class DesktopSearchPanel extends StatelessWidget {
                                     onRefocus();
                                   }
                                 : null,
-                            icon: const AppPaneIcon(
+                            icon: AppPaneIcon(
                               AppPaneSymbol.splitRight,
-                              size: 18,
+                              size: glyph,
                             ),
                           ),
                         ),
@@ -219,7 +231,7 @@ class DesktopSearchPanel extends StatelessWidget {
                         key: const ValueKey('search-close'),
                         tooltip: 'Close search',
                         onPressed: onClose,
-                        icon: const Icon(AppIcons.close, size: 18),
+                        icon: Icon(AppIcons.close, size: glyph),
                       ),
                     ],
                   ),
@@ -378,14 +390,15 @@ class DesktopSearchPanel extends StatelessWidget {
   }) {
     final parent = KeymapRegion.of(context);
     void activate() => onPressed?.call();
+    final side = workspaceIsCompact(context) ? kFingerTarget : 32.0;
     final button = SizedBox.square(
-      dimension: 32,
+      dimension: side,
       child: IconButton(
         key: key,
         tooltip: tooltip,
         onPressed: onPressed,
         isSelected: isSelected,
-        constraints: const BoxConstraints.tightFor(width: 32, height: 32),
+        constraints: BoxConstraints.tightFor(width: side, height: side),
         padding: const EdgeInsets.all(7),
         visualDensity: VisualDensity.standard,
         mouseCursor: onPressed == null
@@ -568,22 +581,26 @@ class _SearchScopesState extends State<_SearchScopes> {
                   builder: (segmentContext) {
                     final selected = widget.selected == prefix;
                     if (selected) _selectedContext = segmentContext;
-                    return DesktopPill(
-                      key: ValueKey('search-category-$label'),
-                      label: label,
-                      capsule: true,
-                      selected: selected,
-                      highlightFocus: selected && _focused,
-                      foregroundColor: selected
-                          ? DesktopChrome.foreground
-                          : DesktopChrome.muted,
-                      tooltip: prefix.isEmpty
-                          ? 'Search harnesses'
-                          : 'Type $prefix to search ${label.toLowerCase()}',
-                      onPressed: () {
-                        widget.onChanged(prefix);
-                        widget.onRefocus();
-                      },
+                    // A phone's chip is a finger tall.
+                    return fingerTarget(
+                      enabled: workspaceIsCompact(context),
+                      DesktopPill(
+                        key: ValueKey('search-category-$label'),
+                        label: label,
+                        capsule: true,
+                        selected: selected,
+                        highlightFocus: selected && _focused,
+                        foregroundColor: selected
+                            ? DesktopChrome.foreground
+                            : DesktopChrome.muted,
+                        tooltip: prefix.isEmpty
+                            ? 'Search harnesses'
+                            : 'Type $prefix to search ${label.toLowerCase()}',
+                        onPressed: () {
+                          widget.onChanged(prefix);
+                          widget.onRefocus();
+                        },
+                      ),
                     );
                   },
                 ),
