@@ -1,12 +1,12 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import 'package:harness_mobile/phone/composing_keyboard.dart';
 import 'package:harness_mobile/phone/phone_navigation.dart';
-import 'package:harness_mobile/phone/phone_sheet.dart';
-import 'package:harness_mobile/phone/settings_row.dart';
 import 'package:harness_mobile/phone/tty.dart';
 import 'package:harness_mobile/phone/tty_controls.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart';
@@ -17,6 +17,7 @@ import 'swarm_conversation.dart';
 import 'swarm_inbox.dart';
 import 'swarm_need_rows.dart';
 import 'swarm_session.dart';
+import 'team_glance.dart';
 
 /// Opens [conversationId] of Swarm [swarmId] over the current page.
 void openSwarmConversation(
@@ -52,10 +53,13 @@ Uri? swarmAttachmentLink(String url) {
       : null;
 }
 
-/// One conversation: its messages, newest at the foot, older ones on demand;
-/// the decisions asked of the person in it; and, for a writer, a composer
-/// that posts text with @mentions of the conversation's agents. Files are
-/// opened, not sent ([swarmSendsFiles]).
+/// One conversation: its messages, newest at the foot, older ones on demand —
+/// each with who wrote it, their role and when, follow-ups grouped, a reply's
+/// quote leading to its original; the decisions asked of the person in it;
+/// and, for a writer, a composer that posts text, as a reply or with
+/// @mentions of the conversation's agents picked as they are typed. A post
+/// shows at once and says when it is not confirmed. Files are opened, not
+/// sent ([swarmSendsFiles]): there is no attach button.
 class SwarmConversationPage extends StatefulWidget {
   const SwarmConversationPage({
     super.key,
@@ -73,6 +77,24 @@ class _SwarmConversationPageState extends State<SwarmConversationPage> {
   SwarmSession? _session;
   SwarmConversation? _conversation;
   final _text = TextEditingController();
+  final _focus = FocusNode(debugLabel: 'Swarm composer');
+  final _scroll = ScrollController();
+
+  /// The message whose actions are open (Reply, Copy), by a tap on it.
+  String? _acting;
+
+  /// A quote followed to its original: the original being brought into view,
+  /// the one lit for a moment on arrival, the search through earlier pages,
+  /// and what to say when it cannot be found.
+  String? _target, _lit;
+  final _targetKey = GlobalKey();
+  Timer? _litTimer;
+  bool _finding = false;
+  String? _note;
+
+  /// Earlier messages are read on their own as the person nears the top;
+  /// "Earlier messages" is offered only once that read failed.
+  bool _loadingOlder = false, _olderFailed = false;
 
   /// No other screen covers this one.
   bool _visible = true;
@@ -82,6 +104,7 @@ class _SwarmConversationPageState extends State<SwarmConversationPage> {
   void initState() {
     super.initState();
     _text.addListener(_typed);
+    _scroll.addListener(_nearTop);
   }
 
   @override
@@ -146,7 +169,10 @@ class _SwarmConversationPageState extends State<SwarmConversationPage> {
   @override
   void dispose() {
     _close();
+    _litTimer?.cancel();
     _text.dispose();
+    _focus.dispose();
+    _scroll.dispose();
     super.dispose();
   }
 
@@ -166,24 +192,156 @@ class _SwarmConversationPageState extends State<SwarmConversationPage> {
     );
   }
 
-  void _mention() {
-    final c = _conversation;
-    if (c == null) return;
-    unawaited(
-      showPhoneSheet(
-        context,
-        title: 'Mention',
-        actions: [
-          for (final agent in c.mentionable)
-            PhoneSheetAction(
-              icon: LucideIcons.atSign300,
-              label: c.reader.snapshot?.agentName(agent.id) ?? agent.name,
-              onTap: () => c.mention(agent.id),
-            ),
-        ],
-      ),
-    );
+  /// An @ to type a name after: the picker opens over the composer.
+  void _mention(SwarmConversation c) {
+    final draft = c.draft;
+    final spaced = draft.isEmpty || RegExp(r'\s$').hasMatch(draft);
+    c.draft = '$draft${spaced ? '' : ' '}@';
+    _focus.requestFocus();
   }
+
+  /// How close to the oldest message shown the earlier ones start to be
+  /// read: a screen's height ahead, so they are there before the person is.
+  void _nearTop() {
+    final c = _conversation;
+    if (c == null ||
+        !c.hasOlder ||
+        _loadingOlder ||
+        _olderFailed ||
+        _finding ||
+        !_scroll.hasClients) {
+      return;
+    }
+    final position = _scroll.position;
+    // The list runs from the foot: what is after the view is above it.
+    if (position.extentAfter < position.viewportDimension) {
+      unawaited(_loadOlder(c));
+    }
+  }
+
+  /// Reads the page before the oldest message shown. The list is drawn from
+  /// its foot, so what arrives above leaves what the person reads in place.
+  Future<void> _loadOlder(SwarmConversation c) async {
+    if (_loadingOlder || !c.hasOlder) return;
+    setState(() {
+      _loadingOlder = true;
+      _olderFailed = false;
+    });
+    final shown = c.messages.length;
+    await c.loadOlder();
+    if (!mounted || _conversation != c) return;
+    setState(() {
+      _loadingOlder = false;
+      // A read that failed, or brought nothing new while more is said to be
+      // there, is not tried again on its own: it would be read over and over.
+      _olderFailed =
+          c.hasOlder && (c.error != null || c.messages.length == shown);
+    });
+  }
+
+  /// Sends the draft, back at the foot of the chat where the post shows.
+  void _send(SwarmConversation c) {
+    _target = null;
+    if (_scroll.hasClients && _scroll.offset > 0) {
+      unawaited(
+        _scroll.animateTo(
+          0,
+          duration: const Duration(milliseconds: 250),
+          curve: Curves.easeOut,
+        ),
+      );
+    }
+    unawaited(c.send());
+  }
+
+  void _reply(SwarmConversation c, SuperTabMessage message) {
+    c.replyingTo = message;
+    setState(() => _acting = null);
+    _focus.requestFocus();
+  }
+
+  /// How many earlier pages a quote's original is looked for in: as many as
+  /// a tag opens through on the desktop.
+  static const _findPages = 50;
+
+  /// Brings [messageId] into view and lights it — read in from earlier pages
+  /// when it is further back — or says why it cannot.
+  Future<void> _jumpTo(SwarmConversation c, String messageId) async {
+    if (_finding) return;
+    setState(() {
+      _finding = true;
+      _note = null;
+    });
+    bool has() => c.messages.any((m) => m.id == messageId);
+    var pages = 0;
+    var failed = false;
+    while (!has() && c.hasOlder && pages < _findPages) {
+      await c.loadOlder();
+      pages++;
+      if (!mounted || _conversation != c) return;
+      if (c.error != null) {
+        failed = true;
+        break;
+      }
+    }
+    if (!mounted) return;
+    final found = has();
+    setState(() {
+      _finding = false;
+      _note = found
+          ? null
+          : failed
+          ? "Couldn't read the original message. Try again."
+          : c.hasOlder
+          ? 'The original message is too far back.'
+          : 'The original message is no longer in this chat.';
+      if (found) _target = messageId;
+    });
+    if (!found) return;
+    _reveal(c, messageId, 0);
+    _litTimer?.cancel();
+    setState(() => _lit = messageId);
+    _litTimer = Timer(const Duration(seconds: 2), () {
+      if (mounted) setState(() => _lit = null);
+    });
+  }
+
+  /// The list builds only the rows near what is shown: it jumps near the
+  /// target by its place in the list until its row is built, then brings it
+  /// to the middle (the desktop's `_revealTarget`).
+  void _reveal(SwarmConversation c, String messageId, int attempt) {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || _target != messageId) return;
+      if (_targetKey.currentContext case final row?) {
+        unawaited(
+          Scrollable.ensureVisible(
+            row,
+            alignment: 0.5,
+            duration: const Duration(milliseconds: 250),
+          ),
+        );
+        return;
+      }
+      final shown = _shown;
+      final index = shown.indexWhere(
+        (entry) => entry is _MessageEntry && entry.message.id == messageId,
+      );
+      if (!_scroll.hasClients || index < 0 || attempt > 20) return;
+      final position = _scroll.position;
+      position.jumpTo(
+        (position.maxScrollExtent * (index + 1) / shown.length).clamp(
+          0,
+          position.maxScrollExtent,
+        ),
+      );
+      _reveal(c, messageId, attempt + 1);
+    });
+    WidgetsBinding.instance.scheduleFrame();
+  }
+
+  /// What the list draws, newest first: kept for [_reveal] to find a row's
+  /// place by.
+  List<_Entry> _shown = const [];
 
   @override
   Widget build(BuildContext context) {
@@ -216,7 +374,8 @@ class _SwarmConversationPageState extends State<SwarmConversationPage> {
     Tty tty,
   ) {
     final group = c.conversation;
-    final snapshot = c.reader.snapshot;
+    final reader = c.reader;
+    final snapshot = reader.snapshot;
     final project = snapshot?.projects
         .where((p) => p.id == group?.projectId)
         .firstOrNull;
@@ -230,28 +389,112 @@ class _SwarmConversationPageState extends State<SwarmConversationPage> {
             need.conversationId == widget.conversationId)
           need,
     ];
-    final messages = c.messages.reversed.toList();
+    final byId = {for (final m in c.messages) m.id: m};
+    final names = [
+      for (final agent in snapshot?.agents ?? const <SuperTabAgent>[])
+        snapshot!.agentName(agent.id),
+    ];
+    String nameOf(SuperTabMessage m) => snapshot?.authorName(m) ?? m.authorName;
+    // The person's own messages are "You" where they are quoted.
+    String quoted(SuperTabMessage m) =>
+        !m.fromAgent && m.authorId == reader.accountId ? 'You' : nameOf(m);
+    final pending = c.pending;
+    final entries = _timeline(
+      c.messages,
+      decisions,
+      hasOlder: c.hasOlder,
+    ).reversed.toList();
+    _shown = entries;
+    // A page shorter than the screen never scrolls: look once it is drawn.
+    if (c.hasOlder && !_loadingOlder && !_olderFailed) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _nearTop();
+      });
+    }
+    final lead = pending == null ? 0 : 1;
+    final title = group == null
+        ? 'Chat'
+        : swarmPmChat(reader, group.projectId)?.id == group.id
+        ? 'Chat with PM'
+        : group.label;
+
+    Widget message(_MessageEntry entry) {
+      final m = entry.message;
+      final reply = m.replyTo == null ? null : byId[m.replyTo];
+      return _Message(
+        key: m.id == _target ? _targetKey : null,
+        message: m,
+        name: nameOf(m),
+        role: snapshot == null ? null : swarmRole(snapshot, m),
+        names: names,
+        grouped: entry.grouped,
+        lit: _lit == m.id,
+        quote: m.replyTo == null
+            ? null
+            : _Quote(
+                key: ValueKey('swarm-quote-${m.id}'),
+                author: reply == null ? null : quoted(reply),
+                text: reply?.text,
+                onTap: () => unawaited(_jumpTo(c, m.replyTo!)),
+              ),
+        actions: _acting == m.id,
+        onTap: () => setState(() => _acting = _acting == m.id ? null : m.id),
+        onReply: c.canPost ? () => _reply(c, m) : null,
+      );
+    }
+
+    Widget entry(_Entry entry) => switch (entry) {
+      _DayEntry(:final day) => Padding(
+        padding: const EdgeInsets.fromLTRB(0, 14, 0, 8),
+        child: Text(
+          swarmDayLabel(day, DateTime.now()),
+          textAlign: TextAlign.center,
+          style: tty.style(color: AppPalette.textFaint, size: 12.5),
+        ),
+      ),
+      final _MessageEntry m => message(m),
+      _AskEntry(:final need, :final grouped) => _Ask(
+        session: session,
+        snapshot: snapshot,
+        need: need,
+        grouped: grouped,
+      ),
+    };
+
+    final note = _finding ? 'Finding the original message…' : _note;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        Row(
-          children: [
-            TtyBackButton(onPressed: () => Navigator.of(context).maybePop()),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  TtyText(
-                    group?.label ?? 'Chat',
-                    size: TtySize.row,
-                    weight: FontWeight.w600,
-                  ),
-                  if (project != null)
-                    TtyText(project.name, color: tty.dim, size: TtySize.meta),
-                ],
+        Padding(
+          padding: const EdgeInsets.fromLTRB(0, 2, 8, 2),
+          child: Row(
+            children: [
+              TtyBackButton(onPressed: () => Navigator.of(context).maybePop()),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      title,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: tty.style(
+                        size: TtySize.title,
+                        weight: FontWeight.w600,
+                      ),
+                    ),
+                    if (project != null)
+                      Text(
+                        project.name,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: _sans(13, color: AppPalette.textSecondary),
+                      ),
+                  ],
+                ),
               ),
-            ),
-          ],
+            ],
+          ),
         ),
         Expanded(
           child: group == null && c.messages.isEmpty
@@ -259,151 +502,1266 @@ class _SwarmConversationPageState extends State<SwarmConversationPage> {
                   padding: const EdgeInsets.all(Tty.origin),
                   child: Text(
                     c.error ?? 'This chat is not open to you.',
-                    style: tty.style(color: tty.dim),
+                    style: _sans(15, color: AppPalette.textSecondary),
                   ),
                 )
               : ListView.builder(
                   key: const ValueKey('swarm-messages'),
+                  controller: _scroll,
                   reverse: true,
-                  padding: const EdgeInsets.fromLTRB(
-                    Tty.origin,
-                    8,
-                    Tty.origin,
-                    8,
-                  ),
-                  itemCount: messages.length + (c.hasOlder ? 1 : 0),
-                  itemBuilder: (context, index) => index < messages.length
-                      ? _Message(message: messages[index])
-                      : Align(
-                          alignment: Alignment.centerLeft,
-                          child: TtyTextButton(
-                            key: const ValueKey('swarm-older-messages'),
-                            label: 'Earlier messages',
-                            size: TtySize.meta,
-                            onPressed: () => unawaited(c.loadOlder()),
-                          ),
-                        ),
+                  padding: const EdgeInsets.fromLTRB(12, 4, 12, 12),
+                  itemCount: lead + entries.length + (c.hasOlder ? 1 : 0),
+                  itemBuilder: (context, index) {
+                    if (index < lead) {
+                      final reply = pending!.replyTo == null
+                          ? null
+                          : byId[pending.replyTo];
+                      final mine = c.messages.reversed
+                          .where(
+                            (m) =>
+                                !m.fromAgent && m.authorId == reader.accountId,
+                          )
+                          .firstOrNull;
+                      return _Pending(
+                        name: mine == null ? 'You' : nameOf(mine),
+                        text: pending.text,
+                        names: names,
+                        sending: c.sending,
+                        quote: pending.replyTo == null
+                            ? null
+                            : _Quote(
+                                author: reply == null ? null : quoted(reply),
+                                text: reply?.text,
+                              ),
+                        onSendAgain: () => unawaited(c.send()),
+                      );
+                    }
+                    if (index - lead < entries.length) {
+                      return entry(entries[index - lead]);
+                    }
+                    // Read on their own near the top; the link only once
+                    // that read failed.
+                    return Center(
+                      child: _olderFailed
+                          ? _Link(
+                              key: const ValueKey('swarm-older-messages'),
+                              label: 'Earlier messages',
+                              onTap: () => unawaited(_loadOlder(c)),
+                            )
+                          : SizedBox(
+                              key: const ValueKey('swarm-older-loading'),
+                              height: 44,
+                              child: Center(
+                                child: Text(
+                                  'Loading earlier messages…',
+                                  style: _sans(
+                                    13.5,
+                                    color: AppPalette.textFaint,
+                                  ),
+                                ),
+                              ),
+                            ),
+                    );
+                  },
                 ),
         ),
-        if (decisions.isNotEmpty)
+        if (note != null)
           Padding(
-            padding: const EdgeInsets.symmetric(horizontal: Tty.origin),
-            child: SettingsGroup(
-              children: [
-                for (final need in decisions)
-                  SwarmDecisionCard(session: session, need: need),
-              ],
+            padding: const EdgeInsets.fromLTRB(16, 6, 16, 0),
+            child: Text(
+              note,
+              key: const ValueKey('swarm-find-note'),
+              style: _sans(13.5, color: AppPalette.textSecondary),
             ),
           ),
         // Unless the body says it already: no conversation and nothing read.
         if (c.error case final error?
             when group != null || c.messages.isNotEmpty)
           Padding(
-            padding: const EdgeInsets.fromLTRB(Tty.origin, 6, Tty.origin, 0),
+            padding: const EdgeInsets.fromLTRB(16, 6, 16, 0),
             child: Text(
               error,
               key: const ValueKey('swarm-post-error'),
-              style: tty.style(color: tty.red, size: TtySize.meta),
+              style: _sans(13.5, color: tty.red),
             ),
           ),
         if (c.canPost)
-          Padding(
-            padding: const EdgeInsets.fromLTRB(Tty.origin, 6, Tty.origin, 6),
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.end,
-              children: [
-                if (c.mentionable.isNotEmpty)
-                  TtyTextButton(
-                    key: const ValueKey('swarm-mention'),
-                    label: '@',
-                    size: TtySize.title,
-                    onPressed: _mention,
-                  ),
-                Expanded(
-                  child: TtyField(
-                    controller: _text,
-                    hint: 'Message',
-                    lines: 4,
-                    action: TextInputAction.newline,
-                  ),
-                ),
-                const SizedBox(width: 8),
-                TtyTextButton(
-                  key: const ValueKey('swarm-send'),
-                  label: c.sending
-                      ? 'Sending…'
-                      : c.unconfirmed
-                      ? 'Send again'
-                      : 'Send',
-                  onPressed:
-                      c.sending || c.draft.trim().isEmpty && !c.unconfirmed
-                      ? null
-                      : () => unawaited(c.send()),
-                ),
-              ],
-            ),
-          )
+          _composer(c, snapshot, tty, quoted)
         else if (group != null)
           Padding(
-            padding: const EdgeInsets.all(Tty.origin),
+            padding: const EdgeInsets.all(16),
             child: Text(
               group.archived
                   ? 'This chat is archived.'
                   : 'You can read this chat, not post in it.',
               key: const ValueKey('swarm-read-only'),
-              style: tty.style(color: tty.dim, size: TtySize.meta),
+              style: _sans(13.5, color: AppPalette.textSecondary),
             ),
           ),
       ],
     );
   }
+
+  /// The @ picker while a name is typed, the reply bar while the draft
+  /// answers a message, then @, a field that grows with what is typed and a
+  /// round Send — no attach button.
+  Widget _composer(
+    SwarmConversation c,
+    SuperTabSnapshot? snapshot,
+    Tty tty,
+    String Function(SuperTabMessage) quoted,
+  ) {
+    final query = c.mentionQuery;
+    final replying = c.replyingTo;
+    // One post at a time: one not confirmed is sent again from where it shows.
+    final canSend = c.pending == null && c.draft.trim().isNotEmpty;
+    return Container(
+      decoration: BoxDecoration(
+        color: Color.alphaBlend(tty.text.withValues(alpha: 0.02), tty.ground),
+        border: Border(top: BorderSide(color: _hair(tty))),
+      ),
+      padding: const EdgeInsets.fromLTRB(10, 8, 10, 8),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          if (query != null && snapshot != null)
+            _MentionPicker(
+              agents: c.mentionable,
+              snapshot: snapshot,
+              query: query,
+              onPick: (agent) {
+                c.completeMention(agent.id);
+                _focus.requestFocus();
+              },
+            ),
+          if (replying != null)
+            Padding(
+              key: const ValueKey('swarm-reply-bar'),
+              padding: const EdgeInsets.fromLTRB(2, 0, 0, 4),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Container(
+                      padding: const EdgeInsets.only(left: 8),
+                      decoration: BoxDecoration(
+                        border: Border(
+                          left: BorderSide(
+                            color: AppPalette.textFaint,
+                            width: 3,
+                          ),
+                        ),
+                      ),
+                      child: Text.rich(
+                        TextSpan(
+                          children: [
+                            const TextSpan(text: 'Reply to '),
+                            TextSpan(
+                              text: quoted(replying) == 'You'
+                                  ? 'you'
+                                  : quoted(replying),
+                              style: TextStyle(color: AppPalette.textPrimary),
+                            ),
+                            TextSpan(
+                              text:
+                                  ': ${replying.text.replaceAll(RegExp(r'\s+'), ' ')}',
+                            ),
+                          ],
+                        ),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: _sans(13.5, color: AppPalette.textSecondary),
+                      ),
+                    ),
+                  ),
+                  _Round(
+                    key: const ValueKey('swarm-reply-cancel'),
+                    label: 'Cancel reply',
+                    onTap: () => c.replyingTo = null,
+                    child: Icon(
+                      LucideIcons.x,
+                      size: 18,
+                      color: AppPalette.textSecondary,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              if (c.mentionable.isNotEmpty)
+                _Round(
+                  key: const ValueKey('swarm-mention'),
+                  label: 'Mention an agent',
+                  onTap: () => _mention(c),
+                  child: Icon(
+                    LucideIcons.atSign,
+                    size: 22,
+                    color: AppPalette.textSecondary,
+                  ),
+                ),
+              const SizedBox(width: 6),
+              Expanded(
+                child: _MessageField(controller: _text, focus: _focus),
+              ),
+              const SizedBox(width: 6),
+              _Round(
+                key: const ValueKey('swarm-send'),
+                label: 'Send',
+                fill: canSend ? AppPalette.accent : ttyRaised(tty),
+                onTap: canSend ? () => _send(c) : null,
+                child: Icon(
+                  LucideIcons.arrowUp,
+                  size: 20,
+                  color: canSend ? Colors.white : AppPalette.textFaint,
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
 }
 
-/// One message: who wrote it and when, its text, and its files to open.
+/// The chat's prose in the app's own face, as prototype v2 draws it: the
+/// messages, quotes, names and the field. Times, roles and day dividers stay
+/// in the terminal's.
+TextStyle _sans(
+  double size, {
+  Color? color,
+  FontWeight weight = FontWeight.w400,
+  double height = 1.35,
+}) => TextStyle(
+  fontSize: size,
+  height: height,
+  color: color ?? AppPalette.textPrimary,
+  fontWeight: weight,
+);
+
+/// The hairline around the chat's cards, picker and field.
+Color _hair(Tty tty) => tty.text.withValues(alpha: 0.12);
+
+/// The ground of a card in the chat: a decision, the picker, a file.
+Color _card(Tty tty) =>
+    Color.alphaBlend(tty.text.withValues(alpha: 0.05), tty.ground);
+
+/// One row of the chat.
+sealed class _Entry {}
+
+/// Where a day starts.
+final class _DayEntry extends _Entry {
+  _DayEntry(this.day);
+  final DateTime day;
+}
+
+final class _MessageEntry extends _Entry {
+  _MessageEntry(this.message, {required this.grouped});
+  final SuperTabMessage message;
+
+  /// Drawn under the one before, with no avatar, name or time.
+  final bool grouped;
+}
+
+/// A decision asked of the person, in its place among the messages.
+final class _AskEntry extends _Entry {
+  _AskEntry(this.need, {this.grouped = false});
+  final SwarmDecisionNeed need;
+
+  /// Drawn under its asker's message just before it, as part of it.
+  final bool grouped;
+}
+
+/// [messages] (oldest first) with the [asks] put where they were asked and a
+/// divider where each day starts. An ask from before the messages read so far
+/// — while there are [hasOlder] ones — goes at the foot instead, so a question
+/// still open is never out of sight behind "Earlier messages".
+List<_Entry> _timeline(
+  List<SuperTabMessage> messages,
+  List<SwarmDecisionNeed> asks, {
+  required bool hasOlder,
+}) {
+  final grouped = swarmGroupedMessages(messages);
+  final oldest = messages.map((m) => m.createdAt).nonNulls.firstOrNull;
+  bool before(DateTime? asked, DateTime? at) =>
+      asked != null && at != null && asked.isBefore(at);
+  final waiting = <SwarmDecisionNeed>[], late = <SwarmDecisionNeed>[];
+  for (final ask in asks) {
+    (hasOlder && before(ask.decision.createdAt, oldest) ? late : waiting).add(
+      ask,
+    );
+  }
+  waiting.sort((a, b) {
+    final x = a.decision.createdAt, y = b.decision.createdAt;
+    if (x == null || y == null) return x == null ? (y == null ? 0 : 1) : -1;
+    return x.compareTo(y);
+  });
+
+  final rows = <(_Entry, DateTime?)>[];
+  // An ask right after its asker's own message — "One question before the
+  // release:" — is drawn as part of it.
+  void ask(SwarmDecisionNeed need) {
+    final asked = need.decision.createdAt;
+    final last = rows.lastOrNull?.$1;
+    final at = last is _MessageEntry ? last.message.createdAt : null;
+    final grouped =
+        last is _MessageEntry &&
+        last.message.fromAgent &&
+        last.message.authorName == need.decision.askerName &&
+        asked != null &&
+        at != null &&
+        !asked.isBefore(at) &&
+        asked.difference(at) <= const Duration(minutes: 5);
+    rows.add((_AskEntry(need, grouped: grouped), asked));
+  }
+
+  var next = 0;
+  for (final m in messages) {
+    while (next < waiting.length &&
+        before(waiting[next].decision.createdAt, m.createdAt)) {
+      ask(waiting[next]);
+      next++;
+    }
+    // Grouped only right under a message: not under a question.
+    final under = rows.isNotEmpty && rows.last.$1 is _MessageEntry;
+    rows.add((
+      _MessageEntry(m, grouped: under && grouped.contains(m.id)),
+      m.createdAt,
+    ));
+  }
+  waiting.skip(next).forEach(ask);
+  for (final need in late) {
+    rows.add((_AskEntry(need), need.decision.createdAt));
+  }
+
+  final timeline = <_Entry>[];
+  DateTime? day;
+  for (final (row, at) in rows) {
+    if (at != null) {
+      final local = DateUtils.dateOnly(at.toLocal());
+      if (local != day) {
+        day = local;
+        timeline.add(_DayEntry(local));
+      }
+    }
+    timeline.add(row);
+  }
+  return timeline;
+}
+
+const _weekdays = [
+  'Monday',
+  'Tuesday',
+  'Wednesday',
+  'Thursday',
+  'Friday',
+  'Saturday',
+  'Sunday',
+];
+const _months = [
+  'Jan',
+  'Feb',
+  'Mar',
+  'Apr',
+  'May',
+  'Jun',
+  'Jul',
+  'Aug',
+  'Sep',
+  'Oct',
+  'Nov',
+  'Dec',
+];
+
+/// A day divider's words for [day] (local): Today, Yesterday, the weekday
+/// within the week, else the date — with its year when it is not this one.
+String swarmDayLabel(DateTime day, DateTime now) {
+  final date = DateUtils.dateOnly(day), today = DateUtils.dateOnly(now);
+  // In hours, rounded: a day across a clock change is 23 or 25 of them.
+  final days = (today.difference(date).inHours / 24).round();
+  if (days == 0) return 'Today';
+  if (days == 1) return 'Yesterday';
+  if (days > 1 && days < 7) return _weekdays[date.weekday - 1];
+  final short = '${date.day} ${_months[date.month - 1]}';
+  return date.year == today.year ? short : '$short ${date.year}';
+}
+
+/// The ids of [messages] (oldest first) drawn as follow-ups under the one
+/// before: the same author within five minutes on the same day, short, with
+/// no question, line break or reply, and at most three to a run — the
+/// desktop's `SuperTabMessageRow.groupsWith`.
+Set<String> swarmGroupedMessages(List<SuperTabMessage> messages) {
+  bool joins(SuperTabMessage current, SuperTabMessage previous) {
+    bool plain(SuperTabMessage m) =>
+        m.replyTo == null &&
+        m.text.length <= 280 &&
+        !m.text.contains('\n') &&
+        !m.text.contains('?') &&
+        !m.text.contains('？');
+    if (!plain(current) ||
+        !plain(previous) ||
+        current.authorId.isEmpty ||
+        current.authorId != previous.authorId ||
+        current.authorName != previous.authorName ||
+        current.author['kind'] != previous.author['kind'] ||
+        current.author['membershipGeneration'] !=
+            previous.author['membershipGeneration']) {
+      return false;
+    }
+    final now = current.createdAt, before = previous.createdAt;
+    if (now == null || before == null) return false;
+    final elapsed = now.difference(before);
+    return !elapsed.isNegative &&
+        elapsed <= const Duration(minutes: 5) &&
+        DateUtils.isSameDay(now.toLocal(), before.toLocal());
+  }
+
+  final joined = <String>{};
+  var first = 0;
+  for (var i = 1; i < messages.length; i++) {
+    if (i - first < 3 &&
+        joins(messages[i], messages[i - 1]) &&
+        joins(messages[i], messages[first])) {
+      joined.add(messages[i].id);
+    } else {
+      first = i;
+    }
+  }
+  return joined;
+}
+
+/// An agent's role as its compact badge says it (the Naming System): PM for
+/// a project's Product Manager, Rev for a reviewer, Dev for an engineer;
+/// none for a person, or an agent no longer in the Swarm.
+String? swarmRole(SuperTabSnapshot snapshot, SuperTabMessage message) {
+  if (!message.fromAgent) return null;
+  return swarmAgentRole(snapshot, message.authorId);
+}
+
+String? swarmAgentRole(SuperTabSnapshot snapshot, String agentId) {
+  if (snapshot.isLead(agentId)) return 'PM';
+  final agent = snapshot.agent(agentId);
+  if (agent == null) return null;
+  return agent.isReviewer ? 'Rev' : 'Dev';
+}
+
+/// The agent asking [need], found by the name it asked under: a decision
+/// names its asker, not their id.
+SuperTabAgent? swarmAsker(SuperTabSnapshot snapshot, SwarmDecisionNeed need) =>
+    snapshot.agents
+        .where((a) => snapshot.agentName(a.id) == need.decision.askerName)
+        .firstOrNull;
+
+/// [text] with each @mention of one of [names] marked, as the desktop and
+/// the prototype mark them.
+TextSpan _mentions(String text, List<String> names, TextStyle style) {
+  if (names.isEmpty || !text.contains('@')) {
+    return TextSpan(text: text, style: style);
+  }
+  // Longest first, so "@Nova2" is not read as "@Nova".
+  final sorted = [...names]..sort((a, b) => b.length.compareTo(a.length));
+  final pattern = RegExp(
+    '(?<![\\w@])@(?:${sorted.map(RegExp.escape).join('|')})(?![\\w])',
+    caseSensitive: false,
+  );
+  final spans = <InlineSpan>[];
+  var at = 0;
+  for (final match in pattern.allMatches(text)) {
+    if (match.start > at) {
+      spans.add(TextSpan(text: text.substring(at, match.start)));
+    }
+    spans.add(
+      TextSpan(
+        text: match[0],
+        style: TextStyle(
+          color: AppPalette.accentOnSurface,
+          backgroundColor: AppPalette.accentOnSurface.withValues(alpha: 0.13),
+          fontWeight: FontWeight.w500,
+        ),
+      ),
+    );
+    at = match.end;
+  }
+  if (at < text.length) spans.add(TextSpan(text: text.substring(at)));
+  return TextSpan(style: style, children: spans);
+}
+
+/// A message's frame: avatar, then who wrote it, their role and [trailing]
+/// (its time) — none of it for a follow-up — then [body].
+class _Row extends StatelessWidget {
+  const _Row({
+    required this.avatar,
+    required this.grouped,
+    required this.header,
+    required this.body,
+  });
+
+  final Widget avatar;
+  final bool grouped;
+  final Widget header;
+  final List<Widget> body;
+
+  @override
+  Widget build(BuildContext context) => Row(
+    crossAxisAlignment: CrossAxisAlignment.start,
+    children: [
+      grouped ? const SizedBox(width: _Avatar.size) : avatar,
+      const SizedBox(width: 10),
+      Expanded(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [if (!grouped) header, ...body],
+        ),
+      ),
+    ],
+  );
+}
+
+/// One message: avatar, who wrote it, their role and when — none of it for a
+/// follow-up — then what it answers, its text and its files. A tap opens
+/// its actions; lit for a moment when a quote leads to it.
 class _Message extends StatelessWidget {
-  const _Message({required this.message});
+  const _Message({
+    super.key,
+    required this.message,
+    required this.name,
+    required this.role,
+    required this.names,
+    required this.grouped,
+    required this.lit,
+    required this.quote,
+    required this.actions,
+    required this.onTap,
+    required this.onReply,
+  });
 
   final SuperTabMessage message;
+  final String name;
+  final String? role;
+
+  /// The names an @mention in it is marked for.
+  final List<String> names;
+  final bool grouped, lit, actions;
+  final Widget? quote;
+  final VoidCallback onTap;
+
+  /// Null where the person cannot post.
+  final VoidCallback? onReply;
 
   @override
   Widget build(BuildContext context) {
     final tty = Tty.of(context);
     final at = message.createdAt?.toLocal();
     String two(int n) => n.toString().padLeft(2, '0');
-    return Padding(
+    return AnimatedContainer(
       key: ValueKey('swarm-message-${message.id}'),
-      padding: const EdgeInsets.only(bottom: 12),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text.rich(
-            TextSpan(
-              children: [
-                TextSpan(
-                  text: message.authorName,
-                  style: tty.style(
-                    color: message.fromAgent ? tty.cyan : tty.green,
-                    weight: FontWeight.w600,
-                    size: TtySize.meta,
+      duration: const Duration(milliseconds: 600),
+      curve: Curves.easeOut,
+      padding: EdgeInsets.fromLTRB(6, grouped ? 0 : 7, 6, 7),
+      decoration: BoxDecoration(
+        color: lit
+            ? AppPalette.accentOnSurface.withValues(alpha: 0.16)
+            : Colors.transparent,
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: _Row(
+        grouped: grouped,
+        avatar: _Avatar(
+          name: name,
+          id: message.authorId,
+          agent: message.fromAgent,
+          pm: role == 'PM',
+        ),
+        header: _Header(
+          name: name,
+          agent: message.fromAgent,
+          role: role,
+          trailing: at == null
+              ? null
+              : Text(
+                  '${two(at.hour)}:${two(at.minute)}',
+                  style: tty.style(color: AppPalette.textFaint, size: 12.5),
+                ),
+        ),
+        body: [
+          if (lit) SizedBox(key: ValueKey('swarm-lit-${message.id}')),
+          ?quote,
+          if (message.text.isNotEmpty)
+            Semantics(
+              button: true,
+              hint: 'Reply to this message',
+              child: GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onTap: onTap,
+                child: Padding(
+                  padding: const EdgeInsets.only(top: 2),
+                  child: SizedBox(
+                    width: double.infinity,
+                    child: Text.rich(
+                      _mentions(message.text, names, _sans(16, height: 1.42)),
+                    ),
                   ),
                 ),
-                if (at != null)
-                  TextSpan(
-                    text: '  ${two(at.hour)}:${two(at.minute)}',
-                    style: tty.style(color: tty.dim, size: TtySize.meta),
-                  ),
-              ],
+              ),
             ),
-          ),
-          const SizedBox(height: 2),
-          if (message.text.isNotEmpty)
-            SelectableText(message.text, style: tty.style(size: TtySize.row)),
           for (final file in message.attachments)
             _File(file: file, link: swarmAttachmentLink(file.url)),
+          if (actions)
+            Padding(
+              padding: const EdgeInsets.only(top: 8),
+              child: Wrap(
+                spacing: 6,
+                runSpacing: 6,
+                children: [
+                  if (onReply case final reply?)
+                    _SmallButton(
+                      key: ValueKey('swarm-reply-${message.id}'),
+                      icon: LucideIcons.reply,
+                      label: 'Reply',
+                      onTap: reply,
+                    ),
+                  _SmallButton(
+                    icon: LucideIcons.copy,
+                    label: 'Copy',
+                    onTap: () => unawaited(
+                      Clipboard.setData(ClipboardData(text: message.text)),
+                    ),
+                  ),
+                ],
+              ),
+            ),
         ],
       ),
     );
   }
+}
+
+/// A message's first line: who, in what role, then [trailing] — its time,
+/// or how its post is going.
+class _Header extends StatelessWidget {
+  const _Header({
+    required this.name,
+    required this.agent,
+    this.role,
+    this.trailing,
+  });
+
+  final String name;
+  final bool agent;
+  final String? role;
+  final Widget? trailing;
+
+  @override
+  Widget build(BuildContext context) {
+    final tty = Tty.of(context);
+    return Wrap(
+      spacing: 6,
+      crossAxisAlignment: WrapCrossAlignment.center,
+      children: [
+        Text(
+          name,
+          style: _sans(
+            13.5,
+            color: agent ? tty.cyan : tty.green,
+            weight: FontWeight.w600,
+          ),
+        ),
+        if (role case final role?) _Role(role),
+        ?trailing,
+      ],
+    );
+  }
+}
+
+/// A role's compact badge: PM, Dev, Rev.
+class _Role extends StatelessWidget {
+  const _Role(this.label);
+
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    final tty = Tty.of(context);
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 4),
+      decoration: BoxDecoration(
+        border: Border.all(color: _hair(tty)),
+        borderRadius: BorderRadius.circular(4),
+      ),
+      child: Text(
+        label,
+        style: tty
+            .style(
+              color: AppPalette.textSecondary,
+              weight: FontWeight.w600,
+              size: 11,
+            )
+            .copyWith(height: 16 / 11, letterSpacing: 0.44),
+      ),
+    );
+  }
+}
+
+/// Who wrote a message, in a circle: an agent's initial on its own deep
+/// colour — blue for a Product Manager, as the prototype has River — the
+/// person's on theirs, white on each.
+class _Avatar extends StatelessWidget {
+  const _Avatar({
+    required this.name,
+    required this.id,
+    required this.agent,
+    this.pm = false,
+  });
+
+  static const double size = 32;
+
+  /// Deep enough under a white initial in either theme.
+  static const _agents = [
+    Color(0xFF1D5BD6),
+    Color(0xFF0F766E),
+    Color(0xFF6D28D9),
+    Color(0xFFA65A08),
+    Color(0xFFBE123C),
+    Color(0xFF15803D),
+    Color(0xFF4E5D78),
+  ];
+  static const _person = Color(0xFF4B5F9B);
+
+  final String name, id;
+  final bool agent;
+
+  /// A project's Product Manager: the prototype's blue, kept for them alone.
+  final bool pm;
+
+  @override
+  Widget build(BuildContext context) {
+    final fill = !agent
+        ? _person
+        : pm
+        ? _agents.first
+        : _agents[1 +
+              id.codeUnits.fold(0, (a, b) => a + b) % (_agents.length - 1)];
+    final initial = name.trim().isEmpty
+        ? '?'
+        : name.trim().characters.first.toUpperCase();
+    return Container(
+      width: size,
+      height: size,
+      alignment: Alignment.center,
+      decoration: BoxDecoration(color: fill, shape: BoxShape.circle),
+      child: Text(
+        initial,
+        style: _sans(13.5, color: Colors.white, weight: FontWeight.w600),
+      ),
+    );
+  }
+}
+
+/// What a reply answers: its author and the start of its text, or that it
+/// is not loaded. A tap leads to it.
+class _Quote extends StatelessWidget {
+  const _Quote({super.key, this.author, this.text, this.onTap});
+
+  /// Null while the original is not loaded.
+  final String? author, text;
+  final VoidCallback? onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final tty = Tty.of(context);
+    final quote = Container(
+      width: double.infinity,
+      margin: const EdgeInsets.only(top: 5, bottom: 3),
+      padding: const EdgeInsets.fromLTRB(10, 7, 10, 8),
+      decoration: BoxDecoration(
+        color: tty.text.withValues(alpha: 0.05),
+        border: Border(left: BorderSide(color: AppPalette.textFaint, width: 3)),
+        borderRadius: const BorderRadius.horizontal(
+          left: Radius.circular(4),
+          right: Radius.circular(10),
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          if (author case final author?)
+            Text(
+              author,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: _sans(13.5, weight: FontWeight.w600),
+            ),
+          Text(
+            text ?? "The original message isn't loaded.",
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+            style: _sans(14, color: AppPalette.textSecondary),
+          ),
+        ],
+      ),
+    );
+    if (onTap == null) return quote;
+    return Semantics(
+      button: true,
+      label: 'Go to the quoted message',
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: onTap,
+        child: quote,
+      ),
+    );
+  }
+}
+
+/// The person's post on its way: "Sending…", then — its answer lost — "Not
+/// confirmed" with Send again, until it is read back.
+class _Pending extends StatelessWidget {
+  const _Pending({
+    required this.name,
+    required this.text,
+    required this.names,
+    required this.sending,
+    required this.quote,
+    required this.onSendAgain,
+  });
+
+  final String name, text;
+  final List<String> names;
+  final bool sending;
+  final Widget? quote;
+  final VoidCallback onSendAgain;
+
+  @override
+  Widget build(BuildContext context) {
+    final tty = Tty.of(context);
+    return Padding(
+      key: const ValueKey('swarm-pending'),
+      padding: const EdgeInsets.fromLTRB(6, 7, 6, 7),
+      child: _Row(
+        grouped: false,
+        avatar: _Avatar(name: name, id: '', agent: false),
+        header: _Header(
+          name: name,
+          agent: false,
+          trailing: Text(
+            sending ? 'Sending…' : 'Not confirmed',
+            style: tty.style(
+              color: sending ? AppPalette.textFaint : tty.yellow,
+              size: 12.5,
+            ),
+          ),
+        ),
+        body: [
+          ?quote,
+          Padding(
+            padding: const EdgeInsets.only(top: 2),
+            child: Text.rich(
+              _mentions(
+                text,
+                names,
+                _sans(
+                  16,
+                  height: 1.42,
+                  color: sending
+                      ? AppPalette.textSecondary
+                      : AppPalette.textPrimary,
+                ),
+              ),
+            ),
+          ),
+          if (!sending)
+            Padding(
+              padding: const EdgeInsets.only(top: 8),
+              child: _SmallButton(
+                key: const ValueKey('swarm-resend-post'),
+                icon: LucideIcons.rotateCw,
+                label: 'Send again',
+                onTap: onSendAgain,
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+/// A decision asked of the person, among the messages: from its asker, a card
+/// with the question and its options side by side.
+class _Ask extends StatelessWidget {
+  const _Ask({
+    required this.session,
+    required this.snapshot,
+    required this.need,
+    required this.grouped,
+  });
+
+  final SwarmSession session;
+  final SuperTabSnapshot? snapshot;
+  final SwarmDecisionNeed need;
+  final bool grouped;
+
+  @override
+  Widget build(BuildContext context) {
+    final tty = Tty.of(context);
+    final decision = need.decision;
+    final snapshot = this.snapshot;
+    final asker = snapshot == null ? null : swarmAsker(snapshot, need);
+    final role = asker == null ? null : swarmAgentRole(snapshot!, asker.id);
+    final at = decision.createdAt?.toLocal();
+    String two(int n) => n.toString().padLeft(2, '0');
+    return Padding(
+      key: ValueKey('swarm-ask-${decision.id}'),
+      padding: EdgeInsets.fromLTRB(6, grouped ? 0 : 7, 6, 7),
+      child: _Row(
+        grouped: grouped,
+        avatar: _Avatar(
+          name: decision.askerName,
+          id: asker?.id ?? decision.askerName,
+          agent: true,
+          pm: role == 'PM',
+        ),
+        header: _Header(
+          name: decision.askerName,
+          agent: true,
+          role: role,
+          trailing: at == null
+              ? null
+              : Text(
+                  '${two(at.hour)}:${two(at.minute)}',
+                  style: tty.style(color: AppPalette.textFaint, size: 12.5),
+                ),
+        ),
+        body: [
+          Container(
+            width: double.infinity,
+            margin: const EdgeInsets.only(top: 8),
+            padding: const EdgeInsets.fromLTRB(14, 12, 14, 14),
+            decoration: BoxDecoration(
+              color: _card(tty),
+              border: Border.all(color: _hair(tty)),
+              borderRadius: BorderRadius.circular(14),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Text(decision.question, style: _sans(16, height: 1.4)),
+                if (decision.unblocks.isNotEmpty) ...[
+                  const SizedBox(height: 4),
+                  Text(
+                    'Unblocks: ${decision.unblocks}',
+                    style: _sans(13.5, color: AppPalette.textSecondary),
+                  ),
+                ],
+                const SizedBox(height: 14),
+                SwarmDecisionAnswer(
+                  session: session,
+                  need: need,
+                  sideBySide: true,
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// The chat's agents whose name starts with what follows the @ being typed,
+/// over the composer: each with its role and what it is doing.
+class _MentionPicker extends StatelessWidget {
+  const _MentionPicker({
+    required this.agents,
+    required this.snapshot,
+    required this.query,
+    required this.onPick,
+  });
+
+  final List<SuperTabAgent> agents;
+  final SuperTabSnapshot snapshot;
+  final String query;
+  final ValueChanged<SuperTabAgent> onPick;
+
+  @override
+  Widget build(BuildContext context) {
+    final tty = Tty.of(context);
+    final glances = {
+      for (final glance in swarmTeamGlance(snapshot).agents)
+        glance.agent.id: glance,
+    };
+    final prefix = query.toLowerCase();
+    final shown = [
+      for (final agent in agents)
+        if (snapshot.agentName(agent.id).toLowerCase().startsWith(prefix))
+          agent,
+    ];
+    return Container(
+      key: const ValueKey('swarm-mention-picker'),
+      margin: const EdgeInsets.only(bottom: 8),
+      constraints: const BoxConstraints(maxHeight: 220),
+      clipBehavior: Clip.antiAlias,
+      decoration: BoxDecoration(
+        color: _card(tty),
+        border: Border.all(color: _hair(tty)),
+        borderRadius: BorderRadius.circular(14),
+        boxShadow: const [
+          BoxShadow(
+            color: Color(0x80000000),
+            blurRadius: 30,
+            offset: Offset(0, 10),
+          ),
+        ],
+      ),
+      child: shown.isEmpty
+          ? Padding(
+              padding: const EdgeInsets.all(14),
+              child: Text(
+                'No agent by that name.',
+                style: _sans(14, color: AppPalette.textSecondary),
+              ),
+            )
+          : ListView(
+              shrinkWrap: true,
+              padding: EdgeInsets.zero,
+              children: [
+                for (final agent in shown)
+                  TtyTap(
+                    key: ValueKey('swarm-pick-${agent.id}'),
+                    semanticsLabel: snapshot.agentName(agent.id),
+                    minHeight: 52,
+                    onTap: () => onPick(agent),
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 14),
+                      child: Row(
+                        children: [
+                          _Avatar(
+                            name: snapshot.agentName(agent.id),
+                            id: agent.id,
+                            agent: true,
+                            pm: snapshot.isLead(agent.id),
+                          ),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: Row(
+                              children: [
+                                Flexible(
+                                  child: Text(
+                                    snapshot.agentName(agent.id),
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: _sans(16, weight: FontWeight.w500),
+                                  ),
+                                ),
+                                if (swarmAgentRole(snapshot, agent.id)
+                                    case final role?) ...[
+                                  const SizedBox(width: 6),
+                                  _Role(role),
+                                ],
+                              ],
+                            ),
+                          ),
+                          if (glances[agent.id] case final glance?) ...[
+                            Container(
+                              width: 7,
+                              height: 7,
+                              decoration: BoxDecoration(
+                                color: _stateColor(tty, glance.state),
+                                shape: BoxShape.circle,
+                              ),
+                            ),
+                            const SizedBox(width: 6),
+                            Text(
+                              glance.label,
+                              style: _sans(13, color: AppPalette.textSecondary),
+                            ),
+                          ],
+                        ],
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+    );
+  }
+}
+
+/// The dot beside what an agent is doing: green working, yellow waiting or
+/// stuck, red down or limited, faint idle.
+Color _stateColor(Tty tty, SwarmAgentState state) => switch (state) {
+  SwarmAgentState.working => tty.green,
+  SwarmAgentState.waiting || SwarmAgentState.stuck => tty.yellow,
+  SwarmAgentState.down || SwarmAgentState.limited => tty.red,
+  _ => AppPalette.textFaint,
+};
+
+/// The composer's field: one rounded line that grows with what is typed, up
+/// to five, in the app's own face.
+class _MessageField extends StatelessWidget {
+  const _MessageField({required this.controller, required this.focus});
+
+  final TextEditingController controller;
+  final FocusNode focus;
+
+  @override
+  Widget build(BuildContext context) {
+    final tty = Tty.of(context);
+    return GestureDetector(
+      // A tap anywhere in the pill — not only on the text — takes the keyboard.
+      behavior: HitTestBehavior.opaque,
+      onTap: focus.requestFocus,
+      child: Container(
+        key: const ValueKey('swarm-field'),
+        constraints: const BoxConstraints(minHeight: 44),
+        alignment: Alignment.centerLeft,
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+        decoration: BoxDecoration(
+          color: ttyRaised(tty),
+          border: Border.all(color: _hair(tty)),
+          borderRadius: BorderRadius.circular(22),
+        ),
+        child: TextSelectionTheme(
+          data: TextSelectionThemeData(
+            cursorColor: AppPalette.accentOnSurface,
+            selectionColor: AppPalette.accentOnSurface.withValues(alpha: 0.3),
+            selectionHandleColor: AppPalette.accentOnSurface,
+          ),
+          child: TextField(
+            controller: controller,
+            focusNode: focus,
+            minLines: 1,
+            maxLines: 5,
+            keyboardType: TextInputType.multiline,
+            textInputAction: TextInputAction.newline,
+            textCapitalization: TextCapitalization.sentences,
+            // The keyboard's own composing, left on: Vietnamese Telex on iOS
+            // rides on autocorrection. See `ComposingKeyboard`.
+            autocorrect: ComposingKeyboard.autocorrect,
+            enableSuggestions: ComposingKeyboard.enableSuggestions,
+            smartDashesType: SmartDashesType.disabled,
+            smartQuotesType: SmartQuotesType.disabled,
+            cursorColor: AppPalette.accentOnSurface,
+            cursorWidth: 2,
+            style: _sans(16, height: 22 / 16),
+            decoration: InputDecoration(
+              isCollapsed: true,
+              // No minimum of its own: the pill's 44 is the field's height.
+              constraints: const BoxConstraints(),
+              filled: false,
+              border: InputBorder.none,
+              enabledBorder: InputBorder.none,
+              focusedBorder: InputBorder.none,
+              disabledBorder: InputBorder.none,
+              contentPadding: EdgeInsets.zero,
+              hintText: 'Message',
+              hintStyle: _sans(
+                16,
+                height: 22 / 16,
+                color: AppPalette.textFaint,
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// A round 44pt button: @, Send, the reply bar's ✕. [fill] draws it solid.
+class _Round extends StatelessWidget {
+  const _Round({
+    super.key,
+    required this.label,
+    required this.onTap,
+    required this.child,
+    this.fill,
+  });
+
+  final String label;
+  final VoidCallback? onTap;
+  final Widget child;
+  final Color? fill;
+
+  @override
+  Widget build(BuildContext context) => Semantics(
+    button: true,
+    enabled: onTap != null,
+    label: label,
+    excludeSemantics: true,
+    child: GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: onTap,
+      child: Container(
+        width: 44,
+        height: 44,
+        alignment: Alignment.center,
+        decoration: BoxDecoration(color: fill, shape: BoxShape.circle),
+        child: child,
+      ),
+    ),
+  );
+}
+
+/// A message's action — Reply, Copy, Send again: small, rounded, raised.
+class _SmallButton extends StatelessWidget {
+  const _SmallButton({
+    super.key,
+    required this.icon,
+    required this.label,
+    required this.onTap,
+  });
+
+  final IconData icon;
+  final String label;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final tty = Tty.of(context);
+    return Semantics(
+      button: true,
+      label: label,
+      excludeSemantics: true,
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: onTap,
+        child: Container(
+          constraints: const BoxConstraints(minHeight: 36),
+          padding: const EdgeInsets.symmetric(horizontal: 12),
+          decoration: BoxDecoration(
+            color: ttyRaised(tty),
+            border: Border.all(color: _hair(tty)),
+            borderRadius: BorderRadius.circular(10),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(icon, size: 16, color: AppPalette.textPrimary),
+              const SizedBox(width: 8),
+              Text(label, style: _sans(14, weight: FontWeight.w500)),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// A link in the accent: Earlier messages.
+class _Link extends StatelessWidget {
+  const _Link({super.key, required this.label, required this.onTap});
+
+  final String label;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) => TtyTap(
+    semanticsLabel: label,
+    onTap: onTap,
+    child: Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 14),
+      child: Text(label, style: _sans(15, color: AppPalette.accentOnSurface)),
+    ),
+  );
 }
 
 /// A message's file: opened in the browser when its link is the backend's.
@@ -417,20 +1775,48 @@ class _File extends StatelessWidget {
   Widget build(BuildContext context) {
     final tty = Tty.of(context);
     final kb = (file.size / 1024).ceil();
-    final label =
-        'File: ${file.name} · ${kb < 1024 ? '$kb KB' : '${(kb / 1024).toStringAsFixed(1)} MB'}';
+    final size = kb < 1024 ? '$kb KB' : '${(kb / 1024).toStringAsFixed(1)} MB';
     final url = link;
-    return TtyTap(
-      minHeight: 32,
-      semanticsLabel: label,
-      onTap: url == null
-          ? null
-          : () => unawaited(launchUrl(url, mode: LaunchMode.inAppBrowserView)),
-      child: Text(
-        label,
-        style: tty.style(
-          color: url == null ? tty.dim : tty.blue,
-          size: TtySize.meta,
+    final color = url == null ? AppPalette.textFaint : tty.blue;
+    return Padding(
+      padding: const EdgeInsets.only(top: 8),
+      child: Semantics(
+        button: url != null,
+        label: 'File: ${file.name}, $size',
+        excludeSemantics: true,
+        child: GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onTap: url == null
+              ? null
+              : () => unawaited(
+                  launchUrl(url, mode: LaunchMode.inAppBrowserView),
+                ),
+          child: Container(
+            constraints: const BoxConstraints(minHeight: 40),
+            padding: const EdgeInsets.symmetric(horizontal: 12),
+            decoration: BoxDecoration(
+              color: _card(tty),
+              border: Border.all(color: _hair(tty)),
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(LucideIcons.file, size: 16, color: color),
+                const SizedBox(width: 8),
+                Flexible(
+                  child: Text(
+                    file.name,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: _sans(14, color: color),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Text(size, style: _sans(13, color: AppPalette.textFaint)),
+              ],
+            ),
+          ),
         ),
       ),
     );

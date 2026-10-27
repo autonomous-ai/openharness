@@ -8,6 +8,7 @@ import 'swarm_choices.dart';
 import 'swarm_inbox.dart';
 import 'swarm_notices.dart';
 import 'swarm_request.dart';
+import 'swarm_start.dart';
 
 /// The account's Swarm on this phone: what its Swarms ask of the person
 /// ([inbox]), the notices that tell them, and the answers held for Undo.
@@ -171,9 +172,11 @@ class SwarmHost extends ChangeNotifier {
     required this.request,
     required this.notices,
     ExperimentalFeaturesStore? features,
+    this.computers,
   }) : features = features ?? experimentalFeaturesStore {
     account.addListener(_update);
     this.features.addListener(_update);
+    computers?.addListener(notifyListeners);
     _update();
   }
 
@@ -185,6 +188,10 @@ class SwarmHost extends ChangeNotifier {
   final SwarmRequest request;
   final SwarmNotices notices;
   final ExperimentalFeaturesStore features;
+
+  /// The account's computers, for the start screens ([swarmStartView]); null
+  /// where nobody handed them in, and no start screen shows.
+  final SwarmComputers? computers;
 
   SwarmSession? session;
   bool _foreground = true;
@@ -209,6 +216,7 @@ class SwarmHost extends ChangeNotifier {
   void dispose() {
     account.removeListener(_update);
     features.removeListener(_update);
+    computers?.removeListener(notifyListeners);
     session?.dispose();
     session = null;
     super.dispose();
@@ -229,4 +237,11 @@ class SwarmScope extends InheritedNotifier<SwarmHost> {
       .dependOnInheritedWidgetOfExactType<SwarmScope>()
       ?.notifier
       ?.session;
+
+  /// The account's computers ([SwarmHost.computers]); null outside the shell
+  /// or where none were handed in.
+  static SwarmComputers? computersOf(BuildContext context) => context
+      .dependOnInheritedWidgetOfExactType<SwarmScope>()
+      ?.notifier
+      ?.computers;
 }

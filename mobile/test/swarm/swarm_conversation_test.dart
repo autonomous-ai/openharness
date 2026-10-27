@@ -235,6 +235,141 @@ void main() {
     expect(posts.toSet(), hasLength(1), reason: 'the backend runs it once');
   });
 
+  test('a reply carries the message it answers, and the reply goes once it '
+      'is sent', () async {
+    final r = rig();
+    r.swarm.routes[messages] = (_) => {
+      'messages': [message('m1', 1, text: 'Ship it?')],
+      'next': null,
+    };
+    r.swarm.routes['/api/super-tabs/$tab/commands'] = (_) => {
+      'result': <String, dynamic>{},
+    };
+    final c = await open(r.reader);
+
+    c.replyingTo = c.messages.single;
+    c.draft = 'Yes';
+    expect(await c.send(), isTrue);
+
+    expect(r.swarm.commands.single['replyTo'], 'm1');
+    expect(c.replyingTo, isNull);
+  });
+
+  test('a post shows at once as sending, out of the draft, until it is read '
+      'back', () async {
+    final r = rig();
+    r.swarm.routes[messages] = (_) => {'messages': <Object>[], 'next': null};
+    final taken = Completer<Object?>();
+    r.swarm.routes['/api/super-tabs/$tab/commands'] = (_) => taken.future;
+    final c = await open(r.reader);
+
+    c.draft = 'On my way';
+    final sent = c.send();
+    await settle();
+
+    expect(c.draft, isEmpty, reason: 'the field is free at once');
+    expect(c.pending?.text, 'On my way');
+    expect(c.sending, isTrue);
+
+    r.swarm.routes[messages] = (_) => {
+      'messages': [
+        message('m9', 3, text: 'On my way', authorId: me, fromAgent: false),
+      ],
+      'next': null,
+    };
+    taken.complete({'result': <String, dynamic>{}});
+    expect(await sent, isTrue);
+
+    expect(c.pending, isNull);
+    expect([for (final m in c.messages) m.text], ['On my way']);
+  });
+
+  test('a post whose answer was lost stays at the foot, not confirmed, and '
+      'out of the draft', () async {
+    final r = rig();
+    r.swarm.routes[messages] = (_) => {'messages': <Object>[], 'next': null};
+    r.swarm.routes['/api/super-tabs/$tab/commands'] = (_) =>
+        throw const SuperTabFailure('MACHINE_UNAVAILABLE', 'No computer.');
+    final c = await open(r.reader);
+
+    c.draft = 'hi';
+    expect(await c.send(), isFalse);
+
+    expect(c.pending?.text, 'hi');
+    expect(c.sending, isFalse);
+    expect(c.unconfirmed, isTrue);
+    expect(c.draft, isEmpty);
+  });
+
+  test('a refused post puts its text back in the draft, with its mention and '
+      'its reply', () async {
+    final r = rig();
+    r.swarm.routes[messages] = (_) => {
+      'messages': [message('m1', 1, text: 'Ship it?')],
+      'next': null,
+    };
+    var refuse = true;
+    r.swarm.routes['/api/super-tabs/$tab/commands'] = (_) => refuse
+        ? throw const SuperTabFailure(
+            'TOO_LONG',
+            'This message is too long.',
+            statusCode: 400,
+          )
+        : {'result': <String, dynamic>{}};
+    final c = await open(r.reader);
+    c.replyingTo = c.messages.single;
+    c.mention('agent-builder');
+    c.draft = '${c.draft}please';
+
+    expect(await c.send(), isFalse);
+
+    expect(c.pending, isNull);
+    expect(c.draft, '@Nova please');
+    expect(c.replyingTo?.id, 'm1');
+    expect(c.error, 'This message is too long.');
+
+    refuse = false;
+    expect(await c.send(), isTrue);
+    expect(r.swarm.commands.last['recipientIds'], ['agent-builder']);
+    expect(r.swarm.commands.last['replyTo'], 'm1');
+  });
+
+  test('the mention picker reads the name typed after an @ at the end', () async {
+    final r = rig();
+    r.swarm.routes[messages] = (_) => {'messages': <Object>[], 'next': null};
+    final c = await open(r.reader);
+
+    c.draft = 'hey';
+    expect(c.mentionQuery, isNull);
+    c.draft = 'hey @';
+    expect(c.mentionQuery, '');
+    c.draft = '@No';
+    expect(c.mentionQuery, 'No');
+    c.draft = 'mail me@home';
+    expect(c.mentionQuery, isNull, reason: 'an @ inside a word is not one');
+    c.draft = 'hey @No then';
+    expect(c.mentionQuery, isNull);
+  });
+
+  test('a name picked for the @ being typed takes its place, and the post '
+      'goes to that agent', () async {
+    final r = rig();
+    r.swarm.routes[messages] = (_) => {'messages': <Object>[], 'next': null};
+    r.swarm.routes['/api/super-tabs/$tab/commands'] = (_) => {
+      'result': <String, dynamic>{},
+    };
+    final c = await open(r.reader);
+
+    c.draft = 'Can you check @No';
+    c.completeMention('agent-builder');
+    expect(c.draft, 'Can you check @Nova ');
+    expect(c.mentionQuery, isNull);
+
+    c.draft = '${c.draft}this';
+    await c.send();
+    expect(r.swarm.commands.single['recipientIds'], ['agent-builder']);
+  });
+
   test('a viewer, or an archived conversation, cannot post', () async {
     final viewer = rig(role: 'viewer');
     viewer.swarm.routes[messages] = (_) => {

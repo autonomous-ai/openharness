@@ -359,6 +359,59 @@ void main() {
     expect(r.asks.mentions, isEmpty);
   });
 
+  // Mira's run on the owner's iPhone, 2026-10-27: Done on a tag took 10
+  // seconds to register, with no sign the tap counted.
+  test('Done shows at once, and the tag goes the moment it is confirmed, '
+      'before the list is read again', () async {
+    final r = rig(mentions: 1);
+    r.swarm.routes['/api/super-tabs/$tab/mentions?state=waiting'] = (_) => {
+      'mentions': [mentionRow('m1')],
+    };
+    await r.reader.refresh();
+    await settle();
+    final confirmed = Completer<Object?>();
+    r.swarm.routes['/api/super-tabs/$tab/commands'] = (_) => confirmed.future;
+    final tag = r.asks.mentions.single;
+
+    final done = r.asks.done(tag);
+    await settle();
+    expect(r.asks.finishing(tag), isTrue);
+
+    // The list the backend reads back still has it for a moment.
+    confirmed.complete({'result': <String, dynamic>{}});
+    expect(await done, isTrue);
+
+    expect(r.asks.finishing(tag), isFalse);
+    expect(r.asks.mentions, isEmpty);
+    await r.asks.load();
+    expect(r.asks.mentions, isEmpty);
+  });
+
+  test(
+    'a Done that fails says so on that tag alone, and the tag stays',
+    () async {
+      final r = rig(decisions: 1, mentions: 1);
+      r.swarm.routes['/api/super-tabs/$tab/decisions?state=open'] = (_) => {
+        'decisions': [decisionRow('d1')],
+      };
+      r.swarm.routes['/api/super-tabs/$tab/mentions?state=waiting'] = (_) => {
+        'mentions': [mentionRow('m1')],
+      };
+      await r.reader.refresh();
+      await settle();
+      r.swarm.routes['/api/super-tabs/$tab/commands'] = (_) =>
+          throw const SuperTabFailure('MACHINE_UNAVAILABLE', 'No computer.');
+      final tag = r.asks.mentions.single;
+
+      expect(await r.asks.done(tag), isFalse);
+
+      expect(r.asks.finishing(tag), isFalse);
+      expect(r.asks.notDone(tag), 'Not marked done. Try again.');
+      expect(r.asks.mentions.single.id, 'm1');
+      expect(r.asks.error, isNull, reason: 'the decision shows no error of it');
+    },
+  );
+
   test(
     'a new ask that arrives later is news; the ones there at first are not',
     () async {
