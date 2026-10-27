@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import '../phone/settings_row.dart';
 import '../phone/tty.dart';
@@ -39,7 +40,7 @@ class SwarmNeedRow extends StatelessWidget {
     ),
     SwarmMentionNeed(:final mention) => SettingsRow(
       key: ValueKey('swarm-need-${need.key}'),
-      title: '${mention.leadName} tagged you',
+      title: swarmNeedTitle(need),
       detail: [
         _where(mention.projectName, mention.conversationTitle),
         if (mention.text.isNotEmpty) mention.text,
@@ -55,9 +56,7 @@ class SwarmNeedRow extends StatelessWidget {
     ),
     SwarmWorkNeed(:final work) => SettingsRow(
       key: ValueKey('swarm-need-${need.key}'),
-      title: work.status == 'blocked'
-          ? '${work.agentName} is stuck'
-          : '${work.agentName} needs you',
+      title: swarmNeedTitle(need),
       detail: [
         _where(work.project.name, work.conversation.label),
         ?work.question,
@@ -70,6 +69,61 @@ class SwarmNeedRow extends StatelessWidget {
 
 String _where(String project, String conversation) =>
     [project, conversation].where((part) => part.isNotEmpty).join(' · ');
+
+/// Who asks, in a few words: "River asks you", "Nova is stuck".
+String swarmNeedTitle(SwarmNeed need) => switch (need) {
+  SwarmDecisionNeed(:final decision) => '${decision.askerName} asks you',
+  SwarmMentionNeed(:final mention) => '${mention.leadName} tagged you',
+  SwarmWorkNeed(:final work) =>
+    work.status == 'blocked'
+        ? '${work.agentName} is stuck'
+        : '${work.agentName} needs you',
+};
+
+/// A need on Swarm Home while another is open there: who asks and one line
+/// of what, a tap to open it in its place. A decision whose answer is held
+/// for Undo says so.
+class SwarmNeedLine extends StatelessWidget {
+  const SwarmNeedLine({
+    super.key,
+    required this.session,
+    required this.need,
+    required this.onTap,
+  });
+
+  final SwarmSession session;
+  final SwarmNeed need;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    AppTheme.watch(context);
+    final line = switch (need) {
+      final SwarmDecisionNeed decision => switch (session.held(decision)) {
+        final choice? =>
+          'Sending “${_option(decision.decision.options, choice)}”…',
+        null => decision.decision.question,
+      },
+      SwarmMentionNeed(:final mention) =>
+        mention.text.isNotEmpty
+            ? mention.text
+            : _where(mention.projectName, mention.conversationTitle),
+      SwarmWorkNeed(:final work) =>
+        work.question ?? _where(work.project.name, work.conversation.label),
+    };
+    return SettingsRow(
+      title: swarmNeedTitle(need),
+      detail: line.isEmpty ? null : line,
+      detailLines: 1,
+      trailing: Icon(
+        LucideIcons.chevronDown300,
+        size: 20,
+        color: AppPalette.textFaint,
+      ),
+      onTap: onTap,
+    );
+  }
+}
 
 /// A decision asked of the person: who asks, the question, and its options.
 /// One tap on an option holds it for the session's Undo window, then sends
@@ -107,7 +161,7 @@ class SwarmDecisionCard extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           Text(
-            '${decision.askerName} asks you',
+            swarmNeedTitle(need),
             style: TextStyle(
               color: AppPalette.textPrimary,
               fontSize: 15,

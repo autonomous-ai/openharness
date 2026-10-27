@@ -17,17 +17,20 @@ import 'swarm_drawer.dart';
 import 'swarm_pm_chat.dart';
 import 'swarm_need_rows.dart';
 import 'swarm_project_page.dart';
+import 'swarm_row.dart';
 import 'swarm_session.dart';
+import 'swarm_team_line.dart';
 import 'team_glance.dart';
 
-/// Swarm on the phone: what every Swarm of the account asks of the person
-/// ("Needs you"), and the Swarms themselves, each project with its team in a
-/// line ([swarmNeedsFirst] orders the two).
+/// Swarm Home: what every Swarm of the account asks of the person ("Needs
+/// you"), one thing open at a time; Chat with PM, one per project; then the
+/// projects, each with its team in a line ([swarmNeedsFirst] orders needs and
+/// the rest). Its drawer ([SwarmDrawer]) is the way to everything else.
 ///
-/// Reached from the Swarm command in Find and from Home's Swarm mark, both
-/// offered only while Settings ▸ Experimental ▸ Swarm is on
-/// ([PhoneExperiment.swarm]). Reads the account's [SwarmSession] from the
-/// shell; with none, says why.
+/// The phone's Home while Settings ▸ Experimental ▸ Swarm is on
+/// ([PhoneExperiment.swarm]); pushed over another page it has a back button
+/// instead of the drawer. Reads the account's [SwarmSession] from the shell;
+/// with none, says why.
 class SwarmPage extends StatefulWidget {
   const SwarmPage({super.key, this.onHarness, this.onSettings});
 
@@ -69,11 +72,28 @@ class _SwarmPageState extends State<SwarmPage> {
         ),
       );
 
+  /// The need open on Home, by its key; null opens the first.
+  String? _focus;
+
+  /// The Chat with PM being opened, as `swarmId/projectId`, and why the last
+  /// one did not open.
+  String? _pmOpening;
+  String? _pmError;
+
   /// The person's Chat with PM of [projectId], created on first use.
   Future<void> _openPm(String swarmId, String projectId) async {
     final reader = _session?.inbox.reader(swarmId);
-    if (reader == null) return;
-    await openSwarmPm(context, reader, swarmId, projectId);
+    if (reader == null || _pmOpening != null) return;
+    setState(() {
+      _pmOpening = '$swarmId/$projectId';
+      _pmError = null;
+    });
+    final error = await openSwarmPm(context, reader, swarmId, projectId);
+    if (!mounted) return;
+    setState(() {
+      _pmOpening = null;
+      _pmError = error;
+    });
   }
 
   @override
@@ -143,6 +163,7 @@ class _SwarmPageState extends State<SwarmPage> {
 
   List<Widget> _body(BuildContext context, SwarmSession session, Tty tty) {
     final inbox = session.inbox;
+    final several = inbox.swarms.length > 1;
     final needs = [
       const SettingsCaption('Needs you'),
       if (inbox.needs.isEmpty)
@@ -155,21 +176,44 @@ class _SwarmPageState extends State<SwarmPage> {
           ),
         )
       else
-        SettingsGroup(
-          children: [
-            for (final need in inbox.needs)
-              SwarmNeedRow(
-                session: session,
-                need: need,
-                onOpen: (swarmId, conversationId) =>
-                    openSwarmConversation(context, swarmId, conversationId),
-              ),
-          ],
-        ),
+        SettingsGroup(children: _needs(context, session)),
+    ];
+    final pm = [
+      for (final swarm in inbox.swarms)
+        if (inbox.reader(swarm.id)?.snapshot case final snapshot?)
+          for (final project in snapshot.projects)
+            SettingsRow(
+              key: ValueKey('swarm-home-pm-${swarm.id}-${project.id}'),
+              title: project.name,
+              detail: switch ([
+                ?swarmPmName(snapshot, project),
+                if (several) swarm.name,
+              ]) {
+                [] => null,
+                final words => words.join(' · '),
+              },
+              value: _pmOpening == '${swarm.id}/${project.id}'
+                  ? 'Opening…'
+                  : null,
+              onTap: () => unawaited(_openPm(swarm.id, project.id)),
+            ),
     ];
     final swarms = [
+      if (pm.isNotEmpty) ...[
+        const SettingsCaption('Chat with PM'),
+        SettingsGroup(children: pm),
+      ],
+      if (_pmError case final error?)
+        Padding(
+          padding: const EdgeInsets.fromLTRB(4, 8, 4, 0),
+          child: Text(
+            error,
+            key: const ValueKey('swarm-pm-error'),
+            style: tty.style(color: tty.red, size: TtySize.meta),
+          ),
+        ),
       for (final swarm in inbox.swarms) ...[
-        SettingsCaption(swarm.name),
+        SettingsCaption(several ? swarm.name : 'Projects'),
         SettingsGroup(children: _projects(context, session, swarm.id)),
       ],
       if (inbox.loaded && inbox.swarms.isEmpty) ...[
@@ -197,6 +241,34 @@ class _SwarmPageState extends State<SwarmPage> {
     ];
   }
 
+  /// Every need, one open with its options or Done, the others a line each
+  /// that opens it in its place. The one open is the person's pick while it
+  /// waits, else the first: answered or done, the next one opens.
+  List<Widget> _needs(BuildContext context, SwarmSession session) {
+    final needs = session.inbox.needs;
+    final open = needs.firstWhere(
+      (need) => need.key == _focus,
+      orElse: () => needs.first,
+    );
+    return [
+      for (final need in needs)
+        if (need == open)
+          SwarmNeedRow(
+            session: session,
+            need: need,
+            onOpen: (swarmId, conversationId) =>
+                openSwarmConversation(context, swarmId, conversationId),
+          )
+        else
+          SwarmNeedLine(
+            key: ValueKey('swarm-need-row-${need.key}'),
+            session: session,
+            need: need,
+            onTap: () => setState(() => _focus = need.key),
+          ),
+    ];
+  }
+
   List<Widget> _projects(
     BuildContext context,
     SwarmSession session,
@@ -217,15 +289,13 @@ class _SwarmPageState extends State<SwarmPage> {
     }
     return [
       for (final project in snapshot.projects)
-        SettingsRow(
+        SwarmRow(
           key: ValueKey('swarm-project-$swarmId-${project.id}'),
           title: project.name,
-          detail: swarmTeamGlance(snapshot, projectId: project.id).line,
-          onTap: () => Navigator.of(context).push(
-            phoneRoute(
-              (_) => SwarmProjectPage(swarmId: swarmId, projectId: project.id),
-            ),
+          detail: SwarmTeamLine(
+            swarmTeamGlance(snapshot, projectId: project.id),
           ),
+          onTap: () => _openProject(context, swarmId, project.id),
         ),
     ];
   }

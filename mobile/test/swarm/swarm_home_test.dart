@@ -140,13 +140,17 @@ void main() {
     return fake;
   }
 
-  /// Swarm Home as the root of its own stack, Swarm on.
+  /// Swarm Home as the root of its own stack, Swarm on, on an iPhone's
+  /// screen.
   Future<SwarmHost> pump(
     WidgetTester tester,
     FakeSwarm fake, {
     VoidCallback? onHarness,
     void Function(BuildContext context)? onSettings,
   }) async {
+    tester.view.physicalSize = const Size(1170, 2532);
+    tester.view.devicePixelRatio = 3;
+    addTearDown(tester.view.reset);
     final features = ExperimentalFeaturesStore(storage: MemoryKeyValueStore())
       ..value = {PhoneExperiment.swarm};
     final account = ValueNotifier<String?>(me);
@@ -321,6 +325,164 @@ void main() {
     });
   });
 
+  group('Swarm Home', () {
+    testWidgets('Needs you first, then Chat with PM, then the projects', (
+      tester,
+    ) async {
+      await pump(tester, backend());
+
+      expect(key('swarm-menu'), findsOneWidget);
+      expect(key('tty-back'), findsNothing);
+      expect(
+        y(tester, 'swarm-need-decision:d1'),
+        lessThan(y(tester, 'swarm-home-pm-$tab-$project')),
+      );
+      expect(
+        y(tester, 'swarm-home-pm-$tab-$project'),
+        lessThan(y(tester, 'swarm-home-pm-$tab-$web')),
+      );
+      expect(
+        y(tester, 'swarm-home-pm-$tab-$web'),
+        lessThan(y(tester, 'swarm-project-$tab-$project')),
+      );
+      expect(
+        find.descendant(
+          of: key('swarm-home-pm-$tab-$project'),
+          matching: find.text('River'),
+        ),
+        findsOneWidget,
+        reason: 'the Product Manager it is with',
+      );
+      expect(
+        find.descendant(
+          of: key('swarm-project-$tab-$project'),
+          matching: find.byType(SwarmTeamLine),
+        ),
+        findsOneWidget,
+      );
+    });
+
+    testWidgets('Needs you opens one thing at a time; a line opens the next', (
+      tester,
+    ) async {
+      await pump(tester, backend());
+
+      expect(key('swarm-option-d1-0'), findsOneWidget);
+      expect(key('swarm-done-m1'), findsNothing);
+      expect(key('swarm-need-row-mention:m1'), findsOneWidget);
+      expect(
+        key('swarm-need-row-work:$tab:g1:attempt-g1:needs_human'),
+        findsOneWidget,
+      );
+      expect(find.text('River tagged you'), findsOneWidget);
+      expect(find.text('Nova needs you'), findsOneWidget);
+
+      await tester.tap(key('swarm-need-row-mention:m1'));
+      await tester.pumpAndSettle();
+
+      expect(key('swarm-done-m1'), findsOneWidget);
+      expect(key('swarm-option-d1-0'), findsNothing);
+      expect(key('swarm-need-row-decision:d1'), findsOneWidget);
+      expect(find.text('River asks you'), findsOneWidget);
+    });
+
+    testWidgets('one tap answers, held for Undo; then the next need opens', (
+      tester,
+    ) async {
+      final fake = backend();
+      var answered = false;
+      fake.routes['/api/super-tabs/$tab/commands'] = (body) {
+        if (body?['command']?['type'] == 'decision.answer') answered = true;
+        return {'result': <String, dynamic>{}};
+      };
+      final open = fake.routes['/api/super-tabs/$tab/decisions?state=open']!;
+      fake.routes['/api/super-tabs/$tab/decisions?state=open'] = (body) =>
+          answered ? {'decisions': <Object>[]} : open(body);
+      await pump(tester, fake);
+
+      await tester.tap(key('swarm-option-d1-0'));
+      await tester.pump();
+      expect(find.text('Sending “Yes”…'), findsOneWidget);
+      expect(key('swarm-undo-d1'), findsOneWidget);
+      await tester.pump(const Duration(seconds: 2));
+      expect(fake.commands, isEmpty, reason: 'still in its Undo window');
+
+      await tester.pump(const Duration(seconds: 2));
+      await tester.pumpAndSettle();
+      expect(fake.commands.single, {
+        'type': 'decision.answer',
+        'decisionId': 'd1',
+        'choice': 0,
+      });
+      expect(key('swarm-need-decision:d1'), findsNothing);
+      expect(key('swarm-done-m1'), findsOneWidget, reason: 'the tag is next');
+    });
+
+    testWidgets('Done marks a tag done', (tester) async {
+      final fake = backend();
+      await pump(tester, fake);
+      await tester.tap(key('swarm-need-row-mention:m1'));
+      await tester.pumpAndSettle();
+
+      await tester.tap(key('swarm-done-m1'));
+      await tester.pumpAndSettle();
+
+      expect(fake.commands.single, {'type': 'mention.done', 'mentionId': 'm1'});
+    });
+
+    testWidgets('nothing waiting says so, and the rest of Home stays', (
+      tester,
+    ) async {
+      final fake = backend();
+      fake.routes['/api/super-tabs/$tab/decisions?state=open'] = (_) => {
+        'decisions': <Object>[],
+      };
+      fake.routes['/api/super-tabs/$tab/mentions?state=waiting'] = (_) => {
+        'mentions': <Object>[],
+      };
+      fake.routes['/api/super-tabs/$tab/parts'] = (_) => firstLoad();
+      await pump(tester, fake);
+
+      expect(find.text('Nothing needs you.'), findsOneWidget);
+      expect(key('swarm-home-pm-$tab-$project'), findsOneWidget);
+      expect(key('swarm-project-$tab-$project'), findsOneWidget);
+    });
+
+    testWidgets('Chat with PM opens it; one not ready says so', (tester) async {
+      final fake = backend();
+      await pump(tester, fake);
+
+      await tester.tap(key('swarm-home-pm-$tab-$web'));
+      await tester.pumpAndSettle();
+      expect(fake.commands.single['type'], 'conversation.create');
+      expect(find.byType(SwarmConversationPage), findsNothing);
+      expect(key('swarm-pm-error'), findsOneWidget);
+      expect(
+        find.text('Chat with PM is not ready yet. Try again.'),
+        findsOneWidget,
+      );
+
+      await tester.tap(key('swarm-home-pm-$tab-$project'));
+      await tester.pumpAndSettle();
+      final page = tester.widget<SwarmConversationPage>(
+        find.byType(SwarmConversationPage),
+      );
+      expect((page.swarmId, page.conversationId), (tab, 'g-pm'));
+    });
+
+    testWidgets('a project opens its page', (tester) async {
+      await pump(tester, backend());
+
+      await tester.tap(key('swarm-project-$tab-$web'));
+      await tester.pumpAndSettle();
+
+      final page = tester.widget<SwarmProjectPage>(
+        find.byType(SwarmProjectPage),
+      );
+      expect((page.swarmId, page.projectId), (tab, web));
+    });
+  });
+
   group('the team line', () {
     testWidgets('down is red, dot and words; Needs you never shows it', (
       tester,
@@ -342,8 +504,9 @@ void main() {
             )
             .text
             .visitChildren((span) {
-              if (span is TextSpan && span.text == words)
+              if (span is TextSpan && span.text == words) {
                 found = span.style?.color;
+              }
               return true;
             });
         return found;

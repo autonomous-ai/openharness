@@ -152,9 +152,13 @@ void main() {
   Finder key(String value) => find.byKey(ValueKey(value));
 
   group('the Swarm page', () {
-    testWidgets('what needs the person comes first, then the Swarms', (
+    testWidgets('what needs the person comes first, then its projects', (
       tester,
     ) async {
+      // An iPhone's screen: all of Home at once.
+      tester.view.physicalSize = const Size(1170, 2532);
+      tester.view.devicePixelRatio = 3;
+      addTearDown(tester.view.reset);
       await pump(tester, backend(), const SwarmPage());
 
       expect(find.text('River asks you'), findsOneWidget);
@@ -164,13 +168,24 @@ void main() {
         tester.getTopLeft(find.text('River asks you')).dy,
         lessThan(tester.getTopLeft(key('swarm-project-$tab-$project')).dy),
       );
-      expect(find.text('phone swarm'), findsOneWidget, reason: 'its caption');
+      expect(
+        find.text('projects'),
+        findsOneWidget,
+        reason: 'one Swarm: its projects, not its name',
+      );
       expect(
         find.text('Open chat'),
         findsOneWidget,
         reason: 'the Naming System: a Swarm chat, not a conversation',
       );
-      expect(find.text('1 waiting'), findsOneWidget, reason: 'the team line');
+      expect(
+        find.descendant(
+          of: key('swarm-project-$tab-$project'),
+          matching: find.textContaining('1 waiting', findRichText: true),
+        ),
+        findsOneWidget,
+        reason: 'the team line',
+      );
     });
 
     testWidgets('an answer is held for Undo, and undone is never sent', (
@@ -280,6 +295,8 @@ void main() {
     testWidgets('a tag is marked done from its row', (tester) async {
       final fake = backend();
       await pump(tester, fake, const SwarmPage());
+      await tester.tap(key('swarm-need-row-mention:m1'));
+      await tester.pumpAndSettle();
 
       await tester.tap(key('swarm-done-m1'));
       await tester.pumpAndSettle();
@@ -291,6 +308,13 @@ void main() {
       tester,
     ) async {
       await pump(tester, backend(), const SwarmPage());
+      await tester.tap(find.text('Nova needs you'));
+      await tester.pumpAndSettle();
+      expect(
+        find.byType(SwarmConversationPage),
+        findsNothing,
+        reason: 'the first tap opens it on Home, where another was open',
+      );
 
       await tester.tap(find.text('Nova needs you'));
       await tester.pumpAndSettle();
