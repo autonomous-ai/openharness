@@ -1,45 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { parsePlanRequest, planSetup } from './planInput.js'
-import type { Policy } from './route.js'
+import { group, machine, NOW, policy, state, type Json } from './fixtures/planState.js'
 
-const NOW = Date.parse('2026-10-27T01:00:00Z')
-const policy: Policy = { version: 1, floor: { low: 1, medium: 2, high: 3 }, quotaReserve: 10, notes: '', localModels: { quality: 1, enabled: true }, models: [
-  { engine: 'claude', model: 'opus', effort: 'high', quality: 3, cost: 3, enabled: true },
-  { engine: 'codex', model: 'default', effort: 'default', quality: 3, cost: 2, enabled: true },
-  { engine: 'claude', model: 'sonnet', effort: 'medium', quality: 2, cost: 2, enabled: true },
-  { engine: 'claude', model: 'haiku', effort: 'auto', quality: 1, cost: 1, enabled: false },
-] }
-type Json = Record<string, unknown>
-
-/** A contributed machine as the status read gives it (a real reading, trimmed of fields the plan does not read). */
-function machine(id: string, extra: Json = {}, observation: Json = {}): Json {
-  return {
-    machineId: id, name: `${id}.local`, cwd: `/Users/x/.harness/cli/data/swarm-projects/tab`, engines: ['claude', 'codex', 'cursor'], maxAgents: 8,
-    scope: 'swarm', contributorId: 'owner', paused: false, availableSlots: 2, teamWork: { allowed: true }, ...extra,
-    observation: {
-      receivedAt: NOW - 5_000, tools: { git: true, node: true, gh: true, python3: true },
-      resources: { memoryTotalBytes: 68_719_476_736, memoryUsedBytes: 36_894_949_376, projectDiskFreeBytes: 132_155_797_504, os: 'macOS' },
-      quotas: [
-        { engine: 'claude', known: true, windows: [{ name: '5-hour', usedPercent: 2, resetsAt: '2026-10-27T03:30:00+00:00' }, { name: 'weekly', usedPercent: 30, resetsAt: '2026-11-01T19:00:00+00:00' }] },
-        { engine: 'codex', known: true, windows: [{ name: 'weekly', usedPercent: 40, resetsAt: 1793592000 }] },
-      ],
-      localModels: [], ...observation,
-    },
-  }
-}
-const task = { goal: 'g', changes: 'c', constraints: 'k', owns: ['x/**'] }
-function group(id: string, extra: Json = {}): Json {
-  return { id, projectId: 'p1', title: `Group ${id}`, leadId: 'lead1', agentIds: ['lead1'], archived: false, task, assignment: null, ...extra }
-}
-function state(extra: Json = {}): Json {
-  return {
-    id: 'tab', ownerId: 'owner', agents: [], starts: [], rules: [], localModels: { grid: 'swarm-g', enabled: true, ready: true },
-    projects: [{ id: 'p1', ownerId: 'owner', repository: { machineId: 'm1', cwd: '/repo', repositoryUrl: 'https://github.com/o/r' } }],
-    machines: [machine('m1'), machine('m2')],
-    conversations: [{ id: 'lead', leadId: 'lead1', title: 'Lead' }, group('g1'), group('g2')],
-    ...extra,
-  }
-}
 const setup = (s: Json, request = {}) => planSetup({ state: s, policy, leadId: 'lead1', request, githubApp: false, now: NOW })
 const taskOf = (s: ReturnType<typeof setup>, id: string) => (s.instance.tasks as Json[]).find(t => t.id === id)!
 
