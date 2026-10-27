@@ -651,6 +651,22 @@ describe('the morning digest', () => {
     expect((await cards()).map(m => (m.source as { kind: string }).kind)).toEqual(['standup', 'recap', 'standup'])
   })
 
+  it('counts on Monday\'s recap the decisions answered last week, as the leaderboard does', async () => {
+    const f = await swarm()
+    const projectId = (await f.timed.read(owner, f.tab)).state.projects![0]!.id
+    await f.execute({ type: 'project.digest', projectId, time: '03:00', timeZone: 'UTC' })
+    // Asked on Thursday 1 January 1970 at 01:00 and answered by the owner at 05:00: 1 point for the answer and 2 for the
+    // 4 hours waited.
+    await db.superTabDecision.create({ data: { id: `d1-${f.tab}`, tabId: f.tab, batchId: `d1-${f.tab}-ask`, projectId, conversationId: f.group,
+      assignmentId: null, personId: owner.sub, askerAgentId: f.lead, question: 'Ship it?', options: ['Yes', 'No'], recommended: 0, unblocks: 'the release',
+      createdAt: new Date(60 * 60_000), answeredAt: new Date(5 * 60 * 60_000), choice: 0, note: null } })
+    // Monday 5 January, 03:00 UTC.
+    f.clock.now = (4 * 24 + 3) * 60 * 60_000
+    await f.leadInbox()
+    const recap = (await db.superTabMessage.findMany({ where: { tabId: f.tab } })).find(m => (m.source as { kind?: string } | null)?.kind === 'recap')!
+    expect((recap.source as { card: { top: Array<{ personId: string; points: number }> } }).card.top).toEqual([{ personId: owner.sub, medal: 'gold', points: 3 }])
+  })
+
   it('lists work that shipped and was archived before the digest (#1757 review, 4)', async () => {
     const f = await swarm()
     const projectId = (await f.timed.read(owner, f.tab)).state.projects![0]!.id

@@ -3,7 +3,7 @@ import { agentDisplayName } from './agentNames.js'
 import { canReadProject, projectsOf, type SwarmProject } from './projects.js'
 import { reportGroups } from './projectUpdates.js'
 import type { ContributedMachine } from './machines.js'
-import { leaderboard } from './leaderboard/stats.js'
+import { leaderboard, type LeaderboardInput } from './leaderboard/stats.js'
 import { waitedOn } from './leaderboard/record.js'
 import type { Medal } from './leaderboard/contract.js'
 import { WEEK_MS, weekStart } from './leaderboard/week.js'
@@ -86,10 +86,14 @@ function cardMachines(state: SuperTabState, project: SwarmProject): ContributedM
   return (state.machines ?? []).filter(m => allSeeLead || m.scope === 'swarm')
 }
 
+/** The project's answered decisions and the waits they resolved, which the leaderboard counts in Unblocked (store.ts loads
+ *  them as the leaderboard read does, leaderboard/read.ts). */
+export type Decided = Pick<LeaderboardInput, 'decisions' | 'resolvedWaits'>
+
 /** Last week by the project's local date `on`, as the leaderboard counts it. */
-export function recapCard(state: SuperTabState, project: SwarmProject, on: string, now: number): RecapCard {
+export function recapCard(state: SuperTabState, project: SwarmProject, on: string, now: number, decided: Decided): RecapCard {
   const week = recapWeek(on)
-  const board = leaderboard({ state, groups: state.conversations, machines: cardMachines(state, project), decisions: [], resolvedWaits: [], projectId: project.id, week, now })
+  const board = leaderboard({ state, groups: state.conversations, machines: cardMachines(state, project), ...decided, projectId: project.id, week, now })
   const shipped = requests(state, project).filter(g => g.ledger?.shippedAt != null && g.ledger.shippedAt >= week && g.ledger.shippedAt < week + WEEK_MS)
     .map(g => shippedItem(state, g))
   return {
@@ -105,14 +109,14 @@ export function recapCard(state: SuperTabState, project: SwarmProject, on: strin
 
 /** The cards that go out with a project's digest on its local date `on`: the stand-up, and the recap on Mondays. Posted once
  *  each, since the digest itself goes out once a day (store.ts); `recipients` is empty, so no agent is woken by them. */
-export function morningCards(state: SuperTabState, project: SwarmProject, from: Author, on: string, since: number, now: number): MessageDraft[] {
+export function morningCards(state: SuperTabState, project: SwarmProject, from: Author, on: string, since: number, now: number, decided: Decided): MessageDraft[] {
   const post = (card: StandupCard | RecapCard, text: string): MessageDraft => ({ id: stableId(card.kind, state.id, project.id, on),
     conversationId: project.leadConversationId, author: from, text, replyTo: null, recipients: [], source: { kind: card.kind, projectId: project.id, on, card } })
   const standup = standupCard(state, project, on, since)
   const cards = [post(standup, `Stand-up for ${on}: ${standup.shipped.length} shipped, ${standup.inProgress.length} in progress, `
     + `${standup.blocked.length} blocked, ${standup.waiting.length} waiting on people.`)]
   if (recapDay(on)) {
-    const recap = recapCard(state, project, on, now)
+    const recap = recapCard(state, project, on, now, decided)
     const names = [...recap.thanks.personIds.map(id => state.people.find(p => p.id === id)?.email.split('@')[0] ?? id),
       ...recap.thanks.agentIds.map(id => agentDisplayName(state.agents, id) ?? id)]
     const thanks = names.length ? ` Thank you, ${names.length > 1 ? `${names.slice(0, -1).join(', ')} and ${names.at(-1)}` : names[0]}!` : ''

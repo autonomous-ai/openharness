@@ -17,7 +17,9 @@ import { bindSession, makeProjectPrivate } from './sessionScope.js'
 import { confidentialSessions, otherRegistrations, recordConfidential } from './confidential.js'
 import { answersRequest, noteProjectReports, projectUpdateRequest } from './projectUpdates.js'
 import { digestDue, digestRequest, digestSince } from './digest.js'
-import { morningCards, recapDay, recapWeek } from './morning.js'
+import { morningCards, recapDay, recapWeek, type Decided } from './morning.js'
+import { answeredDecisions, resolvedWaits } from './leaderboard/read.js'
+import { LEDGER_WEEKS, waitsNow } from './leaderboard/record.js'
 import { WEEK_MS } from './leaderboard/week.js'
 import { judgedMachines, loseTasks, sweepLiveness, SWEEP_EVERY_MS } from './liveness.js'
 import { clock, insertParts, lastChangedAt, loadActive, reassemble, split, type HeadData, type SwarmParts } from './parts/index.js'
@@ -1581,6 +1583,7 @@ export class SuperTabStore {
       // (#1757 review, 4): a due digest loads it.
       const led = ledProject(loaded.state, agentId)
       let asked: Array<{ conversationId: string; personId: string; count: number }> = []
+      let decided: Decided = { decisions: [], resolvedWaits: [] }
       const due = led && digestDue(led, this.now())
       if (led && due) {
         // A Monday's recap (morning.ts) sums last week against the week before.
@@ -1591,6 +1594,13 @@ export class SuperTabStore {
         asked = await waitingInProject(tx, tabId, led.id)
         const groupIds = [...new Set([...finished.map(g => g.key), ...asked.map(d => d.conversationId)])]
         if (groupIds.length) loaded = await this.ensure(tx, loaded, { groupIds })
+        // The recap counts answered decisions in Unblocked as the leaderboard read does (read/service.ts), on Mondays only.
+        if (recapDay(due)) {
+          const waits = loaded.state.conversations.filter(waitsNow).flatMap(g => g.ledger?.waiting ? [g.ledger.waiting.messageId] : [])
+          const [decisions, resolved] = await Promise.all([answeredDecisions(tx, tabId, led.id, this.now() - LEDGER_WEEKS * WEEK_MS),
+            resolvedWaits(tx, tabId, waits)])
+          decided = { decisions, resolvedWaits: resolved }
+        }
       }
       const state = structuredClone(loaded.state)
       author(state, await this.actor(tx, user, state, agentId), true)
@@ -1617,7 +1627,7 @@ export class SuperTabStore {
       const digest = digestRequest(state, target, this.now(), asked)
       if (digest) {
         const project = projectOf(state, digest.source!.projectId as string), on = digest.source!.on as string
-        written.push(digest, ...morningCards(state, project, digest.author, on, digestSince(project, this.now()), this.now()))
+        written.push(digest, ...morningCards(state, project, digest.author, on, digestSince(project, this.now()), this.now(), decided))
         project.digest = { ...project.digest!, lastOn: on, lastAt: this.now() }
       }
       // The poll also frees agents whose task the checks just lost, and any an older server left marked running (each poll; a

@@ -60,6 +60,8 @@ function fixture(): SuperTabState {
   } as SuperTabState
 }
 const lampOS = (state: SuperTabState) => state.projects!.find(p => p.id === 'p1')!
+/** No decision answered. */
+const none = { decisions: [], resolvedWaits: [] }
 const river: Author = { kind: 'agent', id: 'lead', name: 'Lead', displayName: 'River', membershipGeneration: 'g' }
 
 describe('the morning stand-up card', () => {
@@ -92,7 +94,7 @@ describe('the morning stand-up card', () => {
 
 describe('the weekly shipped-together recap', () => {
   it('sums last week from the leaderboard: what shipped, ask-to-shipped against the week before, medals, and everyone who helped', () => {
-    expect(recapCard(fixture(), lampOS(fixture()), '2026-11-02', MONDAY)).toEqual({
+    expect(recapCard(fixture(), lampOS(fixture()), '2026-11-02', MONDAY, none)).toEqual({
       kind: 'recap', week: WEEK,
       shipped: [
         { number: 1, title: 'Night shift', pullRequestUrl: 'https://github.com/example/lampos/pull/12', askedBy: 'dee', builtBy: 'nico', reviewedBy: ['rev'] },
@@ -105,11 +107,23 @@ describe('the weekly shipped-together recap', () => {
   })
 })
 
+describe('Unblocked on the recap, as the leaderboard counts it', () => {
+  it('counts a decision the person answered last week, its answer and the wait it ended', () => {
+    // Dee answered a decision asked in the shipped request's chat 4 hours after it was asked: 3 for the request, 1 for the
+    // answer and 2 for the 4 hours waited.
+    const asked = WEEK + 2 * DAY
+    const decided = { decisions: [{ batchId: 'b1', conversationId: 'g1', personId: 'dee', createdAt: asked, answeredAt: asked + 4 * HOUR }],
+      resolvedWaits: [] }
+    const state = fixture()
+    expect(recapCard(state, lampOS(state), '2026-11-02', MONDAY, decided).top.find(t => t.personId === 'dee')!.points).toBe(6)
+  })
+})
+
 describe('Lent on the recap, read by everyone in the project chat', () => {
   const machine = (machineId: string, agentHours: number, scope?: 'swarm'): ContributedMachine => ({ machineId, name: machineId, contributorId: 'dee',
     membershipGeneration: 'g', generation: 'g1', cwd: '/repo', ...scope ? { scope } : {}, engines: ['claude'], maxAgents: 2, paused: false,
     lent: [{ week: WEEK, agentMs: agentHours * HOUR }] })
-  const deePoints = (state: SuperTabState) => recapCard(state, lampOS(state), '2026-11-02', MONDAY).top.find(t => t.personId === 'dee')!.points
+  const deePoints = (state: SuperTabState) => recapCard(state, lampOS(state), '2026-11-02', MONDAY, none).top.find(t => t.personId === 'dee')!.points
 
   it('counts only machines every reader of the chat may see: a machine given to the Lead project alone is not', () => {
     const state = fixture()
@@ -133,13 +147,13 @@ describe('Lent on the recap, read by everyone in the project chat', () => {
     state.conversations = state.conversations.map(c => c.projectId === 'p1' ? { ...c, projectId: 'lead' } : c)
     const lead = state.projects.find(p => p.id === 'lead')!
     // 3 for the shipped request, 1 for the swarm machine's 10 hours and 3 for the Lead project's 30.
-    expect(recapCard(state, lead, '2026-11-02', MONDAY).top.find(t => t.personId === 'dee')!.points).toBe(7)
+    expect(recapCard(state, lead, '2026-11-02', MONDAY, none).top.find(t => t.personId === 'dee')!.points).toBe(7)
   })
 })
 
 describe('the cards posted with the morning digest', () => {
   it('posts one stand-up card a day into the project chat, for the people only', () => {
-    const cards = morningCards(fixture(), lampOS(fixture()), river, '2026-10-27', LAST, TUESDAY)
+    const cards = morningCards(fixture(), lampOS(fixture()), river, '2026-10-27', LAST, TUESDAY, none)
     expect(cards).toHaveLength(1)
     expect(cards[0]).toMatchObject({ id: stableId('standup', 'tab', 'p1', '2026-10-27'), conversationId: 'lead-p1', author: river, recipients: [], replyTo: null,
       source: { kind: 'standup', projectId: 'p1', on: '2026-10-27', card: { kind: 'standup', on: '2026-10-27' } } })
@@ -147,7 +161,7 @@ describe('the cards posted with the morning digest', () => {
   })
 
   it('adds the recap card on Monday, once for that week, thanking everyone by name', () => {
-    const cards = morningCards(fixture(), lampOS(fixture()), river, '2026-11-02', MONDAY - DAY, MONDAY)
+    const cards = morningCards(fixture(), lampOS(fixture()), river, '2026-11-02', MONDAY - DAY, MONDAY, none)
     expect(cards.map(c => c.source!.kind)).toEqual(['standup', 'recap'])
     expect(cards[1]).toMatchObject({ id: stableId('recap', 'tab', 'p1', '2026-11-02'), conversationId: 'lead-p1', recipients: [],
       source: { kind: 'recap', projectId: 'p1', on: '2026-11-02', card: { kind: 'recap', week: WEEK } } })
@@ -159,7 +173,7 @@ describe('the cards posted with the morning digest', () => {
     const state = fixture()
     lampOS(state).digest = { time: '08:00', timeZone: 'Pacific/Auckland', lastAt: MONDAY - 2 * DAY, lastOn: '2026-11-01' }
     const auckland = Date.UTC(2026, 10, 1, 19, 0)
-    const recap = morningCards(state, lampOS(state), river, '2026-11-02', auckland - DAY, auckland)[1]!
+    const recap = morningCards(state, lampOS(state), river, '2026-11-02', auckland - DAY, auckland, none)[1]!
     expect(recap.source).toMatchObject({ card: { kind: 'recap', week: WEEK } })
     expect(recap.text).toMatch(/^Shipped together, week of 2026-10-26: 2 shipped\./)
   })
