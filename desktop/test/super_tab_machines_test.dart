@@ -595,6 +595,17 @@ void main() {
       await unmount(tester, c);
     });
 
+    testWidgets('twenty: the list scrolls to the last agent', (tester) async {
+      final c = await mount(tester, 20);
+      await tester.tap(line);
+      await tester.pumpAndSettle();
+      final last = find.byKey(const ValueKey('super-machine-agent-m-a19'));
+      await tester.ensureVisible(last);
+      await tester.pumpAndSettle();
+      expect(last.hitTestable(), findsOneWidget);
+      await unmount(tester, c);
+    });
+
     testWidgets(
       'tapping the line lists every agent, Working, Waiting, then Idle, with name, role and status',
       (tester) async {
