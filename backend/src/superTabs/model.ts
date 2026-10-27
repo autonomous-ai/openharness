@@ -12,6 +12,8 @@ export interface Person {
   generation: string
   /** Their own short status (profile.ts); only Swarm members read it. */
   status?: import('./profile.js').PersonStatus
+  /** Their own avatar (profile.ts); only Swarm members read it. */
+  avatar?: import('./profile.js').Avatar
 }
 export interface AgentConfiguration {
   engine: string
@@ -60,6 +62,8 @@ export interface Agent {
   /** Set once its session is a Lead or in a private conversation, and kept until the session leaves: nobody but its
    *  machine's person watches it (projects.ts canWatchAgent). */
   confidential?: true
+  /** Set by its contributor or its project's Lead (profile.ts); absent shows the pattern Desktop draws from its name. */
+  avatar?: import('./profile.js').Avatar
 }
 export type AgentRole = 'builder' | 'reviewer'
 export const agentRole = (agent: Pick<Agent, 'role'>): AgentRole => agent.role ?? 'builder'

@@ -62,3 +62,61 @@ describe('status line', () => {
     expect(() => visibleState(f.state, stranger)).toThrow(expect.objectContaining({ code: 'FORBIDDEN' }))
   })
 })
+
+describe('avatars', () => {
+  const upload = { id: 'u1', url: 'https://cdn.example.test/super-tabs/tab/abc/avatar' }
+  const config = { engine: 'claude', model: 'opus', effort: 'high', contextWindow: null, engineVersion: null }
+  const agentFixture = () => {
+    const f = fixture()
+    f.invite()
+    const add = (harnessId: string, contributor: Extract<Actor, { kind: 'person' }>, lead = false) =>
+      f.run({ type: 'agent.add', conversationId: 'lead', machineId: 'host', harnessId, name: harnessId, configuration: config, lead }, contributor,
+        { contribution: { machineOwnerId: 'host-owner', contributorId: contributor.userId } }).result.agentId as string
+    const lead = add('lead-h', owner, true)
+    const worker = add('worker-h', peer)
+    const as = (agentId: string): Actor => ({ kind: 'agent', agentId, machineOwnerId: 'host-owner' })
+    return Object.assign(f, { lead, worker, as })
+  }
+
+  it('lets a person pick a preset, use their upload, and clear it', () => {
+    const f = fixture()
+    f.run({ type: 'member.avatar', avatar: { kind: 'preset', key: 'fox' } })
+    expect(f.member('owner')!.avatar).toEqual({ kind: 'preset', key: 'fox' })
+    f.run({ type: 'member.avatar', avatar: { kind: 'upload', id: 'u1' } }, owner, { avatarUpload: upload })
+    expect(f.member('owner')!.avatar).toEqual({ kind: 'upload', url: upload.url })
+    f.run({ type: 'member.avatar', avatar: null })
+    expect(f.member('owner')!.avatar).toBeUndefined()
+  })
+
+  it('refuses an upload the store did not find for this actor, and an unknown preset', () => {
+    const f = fixture()
+    expect(() => f.run({ type: 'member.avatar', avatar: { kind: 'upload', id: 'u1' } })).toThrow(expect.objectContaining({ code: 'AVATAR_UNAVAILABLE' }))
+    expect(() => f.run({ type: 'member.avatar', avatar: { kind: 'preset', key: 'https://evil.example/x.png' } } as unknown as Command)).toThrow()
+    expect(f.member('owner')!.avatar).toBeUndefined()
+  })
+
+  it('lets the project’s Lead or the agent’s contributor change an agent’s avatar, nobody else', () => {
+    const f = agentFixture()
+    const avatarOf = (id: string) => f.state.agents.find(a => a.id === id)!.avatar
+    f.run({ type: 'agent.avatar', agentId: f.worker, avatar: { kind: 'preset', key: 'owl' } }, f.as(f.lead))
+    expect(avatarOf(f.worker)).toEqual({ kind: 'preset', key: 'owl' })
+    f.run({ type: 'agent.avatar', agentId: f.worker, avatar: { kind: 'upload', id: 'u1' } }, peer, { avatarUpload: upload })
+    expect(avatarOf(f.worker)).toEqual({ kind: 'upload', url: upload.url })
+    expect(() => f.run({ type: 'agent.avatar', agentId: f.lead, avatar: { kind: 'preset', key: 'cat' } }, peer))
+      .toThrow(expect.objectContaining({ code: 'FORBIDDEN' }))
+    expect(() => f.run({ type: 'agent.avatar', agentId: f.worker, avatar: { kind: 'preset', key: 'cat' } }, f.as(f.worker)))
+      .toThrow(expect.objectContaining({ code: 'FORBIDDEN' }))
+    f.run({ type: 'agent.avatar', agentId: f.worker, avatar: null }, f.as(f.lead))
+    expect(avatarOf(f.worker)).toBeUndefined()
+  })
+
+  it('shows avatars to members only', () => {
+    const f = agentFixture()
+    f.run({ type: 'member.avatar', avatar: { kind: 'upload', id: 'u1' } }, owner, { avatarUpload: upload })
+    f.run({ type: 'agent.avatar', agentId: f.worker, avatar: { kind: 'upload', id: 'u1' } }, peer, { avatarUpload: upload })
+    const seen = visibleState(f.state, peer)
+    expect(seen.people.find(p => p.id === 'owner')!.avatar).toEqual({ kind: 'upload', url: upload.url })
+    expect(seen.agents.find(a => a.id === f.worker)!.avatar).toEqual({ kind: 'upload', url: upload.url })
+    expect(() => visibleState(f.state, stranger)).toThrow(expect.objectContaining({ code: 'FORBIDDEN' }))
+  })
+})

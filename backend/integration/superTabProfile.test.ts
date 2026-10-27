@@ -149,3 +149,33 @@ describe('avatar uploads', () => {
       .rejects.toMatchObject({ code: 'ATTACHMENT_UNAVAILABLE' })
   })
 })
+
+describe('setting avatars', () => {
+  const avatarOf = async (tab: string, key: string) =>
+    ((await read(tab, peer)).body.data.members as Array<{ key: string; data: { avatar?: unknown } }>).find(m => m.key === key)!.data.avatar
+
+  it('puts the person’s own upload on their member record, once', async () => {
+    const tab = await swarm()
+    const { avatar } = await upload(tab, image(64))
+    await run(tab, { type: 'member.avatar', avatar: { kind: 'upload', id: avatar.id } })
+    expect(await avatarOf(tab, owner.sub)).toEqual({ kind: 'upload', url: avatar.url })
+    await expect(run(tab, { type: 'member.avatar', avatar: { kind: 'upload', id: avatar.id } })).rejects.toMatchObject({ code: 'AVATAR_UNAVAILABLE' })
+  })
+
+  it('refuses someone else’s upload and a chat file', async () => {
+    const tab = await swarm()
+    const theirs = (await upload(tab, image(64), 'me.png', 'image/png', peer)).avatar
+    await expect(run(tab, { type: 'member.avatar', avatar: { kind: 'upload', id: theirs.id } })).rejects.toMatchObject({ code: 'AVATAR_UNAVAILABLE' })
+    const chat = await store.upload(owner, tab, 'lead', { name: 'shot.png', mime: 'image/png', body: (await import('node:stream')).Readable.from([Buffer.from(image(64))]) })
+    await expect(run(tab, { type: 'member.avatar', avatar: { kind: 'upload', id: chat.attachment.id } })).rejects.toMatchObject({ code: 'AVATAR_UNAVAILABLE' })
+    expect(await avatarOf(tab, owner.sub)).toBeUndefined()
+  })
+
+  it('lets only one of two commands racing for the same upload take it', async () => {
+    const tab = await swarm()
+    const { avatar } = await upload(tab, image(64))
+    const results = await Promise.allSettled([1, 2].map(() => run(tab, { type: 'member.avatar', avatar: { kind: 'upload', id: avatar.id } })))
+    expect(results.filter(r => r.status === 'fulfilled')).toHaveLength(1)
+    expect(await db.superTabAttachment.findUnique({ where: { id: avatar.id } })).toMatchObject({ usedBy: expect.any(String) })
+  })
+})

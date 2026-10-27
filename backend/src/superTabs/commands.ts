@@ -15,7 +15,7 @@ import { TERMINAL_KEYS, terminalAlert, terminalRequest, terminalResult, type Ter
 import { loseTasks, renewLease, renewOwnTask } from './liveness.js'
 import { credentialResult, redactCredentials, type CredentialKind } from './credentials.js'
 import { dirtyGroups, reportGroups, summarize } from './projectUpdates.js'
-import { setStatus, statusSchema } from './profile.js'
+import { avatarChoice, setAgentAvatar, setMemberAvatar, setStatus, statusSchema, type AvatarUpload } from './profile.js'
 import { agentKind, agentProjectId, audienceOf, agentSetRole, deleteProject, markConfidential, requireSingleRegistration, groupProject, inviteLanding, ledProject, manageProject, MAX_ROLES, mutableProjects, placeRules, projectMembers, projectOf, projectRules, projectsOf, readAgent, readConversation, readProject, roleVersion, sameProject, sharedWithLeads, SKILL_SET_NAMES, skillSetOf, type ProjectRole, type RoleKind, type SwarmProject } from './projects.js'
 
 const id = z.string().min(1).max(160).regex(/^[A-Za-z0-9_-]+$/)
@@ -122,6 +122,8 @@ export const commandSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('invite.accept'), inviteId: id }).strict(),
   z.object({ type: z.literal('member.remove'), userId: id }).strict(),
   z.object({ type: z.literal('member.status'), status: statusSchema.nullable() }).strict(),
+  z.object({ type: z.literal('member.avatar'), avatar: avatarChoice }).strict(),
+  z.object({ type: z.literal('agent.avatar'), agentId: id, avatar: avatarChoice }).strict(),
   // Text may be empty when the message carries files; applyCommand checks that one of them is there.
   z.object({ type: z.literal('message.send'), conversationId: id, text: z.string().trim().max(32_000), replyTo: id.nullable(), recipientIds: z.array(id).max(16),
     attachmentIds: z.array(id).max(MAX_ATTACHMENTS).optional(), mentions: z.array(id).max(MAX_MENTIONS).optional(), agentOnly: z.literal(true).optional() }).strict(),
@@ -225,6 +227,8 @@ export interface CommandContext {
   delivery?: { id: string; conversationId: string; agentId: string; messageId: string; text: string; attachments?: Attachment[] }
   /** The files `message.send` names, each checked by the store: uploaded by this actor to this conversation, and unused. */
   attachments?: Attachment[]
+  /** The avatar upload `member.avatar` or `agent.avatar` names, checked by the store the same way (profile.ts). */
+  avatarUpload?: AvatarUpload
   /** Route decisions this tab recorded in the last hour, counted by the store. */
   recentRoutes?: number
   /** The decision a command names, read from SuperTabRouteDecision by the store. */
@@ -1336,6 +1340,12 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       break
     case 'member.status':
       setStatus(state, actor, command.status, context.now)
+      break
+    case 'member.avatar':
+      setMemberAvatar(state, actor, command.avatar, context.avatarUpload)
+      break
+    case 'agent.avatar':
+      setAgentAvatar(state, actor, command.agentId, command.avatar, context.avatarUpload)
       break
     case 'member.remove': {
       if (actor.kind !== 'person' || (actor.userId !== state.ownerId && actor.userId !== command.userId)) {

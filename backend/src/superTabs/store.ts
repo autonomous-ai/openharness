@@ -8,6 +8,7 @@ import { machineShareGrant, sharedVia } from '../lib/machineSharePolicy.js'
 import { machineBillingAllowsDataPlane } from '../lib/billingState.js'
 import { applyCommand, authorizeCommandAccess, operationSchema, PAIR_CHAIN_LIMIT, postable, type Command, type CommandContext } from './commands.js'
 import { redactCredentials } from './credentials.js'
+import type { AvatarUpload } from './profile.js'
 import { attachmentMime, attachmentName, AttachmentTooLarge, AVATAR_PURPOSE, AVATAR_TYPES, checkedType, MAX_ATTACHMENT_BYTES, MAX_AVATAR_BYTES, objectKeyFor, peekType, publicUrl,
   type Attachment, type Attachments } from './attachments.js'
 import { randomBytes } from 'node:crypto'
@@ -722,6 +723,9 @@ export class SuperTabStore {
       }
       if (command.type === 'mention.done') context.mention = await readMention(tx, tabId, command.mentionId)
       if (command.type === 'message.send' && command.attachmentIds?.length) context.attachments = await this.sendable(tx, tabId, actor, command)
+      if ((command.type === 'member.avatar' || command.type === 'agent.avatar') && command.avatar?.kind === 'upload') {
+        context.avatarUpload = await this.avatarUpload(tx, tabId, actor, command.avatar.id)
+      }
       if (command.type === 'route.record') context.recentRoutes = await recentRoutes(tx, tabId, context.now)
       if (TEAM_WORK_COMMANDS.has(command.type)) {
         context.teamMachines = await this.teamMachines(tx, original)
@@ -910,6 +914,12 @@ export class SuperTabStore {
       if (command.type === 'message.send' && actor.kind === 'person') await resolveByReply(tx, tabId, command.conversationId, actor.userId, context.now)
       await writeMentions(tx, tabId, effects.state, effects.messages, context.now)
       if (command.type === 'mention.done') await markDone(tx, tabId, command.mentionId, context.mention!.personId, context.now)
+      if (context.avatarUpload) {
+        // Conflicts with a concurrent use of the same picture: only one command can take it.
+        const taken = await tx.superTabAttachment.updateMany({ where: { tabId, id: context.avatarUpload.id, purpose: AVATAR_PURPOSE, ...unused },
+          data: { usedBy: receiptId } })
+        if (taken.count !== 1) fail('AVATAR_UNAVAILABLE', 'Upload this picture again before using it.', 400)
+      }
       if (context.attachments?.length) {
         // Conflicts with a concurrent send of the same file: only one message can take it.
         const taken = await tx.superTabAttachment.updateMany({ where: { tabId, id: { in: context.attachments.map(a => a.id) }, ...unused },
@@ -1104,6 +1114,13 @@ export class SuperTabStore {
       if (row.usedBy) fail('ATTACHMENT_USED', 'This file was already sent. Attach it again to send it in another message.')
       return { id: row.id, name: row.name, mime: row.mime, size: row.size, url: publicUrl(attachments.publicBase, row.objectKey) }
     })
+  }
+
+  /** The avatar upload a command names, when it is this actor's, an avatar and unused; otherwise the command refuses it. */
+  private async avatarUpload(tx: Transaction, tabId: string, actor: Actor, id: string): Promise<AvatarUpload | undefined> {
+    const attachments = this.attachments ?? fail('ATTACHMENTS_UNAVAILABLE', 'Avatars are not available on this server.', 503)
+    const row = await tx.superTabAttachment.findFirst({ where: { tabId, id, actorKey: actorKey(actor), purpose: AVATAR_PURPOSE, ...unused } })
+    return row ? { id: row.id, url: publicUrl(attachments.publicBase, row.objectKey) } : undefined
   }
 
   /** Keeps the project's stored texts equal to its custom set: the roles the command wrote, nothing for roles it dropped. */
