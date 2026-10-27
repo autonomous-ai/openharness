@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:fake_async/fake_async.dart';
+import 'package:flutter/widgets.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness_mobile/swarm/swarm_conversation.dart';
 import 'package:harness_mobile/swarm/swarm_inbox.dart';
@@ -268,6 +269,174 @@ void main() {
     expect(news.single, isA<SwarmWorkNeed>());
     await i.refresh();
     expect(news, hasLength(1), reason: 'still waiting is not news again');
+  });
+
+  group('notifies only when what it shows changed', () {
+    /// Swarm `a` with work waiting on the person and one open decision;
+    /// [groups] answers each change read.
+    FakeSwarm waiting({List<Map<String, dynamic>> Function()? groups}) {
+      const derived = {'decisionsWaiting': 1, 'mentionsWaiting': 0};
+      final fake = backend(
+        {
+          'a': [groupData('g1', title: 'Login', status: 'needs_human')],
+        },
+        derived: {'a': derived},
+      );
+      fake.routes['/api/super-tabs/a/changes'] = (_) => changes(
+        cursor: 'c2',
+        groups: groups?.call() ?? const [],
+        derived: derived,
+      );
+      fake.routes['/api/super-tabs/a/decisions?state=open'] = (_) => {
+        'decisions': [
+          {
+            'id': 'd1',
+            'conversationId': 'g1',
+            'question': 'Ship it?',
+            'options': ['Yes', 'No'],
+          },
+        ],
+      };
+      fake.routes['/api/super-tabs/a/mentions?state=waiting'] = (_) => {
+        'mentions': <Object>[],
+      };
+      return fake;
+    }
+
+    // Every 15-second poll rebuilt Home, the drawer and Project, twice or
+    // more, with nothing new (audit of 44d284f65, items 4 and 5).
+    test('a poll that finds everything as it was notifies nothing', () async {
+      final i = inbox(waiting());
+      await i.refresh();
+      await settle();
+      expect(i.needs, hasLength(2));
+      final needs = i.needs;
+      var notifies = 0;
+      i.addListener(() => notifies++);
+
+      await i.refresh();
+      await settle();
+      await i.refresh();
+      await settle();
+
+      expect(notifies, 0);
+      expect(i.needs, same(needs));
+    });
+
+    test('a poll that changes a Swarm notifies once', () async {
+      var title = 'Login';
+      final i = inbox(
+        waiting(
+          groups: () => [
+            part('g1', 9, groupData('g1', title: title, status: 'needs_human')),
+          ],
+        ),
+      );
+      await i.refresh();
+      await settle();
+      var notifies = 0;
+      i.addListener(() => notifies++);
+
+      title = 'Login on the phone';
+      await i.refresh();
+      await settle();
+
+      expect(notifies, 1);
+      expect(
+        i.needs.whereType<SwarmWorkNeed>().single.work.conversation.title,
+        'Login on the phone',
+      );
+    });
+
+    test('still no computer is told once', () async {
+      final fake = FakeSwarm();
+      fake.routes['/api/super-tabs/list'] = (_) => throw const SuperTabFailure(
+        'MACHINE_UNAVAILABLE',
+        'Connect one of your computers to open Swarm.',
+      );
+      final i = inbox(fake);
+      var notifies = 0;
+      i.addListener(() => notifies++);
+
+      await i.refresh();
+      await i.refresh();
+      await i.refresh();
+
+      expect(i.noComputer, isTrue);
+      expect(notifies, 1);
+    });
+
+    test('a computer back after none is told', () async {
+      final fake = backend({'a': []});
+      final listed = fake.routes['/api/super-tabs/list']!;
+      var away = true;
+      fake.routes['/api/super-tabs/list'] = (q) => away
+          ? throw const SuperTabFailure('MACHINE_UNAVAILABLE', 'No computer.')
+          : listed(q);
+      final i = inbox(fake);
+      await i.refresh();
+      var notifies = 0;
+      i.addListener(() => notifies++);
+
+      away = false;
+      await i.refresh();
+      await settle();
+
+      expect(i.noComputer, isFalse);
+      expect(i.loaded, isTrue);
+      expect(notifies, greaterThan(0));
+    });
+
+    test("a Swarm's asks ending their loading are told", () async {
+      final fake = waiting();
+      final open = Completer<Object?>();
+      fake.routes['/api/super-tabs/a/decisions?state=open'] = (_) =>
+          open.future;
+      final i = inbox(fake);
+      await i.refresh();
+      await settle();
+      expect(i.asks('a')!.loading, isTrue);
+      var notifies = 0;
+      i.addListener(() => notifies++);
+
+      open.complete({'decisions': <Object>[]});
+      await settle();
+
+      expect(i.asks('a')!.loading, isFalse);
+      expect(notifies, 1);
+    });
+
+    testWidgets('a screen over it builds once per change, not once per poll', (
+      tester,
+    ) async {
+      final i = inbox(waiting());
+      var builds = 0;
+      await tester.pumpWidget(
+        ListenableBuilder(
+          listenable: i,
+          builder: (_, _) {
+            builds++;
+            return Text('${i.needs.length}', textDirection: TextDirection.ltr);
+          },
+        ),
+      );
+      Future<void> poll() async {
+        unawaited(i.refresh());
+        for (var n = 0; n < 20; n++) {
+          await tester.pump();
+        }
+      }
+
+      await poll();
+      final afterFirst = builds;
+      expect(find.text('2'), findsOneWidget);
+
+      await poll();
+      await poll();
+      await poll();
+
+      expect(builds, afterFirst);
+    });
   });
 
   test('without a computer to ask, it says so', () async {
