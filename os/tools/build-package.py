@@ -14,7 +14,9 @@ import tempfile
 
 
 # dnsmasq: NetworkManager's shared mode hands the setup hotspot's phone an address with it.
-DEPENDENCIES = ('nodejs-lts-jod', 'tmux', 'foot', 'gtklock', 'grim', 'slurp', 'dnsmasq')
+# github-cli (gh) and sound-theme-freedesktop (foot.ini's bell): for a computer installed before they were
+# in the image (packages.x86_64) to get them with an update.
+DEPENDENCIES = ('nodejs-lts-jod', 'tmux', 'foot', 'gtklock', 'grim', 'slurp', 'dnsmasq', 'github-cli', 'sound-theme-freedesktop')
 
 
 def package_info(version, timestamp, size, compositor_dependencies=()):
