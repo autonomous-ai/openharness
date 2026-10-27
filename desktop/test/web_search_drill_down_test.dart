@@ -11,6 +11,7 @@ import 'package:harness/screens/swarm_screen.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/state/swarm_search.dart';
 import 'package:harness/web/shell/web_chrome.dart';
+import 'package:harness/widgets/desktop_search_panel.dart';
 import 'package:harness/widgets/machine_picker_extras.dart';
 import 'package:harness/widgets/machine_picker_form.dart';
 import 'package:harness/widgets/swarm_switcher.dart';
@@ -384,6 +385,21 @@ void main() {
       expect(box.size.height, greaterThanOrEqualTo(44), reason: '$element');
     }
     await _close(tester);
+  });
+
+  testWidgets('a wide window\'s search reads to a screen reader as before', (
+    tester,
+  ) async {
+    final semantics = tester.ensureSemantics();
+    await _openSearch(tester, const Size(1280, 800));
+    // The pager's own focus is for keys only: wrapping the panel must not
+    // make the dialog around it a focusable node of its own.
+    expect(
+      tester.getSemantics(find.byType(DesktopSearchPanel)),
+      isNot(isSemantics(isFocusable: true)),
+    );
+    await _close(tester);
+    semantics.dispose();
   });
 
   for (final (name, size, web) in [

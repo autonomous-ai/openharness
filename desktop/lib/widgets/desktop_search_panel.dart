@@ -904,8 +904,10 @@ class _SearchPagesState extends State<_SearchPages>
       _slide.value = 0;
     }
     final parent = KeymapRegion.of(context);
+    // Keys only: it adds nothing to the accessibility tree.
     final panel = Focus(
       focusNode: _keys,
+      includeSemantics: false,
       child: widget.builder(context, _phone ? this : null),
     );
     if (parent == null) return panel;
