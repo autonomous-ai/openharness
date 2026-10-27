@@ -1,6 +1,7 @@
 /**
  * A Harness OS computer, managed from the owner's phone (`os_device`): whether this computer runs Harness OS,
- * whether an update is ready and starting it, the Wi-Fi networks it sees, and moving it to another one.
+ * whether an update is ready and starting it, the Wi-Fi networks it sees, and moving it to another one, and
+ * the GitHub account its agents use (`github`: a device code entered on the phone, no screen needed here).
  *
  * Owner only. Everything it runs is bounded in time and output, and what must outlive this daemon runs
  * detached in a process group of its own: the update restarts the daemon, and joining another Wi-Fi drops the
@@ -35,7 +36,12 @@ export const NMCLI_TIMEOUT_MS = 10_000
 export const SCAN_TIMEOUT_MS = 20_000
 /** The disk's key slots are slow to change on purpose (a passphrase is hashed for seconds), twice. */
 export const PASSWORD_TIMEOUT_MS = 90_000
-const ACTIONS = ['update', 'wifi_scan', 'wifi_join', 'wifi_result', 'sign_out', 'password', 'ssh']
+/** The GitHub CLI, in the image and a dependency of the harness-os package (os/tools/build-package.py). */
+export const GH = '/usr/bin/gh'
+export const GH_TIMEOUT_MS = 15_000
+/** How long a GitHub sign-in waits for its code to be entered: GitHub's device codes last 15 minutes. */
+export const GITHUB_SIGN_IN_MS = 15 * 60_000
+const ACTIONS = ['update', 'wifi_scan', 'wifi_join', 'wifi_result', 'sign_out', 'password', 'ssh', 'github']
 /** The most output a command run here may print before it is stopped. */
 export const MAX_OUTPUT = 1024 * 1024
 
@@ -51,7 +57,68 @@ export interface OsDeviceDeps {
   exec?: (file: string, args: readonly string[], options: ExecOptions) => Promise<string>
   /** Start [file] detached from this daemon (its own process group, no output), [input] written to its stdin. */
   spawnDetached?: (file: string, args: readonly string[], input?: string) => void
+  /** Start `gh auth login`'s device flow (a code to enter at github.com/login/device). */
+  githubSignIn?: () => GithubSignIn
   now?: () => number
+}
+
+/** A `gh auth login` under way: the code it shows, and it ending once the code was entered (or refused). */
+export interface GithubSignIn {
+  code: Promise<{ code: string; url: string }>
+  done: Promise<void>
+  stop: () => void
+}
+
+/** The code and the page in `gh auth login --web`'s output: "First copy your one-time code: AB12-CD34", or
+ *  "One-time code (AB12-CD34) copied to clipboard" where it found a clipboard. */
+export function deviceCodeOf(output: string): { code: string; url: string } | null {
+  const code = /one-time code\W*([A-Z0-9]{4}-[A-Z0-9]{4})/i.exec(output)?.[1]
+  if (!code) return null
+  return { code, url: /https:\/\/\S+\/login\/device/.exec(output)?.[0] ?? 'https://github.com/login/device' }
+}
+
+/** The account `gh` uses on github.com, from `gh auth status --json hosts`; null when signed out or its
+ *  token no longer works. */
+export function githubLoginOf(out: string): string | null {
+  const parsed: unknown = JSON.parse(out)
+  const hosts = record(parsed) && record(parsed.hosts) ? parsed.hosts : {}
+  const accounts = Array.isArray(hosts['github.com']) ? hosts['github.com'] : []
+  const active = accounts.find((a: unknown) => record(a) && a.active === true)
+  return record(active) && active.state === 'success' && typeof active.login === 'string' ? active.login : null
+}
+
+/** `gh auth login`'s device flow, bounded by GITHUB_SIGN_IN_MS. BROWSER=true: the page opens on the phone,
+ *  not on this computer's screen; its stdin closed, it asks nothing and prints the code. Without the
+ *  screen's display either: the code is the phone's to copy, not this computer's clipboard. */
+export function githubDeviceSignIn(): GithubSignIn {
+  const { WAYLAND_DISPLAY: _wayland, DISPLAY: _x11, ...env } = process.env
+  const child = spawn(GH, ['auth', 'login', '--hostname', 'github.com', '--git-protocol', 'https', '--web', '--skip-ssh-key'],
+    { stdio: ['ignore', 'pipe', 'pipe'], env: { ...env, BROWSER: 'true', GH_PROMPT_DISABLED: '1' } })
+  let output = ''
+  let shown: (value: { code: string; url: string }) => void
+  let failed: (error: Error) => void
+  const code = new Promise<{ code: string; url: string }>((resolve, reject) => { shown = resolve; failed = reject })
+  const read = (chunk: Buffer): void => {
+    if (output.length < MAX_OUTPUT) output += chunk.toString('utf8')
+    const found = deviceCodeOf(output)
+    if (found) shown(found)
+  }
+  child.stdout!.on('data', read)
+  child.stderr!.on('data', read)
+  const timer = setTimeout(() => child.kill('SIGKILL'), GITHUB_SIGN_IN_MS)
+  const done = new Promise<void>((resolve, reject) => {
+    child.on('error', (error) => { clearTimeout(timer); failed(error); reject(error) })
+    child.on('close', (status) => {
+      clearTimeout(timer)
+      const error = new Error(output.trim().split('\n').pop()?.slice(0, 200) || `gh auth login exited ${status}`)
+      failed(error)
+      if (status === 0) resolve(); else reject(error)
+    })
+  })
+  // Each read on its own: a code never shown, or a sign-in nobody waits on, is not an unhandled rejection.
+  code.catch(() => {})
+  done.catch(() => {})
+  return { code, done, stop: () => { clearTimeout(timer); child.kill('SIGKILL') } }
 }
 
 /** Run a command, bounded in time and output (core/AGENTS.md rule 4). */
@@ -162,8 +229,14 @@ export function startOsDevice(_core: CoreApi, deps: OsDeviceDeps = {}): ServiceR
   const read = deps.readFile ?? ((path: string) => readFile(path, 'utf8'))
   const exec = deps.exec ?? execBounded
   const detached = deps.spawnDetached ?? spawnDetached
+  const startSignIn = deps.githubSignIn ?? githubDeviceSignIn
   const now = deps.now ?? Date.now
   let updateStartedAt: number | null = null
+  /** The GitHub sign-in waiting for its code, and why the last one ended without signing in. */
+  let signingIn: { run: GithubSignIn; code: string; url: string } | null = null
+  let signInError: string | null = null
+  /** A sign-in started and not yet showing its code. */
+  let starting: Promise<void> | null = null
 
   const harnessOs = (): boolean => env.HARNESS_OS === '1' || exists(LIVE_UPDATE)
 
@@ -185,7 +258,7 @@ export function startOsDevice(_core: CoreApi, deps: OsDeviceDeps = {}): ServiceR
     ])
     // Encrypted, it waits for its password at every start (installer.py: rd.luks.name=).
     // features: what this daemon does for a phone beyond the update and the Wi-Fi.
-    return { harnessOs: true, update, wifi: { ssid }, hotspot, encrypted: /(^|\s)rd\.luks\.name=/.test(cmdline), features: ['sign_out', 'password', 'ssh'] }
+    return { harnessOs: true, update, wifi: { ssid }, hotspot, encrypted: /(^|\s)rd\.luks\.name=/.test(cmdline), features: ['sign_out', 'password', 'ssh', 'github'] }
   }
 
   const update = (payload: Payload): Payload => {
@@ -247,6 +320,64 @@ export function startOsDevice(_core: CoreApi, deps: OsDeviceDeps = {}): ServiceR
     return parsed
   }
 
+  /** The GitHub account this computer's `gh` (and git, through it) uses, for the agents to clone, push and
+   *  open pull requests with. `{ login }`, with the code to enter while a sign-in waits for it. */
+  const githubStatus = async (): Promise<Payload> => {
+    if (!exists(GH)) return { error: 'GH_MISSING', message: 'The GitHub CLI is not on this computer yet: update it first.' }
+    const login = githubLoginOf(await exec(GH, ['auth', 'status', '--json', 'hosts'], { timeout: GH_TIMEOUT_MS }))
+    return {
+      login,
+      ...(signingIn && !login ? { signingIn: { code: signingIn.code, url: signingIn.url } } : {}),
+      ...(signInError && !login && !signingIn ? { signInError } : {}),
+    }
+  }
+
+  /** A device sign-in started, and answered with its code once `gh` shows it; the one already waiting
+   *  answered again. Signed in, git is set up to use the account (`gh auth setup-git`). */
+  const githubSignIn = async (): Promise<Payload> => {
+    if (!exists(GH)) return githubStatus()
+    // A second ask while the first waits for its code (a phone asking again): the same sign-in, not another.
+    if (!signingIn) {
+      starting ??= startGithubSignIn().finally(() => { starting = null })
+      await starting
+    }
+    return githubStatus()
+  }
+
+  /** `gh auth login` started and kept once it shows its code; failed when it shows none in GH_TIMEOUT_MS. */
+  const startGithubSignIn = async (): Promise<void> => {
+    const run = startSignIn()
+    signInError = null
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const shown = await Promise.race([run.code, new Promise<null>((resolve) => { timer = setTimeout(() => resolve(null), GH_TIMEOUT_MS) })])
+      .finally(() => clearTimeout(timer))
+    if (!shown) {
+      run.stop()
+      throw new Error('gh auth login did not show a code')
+    }
+    console.log('[os-device] github sign-in started')
+    signingIn = { run, ...shown }
+    run.done.then(async () => {
+      await exec(GH, ['auth', 'setup-git', '--hostname', 'github.com'], { timeout: GH_TIMEOUT_MS })
+        .catch((error: unknown) => console.error('[os-device] gh auth setup-git failed:', short(error)))
+      console.log('[os-device] github signed in')
+    }, (error: unknown) => {
+      if (signingIn?.run === run) signInError = short(error)
+    }).finally(() => { if (signingIn?.run === run) signingIn = null })
+  }
+
+  /** Signed out of GitHub here: the account's token taken off this computer, a sign-in waiting stopped. */
+  const githubSignOut = async (): Promise<Payload> => {
+    if (signingIn) { signingIn.run.stop(); signingIn = null }
+    signInError = null
+    const status = await githubStatus()
+    if (typeof status.login === 'string') {
+      console.log('[os-device] github sign-out')
+      await exec(GH, ['auth', 'logout', '--hostname', 'github.com', '--user', status.login], { timeout: GH_TIMEOUT_MS })
+    }
+    return githubStatus()
+  }
+
   return {
     os_device: async (payload, asker) => {
       if (!asker.owner) return { error: 'OWNER_REQUIRED' }
@@ -261,6 +392,11 @@ export function startOsDevice(_core: CoreApi, deps: OsDeviceDeps = {}): ServiceR
         if (action === 'sign_out') return signOut()
         if (action === 'password') return await password(payload)
         if (action === 'ssh') return await ssh(payload)
+        if (action === 'github') {
+          if (payload.state === 'sign_in') return await githubSignIn()
+          if (payload.state === 'sign_out') return await githubSignOut()
+          return await githubStatus()
+        }
         return await result()
       } catch (error) {
         // Never the payload: it may hold a Wi-Fi password.
