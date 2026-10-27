@@ -55,7 +55,8 @@ swarmProjectWork(
 
 /// One project: its team in a line ([swarmTeamLine]), Chat with PM and the
 /// Lead's chat pinned first, then its work by latest activity, older work
-/// folded under "Older".
+/// folded under "Older" — read from the Swarm's closed work when opened, as
+/// no first load has it ([SwarmReader.loadDormant]).
 class SwarmProjectPage extends StatefulWidget {
   const SwarmProjectPage({
     super.key,
@@ -72,7 +73,7 @@ class SwarmProjectPage extends StatefulWidget {
 class _SwarmProjectPageState extends State<SwarmProjectPage> {
   SwarmSession? _session;
   bool _older = false, _openingPm = false;
-  String? _error;
+  String? _error, _olderError;
 
   @override
   void didChangeDependencies() {
@@ -91,6 +92,25 @@ class _SwarmProjectPageState extends State<SwarmProjectPage> {
 
   void _open(String conversationId) =>
       openSwarmConversation(context, widget.swarmId, conversationId);
+
+  void _toggleOlder() {
+    setState(() => _older = !_older);
+    if (_older) unawaited(_readOlder());
+  }
+
+  /// The project's closed work: its first page, or [earlier] the next.
+  Future<void> _readOlder({bool earlier = false}) async {
+    final reader = _session?.inbox.reader(widget.swarmId);
+    if (reader == null) return;
+    setState(() => _olderError = null);
+    try {
+      await reader.loadDormant(widget.projectId, earlier: earlier);
+    } catch (_) {
+      if (mounted) {
+        setState(() => _olderError = 'Could not load older work. Try again.');
+      }
+    }
+  }
 
   Future<void> _openPm() async {
     final reader = _session?.inbox.reader(widget.swarmId);
@@ -177,6 +197,8 @@ class _SwarmProjectPageState extends State<SwarmProjectPage> {
       session.accountId,
       pmChatId: pm?.id,
     );
+    final olderRead = reader.dormantLoaded(project.id);
+    final olderReading = reader.dormantLoading(project.id);
     SettingsRow row(SuperTabConversation g) => SettingsRow(
       key: ValueKey('swarm-conversation-${g.id}'),
       title: g.label,
@@ -240,19 +262,41 @@ class _SwarmProjectPageState extends State<SwarmProjectPage> {
         )
       else
         SettingsGroup(children: [for (final g in work.active) row(g)]),
-      if (work.older.isNotEmpty) ...[
-        const SizedBox(height: 12),
-        SettingsGroup(
-          children: [
-            SettingsRow(
-              key: const ValueKey('swarm-older'),
-              title: _older ? 'Hide older' : 'Older',
-              value: '${work.older.length}',
-              onTap: () => setState(() => _older = !_older),
-            ),
-            if (_older)
-              for (final g in work.older) row(g),
+      const SizedBox(height: 12),
+      SettingsGroup(
+        children: [
+          SettingsRow(
+            key: const ValueKey('swarm-older'),
+            title: _older ? 'Hide older' : 'Older',
+            value: olderReading
+                ? 'Loading…'
+                : olderRead
+                ? '${work.older.length}'
+                : null,
+            onTap: _toggleOlder,
+          ),
+          if (_older) ...[
+            for (final g in work.older) row(g),
+            if (reader.hasEarlierDormant(project.id))
+              SettingsRow(
+                key: const ValueKey('swarm-older-earlier'),
+                title: 'Show earlier',
+                value: olderReading ? 'Loading…' : null,
+                onTap: olderReading
+                    ? null
+                    : () => unawaited(_readOlder(earlier: true)),
+              ),
           ],
+        ],
+      ),
+      if (_older && _olderError != null) ...[
+        const SizedBox(height: 8),
+        Text(_olderError!, style: tty.style(color: tty.red)),
+      ] else if (_older && olderRead && work.older.isEmpty) ...[
+        const SizedBox(height: 8),
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 4),
+          child: Text('No older work.', style: tty.style(color: tty.dim)),
         ),
       ],
     ];

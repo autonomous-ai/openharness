@@ -19,9 +19,11 @@ import 'swarm_fixture.dart';
 /// conversations in order, and a post with a mention.
 void main() {
   const messages = '/api/super-tabs/$tab/conversations/g1/messages';
+  const dormant = '/api/super-tabs/$tab/groups?dormant=1&projectId=$project';
 
-  /// One Swarm, project Mobile: work g1 (Nova needs the person), quiet work
-  /// g-old, someone else's private chat, and one open decision and tag.
+  /// One Swarm, project Mobile: work g1 (Nova needs the person), someone
+  /// else's private chat, and one open decision and tag. Its closed work,
+  /// g-old and older g-spike, is in no first load: the dormant list has it.
   FakeSwarm backend({String role = 'owner'}) {
     final fake = FakeSwarm();
     fake.routes['/api/super-tabs/list'] = (_) => {
@@ -44,7 +46,6 @@ void main() {
             lastMessageSequence: 9,
           ),
           groupData('g-busy', title: 'Sync', lastMessageSequence: 20),
-          groupData('g-old', title: 'Old work', dormant: true),
           groupData(
             'g-private',
             title: 'Their chat',
@@ -57,6 +58,24 @@ void main() {
     };
     fake.routes['/api/super-tabs/$tab/changes'] = (_) =>
         changes(cursor: 'c2', derived: derived);
+    final oldWork = part(
+      'g-old',
+      7,
+      groupData('g-old', title: 'Old work', dormant: true),
+    );
+    fake.routes[dormant] = (_) => {
+      'groups': [oldWork],
+      'next': 'page-2',
+    };
+    fake.routes['$dormant&before=page-2'] = (_) => {
+      'groups': [
+        part('g-spike', 6, groupData('g-spike', title: 'Spike', dormant: true)),
+      ],
+      'next': null,
+    };
+    fake.routes['/api/super-tabs/$tab/groups/g-old'] = (_) => {
+      'group': oldWork,
+    };
     fake.routes['/api/super-tabs/$tab/decisions?state=open'] = (_) => {
       'decisions': [
         {
@@ -290,8 +309,14 @@ void main() {
         );
 
         await tester.tap(key('swarm-older'));
-        await tester.pump();
+        await tester.pumpAndSettle();
         expect(key('swarm-conversation-g-old'), findsOneWidget);
+        expect(key('swarm-conversation-g-spike'), findsNothing);
+
+        await tester.tap(key('swarm-older-earlier'));
+        await tester.pumpAndSettle();
+        expect(key('swarm-conversation-g-spike'), findsOneWidget);
+        expect(key('swarm-older-earlier'), findsNothing);
       },
     );
 
@@ -462,6 +487,24 @@ void main() {
 
       host.foreground = false;
       expect(reader.shown, isFalse);
+    });
+
+    testWidgets('a closed one opened from a notice reads its name', (
+      tester,
+    ) async {
+      final fake = backend();
+      fake.routes['/api/super-tabs/$tab/conversations/g-old/messages'] = (_) =>
+          {'messages': <Object>[], 'next': null};
+      await pump(
+        tester,
+        fake,
+        const SwarmConversationPage(swarmId: tab, conversationId: 'g-old'),
+      );
+      await tester.pumpAndSettle();
+
+      expect(fake.paths, contains('/api/super-tabs/$tab/groups/g-old'));
+      expect(find.text('Old work'), findsOneWidget);
+      expect(find.text('This chat is not open to you.'), findsNothing);
     });
 
     testWidgets('one in a Swarm the person left shows nothing of it', (

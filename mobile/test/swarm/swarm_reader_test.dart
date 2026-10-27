@@ -209,6 +209,44 @@ void main() {
     expect(await r.loadConversation('g-missing'), isFalse);
   });
 
+  test("a project's closed conversations are read from the dormant list, "
+      'a page at a time', () async {
+    const dormant = '/api/super-tabs/$tab/groups?dormant=1&projectId=$project';
+    final swarm = FakeSwarm();
+    swarm.routes['/api/super-tabs/$tab/parts'] = (_) => firstLoad();
+    swarm.routes[dormant] = (_) => {
+      'groups': [
+        part('g-old', 5, groupData('g-old', title: 'Shipped', dormant: true)),
+      ],
+      'next': 'page-2',
+    };
+    swarm.routes['$dormant&before=page-2'] = (_) => {
+      'groups': [
+        part('g-older', 4, groupData('g-older', title: 'Spike', dormant: true)),
+      ],
+      'next': null,
+    };
+    final r = reader(swarm);
+    addTearDown(r.dispose);
+    await r.refresh();
+    expect(r.dormantLoaded(project), isFalse);
+
+    await r.loadDormant(project);
+
+    expect(swarm.paths.last, dormant);
+    expect(r.snapshot!.conversation('g-old')!.closed, isTrue);
+    expect(r.hasEarlierDormant(project), isTrue);
+
+    await r.loadDormant(project);
+    expect(swarm.paths.last, dormant, reason: 'the first page is read once');
+
+    await r.loadDormant(project, earlier: true);
+
+    expect(swarm.paths.last, '$dormant&before=page-2');
+    expect(r.snapshot!.conversation('g-older')!.label, 'Spike');
+    expect(r.hasEarlierDormant(project), isFalse);
+  });
+
   test('while shown it reads every poll; hidden, it reads nothing', () {
     fakeAsync((async) {
       final swarm = FakeSwarm();
