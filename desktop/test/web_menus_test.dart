@@ -403,13 +403,26 @@ void main() {
   ) async {
     await machines(tester, _phone);
 
-    for (final key in machineActions) {
-      expect(
-        _target(tester, key).height,
-        greaterThanOrEqualTo(_finger),
-        reason: '$key',
-      );
+    // The list's own actions, then the machine's, on its details page.
+    void measure(Iterable<Key> keys) {
+      for (final key in keys) {
+        expect(
+          _target(tester, key).height,
+          greaterThanOrEqualTo(_finger),
+          reason: '$key',
+        );
+      }
     }
+
+    measure(machineActions.skip(2));
+    final machine = tester
+        .widget<SwarmSearchResults>(find.byType(SwarmSearchResults))
+        .search
+        .selected!;
+    await tester.tap(find.byKey(ValueKey(machine.id)));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 400));
+    measure(machineActions.take(2));
     expect(tester.takeException(), isNull);
     await tester.pumpWidget(const SizedBox.shrink());
   });

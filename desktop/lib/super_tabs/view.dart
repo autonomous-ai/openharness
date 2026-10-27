@@ -925,8 +925,9 @@ class _SuperTabViewState extends State<SuperTabView>
   bool _isPmChat(SuperTabConversation group) =>
       c.pmChat(group.projectId)?.id == group.id;
 
-  /// The open conversation's name, or what the pane shows instead of one. A
-  /// workgroup's is named as the sidebar names it ([SuperTabWorkgroupName]).
+  /// The open conversation's name, or what the pane shows instead of one,
+  /// named as the sidebar names it: "# openharness", or a workgroup's
+  /// [SuperTabWorkgroupName].
   Widget _title(SuperTabConversation? group) {
     final style = DesktopChrome.text(medium: true);
     final name = _devicesVisible
@@ -938,9 +939,9 @@ class _SuperTabViewState extends State<SuperTabView>
               ? c.snapshot!.name
               : 'Choose a project'
         : c.snapshot!.isProjectLead(group.id)
-        ? c.snapshot!.projectFor(group.id)!.name
+        ? '# ${c.snapshot!.projectFor(group.id)!.name}'
         : group.id == c.snapshot!.leadsConversationId
-        ? 'Product Managers'
+        ? '# $kProductManagersChannel'
         : _isPmChat(group)
         ? kChatWithPm
         : null;
@@ -951,6 +952,22 @@ class _SuperTabViewState extends State<SuperTabView>
       overflow: TextOverflow.ellipsis,
       style: style,
     );
+  }
+
+  /// The composer's hint, naming the open conversation as its sidebar row
+  /// does: "Message #openharness", "Message #product-managers", "Message Wren".
+  String _messageHint(SuperTabConversation group) {
+    final snapshot = c.snapshot!;
+    if (snapshot.isProjectLead(group.id)) {
+      return 'Message #${snapshot.projectFor(group.id)!.name}';
+    }
+    if (group.id == snapshot.leadsConversationId) {
+      return 'Message #$kProductManagersChannel';
+    }
+    if (_isPmChat(group)) {
+      return 'Message ${pmChatName(snapshot, snapshot.projectFor(group.id)!)}';
+    }
+    return 'Message ${group.title}';
   }
 
   Widget _boardButton() {
@@ -1920,17 +1937,7 @@ class _SuperTabViewState extends State<SuperTabView>
                                             : group == null
                                             ? 'Loading conversation…'
                                             : c.canWrite
-                                            ? c.snapshot!.isProjectLead(
-                                                        group.id,
-                                                      ) ||
-                                                      _isPmChat(group)
-                                                  ? 'Message Product Manager'
-                                                  : group.id ==
-                                                        c
-                                                            .snapshot!
-                                                            .leadsConversationId
-                                                  ? 'Message Product Managers'
-                                                  : 'Message ${group.title}'
+                                            ? _messageHint(group)
                                             : 'Read-only conversation',
                                         border: InputBorder.none,
                                         enabledBorder: InputBorder.none,

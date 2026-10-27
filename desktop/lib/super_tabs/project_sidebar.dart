@@ -18,6 +18,17 @@ import 'pm_chat_rows.dart';
 import 'section_heading.dart';
 import 'workgroup_name.dart';
 
+/// The Swarm's Product Managers' conversation, listed as a channel among the projects.
+const kProductManagersChannel = 'product-managers';
+
+/// A project's Product Manager by name, as its Chat with PM is listed.
+String pmChatName(SuperTabSnapshot snapshot, SuperTabProject project) {
+  final pmId = snapshot.conversation(project.leadConversationId)?.leadId;
+  return pmId == null
+      ? 'Product Manager'
+      : snapshot.agentName(pmId, fallback: 'Product Manager');
+}
+
 class ProjectSidebar extends StatelessWidget {
   const ProjectSidebar({
     super.key,
@@ -134,7 +145,7 @@ class ProjectSidebar extends StatelessWidget {
     ),
   );
 
-  /// A project reads as a channel: "# openharness".
+  /// A project, or the Product Managers' conversation, reads as a channel: "# openharness".
   Widget _channelMark() => Text(
     '#',
     textAlign: TextAlign.center,
@@ -150,7 +161,6 @@ class ProjectSidebar extends StatelessWidget {
     SuperTabConversation group, {
     SuperTabProject? project,
     String? label,
-    IconData? icon,
     String? key,
   }) {
     final selected =
@@ -195,15 +205,7 @@ class ProjectSidebar extends StatelessWidget {
               SizedBox(width: SuperTabSectionHeading.indentFor(0)),
               SizedBox(
                 width: _iconColumn,
-                child: project != null
-                    ? _channelMark()
-                    : icon == null
-                    ? null
-                    : Icon(
-                        icon,
-                        size: AppIcons.inlineSize,
-                        color: DesktopChrome.muted,
-                      ),
+                child: project != null || label != null ? _channelMark() : null,
               ),
               Expanded(
                 child: Semantics(
@@ -394,8 +396,8 @@ class ProjectSidebar extends StatelessWidget {
   }
 
   /// The signed-in person's private chat with each project's Product
-  /// Manager, as direct messages pinned above the projects so a collapsed
-  /// project never hides them; the first click opens one.
+  /// Manager, as direct messages below the projects so a collapsed project
+  /// never hides them; the first click opens one.
   List<Widget> _pmChats(List<SuperTabProject> projects) => [
     for (final project in projects)
       ?_pmChat(project, named: projects.length > 1),
@@ -409,9 +411,7 @@ class ProjectSidebar extends StatelessWidget {
     return SuperTabPmChatRow(
       key: ValueKey('super-pm-chat-${project.id}'),
       agentId: pmId,
-      name: pmId == null
-          ? 'Product Manager'
-          : snapshot.agentName(pmId, fallback: 'Product Manager'),
+      name: pmChatName(snapshot, project),
       project: named ? project.name : null,
       selected:
           chat != null &&
@@ -458,6 +458,29 @@ class ProjectSidebar extends StatelessWidget {
         : [for (final group in groups) _row(group)];
   }
 
+  /// Every project with its workgroups, and the Product Managers'
+  /// conversation, which every person in the Swarm reads, by name from A to Z.
+  List<(String, Widget)> _channels(SuperTabSnapshot? snapshot) => [
+    if (snapshot?.conversation(snapshot.leadsConversationId ?? '')
+        case final leads?)
+      (kProductManagersChannel, _row(leads, label: kProductManagersChannel)),
+    for (final project in snapshot?.projects ?? const <SuperTabProject>[])
+      if (snapshot?.conversation(project.leadConversationId) case final lead?)
+        (
+          project.name,
+          Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              _row(lead, project: project),
+              if (controller.expandedProjects.contains(project.id)) ...[
+                ..._workgroups(project),
+                ..._closed(project),
+              ],
+            ],
+          ),
+        ),
+  ]..sort((a, b) => a.$1.toLowerCase().compareTo(b.$1.toLowerCase()));
+
   @override
   Widget build(BuildContext context) {
     final snapshot = controller.snapshot;
@@ -467,15 +490,6 @@ class ProjectSidebar extends StatelessWidget {
       child: ListView(
         padding: const EdgeInsets.all(8),
         children: [
-          if (pmChats.isNotEmpty) ...[
-            SuperTabSectionHeading(
-              'Direct messages',
-              endInset: 0,
-              startInset: SuperTabSectionHeading.indentFor(0),
-            ),
-            ...pmChats,
-            const SizedBox(height: 16),
-          ],
           if (onNewProject != null)
             _navigationRow(
               key: 'super-new-project',
@@ -518,12 +532,6 @@ class ProjectSidebar extends StatelessWidget {
               controller.isOwner ||
               snapshot?.localModels?.enabled == true)
             const SizedBox(height: 20),
-          // Every person in the Swarm reads where the Product Managers talk.
-          if (snapshot?.conversation(snapshot.leadsConversationId ?? '')
-              case final leads?) ...[
-            _row(leads, label: 'Product Managers', icon: AppIcons.users),
-            const SizedBox(height: 16),
-          ],
           SuperTabSectionHeading(
             'Projects',
             onAdd: controller.canWrite ? onNewProject : null,
@@ -533,21 +541,17 @@ class ProjectSidebar extends StatelessWidget {
             onToggleCollapsed: controller.toggleProjectsGroup,
           ),
           if (controller.projectsGroupOpen)
-            for (final project
-                in snapshot?.projects ?? const <SuperTabProject>[])
-              if (snapshot?.conversation(project.leadConversationId)
-                  case final lead?)
-                Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    _row(lead, project: project),
-                    if (controller.expandedProjects.contains(project.id)) ...[
-                      ..._workgroups(project),
-                      ..._closed(project),
-                    ],
-                  ],
-                ),
+            for (final (_, channel) in _channels(snapshot)) channel,
           const SizedBox(height: 16),
+          if (pmChats.isNotEmpty) ...[
+            SuperTabSectionHeading(
+              'Direct messages',
+              endInset: 0,
+              startInset: SuperTabSectionHeading.indentFor(0),
+            ),
+            ...pmChats,
+            const SizedBox(height: 16),
+          ],
           // Machine online/offline, unread marks and theme changes do not touch
           // the controller the rest of this sidebar rebuilds on, so this group
           // watches them itself — the same sources the roster merged before the
