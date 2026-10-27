@@ -219,7 +219,9 @@ get a notice when it is answered, and read the answer through their own decision
 provisional, while it waits, and never asks the same thing twice. A request
 still open after 30 minutes reminds its person, on their devices too; after 2
 hours the product manager is told to ask someone else or go on with the recommendation.
-Each step happens once, however many servers check.
+Each step happens once, however many servers check. The checks run while the
+Swarm is working, whenever one of its machines reports or its product manager
+checks in; a Swarm with neither has no agent waiting on an answer.
 
 **Mentions.** Anyone who can post in a project's conversation can mention a
 person or an agent there. A mentioned person is notified and finds the
