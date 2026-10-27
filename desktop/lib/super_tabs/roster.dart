@@ -439,6 +439,9 @@ class _SuperTabRosterState extends State<SuperTabRoster> {
             name: superTabPersonName(person.email),
             size: 24,
           ),
+          trailing: c.selected?.partnerId == person.id
+              ? Text('Partner', style: DesktopChrome.metadata())
+              : null,
           title: Tooltip(
             message: person.email,
             child: Text(

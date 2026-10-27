@@ -1,54 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/super_tabs/controller.dart';
-import 'package:harness/super_tabs/view.dart';
 
+import 'support/super_tab_collab_fixture.dart';
 import 'support/super_tab_fixture.dart';
-
-Map<String, dynamic> agent(String id, String name) => {
-  'id': id,
-  'projectId': 'web',
-  'name': name,
-  'machineId': 'm',
-  'harnessId': id,
-  'contributorId': 'owner',
-  'configuration': {'engine': 'claude'},
-};
-
-/// A Swarm of three people with one public project, 'web', whose Lead 'pm'
-/// and Builder 'atlas' work in the group 'work'.
-ConversationServer swarm() {
-  final server = ConversationServer();
-  server.state['leadsConversationId'] = 'lead';
-  server.state['projects'] = [projectFixture('web', 'Web', 'web-lead')];
-  server.state['people'] = [
-    {'id': 'owner', 'email': 'owner@example.com', 'role': 'owner'},
-    {'id': 'dee', 'email': 'dee@example.com', 'role': 'collaborator'},
-    {'id': 'kai', 'email': 'kai@example.com', 'role': 'viewer'},
-  ];
-  server.state['agents'] = <dynamic>[
-    agent('pm', 'River'),
-    agent('atlas', 'Atlas'),
-  ];
-  server.state['conversations'] = [
-    {...conversationFixture('lead', 'Lead'), 'kind': 'leads'},
-    {
-      ...conversationFixture('web-lead', 'Web'),
-      'projectId': 'web',
-      'leadId': 'pm',
-      'agentIds': ['pm'],
-    },
-    {
-      ...conversationFixture('work', 'Sidebar glance'),
-      'projectId': 'web',
-      'number': 3,
-      'agentIds': ['pm', 'atlas'],
-    },
-  ];
-  return server;
-}
 
 List<String> readers(SuperTabController c, String id) => [
   for (final person in c.snapshot!.readersOf(c.snapshot!.conversation(id)!))
@@ -92,42 +48,11 @@ void main() {
     expect(readers(c, 'work'), ['owner', 'kai']);
   });
 
-  Future<(ConversationServer, SuperTabController)> show(
-    WidgetTester tester,
-  ) async {
-    // The picker takes a third of the window's height: room for four rows.
-    tester.view
-      ..physicalSize = const Size(1200, 900)
-      ..devicePixelRatio = 1;
-    addTearDown(tester.view.reset);
-    final server = swarm();
-    final c = server.controller();
-    addTearDown(c.dispose);
-    await c.refresh();
-    c.select('work');
-    await tester.pumpWidget(
-      MaterialApp(
-        theme: grid.buildAppTheme(brightness: Brightness.dark),
-        home: Scaffold(
-          body: SuperTabView(
-            controller: c,
-            onInvite: () {},
-            onAddAgent: (_) {},
-            onOpenTerminal: (_) {},
-            machineName: (_) => 'Team Mac',
-          ),
-        ),
-      ),
-    );
-    await tester.pumpAndSettle();
-    return (server, c);
-  }
-
   testWidgets(
     '@ suggests the agents, then the people who read it but not the writer; '
     'a person goes as a mention, an agent as a recipient',
     (tester) async {
-      final (server, c) = await show(tester);
+      final (server, c) = await showSwarm(tester);
       await tester.enterText(composer, '@');
       await tester.pump();
       expect(
@@ -181,7 +106,7 @@ void main() {
   testWidgets('six agents still leave the readers reachable by keyboard', (
     tester,
   ) async {
-    final (server, c) = await show(tester);
+    final (server, c) = await showSwarm(tester);
     for (var i = 1; i <= 5; i++) {
       (server.state['agents'] as List).add(agent('helper-$i', 'Helper $i'));
       final work = (server.state['conversations'] as List).last as Map;
@@ -203,7 +128,7 @@ void main() {
   });
 
   testWidgets('a mention the server refuses shows its reason', (tester) async {
-    final (server, c) = await show(tester);
+    final (server, c) = await showSwarm(tester);
     await tester.enterText(composer, '@ka');
     await tester.pump();
     await tester.sendKeyEvent(LogicalKeyboardKey.enter);

@@ -20,6 +20,7 @@ import 'controller.dart';
 import 'dialog_scope.dart';
 import 'identity.dart';
 import 'model.dart';
+import 'partner.dart';
 import 'message_row.dart';
 import 'message_receipt.dart';
 import 'notifications.dart';
@@ -997,6 +998,18 @@ class _SuperTabViewState extends State<SuperTabView>
                     else
                       _title(group),
                     if (!_devicesVisible && !_notificationsVisible)
+                      if (group == null
+                              ? null
+                              : superTabPartnerLine(c.snapshot!, group)
+                          case final line?)
+                        Text(
+                          line,
+                          key: const ValueKey('super-partner-line'),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: DesktopChrome.metadata(),
+                        ),
+                    if (!_devicesVisible && !_notificationsVisible)
                       if (c.reviewLine(group) case final line?)
                         Text(
                           line,
@@ -1116,6 +1129,8 @@ class _SuperTabViewState extends State<SuperTabView>
           // A private conversation is chat only: it has no work.
           if (group.audience == null)
             item('Work details', () => _groupAction('work', group)),
+          if (editable && group.audience == null)
+            item('Partner', () => showSuperTabPartner(context, c, group)),
           if (editable) ...[
             item('Rename', () => _groupAction('rename', group)),
             item(

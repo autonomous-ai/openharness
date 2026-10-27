@@ -121,6 +121,7 @@ class SuperTabConversation {
           ? SuperTabTask.fromJson(superTabMap(row['task']))
           : null,
       lastMessageSequence = (row['lastMessageSequence'] as num?)?.toInt() ?? 0,
+      partnerId = row['partnerId'] as String?,
       assignment = row['assignment'] == null
           ? null
           : Map.unmodifiable(superTabMap(row['assignment']));
@@ -131,6 +132,10 @@ class SuperTabConversation {
   final String? leadId;
   final List<String> agentIds;
   final bool archived;
+
+  /// The person the work needs for judgement, taste, knowledge or hands,
+  /// named by its Lead or a writer (collaboration protocol); null when none.
+  final String? partnerId;
 
   /// A private conversation's people, who read it with the project's Lead
   /// and nobody else; null for a conversation the project shares.
