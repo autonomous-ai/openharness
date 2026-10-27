@@ -487,6 +487,9 @@ export class SuperTabHost {
         operationId: `release-${agent.releaseId ?? agent.id}`, asAgentId: agent.id, command: { type: 'agent.remove', agentId: agent.id, releaseId: agent.releaseId },
       })
       attempt.retryAt = Infinity
+      // Its worktree goes now that it is stopped for good, not after the weekly sweep's idle week (machines.ts).
+      await this.contributed().removeStoppedWorktree(tabId, agent.harnessId)
+        .catch(error => this.log(`Kept the worktree of a stopped worker: ${error instanceof Error ? error.message : String(error)}`))
     } catch (error) {
       attempt.failures++
       // Five attempts total; permanent ownership/identity refusals never acquire another lease for this runtime.

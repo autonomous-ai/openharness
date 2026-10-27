@@ -14,7 +14,7 @@ import { startAgent, type ScopedRequest } from './start.js'
 import { prepareSwarmStart } from './projectFolder.js'
 import { readAuthSession } from '../lib/authSession.js'
 import { createSwarmCloneTrustRepair, swarmCloneRoots } from './cloneTrust.js'
-import { git } from '../lib/worktreeSweep.js'
+import { git, sweepOne } from '../lib/worktreeSweep.js'
 import { projectsRoot } from '../lib/projectFolder.js'
 import { worktreeFolderName } from '../lib/agentNames.js'
 import { teamPrivacyObserver } from '../team/observer.js'
@@ -466,6 +466,20 @@ export class ContributedMachines {
     // Sessions of every tab share it, so only what expired goes: a session that left is never read again.
     for (const [id, entry] of this.uncommittedCache) if (entry.until <= now) this.uncommittedCache.delete(id)
     return read
+  }
+
+  /** Once its host confirmed a worker stopped (host.ts releaseWorker), the worktree its start made goes at once instead of
+   *  after the weekly sweep's idle week, by that sweep's own rule (lib/worktreeSweep.ts): only a worktree this machine's
+   *  record proves the Swarm made, with no session in it and nothing uncommitted. Its branch keeps every commit and goes
+   *  only when they are all on other branches or the remote, as once its pull request merged. Anything else stays. */
+  async removeStoppedWorktree(tabId: string, harnessId: string): Promise<void> {
+    const file = swarmWorktreesFile(this.core.dataDir, this.machineId)
+    const record = readWorktrees(file).find(w => w.tabId === tabId && w.harnessId === harnessId)
+    if (!record || !await swarmWorktree(record.path, record.source, record.startId)) return
+    if (this.core.agents.live().some(a => !!a.cwd && within(record.path, a.cwd))) return
+    // File times are wall-clock, so the sweep's idle check reads the real clock; no idle wait is asked.
+    if (!await sweepOne(record.path, Date.now(), 0).catch(() => false)) return
+    writeWorktrees(file, readWorktrees(file).filter(w => !(w.tabId === tabId && w.harnessId === harnessId)))
   }
 
   /** A removal deletes only what is provably the Swarm's: the record says which worktree each start made. */

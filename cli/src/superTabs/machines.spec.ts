@@ -1134,6 +1134,43 @@ describe('removed machine cleanup', () => {
       setLive: (sessions: RegisteredSession[]) => { live = sessions }, step: (ms: number) => { now += ms } }
   }
 
+  it('removes a stopped worker\'s worktree once nothing runs there and nothing is uncommitted, and its branch once merged', async () => {
+    const m = machine()
+    const host = m.open()
+    const recorded = () => JSON.parse(readFileSync(swarmWorktreesFile(m.data, 'host'), 'utf8')).worktrees.map((w: { startId: string }) => w.startId)
+    // Its session still runs there: kept.
+    await host.removeStoppedWorktree('tab', 'h-recorded')
+    expect(existsSync(m.recorded)).toBe(true)
+    m.setLive([])
+    // A file not committed: kept, with its work.
+    await host.removeStoppedWorktree('tab', 'h-recorded')
+    expect(readFileSync(join(m.recorded, 'unpushed.txt'), 'utf8')).toBe('work')
+    rmSync(join(m.recorded, 'unpushed.txt'))
+    git(m.clone, 'config', 'branch.super-tab/recorded.harness', 'placeholder')
+    await host.removeStoppedWorktree('tab', 'h-recorded')
+    expect(existsSync(m.recorded)).toBe(false)
+    expect(git(m.clone, 'worktree', 'list', '--porcelain')).not.toContain('/recorded\n')
+    // Its branch had no commit of its own, so it went too.
+    expect(git(m.clone, 'branch', '--list', 'super-tab/recorded')).toBe('')
+    expect(recorded()).toEqual(['kept'])
+  })
+
+  it('keeps a stopped worker\'s branch with a commit only it has, and leaves alone a worktree it has no record of', async () => {
+    const m = machine()
+    m.setLive([])
+    rmSync(join(m.recorded, 'unpushed.txt'))
+    git(m.recorded, 'commit', '-q', '--allow-empty', '-m', 'only here')
+    git(m.clone, 'config', 'branch.super-tab/recorded.harness', 'placeholder')
+    const host = m.open()
+    await host.removeStoppedWorktree('tab', 'h-recorded')
+    expect(existsSync(m.recorded)).toBe(false)
+    expect(git(m.clone, 'log', '-1', '--format=%s', 'super-tab/recorded').trim()).toBe('only here')
+    rmSync(join(m.earlier, 'unpushed.txt'))
+    await host.removeStoppedWorktree('tab', 'h-earlier')
+    await host.removeStoppedWorktree('other-tab', 'h-recorded')
+    expect(existsSync(m.earlier)).toBe(true)
+  })
+
   it('deletes only the tab\'s Swarm folders and Swarm-made worktrees, then acknowledges once', async () => {
     const m = machine()
     const host = m.open()

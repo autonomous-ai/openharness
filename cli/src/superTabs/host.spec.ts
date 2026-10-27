@@ -13,6 +13,7 @@ import { HostFeed } from './hostFeed.js'
 import { SwarmReads } from './swarmReads.js'
 import { retainedHarnesses, retentionFile } from './retention.js'
 import { observerSource } from './observers.js'
+import { ContributedMachines } from './machines.js'
 
 const roots: string[] = []
 const hosts: SuperTabHost[] = []
@@ -897,6 +898,31 @@ it('stops a requested worker once, confirms removal, and releases retention on t
   await host.tick()
   expect(retainedHarnesses(t.dir).size).toBe(0)
   expect(acknowledgements).toBe(1)
+})
+
+it('removes a stopped worker\'s worktree only once its removal is acknowledged, and a failed removal stays in the log', async () => {
+  const t = setup(), host = t.open()
+  const removeWorktree = vi.spyOn(ContributedMachines.prototype, 'removeStoppedWorktree').mockRejectedValue(new Error('git refused'))
+  vi.mocked(t.core.agents.byAgent).mockReturnValue({ agentId: 'harness', sessionId: 'native', registeredAt: 0, startedBy: 'agent' } as never)
+  let removed = false
+  const target = { id: 'agent', harnessId: 'harness', machineId: 'machine-1', workDecision: 'stop', startedSession: { creationId: 'super-original-creation', sessionId: 'native', createdAt: new Date(0).toISOString() } }
+  t.core.agents.closeSwarm = async () => {
+    expect(removeWorktree).not.toHaveBeenCalled()
+    return { closed: true }
+  }
+  t.core.account.backend = async (method, path, body) => {
+    if ((body as any)?.command?.type === 'agent.stopLease') return { status: 200, body: { data: { result: { expiresAt: Date.now() + 3_600_000, durationMs: 120_000 } } } }
+    if (path.includes('/hosts/')) return { status: 200, body: { data: hostForm(removed ? [] : [{ tabId: 'tab', agent: target, stopRequested: true }], { tabs: ['tab'] }) } }
+    if (method === 'GET') return { status: 200, body: { data: swarmReply(path, { agents: [target], conversations: [] }) } }
+    expect(removeWorktree).not.toHaveBeenCalled()
+    removed = true
+    return { status: 200, body: { data: {} } }
+  }
+  try {
+    await host.tick()
+    await vi.waitFor(() => expect(removeWorktree).toHaveBeenCalledWith('tab', 'harness'))
+    await vi.waitFor(() => expect(t.log.mock.calls.flat().join('\n')).toContain('git refused'))
+  } finally { removeWorktree.mockRestore() }
 })
 
 // A lost task (the backend's v1 liveness) has ended for its agent, as a cancelled one has: a stalled agent the Lead stops
