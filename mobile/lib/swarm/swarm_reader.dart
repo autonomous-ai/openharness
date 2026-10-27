@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 import 'model.dart';
 import 'parts.dart';
 import 'swarm_request.dart';
+import 'waiting_work.dart';
 
 /// One Swarm as this phone keeps it current: a first load, then only the parts
 /// that changed since its cursor (docs/design/2026-10-26-swarm-state-parts.md,
@@ -28,6 +29,9 @@ class SwarmReader extends ChangeNotifier {
 
   /// The Swarm as last read; null before the first read and after access ends.
   SuperTabSnapshot? snapshot;
+
+  /// Each conversation's partner, the person its work needs ([swarmPartners]).
+  Map<String, String> partners = const {};
 
   /// What the last read could not do, as a sentence; null once one succeeds.
   String? error;
@@ -88,12 +92,14 @@ class SwarmReader extends ChangeNotifier {
       if (_disposed) return;
       final parts = _parts!;
       if (read.changed || snapshot == null) {
-        final next = SuperTabSnapshot.fromJson(parts.state);
+        final state = parts.state;
+        final next = SuperTabSnapshot.fromJson(state);
         if (next.id != tabId) {
           _parts = null;
           throw const FormatException('A different Swarm was returned.');
         }
         snapshot = next;
+        partners = swarmPartners(state);
         changed = true;
       }
       if (lastChangedAt != parts.lastChangedAt) {
@@ -112,6 +118,7 @@ class SwarmReader extends ChangeNotifier {
         // Refused a first load: nothing of a Swarm it left stays on screen.
         accessRevoked = true;
         snapshot = null;
+        partners = const {};
         _parts = null;
         error = failure.message;
         _poll?.cancel();
@@ -211,7 +218,9 @@ class SwarmReader extends ChangeNotifier {
       return false;
     }
     if (_disposed || !identical(parts, _parts)) return false;
-    snapshot = SuperTabSnapshot.fromJson(parts.state);
+    final state = parts.state;
+    snapshot = SuperTabSnapshot.fromJson(state);
+    partners = swarmPartners(state);
     notifyListeners();
     return snapshot?.conversation(id) != null;
   }

@@ -26,6 +26,22 @@ void main() {
     expect(r.error, isNull);
   });
 
+  test("each conversation's partner is kept beside the Swarm", () async {
+    final swarm = FakeSwarm();
+    swarm.routes['/api/super-tabs/$tab/parts'] = (_) => firstLoad(
+      groups: [
+        {...groupData('g1'), 'partnerId': 'person-dee'},
+        groupData('g2'),
+      ],
+    );
+    final r = reader(swarm);
+    addTearDown(r.dispose);
+
+    await r.refresh();
+
+    expect(r.partners, {'g1': 'person-dee'});
+  });
+
   test('later reads ask only what changed since the cursor', () async {
     final swarm = FakeSwarm();
     swarm.routes['/api/super-tabs/$tab/parts'] = (_) => firstLoad(cursor: 'c1');
