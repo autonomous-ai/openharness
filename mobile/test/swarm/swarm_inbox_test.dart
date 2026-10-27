@@ -185,6 +185,41 @@ void main() {
     expect(i.loaded, isFalse);
   });
 
+  // Production before Swarm v1 (2026-10-27, on the owner's iPhone): no list
+  // route, so the old one-Swarm route read "list" as a Swarm's id and said
+  // "This Super Tab is unavailable."
+  test(
+    'a server without the list says it has no Swarm on the phone yet',
+    () async {
+      final fake = FakeSwarm();
+      fake.routes['/api/super-tabs/list'] = (_) => throw const SuperTabFailure(
+        'NOT_FOUND',
+        'This Super Tab is unavailable.',
+        statusCode: 404,
+      );
+      final i = inbox(fake);
+
+      await i.refresh();
+
+      expect(i.error, swarmServerTooOld);
+      expect(i.loaded, isFalse);
+    },
+  );
+
+  test('any other refusal of the list keeps its own words', () async {
+    final fake = FakeSwarm();
+    fake.routes['/api/super-tabs/list'] = (_) => throw const SuperTabFailure(
+      'SWARM_MIGRATING',
+      'This Swarm is being moved. Try again in a moment.',
+      statusCode: 503,
+    );
+    final i = inbox(fake);
+
+    await i.refresh();
+
+    expect(i.error, 'This Swarm is being moved. Try again in a moment.');
+  });
+
   test('while shown it reads every poll; hidden, it reads nothing', () {
     fakeAsync((async) {
       final fake = backend({'a': []});

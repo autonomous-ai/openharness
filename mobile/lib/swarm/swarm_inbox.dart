@@ -11,6 +11,12 @@ import 'waiting_work.dart';
 /// One of the account's Swarms, as the list names it.
 typedef SwarmListing = ({String id, String name});
 
+/// What the Swarm page says when the account's server has no Swarm list:
+/// one from before Swarm v1, whose one-Swarm route reads "list" as a Swarm's
+/// id and answers that it is unavailable (the owner's iPhone, 2026-10-27).
+const swarmServerTooOld =
+    'Your Harness server does not support Swarm on the phone yet.';
+
 /// Something a Swarm asks of the person, with the Swarm it is in.
 sealed class SwarmNeed {
   SwarmNeed(this.swarmId);
@@ -163,13 +169,23 @@ class SwarmInbox extends ChangeNotifier {
     final cursors = <String>{};
     String? after;
     do {
-      final page = superTabMap(
-        await request(
+      final Object? answer;
+      try {
+        answer = await request(
           'GET',
           '/api/super-tabs/list'
               '${after == null ? '' : '?after=${Uri.encodeQueryComponent(after)}'}',
-        ),
-      );
+        );
+      } on SuperTabFailure catch (failure) {
+        // A server with the list never answers it "not found".
+        if (failure.statusCode != 404) rethrow;
+        throw SuperTabFailure(
+          'SWARM_UNSUPPORTED',
+          swarmServerTooOld,
+          statusCode: failure.statusCode,
+        );
+      }
+      final page = superTabMap(answer);
       if (page['tabs'] is! List) throw const FormatException('Missing tabs');
       for (final raw in page['tabs'] as List) {
         final row = superTabMap(raw);
