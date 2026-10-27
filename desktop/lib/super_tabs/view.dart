@@ -599,7 +599,8 @@ class _SuperTabViewState extends State<SuperTabView>
   /// Reads the page before those loaded, keeping what is on screen in place:
   /// the row of [keep] when it is built, else the topmost row. Rows can
   /// regroup as earlier ones arrive, so the one the reader looks at is kept.
-  /// A read already under way is joined; its caller keeps the place.
+  /// A read already under way is joined; its caller keeps the place. The
+  /// reader scrolling during the read keeps their own place instead.
   Future<void> _loadEarlier(String id, {String? keep}) async {
     final scroll = _scroll[id];
     if (scroll == null || !scroll.hasClients || !_loadingOlder.add(id)) {
@@ -611,12 +612,13 @@ class _SuperTabViewState extends State<SuperTabView>
     final anchor = keptTop != null
         ? (messageId: keep!, top: keptTop)
         : _firstVisibleRow();
+    final request = _scrollRequest;
     try {
       await c.loadMessages(id, older: true);
     } finally {
       _loadingOlder.remove(id);
     }
-    if (anchor != null) await _keepRow(id, anchor);
+    if (anchor != null) await _keepRow(id, anchor, request: request);
   }
 
   /// The topmost row in view, and its top within the list.
@@ -636,12 +638,13 @@ class _SuperTabViewState extends State<SuperTabView>
   /// Brings [anchor]'s row back to where it was in [id]'s list after rows
   /// arrived above it: near it by its place in the list until it is built,
   /// then exactly. A conversation no longer on screen does so on return;
-  /// the reader scrolling meanwhile ends it.
+  /// the reader scrolling since [request] (default: now) ends it.
   Future<void> _keepRow(
     String id,
-    ({String messageId, double top}) anchor,
-  ) async {
-    final request = _scrollRequest;
+    ({String messageId, double top}) anchor, {
+    int? request,
+  }) async {
+    request ??= _scrollRequest;
     for (var attempt = 0; attempt < 20; attempt++) {
       await WidgetsBinding.instance.endOfFrame;
       if (!mounted) return;

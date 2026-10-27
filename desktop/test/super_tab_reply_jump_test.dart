@@ -143,6 +143,38 @@ void main() {
     await tester.pumpAndSettle();
   });
 
+  testWidgets('dragging while earlier messages load keeps the reader there', (
+    tester,
+  ) async {
+    final server = chat(250, replyTo: 'message-10');
+    await show(tester, server);
+    final list = find.byWidgetPredicate(
+      (w) => w is ListView && '${w.key}'.contains('super-messages-'),
+    );
+    final scroll = tester
+        .state<ScrollableState>(
+          find.descendant(of: list, matching: find.byType(Scrollable)),
+        )
+        .position;
+    await tester.scrollUntilVisible(
+      find.text('Earlier messages'),
+      -500,
+      scrollable: find.descendant(of: list, matching: find.byType(Scrollable)),
+    );
+    await tester.pumpAndSettle();
+    server.holdReads = Completer<void>();
+    await tester.tap(find.text('Earlier messages'));
+    await tester.pump();
+    // The reader moves on while the page is slow.
+    await tester.drag(list, const Offset(0, -300));
+    await tester.pumpAndSettle();
+    final dragged = scroll.pixels;
+    server.holdReads!.complete();
+    server.holdReads = null;
+    await tester.pumpAndSettle();
+    expect(scroll.pixels, dragged);
+  });
+
   testWidgets('a deleted original says so instead', (tester) async {
     await show(tester, chat(60, replyTo: 'message-gone'));
     await tester.tap(quoteIn('message-60'));
