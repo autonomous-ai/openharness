@@ -12,6 +12,11 @@ List<T> _list<T>(Object? value, T Function(Map<String, dynamic>) read) =>
     ? List.unmodifiable(value.map((row) => read(superTabMap(row))))
     : throw const FormatException('Invalid Swarm list.');
 
+/// [rows] by id; the first row wins where two share one, as a scan would.
+Map<String, T> _byId<T>(List<T> rows, String Function(T row) idOf) => {
+  for (final row in rows.reversed) idOf(row): row,
+};
+
 /// Work that waits on a person: the agent needs a decision (`needs_human`) or
 /// is stuck (`blocked`). Both stay active work until the agent moves on.
 bool superTabWorkWaits(Object? status) =>
@@ -279,22 +284,31 @@ class SuperTabSnapshot {
   /// Decisions asked of the reader and not yet answered, Swarm-wide; 0 from a
   /// backend before decisions (backend superTabs/decisions.ts).
   final int decisionsWaiting;
-  SuperTabConversation? conversation(String id) =>
-      conversations.where((c) => c.id == id).firstOrNull;
-  SuperTabAgent? agent(String id) =>
-      agents.where((a) => a.id == id).firstOrNull;
+
+  // Built on first use: a read is never changed, and lookups run per row on
+  // every build.
+  late final _conversationsById = _byId(conversations, (c) => c.id);
+  late final _agentsById = _byId(agents, (a) => a.id);
+  late final _projectsById = _byId(projects, (p) => p.id);
+  late final _projectsByLead = <String, SuperTabProject>{
+    for (final p in projects.reversed)
+      ?conversation(p.leadConversationId)?.leadId: p,
+  };
+
+  SuperTabConversation? conversation(String id) => _conversationsById[id];
+  SuperTabAgent? agent(String id) => _agentsById[id];
+  SuperTabProject? projectById(String id) => _projectsById[id];
 
   SuperTabProject? projectFor(String conversationId) {
     final group = conversation(conversationId);
-    return projects.where((p) => p.id == group?.projectId).firstOrNull;
+    return group == null ? null : projectById(group.projectId);
   }
 
   bool isProjectLead(String conversationId) =>
       projects.any((p) => p.leadConversationId == conversationId);
 
-  SuperTabProject? leadProjectForAgent(String agentId) => projects
-      .where((p) => conversation(p.leadConversationId)?.leadId == agentId)
-      .firstOrNull;
+  SuperTabProject? leadProjectForAgent(String agentId) =>
+      _projectsByLead[agentId];
 
   bool isLead(String agentId) => leadProjectForAgent(agentId) != null;
 
@@ -305,9 +319,7 @@ class SuperTabSnapshot {
         : agent.isReviewer
         ? 'reviewer'
         : 'builder';
-    final project =
-        leadProject ??
-        projects.where((entry) => entry.id == agent.projectId).firstOrNull;
+    final project = leadProject ?? projectById(agent.projectId);
     if (project?.skillSet != 'custom') return null;
     final roles = project?.roles ?? const <SuperTabRole>[];
     return roles
@@ -328,8 +340,10 @@ class SuperTabSnapshot {
       if (agent(id) case final a? when a.isReviewer) a,
   ];
 
-  String agentName(String id, {String fallback = 'Agent'}) =>
-      agent(id)?.displayName ?? agent(id)?.name ?? fallback;
+  String agentName(String id, {String fallback = 'Agent'}) {
+    final found = agent(id);
+    return found?.displayName ?? found?.name ?? fallback;
+  }
 
   /// [machineId]'s contribution to this Swarm, if it has one.
   Map<String, dynamic>? pool(String machineId) =>

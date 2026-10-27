@@ -103,4 +103,88 @@ void main() {
 
     expect(waitingIn([row]).single.question, 'Keep the old screen?');
   });
+
+  group('once per Swarm read', () {
+    test('the same read, reader and partners give the same list', () {
+      final read = swarm([groupData('g1', status: 'needs_human')]);
+      final partners = swarmPartners(read.state);
+
+      final first = swarmWaitingWork(read.snapshot, me, partners: partners);
+
+      expect(first, hasLength(1));
+      expect(
+        swarmWaitingWork(read.snapshot, me, partners: partners),
+        same(first),
+      );
+    });
+
+    test('a new read, another reader or new partners count again', () {
+      final read = swarm([groupData('g1', status: 'needs_human')]);
+      final partners = swarmPartners(read.state);
+      final first = swarmWaitingWork(read.snapshot, me, partners: partners);
+
+      expect(
+        swarmWaitingWork(read.snapshot, 'person-other', partners: partners),
+        isEmpty,
+      );
+      expect(
+        swarmWaitingWork(read.snapshot, me, partners: {'g1': 'person-other'}),
+        isEmpty,
+      );
+      expect(
+        swarmWaitingWork(
+          swarm([groupData('g1', status: 'working')]).snapshot,
+          me,
+          partners: partners,
+        ),
+        isEmpty,
+      );
+      expect(
+        [
+          for (final w in swarmWaitingWork(
+            read.snapshot,
+            me,
+            partners: partners,
+          ))
+            w.conversation.id,
+        ],
+        [for (final w in first) w.conversation.id],
+        reason: 'back to the first: still right',
+      );
+    });
+
+    test('the list cannot be changed by a caller', () {
+      final read = swarm([groupData('g1', status: 'needs_human')]);
+
+      expect(
+        () => swarmWaitingWork(read.snapshot, me).clear(),
+        throwsUnsupportedError,
+      );
+    });
+    test('a read after losing access, or another person signed in, keeps '
+        'nothing from before', () {
+      final read = swarm([groupData('g1', status: 'needs_human')]);
+      final partners = swarmPartners(read.state);
+      expect(
+        swarmWaitingWork(read.snapshot, me, partners: partners),
+        hasLength(1),
+      );
+
+      final after = swarm([groupData('g2', status: 'working')]);
+      expect(
+        swarmWaitingWork(
+          after.snapshot,
+          me,
+          partners: swarmPartners(after.state),
+        ),
+        isEmpty,
+        reason: 'g1 is no longer in the read',
+      );
+      expect(
+        swarmWaitingWork(read.snapshot, 'person-other', partners: partners),
+        isEmpty,
+        reason: 'signed out, then someone else on the same read',
+      );
+    });
+  });
 }

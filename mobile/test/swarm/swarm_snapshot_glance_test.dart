@@ -1,0 +1,102 @@
+import 'package:flutter/material.dart';
+import 'package:flutter_test/flutter_test.dart';
+import 'package:harness_mobile/notify/system_notices.dart';
+import 'package:harness_mobile/settings/experimental_features.dart';
+import 'package:harness_mobile/swarm/swarm_page.dart';
+import 'package:harness_mobile/swarm/swarm_session.dart';
+import 'package:harness_mobile/swarm/swarm_team_line.dart';
+import 'package:harness_mobile/swarm/team_glance.dart';
+
+import '../voice_fakes.dart';
+import 'swarm_fixture.dart';
+
+/// A project's team line is counted once per Swarm read: Home, the drawer
+/// and the project's page all draw the one glance of the read they show.
+void main() {
+  FakeSwarm backend() {
+    final fake = FakeSwarm();
+    fake.routes['/api/super-tabs/list'] = (_) => {
+      'tabs': [
+        {'id': tab, 'name': 'Phone Swarm', 'ownerId': me},
+      ],
+      'next': null,
+    };
+    fake.routes['/api/super-tabs/$tab/parts'] = (_) => firstLoad(
+      groups: [
+        groupData(
+          'g1',
+          title: 'Fix login',
+          agentIds: ['agent-builder'],
+          status: 'needs_human',
+        ),
+      ],
+    );
+    fake.routes['/api/super-tabs/$tab/changes'] = (_) => changes(cursor: 'c2');
+    fake.routes['/api/super-tabs/$tab/decisions'] = (_) => {
+      'decisions': <Object>[],
+    };
+    fake.routes['/api/super-tabs/$tab/mentions'] = (_) => {
+      'mentions': <Object>[],
+    };
+    fake.routes['/api/super-tabs/$tab/conversations/'] = (_) => {
+      'messages': <Object>[],
+      'next': null,
+    };
+    return fake;
+  }
+
+  Future<SwarmHost> pump(WidgetTester tester) async {
+    tester.view.physicalSize = const Size(1170, 2532);
+    tester.view.devicePixelRatio = 3;
+    addTearDown(tester.view.reset);
+    final features = ExperimentalFeaturesStore(storage: MemoryKeyValueStore())
+      ..value = {PhoneExperiment.swarm};
+    final account = ValueNotifier<String?>(me);
+    final host = SwarmHost(
+      accountId: () => account.value,
+      account: account,
+      request: backend().request,
+      notices: SilentSystemNotices(),
+      features: features,
+    )..foreground = false;
+    addTearDown(host.dispose);
+    await tester.pumpWidget(
+      MaterialApp(
+        builder: (context, child) => SwarmScope(notifier: host, child: child!),
+        home: const SwarmPage(),
+      ),
+    );
+    await tester.pumpAndSettle();
+    return host;
+  }
+
+  Finder key(String value) => find.byKey(ValueKey(value));
+
+  testWidgets('Home, the drawer and the project page draw one glance', (
+    tester,
+  ) async {
+    final host = await pump(tester);
+    final reader = host.session!.inbox.reader(tab)!;
+    final read = reader.snapshot;
+    SwarmTeamGlance glanceIn(String row) => tester
+        .widget<SwarmTeamLine>(
+          find.descendant(of: key(row), matching: find.byType(SwarmTeamLine)),
+        )
+        .glance;
+
+    final home = glanceIn('swarm-project-$tab-$project');
+    expect(home.line, '1 waiting');
+
+    await tester.tap(key('swarm-menu'));
+    await tester.pumpAndSettle();
+    final drawer = glanceIn('swarm-drawer-project-$tab-$project');
+
+    await tester.tap(key('swarm-drawer-project-$tab-$project'));
+    await tester.pumpAndSettle();
+    final page = glanceIn('swarm-team-line');
+
+    expect(reader.snapshot, same(read), reason: 'still the same read');
+    expect(drawer, same(home));
+    expect(page, same(home));
+  });
+}
