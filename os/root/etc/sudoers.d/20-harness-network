@@ -11,3 +11,6 @@
 # first), and SSH on, off or how it is.
 %wheel ALL=(root) NOPASSWD: /usr/bin/python3 /usr/lib/harness-os/setup.py sign-out, /usr/bin/python3 /usr/lib/harness-os/setup.py password
 %wheel ALL=(root) NOPASSWD: /usr/bin/python3 /usr/lib/harness-os/setup.py ssh status, /usr/bin/python3 /usr/lib/harness-os/setup.py ssh on, /usr/bin/python3 /usr/lib/harness-os/setup.py ssh off
+# The GitHub CLI put back from the computer's own repositories, for the phone's Sign in to GitHub: that one
+# package, never one the caller names.
+%wheel ALL=(root) NOPASSWD: /usr/bin/python3 /usr/lib/harness-os/setup.py install-gh

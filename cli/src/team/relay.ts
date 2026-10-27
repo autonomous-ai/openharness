@@ -55,6 +55,10 @@ export interface TeamRelayPublisherDeps {
   withdraw(owner: string): void
   log(line: string): void
   intervalMs?: number
+  now?: () => number
+  /** After each look, with when the relay was last published (null before): a team account on a build too old for it
+   *  is updated (./refresh.ts). */
+  afterPass?: (publishedAt: number | null) => Promise<void>
 }
 
 /** How often the owner's daemon looks again: a team account set up later gets its relay within this long. */
@@ -66,6 +70,7 @@ export class TeamRelayPublisher {
   private grant: TeamRelayGrant | null = null
   private owner: string | null = null
   private running: Promise<void> | null = null
+  private publishedAt: number | null = null
   constructor(private readonly deps: TeamRelayPublisherDeps) {}
 
   start(): void {
@@ -78,7 +83,7 @@ export class TeamRelayPublisher {
   tick(): Promise<void> {
     return this.running ??= this.pass().catch((error: unknown) => {
       this.deps.log(`team relay: ${error instanceof Error ? error.message : String(error)}`)
-    }).finally(() => { this.running = null })
+    }).then(() => this.owner ? this.deps.afterPass?.(this.publishedAt) : undefined).finally(() => { this.running = null })
   }
 
   private async pass(): Promise<void> {
@@ -92,6 +97,7 @@ export class TeamRelayPublisher {
     const relay = await this.relay.catch((error: unknown) => { this.relay = null; throw error })
     this.grant ??= { url: relay.url, token: relay.mintToken(TEAM_RELAY_GUEST) }
     await this.deps.publish(config, this.grant)
+    this.publishedAt = (this.deps.now ?? Date.now)()
     this.owner = config.owner
     this.deps.log('team relay: the Harness Team account uses this Mac\'s subscriptions')
   }
@@ -100,6 +106,7 @@ export class TeamRelayPublisher {
     if (this.owner) this.deps.withdraw(this.owner)
     this.owner = null
     this.grant = null
+    this.publishedAt = null
     const relay = await this.relay?.catch(() => null)
     this.relay = null
     await relay?.close()
@@ -145,8 +152,9 @@ export const teamRelayPublished = (config: TeamConfig, exists: (path: string) =>
 }) => exists(teamRelayFile(config.owner))
 
 export function realTeamRelayPublisher(startRelay: () => Promise<SubscriptionRelay>, config: () => TeamConfig | null,
-  team: () => boolean, log: (line: string) => void): TeamRelayPublisher {
+  team: () => boolean, log: (line: string) => void, afterPass?: (publishedAt: number | null) => Promise<void>): TeamRelayPublisher {
   return new TeamRelayPublisher({
+    ...(afterPass ? { afterPass } : {}),
     // Tests inject a publisher: a test never reads this Mac's own team account, starts a relay on the owner's sign-ins,
     // or writes to /Users/Shared (a service spec did, 2026-10-27). Production never has VITEST set.
     config: () => process.env.VITEST ? null : config(),

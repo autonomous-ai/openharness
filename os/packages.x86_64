@@ -52,11 +52,15 @@ brightnessctl
 ttf-dejavu
 ttf-nerd-fonts-symbols-mono
 noto-fonts-emoji
+# The sound the terminal's bell plays (foot.ini [bell]).
+sound-theme-freedesktop
 # Harness and the package tools needed to bootstrap agent engines.
 nodejs-lts-jod
 npm
 tmux
 git
+# gh: an agent pushes and opens pull requests, and a Swarm checks a project's out, with the person's GitHub.
+github-cli
 curl
 jq
 ripgrep

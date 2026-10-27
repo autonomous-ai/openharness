@@ -239,7 +239,6 @@ export interface CommandContext {
   /** The files `message.send` names, each checked by the store: uploaded by this actor to this conversation, and unused. */
   attachments?: Attachment[]
   /** Route decisions this tab recorded in the last hour, counted by the store. */
-  recentRoutes?: number
   /** The decision a command names, read from SuperTabRouteDecision by the store. */
   routeDecision?: RouteDecision
   /** Starts on the machine being contributed that the store found abandoned: never contributed, never dispatched,
@@ -1519,7 +1518,6 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       // Only the pick is checked, so an older CLI that still lists a ruled-out candidate records an allowed pick.
       ruled(member ? agentTarget(state, member) : chosen, command.conversationId, `${who} routed to ${chosen.title}`)
       requireWorkerDecisions(state, actor, open(state, command.conversationId), chosen.kind === 'member' ? chosen.agentId : undefined)
-      if ((context.recentRoutes ?? 0) >= 30) fail('RATE_LIMITED', 'This Super Tab routed 30 tasks in the last hour. Wait before routing again.', 429)
       const via = decision.via === 'jev' ? `Jev ${Math.round((decision.p ?? 0) * 100)}%`
         : decision.via === 'only' ? 'only candidate' : 'by policy order'
       effects.routeDecisions.push({ op: 'create', id: operationId, conversationId: command.conversationId, record: decision })

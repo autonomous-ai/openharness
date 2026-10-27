@@ -44,6 +44,15 @@ describe('what a write tells host reads (review round 1)', () => {
     expect(hostMarker('machine', machine(), machine({}, reading(2)), none, 9)).toEqual({})
   })
 
+  it('leaves it alone when only the Lent hours credited from that reading changed', () => {
+    const lent = (agentMs: number, observation?: Record<string, unknown>) => {
+      const part = machine({}, observation)
+      return { ...part, contribution: { ...part.contribution, lent: [{ week: 0, agentMs }] } }
+    }
+    expect(hostMarker('machine', machine({}, reading(1)), lent(15_000, reading(2)), none, 9)).toEqual({})
+    expect(hostMarker('machine', lent(15_000), lent(30_000), none, 9)).toEqual({})
+  })
+
   it('moves it for a change to the machine\'s settings or ledger, and when the part is added or removed', () => {
     const at = { host: { hostChangedAt: new Date(9) } }
     const paused = machine({}, reading(2))

@@ -120,6 +120,7 @@ export class GitHubTokens {
 
   private async mint(key: string, request: TokenRequest): Promise<IssuedToken> {
     const repository = request.repository.fullName
+    let actual = request.repository
     const cached = await this.read(key)
     let entry: Entry | null = null
     if (cached && cached.assignmentId === request.assignmentId && cached.repository === repository) {
@@ -130,9 +131,12 @@ export class GitHubTokens {
       await this.forget(key)
     }
     if (!entry) {
-      const installation = await this.app.installation(request.repository)
-      if (installation === null) throw this.app.notInstalled(request.repository)
-      const minted = await this.app.createToken(installation, request.repository)
+      // Under the name GitHub knows it by now (app.ts `resolve`); the agent's checkout keeps the name it was given, which
+      // GitHub still answers for git.
+      const resolved = await this.app.resolve(request.repository)
+      if (resolved === null) throw this.app.notInstalled(request.repository)
+      actual = resolved.repository
+      const minted = await this.app.createToken(resolved.installation, actual)
       entry = { ...minted, repository, assignmentId: request.assignmentId }
       const ttl = Date.parse(minted.expiresAt) - this.now()
       if (ttl > 0) {
@@ -143,7 +147,7 @@ export class GitHubTokens {
         }
       }
     }
-    const branch = await this.app.defaultBranch(request.repository, entry.token)
+    const branch = await this.app.defaultBranch(actual, entry.token)
     return { token: entry.token, expiresAt: entry.expiresAt, repository, defaultBranch: branch.branch,
       defaultBranchProtected: branch.protection === 'pull_request', defaultBranchProtection: branch.protection }
   }
@@ -154,9 +158,9 @@ export class GitHubTokens {
    * login is never used for another person's project. Never cached: one start asks once, and it lasts at most an hour.
    */
   async prepare(repository: GitHubRepository): Promise<{ token: string; expiresAt: string; repository: string }> {
-    const installation = await this.app.installation(repository)
-    if (installation === null) throw this.app.notInstalled(repository)
-    const minted = await this.app.createToken(installation, repository, PREPARE_PERMISSIONS)
+    const resolved = await this.app.resolve(repository)
+    if (resolved === null) throw this.app.notInstalled(repository)
+    const minted = await this.app.createToken(resolved.installation, resolved.repository, PREPARE_PERMISSIONS)
     return { ...minted, repository: repository.fullName }
   }
 
