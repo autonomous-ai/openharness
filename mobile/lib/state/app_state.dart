@@ -84,6 +84,7 @@ import '../phone/phone_name_store.dart';
 import '../viewer/device_log.dart';
 import '../viewer/device_history.dart';
 import '../viewer/device_log_sync.dart';
+import '../swarm/swarm_request.dart';
 
 enum AppStatus { bootstrapping, unauthenticated, authenticated }
 
@@ -6295,6 +6296,94 @@ class AppNotifier extends ChangeNotifier {
     osStatus[machineId] = status;
     _rememberHarnessOs(machineId, status);
     notifyListeners();
+  }
+
+  /// The machine the Swarm was last asked through, kept while it stays up so the reads of one
+  /// screen do not hop between computers.
+  String? _swarmMachineId;
+
+  /// The machine the phone asks the Swarm through: one of the account's own whose socket is up —
+  /// the one asked last while it stays so, else the first by id, as the web build picks
+  /// (`desktop/lib/state/app_state.dart` `sharedTabsTarget`). Null with none up.
+  MachineState? _swarmMachine() {
+    bool usable(MachineState? machine) =>
+        machine != null &&
+        machine.connectionStatus == ConnectionStatus.connected &&
+        !machine.needsLink &&
+        machine.nodeOnline != false;
+    final kept = machineStates[_swarmMachineId];
+    if (usable(kept)) return kept;
+    MachineState? best;
+    for (final machine in machineStates.values) {
+      if (!usable(machine)) continue;
+      if (best == null ||
+          machine.machine.machineId.compareTo(best.machine.machineId) < 0) {
+        best = machine;
+      }
+    }
+    _swarmMachineId = best?.machine.machineId;
+    return best;
+  }
+
+  /// One Swarm backend call ([method] on [path], `/api/super-tabs…`), forwarded by one of the
+  /// account's own machines with its session (`super_tabs`, `action: backend`,
+  /// cli/src/superTabs/service.ts). The phone holds no Swarm credential: the machine checks that
+  /// this connection is its owner's, and the backend what that account may read. Answers the
+  /// backend's value; a refusal — the backend's, the machine's, or none to ask — is a
+  /// [SuperTabFailure], and an answer that lands after the account changed is dropped.
+  Future<Object?> swarmRequest(
+    String method,
+    String path, {
+    Map<String, dynamic>? body,
+  }) async {
+    final revision = _authRevision;
+    void stillThisAccount() {
+      if (!_authWorkCurrent(revision)) {
+        throw const SuperTabFailure(
+          'ACCOUNT_CHANGED',
+          'The account changed. Open Swarm again.',
+        );
+      }
+    }
+
+    final machine = _swarmMachine();
+    if (machine == null) {
+      throw const SuperTabFailure(
+        'MACHINE_UNAVAILABLE',
+        'Connect one of your computers to open Swarm.',
+      );
+    }
+    final Map<String, dynamic> answer;
+    try {
+      answer = await _conn(machine.machine.machineId).request(
+        'super_tabs',
+        payload: {
+          'action': 'backend',
+          'method': method,
+          'path': path,
+          'body': ?body,
+        },
+        timeout: const Duration(seconds: 30),
+      );
+    } on WsRequestFailure catch (failure) {
+      stillThisAccount();
+      throw SuperTabFailure(
+        failure.code,
+        failure.detail ?? 'Could not reach this Swarm.',
+      );
+    } catch (_) {
+      stillThisAccount();
+      rethrow;
+    }
+    stillThisAccount();
+    if (answer['error'] != null) {
+      throw SuperTabFailure(
+        answer['error'].toString(),
+        answer['detail'] as String? ?? 'Could not reach this Swarm.',
+        statusCode: (answer['status'] as num?)?.toInt() ?? 0,
+      );
+    }
+    return answer['value'];
   }
 
   Future<Map<String, dynamic>> connectors(
