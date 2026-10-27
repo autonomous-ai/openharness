@@ -25,6 +25,8 @@ class Task:
     difficulty: str = 'medium'
     # Tasks whose model family this one must not share: a review is done by another family than the work it reviews.
     independent_of: Tuple[str, ...] = ()
+    # Families the task may not use at all: a review whose build has already run is done by another family.
+    avoid_families: Tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -160,7 +162,8 @@ def load(data: dict) -> Instance:
     tasks = [Task(id=str(t['id']), title=str(t.get('title', t['id'])), minutes=int(t['minutes']), floor=int(t.get('floor', 1)),
                   kind=str(t.get('kind') or 'default'), deps=tuple(str(d) for d in t.get('deps', ())),
                   spend={str(k): float(v) for k, v in t.get('spend', {}).items()}, difficulty=str(t.get('difficulty', 'medium')),
-                  independent_of=tuple(str(d) for d in t.get('independent_of', ())))
+                  independent_of=tuple(str(d) for d in t.get('independent_of', ())),
+                  avoid_families=tuple(str(f) for f in t.get('avoid_families', ())))
              for t in data['tasks']]
     machines = [Machine(id=str(m['id']), name=str(m.get('name', m['id'])), slots=int(m['slots']), engines=tuple(m['engines']))
                 for m in data['machines']]
@@ -211,4 +214,5 @@ def options(instance: Instance, task: Task, floor: bool = True) -> List[Option]:
     quality meets the floor."""
     return [Option(task=task.id, machine=m.id, model=k.id, minutes=duration(task, k))
             for m in instance.machines for k in instance.models
-            if k.engine in m.engines and (k.machines is None or m.id in k.machines) and (not floor or k.quality_for(task.kind) >= task.floor)]
+            if k.engine in m.engines and (k.machines is None or m.id in k.machines) and k.family not in task.avoid_families
+            and (not floor or k.quality_for(task.kind) >= task.floor)]

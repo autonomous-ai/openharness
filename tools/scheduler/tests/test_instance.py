@@ -71,6 +71,12 @@ class OptionsTest(unittest.TestCase):
         inst = load(instance([task('a', minutes=60)], [machine('m')], [model('local', speed=0.5)]))
         self.assertEqual(options(inst, inst.tasks[0])[0].minutes, 120)
 
+    def test_a_family_the_task_must_avoid_is_never_offered(self):
+        # A review whose build already ran on Codex: Codex is off the table even though it meets the floor.
+        inst = load(instance([task('r', avoid_families=['codex'])], [machine('m', engines=['claude', 'codex'])],
+                             [model('opus'), model('gpt', engine='codex')]))
+        self.assertEqual([o.model for o in options(inst, inst.tasks[0])], ['opus'])
+
     def test_a_model_limited_to_some_machines_is_offered_only_there(self):
         inst = load(instance([task('a')], [machine('m1'), machine('m2')], [model('local', machines=['m2'])]))
         self.assertEqual([o.machine for o in options(inst, inst.tasks[0])], ['m2'])
