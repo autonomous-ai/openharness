@@ -89,6 +89,30 @@ describe('a service in its own process', () => {
     expect(stops.usage).toHaveBeenCalledOnce()
   })
 
+  // The review of #1765: with the Swarm off, the edge host still loaded its retention and the agent cleanup kept its
+  // members. Its side is loaded only on, only for a service that acts on it, and handed to it there.
+  it('hands the Swarm\'s side only to the services that act on it, only while the Swarm is on', async () => {
+    const swarm = { retainedHarnesses: () => new Set(['member']) } as never
+    const load = vi.fn(async () => swarm)
+    const run = async (named: string, env: Record<string, string | undefined>) => {
+      const seen: ServiceProcessOptions[] = []
+      const runners = new Map(['agentCleanup', 'sharing', 'handoff', 'models', 'search', 'workspaces'].map(name =>
+        [name, async () => (options: ServiceProcessOptions) => { seen.push(options); return { stop: vi.fn() } }]))
+      const saved = process.env.HARNESS_SWARM
+      if (env.HARNESS_SWARM === undefined) delete process.env.HARNESS_SWARM; else process.env.HARNESS_SWARM = env.HARNESS_SWARM
+      try { await startServiceProcess(named, { runners, host: fakeHost().host, swarm: load }) } finally {
+        if (saved === undefined) delete process.env.HARNESS_SWARM; else process.env.HARNESS_SWARM = saved
+      }
+      return seen.map(options => options.swarm)
+    }
+    for (const named of ['agentCleanup', 'sharing', 'handoff', 'models']) expect(await run(named, {}), named).toEqual([swarm])
+    expect(await run('workspaces,agentCleanup', {})).toEqual([swarm, swarm])
+    expect(load).toHaveBeenCalledTimes(5)
+    expect(await run('search,workspaces', {})).toEqual([undefined, undefined])
+    for (const off of ['off', 'OFF', '0', 'false', 'no']) expect(await run('workspaces,agentCleanup,models', { HARNESS_SWARM: off }), off).toEqual([undefined, undefined, undefined])
+    expect(load).toHaveBeenCalledTimes(5)
+  })
+
   it('leaves off a service that cannot start and runs the others; with none started it fails as a lone one did', async () => {
     const error = vi.spyOn(console, 'error').mockImplementation(() => {})
     const fails = async () => () => { throw new Error('injected fault: usage') }

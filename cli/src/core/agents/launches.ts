@@ -12,7 +12,7 @@ import { readdir, rmdir } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { dirname, isAbsolute } from 'node:path'
 import type { BackendSocket } from '../../backendSocket.js'
-import type { Asker } from '../api.js'
+import type { Asker, SwarmLaunch } from '../api.js'
 import { installedDsh } from '../../dsh/installed.js'
 import { DSH_ID_RE, dshSupportedEngines } from '../../dsh/manifest.js'
 import { folderTrust } from '../../engines/launchPrep.js'
@@ -22,7 +22,6 @@ import { ENGINES, isTerminalEngine, type AgentEngine } from '../../engines/types
 import { AgentCreationReceiptError, creationFingerprint, validCreationId, type AgentCreationOutcome, type AgentCreationReceipts, type AgentCreationStatus, type CreationAuthority } from '../../lib/agentCreationReceipt.js'
 import type { AgentFrame } from '../../lib/agentFrame.js'
 import { engineLabel } from '../../lib/agentNames.js'
-import { isSwarmRole, isSwarmSkillMode } from '../../lib/swarmSkills.js'
 import {
   AGENT_NAME_RE, FirstPromptUnsupportedError, MAX_FIRST_PROMPT_CHARS, NamedAgentUnsupportedError, permissionModeApproves,
   permissionModeFlags, supportsFirstPrompt, supportsNamedAgent, unsupportedLaunchModelFlag,
@@ -75,12 +74,14 @@ export interface LaunchRequestDeps {
   modelTarget: (selection: NewAgentModel) => Promise<GridLaunchOverride | null>
   /** A guest's New Harness, as the guest's own OS user (core/agents/guestCreate.ts); null where there is none. */
   guestCreate?: () => GuestCreate | null
+  /** Which Swarm roles and skill modes a start may ask for (superTabs/inCore/launch.ts); absent while the Swarm is off. */
+  swarmLaunch?: Pick<SwarmLaunch, 'role' | 'mode'>
 }
 
 type Reply = (result: Record<string, unknown>) => void
 type CreateInput = Parameters<CreateAgent>[0]
 
-export function createLaunchRequests({ receipts, createAgent, prepareCreate, prepareEngine, forkAgent, resumeAgent, restartAgent, byAgent, toProject, modelTarget, guestCreate }: LaunchRequestDeps) {
+export function createLaunchRequests({ receipts, createAgent, prepareCreate, prepareEngine, forkAgent, resumeAgent, restartAgent, byAgent, toProject, modelTarget, guestCreate, swarmLaunch }: LaunchRequestDeps) {
   const validateInstalled = async (input: CreateInput, known?: ReturnType<typeof installedDsh>): Promise<{ error: string; detail: string } | null> => {
     if (input.dsh) {
       const installed = known ?? installedDsh(input.dsh)
@@ -407,13 +408,17 @@ export function createLaunchRequests({ receipts, createAgent, prepareCreate, pre
       prompt = trimmed || null
     }
     const swarmRole = payload.swarmRole
+    if (!swarmLaunch && ((swarmRole !== undefined && swarmRole !== null) || payload.swarmSkillMode !== undefined || payload.swarmGitHub !== undefined)) {
+      reply({ error: 'INVALID_SWARM_ROLE', detail: 'The Swarm is off on this computer (HARNESS_SWARM).' }); return
+    }
+    const isSwarmRole = (value: unknown): value is NonNullable<CreateInput['swarmRole']> => !!swarmLaunch?.role(value)
     if (swarmRole !== undefined && swarmRole !== null &&
       (!isSwarmRole(swarmRole) || (engine !== 'claude' && engine !== 'codex'))) {
       reply({ error: 'INVALID_SWARM_ROLE', detail: 'A Swarm role is lead, dev or review, for Claude Code or Codex.' }); return
     }
     // The skills of the project the agent joins (superTabs/start.ts); a start from before modes sends none.
     const swarmSkillMode = payload.swarmSkillMode
-    if (swarmSkillMode !== undefined && !isSwarmSkillMode(swarmSkillMode)) {
+    if (swarmSkillMode !== undefined && !swarmLaunch?.mode(swarmSkillMode)) {
       reply({ error: 'INVALID_SWARM_ROLE', detail: 'A Swarm skill mode is default or orchestration.' }); return
     }
     // Another person's project work: git and gh use the Harness GitHub App's token for the task (lib/swarmGitHub.ts).
