@@ -71,7 +71,9 @@ function cardIn(value: unknown): SwarmCard | null {
     if (!lead) return null
     leads.push(lead)
   }
-  return { id: card.id, name: cut(card.name, NAME_BYTES), count: card.count, leads }
+  // What waits on the person in this Swarm, a count only; nothing waiting, or a service from before it, leaves the field out.
+  const needsYou = whole(card.needsYou) && card.needsYou > 0 ? card.needsYou : 0
+  return { id: card.id, name: cut(card.name, NAME_BYTES), count: card.count, leads, ...(needsYou ? { needsYou } : {}) }
 }
 
 /** A recap the service sent, checked and cut; null when it is not one. */

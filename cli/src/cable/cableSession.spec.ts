@@ -3892,6 +3892,23 @@ describe('swarm cards', () => {
     } finally { await session.stop() }
   })
 
+  it('says on a Swarm\'s card how much waits on the person, and sends the card again when that changes', async () => {
+    const state: { cards: SwarmCard[] } = { cards: [{ ...card('st1'), needsYou: 2 }, card('st2')] }
+    const host = cardHost(state)
+    const { session, port } = await connect(host)
+    try {
+      port.say(PRO)
+      await vi.waitFor(() => expect(ofType(port, 'supertab')).toHaveLength(2))
+      expect(ofType(port, 'supertab').map(f => [f.id, f.needsYou])).toEqual([['st1', 2], ['st2', undefined]])
+      expect(ofType(port, 'supertab')[1]).not.toHaveProperty('needsYou')
+      state.cards = [card('st1'), card('st2')]
+      await session.syncSwarmCards()
+      await vi.waitFor(() => expect(ofType(port, 'supertab')).toHaveLength(3))
+      expect(ofType(port, 'supertab')[2]).toMatchObject({ id: 'st1' })
+      expect(ofType(port, 'supertab')[2]).not.toHaveProperty('needsYou')
+    } finally { await session.stop() }
+  })
+
   it('still sends the cards, with no tab link, when the desktop is closed', async () => {
     const host = cardHost({ cards: [card('st1')] })   // listSwarms: no window
     const { session, port } = await connect(host)

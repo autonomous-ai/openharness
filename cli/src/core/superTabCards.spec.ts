@@ -51,6 +51,15 @@ describe('the Swarm cards on the devices', () => {
     expect(swarmCards).toHaveBeenCalledWith([card('t1')])
   })
 
+  it('keeps how much waits on the person when it is a positive whole number, and drops the field otherwise', () => {
+    const { cards, swarmCards, log } = setup()
+    cards.cards([card('t1', [lead('l1')], { needsYou: 2 }), card('t2', [lead('l1')], { needsYou: 0 }), card('t3', [lead('l1')], { needsYou: -1 }),
+      card('t4', [lead('l1')], { needsYou: 1.5 }), card('t5', [lead('l1')], { needsYou: '3' })])
+    expect(swarmCards.mock.calls[0][0].map((c: { needsYou?: number }) => c.needsYou)).toEqual([2, undefined, undefined, undefined, undefined])
+    expect(swarmCards.mock.calls[0][0][1]).not.toHaveProperty('needsYou')
+    expect(log).not.toHaveBeenCalled()
+  })
+
   it('keeps at most 16 Swarms of 12 Leads and cuts strings on a character boundary', () => {
     const { cards, swarmCards } = setup()
     const many = Array.from({ length: 20 }, (_, i) => card(`t${i}`, Array.from({ length: 15 }, (_, j) => lead(`l${j}`))))

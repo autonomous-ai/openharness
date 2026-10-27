@@ -21,7 +21,9 @@ type Json = Record<string, unknown>
 export type LeadState = 'ask' | 'stuck' | 'work' | 'done'
 /** `order`: the project's index in the Swarm (the app's order), so a dial can show the Leads as the app does whatever their urgency. */
 export interface SwarmLead { id: string; projectId: string; project: string; engine: string; owner: string; local: string; state: LeadState; order: number; since?: number }
-export interface SwarmCard { id: string; name: string; count: number; leads: SwarmLead[] }
+/** `needsYou`: what in this Swarm waits on the person reading it (their open decisions), absent when nothing does. A count only:
+ *  what was asked is read in the app, never on a device someone else may be looking at. */
+export interface SwarmCard { id: string; name: string; count: number; leads: SwarmLead[]; needsYou?: number }
 export interface LeadRecap { tabId: string; leadId: string; text: string; at: number; none: boolean }
 
 const MAX_CARDS = 16, MAX_LEADS = 12, NAME_BYTES = 48, RECAP_BYTES = 1500, MAX_LIST_PAGES = 10, MAX_RECAPS_IN_FLIGHT = 2
@@ -225,7 +227,9 @@ export class SwarmCards {
       const tab = known.get(row.id as string)
       if (!tab) continue
       const { count, leads } = leadsOf(tab.state, this.machineId, live, me)
-      cards.push({ id: row.id as string, name: cut(String(tab.state.name ?? row.name ?? ''), NAME_BYTES), count, leads })
+      const waiting = tab.state.decisionsWaiting
+      const needsYou = typeof waiting === 'number' && Number.isSafeInteger(waiting) && waiting > 0 ? waiting : 0
+      cards.push({ id: row.id as string, name: cut(String(tab.state.name ?? row.name ?? ''), NAME_BYTES), count, leads, ...(needsYou ? { needsYou } : {}) })
     }
     // `since` moves every poll while a turn runs and the Pro counts on by itself, so it alone never re-sends the list.
     // Nor does a clock that keeps its turn; one whose turn changed (the Lead's ended, a worker's goes on) does. The start is

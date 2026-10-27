@@ -195,6 +195,19 @@ function detailReads(calls: string[]): string[] {
 afterEach(() => { vi.useRealTimers() })
 
 describe('SwarmCards.tick', () => {
+  it('says on a Swarm\'s card how many decisions wait on the person, and says it again when that changes', async () => {
+    const t = setup({ t1: { lastChangedAt: 1, state: { ...swarm(), decisionsWaiting: 2 } }, t2: { lastChangedAt: 1, state: swarm({ name: 'quiet' }) } })
+    await t.cards.tick()
+    expect(t.seen.at(-1)!.map(c => [c.id, c.needsYou])).toEqual([['t1', 2], ['t2', undefined]])
+    // None waiting, or a server from before decisions: the card is as it always was.
+    expect(t.seen.at(-1)![1]).not.toHaveProperty('needsYou')
+    t.tabs.t1.lastChangedAt = 2
+    t.tabs.t1.state = { ...swarm(), decisionsWaiting: 0 }
+    await t.cards.tick()
+    expect(t.seen).toHaveLength(2)
+    expect(t.seen.at(-1)![0]).not.toHaveProperty('needsYou')
+  })
+
   it('lists, reads every tab once, then reads only a tab whose change time moved', async () => {
     const t = setup({ t1: { lastChangedAt: 1, state: swarm() }, t2: { lastChangedAt: 4, state: swarm({ name: 'other' }) } })
     await t.cards.tick()

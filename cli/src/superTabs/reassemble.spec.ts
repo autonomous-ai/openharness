@@ -58,6 +58,13 @@ describe('the old Swarm state, rebuilt from parts', () => {
     expect(list(reassemble(storeOf(plain)).agents)[0]).not.toHaveProperty('roleId')
   })
 
+  it('gives a person the decisions waiting on them, and says nothing of them when the server sent none', () => {
+    const first = readFixture<FirstLoad>('parts-builder')
+    expect(reassemble(storeOf(first))).not.toHaveProperty('decisionsWaiting')
+    first.derived.decisionsWaiting = 3
+    expect(reassemble(storeOf(first)).decisionsWaiting).toBe(3)
+  })
+
   it('gives a person their waiting mentions, and a Swarm from before projects no progress', () => {
     const first = readFixture<FirstLoad>('parts-builder')
     first.derived.mentionsWaiting = 2

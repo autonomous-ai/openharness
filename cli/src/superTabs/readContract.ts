@@ -35,6 +35,8 @@ export interface Derived {
   otherProjectsWork?: Json[]
   /** A person only. */
   mentionsWaiting?: number
+  /** A person only: the decisions asked of them that are still open (backend superTabs/decisions.ts). */
+  decisionsWaiting?: number
 }
 
 interface ReadMeta {
