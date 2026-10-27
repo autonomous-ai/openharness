@@ -119,8 +119,9 @@ export function carriedBackendEnv(source: NodeJS.ProcessEnv): Record<string, str
     if (autonomous !== 'prod' && autonomous !== 'stag') throw new TeamInputError(`AUTONOMOUS_ENV must be prod or stag: ${JSON.stringify(autonomous)}`)
     carried.AUTONOMOUS_ENV = autonomous
   }
-  const updates = source.ADAPTER_UPDATE_DISABLE?.trim()
-  if (updates === 'true' || updates === '1') carried.ADAPTER_UPDATE_DISABLE = 'true'
+  // Never ADAPTER_UPDATE_DISABLE: an owner on a local build (`install-cli.sh --no-updates`) carried it into the team
+  // account, whose daemon then never updated, and with nobody to update it by hand it stayed without what came after
+  // (2026-10-27: no tmux of its own, so no teammate's agent could start there). The team account always takes releases.
   return carried
 }
 

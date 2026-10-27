@@ -482,6 +482,44 @@ class Name(unittest.TestCase):
         self.assertIn('127.0.1.1 studio\n', hosts)
 
 
+class InstallGh(unittest.TestCase):
+    def install(self, present, *answers):
+        """install_gh with gh [present] or not, pacman exiting with each of [answers] in turn (0 puts gh there)."""
+        calls = []
+        replies = iter(answers)
+        with tempfile.TemporaryDirectory() as folder:
+            gh = Path(folder) / 'gh'
+            if present:
+                gh.touch()
+            def run(command, **_):
+                calls.append(command)
+                code = next(replies)
+                if code == 0:
+                    gh.touch()
+                return result(code, '', '' if code == 0 else 'error: failed retrieving file\n')
+            with patch.object(setup, 'GH', gh), patch.object(setup.subprocess, 'run', side_effect=run), \
+                 patch.object(setup, 'log'):
+                return setup.install_gh(), calls
+
+    def test_present_it_installs_nothing(self):
+        self.assertEqual(self.install(True), ({'installed': True}, []))
+
+    def test_gone_it_is_put_back_from_the_computers_repositories(self):
+        answer, calls = self.install(False, 0)
+        self.assertEqual(answer, {'installed': True})
+        self.assertEqual(calls, [['pacman', '-S', '--needed', '--noconfirm', 'github-cli']])
+
+    def test_with_its_databases_refreshed_from_the_same_snapshot_when_they_fall_short(self):
+        answer, calls = self.install(False, 1, 0)
+        self.assertEqual(answer, {'installed': True})
+        self.assertEqual(calls[1], ['pacman', '-S', '-y', '--needed', '--noconfirm', 'github-cli'])
+
+    def test_says_why_it_could_not(self):
+        answer, _ = self.install(False, 1, 1)
+        self.assertEqual(answer, {'installed': False,
+                                  'message': 'The GitHub CLI could not be installed: error: failed retrieving file'})
+
+
 class Server:
     def shutdown(self): pass
     def server_close(self): pass
