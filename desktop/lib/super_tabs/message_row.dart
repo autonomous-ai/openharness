@@ -25,6 +25,7 @@ class SuperTabMessageRow extends StatefulWidget {
     this.machineName,
     this.reply,
     this.replyAuthor,
+    this.replyGone = false,
     this.grouped = false,
     this.onReply,
     this.onOpenAgent,
@@ -45,6 +46,9 @@ class SuperTabMessageRow extends StatefulWidget {
   final String? machineName;
   final SuperTabMessage? reply;
   final String? replyAuthor;
+
+  /// The original [reply] would show is no longer in the conversation.
+  final bool replyGone;
   final bool grouped;
   final VoidCallback? onReply, onOpenAgent;
 
@@ -297,7 +301,9 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
                                         'Earlier message',
                                     text:
                                         widget.reply?.text ??
-                                        'The original message isn’t loaded.',
+                                        (widget.replyGone
+                                            ? 'The original message is no longer in this conversation.'
+                                            : 'The original message isn’t loaded.'),
                                     onTap: widget.onOpenReply == null
                                         ? null
                                         : () => widget.onOpenReply!(context),

@@ -143,36 +143,128 @@ void main() {
     await tester.pumpAndSettle();
   });
 
+  Finder messageList() => find.byWidgetPredicate(
+    (w) => w is ListView && '${w.key}'.contains('super-messages-'),
+  );
+  ScrollPosition listPosition(WidgetTester tester) => tester
+      .state<ScrollableState>(
+        find.descendant(of: messageList(), matching: find.byType(Scrollable)),
+      )
+      .position;
+  // A spinner never settles: these pump a while instead.
+  Future<void> settle(WidgetTester tester) async {
+    for (var i = 0; i < 10; i++) {
+      await tester.pump(const Duration(milliseconds: 100));
+    }
+  }
+
+  /// The reader drags the chat to its top.
+  Future<void> dragToTop(WidgetTester tester) async {
+    await tester.drag(
+      messageList(),
+      Offset(0, listPosition(tester).pixels + 200),
+    );
+    await settle(tester);
+  }
+
+  final earlierLoading = find.byKey(const ValueKey('super-earlier-loading'));
+
+  testWidgets('near the top, earlier messages load by themselves in place', (
+    tester,
+  ) async {
+    final server = chat(250, replyTo: 'message-10');
+    final c = await show(tester, server);
+    final loaded = c.messages('lead').length;
+    server.holdReads = Completer<void>();
+    await dragToTop(tester);
+    expect(earlierLoading, findsOneWidget);
+    expect(find.text('Earlier messages'), findsNothing);
+    final top = c.messages('lead').first.id;
+    final before = tester.getTopLeft(row(top));
+    server.holdReads!.complete();
+    server.holdReads = null;
+    await tester.pumpAndSettle();
+    expect(c.messages('lead').length, greaterThan(loaded));
+    expect(tester.getTopLeft(row(top)), before);
+    expect(earlierLoading, findsNothing);
+  });
+
+  testWidgets('a failed earlier read offers the button to try again', (
+    tester,
+  ) async {
+    final server = chat(250, replyTo: 'message-10');
+    final c = await show(tester, server);
+    final loaded = c.messages('lead').length;
+    server.holdReads = Completer<void>();
+    await dragToTop(tester);
+    // Tried with no click, then the read fails.
+    expect(earlierLoading, findsOneWidget);
+    server.holdReads!.completeError(StateError('Offline'));
+    server.holdReads = null;
+    await tester.pumpAndSettle();
+    expect(find.text('Earlier messages'), findsOneWidget);
+    expect(earlierLoading, findsNothing);
+    server.failReads = false;
+    await tester.tap(find.text('Earlier messages'));
+    await tester.pumpAndSettle();
+    expect(c.messages('lead').length, greaterThan(loaded));
+  });
+
   testWidgets('dragging while earlier messages load keeps the reader there', (
     tester,
   ) async {
     final server = chat(250, replyTo: 'message-10');
     await show(tester, server);
-    final list = find.byWidgetPredicate(
-      (w) => w is ListView && '${w.key}'.contains('super-messages-'),
-    );
-    final scroll = tester
-        .state<ScrollableState>(
-          find.descendant(of: list, matching: find.byType(Scrollable)),
-        )
-        .position;
-    await tester.scrollUntilVisible(
-      find.text('Earlier messages'),
-      -500,
-      scrollable: find.descendant(of: list, matching: find.byType(Scrollable)),
-    );
-    await tester.pumpAndSettle();
     server.holdReads = Completer<void>();
-    await tester.tap(find.text('Earlier messages'));
-    await tester.pump();
+    await dragToTop(tester);
+    expect(earlierLoading, findsOneWidget);
     // The reader moves on while the page is slow.
-    await tester.drag(list, const Offset(0, -300));
-    await tester.pumpAndSettle();
-    final dragged = scroll.pixels;
+    await tester.drag(messageList(), const Offset(0, -300));
+    await settle(tester);
+    final dragged = listPosition(tester).pixels;
     server.holdReads!.complete();
     server.holdReads = null;
     await tester.pumpAndSettle();
-    expect(scroll.pixels, dragged);
+    expect(listPosition(tester).pixels, dragged);
+  });
+
+  testWidgets('a quote whose original is not loaded reads it and shows it', (
+    tester,
+  ) async {
+    final server = chat(250, replyTo: 'message-10');
+    final reads = <String>[];
+    server.onRead = reads.add;
+    final c = await show(tester, server);
+    expect(c.messages('lead').any((m) => m.id == 'message-10'), isFalse);
+    final quote = quoteIn('message-250');
+    expect(
+      find.descendant(of: quote, matching: find.text('Note 10')),
+      findsOneWidget,
+    );
+    expect(
+      find.descendant(of: quote, matching: find.text('Earlier message')),
+      findsNothing,
+    );
+    // Rebuilds never read it again.
+    await tester.pump(const Duration(seconds: 5));
+    await tester.pumpAndSettle();
+    expect(reads.where((p) => p.contains('messageId=message-10')).length, 1);
+  });
+
+  testWidgets('a quote whose original was deleted says so', (tester) async {
+    await show(tester, chat(60, replyTo: 'message-gone'));
+    // Its read lands after the first frames.
+    await tester.pump(const Duration(seconds: 1));
+    await tester.pumpAndSettle();
+    expect(
+      find.descendant(
+        of: quoteIn('message-60'),
+        matching: find.text(
+          'The original message is no longer in this conversation.',
+        ),
+      ),
+      findsOneWidget,
+    );
   });
 
   testWidgets('a deleted original says so instead', (tester) async {
@@ -207,6 +299,7 @@ void main() {
     final server = chat(60, replyTo: 'message-61');
     server.append('Private plan', conversationId: 'offline');
     await show(tester, server);
+    expect(find.textContaining('Private plan'), findsNothing);
     await tester.tap(quoteIn('message-60'));
     await tester.pumpAndSettle();
     expect(find.textContaining('Private plan'), findsNothing);

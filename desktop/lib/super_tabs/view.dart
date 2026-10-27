@@ -109,6 +109,9 @@ class _SuperTabViewState extends State<SuperTabView>
   bool _viewEnabled = true;
   bool _chatCovered = false;
   final _loadingOlder = <String>{};
+  // Conversations whose last read of earlier messages failed: they offer the
+  // button instead of reading again by themselves.
+  final _olderFailed = <String>{};
   // The list's rows while built, by message: a page read in above finds the
   // row the reader was looking at, to keep it in place.
   final _built = <String, BuildContext>{};
@@ -596,6 +599,22 @@ class _SuperTabViewState extends State<SuperTabView>
 
   Future<void> _earlier() => _loadEarlier(c.selectedId);
 
+  /// A scroll ending near the top reads the earlier page with no click.
+  void _readEarlierNearTop(String id, ScrollMetrics metrics) {
+    if (metrics.extentBefore > 400 ||
+        _finding != null ||
+        _loadingOlder.contains(id) ||
+        _olderFailed.contains(id) ||
+        !c.hasOlder(id)) {
+      return;
+    }
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted && c.selectedId == id && !_loadingOlder.contains(id)) {
+        unawaited(_loadEarlier(id));
+      }
+    });
+  }
+
   /// Reads the page before those loaded, keeping what is on screen in place:
   /// the row of [keep] when it is built, else the topmost row. Rows can
   /// regroup as earlier ones arrive, so the one the reader looks at is kept.
@@ -607,18 +626,38 @@ class _SuperTabViewState extends State<SuperTabView>
       await c.loadMessages(id, older: true);
       return;
     }
-    final kept = _built[keep];
-    final keptTop = kept != null && kept.mounted ? _topInList(kept) : null;
-    final anchor = keptTop != null
-        ? (messageId: keep!, top: keptTop)
-        : _firstVisibleRow();
     final request = _scrollRequest;
+    final loaded = c.messages(id).length;
+    final started = _anchorRow(keep);
+    setState(() {});
     try {
       await c.loadMessages(id, older: true);
     } finally {
       _loadingOlder.remove(id);
     }
+    if (!mounted) return;
+    // Measured again as the page lands, before its rows are laid out: what
+    // is on screen now, wherever the reader went meanwhile. A conversation
+    // left meanwhile keeps the place it had.
+    final anchor = c.selectedId == id ? _anchorRow(keep) : started;
+    setState(() {
+      // A read that brought nothing while more remain failed.
+      if (c.hasOlder(id) && c.messages(id).length == loaded) {
+        _olderFailed.add(id);
+      } else {
+        _olderFailed.remove(id);
+      }
+    });
     if (anchor != null) await _keepRow(id, anchor, request: request);
+  }
+
+  /// The row of [keep] when it is built, else the topmost row, and its top.
+  ({String messageId, double top})? _anchorRow(String? keep) {
+    final kept = _built[keep];
+    final keptTop = kept != null && kept.mounted ? _topInList(kept) : null;
+    return keptTop != null
+        ? (messageId: keep!, top: keptTop)
+        : _firstVisibleRow();
   }
 
   /// The topmost row in view, and its top within the list.
@@ -1537,7 +1576,11 @@ class _SuperTabViewState extends State<SuperTabView>
     final agent = message.fromAgent
         ? c.snapshot?.agent(message.authorId)
         : null;
-    final reply = byId[message.replyTo];
+    // An original outside the pages read is read by itself for its quote.
+    final quoted = message.replyTo == null || byId.containsKey(message.replyTo)
+        ? null
+        : c.quoted(message.conversationId, message.replyTo!);
+    final reply = byId[message.replyTo] ?? quoted?.message;
     return SuperTabMessageRow(
       key: ValueKey('super-message-${message.id}'),
       message: message,
@@ -1564,6 +1607,7 @@ class _SuperTabViewState extends State<SuperTabView>
       grouped: grouped,
       reply: reply,
       replyAuthor: reply == null ? null : _shownAuthor(c, reply),
+      replyGone: quoted != null && quoted.message == null,
       onOpenReply: (row) => unawaited(_openOriginal(message, row)),
       onReply: c.canWrite && c.selected?.archived == false
           ? () {
@@ -1766,6 +1810,11 @@ class _SuperTabViewState extends State<SuperTabView>
                         final id = c.selectedId;
                         final atEnd = event.metrics.extentAfter < 40;
                         _following[id] = atEnd;
+                        // Once the scroll ends, so keeping the place never
+                        // cuts a drag short.
+                        if (event is ScrollEndNotification) {
+                          _readEarlierNearTop(id, event.metrics);
+                        }
                         if (atEnd) {
                           final sequence = messages.lastOrNull?.sequence ?? 0;
                           WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -1786,14 +1835,36 @@ class _SuperTabViewState extends State<SuperTabView>
                           itemCount: entries.length + 1,
                           itemBuilder: (context, index) {
                             if (index == 0) {
-                              return c.hasOlder(c.selectedId)
-                                  ? Align(
-                                      child: TextButton(
-                                        onPressed: () => unawaited(_earlier()),
-                                        child: const Text('Earlier messages'),
-                                      ),
-                                    )
-                                  : const SizedBox.shrink();
+                              final id = c.selectedId;
+                              if (!c.hasOlder(id)) {
+                                return const SizedBox.shrink();
+                              }
+                              // The button only after a read failed: near
+                              // the top, earlier pages read by themselves.
+                              if (_olderFailed.contains(id)) {
+                                return Align(
+                                  child: TextButton(
+                                    onPressed: () => unawaited(_earlier()),
+                                    child: const Text('Earlier messages'),
+                                  ),
+                                );
+                              }
+                              return SizedBox(
+                                height: 40,
+                                child: _loadingOlder.contains(id)
+                                    ? const Center(
+                                        child: SizedBox.square(
+                                          key: ValueKey(
+                                            'super-earlier-loading',
+                                          ),
+                                          dimension: 16,
+                                          child: CircularProgressIndicator(
+                                            strokeWidth: 2,
+                                          ),
+                                        ),
+                                      )
+                                    : null,
+                              );
                             }
                             final entry = entries[index - 1];
                             final message = entry.message;
@@ -1804,19 +1875,21 @@ class _SuperTabViewState extends State<SuperTabView>
                                 ? entries[index - 2].message
                                 : null;
                             final time = message.createdAt;
-                            return _BuiltRow(
-                              id: message.id,
-                              rows: _built,
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.stretch,
-                                children: [
-                                  if (time != null &&
-                                      !DateUtils.isSameDay(
-                                        time.toLocal(),
-                                        previous?.createdAt?.toLocal(),
-                                      ))
-                                    _date(time),
-                                  KeyedSubtree(
+                            return Column(
+                              crossAxisAlignment: CrossAxisAlignment.stretch,
+                              children: [
+                                if (time != null &&
+                                    !DateUtils.isSameDay(
+                                      time.toLocal(),
+                                      previous?.createdAt?.toLocal(),
+                                    ))
+                                  _date(time),
+                                // The message itself is kept in place: its
+                                // date moves above earlier ones as they come.
+                                _BuiltRow(
+                                  id: message.id,
+                                  rows: _built,
+                                  child: KeyedSubtree(
                                     key: message.id == _target
                                         ? _targetKey
                                         : null,
@@ -1842,8 +1915,8 @@ class _SuperTabViewState extends State<SuperTabView>
                                             ),
                                     ),
                                   ),
-                                ],
-                              ),
+                                ),
+                              ],
                             );
                           },
                         ),

@@ -237,6 +237,11 @@ class SuperTabController extends ChangeNotifier {
   int _uploadRun = 0;
   final _messages = <String, List<SuperTabMessage>>{};
 
+  /// Originals of replies quoted from outside the pages read, one message
+  /// each, never part of the list: null when it is gone. Asked for once.
+  final _quoted = <String, Map<String, SuperTabMessage?>>{};
+  final _quoting = <String, Set<String>>{};
+
   /// Where each conversation's older history continues: the oldest message
   /// read, as the backend's page cursor names it (section 4.6). Null at the
   /// start of the conversation.
@@ -387,6 +392,50 @@ class SuperTabController extends ChangeNotifier {
     }
     _saveSoon();
     _changed();
+  }
+
+  /// The original [messageId] of a reply in [id] whose page is not read:
+  /// read by itself the first time it is asked for. Null until it is known;
+  /// a record holding null when the conversation no longer has it.
+  ({SuperTabMessage? message})? quoted(String id, String messageId) {
+    final known = _quoted[id];
+    if (known != null && known.containsKey(messageId)) {
+      return (message: known[messageId]);
+    }
+    if ((_quoting[id] ??= {}).add(messageId)) {
+      scheduleMicrotask(() => _readQuoted(id, messageId));
+    }
+    return null;
+  }
+
+  /// Reads one message of [id] only: the backend checks the reader may read
+  /// that conversation, as for its pages. A failed read leaves the quote
+  /// saying the original isn't loaded.
+  Future<void> _readQuoted(String id, String messageId) async {
+    if (_disposed || accessRevoked || snapshot?.conversation(id) == null) {
+      return;
+    }
+    try {
+      final answer = await request(
+        'GET',
+        '${_messagesPath(id)}?messageId=${Uri.encodeComponent(messageId)}',
+      );
+      if (_disposed ||
+          accessRevoked ||
+          snapshot?.conversation(id) == null ||
+          _quoting[id]?.contains(messageId) != true) {
+        return;
+      }
+      final rows = (answer['messages'] as List)
+          .map((m) => SuperTabMessage.fromJson(superTabMap(m)))
+          .toList();
+      if (rows.length > 1 ||
+          rows.any((m) => m.id != messageId || m.conversationId != id)) {
+        return;
+      }
+      (_quoted[id] ??= {})[messageId] = rows.firstOrNull;
+      _changed();
+    } catch (_) {}
   }
 
   List<SuperTabMessage> messages(String id) => List.unmodifiable(
@@ -564,6 +613,8 @@ class SuperTabController extends ChangeNotifier {
     _parts = null;
     _partsReadAt = null;
     _messages.clear();
+    _quoted.clear();
+    _quoting.clear();
     _rows.clear();
     _before.clear();
   }
@@ -594,6 +645,8 @@ class SuperTabController extends ChangeNotifier {
     snapshot = null;
     _parts = null;
     _messages.clear();
+    _quoted.clear();
+    _quoting.clear();
     _poll?.cancel();
     _changed();
   }
@@ -950,6 +1003,8 @@ class SuperTabController extends ChangeNotifier {
               (id) => !next.projects.any((project) => project.id == id),
             );
         _messages.removeWhere((id, _) => !allowed.contains(id));
+        _quoted.removeWhere((id, _) => !allowed.contains(id));
+        _quoting.removeWhere((id, _) => !allowed.contains(id));
         _rows.removeWhere((id, _) => !allowed.contains(id));
         _drafts.removeWhere((id, _) => removed.contains(id));
         _attachments.removeWhere((id, files) {
@@ -1280,6 +1335,8 @@ class SuperTabController extends ChangeNotifier {
       snapshot = null;
       _parts = null;
       _messages.clear();
+      _quoted.clear();
+      _quoting.clear();
       _poll?.cancel();
     }
   }
@@ -1421,6 +1478,8 @@ class SuperTabController extends ChangeNotifier {
       if (failure is SuperTabFailure &&
           const {'FORBIDDEN', 'NOT_FOUND'}.contains(failure.code)) {
         _messages.remove(id);
+        _quoted.remove(id);
+        _quoting.remove(id);
         unawaited(refresh());
       }
       _changed();
