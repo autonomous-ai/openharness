@@ -1078,6 +1078,22 @@ model SuperTabMention {
   @@index([tabId, conversationId, personId])
 }
 
+/// One reactor's emoji on one message (superTabs/reactions.ts). The id is derived from all four, so adding the same
+/// reaction twice keeps one row; message pages count them.
+model SuperTabReaction {
+  id             String   @id @map("_id")
+  tabId          String
+  conversationId String
+  messageId      String
+  /// person | agent
+  actorKind      String
+  actorId        String
+  emoji          String
+  createdAt      DateTime @default(now())
+
+  @@index([tabId, messageId])
+}
+
 /// One uploaded file, which one message of the actor that uploaded it can send once.
 model SuperTabAttachment {
   id             String   @id @map("_id")

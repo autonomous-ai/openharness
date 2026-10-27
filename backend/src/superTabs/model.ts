@@ -173,6 +173,8 @@ export interface Conversation {
   audience?: import('./parts/types.js').Audience
   /** The last attempt here that was lost: its agent's status and checks for it are refused, even after reassignment. */
   lostAttempt?: { id: string; agentId: string }
+  /** Counts reaction changes here (reactions.ts), so readers see a new reaction on an older message. */
+  reactionSeq?: number
 }
 
 export function appendPullRequestUrls(group: Conversation, texts: Iterable<string | null | undefined>): void {

@@ -15,6 +15,7 @@ import { TERMINAL_KEYS, terminalAlert, terminalRequest, terminalResult, type Ter
 import { loseTasks, renewLease, renewOwnTask } from './liveness.js'
 import { credentialResult, redactCredentials, type CredentialKind } from './credentials.js'
 import { dirtyGroups, reportGroups, summarize } from './projectUpdates.js'
+import { react, reactionSchema, type ReactionTarget } from './reactions.js'
 import { avatarChoice, setAgentAvatar, setMemberAvatar, setStatus, statusSchema, type AvatarUpload } from './profile.js'
 import { agentKind, agentProjectId, audienceOf, agentSetRole, deleteProject, markConfidential, requireSingleRegistration, groupProject, inviteLanding, ledProject, manageProject, MAX_ROLES, mutableProjects, placeRules, projectMembers, projectOf, projectRules, projectsOf, readAgent, readConversation, readProject, roleVersion, sameProject, sharedWithLeads, SKILL_SET_NAMES, skillSetOf, type ProjectRole, type RoleKind, type SwarmProject } from './projects.js'
 
@@ -128,6 +129,7 @@ export const commandSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('message.send'), conversationId: id, text: z.string().trim().max(32_000), replyTo: id.nullable(), recipientIds: z.array(id).max(16),
     attachmentIds: z.array(id).max(MAX_ATTACHMENTS).optional(), mentions: z.array(id).max(MAX_MENTIONS).optional(), agentOnly: z.literal(true).optional() }).strict(),
   z.object({ type: z.literal('mention.done'), mentionId: id }).strict(),
+  z.object({ type: z.literal('message.react'), conversationId: id, messageId: id, emoji: reactionSchema, on: z.boolean() }).strict(),
   z.object({ type: z.literal('delivery.resolve'), deliveryId: id, resolution: z.enum(['received', 'resend', 'cancel']) }).strict(),
   z.object({ type: z.literal('work.define'), conversationId: id, brief: text.optional(), task: task.optional(), checks: z.array(check).min(1).max(40) }).strict()
     .refine(c => c.task !== undefined || c.brief !== undefined, 'Provide a task or brief.')
@@ -229,6 +231,8 @@ export interface CommandContext {
   attachments?: Attachment[]
   /** The avatar upload `member.avatar` or `agent.avatar` names, checked by the store the same way (profile.ts). */
   avatarUpload?: AvatarUpload
+  /** The message `message.react` names, read by the store (reactions.ts). */
+  reaction?: ReactionTarget
   /** Route decisions this tab recorded in the last hour, counted by the store. */
   recentRoutes?: number
   /** The decision a command names, read from SuperTabRouteDecision by the store. */
@@ -1340,6 +1344,9 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       break
     case 'member.status':
       setStatus(state, actor, command.status, context.now)
+      break
+    case 'message.react':
+      result.changed = react(postable(state, actor, command.conversationId), command.messageId, command.on, context.reaction)
       break
     case 'member.avatar':
       setMemberAvatar(state, actor, command.avatar, context.avatarUpload)

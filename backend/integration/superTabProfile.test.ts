@@ -179,3 +179,65 @@ describe('setting avatars', () => {
     expect(await db.superTabAttachment.findUnique({ where: { id: avatar.id } })).toMatchObject({ usedBy: expect.any(String) })
   })
 })
+
+describe('reactions', () => {
+  const post = async (tab: string, text = 'Shipped the fix') =>
+    (await run(tab, { type: 'message.send', conversationId: 'lead', text, replyTo: null, recipientIds: [] })).result.messageId as string
+  const react = (tab: string, messageId: string, on: boolean, user = owner, emoji: 'tada' | 'heart' = 'tada', operationId = randomUUID()) =>
+    run(tab, { type: 'message.react', conversationId: 'lead', messageId, emoji, on }, user, undefined, operationId)
+  const page = async (tab: string, user = owner) =>
+    (await read(tab, user, 'conversations/lead/messages')).body.data.messages as Array<{ id: string; reactions: Array<{ emoji: string; count: number }> }>
+  const countsOf = async (tab: string, messageId: string, user = owner) => (await page(tab, user)).find(m => m.id === messageId)!.reactions
+
+  it('adds and removes idempotently, and bumps the group only on a change', async () => {
+    const tab = await swarm()
+    const messageId = await post(tab)
+    const seq = async () => ((await read(tab, owner)).body.data.groups as Array<{ key: string; data: { reactionSeq?: number } }>)
+      .find(g => g.key === 'lead')!.data.reactionSeq ?? 0
+    expect((await react(tab, messageId, true)).result).toMatchObject({ changed: true })
+    expect((await react(tab, messageId, true)).result).toMatchObject({ changed: false })
+    expect(await countsOf(tab, messageId)).toEqual([{ emoji: 'tada', count: 1, by: [{ kind: 'person', id: owner.sub }] }])
+    expect(await seq()).toBe(1)
+    await react(tab, messageId, false)
+    expect((await react(tab, messageId, false)).result).toMatchObject({ changed: false })
+    expect(await countsOf(tab, messageId)).toEqual([])
+    expect(await seq()).toBe(2)
+  })
+
+  it('keeps one row when the same reaction arrives twice at once, and counts two reactors racing', async () => {
+    const tab = await swarm()
+    const messageId = await post(tab)
+    await Promise.all([react(tab, messageId, true), react(tab, messageId, true), react(tab, messageId, true, peer)])
+    expect(await countsOf(tab, messageId)).toMatchObject([{ emoji: 'tada', count: 2 }])
+    expect(await db.superTabReaction.count({ where: { tabId: tab, messageId } })).toBe(2)
+  })
+
+  it('answers a retried operation with its first result', async () => {
+    const tab = await swarm()
+    const messageId = await post(tab)
+    const operationId = randomUUID()
+    const first = await react(tab, messageId, true, owner, 'tada', operationId)
+    expect((await react(tab, messageId, true, owner, 'tada', operationId)).result).toEqual(first.result)
+  })
+
+  it('drops a member who left from the counts, and refuses a reader outside the Swarm', async () => {
+    const tab = await swarm()
+    const messageId = await post(tab)
+    await react(tab, messageId, true, peer, 'heart')
+    await react(tab, messageId, true, owner, 'heart')
+    await run(tab, { type: 'member.remove', userId: peer.sub })
+    expect(await countsOf(tab, messageId)).toEqual([{ emoji: 'heart', count: 1, by: [{ kind: 'person', id: owner.sub }] }])
+    await expect(react(tab, messageId, true, outsider)).rejects.toMatchObject({ status: 403 })
+    await expect(react(tab, messageId, true, peer)).rejects.toMatchObject({ status: 403 })
+  })
+
+  it('refuses a message from another conversation or another Swarm', async () => {
+    const tab = await swarm()
+    const other = await swarm()
+    const elsewhere = await post(other)
+    await expect(react(tab, elsewhere, true)).rejects.toMatchObject({ code: 'NOT_FOUND' })
+    const group = (await run(tab, { type: 'conversation.create', title: 'Side', brief: 'Side work.', checks: [] })).result.conversationId as string
+    const side = (await run(tab, { type: 'message.send', conversationId: group, text: 'here', replyTo: null, recipientIds: [] })).result.messageId as string
+    await expect(react(tab, side, true)).rejects.toMatchObject({ code: 'NOT_FOUND' })
+  })
+})

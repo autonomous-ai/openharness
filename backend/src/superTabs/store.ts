@@ -9,6 +9,7 @@ import { machineBillingAllowsDataPlane } from '../lib/billingState.js'
 import { applyCommand, authorizeCommandAccess, operationSchema, PAIR_CHAIN_LIMIT, postable, type Command, type CommandContext } from './commands.js'
 import { redactCredentials } from './credentials.js'
 import type { AvatarUpload } from './profile.js'
+import { reactionCounts, type ReactionTarget } from './reactions.js'
 import { attachmentMime, attachmentName, AttachmentTooLarge, AVATAR_PURPOSE, AVATAR_TYPES, checkedType, MAX_ATTACHMENT_BYTES, MAX_AVATAR_BYTES, objectKeyFor, peekType, publicUrl,
   type Attachment, type Attachments } from './attachments.js'
 import { randomBytes } from 'node:crypto'
@@ -38,6 +39,8 @@ import { authenticatedEmail, authorizeSwarmJoin, configureSharing, joinSwarmSche
   saveSharingSchema, sharingDetails, type JoinSwarm, type SaveSharing } from './sharing.js'
 
 type Transaction = Prisma.TransactionClient
+type ReactCommand = Extract<Command, { type: 'message.react' }>
+const reactionId = (tabId: string, actor: Actor, command: ReactCommand) => stableId(tabId, command.messageId, actorKey(actor), command.emoji)
 const json = (value: unknown): Prisma.InputJsonValue => JSON.parse(JSON.stringify(value)) as Prisma.InputJsonValue
 type SendCommand = Extract<Command, { type: 'message.send' }>
 // Prisma on MongoDB: `usedBy: null` alone misses rows that never had the field.
@@ -723,6 +726,7 @@ export class SuperTabStore {
       }
       if (command.type === 'mention.done') context.mention = await readMention(tx, tabId, command.mentionId)
       if (command.type === 'message.send' && command.attachmentIds?.length) context.attachments = await this.sendable(tx, tabId, actor, command)
+      if (command.type === 'message.react') context.reaction = await this.reactionTarget(tx, tabId, actor, command)
       if ((command.type === 'member.avatar' || command.type === 'agent.avatar') && command.avatar?.kind === 'upload') {
         context.avatarUpload = await this.avatarUpload(tx, tabId, actor, command.avatar.id)
       }
@@ -914,6 +918,7 @@ export class SuperTabStore {
       if (command.type === 'message.send' && actor.kind === 'person') await resolveByReply(tx, tabId, command.conversationId, actor.userId, context.now)
       await writeMentions(tx, tabId, effects.state, effects.messages, context.now)
       if (command.type === 'mention.done') await markDone(tx, tabId, command.mentionId, context.mention!.personId, context.now)
+      if (command.type === 'message.react') await this.writeReaction(tx, tabId, actor, command)
       if (context.avatarUpload) {
         // Conflicts with a concurrent use of the same picture: only one command can take it.
         const taken = await tx.superTabAttachment.updateMany({ where: { tabId, id: context.avatarUpload.id, purpose: AVATAR_PURPOSE, ...unused },
@@ -1116,6 +1121,24 @@ export class SuperTabStore {
     })
   }
 
+  /** The message a reaction names, when it is in that conversation and this actor may see it, and whether the actor already
+   *  reacted to it with that emoji. An agent-only notice is its recipient's alone. */
+  private async reactionTarget(tx: Transaction, tabId: string, actor: Actor, command: ReactCommand): Promise<ReactionTarget | undefined> {
+    const message = await tx.superTabMessage.findFirst({ where: { id: command.messageId, tabId, conversationId: command.conversationId },
+      select: { id: true, source: true, recipientIds: true } })
+    if (!message || (agentOnly(message.source) && !(actor.kind === 'agent' && message.recipientIds.includes(actor.agentId)))) return undefined
+    return { messageId: message.id, reacted: !!await tx.superTabReaction.findUnique({ where: { id: reactionId(tabId, actor, command) } }) }
+  }
+
+  /** Writes or removes the actor's reaction row. The same reaction twice keeps one row: its id is derived. */
+  private async writeReaction(tx: Transaction, tabId: string, actor: Actor, command: ReactCommand) {
+    const id = reactionId(tabId, actor, command)
+    if (!command.on) return void await tx.superTabReaction.deleteMany({ where: { id } })
+    const actorId = actor.kind === 'person' ? actor.userId : actor.agentId
+    await tx.superTabReaction.upsert({ where: { id }, update: {}, create: { id, tabId, conversationId: command.conversationId,
+      messageId: command.messageId, actorKind: actor.kind, actorId, emoji: command.emoji } })
+  }
+
   /** The avatar upload a command names, when it is this actor's, an avatar and unused; otherwise the command refuses it. */
   private async avatarUpload(tx: Transaction, tabId: string, actor: Actor, id: string): Promise<AvatarUpload | undefined> {
     const attachments = this.attachments ?? fail('ATTACHMENTS_UNAVAILABLE', 'Avatars are not available on this server.', 503)
@@ -1312,10 +1335,13 @@ export class SuperTabStore {
       const page = rows.slice(0, 100)
       const next = rows.length > 100 ? { sequence: page.at(-1)!.sequence, id: page.at(-1)!.id } : null
       if (!forward) page.reverse()
+      const reactions = page.length ? reactionCounts(state, await tx.superTabReaction.findMany({ where: { tabId, messageId: { in: page.map(m => m.id) } },
+        select: { messageId: true, emoji: true, actorKind: true, actorId: true } })) : new Map()
       const deliveries = page.length ? await tx.superTabDelivery.findMany({ where: { tabId, messageId: { in: page.map(m => m.id) } },
         select: { id: true, messageId: true, agentId: true, status: true, receipt: true,
           holdReason: true, holdSince: true, deliveredAt: true, answeredAt: true, createdAt: true, updatedAt: true } }) : []
-      return { messages: page.map(m => ({ ...m, mentions: m.mentions ?? [], deliveries: deliveries.filter(d => d.messageId === m.id) })), next }
+      return { messages: page.map(m => ({ ...m, mentions: m.mentions ?? [], reactions: reactions.get(m.id) ?? [],
+        deliveries: deliveries.filter(d => d.messageId === m.id) })), next }
     })
   }
 
