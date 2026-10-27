@@ -3,7 +3,7 @@
 export const ORG_LABEL = 'Team'
 
 export type OrgRole = 'owner' | 'admin' | 'member' | 'guest'
-export type OrgAction = 'people.list' | 'swarms.listAll' | 'swarm.create' | 'swarm.joinOpen' | 'swarm.manage' | 'org.invite'
+export type OrgAction = 'people.list' | 'swarms.listAll' | 'swarm.create' | 'swarm.joinOpen' | 'swarm.invite' | 'swarm.manage' | 'org.invite'
   | 'org.rename' | 'org.transfer' | 'org.delete'
 
 /** Deny by default: an action is allowed only to the roles listed. No role reads a Swarm it is not in. */
@@ -12,6 +12,8 @@ const ALLOWED: Record<OrgAction, readonly OrgRole[]> = {
   'swarms.listAll': ['owner', 'admin'],
   'swarm.create': ['owner', 'admin', 'member'],
   'swarm.joinOpen': ['owner', 'admin', 'member'],
+  /** To a Swarm they are in. */
+  'swarm.invite': ['owner', 'admin', 'member'],
   'swarm.manage': ['owner', 'admin'],
   'org.invite': ['owner', 'admin'],
   'org.rename': ['owner'],

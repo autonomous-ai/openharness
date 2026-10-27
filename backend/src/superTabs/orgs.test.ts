@@ -16,6 +16,7 @@ describe('what each Team role may do (design: Roles)', () => {
   it('lets members and above create Swarms and join those open to the Team', () => {
     expect(allowed('swarm.create')).toEqual(['owner', 'admin', 'member'])
     expect(allowed('swarm.joinOpen')).toEqual(['owner', 'admin', 'member'])
+    expect(allowed('swarm.invite')).toEqual(['owner', 'admin', 'member'])
   })
 
   it('lets only owners and admins invite to the Team or manage any Swarm of it', () => {

@@ -22,8 +22,8 @@ import { clock, insertParts, lastChangedAt, loadActive, reassemble, split, type 
 import { commitParts, indexesOf, numberMessages, type Touch, type Written } from './parts/commit.js'
 import { touchesFor } from './parts/touches.js'
 import { revokeNativeContexts, SuperTabNativeStore } from './native.js'
-import { addMember, hasOrgAccess, listOrgs, memberId, ORG_ACCESS_REVOKED, orgForNewSwarm, requireOrgAccess, requireOrgRole, SwarmOrgs } from './orgStore.js'
-import { ORG_LABEL } from './orgs.js'
+import { activeMember, addMember, hasOrgAccess, listOrgs, memberId, ORG_ACCESS_REVOKED, orgForNewSwarm, requireOrgAccess, requireOrgRole, SwarmOrgs } from './orgStore.js'
+import { ORG_LABEL, type OrgRole } from './orgs.js'
 import {
   activeWork, actorKey, agent, agentOnly, appendPullRequestUrls, author, conversation, createSuperTab, fail, person, stableId, visibleState, finishWorker,
   SuperTabError, isLeads, parkLaterConversations, syncLeads, type Actor, type Agent, type Assignment, type Author, type MessageDraft, type SuperTabState,
@@ -824,6 +824,10 @@ export class SuperTabStore {
       if (command.type === 'decision.answer') context.decision = await readAskedDecision(tx, tabId, command.decisionId)
       if (command.type === 'message.send' && command.attachmentIds?.length) context.attachments = await this.sendable(tx, tabId, actor, command)
       if (command.type === 'route.record') context.recentRoutes = await recentRoutes(tx, tabId, context.now)
+      if ((command.type === 'invite.create' || command.type === 'invite.revoke') && actor.kind === 'person' && original.orgId) {
+        const member = await activeMember(tx, original.orgId, actor.userId)
+        if (member) context.orgRole = member.role as OrgRole
+      }
       if (TEAM_WORK_COMMANDS.has(command.type)) {
         context.teamMachines = await this.teamMachines(tx, original)
         context.otherOrgMachines = await this.otherOrgMachines(tx, original)

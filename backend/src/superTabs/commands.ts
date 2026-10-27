@@ -17,6 +17,7 @@ import { loseTasks, renewLease, renewOwnTask } from './liveness.js'
 import { digestStartsAfter, knownTimeZone } from './digest.js'
 import { credentialResult, redactCredentials, type CredentialKind } from './credentials.js'
 import { dirtyGroups, reportGroups, summarize } from './projectUpdates.js'
+import { orgCan, type OrgRole } from './orgs.js'
 import { recordAnswer, recordAsked, recordStatus } from './leaderboard/record.js'
 import { agentKind, agentProjectId, audienceOf, agentSetRole, canReadProject, deleteProject, markConfidential, requireSingleRegistration, groupProject, inviteLanding, ledProject, manageProject, MAX_ROLES, mutableProjects, placeRules, projectMembers, projectOf, projectRules, projectsOf, readAgent, readConversation, readProject, roleVersion, sameProject, sharedWithLeads, SKILL_SET_NAMES, skillSetOf, type ProjectRole, type RoleKind, type SwarmProject } from './projects.js'
 
@@ -250,6 +251,8 @@ export interface CommandContext {
   /** The tab's contributed machines whose account row is signed in as a Harness Team account (`Machine.sessionKind`),
    *  read by the store for the commands that start, assign or route work (machines.ts teamWorkCheck). */
   teamMachines?: string[]
+  /** The person's role in the Swarm's Team, read by the store for invitations (orgs.ts); absent outside a Team. */
+  orgRole?: OrgRole
   /** Machines of this Swarm also contributed to a Swarm of another Team (store.ts otherOrgMachines). */
   otherOrgMachines?: string[]
   /** No Harness GitHub App on this server (routes/superTabs.ts): a Mac's Harness Team account has no git login to fetch or
@@ -397,6 +400,14 @@ export function postable(state: SuperTabState, actor: Actor, conversationId: str
 }
 function owner(state: SuperTabState, actor: Actor): void {
   if (actor.kind !== 'person' || actor.userId !== state.ownerId) fail('OWNER_REQUIRED', 'Only the Super Tab owner can manage invitations.', 403)
+}
+/** Inviting to a Team's Swarm (design, Roles): its owner, or anyone in it whose Team role may invite to a Swarm they are
+ *  in — owners, admins and members, never guests. Revoking: its owner, or the Team's owners and admins. A Swarm from
+ *  before Teams keeps invitations to its owner. */
+function inviter(state: SuperTabState, actor: Actor, context: Partial<CommandContext>, action: 'swarm.invite' | 'swarm.manage'): void {
+  if (actor.kind === 'person' && actor.userId === state.ownerId) return
+  if (state.orgId && actor.kind === 'person' && context.orgRole && orgCan(context.orgRole, action)) return
+  fail('OWNER_REQUIRED', 'Your role cannot manage invitations to this Swarm.', 403)
 }
 /** A requester is a member who can read the project the work is in. */
 function requester(state: SuperTabState, project: SwarmProject, personId: string): string {
@@ -1385,7 +1396,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       break
     }
     case 'invite.create': {
-      owner(state, actor)
+      inviter(state, actor, context, 'swarm.invite')
       const landing = inviteLanding(state, command.conversationId) ?? fail('NO_PROJECT', 'Create a project before inviting people.')
       const email = command.email.trim().toLowerCase()
       if (state.people.some(p => p.email === email)) fail('ALREADY_MEMBER', 'This person is already in the Super Tab.')
@@ -1396,7 +1407,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       break
     }
     case 'invite.revoke':
-      owner(state, actor)
+      inviter(state, actor, context, 'swarm.manage')
       state.invitations = state.invitations.filter(i => i.id !== command.inviteId)
       break
     case 'member.remove': {

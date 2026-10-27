@@ -434,3 +434,24 @@ describe('the sweep of unfinished removals', () => {
     expect(await db.swarmOrgRemoval.count({ where: { orgId, finishedAt: null } })).toBe(0)
   })
 })
+
+describe('who may invite people to a Team\'s Swarm', () => {
+  it('lets the Swarm\'s owner and the Team\'s owners, admins and members in it invite, never a guest; revoking is for owners and admins', async () => {
+    const orgId = await team('Inviting')
+    const tab = await create(owner, 'Invites', orgId)
+    for (const who of [admin, member, peer]) await invite(tab, who)
+    const inviteAs = async (who: AuthUser, email: string) => call('POST', `/api/super-tabs/${tab}/commands`, who,
+      { operationId: randomUUID(), command: { type: 'invite.create', email, role: 'collaborator', conversationId: 'lead' } })
+    for (const [who, email] of [[owner, 'a@example.com'], [admin, 'b@example.com'], [member, 'c@example.com']] as const) {
+      const reply = await inviteAs(who, email)
+      expect(reply.statusCode, who.email).toBe(200)
+    }
+    const refused = await inviteAs(peer, 'd@example.com')
+    expect(refused.statusCode).toBe(403)
+    const inviteId = (await inviteAs(member, 'e@example.com')).json().data.result.inviteId as string
+    const revokeAs = (who: AuthUser) => call('POST', `/api/super-tabs/${tab}/commands`, who,
+      { operationId: randomUUID(), command: { type: 'invite.revoke', inviteId } })
+    expect((await revokeAs(member)).statusCode).toBe(403)
+    expect((await revokeAs(admin)).statusCode).toBe(200)
+  })
+})
