@@ -204,4 +204,97 @@ void main() {
       expect({for (final a in glance.agents) a.agent.id}, {'mine', 'placed'});
     });
   });
+
+  group('once per Swarm read', () {
+    SuperTabSnapshot team() => swarm(
+      agents: [
+        agent('mine', displayName: 'Ana'),
+        {...agent('other', displayName: 'Bo'), 'projectId': 'project-2'},
+      ],
+      groups: [working('mine', 'needs_human')],
+    );
+
+    test('the same read and project give the same glance, not a new one', () {
+      final snapshot = team();
+
+      final first = swarmTeamGlance(snapshot, projectId: project, now: now);
+
+      expect(
+        swarmTeamGlance(snapshot, projectId: project, now: now),
+        same(first),
+      );
+      expect(
+        swarmTeamGlance(snapshot, now: now),
+        same(swarmTeamGlance(snapshot, now: now)),
+        reason: 'the whole Swarm is kept too',
+      );
+      expect(
+        swarmTeamGlance(snapshot, now: now),
+        isNot(same(first)),
+        reason: 'each project keeps its own',
+      );
+    });
+
+    test('a new read is counted again', () {
+      final before = swarmTeamGlance(team(), projectId: project, now: now);
+      final after = swarmTeamGlance(
+        swarm(
+          agents: [agent('mine', displayName: 'Ana')],
+          groups: [working('mine', 'working')],
+        ),
+        projectId: project,
+        now: now,
+      );
+
+      expect(before.line, '1 waiting');
+      expect(after.line, '1 working');
+    });
+
+    test('a limit that runs out reads again, on the same read', () {
+      final snapshot = swarm(
+        agents: [
+          {
+            ...agent('a1', displayName: 'Ana'),
+            'limitedUntil': DateTime(
+              2026,
+              10,
+              27,
+              9,
+              5,
+            ).toUtc().toIso8601String(),
+          },
+        ],
+        groups: [working('a1', 'working')],
+      );
+      String labelAt(DateTime at) =>
+          swarmTeamGlance(snapshot, now: at).agents.single.label;
+
+      expect(labelAt(now), 'Limited until 09:05');
+      expect(
+        labelAt(now.add(const Duration(minutes: 4))),
+        'Limited until 09:05',
+      );
+      expect(labelAt(DateTime(2026, 10, 27, 9, 5)), 'Working');
+      expect(labelAt(now), 'Limited until 09:05', reason: 'asked for earlier');
+    });
+    test('a read after losing a project keeps nothing of it', () {
+      final before = team();
+      expect(
+        swarmTeamGlance(before, projectId: 'project-2', now: now).agents,
+        hasLength(1),
+      );
+
+      final after = swarm(
+        agents: [agent('mine', displayName: 'Ana')],
+        groups: [working('mine', 'needs_human')],
+      );
+
+      final glance = swarmTeamGlance(after, projectId: 'project-2', now: now);
+      expect(glance.agents, isEmpty);
+      expect(glance.line, 'No agents yet');
+      expect(swarmTeamGlance(after, now: now).agents.map((a) => a.agent.id), [
+        'mine',
+      ]);
+    });
+  });
 }

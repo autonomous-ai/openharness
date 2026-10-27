@@ -39,17 +39,38 @@ Map<String, String> swarmPartners(Map<String, dynamic> state) => {
 ///
 /// The one place this rule lives: when people's areas reach the phone, the
 /// owner gives way to whoever covers the area here.
+///
+/// Worked out once per read, reader and [partners]; the list is shared, so it
+/// cannot be changed.
 List<SwarmWaitingWork> swarmWaitingWork(
   SuperTabSnapshot snapshot,
   String accountId, {
   Map<String, String> partners = const {},
-}) => [
-  for (final conversation in snapshot.conversations)
-    if (superTabWorkWaits(conversation.assignment?['status']))
-      if (snapshot.projects
-              .where((p) => p.id == conversation.projectId)
-              .firstOrNull
-          case final project?)
-        if ((partners[conversation.id] ?? project.ownerId) == accountId)
-          SwarmWaitingWork(conversation, project, snapshot),
-];
+}) {
+  final kept = _kept[snapshot];
+  if (kept != null &&
+      kept.accountId == accountId &&
+      identical(kept.partners, partners)) {
+    return kept.work;
+  }
+  final work = List<SwarmWaitingWork>.unmodifiable([
+    for (final conversation in snapshot.conversations)
+      if (superTabWorkWaits(conversation.assignment?['status']))
+        if (snapshot.projectById(conversation.projectId) case final project?)
+          if ((partners[conversation.id] ?? project.ownerId) == accountId)
+            SwarmWaitingWork(conversation, project, snapshot),
+  ]);
+  _kept[snapshot] = (accountId: accountId, partners: partners, work: work);
+  return work;
+}
+
+/// Each read's waiting work, kept with the read: a replaced read takes it
+/// with it, and another reader or new partners work it out again.
+final _kept =
+    Expando<
+      ({
+        String accountId,
+        Map<String, String> partners,
+        List<SwarmWaitingWork> work,
+      })
+    >('swarm waiting work');
