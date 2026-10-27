@@ -459,7 +459,7 @@ describe('Super Tab native delivery handoff', () => {
     await host.tick(); t.revoke(); await host.tick()
     expect(t.core.turns.cancelDelivery).toHaveBeenCalledWith('team:service:superTabs:delivery')
     expect(t.core.turns.leaseDeliveries).toHaveBeenLastCalledWith('superTabs', {})
-    t.revoke(false); await host.tick()
+    t.revoke(false); t.wait(1_000); await host.tick()
     expect(t.core.turns.deliver).toHaveBeenCalledTimes(1)
     expect(t.receipts[0].uncertain).toBe(true)
     t.remove(); await host.tick()
@@ -529,6 +529,70 @@ describe('Super Tab native delivery handoff', () => {
     const t = setup()
     t.revoke()
     await expect(backend(t.core, 'GET', '/api/super-tabs/tab')).rejects.toMatchObject({ code: 'FORBIDDEN', status: 403 })
+  })
+})
+
+describe('a delivery poll or claim that keeps failing', () => {
+  /** The calls the host makes for one failing path, counted as the backend refuses them with `status`. */
+  function failing(t: ReturnType<typeof setup>, refuse: (method: string, path: string) => boolean, status = 503) {
+    const original = vi.mocked(t.core.account.backend).getMockImplementation()!
+    const calls = { n: 0 }
+    vi.mocked(t.core.account.backend).mockImplementation(async (method, path, body) => {
+      if (!refuse(method, path)) return original(method, path, body)
+      calls.n++
+      return { status, body: { success: false, error: { code: 'SWARM_BUSY', message: 'This Swarm is busy. Try again in a moment.' } } }
+    })
+    return calls
+  }
+
+  it('asks again for the claim after 1 s, 2 s, 4 s and so on, never later than 30 s, and not in between', async () => {
+    const t = setup(), host = t.open()
+    const claims = failing(t, (method, path) => method === 'POST' && path.endsWith('/deliveries/delivery'))
+    await host.tick()
+    expect(claims.n).toBe(1)
+    await host.tick()
+    expect(claims.n).toBe(1)
+    t.wait(999); await host.tick()
+    expect(claims.n).toBe(1)
+    t.wait(1); await host.tick()
+    expect(claims.n).toBe(2)
+    t.wait(1_999); await host.tick()
+    expect(claims.n).toBe(2)
+    t.wait(1); await host.tick()
+    expect(claims.n).toBe(3)
+    // 4 s, 8 s, 16 s, then 30 s every time.
+    for (const [wait, attempts] of [[4_000, 4], [8_000, 5], [16_000, 6], [30_000, 7], [30_000, 8]] as const) {
+      t.wait(wait - 1); await host.tick()
+      expect(claims.n).toBe(attempts - 1)
+      t.wait(1); await host.tick()
+      expect(claims.n).toBe(attempts)
+    }
+  })
+
+  it('claims at once, on the next second, after the backend answers again', async () => {
+    const t = setup(), host = t.open()
+    let refuse = true
+    failing(t, (method, path) => refuse && method === 'POST' && path.endsWith('/deliveries/delivery'))
+    await host.tick()
+    t.wait(1_000); await host.tick()
+    refuse = false
+    t.wait(2_000); await host.tick()
+    expect(t.saved().entries.delivery.stage).toBe('submitting')
+    expect(t.core.turns.deliver).toHaveBeenCalledTimes(1)
+  })
+
+  it('asks again for a delivery list the backend refuses only after the same growing wait', async () => {
+    const t = setup(), host = t.open()
+    const lists = failing(t, (method, path) => method === 'GET' && path.endsWith('/deliveries'))
+    await host.tick()
+    await host.tick()
+    expect(lists.n).toBe(1)
+    t.wait(1_000); await host.tick()
+    expect(lists.n).toBe(2)
+    t.wait(1_999); await host.tick()
+    expect(lists.n).toBe(2)
+    t.wait(1); await host.tick()
+    expect(lists.n).toBe(3)
   })
 })
 

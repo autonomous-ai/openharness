@@ -130,6 +130,10 @@ const STOPS_FRESH_MS = 5_000
 const JOIN_FINAL = new Set(['MACHINES_FULL', 'OWNER_REQUIRED'])
 /** A Lead's reopen that failed (an engine that cannot start, a busy pane) waits this long, doubling up to half an hour, so a
  *  crash loop never spins; one the core took waits a minute for its session to show before it is asked again. */
+/** A delivery poll or claim the backend refused is asked again after 1 s, doubling to 30 s: every host retried each second, which
+ *  added to an overloaded backend (production at 5 pods, 2026-10-27). */
+const DELIVERY_RETRY_MS = 1_000
+const DELIVERY_RETRY_MAX_MS = 30_000
 const LEAD_RETRY_MS = 5_000
 const LEAD_RETRY_MAX_MS = 30 * 60_000
 const LEAD_REOPEN_WAIT_MS = 60_000
@@ -204,6 +208,8 @@ export class SuperTabHost {
   private replacementsRunning: Promise<void> | null = null
   private nextReplacementsAt = 0
   private timer: ReturnType<typeof setTimeout> | null = null
+  /** Per agent's delivery list and per delivery's claim, the failures in a row and when it may be asked again. */
+  private readonly deliveryRetries = new Map<string, { failures: number; retryAt: number }>()
   private native: NativeRecorder | null = null
   private machines: ContributedMachines | null = null
   private readonly machineDeps: Partial<MachineDeps>
@@ -516,6 +522,15 @@ export class SuperTabHost {
   private async leases(): Promise<boolean> {
     return this.core.turns.leaseDeliveries('superTabs', Object.fromEntries(this.authorized))
   }
+  private backedOff(key: string): boolean {
+    const retry = this.deliveryRetries.get(key)
+    return !!retry && this.now() < retry.retryAt
+  }
+  private retryLater(key: string): void {
+    const retry = this.deliveryRetries.get(key) ?? { failures: 0, retryAt: 0 }
+    retry.retryAt = this.now() + Math.min(DELIVERY_RETRY_MAX_MS, DELIVERY_RETRY_MS * 2 ** retry.failures++)
+    this.deliveryRetries.set(key, retry)
+  }
   private async poll(): Promise<void> {
     const data = (await this.sources.feed.refresh()).roster
     if (this.stopped) return
@@ -592,26 +607,35 @@ export class SuperTabHost {
       if (!this.core.agents.byAgent(target.agent.harnessId) || !this.core.agents.terminalAvailable(target.agent.harnessId)) continue
       running.push(target)
       const path = `/api/super-tabs/${target.tabId}/agents/${target.agent.id}/deliveries`
+      const listKey = `list:${target.tabId}:${target.agent.id}`
+      if (this.backedOff(listKey)) continue
+      let listed = false
       try {
         const deliveries = await backend(this.core, 'GET', path)
         if (this.stopped) return
         if (!Array.isArray(deliveries)) throw new Error('Invalid Super Tab delivery list.')
+        listed = true
+        this.deliveryRetries.delete(listKey)
         for (const item of deliveries) {
           const delivery = object(item)
           if (!identifier(delivery.id)) continue
           seen.add(delivery.id)
+          const claimKey = `claim:${delivery.id}`
+          if (this.backedOff(claimKey)) continue
           // Checked before anything is typed: a new delivery, or one held while its agent may since have stopped leading. A
           // claimed one with no journal is never typed, only reported as uncertain; a delivered one only acknowledged.
           const entry = this.journal.entries[delivery.id]
           if ((entry ? entry.stage === 'prepared' : !delivery.claimId) && !this.mayRead(target, delivery)) continue
-          try { await this.accept(target, delivery, path) } catch (error) {
+          try { await this.accept(target, delivery, path); this.deliveryRetries.delete(claimKey) } catch (error) {
             // Answered (or resolved by a person) between the roster read and this call: nothing is owed, and the
             // agent's other deliveries go on.
-            if (!(error instanceof SuperTabHostError) || error.code !== 'DELIVERY_RESOLVED') throw error
+            if (!(error instanceof SuperTabHostError) || error.code !== 'DELIVERY_RESOLVED') { this.retryLater(claimKey); throw error }
+            this.deliveryRetries.delete(claimKey)
             this.retire(delivery.id as string)
           }
         }
       } catch (error) {
+        if (!listed) this.retryLater(listKey)
         // Authority checks and network failures both withhold input. A later fresh read may grant it again.
         this.log(error instanceof Error ? error.message : String(error))
       }
@@ -621,6 +645,9 @@ export class SuperTabHost {
     for (const [harnessId, state] of this.keepAlives) if (!leads.has(harnessId) && !state.running) this.keepAlives.delete(harnessId)
     for (const [key, state] of this.endings) if (!ended.has(key) && !state.running) this.endings.delete(key)
     for (const deliveryId of this.unreadable) if (!seen.has(deliveryId)) this.unreadable.delete(deliveryId)
+    for (const key of this.deliveryRetries.keys()) {
+      if (key.startsWith('claim:') ? !seen.has(key.slice('claim:'.length)) : !running.some(r => `list:${r.tabId}:${r.agent.id}` === key)) this.deliveryRetries.delete(key)
+    }
     for (const deliveryId of this.files.keys()) if (!this.journal.entries[deliveryId]) this.files.delete(deliveryId)
     for (const entry of Object.values(this.journal.entries)) {
       const id = typedId(entry)
