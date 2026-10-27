@@ -53,6 +53,7 @@ class WsPool {
     int localProtocolVersion = 1,
     Duration? fixedReconnectDelay,
     bool trustedLocal = false,
+    bool forceRelayReconnect = false,
   }) {
     // The reconnect policy is part of the key: a row that turns out to be this computer's after its
     // socket was made gets a new socket with the flat delay, not the old backoff. So is whether it
@@ -105,6 +106,7 @@ class WsPool {
       fixedReconnectDelay: fixedReconnectDelay,
       trustedLocal:
           transportKind == WsTransportKind.localPlaintext && trustedLocal,
+      forceRelayReconnect: forceRelayReconnect,
     );
     _conns[machineId] = conn;
     unawaited(conn.connect());

@@ -249,7 +249,7 @@ export interface RemoteRelayPoolOptions {
   /** After a failed dial, reject further dials for this machine for this long. 0 = never. */
   dialCooldownMs?: number
   /** Share one failure record between pools (the background pools all draw on the parent's). */
-  dialFailures?: Map<string, { at: number; error: unknown }>
+  dialFailures?: Map<string, { at: number; error: unknown; until?: number }>
   /** A fresh E2EE session to `machineId` is up (the trust group compares rosters then). Not passed on
    *  to the background pools — the group's own exchange runs on one of those. */
   onSessionReady?: (machineId: string) => void
@@ -269,7 +269,7 @@ export class RemoteRelayPool {
   private entries = new Map<string, Entry>()
   private pending = new Map<string, Promise<Entry>>()
   /** Last failed dial per machine, for the cooldown. Cleared by the next successful dial. */
-  private readonly lastDialFailure: Map<string, { at: number; error: unknown }>
+  private readonly lastDialFailure: Map<string, { at: number; error: unknown; until?: number }>
   private readonly p2pEnabled: boolean
   /** machineId -> when a negotiation last reached it only through TURN (P2P_TURN_FIRST_MEMORY_MS). */
   private readonly turnOnly = new Map<string, number>()
@@ -361,6 +361,7 @@ export class RemoteRelayPool {
   /** `invalidate()` for the shelved background sessions — a background client's own `forceReconnect`
    *  says the machine behind them restarted, so none of them is worth handing to the next client. */
   invalidateIsolated(machineId: string): void {
+    this.lastDialFailure.delete(machineId)
     for (const pool of this.idleIsolated.get(machineId) ?? []) pool.invalidate(machineId)
     this.idleIsolated.delete(machineId)
   }
@@ -372,6 +373,7 @@ export class RemoteRelayPool {
    *  keeps answering pings fine — would ever notice on its own). Signalled by the local client sending
    *  `forceReconnect: true` on a fresh `machine_select` after observing a live RPC time out. */
   invalidate(machineId: string): void {
+    this.lastDialFailure.delete(machineId)
     const entry = this.entries.get(machineId)
     if (!entry) return
     this.entries.delete(machineId)
@@ -432,7 +434,9 @@ export class RemoteRelayPool {
 
   private connect(machineId: string, autonomousEnv: string, selectFrame: Frame): Promise<Entry> {
     const failed = this.lastDialFailure.get(machineId)
-    if (failed && this.dialCooldownMs > 0 && Date.now() - failed.at < this.dialCooldownMs) {
+    // The backend's retry-after binds every pool, the window's too: a window redialled an offline machine every few
+    // seconds, each select a backend web-ws connection (#314). A person asking again forces a reconnect (invalidate).
+    if (failed && (Date.now() < (failed.until ?? 0) || (this.dialCooldownMs > 0 && Date.now() - failed.at < this.dialCooldownMs))) {
       return Promise.reject(failed.error)
     }
     const attempt = (forceRefresh: boolean): Promise<Entry> => this.dial(machineId, autonomousEnv, selectFrame, forceRefresh)
@@ -444,12 +448,14 @@ export class RemoteRelayPool {
       if (err instanceof RelayConnectError && err.closeCode === 4401) return attempt(true)
       throw err
     })
-    if (this.dialCooldownMs > 0) {
-      promise.then(
-        () => { this.lastDialFailure.delete(machineId) },
-        (error) => { this.lastDialFailure.set(machineId, { at: Date.now(), error }) },
-      )
-    }
+    promise.then(
+      () => { this.lastDialFailure.delete(machineId) },
+      (error) => {
+        const retryAfterMs = error instanceof RelayConnectError ? error.retryAfterMs : undefined
+        if (this.dialCooldownMs <= 0 && !retryAfterMs) return
+        this.lastDialFailure.set(machineId, { at: Date.now(), error, ...retryAfterMs ? { until: Date.now() + retryAfterMs } : {} })
+      },
+    )
     this.pending.set(machineId, promise)
     // `.finally()` re-throws on rejection, producing a SECOND promise distinct from the one returned
     // below (which callers already await/catch) — left un-caught, every failed dial (e.g. NO_PEER_LINK
@@ -516,7 +522,10 @@ export class RemoteRelayPool {
         if (!settled) { settled = true; reject(new RelayConnectError('relay connect timed out')) }
       }, CONNECT_TIMEOUT_MS)
       ws.once('open', () => {
-        try { ws.send(JSON.stringify(selectFrame)) } catch { /* the close handler below rejects */ }
+        // `offline: 'refuse'`: an offline machine is refused at once, with a retry-after, instead of an ack this relay
+        // would hang up on (backend webWs.ts). An older backend ignores it and answers node_status offline as before.
+        const upstream = { ...selectFrame, payload: { ...(selectFrame.payload as Record<string, unknown> | undefined), offline: 'refuse' } }
+        try { ws.send(JSON.stringify(upstream)) } catch { /* the close handler below rejects */ }
       })
       ws.on('message', (raw, isBinary) => {
         if (!crypto.ready) {
@@ -560,7 +569,11 @@ export class RemoteRelayPool {
             if (frame.type === 'machine_select_error' && payload?.machineId === machineId) {
               if (!settled) {
                 settled = true; clearTimeout(timeout)
-                reject(new RelayConnectError(typeof payload.error === 'string' ? payload.error : 'machine_select_error'))
+                const error = typeof payload.error === 'string' ? payload.error : 'machine_select_error'
+                const retryAfterMs = (payload as { retryAfterMs?: unknown }).retryAfterMs
+                // MACHINE_OFFLINE closes as the node_status refusal above does.
+                reject(new RelayConnectError(error, error === 'MACHINE_OFFLINE' ? 1013 : undefined,
+                  typeof retryAfterMs === 'number' && retryAfterMs > 0 ? Math.min(retryAfterMs, 5 * 60_000) : undefined))
               }
               return
             }

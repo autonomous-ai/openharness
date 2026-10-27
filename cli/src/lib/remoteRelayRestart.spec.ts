@@ -13,10 +13,11 @@ type Frame = { type: string; payload?: Record<string, unknown> }
 const cleanups: Array<() => Promise<void>> = []
 afterEach(async () => { for (const cleanup of cleanups.splice(0)) await cleanup() })
 
-async function fixture(opts: { offline?: boolean; lingerMs?: number } = {}) {
+async function fixture(opts: { offline?: boolean; lingerMs?: number; refuseAfterMs?: number } = {}) {
   const sockets = new Map<string, WebSocket>()
   let next = 0
   let hellos = 0
+  const selects: Frame[] = []
   const wss = new WebSocketServer({ port: 0, host: '127.0.0.1' })
   await new Promise<void>(resolve => wss.once('listening', resolve))
   const managerDeps = {
@@ -41,6 +42,12 @@ async function fixture(opts: { offline?: boolean; lingerMs?: number } = {}) {
     ws.on('message', raw => {
       const frame = JSON.parse(raw.toString()) as Frame
       if (frame.type === 'machine_select') {
+        selects.push(frame)
+        // Today's backend: a select that asks is refused at once while the machine is offline (webWs.ts).
+        if (opts.refuseAfterMs !== undefined && frame.payload?.offline === 'refuse') {
+          ws.send(JSON.stringify({ type: 'machine_select_error', payload: { machineId, error: 'MACHINE_OFFLINE', retryAfterMs: opts.refuseAfterMs } }))
+          return
+        }
         ws.send(JSON.stringify({ type: 'connected', payload: { machineId } }))
         if (opts.offline) ws.send(JSON.stringify({ type: 'node_status', payload: { online: false } }))
       } else if (frame.type === 'e2e_hello') {
@@ -58,7 +65,7 @@ async function fixture(opts: { offline?: boolean; lingerMs?: number } = {}) {
     await new Promise<void>(resolve => wss.close(() => resolve()))
   })
   return {
-    pool, peers, peerPub, hellos: () => hellos,
+    pool, peers, peerPub, hellos: () => hellos, selects,
     select: { type: 'machine_select', payload: { machineId } },
     restart() { manager = new E2eeManager(managerDeps) },
     status(online: boolean) { for (const ws of sockets.values()) ws.send(JSON.stringify({ type: 'node_status', payload: { online } })) },
@@ -71,6 +78,29 @@ describe('remote daemon restart recovery', () => {
     await expect(f.pool.acquire(machineId, 'prod', f.select, { sendFrame: () => true, sendBinary: () => true }, () => {}))
       .rejects.toMatchObject({ message: 'MACHINE_OFFLINE', closeCode: 1013 })
     expect(f.peers.get(machineId)?.pub).toBe(f.peerPub)
+  })
+
+  it('asks to be refused for an offline machine, and waits out the backend\'s retry-after before selecting it again', async () => {
+    const f = await fixture({ refuseAfterMs: 300 })
+    const sink = { sendFrame: () => true, sendBinary: () => true }
+    const acquire = () => f.pool.acquire(machineId, 'prod', f.select, sink, () => {})
+    await expect(acquire()).rejects.toMatchObject({ message: 'MACHINE_OFFLINE', closeCode: 1013 })
+    expect(f.selects.map(s => s.payload?.offline)).toEqual(['refuse'])
+    // A window redialling meanwhile (prod: every few seconds, #314) is answered from the refusal, without a backend dial.
+    await expect(acquire()).rejects.toMatchObject({ message: 'MACHINE_OFFLINE', closeCode: 1013 })
+    expect(f.selects).toHaveLength(1)
+    await new Promise(resolve => setTimeout(resolve, 350))
+    await expect(acquire()).rejects.toMatchObject({ message: 'MACHINE_OFFLINE' })
+    expect(f.selects).toHaveLength(2)
+  })
+
+  it('a forced reconnect, a person asking again, selects an offline machine at once despite the retry-after', async () => {
+    const f = await fixture({ refuseAfterMs: 60_000 })
+    const sink = { sendFrame: () => true, sendBinary: () => true }
+    await expect(f.pool.acquire(machineId, 'prod', f.select, sink, () => {})).rejects.toMatchObject({ message: 'MACHINE_OFFLINE' })
+    f.pool.invalidate(machineId)
+    await expect(f.pool.acquire(machineId, 'prod', f.select, sink, () => {})).rejects.toMatchObject({ message: 'MACHINE_OFFLINE' })
+    expect(f.selects).toHaveLength(2)
   })
 
   it.each(['desktop', 'background'] as const)('renegotiates after a remote restart for a %s client, without discarding trust', async kind => {

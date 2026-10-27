@@ -9590,7 +9590,7 @@ class AppNotifier extends ChangeNotifier {
     try {
       await _pool?.closeMachine(machineId);
       if (!current()) return false;
-      _connectMachine(state);
+      _connectMachine(state, manual: true);
       settle();
       final connected = await done.future;
       if (!current()) return false;
@@ -11114,7 +11114,8 @@ class AppNotifier extends ChangeNotifier {
     notifyListeners();
   }
 
-  void _connectMachine(MachineState machine) {
+  /// [manual]: a person's Connect, which dials through the daemon's retry-after for an offline machine.
+  void _connectMachine(MachineState machine, {bool manual = false}) {
     if (machine.machine.isShared) return;
     // A row the daemon has refused as "not the machine I serve" is retired until a machine list
     // re-keys it (_onLocalMachineMismatch): the offline poll and the 15s refresh both reconnect
@@ -11127,7 +11128,7 @@ class AppNotifier extends ChangeNotifier {
     // and disables every agent even though the transport is still ready.
     if (_pool != null &&
         (!machine.isLocalMachine || machine.usesLocalTransport)) {
-      _conn(machine.machine.machineId);
+      _conn(machine.machine.machineId, manual: manual);
     }
   }
 
@@ -11699,7 +11700,7 @@ class AppNotifier extends ChangeNotifier {
     }
   }
 
-  WsConn _conn(String machineId) {
+  WsConn _conn(String machineId, {bool manual = false}) {
     if (machineStates[machineId]?.machine.isShared == true) {
       throw StateError('This harness is shared with view-only access.');
     }
@@ -11735,6 +11736,7 @@ class AppNotifier extends ChangeNotifier {
             // This computer's window connection carries the daemon_* frames, which on Windows the
             // daemon takes only over its pipe (WsConn.trustedLocal). A relayed machine needs no trust.
             trustedLocal: machineStates[machineId]?.isLocalMachine == true,
+            forceRelayReconnect: manual,
           );
     _wireConnectionHooks(connection, machineId);
     return connection;

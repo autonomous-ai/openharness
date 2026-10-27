@@ -583,6 +583,35 @@ void main() {
     timeout: const Timeout(Duration(seconds: 20)),
   );
 
+  test(
+    'a person\'s Connect asks the daemon for a fresh dial on its first select',
+    () async {
+      // The daemon answers an offline machine from the backend's retry-after (remoteRelay.ts,
+      // #314); a person clicking Connect is the one select that may dial through it.
+      hub = await FakeHub.start();
+      conn = WsConn(
+        wsBaseUrl: 'wss://unused.example',
+        autonomousEnv: 'prod',
+        machineId: 'm1',
+        accessTokenProvider: (_, _) async => 'sso-token',
+        onAuthFailure: (_) {},
+        onEvent: (_) {},
+        onStatus: (_) {},
+        transportKind: WsTransportKind.localPlaintext,
+        allowLocalTcpFixture: true,
+        localWsUri: Uri.parse('ws://127.0.0.1:${hub.port}/api/local-ws'),
+        forceRelayReconnect: true,
+      );
+      await conn!.connect();
+      while (!hub.frames.any((f) => f['type'] == 'machine_select')) {
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+      }
+      final select = hub.frames.firstWhere((f) => f['type'] == 'machine_select');
+      expect((select['payload'] as Map)['forceReconnect'], isTrue);
+    },
+    timeout: const Timeout(Duration(seconds: 20)),
+  );
+
   test('4403 on a local socket is reported, and the retry goes on', () async {
     // "machine mismatch": the daemon serves another id than the one selected. The app is told so it
     // can find out which; the socket keeps retrying (the answer may be a re-key of this very row)

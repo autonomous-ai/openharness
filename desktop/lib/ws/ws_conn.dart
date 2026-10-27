@@ -156,7 +156,7 @@ class WsConn {
   Timer? _reconnectTimer;
   Timer? _observerHandshakeTimer;
   String? _tokenUsed;
-  bool _forceRelayReconnect = false;
+  bool _forceRelayReconnect;
   final _pending = <String, _PendingRpc>{};
   final _readinessWaiters = <Completer<void>>{};
   final _queue = <Map<String, dynamic>>[];
@@ -235,6 +235,9 @@ class WsConn {
     this.fixedReconnectDelay,
     this.relayCodecs,
     this.transportPlugins,
+    // A person's Connect: the first select asks the daemon for a fresh dial, through the retry-after it keeps for an
+    // offline machine (CLI remoteRelay.ts, #314).
+    this._forceRelayReconnect = false,
   });
 
   /// The socket to dial, decided afresh on every connect: whether the file is
