@@ -1023,13 +1023,12 @@ class _SuperTabViewState extends State<SuperTabView>
   }
 
   /// The messages [id]'s list shows, in order.
-  List<SuperTabMessage> _shownMessages(String id) {
-    // A message waiting for an agent is never announced; notices older backends stored stay hidden.
-    return c
-        .messages(id)
-        .where((m) => m.source['kind'] != 'delivery-hold')
-        .toList();
-  }
+  List<SuperTabMessage> _shownMessages(String id) =>
+      c.messages(id).where(_shown).toList();
+
+  /// A message waiting for an agent is never announced; notices older
+  /// backends stored stay hidden, in the list and as a reply's quote.
+  static bool _shown(SuperTabMessage m) => m.source['kind'] != 'delivery-hold';
 
   /// The row of [id]'s list that shows [messageId]: its own, or the notice
   /// that folds it in. Null while the message is not loaded.
@@ -1580,7 +1579,10 @@ class _SuperTabViewState extends State<SuperTabView>
     final quoted = message.replyTo == null || byId.containsKey(message.replyTo)
         ? null
         : c.quoted(message.conversationId, message.replyTo!);
-    final reply = byId[message.replyTo] ?? quoted?.message;
+    final fetched = quoted?.message;
+    final reply =
+        byId[message.replyTo] ??
+        (fetched != null && _shown(fetched) ? fetched : null);
     return SuperTabMessageRow(
       key: ValueKey('super-message-${message.id}'),
       message: message,
@@ -1607,7 +1609,7 @@ class _SuperTabViewState extends State<SuperTabView>
       grouped: grouped,
       reply: reply,
       replyAuthor: reply == null ? null : _shownAuthor(c, reply),
-      replyGone: quoted != null && quoted.message == null,
+      replyGone: quoted != null && reply == null,
       onOpenReply: (row) => unawaited(_openOriginal(message, row)),
       onReply: c.canWrite && c.selected?.archived == false
           ? () {

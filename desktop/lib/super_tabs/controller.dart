@@ -433,16 +433,18 @@ class SuperTabController extends ChangeNotifier {
           rows.any((m) => m.id != messageId || m.conversationId != id)) {
         return;
       }
-      (_quoted[id] ??= {})[messageId] = rows.firstOrNull;
+      // A row the list never lists is no original to quote either.
+      (_quoted[id] ??= {})[messageId] = rows.where(_listed).firstOrNull;
       _changed();
     } catch (_) {}
   }
 
   List<SuperTabMessage> messages(String id) => List.unmodifiable(
-    (_messages[id] ?? const <SuperTabMessage>[]).where(
-      (m) => m.source['kind'] != 'update-request',
-    ),
+    (_messages[id] ?? const <SuperTabMessage>[]).where(_listed),
   );
+
+  static bool _listed(SuperTabMessage m) =>
+      m.source['kind'] != 'update-request';
 
   /// "Reviewer: Ada · Ready: yes on 1a2b3c4d5", from the newest `Ready:` message a
   /// reviewer of [group] posted in the loaded history. Null without a reviewer.
