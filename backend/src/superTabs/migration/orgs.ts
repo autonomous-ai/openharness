@@ -153,6 +153,7 @@ export async function rollbackOrgs(db: PrismaClient, opts: { apply: boolean }): 
   // The Teams go only once no Swarm names one, so a failed Swarm keeps the Team it still points at; rerun to finish.
   if (!report.failed.length) {
     await db.swarmOrgInvitation.deleteMany({})
+    await db.swarmOrgRemoval.deleteMany({})
     await db.swarmOrgMember.deleteMany({})
     await db.swarmOrg.deleteMany({})
   }

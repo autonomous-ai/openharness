@@ -1,4 +1,4 @@
-import type { Prisma, PrismaClient, SwarmOrgMember } from '@prisma/client'
+import type { Prisma, PrismaClient, SwarmOrgMember, SwarmOrgRemoval } from '@prisma/client'
 import type { AuthUser } from '../lib/ssoAuth.js'
 import { fail, stableId, type SuperTabState } from './model.js'
 import { mayAssignRole, mayManageMember, ORG_LABEL, orgCan, type OrgAction, type OrgRole } from './orgs.js'
@@ -55,13 +55,17 @@ export async function requireOrgRole(tx: Transaction, orgId: string, userId: str
 }
 
 /** Adds a person to a Team with `role`, or brings a removed one back with a new generation (old receipts stay refused).
- *  Someone already in it keeps their role. */
+ *  Someone already in it keeps their role. Nobody comes back while a removal of theirs is still open: they could still
+ *  be in a Swarm of the Team that the removal has not left yet (SwarmOrgs.finishPending finishes it first). */
 export async function addMember(tx: Transaction, orgId: string, person: { id: string; email: string }, role: OrgRole, addedBy: string,
   generation: string): Promise<SwarmOrgMember> {
   const id = memberId(orgId, person.id)
   checked.get(tx)?.delete(id)
   const prior = await tx.swarmOrgMember.findUnique({ where: { id } })
   if (prior && !prior.removedAt) return prior
+  if (await tx.swarmOrgRemoval.count({ where: { orgId, userId: person.id, finishedAt: null } })) {
+    fail('REMOVAL_PENDING', `An earlier removal from this ${ORG_LABEL} is still taking them out of its Swarms. Try again in a few minutes.`, 409)
+  }
   const data = { email: person.email.trim().toLowerCase(), role, generation, addedBy, addedAt: new Date(), removedAt: null, removedBy: null, purgeAt: null }
   return prior
     ? tx.swarmOrgMember.update({ where: { id }, data: { ...data, version: { increment: 1 } } })
@@ -203,6 +207,8 @@ export class SwarmOrgs {
   /** Accepting brings a person in with the invited role, or raises a guest to it; it never lowers a role. */
   async accept(user: AuthUser, orgId: string) {
     const address = user.email.trim().toLowerCase()
+    // An earlier removal still open is finished first; if it cannot be, addMember refuses below.
+    await this.finishPending(orgId, user.sub)
     return this.deps.transaction(async tx => {
       await this.org(tx, user, orgId)
       const invitation = await tx.swarmOrgInvitation.findUnique({ where: { id: `${orgId}:${address}` } })
@@ -267,37 +273,50 @@ export class SwarmOrgs {
         if (!mayManageMember(me.role, target.role as OrgRole)) fail('ORG_ROLE_REQUIRED', `Your role in this ${ORG_LABEL} cannot remove them.`, 403)
       }
       if (await this.ownsTeamSwarm(tx, orgId, userId)) fail('SWARM_OWNER', 'This person owns a Swarm of this Team. Move or delete it first.', 409)
-      const now = this.deps.now()
-      await tx.swarmOrgMember.update({ where: { id: target.id }, data: { removedAt: new Date(now), removedBy: user.sub,
-        purgeAt: new Date(now + ORG_PURGE_MS), version: { increment: 1 } } })
-      return { target, environment: org.autonomousEnv }
+      const now = new Date(this.deps.now())
+      await tx.swarmOrgMember.update({ where: { id: target.id }, data: { removedAt: now, removedBy: user.sub,
+        purgeAt: new Date(now.getTime() + ORG_PURGE_MS), version: { increment: 1 } } })
+      // The removal stays open until the person has left every Swarm of the Team, whatever happens to their row after.
+      return tx.swarmOrgRemoval.create({ data: { id: `${target.id}:${target.generation}`, orgId, userId, email: target.email,
+        generation: target.generation, autonomousEnv: org.autonomousEnv, removedAt: now, removedBy: user.sub, finishedAt: null, purgeAt: null } })
     })
-    const pending = await this.leaveSwarms(removed.target, removed.environment)
-    return { userId, pending }
+    return { userId, pending: await this.finish(removed) }
   }
 
-  /** The removed person leaves each Swarm of the Team they are still in. Returns how many could not be left now. */
-  private async leaveSwarms(target: SwarmOrgMember, environment: string): Promise<number> {
-    const rows = await this.db.superTab.findMany({ where: { autonomousEnv: environment, orgId: target.orgId, memberIds: { has: target.userId } }, select: { id: true } })
+  /** The removed person leaves each Swarm of the Team they are still in; the removal closes once none is left. Returns how
+   *  many Swarms could not be left now. */
+  private async finish(removal: SwarmOrgRemoval): Promise<number> {
+    const rows = await this.db.superTab.findMany({ where: { autonomousEnv: removal.autonomousEnv, orgId: removal.orgId, memberIds: { has: removal.userId } },
+      select: { id: true } })
     let pending = 0
     for (const row of rows) {
-      try { await this.deps.leave(personOf(target, environment), row.id, stableId('org-removal', target.id, target.generation)) } catch (error) {
+      try { await this.deps.leave(personOf(removal, removal.autonomousEnv), row.id, stableId('org-removal', removal.id)) } catch (error) {
         pending++
-        logger.warn('[swarm-orgs] a removal could not leave a Swarm yet', { orgId: target.orgId, tabId: row.id, error: error instanceof Error ? error.message : String(error) })
+        logger.warn('[swarm-orgs] a removal could not leave a Swarm yet', { orgId: removal.orgId, tabId: row.id, error: error instanceof Error ? error.message : String(error) })
       }
+    }
+    if (!pending) {
+      const now = this.deps.now()
+      await this.db.swarmOrgRemoval.update({ where: { id: removal.id }, data: { finishedAt: new Date(now), purgeAt: new Date(now + ORG_PURGE_MS) } })
     }
     return pending
   }
 
-  /** The sweep: removals whose Swarm removals did not all finish. */
-  async finishRemovals(): Promise<number> {
-    const since = new Date(this.deps.now() - ORG_PURGE_MS)
-    const removed = await this.db.swarmOrgMember.findMany({ where: { removedAt: { gt: since } }, take: 500 })
+  /** Finishes the person's open removals from this Team, if it can. */
+  async finishPending(orgId: string, userId: string): Promise<number> {
     let pending = 0
-    for (const target of removed) {
-      const org = await this.db.swarmOrg.findUnique({ where: { id: target.orgId }, select: { autonomousEnv: true } })
-      if (org) pending += await this.leaveSwarms(target, org.autonomousEnv)
-    }
+    for (const removal of await this.db.swarmOrgRemoval.findMany({ where: { orgId, userId, finishedAt: null } })) pending += await this.finish(removal)
     return pending
+  }
+
+  /** The sweep: every open removal, oldest id first, a page at a time, so none is starved by the ones before it. */
+  async finishRemovals(): Promise<number> {
+    let pending = 0, after: string | undefined
+    for (;;) {
+      const page = await this.db.swarmOrgRemoval.findMany({ where: { finishedAt: null, ...(after ? { id: { gt: after } } : {}) }, orderBy: { id: 'asc' }, take: 200 })
+      for (const removal of page) pending += await this.finish(removal)
+      if (page.length < 200) return pending
+      after = page.at(-1)!.id
+    }
   }
 }

@@ -1341,6 +1341,25 @@ model SwarmOrgMember {
   @@index([userId, removedAt])
 }
 
+/// One removal of one Team membership, open until the person has left every Swarm of the Team. While one is open the
+/// person cannot be brought back into the Team; the hourly sweep finishes them in order (superTabs/orgStore.ts).
+model SwarmOrgRemoval {
+  /// `orgId:userId:generation`: the membership generation that was removed.
+  id            String    @id @map("_id")
+  orgId         String
+  userId        String
+  email         String
+  generation    String
+  autonomousEnv String
+  removedAt     DateTime
+  removedBy     String
+  finishedAt    DateTime?
+  purgeAt       DateTime?
+
+  @@index([finishedAt, id])
+  @@index([orgId, userId, finishedAt])
+}
+
 /// An invitation to a Team, by email; deleted when accepted or revoked, purged when it expires.
 model SwarmOrgInvitation {
   /// `orgId:email`

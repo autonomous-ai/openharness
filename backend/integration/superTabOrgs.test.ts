@@ -13,7 +13,7 @@ import { SuperTabStore } from '../src/superTabs/store.js'
 import type { AuthUser } from '../src/lib/ssoAuth.js'
 import type { Command } from '../src/superTabs/commands.js'
 import { migrateOrgs, rollbackOrgs } from '../src/superTabs/migration/orgs.js'
-import { hasOrgAccess } from '../src/superTabs/orgStore.js'
+import { hasOrgAccess, SwarmOrgs } from '../src/superTabs/orgStore.js'
 
 // Teams above Swarms (docs/plans/2026-10-27-swarm-teams.md): every route, authorization and Mongo transaction is real.
 let replica: MongoMemoryReplSet, db: PrismaClient, store: SuperTabStore, app: FastifyInstance
@@ -93,7 +93,9 @@ describe('the Team check on every Swarm read and command', () => {
 
     // As a removal whose Swarm cleanup has not run yet leaves it: the person is still in the Swarm's people.
     const [org] = await orgsOf(owner)
-    await db.swarmOrgMember.update({ where: { id: `${org!.id}:${peer.sub}` }, data: { removedAt: new Date(), removedBy: owner.sub } })
+    const removed = await db.swarmOrgMember.update({ where: { id: `${org!.id}:${peer.sub}` }, data: { removedAt: new Date(), removedBy: owner.sub } })
+    await db.swarmOrgRemoval.create({ data: { id: `${removed.id}:${removed.generation}`, orgId: org!.id, userId: peer.sub, email: peer.email,
+      generation: removed.generation, autonomousEnv: 'prod', removedAt: new Date(), removedBy: owner.sub, finishedAt: null } })
 
     for (const url of reads) {
       const reply = await call('GET', url, peer)
@@ -355,5 +357,80 @@ describe('what the Team check costs', () => {
       for (let i = 0; i < 5; i++) expect(await hasOrgAccess(tx, state, owner.sub)).toBe(true)
     })
     expect(reads).toBe(1)
+  })
+})
+
+describe('a removal whose Swarm cleanup failed', () => {
+  /** As a removal leaves things when leaving one Swarm failed: removed from the Team, its record open, still in the Swarm. */
+  async function failedRemoval(orgId: string, who: AuthUser) {
+    const row = await db.swarmOrgMember.findUniqueOrThrow({ where: { id: `${orgId}:${who.sub}` } })
+    await db.swarmOrgMember.update({ where: { id: row.id }, data: { removedAt: new Date(), removedBy: owner.sub } })
+    await db.swarmOrgRemoval.create({ data: { id: `${row.id}:${row.generation}`, orgId, userId: who.sub, email: who.email,
+      generation: row.generation, autonomousEnv: 'prod', removedAt: new Date(), removedBy: owner.sub, finishedAt: null } })
+  }
+
+  it('is finished before a Team-only re-invite brings the person back, so the old private Swarm stays closed to them', async () => {
+    const orgId = await team('Revival')
+    const privateTab = await create(owner, 'Private work', orgId)
+    await invite(privateTab, member)
+    const operationId = randomUUID(), command = { type: 'message.send', conversationId: 'lead', text: 'before', replyTo: null, recipientIds: [] }
+    expect((await call('POST', `/api/super-tabs/${privateTab}/commands`, member, { operationId, command })).statusCode).toBe(200)
+    await failedRemoval(orgId, member)
+
+    expect((await call('POST', `/api/super-tabs/orgs/${orgId}/invitations`, owner, { email: member.email, role: 'member' })).statusCode).toBe(200)
+    expect((await call('POST', `/api/super-tabs/orgs/${orgId}/accept`, member, {})).statusCode).toBe(200)
+    expect((await orgsOf(member)).map(o => o.id)).toContain(orgId)
+    expect(await swarmPeople(privateTab)).not.toContain(member.sub)
+    expect((await call('GET', `/api/super-tabs/${privateTab}/parts`, member)).statusCode).toBe(403)
+    expect((await call('POST', `/api/super-tabs/${privateTab}/commands`, member, { operationId, command })).statusCode).toBe(403)
+  })
+
+  it('keeps the person out while the earlier removal cannot finish', async () => {
+    const orgId = await team('Stuck')
+    const tab = await create(owner, 'Stuck work', orgId), elsewhere = await create(owner, 'Healthy work', orgId)
+    await invite(tab, member)
+    await failedRemoval(orgId, member)
+    // The Swarm cannot be loaded for now, so leaving it fails again.
+    await db.superTab.update({ where: { id: tab }, data: { format: 1 } })
+    try {
+      expect((await call('POST', `/api/super-tabs/orgs/${orgId}/invitations`, owner, { email: member.email, role: 'member' })).statusCode).toBe(200)
+      const accepted = await call('POST', `/api/super-tabs/orgs/${orgId}/accept`, member, {})
+      expect(accepted.statusCode).toBe(409)
+      expect((await orgsOf(member)).map(o => o.id)).not.toContain(orgId)
+      // Nor does a Swarm invitation make them a guest of the Team meanwhile.
+      const invitation = await run(elsewhere, { type: 'invite.create', email: member.email, role: 'collaborator', conversationId: 'lead' } as Command)
+      const viaSwarm = await call('POST', `/api/super-tabs/${elsewhere}/commands`, member,
+        { operationId: randomUUID(), command: { type: 'invite.accept', inviteId: invitation.result.inviteId } })
+      expect(viaSwarm.statusCode).toBe(409)
+    } finally { await db.superTab.update({ where: { id: tab }, data: { format: 2 } }) }
+  })
+})
+
+describe('the sweep of unfinished removals', () => {
+  it('reaches every open removal, however many, including one whose first try failed', async () => {
+    const orgId = await team('Many removals')
+    const tab = await create(owner, 'Last one', orgId)
+    await invite(tab, member)
+    const removedAt = new Date(Date.now() - 60_000)
+    await db.swarmOrgRemoval.createMany({ data: Array.from({ length: 500 }, (_, i) => ({ id: `${orgId}:filler-${i}:g`, orgId,
+      userId: `filler-${i}`, email: `filler-${i}@example.com`, generation: 'g', autonomousEnv: 'prod', removedAt, removedBy: owner.sub, finishedAt: null })) })
+    const row = await db.swarmOrgMember.findUniqueOrThrow({ where: { id: `${orgId}:${member.sub}` } })
+    await db.swarmOrgMember.update({ where: { id: row.id }, data: { removedAt: new Date() } })
+    await db.swarmOrgRemoval.create({ data: { id: `${row.id}:${row.generation}`, orgId, userId: member.sub, email: member.email,
+      generation: row.generation, autonomousEnv: 'prod', removedAt: new Date(), removedBy: owner.sub, finishedAt: null } })
+
+    let failOnce = true
+    const leaves: string[] = []
+    const orgs = new SwarmOrgs(db, { transaction: body => db.$transaction(body), now: Date.now, leave: async (person, tabId, operationId) => {
+      if (tabId !== tab) return store.orgs['deps'].leave(person, tabId, operationId)
+      leaves.push(`${person.sub}:${tabId}`)
+      if (failOnce) { failOnce = false; throw new Error('the Swarm was busy') }
+      return store.orgs['deps'].leave(person, tabId, operationId)
+    } })
+    expect(await orgs.finishRemovals()).toBeGreaterThanOrEqual(1)
+    expect(await orgs.finishRemovals()).toBe(0)
+    expect(leaves).toEqual([`${member.sub}:${tab}`, `${member.sub}:${tab}`])
+    expect(await swarmPeople(tab)).not.toContain(member.sub)
+    expect(await db.swarmOrgRemoval.count({ where: { orgId, finishedAt: null } })).toBe(0)
   })
 })

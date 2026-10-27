@@ -12,8 +12,8 @@ export async function ensurePartExpiry(db: PrismaClient): Promise<void> {
   for (const collection of ['SwarmHead', 'SwarmGroup', 'SwarmStart', 'SwarmProgress']) {
     await db.$runCommandRaw({ createIndexes: collection, indexes: [{ key: { purgeAt: 1 }, name: 'part_purge', expireAfterSeconds: 0 }] })
   }
-  // Teams (orgStore.ts): a removed person's row and a deleted Team 30 days on, an invitation when it expires.
-  for (const collection of ['SwarmOrg', 'SwarmOrgMember']) {
+  // Teams (orgStore.ts): a removed person's row, a finished removal and a deleted Team 30 days on, an invitation when it expires.
+  for (const collection of ['SwarmOrg', 'SwarmOrgMember', 'SwarmOrgRemoval']) {
     await db.$runCommandRaw({ createIndexes: collection, indexes: [{ key: { purgeAt: 1 }, name: 'org_purge', expireAfterSeconds: 0 }] })
   }
   await db.$runCommandRaw({ createIndexes: 'SwarmOrgInvitation', indexes: [{ key: { expiresAt: 1 }, name: 'org_invitation_expiry', expireAfterSeconds: 0 }] })
