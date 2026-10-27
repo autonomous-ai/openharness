@@ -488,6 +488,14 @@ class ProjectSidebar extends StatelessWidget {
               icon: AppIcons.plus,
               onTap: controller.canWrite ? onNewProject : null,
             ),
+          if (onYourDevices != null)
+            _navigationRow(
+              key: 'super-your-devices',
+              label: 'Your devices',
+              icon: AppIcons.circle,
+              onTap: onYourDevices,
+              selected: devicesSelected,
+            ),
           // The Swarm's models (docs/plans/2026-10-23-swarm-local-models.md), for everyone: the owner sets them up here,
           // and everyone runs and shares models here once they are. What each machine offers is on the machine.
           if (snapshot != null)
@@ -497,14 +505,6 @@ class ProjectSidebar extends StatelessWidget {
               icon: AppIcons.brain,
               onTap: () =>
                   showSwarmLocalModels(context, controller, app: app, now: now),
-            ),
-          if (onYourDevices != null)
-            _navigationRow(
-              key: 'super-your-devices',
-              label: 'Your devices',
-              icon: AppIcons.circle,
-              onTap: onYourDevices,
-              selected: devicesSelected,
             ),
           if (onNotifications != null)
             _navigationRow(

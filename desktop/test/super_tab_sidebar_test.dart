@@ -263,8 +263,8 @@ void main() {
 
     final order = [
       find.byKey(const ValueKey('super-new-project')),
-      find.byKey(const ValueKey('super-local-models')),
       find.byKey(const ValueKey('super-your-devices')),
+      find.byKey(const ValueKey('super-local-models')),
       find.text('Projects'),
       find.byKey(const ValueKey('super-group-leads')),
       find.byKey(const ValueKey('super-group-empty-lead')),

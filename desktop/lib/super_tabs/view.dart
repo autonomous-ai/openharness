@@ -1033,7 +1033,9 @@ class _SuperTabViewState extends State<SuperTabView>
     onNewProject: widget.onNewProject,
     devicesSelected: _devicesVisible,
     notificationsSelected: _notificationsVisible,
-    onNotifications: () {
+    // On a Mac what needs the person is in the menu bar's Harness menu and on
+    // the Dock's badge, so the sidebar keeps no Notifications row.
+    onNotifications: superTabNoticesInMenuBar ? null : () {
       _closeSidebar();
       setState(() {
         _showNotifications = true;

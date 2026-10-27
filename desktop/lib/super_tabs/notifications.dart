@@ -1,6 +1,7 @@
 import 'dart:async';
 
-import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:flutter/foundation.dart'
+    show TargetPlatform, defaultTargetPlatform, kIsWeb;
 import 'package:flutter/material.dart';
 
 import '../notify/system_notifications.dart';
@@ -32,6 +33,12 @@ class SuperTabMention {
   /// `reply` or `done` once it moved to Earlier; null while it waits.
   final String? resolvedBy;
 }
+
+/// Whether the menu bar's Harness menu lists the reader's tags and decisions,
+/// with their count on the Dock: the Mac app's. Elsewhere the Swarm's sidebar
+/// keeps its Notifications row.
+bool get superTabNoticesInMenuBar =>
+    !kIsWeb && defaultTargetPlatform == TargetPlatform.macOS;
 
 /// What tells the person about a new tag outside the window: the operating
 /// system, on Desktop only. The web shows only the badge and the list (spec
