@@ -31,6 +31,11 @@ export interface Agent {
   roleId?: string | null
   /** A finished worker stays undecided even when its group receives a new brief. */
   workDecision?: 'awaiting' | 'keep' | 'stop'
+  /** When its Lead last decided keep: a kept worker is idle from then (tidy.ts). */
+  keptAt?: number
+  /** Set while its stop is the idle check's (tidy.ts), with the decision it had before: its host withdraws that stop when
+   *  the session's folder has changes by the time it would close it (agent.stopRefused). */
+  idleStop?: { previous: 'awaiting' | 'keep' | null }
   releaseId?: string
   /** Captured from the original Swarm launch, never inferred from a later live session with the same id. */
   startedSession?: { creationId: string; sessionId: string; createdAt: string }
@@ -212,6 +217,8 @@ export interface SuperTabState {
   /** Owner-only sharing configuration; visibleState always removes it. */
   sharing?: import('./sharing.js').SwarmSharing
   paused: boolean
+  /** Idle workers stop and finished groups archive by themselves (tidy.ts); false once the owner turns it off. */
+  tidy?: false
   people: Person[]
   agents: Agent[]
   conversations: Conversation[]
