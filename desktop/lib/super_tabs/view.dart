@@ -98,9 +98,22 @@ class _SuperTabViewState extends State<SuperTabView>
   // The message a tag opened, scrolled to once it is laid out.
   String? _target;
   final _targetKey = GlobalKey();
+  // A quote followed to its original: the search still reading older pages,
+  // the reply to come back to (its row's top in the list), and the message
+  // lit for a moment on arrival.
+  int _jumpRequest = 0;
+  ({String conversationId, int pages})? _finding;
+  ({String conversationId, String messageId, double top})? _back;
+  String? _lit;
+  Timer? _litTimer;
   bool _viewEnabled = true;
   bool _chatCovered = false;
   final _loadingOlder = <String>{};
+  // The list's rows while built, by message: a page read in above finds the
+  // row the reader was looking at, to keep it in place.
+  final _built = <String, BuildContext>{};
+  // Rows to keep in place once their conversation is on screen again.
+  final _anchors = <String, ({String messageId, double top})>{};
   int _mentionIndex = 0;
   String? _dismissedMention;
   String? _completionPrefix;
@@ -179,6 +192,10 @@ class _SuperTabViewState extends State<SuperTabView>
       _following.clear();
       _newAfter.clear();
       _replies.clear();
+      _jumpRequest++;
+      _finding = null;
+      _back = null;
+      _anchors.clear();
       _selected = null;
       _changed();
     } else {
@@ -212,6 +229,13 @@ class _SuperTabViewState extends State<SuperTabView>
     if (_selected != id) {
       _scrollRequest++;
       _jumpingToEnd = false;
+      // A search or a way back belongs to the conversation it started in.
+      _jumpRequest++;
+      _finding = null;
+      _back = null;
+      if (_anchors.remove(id) case final anchor?) {
+        unawaited(_keepRow(id, anchor));
+      }
       _dial.cancel(); // a fling from the last conversation never scrolls this one
     }
     if (_selected != id || _composer.text != draft) {
@@ -337,6 +361,7 @@ class _SuperTabViewState extends State<SuperTabView>
     if (c.pmChatOpener == _openPmChat) c.pmChatOpener = null;
     _unregisterDial?.call();
     _dial.cancel();
+    _litTimer?.cancel();
     _composer.dispose();
     _focus.dispose();
     _pullRequestsFocus.dispose();
@@ -569,23 +594,83 @@ class _SuperTabViewState extends State<SuperTabView>
     _focus.requestFocus();
   }
 
-  Future<void> _earlier() async {
-    final id = c.selectedId, scroll = _scroll[c.selectedId];
-    if (scroll == null || !scroll.hasClients || !_loadingOlder.add(id)) return;
-    final offset = scroll.offset, extent = scroll.position.maxScrollExtent;
+  Future<void> _earlier() => _loadEarlier(c.selectedId);
+
+  /// Reads the page before those loaded, keeping what is on screen in place:
+  /// the row of [keep] when it is built, else the topmost row. Rows can
+  /// regroup as earlier ones arrive, so the one the reader looks at is kept.
+  /// A read already under way is joined; its caller keeps the place.
+  Future<void> _loadEarlier(String id, {String? keep}) async {
+    final scroll = _scroll[id];
+    if (scroll == null || !scroll.hasClients || !_loadingOlder.add(id)) {
+      await c.loadMessages(id, older: true);
+      return;
+    }
+    final kept = _built[keep];
+    final keptTop = kept != null && kept.mounted ? _topInList(kept) : null;
+    final anchor = keptTop != null
+        ? (messageId: keep!, top: keptTop)
+        : _firstVisibleRow();
     try {
       await c.loadMessages(id, older: true);
-      await WidgetsBinding.instance.endOfFrame;
-      if (mounted && c.selectedId == id && scroll.hasClients) {
-        scroll.jumpTo(
-          (offset + scroll.position.maxScrollExtent - extent).clamp(
-            0.0,
-            scroll.position.maxScrollExtent,
-          ),
-        );
-      }
     } finally {
       _loadingOlder.remove(id);
+    }
+    if (anchor != null) await _keepRow(id, anchor);
+  }
+
+  /// The topmost row in view, and its top within the list.
+  ({String messageId, double top})? _firstVisibleRow() {
+    ({String messageId, double top})? first;
+    for (final MapEntry(key: messageId, value: row) in _built.entries) {
+      if (!row.mounted) continue;
+      final top = _topInList(row);
+      if (top == null || top < 0 || (first != null && top >= first.top)) {
+        continue;
+      }
+      first = (messageId: messageId, top: top);
+    }
+    return first;
+  }
+
+  /// Brings [anchor]'s row back to where it was in [id]'s list after rows
+  /// arrived above it: near it by its place in the list until it is built,
+  /// then exactly. A conversation no longer on screen does so on return;
+  /// the reader scrolling meanwhile ends it.
+  Future<void> _keepRow(
+    String id,
+    ({String messageId, double top}) anchor,
+  ) async {
+    final request = _scrollRequest;
+    for (var attempt = 0; attempt < 20; attempt++) {
+      await WidgetsBinding.instance.endOfFrame;
+      if (!mounted) return;
+      final scroll = _scroll[id];
+      if (c.selectedId != id || scroll == null || !scroll.hasClients) {
+        _anchors[id] = anchor;
+        return;
+      }
+      if (request != _scrollRequest) return;
+      final position = scroll.position;
+      final row = _built[anchor.messageId];
+      final top = row != null && row.mounted ? _topInList(row) : null;
+      if (top == null) {
+        final entries = superTabTranscriptEntries(_shownMessages(id));
+        final index = entries.indexWhere(
+          (e) => e.message.id == anchor.messageId,
+        );
+        if (index < 0) return;
+        scroll.jumpTo(
+          position.maxScrollExtent * (index + 1) / (entries.length + 1),
+        );
+        continue;
+      }
+      if ((top - anchor.top).abs() < .5) return;
+      // The list's extent is an estimate until laid out there: only the
+      // start bounds the jump, and the next frame measures the row again.
+      scroll.jumpTo(
+        (position.pixels + top - anchor.top).clamp(0.0, double.infinity),
+      );
     }
   }
 
@@ -865,24 +950,165 @@ class _SuperTabViewState extends State<SuperTabView>
   }
 
   /// The list is lazy: jump near the target until its row is built, then
-  /// bring it into view.
-  void _revealTarget(String id, int attempt) {
+  /// bring it into view, or hand its row to [arrived] to place it.
+  void _revealTarget(
+    String id,
+    int attempt, {
+    void Function(BuildContext row)? arrived,
+  }) {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted || c.selectedId != id || _target == null) return;
       if (_targetKey.currentContext case final target?) {
-        unawaited(Scrollable.ensureVisible(target, alignment: .3));
+        if (arrived != null) {
+          arrived(target);
+        } else {
+          unawaited(Scrollable.ensureVisible(target, alignment: .3));
+        }
         return;
       }
       final scroll = _scroll[id];
-      final messages = c.messages(id);
-      final index = messages.indexWhere((m) => m.id == _target);
+      final entries = superTabTranscriptEntries(_shownMessages(id));
+      final index = entries.indexWhere((e) => e.message.id == _target);
       if (scroll == null || !scroll.hasClients || index < 0 || attempt > 20) {
         return;
       }
-      scroll.jumpTo(scroll.position.maxScrollExtent * index / messages.length);
-      _revealTarget(id, attempt + 1);
+      scroll.jumpTo(
+        scroll.position.maxScrollExtent * (index + 1) / (entries.length + 1),
+      );
+      _revealTarget(id, attempt + 1, arrived: arrived);
     });
     WidgetsBinding.instance.scheduleFrame();
+  }
+
+  /// The messages [id]'s list shows, in order.
+  List<SuperTabMessage> _shownMessages(String id) {
+    // A message waiting for an agent is never announced; notices older backends stored stay hidden.
+    return c
+        .messages(id)
+        .where((m) => m.source['kind'] != 'delivery-hold')
+        .toList();
+  }
+
+  /// The row of [id]'s list that shows [messageId]: its own, or the notice
+  /// that folds it in. Null while the message is not loaded.
+  String? _rowShowing(String id, String messageId) {
+    final shown = _shownMessages(id);
+    final message = shown.where((m) => m.id == messageId).firstOrNull;
+    if (message == null) return null;
+    return superTabTranscriptEntries(shown)
+        .lastWhere(
+          (e) => superTabMessageOrder(e.message, message) <= 0,
+          orElse: () => (message: message, interruptions: 0),
+        )
+        .message
+        .id;
+  }
+
+  /// The top of [row] within the message list.
+  double? _topInList(BuildContext row) {
+    final box = row.findRenderObject(), list = Scrollable.maybeOf(row);
+    final viewport = list?.context.findRenderObject();
+    if (box is! RenderBox || viewport is! RenderBox || !box.attached) {
+      return null;
+    }
+    return box.localToGlobal(Offset.zero, ancestor: viewport).dy;
+  }
+
+  /// Follows [reply]'s quote to its original, reading older pages until it is
+  /// loaded. Only this conversation's own pages are read, so the original is
+  /// one the reader may read, or it is not found.
+  Future<void> _openOriginal(SuperTabMessage reply, BuildContext row) async {
+    final id = c.selectedId, original = reply.replyTo;
+    final top = _topInList(row);
+    if (original == null || top == null) return;
+    final request = ++_jumpRequest;
+    bool current() =>
+        request == _jumpRequest &&
+        c.selectedId == id &&
+        !c.accessRevoked &&
+        c.snapshot?.conversation(id) != null;
+    var target = _rowShowing(id, original);
+    String? note;
+    for (var pages = 0; target == null && c.hasOlder(id); pages++) {
+      // As far back as a tag is opened from.
+      if (pages == 50) {
+        note = 'The original message is too far back to open.';
+        break;
+      }
+      setState(() => _finding = (conversationId: id, pages: pages));
+      final loaded = c.messages(id).length;
+      await _loadEarlier(id, keep: reply.id);
+      if (!mounted || !current()) return;
+      target = _rowShowing(id, original);
+      if (target == null && c.messages(id).length == loaded) {
+        note = 'Couldn’t load earlier messages to find the original.';
+        break;
+      }
+    }
+    setState(() => _finding = null);
+    if (target == null) {
+      ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+        SnackBar(
+          content: Text(
+            note ?? 'The original message is no longer in this conversation.',
+          ),
+        ),
+      );
+      return;
+    }
+    final found = target;
+    setState(() {
+      _back = (conversationId: id, messageId: reply.id, top: top);
+      _target = found;
+      // Stop following the end: the original is what to see.
+      _scrollRequest++;
+      _jumpingToEnd = false;
+      _following[id] = false;
+    });
+    _revealTarget(
+      id,
+      0,
+      arrived: (row) {
+        unawaited(Scrollable.ensureVisible(row, alignment: .3));
+        _light(found);
+      },
+    );
+  }
+
+  /// Returns to the reply a quote was followed from, where it was on screen.
+  void _goBack() {
+    final back = _back;
+    if (back == null || back.conversationId != c.selectedId) return;
+    final id = back.conversationId;
+    setState(() {
+      _back = null;
+      _target = back.messageId;
+      _scrollRequest++;
+      _jumpingToEnd = false;
+    });
+    _revealTarget(
+      id,
+      0,
+      arrived: (row) {
+        final scroll = _scroll[id], top = _topInList(row);
+        if (scroll == null || !scroll.hasClients || top == null) return;
+        scroll.jumpTo(
+          (scroll.offset + top - back.top).clamp(
+            0.0,
+            scroll.position.maxScrollExtent,
+          ),
+        );
+      },
+    );
+    _focus.requestFocus();
+  }
+
+  void _light(String messageId) {
+    _litTimer?.cancel();
+    setState(() => _lit = messageId);
+    _litTimer = Timer(const Duration(seconds: 2), () {
+      if (mounted) setState(() => _lit = null);
+    });
   }
 
   List<SuperTabAgent> _needsHuman(SuperTabConversation group) =>
@@ -1335,6 +1561,7 @@ class _SuperTabViewState extends State<SuperTabView>
       grouped: grouped,
       reply: reply,
       replyAuthor: reply == null ? null : _shownAuthor(c, reply),
+      onOpenReply: (row) => unawaited(_openOriginal(message, row)),
       onReply: c.canWrite && c.selected?.archived == false
           ? () {
               setState(() => _replies[c.selectedId] = message);
@@ -1459,16 +1686,14 @@ class _SuperTabViewState extends State<SuperTabView>
     final group = c.selected;
     final writable = c.canWrite && group != null && !group.archived;
     final busy = c.saving || c.uploading;
-    final allMessages = c.messages(c.selectedId);
-    final latestOwn = allMessages.reversed
+    final latestOwn = c
+        .messages(c.selectedId)
+        .reversed
         .where(
           (m) => !m.fromAgent && !m.fromTerminal && m.authorId == c.accountId,
         )
         .firstOrNull;
-    // A message waiting for an agent is never announced; notices older backends stored stay hidden.
-    final messages = allMessages
-        .where((m) => m.source['kind'] != 'delivery-hold')
-        .toList();
+    final messages = _shownMessages(c.selectedId);
     final entries = superTabTranscriptEntries(messages);
     final byId = {for (final message in messages) message.id: message};
     final grouped = SuperTabMessageRow.consecutiveUpdates(messages);
@@ -1477,6 +1702,8 @@ class _SuperTabViewState extends State<SuperTabView>
         ? 0
         : messages.where((message) => message.sequence > newAfter).length;
     final reply = _replies[c.selectedId];
+    final finding = _finding?.conversationId == c.selectedId ? _finding : null;
+    final back = finding == null && _back?.conversationId == c.selectedId;
     final choices = _completionChoices;
     // No conversation read yet: its error is the page itself, not a line over "Loading".
     final unread = _readsFirst && c.snapshot == null;
@@ -1574,57 +1801,134 @@ class _SuperTabViewState extends State<SuperTabView>
                                 ? entries[index - 2].message
                                 : null;
                             final time = message.createdAt;
-                            return Column(
-                              crossAxisAlignment: CrossAxisAlignment.stretch,
-                              children: [
-                                if (time != null &&
-                                    !DateUtils.isSameDay(
-                                      time.toLocal(),
-                                      previous?.createdAt?.toLocal(),
-                                    ))
-                                  _date(time),
-                                if (entry.interruptions > 0)
-                                  SuperTabRecordingNotice(
-                                    key: ValueKey(
-                                      'super-message-${message.id}',
-                                    ),
-                                    author: _shownAuthor(c, message),
-                                    count: entry.interruptions,
-                                    onOpenTerminal: agent == null
-                                        ? null
-                                        : () => _openAgent(agent),
-                                  )
-                                else
+                            return _BuiltRow(
+                              id: message.id,
+                              rows: _built,
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.stretch,
+                                children: [
+                                  if (time != null &&
+                                      !DateUtils.isSameDay(
+                                        time.toLocal(),
+                                        previous?.createdAt?.toLocal(),
+                                      ))
+                                    _date(time),
                                   KeyedSubtree(
                                     key: message.id == _target
                                         ? _targetKey
                                         : null,
-                                    child: _message(
-                                      message,
-                                      grouped.contains(message.id),
-                                      byId,
-                                      showReceipt: message.id == latestOwn?.id,
+                                    child: SuperTabMessageHighlight(
+                                      on: message.id == _lit,
+                                      child: entry.interruptions > 0
+                                          ? SuperTabRecordingNotice(
+                                              key: ValueKey(
+                                                'super-message-${message.id}',
+                                              ),
+                                              author: _shownAuthor(c, message),
+                                              count: entry.interruptions,
+                                              onOpenTerminal: agent == null
+                                                  ? null
+                                                  : () => _openAgent(agent),
+                                            )
+                                          : _message(
+                                              message,
+                                              grouped.contains(message.id),
+                                              byId,
+                                              showReceipt:
+                                                  message.id == latestOwn?.id,
+                                            ),
                                     ),
                                   ),
-                              ],
+                                ],
+                              ),
                             );
                           },
                         ),
                       ),
                     ),
-                    if (newCount > 0)
+                    if (finding != null)
+                      Positioned(
+                        top: 12,
+                        left: 20,
+                        right: 20,
+                        child: Center(
+                          child: Material(
+                            key: const ValueKey('super-reply-finding'),
+                            color: DesktopChrome.surface,
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(
+                                DesktopChrome.controlRadius,
+                              ),
+                              side: BorderSide(color: DesktopChrome.rim),
+                            ),
+                            child: Padding(
+                              padding: const EdgeInsets.only(left: 12),
+                              child: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Flexible(
+                                    child: Semantics(
+                                      liveRegion: true,
+                                      child: Text(
+                                        finding.pages == 0
+                                            ? 'Finding the original message…'
+                                            : 'Finding the original message… '
+                                                  '${finding.pages} '
+                                                  '${finding.pages == 1 ? 'page' : 'pages'} back',
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                        style: DesktopChrome.control(),
+                                      ),
+                                    ),
+                                  ),
+                                  const SizedBox(width: 4),
+                                  TextButton(
+                                    onPressed: () => setState(() {
+                                      _jumpRequest++;
+                                      _finding = null;
+                                    }),
+                                    child: const Text('Cancel'),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                    if (newCount > 0 || back)
                       Positioned(
                         bottom: 12,
                         left: 20,
                         right: 20,
                         child: Center(
-                          child: FilledButton.icon(
-                            key: const ValueKey('super-new-messages'),
-                            onPressed: _jumpToLatest,
-                            icon: const Icon(AppIcons.chevronDown, size: 16),
-                            label: Text(
-                              '$newCount new ${newCount == 1 ? 'message' : 'messages'}',
-                            ),
+                          child: Wrap(
+                            spacing: 8,
+                            runSpacing: 8,
+                            alignment: WrapAlignment.center,
+                            children: [
+                              if (back)
+                                FilledButton.icon(
+                                  key: const ValueKey('super-reply-back'),
+                                  onPressed: _goBack,
+                                  icon: const Icon(
+                                    AppIcons.chevronDown,
+                                    size: 16,
+                                  ),
+                                  label: const Text('Back to reply'),
+                                ),
+                              if (newCount > 0)
+                                FilledButton.icon(
+                                  key: const ValueKey('super-new-messages'),
+                                  onPressed: _jumpToLatest,
+                                  icon: const Icon(
+                                    AppIcons.chevronDown,
+                                    size: 16,
+                                  ),
+                                  label: Text(
+                                    '$newCount new ${newCount == 1 ? 'message' : 'messages'}',
+                                  ),
+                                ),
+                            ],
                           ),
                         ),
                       ),
@@ -2159,4 +2463,39 @@ class _SuperTabViewState extends State<SuperTabView>
       );
     },
   );
+}
+
+/// Records its row's context while built, so [_SuperTabViewState] can find
+/// the row a message is shown in.
+class _BuiltRow extends StatefulWidget {
+  const _BuiltRow({required this.id, required this.rows, required this.child});
+  final String id;
+  final Map<String, BuildContext> rows;
+  final Widget child;
+
+  @override
+  State<_BuiltRow> createState() => _BuiltRowState();
+}
+
+class _BuiltRowState extends State<_BuiltRow> {
+  @override
+  void didUpdateWidget(_BuiltRow oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    // The list reuses a row for another message.
+    if (oldWidget.id != widget.id && oldWidget.rows[oldWidget.id] == context) {
+      oldWidget.rows.remove(oldWidget.id);
+    }
+  }
+
+  @override
+  void dispose() {
+    if (widget.rows[widget.id] == context) widget.rows.remove(widget.id);
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    widget.rows[widget.id] = context;
+    return widget.child;
+  }
 }
