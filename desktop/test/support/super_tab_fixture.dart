@@ -410,6 +410,8 @@ class ConversationServer {
   bool mentionsMissing = false;
   // While set, every read of the mentions list waits for it.
   Completer<void>? holdMentions;
+  // Every read of the mentions list fails, as offline.
+  bool failMentions = false;
   // The effective routing policy answered by GET .../routing-policy.
   Map<String, dynamic>? routingPolicy;
   final state = <String, dynamic>{
@@ -680,6 +682,7 @@ class ConversationServer {
         throw const SuperTabFailure('NOT_FOUND', 'Not found.', statusCode: 404);
       }
       if (holdMentions case final hold?) await hold.future;
+      if (failMentions) throw StateError('Offline');
       final waiting = uri.queryParameters['state'] == 'waiting';
       return jsonDecode(
         jsonEncode({

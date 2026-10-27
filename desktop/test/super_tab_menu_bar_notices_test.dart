@@ -48,6 +48,67 @@ void main() {
     expect(rows.last['id'], 'mention-1');
   });
 
+  group('a conversation the person can no longer read', () {
+    /// A tag and a decision in "Offline editing", then that conversation
+    /// leaves what this account reads.
+    Future<SuperTabLaunchFixture> askedInOffline() async {
+      final f = SuperTabLaunchFixture(local: true);
+      f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Pilot');
+      final c = await f.app.superTabs.open(tabId);
+      await c.refresh();
+      f.connection.server
+        ..tag('message-1', conversationId: 'offline', text: 'Private tag')
+        ..ask(['Private question?'], conversationId: 'offline');
+      await c.refresh();
+      await SuperTabMentions.of(c).load();
+      await SuperTabDecisions.of(c).load();
+      expect(statusMenuSwarmEntries(f.app), hasLength(2));
+      (f.connection.server.state['conversations'] as List).removeWhere(
+        (g) => (g as Map)['id'] == 'offline',
+      );
+      return f;
+    }
+
+    test('leaves the menu at once, though its lists still hold it', () async {
+      final f = await askedInOffline();
+      final c = f.app.superTabs.peek(tabId)!;
+      await c.refresh();
+      expect(c.snapshot!.conversation('offline'), isNull);
+      expect(SuperTabMentions.of(c).waiting, isNotEmpty);
+      expect(statusMenuSwarmEntries(f.app), isEmpty);
+    });
+
+    test('stays out while the new lists are slow to come', () async {
+      final f = await askedInOffline();
+      final server = f.connection.server;
+      server.parts.epoch++;
+      server
+        ..holdMentions = Completer<void>()
+        ..holdDecisions = Completer<void>();
+      final c = f.app.superTabs.peek(tabId)!;
+      await c.refresh();
+      await pumpEventQueue();
+      expect(statusMenuSwarmEntries(f.app), isEmpty);
+      expect(SuperTabMentions.of(c).waiting, isEmpty);
+      expect(SuperTabDecisions.of(c).open, isEmpty);
+      server.holdMentions!.complete();
+      server.holdDecisions!.complete();
+    });
+
+    test('stays out when the new lists fail', () async {
+      final f = await askedInOffline();
+      final server = f.connection.server;
+      server.parts.epoch++;
+      server
+        ..failMentions = true
+        ..failDecisions = true;
+      final c = f.app.superTabs.peek(tabId)!;
+      await c.refresh();
+      await pumpEventQueue();
+      expect(statusMenuSwarmEntries(f.app), isEmpty);
+    });
+  });
+
   test('none from a Swarm this account lost, and none signed out', () async {
     final f = SuperTabLaunchFixture(local: true);
     await openWithNotices(f);

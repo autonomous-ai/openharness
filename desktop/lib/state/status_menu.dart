@@ -197,8 +197,10 @@ void clearStatusMenuNotifications(AppNotifier app, List receipts) {
 
 /// The menu bar's Swarm section: in each open Swarm tab, the decisions asked
 /// of this account, then the tags waiting for it, newest first in each, as its
-/// Notifications page lists them. None from a Swarm it lost, none signed out.
-/// Choosing one opens it there (`SuperTabController.openNotice`).
+/// Notifications page lists them. Only from conversations it can read now,
+/// none from a Swarm it lost, none signed out: the lists are what was read
+/// last, and access can leave before they are read again. Choosing one opens
+/// it there (`SuperTabController.openNotice`).
 List<Map<String, Object?>> statusMenuSwarmEntries(AppNotifier app) {
   if (app.currentUser == null) return [];
   final needs = nativeActivityPayload(HarnessActivity.needsInput);
@@ -232,7 +234,10 @@ List<Map<String, Object?>> statusMenuSwarmEntries(AppNotifier app) {
       ].where((part) => part.isNotEmpty).join(' · '),
       'receivedAt': createdAt?.millisecondsSinceEpoch,
     };
+    bool readable(String conversationId) =>
+        snapshot.conversation(conversationId) != null;
     for (final d in SuperTabDecisions.of(controller).open) {
+      if (!readable(d.conversationId)) continue;
       rows.add(
         row(
           'decision',
@@ -246,6 +251,7 @@ List<Map<String, Object?>> statusMenuSwarmEntries(AppNotifier app) {
       );
     }
     for (final m in SuperTabMentions.of(controller).waiting) {
+      if (!readable(m.conversationId)) continue;
       rows.add(
         row(
           'mention',
