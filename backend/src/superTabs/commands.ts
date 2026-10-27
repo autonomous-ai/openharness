@@ -16,7 +16,7 @@ import { TERMINAL_KEYS, terminalAlert, terminalRequest, terminalResult, type Ter
 import { loseTasks, renewLease, renewOwnTask } from './liveness.js'
 import { credentialResult, redactCredentials, type CredentialKind } from './credentials.js'
 import { dirtyGroups, reportGroups, summarize } from './projectUpdates.js'
-import { agentKind, agentProjectId, audienceOf, agentSetRole, canReadGroup, deleteProject, markConfidential, requireSingleRegistration, groupProject, inviteLanding, ledProject, manageProject, MAX_ROLES, mutableProjects, placeRules, projectMembers, projectOf, projectRules, projectsOf, readAgent, readConversation, readProject, roleVersion, sameProject, sharedWithLeads, SKILL_SET_NAMES, skillSetOf, type ProjectRole, type RoleKind, type SwarmProject } from './projects.js'
+import { agentKind, agentProjectId, audienceOf, agentSetRole, canReadGroup, canReadProject, deleteProject, markConfidential, requireSingleRegistration, groupProject, inviteLanding, ledProject, manageProject, MAX_ROLES, mutableProjects, placeRules, projectMembers, projectOf, projectRules, projectsOf, readAgent, readConversation, readProject, roleVersion, sameProject, sharedWithLeads, SKILL_SET_NAMES, skillSetOf, type ProjectRole, type RoleKind, type SwarmProject } from './projects.js'
 
 const id = z.string().min(1).max(160).regex(/^[A-Za-z0-9_-]+$/)
 const title = z.string().trim().min(1).max(160)
@@ -81,6 +81,8 @@ export const commandSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('project.rename'), projectId: id, name: title }).strict(),
   z.object({ type: z.literal('project.delete'), projectId: id }).strict(),
   z.object({ type: z.literal('project.sharing'), projectId: id, visibility: z.enum(['public', 'private']), memberIds: z.array(id).max(200) }).strict(),
+  // What a person covers in a project (devices, mobile, product...), so a Lead picks a group's partner from it.
+  z.object({ type: z.literal('project.areas'), projectId: id, personId: id, areas: z.array(z.string().trim().min(1).max(40)).max(10) }).strict(),
   z.object({ type: z.literal('project.cadence'), projectId: id, minutes: z.union([z.literal(1), z.literal(5), z.literal(15), z.literal(30)]) }).strict(),
   // `through`: each conversation's sequence the Lead read, as its wake-up names them. `throughRevision` is the tab revision a
   // wake-up from before the store by parts named; it is accepted only up to that split (projectUpdates.ts).
@@ -813,6 +815,23 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       const project = manageProject(state, actor, command.projectId)
       project.members = projectMembers(state, command.memberIds)
       project.visibility = command.visibility
+      break
+    }
+    case 'project.areas': {
+      const project = readProject(state, actor, command.projectId)
+      if (actor.kind !== 'person' || (actor.userId !== command.personId && actor.userId !== project.ownerId)) {
+        fail('AREAS_FORBIDDEN', 'Only that person or the project owner sets their areas.', 403)
+      }
+      const member = state.people.find(p => p.id === command.personId) ?? fail('INVALID_PERSON', 'Name a person in this Swarm.', 400)
+      if (!canReadProject(state, { kind: 'person', userId: member.id, email: member.email }, project)) {
+        fail('INVALID_PERSON', 'Name a person who can read this project.', 400)
+      }
+      mutableProjects(state)
+      const changed = projectOf(state, project.id), list = [...new Set(command.areas)]
+      const { [member.id]: _previous, ...others } = changed.areas ?? {}
+      const next = list.length ? { ...others, [member.id]: list } : others
+      if (Object.keys(next).length) changed.areas = next
+      else delete changed.areas
       break
     }
     case 'project.cadence': {

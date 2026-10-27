@@ -2540,3 +2540,37 @@ describe('partner on a group (collaboration protocol)', () => {
     expect(f.state.conversations.find(c => c.id === group)).not.toHaveProperty('partnerId')
   })
 })
+
+describe('areas each person covers in a project (collaboration protocol)', () => {
+  const areas = (personId: string, list: string[], projectId = 'lead'): Command => ({ type: 'project.areas', projectId, personId, areas: list })
+  const project = (f: ReturnType<typeof fixture>, id = 'lead') => f.state.projects!.find(p => p.id === id)!
+
+  it('lets a person set their own areas, trimmed and each once, and clear them', () => {
+    const f = fixture()
+    f.invite()
+    f.run(areas('peer', [' devices ', 'mobile', 'devices']), peer)
+    expect(project(f).areas).toEqual({ peer: ['devices', 'mobile'] })
+    f.run(areas('peer', []), peer)
+    expect(project(f)).not.toHaveProperty('areas')
+  })
+
+  it('lets the project owner set anyone’s areas, and nobody else set another person’s', () => {
+    const f = fixture(), lead = f.add('lead', 'owner', 'lead', true)
+    f.invite()
+    f.run(areas('peer', ['web']))
+    expect(project(f).areas).toEqual({ peer: ['web'] })
+    expect(() => f.run(areas('owner', ['product']), peer)).toThrow('Only that person or the project owner sets their areas.')
+    expect(() => f.run(areas('owner', ['product']), { kind: 'agent', agentId: lead, machineOwnerId: 'host-owner' }))
+      .toThrow('Only that person or the project owner sets their areas.')
+  })
+
+  it('refuses a person who cannot read the project, and more than ten areas', () => {
+    const f = fixture()
+    f.invite()
+    const secret = f.run({ type: 'project.create', name: 'Secret', visibility: 'private', brief: 'Secret' }).result.projectId as string
+    expect(() => f.run(areas('peer', ['web'], secret))).toThrow('Name a person who can read this project.')
+    expect(() => f.run(areas('stranger', ['web']))).toThrow('Name a person in this Swarm.')
+    expect(commandSchema.safeParse(areas('peer', Array.from({ length: 11 }, (_, i) => `area ${i}`))).success).toBe(false)
+    expect(commandSchema.safeParse(areas('peer', ['x'.repeat(41)])).success).toBe(false)
+  })
+})

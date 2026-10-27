@@ -71,6 +71,9 @@ export function touchesFor(command: Command, actor: Actor, before: SuperTabState
       group(command.reviewOf)
       break
     }
+    case 'project.areas':
+      member(command.personId)
+      break
     case 'conversation.partner':
       member(command.personId ?? undefined)
       break
