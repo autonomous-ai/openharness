@@ -86,11 +86,25 @@ class _SwarmConversationPageState extends State<SwarmConversationPage> {
   /// something drawn changed ([_ChatView]).
   final _view = ValueNotifier<_ChatView?>(null);
 
+  /// The newest message shown when the person began reading back: those
+  /// after it wait below, so what they read stays where it is, and the pill
+  /// says how many. Null at the foot.
+  final _held = ValueNotifier<String?>(null);
+
+  /// Each entry's row as last built, with what it was built from ([_row]).
+  final _rows = <String, ({Object inputs, Widget row})>{};
+
+  /// What [_shown] was made from; the messages by id, and each entry's
+  /// place in [_shown] by its key.
+  Object? _madeFrom;
+  var _byId = <String, SuperTabMessage>{};
+  var _placeOf = <String, int>{};
+
   @override
   void initState() {
     super.initState();
     _text.addListener(_typed);
-    _scroll.addListener(_nearTop);
+    _scroll.addListener(_scrolled);
   }
 
   @override
@@ -158,6 +172,8 @@ class _SwarmConversationPageState extends State<SwarmConversationPage> {
       c.reader.removeListener(_see);
       c.dispose();
     }
+    _rows.clear();
+    _madeFrom = null;
     if (_watching) session?.unwatch(widget.swarmId);
     _watching = false;
     _conversation = null;
@@ -169,6 +185,7 @@ class _SwarmConversationPageState extends State<SwarmConversationPage> {
   void dispose() {
     _close();
     _view.dispose();
+    _held.dispose();
     _litTimer?.cancel();
     _text.dispose();
     _focus.dispose();
@@ -198,6 +215,18 @@ class _SwarmConversationPageState extends State<SwarmConversationPage> {
     final spaced = draft.isEmpty || RegExp(r'\s$').hasMatch(draft);
     c.draft = '$draft${spaced ? '' : ' '}@';
     _focus.requestFocus();
+  }
+
+  /// How far up the chat the person reads back, past which a message that
+  /// arrives waits below instead of pushing up what they read.
+  static const _readingBack = 48.0;
+
+  void _scrolled() {
+    _nearTop();
+    if (!_scroll.hasClients) return;
+    final back = _scroll.offset > _readingBack;
+    if (back == (_held.value != null)) return;
+    _held.value = back ? _conversation?.messages.lastOrNull?.id : null;
   }
 
   /// How close to the oldest message shown the earlier ones start to be
@@ -411,9 +440,30 @@ class _SwarmConversationPageState extends State<SwarmConversationPage> {
         ),
       ),
       Expanded(
-        child: ListenableBuilder(
-          listenable: c,
-          builder: (context, _) => _messages(context, session, c, view, tty),
+        child: Stack(
+          children: [
+            Positioned.fill(
+              child: ListenableBuilder(
+                listenable: Listenable.merge([c, _held]),
+                builder: (context, _) =>
+                    _messages(context, session, c, view, tty),
+              ),
+            ),
+            Positioned(
+              left: 0,
+              right: 0,
+              bottom: 8,
+              child: ListenableBuilder(
+                listenable: Listenable.merge([c, _held]),
+                builder: (context, _) => switch (_waiting(c)) {
+                  0 => const SizedBox.shrink(),
+                  final count => Center(
+                    child: _NewPill(count: count, onTap: _toFoot),
+                  ),
+                },
+              ),
+            ),
+          ],
         ),
       ),
       ListenableBuilder(
@@ -476,6 +526,9 @@ class _SwarmConversationPageState extends State<SwarmConversationPage> {
       c.reader.snapshot?.authorName(m) ?? m.authorName;
 
   /// The messages, newest at the foot, with the decisions asked among them.
+  /// The entries are made again only when what they are made from changed,
+  /// and each row is the one built before while it draws the same ([_row]):
+  /// a new message builds its own row alone.
   Widget _messages(
     BuildContext context,
     SwarmSession session,
@@ -483,66 +536,6 @@ class _SwarmConversationPageState extends State<SwarmConversationPage> {
     _ChatView view,
     Tty tty,
   ) {
-    final snapshot = c.reader.snapshot;
-    final byId = {for (final m in c.messages) m.id: m};
-    final pending = c.pending;
-    final entries = _timeline(
-      c.messages,
-      view.decisions,
-      hasOlder: c.hasOlder,
-    ).reversed.toList();
-    _shown = entries;
-    // A page shorter than the screen never scrolls: look once it is drawn.
-    if (c.hasOlder && !_loadingOlder && !_olderFailed) {
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted) _nearTop();
-      });
-    }
-    final lead = pending == null ? 0 : 1;
-
-    Widget message(_MessageEntry entry) {
-      final m = entry.message;
-      final reply = m.replyTo == null ? null : byId[m.replyTo];
-      return SwarmMessageRow(
-        key: m.id == _target ? _targetKey : null,
-        message: m,
-        name: _nameOf(c, m),
-        role: m.fromAgent ? view.roles[m.authorId] : null,
-        names: view.names,
-        grouped: entry.grouped,
-        lit: _lit == m.id,
-        quote: m.replyTo == null
-            ? null
-            : SwarmQuote(
-                key: ValueKey('swarm-quote-${m.id}'),
-                author: reply == null ? null : _quoted(c, reply),
-                text: reply?.text,
-                onTap: () => unawaited(_jumpTo(c, m.replyTo!)),
-              ),
-        actions: _acting == m.id,
-        onTap: () => setState(() => _acting = _acting == m.id ? null : m.id),
-        onReply: view.canPost ? () => _reply(c, m) : null,
-      );
-    }
-
-    Widget entry(_Entry entry) => switch (entry) {
-      _DayEntry(:final day) => Padding(
-        padding: const EdgeInsets.fromLTRB(0, 14, 0, 8),
-        child: Text(
-          swarmDayLabel(day, DateTime.now()),
-          textAlign: TextAlign.center,
-          style: tty.style(color: AppPalette.textFaint, size: 12.5),
-        ),
-      ),
-      final _MessageEntry m => message(m),
-      _AskEntry(:final need, :final grouped) => _Ask(
-        session: session,
-        snapshot: snapshot,
-        need: need,
-        grouped: grouped,
-      ),
-    };
-
     if (!view.known && c.messages.isEmpty) {
       return Padding(
         padding: const EdgeInsets.all(Tty.origin),
@@ -552,12 +545,126 @@ class _SwarmConversationPageState extends State<SwarmConversationPage> {
         ),
       );
     }
+    final snapshot = c.reader.snapshot;
+    final messages = c.messages;
+    final from = (messages, view.decisions, c.hasOlder, _held.value);
+    if (from != _madeFrom) {
+      // Read back: the messages after the newest shown then wait below, and
+      // so do decisions asked after it.
+      final held = _held.value;
+      final at = held == null
+          ? -1
+          : messages.lastIndexWhere((m) => m.id == held);
+      final shown = at < 0 ? messages : messages.sublist(0, at + 1);
+      final last = shown.lastOrNull?.createdAt;
+      final asks = at < 0 || last == null
+          ? view.decisions
+          : [
+              for (final need in view.decisions)
+                if (!(need.decision.createdAt?.isAfter(last) ?? false)) need,
+            ];
+      _shown = _timeline(shown, asks, hasOlder: c.hasOlder).reversed.toList();
+      _byId = {for (final m in messages) m.id: m};
+      _placeOf = {for (final (i, entry) in _shown.indexed) _keyOf(entry): i};
+      _rows.removeWhere((key, _) => !_placeOf.containsKey(key));
+      _madeFrom = from;
+    }
+    final entries = _shown;
+    final byId = _byId;
+    final pending = c.pending;
+    // A page shorter than the screen never scrolls: look once it is drawn.
+    if (c.hasOlder && !_loadingOlder && !_olderFailed) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _nearTop();
+      });
+    }
+    final lead = pending == null ? 0 : 1;
+
+    Widget entry(_Entry entry) {
+      final key = _keyOf(entry);
+      switch (entry) {
+        case _DayEntry(:final day):
+          final today = DateUtils.dateOnly(DateTime.now());
+          return _row(key, (day, today), () => _Day(day: day, today: today));
+        case _MessageEntry(message: final m, :final grouped):
+          final reply = m.replyTo == null ? null : byId[m.replyTo];
+          final name = _nameOf(c, m);
+          final role = m.fromAgent ? view.roles[m.authorId] : null;
+          final quoted = reply == null ? null : _quoted(c, reply);
+          final lit = _lit == m.id, followed = _target == m.id;
+          final acting = _acting == m.id;
+          return _row(
+            key,
+            (
+              m,
+              name,
+              role,
+              grouped,
+              lit,
+              followed,
+              acting,
+              reply,
+              quoted,
+              view.canPost,
+              view.mentions,
+            ),
+            () => SwarmMessageRow(
+              key: followed ? _targetKey : null,
+              message: m,
+              name: name,
+              role: role,
+              mentions: view.mentions,
+              grouped: grouped,
+              lit: lit,
+              followed: followed,
+              quote: m.replyTo == null
+                  ? null
+                  : SwarmQuote(
+                      key: ValueKey('swarm-quote-${m.id}'),
+                      author: quoted,
+                      text: reply?.text,
+                      onTap: () => unawaited(_jumpTo(c, m.replyTo!)),
+                    ),
+              actions: acting,
+              onTap: () =>
+                  setState(() => _acting = _acting == m.id ? null : m.id),
+              onReply: view.canPost ? () => _reply(c, m) : null,
+            ),
+          );
+        case _AskEntry(:final need, :final grouped):
+          final asker = snapshot == null ? null : swarmAsker(snapshot, need);
+          final role = asker == null ? null : view.roles[asker.id];
+          return _row(
+            key,
+            (need, grouped, asker?.id, role),
+            () => _Ask(
+              session: session,
+              need: need,
+              grouped: grouped,
+              askerId: asker?.id,
+              role: role,
+            ),
+          );
+      }
+    }
+
     return ListView.builder(
       key: const ValueKey('swarm-messages'),
       controller: _scroll,
       reverse: true,
       padding: const EdgeInsets.fromLTRB(12, 4, 12, 12),
       itemCount: lead + entries.length + (c.hasOlder ? 1 : 0),
+      // A row keeps its element when a message or a post moves the others'
+      // places.
+      findChildIndexCallback: (key) {
+        if (key is! ValueKey<String>) return null;
+        if (key.value == _pendingKey) return lead == 1 ? 0 : null;
+        if (key.value == _olderKey) {
+          return c.hasOlder ? lead + entries.length : null;
+        }
+        final at = _placeOf[key.value];
+        return at == null ? null : lead + at;
+      },
       itemBuilder: (context, index) {
         if (index < lead) {
           final reply = pending!.replyTo == null ? null : byId[pending.replyTo];
@@ -565,9 +672,10 @@ class _SwarmConversationPageState extends State<SwarmConversationPage> {
               .where((m) => !m.fromAgent && m.authorId == c.reader.accountId)
               .firstOrNull;
           return _Pending(
+            key: const ValueKey(_pendingKey),
             name: mine == null ? 'You' : _nameOf(c, mine),
             text: pending.text,
-            names: view.names,
+            mentions: view.mentions,
             sending: c.sending,
             quote: pending.replyTo == null
                 ? null
@@ -584,6 +692,7 @@ class _SwarmConversationPageState extends State<SwarmConversationPage> {
         // Read on their own near the top; the link only once that read
         // failed.
         return Center(
+          key: const ValueKey(_olderKey),
           child: _olderFailed
               ? _Link(
                   key: const ValueKey('swarm-older-messages'),
@@ -602,6 +711,46 @@ class _SwarmConversationPageState extends State<SwarmConversationPage> {
                 ),
         );
       },
+    );
+  }
+
+  static const _pendingKey = 'swarm-row-pending', _olderKey = 'swarm-row-older';
+
+  /// The key a row of [entry] keeps wherever it moves in the list.
+  static String _keyOf(_Entry entry) => switch (entry) {
+    _DayEntry(:final day) => 'swarm-row-day-${day.toIso8601String()}',
+    _MessageEntry(:final message) => 'swarm-row-m-${message.id}',
+    _AskEntry(:final need) => 'swarm-row-${need.key}',
+  };
+
+  /// [key]'s row as built from [inputs]: the one built before while they are
+  /// the same — a widget given again as it was is not built again — else a
+  /// new one from [build].
+  Widget _row(String key, Object inputs, Widget Function() build) {
+    final kept = _rows[key];
+    if (kept != null && kept.inputs == inputs) return kept.row;
+    final row = KeyedSubtree(key: ValueKey(key), child: build());
+    _rows[key] = (inputs: inputs, row: row);
+    return row;
+  }
+
+  /// How many messages wait below while the person reads back.
+  int _waiting(SwarmConversation c) {
+    final held = _held.value;
+    if (held == null) return 0;
+    final at = c.messages.lastIndexWhere((m) => m.id == held);
+    return at < 0 ? 0 : c.messages.length - at - 1;
+  }
+
+  /// Back to the foot, where the messages that waited show.
+  void _toFoot() {
+    if (!_scroll.hasClients) return;
+    unawaited(
+      _scroll.animateTo(
+        0,
+        duration: const Duration(milliseconds: 250),
+        curve: Curves.easeOut,
+      ),
     );
   }
 
@@ -740,6 +889,7 @@ class _ChatView {
     required this.canPost,
     required this.archived,
     required this.names,
+    required this.mentions,
     required this.roles,
     required this.mentionable,
     required this.decisions,
@@ -756,6 +906,7 @@ class _ChatView {
     final snapshot = reader.snapshot;
     final group = c.conversation;
     final agents = snapshot?.agents ?? const <SuperTabAgent>[];
+    final names = [for (final agent in agents) snapshot!.agentName(agent.id)];
     // A chat not open to the person shows none of its questions either, even
     // while the decisions read has not caught up.
     final decisions = [
@@ -779,7 +930,10 @@ class _ChatView {
           ?.name,
       canPost: c.canPost,
       archived: group?.archived ?? false,
-      names: [for (final agent in agents) snapshot!.agentName(agent.id)],
+      names: names,
+      mentions: before != null && listEquals(before.names, names)
+          ? before.mentions
+          : SwarmMentions(names),
       roles: {
         for (final agent in agents)
           agent.id: ?swarmAgentRole(snapshot!, agent.id),
@@ -797,8 +951,10 @@ class _ChatView {
   final String? project;
   final bool canPost, archived;
 
-  /// The Swarm's agents by name, for the @mentions marked in messages.
+  /// The Swarm's agents by name, and the @mentions of them marked in
+  /// messages: made again only when a name changed.
   final List<String> names;
+  final SwarmMentions mentions;
 
   /// Each agent's compact role, by agent id: PM, Dev or Rev.
   final Map<String, String> roles;
@@ -1057,20 +1213,96 @@ SuperTabAgent? swarmAsker(SuperTabSnapshot snapshot, SwarmDecisionNeed need) =>
         .where((a) => snapshot.agentName(a.id) == need.decision.askerName)
         .firstOrNull;
 
+/// Where a day starts: Today, Yesterday, the weekday or the date.
+class _Day extends StatelessWidget {
+  const _Day({required this.day, required this.today});
+
+  final DateTime day, today;
+
+  @override
+  Widget build(BuildContext context) {
+    AppTheme.watch(context);
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(0, 14, 0, 8),
+      child: Text(
+        swarmDayLabel(day, today),
+        textAlign: TextAlign.center,
+        style: Tty.of(context).style(color: AppPalette.textFaint, size: 12.5),
+      ),
+    );
+  }
+}
+
+/// How many messages arrived below while the person read back; a tap goes
+/// down to them.
+class _NewPill extends StatelessWidget {
+  const _NewPill({required this.count, required this.onTap});
+
+  final int count;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) => Semantics(
+    button: true,
+    label: count == 1 ? '1 new message' : '$count new messages',
+    excludeSemantics: true,
+    child: GestureDetector(
+      key: const ValueKey('swarm-new-pill'),
+      behavior: HitTestBehavior.opaque,
+      onTap: onTap,
+      // 44 to tap, 36 to see.
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 4),
+        child: Container(
+          height: 36,
+          padding: const EdgeInsets.symmetric(horizontal: 14),
+          decoration: BoxDecoration(
+            color: AppPalette.accent,
+            borderRadius: BorderRadius.circular(18),
+            boxShadow: const [
+              BoxShadow(
+                color: Color(0x59000000),
+                blurRadius: 12,
+                offset: Offset(0, 4),
+              ),
+            ],
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(LucideIcons.arrowDown, size: 16, color: Colors.white),
+              const SizedBox(width: 6),
+              Text(
+                '$count new',
+                style: swarmChatText(
+                  14,
+                  color: Colors.white,
+                  weight: FontWeight.w600,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    ),
+  );
+}
+
 /// The person's post on its way: "Sending…", then — its answer lost — "Not
 /// confirmed" with Send again, until it is read back.
 class _Pending extends StatelessWidget {
   const _Pending({
+    super.key,
     required this.name,
     required this.text,
-    required this.names,
+    required this.mentions,
     required this.sending,
     required this.quote,
     required this.onSendAgain,
   });
 
   final String name, text;
-  final List<String> names;
+  final SwarmMentions mentions;
   final bool sending;
   final Widget? quote;
   final VoidCallback onSendAgain;
@@ -1100,9 +1332,8 @@ class _Pending extends StatelessWidget {
           Padding(
             padding: const EdgeInsets.only(top: 2),
             child: Text.rich(
-              swarmMentionSpan(
+              mentions.span(
                 text,
-                names,
                 swarmChatText(
                   16,
                   height: 1.42,
@@ -1134,23 +1365,24 @@ class _Pending extends StatelessWidget {
 class _Ask extends StatelessWidget {
   const _Ask({
     required this.session,
-    required this.snapshot,
     required this.need,
     required this.grouped,
+    required this.askerId,
+    required this.role,
   });
 
   final SwarmSession session;
-  final SuperTabSnapshot? snapshot;
   final SwarmDecisionNeed need;
   final bool grouped;
 
+  /// Its asker in the Swarm and their role; null for one no longer in it.
+  final String? askerId, role;
+
   @override
   Widget build(BuildContext context) {
+    AppTheme.watch(context);
     final tty = Tty.of(context);
     final decision = need.decision;
-    final snapshot = this.snapshot;
-    final asker = snapshot == null ? null : swarmAsker(snapshot, need);
-    final role = asker == null ? null : swarmAgentRole(snapshot!, asker.id);
     final at = decision.createdAt?.toLocal();
     String two(int n) => n.toString().padLeft(2, '0');
     return Padding(
@@ -1160,7 +1392,7 @@ class _Ask extends StatelessWidget {
         grouped: grouped,
         avatar: SwarmChatAvatar(
           name: decision.askerName,
-          id: asker?.id ?? decision.askerName,
+          id: askerId ?? decision.askerName,
           agent: true,
           pm: role == 'PM',
         ),

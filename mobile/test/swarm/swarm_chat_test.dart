@@ -7,6 +7,7 @@ import 'package:harness_mobile/notify/system_notices.dart';
 import 'package:harness_mobile/settings/experimental_features.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart' as grid;
 import 'package:harness_mobile/swarm/swarm_conversation_page.dart';
+import 'package:harness_mobile/swarm/swarm_message_row.dart';
 import 'package:harness_mobile/swarm/swarm_request.dart';
 import 'package:harness_mobile/swarm/swarm_session.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
@@ -148,13 +149,11 @@ void main() {
   /// The message rows built while [act] runs, by message id: a row drawn as
   /// it was is not built at all.
   Future<List<String>> rowsBuilt(Future<void> Function() act) async {
-    const prefix = 'swarm-message-';
     final built = <String>[];
     final before = debugOnRebuildDirtyWidget;
     debugOnRebuildDirtyWidget = (element, _) {
-      final key = element.widget.key;
-      if (key is ValueKey<String> && key.value.startsWith(prefix)) {
-        built.add(key.value.substring(prefix.length));
+      if (element.widget case SwarmMessageRow(:final message)) {
+        built.add(message.id);
       }
     };
     try {
@@ -912,6 +911,107 @@ void main() {
 
       expect(built, isEmpty);
       expect(find.text('On it @River'), findsOneWidget);
+    });
+
+    /// g1 moved on to [sequence], as the Swarm's next read says.
+    void movedOn(FakeSwarm fake, int sequence) =>
+        fake.routes['/api/super-tabs/$tab/changes'] = (_) => changes(
+          cursor: 'c3',
+          lastChangedAt: 200,
+          derived: {'decisionsWaiting': 0},
+          groups: [
+            part(
+              'g1',
+              9,
+              groupData(
+                'g1',
+                title: 'Fix login',
+                agentIds: ['agent-lead', 'agent-builder'],
+                status: 'working',
+                lastMessageSequence: sequence,
+              ),
+            ),
+          ],
+        );
+
+    testWidgets('a new message at the foot: its own row alone, at once', (
+      tester,
+    ) async {
+      final fake = backend(page());
+      final host = await pump(tester, fake);
+      movedOn(fake, 4);
+      fake.routes['$messages?after=3'] = (_) => {
+        'messages': [message('m4', 4, text: 'Fresh news', minute: 3)],
+        'next': null,
+      };
+
+      final built = await rowsBuilt(() async {
+        await host.session!.inbox.reader(tab)!.refresh();
+        await tester.pumpAndSettle();
+      });
+
+      expect(built, ['m4']);
+      expect(inView(tester, find.text('Fresh news')), isTrue);
+      expect(key('swarm-new-pill'), findsNothing);
+    });
+
+    testWidgets('only the row a quote leads to is lit, and fades', (
+      tester,
+    ) async {
+      await pump(tester, backend(page()));
+      final fading = find.descendant(
+        of: key('swarm-messages'),
+        matching: find.byType(AnimatedContainer),
+      );
+      expect(fading, findsNothing);
+
+      await tester.tap(key('swarm-quote-m3'));
+      await tester.pumpAndSettle();
+
+      expect(key('swarm-lit-m1'), findsOneWidget);
+      expect(fading, findsOneWidget);
+      expect(
+        find.descendant(of: key('swarm-message-m1'), matching: fading),
+        findsNothing,
+        reason: 'the lit row is the animated one itself',
+      );
+      expect(tester.widget(fading).key, const ValueKey('swarm-message-m1'));
+    });
+
+    testWidgets('a message arriving while the person reads back keeps what '
+        'they read in place, and says how many wait below; the pill goes '
+        'to them', (tester) async {
+      final fake = backend([
+        for (var i = 1; i < 40; i++)
+          message('m$i', i, text: 'Line $i\nof the log', minute: i),
+      ]);
+      final host = await pump(tester, fake);
+      await tester.drag(key('swarm-messages'), const Offset(0, 300));
+      await tester.pumpAndSettle();
+      final reading = [
+        for (var i = 39; i > 0; i--) key('swarm-message-m$i'),
+      ].firstWhere((row) => row.evaluate().isNotEmpty && inView(tester, row));
+      final before = tester.getRect(reading).top;
+
+      movedOn(fake, 40);
+      fake.routes['$messages?after=39'] = (_) => {
+        'messages': [message('m40', 40, text: 'Fresh news', minute: 45)],
+        'next': null,
+      };
+      await host.session!.inbox.reader(tab)!.refresh();
+      await tester.pumpAndSettle();
+
+      expect(tester.getRect(reading).top, moreOrLessEquals(before, epsilon: 1));
+      expect(
+        find.descendant(of: key('swarm-new-pill'), matching: find.text('1 new')),
+        findsOneWidget,
+      );
+
+      await tester.tap(key('swarm-new-pill'));
+      await tester.pumpAndSettle();
+
+      expect(inView(tester, find.text('Fresh news')), isTrue);
+      expect(key('swarm-new-pill'), findsNothing);
     });
   });
 

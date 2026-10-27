@@ -51,18 +51,34 @@ Color swarmChatHair(Tty tty) => tty.text.withValues(alpha: 0.12);
 Color swarmChatCard(Tty tty) =>
     Color.alphaBlend(tty.text.withValues(alpha: 0.05), tty.ground);
 
-/// [text] with each @mention of one of [names] marked, as the desktop and
-/// the prototype mark them.
-TextSpan swarmMentionSpan(String text, List<String> names, TextStyle style) {
-  if (names.isEmpty || !text.contains('@')) {
-    return TextSpan(text: text, style: style);
+/// The names an @mention in a message is marked for, as the desktop and the
+/// prototype mark them: the pattern that finds them is made once for every
+/// message drawn with them.
+class SwarmMentions {
+  SwarmMentions(List<String> names)
+    : names = List.unmodifiable(names),
+      _pattern = names.isEmpty
+          ? null
+          : RegExp(
+              // Longest first, so "@Nova2" is not read as "@Nova".
+              '(?<![\\w@])@(?:${([...names]..sort((a, b) => b.length.compareTo(a.length))).map(RegExp.escape).join('|')})(?![\\w])',
+              caseSensitive: false,
+            );
+
+  final List<String> names;
+  final RegExp? _pattern;
+
+  /// [text] with each @mention of one of [names] marked.
+  TextSpan span(String text, TextStyle style) {
+    final pattern = _pattern;
+    if (pattern == null || !text.contains('@')) {
+      return TextSpan(text: text, style: style);
+    }
+    return TextSpan(style: style, children: _marked(text, pattern));
   }
-  // Longest first, so "@Nova2" is not read as "@Nova".
-  final sorted = [...names]..sort((a, b) => b.length.compareTo(a.length));
-  final pattern = RegExp(
-    '(?<![\\w@])@(?:${sorted.map(RegExp.escape).join('|')})(?![\\w])',
-    caseSensitive: false,
-  );
+}
+
+List<InlineSpan> _marked(String text, RegExp pattern) {
   final spans = <InlineSpan>[];
   var at = 0;
   for (final match in pattern.allMatches(text)) {
@@ -82,7 +98,7 @@ TextSpan swarmMentionSpan(String text, List<String> names, TextStyle style) {
     at = match.end;
   }
   if (at < text.length) spans.add(TextSpan(text: text.substring(at)));
-  return TextSpan(style: style, children: spans);
+  return spans;
 }
 
 /// A message's frame: avatar, then who wrote it, their role and [trailing]
@@ -126,9 +142,10 @@ class SwarmMessageRow extends StatelessWidget {
     required this.message,
     required this.name,
     required this.role,
-    required this.names,
+    required this.mentions,
     required this.grouped,
     required this.lit,
+    this.followed = false,
     required this.quote,
     required this.actions,
     required this.onTap,
@@ -139,9 +156,12 @@ class SwarmMessageRow extends StatelessWidget {
   final String name;
   final String? role;
 
-  /// The names an @mention in it is marked for.
-  final List<String> names;
+  final SwarmMentions mentions;
   final bool grouped, lit, actions;
+
+  /// The row a quote led to: lit, then fading. Only it animates — a fade on
+  /// every row would give each its own ticker.
+  final bool followed;
   final Widget? quote;
   final VoidCallback onTap;
 
@@ -150,92 +170,98 @@ class SwarmMessageRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // A row kept as it was is not built again: it follows a theme or font
+    // change itself.
+    AppTheme.watch(context);
     final tty = Tty.of(context);
     final at = message.createdAt?.toLocal();
     String two(int n) => n.toString().padLeft(2, '0');
+    final key = ValueKey('swarm-message-${message.id}');
+    final padding = EdgeInsets.fromLTRB(6, grouped ? 0 : 7, 6, 7);
+    final frame = SwarmMessageFrame(
+      grouped: grouped,
+      avatar: SwarmChatAvatar(
+        name: name,
+        id: message.authorId,
+        agent: message.fromAgent,
+        pm: role == 'PM',
+      ),
+      header: SwarmMessageHeader(
+        name: name,
+        agent: message.fromAgent,
+        role: role,
+        trailing: at == null
+            ? null
+            : Text(
+                '${two(at.hour)}:${two(at.minute)}',
+                style: tty.style(color: AppPalette.textFaint, size: 12.5),
+              ),
+      ),
+      body: [
+        if (lit) SizedBox(key: ValueKey('swarm-lit-${message.id}')),
+        ?quote,
+        if (message.text.isNotEmpty)
+          Semantics(
+            button: true,
+            hint: 'Reply to this message',
+            child: GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onTap: onTap,
+              child: Padding(
+                padding: const EdgeInsets.only(top: 2),
+                child: SizedBox(
+                  width: double.infinity,
+                  child: Text.rich(
+                    mentions.span(
+                      message.text,
+                      swarmChatText(16, height: 1.42),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        for (final file in message.attachments)
+          SwarmFileChip(file: file, link: swarmAttachmentLink(file.url)),
+        if (actions)
+          Padding(
+            padding: const EdgeInsets.only(top: 8),
+            child: Wrap(
+              spacing: 6,
+              runSpacing: 6,
+              children: [
+                if (onReply case final reply?)
+                  SwarmSmallButton(
+                    key: ValueKey('swarm-reply-${message.id}'),
+                    icon: LucideIcons.reply,
+                    label: 'Reply',
+                    onTap: reply,
+                  ),
+                SwarmSmallButton(
+                  icon: LucideIcons.copy,
+                  label: 'Copy',
+                  onTap: () => unawaited(
+                    Clipboard.setData(ClipboardData(text: message.text)),
+                  ),
+                ),
+              ],
+            ),
+          ),
+      ],
+    );
+    if (!followed) return Padding(key: key, padding: padding, child: frame);
     return AnimatedContainer(
-      key: ValueKey('swarm-message-${message.id}'),
+      key: key,
       duration: const Duration(milliseconds: 600),
       curve: Curves.easeOut,
-      padding: EdgeInsets.fromLTRB(6, grouped ? 0 : 7, 6, 7),
+      padding: padding,
       decoration: BoxDecoration(
         color: lit
             ? AppPalette.accentOnSurface.withValues(alpha: 0.16)
             : Colors.transparent,
         borderRadius: BorderRadius.circular(10),
       ),
-      child: SwarmMessageFrame(
-        grouped: grouped,
-        avatar: SwarmChatAvatar(
-          name: name,
-          id: message.authorId,
-          agent: message.fromAgent,
-          pm: role == 'PM',
-        ),
-        header: SwarmMessageHeader(
-          name: name,
-          agent: message.fromAgent,
-          role: role,
-          trailing: at == null
-              ? null
-              : Text(
-                  '${two(at.hour)}:${two(at.minute)}',
-                  style: tty.style(color: AppPalette.textFaint, size: 12.5),
-                ),
-        ),
-        body: [
-          if (lit) SizedBox(key: ValueKey('swarm-lit-${message.id}')),
-          ?quote,
-          if (message.text.isNotEmpty)
-            Semantics(
-              button: true,
-              hint: 'Reply to this message',
-              child: GestureDetector(
-                behavior: HitTestBehavior.opaque,
-                onTap: onTap,
-                child: Padding(
-                  padding: const EdgeInsets.only(top: 2),
-                  child: SizedBox(
-                    width: double.infinity,
-                    child: Text.rich(
-                      swarmMentionSpan(
-                        message.text,
-                        names,
-                        swarmChatText(16, height: 1.42),
-                      ),
-                    ),
-                  ),
-                ),
-              ),
-            ),
-          for (final file in message.attachments)
-            SwarmFileChip(file: file, link: swarmAttachmentLink(file.url)),
-          if (actions)
-            Padding(
-              padding: const EdgeInsets.only(top: 8),
-              child: Wrap(
-                spacing: 6,
-                runSpacing: 6,
-                children: [
-                  if (onReply case final reply?)
-                    SwarmSmallButton(
-                      key: ValueKey('swarm-reply-${message.id}'),
-                      icon: LucideIcons.reply,
-                      label: 'Reply',
-                      onTap: reply,
-                    ),
-                  SwarmSmallButton(
-                    icon: LucideIcons.copy,
-                    label: 'Copy',
-                    onTap: () => unawaited(
-                      Clipboard.setData(ClipboardData(text: message.text)),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-        ],
-      ),
+      child: frame,
     );
   }
 }
