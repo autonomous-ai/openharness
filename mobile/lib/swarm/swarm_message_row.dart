@@ -10,6 +10,7 @@ import 'package:harness_mobile/phone/tty_controls.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart';
 
 import 'model.dart';
+import 'swarm_attachment.dart';
 
 /// The host the backend serves message files from: a link anywhere else is
 /// not opened (the desktop's `attachmentLink`).
@@ -222,7 +223,14 @@ class SwarmMessageRow extends StatelessWidget {
             ),
           ),
         for (final file in message.attachments)
-          SwarmFileChip(file: file, link: swarmAttachmentLink(file.url)),
+          SwarmAttachment(
+            file: file,
+            link: swarmAttachmentLink(file.url),
+            chip: SwarmFileChip(
+              file: file,
+              link: swarmAttachmentLink(file.url),
+            ),
+          ),
         if (actions)
           Padding(
             padding: const EdgeInsets.only(top: 8),
