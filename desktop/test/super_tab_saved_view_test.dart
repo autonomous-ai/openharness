@@ -680,25 +680,39 @@ class _StuckLockStore extends MemoryStore
       release.future.then((_) => action());
 }
 
+/// A browser store whose lock nobody holds, granted late: a phone's boot
+/// keeps the main thread busy, and the fixture measured 0.2 to 1.5 s.
+class _SlowLockStore extends MemoryStore
+    implements SynchronizedLocalKeyValueStore {
+  @override
+  Future<T> synchronized<T>(String scope, Future<T> Function() action) =>
+      Future<void>.delayed(const Duration(milliseconds: 600))
+          .then((_) => action());
+}
+
 void _reReviewTests() {
-  // Minor a.
-  test('a lock another tab holds delays the open no more than 250 ms', () {
+  // Minor a: no wait at all, rather than a bounded one.
+  test('a lock another tab holds neither delays the open nor hides its saved '
+      'view, and the index stays whole', () {
     fakeAsync((async) {
       final server = ConversationServer()..append('Hello');
-      final store = _StuckLockStore();
-      final client = _client(_Transport(server), store)
+      final kept = MemoryStore();
+      _visit(async, server, kept);
+      final store = _StuckLockStore()..values.addAll(kept.values);
+      final transport = _Transport(server)..hold = Completer<void>();
+      final client = _client(transport, store)
         ..bind('owner')
         ..show('tab');
       SuperTabController? c;
       client.open('tab').then((opened) => c = opened);
-      async.elapse(const Duration(milliseconds: 249));
-      expect(c, isNull);
-      async.elapse(const Duration(milliseconds: 2));
-      expect(c, isNotNull);
-      expect(c!.showingSaved, isFalse);
+      async.flushMicrotasks();
+      expect(c!.showingSaved, isTrue);
       expect(c!.messages('lead').single.text, 'Hello');
+      // The other tab lets go: what waited for it runs, one at a time.
       store.release.complete();
       async.flushMicrotasks();
+      expect(store.values[_viewKey], kept.values[_viewKey]);
+      expect(jsonDecode(store.values['super_tab.views.owner']!), ['tab']);
       client.dispose();
     });
   });
@@ -795,36 +809,6 @@ void _followUpTests() {
     expect(store.touched.where((k) => k.contains('super_tab.view')), isEmpty);
   });
 
-  // Minor a, left of it: what the open stopped waiting for.
-  test('a read that missed the lock leaves the views as they were once it '
-      'gets it', () {
-    fakeAsync((async) {
-      final kept = MemoryStore();
-      final views = SuperTabSavedViews(kept);
-      () async {
-        await views.claim('owner');
-        // This Swarm is the least recent of the three kept.
-        for (final tab in ['tab', 'c', 'b']) {
-          await views.write('owner', tab, _view(tab: tab));
-        }
-      }();
-      async.flushMicrotasks();
-      final store = _StuckLockStore()..values.addAll(kept.values);
-      final transport = _Transport(ConversationServer()..append('Hello'))
-        ..hold = Completer<void>();
-      final client = _client(transport, store)
-        ..bind('owner')
-        ..show('tab');
-      client.open('tab');
-      async.elapse(const Duration(milliseconds: 300));
-      final before = Map.of(store.values);
-      store.release.complete();
-      async.flushMicrotasks();
-      expect(store.values, before);
-      client.dispose();
-    });
-  });
-
   // Minor b, left of it.
   test('signing out forgets the account leaving, whoever the device names', () {
     fakeAsync((async) {
@@ -851,24 +835,24 @@ void _followUpTests() {
   });
 
   // The 1.3.76 re-score: a warm boot waited for the server.
-  test('a view slower than 250 ms to read still draws before a 5 s first '
-      'read', () {
+  test('a lock a busy boot grants late still draws the saved view before a '
+      '5 s first read', () {
     fakeAsync((async) {
       final server = ConversationServer()..append('Hello');
-      final store = _OrderStore();
-      _visit(async, server, store);
-      // A phone's boot keeps the main thread busy while the view is read.
-      store.viewDelay = const Duration(milliseconds: 400);
+      final kept = MemoryStore();
+      _visit(async, server, kept);
+      final store = _SlowLockStore()..values.addAll(kept.values);
       final transport = _Transport(server)..delay = const Duration(seconds: 5);
       final client = _client(transport, store)
         ..bind('owner')
         ..show('tab');
       SuperTabController? c;
       client.open('tab').then((opened) => c = opened);
-      async.elapse(const Duration(milliseconds: 500));
+      async.flushMicrotasks();
       expect(c!.showingSaved, isTrue);
       expect(c!.messages('lead').single.text, 'Hello');
-      async.elapse(const Duration(seconds: 5));
+      // The fresh state, then its conversation, 5 s each, replace it.
+      async.elapse(const Duration(seconds: 10));
       expect(c!.showingSaved, isFalse);
       client.dispose();
     });

@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import '../core/local_key_value_store.dart';
@@ -47,9 +48,9 @@ class SuperTabSavedViews {
     }
   }
 
-  /// Puts [tabId] first in the account's index. Best effort when reading: a
-  /// storage that refuses must not fail the open.
+  /// Puts [tabId] first in the account's index, if its view is still kept.
   Future<void> _use(String account, String tabId) async {
+    if (await storage.read(_key(account, tabId)) == null) return;
     final tabs = (await _tabs(account))..remove(tabId);
     tabs.insert(0, tabId);
     for (final gone in tabs.skip(maxTabs)) {
@@ -62,28 +63,28 @@ class SuperTabSavedViews {
   }
 
   /// The view saved for [tabId], or null: none, unreadable, another shape,
-  /// or a storage that refuses (full, private mode). It never throws.
-  Future<Map<String, dynamic>?> read(String account, String tabId) =>
-      _serial(() async {
-        try {
-          final raw = await storage.read(_key(account, tabId));
-          if (raw == null) return null;
-          final view = jsonDecode(raw);
-          // A view an older build kept (a whole state, not parts) is none.
-          if (view is! Map<String, dynamic> ||
-              view['format'] != superTabReadFormat ||
-              view['parts'] is! Map<String, dynamic> ||
-              view['lastChangedAt'] is! int) {
-            return null;
-          }
-          try {
-            await _use(account, tabId);
-          } catch (_) {}
-          return view;
-        } catch (_) {
-          return null;
-        }
-      });
+  /// or a storage that refuses (full, private mode). It never throws, and
+  /// never waits for this browser's lock: another tab may hold it (one iOS
+  /// suspended), and a phone's busy boot grants it a second late. One value
+  /// reads whole; only the index update after it takes the lock, best effort.
+  Future<Map<String, dynamic>?> read(String account, String tabId) async {
+    try {
+      final raw = await storage.read(_key(account, tabId));
+      if (raw == null) return null;
+      final view = jsonDecode(raw);
+      // A view an older build kept (a whole state, not parts) is none.
+      if (view is! Map<String, dynamic> ||
+          view['format'] != superTabReadFormat ||
+          view['parts'] is! Map<String, dynamic> ||
+          view['lastChangedAt'] is! int) {
+        return null;
+      }
+      unawaited(_serial(() => _use(account, tabId)).catchError((Object _) {}));
+      return view;
+    } catch (_) {
+      return null;
+    }
+  }
 
   /// Keeps [view] for [tabId], and says whether it was kept; one over the
   /// cap is not kept, and the older one goes with it rather than staying
