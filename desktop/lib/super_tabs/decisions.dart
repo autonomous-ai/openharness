@@ -36,8 +36,10 @@ class SuperTabDecision {
   final int? choice;
   final String? note;
 
+  final DateTime? createdAt;
+
   /// When the backend reminded the reader of it; null until it did.
-  final DateTime? createdAt, remindedAt;
+  final DateTime? remindedAt;
 }
 
 /// An open request of the reader's that the backend reminded them of at
