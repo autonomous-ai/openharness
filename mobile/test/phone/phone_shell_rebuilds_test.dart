@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness_mobile/core/models.dart';
+import 'package:harness_mobile/phone/agent_home.dart';
 import 'package:harness_mobile/phone/phone_navigation.dart';
 import 'package:harness_mobile/settings/experimental_features.dart';
 import 'package:harness_mobile/phone/phone_shell.dart';
@@ -84,6 +85,46 @@ void main() {
 
     expect(find.byType(SwarmConversationPage), findsNothing);
     expect(rebuilt(), 0, reason: 'its scroll and rows stay as they were');
+  });
+
+  group('Harness out of sight under Swarm Home', () {
+    /// Harness from the drawer, then back to Swarm Home: the terminal home
+    /// is built, and kept out of sight.
+    Future<void> hideHarness(WidgetTester tester) async {
+      await open(tester);
+      await tester.tap(find.byKey(const ValueKey('swarm-menu')));
+      await frames(tester);
+      await tester.tap(find.byKey(const ValueKey('swarm-drawer-harness')));
+      await frames(tester);
+      await tester.binding.handlePopRoute();
+      await frames(tester);
+      expect(find.byType(AgentHome), findsNothing);
+      expect(find.byType(AgentHome, skipOffstage: false), findsOneWidget);
+    }
+
+    testWidgets('builds nothing on app updates', (tester) async {
+      await hideHarness(tester);
+
+      final rebuilt = countRebuildsUnder<AgentHome>();
+      await ticks(tester);
+
+      expect(rebuilt(), 0);
+    });
+
+    testWidgets('builds nothing on app updates with a page over Swarm Home '
+        'that is rebuilt on them', (tester) async {
+      await hideHarness(tester);
+      unawaited(
+        Navigator.of(home(tester))
+            .push(phoneRoute((_) => const Text('reads the app in build'))),
+      );
+      await frames(tester);
+
+      final rebuilt = countRebuildsUnder<AgentHome>();
+      await ticks(tester);
+
+      expect(rebuilt(), 0);
+    });
   });
 
   testWidgets('a page that does not listen for itself is rebuilt on every app '

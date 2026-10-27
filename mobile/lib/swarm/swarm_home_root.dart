@@ -1,5 +1,6 @@
 import 'package:flutter/widgets.dart';
 
+import '../phone/out_of_sight.dart';
 import '../settings/experimental_features.dart';
 
 /// What the root of the phone's stack shows. While Settings ▸ Experimental ▸
@@ -56,7 +57,8 @@ class SwarmHomeChoice extends ChangeNotifier {
 /// [harness] (the terminal home) is built the first time it is shown, and
 /// then kept, out of sight, while Swarm Home is up: a terminal is slow to
 /// open, and the person comes back to it as they left it. Out of sight it
-/// paints nothing, takes no touches or focus, and its animations stop. With
+/// paints and builds nothing, takes no touches or focus, and its animations
+/// and its listening to the app stop ([OutOfSight]). With
 /// Swarm off it is all there is, exactly as before Swarm Home.
 class SwarmHomeRoot extends StatefulWidget {
   const SwarmHomeRoot({
@@ -79,25 +81,35 @@ class SwarmHomeRoot extends StatefulWidget {
 class _SwarmHomeRootState extends State<SwarmHomeRoot> {
   /// Keeps the terminal's state when Swarm Home comes and goes beside it.
   final _harness = GlobalKey(debugLabel: 'harness');
-  bool _harnessBuilt = false;
+
+  /// The terminal as last shown: handed back unchanged while it is out of sight, so a rebuild of
+  /// this root (the shell rebuilding the stack under a page pushed over Swarm Home) leaves it alone.
+  /// Null until it is first shown.
+  Widget? _harnessShown;
 
   @override
   Widget build(BuildContext context) => ListenableBuilder(
     listenable: widget.choice,
     builder: (context, _) {
       final swarm = widget.choice.swarm;
-      if (!swarm) _harnessBuilt = true;
+      if (!swarm) _harnessShown = widget.harness;
       return Stack(
         fit: StackFit.expand,
         children: [
-          if (_harnessBuilt)
+          // Out of sight it neither paints nor builds: its listeners stop ([OutOfSight]) and its
+          // terminal holds its output in the buffer, drawing it once shown (xterm's own
+          // `renderingEnabled`, off with the tickers).
+          if (_harnessShown case final harness?)
             KeyedSubtree(
               key: _harness,
               child: Offstage(
                 offstage: swarm,
                 child: TickerMode(
                   enabled: !swarm,
-                  child: ExcludeFocus(excluding: swarm, child: widget.harness),
+                  child: ExcludeFocus(
+                    excluding: swarm,
+                    child: OutOfSight(hidden: swarm, child: harness),
+                  ),
                 ),
               ),
             ),
