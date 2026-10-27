@@ -61,6 +61,10 @@ describe('Shipped: requests a person asked for, done with a linked PR, 3 points 
     expect(view.goal.thisWeek.shipped).toBe(0)
   })
 
+  it('still counts a shipped request once its group is archived', () => {
+    expect(person(board(swarm(), [shipped('dee', WEEK, WEEK + HOUR, { archived: true })]), 'dee').shipped.count).toBe(1)
+  })
+
   it('gives each person the median time from asking to shipping', () => {
     const view = board(swarm(), [shipped('dee', WEEK, WEEK + HOUR), shipped('dee', WEEK, WEEK + 3 * HOUR), shipped('dee', WEEK, WEEK + 8 * HOUR)])
     expect(person(view, 'dee').shipped.medianAskToShipMs).toBe(3 * HOUR)
@@ -148,6 +152,13 @@ describe('agents waiting on a person now', () => {
       { personId: 'ken', count: 2, conversationIds: [expect.any(String), expect.any(String)] },
       { personId: 'tony', count: 1, conversationIds: [expect.any(String)] }] })
     expect(Object.keys(view.waiting.people[0]!).sort()).toEqual(['conversationIds', 'count', 'personId'])
+  })
+
+  it('waits on the project owner once the requester has left the Swarm', () => {
+    const state = swarm()
+    state.people = state.people.filter(p => p.id !== 'tony')
+    const view = board(state, [group({ status: 'needs_human', requesterId: 'tony' })])
+    expect(view.waiting.people.map(p => p.personId)).toEqual(['ken'])
   })
 
   it('never includes a private conversation', () => {

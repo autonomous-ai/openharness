@@ -5,13 +5,18 @@
 import type { Prisma, PrismaClient } from '@prisma/client'
 import type { AuthUser } from '../../lib/ssoAuth.js'
 import { isTeamSession, TEAM_SESSION_LIMITED, TEAM_SESSION_MESSAGE } from '../../lib/teamSession.js'
-import { author, fail, type Actor, type AgentStart } from '../model.js'
+import { author, fail, isLeads, type Actor, type AgentStart } from '../model.js'
 import { mentionsWaiting } from '../mentions.js'
 import { transaction, type SuperTabStore } from '../store.js'
 import { migrateSwarm } from '../migration/migrate.js'
 import * as parts from '../parts/index.js'
 import type { SwarmParts } from '../parts/index.js'
-import { canReadGroup } from '../projects.js'
+import { canReadGroup, readProject } from '../projects.js'
+import type { Leaderboard } from '../leaderboard/contract.js'
+import { readableWeek, recentDormantGroups } from '../leaderboard/read.js'
+import { LEDGER_WEEKS } from '../leaderboard/record.js'
+import { leaderboard } from '../leaderboard/stats.js'
+import { WEEK_MS } from '../leaderboard/week.js'
 import { READ_FORMAT, SWARM_MIGRATING, type Changes, type DormantGroups, type FirstLoad, type OneGroup, type SwarmList } from './contract.js'
 import { cursorFor, readCursor } from './cursor.js'
 import { changesFor } from './changes.js'
@@ -85,6 +90,21 @@ export class SwarmReads {
       const dormant = loaded.groups.find(g => g.key === conversationId && g.dormant)
       if (dormant && canReadGroup(view.state, actor, dormant.data!)) return { group: envelope(dormant, groupView({ ...dormant.data!, dormant: true })) }
       return fail('NOT_FOUND', 'This conversation is unavailable.', 404)
+    })
+  }
+
+  /** One project's leaderboard for a week (leaderboard/stats.ts), for the people who read the project. It sums only the
+   *  groups the reader may read, dormant ones of the kept weeks included, and never a private conversation. */
+  async leaderboard(user: AuthUser, tabId: string, projectId: string, week?: number): Promise<Leaderboard> {
+    if (isTeamSession(user)) fail(TEAM_SESSION_LIMITED, TEAM_SESSION_MESSAGE, 403)
+    const now = this.now(), start = readableWeek(week, now)
+    return this.read(user, tabId, async tx => {
+      const state = parts.reassemble(await parts.loadActive(tx, tabId))
+      const actor = await this.store.actor(tx, user, state)
+      readProject(state, actor, projectId)
+      const dormant = await recentDormantGroups(tx, tabId, projectId, now - LEDGER_WEEKS * WEEK_MS)
+      const groups = [...state.conversations.filter(g => !g.dormant), ...dormant].filter(g => !isLeads(g) && canReadGroup(state, actor, g))
+      return leaderboard({ state, groups, projectId, week: start, now })
     })
   }
 
