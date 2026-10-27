@@ -8,6 +8,7 @@ import type { CoreApi, TurnDelivery } from '../core/api.js'
 import { fakeCore } from '../testing/fakeCore.js'
 import { backend, swarmRoleFor, hostJournalFile, SuperTabHost, type SuperTabHostOptions } from './host.js'
 import { hostForm, swarmReply } from './fixtures/read/index.js'
+import { CONTINUE } from './limitResume.js'
 import { HostFeed } from './hostFeed.js'
 import { SwarmReads } from './swarmReads.js'
 import { retainedHarnesses, retentionFile } from './retention.js'
@@ -1199,6 +1200,75 @@ describe('a Lead\'s terminal requests', () => {
     await t.open().tick()
     await vi.waitFor(() => expect(t.call).toHaveBeenCalledWith('POST', '/api/super-tabs/tab/commands',
       { operationId: 'terminal-r1', asAgentId: 'agent', command: { type: 'agent.screenResult', requestId: 'r1', ok: true, text: 'Allow? 1. Yes' } }))
+  })
+})
+
+describe('a task lost to a usage limit', () => {
+  it('is resumed in its session from the roster row once the limit has reset', async () => {
+    const t = setup()
+    Object.assign(t.core, { superTabs: { attention: vi.fn(), cards: vi.fn(), cardRecap: vi.fn(), shareObservers: vi.fn(),
+      input: vi.fn(async () => ({ ok: true as const })), screen: vi.fn(async () => ({ ok: true as const, text: '❯ ', hold: null })) } })
+    Object.assign(t.row, { resume: { conversationId: 'group', assignmentId: 'work', lostAt: 3, at: new Date(0).toISOString() } })
+    // Once the backend gave the task back, this machine's assignment rows list it running in this session.
+    const roster = vi.mocked(t.call).getMockImplementation()!
+    let resumed = false
+    vi.mocked(t.call).mockImplementation(async (method, path, body) => {
+      if ((body as { command?: { type?: string } } | undefined)?.command?.type === 'work.resume') resumed = true
+      return path.includes('/hosts/machine-1/changes')
+        ? { status: 200, body: { success: true, data: hostForm([t.row], { assignments: resumed ? [{ tabId: 'tab', assignmentId: 'work', harnessId: 'harness' }] : [] }) } }
+        : roster(method, path, body)
+    })
+    await t.open().tick()
+    await vi.waitFor(() => expect(t.core.superTabs!.input).toHaveBeenCalledWith('harness', CONTINUE, ['Enter']))
+    expect(t.call).toHaveBeenCalledWith('POST', '/api/super-tabs/tab/commands',
+      { operationId: 'limit-resume-work-3', asAgentId: 'agent', command: { type: 'work.resume', conversationId: 'group', assignmentId: 'work', lostAt: 3 } })
+  })
+  // #1757 re-check: a feed read already running when the backend answered was sent before it, and may predate a takeover.
+  it('checks ownership with a feed read that starts after the backend answered, never one already running', async () => {
+    const t = setup()
+    Object.assign(t.core, { superTabs: { attention: vi.fn(), cards: vi.fn(), cardRecap: vi.fn(), shareObservers: vi.fn(),
+      input: vi.fn(async () => ({ ok: true as const })), screen: vi.fn(async () => ({ ok: true as const, text: '❯ ', hold: null })) } })
+    Object.assign(t.row, { resume: { conversationId: 'group', assignmentId: 'work', lostAt: 3, at: new Date(0).toISOString() } })
+    const roster = vi.mocked(t.call).getMockImplementation()!
+    const listed = { tabId: 'tab', assignmentId: 'work', harnessId: 'harness' }
+    let reads = 0, answer!: () => void, stale!: () => void
+    vi.mocked(t.call).mockImplementation(async (method, path, body) => {
+      if ((body as { command?: { type?: string } } | undefined)?.command?.type === 'work.resume') {
+        await new Promise<void>(resolve => { answer = resolve })
+        return { status: 200, body: { success: true, data: { result: {} } } }
+      }
+      if (!path.includes('/hosts/machine-1/changes')) return roster(method, path, body)
+      const read = ++reads
+      // The second read, an ordinary poll, was sent while the backend was answering: what it says predates the takeover.
+      if (read === 2) await new Promise<void>(resolve => { stale = resolve })
+      return { status: 200, body: { success: true, data: hostForm([t.row], { assignments: read === 2 ? [listed] : [] }) } }
+    })
+    const host = t.open()
+    await host.tick()
+    await vi.waitFor(() => expect(answer).toBeDefined())
+    const polling = host.tick()
+    await vi.waitFor(() => expect(stale).toBeDefined())
+    answer()
+    // The answer is in while the old poll is still out; once it lands, the check reads again.
+    await new Promise(resolve => setImmediate(resolve))
+    stale()
+    await polling
+    // Either it typed on the stale read, or it read again and found the task handed on.
+    await vi.waitFor(() => expect(vi.mocked(t.core.superTabs!.input).mock.calls.length
+      || vi.mocked(t.log).mock.calls.some(([message]) => String(message).startsWith('limit resume of work'))).toBeTruthy())
+    expect(t.core.superTabs!.input).not.toHaveBeenCalled()
+    expect(t.log).toHaveBeenCalledWith('limit resume of work: the task is no longer this session\'s')
+    expect(reads).toBe(3)
+  })
+
+  it('does not type when its assignment rows do not list the task in this session after the backend answered', async () => {
+    const t = setup()
+    Object.assign(t.core, { superTabs: { attention: vi.fn(), cards: vi.fn(), cardRecap: vi.fn(), shareObservers: vi.fn(),
+      input: vi.fn(async () => ({ ok: true as const })), screen: vi.fn(async () => ({ ok: true as const, text: '❯ ', hold: null })) } })
+    Object.assign(t.row, { resume: { conversationId: 'group', assignmentId: 'work', lostAt: 3, at: new Date(0).toISOString() } })
+    await t.open().tick()
+    await vi.waitFor(() => expect(t.log).toHaveBeenCalledWith('limit resume of work: the task is no longer this session\'s'))
+    expect(t.core.superTabs!.input).not.toHaveBeenCalled()
   })
 })
 

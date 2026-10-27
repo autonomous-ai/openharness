@@ -12,6 +12,7 @@ import 'package:harness/core/open_in_browser.dart';
 import 'package:harness/super_tabs/message_text.dart';
 import 'package:harness/super_tabs/model.dart';
 import 'package:harness/super_tabs/recording_notice.dart';
+import 'package:harness/super_tabs/project_sidebar.dart';
 import 'package:harness/super_tabs/view.dart';
 
 import 'support/super_tab_fixture.dart';
@@ -385,6 +386,17 @@ void main() {
           await tester.pumpAndSettle();
           await tester.tap(find.byTooltip('Conversations'));
           await tester.pumpAndSettle();
+          // Below the pinned Chat with PM and the projects, a scroll away.
+          await tester.scrollUntilVisible(
+            find.text('Machines'),
+            100,
+            scrollable: find
+                .descendant(
+                  of: find.byType(ProjectSidebar),
+                  matching: find.byType(Scrollable),
+                )
+                .first,
+          );
           expect(find.text('Machines'), findsOneWidget);
           expect(tester.takeException(), isNull);
           await shot('-projects');

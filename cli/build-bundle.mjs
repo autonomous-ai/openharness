@@ -12,7 +12,7 @@
  */
 import * as esbuild from 'esbuild'
 import { createHash } from 'node:crypto'
-import { appendFileSync, readFileSync, copyFileSync, rmSync, writeFileSync } from 'fs'
+import { appendFileSync, readFileSync, readdirSync, copyFileSync, rmSync, writeFileSync } from 'fs'
 import { readDshRegistry } from './scripts/lib/dshRegistry.mjs'
 import { readBuiltinBundle, readHarnessMonitorBundle, readMemoriesBundle, readModelManagerBundle } from './scripts/lib/modelManagerBundle.mjs'
 import { readProcessImageBundle } from './scripts/lib/processImageBundle.mjs'
@@ -68,6 +68,9 @@ const options = {
     // The guest helper and its sudoers drop-in (src/lib/guestHelperAssets.ts): the installed CLI is cli.js alone.
     __GUEST_HELPER__: JSON.stringify(readFileSync('assets/guest-helper/guest-helper.sh', 'utf8')),
     __GUEST_SUDOERS__: JSON.stringify(readFileSync('assets/guest-helper/sudoers', 'utf8')),
+    // The scheduler's Python package (src/superTabs/planCommand.ts), which `harness super-tab plan` writes out and runs.
+    __SCHEDULER_FILES__: JSON.stringify(Object.fromEntries(readdirSync('../tools/scheduler/scheduler').filter(f => f.endsWith('.py')).sort()
+      .map(f => [f, readFileSync(`../tools/scheduler/scheduler/${f}`, 'utf8')]))),
     __BUILTIN_REVISIONS__: JSON.stringify(builtinRevisions),
     __DARWIN_PROCESS_IMAGES__: processImages ? JSON.stringify(processImages) : 'undefined',
   },

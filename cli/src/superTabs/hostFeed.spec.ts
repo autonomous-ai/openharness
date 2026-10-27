@@ -93,6 +93,18 @@ describe('the host form of a machine\'s Swarms', () => {
     expect(paths()).toEqual([FULL, SINCE(C0)])
   })
 
+  it('gives a caller that must see what happened before it asked a read sent after it, never one already out', async () => {
+    const { feed, paths } = feedOf([ok(readFixture('host-full')), ok(readFixture('host-quiet'))])
+    const out = feed.refresh()
+    const fresh = feed.fresh()
+    await Promise.all([out, fresh])
+    expect(paths()).toEqual([FULL, SINCE(C0)])
+    // With none out, it reads at once.
+    await feed.fresh()
+    expect(paths()).toHaveLength(3)
+    expect(paths()[2]).toMatch(/^POST since /)
+  })
+
   it('takes no rows from a Swarm whose lists are malformed, and still those of the others', async () => {
     const form = readFixture<{ tabs: Json[] }>('host-full')
     const { feed } = feedOf([ok({ ...form, tabs: [{ tabId: 'odd', roster: {}, pool: 'none', assignments: null }, ...form.tabs] })])

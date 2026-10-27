@@ -17,14 +17,16 @@ export const FINISHED: readonly string[] = ['done', 'stopped', 'cancelled', 'los
 const running = { $and: [{ $ne: [{ $type: '$data.assignment.status' }, 'missing'] }, { $not: [{ $in: ['$data.assignment.status', FINISHED] }] }] }
 /**
  * Which conversation fields a light load keeps. `always`: who reads it and who is in it, and how its work ended (a lost
- * task's worker awaits no decision, model.ts awaitingWorkers). `whenRunning`: what other projects' work and host rows read of
+ * task's worker awaits no decision, model.ts awaitingWorkers), with the work's id: a host row tells whether a task lost to a
+ * usage limit is still that one before its host resumes it (read/hostRows.ts). `whenRunning`: what other projects' work and host rows read of
  * running work. `unread`: what visibility checks, derived values and host rows never read. light.test.ts fails when
  * model.ts gains a field this does not place.
  */
 export const GROUP_FIELDS = {
-  always: ['id', 'kind', 'projectId', 'leadId', 'agentIds', 'archived', 'audience', 'dormant', 'assignment.agentId', 'assignment.status', 'assignment.lost'],
-  whenRunning: ['title', 'task.owns', 'assignment.id', 'assignment.execution', 'assignment.result'],
-  unread: ['number', 'brief', 'reviewOf', 'checks', 'lastMessageSequence', 'pullRequestUrls', 'messageSeq', 'reportSeq', 'lastActivityAt', 'lostAttempt',
+  always: ['id', 'kind', 'projectId', 'leadId', 'agentIds', 'archived', 'audience', 'dormant', 'assignment.id', 'assignment.agentId', 'assignment.status',
+    'assignment.lost'],
+  whenRunning: ['title', 'task.owns', 'assignment.execution', 'assignment.result'],
+  unread: ['number', 'brief', 'reviewOf', 'checks', 'lastMessageSequence', 'pullRequestUrls', 'messageSeq', 'reportSeq', 'lastActivityAt', 'lostAttempt', 'requesterId', 'ledger',
     'assignment.configuration', 'assignment.recordingProgress', 'assignment.leaseUntil', 'assignment.progressAt'],
 } as const
 const LIGHT_GROUP = {
@@ -44,7 +46,7 @@ function ms(value: unknown): number {
 function lightGroup(row: Record<string, unknown>): Part<GroupData> {
   const raw = (row.data ?? {}) as Partial<GroupData> & { task?: { owns?: string[] } }
   // A conversation with no work has nothing to project there; never read it as having work.
-  // Finished work comes without its id, machine or result: placeholders keep the shape, and nothing reads them.
+  // Finished work comes without its machine or result: placeholders keep the shape, and nothing reads them.
   const work = raw.assignment?.status ? raw.assignment as Partial<NonNullable<GroupData['assignment']>> : null
   const assignment = work && { id: '', execution: { machineId: '', harnessId: '', machineOwnerId: '' }, result: null, ...work }
   const data = { title: '', ...raw, brief: '', checks: [], assignment,

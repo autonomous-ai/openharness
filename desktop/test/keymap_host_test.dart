@@ -365,6 +365,8 @@ void main() {
       ('cmd+w', 'swarm.close'),
       ('cmd+shift+w', 'pane.close'),
       ('ctrl+tab', 'swarm.next'),
+      // Move Pane Up until it was retired; Chat with PM since.
+      ('cmd+shift+k', 'swarm.chat_with_pm'),
     ]) {
       expect(command(keys), expected, reason: keys);
     }
@@ -381,7 +383,7 @@ void main() {
       final id = command(stroke.toString());
       expect(harnessCommandById[id]?.action, shortcut.action);
     }
-    for (final retired in ['cmd+shift+h', 'cmd+shift+k', 'cmd+u', 'cmd+y']) {
+    for (final retired in ['cmd+shift+h', 'cmd+u', 'cmd+y']) {
       expect(command(retired), isNull, reason: retired);
     }
     // ⌥⌘←/→ walk tabs, as in Safari and Chrome; ⇧⌘[ ] no longer do.

@@ -30,6 +30,8 @@ export interface ReadExtras {
   teamMachines: string[]
   /** A person's open mentions, counted by the store. */
   mentionsWaiting?: number
+  /** A person's open decisions (decisions.ts). */
+  decisionsWaiting?: number
 }
 
 const HEAD_FIELDS = ['version', 'id', 'name', 'project', 'projects', 'leadsConversationId', 'ownerId', 'environment',
@@ -38,9 +40,10 @@ const HEAD_FIELDS = ['version', 'id', 'name', 'project', 'projects', 'leadsConve
 export const envelope = <T>(part: Pick<Part, 'key' | 'version' | 'changedAt'>, data: T): LivePart<T> =>
   ({ key: part.key, version: part.version, changedAt: part.changedAt, data })
 
-/** A group as readers get it: its message counter, a dormant flag only when dormant, never the store's bookkeeping. */
+/** A group as readers get it: its message counter, a dormant flag only when dormant, never the store's bookkeeping or the
+ *  leaderboard's (the leaderboard read sums it). */
 export function groupView(group: Conversation): GroupView {
-  const { messageSeq, reportSeq: _report, lastActivityAt: _activity, dormant, audience, ...rest } = group
+  const { messageSeq, reportSeq: _report, lastActivityAt: _activity, ledger: _ledger, dormant, audience, ...rest } = group
   return { ...rest, messageSeq: messageSeq ?? 0, ...(dormant ? { dormant: true as const } : {}), ...(audience ? { audience } : {}) }
 }
 
@@ -97,5 +100,6 @@ function derive(state: SuperTabState, visible: SuperTabState, actor: Actor, now:
     machines: Object.fromEntries((visible.machines ?? []).map(machine)),
     ...(visible.otherProjectsWork ? { otherProjectsWork: visible.otherProjectsWork } : {}),
     ...(actor.kind === 'person' && extras.mentionsWaiting !== undefined ? { mentionsWaiting: extras.mentionsWaiting } : {}),
+    ...(actor.kind === 'person' && extras.decisionsWaiting !== undefined ? { decisionsWaiting: extras.decisionsWaiting } : {}),
   }
 }

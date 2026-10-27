@@ -87,14 +87,21 @@ function lastProgress(state: SuperTabState, worker: Agent, assignment: Assignmen
   return seen.length ? Math.max(...seen) : undefined
 }
 
+function limitReason(worker: Agent, now: number): string | null {
+  return worker.alerting?.includes('limit') && worker.limitedUntil && Date.parse(worker.limitedUntil) > now
+    ? `it hit a usage limit until ${worker.limitedUntil.slice(11, 16)} UTC` : null
+}
+
 /** Why a worker has lost its task now, or null while it still holds it. Only a machine that has reported can be offline. */
 function lostReason(state: SuperTabState, group: Conversation, worker: Agent, assignment: Assignment, now: number): string | null {
   const pool = state.machines?.find(m => m.machineId === worker.machineId)
   if (pool?.observation?.stoppedHarnessIds.includes(worker.harnessId)) return `its session on ${pool.name} stopped`
   if (pool?.observation && now - pool.observation.receivedAt > OFFLINE_LOST_MS) return `its machine ${pool.name} has been offline for 2 minutes`
-  if (worker.alerting?.includes('limit') && worker.limitedUntil && Date.parse(worker.limitedUntil) > now) {
-    return `it hit a usage limit until ${worker.limitedUntil.slice(11, 16)} UTC`
-  }
+  const limited = limitReason(worker, now)
+  if (limited) return limited
+  // Its host alerts only after ten minutes of retries without an answer (cli superTabs/terminal.ts MODEL_WAIT_MS), so a
+  // short burst of failures that recovers never gets here.
+  if (worker.alerting?.includes('model')) return 'its model keeps failing'
   const end = leaseEnd(group, assignment, reportRenewedAt(state, worker))
   if (end !== undefined && now > end) {
     const progress = lastProgress(state, worker, assignment)
@@ -105,12 +112,13 @@ function lostReason(state: SuperTabState, group: Conversation, worker: Agent, as
 
 /** Marks a worker's task lost and fences its agent. The Lead hears who, why, how long since progress and the last result;
  *  the old agent hears that its task moved. Rows are written as the Lead, or as the worker when the project has none. */
-function loseTask(state: SuperTabState, group: Conversation, worker: Agent, reason: string, now: number): MessageDraft[] {
+function loseTask(state: SuperTabState, group: Conversation, worker: Agent, reason: string, now: number, resumeAt?: string): MessageDraft[] {
   const assignment = group.assignment!
+  const resume = resumeAt ? { resumeAt } : {}
   assignment.status = 'lost'
-  assignment.lost = { reason, at: now }
-  group.lostAttempt = { id: assignment.id, agentId: worker.id }
-  worker.lostTask = { conversationId: group.id, assignmentId: assignment.id, reason, at: now }
+  assignment.lost = { reason, at: now, ...resume }
+  group.lostAttempt = { id: assignment.id, agentId: worker.id, machineId: assignment.execution.machineId, engine: assignment.configuration.engine }
+  worker.lostTask = { conversationId: group.id, assignmentId: assignment.id, reason, at: now, ...resume }
   const sender = writtenBy(state, leadOf(state, worker) ?? worker)
   const progress = lastProgress(state, worker, assignment)
   const since = progress === undefined ? 'unknown' : `${plural(Math.max(0, Math.floor((now - progress) / 60_000)), 'minute')} ago`
@@ -118,7 +126,10 @@ function loseTask(state: SuperTabState, group: Conversation, worker: Agent, reas
   const pr = group.pullRequestUrls?.at(-1)
   const source = { kind: 'work-lost', agentId: worker.id, assignmentId: assignment.id, reason }
   const wake = `${worker.displayName ?? worker.name} lost its task "${group.title}": ${reason}. Last progress ${since}. `
-    + `Last result: ${result || 'none'}.${pr && !result?.includes(pr) ? ` Pull request: ${pr}.` : ''} Assign it to another agent now, or cancel it.`
+    + `Last result: ${result || 'none'}.${pr && !result?.includes(pr) ? ` Pull request: ${pr}.` : ''} `
+    + (resumeAt ? `It resumes by itself when its limit resets at ${resumeAt.slice(11, 16)} UTC, unless you hand it on first. `
+      + 'If another account or engine has allowance now, assign it there now with its branch and last progress note, or cancel it.'
+      : 'Assign it to another agent now, or cancel it.')
   return [...toLead(state, worker, { id: stableId('work-lost', assignment.id), conversationId: group.id, author: sender, replyTo: null, recipients: [], text: wake, source }),
     { id: stableId('work-lost', assignment.id, 'agent'), conversationId: group.id, author: sender, replyTo: null, recipients: [worker.id], source,
       text: `Your task "${group.title}" moved: ${reason}. Stop working on it; your status and results for it are no longer accepted.` }]
@@ -126,11 +137,12 @@ function loseTask(state: SuperTabState, group: Conversation, worker: Agent, reas
 }
 
 /** Loses at once the tasks of the workers `which` picks that have a reason now: an agent that just reported a usage limit,
- *  the agents of a machine that just reported. */
-export function loseTasks(state: SuperTabState, now: number, which: (worker: Agent) => boolean = () => true): MessageDraft[] {
+ *  the agents of a machine that just reported. A task lost to that limit resumes at `resumeAt` when its screen said when the
+ *  limit resets (the host types into the same session then, cli superTabs/limitResume.ts). */
+export function loseTasks(state: SuperTabState, now: number, which: (worker: Agent) => boolean = () => true, resumeAt?: string): MessageDraft[] {
   return workerTasks(state).filter(t => which(t.worker)).flatMap(({ group, assignment, worker }) => {
     const reason = lostReason(state, group, worker, assignment, now)
-    return reason ? loseTask(state, group, worker, reason, now) : []
+    return reason ? loseTask(state, group, worker, reason, now, resumeAt && reason === limitReason(worker, now) ? resumeAt : undefined) : []
   })
 }
 

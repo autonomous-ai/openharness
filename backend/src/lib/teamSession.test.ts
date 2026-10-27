@@ -239,7 +239,7 @@ describe('a team session reaching past its own machine', () => {
 
   it('cannot read or speak as the person: every agent route needs one of its agents', async () => {
     for (const url of ['/api/super-tabs/tab-1', '/api/super-tabs/tab-1/starts/start-1', '/api/super-tabs/tab-1/routing-policy',
-      '/api/super-tabs/tab-1/route-decisions', '/api/super-tabs/tab-1/route-decisions/decision-1',
+      '/api/super-tabs/tab-1/route-decisions', '/api/super-tabs/tab-1/route-decisions/decision-1', '/api/super-tabs/tab-1/decisions?state=open',
       '/api/super-tabs/tab-1/conversations/lead/messages', '/api/super-tabs/tab-1/conversations/lead/attempts',
       '/api/super-tabs/tab-1/terminal/request-1', '/api/super-tabs/tab-1?asAgentId=', '/api/super-tabs/tab-1/parts',
       '/api/super-tabs/tab-1/changes?cursor=eyJ2IjoyfQ', '/api/super-tabs/tab-1/groups?dormant=1', '/api/super-tabs/tab-1/groups/group-1']) limited(await call('GET', url))
