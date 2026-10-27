@@ -58,6 +58,7 @@ describe('built-in Swarm skills', () => {
   // with allowance can take it now, and the morning digest. The Lead's alone, in both modes, right after the lost-work line.
   const limit = '- A task lost to a usage limit resumes by itself in the same session when the limit resets (its wake-up says when). Hand it on at once only to another account or engine with allowance now, with its pushed branch and last progress note.\n'
   const digest = '- Morning digest: when a person asks for one, set the project\'s digest to their local time and time zone ("project.digest" with time "08:00" and timeZone "Asia/Ho_Chi_Minh"). When it wakes you, check that each pull request under Shipped is merged, then post one message to the people in the project chat.\n'
+  const recap = '- Stand-up and recap cards go out with the digest by themselves. On Monday the recap card thanks everyone who helped last week: after the digest, post one warm, short thank-you naming them, without repeating the card.\n'
   const checkpoint = '- Push your work branch at least every 30 minutes, and set your work status to working with a one-line note of what is done and what is next, so another agent can continue if you stop.\n'
   // The plan line (Lead's brief for v2 M, 2026-10-27; docs/plans/2026-10-27-swarm-scheduler.md): the Lead's alone, in both modes.
   const plan = '- With 3 or more groups waiting, run plan first: it places them all at once on the best machines and models. Then route each group in the plan\'s order and start the plan\'s pick, with overrideReason "scheduler plan" when the route picks otherwise. If plan cannot run here, route as usual.\n'
@@ -91,11 +92,12 @@ describe('built-in Swarm skills', () => {
       expect(text.split(checkpoint)).toHaveLength(role === 'dev' ? 2 : 1)
       expect(text.split(limit)).toHaveLength(role === 'lead' ? 2 : 1)
       expect(text.split(digest)).toHaveLength(role === 'lead' ? 2 : 1)
+      expect(text.split(recap)).toHaveLength(role === 'lead' ? 2 : 1)
       expect(text.split(mention + decision)).toHaveLength(role === 'lead' ? 2 : 1)
       expect(text.split(ask)).toHaveLength(role === 'dev' ? 2 : 1)
       expect(text.split(requests)).toHaveLength(role === 'lead' ? 2 : 1)
       expect(sha(text.replace(twoHours, '').replace(terminal, '').replace(overlap, '').replace(local, '').replace(mention, '').replace(lost, '').replace(checkpoint, '')
-        .replace(limit, '').replace(digest, '').replace(decision, '').replace(ask, '').replace(requests, ''))).toBe(sha256)
+        .replace(limit, '').replace(digest, '').replace(recap, '').replace(decision, '').replace(ask, '').replace(requests, ''))).toBe(sha256)
     }
   })
   it('adds the 2-hour line to section 7 right after the 6-hour rule', () => {
@@ -104,7 +106,7 @@ describe('built-in Swarm skills', () => {
   })
   it('adds the terminal line where each Lead skill keeps work moving, right after the silent-worker rule', () => {
     const orchestration = readFileSync(prepareSwarmSkill(fixture(), { role: 'lead', key: 'session' }).file, 'utf8')
-    expect(orchestration).toContain(`naming the machine owner who can answer.\n${twoHours}${lost}${limit}${digest}${terminal}- Keep each worker supplied`)
+    expect(orchestration).toContain(`naming the machine owner who can answer.\n${twoHours}${lost}${limit}${digest}${recap}${terminal}- Keep each worker supplied`)
     const plain = readFileSync(prepareSwarmSkill(fixture(), { role: 'lead', key: 'session', mode: 'default' }).file, 'utf8')
     expect(plain).toContain(`- A worker with active work that has said nothing for 20 minutes: ask it.\n${terminal}- A Builder or Reviewer`)
   })
@@ -142,7 +144,7 @@ describe('built-in Swarm skills', () => {
     const orchestration = readFileSync(prepareSwarmSkill(fixture(), { role: 'lead', key: 'session' }).file, 'utf8')
     expect(orchestration).toContain(`${twoHours}${lost}`)
     const plain = readFileSync(prepareSwarmSkill(fixture(), { role: 'lead', key: 'session', mode: 'default' }).file, 'utf8')
-    expect(plain).toContain(`assign it to another agent with what the first one left (branch, last revision, last report).\n${lost}${limit}${digest}- Work with no progress`)
+    expect(plain).toContain(`assign it to another agent with what the first one left (branch, last revision, last report).\n${lost}${limit}${digest}${recap}- Work with no progress`)
   })
   it('adds the usage-limit and digest lines right after each Lead skill\'s lost-work line', () => {
     for (const mode of ['orchestration', 'default'] as const) {
@@ -176,11 +178,12 @@ describe('built-in Swarm skills', () => {
     expect(text.split(checkpoint)).toHaveLength(role === 'dev' ? 2 : 1)
     expect(text.split(limit)).toHaveLength(role === 'lead' ? 2 : 1)
     expect(text.split(digest)).toHaveLength(role === 'lead' ? 2 : 1)
+    expect(text.split(recap)).toHaveLength(role === 'lead' ? 2 : 1)
     expect(text.split(mention + decision)).toHaveLength(role === 'lead' ? 2 : 1)
     expect(text.split(ask)).toHaveLength(role === 'dev' ? 2 : 1)
     expect(text.split(requestsLast)).toHaveLength(role === 'lead' ? 2 : 1)
     expect(sha(text.replace(terminal, '').replace(overlap, '').replace(localDefault, '').replace(mention, '').replace(lost, '').replace(checkpoint, '')
-      .replace(limit, '').replace(digest, '').replace(decision, '').replace(ask, '').replace(requestsLast, ''))).toBe(sha256)
+      .replace(limit, '').replace(digest, '').replace(recap, '').replace(decision, '').replace(ask, '').replace(requestsLast, ''))).toBe(sha256)
     expect(prepared.instructions).toBe(`Use the swarm-${role} skill for this session: the team process; otherwise work your usual way. Before working, read ${JSON.stringify(prepared.file)} with your file or shell tool.`)
   })
 

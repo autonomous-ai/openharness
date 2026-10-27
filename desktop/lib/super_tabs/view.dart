@@ -24,6 +24,7 @@ import 'pm_chat.dart';
 import 'workgroup_name.dart';
 import 'message_row.dart';
 import 'message_receipt.dart';
+import 'morning_card.dart';
 import 'notifications.dart';
 import 'decisions.dart';
 import 'decisions_view.dart';
@@ -138,6 +139,23 @@ class _SuperTabViewState extends State<SuperTabView>
 
   String _agentName(SuperTabAgent agent) =>
       c.snapshot?.agentName(agent.id, fallback: agent.name) ?? agent.name;
+
+  Widget _card(SuperTabMessage message, {VoidCallback? onDismiss}) =>
+      SuperTabMorningCard(
+        key: onDismiss == null ? ValueKey('super-message-${message.id}') : null,
+        message: message,
+        // A person is named by their address's first part, as people say it.
+        personName: (id) =>
+            c.snapshot?.people
+                .where((p) => p.id == id)
+                .firstOrNull
+                ?.email
+                .split('@')
+                .first ??
+            'Someone',
+        agentName: (id) => c.snapshot?.agentName(id) ?? 'Agent',
+        onDismiss: onDismiss,
+      );
 
   String _authorName(SuperTabMessage message) =>
       c.snapshot?.authorName(message) ?? message.authorName;
@@ -1573,12 +1591,23 @@ class _SuperTabViewState extends State<SuperTabView>
     bool grouped,
     Map<String, SuperTabMessage> byId, {
     bool showReceipt = false,
+    bool pinned = false,
   }) {
     if (message.terminalEvent || message.source['kind'] == 'overlap') {
       return SuperTabTerminalRow(
         key: ValueKey('super-message-${message.id}'),
         message: message,
       );
+    }
+    if (superTabMorningCard(message)) {
+      // Pinned above, the transcript keeps its one line, so it is never shown twice.
+      return pinned
+          ? Padding(
+              key: ValueKey('super-message-${message.id}'),
+              padding: const EdgeInsets.fromLTRB(24, 8, 24, 8),
+              child: Text(message.text, style: DesktopChrome.metadata()),
+            )
+          : _card(message);
     }
     final route = message.route;
     if (route != null) {
@@ -1771,6 +1800,21 @@ class _SuperTabViewState extends State<SuperTabView>
     final finding = _finding?.conversationId == c.selectedId ? _finding : null;
     final back = finding == null && _back?.conversationId == c.selectedId;
     final choices = _completionChoices;
+    // Today's stand-up and recap stay at the top of the chat until dismissed.
+    final today = DateTime.now();
+    final pinned = [
+      for (final kind in ['standup', 'recap'])
+        if (messages
+                .where(
+                  (m) => superTabMorningCard(m) && m.source['kind'] == kind,
+                )
+                .lastOrNull
+            case final m?
+            when m.createdAt != null &&
+                DateUtils.isSameDay(m.createdAt!.toLocal(), today) &&
+                !c.cardDismissed(m.id))
+          m,
+    ];
     // No conversation read yet: its error is the page itself, not a line over "Loading".
     final unread = _readsFirst && c.snapshot == null;
     return Column(
@@ -1787,6 +1831,19 @@ class _SuperTabViewState extends State<SuperTabView>
                     child: const Text('Retry'),
                   ),
               ],
+            ),
+          ),
+        if (pinned.isNotEmpty && !c.loading)
+          ConstrainedBox(
+            key: const ValueKey('super-pinned-cards'),
+            constraints: const BoxConstraints(maxHeight: 320),
+            child: SingleChildScrollView(
+              child: Column(
+                children: [
+                  for (final m in pinned)
+                    _card(m, onDismiss: () => c.dismissCard(m.id)),
+                ],
+              ),
             ),
           ),
         // The reader's own chat with the PM shows what the PM asked them.
@@ -1931,6 +1988,7 @@ class _SuperTabViewState extends State<SuperTabView>
                                               byId,
                                               showReceipt:
                                                   message.id == latestOwn?.id,
+                                              pinned: pinned.contains(message),
                                             ),
                                     ),
                                   ),

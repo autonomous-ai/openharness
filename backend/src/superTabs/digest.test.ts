@@ -109,6 +109,15 @@ describe('a project\'s morning digest', () => {
     expect(digestRequest(state, lead, EIGHT + 24 * HOUR)).not.toBeNull()
   })
 
+  it('on Monday asks the Lead for one warm, short thank-you to go with the recap card', () => {
+    const state = fixture(), lead = state.agents.find(a => a.id === 'lead')!
+    lampOS(state).digest!.lastOn = '2026-11-01'
+    const monday = Date.UTC(2026, 10, 2, 1, 0)
+    expect(digestRequest(state, lead, monday)!.text).toContain('\n\nIt is Monday: the weekly recap card is in this chat too. After the digest, post one warm, short '
+      + 'thank-you that names everyone it thanks; do not repeat the card.')
+    expect(digestRequest(fixture(), lead, EIGHT)!.text).not.toContain('It is Monday')
+  })
+
   it('wakes nobody for a project with no digest time, in a paused Swarm, or for an agent that is not the Lead', () => {
     const state = fixture()
     expect(digestRequest(state, state.agents.find(a => a.id === 'nico')!, EIGHT)).toBeNull()

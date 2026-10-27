@@ -2,6 +2,7 @@ import { activeWork, author, stableId, type Agent, type Conversation, type Messa
 import { agentDisplayName } from './agentNames.js'
 import { canReadGroup, ledProject, type SwarmProject } from './projects.js'
 import { reportGroups } from './projectUpdates.js'
+import { recapDay } from './morning.js'
 
 // Night shift (v2 B): people wake to one message per project saying what the Swarm did overnight. At the project's local
 // digest time its Lead's poll wakes the Lead with the lists below, built from state; the Lead checks each pull request is
@@ -98,6 +99,9 @@ export function digestRequest(state: SuperTabState, target: Agent, now: number,
     + 'Check that each pull request under Shipped is merged, and move one that is not to In progress. Then post one message to the people in this chat '
     + 'with these parts, in plain words, without commands or internal IDs.\n\n'
     + projectDigest(state, project, digestSince(project, now), decisionLines(state, project, waiting))
+    // The cards themselves go out with this wake-up (morning.ts); the Lead adds the human touch.
+    + (recapDay(on) ? '\n\nIt is Monday: the weekly recap card is in this chat too. After the digest, post one warm, short thank-you that names everyone it thanks; '
+      + 'do not repeat the card.' : '')
   return { id: stableId('digest', state.id, project.id, on), conversationId: project.leadConversationId,
     author: author(state, { kind: 'agent', agentId: target.id, machineOwnerId: target.machineOwnerId }),
     text, replyTo: null, recipients: [target.id], source: { kind: 'digest-request', projectId: project.id, on } }

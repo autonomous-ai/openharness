@@ -17,6 +17,8 @@ import { bindSession, makeProjectPrivate } from './sessionScope.js'
 import { confidentialSessions, otherRegistrations, recordConfidential } from './confidential.js'
 import { answersRequest, noteProjectReports, projectUpdateRequest } from './projectUpdates.js'
 import { digestDue, digestRequest, digestSince } from './digest.js'
+import { morningCards, recapDay, recapWeek } from './morning.js'
+import { WEEK_MS } from './leaderboard/week.js'
 import { judgedMachines, loseTasks, sweepLiveness, SWEEP_EVERY_MS } from './liveness.js'
 import { clock, insertParts, lastChangedAt, loadActive, reassemble, split, type HeadData, type SwarmParts } from './parts/index.js'
 import { commitParts, indexesOf, numberMessages, type Touch, type Written } from './parts/commit.js'
@@ -1579,8 +1581,11 @@ export class SuperTabStore {
       // (#1757 review, 4): a due digest loads it.
       const led = ledProject(loaded.state, agentId)
       let asked: Array<{ conversationId: string; personId: string; count: number }> = []
-      if (led && digestDue(led, this.now())) {
-        const finished = await tx.swarmGroup.findMany({ where: { tabId, deleted: false, dormant: true, lastActivityAt: { gte: new Date(digestSince(led, this.now())) },
+      const due = led && digestDue(led, this.now())
+      if (led && due) {
+        // A Monday's recap (morning.ts) sums last week against the week before.
+        const since = Math.min(digestSince(led, this.now()), recapDay(due) ? recapWeek(due) - WEEK_MS : Infinity)
+        const finished = await tx.swarmGroup.findMany({ where: { tabId, deleted: false, dormant: true, lastActivityAt: { gte: new Date(since) },
           OR: [{ projectId: led.id }, ...led.id === 'lead' ? [{ projectId: null }] : []] }, select: { key: true } })
         // A decision waits in its conversation even once that conversation went quiet.
         asked = await waitingInProject(tx, tabId, led.id)
@@ -1611,9 +1616,9 @@ export class SuperTabStore {
       // The morning digest is due once a day; recording it as sent is part of this same write, so it is sent once.
       const digest = digestRequest(state, target, this.now(), asked)
       if (digest) {
-        const project = projectOf(state, digest.source!.projectId as string)
-        project.digest = { ...project.digest!, lastOn: digest.source!.on as string, lastAt: this.now() }
-        written.push(digest)
+        const project = projectOf(state, digest.source!.projectId as string), on = digest.source!.on as string
+        written.push(digest, ...morningCards(state, project, digest.author, on, digestSince(project, this.now()), this.now()))
+        project.digest = { ...project.digest!, lastOn: on, lastAt: this.now() }
       }
       // The poll also frees agents whose task the checks just lost, and any an older server left marked running (each poll; a
       // second finds none).
