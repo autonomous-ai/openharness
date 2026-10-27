@@ -172,6 +172,59 @@ void main() {
     expect(r.asks.decisions.single.id, 'd2');
   });
 
+  // Each such read notified, and the inbox rebuilt Home with it, several
+  // times a poll (audit of 44d284f65, item 4; Jasper's item 5).
+  test('asks read back as they were notify nothing, and stay the same '
+      'objects', () async {
+    final r = rig(decisions: 1, mentions: 1);
+    r.swarm.routes['/api/super-tabs/$tab/decisions?state=open'] = (_) => {
+      'decisions': [decisionRow('d1')],
+    };
+    r.swarm.routes['/api/super-tabs/$tab/mentions?state=waiting'] = (_) => {
+      'mentions': [mentionRow('m1')],
+    };
+    await r.reader.refresh();
+    await settle();
+    final decisions = r.asks.decisions, mentions = r.asks.mentions;
+    var notifies = 0;
+    r.asks.addListener(() => notifies++);
+
+    r.swarm.routes['/api/super-tabs/$tab/changes'] = (_) => changes(
+      cursor: 'c3',
+      derived: {'decisionsWaiting': 1, 'mentionsWaiting': 1},
+      lastChangedAt: 300,
+    );
+    await r.reader.refresh();
+    await settle();
+    await r.asks.load();
+
+    expect(r.swarm.paths.where((p) => p.contains('decisions')), hasLength(3));
+    expect(notifies, 0);
+    expect(r.asks.decisions, same(decisions));
+    expect(r.asks.mentions, same(mentions));
+  });
+
+  test('a changed ask is told, even with the same ids', () async {
+    final r = rig(decisions: 1);
+    var question = 'Ship it?';
+    r.swarm.routes['/api/super-tabs/$tab/decisions?state=open'] = (_) => {
+      'decisions': [decisionRow('d1', question: question)],
+    };
+    r.swarm.routes['/api/super-tabs/$tab/mentions?state=waiting'] = (_) => {
+      'mentions': <Object>[],
+    };
+    await r.reader.refresh();
+    await settle();
+    var notifies = 0;
+    r.asks.addListener(() => notifies++);
+
+    question = 'Ship it today?';
+    await r.asks.load();
+
+    expect(notifies, 1);
+    expect(r.asks.decisions.single.question, 'Ship it today?');
+  });
+
   test(
     'a Swarm the reader may no longer read keeps none of its asks',
     () async {

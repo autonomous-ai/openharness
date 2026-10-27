@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:collection/collection.dart' show DeepCollectionEquality;
 import 'package:flutter/foundation.dart';
 
 import 'model.dart';
@@ -121,6 +122,11 @@ class SwarmAsks extends ChangeNotifier {
   void Function(SwarmAskItem item)? onArrived;
 
   ({int decisions, int mentions})? _counts;
+
+  /// The rows [decisions] and [mentions] were made from: a read answering the
+  /// same keeps them as they are, and tells nobody.
+  List<Map<String, dynamic>> _openRows = const [], _waitingRows = const [];
+  static const _same = DeepCollectionEquality();
   int _lastChangedAt = -1, _generation = -1;
 
   // Null until the first read: asks waiting then are not news.
@@ -154,8 +160,7 @@ class SwarmAsks extends ChangeNotifier {
     // What was read before may be of chats the reader can no longer see:
     // none of it stays while the new read runs, nor if that read fails.
     if (reloaded && (decisions.isNotEmpty || mentions.isNotEmpty)) {
-      decisions = const [];
-      mentions = const [];
+      _empty();
       notifyListeners();
     }
     if (counts.decisions == 0 && counts.mentions == 0) {
@@ -175,8 +180,7 @@ class SwarmAsks extends ChangeNotifier {
 
   void _clear() {
     final held = decisions.isNotEmpty || mentions.isNotEmpty || error != null;
-    decisions = const [];
-    mentions = const [];
+    _empty();
     error = null;
     _unconfirmed.clear();
     _done.clear();
@@ -184,6 +188,12 @@ class SwarmAsks extends ChangeNotifier {
     _counts = null;
     _failed = false;
     if (held) notifyListeners();
+  }
+
+  void _empty() {
+    decisions = const [];
+    mentions = const [];
+    _openRows = _waitingRows = const [];
   }
 
   /// Joins a read under way, and has it read once more when asked again.
@@ -225,16 +235,26 @@ class SwarmAsks extends ChangeNotifier {
         _rows('mentions?state=waiting', 'mentions'),
       ]);
       if (_disposed || reader.generation != generation) return;
-      decisions = List.unmodifiable(openRows.map(SuperTabDecision.fromJson));
       final waitingIds = {for (final row in waitingRows) row['id']};
       // Done here and no longer waiting there: the backend caught up.
       _done.removeWhere((id) => !waitingIds.contains(id));
+      final notDone = _notDone.length;
       _notDone.removeWhere((id, _) => !waitingIds.contains(id));
-      mentions = List.unmodifiable(
-        waitingRows
-            .map(SuperTabMention.fromJson)
-            .where((m) => !_done.contains(m.id)),
-      );
+      final waiting = [
+        for (final row in waitingRows)
+          if (!_done.contains(row['id'])) row,
+      ];
+      var changed = error != null || notDone != _notDone.length;
+      if (!_same.equals(openRows, _openRows)) {
+        _openRows = openRows;
+        decisions = List.unmodifiable(openRows.map(SuperTabDecision.fromJson));
+        changed = true;
+      }
+      if (!_same.equals(waiting, _waitingRows)) {
+        _waitingRows = waiting;
+        mentions = List.unmodifiable(waiting.map(SuperTabMention.fromJson));
+        changed = true;
+      }
       error = null;
       _failed = false;
       // No longer open: answered, by this answer or another.
@@ -247,12 +267,15 @@ class SwarmAsks extends ChangeNotifier {
           if (!seen.contains(ask.id)) onArrived?.call(ask);
         }
       }
+      if (changed) notifyListeners();
     } catch (_) {
       if (_disposed || reader.generation != generation) return;
-      error = 'Could not load what is waiting for you. Try again.';
+      const failed = 'Could not load what is waiting for you. Try again.';
+      final told = error == failed && _failed;
+      error = failed;
       _failed = true;
+      if (!told) notifyListeners();
     }
-    notifyListeners();
   }
 
   Future<void> _command(Map<String, dynamic> command, {String? operationId}) =>
@@ -330,6 +353,10 @@ class SwarmAsks extends ChangeNotifier {
     _finishing.remove(mention.id);
     _done.add(mention.id);
     mentions = List.unmodifiable(mentions.where((m) => m.id != mention.id));
+    _waitingRows = [
+      for (final row in _waitingRows)
+        if (row['id'] != mention.id) row,
+    ];
     notifyListeners();
     await load();
     unawaited(reader.refresh());
