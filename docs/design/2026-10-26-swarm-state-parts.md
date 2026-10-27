@@ -975,8 +975,9 @@ The same function serves commands (3.1), the CLI's `status` (5.3), verification 
   `closingSessions`, `machineCleanups`, `overlapAlerts`. Every other array keeps its order. The first differing path
   is logged.
 - **Messages:** before and after, `count` and `sha256` of the ordered list of `(conversationId, sequence, id)` for
-  the tab match. Because messages are not written, this proves the migration did not touch them. It also checks
-  that every message's `conversationId` has a group part, so no history is orphaned.
+  the tab match. Because messages are not written, this proves the migration did not touch them. A message in a
+  conversation still present after normalization must have a group part. Historical messages of conversations
+  already deleted in the old state remain unchanged and inaccessible; migration must not create a new orphan.
 - **Counts unchanged:** deliveries, route decisions, attempts and operations for the tab.
 - **Reports:** a per-Swarm line `{tabId, bytes, groups, dormant, parts, ms, ok}` and a total, written to the worker
   log and to `artifacts/swarm-parts-migration-<date>.json` by the dry-run tool.

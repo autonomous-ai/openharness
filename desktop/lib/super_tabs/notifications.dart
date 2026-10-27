@@ -9,6 +9,7 @@ import '../widgets/desktop_chrome.dart';
 import 'controller.dart';
 import 'machine_status.dart' show superTabAgo;
 import 'model.dart';
+import 'pm_chat.dart';
 import 'section_heading.dart';
 
 /// A Lead's tag of the reader in one message (spec 2026-10-24-lead-mentions.md).
@@ -185,10 +186,14 @@ class SuperTabNotifications extends StatefulWidget {
     required this.mentions,
     required this.onOpen,
     this.now = DateTime.now,
+    this.leading,
   });
   final SuperTabMentions mentions;
   final ValueChanged<SuperTabMention> onOpen;
   final DateTime Function() now;
+
+  /// Shown first in the same list: the reader's decisions (decisions_view.dart).
+  final Widget? leading;
 
   @override
   State<SuperTabNotifications> createState() => _SuperTabNotificationsState();
@@ -226,7 +231,7 @@ class _SuperTabNotificationsState extends State<SuperTabNotifications> {
     final place =
         widget.mentions.controller.pmChat(mention.projectId)?.id ==
             mention.conversationId
-        ? 'Chat with PM'
+        ? kChatWithPm
         : mention.conversationTitle;
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 1),
@@ -324,6 +329,7 @@ class _SuperTabNotificationsState extends State<SuperTabNotifications> {
                 ],
               ),
             ),
+          ?widget.leading,
           _heading('Waiting'),
           if (m.waiting.isEmpty) _empty('Nothing waiting for you.'),
           for (final mention in m.waiting) _row(mention, waiting: true),

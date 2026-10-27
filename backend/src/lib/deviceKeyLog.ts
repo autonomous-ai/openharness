@@ -37,11 +37,17 @@ export type DeviceKeyChannel =
   | { kind: 'machine'; machineId: string; harnessSessionId?: string; team?: boolean }
   | { kind: 'viewer'; harnessSessionId?: string }
 
+/**
+ * The entries after `since`, up to the head they are read with. The head comes first and the entries stop
+ * at it: read side by side, an append landing between the two reads gave a head past the entries the page
+ * carried, and a device reads that as a list held back and freezes it (a Harness OS box registering its
+ * key as it signed in from a phone, 2026-10-22).
+ */
 export async function readDeviceKeyLog(userId: string, since: number): Promise<{ acct: string; head: DevLogHead; entries: unknown[] }> {
-  const [rows, head] = await Promise.all([
-    prisma.deviceKeyLogEntry.findMany({ where: { userId, seq: { gt: since } }, orderBy: { seq: 'asc' }, take: PAGE }),
-    logHead(userId),
-  ])
+  const head = await logHead(userId)
+  const rows = head.seq > since
+    ? await prisma.deviceKeyLogEntry.findMany({ where: { userId, seq: { gt: since, lte: head.seq } }, orderBy: { seq: 'asc' }, take: PAGE })
+    : []
   return { acct: userId, head, entries: rows.map(r => JSON.parse(r.entry) as unknown) }
 }
 

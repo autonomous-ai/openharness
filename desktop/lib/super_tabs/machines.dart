@@ -31,6 +31,7 @@ import '../models/swarm_models_target.dart' show swarmSharedWithYouShown;
 import 'machine_details.dart';
 import 'machine_status.dart';
 import 'model.dart';
+import 'team_account_setup.dart';
 import 'section_heading.dart';
 
 export 'machine_status.dart';
@@ -931,8 +932,8 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
     final person = snapshot.people
         .where((p) => p.id == contributor)
         .firstOrNull;
-    final teammateView = team != null && contributor != c.accountId;
-    final reading = teammateView ? team : shared;
+    final reading = snapshot.readingPoolOf(id, c.accountId);
+    final teammateView = team != null && identical(reading, team);
     final readId = teammateView ? teamId! : id;
     final state = app?.stateOf(readId);
     final observation = superTabMap(
@@ -988,7 +989,11 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
           })
         : null;
     final value = direct ? sample?.$1 : observed;
+    // The name the person gave it in their own Machines list (Rename) wins
+    // over the one the Swarm recorded, often its hostname.
+    final given = app?.stateOf(id)?.machine.name;
     final name =
+        (given == null || given.isEmpty ? null : given) ??
         shared?['name'] as String? ??
         app?.stateOf(id)?.machine.displayName ??
         'Unavailable machine';
@@ -1135,12 +1140,21 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
         }
       }
     }
+    final problem = _teammatesLine(shared, team, contributor);
     return _MachineView(
       apiModels: apiModels,
       localModels: localModels,
       id: id,
       name: name,
-      problem: _teammatesLine(shared, team, contributor),
+      problem: problem,
+      setUpTeam:
+          problem != null &&
+          team == null &&
+          (shared?['teamWork'] as Map?)?['code'] == 'TEAM_ACCOUNT_REQUIRED' &&
+          contributor == c.accountId &&
+          app != null &&
+          app.canSetUpTeamAccount &&
+          app.stateOf(id)?.isLocalMachine == true,
       owner: person,
       contributor: contributor,
       shared: shared,
@@ -1573,6 +1587,9 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
             c.toggleMachineExpanded(view.id);
             _changed();
           },
+          onSetUpTeam: view.setUpTeam
+              ? () => showTeamAccountSetup(context, widget.app!)
+              : null,
         ),
       ),
     );
@@ -1937,11 +1954,15 @@ class _MachineView {
     required this.allowances,
     required this.tip,
     this.problem,
+    this.setUpTeam = false,
     this.apiModels = const [],
     this.localModels = const [],
   });
 
   final String id, name, details, tip;
+
+  /// Its [problem] is this Mac's, its own person looking: no Harness Team account yet, which they can set up here.
+  final bool setUpTeam;
 
   /// Its one line when teammates' agents cannot run there ([superTabTeammatesPaused]); null otherwise.
   final String? problem;
@@ -2050,11 +2071,15 @@ class _MachineLine extends StatelessWidget {
     required this.view,
     required this.expanded,
     required this.onToggle,
+    this.onSetUpTeam,
   });
 
   final _MachineView view;
   final bool expanded;
   final VoidCallback onToggle;
+
+  /// This Mac's row, without its Harness Team account: Set up under the paused line.
+  final VoidCallback? onSetUpTeam;
 
   @override
   Widget build(BuildContext context) {
@@ -2068,12 +2093,17 @@ class _MachineLine extends StatelessWidget {
       child: Row(
         children: [
           const SizedBox(width: 4),
+          // A machine reads as a home directory, "~ Diego's Mac", beside the
+          // sidebar's "# project" channels.
           SizedBox(
             width: 32,
-            child: Icon(
-              AppIcons.monitor,
-              size: AppIcons.inlineSize,
-              color: DesktopChrome.muted,
+            child: Text(
+              '~',
+              textAlign: TextAlign.center,
+              style: DesktopChrome.control(
+                color: DesktopChrome.muted,
+                medium: true,
+              ),
             ),
           ),
           Expanded(
@@ -2125,6 +2155,18 @@ class _MachineLine extends StatelessWidget {
                         overflow: TextOverflow.ellipsis,
                         style: DesktopChrome.metadata(),
                       ),
+                      if (onSetUpTeam != null)
+                        TextButton(
+                          key: ValueKey('super-machine-team-setup-${view.id}'),
+                          onPressed: onSetUpTeam,
+                          style: TextButton.styleFrom(
+                            padding: EdgeInsets.zero,
+                            minimumSize: const Size(0, 22),
+                            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                            alignment: Alignment.centerLeft,
+                          ),
+                          child: const Text('Set up'),
+                        ),
                     ],
                   );
                 },

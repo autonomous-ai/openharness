@@ -694,7 +694,8 @@ describe('private swarm projects on the real control API', () => {
     expect(await updates()).toEqual([])
     now += 299_999
     expect(await updates()).toEqual([])
-    now++
+    // The quiet poll skips the time checks for 30 s after a full one (store.deliveries), so the request lands within that.
+    now += 30_000
     const polls = await Promise.all(Array.from({ length: 3 }, () => updates()))
     const ids = new Set(polls.flat().map(d => d.id))
     expect(ids.size).toBe(1)
@@ -1203,7 +1204,8 @@ describe('Super Tabs on a real Mongo replica set', () => {
     await store.delivery(host, tab, lead, first.id, { type: 'ack', claimId: 'claim', receipt: 'unclear', uncertain: true })
     await run(tab, { type: 'project.delete', projectId: 'lead' })
     expect(await store.deliveryReceipt(host, tab, lead, first.id)).toEqual({ id: first.id, status: 'cancelled' })
-    await expect(store.deliveries(host, tab, lead)).rejects.toMatchObject({ code: 'AGENT_UNAVAILABLE' })
+    // A server that has not just polled for this host (the quiet poll answers an unchanged caller for 30 s) refuses at once.
+    await expect(new SuperTabStore(db).deliveries(host, tab, lead)).rejects.toMatchObject({ code: 'AGENT_UNAVAILABLE' })
     await expect(store.deliveryReceipt(peer, tab, lead, first.id)).rejects.toMatchObject({ code: 'FORBIDDEN' })
     // Reassigning the machine does not transfer the former owner's receipts.
     await db.machine.update({ where: { machineId: 'test-host' }, data: { userId: peer.sub } })

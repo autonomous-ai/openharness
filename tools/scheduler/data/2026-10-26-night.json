@@ -1,0 +1,1313 @@
+{
+ "instance": {
+  "tasks": [
+   {
+    "id": "9e7e516b4e7e1f90d7c9ca43",
+    "title": "Regression: API models in the Swarm",
+    "minutes": 180,
+    "floor": 2,
+    "kind": "testing",
+    "difficulty": "medium",
+    "spend": {
+     "5-hour": 50,
+     "weekly": 8
+    },
+    "deps": [],
+    "independent_of": []
+   },
+   {
+    "id": "2b8a76771f8d6e8380101ad0",
+    "title": "Measure: Super Tab load and message time on the web",
+    "minutes": 60,
+    "floor": 2,
+    "kind": "performance",
+    "difficulty": "medium",
+    "spend": {
+     "5-hour": 30,
+     "weekly": 4
+    },
+    "deps": [],
+    "independent_of": []
+   },
+   {
+    "id": "659a6cc93b944bd24cae2884",
+    "title": "1726 G0: Swarm load benchmark (baseline)",
+    "minutes": 60,
+    "floor": 2,
+    "kind": "backend",
+    "difficulty": "medium",
+    "spend": {
+     "5-hour": 30,
+     "weekly": 4
+    },
+    "deps": [],
+    "independent_of": []
+   },
+   {
+    "id": "aeef05a35995ca9f7cca7060",
+    "title": "1726 G1: design doc for Swarm state by parts",
+    "minutes": 60,
+    "floor": 3,
+    "kind": "design",
+    "difficulty": "high",
+    "spend": {
+     "5-hour": 30,
+     "weekly": 4
+    },
+    "deps": [],
+    "independent_of": []
+   },
+   {
+    "id": "5c48779c71d5111602eab51f",
+    "title": "Review: 1726 G1 design doc",
+    "minutes": 60,
+    "floor": 3,
+    "kind": "review",
+    "difficulty": "high",
+    "spend": {
+     "5-hour": 30,
+     "weekly": 4
+    },
+    "deps": [
+     "aeef05a35995ca9f7cca7060"
+    ],
+    "independent_of": [
+     "aeef05a35995ca9f7cca7060"
+    ]
+   },
+   {
+    "id": "df0940f037c9f6eef1b92b67",
+    "title": "1726 G2: backend storage and commands by parts",
+    "minutes": 180,
+    "floor": 3,
+    "kind": "backend",
+    "difficulty": "high",
+    "spend": {
+     "5-hour": 50,
+     "weekly": 8
+    },
+    "deps": [
+     "5c48779c71d5111602eab51f"
+    ],
+    "independent_of": []
+   },
+   {
+    "id": "c2e38ce017f6f8e65ef8bdce",
+    "title": "1726 G3: backend read API and migration",
+    "minutes": 180,
+    "floor": 3,
+    "kind": "backend",
+    "difficulty": "high",
+    "spend": {
+     "5-hour": 50,
+     "weekly": 8
+    },
+    "deps": [
+     "5c48779c71d5111602eab51f"
+    ],
+    "independent_of": []
+   },
+   {
+    "id": "0a84ea687a435833d1649933",
+    "title": "1726 G5: CLI on the new read API",
+    "minutes": 180,
+    "floor": 3,
+    "kind": "backend",
+    "difficulty": "high",
+    "spend": {
+     "5-hour": 50,
+     "weekly": 8
+    },
+    "deps": [
+     "c2e38ce017f6f8e65ef8bdce"
+    ],
+    "independent_of": []
+   },
+   {
+    "id": "2e2d726a3ff6196c26d44f8f",
+    "title": "1726 G4: Desktop and web on the new read API",
+    "minutes": 180,
+    "floor": 3,
+    "kind": "ui",
+    "difficulty": "high",
+    "spend": {
+     "5-hour": 50,
+     "weekly": 8
+    },
+    "deps": [
+     "c2e38ce017f6f8e65ef8bdce"
+    ],
+    "independent_of": []
+   },
+   {
+    "id": "6bc636fa6713886102b9cbfa",
+    "title": "Review: 1726 G0 benchmark",
+    "minutes": 20,
+    "floor": 2,
+    "kind": "review",
+    "difficulty": "medium",
+    "spend": {
+     "5-hour": 10,
+     "weekly": 1
+    },
+    "deps": [
+     "659a6cc93b944bd24cae2884"
+    ],
+    "independent_of": [
+     "659a6cc93b944bd24cae2884"
+    ]
+   },
+   {
+    "id": "5f0d3516fb850999cb824c90",
+    "title": "Review: 1726 G5 CLI",
+    "minutes": 60,
+    "floor": 3,
+    "kind": "review",
+    "difficulty": "high",
+    "spend": {
+     "5-hour": 30,
+     "weekly": 4
+    },
+    "deps": [
+     "0a84ea687a435833d1649933"
+    ],
+    "independent_of": [
+     "0a84ea687a435833d1649933"
+    ]
+   },
+   {
+    "id": "7a23487b3220d1564f9c7522",
+    "title": "Review: 1726 G3 read API and migration",
+    "minutes": 20,
+    "floor": 3,
+    "kind": "review",
+    "difficulty": "high",
+    "spend": {
+     "5-hour": 10,
+     "weekly": 1
+    },
+    "deps": [
+     "c2e38ce017f6f8e65ef8bdce"
+    ],
+    "independent_of": [
+     "c2e38ce017f6f8e65ef8bdce"
+    ]
+   },
+   {
+    "id": "e6115d403f62dd42d5cf3ab3",
+    "title": "Swarm plan R1: how the lampOS team works",
+    "minutes": 60,
+    "floor": 2,
+    "kind": "research",
+    "difficulty": "medium",
+    "spend": {
+     "5-hour": 30,
+     "weekly": 4
+    },
+    "deps": [],
+    "independent_of": []
+   },
+   {
+    "id": "acdc5546b9fcc601abb8b22c",
+    "title": "Swarm plan R2: pain points of fast agent teams",
+    "minutes": 60,
+    "floor": 2,
+    "kind": "research",
+    "difficulty": "medium",
+    "spend": {
+     "5-hour": 30,
+     "weekly": 4
+    },
+    "deps": [],
+    "independent_of": []
+   },
+   {
+    "id": "e141b9c91ab56d8509789a49",
+    "title": "Review: 1726 G4 Desktop and web",
+    "minutes": 20,
+    "floor": 3,
+    "kind": "review",
+    "difficulty": "high",
+    "spend": {
+     "5-hour": 10,
+     "weekly": 1
+    },
+    "deps": [
+     "2e2d726a3ff6196c26d44f8f"
+    ],
+    "independent_of": [
+     "2e2d726a3ff6196c26d44f8f"
+    ]
+   },
+   {
+    "id": "0da3404ca7a4a33f57d4c871",
+    "title": "Review: 1726 G2 backend storage and commands",
+    "minutes": 20,
+    "floor": 3,
+    "kind": "review",
+    "difficulty": "high",
+    "spend": {
+     "5-hour": 10,
+     "weekly": 1
+    },
+    "deps": [
+     "df0940f037c9f6eef1b92b67"
+    ],
+    "independent_of": [
+     "df0940f037c9f6eef1b92b67"
+    ]
+   },
+   {
+    "id": "8f099aef658fa637127c3482",
+    "title": "1726 G6: integrate, measure, migration dry run",
+    "minutes": 60,
+    "floor": 3,
+    "kind": "backend",
+    "difficulty": "high",
+    "spend": {
+     "5-hour": 30,
+     "weekly": 4
+    },
+    "deps": [
+     "0da3404ca7a4a33f57d4c871",
+     "7a23487b3220d1564f9c7522",
+     "5f0d3516fb850999cb824c90",
+     "e141b9c91ab56d8509789a49"
+    ],
+    "independent_of": []
+   },
+   {
+    "id": "45e5e3322e966e128a7d0f3d",
+    "title": "1726 G3b: reads load only the parts that changed",
+    "minutes": 60,
+    "floor": 3,
+    "kind": "backend",
+    "difficulty": "high",
+    "spend": {
+     "5-hour": 30,
+     "weekly": 4
+    },
+    "deps": [
+     "c2e38ce017f6f8e65ef8bdce"
+    ],
+    "independent_of": []
+   },
+   {
+    "id": "4c650945b01ab59703017bfb",
+    "title": "v1 liveness A: lost work and takeover (backend)",
+    "minutes": 180,
+    "floor": 3,
+    "kind": "backend",
+    "difficulty": "high",
+    "spend": {
+     "5-hour": 50,
+     "weekly": 8
+    },
+    "deps": [],
+    "independent_of": []
+   },
+   {
+    "id": "b27e3b7574be0b1bf4a76986",
+    "title": "v1 liveness B: host progress and Lead takeover (CLI)",
+    "minutes": 180,
+    "floor": 3,
+    "kind": "cli",
+    "difficulty": "high",
+    "spend": {
+     "5-hour": 50,
+     "weekly": 8
+    },
+    "deps": [],
+    "independent_of": []
+   },
+   {
+    "id": "b0b28597aa6be5ef38defa6e",
+    "title": "v1 routing: only machines that can do the work",
+    "minutes": 60,
+    "floor": 3,
+    "kind": "cli",
+    "difficulty": "high",
+    "spend": {
+     "5-hour": 30,
+     "weekly": 4
+    },
+    "deps": [],
+    "independent_of": []
+   },
+   {
+    "id": "f3a620e144116d08c3a68338",
+    "title": "v1 DM: a private chat with the PM for each person (Desktop and web)",
+    "minutes": 180,
+    "floor": 3,
+    "kind": "ui",
+    "difficulty": "high",
+    "spend": {
+     "5-hour": 50,
+     "weekly": 8
+    },
+    "deps": [],
+    "independent_of": []
+   },
+   {
+    "id": "4f49c22420c3c3fc57dda058",
+    "title": "Review: v1 routing: only machines that can do the work",
+    "minutes": 20,
+    "floor": 3,
+    "kind": "review",
+    "difficulty": "high",
+    "spend": {
+     "5-hour": 10,
+     "weekly": 1
+    },
+    "deps": [
+     "b0b28597aa6be5ef38defa6e"
+    ],
+    "independent_of": [
+     "b0b28597aa6be5ef38defa6e"
+    ]
+   },
+   {
+    "id": "1e43f418b6c92f435689581d",
+    "title": "Review: v1 liveness B: host progress and Lead takeover (CLI)",
+    "minutes": 20,
+    "floor": 3,
+    "kind": "review",
+    "difficulty": "high",
+    "spend": {
+     "5-hour": 10,
+     "weekly": 1
+    },
+    "deps": [
+     "b27e3b7574be0b1bf4a76986"
+    ],
+    "independent_of": [
+     "b27e3b7574be0b1bf4a76986"
+    ]
+   },
+   {
+    "id": "d71cdb0a2ab3181904d5eb3d",
+    "title": "Review: v1 liveness A: lost work and takeover (backend)",
+    "minutes": 20,
+    "floor": 3,
+    "kind": "review",
+    "difficulty": "high",
+    "spend": {
+     "5-hour": 10,
+     "weekly": 1
+    },
+    "deps": [
+     "4c650945b01ab59703017bfb"
+    ],
+    "independent_of": [
+     "4c650945b01ab59703017bfb"
+    ]
+   },
+   {
+    "id": "b483494ef289e282021b1e2a",
+    "title": "Review: 1726 G3b: reads load only the parts that changed",
+    "minutes": 20,
+    "floor": 3,
+    "kind": "review",
+    "difficulty": "high",
+    "spend": {
+     "5-hour": 10,
+     "weekly": 1
+    },
+    "deps": [
+     "45e5e3322e966e128a7d0f3d"
+    ],
+    "independent_of": [
+     "45e5e3322e966e128a7d0f3d"
+    ]
+   },
+   {
+    "id": "32777a379c1fd8cccfde3e85",
+    "title": "Review: v1 DM: Chat with PM (Desktop and web)",
+    "minutes": 20,
+    "floor": 3,
+    "kind": "review",
+    "difficulty": "high",
+    "spend": {
+     "5-hour": 10,
+     "weekly": 1
+    },
+    "deps": [
+     "f3a620e144116d08c3a68338"
+    ],
+    "independent_of": [
+     "f3a620e144116d08c3a68338"
+    ]
+   },
+   {
+    "id": "400c47daa5f4e2be6ab1c2e3",
+    "title": "Review: 1726 G6 results doc",
+    "minutes": 20,
+    "floor": 2,
+    "kind": "review",
+    "difficulty": "medium",
+    "spend": {
+     "5-hour": 10,
+     "weekly": 1
+    },
+    "deps": [
+     "8f099aef658fa637127c3482"
+    ],
+    "independent_of": [
+     "8f099aef658fa637127c3482"
+    ]
+   },
+   {
+    "id": "4bc913c9bf52f96cadbcd419",
+    "title": "1726 final: merge main into the feature branch",
+    "minutes": 60,
+    "floor": 3,
+    "kind": "merge",
+    "difficulty": "medium",
+    "spend": {
+     "5-hour": 30,
+     "weekly": 4
+    },
+    "deps": [
+     "8f099aef658fa637127c3482",
+     "b483494ef289e282021b1e2a"
+    ],
+    "independent_of": []
+   },
+   {
+    "id": "42f34fffe4223cab2ff79e69",
+    "title": "Review: 1726 final whole-branch review before main",
+    "minutes": 60,
+    "floor": 3,
+    "kind": "review",
+    "difficulty": "high",
+    "spend": {
+     "5-hour": 30,
+     "weekly": 4
+    },
+    "deps": [
+     "4bc913c9bf52f96cadbcd419"
+    ],
+    "independent_of": [
+     "4bc913c9bf52f96cadbcd419"
+    ]
+   },
+   {
+    "id": "8718795de795e643c928d3cc",
+    "title": "Review: 1726 final merge of main",
+    "minutes": 20,
+    "floor": 3,
+    "kind": "review",
+    "difficulty": "medium",
+    "spend": {
+     "5-hour": 10,
+     "weekly": 1
+    },
+    "deps": [
+     "4bc913c9bf52f96cadbcd419"
+    ],
+    "independent_of": [
+     "4bc913c9bf52f96cadbcd419"
+    ]
+   },
+   {
+    "id": "977d937c468e7720151c780e",
+    "title": "1726 final fix C1: private PM chat must not reach terminal observers",
+    "minutes": 60,
+    "floor": 3,
+    "kind": "fix",
+    "difficulty": "high",
+    "spend": {
+     "5-hour": 30,
+     "weekly": 4
+    },
+    "deps": [
+     "42f34fffe4223cab2ff79e69"
+    ],
+    "independent_of": []
+   },
+   {
+    "id": "b365e73faae5aa84b1b4d544",
+    "title": "1726 final fix C2: rollback must not expose private chats or lost work",
+    "minutes": 60,
+    "floor": 3,
+    "kind": "fix",
+    "difficulty": "high",
+    "spend": {
+     "5-hour": 30,
+     "weekly": 4
+    },
+    "deps": [
+     "42f34fffe4223cab2ff79e69"
+    ],
+    "independent_of": []
+   },
+   {
+    "id": "3f97d137a02c078abfdc7d74",
+    "title": "1726 final fix I3: a lost worker stays out of routing after cancel or reassign",
+    "minutes": 60,
+    "floor": 3,
+    "kind": "fix",
+    "difficulty": "high",
+    "spend": {
+     "5-hour": 30,
+     "weekly": 4
+    },
+    "deps": [
+     "42f34fffe4223cab2ff79e69"
+    ],
+    "independent_of": []
+   },
+   {
+    "id": "42095c031091b32d2d5e163b",
+    "title": "Review: 1726 final fix C2 rollback",
+    "minutes": 20,
+    "floor": 3,
+    "kind": "review",
+    "difficulty": "high",
+    "spend": {
+     "5-hour": 10,
+     "weekly": 1
+    },
+    "deps": [
+     "b365e73faae5aa84b1b4d544"
+    ],
+    "independent_of": [
+     "b365e73faae5aa84b1b4d544"
+    ]
+   },
+   {
+    "id": "a8c17a1e4fb9b75f771b67a7",
+    "title": "Review: 1726 final fix I3 lost worker routing",
+    "minutes": 20,
+    "floor": 3,
+    "kind": "review",
+    "difficulty": "high",
+    "spend": {
+     "5-hour": 10,
+     "weekly": 1
+    },
+    "deps": [
+     "3f97d137a02c078abfdc7d74"
+    ],
+    "independent_of": [
+     "3f97d137a02c078abfdc7d74"
+    ]
+   },
+   {
+    "id": "5c6b795d846d44bfb7591837",
+    "title": "Review: 1726 final fix C1 PM terminal observers",
+    "minutes": 20,
+    "floor": 3,
+    "kind": "review",
+    "difficulty": "high",
+    "spend": {
+     "5-hour": 10,
+     "weekly": 1
+    },
+    "deps": [
+     "977d937c468e7720151c780e"
+    ],
+    "independent_of": [
+     "977d937c468e7720151c780e"
+    ]
+   },
+   {
+    "id": "fa552b26cc36df06a9145405",
+    "title": "v2 A: Swarm as a switchable subsystem (out of the daemon core)",
+    "minutes": 180,
+    "floor": 3,
+    "kind": "cli",
+    "difficulty": "high",
+    "spend": {
+     "5-hour": 50,
+     "weekly": 8
+    },
+    "deps": [],
+    "independent_of": []
+   },
+   {
+    "id": "88a2196381c696b3b458543f",
+    "title": "v2 B: night shift (usage limits never stop the Swarm)",
+    "minutes": 180,
+    "floor": 3,
+    "kind": "cli",
+    "difficulty": "high",
+    "spend": {
+     "5-hour": 50,
+     "weekly": 8
+    },
+    "deps": [],
+    "independent_of": []
+   },
+   {
+    "id": "04f4dd68dc6273061f4e6194",
+    "title": "v2 C: decision packets (batched questions to people)",
+    "minutes": 180,
+    "floor": 3,
+    "kind": "cli",
+    "difficulty": "high",
+    "spend": {
+     "5-hour": 50,
+     "weekly": 8
+    },
+    "deps": [],
+    "independent_of": []
+   },
+   {
+    "id": "9109dbd1ee0f97b1f12ce4f5",
+    "title": "v2 D: review never waits on one reviewer (and no reviewer deadlocks)",
+    "minutes": 180,
+    "floor": 3,
+    "kind": "cli",
+    "difficulty": "high",
+    "spend": {
+     "5-hour": 50,
+     "weekly": 8
+    },
+    "deps": [],
+    "independent_of": []
+   },
+   {
+    "id": "1dace4d8419a80177f226de1",
+    "title": "v2 E: scheduler prototype (global assignment of tasks to machines and models)",
+    "minutes": 180,
+    "floor": 3,
+    "kind": "research",
+    "difficulty": "high",
+    "spend": {
+     "5-hour": 50,
+     "weekly": 8
+    },
+    "deps": [],
+    "independent_of": []
+   }
+  ],
+  "machines": [
+   {
+    "id": "383ce46764d8cbf68d598ec77827a6a2",
+    "name": "MacbookPro.local",
+    "slots": 16,
+    "engines": [
+     "claude",
+     "codex"
+    ]
+   },
+   {
+    "id": "001bcba1e7e9deb6f8756c053a951ce2",
+    "name": "[person]'s Mac",
+    "slots": 8,
+    "engines": [
+     "claude",
+     "codex"
+    ]
+   },
+   {
+    "id": "78351f130fd7a6e04a93c47790767040",
+    "name": "MacBookPro2021.local",
+    "slots": 8,
+    "engines": [
+     "claude",
+     "codex"
+    ]
+   },
+   {
+    "id": "e5c123a616155ce517f24c414cf57180",
+    "name": "MACs-Mac-Studio.local",
+    "slots": 16,
+    "engines": [
+     "claude",
+     "codex"
+    ]
+   },
+   {
+    "id": "ebedf81ba6a1ab03c324f4e8f58b094a",
+    "name": "MacBooks-MacBook-Pro-19.local",
+    "slots": 1,
+    "engines": [
+     "claude",
+     "codex"
+    ]
+   },
+   {
+    "id": "0caa2f6c73e8123baf0705c76b35420d",
+    "name": "MacBooks-MacBook-Pro-10.local",
+    "slots": 4,
+    "engines": [
+     "claude",
+     "codex"
+    ]
+   }
+  ],
+  "models": [
+   {
+    "id": "claude-opus",
+    "engine": "claude",
+    "cost": 3,
+    "quality": {
+     "default": 3
+    },
+    "label": "Claude opus high"
+   },
+   {
+    "id": "codex-default",
+    "engine": "codex",
+    "cost": 2,
+    "quality": {
+     "default": 3
+    },
+    "label": "Codex default default"
+   },
+   {
+    "id": "claude-sonnet",
+    "engine": "claude",
+    "cost": 2,
+    "quality": {
+     "default": 2
+    },
+    "label": "Claude sonnet medium"
+   },
+   {
+    "id": "claude-haiku",
+    "engine": "claude",
+    "cost": 1,
+    "quality": {
+     "default": 1
+    },
+    "label": "Claude haiku auto"
+   },
+   {
+    "id": "grid-deepseek/deepseek-v4.1-flash-1017",
+    "engine": "claude",
+    "cost": 1,
+    "quality": {
+     "default": 1
+    },
+    "concurrency": 4,
+    "subscription": false,
+    "family": "deepseek/deepseek-v4.1-flash-1017",
+    "remote": true,
+    "label": "Claude on deepseek/deepseek-v4.1-flash-1017 \u00b7 OpenRouter (API)"
+   }
+  ],
+  "accounts": [
+   {
+    "id": "codex-1",
+    "members": [
+     [
+      "383ce46764d8cbf68d598ec77827a6a2",
+      "codex"
+     ],
+     [
+      "e5c123a616155ce517f24c414cf57180",
+      "codex"
+     ]
+    ],
+    "reserve": 10.0,
+    "windows": [
+     {
+      "name": "weekly",
+      "left": 59.0,
+      "resets_in": 9055
+     }
+    ],
+    "budget": {
+     "weekly": 49.0
+    }
+   },
+   {
+    "id": "claude-2",
+    "members": [
+     [
+      "001bcba1e7e9deb6f8756c053a951ce2",
+      "claude"
+     ]
+    ],
+    "reserve": 10.0,
+    "windows": [
+     {
+      "name": "5-hour",
+      "left": 100.0,
+      "resets_in": null
+     },
+     {
+      "name": "weekly",
+      "left": 52.0,
+      "resets_in": 5267
+     }
+    ],
+    "budget": {
+     "weekly": 42.0
+    }
+   },
+   {
+    "id": "codex-3",
+    "members": [
+     [
+      "001bcba1e7e9deb6f8756c053a951ce2",
+      "codex"
+     ]
+    ],
+    "reserve": 10.0,
+    "windows": [
+     {
+      "name": "weekly",
+      "left": 0.0,
+      "resets_in": 32099
+     }
+    ],
+    "budget": {
+     "weekly": -10.0
+    }
+   },
+   {
+    "id": "claude-4",
+    "members": [
+     [
+      "78351f130fd7a6e04a93c47790767040",
+      "claude"
+     ]
+    ],
+    "reserve": 10.0,
+    "windows": [
+     {
+      "name": "5-hour",
+      "left": 98.0,
+      "resets_in": 257
+     },
+     {
+      "name": "weekly",
+      "left": 100.0,
+      "resets_in": 8387
+     }
+    ],
+    "budget": {
+     "weekly": 90.0
+    }
+   },
+   {
+    "id": "codex-5",
+    "members": [
+     [
+      "ebedf81ba6a1ab03c324f4e8f58b094a",
+      "codex"
+     ]
+    ],
+    "reserve": 10.0,
+    "windows": [
+     {
+      "name": "5-hour",
+      "left": 100.0,
+      "resets_in": 300
+     },
+     {
+      "name": "weekly",
+      "left": 95.0,
+      "resets_in": 9097
+     }
+    ],
+    "budget": {
+     "weekly": 85.0
+    }
+   },
+   {
+    "id": "claude-6",
+    "members": [
+     [
+      "0caa2f6c73e8123baf0705c76b35420d",
+      "claude"
+     ]
+    ],
+    "reserve": 10.0,
+    "windows": [
+     {
+      "name": "5-hour",
+      "left": 100.0,
+      "resets_in": null
+     },
+     {
+      "name": "weekly",
+      "left": 81.0,
+      "resets_in": 7487
+     }
+    ],
+    "budget": {
+     "weekly": 71.0
+    }
+   },
+   {
+    "id": "codex-7",
+    "members": [
+     [
+      "0caa2f6c73e8123baf0705c76b35420d",
+      "codex"
+     ]
+    ],
+    "reserve": 10.0,
+    "windows": [
+     {
+      "name": "weekly",
+      "left": 97.0,
+      "resets_in": 35126
+     }
+    ],
+    "budget": {
+     "weekly": 87.0
+    }
+   }
+  ]
+ },
+ "actual": {
+  "9e7e516b4e7e1f90d7c9ca43": [
+   "ebedf81ba6a1ab03c324f4e8f58b094a",
+   "claude-opus"
+  ],
+  "2b8a76771f8d6e8380101ad0": [
+   "ebedf81ba6a1ab03c324f4e8f58b094a",
+   "claude-opus"
+  ],
+  "659a6cc93b944bd24cae2884": [
+   "78351f130fd7a6e04a93c47790767040",
+   "claude-opus"
+  ],
+  "aeef05a35995ca9f7cca7060": [
+   "78351f130fd7a6e04a93c47790767040",
+   "claude-opus"
+  ],
+  "5c48779c71d5111602eab51f": [
+   "383ce46764d8cbf68d598ec77827a6a2",
+   "codex-default"
+  ],
+  "df0940f037c9f6eef1b92b67": [
+   "78351f130fd7a6e04a93c47790767040",
+   "claude-opus"
+  ],
+  "c2e38ce017f6f8e65ef8bdce": [
+   "78351f130fd7a6e04a93c47790767040",
+   "claude-opus"
+  ],
+  "0a84ea687a435833d1649933": [
+   "78351f130fd7a6e04a93c47790767040",
+   "claude-opus"
+  ],
+  "2e2d726a3ff6196c26d44f8f": [
+   "001bcba1e7e9deb6f8756c053a951ce2",
+   "claude-opus"
+  ],
+  "6bc636fa6713886102b9cbfa": [
+   "e5c123a616155ce517f24c414cf57180",
+   "codex-default"
+  ],
+  "5f0d3516fb850999cb824c90": [
+   "e5c123a616155ce517f24c414cf57180",
+   "codex-default"
+  ],
+  "7a23487b3220d1564f9c7522": [
+   "e5c123a616155ce517f24c414cf57180",
+   "codex-default"
+  ],
+  "e6115d403f62dd42d5cf3ab3": [
+   "e5c123a616155ce517f24c414cf57180",
+   "claude-opus"
+  ],
+  "acdc5546b9fcc601abb8b22c": [
+   "e5c123a616155ce517f24c414cf57180",
+   "claude-opus"
+  ],
+  "e141b9c91ab56d8509789a49": [
+   "e5c123a616155ce517f24c414cf57180",
+   "codex-default"
+  ],
+  "0da3404ca7a4a33f57d4c871": [
+   "e5c123a616155ce517f24c414cf57180",
+   "codex-default"
+  ],
+  "8f099aef658fa637127c3482": [
+   "78351f130fd7a6e04a93c47790767040",
+   "claude-opus"
+  ],
+  "45e5e3322e966e128a7d0f3d": [
+   "78351f130fd7a6e04a93c47790767040",
+   "claude-opus"
+  ],
+  "4c650945b01ab59703017bfb": [
+   "78351f130fd7a6e04a93c47790767040",
+   "claude-opus"
+  ],
+  "b27e3b7574be0b1bf4a76986": [
+   "78351f130fd7a6e04a93c47790767040",
+   "claude-opus"
+  ],
+  "b0b28597aa6be5ef38defa6e": [
+   "e5c123a616155ce517f24c414cf57180",
+   "claude-opus"
+  ],
+  "f3a620e144116d08c3a68338": [
+   "001bcba1e7e9deb6f8756c053a951ce2",
+   "claude-opus"
+  ],
+  "4f49c22420c3c3fc57dda058": [
+   "e5c123a616155ce517f24c414cf57180",
+   "codex-default"
+  ],
+  "1e43f418b6c92f435689581d": [
+   "e5c123a616155ce517f24c414cf57180",
+   "codex-default"
+  ],
+  "d71cdb0a2ab3181904d5eb3d": [
+   "e5c123a616155ce517f24c414cf57180",
+   "codex-default"
+  ],
+  "b483494ef289e282021b1e2a": [
+   "383ce46764d8cbf68d598ec77827a6a2",
+   "codex-default"
+  ],
+  "32777a379c1fd8cccfde3e85": [
+   "e5c123a616155ce517f24c414cf57180",
+   "codex-default"
+  ],
+  "400c47daa5f4e2be6ab1c2e3": [
+   "383ce46764d8cbf68d598ec77827a6a2",
+   "codex-default"
+  ],
+  "4bc913c9bf52f96cadbcd419": [
+   "78351f130fd7a6e04a93c47790767040",
+   "claude-opus"
+  ],
+  "42f34fffe4223cab2ff79e69": [
+   "e5c123a616155ce517f24c414cf57180",
+   "codex-default"
+  ],
+  "8718795de795e643c928d3cc": [
+   "e5c123a616155ce517f24c414cf57180",
+   "codex-default"
+  ],
+  "977d937c468e7720151c780e": [
+   "78351f130fd7a6e04a93c47790767040",
+   "claude-opus"
+  ],
+  "b365e73faae5aa84b1b4d544": [
+   "78351f130fd7a6e04a93c47790767040",
+   "claude-opus"
+  ],
+  "3f97d137a02c078abfdc7d74": [
+   "e5c123a616155ce517f24c414cf57180",
+   "claude-opus"
+  ],
+  "42095c031091b32d2d5e163b": [
+   "e5c123a616155ce517f24c414cf57180",
+   "codex-default"
+  ],
+  "a8c17a1e4fb9b75f771b67a7": [
+   "e5c123a616155ce517f24c414cf57180",
+   "codex-default"
+  ],
+  "5c6b795d846d44bfb7591837": [
+   "e5c123a616155ce517f24c414cf57180",
+   "codex-default"
+  ],
+  "fa552b26cc36df06a9145405": [
+   "e5c123a616155ce517f24c414cf57180",
+   "claude-opus"
+  ],
+  "88a2196381c696b3b458543f": [
+   "e5c123a616155ce517f24c414cf57180",
+   "claude-opus"
+  ],
+  "04f4dd68dc6273061f4e6194": [
+   "78351f130fd7a6e04a93c47790767040",
+   "claude-opus"
+  ],
+  "9109dbd1ee0f97b1f12ce4f5": [
+   "78351f130fd7a6e04a93c47790767040",
+   "claude-opus"
+  ],
+  "1dace4d8419a80177f226de1": [
+   "e5c123a616155ce517f24c414cf57180",
+   "claude-opus"
+  ]
+ },
+ "estimates": [
+  {
+   "group": "2b8a76771f8d6e8380101ad0",
+   "title": "Measure: Super Tab load and message time on the web",
+   "note": "request named by a variable in the log, matched by time and title"
+  },
+  {
+   "group": "5c48779c71d5111602eab51f",
+   "title": "Review: 1726 G1 design doc",
+   "note": "request named by a variable in the log, matched by time and title"
+  },
+  {
+   "group": "c2e38ce017f6f8e65ef8bdce",
+   "title": "1726 G3: backend read API and migration",
+   "note": "request named by a variable in the log, matched by time and title"
+  },
+  {
+   "group": "0a84ea687a435833d1649933",
+   "title": "1726 G5: CLI on the new read API",
+   "note": "no request of its own; takes G3's read-path request (same rewrite, CLI side)"
+  },
+  {
+   "group": "2e2d726a3ff6196c26d44f8f",
+   "title": "1726 G4: Desktop and web on the new read API",
+   "note": "request named by a variable in the log, matched by time and title"
+  },
+  {
+   "group": "5f0d3516fb850999cb824c90",
+   "title": "Review: 1726 G5 CLI",
+   "note": "request named by a variable in the log, matched by time and title"
+  },
+  {
+   "group": "7a23487b3220d1564f9c7522",
+   "title": "Review: 1726 G3 read API and migration",
+   "note": "no request of its own; takes the log's standard independent review request"
+  },
+  {
+   "group": "e6115d403f62dd42d5cf3ab3",
+   "title": "Swarm plan R1: how the lampOS team works",
+   "note": "no route request; estimate"
+  },
+  {
+   "group": "acdc5546b9fcc601abb8b22c",
+   "title": "Swarm plan R2: pain points of fast agent teams",
+   "note": "no route request; estimate"
+  },
+  {
+   "group": "e141b9c91ab56d8509789a49",
+   "title": "Review: 1726 G4 Desktop and web",
+   "note": "request named by a variable in the log, matched by time and title"
+  },
+  {
+   "group": "8f099aef658fa637127c3482",
+   "title": "1726 G6: integrate, measure, migration dry run",
+   "note": "no route request; estimate"
+  },
+  {
+   "group": "4c650945b01ab59703017bfb",
+   "title": "v1 liveness A: lost work and takeover (backend)",
+   "note": "no route request; estimate like v1 DM"
+  },
+  {
+   "group": "b27e3b7574be0b1bf4a76986",
+   "title": "v1 liveness B: host progress and Lead takeover (CLI)",
+   "note": "no route request; estimate like v1 DM"
+  },
+  {
+   "group": "1e43f418b6c92f435689581d",
+   "title": "Review: v1 liveness B: host progress and Lead takeover (CLI)",
+   "note": "request named by a variable in the log, matched by time and title"
+  },
+  {
+   "group": "d71cdb0a2ab3181904d5eb3d",
+   "title": "Review: v1 liveness A: lost work and takeover (backend)",
+   "note": "request named by a variable in the log, matched by time and title"
+  },
+  {
+   "group": "32777a379c1fd8cccfde3e85",
+   "title": "Review: v1 DM: Chat with PM (Desktop and web)",
+   "note": "request named by a variable in the log, matched by time and title"
+  },
+  {
+   "group": "400c47daa5f4e2be6ab1c2e3",
+   "title": "Review: 1726 G6 results doc",
+   "note": "request named by a variable in the log, matched by time and title"
+  },
+  {
+   "group": "4bc913c9bf52f96cadbcd419",
+   "title": "1726 final: merge main into the feature branch",
+   "note": "request named by a variable in the log, matched by time and title"
+  },
+  {
+   "group": "42f34fffe4223cab2ff79e69",
+   "title": "Review: 1726 final whole-branch review before main",
+   "note": "request named by a variable in the log, matched by time and title"
+  },
+  {
+   "group": "977d937c468e7720151c780e",
+   "title": "1726 final fix C1: private PM chat must not reach terminal observers",
+   "note": "request named by a variable in the log, matched by time and title"
+  },
+  {
+   "group": "b365e73faae5aa84b1b4d544",
+   "title": "1726 final fix C2: rollback must not expose private chats or lost work",
+   "note": "no request of its own; takes fix C1's request"
+  },
+  {
+   "group": "3f97d137a02c078abfdc7d74",
+   "title": "1726 final fix I3: a lost worker stays out of routing after cancel or reassign",
+   "note": "no request of its own; takes fix C1's request"
+  },
+  {
+   "group": "42095c031091b32d2d5e163b",
+   "title": "Review: 1726 final fix C2 rollback",
+   "note": "no request of its own; takes the focused re-check request"
+  },
+  {
+   "group": "a8c17a1e4fb9b75f771b67a7",
+   "title": "Review: 1726 final fix I3 lost worker routing",
+   "note": "no request of its own; takes the focused re-check request"
+  },
+  {
+   "group": "5c6b795d846d44bfb7591837",
+   "title": "Review: 1726 final fix C1 PM terminal observers",
+   "note": "request named by a variable in the log, matched by time and title"
+  },
+  {
+   "group": "fa552b26cc36df06a9145405",
+   "title": "v2 A: Swarm as a switchable subsystem (out of the daemon core)",
+   "note": "no route request (started directly); estimate"
+  },
+  {
+   "group": "88a2196381c696b3b458543f",
+   "title": "v2 B: night shift (usage limits never stop the Swarm)",
+   "note": "no route request (started directly); estimate"
+  },
+  {
+   "group": "04f4dd68dc6273061f4e6194",
+   "title": "v2 C: decision packets (batched questions to people)",
+   "note": "no route request (started directly); estimate"
+  },
+  {
+   "group": "9109dbd1ee0f97b1f12ce4f5",
+   "title": "v2 D: review never waits on one reviewer (and no reviewer deadlocks)",
+   "note": "no route request (started directly); estimate"
+  },
+  {
+   "group": "1dace4d8419a80177f226de1",
+   "title": "v2 E: scheduler prototype (global assignment of tasks to machines and models)",
+   "note": "no route request (started directly); estimate"
+  }
+ ],
+ "excluded": [
+  {
+   "group": "274baf5b89089a604ebbff4b",
+   "title": "Smoke: DeepSeek API on MacbookPro.local",
+   "reason": "a person pinned it to one machine and the shared DeepSeek model"
+  },
+  {
+   "group": "aa409e467756f366f8ec67d4",
+   "title": "Smoke: DeepSeek API on MacBooks-MacBook-Pro-19.local",
+   "reason": "a person pinned it to one machine and the shared DeepSeek model"
+  },
+  {
+   "group": "feb85d3aef2375b81b4275eb",
+   "title": "Smoke: DeepSeek API on MACs-Mac-Studio.local",
+   "reason": "a person pinned it to one machine and the shared DeepSeek model"
+  },
+  {
+   "group": "d80142e540abade0e9ac21de",
+   "title": "Smoke: DeepSeek API on [person]'s Mac",
+   "reason": "a person pinned it to one machine and the shared DeepSeek model"
+  },
+  {
+   "group": "8c0d038efe1b63d3b6628552",
+   "title": "Smoke: DeepSeek API after CLI 0.4.73 (Mac Studio)",
+   "reason": "a person pinned it to one machine and the shared DeepSeek model"
+  },
+  {
+   "group": "e37ffff373d0afd7fc763726",
+   "title": "Check: CLI version and grid log on MacbookPro.local",
+   "reason": "a person pinned it to one machine (a version and log check)"
+  }
+ ]
+}

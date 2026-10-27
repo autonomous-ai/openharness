@@ -4,7 +4,7 @@
 /// loopback origin that passes `/api/` to the local backend of the local
 /// backend recipe (fake SSO tokens, local MongoDB and Redis). Open it with
 /// `?tab=<id>&as=owner|peer` and optionally `&open=pm` (that person's Chat
-/// with PM, created on first use) or `&group=<id>`. It refuses any origin but
+/// with PM, created on first use) or `&group=<id>`, and `&glance=1` to open Team at a glance. It refuses any origin but
 /// 127.0.0.1 and knows only the recipe's two fake test tokens: it never
 /// reaches a real account or production data.
 library;
@@ -17,6 +17,7 @@ import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/shared/theme/color_palette.dart';
 import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/model.dart';
+import 'package:harness/super_tabs/team_glance_panel.dart';
 import 'package:harness/super_tabs/view.dart';
 import 'package:web/web.dart' as web;
 
@@ -112,8 +113,10 @@ Future<void> _review() async {
   debugPrint('review: opened ${controller.selectedId}');
   await controller.loadMessages(controller.selectedId);
   debugPrint('review: messages loaded');
+  final navigator = GlobalKey<NavigatorState>();
   runApp(
     MaterialApp(
+      navigatorKey: navigator,
       debugShowCheckedModeBanner: false,
       theme: grid.buildAppTheme(brightness: palette.brightness),
       home: Scaffold(
@@ -127,4 +130,10 @@ Future<void> _review() async {
       ),
     ),
   );
+  if (query['glance'] == '1') {
+    WidgetsBinding.instance.addPostFrameCallback(
+      (_) =>
+          showSuperTabTeamGlance(navigator.currentContext!, controller, null),
+    );
+  }
 }

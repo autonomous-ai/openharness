@@ -209,6 +209,23 @@ describe('buildLaunchOverrides — a relaunch comes back where the agent was', (
     expect(calls).toEqual([])
   })
 
+  it('in the Harness Team account, spends the owner\'s subscription through the relay on every relaunch', async () => {
+    const relay = { env: { HARNESS_RELAY_TOKEN: 't' }, args: ['-c', 'model_provider="harness_owner"'] }
+    const ownerRelay = vi.fn(async (engine: string) => engine === 'codex' ? relay
+      : engine === 'claude' ? { env: { ANTHROPIC_BASE_URL: 'http://127.0.0.1:9/claude', ANTHROPIC_AUTH_TOKEN: 't' }, args: [] } : null)
+    // Codex is told the relay's provider in place of its own login's: two `-c model_provider` would leave it to pick.
+    expect(await buildLaunchOverrides(deps({ ownerRelay }).d, 'codex', { subscriptionModel: 'gpt-5-codex' }, 'a'))
+      .toMatchObject({ ok: true, overrides: { env: { HARNESS_RELAY_TOKEN: 't' }, extraArgs: ['-c', 'model_provider="harness_owner"', '-m', 'gpt-5-codex'] } })
+    expect(await buildLaunchOverrides(deps({ ownerRelay }).d, 'claude', {}, 'a'))
+      .toMatchObject({ ok: true, overrides: { env: { ANTHROPIC_BASE_URL: 'http://127.0.0.1:9/claude', ANTHROPIC_AUTH_TOKEN: 't' }, extraArgs: [] } })
+    expect(await buildLaunchOverrides(deps({ ownerRelay }).d, 'codex', { gridLaunch: null, codexHome: '/home/u/.codex-work' }, 'a'))
+      .toMatchObject({ ok: true, overrides: { env: { CODEX_HOME: '/home/u/.codex-work', HARNESS_RELAY_TOKEN: 't' }, extraArgs: relay.args } })
+    // A grid is its own provider: the relay is not asked.
+    ownerRelay.mockClear()
+    await buildLaunchOverrides(deps({ ownerRelay }).d, 'codex', { gridLaunch: GRID }, 'a')
+    expect(ownerRelay).not.toHaveBeenCalled()
+  })
+
   it('builds OpenCode overrides without optional code and uses the requested engine facts', async () => {
     vi.mocked(loadEngine).mockImplementation(() => new Promise(() => {}))
     expect(await buildLaunchOverrides(deps().d, 'opencode', {}, 'agent-1')).toMatchObject({ ok: true })

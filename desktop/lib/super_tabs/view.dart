@@ -20,15 +20,20 @@ import 'pull_requests.dart';
 import 'controller.dart';
 import 'dialog_scope.dart';
 import 'model.dart';
+import 'pm_chat.dart';
+import 'workgroup_name.dart';
 import 'message_row.dart';
 import 'message_receipt.dart';
 import 'notifications.dart';
+import 'decisions.dart';
+import 'decisions_view.dart';
 import 'route_row.dart';
 import 'terminal_row.dart';
 import 'work_details.dart';
 import 'project_sidebar.dart';
 import 'project_options.dart';
 import 'pane_layout.dart';
+import 'leaderboard/swarm_board.dart';
 import '../widgets/dial_list_scroll.dart';
 
 typedef _ComposerChoice = ({String label, String? detail, VoidCallback choose});
@@ -83,6 +88,12 @@ class _SuperTabViewState extends State<SuperTabView>
   bool _sidebarOpen = false;
   bool _rosterOpen = false;
   bool _showPullRequests = false;
+
+  /// The human leaderboard (v2 G), read only once it is first opened; a column
+  /// when the window has room for it ([_boardRoomy], set by build), else a dialog.
+  bool _boardOpen = false, _boardRoomy = false;
+  SuperTabSwarmBoard? _boardRead;
+  SuperTabSwarmBoard get _board => _boardRead ??= SuperTabSwarmBoard(c);
   bool _showNotifications = false;
   // The message a tag opened, scrolled to once it is laid out.
   String? _target;
@@ -127,6 +138,7 @@ class _SuperTabViewState extends State<SuperTabView>
     WidgetsBinding.instance.addObserver(this);
     _composer.addListener(_composerMoved);
     c.addListener(_changed);
+    c.pmChatOpener = _openPmChat;
     _registerDial();
     _changed();
   }
@@ -154,7 +166,11 @@ class _SuperTabViewState extends State<SuperTabView>
     }
     if (oldWidget.controller != c) {
       oldWidget.controller.removeListener(_changed);
+      if (oldWidget.controller.pmChatOpener == _openPmChat) {
+        oldWidget.controller.pmChatOpener = null;
+      }
       c.addListener(_changed);
+      c.pmChatOpener = _openPmChat;
       for (final scroll in _scroll.values) {
         scroll.dispose();
       }
@@ -318,11 +334,13 @@ class _SuperTabViewState extends State<SuperTabView>
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     c.removeListener(_changed);
+    if (c.pmChatOpener == _openPmChat) c.pmChatOpener = null;
     _unregisterDial?.call();
     _dial.cancel();
     _composer.dispose();
     _focus.dispose();
     _pullRequestsFocus.dispose();
+    _boardRead?.dispose();
     for (final scroll in _scroll.values) {
       scroll.dispose();
     }
@@ -784,7 +802,20 @@ class _SuperTabViewState extends State<SuperTabView>
       c.select(id);
       _closeSidebar();
     },
+    onOpenPmChat: (projectId) => unawaited(_openPmChat(projectId)),
   );
+
+  /// Opens [projectId]'s PM chat in front of Notifications, pull requests and
+  /// a terminal: the sidebar's way in and ⇧⌘K's ([SuperTabController.pmChatOpener]).
+  Future<bool> _openPmChat(String projectId) {
+    setState(() {
+      _showNotifications = false;
+      _showPullRequests = false;
+    });
+    widget.onCloseTerminal?.call();
+    _closeSidebar();
+    return c.openPmChat(projectId);
+  }
 
   bool get _notificationsVisible =>
       _showNotifications && !_devicesVisible && !c.accessRevoked;
@@ -894,9 +925,11 @@ class _SuperTabViewState extends State<SuperTabView>
   bool _isPmChat(SuperTabConversation group) =>
       c.pmChat(group.projectId)?.id == group.id;
 
-  /// The open conversation's name, or what the pane shows instead of one.
-  Widget _title(SuperTabConversation? group) => Text(
-    _devicesVisible
+  /// The open conversation's name, or what the pane shows instead of one. A
+  /// workgroup's is named as the sidebar names it ([SuperTabWorkgroupName]).
+  Widget _title(SuperTabConversation? group) {
+    final style = DesktopChrome.text(medium: true);
+    final name = _devicesVisible
         ? 'Your devices'
         : _notificationsVisible
         ? 'Notifications'
@@ -909,12 +942,31 @@ class _SuperTabViewState extends State<SuperTabView>
         : group.id == c.snapshot!.leadsConversationId
         ? 'Product Managers'
         : _isPmChat(group)
-        ? 'Chat with PM'
-        : group.label,
-    maxLines: 1,
-    overflow: TextOverflow.ellipsis,
-    style: DesktopChrome.text(medium: true),
-  );
+        ? kChatWithPm
+        : null;
+    if (name == null) return SuperTabWorkgroupName(group!, style: style);
+    return Text(
+      name,
+      maxLines: 1,
+      overflow: TextOverflow.ellipsis,
+      style: style,
+    );
+  }
+
+  Widget _boardButton() {
+    final shown = _boardRoomy && _boardOpen;
+    return AppIconButton(
+      key: const ValueKey('super-leaderboard'),
+      icon: AppIcons.trophy,
+      size: AppIcons.inlineSize,
+      tooltip: 'Leaderboard',
+      selected: shown,
+      color: shown ? DesktopChrome.foreground : DesktopChrome.muted,
+      onPressed: _boardRoomy
+          ? () => setState(() => _boardOpen = !_boardOpen)
+          : () => unawaited(_board.openDialog(context)),
+    );
+  }
 
   /// On a phone the header's bar holds Chat and ⋮, each a finger's size, and
   /// ⋮ names the rest (terminals, pull requests, people) instead of five bare
@@ -1105,6 +1157,7 @@ class _SuperTabViewState extends State<SuperTabView>
               _options(group, views: _menuNamesViews),
             ),
         ],
+        fingerTarget(enabled: _phone, _boardButton()),
         if (!showRoster)
           fingerTarget(
             enabled: _phone,
@@ -1448,6 +1501,12 @@ class _SuperTabViewState extends State<SuperTabView>
                   ),
               ],
             ),
+          ),
+        // The reader's own chat with the PM shows what the PM asked them.
+        if (group != null && _isPmChat(group))
+          SuperTabDecisionsPanel(
+            decisions: SuperTabDecisions.of(c),
+            projectId: group.projectId,
           ),
         Expanded(
           child: c.loading
@@ -1959,6 +2018,9 @@ class _SuperTabViewState extends State<SuperTabView>
         _readVisibleTailAfterFrame();
       }
       _chatCovered = chatCovered;
+      _boardRoomy =
+          constraints.maxWidth >=
+          MediaQuery.textScalerOf(context).scale(SuperTabSwarmBoard.columnFrom);
       final roster = SuperTabRoster(
         controller: c,
         app: widget.app,
@@ -1984,6 +2046,14 @@ class _SuperTabViewState extends State<SuperTabView>
               onLeave: _leaveResize,
               left: narrow ? null : _sidebar(),
               right: showRoster ? roster : null,
+              board: _boardRoomy && _boardOpen
+                  ? _board.column(
+                      onAnswer: (id) {
+                        setState(() => _showPullRequests = false);
+                        unawaited(c.select(id));
+                      },
+                    )
+                  : null,
               center: Column(
                 children: [
                   _header(c.selected, narrow, showRoster),
@@ -2015,6 +2085,9 @@ class _SuperTabViewState extends State<SuperTabView>
                                 mentions: SuperTabMentions.of(c),
                                 onOpen: (mention) =>
                                     unawaited(_openMention(mention)),
+                                leading: SuperTabDecisionList(
+                                  decisions: SuperTabDecisions.of(c),
+                                ),
                               )
                             : const SizedBox.shrink(),
                       ],
