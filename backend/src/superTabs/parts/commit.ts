@@ -65,8 +65,18 @@ export function numberMessages(state: SuperTabState, messages: MessageDraft[], n
     group.lastMessageSequence = sequence
     group.lastActivityAt = new Date(now).toISOString()
     delete group.dormant
+    if (message.author.kind === 'person') notePerson(group, message.author.id, now)
   }
   return sequences
+}
+
+/** How long a person's post seats them at its conversation's table on the office map (Desktop). */
+export const RECENT_PEOPLE_MS = 2 * 60 * 60_000
+const RECENT_PEOPLE_CAP = 8
+
+function notePerson(group: SuperTabState['conversations'][number], personId: string, now: number): void {
+  const kept = Object.entries(group.recentPeople ?? {}).filter(([id, at]) => id !== personId && Date.parse(at) > now - RECENT_PEOPLE_MS)
+  group.recentPeople = Object.fromEntries([[personId, new Date(now).toISOString()], ...kept].slice(0, RECENT_PEOPLE_CAP))
 }
 
 /** Keeps the newest RELEASED_CAP released harnesses of each machine (spec, Archive). */

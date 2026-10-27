@@ -276,6 +276,9 @@ class SuperTabParts {
     if (_derived['decisionsDigest'] case final String digest) {
       state['decisionsDigest'] = digest;
     }
+    if (_derived['kudosReceived'] case final Map counts) {
+      state['kudosReceived'] = counts;
+    }
     return state;
   }
 

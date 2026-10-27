@@ -199,6 +199,8 @@ export interface Conversation {
   dormant?: boolean
   /** When its last message was written (ISO). */
   lastActivityAt?: string
+  /** The people who posted here in the last two hours, newest first, by person id to when (ISO); the office map seats them. */
+  recentPeople?: Record<string, string>
   /** A private conversation: only these people and the project's Lead read it (projects.ts canReadGroup). */
   audience?: import('./parts/types.js').Audience
   /** The last attempt here that was lost: its agent's status and checks for it are refused, even after reassignment. Where it
@@ -328,6 +330,8 @@ export interface CommandEffects {
   /** Decisions asked, and a decision answered, written outside the tab state by the store (decisions.ts). */
   decisions?: import('./decisions.js').DecisionDraft[]
   decisionAnswer?: import('./decisions.js').DecisionAnswer
+  /** A kudos, written outside the tab state by the store (kudos.ts). */
+  kudos?: import('./kudos.js').KudosEffect
 }
 export class SuperTabError extends Error {
   constructor(readonly code: string, message: string, readonly status = 409) {

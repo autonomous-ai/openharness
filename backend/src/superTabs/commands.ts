@@ -13,6 +13,7 @@ import { MAX_ATTACHMENTS, type Attachment } from './attachments.js'
 import { checkMentions, MAX_MENTIONS, type MentionTarget } from './mentions.js'
 import { ANSWERED_NOTICE, answerDecision, askDecisions, checkAsker, decisionChoices, decisionQuestion, MAX_QUESTIONS, type DecisionTarget } from './decisions.js'
 import { TERMINAL_KEYS, terminalAlert, terminalRequest, terminalResult, toLead, type TerminalRequest } from './terminal.js'
+import { kudosFor, MAX_KUDOS_NOTE, type KudosTarget } from './kudos.js'
 import { loseTasks, renewLease, renewOwnTask } from './liveness.js'
 import { ABANDONED, failureNotice, MACHINE_REMOVED } from './startFailure.js'
 import { digestStartsAfter, knownTimeZone } from './digest.js'
@@ -149,6 +150,8 @@ export const commandSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('message.react'), conversationId: id, messageId: id, emoji: reactionSchema, on: z.boolean() }).strict(),
   z.object({ type: z.literal('decision.ask'), conversationId: id, personId: id, questions: z.array(decisionQuestion).min(1).max(MAX_QUESTIONS) }).strict(),
   z.object({ type: z.literal('decision.answer'), decisionId: id, choice: z.number().int().min(0), note: z.string().trim().min(1).max(2000).optional() }).strict(),
+  z.object({ type: z.literal('kudos.give'), conversationId: id, messageId: id,
+    note: z.string().trim().max(MAX_KUDOS_NOTE).regex(/^[^\x00-\x1f\x7f]*$/, 'Keep a note to one line.').optional() }).strict(),
   z.object({ type: z.literal('delivery.resolve'), deliveryId: id, resolution: z.enum(['received', 'resend', 'cancel']) }).strict(),
   z.object({ type: z.literal('work.define'), conversationId: id, brief: text.optional(), task: task.optional(), checks: z.array(check).min(1).max(40) }).strict()
     .refine(c => c.task !== undefined || c.brief !== undefined, 'Provide a task or brief.')
@@ -201,6 +204,7 @@ const WORDS: Partial<Record<Command['type'], readonly string[]>> = {
   'route.record': ['decision.assessment.why', 'decision.why', 'decision.excluded[].title', 'decision.excluded[].reason',
     'decision.candidates[].title', 'decision.candidates[].label'],
   'route.override': ['reason'],
+  'kudos.give': ['note'],
   'tab.rename': ['name'],
   'machine.contribute': ['name'],
   'localModels.status': ['error'],
@@ -268,6 +272,8 @@ export interface CommandContext {
   mention?: MentionTarget
   /** The decision `decision.answer` names, read from SuperTabDecision by the store. */
   decision?: DecisionTarget
+  /** The message `kudos.give` names, read from this tab and conversation by the store. */
+  kudos?: KudosTarget
   /** The tab's contributed machines whose account row is signed in as a Harness Team account (`Machine.sessionKind`),
    *  read by the store for the commands that start, assign or route work (machines.ts teamWorkCheck). */
   teamMachines?: string[]
@@ -492,6 +498,11 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
   const leaving = command.type === 'member.remove' && actor.kind === 'person' && command.userId === actor.userId
   const sender = author(state, actor, !leaving && command.type !== 'decision.answer')
   authorizeCommandAccess(state, actor, command, context)
+  if (command.type === 'kudos.give') {
+    const to = kudosFor(state, actor, conversation(state, command.conversationId), context.kudos)
+    effects.kudos = { conversationId: command.conversationId, messageId: command.messageId, from: sender, to, note: command.note || null }
+    return effects
+  }
   const rememberAttempt = (group: ReturnType<typeof conversation>) => {
     if (group.assignment) effects.previousAttempts.push(structuredClone({ conversationId: group.id,
       brief: group.brief, checks: group.checks, assignment: group.assignment }))

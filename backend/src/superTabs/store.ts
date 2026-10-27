@@ -38,6 +38,7 @@ import { mayDrive, TERMINAL_ANSWER_MS, TERMINAL_EXPIRY_MS, TERMINAL_PICKUP_MS, t
 import { closeAssignment, closeUnassignedStart, readDecision, timedDecisionOf, writeRouteEffects } from './routeDecisions.js'
 import { listMentions, markDone, mentionsWaiting, readMention, resolveByReply, writeMentions } from './mentions.js'
 import { answerable, listDecisions, readAskedDecision, recordAnswer, waitingIn, waitingInProject, writeDecisions } from './decisions.js'
+import { kudosOn, kudosReceived, writeKudos } from './kudos.js'
 import { DEFAULT_ROUTING_POLICY, effectivePolicy, routingPolicySchema, type RoutingPolicy } from './routingPolicy.js'
 import { authenticatedEmail, authorizeSwarmJoin, configureSharing, joinSwarmSchema, requireSharingOwner,
   saveSharingSchema, sharingDetails, type JoinSwarm, type SaveSharing } from './sharing.js'
@@ -571,8 +572,9 @@ export class SuperTabStore {
       const now = this.now()
       const visible = visibleState(state, actor, now)
       const mentions = actor.kind === 'person' ? { mentionsWaiting: await mentionsWaiting(tx, tabId, state, actor, now) } : {}
+      const kudos = await kudosReceived(tx, tabId, state, actor)
       const teamMachines = visible.machines?.length ? await this.teamMachines(tx, state) : []
-      return { lastChangedAt: (await lastChangedAt(tx, [tabId])).get(tabId) ?? 0, state: { ...visible, ...mentions, machines: visible.machines?.map(pool => {
+      return { lastChangedAt: (await lastChangedAt(tx, [tabId])).get(tabId) ?? 0, state: { ...visible, ...mentions, kudosReceived: kudos, machines: visible.machines?.map(pool => {
         const stored = state.machines!.find(m => m.machineId === pool.machineId)!
         // Whether it takes teammates' projects now, and if not why (machines.ts teamWorkRefusal): what routing leaves it
         // out for, and what Desktop can show on the machine.
@@ -747,6 +749,11 @@ export class SuperTabStore {
       }
       if (command.type === 'mention.done') context.mention = await readMention(tx, tabId, command.mentionId)
       if (command.type === 'decision.answer') context.decision = await readAskedDecision(tx, tabId, command.decisionId)
+      if (command.type === 'kudos.give') {
+        const target = await tx.superTabMessage.findFirst({ where: { id: command.messageId, tabId, conversationId: command.conversationId },
+          select: { id: true, conversationId: true, author: true, source: true } })
+        if (target) context.kudos = { id: target.id, conversationId: target.conversationId, author: target.author as unknown as Author, agentOnly: agentOnly(target.source) }
+      }
       if (command.type === 'message.send' && command.attachmentIds?.length) context.attachments = await this.sendable(tx, tabId, actor, command)
       if (command.type === 'message.react') context.reaction = await this.reactionTarget(tx, tabId, actor, command)
       if ((command.type === 'member.avatar' || command.type === 'agent.avatar') && command.avatar?.kind === 'upload') {
@@ -950,6 +957,7 @@ export class SuperTabStore {
         if (command.type === 'decision.ask') effects.result.decisionIds = ids
       }
       if (effects.decisionAnswer) await recordAnswer(tx, tabId, effects.decisionAnswer, context.now)
+      if (effects.kudos) await writeKudos(tx, tabId, effects.kudos, context.now)
       if (context.attachments?.length) {
         // Conflicts with a concurrent send of the same file: only one message can take it.
         const taken = await tx.superTabAttachment.updateMany({ where: { tabId, id: { in: context.attachments.map(a => a.id) }, ...unused },
@@ -1401,8 +1409,9 @@ export class SuperTabStore {
       const deliveries = page.length ? await tx.superTabDelivery.findMany({ where: { tabId, messageId: { in: page.map(m => m.id) } },
         select: { id: true, messageId: true, agentId: true, status: true, receipt: true,
           holdReason: true, holdSince: true, deliveredAt: true, answeredAt: true, createdAt: true, updatedAt: true } }) : []
+      const kudos = await kudosOn(tx, tabId, conversationId, page.map(m => m.id))
       return { messages: page.map(m => ({ ...m, mentions: m.mentions ?? [], reactions: reactions.get(m.id) ?? [],
-        deliveries: deliveries.filter(d => d.messageId === m.id) })), next,
+        deliveries: deliveries.filter(d => d.messageId === m.id), kudos: kudos.get(m.id) ?? [] })), next,
         // A poll for new messages learns here that a reaction changed on a message it already shows (reactions.ts).
         reactionSeq: group.reactionSeq ?? 0 }
     })

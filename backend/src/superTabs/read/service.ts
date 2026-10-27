@@ -8,6 +8,7 @@ import { isTeamSession, TEAM_SESSION_LIMITED, TEAM_SESSION_MESSAGE } from '../..
 import { author, fail, isLeads, seenMachineIds, visibleState, type Actor, type AgentStart } from '../model.js'
 import { mentionsWaiting } from '../mentions.js'
 import { decisionsWaiting } from '../decisions.js'
+import { kudosReceived } from '../kudos.js'
 import { transaction, type SuperTabStore } from '../store.js'
 import { migrateSwarm } from '../migration/migrate.js'
 import * as parts from '../parts/index.js'
@@ -155,13 +156,14 @@ export class SwarmReads {
     const loaded = await loader(tx, tabId, opts)
     const state = parts.reassemble(loaded)
     const actor = await this.store.actor(tx, user, state, asAgentId)
-    const [teamMachines, counts, newest] = await Promise.all([
+    const [teamMachines, counts, kudos, newest] = await Promise.all([
       state.machines?.length ? this.store.teamMachines(tx, state) : [],
       actor.kind === 'person' ? Promise.all([mentionsWaiting(tx, tabId, state, actor, t0), decisionsWaiting(tx, tabId, state, actor)]) : undefined,
+      kudosReceived(tx, tabId, state, actor),
       parts.lastChangedAt(tx, [tabId]),
     ])
     return { parts: loaded, actor, lastChangedAt: newest.get(tabId) ?? null,
-      view: readerView(loaded, actor, t0, { teamMachines,
+      view: readerView(loaded, actor, t0, { teamMachines, kudosReceived: kudos,
         ...(counts ? { mentionsWaiting: counts[0], decisionsWaiting: counts[1].count, decisionsDigest: counts[1].digest } : {}) }) }
   }
 }
