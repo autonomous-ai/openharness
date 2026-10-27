@@ -30,29 +30,32 @@ export function schedulerFiles(): Record<string, string> {
   return Object.fromEntries(readdirSync(dir).filter(f => f.endsWith('.py')).sort().map(f => [f, readFileSync(join(dir, f), 'utf8')]))
 }
 
-/** Puts the package at [root] only whole: two Leads' CLIs may plan at once, and one that stops while writing must not leave
- *  a package the other runs half of. The files go to a folder of this process's own, which is renamed into place in one step;
- *  a folder missing any file is replaced. */
-function writeWhole(root: string, files: Record<string, string>): void {
-  if (Object.keys(files).every(name => existsSync(join(root, 'scheduler', name)))) return
+const whole = (dir: string, files: Record<string, string>) => Object.keys(files).every(name => existsSync(join(dir, 'scheduler', name)))
+
+/** The folder to run the package from, and whether it is this process's own, to remove after the run. Two Leads' CLIs may plan
+ *  at once, and another's solver may be importing from the published folder at any moment, so a published folder is never
+ *  deleted or replaced (review of #1764): a whole copy is written to a folder of this process's own and renamed into place
+ *  only where none is published yet. Should the published one be missing a file (a process that stopped while writing before
+ *  publication was atomic, or a disk that lost it), this run uses its own whole copy instead. */
+function packageFolder(root: string, files: Record<string, string>): { dir: string; own: boolean } {
+  if (whole(root, files)) return { dir: root, own: false }
   const draft = `${root}.${process.pid}.${randomUUID()}`
   mkdirSync(join(draft, 'scheduler'), { recursive: true })
   for (const [name, text] of Object.entries(files)) writeFileSync(join(draft, 'scheduler', name), text)
-  rmSync(root, { recursive: true, force: true })
-  try { renameSync(draft, root) } catch {
-    // Another process put its whole copy in place first; this one is the same files.
-    rmSync(draft, { recursive: true, force: true })
+  if (!existsSync(root)) {
+    try { renameSync(draft, root); return { dir: root, own: false } } catch { /* Another process published first. */ }
   }
+  if (whole(root, files)) { rmSync(draft, { recursive: true, force: true }); return { dir: root, own: false } }
+  return { dir: draft, own: true }
 }
 
 /** Runs `python -m scheduler plan` on [instance], with the package written once per version under the data folder. */
 export async function runSolver(instance: Json, options: { dataDir: string; python?: string; pythonPath?: string[] }): ReturnType<SolverRun> {
   const files = schedulerFiles()
   const version = createHash('sha256').update(JSON.stringify(files)).digest('hex').slice(0, 16)
-  const root = join(options.dataDir, 'scheduler', version)
-  writeWhole(root, files)
+  const { dir: root, own } = packageFolder(join(options.dataDir, 'scheduler', version), files)
   const python = options.python ?? 'python3'
-  return new Promise(resolve => {
+  const answer = await new Promise<Awaited<ReturnType<SolverRun>>>(resolve => {
     const child = spawn(python, ['-m', 'scheduler', 'plan', '--time-limit', String(TIME_LIMIT_SECONDS)], {
       cwd: root, env: { ...process.env, PYTHONPATH: [...(options.pythonPath ?? []), root].join(delimiter) }, stdio: ['pipe', 'pipe', 'pipe'],
     })
@@ -71,6 +74,8 @@ export async function runSolver(instance: Json, options: { dataDir: string; pyth
     })
     child.stdin.end(JSON.stringify(instance))
   })
+  if (own) rmSync(root, { recursive: true, force: true })
+  return answer
 }
 
 export async function planWork(input: { request: unknown }, scoped: ScopedRequest, deps: { run?: SolverRun; now?: () => number; dataDir: string; python?: string }): Promise<Json> {

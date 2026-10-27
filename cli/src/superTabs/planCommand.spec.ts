@@ -1,5 +1,6 @@
-import { spawnSync } from 'node:child_process'
-import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import { execFile, spawnSync } from 'node:child_process'
+import { promisify } from 'node:util'
+import { mkdirSync, mkdtempSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -106,16 +107,39 @@ describe('runSolver', () => {
       .toEqual({ error: 'PYTHON_MISSING', detail: expect.stringContaining('Python 3 is not installed') })
   })
 
-  it('never trusts a solver folder another plan left half-written, and leaves only whole ones', async () => {
-    const dataDir = temp(), python = process.platform === 'win32' ? 'cmd' : 'false'
-    await runSolver(instance, { dataDir, python })
-    const [version] = readdirSync(join(dataDir, 'scheduler')), pkg = join(dataDir, 'scheduler', version!, 'scheduler')
+  it.skipIf(!hasPython('python3'))('never touches a package another process published, and runs from a whole copy of its own', async () => {
+    const dataDir = temp(), fake = temp()
+    mkdirSync(join(fake, 'ortools'))
+    writeFileSync(join(fake, 'ortools', '__init__.py'), "raise ImportError('No module named ortools')\n")
+    await runSolver(instance, { dataDir, python: 'python3', pythonPath: [fake] })
+    const [version] = readdirSync(join(dataDir, 'scheduler')), root = join(dataDir, 'scheduler', version!), pkg = join(root, 'scheduler')
     // Another CLI process stopped while writing: the package has its entry point but not the solver.
     rmSync(join(pkg, 'solver.py'))
-    await Promise.all([runSolver(instance, { dataDir, python }), runSolver(instance, { dataDir, python })])
-    expect(readdirSync(pkg).sort()).toEqual(Object.keys(schedulerFiles()).sort())
+    const before = statSync(root).ino, kept = readdirSync(pkg).sort()
+    // A solver still running from that folder imports one more module after the others have published.
+    const importer = promisify(execFile)('python3', ['-c', 'import time, scheduler; time.sleep(2); import scheduler.instance; print("imported")'], { cwd: root, timeout: 30_000 })
+    // Each publisher waits at the barrier, so all of them find the package half-written at once.
+    const barrier = join(temp(), 'go')
+    const script = `
+      import { existsSync } from 'node:fs';
+      import { runSolver } from './src/superTabs/planCommand.ts';
+      while (!existsSync(process.argv[1])) await new Promise(r => setTimeout(r, 5));
+      const instance = { tasks: [{ id: 'g1', minutes: 60 }], machines: [{ id: 'm1', slots: 1, engines: ['claude'] }], models: [{ id: 'opus', engine: 'claude', cost: 3, quality: { default: 3 } }] };
+      console.log(JSON.stringify(await runSolver(instance, { dataDir: process.argv[2], python: 'python3', pythonPath: [process.argv[3]] })));
+    `
+    const run = promisify(execFile)
+    const children = [1, 2, 3, 4, 5, 6].map(() => run(process.execPath, ['--import', 'tsx', '--input-type=module', '-e', script, barrier, dataDir, fake], { timeout: 30_000 }))
+    await new Promise(r => setTimeout(r, 1000))
+    writeFileSync(barrier, '')
+    const answers = (await Promise.all(children)).map(c => JSON.parse(c.stdout.trim()))
+    // Every publisher ran a whole package: each reached the missing OR-Tools, none failed partway through its imports.
+    expect(answers.map(a => a.error)).toEqual(Array(6).fill('ORTOOLS_MISSING'))
+    expect((await importer).stdout.trim()).toBe('imported')
+    // The folder the running solver uses is the same one, untouched, and no private copy is left behind.
+    expect(statSync(root).ino).toBe(before)
+    expect(readdirSync(pkg).sort()).toEqual(kept)
     expect(readdirSync(join(dataDir, 'scheduler'))).toEqual([version])
-  })
+  }, 60_000)
 
   it('says when the solver stops without a plan', async () => {
     // A program that exits 1 and prints nothing stands in for a solver that crashed.
