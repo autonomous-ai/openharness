@@ -11,7 +11,7 @@ import { SuperTabStore } from '../src/superTabs/store.js'
 import type { Command } from '../src/superTabs/commands.js'
 import type { MachineObservation } from '../src/superTabs/machines.js'
 import { poolRows, rosterRows } from './hostRows.test-support.js'
-import { archiveFinishedGroups, type PullRequestState } from '../src/superTabs/archive.js'
+import { archiveFinishedGroups, markFinishedGroups, type PullRequestState } from '../src/superTabs/archive.js'
 
 // Nobody tidies a Swarm by hand: a worker idle for 15 minutes is stopped on its Lead's poll and its host is asked to close
 // it. A fresh loopback replica set, created here.
@@ -231,5 +231,36 @@ describe('a finished group', () => {
     await archiveFinishedGroups(db, f.timed, github({}), f.clock.now)
     expect(await archived(f)).toBe(false)
     expect((await db.swarmGroup.findMany({ where: { tabId: f.tab, archived: true } }))).toEqual([])
+  })
+})
+
+describe('the archive pass', () => {
+  it('reads each pull request once however many groups link it', async () => {
+    const PR = 'https://github.com/acme/app/pull/9'
+    const f = await swarm()
+    const second = String((await f.execute({ type: 'conversation.create', title: 'Docs', brief: 'Docs too', checks: [{ description: 'Verified', independent: false }] })).result.conversationId)
+    const worker2 = await f.add(second, 'test-host', randomUUID(), 'Writer')
+    const work = String((await f.execute({ type: 'work.assign', conversationId: second, agentId: worker2 })).result.assignmentId)
+    await f.execute({ type: 'work.cancel', conversationId: second, assignmentId: work, reason: 'Done elsewhere' })
+    for (const group of [f.group, second]) await f.execute({ type: 'message.send', conversationId: group, text: `Pull request: ${PR}`, replyTo: null, recipientIds: [] })
+    const read: string[] = []
+    f.clock.now += 40 * MINUTE
+    await archiveFinishedGroups(db, f.timed, { state: async url => { read.push(url); return 'open' }, done: async () => {} }, f.clock.now)
+    // Other tests' Swarms share this database, with links of their own.
+    expect(read.filter(url => url === PR)).toEqual([PR])
+  })
+
+  it('finds a finished group written before the finished mark once the worker marks it at startup', async () => {
+    const f = await swarm()
+    const part = await db.swarmGroup.findFirstOrThrow({ where: { tabId: f.tab, key: f.group } })
+    // As an older backend left it: no mark at all.
+    await db.$runCommandRaw({ update: 'SwarmGroup', updates: [{ q: { _id: part.id }, u: { $unset: { workFinished: '' } } }] })
+    const prs = { state: async () => null, done: async () => {} }
+    f.clock.now += 40 * MINUTE
+    await archiveFinishedGroups(db, f.timed, prs, f.clock.now)
+    expect((await db.swarmGroup.findUniqueOrThrow({ where: { id: part.id } })).archived).toBe(false)
+    expect(await markFinishedGroups(db)).toBeGreaterThanOrEqual(1)
+    await archiveFinishedGroups(db, f.timed, prs, f.clock.now)
+    expect((await db.swarmGroup.findUniqueOrThrow({ where: { id: part.id } })).archived).toBe(true)
   })
 })

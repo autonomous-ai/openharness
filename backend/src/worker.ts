@@ -18,7 +18,7 @@ import { ensureProductUsageExpiry } from './lib/productUsage.js'
 import { ensureTerminalExpiry } from './superTabs/terminal.js'
 import { ensureMentionExpiry } from './superTabs/mentions.js'
 import { ensurePartExpiry, startSwarmSweeps } from './superTabs/sweeps.js'
-import { appPullRequests, startSwarmArchive, unknownPullRequests } from './superTabs/archive.js'
+import { appPullRequests, markFinishedGroups, startSwarmArchive, unknownPullRequests } from './superTabs/archive.js'
 import { SuperTabStore } from './superTabs/store.js'
 import { GitHubApp, githubAppConfig } from './github/app.js'
 import { env } from './config/env.js'
@@ -40,6 +40,8 @@ async function start(): Promise<void> {
   await ensureTerminalExpiry(prisma)
   await ensureMentionExpiry(prisma)
   await ensurePartExpiry(prisma)
+  // After the push, which adds the finished mark: parts written before it are marked once, so the archive pass finds them.
+  await markFinishedGroups(prisma)
   // AFTER the push: it creates the new collections + their unique indexes, and the copy uses $merge
   // so those indexes survive. Copying first would leave the unique index build to fail silently.
   await migrateMachineRename()

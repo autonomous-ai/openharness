@@ -51,7 +51,15 @@ export function appPullRequests(app: GitHubApp): PullRequests {
 
 const BATCH = 500
 
-/** One pass: every unarchived group quiet for ARCHIVE_QUIET_MS whose task is done or cancelled, in a Swarm that keeps
+/** Marks every part written before the finished mark whose task is done or cancelled, so the pass finds it: run once by the
+ *  worker at startup, as its other index work is. Every later write of a part sets the mark itself (parts/write.ts). */
+export async function markFinishedGroups(db: PrismaClient): Promise<number> {
+  const answer = await db.$runCommandRaw({ update: 'SwarmGroup', updates: [{ q: { workFinished: { $exists: false }, deleted: false,
+    'data.assignment.status': { $in: ['done', 'cancelled'] } }, u: { $set: { workFinished: true } }, multi: true }] })
+  return Number((answer as { nModified?: number }).nModified ?? 0)
+}
+
+/** One pass: every unarchived group quiet for ARCHIVE_QUIET_MS whose task is done or cancelled (its finished mark), in a Swarm that keeps
  *  tidying on, is archived once GitHub says each of its pull requests is merged or closed. Read oldest first by a cursor,
  *  so groups that stay open never hold later ones back. */
 export async function archiveFinishedGroups(db: PrismaClient, store: Pick<SuperTabStore, 'archiveFinished'>, prs: PullRequests, now: number): Promise<number> {
@@ -60,18 +68,21 @@ export async function archiveFinishedGroups(db: PrismaClient, store: Pick<SuperT
     if (!tidy.has(tabId)) tidy.set(tabId, ((await db.swarmHead.findUnique({ where: { id: `${tabId}:head` } }))?.data as unknown as HeadData | undefined)?.tidy !== false)
     return tidy.get(tabId)!
   }
+  // One read per pull request a pass, however many groups link it.
+  const states = new Map<string, Promise<PullRequestState>>()
+  const stateOf = (url: string) => { if (!states.has(url)) states.set(url, prs.state(url)); return states.get(url)! }
   let archived = 0, after: { at: Date; id: string } | null = null
   try {
     for (;;) {
       const cursor: Prisma.SwarmGroupWhereInput = after ? { OR: [{ lastActivityAt: { gt: after.at } }, { lastActivityAt: after.at, id: { gt: after.id } }] } : {}
-      const rows = await db.swarmGroup.findMany({ where: { deleted: false, archived: false, kind: null, lastActivityAt: { lte: new Date(now - ARCHIVE_QUIET_MS) }, ...cursor },
+      const rows = await db.swarmGroup.findMany({ where: { workFinished: true, archived: false, deleted: false, kind: null, lastActivityAt: { lte: new Date(now - ARCHIVE_QUIET_MS) }, ...cursor },
         orderBy: [{ lastActivityAt: 'asc' }, { id: 'asc' }], take: BATCH, select: { id: true, tabId: true, key: true, lastActivityAt: true, data: true } })
       for (const row of rows) {
         const group = row.data as unknown as Conversation
         if (group.audience || !['done', 'cancelled'].includes(group.assignment?.status ?? '') || !await tidyOn(row.tabId)) continue
         const urls = group.pullRequestUrls ?? []
         let settled = true
-        for (const url of urls) if (!['merged', 'closed'].includes(await prs.state(url) ?? '')) { settled = false; break }
+        for (const url of urls) if (!['merged', 'closed'].includes(await stateOf(url) ?? '')) { settled = false; break }
         if (settled && await store.archiveFinished(row.tabId, row.key, urls)) archived++
       }
       if (rows.length < BATCH) return archived
