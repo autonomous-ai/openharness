@@ -20,6 +20,16 @@ const unavailable = new Set(['SERVICE_UNAVAILABLE', 'SERVICE_FAILED', 'GRID_UNAV
   'UNSUPPORTED', 'UNSUPPORTED_ON_REMOTE', 'TIMEOUT', 'NATIVE_UNAVAILABLE'])
 const invalid = new Set(['INVALID_ENGINE', 'INVALID_CWD', 'CWD_NOT_FOUND', 'INVALID_GRID', 'INVALID_DSH', 'INVALID_SWARM_ROLE',
   'INVALID_MODEL', 'INVALID_PERMISSION_MODE', 'INVALID_CREATION_ID', 'INVALID_PROJECT_SOURCE', 'WORKTREE_BUSY'])
+/** A Store install's or update's own refusals (dsh/install.ts, dsh/update.ts), by kind. Until 2026-10-28 every one was
+ * `other`: that day's 11 failed installs, all on Windows, said nothing of why. For the Store's requests only, so a
+ * create's or a resume's totals keep their meaning. Its busy and not-installed refusals are named with the others'. */
+const storeFailures = new Map<string, Failure>([
+  ['SETUP_FAILED', 'setup'], ['DOCTOR_FAILED', 'setup'], ['GIT_UNAVAILABLE', 'setup'], ['SHELL_UNAVAILABLE', 'setup'],
+  ['CLONE_FAILED', 'unavailable'], ['VIEWER_UNAVAILABLE', 'unavailable'],
+  ['INVALID_MANIFEST', 'invalid'], ['INVALID_SOURCE', 'invalid'], ['SOURCE_NOT_FOUND', 'invalid'],
+  ['PACKAGE_ID_MISMATCH', 'invalid'], ['PACKAGE_KIND_MISMATCH', 'invalid'], ['LINKED_INSTALL', 'invalid'],
+  ['BUNDLED_PACKAGE', 'invalid'],
+])
 const resumeReasons = new Map<string, ResumeReason>([
   ['TMUX_UNAVAILABLE', 'runtime_unavailable'], ['NATIVE_LAUNCH_HELD', 'runtime_unavailable'],
   ['ENGINE_UNAVAILABLE', 'runtime_unavailable'],
@@ -170,7 +180,8 @@ export function productUsageRequest(type: string, emit: (metric: ProductUsageMet
       count('unknown'); detail(error === 'AGENT_CHANGED' ? 'cancelled' : 'unknown')
     } else if (error != null || state === 'failed' || ok === false) {
       count('failed'); detail('failed')
-      const kind = failureKind(error)
+      const store = action === 'store_install' || action === 'store_update'
+      const kind = (store && typeof error === 'string' ? storeFailures.get(error) : undefined) ?? failureKind(error)
       count(`error_${kind}`)
       // Which code an `other` refusal of a create or a resume had: 22 creates and 9 resumes were `other` on
       // 2026-10-16 (production counters), with nothing to say why. A fixed name from the list, or unlisted.
@@ -186,6 +197,9 @@ export function productUsageRequest(type: string, emit: (metric: ProductUsageMet
       }
       // A delete's or a restart's, whatever its kind: the phone's 3 delete refusals were `other` and its 2 restart
       // refusals `setup` on 2026-10-19, a kind of nine codes, with nothing to say which.
+      // A Store install's or update's, whatever its kind: the 11 Windows installs of 2026-10-28 were `other`, and
+      // nothing said which refusal. Its family adds up to `store_install_failed` (or `store_update_failed`).
+      if (store) count(`error_code_${launchErrorCode(error)}`)
       if (action === 'delete' || action === 'restart') {
         count(`error_code_${launchErrorCode(error)}`)
         // The phone's again, apart: the family above mixes every client of this daemon.
@@ -193,7 +207,7 @@ export function productUsageRequest(type: string, emit: (metric: ProductUsageMet
           try { emit(`phone_${action}_error_code_${launchErrorCode(error)}` as ProductUsageMetric) } catch { /* Optional measurement. */ }
         }
       }
-      detail(`error_${failure ? failure : error === 'TIMEOUT' ? 'timeout' : typeof error === 'string' && ['AGENT_NOT_FOUND', 'SESSION_NOT_FOUND', 'NOT_FOUND'].includes(error) ? 'not_found' : typeof error === 'string' && ['DELETE_IN_PROGRESS', 'WORKTREE_BUSY', 'BUSY'].includes(error) ? 'conflict' : failureKind(error)}`)
+      detail(`error_${failure ? failure : error === 'TIMEOUT' ? 'timeout' : typeof error === 'string' && ['AGENT_NOT_FOUND', 'SESSION_NOT_FOUND', 'NOT_FOUND', 'NOT_INSTALLED'].includes(error) ? 'not_found' : typeof error === 'string' && ['DELETE_IN_PROGRESS', 'WORKTREE_BUSY', 'BUSY', 'DSH_BUSY'].includes(error) ? 'conflict' : kind}`)
     } else if (state === 'pending' || state === 'preparing' || state === 'starting') { count('pending'); detail('pending') }
     else if (state === 'unconfirmed' || state === 'unavailable' || state === 'cancelled') { count('unknown'); detail(state === 'cancelled' ? 'cancelled' : 'unknown') }
     else if (!['create', 'resume', 'restart', 'fork'].includes(action) || hasAgent || state === 'created') { count('ok'); detail('ok') }

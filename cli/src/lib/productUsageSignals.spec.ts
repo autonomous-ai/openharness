@@ -343,6 +343,60 @@ it('observes Store, search and model operations without their arguments and reje
   expect(clock).not.toHaveBeenCalled()
 })
 
+it.each([
+  // A prerequisite this machine lacks, or the harness's own setup or doctor failing on it.
+  ['SETUP_FAILED', 'setup'], ['DOCTOR_FAILED', 'setup'], ['GIT_UNAVAILABLE', 'setup'], ['SHELL_UNAVAILABLE', 'setup'],
+  // The package's source could not be reached, or a viewer it needs could not be installed.
+  ['CLONE_FAILED', 'unavailable'], ['VIEWER_UNAVAILABLE', 'unavailable'],
+  // The package itself, or what was asked of it, is wrong.
+  ['INVALID_MANIFEST', 'invalid'], ['INVALID_SOURCE', 'invalid'], ['SOURCE_NOT_FOUND', 'invalid'],
+  ['PACKAGE_ID_MISMATCH', 'invalid'], ['PACKAGE_KIND_MISMATCH', 'invalid'], ['LINKED_INSTALL', 'invalid'],
+  ['BUNDLED_PACKAGE', 'invalid'], ['DSH_BUSY', 'conflict'], ['NOT_INSTALLED', 'not_found'],
+])('gives a Store install or update refused with %s the kind %s, not `other`', (code, kind) => {
+  const emit = vi.fn()
+  productUsageRequest('dsh_install', emit, () => 0, 'app')(code, undefined, false)
+  productUsageRequest('dsh_update', emit, () => 0, 'app')(code, undefined, false)
+  const names: string[] = emit.mock.calls.flat()
+  expect(names).toContain(`request_app_store_install_error_${kind}`)
+  expect(names).toContain(`request_app_store_update_error_${kind}`)
+  // The detailed counters the prod watch reads; the action totals have five kinds only, `other` among them.
+  expect(names.filter(name => name.startsWith('request_') && name.endsWith('_error_other'))).toEqual([])
+})
+
+it('keeps every refusal a Store install or update can answer in the code list', () => {
+  const codes = new Set<string>()
+  for (const path of ['../dsh/install.ts', '../dsh/update.ts', '../dsh/lock.ts', '../dsh/service.ts', '../services/store.ts']) {
+    const source = readFileSync(new URL(path, import.meta.url), 'utf8')
+    for (const match of source.matchAll(/(?:error: |fail\(|code: )'([A-Z][A-Z0-9_]*)'/g)) codes.add(match[1])
+  }
+  expect(codes.size).toBeGreaterThan(12)
+  expect([...codes].filter(code => launchErrorCode(code) === 'unlisted'),
+    'add each to LAUNCH_ERROR_CODES (lib/productUsageContract.ts and its backend copy)').toEqual([])
+})
+
+it('counts every Store install or update refusal by its code, so the family adds up to `_failed`', () => {
+  // 2026-10-28: 11 Windows installs failed as `other` and the counters could not say which refusal they were.
+  const emit = vi.fn()
+  productUsageRequest('dsh_install', emit, () => 0, 'app')('GIT_UNAVAILABLE', undefined, false)
+  productUsageRequest('dsh_install', emit, () => 0, 'app')('SHELL_UNAVAILABLE', undefined, false)
+  productUsageRequest('dsh_install', emit, () => 0, 'app')('INTERNAL', undefined, false)
+  productUsageRequest('dsh_install', emit, () => 0, 'phone')('PRIVATE_ERROR_WITH_PATH', undefined, false)
+  productUsageRequest('dsh_install', emit, () => 0, 'app')(undefined, undefined, false, false)
+  productUsageRequest('dsh_update', emit, () => 0, 'app')('UPDATE_FAILED', undefined, false)
+  // Answered without a refusal: no code.
+  productUsageRequest('dsh_install', emit, () => 0, 'app')(undefined, undefined, false, true)
+  productUsageRequest('dsh_remove', emit, () => 0, 'app')('REMOVE_FAILED', undefined, false)
+  const names: string[] = emit.mock.calls.flat()
+  const family = (prefix: string) => names.filter(name => name.startsWith(prefix)).sort()
+  expect(family('store_install_error_code_')).toEqual(['store_install_error_code_git_unavailable', 'store_install_error_code_internal',
+    'store_install_error_code_none', 'store_install_error_code_shell_unavailable', 'store_install_error_code_unlisted'])
+  expect(names.filter(name => name === 'store_install_failed')).toHaveLength(5)
+  expect(family('store_update_error_code_')).toEqual(['store_update_error_code_update_failed'])
+  expect(family('store_remove_error_code_')).toEqual([])
+  for (const name of names.filter(name => name.includes('error_code_'))) expect(PRODUCT_USAGE_METRICS).toContain(name)
+  expect(JSON.stringify(emit.mock.calls)).not.toContain('PRIVATE')
+})
+
 it('marks a Store or model list a person opened, and only those', () => {
   const emit = vi.fn()
   productUsageRequest('dsh_list', emit, Date.now, 'app', true)(undefined, undefined, false)
