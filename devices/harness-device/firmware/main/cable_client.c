@@ -974,10 +974,11 @@ static void handle_supertab_recap(const cJSON *p)
     const bool none = cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(p, "none"));
     ui_supertab_recap(tab, lead, none || !text ? "" : text, secs > 4294967295.0 ? 0xFFFFFFFFu : (uint32_t)secs, none);
 }
+// `supertab.focus` {tab, lead}. An empty `lead` is the desktop on that Swarm's tab with no project open: still a focus.
 static void handle_supertab_focus(const cJSON *p)
 {
     const char *tab = str_of(p, "tab"), *lead = str_of(p, "lead");
-    if (id_fits(tab) && id_fits(lead)) ui_supertab_focus(tab, lead);
+    if (id_fits(tab) && lead && (!lead[0] || id_fits(lead))) ui_supertab_focus(tab, lead);
 }
 
 // `question` {agentId, id, questions, superTab?, attention?}. With a non-empty `superTab` it is a Super Tab wait: the
