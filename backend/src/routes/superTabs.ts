@@ -218,7 +218,11 @@ export async function superTabRoutes(app: FastifyInstance, options: { store?: Su
     (req, reply) => respond(reply, async () => {
       const project = await store.projectRepository(req.user!, req.params.tabId, req.params.projectId)
       return projectGitHubAccess(github?.app ?? null, project.repositoryUrl, { canApprove: !!signIn,
-        approved: async repository => !project.approvalRequired || approvals.approved(req.user!.autonomousEnv, req.params.tabId, req.params.projectId, repository) },
+        approved: async repository => !project.approvalRequired || approvals.approved(req.user!.autonomousEnv, req.params.tabId, req.params.projectId, repository),
+        approvedFor: async repository => {
+          const ids = await approvals.approvedProjects(req.user!.autonomousEnv, req.params.tabId, repository)
+          return project.others.filter(other => ids.includes(other.id)).map(other => other.name)
+        } },
         req.query.refresh === '1')
     }))
   // Approving a project's repository: the person signs in to GitHub through the app (or installs it, which signs them in
