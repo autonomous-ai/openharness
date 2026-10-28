@@ -341,6 +341,7 @@ class _SwarmProjectPageState extends State<SwarmProjectPage> {
                 id: agentId,
                 name: snapshot.agentName(agentId),
                 size: 24,
+                picture: snapshot.agent(agentId)?.avatar,
               ),
         number: g.number == null ? null : '#${g.number}',
         title: g.title,
@@ -409,6 +410,7 @@ class _SwarmProjectPageState extends State<SwarmProjectPage> {
                         id: id,
                         name: snapshot.agentName(id),
                         size: 24,
+                        picture: snapshot.agent(id)?.avatar,
                       ),
                       null => null,
                     },
@@ -731,6 +733,7 @@ class _TeamButton extends StatelessWidget {
                               name: a.name,
                               size: 24,
                               ring: AppGlass.rowFill,
+                              picture: a.agent.avatar,
                             ),
                           ),
                       ],
@@ -982,7 +985,11 @@ class _Mate extends StatelessWidget {
       padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 12),
       child: Row(
         children: [
-          SwarmAvatar(id: glance.agent.id, name: glance.name),
+          SwarmAvatar(
+            id: glance.agent.id,
+            name: glance.name,
+            picture: glance.agent.avatar,
+          ),
           const SizedBox(width: 12),
           Expanded(
             child: Column(

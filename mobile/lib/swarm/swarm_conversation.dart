@@ -541,9 +541,8 @@ class SwarmConversation extends ChangeNotifier {
   ) async {
     final key = (message.id, emoji);
     if (_disposed || !canPost || _reacting.containsKey(key)) return false;
-    final on = !reactionsOf(message).any(
-      (r) => r.emoji == emoji && r.includes('person', reader.accountId),
-    );
+    final on = !reactionsOf(message)
+        .any((r) => r.emoji == emoji && r.includes('person', reader.accountId));
     _reacting[key] = on;
     error = null;
     notifyListeners();

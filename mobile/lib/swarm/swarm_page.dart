@@ -16,6 +16,7 @@ import 'swarm_conversation_page.dart';
 import 'swarm_drawer.dart';
 import 'swarm_inbox.dart';
 import 'swarm_pm_chat.dart';
+import 'swarm_profile_sheet.dart';
 import 'swarm_need_rows.dart';
 import 'swarm_project_page.dart';
 import 'swarm_reader.dart';
@@ -150,6 +151,8 @@ class _SwarmPageState extends State<SwarmPage> {
                     openSwarmConversation(context, swarmId, conversationId),
                 onHarness: widget.onHarness,
                 onSettings: widget.onSettings,
+                onProfile: (swarmId) =>
+                    unawaited(showSwarmProfile(context, swarmId: swarmId)),
               ),
             ),
       body: SafeArea(
@@ -240,7 +243,11 @@ class _SwarmPageState extends State<SwarmPage> {
             SwarmRow(
               key: ValueKey('swarm-home-pm-${swarm.id}-${project.id}'),
               leading: switch (swarmPmId(snapshot, project)) {
-                final id? => SwarmAvatar(id: id, name: snapshot.agentName(id)),
+                final id? => SwarmAvatar(
+                  id: id,
+                  name: snapshot.agentName(id),
+                  picture: snapshot.agent(id)?.avatar,
+                ),
                 null => SwarmProjectTile(project.name),
               },
               title: project.name,

@@ -11,6 +11,7 @@ import 'package:harness_mobile/shared/theme/app_theme.dart';
 
 import 'model.dart';
 import 'swarm_attachment.dart';
+import 'swarm_face.dart';
 import 'swarm_ship_row.dart';
 
 /// The host the backend serves message files from: a link anywhere else is
@@ -104,7 +105,8 @@ List<InlineSpan> _marked(String text, RegExp pattern) {
 }
 
 /// A message's frame: avatar, then who wrote it, their role and [trailing]
-/// (its time) — none of it for a follow-up — then [body].
+/// (its time) — none of it for a follow-up — then [body]. With [onAvatar],
+/// the avatar and the room beside it are one thumb-sized target.
 class SwarmMessageFrame extends StatelessWidget {
   const SwarmMessageFrame({
     super.key,
@@ -112,19 +114,48 @@ class SwarmMessageFrame extends StatelessWidget {
     required this.grouped,
     required this.header,
     required this.body,
+    this.onAvatar,
+    this.avatarKey,
+    this.avatarLabel,
   });
 
   final Widget avatar;
   final bool grouped;
   final Widget header;
   final List<Widget> body;
+  final VoidCallback? onAvatar;
+  final Key? avatarKey;
+
+  /// What the avatar's target is read as.
+  final String? avatarLabel;
+
+  /// The avatar's column: the avatar and the room after it, a thumb wide.
+  static const double column = 44;
 
   @override
   Widget build(BuildContext context) => Row(
     crossAxisAlignment: CrossAxisAlignment.start,
     children: [
-      grouped ? const SizedBox(width: SwarmChatAvatar.size) : avatar,
-      const SizedBox(width: 10),
+      SizedBox(
+        width: column,
+        child: grouped
+            ? null
+            : onAvatar == null
+            ? Align(alignment: Alignment.topLeft, child: avatar)
+            : Semantics(
+                button: true,
+                label: avatarLabel,
+                child: GestureDetector(
+                  key: avatarKey,
+                  behavior: HitTestBehavior.opaque,
+                  onTap: onAvatar,
+                  child: SizedBox(
+                    height: column,
+                    child: Align(alignment: Alignment.topLeft, child: avatar),
+                  ),
+                ),
+              ),
+      ),
       Expanded(
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -144,6 +175,7 @@ class SwarmMessageRow extends StatelessWidget {
     super.key,
     required this.message,
     required this.name,
+    required this.look,
     required this.role,
     required this.mentions,
     required this.grouped,
@@ -153,12 +185,16 @@ class SwarmMessageRow extends StatelessWidget {
     required this.actions,
     required this.onTap,
     required this.onReply,
+    this.onAuthor,
     this.reactions,
     this.onLongPress,
   });
 
   final SuperTabMessage message;
   final String name;
+
+  /// What its author wears.
+  final SwarmLook look;
   final String? role;
 
   final SwarmMentions mentions;
@@ -172,6 +208,9 @@ class SwarmMessageRow extends StatelessWidget {
 
   /// Null where the person cannot post.
   final VoidCallback? onReply;
+
+  /// Who wrote it, in a sheet; null where nothing opens.
+  final VoidCallback? onAuthor;
 
   /// Drawn under its text and files: its reaction counts.
   final Widget? reactions;
@@ -198,11 +237,16 @@ class SwarmMessageRow extends StatelessWidget {
     final padding = EdgeInsets.fromLTRB(6, grouped ? 0 : 7, 6, 7);
     final frame = SwarmMessageFrame(
       grouped: grouped,
+      onAvatar: onAuthor,
+      avatarKey: ValueKey('swarm-author-${message.id}'),
+      avatarLabel: name,
       avatar: SwarmChatAvatar(
         name: name,
         id: message.authorId,
         agent: message.fromAgent,
         pm: role == 'PM',
+        picture: look.picture,
+        status: look.status,
       ),
       header: SwarmMessageHeader(
         name: name,
@@ -368,7 +412,8 @@ class SwarmRoleBadge extends StatelessWidget {
 
 /// Who wrote a message, in a circle: an agent's initial on its own deep
 /// colour — blue for a Product Manager, as the prototype has River — the
-/// person's on theirs, white on each.
+/// person's on theirs, white on each — or the picture they chose, and a
+/// person's status emoji while it lasts.
 class SwarmChatAvatar extends StatelessWidget {
   const SwarmChatAvatar({
     super.key,
@@ -376,6 +421,8 @@ class SwarmChatAvatar extends StatelessWidget {
     required this.id,
     required this.agent,
     this.pm = false,
+    this.picture,
+    this.status,
   });
 
   static const double size = 32;
@@ -398,6 +445,12 @@ class SwarmChatAvatar extends StatelessWidget {
   /// A project's Product Manager: the prototype's blue, kept for them alone.
   final bool pm;
 
+  /// What they chose to wear; null wears the initial.
+  final SuperTabAvatarPicture? picture;
+
+  /// A person's status; null for an agent.
+  final SuperTabPersonStatus? status;
+
   @override
   Widget build(BuildContext context) {
     final fill = !agent
@@ -409,17 +462,27 @@ class SwarmChatAvatar extends StatelessWidget {
     final initial = name.trim().isEmpty
         ? '?'
         : name.trim().characters.first.toUpperCase();
-    return Container(
-      width: size,
-      height: size,
-      alignment: Alignment.center,
-      decoration: BoxDecoration(color: fill, shape: BoxShape.circle),
-      child: Text(
-        initial,
-        style: swarmChatText(
-          13.5,
-          color: Colors.white,
-          weight: FontWeight.w600,
+    return SwarmStatusFace(
+      name: name,
+      size: size,
+      status: status,
+      face: SwarmFace(
+        picture: picture,
+        size: size,
+        tint: fill,
+        fallback: Container(
+          width: size,
+          height: size,
+          alignment: Alignment.center,
+          decoration: BoxDecoration(color: fill, shape: BoxShape.circle),
+          child: Text(
+            initial,
+            style: swarmChatText(
+              13.5,
+              color: Colors.white,
+              weight: FontWeight.w600,
+            ),
+          ),
         ),
       ),
     );

@@ -7,6 +7,8 @@ import 'package:harness_mobile/shared/theme/app_theme.dart';
 import 'package:harness_mobile/shared/widgets/skeleton.dart';
 import 'package:harness_mobile/theme/app_theme.dart' show AppColors;
 
+import 'profile_model.dart';
+import 'swarm_face.dart';
 import 'team_glance.dart';
 
 /// The pieces Swarm's screens are drawn with, as the approved prototype v2
@@ -295,7 +297,8 @@ class SwarmSkeletonRows extends StatelessWidget {
   }
 }
 
-/// A person's or an agent's round mark: their initial on their colour.
+/// A person's or an agent's round mark: their picture, or their initial on
+/// their colour; a person's status emoji at its corner while it lasts.
 class SwarmAvatar extends StatelessWidget {
   const SwarmAvatar({
     super.key,
@@ -303,6 +306,8 @@ class SwarmAvatar extends StatelessWidget {
     required this.name,
     this.size = 32,
     this.ring,
+    this.picture,
+    this.status,
   });
 
   final String id, name;
@@ -311,32 +316,54 @@ class SwarmAvatar extends StatelessWidget {
   /// A ring of this colour around it, where avatars overlap.
   final Color? ring;
 
+  /// What they chose to wear; null wears the initial.
+  final SuperTabAvatarPicture? picture;
+
+  /// A person's status; null for an agent.
+  final SuperTabPersonStatus? status;
+
   @override
-  Widget build(BuildContext context) => Container(
-    width: size,
-    height: size,
-    alignment: Alignment.center,
-    decoration: BoxDecoration(
-      color: swarmAvatarColor(id),
-      shape: BoxShape.circle,
-      border: ring == null
-          ? null
-          : Border.all(
-              color: ring!,
-              width: 2,
-              strokeAlign: BorderSide.strokeAlignOutside,
-            ),
-    ),
-    child: Text(
-      _initial(name),
-      style: TextStyle(
-        color: Colors.white,
-        fontSize: size >= 32 ? 13.5 : 11,
-        fontWeight: FontWeight.w600,
-        height: 1,
+  Widget build(BuildContext context) {
+    final color = swarmAvatarColor(id);
+    final face = SwarmFace(
+      picture: picture,
+      size: size,
+      tint: color,
+      fallback: Container(
+        width: size,
+        height: size,
+        alignment: Alignment.center,
+        decoration: BoxDecoration(color: color, shape: BoxShape.circle),
+        child: Text(
+          _initial(name),
+          style: TextStyle(
+            color: Colors.white,
+            fontSize: size >= 32 ? 13.5 : 11,
+            fontWeight: FontWeight.w600,
+            height: 1,
+          ),
+        ),
       ),
-    ),
-  );
+    );
+    return SwarmStatusFace(
+      name: name,
+      size: size,
+      status: status,
+      face: ring == null
+          ? face
+          : DecoratedBox(
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                border: Border.all(
+                  color: ring!,
+                  width: 2,
+                  strokeAlign: BorderSide.strokeAlignOutside,
+                ),
+              ),
+              child: face,
+            ),
+    );
+  }
 }
 
 /// A project's mark: its initial in a rounded tile.
