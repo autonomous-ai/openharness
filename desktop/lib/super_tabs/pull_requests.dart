@@ -76,6 +76,9 @@ class _SuperTabPullRequestsState extends State<SuperTabPullRequests> {
   final _legacy = <String, PullRequestStatus>{};
   bool _all = false, _loading = false, _showMerged = false, _closed = false;
   bool _unsupported = false, _tickers = true;
+  // This computer's GitHub was not reachable yet, as when a restored Swarm
+  // reads before the computer connects: unlike the other codes, it passes.
+  bool _localUnavailable = false;
   String? _scope, _error;
   String _linksKey = '';
   DateTime? _checkedAt;
@@ -232,9 +235,10 @@ class _SuperTabPullRequestsState extends State<SuperTabPullRequests> {
       final urls = links.keys
           .where((url) => _entries[url]?.finalState != true)
           .toList();
-      if (!_unsupported && urls.isNotEmpty) {
+      if ((!_unsupported || _localUnavailable) && urls.isNotEmpty) {
         final values = <String, SuperTabPullRequestEntry>{};
         String? error;
+        var unsupported = false;
         for (var i = 0; i < urls.length; i += 50) {
           final answer =
               await (widget.read ?? widget.app?.readPullRequestsStatus)?.call(
@@ -248,7 +252,8 @@ class _SuperTabPullRequestsState extends State<SuperTabPullRequests> {
             'OWNER_REQUIRED',
             'LOCAL_GITHUB_UNAVAILABLE',
           ].contains(answer['error'])) {
-            _unsupported = true;
+            unsupported = true;
+            _localUnavailable = answer['error'] == 'LOCAL_GITHUB_UNAVAILABLE';
             break;
           }
           if (answer['error'] is String) error ??= answer['error'];
@@ -264,6 +269,7 @@ class _SuperTabPullRequestsState extends State<SuperTabPullRequests> {
             }
           }
         }
+        _unsupported = unsupported;
         if (error == 'GH_MISSING' || error == 'GH_SIGNED_OUT') {
           // A changed login must not leave yesterday's private titles under today's account.
           _entries.clear();
