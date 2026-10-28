@@ -1382,15 +1382,28 @@ static const ht_run_t *big_run(void) {
 }
 static void tabs_at(int index) { dispatch((action_t){.kind = A_TABS}); ht_tab_carousel_reset(&tab_carousel, tabs_total(), index); scene_take(); }
 static void swarm_tabs_checks(const char *dir) {
-    // A closed tab is not listed: with the desktop open, TABS is the desktop's tabs and nothing else. The desktop opens
-    // every Super Tab its owner has not closed, so a Swarm without a desk tab is one closed there ("PR merge" closed and
-    // still on the dial, 2026-10-27).
+    // TABS is the desktop's tabs and nothing else, with or without a window (Diego, 2026-10-27). The desktop opens every
+    // Super Tab its owner has not closed, so a Swarm without a desk tab is one closed there ("PR merge" closed and still
+    // on the dial).
     swarm_setup();
     assert(tabs_total() == 3 && tab_index_of("s2") < 0 && tab_index_of("s3") < 0);
-    // No desktop window: nothing is open to follow, and every Swarm is listed in the `supertabs` order.
-    ui_swarms_replace(NULL, 0, NULL);
-    assert(tabs_total() == 3 && !strcmp(tab_label(0), "openharness") && !strcmp(tab_label(1), "studio") &&
-           !strcmp(tab_label(2), "playground"));
+    {
+        // Desk tabs [A, S linked], Swarms [S, X, Y]: exactly A and S.
+        reset(); static cable_swarm_t rows[2]; memset(rows, 0, sizeof rows);
+        COPY(rows[0].id, "t0"); COPY(rows[0].name, "Harness repo"); rows[0].agents = 1;
+        COPY(rows[1].id, "t1"); COPY(rows[1].name, "openharness"); rows[1].agents = 0;
+        ui_swarms_replace(rows, 2, "t0");
+        const char ids[3][ID_MAX] = {"s1", "s3", "s2"}; ui_supertabs_ids(ids, 3);
+        openharness_card(); card_send(); card_begin("s2", "", "playground"); card_send(); card_begin("s3", "", "studio"); card_send();
+        assert(tabs_total() == 2 && !strcmp(tab_id_at(0), "t0") && !strcmp(tab_id_at(1), "t1"));
+        assert(!strcmp(tab_label(0), "Harness repo") && !strcmp(tab_label(1), "openharness") && tab_index_of("s1") == 1);
+        // The S desk tab closed: the next `swarms` frame drops S.
+        ui_swarms_replace(rows, 1, "t0");
+        assert(tabs_total() == 1 && tab_index_of("s1") < 0);
+        // No window: no desk tab, so nothing is listed, not X, not Y.
+        ui_swarms_replace(NULL, 0, NULL);
+        assert(tabs_total() == 0 && tab_index_of("s1") < 0 && tab_index_of("s2") < 0 && tab_index_of("s3") < 0);
+    }
     // A desk tab linked to a Swarm keeps its place and name, listed with no agents; it was hidden before the link came.
     swarm_setup();
     assert(s.tab_count == 3 && !strcmp(s.tabs[1].id, "t1") && !strcmp(s.tabs[1].name, "openharness"));
@@ -1401,37 +1414,29 @@ static void swarm_tabs_checks(const char *dir) {
         const char ids[1][ID_MAX] = {"s1"}; ui_supertabs_ids(ids, 1); openharness_card(); card_send();
         assert(s.tab_count == 2 && !strcmp(s.tabs[1].id, "t1"));
     }
-    // With no window the unopened Swarms are listed in the `supertabs` order, not the order their cards came in.
+    // Decision 1: a Swarm's page is drawn as any tab's. The centred name of the linked "openharness" and of the desk tab
+    // "Research" share font and ink.
     swarm_setup();
-    assert(!strcmp(tab_id_at(1), "t1") && !strcmp(tab_id_at(2), "t2"));
-    // Decision 1: a Swarm's page is drawn as any tab's. The centred name of the unopened "playground" and of the desk
-    // tab "Research" share font and ink.
     tabs_at(2); const ht_run_t desk = *big_run();
-    ui_swarms_replace(NULL, 0, NULL);
-    assert(!strcmp(tab_id_at(1), "s3") && !strcmp(tab_id_at(2), "s2"));
-    tabs_at(2); const ht_run_t far = *big_run();
-    assert(!strcmp(far.text, "playground") && far.font == desk.font && far.fg == desk.fg && far.bg == desk.bg);
-    // 1a in "Harness repo", openharness at the right edge; 1b dragging; 1c on openharness; 1d the unopened playground.
+    tabs_at(1); const ht_run_t linked = *big_run();
+    assert(!strcmp(linked.text, "openharness") && linked.font == desk.font && linked.fg == desk.fg && linked.bg == desk.bg);
+    // 1a in "Harness repo", openharness at the right edge; 1b dragging; 1c on openharness.
     swarm_setup(); tabs_at(0); FOCUS_PAGE("swarm-tabs-1a");
     tab_carousel.position = HT_TAB_PITCH / 2; FOCUS_PAGE("swarm-tabs-1b");
     tabs_at(1); assert(!strcmp(big_run()->text, "openharness")); FOCUS_PAGE("swarm-tabs-1c");
-    ui_swarms_replace(NULL, 0, NULL); tabs_at(2); FOCUS_PAGE("swarm-tabs-1d");
-    // A tap on an unopened Swarm's name enters it: no workspace handshake, no switching view, then select and open
-    // for its first Lead by order.
+    // A tap on the Swarm's name enters it: no workspace handshake, no switching view, then select and open for its
+    // first Lead by order ("mobile").
     int switched = tab_switches;
     tap(5000, 233, 233);
-    assert(s.view == HOME && swarm_mode() && !strcmp(sw.tab, "s2") && !strcmp(sw.lead, "P0"));
+    assert(s.view == HOME && swarm_mode() && !strcmp(sw.tab, "s1") && !strcmp(sw.lead, "L0"));
     assert(tab_switches == switched && workspace.phase == HT_WORKSPACE_IDLE && !s.loading);
-    assert(swarm_sent == 3 && !strcmp(swarm_wire[0], "select s2 P0") && !strcmp(swarm_wire[1], "open s2 P0") &&
-           !strcmp(swarm_wire[2], "recap.get s2 P0"));
-    // Done on a Swarm the desktop last showed at a Lead opens on that Lead; the Swarm the dial left is closed.
-    ui_supertab_focus("s3", "K1"); assert(!strcmp(sw.tab, "s2"));
+    assert(swarm_sent == 3 && !strcmp(swarm_wire[0], "select s1 L0") && !strcmp(swarm_wire[1], "open s1 L0") &&
+           !strcmp(swarm_wire[2], "recap.get s1 L0"));
+    // Done on a Swarm the desktop last showed at a Lead opens on that Lead.
+    swarm_leave(); ui_supertab_focus("s1", "L3"); assert(!swarm_mode());
     tabs_at(1); swarm_sent = 0; dispatch((action_t){.kind = A_TAB_DONE});
-    assert(!strcmp(sw.tab, "s3") && !strcmp(sw.lead, "K1") && s.view == HOME && tab_switches == switched);
-    assert(!strcmp(swarm_wire[0], "open s2 ") && !strcmp(swarm_wire[1], "select s3 K1") && !strcmp(swarm_wire[2], "open s3 K1"));
-    // The window comes back: the desk tab linked to openharness enters the Swarm too, at its first project by order ("mobile").
-    desk_open(); tabs_at(1); dispatch((action_t){.kind = A_TAB_DONE});
-    assert(!strcmp(sw.tab, "s1") && !strcmp(sw.lead, "L0") && tab_switches == switched);
+    assert(!strcmp(sw.tab, "s1") && !strcmp(sw.lead, "L3") && s.view == HOME && tab_switches == switched);
+    assert(!strcmp(swarm_wire[0], "select s1 L3") && !strcmp(swarm_wire[1], "open s1 L3"));
     // Hold on a Swarm's face opens TABS on that Swarm.
     s.view = HOME; scene_take();
     habitat_touch(true, 233, 230, 9000); habitat_touch(true, 233, 230, 9700);
@@ -1441,7 +1446,7 @@ static void swarm_tabs_checks(const char *dir) {
     swarm_sent = 0; ht_tab_carousel_reset(&tab_carousel, tabs_total(), 2); scene_take();
     dispatch((action_t){.kind = A_TAB_DONE});
     assert(!swarm_mode() && !strcmp(tab_target, "t2") && tab_switches > switched && !strcmp(swarm_wire[0], "open s1 "));
-    puts("Swarm tabs: linked desk tab kept with no agents, unopened Swarms after the desk tabs in list order, same font and ink, entered with no handshake, remembered Lead, hold to TABS, desk tabs unchanged PASS");
+    puts("Swarm tabs: exactly the desk tabs (closed Swarms never listed, with or without a window), linked desk tab kept with no agents, same font and ink, entered with no handshake, remembered Lead, hold to TABS, desk tabs unchanged PASS");
 }
 
 // Every run's text joined, and the first sprite (the pet's frame): what a face says and which pose it holds.
