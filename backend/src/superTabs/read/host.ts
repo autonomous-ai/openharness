@@ -12,7 +12,7 @@ import { machineBillingAllowsDataPlane } from '../../lib/billingState.js'
 import { fail, type AgentStart, type SuperTabState } from '../model.js'
 import type { SuperTabStore } from '../store.js'
 import type { CacheView } from '../cache.js'
-import { readMachines } from '../cachedReads.js'
+import { readLastChangedAt, readMachines } from '../cachedReads.js'
 import * as parts from '../parts/index.js'
 import type { MachineData, Part } from '../parts/index.js'
 import { READ_FORMAT, type HostChanges, type HostChangesRequest } from './contract.js'
@@ -62,14 +62,13 @@ export class HostReads {
       hostMachineId: machineId, sessionKind: 'team', autonomousEnv: user.autonomousEnv, ...machineAlive }, select: { machineId: true } })
     const full = 'reload' in from
     const woken = full ? null : await this.woken(tx, ids, machineId, from.since)
-    // Only for the Swarms answered for: this runs every second on every host, and seven groupBy over all of a Swarm's parts
-    // are no use for one that has nothing to say (a production backend at 5 pods, 2026-10-27).
-    const newest = await parts.lastChangedAt(tx, woken ? ids.filter(id => woken.has(id)) : ids)
     const tabs = []
     const cached = await this.store.view(woken ? ids.filter(id => woken.has(id)) : ids)
     for (const tabId of ids) {
       if (woken && !woken.has(tabId)) continue
-      const lastChangedAt = newest.get(tabId) ?? null, held = request.held?.[tabId]
+      // A wake can repeat while the cursor overlaps the same change. Share the timestamp at the read's stamp instead
+      // of scanning every part kind again before the unchanged-etag shortcut.
+      const lastChangedAt = await readLastChangedAt(tx, cached, tabId), held = request.held?.[tabId]
       // The etag is the rows' hash and then the signature of what they were built from. A matching signature answers
       // 'unchanged' from version columns alone. Never on a full read: grants and billing live outside the parts.
       const inputs = await cached.get(tabId, 'host:inputs', 'main', () => this.inputs(tx, tabId))
