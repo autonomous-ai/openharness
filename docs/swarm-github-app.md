@@ -282,9 +282,11 @@ private key, in the backend's shared Redis. The backend serves the cached token 
 ten minutes before it expires. Then it mints a new one and leaves the old one to its
 last ten minutes, so a push that took the old token before the renewal is not broken.
 That token is for the one repository and the task's own session. When the task is
-done, cancelled or stopped, when the agent is removed, or when the agent starts a new
-task, every token the task holds is revoked (`DELETE /installation/token`) and
-dropped, replaced ones included. If a revocation fails, Harness logs it without
+done, cancelled or stopped, goes to another agent or attempt, or its agent is removed,
+every token minted for the task is revoked (`DELETE /installation/token`) and dropped,
+replaced ones included, whichever backend instance minted them. A request only ever
+ends its own task: one that waited across its task's end leaves the agent's next task
+alone. If a revocation fails, Harness logs it without
 the token and the task's change goes ahead. The token then expires within the hour.
 The server never logs a token.
 

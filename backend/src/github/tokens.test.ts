@@ -125,12 +125,16 @@ describe('agent tokens', () => {
     }
   })
 
-  it('revokes a token cached for an earlier task before minting for the new one', async () => {
+  it('mints apart for the agent\'s next task, and leaves the earlier task\'s token to that task\'s own end', async () => {
     const { tokens, github } = setup()
     const first = await tokens.issue(request('attempt-1'))
     const second = await tokens.issue(request('attempt-2'))
     expect(second.token).not.toBe(first.token)
+    // A request ends only its own task (third security review of #1976); the store ends the earlier one (workEnded).
+    expect(github.revoked).toEqual([])
+    await tokens.release('tab-1', [{ agentId: 'agent-1', assignmentId: 'attempt-1' }])
     expect(github.revoked).toEqual([first.token])
+    expect((await tokens.issue(request('attempt-2'))).token).toBe(second.token)
   })
 
   it('refuses a repository the app is not installed on, with the install link', async () => {
@@ -189,12 +193,13 @@ describe('revoking when a task ends', () => {
     expect(github.revoked).not.toContain(first.token)
   })
 
-  it('revokes a replaced token too when another task takes the agent', async () => {
+  it('revokes a renewed task\'s replaced token too when it ends after another task took the agent', async () => {
     const { tokens, github, advance } = setup()
     const first = await tokens.issue(request('attempt-1'))
     advance(60 * 60_000 - REUSE_MARGIN_MS + 1000)
     const second = await tokens.issue(request('attempt-1'))
     await tokens.issue(request('attempt-2'))
+    await tokens.release('tab-1', [{ agentId: 'agent-1', assignmentId: 'attempt-1' }])
     expect(github.revoked.sort()).toEqual([first.token, second.token].sort())
   })
 
@@ -254,6 +259,39 @@ describe('revoking when a task ends', () => {
     expect(a!.token).not.toBe(b!.token)
     await one.release('tab-1', [{ agentId: 'agent-1', assignmentId: 'attempt-1' }])
     // The first token and both renewals: none left valid.
+    expect(github.issued.size).toBe(0)
+  })
+
+  // Third security review of #1976: an old task's request paused after its end check; the task ended and the agent's next
+  // task got a token; the old request then read the new task's entry, took it for an ended one, revoked its token and
+  // marked it ended, so the live task was refused for 70 minutes. A request ends only the task it was made for.
+  it('a stale request for an ended task leaves the agent\'s next task and its token alone', async () => {
+    const t = Date.parse('2026-10-24T12:00:00Z')
+    const github = fakeGitHub({ publicKey: key.publicKey, appId: '424242', now: () => t })
+    github.installed.set('acme/app', 77)
+    const memory = new MemoryTokenCache(() => t), secret = randomBytes(32)
+    // The stale instance's first read of the agent's entry waits until the next task has its token.
+    let resume!: () => void
+    const resumed = new Promise<void>(done => { resume = done })
+    let paused = false
+    const gated: TokenCache = { set: (k, v, ttl) => memory.set(k, v, ttl), delete: k => memory.delete(k), add: (k, v, ttl) => memory.add(k, v, ttl),
+      take: k => memory.take(k), get: async k => {
+        if (!paused && k === 'harness:github-token:v1:tab-1:agent-1') { paused = true; await resumed }
+        return memory.get(k)
+      } }
+    const make = (cache: TokenCache) => new GitHubTokens(fakeApp(key.privateKey, github, { now: () => t }), cache, { now: () => t, log: { warn: vi.fn() }, secret })
+    const stale = make(gated), fresh = make(memory)
+    const old = stale.issue(request('attempt-1'))
+    await vi.waitFor(() => expect(paused).toBe(true))
+    await fresh.release('tab-1', [{ agentId: 'agent-1', assignmentId: 'attempt-1' }])
+    const next = await fresh.issue(request('attempt-2'))
+    resume()
+    await expect(old).rejects.toMatchObject({ code: 'NO_ASSIGNMENT' })
+    // The next task's token is still good, and the next task still gets one.
+    expect(github.issued.has(next.token)).toBe(true)
+    await expect(fresh.issue(request('attempt-2'))).resolves.toMatchObject({ repository: 'acme/app' })
+    // The old request's own token went with its task; the next task's end takes every one of its own.
+    await fresh.release('tab-1', [{ agentId: 'agent-1', assignmentId: 'attempt-2' }])
     expect(github.issued.size).toBe(0)
   })
 

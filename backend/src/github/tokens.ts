@@ -177,10 +177,13 @@ export class GitHubTokens {
       // Close to its end, it is left to expire: the agent may still be using it, in a push that took it before this renewal.
       // It stays among the task's minted tokens, so the task's end revokes it too (Lead, 2026-10-28).
       if (Date.parse(cached.expiresAt) - this.now() > REUSE_MARGIN_MS) entry = cached
-    } else if (cached) {
-      // An earlier task's, or another repository's: every token minted for it goes now. Another task means that one ended.
-      await this.revokeTask(request.tabId, request.agentId, cached.assignmentId, 'replaced', cached.assignmentId !== request.assignmentId, cached)
+    } else if (cached?.assignmentId === request.assignmentId) {
+      // This task's, for another repository (the project's address changed): every token minted for it goes now.
+      await this.revokeTask(request.tabId, request.agentId, cached.assignmentId, 'replaced', false, cached)
     }
+    // Another task's entry is not this request's to end: a request may have waited across its own task's end and the
+    // agent's next task, and ending what it found there revoked the live task's token and refused it (third security review
+    // of #1976). That task's own end (release) takes every token minted for it, whichever entry is cached then.
     if (!entry) {
       // Under the name GitHub knows it by now (app.ts `resolve`); the agent's checkout keeps the name it was given, which
       // GitHub still answers for git.
