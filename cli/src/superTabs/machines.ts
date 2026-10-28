@@ -724,15 +724,23 @@ export class ContributedMachines {
     // (services/processCoreApi.ts). Diego 10-29: closeStarted is the agent cleanup's alone, so under harnessd the Swarm's
     // process had none, closed nothing and kept every folder. The core closes only a member its host retains or one this
     // start's receipt names; any other agent-started session here stays open, and its folder with it.
+    // Why each close failed, by the folder it ran in: review of #2070, a removal that never confirmed said nothing of why.
+    const refused = new Map<string, string>()
     for (const agent of this.core.agents.live()) {
       if (agent.startedBy === 'agent' && (swarm.has(agent.agentId) || inside(agent.cwd))) {
-        await this.core.agents.closeMember?.(agent.agentId, receipts.get(agent.agentId)).catch(() => null)
+        const answer = await (this.core.agents.closeMember?.(agent.agentId, receipts.get(agent.agentId)) ?? Promise.resolve({ error: 'UNSUPPORTED' }))
+          .catch((error: unknown) => ({ error: error instanceof Error ? error.message : String(error) }))
+        if (typeof answer.error === 'string' && agent.cwd) refused.set(agent.cwd, answer.error)
       }
     }
     const open = this.core.agents.live().map(a => a.cwd).filter((cwd): cwd is string => !!cwd)
-    const kept: string[] = []
+    const kept = new Set<string>()
     for (const target of targets) {
-      if (open.some(cwd => within(target, cwd))) { this.log(`Kept ${basename(target)}: a session still runs in it.`); kept.push(basename(target)); continue }
+      if (open.some(cwd => within(target, cwd))) {
+        const reasons = [...new Set([...refused].filter(([cwd]) => within(target, cwd)).map(([, error]) => error))]
+        this.log(`Kept ${basename(target)}: a session still runs in it${reasons.length ? `; its close was refused: ${reasons.join(', ')}` : ''}.`)
+        kept.add(basename(target)); continue
+      }
       if (addedAgain(await read())) return
       const source = candidates.find(c => c.path === target)?.source
       // git forgets the worktree in its repository too; a folder it refuses (a submodule, a lock) is deleted as a folder.
@@ -741,7 +749,7 @@ export class ContributedMachines {
     }
     // Diego 10-29: a folder kept for a live session was confirmed cleaned anyway and its records dropped, so nothing ever
     // tried it again. Unconfirmed, the cleanup row stays and the next try comes on clean()'s backoff.
-    if (kept.length) throw new Error(`Did not finish cleaning up Swarm ${tabId} yet: a session still runs in ${kept.join(', ')}. It tries again later.`)
+    if (kept.size) throw new Error(`Did not finish cleaning up Swarm ${tabId} yet: a session still runs in ${[...kept].join(', ')}. It tries again later.`)
     if (addedAgain(await read())) return
     writeWorktrees(file, readWorktrees(file).filter(w => w.tabId !== tabId))
     await this.deps.backend(this.core, 'POST', `/api/super-tabs/${tabId}/commands`, { operationId: `machine-cleaned-${removalId}`,

@@ -1725,7 +1725,7 @@ describe('removed machine cleanup', () => {
     m.setLive([person])
     const host = m.open()
     await expect(host.clean('tab', 'removal')).rejects.toThrow('a session still runs in tab.')
-    expect(m.core.agents.closeMember).not.toHaveBeenCalledWith('person', undefined)
+    expect(vi.mocked(m.core.agents.closeMember!).mock.calls.map(([agentId]) => agentId)).not.toContain('person')
     expect(existsSync(m.newRoot)).toBe(true)
     expect(existsSync(join(m.data, 'swarm-projects', 'tab'))).toBe(false)
     expect(m.log.mock.calls.flat().join('\n')).toContain('Kept tab: a session still runs in it.')
@@ -1766,14 +1766,30 @@ describe('removed machine cleanup', () => {
     expect(records(m)).toEqual(['other-tab'])
   })
 
-  it('confirms nothing and keeps the records while a Swarm agent in the clone does not close', async () => {
+  // Review of #2070: the close's answer was thrown away, so a removal that never confirmed said nothing of why.
+  it.each([
+    ['refuses', (m: ReturnType<typeof machine>) => vi.mocked(m.core.agents.closeMember!).mockResolvedValue({ error: 'SERVICE_UNAVAILABLE' } as never), 'SERVICE_UNAVAILABLE'],
+    ['fails', (m: ReturnType<typeof machine>) => vi.mocked(m.core.agents.closeMember!).mockRejectedValue(new Error('core link down')), 'core link down'],
+  ])('confirms nothing, keeps the records and logs why while a Swarm agent in the clone %s to close', async (_how, fail, reason) => {
     const m = machine()
-    vi.mocked(m.core.agents.closeMember!).mockResolvedValue({ error: 'SERVICE_UNAVAILABLE' } as never)
+    fail(m)
     await expect(m.open().clean('tab', 'removal')).rejects.toThrow('a session still runs in recorded.')
     expect(m.core.agents.closeMember).toHaveBeenCalledWith('h-recorded', undefined)
     expect(existsSync(m.recorded)).toBe(true)
     expect(m.acks()).toEqual([])
     expect(records(m)).toEqual(['tab', 'other-tab'])
+    expect(m.log.mock.calls.flat().filter(line => String(line).startsWith('Kept recorded:')))
+      .toEqual([`Kept recorded: a session still runs in it; its close was refused: ${reason}.`])
+  })
+
+  // Review of #2070: both of a tab's clone roots end in its id, and the message named it twice.
+  it('names each kept folder once', async () => {
+    const m = machine()
+    const cloned = join(m.data, 'swarm-projects', 'tab', 'project')
+    m.setLive([session('h-recorded', m.recorded, 'agent'), session('person', cloned), session('another-person', m.newRoot)])
+    vi.mocked(m.core.agents.closeMember!).mockResolvedValue({ error: 'NOT_A_MEMBER' } as never)
+    await expect(m.open().clean('tab', 'removal')).rejects.toThrow(
+      new Error('Did not finish cleaning up Swarm tab yet: a session still runs in recorded, tab. It tries again later.'))
   })
 
   it('finishes a cleanup after a restart that interrupted its acknowledgement', async () => {
