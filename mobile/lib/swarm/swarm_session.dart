@@ -5,9 +5,11 @@ import 'package:flutter/widgets.dart';
 import '../notify/system_notices.dart';
 import '../settings/experimental_features.dart';
 import 'swarm_choices.dart';
+import 'swarm_face.dart';
 import 'swarm_home_cache.dart';
 import 'swarm_inbox.dart';
 import 'swarm_notices.dart';
+import 'swarm_profile.dart';
 import 'swarm_request.dart';
 import 'swarm_start.dart';
 
@@ -177,6 +179,7 @@ class SwarmHost extends ChangeNotifier {
     ExperimentalFeaturesStore? features,
     this.computers,
     SwarmHomeCache? homeCache,
+    this.uploadAvatar,
   }) : features = features ?? experimentalFeaturesStore,
        homeCache = homeCache ?? SwarmHomeCache.device() {
     account.addListener(_update);
@@ -201,6 +204,10 @@ class SwarmHost extends ChangeNotifier {
   /// The last Home of the session's account, kept for a cold start; cleared
   /// when the account leaves or Swarm is turned off.
   final SwarmHomeCache homeCache;
+
+  /// Sends an avatar photo with the phone's own sign-in; null where none can
+  /// go, and only the built-in pictures are offered.
+  final SwarmAvatarUpload? uploadAvatar;
 
   SwarmSession? session;
   bool _foreground = true;
@@ -232,7 +239,10 @@ class SwarmHost extends ChangeNotifier {
       return;
     }
     // Signed out, another account, or Swarm turned off: nothing of it stays.
-    if (session != null) unawaited(homeCache.clear());
+    if (session != null) {
+      unawaited(homeCache.clear());
+      swarmForgetAvatarImages();
+    }
     session?.dispose();
     session = id == null
         ? null
@@ -270,6 +280,13 @@ class SwarmScope extends InheritedNotifier<SwarmHost> {
       .dependOnInheritedWidgetOfExactType<SwarmScope>()
       ?.notifier
       ?.session;
+
+  /// How an avatar photo goes up ([SwarmHost.uploadAvatar]); null outside
+  /// the shell or where none can.
+  static SwarmAvatarUpload? uploadAvatarOf(BuildContext context) => context
+      .dependOnInheritedWidgetOfExactType<SwarmScope>()
+      ?.notifier
+      ?.uploadAvatar;
 
   /// The account's computers ([SwarmHost.computers]); null outside the shell
   /// or where none were handed in.

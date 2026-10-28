@@ -91,6 +91,67 @@ void main() {
     });
   });
 
+  group('faces kept', () {
+    /// A Swarm where River wears an uploaded photo, Nova the owl, and the
+    /// person the fox and a status.
+    SuperTabSnapshot faces() {
+      final load = firstLoad(
+        agents: [
+          {
+            ...agent('agent-lead', name: 'Lead', displayName: 'River'),
+            'avatar': {'kind': 'upload'},
+          },
+          {
+            ...agent('agent-builder', displayName: 'Nova'),
+            'avatar': {'kind': 'preset', 'key': 'owl'},
+          },
+        ],
+        derived: {
+          'avatars': {
+            'agent:agent-lead':
+                'https://storage.googleapis.com/avatars/river.png?sig=secret',
+          },
+        },
+      );
+      load['members'] = [
+        part(me, 1, {
+          ...person(me),
+          'avatar': {'kind': 'preset', 'key': 'fox'},
+          'status': {'text': 'At the dentist', 'emoji': null, 'until': null},
+        }),
+      ];
+      return SuperTabSnapshot.fromJson(SuperTabParts.firstLoad(load).state);
+    }
+
+    test('a built-in picture is kept by its name', () {
+      final back = SuperTabSnapshot.fromJson(
+        swarmHomeSwarm(faces(), const {}).state,
+      );
+      expect(
+        (back.agent('agent-builder')!.avatar! as SuperTabPresetAvatar).key,
+        'owl',
+      );
+      expect((back.people.single.avatar! as SuperTabPresetAvatar).key, 'fox');
+    });
+
+    test('a photo, its link and a status are never kept', () {
+      final snapshot = faces();
+      expect(
+        snapshot.agent('agent-lead')!.avatar,
+        isA<SuperTabUploadedAvatar>(),
+      );
+      final kept = swarmHomeSwarm(snapshot, const {}).state;
+      final text = jsonEncode(kept);
+      expect(text, isNot(contains('storage.googleapis.com')));
+      expect(text, isNot(contains('sig=secret')));
+      expect(text, isNot(contains('upload')));
+      expect(text, isNot(contains('At the dentist')));
+      final back = SuperTabSnapshot.fromJson(kept);
+      expect(back.agent('agent-lead')!.avatar, isNull);
+      expect(back.people.single.status, isNull);
+    });
+  });
+
   group('kept on the phone', () {
     late Directory dir;
     late MemorySwarmHomeKey key;
