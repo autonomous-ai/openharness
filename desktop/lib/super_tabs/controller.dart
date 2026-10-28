@@ -691,6 +691,22 @@ class SuperTabController extends ChangeNotifier {
   /// ([showLatest]).
   final _latestWanted = <String>{};
 
+  /// How many pages joined below the rows of a reader scrolled up, by
+  /// conversation.
+  final _pagesBelow = <String, int>{};
+
+  /// At most this many pages join below a reader scrolled up: past them the
+  /// rest waits for [showLatest], so a long burst is not all held.
+  static const _pagesBelowReader = 3;
+
+  /// Forgets reading back in [id], or in every conversation.
+  void _forgetNewer([String? id]) {
+    for (final kept in [_readingBack, _newer, _latestWanted]) {
+      id == null ? kept.clear() : kept.remove(id);
+    }
+    id == null ? _pagesBelow.clear() : _pagesBelow.remove(id);
+  }
+
   /// The reader of [id] scrolled up, or back to its end. While they read
   /// back, a read that finds more than a page new keeps the rows they are
   /// reading and adds the next page below; [showLatest] reads the rest.
@@ -910,6 +926,7 @@ class SuperTabController extends ChangeNotifier {
     snapshot = null;
     _parts = null;
     _messages.clear();
+    _forgetNewer();
     _quoted.clear();
     _quoting.clear();
     _sent.clear();
@@ -1768,6 +1785,7 @@ class SuperTabController extends ChangeNotifier {
       snapshot = null;
       _parts = null;
       _messages.clear();
+      _forgetNewer();
       _quoted.clear();
       _quoting.clear();
       _poll?.cancel();
@@ -1833,8 +1851,23 @@ class SuperTabController extends ChangeNotifier {
       // below them, and the rest waits for [showLatest].
       final skipped = query.startsWith('?after=') && answer['next'] != null;
       final keepPlace = skipped && _readingBack.contains(id);
+      final full = keepPlace && (_pagesBelow[id] ?? 0) >= _pagesBelowReader;
       if (!_disposed && skipped && !keepPlace) {
         answer = await request('GET', _messagesPath(id));
+      } else if (!_disposed && keepPlace) {
+        // A changed reaction refreshes the page ending at the newest held:
+        // the latest page, under rows read back, would leave a gap.
+        final shown = reacted
+            ? (await request(
+                    'GET',
+                    '${_messagesPath(id)}?before=${tail! + 1}',
+                  ))['messages']
+                  as List
+            : const [];
+        answer = {
+          ...answer,
+          'messages': [...shown, if (!full) ...answer['messages'] as List],
+        };
       } else if (!_disposed &&
           !older &&
           (!light || reacted) &&
@@ -1940,7 +1973,13 @@ class SuperTabController extends ChangeNotifier {
       // An adapting read that found nothing new changes nothing on screen.
       final same = _policy.adapts && _sameMessages(_messages[id], next);
       _messages[id] = next;
-      if (!older) keepPlace ? _newer.add(id) : _newer.remove(id);
+      if (keepPlace) {
+        _newer.add(id);
+        if (!full) _pagesBelow[id] = (_pagesBelow[id] ?? 0) + 1;
+      } else if (!older) {
+        _newer.remove(id);
+        _pagesBelow.remove(id);
+      }
       _dropShownSends(id);
       if (reactionSeq is int) _reactionSeq[id] = reactionSeq;
       if (older || replacing || !_before.containsKey(id)) {
@@ -1958,6 +1997,7 @@ class SuperTabController extends ChangeNotifier {
       if (failure is SuperTabFailure &&
           const {'FORBIDDEN', 'NOT_FOUND'}.contains(failure.code)) {
         _messages.remove(id);
+        _forgetNewer(id);
         _quoted.remove(id);
         _quoting.remove(id);
         unawaited(refresh());
