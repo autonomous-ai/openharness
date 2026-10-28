@@ -22,6 +22,11 @@ const envSchema = z.object({
   // manager socket may land on different backend instances; Redis pub/sub bridges them
   // (channels up:{machineId} / down:{machineId}) plus an agent→manager presence key. See lib/bus.ts.
   REDIS_URL: z.string().default('redis://localhost:6379'),
+  // What each process keeps of the Swarms it read, by their stamps in Redis (superTabs/cache.ts). 'off' is the kill switch:
+  // every read goes to Mongo again, while writes still bump the stamps, so processes that keep theirs on stay right.
+  SWARM_READ_CACHE: z.enum(['on', 'off']).default('on'),
+  // Its size per process, counted as the JSON size of what it holds.
+  SWARM_CACHE_MB: z.string().default('64').transform(Number),
 
   // This backend instance's stable id (used to route manager-command replies via Redis in a
   // multi-instance deploy). Defaults to the pm2 instance index or a per-process fallback.

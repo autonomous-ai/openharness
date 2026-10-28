@@ -1,5 +1,6 @@
 import 'dotenv/config'
-import { closeBus } from './lib/bus.js'
+import { closeBus, redisSwarmStamps } from './lib/bus.js'
+import { configureSwarmStamps } from './superTabs/cache.js'
 import { reconcileCommunityLikeCounts } from './lib/db/communityLikeCounts.js'
 import { backfillMachineFreeEntitlements } from './lib/db/freeEntitlement.js'
 import {
@@ -71,6 +72,8 @@ async function start(): Promise<void> {
 
   machineBillingWorkerService.start()
   productUsagePeopleRollupService.start()
+  // The worker's sweeps and archive write Swarms: they bump the stamps the API processes read by. It reads too little to keep a cache.
+  configureSwarmStamps(redisSwarmStamps(), { reads: false })
   stopSweeps = startSwarmSweeps(prisma)
   // Finished groups archive once GitHub says their pull requests are merged or closed; without the app, only groups that
   // link none do (superTabs/archive.ts).

@@ -3,6 +3,7 @@ import type { Prisma } from '@prisma/client'
 import { activeWork, stableId, type AgentStart, type Agent } from '../model.js'
 import type { GroupData, MachineData, PartKind } from './types.js'
 import { RETENTION_MS } from './types.js'
+import { noteChange } from '../cache.js'
 
 type Transaction = Prisma.TransactionClient
 const json = (value: unknown): Prisma.InputJsonValue => JSON.parse(JSON.stringify(value)) as Prisma.InputJsonValue
@@ -101,6 +102,8 @@ async function keepFinishedAt(tx: Transaction, id: string, fields: Record<string
  */
 export async function guardedWrite(tx: Transaction, tabId: string, write: PartWrite, stamp: number): Promise<number> {
   const model = delegate(tx, write.kind), id = partId(tabId, write.key)
+  // A machine's own reading leaves what its host hears of unmarked (commit.ts hostMarker): only the machine stamp moves.
+  if (write.op !== 'touch') noteChange(tx, tabId, write.kind === 'machine' && write.op === 'update' && !write.host ? 'machine' : 'main')
   if (write.op === 'insert') {
     let fields = { ...extracted(write.kind, write.data, stamp), ...write.head, ...write.host }
     // A part added again under the same key continues from its tombstone's version (spec ruling 6).

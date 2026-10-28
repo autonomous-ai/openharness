@@ -25,6 +25,7 @@ import { archivable, archiveLine, stopIdleWorkers, stoppedMachines } from './tid
 import { clock, insertParts, lastChangedAt, loadActive, reassemble, split, type HeadData, type SwarmParts } from './parts/index.js'
 import { commitParts, indexesOf, numberMessages, type Touch, type Written } from './parts/commit.js'
 import { touchesFor } from './parts/touches.js'
+import { swarmTransaction } from './cache.js'
 import { revokeNativeContexts, SuperTabNativeStore } from './native.js'
 import {
   activeWork, actorKey, agent, agentOnly, agentRole, appendPullRequestUrls, author, conversation, createSuperTab, fail, person, stableId, visibleState, finishWorker,
@@ -130,7 +131,7 @@ export async function loadRow(tx: Transaction, row: SuperTab, named: Named = {})
 export async function transaction<T>(db: Pick<PrismaClient, '$transaction'>, body: (tx: Transaction) => Promise<T>,
   sleep: (ms: number) => Promise<void> = ms => new Promise(resolve => setTimeout(resolve, ms))): Promise<T> {
   for (let attempt = 1; ; attempt++) {
-    try { return await db.$transaction(body, TRANSACTION_OPTIONS) } catch (error) {
+    try { return await swarmTransaction(db, body, TRANSACTION_OPTIONS) } catch (error) {
       if (!retryable(error)) throw error
       if (attempt >= TRANSACTION_ATTEMPTS) {
         // A unique key still taken after every retry is a real duplicate, not contention.

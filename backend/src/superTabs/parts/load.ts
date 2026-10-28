@@ -2,6 +2,7 @@ import type { Prisma } from '@prisma/client'
 import { delegate, extracted, partId, type PartRow } from './write.js'
 import type { GroupData, HeadData, Part, PartKind, SwarmParts } from './types.js'
 import { PART_KINDS } from './types.js'
+import { noteChange } from '../cache.js'
 
 type Transaction = Prisma.TransactionClient
 type Where = Record<string, unknown>
@@ -50,6 +51,7 @@ export function loadAll(tx: Transaction, tabId: string): Promise<SwarmParts> {
 /** Inserts a Swarm's parts as they are (the migration, a new Swarm). An existing part fails with P2002. */
 export async function insertParts(tx: Transaction, parts: SwarmParts): Promise<void> {
   const { tabId } = parts
+  noteChange(tx, tabId, 'main')
   const rows = (kind: PartKind, list: Part[]) => list.map(part => ({ id: partId(tabId, part.key), tabId, key: part.key, version: part.version,
     changedAt: new Date(part.changedAt), deleted: !!part.deleted, ordinal: part.ordinal, data: part.data as Prisma.InputJsonValue,
     ...extracted(kind, part.data, part.changedAt),
