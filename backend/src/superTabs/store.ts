@@ -1578,10 +1578,11 @@ export class SuperTabStore {
     return transaction(this.db, async tx => {
       let loaded = await this.load(tx, user, tabId)
       // Work finished since the last digest and archived or asleep since still shipped, but ordinary loads leave it out
-      // (#1757 review, 4): a due digest loads it.
+      // (#1757 review, 4): a due digest loads it. A paused Swarm sends none (digest.ts digestRequest), so its digest stays
+      // due: it loads nothing for it, or every poll repeats the loads over a growing window (Diego's issue file, 2026-10-27).
       const led = ledProject(loaded.state, agentId)
       let asked: Array<{ conversationId: string; personId: string; count: number }> = []
-      if (led && digestDue(led, this.now())) {
+      if (led && !loaded.state.paused && digestDue(led, this.now())) {
         const finished = await tx.swarmGroup.findMany({ where: { tabId, deleted: false, dormant: true, lastActivityAt: { gte: new Date(digestSince(led, this.now())) },
           OR: [{ projectId: led.id }, ...led.id === 'lead' ? [{ projectId: null }] : []] }, select: { key: true } })
         // A decision waits in its conversation even once that conversation went quiet.
