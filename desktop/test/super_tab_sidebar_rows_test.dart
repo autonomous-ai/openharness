@@ -283,6 +283,78 @@ void main() {
   });
 
   testWidgets(
+    'unread and waiting conversations older than the 8 newest stay listed',
+    (tester) async {
+      final server = humansSwarm();
+      addNumberedWorkgroups(server, 11);
+      // #2 waits for a person to answer its Engineer.
+      (server.state['conversations'] as List)
+          .cast<Map<String, dynamic>>()
+          .firstWhere((g) => g['id'] == 'g2')
+        ..['agentIds'] = ['lead-agent']
+        ..['assignment'] = {'agentId': 'lead-agent', 'status': 'needs_human'};
+      final controller = await show(tester, server);
+      server.append('New work', conversationId: 'g1');
+      await controller.refresh();
+      await tester.tap(toggle);
+      await tester.pumpAndSettle();
+      expect(find.byKey(const ValueKey('super-group-g1')), findsOneWidget);
+      expect(find.byKey(const ValueKey('super-group-g2')), findsOneWidget);
+      expect(find.byKey(const ValueKey('super-group-g3')), findsNothing);
+      expect(find.text('… 2 more'), findsOneWidget);
+      await close(tester, controller);
+    },
+  );
+
+  testWidgets(
+    'a collapsed project holding the open conversation shows as selected',
+    (tester) async {
+      final server = humansSwarm();
+      addNumberedWorkgroups(server, 1);
+      final controller = await show(tester, server);
+      Color? projectFill() => tester
+          .widget<Material>(
+            find.ancestor(of: project, matching: find.byType(Material)).first,
+          )
+          .color;
+      await controller.select('g1');
+      await tester.pumpAndSettle();
+      expect(projectFill(), Colors.transparent);
+
+      await tester.tap(toggle);
+      await tester.pumpAndSettle();
+      expect(controller.selectedId, 'g1');
+      expect(projectFill(), grid.AppSurface.selectedFill);
+
+      await tester.tap(toggle);
+      await tester.pumpAndSettle();
+      expect(projectFill(), Colors.transparent);
+      await close(tester, controller);
+    },
+  );
+
+  testWidgets('an arrow a project name cannot use moves focus as usual', (
+    tester,
+  ) async {
+    final controller = await show(tester, humansSwarm());
+    await tester.tap(toggle);
+    await tester.pumpAndSettle();
+    expect(controller.expandedProjects, {'lead'});
+    Focus.of(tester.element(find.text('Pilot'))).requestFocus();
+    await tester.pumpAndSettle();
+
+    // Already open: → goes on to the chevron beside the name.
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
+    await tester.pumpAndSettle();
+    expect(controller.expandedProjects, {'lead'});
+    expect(
+      primaryFocus?.context?.findAncestorWidgetOfExactType<InkWell>()?.key,
+      const ValueKey('super-project-toggle-lead'),
+    );
+    await close(tester, controller);
+  });
+
+  testWidgets(
     'Enter on a project name opens it; → and ← show and hide its conversations',
     (tester) async {
       final controller = await show(tester, humansSwarm());
@@ -303,9 +375,6 @@ void main() {
 
       // Opening the chat moved focus into it.
       await focusName();
-      await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
-      await tester.pumpAndSettle();
-      expect(controller.expandedProjects, {'lead'});
       await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
       await tester.pumpAndSettle();
       expect(controller.expandedProjects, {'lead'});

@@ -184,16 +184,26 @@ class ProjectSidebar extends StatelessWidget {
     );
     final expanded =
         project != null && controller.expandedProjects.contains(project.id);
+    // A collapsed project shows as selected while one of its conversations it
+    // hides is open; its Chat with PM has a row of its own.
+    final highlighted =
+        selected ||
+        (project != null &&
+            !expanded &&
+            !devicesSelected &&
+            !notificationsSelected &&
+            controller.selected?.projectId == project.id &&
+            controller.selectedId != pmChat?.id);
     final style = DesktopChrome.control(
-      medium: unread || selected,
-      color: selected || unread || project != null || label != null
+      medium: unread || highlighted,
+      color: highlighted || unread || project != null || label != null
           ? DesktopChrome.foreground
           : DesktopChrome.muted,
     );
     return Padding(
       padding: const EdgeInsets.only(bottom: 2),
       child: Material(
-        color: selected ? grid.AppSurface.selectedFill : Colors.transparent,
+        color: highlighted ? grid.AppSurface.selectedFill : Colors.transparent,
         borderRadius: BorderRadius.circular(DesktopChrome.rowRadius),
         clipBehavior: Clip.antiAlias,
         // The chevron stands beside the row's own click, not inside it: the
@@ -201,21 +211,9 @@ class ProjectSidebar extends StatelessWidget {
         child: Row(
           children: [
             Expanded(
-              child: CallbackShortcuts(
-                bindings: project == null
-                    ? const {}
-                    : {
-                        const SingleActivator(
-                          LogicalKeyboardKey.arrowRight,
-                        ): () {
-                          if (!expanded) controller.toggleProject(project.id);
-                        },
-                        const SingleActivator(
-                          LogicalKeyboardKey.arrowLeft,
-                        ): () {
-                          if (expanded) controller.toggleProject(project.id);
-                        },
-                      },
+              child: _arrowToggles(
+                project,
+                expanded: expanded,
                 child: InkWell(
                   key: ValueKey(key ?? 'super-group-${group.id}'),
                   onTap: () => onSelect(group.id),
@@ -334,6 +332,36 @@ class ProjectSidebar extends StatelessWidget {
       ),
     );
   }
+
+  /// On a focused project name, → shows its conversations and ← hides them.
+  /// An arrow that would change nothing moves focus as it does elsewhere.
+  Widget _arrowToggles(
+    SuperTabProject? project, {
+    required bool expanded,
+    required Widget child,
+  }) => project == null
+      ? child
+      : Focus(
+          canRequestFocus: false,
+          skipTraversal: true,
+          onKeyEvent: (node, event) {
+            final keyboard = HardwareKeyboard.instance;
+            final toggles =
+                event is! KeyUpEvent &&
+                !keyboard.isShiftPressed &&
+                !keyboard.isControlPressed &&
+                !keyboard.isAltPressed &&
+                !keyboard.isMetaPressed &&
+                (event.logicalKey == LogicalKeyboardKey.arrowRight
+                    ? !expanded
+                    : event.logicalKey == LogicalKeyboardKey.arrowLeft &&
+                          expanded);
+            if (!toggles) return KeyEventResult.ignored;
+            controller.toggleProject(project.id);
+            return KeyEventResult.handled;
+          },
+          child: child,
+        );
 
   /// The chevron that shows or hides a project's conversations: '>' while
   /// they are hidden, 'v' while shown. Focused, Enter or Space toggles it; on
@@ -567,9 +595,15 @@ class ProjectSidebar extends StatelessWidget {
             _NewestConversations(
               key: ValueKey('super-project-list-${project.id}'),
               rows: [for (final group in groups) (group.id, _row(group))],
-              selectedId: devicesSelected || notificationsSelected
-                  ? null
-                  : controller.selectedId,
+              // Never behind "… N more": the open one, and those with
+              // something to read or answer.
+              kept: {
+                if (!devicesSelected && !notificationsSelected)
+                  controller.selectedId,
+                for (final group in groups)
+                  if (controller.unread(group) || needsHuman(group) > 0)
+                    group.id,
+              },
               more: (hidden, onTap) => _moreRow(project, hidden, onTap),
             ),
           ];
@@ -703,13 +737,14 @@ class ProjectSidebar extends StatelessWidget {
 }
 
 /// A project's open conversations, newest first: the first
-/// [_NewestConversations.shown] and the open one, then a "… N more" row that
-/// shows the rest. Showing the rest lasts until the project is collapsed.
+/// [_NewestConversations.shown] and the [_NewestConversations.kept] ones, then
+/// a "… N more" row that shows the rest. Showing the rest lasts until the
+/// project is collapsed.
 class _NewestConversations extends StatefulWidget {
   const _NewestConversations({
     super.key,
     required this.rows,
-    required this.selectedId,
+    required this.kept,
     required this.more,
   });
 
@@ -717,7 +752,9 @@ class _NewestConversations extends StatefulWidget {
 
   /// Each conversation's id and row, newest first.
   final List<(String, Widget)> rows;
-  final String? selectedId;
+
+  /// Listed even when older than the newest.
+  final Set<String> kept;
   final Widget Function(int hidden, VoidCallback onTap) more;
 
   @override
@@ -735,7 +772,7 @@ class _NewestConversationsState extends State<_NewestConversations> {
         : [
             for (final (index, row) in rows.indexed)
               if (index < _NewestConversations.shown ||
-                  row.$1 == widget.selectedId)
+                  widget.kept.contains(row.$1))
                 row,
           ];
     return Column(
