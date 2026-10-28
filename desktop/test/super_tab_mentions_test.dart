@@ -566,6 +566,41 @@ void main() {
       );
     });
 
+    testWidgets('a tag far past a reader scrolled up opens at its message', (
+      tester,
+    ) async {
+      final server = ConversationServer();
+      server.state['conversations'] = [
+        ...server.state['conversations'] as List,
+        conversationFixture('group', 'Release'),
+      ];
+      for (var i = 1; i <= 100; i++) {
+        server.append('Note $i', conversationId: 'group');
+      }
+      final c = await showView(tester, server);
+      await c.loadMessages('group');
+      // The reader had scrolled up there, then 600 arrived: more than the
+      // pages that join below them.
+      c.readingBack('group', true);
+      for (var i = 101; i <= 700; i++) {
+        server.append('Note $i', conversationId: 'group');
+      }
+      server.tag('message-650', conversationId: 'group', text: 'Note 650');
+      await tester.tap(notificationsEntry());
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('super-mention-mention-1')));
+      await tester.pumpAndSettle();
+      expect(
+        find.text('This message is no longer in the conversation.'),
+        findsNothing,
+      );
+      expect(c.selectedId, 'group');
+      expect(
+        find.byKey(const ValueKey('super-message-message-650')).hitTestable(),
+        findsOneWidget,
+      );
+    });
+
     testWidgets('opening a tag shows its message with the reply box on it', (
       tester,
     ) async {

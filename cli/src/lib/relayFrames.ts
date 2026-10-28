@@ -56,7 +56,8 @@ export const GATEWAY_REQUEST_TYPES = new Set(['device_e2ee_pair', 'phone_pair', 
 /** A window's connection to another machine could not be made: why, and the close code to tell it. Here and
  *  not with the relay pool, so the local socket can tell one apart without loading the pool. */
 export class RelayConnectError extends Error {
-  constructor(message: string, readonly closeCode?: number) {
+  /** `retryAfterMs`: how long the backend asked not to be asked again (its MACHINE_OFFLINE refusal of a relay). */
+  constructor(message: string, readonly closeCode?: number, readonly retryAfterMs?: number) {
     super(message)
     this.name = 'RelayConnectError'
   }
