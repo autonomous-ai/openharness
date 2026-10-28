@@ -306,6 +306,151 @@ void main() {
     expect(recorder.recording, isFalse);
   });
 
+  /// Another screen over the chat, its push done.
+  Future<void> cover(WidgetTester tester) async {
+    final context = tester.element(find.byType(SwarmConversationPage));
+    unawaited(
+      Navigator.of(context).push(
+        MaterialPageRoute<void>(
+          builder: (_) => const Scaffold(body: Text('Other screen')),
+        ),
+      ),
+    );
+    await tester.pump();
+    await tester.pump(const Duration(seconds: 1));
+  }
+
+  Future<void> uncover(WidgetTester tester) async {
+    final context = tester.element(find.text('Other screen'));
+    Navigator.of(context).pop();
+    await tester.pump();
+    await tester.pump(const Duration(seconds: 1));
+  }
+
+  Future<void> lifecycle(
+    WidgetTester tester,
+    List<AppLifecycleState> states,
+  ) async {
+    for (final state in states) {
+      tester.binding.handleAppLifecycleStateChanged(state);
+    }
+    await frames(tester);
+  }
+
+  // Review of #2014 at ad9dee05d: the reviewer's probe, as it was.
+  testWidgets('covering a chat cancels its recording', (tester) async {
+    await pump(tester);
+    await tapMic(tester);
+    expect(recorder.recording, isTrue);
+
+    await cover(tester);
+
+    expect(
+      recorder.recording,
+      isFalse,
+      reason: 'A covered chat must not keep recording speech',
+    );
+  });
+
+  testWidgets('a take covered in its pause is thrown away, not transcribed', (
+    tester,
+  ) async {
+    await pump(tester);
+    stt.replies.add('said behind another screen');
+    await tapMic(tester);
+    recorder.meter.value = 0.8;
+    await tester.pump(const Duration(milliseconds: 500));
+    recorder.meter.value = 0.02;
+
+    await cover(tester);
+    await tester.pump(const Duration(seconds: 5));
+
+    expect(recorder.cancels, 1);
+    expect(recorder.stops, 0, reason: 'a take is only stopped to be sent');
+    expect(stt.calls, isEmpty);
+    await uncover(tester);
+    expect(box(tester), isEmpty);
+  });
+
+  testWidgets('the app going to the background mid-take throws the take '
+      'away; a system prompt over it does not', (tester) async {
+    addTearDown(
+      () => tester.binding.handleAppLifecycleStateChanged(
+        AppLifecycleState.resumed,
+      ),
+    );
+    await pump(tester);
+    await tapMic(tester);
+
+    // The microphone permission prompt and Control Center leave the app
+    // inactive, still in front.
+    await lifecycle(tester, [AppLifecycleState.inactive]);
+    expect(recorder.recording, isTrue);
+
+    await lifecycle(tester, [
+      AppLifecycleState.hidden,
+      AppLifecycleState.paused,
+    ]);
+    expect(recorder.recording, isFalse);
+    expect(recorder.cancels, 1);
+
+    await lifecycle(tester, [
+      AppLifecycleState.hidden,
+      AppLifecycleState.inactive,
+      AppLifecycleState.resumed,
+    ]);
+    await tester.pump(const Duration(seconds: 5));
+    expect(stt.calls, isEmpty);
+    expect(box(tester), isEmpty);
+    expect(find.byType(VoiceMicCore), findsNothing, reason: 'back at rest');
+  });
+
+  testWidgets('back on the chat, the mic starts a fresh take', (tester) async {
+    await pump(tester);
+    stt.replies.add('second try');
+    await tapMic(tester);
+    await cover(tester);
+    await uncover(tester);
+
+    await tapMic(tester);
+    expect(recorder.starts, 2);
+    expect(recorder.recording, isTrue);
+    await tapMic(tester);
+    expect(box(tester), 'second try');
+  });
+
+  testWidgets('a microphone allowed after the chat was covered never opens', (
+    tester,
+  ) async {
+    recorder.pendingPermission = Completer();
+    await pump(tester);
+    await tapMic(tester);
+
+    await cover(tester);
+    recorder.pendingPermission!.complete(true);
+    await frames(tester);
+
+    expect(recorder.starts, 0);
+  });
+
+  testWidgets('words transcribed after the chat was covered are dropped', (
+    tester,
+  ) async {
+    await pump(tester);
+    stt.pending = Completer();
+    await tapMic(tester);
+    await tapMic(tester);
+    expect(stt.calls, hasLength(1), reason: 'sent while the chat was seen');
+
+    await cover(tester);
+    stt.pending!.complete('late words');
+    await frames(tester);
+    await uncover(tester);
+
+    expect(box(tester), isEmpty);
+    expect(fake.commands, isEmpty);
+  });
+
   testWidgets('with no voice input the composer has no mic', (tester) async {
     await pump(tester, voice: false);
 

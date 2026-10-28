@@ -165,6 +165,8 @@ class _SwarmConversationPageState extends State<SwarmConversationPage> {
         _voice = SwarmVoice(create: create, insert: _heard);
       }
     }
+    // A covered chat hears nothing: its take goes with it.
+    if (!_visible) _voice?.hide();
     final session = SwarmScope.of(context);
     if (session == _session) {
       _watch();

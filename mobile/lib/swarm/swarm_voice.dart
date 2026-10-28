@@ -18,6 +18,10 @@ import 'package:harness_mobile/shared/theme/app_theme.dart';
 /// transcribed into the box. The words land when the take ends, not as they
 /// are said: the backend's speech-to-text takes a finished recording. The
 /// language is the terminal's ([voiceLanguageStore]).
+///
+/// ⚠️ **Only while the chat is seen.** A take goes the moment the chat does —
+/// covered by another screen ([hide]) or the app sent to the background — so
+/// nothing is recorded, or sent to be transcribed, behind the person's back.
 class SwarmVoice extends ChangeNotifier {
   SwarmVoice({required this.create, required this.insert});
 
@@ -44,6 +48,9 @@ class SwarmVoice extends ChangeNotifier {
   Timer? _pauseTimer;
   bool _disposed = false;
 
+  /// Hears the app go to the background, from the first tap.
+  AppLifecycleListener? _lifecycle;
+
   /// The voice input, from the first tap: a recorder opens a platform
   /// channel, and a chat nobody talks to should not.
   VoiceInputController? get voice => _voice;
@@ -69,10 +76,36 @@ class SwarmVoice extends ChangeNotifier {
     }
   }
 
+  /// Throws away the take under way — opening, recording or being
+  /// transcribed — with its words: the chat went out of sight. What it was
+  /// waiting on lands nowhere ([VoiceInputController.clear]), and the next
+  /// tap starts afresh.
+  ///
+  /// ⚠️ `clear`, never `stopListening` or a [_finish]: those transcribe the
+  /// take, and a take nobody can see must not leave the phone.
+  void hide() {
+    _stopPause();
+    final voice = _voice;
+    if (voice == null || voice.isIdle) return;
+    voice.clear();
+  }
+
   VoiceInputController _start() {
     final voice = _voice = create();
     voice.addListener(_changed);
     voice.level.addListener(_heard);
+    // ⚠️ Not on `inactive`: the microphone permission prompt itself leaves the
+    // app inactive, and so do Control Center and a call's banner — the app is
+    // still in front, and the take it asked for must survive them.
+    _lifecycle = AppLifecycleListener(
+      onStateChange: (state) {
+        if (state == AppLifecycleState.hidden ||
+            state == AppLifecycleState.paused ||
+            state == AppLifecycleState.detached) {
+          hide();
+        }
+      },
+    );
     return voice;
   }
 
@@ -126,6 +159,7 @@ class SwarmVoice extends ChangeNotifier {
   void dispose() {
     _disposed = true;
     _stopPause();
+    _lifecycle?.dispose();
     if (_voice case final voice?) {
       voice.removeListener(_changed);
       voice.level.removeListener(_heard);
