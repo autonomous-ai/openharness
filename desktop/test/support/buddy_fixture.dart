@@ -6,7 +6,7 @@ import 'super_tab_fixture.dart';
 /// [giveBuddy] adds one.
 ConversationServer buddySwarm({bool enabled = true}) {
   final server = pmChatSwarm();
-  if (enabled) server.state['buddies'] = {'enabled': true};
+  if (enabled) server.state['buddies'] = true;
   server.state['machines'] = [
     {
       'machineId': 'ken-mac',
@@ -46,8 +46,7 @@ void giveBuddy(
     'id': id,
     'name': name,
     'projectId': projectId,
-    'role': 'buddy',
-    'buddyOf': person,
+    'buddyOf': {'personId': person, 'generation': 'fixture'},
     'machineId': machineId,
     'harnessId': 'h-$id',
     'contributorId': person,
@@ -56,15 +55,11 @@ void giveBuddy(
     'configuration': {'engine': engine, 'model': 'default'},
   });
   (server.state['conversations'] as List).add({
-    ...conversationFixture('buddy-$person-$projectId', name),
+    ...conversationFixture('buddy-$person-$projectId', "$person's Buddy"),
     'kind': 'buddy',
     'projectId': projectId,
+    'buddyOwnerId': person,
     'agentIds': [id],
-    'audience': {
-      'people': [
-        {'id': person, 'generation': 'fixture'},
-      ],
-    },
   });
 }
 
@@ -84,4 +79,37 @@ void buddyReply(
     'name': name,
   };
   if (source != null) server.messages.last['source'] = source;
+}
+
+/// [person]'s Buddy in [projectId] being added: its chat and its start, with
+/// no agent yet. With [error] the start failed.
+void startBuddy(
+  ConversationServer server, {
+  String person = 'peer',
+  String projectId = 'lead',
+  String machineId = 'studio',
+  String engine = 'codex',
+  String? error,
+}) {
+  (server.state['conversations'] as List).add({
+    ...conversationFixture('buddy-$person-$projectId', "$person's Buddy"),
+    'kind': 'buddy',
+    'projectId': projectId,
+    'buddyOwnerId': person,
+    'agentIds': <String>[],
+  });
+  server.state['starts'] = [
+    {
+      'id': 'start-1',
+      'machineOwnerId': 'owner',
+      'request': {
+        'conversationId': 'buddy-$person-$projectId',
+        'machineId': machineId,
+        'engine': engine,
+        'buddyOf': {'personId': person, 'generation': 'fixture'},
+      },
+      'harnessId': null,
+      'error': error,
+    },
+  ];
 }

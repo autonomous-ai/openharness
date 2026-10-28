@@ -64,9 +64,7 @@ class SuperTabAgent {
       role = row['role'] as String?,
       roleId = row['roleId'] as String?,
       buddyOf = switch (row['buddyOf']) {
-        final String person => person,
         {'personId': final String person} => person,
-        {'id': final String person} => person,
         _ => null,
       },
       limitedUntil = DateTime.tryParse(row['limitedUntil'] as String? ?? ''),
@@ -102,8 +100,8 @@ class SuperTabAgent {
   bool get isReviewer => role == 'reviewer';
 
   /// A person's private agent for one project (spec: Buddies, 10-28); it
-  /// never takes work.
-  bool get isBuddy => role == 'buddy';
+  /// never takes work. The backend gives it no role, only its person.
+  bool get isBuddy => buddyOf != null;
 
   /// The person whose Buddy it is; null for any other agent.
   final String? buddyOf;
@@ -130,13 +128,17 @@ class SuperTabConversation {
       projectId =
           row['projectId'] as String? ?? (row['kind'] == 'leads' ? '' : 'lead'),
       kind = row['kind'] as String?,
+      buddyOwnerId = row['buddyOwnerId'] as String?,
       number = (row['number'] as num?)?.toInt(),
       title = _text(row, 'title'),
       leadId = row['leadId'] as String?,
       agentIds = List.unmodifiable((row['agentIds'] as List).cast<String>()),
       archived = row['archived'] == true,
       dormant = row['dormant'] == true,
-      audience = row['audience'] is Map
+      // A Buddy chat names no audience: its person alone reads it.
+      audience = row['kind'] == 'buddy' && row['buddyOwnerId'] is String
+          ? List.unmodifiable([row['buddyOwnerId'] as String])
+          : row['audience'] is Map
           ? List.unmodifiable([
               for (final person
                   in superTabMap(row['audience'])['people'] as List? ??
@@ -166,6 +168,9 @@ class SuperTabConversation {
   /// Managers' conversation, `buddy` for a person's chat with their Buddy.
   final String? kind;
   bool get isBuddyChat => kind == 'buddy';
+
+  /// The person a Buddy chat belongs to; only they read it.
+  final String? buddyOwnerId;
   final SuperTabTask? task;
   final int? number;
   String get label => number == null ? title : '#$number $title';
@@ -273,8 +278,13 @@ class SuperTabSnapshot {
       mentionsWaiting = (row['mentionsWaiting'] as num?)?.toInt() ?? 0,
       decisionsWaiting = (row['decisionsWaiting'] as num?)?.toInt() ?? 0,
       decisionsDigest = row['decisionsDigest'] as String?,
-      buddiesEnabled =
-          superTabMap(row['buddies'] ?? const {})['enabled'] == true {
+      buddiesEnabled = row['buddies'] == true,
+      buddyStarts = List.unmodifiable([
+        for (final start
+            in row['starts'] is List ? row['starts'] as List : const [])
+          if (start case {'request': {'buddyOf': Map _}})
+            Map<String, dynamic>.unmodifiable(superTabMap(start)),
+      ]) {
     if (row['version'] != 1) {
       throw const FormatException('Update Harness to open this Swarm.');
     }
@@ -302,6 +312,10 @@ class SuperTabSnapshot {
   /// The Swarm's Buddies setting: off unless its owner turned it on, and off
   /// from a backend before Buddies.
   final bool buddiesEnabled;
+
+  /// The starts of Buddies, oldest first: a Buddy's add is under way while
+  /// its start has neither a harness nor an error.
+  final List<Map<String, dynamic>> buddyStarts;
   final List<SuperTabPerson> people;
   final List<SuperTabAgent> agents;
   final List<Map<String, dynamic>> machines;
@@ -772,7 +786,7 @@ class SuperTabMessage {
   /// The person a Buddy's proposal speaks for, from the tag the server writes
   /// on it; null for every other message, whatever its text says.
   String? get proposalOwnerId =>
-      source['kind'] == 'buddy-proposal' ? source['ownerId'] as String? : null;
+      source['kind'] == 'buddy-proposal' ? source['personId'] as String? : null;
 
   /// A note the backend writes about a terminal: a Lead's typing, or an alert.
   bool get terminalEvent =>

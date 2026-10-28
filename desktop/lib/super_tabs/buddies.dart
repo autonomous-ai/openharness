@@ -323,7 +323,9 @@ Future<void> confirmRemoveBuddy(
 }
 
 /// Under a Buddy chat's header: what it runs on and who else can see its
-/// terminal, and, while it is down, a way to start it again.
+/// terminal, and, while it is down, a way to start it again. Before its
+/// agent is there, how its start is going (backend: the start carries the
+/// add's progress and failure).
 class SuperTabBuddyBar extends StatelessWidget {
   const SuperTabBuddyBar({
     super.key,
@@ -333,12 +335,64 @@ class SuperTabBuddyBar extends StatelessWidget {
   final SuperTabController controller;
   final SuperTabConversation chat;
 
+  EdgeInsets get _padding => const EdgeInsets.fromLTRB(
+    grid.AppDesktop.panelPadding,
+    grid.AppDesktop.controlGap,
+    grid.AppDesktop.panelPadding,
+    grid.AppDesktop.menuInset,
+  );
+
+  /// A start under way, or one that failed with Start again; nothing once
+  /// there is no start (a removed Buddy: Add a Buddy brings it back).
+  Widget _starting(SuperTabController c) {
+    final start = c.buddyStart(chat.projectId);
+    if (start == null) return const SizedBox.shrink();
+    final request = superTabMap(start['request']);
+    final engine = request['engine'] as String? ?? '';
+    final machineId = request['machineId'] as String? ?? '';
+    final error = start['error'];
+    if (error is! String && start['harnessId'] != null) {
+      return const SizedBox.shrink();
+    }
+    final busy = !c.canWrite || c.saving || c.hasPendingAction;
+    return Padding(
+      key: const ValueKey('super-buddy-bar'),
+      padding: _padding,
+      child: Row(
+        children: [
+          Expanded(
+            child: Text(
+              error is String
+                  ? "Couldn't start: $error"
+                  : 'Starting ${buddyEngineName(engine)} on '
+                        '${buddyMachineName(c, machineId)}…',
+              style: DesktopChrome.control(),
+            ),
+          ),
+          if (error is String)
+            TextButton(
+              onPressed: busy || machineId.isEmpty
+                  ? null
+                  : () => unawaited(
+                      c.addBuddy(
+                        projectId: chat.projectId,
+                        machineId: machineId,
+                        engine: engine,
+                      ),
+                    ),
+              child: const Text('Start again'),
+            ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     grid.AppTheme.watch(context);
     final c = controller;
     final agent = c.buddy(chat.projectId);
-    if (agent == null) return const SizedBox.shrink();
+    if (agent == null) return _starting(c);
     final name = c.snapshot!.agentName(agent.id, fallback: agent.name);
     final machine = buddyMachineName(c, agent.machineId);
     final where =
@@ -347,14 +401,9 @@ class SuperTabBuddyBar extends StatelessWidget {
     final busy = !c.canWrite || c.saving || c.hasPendingAction;
     return Padding(
       key: const ValueKey('super-buddy-bar'),
-      padding: const EdgeInsets.fromLTRB(
-        grid.AppDesktop.panelPadding,
-        grid.AppDesktop.controlGap,
-        grid.AppDesktop.panelPadding,
-        grid.AppDesktop.menuInset,
-      ),
+      padding: _padding,
       child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         mainAxisSize: MainAxisSize.min,
         children: [
           Text(where, style: DesktopChrome.metadata()),

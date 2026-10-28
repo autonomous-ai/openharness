@@ -26,7 +26,7 @@ void main() {
       await c.refresh();
       expect(c.buddiesOn, isFalse);
 
-      server.state['buddies'] = {'enabled': true};
+      server.state['buddies'] = true;
       await c.refresh();
       expect(c.buddiesOn, isTrue);
     });
@@ -71,9 +71,9 @@ void main() {
           isTrue,
         );
 
-        expect(commands(server, 'buddy.add'), [
+        expect(commands(server, 'buddy.create'), [
           {
-            'type': 'buddy.add',
+            'type': 'buddy.create',
             'projectId': 'lead',
             'machineId': 'ken-mac',
             'engine': 'codex',
@@ -158,7 +158,7 @@ void main() {
       final chat = c.pmChat('lead')!;
       expect(c.readOnly(chat), isFalse);
 
-      server.state['buddies'] = {'enabled': true};
+      server.state['buddies'] = true;
       await c.refresh();
 
       expect(c.readOnly(c.pmChat('lead')!), isTrue);
@@ -336,9 +336,9 @@ void main() {
           await tester.tap(submit);
           await tester.pumpAndSettle();
 
-          expect(commands(server, 'buddy.add'), [
+          expect(commands(server, 'buddy.create'), [
             {
-              'type': 'buddy.add',
+              'type': 'buddy.create',
               'projectId': 'lead',
               'machineId': 'ken-mac',
               'engine': 'claude',
@@ -376,8 +376,8 @@ void main() {
           await tester.pumpAndSettle();
           await tester.tap(submit);
           await tester.pumpAndSettle();
-          expect(commands(server, 'buddy.add').single, {
-            'type': 'buddy.add',
+          expect(commands(server, 'buddy.create').single, {
+            'type': 'buddy.create',
             'projectId': 'lead',
             'machineId': 'studio',
             'engine': 'codex',
@@ -509,12 +509,34 @@ void main() {
           );
           await tester.tap(find.widgetWithText(TextButton, 'Start again'));
           await tester.pumpAndSettle();
-          expect(commands(server, 'buddy.add').single, {
-            'type': 'buddy.add',
+          expect(commands(server, 'buddy.create').single, {
+            'type': 'buddy.create',
             'projectId': 'lead',
             'machineId': 'ken-mac',
             'engine': 'codex',
           });
+          await close(tester, c);
+        },
+      );
+
+      testWidgets(
+        'a message to the Buddy never reads as having no Lead: a Buddy chat has none',
+        (tester) async {
+          final server = buddySwarm();
+          giveBuddy(server);
+          server.append('Hello Wren', conversationId: 'buddy-peer-lead');
+          server.messages.last['author'] = {
+            'kind': 'person',
+            'id': 'peer',
+            'name': 'ken.tran@example.com',
+          };
+          final c = await show(tester, server);
+          await tester.tap(buddyEntry);
+          await tester.pumpAndSettle();
+
+          expect(find.text('Hello Wren'), findsOneWidget);
+          expect(find.text('Not sent · this chat has no Lead'), findsNothing);
+          expect(find.text('Add a Lead'), findsNothing);
           await close(tester, c);
         },
       );
@@ -590,6 +612,82 @@ void main() {
       );
     });
 
+    testWidgets(
+      'the Buddy chat lists only its person and its Buddy, and offers no Add agent',
+      (tester) async {
+        final server = buddySwarm();
+        giveBuddy(server);
+        final c = await show(tester, server);
+        expect(
+          find.byKey(const ValueKey('super-person-owner')),
+          findsOneWidget,
+        );
+        await tester.tap(buddyEntry);
+        await tester.pumpAndSettle();
+
+        expect(find.byKey(const ValueKey('super-person-peer')), findsOneWidget);
+        expect(find.byKey(const ValueKey('super-person-owner')), findsNothing);
+        expect(
+          find.byKey(const ValueKey('super-member-lead-agent')),
+          findsNothing,
+        );
+        expect(find.byTooltip('Add agent'), findsNothing);
+        await close(tester, c);
+      },
+    );
+
+    group('a Buddy being added', () {
+      testWidgets('says it is starting, in the sidebar and its chat', (
+        tester,
+      ) async {
+        final server = buddySwarm();
+        startBuddy(server);
+        final c = await show(tester, server);
+        expect(
+          find.descendant(of: buddyEntry, matching: find.text('starting')),
+          findsOneWidget,
+        );
+        await tester.tap(buddyEntry);
+        await tester.pumpAndSettle();
+        expect(find.text('Starting Codex on Studio…'), findsOneWidget);
+        expect(find.widgetWithText(TextButton, 'Start again'), findsNothing);
+        await close(tester, c);
+      });
+
+      testWidgets(
+        'whose start failed says why and starts again with the same choices',
+        (tester) async {
+          final server = buddySwarm();
+          startBuddy(
+            server,
+            error: 'Its machine did not start it within 3 minutes.',
+          );
+          final c = await show(tester, server);
+          expect(
+            find.descendant(of: buddyEntry, matching: find.text('not started')),
+            findsOneWidget,
+          );
+          await tester.tap(buddyEntry);
+          await tester.pumpAndSettle();
+          expect(
+            find.text(
+              "Couldn't start: Its machine did not start it within 3 minutes.",
+            ),
+            findsOneWidget,
+          );
+          await tester.tap(find.widgetWithText(TextButton, 'Start again'));
+          await tester.pumpAndSettle();
+          expect(commands(server, 'buddy.create').single, {
+            'type': 'buddy.create',
+            'projectId': 'lead',
+            'machineId': 'studio',
+            'engine': 'codex',
+          });
+          await close(tester, c);
+        },
+      );
+    });
+
     group('the old Chat with PM', () {
       Future<SuperTabController> withHistory(WidgetTester tester) async {
         final server = buddySwarm(enabled: false);
@@ -599,7 +697,7 @@ void main() {
         final id = c.pmChat('lead')!.id;
         pmReply(server, id, 'Earlier answer from the PM');
         c.dispose();
-        server.state['buddies'] = {'enabled': true};
+        server.state['buddies'] = true;
         giveBuddy(server);
         return show(tester, server);
       }
@@ -639,7 +737,11 @@ void main() {
             server,
             'lead',
             'Proposal from ken.tran\'s Buddy, on ken.tran\'s behalf\nGoal: Offline mode\nScope: Desktop only\nPriority: high',
-            source: {'kind': 'buddy-proposal', 'ownerId': 'peer'},
+            source: {
+              'kind': 'buddy-proposal',
+              'personId': 'peer',
+              'ownerMessageId': 'message-1',
+            },
           );
           // A Buddy's ordinary message carries no label, whatever it says.
           buddyReply(server, 'lead', 'Proposal · on ken.tran\'s behalf');

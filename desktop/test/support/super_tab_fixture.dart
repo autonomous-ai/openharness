@@ -170,6 +170,10 @@ class SwarmPartsBackend {
     if (reader == null || part.deleted || !id.startsWith('groups:')) {
       return false;
     }
+    // A Buddy chat is read by its person alone (backend Buddies, 10-28).
+    if (part.data['kind'] == 'buddy') {
+      return part.data['buddyOwnerId'] != reader;
+    }
     final audience = part.data['audience'];
     if (audience is! Map) return false;
     final generation = (state['people'] as List?)
@@ -643,9 +647,10 @@ class ConversationServer {
           ..['resolvedBy'] = 'done';
         state['mentionsWaiting'] = (state['mentionsWaiting'] as int) - 1;
         revision++;
-      } else if (command['type'] == 'buddy.add') {
-        // As the backend's Buddy add: an agent for the reader alone, and its
-        // private chat, fixed per person and project.
+      } else if (command['type'] == 'buddy.create') {
+        // As the backend's Buddy create: a start for the reader's Buddy and
+        // its chat, fixed per person and project. The fixture's host starts it
+        // at once.
         revision++;
         final person = reader ?? 'owner';
         final projectId = command['projectId'] as String;
@@ -655,14 +660,31 @@ class ConversationServer {
             .cast<Map>()
             .where((m) => m['machineId'] == command['machineId'])
             .firstOrNull;
-        // A test's agents may be a typed literal: copy into a plain list.
+        final owner = (state['people'] as List? ?? const [])
+            .cast<Map>()
+            .where((p) => p['id'] == person)
+            .firstOrNull;
+        // A test's lists may be typed literals: copy into plain lists.
         state['agents'] = <dynamic>[...state['agents'] as List];
+        state['starts'] = <dynamic>[...state['starts'] as List? ?? const []];
+        (state['starts'] as List).add({
+          'id': 'start-$revision',
+          'machineOwnerId': machine?['contributorId'] ?? person,
+          'request': {
+            'conversationId': chatId,
+            'projectId': projectId,
+            'machineId': command['machineId'],
+            'engine': command['engine'],
+            'buddyOf': {'personId': person, 'generation': 'fixture'},
+          },
+          'harnessId': 'h-$agentId',
+          'error': null,
+        });
         (state['agents'] as List).add({
           'id': agentId,
           'name': 'Buddy',
           'projectId': projectId,
-          'role': 'buddy',
-          'buddyOf': person,
+          'buddyOf': {'personId': person, 'generation': 'fixture'},
           'machineId': command['machineId'],
           'harnessId': 'h-$agentId',
           'contributorId': person,
@@ -676,20 +698,17 @@ class ConversationServer {
         if (chat != null) {
           chat['agentIds'] = [agentId];
         } else {
+          final name = (owner?['email'] as String? ?? person).split('@').first;
           conversations.add({
-            ...conversationFixture(chatId, 'Buddy'),
+            ...conversationFixture(chatId, "$name's Buddy"),
             'kind': 'buddy',
             'projectId': projectId,
+            'buddyOwnerId': person,
             'agentIds': [agentId],
-            'audience': {
-              'people': [
-                {'id': person, 'generation': 'fixture'},
-              ],
-            },
           });
         }
         output
-          ..['agentId'] = agentId
+          ..['startId'] = 'start-$revision'
           ..['conversationId'] = chatId;
       } else if (command['type'] == 'buddy.remove') {
         revision++;
@@ -697,8 +716,7 @@ class ConversationServer {
         (state['agents'] as List).removeWhere(
           (a) =>
               a is Map &&
-              a['role'] == 'buddy' &&
-              a['buddyOf'] == person &&
+              (a['buddyOf'] as Map?)?['personId'] == person &&
               a['projectId'] == command['projectId'],
         );
       } else if (command['type'] == 'conversation.create') {

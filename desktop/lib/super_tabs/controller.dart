@@ -1069,8 +1069,7 @@ class SuperTabController extends ChangeNotifier {
         (g) =>
             g.isBuddyChat &&
             g.projectId == projectId &&
-            g.audience?.length == 1 &&
-            g.audience!.single == accountId,
+            g.buddyOwnerId == accountId,
       )
       .firstOrNull;
 
@@ -1081,11 +1080,17 @@ class SuperTabController extends ChangeNotifier {
       )
       .firstOrNull;
 
-  /// The project of the reader's Buddy chat [group]; null for any other.
-  SuperTabAgent? buddyIn(SuperTabConversation group) =>
-      buddyChat(group.projectId)?.id == group.id
-      ? buddy(group.projectId)
-      : null;
+  /// The newest start of the reader's Buddy in [projectId]: under way while
+  /// it has neither a harness nor an error, failed with an error.
+  Map<String, dynamic>? buddyStart(String projectId) {
+    final chat = buddyChat(projectId)?.id;
+    return snapshot?.buddyStarts.reversed.where((start) {
+      final request = superTabMap(start['request']);
+      return superTabMap(request['buddyOf'])['personId'] == accountId &&
+          (request['projectId'] == projectId ||
+              (chat != null && request['conversationId'] == chat));
+    }).firstOrNull;
+  }
 
   /// Adds the reader's Buddy in [projectId] on [machineId] with [engine], and
   /// opens its chat. False when refused: [operationError] says why.
@@ -1095,7 +1100,7 @@ class SuperTabController extends ChangeNotifier {
     required String engine,
   }) async {
     final result = await command({
-      'type': 'buddy.add',
+      'type': 'buddy.create',
       'projectId': projectId,
       'machineId': machineId,
       'engine': engine,

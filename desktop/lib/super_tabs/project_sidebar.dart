@@ -552,11 +552,13 @@ class ProjectSidebar extends StatelessWidget {
       name: name,
       project: named ? project.name : null,
       tooltip: 'Your Buddy · ${project.name}',
-      note: agent == null
-          ? 'removed'
-          : agent.downSince != null
-          ? 'offline'
-          : null,
+      note: switch ((agent, controller.buddyStart(project.id))) {
+        (null, {'error': String _}) => 'not started',
+        (null, {'harnessId': null}) => 'starting',
+        (null, _) => 'removed',
+        (final agent?, _) when agent.downSince != null => 'offline',
+        _ => null,
+      },
       selected:
           !devicesSelected &&
           !notificationsSelected &&

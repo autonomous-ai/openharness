@@ -882,9 +882,10 @@ void main() {
     tester,
   ) async {
     final f = await fixture(tester);
-    (f.server.state['agents'] as List)[1]
-      ..['role'] = 'buddy'
-      ..['buddyOf'] = 'owner';
+    (f.server.state['agents'] as List)[1]['buddyOf'] = {
+      'personId': 'owner',
+      'generation': 'fixture',
+    };
     await f.controller.refresh();
     await f.show(tester);
     expect(f.inRow(1, find.text('Buddy')), findsOneWidget);

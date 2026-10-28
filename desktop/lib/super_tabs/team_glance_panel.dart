@@ -88,11 +88,7 @@ class _Warning extends StatelessWidget {
     child: Row(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Icon(
-          AppIcons.triangleAlert,
-          size: 16,
-          color: grid.AppPalette.warn,
-        ),
+        Icon(AppIcons.triangleAlert, size: 16, color: grid.AppPalette.warn),
         const SizedBox(width: 6),
         Expanded(child: Text(text, style: DesktopChrome.control())),
       ],
