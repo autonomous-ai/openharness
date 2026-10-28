@@ -3613,6 +3613,7 @@ class AppNotifier extends ChangeNotifier {
     final removed = swarms.removeAt(index);
     if (removed.superTabId case final tabId?) {
       _rememberSuperTabVisibility(tabId, false);
+      superTabs.release(tabId);
     }
     Swarm? replacement;
     if (swarms.isEmpty) {
