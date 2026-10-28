@@ -1,8 +1,10 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:clock/clock.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/super_tabs/controller.dart';
+import 'package:harness/super_tabs/reading.dart';
 
 import 'support/super_tab_fixture.dart';
 
@@ -81,6 +83,75 @@ void main() {
       List.generate(500, (i) => i + 1501),
     );
     expect(c.hasOlder('lead'), isTrue);
+  });
+
+  test('a message sent while a poll cuts shows once, newest, and leaves '
+      'nothing outgoing', () async {
+    final server = ConversationServer();
+    Completer<void>? post;
+    final c = SuperTabController(
+      tabId: 'tab',
+      accountId: 'owner',
+      save: server.save,
+      initial: const {},
+      pollInterval: Duration.zero,
+      request: (method, path, {body}) async {
+        if (method == 'POST') await post?.future;
+        return server.request(method, path, body: body);
+      },
+    );
+    addTearDown(c.dispose);
+    await c.refresh();
+    await pollThrough(server, c, 500);
+    c.setDraft('lead', 'Please check the arm64 build');
+    post = Completer<void>();
+
+    final sending = c.send();
+    await pumpEventQueue();
+    // While it is on its way, a poll brings 50 more and cuts as many.
+    await pollThrough(server, c, 50);
+    expect(c.messages('lead'), hasLength(500));
+    post.complete();
+    await sending;
+
+    final held = c.messages('lead');
+    expect(held.last.text, 'Please check the arm64 build');
+    expect(held.where((m) => m.text == 'Please check the arm64 build'), [
+      held.last,
+    ]);
+    expect(held, hasLength(500));
+    expect(c.outgoing('lead'), isEmpty);
+    expect(c.hasOlder('lead'), isTrue);
+  });
+
+  test('the view saved right after a cut draws its last page and reads on '
+      'from it', () async {
+    final server = ConversationServer();
+    const reading = SuperTabReading(drawsSaved: true);
+    final c = server.controller(reading: reading);
+    addTearDown(c.dispose);
+    await c.refresh();
+    await pollThrough(server, c, 2000);
+
+    final view = jsonDecode(jsonEncode(c.savedView)) as Map<String, dynamic>;
+    final rows = (view['messages'] as List).cast<Map<String, dynamic>>();
+    expect(rows.map((r) => r['sequence']), List.generate(100, (i) => i + 1901));
+    expect(view['next'], {'sequence': 1901, 'id': 'message-1901'});
+
+    final again = server.controller(reading: reading);
+    addTearDown(again.dispose);
+    again.drawSaved(view);
+    expect(
+      again.messages('lead').map((m) => m.sequence),
+      List.generate(100, (i) => i + 1901),
+    );
+    expect(again.hasOlder('lead'), isTrue);
+    await again.refresh();
+    await again.loadMessages('lead', older: true);
+    expect(
+      again.messages('lead').map((m) => m.sequence),
+      List.generate(200, (i) => i + 1801),
+    );
   });
 
   test('rows from where the view lays its list out are never cut', () async {
