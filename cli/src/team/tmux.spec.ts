@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, rmSync,
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { ensureTeamTmux, tmuxBuildFor, untarGz, type TeamTmuxDeps } from './tmux.js'
+import { ensureTeamTmux, systemTar, tmuxBuildFor, untarGz, type TeamTmuxDeps } from './tmux.js'
 
 const SHA = 'a'.repeat(64)
 const manifest = { tmux: {
@@ -64,6 +64,12 @@ describe('the Harness Team account\'s own tmux', () => {
     const { d } = deps({ runs: async () => true })
     expect(await ensureTeamTmux(d)).toBe('present')
     expect(d.download).not.toHaveBeenCalled()
+  })
+
+  it('unpacks with the system\'s tar: /usr/bin/tar, or on Linux without merged /usr (Debian 10 and 11) /bin/tar', () => {
+    expect(systemTar('darwin', () => false)).toBe('/usr/bin/tar')
+    expect(systemTar('linux', () => true)).toBe('/usr/bin/tar')
+    expect(systemTar('linux', (path) => path === '/bin/tar')).toBe('/bin/tar')
   })
 
   it('on Linux, uses the system\'s tmux and never downloads one', async () => {

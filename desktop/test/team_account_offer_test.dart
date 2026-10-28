@@ -398,13 +398,10 @@ void main() {
       'Your system is asking for your password. Setup then takes a minute or two. '
       'This computer\'s row updates when it is ready.',
     );
-    // No desktop session to ask in (SSH): the terminal is the way.
+    // No desktop session to ask in (the owner's daemon under systemd --user, or SSH): the daemon answers `no-prompt` up
+    // front (cli/src/team/autoSetup.ts) and nothing runs, so the terminal is the way.
     expect(
-      await outcome(tester, 'linux', {'error': 'NO_PROMPT', 'detail': 'no polkit agent'}),
-      'Run harness team setup in a terminal on this computer.',
-    );
-    expect(
-      await outcome(tester, 'linux', {'ok': true, 'state': 'NO_PROMPT'}),
+      await outcome(tester, 'linux', {'ok': true, 'state': 'no-prompt'}),
       'Run harness team setup in a terminal on this computer.',
     );
     expect(

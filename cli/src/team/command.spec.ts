@@ -381,6 +381,14 @@ describe('harness team remove', () => {
     expect(JSON.parse(json.out[0]!)).toMatchObject({ ok: false, code: 'DELETE_REFUSED', next: expect.arrayContaining([expect.stringContaining('Users & Groups')]) })
   })
 
+  it('on a Mac, never checks the owner\'s name: only the Linux removal needs it (for the relay folder setup made)', async () => {
+    // A macOS short name the account pattern does not take, with no config to name the owner: removed as it always was.
+    const f = fake({ user: () => 'Owner Placeholder', exists: (p) => p === '/Users/harnessteam', adminResult: removed })
+    expect(await teamCommand(['remove'], f.deps)).toBe(0)
+    expect(f.admin).toHaveBeenCalledTimes(1)
+    expect(f.built[0]!.script).toContain("TEAM_HOME='/Users/harnessteam'")
+  })
+
   it('has nothing to do without an account, and refuses off a Mac or as root', async () => {
     const none = fake({ exists: () => false })
     expect(await teamCommand(['remove', '--json'], none.deps)).toBe(0)

@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { GuestRunner } from '../lib/guestAccounts.js'
-import { adminRunner } from './admin.js'
+import { adminPromptShows, adminRunner } from './admin.js'
 
 const cleanup: string[] = []
 afterEach(() => { for (const dir of cleanup.splice(0)) rmSync(dir, { recursive: true, force: true }) })
@@ -105,10 +105,22 @@ describe('adminRunner', () => {
     })
 
     it('reads pkexec\'s 126 and 127 as a cancelled prompt, and keeps the script\'s own reason and status', async () => {
-      for (const code of [126, 127]) {
-        expect(await linux({ code }, true).run(() => ({ script: '' }), 'p'))
+      // pkexec's own words (polkit's pkexec.c): 126 for a dismissed dialog, 127 for a refusal.
+      for (const [code, stderr] of [[126, ''], [126, 'Error executing command as another user: Request dismissed\n'],
+        [127, 'Error executing command as another user: Not authorized\n\nThis incident has been reported.\n']] as const) {
+        expect(await linux({ code, stderr }, true).run(() => ({ script: '' }), 'p'), stderr)
           .toEqual({ ok: false, code: 'CANCELLED', message: 'The administrator prompt was cancelled.' })
       }
+      // 127 is also no polkit agent to ask with, and a command the script could not find: a failure, never a "no" the
+      // person gave, which Desktop's offer would remember for good.
+      expect(await linux({ code: 127, stderr: 'Error executing command as another user: No authentication agent found.\n' }, true)
+        .run(() => ({ script: '' }), 'p'))
+        .toEqual({ ok: false, code: 'FAILED', status: 127, message: 'Error executing command as another user: No authentication agent found.' })
+      // As pkexec 124 answered in the gridtest VM (Ubuntu 24.04, 2026-10-28), run with no agent and no terminal.
+      expect(await linux({ code: 127, stderr: 'Error creating textual authentication agent: Error opening current controlling terminal for the process (`/dev/tty\'): No such device or address\n' }, true)
+        .run(() => ({ script: '' }), 'p')).toMatchObject({ ok: false, code: 'FAILED', status: 127 })
+      expect(await linux({ code: 127, stderr: '/root/run.sh: 12: setfacl: not found\n' }, true).run(() => ({ script: '' }), 'p'))
+        .toMatchObject({ ok: false, code: 'FAILED', status: 127 })
       expect(await linux({ code: 3, stderr: 'harness: no tmux every account can run: install it (apt install tmux / dnf install tmux)\n' }, true)
         .run(() => ({ script: '' }), 'p'))
         .toEqual({ ok: false, code: 'FAILED', status: 3, message: 'no tmux every account can run: install it (apt install tmux / dnf install tmux)' })
@@ -120,6 +132,15 @@ describe('adminRunner', () => {
         .toEqual({ ok: false, code: 'NO_PROMPT', message: 'No administrator prompt here: run harness team setup in a terminal.' })
       expect(f.runner).not.toHaveBeenCalled()
       expect(existsSync(f.stage)).toBe(false)
+    })
+
+    it('can show the prompt only with pkexec and a display', () => {
+      const pkexec = (path: string) => path === '/usr/bin/pkexec'
+      expect(adminPromptShows({ DISPLAY: ':0' }, pkexec)).toBe(true)
+      expect(adminPromptShows({ WAYLAND_DISPLAY: 'wayland-0' }, pkexec)).toBe(true)
+      // The owner's daemon under systemd --user, as it usually runs: no display in its environment.
+      expect(adminPromptShows({}, pkexec)).toBe(false)
+      expect(adminPromptShows({ DISPLAY: ':0' }, () => false)).toBe(false)
     })
 
     it('runs it with sudo in the terminal when asked, desktop session or not', async () => {

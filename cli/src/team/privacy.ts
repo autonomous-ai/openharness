@@ -36,7 +36,7 @@ export function privacyProbes(config: Pick<TeamConfig, 'ownerHome' | 'sentinel'>
   const secrets: Probe[] = platform === 'linux'
     ? [
       // GNOME Keyring's and KWallet's files.
-      { item: 'keychain', what: 'your login keyring folder', kind: 'list', paths: [`${home}/.local/share/keyrings`] },
+      { item: 'keychain', what: 'your login keyring folder', kind: 'list', paths: [`${home}/.local/share/keyrings`, `${home}/.local/share/kwalletd`] },
       { item: 'chrome', what: 'Chrome\'s profile folder', kind: 'list', paths: [`${home}/.config/google-chrome`] },
       { item: 'firefox', what: 'Firefox\'s profile folder', kind: 'list', paths: [`${home}/.mozilla`] },
     ]
