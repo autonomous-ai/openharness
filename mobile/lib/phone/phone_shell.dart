@@ -12,6 +12,7 @@ import '../swarm/swarm_computers.dart';
 import '../swarm/swarm_conversation_page.dart';
 import '../swarm/swarm_home_root.dart';
 import '../swarm/swarm_page.dart';
+import '../swarm/swarm_profile.dart';
 import '../swarm/swarm_session.dart';
 import 'agent_home.dart';
 import 'approve_sign_in.dart';
@@ -103,6 +104,11 @@ class _PhoneShellState extends State<PhoneShell> with WidgetsBindingObserver {
       // Swarm Home's start screens: which computers the account has, and
       // whether any is online.
       computers: _swarmComputers,
+      // A photo goes straight to the backend with this app's own sign-in;
+      // the computer a Swarm call goes through carries text only.
+      uploadAvatar: swarmAvatarUploadVia(
+        (tabId, png) => widget.notifier.api.uploadSwarmAvatar(tabId, png),
+      ),
     )..foreground = state == null || _inFront(state);
     _swarmFiles = SwarmAttachmentKeeper(_swarm);
     _swarmNotices.openedSwarm.addListener(_openNoticedSwarm);
