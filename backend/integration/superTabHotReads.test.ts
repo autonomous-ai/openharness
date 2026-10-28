@@ -13,6 +13,7 @@ import { waitingIn } from '../src/superTabs/decisions.js'
 import { HostReads } from '../src/superTabs/read/host.js'
 import { cursorFor } from '../src/superTabs/read/cursor.js'
 import { lastChangedAt } from '../src/superTabs/parts/index.js'
+import { swarmReadCache } from '../src/superTabs/cache.js'
 import type { SuperTabState } from '../src/superTabs/model.js'
 import { writeLegacySwarm } from '../scripts/swarm-parts/legacy.js'
 import { NOW, owner as ownerActor, swarm } from '../src/superTabs/read/fixture.test-support.js'
@@ -48,9 +49,9 @@ afterAll(async () => {
 
 /** A Swarm on two machines of the owner's: a Lead, and on the other a worker with running work, finished work, and OTHERS quiet conversations,
  *  closed deliveries of other messages to other agents, and open decisions in other conversations. */
-async function scene() {
-  const [machineId, leadMachine] = [`m-${randomUUID().slice(0, 8)}`, `l-${randomUUID().slice(0, 8)}`]
-  for (const id of [machineId, leadMachine]) {
+async function scene(sharedMachine?: string) {
+  const [machineId, leadMachine] = [sharedMachine ?? `m-${randomUUID().slice(0, 8)}`, `l-${randomUUID().slice(0, 8)}`]
+  for (const id of sharedMachine ? [leadMachine] : [machineId, leadMachine]) {
     await db.machine.create({ data: { machineId: id, userId: owner.sub, apiKey: 'fixture-only', managerId: 'fixture', autonomousEnv: 'prod', authMode: 'remote' } })
   }
   const s = swarm(MIGRATED)
@@ -108,6 +109,43 @@ function reads(entries: ProfileEntry[], collection: string, fields: string[], no
 }
 const plan = (rows: ProfileEntry[]) => rows.map(r => ({ plan: r.planSummary, docsExamined: r.docsExamined, keysExamined: r.keysExamined, returned: r.nreturned }))
 
+/** Timestamp scans match only tabId; the indexed wake query also bounds changedAt and hostMachineIds. */
+function timestampScans(entries: ProfileEntry[]) {
+  return entries.filter(e => /^Swarm(Head|Member|Agent|Group|Machine|Start|Progress)$/.test(e.command?.aggregate as string))
+    .flatMap(e => {
+      const match = (e.command?.pipeline as Array<{ $match?: { tabId?: { $in?: string[] } } }>)?.[0]?.$match
+      return match?.tabId?.$in && Object.keys(match).length === 1 ? [{ collection: e.command!.aggregate, ids: match.tabId.$in }] : []
+    })
+}
+
+it('batches cold host timestamp misses across Swarms and leaves warm timestamps out of the batch', async () => {
+  const a = await scene(), b = await scene(a.machineId)
+  for (const s of [a, b]) swarmReadCache()!.drop(s.tabId)
+  const hosts = new HostReads(store, { now: () => Date.now() })
+  const expected = await lastChangedAt(db, [a.tabId, b.tabId])
+  const cold = await profiled(async () => {
+    const concurrent = await Promise.all([hosts.changes(owner, a.machineId, { full: true }), hosts.changes(owner, a.machineId, { full: true })])
+    for (const result of concurrent) expect(new Map(result.tabs.map(t => [t.tabId, t.lastChangedAt]))).toEqual(expected)
+  })
+  expect(timestampScans(cold)).toHaveLength(7)
+  for (const scan of timestampScans(cold)) expect(new Set(scan.ids)).toEqual(new Set([a.tabId, b.tabId]))
+  expect(timestampScans(await profiled(() => hosts.changes(owner, a.machineId, { full: true })))).toEqual([])
+
+  const c = await scene(a.machineId)
+  swarmReadCache()!.drop(c.tabId)
+  const mixed = timestampScans(await profiled(() => hosts.changes(owner, a.machineId, { full: true })))
+  expect(mixed).toHaveLength(7)
+  for (const scan of mixed) expect(scan.ids).toEqual([c.tabId])
+
+  const direct = new HostReads(new SuperTabStore(db, () => clock, null, { readCache: null }))
+  const uncached = await profiled(async () => {
+    expect((await direct.changes(owner, a.machineId, { full: true })).tabs)
+      .toEqual((await hosts.changes(owner, a.machineId, { full: true })).tabs)
+  })
+  expect(timestampScans(uncached)).toHaveLength(7)
+  for (const scan of timestampScans(uncached)) expect(new Set(scan.ids)).toEqual(new Set([a.tabId, b.tabId, c.tabId]))
+})
+
 it('reuses the host timestamp at the same stamp, including a repeated wake with a held etag', async () => {
   const s = await scene()
   const hosts = new HostReads(store, { now: () => Date.now() })
@@ -119,13 +157,7 @@ it('reuses the host timestamp at the same stamp, including a repeated wake with 
     expect(second.tabs).toEqual(first.tabs.map(tab => ({ tabId: tab.tabId, etag: tab.etag,
       lastChangedAt: tab.lastChangedAt, unchanged: true })))
   })
-  const scans = entries.filter(e => /^Swarm(Head|Member|Agent|Group|Machine|Start|Progress)$/.test(e.command?.aggregate as string))
-    .filter(e => {
-      const match = (e.command?.pipeline as Array<{ $match?: { tabId?: { $in?: unknown } } }>)?.[0]?.$match
-      // Timestamp scans match only tabId; the host's indexed wake query also bounds changedAt and hostMachineIds.
-      return match?.tabId?.$in && Object.keys(match).length === 1
-    })
-  expect(scans.map(e => e.command?.aggregate)).toEqual([])
+  expect(timestampScans(entries)).toEqual([])
 
   // A committed change invalidates the timestamp along with the host inputs; a cold/direct read agrees.
   clock = Date.now()

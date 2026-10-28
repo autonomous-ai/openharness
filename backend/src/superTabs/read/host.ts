@@ -12,7 +12,7 @@ import { machineBillingAllowsDataPlane } from '../../lib/billingState.js'
 import { fail, type AgentStart, type SuperTabState } from '../model.js'
 import type { SuperTabStore } from '../store.js'
 import type { CacheView } from '../cache.js'
-import { readLastChangedAt, readMachines } from '../cachedReads.js'
+import { readLastChangedAts, readMachines } from '../cachedReads.js'
 import * as parts from '../parts/index.js'
 import type { MachineData, Part } from '../parts/index.js'
 import { groupsBy, retryStaleIndex } from '../parts/indexed.js'
@@ -64,12 +64,14 @@ export class HostReads {
     const full = 'reload' in from
     const woken = full ? null : await this.woken(tx, ids, machineId, from.since)
     const tabs = []
-    const cached = await this.store.view(woken ? ids.filter(id => woken.has(id)) : ids)
+    const answered = woken ? ids.filter(id => woken.has(id)) : ids
+    const cached = await this.store.view(answered)
+    const newest = await readLastChangedAts(tx, cached, answered)
     for (const tabId of ids) {
       if (woken && !woken.has(tabId)) continue
       // A wake can repeat while the cursor overlaps the same change. Share the timestamp at the read's stamp instead
       // of scanning every part kind again before the unchanged-etag shortcut.
-      const lastChangedAt = await readLastChangedAt(tx, cached, tabId), held = request.held?.[tabId]
+      const lastChangedAt = newest.get(tabId) ?? null, held = request.held?.[tabId]
       // The etag is the rows' hash and then the signature of what they were built from. A matching signature answers
       // 'unchanged' from version columns alone. Never on a full read: grants and billing live outside the parts.
       const inputs = await cached.get(tabId, 'host:inputs', 'main', () => this.inputs(tx, tabId))
