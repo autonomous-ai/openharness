@@ -1,5 +1,6 @@
 /** Persistence for route decisions. Called inside SuperTabStore's transactions. */
 import type { Prisma, SuperTabRouteDecision } from '@prisma/client'
+import { ms } from './parts/light.js'
 import { finalMatches, type RouteDecision, type RouteDecisionEffect, type RouteFinal, type RouteOverride, type RouteRecord } from './routeRecord.js'
 
 type Tx = Prisma.TransactionClient
@@ -20,6 +21,18 @@ export const timedDecisionOf = (row: SuperTabRouteDecision) => ({ ...decisionOf(
 export async function readDecision(tx: Tx, tabId: string, id: string): Promise<RouteDecision | undefined> {
   const row = await tx.superTabRouteDecision.findFirst({ where: { id, tabId } })
   return row ? decisionOf(row) : undefined
+}
+
+/** The newest 100 decisions in the conversations a reader may see, newest first, as Prisma reads them. A plain $in match:
+ *  Prisma's `conversationId: { in }` is an $expr $or that Mongo plans branch by branch, 25 ms a read over a Lead's ~360
+ *  conversations (integration/superTabIndexes.test.ts). */
+export async function recentDecisions(tx: Tx, tabId: string, conversationIds: string[]): Promise<SuperTabRouteDecision[]> {
+  const rows = await tx.superTabRouteDecision.aggregateRaw({ pipeline: [{ $match: { tabId, conversationId: { $in: conversationIds } } },
+    { $sort: { createdAt: -1 } }, { $limit: 100 }] }) as unknown as Array<Record<string, unknown>>
+  return rows.map(row => ({ id: row._id as string, tabId: row.tabId as string, conversationId: row.conversationId as string,
+    record: row.record as Prisma.JsonValue, final: (row.final ?? null) as Prisma.JsonValue, override: (row.override ?? null) as Prisma.JsonValue,
+    assignmentId: (row.assignmentId ?? null) as string | null, outcome: (row.outcome ?? null) as string | null,
+    outcomeAt: row.outcomeAt == null ? null : new Date(ms(row.outcomeAt)), createdAt: new Date(ms(row.createdAt)) }))
 }
 
 export async function writeRouteEffects(tx: Tx, tabId: string, effects: RouteDecisionEffect[], now: number): Promise<void> {

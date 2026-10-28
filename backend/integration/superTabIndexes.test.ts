@@ -7,6 +7,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { MongoMemoryReplSet } from 'mongodb-memory-server-core'
 import { PrismaClient } from '@prisma/client'
 import { pageDeliveries, pageReactions } from '../src/superTabs/pageReads.js'
+import { recentDecisions } from '../src/superTabs/routeDecisions.js'
 
 // A fresh loopback replica set, created here. This suite never reads DATABASE_URL or an existing database.
 // Prod Mongo spent hours an hour on the message page's delivery read (2026-10-28): Prisma sends `messageId in [...]` as an
@@ -18,6 +19,7 @@ const pad = (n: number) => String(n).padStart(3, '0')
 const MESSAGES = 300, AGENTS = 10
 const PAGE = Array.from({ length: 100 }, (_, i) => `A-m${pad(100 + i)}`)
 const T0 = Date.parse('2026-10-28T05:00:00.000Z')
+const GROUPS = Array.from({ length: 360 }, (_, i) => `g${pad(i)}`)
 
 beforeAll(async () => {
   replica = await MongoMemoryReplSet.create({ binary: { version: '7.0.24', downloadDir: join(tmpdir(), 'harness-super-tab-mongodb-binaries') },
@@ -45,6 +47,22 @@ beforeAll(async () => {
   // One delivery with every optional field set, and one older record that never had the hold fields at all.
   await db.superTabDelivery.update({ where: { id: 'A-150-3' }, data: { status: 'delivered', receipt: 'typed', holdReason: 'busy',
     holdSince: new Date(T0 + 7000), deliveredAt: new Date(T0 + 8000), answeredAt: new Date(T0 + 9000) } })
+  // Two Swarms of 360 conversations and 2,000 route decisions each, as a busy Swarm keeps them for 90 days. Every fifth
+  // decision has its pick, override and outcome; every seventh is an older record that never had those fields.
+  const decisions = []
+  for (const tab of ['A', 'B']) {
+    for (let i = 0; i < 2000; i++) {
+      const full = i % 5 === 0
+      decisions.push({ id: `${tab}-d${String(i).padStart(4, '0')}`, tabId: tab, conversationId: GROUPS[i % 360],
+        record: { difficulty: 'medium', candidates: [{ id: 'c0', p: 0.42, slots: 3, title: 'Claude opus high' }, { id: 'c1', p: null, slots: 0 }], why: `route ${i}` },
+        ...full ? { final: { kind: 'new', startId: `s${i}` }, override: { by: 'lead', candidateId: 'c1' }, assignmentId: `as${i}`, outcome: 'done',
+          outcomeAt: new Date(T0 + i * 1000 + 500) } : {},
+        createdAt: new Date(T0 + i * 1000) })
+    }
+  }
+  await db.superTabRouteDecision.createMany({ data: decisions.filter((_, i) => i % 7) })
+  await db.$runCommandRaw({ insert: 'SuperTabRouteDecision', documents: decisions.filter((_, i) => !(i % 7)).map(({ id, createdAt, ...rest }) =>
+    ({ _id: id, ...rest, ...rest.outcomeAt ? { outcomeAt: { $date: rest.outcomeAt.toISOString() } } : {}, createdAt: { $date: createdAt.toISOString() } })) })
   await db.$runCommandRaw({ insert: 'SuperTabDelivery', documents: [{ _id: 'A-150-old', tabId: 'A', conversationId: 'g10', messageId: 'A-m150',
     agentId: 'agent-old', machineId: 'host', membershipGeneration: 'gen', authorKind: 'person', authorId: 'owner', authorGeneration: 'gen',
     status: 'answered', createdAt: { $date: new Date(T0).toISOString() }, updatedAt: { $date: new Date(T0 + 1).toISOString() } }] })
@@ -104,5 +122,40 @@ describe('message page reads', () => {
     expect(await pageReactions(db, 'A', PAGE)).toEqual(await db.superTabReaction.findMany({ where: { tabId: 'A', messageId: { in: PAGE } },
       select: { messageId: true, emoji: true, actorKind: true, actorId: true } }))
     expect(await pageDeliveries(db, 'B', PAGE)).toEqual([])
+  })
+})
+
+describe('route decision list', () => {
+  const prismaRead = (tabId: string, conversationIds: string[]) => db.superTabRouteDecision.findMany({ where: { tabId, conversationId: { in: conversationIds } },
+    orderBy: { createdAt: 'desc' }, take: 100 })
+
+  it('reads a Lead\'s newest 100 decisions over every conversation with one index scan of 100 documents', async () => {
+    const [rows, profile] = await profiled('SuperTabRouteDecision', () => recentDecisions(db, 'A', GROUPS))
+    expect(rows.map(row => row.id)).toEqual(Array.from({ length: 100 }, (_, i) => `A-d${1999 - i}`))
+    expect(profile).toEqual({ plans: ['IXSCAN { tabId: 1, createdAt: 1 }'], docsExamined: 100, returned: 100 })
+  })
+
+  // Prisma sends `conversationId in [...]` as an $expr $or of one branch per conversation, which Mongo plans branch by branch:
+  // over a Lead's ~360 conversations that took 25 ms of planning per read, against under 1 ms for the plain $in match. Both
+  // examine the same documents, so the plan shape is what tells them apart: one IXSCAN, never an OR of them.
+  it('reads the decisions of a reader\'s few conversations with one index scan, examining only those', async () => {
+    const [rows, profile] = await profiled('SuperTabRouteDecision', () => recentDecisions(db, 'A', ['g007', 'g300']))
+    expect(rows).toHaveLength(11)
+    expect(profile).toEqual({ plans: ['IXSCAN { tabId: 1, conversationId: 1, outcome: 1 }'], docsExamined: 11, returned: 11 })
+  })
+
+  it('returns each decision as the Prisma read did', async () => {
+    const rows = await recentDecisions(db, 'A', ['g000', 'g001'])
+    expect(rows.find(row => row.id === 'A-d1800')).toEqual({ id: 'A-d1800', tabId: 'A', conversationId: 'g000',
+      record: { difficulty: 'medium', candidates: [{ id: 'c0', p: 0.42, slots: 3, title: 'Claude opus high' }, { id: 'c1', p: null, slots: 0 }], why: 'route 1800' },
+      final: { kind: 'new', startId: 's1800' }, override: { by: 'lead', candidateId: 'c1' }, assignmentId: 'as1800', outcome: 'done',
+      outcomeAt: new Date(T0 + 1_800_500), createdAt: new Date(T0 + 1_800_000) })
+    // Written as an older record: none of the optional fields exist.
+    expect(rows.find(row => row.id === 'A-d0721')).toEqual({ id: 'A-d0721', tabId: 'A', conversationId: 'g001',
+      record: { difficulty: 'medium', candidates: [{ id: 'c0', p: 0.42, slots: 3, title: 'Claude opus high' }, { id: 'c1', p: null, slots: 0 }], why: 'route 721' },
+      final: null, override: null, assignmentId: null, outcome: null, outcomeAt: null, createdAt: new Date(T0 + 721_000) })
+    expect(await recentDecisions(db, 'A', GROUPS)).toEqual(await prismaRead('A', GROUPS))
+    expect(await recentDecisions(db, 'A', ['g007', 'g300'])).toEqual(await prismaRead('A', ['g007', 'g300']))
+    expect(await recentDecisions(db, 'B', [])).toEqual([])
   })
 })
