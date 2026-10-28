@@ -106,8 +106,10 @@ export function approves(text: string): boolean {
 /** The person asked answered a decision: credited from when it was asked. A decision a worker asked through needs_human is
  *  that wait's question, named by the wait, also when the worker asked it again after moving on: answering it answers the
  *  wait, and once the wait is answered, by a post or this decision, the other earns nothing more. A wait from before
- *  decisions were named is matched by its time, as it was asked in the same command. */
-export function recordDecision(group: Conversation, decision: { id: string; personId: string; createdAt: number; assignmentId: string | null }, now: number): void {
+ *  decisions were named is matched by its time, as it was asked in the same command. A decision left to the PM closes its
+ *  wait and is credited to nobody. */
+export function recordDecision(group: Conversation, decision: { id: string; personId: string; createdAt: number; assignmentId: string | null }, now: number,
+  delegated = false): void {
   if (group.audience || isLeads(group)) return
   const waiting = group.ledger?.waiting
   if (waiting && (waiting.decisionId ? waiting.decisionId === decision.id
@@ -115,6 +117,8 @@ export function recordDecision(group: Conversation, decision: { id: string; pers
     if (waiting.answeredAt != null) return
     waiting.answeredAt = now
   }
+  // Left to the PM: the wait is over, but the person did not choose, so it earns them nothing.
+  if (delegated) return
   credit(group, { personId: decision.personId, at: now, waitedMs: now - decision.createdAt, kind: 'decision', item: decision.id })
 }
 

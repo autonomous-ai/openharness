@@ -699,6 +699,37 @@ describe('decisions asked of one person (v2)', () => {
     expect(await decisions(s.tabId, owner, 'open', s.lead)).toEqual([expect.objectContaining({ id: second })])
   })
 
+  it('leaves a decision to the PM: the recommended option, listed as the PM\'s, and the PM\'s line in the person\'s quiet Chat with PM', async () => {
+    const s = await scene()
+    clock = Date.now()
+    const asked = await post(s.tabId, { type: 'decision.ask', conversationId: s.web, personId: peer.sub,
+      questions: [{ ...question('Ship how?'), recommended: 1 }] }, owner, s.lead)
+    const id = (asked.body.data.result.decisionIds as string[])[0]!
+    // The person's Chat with PM went quiet: it is not in a command's usual load.
+    await writeGroup(s.tabId, s.privateId, Date.now(), group => { group.dormant = true })
+    const left = await post(s.tabId, { type: 'decision.answer', decisionId: id, delegate: true }, peer)
+    expect(left.status, JSON.stringify(left.body)).toBe(200)
+    expect(await db.superTabDecision.findUnique({ where: { id } })).toMatchObject({ choice: 1, delegated: true })
+    const listed = { id, choice: 1, delegated: true, answer: 'PM decided: To everyone' }
+    expect(await decisions(s.tabId, peer, 'settled')).toEqual([expect.objectContaining(listed)])
+    // An older Desktop reads the person's answered decisions and labels each "You chose": it is not given this one.
+    expect(await decisions(s.tabId, peer, 'answered')).toEqual([])
+    // Agents read it as answered, as before, now saying who decided.
+    expect(await decisions(s.tabId, owner, 'answered', s.lead)).toEqual([expect.objectContaining(listed)])
+    const line = (await db.superTabMessage.findMany({ where: { tabId: s.tabId, conversationId: s.privateId } })).at(-1)
+    expect(line).toMatchObject({ text: 'PM decided: To everyone — Ship how?', recipientIds: [], source: { kind: 'decision-delegated', decisionId: id } })
+    expect(line!.author).toMatchObject({ kind: 'agent', id: s.lead })
+    // Only the person asked may leave it to the PM, and only while it is open.
+    expect((await post(s.tabId, { type: 'decision.answer', decisionId: id, delegate: true }, peer)).body.error?.code).toBe('DECISION_ANSWERED')
+    expect((await post(s.tabId, { type: 'decision.answer', decisionId: id, delegate: true }, owner)).status).toBe(404)
+    // A person's own answer is listed as theirs.
+    const mine = ((await post(s.tabId, { type: 'decision.ask', conversationId: s.web, personId: peer.sub, questions: [question('Name it?')] }, owner, s.lead))
+      .body.data.result.decisionIds as string[])[0]!
+    await post(s.tabId, { type: 'decision.answer', decisionId: mine, choice: 0 }, peer)
+    expect((await decisions(s.tabId, peer, 'settled')).find(d => d.id === mine)).toMatchObject({ delegated: false, answer: 'Behind a flag' })
+    expect((await decisions(s.tabId, peer, 'answered')).map(d => d.id)).toEqual([mine])
+  })
+
   it('takes an answer in a conversation that went quiet and was archived, counts it on a fresh first load, and tells both agents', async () => {
     const s = await scene()
     clock = Date.now()

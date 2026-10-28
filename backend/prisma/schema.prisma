@@ -1123,6 +1123,8 @@ model SuperTabDecision {
   answeredAt     DateTime?
   choice         Int?
   note           String?
+  /// The person asked left it to the PM, who took the recommended option: never shown as their own choice.
+  delegated      Boolean?
 
   @@index([tabId, personId, createdAt])
   @@index([tabId, askerAgentId, createdAt])
