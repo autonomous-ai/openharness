@@ -123,6 +123,16 @@ function csvFields(line: string): string[] {
   return fields
 }
 
+/** `whoami /user /fo csv /nh`: one line, `"<DOMAIN\name>","<SID>"`, this process's own account. */
+export const WHOAMI_USER_ARGS = ['/user', '/fo', 'csv', '/nh']
+
+/** The account's SID in what `whoami /user /fo csv /nh` printed (its last column: a name may hold a comma), or null. */
+export function windowsUserSid(stdout: string): string | null {
+  const line = stdout.split('\n').map((l) => l.trim()).find(Boolean)
+  const sid = line ? csvFields(line).at(-1) ?? '' : ''
+  try { return checkSid(sid) } catch { return null }
+}
+
 /** The SIDs (the third column) of what `whoami /groups /fo csv /nh` printed. */
 export function windowsGroupSids(stdout: string): string[] {
   return stdout.split('\n').map((line) => line.trim()).filter(Boolean).map((line) => csvFields(line)[2] ?? '').filter((sid) => sid.startsWith('S-1-'))

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   WINDOWS_GH_BUILDS, parseWindowsAccountExists, parseWindowsJobState, runWindowsPrivacyCheck, windowsAccountExistsScript, windowsGroupSids,
-  windowsJobStateScript, windowsOwnerSidScript, windowsPrivacyProbes, windowsRelayAclCommand, windowsUnzipScript, type WindowsPrivacyDeps,
+  windowsJobStateScript, windowsOwnerSidScript, windowsPrivacyProbes, windowsRelayAclCommand, windowsUnzipScript, windowsUserSid, type WindowsPrivacyDeps,
 } from './windowsTeam.js'
 
 const config = { ownerHome: 'C:\\Users\\DELL', sentinel: 'C:\\Users\\DELL\\.harness-team-privacy' }
@@ -59,6 +59,15 @@ describe('runWindowsPrivacyCheck', () => {
 
   it('fails for an administrator, deny-only or not', () => {
     expect(runWindowsPrivacyCheck(config, deps({ groupSids: () => ['S-1-5-32-544'] }))).toMatchObject({ passed: false, item: 'standard-user' })
+  })
+})
+
+describe('windowsUserSid', () => {
+  it('reads the SID whoami /user prints, a name with a comma included, and nothing else', () => {
+    expect(windowsUserSid('"desktop-0tfh0oj\\dell","S-1-5-21-3073114020-2660841771-734626734-1001"\r\n')).toBe('S-1-5-21-3073114020-2660841771-734626734-1001')
+    expect(windowsUserSid('"CORP\\Smith, Jo","S-1-5-21-1-2-3-1105"\r\n')).toBe('S-1-5-21-1-2-3-1105')
+    expect(windowsUserSid('')).toBeNull()
+    expect(windowsUserSid('"x","not a sid"')).toBeNull()
   })
 })
 

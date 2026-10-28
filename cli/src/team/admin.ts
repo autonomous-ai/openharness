@@ -14,10 +14,11 @@
  * Everything that touches the system goes through [AdminDeps]; the specs never run osascript, pkexec or sudo.
  */
 import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir, userInfo } from 'node:os'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { runGuestCommand, type GuestRunner } from '../lib/guestAccounts.js'
 import { adminAppleScript } from '../lib/guestHelperInstall.js'
+import { WHOAMI_USER_ARGS, windowsUserSid } from './windowsTeam.js'
 
 export type AdminResult =
   | { ok: true; stdout: string }
@@ -45,8 +46,6 @@ export interface AdminDeps {
   platform?: NodeJS.Platform
   /** Linux: whether `pkexec` and a desktop session to show its dialog in are there. */
   graphical?: boolean
-  /** Windows: this account's name, the one the staging folder is granted to. */
-  owner?: () => string
 }
 
 /** What a Linux computer with no desktop session answers for the prompt (over SSH, or Desktop's daemon with no display). */
@@ -65,16 +64,23 @@ const psQuote = (word: string): string => `'${word.replaceAll("'", "''")}'`
 /**
  * What runs elevated on Windows: the team script, with what it says kept in the staging folder. `Start-Process -Verb
  * RunAs` cannot hand an elevated process's output back, and this is how it reaches the owner's `harness team`.
+ *
+ * run.ps1 runs as a child powershell.exe whose own stdout and stderr are the two files. Run in this process with
+ * `1> $out 2> $err`, only PowerShell's streams were kept, and the team scripts write through [Console]
+ * (./windowsScript.ts `say`/`die`): every failure read "The script stopped (exit N)", and removal's `team computer <id>`
+ * never reached the CLI (review, 2026-10-28). The child's handle is read once before waiting, so its exit code is kept.
  */
 const ELEVATED_PS1 = [
   '# Runs the Harness Team script elevated and keeps what it said (cli/src/team/admin.ts).',
-  // Redirection in Windows PowerShell 5.1 writes UTF-16 unless told otherwise.
-  "$PSDefaultParameterValues['Out-File:Encoding'] = 'utf8'",
   "$out = Join-Path $PSScriptRoot 'stdout.txt'",
   "$err = Join-Path $PSScriptRoot 'stderr.txt'",
+  "$run = Join-Path $PSScriptRoot 'run.ps1'",
+  "$ps = Join-Path $env:SystemRoot 'System32\\WindowsPowerShell\\v1.0\\powershell.exe'",
   'try {',
-  "  & (Join-Path $PSScriptRoot 'run.ps1') 1> $out 2> $err",
-  '  exit $LASTEXITCODE',
+  "  $p = Start-Process -FilePath $ps -ArgumentList @('-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', \"`\"$run`\"\") -NoNewWindow -PassThru -RedirectStandardOutput $out -RedirectStandardError $err",
+  '  $null = $p.Handle',
+  '  $p.WaitForExit()',
+  '  exit $p.ExitCode',
   '} catch {',
   '  "harness: $($_.Exception.Message)" | Out-File -Append -Encoding utf8 $err',
   '  exit 1',
@@ -97,9 +103,13 @@ const UAC_CANCELLED = 1223
  * owner, SYSTEM and Administrators can open. Inheritance is removed first, before anything is written in it.
  * docs/superpowers/plans/2026-10-28-harness-team-account-windows.md, Task 3.
  */
-async function runElevatedOnWindows(runner: GuestRunner, stageDir: string, build: (stageDir: string) => AdminScript, owner: string): Promise<AdminResult> {
-  // SYSTEM and Administrators by SID: their names change with the language of Windows.
-  const acl = await runner('icacls', [stageDir, '/inheritance:r', '/grant:r', `${owner}:(OI)(CI)F`, '*S-1-5-18:(OI)(CI)F', '*S-1-5-32-544:(OI)(CI)F'],
+async function runElevatedOnWindows(runner: GuestRunner, stageDir: string, build: (stageDir: string) => AdminScript): Promise<AdminResult> {
+  // Every principal by SID. The owner's from this process's own token: a bare name could resolve to a same-named
+  // domain or local account. SYSTEM's and Administrators' names change with the language of Windows.
+  const who = await runner('whoami', WHOAMI_USER_ARGS, { timeoutMs: 30_000 })
+  const ownerSid = who.code === 0 ? windowsUserSid(who.stdout) : null
+  if (!ownerSid) return { ok: false, code: 'FAILED', message: 'Could not read this account\'s SID (whoami /user).' }
+  const acl = await runner('icacls', [stageDir, '/inheritance:r', '/grant:r', `*${ownerSid}:(OI)(CI)F`, '*S-1-5-18:(OI)(CI)F', '*S-1-5-32-544:(OI)(CI)F'],
     { timeoutMs: 30_000 })
   if (acl.code !== 0) {
     return { ok: false, code: 'FAILED', message: `Could not make the staging folder private: ${(acl.stderr || acl.stdout).trim() || `icacls exited ${acl.code}`}` }
@@ -141,7 +151,7 @@ export function adminRunner(deps: AdminDeps = {}): RunAdmin {
   return async (build, prompt, via = 'prompt') => {
     const stageDir = makeStage()
     try {
-      if (platform === 'win32') return await runElevatedOnWindows(runner, stageDir, build, deps.owner?.() ?? userInfo().username)
+      if (platform === 'win32') return await runElevatedOnWindows(runner, stageDir, build)
       chmodSync(stageDir, 0o700)
       // Nothing is staged for a prompt that cannot be shown: a Desktop offer answers at once, never waits on a dialog.
       if (platform === 'linux' && via === 'prompt' && !graphical()) return { ok: false, code: 'NO_PROMPT', message: NO_PROMPT_MESSAGE }
