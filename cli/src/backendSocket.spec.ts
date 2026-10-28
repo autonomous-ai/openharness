@@ -827,7 +827,8 @@ describe('BackendSocket outbound queue', () => {
     // … but once the handshake is abandoned, the ordinary backoff schedules a fresh attempt.
     ws1.handshakeTimeout()
     expect(socket.isConnected()).toBe(false)
-    await vi.advanceTimersByTimeAsync(1_000)
+    // The first redial lands at random between 1 and 2 s.
+    await vi.advanceTimersByTimeAsync(2_000)
     expect(wsMock.instances).toHaveLength(2)
     const ws2 = wsMock.instances[1]
     expect(ws2.options?.handshakeTimeout).toBe(15_000)
@@ -918,7 +919,10 @@ describe('BackendSocket outbound queue', () => {
       expect(statuses).toEqual([true, false])
       expect(calls).toEqual([{ force: true, failedToken: 'stale-token' }])
       expect(revoked).not.toHaveBeenCalled()
-      // And the refresh, not a backoff timer, opened the next socket — with the new token.
+      // The next socket waits out the backoff like any other drop (1–2 s for the first), then dials
+      // once, with the new token.
+      expect(wsMock.instances).toHaveLength(1)
+      await vi.advanceTimersByTimeAsync(2_000)
       expect(wsMock.instances).toHaveLength(2)
       expect(wsMock.instances[1].protocols).toEqual(['fresh-token'])
       await vi.advanceTimersByTimeAsync(60_000)
@@ -939,8 +943,8 @@ describe('BackendSocket outbound queue', () => {
       await vi.advanceTimersByTimeAsync(0)
       expect(revoked).not.toHaveBeenCalled()
       expect(wsMock.instances).toHaveLength(1)
-      await vi.advanceTimersByTimeAsync(1_000)
-      expect(wsMock.instances).toHaveLength(2) // the ordinary backoff, session intact
+      await vi.advanceTimersByTimeAsync(2_000)
+      expect(wsMock.instances).toHaveLength(2) // the ordinary backoff (1–2 s for the first), session intact
       await socket.stop()
     })
 
@@ -974,7 +978,7 @@ describe('BackendSocket outbound queue', () => {
     ;(gatewayOf(socket) as any).sendTo('conn-1', { type: 'e2e_rekey', payload: { n: 1 } })
     expect(ws1.sent).toHaveLength(0)
 
-    await vi.advanceTimersByTimeAsync(1_000)
+    await vi.advanceTimersByTimeAsync(2_000)
     const ws2 = wsMock.instances[1]
     ws2.open()
     const sent = parseSent(ws2)
