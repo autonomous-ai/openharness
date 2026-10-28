@@ -199,7 +199,7 @@ void main() {
     await walk.waitFor(walk.key('swarm-ask-d1'));
     await walk.shot('chat');
 
-    await tester.tap(walk.key('swarm-mention'));
+    await tester.enterText(find.byType(TextField), '@');
     await walk.shot('mention-picker');
     await tester.enterText(find.byType(TextField), '@K');
     await walk.shot('mention-narrowed');
