@@ -17,7 +17,7 @@
  *    the external identity service.
  */
 import type { IncomingMessage } from 'http'
-import { markCpuKind } from './selfProfile.js'
+import { frameKind, markCpuKind } from './selfProfile.js'
 import type { Duplex } from 'stream'
 import { WebSocket, type RawData } from 'ws'
 import { createWss, WS_LIMITS } from './wsServer.js'
@@ -68,6 +68,10 @@ const WEB_CLIENT_PRESENCE_WRITE_MS = 5 * 60_000
 export { BACKEND_ONLY_DOWN_TYPES } from './backendOnlyFrames.js'
 
 const wss = createWss(WS_LIMITS.web, { echoFirstProtocol: true })
+
+/** Frame types the CPU self-profile may log by name; any other type a client sends is logged as `other`. */
+const WEB_FRAME_TYPES: ReadonlySet<string> = new Set([...TERMINAL_DOWN_TYPES, ...P2P_DOWN_TYPES,
+  'p2p_result', 'e2e_hello', 'machine_select', 'machine_deselect', 'machines_watch', 'devices_watch', 'message'])
 
 // Device-status re-seed: covers the silent-offline case (worker crash → presence TTL 45s ages out
 // with no transition published) — the watcher re-reads presence keys on this cadence.
@@ -570,7 +574,7 @@ function attachUserClient(ws: WebSocket, user: AuthUser, surface: 'mobile' | 'we
     }
     let frame: Frame
     try { frame = JSON.parse(raw.toString()) as Frame } catch { return }
-    markCpuKind(`web-ws ${String(frame.type)}`)
+    markCpuKind(frameKind('web-ws', frame.type, WEB_FRAME_TYPES))
     inbox.enqueue(frame)
   })
 
@@ -630,7 +634,7 @@ function attachWebClient(ws: WebSocket, machineId: string): void {
     let frame: Frame
     try { frame = JSON.parse(raw.toString()) as Frame } catch { return }
     const type = frame.type as string | undefined
-    markCpuKind(`web-ws ${String(type)}`)
+    markCpuKind(frameKind('web-ws', type, WEB_FRAME_TYPES))
     // The same backend-only refusal as the per-user path: a key holder is a client, not the backend.
     if (isBackendOnlyDownType(type)) return
     if (typeof type === 'string' && type.startsWith('terminal_') && !TERMINAL_DOWN_TYPES.has(type)) return

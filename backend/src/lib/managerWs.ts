@@ -10,7 +10,7 @@
  *   - on `up`   → publishUp(machineId) so every client-holding backend fans it to its clients.
  */
 import type { IncomingMessage } from 'http'
-import { markCpuKind } from './selfProfile.js'
+import { frameKind, markCpuKind } from './selfProfile.js'
 import type { Duplex } from 'stream'
 import { randomUUID } from 'crypto'
 import { WebSocket, type RawData } from 'ws'
@@ -43,6 +43,10 @@ import { getMachineLifecycleState } from './machineLifecycle.js'
 const PRESENCE_TTL_SEC = 30
 
 const wss = createWss(WS_LIMITS.manager)
+
+/** Frame types the CPU self-profile may log by name: the ones handled below; any other is logged as `other`. */
+const MANAGER_FRAME_TYPES: ReadonlySet<string> = new Set(['up', 'register', 'unregister', 'app_register', 'app_unregister', 'hello',
+  'ping', 'provision_result', 'app_res', 'app_body', 'app_res_body', 'app_ws_msg', 'app_ws_close', 'app_abort'])
 
 /** Fastify/http upgrade hook for `/api/manager-ws`. Auth = manager apiKey (`x-api-key`) + `managerId`. */
 export function handleManagerUpgrade(req: IncomingMessage, socket: Duplex, head: Buffer): void {
@@ -227,7 +231,7 @@ export function attachManager(ws: WebSocket, managerId: string, poolKind: 'contr
     const rawBytes = Buffer.isBuffer(raw) ? raw.length : Array.isArray(raw) ? raw.reduce((n, b) => n + b.length, 0) : raw.byteLength
     let frame: ManagerFrame
     try { frame = JSON.parse(raw.toString()) as ManagerFrame } catch { return }
-    markCpuKind(`manager-ws ${String(frame.t)}`)
+    markCpuKind(frameKind('manager-ws', frame.t, MANAGER_FRAME_TYPES))
     switch (frame.t) {
       case 'up': {
         // Tap project lifecycle to maintain machine_agents (plan cap) — replaces the old /proxy

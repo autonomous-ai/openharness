@@ -1,5 +1,6 @@
+import Fastify from 'fastify'
 import { afterEach, expect, it } from 'vitest'
-import { markCpuKind, startSelfProfile, topSelfTime } from './selfProfile.js'
+import { frameKind, markCpuKind, selfProfileFromEnv, startSelfProfile, topSelfTime } from './selfProfile.js'
 
 let stop = () => {}
 afterEach(() => stop())
@@ -24,4 +25,53 @@ it('counts the busy time of a named piece of work, and of what it awaits, under 
   await new Promise(resolve => setTimeout(resolve, 250))
   const busy = logs[0]!.busyMs as Record<string, number>
   expect(busy['http GET /api/x']).toBeGreaterThanOrEqual(35)
+})
+
+const spin = (ms: number) => { const end = performance.now() + ms; while (performance.now() < end) { /* spin */ } }
+const reported = async (logs: unknown[]) => { while (!logs.length) await new Promise(resolve => setTimeout(resolve, 20)) }
+
+it('logs a WebSocket frame by its type only when the type is known, anything a client invents as other', () => {
+  const known = new Set(['terminal_input'])
+  expect(frameKind('web-ws', 'terminal_input', known)).toBe('web-ws terminal_input')
+  expect(frameKind('web-ws', 'hello from alice@example.com', known)).toBe('web-ws other')
+  expect(frameKind('manager-ws', { t: 'up' }, known)).toBe('manager-ws other')
+  expect(frameKind('manager-ws', undefined, known)).toBe('manager-ws other')
+})
+
+it('keeps at most 50 names in a window; work under any further name counts as other', async () => {
+  const logs: Record<string, number>[] = []
+  // One window long enough for all 120 names, so the cap is the only limit.
+  stop = startSelfProfile({ everyMs: 3_600_000, reportMs: 2_000, log: (_m, c) => logs.push(c.busyMs as Record<string, number>) })
+  for (let i = 0; i < 120; i++) {
+    await new Promise<void>(resolve => setImmediate(() => { markCpuKind(`job name${i}`); spin(1); resolve() }))
+  }
+  await reported(logs)
+  const busy = logs[0]!
+  expect(busy['job name0']).toBeGreaterThan(0)
+  expect(busy.other).toBeGreaterThanOrEqual(60)
+  expect(Object.keys(busy).filter(k => k.startsWith('job name')).length).toBeLessThanOrEqual(50)
+})
+
+it('names HTTP requests when CPU_SELF_PROFILE=1, and adds no request hook when it is off', async () => {
+  // Each server has its own route: work the first one started can still run in the second one's window.
+  const served = async (env: NodeJS.ProcessEnv, route: string) => {
+    const app = Fastify()
+    app.get(route, async () => { spin(5); return {} })
+    const logs: Record<string, number>[] = []
+    const options = { everyMs: 3_600_000, reportMs: 200, log: (_m: string, c: Record<string, unknown>) => logs.push(c.busyMs as Record<string, number>) }
+    const fromEnv = selfProfileFromEnv(app, env, options)
+    // Off, the profile is started by hand to see whether the request would still be named.
+    stop = fromEnv ?? startSelfProfile(options)
+    await app.inject({ method: 'GET', url: route })
+    await new Promise(resolve => setTimeout(resolve, 250))
+    stop(); stop = () => {}
+    await app.close()
+    return { started: fromEnv !== undefined, kinds: Object.keys(Object.assign({}, ...logs)) }
+  }
+  const on = await served({ CPU_SELF_PROFILE: '1' }, '/api/on')
+  expect(on.started).toBe(true)
+  expect(on.kinds).toContain('http GET /api/on')
+  const off = await served({}, '/api/off')
+  expect(off.started).toBe(false)
+  expect(off.kinds).not.toContain('http GET /api/off')
 })

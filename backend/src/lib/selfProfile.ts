@@ -20,6 +20,8 @@ type Tagged = { [KIND]?: string }
 let enabled = false
 let current: string | undefined, since = 0
 let busy = new Map<string, number>()
+/** Names one window keeps; work under any further name counts as `other`, so memory stays bounded. */
+const MAX_KINDS = 50
 
 /** Names the work running now, and everything it goes on to schedule. A no-op unless the profile is on. */
 export function markCpuKind(kind: string): void {
@@ -31,13 +33,30 @@ export function markCpuKind(kind: string): void {
 
 function account(): void {
   const now = performance.now()
-  if (current !== undefined) busy.set(current, (busy.get(current) ?? 0) + now - since)
+  if (current !== undefined) {
+    const kind = busy.has(current) || busy.size < MAX_KINDS ? current : 'other'
+    busy.set(kind, (busy.get(kind) ?? 0) + now - since)
+  }
   since = now
+}
+
+/** A WebSocket frame's kind: `<prefix> <type>` for a type in [known], else `<prefix> other`, so nothing a client
+ *  sends becomes a log key. */
+export function frameKind(prefix: string, type: unknown, known: ReadonlySet<string>): string {
+  return `${prefix} ${typeof type === 'string' && known.has(type) ? type : 'other'}`
 }
 
 /** Every HTTP request is named by its route pattern, never its URL (no ids). */
 export function registerCpuKinds(app: FastifyInstance): void {
   app.addHook('onRequest', async request => { markCpuKind(`http ${request.method} ${request.routeOptions.url ?? 'unrouted'}`) })
+}
+
+/** With CPU_SELF_PROFILE=1, starts the profile and names HTTP requests; off, adds nothing to the server. Returns its
+ *  stop, or undefined when off. */
+export function selfProfileFromEnv(app: FastifyInstance, env: NodeJS.ProcessEnv = process.env, options?: SelfProfileOptions): (() => void) | undefined {
+  if (env.CPU_SELF_PROFILE !== '1') return undefined
+  registerCpuKinds(app)
+  return startSelfProfile(options)
 }
 
 export type SelfProfileOptions = { everyMs?: number; profileMs?: number; reportMs?: number; log?: (message: string, context: Record<string, unknown>) => void }
