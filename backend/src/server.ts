@@ -18,8 +18,10 @@ import { handleManagerUpgrade } from './lib/managerWs.js'
 import { handleAdapterUpgrade } from './lib/adapterWs.js'
 import { logger } from './utils/logger.js'
 import { startTurnCredentialRefresh } from './lib/turnCredentials.js'
-import { closeBus, redisCount, redisSsoProfileStore } from './lib/bus.js'
+import { closeBus, pub, redisCount, redisSsoProfileStore } from './lib/bus.js'
 import { useSharedSsoProfileStore } from './lib/ssoAuth.js'
+import { useSharedRateCounter } from './lib/rateLimit.js'
+import { redisWindowCounter } from './lib/redisRateCounter.js'
 import { selfProfileFromEnv } from './lib/selfProfile.js'
 import { drainAllSockets, openSocketCount, RELEASE_UPGRADE_SLOT, type SlotSocket } from './lib/wsServer.js'
 
@@ -146,6 +148,8 @@ async function start(): Promise<void> {
   // Every process shares one memory of validated tokens; without it each worker asks the profile API
   // for itself. Attached before anything can authenticate — the REST gate below and the socket upgrades.
   useSharedSsoProfileStore(redisSsoProfileStore)
+  // Rate limits count across every process and pod (lib/rateLimit.ts), not once per process.
+  useSharedRateCounter(redisWindowCounter(pub))
 
   // SSO access-token gate for the control API (data-plane auth happens before Fastify).
   registerAuthMiddleware(app)
