@@ -7484,6 +7484,8 @@ class AppNotifier extends ChangeNotifier {
     sessionTails.clear();
     shareStatus.clear();
     gridPictures.clear();
+    // Pickers keep listening to this menu; only the old account's rows go.
+    _modelsMenu?.reset();
     _stopWakeFollowers();
     expandedMachines.clear();
     selectedMachineId = null;
