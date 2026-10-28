@@ -304,6 +304,20 @@ it('refuses Hub reports with credentials, foreign or malformed counters, or extr
   expect((await submit({ ...good, counters: { hub_fork: 1 } })).statusCode).toBe(400)
   expect((await sendSetup({ ...setup, counters: { hub_fork: 1 } })).statusCode).toBe(400)
 })
+it('answers busy storage behind setup and Hub reports as 429 with a Retry-After, and an outage as 503', async () => {
+  for (const send of [() => sendSetup(), () => sendHub()]) {
+    methods.ingestSetupUsage.mockRejectedValueOnce(Object.assign(new Error('PRIVATE_CANARY'), { code: 'P2034' }))
+    const busy = await send()
+    expect(busy.statusCode).toBe(429)
+    expect(busy.json().error.code).toBe('USAGE_UNAVAILABLE')
+    expectRetryAfter(busy)
+    expect(busy.body).not.toContain('PRIVATE_CANARY')
+    methods.ingestSetupUsage.mockRejectedValueOnce(Object.assign(new Error('PRIVATE_CANARY'), { code: 'P1001' }))
+    const down = await send()
+    expect(down.statusCode).toBe(503)
+    expect(down.headers['retry-after']).toBeUndefined()
+  }
+})
 it('does not reflect a Hub storage error', async () => {
   methods.ingestSetupUsage.mockRejectedValue(new Error('PRIVATE_CANARY'))
   const response = await sendHub()

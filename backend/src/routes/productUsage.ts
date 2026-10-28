@@ -59,7 +59,7 @@ function writeBudget(perMinute: number, inFlight: number) {
 }
 
 /** Busy answers send their client back after 30 to 120 seconds, at random: a fleet refused together does not
- * return together. Every client's report backoff honours it (cli/src/gateway/productUsage.ts). */
+ * return together. The CLI's report backoff honours it (cli/src/gateway/productUsage.ts). */
 function sendBusy(reply: FastifyReply, message: string, code: string): void {
   reply.header('Retry-After', String(30 + Math.floor(Math.random() * 91)))
   sendError(reply, message, code, 429)
@@ -111,7 +111,10 @@ export async function productUsageRoutes(app: FastifyInstance): Promise<void> {
       const result = await setupBudget(() => ingestSetupUsage(parsed.data))
       if (result === 'busy') return sendBusy(reply, 'Setup measurement busy', 'USAGE_UNAVAILABLE')
       return sendSuccess(reply, result)
-    } catch { return sendError(reply, 'Setup measurement unavailable', 'USAGE_UNAVAILABLE', 503) }
+    } catch (error) {
+      if (busyCategory(error)) return sendBusy(reply, 'Setup measurement busy', 'USAGE_UNAVAILABLE')
+      return sendError(reply, 'Setup measurement unavailable', 'USAGE_UNAVAILABLE', 503)
+    }
   })
   // The same unlinked receipt, atomic totals and today-or-yesterday rule as setup; no account lookup.
   app.post('/api/product-usage/hub', { bodyLimit: 4096 }, async (req, reply) => {
@@ -122,7 +125,10 @@ export async function productUsageRoutes(app: FastifyInstance): Promise<void> {
       const result = await hubBudget(() => ingestSetupUsage(parsed.data))
       if (result === 'busy') return sendBusy(reply, 'Hub measurement busy', 'USAGE_UNAVAILABLE')
       return sendSuccess(reply, result)
-    } catch { return sendError(reply, 'Hub measurement unavailable', 'USAGE_UNAVAILABLE', 503) }
+    } catch (error) {
+      if (busyCategory(error)) return sendBusy(reply, 'Hub measurement busy', 'USAGE_UNAVAILABLE')
+      return sendError(reply, 'Hub measurement unavailable', 'USAGE_UNAVAILABLE', 503)
+    }
   })
   app.get('/api/product-usage/settings', async (req, reply) => {
     if (!req.user?.sub) return sendError(reply, 'Unauthorized', 'UNAUTHORIZED', 401)
