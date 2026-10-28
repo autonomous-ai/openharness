@@ -10,7 +10,8 @@ import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import {
   REMOVE_REFUSED, SENTINEL_TEXT, TEAM_COMPUTER_LINE, TEAM_COPY, TEAM_ENGINES_INSTALL, TEAM_JOB_WRAPPER, TEAM_PASSWORD, WRITE_PRIVATE, WRITE_PUBLIC,
-  buildRemoveScript, buildSetupScript, sh, teamLaunchdPlist, type SetupScriptInput,
+  LINUX_NO_SYSTEMD, LINUX_NO_TMUX, buildLinuxRemoveScript, buildLinuxSetupScript, buildRemoveScript, buildSetupScript, sh, teamLaunchdPlist,
+  teamSystemdUnit, type SetupScriptInput,
 } from './script.js'
 
 const OWNER_HOME = '/Users/owner-placeholder'
@@ -564,5 +565,210 @@ describe('what setup carries from the owner\'s environment', () => {
     const { carriedBackendEnv } = await import('./layout.js')
     expect(carriedBackendEnv({ AUTONOMOUS_ENV: 'stag', ADAPTER_UPDATE_DISABLE: 'true' })).toEqual({ AUTONOMOUS_ENV: 'stag' })
     expect(carriedBackendEnv({ ADAPTER_UPDATE_DISABLE: '1' })).toEqual({})
+  })
+})
+
+describe('Linux', () => {
+  const LINUX_OWNER_HOME = '/home/owner-placeholder'
+  const LINUX_NODE_DIR = `${LINUX_OWNER_HOME}/.harness/runtime/node-v22.23.2-linux-arm64`
+  const linuxInput = (over: Partial<SetupScriptInput> = {}): SetupScriptInput => input({
+    home: '/home/harnessteam', ownerHome: LINUX_OWNER_HOME, stageDir: '/tmp/harness-team-x1', nodeRuntimeDir: LINUX_NODE_DIR,
+    cliDir: `${LINUX_OWNER_HOME}/.harness/cli`, ownerNode: `${LINUX_NODE_DIR}/bin/node`, ownerCli: `${LINUX_OWNER_HOME}/.harness/cli/cli.js`,
+    ...over,
+  })
+  const linuxRemove = { user: 'harnessteam', home: '/home/harnessteam', ownerHome: LINUX_OWNER_HOME, owner: 'owner-placeholder' }
+  const unitInput = { user: 'harnessteam', home: '/home/harnessteam', node: '/home/harnessteam/.harness/runtime/node-v1/bin/node',
+    cli: '/home/harnessteam/.harness/cli/cli.js', port: 18493, env: { BACKEND_WS_URL: 'wss://backend.example.test/a&b' } }
+
+  describe('setup script', () => {
+    it('parses, and names every value once, single-quoted', () => {
+      const script = buildLinuxSetupScript(linuxInput({ mintEnv: { BACKEND_WS_URL: 'wss://backend.example.test', HARNESS_AUTH_DIR: '/tmp/auth dir' } }))
+      parses(script)
+      expect(script).toContain("TEAM='harnessteam'")
+      expect(script).toContain("TEAM_HOME='/home/harnessteam'")
+      expect(script).toContain(`OWNER_HOME='${LINUX_OWNER_HOME}'`)
+      expect(script).toContain("UNIT='/etc/systemd/system/harness-team.service'")
+      expect(script).toContain("UNIT_NAME='harness-team.service'")
+      expect(script).toContain("CONFIG='/etc/harness/team.json'")
+      expect(script).toContain("STATUS_DIR='/var/lib/harness/team'")
+      expect(script).toContain("RELAY_DIR='/var/lib/harness/team-relay-owner-placeholder'")
+      expect(script).toContain(`SENTINEL='${LINUX_OWNER_HOME}/.harness-team-privacy'`)
+      expect(script).toContain("'BACKEND_WS_URL=wss://backend.example.test' 'HARNESS_AUTH_DIR=/tmp/auth dir' \"$OWNER_NODE\" \"$OWNER_CLI\" team __handoff")
+      // The owner's paths appear only in their assignments: every use goes through the quoted variable.
+      expect(script.split(LINUX_OWNER_HOME).length - 1).toBe(6)
+      // Nothing of macOS.
+      expect(script).not.toMatch(/dscl|launchctl|plutil|stat -f|\/Library\/|\/Users\//)
+    })
+
+    it('makes a standard listed user with a locked password, and never a sudoer', () => {
+      const script = buildLinuxSetupScript(linuxInput())
+      expect(script).toContain('useradd -m -d "$TEAM_HOME" -g "$TEAM_GROUP" -s /bin/bash -c "$TEAM_NAME" "$TEAM"')
+      // Not a system account (-r): it is listed, with a user id from 1000 up, as people's accounts are.
+      expect(script).not.toMatch(/useradd[^\n]* -r\b/)
+      expect(script).toContain('passwd -l "$TEAM"')
+      expect(script).toContain('for group in sudo wheel admin; do')
+      expect(script).toContain('gpasswd -d "$TEAM" "$group"')
+      expect(script).not.toMatch(/usermod[^\n]*-a?G|gpasswd -a|adduser [^\n]*sudo/)
+    })
+
+    it('refuses an existing harnessteam with another home, exit 4, before it changes anything', () => {
+      const script = buildLinuxSetupScript(linuxInput())
+      expect(script).toContain('die "an account named $TEAM already exists and is not the Harness Team account; nothing was changed" 4')
+      expect(at(script, 'is not the Harness Team account; nothing was changed" 4')).toBeLessThan(at(script, 'useradd -m'))
+      expect(at(script, 'is not the Harness Team account; nothing was changed" 4')).toBeLessThan(at(script, 'chmod 700 "$OWNER_HOME"'))
+    })
+
+    it('makes the owner\'s home 0700 and writes the sentinel as the owner', () => {
+      const script = buildLinuxSetupScript(linuxInput())
+      expect(script).toContain('chmod 700 "$OWNER_HOME"')
+      expect(script).toContain(`| as_owner /bin/sh -c ${sh(WRITE_PUBLIC)} sh "$SENTINEL"`)
+      expect(script).toContain('as_owner() { runuser -u "$OWNER" -- "$@"; }')
+      expect(script).toContain('as_team() { runuser -u "$TEAM" -- "$@"; }')
+    })
+
+    it('never writes inside the team home as root: every write there is as_team', () => {
+      const script = buildLinuxSetupScript(linuxInput())
+      for (const line of script.split('\n')) {
+        if (/^\s*(cp|mv|ln|printf|cat|install|mkdir|touch)\b/.test(line) && !line.includes('| as_team') && !line.includes('| as_owner')) {
+          expect(line, line).not.toMatch(/TEAM_HOME|HANDOFF|TEAM_SESSION/)
+        }
+      }
+      expect(script).toContain(`as_team /bin/sh -c ${sh(TEAM_COPY)} sh "$RT" "$TEAM_HOME" "$NODE_NAME" ''`)
+      expect(script).toContain('printf \'%s\\n\' "$code" | as_team /bin/sh -c')
+    })
+
+    it('refuses without systemd (exit 3) before useradd, and checks its tools and the folders it relies on', () => {
+      const script = buildLinuxSetupScript(linuxInput())
+      expect(script).toContain(`[ -d /run/systemd/system ] || die ${sh(LINUX_NO_SYSTEMD)} 3`)
+      expect(at(script, '[ -d /run/systemd/system ]')).toBeLessThan(at(script, 'useradd -m'))
+      expect(at(script, '[ -d /run/systemd/system ]')).toBeLessThan(at(script, 'groupadd'))
+      expect(script).toContain('for tool in setfacl useradd userdel groupadd gpasswd runuser systemctl; do')
+      expect(script).toContain('for dir in / /home /etc /var/lib /etc/systemd/system; do owned_by_root "$dir"; done')
+      expect(script).toContain('[ "$(stat -c %u "$1")" = 0 ]')
+      expect(script).toContain('mode=$(stat -c %a "$1")')
+    })
+
+    it('refuses without a tmux every account can run (exit 3), before it changes anything', () => {
+      const script = buildLinuxSetupScript(linuxInput())
+      expect(LINUX_NO_TMUX).toBe('no tmux every account can run: install it (apt install tmux / dnf install tmux)')
+      expect(script).toContain(`runuser -u nobody -- tmux -V >/dev/null 2>&1 || die ${sh(LINUX_NO_TMUX)} 3`)
+      expect(at(script, 'runuser -u nobody -- tmux -V')).toBeLessThan(at(script, 'useradd -m'))
+    })
+
+    it('runs its steps in order: account, homes, stop, runtime, config, relay folder, sign-in, daemon', () => {
+      const script = buildLinuxSetupScript(linuxInput())
+      const order = [
+        'owned_by_root "$dir"', 'useradd -m', 'passwd -l "$TEAM"', 'chmod 700 "$TEAM_HOME"', 'chmod 700 "$OWNER_HOME"',
+        'as_owner /bin/sh -c', 'systemctl stop "$UNIT_NAME"', 'mktemp -d /var/tmp/harness-team.XXXXXX', 'as_team /bin/sh -c',
+        'npm" install --global --prefix "$home/.local"', 'install -o 0 -g 0 -m 0644 "$STAGE/team.json" "$CONFIG"',
+        'chown "$TEAM:$TEAM_GROUP" "$STATUS_DIR"', 'chmod 700 "$RELAY_DIR"', 'team __handoff', 'as_team /bin/sh -c \'umask 077',
+        'install -o 0 -g 0 -m 0644 "$STAGE/team.service" "$UNIT"', 'systemctl daemon-reload', 'systemctl enable --now "$UNIT_NAME"',
+      ].map((needle) => at(script, needle))
+      expect([...order].sort((a, b) => a - b)).toEqual(order)
+      // Started again even without a new sign-in, as on a Mac.
+      expect(at(script, '[ -z "$no_sign_in" ] || die "$no_sign_in; the team daemon runs without a new sign-in" 7'))
+        .toBeGreaterThan(at(script, 'systemctl enable --now "$UNIT_NAME"'))
+    })
+
+    it('marks the folders it made as its own, so removal takes only those', () => {
+      const script = buildLinuxSetupScript(linuxInput())
+      expect(script).toContain("SHARED_MARK='/etc/harness/.made-by-harness-team-setup'")
+      expect(script).toContain("STATE_MARK='/var/lib/harness/.made-by-harness-team-setup'")
+      expect(at(script, 'owned_by_root "$SHARED"')).toBeLessThan(at(script, '[ -z "$made_shared" ] || : > "$SHARED_MARK"'))
+      expect(at(script, 'owned_by_root "$STATE"')).toBeLessThan(at(script, '[ -z "$made_state" ] || : > "$STATE_MARK"'))
+    })
+
+    it('makes the owner\'s relay folder, which only root can make there, the owner\'s and private', () => {
+      const script = buildLinuxSetupScript(linuxInput())
+      expect(script).toContain('[ ! -L "$RELAY_DIR" ] || die "$RELAY_DIR is a symbolic link" 6')
+      expect(script).toContain('chown "$owner_uid:$owner_gid" "$RELAY_DIR"')
+    })
+
+    it('refuses a value that is not plain, before anything is written', () => {
+      const bad: Array<Partial<SetupScriptInput>> = [
+        { user: "harness'team" }, { user: 'root' }, { owner: 'owner;id' }, { owner: 'harnessteam' }, { ownerHome: "/home/a'b" },
+        { ownerHome: '/home/../etc' }, { home: `${LINUX_OWNER_HOME}/team` }, { stageDir: '/tmp/`id`' }, { realName: 'Harness "Team"' },
+        { mintEnv: { BACKEND_WS_URL: 'wss://x\n' } },
+      ]
+      for (const over of bad) expect(() => buildLinuxSetupScript(linuxInput(over)), JSON.stringify(over)).toThrow()
+    })
+  })
+
+  describe('systemd unit', () => {
+    it('runs the job wrapper as harnessteam, restarts on failure only, and keeps tmux alive', () => {
+      const unit = teamSystemdUnit(unitInput)
+      expect(unit).toContain('\nUser=harnessteam\n')
+      expect(unit).toContain('\nGroup=harnessteam\n')
+      expect(unit).toContain('\nWorkingDirectory=/home/harnessteam\n')
+      expect(unit).toContain('\nRestart=on-failure\n')
+      expect(unit).toContain('\nRestartSec=10\n')
+      expect(unit).toContain('\nKillMode=process\n')
+      expect(unit).toContain('\nTimeoutStopSec=10\n')
+      expect(unit).toContain('\nWantedBy=multi-user.target\n')
+      expect(unit).toContain('\nEnvironment="PORT=18493"\n')
+      expect(unit).toContain('\nEnvironment="ADAPTER_DATA_DIR=/home/harnessteam/.harness/cli/data"\n')
+      expect(unit).toContain('\nEnvironment="SHELL=/bin/bash"\n')
+      expect(unit).toContain('\nEnvironment="BACKEND_WS_URL=wss://backend.example.test/a&b"\n')
+      expect(unit).not.toContain('HARNESSD_PLATFORM')
+      // The log is opened by the job as the team account, never by systemd as root.
+      expect(unit).not.toMatch(/StandardOutput|StandardError/)
+    })
+
+    it('starts the same command the LaunchDaemon does, with systemd\'s $ doubled', () => {
+      const unit = teamSystemdUnit(unitInput)
+      const exec = unit.split('\n').find((line) => line.startsWith('ExecStart='))
+      expect(exec).toBe(`ExecStart=/bin/sh -c '${TEAM_JOB_WRAPPER.replaceAll('$', '$$')}' harness-team`
+        + ` '${unitInput.node}' '${unitInput.cli}' '/home/harnessteam/.harness/team-handoff' '/home/harnessteam/.harness/cli/data/harness.log'`)
+    })
+
+    it('refuses a value systemd would read as something else', () => {
+      expect(() => teamSystemdUnit({ ...unitInput, env: { WEB_URL: 'https://x/%h' } })).toThrow()
+      expect(() => teamSystemdUnit({ ...unitInput, env: { WEB_URL: 'https://x/"a' } })).toThrow()
+      expect(() => teamSystemdUnit({ ...unitInput, env: { WEB_URL: 'https://x/\\a' } })).toThrow()
+      expect(() => teamSystemdUnit({ ...unitInput, env: { WEB_URL: 'https://x/$HOME' } })).toThrow()
+      expect(() => teamSystemdUnit({ ...unitInput, port: 18473 })).toThrow()
+      expect(() => teamSystemdUnit({ ...unitInput, node: 'relative/node' })).toThrow()
+    })
+  })
+
+  describe('remove script', () => {
+    it('parses, names every value single-quoted, and stops the daemon and its processes before it deletes the user', () => {
+      const script = buildLinuxRemoveScript(linuxRemove)
+      parses(script)
+      expect(script).toContain("COMPUTER_ID='/home/harnessteam/.harness/computer-id'")
+      expect(script).toContain("RELAY_DIR='/var/lib/harness/team-relay-owner-placeholder'")
+      expect(script).toContain(`SENTINEL='${LINUX_OWNER_HOME}/.harness-team-privacy'`)
+      const order = [
+        'systemctl disable --now "$UNIT_NAME"', 'pkill -KILL -u "$team_uid"', 'userdel -r "$TEAM"', 'rm -f "$UNIT"',
+        'rm -rf "$TEAM_HOME" "$STATUS_DIR" "$RELAY_DIR"', 'rm -f "$CONFIG" "$SENTINEL"', 'rmdir "$SHARED"',
+      ].map((needle) => at(script, needle))
+      expect([...order].sort((a, b) => a - b)).toEqual(order)
+      expect(script).not.toMatch(/chmod/)
+      expect(script).not.toMatch(/dscl|launchctl|stat -f/)
+    })
+
+    it('starts the daemon again and exits 9 when userdel keeps the user', () => {
+      const script = buildLinuxRemoveScript(linuxRemove)
+      const refused = at(script, `Nothing was removed: the Harness Team account and its daemon run as before" ${REMOVE_REFUSED}`)
+      expect(at(script, 'userdel -r "$TEAM"')).toBeLessThan(at(script, '      until systemctl enable --now "$UNIT_NAME"'))
+      expect(at(script, '      until systemctl enable --now "$UNIT_NAME"')).toBeLessThan(refused)
+      // Refused only while the user is still there: userdel -r exits 12 for a home it could not remove, after removing the user.
+      expect(script).toContain('if ! why=$(userdel -r "$TEAM" 2>&1) && getent passwd "$TEAM" >/dev/null; then')
+    })
+
+    it('leaves an account or a home that is not the Harness Team account\'s alone, and needs the owner for the relay folder', () => {
+      const script = buildLinuxRemoveScript(linuxRemove)
+      expect(script).toContain('is not the Harness Team account (its home is $existing); nothing was removed" 4')
+      expect(script).toContain('belongs to $holder; nothing was removed" 4')
+      expect(() => buildLinuxRemoveScript({ ...linuxRemove, user: 'root' })).toThrow()
+      expect(() => buildLinuxRemoveScript({ ...linuxRemove, owner: 'a;b' })).toThrow()
+      expect(() => buildLinuxRemoveScript({ user: 'harnessteam', home: '/home/harnessteam', ownerHome: LINUX_OWNER_HOME })).toThrow()
+    })
+
+    it('names its computer for the owner to take off, as the macOS removal does', () => {
+      const script = buildLinuxRemoveScript(linuxRemove)
+      expect(script).toContain('[ -z "$computer" ] || say "team computer $computer"')
+      expect(script).toContain('computer=$(runuser -u "$TEAM" -- cat "$COMPUTER_ID" 2>/dev/null | head -n 1) || computer=')
+    })
   })
 })
