@@ -335,3 +335,40 @@ test('a write still under way keeps the connections it is using', async (t) => {
   await sleep(60)
   assert.equal(released, before + 1, 'and once it is done, nothing is left open')
 })
+
+test('a cleanup preview with no page watching lets its connections go when it ends', async (t) => {
+  let released = 0
+  const { viewer, base } = await serve(undefined, {
+    releaseBridges: () => { released += 1 },
+    cleanup: { preview: async () => ({ rows: [], kept: 0, problems: [], reviewId: 'r1' }), close: async () => ({}) },
+  })
+  t.after(() => viewer.close())
+  const before = released
+  const preview = await post(base, viewer.token, '/api/cleanup/preview', {})
+  assert.equal(preview.reviewId, 'r1')
+  assert.equal(released, before + 1, 'the preview opened a connection to every machine; none is left open after it')
+})
+
+test('the last page leaving during a cleanup preview does not cut the preview off', async (t) => {
+  let released = 0, finish
+  const { viewer, base } = await serve(undefined, {
+    releaseBridges: () => { released += 1 },
+    cleanup: { preview: () => new Promise((done) => { finish = done }), close: async () => ({}) },
+  })
+  t.after(() => viewer.close())
+  const sleep = (ms) => new Promise((done) => setTimeout(done, ms))
+  const response = await fetch(`${base}/events`)
+  const reader = response.body.getReader()
+  await reader.read()
+  await sleep(30)
+  const before = released
+  const previewing = post(base, viewer.token, '/api/cleanup/preview', {})
+  await sleep(30)
+  await reader.cancel()
+  await sleep(60)
+  assert.equal(released, before, 'a preview still reading its machines keeps their connections')
+  finish({ rows: [], kept: 0, problems: [], reviewId: 'r2' })
+  await previewing
+  await sleep(30)
+  assert.equal(released, before + 1, 'and lets them go once it has its answer')
+})

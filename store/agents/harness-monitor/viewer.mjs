@@ -24,7 +24,7 @@ export function createViewer({ workspace, port = 0, intervalMs = 4000, remoteInt
   // `remoteIntervalMs`, the local machine every `intervalMs`, and only while a pane is connected.
   const remote = { at: 0, answers: new Map(), problems: [] }
   let snapshot = { spec: 1, status: 'starting', rows: [], summary: null, policy: DEFAULT_POLICY, plan: [], totals: null, problems: [], log: [], observedAt: null, intervalMs }
-  let stopped = false, timer, heartbeat, polling = null, writing = 0
+  let stopped = false, timer, heartbeat, polling = null, using = 0
   // Resolves after the first observation lands. The server starts listening before it, so the pane draws
   // its shell immediately; anything that needs the first real snapshot (a test, a caller) awaits this.
   let observed
@@ -83,12 +83,12 @@ export function createViewer({ workspace, port = 0, intervalMs = 4000, remoteInt
     if (stopped || clients.size === 0) return
     timer = setTimeout(() => { void poll() }, intervalMs)
   }
-  // Nobody is looking and nothing is under way: let go of the kept machine connections as well. Each one
-  // is a bridge socket here and, behind it, a relay session the daemon holds open to that machine; a
-  // closed or frozen Monitor kept all of them open for as long as its viewer ran (2026-10-28). The next
-  // pane opens them again on its first read.
+  // Nobody is looking and nothing is under way (a read, a write, a cleanup preview): let go of the kept
+  // machine connections as well. Each one is a bridge socket here and, behind it, a relay session the
+  // daemon holds open to that machine; a closed or frozen Monitor kept all of them open for as long as its
+  // viewer ran (2026-10-28). The next pane opens them again on its first read.
   const release = () => {
-    if (!stopped && clients.size === 0 && !polling && writing === 0) releaseBridges()
+    if (!stopped && clients.size === 0 && !polling && using === 0) releaseBridges()
   }
   // Someone wants the observation now: read again if the one we have is older than a tick.
   const wake = () => {
@@ -115,10 +115,16 @@ export function createViewer({ workspace, port = 0, intervalMs = 4000, remoteInt
    *  makes, so a click and a typed command cannot behave differently. */
   let writes = Promise.resolve()
   function write(operation) {
-    writing += 1
+    using += 1
     const result = writes.then(operation)
-    writes = result.catch(() => {}).finally(() => { writing -= 1; release() })
+    writes = result.catch(() => {}).finally(() => { using -= 1; release() })
     return result
+  }
+  /** Anything else that talks to the machines over the kept connections, such as a cleanup preview: they stay open
+   *  while it runs and are let go after it if nobody is looking. */
+  async function use(operation) {
+    using += 1
+    try { return await operation() } finally { using -= 1; release() }
   }
   const act = payload => write(() => actOnce(payload))
   async function actOnce({ verb, ids, manual = false, expected, reviewId, path, discardChanges, choices }) {
@@ -205,7 +211,7 @@ export function createViewer({ workspace, port = 0, intervalMs = 4000, remoteInt
         for await (const chunk of req) { body += chunk; if (body.length > 64 * 1024) { json(res, 413, { error: 'Too large.' }); return } }
         let payload; try { payload = JSON.parse(body || '{}') } catch { json(res, 400, { error: 'Send JSON.' }); return }
         if (url.pathname === '/api/act') { json(res, 200, await act(payload)); return }
-        if (url.pathname === '/api/cleanup/preview') { json(res, 200, await cleanup.preview()); return }
+        if (url.pathname === '/api/cleanup/preview') { json(res, 200, await use(() => cleanup.preview())); return }
         if (url.pathname === '/api/cleanup/close') {
           let result
           try { result = await write(() => cleanup.close(payload.reviewId, payload.id)) }
