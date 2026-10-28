@@ -210,7 +210,7 @@ typedef struct {
     bool read_on_dial;
     uint32_t display_revision;
     uint32_t received_ms; // ms() when the row was filed; rows expire 6 h later (notice_expire)
-    uint8_t swarm;        // the dial's own Swarm entry, kept across notif.replace: 1 needs you, 2 stuck (0 the desktop's)
+    uint8_t swarm;        // the dial's own Swarm entry, kept across notif.replace: 1 needs you, 2 stuck, 3 the Lead said (0 the desktop's)
 } cable_notif_t;
 
 bool cable_client_notification_read(const char *agent_id, const char *read_token);

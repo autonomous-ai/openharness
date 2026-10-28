@@ -5649,6 +5649,18 @@ class AppNotifier extends ChangeNotifier {
         null => null,
       };
 
+  /// The conversation open in this Swarm tab (its Lead's, Chat with PM or a
+  /// group), which the round dial's face follows (design
+  /// 2026-10-28-round-dial-swarm-chat). Left out on the machines view and
+  /// before the Swarm has loaded: the dial then shows each project's Lead.
+  /// A change of it re-announces through `onSelection`, as a project's does.
+  String? _dialConversation(String tabId) {
+    final controller = superTabs.peek(tabId);
+    if (controller == null || controller.devicesSelected) return null;
+    final id = controller.selectedId;
+    return controller.snapshot?.conversation(id) == null ? null : id;
+  }
+
   /// The tile roster and the tabs, to every daemon this window reaches over
   /// its loopback ([_deskConnection]) — never a relayed machine's.
   void _announceOpenPanesToDial() {
@@ -5716,6 +5728,7 @@ class AppNotifier extends ChangeNotifier {
           if (swarm.superTabId case final tabId?) ...{
             'superTabId': tabId,
             'projectId': ?_rememberDialProject(tabId),
+            'conversationId': ?_dialConversation(tabId),
           },
           'agentIds': [
             for (final pane in swarm.panes)

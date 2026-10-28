@@ -141,6 +141,20 @@ describe('which finished groups archive', () => {
     }
   })
 
+  it('is never a review whose Reviewer gave no verdict while the work it reviews is going, unless it was cancelled', () => {
+    const verdict = { id: 'v', description: 'Verdict with the reviewed revision', independent: false }
+    const review = (patch: Partial<Conversation>) => group({ id: 'r1', reviewOf: 'g1', ...patch })
+    // Stored as done with no verdict, as no command allows: the rule still holds.
+    const state = swarm({ groups: [group({ assignment: done({ status: 'review' }) }),
+      review({ checks: [{ ...verdict, evidence: null, passedBy: null }] }),
+      review({ id: 'r2', checks: [{ ...verdict, evidence: 'Ready: yes — revision abc', passedBy: 'agent:w' }] }),
+      review({ id: 'r3', checks: [{ ...verdict, evidence: null, passedBy: null }], assignment: done({ status: 'cancelled' }) })] })
+    expect(state.conversations.slice(2).map(g => archivable(state, g, quiet))).toEqual([false, true, true])
+    // Once the reviewed work is done, its review is moot.
+    state.conversations[1]!.assignment = done()
+    expect(archivable(state, state.conversations[2]!, quiet)).toBe(true)
+  })
+
   it('is never a Lead conversation, a private chat, the Leads conversation, an archived group, or any once tidying is off', () => {
     const state = swarm({ groups: [group({ audience: { people: [] } as never }), group({ id: 'leads', kind: 'leads' }), group({ id: 'old', archived: true })] })
     for (const g of state.conversations) expect(archivable(state, g, quiet)).toBe(false)

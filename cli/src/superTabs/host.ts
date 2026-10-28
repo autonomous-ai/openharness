@@ -342,8 +342,9 @@ export class SuperTabHost {
     // until the next host's first roster says who is still a member. A host stops when its backend link drops and when
     // the daemon restarts for an update; an empty roster in force here withdrew every member's invitation each time,
     // which took this computer out of their machine lists until their apps next read them, up to 5 minutes later, and
-    // their panes said Harness here was out of date (Ken, 2026-10-28). The confidential marks are kept as they are.
-    try { this.observers(this.core.dataDir, this.machineId, [], this.now(), this.stillRuns) } catch { /* The old snapshot expires. */ }
+    // their panes said Harness here was out of date (Ken, 2026-10-28). No roster, not an empty one: the confidential marks
+    // and the current Leads' openings are kept as they are, so members watching a Lead are told to retry too.
+    try { this.observers(this.core.dataDir, this.machineId, null, this.now(), this.stillRuns) } catch { /* The old snapshot expires. */ }
     // Signed out or another machine: this host's alerts are no longer anyone's. A core that is gone heard nothing, and
     // the next host's first roster replaces them anyway.
     if (this.attention !== null && this.attention !== '[]') {
@@ -367,6 +368,8 @@ export class SuperTabHost {
   }
   private pollMachines() {
     void this.contributed().tick().catch(error => this.log(error instanceof Error ? error.message : String(error)))
+    // Beside the pass, never behind it: a slow pass still keeps the machine's reading fresh (machines.ts beat).
+    this.contributed().beat()
     this.grids ??= new SwarmGrids(this.core, this.machineId)
     void this.grids.tick().catch(error => this.log(`Swarm grid: ${error instanceof Error ? error.message : String(error)}`))
   }
@@ -572,8 +575,10 @@ export class SuperTabHost {
       try {
         const result = object(await backend(this.core, 'GET', `/api/super-tabs/${entry.tabId}/agents/${entry.agentId}/deliveries/${entry.deliveryId}`))
         if (this.stopped) return
-        // Held input is retired only by an answer. A cancelled one leaves the roster, so the claim path never sees it again; it stays in the journal.
-        const terminal = entry.stage === 'prepared' ? ['answered'] : ['delivered', 'confirmed', 'superseded', 'cancelled', 'answered']
+        // Held input is retired by an answer, or once the backend ended it: it leaves the list, so the claim path never sees it
+        // again. Kept, every hold the backend's delivery pass ends (backend superTabs/deliverySettle.ts) would stay here, and
+        // at 1,000 entries this host accepts no more deliveries.
+        const terminal = entry.stage === 'prepared' ? ['answered', 'cancelled'] : ['delivered', 'confirmed', 'superseded', 'cancelled', 'answered']
         if (result.id !== entry.deliveryId || !terminal.includes(String(result.status))) continue
         if (this.journal.entries[entry.deliveryId] !== entry || this.active.has(typedId(entry))) continue
         delete this.journal.entries[entry.deliveryId]
