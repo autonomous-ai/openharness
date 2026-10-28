@@ -182,7 +182,7 @@ export class SwarmReads {
 
   /** Which of the Swarm's machines are signed in as a team account, and which serve another Workspace's Swarm too (store.ts): the
    *  same answer for every reader, whose view hides what it may not see, so one lookup serves every read of the Swarm for
-   *  MACHINE_READS_MS. Writes still look up afresh (store.ts applyCommand). Outside any transaction, as every read is. */
+   *  MACHINE_READS_MS. Commands that admit work still look up afresh (store.ts executeOnce). Outside any transaction, as every read is. */
   private machineLookups(state: SuperTabState): Promise<MachineReads> {
     if (!state.machines?.length) return Promise.resolve([[], []])
     const now = this.now()
