@@ -34,6 +34,8 @@ export interface ReadExtras {
   otherWorkspaceMachines?: string[]
   /** A person's open mentions, counted by the store. */
   mentionsWaiting?: number
+  /** Which ones they are, as a digest (mentions.ts). */
+  mentionsDigest?: string
   /** A person's open decisions (decisions.ts). */
   decisionsWaiting?: number
   /** Which ones they are, as a digest (decisions.ts). */
@@ -114,6 +116,7 @@ function derive(state: SuperTabState, visible: SuperTabState, actor: Actor, now:
     machines: Object.fromEntries((visible.machines ?? []).map(machine)),
     ...(visible.otherProjectsWork ? { otherProjectsWork: visible.otherProjectsWork } : {}),
     ...(actor.kind === 'person' && extras.mentionsWaiting !== undefined ? { mentionsWaiting: extras.mentionsWaiting } : {}),
+    ...(actor.kind === 'person' && extras.mentionsDigest !== undefined ? { mentionsDigest: extras.mentionsDigest } : {}),
     ...(actor.kind === 'person' && extras.decisionsWaiting !== undefined ? { decisionsWaiting: extras.decisionsWaiting } : {}),
     ...(actor.kind === 'person' && extras.decisionsDigest !== undefined ? { decisionsDigest: extras.decisionsDigest } : {}),
     ...(teamAccountSwarm(state) ? {} : { teamAccounts: false as const }),

@@ -108,7 +108,8 @@ describe('reader view of the parts (design 4.1, 4.3)', () => {
     const { s, parts } = scene()
     expect(readerView(parts, agentActor(s.lead), NOW, { teamMachines: [] }).derived).toHaveProperty('otherProjectsWork', [])
     expect(readerView(parts, agentActor(s.lead), NOW, { teamMachines: [] }).derived).not.toHaveProperty('mentionsWaiting')
-    expect(readerView(parts, peer, NOW, { teamMachines: [], mentionsWaiting: 2 }).derived).toMatchObject({ mentionsWaiting: 2 })
+    expect(readerView(parts, peer, NOW, { teamMachines: [], mentionsWaiting: 2, mentionsDigest: 'd' }).derived).toMatchObject({ mentionsWaiting: 2, mentionsDigest: 'd' })
+    expect(readerView(parts, agentActor(s.lead), NOW, { teamMachines: [], mentionsWaiting: 2, mentionsDigest: 'd' }).derived).not.toHaveProperty('mentionsDigest')
     expect(readerView(parts, peer, NOW, { teamMachines: [] }).derived).not.toHaveProperty('otherProjectsWork')
   })
 

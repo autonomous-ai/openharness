@@ -63,6 +63,8 @@ export interface Derived {
   otherProjectsWork?: OtherProjectWorkView[]
   /** A person only. */
   mentionsWaiting?: number
+  /** A person only: a digest of which tags wait, moving when they change though the count may not. */
+  mentionsDigest?: string
   /** Signed links to uploaded avatars, by `person:<id>` and `agent:<id>` (avatarLinks.ts): fresh with every read, the same
    *  through each half hour, each opening for at most an hour. Absent when nobody visible has one. */
   avatars?: Record<string, string>
