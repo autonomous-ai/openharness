@@ -230,7 +230,8 @@ class SuperTabSnapshot {
       }),
       localModels = SuperTabLocalModels.read(row['localModels']),
       mentionsWaiting = (row['mentionsWaiting'] as num?)?.toInt() ?? 0,
-      decisionsWaiting = (row['decisionsWaiting'] as num?)?.toInt() ?? 0 {
+      decisionsWaiting = (row['decisionsWaiting'] as num?)?.toInt() ?? 0,
+      decisionsDigest = row['decisionsDigest'] as String? {
     if (row['version'] != 1) {
       throw const FormatException('Update Harness to open this Swarm.');
     }
@@ -279,6 +280,10 @@ class SuperTabSnapshot {
   /// Decisions asked of the reader and not yet answered, Swarm-wide; 0 from a
   /// backend before decisions (backend superTabs/decisions.ts).
   final int decisionsWaiting;
+
+  /// Which decisions wait, as a digest that moves when they change though the
+  /// count may not; null from a backend before it (superTabs/decisions.ts).
+  final String? decisionsDigest;
   SuperTabConversation? conversation(String id) =>
       conversations.where((c) => c.id == id).firstOrNull;
   SuperTabAgent? agent(String id) =>

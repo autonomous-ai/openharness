@@ -1,9 +1,8 @@
 /** Older Swarm sessions predate role metadata. Adopt only at restart/resume, from current membership,
  * before native launch authority is captured; changing the live row later would revoke that launch. */
-import type { RegisteredSession, registry } from '../../lib/registry.js'
+import type { AdoptSwarmSkill } from '../../core/api.js'
+import type { registry } from '../../lib/registry.js'
 import type { SwarmSkillGrant } from '../../lib/swarmSkills.js'
-
-export type AdoptSwarmSkill = (session: RegisteredSession, current: () => boolean) => Promise<RegisteredSession | null>
 
 export function createSwarmSkillAdoption(deps: {
   role(harnessId: string): Promise<SwarmSkillGrant | null | undefined>

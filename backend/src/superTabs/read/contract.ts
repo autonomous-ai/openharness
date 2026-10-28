@@ -62,6 +62,8 @@ export interface Derived {
   mentionsWaiting?: number
   /** A person only: decisions asked of them, still open. */
   decisionsWaiting?: number
+  /** A person only: a digest of which decisions are open, moving when they change though the count may not. */
+  decisionsDigest?: string
 }
 export interface OtherProjectWorkView {
   conversationId: string; projectName: string; title: string; owns: string[]; status: WorkStatus; agentName: string; pr: string | null

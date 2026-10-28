@@ -22,6 +22,8 @@ export function fakeGitHub(options: { publicKey: KeyObject; appId: string; now?:
   const owners = new Map<string, number>()
   const renamed = new Map<string, string>()
   const protection = new Map<string, { rules?: unknown[]; protected?: boolean; branch?: string; fail?: boolean }>()
+  /** Pull requests by `owner/name#number`, lower case: GitHub's state and when it was merged. */
+  const pulls = new Map<string, { state: 'open' | 'closed'; merged_at: string | null }>()
   const calls: FakeCall[] = []
   const issued = new Set<string>()
   const revoked: string[] = []
@@ -78,12 +80,17 @@ export function fakeGitHub(options: { publicKey: KeyObject; appId: string; now?:
       const branch = known.branch ?? 'main'
       // A renamed repository: GitHub redirects its old name to its id, and fetch follows, so the body names it as it is now.
       if (!repoPath[3]) return json(200, { full_name: renamed.get(`${repoPath[1]}/${repoPath[2]}`.toLowerCase()) ?? `${repoPath[1]}/${repoPath[2]}`, default_branch: branch })
+      const pull = /^\/pulls\/(\d+)$/.exec(repoPath[3] ?? '')
+      if (pull) {
+        const known = pulls.get(`${repoPath[1]}/${repoPath[2]}#${pull[1]}`.toLowerCase())
+        return known ? json(200, { number: Number(pull[1]), ...known }) : json(404, { message: 'Not Found' })
+      }
       if (repoPath[3] === `/rules/branches/${encodeURIComponent(branch)}`) return json(200, known.rules ?? [])
       if (repoPath[3] === `/branches/${encodeURIComponent(branch)}`) return json(200, { name: branch, protected: known.protected ?? false })
     }
     return json(404, { message: 'Not Found' })
   }) as typeof globalThis.fetch
-  return { fetch, calls, installed, owners, renamed, protection, revoked, issued, control }
+  return { fetch, calls, installed, owners, renamed, protection, pulls, revoked, issued, control }
 }
 
 /** A configured app talking to [github]. */

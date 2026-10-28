@@ -89,6 +89,9 @@ export const machineObservationSchema = z.object({ generation: z.string().max(16
   /** When each running agent's screen or transcript last changed (epoch ms); its lease renews on recent progress
    *  (liveness.ts). Absent from hosts before it, whose agents renew by running alone. */
   harnessProgress: z.record(z.string().max(160), z.number().int().nonnegative()).refine(v => Object.keys(v).length <= 1000).optional(),
+  /** Whether each running Swarm session's folder has uncommitted changes (git status), for those its host could read.
+   *  Only a session reported clean is ever stopped for being idle (tidy.ts). Absent from hosts before it. */
+  harnessUncommitted: z.record(z.string().max(160), z.boolean()).refine(v => Object.keys(v).length <= 1000).optional(),
   /** The Local models add-on (docs/plans/2026-10-23-swarm-local-models.md); absent from hosts before it. On the Swarm's
    *  grid: what this machine serves there (`local` an engine of its own, `api` a saved API it shares), usable by agents on
    *  any machine. On any other grid: a model its owner may use there (`shared`, shared with them), usable only by agents

@@ -38,6 +38,25 @@ describe('the Harness Team account, set up on its own', () => {
     expect(f.log.join('\n')).toContain('the Harness Team account is set up')
   })
 
+  it('says in its log why it asked nothing, one line per answer, so a Mac that never saw the prompt can tell why', async () => {
+    const cases: Array<[Partial<AutoSetupDeps>, string]> = [
+      [{ platform: 'linux' }, 'unsupported'], [{ session: () => null }, 'signed-out'], [{ session: () => ({ ...session, kind: 'team' }) }, 'dedicated'],
+      [{ accountExists: vi.fn(async () => true) }, 'exists'],
+    ]
+    for (const [over, state] of cases) {
+      const f = fake(over)
+      await f.auto.offer('startup', async () => true)
+      expect(f.log, state).toEqual([`the Harness Team account was not offered (startup): ${state}`])
+    }
+    const declined = fake()
+    declined.setDecision({ state: 'declined', at: 1 })
+    await declined.auto.offer('join')
+    expect(declined.log).toEqual(['the Harness Team account was not offered (join): declined'])
+    const alone = fake()
+    await alone.auto.offer('startup', async () => false)
+    expect(alone.log).toEqual(['the Harness Team account was not offered (startup): not-shared'])
+  })
+
   it('asks nothing off a Mac, signed out, on a computer that runs team work only, or where the account exists', async () => {
     const cases: Array<[Partial<AutoSetupDeps>, string]> = [
       [{ platform: 'linux' }, 'unsupported'], [{ platform: 'win32' }, 'unsupported'], [{ session: () => null }, 'signed-out'],

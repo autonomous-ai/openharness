@@ -5,11 +5,18 @@ import 'package:flutter/widgets.dart';
 import '../../state/app_state.dart';
 import '../shell/web_workspace.dart' deferred as workspace;
 import 'deferred_part.dart';
+import 'terminal_fonts.dart';
 
 /// The signed-in workspace, most of the app (about 4.4 of 10.9 MB of
-/// script): a first visit's sign-in page draws without it, and it is
-/// downloaded once that first frame is up ([WorkspacePrefetch]).
-final workspacePart = DeferredPart(workspace.loadLibrary);
+/// script), and its terminal font: a first visit's sign-in page draws
+/// without them, and they are downloaded once that first frame is up
+/// ([WorkspacePrefetch]).
+final workspacePart = DeferredPart(
+  () => downloadWorkspace(
+    library: workspace.loadLibrary,
+    fonts: loadTerminalFonts,
+  ),
+);
 
 /// The browser's workspace once [workspacePart] is in.
 class DeferredWorkspace extends StatelessWidget {

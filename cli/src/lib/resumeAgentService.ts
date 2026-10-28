@@ -1,5 +1,5 @@
 /** Exact-resume lifecycle shared by the daemon and its isolated acceptance tests. */
-import type { AdoptSwarmSkill } from '../core/agents/swarmSkills.js'
+import type { AdoptSwarmSkill } from '../core/api.js'
 import { transcriptSize, type RelaunchMarks } from '../core/transcripts/relaunch.js'
 import { isTerminalEngine } from '../engines/types.js'
 import { installedDsh } from '../dsh/installed.js'

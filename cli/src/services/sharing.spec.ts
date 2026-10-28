@@ -11,10 +11,36 @@ import { setAgentSettingsForTest, signedOutForTest } from '../testing/agentSetti
 import type { RegisteredSession } from '../lib/registry.js'
 import { observerContext, recipientHandshake } from '../sharing/crypto.js'
 import { fakeCore } from '../testing/fakeCore.js'
-import { SHARE_REQUESTS, startSharing, viewerPage, watchStreams } from './sharing.js'
+import { SHARE_REQUESTS, shareObservers, startSharing, viewerPage, watchStreams } from './sharing.js'
+import { observerSource, publishObservers } from '../superTabs/observers.js'
 
 const identity = newIdentity()
 const agent = { agentId: 'agent', sessionId: 's', engine: 'codex', active: true } as unknown as RegisteredSession
+
+// HARNESS_SWARM=off: Share's process hands in no Swarm. Its observers then watch nothing, invitations kept as for a host
+// that stalled, and a session a roster marked confidential still refuses every share (sharing/swarmMarks.ts).
+describe('who a Super Tab lets watch a harness here', () => {
+  let dataDir: string
+  beforeEach(() => { dataDir = mkdtempSync(join(tmpdir(), 'sharing-observers-')) })
+  afterEach(() => { rmSync(dataDir, { recursive: true, force: true }) })
+  const core = () => fakeCore({ dataDir, daemon: { command: 'harness', port: 1, machineId: () => 'machine' } })
+  const grant = (agentId: string, tab?: string) => ({ agentId, recipientEmail: 'b@example.com', ...(tab ? { tab } : {}) }) as never
+
+  it('is the Swarm\'s roster while it is on, and with it off, none of a Super Tab\'s and no confidential session\'s', () => {
+    publishObservers(dataDir, 'machine', [{ tabId: 'tab', agent: { harnessId: 'member', machineId: 'machine' }, observers: [{ email: 'b@example.com' }] },
+      { tabId: 'tab', confidential: true, agent: { harnessId: 'lead', machineId: 'machine' }, observers: [] }], Date.now() + 5_000)
+    const on = shareObservers(core(), observerSource)
+    expect(on.known()).toEqual([expect.objectContaining({ tab: 'super:tab', agentId: 'member', email: 'b@example.com' })])
+    expect(on.allows(grant('member', 'super:tab'))).toBe(true)
+    expect(on.allows(grant('lead'))).toBe(false)
+    expect(on.allows(grant('ordinary'))).toBe(true)
+    const off = shareObservers(core())
+    expect(off.known()).toBeNull()
+    expect(off.allows(grant('member', 'super:tab'))).toBe(false)
+    expect(off.allows(grant('lead'))).toBe(false)
+    expect(off.allows(grant('ordinary'))).toBe(true)
+  })
+})
 
 describe('Share, as a service', () => {
   let dataDir: string

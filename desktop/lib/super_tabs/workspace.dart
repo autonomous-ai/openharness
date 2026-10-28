@@ -541,6 +541,8 @@ class _SuperTabWorkspaceState extends State<SuperTabWorkspace> {
                   machineName: (machine) =>
                       app.stateOf(machine)?.machine.displayName ??
                       'Offline machine',
+                  isThisComputer: (machine) =>
+                      app.stateOf(machine)?.isLocalMachine == true,
                   terminal: showTerminal
                       ? terminal
                       : devices || agents.isNotEmpty
