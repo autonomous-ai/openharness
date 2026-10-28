@@ -2190,6 +2190,12 @@ class _SwarmScreenState extends State<SwarmScreen> {
           app,
           colorForActivity: activityInk,
         ),
+      // The Dock's badge: what needs the person in their Swarms. AppKit clears
+      // it at zero and whenever an update leaves it out.
+      if (_native) 'dockBadge': swarmsNeedYou(app),
+      // The menu bar's Swarm section: what the Swarm sidebar's Notifications
+      // row listed before it moved there.
+      if (_native) 'statusMenuSwarmEntries': statusMenuSwarmEntries(app),
       // The fallback bell and the macOS menu use the same unread ledger.
       'unread': _unread,
       'sessionsOpen': _harnessesVisible,
@@ -2815,6 +2821,8 @@ class _SwarmScreenState extends State<SwarmScreen> {
         unawaited(_showNotificationInbox());
       case 'openStatusHarness':
         await _openStatusHarness(args);
+      case 'openSwarmNotice':
+        await _openSwarmNotice(args);
       case 'clearStatusNotifications':
         if (args['receipts'] case final List receipts) {
           clearStatusMenuNotifications(app, receipts);
@@ -2847,6 +2855,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
           'notifications',
           'notificationInbox',
           'openStatusHarness',
+          'openSwarmNotice',
           'addAgent',
           'newAgent',
           'newTerminal',
@@ -7168,6 +7177,29 @@ class _SwarmScreenState extends State<SwarmScreen> {
     } finally {
       if (mounted) await revealWindow();
     }
+  }
+
+  /// A row of the menu bar's Swarm section: its Swarm tab comes forward and
+  /// opens the tag or decision there; View all (`all`) opens the Swarm's
+  /// Notifications page. One no longer listed opens nothing.
+  Future<void> _openSwarmNotice(Map receipt) async {
+    final tabId = receipt['swarmTabId'], kind = receipt['kind'];
+    final id = receipt['id'];
+    if (tabId is! String || kind is! String || id is! String) return;
+    final listed = statusMenuSwarmEntries(app).any(
+      (row) =>
+          row['swarmTabId'] == tabId &&
+          (kind == 'all' || (row['kind'] == kind && row['id'] == id)),
+    );
+    final controller = app.superTabs.peek(tabId);
+    final tab = app.swarms.where((s) => s.superTabId == tabId).firstOrNull;
+    if (!listed || controller == null || tab == null) return;
+    if (_newHarness?.requestDismiss() == false) return;
+    _closeNewHarness(restoreFocus: false);
+    _closeSearch(restoreFocus: false);
+    app.openSuperTab(tabId, tab.name);
+    controller.openNotice(kind, id);
+    await revealWindow();
   }
 
   /// The bell's inbox, a titlebar dropdown.

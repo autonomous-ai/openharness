@@ -1176,7 +1176,7 @@ class NewHarnessController extends ChangeNotifier {
       return 'The selected model is unavailable. Choose another model or your subscription.';
     }
     if (catalog.sections.every((section) => section.models.isEmpty)) {
-      return 'No models are running on your machines. Open Manage Models to start one.';
+      return 'No models are running on your machines. Open Your models to start one.';
     }
     return null;
   }
@@ -1263,7 +1263,7 @@ class NewHarnessController extends ChangeNotifier {
       ),
       const NewHarnessOption(
         id: manageModelsId,
-        title: 'Manage Models…',
+        title: 'Your models…',
         synthetic: true,
       ),
     ];

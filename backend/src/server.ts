@@ -21,6 +21,7 @@ import { startTurnCredentialRefresh } from './lib/turnCredentials.js'
 import { closeBus, redisCount, redisSsoProfileStore, redisSwarmStamps } from './lib/bus.js'
 import { configureSwarmStamps } from './superTabs/cache.js'
 import { useSharedSsoProfileStore } from './lib/ssoAuth.js'
+import { selfProfileFromEnv } from './lib/selfProfile.js'
 import { drainAllSockets, openSocketCount, RELEASE_UPGRADE_SLOT, type SlotSocket } from './lib/wsServer.js'
 
 // Node ≥ 15 turns an unhandled rejection into a process exit. On a cluster worker that holds thousands of
@@ -119,6 +120,8 @@ const app = Fastify({
 async function start(): Promise<void> {
   // Mint the Cloudflare TURN credential before the first socket lands; no-op when TURN is unconfigured.
   startTurnCredentialRefresh()
+  // Off by default: logs this process's CPU by kind of work every minute, and a 30 s profile every 15 min (#314).
+  selfProfileFromEnv(app)
 
   app.setErrorHandler(errorHandler)
 

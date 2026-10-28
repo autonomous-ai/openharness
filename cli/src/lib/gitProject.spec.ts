@@ -474,6 +474,162 @@ describe('launch Git preparation', { timeout: 30_000 }, () => {
     })
   })
 
+  describe('a worktree whose git is slow or fails', () => {
+    const harnesses = () => join(root, 'harnesses')
+    const listed = () => git('worktree', 'list', '--porcelain')
+    /** A file checked out through the `name` filter, whose smudge command is [smudge]. Set after the
+     *  commit: `git add` needs no filter. */
+    const filtered = async (name: string, smudge: string) => {
+      await writeFile(join(repo, '.gitattributes'), `filtered filter=${name}\n`)
+      await writeFile(join(repo, 'filtered'), 'content\n')
+      await git('add', '.')
+      await git('commit', '-m', 'filtered file')
+      await git('config', `filter.${name}.smudge`, smudge)
+      await git('config', `filter.${name}.required`, 'true')
+    }
+    afterEach(() => { vi.restoreAllMocks() })
+
+    it('uses a checkout that finished although git was still running at the timeout, and stops what git left running', async () => {
+      // git checked everything out and is in its post-checkout hook when the time runs out.
+      const hooks = join(root, 'hooks')
+      await mkdir(hooks)
+      const pidFile = join(root, 'hook.pid')
+      await writeFile(join(hooks, 'post-checkout'), `#!/bin/sh\necho $$ > '${pidFile}'\nexec sleep 60\n`, { mode: 0o755 })
+      await git('config', 'core.hooksPath', hooks)
+      const path = await prepareGitProject(repo, { root: harnesses(), worktree: true, branchName: 'slow', worktreeTimeout: 1_500 })
+      expect(path).toBe(join(worktrees(), 'slow'))
+      expect(await readFile(join(path, 'src', 'value'), 'utf8')).toBe('main')
+      expect(await current(path)).toBe('slow')
+      expect(await git('config', '--get', 'branch.slow.harness')).toBe('created')
+      // Unlocked: git marks a worktree locked while it is being made.
+      const real = await realpath(path)
+      const entry = (await listed()).split(/\n\s*\n/).find(block => block.includes(`worktree ${real}`))
+      expect(entry).toBeDefined()
+      expect(entry).not.toContain('locked')
+      const hookPid = Number((await readFile(pidFile, 'utf8')).trim())
+      expect(() => process.kill(hookPid, 0)).toThrow()
+    }, 20_000)
+
+    it('removes the partial folder and its new branch when the checkout is cut off at the timeout', async () => {
+      await filtered('slow', 'sleep 60; cat')
+      await expect(prepareGitProject(repo, { root: harnesses(), worktree: true, branchName: 'cut', worktreeTimeout: 1_500 }))
+        .rejects.toMatchObject({ code: 'WORKTREE_FAILED' })
+      await expect(readFile(join(worktrees(), 'cut', 'src', 'value'))).rejects.toThrow()
+      await expect(realpath(join(worktrees(), 'cut'))).rejects.toThrow()
+      expect(await git('branch', '--list', 'cut')).toBe('')
+      expect(await listed()).not.toContain('cut')
+    }, 20_000)
+
+    it('says why git failed, without credentials, and leaves no partial folder or new branch', async () => {
+      const said = vi.spyOn(console, 'error').mockImplementation(() => {})
+      await filtered('broken', "echo 'cannot reach https://robot:s3cret-token@example.invalid/lfs' >&2; exit 1")
+      await expect(prepareGitProject(repo, { root: harnesses(), worktree: true, branchName: 'broken' }))
+        .rejects.toMatchObject({ code: 'WORKTREE_FAILED' })
+      const lines = said.mock.calls.map(call => call.join(' ')).filter(line => line.startsWith('[worktree]'))
+      expect(lines).toHaveLength(1)
+      expect(lines[0]).toContain('exit 128')
+      expect(lines[0]).toContain('cannot reach https://')
+      expect(lines[0]).not.toContain('s3cret-token')
+      await expect(realpath(join(worktrees(), 'broken'))).rejects.toThrow()
+      expect(await git('branch', '--list', 'broken')).toBe('')
+      expect(await listed()).not.toContain('broken')
+      // The next start finds the name free.
+      await git('config', '--unset', 'filter.broken.required')
+      await git('config', 'filter.broken.smudge', 'cat')
+      expect(await prepareGitProject(repo, { root: harnesses(), worktree: true, branchName: 'broken' })).toBe(join(worktrees(), 'broken'))
+    })
+
+    it('leaves a registration that existed before the failed start, even one for the same folder', async () => {
+      vi.spyOn(console, 'error').mockImplementation(() => {})
+      // An earlier worktree at the folder this start picks, whose folder was deleted without `git worktree remove`.
+      await git('worktree', 'add', '-b', 'earlier', '--', join(worktrees(), 'again'), 'main')
+      await rm(join(worktrees(), 'again'), { recursive: true, force: true })
+      await expect(prepareGitProject(repo, { root: harnesses(), worktree: true, branchName: 'again' }))
+        .rejects.toMatchObject({ code: 'WORKTREE_FAILED' })
+      expect(await listed()).toContain('branch refs/heads/earlier')
+      expect(await git('branch', '--list', 'again')).toBe('')
+    })
+
+    it('never deletes a branch a person made at their own commit after the first check and before the add', async () => {
+      vi.spyOn(console, 'error').mockImplementation(() => {})
+      // git, as the daemon runs it, with the person's own `git branch mine feature` landing just after the name was checked.
+      const realGit = (await exec('sh', ['-c', 'command -v git'])).stdout.trim()
+      const bin = join(root, 'bin'), made = join(root, 'person-made-it')
+      await mkdir(bin)
+      await writeFile(join(bin, 'git'), `#!/bin/sh\nfor arg in "$@"; do if [ "$arg" = check-ref-format ] && [ ! -e '${made}' ]; then\n`
+        + `  : > '${made}'; '${realGit}' -C '${repo}' branch mine feature\nfi; done\nexec '${realGit}' "$@"\n`, { mode: 0o755 })
+      vi.stubEnv('PATH', `${bin}:${process.env.PATH}`)
+      await expect(prepareGitProject(repo, { root: harnesses(), worktree: true, branchName: 'mine' })).rejects.toMatchObject({ code: 'BRANCH_EXISTS' })
+      expect(await git('rev-parse', 'mine')).toBe(await git('rev-parse', 'feature'))
+      await expect(realpath(join(worktrees(), 'mine'))).rejects.toThrow()
+      expect(await listed()).not.toContain('worktrees/project with spaces/mine')
+    })
+
+    it('logs none of a stateless GitHub token git printed', async () => {
+      const said = vi.spyOn(console, 'error').mockImplementation(() => {})
+      const payload = 'eyJpc3MiOiIxMjM0NTYifQ', signature = `${'s'.repeat(470)}-x_y`
+      await filtered('leaky', `echo 'remote refused (token "ghs_123456_eyJhbGciOiJSUzI1NiJ9.${payload}.${signature}"), retry.' >&2; exit 1`)
+      await expect(prepareGitProject(repo, { root: harnesses(), worktree: true, branchName: 'leaky' })).rejects.toMatchObject({ code: 'WORKTREE_FAILED' })
+      const line = said.mock.calls.map(call => call.join(' ')).find(text => text.startsWith('[worktree]'))!
+      expect(line).toContain('remote refused (token "')
+      expect(line).not.toContain('ghs_123456_')
+      expect(line).not.toContain(payload)
+      expect(line).not.toContain('ssssssss')
+      expect(line).not.toContain('-x_y')
+    })
+
+    describe('on Windows, where taskkill cannot stop what git started', () => {
+      const platform = process.platform
+      beforeEach(async () => {
+        Object.defineProperty(process, 'platform', { value: 'win32', configurable: true })
+        const bin = join(root, 'bin')
+        await mkdir(bin)
+        await writeFile(join(bin, 'taskkill'), '#!/bin/sh\necho \'ERROR: The process with PID 1 could not be terminated.\' >&2\nexit 1\n', { mode: 0o755 })
+        vi.stubEnv('PATH', `${bin}:${process.env.PATH}`)
+      })
+      afterEach(() => { Object.defineProperty(process, 'platform', { value: platform, configurable: true }) })
+      /** git checks out and exits; its post-checkout hook leaves a process behind, holding git's stderr, that ends after
+       *  [seconds] by touching `ended`. */
+      const leftBehind = async (seconds: number) => {
+        const hooks = join(root, 'hooks')
+        await mkdir(hooks)
+        await writeFile(join(hooks, 'post-checkout'), `#!/bin/sh\n(sleep ${seconds}; : > '${join(root, 'ended')}') &\nexit 0\n`, { mode: 0o755 })
+        await git('config', 'core.hooksPath', hooks)
+      }
+
+      it('waits for what git left running to end before it looks at the checkout, and says taskkill failed', async () => {
+        const said = vi.spyOn(console, 'error').mockImplementation(() => {})
+        await leftBehind(2)
+        const path = await prepareGitProject(repo, { root: harnesses(), worktree: true, branchName: 'outlived', worktreeTimeout: 1_500 })
+        expect(await readFile(join(root, 'ended'), 'utf8')).toBe('')
+        expect(await readFile(join(path, 'src', 'value'), 'utf8')).toBe('main')
+        expect(said.mock.calls.map(call => call.join(' ')).join('\n')).toMatch(/\[worktree\] could not stop git.*could not be terminated/)
+      }, 20_000)
+
+      it('removes nothing while something git started may still be writing', async () => {
+        const said = vi.spyOn(console, 'error').mockImplementation(() => {})
+        await leftBehind(8)
+        await expect(prepareGitProject(repo, { root: harnesses(), worktree: true, branchName: 'still-running', worktreeTimeout: 1_500 }))
+          .rejects.toMatchObject({ code: 'WORKTREE_FAILED' })
+        await expect(readFile(join(root, 'ended'))).rejects.toThrow()
+        expect(await readFile(join(worktrees(), 'still-running', 'src', 'value'), 'utf8')).toBe('main')
+        expect(said.mock.calls.map(call => call.join(' ')).join('\n')).toMatch(/\[worktree\] .*still running.*left as it is/)
+      }, 20_000)
+    })
+
+    it('never deletes a branch that existed before the failed start', async () => {
+      vi.spyOn(console, 'error').mockImplementation(() => {})
+      await filtered('broken', 'exit 1')
+      await git('branch', 'topic', 'main')
+      const before = await git('rev-parse', 'topic')
+      await expect(prepareGitProject(repo, { root: harnesses(), worktree: true, branchName: 'topic', existingBranch: true }))
+        .rejects.toMatchObject({ code: 'WORKTREE_FAILED' })
+      expect(await git('rev-parse', 'topic')).toBe(before)
+      await expect(realpath(join(worktrees(), 'topic'))).rejects.toThrow()
+      expect(await listed()).not.toContain('topic')
+    })
+  })
+
   it('copies ignored files named in .worktreeinclude into new worktrees', async () => {
     await writeFile(join(repo, '.gitignore'), '.env\n*.log\nlocal/\n')
     await writeFile(join(repo, '.worktreeinclude'), '.env\nlocal/\n')
@@ -608,19 +764,23 @@ describe('launch Git preparation', { timeout: 30_000 }, () => {
       .rejects.toMatchObject({ code: 'GIT_PROJECT_UNAVAILABLE' })
   })
 
-  it('keeps a worktree created before a checkout hook fails so the user can recover it', async () => {
+  it('removes a worktree whose checkout hook fails, so a retry starts clean, and logs what the hook said', async () => {
+    const said = vi.spyOn(console, 'error').mockImplementation(() => {})
     const hooks = join(root, 'hooks')
     await mkdir(hooks)
-    await writeFile(join(hooks, 'post-checkout'), '#!/bin/sh\nexit 1\n', { mode: 0o755 })
+    await writeFile(join(hooks, 'post-checkout'), '#!/bin/sh\necho "hook refused" >&2\nexit 1\n', { mode: 0o755 })
     await git('config', 'core.hooksPath', hooks)
+    const before = await git('for-each-ref', '--format=%(refname)', 'refs/heads')
     await expect(prepare('worktree')).rejects.toMatchObject({ code: 'WORKTREE_FAILED' })
-    const linked = (await git('worktree', 'list', '--porcelain')).split('\n')
-      .find(line => line.startsWith('worktree ') && line.includes('/worktrees/'))!.slice(9)
-    expect(await readFile(join(linked, 'src', 'value'), 'utf8')).toBe('feature')
+    expect(await git('worktree', 'list', '--porcelain')).not.toContain('/worktrees/')
+    expect(await git('for-each-ref', '--format=%(refname)', 'refs/heads')).toBe(before)
+    expect(said.mock.calls.map(call => call.join(' ')).join('\n')).toMatch(/\[worktree\] git worktree add failed \(exit 1\).*hook refused/)
     expect(await git('branch', '--show-current')).toBe('main')
+    said.mockRestore()
   })
 
   it.each(['No space left on device', 'Disk quota exceeded'])('explains worktree disk exhaustion: %s', async (message) => {
+    const said = vi.spyOn(console, 'error').mockImplementation(() => {})
     const hooks = join(root, 'hooks')
     await mkdir(hooks)
     await writeFile(join(hooks, 'post-checkout'), `#!/bin/sh\necho 'private-file: ${message}' >&2\nexit 1\n`, { mode: 0o755 })
@@ -629,5 +789,6 @@ describe('launch Git preparation', { timeout: 30_000 }, () => {
       code: 'WORKTREE_FAILED',
       message: 'Not enough disk space to create the worktree. Free space on this machine, then retry.',
     })
+    said.mockRestore()
   })
 })

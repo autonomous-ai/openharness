@@ -84,6 +84,25 @@ describe('account-bound harness invitations', () => {
     mocks.prisma.harnessShare.findUnique.mockResolvedValueOnce({ ...input(), ownerId: owner.sub })
     expect((await put()).statusCode).toBe(200)
   })
+  // Diego's issue file (2026-10-27): a daemon that lost its grants file sends a new id for a recipient it already invited;
+  // the unique machine, agent and recipient index refused it as a 500, which the CLI retried forever.
+  it('PUT with a new id for an existing recipient is 409, not 500', async () => {
+    const { Prisma } = await import('@prisma/client')
+    const taken = () => new Prisma.PrismaClientKnownRequestError('Unique constraint failed', { code: 'P2002', clientVersion: 'test' })
+    mocks.prisma.harnessShare.upsert.mockRejectedValue(taken())
+    mocks.prisma.harnessShare.findFirst.mockResolvedValue({ id: 'existing-id', ownerId: owner.sub })
+    const res = await put()
+    expect(res.statusCode).toBe(409)
+    expect(res.json().error).toMatchObject({ code: 'SHARE_EXISTS', id: 'existing-id' })
+    expect(mocks.prisma.harnessShare.findFirst).toHaveBeenCalledWith({ where: { machineId: 'm1', agentId: 'agent-1', recipientEmail: 'ken@example.com' },
+      select: { id: true, ownerId: true } })
+    expect(mocks.changed).not.toHaveBeenCalled()
+    // A row from the machine's earlier owner is theirs: still a conflict, without its id.
+    mocks.prisma.harnessShare.findFirst.mockResolvedValue({ id: 'earlier-id', ownerId: 'earlier-owner' })
+    const earlier = await put()
+    expect(earlier.statusCode).toBe(409)
+    expect(earlier.json().error).not.toHaveProperty('id')
+  })
   it('discovers only active invitations for the signed-in email and environment, without machine secrets', async () => {
     mocks.auth.mockResolvedValue(ken)
     mocks.prisma.harnessShare.findMany.mockResolvedValue([
