@@ -46,6 +46,8 @@ export async function setMachineAgents(core: CoreApi, input: { tabId: string; ma
   const machine = (Array.isArray(state.machines) ? state.machines.map(object) : []).find(m => m.machineId === input.machineId)
   if (!machine) return { error: 'MACHINE_NOT_FOUND', detail: 'This machine is not in this Swarm. Add it from Desktop first.' }
   const name = typeof machine.name === 'string' ? machine.name : input.machineId
+  // The server takes a machine's settings whole and a new contribution starts unpaused (backend superTabs/commands.ts).
+  if (machine.paused === true) return { error: 'MACHINE_PAUSED', detail: `${name} is paused. Resume it first: changing its agents would also resume it.` }
   const total = object(object(machine.observation).resources).memoryTotalBytes
   if (typeof total !== 'number') return { error: 'MACHINE_MEMORY_UNKNOWN', detail: `${name} has not reported its memory yet. Try again once it is online.` }
   const maximum = machineMaximum(total)

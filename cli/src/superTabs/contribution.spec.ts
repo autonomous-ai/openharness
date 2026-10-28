@@ -232,6 +232,11 @@ describe('the owner setting how many agents a machine offers, from a terminal', 
     expect(await unread.set(8)).toEqual({ error: 'MACHINE_MEMORY_UNKNOWN', detail: 'Mac Studio has not reported its memory yet. Try again once it is online.' })
     expect([...f.sent, ...unread.sent]).toEqual([])
   })
+  it('refuses a paused machine, which the server would resume with its new number', async () => {
+    const f = owned(192, { paused: true })
+    expect(await f.set(32)).toEqual({ error: 'MACHINE_PAUSED', detail: 'Mac Studio is paused. Resume it first: changing its agents would also resume it.' })
+    expect(f.sent).toEqual([])
+  })
   it('passes on the server\'s refusal, such as another person\'s machine', async () => {
     const f = owned(192)
     const read = f.backend.getMockImplementation()!
