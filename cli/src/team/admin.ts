@@ -52,6 +52,18 @@ export interface AdminDeps {
 /** What a Linux computer with no desktop session answers for the prompt (over SSH, or Desktop's daemon with no display). */
 export const NO_PROMPT_MESSAGE = 'No administrator prompt here: run harness team setup in a terminal.'
 
+/**
+ * Whether pkexec's answer is the person's "no". 126 is a dismissed dialog. 127 is a refused authorization only when pkexec
+ * says so: it is also no authentication agent to ask with (pkexec 124 with no session: "Error creating textual
+ * authentication agent", gridtest VM, 2026-10-28) and a command the script could not find. Those are failures; read as a
+ * cancel, Desktop's offer would remember a "no" nobody gave, for good (./autoSetup.ts).
+ */
+function pkexecCancelled(code: number | null, stderr: string): boolean {
+  if (code === 126) return true
+  return code === 127 && (stderr.includes('Error executing command as another user: Not authorized')
+    || stderr.includes('Error executing command as another user: Request dismissed'))
+}
+
 /** The script's own reason, its last `harness:` line, or its exit status when it said none. */
 function stopped(stderr: string, code: number | null): AdminResult {
   const last = stderr.trim().split(/[\r\n]+/).pop() ?? ''
@@ -153,8 +165,7 @@ export function adminRunner(deps: AdminDeps = {}): RunAdmin {
         // polkit's own dialog. pkexec hands back the script's output and exit status.
         const result = await runner('pkexec', ['/bin/sh', path], { timeoutMs: 15 * 60_000 })
         if (result.code === 0) return { ok: true, stdout: result.stdout }
-        // 126 is a dismissed dialog, 127 a refused authorization.
-        if (result.code === 126 || result.code === 127) return { ok: false, code: 'CANCELLED', message: 'The administrator prompt was cancelled.' }
+        if (pkexecCancelled(result.code, result.stderr)) return { ok: false, code: 'CANCELLED', message: 'The administrator prompt was cancelled.' }
         return stopped(result.stderr, result.code)
       }
       if (via === 'sudo') {
