@@ -162,8 +162,10 @@ void main() {
       process.errors.add(utf8.encode('fixture diagnostic'));
       process.finish();
       await pending;
+      // A person asked, with the app's Sign out button: the CLI refuses a sign-out nothing says a
+      // person asked for (10-27).
       expect(runner.arguments, [
-        ['logout'],
+        ['logout', '--from-sign-out-button'],
       ]);
     },
   );

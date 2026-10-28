@@ -254,7 +254,9 @@ class CliLogin implements SignInClient, PhoneSignInClient {
     // the credentials saved by the user's next sign-in.
     final Process process;
     try {
-      process = await _runner.start(['logout']);
+      // A person pressed Sign out: the CLI refuses a sign-out nothing says a person asked for (10-27, when
+      // a test's `harness logout` signed a whole Mac out). A CLI from before the flag ignores it.
+      process = await _runner.start(['logout', '--from-sign-out-button']);
     } catch (error) {
       throw CliNotAvailableException('Could not run the harness CLI: $error');
     }
