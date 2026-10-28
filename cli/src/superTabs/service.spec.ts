@@ -203,6 +203,12 @@ it('tells the Lead how to switch a project\'s skills on its owner\'s own request
     askedIn: { conversationId: 'GROUP', messageId: 'OWNER_MESSAGE' } })
   expect(answer.help.command).toContain('project.skills switches a project between the Default, Harness orchestration and Custom skills (Custom once its owner has made the project\'s roles): only its project owner does, or its Lead passing on that owner\'s own chat message, with askedIn naming it.')
 })
+it('tells the Lead how to turn the Swarm\'s tidying off or on at its owner\'s own request', async () => {
+  const t = setup()
+  const answer = await t.ask({ action: 'help' }, owner) as { help: { command: string; commands: Array<Record<string, unknown>> } }
+  expect(answer.help.commands).toContainEqual({ type: 'tab.tidy', enabled: false, askedIn: { conversationId: 'GROUP', messageId: 'OWNER_MESSAGE' } })
+  expect(answer.help.command).toContain('tab.tidy turns off, or back on, the Swarm\'s tidying: workers idle for 15 minutes stop and finished groups archive once their pull requests are merged or closed. Only the Swarm owner does, or a Lead passing on the owner\'s own chat message, with askedIn naming it.')
+})
 it('tells the Lead that start works only on a machine in the Swarm\'s Machines list', async () => {
   const t = setup()
   const answer = await t.ask({ action: 'help' }, owner) as { help: { start: string } }
@@ -583,6 +589,12 @@ it('says a server from before rules does not support them, and passes a malforme
   expect(await send({ type: 'rule.remove', ruleId: 'r' })).toMatchObject({ error: 'RULES_UNSUPPORTED' })
   refuse('command.rule.effort: Invalid option')
   expect(await send({ type: 'rule.set', rule: { kind: 'minEffort', effort: 'huge' }, text: 'x' })).not.toMatchObject({ error: 'RULES_UNSUPPORTED' })
+})
+
+it('tells the Lead that simple work ranks grid models first, and how the owner opts out', async () => {
+  const help = (await setup().ask({ action: 'help' }, owner)).help as { commands: unknown[]; command: string }
+  expect(help.commands).toContainEqual(expect.objectContaining({ type: 'rule.set', rule: { kind: 'noGridFirst' } }))
+  expect(help.command).toContain('ranks models on the Swarm\'s grid first unless the owner set noGridFirst')
 })
 
 it('documents finished worker decisions and explains an older backend without release support', async () => {

@@ -5,7 +5,7 @@
  * backend from before it sends no `attention`, and nothing is raised.
  *
  * The roster is the whole truth each time: the set is handed to the core whole (`core.superTabs.attention`), which
- * raises what is new and closes what is gone (core/superTabAttention.ts). A status that moves on, a new attempt, a
+ * raises what is new and closes what is gone (superTabs/inCore/attention.ts). A status that moves on, a new attempt, a
  * removed agent, a paused or deleted tab: each is a row that no longer says so, and its alert closes.
  */
 import { createHash } from 'node:crypto'

@@ -408,7 +408,7 @@ export class DaemonCableHost implements CableHost {
     }
   }
 
-  /** The Swarm cards the core last handed the devices; a device that attaches later is shown them (core/superTabCards.ts replays). */
+  /** The Swarm cards the core last handed the devices; a device that attaches later is shown them (superTabs/inCore/cards.ts replays). */
   private cards: SwarmCard[] = []
 
   setSwarmCards(items: SwarmCard[]): void {
@@ -985,7 +985,7 @@ export function cableQuestionFor(
   const requestId = frame.payload?.requestId
   const questions = frame.payload?.questions
   if (typeof requestId !== 'string' || !requestId || !Array.isArray(questions)) return null
-  // A Super Tab member waiting on a person (core/superTabAttention.ts): the tab's name and what it needs ride along.
+  // A Super Tab member waiting on a person (superTabs/inCore/attention.ts): the tab's name and what it needs ride along.
   const superTab = frame.payload?.superTab, attention = frame.payload?.attention
   const tab = typeof superTab === 'string' && superTab && (attention === 'decision' || attention === 'stuck') ? { superTab, attention } as SuperTabAsk : null
   return { agentId: frame.agentId, requestId, questions, ...(tab ? { superTab: tab } : {}) }

@@ -35,7 +35,7 @@ export interface ClosingDeps {
   engineReady: (engine: string, ms: number) => Promise<void>
   /** The agents stopped and kept: a close of one already closed is answered closed. */
   stoppedAgents?: Pick<StoppedAgentStore, 'get' | 'resumeReservedAt'>
-  /** Whether the agent may be the Lead of an active Swarm project: never closed (superTabs/retention.ts `mayBeLead`). */
+  /** Whether the agent may be a Lead, which is never closed, as core/main.ts hands it in; absent, none is. */
   leadProtected?: (agentId: string) => boolean
 }
 

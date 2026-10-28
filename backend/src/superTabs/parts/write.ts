@@ -66,7 +66,8 @@ export function extracted(kind: PartKind, data: unknown, stamp: number): Record<
       return { projectId: group.projectId ?? null, kind: group.kind ?? null, archived: group.archived, dormant: !!group.dormant,
         agentIds: group.agentIds, executionMachineId: activeWork(group) ? group.assignment!.execution.machineId : null,
         messageSeq: group.messageSeq ?? 0, reportSeq: group.reportSeq ?? 0,
-        lastActivityAt: group.lastActivityAt ? new Date(group.lastActivityAt) : new Date(stamp), hostDigest: hostDigest(group) }
+        lastActivityAt: group.lastActivityAt ? new Date(group.lastActivityAt) : new Date(stamp), hostDigest: hostDigest(group),
+        workFinished: ['done', 'cancelled'].includes(group.assignment?.status ?? '') }
     }
     case 'agent': {
       const agent = data as Agent

@@ -247,6 +247,34 @@ summary, or `text: null` when nothing merits another message. Human questions,
 serious blockers and completion are reported immediately. This does not start
 a second summarizing model or forward every terminal turn.
 
+## Switching Swarms off on a computer
+
+Swarms are on by default. To run a computer's daemon without them, set
+`HARNESS_SWARM=off` (`0`, `false` and `no` also work) in the environment the
+daemon starts with, then restart it (`harness stop && harness start`). Anything else, or
+leaving it unset, keeps Swarms on.
+
+With Swarms off:
+
+- The daemon never starts the Swarm service, even if the computer has saved
+  Swarm state. No daemon process loads the Swarm's code: not the core, and not
+  the agent cleanup, Share, change agent or models.
+- Agents start, run and close exactly as they do without Swarms. A Product
+  Manager the Swarm kept running can now be stopped like any other agent, and a
+  harness an agent started is cleaned up like any other, even if a Swarm kept it.
+- The computer can't contribute to a Swarm. Swarm requests, including
+  `harness super-tab` and the Swarm's model requests, answer that the service is
+  unavailable. A new agent that asks for a Swarm role is refused, and so is
+  reopening an agent a Swarm started, since it would come back without its role.
+- The computer serves no saved API or model to a Swarm's grid.
+- People watching a harness through a Swarm can't see it, and a session a Swarm
+  marked confidential (a Product Manager, or one in a private chat) still
+  can't be shared at all. That mark is the one piece of saved Swarm state still
+  read while Swarms are off.
+
+Turn Swarms back on by removing the setting and restarting the daemon. Saved
+Swarm state is kept while they're off, so the computer picks up where it left off.
+
 ## Compatibility and rollout
 
 The internal `superTab` storage keys and `harness super-tab` command stay stable.

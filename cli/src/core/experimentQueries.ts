@@ -22,13 +22,13 @@
  * - `cloud_publish`, `cloud_ask`, `cloud_unask`: the cloud agents' harnesses and their questions
  *   (`core.cloud`, core/agents/cloud.ts), for the cloud service alone;
  * - `super_tab_attention`: the Super Tab members here waiting on a person (`core.superTabs`,
- *   core/superTabAttention.ts), for the Super Tab service alone;
+ *   superTabs/inCore/attention.ts), for the Super Tab service alone;
  * - `super_tab_cards`, `super_tab_card_recap`: the Swarms' cards and a Lead's last message for the Harness Pro
- *   (`core.superTabs`, core/superTabCards.ts), for the Super Tab service alone;
+ *   (`core.superTabs`, superTabs/inCore/cards.ts), for the Super Tab service alone;
  * - `super_tab_observers`: members may watch an agent here, so Share must run (`core.superTabs`), for the Super Tab
  *   service alone;
  * - `super_tab_screen`, `super_tab_input`: a member's terminal read as plain text and typed into for its Lead
- *   (`core.superTabs`, core/superTabTerminal.ts), for the Super Tab service alone.
+ *   (`core.superTabs`, superTabs/inCore/terminal.ts), for the Super Tab service alone.
  * The core answers them only for the experiments (core/api.ts `EXPERIMENTS`): creating an agent or
  * telling the windows something is no other process's to ask. The process's side is
  * services/processCoreApi.ts. Agent Messages, an experiment until 2026-10-12, asks a few of the same and is
@@ -161,14 +161,14 @@ export async function answerExperimentQuery(core: Core, experiments: ReadonlySet
       return {}
     }
     case 'super_tab_attention': {
-      // The core checks each item (core/superTabAttention.ts): what reaches the devices is decided there, not here.
+      // The core checks each item (superTabs/inCore/attention.ts): what reaches the devices is decided there, not here.
       if (service !== 'superTabs' || !core.superTabs) return { error: 'NOT_SUPER_TABS' }
       core.superTabs.attention(Array.isArray(payload.items) ? payload.items : [])
       return {}
     }
     case 'super_tab_cards':
     case 'super_tab_card_recap': {
-      // Checked by the core (core/superTabCards.ts), which drops what is not sound; here only the list's shape.
+      // Checked by the core (superTabs/inCore/cards.ts), which drops what is not sound; here only the list's shape.
       if (service !== 'superTabs' || !core.superTabs) return { error: 'NOT_SUPER_TABS' }
       if (query === 'super_tab_cards') core.superTabs.cards(Array.isArray(payload.items) ? payload.items : [])
       else core.superTabs.cardRecap(payload.recap as never)

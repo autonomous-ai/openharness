@@ -8,7 +8,7 @@ import { isLeads, type Conversation, type SuperTabState } from '../model.js'
 import { canReadProject, projectOf } from '../projects.js'
 import { waitedOn, waitsNow } from './record.js'
 import { DAY_MS, WEEK_MS } from './week.js'
-import type { Leaderboard, Medal, PersonScore, WeekGoal } from './contract.js'
+import type { Leaderboard, Medal, ModelShare, PersonScore, WeekGoal } from './contract.js'
 
 export const SHIPPED_POINTS = 3
 export const UNBLOCK_POINTS = 1
@@ -69,7 +69,18 @@ export function leaderboard({ state, groups, machines: visibleMachines, projectI
     goal: { openRequests: requests.filter(open).length, thisWeek: goal(week), lastWeek: goal(week - WEEK_MS) },
     people,
     waiting: waitingNow(state, shared),
+    models: { thisWeek: modelShare(requests, week), lastWeek: modelShare(requests, week - WEEK_MS) },
   }
+}
+
+/** The attempts started in the week starting [start], by the kind of model they ran on. */
+function modelShare(requests: Conversation[], start: number): ModelShare {
+  const runs = requests.flatMap(g => g.ledger?.runs ?? []).filter(r => r.at >= start && r.at < start + WEEK_MS)
+  const reviewed = runs.filter(r => r.firstReview !== undefined)
+  const count = (list: typeof runs, grid: boolean) => list.filter(r => !!r.grid === grid).length
+  const passed = reviewed.filter(r => r.firstReview)
+  return { attempts: runs.length, grid: count(runs, true), reviewed: { grid: count(reviewed, true), subscription: count(reviewed, false) },
+    passedFirst: { grid: count(passed, true), subscription: count(passed, false) } }
 }
 
 /** Shared work still to land: not shipped, cancelled, stopped or archived. */

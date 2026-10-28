@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:desktop_drop/desktop_drop.dart';
 import 'package:file_selector/file_selector.dart';
@@ -21,6 +22,28 @@ Future<void> _attach(
       HarnessAttachment(file.name, await file.readAsBytes()),
   ];
   if (context.mounted) reportAttachProblem(context, attachments.add(read));
+}
+
+/// Attaches the dropped files and hands [onFolders] the dropped folders'
+/// paths, which hold nothing to read.
+Future<void> _attachOrPaste(
+  BuildContext context,
+  HarnessAttachments attachments,
+  Iterable<DropItem> items,
+  ValueChanged<List<String>> onFolders,
+) async {
+  final files = <XFile>[], folders = <String>[];
+  for (final item in items) {
+    // macOS says which items are folders; Linux and Windows give paths alone.
+    final folder =
+        item is DropItemDirectory ||
+        (item.path.isNotEmpty && await FileSystemEntity.isDirectory(item.path));
+    folder ? folders.add(item.path) : files.add(item);
+  }
+  if (folders.isNotEmpty) onFolders(folders);
+  if (files.isNotEmpty && context.mounted) {
+    await _attach(context, attachments, files);
+  }
 }
 
 /// Says what an attach left out, when it left anything.
@@ -103,11 +126,16 @@ class NewHarnessDropZone extends StatefulWidget {
     required this.attachments,
     required this.enabled,
     required this.child,
+    this.onFolders,
   });
 
   final HarnessAttachments attachments;
   final bool enabled;
   final Widget child;
+
+  /// Told the paths of dropped folders, which are then not attached. Without
+  /// it every dropped item is read as a file.
+  final ValueChanged<List<String>>? onFolders;
 
   @override
   State<NewHarnessDropZone> createState() => _NewHarnessDropZoneState();
@@ -128,7 +156,17 @@ class _NewHarnessDropZoneState extends State<NewHarnessDropZone> {
     onDragExited: (_) => _hover(false),
     onDragDone: (details) {
       _hover(false);
-      unawaited(_attach(context, widget.attachments, details.files));
+      final onFolders = widget.onFolders;
+      unawaited(
+        onFolders == null
+            ? _attach(context, widget.attachments, details.files)
+            : _attachOrPaste(
+                context,
+                widget.attachments,
+                details.files,
+                onFolders,
+              ),
+      );
     },
     child: Stack(
       children: [

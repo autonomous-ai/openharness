@@ -5,7 +5,7 @@
 import type { Prisma, PrismaClient } from '@prisma/client'
 import type { AuthUser } from '../../lib/ssoAuth.js'
 import { isTeamSession, TEAM_SESSION_LIMITED, TEAM_SESSION_MESSAGE } from '../../lib/teamSession.js'
-import { author, fail, isLeads, visibleState, type Actor, type AgentStart } from '../model.js'
+import { author, fail, isLeads, seenMachineIds, visibleState, type Actor, type AgentStart } from '../model.js'
 import { mentionsWaiting } from '../mentions.js'
 import { decisionsWaiting } from '../decisions.js'
 import { transaction, type SuperTabStore } from '../store.js'
@@ -21,7 +21,7 @@ import { WEEK_MS } from '../leaderboard/week.js'
 import { READ_FORMAT, SWARM_MIGRATING, type Changes, type DormantGroups, type FirstLoad, type OneGroup, type SwarmList } from './contract.js'
 import { cursorFor, readCursor } from './cursor.js'
 import { changesFor } from './changes.js'
-import { envelope, groupView, readerView, type ReaderView } from './views.js'
+import { envelope, groupView, readerView, seenIn, type ReaderView } from './views.js'
 import { decodeDormantPage, encodeDormantPage } from './dormantPage.js'
 
 type Transaction = Prisma.TransactionClient
@@ -77,7 +77,8 @@ export class SwarmReads {
       const before = page.before ? decodeDormantPage(page.before) : undefined
       const rows = await parts.loadDormant(tx, tabId, { ...(page.projectId ? { projectId: page.projectId } : {}), ...(before ? { before } : {}) })
       const readable = rows.filter(p => { try { return canReadGroup(state, actor, p.data!) } catch { return false } })
-      return { groups: readable.map(p => envelope(p, groupView({ ...p.data!, dormant: true }))),
+      const seen = readable.some(p => p.data!.task?.requires) ? seenMachineIds(visibleState(state, actor, this.now())) : new Set<string>()
+      return { groups: readable.map(p => envelope(p, groupView({ ...p.data!, dormant: true }, seen))),
         next: rows.length === 50 ? encodeDormantPage(rows.at(-1)!) : null }
     })
   }
@@ -90,7 +91,9 @@ export class SwarmReads {
       if (active) return { group: active }
       // A dormant group is in no whole-Swarm view; it passes the same read check as on the dormant list.
       const dormant = loaded.groups.find(g => g.key === conversationId && g.dormant)
-      if (dormant && canReadGroup(view.state, actor, dormant.data!)) return { group: envelope(dormant, groupView({ ...dormant.data!, dormant: true })) }
+      if (dormant && canReadGroup(view.state, actor, dormant.data!)) {
+        return { group: envelope(dormant, groupView({ ...dormant.data!, dormant: true }, seenIn(view.parts))) }
+      }
       return fail('NOT_FOUND', 'This conversation is unavailable.', 404)
     })
   }
@@ -147,6 +150,7 @@ export class SwarmReads {
       parts.lastChangedAt(tx, [tabId]),
     ])
     return { parts: loaded, actor, lastChangedAt: newest.get(tabId) ?? null,
-      view: readerView(loaded, actor, t0, { teamMachines, ...(counts ? { mentionsWaiting: counts[0], decisionsWaiting: counts[1] } : {}) }) }
+      view: readerView(loaded, actor, t0, { teamMachines,
+        ...(counts ? { mentionsWaiting: counts[0], decisionsWaiting: counts[1].count, decisionsDigest: counts[1].digest } : {}) }) }
   }
 }
