@@ -55,12 +55,19 @@ void main() {
         read({'kind': 'upload', 'url': 'https://elsewhere.example/a.png'}),
         isNull,
       );
-      // Avatars are never public: not even the chat files' own CDN.
+      // A server without an avatar bucket keeps them with the chat files and
+      // links them on the chat files' CDN (Ken, 2026-10-28): that host too.
       expect(
-        read({
-          'kind': 'upload',
-          'url': 'https://cdn.harness.autonomous.ai/a.png',
-        }),
+        (read({
+                  'kind': 'upload',
+                  'url': 'https://cdn.harness.autonomous.ai/avatars/t/a/avatar',
+                })!
+                as SuperTabUploadedAvatar)
+            .url,
+        Uri.parse('https://cdn.harness.autonomous.ai/avatars/t/a/avatar'),
+      );
+      expect(
+        read({'kind': 'upload', 'url': 'http://cdn.harness.autonomous.ai/a'}),
         isNull,
       );
       // An upload whose signed link has not come yet shows the default face.
