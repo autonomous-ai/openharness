@@ -7,23 +7,40 @@
  * PR #1934 fell back to GitHub's API by hand. So the team daemon installs gh itself when it has none it can run, as it does
  * tmux (team/tmux.ts): GitHub's own release of it, checked against the checksum pinned here, in its own home. No password.
  *
+ * On Linux the same, from GitHub's tarball for the computer's architecture.
+ *
  * A newer gh is a new version and checksums here, from the release's `gh_<version>_checksums.txt`.
  */
 import { execFile } from 'node:child_process'
 import { existsSync, mkdirSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { untarGz } from './tmux.js'
 
-export interface GhBuild { version: string; url: string; sha256: string; size: number; archiveRoot: string }
+export interface GhBuild { version: string; url: string; sha256: string; size: number; archiveRoot: string; format: 'zip' | 'tar.gz' }
 
 const GH_VERSION = '2.103.3'
-const release = (arch: string, sha256: string, size: number): GhBuild => ({
-  version: GH_VERSION, sha256, size, archiveRoot: `gh_${GH_VERSION}_macOS_${arch}`,
-  url: `https://github.com/cli/cli/releases/download/v${GH_VERSION}/gh_${GH_VERSION}_macOS_${arch}.zip`,
-})
+const release = (system: 'macOS' | 'linux', arch: string, sha256: string, size: number): GhBuild => {
+  const format = system === 'linux' ? 'tar.gz' : 'zip'
+  return {
+    version: GH_VERSION, sha256, size, archiveRoot: `gh_${GH_VERSION}_${system}_${arch}`, format,
+    url: `https://github.com/cli/cli/releases/download/v${GH_VERSION}/gh_${GH_VERSION}_${system}_${arch}.${format}`,
+  }
+}
 /** GitHub's macOS builds of gh, by `process.arch`. */
 export const GH_BUILDS: Readonly<Record<string, GhBuild>> = {
-  arm64: release('arm64', 'd700207eae9ae98fe2b89535c2c087c07823d4628c56364695a5a07ef311c062', 14_106_091),
-  x64: release('amd64', 'a2f86418f4350ae6e9ec60d5000bdf7665728436946a97fc27fe50e6ae752682', 15_702_601),
+  arm64: release('macOS', 'arm64', 'd700207eae9ae98fe2b89535c2c087c07823d4628c56364695a5a07ef311c062', 14_106_091),
+  x64: release('macOS', 'amd64', 'a2f86418f4350ae6e9ec60d5000bdf7665728436946a97fc27fe50e6ae752682', 15_702_601),
+}
+/** GitHub's Linux builds of gh, by `process.arch`: tarballs, from the same release's checksums and sizes. */
+export const GH_LINUX_BUILDS: Readonly<Record<string, GhBuild>> = {
+  arm64: release('linux', 'arm64', 'ee32df2323c8847f5fac6cb6b4b69ca75828e9329a8f22f677021f7b3306ce63', 13_661_485),
+  x64: release('linux', 'amd64', '4c806978ffce1cec70853302a56d70ac6da4f19bae7adca4e1a8ab00633dd91d', 15_031_972),
+}
+
+/** The pinned build for this system, or undefined where none is. */
+export function ghBuildFor(platform: NodeJS.Platform, arch: string): GhBuild | undefined {
+  const builds = platform === 'darwin' ? GH_BUILDS : platform === 'linux' ? GH_LINUX_BUILDS : null
+  return builds && Object.hasOwn(builds, arch) ? builds[arch] : undefined
 }
 
 export type TeamGhOutcome = 'not-team' | 'present' | 'installed' | 'unsupported' | 'failed'
@@ -51,7 +68,7 @@ export async function ensureTeamGh(deps: TeamGhDeps): Promise<TeamGhOutcome> {
   try {
     if (!deps.team()) return 'not-team'
     for (const binary of deps.candidates()) if (await deps.runs(binary)) return 'present'
-    const build = deps.platform === 'darwin' ? GH_BUILDS[deps.arch] : undefined
+    const build = ghBuildFor(deps.platform, deps.arch)
     if (!build) {
       deps.log(`team: no gh build is pinned for ${deps.platform}-${deps.arch}; teammates' agents open pull requests through GitHub's API`)
       return 'unsupported'
@@ -64,7 +81,7 @@ export async function ensureTeamGh(deps: TeamGhDeps): Promise<TeamGhOutcome> {
       rmSync(staging, { recursive: true, force: true })
       mkdirSync(staging, { recursive: true, mode: 0o700 })
       try {
-        const archive = join(staging, 'gh.zip')
+        const archive = join(staging, `gh.${build.format}`)
         writeFileSync(archive, await deps.download(build), { mode: 0o600 })
         await deps.unzip(archive, staging)
         if (!existsSync(join(staging, build.archiveRoot, 'bin', 'gh'))) throw new Error(`the gh archive has no ${build.archiveRoot}/bin/gh`)
@@ -93,7 +110,9 @@ export const ghRunsAt = (binary: string) => new Promise<boolean>((resolve) => {
     (error, stdout) => resolve(!error && /^gh version \S+/.test(String(stdout).trim())))
 })
 
-/** Unpacks with the system's ditto, which every Mac has. */
-export const unzipArchive = (archive: string, into: string) => new Promise<void>((resolve, reject) => {
-  execFile('/usr/bin/ditto', ['-x', '-k', archive, into], { timeout: 60_000 }, (error) => error ? reject(new Error(`could not unpack ${archive}`)) : resolve())
-})
+/** Unpacks a .zip with the system's ditto, which every Mac has, and Linux's .tar.gz with the system's tar. */
+export const unzipArchive = (archive: string, into: string): Promise<void> => archive.endsWith('.tar.gz')
+  ? untarGz(archive, into)
+  : new Promise<void>((resolve, reject) => {
+    execFile('/usr/bin/ditto', ['-x', '-k', archive, into], { timeout: 60_000 }, (error) => error ? reject(new Error(`could not unpack ${archive}`)) : resolve())
+  })

@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { SubscriptionRelay } from '../lib/subscriptionRelay.js'
 import type { TeamConfig } from './config.js'
 import {
-  publishTeamRelay, readTeamRelay, TEAM_RELAY_GUEST, teamRelayDir, teamRelayFile, teamRelayLaunch, teamRelayPublished, TeamRelayPublisher,
+  publishTeamRelay, readTeamRelay, setfaclGrant, TEAM_RELAY_GUEST, teamRelayDir, teamRelayFile, teamRelayLaunch, teamRelayPublished, TeamRelayPublisher,
   type TeamRelayLaunchDeps, type TeamRelayPublisherDeps, type TeamRelayReadDeps,
 } from './relay.js'
 
@@ -142,6 +142,44 @@ describe('the team daemon, reading its owner\'s relay', () => {
       { text: JSON.stringify({ url: 'http://evil.example:9', token: TOKEN }) }, { text: JSON.stringify({ url: 'http://127.0.0.1:9', token: 'short' }) },
       { text: '{' },
     ]) expect(readTeamRelay(config, reader(over)), JSON.stringify(over)).toBeNull()
+  })
+})
+
+describe('on Linux', () => {
+  const linuxConfig = { user: 'harnessteam', owner: 'owner', ownerHome: '/home/owner' } as TeamConfig
+
+  it('names the owner\'s folder setup made under /var/lib/harness', () => {
+    expect(teamRelayDir('owner', 'linux')).toBe('/var/lib/harness/team-relay-owner')
+    expect(teamRelayFile('owner', 'linux')).toBe('/var/lib/harness/team-relay-owner/relay.json')
+    expect(teamRelayPublished(linuxConfig, (path) => path === '/var/lib/harness/team-relay-owner/relay.json', 'linux')).toBe(true)
+  })
+
+  it('sets the folder\'s and the file\'s whole ACL with setfacl: the owner, and harnessteam reading, nobody else', async () => {
+    const calls: string[][] = []
+    const grant = setfaclGrant(async (file, args) => { calls.push([file, ...args]) })
+    const dir = join(mkdtempSync(join(tmpdir(), 'team-relay-')), 'relay')
+    cleanup.push(dir)
+    await publishTeamRelay(linuxConfig, { url: 'http://127.0.0.1:9', token: TOKEN }, process.getuid!(), grant, dir)
+    expect(calls).toEqual([
+      ['setfacl', '--set', 'u::rwx,g::---,o::---,u:harnessteam:r-x', dir],
+      ['setfacl', '--set', 'u::rw-,g::---,o::---,u:harnessteam:r--', expect.stringMatching(/\.next$/)],
+    ])
+    await expect(setfaclGrant(async () => { throw new Error('exit 1') })(dir, 'harnessteam', 'read,readattr')).rejects.toThrow('could not let harnessteam read')
+  })
+
+  it('the team side reads it only from the configured owner, allowing the group bits an ACL shows', () => {
+    const entry = (uid: number, mode: number, dir: boolean) => ({ uid, mode, isDirectory: () => dir, isFile: () => !dir })
+    const reader = (over: { dir?: ReturnType<typeof entry>; file?: ReturnType<typeof entry> } = {}): TeamRelayReadDeps => ({
+      platform: 'linux', ownerUid: () => 1001,
+      // With an ACL entry, the group bits are the ACL's mask: r-x on the folder, r-- on the file.
+      lstat: (path) => path.endsWith('relay.json') ? over.file ?? entry(1001, 0o100640, false) : over.dir ?? entry(1001, 0o40750, true),
+      read: (path) => { expect(path).toBe('/var/lib/harness/team-relay-owner/relay.json'); return JSON.stringify({ url: 'http://127.0.0.1:9', token: TOKEN }) },
+    })
+    expect(readTeamRelay(linuxConfig, reader())).toEqual({ url: 'http://127.0.0.1:9', token: TOKEN })
+    for (const over of [
+      { dir: entry(1002, 0o40750, true) }, { file: entry(1002, 0o100640, false) }, { dir: entry(0, 0o40750, true) },
+      { dir: entry(1001, 0o40770, true) }, { file: entry(1001, 0o100660, false) }, { file: entry(1001, 0o100644, false) },
+    ]) expect(readTeamRelay(linuxConfig, reader(over)), JSON.stringify(over)).toBeNull()
   })
 })
 

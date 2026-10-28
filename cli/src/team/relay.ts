@@ -10,7 +10,8 @@
  *
  * - The owner's daemon keeps a relay of its own for the team account while one exists on this Mac, and leaves its address
  *   and token in a folder it owns under /Users/Shared, readable by the team account alone through a macOS ACL. Not
- *   a guest's, not any other local user's: the token spends the owner's subscription.
+ *   a guest's, not any other local user's: the token spends the owner's subscription. On Linux the folder is one setup made
+ *   for the owner under /var/lib/harness, and the ACL is setfacl's.
  * - The team daemon reads it at each launch, only when the folder and the file belong to the owner the root-owned team
  *   config names (another local user could otherwise leave a relay of their own there and read teammates' prompts), and
  *   only for an engine the team account has not signed in itself: a sign-in of its own wins.
@@ -27,10 +28,13 @@ import { readAuthSession } from '../lib/authSession.js'
 import { engineAccount } from '../lib/engineAccount.js'
 import { claudeRelayEnv, codexRelayArgs, codexRelayEnv, type SubscriptionRelay } from '../lib/subscriptionRelay.js'
 import { readTeamConfig, type TeamConfig } from './config.js'
+import { teamLayout } from './layout.js'
 
-/** The owner's folder for the hand-off, per owner so two people's Macs never share one. */
-export const teamRelayDir = (owner: string) => `/Users/Shared/.harness-team-relay-${owner}`
-export const teamRelayFile = (owner: string) => join(teamRelayDir(owner), 'relay.json')
+/** The owner's folder for the hand-off, per owner so two people's Macs never share one (./layout.ts `relayDir`). On Linux
+ *  setup makes it for the owner, under /var/lib/harness, where nobody else can make a folder. A Mac's unless told. */
+export const teamRelayDir = (owner: string, platform: NodeJS.Platform = 'darwin') =>
+  (teamLayout(platform) ?? teamLayout('darwin')!).relayDir(owner)
+export const teamRelayFile = (owner: string, platform: NodeJS.Platform = 'darwin') => join(teamRelayDir(owner, platform), 'relay.json')
 /** The name the relay knows the team account's token by, in its logs (a fingerprint of it) and to revoke it. */
 export const TEAM_RELAY_GUEST = 'harness-team'
 
@@ -128,6 +132,24 @@ const allow = (path: string, user: string, rights: string) => new Promise<void>(
   })
 })
 
+const execFileAsync = (file: string, args: string[]) => new Promise<void>((resolve, reject) => {
+  execFile(file, args, { timeout: 10_000 }, (error) => error ? reject(error) : resolve())
+})
+
+/**
+ * Linux: the whole ACL of [path], set at once (`--set`, so each publish leaves exactly these entries): this user, and
+ * [user] reading, as the guest helper grants with setfacl. A folder is read and searched (r-x), a file read (r--).
+ */
+export const setfaclGrant = (exec: (file: string, args: string[]) => Promise<void> = execFileAsync) =>
+  async (path: string, user: string, rights: string): Promise<void> => {
+    const folder = rights.split(',').includes('search')
+    const acl = `u::${folder ? 'rwx' : 'rw-'},g::---,o::---,u:${user}:${folder ? 'r-x' : 'r--'}`
+    try { await exec('setfacl', ['--set', acl, path]) } catch { throw new Error(`could not let ${user} read ${path}`) }
+  }
+
+/** This system's way to let the team account read the relay. */
+const grantFor = (platform: NodeJS.Platform) => platform === 'linux' ? setfaclGrant() : allow
+
 /** Writes the grant where only the team account (and this user) can read it. */
 export async function publishTeamRelay(config: TeamConfig, grant: TeamRelayGrant, uid: number = process.getuid?.() ?? -1,
   grantRead: (path: string, user: string, rights: string) => Promise<void> = allow, dir: string = teamRelayDir(config.owner)): Promise<void> {
@@ -143,13 +165,13 @@ export async function publishTeamRelay(config: TeamConfig, grant: TeamRelayGrant
   renameSync(next, join(dir, 'relay.json'))
 }
 
-export function withdrawTeamRelay(owner: string): void {
-  rmSync(teamRelayFile(owner), { force: true })
+export function withdrawTeamRelay(owner: string, platform: NodeJS.Platform = 'darwin'): void {
+  rmSync(teamRelayFile(owner, platform), { force: true })
 }
 
 export const teamRelayPublished = (config: TeamConfig, exists: (path: string) => boolean = (path) => {
   try { lstatSync(path); return true } catch { return false }
-}) => exists(teamRelayFile(config.owner))
+}, platform: NodeJS.Platform = 'darwin') => exists(teamRelayFile(config.owner, platform))
 
 export function realTeamRelayPublisher(startRelay: () => Promise<SubscriptionRelay>, config: () => TeamConfig | null,
   team: () => boolean, log: (line: string) => void, afterPass?: (publishedAt: number | null) => Promise<void>): TeamRelayPublisher {
@@ -160,9 +182,9 @@ export function realTeamRelayPublisher(startRelay: () => Promise<SubscriptionRel
     config: () => process.env.VITEST ? null : config(),
     team, startRelay, log,
     user: () => userInfo().username,
-    publish: (c, grant) => publishTeamRelay(c, grant),
-    published: (c) => teamRelayPublished(c),
-    withdraw: withdrawTeamRelay,
+    publish: (c, grant) => publishTeamRelay(c, grant, process.getuid?.() ?? -1, grantFor(process.platform), teamRelayDir(c.owner, process.platform)),
+    published: (c) => teamRelayPublished(c, undefined, process.platform),
+    withdraw: (owner) => withdrawTeamRelay(owner, process.platform),
   })
 }
 
@@ -174,9 +196,12 @@ export interface TeamRelayReadDeps {
   ownerUid(home: string): number
   /** The file's text, refusing a link. */
   read(path: string): string
+  /** Where the folder is, and how its ACL shows in the mode: a Mac's unless told. */
+  platform?: NodeJS.Platform
 }
 
 const realReadDeps: TeamRelayReadDeps = {
+  platform: process.platform,
   lstat: (path) => lstatSync(path),
   ownerUid: (home) => statSync(home).uid,
   read: (path) => {
@@ -193,12 +218,16 @@ const realReadDeps: TeamRelayReadDeps = {
 /** The owner's relay for this team account, when the owner's daemon left one; null otherwise. */
 export function readTeamRelay(config: TeamConfig, deps: TeamRelayReadDeps = realReadDeps): TeamRelayGrant | null {
   try {
+    const platform = deps.platform ?? 'darwin'
     const owner = deps.ownerUid(config.ownerHome)
-    const dir = deps.lstat(teamRelayDir(config.owner))
+    const dir = deps.lstat(teamRelayDir(config.owner, platform))
     if (!dir.isDirectory() || dir.uid !== owner || (dir.mode & 0o022) !== 0) return null
-    const file = deps.lstat(teamRelayFile(config.owner))
-    if (!file.isFile() || file.uid !== owner || (file.mode & 0o077) !== 0) return null
-    const value = JSON.parse(deps.read(teamRelayFile(config.owner))) as Record<string, unknown>
+    const file = deps.lstat(teamRelayFile(config.owner, platform))
+    // On Linux the group bits of a file with an ACL are its mask, r-- once the team account may read it: the group itself
+    // gets nothing (./relay.ts setfaclGrant). Writable or anyone's, it is not the owner's alone.
+    const closed = platform === 'linux' ? 0o037 : 0o077
+    if (!file.isFile() || file.uid !== owner || (file.mode & closed) !== 0) return null
+    const value = JSON.parse(deps.read(teamRelayFile(config.owner, platform))) as Record<string, unknown>
     if (typeof value.url !== 'string' || !RELAY_URL.test(value.url) || typeof value.token !== 'string' || !TOKEN.test(value.token)) return null
     return { url: value.url, token: value.token }
   } catch {

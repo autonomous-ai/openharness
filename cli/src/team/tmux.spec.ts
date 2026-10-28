@@ -66,6 +66,17 @@ describe('the Harness Team account\'s own tmux', () => {
     expect(d.download).not.toHaveBeenCalled()
   })
 
+  it('on Linux, uses the system\'s tmux and never downloads one', async () => {
+    const manifest = vi.fn(async () => { throw new Error('never read') })
+    const present = deps({ platform: 'linux', candidates: () => ['/usr/bin/tmux'], runs: vi.fn(async (b: string) => b === '/usr/bin/tmux'), manifest })
+    expect(await ensureTeamTmux(present.d)).toBe('present')
+    const missing = deps({ platform: 'linux', candidates: () => [], manifest })
+    expect(await ensureTeamTmux(missing.d)).toBe('unsupported')
+    expect(missing.d.log).toHaveBeenCalledWith('team: no tmux every account can run here: install it (apt install tmux / dnf install tmux)')
+    for (const f of [present, missing]) expect(f.d.download).not.toHaveBeenCalled()
+    expect(manifest).not.toHaveBeenCalled()
+  })
+
   it('says so when no build is published for this Mac, and fails without throwing', async () => {
     expect(await ensureTeamTmux(deps({ arch: 'ia32' }).d)).toBe('unsupported')
     const noBinary = deps({ download: async () => archive('tmux-3.7c-darwin-arm64', false) })
