@@ -15,6 +15,7 @@ import type { CacheView } from '../cache.js'
 import { readMachines } from '../cachedReads.js'
 import * as parts from '../parts/index.js'
 import type { MachineData, Part } from '../parts/index.js'
+import { groupsBy } from '../parts/indexed.js'
 import { READ_FORMAT, type HostChanges, type HostChangesRequest } from './contract.js'
 import { cursorFor, readCursor } from './cursor.js'
 import { hostTab, type HostLookups } from './hostRows.js'
@@ -94,7 +95,9 @@ export class HostReads {
     const after = new Date(since)
     const [changed, groups, machines] = await Promise.all([
       parts.loadChanged(tx, ids, after, PLAIN_KINDS),
-      tx.swarmGroup.findMany({ where: { tabId: { in: ids }, changedAt: { gt: after }, hostMachineIds: { has: machineId } }, select: { tabId: true } }),
+      // Through the changes index by name (parts/indexed.ts): every host runs this every second.
+      groupsBy(tx, 'changes', [{ $match: { tabId: { $in: ids }, changedAt: { $gt: { $date: after.toISOString() } }, hostMachineIds: machineId } },
+        { $project: { _id: 0, tabId: 1 } }]) as Promise<unknown> as Promise<Array<{ tabId: string }>>,
       tx.swarmMachine.findMany({ where: { tabId: { in: ids }, hostChangedAt: { gt: after } }, select: { tabId: true, key: true, data: true } }),
     ])
     const woken = new Set([...ids.filter(id => changed.get(id)?.some(p => plainlyRelevant(p, machineId))), ...groups.map(g => g.tabId)])
