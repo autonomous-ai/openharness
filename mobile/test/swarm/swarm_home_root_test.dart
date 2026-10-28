@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness_mobile/notify/system_notices.dart';
 import 'package:harness_mobile/settings/experimental_features.dart';
-import 'package:harness_mobile/swarm/swarm_drawer.dart';
 import 'package:harness_mobile/swarm/swarm_home_root.dart';
 import 'package:harness_mobile/swarm/swarm_page.dart';
 import 'package:harness_mobile/swarm/swarm_session.dart';
@@ -93,14 +92,12 @@ void main() {
         home: SwarmHomeRoot(
           choice: choice,
           harness: const Text('the terminal'),
-          swarm: (_) => SwarmPage(onHarness: choice.showHarness),
+          swarm: (_) => const SwarmPage(),
         ),
       ),
     );
     await tester.pumpAndSettle();
   }
-
-  Finder key(String value) => find.byKey(ValueKey(value));
 
   Future<void> toHarnessAndBack(WidgetTester tester) async {
     choice.showHarness();
@@ -130,37 +127,6 @@ void main() {
     await toHarnessAndBack(tester);
 
     expect(offset(tester), scrolled);
-  });
-
-  testWidgets('Harness from the drawer and back: Home, its drawer closed', (
-    tester,
-  ) async {
-    await pump(tester);
-    await tester.tap(key('swarm-menu'));
-    await tester.pumpAndSettle();
-    // Under the person's own row, the projects, Your models and Your
-    // devices: Harness is below the fold of this Swarm's long drawer, and
-    // not built until the drawer scrolls to it.
-    await tester.scrollUntilVisible(
-      key('swarm-drawer-harness'),
-      200,
-      scrollable: find
-          .descendant(
-            of: find.byType(SwarmDrawer),
-            matching: find.byType(Scrollable),
-          )
-          .first,
-    );
-    await tester.pumpAndSettle();
-    await tester.tap(key('swarm-drawer-harness'));
-    await tester.pumpAndSettle();
-    expect(find.text('the terminal'), findsOneWidget);
-
-    choice.showSwarm();
-    await tester.pump();
-
-    expect(find.byType(SwarmPage), findsOneWidget);
-    expect(find.byType(SwarmDrawer), findsNothing);
   });
 
   testWidgets('Home out of sight mutes no notice', (tester) async {

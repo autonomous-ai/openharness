@@ -29,8 +29,8 @@ import 'team_glance.dart';
 /// its team in a line — its name opens the project, its arrow lists its
 /// chats: Chat with PM, the project chat, its leaderboard, then its work,
 /// what waits on the person first; then Your models and Your devices, read
-/// only; then the way back to Harness (the terminals), and Settings at its
-/// foot. A row closes the drawer before it opens anything.
+/// only; then Settings at its foot. A row closes the drawer before it opens
+/// anything.
 class SwarmDrawer extends StatefulWidget {
   const SwarmDrawer({
     super.key,
@@ -38,7 +38,6 @@ class SwarmDrawer extends StatefulWidget {
     required this.onProject,
     required this.onPm,
     required this.onChat,
-    this.onHarness,
     this.onSettings,
     this.onProfile,
   });
@@ -54,9 +53,6 @@ class SwarmDrawer extends StatefulWidget {
 
   /// One chat.
   final void Function(String swarmId, String conversationId) onChat;
-
-  /// Harness at the root; null where there is no shell to switch (a test).
-  final VoidCallback? onHarness;
 
   /// Settings over Swarm Home, opened from the context it is given.
   final void Function(BuildContext context)? onSettings;
@@ -204,15 +200,6 @@ class _SwarmDrawerState extends State<SwarmDrawer> {
                         ),
                       ),
                     ),
-                  if (widget.onHarness case final harness?) ...[
-                    const _Caption(''),
-                    SwarmDrawerRow(
-                      key: const ValueKey('swarm-drawer-harness'),
-                      leading: const _Glyph(LucideIcons.squareTerminal300),
-                      title: 'Harness',
-                      onTap: () => then(harness),
-                    ),
-                  ],
                 ],
               ),
             ),

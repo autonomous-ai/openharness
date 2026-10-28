@@ -217,7 +217,6 @@ void main() {
   Future<SwarmHost> pump(
     WidgetTester tester,
     FakeSwarm fake, {
-    VoidCallback? onHarness,
     void Function(BuildContext context)? onSettings,
     SwarmComputers? computers,
     bool settle = true,
@@ -244,7 +243,7 @@ void main() {
         onGenerateRoute: (_) => CupertinoPageRoute<void>(
           builder: (_) => overPage
               ? const SizedBox(key: ValueKey('page-under'))
-              : SwarmPage(onHarness: onHarness, onSettings: onSettings),
+              : SwarmPage(onSettings: onSettings),
         ),
       ),
     );
@@ -270,14 +269,9 @@ void main() {
 
   group('the drawer', () {
     testWidgets('its title and close, Swarm Home with a count, the projects, '
-        'then Harness, and Settings at its foot', (tester) async {
-      var harness = 0, settings = 0;
-      await pump(
-        tester,
-        backend(),
-        onHarness: () => harness++,
-        onSettings: (_) => settings++,
-      );
+        'then Settings at its foot', (tester) async {
+      var settings = 0;
+      await pump(tester, backend(), onSettings: (_) => settings++);
       await openDrawer(tester);
 
       expect(
@@ -301,10 +295,6 @@ void main() {
       );
       expect(
         y(tester, 'swarm-drawer-project-$tab-$web'),
-        lessThan(y(tester, 'swarm-drawer-harness')),
-      );
-      expect(
-        y(tester, 'swarm-drawer-harness'),
         lessThan(y(tester, 'swarm-drawer-settings')),
       );
       expect(
@@ -334,12 +324,7 @@ void main() {
         );
       }
 
-      await tester.tap(key('swarm-drawer-harness'));
-      await tester.pumpAndSettle();
-      expect(harness, 1);
-      expect(key('swarm-drawer-home'), findsNothing, reason: 'it closed');
-
-      await openDrawer(tester);
+      expect(key('swarm-drawer-harness'), findsNothing);
       await tester.tap(key('swarm-drawer-settings'));
       await tester.pumpAndSettle();
       expect(settings, 1);
