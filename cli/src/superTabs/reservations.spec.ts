@@ -49,7 +49,7 @@ it("counts a start's memory only during its start window, so settled agents do n
   free(f, 7.85 * GiB)
   for (const n of [4, 5, 6]) { expect(await book.reserve(agentInput(n))).toMatchObject({ ok: true }); f.launch(n) }
   expect(await book.reserve(agentInput(7))).toMatchObject({ error: 'CAPACITY_UNAVAILABLE',
-    detail: 'Not enough free memory: 1.8 GiB free, 2 GiB needed. 6 GiB more is set aside for agents in their first 5 minutes.' })
+    detail: 'Not enough free memory: 1.8 GiB free, 2 GiB needed. 6 GiB more is set aside for agents still starting.' })
   // The first of the three new agents settles: its own use is in free memory now, and its window no longer holds.
   f.clock.now += 5 * MINUTE - 1
   expect(await book.reserve(agentInput(7))).toMatchObject({ error: 'CAPACITY_UNAVAILABLE' })

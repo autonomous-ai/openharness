@@ -1060,7 +1060,7 @@ describe('a Lead\'s start that fails before its agent exists', () => {
 
   // Ken's MacBook Pro, 2026-10-28: the group read "until that machine is fixed" when the machine was only short of memory.
   it('names a memory shortage and the machine in the notice, and leaves out the rest of the raw reason', async () => {
-    const reason = 'Not enough free memory: 1.8 GiB free, 2 GiB needed. 6 GiB more is set aside for agents in their first 5 minutes.'
+    const reason = 'Not enough free memory: 1.8 GiB free, 2 GiB needed. 6 GiB more is set aside for agents still starting.'
     const b = backend({ candidates: [candidate('c0', 'mac-one')], error: reason })
     expect(await b.lead(b.first)).toMatchObject({ error: 'START_BLOCKED', detail: expect.stringContaining(reason) })
     expect(b.of('message.send')).toMatchObject([{ text: 'Builder could not start on Mac One: not enough free memory (1.8 GiB free, 2 GiB needed), '

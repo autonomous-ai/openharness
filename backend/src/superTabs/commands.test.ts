@@ -1653,7 +1653,7 @@ describe('a failed start\'s reason', () => {
   it('tells the group a memory shortage with its numbers, and keeps every other reason hidden, even one that starts like it', () => {
     const f = fixture(); f.invite()
     failed(f)
-    const memory = 'Not enough free memory: 1.8 GiB free, 2 GiB needed. 6 GiB more is set aside for agents in their first 5 minutes.'
+    const memory = 'Not enough free memory: 1.8 GiB free, 2 GiB needed. 6 GiB more is set aside for agents still starting.'
     expect(f.run({ type: 'agent.startFailed', startId: 's1', error: memory }, owner).messages[0]!.text)
       .toBe('Could not start Builder: its machine has only 1.8 GiB of memory free, and it needs 2 GiB.')
     // A member who did not make the start reads the same, never the rest of the host's reason.

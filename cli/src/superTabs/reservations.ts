@@ -238,7 +238,7 @@ export class CapacityReservations implements ReservationBook {
       const diskHeld = active.filter(row => row.volume === destination.volume).reduce((sum, row) => sum + row.disk_bytes, 0)
       if (memory > 0 && !finite(freeMemory)) return unavailable('The free memory on this machine could not be read.')
       if (memory > 0 && memory > freeMemory! - memoryHeld) return unavailable(memoryShort(freeMemory! - memoryHeld, memory)
-        + (memoryHeld > 0 ? ` ${gibibytes(memoryHeld)} more is set aside for agents in their first 5 minutes.` : ''))
+        + (memoryHeld > 0 ? ` ${gibibytes(memoryHeld)} more is set aside for agents still starting.` : ''))
       if (disk > destination.freeBytes - diskHeld) return unavailable('Destination disk space is already in use or reserved for other agents. Choose another machine or free space before retrying.')
       this.db.prepare(`INSERT INTO reservations (creation_id, fingerprint, memory_bytes, disk_bytes, volume, created_at)
         VALUES (?, ?, ?, ?, ?, ?)`).run(creationId, fingerprint, memory, disk, destination.volume, now)
