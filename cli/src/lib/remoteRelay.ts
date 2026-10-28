@@ -39,6 +39,7 @@ import { RemoteViewerProxy } from './remoteViewerProxy.js'
 import { VIEWER_UP_TYPES } from './viewerWire.js'
 import { isWrapped } from './e2ee/core.js'
 import { admitRelayedPairFrame, isPairFrameType } from './e2ee/applicationFrames.js'
+import { declaredClientQuery } from './declaredClient.js'
 
 const CONNECT_TIMEOUT_MS = 15_000
 const LINGER_MS = 30_000
@@ -464,7 +465,7 @@ export class RemoteRelayPool {
     const peer = this.peers.get(machineId)
     if (!peer) throw new RelayConnectError('NO_PEER_LINK')
     const token = await this.auth.accessToken({ force: forceRefresh })
-    const url = `${this.backendWsBase}/api/web-ws?autonomousEnv=${encodeURIComponent(autonomousEnv)}`
+    const url = `${this.backendWsBase}/api/web-ws?autonomousEnv=${encodeURIComponent(autonomousEnv)}&${declaredClientQuery('relay')}`
     const ws = new WebSocket(url, [token])
     // An 'error' with no listener throws out of the emitter and takes the daemon down. The handshake's
     // once('error') below is consumed by its first emit, and nothing listens after the handshake at all;
