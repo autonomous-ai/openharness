@@ -27,10 +27,15 @@ const kSuperTabAvatarHost = String.fromEnvironment(
   defaultValue: 'storage.googleapis.com',
 );
 
+/// The folder a server without an avatar bucket keeps pictures in on the chat
+/// files' CDN (backend attachments.ts `SHARED_AVATAR_PREFIX`).
+const kSuperTabAvatarFolder = 'avatars';
+
 /// A picture someone uploaded, through the link a member read carries: https,
-/// and only on the avatar host (a private bucket's signed link) or the chat
-/// files' CDN (a server without an avatar bucket keeps pictures there, Ken
-/// 2026-10-28). Never an outside address.
+/// and only on the avatar host (a private bucket's signed link) or in the
+/// avatar folder of the chat files' CDN (a server without an avatar bucket
+/// keeps pictures there, Ken 2026-10-28), never a chat file on it. Never an
+/// outside address.
 class SuperTabUploadedAvatar extends SuperTabAvatarPicture {
   const SuperTabUploadedAvatar._(this.url);
   final Uri url;
@@ -40,7 +45,8 @@ class SuperTabUploadedAvatar extends SuperTabAvatarPicture {
     return url != null &&
             url.scheme == 'https' &&
             (url.host == kSuperTabAvatarHost ||
-                url.host == kSuperTabAttachmentHost)
+                (url.host == kSuperTabAttachmentHost &&
+                    url.path.startsWith('/$kSuperTabAvatarFolder/')))
         ? SuperTabUploadedAvatar._(url)
         : null;
   }

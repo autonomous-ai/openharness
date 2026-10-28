@@ -70,6 +70,23 @@ void main() {
         read({'kind': 'upload', 'url': 'http://cdn.harness.autonomous.ai/a'}),
         isNull,
       );
+      // On the CDN only the avatar folder: a chat file there is no avatar.
+      for (final path in [
+        '/super-tabs/t/a/contract.pdf',
+        '/avatarsx/t/a/avatar',
+        '/avatars',
+        '/avatars/../super-tabs/t/a/contract.pdf',
+        '/a.png',
+      ]) {
+        expect(
+          read({
+            'kind': 'upload',
+            'url': 'https://cdn.harness.autonomous.ai$path',
+          }),
+          isNull,
+          reason: path,
+        );
+      }
       // An upload whose signed link has not come yet shows the default face.
       expect(read({'kind': 'upload'}), isNull);
       expect(read('fox'), isNull);

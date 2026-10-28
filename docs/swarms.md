@@ -287,7 +287,12 @@ server:
   picture. Only the 128 random bits in its address keep it from being guessed.
   A new picture gets a new address; the old one stays reachable. Chat files
   never go in the avatar folder, and the server makes avatar links for that
-  folder alone.
+  folder alone; Desktop shows a picture from the CDN only from that folder too.
+
+If a private avatar bucket is added later, pictures already uploaded to the
+CDN are not moved and get no more links: those people and agents show the
+default face until a picture is uploaded or picked again. Their old CDN links
+still open, as before.
 
 A server with no attachments bucket refuses uploads; the eight pictures still
 work.
