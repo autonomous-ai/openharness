@@ -21,8 +21,8 @@ void main() {
   /// The Home kept: project Mobile, its Product Manager River, Nova waiting
   /// on the person in Fix login.
   SwarmHomeEntry kept() {
-    final state = SuperTabParts.firstLoad(
-      firstLoad(
+    final state = SuperTabParts.firstLoad({
+      ...firstLoad(
         groups: [
           {
             ...groupData(
@@ -36,7 +36,13 @@ void main() {
           },
         ],
       ),
-    ).state;
+      'members': [
+        part(me, 1, {
+          ...person(me),
+          'avatar': {'kind': 'preset', 'key': 'fox'},
+        }),
+      ],
+    }).state;
     return (
       id: tab,
       name: 'Phone Swarm',
@@ -122,6 +128,23 @@ void main() {
       expect(key('swarm-drawer-loading'), findsNothing);
     },
   );
+
+  testWidgets('a cold start draws you first in the menu, in your picture', (
+    tester,
+  ) async {
+    await coldStart(tester);
+    await tester.tap(key('swarm-menu'));
+    for (var i = 0; i < 5; i++) {
+      await tester.pump(const Duration(milliseconds: 100));
+    }
+    final you = key('swarm-drawer-you-$tab');
+    expect(find.descendant(of: you, matching: find.text('🦊')), findsOneWidget);
+    // The kept view holds no email: no name to give, so You.
+    expect(
+      find.descendant(of: you, matching: find.text('You')),
+      findsOneWidget,
+    );
+  });
 }
 
 Finder key(String value) => find.byKey(ValueKey(value));

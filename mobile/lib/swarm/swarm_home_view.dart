@@ -9,10 +9,11 @@ typedef SwarmHomeSwarm = ({
 });
 
 /// [snapshot] thinned to what Home draws: its projects, its agents by name,
-/// engine and status, and each conversation's title, project, people and work
-/// status. Nothing a chat holds — no message, brief, check, task, question or
-/// email — nor machines, starts or what waits on the person, which come with
-/// the next read.
+/// engine and status, each conversation's title, project, people and work
+/// status, and the built-in pictures people and agents wear. Nothing a chat
+/// holds — no message, brief, check, task, question or email, no photo or
+/// status — nor machines, starts or what waits on the person, which come
+/// with the next read.
 SwarmHomeSwarm swarmHomeSwarm(
   SuperTabSnapshot snapshot,
   Map<String, String> partners,
@@ -27,7 +28,7 @@ SwarmHomeSwarm swarmHomeSwarm(
     'projects': [for (final p in snapshot.projects) _project(p)],
     'people': [
       for (final p in snapshot.people)
-        {'id': p.id, 'email': '', 'role': p.role},
+        {'id': p.id, 'email': '', 'role': p.role, 'avatar': ?_preset(p.avatar)},
     ],
     'agents': [for (final a in snapshot.agents) _agent(a)],
     'conversations': [for (final c in snapshot.conversations) _conversation(c)],
@@ -37,6 +38,14 @@ SwarmHomeSwarm swarmHomeSwarm(
   },
   partners: {...partners},
 );
+
+/// A built-in picture by its name. An uploaded one is not kept: its signed
+/// link opens the picture, and comes again with the next read.
+Map<String, dynamic>? _preset(SuperTabAvatarPicture? avatar) =>
+    switch (avatar) {
+      SuperTabPresetAvatar(:final key) => {'kind': 'preset', 'key': key},
+      _ => null,
+    };
 
 Map<String, dynamic> _project(SuperTabProject p) => {
   'id': p.id,
@@ -65,6 +74,7 @@ Map<String, dynamic> _agent(SuperTabAgent a) => {
   'roleId': ?a.roleId,
   'limitedUntil': ?a.limitedUntil?.toIso8601String(),
   'downSince': ?a.downSince?.toIso8601String(),
+  'avatar': ?_preset(a.avatar),
   'configuration': {
     for (final key in const ['engine', 'model', 'effort'])
       if (a.configuration[key] case final String value) key: value,

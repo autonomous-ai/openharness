@@ -5,6 +5,7 @@ import 'package:flutter/widgets.dart';
 import '../notify/system_notices.dart';
 import '../settings/experimental_features.dart';
 import 'swarm_choices.dart';
+import 'swarm_face.dart';
 import 'swarm_home_cache.dart';
 import 'swarm_inbox.dart';
 import 'swarm_notices.dart';
@@ -238,7 +239,10 @@ class SwarmHost extends ChangeNotifier {
       return;
     }
     // Signed out, another account, or Swarm turned off: nothing of it stays.
-    if (session != null) unawaited(homeCache.clear());
+    if (session != null) {
+      unawaited(homeCache.clear());
+      swarmForgetAvatarImages();
+    }
     session?.dispose();
     session = id == null
         ? null

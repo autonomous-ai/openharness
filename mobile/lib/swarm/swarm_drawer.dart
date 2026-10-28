@@ -303,7 +303,8 @@ class _You extends StatelessWidget {
         until: me.status?.until,
         builder: (context) {
           final status = me.statusAt(clock.now());
-          final name = superTabPersonName(me.email);
+          // A Home kept for a cold start holds no email.
+          final name = me.email.isEmpty ? 'You' : superTabPersonName(me.email);
           return SwarmDrawerRow(
             leading: SwarmAvatar(
               id: me.id,

@@ -74,10 +74,30 @@ class SwarmAvatarImages extends InheritedWidget {
       context.dependOnInheritedWidgetOfExactType<SwarmAvatarImages>()?.image(
         url,
       ) ??
-      NetworkImage(url.toString());
+      swarmAvatarImage(url);
 
   @override
   bool updateShouldNotify(SwarmAvatarImages old) => old.image != image;
+}
+
+/// The links of the photos drawn while this account has been signed in.
+final _drawnLinks = <String>{};
+
+/// The uploaded picture at [url], over the network, remembered so that
+/// [swarmForgetAvatarImages] can let it go. Never kept on disk.
+ImageProvider swarmAvatarImage(Uri url) {
+  _drawnLinks.add(url.toString());
+  return NetworkImage(url.toString());
+}
+
+/// Lets go of every photo drawn, as the account leaves: none of another
+/// account's people stays in memory.
+void swarmForgetAvatarImages() {
+  final cache = PaintingBinding.instance.imageCache;
+  for (final link in _drawnLinks) {
+    cache.evict(NetworkImage(link), includeLive: true);
+  }
+  _drawnLinks.clear();
 }
 
 /// [face], [size] round, with a person's [status] emoji at its corner while
