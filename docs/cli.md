@@ -110,7 +110,7 @@ of a word in it); `@mini`, the old way, is refused with what to type instead. `-
 auto|ask|plan|full`, `--name`, `--new [name]` and `--json` are the rest. There is still no
 `harness split`: panes are arranged in the app.
 
-`harness ps`, `show`, `wait` and `close` take `--machine <name>` too, to read, wait for or close a
+`harness ps`, `show`, `wait`, `watch` and `close` take `--machine <name>` too, to read, wait for or close a
 harness on another of your machines: `harness new claude --machine office --name check -- …`, then
 `harness wait --machine office check` and `harness show --machine office check`.
 
@@ -119,6 +119,33 @@ A cloud agent starts the same way: `harness new devin-cloud --machine office --r
 `--acu-limit <n>` caps Devin Cloud's spend (5 when left out). `show` and `wait` read it from the cloud: its
 state, what it said after the last thing it was told, and its links (`links` in JSON). `harness reply <name> --
 <words>` says the person's answer, or what to do next, to a cloud harness; an agent does not.
+
+`harness watch <name>` follows one harness for a program that acts on it: a line each time it changes, one JSON
+object a line with `--json`, until it stops or is gone (exit 4) or `--timeout` passes (exit 124; `0`, the default,
+follows it as long as it lives). It decides as `wait` does: the maker's state for a cloud harness; the daemon's
+activity, then the screen, then two idle looks on one turn for one here. The first line is how it stands now.
+
+| event | when | with |
+|---|---|---|
+| `started` | installing or starting | |
+| `working` | it works (a draft in its box counts) | `ask`: the last thing it was told |
+| `needs_person` | a question or a permission; for a cloud harness, its maker's own state | `question`: its last words, to `--chars` (4000) |
+| `done` | idle after a turn | `summary`: its last answer, to `--chars`; `truncated`; `tools` |
+| `idle` | idle with nothing asked of it, past its start | |
+| `failed` | the cloud says it failed | `summary`, `links` |
+| `stopped` | stopped or gone | `summary`: its last answer, when it has one |
+
+Every line has `at`, `name`, `id`, `agent` and `state` (as `show` says it), and `cloud` and `links` for a cloud
+harness. The same state with new words (a second question, a new answer) is a new line carrying the whole words again;
+the same words are never said twice. **A cloud harness's state is its maker's, not a guess:** Devin Cloud says
+`waiting_for_user` both when it asks and when it has only finished (#1449), so `needs_person` comes either way: read
+`question` and `cloud.providerStatus` to tell. A Devin put to sleep once it finished is `stopped`
+(`providerStatus` `suspended`/`inactivity`), with its answer as `summary`. The words are the harness's own, as they
+are, Devin's `ATTACHMENT:` lines included; `ask` leaves out the line `harness new` puts before a task. It looks every
+3 s, as `wait` does, so a watch of another machine's harness is one `agents_list` over the machine link every 3 s. It reads with the requests
+`wait` makes, over the same socket: one `agents_list` a round, the screen for a harness here that the daemon does not
+already say is working, and the last transcript page only when the harness changed. Nothing reports failing tests
+during a turn yet, so there is no event for them.
 
 `harness whoami` says, for an agent, where it is and what it may do before it acts (`--json` gives the same as
 `context`); the top of an agent's `harness ps` begins with it, and `harness mcp` puts it in its instructions:
