@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:clock/clock.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -18,6 +20,7 @@ import 'swarm_leaderboard.dart';
 import 'swarm_models_page.dart';
 import 'swarm_project_page.dart';
 import 'swarm_reader.dart';
+import 'swarm_machines.dart';
 import 'swarm_session.dart';
 import 'swarm_style.dart';
 import 'swarm_team_line.dart';
@@ -168,6 +171,17 @@ class _SwarmDrawerState extends State<SwarmDrawer> {
                       ],
                       _ => const <Widget>[],
                     },
+                  for (final swarm in swarms)
+                    if (inbox?.reader(swarm.id) case final reader?)
+                      SwarmMachinesSection(
+                        key: ValueKey('swarm-machine-section-${swarm.id}'),
+                        reader: reader,
+                        swarmName: several ? swarm.name : null,
+                        open: (id) => then(
+                          () =>
+                              unawaited(showSwarmMachine(context, reader, id)),
+                        ),
+                      ),
                   // The Swarm's models and the account's computers, read
                   // only, as Desktop's sidebar has them under its projects.
                   const _Caption(''),
