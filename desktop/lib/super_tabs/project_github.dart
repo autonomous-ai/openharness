@@ -26,7 +26,11 @@ class SuperTabProjectGitHub {
       installUrl = row['installUrl'] is String
           ? row['installUrl'] as String
           : null,
-      canApprove = row['canApprove'] == true;
+      canApprove = row['canApprove'] == true,
+      approvedFor = [
+        for (final name in row['approvedFor'] as List? ?? const [])
+          if (name is String) name,
+      ];
 
   /// `covered`, `not-installed`, `not-approved` (installed, but nobody who can push to it approved it for this project:
   /// backend github/approvals.ts), `not-github`, `no-repository`, `unknown` (GitHub did not answer), `unread` (this
@@ -38,6 +42,10 @@ class SuperTabProjectGitHub {
   /// This server has the app's GitHub sign-in to approve a repository with.
   final bool canApprove;
 
+  /// The reader's other projects the repository is approved for, when it is not approved for this one (backend
+  /// github/projectAccess.ts): approving is per project, so a second one asks again.
+  final List<String> approvedFor;
+
   /// What stops teammates' agents here, in the sidebar's one line; null when nothing does or it cannot be said.
   String? get problem => switch (state) {
     'not-installed' || 'not-approved' => "Teammates can't push here yet",
@@ -45,6 +53,11 @@ class SuperTabProjectGitHub {
     _ => null,
   };
 }
+
+/// Names in a sentence: "Notes", "Notes and Docs", "Notes, Docs and Site".
+String _names(List<String> names) => names.length < 2
+    ? names.join()
+    : '${names.sublist(0, names.length - 1).join(', ')} and ${names.last}';
 
 /// The project's GitHub access in full, with what to do about it: Project details, and the dialog the sidebar line
 /// opens. Read when shown; [SuperTabController.readGitHubAccess] keeps it at most 5 minutes.
@@ -145,7 +158,11 @@ class _ProjectGitHubAccessState extends State<ProjectGitHubAccess>
             "Teammates' agents can't push to $repository yet. Install Harness on GitHub there: "
                 "an owner of ${repository.split('/').first}, or the repository's owner, can.",
           'not-approved' =>
-            access.canApprove
+            access.canApprove && access.approvedFor.isNotEmpty
+                // Approving is per project: one approved for the reader's other projects says so (group #646, item 8).
+                ? "Teammates' agents can't use $repository in this project yet. It's approved for "
+                      '${_names(access.approvedFor)}. Approve it here too?'
+                : access.canApprove
                 ? "Teammates' agents can't use $repository in this project yet. Someone who can push to it "
                       'approves it, signing in to GitHub.'
                 : "Teammates' agents can't use $repository in this project yet. This Harness server can't approve "
@@ -243,11 +260,6 @@ class _ProjectGitHubAccessState extends State<ProjectGitHubAccess>
                           key: const Key('super-project-github-approve'),
                           onPressed: _busy ? null : () => _approve('project'),
                           child: const Text('Approve for this project'),
-                        ),
-                        TextButton(
-                          key: const Key('super-project-github-approve-swarm'),
-                          onPressed: _busy ? null : () => _approve('swarm'),
-                          child: const Text('Approve for every project here'),
                         ),
                       ],
                       TextButton(
