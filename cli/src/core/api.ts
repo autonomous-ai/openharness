@@ -1664,6 +1664,8 @@ export const LANE_OFF: LaneSeal = {
 export interface HttpAnswer {
   status: number
   body: Record<string, unknown>
+  /** A busy or failing answer's Retry-After, when it had one (gateway/accountHttp.ts). */
+  retryAfterMs?: number
 }
 
 /** What the core's status reads of the relay: the machine's E2EE fingerprint, its pairings and the one

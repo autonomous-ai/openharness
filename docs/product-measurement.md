@@ -265,7 +265,13 @@ message, database detail, URL or unknown error code is collected. These diagnost
 privacy choice and bounded queue, so a delivery outage can delay its own diagnostic counters.
 Desktop now splits failed delivery attempts into the same fixed categories. A permanently invalid
 or oversized packet is discarded so it cannot block newer reports; transient errors retry the
-same receipt. Delayed errors after a choice or account change are discarded.
+same receipt. Delayed errors after a choice or account change are discarded. A busy or failing
+answer (429, 5xx, a timeout, an unreachable CLI) holds that channel's next report under the CLI's
+backoff: full jitter under a ceiling that doubles from two minutes to half an hour, never before the
+answer's Retry-After, which the CLI's proxy passes on; any other answer resets it. Until the Desktop
+release after 2026-10-28 every refusal was sent again a minute later (165 of 272 failed Desktop
+reports that morning were rate limited), and every 429 counted as `rate_limited`; a 429 for a write
+conflict or a transaction now keeps that cause, as the CLI's does: compare releases separately.
 The local app proxy accepts only bounded UI counts, or Desktop health/UI counts with the exact
 public release, OS and channel context. It does not accept daemon counters or arbitrary context.
 Like the backend, it keeps a report whose only problem is a counter name this CLI does not know yet:
@@ -323,17 +329,19 @@ website route, without cookies, only in a release browser build and never for a 
 account. The same totals can come from one visitor or many.
 
 Both ingestion paths atomically add only UTC-day/metric totals plus an unlinked random retry receipt.
-Fast database write conflicts retry that complete transaction up to three times with short jitter,
-rechecking the sharing choice each time. No retry starts after the first second; existing transaction
-deadlines still apply to each attempt. Slow or exhausted conflicts return to the client's normal
-immutable-report retry. Receipts prevent both immediate and later retries from counting twice.
-Reports update their counters and separate margins in one Mongo update command inside
-that transaction. A partial write aborts the receipt and all counts; no per-report body is stored.
-This shortens shared-row contention without adding a daemon timer or delaying product actions.
-Each backend process admits one aggregate report transaction at a time, with at most 32 waiting
-reports and a two-second queue deadline. Overflow returns a retryable busy response. Permission
-is checked inside the transaction after admission, including every conflict retry. Other server
-processes can still contend; this does not promise zero delivery failures.
+Each backend process writes its reports one batch at a time (`backend/src/lib/productUsageBatch.ts`):
+reports that arrive while a batch commits go together in the next, up to 256, in one transaction that
+checks each report's sharing choice, skips receipts already committed (a retry, or a second copy in
+the same batch), writes the new receipts and adds the batch's summed counters and separate margins
+in one Mongo update command. A process's own reports therefore never conflict on the shared daily
+totals; before this, each report was a transaction of its own, and on 2026-10-28 1,000 of the CLI's
+1,269 rejected reports were those write conflicts. Conflicts with another process's batch retry the
+whole batch up to three times with short jitter, rechecking every sharing choice each time. No retry
+starts after the first second; existing transaction deadlines still apply to each attempt. A partial
+write aborts the batch's receipts and all its counts; no per-report body is stored. At most 2,048
+reports wait per process, each for at most two seconds; overflow, a long wait and exhausted
+conflicts return a retryable busy response with a Retry-After, and the client sends the same receipt
+again later. This does not promise zero delivery failures.
 The public `/api/health` response includes validated release tag/SHA coordinates so a successful
 image build can be distinguished from the version actually serving requests.
 
