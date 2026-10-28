@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
+import 'package:harness_mobile/core/app_settings.dart';
 import 'package:harness_mobile/phone/composing_keyboard.dart';
 import 'package:harness_mobile/phone/phone_navigation.dart';
 import 'package:harness_mobile/phone/tty.dart';
@@ -13,8 +14,11 @@ import 'package:harness_mobile/shared/widgets/skeleton.dart';
 
 import 'identity.dart';
 import 'model.dart';
+import 'swarm_attach.dart';
 import 'swarm_choices.dart';
 import 'swarm_conversation.dart';
+import 'swarm_file_picker.dart';
+import 'swarm_outgoing_files.dart';
 import 'swarm_inbox.dart';
 import 'swarm_message_row.dart';
 import 'swarm_need_rows.dart';
@@ -39,13 +43,18 @@ void openSwarmConversation(
   ),
 );
 
+/// Opens this app's page in the phone's Settings, where a refused camera is turned back on.
+/// Replaced in tests, where there is no Settings to open.
+@visibleForTesting
+Future<bool> Function() openSwarmSettings = openAppSettings;
+
 /// One conversation: its messages, newest at the foot, older ones on demand —
 /// each with who wrote it, their role and when, follow-ups grouped, a reply's
 /// quote leading to its original; the decisions asked of the person in it;
 /// and, for a writer, a composer that posts text, as a reply or with
-/// @mentions of the conversation's agents picked as they are typed. A post
-/// shows at once and says when it is not confirmed. Files are opened, not
-/// sent ([swarmSendsFiles]): there is no attach button.
+/// @mentions of the conversation's agents picked as they are typed, and with
+/// files from the photo library, the camera or Files ([swarmSendsFiles]). A
+/// post shows at once and says when it is not confirmed.
 class SwarmConversationPage extends StatefulWidget {
   const SwarmConversationPage({
     super.key,
@@ -64,6 +73,12 @@ class _SwarmConversationPageState extends State<SwarmConversationPage> {
   SwarmConversation? _conversation;
   final _text = TextEditingController();
   final _focus = FocusNode(debugLabel: 'Swarm composer');
+
+  /// What the last pick left out, or why it could not pick, over the files.
+  final _attachNote = ValueNotifier<String?>(null);
+
+  /// A picker is up: one at a time.
+  bool _picking = false;
   final _scroll = ScrollController();
 
   /// The message whose actions are open (Reply, Copy), by a tap on it.
@@ -198,6 +213,7 @@ class _SwarmConversationPageState extends State<SwarmConversationPage> {
     _litTimer?.cancel();
     _text.dispose();
     _focus.dispose();
+    _attachNote.dispose();
     _scroll.dispose();
     super.dispose();
   }
@@ -216,6 +232,36 @@ class _SwarmConversationPageState extends State<SwarmConversationPage> {
       text: draft,
       selection: TextSelection.collapsed(offset: draft.length),
     );
+  }
+
+  /// The composer's +: the sheet, then the picker it names, its files into
+  /// [c]'s. A refusal of the camera or photos offers the phone's Settings.
+  Future<void> _pickFiles(SwarmConversation c) async {
+    if (_picking) return;
+    _picking = true;
+    try {
+      final source = await showSwarmAttachSheet(context);
+      if (source == null || !mounted || _conversation != c) return;
+      final outcome = await addSwarmPicked(
+        c.files,
+        source,
+        stillWanted: () => mounted && _conversation == c,
+      );
+      if (!mounted || _conversation != c) return;
+      switch (outcome) {
+        case SwarmPicked(:final note):
+          _attachNote.value = note;
+        case SwarmPickFailed(:final message):
+          _attachNote.value = message;
+        case SwarmPickDenied(:final source):
+          _attachNote.value = null;
+          if (await showSwarmAccessOff(context, source)) {
+            unawaited(openSwarmSettings());
+          }
+      }
+    } finally {
+      _picking = false;
+    }
   }
 
   /// An @ to type a name after: the picker opens over the composer.
@@ -280,6 +326,7 @@ class _SwarmConversationPageState extends State<SwarmConversationPage> {
   /// Sends the draft, back at the foot of the chat where the post shows.
   void _send(SwarmConversation c) {
     _target = null;
+    _attachNote.value = null;
     if (_scroll.hasClients && _scroll.offset > 0) {
       unawaited(
         _scroll.animateTo(
@@ -801,6 +848,7 @@ class _SwarmConversationPageState extends State<SwarmConversationPage> {
             key: const ValueKey(_pendingKey),
             name: mine == null ? 'You' : _nameOf(c, mine),
             text: pending.text,
+            files: pending.files,
             mentions: view.mentions,
             sending: c.sending,
             quote: pending.replyTo == null
@@ -883,14 +931,15 @@ class _SwarmConversationPageState extends State<SwarmConversationPage> {
   }
 
   /// The @ picker while a name is typed, the reply bar while the draft
-  /// answers a message, then @, a field that grows with what is typed and a
-  /// round Send — no attach button.
+  /// answers a message, what the last pick left out, the files going with the
+  /// post, then +, @, a field that grows with what is typed and a round Send.
   Widget _composer(SwarmConversation c, Tty tty) {
     final snapshot = c.reader.snapshot;
     final query = c.mentionQuery;
     final replying = c.replyingTo;
     // One post at a time: one not confirmed is sent again from where it shows.
-    final canSend = c.pending == null && c.draft.trim().isNotEmpty;
+    // Files alone are a post too.
+    final canSend = c.canSend;
     return Container(
       decoration: BoxDecoration(
         color: Color.alphaBlend(tty.text.withValues(alpha: 0.02), tty.ground),
@@ -965,9 +1014,38 @@ class _SwarmConversationPageState extends State<SwarmConversationPage> {
                 ],
               ),
             ),
+          ValueListenableBuilder(
+            valueListenable: _attachNote,
+            builder: (context, note, _) => note == null
+                ? const SizedBox.shrink()
+                : Padding(
+                    padding: const EdgeInsets.fromLTRB(4, 0, 4, 6),
+                    child: Text(
+                      note,
+                      key: const ValueKey('swarm-attach-note'),
+                      style: swarmChatText(13.5, color: tty.yellow),
+                    ),
+                  ),
+          ),
+          SwarmOutgoingChips(conversation: c),
           Row(
             crossAxisAlignment: CrossAxisAlignment.end,
             children: [
+              if (swarmSendsFiles)
+                _Round(
+                  key: const ValueKey('swarm-attach'),
+                  label: 'Attach files',
+                  onTap: c.uploading || c.files.room <= 0
+                      ? null
+                      : () => unawaited(_pickFiles(c)),
+                  child: Icon(
+                    LucideIcons.plus,
+                    size: 22,
+                    color: c.uploading || c.files.room <= 0
+                        ? AppPalette.textFaint
+                        : AppPalette.textSecondary,
+                  ),
+                ),
               if (c.mentionable.isNotEmpty)
                 _Round(
                   key: const ValueKey('swarm-mention'),
@@ -1504,6 +1582,7 @@ class _Pending extends StatelessWidget {
     super.key,
     required this.name,
     required this.text,
+    required this.files,
     required this.mentions,
     required this.sending,
     required this.quote,
@@ -1511,6 +1590,10 @@ class _Pending extends StatelessWidget {
   });
 
   final String name, text;
+
+  /// The files going with it, already uploaded: shown as chips that open
+  /// nothing until the post is read back with their links.
+  final List<SwarmOutgoingFile> files;
   final SwarmMentions mentions;
   final bool sending;
   final Widget? quote;
@@ -1538,21 +1621,33 @@ class _Pending extends StatelessWidget {
         ),
         body: [
           ?quote,
-          Padding(
-            padding: const EdgeInsets.only(top: 2),
-            child: Text.rich(
-              mentions.span(
-                text,
-                swarmChatText(
-                  16,
-                  height: 1.42,
-                  color: sending
-                      ? AppPalette.textSecondary
-                      : AppPalette.textPrimary,
+          if (text.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.only(top: 2),
+              child: Text.rich(
+                mentions.span(
+                  text,
+                  swarmChatText(
+                    16,
+                    height: 1.42,
+                    color: sending
+                        ? AppPalette.textSecondary
+                        : AppPalette.textPrimary,
+                  ),
                 ),
               ),
             ),
-          ),
+          for (final file in files)
+            SwarmFileChip(
+              file: SuperTabAttachment.fromJson({
+                'id': '',
+                'name': file.name,
+                'mime': swarmMimeForName(file.name),
+                'size': file.bytes.length,
+                'url': '',
+              }),
+              link: null,
+            ),
           if (!sending)
             Padding(
               padding: const EdgeInsets.only(top: 8),

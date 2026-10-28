@@ -37,12 +37,16 @@
 	<false/>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
-	<!-- Taking a picture to send to an agent. Only the camera needs a string on
-	     iOS 15: picking from the library goes through PHPicker, which runs out of
-	     process and grants nothing, so NSPhotoLibraryUsageDescription would never
-	     be shown and is deliberately absent. -->
+	<!-- Taking a picture to send to an agent or into a Swarm chat. Picking from
+	     the library goes through PHPicker, which runs out of process and grants
+	     nothing, and the Swarm chat asks for no metadata, so iOS does not show
+	     NSPhotoLibraryUsageDescription today. It is set anyway, in plain words,
+	     so a library read that does ask (a future iOS, or a picker option) says
+	     why rather than ending the app. -->
 	<key>NSCameraUsageDescription</key>
-	<string>Scan the code on your computer to connect, or take a photo to send to an agent.</string>
+	<string>Scan the code on your computer to connect, or take a photo to send to an agent or a Swarm chat.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>Choose photos to send to an agent or a Swarm chat. Harness sees only the photos you pick.</string>
 	<!-- What iOS shows when the app first reaches an address on the local network.
 	     Computers are reached through the relay, so today that is a backend on a
 	     LAN address in development, or the debugger in a debug build. Set here, it

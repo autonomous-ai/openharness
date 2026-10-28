@@ -73,11 +73,13 @@ Future<List<XFile>> Function() pickSwarmFiles = () => openFiles();
 /// no name a person would know; other files keep their own.
 ///
 /// Each picker hands over its own copy of the file in the app's private temporary folder; it is
-/// read into memory and deleted at once, kept or not, so no photo stays on the phone.
+/// read into memory and deleted at once, kept or not, so no photo stays on the phone. Nothing is
+/// added once [stillWanted] fails: the chat closed while its picker was up.
 Future<SwarmPickOutcome> addSwarmPicked(
   SwarmOutgoingFiles files,
-  SwarmPickSource source,
-) async {
+  SwarmPickSource source, {
+  bool Function() stillWanted = _always,
+}) async {
   final room = files.room;
   if (room <= 0) {
     return const SwarmPickFailed(
@@ -106,6 +108,13 @@ Future<SwarmPickOutcome> addSwarmPicked(
           : 'Could not open the picker.',
     );
   }
+  // The chat can have closed while the picker was up — signed out, say: nothing goes into it.
+  if (!stillWanted()) {
+    for (final file in picked) {
+      _delete(file);
+    }
+    return const SwarmPicked(null);
+  }
   final photos = source != SwarmPickSource.files;
   final taken = {for (final file in files.files) file.name};
   final read = <SwarmOutgoingFile>[];
@@ -124,7 +133,7 @@ Future<SwarmPickOutcome> addSwarmPicked(
     } catch (_) {
       unreadable ??= name;
     } finally {
-      await _delete(file);
+      _delete(file);
     }
   }
   final note = files.add(read, oversized: oversized);
@@ -132,6 +141,8 @@ Future<SwarmPickOutcome> addSwarmPicked(
     note ?? (unreadable == null ? null : 'Could not read $unreadable.'),
   );
 }
+
+bool _always() => true;
 
 /// [file]'s bytes, or null when it is past the limit, which is measured before it is read so a
 /// large file is never held whole.
@@ -148,11 +159,12 @@ Future<Uint8List?> _read(XFile file) async {
 }
 
 /// Deletes the picker's copy of [file]. Every picker here makes one in the app's own temporary
-/// folder (image_picker and file_selector alike), never handing over the person's original.
-Future<void> _delete(XFile file) async {
+/// folder (image_picker and file_selector alike), never handing over the person's original. At
+/// once rather than awaited: one small file, gone before anything else runs.
+void _delete(XFile file) {
   if (kIsWeb || file.path.isEmpty) return;
   try {
-    await File(file.path).delete();
+    File(file.path).deleteSync();
   } catch (_) {
     // Already gone, or never written: nothing of it is left to keep.
   }

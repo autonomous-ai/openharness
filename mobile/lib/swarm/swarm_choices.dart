@@ -19,9 +19,10 @@ const swarmNeedsFirst = true;
 /// line.
 const swarmTeamLine = true;
 
-/// 4. Posting: text and @mentions. False: files are opened, not sent
-/// (`swarm_conversation_page.dart`).
-const swarmSendsFiles = false;
+/// 4. Posting: text, @mentions and files — from the photo library, the camera
+/// or Files, by Desktop's limits (Tony, 2026-10-28). False: files are opened,
+/// not sent (`swarm_conversation_page.dart`).
+const swarmSendsFiles = true;
 
 /// 5. Notices: on the phone while Harness is open; push to a closed app is
 /// backend work for later. False posts none (`swarm_session.dart`).

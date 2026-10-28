@@ -256,4 +256,20 @@ void main() {
     expect((outcome as SwarmPickFailed).message, 'Attach at most 10 files.');
     expect(opened, isFalse);
   });
+
+  test('a chat closed while the picker was up takes nothing, and the copies '
+      'are deleted', () async {
+    final picked = [copy('a.jpg', 3)];
+    pickSwarmPhotos = (limit) async => picked;
+
+    final outcome = await addSwarmPicked(
+      files,
+      SwarmPickSource.library,
+      stillWanted: () => false,
+    );
+
+    expect((outcome as SwarmPicked).note, isNull);
+    expect(files.files, isEmpty);
+    expect(File(picked.single.path).existsSync(), isFalse);
+  });
 }
