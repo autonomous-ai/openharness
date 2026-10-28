@@ -191,6 +191,32 @@ it('limits the owner proxy to Super Tab endpoints and preserves backend failures
   vi.mocked(t.core.account.backend).mockResolvedValueOnce({ status: 403, body: { success: false, error: { code: 'FORBIDDEN', message: 'Access withdrawn' } } })
   expect(await t.ask({ action: 'backend', method: 'GET', path: '/api/super-tabs/tab' }, owner)).toEqual({ error: 'FORBIDDEN', detail: 'Access withdrawn', status: 403 })
 })
+describe('a machine offered with more than 16 agents', () => {
+  const contribute = (maxAgents: number) => ({ action: 'backend', method: 'POST', path: '/api/super-tabs/tab/commands', body: { operationId: 'add-studio',
+    command: { type: 'machine.contribute', machineId: 'studio', name: 'Studio', cwd: '/swarm', scope: 'swarm', engines: ['claude'], maxAgents } } })
+  // What a server from before 1024 answers (backend middlewares/validation.ts, zod 4's message for .max(16)).
+  const refuse = (message: string) => ({ status: 400, body: { success: false, error: { code: 'VALIDATION_ERROR', message } } })
+  it('is offered with 16 when an older server refuses more, under the same operation', async () => {
+    const t = setup()
+    t.call.mockResolvedValueOnce(refuse('command.maxAgents: Too big: expected number to be <=16'))
+    t.call.mockResolvedValueOnce({ status: 200, body: { success: true, data: { result: { machineId: 'studio' } } } })
+    expect(await t.ask(contribute(96), owner)).toEqual({ ok: true, value: { result: { machineId: 'studio' } } })
+    expect(t.call.mock.calls.map(([method, path, body]) => [method, path, object(object(body).command).maxAgents, object(body).operationId])).toEqual([
+      ['POST', '/api/super-tabs/tab/commands', 96, 'add-studio'],
+      ['POST', '/api/super-tabs/tab/commands', 16, 'add-studio'],
+    ])
+  })
+  it('keeps every other refusal as the server gave it', async () => {
+    const t = setup()
+    t.call.mockResolvedValueOnce(refuse('command.cwd: Use a full folder path, such as /home/me/work or C:\\Users\\me\\work.'))
+    expect(await t.ask(contribute(96), owner)).toMatchObject({ error: 'VALIDATION_ERROR', status: 400 })
+    t.call.mockResolvedValueOnce(refuse('command.maxAgents: Too big: expected number to be <=1024'))
+    expect(await t.ask(contribute(2048), owner)).toMatchObject({ error: 'VALIDATION_ERROR', status: 400 })
+    t.call.mockResolvedValueOnce(refuse('command.maxAgents: Too big: expected number to be <=16'))
+    expect(await t.ask(contribute(16), owner)).toMatchObject({ error: 'VALIDATION_ERROR', status: 400 })
+    expect(t.call).toHaveBeenCalledTimes(3)
+  })
+})
 it('documents how a lead shares its project repository for other machines', async () => {
   const t = setup()
   const answer = await t.ask({ action: 'help' }, owner) as { help: { commands: Array<Record<string, unknown>> } }

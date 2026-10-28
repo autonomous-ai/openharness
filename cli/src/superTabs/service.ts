@@ -152,6 +152,19 @@ function taskCommand(command: Record<string, unknown>): Record<string, unknown> 
   return { ...command, task: trimmed, brief }
 }
 
+/** The owner's own request, as Desktop sends it. A server from before 1024 (2026-10-28) refuses a machine offered with more
+ * than 16 agents; that machine is offered with 16 instead of not at all. The server checks the number before it records the
+ * operation, so the second send under the same operation is still the first that counts. */
+async function ownerBackend(core: CoreApi, method: string, path: string, body: unknown): Promise<unknown> {
+  try { return await backend(core, method, path, body) } catch (error) {
+    const command = object(object(body).command)
+    if (method !== 'POST' || !/^\/api\/super-tabs\/[A-Za-z0-9_-]+\/commands$/.test(path) || command.type !== 'machine.contribute'
+      || typeof command.maxAgents !== 'number' || command.maxAgents <= 16 || !(error instanceof SuperTabHostError)
+      || error.status !== 400 || error.code !== 'VALIDATION_ERROR' || !/^command\.maxAgents: .*\b16\b/.test(error.message)) throw error
+    return backend(core, method, path, { ...object(body), command: { ...command, maxAgents: 16 } })
+  }
+}
+
 /** Tell the agent which messages sent to it it has already answered, so it posts once (a Lead answered one question twice on
  * 2026-10-20). A message is answered when a later message of the agent's own replies to it. */
 function markAnswered(page: unknown, later: unknown[], agentId: string): unknown {
@@ -344,8 +357,7 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
             || !/^\/api\/super-tabs(?:\/[A-Za-z0-9_-]+)*(?:\?[A-Za-z0-9_=&%-]+)?$/.test(path)) {
             return { error: 'INVALID_REQUEST', detail: 'Choose a Super Tab endpoint.' }
           }
-          const value = await backend(core, method as string, path, payload.body)
-          return { ok: true, value }
+          return { ok: true, value: await ownerBackend(core, method as string, path, payload.body) }
         }
         const named = identifier(payload.agentId) ? payload.agentId : null
         const hashed = identifier(payload.harnessId) ? createHash('sha256').update(JSON.stringify([core.daemon.machineId(), payload.harnessId])).digest('hex').slice(0, 24) : null
