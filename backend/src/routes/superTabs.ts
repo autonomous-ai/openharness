@@ -227,10 +227,10 @@ export async function superTabRoutes(app: FastifyInstance, options: { store?: Su
     { preHandler: [validateParams(projectParams), validateBody(approveBody)] }, (req, reply) => respond(reply, async () => {
       if (!github || !approvalSecret) throw new GitHubAppError('GITHUB_APP_NOT_CONFIGURED', 'This Harness server has no GitHub App configured.', 503)
       if (!signIn) throw new GitHubAppError('GITHUB_APPROVAL_NOT_CONFIGURED', 'This Harness server cannot approve repositories yet: its administrator sets GITHUB_APP_CLIENT_ID and GITHUB_APP_CLIENT_SECRET.', 503)
-      const { repositoryUrl } = await store.projectRepository(req.user!, req.params.tabId, req.params.projectId)
+      const { repositoryUrl, name } = await store.projectRepository(req.user!, req.params.tabId, req.params.projectId)
       const repository = githubRepository(repositoryUrl) ?? fail('REPOSITORY_NOT_GITHUB', 'This project\'s repository is not on github.com.', 409)
       const state = signState(approvalSecret, { userId: req.user!.sub, autonomousEnv: req.user!.autonomousEnv, tabId: req.params.tabId,
-        projectId: req.params.projectId, repository: repository.fullName.toLowerCase(), scope: req.body.scope }, Date.now())
+        projectId: req.params.projectId, repository: repository.fullName.toLowerCase(), scope: req.body.scope, projectName: name }, Date.now())
       const install = github.app.installUrl()
       return { authorizeUrl: signIn.authorizeUrl(state), installUrl: install ? `${install}?state=${encodeURIComponent(state)}` : null }
     }))
@@ -248,8 +248,9 @@ export async function superTabRoutes(app: FastifyInstance, options: { store?: Su
       return page(`You can't push to ${named.fullName}`, 'So you can\'t approve it for this Swarm. Someone who can push to it can.', 403)
     }
     await approvals.approve(request, seen.login)
-    return page(`${named.fullName} approved`, request.scope === 'swarm'
-      ? 'Every project in this Swarm can now use it. You can go back to Harness.' : 'This project can now use it. You can go back to Harness.')
+    // Named, so the person knows which project it was for (local Team account run, 2026-10-28: 'This project can now use it').
+    const where = request.scope === 'swarm' ? 'every project of this Swarm' : request.projectName ?? 'this project'
+    return page(`${named.fullName} approved`, `Teammates' agents in ${where} can now push to it. You can go back to Harness.`)
   })
   app.get<{ Params: z.infer<typeof machineParams> }>('/api/super-tabs/:tabId/machines/:machineId/removal', { preHandler: validateParams(machineParams) },
     (req, reply) => respond(reply, () => store.machineRemoval(req.user!, req.params.tabId, req.params.machineId)))

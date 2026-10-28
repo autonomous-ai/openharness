@@ -319,6 +319,8 @@ describe('a queued start\'s preparation token', () => {
     const done = await env.app.inject({ method: 'GET', url: `/api/github/callback?code=c&state=${encodeURIComponent(state)}` })
     expect(done.statusCode).toBe(200)
     expect(done.body).toContain('example/app approved')
+    // The page names the project it was approved for (local Team account run, 2026-10-28: 'This project can now use it').
+    expect(done.body).toContain('Teammates&#39; agents in Pool can now push to it.')
     expect(env.approved).toEqual([expect.objectContaining({ tabId: tab, projectId: 'lead', repository: 'example/app', scope: 'project', login: 'olive' })])
     expect((await prepare(env, tab, startId)).statusCode).toBe(200)
     // A forged or missing state, or an installation without a sign-in, approves nothing.

@@ -27,6 +27,8 @@ export interface ApprovalRequest {
   /** owner/name, lower case. */
   repository: string
   scope: 'project' | 'swarm'
+  /** The project's name when it was asked, for the page GitHub sends the person back to. Shown only, never trusted. */
+  projectName?: string
 }
 
 /** The key that signs a sign-in's state, derived from the app's private key: nothing further to configure. */
@@ -51,7 +53,8 @@ export function readState(secret: Buffer, state: string, now: number): ApprovalR
     const value = JSON.parse(Buffer.from(body, 'base64url').toString()) as ApprovalRequest & { exp: number }
     if (typeof value.exp !== 'number' || value.exp < now || (value.scope !== 'project' && value.scope !== 'swarm')) return null
     for (const key of ['userId', 'autonomousEnv', 'tabId', 'projectId', 'repository'] as const) if (typeof value[key] !== 'string' || !value[key]) return null
-    return { userId: value.userId, autonomousEnv: value.autonomousEnv, tabId: value.tabId, projectId: value.projectId, repository: value.repository, scope: value.scope }
+    return { userId: value.userId, autonomousEnv: value.autonomousEnv, tabId: value.tabId, projectId: value.projectId, repository: value.repository, scope: value.scope,
+      ...(typeof value.projectName === 'string' && value.projectName ? { projectName: value.projectName.slice(0, 200) } : {}) }
   } catch { return null }
 }
 

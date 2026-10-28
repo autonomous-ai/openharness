@@ -1738,13 +1738,13 @@ export class SuperTabStore {
    *  a private project's members only. Null when it has none yet. [approvalRequired]: whether this Swarm's projects need a
    *  repository approved before the app gives them tokens, rolled out with the team account (machines.ts
    *  `teamAccountRequired`). */
-  async projectRepository(user: AuthUser, tabId: string, projectId: string): Promise<{ repositoryUrl: string | null; approvalRequired: boolean }> {
+  async projectRepository(user: AuthUser, tabId: string, projectId: string): Promise<{ repositoryUrl: string | null; approvalRequired: boolean; name: string }> {
     return transaction(this.db, async tx => {
       const { state } = await this.load(tx, user, tabId)
       const actor = await this.actor(tx, user, state)
       const project = visibleState(state, actor, this.now()).projects?.find(p => p.id === projectId)
         ?? fail('NOT_FOUND', 'This project is unavailable.', 404)
-      return { repositoryUrl: project.repository?.repositoryUrl ?? null, approvalRequired: teamAccountRequired(state) }
+      return { repositoryUrl: project.repository?.repositoryUrl ?? null, approvalRequired: teamAccountRequired(state), name: project.name }
     })
   }
 
