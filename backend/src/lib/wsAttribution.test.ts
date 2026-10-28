@@ -95,3 +95,41 @@ describe('the counters each pod logs', () => {
     expect(wsCounterLine().web).toEqual({ open: 1, connects: 0, clients: {}, short: 0, refused: 0 })
   })
 })
+
+// The server's upgrade hook (server.ts) on a real HTTP server and real `ws` sockets: what the counters lean on is that
+// an upgraded socket's raw socket is the one watched, so a tracked socket is never also counted refused.
+describe('real upgrades', () => {
+  it('count a socket destroyed before its upgrade and one closed right after it as refused, a tracked one as a connect', async () => {
+    const { createServer } = await import('node:http')
+    const { WebSocketServer, WebSocket } = await import('ws')
+    const wss = new WebSocketServer({ noServer: true })
+    const server = createServer()
+    server.on('upgrade', (req, socket, head) => {
+      watchUpgrade('web', socket)
+      const how = new URL(req.url ?? '/', 'http://x').searchParams.get('how')
+      if (how === 'destroy') { socket.destroy(); return }
+      wss.handleUpgrade(req, socket, head, ws => {
+        if (how === 'refuse') { ws.close(4401, 'auth expired'); return }
+        const tracked = trackSocket('web', 'web user', ws, { client: 'relay', version: null })
+        ws.once('close', (code, reason) => tracked.closed(code, reason.toString()))
+      })
+    })
+    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+    const port = (server.address() as { port: number }).port
+    const dial = (how: string) => new Promise<void>(resolve => {
+      const ws = new WebSocket(`ws://127.0.0.1:${port}/?how=${how}`)
+      ws.on('open', () => { if (how === 'track') ws.close(1000) })
+      ws.on('error', () => resolve())
+      ws.on('close', () => resolve())
+    })
+    for (const how of ['destroy', 'refuse', 'track']) await dial(how)
+    // The server side's close events land a moment after the client's. Each line counts since the last, so add them up.
+    const seen = { connects: 0, refused: 0, open: -1 }
+    await vi.waitFor(() => {
+      const web = wsCounterLine().web as { open: number; connects: number; refused: number }
+      seen.connects += web.connects; seen.refused += web.refused; seen.open = web.open
+      expect(seen).toEqual({ connects: 1, refused: 2, open: 0 })
+    }, { timeout: 2_000 })
+    server.close()
+  })
+})
