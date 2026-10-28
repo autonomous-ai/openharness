@@ -159,33 +159,49 @@ class SuperTabDecisions extends ChangeNotifier {
     }().whenComplete(() => _loading = null);
   }
 
-  Future<List<SuperTabDecision>> _list(String state) async {
+  /// One list, newest first, and whether it holds every one of its kind:
+  /// only when the backend says it left none out.
+  Future<(List<SuperTabDecision>, bool)> _list(String state) async {
     final Map<String, dynamic> answer;
     try {
       answer = await controller.request('GET', '$_path/decisions?state=$state');
     } on SuperTabFailure catch (failure) {
       // A backend from before decisions has no list: there is nothing to show.
-      if (failure.statusCode == 404) return const [];
+      if (failure.statusCode == 404) return (const <SuperTabDecision>[], true);
+      // One from before Let PM decide has no `settled` list: its answered
+      // list has every answer, none of them the PM's.
+      if (failure.statusCode == 400 && state == 'settled') {
+        return _list('answered');
+      }
       rethrow;
     }
-    return List.unmodifiable([
-      for (final row in answer['decisions'] as List)
-        SuperTabDecision.fromJson(superTabMap(row)),
-    ]);
+    return (
+      List<SuperTabDecision>.unmodifiable([
+        for (final row in answer['decisions'] as List)
+          SuperTabDecision.fromJson(superTabMap(row)),
+      ]),
+      answer['more'] == false,
+    );
   }
+
+  /// Whether [open] holds every open decision, as its last read said.
+  bool _openComplete = false;
 
   Future<void> _read() async {
     final epoch = _epoch;
     try {
-      final [nextOpen, nextAnswered] = await Future.wait([
+      // `settled` has the answers the PM gave too; `answered` is what an
+      // older Desktop reads, without them.
+      final [(nextOpen, openComplete), (nextAnswered, _)] = await Future.wait([
         _list('open'),
-        _list('answered'),
+        _list('settled'),
       ]);
       // Read before who may read what changed: the read asked again since
       // replaces it.
       if (epoch != _epoch) return;
       open = nextOpen;
       answered = nextAnswered;
+      _openComplete = openComplete;
       // The lists are the newest of each (the backend caps them): what is
       // set aside is forgotten only once it is known answered or gone.
       final gone = _gone();
@@ -203,13 +219,11 @@ class SuperTabDecisions extends ChangeNotifier {
   static const sendFailed = 'Could not send your answer. Try again.';
 
   /// Whether a decision is known answered or gone: in the answered list, or
-  /// missing from an open list that holds every open one (as many as the
-  /// Swarm counts waiting).
+  /// missing from an open list the backend says holds every open one.
   bool Function(String id) _gone() {
     final openIds = {for (final d in open) d.id};
     final answeredIds = {for (final d in answered) d.id};
-    final waiting = controller.snapshot?.decisionsWaiting;
-    final complete = waiting != null && open.length >= waiting;
+    final complete = _openComplete;
     return (id) =>
         answeredIds.contains(id) || (complete && !openIds.contains(id));
   }

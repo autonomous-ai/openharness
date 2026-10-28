@@ -42,7 +42,7 @@ import { accrueLent } from './leaderboard/lent.js'
 import { mayDrive, TERMINAL_ANSWER_MS, TERMINAL_EXPIRY_MS, TERMINAL_PICKUP_MS, TERMINAL_RECHECK_MS, type TerminalEffect } from './terminal.js'
 import { closeAssignment, closeUnassignedStart, readDecision, recentDecisions, timedDecisionOf, writeRouteEffects } from './routeDecisions.js'
 import { listMentions, markDone, mentionsWaiting, openTags, readMention, resolveByReply, writeMentions } from './mentions.js'
-import { answerable, fullFor, listDecisions, readAskedDecision, recordAnswer, repeatOf, waitingIn, waitingInProject, writeDecisions } from './decisions.js'
+import { answerable, fullFor, listDecisions, type DecisionList, readAskedDecision, recordAnswer, repeatOf, waitingIn, waitingInProject, writeDecisions } from './decisions.js'
 import { DEFAULT_ROUTING_POLICY, effectivePolicy, routingPolicySchema, type RoutingPolicy } from './routingPolicy.js'
 import { authenticatedEmail, authorizeSwarmJoin, configureSharing, joinSwarmSchema, requireSharingOwner,
   saveSharingSchema, sharingDetails, type JoinSwarm, type SaveSharing } from './sharing.js'
@@ -1652,12 +1652,12 @@ export class SuperTabStore {
   /** The caller's decisions in this Swarm, newest first: a person's asked of them, an agent's asked by it (a Lead's also
    *  those asked in its project), still open or answered. A light load: the quiet conversations its decisions are in are
    *  read with them (decisions.ts conversationsOf), never the Swarm's whole history, read again on every change. */
-  async decisions(user: AuthUser, tabId: string, state: 'open' | 'answered', asAgentId?: string) {
+  async decisions(user: AuthUser, tabId: string, state: DecisionList, asAgentId?: string) {
     return transaction(this.db, async tx => {
       const { state: tab } = await this.load(tx, user, tabId)
       const actor = await this.actor(tx, user, tab, asAgentId)
       author(tab, actor)
-      return { decisions: await listDecisions(tx, tabId, tab, actor, state === 'open') }
+      return await listDecisions(tx, tabId, tab, actor, state)
     })
   }
 

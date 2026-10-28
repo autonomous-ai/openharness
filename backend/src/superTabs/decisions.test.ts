@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import type { Prisma } from '@prisma/client'
 import { applyCommand, commandSchema, type Command, type CommandContext } from './commands.js'
 import { createSuperTab, type Actor, type AgentConfiguration } from './model.js'
-import { waitingInProject, type DecisionTarget } from './decisions.js'
+import { listDecisions, waitingInProject, type DecisionTarget } from './decisions.js'
 
 const owner: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: 'owner', email: 'owner@example.com' }
 const peer: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: 'peer', email: 'peer@example.com' }
@@ -162,6 +162,29 @@ describe('leaving a decision to the PM', () => {
     expect(() => s.run({ type: 'decision.answer', decisionId: 'decision-1', choice: 0, delegate: true }, peer, { decision: open(s) })).toThrow('or leave it to the PM')
     expect(() => s.run({ type: 'decision.answer', decisionId: 'decision-1' }, peer, { decision: open(s) })).toThrow('or leave it to the PM')
     expect(commandSchema.safeParse({ type: 'decision.answer', decisionId: 'decision-1', delegate: false }).success).toBe(false)
+  })
+})
+
+describe('listing a person\'s decisions', () => {
+  /** A transaction whose open decisions are [count] rows asked of the peer in the group, newest first. */
+  const reading = (s: ReturnType<typeof swarm>, count: number) => {
+    const asked: Array<{ take?: number }> = []
+    const rows = Array.from({ length: count }, (_, i) => ({ id: `decision-${i}`, batchId: `batch-${i}`, projectId: 'lead', conversationId: s.group,
+      assignmentId: null, personId: 'peer', askerAgentId: s.lead, question: `Question ${i}`, options: ['Behind a flag', 'To everyone'], recommended: 0,
+      unblocks: 'The release', createdAt: new Date(1000 - i), answeredAt: null, choice: null, note: null, delegated: null }))
+    const tx = { superTabDecision: { findMany: async (args: { take?: number }) => { asked.push(args); return rows.slice(0, args.take) } } }
+    return { tx: tx as unknown as Prisma.TransactionClient, asked }
+  }
+
+  it('says when the newest page leaves open decisions out, so a client never takes it for all of them', async () => {
+    const s = swarm()
+    const full = reading(s, 201)
+    const page = await listDecisions(full.tx, 'tab', s.state, peer, 'open')
+    expect(page.decisions).toHaveLength(200)
+    expect(page.more).toBe(true)
+    const all = await listDecisions(reading(s, 3).tx, 'tab', s.state, peer, 'open')
+    expect(all.decisions.map(d => d.id)).toEqual(['decision-0', 'decision-1', 'decision-2'])
+    expect(all.more).toBe(false)
   })
 })
 

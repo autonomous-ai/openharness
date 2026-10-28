@@ -709,7 +709,10 @@ describe('decisions asked of one person (v2)', () => {
     expect(left.status, JSON.stringify(left.body)).toBe(200)
     expect(await db.superTabDecision.findUnique({ where: { id } })).toMatchObject({ choice: 1, delegated: true })
     const listed = { id, choice: 1, delegated: true, answer: 'PM decided: To everyone' }
-    expect(await decisions(s.tabId, peer, 'answered')).toEqual([expect.objectContaining(listed)])
+    expect(await decisions(s.tabId, peer, 'settled')).toEqual([expect.objectContaining(listed)])
+    // An older Desktop reads the person's answered decisions and labels each "You chose": it is not given this one.
+    expect(await decisions(s.tabId, peer, 'answered')).toEqual([])
+    // Agents read it as answered, as before, now saying who decided.
     expect(await decisions(s.tabId, owner, 'answered', s.lead)).toEqual([expect.objectContaining(listed)])
     const line = (await db.superTabMessage.findMany({ where: { tabId: s.tabId, conversationId: s.privateId } })).at(-1)
     expect(line).toMatchObject({ text: 'PM decided: To everyone — Ship how?', recipientIds: [], source: { kind: 'decision-delegated', decisionId: id } })
@@ -721,7 +724,8 @@ describe('decisions asked of one person (v2)', () => {
     const mine = ((await post(s.tabId, { type: 'decision.ask', conversationId: s.web, personId: peer.sub, questions: [question('Name it?')] }, owner, s.lead))
       .body.data.result.decisionIds as string[])[0]!
     await post(s.tabId, { type: 'decision.answer', decisionId: mine, choice: 0 }, peer)
-    expect((await decisions(s.tabId, peer, 'answered')).find(d => d.id === mine)).toMatchObject({ delegated: false, answer: 'Behind a flag' })
+    expect((await decisions(s.tabId, peer, 'settled')).find(d => d.id === mine)).toMatchObject({ delegated: false, answer: 'Behind a flag' })
+    expect((await decisions(s.tabId, peer, 'answered')).map(d => d.id)).toEqual([mine])
   })
 
   it('takes an answer in a conversation that went quiet and was archived, counts it on a fresh first load, and tells both agents', async () => {

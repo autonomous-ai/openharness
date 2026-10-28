@@ -483,6 +483,7 @@ void main() {
       'a decision set aside is forgotten once it is gone from a complete list',
       () async {
         final server = swarm()
+          ..decisionPage = 50
           ..ask(['Ship how?', 'Name it?'], conversationId: 'pm-chat');
         final controller = server.controller(account: 'peer');
         addTearDown(controller.dispose);
@@ -500,6 +501,41 @@ void main() {
         expect(controller.decisionsAside, {'decision-2'});
       },
     );
+
+    test('a list that does not say it holds every open one forgets nothing it left out', () async {
+      // A backend from before the list said so: what is missing from it
+      // may still be open.
+      final server = swarm()
+        ..ask(['Ship how?', 'Name it?'], conversationId: 'pm-chat');
+      final controller = server.controller(account: 'peer');
+      addTearDown(controller.dispose);
+      final decisions = SuperTabDecisions.of(controller);
+      await controller.refresh();
+      await decisions.load();
+      decisions.setAside(decisions.open);
+
+      server.hideDecision('decision-1');
+      await controller.refresh();
+      await pumpEventQueue();
+
+      expect(controller.decisionsAside, {'decision-1', 'decision-2'});
+    });
+
+    test('on a backend from before Let PM decide, reads answered decisions as before', () async {
+      final server = swarm()
+        ..settledMissing = true
+        ..ask(['Ship how?']);
+      final controller = server.controller(account: 'peer');
+      addTearDown(controller.dispose);
+      final decisions = SuperTabDecisions.of(controller);
+      await controller.refresh();
+      await decisions.load();
+
+      expect(await decisions.answer(decisions.open.single, 1), isTrue);
+
+      expect(decisions.error, isNull);
+      expect(decisions.answered.single.choice, 1);
+    });
 
     testWidgets(
       'a refused Let PM decide shows on its card in Chat with PM, and Retry sends it again',

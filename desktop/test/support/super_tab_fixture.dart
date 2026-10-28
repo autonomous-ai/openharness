@@ -407,8 +407,11 @@ class ConversationServer {
   Completer<void>? holdDecisions;
   // Every read of a decisions list fails, as offline.
   bool failDecisions = false;
-  // The most each decisions list returns, newest first, as the backend caps it.
+  // The most each decisions list returns, newest first, as the backend caps
+  // it; set, a list also says whether it left others out, as the backend does.
   int? decisionPage;
+  // A backend from before Let PM decide: no list of every answered one.
+  bool settledMissing = false;
   // A backend from before the decisions digest: it sends the count alone.
   bool decisionsDigestMissing = false;
   // How many times the mentions list was read.
@@ -799,13 +802,26 @@ class ConversationServer {
       decisionReads++;
       if (holdDecisions case final hold?) await hold.future;
       if (failDecisions) throw StateError('Offline');
-      final open = uri.queryParameters['state'] == 'open';
+      final state = uri.queryParameters['state'];
+      if (state == 'settled' && settledMissing) {
+        throw const SuperTabFailure(
+          'INVALID_REQUEST',
+          'Invalid query.',
+          statusCode: 400,
+        );
+      }
+      final open = state == 'open';
+      // What an older Desktop reads as answered leaves out those the PM
+      // decided; `settled` has them all.
+      final listed = decisions.reversed
+          .where((d) => (d['answeredAt'] == null) == open)
+          .where((d) => state != 'answered' || d['delegated'] != true)
+          .toList();
+      final page = decisionPage;
       return jsonDecode(
         jsonEncode({
-          'decisions': decisions.reversed
-              .where((d) => (d['answeredAt'] == null) == open)
-              .take(decisionPage ?? decisions.length)
-              .toList(),
+          'decisions': listed.take(page ?? listed.length).toList(),
+          if (page != null) 'more': listed.length > page,
         }),
       ) as Map<String, dynamic>;
     }

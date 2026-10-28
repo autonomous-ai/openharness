@@ -214,15 +214,27 @@ const readableIn = (state: SuperTabState, actor: Actor, groups: Map<string, Conv
   return group && canReadGroup(state, actor, group) ? group : undefined
 }
 
-/** ponytail: capped at 200 per state, newest first; page it if a reader ever has more. */
-async function readable(tx: Tx, tabId: string, state: SuperTabState, actor: Actor, open: boolean) {
-  const rows = await tx.superTabDecision.findMany({ where: { tabId, AND: [readerWhere(state, actor), open ? waiting : { answeredAt: { not: null } }] },
-    orderBy: { createdAt: 'desc' }, take: 200 })
+/** Answered by the person themself: as `waiting`, a row written before `delegated` has no such field. */
+const yours: Prisma.SuperTabDecisionWhereInput = { OR: [{ delegated: { isSet: false } }, { delegated: null }, { delegated: false }] }
+
+/** Which decisions a list holds: those still open, or those answered. `settled` is every answered one, those left to the
+ *  PM included; `answered` is what an older Desktop reads and labels each "You chose", so for a person it leaves out those
+ *  the PM decided (their Chat with PM has the PM's line). An agent's `answered` holds them all, saying who decided. */
+export type DecisionList = 'open' | 'answered' | 'settled'
+const LIST_PAGE = 200
+
+/** ponytail: the newest LIST_PAGE per list; `more` says when there are others. Page it if a reader ever has more. */
+async function readable(tx: Tx, tabId: string, state: SuperTabState, actor: Actor, list: DecisionList) {
+  const which = list === 'open' ? [waiting] : list === 'answered' && actor.kind === 'person'
+    ? [{ answeredAt: { not: null } }, yours] : [{ answeredAt: { not: null } }]
+  const read = await tx.superTabDecision.findMany({ where: { tabId, AND: [readerWhere(state, actor), ...which] },
+    orderBy: { createdAt: 'desc' }, take: LIST_PAGE + 1 })
+  const rows = read.slice(0, LIST_PAGE)
   const groups = await conversationsOf(tx, tabId, state, rows.map(r => r.conversationId))
-  return rows.flatMap(row => {
+  return { more: read.length > LIST_PAGE, rows: rows.flatMap(row => {
     const group = readableIn(state, actor, groups, row.conversationId)
     return group ? [{ row, group }] : []
-  })
+  }) }
 }
 
 /** How many of a project's open decisions wait in each conversation for each person, for its digest (digest.ts
@@ -253,8 +265,11 @@ export async function decisionsWaiting(tx: Tx, tabId: string, state: SuperTabSta
   return { count: ids.length, digest: createHash('sha256').update(ids.join('\n')).digest('base64url').slice(0, 16) }
 }
 
-export async function listDecisions(tx: Tx, tabId: string, state: SuperTabState, actor: Actor, open: boolean) {
-  return (await readable(tx, tabId, state, actor, open)).map(({ row, group }) => {
+/** One list of the reader's decisions, newest first, and whether it leaves older ones out (`more`): a client may take a
+ *  decision missing from it as answered or gone only when it does not. */
+export async function listDecisions(tx: Tx, tabId: string, state: SuperTabState, actor: Actor, list: DecisionList) {
+  const { more, rows } = await readable(tx, tabId, state, actor, list)
+  return { more, decisions: rows.map(({ row, group }) => {
     const asker = state.agents.find(a => a.id === row.askerAgentId)
     return { id: row.id, batchId: row.batchId, projectId: row.projectId, projectName: projectOf(state, row.projectId).name,
       conversationId: row.conversationId, conversationTitle: group.title, assignmentId: row.assignmentId ?? null,
@@ -264,5 +279,5 @@ export async function listDecisions(tx: Tx, tabId: string, state: SuperTabState,
       createdAt: row.createdAt, answeredAt: row.answeredAt ?? null, choice: row.choice ?? null, note: row.note ?? null,
       delegated: row.delegated === true,
       answer: row.choice == null || row.options[row.choice] === undefined ? null : answerText(row.options[row.choice]!, row.delegated === true) }
-  })
+  }) }
 }
