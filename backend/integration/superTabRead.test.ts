@@ -15,6 +15,7 @@ import * as parts from '../src/superTabs/parts/index.js'
 import { guardedWrite } from '../src/superTabs/parts/write.js'
 import { migrateSwarm } from '../src/superTabs/migration/migrate.js'
 import { SwarmReads } from '../src/superTabs/read/service.js'
+import { decisionsWaiting } from '../src/superTabs/decisions.js'
 import { HostReads } from '../src/superTabs/read/host.js'
 import type { Conversation, SuperTabState } from '../src/superTabs/model.js'
 import { writeLegacySwarm } from '../scripts/swarm-parts/legacy.js'
@@ -746,6 +747,42 @@ describe('decisions asked of one person (v2)', () => {
     expect(left).toMatchObject({ decisionsWaiting: 0 })
     expect(left.decisionsDigest).not.toBe(replaced.decisionsDigest)
     expect((await get(`/api/super-tabs/${s.tabId}/parts`, owner)).body.data.derived.decisionsDigest).toBe(left.decisionsDigest)
+  })
+
+  it('counts every open decision the reader can open, past 200, reading only which ones and where', async () => {
+    const s = await scene()
+    clock = Date.now()
+    // 150 in finished work gone quiet, which the peer still reads; then 100 newer in a conversation they have left, quiet too:
+    // both are read for their access fields alone, and the left one is filtered on those.
+    await writeGroup(s.tabId, s.web, Date.now(), group => { group.archived = true; group.dormant = true })
+    await writeGroup(s.tabId, s.privateId, Date.now(), group => { group.audience = { people: [] }; group.dormant = true })
+    const asked = (conversationId: string, n: number, from: number) => Array.from({ length: n }, (_, i) => ({ id: `${conversationId}-${i}`,
+      tabId: s.tabId, batchId: `${conversationId}-batch`, projectId: 'lead', conversationId, assignmentId: null, personId: peer.sub,
+      askerAgentId: s.lead, question: `Question ${i}?`, options: ['Yes', 'No'], recommended: 0, unblocks: 'The release', createdAt: new Date(from + i) }))
+    await db.superTabDecision.createMany({ data: [...asked(s.web, 150, NOW), ...asked(s.privateId, 100, NOW + 1000)] })
+    expect((await get(`/api/super-tabs/${s.tabId}/parts`, peer)).body.data.derived.decisionsWaiting).toBe(150)
+
+    const reads: unknown[] = [], whole: string[] = [], quiet: Array<{ key: string; data: Record<string, unknown> }> = []
+    const counted = db.$extends({ query: {
+      superTabDecision: { async findMany({ args, query }) { reads.push(args); return query(args) } },
+      swarmGroup: {
+        async findMany({ args, query }) { const rows = await query(args); whole.push(...rows.map(row => row.key)); return rows },
+        async aggregateRaw({ args, query }) { const rows = await query(args); quiet.push(...rows as unknown as typeof quiet); return rows },
+      },
+    } })
+    const waiting = await counted.$transaction(async tx => {
+      const state = parts.reassemble(await parts.loadActive(tx, s.tabId))
+      whole.length = 0
+      return decisionsWaiting(tx, s.tabId, state, { kind: 'person', userId: peer.sub, email: peer.email })
+    })
+    expect(waiting.count).toBe(150)
+    // Neither what they ask nor a cap; and each quiet conversation's access fields, not its whole record.
+    expect(reads).toEqual([expect.objectContaining({ select: { id: true, conversationId: true } })])
+    expect(reads[0]).not.toHaveProperty('take')
+    expect(whole).toEqual([])
+    expect(quiet.map(row => row.key).sort()).toEqual([s.web, s.privateId].sort())
+    for (const row of quiet) expect(['id', 'kind', 'projectId', 'audience']).toEqual(expect.arrayContaining(Object.keys(row.data)))
+    expect(quiet.find(row => row.key === s.privateId)!.data).toEqual({ id: s.privateId, projectId: 'lead', audience: { people: [] } })
   })
 
   it('keeps one answer when two arrive at once, returns the same receipt for a retried answer, and refuses a person removed from the Swarm', async () => {
