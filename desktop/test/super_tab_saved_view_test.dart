@@ -159,6 +159,9 @@ class _Reads {
   final paths = <String>[];
   bool missing = false;
   Completer<void>? holdMessages;
+
+  /// Holds the reads of an earlier page alone.
+  Completer<void>? holdOlder;
   Future<Map<String, dynamic>> call(
     String method,
     String path, {
@@ -166,6 +169,9 @@ class _Reads {
   }) async {
     if (method == 'GET') paths.add(path);
     if (holdMessages case final hold? when path.endsWith('/messages')) {
+      await hold.future;
+    }
+    if (holdOlder case final hold? when path.contains('/messages?before=')) {
       await hold.future;
     }
     if (missing) {
@@ -1092,6 +1098,43 @@ void _reviewTests() {
       c.dispose();
     });
   });
+
+  test(
+    'an earlier page asked for over the saved view leaves no gap when the '
+    'read replacing that view lands first',
+    () {
+      final server = ConversationServer();
+      for (var i = 1; i <= 120; i++) {
+        server.append('m$i');
+      }
+      final view = _saved(server);
+      fakeAsync((async) {
+        for (var i = 121; i <= 270; i++) {
+          server.append('m$i');
+        }
+        final reads = _Reads(server)..holdOlder = Completer<void>();
+        final c = _controller(reads)
+          ..drawSaved(view)
+          ..start();
+        // Scrolled up at once: from where the saved page said earlier
+        // continues, while the read replacing that page is on its way.
+        unawaited(c.loadMessages('lead', older: true));
+        async.flushMicrotasks();
+        expect(c.messages('lead').first.text, 'm171');
+        reads.holdOlder!.complete();
+        reads.holdOlder = null;
+        async.flushMicrotasks();
+
+        final sequences = c.messages('lead').map((m) => m.sequence).toList();
+        expect(sequences.last, 270);
+        for (var i = 1; i < sequences.length; i++) {
+          expect(sequences[i], sequences[i - 1] + 1, reason: 'at $i');
+        }
+        expect(c.hasOlder('lead'), sequences.first > 1);
+        c.dispose();
+      });
+    },
+  );
 
   // Finding 2.
   test('nothing is written back while the saved view is on screen', () {

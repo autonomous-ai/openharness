@@ -20,7 +20,7 @@ Future<void> openWorkspaceTool(WidgetTester tester, String tool) async {
 Future<void> openWorkspaceManagement(WidgetTester tester, String tool) async {
   final command = switch (tool) {
     'machines' => 'Machine connection settings',
-    'models' => 'Manage models',
+    'models' => 'Your models',
     _ => 'Manage harnesses',
   };
   await key(tester, LogicalKeyboardKey.keyP, cmd: true);

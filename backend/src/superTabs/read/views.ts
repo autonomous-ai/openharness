@@ -8,6 +8,7 @@ import { machineSlots, teamAccountRequired, teamWorkRefusal, type ContributedMac
 import * as store from '../parts/index.js'
 import type { Part, SwarmParts } from '../parts/index.js'
 import { canReadGroup } from '../projects.js'
+import { withAvatarView } from '../profile.js'
 import type { AgentView, Derived, GroupView, HeadView, LivePart, MachineView, MemberView, ProgressView, StartView } from './contract.js'
 
 export interface ReaderParts {
@@ -28,6 +29,8 @@ export interface ReaderView {
 export interface ReadExtras {
   /** Machines whose account row is a Harness Team account (store read helper). */
   teamMachines: string[]
+  /** Machines also contributed to a Swarm of another Workspace (store.ts otherWorkspaceMachines). */
+  otherWorkspaceMachines?: string[]
   /** A person's open mentions, counted by the store. */
   mentionsWaiting?: number
   /** A person's open decisions (decisions.ts). */
@@ -37,7 +40,7 @@ export interface ReadExtras {
 }
 
 const HEAD_FIELDS = ['version', 'id', 'name', 'project', 'projects', 'leadsConversationId', 'ownerId', 'environment',
-  'routingPolicy', 'rules', 'paused', 'invitations', 'localModels'] as const
+  'routingPolicy', 'rules', 'paused', 'invitations', 'localModels', 'workspaceId', 'workspaceVisibility'] as const
 
 export const envelope = <T>(part: Pick<Part, 'key' | 'version' | 'changedAt'>, data: T): LivePart<T> =>
   ({ key: part.key, version: part.version, changedAt: part.changedAt, data })
@@ -61,7 +64,7 @@ export const seenIn = (parts: ReaderView['parts']): Set<string> =>
 
 export function agentView(agent: Agent): AgentView {
   const { downNamed: _named, downSince: _since, limitedUntil: _limit, roleId: _role, ...rest } = agent
-  return rest
+  return withAvatarView(rest) as AgentView
 }
 
 export function readerView(parts: SwarmParts, actor: Actor, now: number, extras: ReadExtras): ReaderView {
@@ -79,7 +82,7 @@ export function readerView(parts: SwarmParts, actor: Actor, now: number, extras:
     state,
     parts: {
       head: envelope(parts.head, head),
-      members: parts.members.filter(m => !m.deleted).map(m => envelope(m, m.data!)),
+      members: parts.members.filter(m => !m.deleted).map(m => envelope(m, withAvatarView(m.data!) as MemberView)),
       agents: visible.agents.map(a => envelope(agentPart(a.id), agentView(state.agents.find(s => s.id === a.id)!))),
       groups: groups.map(g => envelope(groupPart(g.id), groupView(g, seen))),
       machines: (visible.machines ?? []).map(m => envelope(machinePart(m.machineId), m)),
@@ -96,7 +99,8 @@ export const progressView = (data: NonNullable<SwarmParts['progress'][number]['d
 function derive(state: SuperTabState, visible: SuperTabState, actor: Actor, now: number, extras: ReadExtras): Derived {
   const machine = (pool: ContributedMachine) => {
     const stored = state.machines!.find(m => m.machineId === pool.machineId)!
-    const refusal = teamWorkRefusal(stored, now, extras.teamMachines.includes(pool.machineId), teamAccountRequired(state))
+    const refusal = teamWorkRefusal(stored, now, extras.teamMachines.includes(pool.machineId), teamAccountRequired(state),
+      !!extras.otherWorkspaceMachines?.includes(pool.machineId))
     return [pool.machineId, { availableSlots: Math.max(0, pool.maxAgents - machineSlots(state, stored)),
       teamWork: refusal ? { allowed: false as const, ...refusal } : { allowed: true as const } }] as const
   }

@@ -1009,9 +1009,12 @@ model SuperTab {
   format         Int      @default(1)
   migratedAt     DateTime?
   legacyState    Json?
+  /// The Workspace (SwarmWorkspace) it belongs to, also on its head part. Null only on a Swarm from before Workspaces, until migrated.
+  workspaceId          String?
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
+  @@index([autonomousEnv, workspaceId])
   @@index([autonomousEnv, memberIds])
   @@index([autonomousEnv, invitedEmails])
   @@index([autonomousEnv, machineIds])
@@ -1078,6 +1081,22 @@ model SuperTabMention {
   @@index([tabId, conversationId, personId])
 }
 
+/// One reactor's emoji on one message (superTabs/reactions.ts). The id is derived from all four, so adding the same
+/// reaction twice keeps one row; message pages count them.
+model SuperTabReaction {
+  id             String   @id @map("_id")
+  tabId          String
+  conversationId String
+  messageId      String
+  /// person | agent
+  actorKind      String
+  actorId        String
+  emoji          String
+  createdAt      DateTime @default(now())
+
+  @@index([tabId, messageId])
+}
+
 /// A question to one person, with options and a recommendation (backend/src/superTabs/decisions.ts). Kept out of the tab
 /// state, as mentions are: an asking agent and the asked person read it, and the person answers it once.
 model SuperTabDecision {
@@ -1116,6 +1135,8 @@ model SuperTabAttachment {
   size           Int
   objectKey      String
   usedBy         String?
+  /// `avatar` for a profile picture (superTabs/profile.ts), which no message sends; absent on a chat file.
+  purpose        String?
   createdAt      DateTime @default(now())
 
   @@index([tabId, actorKey, createdAt])
@@ -1305,6 +1326,72 @@ model SuperTabTerminalRequest {
 // (`deleted`) until `purgeAt`, so readers learn it is gone. `data` keeps the record's shape from `SuperTab.state`.
 
 /// The Swarm's scalars and settings: projects (without progress), rules, invitations, sharing, routing, Local models.
+/// A Workspace: Swarms and the people who may be in them (docs/plans/2026-10-27-swarm-workspaces.md). Not the Harness Team
+/// account. It never grants reading a Swarm: that needs the Swarm's own membership too.
+model SwarmWorkspace {
+  id            String    @id @map("_id")
+  autonomousEnv String
+  name          String
+  ownerId       String
+  revision      Int       @default(0)
+  createdAt     DateTime  @default(now())
+  deletedAt     DateTime?
+  purgeAt       DateTime?
+}
+
+/// One person of a Workspace. A removal keeps the row with `removedAt` until it is purged; a rejoin writes a new generation.
+model SwarmWorkspaceMember {
+  /// `workspaceId:userId`
+  id         String    @id @map("_id")
+  workspaceId      String
+  userId     String
+  email      String
+  role       String
+  generation String
+  version    Int       @default(1)
+  addedBy    String
+  addedAt    DateTime  @default(now())
+  removedAt  DateTime?
+  removedBy  String?
+  purgeAt    DateTime?
+
+  @@index([workspaceId, removedAt])
+  @@index([userId, removedAt])
+}
+
+/// One removal of one Workspace membership, open until the person has left every Swarm of the Workspace. While one is open the
+/// person cannot be brought back into the Workspace; the hourly sweep finishes them in order (superTabs/workspaceStore.ts).
+model SwarmWorkspaceRemoval {
+  /// `workspaceId:userId:generation`: the membership generation that was removed.
+  id            String    @id @map("_id")
+  workspaceId         String
+  userId        String
+  email         String
+  generation    String
+  autonomousEnv String
+  removedAt     DateTime
+  removedBy     String
+  finishedAt    DateTime?
+  purgeAt       DateTime?
+
+  @@index([finishedAt, id])
+  @@index([workspaceId, userId, finishedAt])
+}
+
+/// An invitation to a Workspace, by email; deleted when accepted or revoked, purged when it expires.
+model SwarmWorkspaceInvitation {
+  /// `workspaceId:email`
+  id        String   @id @map("_id")
+  workspaceId     String
+  email     String
+  role      String
+  invitedBy String
+  expiresAt DateTime
+
+  @@index([email, expiresAt])
+  @@index([workspaceId])
+}
+
 model SwarmHead {
   id              String    @id @map("_id")
   tabId           String

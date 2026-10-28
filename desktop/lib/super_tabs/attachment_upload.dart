@@ -109,12 +109,12 @@ SuperTabUpload uploadWith(ApiClient Function() api) =>
           body['success'] == true) {
         return Map<String, dynamic>.from(body['data'] as Map);
       }
-      throw _refusal(response);
+      throw superTabUploadRefusal(response);
     };
 
 /// What a refused upload says. The backend answers `{error: {code, message}}`;
 /// the local daemon, a bare code string such as `{error: 'FORBIDDEN'}`.
-SuperTabFailure _refusal(Response<dynamic> response) {
+SuperTabFailure superTabUploadRefusal(Response<dynamic> response) {
   final body = response.data;
   final error = body is Map ? body['error'] : null;
   final code = error is Map
@@ -129,6 +129,8 @@ SuperTabFailure _refusal(Response<dynamic> response) {
         switch (code) {
           'FORBIDDEN' => 'You can’t send files in this conversation.',
           'ATTACHMENT_TOO_LARGE' => 'That file is over 10 MB.',
+          'AVATAR_TOO_LARGE' => 'That picture is over 1 MB.',
+          'AVATAR_TYPE' => 'Use a PNG, JPEG or WebP picture.',
           _ => 'Could not upload the file. Try again.',
         },
     statusCode: response.statusCode ?? 0,

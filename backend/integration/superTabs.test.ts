@@ -1432,6 +1432,27 @@ describe('Super Tabs on a real Mongo replica set', () => {
     await run(tab, { type: 'project.delete', projectId: other })
     expect(await db.superTabRoleText.count({ where: { tabId: tab, projectId: other } })).toBe(0)
   })
+  it('serves no role text once the reader, or the hosted agent\'s contributor, left the Swarm\'s Workspace, before that removal reaches the Swarm', async () => {
+    const { tab } = await fixture()
+    await invite(tab)
+    await run(tab, { type: 'agent.add', conversationId: 'lead', machineId: 'test-host', harnessId: randomUUID(), name: 'Worker', configuration: config, lead: false })
+    await run(tab, { type: 'project.roles.create', projectId: 'lead', roles: [{ id: 'lead', name: 'Product Manager', kind: 'lead' as const, text: 'LEAD-TEXT' },
+      { id: 'dev', name: 'Engineer', kind: 'builder' as const, text: 'DEV-TEXT' }] })
+    await run(tab, { type: 'project.skills', projectId: 'lead', mode: 'custom' })
+    const text = (user: AuthUser) => app.inject({ method: 'GET', url: `/api/super-tabs/${tab}/projects/lead/roles/dev`, headers: { authorization: `Bearer ${user.sub}` } })
+    expect((await text(owner)).statusCode).toBe(200)
+    expect((await text(host)).statusCode).toBe(200)
+    // The owner, who is the project's owner and the Worker's contributor, is marked removed as a removal leaves it before its cleanup.
+    const row = await db.superTab.findUniqueOrThrow({ where: { id: tab } })
+    await db.swarmWorkspaceMember.update({ where: { id: `${row.workspaceId}:${owner.sub}` }, data: { removedAt: new Date() } })
+    try {
+      for (const user of [owner, host]) {
+        const answer = await text(user)
+        expect(answer.statusCode, user.email).not.toBe(200)
+        expect(answer.body).not.toContain('DEV-TEXT')
+      }
+    } finally { await db.swarmWorkspaceMember.update({ where: { id: `${row.workspaceId}:${owner.sub}` }, data: { removedAt: null } }) }
+  })
   it('closes the replying agent\'s own deliveries of a message as answered, and nobody else\'s', async () => {
     const { tab, lead } = await fixture()
     const helper = (await run(tab, { type: 'agent.add', conversationId: 'lead', machineId: 'test-host', harnessId: randomUUID(),
@@ -2696,7 +2717,7 @@ describe('Lead mentions', () => {
     const [mention, ...rest] = await list(tab, peer, 'waiting')
     expect(rest).toEqual([])
     expect(mention).toEqual({ id: expect.any(String), projectId: 'lead', projectName: 'Pilot', conversationId: group, conversationTitle: 'Copy review',
-      messageId, leadName: expect.any(String), text: text.slice(0, 200), createdAt: expect.any(String), resolvedAt: null, resolvedBy: null })
+      messageId, leadId: lead, leadName: expect.any(String), text: text.slice(0, 200), createdAt: expect.any(String), resolvedAt: null, resolvedBy: null })
     expect(mention!.leadName).toBe((await waiting(tab, owner)).agents.find(a => a.id === lead)!.displayName)
     expect(await list(tab, owner, 'waiting')).toEqual([])
     expect(await list(tab, peer, 'earlier')).toEqual([])

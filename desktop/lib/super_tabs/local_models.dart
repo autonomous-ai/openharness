@@ -161,7 +161,7 @@ class _SwarmModelsWindowState extends State<_SwarmModelsWindow> {
                   textBaseline: TextBaseline.alphabetic,
                   children: [
                     Text(
-                      'Manage models',
+                      'Your models',
                       style: DesktopChrome.text(
                         size: 15,
                         medium: true,

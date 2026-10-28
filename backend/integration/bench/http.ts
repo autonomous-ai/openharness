@@ -1,5 +1,6 @@
 import Fastify, { type FastifyInstance, type FastifyPluginAsync } from 'fastify'
 import type { AuthUser } from '../../src/lib/ssoAuth.js'
+import { registerCpuKinds } from '../../src/lib/selfProfile.js'
 import { errorHandler } from '../../src/middlewares/errorHandler.js'
 import type { Reply } from './driver.js'
 
@@ -8,6 +9,7 @@ import type { Reply } from './driver.js'
 export async function benchApp(users: () => readonly AuthUser[], routes: FastifyPluginAsync): Promise<FastifyInstance> {
   const app = Fastify()
   app.setErrorHandler(errorHandler)
+  registerCpuKinds(app)
   app.addHook('onRequest', async (request, reply) => {
     const user = users().find(u => `Bearer ${u.sub}` === request.headers.authorization)
     if (!user) return reply.code(401).send({ success: false })

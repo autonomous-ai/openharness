@@ -7,7 +7,7 @@ import '../state/swarm_navigation.dart';
 import '../state/swarm_search.dart';
 import 'desktop_chrome.dart';
 
-/// What a row of a Swarm's Manage models is, which its mark says at a glance.
+/// What a row of a Swarm's Your models is, which its mark says at a glance.
 enum SwarmModelKind { api, apiModel, local, live, get, add, more, shared }
 
 SwarmModelKind swarmModelKind(
