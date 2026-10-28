@@ -5,11 +5,10 @@
 import { isLeads, type Actor, type Agent, type Assignment, type Author, type Check, type Conversation, type SuperTabState, type WorkStatus } from '../model.js'
 import { groupProject, ledProject } from '../projects.js'
 import { WEEK_MS } from './week.js'
+import type { UnblockKind } from './contract.js'
 
-/** How a person unblocked work: answered a decision, approved the Lead's plan, answered work waiting on them, or replied to
- *  a tag (Dee, 2026-10-28). */
-export type UnblockKind = 'decision' | 'approval' | 'needs_human' | 'tag_reply'
-/** `item`: what was answered (the decision, the Lead's ask, the waiting question or the tag message), credited once. Absent
+/** How a person unblocked work (Dee, 2026-10-28): answered a decision, approved the Lead's plan, answered work waiting on them,
+ *  or replied to a tag. `item`: what was answered (the decision, the Lead's ask, the waiting question or the tag message), credited once. Absent
  *  from answers recorded before kinds, which were all answers to waiting work. */
 export interface Unblock { personId: string; at: number; waitedMs: number; kind?: UnblockKind; item?: string }
 /** One attempt at a group's work: what it ran on and whether its first review passed (roadmap, Dec: about 30% of work on

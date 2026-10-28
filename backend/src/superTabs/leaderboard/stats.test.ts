@@ -30,12 +30,12 @@ const shipped = (requesterId: string, askedAt: number, shippedAt: number, extra:
   group({ requesterId, status: 'done', pullRequestUrls: ['https://github.com/o/r/pull/1'], ledger: { askedAt, shippedAt }, ...extra })
 const answered = (...unblocks: Array<[personId: string, at: number, waitedMs: number]>) =>
   group({ status: 'working', ledger: { unblocks: unblocks.map(([personId, at, waitedMs]) => ({ personId, at, waitedMs })) } })
-function machine(contributorId: string, lent: Array<[week: number, agentMs: number]>, machineId = `mac-${contributorId}`): ContributedMachine {
+function machine(contributorId: string, lent: Array<[week: number, busyMs: number]>, machineId = `mac-${contributorId}`): ContributedMachine {
   return { machineId, name: machineId, contributorId, membershipGeneration: 'g', generation: 'g1', cwd: '/repo', scope: 'swarm', engines: ['claude'],
-    maxAgents: 2, paused: false, lent: lent.map(([week, agentMs]) => ({ week, agentMs })) }
+    maxAgents: 2, paused: false, lent: lent.map(([week, busyMs]) => ({ week, busyMs })) }
 }
-const board = (state: SuperTabState, groups: Conversation[], week = WEEK, now = NOW, machines = state.machines ?? []) =>
-  leaderboard({ state, groups, machines, projectId: 'lead', week, now })
+const board = (state: SuperTabState, groups: Conversation[], week = WEEK, now = NOW, machines = state.machines ?? [], names?: ReadonlyMap<string, string>) =>
+  leaderboard({ state, groups, machines, projectId: 'lead', week, now, names })
 const person = (view: ReturnType<typeof board>, id: string) => view.people.find(p => p.personId === id)!
 
 describe('Shipped: requests a person asked for, done with a linked PR, 3 points each', () => {
@@ -71,15 +71,30 @@ describe('Shipped: requests a person asked for, done with a linked PR, 3 points 
   })
 })
 
-describe('Unblocked: waiting items a person answered, 1 point each plus 1 per 2 agent-hours waited', () => {
-  it('adds the answers and the agent-hours they freed', () => {
+describe('Unblocked: items a person answered, 1 point each plus 1 per 2 hours each waited, at most 3', () => {
+  it('weighs each answer by how long it waited', () => {
     const view = board(swarm(), [answered(['tony', WEEK + HOUR, 3 * HOUR], ['tony', WEEK + 2 * HOUR, 90 * 60_000]), answered(['tony', LAST, 10 * HOUR])])
-    // Two answers this week, 4.5 agent-hours between them: 2 + 2.
-    expect(person(view, 'tony')).toMatchObject({ points: 4, unblocked: { count: 2, agentMs: 4.5 * HOUR, medianAnswerMs: 2.25 * HOUR } })
+    // 3 hours waited: 1 + 1; 1.5 hours: 1 + 0.
+    expect(person(view, 'tony')).toMatchObject({ points: 3, unblocked: { count: 2, agentMs: 4.5 * HOUR, medianAnswerMs: 2.25 * HOUR } })
+  })
+
+  it('caps one answer at 3 points, however long it waited', () => {
+    expect(person(board(swarm(), [answered(['tony', WEEK + HOUR, 30 * HOUR])]), 'tony').points).toBe(3)
+  })
+
+  it('counts approvals and answers in the project\'s Lead conversation, though its work never ships', () => {
+    const lead = group({ id: 'lead', ledger: { unblocks: [{ personId: 'ken', at: WEEK + HOUR, waitedMs: 0, kind: 'approval', item: 'm1' }] } })
+    expect(person(board(swarm(), [lead]), 'ken')).toMatchObject({ points: 1, unblocked: { count: 1 } })
   })
 })
 
-describe('Lent: agent-hours run on a person\'s machines, 1 point per 10', () => {
+describe('Lent: busy agent-hours run on a person\'s machines for other people\'s work, 1 point per 10', () => {
+  it('leaves out the online hours recorded before only busy hours counted', () => {
+    const state = swarm()
+    state.machines = [{ ...machine('scholes', []), lent: [{ week: WEEK, agentMs: 40 * HOUR }] }]
+    expect(person(board(state, []), 'scholes')).toMatchObject({ points: 0, lent: { machines: 0, agentMs: 0 }, details: { lent: [] } })
+  })
+
   it('counts this week\'s agent-hours on every machine the person contributed', () => {
     const state = swarm()
     state.machines = [machine('scholes', [[WEEK, 14 * HOUR], [LAST, 50 * HOUR]]), machine('scholes', [[WEEK, 7 * HOUR]], 'gpu'), machine('ken', [[LAST, 40 * HOUR]])]
@@ -92,6 +107,59 @@ describe('Lent: agent-hours run on a person\'s machines, 1 point per 10', () => 
     const state = swarm()
     state.machines = [machine('scholes', [[WEEK, 14 * HOUR]]), machine('scholes', [[WEEK, 30 * HOUR]], 'project-mac')]
     expect(person(board(state, [], WEEK, NOW, [state.machines[0]!]), 'scholes').lent).toEqual({ machines: 1, agentMs: 14 * HOUR })
+  })
+})
+
+describe('last week\'s points, names and details', () => {
+  it('scores the week before the same way, for the arrow against last week', () => {
+    const view = board(swarm(), [shipped('dee', LAST, LAST + HOUR), answered(['dee', LAST + HOUR, 3 * HOUR]), shipped('dee', WEEK, WEEK + HOUR)])
+    expect(person(view, 'dee')).toMatchObject({ points: 3, prevWeekPoints: 5 })
+  })
+
+  it('names each person by their profile name, else their email\'s local part', () => {
+    const view = board(swarm(), [], WEEK, NOW, [], new Map([['dee', 'Dee Tran'], ['tony', '   ']]))
+    expect(['dee', 'tony', 'ken'].map(id => person(view, id).displayName)).toEqual(['Dee Tran', 'tony', 'ken'])
+  })
+
+  it('lists the week\'s shipped requests, newest first, with their PR and when they landed', () => {
+    const older = shipped('dee', WEEK, WEEK + HOUR, { title: 'Offline edits', pullRequestUrls: ['https://github.com/o/r/pull/1', 'https://github.com/o/r/pull/2'] })
+    const newer = shipped('dee', WEEK, WEEK + 2 * HOUR, { title: 'Dark mode' })
+    const view = board(swarm(), [older, newer, shipped('dee', LAST, LAST + HOUR)])
+    expect(person(view, 'dee').details.shipped).toEqual([
+      { title: 'Dark mode', prUrl: 'https://github.com/o/r/pull/1', mergedAt: WEEK + 2 * HOUR },
+      { title: 'Offline edits', prUrl: 'https://github.com/o/r/pull/2', mergedAt: WEEK + HOUR }])
+  })
+
+  it('lists the week\'s unblocks, newest first, with their kind and how long each waited', () => {
+    const asked = group({ title: 'Plan', ledger: { unblocks: [{ personId: 'ken', at: WEEK + 2 * HOUR, waitedMs: 90 * 60_000, kind: 'approval', item: 'm' },
+      { personId: 'ken', at: LAST, waitedMs: 0, kind: 'decision', item: 'd' }] } })
+    // An answer recorded before kinds were kept was an answer to waiting work.
+    const old = group({ title: 'Flag', ledger: { unblocks: [{ personId: 'ken', at: WEEK + HOUR, waitedMs: 20_000 }] } })
+    expect(person(board(swarm(), [asked, old]), 'ken').details.unblocked).toEqual([
+      { title: 'Plan', conversationId: asked.id, kind: 'approval', waitedMinutes: 90 },
+      { title: 'Flag', conversationId: old.id, kind: 'needs_human', waitedMinutes: 0 }])
+  })
+
+  it('lists each machine\'s busy hours this week, busiest first', () => {
+    const state = swarm()
+    state.machines = [machine('scholes', [[WEEK, 2.25 * HOUR]], 'Studio'), machine('scholes', [[WEEK, 14 * HOUR], [LAST, 5 * HOUR]], 'GPU box'),
+      machine('scholes', [[LAST, 5 * HOUR]], 'Laptop')]
+    expect(person(board(state, []), 'scholes').details.lent).toEqual([{ machineName: 'GPU box', busyHours: 14 }, { machineName: 'Studio', busyHours: 2.3 }])
+  })
+
+  it('keeps each list to the 20 newest', () => {
+    const many = Array.from({ length: 25 }, (_, i) => shipped('dee', WEEK, WEEK + i * 60_000, { title: `R${i}` }))
+    const answers = answered(...Array.from({ length: 25 }, (_, i): [string, number, number] => ['dee', WEEK + i * 60_000, 0]))
+    const { details } = person(board(swarm(), [...many, answers]), 'dee')
+    expect(details.shipped.map(s => s.title)).toEqual(Array.from({ length: 20 }, (_, i) => `R${24 - i}`))
+    expect(details.unblocked).toHaveLength(20)
+  })
+
+  it('shows only what is in the groups the reader may read, never a private conversation\'s', () => {
+    const secret = shipped('dee', WEEK, WEEK + HOUR, { title: 'Secret', audience: { people: [{ id: 'dee', generation: 'g' }] } })
+    const chat = group({ title: 'Chat', audience: { people: [{ id: 'ken', generation: 'g' }] },
+      ledger: { unblocks: [{ personId: 'ken', at: WEEK + HOUR, waitedMs: 0, kind: 'tag_reply', item: 't' }] } })
+    expect(JSON.stringify(board(swarm(), [secret, chat]))).not.toMatch(/Secret|Chat/)
   })
 })
 
