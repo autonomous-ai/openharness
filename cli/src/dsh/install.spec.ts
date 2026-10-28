@@ -359,13 +359,20 @@ describe('installDsh, every way it can go', () => {
       expect(await installDsh({ source: 'https://example.com/thing.git' })).toEqual({ ok: false, error: 'CLONE_FAILED', detail: 'git clone exited 1: Receiving objects: 20%' })
     })
 
-    it('no git at all is a failed clone that says so', async () => {
+    it('no git at all is its own refusal, said in words, whichever way the package is fetched', async () => {
+      // The Windows installer does not install Git: 7 of the 11 Windows installs of 2026-10-28 failed in under a
+      // second as a bare `spawn git ENOENT` clone failure.
       const empty = join(root, 'empty-bin')
       mkdirSync(empty)
       process.env.PATH = empty
-      const result = await installDsh({ source: 'https://example.com/thing.git' })
-      expect(result).toMatchObject({ ok: false, error: 'CLONE_FAILED' })
-      expect(!result.ok && result.detail).toContain('ENOENT')
+      const detail = 'Git is not installed on this computer, and installing a harness needs it. Install Git, then try again.'
+      for (const [ref, path] of [[undefined, undefined], ['a'.repeat(40), undefined], [undefined, 'store/agents/thing']] as const) {
+        const frames: DshInstallProgress[] = []
+        const result = await installDsh({ source: 'https://example.com/thing.git', ref, path, onProgress: (p) => frames.push(p) })
+        expect(result, `${ref} ${path}`).toEqual({ ok: false, error: 'GIT_UNAVAILABLE', detail })
+        expect(frames.at(-1)).toEqual({ id: null, phase: 'failed', error: 'GIT_UNAVAILABLE', detail })
+      }
+      expect(leftovers()).toEqual([])
     })
 
     it('a clone still running after ten minutes is stopped, and said to have been', async () => {

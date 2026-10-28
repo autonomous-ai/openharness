@@ -188,7 +188,7 @@ async function cloneOnce(
     // `--progress` because stderr is not a tty here and git would otherwise stay silent until the end;
     // streamed, not collected, so "Receiving objects: 39%" reaches the dialog while it is true.
     const clone = await cloneRepo(source, ref, tmpDir, false, onLine)
-    if (!clone.ok) return fail('CLONE_FAILED', clone.detail)
+    if (!clone.ok) return fail(clone.noGit ? 'GIT_UNAVAILABLE' : 'CLONE_FAILED', clone.noGit ? NO_GIT : clone.detail)
     commit = await gitHead(tmpDir)
     revision = await gitHead(tmpDir, 'HEAD^{tree}')
   } else {
@@ -199,7 +199,7 @@ async function cloneOnce(
     // whole-repo one (the manifest at its root) and nothing else of the monorepo lands on the machine.
     const repoDir = join(root, `.tmp-${randomUUID()}`)
     const clone = await cloneRepo(source, ref, repoDir, true, onLine)
-    if (!clone.ok) return fail('CLONE_FAILED', clone.detail, repoDir)
+    if (!clone.ok) return fail(clone.noGit ? 'GIT_UNAVAILABLE' : 'CLONE_FAILED', clone.noGit ? NO_GIT : clone.detail, repoDir)
     const sparse = await streamGit(['-C', repoDir, 'sparse-checkout', 'set', '--', path], onLine)
     if (!sparse.ok) return fail('CLONE_FAILED', sparse.detail, repoDir)
     const folder = join(repoDir, ...path.split('/'))
@@ -232,7 +232,13 @@ const GIT_ENV: NodeJS.ProcessEnv = {
 }
 
 /** Catalogs pin built-ins to the commit they describe; `git clone --branch` cannot take a SHA. */
-async function cloneRepo(source: string, ref: string | undefined, dir: string, sparse: boolean, onLine: DshInstallOptions['onLine']): Promise<{ ok: true } | { ok: false; detail: string }> {
+/**
+ * A computer with no git at all. The Windows installer does not install Git, and 7 of the 11 Windows installs of
+ * 2026-10-28 failed in under a second as `spawn git ENOENT` under a clone failure: said as what it is instead.
+ */
+const NO_GIT = 'Git is not installed on this computer, and installing a harness needs it. Install Git, then try again.'
+
+async function cloneRepo(source: string, ref: string | undefined, dir: string, sparse: boolean, onLine: DshInstallOptions['onLine']): Promise<GitResult> {
   if (!ref || !/^[a-f0-9]{40}$/i.test(ref)) {
     return streamGit(['clone', '--depth', '1', ...(sparse ? ['--filter=blob:none', '--sparse'] : []), '--progress', ...(ref ? ['--branch', ref] : []), '--', source, dir], onLine)
   }
@@ -251,7 +257,9 @@ async function cloneRepo(source: string, ref: string | undefined, dir: string, s
 }
 
 /** Run git, handing each stderr line (and each carriage-return progress segment) to `onLine` as it lands. */
-function streamGit(args: string[], onLine: ((line: string) => void) | undefined): Promise<{ ok: true } | { ok: false; detail: string }> {
+type GitResult = { ok: true } | { ok: false; detail: string; noGit?: true }
+
+function streamGit(args: string[], onLine: ((line: string) => void) | undefined): Promise<GitResult> {
   return new Promise((resolve) => {
     const child = spawn('git', args, { stdio: ['ignore', 'ignore', 'pipe'], env: { ...process.env, ...GIT_ENV } })
     const tail: string[] = []
@@ -270,7 +278,10 @@ function streamGit(args: string[], onLine: ((line: string) => void) | undefined)
         if (tail.length > 20) tail.shift()
       }
     })
-    child.on('error', (error) => { clearTimeout(timer); resolve({ ok: false, detail: error.message }) })
+    child.on('error', (error: NodeJS.ErrnoException) => {
+      clearTimeout(timer)
+      resolve({ ok: false, detail: error.message, ...(error.code === 'ENOENT' ? { noGit: true as const } : {}) })
+    })
     // Exit may precede the last stderr data. Classify the failure only once
     // the pipe closes, so a retryable Git error cannot become an empty one.
     child.on('close', (code, signal) => {
