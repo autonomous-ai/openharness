@@ -216,6 +216,9 @@ export interface HostAgentRow {
   observers: Array<{ email: string; userId: string }>
   /** Its session is confidential in some Swarm: the host refuses every share of it, ordinary ones too (Critical 1). */
   confidential: boolean
+  /** Confidential, but this Swarm's current Lead: the host lets `observers` watch it through this Swarm's shares while this
+   *  row is in force, and nobody else (Ken, 2026-10-28). An older host ignores it and refuses them, which errs closed. */
+  membersWatch: boolean
 }
 export interface HostPool {
   tabId: string

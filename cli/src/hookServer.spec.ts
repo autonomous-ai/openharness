@@ -541,6 +541,14 @@ describe('account Experimental settings proxy', () => {
     const failed = await post(body)
     expect(failed.status).toBe(502)
     expect(await failed.text()).not.toContain('PRIVATE_CANARY')
+    // The backend's busy answer reaches the Desktop with its Retry-After, which the Desktop waits out.
+    const busy = { success: false, error: { code: 'USAGE_WRITE_CONFLICT', message: 'Usage measurement busy' } }
+    send.mockResolvedValueOnce({ status: 429, body: busy, retryAfterMs: 90_500 } as never)
+    const refused = await post(body)
+    expect(refused.status).toBe(429)
+    expect(refused.headers.get('retry-after')).toBe('91')
+    expect(await refused.json()).toEqual(busy)
+    expect((await post(body)).headers.get('retry-after')).toBeNull()
   })
   it('forwards the current Desktop health report intact while rejecting private context', async () => {
     const body = JSON.parse(readFileSync(new URL('../../tests/fixtures/desktop-product-usage-report.json', import.meta.url), 'utf8'))

@@ -1000,17 +1000,41 @@ describe('Swarm cards', () => {
     expect(host.activeSwarmProject()).toEqual({ superTabId: 'st1', projectId: '', fromDevice: false })
   })
 
+  it('names the conversation the window has open in the active Swarm tab, when it names one', () => {
+    const host = new DaemonCableHost(wiring())
+    const swarms = [
+      { id: 't1', name: 'Swarm', agentIds: [], panes: 1, superTabId: 'st1', projectId: 'p1', conversationId: 'pm1' },
+      { id: 't2', name: 'Swarm', agentIds: [], panes: 1, superTabId: 'st1', projectId: 'p1' },
+      { id: 't3', name: 'Work', agentIds: [], panes: 0, conversationId: 'c1' },
+    ]
+    host.setSwarms({ active: 't1', swarms, tiles: [] })
+    expect(host.activeSwarmProject()).toEqual({ superTabId: 'st1', projectId: 'p1', conversationId: 'pm1', fromDevice: false })
+    host.setSwarms({ active: 't2', swarms, tiles: [] })
+    expect(host.activeSwarmProject()).toEqual({ superTabId: 'st1', projectId: 'p1', fromDevice: false })
+    host.setSwarms({ active: 't3', swarms, tiles: [] })
+    expect(host.activeSwarmProject()).toBeNull()
+  })
+
   it('hands the wiring what a device asks, and answers nothing when the wiring has none', async () => {
     const w = wiring({
-      swarmCardsWanted: vi.fn(), swarmCardOpen: vi.fn(), superTabSelected: vi.fn(),
+      swarmCardsWanted: vi.fn(), swarmCardOpen: vi.fn(), superTabSelected: vi.fn(), swarmSay: vi.fn(async () => true),
       swarmCardRecap: vi.fn(async (tabId: string, leadId: string) => ({ tabId, leadId, text: 'hi', at: 1, none: false })),
     })
     const host = new DaemonCableHost(w)
     host.swarmCardsWanted(true); host.swarmCardOpen('c1', 'st1', 'l1'); host.superTabSelected('st1', 'p1')
     expect(w.swarmCardsWanted).toHaveBeenCalledWith(true)
-    expect(w.swarmCardOpen).toHaveBeenCalledWith('c1', 'st1', 'l1')
+    expect(w.swarmCardOpen).toHaveBeenCalledWith('c1', 'st1', 'l1', false)
     expect(w.superTabSelected).toHaveBeenCalledWith('st1', 'p1')
     expect(await host.swarmCardRecap('st1', 'l1')).toEqual({ tabId: 'st1', leadId: 'l1', text: 'hi', at: 1, none: false })
+    // A dial that speaks swarmChat asks for the chat on the face: the flag goes on to the wiring.
+    host.swarmCardOpen('c1', 'st1', 'l1', true)
+    expect(w.swarmCardOpen).toHaveBeenLastCalledWith('c1', 'st1', 'l1', true)
+    await host.swarmCardRecap('st1', 'l1', true)
+    expect(w.swarmCardRecap).toHaveBeenLastCalledWith('st1', 'l1', true)
+    expect(await host.swarmSay('h1', 'ship it', true)).toBe(true)
+    expect(w.swarmSay).toHaveBeenLastCalledWith('h1', 'ship it', true)
+    await host.swarmSay('h1', 'ship it')
+    expect(w.swarmSay).toHaveBeenLastCalledWith('h1', 'ship it', false)
     const bare = new DaemonCableHost(wiring())
     bare.swarmCardsWanted(false); bare.swarmCardOpen('c1', 'st1', null); bare.superTabSelected('st1', 'p1')
     expect(await bare.swarmCardRecap('st1', 'l1')).toBeNull()

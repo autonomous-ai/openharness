@@ -1,5 +1,6 @@
 import { isBuddy } from './buddies.js'
 import { agentDisplayName } from './agentNames.js'
+import { verdictPending } from './autoReview.js'
 import { activeWork, agentRole, stableId, type Agent, type Conversation, type MessageDraft, type SuperTabState } from './model.js'
 import { agentProjectId, groupProject, projectsOf } from './projects.js'
 
@@ -99,12 +100,12 @@ export function stoppedMachines(state: SuperTabState, rows: MessageDraft[]): Arr
 export const ARCHIVE_QUIET_MS = 30 * 60_000
 
 /** Whether a group may archive by itself, as far as the Swarm alone can tell: its task done or cancelled, quiet for
- *  ARCHIVE_QUIET_MS, and not a Lead conversation, a private chat with people or the Leads conversation. Its pull requests
- *  and decisions are checked by the caller (archive.ts). */
+ *  ARCHIVE_QUIET_MS, not a review still owing its verdict (autoReview.ts verdictPending), and not a Lead conversation, a
+ *  private chat with people or the Leads conversation. Its pull requests and decisions are checked by the caller (archive.ts). */
 export function archivable(state: SuperTabState, group: Conversation, now: number): boolean {
   if (state.tidy === false || group.archived || group.kind || group.audience) return false
   if (projectsOf(state).some(p => p.leadConversationId === group.id)) return false
-  if (!['done', 'cancelled'].includes(group.assignment?.status ?? '')) return false
+  if (!['done', 'cancelled'].includes(group.assignment?.status ?? '') || verdictPending(state, group)) return false
   const last = time(group.lastActivityAt)
   return last !== undefined && now - last >= ARCHIVE_QUIET_MS
 }

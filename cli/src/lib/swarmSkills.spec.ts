@@ -75,6 +75,34 @@ describe('built-in Swarm skills', () => {
   const twoHours = '- A Builder or Reviewer that has been down for 2 hours (machine offline, session gone or stopped): cancel its task with the reason, route it, and assign it to another agent with what the first one left (branch, last revision, last report).\n'
   // A failed start is never left (the round-device group, 2026-10-27; superTabs/start.ts): the Lead's alone, in both modes.
   const failedStart = '- A failed start is retried elsewhere or reported, never left: when one fails, resume it; it starts once on the route\'s next machine, or tells the group and its requester. A task that requires a machine or device never moves: when its route says it waits, keep it queued and route it again once that machine can take it.\n'
+  // The review the Swarm opens by itself (#610, Dee 2026-10-28: reviews start the moment work is ready): each line replaces
+  // one the owner approved, which the byte-for-byte checks below put back. [mode, role, new line, approved line].
+  const autoReview: Array<['orchestration' | 'default', 'lead' | 'dev', string, string]> = [
+    ['orchestration', 'lead', "- When a Builder marks ready for review with a pull request of the project's repository, the Swarm opens \"Review: <group>\" by itself: its brief holds the goal, constraints, owned code, checks, the Builder's handoff and the pull request, privacy first when the work touches sharing or access. A free Reviewer gets it (the one that reviewed the earlier head, for a re-review) and joins the Builder's group to pass the independent check. You get one line there; cancel the review if it is not needed, and post what its brief lacks (the spec's constraints copied verbatim, the most-likely-wrong list). When the line says no Reviewer is free, route the review group, start a Reviewer (prefer a different engine than the Builder, with a model at least as strong), assign it and add it to the Builder's group. Work marked ready without a pull request link gets the same group from you, by hand. A review with no verdict stays open while the work it reviews goes on.\n",
+      "- When a Builder marks ready for review, create a group \"Review: <group>\" whose brief holds only: goal, constraints, the spec's constraints copied verbatim, checks, the most-likely-wrong list, the Builder's rulings, the revision range and the Builder's handoff. Route it, assign it to a Reviewer (reuse an idle one first; prefer a different engine than the Builder, with a model at least as strong), and add the Reviewer to the Builder's group so it can pass the independent check.\n"],
+    ['orchestration', 'dev', "No merge, and no push but your own work branch: at least every 30 minutes, and when the group needs review, with a pull request for it. Never start a reviewer for your own work.",
+      "No merge, PR or push, except pushing your own work branch: at least every 30 minutes, and when the group needs review. Never start a reviewer for your own work."],
+    ['orchestration', 'dev', "- If the group needs review, push your work branch, open a pull request for it (never merge it) and mark ready for review with the revision and the pull request link: the Swarm opens the review from that handoff, so it carries your rulings, revision range and doubts. Otherwise mark done.\n",
+      "- If the group needs review, push your work branch (the branch only; no PR, no merge) and mark ready for review with the revision. Otherwise mark done.\n"],
+    ['orchestration', 'dev', "- Merge, push, open a PR, release, force-push or discard only when told; the exceptions are pushing your own work branch every 30 minutes, and its pull request for review.\n",
+      "- Merge, push, open a PR, release, force-push or discard only when told; the one exception is pushing your own work branch, every 30 minutes and for review.\n"],
+    ['default', 'lead', "- Work that will be merged, or carries medium risk or more, gets a Reviewer. When its Builder marks ready for review with a pull request link, the Swarm opens \"Review: <group>\", assigns a free Reviewer and tells you in one line; cancel it there if it is not needed. When no Reviewer is free, route it, start one, assign it and add it to the Builder's group. Without a pull request link, create the review group yourself the same way.\n",
+      "- Work that will be merged, or carries medium risk or more, gets a Reviewer: create \"Review: <group>\", route it, assign it, and add the Reviewer to the Builder's group.\n"],
+    ['default', 'dev', "- Mark ready for review, with the revision and the PR link, when the work needs review: the Swarm opens the review from your handoff. Otherwise mark done.\n",
+      "- Mark ready for review when the group has a Reviewer; otherwise mark done.\n"],
+  ]
+  const approved = (text: string, mode: 'orchestration' | 'default') =>
+    autoReview.filter(([m]) => m === mode).reduce((t, [, , line, before]) => t.replace(line, before), text)
+  it('tells each Lead the Swarm opens reviews by itself, and each Builder to hand off with a pull request link', () => {
+    for (const [mode, role, line, before] of autoReview) {
+      const text = readFileSync(prepareSwarmSkill(fixture(), { role, key: 'session', mode }).file, 'utf8')
+      expect(text.split(line), `${mode} ${role}`).toHaveLength(2)
+      expect(text).not.toContain(before)
+    }
+    for (const mode of ['orchestration', 'default'] as const) {
+      expect(readFileSync(prepareSwarmSkill(fixture(), { role: 'review', key: 'session', mode }).file, 'utf8')).not.toContain('opens the review')
+    }
+  })
   it.each([
     ['lead', 'b9254e4bb5c633a73e1b87e6ca6690915e1c3a7bb55db0d3d093e6710dd719db'],
     ['dev', 'e78ce31a71f169d8956a2acd46e8bb43b79bd654b80b0fe3c33dbced9d2c3c75'],
@@ -100,7 +128,7 @@ describe('built-in Swarm skills', () => {
       expect(text.split(ask)).toHaveLength(role === 'dev' ? 2 : 1)
       expect(text.split(requests)).toHaveLength(role === 'lead' ? 2 : 1)
       expect(text.split(failedStart)).toHaveLength(role === 'lead' ? 2 : 1)
-      expect(sha(text.replace(twoHours, '').replace(terminal, '').replace(overlap, '').replace(local, '').replace(failedStart, '').replace(mention, '').replace(lost, '').replace(checkpoint, '')
+      expect(sha(approved(text, 'orchestration').replace(twoHours, '').replace(terminal, '').replace(overlap, '').replace(local, '').replace(failedStart, '').replace(mention, '').replace(lost, '').replace(checkpoint, '')
         .replace(limit, '').replace(digest, '').replace(decision, '').replace(ask, '').replace(requests, ''))).toBe(sha256)
     }
   })
@@ -167,8 +195,9 @@ describe('built-in Swarm skills', () => {
   it('adds the checkpoint line where each Builder skill keeps others able to resume its work', () => {
     const orchestration = readFileSync(prepareSwarmSkill(fixture(), { role: 'dev', key: 'session' }).file, 'utf8')
     expect(orchestration).toContain(`never redo a committed step.\n${checkpoint}`)
-    // The orchestration Builder pushed only for review; its checkpoint push is now the other exception.
-    expect(orchestration).toContain('No merge, PR or push, except pushing your own work branch: at least every 30 minutes, and when the group needs review.')
+    // The orchestration Builder pushed only for review; its checkpoint push is now the other exception (and its review push
+    // carries a pull request, #610).
+    expect(orchestration).toContain('no push but your own work branch: at least every 30 minutes, and when the group needs review, with a pull request for it.')
     expect(orchestration).not.toContain('only for review, only when the group needs it')
     const plain = readFileSync(prepareSwarmSkill(fixture(), { role: 'dev', key: 'session', mode: 'default' }).file, 'utf8')
     expect(plain).toContain(`- Have something to show at least every 20 minutes: a push or a short progress line.\n${checkpoint}`)
@@ -195,7 +224,7 @@ describe('built-in Swarm skills', () => {
     expect(text.split(ask)).toHaveLength(role === 'dev' ? 2 : 1)
     expect(text.split(requestsLast)).toHaveLength(role === 'lead' ? 2 : 1)
     expect(text.split(failedStart)).toHaveLength(role === 'lead' ? 2 : 1)
-    expect(sha(text.replace(terminal, '').replace(overlap, '').replace(localDefault, '').replace(failedStart, '').replace(mention, '').replace(lost, '').replace(checkpoint, '')
+    expect(sha(approved(text, 'default').replace(terminal, '').replace(overlap, '').replace(localDefault, '').replace(failedStart, '').replace(mention, '').replace(lost, '').replace(checkpoint, '')
       .replace(limit, '').replace(digest, '').replace(decision, '').replace(ask, '').replace(requestsLast, ''))).toBe(sha256)
     expect(prepared.instructions).toBe(`Use the swarm-${role} skill for this session: the team process; otherwise work your usual way. Before working, read ${JSON.stringify(prepared.file)} with your file or shell tool.`)
   })
