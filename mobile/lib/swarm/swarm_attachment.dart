@@ -140,7 +140,11 @@ class _PreviewState extends State<_Preview> {
                 WidgetsBinding.instance.addPostFrameCallback((_) => _fail());
                 return skeleton;
               }
-              final file = local.data;
+              // Only the file this future answered: while a new one is asked
+              // (after a turn), the last one is another holder's.
+              final file = local.connectionState == ConnectionState.done
+                  ? local.data
+                  : null;
               return Semantics(
                 button: file != null,
                 image: true,
@@ -195,6 +199,7 @@ class _PreviewState extends State<_Preview> {
   /// tap: the viewer is built a frame later, after a change could come.
   void _open(BuildContext context, File file) {
     final turn = _turn;
+    if (turn != widget.store.turns.value) return;
     final name = widget.file.name;
     final store = widget.store;
     unawaited(

@@ -253,6 +253,14 @@ void main() {
   group('open full screen, the picture goes with its account', () {
     final viewer = key('swarm-attachment-viewer');
 
+    /// A second of frames: after a change the preview fetches again under a
+    /// skeleton, which breathes, so the screen never settles.
+    Future<void> frames(WidgetTester tester) async {
+      for (var i = 0; i < 10; i++) {
+        await tester.pump(const Duration(milliseconds: 100));
+      }
+    }
+
     /// The picture open full screen and decoded; the image cache's key for
     /// its decoded picture.
     Future<Object> opened(WidgetTester tester) async {
@@ -297,7 +305,7 @@ void main() {
           findsNothing,
           reason: 'blank from the first frame',
         );
-        await tester.pumpAndSettle();
+        await frames(tester);
         expect(viewer, findsNothing);
         expect(
           PaintingBinding.instance.imageCache.containsKey(picture),
@@ -341,10 +349,52 @@ void main() {
           reason: 'frame $frame',
         );
       }
-      await tester.pumpAndSettle();
+      await frames(tester);
       expect(opening, findsNothing);
 
       await until(tester, () => changed);
+      await closed(tester);
+    });
+
+    testWidgets('another account while the preview fetches again: a skeleton, '
+        'never the old picture, and a tap opens nothing', (tester) async {
+      await pump(tester);
+      await until(tester, () => drawn(tester));
+      storage.hold = Completer();
+
+      var changed = false;
+      unawaited(store.keepOnly('person-b').whenComplete(() => changed = true));
+      await until(tester, () => storage.asked.length == 2);
+
+      expect(drawn(tester), isFalse, reason: "the old account's picture");
+      expect(
+        find.descendant(of: preview, matching: find.byType(Skeleton)),
+        findsOneWidget,
+      );
+      await tester.tap(preview);
+      await frames(tester);
+      expect(viewer, findsNothing);
+
+      storage.hold!.complete();
+      await until(tester, () => changed && drawn(tester));
+      await closed(tester);
+    });
+
+    testWidgets('after another account, the preview fetches its picture '
+        'again, for that account', (tester) async {
+      await pump(tester);
+      await until(tester, () => drawn(tester));
+
+      var changed = false;
+      unawaited(store.keepOnly('person-b').whenComplete(() => changed = true));
+      await until(
+        tester,
+        () => changed && storage.asked.length == 2 && drawn(tester),
+      );
+
+      await tester.tap(preview);
+      await tester.pumpAndSettle();
+      expect(viewer, findsOneWidget, reason: "the new account's picture opens");
       await closed(tester);
     });
 

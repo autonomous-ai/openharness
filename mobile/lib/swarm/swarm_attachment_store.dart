@@ -95,11 +95,9 @@ class SwarmAttachmentStore {
   /// (nobody signed in, or Swarm off) empties everything. A file that could
   /// not go throws, after the rest went; the next call tries again.
   Future<void> keepOnly(String? accountId) {
-    if (accountId != _asked) {
-      _asked = accountId;
-      _turns.value++;
-    }
-    return _serially(() async {
+    final turned = accountId != _asked;
+    _asked = accountId;
+    final change = _serially(() async {
       if (accountId != _account) {
         _account = accountId;
         _kept = _clearOwed = false;
@@ -127,13 +125,14 @@ class SwarmAttachmentStore {
       _kept = true;
       _clearOwed = false;
     });
+    if (turned) _turn();
+    return change;
   }
 
   /// Empties the account's files: a Swarm left its list. One that could not
   /// go throws, and the next [keepOnly] empties them.
   Future<void> clear() {
-    _turns.value++;
-    return _serially(() async {
+    final change = _serially(() async {
       await _close();
       final account = _account;
       if (account == null) return;
@@ -141,7 +140,13 @@ class SwarmAttachmentStore {
       await _delete(await _folderOf(account));
       _clearOwed = false;
     });
+    _turn();
+    return change;
   }
+
+  /// Tells of a change once it is queued, so a file asked for on hearing of
+  /// it waits for the change, and is the new holder's.
+  void _turn() => _turns.value++;
 
   /// Runs [change] after the changes before it and the fetches under way. One
   /// that fails holds up none after it.
