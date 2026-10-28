@@ -10,6 +10,7 @@ import 'model.dart';
 import 'swarm_conversation.dart';
 import 'swarm_devices_page.dart';
 import 'swarm_inbox.dart';
+import 'swarm_leaderboard.dart';
 import 'swarm_models_page.dart';
 import 'swarm_project_page.dart';
 import 'swarm_reader.dart';
@@ -22,9 +23,10 @@ import 'team_glance.dart';
 /// approved prototype draws it: its title and a close button; Swarm Home
 /// with what waits on the person; the projects, each with its initial and
 /// its team in a line — its name opens the project, its arrow lists its
-/// chats: Chat with PM, the project chat, then its work, what waits on the
-/// person first; then Your models and Your devices, read only; then the way
-/// back to Harness (the terminals), and Settings at its foot. A row closes the drawer before it opens anything.
+/// chats: Chat with PM, the project chat, its leaderboard, then its work,
+/// what waits on the person first; then Your models and Your devices, read
+/// only; then the way back to Harness (the terminals), and Settings at its
+/// foot. A row closes the drawer before it opens anything.
 class SwarmDrawer extends StatefulWidget {
   const SwarmDrawer({
     super.key,
@@ -254,9 +256,10 @@ class _SwarmDrawerState extends State<SwarmDrawer> {
     ];
   }
 
-  /// An open project's chats: Chat with PM, the project chat, then its work
-  /// — what waits on the person first, the rest by latest activity. Worked
-  /// out only while it is open: a closed project costs its row alone.
+  /// An open project's chats: Chat with PM, the project chat, its
+  /// leaderboard, then its work — what waits on the person first, the rest
+  /// by latest activity. Worked out only while it is open: a closed project
+  /// costs its row alone.
   List<Widget> _chats(
     SwarmSession session,
     String swarmId,
@@ -287,6 +290,13 @@ class _SwarmDrawerState extends State<SwarmDrawer> {
         onTap: () => then(() => widget.onPm(swarmId, project.id)),
       ),
       if (lead != null) chat(lead, 'Project chat'),
+      SwarmDrawerRow(
+        key: ValueKey('swarm-drawer-leaderboard-$swarmId-${project.id}'),
+        title: 'Leaderboard',
+        sub: true,
+        onTap: () =>
+            then(() => openSwarmLeaderboard(context, swarmId, project.id)),
+      ),
       for (final g in work)
         if (waits.contains(g.id)) chat(g, g.label),
       for (final g in work)
