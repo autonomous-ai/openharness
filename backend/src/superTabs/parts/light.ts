@@ -9,6 +9,7 @@ import type { Prisma } from '@prisma/client'
 import { activeWork, type Agent, type AgentStart } from '../model.js'
 import type { GroupData, HeadData, Part, PartKind, SwarmParts } from './types.js'
 import { delegate, partId, type PartRow } from './write.js'
+import { groupsBy, type GroupIndex } from './indexed.js'
 
 type Transaction = Prisma.TransactionClient
 
@@ -60,11 +61,11 @@ function lightGroup(row: Record<string, unknown>): Part<GroupData> {
  * awaitingWorkers): a lost task leaves none stored (liveness.ts). The 'working' selection then also needs every active
  * conversation such a worker is in, works in or leads, as a whole first load sees them (review of #1745).
  */
-async function undecidedWork(agents: Part<Agent>[], groups: Part<GroupData>[], lightGroups: (match: Record<string, unknown>) => Promise<Part<GroupData>[]>) {
+async function undecidedWork(agents: Part<Agent>[], groups: Part<GroupData>[], lightGroups: (index: GroupIndex, match: Record<string, unknown>) => Promise<Part<GroupData>[]>) {
   const busy = new Set(groups.flatMap(g => [...g.data!.leadId ? [g.data!.leadId] : [], ...activeWork(g.data!) ? [g.data!.assignment!.agentId, ...g.data!.agentIds] : []]))
   const undecided = agents.filter(a => !a.data!.workDecision && !busy.has(a.key)).map(a => a.key)
   if (!undecided.length) return []
-  return lightGroups({ dormant: false, key: { $nin: groups.map(g => g.key) },
+  return lightGroups('dormancy', { dormant: false, key: { $nin: groups.map(g => g.key) },
     $or: [{ 'data.assignment.agentId': { $in: undecided } }, { 'data.leadId': { $in: undecided } }, { agentIds: { $in: undecided } }] })
 }
 
@@ -90,18 +91,22 @@ export async function loadLight(tx: Transaction, tabId: string,
   // those only alongside their conversation (model.ts visibleState).
   const working = [...projects ? projects.map(p => p.leadConversationId) : ['lead'], leadsConversationId ?? '',
     ...starts.map(s => s.data!.request.conversationId), ...invitations.map(i => i.conversationId)]
-  const which = opts.groups === 'working' ? [{ key: { $in: working } }, { executionMachineId: { $ne: null } }] : [{ dormant: false }]
-  const named = [...which, ...opts.groupIds?.length ? [{ key: { $in: opts.groupIds } }] : [], ...opts.agentIds?.length ? [{ agentIds: { $in: opts.agentIds } }] : [],
-    ...opts.projectIds?.length ? [{ projectId: { $in: opts.projectIds }, dormant: false }] : [],
-    // The Swarm's first project also holds conversations stored with no project (model.ts groupProject).
-    ...opts.projectIds?.includes('lead') ? [{ projectId: null, dormant: false }] : []]
-  const lightGroups = async (match: Record<string, unknown>) => (await tx.swarmGroup.aggregateRaw({ pipeline: [{ $match: { tabId, deleted: false, ...match } },
-    { $project: LIGHT_GROUP }] }) as unknown as Array<Record<string, unknown>>).map(lightGroup)
+  // One read per index, never one $or over several: Mongo plans an $or again whenever its plan cache misses (parts/indexed.ts).
+  const keys = [...opts.groups === 'working' ? working : [], ...opts.groupIds ?? []]
+  // The Swarm's first project also holds conversations stored with no project (model.ts groupProject).
+  const projectIds = [...opts.projectIds ?? [], ...opts.projectIds?.includes('lead') ? [null] : []]
+  const named: Array<readonly [GroupIndex, Record<string, unknown>]> = [
+    ...opts.groups === 'working' ? [['running', { executionMachineId: { $ne: null } }] as const] : [['dormancy', { dormant: false }] as const],
+    ...keys.length ? [['key', { key: { $in: keys } }] as const] : [], ...opts.agentIds?.length ? [['agents', { agentIds: { $in: opts.agentIds } }] as const] : [],
+    ...projectIds.length ? [['project', { projectId: { $in: projectIds }, dormant: false }] as const] : []]
+  const lightGroups = async (index: GroupIndex, match: Record<string, unknown>) => (await groupsBy(tx, index, [{ $match: { tabId, deleted: false, ...match } },
+    { $project: LIGHT_GROUP }])).map(lightGroup)
+  const unique = (lists: Part<GroupData>[][]) => [...new Map(lists.flat().map(group => [group.key, group])).values()]
   const [members, agents, machines, progress, groups] = await Promise.all([
     ...(['member', 'agent', 'machine'] as const).map(kind => kind === 'machine' && opts.machines === false ? Promise.resolve([])
       : delegate(tx, kind).findMany({ where: live }).then(rows => rows.map(row => toPart(kind, row)))),
     delegate(tx, 'progress').findMany({ where: live }).then(rows => rows.map(row => toPart('progress', row))),
-    lightGroups({ $or: named }),
+    Promise.all(named.map(([index, match]) => lightGroups(index, match))).then(unique),
   ])
   if (opts.groups === 'working') groups.push(...await undecidedWork(agents as Part<unknown>[] as Part<Agent>[], groups as Part<GroupData>[], lightGroups))
   return { tabId, head: toPart<HeadData>('head', head as unknown as PartRow), members, agents, groups, machines, starts, progress,

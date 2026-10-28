@@ -15,6 +15,7 @@ import type { CacheView } from '../cache.js'
 import { readMachines } from '../cachedReads.js'
 import * as parts from '../parts/index.js'
 import type { MachineData, Part } from '../parts/index.js'
+import { groupsBy, retryStaleIndex } from '../parts/indexed.js'
 import { READ_FORMAT, type HostChanges, type HostChangesRequest } from './contract.js'
 import { cursorFor, readCursor } from './cursor.js'
 import { hostTab, type HostLookups } from './hostRows.js'
@@ -94,7 +95,9 @@ export class HostReads {
     const after = new Date(since)
     const [changed, groups, machines] = await Promise.all([
       parts.loadChanged(tx, ids, after, PLAIN_KINDS),
-      tx.swarmGroup.findMany({ where: { tabId: { in: ids }, changedAt: { gt: after }, hostMachineIds: { has: machineId } }, select: { tabId: true } }),
+      // Through the host's own index by name (parts/indexed.ts): every host runs this every second, and reads no other host's.
+      groupsBy(tx, 'wake', [{ $match: { tabId: { $in: ids }, changedAt: { $gt: { $date: after.toISOString() } }, hostMachineIds: machineId } },
+        { $project: { _id: 0, tabId: 1 } }]) as Promise<unknown> as Promise<Array<{ tabId: string }>>,
       tx.swarmMachine.findMany({ where: { tabId: { in: ids }, hostChangedAt: { gt: after } }, select: { tabId: true, key: true, data: true } }),
     ])
     const woken = new Set([...ids.filter(id => changed.get(id)?.some(p => plainlyRelevant(p, machineId))), ...groups.map(g => g.tabId)])
@@ -114,7 +117,7 @@ export class HostReads {
   private async tabState(tx: Transaction, cached: CacheView, tabId: string, machineId: string): Promise<SuperTabState> {
     const [light, machines] = await Promise.all([cached.get(tabId, `host:state:${machineId}`, 'main',
       // On a miss, one snapshot of what the host's rows are built from.
-      () => this.db.$transaction(t => this.hostParts(t, tabId, machineId))),
+      () => retryStaleIndex(() => this.db.$transaction(t => this.hostParts(t, tabId, machineId)))),
       readMachines(tx, cached, tabId)])
     return parts.reassemble({ ...light, machines }, { share: true })
   }
