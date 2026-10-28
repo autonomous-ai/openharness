@@ -8,7 +8,9 @@ import { endGitBashTree, msysTree, type GitBashTreeDeps } from './gitBashTree.js
 const row = (pid: number, parentPid: number, started: number): ProcessRow =>
   ({ pid, parentPid, executable: 'x.exe', startMarker: `w:${started}`, args: '' })
 
-describe('msysTree', () => {
+// The helper in a POSIX bash against a made-up /proc; Windows has no /bin/bash, and there the helper runs in the real Git
+// Bash against its real /proc in gitBashTimeout.real.spec.ts (manual Windows workflow run 40772897725).
+describe.skipIf(process.platform === 'win32')('msysTree', () => {
   let proc: string
   beforeEach(() => { proc = mkdtempSync(join(tmpdir(), 'msys-proc-')) })
   afterEach(() => { rmSync(proc, { recursive: true, force: true }) })
