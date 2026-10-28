@@ -99,6 +99,10 @@ describe('runtime worker contract', () => {
     expect((await t.send({ context: shown, operation: { kind: 'config' } })).answer.state.effort).toBe('medium')
     t.adapter.configuredEffort.mockResolvedValueOnce('auto')
     expect((await t.send({ context: shown, operation: { kind: 'config' } })).answer.state.effort).toBe('medium')
+    // An effort the settings filled follows them when they change: the marker crosses to the worker and back.
+    const filled = (await t.send({ operation: { kind: 'config' } })).answer.state
+    t.adapter.configuredEffort.mockResolvedValueOnce('medium')
+    expect((await t.send({ context: { ...context(), state: filled }, operation: { kind: 'config' } })).answer.state.effort).toBe('medium')
     expect((await t.send({ operation: { kind: 'pane', text: 'Opus 5 with high effort' } })).answer.state.model).toBe('claude-opus-5')
     expect((await t.send({ operation: { kind: 'models' } })).answer.models).toEqual([])
     expect((await t.send({ operation: { kind: 'catalog' } })).answer.catalog).toEqual([])

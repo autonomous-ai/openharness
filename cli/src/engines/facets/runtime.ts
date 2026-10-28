@@ -17,6 +17,9 @@ export interface RuntimeState {
   mode: 'default' | 'plan' | 'unknown'
   cliVersion: string | null
   observedAt: number | null
+  /** The effort the settings last filled in. While [effort] is still that one, the session has shown none of its own, and
+   * a later settings read may change it; an effort the session showed is never replaced by the settings. */
+  settingsEffort?: string
 }
 
 export type RuntimeField = 'model' | 'effort' | 'mode'
