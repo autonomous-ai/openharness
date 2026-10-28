@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { fakeCore } from '../testing/fakeCore.js'
-import { ContributionPreparations, prepareContribution, prepareTeamContribution } from './contribution.js'
+import { ContributionPreparations, prepareContribution, prepareTeamContribution, setMachineAgents } from './contribution.js'
+import { SuperTabHostError } from './wire.js'
 import { mkdtemp, rm, stat } from 'node:fs/promises'
 import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -187,5 +188,71 @@ describe('this Mac\'s Harness Team account preparing through the relay', () => {
     const slow = relay([])
     await expect(prepareTeamContribution(slow.core, { tabId: 'tab', machineId: 'team-1' }, slow.deps as never)).rejects.toThrow('still preparing')
     expect(slow.close).toHaveBeenCalledOnce()
+  })
+})
+
+describe('the owner setting how many agents a machine offers, from a terminal', () => {
+  function owned(totalGiB: number | null, machine: Record<string, unknown> = {}) {
+    const core = fakeCore()
+    const state: Record<string, unknown> = { machines: [{ machineId: 'studio', name: 'Mac Studio', contributorId: 'ken', cwd: '/Users/ken/harnesses/swarms/tab', scope: 'swarm',
+      // A machine added before Swarms ran only Claude Code and Codex lists every engine it had; the server takes only those two.
+      engines: ['claude', 'codex', 'opencode'], maxAgents: 16, paused: false,
+      ...(totalGiB === null ? {} : { observation: { generation: 'g1', resources: { memoryTotalBytes: totalGiB * GiB, memoryUsedBytes: GiB } } }), ...machine }] }
+    const sent: Record<string, unknown>[] = []
+    const backend = vi.fn(async (_core: unknown, method: string, path: string, body?: unknown) => {
+      if (method === 'GET') return swarmReply(path, state)
+      sent.push(body as Record<string, unknown>)
+      return { result: {} }
+    })
+    const set = (maxAgents: number) => setMachineAgents(core, { tabId: 'tab', machineId: 'studio', maxAgents }, { backend } as never)
+    return { set, sent, backend }
+  }
+
+  it('changes only the number, keeping the machine\'s name, folder and engines', async () => {
+    const f = owned(192)
+    expect(await f.set(96)).toEqual({ ok: true, machineId: 'studio', maxAgents: 96, maximum: 96 })
+    expect(f.sent).toHaveLength(1)
+    expect(f.sent[0]!.command).toEqual({ type: 'machine.contribute', machineId: 'studio', name: 'Mac Studio', cwd: '/Users/ken/harnesses/swarms/tab',
+      scope: 'swarm', engines: ['claude', 'codex'], maxAgents: 96 })
+    expect(String(f.sent[0]!.operationId)).toMatch(/^machine-agents-/)
+  })
+  it('refuses a number above the machine\'s maximum, and says what the maximum is', async () => {
+    const big = owned(192)
+    expect(await big.set(97)).toEqual({ error: 'ABOVE_MACHINE_MAXIMUM', detail: 'Mac Studio can offer at most 96 agents: one for every 2 GB of its memory, and at least 4.' })
+    const small = owned(8)
+    expect(await small.set(5)).toMatchObject({ error: 'ABOVE_MACHINE_MAXIMUM', detail: expect.stringContaining('at most 4 agents') })
+    expect([...big.sent, ...small.sent]).toEqual([])
+    // Every machine may offer 4, whatever its memory.
+    expect(await owned(2).set(4)).toMatchObject({ ok: true, maxAgents: 4, maximum: 4 })
+  })
+  it('refuses a machine that is not in the Swarm, or whose memory it has not reported', async () => {
+    const f = owned(192, { machineId: 'other' })
+    expect(await f.set(8)).toEqual({ error: 'MACHINE_NOT_FOUND', detail: 'This machine is not in this Swarm. Add it from Desktop first.' })
+    const unread = owned(null)
+    expect(await unread.set(8)).toEqual({ error: 'MACHINE_MEMORY_UNKNOWN', detail: 'Mac Studio has not reported its memory yet. Try again once it is online.' })
+    expect([...f.sent, ...unread.sent]).toEqual([])
+  })
+  it('passes on the server\'s refusal, such as another person\'s machine', async () => {
+    const f = owned(192)
+    const read = f.backend.getMockImplementation()!
+    f.backend.mockImplementation(async (core: unknown, method: string, path: string, body?: unknown) => {
+      if (method === 'GET') return read(core, method, path, body)
+      throw new SuperTabHostError('OWNER_REQUIRED', 'Only the machine owner can contribute it.', 403)
+    })
+    await expect(f.set(8)).rejects.toMatchObject({ code: 'OWNER_REQUIRED', status: 403 })
+  })
+  it('says so when an older server could only take 16', async () => {
+    const f = owned(192)
+    f.backend.mockImplementation(async (_core: unknown, method: string, path: string, body?: unknown) => {
+      if (method === 'GET') return swarmReply(path, { machines: [{ machineId: 'studio', name: 'Mac Studio', cwd: '/w', scope: 'swarm', engines: ['claude'], maxAgents: 2,
+        observation: { resources: { memoryTotalBytes: 192 * GiB } } }] })
+      const command = (body as { command: { maxAgents: number } }).command
+      if (command.maxAgents > 16) throw new SuperTabHostError('VALIDATION_ERROR', 'command.maxAgents: Too big: expected number to be <=16', 400)
+      f.sent.push(body as Record<string, unknown>)
+      return { result: {} }
+    })
+    expect(await f.set(96)).toEqual({ ok: true, machineId: 'studio', maxAgents: 16, maximum: 96,
+      notice: 'This Swarm\'s server takes at most 16 agents per machine, so Mac Studio now offers 16. Update the server to offer more.' })
+    expect(f.sent.map(b => (b.command as { maxAgents: number }).maxAgents)).toEqual([16])
   })
 })
