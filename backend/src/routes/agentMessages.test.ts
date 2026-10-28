@@ -369,7 +369,7 @@ describe('Agent Messages per tab', () => {
       expect((await call('POST', `/api/agent-messages/shares/${SID}/invites`, { email: 'new@x.io', days: 7 })).statusCode).toBe(200)
       expectTold(['owner'])
     })
-    it.each([['SELF_INVITE', 400], ['FORBIDDEN', 403], ['TAB_FULL', 409]])('maps an invitation %s to %i', async (error, status) => {
+    it.each([['SELF_INVITE', 400], ['FORBIDDEN', 403], ['TAB_FULL', 409], ['ALREADY_MEMBER', 409]])('maps an invitation %s to %i', async (error, status) => {
       mocks.shares.invite.mockResolvedValue({ error })
       const r = await call('POST', `/api/agent-messages/shares/${SID}/invites`, { email: 'bob@x.io', days: 7 })
       expect(r.statusCode).toBe(status)
