@@ -661,6 +661,38 @@ describe('the delivery poll of an agent with nothing waiting', () => {
 // Hosts read an idle agent's deliveries only every 30 s once the server pushes (stability roadmap 2.4): each new one is
 // announced to the machine its agent runs on, once its write commits, so the host reads it at once.
 describe('the push for a new delivery', () => {
+  it('keeps several messages batched for one recipient in conversation order, including equal timestamps', async () => {
+    const f = await swarm()
+    const expectedIds: string[] = []
+    for (const title of ['Parser', 'Renderer', 'Exporter']) {
+      const group = String((await f.execute({ type: 'conversation.create', title, brief: 'Build it',
+        checks: [{ description: 'Built', independent: false }] })).result.conversationId)
+      // Without the Lead in these groups, each loss is delivered in the same project chat.
+      await f.execute({ type: 'conversation.agent', conversationId: group, agentId: f.lead, present: false, lead: false })
+      const worker = await f.add(group, 'test-host', randomUUID(), title)
+      const assignment = String((await f.execute({ type: 'work.assign', conversationId: group, agentId: worker })).result.assignmentId)
+      expectedIds.push(stableId(stableId('work-lost', assignment), 'lead'))
+    }
+    f.clock.now += 6 * MINUTE
+    // One poll expires all three assignments and inserts their messages/deliveries together.
+    const first = (await f.timed.deliveries(host, f.tab, f.lead)).filter(row => expectedIds.includes(row.messageId))
+    expect(first).toHaveLength(3)
+    expect(new Set(first.map(row => row.messageId))).toEqual(new Set(expectedIds))
+    expect(new Set(first.map(row => row.createdAt.getTime())).size).toBe(1)
+    const page = (await f.timed.messages(owner, f.tab, 'lead', {})).messages.filter(row => expectedIds.includes(row.id))
+    expect(page).toHaveLength(3)
+    expect(page[1]!.sequence).toBe(page[0]!.sequence + 1)
+    expect(page[2]!.sequence).toBe(page[1]!.sequence + 1)
+    expect(first.map(row => row.messageId)).toEqual(page.map(row => row.id))
+
+    // Make the tie explicit rather than relying only on Prisma's shared batch timestamp, then read again.
+    const tiedAt = new Date('2026-10-28T00:00:00.000Z')
+    await db.superTabDelivery.updateMany({ where: { tabId: f.tab, messageId: { in: expectedIds } }, data: { createdAt: tiedAt } })
+    const again = (await f.timed.deliveries(host, f.tab, f.lead)).filter(row => expectedIds.includes(row.messageId))
+    expect(again.map(row => row.createdAt)).toEqual([tiedAt, tiedAt, tiedAt])
+    expect(again.map(row => row.messageId)).toEqual(page.map(row => row.id))
+  })
+
   const announcing = () => {
     const waiting: Array<{ machineId: string; tabId: string; agentId: string }> = []
     return { waiting, hooks: { deliveriesWaiting: (w: { machineId: string; tabId: string; agentId: string }) => { waiting.push(w) } } }
