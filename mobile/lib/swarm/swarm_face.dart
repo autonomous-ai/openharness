@@ -93,6 +93,8 @@ ImageProvider swarmAvatarImage(Uri url) {
 /// Lets go of every photo drawn, as the account leaves: none of another
 /// account's people stays in memory.
 void swarmForgetAvatarImages() {
+  // Nothing drawn, nothing to let go: and no painting needed to know it.
+  if (_drawnLinks.isEmpty) return;
   final cache = PaintingBinding.instance.imageCache;
   for (final link in _drawnLinks) {
     cache.evict(NetworkImage(link), includeLive: true);
