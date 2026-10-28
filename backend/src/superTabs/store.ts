@@ -2073,6 +2073,14 @@ export class SuperTabStore {
   }
 
   private async fullDeliveries(user: AuthUser, tabId: string, agentId: string) {
+    // Every write below is the Lead's: its time checks, idle stops, update request, digest and stale runs. Any other agent's
+    // poll only reads, through the read cache with no transaction (Diego's review of 10-28, item 1: 20 workers were 40
+    // whole-Swarm loads, clones and empty commits a minute). The authority checks are the same; a claim checks them again.
+    const read = await this.readLoad(user, tabId)
+    if (!ledProject(read.state, agentId)) {
+      author(read.state, await this.actor(this.db, user, read.state, agentId), true)
+      return this.allowedDeliveries(this.db, read.state, tabId, agentId)
+    }
     return transaction(this.db, async tx => {
       let loaded = await this.load(tx, user, tabId)
       // Work finished since the last digest and archived or asleep since still shipped, but ordinary loads leave it out
@@ -2144,14 +2152,19 @@ export class SuperTabStore {
       await this.save(tx, loaded, state, clock.next(), [...judgedMachines(loaded.state, state, written), ...stoppedMachines(state, idle),
         ...woken ? [{ kind: 'agent' as const, key: agentId }] : []])
       await this.writeMessages(tx, tabId, state, written, sequences, true)
-      const rows = await inConversationOrder(tx, tabId, await tx.superTabDelivery.findMany({
-        where: { tabId, agentId, status: { in: [...OPEN_DELIVERY] } }, orderBy: { createdAt: 'asc' }, take: 100 }))
-      const allowed: SuperTabDelivery[] = []
-      for (const delivery of rows) {
-        if (this.deliveryAllowed(state, delivery) && await this.senderAllowed(tx, state, delivery)) allowed.push(delivery)
-      }
-      return allowed
+      return this.allowedDeliveries(tx, state, tabId, agentId)
     })
+  }
+
+  /** The agent's open deliveries, oldest first and each conversation's in its order, that its Swarm still lets reach it. */
+  private async allowedDeliveries(tx: Transaction, state: SuperTabState, tabId: string, agentId: string) {
+    const rows = await inConversationOrder(tx, tabId, await tx.superTabDelivery.findMany({
+      where: { tabId, agentId, status: { in: [...OPEN_DELIVERY] } }, orderBy: { createdAt: 'asc' }, take: 100 }))
+    const allowed: SuperTabDelivery[] = []
+    for (const delivery of rows) {
+      if (this.deliveryAllowed(state, delivery) && await this.senderAllowed(tx, state, delivery)) allowed.push(delivery)
+    }
+    return allowed
   }
 
   /** A withdrawn host can retire its own journal without regaining shared
