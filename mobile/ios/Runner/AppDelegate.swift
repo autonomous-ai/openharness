@@ -38,14 +38,17 @@ import UserNotifications
 /// `access` asks for speech recognition, then the microphone, the first time, and answers `allowed`,
 /// `denied` (speech recognition refused or restricted: Dart records and has the backend transcribe,
 /// as before) or `noMic`. `start` takes Dart's `take` and a `locale`, and answers false when the
-/// phone has no recognizer for it now. Then, each with the take: `words` (everything heard so far,
-/// revised as it goes), `level` (the microphone's RMS, ten a second) and once `end` — `done`,
-/// `noSpeech` or `failed`. `stop` ends listening, and the last words and the end follow; `cancel`
-/// ends it with nothing more said.
+/// phone has no recognizer for it now. Then, each with the take: `words` (the recognizer's latest
+/// best guess, `text`; `final` once it says that guess is finished; `from` and `to`, where its words
+/// begin and end in the take's audio, 0 when it gives no times — Dart works out what is done from
+/// these), `level` (the microphone's RMS, ten a second) and once `end` — `done`, `noSpeech` or
+/// `failed`. `stop` ends listening, and the last words and the end follow; `cancel` ends it with
+/// nothing more said.
 ///
-/// ⚠️ **On the phone wherever it can be.** `requiresOnDeviceRecognition` whenever the recognizer
-/// supports the language on this phone; only where it does not does the audio go to Apple to be
-/// recognized, as the keyboard's dictation does. Nothing heard is logged or kept here.
+/// ⚠️ **Set as the keyboard's dictation is** (Tony, 10-29: "exactly like the keyboard"): the
+/// dictation hint, punctuation, live guesses, no contextual words — and on the phone or on Apple's
+/// servers as the recognizer chooses, not forced on the phone, where Vietnamese can be heard worse.
+/// Nothing heard is logged or kept here.
 final class DictationChannel {
   private static var shared: DictationChannel?
 
@@ -126,7 +129,7 @@ final class DictationChannel {
     let request = SFSpeechAudioBufferRecognitionRequest()
     request.shouldReportPartialResults = true
     request.taskHint = .dictation
-    if recognizer.supportsOnDeviceRecognition { request.requiresOnDeviceRecognition = true }
+    request.contextualStrings = []
     if #available(iOS 16.0, *) { request.addsPunctuation = true }
 
     let session = AVAudioSession.sharedInstance()
@@ -161,12 +164,22 @@ final class DictationChannel {
 
     let task = recognizer.recognitionTask(with: request) { [weak self] result, error in
       let text = result?.bestTranscription.formattedString
+      let segments = result?.bestTranscription.segments ?? []
+      let from = segments.first?.timestamp ?? 0
+      let to = segments.last.map { $0.timestamp + $0.duration } ?? 0
+      // Finished: the take's last guess, or one the recognizer marks as the end of what was said
+      // before a pause, after which it may start its words over.
+      let finished = result.map { $0.isFinal || $0.speechRecognitionMetadata != nil } ?? false
       let final = result?.isFinal ?? false
       // "No speech detected": stopped, or given up, before a word was heard.
       let silent = (error as NSError?).map { $0.domain == "kAFAssistantErrorDomain" && $0.code == 1110 }
       DispatchQueue.main.async {
         guard let self, self.current?.take == take else { return }
-        if let text { self.channel.invokeMethod("words", arguments: ["take": take, "text": text]) }
+        if let text {
+          self.channel.invokeMethod(
+            "words",
+            arguments: ["take": take, "text": text, "final": finished, "from": from, "to": to])
+        }
         if final {
           self.finish("done")
         } else if let silent {

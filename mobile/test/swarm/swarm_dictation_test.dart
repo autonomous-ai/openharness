@@ -206,60 +206,125 @@ void main() {
     });
   });
 
-  group('a recognizer that starts its words over after a pause', () {
+  group('the words of a take', () {
     /// What [start] heard last: every word so far.
     String said() => heard.whereType<String>().last;
 
-    test('keeps what it had before', () async {
-      final dictation = SwarmChannelDictation();
-      await start(dictation);
-      final id = take(calls.single);
+    late SwarmChannelDictation dictation;
+    late int id;
 
-      await native('words', id, {'text': 'hôm nay mình làm'});
-      await native('words', id, {'text': 'gì'});
+    setUp(() async {
+      dictation = SwarmChannelDictation();
+      await start(dictation);
+      id = take(calls.single);
+    });
+
+    /// The recognizer's latest best guess at what is being said: [from] and
+    /// [to] where its words begin and end in the take's audio (0 where it
+    /// does not say), [finished] when it says that guess is done.
+    Future<void> guess(
+      String text, {
+      double from = 0,
+      double to = 0,
+      bool finished = false,
+    }) => native('words', id, {
+      'text': text,
+      'final': finished,
+      'from': from,
+      'to': to,
+    });
+
+    // Tony, 10-29: 'một hai ba bốn năm' came out as 'Một 2 12345'.
+    test('each guess replaces the last, however it is rewritten', () async {
+      await guess('1', from: 0.4, to: 0.8);
+      await guess('Một 2', from: 0.4, to: 1.2);
+      await guess('123', from: 0.4, to: 1.6);
+      await guess('1234', from: 0.4, to: 2.0);
+      await guess('12345', from: 0.4, to: 2.4);
+      expect(said(), '12345');
+    });
+
+    test('each guess replaces the last where it says no times', () async {
+      await guess('1');
+      await guess('Một 2');
+      await guess('Một hai ba');
+      expect(said(), 'Một hai ba');
+      await guess('123');
+      expect(said(), '123');
+    });
+
+    test('a guess with times after one without replaces it, unless that one '
+        'was finished', () async {
+      await guess('1');
+      await guess('Một 2', from: 0.4, to: 1.2);
+      expect(said(), 'Một 2');
+
+      await guess('Một hai.', finished: true);
+      await guess('Ba', from: 3.0, to: 3.3);
+      expect(said(), 'Một hai. Ba');
+    });
+
+    test('a finished sentence, then new words after a pause, keeps the '
+        'sentence exactly once', () async {
+      await guess('Hôm nay mình làm gì', from: 0.3, to: 2.0);
+      await guess('Hôm nay mình làm gì.', from: 0.3, to: 2.1, finished: true);
+      await guess('Ngày', from: 3.6, to: 3.9);
+      expect(said(), 'Hôm nay mình làm gì. Ngày');
+      await guess('Ngày mai', from: 3.6, to: 4.3);
+      expect(said(), 'Hôm nay mình làm gì. Ngày mai');
+    });
+
+    test(
+      'a finished sentence, then new words, where it says no times',
+      () async {
+        await guess('Hôm nay mình làm gì.', finished: true);
+        await guess('Ngày');
+        await guess('Ngày mai');
+        expect(said(), 'Hôm nay mình làm gì. Ngày mai');
+      },
+    );
+
+    test('words that start after the last ended are new, though nothing '
+        'said the last was finished', () async {
+      await guess('hôm nay mình làm', from: 0.3, to: 2.0);
+      await guess('gì', from: 3.4, to: 3.6);
       expect(said(), 'hôm nay mình làm gì');
-      await native('words', id, {'text': 'gì nữa'});
+      await guess('gì nữa', from: 3.4, to: 4.0);
       expect(said(), 'hôm nay mình làm gì nữa');
-      await native('words', id, {'text': 'Không'});
-      expect(said(), 'hôm nay mình làm gì nữa Không');
     });
 
-    test('is not confused with one changing its mind', () async {
-      final dictation = SwarmChannelDictation();
-      await start(dictation);
-      final id = take(calls.single);
-
-      await native('words', id, {'text': 'một hai ba'});
-      await native('words', id, {'text': 'một hai'});
-      expect(said(), 'một hai');
-      await native('words', id, {'text': 'Một, hai bốn'});
-      expect(said(), 'Một, hai bốn');
-      await native('words', id, {'text': 'Mốt hai bốn'});
-      expect(said(), 'Mốt hai bốn', reason: 'its first word revised');
+    test('a guess said to be finished and then revised is replaced, not '
+        'repeated', () async {
+      await guess('1', from: 0.4, to: 0.8, finished: true);
+      await guess('Một 2', from: 0.4, to: 1.2);
+      expect(said(), 'Một 2');
     });
 
-    test('is not doubled when it says everything again at the end', () async {
-      final dictation = SwarmChannelDictation();
-      await start(dictation);
-      final id = take(calls.single);
+    test('a recognizer that says everything again after a finished sentence '
+        'is not doubled', () async {
+      await guess('Hôm nay', from: 0.3, to: 1.0, finished: true);
+      await guess('Hôm nay mình', from: 0.3, to: 1.5);
+      expect(said(), 'Hôm nay mình');
 
-      await native('words', id, {'text': 'hôm nay mình làm'});
-      await native('words', id, {'text': 'gì'});
-      await native('words', id, {'text': 'Hôm nay mình làm gì nữa.'});
+      await guess('Hôm nay mình.', finished: true);
+      await guess('Hôm nay mình làm');
+      expect(said(), 'Hôm nay mình làm', reason: 'where it says no times');
+    });
 
-      expect(said(), 'Hôm nay mình làm gì nữa.');
+    test('the last words, as the take stops, come once', () async {
+      await guess('một hai', from: 0.3, to: 1.0);
+      await guess('Một hai.', from: 0.3, to: 1.0, finished: true);
+      expect(said(), 'Một hai.');
     });
 
     test('keeps nothing from one take for the next', () async {
-      final dictation = SwarmChannelDictation();
-      await start(dictation);
-      final first = take(calls.single);
-      await native('words', first, {'text': 'một hai ba'});
-      await native('words', first, {'text': 'bốn'});
+      await guess('Một hai ba.', from: 0.3, to: 1.5, finished: true);
+      await guess('bốn', from: 2.5, to: 2.8);
       await dictation.cancel();
 
       await start(dictation);
-      await native('words', take(calls.last), {'text': 'năm'});
+      id = take(calls.last);
+      await guess('năm', from: 0.3, to: 0.6);
 
       expect(said(), 'năm');
     });

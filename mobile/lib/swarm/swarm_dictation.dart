@@ -85,9 +85,13 @@ double swarmDictationLevel(double rms) {
 /// Each take has a number of its own, sent with every call and said back with
 /// every event, so words from a take already ended land nowhere.
 ///
-/// ⚠️ **Its words are stitched ([_stitched]).** The recognizer on the phone can
-/// start its words over after a pause, saying only what came after it; what
-/// it dropped is kept here, in front, so the box never loses a phrase.
+/// ⚠️ **Its guesses replace each other ([_stitched]), never add up.** The
+/// recognizer says its latest best guess at the words not yet finished, and
+/// rewrites it as it goes ("1", "Một 2", "123"); only a guess it says is
+/// finished, or one its next words begin after in the take's audio — on the
+/// phone it can start over after a pause, without a word — is kept, once, in
+/// front of what it says next. Never a guess by how the words look: Tony's
+/// 'một hai ba bốn năm' came out as 'Một 2 12345' that way (10-29).
 class SwarmChannelDictation implements SwarmDictation {
   SwarmChannelDictation({MethodChannel? channel})
     : _channel = channel ?? const MethodChannel('harness/dictation') {
@@ -103,9 +107,16 @@ class SwarmChannelDictation implements SwarmDictation {
   })?
   _to;
 
-  /// What the recognizer said before it last started over, and what it said
-  /// last, as it said it.
-  String _kept = '', _last = '';
+  /// What the recognizer has finished saying in this take, and its guess at
+  /// what comes after: where that ends in the take's audio, and whether it
+  /// said that guess was finished.
+  String _done = '', _guess = '';
+  double _guessTo = 0;
+  bool _guessFinished = false;
+
+  /// How far a guess may begin before the last one ended and still be new
+  /// words: the recognizer's own times overlap a little at a word's edge.
+  static const _overlap = 0.05;
 
   @override
   Future<SwarmDictationAccess> access() async {
@@ -131,7 +142,9 @@ class SwarmChannelDictation implements SwarmDictation {
   }) async {
     final take = ++_take;
     _to = (words: onWords, level: onLevel, end: onEnd);
-    _kept = _last = '';
+    _done = _guess = '';
+    _guessTo = 0;
+    _guessFinished = false;
     try {
       final started = await _channel.invokeMethod<bool>('start', {
         'take': take,
@@ -172,7 +185,16 @@ class SwarmChannelDictation implements SwarmDictation {
     if (to == null) return;
     switch (call.method) {
       case 'words':
-        if (arguments['text'] case final String text) to.words(_stitched(text));
+        if (arguments['text'] case final String text) {
+          to.words(
+            _stitched(
+              text,
+              finished: arguments['final'] == true,
+              from: _seconds(arguments['from']),
+              to: _seconds(arguments['to']),
+            ),
+          );
+        }
       case 'level':
         if (arguments['rms'] case final num rms) {
           to.level(swarmDictationLevel(rms.toDouble()));
@@ -186,24 +208,34 @@ class SwarmChannelDictation implements SwarmDictation {
     }
   }
 
-  /// [text], every word so far as the recognizer says it, after what it has
-  /// dropped. Started over: fewer words than it said last, from a different
-  /// first word — one changing its mind keeps the start of its sentence. All
-  /// said again, as a recognizer may at the end: nothing kept is put in front.
-  String _stitched(String text) {
-    final words = _plain(text), before = _plain(_last);
-    if (_kept.isNotEmpty &&
-        words.join(' ').startsWith(_plain(_kept).join(' '))) {
-      _kept = '';
-    } else if (before.length >= 2 &&
-        words.isNotEmpty &&
-        words.length < before.length &&
-        words.first != before.first) {
-      _kept = _joined(_kept, _last);
+  /// Every word of the take so far: what is [_done], then [guess], the
+  /// recognizer's latest — which replaces the last, unless that one is done.
+  ///
+  /// The last guess is done when this one begins after it ended in the take's
+  /// audio ([from], [to]: seconds, 0 where the recognizer gives none). Without
+  /// both times, when the recognizer said it was [finished] and this one is not the
+  /// same words again with more after them, as a recognizer that keeps the
+  /// whole take in each guess says it.
+  String _stitched(
+    String guess, {
+    required bool finished,
+    required double from,
+    required double to,
+  }) {
+    final timed = from > 0 && _guessTo > 0;
+    final after = timed && from >= _guessTo - _overlap;
+    final again = _plain(guess).join(' ').startsWith(_plain(_guess).join(' '));
+    if (_guess.isNotEmpty && (after || (!timed && _guessFinished && !again))) {
+      _done = _joined(_done, _guess);
     }
-    _last = text;
-    return _joined(_kept, text);
+    _guess = guess;
+    _guessTo = to;
+    _guessFinished = finished;
+    return _joined(_done, guess);
   }
+
+  static double _seconds(Object? value) =>
+      value is num && value.isFinite ? value.toDouble() : 0;
 
   /// [text]'s words without case or punctuation, to be compared.
   static List<String> _plain(String text) => text
