@@ -10,6 +10,7 @@ import 'package:harness_mobile/swarm/swarm_models_page.dart';
 import 'package:harness_mobile/swarm/swarm_page.dart';
 import 'package:harness_mobile/swarm/swarm_session.dart';
 import 'package:harness_mobile/swarm/swarm_start.dart';
+import 'package:harness_mobile/swarm/swarm_style.dart';
 
 import '../voice_fakes.dart';
 import 'swarm_fixture.dart';
@@ -268,6 +269,40 @@ void main() {
       );
     });
 
+    testWidgets('nothing to list is a line under the caption, as on Home', (
+      tester,
+    ) async {
+      await pump(tester, backend(), home: const SwarmModelsPage());
+
+      expect(
+        find.ancestor(
+          of: key('swarm-models-none-$tab'),
+          matching: find.byType(SwarmGroup),
+          matchRoot: true,
+        ),
+        findsNothing,
+        reason: "Home's empty states are words, not a card",
+      );
+    });
+
+    testWidgets('pulling down reads the Swarms again, as on Home', (
+      tester,
+    ) async {
+      final fake = backend();
+      await pump(tester, fake, home: const SwarmModelsPage());
+      int lists() => fake.paths.where((p) => p.endsWith('/list')).length;
+      final before = lists();
+
+      await tester.fling(
+        find.byType(Scrollable).first,
+        const Offset(0, 400),
+        1000,
+      );
+      await tester.pumpAndSettle();
+
+      expect(lists(), greaterThan(before));
+    });
+
     testWidgets('a Swarm whose models are not set up says who sets them up', (
       tester,
     ) async {
@@ -359,6 +394,45 @@ void main() {
       );
     });
 
+    testWidgets('pulling down reads the computers again', (tester) async {
+      final computers = _Computers(const [(name: 'Studio Mac', away: false)]);
+      await pump(
+        tester,
+        backend(),
+        home: const SwarmDevicesPage(),
+        computers: computers,
+      );
+
+      await tester.fling(
+        find.byType(Scrollable).first,
+        const Offset(0, 400),
+        1000,
+      );
+      await tester.pumpAndSettle();
+
+      expect(computers.rechecks, 1);
+    });
+
+    testWidgets('no computer yet is a line under the caption, as on Home', (
+      tester,
+    ) async {
+      await pump(
+        tester,
+        backend(),
+        home: const SwarmDevicesPage(),
+        computers: _Computers(const []),
+      );
+
+      expect(
+        find.ancestor(
+          of: key('swarm-devices-none'),
+          matching: find.byType(SwarmGroup),
+          matchRoot: true,
+        ),
+        findsNothing,
+      );
+    });
+
     testWidgets('no computer yet says so', (tester) async {
       await pump(
         tester,
@@ -388,8 +462,10 @@ class _Computers extends ChangeNotifier implements SwarmComputers {
     notifyListeners();
   }
 
+  var rechecks = 0;
+
   @override
-  Future<void> recheck() async {}
+  Future<void> recheck() async => rechecks++;
 
   @override
   void add(BuildContext context) {}

@@ -7,6 +7,7 @@ import 'package:harness_mobile/shared/theme/app_theme.dart';
 import 'model.dart';
 import 'swarm_inbox.dart';
 import 'swarm_reader.dart';
+import 'swarm_row.dart';
 import 'swarm_session.dart';
 import 'swarm_style.dart';
 
@@ -81,20 +82,25 @@ class SwarmModelsPage extends StatelessWidget {
                 onPressed: () => Navigator.of(context).maybePop(),
               ),
               title: 'Your models',
+              subtitle: 'What the Swarm can use now',
             ),
             Expanded(
               child: session == null
                   ? const SizedBox.shrink()
                   : ListenWhileInSight(
                       listenable: session.inbox,
-                      builder: (context) => ListView(
-                        padding: EdgeInsets.fromLTRB(
-                          12,
-                          0,
-                          12,
-                          MediaQuery.paddingOf(context).bottom + 28,
+                      builder: (context) => RefreshIndicator(
+                        onRefresh: session.inbox.refresh,
+                        child: ListView(
+                          physics: const AlwaysScrollableScrollPhysics(),
+                          padding: EdgeInsets.fromLTRB(
+                            12,
+                            0,
+                            12,
+                            MediaQuery.paddingOf(context).bottom + 28,
+                          ),
+                          children: _body(session.inbox),
                         ),
-                        children: _body(session.inbox),
                       ),
                     ),
             ),
@@ -108,91 +114,109 @@ class SwarmModelsPage extends StatelessWidget {
     final swarms = inbox.swarms;
     if (swarms.isEmpty) {
       return [
-        const SwarmCaption('Models this Swarm can use now', first: true),
+        const SizedBox(height: 6),
         if (inbox.loaded)
-          const _Words('swarm-models-no-swarm', 'You are not in a Swarm yet.')
+          _line(
+            'swarm-models-no-swarm',
+            'No Swarm yet. Start one on your computer.',
+          )
         else
           SwarmSkeletonRows(id: 'swarm-models-loading', rows: 3),
       ];
     }
+    // With several Swarms, each one's captions start with its name, as
+    // Home's do.
     final several = swarms.length > 1;
     return [
       for (final (i, swarm) in swarms.indexed)
         ..._swarm(
           swarm.id,
-          several ? swarm.name : 'Models this Swarm can use now',
           inbox.reader(swarm.id),
+          name: several ? swarm.name : null,
           first: i == 0,
-          named: several,
         ),
     ];
   }
 
   List<Widget> _swarm(
     String id,
-    String caption,
     SwarmReader? reader, {
+    required String? name,
     required bool first,
-    required bool named,
   }) {
+    String caption(String text) => name == null ? text : '$name · $text';
+    // The Swarm's own caption, over what stands for its models; with one
+    // Swarm, the page's caption is it.
+    List<Widget> alone(Widget child) => [
+      if (name != null)
+        SwarmCaption(name, first: first)
+      else if (first)
+        const SizedBox(height: 6),
+      child,
+    ];
     final snapshot = reader?.snapshot;
-    final heading = named
-        ? _SwarmName(caption, first: first)
-        : SwarmCaption(caption, first: first);
     if (snapshot == null) {
-      return [
-        heading,
-        if (reader?.error != null)
-          _Words(
-            'swarm-models-error-$id',
-            'This Swarm could not be read right now.',
-          )
-        else
-          SwarmSkeletonRows(id: 'swarm-models-loading-$id', rows: 3),
-      ];
+      return alone(switch (reader?.error) {
+        final error? => SwarmGroup(
+          key: ValueKey('swarm-models-error-$id'),
+          children: [
+            SwarmRow(
+              title: error,
+              detail: SwarmRow.line('Pull down to try again.'),
+              onTap: null,
+            ),
+          ],
+        ),
+        null => SwarmSkeletonRows(id: 'swarm-models-loading-$id', rows: 3),
+      });
     }
     final list = swarmModelList(snapshot, now: now());
     if (list == null) {
-      return [
-        heading,
-        _Words(
+      return alone(
+        _line(
           'swarm-models-off-$id',
           "Models aren't set up for this Swarm yet. "
               'Its owner sets them up on a computer.',
         ),
-      ];
+      );
     }
     if (list.isEmpty) {
-      return [
-        heading,
-        _Words(
+      return alone(
+        _line(
           'swarm-models-none-$id',
           'No models are running for this Swarm right now.',
         ),
+      );
+    }
+    var top = first;
+    List<Widget> section(String title, List<SwarmModelRow> rows, String kind) {
+      if (rows.isEmpty) return const [];
+      final heading = SwarmCaption(caption(title), first: top);
+      top = false;
+      return [
+        heading,
+        SwarmGroup(
+          key: ValueKey('swarm-models-$kind-$id'),
+          children: [
+            for (final row in rows)
+              SwarmRow(
+                title: row.name,
+                detail: SwarmRow.line(switch (kind) {
+                  'api' => 'Shared by ${row.machine}',
+                  'local' => 'Runs on ${row.machine}',
+                  _ => '${row.machine} only',
+                }),
+                trailing: row.provider == null
+                    ? null
+                    : SwarmRow.line(row.provider!),
+                onTap: null,
+              ),
+          ],
+        ),
       ];
     }
-    List<Widget> section(String title, List<SwarmModelRow> rows, String kind) =>
-        rows.isEmpty
-        ? const []
-        : [
-            SwarmCaption(title),
-            SwarmGroup(
-              key: ValueKey('swarm-models-$kind-$id'),
-              children: [
-                for (final row in rows)
-                  _ModelRow(
-                    row,
-                    where: switch (kind) {
-                      'api' => 'Shared by ${row.machine}',
-                      'local' => 'Runs on ${row.machine}',
-                      _ => '${row.machine} only',
-                    },
-                  ),
-              ],
-            ),
-          ];
+
     return [
-      heading,
       ...section('API models', list.apis, 'api'),
       ...section('Local models', list.local, 'local'),
       ...section('On one computer only', list.oneComputer, 'one'),
@@ -200,122 +224,10 @@ class SwarmModelsPage extends StatelessWidget {
   }
 }
 
-/// A Swarm's name over its models, where the account has several.
-class _SwarmName extends StatelessWidget {
-  const _SwarmName(this.name, {required this.first});
-
-  final String name;
-  final bool first;
-
-  @override
-  Widget build(BuildContext context) => Padding(
-    padding: EdgeInsets.fromLTRB(4, first ? 8 : 32, 4, 0),
-    child: Text(
-      name,
-      maxLines: 1,
-      overflow: TextOverflow.ellipsis,
-      style: TextStyle(
-        color: AppPalette.textPrimary,
-        fontSize: 17,
-        fontWeight: FontWeight.w600,
-      ),
-    ),
-  );
-}
-
-/// One model: its name, an API's provider at its right, and where it runs
-/// under it.
-class _ModelRow extends StatelessWidget {
-  const _ModelRow(this.row, {required this.where});
-
-  final SwarmModelRow row;
-  final String where;
-
-  @override
-  Widget build(BuildContext context) {
-    AppTheme.watch(context);
-    return Semantics(
-      container: true,
-      child: ConstrainedBox(
-        constraints: const BoxConstraints(minHeight: 56),
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Row(
-                crossAxisAlignment: CrossAxisAlignment.baseline,
-                textBaseline: TextBaseline.alphabetic,
-                children: [
-                  Expanded(
-                    child: Text(
-                      row.name,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                        color: AppPalette.textPrimary,
-                        fontSize: 16,
-                        fontWeight: FontWeight.w500,
-                        height: 1.3,
-                      ),
-                    ),
-                  ),
-                  if (row.provider case final provider?) ...[
-                    const SizedBox(width: 12),
-                    Text(
-                      provider,
-                      style: TextStyle(
-                        color: AppPalette.textSecondary,
-                        fontSize: 13.5,
-                      ),
-                    ),
-                  ],
-                ],
-              ),
-              const SizedBox(height: 3),
-              Text(
-                where,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(
-                  color: AppPalette.textSecondary,
-                  fontSize: 13.5,
-                  height: 1.35,
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-/// What a page says where it has nothing to list, in a card.
-class _Words extends StatelessWidget {
-  const _Words(this.id, this.text);
-
-  final String id, text;
-
-  @override
-  Widget build(BuildContext context) {
-    AppTheme.watch(context);
-    return SwarmGroup(
-      key: ValueKey(id),
-      children: [
-        Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 16),
-          child: Text(
-            text,
-            style: TextStyle(
-              color: AppPalette.textSecondary,
-              fontSize: 15,
-              height: 1.4,
-            ),
-          ),
-        ),
-      ],
-    );
-  }
-}
+/// What a page says where it has nothing to list: a line under its caption,
+/// as Home's empty states are.
+Widget _line(String id, String text) => Padding(
+  key: ValueKey(id),
+  padding: const EdgeInsets.symmetric(horizontal: 4),
+  child: SwarmRow.line(text, lines: 2),
+);

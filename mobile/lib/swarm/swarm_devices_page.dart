@@ -5,6 +5,7 @@ import 'package:harness_mobile/phone/tty.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart';
 import 'package:harness_mobile/theme/app_theme.dart' show AppColors;
 
+import 'swarm_row.dart';
 import 'swarm_session.dart';
 import 'swarm_start.dart';
 import 'swarm_style.dart';
@@ -40,33 +41,37 @@ class SwarmDevicesPage extends StatelessWidget {
                   ? const SizedBox.shrink()
                   : ListenWhileInSight(
                       listenable: computers,
-                      builder: (context) => ListView(
-                        padding: EdgeInsets.fromLTRB(
-                          12,
-                          0,
-                          12,
-                          MediaQuery.paddingOf(context).bottom + 28,
+                      builder: (context) => RefreshIndicator(
+                        onRefresh: computers.recheck,
+                        child: ListView(
+                          physics: const AlwaysScrollableScrollPhysics(),
+                          padding: EdgeInsets.fromLTRB(
+                            12,
+                            0,
+                            12,
+                            MediaQuery.paddingOf(context).bottom + 28,
+                          ),
+                          children: [
+                            const SwarmCaption('Your computers', first: true),
+                            switch (computers.computers) {
+                              null => SwarmSkeletonRows(
+                                id: 'swarm-devices-loading',
+                                rows: 3,
+                                round: true,
+                              ),
+                              [] => const _NoComputer(),
+                              final list => SwarmGroup(
+                                children: [
+                                  for (final (i, computer) in list.indexed)
+                                    _ComputerRow(
+                                      key: ValueKey('swarm-device-$i'),
+                                      computer,
+                                    ),
+                                ],
+                              ),
+                            },
+                          ],
                         ),
-                        children: [
-                          const SwarmCaption('Your computers', first: true),
-                          switch (computers.computers) {
-                            null => SwarmSkeletonRows(
-                              id: 'swarm-devices-loading',
-                              rows: 3,
-                              round: true,
-                            ),
-                            [] => const _NoComputer(),
-                            final list => SwarmGroup(
-                              children: [
-                                for (final (i, computer) in list.indexed)
-                                  _ComputerRow(
-                                    key: ValueKey('swarm-device-$i'),
-                                    computer,
-                                  ),
-                              ],
-                            ),
-                          },
-                        ],
                       ),
                     ),
             ),
@@ -77,7 +82,8 @@ class SwarmDevicesPage extends StatelessWidget {
   }
 }
 
-/// One computer: a dot, its name, and Online or Offline at its right.
+/// One computer, as a Home row: a dot, its name, and Online or Offline at
+/// its right.
 class _ComputerRow extends StatelessWidget {
   const _ComputerRow(this.computer, {super.key});
 
@@ -87,72 +93,33 @@ class _ComputerRow extends StatelessWidget {
   Widget build(BuildContext context) {
     AppTheme.watch(context);
     final online = !computer.away;
-    return Semantics(
-      container: true,
-      child: ConstrainedBox(
-        constraints: const BoxConstraints(minHeight: 52),
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-          child: Row(
-            children: [
-              Container(
-                width: 9,
-                height: 9,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  color: online ? AppColors.success : null,
-                  border: online
-                      ? null
-                      : Border.all(color: AppPalette.textFaint, width: 1.5),
-                ),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Text(
-                  computer.name,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    color: AppPalette.textPrimary,
-                    fontSize: 16,
-                    fontWeight: FontWeight.w500,
-                  ),
-                ),
-              ),
-              const SizedBox(width: 12),
-              Text(
-                online ? 'Online' : 'Offline',
-                style: TextStyle(color: AppPalette.textSecondary, fontSize: 14),
-              ),
-            ],
-          ),
+    return SwarmRow(
+      leading: Container(
+        width: 9,
+        height: 9,
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          color: online ? AppColors.success : null,
+          border: online
+              ? null
+              : Border.all(color: AppPalette.textFaint, width: 1.5),
         ),
       ),
+      title: computer.name,
+      trailing: SwarmRow.line(online ? 'Online' : 'Offline'),
+      onTap: null,
     );
   }
 }
 
+/// No computer: a line under the caption, as Home's empty states are.
 class _NoComputer extends StatelessWidget {
   const _NoComputer();
 
   @override
-  Widget build(BuildContext context) {
-    AppTheme.watch(context);
-    return SwarmGroup(
-      key: const ValueKey('swarm-devices-none'),
-      children: [
-        Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 16),
-          child: Text(
-            'No computers on your account yet.',
-            style: TextStyle(
-              color: AppPalette.textSecondary,
-              fontSize: 15,
-              height: 1.4,
-            ),
-          ),
-        ),
-      ],
-    );
-  }
+  Widget build(BuildContext context) => Padding(
+    key: const ValueKey('swarm-devices-none'),
+    padding: const EdgeInsets.symmetric(horizontal: 4),
+    child: SwarmRow.line('No computers on your account yet.', lines: 2),
+  );
 }
