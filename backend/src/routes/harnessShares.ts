@@ -8,6 +8,7 @@ import { machineBillingAllowsDataPlane } from '../lib/billingState.js'
 import { validateBody, validateParams } from '../middlewares/validation.js'
 import { sendError, sendSuccess } from '../utils/response.js'
 import type { AuthUser } from '../lib/ssoAuth.js'
+import { logger } from '../utils/logger.js'
 import { TEAM_SESSION_LIMITED, TEAM_SESSION_MESSAGE, teamMachineScope } from '../lib/teamSession.js'
 
 const params = z.object({ id: z.string().uuid() })
@@ -37,7 +38,9 @@ async function tellRecipient(shareId: string): Promise<void> {
     const share = await prisma.harnessShare.findUnique({ where: { id: shareId } })
     if (!share) return
     const recipient = await prisma.user.findUnique({ where: { email: share.recipientEmail }, select: { id: true } })
-    if (recipient) await publishDeviceMachineListChanged(recipient.id, { reason: 'updated' })
+    if (!recipient) return
+    await publishDeviceMachineListChanged(recipient.id, { reason: 'updated' })
+    logger.info('harness share: told the recipient it changed', { shareId, recipientId: recipient.id })
   } catch { /* best effort */ }
 }
 

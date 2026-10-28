@@ -78,10 +78,17 @@ async function writePolicy(machineId: string, user: AuthUser, emails: string[], 
   }
 }
 
+/** Whether two policies share the machine with the same people: the same addresses, in any order, and the same domain. */
+function samePolicy(a: MachineShare | null, b: MachineShare | null): boolean {
+  const emails = (s: MachineShare | null) => [...new Set(s?.emails ?? [])].sort().join('\n')
+  return emails(a) === emails(b) && (a?.domain ?? null) === (b?.domain ?? null)
+}
+
 /**
  * Everyone a change of the policy may add the machine to or take it from, their apps and daemons told to
  * read their Machines again: the addresses before and after, everyone at the domain before and after, and
- * whoever had added it. Best effort, like Share's `tellRecipient`: the policy is written already.
+ * whoever had added it. Best effort, like Share's `tellRecipient`: the policy is written already. Called only for a
+ * policy that changed, so one side of it names someone.
  */
 async function tellAffected(machineId: string, ownerId: string, before: MachineShare | null, after: MachineShare | null): Promise<void> {
   try {
@@ -89,12 +96,13 @@ async function tellAffected(machineId: string, ownerId: string, before: MachineS
     const domains = [...new Set([before?.domain, after?.domain].filter((d): d is string => !!d))]
     const where = [...emails.length ? [{ email: { in: emails } }] : [], ...domains.map(d => ({ email: { endsWith: `@${d}` } }))]
     const [users, adds] = await Promise.all([
-      where.length ? prisma.user.findMany({ where: { OR: where }, select: { id: true }, take: TELL_MAX }) : [],
+      prisma.user.findMany({ where: { OR: where }, select: { id: true }, take: TELL_MAX }),
       prisma.machineShareAdd.findMany({ where: { machineId }, select: { userId: true }, take: TELL_MAX }),
     ])
     const ids = new Set([...users.map(u => u.id), ...adds.map(a => a.userId)])
     ids.delete(ownerId)
     await Promise.all([...ids].map(id => publishDeviceMachineListChanged(id, { reason: 'updated' })))
+    logger.info('machine share: told everyone it changed', { machineId, ownerId, told: ids.size })
   } catch (err) {
     logger.warn('machine share: could not tell everyone it changed', { machineId, error: String(err) })
   }
@@ -126,8 +134,13 @@ export async function machineShareRoutes(app: FastifyInstance): Promise<void> {
         }
       }
       const { before, after } = await writePolicy(machineId, user, emails, domain)
-      await publishMachineShareChanged(machineId).catch(() => 0)
-      await tellAffected(machineId, user.sub, before, after)
+      // Told only when who it is shared with changed. The owner's daemon writes its policy again every two minutes
+      // while it reads back something else (an address the backend drops above), and each write told every member's
+      // every app to re-read its machines and shares: Diego's app re-read them every 1 to 3 minutes (2026-10-28).
+      if (!samePolicy(before, after)) {
+        await publishMachineShareChanged(machineId).catch(() => 0)
+        await tellAffected(machineId, user.sub, before, after)
+      }
       sendSuccess(reply, await policyView(after, user))
     })
 
