@@ -74,13 +74,19 @@ void main() {
             ),
           ),
         ),
-        ['8 shipped', '1 unblocked', '40 h lent'],
+        ['8 shipped', '1 unblocked', '40 hours lent'],
       );
       expect(
         swarmNumbers(score(scoreData('b', points: 2, rank: 2, unblocked: 2))),
         ['2 unblocked'],
       );
-      // Under half an hour lent reads 0 h, so it is left out.
+      expect(
+        swarmNumbers(
+          score(scoreData('d', points: 1, rank: 4, lentMs: 3600000)),
+        ),
+        ['1 hour lent'],
+      );
+      // Under half an hour lent reads 0 hours, so it is left out.
       expect(
         swarmNumbers(score(scoreData('c', points: 0, rank: 3, lentMs: 60000))),
         isEmpty,

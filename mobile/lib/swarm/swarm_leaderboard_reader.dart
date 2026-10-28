@@ -102,14 +102,14 @@ String swarmDuration(int ms) {
 /// Whole agent-hours, as the points count them.
 int swarmHours(int ms) => (ms / _hour).round();
 
-/// "8 shipped", "1 unblocked", "40 h lent": each number that would not read
-/// zero, in words (the desktop's `leaderboardNumbers`).
+/// "8 shipped", "1 unblocked", "40 hours lent": each number that would not
+/// read zero, in words (the desktop's `leaderboardNumbers`).
 List<String> swarmNumbers(SwarmScore score) {
   final hours = swarmHours(score.lentMs);
   return [
     if (score.shipped > 0) '${score.shipped} shipped',
     if (score.unblocked > 0) '${score.unblocked} unblocked',
-    if (hours > 0) '$hours h lent',
+    if (hours > 0) '${_plural(hours, 'hour')} lent',
   ];
 }
 

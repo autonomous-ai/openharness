@@ -217,10 +217,9 @@ void main() {
     expect(points.color, AppPalette.textPrimary);
     expect(points.fontFeatures, const [FontFeature.tabularFigures()]);
     expect(find.textContaining('pts'), findsNothing);
-    // No points yet: the 0 holds the column in quiet ink.
-    final zero = style('swarm-leaderboard-points-dee', '0');
-    expect(zero.color, AppPalette.textSecondary);
-    expect(zero.fontWeight, isNot(FontWeight.w600));
+    // No points yet: the 0 holds the column in the points style, one rule
+    // for every value.
+    expect(style('swarm-leaderboard-points-dee', '0'), points);
   });
 
   testWidgets('the numbers in words under the name: zeros left out, whole '
@@ -235,7 +234,7 @@ void main() {
           .data;
     }
 
-    const diego = '8 shipped · 1 unblocked · 40 h lent';
+    const diego = '8 shipped · 1 unblocked · 40 hours lent';
     final text = shown('diego')!;
     expect(diego.startsWith(text), isTrue, reason: text);
     expect(
@@ -298,6 +297,30 @@ void main() {
         .color;
     expect(fill(me), AppSurface.selectedFill);
     expect(fill('diego'), Colors.transparent);
+  });
+
+  testWidgets("a hardware keyboard's focus shows over the viewer's own fill", (
+    tester,
+  ) async {
+    await pump(tester, backend());
+    await tester.pumpAndSettle();
+    final row = key('swarm-leaderboard-person-$me');
+    final ink = Material.of(tester.element(row)) as RenderObject;
+    final focus = Theme.of(tester.element(row)).focusColor;
+    expect(ink, isNot(paints..rrect(color: focus)));
+    FocusManager.instance.highlightStrategy =
+        FocusHighlightStrategy.alwaysTraditional;
+    addTearDown(
+      () => FocusManager.instance.highlightStrategy =
+          FocusHighlightStrategy.automatic,
+    );
+    Focus.of(
+      tester.element(
+        find.descendant(of: row, matching: find.byType(Padding)).first,
+      ),
+    ).requestFocus();
+    await tester.pumpAndSettle();
+    expect(ink, paints..rrect(color: focus));
   });
 
   testWidgets('no cups, medals, sparkles or emoji of its own', (tester) async {

@@ -331,7 +331,7 @@ class _SwarmLeaderboardPageState extends State<SwarmLeaderboardPage> {
 const _figures = [FontFeature.tabularFigures()];
 
 /// Numbers and rankings: the rank a bold numeral in secondary ink, the points
-/// the one emphasized number, and 0 points holding the column in quiet ink.
+/// the one emphasized number, 0 included.
 TextStyle _rankStyle() => AppType.label(
   fontWeight: FontWeight.w700,
   color: AppPalette.textSecondary,
@@ -340,11 +340,6 @@ TextStyle _rankStyle() => AppType.label(
 TextStyle _pointsStyle() => AppType.label(
   fontWeight: FontWeight.w600,
   color: AppPalette.textPrimary,
-  fontFeatures: _figures,
-);
-TextStyle _noPointsStyle() => AppType.label(
-  fontWeight: FontWeight.w400,
-  color: AppPalette.textSecondary,
   fontFeatures: _figures,
 );
 TextStyle _trendStyle(Color color) =>
@@ -551,13 +546,7 @@ class _PersonRow extends StatelessWidget {
                   column(
                     'points',
                     columns.points,
-                    Text(
-                      '${score.points}',
-                      maxLines: 1,
-                      style: score.points == 0
-                          ? _noPointsStyle()
-                          : _pointsStyle(),
-                    ),
+                    Text('${score.points}', maxLines: 1, style: _pointsStyle()),
                   ),
                 ],
               ),
