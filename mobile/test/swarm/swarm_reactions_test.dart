@@ -7,6 +7,7 @@ import 'package:harness_mobile/swarm/parts.dart';
 import 'package:harness_mobile/swarm/swarm_reactions.dart';
 
 import 'swarm_fixture.dart';
+import '../theme/sheet_shape.dart';
 
 /// Emoji reactions on a Swarm message, as Desktop draws them (backend
 /// reactions.ts): the counts under it, the reader's own marked, and the six
@@ -202,6 +203,7 @@ void main() {
         readerId: me,
       );
       await tester.pumpAndSettle();
+      expect(sheetTopRadius(tester), 12);
       return picked;
     }
 

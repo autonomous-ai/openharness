@@ -9,6 +9,7 @@ import 'package:harness_mobile/swarm/swarm_leaderboard_reader.dart';
 import 'package:harness_mobile/swarm/swarm_request.dart';
 import 'package:harness_mobile/swarm/swarm_session.dart';
 
+import '../theme/sheet_shape.dart';
 import '../voice_fakes.dart';
 import 'swarm_fixture.dart';
 
@@ -186,6 +187,7 @@ void main() {
 
     await tester.tap(key('swarm-leaderboard-week'));
     await tester.pumpAndSettle();
+    expect(sheetTopRadius(tester), 12);
     for (final name in ['Last week', '2 weeks ago', '3 weeks ago']) {
       expect(find.text(name), findsOneWidget);
     }
@@ -226,6 +228,7 @@ void main() {
     await tester.pumpAndSettle();
 
     const sheet = 'swarm-leaderboard-sheet';
+    expect(sheetTopRadius(tester), 12);
     expect(inside(sheet, find.text('diego')), findsOneWidget);
     for (final line in [
       '28 this week · place 1',
@@ -382,10 +385,7 @@ void main() {
         inside('swarm-leaderboard-person-ken', find.text('9 pts')),
         findsOneWidget,
       );
-      expect(
-        inside('swarm-leaderboard-team', find.text('2')),
-        findsOneWidget,
-      );
+      expect(inside('swarm-leaderboard-team', find.text('2')), findsOneWidget);
       expect(
         fake.paths.where((p) => p.startsWith(path)).length,
         before + 1,

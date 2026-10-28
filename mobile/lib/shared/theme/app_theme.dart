@@ -764,10 +764,9 @@ abstract final class AppMenu {
   static const Color rimDark = Color(0x1FFFFFFF);
   static Color get rim => AppTheme.pick(rimLight, rimDark);
 
-  /// A menu panel's rounding. On the §3 ladder this is the *panel* step (10),
-  /// one below a content card (12) and above the rows inside it (8) — a child is
-  /// never rounder than its parent.
-  static const double panelRadius = 10;
+  /// A menu panel's rounding: Desktop's popover radius (16), as the Phone
+  /// section of desktop/design/desktop-design-system.md has it.
+  static const double panelRadius = AppControl.menuRadius;
 
   /// Deeper than Material's menu default (8): this panel opens over chrome that
   /// already carries a lift of its own, and at 8 it reads as lying *on* that
@@ -858,16 +857,9 @@ abstract final class AppCard {
   static Color get highlightEdge =>
       AppTheme.pick(const Color(0x0A000000), const Color(0x1FFFFFFF));
 
-  /// Corner rounding, on macOS's scale rather than iOS's.
-  ///
-  /// A Mac window is ~10 and a sheet/popover ~12; iOS and the web round far
-  /// harder, and at 18 a card read as an iOS sheet that had wandered onto a
-  /// desktop. It also disagreed with the buttons *inside* it ([AppControl.radius]
-  /// is 8), so a card and its own action were speaking two shape languages.
-  ///
-  /// The inset tile drops to 8 to match those buttons: an inset sits inside a
-  /// card, and nesting a rounder box inside a less-round one is what makes a
-  /// tile look pasted on rather than set in.
+  /// Corner rounding, the same as Desktop's cards: 12, with the inset tile one
+  /// step tighter at 8 — nesting a rounder box inside a less-round one is what
+  /// makes a tile look pasted on rather than set in.
   static const double radius = 12;
   static const double insetRadius = 8;
 
@@ -1170,8 +1162,7 @@ ThemeData buildAppTheme({Brightness brightness = Brightness.light}) {
     // Fill, rim and elevation come from [AppMenu] so a Material popup cannot
     // disagree with a MenuAnchor about what a menu looks like.
     //
-    // The radius does not: [AppControl.menuRadius] (6) is the §3 step for
-    // *Material's own* popup, which draws tighter than the app's panel (10).
+    // The radius too: [AppControl.menuRadius], Desktop's popover radius.
     popupMenuTheme: PopupMenuThemeData(
       color: panelFill,
       surfaceTintColor: Colors.transparent,
@@ -1199,6 +1190,7 @@ ThemeData buildAppTheme({Brightness brightness = Brightness.light}) {
       shape: Border(),
       collapsedShape: Border(),
     ),
+    bottomSheetTheme: const BottomSheetThemeData(shape: AppControl.sheetShape),
     dialogTheme: DialogThemeData(
       // The raised block's own fill, not a menu's and not a card's. §9.3: a
       // dialog that takes `windowBg` merges with the page, and one that takes
@@ -1206,11 +1198,10 @@ ThemeData buildAppTheme({Brightness brightness = Brightness.light}) {
       // both invisible in light, both plain in dark.
       backgroundColor: dialogFill,
       surfaceTintColor: Colors.transparent,
-      // The card radius, not a number of its own. This was 18 — the iOS
-      // action-sheet curve, and the app's cards had already come down to 12 for
-      // macOS without the dialogs following.
+      // Desktop's dialog radius, as the Phone section of the design system has
+      // it: one step rounder than the cards a dialog may hold.
       shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(AppCard.radius),
+        borderRadius: BorderRadius.circular(AppControl.dialogRadius),
       ),
     ),
     // ⚠️ [AppPalette.accentOnSurface], NOT `colorScheme.primary`.
@@ -1247,9 +1238,10 @@ ThemeData buildAppTheme({Brightness brightness = Brightness.light}) {
 
 /// The one set of numbers every button in the app is built from.
 ///
-/// macOS controls are compact, squarish and quiet: a 13pt semibold label in a
-/// ~32px capsule with a small radius — not the tall, wide, fully-round buttons
-/// Material defaults to. Before this existed each call site invented its own,
+/// Desktop's control recipe: a ~32px capsule button and softly rounded fields,
+/// not the tall, wide buttons Material defaults to; a smaller control reaches
+/// the 44pt touch target through `TouchTarget`. Before this existed each call
+/// site invented its own,
 /// which is how the app ended up with seven button heights, three shape systems
 /// and six label sizes. Change a number here, not at a call site.
 abstract final class AppControl {
@@ -1270,14 +1262,24 @@ abstract final class AppControl {
   /// one.
   static const double heightField = 36;
 
-  /// Corner radius. Apple's push buttons are gently rounded, not stadium — a
-  /// pill reads as a "chip" on macOS, not as a button.
-  static const double radius = 8;
+  /// Text-field radius, Desktop's 10. Action buttons use the shared capsule
+  /// shape, as on Desktop.
+  static const double radius = 10;
 
-  /// A menu/popover's rounding. Tighter than a button's: macOS menus are nearly
-  /// square-cornered, and rounding one like an iOS action sheet is one of the
-  /// louder tells that a desktop app was drawn to phone conventions.
-  static const double menuRadius = 6;
+  /// Menu/popover radius, Desktop's 16.
+  static const double menuRadius = 16;
+
+  /// Dialog radius, Desktop's 20.
+  static const double dialogRadius = 20;
+
+  /// A bottom sheet's top corners: the card radius (12). Desktop has no
+  /// sheets; the design system's Phone section lists this as phone-only.
+  static const double sheetRadius = AppCard.radius;
+
+  /// Every bottom sheet's shape, the theme's and each caller's.
+  static const ShapeBorder sheetShape = RoundedRectangleBorder(
+    borderRadius: BorderRadius.vertical(top: Radius.circular(sheetRadius)),
+  );
 
   /// The air between a menu panel and the control it hangs off.
   ///
@@ -1755,9 +1757,7 @@ TextStyle _fieldTextStyle(Color color) => TextStyle(
 /// the `Icon` itself still has to be handed this size at the call site.
 const double kFieldIconSize = 18;
 
-RoundedRectangleBorder get _buttonShape => RoundedRectangleBorder(
-  borderRadius: BorderRadius.circular(AppControl.radius),
-);
+StadiumBorder get _buttonShape => const StadiumBorder();
 
 /// The primary action: a solid accent capsule.
 /// A filled button that destroys something.
