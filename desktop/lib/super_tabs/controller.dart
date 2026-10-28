@@ -699,6 +699,14 @@ class SuperTabController extends ChangeNotifier {
   /// rest waits for [showLatest], so a long burst is not all held.
   static const _pagesBelowReader = 3;
 
+  /// Whether [id]'s reader is scrolled up with all the pages that join below
+  /// them held: the rest waits for [showLatest], so no poll reads it.
+  bool _holding(String id) =>
+      _readingBack.contains(id) &&
+      _newer.contains(id) &&
+      !_latestWanted.contains(id) &&
+      (_pagesBelow[id] ?? 0) >= _pagesBelowReader;
+
   /// Forgets reading back in [id], or in every conversation.
   void _forgetNewer([String? id]) {
     for (final kept in [_readingBack, _newer, _latestWanted]) {
@@ -717,12 +725,20 @@ class SuperTabController extends ChangeNotifier {
   bool hasNewer(String id) => _newer.contains(id);
 
   /// Brings [id]'s newest messages: when more are waiting than reads
-  /// brought, the latest page replaces what is held.
+  /// brought, the latest page replaces what is held; otherwise what came
+  /// after it is read. Its own read: one already under way may have asked
+  /// for less (the rows held below a reader scrolled up).
   Future<void> showLatest(String id) async {
     _readingBack.remove(id);
-    await _reading[(id, false)];
-    if (_disposed || !_newer.contains(id)) return;
-    _latestWanted.add(id);
+    for (
+      var under = _reading[(id, false)];
+      under != null;
+      under = _reading[(id, false)]
+    ) {
+      await under;
+    }
+    if (_disposed) return;
+    if (_newer.contains(id)) _latestWanted.add(id);
     await _readMessages(id);
   }
 
@@ -1742,6 +1758,8 @@ class SuperTabController extends ChangeNotifier {
     // messages: the first read after it takes the latest page whole.
     if (_showingSaved || _latestWanted.contains(id)) return '';
     final tail = _messages[id]?.lastOrNull?.sequence;
+    // Holding: the rows shown, for their receipts and reactions.
+    if (tail != null && _holding(id)) return '?before=${tail + 1}';
     return tail != null ? '?after=$tail' : '';
   }
 
@@ -1824,11 +1842,14 @@ class SuperTabController extends ChangeNotifier {
       return;
     }
     if (older && !hasOlder(id)) return;
+    // A light check asks only for new messages, which wait while holding.
+    if (light && _holding(id)) return;
     try {
       final known = _messages[id];
       final tail = known != null && known.isNotEmpty
           ? known.last.sequence
           : null;
+      final holding = !older && _holding(id);
       final query = _query(id, older: older);
       final latest = !older && _latestWanted.remove(id);
       final from = _before[id];
@@ -1839,7 +1860,10 @@ class SuperTabController extends ChangeNotifier {
             )
           : await request('GET', '${_messagesPath(id)}$query');
       final arrived =
-          !older && tail != null && (answer['messages'] as List).isNotEmpty;
+          !older &&
+          !holding &&
+          tail != null &&
+          (answer['messages'] as List).isNotEmpty;
       final reacted = !older && _reactionsMoved(id, answer);
       // Recorded only once the rows are refreshed: a read that fails leaves
       // the change for the next poll.
@@ -1851,7 +1875,6 @@ class SuperTabController extends ChangeNotifier {
       // below them, and the rest waits for [showLatest].
       final skipped = query.startsWith('?after=') && answer['next'] != null;
       final keepPlace = skipped && _readingBack.contains(id);
-      final full = keepPlace && (_pagesBelow[id] ?? 0) >= _pagesBelowReader;
       if (!_disposed && skipped && !keepPlace) {
         answer = await request('GET', _messagesPath(id));
       } else if (!_disposed && keepPlace) {
@@ -1866,7 +1889,7 @@ class SuperTabController extends ChangeNotifier {
             : const [];
         answer = {
           ...answer,
-          'messages': [...shown, if (!full) ...answer['messages'] as List],
+          'messages': [...shown, ...answer['messages'] as List],
         };
       } else if (!_disposed &&
           !older &&
@@ -1975,8 +1998,8 @@ class SuperTabController extends ChangeNotifier {
       _messages[id] = next;
       if (keepPlace) {
         _newer.add(id);
-        if (!full) _pagesBelow[id] = (_pagesBelow[id] ?? 0) + 1;
-      } else if (!older) {
+        _pagesBelow[id] = (_pagesBelow[id] ?? 0) + 1;
+      } else if (!older && !holding) {
         _newer.remove(id);
         _pagesBelow.remove(id);
       }
