@@ -36,7 +36,7 @@ import type { HoldReason } from './holdReason.js'
 import { agentDisplayName } from './agentNames.js'
 import { endedHolds, HOLDING, type WorkHold } from '../github/holds.js'
 import { accrueLent } from './leaderboard/lent.js'
-import { mayDrive, TERMINAL_ANSWER_MS, TERMINAL_EXPIRY_MS, TERMINAL_PICKUP_MS, type TerminalEffect } from './terminal.js'
+import { mayDrive, TERMINAL_ANSWER_MS, TERMINAL_EXPIRY_MS, TERMINAL_PICKUP_MS, TERMINAL_RECHECK_MS, type TerminalEffect } from './terminal.js'
 import { closeAssignment, closeUnassignedStart, readDecision, timedDecisionOf, writeRouteEffects } from './routeDecisions.js'
 import { listMentions, markDone, mentionsWaiting, readMention, resolveByReply, writeMentions } from './mentions.js'
 import { answerable, fullFor, listDecisions, readAskedDecision, recordAnswer, waitingIn, waitingInProject, writeDecisions } from './decisions.js'
@@ -202,6 +202,10 @@ export interface SuperTabStoreHooks {
   /** No Harness GitHub App on this server: a Mac's Harness Team account joins no Swarm and takes no teammates' work, since
    *  it has no git login to fetch or push with (commands.ts `teamAccountsIdle`). */
   teamAccountsIdle?: boolean
+  /** A terminal request was answered or refused, after the commit (lib/bus.ts tells every instance). It must not throw. */
+  terminalAnswered?: (requestId: string) => void
+  /** Calls `onChange` when that request is answered or refused on any instance; resolves to the call that stops listening. */
+  watchTerminal?: (requestId: string, onChange: () => void) => Promise<() => void>
 }
 
 /** Persistent coordination. Host adapters own execution and must confirm their local session grants. */
@@ -1344,34 +1348,56 @@ export class SuperTabStore {
     const answered = await tx.superTabTerminalRequest.updateMany({ where: { id: effect.id, tabId, status: 'claimed', claimedAt: { gte: new Date(now - TERMINAL_ANSWER_MS) } },
       data: { status: 'done', ok: effect.ok, result: effect.text, error: effect.error } })
     if (!answered.count) fail('REQUEST_CLOSED', 'This terminal request is no longer waiting for an answer.')
+    this.terminalAnswered(tx, effect.id)
   }
 
-  /** The requester alone reads the answer, once: the screen text is deleted as it is returned. Waits up to `waitMs` for it. */
+  private terminalAnswered(tx: Transaction, requestId: string) {
+    const told = this.hooks.terminalAnswered
+    if (told) afterCommit(tx, () => told(requestId))
+  }
+
+  /** The requester alone reads the answer, once: the screen text is deleted as it is returned. Waits up to `waitMs` for it,
+   *  reading again when the host's answer or refusal is told, when the request turns late, or every few seconds unwoken. */
   async terminalResult(user: AuthUser, tabId: string, requestId: string, asAgentId?: string, waitMs = 0) {
     const deadline = Date.now() + waitMs
-    for (;;) {
-      const answer = await transaction(this.db, async tx => {
-        const { state } = await this.load(tx, user, tabId)
-        const actor = await this.actor(tx, user, state, asAgentId)
-        author(state, actor)
-        const now = this.now()
-        const row = await tx.superTabTerminalRequest.findFirst({ where: { id: requestId, tabId, createdAt: { gte: new Date(now - TERMINAL_EXPIRY_MS) } } })
-        if (!row || row.requesterKey !== actorKey(actor)) fail('NOT_FOUND', 'This terminal request is unavailable.', 404)
-        // A sender who has since lost write access, or is no longer the agent's project Lead, gets nothing.
-        mayDrive(state, actor, agent(state, row.agentId), await this.confidential(tx, row.agentId))
-        const late = row.status === 'pending' && now - row.createdAt.getTime() > TERMINAL_PICKUP_MS
-          ? 'The agent’s machine did not pick up the request within 10 seconds. It may be offline or asleep.'
-          : row.status === 'claimed' && now - row.claimedAt!.getTime() > TERMINAL_ANSWER_MS
-            ? 'The agent’s machine picked up the request but did not answer within 30 seconds.' : null
-        if (row.status !== 'done' && !late) return null
-        await tx.superTabTerminalRequest.delete({ where: { id: row.id } })
-        if (late || !row.ok) return { requestId, ok: false, error: late ?? row.error }
-        return { requestId, ok: true, ...(row.result !== null ? { text: row.result } : {}) }
-      })
-      if (answer) return answer
-      if (Date.now() >= deadline) return { requestId, pending: true }
-      await new Promise(resolve => setTimeout(resolve, 250))
-    }
+    let told = false, wake = () => {}
+    const stop = waitMs > 0 && this.hooks.watchTerminal
+      ? await this.hooks.watchTerminal(requestId, () => { told = true; wake() }) : () => {}
+    try {
+      for (;;) {
+        told = false
+        const { answer, lateIn } = await transaction(this.db, async tx => {
+          const { state } = await this.load(tx, user, tabId)
+          const actor = await this.actor(tx, user, state, asAgentId)
+          author(state, actor)
+          const now = this.now()
+          const row = await tx.superTabTerminalRequest.findFirst({ where: { id: requestId, tabId, createdAt: { gte: new Date(now - TERMINAL_EXPIRY_MS) } } })
+          if (!row || row.requesterKey !== actorKey(actor)) fail('NOT_FOUND', 'This terminal request is unavailable.', 404)
+          // A sender who has since lost write access, or is no longer the agent's project Lead, gets nothing.
+          mayDrive(state, actor, agent(state, row.agentId), await this.confidential(tx, row.agentId))
+          // How long until a request still waiting turns late by itself.
+          const lateIn = row.status === 'pending' ? row.createdAt.getTime() + TERMINAL_PICKUP_MS - now
+            : row.status === 'claimed' ? row.claimedAt!.getTime() + TERMINAL_ANSWER_MS - now : 0
+          const late = row.status === 'pending' && lateIn < 0
+            ? 'The agent’s machine did not pick up the request within 10 seconds. It may be offline or asleep.'
+            : row.status === 'claimed' && lateIn < 0
+              ? 'The agent’s machine picked up the request but did not answer within 30 seconds.' : null
+          if (row.status !== 'done' && !late) return { answer: null, lateIn }
+          await tx.superTabTerminalRequest.delete({ where: { id: row.id } })
+          if (late || !row.ok) return { answer: { requestId, ok: false, error: late ?? row.error }, lateIn }
+          return { answer: { requestId, ok: true, ...(row.result !== null ? { text: row.result } : {}) }, lateIn }
+        })
+        if (answer) return answer
+        const left = deadline - Date.now()
+        if (left <= 0) return { requestId, pending: true }
+        if (told) continue
+        await new Promise<void>(resolve => {
+          const timer = setTimeout(resolve, Math.min(left, lateIn + 1, TERMINAL_RECHECK_MS))
+          wake = () => { clearTimeout(timer); resolve() }
+        })
+        wake = () => {}
+      }
+    } finally { stop() }
   }
 
   /** Each waiting request for this host's agents is handed over once. One that waited too long, or whose terminal, agent or
@@ -1395,7 +1421,8 @@ export class SuperTabStore {
           ? 'The agent’s machine did not pick up the request within 10 seconds. It may be offline or asleep.'
           : await this.terminalRefusal(tx, states.get(row.tabId)!, row)
         if (refusal) {
-          await tx.superTabTerminalRequest.updateMany({ where: { id: row.id, status: 'pending' }, data: { status: 'done', ok: false, error: refusal } })
+          const refused = await tx.superTabTerminalRequest.updateMany({ where: { id: row.id, status: 'pending' }, data: { status: 'done', ok: false, error: refusal } })
+          if (refused.count) this.terminalAnswered(tx, row.id)
           continue
         }
         const claimed = await tx.superTabTerminalRequest.updateMany({ where: { id: row.id, status: 'pending' }, data: { status: 'claimed', claimedAt: new Date(now) } })

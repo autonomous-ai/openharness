@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto'
+import { EventEmitter } from 'node:events'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { join } from 'node:path'
@@ -2458,6 +2459,76 @@ describe('the Lead reads and types in an agent terminal', () => {
     expect(await claim()).toHaveLength(1)
     await expect(later(31_000).execute(host, tab, { operationId: randomUUID(), command: { type: 'agent.screenResult', requestId, ok: true, text: 'late' } }, worker))
       .rejects.toThrow('no longer waiting')
+  })
+
+  /** A store whose terminal answers are told the way the routes tell them across instances (lib/bus.ts), here in process.
+   *  `heard: false` loses every notice, as a dropped publish would. It counts the Swarm loads a wait makes. */
+  function watched(options: { heard?: boolean; now?: () => number } = {}) {
+    const notices = new EventEmitter()
+    const at = new SuperTabStore(db, options.now ?? Date.now, null, {
+      terminalAnswered: requestId => { if (options.heard !== false) notices.emit(requestId) },
+      watchTerminal: async (requestId, onChange) => { notices.on(requestId, onChange); return () => { notices.off(requestId, onChange) } },
+    })
+    const load = vi.spyOn(at as unknown as { load: (...args: unknown[]) => unknown }, 'load')
+    return { at, loads: () => load.mock.calls.length, listeners: (requestId: string) => notices.listenerCount(requestId) }
+  }
+
+  it('waits for an answer without loading the Swarm again and again', async () => {
+    const { tab, lead, worker, claim } = await terminalFixture()
+    const requestId = (await run(tab, { type: 'agent.screen', agentId: worker }, host, lead)).result.requestId as string
+    expect(await claim()).toHaveLength(1)
+    const { at, loads, listeners } = watched()
+    expect(await at.terminalResult(host, tab, requestId, lead, 3_000)).toEqual({ requestId, pending: true })
+    expect(loads()).toBeLessThanOrEqual(2)
+    expect(listeners(requestId)).toBe(0)
+  })
+
+  it('returns the answer as soon as the host’s answer commits', async () => {
+    const { tab, lead, worker, claim } = await terminalFixture()
+    const requestId = (await run(tab, { type: 'agent.screen', agentId: worker }, host, lead)).result.requestId as string
+    expect(await claim()).toHaveLength(1)
+    const { at, loads } = watched()
+    const waiting = at.terminalResult(host, tab, requestId, lead, 20_000).then(answer => ({ answer, at: Date.now() }))
+    await new Promise(resolve => setTimeout(resolve, 300))
+    await at.execute(host, tab, { operationId: randomUUID(), command: { type: 'agent.screenResult', requestId, ok: true, text: 'screen' } }, worker)
+    const answeredAt = Date.now()
+    const { answer, at: returnedAt } = await waiting
+    expect(answer).toEqual({ requestId, ok: true, text: 'screen' })
+    expect(returnedAt - answeredAt).toBeLessThan(100)
+    expect(loads()).toBeLessThanOrEqual(4)
+  })
+
+  it('wakes a wait when the request turns late, and when the host refuses it', async () => {
+    const { tab, lead, worker, claim } = await terminalFixture()
+    const unseen = (await run(tab, { type: 'agent.screen', agentId: worker }, host, lead)).result.requestId as string
+    // The pickup window ends 300 ms into this store's clock.
+    const late = watched({ now: () => Date.now() + 9_700 })
+    const started = Date.now()
+    expect(await late.at.terminalResult(host, tab, unseen, lead, 20_000)).toEqual({ requestId: unseen, ok: false, error: expect.stringContaining('did not pick up') })
+    expect(Date.now() - started).toBeLessThan(2_000)
+    const replaced = (await run(tab, { type: 'agent.input', agentId: worker, keys: ['Enter'] }, host, lead)).result.requestId as string
+    await db.superTabTerminalRequest.update({ where: { id: replaced }, data: { harnessId: 'replaced-terminal' } })
+    const { at } = watched()
+    const waiting = at.terminalResult(host, tab, replaced, lead, 20_000)
+    await new Promise(resolve => setTimeout(resolve, 300))
+    const refusedAt = Date.now()
+    expect(await claim(at)).toEqual([])
+    expect(await waiting).toEqual({ requestId: replaced, ok: false, error: expect.stringContaining('changed') })
+    expect(Date.now() - refusedAt).toBeLessThan(1_000)
+  })
+
+  it('still returns an answer whose notice was lost, at the next re-check', async () => {
+    const { tab, lead, worker, claim } = await terminalFixture()
+    const requestId = (await run(tab, { type: 'agent.screen', agentId: worker }, host, lead)).result.requestId as string
+    expect(await claim()).toHaveLength(1)
+    const { at, loads } = watched({ heard: false })
+    const waiting = at.terminalResult(host, tab, requestId, lead, 20_000)
+    await new Promise(resolve => setTimeout(resolve, 300))
+    await run(tab, { type: 'agent.screenResult', requestId, ok: true, text: 'screen' }, host, worker)
+    const answeredAt = Date.now()
+    expect(await waiting).toEqual({ requestId, ok: true, text: 'screen' })
+    expect(Date.now() - answeredAt).toBeLessThan(6_000)
+    expect(loads()).toBeLessThanOrEqual(3)
   })
 
   it('expires an unread answer after two minutes, without waiting for another request', async () => {

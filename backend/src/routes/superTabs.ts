@@ -1,6 +1,7 @@
 import type { FastifyInstance, FastifyReply } from 'fastify'
 import { z } from 'zod'
 import { prisma } from '../lib/prisma.js'
+import { publishTerminalAnswered, subscribeTerminalAnswered } from '../lib/bus.js'
 import { env } from '../config/env.js'
 import multipart from '@fastify/multipart'
 import { attachmentsFromEnv, MAX_ATTACHMENT_BYTES, MAX_AVATAR_BYTES } from '../superTabs/attachments.js'
@@ -102,7 +103,10 @@ export async function superTabRoutes(app: FastifyInstance, options: { store?: Su
   const store = options.store ?? new SuperTabStore(prisma, Date.now, attachmentsFromEnv(env),
     { workEnded: (tabId, ended) => { void github?.release(tabId, ended).catch(error => logger.warn('[github] release failed', { tabId, error: String(error) })) },
       // A team account has no git login of its own: without the app it takes no teammates' work.
-      teamAccountsIdle: !github })
+      teamAccountsIdle: !github,
+      // The host's answer often lands on another instance than the sender's wait.
+      terminalAnswered: requestId => { void publishTerminalAnswered(requestId) },
+      watchTerminal: (requestId, onChange) => subscribeTerminalAnswered(requestId, onChange) })
   const reads = options.reads ?? new SwarmReads(store, { githubApp: !!github })
   const hosts = options.hosts ?? new HostReads(store, { githubApp: !!github, teamAccountsIdle: !github })
   app.get('/api/super-tabs/grids', (req, reply) => respond(reply, () => store.hostGrids(req.user!)))

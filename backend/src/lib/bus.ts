@@ -226,6 +226,14 @@ export function publishAgentMessageShareChanged(id: string): Promise<number> {
   return safePublish(`amsg-share:${id}`, '{}')
 }
 
+/** A Swarm terminal request was answered or refused: its sender's wait, on any instance, reads it again. No content. */
+export function subscribeTerminalAnswered(requestId: string, cb: () => void): Promise<() => void> {
+  return addSub(`terminal-answer:${requestId}`, cb)
+}
+export function publishTerminalAnswered(requestId: string): Promise<number> {
+  return safePublish(`terminal-answer:${requestId}`, '{}')
+}
+
 /** Frames between daemons of a shared tab, by tab and machine: sealed, never read here. */
 export function subscribeTabRelay(share: string, machineId: string, cb: (msg: unknown) => void): Promise<() => void> {
   return addSub(`amsg:${share}:${machineId}`, cb as Cb)
