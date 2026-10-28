@@ -28,8 +28,8 @@ export interface TurnOptions {
 }
 
 export interface TurnHandle {
-  /** Resolves when the process exits. Never rejects — a failure is reported through `onLine`. */
-  done: Promise<{ code: number | null; killed: boolean }>
+  /** Resolves on exit. CLI failures arrive through `onLine`; input delivery failures set `inputError`. */
+  done: Promise<{ code: number | null; killed: boolean; inputError?: string }>
   kill: () => void
 }
 
@@ -63,12 +63,20 @@ export function runTurn(opts: TurnOptions, onLine: (line: StreamLine) => void, o
   })
 
   let killed = false
+  let inputError: string | undefined
   const kill = (): void => {
     if (killed || child.exitCode !== null) return
     killed = true
     killGroup(child)
   }
   opts.signal?.addEventListener('abort', kill, { once: true })
+
+  const failInput = (err: Error): void => {
+    inputError = `could not write input to claude: ${err.message}`
+    // A broken pipe is an execution failure, not a user cancellation.
+    killGroup(child)
+  }
+  child.stdin?.on('error', failInput)
 
   if (child.stdout) {
     const rl = createInterface({ input: child.stdout, crlfDelay: Infinity })
@@ -92,17 +100,17 @@ export function runTurn(opts: TurnOptions, onLine: (line: StreamLine) => void, o
   try {
     child.stdin?.write(`${JSON.stringify({ type: 'user', message: { role: 'user', content: [{ type: 'text', text: opts.text }] } })}\n`)
     child.stdin?.end()
-  } catch {
-    kill()
+  } catch (err) {
+    failInput(err instanceof Error ? err : new Error(String(err)))
   }
 
-  const done = new Promise<{ code: number | null; killed: boolean }>((resolve) => {
+  const done = new Promise<{ code: number | null; killed: boolean; inputError?: string }>((resolve) => {
     let settled = false
     const finish = (code: number | null): void => {
       if (settled) return
       settled = true
       opts.signal?.removeEventListener('abort', kill)
-      resolve({ code, killed })
+      resolve({ code, killed, ...(inputError ? { inputError } : {}) })
     }
     child.on('close', finish)
     child.on('error', () => finish(null))
