@@ -223,6 +223,156 @@ void main() {
     await walk.wait();
   });
 
+  testWidgets('the chat as it loads, reads back and starts', (tester) async {
+    final walk = _Walk(tester, binding, 'loading');
+    const conversation = 'g-build';
+    const messages =
+        '/api/super-tabs/$tab/conversations/$conversation/messages';
+    final now = DateTime.now();
+    const said = [
+      'Build 214 is green on CI.',
+      'The iPhone run starts after lunch, once the phone is plugged in.',
+      'Jasper fixed the three review findings.',
+      'Kai is checking the Android build.',
+      'Release notes are drafted; I will ask you before we ship.',
+    ];
+    Map<String, dynamic> message(int sequence) => {
+      'id': 'm$sequence',
+      'conversationId': conversation,
+      'text': said[sequence % said.length],
+      'sequence': sequence,
+      'author': {
+        'kind': 'agent',
+        'id': sequence.isEven ? 'agent-lead' : 'agent-jasper',
+        'name': sequence.isEven ? 'River' : 'Jasper',
+      },
+      'attachments': <Object>[],
+      'createdAt': now
+          .subtract(Duration(minutes: 3 * (60 - sequence)))
+          .toUtc()
+          .toIso8601String(),
+    };
+    Map<String, dynamic> build(int newest) => groupData(
+      conversation,
+      title: 'Phone build',
+      agentIds: ['agent-lead', 'agent-jasper'],
+      status: 'working',
+      workerId: 'agent-jasper',
+      lastMessageSequence: newest,
+    );
+
+    final swarm = Completer<void>();
+    final first = Completer<Object?>(), earlier = Completer<Object?>();
+    final fake = FakeSwarm();
+    fake.routes['/api/super-tabs/list'] = (_) => {
+      'tabs': [
+        {'id': tab, 'name': 'Phone Swarm', 'ownerId': me},
+      ],
+      'next': null,
+    };
+    fake.routes['/api/super-tabs/$tab/parts'] = (_) async {
+      await swarm.future;
+      return {
+        ...firstLoad(
+          agents: [
+            agent('agent-lead', name: 'Lead', displayName: 'River'),
+            agent('agent-jasper', displayName: 'Jasper'),
+          ],
+          groups: [
+            build(40),
+            groupData(
+              'g-new',
+              title: 'Release notes',
+              agentIds: ['agent-lead'],
+            ),
+          ],
+        ),
+        'members': [part(me, 1, person(me))],
+      };
+    };
+    fake.routes['/api/super-tabs/$tab/changes'] = (_) => changes(cursor: 'c2');
+    fake.routes['/api/super-tabs/$tab/decisions?state=open'] = (_) => {
+      'decisions': <Object>[],
+    };
+    fake.routes['/api/super-tabs/$tab/mentions?state=waiting'] = (_) => {
+      'mentions': <Object>[],
+    };
+    fake.routes[messages] = (_) => first.future;
+    fake.routes['$messages?before=21&beforeId=m21'] = (_) => earlier.future;
+    fake.routes['/api/super-tabs/$tab/conversations/g-new/messages'] = (_) => {
+      'messages': <Object>[],
+      'next': null,
+    };
+
+    final features = ExperimentalFeaturesStore(storage: MemoryKeyValueStore())
+      ..value = {PhoneExperiment.swarm};
+    final account = ValueNotifier<String?>(me);
+    final host = SwarmHost(
+      accountId: () => account.value,
+      account: account,
+      request: fake.request,
+      notices: SilentSystemNotices(),
+      features: features,
+    )..foreground = false;
+    addTearDown(host.dispose);
+    await tester.pumpWidget(
+      _app(
+        host,
+        const SwarmConversationPage(swarmId: tab, conversationId: conversation),
+      ),
+    );
+    await walk.waitFor(walk.key('swarm-chat-skeleton'));
+    await walk.shot('skeleton-and-header');
+
+    swarm.complete();
+    await walk.waitFor(find.text('Phone build'));
+    await walk.shot('skeleton');
+
+    first.complete({
+      'messages': [for (var i = 40; i > 20; i--) message(i)],
+      'next': {'sequence': 21, 'id': 'm21'},
+    });
+    await walk.waitFor(walk.key('swarm-message-m40'));
+    await walk.shot('read');
+
+    // Reading back when a message arrives: it waits below.
+    await tester.drag(walk.key('swarm-messages'), const Offset(0, 300));
+    await walk.wait();
+    fake.routes['/api/super-tabs/$tab/changes'] = (_) => changes(
+      cursor: 'c3',
+      lastChangedAt: 200,
+      groups: [part(conversation, 9, build(41))],
+    );
+    fake.routes['$messages?after=40'] = (_) => {
+      'messages': [message(41)],
+      'next': null,
+    };
+    await host.session!.inbox.reader(tab)!.refresh();
+    await walk.waitFor(walk.key('swarm-new-pill'));
+    await walk.shot('new-pill');
+
+    await tester.drag(walk.key('swarm-messages'), const Offset(0, 4000));
+    await walk.waitFor(walk.key('swarm-older-loading'));
+    await walk.shot('earlier-loading');
+    earlier.complete({
+      'messages': [for (var i = 20; i > 0; i--) message(i)],
+      'next': null,
+    });
+    await walk.wait();
+
+    // Another chat, with nothing in it yet: the app built again around it,
+    // as a navigator keeps its first page.
+    await tester.pumpWidget(const SizedBox());
+    await tester.pumpWidget(
+      _app(
+        host,
+        const SwarmConversationPage(swarmId: tab, conversationId: 'g-new'),
+      ),
+    );
+    await walk.waitFor(walk.key('swarm-chat-empty'));
+    await walk.shot('empty');
+  });
+
   testWidgets('each start screen', (tester) async {
     final walk = _Walk(tester, binding, 'start');
     const macAway = (name: 'MacBook Pro', away: true);

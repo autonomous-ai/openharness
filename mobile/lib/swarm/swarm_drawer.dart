@@ -9,6 +9,7 @@ import 'model.dart';
 import 'swarm_conversation.dart';
 import 'swarm_inbox.dart';
 import 'swarm_project_page.dart';
+import 'swarm_reader.dart';
 import 'swarm_session.dart';
 import 'swarm_style.dart';
 import 'swarm_team_line.dart';
@@ -70,11 +71,7 @@ class _SwarmDrawerState extends State<SwarmDrawer> {
       action();
     }
 
-    final swarms = [
-      for (final swarm in inbox?.swarms ?? const <SwarmListing>[])
-        if (inbox!.reader(swarm.id)?.snapshot case final snapshot?)
-          (swarm: swarm, snapshot: snapshot),
-    ];
+    final swarms = inbox?.swarms ?? const <SwarmListing>[];
     final several = swarms.length > 1;
     final waiting = inbox?.needs.length ?? 0;
     return Drawer(
@@ -116,18 +113,39 @@ class _SwarmDrawerState extends State<SwarmDrawer> {
                     badge: waiting > 0 ? SwarmBadge(waiting, warn: true) : null,
                     onTap: close,
                   ),
-                  for (final (:swarm, :snapshot) in swarms)
-                    if (snapshot.projects.isNotEmpty) ...[
-                      _Caption(several ? swarm.name : 'Projects'),
-                      for (final project in snapshot.projects)
-                        ..._project(
-                          session!,
-                          swarm.id,
-                          snapshot,
-                          project,
-                          then,
+                  // Before the list, and for a Swarm still to be read, its
+                  // projects are rows on their way; one that could not be
+                  // read lists none.
+                  if (inbox != null &&
+                      !inbox.loaded &&
+                      inbox.error == null) ...[
+                    const _Caption('Projects'),
+                    SwarmSkeletonRows(id: 'swarm-drawer-loading', drawer: true),
+                  ],
+                  for (final swarm in swarms)
+                    ...switch (inbox!.reader(swarm.id)) {
+                      SwarmReader(snapshot: final snapshot?)
+                          when snapshot.projects.isNotEmpty =>
+                        [
+                          _Caption(several ? swarm.name : 'Projects'),
+                          for (final project in snapshot.projects)
+                            ..._project(
+                              session!,
+                              swarm.id,
+                              snapshot,
+                              project,
+                              then,
+                            ),
+                        ],
+                      SwarmReader(snapshot: null, error: null) || null => [
+                        _Caption(several ? swarm.name : 'Projects'),
+                        SwarmSkeletonRows(
+                          id: 'swarm-drawer-loading-${swarm.id}',
+                          drawer: true,
                         ),
-                    ],
+                      ],
+                      _ => const <Widget>[],
+                    },
                   if (widget.onHarness case final harness?) ...[
                     const _Caption(''),
                     SwarmDrawerRow(
@@ -161,9 +179,7 @@ class _SwarmDrawerState extends State<SwarmDrawer> {
     );
   }
 
-  /// A project's row, and while its arrow is open, its chats: Chat with PM,
-  /// the project chat, then its work — what waits on the person first, the
-  /// rest by latest activity.
+  /// A project's row, and while its arrow is open, its chats ([_chats]).
   List<Widget> _project(
     SwarmSession session,
     String swarmId,
@@ -173,21 +189,6 @@ class _SwarmDrawerState extends State<SwarmDrawer> {
   ) {
     final id = '$swarmId/${project.id}';
     final open = _open.contains(id);
-    final lead = snapshot.conversation(project.leadConversationId);
-    final reader = session.inbox.reader(swarmId);
-    final work = swarmProjectWork(
-      snapshot,
-      project,
-      session.accountId,
-      pmChatId: reader == null ? null : swarmPmChat(reader, project.id)?.id,
-    ).active;
-    final waits = swarmWaitingOnYou(session.inbox, swarmId);
-    SwarmDrawerRow chat(SuperTabConversation g, String title) => SwarmDrawerRow(
-      key: ValueKey('swarm-drawer-chat-${g.id}'),
-      title: title,
-      sub: true,
-      onTap: () => then(() => widget.onChat(swarmId, g.id)),
-    );
     return [
       Row(
         children: [
@@ -212,19 +213,47 @@ class _SwarmDrawerState extends State<SwarmDrawer> {
           ),
         ],
       ),
-      if (open) ...[
-        SwarmDrawerRow(
-          key: ValueKey('swarm-drawer-pm-$swarmId-${project.id}'),
-          title: 'Chat with PM',
-          sub: true,
-          onTap: () => then(() => widget.onPm(swarmId, project.id)),
-        ),
-        if (lead != null) chat(lead, 'Project chat'),
-        for (final g in work)
-          if (waits.contains(g.id)) chat(g, g.label),
-        for (final g in work)
-          if (!waits.contains(g.id)) chat(g, g.label),
-      ],
+      if (open) ..._chats(session, swarmId, snapshot, project, then),
+    ];
+  }
+
+  /// An open project's chats: Chat with PM, the project chat, then its work
+  /// — what waits on the person first, the rest by latest activity. Worked
+  /// out only while it is open: a closed project costs its row alone.
+  List<Widget> _chats(
+    SwarmSession session,
+    String swarmId,
+    SuperTabSnapshot snapshot,
+    SuperTabProject project,
+    void Function(VoidCallback action) then,
+  ) {
+    final lead = snapshot.conversation(project.leadConversationId);
+    final reader = session.inbox.reader(swarmId);
+    final work = swarmProjectWork(
+      snapshot,
+      project,
+      session.accountId,
+      pmChatId: reader == null ? null : swarmPmChat(reader, project.id)?.id,
+    ).active;
+    final waits = swarmWaitingOnYou(session.inbox, swarmId);
+    SwarmDrawerRow chat(SuperTabConversation g, String title) => SwarmDrawerRow(
+      key: ValueKey('swarm-drawer-chat-${g.id}'),
+      title: title,
+      sub: true,
+      onTap: () => then(() => widget.onChat(swarmId, g.id)),
+    );
+    return [
+      SwarmDrawerRow(
+        key: ValueKey('swarm-drawer-pm-$swarmId-${project.id}'),
+        title: 'Chat with PM',
+        sub: true,
+        onTap: () => then(() => widget.onPm(swarmId, project.id)),
+      ),
+      if (lead != null) chat(lead, 'Project chat'),
+      for (final g in work)
+        if (waits.contains(g.id)) chat(g, g.label),
+      for (final g in work)
+        if (!waits.contains(g.id)) chat(g, g.label),
     ];
   }
 }

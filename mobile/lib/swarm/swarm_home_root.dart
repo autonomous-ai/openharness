@@ -1,5 +1,6 @@
 import 'package:flutter/widgets.dart';
 
+import '../phone/out_of_sight.dart';
 import '../settings/experimental_features.dart';
 
 /// What the root of the phone's stack shows. While Settings ▸ Experimental ▸
@@ -53,11 +54,12 @@ class SwarmHomeChoice extends ChangeNotifier {
 
 /// The root of the phone's stack: Swarm Home or [harness], as [choice] says.
 ///
-/// [harness] (the terminal home) is built the first time it is shown, and
-/// then kept, out of sight, while Swarm Home is up: a terminal is slow to
-/// open, and the person comes back to it as they left it. Out of sight it
-/// paints nothing, takes no touches or focus, and its animations stop. With
-/// Swarm off it is all there is, exactly as before Swarm Home.
+/// Each is built the first time it is shown, and then kept, out of sight,
+/// while the other is up: the person comes back to it as they left it — the
+/// terminal attached, Home scrolled where it was. Out of sight it paints and
+/// builds nothing, takes no touches or focus, and its animations and its
+/// listening stop ([OutOfSight]). With Swarm off the terminal is all there is,
+/// exactly as before Swarm Home.
 class SwarmHomeRoot extends StatefulWidget {
   const SwarmHomeRoot({
     super.key,
@@ -69,7 +71,7 @@ class SwarmHomeRoot extends StatefulWidget {
   final SwarmHomeChoice choice;
   final Widget harness;
 
-  /// Swarm Home; made again each time it is shown.
+  /// Swarm Home; made the first time it is shown.
   final WidgetBuilder swarm;
 
   @override
@@ -77,33 +79,57 @@ class SwarmHomeRoot extends StatefulWidget {
 }
 
 class _SwarmHomeRootState extends State<SwarmHomeRoot> {
-  /// Keeps the terminal's state when Swarm Home comes and goes beside it.
+  /// Keep each one's state while the other comes and goes beside it.
   final _harness = GlobalKey(debugLabel: 'harness');
-  bool _harnessBuilt = false;
+  final _swarm = GlobalKey(debugLabel: 'swarm');
+
+  /// Each as last shown: handed back unchanged while it is out of sight, so a
+  /// rebuild of this root (the shell rebuilding the stack under a page pushed
+  /// over it) leaves it alone. Null until it is first shown; Swarm Home's
+  /// goes again with Swarm turned off.
+  Widget? _harnessShown, _swarmShown;
 
   @override
   Widget build(BuildContext context) => ListenableBuilder(
     listenable: widget.choice,
     builder: (context, _) {
-      final swarm = widget.choice.swarm;
-      if (!swarm) _harnessBuilt = true;
+      final choice = widget.choice;
+      final swarm = choice.swarm;
+      if (!swarm) _harnessShown = widget.harness;
+      if (swarm) _swarmShown = widget.swarm(context);
+      if (!swarm && !choice.harnessOverSwarm) _swarmShown = null;
       return Stack(
         fit: StackFit.expand,
         children: [
-          if (_harnessBuilt)
-            KeyedSubtree(
-              key: _harness,
-              child: Offstage(
-                offstage: swarm,
-                child: TickerMode(
-                  enabled: !swarm,
-                  child: ExcludeFocus(excluding: swarm, child: widget.harness),
-                ),
-              ),
-            ),
-          if (swarm) widget.swarm(context),
+          // The terminal holds its output in its buffer while out of sight,
+          // and draws it once shown (xterm's own `renderingEnabled`, off with
+          // the tickers).
+          if (_harnessShown case final harness?)
+            _Kept(key: _harness, hidden: swarm, child: harness),
+          if (_swarmShown case final home?)
+            _Kept(key: _swarm, hidden: !swarm, child: home),
         ],
       );
     },
+  );
+}
+
+/// [child] at the root, or kept out of sight while [hidden].
+class _Kept extends StatelessWidget {
+  const _Kept({super.key, required this.hidden, required this.child});
+
+  final bool hidden;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) => Offstage(
+    offstage: hidden,
+    child: TickerMode(
+      enabled: !hidden,
+      child: ExcludeFocus(
+        excluding: hidden,
+        child: OutOfSight(hidden: hidden, child: child),
+      ),
+    ),
   );
 }

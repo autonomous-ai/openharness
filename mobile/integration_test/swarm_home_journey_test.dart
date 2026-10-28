@@ -12,6 +12,8 @@ import 'package:harness_mobile/settings/experimental_features.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart' as grid;
 import 'package:harness_mobile/state/app_state.dart';
 import 'package:harness_mobile/swarm/swarm_conversation_page.dart';
+import 'package:harness_mobile/swarm/swarm_drawer.dart';
+import 'package:harness_mobile/swarm/swarm_page.dart';
 import 'package:harness_mobile/swarm/swarm_project_page.dart';
 import 'package:harness_mobile/swarm/swarm_request.dart';
 import 'package:harness_mobile/ws/ws_conn.dart';
@@ -44,44 +46,7 @@ void main() {
   ) async {
     final swarm = _Swarm();
     final walk = _Walk(tester, binding, 'swarm-home');
-    const machine = Machine(
-      machineId: 'mac-1',
-      authMode: MachineAuthMode.remote,
-      name: 'Studio Mac',
-    );
-    final agents = [
-      <String, dynamic>{
-        'id': 'agent-review',
-        'name': 'passkeys',
-        'sessionId': 'session-review',
-        'engine': 'claude',
-        'status': 'active',
-        'terminal': {'available': true},
-        'project': {'name': 'harness', 'cwd': '/srv/harness'},
-        'updatedAt': DateTime.now().toUtc().toIso8601String(),
-      },
-    ];
-    final notifier = AppNotifier(
-      config: AppConfig.dev,
-      authSession: AuthSession(storage: _Memory()),
-      configStore: null,
-      connectionForTest: (machineId) =>
-          _ScriptedConn(machineId, agents, swarm.fake),
-    );
-    addTearDown(notifier.dispose);
-    notifier
-      ..currentUser = const CurrentUserProfile(id: me, email: 'sam@example.com')
-      ..machines = [machine];
-    notifier.machineStates[machine.machineId] = MachineState(machine)
-      ..nodeOnline = true
-      ..connectionStatus = ConnectionStatus.connected
-      ..agentLoadStatus = AgentLoadStatus.loaded
-      ..agents = [for (final json in agents) Agent.fromJson(json)];
-    // In memory only: the value, not the store's write.
-    experimentalFeaturesStore.value = {PhoneExperiment.swarm};
-    addTearDown(() => experimentalFeaturesStore.value = const {});
-
-    await tester.pumpWidget(_phone(PhoneShell(notifier: notifier)));
+    await _openShell(tester, swarm);
     final navigator = find
         .descendant(
           of: find.byType(PhoneShell),
@@ -184,14 +149,107 @@ void main() {
     await walk.wait(1500);
     await walk.shot('swarm-off');
   }, timeout: const Timeout(Duration(minutes: 3)));
+
+  testWidgets('Home is where it was left, after Harness and back', (
+    tester,
+  ) async {
+    final walk = _Walk(tester, binding, 'swarm-home-kept');
+    await _openShell(tester, _Swarm(more: 8));
+    final list = find
+        .descendant(
+          of: find.byType(SwarmPage),
+          matching: find.byType(Scrollable),
+        )
+        .first;
+    double offset() => tester.state<ScrollableState>(list).position.pixels;
+
+    // ① Home, scrolled down to its projects.
+    await walk.waitFor(walk.key('swarm-home-pm-$tab-$project'));
+    await tester.drag(list, const Offset(0, -500));
+    await walk.wait(1200);
+    final scrolled = offset();
+    expect(scrolled, greaterThan(0));
+    await walk.shot('home-scrolled');
+
+    // ② Harness from the drawer, below its projects.
+    await tester.tap(walk.key('swarm-menu'));
+    await walk.waitFor(find.byType(SwarmDrawer));
+    await walk.wait();
+    await tester.scrollUntilVisible(
+      walk.key('swarm-drawer-harness'),
+      200,
+      scrollable: find
+          .descendant(
+            of: find.byType(SwarmDrawer),
+            matching: find.byType(Scrollable),
+          )
+          .first,
+    );
+    await tester.tap(walk.key('swarm-drawer-harness'));
+    await walk.waitFor(walk.key('swarm-mark'));
+    await walk.wait(1500);
+    await walk.shot('harness');
+
+    // ③ Back to Home with the Swarm mark: scrolled where it was, its drawer
+    // closed.
+    await tester.tap(walk.key('swarm-mark'));
+    await walk.waitFor(walk.key('swarm-menu'));
+    expect(offset(), scrolled);
+    expect(walk.key('swarm-drawer-harness'), findsNothing);
+    await walk.shot('home-back');
+  }, timeout: const Timeout(Duration(minutes: 2)));
+}
+
+/// The real shell on [swarm], Swarm on, with one machine of the account
+/// connected and its one agent listed.
+Future<void> _openShell(WidgetTester tester, _Swarm swarm) async {
+  const machine = Machine(
+    machineId: 'mac-1',
+    authMode: MachineAuthMode.remote,
+    name: 'Studio Mac',
+  );
+  final agents = [
+    <String, dynamic>{
+      'id': 'agent-review',
+      'name': 'passkeys',
+      'sessionId': 'session-review',
+      'engine': 'claude',
+      'status': 'active',
+      'terminal': {'available': true},
+      'project': {'name': 'harness', 'cwd': '/srv/harness'},
+      'updatedAt': DateTime.now().toUtc().toIso8601String(),
+    },
+  ];
+  final notifier = AppNotifier(
+    config: AppConfig.dev,
+    authSession: AuthSession(storage: _Memory()),
+    configStore: null,
+    connectionForTest: (machineId) =>
+        _ScriptedConn(machineId, agents, swarm.fake),
+  );
+  addTearDown(notifier.dispose);
+  notifier
+    ..currentUser = const CurrentUserProfile(id: me, email: 'sam@example.com')
+    ..machines = [machine];
+  notifier.machineStates[machine.machineId] = MachineState(machine)
+    ..nodeOnline = true
+    ..connectionStatus = ConnectionStatus.connected
+    ..agentLoadStatus = AgentLoadStatus.loaded
+    ..agents = [for (final json in agents) Agent.fromJson(json)];
+  // In memory only: the value, not the store's write.
+  experimentalFeaturesStore.value = {PhoneExperiment.swarm};
+  addTearDown(() => experimentalFeaturesStore.value = const {});
+
+  await tester.pumpWidget(_phone(PhoneShell(notifier: notifier)));
 }
 
 /// One Swarm, "Phone Swarm", as the backend would send it: Mobile app (River
 /// its Product Manager, Nova waiting on the person, Kai working, Atlas
 /// down), Website (Cleo), a decision and a tag for the person, and their
 /// Chat with PM of Mobile app. A decision answered and a tag done leave.
+/// [more] projects besides, for a Home taller than the screen.
 class _Swarm {
-  _Swarm() {
+  _Swarm({int more = 0}) {
     const web = 'project-2';
     const webLead = 'group-lead-web';
     Map<String, dynamic> inWeb(Map<String, dynamic> row) => {
@@ -223,6 +281,8 @@ class _Swarm {
         projects: [
           projectRow(project, 'Mobile app', leadChat),
           projectRow(web, 'Website', webLead),
+          for (var i = 1; i <= more; i++)
+            projectRow('project-more-$i', 'Project $i', 'lead-more-$i'),
         ],
       ),
       agents: [

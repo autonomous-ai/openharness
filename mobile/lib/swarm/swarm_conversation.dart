@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 
 import 'model.dart';
+import 'swarm_chat_cache.dart';
 import 'swarm_reader.dart';
 import 'swarm_request.dart';
 
@@ -13,13 +14,22 @@ import 'swarm_request.dart';
 /// Messages are read as the latest page when opened, older pages on demand,
 /// and new ones when the Swarm's read says the conversation moved past the
 /// last one shown (`lastMessageSequence`): no read of its own while nothing
-/// was posted. Keep the [reader] shown while this is on screen.
+/// was posted. Keep the [reader] shown while this is on screen. A chat read
+/// before shows at once what was read then ([SwarmChatCache]) and reads on
+/// from it.
 ///
 /// A conversation the Swarm's read no longer has hides its messages at once
-/// and is asked for by id, as a closed one is in no full read. One the person
-/// cannot read keeps nothing here: messages, draft and a post not confirmed.
+/// and is asked for by id, as a closed one is in no full read; one it never
+/// had is asked for while its messages are read. One the person cannot read
+/// keeps nothing here: messages, draft and a post not confirmed.
 class SwarmConversation extends ChangeNotifier {
   SwarmConversation(this.reader, this.id) {
+    _listed = conversation != null;
+    if (SwarmChatCache.take(reader, id) case final kept?) {
+      messages = kept.messages;
+      _before = kept.before;
+      _read = _kept = true;
+    }
     reader.addListener(_swarmChanged);
     reader.reads.addListener(_swarmChanged);
   }
@@ -36,8 +46,30 @@ class SwarmConversation extends ChangeNotifier {
   /// A post is on its way.
   bool sending = false;
 
+  /// Tells the composer what changed in it — the draft, the message it
+  /// answers, a post leaving it — while this notifier itself tells the
+  /// messages: a letter typed draws none of them again.
+  Listenable get composer => _composer;
+  final _composer = _Changes();
+
   SuperTabPage? _before;
   bool _read = false, _lost = false, _disposed = false;
+
+  /// The backend refused the person this conversation: [SwarmChatState.lost]
+  /// until a read of it succeeds.
+  bool _refused = false;
+
+  /// The Swarm's read has had it since it was last forgotten: one that then
+  /// leaves the read hides its messages at once, where one never in it (a
+  /// closed one, looked for by id) keeps those read meanwhile.
+  late bool _listed;
+
+  /// The messages are those kept from when the chat was last open, not yet
+  /// read on from.
+  bool _kept = false;
+
+  /// A read told no one ([readBackTo]): told once it is done.
+  bool _untold = false;
   Future<void>? _reading, _readingOlder, _locating;
 
   /// Moves when what was read is dropped: a read asked for before then
@@ -67,6 +99,16 @@ class SwarmConversation extends ChangeNotifier {
   /// Earlier messages wait to be read.
   bool get hasOlder => _before != null;
 
+  /// Where the chat stands: the page draws a skeleton, its messages, or
+  /// "not open" from it.
+  SwarmChatState get state => _refused
+      ? SwarmChatState.lost
+      : _read
+      ? SwarmChatState.loaded
+      : _locating != null
+      ? SwarmChatState.locating
+      : SwarmChatState.loading;
+
   /// A post was sent and not confirmed: [send] retries it.
   bool get unconfirmed => _pending != null && !sending;
 
@@ -87,7 +129,7 @@ class SwarmConversation extends ChangeNotifier {
   SuperTabMessage? get replyingTo => _replyingTo;
   set replyingTo(SuperTabMessage? message) {
     _replyingTo = message;
-    notifyListeners();
+    _composer.changed();
   }
 
   /// The person may post here: a writer of the Swarm, in a conversation that
@@ -107,7 +149,7 @@ class SwarmConversation extends ChangeNotifier {
   set draft(String value) {
     _draft = value;
     _mentions.removeWhere((_, token) => !containsMention(value, token));
-    notifyListeners();
+    _composer.changed();
   }
 
   /// Whether [text] names [token] as a word of its own: the desktop's rule.
@@ -138,7 +180,7 @@ class SwarmConversation extends ChangeNotifier {
     final spaced = _draft.isEmpty || RegExp(r'\s$').hasMatch(_draft);
     _draft = '$_draft${spaced ? '' : ' '}$token ';
     _mentions[agentId] = token;
-    notifyListeners();
+    _composer.changed();
   }
 
   /// The agents a post can mention: those in this conversation.
@@ -159,16 +201,20 @@ class SwarmConversation extends ChangeNotifier {
     if (reader.snapshot == null) return;
     final group = conversation;
     if (group == null) {
-      if (messages.isNotEmpty || _read) {
-        _forget();
-        notifyListeners();
+      if (_listed) {
+        _listed = false;
+        if (messages.isNotEmpty || _read) {
+          _forget();
+          notifyListeners();
+        }
       }
       // Asked for by id until it is known unreadable; an ask that failed is
       // made again at the Swarm's next read.
       if (!_lost) unawaited(_locate());
       return;
     }
-    _lost = false;
+    _listed = true;
+    if (_lost) _lost = _refused = false;
     final tail = messages.lastOrNull?.sequence ?? 0;
     if (!_read || group.lastMessageSequence > tail) unawaited(load());
   }
@@ -196,15 +242,19 @@ class SwarmConversation extends ChangeNotifier {
     _readingOlder = null;
   }
 
-  /// The person cannot read this conversation: nothing of it stays.
+  /// The person cannot read this conversation: nothing of it stays, here or
+  /// kept for the next open.
   void _lose() {
+    SwarmChatCache.drop(reader, id);
     final held =
+        !_refused ||
         messages.isNotEmpty ||
         _read ||
         _draft.isNotEmpty ||
         _pending != null ||
         _replyingTo != null ||
         error != null;
+    _refused = true;
     _forget();
     _draft = '';
     _mentions.clear();
@@ -212,38 +262,74 @@ class SwarmConversation extends ChangeNotifier {
     _sent = null;
     _replyingTo = null;
     error = null;
-    if (held) notifyListeners();
+    if (held) _tell();
   }
 
   /// The latest page the first time, then what came after the newest shown;
-  /// a conversation the Swarm's read does not have is asked for by id first.
-  /// Joins a read under way.
+  /// a conversation the Swarm's read does not have is asked for by id at the
+  /// same time. Joins a read under way.
   Future<void> load() {
     if (_disposed) return Future.value();
-    if (reader.snapshot != null && conversation == null) return _locate();
-    if (_reading case final reading?) return reading;
-    late final Future<void> reading;
-    reading = _load(older: false).whenComplete(() {
-      if (identical(_reading, reading)) _reading = null;
-    });
-    return _reading = reading;
+    final locating = reader.snapshot != null && conversation == null
+        ? _locate()
+        : null;
+    var reading = _reading;
+    if (reading == null) {
+      late final Future<void> read;
+      read = _load(older: false).whenComplete(() {
+        if (identical(_reading, read)) _reading = null;
+      });
+      reading = _reading = read;
+    }
+    return locating == null ? reading : Future.wait([locating, reading]);
   }
 
   /// The page before the oldest shown.
-  Future<void> loadOlder() {
+  Future<void> loadOlder() => _older(tell: true);
+
+  /// Reads earlier pages until [messageId] is among the messages, the first
+  /// one is reached or [pages] were read, and tells the chat once at the end
+  /// rather than at each page: a quote followed to its original draws the
+  /// chat once. True once the message is there.
+  Future<bool> readBackTo(String messageId, {int pages = 50}) async {
+    bool has() => messages.any((m) => m.id == messageId);
+    var read = 0;
+    try {
+      while (!_disposed && !has() && hasOlder && read < pages) {
+        await _older(tell: false);
+        read++;
+        if (error != null) break;
+      }
+    } finally {
+      if (_untold && !_disposed) {
+        _untold = false;
+        notifyListeners();
+      }
+    }
+    return has();
+  }
+
+  Future<void> _older({required bool tell}) {
     if (!hasOlder) return Future.value();
     if (_readingOlder case final reading?) return reading;
     late final Future<void> reading;
-    reading = _load(older: true).whenComplete(() {
+    reading = _load(older: true, tell: tell).whenComplete(() {
       if (identical(_readingOlder, reading)) _readingOlder = null;
     });
     return _readingOlder = reading;
   }
 
-  Future<void> _load({required bool older}) async {
+  /// One page: the one before the oldest shown, else what came after the
+  /// newest — or, with [latest] or none shown, the latest page. Tells the
+  /// chat what changed unless [tell] is false, which leaves it [_untold].
+  Future<void> _load({
+    required bool older,
+    bool latest = false,
+    bool tell = true,
+  }) async {
     final epoch = _epoch;
     try {
-      final tail = messages.lastOrNull?.sequence;
+      final tail = latest ? null : messages.lastOrNull?.sequence;
       final before = _before;
       final query = older
           ? '?before=${before!.sequence}'
@@ -260,16 +346,41 @@ class SwarmConversation extends ChangeNotifier {
       if (incoming.any((m) => m.conversationId != id)) {
         throw const FormatException('A different conversation was returned.');
       }
-      final combined = {
-        for (final m in messages) m.id: m,
-        for (final m in incoming) m.id: m,
-      };
-      messages = List.unmodifiable(
-        combined.values.toList()..sort(superTabMessageOrder),
-      );
-      if (older || !_read) _before = SuperTabPage.read(answer['next']);
+      if (!older && _kept) {
+        _kept = false;
+        // More than a page came after what was kept: the latest page, as a
+        // first open reads it, where reading on would leave a gap.
+        if (tail != null && answer['next'] != null) {
+          await _load(older: false, latest: true, tell: tell);
+          return;
+        }
+      }
+      // A message read again as it was stays the one shown, and a read that
+      // brings nothing new tells no one: the chat draws nothing again.
+      final byId = latest
+          ? <String, SuperTabMessage>{}
+          : {for (final m in messages) m.id: m};
+      var changed = !_read || error != null || _refused || latest;
+      for (final m in incoming) {
+        if (byId[m.id] case final shown? when _same(shown, m)) continue;
+        byId[m.id] = m;
+        changed = true;
+      }
+      if (changed) {
+        messages = List.unmodifiable(
+          byId.values.toList()..sort(superTabMessageOrder),
+        );
+      }
+      if (older || !_read || latest) {
+        final before = SuperTabPage.read(answer['next']);
+        changed |=
+            before?.sequence != _before?.sequence || before?.id != _before?.id;
+        _before = before;
+      }
       _read = true;
+      _refused = false;
       error = null;
+      if (!changed) return;
     } on SuperTabFailure catch (failure) {
       if (_disposed || epoch != _epoch) return;
       if (const {'FORBIDDEN', 'NOT_FOUND'}.contains(failure.code)) _lose();
@@ -278,7 +389,11 @@ class SwarmConversation extends ChangeNotifier {
       if (_disposed || epoch != _epoch) return;
       error = 'Could not load messages. Try again.';
     }
-    notifyListeners();
+    if (tell) {
+      notifyListeners();
+    } else {
+      _untold = true;
+    }
   }
 
   /// Posts the draft, to the agents mentioned in it and as a reply to
@@ -302,7 +417,7 @@ class SwarmConversation extends ChangeNotifier {
     _pending = pending;
     sending = true;
     error = null;
-    notifyListeners();
+    _tell();
     try {
       await reader.request(
         'POST',
@@ -325,7 +440,7 @@ class SwarmConversation extends ChangeNotifier {
       return false;
     } finally {
       sending = false;
-      if (!_disposed) notifyListeners();
+      if (!_disposed) _tell();
     }
     unawaited(reader.refresh());
     // Shown as on its way until the read that brings it back.
@@ -333,9 +448,24 @@ class SwarmConversation extends ChangeNotifier {
     if (_disposed || !identical(_pending, pending)) return true;
     _pending = null;
     _sent = null;
-    notifyListeners();
+    _tell();
     return true;
   }
+
+  /// A post moved between the composer and the messages: both are told.
+  void _tell() {
+    notifyListeners();
+    _composer.changed();
+  }
+
+  /// What a row draws of a message, the same in [a] as in [b].
+  static bool _same(SuperTabMessage a, SuperTabMessage b) =>
+      a.sequence == b.sequence &&
+      a.text == b.text &&
+      a.replyTo == b.replyTo &&
+      a.authorName == b.authorName &&
+      a.createdAt == b.createdAt &&
+      a.attachments.length == b.attachments.length;
 
   /// A refused post's text back in the draft, before anything typed since.
   void _restore() {
@@ -371,10 +501,25 @@ class SwarmConversation extends ChangeNotifier {
   @override
   void dispose() {
     _disposed = true;
+    // Shown at once when opened again, while the person can still read it.
+    if (_read && !_refused) {
+      SwarmChatCache.keep(reader, id, messages: messages, before: _before);
+    }
     reader.removeListener(_swarmChanged);
     reader.reads.removeListener(_swarmChanged);
+    _composer.dispose();
     super.dispose();
   }
+}
+
+/// Where a chat stands: its first page on its way, looked for by id (one no
+/// full read of its Swarm has), read, or not open to the person — said only
+/// once the backend refused it.
+enum SwarmChatState { loading, locating, loaded, lost }
+
+/// A notifier told from outside it: the conversation's [composer].
+class _Changes extends ChangeNotifier {
+  void changed() => notifyListeners();
 }
 
 /// The person's private chat with [projectId]'s Product Manager: that
@@ -394,8 +539,9 @@ SuperTabConversation? swarmPmChat(SwarmReader reader, String projectId) =>
 /// alone, named after them, with the project's Lead in it. The create is one
 /// fixed operation per person, membership and project, so a second tap or
 /// another device gets the same conversation back, while a person who left
-/// and rejoined gets a new one (the desktop's `openPmChat`). Answers its id,
-/// or null when it could not be read back; a refusal throws.
+/// and rejoined gets a new one (the desktop's `openPmChat`). Answers its id
+/// as soon as it is made — the chat opened on it looks it up as it reads its
+/// messages — or null when the create named none; a refusal throws.
 Future<String?> openSwarmPmChat(SwarmReader reader, String projectId) async {
   if (swarmPmChat(reader, projectId) case final chat?) return chat.id;
   final me = reader.snapshot?.people
@@ -428,7 +574,5 @@ Future<String?> openSwarmPmChat(SwarmReader reader, String projectId) async {
     ),
   );
   final id = superTabMap(answer['result'] ?? const {})['conversationId'];
-  if (id is! String) return null;
-  await reader.refresh();
-  return await reader.loadConversation(id) ? id : null;
+  return id is String ? id : null;
 }

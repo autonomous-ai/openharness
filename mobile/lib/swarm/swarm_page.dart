@@ -3,18 +3,22 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
+import 'package:harness_mobile/phone/out_of_sight.dart';
 import 'package:harness_mobile/phone/phone_navigation.dart';
 import 'package:harness_mobile/phone/phone_shell_scope.dart';
 import 'package:harness_mobile/phone/tty.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart';
 import 'package:harness_mobile/theme/app_theme.dart' show AppColors;
 
+import 'model.dart';
 import 'swarm_choices.dart';
 import 'swarm_conversation_page.dart';
 import 'swarm_drawer.dart';
+import 'swarm_inbox.dart';
 import 'swarm_pm_chat.dart';
 import 'swarm_need_rows.dart';
 import 'swarm_project_page.dart';
+import 'swarm_reader.dart';
 import 'swarm_row.dart';
 import 'swarm_session.dart';
 import 'swarm_start.dart';
@@ -58,19 +62,28 @@ class SwarmPage extends StatefulWidget {
 class _SwarmPageState extends State<SwarmPage> {
   SwarmSession? _session;
 
+  /// Kept out of sight under Harness ([OutOfSight]), as it was left: it is no
+  /// Swarm screen meanwhile — a notice still tells what arrives — and draws
+  /// nothing new. Shown again, it reads the Swarms as on any return to Home.
+  bool _hidden = false;
+
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
     final session = SwarmScope.of(context);
-    if (session == _session) return;
-    _session?.leave();
-    _session = session?..enter();
-    if (session != null) unawaited(session.inbox.refresh());
+    final hidden = OutOfSight.of(context);
+    if (session == _session && hidden == _hidden) return;
+    if (!_hidden) _session?.leave();
+    _session = session;
+    _hidden = hidden;
+    if (hidden || session == null) return;
+    session.enter();
+    unawaited(session.inbox.refresh());
   }
 
   @override
   void dispose() {
-    _session?.leave();
+    if (!_hidden) _session?.leave();
     super.dispose();
   }
 
@@ -79,6 +92,7 @@ class _SwarmPageState extends State<SwarmPage> {
         Navigator.of(context).push(
           phoneRoute(
             (_) => SwarmProjectPage(swarmId: swarmId, projectId: projectId),
+            listensForItself: true,
           ),
         ),
       );
@@ -116,8 +130,9 @@ class _SwarmPageState extends State<SwarmPage> {
     return Scaffold(
       backgroundColor: tty.ground,
       // Home's drawer; a Swarm page pushed over another page has its back
-      // button instead.
-      drawer: pushed
+      // button instead. None out of sight: one closing as Harness took the
+      // screen would stop there, its animation off, and be found half open.
+      drawer: pushed || _hidden
           ? null
           : ListenableBuilder(
               listenable: Listenable.merge([?session, ?session?.inbox]),
@@ -149,11 +164,11 @@ class _SwarmPageState extends State<SwarmPage> {
             Expanded(
               child: session == null
                   ? const _Unavailable()
-                  : ListenableBuilder(
+                  : ListenWhileInSight(
                       listenable: Listenable.merge([session, session.inbox]),
                       // Before there is a Swarm to show, a start screen in
                       // place of the body, under the same top bar.
-                      builder: (context, _) =>
+                      builder: (context) =>
                           swarmStartView(context, session) ??
                           RefreshIndicator(
                             onRefresh: session.inbox.refresh,
@@ -178,19 +193,41 @@ class _SwarmPageState extends State<SwarmPage> {
 
   List<Widget> _body(BuildContext context, SwarmSession session, Tty tty) {
     final inbox = session.inbox;
+    // Before the list there is nothing to read; a list that could not be
+    // read says so alone, without rows on their way.
+    if (!inbox.loaded) {
+      return [
+        if (inbox.error case final error?)
+          _error(error, key: 'swarm-error')
+        else
+          ..._reading(),
+      ];
+    }
     final several = inbox.swarms.length > 1;
+    final empty = _emptyNeeds(inbox);
     List<Widget> needs({required bool first}) => [
       SwarmCaption('Needs you', count: inbox.needs.length, first: first),
-      if (inbox.needs.isEmpty)
-        Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 4),
-          child: SwarmRow.line(
-            inbox.loaded ? 'Nothing needs you.' : 'Reading your Swarms…',
-            key: const ValueKey('swarm-needs-none'),
-          ),
-        )
+      if (inbox.needs.isNotEmpty)
+        SwarmGroup(children: _needs(context, session))
       else
-        SwarmGroup(children: _needs(context, session)),
+        switch (empty) {
+          _EmptyNeeds.reading => SwarmSkeletonRows(
+            id: 'swarm-needs-loading',
+            rows: 1,
+          ),
+          _EmptyNeeds.unread => _error(
+            'Could not load what is waiting for you. Try again.',
+            key: 'swarm-needs-unread',
+            top: 0,
+          ),
+          _EmptyNeeds.none => Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 4),
+            child: SwarmRow.line(
+              'Nothing needs you.',
+              key: const ValueKey('swarm-needs-none'),
+            ),
+          ),
+        },
     ];
     final pm = [
       for (final swarm in inbox.swarms)
@@ -217,29 +254,44 @@ class _SwarmPageState extends State<SwarmPage> {
               onTap: () => unawaited(_openPm(swarm.id, project.id)),
             ),
     ];
+    // Swarms listed and still to be read: their rows are on their way.
+    final reading = [
+      for (final swarm in inbox.swarms)
+        if (_unread(inbox.reader(swarm.id))) swarm.id,
+    ];
     List<Widget> swarms({required bool first}) => [
-      if (pm.isNotEmpty) ...[
+      if (pm.isNotEmpty || reading.isNotEmpty) ...[
         SwarmCaption('Chat with PM', first: first),
-        SwarmGroup(children: pm),
+        if (pm.isNotEmpty) SwarmGroup(children: pm),
+        for (final (i, id) in reading.indexed) ...[
+          if (pm.isNotEmpty || i > 0) const SizedBox(height: 8),
+          SwarmSkeletonRows(id: 'swarm-pm-loading-$id', round: true),
+        ],
       ],
       if (_pmError case final error?)
-        Padding(
-          padding: const EdgeInsets.fromLTRB(4, 8, 4, 0),
-          child: SwarmRow.line(
-            error,
-            key: const ValueKey('swarm-pm-error'),
-            lines: 3,
-            color: AppColors.danger,
-          ),
-        ),
+        _error(error, key: 'swarm-pm-error', top: 8),
       for (final (i, swarm) in inbox.swarms.indexed) ...[
         SwarmCaption(
           several ? swarm.name : 'Projects',
-          first: first && pm.isEmpty && i == 0,
+          first: first && pm.isEmpty && reading.isEmpty && i == 0,
         ),
-        SwarmGroup(children: _projects(context, session, swarm.id)),
+        switch (inbox.reader(swarm.id)) {
+          SwarmReader(snapshot: final snapshot?) => SwarmGroup(
+            children: _projects(context, swarm.id, snapshot),
+          ),
+          SwarmReader(error: final error?) => SwarmGroup(
+            children: [
+              SwarmRow(
+                title: error,
+                detail: SwarmRow.line('Pull down to try again.'),
+                onTap: null,
+              ),
+            ],
+          ),
+          _ => SwarmSkeletonRows(id: 'swarm-projects-loading-${swarm.id}'),
+        },
       ],
-      if (inbox.loaded && inbox.swarms.isEmpty) ...[
+      if (inbox.swarms.isEmpty) ...[
         SwarmCaption('Your Swarms', first: first && pm.isEmpty),
         Padding(
           padding: const EdgeInsets.symmetric(horizontal: 4),
@@ -251,21 +303,41 @@ class _SwarmPageState extends State<SwarmPage> {
       ],
     ];
     return [
-      if (inbox.error case final error?)
-        Padding(
-          padding: const EdgeInsets.fromLTRB(4, 6, 4, 0),
-          child: SwarmRow.line(
-            error,
-            key: const ValueKey('swarm-error'),
-            lines: 3,
-            color: AppColors.danger,
-          ),
-        ),
+      if (inbox.error case final error?) _error(error, key: 'swarm-error'),
       ...swarmNeedsFirst
           ? [...needs(first: true), ...swarms(first: false)]
           : [...swarms(first: true), ...needs(first: false)],
     ];
   }
+
+  /// Home before the list answers: Needs you, Chat with PM and the projects
+  /// as rows on their way, in the order Home shows them.
+  List<Widget> _reading() {
+    List<Widget> needs({required bool first}) => [
+      SwarmCaption('Needs you', first: first),
+      SwarmSkeletonRows(id: 'swarm-needs-loading', rows: 1),
+    ];
+    List<Widget> swarms({required bool first}) => [
+      SwarmCaption('Chat with PM', first: first),
+      SwarmSkeletonRows(id: 'swarm-pm-loading', round: true),
+      const SwarmCaption('Projects'),
+      SwarmSkeletonRows(id: 'swarm-projects-loading'),
+    ];
+    return swarmNeedsFirst
+        ? [...needs(first: true), ...swarms(first: false)]
+        : [...swarms(first: true), ...needs(first: false)];
+  }
+
+  /// What went wrong, in the danger colour, up to three lines.
+  Widget _error(String text, {required String key, double top = 6}) => Padding(
+    padding: EdgeInsets.fromLTRB(4, top, 4, 0),
+    child: SwarmRow.line(
+      text,
+      key: ValueKey(key),
+      lines: 3,
+      color: AppColors.danger,
+    ),
+  );
 
   /// Every need, one open with its options or Done, the others a line each
   /// that opens it in its place. The one open is the person's pick while it
@@ -297,22 +369,9 @@ class _SwarmPageState extends State<SwarmPage> {
 
   List<Widget> _projects(
     BuildContext context,
-    SwarmSession session,
     String swarmId,
+    SuperTabSnapshot snapshot,
   ) {
-    final reader = session.inbox.reader(swarmId);
-    final snapshot = reader?.snapshot;
-    if (snapshot == null) {
-      return [
-        SwarmRow(
-          title: reader?.error ?? 'Reading…',
-          detail: reader?.error == null
-              ? null
-              : SwarmRow.line('Pull down to try again.'),
-          onTap: null,
-        ),
-      ];
-    }
     if (snapshot.projects.isEmpty) {
       return [const SwarmRow(title: 'No project yet', onTap: null)];
     }
@@ -329,6 +388,47 @@ class _SwarmPageState extends State<SwarmPage> {
         ),
     ];
   }
+}
+
+/// Why Needs you is empty.
+enum _EmptyNeeds {
+  /// A Swarm, or what waits on the person in it, is still being read.
+  reading,
+
+  /// Something could not be read: "nothing" is not known.
+  unread,
+
+  /// Everything was read, and nothing needs the person.
+  none,
+}
+
+/// A Swarm listed and still to be read: no snapshot yet, and no reason it
+/// could not be read.
+bool _unread(SwarmReader? reader) =>
+    reader == null || (reader.snapshot == null && reader.error == null);
+
+/// Why [inbox]'s Needs you is empty: still reading while a Swarm, or what
+/// waits on the person in it since it was last read in full, is not read yet.
+_EmptyNeeds _emptyNeeds(SwarmInbox inbox) {
+  var reading = false, unread = false;
+  for (final swarm in inbox.swarms) {
+    switch (inbox.reader(swarm.id)) {
+      case SwarmReader(snapshot: _?):
+        if (inbox.asks(swarm.id) case final asks?) {
+          if (asks.loading) {
+            reading = true;
+          } else if (asks.error != null) {
+            unread = true;
+          }
+        }
+      case SwarmReader(error: _?):
+        unread = true;
+      case _:
+        reading = true;
+    }
+  }
+  if (reading) return _EmptyNeeds.reading;
+  return unread ? _EmptyNeeds.unread : _EmptyNeeds.none;
 }
 
 /// No session: Swarm is off, or nobody is signed in on this phone.

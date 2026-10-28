@@ -447,7 +447,7 @@ class SwarmInbox extends ChangeNotifier {
         final SuperTabMention mention => SwarmMentionNeed(id, mention),
         _ => throw StateError('Unknown ask $ask'),
       }))
-      ..addListener(_relay);
+      ..addListener(_asked);
     return reader;
   }
 
@@ -462,12 +462,20 @@ class SwarmInbox extends ChangeNotifier {
     _workSeen.remove(id);
   }
 
-  /// A Swarm's reader or asks told of a change: what they hold is drawn
-  /// through the inbox (Home's projects, a decision's buttons), so it is
-  /// told on, once per list read at most.
+  /// A Swarm's reader told of a change: what it holds is drawn through the
+  /// inbox (Home's projects, the work waiting), so it is told on, once per
+  /// list read at most.
   void _relay() {
     _below = true;
     if (!_polling) _rebuild();
+  }
+
+  /// A Swarm's asks told of a change: shown at once, poll or not. A Done or
+  /// an answer is the person's own tap, and a slow read of another Swarm
+  /// must not hold it back.
+  void _asked() {
+    _below = true;
+    _rebuild();
   }
 
   /// Works out [needs] again; notifies when they, the inbox itself ([told])
