@@ -1,4 +1,4 @@
-import { admitMachineStart, expireRemoval, expireRemovals, failTeamWork, machineContribution, machineOffline, ownedMachine, requireTeamWork, teamMachineFor, teamPoolsOf, teamStartRequest, teamWorkCheck, type ContributedMachine } from './machines.js'
+import { admitMachineStart, expireRemoval, expireRemovals, failTeamWork, removalEnded, machineContribution, machineOffline, ownedMachine, requireTeamWork, teamMachineFor, teamPoolsOf, teamStartRequest, teamWorkCheck, type ContributedMachine } from './machines.js'
 import { assignAgentDisplayNames } from './agentNames.js'
 import { z } from 'zod'
 import {
@@ -463,10 +463,10 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
   syncLeads(state)
   numberConversations(state)
   placeRules(state)
-  expireRemovals(state, context.now)
+  const ended = expireRemovals(state, context.now)
   assignAgentDisplayNames(state.agents)
   const result: Record<string, unknown> = {}
-  const effects: CommandEffects = { state, messages: [], cancelledAgents: [], previousAttempts: [], routeDecisions: [], result }
+  const effects: CommandEffects = { state, messages: ended, cancelledAgents: [], previousAttempts: [], routeDecisions: [], result }
   const operationId = stableId(state.id, actorKey(actor), context.operationId)
 
   // Acceptance is the only operation a non-member can perform; the verified account email owns the invite.
@@ -498,6 +498,8 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
     const pool = state.machines?.find(m => m.removal && owns(m.machineId, m.removal.id, m.contributorId))
     const cleanup = state.machineCleanups?.find(c => owns(c.machineId, c.removalId, c.machineOwnerId))
     if (!pool && !cleanup) fail('NOT_FOUND', 'This machine has no cleanup waiting.', 404)
+    // One that already left the list said why then.
+    if (pool) effects.messages.push(...removalEnded(state, pool, 'confirmed'))
     state.machines = state.machines?.filter(m => m !== pool)
     state.machineCleanups = state.machineCleanups?.filter(c => c !== cleanup)
     if (!state.machineCleanups?.length) delete state.machineCleanups
@@ -686,9 +688,9 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
         text: `${how(machine)}, and ${join} with it.${task ? ` Its task "${group.title}" needs to be assigned again or closed.` : ''}`,
         replyTo: null, recipients: lead ? [lead] : [], source: SYSTEM_ROW })
     }
-    // Its host is offline and cannot acknowledge, so the day-long fallback applies at once: the machine leaves the list
+    // Its host is offline and cannot acknowledge, so the fallback applies at once: the machine leaves the list
     // now and its cleanup waits for its next connection (spec 2026-10-23-remove-machine.md).
-    if (pool?.removal && machineOffline(pool, context.now)) expireRemoval(state, pool)
+    if (pool?.removal && machineOffline(pool, context.now)) effects.messages.push(...removalEnded(state, pool, expireRemoval(state, pool, context.now)))
     return removed
   }
 
