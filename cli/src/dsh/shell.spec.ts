@@ -145,6 +145,15 @@ describe('isShellNoise', () => {
     expect(isShellNoise('  ok   bash: no job control in this shell')).toBe(false)
     expect(isShellNoise('logout failed')).toBe(false)
   })
+
+  it('keeps a line that names some other bash: only bash itself, or the paths it is installed at, says the notice', () => {
+    // Review of #2025: any `<path>/bash: no job control in this shell` was dropped, a script's own line included.
+    expect(isShellNoise('scripts/bash: no job control in this shell')).toBe(false)
+    expect(isShellNoise('./bash: no job control in this shell')).toBe(false)
+    expect(isShellNoise('/home/ana/project/bash: cannot set terminal process group (-1): Inappropriate ioctl for device')).toBe(false)
+    expect(isShellNoise('mybash: no job control in this shell')).toBe(false)
+    expect(isShellNoise('/bin/bash: cannot set terminal process group (4242): Inappropriate ioctl for device')).toBe(true)
+  })
 })
 
 describe('runDshCommand', () => {

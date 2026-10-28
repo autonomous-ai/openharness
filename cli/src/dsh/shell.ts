@@ -40,7 +40,12 @@ export function isShellNoise(line: string): boolean {
     || BASH_NO_TTY.test(line) || line === 'logout'
 }
 
-const BASH_NO_TTY = /^(?:\S*\/)?bash: (?:cannot set terminal process group \(-?\d+\): Inappropriate ioctl for device|no job control in this shell)$/
+/**
+ * The notice word for word, said by bash under a name it has: an interactive bash says its own base name (`bash`, Git
+ * Bash's too), and the paths are the ones bash is installed at, `/usr/bin/bash` as Linux CI saw it. Not any
+ * `<path>/bash:`, which dropped a script's own line that only looked like the notice (review of #2025).
+ */
+const BASH_NO_TTY = /^(?:bash|\/bin\/bash|\/usr\/bin\/bash): (?:cannot set terminal process group \(-?\d+\): Inappropriate ioctl for device|no job control in this shell)$/
 
 /**
  * The shell's report of a job of its own that a signal ended (`/bin/sh: line 1: 31849 Terminated: 15  sleep 30`
