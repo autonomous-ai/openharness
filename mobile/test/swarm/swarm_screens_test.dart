@@ -849,7 +849,7 @@ void main() {
       );
       await tester.pumpAndSettle();
 
-      await tester.tap(key('swarm-mention'));
+      await tester.enterText(find.byType(TextField), '@');
       await tester.pumpAndSettle();
       await tester.tap(find.text('Nova').last);
       await tester.pumpAndSettle();

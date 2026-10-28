@@ -308,14 +308,6 @@ class _SwarmConversationPageState extends State<SwarmConversationPage> {
     }
   }
 
-  /// An @ to type a name after: the picker opens over the composer.
-  void _mention(SwarmConversation c) {
-    final draft = c.draft;
-    final spaced = draft.isEmpty || RegExp(r'\s$').hasMatch(draft);
-    c.draft = '$draft${spaced ? '' : ' '}@';
-    _focus.requestFocus();
-  }
-
   /// How far up the chat the person reads back, past which a message that
   /// arrives waits below instead of pushing up what they read.
   static const _readingBack = 48.0;
@@ -1036,7 +1028,8 @@ class _SwarmConversationPageState extends State<SwarmConversationPage> {
 
   /// The @ picker while a name is typed, the reply bar while the draft
   /// answers a message, what the last pick left out, the files going with the
-  /// post, then +, @, a field that grows with what is typed and a round Send.
+  /// post, then +, a field that grows with what is typed and a round Send. An
+  /// @ is typed in the field: it has no button of its own.
   Widget _composer(SwarmConversation c, Tty tty) {
     final snapshot = c.reader.snapshot;
     final query = c.mentionQuery;
@@ -1153,17 +1146,6 @@ class _SwarmConversationPageState extends State<SwarmConversationPage> {
                     color: c.uploading || c.files.room <= 0
                         ? AppPalette.textFaint
                         : AppPalette.textSecondary,
-                  ),
-                ),
-              if (c.mentionable.isNotEmpty)
-                _Round(
-                  key: const ValueKey('swarm-mention'),
-                  label: 'Mention an agent',
-                  onTap: () => _mention(c),
-                  child: Icon(
-                    LucideIcons.atSign,
-                    size: AppIconSize.standalone,
-                    color: AppPalette.textSecondary,
                   ),
                 ),
               const SizedBox(width: 6),

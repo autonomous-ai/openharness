@@ -487,11 +487,28 @@ void main() {
     expect(fake.commands.single['replyTo'], isNull);
   });
 
+  testWidgets('the composer has no @ button: an @ typed in the field opens '
+      'the picker', (tester) async {
+    await pump(tester, backend([message('m1', 1)]));
+
+    expect(key('swarm-attach'), findsOneWidget);
+    expect(key('swarm-field'), findsOneWidget);
+    expect(key('swarm-send'), findsOneWidget);
+    expect(key('swarm-mention'), findsNothing);
+    expect(find.byIcon(LucideIcons.atSign), findsNothing);
+
+    await tester.enterText(find.byType(TextField), '@');
+    await tester.pump();
+    expect(key('swarm-mention-picker'), findsOneWidget);
+    expect(key('swarm-pick-agent-lead'), findsOneWidget);
+    expect(key('swarm-pick-agent-builder'), findsOneWidget);
+  });
+
   testWidgets('the @ picker lists the chat\'s agents with role and state, '
       'narrowed by what is typed', (tester) async {
     await pump(tester, backend([message('m1', 1)]));
 
-    await tester.tap(key('swarm-mention'));
+    await tester.enterText(find.byType(TextField), '@');
     await tester.pump();
     expect(key('swarm-mention-picker'), findsOneWidget);
     expect(key('swarm-pick-agent-lead'), findsOneWidget);
