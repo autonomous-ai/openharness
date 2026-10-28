@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter_test/flutter_test.dart';
 
 import 'support/super_tab_fixture.dart';
@@ -34,6 +36,83 @@ void main() {
         'five',
       ]);
       expect(reads.first, endsWith('messages?before=2&beforeId=message-4'));
+    },
+  );
+
+  test('older read during an open poll read still asks before=', () async {
+    final server = ConversationServer()..messagePage = 2;
+    for (final text in ['one', 'two', 'three', 'four']) {
+      server.append(text);
+    }
+    final c = server.controller();
+    await c.refresh();
+    final reads = <String>[];
+    server.onRead = reads.add;
+    final slow = server.holdReads = Completer<void>();
+
+    // The poll's read of new messages is open when the reader scrolls up.
+    final newest = c.loadMessages('lead');
+    final older = c.loadMessages('lead', older: true);
+    server.holdReads = null;
+    slow.complete();
+    await Future.wait([newest, older]);
+
+    expect(reads, contains(endsWith('messages?before=3&beforeId=message-3')));
+    expect(c.messages('lead').map((m) => m.text), [
+      'one',
+      'two',
+      'three',
+      'four',
+    ]);
+  });
+
+  test(
+    'an older page that lands while a poll reads its receipt is kept',
+    () async {
+      final server = ConversationServer()..messagePage = 2;
+      for (final text in ['one', 'two', 'mine']) {
+        server.append(text);
+      }
+      // The reader's own message, not yet answered: a read past it asks for
+      // its receipt again.
+      server.messages.last['deliveries'] = [
+        {'agentId': 'lead-agent', 'status': 'delivered'},
+      ];
+      final c = server.controller();
+      await c.refresh();
+      for (final text in ['r1', 'r2', 'r3']) {
+        server.append(text);
+        server.messages.last['author'] = {
+          'kind': 'agent',
+          'id': 'lead-agent',
+          'name': 'Lead',
+        };
+      }
+      final reads = <String>[];
+      server.onRead = reads.add;
+      final pages = server.holdReads = Completer<void>();
+
+      var newestDone = false;
+      final newest = c.loadMessages('lead').then((_) => newestDone = true);
+      final older = c.loadMessages('lead', older: true);
+      // Both pages go; the poll's receipt read that follows waits.
+      final receipt = server.holdReads = Completer<void>();
+      pages.complete();
+      await older;
+      await pumpEventQueue();
+      expect(newestDone, isFalse, reason: 'its receipt read is still open');
+      server.holdReads = null;
+      receipt.complete();
+      await newest;
+      expect(reads.last, contains('messageId=message-3'));
+
+      expect(c.messages('lead').map((m) => m.text), [
+        'one',
+        'two',
+        'mine',
+        'r1',
+        'r2',
+      ]);
     },
   );
 
