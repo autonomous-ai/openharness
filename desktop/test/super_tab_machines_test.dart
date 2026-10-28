@@ -1225,8 +1225,6 @@ void main() {
       expect(row, findsOneWidget);
       await openMachineDetails(tester, row);
       await tester.pumpAndSettle();
-      await tester.tap(find.byKey(const ValueKey('super-detail-more')));
-      await tester.pumpAndSettle();
       await tester.tap(find.text('Attach running agent'));
       await tester.pumpAndSettle();
       expect(attached, [c.selected!.id]);

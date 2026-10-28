@@ -1469,16 +1469,6 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
               });
             }
 
-            // One clear action at the right; the rarer ones behind ⋯ (Ken, 2026-10-28).
-            final more = [
-              if (shared != null && contributor == c.accountId)
-                (
-                  label: paused ? 'Resume new work' : 'Pause new work',
-                  onPressed: () => unawaited(pause()),
-                ),
-              if (c.canWrite && c.selected != null)
-                (label: 'Attach running agent', onPressed: attach),
-            ];
             return SuperTabDetailDialog(
               title: superTabMachineName(name),
               detail: _canRemove(id) ? removeReason : null,
@@ -1516,8 +1506,20 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
                   now: widget.now,
                 ),
               ),
+              // One clear action at the right; the rarer ones quiet at the left (Ken, 2026-10-28).
               leadingActions: [
-                if (more.isNotEmpty) SuperTabMoreActions(items: more),
+                if (shared != null && contributor == c.accountId)
+                  TextButton(
+                    style: superTabQuietAction,
+                    onPressed: () => unawaited(pause()),
+                    child: Text(paused ? 'Resume new work' : 'Pause new work'),
+                  ),
+                if (c.canWrite && c.selected != null)
+                  TextButton(
+                    style: superTabQuietAction,
+                    onPressed: attach,
+                    child: const Text('Attach running agent'),
+                  ),
               ],
               actions: [
                 if (contributor == c.accountId)

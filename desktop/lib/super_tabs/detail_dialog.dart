@@ -1,9 +1,6 @@
 import 'package:flutter/material.dart';
 
-import '../shared/theme/app_icons.dart';
 import '../shared/theme/app_theme.dart' as grid;
-import '../shared/widgets/app_icon_button.dart';
-import '../shared/widgets/app_menu.dart';
 import '../widgets/desktop_chrome.dart';
 import '../widgets/desktop_prompt_surface.dart';
 
@@ -257,31 +254,8 @@ class SuperTabDetailSection extends StatelessWidget {
   );
 }
 
-/// A dialog's less frequent actions behind one quiet ⋯ control, so its footer keeps a single clear action.
-class SuperTabMoreActions extends StatelessWidget {
-  const SuperTabMoreActions({super.key, required this.items});
-
-  final List<({String label, VoidCallback onPressed})> items;
-
-  @override
-  Widget build(BuildContext context) => MenuAnchor(
-    consumeOutsideTap: true,
-    alignmentOffset: const Offset(0, grid.AppControl.menuGap),
-    style: grid.AppMenu.style(minWidth: 200, maxWidth: 280),
-    menuChildren: [
-      for (final item in items)
-        AppMenuItem(
-          key: ValueKey('super-detail-more-${item.label}'),
-          label: item.label,
-          onPressed: item.onPressed,
-        ),
-    ],
-    builder: (context, menu, _) => AppIconButton(
-      key: const ValueKey('super-detail-more'),
-      icon: AppIcons.ellipsis,
-      tooltip: 'More actions',
-      color: DesktopChrome.muted,
-      onPressed: () => menu.isOpen ? menu.close() : menu.open(),
-    ),
-  );
-}
+/// A dialog's less frequent action: text with no pill, its fill only on hover, so the footer keeps one clear action.
+final superTabQuietAction = TextButton.styleFrom(
+  backgroundColor: Colors.transparent,
+  side: BorderSide.none,
+);

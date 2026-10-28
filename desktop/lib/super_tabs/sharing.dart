@@ -354,10 +354,7 @@ class _SwarmSharingDialogState extends State<SwarmSharingDialog> {
       why == null ? control : Tooltip(message: why, child: control);
 
   /// A row's own control: text with no pill, its fill only on hover.
-  static final _quiet = TextButton.styleFrom(
-    backgroundColor: Colors.transparent,
-    side: BorderSide.none,
-  );
+  static final _quiet = superTabQuietAction;
 
   static const _roles = [
     SelectOption(value: 'collaborator', label: 'Can collaborate'),
