@@ -130,7 +130,14 @@ export async function loadRow(tx: Transaction, row: SuperTab, named: Named = {})
 export async function transaction<T>(db: Pick<PrismaClient, '$transaction'>, body: (tx: Transaction) => Promise<T>,
   sleep: (ms: number) => Promise<void> = ms => new Promise(resolve => setTimeout(resolve, ms))): Promise<T> {
   for (let attempt = 1; ; attempt++) {
-    try { return await db.$transaction(body, TRANSACTION_OPTIONS) } catch (error) {
+    let committed: Array<() => void> = []
+    try {
+      const result = await db.$transaction(tx => { committed = []; pendingCommits.set(tx, committed); return body(tx) }, TRANSACTION_OPTIONS)
+      for (const callback of committed) {
+        try { callback() } catch (error) { logger.warn('[super-tab] after-commit callback failed', { error: error instanceof Error ? error.message : String(error) }) }
+      }
+      return result
+    } catch (error) {
       if (!retryable(error)) throw error
       if (attempt >= TRANSACTION_ATTEMPTS) {
         // A unique key still taken after every retry is a real duplicate, not contention.
@@ -142,6 +149,20 @@ export async function transaction<T>(db: Pick<PrismaClient, '$transaction'>, bod
   }
 }
 const TRANSACTION_OPTIONS = { maxWait: 5_000, timeout: 15_000 }
+/** Each attempt's after-commit work, by that attempt's client: a retried attempt's list is dropped with its client. */
+const pendingCommits = new WeakMap<Transaction, Array<() => void>>()
+
+/**
+ * Runs `callback` once the transaction `tx` belongs to has committed, never for an attempt that failed or was retried. What
+ * others hear of a write must follow its commit: told earlier, a reader could look before the write is visible, or hear of
+ * one rolled back. The Swarm cache's stamp (Stability 2.2) and the delivery push (Stability 2.4) both go through here. It
+ * runs synchronously after the commit; async work is fired and forgotten, and a throw is logged, never failing the write.
+ */
+export function afterCommit(tx: Transaction, callback: () => void): void {
+  const pending = pendingCommits.get(tx)
+  if (!pending) throw new Error('afterCommit needs a client from a Swarm transaction (store.ts transaction).')
+  pending.push(callback)
+}
 /** The deliveries a host is still told about (the rest are answered, cancelled or confirmed). */
 const OPEN_DELIVERY = ['queued', 'claimed', 'uncertain'] as const
 /** Callers kept for the quiet delivery poll before the stale ones are dropped. */

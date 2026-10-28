@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { transaction } from './store.js'
+import { afterCommit, transaction } from './store.js'
 import { SuperTabError } from './model.js'
 
 const conflict = () => Object.assign(new Error('Transaction failed due to a write conflict or a deadlock'), { code: 'P2034' })
@@ -49,5 +49,65 @@ describe('Swarm transactions', () => {
     const other = flaky(new Error('boom'))
     await expect(transaction(other as never, async () => 1, async () => {})).rejects.toThrow('boom')
     expect(other.$transaction).toHaveBeenCalledTimes(1)
+  })
+})
+
+/** A database whose commit fails with each of `failures` in turn, after the body has run, as a write conflict at commit does. */
+function failingCommit(...failures: unknown[]) {
+  const $transaction = vi.fn(async (body: (tx: never) => Promise<unknown>) => {
+    const result = await body({} as never)
+    const failure = failures.shift()
+    if (failure) throw failure
+    return result
+  })
+  return { $transaction } as never as { $transaction: typeof $transaction }
+}
+
+// Shared by the Swarm cache's stamp (Stability 2.2) and the delivery push (Stability 2.4): what others hear of a write must
+// follow its commit, or a reader could be told of a change it cannot see yet, or of one that was rolled back.
+describe('work after a Swarm transaction commits', () => {
+  it('runs the committed attempt\'s callbacks once, in order, only after the body is done', async () => {
+    const db = failingCommit()
+    const ran: string[] = []
+    await transaction(db as never, async tx => {
+      afterCommit(tx, () => ran.push('first'))
+      afterCommit(tx, () => ran.push('second'))
+      ran.push('body')
+    })
+    expect(ran).toEqual(['body', 'first', 'second'])
+  })
+
+  it('drops the callbacks of an attempt whose commit failed, and runs only the one that committed', async () => {
+    const db = failingCommit(conflict(), conflict())
+    let attempt = 0
+    const ran: number[] = []
+    await transaction(db as never, async tx => { const mine = ++attempt; afterCommit(tx, () => ran.push(mine)) }, async () => {})
+    expect(db.$transaction).toHaveBeenCalledTimes(3)
+    expect(ran).toEqual([3])
+  })
+
+  it('runs nothing when the transaction fails for good', async () => {
+    const ran = vi.fn()
+    const rolledBack = failingCommit(new Error('boom'))
+    await expect(transaction(rolledBack as never, async tx => { afterCommit(tx, ran) })).rejects.toThrow('boom')
+    const refused = failingCommit()
+    await expect(transaction(refused as never, async tx => { afterCommit(tx, ran); throw new SuperTabError('FORBIDDEN', 'No.', 403) }))
+      .rejects.toMatchObject({ code: 'FORBIDDEN' })
+    expect(ran).not.toHaveBeenCalled()
+  })
+
+  it('never fails a committed write for a callback that throws, and still runs the rest', async () => {
+    const db = failingCommit()
+    const later = vi.fn()
+    expect(await transaction(db as never, async tx => {
+      afterCommit(tx, () => { throw new Error('Redis is down') })
+      afterCommit(tx, later)
+      return 'saved'
+    })).toBe('saved')
+    expect(later).toHaveBeenCalledTimes(1)
+  })
+
+  it('refuses a callback for a client no Swarm transaction opened, so it is never silently lost', () => {
+    expect(() => afterCommit({} as never, () => {})).toThrow(/Swarm transaction/)
   })
 })
