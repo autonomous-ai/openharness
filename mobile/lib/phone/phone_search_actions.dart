@@ -1,6 +1,8 @@
 import 'package:flutter/widgets.dart';
 
+import 'package:harness_mobile/settings/experimental_features.dart';
 import 'package:harness_mobile/state/app_state.dart';
+import 'package:harness_mobile/swarm/swarm_page.dart';
 
 import 'agent_index.dart';
 import 'agents_list_page.dart';
@@ -48,6 +50,16 @@ List<PhoneCommand> phoneSearchCommands(
           Navigator.of(context)
               .push(phoneRoute((_) => AgentsListPage(notifier: notifier))),
     ),
+    // Swarm's way in while it is built: only for a phone that turned it on in Settings ▸
+    // Experimental. Read here, on every filter, so turning it off takes it out of the next search.
+    if (experimentalFeaturesStore.isOn(PhoneExperiment.swarm))
+      PhoneCommand(
+        id: 'swarm.open',
+        title: 'Swarm',
+        detail: 'Experimental · your Swarms',
+        run: () =>
+            Navigator.of(context).push(phoneRoute((_) => const SwarmPage())),
+      ),
     PhoneCommand(
       id: 'app.settings',
       title: 'Settings',

@@ -1,4 +1,4 @@
-import { admitMachineStart, expireRemoval, expireRemovals, failTeamWork, machineContribution, machineOffline, ownedMachine, requireTeamWork, teamMachineFor, teamPoolsOf, teamStartRequest, teamWorkCheck, type ContributedMachine } from './machines.js'
+import { admitMachineStart, expireRemoval, expireRemovals, failTeamWork, removalEnded, machineContribution, machineOffline, ownedMachine, requireTeamWork, teamMachineFor, teamPoolsOf, teamStartRequest, teamWorkCheck, type ContributedMachine } from './machines.js'
 import { assignAgentDisplayNames } from './agentNames.js'
 import { z } from 'zod'
 import {
@@ -277,6 +277,9 @@ export interface CommandContext {
   /** For a worker's needs_human that asks: the decisions it has open for that person when its question would pass the cap,
    *  read by the store (decisions.ts fullFor). */
   openDecisions?: number | null
+  /** For a worker's needs_human that asks: the open decision its question exactly repeats, which it asks again rather than
+   *  anew, read by the store (decisions.ts repeatOf). */
+  repeatedDecision?: string | null
   /** The tab's contributed machines whose account row is signed in as a Harness Team account (`Machine.sessionKind`),
    *  read by the store for the commands that start, assign or route work (machines.ts teamWorkCheck). */
   teamMachines?: string[]
@@ -460,10 +463,10 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
   syncLeads(state)
   numberConversations(state)
   placeRules(state)
-  expireRemovals(state, context.now)
+  const ended = expireRemovals(state, context.now)
   assignAgentDisplayNames(state.agents)
   const result: Record<string, unknown> = {}
-  const effects: CommandEffects = { state, messages: [], cancelledAgents: [], previousAttempts: [], routeDecisions: [], result }
+  const effects: CommandEffects = { state, messages: ended, cancelledAgents: [], previousAttempts: [], routeDecisions: [], result }
   const operationId = stableId(state.id, actorKey(actor), context.operationId)
 
   // Acceptance is the only operation a non-member can perform; the verified account email owns the invite.
@@ -495,6 +498,8 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
     const pool = state.machines?.find(m => m.removal && owns(m.machineId, m.removal.id, m.contributorId))
     const cleanup = state.machineCleanups?.find(c => owns(c.machineId, c.removalId, c.machineOwnerId))
     if (!pool && !cleanup) fail('NOT_FOUND', 'This machine has no cleanup waiting.', 404)
+    // One that already left the list said why then.
+    if (pool) effects.messages.push(...removalEnded(state, pool, 'confirmed'))
     state.machines = state.machines?.filter(m => m !== pool)
     state.machineCleanups = state.machineCleanups?.filter(c => c !== cleanup)
     if (!state.machineCleanups?.length) delete state.machineCleanups
@@ -683,9 +688,9 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
         text: `${how(machine)}, and ${join} with it.${task ? ` Its task "${group.title}" needs to be assigned again or closed.` : ''}`,
         replyTo: null, recipients: lead ? [lead] : [], source: SYSTEM_ROW })
     }
-    // Its host is offline and cannot acknowledge, so the day-long fallback applies at once: the machine leaves the list
+    // Its host is offline and cannot acknowledge, so the fallback applies at once: the machine leaves the list
     // now and its cleanup waits for its next connection (spec 2026-10-23-remove-machine.md).
-    if (pool?.removal && machineOffline(pool, context.now)) expireRemoval(state, pool)
+    if (pool?.removal && machineOffline(pool, context.now)) effects.messages.push(...removalEnded(state, pool, expireRemoval(state, pool, context.now)))
     return removed
   }
 
@@ -897,8 +902,9 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       const stored = projectOf(state, project.id)
       if (command.time === null) delete stored.digest
       else {
-        // Set after today's time, the first digest comes tomorrow rather than at once.
-        const lastOn = digestStartsAfter(command.time, command.timeZone, context.now)
+        // Set after today's time, the first digest comes tomorrow rather than at once; moved later on a day its digest went
+        // out, it stays sent for today.
+        const lastOn = digestStartsAfter(command.time, command.timeZone, context.now, stored.digest?.lastOn)
         stored.digest = { time: command.time, timeZone: command.timeZone, ...lastOn ? { lastOn } : {} }
       }
       break
@@ -1754,6 +1760,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       if (command.status === 'done' && (!command.result || !group.checks.every(c => c.passedBy && c.evidence))) {
         fail('CHECKS_PENDING', 'Completion needs a result and evidence for every acceptance check.')
       }
+      let asked: string | undefined
       if (command.ask) {
         if (command.status !== 'needs_human' || !command.result || actor.kind !== 'agent') {
           fail('INVALID_DECISION', 'An agent asks a person for a decision only when its work needs a human, with the question as its result.', 400)
@@ -1762,13 +1769,16 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
         const drafts = askDecisions(state, group, personId, [{ question: command.result, ...choices }],
           { operationId, askerAgentId: actor.agentId, assignmentId: assignment.id })
         // At the cap the status still counts, reaches the Lead and renews the lease; only the question waits (review of #1859).
-        if (context.openDecisions == null) effects.decisions = drafts
+        if (context.openDecisions == null) {
+          effects.decisions = drafts
+          asked = context.repeatedDecision ?? drafts[0]!.id
+        }
         else effects.result.notAsked = `Not asked ${person(state, personId).email}: ${context.openDecisions} decisions you asked them are still open, and at most ${MAX_OPEN_DECISIONS} can be. Wait for answers before asking more.`
       }
       const changed = assignment.status !== command.status || assignment.result !== command.result || !!command.ask, previous = assignment.status
       assignment.status = command.status
       assignment.result = command.result
-      recordStatus(group, assignment, previous, context.now, changed ? operationId : null)
+      recordStatus(group, assignment, previous, context.now, changed ? operationId : null, asked)
       if (['done', 'stopped'].includes(command.status)) finishWorker(state, assignment.agentId, group)
       // Finished work shows the worker recovered from a task it lost before.
       if (command.status === 'done') delete state.agents.find(a => a.id === assignment.agentId)?.lostTask

@@ -11,6 +11,10 @@ abstract final class AppIcons {
   static const double controlSize = 20;
   static const double featureSize = 24;
 
+  /// Dense pane actions and metadata beside 12pt text, as the icon design
+  /// system's 14pt role.
+  static const double metadataSize = 14;
+
   /// The close mark in tabs and pane headers, inside the full click target.
   /// 14: its stroke matches the 13pt regular text beside it (1.1pt, measured),
   /// as the native tab's × takes the title's size and weight.
