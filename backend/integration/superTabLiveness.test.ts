@@ -236,6 +236,23 @@ describe('work that loses its owner', () => {
       .toContain('lost its task "Ship the parser": its session on Worker Mac stopped.')
   })
 
+  // The stuck Swarm of that day: its first loss's notices were written under the old ids, named by the task alone. Its next
+  // check writes the loss under new ids, and the Lead and the worker each receive their notice.
+  it('heals a resumed task whose first loss was written under the old notice ids', async () => {
+    const f = await swarm()
+    for (const id of [stableId('work-lost', f.assignmentId), stableId('work-lost', f.assignmentId, 'agent')]) {
+      await db.superTabMessage.create({ data: { id, tabId: f.tab, conversationId: f.group, sequence: 1, author: { kind: 'agent', id: f.lead },
+        text: 'The first loss', replyTo: null, recipientIds: [], mentions: [] } })
+    }
+    f.clock.now += MINUTE
+    await f.observe('test-host', [], { stoppedHarnessIds: [f.harness.worker] })
+    expect(await f.assignment()).toMatchObject({ id: f.assignmentId, status: 'lost', lost: { reason: 'its session on Worker Mac stopped' } })
+    expect((await f.leadInbox()).map(m => m.text)).toContain(`${await f.name(f.worker)} lost its task "Ship the parser": its session on Worker Mac stopped. `
+      + 'Last progress 1 minute ago. Last result: none. Assign it to another agent now, or cancel it.')
+    expect(await db.superTabDelivery.count({ where: { tabId: f.tab, agentId: f.worker,
+      messageId: stableId('work-lost', f.assignmentId, String(f.clock.now), 'agent') } })).toBe(1)
+  })
+
   // #1757 review, 2: a receipt replays the first answer, so it never says who holds the task now; the host's assignment
   // rows do (cli superTabs/limitResume.ts reads them before typing).
   it('replays a resume whose answer was lost even after a takeover, while its host\'s assignment rows no longer list it', async () => {
