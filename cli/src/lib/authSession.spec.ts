@@ -127,13 +127,15 @@ describe('AuthSessionManager', () => {
 
     writeAuthSession({ ...baseSession(), clientId: 'harness-desktop' })
     await manager.accessToken()
-    expect(sent(0)).toEqual({ refreshToken: 'refresh-1', autonomousEnv: 'prod', clientId: 'harness-desktop' })
+    // An SSO sign-in's renewal also asks to become a Harness session (backend lib/ssoSession.ts).
+    const harnessSession = { kind: 'computer', label: expect.any(String) }
+    expect(sent(0)).toEqual({ refreshToken: 'refresh-1', autonomousEnv: 'prod', clientId: 'harness-desktop', harnessSession })
     // The client outlives the refresh: the next one names it too.
     expect(readAuthSession()).toMatchObject({ accessToken: 'new-access', clientId: 'harness-desktop' })
 
     writeAuthSession(baseSession())
     await manager.accessToken()
-    expect(sent(1)).toEqual({ refreshToken: 'refresh-1', autonomousEnv: 'prod' })
+    expect(sent(1)).toEqual({ refreshToken: 'refresh-1', autonomousEnv: 'prod', harnessSession })
   })
 
   it('reads back only a client that is ours', async () => {
@@ -201,6 +203,17 @@ describe('AuthSessionManager', () => {
     expect(err).toMatchObject({ name: AuthSessionError.name, code: 'UNAVAILABLE' })
     expect(err.message).toMatch(/harness login/)          // the way out, which the upstream never names
     expect(err.message).toMatch(/Authentication service unavailable/)  // the upstream's own words, kept
+  })
+
+  it('a renewal answered "sign in again" says so and keeps the session, unmarked', async () => {
+    writeAuthSession({ ...baseSession(), accessToken: 'hna_old', refreshToken: 'hnr_1' })
+    vi.stubGlobal('fetch', vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify({
+      success: false, error: { code: 'SIGN_IN_AGAIN', message: 'Sign in again: not confirmed for 7 days' },
+    }), { status: 403 })))
+    const manager = new AuthSessionManager('https://api.example.test')
+    await expect(manager.accessToken()).rejects.toMatchObject({ code: 'SIGN_IN_AGAIN', message: expect.stringMatching(/harness login/) })
+    expect(readAuthSession()).toMatchObject({ refreshToken: 'hnr_1' })
+    expect(readSignedOut()).toBeNull()
   })
 
   it('keeps the session when the refresh service is merely unavailable', async () => {

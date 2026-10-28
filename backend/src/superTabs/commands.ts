@@ -1,4 +1,4 @@
-import { admitMachineStart, expireRemoval, expireRemovals, failTeamWork, removalEnded, machineContribution, machineOffline, ownedMachine, requireTeamWork, teamMachineFor, teamPoolsOf, teamStartRequest, teamWorkCheck, type ContributedMachine } from './machines.js'
+import { admitMachineStart, cleanupOverdue, expireRemoval, expireRemovals, failTeamWork, removalEnded, machineContribution, machineOffline, ownedMachine, requireTeamWork, teamMachineFor, teamPoolsOf, teamStartRequest, teamWorkCheck, type ContributedMachine } from './machines.js'
 import { assignAgentDisplayNames } from './agentNames.js'
 import { z } from 'zod'
 import {
@@ -11,7 +11,7 @@ import { routingOverrideSchema } from './routingPolicy.js'
 import { agentTarget, askedInSchema, broken, MAX_RULES, RULE_MESSAGE_MS, ruleSchema, ruleTextSchema, startTarget, unmet, type RunTarget } from './rules.js'
 import { MAX_ATTACHMENTS, type Attachment } from './attachments.js'
 import { checkMentions, MAX_MENTIONS, type MentionTarget } from './mentions.js'
-import { ANSWERED_NOTICE, answerDecision, askDecisions, checkAsker, decisionChoices, decisionQuestion, MAX_OPEN_DECISIONS, MAX_QUESTIONS, type DecisionTarget } from './decisions.js'
+import { ANSWERED_NOTICE, answerDecision, DELEGATED_NOTICE, askDecisions, checkAsker, decisionChoices, decisionQuestion, MAX_OPEN_DECISIONS, MAX_QUESTIONS, type DecisionTarget } from './decisions.js'
 import { TERMINAL_KEYS, terminalAlert, terminalRequest, terminalResult, toLead, type TerminalRequest } from './terminal.js'
 import { loseTasks, renewLease, renewOwnTask } from './liveness.js'
 import { ABANDONED, failureNotice, MACHINE_REMOVED } from './startFailure.js'
@@ -23,6 +23,7 @@ import { LEDGER_WEEKS, PULL_REQUEST_URL, recordAsked, recordDecision, recordMerg
 import { WEEK_MS } from './leaderboard/week.js'
 import { react, reactionSchema, type ReactionTarget } from './reactions.js'
 import { shipNotice, shippedAt } from './ship.js'
+import { openReview, openReviewOf, projectPullRequest, verdictPending } from './autoReview.js'
 import { avatarChoice, setAgentAvatar, setMemberAvatar, setStatus, statusSchema, type AvatarUpload } from './profile.js'
 import { agentKind, agentProjectId, audienceOf, agentSetRole, canReadProject, deleteProject, markConfidential, requireSingleRegistration, groupProject, inviteLanding, ledProject, manageProject, MAX_ROLES, mutableProjects, placeRules, projectMembers, projectOf, projectRules, projectsOf, readAgent, readConversation, readProject, roleVersion, sameProject, sharedWithLeads, SKILL_SET_NAMES, skillSetOf, type ProjectRole, type RoleKind, type SwarmProject } from './projects.js'
 
@@ -152,7 +153,9 @@ export const commandSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('mention.done'), mentionId: id }).strict(),
   z.object({ type: z.literal('message.react'), conversationId: id, messageId: id, emoji: reactionSchema, on: z.boolean() }).strict(),
   z.object({ type: z.literal('decision.ask'), conversationId: id, personId: id, questions: z.array(decisionQuestion).min(1).max(MAX_QUESTIONS) }).strict(),
-  z.object({ type: z.literal('decision.answer'), decisionId: id, choice: z.number().int().min(0), note: z.string().trim().min(1).max(2000).optional() }).strict(),
+  // A choice, or `delegate`: the person asked leaves it to the PM, who takes its recommended option (decisions.ts answerDecision).
+  z.object({ type: z.literal('decision.answer'), decisionId: id, choice: z.number().int().min(0).optional(), note: z.string().trim().min(1).max(2000).optional(),
+    delegate: z.literal(true).optional() }).strict(),
   z.object({ type: z.literal('delivery.resolve'), deliveryId: id, resolution: z.enum(['received', 'resend', 'cancel']) }).strict(),
   z.object({ type: z.literal('work.define'), conversationId: id, brief: text.optional(), task: task.optional(), checks: z.array(check).min(1).max(40) }).strict()
     .refine(c => c.task !== undefined || c.brief !== undefined, 'Provide a task or brief.')
@@ -240,6 +243,9 @@ export interface CommandContext {
   confidentialSession?: boolean
   /** For a command that registers a session or can make one confidential: the other Swarms' registrations (confidential.ts). */
   registrations?: import('./projects.js').OtherRegistrations
+  /** The machines of this Swarm's pending cleanups whose machine account is deleted, read by the store: no host will ever
+   *  confirm those cleanups (Ken's remote-deepseek and WIN-DELL, 2026-10-28), so they go. */
+  deletedMachineIds?: string[]
   /** Read from host ownership/access records by the store, never copied from the request. */
   contribution?: { machineOwnerId: string; contributorId: string; hostGrant?: string | null
     /** A Harness Team account's machine: the Mac it lives on, from its account row (machines.ts ContributedMachine). */
@@ -464,6 +470,12 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
   numberConversations(state)
   placeRules(state)
   const ended = expireRemovals(state, context.now)
+  // Their removal already said they left; nothing is said again.
+  const deleted = new Set(context.deletedMachineIds ?? [])
+  if (deleted.size && state.machineCleanups) {
+    state.machineCleanups = state.machineCleanups.filter(c => !deleted.has(c.machineId))
+    if (!state.machineCleanups.length) delete state.machineCleanups
+  }
   assignAgentDisplayNames(state.agents)
   const result: Record<string, unknown> = {}
   const effects: CommandEffects = { state, messages: ended, cancelledAgents: [], previousAttempts: [], routeDecisions: [], result }
@@ -926,9 +938,10 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       state.machines ??= []
       // The owner's host adds the machine its Lead runs on by itself (cli/src/superTabs/host.ts). It only fills a gap:
       // on 2026-10-22 Ken's Mac ran the Lead of a Swarm it was never added to, so its starts bypassed the machine's slots.
-      // A late cleanup would delete the new contribution's folders.
+      // A late cleanup would delete the new contribution's folders, but one that waited past the fallback no longer holds
+      // its own owner's add: it goes, and the add takes its place (machines.ts cleanupOverdue).
       const cleaning = state.machines.some(m => m.machineId === command.machineId && m.removal)
-        || !!state.machineCleanups?.some(c => c.machineId === command.machineId)
+        || !!state.machineCleanups?.some(c => c.machineId === command.machineId && !(c.machineOwnerId === actor.userId && cleanupOverdue(c, context.now)))
       // A Mac's Harness Team account joins by itself wherever its owner added the Mac, as that Mac (cli/src/superTabs/host.ts).
       const mac = context.contribution?.hostMachineId
         ? state.machines.find(m => m.machineId === context.contribution!.hostMachineId && m.contributorId === actor.userId && !m.removal) : undefined
@@ -955,6 +968,8 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       }
       if (state.starts?.some(s => s.request.machineId === command.machineId && (!s.harnessId || (s.poolGeneration && !s.poolSettled)) && !s.error)) fail('STARTS_PENDING', 'Reconcile pending starts before changing this contribution.')
       state.machines = state.machines.filter(m => m.machineId !== command.machineId)
+      state.machineCleanups = state.machineCleanups?.filter(c => c.machineId !== command.machineId)
+      if (!state.machineCleanups?.length) delete state.machineCleanups
       const host = context.contribution?.hostMachineId
       state.machines.push({ machineId: command.machineId, name: mac?.name ?? command.name, cwd: command.cwd, engines: [...new Set(command.engines)],
         maxAgents: mac?.maxAgents ?? command.maxAgents, ...(command.scope ? { scope: command.scope } : {}),
@@ -1083,6 +1098,9 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
           fail('REVIEW_TARGET', 'A review group reviews one build group of the same project.', 400)
         }
         requireCustomRole(project, 'reviewer')
+        // One open review at a time: a Lead on the skill text from before #610 would otherwise open one beside the Swarm's.
+        const pending = openReviewOf(state, reviewed)
+        if (pending) fail('REVIEW_OPEN', `#${pending.number} ${pending.title} already reviews this work and has no verdict yet. Cancel it first, or wait for its verdict.`)
       }
       const requesterId = command.requesterId ? requester(state, project, command.requesterId) : actor.kind === 'person' ? actor.userId : undefined
       const number = nextConversationNumber(state)
@@ -1108,10 +1126,12 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       break
     }
     case 'decision.answer': {
-      const { answer, recipients, source } = answerDecision(state, actor, context.decision, command.choice, command.note ?? null)
+      const { answer, recipients, source, line } = answerDecision(state, actor, context.decision,
+        { choice: command.choice, note: command.note ?? null, delegate: command.delegate === true })
       effects.decisionAnswer = answer
-      recordDecision(conversation(state, context.decision!.conversationId), context.decision!, context.now)
-      if (recipients.length) message(context.decision!.conversationId, ANSWERED_NOTICE, recipients, null, source)
+      recordDecision(conversation(state, context.decision!.conversationId), context.decision!, context.now, answer.delegated === true)
+      if (recipients.length) message(context.decision!.conversationId, answer.delegated ? DELEGATED_NOTICE : ANSWERED_NOTICE, recipients, null, source)
+      if (line) effects.messages.push({ id: stableId(operationId, 'delegated'), replyTo: null, recipients: [], ...line })
       result.decisionId = answer.id
       break
     }
@@ -1160,6 +1180,9 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       const group = conversation(state, command.conversationId)
       if (group.id === groupProject(state, group).leadConversationId) fail('LEAD_CONVERSATION', 'The Lead conversation stays available.')
       if (command.archived && activeWork(group)) fail('WORK_ACTIVE', 'Resolve the active assignment before archiving this conversation.')
+      if (command.archived && verdictPending(state, group)) {
+        fail('REVIEW_PENDING', 'This review has no verdict yet. Cancel it, or finish the work it reviews, before archiving it.')
+      }
       group.archived = command.archived
       // Archived by hand, it leaves the active set until it is reopened (spec, Archive), once its reports are acknowledged:
       // until then the sweep leaves it in the active set, where the report check sees it (design section 3.6).
@@ -1793,6 +1816,14 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
           (actor.kind !== 'agent' || id !== actor.agentId) && state.agents.some(a => a.id === id && agentRole(a) === 'reviewer' && a.workDecision !== 'stop'))
         const asked = !command.ask ? '' : effects.result.notAsked ? `\n\n${effects.result.notAsked}` : `\n\nAsked ${person(state, command.ask.personId).email}.`
         message(group.id, `${label}${command.result ? `\n\n${command.result}` : ''}${asked}`, [...(tellLead ? [lead] : []), ...reviewers], null, SYSTEM_ROW)
+        // The Engineer's own Ready for review with a pull request of the project opens its review (autoReview.ts).
+        const pullRequest = command.status === 'review' && actor.kind === 'agent' && actor.agentId === assignment.agentId && !group.reviewOf
+          && !group.audience && !openReviewOf(state, group) ? projectPullRequest(state, group, command.result) : null
+        const opened = pullRequest && openReview(state, group, command.result!, pullRequest, { operationId, now: context.now, engineer: sender,
+          // The owner's hard rules hold as for work.assign; the reviewed task's own requirement is its Engineer's, not its Reviewer's.
+          mayWork: a => !teamWorkCheck(state, a.machineId, a.contributorId, groupProject(state, group), context.now, context.teamMachines, context.otherWorkspaceMachines)
+            && !broken(groupRules(group.id), agentTarget(state, a), machineName, macOf) })
+        if (opened) effects.messages.push(...opened.messages)
         // Shipped before this command: the leaderboard marks this Done as shipped just above (recordStatus).
         if (command.status === 'done' && shippedAt(conversation(original, group.id)) == null) {
           appendPullRequestUrls(group, [command.result, ...group.checks.map(check => check.evidence)])

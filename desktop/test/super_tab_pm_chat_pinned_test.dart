@@ -230,7 +230,9 @@ void main() {
         await c.refresh();
         await pumpEventQueue(times: 100);
         expect(c.unreadCount(c.pmChat('lead')!), 25);
-        expect(reads, hasLength(3));
+        // The page after the held tail says more than a page arrived: the
+        // latest page replaces it, and two earlier pages reach the read mark.
+        expect(reads, hasLength(4));
 
         reads.clear();
         await c.refresh();

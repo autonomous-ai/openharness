@@ -17,6 +17,7 @@ import '../widgets/engine_identity.dart';
 import '../widgets/harness_activity_mark.dart';
 import 'agent_details.dart';
 import 'controller.dart';
+import 'detail_dialog.dart';
 import 'dialog_scope.dart';
 import 'identity.dart';
 import 'leaderboard/format.dart';
@@ -246,20 +247,27 @@ class _SuperTabRosterState extends State<SuperTabRoster> {
   Future<void> _person(SuperTabPerson person, SuperTabPersonScore? score) =>
       showAppDialog<void>(
         context: context,
-        builder: (context) => AlertDialog(
-          title: Text(leaderboardName(person, score)),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text('${person.email}\n${person.role}'),
-              if (score != null) ...[
-                const SizedBox(height: 12),
-                LeaderboardPersonWeek(score: score),
-              ],
-            ],
-          ),
+        builder: (context) => SuperTabDetailDialog(
+          title: leaderboardName(person, score),
+          // Who they are on one line under the name (Ken, 2026-10-28).
+          detail:
+              '${person.email} · ${switch (person.role) {
+                'owner' => 'Owner',
+                'viewer' => 'Can view',
+                _ => 'Can collaborate',
+              }}',
+          leading: SuperTabAvatar.person(person, size: 40),
+          body: score == null
+              ? const SizedBox.shrink()
+              : LeaderboardPersonWeek(score: score),
           actions: [
+            TextButton(
+              onPressed: () {
+                Navigator.pop(context);
+                widget.onInvite();
+              },
+              child: const Text('Manage people'),
+            ),
             if (person.id == c.accountId && c.canWrite)
               TextButton(
                 key: const ValueKey('super-profile-edit'),
@@ -269,17 +277,6 @@ class _SuperTabRosterState extends State<SuperTabRoster> {
                 },
                 child: const Text('Edit profile'),
               ),
-            TextButton(
-              onPressed: () {
-                Navigator.pop(context);
-                widget.onInvite();
-              },
-              child: const Text('Manage people'),
-            ),
-            TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('Close'),
-            ),
           ],
         ),
       );
@@ -442,7 +439,7 @@ class _SuperTabRosterState extends State<SuperTabRoster> {
               SuperTabAvatar.agent(
                 agent,
                 name: name,
-                size: 24,
+                size: SuperTabAvatar.rowSize,
                 engineBadge: false,
               ),
               const SizedBox(width: 8),

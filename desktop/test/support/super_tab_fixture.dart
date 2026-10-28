@@ -411,6 +411,11 @@ class ConversationServer {
   Completer<void>? holdDecisions;
   // Every read of a decisions list fails, as offline.
   bool failDecisions = false;
+  // The most each decisions list returns, newest first, as the backend caps
+  // it; set, a list also says whether it left others out, as the backend does.
+  int? decisionPage;
+  // A backend from before Let PM decide: no list of every answered one.
+  bool settledMissing = false;
   // A backend from before the decisions digest: it sends the count alone.
   bool decisionsDigestMissing = false;
   // How many times the mentions list was read.
@@ -637,10 +642,14 @@ class ConversationServer {
       } else if (command['type'] == 'message.react') {
         output['changed'] = _react(command, reader ?? 'owner');
       } else if (command['type'] == 'decision.answer') {
-        answerDecision(
-          command['decisionId'] as String,
-          command['choice'] as int,
-        );
+        final id = command['decisionId'] as String;
+        if (command['delegate'] == true) {
+          // Left to the PM: the backend takes the recommended option.
+          final asked = decisions.firstWhere((d) => d['id'] == id);
+          answerDecision(id, asked['recommended'] as int, delegated: true);
+        } else {
+          answerDecision(id, command['choice'] as int);
+        }
       } else if (command['type'] == 'mention.done') {
         mentions.firstWhere((m) => m['id'] == command['mentionId'])
           ..['resolvedAt'] = '2026-10-24T06:00:00Z'
@@ -887,12 +896,26 @@ class ConversationServer {
       decisionReads++;
       if (holdDecisions case final hold?) await hold.future;
       if (failDecisions) throw StateError('Offline');
-      final open = uri.queryParameters['state'] == 'open';
+      final state = uri.queryParameters['state'];
+      if (state == 'settled' && settledMissing) {
+        throw const SuperTabFailure(
+          'INVALID_REQUEST',
+          'Invalid query.',
+          statusCode: 400,
+        );
+      }
+      final open = state == 'open';
+      // What an older Desktop reads as answered leaves out those the PM
+      // decided; `settled` has them all.
+      final listed = decisions.reversed
+          .where((d) => (d['answeredAt'] == null) == open)
+          .where((d) => state != 'answered' || d['delegated'] != true)
+          .toList();
+      final page = decisionPage;
       return jsonDecode(
         jsonEncode({
-          'decisions': decisions.reversed
-              .where((d) => (d['answeredAt'] == null) == open)
-              .toList(),
+          'decisions': listed.take(page ?? listed.length).toList(),
+          if (page != null) 'more': listed.length > page,
         }),
       ) as Map<String, dynamic>;
     }
@@ -1042,6 +1065,7 @@ class ConversationServer {
         'answeredAt': null,
         'choice': null,
         'note': null,
+        'delegated': false,
       });
     }
     state['decisionsWaiting'] =
@@ -1051,9 +1075,10 @@ class ConversationServer {
   }
 
   /// The reader answers one, here or on another device.
-  void answerDecision(String id, int choice) {
+  void answerDecision(String id, int choice, {bool delegated = false}) {
     decisions.firstWhere((d) => d['id'] == id)
       ..['choice'] = choice
+      ..['delegated'] = delegated
       ..['answeredAt'] = '2026-10-27T06:00:00Z';
     state['decisionsWaiting'] = (state['decisionsWaiting'] as int) - 1;
     _digestDecisions();

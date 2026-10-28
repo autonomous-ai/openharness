@@ -7,6 +7,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/state/harness_activity.dart';
 import 'package:harness/super_tabs/agent_details.dart';
+import 'package:harness/super_tabs/detail_dialog.dart';
 import 'package:harness/super_tabs/roster.dart';
 import 'package:harness/super_tabs/team_glance.dart';
 
@@ -124,6 +125,16 @@ Finder _row(String id) => find.byKey(ValueKey('super-member-$id'));
 Finder _line(String id, String text) =>
     find.descendant(of: _row(id), matching: find.text(text));
 
+/// The agents a machine lists for [state], as one row's value.
+String? _stateRow(Finder machine, String state) {
+  final row = find.descendant(
+    of: machine,
+    matching: find.ancestor(of: find.text(state), matching: find.byType(SuperTabDetailRow)),
+  );
+  if (row.evaluate().isEmpty) return null;
+  return (row.evaluate().first.widget as SuperTabDetailRow).value;
+}
+
 Future<void> _openGlance(WidgetTester tester) async {
   await tester.tap(find.byTooltip('Team at a glance'));
   await tester.pumpAndSettle();
@@ -144,11 +155,11 @@ void main() {
         );
         // Holding a task with no turn seen running: assigned, never claimed as working.
         expect(
-          _line('Atlas', 'Assigned · Mac Studio · opus high'),
+          _line('Atlas', 'Assigned · Mac Studio · Opus · high'),
           findsOneWidget,
         );
         expect(
-          _line('Sage', 'Idle · MacBook Pro · sonnet medium'),
+          _line('Sage', 'Idle · MacBook Pro · Sonnet · medium'),
           findsOneWidget,
         );
       },
@@ -166,9 +177,12 @@ void main() {
       String line(HarnessActivity? activity) => superTabAgentGlance(
         SuperTabAgentInfo(c, null, atlas, activity: activity),
       ).line;
-      expect(line(HarnessActivity.working), 'Working · Mac Studio · opus high');
-      expect(line(HarnessActivity.idle), 'Assigned · Mac Studio · opus high');
-      expect(line(null), 'Assigned · Mac Studio · opus high');
+      expect(
+        line(HarnessActivity.working),
+        'Working · Mac Studio · Opus · high',
+      );
+      expect(line(HarnessActivity.idle), 'Assigned · Mac Studio · Opus · high');
+      expect(line(null), 'Assigned · Mac Studio · Opus · high');
     });
 
     testWidgets(
@@ -201,16 +215,22 @@ void main() {
             _task('Teal', 'review'),
           ],
         );
-        expect(_line('Moss', 'Stuck · Mac Studio · opus high'), findsOneWidget);
         expect(
-          _line('Teal', 'In review · Mac Studio · opus high'),
+          _line('Moss', 'Stuck · Mac Studio · Opus · high'),
           findsOneWidget,
         );
         expect(
-          _line('Wren', 'Waiting · Mac Studio · opus high'),
+          _line('Teal', 'In review · Mac Studio · Opus · high'),
           findsOneWidget,
         );
-        expect(_line('Lark', 'Lost · Mac Studio · opus high'), findsOneWidget);
+        expect(
+          _line('Wren', 'Waiting · Mac Studio · Opus · high'),
+          findsOneWidget,
+        );
+        expect(
+          _line('Lark', 'Lost · Mac Studio · Opus · high'),
+          findsOneWidget,
+        );
         final tip = tester
             .widgetList<Tooltip>(
               find.ancestor(of: _row('Lark'), matching: find.byType(Tooltip)),
@@ -218,11 +238,14 @@ void main() {
             .single
             .message!;
         expect(tip, contains('Lost "Task of Lark"'));
-        expect(_line('Kite', 'Down · MacBook Pro · opus high'), findsOneWidget);
+        expect(
+          _line('Kite', 'Down · MacBook Pro · Opus · high'),
+          findsOneWidget,
+        );
         expect(
           _line(
             'Rook',
-            'Limited until ${two(until.hour)}:${two(until.minute)} · MacBook Pro · opus high',
+            'Limited until ${two(until.hour)}:${two(until.minute)} · MacBook Pro · Opus · high',
           ),
           findsOneWidget,
         );
@@ -230,9 +253,10 @@ void main() {
     );
 
     // Builders started with opus high were stored as auto (fixed in the CLI, 2026-10-27); one stored before the fix
-    // shows what its start asked for while the start still says, and otherwise that the effort is not known.
+    // shows what its start asked for while the start still says. An effort nobody reported is left out: the PM's row
+    // read "opus unknown" (2026-10-28), and a row says only what is known.
     testWidgets(
-      'shows the requested effort for an auto reading its start still names, else unknown',
+      'shows the requested effort for an auto reading its start still names, else no effort',
       (tester) async {
         await _swarm(
           tester,
@@ -243,13 +267,40 @@ void main() {
           ],
           starts: [_start('Nico', 'high')],
         );
-        expect(_line('Nico', 'Idle · Mac Studio · opus high'), findsOneWidget);
         expect(
-          _line('Quinn', 'Idle · Mac Studio · opus unknown'),
+          _line('Nico', 'Idle · Mac Studio · Opus · high'),
           findsOneWidget,
         );
+        expect(_line('Quinn', 'Idle · Mac Studio · Opus'), findsOneWidget);
+        expect(_line('Avery', 'Idle · Mac Studio · Opus'), findsOneWidget);
+        expect(find.textContaining('unknown'), findsNothing);
+      },
+    );
+
+    testWidgets(
+      'names the model by its display name, with its version when reported',
+      (tester) async {
+        await _swarm(
+          tester,
+          agents: [
+            _agent('Iris', 'm1', model: 'claude-opus-5-5'),
+            _agent('Juno', 'm1', model: 'claude-sonnet-5-5', effort: null),
+            _agent(
+              'Kai',
+              'm2',
+              engine: 'codex',
+              model: 'gpt-5.6-sol',
+              effort: 'xhigh',
+            ),
+          ],
+        );
         expect(
-          _line('Avery', 'Idle · Mac Studio · opus unknown'),
+          _line('Iris', 'Idle · Mac Studio · Opus 5.5 · high'),
+          findsOneWidget,
+        );
+        expect(_line('Juno', 'Idle · Mac Studio · Sonnet 5.5'), findsOneWidget);
+        expect(
+          _line('Kai', 'Idle · MacBook Pro · GPT-5.6 Sol · xhigh'),
           findsOneWidget,
         );
       },
@@ -263,7 +314,7 @@ void main() {
         agents: [_agent('Echo', 'm1')],
         starts: [_start('Echo', 'high')],
       );
-      expect(_line('Echo', 'Idle · Mac Studio · opus high'), findsOneWidget);
+      expect(_line('Echo', 'Idle · Mac Studio · Opus · high'), findsOneWidget);
     });
   });
 
@@ -292,14 +343,8 @@ void main() {
           ),
           findsOneWidget,
         );
-        expect(
-          find.descendant(of: studio, matching: find.text('Lead · Idle')),
-          findsOneWidget,
-        );
-        expect(
-          find.descendant(of: studio, matching: find.text('Atlas · Idle')),
-          findsOneWidget,
-        );
+        // Agents by what they are doing, one row per state, as label and value (Ken, 2026-10-28).
+        expect(_stateRow(studio, 'Idle'), 'Lead, Atlas');
         final laptop = find.byKey(const ValueKey('glance-machine-m2'));
         expect(
           find.descendant(
@@ -329,16 +374,16 @@ void main() {
       await _openGlance(tester);
       final counts = find.byKey(const ValueKey('glance-models'));
       expect(
-        find.descendant(of: counts, matching: find.text('opus high · 3')),
+        find.descendant(of: counts, matching: find.text('Opus · high · 3')),
         findsOneWidget,
       );
       expect(
-        find.descendant(of: counts, matching: find.text('sonnet medium · 1')),
+        find.descendant(of: counts, matching: find.text('Sonnet · medium · 1')),
         findsOneWidget,
       );
       expect(
-        tester.getTopLeft(find.text('opus high · 3')).dy,
-        lessThan(tester.getTopLeft(find.text('sonnet medium · 1')).dy),
+        tester.getTopLeft(find.text('Opus · high · 3')).dy,
+        lessThan(tester.getTopLeft(find.text('Sonnet · medium · 1')).dy),
       );
     });
 
@@ -431,10 +476,7 @@ void main() {
           ),
           findsOneWidget,
         );
-        expect(
-          find.descendant(of: studio, matching: find.text('Finn · Assigned')),
-          findsOneWidget,
-        );
+        expect(_stateRow(studio, 'Assigned'), 'Finn');
         expect(find.textContaining('which is offline'), findsNothing);
         expect(
           find.byKey(const ValueKey('glance-machine-m1-team')),
@@ -480,12 +522,45 @@ void main() {
         );
         await _openGlance(tester);
         expect(
-          find.text('Hugo runs effort xhigh; its start asked for high.'),
+          find.text('Hugo runs at xhigh effort; it was started at high.'),
           findsOneWidget,
         );
         expect(find.textContaining('Nico runs'), findsNothing);
         expect(find.textContaining('Echo runs'), findsNothing);
       },
     );
-  });
+  
+    testWidgets('busy agents on one offline machine are one warning, their names folded', (tester) async {
+      final names = ['Milo', 'Kai', 'Iris', 'Ellis', 'Nova'];
+      await _swarm(
+        tester,
+        machines: [_machine('m1', 'Mac Studio', max: 8), _machine('m2', 'MacBook Pro', max: 8, age: _offline)],
+        agents: [for (final name in names) _agent(name, 'm2')],
+        tasks: [for (final name in names) _task(name, 'working')],
+      );
+      await _openGlance(tester);
+      expect(find.text('5 agents are busy on MacBook Pro, which is offline.'), findsOneWidget);
+      expect(find.textContaining('Milo is busy'), findsNothing);
+      expect(find.text('Milo, Kai, Iris and 2 more'), findsOneWidget);
+      await tester.tap(find.text('Milo, Kai, Iris and 2 more'));
+      await tester.pumpAndSettle();
+      expect(
+        find.text('Milo, Kai, Iris, Ellis, Nova'),
+        findsNWidgets(2),
+        reason: 'the unfolded warning, and the machine\'s Assigned row',
+      );
+    });
+
+    testWidgets('agents on another effort than they started with are one warning, in plain words', (tester) async {
+      await _swarm(
+        tester,
+        agents: [_agent('Robin', 'm1', effort: 'xhigh'), _agent('Sage', 'm1', effort: 'xhigh')],
+        starts: [_start('Robin', 'high'), _start('Sage', 'high')],
+      );
+      await _openGlance(tester);
+      expect(find.text('2 agents run at another effort than they were started with.'), findsOneWidget);
+      expect(find.text('Robin (xhigh, started at high), Sage (xhigh, started at high)'), findsOneWidget);
+      expect(find.textContaining('runs effort'), findsNothing);
+    });
+});
 }

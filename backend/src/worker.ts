@@ -16,9 +16,11 @@ import {
 import { ensurePlans } from './lib/db/seed.js'
 import { prisma } from './lib/prisma.js'
 import { ensureProductUsageExpiry } from './lib/productUsage.js'
+import { ensureHarnessSessionExpiry } from './lib/ssoSession.js'
 import { ensureTerminalExpiry } from './superTabs/terminal.js'
 import { ensureMentionExpiry } from './superTabs/mentions.js'
 import { ensurePartExpiry, startSwarmSweeps } from './superTabs/sweeps.js'
+import { startDeliverySettle } from './superTabs/deliverySettle.js'
 import { appPullRequests, markFinishedGroups, startSwarmArchive, unknownPullRequests } from './superTabs/archive.js'
 import { SuperTabStore } from './superTabs/store.js'
 import { announceSwarmDeliveries } from './lib/swarmDeliveryPushes.js'
@@ -39,6 +41,7 @@ async function start(): Promise<void> {
   await migrateUserPresencePerMachine()
   ensureSchema()
   await ensureProductUsageExpiry()
+  await ensureHarnessSessionExpiry(prisma)
   await ensureTerminalExpiry(prisma)
   await ensureMentionExpiry(prisma)
   await ensurePartExpiry(prisma)
@@ -58,6 +61,7 @@ async function start(): Promise<void> {
 
   let stopSweeps = (): void => {}
   let stopArchive = (): void => {}
+  let stopDeliveries = (): void => {}
   const shutdown = (signal: string): void => {
     logger.info(`Received ${signal}, stopping backend worker...`)
     const hardExit = setTimeout(() => process.exit(0), 5000)
@@ -66,6 +70,7 @@ async function start(): Promise<void> {
     productUsagePeopleRollupService.stop()
     stopSweeps()
     stopArchive()
+    stopDeliveries()
     void Promise.allSettled([prisma.$disconnect(), closeBus()]).finally(() => process.exit(0))
   }
   process.on('SIGINT', () => shutdown('SIGINT'))
@@ -82,6 +87,8 @@ async function start(): Promise<void> {
   // link none do (superTabs/archive.ts).
   const githubConfig = githubAppConfig(env), githubApp = githubConfig ? new GitHubApp(githubConfig) : null
   stopArchive = startSwarmArchive(prisma, swarms, () => githubApp ? appPullRequests(githubApp) : unknownPullRequests)
+  // A delivery that can no longer move ends as Not sent, instead of waiting for good (superTabs/deliverySettle.ts).
+  stopDeliveries = startDeliverySettle(prisma, swarms)
   // PM2 wait_ready gates the singleton worker's "online" state on schema/catalog/backfill startup.
   // Plain node/tsx runs do not provide process.send and simply continue.
   process.send?.('ready')

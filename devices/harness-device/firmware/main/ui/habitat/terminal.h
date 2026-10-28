@@ -136,7 +136,7 @@ typedef struct {
 } ht_sprite_t;
 typedef struct {
     int16_t x, y, w;
-    uint8_t arc; // 0 = straight, 1 = upper arc, 2 = lower arc
+    uint8_t arc; // 0 = straight, 1 = upper arc, 2 = lower arc, 3 = inner upper arc (ht_arc_inner_face)
     uint8_t shimmer; // 0 = steady ink, 1..21 = cached-mask highlight sweep
     uint16_t fg, bg;
     const ht_font_t *font;
@@ -246,6 +246,13 @@ void ht_arc_title_face(ht_scene_t *scene, uint16_t fg, const char *text, const h
 // The lower arc, in GeistMono (the non-Focus skins); ht_arc_status_face takes any face, like ht_arc_title_face.
 void ht_arc_status(ht_scene_t *scene, uint16_t fg, const char *text);
 void ht_arc_status_face(ht_scene_t *scene, uint16_t fg, const char *text, const ht_arc_face_t *face);
+// A smaller label on a tighter curve under the upper arc: a Swarm face's chat name under its project (design
+// 2026-10-28-round-dial-swarm-chat). Proportional faces only (a mono face draws nothing), fitted to a shorter span with
+// "…". Its mask cache is its own, in PSRAM on the board, and made only the first time such a label is drawn, so a dial
+// that never shows one spends nothing on it; the upper and lower arcs and their caches are as before.
+void ht_arc_inner_face(ht_scene_t *scene, uint16_t fg, const char *text, const ht_arc_face_t *face);
+// Whether the inner arc's cache has been made (for the tests: nothing before a chat name is drawn).
+bool ht_arc_inner_cache_made(void);
 // What `text` takes of the arc in `face`, in px of arc length (a proportional face rounds up; fits when
 // <= HT_ARC_SPAN). A proportional title or status longer than that ends at a word and "…" (no "…"
 // for a `bare` face).

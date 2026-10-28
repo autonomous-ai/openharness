@@ -4,6 +4,7 @@
 import type { Prisma, PrismaClient } from '@prisma/client'
 import { fail, isLeads, person, stableId, type Actor, type Conversation, type MessageDraft, type SuperTabState } from './model.js'
 import { canReadGroup, groupProject, ledProject, projectOf } from './projects.js'
+import { groupsBy } from './parts/indexed.js'
 
 type Tx = Prisma.TransactionClient
 export const MAX_MENTIONS = 5
@@ -79,8 +80,9 @@ async function readable(tx: Tx, tabId: string, state: SuperTabState, actor: Extr
   const groups = new Map(state.conversations.map(c => [c.id, c]))
   const missing = [...new Set(rows.map(r => r.conversationId))].filter(id => !groups.has(id))
   if (missing.length) {
-    for (const row of await tx.swarmGroup.findMany({ where: { tabId, deleted: false, key: { in: missing } }, select: { key: true, data: true } })) {
-      groups.set(row.key, row.data as unknown as Conversation)
+    // By id through its index (parts/indexed.ts): every person's read counts these on each poll.
+    for (const row of await groupsBy(tx, 'key', [{ $match: { tabId, deleted: false, key: { $in: missing } } }, { $project: { _id: 0, key: 1, data: 1 } }])) {
+      groups.set(row.key as string, row.data as unknown as Conversation)
     }
   }
   return rows.flatMap(row => {

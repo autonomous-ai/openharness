@@ -248,14 +248,14 @@ void main() {
       expect(
         rowTooltip(tester, f, 1),
         contains(
-          'Claude opus · Test host · Working on "Offline editing" · Last active 2 hours ago',
+          'Claude Opus · Test host · Working on "Offline editing" · Last active 2 hours ago',
         ),
       );
       expect(
         rowTooltip(tester, f, 1),
         contains('Sage · Engineer · openharness'),
       );
-      expect(f.lineText(tester, 1), 'Working · Test host · opus unknown');
+      expect(f.lineText(tester, 1), 'Working · Test host · Opus');
       final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
       await mouse.addPointer(location: Offset.zero);
       await mouse.moveTo(tester.getCenter(f.row(1)));
@@ -265,6 +265,34 @@ void main() {
       await f.close(tester);
     },
   );
+
+  // The PM's row and details read the configuration's raw "opus" or "claude-opus-5-5" (2026-10-28): both name the
+  // model as people know it.
+  testWidgets('agent details name the model by its display name', (
+    tester,
+  ) async {
+    final f = await fixture(tester);
+    (f.server.state['agents'] as List)[1]['configuration'] = {
+      'engine': 'claude',
+      'model': 'claude-opus-5-5',
+      'effort': 'auto',
+    };
+    await f.controller.refresh();
+    await f.show(tester);
+    expect(f.lineText(tester, 1), contains('Opus 5.5'));
+    expect(f.lineText(tester, 1), isNot(contains('unknown')));
+    await tester.tap(f.row(1));
+    await tester.pumpAndSettle();
+    expect(
+      find.descendant(
+        of: find.byType(AlertDialog),
+        matching: find.text('Opus 5.5'),
+      ),
+      findsOneWidget,
+    );
+    expect(find.textContaining('claude-opus-5-5'), findsNothing);
+    await f.close(tester);
+  });
 
   testWidgets('agent tooltip omits data that neither state nor host knows', (
     tester,
@@ -678,7 +706,7 @@ void main() {
     await tester.tap(f.row(0));
     await tester.pumpAndSettle();
     expect(find.text('Claude'), findsOneWidget);
-    expect(find.text('sonnet'), findsOneWidget);
+    expect(find.text('Sonnet'), findsOneWidget);
     await tester.tap(find.widgetWithText(TextButton, 'Close'));
     await tester.pumpAndSettle();
     await f.close(tester);

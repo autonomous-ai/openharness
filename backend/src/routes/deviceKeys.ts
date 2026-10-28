@@ -4,6 +4,7 @@ import { appendDeviceAck, appendDeviceKey, deviceKeysSeen, readDeviceAcks, readD
 import { validateBody, validateQuery } from '../middlewares/validation.js'
 import { sendError, sendSuccess } from '../utils/response.js'
 import { isTeamSession, TEAM_SESSION_LIMITED, TEAM_SESSION_MESSAGE } from '../lib/teamSession.js'
+import { createRateLimiter } from '../lib/rateLimit.js'
 
 const query = z.object({
   since: z.coerce.number().int().min(0).default(0),
@@ -17,22 +18,10 @@ const query = z.object({
  *  removal when someone asks. Generous for that; a loop cannot rebuild the log on every request. */
 const APPENDS_PER_MINUTE = 20
 /** At most [perMinute] calls per account per minute, per process. */
-function limiter(perMinute: number): (userId: string, now?: number) => boolean {
-  const windows = new Map<string, { start: number; count: number }>()
-  return (userId, now = Date.now()) => {
-    const w = windows.get(userId)
-    if (!w || now - w.start >= 60_000) {
-      if (windows.size >= 10_000) windows.clear()
-      windows.set(userId, { start: now, count: 1 })
-      return true
-    }
-    return ++w.count <= perMinute
-  }
-}
-const allowAppend = limiter(APPENDS_PER_MINUTE)
+const allowAppend = createRateLimiter('device-keys-append', 60_000, APPENDS_PER_MINUTE)
 // An acknowledgement is one "It's mine" a person pressed, on one device: the same budget, kept apart so
 // confirming devices never costs the log its appends. Each one replays the log to check it.
-const allowAck = limiter(APPENDS_PER_MINUTE)
+const allowAck = createRateLimiter('device-keys-ack', 60_000, APPENDS_PER_MINUTE)
 const body = z.object({ entry: z.record(z.string(), z.unknown()) }).strict()
 const acksQuery = z.object({ since: z.coerce.number().int().min(0).default(0) })
 const ackBody = z.object({ ack: z.record(z.string(), z.unknown()) }).strict()
@@ -71,7 +60,7 @@ export async function deviceKeyRoutes(app: FastifyInstance): Promise<void> {
     // A key added here is one the account's machines let in as an app: never a team account's (lib/teamSession.ts),
     // whichever gate it came through. Its machine key goes over its own socket, which keeps it to that machine.
     if (isTeamSession(user)) return sendError(reply, TEAM_SESSION_MESSAGE, TEAM_SESSION_LIMITED, 403)
-    if (!allowAppend(user.sub)) return sendError(reply, 'Too many changes to your devices. Try again in a minute.', 'RATE_LIMITED', 429)
+    if (!(await allowAppend.allows(user.sub))) return sendError(reply, 'Too many changes to your devices. Try again in a minute.', 'RATE_LIMITED', 429)
     const result = await appendDeviceKey(user.sub, req.body.entry, { kind: 'viewer', harnessSessionId: user.harnessSessionId })
     if (result.ok) return sendSuccess(reply, { head: result.head })
     if (result.status === 409) {
@@ -95,7 +84,7 @@ export async function deviceKeyRoutes(app: FastifyInstance): Promise<void> {
     const user = req.user!
     // "It's mine" is the person's word: a team account never vouches for a key on the person's devices.
     if (isTeamSession(user)) return sendError(reply, TEAM_SESSION_MESSAGE, TEAM_SESSION_LIMITED, 403)
-    if (!allowAck(user.sub)) return sendError(reply, 'Too many changes to your devices. Try again in a minute.', 'RATE_LIMITED', 429)
+    if (!(await allowAck.allows(user.sub))) return sendError(reply, 'Too many changes to your devices. Try again in a minute.', 'RATE_LIMITED', 429)
     const result = await appendDeviceAck(user.sub, req.body.ack)
     if (result.ok) return sendSuccess(reply, { created: result.created })
     sendError(reply, 'This acknowledgement was refused.', result.code, result.status)

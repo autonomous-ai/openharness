@@ -89,7 +89,8 @@ class SuperTabAgent {
   final String machineOwnerId;
 
   /// Its session read private chats: a Product Manager, now or before, or an agent in a private chat. Only the person
-  /// whose computer runs it may watch it; its computer refuses every share (backend projects.ts `canWatchAgent`).
+  /// whose computer runs it may watch it, but every member watches the current Product Manager, view only
+  /// (backend projects.ts `watchClosed`, terminal_unavailable.dart `superTabTerminalPrivate`).
   final bool confidential;
   // Keep the legacy default for callers while allowing group-based roster ownership.
   final bool hasProjectId;
@@ -432,6 +433,9 @@ class SuperTabSnapshot {
     Map<String, dynamic>? best;
     for (final m in teamPoolsOf(machineId)) {
       if (m['removal'] != null) continue;
+      // Removed (`harness team remove` deletes its machine): the server reads a live account never so, and the Mac is a
+      // Mac without one again, which its owner can set up from its row (local Team account run, 2026-10-28).
+      if (m['teamWork'] case {'code': 'TEAM_ACCOUNT_REQUIRED'}) continue;
       if (best == null || reported(m) >= reported(best)) best = m;
     }
     return best;
