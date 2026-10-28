@@ -110,15 +110,20 @@ ping per dependency per second per process. From the moment a process gets SIGTE
 503 `draining`, and it keeps serving for `DRAIN_DELAY_MS` (default 0, closing at once as before) before it
 closes its listeners, drains its WebSockets and disconnects Mongo and Redis.
 
+Set `DRAIN_DELAY_MS` only on the Kubernetes image (`Dockerfile.k8s`), never under pm2: in cluster mode a probe
+reaches whichever worker the master picks, so one worker's 503 says nothing, and pm2 kills a worker that has not
+exited within `kill_timeout` (10 s, `ecosystem.config.cjs`).
+
 Settings for the `api` Deployment (the `job` Deployment serves no HTTP and has no probes):
 
 ```yaml
-terminationGracePeriodSeconds: 20   # DRAIN_DELAY_MS + up to ~10 s of socket drain and close
+terminationGracePeriodSeconds: 30   # DRAIN_DELAY_MS + up to ~10 s of socket drain and close, plus margin
 containers:
   - name: backend
     env:
       - name: DRAIN_DELAY_MS
-        value: "5000"               # no preStop sleep: the process keeps serving on its own
+        value: "15000"              # readiness needs up to 10 s to fail, then the ingress a few more to drop
+                                    # the pod. No preStop sleep: the process keeps serving on its own
     startupProbe:
       httpGet: { path: /api/health, port: 8085 }
       periodSeconds: 2
