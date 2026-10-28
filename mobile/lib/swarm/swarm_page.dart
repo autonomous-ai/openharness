@@ -193,9 +193,9 @@ class _SwarmPageState extends State<SwarmPage> {
 
   List<Widget> _body(BuildContext context, SwarmSession session, Tty tty) {
     final inbox = session.inbox;
-    // Before the list there is nothing to read; a list that could not be
-    // read says so alone, without rows on their way.
-    if (!inbox.loaded) {
+    // Before the list there is nothing to read, unless a Home was kept; a
+    // list that could not be read says so alone, without rows on their way.
+    if (!inbox.loaded && inbox.swarms.isEmpty) {
       return [
         if (inbox.error case final error?)
           _error(error, key: 'swarm-error')

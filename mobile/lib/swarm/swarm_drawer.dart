@@ -113,11 +113,12 @@ class _SwarmDrawerState extends State<SwarmDrawer> {
                     badge: waiting > 0 ? SwarmBadge(waiting, warn: true) : null,
                     onTap: close,
                   ),
-                  // Before the list, and for a Swarm still to be read, its
-                  // projects are rows on their way; one that could not be
-                  // read lists none.
+                  // Before the list (and no Home kept), and for a Swarm
+                  // still to be read, its projects are rows on their way; one
+                  // that could not be read lists none.
                   if (inbox != null &&
                       !inbox.loaded &&
+                      inbox.swarms.isEmpty &&
                       inbox.error == null) ...[
                     const _Caption('Projects'),
                     SwarmSkeletonRows(id: 'swarm-drawer-loading', drawer: true),

@@ -47,46 +47,55 @@ void main() {
     );
   }
 
+  /// A cold start over the Home kept, with no computer answering: the list
+  /// never comes back. Pumped until the kept view is read off disk.
+  Future<({SwarmHost host, FakeSwarm fake})> coldStart(
+    WidgetTester tester,
+  ) async {
+    tester.view.physicalSize = const Size(1170, 2532);
+    tester.view.devicePixelRatio = 3;
+    addTearDown(tester.view.reset);
+    final cache = memoryHomeCache();
+    await tester.runAsync(() => cache.write(me, [kept()]));
+    // No computer answers: the list never comes back.
+    final fake = FakeSwarm();
+    fake.routes['/api/super-tabs/list'] = (_) => Completer<Object?>().future;
+    final account = ValueNotifier<String?>(me);
+    final host = SwarmHost(
+      accountId: () => account.value,
+      account: account,
+      request: fake.request,
+      notices: SilentSystemNotices(),
+      features: ExperimentalFeaturesStore(storage: MemoryKeyValueStore())
+        ..value = {PhoneExperiment.swarm},
+      homeCache: cache,
+    );
+    addTearDown(host.dispose);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        builder: (context, child) => SwarmScope(notifier: host, child: child!),
+        home: const SwarmPage(),
+      ),
+    );
+    // The kept view is read off disk: real time, then a frame, until it is.
+    for (var i = 0; i < 100 && host.session!.inbox.swarms.isEmpty; i++) {
+      await tester.runAsync(
+        () => Future<void>.delayed(const Duration(milliseconds: 10)),
+      );
+      await tester.pump();
+    }
+
+    await tester.pump();
+    return (host: host, fake: fake);
+  }
+
   testWidgets(
     'a cold start draws the Home kept before the first read answers',
     (tester) async {
-      tester.view.physicalSize = const Size(1170, 2532);
-      tester.view.devicePixelRatio = 3;
-      addTearDown(tester.view.reset);
-      final cache = memoryHomeCache();
-      await tester.runAsync(() => cache.write(me, [kept()]));
-      // No computer answers: the list never comes back.
-      final fake = FakeSwarm();
-      fake.routes['/api/super-tabs/list'] = (_) => Completer<Object?>().future;
-      final account = ValueNotifier<String?>(me);
-      final host = SwarmHost(
-        accountId: () => account.value,
-        account: account,
-        request: fake.request,
-        notices: SilentSystemNotices(),
-        features: ExperimentalFeaturesStore(storage: MemoryKeyValueStore())
-          ..value = {PhoneExperiment.swarm},
-        homeCache: cache,
-      );
-      addTearDown(host.dispose);
+      final (:host, :fake) = await coldStart(tester);
 
-      await tester.pumpWidget(
-        MaterialApp(
-          builder: (context, child) =>
-              SwarmScope(notifier: host, child: child!),
-          home: const SwarmPage(),
-        ),
-      );
-      // The kept view is read off disk: real time, then a frame, until it is.
-      for (var i = 0; i < 100 && host.session!.inbox.swarms.isEmpty; i++) {
-        await tester.runAsync(
-          () => Future<void>.delayed(const Duration(milliseconds: 10)),
-        );
-        await tester.pump();
-      }
-
-      await tester.pump();
-
+      expect(key('swarm-projects-loading-$tab'), findsNothing);
       expect(
         find.byKey(const ValueKey('swarm-project-$tab-$project')),
         findsOneWidget,
@@ -98,4 +107,21 @@ void main() {
       expect(fake.paths, ['/api/super-tabs/list']);
     },
   );
+
+  testWidgets(
+    'a cold start lists the projects kept in the drawer, with none on their '
+    'way',
+    (tester) async {
+      await coldStart(tester);
+
+      await tester.tap(key('swarm-menu'));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 500));
+
+      expect(key('swarm-drawer-project-$tab-$project'), findsOneWidget);
+      expect(key('swarm-drawer-loading'), findsNothing);
+    },
+  );
 }
+
+Finder key(String value) => find.byKey(ValueKey(value));
