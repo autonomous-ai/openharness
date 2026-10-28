@@ -140,7 +140,7 @@ class _SheetRowState extends State<SheetRow> {
   @override
   Widget build(BuildContext context) {
     AppTheme.watch(context);
-    const corner = Radius.circular(AppControl.sheetRadius);
+    const corner = Radius.circular(AppControl.rowRadius);
     final subtitle = widget.subtitle;
     final trailing = widget.trailing;
     return Semantics(

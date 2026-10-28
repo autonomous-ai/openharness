@@ -59,10 +59,66 @@ void main() {
   });
 
   group('how the board writes', () {
-    test('a cup for each medal', () {
-      expect(swarmCup(SwarmMedal.gold), '🥇');
-      expect(swarmCup(SwarmMedal.silver), '🥈');
-      expect(swarmCup(SwarmMedal.bronze), '🥉');
+    test('the numbers in words, each that would read zero left out', () {
+      SwarmScore score(Map<String, dynamic> json) => SwarmScore.fromJson(json);
+      expect(
+        swarmNumbers(
+          score(
+            scoreData(
+              'a',
+              points: 9,
+              rank: 1,
+              shipped: 8,
+              unblocked: 1,
+              lentMs: 40 * 3600000,
+            ),
+          ),
+        ),
+        ['8 shipped', '1 unblocked', '40 hours lent'],
+      );
+      expect(
+        swarmNumbers(score(scoreData('b', points: 2, rank: 2, unblocked: 2))),
+        ['2 unblocked'],
+      );
+      expect(
+        swarmNumbers(
+          score(scoreData('d', points: 1, rank: 4, lentMs: 3600000)),
+        ),
+        ['1 hour lent'],
+      );
+      // Under half an hour lent reads 0 hours, so it is left out.
+      expect(
+        swarmNumbers(score(scoreData('c', points: 0, rank: 3, lentMs: 60000))),
+        isEmpty,
+      );
+    });
+
+    test('the profile name when the board has one', () {
+      expect(
+        SwarmScore.fromJson({
+          ...scoreData('a', points: 1, rank: 1),
+          'displayName': 'Diego M',
+        }).displayName,
+        'Diego M',
+      );
+      expect(
+        SwarmScore.fromJson({
+          ...scoreData('a', points: 1, rank: 1),
+          'displayName': '',
+        }).displayName,
+        isNull,
+      );
+    });
+
+    test('the change against last week, none when level or unknown', () {
+      SwarmScore score(int points, int? before) => SwarmScore.fromJson({
+        ...scoreData('a', points: points, rank: 1),
+        'prevWeekPoints': ?before,
+      });
+      expect(swarmTrend(score(28, 20)), 'up 8 from last week');
+      expect(swarmTrend(score(21, 25)), 'down 4 from last week');
+      expect(swarmTrend(score(5, 5)), isNull);
+      expect(swarmTrend(score(5, null)), isNull);
     });
 
     test('a duration in minutes under an hour, then in hours', () {
@@ -72,10 +128,10 @@ void main() {
     });
 
     test('lent time in whole agent-hours', () {
-      expect(swarmLentHours(0), '0h');
-      expect(swarmLentHours(40 * 3600000), '40h');
-      expect(swarmLentHours(123 * 3600000 + 29 * 60000), '123h');
-      expect(swarmLentHours(30 * 60000), '1h');
+      expect(swarmHours(0), 0);
+      expect(swarmHours(40 * 3600000), 40);
+      expect(swarmHours(123 * 3600000 + 29 * 60000), 123);
+      expect(swarmHours(30 * 60000), 1);
     });
 
     test("a week is named from this week's Monday", () {
