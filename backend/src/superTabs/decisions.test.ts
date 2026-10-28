@@ -138,11 +138,15 @@ describe('leaving a decision to the PM', () => {
     expect(answered.messages).toHaveLength(2)
   })
 
-  it('posts no line when the person has no Chat with PM in that project', () => {
+  it('posts no line when the person has no open Chat with PM in that project', () => {
     const s = swarm()
     const answered = delegate(s, peer, open(s))
     expect(answered.decisionAnswer).toMatchObject({ choice: 1, delegated: true })
     expect(answered.messages.map(m => m.conversationId)).toEqual([s.group])
+    // An archived one refuses posts: the answer still stands, without the line.
+    const chat = pmChat(s)
+    s.state.conversations.find(c => c.id === chat)!.archived = true
+    expect(delegate(s, peer, open(s)).messages.map(m => m.conversationId)).toEqual([s.group])
   })
 
   it('lets only the person asked delegate, once, and only a decision with a recommended option', () => {
