@@ -399,7 +399,7 @@ async function attachAdapter(ws: WebSocket, machineId: string, userId: string, c
   // and counted pongs only, so an adapter that was actively sending application traffic could still
   // be killed if one pong went missing. `trackSocketLiveness` counts message/ping/pong against a time
   // deadline instead, which is the same fix already applied to the hub's own sockets.
-  const releaseLiveness = trackSocketLiveness(ws)
+  const releaseLiveness = trackSocketLiveness(ws, 'adapter')
 
   onMessage = (raw: RawData, isBinary: boolean): void => {
     if (isBinary) {
