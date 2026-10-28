@@ -241,6 +241,15 @@ describe('launch Git preparation', { timeout: 30_000 }, () => {
     }
   })
 
+  // Desktop makes the name up before the start and keeps it; the person never chose it, so taken is no refusal.
+  it('gives a made-up worktree branch name that is already taken the next free number', async () => {
+    await git('branch', 'quiet-owl')
+    await git('branch', 'quiet-owl-2')
+    const made = await prepare('worktree', 'refs/heads/feature', repo, { branchName: 'quiet-owl', branchMode: 'placeholder' })
+    expect(await current(made)).toBe('quiet-owl-3')
+    expect(await git('config', '--get', 'branch.quiet-owl-3.harness')).toBe('placeholder')
+  })
+
   it('makes a new branch for the folder itself, keeping its uncommitted work, and refuses one that exists', async () => {
     await writeFile(join(repo, 'src', 'value'), 'in progress')
     expect(await prepare('branch', 'refs/heads/login-fix', repo, { branchName: 'login-fix' })).toBe(repo)

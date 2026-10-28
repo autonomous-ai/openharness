@@ -322,8 +322,11 @@ export async function prepareGitProject(source: string, options: GitProjectOptio
   // Grouped by repository, so the leaf only needs the branch.
   const repository = trees[0]?.usable ? basename(trees[0].path) : basename(root)
   const taken = new Set((await git(source, ['for-each-ref', '--format=%(refname)', 'refs/heads']).catch(() => '')).split('\n'))
-  const branch = options.branchName ?? placeholderBranch(taken, options.pick)
   const placeholder = !options.branchName || options.placeholder === true
+  let branch = options.branchName ?? placeholderBranch(taken, options.pick)
+  // A name made up before the start (Desktop keeps its pick) may be taken by then; nobody chose it, so the next
+  // free number is taken instead of refusing with BRANCH_EXISTS.
+  if (placeholder && !existing) for (let suffix = 2, base = branch; taken.has(`refs/heads/${branch}`); suffix++) branch = `${base}-${suffix}`
   if (existing) {
     if (!taken.has(`refs/heads/${branch}`)) throw new GitProjectError('GIT_PROJECT_UNAVAILABLE', 'That branch is no longer available. Choose another branch.')
     if (trees.some(tree => tree.ref === `refs/heads/${branch}`)) {
