@@ -49,7 +49,7 @@ import { infoBlockFooter } from './lib/infoBlockFooter.js'
 import { flashCommand } from './lib/flash.js'
 import { awaitLoginCallback, extractCallbackParams, LOGIN_TIMEOUT_MESSAGE, type LoginCallbackParams } from './lib/loginCallback.js'
 import { ancestors, removeSignIn, SIGN_OUT_BUTTON_FLAG, signOutAsked, type Asker, type SignOutAsked } from './lib/signOut.js'
-import { AUTH_DIR, AuthSessionError, AuthSessionManager, knownSsoClientId, newSignInEpoch, readAuthSession, ssoClientIdFor, writeAuthSession, type AuthSession } from './lib/authSession.js'
+import { AUTH_DIR, AuthSessionError, AuthSessionManager, knownSsoClientId, newSignInEpoch, readAuthSession, readSignedOut, ssoClientIdFor, writeAuthSession, type AuthSession } from './lib/authSession.js'
 import { handOffToGrid } from './lib/gridHandoff.js'
 import { claimTicket, qrSignIn, type QrSignInTokens } from './lib/qrSignIn.js'
 import { pickSignInMethod, signInMethodFlag, signInProviderName, withSignInProvider, type SignInMethod, type SignInProvider } from './lib/signInMethodPicker.js'
@@ -335,15 +335,19 @@ function thisDeviceFingerprint(create: boolean): string | null {
  *  on-disk-but-about-to-expire gets refreshed here rather than reporting loggedIn:true and 401ing on
  *  the caller's very next request. */
 async function authStatusCommand(json: boolean): Promise<void> {
-  const session = readAuthSession()
+  const auth = new AuthSessionManager(backendHttpBase())
+  // A sign-in whose refresh was refused is kept, marked signed out (lib/authSession.ts `markSignedOut`), and
+  // tried again each time this is asked: the refusal may have been the service's. A revoked one is not.
+  const session = readAuthSession() ?? (await auth.retrySignedOut() ? readAuthSession() : null)
   if (!session) {
     // The computer id travels even signed out: it is the id this computer's daemon serves itself
     // under, and the app keys the local machine by it until a sign-in hands out a machineId.
-    if (json) console.log(JSON.stringify({ loggedIn: false, computerId: computerId() }))
+    const waiting = signedOutWaiting()
+    if (json) console.log(JSON.stringify({ loggedIn: false, computerId: computerId(), ...(waiting ? { signedOut: waiting } : {}) }))
+    else if (waiting === 'pending-refresh') console.log('\n  ✗ Signed out: this computer\'s sign-in could not be renewed. It is tried again; or run: harness login\n')
     else console.log('\n  ✗ Not signed in. Run: harness login\n')
     return
   }
-  const auth = new AuthSessionManager(backendHttpBase())
   let loggedIn = true
   let offline = false
   try {
@@ -359,8 +363,10 @@ async function authStatusCommand(json: boolean): Promise<void> {
   const latest = readAuthSession()
   const signedIn = loggedIn && latest !== null
   const fingerprintNow = thisDeviceFingerprint(false)
+  const waiting = signedIn ? null : signedOutWaiting()
   const payload = {
     loggedIn: signedIn,
+    ...(waiting ? { signedOut: waiting } : {}),
     ...(signedIn && offline ? { offline: true } : {}),
     computerId: latest?.computerId,
     machineId: latest?.machineId,
@@ -1739,6 +1745,13 @@ function clearAdapterState(): void {
   if (dataDir === cliDir) rmStateFiles(dataDir)
   else rmSync(dataDir, { recursive: true, force: true })
   rmStateFiles(cliDir)
+}
+
+/** Why a sign-in kept on disk is signed out, as `auth status` tells the app: waiting for its refresh to be
+ *  tried again, or for a new sign-in (a revoke). Null when there is none, or it is signed in. */
+function signedOutWaiting(): 'pending-refresh' | 'waiting-for-sign-in' | null {
+  const signedOut = readSignedOut()
+  return signedOut === null ? null : signedOut.reason === 'refresh-refused' ? 'pending-refresh' : 'waiting-for-sign-in'
 }
 
 /**

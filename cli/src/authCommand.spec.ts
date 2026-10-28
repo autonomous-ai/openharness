@@ -316,6 +316,41 @@ describe('harness auth status --json', () => {
     expect(JSON.parse(result.stdout.trim())).toMatchObject({ loggedIn: true, offline: true, machineId: 'm_seeded' })
   })
 
+  // 10-27: nothing automatic deletes the sign-in any more; it is kept, marked signed out (lib/authSession.ts
+  // `markSignedOut`), and the app is told which kind so it can say what happens next.
+  it('a sign-in whose refresh was refused reports signed out, waiting for a refresh, and keeps it', async () => {
+    const root = tempRoot()
+    seedSession(root, { overrides: { signedOut: { at: 1, reason: 'refresh-refused' } } })
+    const backend = await fakeBackend({ routes: { '/api/auth/refresh': () => new Refusal(401, 'REFRESH_TOKEN_INVALID', 'expired') } })
+
+    const result = await runAsync(root, ['auth', 'status', '--json'], backend.base)
+
+    expect(result.status).toBe(0)
+    expect(JSON.parse(result.stdout.trim())).toMatchObject({ loggedIn: false, signedOut: 'pending-refresh' })
+    expect(backend.calls.map((c) => c.url)).toEqual(['/api/auth/refresh'])
+    expect(existsSync(join(root, 'auth', 'session.json'))).toBe(true)
+  })
+
+  it('a refused refresh the service now renews signs the computer back in', async () => {
+    const root = tempRoot()
+    seedSession(root, { overrides: { signedOut: { at: 1, reason: 'refresh-refused' } } })
+    const backend = await fakeBackend({ routes: { '/api/auth/refresh': () => ({ token: 'tok_renewed', refreshToken: 'refresh_2', expiresIn: 3600 }) } })
+
+    const result = await runAsync(root, ['auth', 'status', '--json'], backend.base)
+
+    expect(JSON.parse(result.stdout.trim())).toMatchObject({ loggedIn: true, machineId: 'm_seeded' })
+    expect(JSON.parse(readFileSync(join(root, 'auth', 'session.json'), 'utf8'))).not.toHaveProperty('signedOut')
+  })
+
+  it('a revoked sign-in reports signed out, waiting for a sign-in, and asks the network nothing', () => {
+    const root = tempRoot()
+    seedSession(root, { overrides: { signedOut: { at: 1, reason: 'revoked' } } })
+
+    const result = runSync(root, ['auth', 'status', '--json'], 'http://127.0.0.1:1')
+
+    expect(JSON.parse(result.stdout.trim())).toMatchObject({ loggedIn: false, signedOut: 'waiting-for-sign-in' })
+  })
+
   it('carries this machine\'s fingerprint when its key is on disk', () => {
     const root = tempRoot()
     seedSession(root)

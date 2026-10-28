@@ -60,7 +60,7 @@ import { awakeTimeout } from '../lib/sleepAware.js'
 import { removePidFileIf, onError } from '../lib/daemonLaunch.js'
 import { harnessdEnv, holdHarnessdEnv } from '../lib/harnessdEnv.js'
 import { dropAgentSessionEnv } from '../lib/agentSessionEnv.js'
-import { AUTH_DIR, AuthSessionManager, clearAuthSession, ensureSignInEpoch, readAuthSession, signInOf, type AuthSession } from '../lib/authSession.js'
+import { AUTH_DIR, AuthSessionManager, ensureSignInEpoch, markSignedOut, readAuthSession, signInOf, type AuthSession } from '../lib/authSession.js'
 import { ENGINES, enginePathOverride } from '../lib/engineBin.js'
 import { isTerminalEngine, type AgentEngine } from '../engines/types.js'
 import { engineInstallRecipe } from '../lib/engineInstall.js'
@@ -3131,10 +3131,13 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // Windows: the master's stop is a message (harnessd/protocol.ts `harnessd:shutdown`), never a signal.
   coreLink.onShutdown(() => void shutdown('the harnessd master asked this core to stop'))
 
-  // A machine revocation or invalid SSO refresh ends this adapter session permanently.
+  // A machine revocation, a 401/403 on the backend link, or a refused SSO refresh ends this signed-in
+  // session: the daemon stops and comes back signed out. The sign-in is kept, marked signed out, and nothing
+  // reads it again until a new sign-in replaces it. 10-27: a sign-out nobody asked for stalled a whole Mac;
+  // only a person deletes it (lib/signOut.ts).
   backend.onRevoked = () => {
-    console.log('[cli] this computer was removed from the machine — clearing credentials and stopping')
-    clearAuthSession()
+    console.log('[cli] this computer\'s sign-in was revoked or refused — signed out, keeping it until a new sign-in, and stopping')
+    markSignedOut('revoked')
     // The web-tools cache lives exactly as long as the sign-in. `harness logout` and `reset` stop
     // the daemon outright; this is the one sign-out the daemon learns of from inside.
     ports.models?.signedOut()

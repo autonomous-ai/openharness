@@ -115,8 +115,26 @@ export function signInOf(epoch: string | undefined | null, acct?: string | null)
   return { epoch, adopted, at: at ? Number(at[1]) : null, ...(acct && !adopted ? { acct } : {}) }
 }
 
+/** The session on disk, and its signed-out mark when it has one ([markSignedOut]). */
+function readStored(): { session: AuthSession; signedOut: { at: number; reason: SignedOutReason } | null } | null {
+  let raw: string
+  try { raw = readFileSync(AUTH_SESSION_FILE, 'utf8') } catch { return null }
+  const session = parse(raw)
+  if (!session) return null
+  let mark: unknown
+  try { mark = (JSON.parse(raw) as { signedOut?: unknown }).signedOut } catch { mark = undefined }
+  const signedOut = typeof mark === 'object' && mark !== null
+    && ((mark as { reason?: unknown }).reason === 'refresh-refused' || (mark as { reason?: unknown }).reason === 'revoked')
+    ? { at: Number((mark as { at?: unknown }).at) || 0, reason: (mark as { reason: SignedOutReason }).reason }
+    : null
+  return { session, signedOut }
+}
+
+/** This computer's sign-in, or null when it has none, or has one marked signed out ([markSignedOut]): nothing
+ *  acts on that one again until a new sign-in replaces it. */
 export function readAuthSession(): AuthSession | null {
-  try { return parse(readFileSync(AUTH_SESSION_FILE, 'utf8')) } catch { return null }
+  const stored = readStored()
+  return stored && !stored.signedOut ? stored.session : null
 }
 
 export function hasAuthSession(): boolean { return readAuthSession() !== null }
@@ -137,6 +155,27 @@ export function writeAuthSession(session: AuthSession): void {
   } finally {
     try { rmSync(temp, { force: true }) } catch { /* ignore */ }
   }
+}
+
+/** Why a sign-in kept on disk is signed out: its refresh was refused, or it was revoked. */
+export type SignedOutReason = 'refresh-refused' | 'revoked'
+
+/**
+ * Marks this computer's sign-in signed out, and keeps it. 10-27: a sign-out nobody asked for stalled a whole
+ * Mac for hours. Nothing automatic deletes the sign-in any more (a refused refresh, a 401 or 403, a revoke):
+ * it is marked instead, [readAuthSession] reads it as none, and a new sign-in's [writeAuthSession] replaces
+ * it. Only a person deletes it (lib/signOut.ts `removeSignIn`). A refused refresh is tried again
+ * ([AuthSessionManager.retrySignedOut]); a revoked one is not.
+ */
+export function markSignedOut(reason: SignedOutReason, at = Date.now()): void {
+  const stored = readStored()
+  if (!stored || stored.signedOut) return
+  writeAuthSession({ ...stored.session, signedOut: { at, reason } } as AuthSession)
+}
+
+/** Why and since when this computer's sign-in is signed out, kept on disk; null when it is not. */
+export function readSignedOut(): { at: number; reason: SignedOutReason } | null {
+  return readStored()?.signedOut ?? null
 }
 
 export function clearAuthSession(): void {
@@ -301,12 +340,38 @@ export class AuthSessionManager {
         writeAuthSession(next)
         return next.accessToken
       } catch (err) {
-        if (err instanceof AuthSessionError && err.code === 'INVALID_REFRESH') clearAuthSession()
+        if (err instanceof AuthSessionError && err.code === 'INVALID_REFRESH') markSignedOut('refresh-refused')
         throw err
       }
     })
     this.refreshInFlight = running
     try { return await running } finally { if (this.refreshInFlight === running) this.refreshInFlight = null }
+  }
+
+  /**
+   * Tries a refused refresh again: the refusal may have been the service's, not the sign-in's. One that works
+   * signs this computer back in. A revoked sign-in is never tried: it waits for a new one. True when the
+   * computer is signed in again.
+   */
+  async retrySignedOut(): Promise<boolean> {
+    if (readStored()?.signedOut?.reason !== 'refresh-refused') return false
+    return withLock(async () => {
+      const stored = readStored()
+      if (!stored || stored.signedOut?.reason !== 'refresh-refused') return stored !== null && !stored.signedOut
+      try {
+        const refreshed = await refreshRequest(this.backendBaseUrl, stored.session, this.opts.refreshTimeoutMs)
+        writeAuthSession({
+          ...stored.session,
+          accessToken: refreshed.token,
+          ...(refreshed.refreshToken ? { refreshToken: refreshed.refreshToken } : {}),
+          ...(refreshed.expiresIn ? { expiresAt: Date.now() + refreshed.expiresIn * 1000 } : {}),
+          updatedAt: Date.now(),
+        })
+        return true
+      } catch {
+        return false
+      }
+    })
   }
 
   updateMachineId(machineId: string): void {

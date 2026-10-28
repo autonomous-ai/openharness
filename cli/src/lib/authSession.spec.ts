@@ -12,8 +12,11 @@ const {
   AuthSessionManager,
   clearAuthSession,
   ensureSignInEpoch,
+  hasAuthSession,
+  markSignedOut,
   newSignInEpoch,
   readAuthSession,
+  readSignedOut,
   releaseHeldAuthLock,
   signInOf,
   writeAuthSession,
@@ -235,15 +238,73 @@ describe('AuthSessionManager', () => {
     expect(readAuthSession()).toMatchObject({ refreshToken: 'refresh-1' })
   })
 
-  it('clears an invalid refresh session instead of retrying it forever', async () => {
+  // 10-27: a sign-out nobody asked for stalled a whole Mac. Nothing automatic deletes the sign-in: it is kept,
+  // marked signed out, and nothing reads it as signed in again until a new sign-in replaces it.
+  const refusal = (): Response => new Response(JSON.stringify({
+    success: false,
+    error: { code: 'REFRESH_TOKEN_INVALID', message: 'expired' },
+  }), { status: 401 })
+  const renewal = (): Response => new Response(JSON.stringify({
+    success: true,
+    data: { token: 'renewed-access', refreshToken: 'refresh-2', expiresIn: 3600 },
+  }), { status: 200 })
+
+  it('a refused refresh keeps the sign-in, marked signed out: nothing uses it, nor refreshes it again', async () => {
     writeAuthSession(baseSession())
-    vi.stubGlobal('fetch', vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify({
-      success: false,
-      error: { code: 'REFRESH_TOKEN_INVALID', message: 'expired' },
-    }), { status: 401 })))
+    const refused = vi.fn<typeof fetch>().mockImplementation(async () => refusal())
+    vi.stubGlobal('fetch', refused)
     const manager = new AuthSessionManager('https://api.example.test')
 
     await expect(manager.accessToken()).rejects.toMatchObject({ name: AuthSessionError.name, code: 'INVALID_REFRESH' })
+
     expect(readAuthSession()).toBeNull()
+    expect(readSignedOut()).toMatchObject({ reason: 'refresh-refused' })
+    expect(JSON.parse(await readFile(AUTH_SESSION_FILE, 'utf8'))).toMatchObject({ refreshToken: 'refresh-1' })
+    await expect(manager.accessToken()).rejects.toMatchObject({ code: 'MISSING' })
+    expect(refused).toHaveBeenCalledTimes(1)
+  })
+
+  it('a refused refresh is tried again when asked, and one that now works signs the computer back in', async () => {
+    writeAuthSession(baseSession())
+    markSignedOut('refresh-refused')
+    vi.stubGlobal('fetch', vi.fn<typeof fetch>().mockImplementation(async () => refusal()))
+    const manager = new AuthSessionManager('https://api.example.test')
+
+    expect(await manager.retrySignedOut()).toBe(false)
+    expect(readSignedOut()).toMatchObject({ reason: 'refresh-refused' })
+
+    vi.stubGlobal('fetch', vi.fn<typeof fetch>().mockImplementation(async () => renewal()))
+    expect(await manager.retrySignedOut()).toBe(true)
+
+    expect(readSignedOut()).toBeNull()
+    expect(readAuthSession()).toMatchObject({ accessToken: 'renewed-access', refreshToken: 'refresh-2', machineId: 'machine-1' })
+  })
+
+  // The daemon stops on a revoke and comes back signed out (core/main.ts `onRevoked`): it boots signed in
+  // only on a sign-in it can read, and every request takes its token from here.
+  it('a revoked sign-in is never acted on again: no token, no refresh, until a new sign-in', async () => {
+    writeAuthSession({ ...baseSession(), expiresAt: Date.now() + 3_600_000 })
+    markSignedOut('revoked')
+    const fetched = vi.fn<typeof fetch>()
+    vi.stubGlobal('fetch', fetched)
+    const manager = new AuthSessionManager('https://api.example.test')
+
+    expect(hasAuthSession()).toBe(false)
+    await expect(manager.accessToken()).rejects.toMatchObject({ code: 'MISSING' })
+    await expect(manager.accessToken({ force: true })).rejects.toMatchObject({ code: 'MISSING' })
+    expect(await manager.retrySignedOut()).toBe(false)
+
+    expect(fetched).not.toHaveBeenCalled()
+    expect(readSignedOut()).toMatchObject({ reason: 'revoked' })
+  })
+
+  it('a new sign-in replaces one marked signed out', () => {
+    writeAuthSession(baseSession())
+    markSignedOut('revoked')
+
+    writeAuthSession({ ...baseSession(), accessToken: 'new-sign-in' })
+
+    expect(readSignedOut()).toBeNull()
+    expect(readAuthSession()).toMatchObject({ accessToken: 'new-sign-in' })
   })
 })
