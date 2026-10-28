@@ -287,18 +287,24 @@ class DesktopPill extends StatelessWidget {
 
 /// The same heading and dismiss control for every list or task dialog.
 /// A form can omit Close when its Cancel action already provides dismissal.
+/// [leading] is an identity beside the title (an avatar); [trailing] are icon
+/// controls that belong to the whole dialog, placed before Close.
 class DesktopDialogHeader extends StatelessWidget {
   const DesktopDialogHeader({
     super.key,
     required this.title,
     this.detail,
     this.onClose,
+    this.leading,
+    this.trailing = const [],
     this.padding = const EdgeInsets.fromLTRB(24, 24, 16, 16),
   });
 
   final String title;
   final String? detail;
   final VoidCallback? onClose;
+  final Widget? leading;
+  final List<Widget> trailing;
   final EdgeInsets padding;
 
   @override
@@ -307,6 +313,10 @@ class DesktopDialogHeader extends StatelessWidget {
     child: Row(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
+        if (leading case final leading?) ...[
+          leading,
+          const SizedBox(width: 12),
+        ],
         Expanded(
           child: Column(
             mainAxisSize: MainAxisSize.min,
@@ -323,8 +333,9 @@ class DesktopDialogHeader extends StatelessWidget {
             ],
           ),
         ),
+        if (trailing.isNotEmpty) ...[const SizedBox(width: 12), ...trailing],
         if (onClose != null) ...[
-          const SizedBox(width: 12),
+          SizedBox(width: trailing.isEmpty ? 12 : 4),
           IconButton(
             tooltip: 'Close',
             onPressed: onClose,
