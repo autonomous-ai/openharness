@@ -413,11 +413,13 @@ export function conversation(state: SuperTabState, id: string): Conversation {
 export const isLeads = (group: Conversation): boolean => group.kind === 'leads'
 
 const KNOWN_KINDS: Record<NonNullable<Conversation['kind']>, true> = { leads: true, buddy: true }
+/** Conversation kinds this release knows; one of another kind is kept aside unchanged (parkLaterConversations, parts/shape.ts). */
+export const knownKind = (group: Pick<Conversation, 'kind'>): boolean => group.kind == null || Object.hasOwn(KNOWN_KINDS, group.kind)
 /** During a rolling deploy the previous release reads what the next one wrote. A conversation kind it does not know
  *  belongs to no project it can check, so it waits here unchanged, and the release that knows it puts it back. */
 export function parkLaterConversations(state: SuperTabState): void {
   const all = [...state.conversations, ...state.parkedConversations ?? []]
-  const known = (c: Conversation) => c.kind == null || Object.hasOwn(KNOWN_KINDS, c.kind)
+  const known = knownKind
   state.conversations = all.filter(known)
   const parked = all.filter(c => !known(c))
   if (parked.length) state.parkedConversations = parked

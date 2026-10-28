@@ -5,6 +5,7 @@ import { canReadGroup, canWatchAgent, isConfidential } from './projects.js'
 import { sweepLiveness } from './liveness.js'
 import { hostTab } from './read/hostRows.js'
 import { groupView } from './read/views.js'
+import { reassemble, split } from './parts/index.js'
 
 const owner: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: 'owner', email: 'owner@example.com' }
 const peer: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: 'peer', email: 'peer@example.com' }
@@ -456,5 +457,14 @@ describe('a Buddy chat as readers get it', () => {
     expect(view).not.toHaveProperty('audience')
     expect(view).not.toHaveProperty('proposals')
     expect(groupView(group(f, f.pmChat), new Set())).toHaveProperty('audience')
+  })
+})
+
+describe('a Buddy chat stored in parts', () => {
+  it('comes back as a conversation, never set aside as a kind this release does not know', () => {
+    const f = setup()
+    const back = reassemble(split(f.state, { tabId: 'swarm', version: 1, now: 1000 }))
+    expect(back.conversations.map(c => c.id)).toContain(f.chat)
+    expect(back.parkedConversations).toBeUndefined()
   })
 })
