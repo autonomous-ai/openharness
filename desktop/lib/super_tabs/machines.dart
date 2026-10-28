@@ -1471,9 +1471,9 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
 
             return SuperTabDetailDialog(
               title: superTabMachineName(name),
-              detail: _canRemove(id) ? removeReason : null,
               headerActions: [
-                // Out of the way of the everyday actions below: a quiet mark that turns red when pointed at.
+                // Out of the way of the everyday actions below: a quiet mark that turns red when pointed at, and says
+                // why on hover when it cannot.
                 if (_canRemove(id))
                   AppIconButton(
                     key: const ValueKey('super-machine-remove'),

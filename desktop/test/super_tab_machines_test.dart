@@ -1546,12 +1546,11 @@ void main() {
       await tester.pumpAndSettle();
       final remove = find.byKey(const ValueKey('super-machine-remove'));
       expect(remove, findsOneWidget);
-      expect(
-        find.text(
-          'Mira is the Product Manager of project Pilot. Delete the project first.',
-        ),
-        findsOneWidget,
-      );
+      // Why, on the unavailable control itself, not as a sentence under the title (Ken, 2026-10-28).
+      const why =
+          'Mira is the Product Manager of project Pilot. Delete the project first.';
+      expect(find.text(why), findsNothing);
+      expect(find.byTooltip(why), findsOneWidget);
       expect(server.posts, isEmpty);
       await tester.pumpWidget(const SizedBox());
       await c.flush();
@@ -1673,7 +1672,9 @@ void main() {
         await c.refresh();
         await tester.pumpAndSettle();
         expect(
-          find.textContaining('Product Manager of project Pilot'),
+          find.byTooltip(
+            'Mira is the Product Manager of project Pilot. Delete the project first.',
+          ),
           findsOneWidget,
         );
         final remove = tester.widget<AppIconButton>(
@@ -1984,18 +1985,14 @@ void main() {
             expect(
               find.descendant(
                 of: details,
-                matching: find.textContaining(
-                  '70% left · resets in ',
-                ),
+                matching: find.textContaining('70% left · resets in '),
               ),
               findsOneWidget,
             );
             expect(
               find.descendant(
                 of: details,
-                matching: find.textContaining(
-                  '90% left · resets in ',
-                ),
+                matching: find.textContaining('90% left · resets in '),
               ),
               findsOneWidget,
             );
@@ -2068,41 +2065,52 @@ void main() {
     expect(superTabRepositoryUrl('/Users/me/project.git'), isNull);
     expect(superTabRepositoryUrl('github.com'), isNull);
   });
-  testWidgets('Add machine shows a long hostname whole, over two lines if it must', (tester) async {
-    final f = SuperTabLaunchFixture();
-    f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Pilot');
-    const host = 'autonomous-code-vm-01.c.autonomous-code.internal';
-    f.app.machineStates['m']!.machine = f.app.machineStates['m']!.machine.copyWith(name: host);
-    final c = await f.app.superTabs.open(tabId);
-    await c.refresh();
-    await tester.pumpWidget(
-      MaterialApp(
-        theme: grid.buildAppTheme(brightness: Brightness.dark),
-        home: Scaffold(
-          body: SizedBox(
-            width: 300,
-            height: 400,
-            child: SuperTabMachines(
-              controller: c,
-              app: f.app,
-              onAddAgent: (_) {},
-              readLocal: (_) async => _reading(freeGiB: 8),
+  testWidgets(
+    'Add machine shows a long hostname whole, over two lines if it must',
+    (tester) async {
+      final f = SuperTabLaunchFixture();
+      f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Pilot');
+      const host = 'autonomous-code-vm-01.c.autonomous-code.internal';
+      f.app.machineStates['m']!.machine = f.app.machineStates['m']!.machine
+          .copyWith(name: host);
+      final c = await f.app.superTabs.open(tabId);
+      await c.refresh();
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: grid.buildAppTheme(brightness: Brightness.dark),
+          home: Scaffold(
+            body: SizedBox(
+              width: 300,
+              height: 400,
+              child: SuperTabMachines(
+                controller: c,
+                app: f.app,
+                onAddAgent: (_) {},
+                readLocal: (_) async => _reading(freeGiB: 8),
+              ),
             ),
           ),
         ),
-      ),
-    );
-    await tester.pumpAndSettle();
-    await tester.tap(find.byTooltip('Add machine'));
-    await tester.pumpAndSettle();
-    final label = find.descendant(of: _picker, matching: find.textContaining(host));
-    expect(label, findsOneWidget);
-    final paragraph = tester.renderObject<RenderParagraph>(label);
-    expect(paragraph.didExceedMaxLines, isFalse, reason: 'the whole hostname is readable');
-    await tester.pumpWidget(const SizedBox());
-    await c.flush();
-    c.dispose();
-  });
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.byTooltip('Add machine'));
+      await tester.pumpAndSettle();
+      final label = find.descendant(
+        of: _picker,
+        matching: find.textContaining(host),
+      );
+      expect(label, findsOneWidget);
+      final paragraph = tester.renderObject<RenderParagraph>(label);
+      expect(
+        paragraph.didExceedMaxLines,
+        isFalse,
+        reason: 'the whole hostname is readable',
+      );
+      await tester.pumpWidget(const SizedBox());
+      await c.flush();
+      c.dispose();
+    },
+  );
 
   testWidgets(
     'Add machine has one field and contributes the prepared project and installed engines',
