@@ -272,25 +272,24 @@ void main() {
     await unmount(tester);
   });
 
-  testWidgets('a push reads at once and starts the pace over', (tester) async {
-    await mount(tester, machines: const [_asleep]);
-    expect(await readsIn(tester, 120), [4, 12, 27, 57, 87, 117]);
+  testWidgets(
+    'a push reads once its copies from the other machines are in, and starts the pace over',
+    (tester) async {
+      await mount(tester, machines: const [_asleep]);
+      expect(await readsIn(tester, 120), [4, 12, 27, 57, 87, 117]);
 
-    expect(
-      await readAtOnce(
-        tester,
-        () => unawaited(
-          app.handleEventForTest(_studioId, const {
-            'type': 'machines_changed',
-            'payload': <String, dynamic>{},
-          }),
-        ),
-      ),
-      isTrue,
-    );
-    expect(await readsIn(tester, 12), [124, 132]);
-    await unmount(tester);
-  });
+      unawaited(
+        app.handleEventForTest(_studioId, const {
+          'type': 'machines_changed',
+          'payload': <String, dynamic>{},
+        }),
+      );
+      // AppNotifier.machinesPushCollapse: the same push arrives once per connected machine.
+      expect(await readsIn(tester, 2), [122]);
+      expect(await readsIn(tester, 12), [126, 134]);
+      await unmount(tester);
+    },
+  );
 
   testWidgets('the person\'s Retry reads at once and starts the pace over', (
     tester,
