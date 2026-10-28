@@ -63,7 +63,7 @@ describe('removing the old state migrated Swarms keep (Stability 2.1)', () => {
     await legacySwarm()
 
     for (const apply of [false, true]) {
-      expect(await dropLegacyStates(db, { apply })).toEqual({ ok: false, swarms: 2, unmigrated: 1, kept: 1, keptBytes: OLD_STATE_BYTES, removed: 0, batches: 0 })
+      expect(await dropLegacyStates(db, { apply })).toEqual({ ok: false, swarms: 2, unmigrated: 1, kept: 1, keptBytes: OLD_STATE_BYTES, removed: 0, batches: 0, writeErrors: 0 })
     }
     expect(await kept(migrated)).toEqual(OLD_STATE)
   })
@@ -82,9 +82,23 @@ describe('removing the old state migrated Swarms keep (Stability 2.1)', () => {
     const [first, second] = [await migratedSwarm(), await migratedSwarm()]
     await db.superTab.create({ data: { id: `tab-${randomUUID()}`, ownerId: 'owner', autonomousEnv: 'prod', format: 2, state: { version: 2 } } })
 
-    expect(await dropLegacyStates(db)).toEqual({ ok: true, swarms: 3, unmigrated: 0, kept: 2, keptBytes: 2 * OLD_STATE_BYTES, removed: 0, batches: 0 })
+    expect(await dropLegacyStates(db)).toEqual({ ok: true, swarms: 3, unmigrated: 0, kept: 2, keptBytes: 2 * OLD_STATE_BYTES, removed: 0, batches: 0, writeErrors: 0 })
     expect([await kept(first), await kept(second)]).toEqual([OLD_STATE, OLD_STATE])
   })
+
+  it('stops at the first batch the database refuses, and counts its refused writes', async () => {
+    await empty()
+    const ids = [await migratedSwarm(), await migratedSwarm()]
+    // A validator that refuses any row without an old state, so every removal comes back as a write error.
+    await db.$runCommandRaw({ collMod: 'SuperTab', validator: { legacyState: { $exists: true } }, validationAction: 'error' })
+    try {
+      expect(await dropLegacyStates(db, { apply: true, batch: 1 })).toEqual({ ok: true, swarms: 2, unmigrated: 0, kept: 2, keptBytes: 2 * OLD_STATE_BYTES,
+        removed: 0, batches: 1, writeErrors: 1 })
+    } finally {
+      await db.$runCommandRaw({ collMod: 'SuperTab', validator: {}, validationLevel: 'off' })
+    }
+    expect(await Promise.all(ids.map(kept))).toEqual([OLD_STATE, OLD_STATE])
+  }, 10_000)
 
   it('removes every kept old state in batches, leaving each Swarm\'s row and parts as they were', async () => {
     await empty()
@@ -94,11 +108,11 @@ describe('removing the old state migrated Swarms keep (Stability 2.1)', () => {
       parts: await db.$transaction(tx => parts.loadAll(tx, id)) })))
     const before = await snapshot()
 
-    expect(await dropLegacyStates(db, { apply: true, batch: 2 })).toEqual({ ok: true, swarms: 3, unmigrated: 0, kept: 3, keptBytes: 3 * OLD_STATE_BYTES, removed: 3, batches: 2 })
+    expect(await dropLegacyStates(db, { apply: true, batch: 2 })).toEqual({ ok: true, swarms: 3, unmigrated: 0, kept: 3, keptBytes: 3 * OLD_STATE_BYTES, removed: 3, batches: 2, writeErrors: 0 })
     expect(await db.$runCommandRaw({ count: 'SuperTab', query: { legacyState: { $exists: true } } })).toMatchObject({ n: 0 })
     expect(await Promise.all(ids.map(kept))).toEqual([null, null, null])
     expect(await snapshot()).toEqual(before)
     // Run again, it finds nothing left.
-    expect(await dropLegacyStates(db, { apply: true })).toEqual({ ok: true, swarms: 3, unmigrated: 0, kept: 0, keptBytes: 0, removed: 0, batches: 0 })
+    expect(await dropLegacyStates(db, { apply: true })).toEqual({ ok: true, swarms: 3, unmigrated: 0, kept: 0, keptBytes: 0, removed: 0, batches: 0, writeErrors: 0 })
   })
 })

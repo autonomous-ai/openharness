@@ -19,6 +19,9 @@ async function main() {
     if (!report.ok) {
       console.error(`Refused: ${report.unmigrated} of ${report.swarms} Swarms are not in parts yet. Nothing was removed.`)
       process.exitCode = 1
+    } else if (report.writeErrors) {
+      console.error(`Stopped: the database refused ${report.writeErrors} removals. ${report.removed} old states were removed before that.`)
+      process.exitCode = 1
     } else if (!options.apply) console.log('Dry run: nothing was removed. After a backup, add --apply --backup-confirmed to remove them.')
   } finally {
     await db.$disconnect()

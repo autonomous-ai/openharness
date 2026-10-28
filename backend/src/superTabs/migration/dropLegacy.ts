@@ -12,7 +12,11 @@ export interface DropOptions {
   batch?: number
 }
 /** Counts and sizes only: nothing that names a Swarm or shows its content. */
-export interface DropReport { ok: boolean; swarms: number; unmigrated: number; kept: number; keptBytes: number; removed: number; batches: number }
+export interface DropReport {
+  ok: boolean; swarms: number; unmigrated: number; kept: number; keptBytes: number; removed: number; batches: number
+  /** Removals the database refused. The run stops at the first batch with one, or that removes nothing. */
+  writeErrors: number
+}
 
 export const DEFAULT_BATCH = 100
 /** Not in parts: format 1, or a row from before the field, which reads as 1. */
@@ -28,16 +32,21 @@ export async function dropLegacyStates(db: PrismaClient, { apply = false, batch 
   const [swarms, unmigrated] = [await count(db, {}), await count(db, UNMIGRATED)]
   const [size] = (await db.$runCommandRaw({ aggregate: 'SuperTab', cursor: {}, pipeline: [{ $match: KEPT },
     { $group: { _id: null, kept: { $sum: 1 }, keptBytes: { $sum: { $bsonSize: '$legacyState' } } } }] }) as unknown as Batch<{ kept: number; keptBytes: number }>).cursor.firstBatch
-  const report = { ok: unmigrated === 0, swarms, unmigrated, kept: size?.kept ?? 0, keptBytes: size?.keptBytes ?? 0, removed: 0, batches: 0 }
+  const report = { ok: unmigrated === 0, swarms, unmigrated, kept: size?.kept ?? 0, keptBytes: size?.keptBytes ?? 0, removed: 0, batches: 0, writeErrors: 0 }
   if (!report.ok || !apply) return report
   for (;;) {
     const ids = (await db.$runCommandRaw({ find: 'SuperTab', filter: KEPT, projection: { _id: 1 }, limit: batch }) as unknown as Batch<{ _id: string }>)
       .cursor.firstBatch.map(row => row._id)
     if (!ids.length) return report
     // Only rows still in parts: one rolled back meanwhile keeps whatever it holds.
-    const updated = await db.$runCommandRaw({ update: 'SuperTab', updates: [{ q: { _id: { $in: ids }, ...KEPT }, u: { $unset: { legacyState: '' } }, multi: true }] }) as { nModified: unknown }
-    report.removed += Number(updated.nModified)
+    const updated = await db.$runCommandRaw({ update: 'SuperTab', updates: [{ q: { _id: { $in: ids }, ...KEPT }, u: { $unset: { legacyState: '' } }, multi: true }] }) as
+      { nModified: unknown; writeErrors?: unknown[] }
+    const removed = Number(updated.nModified)
+    report.removed += removed
+    report.writeErrors += updated.writeErrors?.length ?? 0
     report.batches++
+    // The same rows would come back from the next find: a refused or empty batch would repeat for ever.
+    if (!removed || updated.writeErrors?.length) return report
   }
 }
 
