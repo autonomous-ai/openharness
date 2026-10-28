@@ -10,7 +10,7 @@ import { machineAlive } from '../../lib/prisma.js'
 import { isTeamSession } from '../../lib/teamSession.js'
 import { machineBillingAllowsDataPlane } from '../../lib/billingState.js'
 import { fail, type AgentStart, type SuperTabState } from '../model.js'
-import type { SuperTabStore } from '../store.js'
+import { GrantReads, type SuperTabStore } from '../store.js'
 import type { CacheView } from '../cache.js'
 import { readMachines } from '../cachedReads.js'
 import * as parts from '../parts/index.js'
@@ -55,6 +55,8 @@ export class HostReads {
     await this.store.hostFor(tx, user, machineId)
     const owned = await tx.machine.findFirst({ where: { machineId, userId: user.sub, autonomousEnv: user.autonomousEnv, ...machineAlive } })
     if (!owned || !machineBillingAllowsDataPlane(owned)) fail('HOST_UNAVAILABLE', 'This execution host is unavailable.', 403)
+    // Every agent's grant check of this read shares one read of each machine, share, contributor and Workspace membership.
+    const grants = new GrantReads(owned)
     // Swarms still in one row are migrated when first opened; the job migrates every one before the new release serves.
     const ids = (await tx.superTab.findMany({ where: { autonomousEnv: user.autonomousEnv, format: 2,
       OR: [{ machineIds: { has: machineId } }, { cleanupMachineIds: { has: machineId } }] },
@@ -76,7 +78,7 @@ export class HostReads {
       const inputs = await cached.get(tabId, 'host:inputs', 'main', () => this.inputs(tx, tabId))
       if (!full && held && inputs && held.slice(ROW_HASH) === inputs) { tabs.push({ tabId, lastChangedAt, etag: held, unchanged: true as const }); continue }
       const state = await this.tabState(tx, cached, tabId, machineId)
-      const rows = await hostTab(tabId, state, machineId, user, lastChangedAt, await this.lookups(tx, state, teams))
+      const rows = await hostTab(tabId, state, machineId, user, lastChangedAt, await this.lookups(tx, state, teams, grants))
       const etag = rows.etag + (inputs ?? '')
       // The host already holds these rows: say so instead of sending them again.
       tabs.push(held?.slice(0, ROW_HASH) === rows.etag ? { tabId, lastChangedAt, etag, unchanged: true as const } : { ...rows, etag })
@@ -162,10 +164,10 @@ export class HostReads {
       .digest('base64url').slice(0, ROW_HASH)
   }
 
-  private async lookups(tx: Transaction, state: SuperTabState, teams: Array<{ machineId: string }>): Promise<HostLookups> {
+  private async lookups(tx: Transaction, state: SuperTabState, teams: Array<{ machineId: string }>, grants: GrantReads): Promise<HostLookups> {
     const people = await tx.user.findMany({ where: { id: { in: state.people.map(p => p.id) }, autonomousEnv: state.environment }, select: { id: true, email: true } })
     const confidential = await confidentialSessions(tx, state.agents.map(a => a.id), state.id)
-    return { people, confidential, teams, githubApp: !!this.options.githubApp, agentGrant: target => this.store.agentGrant(tx, state, target) }
+    return { people, confidential, teams, githubApp: !!this.options.githubApp, agentGrant: target => this.store.agentGrant(tx, state, target, grants) }
   }
 
   /** Swarms whose record of this machine changed since the cursor and that no longer list it. */
