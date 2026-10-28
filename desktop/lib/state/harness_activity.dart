@@ -139,3 +139,16 @@ HarnessActivity? tabActivity(AppNotifier app, Swarm tab) {
   }
   return result;
 }
+
+/// What needs this account across its Swarm tabs: the tags and open decisions
+/// the Swarm counts for it alone, each Swarm once. None from a Swarm it lost,
+/// none signed out. The Dock's badge, and what the Swarm's sidebar row counted.
+int swarmsNeedYou(AppNotifier app) {
+  if (app.currentUser == null) return 0;
+  var count = 0;
+  for (final id in {for (final tab in app.swarms) ?tab.superTabId}) {
+    if (app.superTabs.peek(id)?.accessRevoked == true) continue;
+    count += app.superTabs.waitingTags(id) + app.superTabs.waitingDecisions(id);
+  }
+  return count;
+}

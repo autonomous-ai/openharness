@@ -4,7 +4,8 @@ import type { HandoffDeps } from '../lib/agentHandoff.js'
 import type { RegisteredSession } from '../lib/registry.js'
 import { fakeCore } from '../testing/fakeCore.js'
 import { HANDOFF_REQUESTS, startHandoff } from './handoff.js'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { recordReplacement } from '../superTabs/replacements.js'
+import { existsSync, mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -17,14 +18,30 @@ describe('the change-agent handoff service', () => {
     try {
       const old = { agentId: 'old', cwd: '/repo', resumeOnly: true }, target = { agentId: 'new', cwd: '/repo', engine: 'claude' }
       const core = fakeCore({ dataDir, conversations: { resolve: vi.fn(async id => (id === 'old' ? old : target) as never) } })
-      const handler = startHandoff(core).agent_handoff_complete!
+      const handler = startHandoff(core, undefined, undefined, recordReplacement).agent_handoff_complete!
       const payload = { agentId: 'old', replacementId: 'new', changeId: '0123456789abcdef', targetEngine: 'claude' }
       expect(await handler(payload, { local: false, owner: false })).toEqual({ error: 'OWNER_REQUIRED' })
+      expect(existsSync(join(dataDir, 'super-tabs'))).toBe(false)
       expect(await handler(payload, owner)).toEqual({ ok: true })
+      expect(existsSync(join(dataDir, 'super-tabs'))).toBe(true)
       expect(await handler(payload, owner)).toEqual({ ok: true })
       expect(await handler({ ...payload, replacementId: 'old' }, owner)).toMatchObject({ error: 'HANDOFF_UNAVAILABLE' })
       const closed = new AbortController(); closed.abort()
       expect(await handler(payload, owner, closed.signal)).toMatchObject({ error: 'HANDOFF_UNAVAILABLE' })
+    } finally { rmSync(dataDir, { recursive: true, force: true }) }
+  })
+  // HARNESS_SWARM=off: the edge host hands in no Swarm, and a completed change is the person's alone: nothing is recorded
+  // for a Super Tab's host, and none of its saved state is written.
+  it('records nothing for the Swarm while it is off, and still asks the owner', async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'handoff-off-'))
+    try {
+      const resolve = vi.fn(async () => null)
+      const handler = startHandoff(fakeCore({ dataDir, conversations: { resolve } })).agent_handoff_complete!
+      const payload = { agentId: 'old', replacementId: 'new', changeId: '0123456789abcdef', targetEngine: 'claude' }
+      expect(await handler(payload, { local: false, owner: false })).toEqual({ error: 'OWNER_REQUIRED' })
+      expect(await handler(payload, owner)).toEqual({ ok: true })
+      expect(resolve).not.toHaveBeenCalled()
+      expect(existsSync(join(dataDir, 'super-tabs'))).toBe(false)
     } finally { rmSync(dataDir, { recursive: true, force: true }) }
   })
   it('uses the real provider by default and preserves its unknown-agent answer', async () => {

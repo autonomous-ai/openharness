@@ -1,6 +1,3 @@
-import { createSwarmSkillAdoption } from './agents/swarmSkills.js'
-import { swarmRoleThrough } from './superTabSkills.js'
-import { mayBeLead, retainedHarnesses, retainedLeads } from '../superTabs/retention.js'
 import { realTeamRelayLaunch } from '../team/relay.js'
 import { createGridAssignments } from './agents/gridAssignments.js'
 import { createQuestionControls } from './engines/questionControls.js'
@@ -63,7 +60,7 @@ import { awakeTimeout } from '../lib/sleepAware.js'
 import { removePidFileIf, onError } from '../lib/daemonLaunch.js'
 import { harnessdEnv, holdHarnessdEnv } from '../lib/harnessdEnv.js'
 import { dropAgentSessionEnv } from '../lib/agentSessionEnv.js'
-import { AUTH_DIR, AuthSessionManager, clearAuthSession, ensureSignInEpoch, readAuthSession, signInOf, type AuthSession } from '../lib/authSession.js'
+import { AUTH_DIR, AuthSessionManager, ensureSignInEpoch, markSignedOut, readAuthSession, signInOf, type AuthSession } from '../lib/authSession.js'
 import { ENGINES, enginePathOverride } from '../lib/engineBin.js'
 import { isTerminalEngine, type AgentEngine } from '../engines/types.js'
 import { engineInstallRecipe } from '../lib/engineInstall.js'
@@ -211,15 +208,12 @@ import { createTerminalWatch } from './terminalWatch.js'
 import { createSharingLink } from './sharingLink.js'
 import { createAgentSettingsSync, createExperimentHooks, wakeExperiments } from './experiments.js'
 import { answerExperimentQuery, answerMachineAddonsQuery, createForExperiment, creationForExperiment } from './experimentQueries.js'
-import { createSuperTabAttention } from './superTabAttention.js'
-import { createSuperTabTerminal } from './superTabTerminal.js'
-import { createSuperTabCards } from './superTabCards.js'
 import { answerConnectorsQuery } from './connectorsQueries.js'
 import { answerSharedMachinesQuery } from './sharedMachinesQueries.js'
 import { inlineSharedMachinesPort } from '../lib/sharedMachinesPort.js'
 import { createOrchestratorLink } from './orchestratorLink.js'
 import { daemonCommand } from '../lib/daemonCommand.js'
-import { KNOWN_SERVICES, masterRunsEngineRuntime, masterRunsLiveEngines, servicesTheMasterRuns } from '../harnessd/services.js'
+import { KNOWN_SERVICES, masterRunsEngineRuntime, masterRunsLiveEngines, servicesOn, servicesTheMasterRuns, swarmOn } from '../harnessd/services.js'
 import { askForMessages, createMessagesLink } from './messagesLink.js'
 import { createDevicesLink } from './devicesLink.js'
 import { CORE_EXIT_STOP, CORE_EXIT_UPDATE, PROBE_COMMAND } from '../harnessd/protocol.js'
@@ -260,7 +254,6 @@ import { createRuntimeTransport } from './engines/runtimeTransport.js'
 import { RuntimeProfileController } from '../lib/runtimeControl.js'
 import { installTimestampedConsole, sid, prepareLogFile, trimLogFile, LOG_CHECK_INTERVAL_MS } from '../lib/log.js'
 import { backendHttpBase } from '../lib/controlPlane.js'
-import { forwardAttachmentUpload } from '../lib/superTabAttachmentProxy.js'
 
 // Daemon stdout/stderr. Capped at LOG_MAX_BYTES — see prepareLogFile/trimLogFile in lib/log.ts.
 const LOG_FILE = DAEMON_LOG_FILE
@@ -703,7 +696,11 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   const syncRecapPool = (): void => {
     ports.devices?.engines(registry.active().map((session) => session.engine))
   }
-  const outOfProcess = servicesTheMasterRuns(harnessd, KNOWN_SERVICES)
+  // The Swarm switch (harnessd/services.ts `HARNESS_SWARM`, on unless set off): its code in this process comes from one
+  // entry, loaded only while it is on (superTabs/inCore.ts), and its service is left off with it.
+  const swarm = swarmOn(harnessd) ? await import('../superTabs/inCore.js') : null
+  const knownServices = servicesOn(harnessd, KNOWN_SERVICES)
+  const outOfProcess = servicesTheMasterRuns(harnessd, knownServices)
   // The viewers' process (the viewers and the Store) runs once something needs it (core/viewersWake.ts).
   const viewersWake = createViewersWake({ want: (service) => coreLink.want(service), outOfProcess })
   const liveHosted = masterRunsLiveEngines(harnessd, process.ppid)
@@ -722,8 +719,12 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   const isolatedNativeControl = (engine: string): boolean => nativeControlHosted && isolatedLive(engine)
   const isolatedSubmission = (engine: string): boolean => submissionHosted && isolatedLive(engine)
   const isolatedRuntime = (engine: string): boolean => runtimeHosted && isolatedLive(engine)
-  const inline = KNOWN_SERVICES.some((name) => !outOfProcess.has(name)) || !runtimeHosted || !screenHosted || !modelControlHosted || !questionControlHosted || !submissionHosted || !nativeControlHosted
+  const inline = knownServices.some((name) => !outOfProcess.has(name)) || !runtimeHosted || !screenHosted || !modelControlHosted || !questionControlHosted || !submissionHosted || !nativeControlHosted
     ? await import('../services/inline.js') : null
+  // The Swarm's side of the services that act on it, for those of them that run in this process while it is on
+  // (superTabs/inServices.ts): off, or with them in their own processes, none of it is loaded here.
+  const swarmServices = swarm && ['sharing', 'handoff', 'models'].some((name) => !outOfProcess.has(name))
+    ? await import('../superTabs/inServices.js') : null
   let serviceLinksRef: ServiceLinks | null = null
   const runtimeTransport = createRuntimeTransport({
     call: (service, type, payload, waitMs) => serviceLinksRef?.call(service, type, payload, waitMs) ?? Promise.resolve({ error: 'SERVICE_UNAVAILABLE' }),
@@ -846,33 +847,33 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     ask: (agentId, requestId, question) => cloudAgents?.doors.ask(agentId, requestId, question),
     unask: (agentId, requestId) => cloudAgents?.doors.unask(agentId, requestId),
   }
-  // The Super Tab members here waiting on a person, on the devices alone (core/superTabAttention.ts). Read only once
-  // the questions exist, below: the service starts after them.
-  const superTabWaits = createSuperTabAttention({
-    send: (frame) => ports.devices?.card(frame),
-    asking: (agentId) => [...openQuestions.values()].some((asked) => asked.agentId === agentId),
-  })
-  // A member's terminal for its Lead (core/superTabTerminal.ts): read plain, typed under the pane's write lock, which is
-  // built below, after the inputs.
-  const superTabTerminal = createSuperTabTerminal({
-    resolve: (agentId) => registry.byAgent(agentId),
-    capture: (session, options) => terminals.capture(session, options),
-    read: (session, capture) => screens.read(session, capture),
-    type: typeTerminal,
-    key: keyTerminal,
-    locked: (agentId, write) => deviceInput.legacyWrite(agentId, write),
-  })
-  // The Swarms' cards and Leads' recaps for the Harness Pro, on the devices alone (core/superTabCards.ts): kept whole, and shown
-  // again to a dial that attaches.
   const routeSuperTabs = (payload: Record<string, unknown>): Promise<Record<string, unknown>> => new Promise((resolve) => {
     const asker = { local: true, owner: true }
     if (!(serviceLinksRef?.route('super_tabs', payload, asker, resolve) || serviceHost.route('super_tabs', payload, asker, resolve))) resolve({ error: 'SERVICE_UNAVAILABLE' })
   })
-  const superTabCards = createSuperTabCards({
-    swarmCards: (items) => ports.devices?.swarmCards(items),
-    swarmCardRecap: (recap) => ports.devices?.swarmCardRecap(recap),
-    request: (payload) => routeSuperTabs(payload),
-  })
+  // The Swarm's doors in this process, while it is on (superTabs/inCore/): its members here waiting on a person, on the
+  // devices alone, read only once the questions exist below (the service starts after them); a member's terminal for its
+  // Lead, read plain and typed under the pane's write lock, built below after the inputs; and the Swarms' cards and Leads'
+  // recaps for the Harness Pro, on the devices alone, kept whole and shown again to a dial that attaches.
+  const swarmDoors = swarm && {
+    waits: swarm.createSuperTabAttention({
+      send: (frame) => ports.devices?.card(frame),
+      asking: (agentId) => [...openQuestions.values()].some((asked) => asked.agentId === agentId),
+    }),
+    terminal: swarm.createSuperTabTerminal({
+      resolve: (agentId) => registry.byAgent(agentId),
+      capture: (session, options) => terminals.capture(session, options),
+      read: (session, capture) => screens.read(session, capture),
+      type: typeTerminal,
+      key: keyTerminal,
+      locked: (agentId, write) => deviceInput.legacyWrite(agentId, write),
+    }),
+    cards: swarm.createSuperTabCards({
+      swarmCards: (items) => ports.devices?.swarmCards(items),
+      swarmCardRecap: (recap) => ports.devices?.swarmCardRecap(recap),
+      request: (payload) => routeSuperTabs(payload),
+    }),
+  }
   // Shared tabs' relay, a socket per shared tab held by the gateway (gateway/tabRelay.ts), and which of them the core saw
   // opened: opened again after a gateway-only restart, closed when Agent Messages' process goes (core/gatewayLink.ts).
   const tabRelay = tabRelayOf(() => gatewayOps.tabRelay)
@@ -882,13 +883,15 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   const coreApi = createCoreApi({
     nativeTurns: async (agentId, cursor) => nativeTurns.read(agentId, cursor),
     cloud: cloudDoors,
-    superTabs: { attention: (items) => superTabWaits.attention(items), cards: (items) => superTabCards.cards(items), cardRecap: (recap) => superTabCards.recap(recap),
-      // In the core's own process Share was started with it; out of it, the master starts Share's process.
-      shareObservers: () => { if (outOfProcess.has('sharing')) coreLink.want('sharing') },
-      screen: (agentId, scrollback) => superTabTerminal.screen(agentId, scrollback),
-      input: (agentId, text, keys) => superTabTerminal.input(agentId, text, keys) },
-    // The devices' `cardsWanted`, `cardRecap` and `cardOpen`, and no other action of the Super Tab service (core/superTabCards.ts `ask`).
-    superTabRequest: (payload) => superTabCards.ask(payload),
+    ...(swarmDoors ? {
+      superTabs: { attention: (items) => swarmDoors.waits.attention(items), cards: (items) => swarmDoors.cards.cards(items), cardRecap: (recap) => swarmDoors.cards.recap(recap),
+        // In the core's own process Share was started with it; out of it, the master starts Share's process.
+        shareObservers: () => { if (outOfProcess.has('sharing')) coreLink.want('sharing') },
+        screen: (agentId, scrollback) => swarmDoors.terminal.screen(agentId, scrollback),
+        input: (agentId, text, keys) => swarmDoors.terminal.input(agentId, text, keys) },
+      // The devices' `cardsWanted`, `cardRecap` and `cardOpen`, and no other action of the Super Tab service (superTabs/inCore/cards.ts `ask`).
+      superTabRequest: (payload) => swarmDoors.cards.ask(payload),
+    } : {}),
     cloudRows: () => (cloudAgents?.dialRows() ?? []) as unknown as RegisteredSession[],
     // Agents' terminals: a literal-argv launch, and a read-only view for Share's observers (core/terminalWatch.ts).
     terminals: { ...TERMINALS_OFF, ...createTerminalOpener({ createBackend, recoverBackend, registry, announceSession, blocksFolder: (cwd) => !!backendRef?.purgeAgentService?.blocksFolder(cwd), noBackendCode: createUnavailable }), watch: terminalWatch.watch },
@@ -978,8 +981,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       if (attached) for (const frame of openQuestions.values()) ports.devices?.card(frame)
       if (attached) void mirror.liveCards().then((cards) => { for (const frame of cards) ports.devices?.card(frame) })
       if (attached) for (const frame of cloudAgents?.liveCards() ?? []) ports.devices?.card(frame)
-      if (attached) superTabWaits.replay()
-      if (attached) superTabCards.replay()
+      if (attached) swarmDoors?.waits.replay()
+      if (attached) swarmDoors?.cards.replay()
     },
     // What a device or another machine asks of an agent here: the SAME handlers the backend socket
     // drives, called directly — the slash-command adaptation and the turn and question plumbing live there.
@@ -999,7 +1002,9 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     // The Super Tab host keeps its Leads alive and closes the sessions its backend ends (superTabs/host.ts). Read when it
     // asks, never now: the lifecycle is built further down, and one asked before then is refused, and asked again later.
     resumeAgent: async (agentId) => lifecycle.resumeAgent(agentId),
-    swarmMembers: { leads: () => retainedLeads(env.ADAPTER_DATA_DIR), harnesses: () => retainedHarnesses(env.ADAPTER_DATA_DIR) },
+    // What it may close and reopen is decided in this process, on what its host retains (superTabs/inCore/agents.ts).
+    ...(swarm ? { swarmAgents: (agentDeps) => swarm.createSwarmAgents({ ...agentDeps,
+      members: { leads: () => swarm.retainedLeads(env.ADAPTER_DATA_DIR), harnesses: () => swarm.retainedHarnesses(env.ADAPTER_DATA_DIR) } }) } : {}),
     dsh: (session) => backendRef?.dshFrameProvider?.(session) ?? null,
     windows: (frame) => backendRef?.sendLocal(frame),
     daemon: { command: daemonCommand(), port: env.PORT, machineId: () => backendRef?.machineId ?? '', autonomousEnv: session?.autonomousEnv ?? env.AUTONOMOUS_ENV },
@@ -1338,6 +1343,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   backend.sessionsProvider = history.sessionsList
   // Everything the core writes into a pane, and the device's pane lock (core/input.ts).
   const inputs = createInput({
+    // The Swarm's chat is queued in the engine's own input while an agent works (superTabs/inCore/deliveries.ts).
+    ...(swarm ? { typesWhileBusy: swarm.typesWhileBusy } : {}),
     readScreen: screens.read,
     submission: submissions,
     resolve: (id) => registry.resolve(id),
@@ -1594,7 +1601,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       // The gateway first hears what it starts from, then the shared tabs it held before a restart.
       if (service === 'gateway') { gatewayLink?.connected(); tabRelay.connected() }
       if (service === 'devices') devicesLink.connected()
-      if (service === 'superTabs') superTabCards.serviceUp()
+      if (service === 'superTabs') swarmDoors?.cards.serviceUp()
       if (service === 'wifi') wifiCore.started(appVoiceFocus ?? null)
       if (service === 'viewers') viewersLink.connected()
       devicesWake.connected(service)
@@ -1617,7 +1624,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       if (service === 'gateway') gatewayLink?.disconnected()
       // Agent Messages' process went: its tabs' sockets have no one to hear them, and it opens them again as it starts.
       if (service === 'messages') tabRelay.closeOpened()
-      if (service === 'devices') { devicesLink.disconnected(); superTabCards.devicesGone() }
+      if (service === 'devices') { devicesLink.disconnected(); swarmDoors?.cards.devicesGone() }
       if (service === 'wifi') wifiCore.stopped()
       if (service === 'recaps') recapsLink.disconnected()
       void terminalWatch.gone(service)
@@ -1661,7 +1668,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // Share (services/sharing.ts): in this process, or in its own once it is on (core/sharingLink.ts). Its
   // observers' frames reach it as the relay hands them over.
   if (outOfProcess.has('sharing')) ports.sharing = createSharingLink({ call: (type, payload) => serviceLinks.call('sharing', type, payload), notify: (frame) => serviceLinks.notify('sharing', frame) })
-  else serviceHost.start('sharing', inline!.startSharing, coreApi, SHARING_FALLBACKS, SHARE_REQUESTS)
+  else serviceHost.start('sharing', (core, given) => inline!.startSharing(core, given, swarmServices ? { observers: swarmServices.observerSource } : {}), coreApi, SHARING_FALLBACKS, SHARE_REQUESTS)
   backend.observers = { receive: (connId, type, payload) => ports.sharing?.observer(connId, type, payload), closeAll: () => ports.sharing?.linkDown() }
   // Agent Messages (services/messages.ts): in the edge host, or in this process behind the service host's guard (a
   // fault there costs no message its write).
@@ -1699,8 +1706,9 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   if (!outOfProcess.has('windowNames')) serviceHost.serve('windowNames', inline!.startWindowNames, coreApi, WINDOW_NAMES_REQUESTS)
   if (!outOfProcess.has('memory')) serviceHost.serve('memory', inline!.startMemory, coreApi, MEMORY_REQUESTS)
   if (!outOfProcess.has('router')) serviceHost.serve('router', inline!.startRouter, coreApi, ROUTER_REQUESTS)
-  if (!outOfProcess.has('superTabs')) serviceHost.start('superTabs', inline!.startSuperTabs, coreApi, SUPER_TAB_FALLBACKS, SUPER_TAB_REQUESTS)
-  if (!outOfProcess.has('handoff')) serviceHost.serve('handoff', inline!.startHandoff, coreApi, HANDOFF_REQUESTS)
+  if (!swarm) serviceHost.leaveOff('superTabs', SUPER_TAB_REQUESTS)
+  else if (!outOfProcess.has('superTabs')) serviceHost.start('superTabs', swarm.startSuperTabs, coreApi, SUPER_TAB_FALLBACKS, SUPER_TAB_REQUESTS)
+  if (!outOfProcess.has('handoff')) serviceHost.serve('handoff', (core) => inline!.startHandoff(core, undefined, undefined, swarmServices?.recordReplacement), coreApi, HANDOFF_REQUESTS)
   // Connected services' MCP bridge and the Connectors screen (services/connectors.ts): here, or in the edge host.
   if (!outOfProcess.has('connectors')) serviceHost.serve('connectors', inline!.startConnectors, coreApi, CONNECTORS_REQUESTS)
   // Sharing this machine with other accounts, and the machines shared with this one (services/sharedMachines.ts).
@@ -1715,13 +1723,13 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // The recaps: in this process, or in the edge host (services/recapsProcess.ts), told each turn's lifecycle.
   if (outOfProcess.has('recaps')) ports.recaps = recapsLink.port; else serviceHost.start('recaps', inline!.startRecaps, coreApi, RECAPS_FALLBACKS)
   // Cleaning up after agents: the harnesses a closed harness started, and those idle half an hour (services/agentCleanup.ts).
-  if (outOfProcess.has('agentCleanup')) ports.agentCleanup = agentCleanupLink.port; else serviceHost.start('agentCleanup', inline!.startAgentCleanup, coreApi, AGENT_CLEANUP_FALLBACKS)
+  if (outOfProcess.has('agentCleanup')) ports.agentCleanup = agentCleanupLink.port; else serviceHost.start('agentCleanup', (core, given) => inline!.startAgentCleanup(core, given, swarm?.retainedHarnesses), coreApi, AGENT_CLEANUP_FALLBACKS)
   if (!outOfProcess.has('shell')) serviceHost.serve('shell', inline!.startShell, coreApi, SHELL_REQUESTS)
   // Models: grid access and its pin, the model pictures on agents' frames, the keystroke prewarm, where an
   // agent on a grid model sends its inference, and the models requests the apps send (services/models.ts):
   // in this process, or in its own (services/modelsProcess.ts), reached through core/modelsLink.ts.
   if (outOfProcess.has('models')) ports.models = modelsLink.port
-  else serviceHost.start('models', inline!.startModels, coreApi, MODELS_FALLBACKS, MODELS_REQUESTS)
+  else serviceHost.start('models', (core, given) => inline!.startModels(core, given, swarmServices ?? undefined), coreApi, MODELS_FALLBACKS, MODELS_REQUESTS)
   // What the socket asks of models: read on each use, so a models service switched off answers its fallbacks.
   backend.models = () => ports.models ?? MODELS_OFF
 
@@ -2151,8 +2159,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     onAgentSettingsWrite: (body) => agentSettings.settingsWrite(body),
     onProductFeedback: (body) => proxyBackend('POST', '/api/product-usage/feedback', body),
     onSignInAnswer: (action, body) => proxyBackend('POST', `/api/auth/qr/${action}`, body),
-    onSuperTabAttachment: (req, res, path) => forwardAttachmentUpload(req, res, path,
-      { accessToken: () => auth.accessToken(), environment: autonomousEnv, base: backendHttpBase() }),
+    ...(swarm ? { onSuperTabAttachment: (req, res, path) => swarm.forwardAttachmentUpload(req, res, path,
+      { accessToken: () => auth.accessToken(), environment: autonomousEnv, base: backendHttpBase() }) } : {}),
     onProductUsageReport: (body) => proxyBackend('POST', '/api/product-usage/report', body),
     onProductUsageRead: () => proxyBackend('GET', '/api/product-usage/settings'),
     onProductUsageWrite: (body) => proxyBackend('POST', '/api/product-usage/settings', body),
@@ -2369,6 +2377,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     downloading: (engine) => engineDownloading(engine),
   })
   const launchOverridesDeps: LaunchOverridesDeps = {
+    // A Swarm session's skill and GitHub App on every relaunch; off, such a session is not relaunched.
+    ...(swarm ? { swarm: swarm.SWARM_LAUNCH } : {}),
     publishConfig: publishGridConfigDir,
     machine: gridLaunchMachine,
     native: prepareNativeLaunch,
@@ -2384,11 +2394,11 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // What a relaunch needs to bring a pane back (core/agents/launch.ts). Declared before the restore
   // pass below, which calls these for every pane it rebuilds.
   const launchAuthority = createLaunchAuthority({ byAgent: id => registry.byAgent(id), revision: restoreRevision, cancelled: id => launchCancelled(id) })
-  const adoptSwarmSkill = createSwarmSkillAdoption({
+  const adoptSwarmSkill = swarm?.createSwarmSkillAdoption({
     authority: launchAuthority,
-    candidate: id => retainedHarnesses(env.ADAPTER_DATA_DIR).has(id),
+    candidate: id => swarm.retainedHarnesses(env.ADAPTER_DATA_DIR).has(id),
     role: outOfProcess.has('superTabs')
-      ? swarmRoleThrough((type, payload) => serviceLinks.call('superTabs', type, payload, 3500))
+      ? swarm.swarmRoleThrough((type, payload) => serviceLinks.call('superTabs', type, payload, 3500))
       : id => ports.superTabs?.swarmRole(id) ?? Promise.resolve(undefined),
     save: (id, skill) => registry.setSwarmSkill(id, skill),
   })
@@ -2697,6 +2707,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
 
   // Creating an agent (core/agents/create.ts).
   const creator = createAgentCreator({
+    ...(swarm ? { swarmLaunch: swarm.SWARM_LAUNCH } : {}),
     publishConfig: publishGridConfigDir,
     native: prepareNativeLaunch,
     dshLaunch,
@@ -2820,7 +2831,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     stopped: (agentId) => ports.agentCleanup?.closed(agentId),
     moveHeld: (agentId) => moveHeld.has(agentId),
     // The Lead of an active Swarm project is never stopped (owner, 2026-10-23); its host keeps the list (superTabs/retention.ts).
-    leadProtected: (agentId) => mayBeLead(env.ADAPTER_DATA_DIR, agentId),
+    ...(swarm ? { leadProtected: (agentId: string) => swarm.mayBeLead(env.ADAPTER_DATA_DIR, agentId) } : {}),
   })
   const stopJobs = lifecycle.stopJobs
   launchCancelled = id => stopJobs.has(id)
@@ -2846,7 +2857,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     announceSession,
     engineReady: (engine, ms) => engineLinks.ready(engine, ms),
     stoppedAgents,
-    leadProtected: (agentId) => mayBeLead(env.ADAPTER_DATA_DIR, agentId),
+    ...(swarm ? { leadProtected: (agentId: string) => swarm.mayBeLead(env.ADAPTER_DATA_DIR, agentId) } : {}),
   })
   backend.closeAgentService = closing.closeAgentService
   backend.closeAgentService.start()
@@ -2944,6 +2955,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // The requests that start an agent's process, and the receipts of those asked with a creationId
   // (core/agents/launches.ts). The orchestrator and the cable create and fork through the socket's slots.
   const launches = createLaunchRequests({
+    ...(swarm ? { swarmLaunch: swarm.SWARM_LAUNCH } : {}),
     receipts: new AgentCreationReceipts(join(env.ADAPTER_DATA_DIR, 'agent-creations')),
     createAgent: () => backend.onCreateAgent, forkAgent: () => backend.onForkAgent,
     prepareCreate: creator.prepare, prepareEngine: prepareNativeLaunch,
@@ -3119,15 +3131,21 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // Windows: the master's stop is a message (harnessd/protocol.ts `harnessd:shutdown`), never a signal.
   coreLink.onShutdown(() => void shutdown('the harnessd master asked this core to stop'))
 
-  // A machine revocation or invalid SSO refresh ends this adapter session permanently.
+  // A machine revocation, a 401/403 on the backend link, or a refused SSO refresh ends this signed-in
+  // session: the daemon stops and comes back signed out. The sign-in is kept, marked signed out, and nothing
+  // reads it again until a new sign-in replaces it. 10-27: a sign-out nobody asked for stalled a whole Mac;
+  // only a person deletes it (lib/signOut.ts).
   backend.onRevoked = () => {
-    console.log('[cli] this computer was removed from the machine — clearing credentials and stopping')
-    clearAuthSession()
+    console.log('[cli] this computer\'s sign-in was revoked or refused — signed out, keeping it until a new sign-in, and stopping')
     // The web-tools cache lives exactly as long as the sign-in. `harness logout` and `reset` stop
     // the daemon outright; this is the one sign-out the daemon learns of from inside.
     ports.models?.signedOut()
-    superTabCards.reset()
-    void shutdown('revoked')
+    swarmDoors?.cards.reset()
+    // Marked before the stop: the core that comes back must read it as signed out. The mark waits for a
+    // refresh another process has under way, so that refresh's save cannot write over it.
+    void markSignedOut('revoked')
+      .catch((error: unknown) => console.log(`[cli] could not mark the sign-in signed out (${error instanceof Error ? error.message : String(error)})`))
+      .finally(() => void shutdown('revoked'))
   }
 
   // Mirror the machine's display name to disk so `harness status` (a separate process) can print it.
@@ -3155,7 +3173,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // In their own process they are told everything the windows said as they connect (core/devicesLink.ts):
   // said here too, it reached a dial still opening its port, before its greeting.
   // The Swarm cards the Super Tab service sent before this line had no devices to reach: they are shown now.
-  if (outOfProcess.has('devices')) { ports.devices = devicesLink.port; superTabCards.replay() }
+  if (outOfProcess.has('devices')) { ports.devices = devicesLink.port; swarmDoors?.cards.replay() }
   else {
     serviceHost.start('devices', (core, started) => inline!.startDevices(core, started, {
       logsDir: env.HARNESS_LOGS_DIR, testDialPort: harnessd.HARNESSD_TEST_DIAL_PORT,
@@ -3195,9 +3213,9 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     const full = card.type === 'commander_event' && payload?.kind === 'summary' && typeof card.agentId === 'string'
       ? mirror.lastFullText(registry.byAgent(card.agentId)?.sessionId ?? card.agentId) ?? cloudAgents?.said(card.agentId) : undefined
     // An engine's question takes the place of a Super Tab wait on the devices, which shows again once it closes.
-    superTabWaits.before(card)
+    swarmDoors?.waits.before(card)
     ports.devices?.card(full ? { ...card, payload: { ...payload, fullText: full } } : card)
-    superTabWaits.after(card)
+    swarmDoors?.waits.after(card)
   }
 
   // Last: every handler is wired and the restored agents are confirmed, so requests that arrived while

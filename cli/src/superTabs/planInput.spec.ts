@@ -55,6 +55,22 @@ describe('planSetup', () => {
     expect(taskOf(s, 't1').machines).toEqual(['m1-team'])
   })
 
+  it('keeps a task that requires a machine to that machine, or its Mac\'s team account, as the route does', () => {
+    // 2026-10-27: a task to check a device plugged into one person's Mac went to another machine by policy order.
+    const requires = (r: Json) => ({ task: { goal: 'g', changes: 'c', constraints: 'k', owns: ['o'], requires: r } })
+    const s = setup(state({ projects, machines: mac(), conversations: [group('r1', requires({ machines: ['m2'] })),
+      group('r2', { projectId: 'p2', ...requires({ machines: ['m1'] }) }), group('r3', requires({ machines: [], unseenMachines: 1 })), group('free')] }))
+    expect(taskOf(s, 'r1').machines).toEqual(['m2'])
+    expect(taskOf(s, 'r2').machines).toEqual(['m1-team'])
+    expect(taskOf(s, 'r3').machines).toEqual([])
+    expect(taskOf(s, 'free').machines).toEqual(['m1', 'm2'])
+  })
+
+  it('offers no machine to a task that requires a device, since no machine reports its devices to the plan', () => {
+    const s = setup(state({ conversations: [group('d1', { task: { goal: 'g', changes: 'c', constraints: 'k', owns: ['o'], requires: { devices: ['/dev/cu.usbmodem1'] } } })] }))
+    expect(taskOf(s, 'd1').machines).toEqual([])
+  })
+
   it('offers a Mac\'s own projects on the Mac and a teammate\'s in its team account, never both', () => {
     const s = setup(state({ projects, machines: mac(), conversations: [group('o1', { projectId: 'p1' }), group('t1', { projectId: 'p2' })] }))
     expect(taskOf(s, 'o1').machines).toEqual(['m1', 'm2'])
@@ -87,6 +103,20 @@ describe('planSetup', () => {
   it('adds the groups the Lead says a group waits for, and lists one that is not open', () => {
     const s = setup(state(), { g2: { difficulty: 'low', risk: 'low', size: 'small', after: ['g1', 'gone'] } })
     expect(taskOf(s, 'g2').deps).toEqual(['g1'])
+    expect(s.ignored).toEqual(['gone'])
+  })
+
+  // Diego's issue, 2026-10-27: an assessment of a group that is not open (a typo, a finished group) was dropped without a word,
+  // and the group meant was planned at the default.
+  it('lists an assessed group that is not open', () => {
+    const s = setup(state(), { typo: { difficulty: 'high', risk: 'high', size: 'large' } })
+    expect(s.ignored).toEqual(['typo'])
+    expect(s.estimates).toEqual(['g1', 'g2'])
+  })
+
+  it('lists a group that is not open once, however many name it', () => {
+    const low = { difficulty: 'low', risk: 'low', size: 'small' } as const
+    const s = setup(state(), { g1: { ...low, after: ['gone'] }, g2: { ...low, after: ['gone'] }, gone: low })
     expect(s.ignored).toEqual(['gone'])
   })
 

@@ -232,8 +232,11 @@ export async function communityRoutes(app: FastifyInstance): Promise<void> {
 
   // Read by an <img>, which sends no environment header: a publication id is a UUID, unique across both.
   app.get<{ Params: z.infer<typeof params> }>('/api/community/harnesses/:id/cover', { preHandler: validateParams(params) }, async (req, reply) => {
-    const post = await prisma.communityHarness.findFirst({ where: { id: req.params.id, deletedAt: null }, select: { cover: true } })
-    const image = post?.cover ? coverImage(post.cover) : null
+    const post = await prisma.communityHarness.findFirst({ where: { id: req.params.id, deletedAt: null }, select: { cover: true, autonomousEnv: true, authorId: true } })
+    // A harness reports hid is hidden here too, as on its page (#1026: a hidden cover was still served); its author still
+    // has it. The hidden row is the publication's own environment's, since an <img> names none.
+    const hidden = post && post.authorId !== req.user?.sub && await isHiddenFrom(post.autonomousEnv, 'harness', req.params.id)
+    const image = post?.cover && !hidden ? coverImage(post.cover) : null
     if (!image) return sendError(reply, 'This cover is unavailable.', 'NOT_FOUND', 404)
     reply.header('Content-Type', image.type).header('X-Content-Type-Options', 'nosniff').send(image.bytes)
   })

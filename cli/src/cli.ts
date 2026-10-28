@@ -48,7 +48,8 @@ import { serviceCommand, serviceCommandDeps } from './lib/serviceCommand.js'
 import { infoBlockFooter } from './lib/infoBlockFooter.js'
 import { flashCommand } from './lib/flash.js'
 import { awaitLoginCallback, extractCallbackParams, LOGIN_TIMEOUT_MESSAGE, type LoginCallbackParams } from './lib/loginCallback.js'
-import { AUTH_DIR, AuthSessionError, AuthSessionManager, clearAuthSession, knownSsoClientId, newSignInEpoch, readAuthSession, ssoClientIdFor, writeAuthSession, type AuthSession } from './lib/authSession.js'
+import { ancestorsOnce, removeSignIn, SIGN_OUT_BUTTON_FLAG, signOutAsked, type Asker, type SignOutAsked } from './lib/signOut.js'
+import { AUTH_DIR, AuthSessionError, AuthSessionManager, knownSsoClientId, newSignInEpoch, readAuthSession, readSignedOut, ssoClientIdFor, writeAuthSession, type AuthSession } from './lib/authSession.js'
 import { handOffToGrid } from './lib/gridHandoff.js'
 import { claimTicket, qrSignIn, type QrSignInTokens } from './lib/qrSignIn.js'
 import { pickSignInMethod, signInMethodFlag, signInProviderName, withSignInProvider, type SignInMethod, type SignInProvider } from './lib/signInMethodPicker.js'
@@ -334,15 +335,19 @@ function thisDeviceFingerprint(create: boolean): string | null {
  *  on-disk-but-about-to-expire gets refreshed here rather than reporting loggedIn:true and 401ing on
  *  the caller's very next request. */
 async function authStatusCommand(json: boolean): Promise<void> {
-  const session = readAuthSession()
+  const auth = new AuthSessionManager(backendHttpBase())
+  // A sign-in whose refresh was refused is kept, marked signed out (lib/authSession.ts `markSignedOut`), and
+  // tried again each time this is asked: the refusal may have been the service's. A revoked one is not.
+  const session = readAuthSession() ?? (await auth.retrySignedOut() ? readAuthSession() : null)
   if (!session) {
     // The computer id travels even signed out: it is the id this computer's daemon serves itself
     // under, and the app keys the local machine by it until a sign-in hands out a machineId.
-    if (json) console.log(JSON.stringify({ loggedIn: false, computerId: computerId() }))
+    const waiting = signedOutWaiting()
+    if (json) console.log(JSON.stringify({ loggedIn: false, computerId: computerId(), ...(waiting ? { signedOut: waiting } : {}) }))
+    else if (waiting === 'pending-refresh') console.log('\n  ✗ Signed out: this computer\'s sign-in could not be renewed. It is tried again; or run: harness login\n')
     else console.log('\n  ✗ Not signed in. Run: harness login\n')
     return
   }
-  const auth = new AuthSessionManager(backendHttpBase())
   let loggedIn = true
   let offline = false
   try {
@@ -358,8 +363,10 @@ async function authStatusCommand(json: boolean): Promise<void> {
   const latest = readAuthSession()
   const signedIn = loggedIn && latest !== null
   const fingerprintNow = thisDeviceFingerprint(false)
+  const waiting = signedIn ? null : signedOutWaiting()
   const payload = {
     loggedIn: signedIn,
+    ...(waiting ? { signedOut: waiting } : {}),
     ...(signedIn && offline ? { offline: true } : {}),
     computerId: latest?.computerId,
     machineId: latest?.machineId,
@@ -1321,13 +1328,15 @@ async function updateCommand(force: boolean): Promise<void> {
  * on this box first, while the token that makes their deregistration authoritative still exists.
  */
 async function logout(): Promise<void> {
+  const chain = ancestorsOnce()
+  const asked = personAsked('logout', chain)
   // Through the lock-taking stop, not an inline kill: a logout that lands mid-handoff would otherwise
   // SIGTERM the OLD daemon, leave the new one coming up, and then delete the session under it.
   const { pid: stoppedPid } = await stopDaemonOrExit()
-  // Before clearAuthSession: see the note above on serve children. Its exit code is deliberately
+  // Before removeSignIn: see the note above on serve children. Its exit code is deliberately
   // dropped — this command cannot fail — and its own words have already reached the terminal.
   const gridOut = await passThroughToGridLogout([])
-  clearAuthSession()
+  removeSignIn('logout', asked, chain)
   rmSync(MACHINE_NAME_FILE, { force: true })
   // Same reason as the name above: the cached machine list describes the account that just left, and the
   // local `/api/machines` fallback would otherwise hand it to whoever signs in next on this computer.
@@ -1738,14 +1747,36 @@ function clearAdapterState(): void {
   rmStateFiles(cliDir)
 }
 
+/** Why a sign-in kept on disk is signed out, as `auth status` tells the app: waiting for its refresh to be
+ *  tried again, or for a new sign-in (a revoke). Null when there is none, or it is signed in. */
+function signedOutWaiting(): 'pending-refresh' | 'waiting-for-sign-in' | null {
+  const signedOut = readSignedOut()
+  return signedOut === null ? null : signedOut.reason === 'refresh-refused' ? 'pending-refresh' : 'waiting-for-sign-in'
+}
+
+/**
+ * How a person asked for `harness [command]` to take this computer's sign-in away; exits with why not when
+ * nothing says one did. 10-27: a desktop test ran the real `harness logout`, with no person anywhere near it,
+ * and signed the whole Mac out, every agent on it with it (lib/signOut.ts).
+ */
+function personAsked(command: string, chain: () => readonly Asker[]): SignOutAsked {
+  const asked = signOutAsked({ interactive: process.stdin.isTTY === true, flags: process.argv.slice(2), ancestors: chain })
+  if (asked) return asked
+  console.error(`\n✗ \`harness ${command}\` signs this computer out, and nothing says a person asked: it has no terminal, `
+    + `and no ${SIGN_OUT_BUTTON_FLAG} from the desktop app's Sign out button. Run it in a terminal.\n`)
+  process.exit(1)
+}
+
 /** Stop the daemon and clear local state so the next login starts fresh. */
 async function resetCommand(): Promise<void> {
+  const chain = ancestorsOnce()
+  const asked = personAsked('reset', chain)
   // Before anything is cleared: a pid file removed under a Harness still running leaves nothing able to stop it.
   const r = await stopDaemonOrExit()
   clearAdapterState()
   console.log(`\n  ✓ Cleared local machine CLI state at ${tildify(env.ADAPTER_DATA_DIR)}.`)
   if (r.pid) console.log(`    Stopped adapter process ${r.pid}.`)
-  clearAuthSession()
+  removeSignIn('reset', asked, chain)
   console.log('\n  Start again with: harness login, then harness start\n')
   // The SECOND door onto the sign-out `logout` performs, and it clears MORE, so somebody running it
   // is if anything likelier to believe nothing is left. Same call, so the two cannot drift.
@@ -2641,8 +2672,6 @@ async function logsExportCommand(json: boolean): Promise<void> {
 }
 
 import { orchestratorCommand } from './orchestrator/command.js'
-import { superTabCommand } from './superTabs/command.js'
-import { gitCredentialCommand } from './superTabs/gitCredential.js'
 import { paneOwner, sendCommand } from './messages/command.js'
 import { agentOrigin, closeCommand, psCommand, replyCommand, showCommand, tellCommand, waitCommand, whoamiCommand } from './agentClient/commands.js'
 import { agentsHelp, helpFor } from './agentClient/help.js'
@@ -2726,12 +2755,14 @@ switch (cmd) {
   case 'orchestrator':
     orchestratorCommand(rest).then(code => { process.exitCode = code }).catch(onError)
     break
+  // The Swarm's commands are loaded only when run: started from the sources, every daemon process runs this file, and
+  // with the Swarm off (`HARNESS_SWARM`) none of them loads its code (src/architecture.spec.ts).
   case 'super-tab':
-    superTabCommand(rest).then(code => { process.exitCode = code }).catch(onError)
+    import('./superTabs/command.js').then(({ superTabCommand }) => superTabCommand(rest)).then(code => { process.exitCode = code }).catch(onError)
     break
   case 'git-credential':
     // git's credential helper in a Swarm agent's session (docs/swarm-github-app.md); git runs it, people do not.
-    gitCredentialCommand(rest).then(code => { process.exitCode = code }).catch(onError)
+    import('./superTabs/gitCredential.js').then(({ gitCredentialCommand }) => gitCredentialCommand(rest)).then(code => { process.exitCode = code }).catch(onError)
     break
   case 'login': {
     // The result line goes out FIRST (loginCommand prints it), then the daemon is swapped onto the

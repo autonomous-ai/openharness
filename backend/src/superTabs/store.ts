@@ -8,23 +8,29 @@ import { machineShareGrant, sharedVia } from '../lib/machineSharePolicy.js'
 import { machineBillingAllowsDataPlane } from '../lib/billingState.js'
 import { applyCommand, authorizeCommandAccess, operationSchema, PAIR_CHAIN_LIMIT, postable, type Command, type CommandContext } from './commands.js'
 import { redactCredentials } from './credentials.js'
-import { attachmentMime, attachmentName, AttachmentTooLarge, checkedType, MAX_ATTACHMENT_BYTES, objectKeyFor, publicUrl, type Attachment, type Attachments } from './attachments.js'
+import type { AvatarUpload } from './profile.js'
+import { reactionCounts, type ReactionTarget } from './reactions.js'
+import { attachmentMime, attachmentName, AttachmentTooLarge, AVATAR_PURPOSE, AVATAR_TYPES, checkedType, MAX_ATTACHMENT_BYTES, MAX_AVATAR_BYTES, objectKeyFor, peekType, publicUrl,
+  type Attachment, type Attachments, type AttachmentStore, type AvatarStore } from './attachments.js'
 import { randomBytes } from 'node:crypto'
 import type { Readable } from 'node:stream'
 import { logger } from '../utils/logger.js'
 import { canReadAgent, canReadGroup, canWatchAgent, groupProject, ledProject, projectOf, projectsOf, agentProjectId, readConversation, roleVersion, type ProjectVisibility } from './projects.js'
 import { bindSession, makeProjectPrivate } from './sessionScope.js'
 import { confidentialSessions, otherRegistrations, recordConfidential } from './confidential.js'
-import { answersRequest, noteProjectReports, projectUpdateRequest } from './projectUpdates.js'
+import { answersRequest, dirtyGroups, noteProjectReports, projectUpdateRequest } from './projectUpdates.js'
 import { digestDue, digestRequest, digestSince } from './digest.js'
 import { judgedMachines, loseTasks, sweepLiveness, SWEEP_EVERY_MS } from './liveness.js'
+import { archivable, archiveLine, stopIdleWorkers, stoppedMachines } from './tidy.js'
 import { clock, insertParts, lastChangedAt, loadActive, reassemble, split, type HeadData, type SwarmParts } from './parts/index.js'
 import { commitParts, indexesOf, numberMessages, type Touch, type Written } from './parts/commit.js'
 import { touchesFor } from './parts/touches.js'
 import { revokeNativeContexts, SuperTabNativeStore } from './native.js'
+import { activeMember, addMember, hasWorkspaceAccess, listWorkspaces, memberId, WORKSPACE_ACCESS_REVOKED, workspaceForNewSwarm, requireWorkspaceAccess, requireWorkspaceRole, SwarmWorkspaces } from './workspaceStore.js'
+import { WORKSPACE_LABEL, type WorkspaceRole } from './workspaces.js'
 import {
-  activeWork, actorKey, agent, agentOnly, appendPullRequestUrls, author, conversation, createSuperTab, fail, person, stableId, visibleState, finishWorker,
-  SuperTabError, isLeads, parkLaterConversations, syncLeads, type Actor, type Agent, type Assignment, type Author, type MessageDraft, type SuperTabState,
+  activeWork, actorKey, agent, agentOnly, agentRole, appendPullRequestUrls, author, conversation, createSuperTab, fail, person, stableId, visibleState, finishWorker,
+  SuperTabError, isLeads, parkLaterConversations, syncLeads, type Actor, type Agent, type Assignment, type Author, type Conversation, type MessageDraft, type SuperTabState,
 } from './model.js'
 import type { HoldReason } from './holdReason.js'
 import { agentDisplayName } from './agentNames.js'
@@ -33,12 +39,14 @@ import { accrueLent } from './leaderboard/lent.js'
 import { mayDrive, TERMINAL_ANSWER_MS, TERMINAL_EXPIRY_MS, TERMINAL_PICKUP_MS, type TerminalEffect } from './terminal.js'
 import { closeAssignment, closeUnassignedStart, readDecision, timedDecisionOf, writeRouteEffects } from './routeDecisions.js'
 import { listMentions, markDone, mentionsWaiting, readMention, resolveByReply, writeMentions } from './mentions.js'
-import { answerable, listDecisions, readAskedDecision, recordAnswer, waitingInProject, writeDecisions } from './decisions.js'
+import { answerable, fullFor, listDecisions, readAskedDecision, recordAnswer, waitingIn, waitingInProject, writeDecisions } from './decisions.js'
 import { DEFAULT_ROUTING_POLICY, effectivePolicy, routingPolicySchema, type RoutingPolicy } from './routingPolicy.js'
 import { authenticatedEmail, authorizeSwarmJoin, configureSharing, joinSwarmSchema, requireSharingOwner,
   saveSharingSchema, sharingDetails, type JoinSwarm, type SaveSharing } from './sharing.js'
 
 type Transaction = Prisma.TransactionClient
+type ReactCommand = Extract<Command, { type: 'message.react' }>
+const reactionId = (tabId: string, actor: Actor, command: ReactCommand) => stableId(tabId, command.messageId, actorKey(actor), command.emoji)
 const json = (value: unknown): Prisma.InputJsonValue => JSON.parse(JSON.stringify(value)) as Prisma.InputJsonValue
 type SendCommand = Extract<Command, { type: 'message.send' }>
 // Prisma on MongoDB: `usedBy: null` alone misses rows that never had the field.
@@ -182,6 +190,9 @@ const routeDecisionOf = (command: Command): string | undefined => command.type =
 
 export class SuperTabStore {
   readonly native: SuperTabNativeStore
+  readonly workspaces: SwarmWorkspaces
+  /** The private avatar bucket, whose links member reads sign (read/service.ts); null when avatar uploads are off. */
+  get avatars(): AvatarStore | null { return this.attachments?.avatars ?? null }
   constructor(readonly db: PrismaClient, readonly now: () => number = Date.now,
     private readonly attachments: Attachments | null = null, private readonly hooks: SuperTabStoreHooks = {}) {
     this.native = new SuperTabNativeStore({
@@ -192,6 +203,13 @@ export class SuperTabStore {
       agentGrant: (tx, state, target) => this.agentGrant(tx, state, target),
       contribution: (tx, state, actor, command) => this.contribution(tx, state, actor, command),
       teamHost: (tx, user) => this.teamHost(tx, user),
+      workspaceAccess: (tx, state, userId) => requireWorkspaceAccess(tx, state, userId),
+    })
+    this.workspaces = new SwarmWorkspaces(db, {
+      transaction: body => transaction(db, body),
+      leave: (person, tabId, operationId) => this.executeOnce(person, tabId, { operationId, command: { type: 'member.remove', userId: person.sub } },
+        undefined, undefined, true),
+      now,
     })
   }
 
@@ -260,6 +278,19 @@ export class SuperTabStore {
     const rows = await tx.machine.findMany({ where: { machineId: { in: ids }, autonomousEnv: state.environment, sessionKind: 'team', ...machineAlive },
       select: { machineId: true } })
     return rows.map(r => r.machineId)
+  }
+
+  /** This Swarm's contributed machines that are also contributed to a Swarm of another Workspace: their Harness Team account
+   *  takes no teammate's work here (machines.ts teamWorkRefusal). One indexed read of the machines' parts, one of rows. */
+  async otherWorkspaceMachines(tx: Transaction, state: SuperTabState): Promise<string[]> {
+    const ids = (state.machines ?? []).map(m => m.machineId)
+    if (!state.workspaceId || !ids.length) return []
+    const elsewhere = await tx.swarmMachine.findMany({ where: { machineId: { in: ids }, deleted: false, contributed: true, tabId: { not: state.id } },
+      select: { tabId: true, machineId: true } })
+    if (!elsewhere.length) return []
+    const rows = await tx.superTab.findMany({ where: { id: { in: [...new Set(elsewhere.map(e => e.tabId))] } }, select: { id: true, workspaceId: true } })
+    const other = new Set(rows.filter(r => r.workspaceId && r.workspaceId !== state.workspaceId).map(r => r.id))
+    return [...new Set(elsewhere.filter(e => other.has(e.tabId)).map(e => e.machineId))]
   }
 
   private policyId(user: AuthUser) { return stableId('routing-policy', user.sub, user.autonomousEnv) }
@@ -368,11 +399,13 @@ export class SuperTabStore {
   }
 
   /** Shared with the read API (superTabs/read, design section 7.2). */
-  async actor(tx: Transaction, user: AuthUser, state: SuperTabState, agentId?: string): Promise<Actor> {
+  /** `workspaceLeave` is a Workspace removal leaving this Swarm for the person (workspaceStore.ts SwarmWorkspaces.remove): past the Workspace check. */
+  async actor(tx: Transaction, user: AuthUser, state: SuperTabState, agentId?: string, workspaceLeave = false): Promise<Actor> {
     const team = await this.teamHost(tx, user)
     if (!agentId) {
       // A team session never speaks or reads as the person.
       if (team !== null) fail(TEAM_SESSION_LIMITED, TEAM_SESSION_MESSAGE, 403)
+      if (!workspaceLeave) await requireWorkspaceAccess(tx, state, user.sub)
       return { kind: 'person', userId: user.sub, email: user.email }
     }
     const target = agent(state, agentId)
@@ -384,7 +417,10 @@ export class SuperTabStore {
   }
 
   /** Shared with the read API (superTabs/read, design section 7.2). */
+  /** Every path that serves an agent's host checks this, so it also holds the Workspace check: the agent acts for its
+   *  contributor, who must still be in the Swarm's Workspace. Its host need not be, as it need not be in the Swarm. */
   async agentGrant(tx: Transaction, state: SuperTabState, target: Agent): Promise<void> {
+    await requireWorkspaceAccess(tx, state, target.contributorId)
     const machine = await tx.machine.findFirst({ where: { machineId: target.machineId, userId: target.machineOwnerId,
       autonomousEnv: state.environment, ...machineAlive } })
     if (!machine || !machineBillingAllowsDataPlane(machine)) fail('HOST_UNAVAILABLE', 'This execution host is unavailable.', 403)
@@ -428,10 +464,10 @@ export class SuperTabStore {
     return { machineOwnerId: machine.userId, contributorId, hostGrant, ...host }
   }
 
-  async create(user: AuthUser, operationId: string, name: string, projectVisibility?: ProjectVisibility) {
+  async create(user: AuthUser, operationId: string, name: string, projectVisibility?: ProjectVisibility, workspaceId?: string) {
     this.personOnly(user)
     const id = stableId('super-tab', user.autonomousEnv, user.sub, operationId)
-    const requestHash = hash({ name, ...(projectVisibility ? { projectVisibility } : {}) })
+    const requestHash = hash({ name, ...(projectVisibility ? { projectVisibility } : {}), ...(workspaceId ? { workspaceId } : {}) })
     return transaction(this.db, async tx => {
       const prior = await tx.superTabOperation.findUnique({ where: { id } })
       if (prior) {
@@ -439,8 +475,10 @@ export class SuperTabStore {
         return { id, revision: prior.revision }
       }
       const state = createSuperTab(id, name, { id: user.sub, email: user.email }, user.autonomousEnv, projectVisibility)
+      // Every new Swarm is in a Workspace, invite-only there until its owner or the Workspace's admins open it (workspaceStore.ts).
+      state.workspaceId = await workspaceForNewSwarm(tx, user, name, id, workspaceId)
       // Born in parts: its state lives in the Swarm* parts, and `state` only fences older backends (schema.prisma).
-      await tx.superTab.create({ data: { id, ownerId: user.sub, autonomousEnv: user.autonomousEnv, ...indexesOf(state), format: 2, state: { version: 2 } } })
+      await tx.superTab.create({ data: { id, ownerId: user.sub, autonomousEnv: user.autonomousEnv, workspaceId: state.workspaceId, ...indexesOf(state), format: 2, state: { version: 2 } } })
       await insertParts(tx, split({ ...state, sequenceBase: 0 }, { tabId: id, version: 1, now: clock.next() }))
       await tx.superTabOperation.create({ data: { id, tabId: id, actorKey: `person:${user.sub}`, requestHash, revision: 0, result: { id } } })
       return { id, revision: 0 }
@@ -456,6 +494,43 @@ export class SuperTabStore {
       const head = heads.get(row.id)
       return head ? [{ id: row.id, name: head.name, ownerId: row.ownerId, revision: row.revision, paused: head.paused }] : []
     }), next: rows.length > 100 ? rows[99]!.id : null }
+  }
+
+  async workspaceList(user: AuthUser) {
+    this.personOnly(user)
+    return { workspaces: await listWorkspaces(this.db, user) }
+  }
+
+  /** Opens a Swarm to its Workspace's members, or closes it again: its owner (not a guest) or the Workspace's owners and admins,
+   *  who need not be in the Swarm. Closing it leaves everyone who joined. */
+  async setWorkspaceVisibility(user: AuthUser, tabId: string, visibility: 'invite-only' | 'workspace') {
+    this.personOnly(user)
+    return transaction(this.db, async tx => {
+      const loaded = await this.load(tx, user, tabId), state = structuredClone(loaded.state)
+      if (!state.workspaceId) fail('WORKSPACE_REQUIRED', `This Swarm has no ${WORKSPACE_LABEL} yet.`, 409)
+      const own = await tx.swarmWorkspaceMember.findUnique({ where: { id: memberId(state.workspaceId, user.sub) } })
+      if (!(state.ownerId === user.sub && own && !own.removedAt && own.role !== 'guest')) await requireWorkspaceRole(tx, state.workspaceId, user.sub, 'swarm.manage')
+      state.workspaceVisibility = visibility
+      await this.save(tx, loaded, state, clock.next(), [{ kind: 'head', key: 'head' }])
+      return { id: tabId, workspaceVisibility: visibility }
+    })
+  }
+
+  /** A member or above joins a Swarm open to their Workspace, as a collaborator. A guest never does (design, Roles). */
+  async workspaceJoin(user: AuthUser, tabId: string, operationId: string) {
+    this.personOnly(user)
+    return transaction(this.db, async tx => {
+      const loaded = await this.load(tx, user, tabId), state = structuredClone(loaded.state)
+      if (!state.workspaceId || state.workspaceVisibility !== 'workspace') fail('FORBIDDEN', 'This Swarm is not open to its Workspace.', 403)
+      await requireWorkspaceRole(tx, state.workspaceId, user.sub, 'swarm.joinOpen')
+      const existing = state.people.find(p => p.id === user.sub)
+      if (existing) return { id: tabId, role: existing.role, alreadyMember: true }
+      const member = { id: user.sub, email: authenticatedEmail(user.email)!, role: 'collaborator' as const, generation: stableId('workspace-join', tabId, user.sub, operationId) }
+      state.people.push(member)
+      // As a link join does: the open visibility it relied on lives on the head, so closing it at once conflicts.
+      await this.save(tx, loaded, state, clock.next(), [{ kind: 'head', key: 'head' }])
+      return { id: tabId, role: member.role, alreadyMember: false }
+    })
   }
 
   async invitations(user: AuthUser) {
@@ -540,6 +615,13 @@ export class SuperTabStore {
         return { id: tabId, role: member.role, alreadyMember: result.alreadyMember === true }
       }
       const alreadyMember = !!member
+      if (!member && state.workspaceId) {
+        // A link or an email domain makes a guest of the Workspace, never higher. Someone the Workspace removed comes back only by
+        // an invitation, never by a general link (design, Roles).
+        const prior = await tx.swarmWorkspaceMember.findUnique({ where: { id: memberId(state.workspaceId, user.sub) } })
+        if (prior?.removedAt) fail(WORKSPACE_ACCESS_REVOKED, `You were removed from this Swarm's ${WORKSPACE_LABEL}. Ask its owner to invite you.`, 403)
+        await addMember(tx, state.workspaceId, { id: user.sub, email: user.email }, 'guest', state.ownerId, receiptId)
+      }
       if (!member) {
         member = { id: user.sub, email: authenticatedEmail(user.email)!, role: sharing.access.role, generation: receiptId }
         state.people.push(member)
@@ -564,11 +646,12 @@ export class SuperTabStore {
       const visible = visibleState(state, actor, now)
       const mentions = actor.kind === 'person' ? { mentionsWaiting: await mentionsWaiting(tx, tabId, state, actor, now) } : {}
       const teamMachines = visible.machines?.length ? await this.teamMachines(tx, state) : []
+      const otherWorkspace = visible.machines?.length ? await this.otherWorkspaceMachines(tx, state) : []
       return { lastChangedAt: (await lastChangedAt(tx, [tabId])).get(tabId) ?? 0, state: { ...visible, ...mentions, machines: visible.machines?.map(pool => {
         const stored = state.machines!.find(m => m.machineId === pool.machineId)!
         // Whether it takes teammates' projects now, and if not why (machines.ts teamWorkRefusal): what routing leaves it
         // out for, and what Desktop can show on the machine.
-        const refusal = teamWorkRefusal(stored, now, teamMachines.includes(pool.machineId), teamAccountRequired(state))
+        const refusal = teamWorkRefusal(stored, now, teamMachines.includes(pool.machineId), teamAccountRequired(state), otherWorkspace.includes(pool.machineId))
         return { ...pool, availableSlots: Math.max(0, pool.maxAgents - machineSlots(state, stored)),
           teamWork: refusal ? { allowed: false as const, ...refusal } : { allowed: true as const } }
       }) } }
@@ -618,7 +701,8 @@ export class SuperTabStore {
     }
   }
 
-  private async executeOnce(user: AuthUser, tabId: string, input: { operationId: string; command: Command }, asAgentId?: string, hostMachineId?: string) {
+  private async executeOnce(user: AuthUser, tabId: string, input: { operationId: string; command: Command }, asAgentId?: string, hostMachineId?: string,
+    workspaceLeave = false) {
     const { operationId, command } = operationSchema.parse(input)
     let ended: WorkHold[] = []
     const done = await transaction(this.db, async tx => {
@@ -641,11 +725,18 @@ export class SuperTabStore {
       }
       if (hostMachineId && !['agent.startDispatch', 'agent.started', 'agent.startFailed', 'agent.startSettled', 'route.modelResult'].includes(command.type)) fail('FORBIDDEN', 'A host can only settle its queued starts.', 403)
       if (team !== null && !hostMachineId) this.teamCommand(original, team, user, command)
+      // Accepting a Swarm's invitation from outside its Workspace makes the person a guest of the Workspace first (design, Roles).
+      if (command.type === 'invite.accept' && !hostMachineId && original.workspaceId) {
+        const email = user.email.trim().toLowerCase()
+        const invite = original.invitations.find(i => i.id === command.inviteId && i.email === email && i.expiresAt > this.now())
+        // Only the Swarm's owner invites (invite.create), so the guest is added on the owner's authority.
+        if (invite) await addMember(tx, original.workspaceId, { id: user.sub, email }, 'guest', original.ownerId, stableId('workspace-guest', tabId, user.sub, operationId))
+      }
       // A removed agent's or machine's host confirms its close or cleanup as the machine owner, who may have left the Swarm with it.
       const actor: Actor = command.type === 'agent.sessionClosed' || command.type === 'machine.cleaned' ? { kind: 'person', userId: user.sub, email: user.email }
         : hostMachineId && 'startId' in command
           ? await this.poolHostActor(tx, user, original, hostMachineId, command.startId)
-          : await this.actor(tx, user, original, asAgentId)
+          : await this.actor(tx, user, original, asAgentId, workspaceLeave && command.type === 'member.remove' && command.userId === user.sub && !asAgentId)
       const receiptId = stableId(tabId, actorKey(actor), operationId)
       const requestHash = hash(command)
       const prior = await tx.superTabOperation.findUnique({ where: { id: receiptId } })
@@ -722,7 +813,7 @@ export class SuperTabStore {
         const reply = await tx.superTabMessage.findFirst({ where: { id: command.replyTo, tabId, conversationId: command.conversationId } })
         if (reply) context.reply = { id: reply.id, conversationId: reply.conversationId, author: reply.author as unknown as Author }
       }
-      if ((command.type === 'rule.set' || command.type === 'rule.remove' || command.type === 'project.skills') && command.askedIn) {
+      if ((command.type === 'rule.set' || command.type === 'rule.remove' || command.type === 'project.skills' || command.type === 'tab.tidy') && command.askedIn) {
         const asked = await tx.superTabMessage.findFirst({ where: { id: command.askedIn.messageId, tabId, conversationId: command.askedIn.conversationId } })
         if (asked) context.askedIn = { author: asked.author as unknown as Author, source: !!asked.source, createdAt: asked.createdAt.getTime() }
       }
@@ -739,9 +830,22 @@ export class SuperTabStore {
       }
       if (command.type === 'mention.done') context.mention = await readMention(tx, tabId, command.mentionId)
       if (command.type === 'decision.answer') context.decision = await readAskedDecision(tx, tabId, command.decisionId)
+      if (command.type === 'work.status' && command.ask && command.result && actor.kind === 'agent') {
+        context.openDecisions = await fullFor(tx, tabId, { ...command.ask, askerAgentId: actor.agentId, assignmentId: command.assignmentId,
+          conversationId: command.conversationId, question: command.result })
+      }
       if (command.type === 'message.send' && command.attachmentIds?.length) context.attachments = await this.sendable(tx, tabId, actor, command)
+      if (command.type === 'message.react') context.reaction = await this.reactionTarget(tx, tabId, actor, command)
+      if ((command.type === 'member.avatar' || command.type === 'agent.avatar') && command.avatar?.kind === 'upload') {
+        context.avatarUpload = await this.avatarUpload(tx, tabId, actor, command.avatar.id)
+      }
+      if ((command.type === 'invite.create' || command.type === 'invite.revoke') && actor.kind === 'person' && original.workspaceId) {
+        const member = await activeMember(tx, original.workspaceId, actor.userId)
+        if (member) context.workspaceRole = member.role as WorkspaceRole
+      }
       if (TEAM_WORK_COMMANDS.has(command.type)) {
         context.teamMachines = await this.teamMachines(tx, original)
+        context.otherWorkspaceMachines = await this.otherWorkspaceMachines(tx, original)
         if (this.hooks.teamAccountsIdle) context.teamAccountsIdle = true
       }
       if (command.type === 'agent.screen' || command.type === 'agent.input') {
@@ -926,6 +1030,13 @@ export class SuperTabStore {
       if (command.type === 'message.send' && actor.kind === 'person') await resolveByReply(tx, tabId, command.conversationId, actor.userId, context.now)
       await writeMentions(tx, tabId, effects.state, effects.messages, context.now)
       if (command.type === 'mention.done') await markDone(tx, tabId, command.mentionId, context.mention!.personId, context.now)
+      if (command.type === 'message.react') await this.writeReaction(tx, tabId, actor, command)
+      if (context.avatarUpload) {
+        // Conflicts with a concurrent use of the same picture: only one command can take it.
+        const taken = await tx.superTabAttachment.updateMany({ where: { tabId, id: context.avatarUpload.id, purpose: AVATAR_PURPOSE, ...unused },
+          data: { usedBy: receiptId } })
+        if (taken.count !== 1) fail('AVATAR_UNAVAILABLE', 'Upload this picture again before using it.', 400)
+      }
       if (effects.decisions) {
         const ids = await writeDecisions(tx, tabId, effects.decisions, context.now)
         if (command.type === 'decision.ask') effects.result.decisionIds = ids
@@ -1044,30 +1155,64 @@ export class SuperTabStore {
     // A file's name is shown in the chat like its message, so it never keeps a credential either.
     const name = attachmentName.transform(value => redactCredentials(value).text).safeParse(file.name), mime = attachmentMime.safeParse(file.mime)
     if (!name.success || !mime.success) fail('INVALID_ATTACHMENT', 'Attach a file with a printable name and a content type.', 400)
-    const key = await transaction(this.db, async tx => {
-      const { actor } = await this.poster(tx, user, tabId, conversationId, asAgentId)
-      const key = actorKey(actor)
-      // Unsent files cost bucket space, so one actor gets a bounded number an hour.
+    const key = await this.uploader(tabId, tx => this.poster(tx, user, tabId, conversationId, asAgentId).then(p => p.actor))
+    const row = await this.keep(attachments.store, attachments.prefix, tabId, key, { name: name.data, conversationId },
+      async () => checkedType(mime.data, file.body), file.body, MAX_ATTACHMENT_BYTES)
+    return { attachment: { id: row.id, name: row.name, mime: row.mime, size: row.size, url: publicUrl(attachments.publicBase, row.objectKey) } satisfies Attachment }
+  }
+
+  /** A picture for a person's or an agent's avatar (profile.ts): png, jpg or webp by its real bytes, at most 1 MB. Any
+   *  member who may write uploads one; the command that sets it decides whose it becomes. */
+  async uploadAvatar(user: AuthUser, tabId: string, file: { body: Readable }, asAgentId?: string) {
+    // Member-only: never the public attachments bucket. Until a private one is configured, uploads stay off (presets work).
+    const avatars = this.attachments?.avatars ?? fail('AVATARS_UNAVAILABLE', 'Uploading pictures is not set up on this server yet. Pick one of the pictures instead.', 503)
+    const key = await this.uploader(tabId, async tx => {
+      const { state } = await this.load(tx, user, tabId, {})
+      const actor = await this.actor(tx, user, state, asAgentId)
+      author(state, actor, true)
+      return actor
+    })
+    const row = await this.keep(avatars, this.attachments!.prefix, tabId, key, { name: 'avatar', conversationId: '', purpose: AVATAR_PURPOSE }, async () => {
+      const peeked = await peekType(file.body)
+      if (!peeked.type || !AVATAR_TYPES.has(peeked.type)) fail('AVATAR_TYPE', 'Use a PNG, JPEG or WebP picture.', 415)
+      return { mime: peeked.type, body: peeked.body }
+    }, file.body, MAX_AVATAR_BYTES)
+    // No link: a picture is only reached through the signed links member reads carry (avatarLinks.ts).
+    return { avatar: { id: row.id } }
+  }
+
+  /** The uploading actor's key, once it may upload and is under its hourly allowance: unsent files cost bucket space. */
+  private async uploader(tabId: string, allowed: (tx: Transaction) => Promise<Actor>): Promise<string> {
+    return transaction(this.db, async tx => {
+      const key = actorKey(await allowed(tx))
       const recent = await tx.superTabAttachment.count({ where: { tabId, actorKey: key, createdAt: { gte: new Date(this.now() - 3_600_000) } } })
       if (recent >= 200) fail('RATE_LIMITED', 'You attached 200 files in the last hour. Wait before attaching more.', 429)
       return key
     })
-    const objectKey = objectKeyFor(attachments.prefix, tabId, name.data)
-    let size: number, stored = mime.data
+  }
+
+  /** Streams one file into the bucket under a random key, as the type `typed` decides from its first bytes, and records it. */
+  private async keep(bucket: AttachmentStore, prefix: string, tabId: string, actorKey: string, file: { name: string; conversationId: string; purpose?: string },
+    typed: () => Promise<{ mime: string; body: Readable }>, original: Readable, cap: number) {
+    const objectKey = objectKeyFor(prefix, tabId, file.name)
+    let size: number, mime: string
     try {
-      const checked = await checkedType(mime.data, file.body)
-      stored = checked.mime
-      size = await attachments.store.put(objectKey, { name: name.data, mime: stored }, checked.body, MAX_ATTACHMENT_BYTES)
+      const checked = await typed()
+      mime = checked.mime
+      size = await bucket.put(objectKey, { name: file.name, mime }, checked.body, cap)
     } catch (error) {
-      if (error instanceof AttachmentTooLarge) fail('ATTACHMENT_TOO_LARGE', error.message, 413)
+      if (error instanceof SuperTabError) throw error
+      if (error instanceof AttachmentTooLarge) {
+        if (file.purpose === AVATAR_PURPOSE) fail('AVATAR_TOO_LARGE', 'An avatar can be at most 1 MB.', 413)
+        fail('ATTACHMENT_TOO_LARGE', error.message, 413)
+      }
       // The client's own stream breaking is the request's; anything else is the bucket's, and the person can try again.
-      if (file.body.errored || (error && typeof error === 'object' && 'code' in error && String(error.code).startsWith('FST_'))) throw error
+      if (original.errored || (error && typeof error === 'object' && 'code' in error && String(error.code).startsWith('FST_'))) throw error
       logger.error('super-tab attachment storage failed', { tabId, error: error instanceof Error ? error.message : String(error) })
       fail('ATTACHMENTS_UNAVAILABLE', 'Could not store the file just now. Try again.', 503)
     }
-    const row = await this.db.superTabAttachment.create({ data: { id: randomBytes(12).toString('hex'), tabId, conversationId,
-      actorKey: key, name: name.data, mime: stored, size, objectKey } })
-    return { attachment: { id: row.id, name: row.name, mime: row.mime, size: row.size, url: publicUrl(attachments.publicBase, objectKey) } satisfies Attachment }
+    return this.db.superTabAttachment.create({ data: { id: randomBytes(12).toString('hex'), tabId, conversationId: file.conversationId,
+      actorKey, name: file.name, mime, size, objectKey, ...(file.purpose ? { purpose: file.purpose } : {}) } })
   }
 
   /** The actor, once it may post in this conversation. */
@@ -1086,12 +1231,36 @@ export class SuperTabStore {
     const rows = await tx.superTabAttachment.findMany({ where: { tabId, id: { in: ids } } })
     return ids.map(id => {
       const row = rows.find(r => r.id === id)
-      if (!row || row.actorKey !== actorKey(actor) || row.conversationId !== command.conversationId) {
+      if (!row || row.actorKey !== actorKey(actor) || row.conversationId !== command.conversationId || row.purpose) {
         fail('ATTACHMENT_UNAVAILABLE', 'Attach this file again before sending it.', 400)
       }
       if (row.usedBy) fail('ATTACHMENT_USED', 'This file was already sent. Attach it again to send it in another message.')
       return { id: row.id, name: row.name, mime: row.mime, size: row.size, url: publicUrl(attachments.publicBase, row.objectKey) }
     })
+  }
+
+  /** The message a reaction names, when it is in that conversation and this actor may see it, and whether the actor already
+   *  reacted to it with that emoji. An agent-only notice is its recipient's alone. */
+  private async reactionTarget(tx: Transaction, tabId: string, actor: Actor, command: ReactCommand): Promise<ReactionTarget | undefined> {
+    const message = await tx.superTabMessage.findFirst({ where: { id: command.messageId, tabId, conversationId: command.conversationId },
+      select: { id: true, source: true, recipientIds: true } })
+    if (!message || (agentOnly(message.source) && !(actor.kind === 'agent' && message.recipientIds.includes(actor.agentId)))) return undefined
+    return { messageId: message.id, reacted: !!await tx.superTabReaction.findUnique({ where: { id: reactionId(tabId, actor, command) } }) }
+  }
+
+  /** Writes or removes the actor's reaction row. The same reaction twice keeps one row: its id is derived. */
+  private async writeReaction(tx: Transaction, tabId: string, actor: Actor, command: ReactCommand) {
+    const id = reactionId(tabId, actor, command)
+    if (!command.on) return void await tx.superTabReaction.deleteMany({ where: { id } })
+    const actorId = actor.kind === 'person' ? actor.userId : actor.agentId
+    await tx.superTabReaction.upsert({ where: { id }, update: {}, create: { id, tabId, conversationId: command.conversationId,
+      messageId: command.messageId, actorKind: actor.kind, actorId, emoji: command.emoji } })
+  }
+
+  /** The avatar upload a command names, when it is this actor's, an avatar and unused; otherwise the command refuses it. */
+  private async avatarUpload(tx: Transaction, tabId: string, actor: Actor, id: string): Promise<AvatarUpload | undefined> {
+    const row = await tx.superTabAttachment.findFirst({ where: { tabId, id, actorKey: actorKey(actor), purpose: AVATAR_PURPOSE, ...unused } })
+    return row ? { id: row.id, key: row.objectKey } : undefined
   }
 
   /** Keeps the project's stored texts equal to its custom set: the roles the command wrote, nothing for roles it dropped. */
@@ -1123,7 +1292,8 @@ export class SuperTabStore {
       } else if (team !== null) {
         // A team session is never the project's owner: it reads a text only for an agent its own machine hosts.
         if (!await this.hostsProject(tx, state, user, project.id, team)) unavailable()
-      } else if (!(user.sub === project.ownerId && state.people.some(p => p.id === user.sub)) && !await this.hostsProject(tx, state, user, project.id)) {
+      } else if (!(user.sub === project.ownerId && state.people.some(p => p.id === user.sub) && await hasWorkspaceAccess(tx, state, user.sub))
+        && !await this.hostsProject(tx, state, user, project.id)) {
         unavailable()
       }
       const stored = await tx.superTabRoleText.findUnique({ where: { id: stableId(tabId, projectId, roleId) } })
@@ -1300,7 +1470,7 @@ export class SuperTabStore {
     return transaction(this.db, async tx => {
       const { state } = await this.load(tx, user, tabId, { groupIds: [conversationId] })
       const actor = await this.actor(tx, user, state, asAgentId)
-      readConversation(state, actor, conversationId)
+      const group = readConversation(state, actor, conversationId)
       const forward = cursor.after !== undefined
       const past = (sequence: number, id: string | undefined, direction: 'gt' | 'lt') => id === undefined ? { sequence: { [direction]: sequence } }
         : { OR: [{ sequence: { [direction]: sequence } }, { sequence, id: { [direction]: id } }] }
@@ -1319,10 +1489,15 @@ export class SuperTabStore {
       const page = rows.slice(0, 100)
       const next = rows.length > 100 ? { sequence: page.at(-1)!.sequence, id: page.at(-1)!.id } : null
       if (!forward) page.reverse()
+      const reactions = page.length ? reactionCounts(state, await tx.superTabReaction.findMany({ where: { tabId, messageId: { in: page.map(m => m.id) } },
+        select: { messageId: true, emoji: true, actorKind: true, actorId: true } })) : new Map()
       const deliveries = page.length ? await tx.superTabDelivery.findMany({ where: { tabId, messageId: { in: page.map(m => m.id) } },
         select: { id: true, messageId: true, agentId: true, status: true, receipt: true,
           holdReason: true, holdSince: true, deliveredAt: true, answeredAt: true, createdAt: true, updatedAt: true } }) : []
-      return { messages: page.map(m => ({ ...m, mentions: m.mentions ?? [], deliveries: deliveries.filter(d => d.messageId === m.id) })), next }
+      return { messages: page.map(m => ({ ...m, mentions: m.mentions ?? [], reactions: reactions.get(m.id) ?? [],
+        deliveries: deliveries.filter(d => d.messageId === m.id) })), next,
+        // A poll for new messages learns here that a reaction changed on a message it already shows (reactions.ts).
+        reactionSeq: group.reactionSeq ?? 0 }
     })
   }
 
@@ -1331,6 +1506,7 @@ export class SuperTabStore {
     this.personOnly(user)
     return transaction(this.db, async tx => {
       const { state: tab } = await this.load(tx, user, tabId, { allGroups: true })
+      await this.actor(tx, user, tab)
       return { mentions: await listMentions(tx, tabId, tab, { kind: 'person', userId: user.sub, email: user.email }, this.now(), state === 'waiting') }
     })
   }
@@ -1507,6 +1683,7 @@ export class SuperTabStore {
       return await transaction(this.db, async tx => {
         const { state } = await this.load(tx, user, tabId)
         person(state, user.sub)
+        await requireWorkspaceAccess(tx, state, user.sub)
         const target = state.agents.find(a => a.machineId === machineId && a.harnessId === harnessId && a.machineOwnerId === machineOwnerId)
         if (!target) return false
         agent(state, target.id)
@@ -1577,10 +1754,11 @@ export class SuperTabStore {
     return transaction(this.db, async tx => {
       let loaded = await this.load(tx, user, tabId)
       // Work finished since the last digest and archived or asleep since still shipped, but ordinary loads leave it out
-      // (#1757 review, 4): a due digest loads it.
+      // (#1757 review, 4): a due digest loads it. A paused Swarm sends none (digest.ts digestRequest), so its digest stays
+      // due: it loads nothing for it, or every poll repeats the loads over a growing window (Diego's issue file, 2026-10-27).
       const led = ledProject(loaded.state, agentId)
       let asked: Array<{ conversationId: string; personId: string; count: number }> = []
-      if (led && digestDue(led, this.now())) {
+      if (led && !loaded.state.paused && digestDue(led, this.now())) {
         const finished = await tx.swarmGroup.findMany({ where: { tabId, deleted: false, dormant: true, lastActivityAt: { gte: new Date(digestSince(led, this.now())) },
           OR: [{ projectId: led.id }, ...led.id === 'lead' ? [{ projectId: null }] : []] }, select: { key: true } })
         // A decision waits in its conversation even once that conversation went quiet.
@@ -1593,6 +1771,13 @@ export class SuperTabStore {
       const target = agent(state, agentId)
       // A Lead's poll runs the time checks (liveness.ts): lost work wakes it in this same poll.
       const written = ledProject(state, agentId) ? sweepLiveness(state, this.now()) : []
+      // The Lead's poll stops its project's idle workers too (tidy.ts): it is where what waits for each agent is known.
+      const reviewers = led ? state.agents.filter(a => agentRole(a) === 'reviewer' && a.workDecision !== 'stop' && agentProjectId(state, a) === led.id).map(a => a.id) : []
+      const asleep = reviewers.length ? (await tx.swarmGroup.findMany({ where: { tabId, deleted: false, dormant: true, agentIds: { hasSome: reviewers } },
+        select: { data: true } })).map(row => row.data as unknown as Conversation) : []
+      const idle = led ? stopIdleWorkers(state, led.id, this.now(), new Set((await tx.superTabDelivery.findMany({
+        where: { tabId, status: { in: [...OPEN_DELIVERY] } }, select: { agentId: true }, distinct: ['agentId'] })).map(d => d.agentId)), asleep) : []
+      written.push(...idle)
       const update = projectUpdateRequest(state, target, this.now())
       let woken = false
       if (update) {
@@ -1624,7 +1809,9 @@ export class SuperTabStore {
       }
       // One write for all: the time checks' changes, the digest and the wake-ups'.
       const sequences = numberMessages(state, written, this.now())
-      await this.save(tx, loaded, state, clock.next(), [...judgedMachines(state, written), ...woken ? [{ kind: 'agent' as const, key: agentId }] : []])
+      // A stop was judged from its machine's report that the session is clean: a newer report makes this write retry.
+      await this.save(tx, loaded, state, clock.next(), [...judgedMachines(state, written), ...stoppedMachines(state, idle),
+        ...woken ? [{ kind: 'agent' as const, key: agentId }] : []])
       await this.writeMessages(tx, tabId, state, written, sequences)
       const rows = await tx.superTabDelivery.findMany({ where: { tabId, agentId, status: { in: [...OPEN_DELIVERY] } },
         orderBy: { createdAt: 'asc' }, take: 100 })
@@ -1695,6 +1882,30 @@ export class SuperTabStore {
       await tx.superTabDelivery.update({ where: { id: delivery.id }, data: { holdReason: reason, holdSince: delivery.holdSince ?? new Date(this.now()) } })
     }
     return { held: true }
+  }
+
+  /** Archives a finished group whose pull requests `checked` were all read merged or closed (archive.ts), only if it still
+   *  qualifies inside this write: no message since, no decision waiting and no pull request linked since the read. Its
+   *  queued deliveries are kept for when it reopens, as a person's archive keeps them. True when it archived. */
+  async archiveFinished(tabId: string, groupId: string, checked: readonly string[]): Promise<boolean> {
+    return transaction(this.db, async tx => {
+      const row = await tx.superTab.findUnique({ where: { id: tabId } })
+      if (!row) return false
+      const loaded = await loadRow(tx, requireParts(row), { groupIds: [groupId] }), state = structuredClone(loaded.state)
+      const group = state.conversations.find(c => c.id === groupId)
+      const now = this.now()
+      if (!group || !archivable(state, group, now) || (group.pullRequestUrls ?? []).some(url => !checked.includes(url))) return false
+      if (await waitingIn(tx, tabId, groupId)) return false
+      group.archived = true
+      const line = archiveLine(state, group, now), rows = line ? [line] : []
+      const sequences = numberMessages(state, rows, now)
+      if (!dirtyGroups(state, groupProject(state, group)).includes(group)) group.dormant = true
+      // As a person's archive does (execute): a claim of a delivery here conflicts with this write.
+      await tx.superTabDelivery.updateMany({ where: { tabId, conversationId: groupId, status: { in: [...OPEN_DELIVERY] } }, data: { updatedAt: new Date(now) } })
+      await this.save(tx, loaded, state, clock.next())
+      await this.writeMessages(tx, tabId, state, rows, sequences)
+      return true
+    })
   }
 
   /** Only the recorded execution host may attest that the actual session/attempt has stopped. */

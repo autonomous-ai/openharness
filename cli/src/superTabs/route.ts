@@ -21,6 +21,7 @@ export type Rule =
   | { kind: 'minEffort'; engine?: string; effort: string }
   | { kind: 'preferEngine'; taskKind: string | null; engine: string }
   | { kind: 'preferIdle' }
+  | { kind: 'noGridFirst' }
 export interface SwarmRule { rule: Rule; text: string }
 export interface PolicyModel { engine: 'claude' | 'codex'; model: string; effort: string; quality: number; cost: number; enabled: boolean }
 export interface Policy { version: 1; models: PolicyModel[]; floor: Record<Level, number>; quotaReserve: number; notes: string;
@@ -111,13 +112,17 @@ export function liftEffort(rules: SwarmRule[], engine: string, effort: string): 
   const least = Math.max(-1, ...rules.flatMap(({ rule }) => rule.kind === 'minEffort' && applies(rule, engine) ? [rank(rule.effort)] : []))
   return least < 0 ? effort : EFFORTS[least]
 }
-/** The soft rules for this task: the engine preferred for its kind (a rule for the kind before one for every task), and
- * whether idle agents come first. */
-interface Soft { engine: string | null; idle: boolean }
-function softOf(rules: SwarmRule[], kind: string | undefined): Soft {
+/** The soft rules for this task: the engine preferred for its kind (a rule for the kind before one for every task),
+ * whether idle agents come first, and whether a model on the Swarm's grid comes first. */
+interface Soft { engine: string | null; idle: boolean; grid: boolean }
+function softOf(rules: SwarmRule[], a: Assessment): Soft {
   const prefer = rules.flatMap(({ rule }) => rule.kind === 'preferEngine' ? [rule] : [])
-  const engine = (prefer.find(r => kind && r.taskKind === kind) ?? prefer.find(r => r.taskKind === null))?.engine ?? null
-  return { engine, idle: rules.some(r => r.rule.kind === 'preferIdle') }
+  const engine = (prefer.find(r => a.kind && r.taskKind === a.kind) ?? prefer.find(r => r.taskKind === null))?.engine ?? null
+  // Simple work goes to the free models first (roadmap, Dec: about 30% of work on cheaper models without lower quality).
+  // A grid model counts as cost 1 like Haiku, so an expiring 5-hour window or an idle member ranked above it and it was
+  // rarely picked. Reviews keep the other model family, and the owner can opt out.
+  const grid = a.difficulty === 'low' && a.risk === 'low' && a.kind !== 'review' && !rules.some(r => r.rule.kind === 'noGridFirst')
+  return { engine, idle: rules.some(r => r.rule.kind === 'preferIdle'), grid }
 }
 
 export function parseAssessment(value: unknown): Assessment | string {
@@ -214,7 +219,7 @@ function runsNamed(p: Probe, named: string): boolean {
   const name = words([p.gridModel ?? p.model, p.gridLabel ?? '', ENGINE[p.engine]].join(' ')).join('')
   return words(named).every(w => name.includes(w))
 }
-const NAMED_NONE = (named: string) => `No candidate runs "${named}". Share it with the Swarm (Manage models), or check its name.`
+const NAMED_NONE = (named: string) => `No candidate runs "${named}". Share it with the Swarm (Your models), or check its name.`
 
 /** How many Builders may run on one API model a member shares: the share answers four requests at once
  * (cli/src/lib/swarmApiShares.ts CONCURRENCY), unlike a local engine, which answers one conversation at a time. */
@@ -226,7 +231,7 @@ export interface HeldModel { model: string; label: string; kind: 'local' | 'api'
 
 /** Why a held model is not offered, and what frees it: a model in use reads as unshared otherwise (owner, 2026-10-24). */
 function heldReason(m: HeldModel): string {
-  if (m.refused) return `"${m.label}" is shared with the Swarm, but Builders are not offered it: ${m.refused} Ask a member to run a larger model, or share an API (Manage models).`
+  if (m.refused) return `"${m.label}" is shared with the Swarm, but Builders are not offered it: ${m.refused} Ask a member to run a larger model, or share an API (Your models).`
   const who = m.holders.length === 1 ? `Builder ${m.holders[0]} is on it` : `Builders ${m.holders.slice(0, -1).join(', ')} and ${m.holders.at(-1)} are on it`
   const limit = m.kind === 'api' ? `an API model takes ${API_BUILDERS} Builders at a time` : 'a local model serves one Builder at a time'
   return `"${m.label}" is shared with the Swarm, but ${who}: ${limit}. Assign the work to ${m.holders.length === 1 ? 'that Builder once it is free, or stop it' : 'one of them once it is free, or stop one'} to free the model.`
@@ -330,21 +335,22 @@ function sizeUp(p: Probe, policy: Policy, a: Assessment, now: number, open: Comm
 const WAY = ['right away', 'about a quarter of the way in', 'about halfway', 'about three quarters of the way in', 'near the end']
 const runsOut = (w: Measured) => `The ${w.name} window is expected to run out ${WAY[Math.round(Math.max(0, w.usable / w.needed) * 4)]}${w.resetsIn === null ? '' : `; resets in ${span(w.resetsIn)}`}.`
 const UNREAD = 'Its quota could not be read in full, and another candidate\'s quota fits this task.'
-export const LOCAL_NONE = 'No local model is being served on this Swarm\'s grid. Ask a member to run one or share an API (Manage models, in the Swarm\'s sidebar).'
+export const LOCAL_NONE = 'No local model is being served on this Swarm\'s grid. Ask a member to run one or share an API (Your models, in the Swarm\'s sidebar).'
 
-/** The fixed order: the owner's preferred engine, an idle member before a new agent and a less busy machine first when the
- * owner prefers idle agents; then the policy order: cheaper in effect, stronger, a model that runs on a machine before one
- * reached through a shared API or another grid, more room on the tightest window, an idle member in the task's repository
- * before a new agent, then by title. */
+/** The fixed order: the owner's preferred engine, a model on the Swarm's grid for simple work, an idle member before a new
+ * agent and a less busy machine first when the owner prefers idle agents; then the policy order: cheaper in effect,
+ * stronger, a model that runs on a machine before one reached through a shared API or another grid, more room on the
+ * tightest window, an idle member in the task's repository before a new agent, then by title. */
 function compare(x: Probe & Sized, y: Probe & Sized, soft: Soft): number {
   const placed = (p: Probe) => p.kind === 'member' && (p.repo ?? 'same') === 'same' ? 0 : 1
   const preferred = (p: Probe) => soft.engine && p.engine !== soft.engine ? 1 : 0
+  const subscription = (p: Probe) => soft.grid && !p.gridModel ? 1 : 0
   const fresh = (p: Probe) => soft.idle && p.kind === 'new' ? 1 : 0
   const busy = (p: Probe) => soft.idle && p.kind === 'new' ? p.load?.agents ?? 1000 : 0
   // On-machine first (owner, 2026-10-24): an API spends a member's key and credits, and a model shared on another grid is
   // someone else's machine; at equal cost and strength the Swarm's own engine goes first.
   const remote = (p: Probe) => p.gridModel && (p.gridKind === 'api' || p.gridKind === 'shared') ? 1 : 0
-  return preferred(x) - preferred(y) || fresh(x) - fresh(y) || busy(x) - busy(y)
+  return preferred(x) - preferred(y) || subscription(x) - subscription(y) || fresh(x) - fresh(y) || busy(x) - busy(y)
     || x.fit.effectiveCost - y.fit.effectiveCost
     || y.quality - x.quality
     || remote(x) - remote(y)
@@ -401,7 +407,7 @@ export function choose(probes: Probe[], policy: Policy, a: Assessment, now: numb
   const status = (['fits', 'unknown', 'short'] as const).find(s => sized.some(p => p.fit.status === s))!
   excluded.push(...sized.filter(p => p.fit.status !== status).map(p => ({ title: titleOf(p), reason: p.fit.status === 'unknown' ? UNREAD : runsOut(p.tight!) })))
   // When every candidate is short, the one expected to get furthest goes first.
-  const soft = softOf(rules, a.kind)
+  const soft = softOf(rules, a)
   const set = sized.filter(p => p.fit.status === status).sort((x, y) => status === 'short' ? y.fit.coverage! - x.fit.coverage! || compare(x, y, soft) : compare(x, y, soft))
   const shown = withEveryMachine(set).map(({ tight, text, ...p }, i) => ({ ...p, id: `c${i}`, title: titleOf(p), label: labelOf({ ...p, tight, text }, now) }))
   const first = set[0].tight!

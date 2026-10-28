@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
-import type { RegisteredSession } from '../lib/registry.js'
-import type { ScreenReading } from '../engines/facets/screen.js'
-import { createSuperTabTerminal } from './superTabTerminal.js'
+import type { RegisteredSession } from '../../lib/registry.js'
+import type { ScreenReading } from '../../engines/facets/screen.js'
+import { createSuperTabTerminal } from './terminal.js'
 
 const session = { agentId: 'h1', engine: 'claude' } as RegisteredSession
 const reading = (messageHold: ScreenReading['messageHold']) => ({ messageHold } as ScreenReading)

@@ -250,15 +250,15 @@ export function processCoreApi(dataDir: string, service: string, view: AgentsVie
         ask: (agentId, requestId, question) => { void ask('cloud_ask', { agentId, questionId: requestId, question }).catch(() => {}) },
         unask: (agentId, requestId) => { void ask('cloud_unask', { agentId, questionId: requestId }).catch(() => {}) },
       } satisfies CloudCore,
-      // The Super Tab service's waits (core/superTabAttention.ts), the whole set each time: a core that missed one
+      // The Super Tab service's waits (superTabs/inCore/attention.ts), the whole set each time: a core that missed one
       // hears the next, and a new core the host's first roster (superTabs/host.ts).
       superTabs: {
         attention: (items) => { void ask('super_tab_attention', { items }).catch(() => {}) },
-        // The Swarm cards, whole each time they change, and one Lead's recap (core/superTabCards.ts).
+        // The Swarm cards, whole each time they change, and one Lead's recap (superTabs/inCore/cards.ts).
         cards: (items) => { void ask('super_tab_cards', { items }).catch(() => {}) },
         cardRecap: (recap) => { void ask('super_tab_card_recap', { recap }).catch(() => {}) },
         shareObservers: () => { void ask('super_tab_observers', {}).catch(() => {}) },
-        // A Lead's read of a member's terminal and its typing (core/superTabTerminal.ts), answered by the core.
+        // A Lead's read of a member's terminal and its typing (superTabs/inCore/terminal.ts), answered by the core.
         screen: (agentId, scrollback) => terminalAnswer(ask('super_tab_screen', { agentId, scrollback })) as Promise<SuperTabScreen>,
         input: (agentId, text, keys) => terminalAnswer(ask('super_tab_input', { agentId, text, keys })),
       } satisfies SuperTabsCore,

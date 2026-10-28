@@ -263,8 +263,8 @@ void main() {
 
     final order = [
       find.byKey(const ValueKey('super-new-project')),
-      find.byKey(const ValueKey('super-local-models')),
       find.byKey(const ValueKey('super-your-devices')),
+      find.byKey(const ValueKey('super-local-models')),
       find.text('Projects'),
       find.byKey(const ValueKey('super-group-leads')),
       find.byKey(const ValueKey('super-group-empty-lead')),
@@ -529,16 +529,18 @@ void main() {
     final setUp = find.byKey(const ValueKey('super-local-models-setup'));
 
     testWidgets(
-      'the owner sets models up from Manage models; there is no switch',
+      'the owner sets models up from Your models; there is no switch',
       (tester) async {
         final server = ConversationServer();
         server.state['machines'] = [machine()];
         final c = server.controller();
         await c.refresh();
         await mount(tester, c);
-        expect(find.text('Manage models'), findsOneWidget);
+        expect(find.text('Your models'), findsOneWidget);
         await tester.tap(open);
         await tester.pumpAndSettle();
+        // The page is titled as the row that opens it.
+        expect(find.text('Your models'), findsNWidgets(2));
         expect(find.byType(Switch), findsNothing);
         expect(
           find.textContaining('Set up connects this computer to the Swarm'),
@@ -564,7 +566,7 @@ void main() {
     );
 
     testWidgets(
-      'everyone sees Manage models; before it is set up a member is told the owner sets it up',
+      'everyone sees Your models; before it is set up a member is told the owner sets it up',
       (tester) async {
         final server = ConversationServer();
         (server.state['people'] as List).add({
