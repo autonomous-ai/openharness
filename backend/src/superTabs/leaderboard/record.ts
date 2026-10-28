@@ -6,7 +6,8 @@ import type { Actor, Assignment, Conversation, SuperTabState, WorkStatus } from 
 import { groupProject } from '../projects.js'
 import { WEEK_MS } from './week.js'
 
-export interface Unblock { personId: string; at: number; waitedMs: number }
+/** `waitId`: the "Needs a human" row the answer answered, which a decision asked with it shares (absent on older answers). */
+export interface Unblock { personId: string; at: number; waitedMs: number; waitId?: string }
 /** A group's leaderboard bookkeeping; readers never get it whole (read/views.ts groupView). */
 export interface GroupLedger {
   askedAt?: number
@@ -69,7 +70,7 @@ export function recordAnswer(state: SuperTabState, group: Conversation, actor: A
   const ledger = group.ledger!
   waiting.answeredAt = now
   const kept = (ledger.unblocks ?? []).filter(u => now - u.at < LEDGER_WEEKS * WEEK_MS)
-  ledger.unblocks = [...kept, { personId: actor.userId, at: now, waitedMs: Math.max(0, now - waiting.since) }]
+  ledger.unblocks = [...kept, { personId: actor.userId, at: now, waitedMs: Math.max(0, now - waiting.since), waitId: waiting.messageId }]
 }
 
 /** Whether the group's work waits on a person now: needs a human and not yet answered. An item from before answers were

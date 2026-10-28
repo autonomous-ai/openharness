@@ -134,7 +134,7 @@ describe('when the Lead records a merge', () => {
     return { f, lead: f.asAgent(lead), id }
   }
   const shippedFor = (f: ReturnType<typeof fixture>, personId: string) =>
-    leaderboard({ state: f.state, groups: f.state.conversations, machines: [], projectId: 'lead', week: weekStart(NOW), now: NOW })
+    leaderboard({ state: f.state, groups: f.state.conversations, machines: [], decisions: [], resolvedWaits: [], projectId: 'lead', week: weekStart(NOW), now: NOW })
       .people.find(p => p.personId === personId)!
 
   it('ships the request when its PR merged, links the PR and says so in the group', () => {
@@ -234,7 +234,7 @@ describe('when the Lead records a merge', () => {
     f.at(monday)
     f.run(merged(id), lead)
     expect(f.group(id).ledger?.shippedAt).toBe(monday)
-    const board = (week: number) => leaderboard({ state: f.state, groups: f.state.conversations, machines: [], projectId: 'lead', week, now: monday })
+    const board = (week: number) => leaderboard({ state: f.state, groups: f.state.conversations, machines: [], decisions: [], resolvedWaits: [], projectId: 'lead', week, now: monday })
     expect(board(weekStart(monday)).goal.thisWeek.shipped).toBe(1)
     expect(board(weekStart(sunday)).goal.thisWeek.shipped).toBe(0)
   })
@@ -285,7 +285,8 @@ describe('who unblocks waiting work', () => {
     expect(f.group(id).ledger?.waiting).toEqual({ assignmentId, since: 10_000, messageId: expect.any(String) })
     f.at(10_000 + 3 * 3_600_000)
     f.say(id, owner)
-    expect(f.group(id).ledger?.unblocks).toEqual([{ personId: 'owner', at: 10_000 + 3 * 3_600_000, waitedMs: 3 * 3_600_000 }])
+    const asked = f.group(id).ledger!.waiting!.messageId
+    expect(f.group(id).ledger?.unblocks).toEqual([{ personId: 'owner', at: 10_000 + 3 * 3_600_000, waitedMs: 3 * 3_600_000, waitId: asked }])
     expect(f.group(id).ledger?.waiting).toEqual({ assignmentId, since: 10_000, messageId: expect.any(String), answeredAt: 10_000 + 3 * 3_600_000 })
   })
 

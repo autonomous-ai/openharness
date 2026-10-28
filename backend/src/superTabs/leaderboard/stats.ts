@@ -9,6 +9,9 @@ import { canReadProject, projectOf } from '../projects.js'
 import { waitedOn, waitsNow } from './record.js'
 import { DAY_MS, WEEK_MS } from './week.js'
 import type { Leaderboard, Medal, PersonScore, WeekGoal } from './contract.js'
+import { unblockedFacts, type AnsweredDecision, type ResolvedWait } from './unblocked.js'
+
+export type { AnsweredDecision, ResolvedWait } from './unblocked.js'
 
 export const SHIPPED_POINTS = 3
 export const UNBLOCK_POINTS = 1
@@ -24,31 +27,37 @@ export interface LeaderboardInput {
   groups: Conversation[]
   /** The contributed machines the reader may see (model.ts visibleState): Lent sums no other. */
   machines: ContributedMachine[]
+  /** Answered decisions of the project in the kept weeks (read.ts); only those in [groups] count. */
+  decisions: AnsweredDecision[]
+  /** Waits whose decision was answered, however long ago (read.ts): what still waits does not expire with the kept weeks. */
+  resolvedWaits: ResolvedWait[]
   projectId: string
   /** The Monday 00:00 UTC the week starts (week.ts). */
   week: number
   now: number
 }
 
-export function leaderboard({ state, groups, machines: visibleMachines, projectId, week, now }: LeaderboardInput): Leaderboard {
+export function leaderboard({ state, groups, machines: visibleMachines, decisions, resolvedWaits, projectId, week, now }: LeaderboardInput): Leaderboard {
   const project = projectOf(state, projectId)
   const shared = groups.filter(g => !isLeads(g) && !g.audience && (g.projectId ?? 'lead') === projectId && g.id !== project.leadConversationId)
   const requests = shared.filter(g => !g.reviewOf)
   const landed = requests.filter(g => g.requesterId && g.ledger?.shippedAt != null && (g.pullRequestUrls?.length ?? 0) > 0)
   const players = state.people.filter(p => canReadProject(state, { kind: 'person', userId: p.id, email: p.email }, project))
   const inWeek = (at: number, start = week) => at >= start && at < start + WEEK_MS
+  const unblocked = unblockedFacts(shared, decisions)
   const score = (personId: string, start: number) => {
     const shippedHere = landed.filter(g => g.requesterId === personId && inWeek(g.ledger!.shippedAt!, start))
-    const answers = shared.flatMap(g => g.ledger?.unblocks ?? []).filter(u => u.personId === personId && inWeek(u.at, start))
+    const answers = unblocked.answers.filter(a => a.personId === personId && inWeek(a.at, start))
+    const waits = unblocked.waits.filter(w => w.personId === personId && inWeek(w.at, start))
     const machines = visibleMachines.filter(m => m.contributorId === personId)
       .map(m => m.lent?.find(l => l.week === start)?.agentMs ?? 0).filter(ms => ms > 0)
-    const freedMs = sum(answers.map(u => u.waitedMs)), lentMs = sum(machines)
+    const freedMs = sum(waits.map(w => w.waitedMs)), lentMs = sum(machines)
     const points = shippedHere.length * SHIPPED_POINTS + answers.length * UNBLOCK_POINTS
       + Math.floor(freedMs / (UNBLOCK_HOURS_PER_POINT * HOUR_MS)) + Math.floor(lentMs / (LENT_HOURS_PER_POINT * HOUR_MS))
     return {
       points,
       shipped: { count: shippedHere.length, medianAskToShipMs: median(askToShip(shippedHere)) },
-      unblocked: { count: answers.length, agentMs: freedMs, medianAnswerMs: median(answers.map(u => u.waitedMs)) },
+      unblocked: { count: answers.length, agentMs: freedMs, medianAnswerMs: median(waits.map(w => w.waitedMs)) },
       lent: { machines: machines.length, agentMs: lentMs },
     }
   }
@@ -68,7 +77,7 @@ export function leaderboard({ state, groups, machines: visibleMachines, projectI
     projectId, week,
     goal: { openRequests: requests.filter(open).length, thisWeek: goal(week), lastWeek: goal(week - WEEK_MS) },
     people,
-    waiting: waitingNow(state, shared),
+    waiting: waitingNow(state, shared, new Set([...unblocked.decided, ...resolvedWaits.filter(r => shared.some(g => g.id === r.conversationId)).map(r => r.batchId)])),
   }
 }
 
@@ -77,9 +86,10 @@ const open = (group: Conversation): boolean => !group.archived && group.ledger?.
   && !['done', 'cancelled', 'stopped'].includes(group.assignment?.status ?? '')
 
 /** Who agents wait on now and how many items each: in name order, never ranked (the mockup's "Kind" rule). */
-function waitingNow(state: SuperTabState, shared: Conversation[]): Leaderboard['waiting'] {
+function waitingNow(state: SuperTabState, shared: Conversation[], decided: Set<string>): Leaderboard['waiting'] {
   const byPerson = new Map<string, string[]>()
-  for (const group of shared.filter(g => !g.archived && waitsNow(g))) {
+  // A needs-human whose decision was answered waits no longer, though its worker has not moved on yet.
+  for (const group of shared.filter(g => !g.archived && waitsNow(g) && !decided.has(g.ledger?.waiting?.messageId ?? ''))) {
     const personId = waitedOn(state, group)
     byPerson.set(personId, [...byPerson.get(personId) ?? [], group.id])
   }
