@@ -395,9 +395,11 @@ describe('host form (design 4.10)', () => {
     expect(tab.lastChangedAt).toBe(MIGRATED)
     const rows = new Map<string, Row>(tab.roster.filter((r: Row) => r.agent).map((r: Row) => [r.agent!.id, r]))
     expect([...rows.keys()].sort()).toEqual([s.lead, s.worker, s.more.idle, s.more.loner].sort())
-    // Nobody but its machine's owner watches a Lead (final review, Critical 1); a Builder's readers still do.
-    expect(rows.get(s.lead)).toMatchObject({ lead: true, active: true, leadsConversationId: s.leads, lastChangedAt: MIGRATED, observers: [] })
-    expect(rows.get(s.worker)).toMatchObject({ observers: [{ email: peer.email, userId: peer.sub }, { email: outsider.email, userId: outsider.sub }] })
+    // A Lead's readers watch it, view only (Ken, 2026-10-28), as a Builder's do; marked, its host lets nobody else.
+    const readers = [{ email: peer.email, userId: peer.sub }, { email: outsider.email, userId: outsider.sub }]
+    expect(rows.get(s.lead)).toMatchObject({ lead: true, active: true, leadsConversationId: s.leads, lastChangedAt: MIGRATED, observers: readers,
+      confidential: true, membersWatch: true })
+    expect(rows.get(s.worker)).toMatchObject({ observers: readers, confidential: false, membersWatch: false })
     // Its only group is finished and dormant, yet not archived: the host must not hand it to automatic cleanup.
     expect(rows.get(s.more.idle)).toMatchObject({ lead: false, active: true })
     expect(tab.pool).toMatchObject({ tabId: s.tabId, machine: { machineId: machine }, starts: [{ id: 'queued' }, { id: 'queued-in-dormant' }] })

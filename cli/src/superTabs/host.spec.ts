@@ -1591,6 +1591,41 @@ describe('the members a host lets watch its agents', () => {
     expect(source.allows(peer)).toBe(false)
     expect(superTabs.shareObservers).toHaveBeenCalledOnce()
   })
+
+  it('tells a member watching the current Lead to retry through a stop, and refuses other Swarms\', ordinary and a former Lead\'s shares for good', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'super-tab-host-')); roots.push(dir)
+    // The Lead as the backend sends it: marked confidential, and its listed members watch it (Ken, 2026-10-28).
+    const lead = (membersWatch: boolean) => ({ tabId: 'tab', confidential: true, membersWatch,
+      agent: { id: 'agent', harnessId: 'harness', machineId: 'machine-1', name: 'River' }, observers: [{ email: 'peer@example.com', userId: 'peer' }] })
+    let rows: unknown[] = [lead(true)], clock = 0
+    const call: CoreApi['account']['backend'] = vi.fn(async (_method, path) =>
+      ({ status: 200, body: { success: true, data: path.includes('/hosts/') ? hostForm(rows, { tabs: ['tab'] }) : [] } }))
+    const superTabs = { attention: vi.fn(), cards: vi.fn(), cardRecap: vi.fn(), shareObservers: vi.fn(), screen: vi.fn(), input: vi.fn() }
+    const core = fakeCore({ dataDir: dir, superTabs, account: { backend: call },
+      agents: { byAgent: vi.fn(() => ({ agentId: 'harness' }) as never), terminalAvailable: vi.fn(() => true) } })
+    const source = observerSource(dir, () => 'machine-1', () => clock)
+    const grant = (tab: string | null, recipientEmail = 'peer@example.com') => ({ tab, agentId: 'harness', recipientEmail }) as never
+    const member = grant('super:tab'), otherSwarm = grant('super:other'), ordinary = grant(null)
+    const first = new SuperTabHost(core, 'machine-1', { log: vi.fn(), now: () => clock }); hosts.push(first)
+    await first.tick(); clock += 201
+    expect(source.allows(member)).toBe(true)
+    // Its backend link drops, or the daemon restarts for an update: viewing pauses, and the member is told to try again.
+    first.stop(); clock += 201
+    expect(source.allows(member)).toBe(false)
+    expect(source.paused(member)).toBe(true)
+    // As for any Swarm share, the next roster decides one of this Swarm's; another Swarm's or an ordinary one is closed.
+    for (const refused of [otherSwarm, ordinary]) expect(source.paused(refused)).toBe(false)
+    // The next host's first roster lets the member watch again.
+    const next = new SuperTabHost(core, 'machine-1', { log: vi.fn(), now: () => clock }); hosts.push(next)
+    await next.tick(); clock += 201
+    expect(source.allows(member)).toBe(true)
+    // No longer the Lead: closed, and a stop after that does not reopen it to a retry.
+    rows = [lead(false)]
+    clock += 1_000; await next.tick(); clock += 201
+    expect(source.allows(member)).toBe(false)
+    next.stop(); clock += 201
+    expect(source.paused(member)).toBe(false)
+  })
 })
 
 describe('adding the machine its own Lead runs on to the Swarm', () => {

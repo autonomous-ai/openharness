@@ -3268,11 +3268,28 @@ describe('the PM\'s terminal after a private chat (final review, Critical 1)', (
     await expect(opened(host)).resolves.toMatchObject({ contextId: expect.any(String) })
   })
 
-  it('lets nobody but its machine\'s owner watch it: not a reader outside the chat, not the Swarm owner, not with an earlier share', async () => {
-    const { tab, lead, harnessId } = await privateChat()
+  it('lets every reader watch it while it is the Lead, view only: not through an ordinary share, and not once it is no longer the Lead', async () => {
+    const { tab, lead, harnessId, swarmShare, ordinaryShare } = await privateChat()
+    // Ken, 2026-10-28: a member watching the Product Manager reads the private chats it is in, and every member may.
+    expect(await observers(lead)).toEqual(expect.arrayContaining([bob.sub, owner.sub, peer.sub]))
+    const row = (await rosterRows(store, host, 'test-host')).find(t => t.tabId === tab && t.agent?.id === lead)!
+    expect(row).toMatchObject({ confidential: true, membersWatch: true })
+    for (const user of [bob, owner, peer]) expect(await store.mayObserve(user, tab, 'test-host', harnessId, host.sub)).toBe(true)
+    expect(await recipientShare(swarmShare, bob, db)).not.toBeNull()
+    // Outside the Swarm it is still its machine's person's alone.
+    expect(await recipientShare(ordinaryShare, carol, db)).toBeNull()
+    // A Lead leaves only with its project, but a state from before that rule can hold a former Lead still in the private chat.
+    const state = await storedState(tab)
+    state.conversations.find(c => c.id === 'lead')!.leadId = null
+    await saveState(tab, state)
     expect(await observers(lead)).toEqual([])
     for (const user of [bob, owner, peer]) expect(await store.mayObserve(user, tab, 'test-host', harnessId, host.sub)).toBe(false)
-    // A Builder's terminal stays watchable by the project's readers.
+    expect(await recipientShare(swarmShare, bob, db)).toBeNull()
+    expect(await store.mayObserve(host, tab, 'test-host', harnessId, host.sub)).toBe(true)
+  })
+
+  it('leaves a Builder\'s terminal to the project\'s readers', async () => {
+    const { tab } = await privateChat()
     const workerHarness = randomUUID()
     const worker = String((await run(tab, { type: 'agent.add', conversationId: 'lead', machineId: 'test-host', harnessId: workerHarness,
       name: 'Worker', configuration: config, lead: false })).result.agentId)
@@ -3368,8 +3385,9 @@ describe('the PM\'s terminal after a private chat (final review, Critical 1)', (
     // Swarm B's Lead cannot read or type into its Builder alias of Swarm A's PM.
     await expect(run(other, { type: 'agent.screen', agentId: lead }, host, otherLead)).rejects.toMatchObject({ code: 'TERMINAL_PRIVATE' })
     await expect(run(other, { type: 'agent.input', agentId: lead, keys: ['Enter'] }, host, otherLead)).rejects.toMatchObject({ code: 'TERMINAL_PRIVATE' })
-    // Shares made before the chat, opened as the observer relay opens them.
-    expect(await recipientShare(swarmShare, bob, db)).toBeNull()
+    // Shares made before the chat, opened as the observer relay opens them: Swarm A's opens for its member while the session
+    // is A's Lead (Ken, 2026-10-28); Swarm B's and the ordinary one stay closed.
+    expect(await recipientShare(swarmShare, bob, db)).not.toBeNull()
     expect(await recipientShare(ordinaryShare, carol, db)).toBeNull()
     await db.harnessShare.update({ where: { id: swarmShare }, data: { superTabId: other } })
     expect(await recipientShare(swarmShare, bob, db)).toBeNull()

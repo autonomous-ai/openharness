@@ -342,8 +342,9 @@ export class SuperTabHost {
     // until the next host's first roster says who is still a member. A host stops when its backend link drops and when
     // the daemon restarts for an update; an empty roster in force here withdrew every member's invitation each time,
     // which took this computer out of their machine lists until their apps next read them, up to 5 minutes later, and
-    // their panes said Harness here was out of date (Ken, 2026-10-28). The confidential marks are kept as they are.
-    try { this.observers(this.core.dataDir, this.machineId, [], this.now(), this.stillRuns) } catch { /* The old snapshot expires. */ }
+    // their panes said Harness here was out of date (Ken, 2026-10-28). No roster, not an empty one: the confidential marks
+    // and the current Leads' openings are kept as they are, so members watching a Lead are told to retry too.
+    try { this.observers(this.core.dataDir, this.machineId, null, this.now(), this.stillRuns) } catch { /* The old snapshot expires. */ }
     // Signed out or another machine: this host's alerts are no longer anyone's. A core that is gone heard nothing, and
     // the next host's first roster replaces them anyway.
     if (this.attention !== null && this.attention !== '[]') {

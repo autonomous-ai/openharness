@@ -1853,22 +1853,23 @@ export class SuperTabStore {
       const target = state.agents.find(a => a.machineId === machineId && a.harnessId === harnessId && a.machineOwnerId === machineOwnerId)
       if (!target) return false
       agent(state, target.id)
-      if (!canWatchAgent(state, { kind: 'person', userId: user.sub, email: user.email }, target, await this.confidential(tx, target.id))) return false
+      if (!canWatchAgent(state, { kind: 'person', userId: user.sub, email: user.email }, target, await this.confidential(tx, target.id, tabId))) return false
       await this.agentGrant(tx, state, target)
       return true
     } catch (error) { if (error instanceof SuperTabError) return false; throw error }
   }
 
-  /** Whether an agent's session is confidential in any Swarm (confidential.ts). */
-  private async confidential(tx: Transaction, agentId: string): Promise<boolean> {
-    return (await confidentialSessions(tx, [agentId])).has(agentId)
+  /** Whether an agent's session is confidential in any Swarm, or any but `exceptTabId` (confidential.ts). */
+  private async confidential(tx: Transaction, agentId: string, exceptTabId?: string): Promise<boolean> {
+    return (await confidentialSessions(tx, [agentId], exceptTabId)).has(agentId)
   }
 
-  /** Whether a terminal share may open, wherever it came from (routes/harnessShares.ts): a confidential session's only for
-   *  its machine's person, even an ordinary share made outside any Swarm; a Swarm's share only while that Swarm allows it. */
+  /** Whether a terminal share may open, wherever it came from (routes/harnessShares.ts): a Swarm's share only while that
+   *  Swarm lets its recipient watch (its current Lead included, projects.ts watchClosed); an ordinary share made outside any
+   *  Swarm never of a confidential session, but for its machine's person. */
   async mayOpenShare(user: AuthUser, share: { superTabId: string | null; machineId: string; agentId: string; ownerId: string }): Promise<boolean> {
-    if (user.sub !== share.ownerId && await this.confidential(this.db, stableId(share.machineId, share.agentId))) return false
-    return !share.superTabId || this.mayObserve(user, share.superTabId, share.machineId, share.agentId, share.ownerId)
+    if (share.superTabId) return this.mayObserve(user, share.superTabId, share.machineId, share.agentId, share.ownerId)
+    return user.sub === share.ownerId || !await this.confidential(this.db, stableId(share.machineId, share.agentId))
   }
 
   private deliveryAllowed(state: SuperTabState, delivery: SuperTabDelivery): boolean {
