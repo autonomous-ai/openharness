@@ -232,7 +232,7 @@ export class SuperTabHost {
   private nextReplacementsAt = 0
   private timer: ReturnType<typeof setTimeout> | null = null
   /** Per agent's delivery list and per delivery's claim, the failures in a row and when it may be asked again. */
-  private readonly deliveryRetries = new Map<string, { failures: number; retryAt: number; list?: string }>()
+  private readonly deliveryRetries = new Map<string, { failures: number; retryAt: number; since: number; list?: string }>()
   private native: NativeRecorder | null = null
   private machines: ContributedMachines | null = null
   private readonly machineDeps: Partial<MachineDeps>
@@ -595,10 +595,11 @@ export class SuperTabHost {
     const retry = this.deliveryRetries.get(key)
     return !!retry && this.now() < retry.retryAt
   }
-  private retryLater(key: string, list?: string): void {
-    const retry = this.deliveryRetries.get(key) ?? { failures: 0, retryAt: 0, ...(list ? { list } : {}) }
+  private retryLater(key: string, list?: string) {
+    const retry = this.deliveryRetries.get(key) ?? { failures: 0, retryAt: 0, since: this.now(), ...(list ? { list } : {}) }
     retry.retryAt = this.now() + Math.min(DELIVERY_RETRY_MAX_MS, DELIVERY_RETRY_MS * 2 ** retry.failures++)
     this.deliveryRetries.set(key, retry)
+    return retry
   }
   private async poll(): Promise<void> {
     const data = (await this.sources.feed.refresh()).roster
@@ -723,9 +724,16 @@ export class SuperTabHost {
         }
         read.busy = deliveries.some(item => !this.settled(object(item)))
       } catch (error) {
-        if (!listRead) this.retryLater(listKey)
         // Authority checks and network failures both withhold input. A later fresh read may grant it again.
-        this.log(error instanceof Error ? error.message : String(error))
+        const message = error instanceof Error ? error.message : String(error)
+        if (listRead) this.log(message)
+        else {
+          // 2026-10-28: a Lead's list failed for 45 minutes while this log said only the backend's words, with no agent.
+          const retry = this.retryLater(listKey), code = error instanceof SuperTabHostError ? ` (${error.code})` : ''
+          this.log(`Could not read the deliveries for agent ${target.agent.id} (session ${target.agent.harnessId.slice(0, 8)}) in Swarm ${target.tabId}: `
+            + `${message}${code}. Failing since ${new Date(retry.since).toISOString()}, ${retry.failures} ${retry.failures === 1 ? 'try' : 'tries'}; `
+            + `next try in ${Math.round((retry.retryAt - this.now()) / 1_000)} s.`)
+        }
       }
     }
     if (this.stopped) return

@@ -779,6 +779,20 @@ describe('a delivery poll or claim that keeps failing', () => {
     expect(claims.n).toBe(4)
   })
 
+  // 2026-10-28: a Lead's list failed for 45 minutes and the log said only "This already exists, so nothing new was saved."
+  it('says whose delivery list keeps failing, with the backend\'s code, since when and how often', async () => {
+    const t = setup(), host = t.open()
+    failing(t, (method, path) => method === 'GET' && path.endsWith('/deliveries'))
+    await host.tick()
+    t.wait(1_000); await host.tick()
+    expect(t.log.mock.calls.slice(-2).map(call => call[0])).toEqual([
+      'Could not read the deliveries for agent agent (session harness) in Swarm tab: This Swarm is busy. Try again in a moment. (SWARM_BUSY). '
+        + 'Failing since 1970-01-01T00:00:00.000Z, 1 try; next try in 1 s.',
+      'Could not read the deliveries for agent agent (session harness) in Swarm tab: This Swarm is busy. Try again in a moment. (SWARM_BUSY). '
+        + 'Failing since 1970-01-01T00:00:00.000Z, 2 tries; next try in 2 s.',
+    ])
+  })
+
   it('asks again for a delivery list the backend refuses only after the same growing wait', async () => {
     const t = setup(), host = t.open()
     const lists = failing(t, (method, path) => method === 'GET' && path.endsWith('/deliveries'))
