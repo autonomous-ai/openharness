@@ -1,6 +1,7 @@
 /**
- * Where the Harness Team account lives on a Mac, and the checks every value passes before it goes into the
- * privileged script (docs/plans/2026-10-24-swarm-team-account.md, Task 2).
+ * Where the Harness Team account lives on a Mac and on Linux (`teamLayout`), and the checks every value passes before
+ * it goes into the privileged script (docs/plans/2026-10-24-swarm-team-account.md, Task 2;
+ * docs/superpowers/plans/2026-10-28-harness-team-account-linux.md).
  *
  * The team account is a separate, standard macOS user that runs a second Harness daemon for Swarm work, so a
  * teammate's agent on this Mac cannot read the owner's files. It is listed in System Settings > Users & Groups
@@ -12,22 +13,84 @@ import { isAbsolute, normalize } from 'node:path'
 
 export const TEAM_USER = 'harnessteam'
 export const TEAM_REAL_NAME = 'Harness Team'
-export const TEAM_HOME = `/Users/${TEAM_USER}`
 /** The team daemon's control port. Not 18473 (the owner's daemon) or 18474 (a dev daemon beside it): the team
  *  daemon runs as its own OS user and would find another port anyway, but a fixed one is easier to audit. */
 export const TEAM_PORT = 18493
-export const TEAM_LABEL = 'ai.autonomous.harness.team'
-export const TEAM_PLIST = `/Library/LaunchDaemons/${TEAM_LABEL}.plist`
-/** Root-owned: what setup made, read by the team daemon. Root's so a process in the team account cannot point its
- *  own privacy check somewhere else. */
-export const TEAM_SHARED_DIR = '/Library/Application Support/Harness'
-/** Left in that folder by a setup that made it, so removal takes the folder away once it is empty, and never one made
- *  by anything else. */
-export const TEAM_SHARED_MARK = `${TEAM_SHARED_DIR}/.made-by-harness-team-setup`
-export const TEAM_CONFIG_FILE = `${TEAM_SHARED_DIR}/team.json`
-/** The team account's: where its daemon reports sign-in and the privacy check, for the owner's `harness team status`. */
-export const TEAM_STATUS_DIR = `${TEAM_SHARED_DIR}/Team`
-export const TEAM_STATUS_FILE = `${TEAM_STATUS_DIR}/status.json`
+
+export type TeamPlatform = 'darwin' | 'linux'
+
+/** Where the team account and what setup makes live on one platform. Every caller reads its paths from here. */
+export interface TeamLayout {
+  platform: TeamPlatform
+  home: string
+  /** Root-owned: what setup made, read by the team daemon. Root's so a process in the team account cannot point its
+   *  own privacy check somewhere else. */
+  sharedDir: string
+  /** Left in that folder by a setup that made it, so removal takes the folder away once it is empty, and never one
+   *  made by anything else. */
+  sharedMark: string
+  configFile: string
+  /** The team account's: where its daemon reports sign-in and the privacy check, for the owner's `harness team status`. */
+  statusDir: string
+  statusFile: string
+  /** What runs the team daemon as the team account from boot, and the root-owned file that defines it. */
+  service: { kind: 'launchd' | 'systemd'; label: string; file: string }
+  /** The owner's folder for the subscription relay's hand-off (./relay.ts), per owner. */
+  relayDir(owner: string): string
+  /** The team account's primary group. */
+  group: string
+}
+
+const MAC_SHARED = '/Library/Application Support/Harness'
+const MAC_LABEL = 'ai.autonomous.harness.team'
+
+const LAYOUTS: Record<TeamPlatform, TeamLayout> = {
+  darwin: {
+    platform: 'darwin',
+    home: `/Users/${TEAM_USER}`,
+    sharedDir: MAC_SHARED,
+    sharedMark: `${MAC_SHARED}/.made-by-harness-team-setup`,
+    configFile: `${MAC_SHARED}/team.json`,
+    statusDir: `${MAC_SHARED}/Team`,
+    statusFile: `${MAC_SHARED}/Team/status.json`,
+    service: { kind: 'launchd', label: MAC_LABEL, file: `/Library/LaunchDaemons/${MAC_LABEL}.plist` },
+    // /Users/Shared lets anyone make a folder; a macOS ACL lets the team account read this one.
+    relayDir: (owner) => `/Users/Shared/.harness-team-relay-${owner}`,
+    // Every local account on a Mac is in staff.
+    group: 'staff',
+  },
+  // The Linux account follows the guest helper's tools (useradd, setfacl) and the daemon's own supervisor (systemd).
+  linux: {
+    platform: 'linux',
+    home: `/home/${TEAM_USER}`,
+    sharedDir: '/etc/harness',
+    sharedMark: '/etc/harness/.made-by-harness-team-setup',
+    configFile: '/etc/harness/team.json',
+    statusDir: '/var/lib/harness/team',
+    statusFile: '/var/lib/harness/team/status.json',
+    service: { kind: 'systemd', label: 'harness-team.service', file: '/etc/systemd/system/harness-team.service' },
+    // Made by setup for the owner (nobody else can make a folder under /var/lib/harness); an ACL lets the team account read it.
+    relayDir: (owner) => `/var/lib/harness/team-relay-${owner}`,
+    // Its own group, as useradd makes one: no other account shares it.
+    group: TEAM_USER,
+  },
+}
+
+/** This platform's layout, or null where there is no Harness Team account. */
+export function teamLayout(platform: NodeJS.Platform): TeamLayout | null {
+  return Object.hasOwn(LAYOUTS, platform) ? LAYOUTS[platform as TeamPlatform] : null
+}
+
+// The macOS values under the names every Mac caller has used since the account was made.
+const MAC = LAYOUTS.darwin
+export const TEAM_HOME = MAC.home
+export const TEAM_LABEL = MAC.service.label
+export const TEAM_PLIST = MAC.service.file
+export const TEAM_SHARED_DIR = MAC.sharedDir
+export const TEAM_SHARED_MARK = MAC.sharedMark
+export const TEAM_CONFIG_FILE = MAC.configFile
+export const TEAM_STATUS_DIR = MAC.statusDir
+export const TEAM_STATUS_FILE = MAC.statusFile
 /** A file in the owner's home, readable by everyone, so only the home folder's own mode keeps it from the team
  *  account. Directly in the home: ~/Library is 700 on its own, so a sentinel there would pass even with the home
  *  folder open. */
