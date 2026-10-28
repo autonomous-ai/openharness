@@ -30,6 +30,9 @@ describe('harness mcp-servers (#1872)', () => {
       expect(tried.err).toMatch(/may not change this machine's MCP servers/)
       expect(readMachineMcp(tried.dataDir).servers).toEqual({})
     }
+    // An agent in a Harness pane whose engine sets none of those variables (#1881's P3).
+    const inPane = mcpServersCommand(['add', 'lamp', '--', 'lamp-mcp'], { dataDir: mkdtempSync(join(tmpdir(), 'mcp-servers-')), env: {}, inPane: true, out: () => {}, err: () => {} })
+    expect(inPane).toBe(5)
     // Listing is fine for anyone on this machine.
     expect(run(['list'], { CODEX_THREAD_ID: 't' }).code).toBe(0)
   })

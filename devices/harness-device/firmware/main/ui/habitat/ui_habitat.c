@@ -597,6 +597,7 @@ static EXT_RAM_BSS_ATTR struct {
     int at;                           // that Lead's place, where the face lands when the Lead goes
     bool retried;                     // its recap was asked for a second time
     struct { char tab[ID_MAX], lead[ID_MAX]; } focus[HT_SUPERTABS_MAX];   // the Lead the desktop last showed, per Swarm
+    char pending[ID_MAX];             // a Swarm the desktop opened before its `swarms` frame said so (ui_supertab_focus)
     // Super Tab waits from this machine's harnesses, shown only through the Lead whose `local` names the harness.
     struct { char agent[ID_MAX], request[80], swarm[HT_SUPERTAB_NAME], text[240]; bool stuck, shown; } waits[SWARM_WAITS];
 } sw;
@@ -4804,6 +4805,12 @@ void ui_service_model_picker(void)
 static EXT_RAM_BSS_ATTR cable_swarm_t desk_rows[SWARMS_MAX];
 static int desk_row_count;
 static char desk_selected[ID_MAX];
+// Whether a desktop focus may take the dial into a Swarm now: from HOME or an agent, never while talking, nor over a
+// question or a form.
+static bool swarm_may_follow(void)
+{
+    return !s.voice_open && !question_view(s.view) && (s.view == HOME || s.view == AGENT);
+}
 static void swarms_apply(void)
 {
     // A tab with no agent (only shells or viewers, or nothing) is not listed: nothing on the dial can drive it. A
@@ -4834,6 +4841,13 @@ static void swarms_apply(void)
         if (s.view == HOME || s.view == AGENT || s.view == AGENTS) tabs_open();
     } else {
         swarm_desk_note();
+    }
+    // The focus came just before this frame (Diego's dial, 2026-10-28): the desktop has opened that Swarm's desk tab
+    // now. Spent by any change of tab, so a later visit to the tab does not replay it.
+    if (sw.pending[0] && selected_changed) {
+        const ht_supertab_t *t = ht_supertabs_find(&swarm, sw.pending);
+        if (t && t->tab[0] && !strcmp(t->tab, s.selected_tab) && !swarm_mode() && swarm_may_follow()) swarm_enter(t, "", false);
+        sw.pending[0] = 0;
     }
     changed = changed || total_before != tabs_total();
     if (s.view == TABS && (changed || (selected_changed && !browsing))) {
@@ -4986,23 +5000,28 @@ void ui_supertab_recap(const char *tab, const char *lead, const char *text, uint
     if (ht_supertabs_recap_put(&swarm, tab, lead, text, at, none)) change();
     display_unlock();
 }
+// `lead` "" is the desktop on that Swarm's tab with no project open (its Chat with PM, a DM): the dial still goes in, on
+// the Lead it last showed there, and one already in keeps its face.
 void ui_supertab_focus(const char *tab, const char *lead)
 {
     if (!tab || !lead) return;
     display_lock();
     int slot = -1;
-    for (int i = 0; i < HT_SUPERTABS_MAX && slot < 0; i++) if (!strcmp(sw.focus[i].tab, tab)) slot = i;
-    for (int i = 0; i < HT_SUPERTABS_MAX && slot < 0; i++) if (!sw.focus[i].tab[0] || !ht_supertabs_find(&swarm, sw.focus[i].tab)) slot = i;
+    for (int i = 0; i < HT_SUPERTABS_MAX && slot < 0 && lead[0]; i++) if (!strcmp(sw.focus[i].tab, tab)) slot = i;
+    for (int i = 0; i < HT_SUPERTABS_MAX && slot < 0 && lead[0]; i++) if (!sw.focus[i].tab[0] || !ht_supertabs_find(&swarm, sw.focus[i].tab)) slot = i;
     if (slot >= 0) { COPY(sw.focus[slot].tab, tab); COPY(sw.focus[slot].lead, lead); }
     const ht_supertab_t *t = ht_supertabs_find(&swarm, tab);
     int i = swarm_lead_index(t, lead);
     // As `focus` today: never while talking, nor over a question or a form.
     bool free = !s.voice_open && !question_view(s.view) && s.view != FORM && s.view != DRAFT && s.view != DRAFT_OPTIONS;
-    if (i >= 0 && free) {
+    sw.pending[0] = 0;
+    if (t && (i >= 0 || !lead[0]) && free) {
         if (swarm_mode() && !strcmp(sw.tab, tab)) {
-            if (strcmp(sw.lead, lead)) swarm_show(t, i, false);
-        } else if (!swarm_mode() && t->tab[0] && !strcmp(s.selected_tab, t->tab) && (s.view == HOME || s.view == AGENT)) {
-            swarm_enter(t, lead, false);   // the desktop opened this Swarm's tab: the dial goes in with it
+            if (i >= 0 && strcmp(sw.lead, lead)) swarm_show(t, i, false);
+        } else if (!swarm_mode() && t->tab[0] && swarm_may_follow()) {
+            // The desktop opened this Swarm's tab: the dial goes in with it, or as soon as the `swarms` frame says so.
+            if (!strcmp(s.selected_tab, t->tab)) swarm_enter(t, lead, false);
+            else COPY(sw.pending, tab);
         }
     }
     change();

@@ -170,10 +170,11 @@ Machine:
   harness ps [--all]           the harnesses here: state, who started each, what each is about
   harness show <name>          a harness's state and last turn: what it was asked and what it answered
   harness wait <name>[,<name>] wait until they stop working (--any, --timeout 30m); exit 3 = needs the person
+  harness watch <name>         follow a harness: a line (--json: an object) each time it changes, until it stops
   harness close <name> [--now] save a harness's screen and stop it; an agent closes only what it started
   harness tell <name> -- <w>   from an agent's pane: more work for a harness it started (agents-tell-agents)
   harness reply <name> -- <w>  say words to a cloud harness (Devin Cloud, Cursor Cloud, Fo): its answer or what next
-                               new, ps, show, wait, tell, reply and close take --machine <name> for another of your
+                               new, ps, show, wait, watch, tell, reply and close take --machine <name> for another of your
                                machines: \`harness show --machine office x\`
   harness mcp                  the agent verbs as an MCP server on stdin/stdout, for agents that use MCP
   harness help agents          the agent commands, states, exit codes and rules on one screen
@@ -2671,8 +2672,8 @@ async function logsExportCommand(json: boolean): Promise<void> {
 }
 
 import { orchestratorCommand } from './orchestrator/command.js'
-import { paneOwner, sendCommand } from './messages/command.js'
-import { agentOrigin, closeCommand, psCommand, replyCommand, showCommand, tellCommand, waitCommand, whoamiCommand } from './agentClient/commands.js'
+import { paneOwner, sendCommand, sendPane } from './messages/command.js'
+import { agentOrigin, closeCommand, psCommand, replyCommand, showCommand, tellCommand, waitCommand, watchCommand, whoamiCommand } from './agentClient/commands.js'
 import { agentsHelp, helpFor } from './agentClient/help.js'
 import { openUrlCommand } from './agentClient/openUrl.js'
 import { harnessRunner, mcpCommand } from './agentClient/mcp.js'
@@ -2732,9 +2733,13 @@ switch (cmd) {
   case 'settings':
     settingsCommand(rest, { port: daemonPort() }).then(code => { process.exitCode = code }).catch(onError)
     break
-  case 'mcp-servers':
-    process.exitCode = mcpServersCommand(rest)
+  case 'mcp-servers': {
+    // Refused in a pane a Harness daemon made, as `harness mcp` tells one (#1881's P3): an engine there may set none of
+    // the variables `outsideCaller` reads. A pty host pane (Windows) is always Harness's.
+    const pane = sendPane(process.env)
+    process.exitCode = mcpServersCommand(rest, { inPane: !!pane && (!pane.startsWith('%') || !!paneOwner(pane)) })
     break
+  }
   case 'mcp': {
     const pane = process.env.TMUX_PANE
     mcpCommand({ run: harnessRunner(SCRIPT_PATH), inPane: !!pane && !!paneOwner(pane) }).then(code => { process.exitCode = code }).catch(onError)
@@ -2751,6 +2756,9 @@ switch (cmd) {
     break
   case 'wait':
     waitCommand(rest, { machines: usableMachines }).then(code => { process.exitCode = code }).catch(onError)
+    break
+  case 'watch':
+    watchCommand(rest, { machines: usableMachines }).then(code => { process.exitCode = code }).catch(onError)
     break
   case 'close':
     closeCommand(rest, { machines: usableMachines }).then(code => { process.exitCode = code }).catch(onError)

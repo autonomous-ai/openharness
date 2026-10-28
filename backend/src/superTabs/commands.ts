@@ -19,7 +19,7 @@ import { digestStartsAfter, knownTimeZone } from './digest.js'
 import { credentialResult, redactCredentials, type CredentialKind } from './credentials.js'
 import { dirtyGroups, reportGroups, summarize } from './projectUpdates.js'
 import { workspaceCan, type WorkspaceRole } from './workspaces.js'
-import { LEDGER_WEEKS, PULL_REQUEST_URL, recordAnswer, recordAsked, recordMerged, recordReview, recordRun, recordStatus } from './leaderboard/record.js'
+import { LEDGER_WEEKS, PULL_REQUEST_URL, recordAsked, recordDecision, recordMerged, recordPost, recordReview, recordRun, recordStatus } from './leaderboard/record.js'
 import { WEEK_MS } from './leaderboard/week.js'
 import { react, reactionSchema, type ReactionTarget } from './reactions.js'
 import { shipNotice, shippedAt } from './ship.js'
@@ -245,7 +245,9 @@ export interface CommandContext {
     /** A Harness Team account's machine: the Mac it lives on, from its account row (machines.ts ContributedMachine). */
     hostMachineId?: string }
   /** Loaded from this tab and conversation by the store. */
-  reply?: { id: string; conversationId: string; author: Author }
+  reply?: { id: string; conversationId: string; author: Author; createdAt: number }
+  /** For a person's `message.send`: the tags waiting on them in that conversation, read by the store (leaderboard/record.ts). */
+  openTags?: Array<{ messageId: string; createdAt: number }>
   /** The message a Lead quotes as the owner's request for a rule or skill mode change, loaded from this tab by the store. */
   askedIn?: { author: Author; source: boolean; createdAt: number }
   /** The newest messages of this conversation before the one being sent, newest first, loaded by the store for `message.send`. */
@@ -1102,6 +1104,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
     case 'decision.answer': {
       const { answer, recipients, source } = answerDecision(state, actor, context.decision, command.choice, command.note ?? null)
       effects.decisionAnswer = answer
+      recordDecision(conversation(state, context.decision!.conversationId), context.decision!, context.now)
       if (recipients.length) message(context.decision!.conversationId, ANSWERED_NOTICE, recipients, null, source)
       result.decisionId = answer.id
       break
@@ -1574,7 +1577,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       }
       // The transcript still accepts a human message while the lead is unavailable. The UI can say why no delivery was created.
       message(group.id, command.text, recipients, command.replyTo, command.agentOnly ? AGENT_ONLY : undefined, attachments, mentions)
-      recordAnswer(state, group, actor, command.replyTo, context.now)
+      recordPost(state, group, actor, { replyTo: command.replyTo, text: command.text, reply: context.reply, openTags: context.openTags }, context.now)
       if (actor.kind === 'agent') renewOwnTask(group, actor.agentId, context.now)
       break
     }

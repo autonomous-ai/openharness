@@ -14,8 +14,9 @@ export function readableWeek(week: number | undefined, now: number): number {
   return week
 }
 
-/** What the board reads of a group (stats.ts, record.ts waitsNow) and its read check (projects.ts canReadGroup). */
-const BOARD_FIELDS = ['id', 'kind', 'projectId', 'audience', 'requesterId', 'reviewOf', 'archived', 'pullRequestUrls', 'ledger',
+/** What the board reads of a group (stats.ts, record.ts waitsNow) and its read check (projects.ts canReadGroup); the title
+ *  names it in a person's details. */
+const BOARD_FIELDS = ['id', 'kind', 'projectId', 'title', 'audience', 'requesterId', 'reviewOf', 'archived', 'pullRequestUrls', 'ledger',
   'assignment.id', 'assignment.status'] as const
 
 /** Dormant groups of one project active since [since]: a request shipped in a week the board sums wrote its Done row then.
@@ -29,4 +30,13 @@ export async function recentDormantGroups(tx: Prisma.TransactionClient, tabId: s
     { $project: { _id: 0, ...Object.fromEntries(BOARD_FIELDS.map(field => [`data.${field}`, 1])) } },
   ] }) as unknown as Array<{ data: Conversation }>
   return rows.map(row => row.data)
+}
+
+/** The profile names of the board's people (contract.ts displayName), one read by id for the few people of a Swarm. A member id
+ *  that is not an account id (an older fixture) has no name and goes by its email. */
+export async function profileNames(tx: Prisma.TransactionClient, personIds: string[]): Promise<Map<string, string>> {
+  const ids = personIds.filter(id => /^[0-9a-f]{24}$/.test(id))
+  if (!ids.length) return new Map()
+  const rows = await tx.user.findMany({ where: { id: { in: ids } }, select: { id: true, name: true } })
+  return new Map(rows.flatMap(row => row.name ? [[row.id, row.name] as const] : []))
 }

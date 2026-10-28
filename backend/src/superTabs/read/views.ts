@@ -4,7 +4,7 @@
  * in `derived`, so a part never changes without a new version (Lead's ruling).
  */
 import { isLeads, seenMachineIds, visibleState, withSeenRequirement, type Actor, type Agent, type Conversation, type SuperTabState } from '../model.js'
-import { machineSlots, teamAccountRequired, teamWorkRefusal, type ContributedMachine } from '../machines.js'
+import { machineSlots, teamAccountRequired, teamAccountSwarm, teamWorkRefusal, type ContributedMachine } from '../machines.js'
 import * as store from '../parts/index.js'
 import type { Part, SwarmParts } from '../parts/index.js'
 import { canReadGroup } from '../projects.js'
@@ -113,5 +113,6 @@ function derive(state: SuperTabState, visible: SuperTabState, actor: Actor, now:
     ...(actor.kind === 'person' && extras.mentionsWaiting !== undefined ? { mentionsWaiting: extras.mentionsWaiting } : {}),
     ...(actor.kind === 'person' && extras.decisionsWaiting !== undefined ? { decisionsWaiting: extras.decisionsWaiting } : {}),
     ...(actor.kind === 'person' && extras.decisionsDigest !== undefined ? { decisionsDigest: extras.decisionsDigest } : {}),
+    ...(teamAccountSwarm(state) ? {} : { teamAccounts: false as const }),
   }
 }

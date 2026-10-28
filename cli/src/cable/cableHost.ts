@@ -439,11 +439,15 @@ export class DaemonCableHost implements CableHost {
     this.wiring.superTabSelected?.(superTabId, projectId)
   }
 
-  /** The active tab when it is a Swarm with an open project; `fromDevice` when the announce was a device's own pick. */
+  /**
+   * The active tab when it is a Swarm, with its open project or '' when none is (its Chat with PM, a DM, or a Swarm
+   * not loaded yet); `fromDevice` when the announce was a device's own pick. A Swarm tab with no project used to read
+   * as no Swarm at all, and the dial stayed on "Nothing on this tab" while the window showed the Swarm.
+   */
   activeSwarmProject(): { superTabId: string; projectId: string; fromDevice: boolean } | null {
     const app = this.swarms
     const tab = app?.swarms.find((s) => s.id === app.active)
-    return app && tab?.superTabId && tab.projectId ? { superTabId: tab.superTabId, projectId: tab.projectId, fromDevice: app.fromDevice === true } : null
+    return app && tab?.superTabId ? { superTabId: tab.superTabId, projectId: tab.projectId ?? '', fromDevice: app.fromDevice === true } : null
   }
 
   selectSwarm(swarmId: string): void {

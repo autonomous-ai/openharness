@@ -743,7 +743,9 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
                   // This Mac, added while its person is here: macOS asks once
                   // for the Harness Team account (cli/src/team/autoSetup.ts).
                   if (app.stateOf(selected)?.isLocalMachine == true) {
-                    unawaited(app.offerTeamAccount('contribute'));
+                    unawaited(
+                      app.offerTeamAccount('contribute', tabId: c.tabId),
+                    );
                   }
                   if (context.mounted) Navigator.pop(context);
                 } catch (failure) {

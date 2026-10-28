@@ -25,6 +25,29 @@ typedef AccessTokenProvider = Future<String> Function(
 
 enum WsTransportKind { cloudE2ee, localPlaintext }
 
+/// Opens a backend socket ([WsConn.cloudSocket]).
+typedef CloudSocketFactory = WebSocketChannel Function(
+  Uri uri,
+  Iterable<String>? protocols,
+);
+
+/// How long [WsConn] waits before its [attempt]th reconnect: a window that doubles from 1 s to a
+/// 30 s ceiling, the wait somewhere in its second half. The jitter spreads the tabs a backend
+/// restart dropped together; the half that is not random is what keeps a socket that fails at once
+/// to a handful of dials a minute, which no draw can undercut.
+Duration reconnectDelay(int attempt, Random random) {
+  final exponent = min(max(attempt - 1, 0), 5);
+  final window = min(30000, 1000 * (1 << exponent));
+  return Duration(
+    milliseconds: window ~/ 2 + (random.nextDouble() * (window / 2)).round(),
+  );
+}
+
+/// How long a connection has to stay up before its next drop starts the backoff over. Resetting it
+/// the moment a socket was up made a socket the backend dropped right after its handshake redial
+/// every second, for good: about 54 dials a minute from one browser tab (prod, 2026-10-28).
+const connectionStableAfter = Duration(minutes: 1);
+
 /// A `request()` call got no reply within its timeout — distinct from other request-level errors
 /// (an explicit `{error: ...}` response) so callers can tell "the peer is unresponsive" apart from
 /// "the peer answered with a failure."
@@ -133,6 +156,13 @@ class WsConn {
   /// local transport, the dev fixture — means every frame rides the socket.
   final TerminalTransportPluginFactory? transportPlugins;
 
+  /// Opens the backend socket. Null dials a real one; tests pass a fake.
+  @visibleForTesting
+  final CloudSocketFactory? cloudSocket;
+
+  /// The reconnect jitter's source. Null is a fresh [Random].
+  final Random _random;
+
   Future<Map<String, dynamic>> Function(
     String type,
     Map<String, dynamic> payload,
@@ -154,8 +184,13 @@ class WsConn {
   bool _ready = false;
   int _attempt = 0;
   Timer? _reconnectTimer;
+  Timer? _stableTimer;
   Timer? _observerHandshakeTimer;
   String? _tokenUsed;
+
+  /// The token a 4401 refresh just handed over, until a connection is up on it. The backend
+  /// refusing that one too means the sign-in itself is gone; refreshing again only loops.
+  String? _refreshedToken;
   bool _forceRelayReconnect = false;
   final _pending = <String, _PendingRpc>{};
   final _readinessWaiters = <Completer<void>>{};
@@ -235,7 +270,9 @@ class WsConn {
     this.fixedReconnectDelay,
     this.relayCodecs,
     this.transportPlugins,
-  });
+    this.cloudSocket,
+    Random? random,
+  }) : _random = random ?? Random();
 
   /// The socket to dial, decided afresh on every connect: whether the file is
   /// there now, not whether it was the last time something looked. A dial
@@ -374,9 +411,9 @@ class WsConn {
       final channel =
           overPipe ??
           (!isLocal
-              ? WebSocketChannel.connect(
+              ? (cloudSocket ?? _connectCloud)(
                   uri,
-                  protocols: token == null || token.isEmpty ? null : [token],
+                  token == null || token.isEmpty ? null : [token],
                 )
               : socket != null
               ? await _connectLocalSocket(uri, socket) ?? _connectLocalPort(uri)
@@ -489,7 +526,9 @@ class WsConn {
   void _markReady() {
     _observerHandshakeTimer?.cancel();
     _ready = true;
-    _attempt = 0;
+    _refreshedToken = null;
+    _stableTimer?.cancel();
+    _stableTimer = Timer(connectionStableAfter, () => _attempt = 0);
     onStatus(ConnectionStatus.connected);
     _flushQueue();
     _settleReadiness();
@@ -946,6 +985,7 @@ class WsConn {
   void _onDone(WebSocketChannel channel) {
     if (!identical(_channel, channel)) return;
     _observerHandshakeTimer?.cancel();
+    _stableTimer?.cancel();
     _channel = null;
     _sub = null;
     _codec = null;
@@ -981,9 +1021,17 @@ class WsConn {
       return;
     }
     if (code == 4401) {
+      final token = _tokenUsed;
+      if (token != null && token == _refreshedToken) {
+        _closing = true;
+        onStatus(ConnectionStatus.disconnected);
+        onAuthFailure('Your SSO session expired. Please sign in again.');
+        return;
+      }
       unawaited(_refreshAndReconnect());
       return;
     }
+    _refreshedToken = null;
     if (code == 4403) {
       _closing = true;
       onStatus(ConnectionStatus.disconnected);
@@ -1000,8 +1048,16 @@ class WsConn {
   Future<void> _refreshAndReconnect() async {
     onStatus(ConnectionStatus.reconnecting);
     try {
-      await accessTokenProvider(true, _tokenUsed);
-      if (!_closing) await connect();
+      _refreshedToken = await accessTokenProvider(true, _tokenUsed);
+      if (_closing) return;
+      // The first refusal in a run dials straight back with the new token; a run that keeps
+      // failing waits its turn like any other drop.
+      if (_attempt == 0) {
+        _attempt = 1;
+        await connect();
+      } else {
+        _scheduleReconnect();
+      }
     } catch (_) {
       _closing = true;
       onStatus(ConnectionStatus.disconnected);
@@ -1014,12 +1070,12 @@ class WsConn {
     _attempt++;
     onStatus(ConnectionStatus.reconnecting);
     _reconnectTimer?.cancel();
-    final exponent = min(max(_attempt - 1, 0), 5);
-    final delay =
-        fixedReconnectDelay ??
-        Duration(milliseconds: min(30000, 1000 * (1 << exponent)));
+    final delay = fixedReconnectDelay ?? reconnectDelay(_attempt, _random);
     _reconnectTimer = Timer(delay, connect);
   }
+
+  static WebSocketChannel _connectCloud(Uri uri, Iterable<String>? protocols) =>
+      WebSocketChannel.connect(uri, protocols: protocols);
 
   void _rejectPending(String reason) {
     _settleReadiness(reason);
@@ -1041,6 +1097,7 @@ class WsConn {
     _disposePlugin();
     _reconnectTimer?.cancel();
     _reconnectTimer = null;
+    _stableTimer?.cancel();
     _rejectPending('WS closed');
     final sub = _sub;
     _sub = null;

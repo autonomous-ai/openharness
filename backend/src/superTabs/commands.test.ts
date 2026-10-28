@@ -229,12 +229,12 @@ describe('Super Tab collaboration policy', () => {
       { kind: 'agent', agentId: worker, machineOwnerId: 'host-owner' }).messages[0]!
     expect(posted.recipients).toEqual([])
     const reply = f.run({ type: 'message.send', conversationId: 'lead', text: 'Keep the local copy.', replyTo: posted.id, recipientIds: [] }, owner,
-      { reply: { id: posted.id, conversationId: 'lead', author: posted.author } })
+      { reply: { id: posted.id, conversationId: 'lead', author: posted.author, createdAt: 0 } })
     expect(reply.messages[0]!.recipients).toEqual([worker])
     const fresh = f.run({ type: 'message.send', conversationId: 'lead', text: 'Continue.', replyTo: null, recipientIds: [] })
     expect(fresh.messages[0]!.recipients).toEqual([lead])
     expect(() => f.run({ type: 'message.send', conversationId: 'lead', text: 'Cross-group reply', replyTo: posted.id, recipientIds: [] }, owner,
-      { reply: { id: posted.id, conversationId: 'elsewhere', author: posted.author } })).toThrow('Reply to a message in this conversation')
+      { reply: { id: posted.id, conversationId: 'elsewhere', author: posted.author, createdAt: 0 } })).toThrow('Reply to a message in this conversation')
   })
 
   it('delivers an assigned worker\'s own post to its Lead, and nobody else\'s', () => {
@@ -265,7 +265,7 @@ describe('Super Tab collaboration policy', () => {
         const reply = history.find(m => m.id === replyTo)
         const sent = f.run({ type: 'message.send', conversationId: group, text: 'Update.', replyTo, recipientIds }, as(agentId), {
           recent: history.slice().reverse().slice(0, PAIR_CHAIN_LIMIT).map(m => ({ author: m.author as never, recipients: m.recipients })),
-          ...(reply ? { reply: { id: reply.id, conversationId: group, author: reply.author as never } } : {}),
+          ...(reply ? { reply: { id: reply.id, conversationId: group, author: reply.author as never, createdAt: 0 } } : {}),
         }).messages[0]!
         history.push({ author: { kind: 'agent', id: agentId }, recipients: sent.recipients, id: sent.id })
         return sent
@@ -309,7 +309,7 @@ describe('Super Tab collaboration policy', () => {
       history.push({ author: { kind: 'person', id: 'owner' }, recipients: personMessage.recipients, id: personMessage.id })
       expect(personMessage.recipients).toEqual([lead])
       const reply = f.run({ type: 'message.send', conversationId: group, text: 'Ask the worker', replyTo: personMessage.id, recipientIds: [] }, as(lead), {
-        reply: { id: personMessage.id, conversationId: group, author: personMessage.author },
+        reply: { id: personMessage.id, conversationId: group, author: personMessage.author, createdAt: 0 },
       }).messages[0]!
       expect(reply.recipients).toEqual([])
     })
