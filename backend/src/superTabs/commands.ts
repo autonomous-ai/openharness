@@ -20,6 +20,9 @@ import { credentialResult, redactCredentials, type CredentialKind } from './cred
 import { dirtyGroups, reportGroups, summarize } from './projectUpdates.js'
 import { LEDGER_WEEKS, PULL_REQUEST_URL, recordAnswer, recordAsked, recordMerged, recordReview, recordRun, recordStatus } from './leaderboard/record.js'
 import { WEEK_MS } from './leaderboard/week.js'
+import { react, reactionSchema, type ReactionTarget } from './reactions.js'
+import { shipNotice, shippedAt } from './ship.js'
+import { avatarChoice, setAgentAvatar, setMemberAvatar, setStatus, statusSchema, type AvatarUpload } from './profile.js'
 import { agentKind, agentProjectId, audienceOf, agentSetRole, canReadProject, deleteProject, markConfidential, requireSingleRegistration, groupProject, inviteLanding, ledProject, manageProject, MAX_ROLES, mutableProjects, placeRules, projectMembers, projectOf, projectRules, projectsOf, readAgent, readConversation, readProject, roleVersion, sameProject, sharedWithLeads, SKILL_SET_NAMES, skillSetOf, type ProjectRole, type RoleKind, type SwarmProject } from './projects.js'
 
 const id = z.string().min(1).max(160).regex(/^[A-Za-z0-9_-]+$/)
@@ -136,10 +139,14 @@ export const commandSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('invite.revoke'), inviteId: id }).strict(),
   z.object({ type: z.literal('invite.accept'), inviteId: id }).strict(),
   z.object({ type: z.literal('member.remove'), userId: id }).strict(),
+  z.object({ type: z.literal('member.status'), status: statusSchema.nullable() }).strict(),
+  z.object({ type: z.literal('member.avatar'), avatar: avatarChoice }).strict(),
+  z.object({ type: z.literal('agent.avatar'), agentId: id, avatar: avatarChoice }).strict(),
   // Text may be empty when the message carries files; applyCommand checks that one of them is there.
   z.object({ type: z.literal('message.send'), conversationId: id, text: z.string().trim().max(32_000), replyTo: id.nullable(), recipientIds: z.array(id).max(16),
     attachmentIds: z.array(id).max(MAX_ATTACHMENTS).optional(), mentions: z.array(id).max(MAX_MENTIONS).optional(), agentOnly: z.literal(true).optional() }).strict(),
   z.object({ type: z.literal('mention.done'), mentionId: id }).strict(),
+  z.object({ type: z.literal('message.react'), conversationId: id, messageId: id, emoji: reactionSchema, on: z.boolean() }).strict(),
   z.object({ type: z.literal('decision.ask'), conversationId: id, personId: id, questions: z.array(decisionQuestion).min(1).max(MAX_QUESTIONS) }).strict(),
   z.object({ type: z.literal('decision.answer'), decisionId: id, choice: z.number().int().min(0), note: z.string().trim().min(1).max(2000).optional() }).strict(),
   z.object({ type: z.literal('delivery.resolve'), deliveryId: id, resolution: z.enum(['received', 'resend', 'cancel']) }).strict(),
@@ -175,6 +182,7 @@ export const operationSchema = z.object({ operationId: id, command: commandSchem
  *  chat row is redacted (terminal.ts). Not a role's skill text, which only its project's owner, Lead and hosts read. */
 const WORDS: Partial<Record<Command['type'], readonly string[]>> = {
   'message.send': ['text'],
+  'member.status': ['status.text'],
   'agent.add': ['name', 'initialMessage'],
   'agent.start': ['request.name', 'overrideReason'],
   'agent.startFailed': ['error'],
@@ -244,6 +252,10 @@ export interface CommandContext {
   delivery?: { id: string; conversationId: string; agentId: string; messageId: string; text: string; attachments?: Attachment[] }
   /** The files `message.send` names, each checked by the store: uploaded by this actor to this conversation, and unused. */
   attachments?: Attachment[]
+  /** The avatar upload `member.avatar` or `agent.avatar` names, checked by the store the same way (profile.ts). */
+  avatarUpload?: AvatarUpload
+  /** The message `message.react` names, read by the store (reactions.ts). */
+  reaction?: ReactionTarget
   /** Route decisions this tab recorded in the last hour, counted by the store. */
   /** The decision a command names, read from SuperTabRouteDecision by the store. */
   routeDecision?: RouteDecision
@@ -1479,6 +1491,18 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       owner(state, actor)
       state.invitations = state.invitations.filter(i => i.id !== command.inviteId)
       break
+    case 'member.status':
+      setStatus(state, actor, command.status, context.now)
+      break
+    case 'message.react':
+      result.changed = react(postable(state, actor, command.conversationId), command.messageId, command.on, context.reaction)
+      break
+    case 'member.avatar':
+      setMemberAvatar(state, actor, command.avatar, context.avatarUpload)
+      break
+    case 'agent.avatar':
+      setAgentAvatar(state, actor, command.agentId, command.avatar, context.avatarUpload)
+      break
     case 'member.remove': {
       if (actor.kind !== 'person' || (actor.userId !== state.ownerId && actor.userId !== command.userId)) {
         fail('FORBIDDEN', 'Only the owner can remove another person.', 403)
@@ -1734,6 +1758,12 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
           (actor.kind !== 'agent' || id !== actor.agentId) && state.agents.some(a => a.id === id && agentRole(a) === 'reviewer' && a.workDecision !== 'stop'))
         const asked = command.ask ? `\n\nAsked ${person(state, command.ask.personId).email}.` : ''
         message(group.id, `${label}${command.result ? `\n\n${command.result}` : ''}${asked}`, [...(tellLead ? [lead] : []), ...reviewers], null, SYSTEM_ROW)
+        // Shipped before this command: the leaderboard marks this Done as shipped just above (recordStatus).
+        if (command.status === 'done' && shippedAt(conversation(original, group.id)) == null) {
+          appendPullRequestUrls(group, [command.result, ...group.checks.map(check => check.evidence)])
+          const shipped = shipNotice(state, group, sender, operationId)
+          if (shipped) effects.messages.push(shipped)
+        }
       }
       if (actor.kind === 'agent') renewOwnTask(group, actor.agentId, context.now)
       break
