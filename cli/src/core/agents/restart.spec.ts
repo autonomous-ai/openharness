@@ -11,7 +11,7 @@ import { processLaunchArgs } from '../../lib/processTable.js'
 import { workspaceMissing } from '../../lib/workspaceCheck.js'
 import { createAgentRestarter, type RestartDeps } from './restart.js'
 import { createLaunchAuthority } from './launchAuthority.js'
-import { createSwarmSkillAdoption } from './swarmSkills.js'
+import { createSwarmSkillAdoption } from '../../superTabs/inCore/adoption.js'
 import { GUEST_HARNESS_REFUSAL } from '../guestPolicy.js'
 import { TerminalAgentReconciler } from '../../lib/terminalAgentReconciler.js'
 

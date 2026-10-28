@@ -1,8 +1,8 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { RegisteredSession } from '../../lib/registry.js'
 import type { SwarmSkillGrant } from '../../lib/swarmSkills.js'
-import { createLaunchAuthority } from './launchAuthority.js'
-import { createSwarmSkillAdoption } from './swarmSkills.js'
+import { createLaunchAuthority } from '../../core/agents/launchAuthority.js'
+import { createSwarmSkillAdoption } from './adoption.js'
 
 const row = (over: Partial<RegisteredSession> = {}) => ({ agentId: 'old-session', engine: 'claude', sessionId: 'conversation',
   registeredAt: 1, cwd: '/project', runtimes: [], ...over }) as RegisteredSession

@@ -2,7 +2,7 @@
  * The host's side of a Lead reading and typing into a worker's terminal (spec/2026-10-23-lead-sees-agent-terminal.md).
  * Workers got stuck on what only their terminal showed (a permission prompt, a usage-limit screen, a model picker) and
  * only a person at that machine could see and clear it. The backend relays the Lead's request to the host of the agent's
- * machine; the host reads or types with the core's own capture and input (core/superTabTerminal.ts) and answers as that
+ * machine; the host reads or types with the core's own capture and input (superTabs/inCore/terminal.ts) and answers as that
  * agent. It also tells the Lead, once per episode, when a worker has sat on a prompt for 3 minutes or its screen shows
  * a usage limit. The same reads tell the machine report when each agent's screen last changed: the backend renews the
  * agent's lease on its task from that (docs: swarm-never-stops, v1 liveness).
@@ -25,7 +25,7 @@ const PROMPT_WAIT_MS = 3 * 60_000
 const MAX_SCREEN_BYTES = 64 * 1024
 /** What the screen reader says a prompt or a question is waiting on; a popup or a hidden prompt is not one. */
 export const WAITING: ReadonlySet<MessageHold> = new Set(['permission_open', 'question_open', 'menu_open', 'trust_open', 'update_prompt_open', 'model_prompt_open', 'sign_in_open'])
-/** The spec's named keys, in any case: the name the Lead's request carries, and the terminal's own (core/superTabTerminal.ts).
+/** The spec's named keys, in any case: the name the Lead's request carries, and the terminal's own (superTabs/inCore/terminal.ts).
  *  Ctrl-D and the like are left out: one closes an engine. */
 const KEYS: Record<string, [string, string]> = { enter: ['Enter', 'Enter'], esc: ['Esc', 'Escape'], escape: ['Esc', 'Escape'], tab: ['Tab', 'Tab'],
   up: ['Up', 'Up'], down: ['Down', 'Down'], left: ['Left', 'Left'], right: ['Right', 'Right'], 'ctrl-c': ['Ctrl-C', 'C-c'],
