@@ -5,7 +5,7 @@ import type { AuthUser } from '../lib/ssoAuth.js'
 import { isTeamSession, TEAM_SESSION_LIMITED, TEAM_SESSION_MESSAGE } from '../lib/teamSession.js'
 import { activeWork, agent, appendPullRequestUrls, author, conversation, fail, isLeads, stableId, SuperTabError,
   type Actor, type Agent, type Author, type Conversation, type SuperTabState } from './model.js'
-import { canReadGroup, groupProject, readConversation } from './projects.js'
+import { canReadGroup, canWatchAgent, groupProject, readConversation, watchersLost } from './projects.js'
 import { noteProjectReports } from './projectUpdates.js'
 import { numberMessages, type Touch } from './parts/commit.js'
 import { redactCredentials } from './credentials.js'
@@ -70,6 +70,10 @@ export class SuperTabNativeStore {
     const operator = author(state, { kind: 'person', userId: binding.operator.id, email: binding.operator.name }, true)
     const target = agent(state, record.agentId)
     const group = readConversation(state, { kind: 'person', userId: binding.operator.id, email: binding.operator.name }, record.conversationId)
+    // A terminal drives its session and its answers land in the conversation: only those who may watch it may use it.
+    if (!canWatchAgent(state, { kind: 'person', userId: binding.operator.id, email: binding.operator.name }, target)) {
+      fail('NATIVE_CONTEXT_REVOKED', 'This terminal now reads private chats; only its machine\'s owner can use it.', 403)
+    }
     if (operator.membershipGeneration !== binding.operator.membershipGeneration || group.archived || !group.agentIds.includes(target.id)
       || target.harnessId !== binding.harnessId || target.machineId !== binding.machineId || target.machineOwnerId !== binding.machineOwnerId
       || target.contributorId !== binding.contributorId || target.membershipGeneration !== binding.contributionGeneration
@@ -109,6 +113,9 @@ export class SuperTabNativeStore {
         if (prior.conversationId !== request.conversationId || prior.agentId !== request.agentId) fail('OPERATION_REUSED', 'Use a new operation ID for a different terminal.')
         await this.validate(tx, state, prior)
         return { contextId }
+      }
+      if (!canWatchAgent(state, { kind: 'person', userId: user.sub, email: user.email }, target)) {
+        fail('SESSION_CONFIDENTIAL', 'This terminal reads private chats; only its machine\'s owner can open it.', 403)
       }
       const binding: Binding = { tabId, conversationId: group.id, agentId: target.id, harnessId: target.harnessId,
         machineId: target.machineId, machineOwnerId: target.machineOwnerId, operator,
@@ -264,6 +271,8 @@ export async function revokeNativeContexts(tx: Transaction, before: SuperTabStat
     const current = after.agents.find(a => a.id === target.id)
     if (!current || current.harnessId !== target.harnessId) conditions.push({ agentId: target.id })
   }
+  // Those who may no longer watch an agent, such as everyone but its machine's owner once it reads private chats.
+  for (const { agentId, personIds } of watchersLost(before, after)) conditions.push({ agentId, userId: { in: personIds } })
   for (const group of before.conversations) {
     const current = after.conversations.find(c => c.id === group.id)
     if (!current || (current.archived && !group.archived)) conditions.push({ conversationId: group.id })

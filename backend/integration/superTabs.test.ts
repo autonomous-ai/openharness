@@ -3198,6 +3198,37 @@ describe('the PM\'s terminal after a private chat (final review, Critical 1)', (
   }
   const observers = async (agentId: string) => (await rosterRows(store, host, 'test-host')).find(t => t.agent?.id === agentId)!.observers.map(p => p.userId)
 
+  // A terminal drives its session and its answers land in the conversation: once the session reads private chats, only its
+  // machine's owner may use one, as only they may watch it.
+  it('revokes at once a member\'s terminal on a Builder made its project\'s Lead, refuses a fresh one, and keeps the machine owner\'s', async () => {
+    const { tab } = await fixture()
+    await invite(tab)
+    const asHost = await run(tab, { type: 'invite.create', email: host.email, role: 'collaborator', conversationId: 'lead' })
+    await run(tab, { type: 'invite.accept', inviteId: asHost.result.inviteId as string }, host)
+    const second = (await run(tab, { type: 'project.create', name: 'Second', visibility: 'public', brief: '' })).result as { projectId: string; conversationId: string }
+    const group = String((await run(tab, { type: 'conversation.create', projectId: second.projectId, title: 'Build', brief: 'Build it', checks: [] })).result.conversationId)
+    const worker = String((await run(tab, { type: 'agent.add', conversationId: group, machineId: 'test-host', harnessId: randomUUID(),
+      name: 'Builder', configuration: config, lead: false })).result.agentId)
+    const opened = (user: AuthUser) => store.native.open(user, tab, { operationId: randomUUID(), conversationId: group, agentId: worker })
+    const { contextId: peers } = await opened(peer)
+    const { contextId: hosts } = await opened(host)
+    const typed = (contextId: string, turnId: string) => store.native.append(host, tab, contextId, { turnId, kind: 'prompt', previousEventId: null,
+      text: 'Typed into the Builder', truncated: false, interrupted: false })
+    await typed(peers, 'before')
+
+    // Peer still reads the Builder's conversation; leading the project, where people chat with it privately, makes it confidential.
+    await run(tab, { type: 'conversation.agent', conversationId: second.conversationId, agentId: worker, present: true, lead: true })
+    expect((await db.superTabNativeContext.findUniqueOrThrow({ where: { id: peers } })).revoked).toBe(true)
+    expect((await db.superTabNativeContext.findUniqueOrThrow({ where: { id: hosts } })).revoked).toBe(false)
+    await expect(typed(peers, 'after')).rejects.toMatchObject({ code: 'NATIVE_CONTEXT_REVOKED' })
+    await expect(opened(peer)).rejects.toMatchObject({ code: 'SESSION_CONFIDENTIAL' })
+    await expect(opened(host)).resolves.toMatchObject({ contextId: expect.any(String) })
+    // A terminal the revoke did not reach (one written before this rule) is refused at use all the same.
+    await db.superTabNativeContext.update({ where: { id: peers }, data: { revoked: false } })
+    await expect(typed(peers, 'missed')).rejects.toMatchObject({ code: 'NATIVE_CONTEXT_REVOKED' })
+    await expect(store.native.read(host, tab, peers)).rejects.toMatchObject({ code: 'NATIVE_CONTEXT_REVOKED' })
+  })
+
   it('lets nobody but its machine\'s owner watch it: not a reader outside the chat, not the Swarm owner, not with an earlier share', async () => {
     const { tab, lead, harnessId } = await privateChat()
     expect(await observers(lead)).toEqual([])
