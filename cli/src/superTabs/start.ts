@@ -2,7 +2,7 @@ import { encodeRuntimeProfile } from '../engines/kit/runtime.js'
 import { parseRuntimeProfile } from '../lib/runtimeProfileWire.js'
 import { createHash, randomUUID } from 'node:crypto'
 import { openDaemon, type Daemon, type Where } from '../agentClient/daemon.js'
-import { admission, quotaOf, type Requirements } from './capacity.js'
+import { admission, memoryShortIn, quotaOf, type Requirements } from './capacity.js'
 import { groupSkillMode, identifier, object } from './host.js'
 import { permissionModeFlags } from '../lib/engineLaunch.js'
 import type { AgentEngine } from '../engines/types.js'
@@ -147,14 +147,19 @@ async function startElsewhere(input: Json, failed: Json, scoped: ScopedRequest, 
     const requester = identifier(group?.requesterId) ? [group.requesterId] : []
     // People read why in the failure row the backend wrote; this one says only what it means, never the raw error. A task's
     // requirement names no machine at all: the one it failed on is a required one, which a reader may not see (backend
-    // model.ts TaskRequirement; review of #1847).
+    // model.ts TaskRequirement; review of #1847). A memory shortage is named, with only the numbers members see in the Machines
+    // view: "until that machine is fixed" sent people looking for a fault on Ken's MacBook Pro (2026-10-28).
+    const short = memoryShortIn(on.error)
     requireSuccess(await scoped({ action: 'command', operationId: derived('start-blocked', String(on.id)), command: { type: 'message.send',
       conversationId: request.conversationId, replyTo: null, recipientIds: [], ...(requester.length ? { mentions: requester } : {}),
       text: required
         ? `${String(request.name)} could not start. This task needs a particular machine or device, so it was not moved to another machine. `
           + 'It has no worker until a machine that has what it needs can start it.'
-        : `${String(request.name)} could not start on ${machineName(object(on.request).machineId)}, and no other machine allowed for this task could take it. `
-          + 'This task has no worker until that machine is fixed or another one is added.' } }))
+        : short
+          ? `${String(request.name)} could not start on ${machineName(object(on.request).machineId)}: not enough free memory (${short.free} free, ${short.needed} needed), `
+            + 'and no other machine allowed for this task could take it. This task has no worker until memory frees up on that machine or another one is added.'
+          : `${String(request.name)} could not start on ${machineName(object(on.request).machineId)}, and no other machine allowed for this task could take it. `
+            + 'This task has no worker until that machine is fixed or another one is added.' } }))
     return { error: 'START_BLOCKED', startId: on.id, detail: `${String(on.error)} ${required
       ? 'This task requires its machine or device, so it was not moved; the group was told.'
       : 'No other machine allowed for this task could start it; the group was told.'}` }
@@ -267,9 +272,13 @@ async function startOnce(input: Json, scoped: ScopedRequest, where: Where, open:
     ...(permissionWarning ? { permissionWarning } : {}) }
   // Contributed capacity is executed by its owner. A collaborator receives no
   // machine credentials and cannot issue arbitrary commands to that computer.
-  if (start.poolGeneration && input.hostDispatch !== true) return { ok: true, queued: true, startId, machineId: request.machineId,
-    ...(permissionWarning ? { permissionWarning } : {}),
-    detail: 'Queued on the contributed machine. Resume this start ID to read its receipt.' }
+  // Its machine reports it preparing (backend liveness.ts): the backend waits up to 15 minutes, and so should the Lead.
+  if (start.poolGeneration && input.hostDispatch !== true) return start.preparing === true
+    ? { ok: true, queued: true, preparing: true, startId, machineId: request.machineId, ...(permissionWarning ? { permissionWarning } : {}),
+      detail: 'Its machine is still preparing it (fetching the project, checking its worktree out); that can take up to 15 minutes. Resume this start ID to read its receipt; do not start another.' }
+    : { ok: true, queued: true, startId, machineId: request.machineId,
+      ...(permissionWarning ? { permissionWarning } : {}),
+      detail: 'Queued on the contributed machine. Resume this start ID to read its receipt.' }
   const target = await open(where, request.machineId)
   /** What the agent runs now, as its frame says; null when the frame cannot say. */
   const ranNow = async (agentId: string, engine: string) => {

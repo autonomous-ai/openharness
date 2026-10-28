@@ -144,6 +144,96 @@ void main() {
       ]);
     });
 
+    test(
+      'parses the display name, last week and what each number is made of',
+      () {
+        final board = SuperTabLeaderboard.fromJson({
+          ...answer(),
+          'people': [
+            {
+              ...score('ken', points: 42, rank: 1, shipped: 1),
+              'displayName': 'Ken Tran',
+              'prevWeekPoints': 30,
+              'details': {
+                'shipped': [
+                  {
+                    'title': 'Desktop: a machine shows one count',
+                    'prUrl': 'https://github.com/o/r/pull/1824',
+                    'mergedAt': '2026-10-27T10:00:00.000Z',
+                  },
+                ],
+                'unblocked': [
+                  {
+                    'title': 'Which sign-in page?',
+                    'conversationId': 'g1',
+                    'kind': 'decision',
+                    'waitedMinutes': 95,
+                  },
+                ],
+                'lent': [
+                  {'machineName': 'MACs-Mac-Studio.local', 'busyHours': 12.5},
+                ],
+              },
+            },
+          ],
+        });
+        final ken = board.people.single;
+        expect(ken.displayName, 'Ken Tran');
+        expect(ken.prevWeekPoints, 30);
+        final details = ken.details!;
+        expect(details.shipped.map((s) => (s.title, s.prUrl)), [
+          (
+            'Desktop: a machine shows one count',
+            'https://github.com/o/r/pull/1824',
+          ),
+        ]);
+        expect(
+          details.unblocked.map(
+            (u) => (u.title, u.conversationId, u.kind, u.waitedMinutes),
+          ),
+          [('Which sign-in page?', 'g1', 'decision', 95)],
+        );
+        expect(details.lent.map((l) => (l.machineName, l.busyHours)), [
+          ('MACs-Mac-Studio.local', 12.5),
+        ]);
+      },
+    );
+
+    test(
+      'reads a server from before names, last week and details as unknown',
+      () {
+        final ken = SuperTabLeaderboard.fromJson(answer()).people.first;
+        expect(ken.displayName, isNull);
+        expect(ken.prevWeekPoints, isNull);
+        expect(ken.details, isNull);
+      },
+    );
+
+    test('skips detail items with no title rather than drawing them blank', () {
+      final ken = SuperTabLeaderboard.fromJson({
+        ...answer(),
+        'people': [
+          {
+            ...score('ken', points: 1, rank: 1),
+            'displayName': '',
+            'details': {
+              'shipped': [
+                {'prUrl': 'https://github.com/o/r/pull/1'},
+                {'title': 'Kept', 'prUrl': 7},
+              ],
+              'unblocked': 'not a list',
+            },
+          },
+        ],
+      }).people.single;
+      expect(ken.displayName, isNull);
+      expect(ken.details!.shipped.map((s) => (s.title, s.prUrl)), [
+        ('Kept', null),
+      ]);
+      expect(ken.details!.unblocked, isEmpty);
+      expect(ken.details!.lent, isEmpty);
+    });
+
     test('asks for the project and, once chosen, the week', () async {
       final requests = FakeRequests();
       final reader = SuperTabLeaderboardReader(

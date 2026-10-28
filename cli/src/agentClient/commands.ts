@@ -81,6 +81,16 @@ Exit status: 0 idle or closed by you, 3 one needs the person (a question or a pe
 124 timed out.
 --timeout takes 90s, 30m, 2h; 0 waits as long as it takes.
 ${ON_MACHINE}`
+export const WATCH_USAGE = `Usage: harness watch [--machine <name>] <name> [--chars N] [--timeout 30m] [--json]
+
+Follows one harness and prints a line each time it changes: started, working, needs_person (its last words),
+done (its answer), idle (nothing asked of it), failed, stopped (with its last answer). With --json each line is one
+JSON object, for a program to read. The first line is how it stands now; the same state with new words is a new line.
+It looks every 3 s, as wait does. A cloud harness's state is its maker's: Devin Cloud says needs_person both when it
+asks and when it has only finished, so read the words and cloud.providerStatus.
+Exit status: 4 once it stops or is gone, 124 when --timeout passes. --timeout takes 90s, 30m, 2h; 0, the default,
+follows it as long as it lives.
+${ON_MACHINE}`
 export const CLOSE_USAGE = `Usage: harness close [--machine <name>] <name> [--now] [--json]
 
 Saves the harness's screen and stops it. Its conversation is kept: the person can resume it.
@@ -1031,6 +1041,130 @@ export function waitCommand(argv: readonly string[], deps: ClientDeps = {}): Pro
       o.daemon.close()
     }
   })
+}
+
+// ── watch ──────────────────────────────────────────────────────────────────────────────────────────
+
+/** What `harness watch` says changed. `idle`: idle with nothing asked of it, so nothing done to report. */
+export type WatchEvent = 'started' | 'working' | 'needs_person' | 'done' | 'idle' | 'failed' | 'stopped'
+
+/** A cloud harness's maker state as an event; none while it is unknown. */
+const CLOUD_EVENTS: Partial<Record<State, WatchEvent>> = {
+  starting: 'started', installing: 'started', working: 'working', 'needs-input': 'needs_person', idle: 'done', failed: 'failed', stopped: 'stopped',
+}
+
+/** The state a harness here is in at each event: its frame says only working or idle, the screen the rest. */
+const EVENT_STATES: Record<WatchEvent, State> = {
+  started: 'starting', working: 'working', needs_person: 'needs-input', done: 'idle', idle: 'idle', failed: 'failed', stopped: 'stopped',
+}
+
+/**
+ * Follows one harness by `wait`'s looks (the maker's state for a cloud harness; the daemon's activity, then the screen,
+ * then two idle looks on one turn for one here) and prints each change once: what a program driving something from a
+ * harness (lampOS's lamp, which moves and speaks as Devin works) polled `show` for and worked out itself. Read-only:
+ * the same requests over the same local socket, so an older harnessd answers it as it answers `wait`.
+ */
+export function watchCommand(argv: readonly string[], deps: ClientDeps = {}): Promise<number> {
+  return run(WATCH_USAGE, deps, wantsJson, argv, async (s) => {
+    const { names, flags, machine } = words(argv, { '--chars': 'value', '--timeout': 'value', '--json': 'flag' })
+    if (names.length !== 1) throw new UsageError(names.length ? 'Watch one harness.' : 'Name the harness to watch.')
+    const chars = flags.has('--chars') ? Number(flags.get('--chars')) : DEFAULT_CHARS
+    if (!Number.isInteger(chars) || chars < 1) throw new UsageError('--chars takes a whole number.')
+    const timeoutMs = flags.has('--timeout') ? parseDuration(String(flags.get('--timeout'))) : 0
+    const json = flags.has('--json')
+    const away = await machineOf(s, s.where(), machine)
+    const o = await opened(s)
+    let t: Target | null = null
+    try {
+      t = await target(s, o, names[0], away)
+      const h = t
+      const deadline = timeoutMs > 0 ? s.now() + timeoutMs : Infinity
+      /** The last line printed, as its event and the turn it spoke of: a line is printed only when this changes. */
+      let printed: string | null = null
+      let sawWorking = false
+      let idle: { turn: string; looks: number } | null = null
+      /** The turn read for the frame last seen changed (its `updatedAt`): read again only when that moves. */
+      let turnFor: { updatedAt: string; turn: Awaited<ReturnType<typeof readLastTurn>> } | null = null
+      const turnNow = async () => {
+        const updatedAt = h.frame.updatedAt ?? ''
+        if (!turnFor || turnFor.updatedAt !== updatedAt || !updatedAt) turnFor = { updatedAt, turn: await readLastTurn(h, 1) }
+        return turnFor.turn
+      }
+      const keyOf = (turn: Awaited<ReturnType<typeof readLastTurn>>): string => (turn ? `${turn.ask}\u0000${turn.tools}\u0000${turn.answer.length}` : '')
+      /** This round's event: null while it can't be told yet (an idle look not yet confirmed, a state unknown). */
+      const look = async (): Promise<WatchEvent | null> => {
+        const frame = (await list(h.daemon, false)).find((f) => f.id === h.frame.id)
+        if (!frame) {
+          const stopped = (await list(h.daemon, true)).find((f) => f.id === h.frame.id)
+          if (stopped) h.frame = stopped
+          return 'stopped'
+        }
+        h.frame = frame
+        if (frame.status === 'stopped') return 'stopped'
+        if (frame.location === 'cloud') return CLOUD_EVENTS[stateOf(frame)] ?? null
+        const screen = frame.activity?.state === 'working' ? 'working' : await inspect(h)
+        if (screen === 'working' || screen === 'draft') { sawWorking = true; idle = null; return 'working' }
+        if (screen === 'needs-input') { idle = null; return 'needs_person' }
+        if (screen === null && stateOf(frame) !== 'idle') { idle = null; return null }
+        // Idle on two looks in a row with the same last turn, as `wait` decides it (#1180).
+        const turn = await turnNow()
+        if (toldPending(o, h, turn, s.now())) { idle = null; return 'working' }
+        const key = keyOf(turn)
+        const looks = idle && idle.turn === key ? idle.looks + 1 : 1
+        idle = { turn: key, looks }
+        if (looks < 2) return null
+        if (sawWorking || turn?.answered) return 'done'
+        const age = frame.createdAt ? s.now() - Date.parse(frame.createdAt) : Infinity
+        return age > STARTING_MS && looks >= QUIET_LOOKS ? 'idle' : null
+      }
+      for (;;) {
+        const event = await look().catch((error) => {
+          // A round that timed out (its machine slow for a moment) is looked at again next round, as `wait` does.
+          if (error instanceof AgentClientError && error.code === 'TIMEOUT') return null
+          throw error
+        })
+        if (event) {
+          const said = event !== 'started' && event !== 'idle'
+          const turn = said ? await turnNow() : null
+          const key = `${event}\u0000${event === 'working' ? turn?.ask ?? '' : keyOf(turn)}`
+          if (key !== printed) {
+            printed = key
+            printWatch(s, json, chars, h, event, turn)
+          }
+          if (event === 'stopped') return EXIT.stopped
+        }
+        if (s.now() >= deadline) return EXIT.timeout
+        await s.sleep(Math.min(s.intervalMs, Math.max(0, deadline - s.now())))
+      }
+    } finally { if (t?.remote) t.daemon.close(); o.daemon.close() }
+  })
+}
+
+/** The line `harness new` puts before an agent's task, saying who started it (`startHeader`): not the person's words. */
+const START_HEADER = /^\[from [^\]\n]*, the (?:agent|harness) that started you\. It reads your answer itself\.\]\n\n/
+const withoutStartHeader = (ask: string): string => ask.replace(START_HEADER, '')
+
+/** One `watch` line: a JSON object with `--json`, else the time, the harness, the event and its words. */
+function printWatch(s: Setup, json: boolean, chars: number, t: Target, event: WatchEvent,
+  turn: { ask: string | null; answer: string; tools: number } | null): void {
+  const text = turn?.answer ?? ''
+  const words: Record<string, unknown> = event === 'working' ? { ask: turn?.ask ? withoutStartHeader(turn.ask) : null }
+    : event === 'needs_person' ? { question: clip(text, chars), truncated: text.length > chars }
+    : event === 'done' || event === 'failed' ? { summary: clip(text, chars), truncated: text.length > chars, tools: turn?.tools ?? 0 }
+    // Stopped after a turn (Devin put to sleep once it finished, #1449): its answer is still the one to read.
+    : event === 'stopped' && text ? { summary: clip(text, chars), truncated: text.length > chars }
+    : {}
+  const cloud = cloudMeta(t.frame)
+  const at = new Date(s.now()).toISOString()
+  const line = {
+    event, at, name: t.frame.name ?? t.frame.id.slice(0, 8), id: t.frame.id, agent: engineName(t.frame.engine ?? ''),
+    state: t.frame.location === 'cloud' && event !== 'stopped' ? stateOf(t.frame) : EVENT_STATES[event], ...words,
+    ...(cloud ? { cloud } : {}), ...(t.frame.cloud?.links?.length ? { links: t.frame.cloud.links } : {}),
+  }
+  if (json) { s.out(JSON.stringify(line)); return }
+  const said = typeof words.question === 'string' ? words.question : typeof words.summary === 'string' ? words.summary
+    : typeof words.ask === 'string' ? `asked: ${clip(words.ask, 200)}` : ''
+  s.out(`${at.slice(11, 19)}Z ${line.name}: ${event.replace('_', ' ')}${said ? `: ${said}` : ''}`)
 }
 
 // ── close ──────────────────────────────────────────────────────────────────────────────────────────

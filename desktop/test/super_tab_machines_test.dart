@@ -2722,11 +2722,15 @@ void main() {
     },
   );
 
+  // Every 2 GiB of total RAM may run an agent, and every machine may offer
+  // four; the suggestion keeps its 16 (Ken, 2026-10-28).
   for (final (totalGiB, suggested, maximum) in [
     (32.0, 8, 16),
     (16.0, 4, 8),
-    (64.0, 16, 16),
-    (2.0, 1, 1),
+    (64.0, 16, 32),
+    (192.0, 16, 96),
+    (8.0, 2, 4),
+    (2.0, 1, 4),
   ]) {
     testWidgets(
       'Add machine with $totalGiB GiB total offers $suggested of $maximum slots',
@@ -2758,6 +2762,41 @@ void main() {
       },
     );
   }
+
+  testWidgets('Configure lets a 192 GiB machine offer 96 agents', (
+    tester,
+  ) async {
+    final f = SuperTabLaunchFixture();
+    f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Pilot');
+    f.connection.server.state['machines'] = [
+      {'machineId': 'm', 'contributorId': 'owner', 'maxAgents': 16},
+    ];
+    final c = await f.app.superTabs.open(tabId);
+    await c.refresh();
+    await _openConfigureDialog(
+      tester,
+      f,
+      c,
+      readLocal: (_) async => _reading(totalGiB: 192, freeGiB: 100),
+    );
+
+    expect(_agentSlots(tester), '16');
+    for (var slot = 16; slot < 96; slot++) {
+      await tester.tap(_slotsStep('more'));
+      await tester.pump();
+    }
+    expect(_agentSlots(tester), '96');
+    expect(_slotsButton(tester, 'more').onPressed, isNull);
+    await tester.tap(find.widgetWithText(FilledButton, 'Save'));
+    await _settleSave(tester);
+    expect(f.connection.server.posts.single['command']!['maxAgents'], 96);
+    expect(tester.takeException(), isNull);
+
+    await tester.pumpWidget(const SizedBox());
+    await c.flush();
+    f.app.superTabs.dispose();
+    await tester.pump();
+  });
 
   testWidgets(
     'Configure keeps the owner’s 12 slots even when total RAM offers eight',

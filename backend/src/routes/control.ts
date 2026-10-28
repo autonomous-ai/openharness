@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify'
 import type { DaemonsSwitch } from '../lib/daemonsSwitch.js'
 import type { JevRouteOptions } from './jevRoute.js'
+import type { ReadinessReport } from '../lib/readiness.js'
 import { cursorRoutes } from './cursor.js'
 import { voiceRoutes } from './voice.js'
 import { harnessShareRoutes } from './harnessShares.js'
@@ -30,8 +31,12 @@ import { healthRoutes, authRoutes, userRoutes, machineRoutes, planRoutes, gridRo
  * list, so what is checked against the route table — a team session's deny-by-default sweep (routes/control.test.ts)
  * — is the table production serves.
  */
-export async function registerControlRoutes(app: FastifyInstance, opts: { daemons: DaemonsSwitch; count: JevRouteOptions['count'] }): Promise<void> {
-  await app.register(healthRoutes)
+export async function registerControlRoutes(app: FastifyInstance, opts: {
+  daemons: DaemonsSwitch
+  count: JevRouteOptions['count']
+  readiness: { probe(): Promise<ReadinessReport> }
+}): Promise<void> {
+  await app.register(healthRoutes, { readiness: opts.readiness })
   await app.register(authRoutes)
   await app.register(userRoutes)
   await app.register(machineRoutes)

@@ -3531,3 +3531,48 @@ describe('Swarm parts under concurrent writes', () => {
     expect((await store.routeDecision(owner, tab, routeDecisionId)).final).toMatchObject({ kind: 'new', startId })
   })
 })
+
+describe('a migrated Swarm\'s kept old state (Stability 2.1)', () => {
+  /** About the 1 MB a production Swarm kept from before its split into parts (design 6.1: `SuperTab.legacyState`). */
+  const OLD_STATE = { conversations: Array.from({ length: 2_000 }, (_, i) => ({ id: `old-${i}`, title: 'x'.repeat(480) })) }
+  /** Far below the old state: a read that fetched it would send at least 1 MB. */
+  const READ_LIMIT = 200_000
+  const bytesOut = async () => Number(((await db.$runCommandRaw({ serverStatus: 1 })) as { network: { bytesOut: unknown } }).network.bytesOut)
+
+  it('is never fetched by a command, a read, the owner\'s lists, an invitation list or a host\'s terminal pickup', async () => {
+    const { tab, lead } = await fixture()
+    const invited: AuthUser = { sub: '100000000000000000000009', email: 'invited@example.com', autonomousEnv: 'prod', role: 'user' }
+    await run(tab, { type: 'invite.create', email: invited.email, role: 'viewer', conversationId: 'lead' })
+    const group = (await run(tab, { type: 'conversation.create', title: 'Terminal', brief: 'Answer the prompt', checks: [] })).result.conversationId as string
+    const worker = (await run(tab, { type: 'agent.add', conversationId: group, machineId: 'test-host', harnessId: randomUUID(),
+      name: 'Terminal Engineer', configuration: config, lead: false })).result.agentId as string
+    await db.superTab.update({ where: { id: tab }, data: { legacyState: OLD_STATE } })
+
+    const fetched: string[] = []
+    /** Runs `body`, and names it when MongoDB sent this backend enough for the old state while it ran (bench/probe.ts). */
+    async function measured<T>(name: string, body: () => Promise<T>): Promise<T> {
+      const before = await bytesOut(), ownReply = await bytesOut() - before
+      const start = await bytesOut()
+      const result = await body()
+      if (await bytesOut() - start - ownReply >= READ_LIMIT) fetched.push(name)
+      return result
+    }
+    expect((await measured('command', () => run(tab, message('After the split')))).result.messageId).toBeTruthy()
+    expect((await measured('read', () => store.read(owner, tab))).state.agents.map(a => a.id).sort()).toEqual([lead, worker].sort())
+    expect(await measured('invitations', () => store.invitations(invited))).toEqual([expect.objectContaining({ tabId: tab, name: 'Pilot', role: 'viewer' })])
+    // The owner's lists read each of the owner's Swarms: an owner of this one alone, as the shared owner has many here.
+    const solo: AuthUser = { sub: '10000000000000000000000a', email: 'solo@example.com', autonomousEnv: 'prod', role: 'user' }
+    const own = (await store.create(solo, randomUUID(), 'Solo')).id
+    await db.superTab.update({ where: { id: own }, data: { legacyState: OLD_STATE } })
+    expect((await measured('list', () => store.list(solo))).tabs).toEqual([expect.objectContaining({ id: own, name: 'Solo', ownerId: solo.sub })])
+    expect(await measured('host grids', () => store.hostGrids(solo))).toEqual([expect.objectContaining({ tabId: own, enabled: true })])
+    expect(await measured('archive', () => store.archiveFinished(tab, group, []))).toBe(false)
+    const requestId = (await run(tab, { type: 'agent.screen', agentId: worker, scrollback: 20 }, host, lead)).result.requestId as string
+    expect((await measured('terminal pickup', () => store.hostTerminal(host, 'test-host'))).filter(row => row.tabId === tab).map(row => row.request.id))
+      .toEqual([requestId])
+    expect(fetched).toEqual([])
+
+    // Reads and writes leave it in place: only the maintenance script removes it.
+    for (const id of [tab, own]) expect((await db.superTab.findUnique({ where: { id }, select: { legacyState: true } }))!.legacyState).toEqual(OLD_STATE)
+  })
+})

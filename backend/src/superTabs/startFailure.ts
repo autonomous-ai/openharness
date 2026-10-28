@@ -7,13 +7,27 @@ export const MACHINE_FAILED = 'Its machine could not prepare or launch it.'
 export const TIMED_OUT = 'Its machine did not start it within 3 minutes.'
 /** liveness.ts writes `<machine name> did not start it within 3 minutes`. */
 export const TIMED_OUT_SUFFIX = ' did not start it within 3 minutes'
+/** liveness.ts writes these after a machine named the start as preparing: past its limit, or with its reports stopped. */
+export const STILL_PREPARING_SUFFIX = ' was still preparing it after 15 minutes'
+export const STOPPED_REPORTING_SUFFIX = ' stopped reporting while preparing it'
+/** Each suffix the server writes after a machine name, with what a group member reads instead. */
+const TIMEOUTS: Array<[string, string]> = [[TIMED_OUT_SUFFIX, TIMED_OUT],
+  [STILL_PREPARING_SUFFIX, 'Its machine was still preparing it after 15 minutes.'],
+  [STOPPED_REPORTING_SUFFIX, 'Its machine stopped reporting while preparing it.']]
 /** Reasons the server writes itself, which name nothing (commands.ts removeMachine and machine.contribute). */
 export const MACHINE_REMOVED = 'Its machine was removed from the Swarm.'
 export const ABANDONED = 'Abandoned before it started.'
 
+/** A host's refusal for memory (cli superTabs/capacity.ts memoryShort): its numbers alone, which members already see in the
+ *  Machines view. Read only at the start of the reason, so nothing else a host wrote is ever told (Ken's MacBook Pro,
+ *  2026-10-28, where "could not prepare or launch it" sent people looking for a fault). */
+const MEMORY_SHORT = /^Not enough free memory: (\d+(?:\.\d)? GiB) free, (\d+(?:\.\d)? GiB) needed\./
+
 export function publicReason(error: string): string {
   if (error === MACHINE_REMOVED || error === ABANDONED) return error
-  return error.endsWith(TIMED_OUT_SUFFIX) ? TIMED_OUT : MACHINE_FAILED
+  const memory = MEMORY_SHORT.exec(error)
+  if (memory) return `Its machine has only ${memory[1]} of memory free, and it needs ${memory[2]}.`
+  return TIMEOUTS.find(([suffix]) => error.endsWith(suffix))?.[1] ?? MACHINE_FAILED
 }
 
 /** The group's notice of a failed start; its Lead, woken by it, reads the raw reason on the start. */

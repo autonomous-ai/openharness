@@ -49,7 +49,7 @@ import { infoBlockFooter } from './lib/infoBlockFooter.js'
 import { flashCommand } from './lib/flash.js'
 import { awaitLoginCallback, extractCallbackParams, LOGIN_TIMEOUT_MESSAGE, type LoginCallbackParams } from './lib/loginCallback.js'
 import { ancestorsOnce, removeSignIn, SIGN_OUT_BUTTON_FLAG, signOutAsked, type Asker, type SignOutAsked } from './lib/signOut.js'
-import { AUTH_DIR, AuthSessionError, AuthSessionManager, knownSsoClientId, newSignInEpoch, readAuthSession, readSignedOut, ssoClientIdFor, writeAuthSession, type AuthSession } from './lib/authSession.js'
+import { AUTH_DIR, AuthSessionError, AuthSessionManager, knownSsoClientId, newSignInEpoch, readAuthSession, readSignedOut, ssoClientIdFor, updateAuthSession, writeAuthSession, type AuthSession } from './lib/authSession.js'
 import { handOffToGrid } from './lib/gridHandoff.js'
 import { claimTicket, qrSignIn, type QrSignInTokens } from './lib/qrSignIn.js'
 import { pickSignInMethod, signInMethodFlag, signInProviderName, withSignInProvider, type SignInMethod, type SignInProvider } from './lib/signInMethodPicker.js'
@@ -170,15 +170,19 @@ Machine:
   harness ps [--all]           the harnesses here: state, who started each, what each is about
   harness show <name>          a harness's state and last turn: what it was asked and what it answered
   harness wait <name>[,<name>] wait until they stop working (--any, --timeout 30m); exit 3 = needs the person
+  harness watch <name>         follow a harness: a line (--json: an object) each time it changes, until it stops
   harness close <name> [--now] save a harness's screen and stop it; an agent closes only what it started
   harness tell <name> -- <w>   from an agent's pane: more work for a harness it started (agents-tell-agents)
   harness reply <name> -- <w>  say words to a cloud harness (Devin Cloud, Cursor Cloud, Fo): its answer or what next
-                               new, ps, show, wait, tell, reply and close take --machine <name> for another of your
+                               new, ps, show, wait, watch, tell, reply and close take --machine <name> for another of your
                                machines: \`harness show --machine office x\`
   harness mcp                  the agent verbs as an MCP server on stdin/stdout, for agents that use MCP
   harness help agents          the agent commands, states, exit codes and rules on one screen
   harness settings [<name> on|off]  what agents may do (agents-start-agents, agents-tell-agents, pull-request-line, agent-messages): your account's experiments in Settings ▸ Experimental, each off by default
+  harness mcp-servers [add|remove]  local MCP servers (a paired lamp's lamp-mcp) for the agents Harness starts here: yours alone to change
   harness machines delete <id> remove ANOTHER machine (refuses this one; use \`harness logout\`)
+  harness machines engines <machine> [--engine E]… [--json]
+                               ask another of your machines now which engines it has: installed, signed in, first prompt
   harness e2e plan             which coding tools have a new version out (the grid-switch e2e trigger)
   harness e2e grid-switch      move a fresh agent subscription -> grid -> back home with its tool + MCP; leaves a review bundle
   harness remote               from a Harness terminal tile: open a terminal on another of your machines and move this tile to it
@@ -289,13 +293,10 @@ async function resolveComputerMachine(signal?: AbortSignal): Promise<AuthSession
   const machineId = result.machine?.machineId
   if (!machineId) throw new Error('Backend did not return a machine id for this computer')
   // Refresh can atomically replace the session while this request is in flight. Always merge the
-  // machine id into the newest file so a stale caller never rolls its rotated refresh token back.
-  const latest = readAuthSession()
-  if (!latest) throw new Error('SSO session disappeared while resolving this computer')
-  const next = latest.machineId === machineId
-    ? latest
-    : { ...latest, machineId, updatedAt: Date.now() }
-  if (next !== latest) writeAuthSession(next)
+  // machine id into the newest file, under the lock, so a stale caller never rolls its rotated refresh
+  // token back nor writes over a signed-out mark.
+  const next = await updateAuthSession((latest) => latest.machineId === machineId ? null : { ...latest, machineId, updatedAt: Date.now() })
+  if (!next) throw new Error('SSO session disappeared while resolving this computer')
   return next
 }
 
@@ -314,9 +315,8 @@ async function recordSignInAccount(accessToken: string, signInEpoch: string, aut
       authorization: `Bearer ${accessToken}`, 'x-autonomous-env': autonomousEnv,
     })
     const acct = me?.user?.id
-    const latest = readAuthSession()
-    if (typeof acct !== 'string' || !acct || latest?.signInEpoch !== signInEpoch) return
-    writeAuthSession({ ...latest, signInAcct: acct })
+    if (typeof acct !== 'string' || !acct) return
+    await updateAuthSession((latest) => latest.signInEpoch === signInEpoch ? { ...latest, signInAcct: acct } : null)
   } catch { /* no account recorded */ }
 }
 
@@ -2673,11 +2673,12 @@ async function logsExportCommand(json: boolean): Promise<void> {
 
 import { orchestratorCommand } from './orchestrator/command.js'
 import { paneOwner, sendCommand } from './messages/command.js'
-import { agentOrigin, closeCommand, psCommand, replyCommand, showCommand, tellCommand, waitCommand, whoamiCommand } from './agentClient/commands.js'
+import { agentOrigin, closeCommand, psCommand, replyCommand, showCommand, tellCommand, waitCommand, watchCommand, whoamiCommand } from './agentClient/commands.js'
 import { agentsHelp, helpFor } from './agentClient/help.js'
 import { openUrlCommand } from './agentClient/openUrl.js'
 import { harnessRunner, mcpCommand } from './agentClient/mcp.js'
 import { settingsCommand } from './agentClient/settings.js'
+import { mcpServersCommand } from './agentClient/mcpServers.js'
 
 // ── arg parse ──────────────────────────────────────────────────────────────────────────────────
 // `hn` is the terminal client's short name (like tmux, fzf): the same CLI, entered at `tui`. A call
@@ -2732,6 +2733,9 @@ switch (cmd) {
   case 'settings':
     settingsCommand(rest, { port: daemonPort() }).then(code => { process.exitCode = code }).catch(onError)
     break
+  case 'mcp-servers':
+    process.exitCode = mcpServersCommand(rest)
+    break
   case 'mcp': {
     const pane = process.env.TMUX_PANE
     mcpCommand({ run: harnessRunner(SCRIPT_PATH), inPane: !!pane && !!paneOwner(pane) }).then(code => { process.exitCode = code }).catch(onError)
@@ -2748,6 +2752,9 @@ switch (cmd) {
     break
   case 'wait':
     waitCommand(rest, { machines: usableMachines }).then(code => { process.exitCode = code }).catch(onError)
+    break
+  case 'watch':
+    watchCommand(rest, { machines: usableMachines }).then(code => { process.exitCode = code }).catch(onError)
     break
   case 'close':
     closeCommand(rest, { machines: usableMachines }).then(code => { process.exitCode = code }).catch(onError)
@@ -2930,6 +2937,12 @@ switch (cmd) {
     else if (args[0] === 'list') machinesListCommand(flags.includes('--json')).catch(onError)
     else if (args[0] === 'delete' || args[0] === 'rm') {
       machinesDeleteCommand(args[1], flags.includes('--yes')).catch(onError)
+    } else if (args[0] === 'engines') {
+      // The raw words after `engines`: `--engine <name>` takes a value the args/flags split would separate.
+      import('./lib/machineEngines.js')
+        .then(({ runMachinesEngines }) => runMachinesEngines(rest.slice(rest.indexOf('engines') + 1), env.ADAPTER_DATA_DIR, daemonPort()))
+        .then((code) => { process.exitCode = code })
+        .catch(onError)
     } else { console.error(`Unknown command: machines ${args[0]}`); usage(1) }
     break
   case 'link':

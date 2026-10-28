@@ -160,6 +160,15 @@ describe('sharing a machine', () => {
       expect(mocks.listChanged.mock.calls.map(c => c[0])).toEqual(['dee', 'kim'])
     })
 
+    it('answers added when a racing identical add stored it first', async () => {
+      mocks.prisma.machineShare.findUnique.mockResolvedValue(row({ emails: [] }))
+      mocks.prisma.machineShareAdd.upsert.mockRejectedValueOnce(Object.assign(new Error('Unique constraint failed'), { code: 'P2002' })).mockResolvedValueOnce({})
+      const res = await add()
+      expect(res.statusCode).toBe(200)
+      expect(res.json().data).toEqual({ added: true })
+      expect(mocks.prisma.machineShareAdd.upsert).toHaveBeenCalledTimes(2)
+    })
+
     it('needs no add for a named address', async () => {
       mocks.prisma.machineShare.findUnique.mockResolvedValue(row({ emails: ['kim@acme.io'], domain: null }))
       expect((await add()).statusCode).toBe(200)

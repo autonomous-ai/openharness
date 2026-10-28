@@ -54,6 +54,7 @@ import { machineRoutes } from '../routes/machines.js'
 import { SsoAuthError, type AuthUser } from './ssoAuth.js'
 import type { SuperTabStore } from '../superTabs/store.js'
 import { TEAM_ROUTES } from './teamSession.js'
+import { createReadiness } from './readiness.js'
 
 const OWNER_COMPUTER = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
 const TEAM_COMPUTER = 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'
@@ -378,7 +379,7 @@ describe('the allowlist', () => {
       for (const method of [route.method].flat()) seen.add(`${method} ${route.url}`)
     })
     const { registerControlRoutes } = await import('../routes/control.js')
-    await registerControlRoutes(probe, { daemons: { on: true, users: null } as never, count: async () => 0 })
+    await registerControlRoutes(probe, { daemons: { on: true, users: null } as never, count: async () => 0, readiness: createReadiness({}) })
     await probe.ready()
     const named = TEAM_ROUTES.map(r => `${r.method} ${r.url}`)
     expect(new Set(named).size).toBe(named.length)

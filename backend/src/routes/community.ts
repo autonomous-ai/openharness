@@ -165,7 +165,8 @@ async function origin(forkedFrom: string | null, autonomousEnv: string) {
 }
 
 export async function communityRoutes(app: FastifyInstance): Promise<void> {
-  app.addHook('onSend', async (_req, reply) => { reply.header('Cache-Control', 'no-store') })
+  // Synchronous, as every header-only hook (middlewares/securityHeaders.ts).
+  app.addHook('onSend', (_req, reply, payload, done) => { reply.header('Cache-Control', 'no-store'); done(null, payload) })
   // A gzipped body unpacks to at most what a raw one may carry (the snapshot and its envelope).
   acceptGzipJson(app, 6_100_000)
 
