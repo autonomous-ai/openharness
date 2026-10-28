@@ -148,8 +148,10 @@ void main() {
       // things need the person; the mark goes back to Swarm Home.
       Future<void> harness() async {
         await tester.tap(walk.keyStarting('swarm-project-').first);
-        await walk.waitFor(walk.key('swarm-team-line'));
-        await tester.tap(walk.key('swarm-team-line'));
+        await walk.waitFor(walk.key('swarm-project-menu'));
+        await tester.tap(walk.key('swarm-project-menu'));
+        await walk.waitFor(walk.key('swarm-project-menu-status'));
+        await tester.tap(walk.key('swarm-project-menu-status'));
         await walk.waitFor(walk.key('swarm-sheet-team'));
         await tester.tap(walk.key('swarm-sheet-team'));
         await walk.waitFor(walk.keyStarting('swarm-open-terminal-'));
@@ -218,12 +220,17 @@ void main() {
       await walk.waitFor(walk.keyStarting('swarm-project-'));
       await walk.shot('swarm');
 
-      // ② A project: its project chat, Chat with PM at the top right, the
-      // line under the header; the line opens its work by latest.
+      // ② A project: its project chat, its ⋮ menu at the top right with
+      // Chat with PM and the team's status; the status opens its work by
+      // latest.
       await tester.tap(find.text('Mobile app').last);
-      await walk.waitFor(walk.key('swarm-team-line'));
+      await walk.waitFor(walk.key('swarm-project-menu'));
       await walk.shot('project');
-      await tester.tap(walk.key('swarm-team-line'));
+      await tester.tap(walk.key('swarm-project-menu'));
+      await walk.waitFor(walk.key('swarm-project-menu-status'));
+      await walk.wait();
+      await walk.shot('project-menu');
+      await tester.tap(walk.key('swarm-project-menu-status'));
       await walk.waitFor(walk.key('swarm-team-close'));
       await walk.wait();
       await walk.shot('project-work');

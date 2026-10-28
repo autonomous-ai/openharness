@@ -19,7 +19,6 @@ import 'package:harness_mobile/swarm/swarm_session.dart';
 import 'package:harness_mobile/swarm/swarm_start.dart';
 import 'package:harness_mobile/swarm/swarm_style.dart';
 import 'package:harness_mobile/swarm/swarm_team_line.dart';
-import 'package:harness_mobile/swarm/team_glance.dart';
 import 'package:harness_mobile/theme/app_theme.dart' show AppColors;
 
 import '../voice_fakes.dart';
@@ -817,8 +816,62 @@ void main() {
       await tester.pumpAndSettle();
     }
 
-    testWidgets('opens on its project chat, its name over who is in it, and '
-        'Chat with PM at the top right', (tester) async {
+    /// The project's ⋮ menu, open.
+    Future<void> openMenu(WidgetTester tester) async {
+      await tester.tap(key('swarm-project-menu'));
+      await tester.pumpAndSettle();
+    }
+
+    /// The project's work and team, from its menu's status row.
+    Future<void> openSheet(WidgetTester tester) async {
+      await openMenu(tester);
+      await tester.tap(key('swarm-project-menu-status'));
+      await tester.pumpAndSettle();
+    }
+
+    /// The words of the menu's status row.
+    TextSpan statusWords(WidgetTester tester) =>
+        tester
+                .widget<RichText>(
+                  find.descendant(
+                    of: inside(
+                      'swarm-project-menu-status',
+                      find.byType(SwarmStatusText),
+                    ),
+                    matching: find.byType(RichText),
+                  ),
+                )
+                .text
+            as TextSpan;
+    String status(WidgetTester tester) => statusWords(tester).toPlainText();
+    Color? colorOf(WidgetTester tester, String words) {
+      Color? found;
+      statusWords(tester).visitChildren((span) {
+        if (span is TextSpan && span.text == words) found = span.style?.color;
+        return true;
+      });
+      return found;
+    }
+
+    /// [fake] with its Swarm's Buddies on.
+    FakeSwarm withBuddies(FakeSwarm fake) {
+      final parts = fake.routes['/api/super-tabs/$tab/parts']!;
+      fake.routes['/api/super-tabs/$tab/parts'] = (body) {
+        final load = parts(body)! as Map<String, dynamic>;
+        final head = load['head'] as Map<String, dynamic>;
+        return {
+          ...load,
+          'head': {
+            ...head,
+            'data': {...head['data'] as Map<String, dynamic>, 'buddies': true},
+          },
+        };
+      };
+      return fake;
+    }
+
+    testWidgets('opens on its project chat, its name over who is in it, its '
+        'menu at the top right, and nothing under the header', (tester) async {
       await pump(tester, backend());
       await openProject(tester, project);
 
@@ -832,95 +885,183 @@ void main() {
       expect(key('swarm-lead-chat'), findsNothing, reason: 'no row to open');
       expect(find.text('Working on'), findsNothing, reason: 'in the sheet');
 
-      final pm = tester.widget<SwarmButton>(key('swarm-pm-chat'));
-      expect((pm.style, pm.wide), (SwarmButtonStyle.plain, false));
       expect(
-        find.byWidgetPredicate(
-          (w) => w is SwarmButton && w.style == SwarmButtonStyle.fill,
-        ),
+        key('swarm-team-line'),
         findsNothing,
-        reason: 'the chat leads; Chat with PM is quiet',
+        reason: 'no team strip under the header (Tony, 2026-10-29)',
       );
+      expect(find.byType(SwarmAvatar), findsNothing, reason: 'no faces');
       expect(
-        inside('swarm-pm-chat', find.text('Chat with PM')),
-        findsOneWidget,
+        find.textContaining('waiting on you'),
+        findsNothing,
+        reason: 'the status is in the menu',
       );
+      expect(key('swarm-pm-chat'), findsNothing, reason: 'in the menu');
+      expect(find.text('Chat with PM'), findsNothing);
+
+      final menu = key('swarm-project-menu');
+      expect(tester.getSize(menu), const Size(44, 44), reason: 'a thumb');
+      final glyph = find.descendant(
+        of: menu,
+        matching: find.byIcon(LucideIcons.ellipsisVertical300),
+      );
+      expect(glyph, findsOneWidget);
       expect(
-        tester.getTopLeft(key('swarm-pm-chat')).dx,
+        tester.getTopLeft(menu).dx,
         greaterThan(tester.getTopRight(key('swarm-title')).dx),
         reason: 'at the end of the header',
       );
       expect(
-        middle(tester, key('swarm-pm-chat')),
+        middle(tester, menu),
         closeTo(middle(tester, key('tty-back')), 2),
         reason: 'in the one bar with back',
       );
       expect(
-        tester.getTopRight(key('swarm-pm-chat')).dx,
+        tester.getTopRight(glyph).dx,
         tester.getSize(find.byType(SwarmConversationPage)).width -
             AppSpace.screenInset,
-        reason: "the screen's side margin, not its edge",
+        reason: "on the screen's side margin, not its edge",
       );
-
-      await tester.tap(key('swarm-pm-chat'));
-      await tester.pumpAndSettle();
-      final page = tester.widget<SwarmConversationPage>(
-        find.byType(SwarmConversationPage),
-      );
-      expect((page.swarmId, page.conversationId), (tab, 'g-pm'));
-
-      await tester.tap(key('tty-back'));
-      await tester.pumpAndSettle();
-      expect(key('swarm-pm-chat'), findsOneWidget, reason: 'back on it');
-      await tester.tap(key('tty-back'));
-      await tester.pumpAndSettle();
-      expect(find.byType(SwarmProjectPage), findsNothing);
-      expect(key('swarm-menu'), findsOneWidget, reason: 'back on Home');
     });
 
-    testWidgets('the line under the header has the team, the Product Manager '
-        'first, and what waits on the person; it opens Work: waiting on '
-        'you, then working on', (tester) async {
+    testWidgets('its menu has Chat with PM, then the team in words, each a '
+        'row a thumb can press', (tester) async {
       await pump(tester, backend());
       await openProject(tester, project);
+      await openMenu(tester);
 
       expect(
-        y(tester, 'swarm-pm-chat'),
-        lessThan(y(tester, 'swarm-team-line')),
-        reason: 'under the header',
-      );
-      expect(
-        inside('swarm-team-line', find.byType(SwarmAvatar)),
-        findsNWidgets(3),
-        reason: 'River, Nova and Atlas',
-      );
-      expect(
-        tester
-            .widget<SwarmAvatar>(
-              inside('swarm-team-line', find.byType(SwarmAvatar)).first,
-            )
-            .id,
-        'agent-lead',
-        reason: 'the Product Manager first, as the prototype stacks them',
-      );
-      expect(
-        inside('swarm-team-line', find.text('1 waiting on you')),
+        inside('swarm-project-menu-pm-chat', find.text('Chat with PM')),
         findsOneWidget,
-        reason: 'Fix login waits on the person',
-      );
-      final line = tester.widget<SwarmTeamLine>(
-        inside('swarm-team-line', find.byType(SwarmTeamLine)),
       );
       expect(
-        line.only,
-        {SwarmAgentState.down},
-        reason: 'what waits leads; of the team, only who is down stays',
+        status(tester),
+        '1 waiting on you · 1 down',
+        reason: 'Fix login waits on the person; of the team, Atlas is down',
       );
+      expect(colorOf(tester, '1 waiting on you'), AppColors.warning);
+      expect(colorOf(tester, '1 down'), AppColors.danger);
+      expect(
+        find.descendant(
+          of: find.byType(BottomSheet),
+          matching: find.byType(SwarmAvatar),
+        ),
+        findsNothing,
+        reason: 'words only, no faces',
+      );
+      expect(
+        inside(
+          'swarm-project-menu-status',
+          find.byIcon(LucideIcons.chevronRight300),
+        ),
+        findsOneWidget,
+        reason: 'it opens more',
+      );
+      expect(
+        y(tester, 'swarm-project-menu-pm-chat'),
+        lessThan(y(tester, 'swarm-project-menu-status')),
+        reason: 'Chat with PM first',
+      );
+      for (final row in [
+        'swarm-project-menu-pm-chat',
+        'swarm-project-menu-status',
+      ]) {
+        expect(
+          tester.getSize(key(row)).height,
+          greaterThanOrEqualTo(44),
+          reason: row,
+        );
+      }
+    });
 
-      await tester.tap(key('swarm-team-line'));
+    testWidgets('with nothing waiting on the person, the menu says the team '
+        'in one line', (tester) async {
+      final fake = backend();
+      final parts = fake.routes['/api/super-tabs/$tab/parts']!;
+      fake.routes['/api/super-tabs/$tab/parts'] = (body) {
+        final load = parts(body)! as Map<String, dynamic>;
+        return {
+          ...load,
+          'groups': [
+            for (final row in load['groups'] as List)
+              if ((row as Map)['key'] == 'g1')
+                {
+                  ...row,
+                  'data': {
+                    ...row['data'] as Map,
+                    'assignment': {
+                      ...(row['data'] as Map)['assignment'] as Map,
+                      'status': 'working',
+                    },
+                  },
+                }
+              else
+                row,
+          ],
+        };
+      };
+      await pump(tester, fake);
+      await openProject(tester, project);
+      await openMenu(tester);
+
+      expect(status(tester), '1 working · 1 down', reason: 'Nova and Atlas');
+      expect(colorOf(tester, '1 down'), AppColors.danger);
+      expect(find.textContaining('waiting on you'), findsNothing);
+    });
+
+    testWidgets("the menu's counts follow the Swarm while it is open", (
+      tester,
+    ) async {
+      final fake = backend();
+      final host = await pump(tester, fake);
+      await openProject(tester, project);
+      await openMenu(tester);
+      expect(status(tester), '1 waiting on you · 1 down');
+
+      // Nova goes down too.
+      fake.routes['/api/super-tabs/$tab/changes'] = (_) => {
+        ...changes(
+          cursor: 'c3',
+          lastChangedAt: 200,
+          derived: const {'decisionsWaiting': 1, 'mentionsWaiting': 1},
+        ),
+        'agents': [
+          part('agent-builder', 2, {
+            ...agent('agent-builder', displayName: 'Nova'),
+            'downSince': '2026-10-29T01:00:00.000Z',
+          }),
+        ],
+      };
+      unawaited(host.session!.inbox.reader(tab)!.refresh());
       await tester.pumpAndSettle();
 
+      expect(status(tester), '1 waiting on you · 2 down', reason: 'Nova too');
+      expect(key('swarm-project-menu-pm-chat'), findsOneWidget, reason: 'open');
+    });
+
+    testWidgets('with Buddies on, the menu has the team alone: there is no '
+        'Chat with PM', (tester) async {
+      await pump(tester, withBuddies(backend()));
+      await openProject(tester, project);
+      await openMenu(tester);
+
+      expect(key('swarm-project-menu-pm-chat'), findsNothing);
+      expect(find.text('Chat with PM'), findsNothing);
+      expect(status(tester), '1 waiting on you · 1 down');
+    });
+
+    testWidgets("the menu's status opens the project's work: waiting on you, "
+        'then working on', (tester) async {
+      await pump(tester, backend());
+      await openProject(tester, project);
+      await openSheet(tester);
+
       expect(find.byType(SwarmProjectSheet), findsOneWidget);
+      expect(
+        key('swarm-project-menu-status'),
+        findsNothing,
+        reason: 'the menu closed for it',
+      );
       expect(find.byType(SwarmProjectPage), findsOneWidget, reason: 'under it');
       expect(
         tester.getTopLeft(find.text('Waiting on you')).dy,
@@ -972,32 +1113,31 @@ void main() {
       );
     });
 
-    testWidgets('with nothing waiting on the person, the line is the team in '
-        'one line', (tester) async {
+    testWidgets("the menu's Chat with PM opens it, and back comes back to the "
+        'project chat', (tester) async {
       await pump(tester, backend());
-      await openProject(tester, web);
+      await openProject(tester, project);
+      await openMenu(tester);
 
-      expect(
-        tester
-            .widget<SwarmConversationPage>(find.byType(SwarmConversationPage))
-            .conversationId,
-        webLead,
-        reason: "its own project chat, Cleo's",
+      await tester.tap(key('swarm-project-menu-pm-chat'));
+      await tester.pumpAndSettle();
+      final page = tester.widget<SwarmConversationPage>(
+        find.byType(SwarmConversationPage),
       );
+      expect((page.swarmId, page.conversationId), (tab, 'g-pm'));
+
+      await tester.tap(key('tty-back'));
+      await tester.pumpAndSettle();
+      expect(key('swarm-project-menu'), findsOneWidget, reason: 'back on it');
       expect(
-        inside('swarm-team-line', find.text('1 waiting on you')),
+        key('swarm-project-menu-pm-chat'),
         findsNothing,
+        reason: 'the menu closed as the chat opened',
       );
-      final line = tester.widget<SwarmTeamLine>(
-        inside('swarm-team-line', find.byType(SwarmTeamLine)),
-      );
-      expect(line.only, isNull, reason: 'all of the team line');
-      expect(
-        inside('swarm-team-line', find.byType(SwarmAvatar)),
-        findsOneWidget,
-        reason: 'Cleo',
-      );
-      expect(find.text('Cleo and everyone'), findsOneWidget);
+      await tester.tap(key('tty-back'));
+      await tester.pumpAndSettle();
+      expect(find.byType(SwarmProjectPage), findsNothing);
+      expect(key('swarm-menu'), findsOneWidget, reason: 'back on Home');
     });
 
     testWidgets("the sheet's Team lists each agent in a word", (tester) async {
@@ -1022,8 +1162,7 @@ void main() {
       await pump(tester, fake);
       await openProject(tester, project);
 
-      await tester.tap(key('swarm-team-line'));
-      await tester.pumpAndSettle();
+      await openSheet(tester);
       expect(key('swarm-agent-agent-lead'), findsNothing, reason: 'Work first');
       await tester.tap(key('swarm-sheet-team'));
       await tester.pumpAndSettle();
@@ -1068,28 +1207,43 @@ void main() {
       await tester.tap(key('swarm-team-close'));
       await tester.pumpAndSettle();
       expect(find.byType(SwarmProjectSheet), findsNothing);
-      expect(key('swarm-pm-chat'), findsOneWidget, reason: 'back on the chat');
+      expect(
+        key('swarm-project-menu'),
+        findsOneWidget,
+        reason: 'back on the chat',
+      );
     });
 
-    testWidgets('Chat with PM says Opening… while it opens, and says why it '
-        'did not', (tester) async {
+    testWidgets('Chat with PM shows it is opening in place of the menu, and '
+        'says why it did not open', (tester) async {
+      final semantics = tester.ensureSemantics();
       final fake = backend();
       final answer = Completer<Object?>();
       fake.routes['/api/super-tabs/$tab/commands'] = (_) => answer.future;
       await pump(tester, fake);
       await openProject(tester, web);
 
-      await tester.tap(key('swarm-pm-chat'));
-      await tester.pump();
+      await openMenu(tester);
+      await tester.tap(key('swarm-project-menu-pm-chat'));
+      // A spinner turns until the answer: nothing settles.
+      await frames(tester);
       expect(
-        find.descendant(
-          of: key('swarm-pm-chat'),
-          matching: find.text('Opening…'),
-        ),
+        key('swarm-project-menu-pm-chat'),
+        findsNothing,
+        reason: 'the menu closed',
+      );
+      expect(
+        inside('swarm-project-menu', find.byType(CircularProgressIndicator)),
         findsOneWidget,
       );
-      await tester.tap(key('swarm-pm-chat'));
-      await tester.pump();
+      expect(find.bySemanticsLabel('Opening Chat with PM…'), findsOneWidget);
+      await tester.tap(key('swarm-project-menu'));
+      await frames(tester);
+      expect(
+        key('swarm-project-menu-status'),
+        findsNothing,
+        reason: 'no menu while it opens',
+      );
       expect(fake.commands, hasLength(1), reason: 'one tap, one chat');
 
       answer.complete({'result': <String, dynamic>{}});
@@ -1110,20 +1264,21 @@ void main() {
         findsOneWidget,
       );
       expect(
-        find.descendant(
-          of: key('swarm-pm-chat'),
-          matching: find.text('Chat with PM'),
+        inside(
+          'swarm-project-menu',
+          find.byIcon(LucideIcons.ellipsisVertical300),
         ),
         findsOneWidget,
+        reason: 'the menu is back',
       );
+      semantics.dispose();
     });
 
     testWidgets('a task in the sheet opens over it, and back returns to the '
         'sheet', (tester) async {
       await pump(tester, backend());
       await openProject(tester, project);
-      await tester.tap(key('swarm-team-line'));
-      await tester.pumpAndSettle();
+      await openSheet(tester);
 
       await tester.tap(key('swarm-conversation-g-busy'));
       await tester.pumpAndSettle();
@@ -1195,8 +1350,9 @@ void main() {
       expect(find.textContaining('Atlas'), findsNothing);
     });
 
-    testWidgets("the prototype's small dots, its parts a space apart; wider "
-        'apart on the team card', (tester) async {
+    testWidgets("the prototype's small dots, its parts a space apart", (
+      tester,
+    ) async {
       await pump(tester, backend());
 
       TextSpan spans(Finder line) =>
@@ -1227,70 +1383,6 @@ void main() {
         spans(row).toPlainText(),
         contains('waiting ●'),
         reason: 'one space between parts',
-      );
-
-      await tester.tap(key('swarm-project-$tab-$project'));
-      await tester.pumpAndSettle();
-      expect(
-        spans(
-          find.descendant(
-            of: key('swarm-team-line'),
-            matching: find.byType(SwarmTeamLine),
-          ),
-        ).toPlainText(),
-        '●\u00A01\u00A0down',
-        reason: 'beside what waits on the person, only who is down',
-      );
-    });
-
-    testWidgets("with nothing waiting on the person, the project's line "
-        "spreads its parts, as the prototype's gap", (tester) async {
-      final fake = backend();
-      final parts = fake.routes['/api/super-tabs/$tab/parts']!;
-      fake.routes['/api/super-tabs/$tab/parts'] = (body) {
-        final load = parts(body)! as Map<String, dynamic>;
-        return {
-          ...load,
-          'groups': [
-            for (final row in load['groups'] as List)
-              if ((row as Map)['key'] == 'g1')
-                {
-                  ...row,
-                  'data': {
-                    ...row['data'] as Map,
-                    'assignment': {
-                      ...(row['data'] as Map)['assignment'] as Map,
-                      'status': 'working',
-                    },
-                  },
-                }
-              else
-                row,
-          ],
-        };
-      };
-      await pump(tester, fake);
-      await tester.tap(key('swarm-project-$tab-$project'));
-      await tester.pumpAndSettle();
-
-      final line = find.descendant(
-        of: key('swarm-team-line'),
-        matching: find.byType(SwarmTeamLine),
-      );
-      expect(
-        (tester.widget<RichText>(
-                  find.descendant(of: line, matching: find.byType(RichText)),
-                ).text
-                as TextSpan)
-            .toPlainText(),
-        contains('working  ●'),
-      );
-      expect(
-        find.descendant(
-          of: key('swarm-team-line'),
-          matching: find.text('1 waiting on you'),
-        ),
-        findsNothing,
       );
     });
 

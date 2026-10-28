@@ -23,7 +23,7 @@ import '../test/swarm/swarm_fixture.dart';
 /// the app opens on Swarm Home; Needs you opens one thing at a time, a tag
 /// with Done, a decision answered with one tap and its Undo; the drawer with
 /// Chat with PM, the projects and a project's chats, and no Harness there; a
-/// project on its project chat, Chat with PM at the top right; Chat with PM
+/// project on its project chat, its ⋮ menu at the top right; Chat with PM
 /// itself; Harness through an agent's notice and back with the terminal's
 /// Swarm mark; and Swarm turned off, the terminal as it always was.
 ///
@@ -107,16 +107,20 @@ void main() {
     await walk.waitFor(walk.key('swarm-drawer-chat-$leadChat'));
     await walk.shot('drawer-chats');
 
-    // ⑥ A project's name opens it on its project chat, Chat with PM at the
-    // top right.
+    // ⑥ A project's name opens it on its project chat, its ⋮ menu at the
+    // top right and nothing under the header.
     await tester.tap(walk.key('swarm-drawer-project-$tab-$project'));
-    await walk.waitFor(walk.key('swarm-pm-chat'));
+    await walk.waitFor(walk.key('swarm-project-menu'));
     expect(find.byType(SwarmProjectPage), findsOneWidget);
     await walk.shot('project');
 
-    // ⑥½ The line under the header: the project's work, then each agent,
-    // in a sheet over the chat.
-    await tester.tap(walk.key('swarm-team-line'));
+    // ⑥½ The menu: Chat with PM and the team's status, which opens the
+    // project's work, then each agent, in a sheet over the chat.
+    await tester.tap(walk.key('swarm-project-menu'));
+    await walk.waitFor(walk.key('swarm-project-menu-status'));
+    await walk.wait();
+    await walk.shot('project-menu');
+    await tester.tap(walk.key('swarm-project-menu-status'));
     await walk.waitFor(walk.key('swarm-team-close'));
     await walk.wait();
     await walk.shot('work');
@@ -126,8 +130,11 @@ void main() {
     await tester.tap(walk.key('swarm-team-close'));
     await walk.waitGone(walk.key('swarm-team-close'));
 
-    // ⑦ Chat with PM: the person and the Product Manager alone.
-    await tester.tap(walk.key('swarm-pm-chat'));
+    // ⑦ Chat with PM, from the menu: the person and the Product Manager
+    // alone.
+    await tester.tap(walk.key('swarm-project-menu'));
+    await walk.waitFor(walk.key('swarm-project-menu-pm-chat'));
+    await tester.tap(walk.key('swarm-project-menu-pm-chat'));
     await walk.waitFor(find.byType(SwarmConversationPage));
     await walk.waitFor(find.textContaining('Passkeys are ready'));
     FocusManager.instance.primaryFocus?.unfocus();
@@ -238,8 +245,10 @@ Future<void> _openTerminal(WidgetTester tester, _Walk walk) async {
   await tester.tap(walk.key('swarm-menu'));
   await walk.waitFor(walk.key('swarm-drawer-project-$tab-$project'));
   await tester.tap(walk.key('swarm-drawer-project-$tab-$project'));
-  await walk.waitFor(walk.key('swarm-team-line'));
-  await tester.tap(walk.key('swarm-team-line'));
+  await walk.waitFor(walk.key('swarm-project-menu'));
+  await tester.tap(walk.key('swarm-project-menu'));
+  await walk.waitFor(walk.key('swarm-project-menu-status'));
+  await tester.tap(walk.key('swarm-project-menu-status'));
   await walk.waitFor(walk.key('swarm-sheet-team'));
   await tester.tap(walk.key('swarm-sheet-team'));
   await walk.waitFor(walk.key('swarm-open-terminal-agent-builder'));

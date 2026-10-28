@@ -16,7 +16,7 @@ import 'package:harness_mobile/swarm/swarm_need_rows.dart';
 ///
 /// It reads: Swarm on (in memory only; the saved switch is left as it was),
 /// Swarm Home and its drawer, Harness from the project team and the terminal's mark back to Swarm Home,
-/// the first project, its project chat. It writes only when `SWARM_E2E_CHAT` names a test chat whose open
+/// the first project, its project chat and its ⋮ menu. It writes only when `SWARM_E2E_CHAT` names a test chat whose open
 /// decision asks this person: there it posts one short line and answers that
 /// decision with its first option. Nothing else is written.
 ///
@@ -115,8 +115,10 @@ void main() {
       await tester.tap(key('swarm-drawer-home'));
       await waitGone(key('swarm-drawer-home'));
       await tester.tap(keyStarting('swarm-project-').first);
-      await waitFor(key('swarm-team-line'));
-      await tester.tap(key('swarm-team-line'));
+      await waitFor(key('swarm-project-menu'));
+      await tester.tap(key('swarm-project-menu'));
+      await waitFor(key('swarm-project-menu-status'));
+      await tester.tap(key('swarm-project-menu-status'));
       await waitFor(key('swarm-sheet-team'));
       await tester.tap(key('swarm-sheet-team'));
       await waitFor(keyStarting('swarm-open-terminal-'));
@@ -128,10 +130,17 @@ void main() {
 
       // ② The first project: it opens on its project chat, read only.
       await tester.tap(keyStarting('swarm-project-').first);
-      await waitFor(key('swarm-pm-chat'));
+      await waitFor(key('swarm-project-menu'));
       await waitFor(key('swarm-messages'));
       await wait(3000);
       await shot('project');
+      // Its ⋮ menu: Chat with PM and the team's status, as it reads now.
+      await tester.tap(key('swarm-project-menu'));
+      await waitFor(key('swarm-project-menu-status'));
+      await shot('project-menu');
+      // Closed again by a tap above it, as the person would.
+      await tester.tapAt(const Offset(20, 120));
+      await waitGone(key('swarm-project-menu-status'));
 
       if (chat.isEmpty) return;
 

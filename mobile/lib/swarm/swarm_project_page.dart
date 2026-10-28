@@ -1,7 +1,7 @@
 import 'dart:async';
 
-import 'package:flutter/cupertino.dart' show kMinInteractiveDimensionCupertino;
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import 'package:harness_mobile/phone/tty.dart';
@@ -11,10 +11,10 @@ import 'package:harness_mobile/shared/theme/app_space.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart';
 import 'package:harness_mobile/shared/theme/app_type.dart';
 import 'package:harness_mobile/shared/widgets/skeleton.dart';
+import 'package:harness_mobile/shared/widgets/touch_target.dart';
 import 'package:harness_mobile/theme/app_theme.dart' show AppColors;
 
 import 'model.dart';
-import 'swarm_choices.dart';
 import 'swarm_conversation.dart';
 import 'swarm_conversation_page.dart';
 import 'swarm_home_keeper.dart';
@@ -74,9 +74,10 @@ Set<String> swarmWaitingOnYou(SwarmInbox inbox, String swarmId) => {
 
 /// One project, as prototype B draws it (Tony, 2026-10-28): its project chat
 /// (its Product Manager and everyone) is the screen, under the project's name
-/// and who is in it; Chat with PM at the header's end; and under the header
-/// the team in one line ([SwarmProjectStatus]), which opens the project's work
-/// and team in a sheet ([showSwarmProjectSheet]).
+/// and who is in it, with nothing under the header; and at the header's end a
+/// ⋮ menu (Tony, 2026-10-29) with Chat with PM and the team's status in words
+/// ([SwarmProjectStatus]), which opens the project's work and team in a sheet
+/// ([showSwarmProjectSheet]).
 class SwarmProjectPage extends StatefulWidget {
   const SwarmProjectPage({
     super.key,
@@ -93,8 +94,9 @@ class SwarmProjectPage extends StatefulWidget {
 class _SwarmProjectPageState extends State<SwarmProjectPage> {
   SwarmSession? _session;
 
-  /// Chat with PM: being opened, and why the last one did not open. Its
-  /// button and its line listen; the chat is not built again for them.
+  /// Chat with PM: being opened, and why the last one did not open. The
+  /// menu's button and the line under the header listen; the chat is not
+  /// built again for them.
   final _pm = ValueNotifier<({bool opening, String? error})>((
     opening: false,
     error: null,
@@ -198,8 +200,30 @@ class _SwarmProjectPageState extends State<SwarmProjectPage> {
     ),
   );
 
+  /// The header's menu ([showSwarmProjectMenu]), then what was picked in it.
+  /// With Buddies on there is no Chat with PM ([SwarmReader.buddiesOn]).
+  Future<void> _openMenu() async {
+    final reader = _reader;
+    if (reader == null || _pm.value.opening) return;
+    final picked = await showSwarmProjectMenu(
+      context,
+      swarmId: widget.swarmId,
+      projectId: widget.projectId,
+      pmChat: !reader.buddiesOn,
+    );
+    if (!mounted) return;
+    switch (picked) {
+      case SwarmProjectMenuItem.pmChat:
+        await _openPm();
+      case SwarmProjectMenuItem.status:
+        _openSheet();
+      case null:
+        break;
+    }
+  }
+
   /// [project]'s chat as the screen: its name over who is in it — and, with
-  /// several Swarms, which one — Chat with PM, and the team's line.
+  /// several Swarms, which one — and its menu at the header's end.
   Widget _chatOf(SuperTabSnapshot snapshot, SuperTabProject project) {
     final who = switch (swarmPmName(snapshot, project)) {
       final name? => '$name and everyone',
@@ -219,42 +243,30 @@ class _SwarmProjectPageState extends State<SwarmProjectPage> {
       subtitle: inputs.$3,
       action: ValueListenableBuilder(
         valueListenable: _pm,
-        builder: (context, pm, _) => SwarmButton(
-          key: const ValueKey('swarm-pm-chat'),
-          icon: LucideIcons.messageSquare300,
-          label: 'Chat with PM',
-          busy: pm.opening,
-          busyLabel: 'Opening…',
-          onPressed: () => unawaited(_openPm()),
+        builder: (context, pm, _) => _MenuButton(
+          opening: pm.opening,
+          onPressed: () => unawaited(_openMenu()),
         ),
       ),
-      below: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          SwarmProjectStatus(
-            swarmId: widget.swarmId,
-            projectId: widget.projectId,
-            onTap: _openSheet,
+      // Nothing else under the header (Tony, 2026-10-29): the team's status
+      // is in the menu.
+      below: ValueListenableBuilder(
+        valueListenable: _pm,
+        builder: (context, pm, _) => switch (pm.error) {
+          final error? => Padding(
+            padding: const EdgeInsets.symmetric(
+              horizontal: AppSpace.screenInset,
+              vertical: AppSpace.s,
+            ),
+            child: SwarmRow.line(
+              error,
+              key: const ValueKey('swarm-pm-error'),
+              lines: 3,
+              color: AppColors.danger,
+            ),
           ),
-          ValueListenableBuilder(
-            valueListenable: _pm,
-            builder: (context, pm, _) => switch (pm.error) {
-              final error? => Padding(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: AppSpace.screenInset,
-                  vertical: AppSpace.s,
-                ),
-                child: SwarmRow.line(
-                  error,
-                  key: const ValueKey('swarm-pm-error'),
-                  lines: 3,
-                  color: AppColors.danger,
-                ),
-              ),
-              null => const SizedBox.shrink(),
-            },
-          ),
-        ],
+          null => const SizedBox.shrink(),
+        },
       ),
     );
     _chat = (inputs: inputs, chat: chat);
@@ -339,16 +351,187 @@ class _Frame extends StatelessWidget {
   }
 }
 
-/// The team of a project in one line under its chat's header, as prototype
-/// B draws it: its avatars, the Product Manager first, then its line
-/// ([SwarmTeamLine]) — or, while work waits on the person, how much does in
-/// the warning colour, with only who is down of the team — and a chevron. It
-/// opens the project's work and team ([onTap]). Counted from the Home kept,
-/// its line reads "Updating…" until its Swarm is read again
-/// ([swarmHomeKept]), and nothing waits yet.
+/// The header's ⋮: 44 points square, its glyph's end on the screen's side
+/// margin, as the header's words are. While Chat with PM opens ([opening]), a
+/// spinner in its place, and taps do nothing.
+class _MenuButton extends StatelessWidget {
+  const _MenuButton({required this.opening, required this.onPressed});
+
+  final bool opening;
+  final VoidCallback onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    AppTheme.watch(context);
+    final ink = AppPalette.textPrimary;
+    return Semantics(
+      key: const ValueKey('swarm-project-menu'),
+      button: true,
+      enabled: !opening,
+      label: opening ? 'Opening Chat with PM…' : 'Project menu',
+      excludeSemantics: true,
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: opening
+            ? null
+            : () {
+                HapticFeedback.selectionClick();
+                onPressed();
+              },
+        child: SizedBox.square(
+          dimension: minTouchTarget,
+          child: Align(
+            alignment: AlignmentDirectional.centerEnd,
+            child: opening
+                ? SizedBox.square(
+                    dimension: 18,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2,
+                      color: ink,
+                      backgroundColor: ink.withValues(alpha: .35),
+                    ),
+                  )
+                : Icon(LucideIcons.ellipsisVertical300, size: 22, color: ink),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// What the project's menu ([showSwarmProjectMenu]) was closed with.
+enum SwarmProjectMenuItem { pmChat, status }
+
+/// The project's ⋮ menu, as Tony asked for it (2026-10-29): Chat with PM —
+/// none while Buddies are on ([pmChat]) — then the team's status in words
+/// ([SwarmProjectStatus]), which opens the project's work and team. Its rows
+/// are a thumb's height at least, on the sheet the composer's + opens.
+/// Answers the row picked, or null when the person closes it.
+Future<SwarmProjectMenuItem?> showSwarmProjectMenu(
+  BuildContext context, {
+  required String swarmId,
+  required String projectId,
+  required bool pmChat,
+}) => showModalBottomSheet<SwarmProjectMenuItem>(
+  context: context,
+  backgroundColor: AppGlass.rowFill,
+  shape: AppControl.sheetShape,
+  builder: (_) =>
+      _ProjectMenu(swarmId: swarmId, projectId: projectId, pmChat: pmChat),
+);
+
+class _ProjectMenu extends StatelessWidget {
+  const _ProjectMenu({
+    required this.swarmId,
+    required this.projectId,
+    required this.pmChat,
+  });
+
+  final String swarmId, projectId;
+  final bool pmChat;
+
+  @override
+  Widget build(BuildContext context) {
+    AppTheme.watch(context);
+    void pick(SwarmProjectMenuItem item) => Navigator.of(context).pop(item);
+    return SafeArea(
+      top: false,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(
+          AppSpace.l,
+          AppSpace.s,
+          AppSpace.l,
+          AppSpace.l,
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            // The grabber: a capsule as wide as the two largest steps.
+            Center(
+              child: Container(
+                width: AppSpace.xl + AppSpace.m,
+                height: AppSpace.xs,
+                margin: const EdgeInsets.only(bottom: AppSpace.s),
+                decoration: ShapeDecoration(
+                  color: AppGlass.hair,
+                  shape: const StadiumBorder(),
+                ),
+              ),
+            ),
+            if (pmChat)
+              _MenuRow(
+                key: const ValueKey('swarm-project-menu-pm-chat'),
+                onTap: () => pick(SwarmProjectMenuItem.pmChat),
+                child: Text(
+                  'Chat with PM',
+                  style: AppType.body(color: AppPalette.textPrimary),
+                ),
+              ),
+            SwarmProjectStatus(
+              swarmId: swarmId,
+              projectId: projectId,
+              onTap: () => pick(SwarmProjectMenuItem.status),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// One row of the project's menu: its words, then maybe a mark at its end,
+/// at least [minTouchTarget] tall.
+class _MenuRow extends StatelessWidget {
+  const _MenuRow({
+    super.key,
+    required this.onTap,
+    required this.child,
+    this.trailing,
+  });
+
+  final VoidCallback onTap;
+  final Widget child;
+  final Widget? trailing;
+
+  @override
+  Widget build(BuildContext context) {
+    AppTheme.watch(context);
+    return Semantics(
+      button: true,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(AppControl.radius),
+        onTap: onTap,
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(minHeight: minTouchTarget),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(
+              horizontal: AppSpace.m,
+              vertical: AppSpace.s,
+            ),
+            child: Row(
+              children: [
+                Expanded(child: child),
+                if (trailing case final trailing?) ...[
+                  const SizedBox(width: AppSpace.s),
+                  trailing,
+                ],
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// The team of a project in its menu: its status in words
+/// ([SwarmStatusText]) and a chevron, opening the project's work and team
+/// ([onTap]). Counted from the Home kept, it reads "Updating…" until its
+/// Swarm is read again ([swarmHomeKept]), and nothing waits yet.
 ///
-/// It follows its Swarm and the inbox itself, and is built again only when
-/// what it shows moved: the chat around it is not built again for it.
+/// It follows its Swarm and the inbox itself while the menu is open, and is
+/// built again only when what it shows moved.
 class SwarmProjectStatus extends StatefulWidget {
   const SwarmProjectStatus({
     super.key,
@@ -364,22 +547,14 @@ class SwarmProjectStatus extends StatefulWidget {
   State<SwarmProjectStatus> createState() => _SwarmProjectStatusState();
 }
 
-/// What [SwarmProjectStatus] shows: its team, its Product Manager, how much
-/// work waits on the person, and whether it is counted from the Home kept.
-typedef _Status = ({
-  SwarmTeamGlance glance,
-  String? pmId,
-  int waiting,
-  bool kept,
-});
+/// What [SwarmProjectStatus] shows: its team, how much work waits on the
+/// person, and whether it is counted from the Home kept.
+typedef _Status = ({SwarmTeamGlance glance, int waiting, bool kept});
 
 class _SwarmProjectStatusState extends State<SwarmProjectStatus> {
   SwarmSession? _session;
   SwarmReader? _reader;
   _Status? _status;
-
-  /// Avatars past this many would crowd out the line.
-  static const _most = 5;
 
   @override
   void didChangeDependencies() {
@@ -430,7 +605,6 @@ class _SwarmProjectStatusState extends State<SwarmProjectStatus> {
     );
     return (
       glance: swarmTeamGlance(snapshot, projectId: project.id),
-      pmId: swarmPmId(snapshot, project),
       // What was kept is not now, what waits on the person least of all.
       waiting: kept
           ? 0
@@ -439,107 +613,92 @@ class _SwarmProjectStatusState extends State<SwarmProjectStatus> {
     );
   }
 
-  /// The line beside the avatars: what waits on the person, in the warning
-  /// colour, with who is down; or else the team's line.
-  Widget _line(_Status? status) {
-    if (status == null || !swarmTeamLine) return const SizedBox.shrink();
-    if (status.waiting == 0) {
-      return SwarmTeamLine(
-        status.glance,
-        size: 14,
-        spread: true,
-        kept: status.kept,
-      );
-    }
-    return Row(
-      children: [
-        DecoratedBox(
-          decoration: BoxDecoration(
-            color: AppColors.warning.withValues(alpha: .13),
-            borderRadius: BorderRadius.circular(AppControl.radius),
-          ),
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: AppSpace.s),
-            child: Text(
-              '${status.waiting} waiting on you',
-              maxLines: 1,
-              style: swarmChatText(
-                14,
-                color: AppColors.warning,
-                weight: FontWeight.w500,
-              ),
+  @override
+  Widget build(BuildContext context) {
+    AppTheme.watch(context);
+    final status = _status;
+    return _MenuRow(
+      key: const ValueKey('swarm-project-menu-status'),
+      onTap: widget.onTap,
+      trailing: Icon(
+        LucideIcons.chevronRight300,
+        size: AppIconSize.besideText,
+        color: AppPalette.textFaint,
+      ),
+      child: status == null
+          ? Text(
+              'Updating…',
+              style: AppType.body(color: AppPalette.textSecondary),
+            )
+          : SwarmStatusText(
+              status.glance,
+              waiting: status.waiting,
+              kept: status.kept,
             ),
-          ),
-        ),
-        const SizedBox(width: AppSpace.m),
-        Flexible(
-          child: SwarmTeamLine(
-            status.glance,
-            size: 14,
-            only: const {SwarmAgentState.down},
-          ),
-        ),
-      ],
     );
   }
+}
+
+/// A project's team in words, as its menu says it (Tony, 2026-10-29): "17
+/// working · 3 down", no faces — or, while work waits on the person
+/// ([waiting]), how much does, in the warning colour, with only who is down
+/// of the team. Who is down is red, as on [SwarmTeamLine]. Counted from the
+/// Home kept ([kept]), it reads "Updating…".
+class SwarmStatusText extends StatelessWidget {
+  const SwarmStatusText(
+    this.glance, {
+    super.key,
+    this.waiting = 0,
+    this.kept = false,
+  });
+
+  final SwarmTeamGlance glance;
+  final int waiting;
+  final bool kept;
 
   @override
   Widget build(BuildContext context) {
     AppTheme.watch(context);
-    final tty = Tty.of(context);
-    final status = _status;
-    final agents = status == null
-        ? const <SwarmAgentGlance>[]
-        : _pmFirst(status.glance, status.pmId).take(_most).toList();
-    return Material(
-      key: const ValueKey('swarm-team-line'),
-      color: Colors.transparent,
-      shape: Border.symmetric(horizontal: BorderSide(color: AppGlass.hair)),
-      child: InkWell(
-        onTap: widget.onTap,
-        child: ConstrainedBox(
-          constraints: const BoxConstraints(minHeight: kMinInteractiveDimensionCupertino),
-          child: Padding(
-            padding: const EdgeInsets.symmetric(
-              horizontal: AppSpace.screenInset,
-              vertical: AppSpace.xs,
-            ),
-            child: Row(
-              children: [
-                if (agents.isNotEmpty) ...[
-                  SizedBox(
-                    width: 24 + 17.0 * (agents.length - 1),
-                    height: 24,
-                    child: Stack(
-                      children: [
-                        for (final (i, a) in agents.indexed)
-                          Positioned(
-                            left: 17.0 * i,
-                            child: SwarmAvatar(
-                              id: a.agent.id,
-                              name: a.name,
-                              size: 24,
-                              ring: tty.ground,
-                              picture: a.agent.avatar,
-                            ),
-                          ),
-                      ],
-                    ),
-                  ),
-                  const SizedBox(width: AppSpace.m),
-                ],
-                Expanded(child: _line(status)),
-                const SizedBox(width: AppSpace.s),
-                Icon(
-                  LucideIcons.chevronRight300,
-                  size: AppIconSize.besideText,
-                  color: AppPalette.textFaint,
-                ),
-              ],
-            ),
-          ),
+    final down = swarmStateColor(SwarmAgentState.down);
+    final List<({String text, Color? color})> parts = kept
+        ? const []
+        : waiting > 0
+        ? [
+            (text: '$waiting waiting on you', color: AppColors.warning),
+            if (glance.down > 0) (text: '${glance.down} down', color: down),
+          ]
+        : [
+            for (final part in glance.parts)
+              (
+                text: part.text,
+                color: part.state == SwarmAgentState.down ? down : null,
+              ),
+          ];
+    if (parts.isEmpty) {
+      return Text(
+        kept ? 'Updating…' : glance.line,
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+        style: AppType.body(
+          color: kept ? AppPalette.textSecondary : AppPalette.textPrimary,
         ),
+      );
+    }
+    return Text.rich(
+      TextSpan(
+        children: [
+          for (final (i, part) in parts.indexed) ...[
+            if (i > 0) const TextSpan(text: ' · '),
+            TextSpan(
+              text: part.text,
+              style: part.color == null ? null : TextStyle(color: part.color),
+            ),
+          ],
+        ],
       ),
+      maxLines: 2,
+      overflow: TextOverflow.ellipsis,
+      style: AppType.body(color: AppPalette.textPrimary),
     );
   }
 }
@@ -1058,19 +1217,14 @@ class _LoadingTopBar extends StatelessWidget {
   }
 }
 
-/// The page on its way: the team's line under the header, the size of what
-/// replaces it.
+/// The page on its way: nothing under its header, as nothing is there once
+/// its chat is.
 class _Loading extends StatelessWidget {
   const _Loading();
 
   @override
-  Widget build(BuildContext context) => const SkeletonBlock(
-    key: ValueKey('swarm-project-loading'),
-    child: Align(
-      alignment: Alignment.topCenter,
-      child: _SkeletonRow(team: true),
-    ),
-  );
+  Widget build(BuildContext context) =>
+      const SizedBox.expand(key: ValueKey('swarm-project-loading'));
 }
 
 /// The sheet's work on its way: three rows, the shape of its cards'.
@@ -1099,55 +1253,41 @@ class _WorkLoading extends StatelessWidget {
 }
 
 /// A row on its way, the shape of a [SwarmRow] with a 24-point avatar and a
-/// line under its title; or of the team's line ([team]): overlapping avatars
-/// and the line.
+/// line under its title.
 class _SkeletonRow extends StatelessWidget {
-  const _SkeletonRow({this.width = .45, this.team = false});
+  const _SkeletonRow({this.width = .45});
 
   final double width;
-  final bool team;
 
   @override
   Widget build(BuildContext context) => ConstrainedBox(
-    constraints: BoxConstraints(
-      minHeight: team ? kMinInteractiveDimensionCupertino : SwarmRow.height,
-    ),
+    constraints: const BoxConstraints(minHeight: SwarmRow.height),
     child: Padding(
-      padding: team
-          ? const EdgeInsets.symmetric(
-              horizontal: AppSpace.screenInset,
-              vertical: AppSpace.xs,
-            )
-          : const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
       child: Row(
         children: [
-          Skeleton(width: team ? 24 + 17.0 * 2 : 24, height: 24, radius: 12),
+          const Skeleton(width: 24, height: 24, radius: 12),
           const SizedBox(width: 12),
           Expanded(
-            child: team
-                ? const SkeletonText(
-                    style: TextStyle(fontSize: 14, height: 1.35),
-                    widthFactor: .6,
-                  )
-                : Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      SkeletonText(
-                        style: const TextStyle(
-                          fontSize: 16,
-                          fontWeight: FontWeight.w500,
-                          height: 1.3,
-                        ),
-                        widthFactor: width,
-                      ),
-                      const SizedBox(height: 3),
-                      SkeletonText(
-                        style: const TextStyle(fontSize: 13.5, height: 1.35),
-                        widthFactor: width + .25,
-                      ),
-                    ],
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                SkeletonText(
+                  style: const TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.w500,
+                    height: 1.3,
                   ),
+                  widthFactor: width,
+                ),
+                const SizedBox(height: 3),
+                SkeletonText(
+                  style: const TextStyle(fontSize: 13.5, height: 1.35),
+                  widthFactor: width + .25,
+                ),
+              ],
+            ),
           ),
         ],
       ),
