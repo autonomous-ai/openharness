@@ -581,6 +581,12 @@ export function visibleState(state: SuperTabState, actor: Actor, now = Date.now(
   for (const start of visible.starts ?? []) {
     if (start.error && !readsRawReason(actor, start, state.conversations.find(c => c.id === start.request.conversationId))) start.error = publicReason(start.error)
   }
+  // A Buddy brainstorms; where agents run and how work is routed are none of its business (buddies.ts).
+  if (actor.kind === 'agent' && state.agents.some(a => a.id === actor.agentId && a.buddyOf)) {
+    visible.machines = []
+    delete visible.rules
+    delete visible.routingPolicy
+  }
   const seen = seenMachineIds(visible)
   visible.conversations = visible.conversations.map(c => withSeenRequirement(c, seen))
   return visible

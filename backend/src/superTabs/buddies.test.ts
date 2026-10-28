@@ -73,6 +73,17 @@ describe('what a Buddy reads', () => {
     expect(visibleState(f.state, buddy).conversations.map(c => c.id).sort()).toEqual([f.app.conversationId, f.chat].sort())
   })
 
+  it('shows no machines, starts or rules in its Swarm read: only names in the roster', () => {
+    const f = setup()
+    machine(f, 'peer-mac', 'peer')
+    f.run({ type: 'rule.set', projectId: f.app.projectId, rule: { kind: 'preferIdle' }, text: 'Idle first.' })
+    const seen = visibleState(f.state, agentActor('buddy'))
+    expect(seen.machines ?? []).toEqual([])
+    expect(seen.rules ?? []).toEqual([])
+    expect(seen.agents.map(a => a.id)).toContain(f.pm)
+    expect(visibleState(f.state, agentActor(f.pm)).machines).toHaveLength(1)
+  })
+
   it('is no other person\'s Buddy chat in the same project', () => {
     const f = setup()
     f.state.conversations.push({ ...group(f, f.chat), id: 'owner-buddy', agentIds: ['other-buddy'], audience: { people: [{ id: 'owner', generation: f.state.people[0]!.generation }] } })
