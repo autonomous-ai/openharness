@@ -528,6 +528,16 @@ describe('a Buddy\'s folder (Lead\'s ruling on the privacy review of #1992)', ()
     expect(() => prepareSwarmSkill(workspace, { role: 'buddy', key: 'session' })).not.toThrow()
   })
 
+  it('locks the folder even when the skill cannot be prepared (re-check of #1992)', () => {
+    const workspace = fixture(), outside = fixture()
+    writeFileSync(join(workspace, 'README.md'), 'readme\n', { mode: 0o644 })
+    mkdirSync(join(workspace, '.harness'))
+    symlinkSync(join(outside, 'elsewhere'), join(workspace, '.harness', '.gitignore'))
+    expect(() => prepareSwarmSkill(workspace, { role: 'buddy', key: 'session' })).toThrow()
+    expect(statSync(join(workspace, 'README.md')).mode & 0o222).toBe(0)
+    expect(JSON.parse(readFileSync(join(workspace, '.claude', 'settings.local.json'), 'utf8')).permissions.allow).toEqual(['Bash(harness super-tab:*)'])
+  })
+
   it('leaves every other role\'s folder as it is', () => {
     const workspace = fixture()
     writeFileSync(join(workspace, 'README.md'), 'readme\n', { mode: 0o644 })

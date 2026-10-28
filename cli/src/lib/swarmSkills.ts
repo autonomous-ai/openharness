@@ -601,6 +601,8 @@ const modeOf = (role: SwarmRole, version: string) =>
 export function prepareSwarmSkill(workspace: string, saved: SwarmSkill): { file: string; instructions: string } {
   if (!parseSwarmSkill(saved)) throw new Error('A Swarm skill needs a role and session key')
   const root = realpathSync(workspace)
+  // First, so a skill that cannot be prepared still leaves a Buddy's folder locked (re-check of #1992).
+  if (saved.role === 'buddy') lockBuddyFolder(root)
   const dir = skillDirectory(root, saved, true)!
   ignoreHarnessRuntime(root)
   const file = join(dir, 'SKILL.md')
@@ -614,7 +616,6 @@ export function prepareSwarmSkill(workspace: string, saved: SwarmSkill): { file:
     writeFileSync(file, text, { flag: 'wx', mode: 0o600 })
     writeRecord(dir, { text: version, notified: version, mode, told: mode, change: 0, toldChange: 0 })
   }
-  if (saved.role === 'buddy') lockBuddyFolder(root)
   return { file, instructions: `${swarmSkillUse(saved.role, mode)} Before working, read ${JSON.stringify(file)} with your file or shell tool.` }
 }
 

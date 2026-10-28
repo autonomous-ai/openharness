@@ -205,6 +205,8 @@ any still starting, and stops their posts. Their chats stay for their owners to 
   file editing is turned off, and the files in its own copy of the project are read-only. It may run on any machine its
   owner may use. A Codex Buddy keeps Codex's full permissions with read-only files, so it runs only on its owner's own
   machines (follow-up: give Codex the same pre-approved commands). No Buddy gets the Harness GitHub App's token.
+  Claude Code also merges allow rules from the machine owner's own settings and the project's checked-in settings: a
+  broad shell rule there applies to a Buddy too, so keep those narrow on machines that run Claude Buddies.
 - Nobody else is ever added to a Buddy chat, the Swarm's owner and the product manager included.
 - A proposal is sent only for its owner's own message in their Buddy chat that asked for it: their newest message there,
   or one from the last hour, and only once for each such message. The server writes the "on behalf of" label, so a Buddy cannot leave it out or change it.
