@@ -1,3 +1,4 @@
+import { isBuddy, isBuddyChat } from './buddies.js'
 import type { PrismaClient } from '@prisma/client'
 import { ensureIndex } from '../lib/db/indexes.js'
 import { activeWork, actorKey, agent, author, conversation, fail, isLeads, stableId, type Actor, type Agent, type Author, type Conversation, type MessageDraft,
@@ -122,6 +123,9 @@ export function terminalAlert(state: SuperTabState, actor: Actor, sender: Author
   // Its engine has been retrying its model for 10 minutes (2026-10-24: a Builder on a small local model retried for an
   // hour while its Lead waited on it).
   if (command.alert === 'model') text = `${nameOf(target)} can't get answers from its model: its requests keep failing. Stop it, or give the work to another model.`
+  // A Buddy's alert is its owner's alone, in their chat: the PM neither reads that chat nor runs the Buddy (buddies.ts).
+  const chat = isBuddy(target) ? state.conversations.find(c => isBuddyChat(c) && c.agentIds.includes(target.id)) : undefined
+  if (chat) return [{ id, conversationId: chat.id, author: sender, replyTo: null, recipients: [], text, source }]
   return toLead(state, target, { id, conversationId: group.id, author: sender, replyTo: null, recipients: [], text, source })
 }
 

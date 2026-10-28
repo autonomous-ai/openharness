@@ -62,9 +62,11 @@ export async function swarmRoleFor(sources: SwarmSources, harnessId: string): Pr
     if (led) return { role: 'lead' as const, mode: groupSkillMode(state, led) }
     const member = groups.find(group => Array.isArray(group.agentIds) && group.agentIds.includes(target.id)
       || object(group.assignment).agentId === target.id && object(object(group.assignment).execution).machineId === machineId)
-    return member ? { role: agent.role === 'reviewer' ? 'review' as const : 'dev' as const, mode: groupSkillMode(state, member) } : null
+    // A Buddy names its owner (backend buddies.ts); its role field stays a builder's for older readers.
+    const role = agent.buddyOf && typeof agent.buddyOf === 'object' ? 'buddy' as const : agent.role === 'reviewer' ? 'review' as const : 'dev' as const
+    return member ? { role, mode: groupSkillMode(state, member) } : null
   }))
-  return (['lead', 'dev', 'review'] as const).map(role => grants.find(grant => grant?.role === role)).find(Boolean) ?? null
+  return (['lead', 'dev', 'review', 'buddy'] as const).map(role => grants.find(grant => grant?.role === role)).find(Boolean) ?? null
 }
 
 interface Entry {

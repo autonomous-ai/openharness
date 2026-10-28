@@ -950,6 +950,7 @@ export class SuperTabStore {
       }
       if (command.type === 'machine.contribute') context.abandonedStartIds = await abandonedStarts(tx, tabId, original, command.machineId, context.now)
       if (command.type === 'agent.start') context.contribution = await this.contribution(tx, original, actor, command.request, true)
+      if (command.type === 'buddy.create') context.contribution = await this.contribution(tx, original, actor, command, true)
       if (command.type === 'agent.started' || command.type === 'agent.startDispatch') {
         const start = original.starts?.find(s => s.id === command.startId) ?? fail('NOT_FOUND', 'This agent start is unavailable.', 404)
         context.contribution = await this.contribution(tx, original, actor, start.request, true)
@@ -959,9 +960,20 @@ export class SuperTabStore {
         if (reply) context.reply = { id: reply.id, conversationId: reply.conversationId, author: reply.author as unknown as Author, createdAt: reply.createdAt.getTime() }
       }
       if (command.type === 'message.send' && actor.kind === 'person') context.openTags = await openTags(tx, tabId, command.conversationId, actor.userId, context.now)
-      if ((command.type === 'rule.set' || command.type === 'rule.remove' || command.type === 'project.skills' || command.type === 'tab.tidy') && command.askedIn) {
+      if ((command.type === 'rule.set' || command.type === 'rule.remove' || command.type === 'project.skills' || command.type === 'tab.tidy'
+        || command.type === 'tab.buddies') && command.askedIn) {
         const asked = await tx.superTabMessage.findFirst({ where: { id: command.askedIn.messageId, tabId, conversationId: command.askedIn.conversationId } })
         if (asked) context.askedIn = { author: asked.author as unknown as Author, source: !!asked.source, createdAt: asked.createdAt.getTime() }
+      }
+      if (command.type === 'buddy.propose') {
+        const asked = await tx.superTabMessage.findFirst({ where: { id: command.ownerMessageId, tabId, conversationId: command.conversationId } })
+        // The newest message its owner wrote there: the chat's newest rows, the Buddy's and the owner's in turn.
+        const recent = asked ? await tx.superTabMessage.findMany({ where: { tabId, conversationId: command.conversationId },
+          orderBy: { sequence: 'desc' }, take: 50, select: { id: true, author: true, source: true } }) : []
+        const ownerId = (asked?.author as unknown as Author | undefined)?.id
+        const newest = recent.find(m => !m.source && (m.author as unknown as Author).kind === 'person' && (m.author as unknown as Author).id === ownerId)
+        if (asked) context.proposalAsk = { id: asked.id, conversationId: asked.conversationId, author: asked.author as unknown as Author,
+          source: !!asked.source, createdAt: asked.createdAt.getTime(), ...(newest ? { newestOwnerMessageId: newest.id } : {}) }
       }
       if (command.type === 'message.send' && actor.kind === 'agent') {
         const recent = await tx.superTabMessage.findMany({ where: { tabId, conversationId: command.conversationId },
