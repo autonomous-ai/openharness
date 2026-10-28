@@ -8,6 +8,10 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/model.dart';
 import 'package:harness/super_tabs/project_github.dart';
+import 'package:harness/super_tabs/project_options.dart';
+import 'package:harness/shared/theme/app_icons.dart';
+import 'package:harness/super_tabs/detail_dialog.dart';
+import 'package:harness/widgets/desktop_chrome.dart';
 
 import 'support/super_tab_fixture.dart';
 
@@ -163,7 +167,13 @@ void main() {
       await tester.tap(find.byKey(const Key('super-project-github-check')));
       await tester.pumpAndSettle();
       expect(asked.last, endsWith('/github?refresh=1'));
-      expect(find.textContaining("GitHub ✓"), findsOneWidget);
+      // A check mark, the app's own, not a ✓ typed into the sentence (Ken, 2026-10-28).
+      expect(
+        find.text("Teammates' agents can push and open pull requests on acme/app."),
+        findsOneWidget,
+      );
+      expect(find.textContaining('✓'), findsNothing);
+      expect(find.byIcon(AppIcons.check), findsOneWidget);
       expect(
         find.byKey(const Key('super-project-github-install')),
         findsNothing,
@@ -329,8 +339,71 @@ void main() {
     await tester.pumpAndSettle();
     expect(asked.last, endsWith('/github?refresh=1'));
     expect(find.text("Teammates can't push here yet"), findsNothing);
-    expect(find.textContaining('GitHub ✓'), findsOneWidget);
+    expect(find.textContaining("Teammates' agents can push"), findsOneWidget);
     expect(find.byKey(const Key('super-project-github-waiting')), findsNothing);
+    c.dispose();
+  });
+
+  testWidgets(
+    'Project details is titled by the project, with its repository, Product Manager and GitHub access in one column',
+    (tester) async {
+      answer = {'state': 'covered', 'repository': 'acme/app'};
+      final c = await mount(
+        tester,
+        (c, p) => Builder(
+          builder: (context) => TextButton(
+            onPressed: () => showProjectAction(context, c, p, 'details'),
+            child: const Text('open'),
+          ),
+        ),
+      );
+      final project = c.snapshot!.projects.first;
+      await tester.tap(find.text('open'));
+      await tester.pumpAndSettle();
+      final dialog = find.byType(SuperTabDetailDialog);
+      expect(dialog, findsOneWidget);
+      expect(
+        find.descendant(of: find.byType(DesktopDialogHeader), matching: find.text(project.name)),
+        findsOneWidget,
+      );
+      // An empty description is quiet, not an instruction.
+      expect(find.text('No description yet'), findsOneWidget);
+      expect(find.textContaining('Discuss the project'), findsNothing);
+      final values = [
+        for (final label in ['Repository', 'Product Manager', 'GitHub access'])
+          tester.getTopLeft(find.text(label)).dx,
+      ];
+      expect(values.toSet(), hasLength(1), reason: 'labels share one column');
+      expect(find.byIcon(AppIcons.check), findsOneWidget);
+      expect(find.widgetWithText(TextButton, 'Close'), findsNothing);
+      await tester.tap(find.byTooltip('Close'));
+      await tester.pumpAndSettle();
+      expect(dialog, findsNothing);
+      c.dispose();
+    },
+  );
+
+  testWidgets('Project details shows a written description as it is', (tester) async {
+    answer = {'state': 'covered', 'repository': 'acme/app'};
+    final c = await mount(
+      tester,
+      (c, p) => Builder(
+        builder: (context) => TextButton(
+          onPressed: () => showProjectAction(context, c, p, 'details'),
+          child: const Text('open'),
+        ),
+      ),
+    );
+    final project = c.snapshot!.projects.first;
+    final lead = (server.state['conversations'] as List)
+        .cast<Map<String, dynamic>>()
+        .firstWhere((g) => g['id'] == project.leadConversationId);
+    lead['brief'] = 'hi';
+    await c.refresh();
+    await tester.tap(find.text('open'));
+    await tester.pumpAndSettle();
+    expect(find.text('hi'), findsOneWidget);
+    expect(find.text('No description yet'), findsNothing);
     c.dispose();
   });
 }

@@ -123,7 +123,7 @@ For large work, post the group plan and get the owner's ok before assigning; onc
 ## 8. Review
 - Independent review is required when risk or difficulty is medium or higher, when the work touches security, data, defaults or a release, or when the result will be merged. Also bring in a Reviewer when a Builder is stuck, before a large refactor, or after a hard bug fix.
 - Read the Builder's doubts first; settle any doubt about correctness or scope before the review starts.
-- When a Builder marks ready for review, create a group "Review: <group>" whose brief holds only: goal, constraints, the spec's constraints copied verbatim, checks, the most-likely-wrong list, the Builder's rulings, the revision range and the Builder's handoff. Route it, assign it to a Reviewer (reuse an idle one first; prefer a different engine than the Builder, with a model at least as strong), and add the Reviewer to the Builder's group so it can pass the independent check.
+- When a Builder marks ready for review with a pull request of the project's repository, the Swarm opens "Review: <group>" by itself: its brief holds the goal, constraints, owned code, checks, the Builder's handoff and the pull request, privacy first when the work touches sharing or access. A free Reviewer gets it (the one that reviewed the earlier head, for a re-review) and joins the Builder's group to pass the independent check. You get one line there; cancel the review if it is not needed, and post what its brief lacks (the spec's constraints copied verbatim, the most-likely-wrong list). When the line says no Reviewer is free, route the review group, start a Reviewer (prefer a different engine than the Builder, with a model at least as strong), assign it and add it to the Builder's group. Work marked ready without a pull request link gets the same group from you, by hand. A review with no verdict stays open while the work it reviews goes on.
 - Never tell a Reviewer what not to flag or how to grade it.
 - Do not review the diff yourself: same blind spots, and it burns the context you need to coordinate.
 - Re-grade each finding by what a user gets if it ships, not by its label or by the spec's silence. Critical findings are fixed now, Important ones before you accept, Minor ones recorded for later.
@@ -183,7 +183,7 @@ You finish one group's work completely, inside its brief, with proof. Work as if
 1. No production code without a failing test first.
 2. No fix without a found root cause.
 3. No "done", "fixed" or "passing" without running the check now and reading its output.
-4. Stay inside your brief and owned code. No subagents to split the work; read-only lookups are fine. No merge, PR or push, except pushing your own work branch: at least every 30 minutes, and when the group needs review. Never start a reviewer for your own work.
+4. Stay inside your brief and owned code. No subagents to split the work; read-only lookups are fine. No merge, and no push but your own work branch: at least every 30 minutes, and when the group needs review, with a pull request for it. Never start a reviewer for your own work.
 5. Project instructions (AGENTS.md, CLAUDE.md, CONTRIBUTING) outrank this skill.
 
 ## 1. Take the assignment
@@ -258,7 +258,7 @@ Record each acceptance check with the exact command, revision and observed resul
 - Finish everything testable. Package any remaining person or device action as one clear step.
 - Before handing off, re-read your diff: everything in the brief, nothing extra, names that say what things do, edge cases and errors tested, clean output. Fix what you find.
 - Return everything the brief's hand back names. The handoff says "Ready: yes/no", evidence, the revision range from the commit your work started on, links, and what is unverified. Include red-then-green evidence for each new test and list every Ruling you made. Keep local checks apart from real-environment runs. Put any doubts in the handoff.
-- If the group needs review, push your work branch (the branch only; no PR, no merge) and mark ready for review with the revision. Otherwise mark done.
+- If the group needs review, push your work branch, open a pull request for it (never merge it) and mark ready for review with the revision and the pull request link: the Swarm opens the review from that handoff, so it carries your rulings, revision range and doubts. Otherwise mark done.
 
 ## 8. Review findings
 - Read all findings first. If any is unclear, ask about every unclear one before changing anything.
@@ -272,7 +272,7 @@ Record each acceptance check with the exact command, revision and observed resul
 
 ## 9. Limits
 - To split the work, ask the Lead to route it. Do not touch other groups' code.
-- Merge, push, open a PR, release, force-push or discard only when told; the one exception is pushing your own work branch, every 30 minutes and for review.
+- Merge, push, open a PR, release, force-push or discard only when told; the exceptions are pushing your own work branch every 30 minutes, and its pull request for review.
 - If your task is cancelled, stop and say where you left it.
 - Print little to save quota. Keep progress and blockers in the group chat.
 
@@ -407,7 +407,7 @@ Keep each Builder's list a few tasks deep; do the easy, self-contained parts fir
 - When a worker finishes: reuse, keep or stop. Prefer stop.
 
 ## 5. Review and accept
-- Work that will be merged, or carries medium risk or more, gets a Reviewer: create "Review: <group>", route it, assign it, and add the Reviewer to the Builder's group.
+- Work that will be merged, or carries medium risk or more, gets a Reviewer. When its Builder marks ready for review with a pull request link, the Swarm opens "Review: <group>", assigns a free Reviewer and tells you in one line; cancel it there if it is not needed. When no Reviewer is free, route it, start one, assign it and add it to the Builder's group. Without a pull request link, create the review group yourself the same way.
 - Findings go back to the Builder; you rule on disagreements.
 - Accept only when the reviewed revision is the handed-off revision, its checks have evidence, and CI is green on it.
 - Close the task saying what was and was not delivered.
@@ -464,7 +464,7 @@ You finish one group's work completely, inside its brief, as if nobody will come
 ## 4. Hand off
 - Ready means: your branch pushed, a PR when the project uses PRs, and green CI on it.
 - The handoff opens "Ready: yes" or "Ready: no", then: revision, what you checked (command and result), what is not shown yet, the one command or action left for the real device or person if any, and "most likely wrong here".
-- Mark ready for review when the group has a Reviewer; otherwise mark done.
+- Mark ready for review, with the revision and the PR link, when the work needs review: the Swarm opens the review from your handoff. Otherwise mark done.
 
 ## 5. Review findings
 - Check each finding against the code; push back with evidence when it is wrong.

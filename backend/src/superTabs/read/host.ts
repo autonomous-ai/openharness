@@ -162,7 +162,7 @@ export class HostReads {
 
   private async lookups(tx: Transaction, state: SuperTabState, teams: Array<{ machineId: string }>): Promise<HostLookups> {
     const people = await tx.user.findMany({ where: { id: { in: state.people.map(p => p.id) }, autonomousEnv: state.environment }, select: { id: true, email: true } })
-    const confidential = await confidentialSessions(tx, state.agents.map(a => a.id))
+    const confidential = await confidentialSessions(tx, state.agents.map(a => a.id), state.id)
     return { people, confidential, teams, githubApp: !!this.options.githubApp, agentGrant: target => this.store.agentGrant(tx, state, target) }
   }
 

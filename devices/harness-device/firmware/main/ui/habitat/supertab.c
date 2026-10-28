@@ -57,6 +57,13 @@ bool ht_supertab_lead_add(ht_supertab_t *t, const ht_lead_in_t *in)
                !strcmp(s, "work") ? HT_LEAD_WORK : HT_LEAD_DONE;
     l->order = in->order < 0 ? -1 : in->order;
     l->since_s = in->since < 0 ? -1 : in->since > INT32_MAX ? INT32_MAX : (int32_t)in->since;
+    // The chat on the face. One this dial cannot name (an unknown kind, an id it cannot hold) is the Lead chat with no
+    // id: the Lead stays, and no chat's recap is taken for it.
+    const char *c = in->chat ? in->chat : "";
+    l->chat = !strcmp(c, "group") ? HT_CHAT_GROUP : !strcmp(c, "pm") ? HT_CHAT_PM : HT_CHAT_LEAD;
+    bool named = (!strcmp(c, "group") || !strcmp(c, "pm") || !strcmp(c, "lead")) && put_id(l->chat_id, in->chat_id, true);
+    if (named) put_text(l->chat_name, sizeof l->chat_name, in->chat_name);
+    else { l->chat = HT_CHAT_LEAD; l->chat_id[0] = 0; l->chat_name[0] = 0; }
     t->lead_n++;
     return true;
 }
@@ -163,15 +170,22 @@ void ht_supertabs_recap_open(ht_supertabs_t *s, const char *tab, const char *lea
     bool open = lead && *lead && tab && *tab;
     put_text(s->recap.tab, sizeof s->recap.tab, open ? tab : "");
     put_text(s->recap.lead, sizeof s->recap.lead, open ? lead : "");
+    s->recap.chat_id[0] = 0;
     s->recap.text[0] = 0;
     s->recap.at = 0;
     s->recap.asked_ms = now_ms;
     s->recap.state = open ? HT_RECAP_LOADING : HT_RECAP_NONE;
 }
-bool ht_supertabs_recap_put(ht_supertabs_t *s, const char *tab, const char *lead, const char *text, uint32_t at, bool none)
+bool ht_supertabs_recap_put(ht_supertabs_t *s, const char *tab, const char *lead, const char *chat_id, const char *text, uint32_t at, bool none)
 {
     if (s->recap.state == HT_RECAP_NONE || !tab || !lead || strcmp(s->recap.tab, tab) || strcmp(s->recap.lead, lead))
         return false;
+    // A recap for another chat than the one on the face (the desktop moved on while it was read) is not this face's.
+    const ht_supertab_t *t = ht_supertabs_find(s, tab);
+    const char *face = "";
+    for (int i = 0; t && i < t->lead_n; i++) if (!strcmp(t->leads[i].id, lead)) face = t->leads[i].chat_id;
+    if (strcmp(chat_id ? chat_id : "", face)) return false;
+    put_text(s->recap.chat_id, sizeof s->recap.chat_id, face);
     put_text(s->recap.text, sizeof s->recap.text, none ? "" : text);
     s->recap.at = at;
     s->recap.state = s->recap.text[0] ? HT_RECAP_LOADED : HT_RECAP_EMPTY;

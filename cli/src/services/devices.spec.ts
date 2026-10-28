@@ -612,6 +612,61 @@ describe('what the windows say, reaching the dial', () => {
       expect(superTabRequest).not.toHaveBeenCalled()
     })
 
+    it('tells the cards the window\'s open Swarm conversation, again only when it changes', () => {
+      const superTabRequest = vi.fn(async () => ({ ok: true }))
+      const { port, reconnected } = withRequest(superTabRequest)
+      const open = (active: string, conversationId?: string) => ({ active, tiles: [], swarms: [
+        { id: 'plain', name: 'plain', agentIds: [], panes: 0 },
+        { id: 'tab-st1', name: 'st1', agentIds: [], panes: 0, superTabId: 'st1', projectId: 'p1', ...(conversationId ? { conversationId } : {}) }] })
+      port.swarms(open('tab-st1', 'pm1'))
+      seen.host.swarmCardsWanted!(true)
+      expect(superTabRequest).toHaveBeenLastCalledWith({ action: 'cardsWanted', on: true, include: ['st1'], focus: { tabId: 'st1', conversationId: 'pm1' } })
+      port.swarms(open('tab-st1', 'pm1'))
+      expect(superTabRequest).toHaveBeenCalledTimes(1)
+      port.swarms(open('tab-st1', 'g1'))
+      expect(superTabRequest).toHaveBeenLastCalledWith({ action: 'cardsWanted', on: true, include: ['st1'], focus: { tabId: 'st1', conversationId: 'g1' } })
+      // Another tab active, or a Swarm tab that names no conversation: no focus, and the wish says none.
+      port.swarms(open('plain', 'g1'))
+      expect(superTabRequest).toHaveBeenLastCalledWith({ action: 'cardsWanted', on: true, include: ['st1'] })
+      port.swarms(open('tab-st1'))
+      expect(superTabRequest).toHaveBeenCalledTimes(3)
+      port.swarms(open('tab-st1', 'g1'))
+      superTabRequest.mockClear()
+      reconnected.forEach((run) => run())
+      expect(superTabRequest.mock.calls).toEqual([[{ action: 'cardsWanted', on: true, include: ['st1'], focus: { tabId: 'st1', conversationId: 'g1' } }]])
+      // Nobody wants cards: a focus change says nothing.
+      seen.host.swarmCardsWanted!(false)
+      superTabRequest.mockClear()
+      port.swarms(open('tab-st1', 'pm1'))
+      expect(superTabRequest).not.toHaveBeenCalled()
+    })
+
+    it('asks for the chat on the face for a swarmChat dial: recap, open and talk carry the flag, and a chat recap names its chat', async () => {
+      const answers: Array<Record<string, unknown>> = [
+        { ok: true, text: 'from the group', at: 3, none: false, chatId: 'g1' },
+        { ok: true, text: 'no chat named', at: 3, none: false },
+        { ok: true, text: 'bad chat', at: 3, none: false, chatId: 'bad id' },
+        { ok: true, text: 'lead', at: 3, none: false, chatId: 'g1' },
+        { ok: true, said: true },
+      ]
+      const superTabRequest = vi.fn(async (_payload: Record<string, unknown>) => answers.shift() ?? { ok: true })
+      withRequest(superTabRequest)
+      expect(await seen.host.swarmCardRecap!('st1', 'lead1', true)).toEqual({ tabId: 'st1', leadId: 'lead1', text: 'from the group', at: 3, none: false, chatId: 'g1' })
+      expect(superTabRequest).toHaveBeenLastCalledWith({ action: 'cardRecap', tabId: 'st1', leadId: 'lead1', chat: true })
+      // A chat recap that does not name its chat by an id is no recap: the dial must not show it for another chat.
+      expect(await seen.host.swarmCardRecap!('st1', 'lead1', true)).toBeNull()
+      expect(await seen.host.swarmCardRecap!('st1', 'lead1', true)).toBeNull()
+      // Without the flag, today's recap: no chat asked for, none passed on.
+      expect(await seen.host.swarmCardRecap!('st1', 'lead1')).toEqual({ tabId: 'st1', leadId: 'lead1', text: 'lead', at: 3, none: false })
+      expect(superTabRequest).toHaveBeenLastCalledWith({ action: 'cardRecap', tabId: 'st1', leadId: 'lead1' })
+      expect(await seen.host.swarmSay!('h1', 'ship it', true)).toBe(true)
+      expect(superTabRequest).toHaveBeenLastCalledWith({ action: 'cardSay', harnessId: 'h1', text: 'ship it', chat: true })
+      seen.host.swarmCardOpen!('c1', 'st1', 'lead1', true)
+      expect(superTabRequest).toHaveBeenLastCalledWith({ action: 'cardOpen', session: 'c1', tabId: 'st1', leadId: 'lead1', chat: true })
+      seen.host.swarmCardOpen!('c1', 'st1', null)
+      expect(superTabRequest).toHaveBeenLastCalledWith({ action: 'cardOpen', session: 'c1', tabId: 'st1', leadId: null })
+    })
+
     it('reads a recap through the service, cut to 1,500 bytes on a character; anything unusable is null', async () => {
       const answers: Array<Record<string, unknown> | 'throw'> = [
         { ok: true, tabId: 'st1', leadId: 'lead1', text: 'é'.repeat(1000), at: 1792560000, none: false },

@@ -9,10 +9,9 @@ import { ensureIndex } from './db/indexes.js'
 import { PRODUCT_USAGE_DAYS, type ProductUsageChoice, type ProductUsageReport } from '../types/productUsage.js'
 import { ACTIVITY_DAYS, type ActivitySurface } from '../types/productUsageActivity.js'
 import { incrementUsageTotals, type UsageIncrement } from './productUsageWrite.js'
-import { createUsageAdmission } from './productUsageAdmission.js'
+import { createUsageBatch } from './productUsageBatch.js'
 
 const DAY = 86_400_000
-const writeUsage = createUsageAdmission()
 type Db = Pick<Prisma.TransactionClient, 'productUsagePreference' | 'analyticsMachineState'>
 
 /** A pre-existing off choice wins over the new default. Never cache an enabled answer. */
@@ -38,6 +37,19 @@ function validDay(day: string, now: Date): boolean {
   const today = Math.floor(now.getTime() / DAY) * DAY
   return Number.isFinite(stamp) && new Date(stamp).toISOString().slice(0, 10) === day
     && stamp <= today && stamp > today - PRODUCT_USAGE_DAYS * DAY
+}
+
+/** [productUsageChoice] for several accounts at once, in two reads: a batch's permission checks. */
+async function productUsageChoices(userIds: string[], db: Db): Promise<Map<string, ProductUsageChoice>> {
+  const choices = new Map<string, ProductUsageChoice>()
+  if (!userIds.length) return choices
+  for (const saved of await db.productUsagePreference.findMany({ where: { userId: { in: userIds } },
+    select: { userId: true, enabled: true, revision: true } })) choices.set(saved.userId, { enabled: saved.enabled, revision: saved.revision })
+  const unsaved = userIds.filter(id => !choices.has(id))
+  const off = new Set(unsaved.length ? (await db.analyticsMachineState.findMany({ where: { userId: { in: unsaved }, consent: 'off' },
+    select: { userId: true } })).map(row => row.userId) : [])
+  for (const id of unsaved) choices.set(id, { enabled: !off.has(id), revision: 0 })
+  return choices
 }
 
 /** Identity is used for permission only. Neither it nor the report body reaches analytics storage. */
@@ -66,23 +78,24 @@ const STAFF_ACCOUNTS_MAX = 10_000
  * 2026 the team was 8–30% of the phone's people each day, and a TestFlight build's counts were the App Store's.
  * Kept, not dropped, so either can still be read on its own. Signed-out setup reports have no account to ask.
  *
- * Read inside the admitted transaction, beside the permission check: a lookup ahead of admission would put a
- * database read per report outside the bound that admission keeps on this process.
+ * Read inside the batch's transaction, beside the permission check, one read for the accounts not seen yet.
  */
-async function apartPrefix(tx: Pick<Prisma.TransactionClient, 'user'>, context: ProductUsageContext | undefined,
-  userId: string | undefined): Promise<string> {
-  if (context?.channel === 'testing') return 'testing:'
-  if (!userId) return ''
-  let staff = staffAccounts.get(userId)
-  if (staff === undefined) {
-    const user = await tx.user.findUnique({ where: { id: userId }, select: { email: true } })
-    staff = !!user?.email.toLowerCase().endsWith(STAFF_EMAIL)
-    if (staffAccounts.size >= STAFF_ACCOUNTS_MAX) staffAccounts.clear()
-    staffAccounts.set(userId, staff)
+async function apartPrefixes(tx: Pick<Prisma.TransactionClient, 'user'>, reports: QueuedReport[]): Promise<string[]> {
+  const unknown = [...new Set(reports.filter(r => r.context?.channel !== 'testing' && r.userId && !staffAccounts.has(r.userId))
+    .map(r => r.userId!))]
+  if (unknown.length) {
+    const emails = new Map((await tx.user.findMany({ where: { id: { in: unknown } }, select: { id: true, email: true } }))
+      .map(user => [user.id, user.email]))
+    if (staffAccounts.size + unknown.length > STAFF_ACCOUNTS_MAX) staffAccounts.clear()
+    for (const id of unknown) staffAccounts.set(id, !!emails.get(id)?.toLowerCase().endsWith(STAFF_EMAIL))
   }
-  return staff ? 'staff:' : ''
+  return reports.map(r => r.context?.channel === 'testing' ? 'testing:' : r.userId && staffAccounts.get(r.userId) ? 'staff:' : '')
 }
 export function resetStaffAccountsForTests(): void { staffAccounts.clear() }
+
+interface QueuedReport { id: string; day: string; revision?: number; context?: ProductUsageContext; userId?: string
+  increments: UsageIncrement[] }
+type IngestResult = { accepted: true } | ({ accepted: false; reason: 'CHOICE_CHANGED' } & ProductUsageChoice)
 
 async function ingestCounters(report: SetupUsageReport & { revision?: number; context?: ProductUsageContext }, userId?: string, now = new Date()) {
   if (report.context?.channel === 'development') return { accepted: true, reason: 'DEVELOPMENT' }
@@ -97,41 +110,63 @@ async function ingestCounters(report: SetupUsageReport & { revision?: number; co
     increments.push({ dayUtc: new Date(Math.floor(now.getTime() / DAY) * DAY),
       metric: `health_${report.context.surface}_report_late`, value: 1 })
   }
-  // October's delivery audit found aggregate write conflicts. Retry the entire transaction,
-  // including permission, without extending a slow request or waiting a full client interval.
-  // At most four attempts; only fast conflicts may start another within the first second.
-  return writeUsage(async () => {
-    const started = performance.now()
-    for (let attempt = 0; ; attempt++) {
-      try {
-        return await prisma.$transaction(async tx => {
-          if (userId) {
-            const choice = await productUsageChoice(userId, tx)
-            if (!choice.enabled || choice.revision !== report.revision) return { accepted: false, reason: 'CHOICE_CHANGED', ...choice }
-          }
-          // Receipt and increments commit together; a lost HTTP response can be retried with the same id.
-          const apart = await apartPrefix(tx, report.context, userId)
-          await tx.productUsageReceipt.create({ data: {
-            id: report.id, expiresAt: new Date(Date.parse(report.day) + (PRODUCT_USAGE_DAYS + 1) * DAY),
-          } })
-          await incrementUsageTotals(tx, apart ? increments.map(i => ({ ...i, metric: apart + i.metric })) : increments)
-          return { accepted: true }
+  return writeUsage({ id: report.id, day: report.day, revision: report.revision, context: report.context, userId, increments })
+}
+
+const writeUsage = createUsageBatch(commitReports)
+
+/** One transaction for a batch: each report's permission, its receipt and the batch's summed totals commit together;
+ * a lost HTTP response can be retried with the same id, and a receipt already committed counts once. Write conflicts
+ * now come only from another process's batch: the whole batch is retried, permission included, at most four
+ * attempts, and only fast conflicts may start another within the first second. */
+async function commitReports(reports: QueuedReport[]): Promise<IngestResult[]> {
+  const started = performance.now()
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await prisma.$transaction(async tx => {
+        const choices = await productUsageChoices([...new Set(reports.flatMap(r => r.userId ? [r.userId] : []))], tx)
+        const results: IngestResult[] = reports.map(r => {
+          const choice = r.userId ? choices.get(r.userId)! : null
+          return !choice || (choice.enabled && choice.revision === r.revision) ? { accepted: true }
+            : { accepted: false, reason: 'CHOICE_CHANGED', ...choice }
         })
-      } catch (error) {
-        // A competing first writer of a daily total is not a duplicate unless its receipt committed.
-        const code = (error as { code?: string } | null)?.code
-        if (code === 'P2002'
-            && await prisma.productUsageReceipt.findUnique({ where: { id: report.id }, select: { id: true } })) return { accepted: true }
-        const pause = 25 * 2 ** attempt + Math.floor(Math.random() * 50)
-        // A Mongo lock wait comes without a Prisma code, labelled transient, as Swarm's do (superTabs/store.ts).
-        const transient = error instanceof Error && error.message.includes('TransientTransactionError')
-        if ((code !== 'P2034' && code !== 'P2002' && !transient) || attempt >= 3
-            || performance.now() - started + pause >= 1000) throw error
-        await delay(pause)
-        if (performance.now() - started >= 1000) throw error
-      }
+        const permitted = reports.filter((_, i) => results[i].accepted)
+        const received = new Set((await tx.productUsageReceipt.findMany({
+          where: { id: { in: [...new Set(permitted.map(r => r.id))] } }, select: { id: true } })).map(r => r.id))
+        // A report sent again while its first copy is in this same batch counts once too.
+        const fresh: QueuedReport[] = []
+        for (const r of permitted) if (!received.has(r.id)) { received.add(r.id); fresh.push(r) }
+        if (!fresh.length) return results
+        await tx.productUsageReceipt.createMany({ data: fresh.map(r => ({
+          id: r.id, expiresAt: new Date(Date.parse(r.day) + (PRODUCT_USAGE_DAYS + 1) * DAY) })) })
+        const apart = await apartPrefixes(tx, fresh)
+        await incrementUsageTotals(tx, summed(fresh.flatMap((r, i) =>
+          apart[i] ? r.increments.map(inc => ({ ...inc, metric: apart[i] + inc.metric })) : r.increments)))
+        return results
+      })
+    } catch (error) {
+      const code = (error as { code?: string } | null)?.code
+      const pause = 25 * 2 ** attempt + Math.floor(Math.random() * 50)
+      // A Mongo lock wait comes without a Prisma code, labelled transient, as Swarm's do (superTabs/store.ts).
+      const transient = error instanceof Error && error.message.includes('TransientTransactionError')
+      if ((code !== 'P2034' && code !== 'P2002' && !transient) || attempt >= 3
+        || performance.now() - started + pause >= 1000) throw error
+      await delay(pause)
+      if (performance.now() - started >= 1000) throw error
     }
-  })
+  }
+}
+
+/** One update per day and name, whichever reports added to it. */
+function summed(increments: UsageIncrement[]): UsageIncrement[] {
+  const totals = new Map<string, UsageIncrement>()
+  for (const inc of increments) {
+    const key = `${inc.dayUtc.toISOString()}|${inc.metric}`
+    const seen = totals.get(key)
+    if (seen) seen.value += inc.value
+    else totals.set(key, { ...inc })
+  }
+  return [...totals.values()]
 }
 
 export type RelayUsageMetric = 'relay_desktop_opens' | 'relay_tui_opens' | 'relay_mobile_opens' | 'relay_web_opens'

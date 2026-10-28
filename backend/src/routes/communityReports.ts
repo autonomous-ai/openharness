@@ -13,7 +13,7 @@ import { z } from 'zod'
 import { communityStarters } from '../lib/communityAccess.js'
 import { communityReportReasons, communityReportTargets, fileReport, type ReportTarget } from '../lib/communityReports.js'
 import { prisma } from '../lib/prisma.js'
-import { createWindowLimiter } from '../lib/windowLimiter.js'
+import { createRateLimiter } from '../lib/rateLimit.js'
 import { requireAdmin } from '../middlewares/authMiddleware.js'
 import { validateBody } from '../middlewares/validation.js'
 import { sendError, sendSuccess } from '../utils/response.js'
@@ -22,7 +22,7 @@ import { environment, publication } from './community.js'
 const target = { targetType: z.enum(communityReportTargets), targetId: z.string().regex(/^[a-z0-9-]{1,80}$/) }
 const reportBody = z.object({ ...target, reason: z.enum(communityReportReasons) }).strict()
 const reviewBody = z.object({ ...target, decision: z.enum(['restore', 'remove']) }).strict()
-const limiter = createWindowLimiter(10 * 60_000, 20)
+const limiter = createRateLimiter('community-report', 10 * 60_000, 20)
 export const resetReportRateLimits = (): void => limiter.reset()
 
 /** What a report is about: the publication it is on, and who made it (who may not report it). */
@@ -68,7 +68,7 @@ export async function communityReportRoutes(app: FastifyInstance): Promise<void>
     const about = await reported(targetType, targetId, autonomousEnv)
     if (!about) return sendError(reply, 'This is no longer available.', 'NOT_FOUND', 404)
     if (about.authorId === userId) return sendError(reply, 'You cannot report your own work.', 'INVALID_REPORT', 400)
-    if (!limiter.allows(userId)) return sendError(reply, 'Please wait before reporting again.', 'RATE_LIMITED', 429)
+    if (!(await limiter.allows(userId))) return sendError(reply, 'Please wait before reporting again.', 'RATE_LIMITED', 429)
     await fileReport({ autonomousEnv, targetType, targetId, harnessId: about.harnessId, userId, reason })
     sendSuccess(reply, { reported: true })
   })

@@ -24,6 +24,9 @@ import { prisma } from './lib/prisma.js'
 import { backendReadinessChecks, createReadiness, drainBeforeClosing, processDrain } from './lib/readiness.js'
 import { configureSwarmStamps } from './superTabs/cache.js'
 import { useSharedSsoProfileStore } from './lib/ssoAuth.js'
+import { useSharedRateCounter } from './lib/rateLimit.js'
+import { createRouteRateLimit } from './middlewares/routeRateLimit.js'
+import { redisWindowCounter } from './lib/redisRateCounter.js'
 import { selfProfileFromEnv } from './lib/selfProfile.js'
 import { drainAllSockets, openSocketCount, RELEASE_UPGRADE_SLOT, type SlotSocket } from './lib/wsServer.js'
 
@@ -144,10 +147,21 @@ async function start(): Promise<void> {
   // Every process shares one memory of validated tokens; without it each worker asks the profile API
   // for itself. Attached before anything can authenticate — the REST gate below and the socket upgrades.
   useSharedSsoProfileStore(redisSsoProfileStore)
+  // Rate limits count across every process and pod (lib/rateLimit.ts), not once per process.
+  useSharedRateCounter(redisWindowCounter(pub))
   configureSwarmStamps(redisSwarmStamps(), { reads: env.SWARM_READ_CACHE === 'on', maxBytes: env.SWARM_CACHE_MB * 2 ** 20 })
 
-  // SSO access-token gate for the control API (data-plane auth happens before Fastify).
+  // SSO access-token gate for the control API (data-plane auth happens before Fastify), inside the per-route limit
+  // (Stability 3.2): a request counts for the person it signed in as, and a token already refused this window is
+  // answered before it costs a sign-in.
+  const routeLimit = createRouteRateLimit({
+    perPersonPerMinute: env.ROUTE_RATE_LIMIT_PER_PERSON_MINUTE,
+    perCallerPerSecond: env.ROUTE_RATE_LIMIT_PER_CALLER_SECOND,
+    perPersonPerSecond: env.ROUTE_RATE_LIMIT_PER_PERSON_SECOND,
+  })
+  app.addHook('onRequest', routeLimit.beforeSignIn)
   registerAuthMiddleware(app)
+  app.addHook('onRequest', routeLimit.afterSignIn)
 
   // Mongo always; Redis where one is configured. Each answers within 1 s or counts as down (lib/readiness.ts).
   const readiness = createReadiness(backendReadinessChecks(process.env, {
