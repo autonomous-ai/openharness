@@ -8,9 +8,14 @@ import type { Prisma } from '@prisma/client'
 import { z } from 'zod'
 import { AGENT_ONLY, fail, isLeads, person, stableId, type Actor, type Conversation, type SuperTabState } from './model.js'
 import { canReadGroup, groupProject, ledProject, projectOf } from './projects.js'
+import { LEDGER_WEEKS } from './leaderboard/record.js'
+import { WEEK_MS } from './leaderboard/week.js'
 
 type Tx = Prisma.TransactionClient
 export const MAX_QUESTIONS = 10
+/** Open decisions one asker may hold for one person: an asker whose question changes a little every turn would otherwise
+ *  write without end, and push real decisions out of the person's list. */
+export const MAX_OPEN_DECISIONS = 20
 
 const line = (max: number) => z.string().trim().min(1).max(max)
 /** What a question offers besides itself: 2–5 distinct options, the index of the recommended one, and what an answer unblocks. */
@@ -88,16 +93,37 @@ const repeatKey = (d: Pick<DecisionDraft, 'askerAgentId' | 'assignmentId' | 'per
   JSON.stringify([d.askerAgentId, d.assignmentId ?? null, d.personId, d.conversationId, d.question, d.options, d.recommended, d.unblocks])
 
 /** Writes the questions asked and returns the decision each one is: an open decision that this ask exactly repeats is that
- *  decision again, not a second one. Read and written in the command's transaction; two identical asks committing at the
- *  same moment can still both be written. */
+ *  decision again, not a second one. New ones beyond MAX_OPEN_DECISIONS from this asker to this person are refused, and
+ *  writing them removes the tab's decisions answered before the leaderboard's weeks. Read and written in the command's
+ *  transaction; asks committing at the same moment each pass the check, so together they can still be written twice or
+ *  go past the cap by what they add. */
 export async function writeDecisions(tx: Tx, tabId: string, drafts: DecisionDraft[], now: number): Promise<string[]> {
   if (!drafts.length) return []
-  const open = await tx.superTabDecision.findMany({ where: { tabId, personId: drafts[0]!.personId, conversationId: drafts[0]!.conversationId,
-    askerAgentId: drafts[0]!.askerAgentId, question: { in: drafts.map(d => d.question) }, ...waiting } })
+  const { personId, askerAgentId } = drafts[0]!
+  const open = await tx.superTabDecision.findMany({ where: { tabId, personId, conversationId: drafts[0]!.conversationId,
+    askerAgentId, question: { in: drafts.map(d => d.question) }, ...waiting } })
   const held = new Map(open.map(o => [repeatKey(o), o.id]))
   const fresh = drafts.filter(d => !held.has(repeatKey(d)))
-  if (fresh.length) await tx.superTabDecision.createMany({ data: fresh.map(d => ({ ...d, tabId, createdAt: new Date(now) })) })
+  if (fresh.length) {
+    const asked = await tx.superTabDecision.count({ where: { tabId, personId, askerAgentId, ...waiting } })
+    if (asked + fresh.length > MAX_OPEN_DECISIONS) {
+      fail('DECISIONS_FULL', `${asked} decisions you asked this person are still open, and at most ${MAX_OPEN_DECISIONS} can be. Wait for answers before asking more.`)
+    }
+    await tx.superTabDecision.createMany({ data: fresh.map(d => ({ ...d, tabId, createdAt: new Date(now) })) })
+    await tx.superTabDecision.deleteMany({ where: { tabId, answeredAt: { lt: new Date(now - LEDGER_WEEKS * WEEK_MS) } } })
+  }
   return drafts.map(d => held.get(repeatKey(d)) ?? d.id)
+}
+
+/** How many decisions this asker has open for this person when one more question would pass MAX_OPEN_DECISIONS, or null when
+ *  it fits: an exact repeat of an open one is that decision again and always fits. Read before a worker's needs_human, which
+ *  at the cap still records its status and only skips the question (review of #1859). */
+export async function fullFor(tx: Tx, tabId: string, ask: Parameters<typeof repeatKey>[0]): Promise<number | null> {
+  const { personId, askerAgentId } = ask
+  const asked = await tx.superTabDecision.count({ where: { tabId, personId, askerAgentId, ...waiting } })
+  if (asked < MAX_OPEN_DECISIONS) return null
+  const same = await tx.superTabDecision.findMany({ where: { tabId, personId, askerAgentId, conversationId: ask.conversationId, question: ask.question, ...waiting } })
+  return same.some(o => repeatKey(o) === repeatKey(ask)) ? null : asked
 }
 
 export async function readAskedDecision(tx: Tx, tabId: string, id: string): Promise<DecisionTarget | undefined> {
@@ -158,11 +184,19 @@ async function readable(tx: Tx, tabId: string, state: SuperTabState, actor: Acto
 }
 
 /** How many of a project's open decisions wait in each conversation for each person, for its digest (digest.ts
- *  decisionLines): never what they ask. Counted by the database, so every one counts, however many there are, and private
- *  ones filtered out later never crowd out shared ones (review of #1772). */
+ *  decisionLines): never what they ask. Every open one is read, so every one counts, however many there are, and private
+ *  ones filtered out later never crowd out shared ones (review of #1772). Counted here, reading only who and where:
+ *  groupBy on this model once panicked the Prisma engine on Mongo (review of #1855). */
 export async function waitingInProject(tx: Tx, tabId: string, projectId: string): Promise<Array<{ conversationId: string; personId: string; count: number }>> {
-  const groups = await tx.superTabDecision.groupBy({ by: ['conversationId', 'personId'], where: { tabId, projectId, ...waiting }, _count: { _all: true } })
-  return groups.map(g => ({ conversationId: g.conversationId, personId: g.personId, count: g._count._all }))
+  const rows = await tx.superTabDecision.findMany({ where: { tabId, projectId, ...waiting }, select: { conversationId: true, personId: true } })
+  const counts = new Map<string, { conversationId: string; personId: string; count: number }>()
+  for (const { conversationId, personId } of rows) {
+    const key = JSON.stringify([conversationId, personId])
+    const entry = counts.get(key)
+    if (entry) entry.count++
+    else counts.set(key, { conversationId, personId, count: 1 })
+  }
+  return [...counts.values()]
 }
 
 /** A person's open decisions: how many, and a digest of which. A client reads its list again when the digest moves, as
