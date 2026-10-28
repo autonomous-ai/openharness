@@ -1,5 +1,3 @@
-import { prepareSwarmSkill } from '../../lib/swarmSkills.js'
-import { swarmGitHubLaunch } from '../../lib/swarmGitHub.js'
 import type { NativeLaunch, NativeLaunchResult, NativeLaunchSource } from '../../engines/nativeLaunch.js'
 /**
  * Creating an agent (`agent_create`): open a fresh pane running the chosen engine in the chosen
@@ -13,7 +11,7 @@ import { realpathSync, statSync } from 'node:fs'
 import { readdir } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import type { BackendSocket } from '../../backendSocket.js'
-import type { ModelsPort } from '../api.js'
+import type { ModelsPort, SwarmLaunch } from '../api.js'
 import { MODEL_MANAGER_ID } from '../../dsh/builtinIds.js'
 import { installedDsh } from '../../dsh/installed.js'
 import { harnessEnvToClear, type DshAccount } from '../../dsh/launch.js'
@@ -99,17 +97,20 @@ export interface CreateAgentDeps {
   /** In the Harness Team account, for an engine it has not signed in itself: the owner's subscription through the
    *  owner's relay (team/relay.ts `teamRelayLaunch`), null otherwise. Absent ⇒ never. */
   ownerRelay?: (engine: AgentEngine) => Promise<{ env: Record<string, string>; args: string[] } | null>
+  /** The Swarm's part of a start with a Swarm role (superTabs/inCore/launch.ts); absent while the Swarm is off. */
+  swarmLaunch?: SwarmLaunch
 }
 
 export function createAgentCreator({
   native: inspectNative, publishConfig, createBackend: initialBackend, recoverBackend, noBackendCode = 'TMUX_UNAVAILABLE', registry, externalResume, watchNewPane, announceSession, attachDsh,
   prepareApiTools, hookPort, hooksDisabled, installOpencodePlugin, gridLaunchMachine, buildGridLaunch, terminalHintMachineName, blocksFolder,
-  gridSetup, privateGridName, dshLaunch, ownerRelay,
+  gridSetup, privateGridName, dshLaunch, ownerRelay, swarmLaunch,
 }: CreateAgentDeps) {
   const prepare = async (input: Parameters<CreateAgent>[0], authority: LaunchAuthority, context?: { local: boolean }): Promise<LaunchPreparation<Awaited<ReturnType<CreateAgent>>>> => {
     if (input.resumeSessionId) return { ok: true, dispatch: () => externalResume(input) }
     const stale = () => ({ ok: false as const, error: 'LAUNCH_AUTHORITY_CHANGED', unavailable: 'launch', detail: 'Waiting for the original launch request’s authority.' })
     if (!authority.current()) return stale()
+    if (input.swarmRole && !swarmLaunch) return { ok: false, error: 'SWARM_SKILL_FAILED', detail: 'The Swarm is off on this computer (HARNESS_SWARM).' }
     let { engine, cwd, bypassPermission, permissionMode, grid, codexHome, dsh, prompt, name, agent, scmLaunchRecord, startedBy, parentAgentId, launchModel } = input
     let createBackend = initialBackend
     if (!createBackend && recoverBackend) {
@@ -346,9 +347,9 @@ export function createAgentCreator({
     // is supposed to use exactly these variables.
     // Another person's project work (superTabs/start.ts): git and gh use the Harness GitHub App's token for the task,
     // never this machine owner's own GitHub login (lib/swarmGitHub.ts). Kept on the row's skill, so a relaunch keeps it.
-    let swarmGitHub: ReturnType<typeof swarmGitHubLaunch> = null
-    if (input.swarmRole && input.swarmGitHub) {
-      try { swarmGitHub = swarmGitHubLaunch(label) }
+    let swarmGitHub: ReturnType<SwarmLaunch['github']> = null
+    if (swarmLaunch && input.swarmRole && input.swarmGitHub) {
+      try { swarmGitHub = swarmLaunch.github(label) }
       catch (error) { return { ok: false, error: 'SWARM_SKILL_FAILED', detail: String(error) } }
     }
     const clearEnv = [...(gridLaunch ? gridConflictingEnvToClear(gridLaunch) : []), ...harnessEnvToClear(dshEnv), ...swarmGitHub?.clearEnv ?? []]
@@ -361,8 +362,8 @@ export function createAgentCreator({
     const swarmSkill = input.swarmRole ? { role: input.swarmRole, key: label, ...(input.swarmSkillMode ? { mode: input.swarmSkillMode } : {}),
       ...(swarmGitHub ? { github: true as const } : {}) } : undefined
     let swarmInstructions: string | undefined
-    if (swarmSkill) {
-      try { swarmInstructions = prepareSwarmSkill(cwd, swarmSkill).instructions }
+    if (swarmLaunch && swarmSkill) {
+      try { swarmInstructions = swarmLaunch.prepare(cwd, swarmSkill).instructions }
       catch (error) { return { ok: false, error: 'SWARM_SKILL_FAILED', detail: String(error) } }
     }
     const told = agentLaunchArgs(engine, startedBy, { cwd, profile: codexHome, environment: native?.environment, ...(swarmInstructions ? { swarmInstructions } : {}) })

@@ -17,7 +17,8 @@ write the request, and choose the project's visibility. Store uses
 
 Use **+ Project** in the left sidebar to create another project in the current
 Swarm. It uses the same form and creates a separate lead session. Clicking a
-project name opens its lead chat. Its chevron expands numbered workgroups.
+project row opens its lead chat and expands its numbered workgroups; a second
+click on the open project hides them.
 The lead can create and coordinate those workgroups; people usually work
 through the project lead.
 
@@ -97,7 +98,7 @@ a report every 15 seconds, so that a silent machine can be told from a quiet one
 that fails waits a whole 15 seconds before the next.
 
 Each machine in the sidebar is one line, at a project row's height and on its columns: a
-status dot where the project chevrons sit, the name where project names start (a computer's
+status dot at the right edge, where project rows show theirs, the name where project names start (a computer's
 real hostname without `.local`, such as `MacBookPro2021`, or the name a person gave it), then three
 columns every row shares, so their figures line up down the list: Claude's allowance, Codex's,
 and the agents, whose avatars stand 16 points clear of the figures. An allowance is the engine's mark and the share left of its tightest window,
@@ -187,18 +188,24 @@ product manager can see what its terminal shows.
 
 The leaderboard shows how each person helped the team ship this week. People
 compete for fun, but the reward is shared: the team's goal is on top, and
-everyone's points count toward it. In Desktop and the web app, the trophy in the
-conversation header opens it. On a wide window it opens as a column at the far
-right, beside People. On a narrower one it opens as a dialog. It shows the project
-of the open conversation to the people who can read that project.
+everyone's points count toward it. In Desktop and the web app it is the right
+pane's Humans section; there is no separate view. The team goal is one line at
+the top, beside a small week picker. Below it, everyone is listed, with no
+cut-off and most points first. Each person is one row: avatar, name and points
+in fixed columns, with a quiet line of their Shipped, Unblocked and Lent under it.
+It shows the project of the open conversation to the people who can read that
+project. A server without a leaderboard leaves the names without numbers.
 
 Each person has three numbers:
 
-- **Shipped**: requests the person asked for whose work is Done with a linked
-  pull request. A group records its requester when it is opened. A person's own
-  new group names them, and a product manager names the person who asked in the
-  project chat or in their Chat with PM. Product managers mark a group Done only
-  after its pull request has merged. 3 points each.
+- **Shipped**: requests the person asked for whose pull request merged. A group
+  records its requester when it is opened. A person's own new group names them,
+  and a product manager names the person who asked in the project chat or in
+  their Chat with PM. Right after merging, the product manager records the merge
+  with the group and the PR link (and the merge time, for one recorded later, up
+  to four weeks back). The request ships at the merge, even if its work is lost
+  or cancelled afterwards. A group that is Done with a linked PR ships too; the
+  earlier of the merge and Done is when it shipped. 3 points each.
 - **Unblocked**: items needing a person that the person answered. An answer counts
   when it comes from the person the item waits on, or when it replies to the
   question itself. That person is the group's requester, or the project's owner
@@ -208,12 +215,13 @@ Each person has three numbers:
   from each machine's readings. A product manager's session doesn't count: it
   coordinates in confidence and doesn't build. 1 point for every 10 hours.
 
-The top three get medals, and people with the same points share a place. A
-streak counts the days in a row, up to today, with a shipped request. Tapping a
-name shows that person's week: the median time from asking to shipping, the
-median time to answer, and the hours freed and lent. The team goal compares the
-project's open requests, what shipped and the median time from asking to
-shipping with the week before. Weeks run from Monday 00:00 UTC, and the week
+People with the same points share a place. A streak counts the days in a row,
+up to today, with a shipped request. Tapping a name shows that person's week:
+their place, the median time from asking to shipping, the median time to answer,
+the hours freed and lent, and their streak. The team goal line shows what
+shipped, everyone's points and the project's open requests; hovering it compares
+what shipped with the week before and gives the median time from asking to
+shipping. Weeks run from Monday 00:00 UTC, and the week
 picker reaches back three weeks.
 
 **Agents waiting on a person now** lists who agents are waiting on and how many
@@ -225,6 +233,47 @@ shipped, who answered and how long agents waited. It never records what anyone
 wrote. Private conversations, Chat with PM among them, never count and never
 appear in it. Decisions asked of a person will count toward Unblocked once
 decisions ship.
+
+## Avatars, status and celebrations
+
+People and agents each show one avatar wherever they appear: messages, the
+roster, machine rows and mentions. A person sets theirs from their own row in
+the roster. They can pick one of eight pictures or upload a PNG, JPEG or WebP.
+Desktop and the web app crop the upload square and resize it to 256 pixels
+before sending it. The server accepts only those three formats, judged by the
+file's own bytes, and at most 1 MB. Each upload can be used once. Without a picture, a person shows their initial. An
+agent shows a pattern made from its name, the same on every computer, with a
+small Claude or Codex badge. Its contributor changes it from the agent's
+details, and the project's product manager can change it with `agent.avatar`.
+
+A person can also set a short status, such as Focusing, Coffee break or their
+own words up to 80 characters. They can let it clear itself after an hour,
+after four hours or at the end of the day. It shows next to their name and as
+a small emoji on their avatar, and disappears at its time even on a page where
+nothing else changes.
+
+Avatars and status reach only the Swarm's members. Uploaded pictures are kept
+in a private bucket that nobody can read directly. Each member's read of the
+Swarm carries signed links to the pictures it shows. A link stays the same for
+half an hour, so pictures are not fetched on every poll, and stops opening
+within an hour. A copied link expires, and someone removed from the Swarm gets
+no new links. A server without the private bucket (`SUPER_TAB_AVATARS_BUCKET`)
+refuses uploads; the eight pictures still work.
+
+People and agents react to a message with a small set: 👍 🎉 ❤️ 😄 👀 🚀.
+Counts show under the message, with the reader's own highlighted and the names
+on hover. Reacting twice keeps one reaction, and reacting again takes it back.
+Someone who leaves the Swarm drops out of the counts. A reaction changes its
+conversation, so other readers see it within one poll, also when new messages
+arrive in the same poll.
+
+When linked work is marked Done (a group with a pull request, marked Done after
+its merge), the project chat shows one celebration line. It names the person
+who asked for the work, the engineer who built it and the reviewers. A group is
+one request, so only its first Done is celebrated, not a later attempt's. A new
+one throws confetti once on each computer. An old one in the history, or one
+seen with reduced motion, stays still. A private conversation is never celebrated,
+and the line never quotes the work's result.
 
 ## Lead updates
 
@@ -238,6 +287,34 @@ The lead uses `project.report` to acknowledge the request and post a useful
 summary, or `text: null` when nothing merits another message. Human questions,
 serious blockers and completion are reported immediately. This does not start
 a second summarizing model or forward every terminal turn.
+
+## Switching Swarms off on a computer
+
+Swarms are on by default. To run a computer's daemon without them, set
+`HARNESS_SWARM=off` (`0`, `false` and `no` also work) in the environment the
+daemon starts with, then restart it (`harness stop && harness start`). Anything else, or
+leaving it unset, keeps Swarms on.
+
+With Swarms off:
+
+- The daemon never starts the Swarm service, even if the computer has saved
+  Swarm state. No daemon process loads the Swarm's code: not the core, and not
+  the agent cleanup, Share, change agent or models.
+- Agents start, run and close exactly as they do without Swarms. A Product
+  Manager the Swarm kept running can now be stopped like any other agent, and a
+  harness an agent started is cleaned up like any other, even if a Swarm kept it.
+- The computer can't contribute to a Swarm. Swarm requests, including
+  `harness super-tab` and the Swarm's model requests, answer that the service is
+  unavailable. A new agent that asks for a Swarm role is refused, and so is
+  reopening an agent a Swarm started, since it would come back without its role.
+- The computer serves no saved API or model to a Swarm's grid.
+- People watching a harness through a Swarm can't see it, and a session a Swarm
+  marked confidential (a Product Manager, or one in a private chat) still
+  can't be shared at all. That mark is the one piece of saved Swarm state still
+  read while Swarms are off.
+
+Turn Swarms back on by removing the setting and restarting the daemon. Saved
+Swarm state is kept while they're off, so the computer picks up where it left off.
 
 ## Compatibility and rollout
 

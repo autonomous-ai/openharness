@@ -13,6 +13,7 @@ import { HostFeed } from './hostFeed.js'
 import { SwarmReads } from './swarmReads.js'
 import { retainedHarnesses, retentionFile } from './retention.js'
 import { observerSource } from './observers.js'
+import { ContributedMachines } from './machines.js'
 
 const roots: string[] = []
 const hosts: SuperTabHost[] = []
@@ -249,6 +250,104 @@ describe('Super Tab native delivery handoff', () => {
     expect(vi.mocked(t.core.turns.deliver).mock.calls[0]?.[1]).toContain('Message message from Collaborator:\nYes, keep them.')
     expect(vi.mocked(t.core.turns.deliver).mock.calls[0]?.[1]).toContain('On Claude Code or Codex, Leads use swarm-lead, Builders swarm-dev and Reviewers swarm-review.')
     expect(vi.mocked(t.core.turns.deliver).mock.calls[0]?.[1]).toContain('Leads coordinate: assign multi-part or 15+ minute work to Swarm agent groups; do only answers, lookups and work under 15 minutes yourself; your subagents only read/look up.')
+  })
+
+  describe('the replied-to message', () => {
+    const earlier = (fields: Record<string, unknown> = {}) => ({ id: 'question-2', tabId: 'tab', conversationId: 'lead', sequence: 7,
+      author: { kind: 'agent', id: 'lead-agent', name: 'Lead', displayName: 'River' }, source: null,
+      text: 'Plan B: ship the reply quote, then the cleanup.', attachments: [{ id: 'f1', name: 'plan.md', mime: 'text/markdown', size: 9, url: 'https://files/plan.md' }],
+      replyTo: null, recipientIds: [], mentions: [], createdAt: '2026-10-27T08:07:27.418Z', deliveries: [], ...fields })
+    /** The conversation's one-message read answers with `read`; every other call keeps the setup's answer. */
+    const serve = (t: ReturnType<typeof setup>, read: () => unknown) => {
+      const original = vi.mocked(t.call).getMockImplementation()!
+      const reads: string[] = []
+      vi.mocked(t.call).mockImplementation(async (method, path, body) => {
+        if (method === 'GET' && path.includes('/messages?')) { reads.push(path); return { status: 200, body: { success: true, data: read() } } }
+        return original(method, path, body)
+      })
+      return reads
+    }
+    const delivered = (t: ReturnType<typeof setup>) => String(vi.mocked(t.core.turns.deliver).mock.calls[0]?.[1])
+
+    it('quotes it, as this agent may read it in that conversation, before the answer', async () => {
+      const t = setup({ replyTo: 'question-2', text: 'GO' })
+      const reads = serve(t, () => ({ messages: [earlier()], next: null }))
+      await t.open().tick()
+      expect(reads).toEqual(['/api/super-tabs/tab/conversations/lead/messages?asAgentId=agent&messageId=question-2'])
+      expect(delivered(t)).toContain('Replying to Lead (2026-10-27 08:07 UTC): Plan B: ship the reply quote, then the cleanup.\n'
+        + 'Its attachments: plan.md\n\nMessage message from Collaborator:\nGO')
+      expect(delivered(t)).not.toContain('Read it before interpreting the answer')
+    })
+    it('cuts a long one at 600 characters and says how to read the rest', async () => {
+      const t = setup({ replyTo: 'question-2', text: 'GO' })
+      serve(t, () => ({ messages: [earlier({ text: `${'a'.repeat(600)}THE-END`, attachments: null })], next: null }))
+      await t.open().tick()
+      expect(delivered(t)).toContain(`Replying to Lead (2026-10-27 08:07 UTC): ${'a'.repeat(600)}… (cut; read it all: `)
+      expect(delivered(t)).toContain(`message 'lead' 'question-2')\n\nMessage message from Collaborator:\nGO`)
+      expect(delivered(t)).not.toContain('THE-END')
+    })
+    it('falls back to the command when the read fails, and reads again for the next try', async () => {
+      const t = setup({ replyTo: 'question-2', text: 'GO' })
+      let fail = true
+      const reads = serve(t, () => { if (fail) throw new Error('backend down'); return { messages: [earlier()], next: null } })
+      const host = t.open()
+      await host.tick()
+      expect(delivered(t)).toContain(`In reply to message question-2. Read it before interpreting the answer: `)
+      expect(delivered(t)).not.toContain('Replying to')
+      fail = false
+      t.event('rejected', 'team_waiting_busy')
+      await host.tick()
+      expect(reads).toHaveLength(2)
+      expect(String(vi.mocked(t.core.turns.deliver).mock.calls[1]?.[1])).toContain('Replying to Lead')
+    })
+    it('reads it once per delivery while the terminal holds the input', async () => {
+      const t = setup({ replyTo: 'question-2', text: 'GO' })
+      const reads = serve(t, () => ({ messages: [earlier()], next: null }))
+      const host = t.open()
+      await host.tick()
+      t.event('rejected', 'team_waiting_busy')
+      await host.tick()
+      expect(t.core.turns.deliver).toHaveBeenCalledTimes(2)
+      expect(reads).toHaveLength(1)
+      expect(String(vi.mocked(t.core.turns.deliver).mock.calls[1]?.[1])).toContain('Replying to Lead')
+    })
+    it('never types a kept quote once the server refuses the held input, as when the agent left the conversation', async () => {
+      const t = setup({ replyTo: 'question-2', text: 'GO' })
+      serve(t, () => ({ messages: [earlier()], next: null }))
+      const host = t.open()
+      await host.tick()
+      expect(delivered(t)).toContain('Replying to Lead')
+      // Each try claims again; the server refuses a claim for an agent no longer in the conversation (deliveryAllowed).
+      const original = vi.mocked(t.call).getMockImplementation()!
+      vi.mocked(t.call).mockImplementation(async (method, path, body) => (body as Record<string, unknown> | undefined)?.type === 'claim'
+        ? { status: 403, body: { success: false, error: { code: 'DELIVERY_REVOKED', message: 'This instruction is no longer authorized.' } } }
+        : original(method, path, body))
+      t.event('rejected', 'team_waiting_busy')
+      await host.tick().catch(() => {})
+      expect(t.core.turns.deliver).toHaveBeenCalledTimes(1)
+    })
+    it.each([
+      ['the server does not show it to this agent', { messages: [], next: null }],
+      ['it is another agent\'s private notice', { messages: [earlier({ source: { kind: 'agent-only' }, recipientIds: ['someone-else'] })], next: null }],
+      ['it belongs to another conversation', { messages: [earlier({ conversationId: 'elsewhere' })], next: null }],
+      ['it is another message', { messages: [earlier({ id: 'question-3' })], next: null }],
+    ])('never quotes it when %s', async (_case, page) => {
+      const t = setup({ replyTo: 'question-2', text: 'GO' })
+      serve(t, () => page)
+      await t.open().tick()
+      expect(delivered(t)).not.toContain('Replying to')
+      expect(delivered(t)).not.toContain('Plan B')
+      expect(delivered(t)).toContain('In reply to message question-2. Read it before interpreting the answer: ')
+    })
+    it('reads nothing for a message that replies to nothing, or for an agent-only notice', async () => {
+      for (const fields of [{}, { replyTo: 'question-2', source: { kind: 'agent-only' } }]) {
+        const t = setup(fields)
+        const reads = serve(t, () => ({ messages: [earlier()], next: null }))
+        await t.open().tick()
+        expect(reads).toEqual([])
+        expect(delivered(t)).not.toContain('Replying to')
+      }
+    })
   })
 
   it('types only the notice for an agent-only delivery, with no invitation to reply in the conversation', async () => {
@@ -899,6 +998,140 @@ it('stops a requested worker once, confirms removal, and releases retention on t
   expect(acknowledgements).toBe(1)
 })
 
+// Review of #1807: the clean report the idle check trusted can be a minute old. An edit since, or a folder git cannot read,
+// withdraws the idle stop instead of closing the session; a stop its Lead asked for closes as before.
+it.each([['changed', { ok: true, stdout: ' M src/a.ts\n', stderr: '' }], ['unreadable', { ok: false, stdout: '', stderr: 'fatal' }]] as const)(
+  'withdraws an idle stop whose folder is %s when it would close it', async (_kind, status) => {
+  const git = vi.fn(async () => status)
+  const t = setup(), host = t.open({ machines: { git } })
+  vi.mocked(t.core.agents.byAgent).mockReturnValue({ agentId: 'harness', sessionId: 'native', registeredAt: 0, startedBy: 'agent', cwd: '/work/harness' } as never)
+  const target = { id: 'agent', harnessId: 'harness', machineId: 'machine-1', workDecision: 'stop', releaseId: 'idle-1', idleStop: { previous: 'awaiting' },
+    startedSession: { creationId: 'super-original-creation', sessionId: 'native', createdAt: new Date(0).toISOString() } }
+  const close = vi.fn(async () => ({ closed: true as const }))
+  t.core.agents.closeSwarm = close
+  const commands: unknown[] = []
+  let withdrawn = false
+  t.core.account.backend = async (method, path, body) => {
+    if (path.includes('/hosts/')) return { status: 200, body: { data: hostForm(withdrawn ? [] : [{ tabId: 'tab', agent: target, stopRequested: true }], { tabs: ['tab'] }) } }
+    if (method === 'GET') return { status: 200, body: { data: swarmReply(path, { agents: [target], conversations: [] }) } }
+    commands.push((body as any)?.command)
+    if ((body as any)?.command?.type === 'agent.stopLease') return { status: 200, body: { data: { result: { expiresAt: Date.now() + 120_000, durationMs: 120_000 } } } }
+    if ((body as any)?.command?.type === 'agent.stopRefused') withdrawn = true
+    return { status: 200, body: { data: {} } }
+  }
+  await host.tick()
+  await vi.waitFor(() => expect(withdrawn).toBe(true))
+  expect(git).toHaveBeenCalledWith('/work/harness', ['status', '--porcelain'])
+  expect(commands).toEqual([{ type: 'agent.stopLease', agentId: 'agent', releaseId: 'idle-1' }, { type: 'agent.stopRefused', agentId: 'agent', releaseId: 'idle-1' }])
+  expect(close).not.toHaveBeenCalled()
+})
+
+it('retries a withdrawal the backend refused, reading the folder again after its backoff, and never closes meanwhile', async () => {
+  const git = vi.fn(async () => ({ ok: true, stdout: ' M src/a.ts\n', stderr: '' }))
+  const t = setup(), host = t.open({ machines: { git } })
+  vi.mocked(t.core.agents.byAgent).mockReturnValue({ agentId: 'harness', sessionId: 'native', registeredAt: 0, startedBy: 'agent', cwd: '/work/harness' } as never)
+  const target = { id: 'agent', harnessId: 'harness', machineId: 'machine-1', workDecision: 'stop', releaseId: 'idle-1', idleStop: { previous: 'awaiting' },
+    startedSession: { creationId: 'super-original-creation', sessionId: 'native', createdAt: new Date(0).toISOString() } }
+  const close = vi.fn(async () => ({ closed: true as const }))
+  t.core.agents.closeSwarm = close
+  let attempts = 0, withdrawn = false
+  t.core.account.backend = async (method, path, body) => {
+    if (path.includes('/hosts/')) return { status: 200, body: { data: hostForm(withdrawn ? [] : [{ tabId: 'tab', agent: target, stopRequested: true }], { tabs: ['tab'] }) } }
+    if (method === 'GET') return { status: 200, body: { data: swarmReply(path, { agents: [target], conversations: [] }) } }
+    if ((body as any)?.command?.type === 'agent.stopLease') return { status: 200, body: { data: { result: { expiresAt: Date.now() + 120_000, durationMs: 120_000 } } } }
+    if ((body as any)?.command?.type === 'agent.stopRefused' && ++attempts === 1) return { status: 503, body: { error: 'SWARM_BUSY', message: 'Busy' } }
+    if ((body as any)?.command?.type === 'agent.stopRefused') withdrawn = true
+    return { status: 200, body: { data: {} } }
+  }
+  await host.tick()
+  await vi.waitFor(() => expect(attempts).toBe(1))
+  await vi.waitFor(() => expect(t.log.mock.calls.flat().join('\n')).toContain('Busy'))
+  // Within the first 5-second backoff nothing is tried again.
+  t.wait(4_000); await host.tick()
+  await new Promise(resolve => setTimeout(resolve, 20))
+  expect(attempts).toBe(1)
+  t.wait(2_000); await host.tick()
+  await vi.waitFor(() => expect(withdrawn).toBe(true))
+  expect(attempts).toBe(2)
+  expect(git).toHaveBeenCalledTimes(2)
+  expect(close).not.toHaveBeenCalled()
+})
+
+// Review of #1807: the lease answer can take up to its two minutes, so the folder is read after it, right before the close.
+it('withdraws an idle stop whose folder changed while the close lease was being granted', async () => {
+  let status = { ok: true, stdout: '', stderr: '' }
+  const git = vi.fn(async () => status)
+  const t = setup(), host = t.open({ machines: { git } })
+  vi.mocked(t.core.agents.byAgent).mockReturnValue({ agentId: 'harness', sessionId: 'native', registeredAt: 0, startedBy: 'agent', cwd: '/work/harness' } as never)
+  const target = { id: 'agent', harnessId: 'harness', machineId: 'machine-1', workDecision: 'stop', releaseId: 'idle-1', idleStop: { previous: 'awaiting' },
+    startedSession: { creationId: 'super-original-creation', sessionId: 'native', createdAt: new Date(0).toISOString() } }
+  const close = vi.fn(async () => ({ closed: true as const }))
+  t.core.agents.closeSwarm = close
+  let grant = () => {}, asked = false, withdrawn = false
+  t.core.account.backend = async (method, path, body) => {
+    if ((body as any)?.command?.type === 'agent.stopLease') {
+      asked = true
+      await new Promise<void>(resolve => { grant = resolve })
+      return { status: 200, body: { data: { result: { expiresAt: Date.now() + 120_000, durationMs: 120_000 } } } }
+    }
+    if (path.includes('/hosts/')) return { status: 200, body: { data: hostForm(withdrawn ? [] : [{ tabId: 'tab', agent: target, stopRequested: true }], { tabs: ['tab'] }) } }
+    if (method === 'GET') return { status: 200, body: { data: swarmReply(path, { agents: [target], conversations: [] }) } }
+    if ((body as any)?.command?.type === 'agent.stopRefused') withdrawn = true
+    return { status: 200, body: { data: {} } }
+  }
+  await host.tick()
+  await vi.waitFor(() => expect(asked).toBe(true))
+  status = { ok: true, stdout: ' M src/a.ts\n', stderr: '' }
+  grant()
+  await vi.waitFor(() => expect(withdrawn).toBe(true))
+  expect(close).not.toHaveBeenCalled()
+})
+
+it('closes an idle stop whose folder is still clean', async () => {
+  const git = vi.fn(async () => ({ ok: true, stdout: '', stderr: '' }))
+  const t = setup(), host = t.open({ machines: { git } })
+  vi.mocked(t.core.agents.byAgent).mockReturnValue({ agentId: 'harness', sessionId: 'native', registeredAt: 0, startedBy: 'agent', cwd: '/work/harness' } as never)
+  const target = { id: 'agent', harnessId: 'harness', machineId: 'machine-1', workDecision: 'stop', releaseId: 'idle-1', idleStop: { previous: null },
+    startedSession: { creationId: 'super-original-creation', sessionId: 'native', createdAt: new Date(0).toISOString() } }
+  let removed = false
+  t.core.agents.closeSwarm = async () => ({ closed: true })
+  t.core.account.backend = async (method, path, body) => {
+    if ((body as any)?.command?.type === 'agent.stopLease') return { status: 200, body: { data: { result: { expiresAt: Date.now() + 3_600_000, durationMs: 120_000 } } } }
+    if (path.includes('/hosts/')) return { status: 200, body: { data: hostForm(removed ? [] : [{ tabId: 'tab', agent: target, stopRequested: true }], { tabs: ['tab'] }) } }
+    if (method === 'GET') return { status: 200, body: { data: swarmReply(path, { agents: [target], conversations: [] }) } }
+    if ((body as any)?.command?.type === 'agent.remove') removed = true
+    return { status: 200, body: { data: {} } }
+  }
+  await host.tick()
+  await vi.waitFor(() => expect(removed).toBe(true))
+  expect(git).toHaveBeenCalledOnce()
+})
+
+it('removes a stopped worker\'s worktree only once its removal is acknowledged, and a failed removal stays in the log', async () => {
+  const t = setup(), host = t.open()
+  const removeWorktree = vi.spyOn(ContributedMachines.prototype, 'removeStoppedWorktree').mockRejectedValue(new Error('git refused'))
+  vi.mocked(t.core.agents.byAgent).mockReturnValue({ agentId: 'harness', sessionId: 'native', registeredAt: 0, startedBy: 'agent' } as never)
+  let removed = false
+  const target = { id: 'agent', harnessId: 'harness', machineId: 'machine-1', workDecision: 'stop', startedSession: { creationId: 'super-original-creation', sessionId: 'native', createdAt: new Date(0).toISOString() } }
+  t.core.agents.closeSwarm = async () => {
+    expect(removeWorktree).not.toHaveBeenCalled()
+    return { closed: true }
+  }
+  t.core.account.backend = async (method, path, body) => {
+    if ((body as any)?.command?.type === 'agent.stopLease') return { status: 200, body: { data: { result: { expiresAt: Date.now() + 3_600_000, durationMs: 120_000 } } } }
+    if (path.includes('/hosts/')) return { status: 200, body: { data: hostForm(removed ? [] : [{ tabId: 'tab', agent: target, stopRequested: true }], { tabs: ['tab'] }) } }
+    if (method === 'GET') return { status: 200, body: { data: swarmReply(path, { agents: [target], conversations: [] }) } }
+    expect(removeWorktree).not.toHaveBeenCalled()
+    removed = true
+    return { status: 200, body: { data: {} } }
+  }
+  try {
+    await host.tick()
+    await vi.waitFor(() => expect(removeWorktree).toHaveBeenCalledWith('tab', 'harness'))
+    await vi.waitFor(() => expect(t.log.mock.calls.flat().join('\n')).toContain('git refused'))
+  } finally { removeWorktree.mockRestore() }
+})
+
 // A lost task (the backend's v1 liveness) has ended for its agent, as a cancelled one has: a stalled agent the Lead stops
 // is closed, never kept for work it no longer holds.
 it.each(['cancelled', 'lost'])('closes the session of a worker whose assignment is %s', async status => {
@@ -1543,7 +1776,7 @@ describe('built-in skill text after a CLI update', () => {
       holds.push({ match, until: new Promise<void>(resolve => { release = resolve }) })
       return release
     }
-    return { t, files, sent, refused, pass, rowRoles, texts, fetched, holdNext, setRefuse: (next: typeof refuse) => { refuse = next }, setGroups: (next: typeof groups) => { groups = next }, setMode: (next: typeof mode) => { skillMode = next } }
+    return { t, files, sent, refused, pass, agents, rowRoles, texts, fetched, holdNext, setRefuse: (next: typeof refuse) => { refuse = next }, setGroups: (next: typeof groups) => { groups = next }, setMode: (next: typeof mode) => { skillMode = next } }
   }
 
   // Custom roles and skills per project (spec 2026-10-23): on Custom the roster names each agent's role and its text's
@@ -1646,6 +1879,18 @@ describe('built-in skill text after a CLI update', () => {
       await poll
       await f.pass(host, 1_000)
       expect(f.sent).toEqual([])
+    })
+    // Diego's issue, 2026-10-27: nothing deleted a session's skill state, so a daemon running for weeks kept an entry, with
+    // the full Custom role text, for every Swarm agent it ever ran.
+    it('forgets a session\'s skill state once it leaves the roster', async () => {
+      const f = syncFixture(false, 'default')
+      custom(f, 'Plan the work.\n')
+      const host = await f.pass()
+      const state = host as unknown as Record<'skillChecks' | 'skillModes' | 'roleTexts', Map<string, unknown>>
+      expect(state.roleTexts.has('h-lead')).toBe(true)
+      f.agents.splice(0, f.agents.length)
+      await f.pass(host, 1_000)
+      expect([state.skillChecks.size, state.skillModes.size, state.roleTexts.size]).toEqual([0, 0, 0])
     })
     it('leaves an agent whose role is gone on its file, fetching and telling nothing: the backend tells it', async () => {
       const f = syncFixture(false, 'default')

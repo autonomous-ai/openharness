@@ -122,6 +122,17 @@ ask again. The team account's engines also needed signing in by hand, and the Le
   user alone read it. The team daemon uses it for an engine it has not signed in itself, on every launch and relaunch
   (Codex is named the relay's provider in place of its own login's), and reports that engine ready to the Swarm.
 
+- **Nothing to run by hand (2026-10-27).** Two things kept a Mac's team account out of its Swarms, each fixed in code:
+  - *A device list frozen by the backend's race (#1789)* trusted no new device, the team account's machine included,
+    so its owner's daemon could not reach it ("not linked"). A list frozen as `invalid` now heals itself once the
+    backend serves the entries it claimed, when they continue the chain this machine verified
+    (lib/e2ee/deviceLogSyncer.ts); a rollback or fork still waits for a person.
+  - *A team account copied from a local build* never updated itself. Its updater now follows releases
+    (lib/selfUpdate.ts `followReleases`), and one already on such a build is updated by its owner's daemon: when its
+    status file shows engines neither signed in nor using the relay, checked after the relay was published, the owner's
+    daemon runs `harness update --force` as the team account over the link (`shell_open`), at most once a day
+    (team/refresh.ts).
+
 ### Design
 
 - **Growth:** one file per Mac, rewritten in place; removed when the team account is gone or the owner's daemon stops.

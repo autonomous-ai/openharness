@@ -31,6 +31,7 @@ import { ts } from './lib/log.js'
 import { confirm as confirmUpdate, pendingVersion, restore as restoreUpdate, unjudgedUpdate } from './lib/selfUpdate.js'
 import { keepStaged, ptyUnjudged, rollBackStaged } from './lib/windows/ptyUpdate.js'
 import { VERSION } from './version.js'
+import { isTeamAccount } from './team/config.js'
 
 /** Where a master re-executing on a new bundle leaves word of it, until that master's core is up. */
 export const HARNESSD_REEXEC_FILE = join(env.ADAPTER_DATA_DIR, 'harnessd-reexec.json')
@@ -272,7 +273,9 @@ export function startMaster(
     unjudgedUpdate: (bundle) => unjudgedUpdate(env.ADAPTER_CLI_DIR, bundle)
       ?? (ptyRoot === null ? null : ptyUnjudged(ptyRoot, { cliPending: pendingVersion(env.ADAPTER_CLI_DIR) !== null, log: masterLog, lock })),
     // The updater runs for the installed copy alone (lib/installedCopy.ts), beside the core, never in it.
-    updater: !env.ADAPTER_UPDATE_DISABLE && isInstalledCopy(start.scriptPath, env.ADAPTER_CLI_DIR),
+    // The Harness Team account takes releases even when its owner's environment switched updates off and setup carried
+    // that in (team/layout.ts): nobody develops in it, and nobody is there to update it by hand.
+    updater: (!env.ADAPTER_UPDATE_DISABLE || isTeamAccount()) && isInstalledCopy(start.scriptPath, env.ADAPTER_CLI_DIR),
     // A master that ends cleanly gives up its claim on its lean bundle, so the next one to start can
     // clear the folder; one that dies leaves a claim whose pid is gone, which counts for nothing.
     exit: (code) => {

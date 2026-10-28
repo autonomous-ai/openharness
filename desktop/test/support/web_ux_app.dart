@@ -52,9 +52,6 @@ class WebUxApp extends AppNotifier {
   Future<bool> refreshMachines() async => true;
 
   @override
-  Future<void> rereadMachines() async {}
-
-  @override
   Future<bool> connectTrusted(String machineId, {Duration? timeout}) async =>
       false;
 

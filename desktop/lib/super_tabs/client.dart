@@ -6,6 +6,7 @@ import 'package:flutter/foundation.dart';
 
 import '../core/local_key_value_store.dart';
 import 'attachment_upload.dart';
+import 'avatar_upload.dart';
 import 'controller.dart';
 import 'model.dart';
 import 'notifications.dart';
@@ -27,16 +28,22 @@ class SuperTabClient {
   SuperTabClient({
     required this.transport,
     required this.storage,
+    LocalKeyValueStore? viewStorage,
     this.onSnapshot,
     this.onTabs,
     this.onSelection,
     this.onMention,
     this.onTagCounts,
     this.upload = refuseUpload,
+    this.avatarUpload = refuseAvatarUpload,
     this.discoveryInterval = const Duration(seconds: 15),
-  });
+  }) : viewStorage = viewStorage ?? storage;
   final SuperTabTransport transport;
   final LocalKeyValueStore storage;
+
+  /// Where each Swarm's saved view is kept ([SuperTabSavedViews]): a few
+  /// hundred KB each, so Desktop keeps them out of [storage]'s small file.
+  final LocalKeyValueStore viewStorage;
   final void Function(SuperTabController)? onSnapshot;
   final void Function(List<SuperTabListing>, Set<String> hidden)? onTabs;
 
@@ -69,6 +76,7 @@ class SuperTabClient {
   bool _paused(String id) =>
       _reading.pausesAway && (_loaded[id]?.away ?? false);
   final SuperTabUpload upload;
+  final SuperTabAvatarUpload avatarUpload;
   final Duration discoveryInterval;
 
   /// How every Swarm tab here keeps itself current. Desktop's unless the host
@@ -106,16 +114,22 @@ class SuperTabClient {
 
   bool _isAway(String id) => !_pageVisible || id != _shown;
 
-  late final _views = SuperTabSavedViews(storage);
+  late final _views = SuperTabSavedViews(viewStorage);
   final _viewSaves = <String, Timer>{};
   final _viewSavedAt = <String, DateTime>{};
   final _viewVersions = <String, int>{};
 
+  /// The web's forgets beyond Desktop's: the Swarms a discovery no longer
+  /// lists, and the account leaving. Desktop forgets as it did with #1803.
+  bool get _forgetsWebOnly => _reading.drawsSaved && !_reading.confirmsSaved;
+
   /// Only the account using this device keeps views on it: any other one,
   /// after a reload too, is forgotten ([SuperTabSavedViews.claim]).
-  void _claimViews() {
+  void _claimViews({String? leaving}) {
     if (!_reading.drawsSaved) return;
-    unawaited(_views.claim(_account).catchError((Object _) {}));
+    unawaited(
+      _views.claim(_account, leaving: leaving).catchError((Object _) {}),
+    );
   }
 
   /// Moves each time a Swarm's view is kept on this device: Settings' Clear
@@ -240,9 +254,10 @@ class SuperTabClient {
     _viewSaves.clear();
     _viewSavedAt.clear();
     _viewVersions.clear();
+    final leaving = _account;
     _account = account;
     // Nothing of an account that left stays on this device.
-    _claimViews();
+    _claimViews(leaving: _forgetsWebOnly ? leaving : null);
     _generation++;
     _discoveryTimer?.cancel();
     _discovering = null;
@@ -361,6 +376,15 @@ class SuperTabClient {
         discoveryError = null;
         final hidden = Set<String>.unmodifiable({..._hidden, ..._creating});
         onTabs!(tabs.values.toList(), hidden);
+        // Every page read: a Swarm not listed is no longer this account's.
+        // In the background: the lock another tab holds never delays tags.
+        if (_forgetsWebOnly) {
+          unawaited(
+            _views
+                .keepOnly(account, {...tabs.keys, ..._creating})
+                .catchError((Object _) {}),
+          );
+        }
         await _readTags([
           for (final id in tabs.keys)
             if (!hidden.contains(id) &&
@@ -449,6 +473,7 @@ class SuperTabClient {
       },
       save: (state) => storage.write(key, jsonEncode(state)),
       upload: upload,
+      avatarUpload: avatarUpload,
       reading: _reading,
     )..away = _isAway(id);
     var seenChange = (lastChangedAt: -1, mentionsWaiting: -1, pmUnread: -1);
@@ -487,18 +512,29 @@ class SuperTabClient {
       ..onArrived = onMention;
     _tagCounts.remove(id);
     _loaded[id] = controller;
-    controller.start();
-    // After the first read is asked for: reading and drawing a saved view
-    // takes the main thread a moment a phone's first read need not wait on.
-    if (_reading.drawsSaved) {
-      // Behind the lock shared with this browser's other tabs: one iOS has
-      // suspended may hold it. Past a short wait, open with no saved view.
-      final view = await _views
-          .read(account, id)
-          .timeout(_viewLockWait, onTimeout: () => null);
+    void drawSaved(Map<String, dynamic>? view) {
       if (view != null && generation == _generation) {
         controller.drawSaved(view);
       }
+    }
+
+    // Desktop's saved view is a local file, read before the first read so
+    // that read asks only for what changed since it. It waits its turn
+    // behind the views' other work; past a short wait, it opens with none.
+    if (_reading.drawsSaved && _reading.confirmsSaved) {
+      drawSaved(
+        await _views
+            .readInTurn(account, id)
+            .timeout(_viewLockWait, onTimeout: () => null),
+      );
+    }
+    controller.start();
+    // After the first read is asked for: reading and drawing a saved view
+    // takes the main thread a moment a phone's first read need not wait on.
+    // Drawn when it is read, unless that read landed first; the open waits
+    // for neither.
+    if (_reading.drawsSaved && !_reading.confirmsSaved) {
+      unawaited(_views.read(account, id).then(drawSaved));
     }
     return controller;
   }

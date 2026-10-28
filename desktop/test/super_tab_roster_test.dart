@@ -93,6 +93,7 @@ class RosterFixture {
               app: nativeState ? app : null,
               onInvite: () {},
               onAddAgent: (group) => added = group,
+              onAnswer: (_) {},
               onOpenAgent: (agent) => opened = agent,
             ),
           ),
@@ -943,28 +944,12 @@ void main() {
     await f.close(tester);
   });
 
-  testWidgets('eight people show five, then expand and collapse', (
-    tester,
-  ) async {
+  testWidgets('eight people all show, with no More row', (tester) async {
     final f = await fixtureWithPeople(tester, 8);
-    for (var i = 0; i < 8; i++) {
-      expect(person(i), i < 5 ? findsOneWidget : findsNothing);
-    }
-    expect(find.text('Show 3 more'), findsOneWidget);
-
-    await tester.tap(find.text('Show 3 more'));
-    await tester.pumpAndSettle();
     for (var i = 0; i < 8; i++) {
       expect(person(i), findsOneWidget);
     }
-    expect(find.text('Show less'), findsOneWidget);
-
-    await tester.tap(find.text('Show less'));
-    await tester.pumpAndSettle();
-    for (var i = 0; i < 8; i++) {
-      expect(person(i), i < 5 ? findsOneWidget : findsNothing);
-    }
-    expect(find.text('Show 3 more'), findsOneWidget);
+    expect(find.textContaining('Show '), findsNothing);
     await f.close(tester);
   });
 

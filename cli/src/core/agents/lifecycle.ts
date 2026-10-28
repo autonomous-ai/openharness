@@ -61,7 +61,7 @@ export interface LifecycleDeps {
   stopped?: (agentId: string) => void
   /** An agent a move a dead daemon left may still run beside (main.ts `moveHeld`): no engine of it starts this start. */
   moveHeld?: (agentId: string) => boolean
-  /** Whether the agent is the Lead of an active Swarm project here (superTabs/retention.ts `retainedLeads`). */
+  /** Whether the agent is a Lead the core must never stop, as core/main.ts hands it in; absent, none is. */
   leadProtected?: (agentId: string) => boolean
 }
 

@@ -2,25 +2,38 @@
  * What the leaderboard counts, recorded as it happens on the group it happened in (docs/swarms.md, Leaderboard): when a
  * request was asked and first shipped, which item waits on a person, and who answered it. Only facts and times, never text.
  */
-import type { Actor, Assignment, Conversation, SuperTabState, WorkStatus } from '../model.js'
+import type { Actor, Agent, Assignment, Check, Conversation, SuperTabState, WorkStatus } from '../model.js'
 import { groupProject } from '../projects.js'
 import { WEEK_MS } from './week.js'
 
 export interface Unblock { personId: string; at: number; waitedMs: number }
+/** One attempt at a group's work: what it ran on and whether its first review passed (roadmap, Dec: about 30% of work on
+ *  cheaper models without lower quality). `grid`: a model served on the Swarm's grid, named by its start, since the engine
+ *  reports none of its own. `firstVerdicts`: each independent check's first verdict during this attempt, by check id.
+ *  `firstReview`: false once any of them failed, true once every independent check passed its first, absent until then. */
+export interface Run { assignmentId: string; engine: string; model: string | null; grid?: true; at: number
+  firstVerdicts?: Record<string, boolean>; firstReview?: boolean }
 /** A group's leaderboard bookkeeping; readers never get it whole (read/views.ts groupView). */
 export interface GroupLedger {
   askedAt?: number
-  /** The first time its work was done; a group is one request, so finishing it again ships nothing new. */
+  /** When it shipped: its earliest recorded merge, or without one the first time its work was done. A group is one request,
+   *  so finishing it again ships nothing new. */
   shippedAt?: number
+  /** The earliest merge the Lead recorded (recordMerged); once there is one, it is the ship time. */
+  mergedAt?: number
   /** The item waiting on a person: the attempt, since when, the "Needs a human" row it posted, and once a person answered it,
    *  when. An answered item no longer waits, though its worker has not moved on yet. */
   waiting?: { assignmentId: string; since: number; messageId: string; answeredAt?: number }
   /** Answers within the last LEDGER_WEEKS, oldest first. */
   unblocks?: Unblock[]
+  /** The last MAX_RUNS attempts, oldest first. */
+  runs?: Run[]
 }
 
 /** The leaderboard reads this week and last; a little more keeps a streak and week boundaries safe. */
 export const LEDGER_WEEKS = 5
+/** A group is one request; more attempts than this are a stuck task, and the oldest say nothing new. */
+export const MAX_RUNS = 20
 
 /** A shared group is asked when it is opened. A private conversation is chat only and never counts. */
 export function recordAsked(group: Conversation, requesterId: string | undefined, now: number): void {
@@ -38,6 +51,17 @@ export function recordStatus(group: Conversation, assignment: Assignment, previo
     ledger.waiting = { assignmentId: assignment.id, since: now, messageId }
   } else if (assignment.status !== 'needs_human') delete ledger.waiting
   if (assignment.status === 'done') ledger.shippedAt ??= now
+}
+
+/** One GitHub pull request link, as a merge record names it (model.ts appendPullRequestUrls finds the same in text). */
+export const PULL_REQUEST_URL = /^https:\/\/github\.com\/[A-Za-z0-9_-]+\/[A-Za-z0-9_.-]+\/pull\/[1-9][0-9]*$/
+
+/** The Lead's record that a request's PR merged (Lead, 2026-10-27): the request ships at its earliest recorded merge, even
+ *  when Done came first, and whatever its work does next, so work lost or cancelled after the merge still counts. */
+export function recordMerged(group: Conversation, mergedAt: number): void {
+  const ledger = group.ledger ??= {}
+  ledger.mergedAt = Math.min(ledger.mergedAt ?? mergedAt, mergedAt)
+  ledger.shippedAt = ledger.mergedAt
 }
 
 /** The person a waiting item waits on: its requester while still a member, otherwise the project's owner. */
@@ -63,4 +87,28 @@ export function recordAnswer(state: SuperTabState, group: Conversation, actor: A
 export function waitsNow(group: Conversation): boolean {
   const waiting = group.ledger?.waiting
   return group.assignment?.status === 'needs_human' && !(waiting?.assignmentId === group.assignment.id && waiting.answeredAt != null)
+}
+
+/** An assignment records the model its agent runs: the grid model its start named, else what its engine reports. An agent
+ *  started before it kept its grid model has it only on its start, which is here while that start is not finished. */
+export function recordRun(state: SuperTabState, group: Conversation, assignment: Assignment, worker: Agent, now: number): void {
+  const gridModel = worker.gridModel
+    ?? state.starts?.find(s => s.harnessId === worker.harnessId && s.request.machineId === worker.machineId)?.request.gridModel
+  const run: Run = { assignmentId: assignment.id, engine: assignment.configuration.engine,
+    model: gridModel ?? assignment.configuration.model, ...(gridModel ? { grid: true as const } : {}), at: now }
+  const ledger = group.ledger ??= {}
+  ledger.runs = [...ledger.runs ?? [], run].slice(-MAX_RUNS)
+}
+
+/** Each independent check's first verdict during an attempt is its first review; later verdicts are repairs and never
+ *  rewrite it. The attempt passed its first review only when every independent check passed the first time (review of
+ *  #1808: one check passing first used to count as a pass while another failed). */
+export function recordReview(group: Conversation, check: Check, passed: boolean): void {
+  const run = group.ledger?.runs?.find(r => r.assignmentId === group.assignment?.id)
+  if (!check.independent || !run) return
+  const verdicts = run.firstVerdicts ??= {}
+  verdicts[check.id] ??= passed
+  const firsts = group.checks.filter(c => c.independent).map(c => verdicts[c.id])
+  if (firsts.includes(false)) run.firstReview = false
+  else if (firsts.every(v => v === true)) run.firstReview = true
 }

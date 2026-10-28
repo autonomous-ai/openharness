@@ -143,7 +143,14 @@ class SavedComputersWatch extends ChangeNotifier {
     // Booting, nobody is known yet and nothing is forgotten; signed out (by
     // hand, or a session that expired, at boot too), the last account's go.
     final account = signedOut ? null : app.currentUser?.id;
-    if (account != _account || (signedOut && !_forgotten)) _bind(account);
+    if (account != _account || (signedOut && !_forgotten)) {
+      _bind(account);
+      // The Super Tab views too, as Clear now: a boot signed out never binds
+      // the account they were kept for.
+      if (signedOut) {
+        unawaited(app.superTabs.clearSavedViews().catchError((Object _) {}));
+      }
+    }
     // The list answering takes the kept computers off the page.
     if (!identical(shown, _wasShown)) {
       _wasShown = shown;

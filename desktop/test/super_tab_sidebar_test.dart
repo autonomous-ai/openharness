@@ -112,8 +112,8 @@ Future<SuperTabController> projectSidebar(ConversationServer server) async {
 
 void main() {
   for (final scale in [1.0, 2.0]) {
-    testWidgets('flat navigation shares text and selection bounds; disclosure does not '
-        'switch chats at ${scale}x', (tester) async {
+    testWidgets('flat navigation shares text and selection bounds; a project row '
+        'opens its chat and shows its workgroups at ${scale}x', (tester) async {
       addTearDown(() => tester.binding.setSurfaceSize(null));
       final app = createApp(connected: true);
       addTearDown(app.dispose);
@@ -129,8 +129,8 @@ void main() {
         onNewProject: () => created++,
         onYourDevices: () => openedDevices++,
       );
-      final expand = find.byKey(const ValueKey('super-project-expand-lead'));
-      final empty = find.byKey(const ValueKey('super-project-expand-empty'));
+      final project = find.byKey(const ValueKey('super-group-lead'));
+      final empty = find.byKey(const ValueKey('super-group-empty-lead'));
       final devices = find.byKey(const ValueKey('super-your-devices'));
       final newProject = find.byKey(const ValueKey('super-new-project'));
       expect(find.byType(OutlinedButton), findsNothing);
@@ -152,9 +152,9 @@ void main() {
       await tester.tap(sample);
       await tester.pumpAndSettle();
       expect(controller.selectedId, 'empty-lead');
-      await tester.tap(expand);
+      await tester.tap(project);
       await tester.pumpAndSettle();
-      expect(controller.selectedId, 'empty-lead');
+      expect(controller.selectedId, 'lead');
       expect(inRow('super-group-lead', find.text('#')), findsOneWidget);
       final work = find.byKey(const ValueKey('super-group-offline'));
       expect(work, findsOneWidget);
@@ -174,10 +174,6 @@ void main() {
         tester.getCenter(unreadDot('offline')).dx,
         tester.getCenter(unreadDot('lead')).dx,
       );
-      expect(
-        tester.getCenter(unreadDot('lead')).dx,
-        lessThan(tester.getTopLeft(expand).dx),
-      );
       for (final row in [newProject, devices, work]) {
         final bounds = tester.getRect(row);
         final projectBounds = tester.getRect(
@@ -192,12 +188,13 @@ void main() {
       expect(controller.selectedId, 'offline');
       await tester.tap(empty);
       await tester.pumpAndSettle();
-      expect(controller.selectedId, 'offline');
+      expect(controller.selectedId, 'empty-lead');
       expect(find.text('No workgroups yet'), findsOneWidget);
       expect(tester.getTopLeft(find.text('No workgroups yet')).dx, textX);
-      expect(find.byTooltip('Collapse sample-project'), findsOneWidget);
+      // A second click on the open project hides its workgroups again.
       await tester.tap(empty);
       await tester.pumpAndSettle();
+      expect(controller.selectedId, 'empty-lead');
       expect(find.text('No workgroups yet'), findsNothing);
 
       // The plain top actions retain keyboard operation and do not create tabs.
@@ -216,7 +213,7 @@ void main() {
       await tester.pumpAndSettle();
       expect(openedDevices, 1);
       expect(controller.devicesSelected, isTrue);
-      expect(controller.selectedId, 'offline');
+      expect(controller.selectedId, 'empty-lead');
       expect(app.swarms, hasLength(tabsBefore));
       expect(
         rowMaterial(tester, 'super-your-devices').color,
@@ -308,7 +305,7 @@ void main() {
   });
 
   testWidgets('section disclosure follows its label and + aligns with the '
-      'right disclosure column', (tester) async {
+      'rows\' right status column', (tester) async {
     addTearDown(() => tester.binding.setSurfaceSize(null));
     final app = createApp(connected: true);
     addTearDown(app.dispose);
@@ -335,9 +332,8 @@ void main() {
       }
       expect(
         tester.getCenter(find.byTooltip('New project')).dx,
-        tester
-            .getCenter(find.byKey(const ValueKey('super-project-expand-lead')))
-            .dx,
+        tester.getRect(find.byKey(const ValueKey('super-group-lead'))).right -
+            16,
       );
       expect(tester.takeException(), isNull);
     }

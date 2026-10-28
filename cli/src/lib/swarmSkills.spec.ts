@@ -9,6 +9,9 @@ import { agentLaunchArgs } from './agentAttribution.js'
 import { buildLaunchOverrides } from './launchOverrides.js'
 import { gridLaunchInProcess } from '../testing/gridLaunchInProcess.js'
 
+/** The Swarm's relaunch preparation, as the core hands it in while the Swarm is on (lib/launchOverrides.ts `swarm`). */
+const SWARM = { prepare: prepareSwarmSkill, github: () => null }
+
 const roots: string[] = []
 const fixture = () => { const root = mkdtempSync(join(tmpdir(), 'swarm-skills-')); roots.push(root); return root }
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }) })
@@ -66,10 +69,12 @@ describe('built-in Swarm skills', () => {
   const ask = '- When you know who decides, add ask to that needs-human (the person, 2 to 5 options, the one you recommend, what it unblocks) and keep working on your recommendation, marked provisional, until a notice says it was answered; read the answer with harness super-tab decisions --answered.\n'
   // The requests section (Lead's ruling for v2 G, the human leaderboard, 2026-10-27): the Lead's alone, in both modes, in a
   // section of its own so other groups' edits to the Lead text merge cleanly.
-  const requests = '## Requests and Done\n- When you open a group for a person\'s request, asked in the project chat or in their Chat with PM, name them as its requester: requesterId on conversation.create, or conversation.requester for a group already open. It records only that they asked, never what they wrote.\n- Mark a group Done only after its pull request has merged: the leaderboard counts a request as shipped once its group is Done with a linked PR.\n\n'
+  const requests = '## Requests and Done\n- When you open a group for a person\'s request, asked in the project chat or in their Chat with PM, name them as its requester: requesterId on conversation.create, or conversation.requester for a group already open. It records only that they asked, never what they wrote.\n- Right after you merge a group\'s pull request, record it: conversation.merged with the group and the PR link, and mergedAt for a merge you record later. The leaderboard counts the request as shipped at the merge, even if its work is lost or cancelled afterwards. Mark a group Done only after its pull request has merged.\n\n'
   // Last in the Default Lead text, which has no red flags: after a blank line, ending the text.
   const requestsLast = `\n${requests.trimEnd()}\n`
   const twoHours = '- A Builder or Reviewer that has been down for 2 hours (machine offline, session gone or stopped): cancel its task with the reason, route it, and assign it to another agent with what the first one left (branch, last revision, last report).\n'
+  // A failed start is never left (the round-device group, 2026-10-27; superTabs/start.ts): the Lead's alone, in both modes.
+  const failedStart = '- A failed start is retried elsewhere or reported, never left: when one fails, resume it; it starts once on the route\'s next machine, or tells the group and its requester. A task that requires a machine or device never moves: when its route says it waits, keep it queued and route it again once that machine can take it.\n'
   it.each([
     ['lead', 'b9254e4bb5c633a73e1b87e6ca6690915e1c3a7bb55db0d3d093e6710dd719db'],
     ['dev', 'e78ce31a71f169d8956a2acd46e8bb43b79bd654b80b0fe3c33dbced9d2c3c75'],
@@ -94,13 +99,23 @@ describe('built-in Swarm skills', () => {
       expect(text.split(mention + decision)).toHaveLength(role === 'lead' ? 2 : 1)
       expect(text.split(ask)).toHaveLength(role === 'dev' ? 2 : 1)
       expect(text.split(requests)).toHaveLength(role === 'lead' ? 2 : 1)
-      expect(sha(text.replace(twoHours, '').replace(terminal, '').replace(overlap, '').replace(local, '').replace(mention, '').replace(lost, '').replace(checkpoint, '')
+      expect(text.split(failedStart)).toHaveLength(role === 'lead' ? 2 : 1)
+      expect(sha(text.replace(twoHours, '').replace(terminal, '').replace(overlap, '').replace(local, '').replace(failedStart, '').replace(mention, '').replace(lost, '').replace(checkpoint, '')
         .replace(limit, '').replace(digest, '').replace(decision, '').replace(ask, '').replace(requests, ''))).toBe(sha256)
     }
   })
   it('adds the 2-hour line to section 7 right after the 6-hour rule', () => {
     const text = readFileSync(prepareSwarmSkill(fixture(), { role: 'lead', key: 'session' }).file, 'utf8')
     expect(text).toContain(`reassign work that has not moved for 6 hours; report on-screen trust, sign-in or permission questions in chat, naming the machine owner who can answer.\n${twoHours}`)
+  })
+  it('adds the failed-start line right after each Lead skill\'s local models line, and to no other role', () => {
+    const orchestration = readFileSync(prepareSwarmSkill(fixture(), { role: 'lead', key: 'session' }).file, 'utf8')
+    expect(orchestration).toContain(`${local}${failedStart}- The brief is all a Builder gets.`)
+    const plain = readFileSync(prepareSwarmSkill(fixture(), { role: 'lead', key: 'session', mode: 'default' }).file, 'utf8')
+    expect(plain).toContain(`${localDefault}${failedStart}- The brief is all a Builder gets;`)
+    for (const mode of ['orchestration', 'default'] as const) for (const role of ['dev', 'review'] as const) {
+      expect(readFileSync(prepareSwarmSkill(fixture(), { role, key: 'session', mode }).file, 'utf8')).not.toContain(failedStart)
+    }
   })
   it('adds the terminal line where each Lead skill keeps work moving, right after the silent-worker rule', () => {
     const orchestration = readFileSync(prepareSwarmSkill(fixture(), { role: 'lead', key: 'session' }).file, 'utf8')
@@ -179,7 +194,8 @@ describe('built-in Swarm skills', () => {
     expect(text.split(mention + decision)).toHaveLength(role === 'lead' ? 2 : 1)
     expect(text.split(ask)).toHaveLength(role === 'dev' ? 2 : 1)
     expect(text.split(requestsLast)).toHaveLength(role === 'lead' ? 2 : 1)
-    expect(sha(text.replace(terminal, '').replace(overlap, '').replace(localDefault, '').replace(mention, '').replace(lost, '').replace(checkpoint, '')
+    expect(text.split(failedStart)).toHaveLength(role === 'lead' ? 2 : 1)
+    expect(sha(text.replace(terminal, '').replace(overlap, '').replace(localDefault, '').replace(failedStart, '').replace(mention, '').replace(lost, '').replace(checkpoint, '')
       .replace(limit, '').replace(digest, '').replace(decision, '').replace(ask, '').replace(requestsLast, ''))).toBe(sha256)
     expect(prepared.instructions).toBe(`Use the swarm-${role} skill for this session: the team process; otherwise work your usual way. Before working, read ${JSON.stringify(prepared.file)} with your file or shell tool.`)
   })
@@ -404,7 +420,7 @@ describe('built-in Swarm skills', () => {
     const cwd = fixture(), swarmSkill = { role: 'dev' as const, key: 'original' }
     const first = prepareSwarmSkill(cwd, swarmSkill)
     const result = await buildLaunchOverrides({ capabilities: async () => ({ sessionEnv: true }), installCodexHooks: () => true, machine: () => ({ hermesSystemManaged: false }), gridLaunch: gridLaunchInProcess(),
-      writeGridConfigDir: async () => '/unused', readCodexConfig: () => null, readAttribution: () => null }, engine, { cwd, swarmSkill }, 'new-registry-id')
+      writeGridConfigDir: async () => '/unused', readCodexConfig: () => null, readAttribution: () => null, swarm: SWARM }, engine, { cwd, swarmSkill }, 'new-registry-id')
     expect(result.ok).toBe(true)
     if (result.ok) expect(result.overrides?.extraArgs.join(' ')).toContain(first.file)
     expect(readdirSync(join(cwd, '.harness', 'runtime'))).toHaveLength(1)
@@ -413,8 +429,8 @@ describe('built-in Swarm skills', () => {
   it('refuses relaunch with a missing workspace or a redirected runtime', async () => {
     const cwd = fixture(), swarmSkill = { role: 'dev' as const, key: 'original' }
     symlinkSync(fixture(), join(cwd, '.harness'))
-    const deps = { capabilities: async () => ({ sessionEnv: true }), installCodexHooks: () => true, machine: () => ({ hermesSystemManaged: false }), gridLaunch: gridLaunchInProcess(), writeGridConfigDir: async () => '/unused' }
-    expect(await buildLaunchOverrides(deps, 'claude', { swarmSkill }, 'a')).toMatchObject({ ok: false, error: 'SWARM_SKILL_FAILED' })
-    expect(await buildLaunchOverrides(deps, 'claude', { cwd, swarmSkill }, 'a')).toMatchObject({ ok: false, error: 'SWARM_SKILL_FAILED' })
+    const deps = { capabilities: async () => ({ sessionEnv: true }), installCodexHooks: () => true, machine: () => ({ hermesSystemManaged: false }), gridLaunch: gridLaunchInProcess(), writeGridConfigDir: async () => '/unused', swarm: SWARM }
+    expect(await buildLaunchOverrides(deps, 'claude', { swarmSkill }, 'a')).toMatchObject({ ok: false, error: 'SWARM_SKILL_FAILED', detail: expect.stringContaining('no saved workspace') })
+    expect(await buildLaunchOverrides(deps, 'claude', { cwd, swarmSkill }, 'a')).toMatchObject({ ok: false, error: 'SWARM_SKILL_FAILED', detail: expect.not.stringContaining('HARNESS_SWARM') })
   })
 })

@@ -481,7 +481,7 @@ describe('an agent whose task was lost', () => {
 })
 
 describe('a start that never runs', () => {
-  it('fails 3 minutes after dispatch, naming its machine, and tells the Lead in its group', async () => {
+  it('fails 3 minutes after dispatch, naming its machine to its Lead only, and tells the Lead in its group', async () => {
     const f = await swarm()
     await f.beat(f.clock.now)
     const decision = { assessment: { difficulty: 'low', risk: 'low', why: 'Small task.' },
@@ -501,7 +501,9 @@ describe('a start that never runs', () => {
     expect((await f.timed.read(owner, f.tab)).state.starts!.find(s => s.id === startId)!.error).toBeNull()
     f.clock.now = dispatched + 3 * MINUTE + 1
     const told = (await f.leadInbox()).find(m => (m.source as { kind?: string }).kind === 'start-timeout')!
-    expect(told).toMatchObject({ conversationId: 'lead', text: 'Could not start Builder: Worker Mac did not start it within 3 minutes.' })
+    // Every group member reads the notice, so it names no machine (review of #1847); the start's Lead reads which one.
+    expect(told).toMatchObject({ conversationId: 'lead', text: 'Could not start Builder: its machine did not start it within 3 minutes.' })
+    expect((await f.timed.start(host, f.tab, startId, f.lead)).error).toBe('Worker Mac did not start it within 3 minutes')
     await expect(onMachine({ type: 'agent.started', startId, harnessId: randomUUID(), configuration: config }))
       .rejects.toMatchObject({ code: 'START_FAILED' })
   })

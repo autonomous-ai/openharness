@@ -1,11 +1,22 @@
 import { createHash } from 'node:crypto'
 import type { RouteDecisionEffect } from './routeRecord.js'
 import { agentDisplayName, assignAgentDisplayNames } from './agentNames.js'
+import { withAvatarView } from './profile.js'
 import { downSince, expireRemovals } from './machines.js'
+import { publicReason, readsRawReason } from './startFailure.js'
 import { agentProjectId, agentSetRole, canReadAgent, canReadGroup, canReadProject, groupProject, ledProject, placeRules, projectsOf, sharedWithLeads, skillSetOf, type ProjectVisibility, type SwarmProject } from './projects.js'
 
 export type Role = 'owner' | 'collaborator' | 'viewer'
-export interface Person { id: string; email: string; role: Role; generation: string }
+export interface Person {
+  id: string
+  email: string
+  role: Role
+  generation: string
+  /** Their own short status (profile.ts); only Swarm members read it. */
+  status?: import('./profile.js').PersonStatus
+  /** Their own avatar (profile.ts); only Swarm members read it. */
+  avatar?: import('./profile.js').Avatar
+}
 export interface AgentConfiguration {
   engine: string
   model: string | null
@@ -31,9 +42,17 @@ export interface Agent {
   roleId?: string | null
   /** A finished worker stays undecided even when its group receives a new brief. */
   workDecision?: 'awaiting' | 'keep' | 'stop'
+  /** When its Lead last decided keep: a kept worker is idle from then (tidy.ts). */
+  keptAt?: number
+  /** Set while its stop is the idle check's (tidy.ts), with the decision it had before: its host withdraws that stop when
+   *  the session's folder has changes by the time it would close it (agent.stopRefused). */
+  idleStop?: { previous: 'awaiting' | 'keep' | null }
   releaseId?: string
   /** Captured from the original Swarm launch, never inferred from a later live session with the same id. */
   startedSession?: { creationId: string; sessionId: string; createdAt: string }
+  /** The model on the Swarm's grid its start named, which its engine never reports. Kept here because a command does not
+   *  load a finished start (parts/load.ts loadActive), and the leaderboard counts every assignment by it (review of #1808). */
+  gridModel?: string
   configuration: AgentConfiguration
   /** The last configuration operation fences delayed observations, including re-contribution. */
   configurationVersion?: string
@@ -53,6 +72,8 @@ export interface Agent {
   /** Set once its session is a Lead or in a private conversation, and kept until the session leaves: nobody but its
    *  machine's person watches it (projects.ts canWatchAgent). */
   confidential?: true
+  /** Set by its contributor or its project's Lead (profile.ts); absent shows the pattern Desktop draws from its name. */
+  avatar?: import('./profile.js').Avatar
 }
 export type AgentRole = 'builder' | 'reviewer'
 export const agentRole = (agent: Pick<Agent, 'role'>): AgentRole => agent.role ?? 'builder'
@@ -125,6 +146,25 @@ export interface WorkTask {
   changes: string
   constraints: string
   owns: string[]
+  requires?: TaskRequirement
+}
+/** Where a task can be done at all (2026-10-27: a task to check a device plugged into one person's Mac was routed to another
+ *  machine by policy order). `machines`: it runs only there, or on a Mac's Harness Team account of one of them. `devices`:
+ *  full paths every start for it asks its machine to check (cli superTabs/capacity.ts). Never in the rendered brief, since
+ *  a reader may not see the machine. A reader is handed only the machines they see, and how many others (`unseenMachines`). */
+export interface TaskRequirement { machines?: string[]; devices?: string[]; unseenMachines?: number }
+
+/** The machines a reader sees: listed in their visible state, or running an agent they see. */
+export const seenMachineIds = (visible: Pick<SuperTabState, 'machines' | 'agents'>): Set<string> =>
+  new Set([...(visible.machines ?? []).map(m => m.machineId), ...visible.agents.map(a => a.machineId)])
+
+/** [group] with its requirement as a reader who sees [seen] may read it. The same group read again gives the same result. */
+export function withSeenRequirement<T extends Pick<Conversation, 'task'>>(group: T, seen: ReadonlySet<string>): T {
+  const requires = group.task?.requires
+  if (!requires?.machines?.some(id => !seen.has(id))) return group
+  const machines = requires.machines.filter(id => seen.has(id))
+  return { ...group, task: { ...group.task!, requires: { ...requires, machines,
+    unseenMachines: (requires.unseenMachines ?? 0) + requires.machines.length - machines.length } } }
 }
 
 export function renderWorkTask(task: WorkTask): string {
@@ -164,6 +204,8 @@ export interface Conversation {
   /** The last attempt here that was lost: its agent's status and checks for it are refused, even after reassignment. Where it
    *  ran (machine and engine) stays too, so routing the work again avoids that account even once its agent is gone. */
   lostAttempt?: { id: string; agentId: string; machineId?: string; engine?: string }
+  /** Counts reaction changes here (reactions.ts), so readers see a new reaction on an older message. */
+  reactionSeq?: number
   /** The person who asked for this work: whoever opened it, or the person its Lead named (leaderboard/record.ts). */
   requesterId?: string
   /** What the leaderboard counts here (leaderboard/record.ts); bookkeeping readers never get whole. */
@@ -212,6 +254,8 @@ export interface SuperTabState {
   /** Owner-only sharing configuration; visibleState always removes it. */
   sharing?: import('./sharing.js').SwarmSharing
   paused: boolean
+  /** Idle workers stop and finished groups archive by themselves (tidy.ts); false once the owner turns it off. */
+  tidy?: false
   people: Person[]
   agents: Agent[]
   conversations: Conversation[]
@@ -507,6 +551,9 @@ export function visibleState(state: SuperTabState, actor: Actor, now = Date.now(
   }
   for (const project of projectsOf(visible)) for (const target of awaitingWorkers(visible, project.id)) target.workDecision = 'awaiting'
   for (const project of visible.projects ?? []) project.skillSet = skillSetOf(project)
+  // An uploaded avatar's stored key stays on the server; readers get a signed link with each parts read (avatarLinks.ts).
+  visible.people = visible.people.map(withAvatarView) as Person[]
+  visible.agents = visible.agents.map(withAvatarView) as Agent[]
   // On Custom every agent shows the role it runs, null when its kind has none; elsewhere a role id means nothing yet.
   for (const target of visible.agents) {
     const home = projectsOf(state).find(p => p.id === agentProjectId(state, target))
@@ -514,5 +561,10 @@ export function visibleState(state: SuperTabState, actor: Actor, now = Date.now(
     else delete target.roleId
   }
   if (actor.kind !== 'person' || actor.userId !== state.ownerId) visible.invitations = []
+  for (const start of visible.starts ?? []) {
+    if (start.error && !readsRawReason(actor, start, state.conversations.find(c => c.id === start.request.conversationId))) start.error = publicReason(start.error)
+  }
+  const seen = seenMachineIds(visible)
+  visible.conversations = visible.conversations.map(c => withSeenRequirement(c, seen))
   return visible
 }

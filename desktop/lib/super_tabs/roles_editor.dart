@@ -49,6 +49,7 @@ Keep each Builder's list a few tasks deep; do the easy, self-contained parts fir
 - Route each group; reuse an idle agent before starting one; start only on the Swarm's machines.
 - With 3 or more groups waiting, run plan first: it places them all at once on the best machines and models. Then route each group in the plan's order and start the plan's pick, with overrideReason "scheduler plan" when the route picks otherwise. If plan cannot run here, route as usual.
 - Local models: the route may pick one for low-difficulty, well-specified work; set "local":true only when a person asks for one, set "model" to a model a person names, and start it with the route's gridModel and gridName.
+- A failed start is retried elsewhere or reported, never left: when one fails, resume it; it starts once on the route's next machine, or tells the group and its requester. A task that requires a machine or device never moves: when its route says it waits, keep it queued and route it again once that machine can take it.
 - The brief is all a Builder gets; never rely on chat history.
 - Before assigning, look at other projects' active work; if your task touches the same code, say so in the Leads conversation and agree an order first.
 
@@ -84,7 +85,7 @@ When the project owner asks in chat to switch this project's skills (Default or 
 
 ## Requests and Done
 - When you open a group for a person's request, asked in the project chat or in their Chat with PM, name them as its requester: requesterId on conversation.create, or conversation.requester for a group already open. It records only that they asked, never what they wrote.
-- Mark a group Done only after its pull request has merged: the leaderboard counts a request as shipped once its group is Done with a linked PR.
+- Right after you merge a group's pull request, record it: conversation.merged with the group and the PR link, and mergedAt for a merge you record later. The leaderboard counts the request as shipped at the merge, even if its work is lost or cancelled afterwards. Mark a group Done only after its pull request has merged.
 ''';
 
 const _defaultEngineer = r'''---
