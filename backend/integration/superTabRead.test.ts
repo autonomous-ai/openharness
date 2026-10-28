@@ -1091,6 +1091,28 @@ describe('escalation and the device hook (collaboration protocol)', () => {
     expect((await escalations(s.tabId)).map(m => (m.source as { escalated: string }).escalated)).toEqual([id])
   })
 
+  it('reminds nobody and tells the Lead nothing while the Swarm is paused, and does both once it resumes', async () => {
+    const s = await scene(), t = timed()
+    await keepWorker(s)
+    const id = (await ask(t, s)).result.requestId as string
+    const pause = (paused: boolean) => t.store.execute(owner, s.tabId, { operationId: randomUUID(), command: { type: 'tab.pause', paused } })
+    await pause(true)
+    t.heard.length = 0
+    t.later(121 * MINUTE)
+    await t.store.deliveries(owner, s.tabId, s.lead)
+    expect(t.heard).toEqual([])
+    expect(await escalations(s.tabId)).toEqual([])
+    expect(await db.superTabDecision.findUnique({ where: { id }, select: { remindedAt: true, escalatedAt: true } }))
+      .toEqual({ remindedAt: null, escalatedAt: null })
+    await pause(false)
+    t.later(MINUTE)
+    await t.store.deliveries(owner, s.tabId, s.lead)
+    t.later(MINUTE)
+    await t.store.deliveries(owner, s.tabId, s.lead)
+    expect(t.heard).toEqual([{ tabId: s.tabId, personId: peer.sub, requestId: id, kind: 'handsOn', reason: 'reminder' }])
+    expect((await escalations(s.tabId)).map(m => (m.source as { escalated: string }).escalated)).toEqual([id])
+  })
+
   it('never fails a write or a sweep on a failing device hook', async () => {
     const s = await scene()
     await keepWorker(s)

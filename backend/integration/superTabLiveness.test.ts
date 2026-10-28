@@ -44,9 +44,9 @@ afterAll(async () => {
 })
 
 /** A Swarm whose Lead runs on one of host's machines and whose worker runs on another, assigned "Ship the parser". */
-async function swarm({ legacy = false, client = db }: { legacy?: boolean; client?: PrismaClient } = {}) {
+async function swarm({ legacy = false, client = db, heard }: { legacy?: boolean; client?: PrismaClient; heard?: unknown[] } = {}) {
   let now = 10_000_000
-  const timed = new SuperTabStore(client, () => now)
+  const timed = new SuperTabStore(client, () => now, null, heard ? { personNeeded: signal => { heard.push(signal) } } : {})
   const tab = (await timed.create(owner, randomUUID(), 'Liveness', legacy ? undefined : 'public')).id
   if (legacy) await dropProjects(tab)
   const execute = (command: Command, user = owner, asAgentId?: string) => timed.execute(user, tab, { operationId: randomUUID(), command }, asAgentId)
@@ -565,6 +565,33 @@ describe('the delivery poll of an agent with nothing waiting', () => {
   })
 })
 
+describe('requests waiting on a person, on the machines\' time checks (collaboration protocol)', () => {
+  it('reminds nobody, tells the Lead nothing and marks nothing while the Swarm is paused, and does each once after it resumes', async () => {
+    const heard: unknown[] = []
+    const f = await swarm({ heard })
+    const asked = await f.execute({ type: 'handsOn.ask', conversationId: f.group, personId: owner.sub, request: 'Plug in the voice device',
+      steps: ['Plug it into the Mac Studio'], next: 'I run the voice test' }, host, f.lead)
+    const id = asked.result.requestId as string
+    const escalated = async () => (await db.superTabMessage.findMany({ where: { tabId: f.tab } }))
+      .filter(m => (m.source as { escalated?: string } | null)?.escalated === id)
+    await f.execute({ type: 'tab.pause', paused: true })
+    heard.length = 0
+    f.clock.now += 121 * 60_000
+    await f.observe('lead-host', [f.harness.lead])
+    expect(heard).toEqual([])
+    expect(await escalated()).toEqual([])
+    expect(await db.superTabDecision.findUnique({ where: { id }, select: { remindedAt: true, escalatedAt: true } }))
+      .toEqual({ remindedAt: null, escalatedAt: null })
+    await f.execute({ type: 'tab.pause', paused: false })
+    f.clock.now += 31_000
+    await f.observe('lead-host', [f.harness.lead])
+    f.clock.now += 31_000
+    await f.observe('lead-host', [f.harness.lead])
+    expect(heard).toEqual([{ tabId: f.tab, personId: owner.sub, requestId: id, kind: 'handsOn', reason: 'reminder' }])
+    expect(await escalated()).toHaveLength(1)
+  })
+})
+
 describe('the morning digest', () => {
   // #1772 review: every open decision counts, however many there are, and private ones never crowd out shared ones.
   it('counts every decision waiting, past 200, and is not crowded out by newer private ones', async () => {
@@ -646,9 +673,7 @@ describe('the morning digest', () => {
     f.clock.now = 3 * 60 * 60_000
     queries.length = 0
     await f.leadInbox()
-    // The digest's decisions are read per project; the escalation sweep (decisions.ts sweepRequests) still runs while paused.
-    const forDigest = queries.filter(q => (q.model === 'SwarmGroup' && q.args.where?.dormant === true && q.args.where.lastActivityAt)
-      || (q.model === 'SuperTabDecision' && q.args.where?.projectId))
+    const forDigest = queries.filter(q => (q.model === 'SwarmGroup' && q.args.where?.dormant === true && q.args.where.lastActivityAt) || q.model === 'SuperTabDecision')
     expect(forDigest).toEqual([])
     await f.execute({ type: 'tab.pause', paused: false })
     f.clock.now += 30_000

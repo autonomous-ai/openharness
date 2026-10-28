@@ -275,9 +275,11 @@ const unset = (field: 'remindedAt' | 'escalatedAt'): Prisma.SuperTabDecisionWher
 
 /** The escalations due now, each recorded on its request by a write that only one sweep wins, so a restarted server or two
  *  sweeps at once never remind or tell twice. Run with the liveness time checks, in their transaction; the reminders are for
- *  the device hook once it commits. ponytail: 200 due requests per sweep; the rest wait for the next one. */
+ *  the device hook once it commits. ponytail: 200 due requests per sweep; the rest wait for the next one. A paused Swarm
+ *  nudges nobody: its due requests stay due, and go out on the first sweep once it resumes. */
 export async function sweepRequests(tx: Tx, tabId: string, state: SuperTabState, now: number,
   writer: (lead: Agent) => Author): Promise<{ messages: MessageDraft[]; signals: PersonSignal[] }> {
+  if (state.paused) return { messages: [], signals: [] }
   const rows = await tx.superTabDecision.findMany({ where: { tabId, AND: [waiting, { createdAt: { lte: new Date(now - REMIND_AFTER_MS) } },
     { OR: [unset('remindedAt'), { AND: [unset('escalatedAt'), { createdAt: { lte: new Date(now - ESCALATE_AFTER_MS) } }] }] }] },
     orderBy: { createdAt: 'asc' }, take: 200 })
