@@ -8,6 +8,7 @@ import { machineBillingAllowsDataPlane } from '../lib/billingState.js'
 import { validateBody, validateParams } from '../middlewares/validation.js'
 import { sendError, sendSuccess } from '../utils/response.js'
 import type { AuthUser } from '../lib/ssoAuth.js'
+import { logger } from '../utils/logger.js'
 import { TEAM_SESSION_LIMITED, TEAM_SESSION_MESSAGE, teamMachineScope } from '../lib/teamSession.js'
 
 const params = z.object({ id: z.string().uuid() })
@@ -29,7 +30,9 @@ const body = z.object({
 /**
  * Shared harnesses arrive in the invited account's machine list, so an invitation given or taken back
  * is a list change for THAT account: poke its open apps (web tabs, and each computer's daemon → app)
- * to re-read. This is what lets the app stop polling `/api/harness-shares` to discover invitations.
+ * to re-read. This is what lets the app stop polling `/api/harness-shares` to discover invitations. The
+ * reason says so: an app reads `/api/harness-shares` (seconds, through the owner's daemon) only when told
+ * it changed, and every few minutes otherwise.
  * Best effort — the invitation is already persisted, and an address with no account has nobody to tell.
  */
 async function tellRecipient(shareId: string): Promise<void> {
@@ -37,7 +40,10 @@ async function tellRecipient(shareId: string): Promise<void> {
     const share = await prisma.harnessShare.findUnique({ where: { id: shareId } })
     if (!share) return
     const recipient = await prisma.user.findUnique({ where: { email: share.recipientEmail }, select: { id: true } })
-    if (recipient) await publishDeviceMachineListChanged(recipient.id, { reason: 'updated' })
+    if (recipient) {
+      await publishDeviceMachineListChanged(recipient.id, { reason: 'harness_shares' })
+      logger.info('harness share: told the recipient it changed', { shareId, recipientId: recipient.id })
+    }
     // A private link admits the recipient only through this invitation (harnessLinks.ts recipientLink): its viewers check again.
     const links = await prisma.harnessLink.findMany({ where: { ownerId: share.ownerId, machineId: share.machineId, agentId: share.agentId,
       autonomousEnv: share.autonomousEnv, revokedAt: null, visibility: { not: 'public' } }, select: { id: true } })

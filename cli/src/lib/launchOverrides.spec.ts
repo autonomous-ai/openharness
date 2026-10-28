@@ -13,6 +13,7 @@ import { gridLaunchInProcess } from '../testing/gridLaunchInProcess.js'
 import { AGENT_ATTRIBUTION_LINE, HARNESS_INSTRUCTIONS } from './agentAttribution.js'
 import { prepareSwarmSkill } from './swarmSkills.js'
 import { swarmGitHubLaunch } from './swarmGitHub.js'
+import { writeMachineMcp } from './machineMcp.js'
 
 const GRID: GridLaunchOverride = {
   networkId: 'grid-abc',
@@ -401,6 +402,29 @@ describe('buildLaunchOverrides — every harness is told how to use Harness', ()
     expect(codex.overrides.extraArgs.filter((arg) => arg.startsWith('developer_instructions='))).toHaveLength(1)
     expect(codex.overrides.extraArgs.at(-1)).toContain('You are running in Harness')
     expect(codex.overrides.extraArgs.at(-1)).not.toContain('Started by another agent in [Harness]')
+  })
+})
+
+describe('buildLaunchOverrides — machine MCP servers (#1872)', () => {
+  afterEach(() => rmSync(join(env.ADAPTER_DATA_DIR, 'mcp-servers.json'), { force: true }))
+
+  it('carries the person\'s servers on every relaunch, beside a grid\'s own, before what Harness tells the agent', async () => {
+    writeMachineMcp({ lamp: { command: 'lamp-mcp', args: ['--lamp', 'lamp-75c9'], engines: [], projects: [] } })
+    setAgentSettingsForTest(env.ADAPTER_DATA_DIR, { agentsStartAgents: true })
+    const own = await buildLaunchOverrides(deps({ readAttribution: () => null }).d, 'claude', { startedBy: null, cwd: '/w' }, 'a')
+    expect(own).toMatchObject({ ok: true, overrides: { extraArgs: [
+      `--mcp-config=${JSON.stringify({ mcpServers: { lamp: { type: 'stdio', command: 'lamp-mcp', args: ['--lamp', 'lamp-75c9'] } } })}`,
+      '--append-system-prompt', HARNESS_INSTRUCTIONS] } })
+    const grid = await buildLaunchOverrides(deps({ readAttribution: () => null }).d, 'claude', { startedBy: null, gridLaunch: GRID, cwd: null }, 'a')
+    expect(grid.ok).toBe(true)
+    if (!grid.ok) return
+    // On a grid too, as its own `--mcp-config=`: a grid's web tools, when it has them, keep theirs.
+    expect(grid.overrides.extraArgs.some((arg) => arg.startsWith('--mcp-config={"mcpServers":{"lamp"'))).toBe(true)
+    const codex = await buildLaunchOverrides(deps({ readAttribution: () => null }).d, 'codex', { startedBy: null, cwd: null }, 'a')
+    expect(codex.ok && codex.overrides.extraArgs).toEqual(expect.arrayContaining(['mcp_servers.lamp.command="lamp-mcp"', 'mcp_servers.lamp.args=["--lamp","lamp-75c9"]']))
+    expect(JSON.stringify(codex)).not.toContain('approval_mode')
+    const hermes = await buildLaunchOverrides(deps({ readAttribution: () => null }).d, 'hermes', { startedBy: null, cwd: null }, 'a')
+    expect(JSON.stringify(hermes)).not.toContain('lamp-mcp')
   })
 })
 

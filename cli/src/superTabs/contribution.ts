@@ -2,7 +2,7 @@ import type { CoreApi } from '../core/api.js'
 import { openDaemon } from '../agentClient/daemon.js'
 import { parseProjectFolder, prepareProjectFolder } from '../lib/projectFolder.js'
 import { readCapabilities, START_REQUIREMENTS } from './capacity.js'
-import { backend, identifier, object } from './host.js'
+import { backend, identifier, object, SuperTabHostError } from './host.js'
 import { mkdir } from 'node:fs/promises'
 import { readAuthSession } from '../lib/authSession.js'
 import { randomUUID } from 'node:crypto'
@@ -17,6 +17,53 @@ interface ContributionDeps {
   reads?: SwarmReads
 }
 const CONTRIBUTION_DEPS = { backend, open: openDaemon, prepare: prepareProjectFolder, capacity: readCapabilities }
+
+/** The most agents a machine may offer: one for every 2 GB of total RAM, and 4 whatever its RAM (Ken, 2026-10-28: the cap
+ * of 16 held a 192 GB Mac Studio to a sixth of that). 1024 is the most the server accepts (backend superTabs/commands.ts). */
+export const machineMaximum = (memoryTotalBytes: number): number =>
+  Math.min(1024, Math.max(4, Math.floor(memoryTotalBytes / START_REQUIREMENTS.memoryBytes)))
+
+/** The owner's own request to the server, as Desktop and `harness super-tab set-agents` send it. A server from before 1024
+ * (2026-10-28) refuses a machine offered with more than 16 agents; that machine is offered with 16 instead of not at all.
+ * The server checks the number before it records the operation, so the second send under the same operation is still
+ * the first that counts. `offered16` says it happened. */
+export async function ownerRequest(core: CoreApi, method: string, path: string, body: unknown, send: typeof backend = backend): Promise<{ value: unknown; offered16: boolean }> {
+  try { return { value: await send(core, method, path, body), offered16: false } } catch (error) {
+    const command = object(object(body).command)
+    if (method !== 'POST' || !/^\/api\/super-tabs\/[A-Za-z0-9_-]+\/commands$/.test(path) || command.type !== 'machine.contribute'
+      || typeof command.maxAgents !== 'number' || command.maxAgents <= 16 || !(error instanceof SuperTabHostError)
+      || error.status !== 400 || error.code !== 'VALIDATION_ERROR' || !/^command\.maxAgents: .*\b16\b/.test(error.message)) throw error
+    return { value: await send(core, method, path, { ...object(body), command: { ...command, maxAgents: 16 } }), offered16: true }
+  }
+}
+
+/** `harness super-tab set-agents`: the owner sets how many Swarm agents may run on one of their machines at once, without
+ * Desktop. Only the number changes; the machine's name, folder and engines are sent again as the Swarm has them, since
+ * the server takes a machine's settings whole. The server checks that the person owns the machine. */
+export async function setMachineAgents(core: CoreApi, input: { tabId: string; machineId: string; maxAgents: number },
+  deps: { backend: typeof backend; reads?: SwarmReads } = { backend }): Promise<Json> {
+  const { state } = await (deps.reads ?? new SwarmReads(core, { backend: deps.backend })).read(input.tabId)
+  const machine = (Array.isArray(state.machines) ? state.machines.map(object) : []).find(m => m.machineId === input.machineId)
+  if (!machine) return { error: 'MACHINE_NOT_FOUND', detail: 'This machine is not in this Swarm. Add it from Desktop first.' }
+  const name = typeof machine.name === 'string' ? machine.name : input.machineId
+  // The server takes a machine's settings whole and a new contribution starts unpaused (backend superTabs/commands.ts).
+  if (machine.paused === true) return { error: 'MACHINE_PAUSED', detail: `${name} is paused. Resume it first: changing its agents would also resume it.` }
+  const total = object(object(machine.observation).resources).memoryTotalBytes
+  if (typeof total !== 'number') return { error: 'MACHINE_MEMORY_UNKNOWN', detail: `${name} has not reported its memory yet. Try again once it is online.` }
+  const maximum = machineMaximum(total)
+  if (input.maxAgents > maximum) {
+    return { error: 'ABOVE_MACHINE_MAXIMUM', detail: `${name} can offer at most ${maximum} agents: one for every 2 GB of its memory, and at least 4.` }
+  }
+  // A machine added before Swarms ran only Claude Code and Codex still lists every engine it had; the server takes those two.
+  const engines = (Array.isArray(machine.engines) ? machine.engines : []).filter(e => e === 'claude' || e === 'codex')
+  if (!engines.length) return { error: 'NO_SWARM_ENGINE', detail: `${name} runs neither Claude Code nor Codex. Configure it from Desktop.` }
+  const command = { type: 'machine.contribute', machineId: input.machineId, name, cwd: machine.cwd,
+    ...(machine.scope === 'swarm' ? { scope: 'swarm' } : {}), engines, maxAgents: input.maxAgents }
+  const sent = await ownerRequest(core, 'POST', `/api/super-tabs/${input.tabId}/commands`,
+    { operationId: `machine-agents-${randomUUID()}`, command }, deps.backend)
+  return { ok: true, machineId: input.machineId, maxAgents: sent.offered16 ? 16 : input.maxAgents, maximum,
+    ...(sent.offered16 ? { notice: `This Swarm's server takes at most 16 agents per machine, so ${name} now offers 16. Update the server to offer more.` } : {}) }
+}
 
 /** Owner-only setup. Reuses the regular checkout preparation and engine probe;
  * it neither launches an agent nor grants the team access to the computer. */
@@ -62,7 +109,8 @@ export async function prepareContribution(core: CoreApi, input: Json, given: Par
     const total = typeof resources.memoryTotalBytes === 'number' ? resources.memoryTotalBytes : 0
     // Free memory is checked again for every start. It must not shrink the machine's
     // configured limit just because other work happens to be running during setup.
-    const maxAvailableAgents = Math.max(1, Math.min(16, Math.floor(total / START_REQUIREMENTS.memoryBytes)))
+    // The suggestion keeps its 16, so a machine that joins by itself still sends what a server from before 1024 accepts.
+    const maxAvailableAgents = machineMaximum(total)
     const maxAgents = Math.max(1, Math.min(16, Math.floor(total / (2 * START_REQUIREMENTS.memoryBytes))))
     return { ok: true, state: 'ready', cwd, engines: [...new Set(engines)], maxAgents, maxAvailableAgents, ...(swarm ? { scope: 'swarm' } : {}) }
   } finally { connection.close() }

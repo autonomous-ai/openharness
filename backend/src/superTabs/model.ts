@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto'
 import type { RouteDecisionEffect } from './routeRecord.js'
 import { agentDisplayName, assignAgentDisplayNames } from './agentNames.js'
 import { withAvatarView } from './profile.js'
-import { downSince, expireRemovals } from './machines.js'
+import { downSince, expireRemovals, startPreparing } from './machines.js'
 import { publicReason, readsRawReason } from './startFailure.js'
 import { agentProjectId, agentSetRole, canReadAgent, canReadGroup, canReadProject, groupProject, ledProject, placeRules, projectsOf, sharedWithLeads, skillSetOf, type ProjectVisibility, type SwarmProject } from './projects.js'
 
@@ -109,8 +109,11 @@ export interface AgentStart {
   request: AgentStartRequest
   harnessId: string | null
   dispatched: boolean
-  /** When its host was asked to launch it; a start not running 3 minutes later fails (liveness.ts). */
+  /** When its host was asked to launch it; a start not running 3 minutes later fails, or 15 minutes later while its machine
+   *  reports it preparing (liveness.ts). */
   dispatchedAt?: number
+  /** On reads only, never stored: its machine's fresh report says it is preparing (machines.ts startPreparing). */
+  preparing?: true
   error: string | null
 }
 /** `needs_human`: the agent needs a person's decision (its result is the question). `blocked`: it cannot go on (its result
@@ -432,8 +435,9 @@ export function syncLeads(state: SuperTabState): void {
   const id = state.leadsConversationId ??= stableId(state.id, 'leads')
   const group = state.conversations.find(c => c.id === id) ?? { id, kind: 'leads', title: 'Leads', leadId: null, agentIds: [],
     archived: false, brief: '', checks: [], assignment: null, lastMessageSequence: 0 }
-  state.conversations = [...state.conversations.filter(c => c !== group), group]
-  group.agentIds = state.agents.filter(a => ledProject(state, a.id)).map(a => a.id)
+  // A new record, not the one found: a read's state shares the stored ones (parts/shape.ts reassemble).
+  state.conversations = [...state.conversations.filter(c => c !== group),
+    { ...group, agentIds: state.agents.filter(a => ledProject(state, a.id)).map(a => a.id) }]
 }
 
 /** Legacy groups keep their append order, including archived groups. Persisted
@@ -546,7 +550,9 @@ export function visibleState(state: SuperTabState, actor: Actor, now = Date.now(
       pool.observation.stoppedHarnessIds = pool.observation.stoppedHarnessIds.filter(id => harnesses.has(id))
       if (pool.observation.harnessProgress) pool.observation.harnessProgress = Object.fromEntries(Object.entries(pool.observation.harnessProgress).filter(([id]) => harnesses.has(id)))
       if (pool.observation.stoppedReservations) pool.observation.stoppedReservations = pool.observation.stoppedReservations.filter(r => harnesses.has(r.harnessId))
+      if (pool.observation.preparingStartIds) pool.observation.preparingStartIds = pool.observation.preparingStartIds.filter(id => visible.starts?.some(s => s.id === id))
     }
+    for (const start of visible.starts ?? []) if (startPreparing(state, start, now)) start.preparing = true
     visible.invitations = visible.invitations.filter(i => visible.conversations.some(c => c.id === i.conversationId))
   }
   for (const project of projectsOf(visible)) for (const target of awaitingWorkers(visible, project.id)) target.workDecision = 'awaiting'

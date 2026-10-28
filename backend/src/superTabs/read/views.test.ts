@@ -117,3 +117,22 @@ describe('reader view of the parts (design 4.1, 4.3)', () => {
     expect(() => readerView(parts, { kind: 'person', userId: 'nobody', email: 'x@example.com' }, NOW, { teamMachines: [] })).toThrow(/no longer have access/)
   })
 })
+
+describe('reader view over what the read cache holds', () => {
+  const deepFreeze = <T>(value: T): T => {
+    if (value && typeof value === 'object') { Object.values(value).forEach(deepFreeze); Object.freeze(value) }
+    return value
+  }
+
+  it('builds from the state it is given, over frozen parts, as it would from the parts alone', () => {
+    const { parts } = scene()
+    const expected = readerView(structuredClone(parts), peer, NOW, { teamMachines: [] })
+    const frozen = deepFreeze(structuredClone(parts))
+    const state = store.reassemble(frozen, { share: true })
+    for (const actor of [peer, owner, outsider, agentActor(richSwarm().lead)]) {
+      const view = readerView(frozen, actor, NOW, { teamMachines: [] }, state)
+      expect(view.state).toBe(state)
+      if (actor === peer) expect({ parts: view.parts, derived: view.derived }).toEqual({ parts: expected.parts, derived: expected.derived })
+    }
+  })
+})

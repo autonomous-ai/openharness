@@ -10,7 +10,9 @@ import { machineAlive } from '../../lib/prisma.js'
 import { isTeamSession } from '../../lib/teamSession.js'
 import { machineBillingAllowsDataPlane } from '../../lib/billingState.js'
 import { fail, type AgentStart, type SuperTabState } from '../model.js'
-import { transaction, type SuperTabStore } from '../store.js'
+import type { SuperTabStore } from '../store.js'
+import type { CacheView } from '../cache.js'
+import { readMachines } from '../cachedReads.js'
 import * as parts from '../parts/index.js'
 import type { MachineData, Part } from '../parts/index.js'
 import { READ_FORMAT, type HostChanges, type HostChangesRequest } from './contract.js'
@@ -47,38 +49,39 @@ export class HostReads {
   async changes(user: AuthUser, machineId: string, request: HostChangesRequest): Promise<HostChanges> {
     const t0 = this.now()
     const from = request.cursor && !request.full ? readCursor(request.cursor, 0, t0) : { reload: true as const }
-    return transaction(this.db, async tx => {
-      await this.store.hostFor(tx, user, machineId)
-      const owned = await tx.machine.findFirst({ where: { machineId, userId: user.sub, autonomousEnv: user.autonomousEnv, ...machineAlive } })
-      if (!owned || !machineBillingAllowsDataPlane(owned)) fail('HOST_UNAVAILABLE', 'This execution host is unavailable.', 403)
-      // Swarms still in one row are migrated when first opened; the job migrates every one before the new release serves.
-      const ids = (await tx.superTab.findMany({ where: { autonomousEnv: user.autonomousEnv, format: 2,
-        OR: [{ machineIds: { has: machineId } }, { cleanupMachineIds: { has: machineId } }] },
-        orderBy: { updatedAt: 'desc' }, take: FULL_TABS, select: { id: true } })).map(r => r.id)
-      const teams = isTeamSession(user) || this.options.teamAccountsIdle ? [] : await tx.machine.findMany({ where: { userId: user.sub,
-        hostMachineId: machineId, sessionKind: 'team', autonomousEnv: user.autonomousEnv, ...machineAlive }, select: { machineId: true } })
-      const full = 'reload' in from
-      const woken = full ? null : await this.woken(tx, ids, machineId, from.since)
-      // Only for the Swarms answered for: this runs every second on every host, and seven groupBy over all of a Swarm's parts
-      // are no use for one that has nothing to say (a production backend at 5 pods, 2026-10-27).
-      const newest = await parts.lastChangedAt(tx, woken ? ids.filter(id => woken.has(id)) : ids)
-      const tabs = []
-      for (const tabId of ids) {
-        if (woken && !woken.has(tabId)) continue
-        const lastChangedAt = newest.get(tabId) ?? null, held = request.held?.[tabId]
-        // The etag is the rows' hash and then the signature of what they were built from. A matching signature answers
-        // 'unchanged' from version columns alone. Never on a full read: grants and billing live outside the parts.
-        const inputs = await this.inputs(tx, tabId)
-        if (!full && held && inputs && held.slice(ROW_HASH) === inputs) { tabs.push({ tabId, lastChangedAt, etag: held, unchanged: true as const }); continue }
-        const state = await this.tabState(tx, tabId, machineId)
-        const rows = await hostTab(tabId, state, machineId, user, lastChangedAt, await this.lookups(tx, state, teams))
-        const etag = rows.etag + (inputs ?? '')
-        // The host already holds these rows: say so instead of sending them again.
-        tabs.push(held?.slice(0, ROW_HASH) === rows.etag ? { tabId, lastChangedAt, etag, unchanged: true as const } : { ...rows, etag })
-      }
-      return { format: READ_FORMAT, full, cursor: cursorFor(t0, 0), tabs,
-        removedTabIds: full ? [] : await this.removed(tx, user.autonomousEnv, machineId, from.since, new Set(ids)) }
-    })
+    // Outside any transaction: each Swarm's signature and state come through the read cache (cache.ts), at stamps read once.
+    const tx = this.db
+    await this.store.hostFor(tx, user, machineId)
+    const owned = await tx.machine.findFirst({ where: { machineId, userId: user.sub, autonomousEnv: user.autonomousEnv, ...machineAlive } })
+    if (!owned || !machineBillingAllowsDataPlane(owned)) fail('HOST_UNAVAILABLE', 'This execution host is unavailable.', 403)
+    // Swarms still in one row are migrated when first opened; the job migrates every one before the new release serves.
+    const ids = (await tx.superTab.findMany({ where: { autonomousEnv: user.autonomousEnv, format: 2,
+      OR: [{ machineIds: { has: machineId } }, { cleanupMachineIds: { has: machineId } }] },
+      orderBy: { updatedAt: 'desc' }, take: FULL_TABS, select: { id: true } })).map(r => r.id)
+    const teams = isTeamSession(user) || this.options.teamAccountsIdle ? [] : await tx.machine.findMany({ where: { userId: user.sub,
+      hostMachineId: machineId, sessionKind: 'team', autonomousEnv: user.autonomousEnv, ...machineAlive }, select: { machineId: true } })
+    const full = 'reload' in from
+    const woken = full ? null : await this.woken(tx, ids, machineId, from.since)
+    // Only for the Swarms answered for: this runs every second on every host, and seven groupBy over all of a Swarm's parts
+    // are no use for one that has nothing to say (a production backend at 5 pods, 2026-10-27).
+    const newest = await parts.lastChangedAt(tx, woken ? ids.filter(id => woken.has(id)) : ids)
+    const tabs = []
+    const cached = await this.store.view(woken ? ids.filter(id => woken.has(id)) : ids)
+    for (const tabId of ids) {
+      if (woken && !woken.has(tabId)) continue
+      const lastChangedAt = newest.get(tabId) ?? null, held = request.held?.[tabId]
+      // The etag is the rows' hash and then the signature of what they were built from. A matching signature answers
+      // 'unchanged' from version columns alone. Never on a full read: grants and billing live outside the parts.
+      const inputs = await cached.get(tabId, 'host:inputs', 'main', () => this.inputs(tx, tabId))
+      if (!full && held && inputs && held.slice(ROW_HASH) === inputs) { tabs.push({ tabId, lastChangedAt, etag: held, unchanged: true as const }); continue }
+      const state = await this.tabState(tx, cached, tabId, machineId)
+      const rows = await hostTab(tabId, state, machineId, user, lastChangedAt, await this.lookups(tx, state, teams))
+      const etag = rows.etag + (inputs ?? '')
+      // The host already holds these rows: say so instead of sending them again.
+      tabs.push(held?.slice(0, ROW_HASH) === rows.etag ? { tabId, lastChangedAt, etag, unchanged: true as const } : { ...rows, etag })
+    }
+    return { format: READ_FORMAT, full, cursor: cursorFor(t0, 0), tabs,
+      removedTabIds: full ? [] : await this.removed(tx, user.autonomousEnv, machineId, from.since, new Set(ids)) }
   }
 
   /**
@@ -107,7 +110,15 @@ export class HostReads {
   /** The Swarm's active parts plus, dormant ones included, every group its agents on this machine are in (a finished
    *  group that is not archived still keeps its agent from automatic cleanup) and every group of a start it holds (the
    *  host still settles a queued start whose group went quiet). */
-  private async tabState(tx: Transaction, tabId: string, machineId: string): Promise<SuperTabState> {
+  private async tabState(tx: Transaction, cached: CacheView, tabId: string, machineId: string): Promise<SuperTabState> {
+    const [light, machines] = await Promise.all([cached.get(tabId, `host:state:${machineId}`, 'main',
+      // On a miss, one snapshot of what the host's rows are built from.
+      () => this.db.$transaction(t => this.hostParts(t, tabId, machineId))),
+      readMachines(tx, cached, tabId)])
+    return parts.reassemble({ ...light, machines }, { share: true })
+  }
+
+  private async hostParts(tx: Transaction, tabId: string, machineId: string) {
     const [agents, starts] = await Promise.all([
       tx.swarmAgent.findMany({ where: { tabId, machineId, deleted: false }, select: { key: true } }),
       tx.swarmStart.findMany({ where: { tabId, machineId, deleted: false, finishedAt: null }, select: { conversationId: true } }),
@@ -118,7 +129,7 @@ export class HostReads {
       .map(g => g.projectId ?? 'lead'))] : []
     // Light conversations (parts/light.ts), and only those host rows read: its agents' (dormant ones too, for `active`),
     // the Lead conversations, running work (assignments, attention, stop requests), and its starts' and their projects'.
-    return parts.reassemble(await parts.loadLight(tx, tabId, { groups: 'working', agentIds: agents.map(a => a.key), groupIds, projectIds }))
+    return parts.loadLight(tx, tabId, { groups: 'working', agentIds: agents.map(a => a.key), groupIds, projectIds, machines: false })
   }
 
   /**

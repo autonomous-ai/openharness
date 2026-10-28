@@ -36,7 +36,7 @@ const LIGHT_GROUP = {
 }
 
 /** A date as `aggregateRaw` returns it: Extended JSON. */
-function ms(value: unknown): number {
+export function ms(value: unknown): number {
   const date = (value as { $date?: unknown } | null)?.$date ?? value
   if (typeof date === 'string') return Date.parse(date)
   if (typeof date === 'number') return date
@@ -78,7 +78,9 @@ const toPart = <T>(kind: PartKind, row: PartRow): Part<T> => ({ kind, key: row.k
  * dormant ones too, and the active ones of the named projects. Starts: unfinished, or every live start with `includeRecentStarts`.
  */
 export async function loadLight(tx: Transaction, tabId: string,
-  opts: { groupIds?: string[]; agentIds?: string[]; projectIds?: string[]; includeRecentStarts?: boolean; groups?: 'active' | 'working' } = {}): Promise<SwarmParts> {
+  opts: { groupIds?: string[]; agentIds?: string[]; projectIds?: string[]; includeRecentStarts?: boolean; groups?: 'active' | 'working'
+    /** False leaves machines out: the read cache keeps them at their own stamp (cache.ts). */
+    machines?: boolean } = {}): Promise<SwarmParts> {
   const head = await tx.swarmHead.findUnique({ where: { id: partId(tabId, 'head') } })
   if (!head) throw Object.assign(new Error(`Swarm ${tabId} has no parts`), { code: 'PARTS_MISSING' })
   const live = { tabId, deleted: false }
@@ -96,7 +98,8 @@ export async function loadLight(tx: Transaction, tabId: string,
   const lightGroups = async (match: Record<string, unknown>) => (await tx.swarmGroup.aggregateRaw({ pipeline: [{ $match: { tabId, deleted: false, ...match } },
     { $project: LIGHT_GROUP }] }) as unknown as Array<Record<string, unknown>>).map(lightGroup)
   const [members, agents, machines, progress, groups] = await Promise.all([
-    ...(['member', 'agent', 'machine'] as const).map(kind => delegate(tx, kind).findMany({ where: live }).then(rows => rows.map(row => toPart(kind, row)))),
+    ...(['member', 'agent', 'machine'] as const).map(kind => kind === 'machine' && opts.machines === false ? Promise.resolve([])
+      : delegate(tx, kind).findMany({ where: live }).then(rows => rows.map(row => toPart(kind, row)))),
     delegate(tx, 'progress').findMany({ where: live }).then(rows => rows.map(row => toPart('progress', row))),
     lightGroups({ $or: named }),
   ])

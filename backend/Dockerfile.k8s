@@ -79,7 +79,8 @@ USER backend
 EXPOSE 8085 8087
 
 # `exec` replaces the shell, so node ends up as PID 1 and receives SIGTERM directly; both entry
-# points shut down on it (server.ts closes the listeners, then DRAINS open websockets with a 1012
-# close + ~4s grace before quitting Redis, so give the api terminationGracePeriodSeconds >= 10 too;
+# points shut down on it (server.ts answers /api/ready 503 and keeps serving for DRAIN_DELAY_MS, then
+# closes the listeners and DRAINS open websockets with a 1012 close + ~4s grace before quitting Redis,
+# so give the api terminationGracePeriodSeconds >= DRAIN_DELAY_MS + 10s; see README.md for the probes;
 # worker.ts stops the billing loop and hard-exits after 5s, so the job also needs >= 10).
 CMD ["sh", "-c", "case \"$APP\" in api) exec node dist/server.js ;; job) exec node dist/worker.js ;; *) echo \"FATAL: unknown APP='$APP' (expected 'api' or 'job')\" >&2; exit 1 ;; esac"]

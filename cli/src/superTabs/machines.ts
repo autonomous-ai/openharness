@@ -135,6 +135,10 @@ export class ContributedMachines {
   private readonly waiting = new Map<string, string>()
   /** Per waiting start, since when this machine has refused it without a break. */
   private readonly refusedSince = new Map<string, number>()
+  /** The starts this machine launched whose creation the daemon is still carrying out (fetch, worktree, engine), as its
+   *  last pass found them. Reported so the backend waits past its 3 minutes (backend liveness.ts): Diego's Mac fetched and
+   *  checked out a 470 MB project, and the start failed while it did (2026-10-27). */
+  private readonly preparing = new Set<string>()
   /** Removals cleaned and acknowledged by this host, and the one in progress per removal. */
   private readonly cleaned = new Set<string>()
   private readonly cleaning = new Map<string, Promise<void>>()
@@ -149,6 +153,8 @@ export class ContributedMachines {
   private readonly uncommittedCache = new Map<string, { cwd: string; dirty: boolean; until: number }>()
   /** Until when the reading leaves out its readiness field, which the backend refused. */
   private readinessRefusedUntil = 0
+  /** Until when the reading leaves out the starts it is preparing, which the backend refused. */
+  private preparingRefusedUntil = 0
   /** Whether each engine is installed and signed in, and until when that stands: one probe starts login shells and reads
    *  the engines' accounts, so it runs every [READINESS_MS] (a failed one again after [READINESS_RETRY_MS]). */
   private engineRead: { value: ReadyEngine[] | null; until: number } | null = null
@@ -240,6 +246,7 @@ export class ContributedMachines {
     const pendingIds = new Set(pools.flatMap(row => list(row.starts).map(start => start.id)))
     for (const id of this.waiting.keys()) if (!pendingIds.has(id)) this.waiting.delete(id)
     for (const id of this.refusedSince.keys()) if (!pendingIds.has(id)) this.refusedSince.delete(id)
+    for (const id of this.preparing) if (!pendingIds.has(id)) this.preparing.delete(id)
     for (const tab of this.published.keys()) if (!pools.some(row => row.tabId === tab)) this.published.delete(tab)
     const privacy = this.privacy()
     // A model run or stopped for a Swarm, or an API shared with it, is sent on this pass, not on the next beat: the
@@ -265,12 +272,13 @@ export class ContributedMachines {
         }
         const running = ids.filter(id => !!this.core.agents.byAgent(id) && !stopped.includes(id))
         const pending = list(row.starts)
+        const preparing = began >= this.preparingRefusedUntil ? pending.flatMap(start => this.preparing.has(String(start.id)) ? [String(start.id)] : []) : []
         const tools = [...new Set([...COMMON_TOOLS, ...pending.flatMap(start => {
           const wanted = object(object(start.request).requirements).tools
           return Array.isArray(wanted) ? wanted.filter((name): name is string => typeof name === 'string' && /^[A-Za-z0-9_.+-]{1,80}$/.test(name)) : []
         })])].slice(0, 20)
         const signature = JSON.stringify([row.reservations, pool.generation, [...running].sort(), [...stopped].sort(), row.paused === true || pool.paused === true,
-          pending.map(start => start.id).sort(),
+          pending.map(start => start.id).sort(), [...preparing].sort(),
           // A privacy result that changes (a home folder opened again) is sent at once, not on the next beat.
           privacy ? [privacy.mode, 'passed' in privacy ? privacy.passed : null, 'item' in privacy ? privacy.item : null] : null,
           typeof row.localGrid === 'string' ? modelsStamp : null])
@@ -332,7 +340,7 @@ export class ContributedMachines {
         const shown = began >= this.progressRefusedUntil ? this.deps.progress?.(running) ?? {} : {}
         const progress = Object.fromEntries(running.flatMap(id => typeof shown[id] === 'number' ? [[id, shown[id]]] : []))
         const uncommitted = began >= this.uncommittedRefusedUntil ? await this.uncommitted(running, began) : {}
-        const observation = { generation: pool.generation, tools: reportedTools,
+        const observation = { generation: pool.generation, tools: reportedTools, ...(preparing.length ? { preparingStartIds: preparing } : {}),
           ...(Object.keys(uncommitted).length ? { harnessUncommitted: uncommitted } : {}),
           ...(Object.keys(progress).length ? { harnessProgress: progress } : {}), ...(localModels ? { localModels } : {}),
           ...((readyEngines || checkouts) && began >= this.readinessRefusedUntil ? { readiness } : {}),
@@ -354,10 +362,12 @@ export class ContributedMachines {
         try {
           const path = `/api/super-tabs/${row.tabId}/machines/${this.machineId}`
           const refused = (error: unknown) => error instanceof SuperTabHostError && error.status === 400 && error.code === 'VALIDATION_ERROR'
-          // Older backends reject the additive fields. The newest go alone first, readiness, progress, then privacy: a backend
-          // that takes everything else keeps the local models it reads. Their boolean-only view still safely refuses an
-          // unverified tool, and a reading without privacy is never one a Team machine passes on.
-          const { harnessUncommitted: _uncommitted, ...known } = observation
+          // Older backends reject the additive fields. The newest go alone first (the starts it is preparing, uncommitted work,
+          // readiness, progress, then privacy): a backend that takes everything else keeps the local models it reads. Their
+          // boolean-only view still safely refuses an unverified tool, and a reading without privacy is never one a Team
+          // machine passes on.
+          const { preparingStartIds: _preparing, ...unprepared } = observation
+          const { harnessUncommitted: _uncommitted, ...known } = unprepared
           const { readiness: _readiness, ...ready } = known
           const { harnessProgress: _progress, ...withoutProgress } = ready
           const { privacy: _privacy, ...withoutPrivacy } = withoutProgress
@@ -365,7 +375,8 @@ export class ContributedMachines {
           // A backend before `starting` refuses it: it gets the models the grid lists, as before, not none at all.
           const listedOnly = localModels?.some(m => m.starting)
             ? [{ ...withoutPrivacy, localModels: localModels.filter(m => !m.starting) }] : []
-          const attempts = [...('harnessUncommitted' in observation ? [observation] : []), ...('readiness' in known ? [known] : []), ready, ...('harnessProgress' in ready ? [withoutProgress] : []),
+          const attempts = [...('preparingStartIds' in observation ? [observation] : []), ...('harnessUncommitted' in unprepared ? [unprepared] : []),
+            ...('readiness' in known ? [known] : []), ready, ...('harnessProgress' in ready ? [withoutProgress] : []),
             ...('privacy' in withoutProgress ? [withoutPrivacy] : []), ...listedOnly,
             ...('toolProbeErrors' in observation || 'localModels' in observation || 'refusedModels' in observation ? [legacy] : [])]
           for (const [index, attempt] of attempts.entries()) {
@@ -374,7 +385,8 @@ export class ContributedMachines {
               break
             } catch (error) {
               if (!refused(error) || index === attempts.length - 1) throw error
-              if ('harnessUncommitted' in attempt) this.uncommittedRefusedUntil = began + FIELD_REFUSED_MS
+              if ('preparingStartIds' in attempt) this.preparingRefusedUntil = began + FIELD_REFUSED_MS
+              else if ('harnessUncommitted' in attempt) this.uncommittedRefusedUntil = began + FIELD_REFUSED_MS
               else if ('readiness' in attempt) this.readinessRefusedUntil = began + FIELD_REFUSED_MS
               else if ('harnessProgress' in attempt) this.progressRefusedUntil = began + FIELD_REFUSED_MS
               else if ('privacy' in attempt) this.privacyRefusedUntil = began + FIELD_REFUSED_MS
@@ -423,6 +435,9 @@ export class ContributedMachines {
             }
             const result = await this.deps.start({ tabId: row.tabId, startId: start.id, hostDispatch: true, ...(github ? { github } : {}) }, scoped, where, this.deps.open)
             const refused = result.ok !== true && !start.dispatched && !NOT_REFUSED.has(String(result.error))
+            // Launched, and its creation still under way on the daemon: anything else is not preparing.
+            if (result.error === 'START_PENDING' && result.state === 'pending') this.preparing.add(String(start.id))
+            else this.preparing.delete(String(start.id))
             if (!refused) this.refusedSince.delete(start.id)
             if (result.ok === true && identifier(result.harnessId)) {
               this.waiting.delete(start.id)

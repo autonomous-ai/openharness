@@ -38,7 +38,7 @@ export type DownTransport = 'relay' | 'local' | 'p2p'
  * lib/e2ee/deviceLogSyncer.ts): forged, the first only makes this daemon re-read and verify the log,
  * the second could fake an answer to its own append — neither is anything a client should be sending.
  */
-export const BACKEND_ONLY_DOWN_TYPES = new Set(['machine_meta', 'machine_revoked', 'desk_changed', 'zoo_changed', 'machines_changed', 'device_keys_changed', 'connectors_changed', 'devlog_append_result'])
+export const BACKEND_ONLY_DOWN_TYPES = new Set(['machine_meta', 'machine_revoked', 'desk_changed', 'zoo_changed', 'machines_changed', 'device_keys_changed', 'connectors_changed', 'super_tab_deliveries', 'devlog_append_result'])
 
 /** A frame type as the sender spelled it, fit for one log line: the relay chooses it, so it is bounded
  *  and escaped rather than trusted not to carry a newline that forges the next line. */

@@ -3,6 +3,7 @@ import type { AgentStart, Conversation } from './model.js'
 import { clock, guardedWrite, PartConflict, type HeadData, type ProgressData } from './parts/index.js'
 import { DORMANT_AFTER_MS, RETENTION_MS } from './parts/types.js'
 import { logger } from '../utils/logger.js'
+import { swarmTransaction } from './cache.js'
 
 /** Parts whose key is never used twice (conversations, starts, projects' progress) lose their tombstone at `purgeAt`.
  *  A person, agent or machine can come back under the same key, so its tombstone is kept for good, compacted to its
@@ -34,7 +35,7 @@ const BATCH = 500
 /** One guarded write in its own transaction. A part that changed since it was read is left for the next sweep. */
 async function guarded(db: PrismaClient, write: Parameters<typeof guardedWrite>[2] & { tabId: string }): Promise<boolean> {
   try {
-    await db.$transaction(tx => guardedWrite(tx, write.tabId, write, clock.next()))
+    await swarmTransaction(db, tx => guardedWrite(tx, write.tabId, write, clock.next()))
     return true
   } catch (error) {
     if (error instanceof PartConflict) return false
@@ -102,10 +103,10 @@ async function expireInvitations(db: PrismaClient, now: number): Promise<number>
     const kept = data.invitations.filter(i => i.expiresAt > now)
     if (kept.length === data.invitations.length) continue
     try {
-      await db.$transaction(async tx => {
+      await swarmTransaction(db, async tx => {
         await guardedWrite(tx, head.tabId, { op: 'update', kind: 'head', key: 'head', seen: head.version, data: { ...data, invitations: kept },
           head: { groupCounter: head.groupCounter, visibilityEpoch: head.visibilityEpoch, sequenceBase: head.sequenceBase } }, clock.next())
-        const row = await tx.superTab.findUniqueOrThrow({ where: { id: head.tabId } })
+        const row = await tx.superTab.findUniqueOrThrow({ where: { id: head.tabId }, select: { revision: true } })
         const updated = await tx.superTab.updateMany({ where: { id: head.tabId, revision: row.revision },
           data: { revision: row.revision + 1, invitedEmails: kept.map(i => i.email) } })
         if (!updated.count) throw new PartConflict('head', 'index')

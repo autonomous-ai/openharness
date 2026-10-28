@@ -10,7 +10,7 @@ import { uploadAttachments } from './attach.js'
 import { keyName } from './terminal.js'
 import { randomUUID } from 'node:crypto'
 
-const USAGE = 'harness super-tab --tab ID [--agent ID] [--port N --machine ID] status | messages GROUP | message GROUP MESSAGE_ID | decisions [--answered] | post GROUP TEXT OPERATION_ID [--reply-to MESSAGE_ID] [--attach PATH]... [--mention PERSON]... | command OPERATION_ID JSON | start OPERATION_ID JSON | resume START_ID | capacity MACHINE_ID JSON | route GROUP JSON | plan [JSON] | remove-machine MACHINE_ID [--yes] | screen AGENT [--scrollback N] | type AGENT [TEXT] [--key K]... | help'
+const USAGE = 'harness super-tab --tab ID [--agent ID] [--port N --machine ID] status | messages GROUP | message GROUP MESSAGE_ID | decisions [--answered] | post GROUP TEXT OPERATION_ID [--reply-to MESSAGE_ID] [--attach PATH]... [--mention PERSON]... | command OPERATION_ID JSON | start OPERATION_ID JSON | resume START_ID | capacity MACHINE_ID JSON | route GROUP JSON | plan [JSON] | remove-machine MACHINE_ID [--yes] | set-agents MACHINE_ID COUNT | screen AGENT [--scrollback N] | type AGENT [TEXT] [--key K]... | help'
 export function parseSuperTabArgs(argv: readonly string[], where: Where) {
   const positional: string[] = []
   let tabId = '', agentId = ''
@@ -61,6 +61,9 @@ export function parseSuperTabArgs(argv: readonly string[], where: Where) {
       ? { action: 'backend', method: 'POST', path: `/api/super-tabs/${tabId}/commands`,
         body: { operationId: `machine-remove-${randomUUID()}`, command: { type: 'machine.remove', machineId: first } } }
       : { action: 'backend', method: 'GET', path: `/api/super-tabs/${tabId}/machines/${first}/removal` })
+  } else if (action === 'set-agents' && identifier(first) && /^[1-9][0-9]{0,3}$/.test(second ?? '') && positional.length === 3) {
+    // The machine's owner, as the person: how many Swarm agents may run on it at once (contribution.ts setMachineAgents).
+    Object.assign(payload, { action: 'setMachineAgents', machineId: first, maxAgents: Number(second) })
   } else if (action === 'route' && identifier(first) && second && positional.length === 3) {
     Object.assign(payload, { conversationId: first, assessment: JSON.parse(second) })
   } else if (action === 'plan' && positional.length <= 2) {
@@ -98,17 +101,20 @@ export async function superTabCommand(argv: readonly string[], deps: {
     const request = parseSuperTabArgs(argv, (deps.where ?? (() => whereFor(process.env.TMUX_PANE)))())
     operationId = request.payload.operationId
     daemon = await (deps.open ?? openDaemon)(request.where)
-    if (request.payload.action === 'backend') {
-      // The owner's own act: it deletes this machine's Swarm folders, so neither a Swarm agent on it (its pane, or --agent)
-      // nor an outside agent's shell may run it with the owner's authority.
+    const owners = request.payload.action === 'backend' || request.payload.action === 'setMachineAgents'
+    if (owners) {
+      // The owner's own acts: removal deletes this machine's Swarm folders, and no agent raises its own machine's room
+      // (Lead, 2026-10-28). So neither a Swarm agent on it (its pane, or --agent) nor an outside agent's shell may run
+      // them with the owner's authority.
       const listed = request.payload.agentId || outsideCaller(deps.env ?? process.env, request.where.machineId) ? null : await daemon.request('agents_list')
       if (!listed || callerOf(Array.isArray(listed.agents) ? listed.agents as Frame[] : [], deps.pane ?? process.env.TMUX_PANE, request.where.machineId)) {
-        throw new Error('Remove a machine from your own terminal or from Desktop, not from an agent.')
+        throw new Error(request.payload.action === 'backend' ? 'Remove a machine from your own terminal or from Desktop, not from an agent.'
+          : 'Set a machine\'s agents from your own terminal or from Desktop, not from an agent.')
       }
     }
     // Help names the caller when it can, so a Lead also reads its own options; outside a harness it is the plain help.
     const help = request.payload.action === 'help'
-    if (request.payload.action !== 'backend' && !request.payload.agentId && (!help || request.payload.tabId)) {
+    if (!owners && !request.payload.agentId && (!help || request.payload.tabId)) {
       const listed = await daemon.request('agents_list')
       const frames = Array.isArray(listed.agents) ? listed.agents as Frame[] : []
       const caller = callerOf(frames, deps.pane ?? process.env.TMUX_PANE, request.where.machineId)

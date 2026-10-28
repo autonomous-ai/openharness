@@ -42,6 +42,18 @@ describe('Swarm transactions', () => {
     expect(Math.max(...waits)).toBeLessThanOrEqual(1_500)
   })
 
+  it('tries an expired or unstartable transaction once more, then says the Swarm is busy', async () => {
+    // 2026-10-28 prod: host changes reads expired after 15.4 s. Running a body that slow eight times would hold a
+    // request for two minutes and add the load that made it slow; one more try, then the client retries later.
+    const expired = () => Object.assign(new Error('Transaction API error: Transaction already closed'), { code: 'P2028' })
+    const once = flaky(expired())
+    expect(await transaction(once as never, async () => 'done', async () => {})).toBe('done')
+    expect(once.$transaction).toHaveBeenCalledTimes(2)
+    const twice = flaky(expired(), expired(), expired())
+    await expect(transaction(twice as never, async () => 1, async () => {})).rejects.toMatchObject({ code: 'SWARM_BUSY', status: 503 })
+    expect(twice.$transaction).toHaveBeenCalledTimes(2)
+  })
+
   it('rethrows a unique key still taken after every attempt, and anything else at once', async () => {
     const taken = () => Object.assign(new Error('Unique constraint failed'), { code: 'P2002' })
     const duplicate = flaky(...Array.from({ length: 8 }, taken))

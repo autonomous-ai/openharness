@@ -1,21 +1,26 @@
 /**
  * The leaderboard of one project and week (docs/swarms.md, Leaderboard): three numbers per person, Shipped, Unblocked and
- * Lent, their points, a shipping streak, the team goal, and who agents wait on now. Pure: the read decides who may see it and
- * hands in only the groups that reader may read. Private conversations are left out here too.
+ * Lent, their points against last week's, what they are made of, a shipping streak, the team goal, and who agents wait on
+ * now. Pure: the read decides who may see it and hands in only the groups that reader may read. Private conversations are
+ * left out here too.
  */
 import type { ContributedMachine } from '../machines.js'
 import { isLeads, type Conversation, type SuperTabState } from '../model.js'
 import { canReadProject, projectOf } from '../projects.js'
-import { waitedOn, waitsNow } from './record.js'
+import { waitedOn, waitsNow, type Unblock } from './record.js'
 import { DAY_MS, WEEK_MS } from './week.js'
-import type { Leaderboard, Medal, ModelShare, PersonScore, WeekGoal } from './contract.js'
+import type { Leaderboard, Medal, ModelShare, PersonDetails, PersonScore, WeekGoal } from './contract.js'
 
 export const SHIPPED_POINTS = 3
 export const UNBLOCK_POINTS = 1
 const HOUR_MS = 3_600_000
-/** One more point per this many agent-hours an answer freed, and per this many agent-hours lent. */
+/** One more point per this many hours an item waited, up to UNBLOCK_MAX_WAIT_POINTS more: an answer is worth a ship at most
+ *  (Lead's ruling, 2026-10-28). One point per this many busy agent-hours lent. */
 export const UNBLOCK_HOURS_PER_POINT = 2
+export const UNBLOCK_MAX_WAIT_POINTS = 2
 export const LENT_HOURS_PER_POINT = 10
+/** Each details list keeps the newest this many. */
+export const DETAILS_LIMIT = 20
 const MEDALS: Medal[] = ['gold', 'silver', 'bronze']
 
 export interface LeaderboardInput {
@@ -28,32 +33,44 @@ export interface LeaderboardInput {
   /** The Monday 00:00 UTC the week starts (week.ts). */
   week: number
   now: number
+  /** People's profile names by id, read with the board (read.ts profileNames); absent ones go by their email. */
+  names?: ReadonlyMap<string, string>
 }
 
-export function leaderboard({ state, groups, machines: visibleMachines, projectId, week, now }: LeaderboardInput): Leaderboard {
+export function leaderboard({ state, groups, machines: visibleMachines, projectId, week, now, names }: LeaderboardInput): Leaderboard {
   const project = projectOf(state, projectId)
-  const shared = groups.filter(g => !isLeads(g) && !g.audience && (g.projectId ?? 'lead') === projectId && g.id !== project.leadConversationId)
+  // The Lead conversation is where plans are approved: its answers count, though nothing there is a request that ships.
+  const visible = groups.filter(g => !isLeads(g) && !g.audience && (g.projectId ?? 'lead') === projectId)
+  const shared = visible.filter(g => g.id !== project.leadConversationId)
   const requests = shared.filter(g => !g.reviewOf)
   const landed = requests.filter(g => g.requesterId && g.ledger?.shippedAt != null && (g.pullRequestUrls?.length ?? 0) > 0)
   const players = state.people.filter(p => canReadProject(state, { kind: 'person', userId: p.id, email: p.email }, project))
   const inWeek = (at: number, start = week) => at >= start && at < start + WEEK_MS
   // Each person's records, gathered once: the board scores every player three times (Diego's issue file, 2026-10-27).
   const landedBy = byKey(landed, g => g.requesterId!)
-  const answersBy = byKey(shared.flatMap(g => g.ledger?.unblocks ?? []), u => u.personId)
+  const answersBy = byKey(visible.flatMap(group => (group.ledger?.unblocks ?? []).map(unblock => ({ ...unblock, group }))), u => u.personId)
   const machinesBy = byKey(visibleMachines, m => m.contributorId)
   const score = (personId: string, start: number) => {
     const shippedHere = (landedBy.get(personId) ?? []).filter(g => inWeek(g.ledger!.shippedAt!, start))
     const answers = (answersBy.get(personId) ?? []).filter(u => inWeek(u.at, start))
     const machines = (machinesBy.get(personId) ?? [])
-      .map(m => m.lent?.find(l => l.week === start)?.agentMs ?? 0).filter(ms => ms > 0)
-    const freedMs = sum(answers.map(u => u.waitedMs)), lentMs = sum(machines)
-    const points = shippedHere.length * SHIPPED_POINTS + answers.length * UNBLOCK_POINTS
-      + Math.floor(freedMs / (UNBLOCK_HOURS_PER_POINT * HOUR_MS)) + Math.floor(lentMs / (LENT_HOURS_PER_POINT * HOUR_MS))
+      .map(m => ({ name: m.name, busyMs: m.lent?.find(l => l.week === start)?.busyMs ?? 0 })).filter(m => m.busyMs > 0)
+    const freedMs = sum(answers.map(u => u.waitedMs)), lentMs = sum(machines.map(m => m.busyMs))
+    const points = shippedHere.length * SHIPPED_POINTS + sum(answers.map(unblockPoints)) + Math.floor(lentMs / (LENT_HOURS_PER_POINT * HOUR_MS))
+    const details: PersonDetails = {
+      shipped: newest(shippedHere, g => g.ledger!.shippedAt!)
+        .map(g => ({ title: g.title, prUrl: g.pullRequestUrls!.at(-1)!, mergedAt: g.ledger!.shippedAt! })),
+      unblocked: newest(answers, u => u.at)
+        .map(u => ({ title: u.group.title, conversationId: u.group.id, kind: u.kind ?? 'needs_human', waitedMinutes: Math.round(u.waitedMs / 60_000) })),
+      lent: [...machines].sort((a, b) => b.busyMs - a.busyMs).slice(0, DETAILS_LIMIT)
+        .map(m => ({ machineName: m.name, busyHours: Math.round(m.busyMs / HOUR_MS * 10) / 10 })),
+    }
     return {
       points,
       shipped: { count: shippedHere.length, medianAskToShipMs: median(askToShip(shippedHere)) },
       unblocked: { count: answers.length, agentMs: freedMs, medianAnswerMs: median(answers.map(u => u.waitedMs)) },
       lent: { machines: machines.length, agentMs: lentMs },
+      details,
     }
   }
   const goal = (start: number): WeekGoal => {
@@ -61,12 +78,13 @@ export function leaderboard({ state, groups, machines: visibleMachines, projectI
     return { shipped: shippedHere.length, points: sum(players.map(p => score(p.id, start).points)), medianAskToShipMs: median(askToShip(shippedHere)) }
   }
   const today = Math.floor(Math.min(now, week + WEEK_MS - 1) / DAY_MS)
-  const scored = players.map(p => ({ personId: p.id, email: p.email, ...score(p.id, week),
+  const scored = players.map(p => ({ personId: p.id, email: p.email, displayName: names?.get(p.id)?.trim() || p.email.split('@')[0]!,
+    ...score(p.id, week), prevWeekPoints: score(p.id, week - WEEK_MS).points,
     streakDays: streak(new Set((landedBy.get(p.id) ?? []).map(g => Math.floor(g.ledger!.shippedAt! / DAY_MS))), today) }))
     .sort((a, b) => b.points - a.points || a.email.localeCompare(b.email))
-  const people: PersonScore[] = scored.map(({ email: _email, ...entry }) => {
+  const people: PersonScore[] = scored.map(({ email: _email, details, ...entry }) => {
     const rank = 1 + scored.filter(other => other.points > entry.points).length
-    return { ...entry, rank, medal: entry.points > 0 ? MEDALS[rank - 1] ?? null : null }
+    return { ...entry, rank, medal: entry.points > 0 ? MEDALS[rank - 1] ?? null : null, details }
   })
   return {
     projectId, week,
@@ -76,6 +94,11 @@ export function leaderboard({ state, groups, machines: visibleMachines, projectI
     models: { thisWeek: modelShare(requests, week), lastWeek: modelShare(requests, week - WEEK_MS) },
   }
 }
+
+/** One point per answer, and more the longer its item waited, capped. */
+const unblockPoints = (unblock: Unblock): number =>
+  UNBLOCK_POINTS + Math.min(UNBLOCK_MAX_WAIT_POINTS, Math.floor(unblock.waitedMs / (UNBLOCK_HOURS_PER_POINT * HOUR_MS)))
+const newest = <T>(items: T[], at: (item: T) => number): T[] => [...items].sort((a, b) => at(b) - at(a)).slice(0, DETAILS_LIMIT)
 
 /** The attempts started in the week starting [start], by the kind of model they ran on. */
 function modelShare(requests: Conversation[], start: number): ModelShare {

@@ -35,6 +35,7 @@ import type { ScmLaunchRecord } from './scm/types.js'
 import type { StartedBy } from './lib/agentAttribution.js'
 import { probeEngines } from './lib/engineProbe.js'
 import { engineInstallRecipe } from './lib/engineInstall.js'
+import { supportsFirstPrompt } from './lib/engineLaunch.js'
 import { agentFrame, type AgentDshContext, type AgentFrame } from './lib/agentFrame.js'
 import type { AgentTokenUsage } from './lib/agentUsageWire.js'
 import { terminalHandoffRequest } from './lib/terminalHandoff.js'
@@ -442,6 +443,8 @@ export class BackendSocket {
     },
     notice: (notice: BackendNotice) => {
       this.onAccountNotice?.(notice)
+      // Only the Swarm host acts on it (superTabs/host.ts): the windows have nothing to re-read.
+      if (notice.type === 'super_tab_deliveries') return
       this.sendLocal(notice.type === 'machines_changed' ? { type: notice.type, payload: { reason: notice.reason } }
         : notice.type === 'device_keys_changed' ? { type: notice.type, payload: {} }
           : { type: notice.type, payload: { revision: notice.revision } })
@@ -1126,6 +1129,10 @@ export class BackendSocket {
                 // lets an older CLI (which never sends the field) keep reading as "unknown" rather
                 // than "no", per the desktop app's `EngineAvailability.fromJson`.
                 ...(entry.engine === 'codex' ? { supportsCodexHome: true } : {}),
+                // Static too, and this machine's own: whether `harness new` here can hand the engine a
+                // first prompt (engineLaunch.ts FIRST_PROMPT_ARGS), so a caller on another version reads
+                // it from the machine that will start the agent (#1788).
+                firstPrompt: supportsFirstPrompt(entry.engine),
                 // Static too: a pane whose engine is still downloading beside Desktop Harness's setup
                 // waits for that download (engineLaunch.ts `harness_wait_download`) rather than
                 // installing it again, so the desktop may open the pane before the download ends.

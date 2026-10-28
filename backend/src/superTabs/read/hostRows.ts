@@ -5,7 +5,7 @@
  */
 import type { AuthUser } from '../../lib/ssoAuth.js'
 import { activeWork, agent, isLeads, SuperTabError, conversation, type Agent, type SuperTabState } from '../model.js'
-import { hostLocalGrid, machineContribution, type MachineCleanup } from '../machines.js'
+import { hostLocalGrid, machineContribution, teamAccountSwarm, type MachineCleanup } from '../machines.js'
 import { agentProjectId, agentSetRole, canWatchAgent, isConfidential, groupProject, ledProject, projectsOf, skillModeOf, skillSetOf } from '../projects.js'
 import type { HostAgentRow, HostPool, HostRosterRow, HostTabRows } from './contract.js'
 import { hostEtag } from './hostEtag.js'
@@ -35,8 +35,10 @@ export async function hostTab(tabId: string, state: SuperTabState, machineId: st
 
 async function roster(tabId: string, state: SuperTabState, machineId: string, user: AuthUser, lastChangedAt: number | null, lookups: HostLookups): Promise<HostRosterRow[]> {
   const rows: HostRosterRow[] = []
-  // Where its owner added this Mac and its team account is missing, this host adds that account (cli/src/superTabs/host.ts).
-  const mac = state.machines?.find(m => m.machineId === machineId && m.contributorId === user.sub && m.scope === 'swarm' && !m.removal)
+  // Where its owner added this Mac and its team account is missing, this host adds that account (cli/src/superTabs/host.ts),
+  // in a Swarm the team account is tried in (teamAccountSwarm).
+  const mac = !teamAccountSwarm(state) ? undefined
+    : state.machines?.find(m => m.machineId === machineId && m.contributorId === user.sub && m.scope === 'swarm' && !m.removal)
   for (const team of mac ? lookups.teams : []) {
     if (state.machines?.some(m => m.machineId === team.machineId) || state.machineCleanups?.some(c => c.machineId === team.machineId)) continue
     rows.push({ tabId, joinTeam: { machineId: team.machineId, name: mac!.name, maxAgents: mac!.maxAgents } })

@@ -1,12 +1,13 @@
 import 'package:flutter/material.dart';
 
+import '../../shared/theme/app_theme.dart' as grid;
 import '../../widgets/desktop_chrome.dart';
 import 'format.dart';
 import 'model.dart';
 
-/// The shared reward on one line at the top of Humans: what shipped in the
-/// week shown, everyone's points together and the project's open requests.
-/// The week before and the median time to ship are on hover.
+/// The shared reward at the top of Humans: a small "🚀 N shipped" chip for
+/// the week shown (Dee, 2026-10-28: no open count). The week before and the
+/// median time to ship are on hover.
 class LeaderboardGoalLine extends StatelessWidget {
   const LeaderboardGoalLine({
     super.key,
@@ -22,23 +23,27 @@ class LeaderboardGoalLine extends StatelessWidget {
   Widget build(BuildContext context) {
     final now = goal.thisWeek, before = goal.lastWeek;
     final earlier = weekName == 'this week' ? 'last week' : 'the week before';
-    final line =
-        'Team goal: ${now.shipped} shipped · ${now.points} pts · ${goal.openRequests} open';
     final median = _median(now.medianAskToShipMs, before.medianAskToShipMs);
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 0, 16, 4),
-      child: Tooltip(
-        message: [
-          line,
-          '${before.shipped} shipped $earlier',
-          ?median,
-        ].join('\n'),
-        child: Text(
-          line,
-          key: const ValueKey('leaderboard-goal'),
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
-          style: DesktopChrome.metadata(),
+      child: Align(
+        alignment: Alignment.centerLeft,
+        child: Tooltip(
+          message: ['${before.shipped} shipped $earlier', ?median].join('\n'),
+          child: Container(
+            key: const ValueKey('leaderboard-goal'),
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+            decoration: BoxDecoration(
+              color: grid.AppSurface.hoverFill,
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: Text(
+              '🚀 ${now.shipped} shipped $weekName',
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: DesktopChrome.metadata(color: DesktopChrome.foreground),
+            ),
+          ),
         ),
       ),
     );

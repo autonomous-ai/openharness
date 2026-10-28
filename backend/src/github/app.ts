@@ -70,6 +70,8 @@ export interface DefaultBranch { branch: string | null; protection: BranchProtec
 const base64url = (value: string | Buffer) => Buffer.from(value).toString('base64url')
 const INSTALLATION_TTL_MS = 10 * 60_000
 const NOT_INSTALLED_TTL_MS = 60_000
+/** How often a person's "check again" may make the server ask GitHub again about one repository. */
+const REFRESH_MS = 15_000
 const BRANCH_TTL_MS = 10 * 60_000
 const REQUEST_TIMEOUT_MS = 10_000
 
@@ -89,6 +91,8 @@ export class GitHubApp {
   private readonly branches = new Map<string, { value: DefaultBranch; until: number }>()
   /** A repository's name now, by the name asked for (lower case): null when it was not renamed. */
   private readonly renames = new Map<string, { repository: GitHubRepository | null; until: number }>()
+  /** When each repository's "not installed" was last forgotten on request ([forget]). */
+  private readonly forgotten = new Map<string, number>()
 
   constructor(readonly config: GitHubAppConfig, options: GitHubAppOptions = {}) {
     this.fetch = options.fetch ?? fetch
@@ -216,6 +220,17 @@ export class GitHubApp {
       if (answer.status === 200 && typeof id === 'number') return id
     }
     return null
+  }
+
+  /** Forgets that the app was not on [repository] (and its rename), so the next lookup asks GitHub: a person just
+   *  installed it. At most once every REFRESH_MS per repository, so a refresh cannot become a stream of lookups. */
+  forget(repository: GitHubRepository): void {
+    const key = repository.fullName.toLowerCase()
+    const last = this.forgotten.get(key)
+    if (last !== undefined && this.now() - last < REFRESH_MS) return
+    this.forgotten.set(key, this.now())
+    if (this.installations.get(key)?.id === null) this.installations.delete(key)
+    if (this.renames.get(key)?.repository === null) this.renames.delete(key)
   }
 
   /** A token for [repository] alone, with TOKEN_PERMISSIONS alone. */

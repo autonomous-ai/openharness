@@ -9,6 +9,7 @@ import { canReadGroup, groupProject, readConversation } from './projects.js'
 import { noteProjectReports } from './projectUpdates.js'
 import { numberMessages, type Touch } from './parts/commit.js'
 import { redactCredentials } from './credentials.js'
+import type { DeliveriesWaiting } from './store.js'
 
 const id = z.string().min(1).max(160).regex(/^[A-Za-z0-9_-]+$/)
 export const openNativeSchema = z.object({ operationId: id, conversationId: id, agentId: id }).strict()
@@ -39,6 +40,8 @@ interface Deps {
   teamHost(tx: Transaction, user: AuthUser): Promise<string | null>
   /** Refuses a person no longer in the Swarm's Workspace (workspaceStore.ts requireWorkspaceAccess). */
   workspaceAccess(tx: Transaction, state: SuperTabState, userId: string): Promise<void>
+  /** Tells the agent's machine, once `tx` commits, that a delivery waits for it (store.ts announce). */
+  announce(tx: Transaction, waiting: DeliveriesWaiting): void
 }
 const json = (value: unknown): Prisma.InputJsonValue => JSON.parse(JSON.stringify(value)) as Prisma.InputJsonValue
 const digest = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex')
@@ -235,6 +238,7 @@ export class SuperTabNativeStore {
           ...(team
             ? { authorKind: 'agent', authorId: target.id, authorGeneration: target.membershipGeneration }
             : { authorKind: 'person', authorId: binding.operator.id, authorGeneration: binding.operator.membershipGeneration }) } })
+        this.deps.announce(tx, { machineId: lead.machineId, tabId, agentId: recipient })
       }
       await tx.superTabNativeContext.update({ where: { id: contextId }, data: { lastEventId: eventId } })
       const result = { eventId, sequence }
