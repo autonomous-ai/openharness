@@ -36,7 +36,7 @@ import { activeMember, addMember, hasWorkspaceAccess, listWorkspaces, memberId, 
 import { WORKSPACE_LABEL, type WorkspaceRole } from './workspaces.js'
 import {
   activeWork, actorKey, agent, agentOnly, agentRole, appendPullRequestUrls, author, conversation, createSuperTab, fail, person, stableId, visibleState, finishWorker,
-  SuperTabError, isLeads, parkLaterConversations, syncLeads, type Actor, type Agent, type Assignment, type Author, type Conversation, type MessageDraft, type SuperTabState,
+  SuperTabError, isLeads, parkLaterConversations, syncLeads, type Actor, type Agent, type Assignment, type Author, type Conversation, type MessageDraft, type Person, type SuperTabState,
 } from './model.js'
 import type { HoldReason } from './holdReason.js'
 import { stuck } from './deliverySettle.js'
@@ -1843,14 +1843,20 @@ export class SuperTabStore {
     })
   }
 
-  /** The owner's Swarms with the Local models add-on: what the owner's computer creates on grid and keeps in step. */
+  /** The owner's Swarms with the Local models add-on: what the owner's computer creates on grid and keeps in step. Every
+   *  daemon of the owner's asks every minute, add-on on or off, so it reads only the Swarms' heads and the people of those
+   *  with the add-on: a full load of each Swarm sent about 1 MB per Swarm per poll (Diego, 2026-10-28). */
   async hostGrids(user: AuthUser) {
     this.personOnly(user)
-    const rows = await this.db.superTab.findMany({ where: { autonomousEnv: user.autonomousEnv, ownerId: user.sub, format: 2 }, take: 100, select: SWARM_ROW })
+    const rows = await this.db.superTab.findMany({ where: { autonomousEnv: user.autonomousEnv, ownerId: user.sub, format: 2 }, take: 100, select: { id: true } })
     return transaction(this.db, async tx => {
-      const grids = []
-      for (const row of rows) { const grid = swarmGridRow(row.id, (await loadRow(tx, row)).state); if (grid) grids.push(grid) }
-      return grids
+      const heads = await tx.swarmHead.findMany({ where: { tabId: { in: rows.map(row => row.id) }, key: 'head' }, select: { tabId: true, data: true } })
+      const withGrid = new Map(heads.map(head => [head.tabId, head.data as unknown as HeadData] as const).filter(([, head]) => head.localModels))
+      const people = new Map<string, Person[]>([...withGrid.keys()].map(tabId => [tabId, []]))
+      for (const member of await tx.swarmMember.findMany({ where: { tabId: { in: [...withGrid.keys()] }, deleted: false },
+        orderBy: { ordinal: 'asc' }, select: { tabId: true, data: true } })) people.get(member.tabId)!.push(member.data as unknown as Person)
+      return rows.flatMap(row => withGrid.has(row.id)
+        ? [swarmGridRow(row.id, { ...withGrid.get(row.id)!, people: people.get(row.id)! } as SuperTabState)!] : [])
     })
   }
 

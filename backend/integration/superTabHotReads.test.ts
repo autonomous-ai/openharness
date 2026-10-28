@@ -16,7 +16,7 @@ import { cursorFor } from '../src/superTabs/read/cursor.js'
 import { lastChangedAt } from '../src/superTabs/parts/index.js'
 import type { SuperTabState } from '../src/superTabs/model.js'
 import { writeLegacySwarm } from '../scripts/swarm-parts/legacy.js'
-import { NOW, owner as ownerActor, swarm } from '../src/superTabs/read/fixture.test-support.js'
+import { NOW, owner as ownerActor, peer, swarm } from '../src/superTabs/read/fixture.test-support.js'
 import { PROFILE_STAGES, profileEntry, queryShape, type ProfileEntry } from './bench/profile.js'
 
 // The hot reads of the roadmap's 2.7 (indexes) under Mongo's profiler: each must read only the documents it returns, never
@@ -50,7 +50,7 @@ afterAll(async () => {
 
 /** A Swarm on two machines of the owner's: a Lead, and on the other a worker with running work, finished work, and OTHERS quiet conversations,
  *  closed deliveries of other messages to other agents, and open decisions in other conversations. */
-async function scene() {
+async function scene(edit: (s: ReturnType<typeof swarm>) => void = () => {}) {
   const [machineId, leadMachine] = [`m-${randomUUID().slice(0, 8)}`, `l-${randomUUID().slice(0, 8)}`]
   for (const id of [machineId, leadMachine]) {
     await db.machine.create({ data: { machineId: id, userId: owner.sub, apiKey: 'fixture-only', managerId: 'fixture', autonomousEnv: 'prod', authMode: 'remote' } })
@@ -64,6 +64,7 @@ async function scene() {
   s.run({ type: 'work.assign', conversationId: web, agentId: worker })
   const done = s.group('Done work')
   const quiet = Array.from({ length: OTHERS }, (_, i) => s.group(`Quiet ${i}`))
+  edit(s)
   s.edit(state => {
     state.conversations.find(c => c.id === done)!.assignment = { ...state.conversations.find(c => c.id === web)!.assignment!, id: 'old-work', status: 'done' }
   })
@@ -227,5 +228,24 @@ describe('hot reads read only what they return (roadmap 2.7)', () => {
   it('no read of these scans a whole collection', () => {
     const scans = entries.filter(e => e.planSummary === 'COLLSCAN' && !e.ns.includes('.system.'))
     expect(scans.map(e => `${e.ns.slice(e.ns.indexOf('.') + 1)} ${queryShape((e.command?.pipeline as Array<{ $match?: unknown }> | undefined)?.[0]?.$match ?? e.command?.filter ?? e.command?.q)}`)).toEqual([])
+  })
+})
+
+describe('the owner\'s grid poll', () => {
+  it('reads each Swarm\'s head and only the people of those with Local models, never their groups, agents, machines or starts', async () => {
+    const off = await scene(s => s.edit(state => { delete state.localModels }))
+    const on = await scene(s => s.join(peer))
+    let grids: Awaited<ReturnType<SuperTabStore['hostGrids']>> = []
+    const entries = await profiled(async () => { grids = await store.hostGrids(owner) })
+    expect(grids.filter(g => g.tabId === off.tabId)).toEqual([])
+    const head = await db.swarmHead.findFirstOrThrow({ where: { tabId: on.tabId } })
+    expect(grids.filter(g => g.tabId === on.tabId)).toEqual([{ tabId: on.tabId, grid: (head.data as { localModels: { grid: string } }).localModels.grid,
+      enabled: true, ready: null, members: [peer.email] }])
+    const heavy = entries.filter(e => /\.Swarm(Group|Agent|Machine|Start|Progress)$/.test(e.ns))
+    expect(heavy.map(e => e.ns.slice(e.ns.indexOf('.') + 1))).toEqual([])
+    // The people read asks for the Swarms with Local models only.
+    const people = entries.filter(e => e.ns.endsWith('.SwarmMember'))
+    expect(people.length).toBeGreaterThan(0)
+    expect(JSON.stringify(people.map(e => e.command))).not.toContain(off.tabId)
   })
 })
