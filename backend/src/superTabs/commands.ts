@@ -1,4 +1,4 @@
-import { admitMachineStart, downSince, expireRemoval, expireRemovals, failTeamWork, removalEnded, machineContribution, machineOffline, ownedMachine, projectFolder, requireTeamWork, teamMachineFor, teamPoolsOf, teamStartRequest, teamWorkCheck, type ContributedMachine } from './machines.js'
+import { admitMachineStart, cleanupOverdue, downSince, expireRemoval, expireRemovals, failTeamWork, removalEnded, machineContribution, machineOffline, ownedMachine, projectFolder, requireTeamWork, teamMachineFor, teamPoolsOf, teamStartRequest, teamWorkCheck, type ContributedMachine } from './machines.js'
 import { assignAgentDisplayNames } from './agentNames.js'
 import { z } from 'zod'
 import {
@@ -960,9 +960,10 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       state.machines ??= []
       // The owner's host adds the machine its Lead runs on by itself (cli/src/superTabs/host.ts). It only fills a gap:
       // on 2026-10-22 Ken's Mac ran the Lead of a Swarm it was never added to, so its starts bypassed the machine's slots.
-      // A late cleanup would delete the new contribution's folders.
+      // A late cleanup would delete the new contribution's folders, but one that waited past the fallback no longer holds
+      // its own owner's add: it goes, and the add takes its place (machines.ts cleanupOverdue).
       const cleaning = state.machines.some(m => m.machineId === command.machineId && m.removal)
-        || !!state.machineCleanups?.some(c => c.machineId === command.machineId)
+        || !!state.machineCleanups?.some(c => c.machineId === command.machineId && !(c.machineOwnerId === actor.userId && cleanupOverdue(c, context.now)))
       // A Mac's Harness Team account joins by itself wherever its owner added the Mac, as that Mac (cli/src/superTabs/host.ts).
       const mac = context.contribution?.hostMachineId
         ? state.machines.find(m => m.machineId === context.contribution!.hostMachineId && m.contributorId === actor.userId && !m.removal) : undefined
@@ -989,6 +990,8 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       }
       if (state.starts?.some(s => s.request.machineId === command.machineId && (!s.harnessId || (s.poolGeneration && !s.poolSettled)) && !s.error)) fail('STARTS_PENDING', 'Reconcile pending starts before changing this contribution.')
       state.machines = state.machines.filter(m => m.machineId !== command.machineId)
+      state.machineCleanups = state.machineCleanups?.filter(c => c.machineId !== command.machineId)
+      if (!state.machineCleanups?.length) delete state.machineCleanups
       const host = context.contribution?.hostMachineId
       state.machines.push({ machineId: command.machineId, name: mac?.name ?? command.name, cwd: command.cwd, engines: [...new Set(command.engines)],
         maxAgents: mac?.maxAgents ?? command.maxAgents, ...(command.scope ? { scope: command.scope } : {}),

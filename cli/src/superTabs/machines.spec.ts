@@ -1457,6 +1457,33 @@ describe('removed machine cleanup', () => {
     await expect(host.clean('../escape', 'other')).rejects.toThrow('Invalid machine removal.')
   })
 
+  // 2026-10-28: once a cleanup has waited past the backend's fallback, its owner can add the machine again and the backend
+  // drops the cleanup (backend machines.ts cleanupOverdue). A cleanup that starts after that must not delete the new Swarm folders.
+  it.each([['added again', {}], ['added again and being removed under a newer removal', { removal: { id: 'newer', state: 'cleaning' } }]])(
+    'deletes nothing and confirms nothing once this machine was %s', async (_why, listed) => {
+    const m = machine()
+    m.backend.mockImplementation(async (_core, method, path) => method === 'GET' && path.startsWith('/api/super-tabs/tab/')
+      ? swarmReply(path, { starts: m.starts, machines: [{ machineId: 'host', contributorId: 'person', cwd: m.newRoot, ...listed }] }) : { parts: [] })
+    const host = m.open()
+    await host.clean('tab', 'removal')
+    for (const kept of [join(m.data, 'swarm-projects', 'tab'), m.newRoot, m.recorded, m.earlier]) expect(existsSync(kept), kept).toBe(true)
+    expect(m.core.agents.closeStarted).not.toHaveBeenCalled()
+    expect(m.acks()).toEqual([])
+    expect(m.log.mock.calls.flat().join('\n')).toContain('added to that Swarm again')
+    // Settled: the next poll's row, if any, does not run it again.
+    await host.clean('tab', 'removal')
+    expect(m.backend.mock.calls.filter(c => c[1] === 'GET')).toHaveLength(1)
+  })
+
+  it('cleans up while the Swarm still lists this machine under this very removal', async () => {
+    const m = machine()
+    m.backend.mockImplementation(async (_core, method, path) => method === 'GET' && path.startsWith('/api/super-tabs/tab/')
+      ? swarmReply(path, { starts: m.starts, machines: [{ machineId: 'host', contributorId: 'person', cwd: m.newRoot, removal: { id: 'removal', state: 'cleaning' } }] }) : { parts: [] })
+    await m.open().clean('tab', 'removal')
+    for (const gone of [join(m.data, 'swarm-projects', 'tab'), m.newRoot, m.recorded, m.earlier]) expect(existsSync(gone), gone).toBe(false)
+    expect(m.acks()).toHaveLength(1)
+  })
+
   it('keeps a person\'s own worktree of the same repository even when the registry now lists it as the agent\'s folder', async () => {
     const m = machine()
     const outside = worktree(m.own, join(m.home, 'code', 'app-feature'), 'feature')
