@@ -161,6 +161,9 @@ export class ContributedMachines {
   /** Removals cleaned and acknowledged by this host, and the one in progress per removal. */
   private readonly cleaned = new Set<string>()
   private readonly cleaning = new Map<string, Promise<void>>()
+  /** The Swarms a cleanup is running in, with how many: no agent starts there meanwhile (second review of #1991: a start
+   *  wrote into a clone the cleanup then deleted). A start waits for a later pass. */
+  private readonly cleaningTabs = new Map<string, number>()
   /** Per removal whose cleanup or acknowledgement failed, how often and when it may run again. */
   private readonly cleanupRetries = new Map<string, { failures: number; at: number }>()
   /** Until when the reading leaves out its privacy field, which the backend refused. */
@@ -459,6 +462,7 @@ export class ContributedMachines {
         for (const start of round) {
           if (this.stopped) return
           if (!identifier(start.id) || ((row.paused || pool.paused) && !start.dispatched)) continue
+          if (this.cleaningTabs.has(String(row.tabId))) continue
           const path = `/api/super-tabs/hosts/${this.machineId}/starts/${row.tabId}/${start.id}`
           // The start endpoint reads this start and takes its commands, nothing else. Any other read went out as an empty
           // command, which the backend refused with a 400 at every start (prod logs 2026-10-28).
@@ -585,7 +589,7 @@ export class ContributedMachines {
     // Both name folders and an operation: nothing else may reach a path.
     if (!identifier(tabId) || !identifier(removalId)) return Promise.reject(new Error('Invalid machine removal.'))
     if (this.cleaned.has(removalId) || this.deps.now() < (this.cleanupRetries.get(removalId)?.at ?? 0)) return Promise.resolve()
-    const running = this.cleaning.get(removalId) ?? this.runCleanup(tabId, removalId)
+    const running = this.cleaning.get(removalId) ?? this.cleanTab(tabId, removalId)
       .then(() => { this.cleaned.add(removalId); this.cleanupRetries.delete(removalId) }, error => {
         // The row asks again every poll; a backend that keeps failing is asked a minute later, doubling up to half an hour.
         const retry = this.cleanupRetries.get(removalId) ?? { failures: 0, at: 0 }
@@ -596,6 +600,14 @@ export class ContributedMachines {
     this.cleaning.set(removalId, running)
     return running
   }
+  /** Runs one cleanup with its Swarm marked as cleaning for its whole run. */
+  private async cleanTab(tabId: string, removalId: string) {
+    this.cleaningTabs.set(tabId, (this.cleaningTabs.get(tabId) ?? 0) + 1)
+    try { await this.runCleanup(tabId, removalId) } finally {
+      const left = this.cleaningTabs.get(tabId)! - 1
+      if (left) this.cleaningTabs.set(tabId, left); else this.cleaningTabs.delete(tabId)
+    }
+  }
   private async runCleanup(tabId: string, removalId: string) {
     const file = swarmWorktreesFile(this.core.dataDir, this.machineId)
     const recorded = readWorktrees(file).filter(w => w.tabId === tabId)
@@ -605,8 +617,9 @@ export class ContributedMachines {
     // A cleanup that waited past the backend's fallback gives way to its owner adding this machine again (backend machines.ts
     // cleanupOverdue, 2026-10-28). The Swarm listing this machine other than under this very removal means a newer add owns
     // the folders now: delete nothing, and confirm nothing, since the backend dropped this cleanup with that add. Read at
-    // the start, again before anything is closed or deleted, and again before the worktree records change (review of
-    // #1986), so an add that lands while this runs keeps what it made.
+    // the start, again before anything is closed, again before each deletion (closing a session waits, and an add can land
+    // meanwhile: second review of #1991), and again before the worktree records change, so an add that lands while this
+    // runs keeps what it made.
     const read = async () => {
       try { return (await this.sources.reads.read(tabId)).state }
       catch (error) { if (!(error instanceof SuperTabHostError) || ![403, 404].includes(error.status)) throw error; return {} }
@@ -649,6 +662,7 @@ export class ContributedMachines {
     const open = this.core.agents.live().map(a => a.cwd).filter((cwd): cwd is string => !!cwd)
     for (const target of targets) {
       if (open.some(cwd => within(target, cwd))) { this.log(`Kept ${target}: a session still runs in it.`); continue }
+      if (addedAgain(await read())) return
       const source = candidates.find(c => c.path === target)?.source
       // git forgets the worktree in its repository too; a folder it refuses (a submodule, a lock) is deleted as a folder.
       if (source) await git(source, ['worktree', 'remove', '--force', target]).catch(() => null)
