@@ -295,6 +295,25 @@ describe('revoking when a task ends', () => {
     expect(github.issued.size).toBe(0)
   })
 
+  // Security re-check of #1976: a task lost to a usage limit resumes under the same id. Its end and its resumption are
+  // handled in the order the store reported them, so a slow end never marks the resumed task ended again.
+  it('forgets a task\'s end when it resumes, even when the end was still being recorded', async () => {
+    const memory = new MemoryTokenCache()
+    let slow: (() => void) | null = null
+    const cache: TokenCache = { get: k => memory.get(k), delete: k => memory.delete(k), add: (k, v, t) => memory.add(k, v, t), take: k => memory.take(k),
+      set: async (k, v, t) => { if (k.includes(':released:')) await new Promise<void>(done => { slow = done }); await memory.set(k, v, t) } }
+    const { tokens, github } = setup(cache)
+    const before = await tokens.issue(request())
+    const ended = tokens.release('tab-1', [{ agentId: 'agent-1', assignmentId: 'attempt-1' }])
+    const resumed = tokens.resume('tab-1', [{ agentId: 'agent-1', assignmentId: 'attempt-1' }])
+    await vi.waitFor(() => expect(slow).not.toBeNull())
+    slow!()
+    await Promise.all([ended, resumed])
+    expect(github.revoked).toEqual([before.token])
+    const after = await tokens.issue(request())
+    expect(after.token).not.toBe(before.token)
+  })
+
   it('logs a failed revoke without the token, drops it anyway and never throws', async () => {
     const { tokens, github, log } = setup()
     const issued = await tokens.issue(request())

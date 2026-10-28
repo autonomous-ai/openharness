@@ -38,7 +38,7 @@ import {
 import type { HoldReason } from './holdReason.js'
 import { stuck } from './deliverySettle.js'
 import { agentDisplayName } from './agentNames.js'
-import { endedHolds, HOLDING, type WorkHold } from '../github/holds.js'
+import { endedHolds, HOLDING, startedHolds, type WorkHold } from '../github/holds.js'
 import { accrueLent } from './leaderboard/lent.js'
 import { mayDrive, TERMINAL_ANSWER_MS, TERMINAL_EXPIRY_MS, TERMINAL_PICKUP_MS, TERMINAL_RECHECK_MS, type TerminalEffect } from './terminal.js'
 import { closeAssignment, closeUnassignedStart, readDecision, recentDecisions, timedDecisionOf, writeRouteEffects } from './routeDecisions.js'
@@ -216,6 +216,9 @@ export interface SuperTabStoreHooks {
   /** Tasks that stopped being in an agent's hands with this write (github/holds.ts): done, cancelled, stopped, given to
    *  another attempt, or their agent removed. Called after the write commits; it must not throw. */
   workEnded?: (tabId: string, ended: WorkHold[]) => void
+  /** Tasks newly in progress, or in progress again under the same id (resumed after a usage limit): GitHub tokens forget
+   *  that such a task ended (github/tokens.ts resume). */
+  workStarted?: (tabId: string, started: WorkHold[]) => void
   /** No Harness GitHub App on this server: a Mac's Harness Team account joins no Swarm and takes no teammates' work, since
    *  it has no git login to fetch or push with (commands.ts `teamAccountsIdle`). */
   teamAccountsIdle?: boolean
@@ -808,10 +811,11 @@ export class SuperTabStore {
   private async executeOnce(user: AuthUser, tabId: string, input: { operationId: string; command: Command }, asAgentId?: string, hostMachineId?: string,
     workspaceLeave = false) {
     const { operationId, command } = operationSchema.parse(input)
-    let ended: WorkHold[] = []
+    let ended: WorkHold[] = [], started: WorkHold[] = []
     const done = await transaction(this.db, async tx => {
-      // A retried attempt starts again: only the attempt that commits says which tasks ended.
+      // A retried attempt starts again: only the attempt that commits says which tasks ended or started.
       ended = []
+      started = []
       const stamp = clock.next()
       const first = await this.load(tx, user, tabId, namedFor(command))
       const loaded = await this.ensure(tx, first, await this.moreNamed(tx, tabId, first.state, command))
@@ -1115,6 +1119,7 @@ export class SuperTabStore {
         }
       }
       ended = endedHolds(original, effects.state)
+      started = startedHolds(original, effects.state)
       await writeRouteEffects(tx, tabId, effects.routeDecisions, context.now)
       if (command.type === 'agent.startFailed') {
         const start = original.starts?.find(s => s.id === command.startId)
@@ -1203,7 +1208,15 @@ export class SuperTabStore {
       return { result: effects.result, parts: committed.written, lastChangedAt: stamp }
     })
     this.endWork(tabId, ended)
+    this.startWork(tabId, started)
     return done
+  }
+
+  private startWork(tabId: string, started: WorkHold[]): void {
+    if (!started.length || !this.hooks.workStarted) return
+    try { this.hooks.workStarted(tabId, started) } catch (error) {
+      logger.warn('[super-tab] work-started hook failed', { tabId, error: error instanceof Error ? error.message : String(error) })
+    }
   }
 
   private endWork(tabId: string, ended: WorkHold[]): void {

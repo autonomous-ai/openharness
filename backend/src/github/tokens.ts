@@ -103,6 +103,8 @@ export class GitHubTokens {
   private readonly log: Pick<typeof logger, 'warn'>
   private readonly secret: Buffer
   private readonly flights = new Map<string, Promise<IssuedToken>>()
+  /** Each task's end and resumption, in the order the store reported them on this instance. */
+  private readonly lifecycle = new Map<string, Promise<void>>()
 
   constructor(readonly app: GitHubApp, private readonly cache: TokenCache, options: GitHubTokensOptions) {
     this.now = options.now ?? Date.now
@@ -271,10 +273,32 @@ export class GitHubTokens {
   /** The tasks that ended in [tabId] (done, cancelled, stopped, reassigned, or the agent removed): each one's cached token is
    *  revoked and forgotten. Never throws; a failed revoke is logged without the token and leaves the token to expire. */
   async release(tabId: string, ended: readonly WorkHold[]): Promise<void> {
-    for (const hold of ended) {
+    await Promise.all(ended.map(hold => this.inOrder(tabId, hold, async () => {
       const entry = await this.read(this.key(tabId, hold.agentId))
       await this.revokeTask(tabId, hold.agentId, hold.assignmentId, 'task ended', true, entry?.assignmentId === hold.assignmentId ? entry : null)
-    }
+    })))
+  }
+
+  /** Tasks in progress again under the same id (resumed after a usage limit lost them): their end is forgotten, so they get
+   *  tokens again. Every token from before the loss stays revoked; nothing minted before it is handed out again (security
+   *  re-check of #1976: a resumed task was refused tokens for 70 minutes). Never throws. */
+  async resume(tabId: string, started: readonly WorkHold[]): Promise<void> {
+    await Promise.all(started.map(hold => this.inOrder(tabId, hold, async () => {
+      try { await this.cache.delete(this.releasedKey(tabId, hold.agentId, hold.assignmentId)) } catch (error) {
+        this.log.warn('[github] task resumption not recorded', { tabId, agentId: hold.agentId, error: error instanceof Error ? error.message : String(error) })
+      }
+    })))
+  }
+
+  /** Runs [work] after this task's earlier end or resumption on this instance: a loss and the resumption after it are
+   *  reported in that order, and the end's mark must not land after the resumption cleared it. */
+  private inOrder(tabId: string, hold: WorkHold, work: () => Promise<void>): Promise<void> {
+    const key = `${tabId}:${hold.agentId}:${hold.assignmentId}`
+    const next = (this.lifecycle.get(key) ?? Promise.resolve()).then(work, work)
+    const settled = next.catch(() => undefined)
+    this.lifecycle.set(key, settled)
+    void settled.then(() => { if (this.lifecycle.get(key) === settled) this.lifecycle.delete(key) })
+    return next
   }
 }
 

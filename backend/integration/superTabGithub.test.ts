@@ -56,7 +56,8 @@ async function fresh(options: { github?: boolean; approveAll?: boolean; signIn?:
   const log = { warn: vi.fn() }
   const tokens = new GitHubTokens(fakeApp(key.privateKey, github), new MemoryTokenCache(), { log, secret: randomBytes(32) })
   const releases: Promise<void>[] = []
-  const store = new SuperTabStore(db, Date.now, null, { workEnded: (tab, ended) => { releases.push(tokens.release(tab, ended)) } })
+  const store = new SuperTabStore(db, Date.now, null, { workEnded: (tab, ended) => { releases.push(tokens.release(tab, ended)) },
+    workStarted: (tab, started) => { releases.push(tokens.resume(tab, started)) } })
   const app: FastifyInstance = Fastify()
   app.setErrorHandler(errorHandler)
   app.addHook('onRequest', async (request, reply) => {
@@ -345,6 +346,27 @@ describe('a queued start\'s preparation token', () => {
     expect(cancelled.body).toContain('Nothing was approved. Go back to Harness and choose Approve to try again.')
     expect(cancelled.body).not.toContain('Harness is installed')
     expect(env.approved).toEqual([])
+  })
+
+  // Security re-check of #1976: a task lost to a usage limit keeps its id when it resumes, and its loss marked it ended,
+  // so after resuming it was refused GitHub tokens for 70 minutes.
+  it('gives a task resumed after a usage limit a fresh token, while the one from before the loss stays revoked', async () => {
+    const env = await fresh()
+    const { tab, group, worker, assignmentId } = await working(env)
+    const before = await ask(env, tab, worker)
+    expect(before.statusCode, before.body).toBe(200)
+    const resetAt = new Date(Date.now() + 1500).toISOString()
+    await env.run(tab, { type: 'agent.alert', agentId: worker, alert: 'limit', active: true, resetAt } as Command, host, worker)
+    await env.settled()
+    expect(env.github.revoked).toContain(before.json().data.token)
+    const lostAt = (await env.store.read(owner, tab)).state.conversations.find(c => c.id === group)!.assignment!.lost!.at
+    await new Promise(done => setTimeout(done, Date.parse(resetAt) - Date.now() + 50))
+    await env.run(tab, { type: 'work.resume', conversationId: group, assignmentId, lostAt } as Command, host, worker)
+    await env.settled()
+    const after = await ask(env, tab, worker)
+    expect(after.statusCode, after.body).toBe(200)
+    expect(after.json().data.token).not.toBe(before.json().data.token)
+    expect(env.github.issued.has(before.json().data.token)).toBe(false)
   })
 
   it('says when the server cannot approve, and refuses a project not on GitHub', async () => {
