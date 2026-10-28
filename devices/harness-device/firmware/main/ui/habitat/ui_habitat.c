@@ -593,6 +593,7 @@ enum { SUPERTAB_RECAP_GET, SUPERTAB_OPEN, SUPERTAB_SELECT };
 static EXT_RAM_BSS_ATTR ht_supertabs_t swarm;
 static EXT_RAM_BSS_ATTR struct {
     char tab[ID_MAX], lead[ID_MAX];   // the Swarm the dial is in ("" in a desk tab) and the Lead on its face
+    char desk[ID_MAX];                // the desk tab that Swarm is listed at, "" when none (entered from the inbox)
     int at;                           // that Lead's place, where the face lands when the Lead goes
     bool retried;                     // its recap was asked for a second time
     struct { char tab[ID_MAX], lead[ID_MAX]; } focus[HT_SUPERTABS_MAX];   // the Lead the desktop last showed, per Swarm
@@ -664,9 +665,14 @@ static void swarm_leave(void)
 {
     if (!swarm_mode()) return;
     swarm_send(SUPERTAB_OPEN, sw.tab, "");
-    sw.tab[0] = sw.lead[0] = 0; sw.at = 0;
+    sw.tab[0] = sw.lead[0] = sw.desk[0] = 0; sw.at = 0;
     ht_supertabs_recap_open(&swarm, "", "", ms());
     change();
+}
+static void swarm_desk_note(void)
+{
+    const ht_supertab_t *t = swarm_here();
+    if (t && t->tab[0] && workspace_index(t->tab) >= 0) COPY(sw.desk, t->tab);
 }
 static const char *swarm_remembered(const char *tab)
 {
@@ -682,6 +688,7 @@ static void swarm_enter(const ht_supertab_t *t, const char *lead, bool select)
     if (workspace.phase != HT_WORKSPACE_IDLE) ht_workspace_cancel_request(&workspace);
     s.loading = false;
     COPY(sw.tab, t->id);
+    sw.desk[0] = 0; swarm_desk_note();
     int i = swarm_lead_index(t, lead);
     if (i < 0) i = swarm_lead_index(t, swarm_remembered(t->id));
     swarm_show(t, i < 0 ? 0 : i, select);
@@ -4821,6 +4828,13 @@ static void swarms_apply(void)
     s.tab_count=bounded;
     if (bounded) memcpy(s.tabs,rows,(size_t)bounded*sizeof *rows);
     COPY(s.selected_tab,selected);
+    // The desktop closed the desk tab of the Swarm on the face: the dial leaves it too, for TABS on the app's tab.
+    if (swarm_mode() && sw.desk[0] && workspace_index(sw.desk) < 0) {
+        swarm_leave();
+        if (s.view == HOME || s.view == AGENT || s.view == AGENTS) tabs_open();
+    } else {
+        swarm_desk_note();
+    }
     changed = changed || total_before != tabs_total();
     if (s.view == TABS && (changed || (selected_changed && !browsing))) {
         int index = browsing ? tab_index_of(focused) : tab_index_here();
@@ -4928,7 +4942,7 @@ void ui_supertabs_ids(const char ids[][ID_MAX], int n)
     swarm_events(ev, count);
     if (swarm_mode() && !swarm_here()) {
         // The Swarm on the face is gone: back to the list.
-        sw.tab[0] = sw.lead[0] = 0;
+        sw.tab[0] = sw.lead[0] = sw.desk[0] = 0;
         ht_supertabs_recap_open(&swarm, "", "", ms());
         if (s.view == HOME || s.view == AGENT || s.view == AGENTS) tabs_open();
     }

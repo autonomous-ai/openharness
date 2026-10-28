@@ -140,6 +140,10 @@ The TABS carousel lists, in order:
    window (an empty `swarms` list) TABS is empty. The `supertabs` and `supertab` frames are unchanged: the dial still
    needs the cards to enter a Swarm from its desk tab and to follow the desktop.
 
+When the desktop closes the desk tab of the Swarm on the dial's face, the dial leaves that Swarm (`supertab.open` with
+no Lead) for TABS, on the app's current tab, or onto the empty list with no window. A Swarm entered from the inbox (§5)
+that has no desk tab is not one the desktop closed, and stays on the face.
+
 Every entry uses the same `tab_name`/`tab_split` drawing, the same ink and the same fade (decision 1). The list can
 hold 24 desk tabs; the carousel takes the count and needs no paging.
 

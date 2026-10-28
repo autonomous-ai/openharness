@@ -1404,6 +1404,25 @@ static void swarm_tabs_checks(const char *dir) {
         ui_swarms_replace(NULL, 0, NULL);
         assert(tabs_total() == 0 && tab_index_of("s1") < 0 && tab_index_of("s2") < 0 && tab_index_of("s3") < 0);
     }
+    {
+        // The dial in openharness when its desk tab closes on the desktop: it leaves the Swarm (saying so) for TABS,
+        // on the app's current tab. A `swarms` frame that keeps the desk tab keeps the dial in.
+        static cable_swarm_t rows[2]; memset(rows, 0, sizeof rows);
+        COPY(rows[0].id, "t0"); COPY(rows[0].name, "Harness repo"); rows[0].agents = 1;
+        COPY(rows[1].id, "t2"); COPY(rows[1].name, "Research"); rows[1].agents = 1;
+        swarm_setup(); tabs_at(1); dispatch((action_t){.kind = A_TAB_DONE}); assert(swarm_mode() && !strcmp(sw.tab, "s1"));
+        desk_open(); assert(swarm_mode() && s.view == HOME);
+        swarm_sent = 0; ui_swarms_replace(rows, 2, "t2");
+        assert(!swarm_mode() && s.view == TABS && ht_tab_carousel_index(&tab_carousel) == 1 && !strcmp(tab_id_at(1), "t2"));
+        assert(swarm_sent == 1 && !strcmp(swarm_wire[0], "open s1 "));
+        // No window at all: the same, onto the empty list.
+        swarm_setup(); tabs_at(1); dispatch((action_t){.kind = A_TAB_DONE}); assert(swarm_mode());
+        ui_swarms_replace(NULL, 0, NULL); assert(!swarm_mode() && s.view == TABS && tabs_total() == 0);
+        // A Swarm entered from the inbox with no desk tab is not one the desktop closed: `swarms` frames leave it be.
+        swarm_setup(); swarm_enter(ht_supertabs_find(&swarm, "s2"), "P0", true); scene_take();
+        desk_open(); ui_swarms_replace(rows, 2, "t2"); ui_swarms_replace(NULL, 0, NULL);
+        assert(swarm_mode() && !strcmp(sw.tab, "s2") && s.view == HOME);
+    }
     // A desk tab linked to a Swarm keeps its place and name, listed with no agents; it was hidden before the link came.
     swarm_setup();
     assert(s.tab_count == 3 && !strcmp(s.tabs[1].id, "t1") && !strcmp(s.tabs[1].name, "openharness"));
@@ -1446,7 +1465,7 @@ static void swarm_tabs_checks(const char *dir) {
     swarm_sent = 0; ht_tab_carousel_reset(&tab_carousel, tabs_total(), 2); scene_take();
     dispatch((action_t){.kind = A_TAB_DONE});
     assert(!swarm_mode() && !strcmp(tab_target, "t2") && tab_switches > switched && !strcmp(swarm_wire[0], "open s1 "));
-    puts("Swarm tabs: exactly the desk tabs (closed Swarms never listed, with or without a window), linked desk tab kept with no agents, same font and ink, entered with no handshake, remembered Lead, hold to TABS, desk tabs unchanged PASS");
+    puts("Swarm tabs: exactly the desk tabs (closed Swarms never listed, with or without a window), closing the face's desk tab leaves the Swarm, linked desk tab kept with no agents, same font and ink, entered with no handshake, remembered Lead, hold to TABS, desk tabs unchanged PASS");
 }
 
 // Every run's text joined, and the first sprite (the pet's frame): what a face says and which pose it holds.
