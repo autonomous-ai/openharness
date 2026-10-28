@@ -62,6 +62,8 @@ class SuperTabPmChatRow extends StatelessWidget {
     this.selected = false,
     this.unread = false,
     this.unreadCount = 0,
+    this.tooltip,
+    this.note,
   });
 
   /// The Product Manager's agent, for its avatar; null while it has none.
@@ -73,6 +75,12 @@ class SuperTabPmChatRow extends StatelessWidget {
   final bool selected, unread;
   final int unreadCount;
   final VoidCallback? onTap;
+
+  /// What hovering says; Chat with PM's name when not given.
+  final String? tooltip;
+
+  /// A quiet word after the name, such as a Buddy's "offline".
+  final String? note;
 
   static const _column = SuperTabSectionHeading.actionWidth;
   static const _dotSize = 6.0;
@@ -98,9 +106,9 @@ class SuperTabPmChatRow extends StatelessWidget {
             focusColor: grid.AppSurface.hoverFill,
             borderRadius: BorderRadius.circular(DesktopChrome.rowRadius),
             child: Tooltip(
-              message: project == null
-                  ? kChatWithPm
-                  : '$kChatWithPm · $project',
+              message:
+                  tooltip ??
+                  (project == null ? kChatWithPm : '$kChatWithPm · $project'),
               child: Row(
                 children: [
                   SizedBox(width: SuperTabSectionHeading.indentFor(0)),
@@ -144,6 +152,10 @@ class SuperTabPmChatRow extends StatelessWidget {
                                   style: DesktopChrome.metadata(),
                                 ),
                               ),
+                            ],
+                            if (note case final note?) ...[
+                              const SizedBox(width: 8),
+                              Text(note, style: DesktopChrome.metadata()),
                             ],
                           ],
                         ),
