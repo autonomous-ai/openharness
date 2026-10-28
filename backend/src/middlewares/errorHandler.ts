@@ -5,10 +5,10 @@ import { logger } from '../utils/logger.js'
 import { SuperTabError } from '../superTabs/model.js'
 
 /** How long a busy answer asks the caller to wait: just past the Swarm transaction's longest backoff (1.5 s). */
-export const BUSY_RETRY_AFTER_SECONDS = 2
+const BUSY_RETRY_AFTER_SECONDS = 2
 
 /** A 503 the caller should simply try again: it carries Retry-After. Every client retries a 5xx (store.ts `transaction`). */
-export function sendBusy(reply: FastifyReply, message: string, code: string): void {
+function sendBusy(reply: FastifyReply, message: string, code: string): void {
   reply.header('Retry-After', String(BUSY_RETRY_AFTER_SECONDS))
   sendError(reply, message, code, 503)
 }
