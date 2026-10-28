@@ -10,6 +10,10 @@ import 'controller.dart';
 import 'detail_dialog.dart';
 import 'model.dart';
 
+/// The spacing scale's steps (4, 8, 12) from the shared control gap, as the leaderboard rows take them.
+const _gap = DesktopChrome.controlGap;
+const _halfGap = _gap / 2;
+
 /// Whether teammates' agents can push and open pull requests on a Swarm project's repository: the Harness GitHub App is
 /// installed there (backend github/projectAccess.ts, docs/plans/2026-10-28-swarm-project-github-access.md). Before this,
 /// nothing said so until a start failed and the Lead relayed it.
@@ -171,7 +175,7 @@ class _ProjectGitHubAccessState extends State<ProjectGitHubAccess>
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Padding(
-                      padding: const EdgeInsets.only(top: 2),
+                      padding: const EdgeInsets.only(top: _halfGap / 2),
                       child: Icon(
                         AppIcons.check,
                         size: grid.AppControl.iconSize,
@@ -186,7 +190,7 @@ class _ProjectGitHubAccessState extends State<ProjectGitHubAccess>
                 sentence,
               if (waiting)
                 Padding(
-                  padding: const EdgeInsets.only(top: 4),
+                  padding: const EdgeInsets.only(top: _halfGap),
                   child: Text(
                     'Finish on GitHub in your browser. This updates when you come back.',
                     key: const Key('super-project-github-waiting'),
@@ -197,7 +201,7 @@ class _ProjectGitHubAccessState extends State<ProjectGitHubAccess>
                 ),
               if (_error != null)
                 Padding(
-                  padding: const EdgeInsets.only(top: 4),
+                  padding: const EdgeInsets.only(top: _halfGap),
                   child: Text(
                     _error!,
                     key: const Key('super-project-github-error'),
@@ -211,7 +215,7 @@ class _ProjectGitHubAccessState extends State<ProjectGitHubAccess>
                   access.state == 'unknown' ||
                   access.state == 'unread')
                 Padding(
-                  padding: const EdgeInsets.only(top: 8),
+                  padding: const EdgeInsets.only(top: _gap),
                   child: Wrap(
                     spacing: 8,
                     runSpacing: 4,
@@ -388,7 +392,7 @@ class _ProjectGitHubLineState extends State<ProjectGitHubLine>
           key: ValueKey('super-project-github-line-${widget.project.id}'),
           onTap: () => showProjectGitHubAccess(context, c, widget.project),
           child: Padding(
-            padding: const EdgeInsets.only(bottom: 4),
+            padding: const EdgeInsets.only(bottom: _halfGap),
             child: Text(
               problem,
               maxLines: 1,

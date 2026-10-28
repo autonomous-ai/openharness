@@ -4,6 +4,10 @@ import '../shared/theme/app_theme.dart' as grid;
 import '../widgets/desktop_chrome.dart';
 import '../widgets/desktop_prompt_surface.dart';
 
+/// The spacing scale's steps (4, 8, 12) from the shared control gap, as the leaderboard rows take them.
+const _gap = DesktopChrome.controlGap;
+const _halfGap = _gap / 2;
+
 /// Where every value of a details dialog starts: after the label column and its gap.
 const superTabDetailLabelWidth = 120.0;
 
@@ -75,7 +79,7 @@ class _SuperTabDetailDialogState extends State<SuperTabDetailDialog> {
         widget.actions.isNotEmpty || widget.leadingActions.isNotEmpty;
     return DesktopChrome(
       child: Dialog(
-        insetPadding: const EdgeInsets.all(20),
+        insetPadding: const EdgeInsets.all(DesktopChrome.groupGap),
         backgroundColor: Colors.transparent,
         elevation: 0,
         shape: DesktopChrome.bareDialogShape,
@@ -92,7 +96,12 @@ class _SuperTabDetailDialogState extends State<SuperTabDetailDialog> {
                   leading: widget.leading,
                   trailing: widget.headerActions,
                   onClose: widget.onClose ?? () => Navigator.pop(context),
-                  padding: const EdgeInsets.fromLTRB(inset, inset, 16, 12),
+                  padding: const EdgeInsets.fromLTRB(
+                    inset,
+                    inset,
+                    DesktopChrome.groupGap,
+                    _gap + _halfGap,
+                  ),
                 ),
                 if (_scrolled)
                   Divider(
@@ -107,11 +116,16 @@ class _SuperTabDetailDialogState extends State<SuperTabDetailDialog> {
                   child: NotificationListener<Notification>(
                     onNotification: _onScroll,
                     child: Padding(
-                      padding: const EdgeInsets.only(left: inset, right: 12),
+                      padding: const EdgeInsets.only(
+                        left: inset,
+                        right: _gap + _halfGap,
+                      ),
                       child: DesktopPromptScrollBody(
                         controller: _scroll,
                         child: Padding(
-                          padding: const EdgeInsets.only(top: 4, bottom: 4),
+                          padding: const EdgeInsets.symmetric(
+                            vertical: _halfGap,
+                          ),
                           child: widget.body,
                         ),
                       ),
@@ -120,7 +134,12 @@ class _SuperTabDetailDialogState extends State<SuperTabDetailDialog> {
                 ),
                 if (widget.footer case final footer?)
                   Padding(
-                    padding: const EdgeInsets.fromLTRB(inset, 12, inset, 0),
+                    padding: const EdgeInsets.fromLTRB(
+                      inset,
+                      _gap + _halfGap,
+                      inset,
+                      0,
+                    ),
                     child: footer,
                   ),
                 if (hasActions)
@@ -190,7 +209,7 @@ class SuperTabDetailRow extends StatelessWidget {
           constraints.maxWidth < 320 ||
           MediaQuery.textScalerOf(context).scale(13) > 20;
       return Padding(
-        padding: const EdgeInsets.symmetric(vertical: 5),
+        padding: const EdgeInsets.symmetric(vertical: _halfGap),
         child: stacked
             ? Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,

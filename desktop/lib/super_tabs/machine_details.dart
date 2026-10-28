@@ -8,6 +8,10 @@ import '../widgets/engine_identity.dart';
 import '../widgets/workspace_subscription_usage.dart';
 import 'detail_dialog.dart';
 
+/// The spacing scale's steps (4, 8, 12) from the shared control gap, as the leaderboard rows take them.
+const _gap = DesktopChrome.controlGap;
+const _halfGap = _gap / 2;
+
 /// Full machine context behind the sidebar's compact, live readings.
 class SuperTabMachineDetails extends StatelessWidget {
   const SuperTabMachineDetails({
@@ -38,42 +42,79 @@ class SuperTabMachineDetails extends StatelessWidget {
       (row['details'] as List? ?? const []).whereType<String>(),
     );
     final accountName = row['account'] as String?;
+    final name = Text(account.name, style: DesktopChrome.control(medium: true));
+    final email = accountName?.isNotEmpty == true
+        ? Text(accountName!, style: DesktopChrome.metadata())
+        : null;
+    // Without its windows the account's one figure stands for them.
+    final figure = windows.isEmpty
+        ? Text(
+            '${account.figure} left',
+            style: DesktopChrome.control(
+              color: account.ink(
+                DesktopChrome.foreground,
+                DesktopChrome.surface,
+              ),
+            ),
+          )
+        : null;
     return Padding(
-      padding: const EdgeInsets.only(top: 6, bottom: 4),
+      padding: const EdgeInsets.only(top: _gap, bottom: _halfGap),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Row(
-            children: [
-              EngineMark(engine: account.engine, size: 16),
-              const SizedBox(width: 8),
-              Text(account.name, style: DesktopChrome.control(medium: true)),
-              if (accountName?.isNotEmpty == true) ...[
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Text(
-                    accountName!,
-                    style: DesktopChrome.metadata(),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                ),
-              ] else
-                const Spacer(),
-              // Without its windows the account's one figure stands for them.
-              if (windows.isEmpty) ...[
-                const SizedBox(width: 12),
-                Text(
-                  '${account.figure} left',
-                  style: DesktopChrome.control(
-                    color: account.ink(
-                      DesktopChrome.foreground,
-                      DesktopChrome.surface,
+          // On one line when there is room; narrow or with enlarged text, the email and figure go beneath, as the
+          // rows' values do (review of #1962).
+          LayoutBuilder(
+            builder: (context, constraints) {
+              final stacked =
+                  constraints.maxWidth < 320 ||
+                  MediaQuery.textScalerOf(context).scale(13) > 20;
+              final mark = EngineMark(engine: account.engine, size: 16);
+              if (stacked) {
+                return Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        mark,
+                        const SizedBox(width: 8),
+                        Flexible(child: name),
+                      ],
                     ),
+                    if (email != null)
+                      Padding(
+                        padding: const EdgeInsets.only(top: _halfGap / 2),
+                        child: email,
+                      ),
+                    if (figure != null)
+                      Padding(
+                        padding: const EdgeInsets.only(top: _halfGap / 2),
+                        child: figure,
+                      ),
+                  ],
+                );
+              }
+              return Row(
+                children: [
+                  mark,
+                  const SizedBox(width: 8),
+                  Flexible(child: name),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: email == null
+                        ? const SizedBox.shrink()
+                        : Text(
+                            accountName!,
+                            style: DesktopChrome.metadata(),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
                   ),
-                ),
-              ],
-            ],
+                  if (figure != null) ...[const SizedBox(width: 12), figure],
+                ],
+              );
+            },
           ),
           for (final window in windows)
             SuperTabDetailRow(
@@ -88,7 +129,9 @@ class SuperTabMachineDetails extends StatelessWidget {
 
   /// A window's share in the footer's colours: neutral above 20%, amber to 6%, red at 5% or less.
   static Color _ink(String left) {
-    final percent = int.tryParse(left.split('%').first) ?? 100;
+    // "5.0%" is 5, "<1%" under 1; floored as the footer floors it. Unreadable stays neutral.
+    final figure = left.split('%').first.replaceFirst('<', '');
+    final percent = (double.tryParse(figure) ?? 100).floor();
     return statusLineInkOnSurface(
       percent > 20
           ? DesktopChrome.foreground

@@ -11,6 +11,10 @@ import 'project_github.dart';
 import 'project_visibility.dart';
 import 'roles_editor.dart';
 
+/// The spacing scale's steps (4, 8, 12) from the shared control gap, as the leaderboard rows take them.
+const _gap = DesktopChrome.controlGap;
+const _halfGap = _gap / 2;
+
 /// A project's details, read only: its description, repository, Product Manager and whether teammates' agents can
 /// push there, in the shared details frame (Ken, 2026-10-28).
 Future<void> _showProjectDetails(
@@ -37,7 +41,7 @@ Future<void> _showProjectDetails(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               Padding(
-                padding: const EdgeInsets.only(bottom: 12),
+                padding: const EdgeInsets.only(bottom: _gap + _halfGap),
                 child: brief.isEmpty
                     ? Text(
                         'No description yet',

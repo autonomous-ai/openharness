@@ -2,6 +2,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
+import 'package:harness/super_tabs/detail_dialog.dart';
 import 'package:harness/super_tabs/machine_details.dart';
 import 'package:harness/widgets/engine_identity.dart';
 
@@ -130,6 +131,78 @@ void main() {
         tester.getTopLeft(find.text('Codex')).dx,
         tester.getTopLeft(find.text('Claude Code')).dx,
       );
+    },
+  );
+
+  testWidgets(
+    '5%, 5.0% and 100% read with the right ink: decimals are not taken for 100%',
+    (tester) async {
+      await _show(
+        tester,
+        const SuperTabMachineDetails(
+          name: 'Mac',
+          status: 'Online',
+          accounts: [
+            {
+              'engine': 'claude',
+              'remainingPercent': 5,
+              'details': [
+                'Session: 5% remaining',
+                'Weekly: 5.0% remaining',
+                'Monthly: 100% remaining',
+              ],
+            },
+          ],
+        ),
+      );
+      Color? ink(String text) =>
+          tester.widget<Text>(find.text(text)).style!.color;
+      expect(
+        ink('5.0% left'),
+        ink('5% left'),
+        reason: 'both at the critical limit',
+      );
+      expect(ink('5% left'), isNot(ink('100% left')));
+    },
+  );
+
+  testWidgets(
+    'a narrow window with enlarged text stacks the allowance instead of overflowing',
+    (tester) async {
+      await tester.binding.setSurfaceSize(const Size(320, 800));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: grid.buildAppTheme(brightness: Brightness.dark),
+          builder: (context, child) => MediaQuery(
+            data: MediaQuery.of(context)
+                .copyWith(textScaler: const TextScaler.linear(2)),
+            child: child!,
+          ),
+          home: const Scaffold(
+            body: Center(
+              child: SuperTabDetailDialog(
+                title: 'Mac',
+                body: SuperTabMachineDetails(
+                  name: 'Mac',
+                  status: 'Online',
+                  accounts: [
+                    {
+                      'engine': 'claude',
+                      'account': 'someone.with.a.long.address@example.com',
+                      'remainingPercent': 95,
+                      'details': <String>[],
+                    },
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull);
+      expect(find.text('95% left'), findsOneWidget);
     },
   );
 }

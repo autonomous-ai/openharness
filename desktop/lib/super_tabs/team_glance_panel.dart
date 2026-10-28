@@ -10,6 +10,10 @@ import 'detail_dialog.dart';
 import 'machine_status.dart';
 import 'team_glance.dart';
 
+/// The spacing scale's steps (4, 8, 12) from the shared control gap, as the leaderboard rows take them.
+const _gap = DesktopChrome.controlGap;
+const _halfGap = _gap / 2;
+
 /// Opens Team at a glance over the Swarm, live: it follows the Swarm as it changes.
 Future<void> showSuperTabTeamGlance(
   BuildContext context,
@@ -62,7 +66,9 @@ class SuperTabTeamGlancePanel extends StatelessWidget {
                 children: [
                   for (final (model, count) in glance.models)
                     Padding(
-                      padding: const EdgeInsets.symmetric(vertical: 2),
+                      padding: const EdgeInsets.symmetric(
+                        vertical: _halfGap / 2,
+                      ),
                       child: Text(
                         '$model · $count',
                         style: DesktopChrome.control(),
@@ -99,12 +105,12 @@ class _WarningState extends State<_Warning> {
         ? '${names.take(_shown).join(', ')} and ${names.length - _shown} more'
         : names.join(', ');
     return Padding(
-      padding: const EdgeInsets.only(bottom: 8),
+      padding: const EdgeInsets.only(bottom: _gap),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Padding(
-            padding: const EdgeInsets.only(top: 1),
+            padding: const EdgeInsets.only(top: _halfGap / 4),
             child: Icon(
               AppIcons.triangleAlert,
               size: grid.AppControl.iconSize,
@@ -119,7 +125,7 @@ class _WarningState extends State<_Warning> {
                 Text(widget.warning.text, style: DesktopChrome.control()),
                 if (names.isNotEmpty)
                   Padding(
-                    padding: const EdgeInsets.only(top: 2),
+                    padding: const EdgeInsets.only(top: _halfGap / 2),
                     child: folded
                         ? MouseRegion(
                             cursor: SystemMouseCursors.click,
@@ -175,7 +181,7 @@ class _Machine extends StatelessWidget {
     }
     return Padding(
       key: ValueKey('glance-machine-${machine.id}'),
-      padding: const EdgeInsets.only(top: 8, bottom: 4),
+      padding: const EdgeInsets.only(top: _gap, bottom: _halfGap),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
@@ -189,7 +195,7 @@ class _Machine extends StatelessWidget {
           ),
           if (byState.isEmpty)
             Padding(
-              padding: const EdgeInsets.only(top: 4),
+              padding: const EdgeInsets.only(top: _halfGap),
               child: Text('No agents', style: DesktopChrome.metadata()),
             )
           else

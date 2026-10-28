@@ -468,7 +468,10 @@ class _SwarmSharingDialogState extends State<SwarmSharingDialog> {
                 quiet: true,
                 onChanged: (value) => setState(() => _inviteRole = value),
               ),
-              FilledButton(
+              // One primary action at a time: while a sharing change waits for Save, Invite steps back.
+              (_pending != null || _changed
+                  ? OutlinedButton.new
+                  : FilledButton.new)(
                 key: const Key('swarm-invite-send'),
                 onPressed: _busy || _email.text.trim().isEmpty ? null : _invite,
                 child: const Text('Invite'),
