@@ -23,6 +23,8 @@ import 'new_device_banner.dart';
 import 'phone_navigation.dart';
 import 'phone_shell_scope.dart';
 import 'settings_page.dart' show openPhoneSettings;
+import 'voice_input_controller.dart';
+import 'voice_input_scope.dart';
 import 'welcome/connect_code.dart';
 
 /// The signed-in phone app: one page stack, rooted in [AgentHome] — the terminal the phone opens
@@ -110,6 +112,14 @@ class _PhoneShellState extends State<PhoneShell> with WidgetsBindingObserver {
       uploadAvatar: swarmAvatarUploadVia(
         (tabId, png) => widget.notifier.api.uploadSwarmAvatar(tabId, png),
       ),
+      // A chat's mic hears as a terminal's does: through the backend's
+      // speech-to-text, or sample mode's, which records nothing.
+      voice: () =>
+          VoiceInputScope.maybeOf(context)?.create() ??
+          VoiceInputController(
+            transcriber: (wav, lang) =>
+                widget.notifier.api.transcribeVoice(wav, lang: lang),
+          ),
     )..foreground = state == null || _inFront(state);
     _swarmFiles = SwarmAttachmentKeeper(_swarm);
     _swarmNotices.openedSwarm.addListener(_openNoticedSwarm);

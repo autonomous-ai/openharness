@@ -29,6 +29,7 @@ import 'swarm_need_rows.dart';
 import 'swarm_profile_sheet.dart';
 import 'swarm_reactions.dart';
 import 'swarm_session.dart';
+import 'swarm_voice.dart';
 import 'team_glance.dart';
 
 /// Opens [conversationId] of Swarm [swarmId] over the current page.
@@ -102,6 +103,9 @@ class _SwarmConversationPageState extends State<SwarmConversationPage> {
 
   /// A picker is up: one at a time.
   bool _picking = false;
+
+  /// The composer's mic, while the shell can hear one ([SwarmScope.voiceOf]).
+  SwarmVoice? _voice;
   final _scroll = ScrollController();
 
   /// The message whose actions are open (Reply, Copy), by a tap on it.
@@ -156,6 +160,13 @@ class _SwarmConversationPageState extends State<SwarmConversationPage> {
     super.didChangeDependencies();
     // Off while a screen pushed over this one covers it.
     _visible = TickerMode.valuesOf(context).enabled;
+    if (_voice == null) {
+      if (SwarmScope.voiceOf(context) case final create?) {
+        _voice = SwarmVoice(create: create, insert: _heard);
+      }
+    }
+    // A covered chat hears nothing: its take goes with it.
+    if (!_visible) _voice?.hide();
     final session = SwarmScope.of(context);
     if (session == _session) {
       _watch();
@@ -252,6 +263,7 @@ class _SwarmConversationPageState extends State<SwarmConversationPage> {
   @override
   void dispose() {
     _close();
+    _voice?.dispose();
     _view.dispose();
     _held.dispose();
     _litTimer?.cancel();
@@ -276,6 +288,15 @@ class _SwarmConversationPageState extends State<SwarmConversationPage> {
       text: draft,
       selection: TextSelection.collapsed(offset: draft.length),
     );
+  }
+
+  /// What the mic heard, into the draft after what is there: never sent.
+  void _heard(String words) {
+    final c = _conversation;
+    if (c == null) return;
+    final draft = c.draft;
+    final spaced = draft.isEmpty || RegExp(r'\s$').hasMatch(draft);
+    c.draft = '$draft${spaced ? '' : ' '}$words';
   }
 
   /// The composer's +: the sheet, then the picker it names, its files into
@@ -696,7 +717,7 @@ class _SwarmConversationPageState extends State<SwarmConversationPage> {
       ),
       if (view.canPost)
         ListenableBuilder(
-          listenable: c.composer,
+          listenable: Listenable.merge([c.composer, _voice]),
           builder: (context, _) => _composer(c, tty),
         )
       else if (view.known)
@@ -1038,8 +1059,9 @@ class _SwarmConversationPageState extends State<SwarmConversationPage> {
 
   /// The @ picker while a name is typed, the reply bar while the draft
   /// answers a message, what the last pick left out, the files going with the
-  /// post, then +, a field that grows with what is typed and a round Send. An
-  /// @ is typed in the field: it has no button of its own.
+  /// post, what the mic could not hear, then +, a field that grows with what
+  /// is typed, the mic and a round Send. An @ is typed in the field: it has no
+  /// button of its own.
   Widget _composer(SwarmConversation c, Tty tty) {
     final snapshot = c.reader.snapshot;
     final query = c.mentionQuery;
@@ -1139,6 +1161,20 @@ class _SwarmConversationPageState extends State<SwarmConversationPage> {
                     ),
                   ),
           ),
+          if (_voice?.notice case final notice?)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(
+                AppSpace.xs,
+                0,
+                AppSpace.xs,
+                AppSpace.s,
+              ),
+              child: Text(
+                notice,
+                key: const ValueKey('swarm-voice-note'),
+                style: AppType.caption(color: tty.yellow),
+              ),
+            ),
           SwarmOutgoingChips(conversation: c),
           Row(
             crossAxisAlignment: CrossAxisAlignment.end,
@@ -1162,7 +1198,10 @@ class _SwarmConversationPageState extends State<SwarmConversationPage> {
               Expanded(
                 child: _MessageField(controller: _text, focus: _focus),
               ),
-              const SizedBox(width: 6),
+              if (_voice case final voice?)
+                SwarmVoiceMic(voice: voice)
+              else
+                const SizedBox(width: 6),
               _Round(
                 key: const ValueKey('swarm-send'),
                 label: 'Send',

@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/widgets.dart';
 
 import '../notify/system_notices.dart';
+import '../phone/voice_input_controller.dart';
 import '../settings/experimental_features.dart';
 import 'swarm_choices.dart';
 import 'swarm_face.dart';
@@ -183,6 +184,7 @@ class SwarmHost extends ChangeNotifier {
     this.computers,
     SwarmHomeCache? homeCache,
     this.uploadAvatar,
+    this.voice,
   }) : features = features ?? experimentalFeaturesStore,
        homeCache = homeCache ?? SwarmHomeCache.device() {
     account.addListener(_update);
@@ -214,6 +216,11 @@ class SwarmHost extends ChangeNotifier {
   /// Sends an avatar photo with the phone's own sign-in; null where none can
   /// go, and only the built-in pictures are offered.
   final SwarmAvatarUpload? uploadAvatar;
+
+  /// A new voice input for a chat's mic, which owns and disposes it — the
+  /// terminal's speech-to-text; null where none can be heard, and the
+  /// composer has no mic.
+  final VoiceInputController Function()? voice;
 
   SwarmSession? session;
   bool _foreground = true;
@@ -301,4 +308,9 @@ class SwarmScope extends InheritedNotifier<SwarmHost> {
       .dependOnInheritedWidgetOfExactType<SwarmScope>()
       ?.notifier
       ?.computers;
+
+  /// How a chat's mic makes its voice input ([SwarmHost.voice]); null
+  /// outside the shell or where none can be heard.
+  static VoiceInputController Function()? voiceOf(BuildContext context) =>
+      context.dependOnInheritedWidgetOfExactType<SwarmScope>()?.notifier?.voice;
 }
