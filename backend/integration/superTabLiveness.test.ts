@@ -646,7 +646,9 @@ describe('the morning digest', () => {
     f.clock.now = 3 * 60 * 60_000
     queries.length = 0
     await f.leadInbox()
-    const forDigest = queries.filter(q => (q.model === 'SwarmGroup' && q.args.where?.dormant === true && q.args.where.lastActivityAt) || q.model === 'SuperTabDecision')
+    // The digest's decisions are read per project; the escalation sweep (decisions.ts sweepRequests) still runs while paused.
+    const forDigest = queries.filter(q => (q.model === 'SwarmGroup' && q.args.where?.dormant === true && q.args.where.lastActivityAt)
+      || (q.model === 'SuperTabDecision' && q.args.where?.projectId))
     expect(forDigest).toEqual([])
     await f.execute({ type: 'tab.pause', paused: false })
     f.clock.now += 30_000
