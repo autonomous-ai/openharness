@@ -794,6 +794,35 @@ describe('decisions asked of one person (v2)', () => {
     expect((await get(`/api/super-tabs/${s.tabId}/parts`, owner)).body.data.derived.decisionsDigest).toBe(left.decisionsDigest)
   })
 
+  it('marks which tags wait, so an answer and a new tag read again though the count stays, an unrelated post not', async () => {
+    const s = await scene()
+    clock = Date.now()
+    const tag = async (conversationId: string) => expect((await post(s.tabId, { type: 'message.send', conversationId, text: 'Please look.', replyTo: null,
+      recipientIds: [], mentions: [peer.sub] }, owner, s.lead)).status).toBe(200)
+    const derived = async (as: AuthUser = peer) => (await get(`/api/super-tabs/${s.tabId}/parts`, as)).body.data
+    await tag(s.web)
+    const before = await derived()
+    expect(before.derived).toMatchObject({ mentionsWaiting: 1, mentionsDigest: expect.any(String) })
+    const [mention] = (await get(`/api/super-tabs/${s.tabId}/mentions?state=waiting`, peer)).body.data.mentions as Array<{ id: string }>
+    expect(before.derived.mentionsDigest).not.toContain(mention!.id)
+    // Someone else's post changes the Swarm and no tag.
+    expect((await post(s.tabId, { type: 'message.send', conversationId: s.web, text: 'Unrelated.', replyTo: null, recipientIds: [] })).status).toBe(200)
+    const changes = (await get(`/api/super-tabs/${s.tabId}/changes?cursor=${before.cursor}`, peer)).body.data
+    expect(changes.derived).toMatchObject({ mentionsWaiting: 1, mentionsDigest: before.derived.mentionsDigest })
+    // Answered by the person's reply, and tagged in another conversation: still one waiting, another one.
+    expect((await post(s.tabId, { type: 'message.send', conversationId: s.web, text: 'Looked.', replyTo: null, recipientIds: [] }, peer)).status).toBe(200)
+    await tag(s.privateId)
+    const replaced = (await derived()).derived
+    expect(replaced.mentionsWaiting).toBe(1)
+    expect(replaced.mentionsDigest).not.toBe(before.derived.mentionsDigest)
+    // 30 days on it expires; with none left it is the same as for anyone with none.
+    clock = Date.now() + 30 * DAY + 1000
+    const expired = (await derived()).derived
+    expect(expired.mentionsWaiting).toBe(0)
+    expect(expired.mentionsDigest).not.toBe(replaced.mentionsDigest)
+    expect((await derived(owner)).derived.mentionsDigest).toBe(expired.mentionsDigest)
+  })
+
   it('counts every open decision the reader can open, past 200, reading only which ones and where', async () => {
     const s = await scene()
     clock = Date.now()

@@ -6,7 +6,7 @@ import type { PrismaClient } from '@prisma/client'
 import type { AuthUser } from '../../lib/ssoAuth.js'
 import { isTeamSession, TEAM_SESSION_LIMITED, TEAM_SESSION_MESSAGE } from '../../lib/teamSession.js'
 import { author, fail, isLeads, seenMachineIds, visibleState, type Actor, type AgentStart, type SuperTabState } from '../model.js'
-import { mentionsWaiting } from '../mentions.js'
+import { waitingMentions } from '../mentions.js'
 import { decisionsWaiting } from '../decisions.js'
 import type { SuperTabStore } from '../store.js'
 import { transaction } from '../store.js'
@@ -172,12 +172,13 @@ export class SwarmReads {
     const actor = await this.store.actor(tx, user, state, asAgentId)
     const [[teamMachines, otherWorkspaceMachines], counts, newest] = await Promise.all([
       this.machineLookups(state),
-      actor.kind === 'person' ? Promise.all([mentionsWaiting(tx, tabId, state, actor, t0), decisionsWaiting(tx, tabId, state, actor)]) : undefined,
+      actor.kind === 'person' ? Promise.all([waitingMentions(tx, tabId, state, actor, t0), decisionsWaiting(tx, tabId, state, actor)]) : undefined,
       readLastChangedAt(tx, cached, tabId),
     ])
     return { parts: loaded, actor, lastChangedAt: newest,
       view: readerView(loaded, actor, t0, { teamMachines, otherWorkspaceMachines,
-        ...(counts ? { mentionsWaiting: counts[0], decisionsWaiting: counts[1].count, decisionsDigest: counts[1].digest } : {}) }, state) }
+        ...(counts ? { mentionsWaiting: counts[0].count, mentionsDigest: counts[0].digest, decisionsWaiting: counts[1].count,
+          decisionsDigest: counts[1].digest } : {}) }, state) }
   }
 
   /** Which of the Swarm's machines are signed in as a team account, and which serve another Workspace's Swarm too (store.ts): the

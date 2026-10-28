@@ -144,6 +144,8 @@ class SwarmPartsBackend {
     'machines': <String, dynamic>{},
     if (state['mentionsWaiting'] != null)
       'mentionsWaiting': state['mentionsWaiting'],
+    if (state['mentionsDigest'] != null)
+      'mentionsDigest': state['mentionsDigest'],
     if (state['decisionsWaiting'] != null)
       'decisionsWaiting': state['decisionsWaiting'],
     if (state['decisionsDigest'] != null)

@@ -314,6 +314,83 @@ void main() {
       controller.dispose();
     });
 
+    test('a Swarm change that leaves the count and digest alone reads no '
+        'tags and tells nobody', () async {
+      final server = ConversationServer()..tag('m1', text: 'First');
+      server.state['mentionsDigest'] = 'digest-1';
+      final controller = server.controller();
+      addTearDown(controller.dispose);
+      final mentions = SuperTabMentions.of(controller);
+      await controller.refresh();
+      await pumpEventQueue();
+      expect(mentions.waiting.map((m) => m.text), ['First']);
+      final reads = server.mentionReads;
+      var notified = 0;
+      mentions.addListener(() => notified++);
+      for (var i = 0; i < 5; i++) {
+        final before = controller.lastChangedAt;
+        server.append('Unrelated $i');
+        await controller.refresh();
+        await pumpEventQueue();
+        expect(controller.lastChangedAt, isNot(before));
+      }
+      expect(server.mentionReads - reads, 0);
+      expect(notified, 0);
+
+      // One answered and another arrived: the count stays, the digest moves.
+      server.mentions.single
+        ..['resolvedAt'] = '2026-10-24T05:10:00Z'
+        ..['resolvedBy'] = 'reply';
+      server.tag('m2', text: 'Second');
+      server.state['mentionsWaiting'] = 1;
+      server.state['mentionsDigest'] = 'digest-2';
+      await controller.refresh();
+      await pumpEventQueue();
+      // Waiting once and Earlier once.
+      expect(server.mentionReads - reads, 2);
+      expect(notified, 1);
+      expect(mentions.waiting.map((m) => m.text), ['Second']);
+      expect(mentions.earlier.map((m) => m.text), ['First']);
+    });
+
+    test('a failed read is tried again on the next Swarm change, digest or '
+        'not', () async {
+      final server = ConversationServer()..tag('m1', text: 'First');
+      server.state['mentionsDigest'] = 'digest-1';
+      server.failMentions = true;
+      final controller = server.controller();
+      addTearDown(controller.dispose);
+      final mentions = SuperTabMentions.of(controller);
+      await controller.refresh();
+      await pumpEventQueue();
+      expect(mentions.error, isNotNull);
+      server.failMentions = false;
+      server.append('Unrelated');
+      await controller.refresh();
+      await pumpEventQueue();
+      expect(mentions.error, isNull);
+      expect(mentions.waiting.map((m) => m.text), ['First']);
+    });
+
+    test('without a digest, every Swarm change while a tag waits reads the '
+        'lists again, and the same lists tell nobody', () async {
+      final server = ConversationServer()..tag('m1', text: 'First');
+      final controller = server.controller();
+      addTearDown(controller.dispose);
+      final mentions = SuperTabMentions.of(controller);
+      await controller.refresh();
+      await pumpEventQueue();
+      final reads = server.mentionReads;
+      var notified = 0;
+      mentions.addListener(() => notified++);
+      server.append('Unrelated');
+      await controller.refresh();
+      await pumpEventQueue();
+      expect(server.mentionReads - reads, 2);
+      expect(notified, 0);
+      expect(mentions.waiting.map((m) => m.text), ['First']);
+    });
+
     test(
       'a backend without the list shows an empty list, not an error',
       () async {

@@ -277,6 +277,7 @@ class SuperTabSnapshot {
       }),
       localModels = SuperTabLocalModels.read(row['localModels']),
       mentionsWaiting = (row['mentionsWaiting'] as num?)?.toInt() ?? 0,
+      mentionsDigest = row['mentionsDigest'] as String?,
       decisionsWaiting = (row['decisionsWaiting'] as num?)?.toInt() ?? 0,
       decisionsDigest = row['decisionsDigest'] as String?,
       buddiesEnabled = row['buddies'] == true,
@@ -338,6 +339,10 @@ class SuperTabSnapshot {
   /// The reader's tags still waiting for them, Swarm-wide; 0 from a backend
   /// before tags (spec 2026-10-24-lead-mentions.md).
   final int mentionsWaiting;
+
+  /// Which tags wait, as a digest that moves when they change though the
+  /// count may not; null from a backend before it (superTabs/mentions.ts).
+  final String? mentionsDigest;
 
   /// Decisions asked of the reader and not yet answered, Swarm-wide; 0 from a
   /// backend before decisions (backend superTabs/decisions.ts).
