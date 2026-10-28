@@ -3253,6 +3253,9 @@ describe('the PM\'s terminal after a private chat (final review, Critical 1)', (
 
     await run(tab, { type: 'conversation.agent', conversationId: second.conversationId, agentId: worker, present: true, lead: true })
     await expect(typed(peers, 'after')).rejects.toMatchObject({ code: 'NATIVE_CONTEXT_REVOKED' })
+    // The refusal at use says why, as the refusal at open does (review of #1940).
+    await db.superTabNativeContext.update({ where: { id: peers }, data: { revoked: false } })
+    await expect(typed(peers, 'why')).rejects.toMatchObject({ code: 'NATIVE_CONTEXT_REVOKED', message: expect.stringContaining('a Product Manager’s terminal') })
     await expect(store.native.read(host, tab, peers)).rejects.toMatchObject({ code: 'NATIVE_CONTEXT_REVOKED' })
     await expect(opened(peer)).rejects.toMatchObject({ code: 'TERMINAL_PRIVATE' })
     // Even a terminal the change left unrevoked is refused at use.
@@ -3381,6 +3384,31 @@ describe('the PM\'s terminal after a private chat (final review, Critical 1)', (
       await expect(run(tab, { type: 'agent.input', agentId: lead, text: 'history' }, user)).rejects.toMatchObject({ code: 'TERMINAL_PRIVATE' })
     }
     expect((await run(tab, { type: 'agent.screen', agentId: lead }, host)).result.requestId).toBeTruthy()
+  })
+})
+
+// Prod, 2026-10-28 (Atlas, the hour to 14:30 VN): every command, message.send included, sent one terminal-context query of
+// 78 branches, 70 of them this project's archived groups, that returned nothing and spent 67% of its 0.6–3.8 s planning.
+describe('terminal-context revoke on an ordinary command', () => {
+  it('sends a message in a Swarm with many archived groups and a private project without touching terminal contexts', async () => {
+    const { tab } = await fixture()
+    await invite(tab)
+    await run(tab, { type: 'project.create', name: 'Owner only', visibility: 'private', brief: '' })
+    await run(tab, { type: 'conversation.create', title: 'Owner and PM', brief: '', checks: [], audience: { personIds: [owner.sub] } })
+    for (let i = 0; i < 30; i++) {
+      const group = String((await run(tab, { type: 'conversation.create', title: `Old ${i}`, brief: '', checks: [] })).result.conversationId)
+      await run(tab, { type: 'conversation.archive', conversationId: group, archived: true })
+    }
+    await db.$runCommandRaw({ profile: 2 })
+    try {
+      await run(tab, message('Status?'))
+    } finally {
+      await db.$runCommandRaw({ profile: 0 })
+    }
+    const profiled = await db.$runCommandRaw({ find: 'system.profile', filter: { 'command.profile': { $exists: false } }, batchSize: 10000 }) as
+      unknown as { cursor: { firstBatch: Array<{ ns: string; op: string }> } }
+    await db.$runCommandRaw({ drop: 'system.profile' })
+    expect(profiled.cursor.firstBatch.filter(row => row.ns.endsWith('.SuperTabNativeContext'))).toEqual([])
   })
 })
 

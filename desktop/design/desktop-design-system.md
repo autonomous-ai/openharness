@@ -256,6 +256,82 @@ accessory columns align. Specialized harness names need no marketing second
 line. Machine menus align to the project popover's top edge with an 8-point gap,
 then flip or constrain when the window has insufficient room.
 
+## Numbers and rankings
+
+A ranking, a score or a count is read by comparing rows, so its figures line
+up and only one of them speaks. Leaderboards, team summaries, usage tables and
+any later list of people or numbers use this recipe and the existing roles;
+there is no number style, ranking palette or medal artwork of its own.
+
+| Part | Role | Rule |
+| --- | --- | --- |
+| Rank | `AppType.label`, `FontWeight.w700`, `AppPalette.textSecondary` | A bold numeral in a fixed leading column. First place differs from tenth only by its number. |
+| Emphasized number (points) | `AppType.label`, `FontWeight.w600`, `AppPalette.textPrimary` | One per row, at the trailing edge. Shown even when it is 0, so the column holds. |
+| Secondary metrics | `AppType.caption`, `AppPalette.textSecondary` | Plain words beneath the name, joined by a spaced middle dot: `3 shipped · 2 unblocked`. A metric at 0 is left out; a row with none has no second line. |
+| Trend | `AppIcons.arrowUp` / `AppIcons.arrowDown` at 14 points, with a caption-size number | Shape and color together: up in `AppPalette.online`, down in the theme's semantic error ink. No change shows nothing. |
+| Current person | `AppSurface.selectedFill` | The sidebar's selected-row fill, not the blue keyboard selection (`AppDesktop.selection`). Text stays in ordinary ink. |
+
+Every figure that sits in a column (rank, points, counts, percentages and
+trend values) passes `fontFeatures: [FontFeature.tabularFigures()]` to its
+existing `AppType` style, so digits keep one width and a column does not
+shimmer as values change. Numeric columns are right-aligned at a fixed width
+sized for the widest expected value; names take the remaining width and
+truncate first. Row anatomy is the list rule above: rank, identity, name with
+its metadata, then trend and the emphasized number at the right.
+
+Medals, cups, trophies, flames and emoji are not icons and not ranks. A place
+is its numeral. Color never carries a trend, a rank or a threshold on its own:
+the arrow's direction, the number and the accessible label ("up 3 from last
+week") say the same thing. Hover and keyboard focus keep their ordinary
+treatment over the current person's fill, so focus stays visible on that row.
+
+## Phone
+
+The phone app speaks the same language at a thumb's scale. It uses the same
+role names in `mobile/lib/shared/theme` (`AppType`, `AppPalette`, `AppSurface`,
+`AppControl`, `AppMenu`, `AppCard`) with the sizes below. A role keeps its
+meaning, color and weight on both; only the size changes, and only where this
+section says so. Every other rule in this document holds on the phone.
+
+| Role | Desktop | Phone |
+| --- | --- | --- |
+| Display (`AppType.display`) | 28, semibold | 34, semibold |
+| Page title (`AppType.title`) | 20, semibold | 22, semibold |
+| Heading (`AppType.heading`) | 17, semibold | 17, semibold |
+| Body and control (`AppType.body`, `AppType.label`) | 13 | 17 |
+| Metadata (`AppType.caption`) | 12 | 13 |
+| Code (`AppType.mono`, `monoLabel`, `monoMeta`) | 13 / 12 / 11 | 13 / 12 / 11 |
+| Touch target | 32 icon, 28 compact | 44 (`minTouchTarget`) |
+| Icon beside text / standalone | 16 / 20 | 20 / 24 |
+| Screen side inset | 24 (dialog content) | 16 |
+| Spacing scale | 4, 8, 12, 16, 24 | 4, 8, 12, 16, 24 |
+| Field / row / pane radius | 10 | 10 |
+| Card / inset tile radius | 12 / 8 | 12 / 8 |
+| Popover and menu radius | 16 | 16 |
+| Dialog radius | 20 | 20 |
+| Action buttons | capsule | capsule |
+
+Every independently tappable control reaches 44 points. A control drawn
+smaller, such as a 32-point icon button in a header, keeps its drawn size and
+extends its hit area with `TouchTarget` rather than growing the row around it.
+Themed buttons and icon buttons reach 44 on their own: they are drawn at their
+usual size, but their layout box is 44 tall, so a row holding one is at least 44.
+A screen's own primary action is drawn 44 points tall.
+
+Deliberate differences from Desktop, and only these:
+
+- Type, touch target, icon and side-inset sizes, as in the table.
+- No hover state and no hand cursor. Press feedback replaces hover; focus
+  outlines appear only with a hardware keyboard.
+- Swarm screens set their top-bar titles in the terminal face, as the approved
+  phone prototype does. Everything else on them uses the system face.
+- The terminal keeps its own font, size and palette, as on Desktop.
+- Bottom sheets, which Desktop does not have, round their top corners at the
+  card radius (12).
+
+The mobile style check (`scripts/check-ui-style.py`) covers `mobile/lib/swarm`
+with the same rules as Desktop's Swarm code and an allowlist of its own.
+
 ## Surface families
 
 **Titlebar dropdowns** — the avatar's menu, the bell's inbox and the other
@@ -483,6 +559,35 @@ Increase Contrast. Exercise mouse, keyboard, nested dismissal, drafts and
 composition. Use synthetic review data, not real agent launches or permissions.
 Inspect the rebuilt app; widget tests alone do not prove native VoiceOver or
 physical IME behavior. Record evidence and limitations in the migration ledger.
+
+## UI checklist
+
+Every pull request that changes UI pastes this into its description and ticks
+what it checked, or says why an item does not apply:
+
+```text
+UI checklist (desktop/design/desktop-design-system.md)
+- [ ] ASCII mockup confirmed by the requester before visuals were built
+- [ ] Named roles only (AppType, AppPalette/AppSurface, AppDesktop/AppControl,
+      AppIcons); scripts/check-ui-style.py passes and its allowlist only shrank
+- [ ] Numbers follow Numbers and rankings: tabular, right-aligned, one
+      emphasized number, zeros hidden, no emoji or medals
+- [ ] Color is never the only signal; a trend or state also has a shape or words
+- [ ] Light and dark, 160–200% text, long and missing names, empty, loading and
+      error states, with screenshots
+- [ ] Phone: Phone table sizes, 44-point targets, differences from Desktop listed
+- [ ] Copy follows the Naming System
+- [ ] Keyboard, focus return and hand cursor (Desktop)
+```
+
+`scripts/check-ui-style.py` runs in CI for `desktop/lib/super_tabs` and
+`mobile/lib/swarm`. It fails on a new `Color(0x…)`, Material `Colors.*` other
+than transparent, numeric `fontSize`, `EdgeInsets` with a number, or numeric
+`BorderRadius.circular` outside theme folders. Fix the call site with a role;
+when a count falls, run `python3 scripts/check-ui-style.py --update` and commit
+the smaller allowlist. Each area keeps its list in
+`scripts/ui-style-allowlist/<area>.json`. The update never raises a count, and a
+pull request whose allowlist records more than its base branch fails.
 
 ## Standard of finish
 
