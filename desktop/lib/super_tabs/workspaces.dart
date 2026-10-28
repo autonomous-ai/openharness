@@ -329,14 +329,26 @@ class SwarmWorkspaces extends ChangeNotifier {
       _invitations = invitations;
       _error = null;
     } on SuperTabFailure catch (failure) {
-      if (client.account != account) return;
-      if (_readFor != account) {
-        _readFor = account;
-        _workspaces = null;
-        _invitations = const [];
-      }
-      _error = failure.message;
+      _failed(account, failure.message);
+    } on FormatException {
+      _failed(account, _unreadable);
+    } on TypeError {
+      // A row of the wrong shape, from a backend this client does not know.
+      _failed(account, _unreadable);
     }
     notifyListeners();
+  }
+
+  static const _unreadable = 'Workspaces could not be read.';
+
+  /// Keeps the last list read for [account], and says why this read failed.
+  void _failed(String account, String message) {
+    if (client.account != account) return;
+    if (_readFor != account) {
+      _readFor = account;
+      _workspaces = null;
+      _invitations = const [];
+    }
+    _error = message;
   }
 }

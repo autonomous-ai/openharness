@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import '../core/first_task.dart';
@@ -13,11 +14,12 @@ import 'launch_prompt.dart';
 
 /// Captures a conversation before opening New Harness. Its journal survives a
 /// closed form or process; a recovered launch only reads the native receipt.
-/// The Workspaces the person may create a Swarm in, read now if the menu
-/// has not read them yet; none when they cannot be read.
-Future<List<SwarmWorkspace>> _swarmHomes(AppNotifier app) async {
+/// The Workspaces the person may create a Swarm in, as the Workspace menu
+/// last read them. New Swarm never waits for a read: with none read yet the
+/// backend puts the Swarm in the person's own Workspace, as before.
+List<SwarmWorkspace> _swarmHomes(AppNotifier app) {
   final workspaces = SwarmWorkspaces.of(app.superTabs);
-  if (workspaces.workspaces == null) await workspaces.refresh();
+  if (workspaces.workspaces == null) unawaited(workspaces.refresh());
   return workspaces.swarmHomes;
 }
 
@@ -65,7 +67,7 @@ class SuperTabLaunch {
     // a backend from before them names none and creates it as before.
     List<({String id, String name})>? workspaces;
     if (saved['newSwarm'] == true && saved['newProject'] != true) {
-      final homes = await _swarmHomes(app);
+      final homes = _swarmHomes(app);
       if (raw == null) {
         saved['workspaceId'] = SwarmWorkspaces.of(app.superTabs)
             .takeNewSwarmWorkspace();

@@ -476,6 +476,17 @@ void main() {
       expect(state.error, isNull);
     });
 
+    test(
+      'an answer that is not a Workspaces list is reported, not thrown',
+      () async {
+        backend.answers['/api/super-tabs/workspaces'] = 'Swarm';
+        await state.refresh();
+        expect(state.workspaces, isNull);
+        expect(state.showsMenu, isFalse);
+        expect(state.error, 'Workspaces could not be read.');
+      },
+    );
+
     test('reads asked together share one request', () async {
       _lists(backend, [_workspace('w1', 'owner')]);
       await Future.wait<void>([state.refresh(), state.refresh()]);

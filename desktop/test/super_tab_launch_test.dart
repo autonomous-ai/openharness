@@ -636,6 +636,8 @@ void main() {
 
     test('is the one chosen in the Workspace menu', () async {
       final f = SuperTabLaunchFixture()..connection.workspaces = twoHomes();
+      // As the sidebar's Workspace menu reads them.
+      await SwarmWorkspaces.of(f.app.superTabs).refresh();
       SwarmWorkspaces.of(f.app.superTabs).chooseForNewSwarm('w2');
       final box = await f.box();
       expect(
@@ -650,14 +652,25 @@ void main() {
 
     test('follows the Workspace picked in the New Swarm box', () async {
       final f = SuperTabLaunchFixture()..connection.workspaces = twoHomes();
+      await SwarmWorkspaces.of(f.app.superTabs).refresh();
       final box = await f.box();
       box.integration!.workspaceId = 'w2';
       expect(await box.create(), NewHarnessOutcome.created, reason: box.error);
       expect(created(f)['workspaceId'], 'w2');
     });
 
+    test('is not named before the Workspaces are read, and the box does not '
+        'wait for them', () async {
+      final f = SuperTabLaunchFixture()..connection.workspaces = twoHomes();
+      final box = await f.box();
+      expect(box.integration!.workspaces, isNull);
+      expect(await box.create(), NewHarnessOutcome.created, reason: box.error);
+      expect(created(f).containsKey('workspaceId'), isFalse);
+    });
+
     test('is not named to a backend from before Workspaces', () async {
       final f = SuperTabLaunchFixture();
+      await SwarmWorkspaces.of(f.app.superTabs).refresh();
       final box = await f.box();
       expect(box.integration!.workspaces, isNull);
       expect(await box.create(), NewHarnessOutcome.created, reason: box.error);
@@ -1098,6 +1111,7 @@ void main() {
           'swarms': [],
         },
       ];
+    await tester.runAsync(() => SwarmWorkspaces.of(f.app.superTabs).refresh());
     final box = (await tester.runAsync(() => f.box()))!;
     await tester.pumpWidget(
       MaterialApp(

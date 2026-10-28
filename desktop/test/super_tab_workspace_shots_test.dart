@@ -115,19 +115,38 @@ void main() {
       );
       await tester.pumpAndSettle();
 
+      Future<void> repaint() async {
+        for (final render in tester.allRenderObjects) {
+          render.markNeedsPaint();
+        }
+        await tester.pump();
+      }
+
+      // Real shadows while capturing: a test otherwise draws them as solid
+      // black shapes.
       Future<void> shot(String name) async {
         if (shots == null) return;
-        await tester.runAsync(() async {
-          final boundary =
-              picture.currentContext!.findRenderObject()!
-                  as RenderRepaintBoundary;
-          final image = await boundary.toImage(pixelRatio: 1.5);
-          final bytes = await image.toByteData(format: ui.ImageByteFormat.png);
-          await Directory(shots!).create(recursive: true);
-          await File('$shots/workspace-$name-${brightness.name}.png')
-              .writeAsBytes(bytes!.buffer.asUint8List());
-          image.dispose();
-        });
+        final disabled = debugDisableShadows;
+        try {
+          debugDisableShadows = false;
+          await repaint();
+          await tester.runAsync(() async {
+            final boundary =
+                picture.currentContext!.findRenderObject()!
+                    as RenderRepaintBoundary;
+            final image = await boundary.toImage(pixelRatio: 1.5);
+            final bytes = await image.toByteData(
+              format: ui.ImageByteFormat.png,
+            );
+            await Directory(shots!).create(recursive: true);
+            await File('$shots/workspace-$name-${brightness.name}.png')
+                .writeAsBytes(bytes!.buffer.asUint8List());
+            image.dispose();
+          });
+        } finally {
+          debugDisableShadows = disabled;
+          await repaint();
+        }
       }
 
       await shot('sidebar');
