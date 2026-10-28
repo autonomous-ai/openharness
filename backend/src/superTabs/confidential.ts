@@ -8,19 +8,22 @@ type Transaction = Prisma.TransactionClient
 
 /**
  * The native sessions (an agent id is one machine's harness, the same in every Swarm) among `agentIds` that are confidential
- * in any Swarm (Lead ruling, final review Critical 1): marked once a Lead or a private conversation's member (projects.ts
- * markConfidential), or, in a part written before that mark, a Lead or private member now. A confidential session is
- * watched by nobody but its machine's person, whichever Swarm or share asks.
+ * in any Swarm (Lead ruling, final review Critical 1), or in any but `exceptTabId`: marked once a Lead or a private
+ * conversation's member (projects.ts markConfidential), or, in a part written before that mark, a Lead or private member now.
+ * A confidential session is watched by nobody but its machine's person, whichever Swarm or share asks, except by its own
+ * Swarm's readers while it is that Swarm's current Lead (projects.ts watchClosed), which is why a Swarm asks about the others.
  */
 /** `stateOf` gives a Swarm's active parts with these agents' groups, as loadActive in `tx` does; a read outside a transaction may
  *  give the read cache's (cachedReads.ts readParts gives the same parts), uncopied, as nothing here changes it. */
-export async function confidentialSessions(tx: Transaction, agentIds: string[],
+export async function confidentialSessions(tx: Transaction, agentIds: string[], exceptTabId?: string,
   stateOf: (tabId: string, agentIds: string[]) => Promise<SuperTabState> = async (tabId, ids) => reassemble(await loadActive(tx, tabId, { agentIds: ids }))): Promise<Set<string>> {
   const found = new Set<string>()
   if (!agentIds.length) return found
   // One $in scan of the key index, and only the mark: Prisma's `in` is planned as one index scan per id, and `data` is the whole agent.
-  const rows = await tx.swarmAgent.aggregateRaw({ pipeline: [{ $match: { key: { $in: [...new Set(agentIds)] }, deleted: false } },
-    { $project: { _id: 0, tabId: 1, key: 1, confidential: '$data.confidential' } }] }) as unknown as Array<{ tabId: string; key: string; confidential?: Agent['confidential'] }>
+  // `exceptTabId` is left out after the read: in the filter the planner took the (tabId, key) index and walked every other Swarm.
+  const rows = (await tx.swarmAgent.aggregateRaw({ pipeline: [{ $match: { key: { $in: [...new Set(agentIds)] }, deleted: false } },
+    { $project: { _id: 0, tabId: 1, key: 1, confidential: '$data.confidential' } }] }) as unknown as Array<{ tabId: string; key: string; confidential?: Agent['confidential'] }>)
+    .filter(row => row.tabId !== exceptTabId)
   const unmarked = new Map<string, string[]>()
   for (const row of rows) {
     if (row.confidential) found.add(row.key)

@@ -19,7 +19,7 @@ const _halfGap = _gap / 2;
 
 /// The avatar the Agents rows below draw, so without a rank column a person's
 /// name starts where an agent's does.
-const _avatarSize = 24.0;
+const _avatarSize = SuperTabAvatar.rowSize;
 
 /// Numbers and rankings (desktop design system): the rank a bold numeral in
 /// secondary ink, the points the one emphasized number, every figure in a
@@ -253,9 +253,9 @@ class LeaderboardPersonRow extends StatelessWidget {
     );
   }
 
-  /// The name, then the status quietly; the email on hover.
+  /// The name, then the status quietly; on hover the whole name, which a long one cut short needs, and the email.
   Widget _name() => Tooltip(
-    message: person.email,
+    message: '${leaderboardName(person, score)}\n${person.email}',
     child: SuperTabUntil(
       until: person.status?.until,
       builder: (context) => Text.rich(
@@ -447,35 +447,79 @@ class LeaderboardPersonWeek extends StatelessWidget {
   }
 }
 
-/// The three lists behind a person's numbers, each saying so when empty. A
-/// long week scrolls inside the window.
-class _LeaderboardPersonDetails extends StatelessWidget {
+/// The three lists behind a person's numbers, each with its count, its newest
+/// five and the rest one click away, and saying so when empty. The dialog
+/// around it scrolls (Ken, 2026-10-28).
+class _LeaderboardPersonDetails extends StatefulWidget {
   const _LeaderboardPersonDetails({required this.score, required this.details});
   final SuperTabPersonScore score;
   final SuperTabPersonDetails details;
 
   @override
+  State<_LeaderboardPersonDetails> createState() =>
+      _LeaderboardPersonDetailsState();
+}
+
+class _LeaderboardPersonDetailsState extends State<_LeaderboardPersonDetails> {
+  /// The newest a list shows before Show all.
+  static const _shown = 5;
+  final _expanded = <String>{};
+
+  @override
   Widget build(BuildContext context) {
-    final trend = leaderboardTrend(score);
+    final score = widget.score, details = widget.details;
     final quiet = DesktopChrome.metadata();
-    Widget section(String title, String empty, List<Widget> items) => Padding(
-      padding: const EdgeInsets.only(top: _gap + _halfGap),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            title,
-            style: DesktopChrome.control(
-              color: DesktopChrome.foreground,
-              medium: true,
+    final figures = quiet.copyWith(fontFeatures: grid.AppFont.tabularFigures);
+    Widget section(String title, String empty, List<Widget> items) {
+      final all = _expanded.contains(title) || items.length <= _shown;
+      return Padding(
+        padding: const EdgeInsets.only(top: _gap * 2),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.baseline,
+              textBaseline: TextBaseline.alphabetic,
+              children: [
+                Text(
+                  title,
+                  style: DesktopChrome.control(
+                    color: DesktopChrome.foreground,
+                    medium: true,
+                  ),
+                ),
+                if (items.isNotEmpty) ...[
+                  const SizedBox(width: _gap),
+                  Text('${items.length}', style: figures),
+                ],
+              ],
             ),
-          ),
-          const SizedBox(height: _halfGap),
-          if (items.isEmpty) Text(empty, style: quiet) else ...items,
-        ],
-      ),
-    );
-    // Items stand the spacing scale's smallest step apart.
+            const SizedBox(height: _halfGap),
+            if (items.isEmpty)
+              Text(empty, style: quiet)
+            else ...[
+              ...all ? items : items.take(_shown),
+              if (!all)
+                Align(
+                  alignment: AlignmentDirectional.centerStart,
+                  child: TextButton(
+                    style: TextButton.styleFrom(
+                      backgroundColor: Colors.transparent,
+                      side: BorderSide.none,
+                      padding: EdgeInsets.zero,
+                      minimumSize: Size.zero,
+                    ),
+                    onPressed: () => setState(() => _expanded.add(title)),
+                    child: Text('Show all ${items.length}'),
+                  ),
+                ),
+            ],
+          ],
+        ),
+      );
+    }
+
+    // One line each, the whole title on hover; items stand the spacing scale's smallest step apart.
     Widget item(Widget title, String trailing) => Padding(
       padding: const EdgeInsets.symmetric(vertical: _halfGap / 2),
       child: Row(
@@ -484,74 +528,69 @@ class _LeaderboardPersonDetails extends StatelessWidget {
           Expanded(child: title),
           if (trailing.isNotEmpty) ...[
             const SizedBox(width: _gap + _halfGap),
-            Text(
-              trailing,
-              style: quiet.copyWith(fontFeatures: grid.AppFont.tabularFigures),
-            ),
+            Text(trailing, style: figures),
           ],
         ],
       ),
     );
     final text = DesktopChrome.control();
-    return ConstrainedBox(
-      constraints: BoxConstraints(
-        maxHeight: MediaQuery.sizeOf(context).height * .5,
+    Widget line(String value, {TextStyle? style}) => Tooltip(
+      message: value,
+      excludeFromSemantics: true,
+      child: Text(
+        value,
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+        style: style ?? text,
       ),
-      // The small form's width, less the dialog's own content inset.
-      child: SizedBox(
-        width: grid.AppDesktop.formWidth - 2 * grid.AppDesktop.panelPadding,
-        child: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                trend == null
-                    ? '${score.points} pts'
-                    : '${score.points} pts · $trend',
-                style: quiet,
-              ),
-              section('Shipped', 'No pull requests merged yet', [
-                for (final shipped in details.shipped)
-                  item(switch (Uri.tryParse(shipped.prUrl ?? '')) {
-                    // Only a web page opens: a link from the server is data,
-                    // and any other scheme could open a file or an app.
-                    final link?
-                        when const {'http', 'https'}.contains(link.scheme) =>
-                      Semantics(
-                        link: true,
-                        child: InkWell(
-                          onTap: () => launchUrl(
-                            link,
-                            mode: LaunchMode.externalApplication,
-                          ),
-                          child: Text(
-                            shipped.title,
-                            style: text.copyWith(color: DesktopChrome.accent),
-                          ),
-                        ),
-                      ),
-                    _ => Text(shipped.title, style: text),
-                  }, ''),
-              ]),
-              section('Unblocked', 'No questions answered yet', [
-                for (final unblocked in details.unblocked)
-                  item(
-                    Text(unblocked.title, style: text),
-                    'waited ${leaderboardDuration(unblocked.waitedMinutes * 60000)}',
-                  ),
-              ]),
-              section('Lent', 'No machines lent yet', [
-                for (final lent in details.lent)
-                  item(
-                    Text(superTabMachineName(lent.machineName), style: text),
-                    '${leaderboardDuration((lent.busyHours * 3600000).round())} busy',
-                  ),
-              ]),
-            ],
-          ),
+    );
+    final before = score.prevWeekPoints;
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Text(
+          [
+            '${plural(score.points, 'point')} this week',
+            if (before != null) '$before last week',
+          ].join(' · '),
+          style: quiet,
         ),
-      ),
+        section('Shipped', 'No pull requests merged yet', [
+          for (final shipped in details.shipped)
+            item(switch (Uri.tryParse(shipped.prUrl ?? '')) {
+              // Only a web page opens: a link from the server is data,
+              // and any other scheme could open a file or an app.
+              final link? when const {'http', 'https'}.contains(link.scheme) =>
+                Semantics(
+                  link: true,
+                  child: InkWell(
+                    onTap: () =>
+                        launchUrl(link, mode: LaunchMode.externalApplication),
+                    child: line(
+                      shipped.title,
+                      style: text.copyWith(color: DesktopChrome.accent),
+                    ),
+                  ),
+                ),
+              _ => line(shipped.title),
+            }, ''),
+        ]),
+        section('Unblocked', 'No questions answered yet', [
+          for (final unblocked in details.unblocked)
+            item(
+              line(unblocked.title),
+              'waited ${leaderboardDuration(unblocked.waitedMinutes * 60000)}',
+            ),
+        ]),
+        section('Lent', 'No machines lent yet', [
+          for (final lent in details.lent)
+            item(
+              line(superTabMachineName(lent.machineName)),
+              '${leaderboardDuration((lent.busyHours * 3600000).round())} busy',
+            ),
+        ]),
+      ],
     );
   }
 }

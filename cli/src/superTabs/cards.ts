@@ -10,6 +10,11 @@
  * agent working by its own live turn, `since` from the earliest of those turns; or an assignment works or is in review, all there is for agents on
  * other machines), else `done`.
  * A paused Swarm keeps its card and every Lead reads `done`.
+ *
+ * For the round dial (design 2026-10-28-round-dial-swarm-chat) every Lead also carries the chat on its project's face (`chat`):
+ * the Lead conversation, or the project's Chat with PM or group the window has open (`want`'s focus); and the newest message
+ * the Lead wrote in its Lead conversation or Chat with PM since the baseline (`notice`), the dial's one alert. `state` keeps
+ * its meaning for the Pro and older dials, which never read either.
  */
 import { randomUUID } from 'node:crypto'
 import type { CoreApi } from '../core/api.js'
@@ -19,8 +24,8 @@ import { SwarmReads, type SwarmRead } from './swarmReads.js'
 
 type Json = Record<string, unknown>
 /** The cards' shapes are the core's contract with the Swarm (core/api.ts), which the core declares and the Swarm imports. */
-import type { LeadRecap, LeadState, SwarmCard, SwarmLead } from '../core/api.js'
-export type { LeadRecap, LeadState, SwarmCard, SwarmLead } from '../core/api.js'
+import type { CardFocus, ChatKind, LeadNotice, LeadRecap, LeadState, SwarmCard, SwarmChat, SwarmLead } from '../core/api.js'
+export type { CardFocus, LeadNotice, LeadRecap, LeadState, SwarmCard, SwarmChat, SwarmLead } from '../core/api.js'
 
 const MAX_CARDS = 16, MAX_LEADS = 12, NAME_BYTES = 48, RECAP_BYTES = 1500, MAX_LIST_PAGES = 10, MAX_RECAPS_IN_FLIGHT = 2
 /** The Pro keeps an id in 48 bytes with its NUL: 47 characters at most reach it. */
@@ -39,6 +44,26 @@ function cut(text: string, bytes: number): string {
   return out
 }
 const list = (v: unknown): Json[] => Array.isArray(v) ? v.map(object) : []
+const projectKey = (project: Json): string => String(project.id ?? 'lead')
+const inProject = (conversation: Json, projectId: string): boolean => (conversation.projectId ?? 'lead') === projectId
+/** The reader's Chat with PM: the backend sends a private conversation's `audience` only to the people in it (`visibleState`). */
+const isPmChat = (conversation: Json): boolean => !!conversation.audience && typeof conversation.audience === 'object'
+const sequenceOf = (conversation: Json): number => typeof conversation.lastMessageSequence === 'number' ? conversation.lastMessageSequence : 0
+
+/** The conversation on a project's face and its kind: the one the window has open when it is a live conversation of this
+ *  project, else the project's Lead conversation; null when that one's id is not one a dial can hold. An archived group is
+ *  over: the face stays on the Lead (Ruling on the plan, 2026-10-28). */
+function faceOf(conversations: Json[], projectId: string, lead: Json, focus?: string): { conversation: Json; kind: ChatKind } | null {
+  const open = focus !== undefined && focus !== lead.id
+    ? conversations.find(c => c.id === focus && inProject(c, projectId) && c.archived !== true && cardId(c.id)) : undefined
+  if (open) return { conversation: open, kind: isPmChat(open) ? 'pm' : 'group' }
+  return cardId(lead.id) ? { conversation: lead, kind: 'lead' } : null
+}
+/** Whose messages are the chat's recap: the Lead's in its conversation and Chat with PM, the group's agents' in a group. */
+function voicesOf(face: { conversation: Json; kind: ChatKind }, leadId: string): Set<string> {
+  if (face.kind !== 'group') return new Set([leadId])
+  return new Set(Array.isArray(face.conversation.agentIds) ? face.conversation.agentIds.filter((id): id is string => typeof id === 'string') : [])
+}
 
 /**
  * One Lead per project of the Swarm, most urgent first with ties in project order; the 12 most urgent are kept, and each
@@ -46,7 +71,7 @@ const list = (v: unknown): Json[] => Array.isArray(v) ? v.map(object) : []
  * harness and whether it is in a turn (null: not here); `me` is the signed-in person's id, so a Lead on someone else's
  * machine names that owner (people[] has an email, which is the name a Swarm shows a person by).
  */
-export function leadsOf(state: Json, machineId: string, live: (harnessId: string) => { inTurn: boolean; since?: number } | null, me?: string): { count: number; leads: SwarmLead[] } {
+export function leadsOf(state: Json, machineId: string, live: (harnessId: string) => { inTurn: boolean; since?: number } | null, me?: string, focus?: string): { count: number; leads: SwarmLead[] } {
   const agents = list(state.agents), conversations = list(state.conversations), people = list(state.people)
   // An old tab has no `projects`: its one project is the tab itself, `lead`, led by the conversation `lead`.
   const projects = Array.isArray(state.projects) ? list(state.projects) : [{ id: 'lead', name: state.name, leadConversationId: 'lead' }]
@@ -81,10 +106,22 @@ export function leadsOf(state: Json, machineId: string, live: (harnessId: string
     }
     const ownerId = agent.machineOwnerId
     const owner = me && typeof ownerId === 'string' && ownerId !== me ? people.find(p => p.id === ownerId) : undefined
+    const face = faceOf(conversations, projectKey(project), lead, focus)
+    let chat: SwarmChat | undefined
+    if (face) {
+      const { conversation, kind } = face
+      // Only a group works on the dial, and only while its assignment works: Lead and PM chats never do (design decision 4).
+      const working = kind === 'group' && object(conversation.assignment).status === 'working'
+      const voices = voicesOf(face, String(agent.id))
+      const turns = working ? agents.filter(a => voices.has(a.id as string)).map(turnHere).filter(t => t?.inTurn) : []
+      const secs = turns.map(t => t!.since).filter((v): v is number => typeof v === 'number')
+      chat = { kind, id: conversation.id as string, name: kind === 'lead' ? 'Lead' : kind === 'pm' ? 'PM' : cut(String(conversation.title ?? ''), NAME_BYTES), working,
+        ...(secs.length ? { since: Math.max(...secs) } : {}) }
+    }
     leads.push({
       id: String(agent.id), projectId: String(project.id ?? 'lead'), project: cut(String(project.name ?? ''), NAME_BYTES), engine: String(object(agent.configuration).engine ?? ''),
       owner: owner && typeof owner.email === 'string' ? cut(owner.email, NAME_BYTES) : '',
-      local: here && cardId(harnessId) ? harnessId : '', state, order, ...(since !== undefined ? { since } : {}),
+      local: here && cardId(harnessId) ? harnessId : '', state, order, ...(since !== undefined ? { since } : {}), ...(chat ? { chat } : {}),
     })
   }
   // Array.sort is stable: equal urgency keeps the project order.
@@ -92,24 +129,30 @@ export function leadsOf(state: Json, machineId: string, live: (harnessId: string
   return { count: ordered.length, leads: ordered.slice(0, MAX_LEADS) }
 }
 
-/** The newest row the Lead itself wrote: a person-visible message, not a system row (`source`) or someone else's. `at` in seconds. */
-export function lastLeadMessage(messages: Json[], leadId: string): { text: string; at: number } | null {
-  let best: { text: string; at: number; sequence: number } | null = null
+/** The newest row one of the chat's agents wrote: a person-visible message, not a system row (`source`), the person's or
+ *  another agent's. `at` in seconds; `id` the message's, or '' when it has none. */
+export function lastAgentMessage(messages: Json[], agentIds: ReadonlySet<string>): { text: string; at: number; id: string; sequence: number } | null {
+  let best: { text: string; at: number; id: string; sequence: number } | null = null
   for (const item of messages) {
     const m = object(item)
-    if (m.source != null || object(m.author).id !== leadId || typeof m.text !== 'string') continue
+    const author = object(m.author).id
+    if (m.source != null || typeof author !== 'string' || !agentIds.has(author) || typeof m.text !== 'string') continue
     const sequence = typeof m.sequence === 'number' ? m.sequence : -1
     if (best && sequence <= best.sequence) continue
     const stamp = typeof m.createdAt === 'number' ? m.createdAt : Date.parse(String(m.createdAt))
-    best = { text: m.text, at: Number.isFinite(stamp) ? Math.floor(stamp / 1000) : 0, sequence }
+    best = { text: m.text, at: Number.isFinite(stamp) ? Math.floor(stamp / 1000) : 0, id: typeof m.id === 'string' ? m.id : '', sequence }
   }
-  return best && { text: best.text, at: best.at }
+  return best
 }
 
 interface TabCache { lastChangedAt: number | null; state: Json }
 interface Cached { sequence: number; recap: LeadRecap }
-/** A Lead some Harness Pro has the recap of open, and the sessions (one per Pro) that have it open. */
-interface Opened { tabId: string; leadId: string; sequence: number | null; sessions: Set<string> }
+/** A Lead some Harness Pro has the recap of open, and the sessions (one per Pro) that have it open. With `chat` (a round dial
+ *  that speaks `swarmChat`), the recap is the face chat's, and `chatId` the chat it was last told of. */
+interface Opened { tabId: string; leadId: string; chat: boolean; chatId: string | null; sequence: number | null; sessions: Set<string> }
+/** Where a recap is read, or talk is posted: a conversation, how far it has gone, and whose messages are its recap. */
+interface Target { id: string; sequence: number; voices: Set<string>; chatId?: string }
+const recapKey = (tabId: string, leadId: string, chatId?: string) => chatId === undefined ? `${tabId}:${leadId}` : `${tabId}:${leadId}:${chatId}`
 const tabOf = (read: SwarmRead): TabCache => ({ lastChangedAt: read.lastChangedAt, state: read.state })
 
 export class SwarmCards {
@@ -117,47 +160,75 @@ export class SwarmCards {
   onRecap?: (recap: LeadRecap) => void
   private readonly now: () => number
   private readonly intervalMs: number
+  private readonly log: (line: string) => void
   private timer: NodeJS.Timeout | undefined
   private busy = false
   private tabs = new Map<string, TabCache>()
+  /** The tabs to show, in the list's order, with the name the list gave each, as the last poll read them. */
+  private rows: Array<{ id: string; name: unknown }> = []
   private recaps = new Map<string, Cached>()
   /** When each local Lead's current turn began, so `since` counts on between polls. */
   private turns = new Map<string, number>()
+  /** Whether a harness is here and in a turn, as the last poll read it; null before the first. */
+  private live: ((harnessId: string) => { inTurn: boolean; since?: number } | null) | null = null
   private last: string | null = null
   /** When each shown Lead's clock started (ms, `${card}/${lead}`), as the list last sent said. */
   private lastStarts = new Map<string, number>()
   private me: string | undefined
   private include: string[] = []
+  /** The conversation the window has open in a Swarm tab: that project's face follows it. */
+  private focus: CardFocus | null = null
   private opened = new Map<string, Opened>()
   private openBy = new Map<string, string>()
   private recapsRunning = 0
+  /** One push of open recaps at a time: a focus change and a poll that both see a new face push it once. */
+  private pushing: Promise<void> = Promise.resolve()
+  /** The alert baseline: per watched conversation (`${tab}:${conversation}`), the last sequence whose messages were seen. */
+  private seen = new Map<string, number>()
+  /** Each Lead's newest notice (`${tab}:${lead}`), carried on its card. */
+  private notices = new Map<string, LeadNotice>()
+  /** Watched conversations whose last read failed, so a run of failures is logged once. */
+  private failed = new Set<string>()
   private readonly reads: SwarmReads
 
-  constructor(private readonly core: CoreApi, private readonly machineId: string, options: { now?: () => number; intervalMs?: number; reads?: SwarmReads } = {}) {
+  constructor(private readonly core: CoreApi, private readonly machineId: string, options: { now?: () => number; intervalMs?: number; reads?: SwarmReads; log?: (line: string) => void } = {}) {
     this.now = options.now ?? Date.now
     this.intervalMs = options.intervalMs ?? 5000
     this.reads = options.reads ?? new SwarmReads(core)
+    this.log = options.log ?? (line => console.log(line))
   }
 
-  /** Poll while a capable Pro is attached; none otherwise (no request at all). `include`: the Swarms the desktop has tabs for, read first. */
-  want(on: boolean, include: string[] = []): void {
+  /** Poll while a capable Pro is attached; none otherwise (no request at all). `include`: the Swarms the desktop has tabs for,
+   *  read first. `focus`: the conversation the window has open in a Swarm tab; a change rebuilds the cards at once from the
+   *  last reads, with no request. */
+  want(on: boolean, include: string[] = [], focus: CardFocus | null = null): void {
     if (!on) {
       if (this.timer) clearInterval(this.timer)
       this.timer = undefined
-      this.opened.clear(); this.openBy.clear(); this.include = []
+      this.opened.clear(); this.openBy.clear(); this.include = []; this.focus = null
+      // A device that attaches again starts a fresh baseline: what was said while none was here never alerts.
+      this.seen.clear(); this.notices.clear(); this.failed.clear()
       return
     }
     const wanted = include.filter(cardId).slice(0, MAX_CARDS)
     const moved = wanted.join(',') !== this.include.join(',')
     this.include = wanted
-    if (this.timer) { if (moved) void this.tick(); return }
+    const next = focus && cardId(focus.tabId) && cardId(focus.conversationId) ? { tabId: focus.tabId, conversationId: focus.conversationId } : null
+    const refocused = `${next?.tabId}/${next?.conversationId}` !== `${this.focus?.tabId}/${this.focus?.conversationId}`
+    this.focus = next
+    if (this.timer) {
+      if (refocused && this.live) { this.emit(); void this.pushOpen() }
+      if (moved) void this.tick()
+      return
+    }
     this.timer = setInterval(() => { void this.tick() }, this.intervalMs)
     this.timer.unref?.()
     void this.tick()
   }
 
-  /** The recap on a Pro's screen (leadId null: closed), per Pro `session`: a change in that Lead's conversation is pushed once. */
-  open(session: string, tabId: string, leadId: string | null): void {
+  /** The recap on a Pro's screen (leadId null: closed), per Pro `session`: a change in that Lead's conversation is pushed once.
+   *  With `chat`, the face chat's: a change in it, or another chat on the face, is pushed once. */
+  open(session: string, tabId: string, leadId: string | null, chat = false): void {
     const before = this.openBy.get(session)
     if (before) {
       const held = this.opened.get(before)
@@ -166,11 +237,13 @@ export class SwarmCards {
       this.openBy.delete(session)
     }
     if (!leadId || !cardId(session) || !cardId(tabId) || !cardId(leadId)) return
-    const key = `${tabId}:${leadId}`
+    const key = `${recapKey(tabId, leadId)}${chat ? ':chat' : ''}`
     let entry = this.opened.get(key)
     if (!entry) {
       // From what the Pro was shown when there is a recap read, else from the first read of the tab: the next change is pushed.
-      entry = { tabId, leadId, sequence: this.recaps.get(key)?.sequence ?? this.sequenceOf(tabId, leadId), sessions: new Set() }
+      const target = this.target(tabId, leadId, chat)
+      entry = { tabId, leadId, chat, chatId: target?.chatId ?? null,
+        sequence: target ? this.recaps.get(recapKey(tabId, leadId, target.chatId))?.sequence ?? target.sequence : null, sessions: new Set() }
       this.opened.set(key, entry)
     }
     entry.sessions.add(session)
@@ -212,18 +285,33 @@ export class SwarmCards {
       }
     }))
     this.tabs = known
+    this.rows = rows.map(row => ({ id: row.id as string, name: row.name }))
     const me = (await this.core.account.identity().catch(() => null))?.accountId
     // Another person signed in: nothing of the last account's is kept, and the list is said again whatever it is.
-    if (this.me !== undefined && me !== this.me) { this.last = null; this.recaps.clear() }
+    if (this.me !== undefined && me !== this.me) { this.last = null; this.recaps.clear(); this.seen.clear(); this.notices.clear(); this.failed.clear() }
     this.me = me ?? this.me
     const turns = await this.turnsHere()
-    const live = (harnessId: string) => this.core.agents.byAgent(harnessId) ? turns.get(harnessId) ?? { inTurn: false } : null
+    this.live = (harnessId: string) => this.core.agents.byAgent(harnessId) ? turns.get(harnessId) ?? { inTurn: false } : null
+    await this.watchNotices()
+    this.emit()
+    this.prune()
+    await this.pushOpen()
+  }
+
+  /** The cards from the last reads, said when they changed. */
+  private emit(): void {
+    const live = this.live ?? (() => null)
     const cards: SwarmCard[] = []
-    for (const row of rows) {
-      const tab = known.get(row.id as string)
+    for (const row of this.rows) {
+      const tab = this.tabs.get(row.id)
       if (!tab) continue
-      const { count, leads } = leadsOf(tab.state, this.machineId, live, me)
-      cards.push({ id: row.id as string, name: cut(String(tab.state.name ?? row.name ?? ''), NAME_BYTES), count, leads })
+      const focus = this.focus?.tabId === row.id ? this.focus.conversationId : undefined
+      const { count, leads } = leadsOf(tab.state, this.machineId, live, this.me, focus)
+      const noticed = leads.map(lead => {
+        const notice = this.notices.get(recapKey(row.id, lead.id))
+        return notice ? { ...lead, notice } : lead
+      })
+      cards.push({ id: row.id, name: cut(String(tab.state.name ?? row.name ?? ''), NAME_BYTES), count, leads: noticed })
     }
     // `since` moves every poll while a turn runs and the Pro counts on by itself, so it alone never re-sends the list.
     // Nor does a clock that keeps its turn; one whose turn changed (the Lead's ended, a worker's goes on) does. The start is
@@ -233,8 +321,55 @@ export class SwarmCards {
     for (const card of cards) for (const lead of card.leads) if (lead.since !== undefined) starts.set(`${card.id}/${lead.id}`, now - lead.since * 1000)
     const moved = [...starts].some(([key, at]) => Math.abs(at - (this.lastStarts.get(key) ?? at)) > 2000)
     if (signature !== this.last || moved) { this.last = signature; this.lastStarts = starts; this.onCards?.(cards) }
-    this.prune()
-    await this.pushOpen()
+  }
+
+  /**
+   * The dial's alerts (design 2026-10-28 §2): each project's Lead conversation and Chat with PM, by the `lastMessageSequence`
+   * the tab reads already carry. A conversation first seen sets the baseline and is not read; one that moved past it has its
+   * newest page read once, under the recaps' limit, and the newest message its Lead wrote after the baseline becomes the
+   * Lead's notice. Two messages between two reads make one notice, for the newest. The baseline moves only after a read
+   * that worked, so a failed one is tried again at the next poll. Groups are never watched.
+   */
+  private async watchNotices(): Promise<void> {
+    const watched = new Set<string>()
+    for (const [tabId, { state }] of this.tabs) {
+      const conversations = list(state.conversations)
+      for (const { project, lead, leadId } of leadProjects(state)) {
+        const projectId = projectKey(project)
+        const chats: Array<{ conversation: Json; chat: LeadNotice['chat'] }> = [{ conversation: lead, chat: 'lead' },
+          ...conversations.filter(c => inProject(c, projectId) && isPmChat(c) && c.archived !== true).map(conversation => ({ conversation, chat: 'pm' as const }))]
+        for (const { conversation, chat } of chats) {
+          if (!cardId(conversation.id) || typeof conversation.lastMessageSequence !== 'number') continue
+          const key = `${tabId}:${conversation.id}`, sequence = conversation.lastMessageSequence
+          watched.add(key)
+          const baseline = this.seen.get(key)
+          if (baseline === undefined) { this.seen.set(key, sequence); continue }
+          if (sequence <= baseline || this.recapsRunning >= MAX_RECAPS_IN_FLIGHT) continue
+          this.recapsRunning++
+          try {
+            const page = object(await backend(this.core, 'GET', `/api/super-tabs/${tabId}/conversations/${conversation.id}/messages`))
+            const after = list(page.messages).filter(m => typeof m.sequence === 'number' && m.sequence > baseline)
+            const said = lastAgentMessage(after, new Set([leadId]))
+            if (said && cardId(said.id)) {
+              const notice: LeadNotice = { chat, chatId: conversation.id, id: said.id, text: cut(said.text, RECAP_BYTES), at: said.at }
+              const held = this.notices.get(recapKey(tabId, leadId))
+              if (!held || held.at <= notice.at) this.notices.set(recapKey(tabId, leadId), notice)
+            }
+            this.seen.set(key, sequence)
+            this.failed.delete(key)
+          } catch (error) {
+            if (!this.failed.has(key)) {
+              this.failed.add(key)
+              this.log(`[super-tabs] a Lead's new message could not be read for the dial; tried again at the next poll: ${error instanceof Error ? error.message : String(error)}`)
+            }
+          } finally { this.recapsRunning-- }
+        }
+      }
+    }
+    // A Swarm or project that left the cards takes its baseline and notices with it.
+    for (const key of [...this.seen.keys()]) if (!watched.has(key)) this.seen.delete(key)
+    for (const key of [...this.failed]) if (!watched.has(key)) this.failed.delete(key)
+    for (const [key, notice] of this.notices) if (!watched.has(`${key.slice(0, key.indexOf(':'))}:${notice.chatId}`)) this.notices.delete(key)
   }
 
   /** Which of the Leads that run here are in a turn, and since when (the core's windows' own measure of "working"). */
@@ -259,32 +394,35 @@ export class SwarmCards {
     return out
   }
 
-  /** The Lead's conversation and how far it has gone, from the tab as last read. */
-  private leadConversation(tabId: string, leadId: string): { id: string; sequence: number } | null {
+  /** Where the Lead's recap is read and its talk posted, from the tab as last read: its Lead conversation, or with `chat` the
+   *  chat on its project's face (`chatId` set). */
+  private target(tabId: string, leadId: string, chat: boolean): Target | null {
     const state = this.tabs.get(tabId)?.state
     if (!state) return null
-    const conversations = list(state.conversations)
-    const projects = Array.isArray(state.projects) ? list(state.projects) : [{ leadConversationId: 'lead' }]
-    for (const project of projects) {
-      const lead = conversations.find(c => c.id === project.leadConversationId)
-      if (lead && lead.leadId === leadId && identifier(lead.id)) return { id: lead.id, sequence: typeof lead.lastMessageSequence === 'number' ? lead.lastMessageSequence : 0 }
-    }
-    return null
+    const found = leadProjects(state).find(p => p.leadId === leadId)
+    if (!found || !identifier(found.lead.id)) return null
+    if (!chat) return { id: found.lead.id, sequence: sequenceOf(found.lead), voices: new Set([leadId]) }
+    const focus = this.focus?.tabId === tabId ? this.focus.conversationId : undefined
+    const face = faceOf(list(state.conversations), projectKey(found.project), found.lead, focus)
+    if (!face) return null
+    const id = face.conversation.id as string
+    return { id, sequence: sequenceOf(face.conversation), voices: voicesOf(face, leadId), chatId: id }
   }
-  private sequenceOf(tabId: string, leadId: string): number | null { return this.leadConversation(tabId, leadId)?.sequence ?? null }
 
-  /** What the Lead last said: the newest page of its conversation, then one page back; `none` when neither holds a row of its own. */
-  async recap(tabId: string, leadId: string): Promise<LeadRecap> {
+  /** What the Lead last said: the newest page of its conversation, then one page back; `none` when neither holds a row of its own.
+   *  With `chat`, what the chat on its face last heard from its agents, naming that chat. */
+  async recap(tabId: string, leadId: string, chat = false): Promise<LeadRecap> {
     if (!cardId(tabId) || !cardId(leadId)) return { tabId, leadId, text: '', at: 0, none: true }
-    let found = this.leadConversation(tabId, leadId)
+    let found = this.target(tabId, leadId, chat)
     if (!found) {
       if (this.recapsRunning >= MAX_RECAPS_IN_FLIGHT) throw new Error('too many recap reads at once')
       this.recapsRunning++
       try { this.tabs.set(tabId, tabOf(await this.reads.read(tabId))) } finally { this.recapsRunning-- }
-      found = this.leadConversation(tabId, leadId)
+      found = this.target(tabId, leadId, chat)
     }
     if (!found) return { tabId, leadId, text: '', at: 0, none: true }
-    const key = `${tabId}:${leadId}`, held = this.recaps.get(key)
+    const named = found.chatId === undefined ? {} : { chatId: found.chatId }
+    const key = recapKey(tabId, leadId, found.chatId), held = this.recaps.get(key)
     if (held && held.sequence === found.sequence) return held.recap
     // At most two backend reads of recaps run at once: a Pro that asks in a loop cannot flood the backend.
     if (this.recapsRunning >= MAX_RECAPS_IN_FLIGHT) throw new Error('too many recap reads at once')
@@ -292,24 +430,25 @@ export class SwarmCards {
     try {
       const path = `/api/super-tabs/${tabId}/conversations/${found.id}/messages`
       const newest = object(await backend(this.core, 'GET', path))
-      let said = lastLeadMessage(list(newest.messages), leadId)
+      let said = lastAgentMessage(list(newest.messages), found.voices)
       // The page before, from the page's own (sequence, id) cursor: a page edge inside equal sequences skips nothing (design 4.6).
       const before = object(newest.next)
       if (!said && typeof before.sequence === 'number' && identifier(before.id)) {
-        said = lastLeadMessage(list(object(await backend(this.core, 'GET', `${path}?before=${before.sequence}&beforeId=${before.id}`)).messages), leadId)
+        said = lastAgentMessage(list(object(await backend(this.core, 'GET', `${path}?before=${before.sequence}&beforeId=${before.id}`)).messages), found.voices)
       }
-      const recap: LeadRecap = said ? { tabId, leadId, text: cut(said.text, RECAP_BYTES), at: said.at, none: false } : { tabId, leadId, text: '', at: 0, none: true }
+      const recap: LeadRecap = said ? { tabId, leadId, text: cut(said.text, RECAP_BYTES), at: said.at, none: false, ...named } : { tabId, leadId, text: '', at: 0, none: true, ...named }
       this.recaps.set(key, { sequence: found.sequence, recap })
       return recap
     } finally { this.recapsRunning-- }
   }
 
   /** Words spoken on a Pro to a Lead that runs here (its harness): posted as the person in that Lead's conversation, as typed in
-   *  the Swarm chat. False when that harness leads no project in the Swarms as last read, so the caller sends the turn as before. */
-  async say(harnessId: string, text: string): Promise<boolean> {
+   *  the Swarm chat; with `chat`, in the chat on its face. False when that harness leads no project in the Swarms as last read,
+   *  so the caller sends the turn as before. */
+  async say(harnessId: string, text: string, chat = false): Promise<boolean> {
     for (const [tabId, { state }] of this.tabs) {
       const agent = list(state.agents).find(a => a.machineId === this.machineId && a.harnessId === harnessId)
-      const found = agent && cardId(agent.id) ? this.leadConversation(tabId, agent.id) : null
+      const found = agent && cardId(agent.id) ? this.target(tabId, agent.id, chat) : null
       if (!found) continue
       await backend(this.core, 'POST', `/api/super-tabs/${tabId}/commands`, { operationId: `pro-voice-${randomUUID()}`,
         command: { type: 'message.send', conversationId: found.id, text, replyTo: null, recipientIds: [] } })
@@ -318,22 +457,45 @@ export class SwarmCards {
     return false
   }
 
-  /** Remembered recaps are kept only for Leads that are still in a tab. */
+  /** Remembered recaps are kept only for Leads that are still in a tab, and a chat's only while it is on the face. */
   private prune(): void {
-    for (const [key, held] of this.recaps) if (!this.leadConversation(held.recap.tabId, held.recap.leadId)) this.recaps.delete(key)
+    for (const [key, held] of this.recaps) {
+      const { tabId, leadId, chatId } = held.recap
+      const now = this.target(tabId, leadId, chatId !== undefined)
+      if (!now || now.chatId !== chatId) this.recaps.delete(key)
+    }
   }
 
-  /** Each open Lead that moved on since its Pro last got the recap: the new one is sent once. A failed read is tried again next tick. */
-  private async pushOpen(): Promise<void> {
+  /** Each open Lead that moved on since its Pro last got the recap, or whose face shows another chat: the new one is sent once.
+   *  A failed read is tried again next tick. */
+  private pushOpen(): Promise<void> {
+    const run = this.pushing.then(() => this.pushOpenNow())
+    this.pushing = run.catch(() => {})
+    return run
+  }
+  private async pushOpenNow(): Promise<void> {
     for (const open of [...this.opened.values()]) {
-      const sequence = this.sequenceOf(open.tabId, open.leadId)
-      if (sequence === null) continue
-      if (open.sequence === null) { open.sequence = sequence; continue }
-      if (open.sequence === sequence) continue
-      const recap = await this.recap(open.tabId, open.leadId).catch(() => null)
+      const target = this.target(open.tabId, open.leadId, open.chat)
+      if (!target) continue
+      if (open.sequence === null) { open.sequence = target.sequence; open.chatId = target.chatId ?? null; continue }
+      if (open.sequence === target.sequence && open.chatId === (target.chatId ?? null)) continue
+      const recap = await this.recap(open.tabId, open.leadId, open.chat).catch(() => null)
       if (!recap) continue
-      open.sequence = sequence
+      open.sequence = target.sequence
+      open.chatId = target.chatId ?? null
       this.onRecap?.(recap)
     }
   }
+}
+
+/** Each project of a tab whose Lead conversation names its Lead: the project, that conversation and the Lead agent's id. */
+function leadProjects(state: Json): Array<{ project: Json; lead: Json; leadId: string }> {
+  const conversations = list(state.conversations)
+  const projects = Array.isArray(state.projects) ? list(state.projects) : [{ id: 'lead', leadConversationId: 'lead' }]
+  const out: Array<{ project: Json; lead: Json; leadId: string }> = []
+  for (const project of projects) {
+    const lead = conversations.find(c => c.id === project.leadConversationId)
+    if (lead && typeof lead.leadId === 'string') out.push({ project, lead, leadId: lead.leadId })
+  }
+  return out
 }

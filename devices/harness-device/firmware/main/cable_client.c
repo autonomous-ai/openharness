@@ -321,6 +321,9 @@ static void send_hello(void)
     // a wait back from this dial, which once had to: a wait is never an answer screen here.
     msg_string(&root, "swarmCard", "v1");
     msg_string(&root, "superTab", "wait-v1");
+    // Each Lead's face is the chat the desktop has open, and the alerts are the Lead's new messages (handle_supertab_notice;
+    // design 2026-10-28-round-dial-swarm-chat). A daemon that predates it ignores the field and sends today's frames.
+    msg_string(&root, "swarmChat", "v1");
     // Which of the two dials this is (board.h) — informational, so a log or a bug report can say. A
     // daemon that predates the field ignores it.
     msg_string(&root, "hw", board()->name);
@@ -955,6 +958,8 @@ static void handle_supertab(const cJSON *p)
             // Absent from a daemon before `order`: the frame's own order stands.
             .order = cJSON_IsNumber(order) && order->valuedouble >= 0 && order->valuedouble < 65536 ? (int)order->valuedouble : -1,
             .since = cJSON_IsNumber(since) && since->valuedouble >= 0 ? (since->valuedouble > 2592000 ? 2592000 : (long)since->valuedouble) : -1,
+            // The chat on the face; absent from a daemon without swarmChat, which reads as the Lead chat.
+            .chat = str_of(l, "chat"), .chat_id = str_of(l, "chatId"), .chat_name = str_of(l, "chatName"),
         };
         ht_supertab_lead_add(&card, &in);
     }
@@ -967,12 +972,34 @@ static void handle_supertab(const cJSON *p)
 // `supertab.recap`: one Lead's last message. The model cuts it to 1,500 bytes; `none` is "no message yet".
 static void handle_supertab_recap(const cJSON *p)
 {
-    const char *tab = str_of(p, "tab"), *lead = str_of(p, "lead"), *text = str_of(p, "text");
+    const char *tab = str_of(p, "tab"), *lead = str_of(p, "lead"), *text = str_of(p, "text"), *chat_id = str_of(p, "chatId");
     if (!id_fits(tab) || !id_fits(lead)) return;
+    // A chat's recap names its chat; one whose chat cannot be held is not one (never shown for another).
+    if (chat_id && !id_fits(chat_id)) return;
     const cJSON *at = cJSON_GetObjectItemCaseSensitive(p, "at");
     const double secs = cJSON_IsNumber(at) && at->valuedouble > 0 ? at->valuedouble : 0;
     const bool none = cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(p, "none"));
-    ui_supertab_recap(tab, lead, none || !text ? "" : text, secs > 4294967295.0 ? 0xFFFFFFFFu : (uint32_t)secs, none);
+    ui_supertab_recap(tab, lead, chat_id ? chat_id : "", none || !text ? "" : text, secs > 4294967295.0 ? 0xFFFFFFFFu : (uint32_t)secs, none);
+}
+// `supertab.notice` {tab, lead, chat, chatId, id, text, at}: the Lead's new message in its Lead conversation or Chat with
+// PM, the one thing that alerts with a swarmChat daemon. The daemon sends each once; the UI decides the beep.
+static void handle_supertab_notice(const cJSON *p)
+{
+    const char *tab = str_of(p, "tab"), *lead = str_of(p, "lead"), *chat = str_of(p, "chat"), *chat_id = str_of(p, "chatId");
+    const char *id = str_of(p, "id"), *text = str_of(p, "text");
+    if (!id_fits(tab) || !id_fits(lead) || !id_fits(chat_id) || !id_fits(id) || !text || !chat) return;
+    if (strcmp(chat, "lead") && strcmp(chat, "pm")) return;   // groups never alert
+    const cJSON *at = cJSON_GetObjectItemCaseSensitive(p, "at");
+    const double secs = cJSON_IsNumber(at) && at->valuedouble > 0 ? at->valuedouble : 0;
+    if (ui_supertab_notice(tab, lead, strcmp(chat, "pm") ? HT_CHAT_LEAD : HT_CHAT_PM, chat_id, text,
+                           secs > 4294967295.0 ? 0xFFFFFFFFu : (uint32_t)secs))
+        audio_notify_done();
+}
+// `supertab.notice.read` {tab, lead, chatId}: the desktop opened that chat, so its alert is read.
+static void handle_supertab_notice_read(const cJSON *p)
+{
+    const char *tab = str_of(p, "tab"), *lead = str_of(p, "lead"), *chat_id = str_of(p, "chatId");
+    if (id_fits(tab) && id_fits(lead) && id_fits(chat_id)) ui_supertab_notice_read(tab, lead, chat_id);
 }
 // `supertab.focus` {tab, lead}. An empty `lead` is the desktop on that Swarm's tab with no project open: still a focus.
 static void handle_supertab_focus(const cJSON *p)
@@ -1373,6 +1400,8 @@ static void handle_message(const cJSON *root)
     if (strcmp(t, "supertab") == 0) { handle_supertab(p); return; }
     if (strcmp(t, "supertab.recap") == 0) { handle_supertab_recap(p); return; }
     if (strcmp(t, "supertab.focus") == 0) { handle_supertab_focus(p); return; }
+    if (strcmp(t, "supertab.notice") == 0) { handle_supertab_notice(p); return; }
+    if (strcmp(t, "supertab.notice.read") == 0) { handle_supertab_notice_read(p); return; }
 
     if (strcmp(t, "agent.updated") == 0) {
         // One agent changed. Cheapest correct answer is to re-ask: the daemon is on the other end of a

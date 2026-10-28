@@ -32,7 +32,7 @@ let swarm: Swarm
 let recipient: AuthUser
 /** Who the next list call is made as. */
 let viewer: AuthUser
-/** The shares the recipient must be listed, by hand: each worker not on its own machine, and the ordinary share. */
+/** The shares the recipient must be listed, by hand: each worker not on its own machine, the Swarm's Lead, and the ordinary share. */
 let expected: string[]
 /** Every share addressed to the recipient that the list must leave out, by why. */
 let hidden: Record<string, string>
@@ -46,7 +46,7 @@ const list = async (as: AuthUser = recipient) => {
 const listedIds = (machines: Awaited<ReturnType<typeof list>>) => machines.flatMap(m => m.shares.map(s => s.id)).sort()
 const percentile = (values: number[], p: number) => [...values].sort((a, b) => a - b)[Math.min(values.length - 1, Math.floor(values.length * p))]!
 
-interface Profiled { collection: string; plans: string[]; docsExamined: number; returned: number }
+interface Profiled { collection: string; plans: string[]; keysExamined: number; docsExamined: number; returned: number }
 /** What Mongo did for each collection while `read` ran: plans, documents examined and rows returned. */
 async function profiled(read: () => Promise<unknown>): Promise<Profiled[]> {
   const db = database.db
@@ -54,14 +54,15 @@ async function profiled(read: () => Promise<unknown>): Promise<Profiled[]> {
   await read()
   await db.$runCommandRaw({ profile: 0 })
   const found = await db.$runCommandRaw({ find: 'system.profile', filter: { 'command.profile': { $exists: false } }, batchSize: 10000 }) as
-    unknown as { cursor: { firstBatch: Array<{ ns: string; planSummary?: string; docsExamined?: number; nreturned?: number }> } }
+    unknown as { cursor: { firstBatch: Array<{ ns: string; planSummary?: string; keysExamined?: number; docsExamined?: number; nreturned?: number }> } }
   await db.$runCommandRaw({ drop: 'system.profile' })
   const byCollection = new Map<string, Profiled>()
   for (const row of found.cursor.firstBatch) {
     const collection = row.ns.slice(row.ns.indexOf('.') + 1)
     if (collection.startsWith('system.') || collection.startsWith('$cmd')) continue
-    const entry = byCollection.get(collection) ?? { collection, plans: [], docsExamined: 0, returned: 0 }
+    const entry = byCollection.get(collection) ?? { collection, plans: [], keysExamined: 0, docsExamined: 0, returned: 0 }
     if (row.planSummary && !entry.plans.includes(row.planSummary)) entry.plans.push(row.planSummary)
+    entry.keysExamined += row.keysExamined ?? 0
     entry.docsExamined += row.docsExamined ?? 0
     entry.returned += row.nreturned ?? 0
     byCollection.set(collection, entry)
@@ -91,6 +92,10 @@ beforeAll(async () => {
   const plain = randomUUID()
   await share(plain, { superTabId: null, owner: 2, agentId: 'plain-harness' })
   expected.push(plain)
+  // The Swarm's current Lead is open to its readers (projects.ts watchClosed); confidential, it is closed everywhere else.
+  const lead = randomUUID()
+  await share(lead, { superTabId: swarm.tabId, owner: 0, agentId: 'bench-lead' })
+  expected.push(lead)
   expected.sort()
   // A Swarm the recipient is not in, with one agent shared through it, and its Lead, shared outside any Swarm.
   const store = new SuperTabStore(db)
@@ -101,9 +106,12 @@ beforeAll(async () => {
     harnessId: 'elsewhere-worker', name: 'Elsewhere', configuration: AGENT_CONFIGURATION, lead: false } })
   await store.execute(people[0]!, other, { operationId: randomUUID(), command: { type: 'agent.add', conversationId: 'lead', machineId: machineId(0),
     harnessId: 'elsewhere-lead', name: 'Lead', configuration: AGENT_CONFIGURATION, lead: true } })
+  // Agents of 200 other Swarms, as production holds them: a read of these agents' keys must not walk theirs.
+  const { id: _row, ...template } = await db.swarmAgent.findFirstOrThrow({ where: { tabId: swarm.tabId } })
+  await db.swarmAgent.createMany({ data: Array.from({ length: 200 }, (_, i) => ({ ...template, id: `crowd-${i}`, tabId: `crowd-tab-${i}`,
+    key: `crowd-agent-${i}`, data: template.data as object })) })
   hidden = {}
   const hide = async (why: string, data: Parameters<typeof share>[1]) => { const id = randomUUID(); hidden[id] = why; await share(id, data) }
-  await hide('the Lead is a confidential session', { superTabId: swarm.tabId, owner: 0, agentId: 'bench-lead' })
   await hide('an ordinary share of a confidential session', { superTabId: null, owner: 0, agentId: 'elsewhere-lead' })
   await hide('a Swarm the recipient is not in', { superTabId: other, owner: 0, agentId: 'elsewhere-worker' })
   await hide('an agent not in the Swarm', { superTabId: swarm.tabId, owner: 2, agentId: 'gone-worker' })
@@ -158,14 +166,16 @@ describe('the harness shares list on a Swarm-sized database', () => {
       // Prisma's `in` is planned as one index scan per value (an OR of N branches), each read planned anew: one $in scan instead.
       expect(read.plans.filter(p => p.includes('}, IXSCAN')), read.collection).toEqual([])
       expect(read.docsExamined, read.collection).toBeLessThanOrEqual(read.returned + 2)
+      // Keys too: an agent read by key that walks the (tabId, key) index costs every other Swarm in production.
+      expect(read.keysExamined, read.collection).toBeLessThanOrEqual(read.returned + 10)
     }
   })
 })
 
 /**
  * The list against each share asked alone (mayOpenShare), and against what each person must see by hand, as people and
- * permissions change under a warm read cache (review of #1973): a private conversation, a private project, a Lead and its
- * replacement, a removed member, and a machine grant taken back. Two members ask in turn, each after the other's change.
+ * permissions change under a warm read cache (review of #1973): a Lead and its private conversation, a session confidential
+ * here or in another Swarm, a private project, a Lead's replacement, a removed member, and a machine grant taken back. Two members ask in turn, each after the other's change.
  */
 describe('the harness shares list as permissions change', () => {
   const fixture = (n: number): AuthUser => ({ sub: (0x200000000000000000000001n + BigInt(n)).toString(16).padStart(24, '0'),
@@ -229,28 +239,52 @@ describe('the harness shares list as permissions change', () => {
     return { tab, run, agents, sees, shared }
   }
 
-  it('hides the Lead from everyone, and still once it is in a private conversation that one member reads', async () => {
-    const { run, agents, sees } = await swarmWithShares()
+  /** Marks agent `agentId` of this Swarm confidential in another Swarm too, as a registration there would have left it. */
+  async function confidentialElsewhere(tab: string, agentId: string) {
+    const { id, ...row } = await database.db.swarmAgent.findFirstOrThrow({ where: { tabId: tab, key: agentId } })
+    await database.db.swarmAgent.create({ data: { ...row, id: `elsewhere-${id}`, tabId: `elsewhere-${tab}`, data: { ...row.data as object, confidential: true } } })
+  }
+
+  it('keeps the Swarm\'s current Lead open to its readers, in a private conversation too, and closes it once confidential elsewhere', async () => {
+    const { tab, run, agents, sees } = await swarmWithShares()
     expect([await sees(a), await sees(b)]).toEqual(['XYZ', 'XYZ'])
     await run({ type: 'conversation.agent', conversationId: 'lead', agentId: agents.X!, present: true, lead: true })
-    expect([await sees(b), await sees(a)]).toEqual(['YZ', 'YZ'])
+    expect([await sees(b), await sees(a)]).toEqual(['XYZ', 'XYZ'])
     const chat = (await run({ type: 'conversation.create', title: 'Private', brief: 'Owner and A only.', checks: [], audience: { personIds: [owner.sub, a.sub] } }))
       .result.conversationId as string
     await run({ type: 'conversation.agent', conversationId: chat, agentId: agents.X!, present: true, lead: false })
-    expect([await sees(a), await sees(b)]).toEqual(['YZ', 'YZ'])
+    expect([await sees(a), await sees(b)]).toEqual(['XYZ', 'XYZ'])
+    await confidentialElsewhere(tab, agents.X!)
+    expect([await sees(b), await sees(a)]).toEqual(['YZ', 'YZ'])
   })
 
-  it('hides a project\'s Lead, and the next project\'s Lead once the first project is deleted', async () => {
+  it('closes a session confidential in another Swarm, though it is an ordinary Builder here', async () => {
+    const { tab, agents, sees } = await swarmWithShares()
+    expect([await sees(a), await sees(b)]).toEqual(['XYZ', 'XYZ'])
+    await confidentialElsewhere(tab, agents.Z!)
+    expect([await sees(b), await sees(a)]).toEqual(['XY', 'XY'])
+  })
+
+  it('closes a session marked confidential that no longer leads here', async () => {
+    const { tab, agents, sees } = await swarmWithShares()
+    // Written before any list of this Swarm, so no read holds the agent as it was: a mark a Lead or private member leaves.
+    const part = await database.db.swarmAgent.findFirstOrThrow({ where: { tabId: tab, key: agents.Y! } })
+    await database.db.swarmAgent.update({ where: { id: part.id }, data: { data: { ...part.data as object, confidential: true } } })
+    expect([await sees(a), await sees(b)]).toEqual(['XZ', 'XZ'])
+  })
+
+  it('shows a project\'s Lead to the Swarm\'s readers, and the next project\'s Lead once the first project is deleted', async () => {
     // A Lead leaves only with its project (commands.ts protectLead): replacing one is a new project with a new Lead.
     const { run, sees, shared } = await swarmWithShares()
     const first = (await run({ type: 'project.create', name: 'First', visibility: 'public', brief: '' })).result as { projectId: string; conversationId: string }
     await shared('L', first.conversationId, true)
-    expect([await sees(a), await sees(b)]).toEqual(['XYZ', 'XYZ'])
+    expect([await sees(a), await sees(b)]).toEqual(['LXYZ', 'LXYZ'])
     await run({ type: 'project.delete', projectId: first.projectId })
+    expect([await sees(b), await sees(a)]).toEqual(['XYZ', 'XYZ'])
     const next = (await run({ type: 'project.create', name: 'Next', visibility: 'public', brief: '' })).result as { projectId: string; conversationId: string }
     await shared('M', next.conversationId, true)
     await shared('W', next.conversationId)
-    expect([await sees(b), await sees(a)]).toEqual(['WXYZ', 'WXYZ'])
+    expect([await sees(a), await sees(b)]).toEqual(['MWXYZ', 'MWXYZ'])
   })
 
   it('shows a private project only to its members, and again to everyone once it is shared', async () => {
