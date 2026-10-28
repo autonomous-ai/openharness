@@ -23,8 +23,8 @@ LocalKeyValueStore swarmViewStore({LocalKeyValueStore? beside}) =>
 /// any. Which Swarms an account keeps, and whose device this is, are a few
 /// bytes in that folder's own `state.json`.
 ///
-/// Desktop 1.3.27 to 1.3.31 wrote all of it into the settings document; the
-/// first operation moves it out, once ([_moveOut]).
+/// Desktop builds from 1.3.27 on wrote all of it into the settings document;
+/// the first operation moves it out, once ([_moveOut]).
 class SwarmViewFiles implements LocalKeyValueStore {
   SwarmViewFiles(this.settings)
     : directory = Directory(
