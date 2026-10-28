@@ -11,7 +11,7 @@ import { applyCommand, authorizeCommandAccess, operationSchema, PAIR_CHAIN_LIMIT
 import { redactCredentials } from './credentials.js'
 import type { AvatarUpload } from './profile.js'
 import { reactionCounts, type ReactionTarget } from './reactions.js'
-import { pageDeliveries, pageReactions } from './pageReads.js'
+import { inConversationOrder, pageDeliveries, pageReactions } from './pageReads.js'
 import { attachmentMime, attachmentName, AttachmentTooLarge, AVATAR_PURPOSE, AVATAR_TYPES, checkedType, MAX_ATTACHMENT_BYTES, MAX_AVATAR_BYTES, objectKeyFor, peekType, publicUrl, trimPrefix,
   type Attachment, type Attachments, type AttachmentStore, type AvatarStore } from './attachments.js'
 import { randomBytes } from 'node:crypto'
@@ -181,9 +181,10 @@ export function afterCommit(tx: Transaction, callback: () => void): void {
   if (!pending) throw new Error('afterCommit needs a client from a Swarm transaction (store.ts transaction).')
   pending.push(callback)
 }
-/** An agent's open deliveries, oldest first: one indexed read. */
-const openDeliveries = (tx: Transaction, tabId: string, agentId: string) => tx.superTabDelivery.findMany({
-  where: { tabId, agentId, status: { in: [...OPEN_DELIVERY] } }, orderBy: { createdAt: 'asc' }, take: 100 })
+/** An agent's open deliveries, oldest first and each conversation's tied rows in its order (pageReads.ts): one indexed
+ *  read, and the tied messages' sequences only when there are ties. */
+const openDeliveries = async (tx: Transaction, tabId: string, agentId: string) => inConversationOrder(tx, tabId,
+  await tx.superTabDelivery.findMany({ where: { tabId, agentId, status: { in: [...OPEN_DELIVERY] } }, orderBy: { createdAt: 'asc' }, take: 100 }))
 
 /** The grants a held answer checks again: the agent's own and those of the agents that sent what it allowed. */
 function grantsOf(state: SuperTabState, agentId: string, allowed: SuperTabDelivery[]) {
@@ -323,6 +324,10 @@ export class GrantReads {
     return answer
   }
 }
+
+/** Another Swarm too busy to say whether a shared session is confidential there: the list hides those shares and lists the rest,
+ *  as a busy load of a share's own Swarm hides its shares (Lead, review of #1973), rather than failing every share. */
+const busyListing = (tabId: string) => logger.warn('[super-tab] shares list: a busy Swarm hid the shares it could not answer for', { tabId })
 
 export class SuperTabStore {
   readonly native: SuperTabNativeStore
@@ -2022,7 +2027,8 @@ export class SuperTabStore {
   async openableShares<T extends { superTabId: string | null; machineId: string; agentId: string; ownerId: string }>(user: AuthUser, shares: T[]): Promise<T[]> {
     const key = (share: T) => stableId(share.machineId, share.agentId)
     // An ordinary share: never of a session confidential in any Swarm, but for its machine's person.
-    const anywhere = await confidentialSessions(this.db, shares.filter(s => !s.superTabId && user.sub !== s.ownerId).map(key), undefined, this.cachedState)
+    const anywhere = await confidentialSessions(this.db, shares.filter(s => !s.superTabId && user.sub !== s.ownerId).map(key), undefined, this.cachedState,
+      busyListing)
     const byTab = new Map<string, T[]>()
     for (const share of shares) if (share.superTabId) byTab.set(share.superTabId, [...byTab.get(share.superTabId) ?? [], share])
     const observable = new Set<T>()
@@ -2053,7 +2059,7 @@ export class SuperTabStore {
     }
     const targets = shares.map(share => state.agents.find(a => a.machineId === share.machineId && a.harnessId === share.agentId && a.machineOwnerId === share.ownerId))
     // Confidential in another Swarm closes it here too; in this one, its current Lead stays open to readers (projects.ts watchClosed).
-    const elsewhere = await confidentialSessions(this.db, targets.flatMap(t => t ? [t.id] : []), tabId, this.cachedState)
+    const elsewhere = await confidentialSessions(this.db, targets.flatMap(t => t ? [t.id] : []), tabId, this.cachedState, busyListing)
     const allowed: T[] = []
     for (const [i, share] of shares.entries()) {
       const target = targets[i]
@@ -2125,12 +2131,13 @@ export class SuperTabStore {
   /** The open deliveries the last full poll allowed, while the Swarm is as it read it: the grants it checked are checked
    *  again, as the full poll does: the agent's refuses the poll, a sender's withholds what it sent (senderAllowed). */
   private async heldDeliveries(user: AuthUser, agentId: string, open: SuperTabDelivery[], seen: NonNullable<Polled['open']>) {
-    const target = seen.grants[agentId]!, inSwarm = () => {}
+    // One request's reads, shared by the agent's check and its senders' (GrantReads), never kept past it.
+    const target = seen.grants[agentId]!, inSwarm = () => {}, reads = new GrantReads()
     const team = await this.teamHost(this.db, user)
     if (team !== null && target.machineId !== team) fail(TEAM_SESSION_LIMITED, TEAM_SESSION_MESSAGE, 403)
-    await this.grantHolds(this.db, seen.swarm, target, inSwarm)
+    await this.grantHolds(this.db, seen.swarm, target, inSwarm, reads)
     const senders = new Map<string, Promise<boolean>>()
-    const sent = (id: string) => senders.get(id) ?? senders.set(id, this.grantHolds(this.db, seen.swarm, seen.grants[id]!, inSwarm)
+    const sent = (id: string) => senders.get(id) ?? senders.set(id, this.grantHolds(this.db, seen.swarm, seen.grants[id]!, inSwarm, reads)
       .then(() => true, error => { if (error instanceof SuperTabError) return false; throw error })).get(id)!
     const allowed: SuperTabDelivery[] = []
     for (const delivery of open) {

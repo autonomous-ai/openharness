@@ -950,6 +950,41 @@ describe('the delivery poll of an agent with a held delivery', () => {
     }
   })
 
+  // #2022: one write's deliveries share a creation time; the held answer keeps each conversation's tied rows in its order too.
+  it('returns tied held deliveries in their conversation\'s order, without loading the Swarm', async () => {
+    const counted = counting()
+    const f = await swarm({ client: counted.client })
+    const assignments: string[] = []
+    for (const title of ['Parser', 'Renderer', 'Exporter']) {
+      const group = String((await f.execute({ type: 'conversation.create', title, brief: 'Build it',
+        checks: [{ description: 'Built', independent: false }] })).result.conversationId)
+      await f.execute({ type: 'conversation.agent', conversationId: group, agentId: f.lead, present: false, lead: false })
+      const worker = await f.add(group, 'test-host', randomUUID(), title)
+      assignments.push(String((await f.execute({ type: 'work.assign', conversationId: group, agentId: worker })).result.assignmentId))
+    }
+    f.clock.now += 6 * MINUTE
+    const expectedIds = assignments.map(assignment => stableId(stableId('work-lost', assignment, String(f.clock.now)), 'lead'))
+    const first = (await f.timed.deliveries(host, f.tab, f.lead)).filter(row => expectedIds.includes(row.messageId))
+    expect(first).toHaveLength(3)
+    await f.timed.delivery(host, f.tab, f.lead, first[0]!.id, { type: 'claim', claimId: 'claim-1' })
+    await f.timed.delivery(host, f.tab, f.lead, first[0]!.id, { type: 'hold', claimId: 'claim-1', reason: 'team_waiting_user' })
+    const page = (await f.timed.messages(owner, f.tab, 'lead', {})).messages.filter(row => expectedIds.includes(row.id))
+    f.clock.now += 1_000
+    await f.timed.deliveries(host, f.tab, f.lead)
+    // Stored later sequence first, so insertion order cannot stand in for the tie-break; no Swarm write, so the stamp stays.
+    const tiedAt = new Date('2026-10-28T00:00:00.000Z')
+    const stored = await db.superTabDelivery.findMany({ where: { tabId: f.tab, messageId: { in: expectedIds } } })
+    await db.superTabDelivery.deleteMany({ where: { tabId: f.tab, messageId: { in: expectedIds } } })
+    for (const id of [...page.map(row => row.id)].reverse()) {
+      await db.superTabDelivery.create({ data: { ...stored.find(row => row.messageId === id)!, createdAt: tiedAt } })
+    }
+    counted.ops.length = 0
+    f.clock.now += 1_000
+    const held = (await f.timed.deliveries(host, f.tab, f.lead)).filter(row => expectedIds.includes(row.messageId))
+    expect(counted.ops).not.toContain('SwarmGroup.aggregateRaw')
+    expect(held.map(row => row.messageId)).toEqual(page.map(row => row.id))
+  })
+
   // A Workspace removal is read outside the Swarm, as a machine share is (superTabs.test.ts): the next poll meets it.
   it('refuses on the next poll once the agent\'s contributor is out of the Swarm\'s Workspace', async () => {
     const f = await swarm()
@@ -990,6 +1025,43 @@ describe('the delivery poll of an agent with a held delivery', () => {
 // Hosts read an idle agent's deliveries only every 30 s once the server pushes (stability roadmap 2.4): each new one is
 // announced to the machine its agent runs on, once its write commits, so the host reads it at once.
 describe('the push for a new delivery', () => {
+  it('keeps several messages batched for one recipient in conversation order, including equal timestamps', async () => {
+    const f = await swarm()
+    const assignments: string[] = []
+    for (const title of ['Parser', 'Renderer', 'Exporter']) {
+      const group = String((await f.execute({ type: 'conversation.create', title, brief: 'Build it',
+        checks: [{ description: 'Built', independent: false }] })).result.conversationId)
+      // Without the Lead in these groups, each loss is delivered in the same project chat.
+      await f.execute({ type: 'conversation.agent', conversationId: group, agentId: f.lead, present: false, lead: false })
+      const worker = await f.add(group, 'test-host', randomUUID(), title)
+      assignments.push(String((await f.execute({ type: 'work.assign', conversationId: group, agentId: worker })).result.assignmentId))
+    }
+    f.clock.now += 6 * MINUTE
+    // Each loss notice is named by its task and the time of the loss (this poll).
+    const expectedIds = assignments.map(assignment => stableId(stableId('work-lost', assignment, String(f.clock.now)), 'lead'))
+    // One poll expires all three assignments and inserts their messages/deliveries together.
+    const first = (await f.timed.deliveries(host, f.tab, f.lead)).filter(row => expectedIds.includes(row.messageId))
+    expect(first).toHaveLength(3)
+    expect(new Set(first.map(row => row.messageId))).toEqual(new Set(expectedIds))
+    expect(new Set(first.map(row => row.createdAt.getTime())).size).toBe(1)
+    const page = (await f.timed.messages(owner, f.tab, 'lead', {})).messages.filter(row => expectedIds.includes(row.id))
+    expect(page).toHaveLength(3)
+    expect(page[1]!.sequence).toBe(page[0]!.sequence + 1)
+    expect(page[2]!.sequence).toBe(page[1]!.sequence + 1)
+    expect(first.map(row => row.messageId)).toEqual(page.map(row => row.id))
+
+    // Make the tie explicit, and store the rows later sequence first so insertion order cannot stand in for it, then read again.
+    const tiedAt = new Date('2026-10-28T00:00:00.000Z')
+    const stored = await db.superTabDelivery.findMany({ where: { tabId: f.tab, messageId: { in: expectedIds } } })
+    await db.superTabDelivery.deleteMany({ where: { tabId: f.tab, messageId: { in: expectedIds } } })
+    for (const id of [...page.map(row => row.id)].reverse()) {
+      await db.superTabDelivery.create({ data: { ...stored.find(row => row.messageId === id)!, createdAt: tiedAt } })
+    }
+    const again = (await f.timed.deliveries(host, f.tab, f.lead)).filter(row => expectedIds.includes(row.messageId))
+    expect(again.map(row => row.createdAt)).toEqual([tiedAt, tiedAt, tiedAt])
+    expect(again.map(row => row.messageId)).toEqual(page.map(row => row.id))
+  })
+
   const announcing = () => {
     const waiting: Array<{ machineId: string; tabId: string; agentId: string }> = []
     return { waiting, hooks: { deliveriesWaiting: (w: { machineId: string; tabId: string; agentId: string }) => { waiting.push(w) } } }

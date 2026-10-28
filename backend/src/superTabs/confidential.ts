@@ -1,5 +1,6 @@
 import type { Prisma } from '@prisma/client'
-import type { Agent, SuperTabState } from './model.js'
+import { SuperTabError, type Agent, type SuperTabState } from './model.js'
+import { RETRYABLE_SWARM_CODES } from './retry.js'
 import { loadActive, reassemble } from './parts/index.js'
 import { confidentialSession, sessionKey, type OtherRegistrations } from './projects.js'
 import { bindSession, sessionRecordId } from './sessionScope.js'
@@ -14,9 +15,11 @@ type Transaction = Prisma.TransactionClient
  * Swarm's readers while it is that Swarm's current Lead (projects.ts watchClosed), which is why a Swarm asks about the others.
  */
 /** `stateOf` gives a Swarm's active parts with these agents' groups, as loadActive in `tx` does; a read outside a transaction may
- *  give the read cache's (cachedReads.ts readParts gives the same parts), uncopied, as nothing here changes it. */
+ *  give the read cache's (cachedReads.ts readParts gives the same parts), uncopied, as nothing here changes it. With `busyClosed`,
+ *  a Swarm too busy to read (retry.ts) closes the sessions asked of it, as unknown, and is named to it; without, its answer throws. */
 export async function confidentialSessions(tx: Transaction, agentIds: string[], exceptTabId?: string,
-  stateOf: (tabId: string, agentIds: string[]) => Promise<SuperTabState> = async (tabId, ids) => reassemble(await loadActive(tx, tabId, { agentIds: ids }))): Promise<Set<string>> {
+  stateOf: (tabId: string, agentIds: string[]) => Promise<SuperTabState> = async (tabId, ids) => reassemble(await loadActive(tx, tabId, { agentIds: ids })),
+  busyClosed?: (tabId: string) => void): Promise<Set<string>> {
   const found = new Set<string>()
   if (!agentIds.length) return found
   // One $in scan of the key index, and only the mark: Prisma's `in` is planned as one index scan per id, and `data` is the whole agent.
@@ -32,7 +35,15 @@ export async function confidentialSessions(tx: Transaction, agentIds: string[], 
   for (const [tabId, keys] of unmarked) {
     const pending = keys.filter(key => !found.has(key))
     if (!pending.length) continue
-    const state = await stateOf(tabId, pending)
+    let state: SuperTabState
+    try {
+      state = await stateOf(tabId, pending)
+    } catch (error) {
+      if (!busyClosed || !(error instanceof SuperTabError) || !RETRYABLE_SWARM_CODES.has(error.code)) throw error
+      for (const key of pending) found.add(key)
+      busyClosed(tabId)
+      continue
+    }
     for (const target of state.agents) if (pending.includes(target.id) && confidentialSession(state, target)) found.add(target.id)
   }
   return found
