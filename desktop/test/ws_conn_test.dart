@@ -17,6 +17,12 @@ class FakeHub {
   final HttpServer server;
   final bool rejectOldToken;
   final int? closeCodeOnSelect;
+
+  /// The reason [closeCodeOnSelect] closes with: what the daemon's relay says, as it says it.
+  String closeReasonOnSelect = 'rejected';
+
+  /// Answers every select with this `machine_select_error` code instead, as the backend does.
+  String? selectErrorOnSelect;
   final List<Map<String, dynamic>> frames = [];
   final List<String> protocols = [];
   final List<String?> environments = [];
@@ -58,7 +64,19 @@ class FakeHub {
         if (frame['type'] == 'machine_select') {
           final machineId = (frame['payload'] as Map)['machineId'] as String;
           if (hub.closeCodeOnSelect != null) {
-            ws.close(hub.closeCodeOnSelect!, 'rejected');
+            ws.close(hub.closeCodeOnSelect!, hub.closeReasonOnSelect);
+            return;
+          }
+          if (hub.selectErrorOnSelect != null) {
+            ws.add(
+              jsonEncode({
+                'type': 'machine_select_error',
+                'payload': {
+                  'machineId': machineId,
+                  'error': hub.selectErrorOnSelect,
+                },
+              }),
+            );
             return;
           }
           if (hub.rejectOldToken && protocol == 'tok-old') {
@@ -584,6 +602,87 @@ void main() {
     await conn!.connect();
     await conn!.request('agents_list');
     expect(DateTime.now().difference(started), lessThan(const Duration(milliseconds: 500)));
+  });
+
+  // Prod, 2026-10-28: a laptop removed from the account in September was still selected every few
+  // seconds. Through this computer's daemon the refusal arrives as the relay's close, with the
+  // backend's code for its reason; straight from the backend (the web viewer), as the frame.
+  for (final (path, local) in [('daemon relay', true), ('backend', false)]) {
+    test(
+      'a machine refused as not on the account ($path) is not dialled again',
+      () async {
+        hub = await FakeHub.start(closeCodeOnSelect: local ? 1011 : null);
+        hub.closeReasonOnSelect = 'NOT_YOUR_MACHINE';
+        if (!local) hub.selectErrorOnSelect = 'NOT_YOUR_MACHINE';
+        final failures = <String>[];
+        final statuses = <ConnectionStatus>[];
+        conn = WsConn(
+          wsBaseUrl: 'ws://127.0.0.1:${hub.port}',
+          autonomousEnv: 'prod',
+          machineId: 'm1',
+          accessTokenProvider: (_, _) async => 'sso-token',
+          onAuthFailure: (_) {},
+          onLocalFailure: (code, reason) => failures.add(reason),
+          onEvent: (_) {},
+          onStatus: statuses.add,
+          transportKind: local
+              ? WsTransportKind.localPlaintext
+              : WsTransportKind.cloudE2ee,
+          allowLocalTcpFixture: true,
+          localWsUri: local
+              ? Uri.parse('ws://127.0.0.1:${hub.port}/api/local-ws')
+              : null,
+        );
+        await conn!.connect();
+        // Past the first two steps of the backoff (0.5–1 s, then 1–2 s).
+        await Future<void>.delayed(const Duration(milliseconds: 3200));
+        expect(hub.protocols, hasLength(1));
+        expect(conn!.isClosed, isTrue);
+        expect(statuses.last, ConnectionStatus.disconnected);
+        if (local) expect(failures, ['NOT_YOUR_MACHINE']);
+      },
+    );
+  }
+
+  // Prod, 2026-10-28: relays living 0.4 s made 2,304 of 2,308 backend socket opens in 15 minutes.
+  // A relayed machine that is off was redialled on the 15–30 s backoff for as long as the app ran,
+  // each dial refused at once: about 2.7 a minute for every machine that was off. It now waits for
+  // word that the machine is back, and rechecks on its own only every 1, 2, 4, 8, then 15 minutes.
+  test('a relayed machine that is off waits to be woken instead of redialling', () async {
+    // The reason is what counts: a current daemon closes with 1013, an older one with 1011 (a
+    // dart:io server cannot send 1013, a reserved code).
+    hub = await FakeHub.start(closeCodeOnSelect: 1011);
+    hub.closeReasonOnSelect = 'MACHINE_OFFLINE';
+    conn = WsConn(
+      wsBaseUrl: 'wss://unused.example',
+      autonomousEnv: 'prod',
+      machineId: 'm1',
+      accessTokenProvider: (_, _) async => 'sso-token',
+      onAuthFailure: (_) {},
+      onEvent: (_) {},
+      onStatus: (_) {},
+      transportKind: WsTransportKind.localPlaintext,
+      allowLocalTcpFixture: true,
+      localWsUri: Uri.parse('ws://127.0.0.1:${hub.port}/api/local-ws'),
+    );
+    await conn!.connect();
+    await Future<void>.delayed(const Duration(milliseconds: 3200));
+    expect(hub.protocols, hasLength(1));
+    expect(conn!.isParked, isTrue);
+    expect(conn!.isClosed, isFalse);
+
+    conn!.wake('machine online');
+    await Future<void>.delayed(const Duration(milliseconds: 250));
+    expect(hub.protocols, hasLength(2));
+  });
+
+  // The first recheck is the relay's own retry-after (30 s): a machine back online that a wake reached while the relay
+  // still answered from its refusal parks again, and must not wait a minute more (review of #2027).
+  test('a parked connection rechecks after 30 s, then 1, 2, 4, 8 and every 15 minutes', () {
+    expect(
+      [for (var n = 0; n < 7; n++) WsConn.parkedRecheckAfter(n).inSeconds],
+      [30, 60, 120, 240, 480, 900, 900],
+    );
   });
 
   test(

@@ -218,6 +218,111 @@ describe('work that loses its owner', () => {
     expect((await f.leadInbox()).map(m => m.text)).toContain(`${await f.name(f.worker)} resumed its task after its usage limit reset.`)
   })
 
+  // 2026-10-28: a resumed task keeps its id. When its session then stopped, the second loss wrote the first loss's notice
+  // ids again: the machine's report and the Lead's poll each failed on the duplicate from then on, so the machine looked
+  // offline and nothing reached the Lead.
+  it('is lost again after it resumed, and its machine\'s report and its Lead\'s poll still go through', async () => {
+    const f = await swarm()
+    const lostAt = f.clock.now
+    await f.execute({ type: 'agent.alert', agentId: f.worker, alert: 'limit', active: true, resetAt: new Date(f.clock.now + 30 * MINUTE).toISOString() }, host, f.worker)
+    f.clock.now += 30 * MINUTE
+    await f.execute({ type: 'work.resume', conversationId: f.group, assignmentId: f.assignmentId, lostAt }, host, f.worker)
+    await f.leadInbox()
+    f.clock.now += MINUTE
+    await f.observe('test-host', [], { stoppedHarnessIds: [f.harness.worker] })
+    expect(await f.assignment()).toMatchObject({ id: f.assignmentId, status: 'lost', lost: { reason: 'its session on Worker Mac stopped', at: f.clock.now } })
+    expect((await f.lostRows()).filter(m => m.recipientIds.includes(f.lead))).toHaveLength(2)
+    expect((await f.leadInbox()).filter(m => (m.source as { kind?: string }).kind === 'work-lost').at(-1)!.text)
+      .toContain('lost its task "Ship the parser": its session on Worker Mac stopped.')
+  })
+
+  // The stuck Swarm of that day: its first loss's notices were written under the old ids, named by the task alone. Its next
+  // check writes the loss under new ids, and the Lead and the worker each receive their notice.
+  it('heals a resumed task whose first loss was written under the old notice ids', async () => {
+    const f = await swarm()
+    for (const id of [stableId('work-lost', f.assignmentId), stableId('work-lost', f.assignmentId, 'agent')]) {
+      await db.superTabMessage.create({ data: { id, tabId: f.tab, conversationId: f.group, sequence: 1, author: { kind: 'agent', id: f.lead },
+        text: 'The first loss', replyTo: null, recipientIds: [], mentions: [] } })
+    }
+    f.clock.now += MINUTE
+    await f.observe('test-host', [], { stoppedHarnessIds: [f.harness.worker] })
+    expect(await f.assignment()).toMatchObject({ id: f.assignmentId, status: 'lost', lost: { reason: 'its session on Worker Mac stopped' } })
+    expect((await f.leadInbox()).map(m => m.text)).toContain(`${await f.name(f.worker)} lost its task "Ship the parser": its session on Worker Mac stopped. `
+      + 'Last progress 1 minute ago. Last result: none. Assign it to another agent now, or cancel it.')
+    expect(await db.superTabDelivery.count({ where: { tabId: f.tab, agentId: f.worker,
+      messageId: stableId('work-lost', f.assignmentId, String(f.clock.now), 'agent') } })).toBe(1)
+  })
+
+  // One duplicate stopped every later report and poll for 45 minutes that day. A notice of the time checks found already
+  // stored as that same notice is kept, and its missing deliveries are written, so its recipients still receive it.
+  describe('a lost notice already stored', () => {
+    const lostIds = (f: Awaited<ReturnType<typeof swarm>>) =>
+      ({ lead: stableId('work-lost', f.assignmentId, String(f.clock.now)), agent: stableId('work-lost', f.assignmentId, String(f.clock.now), 'agent') })
+    const STOPPED = 'its session on Worker Mac stopped'
+    /** Stores `text` under `id` as the loss notice the time checks write for this task, or as one with `source` changed. */
+    const store = (f: Awaited<ReturnType<typeof swarm>>, id: string, text: string,
+      { conversationId = f.group, source = {} }: { conversationId?: string; source?: Record<string, unknown> } = {}) => db.superTabMessage.create({ data: { id,
+      tabId: f.tab, conversationId, sequence: 1, author: { kind: 'agent', id: f.lead },
+      source: { kind: 'work-lost', agentId: f.worker, assignmentId: f.assignmentId, reason: STOPPED, ...source },
+      text, replyTo: null, recipientIds: [], mentions: [] } })
+
+    it('is kept on its machine\'s report, and the Lead and the worker still receive it', async () => {
+      const f = await swarm()
+      f.clock.now += MINUTE
+      const ids = lostIds(f)
+      await store(f, ids.lead, 'Stored for the Lead')
+      await store(f, ids.agent, 'Stored for the worker')
+      await f.observe('test-host', [], { stoppedHarnessIds: [f.harness.worker] })
+      expect(await f.assignment()).toMatchObject({ status: 'lost', lost: { reason: 'its session on Worker Mac stopped' } })
+      expect((await f.leadInbox()).map(m => m.text)).toContain('Stored for the Lead')
+      expect(await db.superTabDelivery.count({ where: { tabId: f.tab, agentId: f.worker, messageId: ids.agent } })).toBe(1)
+    })
+
+    it('is kept on its Lead\'s poll, and the Lead receives it', async () => {
+      const f = await swarm()
+      await f.observe('test-host', [f.harness.worker])
+      f.clock.now += 3 * MINUTE
+      await store(f, lostIds(f).lead, 'Stored for the Lead', { source: { reason: 'its machine Worker Mac has been offline for 2 minutes' } })
+      expect((await f.leadInbox()).map(m => m.text)).toContain('Stored for the Lead')
+      expect(await f.assignment()).toMatchObject({ status: 'lost' })
+    })
+
+    it('gets no second delivery when its delivery is stored too', async () => {
+      const f = await swarm()
+      f.clock.now += MINUTE
+      const ids = lostIds(f)
+      await store(f, ids.lead, 'Stored for the Lead')
+      await db.superTabDelivery.create({ data: { id: stableId(ids.lead, f.lead), tabId: f.tab, conversationId: f.group, messageId: ids.lead, agentId: f.lead,
+        machineId: 'lead-host', machineOwnerId: host.sub, assignmentId: null, membershipGeneration: 'g', authorKind: 'agent', authorId: f.lead, authorGeneration: 'g' } })
+      await f.observe('test-host', [], { stoppedHarnessIds: [f.harness.worker] })
+      expect(await f.assignment()).toMatchObject({ status: 'lost' })
+      expect(await db.superTabDelivery.count({ where: { tabId: f.tab, messageId: ids.lead } })).toBe(1)
+    })
+
+    it('still refuses a stored message that is not this notice', async () => {
+      const f = await swarm()
+      f.clock.now += MINUTE
+      await store(f, lostIds(f).lead, 'Another message', { conversationId: 'lead' })
+      await expect(f.observe('test-host', [], { stoppedHarnessIds: [f.harness.worker] })).rejects.toThrow('Unique constraint failed')
+      expect(await f.assignment()).toMatchObject({ status: 'working' })
+    })
+
+    // Review of #2034: a loss notice of another task, or of another worker, is not this loss; kept, it would be delivered as it.
+    it.each([
+      ['another task', { assignmentId: 'another-assignment' }],
+      ['another worker', { agentId: 'another-agent' }],
+      ['another reason', { reason: 'it hit a usage limit until 12:00 UTC' }],
+    ])('still refuses a stored loss notice of %s, and delivers nothing', async (_, source) => {
+      const f = await swarm()
+      f.clock.now += MINUTE
+      const ids = lostIds(f)
+      await store(f, ids.lead, 'Another loss', { source })
+      await expect(f.observe('test-host', [], { stoppedHarnessIds: [f.harness.worker] })).rejects.toThrow('Unique constraint failed')
+      expect(await f.assignment()).toMatchObject({ status: 'working' })
+      expect(await db.superTabDelivery.count({ where: { tabId: f.tab, messageId: { in: [ids.lead, ids.agent] } } })).toBe(0)
+    })
+  })
+
   // #1757 review, 2: a receipt replays the first answer, so it never says who holds the task now; the host's assignment
   // rows do (cli superTabs/limitResume.ts reads them before typing).
   it('replays a resume whose answer was lost even after a takeover, while its host\'s assignment rows no longer list it', async () => {
@@ -608,6 +713,51 @@ describe('the delivery poll of an agent with nothing waiting', () => {
     expect(told.map(m => (m.source as { kind?: string }).kind)).toEqual(['update-request'])
   })
 
+  // Prod, 2026-10-28: a Lead's host received an update request on 26 Oct and the Lead never answered it. Every later poll
+  // took it as still pending, so the project was never asked again, its reports were never summarized, and 372 archived
+  // conversations could not go quiet for two days.
+  it('asks again once an update request the Lead\'s host received goes unanswered for two hours, and not before', async () => {
+    const f = await swarm()
+    await f.leadInbox()
+    f.clock.now += 5 * MINUTE
+    const requests = async () => {
+      const rows = await f.timed.deliveries(host, f.tab, f.lead)
+      const messages = await db.superTabMessage.findMany({ where: { id: { in: rows.map(r => r.messageId) } } })
+      return rows.filter(r => (messages.find(m => m.id === r.messageId)!.source as { kind?: string }).kind === 'update-request')
+    }
+    const [first] = await requests()
+    expect(first).toBeDefined()
+    // Typed into the Lead's terminal, never answered.
+    await f.timed.delivery(host, f.tab, f.lead, first!.id, { type: 'claim', claimId: 'claim' })
+    await f.timed.delivery(host, f.tab, f.lead, first!.id, { type: 'ack', claimId: 'claim', receipt: 'typed', uncertain: false })
+    // New reports keep coming.
+    f.clock.now += MINUTE
+    await f.execute({ type: 'work.status', conversationId: f.group, assignmentId: f.assignmentId, status: 'working', result: 'Halfway' }, host, f.worker)
+    f.clock.now += 59 * MINUTE
+    expect(await requests()).toEqual([])
+    f.clock.now += 61 * MINUTE
+    const again = await requests()
+    expect(again).toHaveLength(1)
+    expect(again[0]!.messageId).not.toBe(first!.messageId)
+  })
+
+  it('keeps holding later update requests while the first never reached the Lead\'s host, however long', async () => {
+    const f = await swarm()
+    await f.leadInbox()
+    f.clock.now += 5 * MINUTE
+    const kinds = async () => {
+      const rows = await f.timed.deliveries(host, f.tab, f.lead)
+      const messages = await db.superTabMessage.findMany({ where: { id: { in: rows.map(r => r.messageId) } } })
+      return rows.map(r => (messages.find(m => m.id === r.messageId)!.source as { kind?: string }).kind)
+    }
+    expect(await kinds()).toContain('update-request')
+    // Never claimed: the host is offline. New reports keep coming.
+    f.clock.now += MINUTE
+    await f.execute({ type: 'work.status', conversationId: f.group, assignmentId: f.assignmentId, status: 'working', result: 'Halfway' }, host, f.worker)
+    f.clock.now += 3 * 60 * MINUTE
+    expect((await kinds()).filter(kind => kind === 'update-request')).toHaveLength(1)
+  })
+
   it('delivers a message on the very next poll, within a second of the last one', async () => {
     const counted = counting()
     const f = await swarm({ client: counted.client })
@@ -661,6 +811,43 @@ describe('the delivery poll of an agent with nothing waiting', () => {
 // Hosts read an idle agent's deliveries only every 30 s once the server pushes (stability roadmap 2.4): each new one is
 // announced to the machine its agent runs on, once its write commits, so the host reads it at once.
 describe('the push for a new delivery', () => {
+  it('keeps several messages batched for one recipient in conversation order, including equal timestamps', async () => {
+    const f = await swarm()
+    const assignments: string[] = []
+    for (const title of ['Parser', 'Renderer', 'Exporter']) {
+      const group = String((await f.execute({ type: 'conversation.create', title, brief: 'Build it',
+        checks: [{ description: 'Built', independent: false }] })).result.conversationId)
+      // Without the Lead in these groups, each loss is delivered in the same project chat.
+      await f.execute({ type: 'conversation.agent', conversationId: group, agentId: f.lead, present: false, lead: false })
+      const worker = await f.add(group, 'test-host', randomUUID(), title)
+      assignments.push(String((await f.execute({ type: 'work.assign', conversationId: group, agentId: worker })).result.assignmentId))
+    }
+    f.clock.now += 6 * MINUTE
+    // Each loss notice is named by its task and the time of the loss (this poll).
+    const expectedIds = assignments.map(assignment => stableId(stableId('work-lost', assignment, String(f.clock.now)), 'lead'))
+    // One poll expires all three assignments and inserts their messages/deliveries together.
+    const first = (await f.timed.deliveries(host, f.tab, f.lead)).filter(row => expectedIds.includes(row.messageId))
+    expect(first).toHaveLength(3)
+    expect(new Set(first.map(row => row.messageId))).toEqual(new Set(expectedIds))
+    expect(new Set(first.map(row => row.createdAt.getTime())).size).toBe(1)
+    const page = (await f.timed.messages(owner, f.tab, 'lead', {})).messages.filter(row => expectedIds.includes(row.id))
+    expect(page).toHaveLength(3)
+    expect(page[1]!.sequence).toBe(page[0]!.sequence + 1)
+    expect(page[2]!.sequence).toBe(page[1]!.sequence + 1)
+    expect(first.map(row => row.messageId)).toEqual(page.map(row => row.id))
+
+    // Make the tie explicit, and store the rows later sequence first so insertion order cannot stand in for it, then read again.
+    const tiedAt = new Date('2026-10-28T00:00:00.000Z')
+    const stored = await db.superTabDelivery.findMany({ where: { tabId: f.tab, messageId: { in: expectedIds } } })
+    await db.superTabDelivery.deleteMany({ where: { tabId: f.tab, messageId: { in: expectedIds } } })
+    for (const id of [...page.map(row => row.id)].reverse()) {
+      await db.superTabDelivery.create({ data: { ...stored.find(row => row.messageId === id)!, createdAt: tiedAt } })
+    }
+    const again = (await f.timed.deliveries(host, f.tab, f.lead)).filter(row => expectedIds.includes(row.messageId))
+    expect(again.map(row => row.createdAt)).toEqual([tiedAt, tiedAt, tiedAt])
+    expect(again.map(row => row.messageId)).toEqual(page.map(row => row.id))
+  })
+
   const announcing = () => {
     const waiting: Array<{ machineId: string; tabId: string; agentId: string }> = []
     return { waiting, hooks: { deliveriesWaiting: (w: { machineId: string; tabId: string; agentId: string }) => { waiting.push(w) } } }

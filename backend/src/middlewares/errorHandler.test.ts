@@ -70,6 +70,19 @@ describe('the shared error handler', () => {
     expect(res.json().error).toEqual({ code: 'DUPLICATE', message: 'This already exists, so nothing new was saved.' })
   })
 
+  // In the cluster the log line is JSON whose own `message` is the event's (utils/logger.ts): a context field of that name was
+  // dropped, so prod's duplicate-key lines never said which index (2026-10-28).
+  it('logs the database\'s own words, naming the index, under a field the log line keeps', async () => {
+    const warn = vi.spyOn(logger, 'warn').mockImplementation(() => {})
+    for (const [code, message] of [['P2002', 'Unique constraint failed on the constraint: `_id_`'], ['P2028', 'Transaction already closed']]) {
+      thrown = prismaError(code!, message!)
+      await app.inject({ method: 'GET', url: '/fails' })
+      const context = warn.mock.calls.at(-1)![1] as Record<string, unknown>
+      expect(context).toMatchObject({ path: '/fails', method: 'GET', error: message })
+      expect(context).not.toHaveProperty('message')
+    }
+  })
+
   it('keeps anything else a 500 and logs its stack', async () => {
     const error = vi.spyOn(logger, 'error').mockImplementation(() => {})
     thrown = new TypeError("Cannot read properties of null (reading 'sendDown')")

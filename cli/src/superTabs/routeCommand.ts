@@ -193,7 +193,9 @@ export async function routeTask(input: { tabId: string; conversationId: string; 
   const rules = (list(state.rules).filter(r => r.rule && typeof r.text === 'string' && (r.projectId === undefined || r.projectId === projectId)) as unknown as SwarmRule[])
     .map(r => r.rule.kind !== 'machines' ? r : { ...r, rule: { ...r.rule,
       machineIds: [...r.rule.machineIds, ...[...macOf].filter(([, mac]) => r.rule.kind === 'machines' && r.rule.machineIds.includes(mac)).map(([team]) => team)] } })
-  const members = agents.filter(a => !busy.has(String(a.id)) && (a.role === 'reviewer') === review && ENGINES.includes(String(object(a.configuration).engine))).map(a => withLaunchEffort(a, list(state.starts)))
+  // A Buddy is a person's own, and is never assigned work (the backend refuses it too, backend buddies.ts).
+  const members = agents.filter(a => !busy.has(String(a.id)) && !a.buddyOf && (a.role === 'reviewer') === review
+    && ENGINES.includes(String(object(a.configuration).engine))).map(a => withLaunchEffort(a, list(state.starts)))
   // A new agent starts only on a machine in the Swarm's Machines list (the backend refuses any other): a contributed machine, or
   // one an agent of the Swarm runs on. The Lead runs here, so its own machine is always listed. Of the account's machines
   // only those count; the rest were never prepared with the project and would only be excluded for a missing folder

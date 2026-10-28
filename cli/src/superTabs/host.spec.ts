@@ -14,6 +14,7 @@ import { SwarmReads } from './swarmReads.js'
 import { retainedHarnesses, retentionFile } from './retention.js'
 import { observerSource } from './observers.js'
 import { ContributedMachines } from './machines.js'
+import { createAccountHttp } from '../gateway/accountHttp.js'
 
 const roots: string[] = []
 const hosts: SuperTabHost[] = []
@@ -78,6 +79,14 @@ describe('current Swarm role lookup', () => {
     expect(await swarmRoleFor(sources, 'harness')).toEqual({ role: 'review', mode: 'orchestration' })
     groups = []
     expect(await swarmRoleFor(sources, 'harness')).toBeNull()
+  })
+  it('derives a Buddy from its owner while it is in its chat, so its skill stays the Buddy\'s', async () => {
+    const t = setup()
+    const agent = { id: 'agent', harnessId: 'harness', machineId: 'machine-1', buddyOf: { personId: 'peer', generation: 'g' } }
+    vi.mocked(t.call).mockImplementation(async (_method, path) => ({ status: 200, body: { success: true, data:
+      path.includes('/hosts/') ? hostForm([{ tabId: 'tab', agent }]) : swarmReply(path, { agents: [agent],
+        conversations: [{ id: 'chat', kind: 'buddy', leadId: null, agentIds: ['agent'] }] }) } }))
+    expect(await swarmRoleFor(sourcesOf(t.core), 'harness')).toEqual({ role: 'buddy', mode: 'orchestration' })
   })
   it.each(['lead', 'member', 'assigned'] as const)('derives an old %s from current groups on its machine', async kind => {
     const t = setup()
@@ -150,6 +159,23 @@ describe('the host tick on the host form', () => {
     await host.tick()
     expect(vi.mocked(t.call).mock.calls.filter(([, path]) => path.includes('/hosts/'))).toHaveLength(2)
     expect(t.log).toHaveBeenCalledTimes(1)
+  })
+  // Diego 10-29: a host form whose body timed out after the headers read as '200 OK, {}', so the host paused this machine's
+  // Swarm work for a minute behind 'Update Harness'. Through the gateway's real backend helper, it is a timeout that is logged and retried.
+  it('logs a feed read that times out after the headers as unreachable and reads again the next second', async () => {
+    const t = setup(), host = t.open()
+    const stalled = () => new Response(new ReadableStream({ start(controller) { controller.error(new DOMException('late', 'TimeoutError')) } }), { status: 200 })
+    const gateway = createAccountHttp({ tokens: { accessToken: async () => 'token' }, account: () => ({ machineId: 'account', signIn: null }),
+      computer: { id: 'computer', name: 'Mac', hostname: 'mac' }, environment: 'test', base: () => 'https://backend.invalid',
+      request: vi.fn<typeof fetch>(async () => stalled()), log: vi.fn() })
+    vi.mocked(t.call).mockImplementation((method, path, body) => gateway.backend(method, path, body))
+    await host.tick()
+    t.wait(1_000)
+    await host.tick()
+    expect(t.log.mock.calls.map(([line]) => line)).toEqual([
+      'The Harness backend did not answer GET /api/super-tabs/hosts/machine-1/changes?full=1 within 20s. Try again in a moment.',
+      'The Harness backend did not answer GET /api/super-tabs/hosts/machine-1/changes?full=1 within 20s. Try again in a moment.'])
+    expect(vi.mocked(t.call).mock.calls.filter(([, path]) => path.includes('/hosts/'))).toHaveLength(2)
   })
 })
 
@@ -777,6 +803,20 @@ describe('a delivery poll or claim that keeps failing', () => {
     expect(claims.n).toBe(3)
     t.wait(1_000); await host.tick()
     expect(claims.n).toBe(4)
+  })
+
+  // 2026-10-28: a Lead's list failed for 45 minutes and the log said only "This already exists, so nothing new was saved."
+  it('says whose delivery list keeps failing, with the backend\'s code, since when and how often', async () => {
+    const t = setup(), host = t.open()
+    failing(t, (method, path) => method === 'GET' && path.endsWith('/deliveries'))
+    await host.tick()
+    t.wait(1_000); await host.tick()
+    expect(t.log.mock.calls.slice(-2).map(call => call[0])).toEqual([
+      'Could not read the deliveries for agent agent (session harness) in Swarm tab: This Swarm is busy. Try again in a moment. (SWARM_BUSY). '
+        + 'Failing since 1970-01-01T00:00:00.000Z, 1 try; next try in 1 s.',
+      'Could not read the deliveries for agent agent (session harness) in Swarm tab: This Swarm is busy. Try again in a moment. (SWARM_BUSY). '
+        + 'Failing since 1970-01-01T00:00:00.000Z, 2 tries; next try in 2 s.',
+    ])
   })
 
   it('asks again for a delivery list the backend refuses only after the same growing wait', async () => {

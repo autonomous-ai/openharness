@@ -566,6 +566,88 @@ void main() {
       );
     });
 
+    testWidgets('a tag far past a reader scrolled up opens at its message', (
+      tester,
+    ) async {
+      final server = ConversationServer();
+      server.state['conversations'] = [
+        ...server.state['conversations'] as List,
+        conversationFixture('group', 'Release'),
+      ];
+      for (var i = 1; i <= 100; i++) {
+        server.append('Note $i', conversationId: 'group');
+      }
+      final c = await showView(tester, server);
+      await c.loadMessages('group');
+      // The reader had scrolled up there, then 600 arrived: more than the
+      // pages that join below them.
+      c.readingBack('group', true);
+      for (var i = 101; i <= 700; i++) {
+        server.append('Note $i', conversationId: 'group');
+      }
+      server.tag('message-650', conversationId: 'group', text: 'Note 650');
+      await tester.tap(notificationsEntry());
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('super-mention-mention-1')));
+      await tester.pumpAndSettle();
+      expect(
+        find.text('This message is no longer in the conversation.'),
+        findsNothing,
+      );
+      expect(c.selectedId, 'group');
+      expect(
+        find.byKey(const ValueKey('super-message-message-650')).hitTestable(),
+        findsOneWidget,
+      );
+    });
+
+    testWidgets(
+      'a tag opened while a poll reads the rows held below a reader scrolled '
+      'up still opens at its message',
+      (tester) async {
+        final server = ConversationServer();
+        server.state['conversations'] = [
+          ...server.state['conversations'] as List,
+          conversationFixture('group', 'Release'),
+        ];
+        for (var i = 1; i <= 100; i++) {
+          server.append('Note $i', conversationId: 'group');
+        }
+        final c = await showView(tester, server);
+        await c.loadMessages('group');
+        c.readingBack('group', true);
+        for (var i = 101; i <= 700; i++) {
+          server.append('Note $i', conversationId: 'group');
+        }
+        // Three pages join below the reader; newer ones wait.
+        for (var poll = 0; poll < 3; poll++) {
+          await c.loadMessages('group');
+        }
+        expect(c.hasNewer('group'), isTrue);
+        server.tag('message-650', conversationId: 'group', text: 'Note 650');
+        await tester.tap(notificationsEntry());
+        await tester.pumpAndSettle();
+        // A background poll is reading the rows held when the tag opens.
+        final held = server.holdReads = Completer<void>();
+        final poll = c.loadMessages('group');
+        await tester.tap(find.byKey(const ValueKey('super-mention-mention-1')));
+        await tester.pump();
+        server.holdReads = null;
+        held.complete();
+        await poll;
+        await tester.pumpAndSettle();
+        expect(
+          find.text('This message is no longer in the conversation.'),
+          findsNothing,
+        );
+        expect(c.selectedId, 'group');
+        expect(
+          find.byKey(const ValueKey('super-message-message-650')).hitTestable(),
+          findsOneWidget,
+        );
+      },
+    );
+
     testWidgets('opening a tag shows its message with the reply box on it', (
       tester,
     ) async {

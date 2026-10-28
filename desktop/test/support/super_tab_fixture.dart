@@ -170,6 +170,10 @@ class SwarmPartsBackend {
     if (reader == null || part.deleted || !id.startsWith('groups:')) {
       return false;
     }
+    // A Buddy chat is read by its person alone (backend Buddies, 10-28).
+    if (part.data['kind'] == 'buddy') {
+      return part.data['buddyOwnerId'] != reader;
+    }
     final audience = part.data['audience'];
     if (audience is! Map) return false;
     final generation = (state['people'] as List?)
@@ -652,6 +656,96 @@ class ConversationServer {
           ..['resolvedBy'] = 'done';
         state['mentionsWaiting'] = (state['mentionsWaiting'] as int) - 1;
         revision++;
+      } else if (command['type'] == 'buddy.create') {
+        // As the backend's Buddy create: a start for the reader's Buddy and
+        // its chat, fixed per person and project. The fixture's host starts it
+        // at once.
+        final person = reader ?? 'owner';
+        final projectId = command['projectId'] as String;
+        bool mine(Object? a) =>
+            a is Map &&
+            (a['buddyOf'] as Map?)?['personId'] == person &&
+            a['projectId'] == projectId;
+        // As the backend: one Buddy per person and project. A running one
+        // refuses another; a down one is replaced.
+        if ((state['agents'] as List).any(
+          (a) => mine(a) && (a as Map)['downSince'] == null,
+        )) {
+          throw const SuperTabFailure(
+            'BUDDY_EXISTS',
+            'You already have a Buddy in this project.',
+            statusCode: 409,
+          );
+        }
+        revision++;
+        final agentId = 'buddy-$revision';
+        final chatId = 'buddy-$person-$projectId';
+        final machine = (state['machines'] as List? ?? const [])
+            .cast<Map>()
+            .where((m) => m['machineId'] == command['machineId'])
+            .firstOrNull;
+        final owner = (state['people'] as List? ?? const [])
+            .cast<Map>()
+            .where((p) => p['id'] == person)
+            .firstOrNull;
+        // A test's lists may be typed literals: copy into plain lists.
+        state['agents'] = <dynamic>[
+          for (final a in state['agents'] as List)
+            if (!mine(a)) a,
+        ];
+        state['starts'] = <dynamic>[...state['starts'] as List? ?? const []];
+        (state['starts'] as List).add({
+          'id': 'start-$revision',
+          'machineOwnerId': machine?['contributorId'] ?? person,
+          'request': {
+            'conversationId': chatId,
+            'projectId': projectId,
+            'machineId': command['machineId'],
+            'engine': command['engine'],
+            'buddyOf': {'personId': person, 'generation': 'fixture'},
+          },
+          'harnessId': 'h-$agentId',
+          'error': null,
+        });
+        (state['agents'] as List).add({
+          'id': agentId,
+          'name': 'Buddy',
+          'projectId': projectId,
+          'buddyOf': {'personId': person, 'generation': 'fixture'},
+          'machineId': command['machineId'],
+          'harnessId': 'h-$agentId',
+          'contributorId': person,
+          'machineOwnerId': machine?['contributorId'] ?? person,
+          'confidential': true,
+          'configuration': {'engine': command['engine'], 'model': 'default'},
+        });
+        final conversations = (state['conversations'] as List)
+            .cast<Map<String, dynamic>>();
+        final chat = conversations.where((g) => g['id'] == chatId).firstOrNull;
+        if (chat != null) {
+          chat['agentIds'] = [agentId];
+        } else {
+          final name = (owner?['email'] as String? ?? person).split('@').first;
+          conversations.add({
+            ...conversationFixture(chatId, "$name's Buddy"),
+            'kind': 'buddy',
+            'projectId': projectId,
+            'buddyOwnerId': person,
+            'agentIds': [agentId],
+          });
+        }
+        output
+          ..['startId'] = 'start-$revision'
+          ..['conversationId'] = chatId;
+      } else if (command['type'] == 'buddy.remove') {
+        revision++;
+        final person = reader ?? 'owner';
+        (state['agents'] as List).removeWhere(
+          (a) =>
+              a is Map &&
+              (a['buddyOf'] as Map?)?['personId'] == person &&
+              a['projectId'] == command['projectId'],
+        );
       } else if (command['type'] == 'conversation.create') {
         revision++;
         final id = 'group-$revision';
