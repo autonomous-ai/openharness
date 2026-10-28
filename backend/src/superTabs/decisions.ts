@@ -117,15 +117,20 @@ export async function writeDecisions(tx: Tx, tabId: string, drafts: DecisionDraf
   return drafts.map(d => held.get(repeatKey(d)) ?? d.id)
 }
 
+/** The open decision an ask exactly repeats, which writeDecisions keeps as that decision again. Read before a worker's
+ *  needs_human that asks, so its wait names the decision it is waiting on (leaderboard/record.ts recordStatus). */
+export async function repeatOf(tx: Tx, tabId: string, ask: Parameters<typeof repeatKey>[0]): Promise<string | undefined> {
+  const same = await tx.superTabDecision.findMany({ where: { tabId, personId: ask.personId, askerAgentId: ask.askerAgentId,
+    conversationId: ask.conversationId, question: ask.question, ...waiting } })
+  return same.find(o => repeatKey(o) === repeatKey(ask))?.id
+}
+
 /** How many decisions this asker has open for this person when one more question would pass MAX_OPEN_DECISIONS, or null when
- *  it fits: an exact repeat of an open one is that decision again and always fits. Read before a worker's needs_human, which
- *  at the cap still records its status and only skips the question (review of #1859). */
-export async function fullFor(tx: Tx, tabId: string, ask: Parameters<typeof repeatKey>[0]): Promise<number | null> {
-  const { personId, askerAgentId } = ask
-  const asked = await tx.superTabDecision.count({ where: { tabId, personId, askerAgentId, ...waiting } })
-  if (asked < MAX_OPEN_DECISIONS) return null
-  const same = await tx.superTabDecision.findMany({ where: { tabId, personId, askerAgentId, conversationId: ask.conversationId, question: ask.question, ...waiting } })
-  return same.some(o => repeatKey(o) === repeatKey(ask)) ? null : asked
+ *  it fits. Read before a worker's needs_human asks something new (an exact repeat of an open one, repeatOf, always fits),
+ *  which at the cap still records its status and only skips the question (review of #1859). */
+export async function fullFor(tx: Tx, tabId: string, ask: { personId: string; askerAgentId: string }): Promise<number | null> {
+  const asked = await tx.superTabDecision.count({ where: { tabId, personId: ask.personId, askerAgentId: ask.askerAgentId, ...waiting } })
+  return asked < MAX_OPEN_DECISIONS ? null : asked
 }
 
 export async function readAskedDecision(tx: Tx, tabId: string, id: string): Promise<DecisionTarget | undefined> {
