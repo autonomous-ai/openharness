@@ -49,8 +49,8 @@ const LINGER_MS = 30_000
 const ISOLATED_LINGER_MS = 3 * 60_000
 // After a FAILED background dial, how long the same machine is answered from that failure instead of
 // dialled again. A poller that retries on every tick against an unlinked or unreachable machine would
-// otherwise turn one bad machine into a relay dial per tick, forever. Never applied to the window's
-// pool: a person clicking again deserves a fresh attempt.
+// otherwise turn one bad machine into a relay dial per tick, forever. The window's pool has the shorter backoff
+// below instead, which an explicit redial skips: a person clicking again deserves a fresh attempt.
 const ISOLATED_DIAL_COOLDOWN_MS = 30_000
 // After a machine was refused or could not be reached, every pool answers its next selects from that failure
 // for 1 s, then 2, 4 … up to this, or for as long as the backend asked (its MACHINE_OFFLINE retry-after, 30 s),
