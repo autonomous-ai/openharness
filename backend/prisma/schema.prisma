@@ -260,6 +260,11 @@ model Machine {
   // overwrite-every-connect rule as `hostname`/`clientVersion`. Null when the upgrade did not come
   // through Cloudflare (local dev) or the row predates the field.
   countryCode                     String?
+  // When this machine's daemon was last seen on /api/adapter-ws: stamped on connect, on close, and at most every
+  // MACHINE_PRESENCE_WRITE_MS while the socket stays open (adapterWs.ts), so it lags real liveness by at most
+  // that. One overwritten value, never a history. Redis `machine:{id}:mgr` is still "online right now"; this
+  // answers "since when is it offline". Null on rows that have not connected since the field shipped.
+  lastSeenAt                      DateTime?
   // Billing lifecycle for newly-created campaign machines. Missing on old rows means legacy-active.
   // Grandfathered Remote machines are `not_required`; new paid Remote and managed machines move pending -> active only after
   // checkout verification. A cancelled paid subscription stays active until its period end, then
