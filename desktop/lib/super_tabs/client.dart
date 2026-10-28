@@ -237,6 +237,10 @@ class SuperTabClient {
   /// The last state of each Swarm closed here ([release]): a closed view
   /// still protects its Product Managers, without reading anything more.
   final _closedSnapshots = <String, SuperTabSnapshot>{};
+
+  /// How many times each Swarm was closed here: an open a close overtook
+  /// stops before it makes a controller.
+  final _closes = <String, int>{};
   SuperTabController? peek(String id) => _loaded[id];
   Iterable<SuperTabController> get loadedControllers => _loaded.values;
 
@@ -300,6 +304,7 @@ class SuperTabClient {
     _controllers.clear();
     _loaded.clear();
     _closedSnapshots.clear();
+    _closes.clear();
     if (account != null &&
         onTabs != null &&
         discoveryInterval > Duration.zero) {
@@ -455,14 +460,21 @@ class SuperTabClient {
     return SuperTabSnapshot.fromJson(parts.state);
   }
 
-  Future<SuperTabController> open(String id) =>
-      _controllers.putIfAbsent(id, () {
-        final generation = _generation;
-        return _open(id).catchError((Object failure, StackTrace stack) {
-          if (_generation == generation) _controllers.remove(id);
-          Error.throwWithStackTrace(failure, stack);
-        });
+  Future<SuperTabController> open(String id) => _controllers.putIfAbsent(
+    id,
+    () {
+      final generation = _generation;
+      late final Future<SuperTabController> opening;
+      opening = _open(id).catchError((Object failure, StackTrace stack) {
+        // An open since a close has its own entry.
+        if (_generation == generation && identical(_controllers[id], opening)) {
+          _controllers.remove(id);
+        }
+        Error.throwWithStackTrace(failure, stack);
       });
+      return opening;
+    },
+  );
 
   /// A tab closed here: its controller stops polling, notifying and saving,
   /// and the next [open] reads the Swarm afresh. What changed since the last
@@ -471,25 +483,18 @@ class SuperTabClient {
     if (_viewSaves.containsKey(id)) _saveView(id);
     final future = _controllers.remove(id);
     final loaded = _loaded.remove(id);
+    // One that has read nothing yet keeps what the last close kept.
     if (loaded?.snapshot case final snapshot?) _closedSnapshots[id] = snapshot;
     loaded?.dispose();
     if (loaded != null) unawaited(loaded.flush().catchError((Object _) {}));
-    if (future == null || loaded != null) return;
-    // Still opening: it is stopped once it lands. An open since has its own.
-    unawaited(
-      future
-          .then((c) async {
-            if (identical(_loaded[id], c)) _loaded.remove(id);
-            c.dispose();
-            await c.flush();
-          })
-          .catchError((Object _) {}),
-    );
+    // Still reading its saved state: that open stops ([_open]).
+    if (future != null && loaded == null) _closes[id] = (_closes[id] ?? 0) + 1;
   }
 
   Future<SuperTabController> _open(String id) async {
     final account = _account;
     final generation = _generation;
+    final closes = _closes[id];
     if (account == null) {
       throw const SuperTabFailure('SIGNED_OUT', 'Sign in to use Swarm.');
     }
@@ -497,6 +502,9 @@ class SuperTabClient {
     final raw = await storage.read(key);
     if (generation != _generation) {
       throw const SuperTabFailure('ACCOUNT_CHANGED', 'The account changed.');
+    }
+    if (_closes[id] != closes) {
+      throw const SuperTabFailure('CLOSED', 'This Swarm was closed.');
     }
     final saved = raw == null
         ? <String, dynamic>{}
@@ -539,6 +547,8 @@ class SuperTabClient {
         onSelection?.call(controller);
       }
       if (controller.snapshot case final snapshot?) {
+        // Its own state replaces what a close kept.
+        _closedSnapshots.remove(id);
         final change = (
           lastChangedAt: controller.lastChangedAt,
           mentionsWaiting: snapshot.mentionsWaiting,
@@ -562,7 +572,6 @@ class SuperTabClient {
       SuperTabDecisions.of(controller).addListener(changed);
     }
     _tagCounts.remove(id);
-    _closedSnapshots.remove(id);
     _loaded[id] = controller;
     void drawSaved(Map<String, dynamic>? view) {
       if (view != null && generation == _generation) {

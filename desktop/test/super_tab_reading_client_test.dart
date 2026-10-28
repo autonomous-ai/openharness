@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:fake_async/fake_async.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/super_tabs/client.dart';
@@ -63,15 +65,39 @@ class _Backend {
       paths.where((p) => Uri.parse(p).path == '/api/super-tabs/list').length;
 }
 
+/// Holds the next read of a Swarm's saved state until [release]d: an open
+/// that has not landed yet.
+class _HeldStore extends MemoryStore {
+  Completer<void>? _held;
+  bool _holdsNext = false;
+
+  void holdNextOpen() {
+    _held = Completer<void>();
+    _holdsNext = true;
+  }
+
+  void release() => _held!.complete();
+
+  @override
+  Future<String?> read(String key) async {
+    if (_holdsNext && key == 'super_tab.owner.tab') {
+      _holdsNext = false;
+      await _held!.future;
+    }
+    return super.read(key);
+  }
+}
+
 SuperTabClient _client(
   _Backend backend, {
+  MemoryStore? storage,
   SuperTabReading? reading,
   void Function(SuperTabMention)? onMention,
   void Function(SuperTabController)? onSnapshot,
 }) {
   final client = SuperTabClient(
     transport: backend.call,
-    storage: MemoryStore(),
+    storage: storage ?? MemoryStore(),
     onTabs: (_, _) {},
     onMention: onMention,
     onSnapshot: onSnapshot,
@@ -291,18 +317,92 @@ void main() {
     });
   });
 
-  test('a Swarm released while it opens stops once it has opened', () {
+  test('a Swarm released while it opens never reads; its open fails', () {
     fakeAsync((async) {
       final backend = _Backend();
       final client = _client(backend, reading: SuperTabReading.desktop)
         ..bind('owner');
-      client.open('tab');
+      Object? failure;
+      client.open('tab').then<void>((_) {}, onError: (Object e) => failure = e);
       client.release('tab');
-      async.elapse(const Duration(seconds: 1));
-      backend.paths.clear();
       async.elapse(const Duration(seconds: 10));
-      expect(backend.paths, isEmpty);
+      expect(backend.states('tab'), 0);
+      expect(
+        failure,
+        isA<SuperTabFailure>().having((f) => f.code, 'code', 'CLOSED'),
+      );
       expect(client.peek('tab'), isNull);
+      client.dispose();
+    });
+  });
+
+  test('a Swarm closed and opened again before its first open lands polls '
+      'once, with the new view', () {
+    fakeAsync((async) {
+      final backend = _Backend();
+      final storage = _HeldStore()..holdNextOpen();
+      final client = _client(
+        backend,
+        reading: SuperTabReading.desktop,
+        storage: storage,
+      )..bind('owner');
+      client.open('tab').ignore();
+      async.flushMicrotasks();
+      client.release('tab');
+      SuperTabController? reopened;
+      client.open('tab').then((c) => reopened = c);
+      async.elapse(const Duration(seconds: 1));
+      storage.release();
+      async.elapse(const Duration(seconds: 1));
+      expect(reopened, isNotNull);
+      expect(client.peek('tab'), same(reopened));
+      backend.paths.clear();
+      async.elapse(const Duration(seconds: 9));
+      expect(backend.states('tab'), 3);
+      client.dispose();
+    });
+  });
+
+  test('a Swarm closed again before its reopen lands still protects its '
+      'Product Manager', () {
+    fakeAsync((async) {
+      final backend = _Backend();
+      final server = backend.servers['tab']!;
+      server.state['agents'] = [
+        {
+          'id': 'pm',
+          'name': 'Quinn',
+          'machineId': 'm',
+          'harnessId': 'native-pm',
+          'contributorId': 'owner',
+          'configuration': {'engine': 'claude'},
+        },
+      ];
+      (server.state['conversations'] as List)[0]['leadId'] = 'pm';
+      final storage = _HeldStore();
+      final client = _client(
+        backend,
+        reading: SuperTabReading.desktop,
+        storage: storage,
+      )..bind('owner');
+      client.open('tab');
+      async.elapse(const Duration(seconds: 1));
+      client.release('tab');
+      expect(
+        client.leadProtectionReasonForHarness('m', 'native-pm'),
+        isNotNull,
+      );
+      storage.holdNextOpen();
+      client.open('tab').ignore();
+      async.flushMicrotasks();
+      client.release('tab');
+      storage.release();
+      async.elapse(const Duration(seconds: 10));
+      expect(client.peek('tab'), isNull);
+      expect(
+        client.leadProtectionReasonForHarness('m', 'native-pm'),
+        isNotNull,
+      );
       client.dispose();
     });
   });
