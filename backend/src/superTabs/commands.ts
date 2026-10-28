@@ -23,6 +23,7 @@ import { LEDGER_WEEKS, PULL_REQUEST_URL, recordAnswer, recordAsked, recordMerged
 import { WEEK_MS } from './leaderboard/week.js'
 import { react, reactionSchema, type ReactionTarget } from './reactions.js'
 import { shipNotice, shippedAt } from './ship.js'
+import { cancelledTags, cancelReason, unfinishedWork } from './tidy.js'
 import { avatarChoice, setAgentAvatar, setMemberAvatar, setStatus, statusSchema, type AvatarUpload } from './profile.js'
 import { agentKind, agentProjectId, audienceOf, agentSetRole, canReadProject, deleteProject, markConfidential, requireSingleRegistration, groupProject, inviteLanding, ledProject, manageProject, MAX_ROLES, mutableProjects, placeRules, projectMembers, projectOf, projectRules, projectsOf, readAgent, readConversation, readProject, roleVersion, sameProject, sharedWithLeads, SKILL_SET_NAMES, skillSetOf, type ProjectRole, type RoleKind, type SwarmProject } from './projects.js'
 
@@ -1148,6 +1149,9 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       const group = conversation(state, command.conversationId)
       if (group.id === groupProject(state, group).leadConversationId) fail('LEAD_CONVERSATION', 'The Lead conversation stays available.')
       if (command.archived && activeWork(group)) fail('WORK_ACTIVE', 'Resolve the active assignment before archiving this conversation.')
+      if (command.archived && unfinishedWork(group)) fail('WORK_UNFINISHED', 'This task did not finish. Hand it on, or cancel it with a reason, before archiving.')
+      const tags = command.archived && !group.archived ? cancelledTags(state, group, actor) : []
+      if (tags.length) message(group.id, `Archived without shipping: the task was cancelled${cancelReason(group) ? ` (${cancelReason(group)})` : ''}.`, [], null, SYSTEM_ROW, undefined, tags)
       group.archived = command.archived
       // Archived by hand, it leaves the active set until it is reopened (spec, Archive), once its reports are acknowledged:
       // until then the sweep leaves it in the active set, where the report check sees it (design section 3.6).
@@ -1798,14 +1802,15 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       }
       // A retry after the cancel keeps the first reason and tells the worker once.
       if (assignment.status === 'cancelled') break
-      const lost = assignment.status === 'lost'
-      if (!activeWork(group) && !lost) fail('ATTEMPT_CLOSED', 'This attempt has already ended.')
+      // A stopped task is unfinished too, and only a cancel closes it (tidy.ts unfinishedWork): its worker is finished already.
+      const lost = assignment.status === 'lost', stopped = assignment.status === 'stopped'
+      if (!activeWork(group) && !lost && !stopped) fail('ATTEMPT_CLOSED', 'This attempt has already ended.')
       // A removed worker (reconciling) can never confirm a stop, so this is the only way to close its task; nobody is left to tell.
       // A lost task's agent was told already that its task moved, and does not wait for a decision.
-      const gone = assignment.status === 'reconciling' || lost
+      const gone = assignment.status === 'reconciling' || lost || stopped
       assignment.status = 'cancelled'
       assignment.result = command.reason
-      if (!lost) finishWorker(state, assignment.agentId, group)
+      if (!lost && !stopped) finishWorker(state, assignment.agentId, group)
       message(group.id, `${isLead ? 'The Lead' : 'The tab owner'} cancelled this task: ${command.reason.replace(/[.\s]+$/, '')}.${gone ? '' : ' Stop working on it.'}`,
         gone ? [] : [assignment.agentId], null, SYSTEM_ROW)
       break

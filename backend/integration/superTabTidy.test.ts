@@ -9,6 +9,7 @@ import { PrismaClient } from '@prisma/client'
 import type { AuthUser } from '../src/lib/ssoAuth.js'
 import { SuperTabStore } from '../src/superTabs/store.js'
 import type { Command } from '../src/superTabs/commands.js'
+import type { Conversation } from '../src/superTabs/model.js'
 import type { MachineObservation } from '../src/superTabs/machines.js'
 import { poolRows, rosterRows } from './hostRows.test-support.js'
 import { archiveFinishedGroups, markFinishedGroups, type PullRequestState } from '../src/superTabs/archive.js'
@@ -198,7 +199,7 @@ describe('a finished group', () => {
     expect(prs.read).toContain(PR)
     expect(prs.closed).toBe(true)
     expect(await archiveLines(f)).toEqual([expect.objectContaining({ recipientIds: [],
-      text: 'Archived: the work is cancelled and its pull requests are merged or closed.' })])
+      text: 'Archived: the work is cancelled (Done elsewhere) and its pull requests are merged or closed.' })])
     // It never archives twice.
     f.clock.now += 40 * MINUTE
     await archiveFinishedGroups(db, f.timed, prs, f.clock.now)
@@ -222,6 +223,31 @@ describe('a finished group', () => {
     f.clock.now += 40 * MINUTE
     await archiveFinishedGroups(db, f.timed, github({}), f.clock.now)
     expect(await archived(f)).toBe(false)
+  })
+
+  it('stays open while its task is lost, even marked finished, so unfinished work never closes silently', async () => {
+    const f = await swarm()
+    const lost = String((await f.execute({ type: 'conversation.create', title: 'Round tabs', brief: 'Drop closed tabs', checks: [{ description: 'Verified', independent: false }] })).result.conversationId)
+    const worker = await f.add(lost, 'test-host', randomUUID(), 'Dial')
+    await f.execute({ type: 'work.assign', conversationId: lost, agentId: worker })
+    const part = await db.swarmGroup.findFirstOrThrow({ where: { tabId: f.tab, key: lost } })
+    const data = part.data as unknown as Conversation
+    await db.swarmGroup.update({ where: { id: part.id }, data: { workFinished: true,
+      data: { ...data, assignment: { ...data.assignment!, status: 'lost', lost: { reason: 'its model keeps failing', at: f.clock.now } } } as object } })
+    f.clock.now += 40 * MINUTE
+    await archiveFinishedGroups(db, f.timed, github({}), f.clock.now)
+    expect((await db.swarmGroup.findUniqueOrThrow({ where: { id: part.id } })).archived).toBe(false)
+    expect(await archived(f)).toBe(true)
+  })
+
+  it('tags the person who asked for a cancelled task, with the reason, when it archives', async () => {
+    const f = await swarm()
+    f.clock.now += 40 * MINUTE
+    await archiveFinishedGroups(db, f.timed, github({}), f.clock.now)
+    const [line] = await archiveLines(f)
+    expect(line).toMatchObject({ text: 'Archived: the work is cancelled (Done elsewhere).', mentions: [owner.sub] })
+    expect(await db.superTabMention.findMany({ where: { tabId: f.tab, conversationId: f.group } }))
+      .toEqual([expect.objectContaining({ personId: owner.sub, messageId: line!.id, resolvedAt: null })])
   })
 
   it('stays open once the owner turned tidying off, and never archives the Lead conversation', async () => {

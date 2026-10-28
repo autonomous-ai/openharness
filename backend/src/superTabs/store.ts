@@ -1904,6 +1904,7 @@ export class SuperTabStore {
       await tx.superTabDelivery.updateMany({ where: { tabId, conversationId: groupId, status: { in: [...OPEN_DELIVERY] } }, data: { updatedAt: new Date(now) } })
       await this.save(tx, loaded, state, clock.next())
       await this.writeMessages(tx, tabId, state, rows, sequences)
+      await writeMentions(tx, tabId, state, rows, now)
       return true
     })
   }
