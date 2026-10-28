@@ -24,6 +24,35 @@ import UserNotifications
     SignInPageChannel.register(with: engineBridge.pluginRegistry)
     HandoffChannel.register(with: engineBridge.pluginRegistry)
     ChimeChannel.register(with: engineBridge.pluginRegistry)
+    AppBadgeChannel.register(with: engineBridge.pluginRegistry)
+  }
+}
+
+/// `harness/app_badge` — the app icon's count (Dart: `setSwarmBadge` in `lib/notify/system_notices.dart`):
+/// what the Swarms ask of the person, the drawer's waiting count. `set` takes the count; zero takes it
+/// off. Drawn only where the person allowed badges with the notification prompt.
+enum AppBadgeChannel {
+  static func register(with registry: FlutterPluginRegistry) {
+    guard let messenger = registry.registrar(forPlugin: "HarnessAppBadge")?.messenger() else { return }
+    let channel = FlutterMethodChannel(name: "harness/app_badge", binaryMessenger: messenger)
+    channel.setMethodCallHandler { call, result in
+      guard call.method == "set" else { result(FlutterMethodNotImplemented); return }
+      guard let count = call.arguments as? Int, count >= 0 else {
+        result(FlutterError(code: "bad_count", message: "A count of zero or more.", details: nil))
+        return
+      }
+      if #available(iOS 16.0, *) {
+        // The completion can run off the main thread; Flutter is answered on it.
+        UNUserNotificationCenter.current().setBadgeCount(count) { error in
+          DispatchQueue.main.async {
+            result(error.map { FlutterError(code: "badge", message: $0.localizedDescription, details: nil) })
+          }
+        }
+      } else {
+        UIApplication.shared.applicationIconBadgeNumber = count
+        result(nil)
+      }
+    }
   }
 }
 

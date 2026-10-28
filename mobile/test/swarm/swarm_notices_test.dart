@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness_mobile/notify/system_notices.dart';
 import 'package:harness_mobile/swarm/model.dart';
@@ -149,6 +150,92 @@ void main() {
     expect(notices.cancelled, isEmpty);
   });
 
+  group("the app icon's count", () {
+    test('is the number of needs each read, as the drawer counts them', () {
+      final notices = _Recording();
+      final announcer = SwarmAnnouncer(notices, quiet: (_) => false);
+
+      announcer.settle([decision(), mention(), work('needs_human')]);
+      expect(notices.badges, [3]);
+
+      // Answered on the desktop.
+      announcer.settle([mention(), work('needs_human')]);
+      expect(notices.badges, [3, 2]);
+    });
+
+    test('is set on the first read even with nothing waiting', () {
+      // What an earlier run left on the icon goes.
+      final notices = _Recording();
+      SwarmAnnouncer(notices, quiet: (_) => false).settle(const []);
+      expect(notices.badges, [0]);
+    });
+
+    test('is not set again while it stays the same', () {
+      final notices = _Recording();
+      final announcer = SwarmAnnouncer(notices, quiet: (_) => false);
+
+      announcer.settle([decision()]);
+      announcer.settle([mention()]);
+
+      expect(notices.badges, [1]);
+    });
+
+    test('counts while a Swarm screen is up, where no notice is posted', () {
+      final notices = _Recording();
+      final announcer = SwarmAnnouncer(notices, quiet: (_) => true);
+
+      announcer.settle([decision(), mention()]);
+
+      expect(notices.badges, [2]);
+    });
+
+    test('clears when the account signs out', () {
+      final notices = _Recording();
+      final announcer = SwarmAnnouncer(notices, quiet: (_) => false);
+      announcer.settle([decision()]);
+
+      announcer.clear();
+
+      expect(notices.badges, [1, 0]);
+    });
+  });
+
+  group("the app icon's count while nobody is signed in", () {
+    test('goes as the app finds itself signed out, once each time', () {
+      final notices = _Recording();
+      final app = ValueNotifier('booting');
+      swarmBadgeOffWhileSignedOut(
+        app,
+        signedOut: () => app.value == 'signed out',
+        notices: notices,
+      );
+      expect(notices.badges, isEmpty, reason: 'not known yet');
+
+      // A launch that starts signed out never makes a Swarm session, whose
+      // end would have taken the last account's count off.
+      app.value = 'signed out';
+      expect(notices.badges, [0]);
+      app.notifyListeners();
+      expect(notices.badges, [0], reason: 'still signed out: once');
+
+      app.value = 'signed in';
+      expect(notices.badges, [0], reason: 'the session counts from here');
+
+      app.value = 'signed out';
+      expect(notices.badges, [0, 0]);
+    });
+
+    test('a launch already known to be signed out takes it off at once', () {
+      final notices = _Recording();
+      swarmBadgeOffWhileSignedOut(
+        ValueNotifier(0),
+        signedOut: () => true,
+        notices: notices,
+      );
+      expect(notices.badges, [0]);
+    });
+  });
+
   group('the tap', () {
     test('leads to the Swarm and conversation, never read as an agent', () {
       const target = (swarmId: 'tab-b', conversationId: 'g9');
@@ -183,6 +270,7 @@ void main() {
 class _Recording extends SilentSystemNotices {
   final shown = <SwarmNoticeMessage>[];
   final cancelled = <String>[];
+  final badges = <int>[];
 
   @override
   Future<void> showSwarm(SwarmNoticeMessage message) async =>
@@ -190,4 +278,7 @@ class _Recording extends SilentSystemNotices {
 
   @override
   Future<void> cancelSwarm(String key) async => cancelled.add(key);
+
+  @override
+  Future<void> setSwarmBadge(int count) async => badges.add(count);
 }

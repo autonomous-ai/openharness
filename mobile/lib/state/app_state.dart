@@ -84,6 +84,7 @@ import '../phone/phone_name_store.dart';
 import '../viewer/device_log.dart';
 import '../viewer/device_history.dart';
 import '../viewer/device_log_sync.dart';
+import '../swarm/swarm_notices.dart';
 import '../swarm/swarm_request.dart';
 
 enum AppStatus { bootstrapping, unauthenticated, authenticated }
@@ -11273,6 +11274,15 @@ final appStateProvider = Provider<AppNotifier>((ref) {
     configStore: ConfigStore(),
     paneLayoutStore: PaneLayoutStore(),
   );
+  // The app icon's Swarm count: a launch that starts signed out has no
+  // Swarm session to take the last account's number off.
+  if (app.agentNotices.system case final SwarmNotices notices) {
+    swarmBadgeOffWhileSignedOut(
+      app,
+      signedOut: () => app.status == AppStatus.unauthenticated,
+      notices: notices,
+    );
+  }
   app.bootstrap();
   return app;
 });
