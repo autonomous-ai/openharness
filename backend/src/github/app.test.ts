@@ -158,6 +158,10 @@ describe('installation tokens', () => {
     const asked = github.calls.filter(c => c.path.startsWith('/users/'))
     expect(asked).toEqual([expect.objectContaining({ method: 'GET', path: '/users/harness-fixture%5Bbot%5D', auth: '' })])
     // With no app name configured, the app's own answer names it.
+    // With a token, asked with it: unsigned requests from a server's shared address can be refused (PR #1948).
+    const signed = setup()
+    await signed.app.commitIdentity('ghs_issued')
+    expect(signed.github.calls.find(c => c.path.startsWith('/users/'))?.auth).toBe('Bearer ghs_issued')
     const unnamed = setup({ slug: null })
     expect(await unnamed.app.commitIdentity()).toMatchObject({ name: 'harness-fixture[bot]' })
     expect(unnamed.github.calls.map(c => c.path)).toEqual(['/app', '/users/harness-fixture%5Bbot%5D'])

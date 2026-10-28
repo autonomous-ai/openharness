@@ -50,9 +50,28 @@ describe('attachment bucket credentials', () => {
     expect(attachmentsFromEnv({ ...env(''), NODE_ENV: 'production' })?.publicBase).toBe('https://cdn.example.test')
   })
 
-  it('keeps avatars off without a private bucket, and never in the public one', () => {
-    expect(attachmentsFromEnv(env(encoded(key)))?.avatars).toBeNull()
-    expect(attachmentsFromEnv(env(encoded(key), 'attachments', 'avatars'))?.avatars).toBeInstanceOf(GcsAvatarStore)
+  // Prod has the attachments bucket only (Ken, 2026-10-28): avatars live there under their own folder and are linked on
+  // its CDN like chat files, so nothing is signed (no signing permission is needed either).
+  it('keeps avatars in the attachments bucket under avatars/, on its CDN, without a bucket of their own', async () => {
+    const shared = attachmentsFromEnv(env(encoded(key)))!
+    expect(shared.avatarPrefix).toBe('avatars')
+    expect(await shared.avatars!.signedUrl('avatars/tab/0123/avatar', Date.now() + 3_600_000)).toBe('https://cdn.example.test/avatars/tab/0123/avatar')
+    const bucket = await (shared.avatars as unknown as { store: { files(): Promise<import('@google-cloud/storage').Bucket> } }).store.files()
+    expect(bucket.name).toBe('attachments')
+  })
+
+  it('lets a dedicated avatar bucket win, under the attachments prefix as before', () => {
+    const dedicated = attachmentsFromEnv(env(encoded(key), 'attachments', 'avatars'))!
+    expect(dedicated.avatars).toBeInstanceOf(GcsAvatarStore)
+    expect(dedicated.avatarPrefix).toBe('super-tabs')
+  })
+
+  it('refuses at startup a chat-file prefix that would put chat files in the avatar folder', () => {
+    for (const prefix of ['avatars', '/avatars/', 'avatars/chat']) {
+      expect(() => attachmentsFromEnv({ ...env(''), SUPER_TAB_ATTACHMENTS_PREFIX: prefix })).toThrow('SUPER_TAB_ATTACHMENTS_PREFIX')
+    }
+    // With a bucket of their own, the folders never meet.
+    expect(attachmentsFromEnv({ ...env('', 'attachments', 'pictures'), SUPER_TAB_ATTACHMENTS_PREFIX: 'avatars' })).not.toBeNull()
   })
 
   it('signs an avatar link with the configured key, for a limited time, without a network call', async () => {

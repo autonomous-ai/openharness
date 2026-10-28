@@ -3,6 +3,8 @@
 /// them; a value this build does not know reads as absent.
 library;
 
+import 'attachment_upload.dart' show kSuperTabAttachmentHost;
+
 /// What a member or agent shows instead of the default.
 sealed class SuperTabAvatarPicture {
   const SuperTabAvatarPicture();
@@ -25,8 +27,10 @@ const kSuperTabAvatarHost = String.fromEnvironment(
   defaultValue: 'storage.googleapis.com',
 );
 
-/// A picture someone uploaded, through the signed link a member read carries:
-/// https on the avatar host only, never a public or outside address.
+/// A picture someone uploaded, through the link a member read carries: https,
+/// and only on the avatar host (a private bucket's signed link) or the chat
+/// files' CDN (a server without an avatar bucket keeps pictures there, Ken
+/// 2026-10-28). Never an outside address.
 class SuperTabUploadedAvatar extends SuperTabAvatarPicture {
   const SuperTabUploadedAvatar._(this.url);
   final Uri url;
@@ -35,7 +39,8 @@ class SuperTabUploadedAvatar extends SuperTabAvatarPicture {
     final url = Uri.tryParse(value);
     return url != null &&
             url.scheme == 'https' &&
-            url.host == kSuperTabAvatarHost
+            (url.host == kSuperTabAvatarHost ||
+                url.host == kSuperTabAttachmentHost)
         ? SuperTabUploadedAvatar._(url)
         : null;
   }
