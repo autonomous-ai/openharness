@@ -130,6 +130,25 @@ export interface WorkTask {
   changes: string
   constraints: string
   owns: string[]
+  requires?: TaskRequirement
+}
+/** Where a task can be done at all (2026-10-27: a task to check a device plugged into one person's Mac was routed to another
+ *  machine by policy order). `machines`: it runs only there, or on a Mac's Harness Team account of one of them. `devices`:
+ *  full paths every start for it asks its machine to check (cli superTabs/capacity.ts). Never in the rendered brief, since
+ *  a reader may not see the machine. A reader is handed only the machines they see, and how many others (`unseenMachines`). */
+export interface TaskRequirement { machines?: string[]; devices?: string[]; unseenMachines?: number }
+
+/** The machines a reader sees: listed in their visible state, or running an agent they see. */
+export const seenMachineIds = (visible: Pick<SuperTabState, 'machines' | 'agents'>): Set<string> =>
+  new Set([...(visible.machines ?? []).map(m => m.machineId), ...visible.agents.map(a => a.machineId)])
+
+/** [group] with its requirement as a reader who sees [seen] may read it. The same group read again gives the same result. */
+export function withSeenRequirement<T extends Pick<Conversation, 'task'>>(group: T, seen: ReadonlySet<string>): T {
+  const requires = group.task?.requires
+  if (!requires?.machines?.some(id => !seen.has(id))) return group
+  const machines = requires.machines.filter(id => seen.has(id))
+  return { ...group, task: { ...group.task!, requires: { ...requires, machines,
+    unseenMachines: (requires.unseenMachines ?? 0) + requires.machines.length - machines.length } } }
 }
 
 export function renderWorkTask(task: WorkTask): string {
@@ -517,5 +536,7 @@ export function visibleState(state: SuperTabState, actor: Actor, now = Date.now(
     else delete target.roleId
   }
   if (actor.kind !== 'person' || actor.userId !== state.ownerId) visible.invitations = []
+  const seen = seenMachineIds(visible)
+  visible.conversations = visible.conversations.map(c => withSeenRequirement(c, seen))
   return visible
 }
