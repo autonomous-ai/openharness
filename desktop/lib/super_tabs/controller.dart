@@ -571,11 +571,16 @@ class SuperTabController extends ChangeNotifier {
   /// Draws a [savedView] kept from an earlier visit while the first read is
   /// on its way, and holds its parts: the first read asks only for what
   /// changed since, and replaces it. With [SuperTabReading.confirmsSaved] it
-  /// only holds them, for that read to draw. One for another Swarm, one too old for
-  /// its cursor, one that no longer parses, or one after a read has landed,
-  /// draws nothing.
+  /// only holds them, for that read to draw. One for another Swarm, one too
+  /// old for its cursor, one that no longer parses, or one after a read has
+  /// landed or been refused, draws nothing.
   void drawSaved(Map<String, dynamic> view) {
-    if (!_policy.drawsSaved || snapshot != null || stateReads > 0) return;
+    if (!_policy.drawsSaved ||
+        accessRevoked ||
+        snapshot != null ||
+        stateReads > 0) {
+      return;
+    }
     try {
       if (view['format'] != superTabReadFormat) return;
       final savedAt = DateTime.fromMillisecondsSinceEpoch(

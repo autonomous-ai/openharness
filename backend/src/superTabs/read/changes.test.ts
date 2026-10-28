@@ -115,4 +115,19 @@ describe('changes since a cursor (design 4.4)', () => {
     expect(receive(fresh, changed, peer).progress).toEqual([{ key: 'lead', version: R + 1, changedAt: LATER,
       data: { since: 1, summarizedFloor: 0, summarized: {}, requestedFloor: 0, requested: {}, requestedAt: null } }])
   })
+
+  it('hands a reader only the required machines they see, whole and in changes', () => {
+    const { s } = scene()
+    // Only an agent of the private project runs on 'secret-mac', so the peer does not see that machine.
+    s.add('secret-harness', s.secretGroup, false, owner, 'secret-mac')
+    s.run({ type: 'work.define', conversationId: s.done, task: { goal: 'Check the device', changes: 'None', constraints: 'None', owns: ['devices'],
+      requires: { machines: ['secret-mac', 'mac'] } }, checks: [{ description: 'It answers.', independent: false }] })
+    const fresh = store.split(s.state, { tabId: 'tab', version: R, now: NOW })
+    const requires = (groups: Array<{ key: string }>) => (groups.find(g => g.key === s.done) as unknown as { data: { task: { requires: unknown } } }).data.task.requires
+    expect(requires(readerView(fresh, owner, LATER, { teamMachines: [] }).parts.groups)).toEqual({ machines: ['secret-mac', 'mac'] })
+    expect(requires(readerView(fresh, peer, LATER, { teamMachines: [] }).parts.groups)).toEqual({ machines: ['mac'], unseenMachines: 1 })
+    const changed = [write(fresh, 'groups', s.done, () => {})]
+    expect(requires(receive(fresh, changed, peer).groups)).toEqual({ machines: ['mac'], unseenMachines: 1 })
+    expect(requires(receive(fresh, changed, owner).groups)).toEqual({ machines: ['secret-mac', 'mac'] })
+  })
 })

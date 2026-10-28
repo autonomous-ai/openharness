@@ -28,6 +28,7 @@ import { NativeFiles } from '../../engines/kit/nativeFiles.js'
 import { agentLaunchArgs } from '../../lib/agentAttribution.js'
 import { WindowsBatchLaunchRefused } from '../../lib/windows/launch.js'
 import { swarmGitHubLaunch } from '../../lib/swarmGitHub.js'
+import { SWARM_LAUNCH } from '../../superTabs/inCore/launch.js'
 
 vi.mock('../../lib/projectFolder.js', async real => {
   const actual = await real<typeof import('../../lib/projectFolder.js')>()
@@ -153,6 +154,7 @@ function setup(over: Partial<CreateAgentDeps> = {}) {
     gridSetup: vi.fn(() => vi.fn(async () => ({}))) as never,
     privateGridName: vi.fn(async () => 'grid-me'),
     dshLaunch: { launch: launchDsh, materialize: async () => ({ ok: true, ...await materializeWorkspace() }) },
+    swarmLaunch: SWARM_LAUNCH,
     ...over,
   }
   return { deps, create: createAgentCreator(deps) }
@@ -259,6 +261,19 @@ describe('creating an agent', () => {
     expect(await setup().create(request({ cwd: folder(), swarmRole: 'dev', swarmGitHub: true })))
       .toMatchObject({ ok: false, error: 'SWARM_SKILL_FAILED', detail: 'Error: fixture disk full' })
     expect(createAndRegisterPane).not.toHaveBeenCalled()
+  })
+
+  // HARNESS_SWARM=off: the core holds none of the Swarm's launch code, so a start that asks for a Swarm role is
+  // refused before anything is written or launched, and every other start is as it was.
+  it('refuses a Swarm role while the Swarm is off, before opening a pane, and starts everything else as before', async () => {
+    acceptFullMode.mockClear()
+    const off = setup({ swarmLaunch: undefined })
+    expect(await off.create(request({ cwd: folder(), swarmRole: 'dev' })))
+      .toEqual({ ok: false, error: 'SWARM_SKILL_FAILED', detail: 'The Swarm is off on this computer (HARNESS_SWARM).' })
+    expect(createAndRegisterPane).not.toHaveBeenCalled()
+    expect(acceptFullMode).not.toHaveBeenCalled()
+    expect(await off.create(request({ cwd: folder() }))).toMatchObject({ ok: true })
+    expect(vi.mocked(createAndRegisterPane).mock.calls[0]![0]).not.toHaveProperty('swarmSkill')
   })
 
   it('refuses an unsafe Swarm runtime before opening a pane', async () => {

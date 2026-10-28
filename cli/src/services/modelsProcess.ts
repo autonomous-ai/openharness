@@ -22,6 +22,7 @@ import { parseGridLaunchOverride, type GridLaunchRequest } from '../lib/gridLaun
 import { ENGINES, type AgentEngine } from '../engines/types.js'
 import { gridGlances, onGridModelsChanged } from '../lib/gridModels.js'
 import type { RuntimeModelOption } from '../lib/runtimeProfile.js'
+import type { SwarmServices } from '../serviceProcess.js'
 import { startModels } from './models.js'
 import { runServiceProcess, type CoreConnection, type ServiceProcess } from './process.js'
 import { UNASKED } from './processCoreApi.js'
@@ -37,6 +38,8 @@ export interface ModelsServiceOptions {
   run?: typeof runServiceProcess
   /** Swapped in tests for models that read no grid and start nothing. */
   start?: typeof startModels
+  /** The Swarm's side of this service, while the Swarm is on (serviceProcess.ts, superTabs/inServices.ts). */
+  swarm?: SwarmServices
   /** Every grid at a glance, and being told when that changes: the pictures', unless a test says. */
   glances?: () => GridGlance[]
   onChanged?: (listener: () => void) => () => void
@@ -151,7 +154,7 @@ export function runModelsService(options: ModelsServiceOptions): ServiceProcess 
   const ask = (query: string, payload: Payload = {}): Promise<Payload> =>
     core ? core.query(query, payload) : Promise.reject(new Error('not connected to the core'))
   const ports = emptyPorts()
-  const requests = (options.start ?? startModels)(modelsCoreApi(options.dataDir, ask), ports)
+  const requests = (options.start ?? startModels)(modelsCoreApi(options.dataDir, ask), ports, options.swarm)
   if (!ports.models) throw new Error('models did not start')
   const models = ports.models
 

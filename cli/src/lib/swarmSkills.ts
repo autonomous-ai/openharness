@@ -3,25 +3,11 @@ import { ignoreHarnessRuntime } from './harnessRuntimeIgnore.js'
 import { createHash, randomUUID } from 'node:crypto'
 import { existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, renameSync, writeFileSync } from 'node:fs'
 import { join, relative, sep } from 'node:path'
+import { isSwarmRole, isSwarmSkillMode, parseSwarmSkill, type SwarmRole, type SwarmSkill, type SwarmSkillGrant, type SwarmSkillMode } from './savedSkill.js'
 
-export type SwarmRole = 'lead' | 'dev' | 'review'
-/** A Swarm project's skill set, which its owner chooses (2026-10-23): Default is the team process alone, Harness orchestration
- * adds Harness practices. A session saved without one launched before modes, on the orchestration text. */
-export type SwarmSkillMode = 'default' | 'orchestration'
-/** `github`: git and gh in this session use the Harness GitHub App's token for its task (lib/swarmGitHub.ts), set when a
- *  start does another person's project work (superTabs/start.ts) and kept for every relaunch. */
-export interface SwarmSkill { role: SwarmRole; key: string; mode?: SwarmSkillMode; github?: true }
-/** What a session's current Swarm membership grants it, before it has a key. */
-export type SwarmSkillGrant = Omit<SwarmSkill, 'key' | 'github'>
-export const isSwarmRole = (value: unknown): value is SwarmRole => value === 'lead' || value === 'dev' || value === 'review'
-export const isSwarmSkillMode = (value: unknown): value is SwarmSkillMode => value === 'default' || value === 'orchestration'
-
-export function parseSwarmSkill(value: unknown): SwarmSkill | undefined {
-  if (!value || typeof value !== 'object') return undefined
-  const { role, key, mode, github } = value as Partial<SwarmSkill>
-  return isSwarmRole(role) && typeof key === 'string' && key.length > 0
-    ? { role, key, ...(isSwarmSkillMode(mode) ? { mode } : {}), ...(github === true ? { github } : {}) } : undefined
-}
+// The saved record's shape and parse live with the registry's rows (lib/savedSkill.ts), which load without the Swarm.
+export { isSwarmRole, isSwarmSkillMode, parseSwarmSkill }
+export type { SwarmRole, SwarmSkill, SwarmSkillGrant, SwarmSkillMode }
 
 /** The owner's texts, used verbatim. */
 const orchestration: Record<SwarmRole, string> = {
@@ -113,6 +99,7 @@ For large work, post the group plan and get the owner's ok before assigning; onc
 - Match strength to work: mechanical → cheaper; integration and judgment → standard; design or subtle risk → strongest. A review is at least as strong as the build. Don't go below the standard tier for Reviewers, or for Builders working from prose; the cheapest models take more turns and end up costing more.
 - Reuse an idle agent before starting a new one. Start only on the Swarm's listed machines, from the branch the work builds on.
 - Local models: when the Swarm serves one (a member's model, a shared API, a model shared with a member), the route may pick it for low-difficulty, well-specified work; it costs no subscription. Set "local":true in the route only when a person asks for a local model. When a person names a model, set "model" to their words ("deepseek 4.1 flash"): the route then offers that model alone. Start the pick with the gridModel and gridName the route gives, never a model or effort.
+- A failed start is retried elsewhere or reported, never left: when one fails, resume it; it starts once on the route's next machine, or tells the group and its requester.
 - The brief is all a Builder gets. Never pass your chat history; put everything needed in the brief.
 - Before assigning, look at other projects' active work; if your task touches the same code, say so in the Leads conversation and agree an order first.
 
@@ -400,6 +387,7 @@ Keep each Builder's list a few tasks deep; do the easy, self-contained parts fir
 - Route each group; reuse an idle agent before starting one; start only on the Swarm's machines.
 - With 3 or more groups waiting, run plan first: it places them all at once on the best machines and models. Then route each group in the plan's order and start the plan's pick, with overrideReason "scheduler plan" when the route picks otherwise. If plan cannot run here, route as usual.
 - Local models: the route may pick one for low-difficulty, well-specified work; set "local":true only when a person asks for one, set "model" to a model a person names, and start it with the route's gridModel and gridName.
+- A failed start is retried elsewhere or reported, never left: when one fails, resume it; it starts once on the route's next machine, or tells the group and its requester.
 - The brief is all a Builder gets; never rely on chat history.
 - Before assigning, look at other projects' active work; if your task touches the same code, say so in the Leads conversation and agree an order first.
 
