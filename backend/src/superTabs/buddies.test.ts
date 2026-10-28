@@ -490,3 +490,45 @@ describe('a decision left to the PM while Buddies are on', () => {
     expect(delegate()).toEqual([expect.objectContaining({ conversationId: f.chat, recipients: [], text: 'PM decided: To everyone — Ship how?' })])
   })
 })
+
+describe('starting a down Buddy again', () => {
+  /** fresh() with peer's Buddy started and settled on peer's Mac. */
+  function running() {
+    const f = fresh()
+    const added = addBuddy(f, peer, f.app.projectId)
+    const host = { contribution: { machineOwnerId: 'peer', contributorId: 'peer' } }
+    const agentId = f.run({ type: 'agent.started', startId: added.result.startId as string, harnessId: 'native', configuration }, peer, host).result.agentId as string
+    f.run({ type: 'agent.startSettled', startId: added.result.startId as string, warning: null }, peer, host)
+    return { f, chat: added.result.conversationId as string, agentId }
+  }
+
+  it('replaces the person\'s own down Buddy in one step, closing its session and keeping the same chat', () => {
+    const { f, chat, agentId } = running()
+    f.state.agents.find(a => a.id === agentId)!.downSince = new Date(500).toISOString()
+    const again = addBuddy(f, peer, f.app.projectId)
+    expect(again.result.conversationId).toBe(chat)
+    expect(again.cancelledAgents).toEqual([agentId])
+    expect(f.state.agents.map(a => a.id)).not.toContain(agentId)
+    expect(f.state.closingSessions).toEqual([{ agentId, machineId: 'peer-mac', harnessId: 'native', machineOwnerId: 'peer' }])
+    expect(f.state.starts!.find(s => s.id === again.result.startId)!.request).toMatchObject({ conversationId: chat, buddyOf: { personId: 'peer' } })
+    expect(group(f, chat).agentIds).toEqual([])
+  })
+
+  it('counts a Buddy as down when its machine stopped reporting', () => {
+    const { f, agentId } = running()
+    const late = 1000 + 10 * 60_000
+    expect(() => f.run({ type: 'buddy.create', projectId: f.app.projectId, machineId: 'peer-mac', engine: 'claude' }, peer,
+      { now: late, contribution: { machineOwnerId: 'peer', contributorId: 'peer' } })).toThrow()
+    expect(f.state.agents.map(a => a.id)).toContain(agentId)
+    f.state.machines!.push({ ...structuredClone(f.state.machines![0]!), machineId: 'spare-mac', observation: { ...structuredClone(f.state.machines![0]!.observation!), receivedAt: late } })
+    const again = f.run({ type: 'buddy.create', projectId: f.app.projectId, machineId: 'spare-mac', engine: 'claude' }, peer,
+      { now: late, contribution: { machineOwnerId: 'peer', contributorId: 'peer' } })
+    expect(again.cancelledAgents).toEqual([agentId])
+  })
+
+  it('still refuses while the Buddy runs', () => {
+    const { f, agentId } = running()
+    expect(() => addBuddy(f, peer, f.app.projectId)).toThrow('You already have a Buddy in this project')
+    expect(f.state.agents.map(a => a.id)).toContain(agentId)
+  })
+})

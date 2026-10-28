@@ -1,4 +1,4 @@
-import { admitMachineStart, expireRemoval, expireRemovals, failTeamWork, removalEnded, machineContribution, machineOffline, ownedMachine, projectFolder, requireTeamWork, teamMachineFor, teamPoolsOf, teamStartRequest, teamWorkCheck, type ContributedMachine } from './machines.js'
+import { admitMachineStart, downSince, expireRemoval, expireRemovals, failTeamWork, removalEnded, machineContribution, machineOffline, ownedMachine, projectFolder, requireTeamWork, teamMachineFor, teamPoolsOf, teamStartRequest, teamWorkCheck, type ContributedMachine } from './machines.js'
 import { assignAgentDisplayNames } from './agentNames.js'
 import { z } from 'zod'
 import {
@@ -1361,10 +1361,13 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       if (state.paused) fail('PAUSED', 'New work is paused in this Super Tab.')
       const project = readProject(state, actor, command.projectId), me = person(state, actor.userId)
       const chatId = buddyChatId(project.id, me)
-      if (state.agents.some(a => a.buddyOf?.personId === me.id && agentProjectId(state, a) === project.id)
-        || state.starts?.some(s => s.request.conversationId === chatId && !s.harnessId && !s.error)) {
+      // A down Buddy is replaced (Desktop's Start again, review of #1992): its session closes in this same command, so a
+      // start refused below leaves it as it was. A running or starting one is kept.
+      const existing = state.agents.find(a => a.buddyOf?.personId === me.id && agentProjectId(state, a) === project.id)
+      if ((existing && !downSince(state, existing, context.now)) || state.starts?.some(s => s.request.conversationId === chatId && !s.harnessId && !s.error)) {
         fail('BUDDY_EXISTS', 'You already have a Buddy in this project. Remove it to add another.')
       }
+      if (existing) removeAgent(existing)
       // A Buddy runs where the Swarm's agents run, under that machine's own rules: its Machines list.
       const pool = machineContribution(state, command.machineId) ?? fail('BUDDY_MACHINE', 'Add this machine to the Swarm first: a Buddy runs on one of its machines.', 403)
       const grant = context.contribution ?? fail('HOST_REQUIRED', 'Choose a machine shared with the contributor.', 403)

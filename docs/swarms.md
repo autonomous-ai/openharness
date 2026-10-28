@@ -206,7 +206,8 @@ chats stay for their owners to read.
 - Nobody else reads a Buddy chat: not the product manager, and not the project's or the Swarm's owner. Private matters
   stay there; the Buddy posts only what its owner asks it to send.
 - Removing a Buddy, the owner leaving the Swarm, or deleting the project closes its session. Adding a Buddy again
-  reopens the same chat. The idle tidy-up leaves Buddies alone: a Buddy waits for its owner.
+  reopens the same chat. Adding one while the person's Buddy there is down replaces it in one step, in the same chat;
+  while it runs or starts, adding another is refused. The idle tidy-up leaves Buddies alone: a Buddy waits for its owner.
 - While Buddies are on, Chat with PM is read-only. Nobody opens a new one or posts in an old one, the product manager
   included, and old history stays readable. To talk to the product manager, people use the project chat.
 
