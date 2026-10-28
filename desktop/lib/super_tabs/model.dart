@@ -85,7 +85,8 @@ class SuperTabAgent {
   final String machineOwnerId;
 
   /// Its session read private chats: a Product Manager, now or before, or an agent in a private chat. Only the person
-  /// whose computer runs it may watch it; its computer refuses every share (backend projects.ts `canWatchAgent`).
+  /// whose computer runs it may watch it, but every member watches the current Product Manager, view only
+  /// (backend projects.ts `watchClosed`, terminal_unavailable.dart `superTabTerminalPrivate`).
   final bool confidential;
   // Keep the legacy default for callers while allowing group-based roster ownership.
   final bool hasProjectId;

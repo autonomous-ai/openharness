@@ -183,11 +183,18 @@ export function markConfidential(state: SuperTabState): void {
   for (const target of state.agents) if (!target.confidential && confidentialSession(state, target)) target.confidential = true
 }
 
-/** Who may watch an agent's terminal: observe it, hold a share of it, read or type in it. A confidential session's screen and
- *  scrollback hold people's private chats, so only the person whose machine runs it may, owners included. `elsewhere`: the
- *  same session is confidential in another Swarm (confidential.ts). Any other agent: every reader of its project, as before. */
+/** Whether a session's terminal is closed to watching in this Swarm. A confidential session's screen and scrollback hold
+ *  people's private chats, so only the person whose machine runs it watches it, owners included. The project's current Lead is
+ *  the exception, view only (Ken, 2026-10-28): every reader of its project watches it, the private chats it is in included.
+ *  It stays marked, so a former Lead, another Swarm and an ordinary share still find it closed. `elsewhere`: the session is
+ *  confidential in another Swarm (confidential.ts), whose chats are not this Swarm's to read. */
+export const watchClosed = (state: SuperTabState, target: Agent, elsewhere = false): boolean =>
+  elsewhere || (isConfidential(state, target) && !ledProject(state, target.id))
+
+/** Who may watch an agent's terminal: observe it or hold a share of it. Reading or typing in it on request is closed by
+ *  `isConfidential` alone (terminal.ts mayDrive). Any other agent: every reader of its project, as before. */
 export function canWatchAgent(state: SuperTabState, actor: Actor, target: Agent, elsewhere = false): boolean {
-  return canReadAgent(state, actor, target) && (!isConfidential(state, target, elsewhere) || ownSession(actor, target))
+  return canReadAgent(state, actor, target) && (!watchClosed(state, target, elsewhere) || ownSession(actor, target))
 }
 
 /** Whether someone who could watch an agent's terminal before a commit cannot after it (canWatchAgent, by the session the
@@ -196,11 +203,11 @@ export function canWatchAgent(state: SuperTabState, actor: Actor, target: Agent,
 export function watchingNarrowed(before: SuperTabState, after: SuperTabState): boolean {
   const session = (a: Agent) => `${a.machineId}\n${a.harnessId}\n${a.machineOwnerId}`
   const now = new Map(after.agents.map(a => [session(a), a]))
-  // canWatchAgent per person, with the agent's confidentiality read once per state.
+  // canWatchAgent per person, with whether the agent is closed read once per state.
   const watchers = (state: SuperTabState, target: Agent) => {
-    const confidential = isConfidential(state, target)
+    const closed = watchClosed(state, target)
     return state.people.map(p => ({ kind: 'person' as const, userId: p.id, email: p.email }))
-      .filter(actor => canReadAgent(state, actor, target) && (!confidential || ownSession(actor, target)))
+      .filter(actor => canReadAgent(state, actor, target) && (!closed || ownSession(actor, target)))
   }
   return before.agents.some(target => {
     const was = watchers(before, target)
