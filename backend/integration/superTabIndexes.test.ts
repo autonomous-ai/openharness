@@ -210,6 +210,22 @@ describe('terminal context revoke', () => {
     expect((await db.superTabDelivery.findUniqueOrThrow({ where: { id: 'turn' } })).status).toBe('cancelled')
   })
 
+  // A session in a private conversation reads it (projects.ts confidentialSession): only its machine's owner may watch or drive it
+  // from then on. A command can no longer put a Builder there; a session marked before that rule, or made so by the shared
+  // rule's next change, is revoked through the same watchersLost comparison.
+  it('revokes at once everyone\'s terminals on an agent that joins a private conversation, but its machine\'s owner\'s', async () => {
+    await db.superTabNativeContext.deleteMany({})
+    const { s, open } = scene()
+    const worker = s.add('builder-harness', open, false, peer, 'host', peer.userId)
+    await db.superTabNativeContext.createMany({ data: [{ ...context('peer-worker', open, peer.userId), agentId: worker },
+      { ...context('outsider-worker', open, outsider.userId), agentId: worker }, { ...context('owner-worker', open, s.state.ownerId), agentId: worker }] })
+    const before = structuredClone(s.state) as SuperTabState
+    const chat = s.run({ type: 'conversation.create', title: 'Private', brief: '', checks: [], audience: { personIds: [peer.userId] } }, peer).conversationId as string
+    s.edit(state => { state.conversations.find(c => c.id === chat)!.agentIds.push(worker) })
+    await revokeNativeContexts(db, before, s.state)
+    expect(await revoked()).toEqual(['outsider-worker', 'owner-worker'])
+  })
+
   it('revokes the contexts of a person made a viewer', async () => {
     await db.superTabNativeContext.deleteMany({})
     const { s, open } = scene()
