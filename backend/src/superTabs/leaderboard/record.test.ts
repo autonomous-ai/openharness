@@ -417,6 +417,16 @@ describe('other ways a person unblocks work: decisions, approvals and tags', () 
     expect(f.group(id).ledger?.waiting?.answeredAt).toBe(2 * HOUR)
   })
 
+  it('counts a needs-human ask once when its person posts an answer before answering its decision', () => {
+    const f = fixture(), id = f.create(), { worker, assignmentId } = f.assign(id)
+    f.at(HOUR)
+    f.status(id, assignmentId, worker, 'needs_human', 'Flag?')
+    f.at(2 * HOUR)
+    f.say(id, owner, 'Flag.')
+    f.run({ type: 'decision.answer', decisionId: 'decision-1', choice: 0 }, owner, { decision: decision(id, { createdAt: HOUR, assignmentId }) })
+    expect(f.group(id).ledger?.unblocks).toEqual([expect.objectContaining({ kind: 'needs_human' })])
+  })
+
   it('leaves a wait open when the decision answered belongs to another attempt', () => {
     const f = fixture(), id = f.create(), { worker, assignmentId } = f.assign(id)
     f.status(id, assignmentId, worker, 'needs_human', 'Flag?')

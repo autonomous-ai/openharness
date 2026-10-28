@@ -8,8 +8,8 @@ import { WEEK_MS } from './week.js'
 import type { UnblockKind } from './contract.js'
 
 /** How a person unblocked work (Dee, 2026-10-28): answered a decision, approved the Lead's plan, answered work waiting on them,
- *  or replied to a tag. `item`: what was answered (the decision, the Lead's ask, the waiting question or the tag message), credited once. Absent
- *  from answers recorded before kinds, which were all answers to waiting work. */
+ *  or replied to a tag. `item`: what was answered (the decision, the Lead's ask, the waiting question or the tag message),
+ *  credited once. Both are absent from answers recorded before kinds, which were all answers to waiting work. */
 export interface Unblock { personId: string; at: number; waitedMs: number; kind?: UnblockKind; item?: string }
 /** One attempt at a group's work: what it ran on and whether its first review passed (roadmap, Dec: about 30% of work on
  *  cheaper models without lower quality). `grid`: a model served on the Swarm's grid, named by its start, since the engine
@@ -101,12 +101,14 @@ export function approves(text: string): boolean {
   return /^(go|approved?|duyet)(?![\p{L}\p{N}])/u.test(plain)
 }
 
-/** The person asked answered a decision: credited from when it was asked. A decision a worker asked through needs_human
- *  answers that wait too, so a post after it is not a second answer. */
+/** The person asked answered a decision: credited from when it was asked. A decision a worker asked through needs_human is
+ *  that wait's question, asked in the same command (same time): answering it answers the wait, and once the wait is answered,
+ *  by a post or this decision, the other earns nothing more. */
 export function recordDecision(group: Conversation, decision: { id: string; personId: string; createdAt: number; assignmentId: string | null }, now: number): void {
   if (group.audience || isLeads(group)) return
   const waiting = group.ledger?.waiting
-  if (decision.assignmentId && waitsNow(group) && waiting?.assignmentId === decision.assignmentId && group.assignment?.id === decision.assignmentId) {
+  if (decision.assignmentId && waiting?.assignmentId === decision.assignmentId && waiting.since === decision.createdAt) {
+    if (waiting.answeredAt != null) return
     waiting.answeredAt = now
   }
   credit(group, { personId: decision.personId, at: now, waitedMs: now - decision.createdAt, kind: 'decision', item: decision.id })

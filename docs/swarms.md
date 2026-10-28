@@ -206,14 +206,32 @@ Each person has three numbers:
   to four weeks back). The request ships at the merge, even if its work is lost
   or cancelled afterwards. A group that is Done with a linked PR ships too; the
   earlier of the merge and Done is when it shipped. 3 points each.
-- **Unblocked**: items needing a person that the person answered. An answer counts
-  when it comes from the person the item waits on, or when it replies to the
-  question itself. That person is the group's requester, or the project's owner
-  when the group has none. 1 point each, plus 1 point for every 2 hours the agents
-  waited for those answers.
-- **Lent**: hours Swarm agents ran on the person's contributed machines, added up
-  from each machine's readings. A product manager's session doesn't count: it
-  coordinates in confidence and doesn't build. 1 point for every 10 hours.
+- **Unblocked**: items needing a person that the person answered, each counted
+  once:
+  - a decision asked of them;
+  - a plan the product manager asked them to approve. A reply to the product
+    manager's message counts when it starts with GO, approve, approved or duyệt,
+    in any case and with or without accents. A bare "ok" doesn't count;
+  - an agent's "needs a human" question. The answer must come from the person the
+    item waits on, or reply to the question itself. That person is the group's
+    requester, or the project's owner when the group has none;
+  - a tag addressed to them, answered by their next post in that conversation.
+
+  One post counts once, even if it answers several of these. Approvals in the
+  project chat count too. Each answer is 1 point, plus 1 point for every 2 hours
+  the item waited, up to 3 points per answer.
+- **Lent**: hours Swarm agents on the person's contributed machines spent working
+  on tasks other people asked for, added up from each machine's readings. Idle or
+  waiting agents don't count, and neither do the person's own requests. A product
+  manager's session doesn't count either: it coordinates in confidence and doesn't
+  build. 1 point for every 10 hours.
+
+Each person also has last week's points, for the arrow against last week. Their
+details list what they shipped (title, PR, when it merged), what they unblocked
+(conversation, kind, how long it waited) and each machine's busy hours: the 20
+newest of each, and only from conversations the reader can read. People go by
+their profile name, or by the first part of their email when they haven't set
+one.
 
 People with the same points share a place. A streak counts the days in a row,
 up to today, with a shipped request. Tapping a name shows that person's week:
@@ -228,11 +246,11 @@ picker reaches back three weeks.
 items each, in name order. An item leaves the list as soon as it is answered. It is never ranked and never earns points. **Answer**
 opens the reader's own waiting item, or the first one when none waits on them.
 
-Only facts count, never text. The leaderboard records when work was asked for and
-shipped, who answered and how long agents waited. It never records what anyone
-wrote. Private conversations, Chat with PM among them, never count and never
-appear in it. Decisions asked of a person will count toward Unblocked once
-decisions ship.
+Only facts count, never message text. The leaderboard records when work was asked
+for and shipped, who answered what kind of item, and how long it waited. It
+never records what anyone wrote. The only text it shows is the title of a
+conversation the reader can read. Private conversations, Chat with PM among
+them, never count and never appear in it.
 
 ## Avatars, status and celebrations
 
