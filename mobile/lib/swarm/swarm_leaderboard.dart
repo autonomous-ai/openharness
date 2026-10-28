@@ -481,10 +481,10 @@ class _PersonRow extends StatelessWidget {
       child: Semantics(
         key: ValueKey('swarm-leaderboard-person-$id'),
         button: true,
+        // What the row shows, the numbers in full: none at zero.
         label: [
-          '$name, place ${score.rank}, ${score.points} points, '
-              '${score.shipped} shipped, ${score.unblocked} unblocked, '
-              '${swarmHours(score.lentMs)} hours lent',
+          '$name, place ${score.rank}, ${score.points} points',
+          ...numbers,
           ?trend,
         ].join(', '),
         excludeSemantics: true,

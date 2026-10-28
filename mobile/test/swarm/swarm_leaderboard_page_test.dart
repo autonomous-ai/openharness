@@ -168,6 +168,18 @@ void main() {
         isButton: true,
       ),
     );
+    // The label says what the row shows: a number at zero is left out.
+    expect(
+      tester.getSemantics(key('swarm-leaderboard-person-ken')),
+      isSemantics(
+        label: 'ken, place 2, 21 points, 3 shipped, down 4 from last week',
+        isButton: true,
+      ),
+    );
+    expect(
+      tester.getSemantics(key('swarm-leaderboard-person-dee')),
+      isSemantics(label: 'Former member, place 4, 0 points', isButton: true),
+    );
     expect(
       tester.getSize(key(diego)).height,
       greaterThanOrEqualTo(minTouchTarget),
@@ -181,6 +193,34 @@ void main() {
     expect(inside(dee, find.text('Former member')), findsOneWidget);
     expect(y(tester, 'swarm-leaderboard-person-ken'), lessThan(y(tester, dee)));
     expect(fake.paths.where((p) => p.contains('/leaderboard')), [path]);
+  });
+
+  testWidgets('a display name from the board wins over the email name', (
+    tester,
+  ) async {
+    final fake = backend();
+    fake.routes[path] = (_) {
+      final data = board();
+      (data['people'] as List<Map<String, dynamic>>)[1]['displayName'] =
+          'Ken Nguyen';
+      return data;
+    };
+    await pump(tester, fake);
+    await tester.pumpAndSettle();
+    const ken = 'swarm-leaderboard-person-ken';
+    expect(inside(ken, find.text('Ken Nguyen')), findsOneWidget);
+    expect(find.text('ken'), findsNothing);
+    expect(
+      tester.getSemantics(key(ken)).label,
+      startsWith('Ken Nguyen, place 2'),
+    );
+    // Its sheet is titled the same.
+    await tester.tap(key(ken));
+    await tester.pumpAndSettle();
+    expect(
+      inside('swarm-leaderboard-sheet', find.text('Ken Nguyen')),
+      findsOneWidget,
+    );
   });
 
   testWidgets('a bold rank in its own column and the points as the one '
