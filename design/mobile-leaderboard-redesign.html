@@ -1,0 +1,296 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Leaderboard on the phone — three directions</title>
+<style>
+/* ── Shell: a plain frame, never part of a design ─────────────────────── */
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+body.shell {
+  font: 13px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  background: #e9e9e7; color: #222;
+}
+html[data-theme="dark"] body.shell { background: #0e0e0e; color: #ddd; }
+.shell-bar {
+  position: sticky; top: 0; z-index: 10; display: flex; flex-wrap: wrap; gap: 8px;
+  align-items: center; padding: 8px 12px; background: inherit;
+  border-bottom: 1px solid rgba(127,127,127,.25);
+}
+.shell-tabs { display: flex; gap: 2px; overflow-x: auto; }
+.shell-tab, .shell-mode {
+  font: inherit; color: inherit; background: none; border: 1px solid transparent;
+  border-radius: 6px; padding: 5px 10px; cursor: pointer; white-space: nowrap;
+}
+.shell-tab[aria-selected="true"], .shell-mode[aria-pressed="true"] {
+  border-color: rgba(127,127,127,.6); font-weight: 600;
+}
+.shell-tab:focus-visible, .shell-mode:focus-visible { outline: 2px solid #5b8def; outline-offset: 1px; }
+.shell-modes { margin-left: auto; display: flex; gap: 2px; }
+.shell-thesis { padding: 8px 12px 0; opacity: .8; max-width: 760px; }
+.shell-stage { display: flex; flex-wrap: wrap; gap: 28px; justify-content: center; padding: 20px 12px 40px; }
+.shell-label { text-align: center; opacity: .6; margin-bottom: 6px; }
+@media (max-width: 420px) {
+  .shell-tab .shell-name { display: none; }
+  .shell-modes { margin-left: 0; }
+  .shell-stage { padding: 12px 0 24px; }
+  .phone { width: 100%; border-width: 0; border-radius: 0; box-shadow: none; }
+}
+
+/* A phone: 375 wide, the app's own top bar. Tokens come from the theme. */
+.phone {
+  width: 375px; max-width: 100%; height: 760px; overflow: hidden; position: relative;
+  border-radius: 34px; border: 8px solid #000; box-shadow: 0 10px 40px rgba(0,0,0,.25);
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto, sans-serif;
+  background: var(--bg); color: var(--fg); display: flex; flex-direction: column;
+}
+.phone[data-theme="dark"] {
+  --bg: #181818; --fg: #f5f5f5; --fg2: #a8a8a2; --fg3: #8a8a84; --row: #202020;
+  --hair: rgba(255,255,255,.12); --accent: #bdcbdc; --accent-ink: #181818; --track: rgba(255,255,255,.08);
+  --scrim: rgba(0,0,0,.55); --sheet: #202020; --gold: #f4c542;
+}
+.phone[data-theme="light"] {
+  --bg: #fafaf9; --fg: #1a1a18; --fg2: #62615b; --fg3: #7a7973; --row: #f3f3f2;
+  --hair: rgba(0,0,0,.08); --accent: #3d5a8a; --accent-ink: #ffffff; --track: rgba(0,0,0,.06);
+  --scrim: rgba(0,0,0,.35); --sheet: #ffffff; --gold: #b7861a;
+}
+.status { height: 44px; display: flex; align-items: center; justify-content: space-between; padding: 0 26px; font-weight: 600; font-size: 15px; }
+.topbar { display: flex; align-items: center; gap: 4px; padding: 2px 8px 2px 4px; min-height: 52px; }
+.back { width: 44px; height: 44px; display: grid; place-items: center; border: 0; background: none; color: var(--fg); font-size: 22px; border-radius: 10px; cursor: pointer; }
+.title { font: 600 17px/1.25 ui-monospace, "SF Mono", Menlo, monospace; }
+.subtitle { color: var(--fg2); font-size: 13px; }
+.body { flex: 1; overflow-y: auto; padding: 0 12px 28px; }
+.fig { font-variant-numeric: tabular-nums; }
+.av { flex: none; border-radius: 50%; display: grid; place-items: center; color: #fff; font-weight: 600; }
+button.row-tap { all: unset; display: block; width: 100%; cursor: pointer; }
+button.row-tap:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; border-radius: 12px; }
+.week { display: inline-flex; align-items: center; gap: 4px; min-height: 44px; padding: 0 10px; border: 0; background: none; color: var(--fg); font: 15px/1 inherit; font-family: inherit; border-radius: 10px; cursor: pointer; }
+.week:hover { background: var(--track); }
+.week:focus-visible { outline: 2px solid var(--accent); }
+.chev { font-size: 12px; color: var(--fg2); }
+
+/* The person's week, as a bottom sheet over the phone. */
+.scrim { position: absolute; inset: 0; background: var(--scrim); opacity: 0; pointer-events: none; transition: opacity .2s; }
+.sheet { position: absolute; left: 0; right: 0; bottom: 0; background: var(--sheet); border-radius: 18px 18px 0 0; padding: 8px 18px 28px; transform: translateY(100%); transition: transform .25s ease-out; }
+.phone.sheet-open .scrim { opacity: 1; pointer-events: auto; }
+.phone.sheet-open .sheet { transform: none; }
+.grip { width: 36px; height: 5px; border-radius: 3px; background: var(--hair); margin: 0 auto 8px; }
+.sheet-head { display: flex; align-items: center; gap: 12px; margin-bottom: 6px; }
+.sheet-name { flex: 1; font-size: 18px; font-weight: 600; }
+.sheet-line { display: flex; padding: 8px 0; font-size: 14.5px; line-height: 1.35; }
+.sheet-line span:first-child { width: 96px; flex: none; color: var(--fg2); }
+@media (prefers-reduced-motion: reduce) { .sheet, .scrim { transition: none; } }
+
+/* ── A · Podium ─────────────────────────────────────────────────────── */
+#dir-a .a-head { display: flex; align-items: center; justify-content: space-between; height: 52px; }
+#dir-a .a-chip { padding: 6px 12px; border-radius: 16px; border: 1px solid var(--hair); background: var(--row); font-weight: 500; font-size: 14px; }
+#dir-a .a-podium { display: grid; grid-template-columns: 1fr 1.15fr 1fr; align-items: end; gap: 8px; margin: 10px 0 14px; }
+#dir-a .a-step { text-align: center; border-radius: 16px; background: var(--row); padding: 12px 6px 10px; position: relative; }
+#dir-a .a-step.a-first { padding-top: 18px; background: linear-gradient(180deg, color-mix(in srgb, var(--gold) 22%, var(--row)), var(--row)); }
+#dir-a .a-cup { font-size: 26px; line-height: 1; }
+#dir-a .a-first .a-cup { font-size: 34px; }
+#dir-a .a-step .av { margin: 8px auto 6px; }
+#dir-a .a-name { font-weight: 600; font-size: 15px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#dir-a .a-pts { font-weight: 700; font-size: 17px; margin-top: 2px; }
+#dir-a .a-first .a-pts { font-size: 22px; }
+#dir-a .a-mini { color: var(--fg2); font-size: 11.5px; margin-top: 6px; display: flex; flex-wrap: wrap; justify-content: center; gap: 2px 7px; }
+#dir-a .a-mini span { white-space: nowrap; }
+#dir-a .a-sparkle { position: absolute; top: 4px; right: 14px; font-size: 16px; animation: a-twinkle 1.4s ease-out 1 both; }
+@keyframes a-twinkle { 0% { opacity: 0; transform: scale(.5) rotate(0); } 30% { opacity: 1; } 100% { opacity: 0; transform: scale(1.3) rotate(35deg); } }
+@media (prefers-reduced-motion: reduce) { #dir-a .a-sparkle { display: none; } }
+#dir-a .a-list { border-radius: 14px; background: var(--row); overflow: hidden; }
+#dir-a .a-row { display: flex; align-items: center; gap: 12px; min-height: 60px; padding: 10px 14px 10px 10px; }
+#dir-a .a-row + .a-row { border-top: 1px solid var(--hair); }
+#dir-a .a-place { width: 24px; text-align: center; color: var(--fg2); font-weight: 500; }
+#dir-a .a-row .a-name { flex: 1; }
+#dir-a .a-stats { color: var(--fg2); font-size: 13px; display: flex; gap: 12px; }
+#dir-a .a-row-pts { font-weight: 600; }
+
+/* ── B · Scoreboard ─────────────────────────────────────────────────── */
+#dir-b .b-head { display: flex; align-items: center; justify-content: space-between; height: 52px; }
+#dir-b .b-shipped { font-size: 14px; color: var(--fg2); }
+#dir-b .b-shipped b { color: var(--fg); font-size: 20px; margin-right: 2px; }
+#dir-b .b-table { border-radius: 12px; background: var(--row); overflow: hidden; }
+#dir-b .b-grid { display: grid; grid-template-columns: 26px 1fr 34px 34px 44px 50px; align-items: center; column-gap: 6px; padding: 0 12px 0 8px; }
+#dir-b .b-cols { min-height: 34px; color: var(--fg3); font-size: 12px; border-bottom: 1px solid var(--hair); }
+#dir-b .b-cols span { text-align: right; }
+#dir-b .b-cols span:nth-child(2) { text-align: left; }
+#dir-b .b-row { min-height: 56px; }
+#dir-b .b-row + .b-row { border-top: 1px solid var(--hair); }
+#dir-b .b-place { text-align: center; font-size: 15px; color: var(--fg2); }
+#dir-b .b-who { display: flex; align-items: center; gap: 8px; min-width: 0; }
+#dir-b .b-who-text { min-width: 0; flex: 1; }
+#dir-b .b-name { font-weight: 500; font-size: 15px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#dir-b .b-bar { height: 4px; border-radius: 2px; background: var(--track); margin-top: 5px; }
+#dir-b .b-bar i { display: block; height: 100%; border-radius: 2px; background: var(--accent); }
+#dir-b .b-num { text-align: right; font-size: 14px; color: var(--fg2); }
+#dir-b .b-pts { text-align: right; font-size: 15px; font-weight: 700; }
+#dir-b .b-legend { color: var(--fg3); font-size: 12px; padding: 10px 4px; }
+
+/* ── C · Team first ─────────────────────────────────────────────────── */
+#dir-c .c-hero { border-radius: 18px; padding: 16px 18px; background: var(--accent); color: var(--accent-ink); margin: 6px 0 14px; }
+#dir-c .c-hero-top { display: flex; justify-content: space-between; align-items: center; }
+#dir-c .c-week { color: inherit; opacity: .9; margin-right: -10px; }
+#dir-c .c-big { font-size: 44px; font-weight: 800; line-height: 1; margin-top: 6px; }
+#dir-c .c-big small { font-size: 17px; font-weight: 600; margin-left: 6px; }
+#dir-c .c-before { opacity: .85; margin-top: 6px; font-size: 14px; }
+#dir-c .c-caption { color: var(--fg2); font-size: 13px; margin: 0 4px 8px; }
+#dir-c .c-card { display: flex; gap: 12px; align-items: center; padding: 12px 14px; border-radius: 14px; background: var(--row); margin-bottom: 8px; min-height: 64px; }
+#dir-c .c-mid { flex: 1; min-width: 0; }
+#dir-c .c-name { font-weight: 600; font-size: 16px; display: flex; gap: 6px; align-items: center; }
+#dir-c .c-facts { color: var(--fg2); font-size: 13.5px; margin-top: 3px; }
+#dir-c .c-pill { padding: 6px 10px; border-radius: 12px; background: var(--track); font-weight: 700; font-size: 15px; }
+#dir-c .c-card.c-lead .c-pill { background: color-mix(in srgb, var(--gold) 28%, transparent); }
+
+/* Skeleton rows, the state before the board lands. */
+.sk { background: var(--track); border-radius: 6px; animation: sk-breathe 1.6s ease-in-out infinite; }
+@keyframes sk-breathe { 50% { opacity: .55; } }
+@media (prefers-reduced-motion: reduce) { .sk { animation: none; } }
+</style>
+</head>
+<body class="shell">
+<div class="shell-bar">
+  <div class="shell-tabs" role="tablist" aria-label="Directions" id="shell-tabs"></div>
+  <div class="shell-modes" role="group" aria-label="Appearance" id="shell-modes"></div>
+</div>
+<div class="shell-thesis" id="shell-thesis"></div>
+<div id="shell-panels"></div>
+
+<script>
+// The board as the phone shows it today (the simulator screenshots of PR #1875).
+const BOARD = {
+  project: 'openharness', shipped: 19, shippedBefore: 11, week: 'This week',
+  people: [
+    { id: 'diego', name: 'diego', pts: 28, rank: 1, medal: 'gold', shipped: 8, unblocked: 1, lent: 40, machines: 2,
+      ship: '8 asks landed · median 3.1 h to ship', answers: '1 answered · median 4 min · 6 min of agent time freed', streak: '3 days shipping', colour: '#4E5D78' },
+    { id: 'ken', name: 'ken', pts: 21, rank: 2, medal: 'silver', shipped: 3, unblocked: 0, lent: 123, machines: 2,
+      ship: '3 asks landed · median 3.1 h to ship', answers: 'Nothing answered yet', streak: 'No streak yet', colour: '#0F766E' },
+    { id: 'tony', name: 'tony', pts: 15, rank: 3, medal: 'bronze', shipped: 2, unblocked: 4, lent: 6, machines: 2,
+      ship: '2 asks landed · median 3.1 h to ship', answers: '4 answered · median 4 min · 24 min of agent time freed', streak: 'No streak yet', colour: '#6D28D9' },
+    { id: 'dee', name: 'dee', pts: 12, rank: 4, medal: null, shipped: 1, unblocked: 2, lent: 0, machines: 0,
+      ship: '1 ask landed · median 3.1 h to ship', answers: '2 answered · median 4 min · 12 min of agent time freed', streak: 'No streak yet', colour: '#6D28D9' },
+  ],
+};
+const CUP = { gold: '🥇', silver: '🥈', bronze: '🥉' };
+const DIRECTIONS = [
+  { id: 'a', letter: 'A', name: 'Podium',
+    thesis: 'Bets that the top three is a moment worth celebrating: a podium up top, everyone else in a quiet list below.' },
+  { id: 'b', letter: 'B', name: 'Scoreboard',
+    thesis: 'Bets that people come to compare: one aligned table, the three stats labelled once, a bar showing points against the leader.' },
+  { id: 'c', letter: 'C', name: 'Team first',
+    thesis: 'Bets that the shared result motivates more than rank: the week’s shipped count leads, each person is a card with their stats in words.' },
+];
+const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
+const av = (p, size) => `<span class="av" style="width:${size}px;height:${size}px;background:${p.colour};font-size:${size >= 32 ? 13.5 : 11}px" aria-hidden="true">${esc(p.name[0].toUpperCase())}</span>`;
+const label = p => `${p.name}, place ${p.rank}, ${p.pts} points, ${p.shipped} shipped, ${p.unblocked} unblocked, ${p.lent} hours lent`;
+const tap = (p, inner, cls = '') => `<button class="row-tap ${cls}" data-person="${p.id}" aria-label="${esc(label(p))}">${inner}</button>`;
+const weekButton = (k, cls = '') => `<button class="week ${cls}" aria-label="Week: This week" data-week="${k}">This week <span class="chev">▾</span></button>`;
+
+function podium(k, loading) {
+  const [first, second, third] = BOARD.people, rest = BOARD.people.slice(3);
+  const step = (p, cls) => tap(p, `<div class="a-step ${cls}">
+      ${cls ? '<span class="a-sparkle" aria-hidden="true">✨</span>' : ''}
+      <div class="a-cup" aria-hidden="true">${CUP[p.medal]}</div>${av(p, cls ? 52 : 44)}
+      <div class="a-name">${esc(p.name)}</div><div class="a-pts fig">${p.pts} pts</div>
+      <div class="a-mini fig"><span>🚀 ${p.shipped}</span><span>🔓 ${p.unblocked}</span><span>💻 ${p.lent}h</span></div></div>`);
+  if (loading) return `<div class="a-head"><span class="sk" style="width:120px;height:30px;border-radius:16px"></span>${weekButton(k)}</div>
+    <div class="a-podium">${[100, 130, 100].map(h => `<div class="a-step"><div class="sk" style="height:${h}px"></div></div>`).join('')}</div>
+    <div class="a-list">${[0, 1].map(() => `<div class="a-row"><span class="sk" style="width:32px;height:32px;border-radius:50%"></span><span class="sk" style="flex:1;height:14px"></span></div>`).join('')}</div>`;
+  return `<div class="a-head"><span class="a-chip fig">🚀 ${BOARD.shipped} shipped</span>${weekButton(k)}</div>
+    <div class="a-podium">${step(second, '').replace('a-step ', 'a-step a-second ')}${step(first, 'a-first')}${step(third, '')}</div>
+    <div class="a-list">${rest.map(p => tap(p, `<div class="a-row"><span class="a-place fig">${p.rank}</span>${av(p, 32)}
+      <div class="a-name">${esc(p.name)}<div class="a-stats fig"><span>🚀 ${p.shipped}</span><span>🔓 ${p.unblocked}</span><span>💻 ${p.lent}h</span></div></div>
+      <span class="a-row-pts fig">${p.pts} pts</span></div>`)).join('')}</div>`;
+}
+
+function scoreboard(k, loading) {
+  const top = BOARD.people[0].pts;
+  const head = `<div class="b-head"><span class="b-shipped fig"><b>${BOARD.shipped}</b> shipped</span>${weekButton(k)}</div>`;
+  const cols = `<div class="b-grid b-cols" aria-hidden="true"><span></span><span>Person</span><span title="Shipped">🚀</span><span title="Unblocked">🔓</span><span title="Lent">💻</span><span>pts</span></div>`;
+  if (loading) return head + `<div class="b-table">${cols}${[0, 1, 2, 3].map(() => `<div class="b-grid b-row"><span></span><span class="sk" style="height:14px"></span><span></span><span></span><span></span><span class="sk" style="height:14px"></span></div>`).join('')}</div>`;
+  return head + `<div class="b-table" role="list">${cols}${BOARD.people.map(p => tap(p, `<div class="b-grid b-row" role="listitem">
+      <span class="b-place fig" aria-hidden="true">${p.medal ? CUP[p.medal] : p.rank}</span>
+      <span class="b-who">${av(p, 28)}<span class="b-who-text"><div class="b-name">${esc(p.name)}</div><div class="b-bar"><i style="width:${Math.round(100 * p.pts / top)}%"></i></div></span></span>
+      <span class="b-num fig">${p.shipped}</span><span class="b-num fig">${p.unblocked}</span><span class="b-num fig">${p.lent}h</span>
+      <span class="b-pts fig">${p.pts}</span></div>`)).join('')}</div>
+    <div class="b-legend">🚀 shipped · 🔓 unblocked · 💻 hours lent · bars against first place</div>`;
+}
+
+function teamFirst(k, loading) {
+  const hero = loading
+    ? `<div class="c-hero"><div class="c-hero-top"><span>Team this week</span>${weekButton(k, 'c-week')}</div><div class="sk" style="height:44px;width:60%;margin-top:6px;background:rgba(127,127,127,.3)"></div></div>`
+    : `<div class="c-hero"><div class="c-hero-top"><span>Team this week</span>${weekButton(k, 'c-week')}</div>
+       <div class="c-big fig">🚀 ${BOARD.shipped}<small>shipped</small></div><div class="c-before fig">${BOARD.shippedBefore} shipped last week</div></div>`;
+  if (loading) return hero + [0, 1, 2].map(() => `<div class="c-card"><span class="sk" style="width:40px;height:40px;border-radius:50%"></span><span class="sk" style="flex:1;height:16px"></span></div>`).join('');
+  return hero + `<div class="c-caption">Who moved it</div>` + BOARD.people.map(p => tap(p, `<div class="c-card ${p.rank === 1 ? 'c-lead' : ''}">${av(p, 40)}
+      <div class="c-mid"><div class="c-name">${esc(p.name)} <span aria-hidden="true">${p.medal ? CUP[p.medal] : ''}</span></div>
+      <div class="c-facts fig">${p.shipped} shipped · ${p.unblocked} unblocked · ${p.lent}h lent</div></div>
+      <span class="c-pill fig">${p.pts} pts</span></div>`)).join('');
+}
+
+const BUILD = { a: podium, b: scoreboard, c: teamFirst };
+
+function phone(dir, theme, k, loading) {
+  return `<div><div class="shell-label">${theme === 'dark' ? 'Dark' : 'Light'}${loading ? ' · loading' : ''}</div>
+  <div class="phone" id="${k}" data-theme="${theme}">
+    <div class="status"><span>10:21</span><span aria-hidden="true">●●● ▮</span></div>
+    <div class="topbar"><button class="back" aria-label="Back">‹</button><div><div class="title">Leaderboard</div><div class="subtitle">${BOARD.project}</div></div></div>
+    <div class="body">${BUILD[dir](k, loading)}</div>
+    <div class="scrim" data-close="${k}"></div>
+    <div class="sheet" role="dialog" aria-modal="true" aria-label="Their week" id="${k}-sheet"></div>
+  </div></div>`;
+}
+
+let active = 'a', mode = 'both';
+// A link can open a direction and appearance at once: #b-light, #c-loading.
+{
+  const [d, m] = location.hash.slice(1).split('-');
+  if (DIRECTIONS.some(x => x.id === d)) active = d;
+  if (['light', 'dark', 'both', 'loading'].includes(m)) mode = m;
+}
+function render() {
+  document.documentElement.dataset.theme = mode === 'light' ? 'light' : 'dark';
+  document.getElementById('shell-tabs').innerHTML = DIRECTIONS.map((d, i) =>
+    `<button class="shell-tab" role="tab" id="tab-${d.id}" aria-controls="panel-${d.id}" aria-selected="${d.id === active}" tabindex="${d.id === active ? 0 : -1}" data-dir="${d.id}">${d.letter}<span class="shell-name"> · ${d.name}</span></button>`).join('');
+  document.getElementById('shell-modes').innerHTML = [['light', 'Light'], ['dark', 'Dark'], ['both', 'Both'], ['loading', 'Loading']].map(([m, l]) =>
+    `<button class="shell-mode" aria-pressed="${m === mode}" data-mode="${m}">${l}</button>`).join('');
+  const d = DIRECTIONS.find(d => d.id === active);
+  document.getElementById('shell-thesis').textContent = `${d.letter} · ${d.name} — ${d.thesis}`;
+  const themes = mode === 'both' || mode === 'loading' ? ['light', 'dark'] : [mode];
+  document.getElementById('shell-panels').innerHTML = DIRECTIONS.map(x =>
+    `<div role="tabpanel" id="panel-${x.id}" aria-labelledby="tab-${x.id}" ${x.id === active ? '' : 'hidden'}>
+      <div class="shell-stage" id="dir-${x.id}">${x.id === active ? themes.map(t => phone(x.id, t, `${x.id}-${t}`, mode === 'loading')).join('') : ''}</div></div>`).join('');
+}
+
+function openSheet(k, id) {
+  const p = BOARD.people.find(p => p.id === id), ph = document.getElementById(k);
+  const lines = [['Points', p.medal ? `${p.pts} this week · place ${p.rank}` : `${p.pts} this week`], ['Shipped', p.ship], ['Unblocked', p.answers],
+    ['Lent', p.machines ? `${p.machines} machines · ${p.lent} agent-hours` : 'Nothing lent yet'], ['Streak', p.streak]];
+  document.getElementById(`${k}-sheet`).innerHTML = `<div class="grip"></div><div class="sheet-head">${av(p, 32)}<span class="sheet-name">${esc(p.name)}</span>
+    <button class="back" data-close="${k}" aria-label="Close">✕</button></div>${lines.map(([a, b]) => `<div class="sheet-line"><span>${a}</span><span>${esc(b)}</span></div>`).join('')}`;
+  ph.classList.add('sheet-open');
+  ph.querySelector('.sheet .back').focus();
+}
+
+document.addEventListener('click', e => {
+  const t = e.target.closest('[data-dir],[data-mode],[data-person],[data-close]');
+  if (!t) return;
+  if (t.dataset.dir) { active = t.dataset.dir; render(); document.getElementById(`tab-${active}`).focus(); }
+  else if (t.dataset.mode) { mode = t.dataset.mode; render(); }
+  else if (t.dataset.person) openSheet(t.closest('.phone').id, t.dataset.person);
+  else if (t.dataset.close) document.getElementById(t.dataset.close).classList.remove('sheet-open');
+});
+document.addEventListener('keydown', e => {
+  const i = DIRECTIONS.findIndex(d => d.id === active);
+  if (e.key === 'Escape') document.querySelectorAll('.phone.sheet-open').forEach(p => p.classList.remove('sheet-open'));
+  else if (/^[1-3]$/.test(e.key)) { active = DIRECTIONS[+e.key - 1].id; render(); }
+  else if (e.target.closest('[role="tab"]') && (e.key === 'ArrowRight' || e.key === 'ArrowLeft')) {
+    active = DIRECTIONS[(i + (e.key === 'ArrowRight' ? 1 : DIRECTIONS.length - 1)) % DIRECTIONS.length].id;
+    render(); document.getElementById(`tab-${active}`).focus();
+  }
+});
+render();
+</script>
+</body>
+</html>
