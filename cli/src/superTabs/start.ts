@@ -121,8 +121,8 @@ async function watchQueued(queued: Json, scoped: ScopedRequest, pause: (ms: numb
   return queued
 }
 
-/** Hard rules this client reads before it moves a task. A rule of any other kind may bind the task to its machine (a
- *  machine or device requirement added later), so the task then stays where it is and is reported instead. */
+/** Hard rules this client reads before it moves a task. A rule of any other kind may bind the task to its machine, so the
+ *  task then stays where it is and is reported instead. */
 const KNOWN_RULES = new Set(['forbidModel', 'machines', 'minEffort', 'preferEngine', 'preferIdle'])
 const RETRY = /^retry-[0-9a-f]{24}$/
 /** Answers that are not the request's own (routeCommand.ts): the backend may still have recorded it. */
@@ -143,16 +143,27 @@ async function startElsewhere(input: Json, failed: Json, scoped: ScopedRequest, 
   const machines = Array.isArray(state.machines) ? state.machines.map(object) : []
   const project = (Array.isArray(state.projects) ? state.projects.map(object) : []).find(p => p.id === group?.projectId)
   const machineName = (id: unknown) => text(machines.find(m => m.machineId === id)?.name) ?? 'its machine'
-  const blocked = async (on: Json): Promise<Json> => {
+  const blocked = async (on: Json, required = false): Promise<Json> => {
     const requester = identifier(group?.requesterId) ? [group.requesterId] : []
-    // People read why in the failure row the backend wrote; this one says only what it means, never the raw error.
+    // People read why in the failure row the backend wrote; this one says only what it means, never the raw error. A task's
+    // requirement names no machine at all: the one it failed on is a required one, which a reader may not see (backend
+    // model.ts TaskRequirement; review of #1847).
     requireSuccess(await scoped({ action: 'command', operationId: derived('start-blocked', String(on.id)), command: { type: 'message.send',
       conversationId: request.conversationId, replyTo: null, recipientIds: [], ...(requester.length ? { mentions: requester } : {}),
-      text: `${String(request.name)} could not start on ${machineName(object(on.request).machineId)}, and no other machine allowed for this task could take it. `
-        + 'This task has no worker until that machine is fixed or another one is added.' } }))
-    return { error: 'START_BLOCKED', startId: on.id, detail: `${String(on.error)} No other machine allowed for this task could start it; the group was told.` }
+      text: required
+        ? `${String(request.name)} could not start. This task needs a particular machine or device, so it was not moved to another machine. `
+          + 'It has no worker until a machine that has what it needs can start it.'
+        : `${String(request.name)} could not start on ${machineName(object(on.request).machineId)}, and no other machine allowed for this task could take it. `
+          + 'This task has no worker until that machine is fixed or another one is added.' } }))
+    return { error: 'START_BLOCKED', startId: on.id, detail: `${String(on.error)} ${required
+      ? 'This task requires its machine or device, so it was not moved; the group was told.'
+      : 'No other machine allowed for this task could start it; the group was told.'}` }
   }
   if (RETRY.test(startId)) return blocked(failed)
+  // A task that requires its machines or devices waits for them (#1829): a Lead who cannot see a required machine reads only
+  // how many there are, and no machine reports its devices, so nothing tells this client another machine could do it.
+  const requires = object(object(group?.task).requires)
+  if (Array.isArray(requires.machines) || (number(requires.unseenMachines) ?? 0) > 0 || (Array.isArray(requires.devices) && requires.devices.length)) return blocked(failed, true)
   const rules = (Array.isArray(state.rules) ? state.rules.map(object) : []).filter(r => !r.projectId || r.projectId === group?.projectId)
   if (rules.some(r => !KNOWN_RULES.has(String(object(r.rule).kind)))) return blocked(failed)
   const decision = object(requireSuccess(await scoped({ action: 'routeDecision', decisionId: failed.routeDecisionId })))
@@ -184,9 +195,10 @@ async function startElsewhere(input: Json, failed: Json, scoped: ScopedRequest, 
       excluded: [...all.filter(c => failedOn.has(String(c.machineId))).map(c => ({ title: c.title, reason })),
         ...(Array.isArray(record.excluded) ? record.excluded : [])].slice(0, 200),
       pick: pick.id, via: 'order', fallback: undefined, p: null, belowFloor: false, why } } })
-  // The backend refuses a pick that breaks a hard rule or cannot take a teammate's work: then nothing else may run it.
+  // The backend refuses a pick that breaks a hard rule, the task's requirement set since it was read, or cannot take a
+  // teammate's work: then nothing else may run it.
   const routeDecisionId = rerouted.ok === true ? object(object(rerouted.value).result).routeDecisionId : null
-  if (!identifier(routeDecisionId)) return blocked(failed)
+  if (!identifier(routeDecisionId)) return blocked(failed, rerouted.error === 'REQUIREMENT_UNMET')
   // What named the failed machine's own setup stays with it; the pick says what runs on the new one.
   const { permissionMode: _mode, model: _model, effort: _effort, gridModel: _grid, gridName: _name, codexHome: _home, ...kept } = request
   const retryId = derived('retry', startId), retryRequest = { ...kept, machineId: pick.machineId, engine: pick.engine, cwd: folder(pick.machineId),
@@ -199,6 +211,7 @@ async function startElsewhere(input: Json, failed: Json, scoped: ScopedRequest, 
     // A lost reply may follow a recorded start: its own receipt, read again, says which. Only a backend that answered with
     // a refusal and holds no such start refused it.
     const code = object(error).code, receipt = await scoped({ action: 'startStatus', startId: retryId }).catch((): Json => ({}))
+    if (receipt.ok !== true && receipt.error === 'NOT_FOUND' && code === 'REQUIREMENT_UNMET') return blocked(failed, true)
     if (receipt.ok !== true) return receipt.error === 'NOT_FOUND' && typeof code === 'string' && !TRANSPORT.has(code) ? refused((error as Error).message) : uncertain
     try { retry = await startOnce({ action: 'resume', tabId: input.tabId, startId: retryId }, scoped, where, open) } catch { return uncertain }
   }

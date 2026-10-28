@@ -29,6 +29,11 @@ describe('Change agent keeps the Swarm member', () => {
     expect(changed.cancelledAgents).toEqual([])
     expect(f.state.agents[0]!.harnessId).toBe('old')
   })
+  it('forgets the grid model the old terminal was started on, since the new one reports its own (review of #1808)', () => {
+    const f = fixture()
+    f.state.agents[0]!.gridModel = 'moonshotai/kimi-k3'
+    expect(f.run().state.agents[0]).not.toHaveProperty('gridModel')
+  })
   it('repeating the same replacement is a no-op and cannot roll back newer configuration', () => {
     const f = fixture(), changed = f.run().state
     changed.agents[0]!.configuration.model = 'opus'
