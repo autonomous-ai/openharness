@@ -87,6 +87,11 @@ async function invite(tab: string, role: 'collaborator' | 'viewer' = 'collaborat
   const invitation = await run(tab, { type: 'invite.create', email: peer.email, role, conversationId: 'lead' })
   await run(tab, { type: 'invite.accept', inviteId: invitation.result.inviteId as string }, peer)
 }
+/** `host`, whose machine runs the fixture's agents, as a member: the one person who drives a Lead's terminal (terminal.ts mayDrive). */
+async function joinHost(tab: string) {
+  const invitation = await run(tab, { type: 'invite.create', email: host.email, role: 'collaborator', conversationId: 'lead' })
+  await run(tab, { type: 'invite.accept', inviteId: invitation.result.inviteId as string }, host)
+}
 
 beforeAll(async () => {
   replica = await MongoMemoryReplSet.create({ binary: { version: '7.0.24', downloadDir: join(tmpdir(), 'harness-super-tab-mongodb-binaries') },
@@ -338,7 +343,8 @@ describe('native recording restart recovery', () => {
     const { tab, lead } = await fixture()
     await run(tab, { type: 'work.define', conversationId: 'lead', brief: 'Lead task', checks: [{ description: 'Checked', independent: false }] })
     await run(tab, { type: 'work.assign', conversationId: 'lead', agentId: lead })
-    const { contextId } = await store.native.open(owner, tab, { operationId: randomUUID(), conversationId: 'lead', agentId: lead })
+    await joinHost(tab)
+    const { contextId } = await store.native.open(host, tab, { operationId: randomUUID(), conversationId: 'lead', agentId: lead })
     const receipt = await store.native.append(host, tab, contextId, { turnId: 'lead_restart', kind: 'gap', previousEventId: null,
       text: '', truncated: false, interrupted: false,
       gap: { incidentId: 'lead_restart', reason: 'recording_restarted', detectedAt: Date.now() + 1000 } }) as { eventId: string }
@@ -568,7 +574,9 @@ describe('deleting abandoned swarm projects', () => {
     const harnessId = randomUUID()
     const agentId = String((await run(tab, { type: 'agent.add', conversationId, machineId: 'test-host', harnessId,
       name: 'Private lead', configuration: config, lead: true })).result.agentId)
-    const context = await store.native.open(owner, tab, { operationId: randomUUID(), conversationId, agentId })
+    await joinHost(tab)
+    await run(tab, { type: 'project.sharing', projectId, visibility: 'private', memberIds: [host.sub] })
+    const context = await store.native.open(host, tab, { operationId: randomUUID(), conversationId, agentId })
     await run(tab, { type: 'project.delete', projectId })
     await expect(store.native.read(host, tab, context.contextId)).rejects.toMatchObject({ code: 'NATIVE_CONTEXT_REVOKED' })
     expect(await store.mayObserve(owner, tab, 'test-host', harnessId, host.sub)).toBe(false)
@@ -658,7 +666,7 @@ describe('private swarm projects on the real control API', () => {
     await run(tab, { ...message('Private result'), conversationId } as Command)
     expect((await store.read(peer, tab)).state.projects!.map(p => p.id)).not.toContain(projectId)
     await expect(store.messages(peer, tab, conversationId, {})).rejects.toMatchObject({ code: 'NOT_FOUND' })
-    await expect(store.native.open(peer, tab, { operationId: randomUUID(), conversationId, agentId })).rejects.toMatchObject({ code: 'NOT_FOUND' })
+    await expect(store.native.open(peer, tab, { operationId: randomUUID(), conversationId, agentId: workerId })).rejects.toMatchObject({ code: 'NOT_FOUND' })
     expect(await store.mayObserve(peer, tab, 'test-host', workerHarness, host.sub)).toBe(false)
     expect((await rosterRows(store, host, 'test-host')).find(t => t.agent?.id === workerId)!.observers.map(p => p.userId)).not.toContain(peer.sub)
     await expect(store.messages(host, tab, 'lead', {}, agentId)).rejects.toMatchObject({ code: 'NOT_FOUND' })
@@ -666,7 +674,8 @@ describe('private swarm projects on the real control API', () => {
     await run(tab, { type: 'project.sharing', projectId, visibility: 'private', memberIds: [peer.sub] })
     expect((await store.messages(peer, tab, conversationId, {})).messages.map(m => m.text)).toContain('Private result')
     expect(await store.mayObserve(peer, tab, 'test-host', workerHarness, host.sub)).toBe(true)
-    const context = await store.native.open(peer, tab, { operationId: randomUUID(), conversationId, agentId })
+    // A member's terminal, also on the Builder: only its machine's owner drives a Lead.
+    const context = await store.native.open(peer, tab, { operationId: randomUUID(), conversationId, agentId: workerId })
     const command = { ...message('Shared review'), conversationId } as Command
     const operationId = randomUUID()
     await run(tab, command, peer, undefined, operationId)
@@ -910,12 +919,14 @@ describe('Super Tabs on a real Mongo replica set', () => {
   it('records native turns once, in order, with verified source metadata and no input echo', async () => {
     const { tab, lead } = await fixture()
     await invite(tab)
+    // Only the Lead's machine's owner drives it (terminal.ts mayDrive); the execution host alone records and reads it.
+    await joinHost(tab)
     const request = { operationId: randomUUID(), conversationId: 'lead', agentId: lead }
-    const { contextId } = await store.native.open(peer, tab, request)
-    expect(await store.native.open(peer, tab, request)).toEqual({ contextId })
+    const { contextId } = await store.native.open(host, tab, request)
+    expect(await store.native.open(host, tab, request)).toEqual({ contextId })
     await expect(store.native.read(peer, tab, contextId)).rejects.toMatchObject({ code: 'FORBIDDEN' })
     expect(await store.native.read(host, tab, contextId)).toMatchObject({ agentId: lead, machineId: 'test-host',
-      operator: { id: peer.sub, kind: 'person' }, lastEventId: null })
+      operator: { id: host.sub, kind: 'person' }, lastEventId: null })
     const prompt = { turnId: randomUUID(), kind: 'prompt' as const, previousEventId: null,
       text: 'A native intervention', truncated: false, interrupted: false }
     await expect(store.native.append(owner, tab, contextId, prompt)).rejects.toMatchObject({ code: 'FORBIDDEN' })
@@ -932,7 +943,7 @@ describe('Super Tabs on a real Mongo replica set', () => {
     const rows = (await store.messages(owner, tab, 'lead', {})).messages
     expect(rows).toHaveLength(2)
     expect(rows[0]).toMatchObject({ text: prompt.text, author: { kind: 'agent', id: lead },
-      source: { kind: 'native', phase: 'prompt', operator: { id: peer.sub, kind: 'person' } } })
+      source: { kind: 'native', phase: 'prompt', operator: { id: host.sub, kind: 'person' } } })
     expect(rows[1]).toMatchObject({ replyTo: first.eventId, text: answer.text, source: { interrupted: true, phase: 'answer' } })
     expect(rows[0]!.source).not.toHaveProperty('contextId')
     expect(rows[1]!.sequence).toBeGreaterThan(rows[0]!.sequence)
@@ -970,9 +981,13 @@ describe('Super Tabs on a real Mongo replica set', () => {
   })
 
   it('requires machine control as well as collaboration and fences removal, re-invitation and changed machine grants', async () => {
-    const { tab, lead } = await fixture()
+    const { tab } = await fixture()
     await invite(tab, 'viewer')
-    const request = { operationId: randomUUID(), conversationId: 'lead', agentId: lead }
+    // A member's terminal on a Builder: only its machine's owner drives a Lead (terminal.ts mayDrive).
+    const group = String((await run(tab, { type: 'conversation.create', title: 'Build', brief: '', checks: [] })).result.conversationId)
+    const worker = String((await run(tab, { type: 'agent.add', conversationId: group, machineId: 'test-host', harnessId: randomUUID(),
+      name: 'Builder', configuration: config, lead: false })).result.agentId)
+    const request = { operationId: randomUUID(), conversationId: group, agentId: worker }
     await expect(store.native.open(peer, tab, request)).rejects.toMatchObject({ code: 'READ_ONLY' })
     await run(tab, { type: 'member.remove', userId: peer.sub })
     await invite(tab)
@@ -980,7 +995,7 @@ describe('Super Tabs on a real Mongo replica set', () => {
     const event = { turnId: randomUUID(), kind: 'gap' as const, previousEventId: null,
       text: 'Caller text must not impersonate a gap explanation', truncated: false, interrupted: false }
     await store.native.append(host, tab, contextId, event)
-    expect((await store.messages(owner, tab, 'lead', {})).messages[0]!.text).toContain('Some terminal activity could not be recorded')
+    expect((await store.messages(owner, tab, group, {})).messages[0]!.text).toContain('Some terminal activity could not be recorded')
     const original = (await db.machineShare.findUnique({ where: { machineId: 'test-host' } }))!
     await db.machineShare.update({ where: { machineId: 'test-host' }, data: { emails: [owner.email],
       grantVersions: nextMachineShareGrants(original, [owner.email], null) } })
