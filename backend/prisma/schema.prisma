@@ -1202,6 +1202,8 @@ model SuperTabDelivery {
   @@index([machineId, status])
   // A page of messages reads its deliveries by message (pageReads.ts).
   @@index([tabId, messageId])
+  // The delivery pass reads only the open ones (superTabs/deliverySettle.ts).
+  @@index([status, id])
 }
 
 // One independent harness owns at most one active assignment across all Super Tabs.

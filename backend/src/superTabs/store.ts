@@ -36,6 +36,7 @@ import {
   SuperTabError, isLeads, parkLaterConversations, syncLeads, type Actor, type Agent, type Assignment, type Author, type Conversation, type MessageDraft, type SuperTabState,
 } from './model.js'
 import type { HoldReason } from './holdReason.js'
+import { stuck } from './deliverySettle.js'
 import { agentDisplayName } from './agentNames.js'
 import { endedHolds, HOLDING, type WorkHold } from '../github/holds.js'
 import { accrueLent } from './leaderboard/lent.js'
@@ -992,12 +993,13 @@ export class SuperTabStore {
       }
       await revokeNativeContexts(tx, original, effects.state)
       // Rule (b) for claims (design D10): a change to who a conversation's deliveries may reach writes those delivery rows,
-      // so a claim of one conflicts with it. Archiving keeps them for when it reopens, as before.
-      const regrouped = command.type === 'conversation.archive' && command.archived || command.type === 'conversation.audience'
-        || command.type === 'conversation.agent' && !command.present
-      if (regrouped) {
+      // so a claim of one conflicts with it. An archived conversation, or one its receiver left, ends them: kept for a
+      // reopening, 6 of the 9 deliveries prod watch found stuck for days on 2026-10-28 waited in archived groups, unread.
+      const unreadable = command.type === 'conversation.archive' && command.archived || command.type === 'conversation.agent' && !command.present
+      if (unreadable || command.type === 'conversation.audience') {
         await tx.superTabDelivery.updateMany({ where: { tabId, conversationId: command.conversationId, status: { in: ['queued', 'claimed', 'uncertain'] },
-          ...(command.type === 'conversation.agent' ? { agentId: command.agentId } : {}) }, data: { updatedAt: new Date(context.now) } })
+          ...(command.type === 'conversation.agent' ? { agentId: command.agentId } : {}) },
+          data: unreadable ? { status: 'cancelled', holdReason: null, holdSince: null } : { updatedAt: new Date(context.now) } })
       }
       if (command.type === 'conversation.audience') {
         const kept = new Set(conversation(effects.state, command.conversationId).audience?.people.map(p => p.id))
@@ -1983,10 +1985,10 @@ export class SuperTabStore {
     })
   }
 
-  /** The host cannot type a claimed instruction yet. Recorded on the delivery for logs; nothing is posted, nobody is told it waits. */
+  /** The host cannot type a claimed instruction yet. Recorded on the delivery, an agent-only one's too: it is how the delivery
+   *  pass tells a claim its host still holds from one nobody will type (deliverySettle.ts). Nothing is posted. */
   private async hold(tx: Transaction, delivery: SuperTabDelivery, reason: HoldReason) {
     if (delivery.status !== 'claimed') return { held: false }
-    if (agentOnly((await tx.superTabMessage.findUnique({ where: { id: delivery.messageId }, select: { source: true } }))?.source)) return { held: false }
     if (delivery.holdReason !== reason || !delivery.holdSince) {
       await tx.superTabDelivery.update({ where: { id: delivery.id }, data: { holdReason: reason, holdSince: delivery.holdSince ?? new Date(this.now()) } })
     }
@@ -1995,7 +1997,7 @@ export class SuperTabStore {
 
   /** Archives a finished group whose pull requests `checked` were all read merged or closed (archive.ts), only if it still
    *  qualifies inside this write: no message since, no decision waiting and no pull request linked since the read. Its
-   *  queued deliveries are kept for when it reopens, as a person's archive keeps them. True when it archived. */
+   *  waiting deliveries end, as a person's archive ends them. True when it archived. */
   async archiveFinished(tabId: string, groupId: string, checked: readonly string[]): Promise<boolean> {
     return transaction(this.db, async tx => {
       const row = await tx.superTab.findUnique({ where: { id: tabId }, select: SWARM_ROW })
@@ -2010,10 +2012,29 @@ export class SuperTabStore {
       const sequences = numberMessages(state, rows, now)
       if (!dirtyGroups(state, groupProject(state, group)).includes(group)) group.dormant = true
       // As a person's archive does (execute): a claim of a delivery here conflicts with this write.
-      await tx.superTabDelivery.updateMany({ where: { tabId, conversationId: groupId, status: { in: [...OPEN_DELIVERY] } }, data: { updatedAt: new Date(now) } })
+      await tx.superTabDelivery.updateMany({ where: { tabId, conversationId: groupId, status: { in: [...OPEN_DELIVERY] } },
+        data: { status: 'cancelled', holdReason: null, holdSince: null } })
       await this.save(tx, loaded, state, clock.next())
       await this.writeMessages(tx, tabId, state, rows, sequences)
       return true
+    })
+  }
+
+  /** Ends, as cancelled, those of this Swarm's open deliveries `rows` (as the delivery pass read them) that can no longer move
+   *  (deliverySettle.ts). Each only as it was read: a host that claimed, held or acknowledged one since keeps it. A hold
+   *  keeps its reason, so its sender learns why it was not sent. The number ended. */
+  async settleDeliveries(tabId: string, rows: SuperTabDelivery[], now: number): Promise<number> {
+    return transaction(this.db, async tx => {
+      const row = await tx.superTab.findUnique({ where: { id: tabId }, select: SWARM_ROW })
+      // A Swarm deleted since: nobody can read its deliveries.
+      const state = row ? (await loadRow(tx, requireParts(row), { groupIds: [...new Set(rows.map(r => r.conversationId))] })).state : null
+      let settled = 0
+      for (const delivery of rows) {
+        if (!stuck(delivery, !!state && this.deliveryAllowed(state, delivery), now)) continue
+        settled += (await tx.superTabDelivery.updateMany({ where: { id: delivery.id, tabId, status: delivery.status, updatedAt: delivery.updatedAt },
+          data: { status: 'cancelled' } })).count
+      }
+      return settled
     })
   }
 

@@ -12,6 +12,7 @@ import type { Command } from '../src/superTabs/commands.js'
 import type { MachineObservation } from '../src/superTabs/machines.js'
 import { poolRows, rosterRows } from './hostRows.test-support.js'
 import { archiveFinishedGroups, markFinishedGroups, type PullRequestState } from '../src/superTabs/archive.js'
+import { settleStuckDeliveries } from '../src/superTabs/deliverySettle.js'
 
 // Nobody tidies a Swarm by hand: a worker idle for 15 minutes is stopped on its Lead's poll and its host is asked to close
 // it. A fresh loopback replica set, created here.
@@ -262,5 +263,100 @@ describe('the archive pass', () => {
     expect(await markFinishedGroups(db)).toBeGreaterThanOrEqual(1)
     await archiveFinishedGroups(db, f.timed, prs, f.clock.now)
     expect((await db.swarmGroup.findUniqueOrThrow({ where: { id: part.id } })).archived).toBe(true)
+  })
+})
+
+// Prod watch, 2026-10-28: 9 deliveries had waited for days (uncertain since Oct 20, claimed for 71 hours, queued in archived
+// groups). None belonged to a task, so nothing ended them. Each now ends as cancelled, which its sender sees as Not sent.
+describe('a delivery that cannot move', () => {
+  const HOUR = 60 * MINUTE
+  type Fixture = Awaited<ReturnType<typeof swarm>>
+  const status = async (id: string) => (await db.superTabDelivery.findUniqueOrThrow({ where: { id } })).status
+  /** A person's message to the Lead in the project chat, waiting for the Lead's host. */
+  const toLead = async (f: Fixture, text: string) => {
+    const sent = await f.execute({ type: 'message.send', conversationId: 'lead', text, replyTo: null, recipientIds: [] })
+    return (await db.superTabDelivery.findFirstOrThrow({ where: { tabId: f.tab, messageId: sent.result.messageId as string, agentId: f.lead } })).id
+  }
+  /** The Lead's message to its worker in the worker's group. */
+  const toWorker = async (f: Fixture, text: string) => {
+    const sent = await f.execute({ type: 'message.send', conversationId: f.group, text, replyTo: null, recipientIds: [f.worker] }, host, f.lead)
+    return (await db.superTabDelivery.findFirstOrThrow({ where: { tabId: f.tab, messageId: sent.result.messageId as string, agentId: f.worker } })).id
+  }
+  /** The pass at [after] past the row's last write: a host's own writes are stamped by the database clock, not the store's. */
+  const settleAfter = async (f: Fixture, id: string, after: number) =>
+    settleStuckDeliveries(db, f.timed, (await db.superTabDelivery.findUniqueOrThrow({ where: { id } })).updatedAt.getTime() + after)
+
+  it('ends as Not sent when the tidy pass archives its group', async () => {
+    const f = await swarm()
+    const waiting = await toWorker(f, 'One more thing.')
+    f.clock.now += 40 * MINUTE
+    await archiveFinishedGroups(db, f.timed, { state: async () => null, done: async () => {} }, f.clock.now)
+    expect((await db.swarmGroup.findFirstOrThrow({ where: { tabId: f.tab, key: f.group } })).archived).toBe(true)
+    expect(await status(waiting)).toBe('cancelled')
+  })
+
+  it('is ended by the delivery pass once its group is archived, even asleep, while one its recipient can read waits', async () => {
+    const f = await swarm()
+    const old = await toWorker(f, 'Left over.')
+    const readable = await toLead(f, 'Still for you.')
+    await f.execute({ type: 'conversation.archive', conversationId: f.group, archived: true })
+    // As a backend from before this pass left it: archived and asleep with its delivery still queued.
+    await db.superTabDelivery.update({ where: { id: old }, data: { status: 'queued' } })
+    const part = await db.swarmGroup.findFirstOrThrow({ where: { tabId: f.tab, key: f.group } })
+    await db.swarmGroup.update({ where: { id: part.id }, data: { dormant: true, data: { ...part.data as object, dormant: true } } })
+    await settleStuckDeliveries(db, f.timed, f.clock.now)
+    expect(await status(old)).toBe('cancelled')
+    expect(await status(readable)).toBe('queued')
+  })
+
+  it('ends a claim its host has not touched for 10 minutes, and keeps one its host touched since', async () => {
+    const f = await swarm()
+    const id = await toLead(f, 'Claimed, then the host went away.')
+    await f.timed.delivery(host, f.tab, f.lead, id, { type: 'claim', claimId: 'claim' })
+    await settleAfter(f, id, 9 * MINUTE)
+    expect(await status(id)).toBe('claimed')
+    await settleAfter(f, id, 10 * MINUTE + 1_000)
+    expect(await status(id)).toBe('cancelled')
+  })
+
+  it('ends a hold after an hour, or after a day while a person owes the agent an answer, and keeps why', async () => {
+    const f = await swarm()
+    const busy = await toLead(f, 'Held while the Lead works.')
+    const asking = await toLead(f, 'Held while the Lead waits on a person.')
+    for (const id of [busy, asking]) await f.timed.delivery(host, f.tab, f.lead, id, { type: 'claim', claimId: `claim-${id}` })
+    await f.timed.delivery(host, f.tab, f.lead, busy, { type: 'hold', claimId: `claim-${busy}`, reason: 'team_waiting_idle' })
+    await f.timed.delivery(host, f.tab, f.lead, asking, { type: 'hold', claimId: `claim-${asking}`, reason: 'team_waiting_user' })
+    const heldAt = f.clock.now
+    await settleStuckDeliveries(db, f.timed, heldAt + 59 * MINUTE)
+    expect([await status(busy), await status(asking)]).toEqual(['claimed', 'claimed'])
+    await settleStuckDeliveries(db, f.timed, heldAt + HOUR + MINUTE)
+    expect(await db.superTabDelivery.findUniqueOrThrow({ where: { id: busy } })).toMatchObject({ status: 'cancelled', holdReason: 'team_waiting_idle' })
+    expect(await status(asking)).toBe('claimed')
+    await settleStuckDeliveries(db, f.timed, heldAt + 23 * HOUR)
+    expect(await status(asking)).toBe('claimed')
+    await settleStuckDeliveries(db, f.timed, heldAt + 24 * HOUR + MINUTE)
+    expect(await db.superTabDelivery.findUniqueOrThrow({ where: { id: asking } })).toMatchObject({ status: 'cancelled', holdReason: 'team_waiting_user' })
+  })
+
+  it('ends an uncertain delivery nobody resolved within an hour', async () => {
+    const f = await swarm()
+    const id = await toLead(f, 'Maybe typed.')
+    await f.timed.delivery(host, f.tab, f.lead, id, { type: 'claim', claimId: 'claim' })
+    await f.timed.delivery(host, f.tab, f.lead, id, { type: 'ack', claimId: 'claim', receipt: 'Native paste was ambiguous.', uncertain: true })
+    await settleAfter(f, id, 59 * MINUTE)
+    expect(await status(id)).toBe('uncertain')
+    await settleAfter(f, id, HOUR + MINUTE)
+    expect(await status(id)).toBe('cancelled')
+  })
+
+  it('leaves a delivery its host wrote after the pass read it', async () => {
+    const f = await swarm()
+    const id = await toLead(f, 'Claimed as the pass reads it.')
+    await f.timed.delivery(host, f.tab, f.lead, id, { type: 'claim', claimId: 'claim' })
+    const read = await db.superTabDelivery.findUniqueOrThrow({ where: { id } })
+    await new Promise(resolve => setTimeout(resolve, 5))
+    await f.timed.delivery(host, f.tab, f.lead, id, { type: 'ack', claimId: 'claim', receipt: 'Typed.', uncertain: false })
+    expect(await f.timed.settleDeliveries(f.tab, [read], read.updatedAt.getTime() + HOUR)).toBe(0)
+    expect(await status(id)).toBe('delivered')
   })
 })

@@ -8,6 +8,7 @@ import { MongoMemoryReplSet } from 'mongodb-memory-server-core'
 import { PrismaClient } from '@prisma/client'
 import { pageDeliveries, pageReactions } from '../src/superTabs/pageReads.js'
 import { recentDecisions } from '../src/superTabs/routeDecisions.js'
+import { settleStuckDeliveries } from '../src/superTabs/deliverySettle.js'
 
 // A fresh loopback replica set, created here. This suite never reads DATABASE_URL or an existing database.
 // Prod Mongo spent hours an hour on the message page's delivery read (2026-10-28): Prisma sends `messageId in [...]` as an
@@ -122,6 +123,27 @@ describe('message page reads', () => {
     expect(await pageReactions(db, 'A', PAGE)).toEqual(await db.superTabReaction.findMany({ where: { tabId: 'A', messageId: { in: PAGE } },
       select: { messageId: true, emoji: true, actorKind: true, actorId: true } }))
     expect(await pageDeliveries(db, 'B', PAGE)).toEqual([])
+  })
+})
+
+describe('the delivery pass', () => {
+  it('reads the open deliveries through the status index, examining only those it judges, with their dates as Dates', async () => {
+    const open = ['queued', 'claimed', 'uncertain'].map((status, i) => ({ _id: `A-open-${i}`, tabId: 'A', conversationId: 'g1', messageId: 'A-m900',
+      agentId: `agent-${i}`, machineId: 'host', membershipGeneration: 'gen', authorKind: 'person', authorId: 'owner', authorGeneration: 'gen', status,
+      ...status === 'claimed' ? { claimId: 'claim', holdReason: 'team_waiting_user', holdSince: { $date: new Date(T0 + 1000).toISOString() } } : {},
+      createdAt: { $date: new Date(T0).toISOString() }, updatedAt: { $date: new Date(T0 + 2000).toISOString() } }))
+    await db.$runCommandRaw({ insert: 'SuperTabDelivery', documents: open })
+    const judged: Array<{ tabId: string; rows: unknown[] }> = []
+    const store = { settleDeliveries: async (tabId: string, rows: unknown[]) => { judged.push({ tabId, rows }); return 0 } }
+    const [, profile] = await profiled('SuperTabDelivery', () => settleStuckDeliveries(db, store, T0))
+    await db.superTabDelivery.deleteMany({ where: { messageId: 'A-m900' } })
+    // One scan of the index per open status, merged in id order.
+    expect(profile).toEqual({ plans: [Array(3).fill('IXSCAN { status: 1, _id: 1 }').join(', ')], docsExamined: 3, returned: 3 })
+    expect(judged).toEqual([{ tabId: 'A', rows: [
+      expect.objectContaining({ id: 'A-open-0', status: 'queued', holdSince: null, createdAt: new Date(T0), updatedAt: new Date(T0 + 2000) }),
+      expect.objectContaining({ id: 'A-open-1', status: 'claimed', holdReason: 'team_waiting_user', holdSince: new Date(T0 + 1000) }),
+      expect.objectContaining({ id: 'A-open-2', status: 'uncertain', conversationId: 'g1', agentId: 'agent-2' }),
+    ] }])
   })
 })
 
