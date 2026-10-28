@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { Prisma } from '@prisma/client'
 import { prisma, machineAlive } from './prisma.js'
+import { upsertRacing } from './upsertRace.js'
 
 /**
  * Shared tabs across accounts: the owner's signed roster, stored and never read; invitations by email; and who
@@ -96,12 +97,12 @@ export async function invite(input: { ownerUserId: string; ownerEmail: string; s
     prisma.agentMessageInvite.count({ where: { shareId: share.id, acceptedAt: null, revokedAt: null, expiresAt: { gt: new Date() } } }),
   ])
   if (members + pending >= MAX_MEMBERS) return { error: 'TAB_FULL' as const }
-  const row = await prisma.agentMessageInvite.upsert({
+  const row = await upsertRacing(() => prisma.agentMessageInvite.upsert({
     where: { shareId_email: { shareId: share.id, email } },
     create: { id: randomUUID(), shareId: share.id, ownerUserId: input.ownerUserId, ownerMachineId: share.ownerMachineId,
       email, autonomousEnv: input.autonomousEnv, expiresAt: input.expiresAt, acceptedAt: null, acceptedBy: null, revokedAt: null },
     update: { expiresAt: input.expiresAt, revokedAt: null, acceptedAt: null, acceptedBy: null },
-  })
+  }))
   return { id: row.id }
 }
 
@@ -147,9 +148,9 @@ export async function accept(user: { sub: string; email: string; autonomousEnv: 
   if (row.expiresAt <= now) return { error: 'EXPIRED' as const }
   await prisma.agentMessageInvite.update({ where: { id: row.id }, data: { acceptedBy: user.sub, acceptedAt: now } })
   const id = memberId(row.shareId, user.sub)
-  await prisma.agentMessageMember.upsert({ where: { id },
+  await upsertRacing(() => prisma.agentMessageMember.upsert({ where: { id },
     create: { id, shareId: row.shareId, userId: user.sub, email: row.email, inviteId: row.id, acceptedAt: now, removedAt: null },
-    update: { removedAt: null, inviteId: row.id, acceptedAt: now } })
+    update: { removedAt: null, inviteId: row.id, acceptedAt: now } }))
   return { sharedTabId: row.shareId }
 }
 
