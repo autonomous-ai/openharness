@@ -62,6 +62,13 @@ describe('what each action reads of the Swarm', () => {
     expect(answer).not.toHaveProperty('error')
     expect(s.reads()).toEqual([])
   })
+  it('reads a routing decision by id for its Lead, from the backend that checks who may read it', async () => {
+    const s = swarm((_method, path) => path === `/api/super-tabs/${T}/route-decisions/d-1?asAgentId=${FIXTURE.leadId}`
+      ? ok({ id: 'd-1', record: { pick: 'c0' } }) : undefined)
+    expect(await s.ask({ action: 'routeDecision', tabId: T, agentId: FIXTURE.leadId, decisionId: 'd-1' }, owner))
+      .toEqual({ ok: true, value: { id: 'd-1', record: { pick: 'c0' } } })
+    expect(s.reads()).toEqual([])
+  })
   it('reads the people only for a post that tags someone', async () => {
     const s = swarm()
     await s.ask({ action: 'command', tabId: T, agentId: FIXTURE.leadId, operationId: 'op-3',

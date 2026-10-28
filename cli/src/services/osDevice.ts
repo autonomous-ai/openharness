@@ -39,6 +39,8 @@ export const PASSWORD_TIMEOUT_MS = 90_000
 /** The GitHub CLI, in the image and a dependency of the harness-os package (os/tools/build-package.py). */
 export const GH = '/usr/bin/gh'
 export const GH_TIMEOUT_MS = 15_000
+/** Putting the GitHub CLI back: a download of some 15 MB, and os/setup.py's own bound with room to answer. */
+export const GH_INSTALL_TIMEOUT_MS = 300_000
 /** How long a GitHub sign-in waits for its code to be entered: GitHub's device codes last 15 minutes. */
 export const GITHUB_SIGN_IN_MS = 15 * 60_000
 const ACTIONS = ['update', 'wifi_scan', 'wifi_join', 'wifi_result', 'sign_out', 'password', 'ssh', 'github']
@@ -237,6 +239,8 @@ export function startOsDevice(_core: CoreApi, deps: OsDeviceDeps = {}): ServiceR
   let signInError: string | null = null
   /** A sign-in started and not yet showing its code. */
   let starting: Promise<void> | null = null
+  /** The GitHub CLI being put back, for a sign-in. */
+  let installing: Promise<void> | null = null
 
   const harnessOs = (): boolean => env.HARNESS_OS === '1' || exists(LIVE_UPDATE)
 
@@ -323,25 +327,54 @@ export function startOsDevice(_core: CoreApi, deps: OsDeviceDeps = {}): ServiceR
   /** The GitHub account this computer's `gh` (and git, through it) uses, for the agents to clone, push and
    *  open pull requests with. `{ login }`, with the code to enter while a sign-in waits for it. */
   const githubStatus = async (): Promise<Payload> => {
-    if (!exists(GH)) return { error: 'GH_MISSING', message: 'The GitHub CLI is not on this computer yet: update it first.' }
+    const failed = signInError && !signingIn ? { signInError } : {}
+    // Gone (removed by hand, say): signed in to nothing, and put back by the next Sign in.
+    if (!exists(GH)) return { login: null, ...(installing ? { installing: true } : { missing: true, ...failed }) }
     const login = githubLoginOf(await exec(GH, ['auth', 'status', '--json', 'hosts'], { timeout: GH_TIMEOUT_MS }))
     return {
       login,
       ...(signingIn && !login ? { signingIn: { code: signingIn.code, url: signingIn.url } } : {}),
-      ...(signInError && !login && !signingIn ? { signInError } : {}),
+      ...(!login ? failed : {}),
     }
   }
 
   /** A device sign-in started, and answered with its code once `gh` shows it; the one already waiting
-   *  answered again. Signed in, git is set up to use the account (`gh auth setup-git`). */
+   *  answered again. Signed in, git is set up to use the account (`gh auth setup-git`). Without `gh`, it is
+   *  installed first, then the sign-in starts: answered at once `{ installing }`, for the phone to follow. */
   const githubSignIn = async (): Promise<Payload> => {
-    if (!exists(GH)) return githubStatus()
+    if (!exists(GH)) {
+      installing ??= installGh().finally(() => { installing = null })
+      return githubStatus()
+    }
     // A second ask while the first waits for its code (a phone asking again): the same sign-in, not another.
     if (!signingIn) {
       starting ??= startGithubSignIn().finally(() => { starting = null })
       await starting
     }
     return githubStatus()
+  }
+
+  /** The GitHub CLI put back from Harness OS's own repositories (os/setup.py install-gh), then the sign-in
+   *  it was installed for started. Longer than a phone waits on one answer, so never awaited by one. */
+  const installGh = async (): Promise<void> => {
+    signInError = null
+    console.log('[os-device] github: installing the GitHub CLI')
+    try {
+      const parsed: unknown = JSON.parse(await exec('sudo', ['-n', PYTHON, SETUP, 'install-gh'], { timeout: GH_INSTALL_TIMEOUT_MS }))
+      if (!record(parsed) || parsed.installed !== true) {
+        signInError = record(parsed) && typeof parsed.message === 'string' ? parsed.message : 'The GitHub CLI could not be installed.'
+        return
+      }
+    } catch (error) {
+      // An OS from before install-gh: sudo refuses it.
+      console.error('[os-device] github: install-gh failed:', short(error))
+      signInError = 'The GitHub CLI could not be installed here: update this computer, then try again.'
+      return
+    }
+    // Removing the package left its sign-in (~/.config/gh): back, it may be signed in already.
+    if ((await githubStatus().catch(() => ({ login: null }))).login) return
+    starting ??= startGithubSignIn().finally(() => { starting = null })
+    await starting.catch((error: unknown) => { signInError = short(error) })
   }
 
   /** `gh auth login` started and kept once it shows its code; failed when it shows none in GH_TIMEOUT_MS. */

@@ -18,11 +18,9 @@ import { identifier, object } from './wire.js'
 import { SwarmReads, type SwarmRead } from './swarmReads.js'
 
 type Json = Record<string, unknown>
-export type LeadState = 'ask' | 'stuck' | 'work' | 'done'
-/** `order`: the project's index in the Swarm (the app's order), so a dial can show the Leads as the app does whatever their urgency. */
-export interface SwarmLead { id: string; projectId: string; project: string; engine: string; owner: string; local: string; state: LeadState; order: number; since?: number }
-export interface SwarmCard { id: string; name: string; count: number; leads: SwarmLead[] }
-export interface LeadRecap { tabId: string; leadId: string; text: string; at: number; none: boolean }
+/** The cards' shapes are the core's contract with the Swarm (core/api.ts), which the core declares and the Swarm imports. */
+import type { LeadRecap, LeadState, SwarmCard, SwarmLead } from '../core/api.js'
+export type { LeadRecap, LeadState, SwarmCard, SwarmLead } from '../core/api.js'
 
 const MAX_CARDS = 16, MAX_LEADS = 12, NAME_BYTES = 48, RECAP_BYTES = 1500, MAX_LIST_PAGES = 10, MAX_RECAPS_IN_FLIGHT = 2
 /** The Pro keeps an id in 48 bytes with its NUL: 47 characters at most reach it. */

@@ -287,7 +287,7 @@ export interface AppSwarms {
 /** Why the list is as short as it is. The dial renders this, instead of drawing an empty wheel. */
 export type CableMachineSource = 'backend' | 'local' | 'signed-out'
 /**
- * What a Super Tab member's wait adds to its `question` (core/superTabAttention.ts): the tab's name and whether it needs a
+ * What a Super Tab member's wait adds to its `question` (superTabs/inCore/attention.ts): the tab's name and whether it needs a
  * decision or is stuck. The Harness Pro makes it an alert whose toast stays; firmware without it, and the round dial,
  * read the words alone. Nobody answers it on a device.
  */
@@ -335,7 +335,7 @@ export interface CableHost {
   listSwarms(): { selected: string; swarms: CableSwarm[]; tiles: CableTile[] }
   /** The dial picked a swarm. Relayed to the window, which switches and re-describes its desk. */
   selectSwarm(swarmId: string): void
-  /** The Swarm cards the core last told the devices (core/superTabCards.ts); empty until it has. */
+  /** The Swarm cards the core last told the devices (superTabs/inCore/cards.ts); empty until it has. */
   swarmCards?(): SwarmCard[]
   /** A device that speaks `swarmCard: 'v1'` is attached (true) or gone (false): the core starts or stops reading the Swarms. */
   swarmCardsWanted?(on: boolean): void

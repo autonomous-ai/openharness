@@ -14,6 +14,10 @@ import { identifier, object, SuperTabHostError } from './wire.js'
 export const CONTINUE = 'continue: your usage limit has reset and this task is yours again'
 /** A resume that could not happen yet (a prompt open, the backend out of reach or its clock behind) waits this long. */
 const RETRY_MS = 15_000
+/** How long a settled loss, or a retry time gone by, is kept (Diego's issue, 2026-10-27: both grew for the life of the
+ *  daemon, one per lost task). A roster read that still lists a settled loss is seconds old, so the continue is never typed
+ *  twice. */
+const SETTLED_MS = 10 * 60_000
 
 /** A loss due to resume: its agent here, and which loss of which task. */
 interface Due { tabId: string; agentId: string; harnessId: string; conversationId: string; assignmentId: string; lostAt: number; key: string }
@@ -22,8 +26,8 @@ type Owns = (tabId: string, assignmentId: string, harnessId: string) => Promise<
 
 export class LimitResume {
   /** Losses resumed or refused here, by assignment and loss (one task can be lost, resumed and lost again): neither is
-   *  asked about again, though a roster read from before still lists it. */
-  private readonly settled = new Set<string>()
+   *  asked about again, though a roster read from before still lists it. Each with when it was settled. */
+  private readonly settled = new Map<string, number>()
   private readonly retryAt = new Map<string, number>()
   /** Losses the backend gave back whose continue is not typed yet: the row stops listing them once the task is resumed. */
   private readonly typing = new Map<string, Due>()
@@ -46,6 +50,8 @@ export class LimitResume {
 
   private async resumeDue(rows: unknown[]): Promise<void> {
     const now = this.now()
+    for (const [key, at] of this.settled) if (at <= now - SETTLED_MS) this.settled.delete(key)
+    for (const [key, at] of this.retryAt) if (at <= now - SETTLED_MS) this.retryAt.delete(key)
     for (const row of rows.map(object)) {
       const agent = object(row.agent), resume = object(row.resume)
       if (!identifier(row.tabId) || !identifier(agent.id) || !identifier(agent.harnessId) || agent.machineId !== this.machineId) continue
@@ -67,11 +73,11 @@ export class LimitResume {
     } catch (error) {
       const refused = error instanceof SuperTabHostError && error.status >= 400 && error.status < 500 && error.code !== 'LIMIT_NOT_RESET'
       this.log(`limit resume of ${due.assignmentId}: ${error instanceof Error ? error.message : String(error)}`)
-      if (refused) this.settled.add(due.key)
+      if (refused) this.settled.set(due.key, now)
       else this.retryAt.set(due.key, now + RETRY_MS)
       return
     }
-    this.settled.add(due.key)
+    this.settled.set(due.key, now)
     this.retryAt.delete(due.key)
     this.typing.set(due.key, due)
   }
