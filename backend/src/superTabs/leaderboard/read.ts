@@ -14,11 +14,19 @@ export function readableWeek(week: number | undefined, now: number): number {
   return week
 }
 
-/** Dormant groups of one project active since [since]: a request shipped in a week the board sums wrote its Done row then. */
+/** What the board reads of a group (stats.ts, record.ts waitsNow) and its read check (projects.ts canReadGroup). */
+const BOARD_FIELDS = ['id', 'kind', 'projectId', 'audience', 'requesterId', 'reviewOf', 'archived', 'pullRequestUrls', 'ledger',
+  'assignment.id', 'assignment.status'] as const
+
+/** Dormant groups of one project active since [since]: a request shipped in a week the board sums wrote its Done row then.
+ *  Only the fields the board reads: every open board reads them once a minute (Diego's issue file, 2026-10-27). */
 export async function recentDormantGroups(tx: Prisma.TransactionClient, tabId: string, projectId: string, since: number): Promise<Conversation[]> {
-  // A group stored with no project belongs to the default one (projects.ts groupProject), as in a Swarm from before projects.
-  const project = projectId === 'lead' ? { OR: [{ projectId: 'lead' }, { projectId: null }, { projectId: { isSet: false } }] } : { projectId }
-  const rows = await tx.swarmGroup.findMany({ where: { tabId, deleted: false, dormant: true, lastActivityAt: { gte: new Date(since) }, ...project },
-    select: { data: true } })
-  return rows.map(row => row.data as unknown as Conversation)
+  // A group stored with no project belongs to the default one (projects.ts groupProject), as in a Swarm from before projects;
+  // a null match is a missing field too.
+  const project = projectId === 'lead' ? { $or: [{ projectId: 'lead' }, { projectId: null }] } : { projectId }
+  const rows = await tx.swarmGroup.aggregateRaw({ pipeline: [
+    { $match: { tabId, deleted: false, dormant: true, lastActivityAt: { $gte: { $date: new Date(since).toISOString() } }, ...project } },
+    { $project: { _id: 0, ...Object.fromEntries(BOARD_FIELDS.map(field => [`data.${field}`, 1])) } },
+  ] }) as unknown as Array<{ data: Conversation }>
+  return rows.map(row => row.data)
 }

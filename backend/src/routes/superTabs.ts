@@ -3,7 +3,7 @@ import { z } from 'zod'
 import { prisma } from '../lib/prisma.js'
 import { env } from '../config/env.js'
 import multipart from '@fastify/multipart'
-import { attachmentsFromEnv, MAX_ATTACHMENT_BYTES } from '../superTabs/attachments.js'
+import { attachmentsFromEnv, MAX_ATTACHMENT_BYTES, MAX_AVATAR_BYTES } from '../superTabs/attachments.js'
 import { validateBody, validateParams, validateQuery } from '../middlewares/validation.js'
 import { sendError, sendSuccess } from '../utils/response.js'
 import { operationSchema } from '../superTabs/commands.js'
@@ -241,6 +241,27 @@ export async function superTabRoutes(app: FastifyInstance, options: { store?: Su
           fail('INVALID_ATTACHMENT', 'Send a multipart form with conversationId and one file.', 400)
         }
         return uploaded ?? fail('INVALID_ATTACHMENT', 'Attach one file.', 400)
+      }))
+  })
+  // An avatar picture (superTabs/profile.ts) comes the same way, alone in its form; the command that sets it names whose it is.
+  await app.register(async scope => {
+    await scope.register(multipart, { limits: { fileSize: MAX_AVATAR_BYTES + 1, files: 1, fields: 0, parts: 1 } })
+    scope.post<{ Params: z.infer<typeof tabParams>; Querystring: z.infer<typeof agentQuery> }>('/api/super-tabs/:tabId/avatars',
+      { preHandler: [validateParams(tabParams), validateQuery(agentQuery)] }, (req, reply) => respond(reply, async () => {
+        let uploaded: unknown = null, stored: unknown = null
+        try {
+          for await (const part of req.parts()) {
+            if (part.type === 'field' || uploaded) { if (part.type === 'file') part.file.resume(); fail('INVALID_AVATAR', 'Send one picture.', 400) }
+            try { uploaded = await store.uploadAvatar(req.user!, req.params.tabId, { body: part.file }, req.query.asAgentId) }
+            catch (error) { stored = error; throw error } finally { part.file.resume() }
+          }
+        } catch (error) {
+          const code = error && typeof error === 'object' && 'code' in error ? error.code : null
+          if (code === 'FST_REQ_FILE_TOO_LARGE') fail('AVATAR_TOO_LARGE', 'An avatar can be at most 1 MB.', 413)
+          if (error instanceof SuperTabError || (error === stored && !(code && String(code).startsWith('FST_')))) throw error
+          fail('INVALID_AVATAR', 'Send a multipart form with one picture.', 400)
+        }
+        return uploaded ?? fail('INVALID_AVATAR', 'Send one picture.', 400)
       }))
   })
   app.get<{ Params: z.infer<typeof tabParams>; Querystring: z.infer<typeof mentionQuery> }>('/api/super-tabs/:tabId/mentions',

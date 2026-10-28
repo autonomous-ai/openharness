@@ -1078,6 +1078,22 @@ model SuperTabMention {
   @@index([tabId, conversationId, personId])
 }
 
+/// One reactor's emoji on one message (superTabs/reactions.ts). The id is derived from all four, so adding the same
+/// reaction twice keeps one row; message pages count them.
+model SuperTabReaction {
+  id             String   @id @map("_id")
+  tabId          String
+  conversationId String
+  messageId      String
+  /// person | agent
+  actorKind      String
+  actorId        String
+  emoji          String
+  createdAt      DateTime @default(now())
+
+  @@index([tabId, messageId])
+}
+
 /// A question to one person, with options and a recommendation (backend/src/superTabs/decisions.ts). Kept out of the tab
 /// state, as mentions are: an asking agent and the asked person read it, and the person answers it once.
 model SuperTabDecision {
@@ -1116,6 +1132,8 @@ model SuperTabAttachment {
   size           Int
   objectKey      String
   usedBy         String?
+  /// `avatar` for a profile picture (superTabs/profile.ts), which no message sends; absent on a chat file.
+  purpose        String?
   createdAt      DateTime @default(now())
 
   @@index([tabId, actorKey, createdAt])
