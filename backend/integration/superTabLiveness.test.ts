@@ -481,7 +481,7 @@ describe('an agent whose task was lost', () => {
 })
 
 describe('a start that never runs', () => {
-  it('fails 3 minutes after dispatch, naming its machine, and tells the Lead in its group', async () => {
+  it('fails 3 minutes after dispatch, naming its machine to its Lead only, and tells the Lead in its group', async () => {
     const f = await swarm()
     await f.beat(f.clock.now)
     const decision = { assessment: { difficulty: 'low', risk: 'low', why: 'Small task.' },
@@ -501,7 +501,9 @@ describe('a start that never runs', () => {
     expect((await f.timed.read(owner, f.tab)).state.starts!.find(s => s.id === startId)!.error).toBeNull()
     f.clock.now = dispatched + 3 * MINUTE + 1
     const told = (await f.leadInbox()).find(m => (m.source as { kind?: string }).kind === 'start-timeout')!
-    expect(told).toMatchObject({ conversationId: 'lead', text: 'Could not start Builder: Worker Mac did not start it within 3 minutes.' })
+    // Every group member reads the notice, so it names no machine (review of #1847); the start's Lead reads which one.
+    expect(told).toMatchObject({ conversationId: 'lead', text: 'Could not start Builder: its machine did not start it within 3 minutes.' })
+    expect((await f.timed.start(host, f.tab, startId, f.lead)).error).toBe('Worker Mac did not start it within 3 minutes')
     await expect(onMachine({ type: 'agent.started', startId, harnessId: randomUUID(), configuration: config }))
       .rejects.toMatchObject({ code: 'START_FAILED' })
   })
@@ -564,6 +566,97 @@ describe('the delivery poll of an agent with nothing waiting', () => {
 })
 
 describe('the morning digest', () => {
+  // #1772 review: every open decision counts, however many there are, and private ones never crowd out shared ones.
+  it('counts every decision waiting, past 200, and is not crowded out by newer private ones', async () => {
+    const f = await swarm()
+    const projectId = (await f.timed.read(owner, f.tab)).state.projects![0]!.id
+    await f.execute({ type: 'project.digest', projectId, time: '03:00', timeZone: 'UTC' })
+    const secret = String((await f.execute({ type: 'conversation.create', title: 'Salaries', brief: '', checks: [], audience: { personIds: [owner.sub] } } as Command)).result.conversationId)
+    const asked = (conversationId: string, count: number, from: number) => Array.from({ length: count }, (_, i) => ({ id: randomUUID(), tabId: f.tab,
+      batchId: 'batch', projectId, conversationId, assignmentId: null, personId: owner.sub, askerAgentId: f.lead, question: `Question ${i}?`,
+      options: ['Yes', 'No'], recommended: 0, unblocks: 'Work', createdAt: new Date(from + i) }))
+    const digestText = async () => {
+      f.clock.now += 24 * 60 * 60_000
+      await f.leadInbox()
+      return (await db.superTabMessage.findMany({ where: { tabId: f.tab }, orderBy: { sequence: 'desc' } })).find(m => (m.source as { kind?: string } | null)?.kind === 'digest-request')!.text
+    }
+    // One shared decision, older than 200 private ones.
+    await db.superTabDecision.createMany({ data: [...asked(f.group, 1, 1_000), ...asked(secret, 200, 5_000)] })
+    f.clock.now = 3 * 60 * 60_000 - 24 * 60 * 60_000
+    expect(await digestText()).toMatch(/\nDecisions waiting:\n- #1 Ship the parser: 1 for owner@example\.com$/)
+    await db.superTabDecision.createMany({ data: asked(f.group, 200, 10_000) })
+    expect(await digestText()).toMatch(/\nDecisions waiting:\n- #1 Ship the parser: 201 for owner@example\.com$/)
+  })
+
+  // groupBy on SuperTabDecision once panicked the Prisma engine on Mongo (review of #1855): the same counts, read without it.
+  it('counts the decisions waiting without groupBy, leaving out answered ones', async () => {
+    const counted = counting()
+    const f = await swarm({ client: counted.client })
+    const projectId = (await f.timed.read(owner, f.tab)).state.projects![0]!.id
+    await f.execute({ type: 'project.digest', projectId, time: '03:00', timeZone: 'UTC' })
+    const decision = (personId: string, i: number, answeredAt?: Date) => ({ id: randomUUID(), tabId: f.tab, batchId: 'batch', projectId,
+      conversationId: f.group, assignmentId: null, personId, askerAgentId: f.lead, question: `Question ${i}?`, options: ['Yes', 'No'],
+      recommended: 0, unblocks: 'Work', createdAt: new Date(1_000 + i), ...(answeredAt ? { answeredAt, choice: 0 } : {}) })
+    await db.superTabDecision.createMany({ data: [decision(owner.sub, 1), decision(owner.sub, 2), decision(owner.sub, 3, new Date(2_000))] })
+    f.clock.now = 3 * 60 * 60_000
+    counted.ops.length = 0
+    await f.leadInbox()
+    expect(counted.ops).not.toContain('SuperTabDecision.groupBy')
+    const digest = (await db.superTabMessage.findMany({ where: { tabId: f.tab } })).find(m => (m.source as { kind?: string } | null)?.kind === 'digest-request')!
+    expect(digest.text).toMatch(/\nDecisions waiting:\n- #1 Ship the parser: 2 for owner@example\.com$/)
+  })
+
+  it('lists a decision still waiting in a conversation that has gone quiet', async () => {
+    const f = await swarm()
+    const projectId = (await f.timed.read(owner, f.tab)).state.projects![0]!.id
+    await f.execute({ type: 'project.digest', projectId, time: '03:00', timeZone: 'UTC' })
+    await f.execute({ type: 'decision.ask', conversationId: f.group, personId: owner.sub,
+      questions: [{ question: 'Keep the old parser?', options: ['Keep it', 'Drop it'], recommended: 1, unblocks: 'The cleanup' }] }, host, f.lead)
+    // Ordinary loads no longer read it (sweeps.ts puts quiet conversations to sleep), and it has been quiet since before the
+    // digest's day, so nothing it shipped brings it back.
+    await db.swarmGroup.updateMany({ where: { tabId: f.tab, key: f.group }, data: { dormant: true, lastActivityAt: new Date(0) } })
+    f.clock.now = 3 * 60 * 60_000 + 2 * 24 * 60 * 60_000
+    await f.leadInbox()
+    const digest = (await db.superTabMessage.findMany({ where: { tabId: f.tab } })).find(m => (m.source as { kind?: string } | null)?.kind === 'digest-request')!
+    expect(digest.text).toMatch(/\nDecisions waiting:\n- #1 Ship the parser: 1 for owner@example\.com$/)
+  })
+
+  it('lists the decisions waiting, by conversation and person, never their questions', async () => {
+    const f = await swarm()
+    const projectId = (await f.timed.read(owner, f.tab)).state.projects![0]!.id
+    await f.execute({ type: 'project.digest', projectId, time: '03:00', timeZone: 'UTC' })
+    const question = (text: string) => ({ question: text, options: ['Behind a flag', 'To everyone'], recommended: 0, unblocks: 'The release' })
+    await f.execute({ type: 'decision.ask', conversationId: f.group, personId: owner.sub, questions: [question('Secret launch plan?'), question('Price it?')] }, host, f.lead)
+    f.clock.now = 3 * 60 * 60_000
+    await f.leadInbox()
+    const digest = (await db.superTabMessage.findMany({ where: { tabId: f.tab } })).find(m => (m.source as { kind?: string } | null)?.kind === 'digest-request')!
+    expect(digest.text).toMatch(/\nDecisions waiting:\n- #1 Ship the parser: 2 for owner@example\.com$/)
+    expect(digest.text).not.toMatch(/Secret launch plan|Price it|Behind a flag/)
+  })
+
+  // Diego's issue file (2026-10-27): a paused Swarm sends no digest (digest.ts digestRequest), so it stays due, and every full
+  // Lead poll read the dormant groups and waiting decisions for it again, over a window that kept growing.
+  it('reads nothing for the digest while the Swarm is paused, and sends it once it resumes', async () => {
+    const queries: Array<{ model?: string; args: { where?: Record<string, unknown> } }> = []
+    const client = db.$extends({ query: { $allModels: { async $allOperations({ model, args, query }) {
+      queries.push({ model, args: args as { where?: Record<string, unknown> } })
+      return query(args)
+    } } } }) as unknown as PrismaClient
+    const f = await swarm({ client })
+    const projectId = (await f.timed.read(owner, f.tab)).state.projects![0]!.id
+    await f.execute({ type: 'project.digest', projectId, time: '03:00', timeZone: 'UTC' })
+    await f.execute({ type: 'tab.pause', paused: true })
+    f.clock.now = 3 * 60 * 60_000
+    queries.length = 0
+    await f.leadInbox()
+    const forDigest = queries.filter(q => (q.model === 'SwarmGroup' && q.args.where?.dormant === true && q.args.where.lastActivityAt) || q.model === 'SuperTabDecision')
+    expect(forDigest).toEqual([])
+    await f.execute({ type: 'tab.pause', paused: false })
+    f.clock.now += 30_000
+    await f.leadInbox()
+    expect((await db.superTabMessage.findMany({ where: { tabId: f.tab } })).filter(m => (m.source as { kind?: string } | null)?.kind === 'digest-request')).toHaveLength(1)
+  })
+
   it('is sent once when two of the Lead\'s polls run at the same moment', async () => {
     const f = await swarm()
     const projectId = (await f.timed.read(owner, f.tab)).state.projects![0]!.id

@@ -13,7 +13,9 @@ cd "$(dirname "$0")/.."
 CADGEN_VERSION="$(cat CADGEN_VERSION)"
 harness_venv .venv 3.12 3.11 3.15 || exit 1
 echo "     installing cadgen $CADGEN_VERSION and the skills' extras (OpenCascade comes with it; minutes the first time)"
-harness_pip .venv "cadgen[snapshot]==${CADGEN_VERSION}" trimesh numpy scipy rtree networkx lxml
+# cadgen names cadquery-ocp and build123d without versions, and cadquery-ocp 8 drops TDF_LabelSequence,
+# which cadgen's STEP loader imports: pinned to the pair Autonomous Workshop builds with.
+harness_pip .venv "cadgen[snapshot]==${CADGEN_VERSION}" "cadquery-ocp==7.9.3.1.1" "build123d==0.11.1" trimesh numpy scipy rtree networkx lxml
 echo "ok   cadgen $CADGEN_VERSION"
 node_version="$(toolchain/node.sh --version 2>&1)" || { echo "$node_version"; exit 1; }
 echo "ok   node $node_version (STL, 3MF and GLB exports)"

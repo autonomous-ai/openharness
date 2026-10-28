@@ -8,6 +8,7 @@ import '../shortcuts/app_keymap.dart';
 import '../shortcuts/keymap.dart';
 import '../state/swarm_navigation.dart';
 import '../state/swarm_search.dart';
+import '../state/workspace_chrome.dart';
 import 'desktop_chrome.dart';
 import 'finger_target.dart';
 import 'box_chrome.dart' show ReadlineKeys;
@@ -15,6 +16,9 @@ import 'swarm_switcher.dart';
 import 'swarm_search_input.dart';
 import 'key_hints.dart';
 import 'machine_picker_extras.dart';
+import 'swarm_resource_preview.dart' show resourcePreviewFormFocused;
+
+part 'desktop_search_pages.dart';
 
 /// A desktop command palette over the existing search and activation pipeline.
 /// Category buttons edit the same query as keyboard prefixes; no second index.
@@ -93,6 +97,23 @@ class DesktopSearchPanel extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // Only a host that can go compact (the web) pages its results; Desktop,
+    // which sets no compactBelow, builds the panel as it always has.
+    if (search.harnessContext != null ||
+        WorkspaceChrome.of(context).compactBelow <= 0) {
+      return _panel(context, null);
+    }
+    return _SearchPages(
+      search: search,
+      onChoose: onChoose,
+      onRefocus: onRefocus,
+      builder: _panel,
+    );
+  }
+
+  /// The panel; [pages] is non-null on a phone, where the results and a row's
+  /// details are two pages under the search field and its scopes.
+  Widget _panel(BuildContext context, _SearchPagesState? pages) {
     grid.AppTheme.watch(context);
     // A phone's buttons are a finger's size; a mouse keeps 32. On a phone the
     // three glyphs share one size, and the row's right inset puts Close's glyph
@@ -100,6 +121,30 @@ class DesktopSearchPanel extends StatelessWidget {
     final compact = workspaceIsCompact(context);
     final button = compact ? kFingerTarget : 32.0;
     final glyph = compact ? 20.0 : 18.0;
+    final hooks = _machineHooks(context);
+    Widget machineHeader(MachinePickerHooks hooks) => ListenableBuilder(
+      listenable: search,
+      builder: (context, _) => search.isMachineMode
+          ? MachinePickerHeader(search: search, hooks: hooks)
+          : const SizedBox.shrink(),
+    );
+    Widget machineFooter(MachinePickerHooks hooks) => ListenableBuilder(
+      listenable: search,
+      builder: (context, _) => search.isMachineMode
+          ? Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Divider(height: 1, color: DesktopChrome.rim),
+                MachinePickerFooter(
+                  search: search,
+                  hooks: hooks,
+                  onAddMachine: _addMachine,
+                ),
+              ],
+            )
+          : const SizedBox.shrink(),
+    );
     return DesktopChrome(
       child: Align(
         alignment: Alignment.topCenter,
@@ -204,7 +249,9 @@ class DesktopSearchPanel extends StatelessWidget {
                                 ),
                               ),
                       ),
-                      if (search.harnessContext == null)
+                      // A phone's preview is a page of its own: nothing to
+                      // show or hide beside the list.
+                      if (search.harnessContext == null && pages == null)
                         ListenableBuilder(
                           listenable: search,
                           builder: (context, _) => _toolbarButton(
@@ -275,49 +322,53 @@ class DesktopSearchPanel extends StatelessWidget {
                       ),
                     ),
                   ),
-                if (_machineHooks(context) case final hooks?)
-                  ListenableBuilder(
-                    listenable: search,
-                    builder: (context, _) => search.isMachineMode
-                        ? MachinePickerHeader(search: search, hooks: hooks)
-                        : const SizedBox.shrink(),
-                  ),
-                Flexible(
-                  child: ListenableBuilder(
-                    listenable: search,
-                    builder: (context, _) => SwarmSearchResults(
-                      search: search,
-                      onChoose: onChoose,
-                      onRefocus: onRefocus,
-                      // Keep the dialog, editor, and footer stationary while a
-                      // query gains a preview or changes to an empty result.
-                      fitRows: search.harnessContext != null,
-                      // The scope control already explains the empty search.
-                      // Give results the full width until there is a preview.
-                      showPreview: !search.showsTypeHints,
-                      sideBySideMinWidth: 800,
-                      previewBuilder: previewBuilder,
+                if (pages != null)
+                  Flexible(
+                    child: pages.view(
+                      list: Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          if (hooks != null) machineHeader(hooks),
+                          Expanded(
+                            child: ListenableBuilder(
+                              listenable: search,
+                              builder: (context, _) => SwarmSearchResults(
+                                search: search,
+                                onChoose: pages.choose,
+                                onRefocus: onRefocus,
+                                showPreview: false,
+                                onShowDetails: pages.show,
+                              ),
+                            ),
+                          ),
+                          if (hooks != null) machineFooter(hooks),
+                        ],
+                      ),
+                      preview: previewBuilder,
+                    ),
+                  )
+                else ...[
+                  if (hooks != null) machineHeader(hooks),
+                  Flexible(
+                    child: ListenableBuilder(
+                      listenable: search,
+                      builder: (context, _) => SwarmSearchResults(
+                        search: search,
+                        onChoose: onChoose,
+                        onRefocus: onRefocus,
+                        // Keep the dialog, editor, and footer stationary while a
+                        // query gains a preview or changes to an empty result.
+                        fitRows: search.harnessContext != null,
+                        // The scope control already explains the empty search.
+                        // Give results the full width until there is a preview.
+                        showPreview: !search.showsTypeHints,
+                        sideBySideMinWidth: 800,
+                        previewBuilder: previewBuilder,
+                      ),
                     ),
                   ),
-                ),
-                if (_machineHooks(context) case final hooks?)
-                  ListenableBuilder(
-                    listenable: search,
-                    builder: (context, _) => search.isMachineMode
-                        ? Column(
-                            mainAxisSize: MainAxisSize.min,
-                            crossAxisAlignment: CrossAxisAlignment.stretch,
-                            children: [
-                              Divider(height: 1, color: DesktopChrome.rim),
-                              MachinePickerFooter(
-                                search: search,
-                                hooks: hooks,
-                                onAddMachine: _addMachine,
-                              ),
-                            ],
-                          )
-                        : const SizedBox.shrink(),
-                  ),
+                  if (hooks != null) machineFooter(hooks),
+                ],
                 if (search.harnessContext != null) ...[
                   Divider(height: 1, color: DesktopChrome.rim),
                   Padding(

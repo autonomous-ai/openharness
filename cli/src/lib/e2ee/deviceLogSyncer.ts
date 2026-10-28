@@ -593,7 +593,13 @@ export class DeviceLogSyncer {
       }
       const current = this.deps.store.read()
       const state = current.state!
-      if (current.frozen) { this.looseRemovals(got.entries); return }
+      // A log frozen as `invalid` from a page that claimed a head past the entries it carried heals by itself once the
+      // backend serves them: the backend did that whenever a device registered between its two reads, and froze every
+      // device that read at that moment until someone ran `harness devices rebaseline` (#1789, fixed 2026-10-27; a Mac
+      // frozen on 10-24 could never link its Harness Team account). The entries must continue the chain this machine
+      // verified and check out one by one (`accept`), or it stays frozen. A rollback or a fork never heals on its own.
+      const heals = current.frozen?.reason === 'invalid' && got.head.seq > state.head.seq && got.entries.length > 0
+      if (current.frozen && !heals) { this.looseRemovals(got.entries); return }
       if (got.head.seq < state.head.seq) { this.freeze('rollback'); return }
       if (got.head.seq === state.head.seq) {
         if (got.head.hash !== state.head.hash) this.freeze('fork')
@@ -601,6 +607,7 @@ export class DeviceLogSyncer {
       }
       if (!got.entries.length) { this.freeze('invalid'); return }
       if (!this.accept(got.entries, bootstrap)) return
+      if (heals) this.deps.log?.('[devlog] the device list checks out again: no longer frozen')
       if (this.deps.store.read().state!.head.seq >= got.head.seq) return
     }
   }

@@ -183,7 +183,7 @@ function blankOrphanKeyBodies(text: string): string {
 export function redactHandoffSecrets(text: string): string {
   return blankOrphanKeyBodies(text
     .replace(/-----BEGIN [A-Z0-9 ]+-----[\s\S]*?(?:-----END [A-Z0-9 ]+-----|$)/g, '-----BEGIN <redacted>-----'))
-    .replace(/\b(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,})/g, '<redacted>')
+    .replace(/\b(?:ghs_\d+_[A-Za-z0-9_-]{8,}(?:\.[A-Za-z0-9_-]{8,}){2}|gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,})/g, '<redacted>')
     .replace(/\b(?:AKIA|ASIA)[0-9A-Z]{16}\b/g, '<redacted>')
     .replace(/\bxox[a-z]-[A-Za-z0-9-]{10,}/g, '<redacted>')
     .replace(/\bAIza[0-9A-Za-z_-]{35}/g, '<redacted>')

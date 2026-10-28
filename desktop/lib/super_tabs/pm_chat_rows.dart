@@ -50,8 +50,8 @@ class SuperTabPmUnread extends StatelessWidget {
 }
 
 /// A person's Chat with PM as a direct message: the Product Manager's avatar
-/// and name, like a chat app's direct messages, with the project named after
-/// it when the Swarm has several.
+/// and name, like a chat app's direct messages, with the project in brackets
+/// after it when the Swarm has several: "Finn (web-2)".
 class SuperTabPmChatRow extends StatelessWidget {
   const SuperTabPmChatRow({
     super.key,
@@ -138,7 +138,7 @@ class SuperTabPmChatRow extends StatelessWidget {
                               const SizedBox(width: 8),
                               Flexible(
                                 child: Text(
-                                  project,
+                                  '($project)',
                                   maxLines: 1,
                                   overflow: TextOverflow.ellipsis,
                                   style: DesktopChrome.metadata(),

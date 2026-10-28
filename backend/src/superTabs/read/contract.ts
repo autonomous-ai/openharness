@@ -25,10 +25,11 @@ export type GroupChange = LivePart<GroupView> | Tombstone | DormantStub
  *  invitations filtered (invitations only for the Swarm owner). */
 export type HeadView = Pick<SuperTabState, 'version' | 'id' | 'name' | 'project' | 'projects' | 'leadsConversationId' | 'ownerId'
   | 'environment' | 'routingPolicy' | 'rules' | 'paused' | 'invitations' | 'localModels'>
-export type MemberView = Person
+/** A member's avatar says only `{ kind: 'upload' }` for an upload: its link comes signed in `derived.avatars`. */
+export type MemberView = Omit<Person, 'avatar'> & { avatar?: import('../profile.js').AvatarView }
 /** The stored agent. Time-based and cross-part values (`downSince`, `limitedUntil`, an awaiting decision, the custom
  *  role) come only in `derived.agents`, so an agent never changes without a new version. */
-export type AgentView = Omit<Agent, 'downNamed' | 'downSince' | 'limitedUntil' | 'roleId'>
+export type AgentView = Omit<Agent, 'downNamed' | 'downSince' | 'limitedUntil' | 'roleId' | 'avatar'> & { avatar?: import('../profile.js').AvatarView }
 /** A private conversation's audience: the people it is shared with. The project's Lead always reads it too. */
 export interface Audience { people: Array<{ id: string; generation: string }> }
 /** A conversation with its own message counter (`lastMessageSequence` and message sequences compare within one group).
@@ -60,8 +61,13 @@ export interface Derived {
   otherProjectsWork?: OtherProjectWorkView[]
   /** A person only. */
   mentionsWaiting?: number
+  /** Signed links to uploaded avatars, by `person:<id>` and `agent:<id>` (avatarLinks.ts): fresh with every read, the same
+   *  through each half hour, each opening for at most an hour. Absent when nobody visible has one. */
+  avatars?: Record<string, string>
   /** A person only: decisions asked of them, still open. */
   decisionsWaiting?: number
+  /** A person only: a digest of which decisions are open, moving when they change though the count may not. */
+  decisionsDigest?: string
 }
 export interface OtherProjectWorkView {
   conversationId: string; projectName: string; title: string; owns: string[]; status: WorkStatus; agentName: string; pr: string | null
@@ -135,7 +141,13 @@ export interface SwarmList {
  *  newest row the same way. `next` is null at the end. `after` alone (no `afterId`) means strictly after that sequence,
  *  which is all a poll for new messages needs. */
 export interface MessagePageCursor { sequence: number; id: string }
-export interface MessagePage<M = Record<string, unknown>> { messages: M[]; next: MessagePageCursor | null }
+export interface MessagePage<M = Record<string, unknown>> {
+  messages: M[]
+  next: MessagePageCursor | null
+  /** The conversation's reaction counter (reactions.ts): when it moved, read the page shown again for its counts. Each
+   *  message carries `reactions: [{ emoji, count, by: [{ kind, id }] }]`, current members only. */
+  reactionSeq: number
+}
 
 /** GET /api/super-tabs/hosts/:machineId/changes?cursor=[&full=1], or POST to the same path with this body when the host
  *  holds etags (up to 500 Swarms do not fit in a URL). Ask `full` at start and at least every 60 s. */

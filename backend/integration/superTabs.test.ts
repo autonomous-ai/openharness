@@ -797,6 +797,40 @@ describe('since when a worker is down', () => {
 })
 
 describe('Super Tabs on a real Mongo replica set', () => {
+  it('records a grid worker\'s model on every assignment, after its start is finished and no longer loaded', async () => {
+    // Review of #1808: the run read the start, which a command does not load once the start is finished, so an assigned or
+    // reused Kimi worker counted as a subscription run.
+    const tab = (await store.create(owner, randomUUID(), 'Grid pool')).id
+    const invitation = await run(tab, { type: 'invite.create', email: host.email, role: 'collaborator', conversationId: 'lead' })
+    await run(tab, { type: 'invite.accept', inviteId: invitation.result.inviteId as string }, host)
+    await db.machine.create({ data: { machineId: 'grid-host', userId: host.sub, apiKey: 'fixture-grid-host', managerId: 'fixture', autonomousEnv: 'prod', authMode: 'remote' } })
+    const team = await teamMachine('grid-host')
+    await run(tab, { type: 'machine.contribute', machineId: 'grid-host', name: 'Grid laptop', cwd: '/project', engines: ['claude'], maxAgents: 2 }, host)
+    const grid = (await store.read(owner, tab)).state.localModels!.grid
+    const generation = (await poolRows(store, host, 'grid-host'))[0]!.machine.generation
+    await store.observeMachine(team.session, tab, 'grid-host', { generation, resources: { cpuPercent: 10, memoryTotalBytes: 32e9, memoryUsedBytes: 4e9,
+      diskFreeBytes: 120e9, diskTotalBytes: 500e9, projectDiskFreeBytes: 120e9, deviceType: 'Laptop', chip: 'Fixture CPU', os: 'macOS', gpuPercent: null },
+      quotas: [], tools: { git: true }, runningHarnessIds: [], stoppedHarnessIds: [], privacy: team.privacy,
+      localModels: [{ grid, model: 'moonshotai/kimi-k3', name: 'Kimi K3', kind: 'api' }] })
+    const group = String((await run(tab, { type: 'conversation.create', title: 'Small fix', brief: 'Fix it.',
+      checks: [{ description: 'Independent review', independent: true }] })).result.conversationId)
+    const startId = String((await run(tab, { type: 'agent.start', request: { conversationId: group, machineId: 'grid-host', engine: 'claude', name: 'Builder',
+      cwd: '/project', worktree: true, gridModel: 'moonshotai/kimi-k3', gridName: grid,
+      requirements: { memoryBytes: 0, diskBytes: 0, maxCpuPercent: 100, tools: [], devices: [], quotaRequired: false } } })).result.startId)
+    const hostRun = (command: Command) => store.execute(host, tab, { operationId: randomUUID(), command }, undefined, 'grid-host')
+    await hostRun({ type: 'agent.startDispatch', startId })
+    const agentId = String((await hostRun({ type: 'agent.started', startId, harnessId: 'grid-builder',
+      configuration: { engine: 'claude', model: null, effort: null, contextWindow: null, engineVersion: null } })).result.agentId)
+    await hostRun({ type: 'agent.startSettled', startId, warning: null })
+    const runs = async () => (await storedState(tab)).conversations.find(c => c.id === group)!.ledger!.runs!.map(r => [r.model, r.grid])
+    await run(tab, { type: 'work.assign', conversationId: group, agentId })
+    expect(await runs()).toEqual([['moonshotai/kimi-k3', true]])
+    const first = (await store.read(owner, tab)).state.conversations.find(c => c.id === group)!.assignment!.id
+    await run(tab, { type: 'work.cancel', conversationId: group, assignmentId: first, reason: 'Again.' })
+    await run(tab, { type: 'work.assign', conversationId: group, agentId })
+    expect(await runs()).toEqual([['moonshotai/kimi-k3', true], ['moonshotai/kimi-k3', true]])
+  })
+
   it('contributes project capacity without sharing the computer and fences host execution', async () => {
     const tab = (await store.create(owner, randomUUID(), 'Machine pool')).id
     const invitation = await run(tab, { type: 'invite.create', email: host.email, role: 'collaborator', conversationId: 'lead' })
@@ -1917,13 +1951,13 @@ describe('Super Tabs on a real Mongo replica set', () => {
     expect(await store.routeDecision(owner, tab, id)).toMatchObject({ outcome: 'done', assignmentId: second })
   })
 
-  it('limits route records to 30 per tab per hour', async () => {
+  it('records more than 30 routes in an hour: there is no hourly cap', async () => {
     const { tab, lead } = await fixture()
     const decision = { assessment: { difficulty: 'low', risk: 'low', why: 'Docs.' },
       candidates: [{ id: 'c0', kind: 'new', machineId: 'test-host', engine: 'claude', model: 'haiku', effort: 'auto', quality: 1, cost: 1, title: 'New agent', label: 'New agent' }],
       excluded: [], floor: 1, notes: false, pick: 'c0', via: 'only', p: null, belowFloor: false, why: 'Only candidate.' }
     for (let i = 0; i < 30; i++) await run(tab, { type: 'route.record', conversationId: 'lead', decision } as Command, host, lead)
-    await expect(run(tab, { type: 'route.record', conversationId: 'lead', decision } as Command, host, lead)).rejects.toMatchObject({ code: 'RATE_LIMITED', status: 429 })
+    await expect(run(tab, { type: 'route.record', conversationId: 'lead', decision } as Command, host, lead)).resolves.toBeDefined()
   })
 })
 
@@ -2662,7 +2696,7 @@ describe('Lead mentions', () => {
     const [mention, ...rest] = await list(tab, peer, 'waiting')
     expect(rest).toEqual([])
     expect(mention).toEqual({ id: expect.any(String), projectId: 'lead', projectName: 'Pilot', conversationId: group, conversationTitle: 'Copy review',
-      messageId, leadName: expect.any(String), text: text.slice(0, 200), createdAt: expect.any(String), resolvedAt: null, resolvedBy: null })
+      messageId, leadId: lead, leadName: expect.any(String), text: text.slice(0, 200), createdAt: expect.any(String), resolvedAt: null, resolvedBy: null })
     expect(mention!.leadName).toBe((await waiting(tab, owner)).agents.find(a => a.id === lead)!.displayName)
     expect(await list(tab, owner, 'waiting')).toEqual([])
     expect(await list(tab, peer, 'earlier')).toEqual([])
@@ -2688,6 +2722,30 @@ describe('Lead mentions', () => {
     await run(tab, { type: 'message.send', conversationId: group, text: 'Confirmed.', replyTo: messageId, recipientIds: [] }, peer)
     expect(await list(tab, peer, 'waiting')).toEqual([])
     expect(await list(tab, peer, 'earlier')).toEqual([expect.objectContaining({ messageId, resolvedBy: 'reply' })])
+  })
+
+  it('counts a tag in a conversation gone quiet, as the list shows it, on every read, and never once the person cannot read it', async () => {
+    const { tab, lead, group } = await tagged()
+    const other = (await run(tab, { type: 'conversation.create', title: 'Pricing page', brief: '', checks: [] })).result.conversationId as string
+    await run(tab, { type: 'conversation.agent', conversationId: other, agentId: lead, present: true, lead: true })
+    await run(tab, { type: 'message.send', conversationId: other, text: 'Check the prices.', replyTo: null, recipientIds: [], mentions: [peer.sub] }, host, lead)
+    // Ordinary loads no longer read it (sweeps.ts puts quiet conversations to sleep).
+    await db.swarmGroup.updateMany({ where: { tabId: tab, key: group }, data: { dormant: true } })
+    const derived = async (url: string) => {
+      const response = await app.inject({ method: 'GET', url: `/api/super-tabs/${tab}/${url}`, headers: { authorization: `Bearer ${peer.sub}` } })
+      expect(response.statusCode, response.body).toBe(200)
+      return response.json().data as { cursor: string; derived: { mentionsWaiting?: number } }
+    }
+    const first = await derived('parts')
+    expect((await list(tab, peer, 'waiting')).map(m => m.conversationId).sort()).toEqual([group, other].sort())
+    expect(first.derived.mentionsWaiting).toBe(2)
+    expect((await derived(`changes?cursor=${first.cursor}`)).derived.mentionsWaiting).toBe(2)
+    expect((await waiting(tab, peer)).mentionsWaiting).toBe(2)
+    await run(tab, { type: 'project.sharing', projectId: 'lead', visibility: 'private', memberIds: [] })
+    expect(await db.swarmGroup.findFirst({ where: { tabId: tab, key: group }, select: { dormant: true } })).toEqual({ dormant: true })
+    expect(await list(tab, peer, 'waiting')).toEqual([])
+    expect((await derived('parts')).derived.mentionsWaiting).toBe(0)
+    expect((await waiting(tab, peer)).mentionsWaiting).toBe(0)
   })
 
   it('lets a tagged viewer mark it done', async () => {

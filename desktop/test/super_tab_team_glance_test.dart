@@ -111,6 +111,7 @@ Future<ConversationServer> _swarm(
           onInvite: () {},
           onOpenAgent: (_) {},
           onAddAgent: (_) {},
+          onAnswer: (_) {},
         ),
       ),
     ),

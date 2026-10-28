@@ -133,6 +133,16 @@ class UsageController extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Drops every remote machine's figures: they belonged to the account that
+  /// just signed out, and its emails must not show under the next one. A read
+  /// still on its way lands nowhere, like any older answer.
+  void forgetRemote() {
+    if (_disposed) return;
+    _remoteRequest++;
+    _remote = const [];
+    notifyListeners();
+  }
+
   Future<void> _refreshLocal() async {
     _started = true;
     final request = ++_request;

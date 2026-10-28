@@ -355,7 +355,7 @@ void main() {
         session: AuthSession(storage: MemoryStore()),
         keys: keys,
       ),
-    )..deafMachineListInterval = const Duration(milliseconds: 40);
+    )..deafMachineListPaceForTest = const [Duration(milliseconds: 40)];
     final api = _Api(backend)..user = 'user-a';
     app.api = api;
     addTearDown(app.dispose);
@@ -378,7 +378,7 @@ void main() {
 
     // Back to the tab (the person was signing in their computer): asked for at once.
     final beforeResume = api.machineReads;
-    app.deafMachineListInterval = const Duration(hours: 1);
+    app.deafMachineListPaceForTest = const [Duration(hours: 1)];
     app.appLifecycleChanged(AppLifecycleState.resumed);
     await settle();
     expect(api.machineReads, greaterThan(beforeResume));

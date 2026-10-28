@@ -1,5 +1,5 @@
 /** Exact-resume lifecycle shared by the daemon and its isolated acceptance tests. */
-import type { AdoptSwarmSkill } from '../core/agents/swarmSkills.js'
+import type { AdoptSwarmSkill } from '../core/api.js'
 import { transcriptSize, type RelaunchMarks } from '../core/transcripts/relaunch.js'
 import { isTerminalEngine } from '../engines/types.js'
 import { installedDsh } from '../dsh/installed.js'
@@ -7,6 +7,7 @@ import { engineKeepsTranscriptFile, registry as liveRegistry, type RegisteredSes
 import { controlTranscriptEvidence } from '../engines/transcriptBindings.js'
 import { materializeResumeTranscript } from '../engines/resumeTranscript.js'
 import { IdentityReadUnavailable } from '../engines/kit/identityScan.js'
+import { ResumePreparationError } from '../engines/kit/resumeRepair.js'
 import type { StoppedAgentStore } from './stoppedAgents.js'
 import { resumeStoppedAgent, waitForResumedAgent, resumeChanged, resumeUnconfirmed, RESUME_READINESS_BUDGET_MS } from './resumeStoppedAgent.js'
 import { checkPidRuntime } from './deleteAgentFallback.js'
@@ -53,6 +54,19 @@ export interface ResumeAgentServiceDeps {
   attachSession(session: RegisteredSession): Promise<boolean>
   /** Where the relaunched engine's own writing begins, for the attach that follows (core/transcripts/relaunch.ts). */
   relaunchMarks?: Pick<RelaunchMarks, 'note'>
+}
+
+/** A history that could not be prepared, and which check refused it: on 2026-10-26, 10 of 17 failed resumes were
+ *  this and nothing said why. The kind goes in the reply for its counter; the message of a typed failure (an engine's
+ *  file label and a line number, never conversation text) only to this daemon's log. Any other error is logged by
+ *  its class alone: its message can carry a profile path, a token or a line of the conversation (review of #1777). */
+function preparationFailed(agent: string, error: unknown) {
+  const reason = error instanceof ResumePreparationError ? error.kind : 'other'
+  const said = error instanceof ResumePreparationError ? error.message : error instanceof Error ? error.name : typeof error
+  console.warn(`[resume] ${agent} · resume preparation failed: ${reason}: ${said}`)
+  return { ok: false as const, error: 'RESUME_PREPARATION_FAILED', reason,
+    detail: reason === 'changed_during' ? 'Codex is still writing this conversation. Try again once it stops.'
+      : 'Could not prepare the saved conversation. Its history has been retained.' }
 }
 
 export function createResumeAgentService(deps: ResumeAgentServiceDeps) {
@@ -275,7 +289,7 @@ export function createResumeAgentService(deps: ResumeAgentServiceDeps) {
         if (resumeSessionId) {
           try { prepareSessionResume(saved) } catch (error) {
             if (error instanceof IdentityReadUnavailable) throw error
-            return { ok: false, error: 'RESUME_PREPARATION_FAILED', detail: 'Could not prepare the saved conversation. Its history has been retained.' }
+            return preparationFailed(sid(saved.agentId), error)
           }
           // The confirmed synchronous repair may atomically replace this file.
           // Earn a new proof of the same conversation before the next await.

@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { encryptDownFrame, encryptRpcResult } from '../lib/e2ee/applicationFrames.js'
 import { fakeCore } from '../testing/fakeCore.js'
 import {
-  activeSsid, CMDLINE, execBounded, joinRequest, LIVE_UPDATE, MAX_OUTPUT, nmcliFields, OS_DEVICE_REQUESTS, SETUP, SETUP_RESULT, spawnDetached,
+  activeSsid, CMDLINE, deviceCodeOf, execBounded, GH, githubDeviceSignIn, githubLoginOf, joinRequest, LIVE_UPDATE, MAX_OUTPUT, nmcliFields, OS_DEVICE_REQUESTS, SETUP, SETUP_RESULT, spawnDetached,
   startOsDevice, UPDATE_BUSY_MS, updateOf, wifiNetworks, type OsDeviceDeps,
 } from './osDevice.js'
 
@@ -77,7 +77,7 @@ describe('the Harness OS computer, managed from the phone', () => {
           cli: { running: '0.9.1', available: true, next: null },
         },
       },
-      wifi: { ssid: 'Home: 5G' }, hotspot: 'Harness-BD19', encrypted: true, features: ['sign_out', 'password', 'ssh'],
+      wifi: { ssid: 'Home: 5G' }, hotspot: 'Harness-BD19', encrypted: true, features: ['sign_out', 'password', 'ssh', 'github'],
     })
     expect(exec).toHaveBeenCalledWith('/usr/bin/python3', [LIVE_UPDATE, 'status'], { timeout: 15_000 })
     expect(exec).toHaveBeenCalledWith('/usr/bin/python3', [SETUP, 'name'], { timeout: 10_000 })
@@ -88,8 +88,8 @@ describe('the Harness OS computer, managed from the phone', () => {
 
   it('still answers on Harness OS when its update tool or nmcli fails', async () => {
     const failing = (reason: unknown) => service({ exec: vi.fn(async () => { throw reason }) }).ask({ action: 'status' })
-    expect(await failing(new Error('Command failed: python3\nTraceback ...'))).toEqual({ harnessOs: true, update: { available: false, error: 'Command failed: python3' }, wifi: { ssid: null }, hotspot: null, encrypted: true, features: ['sign_out', 'password', 'ssh'] })
-    expect(await failing('killed')).toEqual({ harnessOs: true, update: { available: false, error: 'killed' }, wifi: { ssid: null }, hotspot: null, encrypted: true, features: ['sign_out', 'password', 'ssh'] })
+    expect(await failing(new Error('Command failed: python3\nTraceback ...'))).toEqual({ harnessOs: true, update: { available: false, error: 'Command failed: python3' }, wifi: { ssid: null }, hotspot: null, encrypted: true, features: ['sign_out', 'password', 'ssh', 'github'] })
+    expect(await failing('killed')).toEqual({ harnessOs: true, update: { available: false, error: 'killed' }, wifi: { ssid: null }, hotspot: null, encrypted: true, features: ['sign_out', 'password', 'ssh', 'github'] })
     const notJson = service({ exec: vi.fn(async () => 'not json') })
     expect(await notJson.ask({ action: 'status' })).toMatchObject({ update: { available: false, error: expect.stringContaining('JSON') } })
     const notObject = service({ exec: vi.fn(async () => '[1]') })
@@ -252,6 +252,195 @@ describe('the Harness OS computer, managed from the phone', () => {
     ])
   })
 
+  describe('GitHub, for the agents to clone, push and open pull requests with', () => {
+    const SIGNED_IN = JSON.stringify({ hosts: { 'github.com': [{ state: 'success', active: true, host: 'github.com', login: 'octo' }] } })
+    const SIGNED_OUT = JSON.stringify({ hosts: {} })
+
+    /** A `gh auth login` that shows [code] and ends when the test says. */
+    function signIn(code = { code: 'AB12-CD34', url: 'https://github.com/login/device' }) {
+      let end!: (error?: Error) => void
+      const done = new Promise<void>((resolve, reject) => { end = (error) => error ? reject(error) : resolve() })
+      done.catch(() => {})
+      const run = { code: Promise.resolve(code), done, stop: vi.fn() }
+      return { run, end }
+    }
+
+    function github(over: OsDeviceDeps = {}) {
+      let account = SIGNED_OUT
+      const exec = vi.fn(async (_file: string, args: readonly string[]) => {
+        if (args[1] === 'logout') account = SIGNED_OUT
+        return args[1] === 'status' ? account : ''
+      })
+      const login = signIn()
+      const githubSignIn = vi.fn(() => login.run)
+      const { ask } = service({ exec, githubSignIn, ...over })
+      return { ask, exec, githubSignIn, login, signInAs: (name: string) => { account = SIGNED_IN.replace('octo', name) } }
+    }
+
+    it('says which account it uses, or none', async () => {
+      const { ask, signInAs } = github()
+      expect(await ask({ action: 'github' })).toEqual({ login: null })
+      signInAs('octo')
+      expect(await ask({ action: 'github', state: 'status' })).toEqual({ login: 'octo' })
+    })
+
+    it('reads an account whose token stopped working, or one not active, as signed out', () => {
+      expect(githubLoginOf(SIGNED_IN)).toBe('octo')
+      expect(githubLoginOf(SIGNED_IN.replace('success', 'error'))).toBeNull()
+      expect(githubLoginOf(SIGNED_IN.replace('"active":true', '"active":false'))).toBeNull()
+      expect(githubLoginOf('{}')).toBeNull()
+    })
+
+    it('signs in with a code to enter on another device, then sets git up to use the account', async () => {
+      vi.spyOn(console, 'log').mockImplementation(() => {})
+      const { ask, exec, githubSignIn, login, signInAs } = github()
+      const waiting = { login: null, signingIn: { code: 'AB12-CD34', url: 'https://github.com/login/device' } }
+      expect(await ask({ action: 'github', state: 'sign_in' })).toEqual(waiting)
+      // Asked again, the same code: one sign-in at a time.
+      expect(await ask({ action: 'github', state: 'sign_in' })).toEqual(waiting)
+      expect(await ask({ action: 'github' })).toEqual(waiting)
+      expect(githubSignIn).toHaveBeenCalledTimes(1)
+      signInAs('octo')
+      login.end()
+      await vi.waitFor(() => expect(exec).toHaveBeenCalledWith(GH, ['auth', 'setup-git', '--hostname', 'github.com'], { timeout: 15_000 }))
+      expect(await ask({ action: 'github' })).toEqual({ login: 'octo' })
+    })
+
+    it('starts one sign-in for two asks at once, while its code is on its way', async () => {
+      vi.spyOn(console, 'log').mockImplementation(() => {})
+      let show!: (code: { code: string; url: string }) => void
+      const run = { code: new Promise<{ code: string; url: string }>((resolve) => { show = resolve }), done: new Promise<void>(() => {}), stop: vi.fn() }
+      const githubSignIn = vi.fn(() => run)
+      const { ask } = github({ githubSignIn })
+      const first = ask({ action: 'github', state: 'sign_in' })
+      const second = ask({ action: 'github', state: 'sign_in' })
+      show({ code: 'AB12-CD34', url: 'https://github.com/login/device' })
+      const waiting = { login: null, signingIn: { code: 'AB12-CD34', url: 'https://github.com/login/device' } }
+      expect(await first).toEqual(waiting)
+      expect(await second).toEqual(waiting)
+      expect(githubSignIn).toHaveBeenCalledTimes(1)
+    })
+
+    it('sets git up once the code was entered', async () => {
+      vi.spyOn(console, 'log').mockImplementation(() => {})
+      const { ask, exec, login, signInAs } = github()
+      await ask({ action: 'github', state: 'sign_in' })
+      signInAs('octo')
+      login.end()
+      await vi.waitFor(() => expect(exec).toHaveBeenCalledWith(GH, ['auth', 'setup-git', '--hostname', 'github.com'], { timeout: 15_000 }))
+      expect(await ask({ action: 'github' })).toEqual({ login: 'octo' })
+    })
+
+    it('says why a sign-in ended without signing in, until the next one', async () => {
+      vi.spyOn(console, 'log').mockImplementation(() => {})
+      const { ask, login } = github()
+      await ask({ action: 'github', state: 'sign_in' })
+      login.end(new Error('error: access denied'))
+      await vi.waitFor(async () => expect(await ask({ action: 'github' })).toEqual({ login: null, signInError: 'error: access denied' }))
+    })
+
+    it('gives up on a sign-in that shows no code', async () => {
+      vi.useFakeTimers()
+      vi.spyOn(console, 'error').mockImplementation(() => {})
+      const stop = vi.fn()
+      const { ask } = github({ githubSignIn: () => ({ code: new Promise(() => {}), done: new Promise(() => {}), stop }) })
+      const answer = ask({ action: 'github', state: 'sign_in' })
+      await vi.advanceTimersByTimeAsync(15_000)
+      expect(await answer).toEqual({ error: 'FAILED', message: 'gh auth login did not show a code' })
+      expect(stop).toHaveBeenCalled()
+      vi.useRealTimers()
+    })
+
+    it('signs out of the account it uses, and stops a sign-in waiting', async () => {
+      vi.spyOn(console, 'log').mockImplementation(() => {})
+      const { ask, exec, login, signInAs } = github()
+      await ask({ action: 'github', state: 'sign_in' })
+      expect(await ask({ action: 'github', state: 'sign_out' })).toEqual({ login: null })
+      expect(login.run.stop).toHaveBeenCalled()
+      signInAs('octo')
+      expect(await ask({ action: 'github', state: 'sign_out' })).toEqual({ login: null })
+      expect(exec).toHaveBeenCalledWith(GH, ['auth', 'logout', '--hostname', 'github.com', '--user', 'octo'], { timeout: 15_000 })
+    })
+
+    /** A computer whose gh is gone, and the setup's install-gh answering [answer] (and putting gh back on `installed`). */
+    function withoutGh(answer: () => Promise<string>) {
+      let there = false
+      let installed!: () => void
+      const done = new Promise<void>((resolve) => { installed = resolve })
+      const base = github()
+      const exec = vi.fn(async (file: string, args: readonly string[], _options?: { timeout: number }) => {
+        if (file === 'sudo') {
+          try {
+            const out = await answer()
+            there = out.includes('"installed": true')
+            return out
+          } finally { installed() }
+        }
+        return base.exec(file, args)
+      })
+      const githubSignIn = vi.fn(() => base.login.run)
+      const { ask } = service({ exec, githubSignIn, exists: (path) => path !== GH || there })
+      return { ask, exec, githubSignIn, done, signInAs: base.signInAs }
+    }
+
+    it('puts a GitHub CLI that is gone back from the OS, then signs in, answering at once', async () => {
+      vi.spyOn(console, 'log').mockImplementation(() => {})
+      let finish!: (out: string) => void
+      const { ask, exec, githubSignIn, done } = withoutGh(() => new Promise((resolve) => { finish = resolve }))
+      expect(await ask({ action: 'github' })).toEqual({ login: null, missing: true })
+      expect(await ask({ action: 'github', state: 'sign_in' })).toEqual({ login: null, installing: true })
+      // Asked again while it installs: the same install.
+      expect(await ask({ action: 'github', state: 'sign_in' })).toEqual({ login: null, installing: true })
+      expect(exec).toHaveBeenCalledWith('sudo', ['-n', '/usr/bin/python3', SETUP, 'install-gh'], { timeout: 300_000 })
+      expect(exec.mock.calls.filter(([file]) => file === 'sudo')).toHaveLength(1)
+      finish('{"installed": true}')
+      await done
+      await vi.waitFor(async () => expect(await ask({ action: 'github' }))
+        .toEqual({ login: null, signingIn: { code: 'AB12-CD34', url: 'https://github.com/login/device' } }))
+      expect(githubSignIn).toHaveBeenCalledTimes(1)
+    })
+
+    it('puts the GitHub CLI back without signing in again where its sign-in stayed', async () => {
+      vi.spyOn(console, 'log').mockImplementation(() => {})
+      const { ask, githubSignIn, done, signInAs } = withoutGh(async () => '{"installed": true}')
+      signInAs('octo')
+      await ask({ action: 'github', state: 'sign_in' })
+      await done
+      await vi.waitFor(async () => expect(await ask({ action: 'github' })).toEqual({ login: 'octo' }))
+      expect(githubSignIn).not.toHaveBeenCalled()
+    })
+
+    it('says why the GitHub CLI could not be put back', async () => {
+      vi.spyOn(console, 'log').mockImplementation(() => {})
+      const { ask, githubSignIn, done } = withoutGh(async () => '{"installed": false, "message": "The GitHub CLI could not be installed: error: failed retrieving file"}')
+      await ask({ action: 'github', state: 'sign_in' })
+      await done
+      await vi.waitFor(async () => expect(await ask({ action: 'github' }))
+        .toEqual({ login: null, missing: true, signInError: 'The GitHub CLI could not be installed: error: failed retrieving file' }))
+      expect(githubSignIn).not.toHaveBeenCalled()
+    })
+
+    it('asks for an update on an OS from before install-gh, whose sudo refuses it', async () => {
+      vi.spyOn(console, 'log').mockImplementation(() => {})
+      vi.spyOn(console, 'error').mockImplementation(() => {})
+      const { ask, done } = withoutGh(async () => { throw new Error('sudo: a password is required') })
+      await ask({ action: 'github', state: 'sign_in' })
+      await done.catch(() => {})
+      await vi.waitFor(async () => expect(await ask({ action: 'github' }))
+        .toEqual({ login: null, missing: true, signInError: 'The GitHub CLI could not be installed here: update this computer, then try again.' }))
+    })
+
+    it('finds the code and the page in what gh prints', () => {
+      expect(deviceCodeOf('! First copy your one-time code: B4B9-2B70\nOpen this URL to continue in your web browser: https://github.com/login/device\n'))
+        .toEqual({ code: 'B4B9-2B70', url: 'https://github.com/login/device' })
+      expect(deviceCodeOf('! First copy your one-time code: B4B9-2B70\n')).toEqual({ code: 'B4B9-2B70', url: 'https://github.com/login/device' })
+      // Where gh found a clipboard (a Harness OS screen), it says it another way (gh 2.102, seen on one).
+      expect(deviceCodeOf('! One-time code (8856-2E47) copied to clipboard\nOpen this URL to continue in your web browser: https://github.com/login/device\n'))
+        .toEqual({ code: '8856-2E47', url: 'https://github.com/login/device' })
+      expect(deviceCodeOf('Press Enter to open github.com')).toBeNull()
+    })
+  })
+
   it('runs on the real filesystem and environment by default', async () => {
     vi.stubEnv('HARNESS_OS', '')
     const requests = startOsDevice(fakeCore())
@@ -301,5 +490,41 @@ describe('the defaults that run commands', () => {
     spawnDetached('/usr/bin/harness', ['update'])
     expect(child.spawn).toHaveBeenLastCalledWith('/usr/bin/harness', ['update'], { detached: true, stdio: ['ignore', 'ignore', 'ignore'] })
     expect(bare.unref).toHaveBeenCalled()
+  })
+
+  function ghProcess() {
+    const proc = Object.assign(new EventEmitter(), { stdout: new EventEmitter(), stderr: new EventEmitter(), kill: vi.fn() })
+    child.spawn.mockReturnValueOnce(proc)
+    return proc
+  }
+
+  it('runs gh\'s device sign-in with no browser and no questions, the code read as it prints', async () => {
+    vi.stubEnv('WAYLAND_DISPLAY', 'wayland-0')
+    vi.stubEnv('DISPLAY', ':0')
+    const proc = ghProcess()
+    const run = githubDeviceSignIn()
+    const { env } = child.spawn.mock.calls[0][2] as { env: Record<string, string | undefined> }
+    expect(env).not.toHaveProperty('WAYLAND_DISPLAY')
+    expect(env).not.toHaveProperty('DISPLAY')
+    vi.unstubAllEnvs()
+    expect(child.spawn).toHaveBeenCalledWith(GH, ['auth', 'login', '--hostname', 'github.com', '--git-protocol', 'https', '--web', '--skip-ssh-key'],
+      expect.objectContaining({ stdio: ['ignore', 'pipe', 'pipe'], env: expect.objectContaining({ BROWSER: 'true', GH_PROMPT_DISABLED: '1' }) }))
+    proc.stderr.emit('data', Buffer.from('! First copy your one-time code: '))
+    proc.stderr.emit('data', Buffer.from('B4B9-2B70\nOpen this URL to continue in your web browser: https://github.com/login/device\n'))
+    await expect(run.code).resolves.toEqual({ code: 'B4B9-2B70', url: 'https://github.com/login/device' })
+    proc.emit('close', 0)
+    await expect(run.done).resolves.toBeUndefined()
+  })
+
+  it('ends a device sign-in that failed with gh\'s last line, and stops one on request', async () => {
+    const failed = ghProcess()
+    const run = githubDeviceSignIn()
+    failed.stderr.emit('data', Buffer.from('error connecting to github.com\n'))
+    failed.emit('close', 1)
+    await expect(run.code).rejects.toThrow('error connecting to github.com')
+    await expect(run.done).rejects.toThrow('error connecting to github.com')
+    const stopped = ghProcess()
+    githubDeviceSignIn().stop()
+    expect(stopped.kill).toHaveBeenCalledWith('SIGKILL')
   })
 })

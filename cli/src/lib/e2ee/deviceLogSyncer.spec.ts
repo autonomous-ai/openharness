@@ -294,6 +294,38 @@ describe('DeviceLogSyncer', () => {
       expect(t.store.read().frozen).not.toBeNull()
     })
 
+    it('heals a freeze from a page that claimed a head past its entries, once the backend serves them (#1789)', async () => {
+      // A device registers between the backend's two reads: the page says the log reaches it, and carries no entry for it.
+      t.backend.add(phone, 'viewer', '', 'phone')
+      const real = t.backend.fetch.getMockImplementation()!
+      t.backend.fetch.mockImplementationOnce(async (since: number) => ({ ...(await real(since))!, entries: [] }))
+      await t.syncer.refresh()
+      expect(t.store.read().frozen?.reason).toBe('invalid')
+      expect(t.calls.adopt.mock.calls.flat(2).some((m: { pub: string }) => m.pub === phone.pub)).toBe(false)
+      // The fixed backend serves the entry: it continues the chain this machine verified, so the freeze is over.
+      await t.syncer.refresh()
+      expect(t.store.read().frozen).toBeNull()
+      expect(t.store.read().state?.head).toEqual(t.backend.state.head)
+      expect(t.calls.adopt.mock.calls.flat(2).some((m: { pub: string }) => m.pub === phone.pub)).toBe(true)
+    })
+
+    it('stays frozen as invalid while what the backend serves does not check out', async () => {
+      t.backend.add(phone, 'viewer', '', 'phone')
+      const real = t.backend.fetch.getMockImplementation()!
+      t.backend.fetch.mockImplementationOnce(async (since: number) => ({ ...(await real(since))!, entries: [] }))
+      await t.syncer.refresh()
+      expect(t.store.read().frozen?.reason).toBe('invalid')
+      // Entries that do not continue the verified chain: a forged log ahead of it.
+      const forged = new FakeBackend()
+      forged.add(evil, 'viewer', '', 'evil')
+      forged.add(phone, 'viewer', '', 'phone')
+      forged.add(box2, 'machine', MID2, 'box2')
+      t.backend.lie = forged.entries
+      await t.syncer.refresh()
+      expect(t.store.read().frozen?.reason).toBe('invalid')
+      expect(t.calls.adopt.mock.calls.flat(2).some((m: { pub: string }) => m.pub === evil.pub)).toBe(false)
+    })
+
     it('shows what trusting the log again changes, and does it only when confirmed', async () => {
       t.backend.lie = t.backend.entries.slice(0, 1)
       await t.syncer.refresh()

@@ -11,6 +11,8 @@ import { DSH_SESSION_ENV } from '../dsh/launch.js'
 import { GRID_CONFLICTING_ENV_VARS, type GridLaunchOverride } from './gridLaunch.js'
 import { gridLaunchInProcess } from '../testing/gridLaunchInProcess.js'
 import { AGENT_ATTRIBUTION_LINE, HARNESS_INSTRUCTIONS } from './agentAttribution.js'
+import { prepareSwarmSkill } from './swarmSkills.js'
+import { swarmGitHubLaunch } from './swarmGitHub.js'
 
 const GRID: GridLaunchOverride = {
   networkId: 'grid-abc',
@@ -36,6 +38,8 @@ function deps(overrides: Partial<LaunchOverridesDeps> = {}) {
     // No Codex configuration unless a test says so — otherwise every relaunch built here would
     // consult the config.toml of whoever is running the suite.
     readCodexConfig: () => null,
+    // The Swarm on, as by default (`HARNESS_SWARM`); a test of it off leaves it out.
+    swarm: { prepare: prepareSwarmSkill, github: (key) => swarmGitHubLaunch(key) },
     ...overrides,
   }
   return { d, calls }
@@ -479,6 +483,21 @@ describe('buildLaunchOverrides — a Swarm session on the Harness GitHub App', (
     if (!result.ok) throw new Error(result.error)
     expect(result.overrides.env).not.toHaveProperty('GIT_CONFIG_PARAMETERS')
     expect(result.overrides.clearEnv).not.toContain('GH_TOKEN')
+  })
+
+  // HARNESS_SWARM=off: the core hands in no Swarm, and a session the Swarm started is not relaunched without its role.
+  it('refuses a Swarm session with the Swarm off, before it asks or writes anything', async () => {
+    const native = vi.fn(), dshLaunch = vi.fn()
+    const { d, calls } = deps({ swarm: undefined, native, dshLaunch })
+    for (const swarmSkill of [skill, { role: 'lead' as const, key: 'harness-claude-plain' }]) {
+      expect(await buildLaunchOverrides(d, 'claude', { cwd: workspace(), dsh: 'fixture/blender', swarmSkill }, 'agent-1', () => true))
+        .toEqual({ ok: false, error: 'SWARM_SKILL_FAILED', detail: 'The Swarm is off on this computer (HARNESS_SWARM).' })
+    }
+    expect(native).not.toHaveBeenCalled()
+    expect(dshLaunch).not.toHaveBeenCalled()
+    expect(calls).toEqual([])
+    // A session the Swarm never started relaunches as it always did.
+    expect(await buildLaunchOverrides(d, 'claude', { cwd: workspace() }, 'agent-1', () => true)).toMatchObject({ ok: true })
   })
 
   it('refuses the relaunch when the app\'s files cannot be written', async () => {
