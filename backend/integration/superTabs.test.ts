@@ -2690,6 +2690,30 @@ describe('Lead mentions', () => {
     expect(await list(tab, peer, 'earlier')).toEqual([expect.objectContaining({ messageId, resolvedBy: 'reply' })])
   })
 
+  it('counts a tag in a conversation gone quiet, as the list shows it, on every read, and never once the person cannot read it', async () => {
+    const { tab, lead, group } = await tagged()
+    const other = (await run(tab, { type: 'conversation.create', title: 'Pricing page', brief: '', checks: [] })).result.conversationId as string
+    await run(tab, { type: 'conversation.agent', conversationId: other, agentId: lead, present: true, lead: true })
+    await run(tab, { type: 'message.send', conversationId: other, text: 'Check the prices.', replyTo: null, recipientIds: [], mentions: [peer.sub] }, host, lead)
+    // Ordinary loads no longer read it (sweeps.ts puts quiet conversations to sleep).
+    await db.swarmGroup.updateMany({ where: { tabId: tab, key: group }, data: { dormant: true } })
+    const derived = async (url: string) => {
+      const response = await app.inject({ method: 'GET', url: `/api/super-tabs/${tab}/${url}`, headers: { authorization: `Bearer ${peer.sub}` } })
+      expect(response.statusCode, response.body).toBe(200)
+      return response.json().data as { cursor: string; derived: { mentionsWaiting?: number } }
+    }
+    const first = await derived('parts')
+    expect((await list(tab, peer, 'waiting')).map(m => m.conversationId).sort()).toEqual([group, other].sort())
+    expect(first.derived.mentionsWaiting).toBe(2)
+    expect((await derived(`changes?cursor=${first.cursor}`)).derived.mentionsWaiting).toBe(2)
+    expect((await waiting(tab, peer)).mentionsWaiting).toBe(2)
+    await run(tab, { type: 'project.sharing', projectId: 'lead', visibility: 'private', memberIds: [] })
+    expect(await db.swarmGroup.findFirst({ where: { tabId: tab, key: group }, select: { dormant: true } })).toEqual({ dormant: true })
+    expect(await list(tab, peer, 'waiting')).toEqual([])
+    expect((await derived('parts')).derived.mentionsWaiting).toBe(0)
+    expect((await waiting(tab, peer)).mentionsWaiting).toBe(0)
+  })
+
   it('lets a tagged viewer mark it done', async () => {
     const { tab } = await tagged('viewer')
     const [mention] = await list(tab, peer, 'waiting')
