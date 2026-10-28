@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto'
+import { EventEmitter } from 'node:events'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { join } from 'node:path'
@@ -85,6 +86,11 @@ async function saveState(tab: string, state: SuperTabState) {
 async function invite(tab: string, role: 'collaborator' | 'viewer' = 'collaborator') {
   const invitation = await run(tab, { type: 'invite.create', email: peer.email, role, conversationId: 'lead' })
   await run(tab, { type: 'invite.accept', inviteId: invitation.result.inviteId as string }, peer)
+}
+/** `host`, whose machine runs the fixture's agents, as a member: the one person who drives a Lead's terminal (terminal.ts mayDrive). */
+async function joinHost(tab: string) {
+  const invitation = await run(tab, { type: 'invite.create', email: host.email, role: 'collaborator', conversationId: 'lead' })
+  await run(tab, { type: 'invite.accept', inviteId: invitation.result.inviteId as string }, host)
 }
 
 beforeAll(async () => {
@@ -337,7 +343,8 @@ describe('native recording restart recovery', () => {
     const { tab, lead } = await fixture()
     await run(tab, { type: 'work.define', conversationId: 'lead', brief: 'Lead task', checks: [{ description: 'Checked', independent: false }] })
     await run(tab, { type: 'work.assign', conversationId: 'lead', agentId: lead })
-    const { contextId } = await store.native.open(owner, tab, { operationId: randomUUID(), conversationId: 'lead', agentId: lead })
+    await joinHost(tab)
+    const { contextId } = await store.native.open(host, tab, { operationId: randomUUID(), conversationId: 'lead', agentId: lead })
     const receipt = await store.native.append(host, tab, contextId, { turnId: 'lead_restart', kind: 'gap', previousEventId: null,
       text: '', truncated: false, interrupted: false,
       gap: { incidentId: 'lead_restart', reason: 'recording_restarted', detectedAt: Date.now() + 1000 } }) as { eventId: string }
@@ -567,7 +574,9 @@ describe('deleting abandoned swarm projects', () => {
     const harnessId = randomUUID()
     const agentId = String((await run(tab, { type: 'agent.add', conversationId, machineId: 'test-host', harnessId,
       name: 'Private lead', configuration: config, lead: true })).result.agentId)
-    const context = await store.native.open(owner, tab, { operationId: randomUUID(), conversationId, agentId })
+    await joinHost(tab)
+    await run(tab, { type: 'project.sharing', projectId, visibility: 'private', memberIds: [host.sub] })
+    const context = await store.native.open(host, tab, { operationId: randomUUID(), conversationId, agentId })
     await run(tab, { type: 'project.delete', projectId })
     await expect(store.native.read(host, tab, context.contextId)).rejects.toMatchObject({ code: 'NATIVE_CONTEXT_REVOKED' })
     expect(await store.mayObserve(owner, tab, 'test-host', harnessId, host.sub)).toBe(false)
@@ -657,7 +666,7 @@ describe('private swarm projects on the real control API', () => {
     await run(tab, { ...message('Private result'), conversationId } as Command)
     expect((await store.read(peer, tab)).state.projects!.map(p => p.id)).not.toContain(projectId)
     await expect(store.messages(peer, tab, conversationId, {})).rejects.toMatchObject({ code: 'NOT_FOUND' })
-    await expect(store.native.open(peer, tab, { operationId: randomUUID(), conversationId, agentId })).rejects.toMatchObject({ code: 'NOT_FOUND' })
+    await expect(store.native.open(peer, tab, { operationId: randomUUID(), conversationId, agentId: workerId })).rejects.toMatchObject({ code: 'NOT_FOUND' })
     expect(await store.mayObserve(peer, tab, 'test-host', workerHarness, host.sub)).toBe(false)
     expect((await rosterRows(store, host, 'test-host')).find(t => t.agent?.id === workerId)!.observers.map(p => p.userId)).not.toContain(peer.sub)
     await expect(store.messages(host, tab, 'lead', {}, agentId)).rejects.toMatchObject({ code: 'NOT_FOUND' })
@@ -665,7 +674,8 @@ describe('private swarm projects on the real control API', () => {
     await run(tab, { type: 'project.sharing', projectId, visibility: 'private', memberIds: [peer.sub] })
     expect((await store.messages(peer, tab, conversationId, {})).messages.map(m => m.text)).toContain('Private result')
     expect(await store.mayObserve(peer, tab, 'test-host', workerHarness, host.sub)).toBe(true)
-    const context = await store.native.open(peer, tab, { operationId: randomUUID(), conversationId, agentId })
+    // A member's terminal, also on the Builder: only its machine's owner drives a Lead.
+    const context = await store.native.open(peer, tab, { operationId: randomUUID(), conversationId, agentId: workerId })
     const command = { ...message('Shared review'), conversationId } as Command
     const operationId = randomUUID()
     await run(tab, command, peer, undefined, operationId)
@@ -909,12 +919,14 @@ describe('Super Tabs on a real Mongo replica set', () => {
   it('records native turns once, in order, with verified source metadata and no input echo', async () => {
     const { tab, lead } = await fixture()
     await invite(tab)
+    // Only the Lead's machine's owner drives it (terminal.ts mayDrive); the execution host alone records and reads it.
+    await joinHost(tab)
     const request = { operationId: randomUUID(), conversationId: 'lead', agentId: lead }
-    const { contextId } = await store.native.open(peer, tab, request)
-    expect(await store.native.open(peer, tab, request)).toEqual({ contextId })
+    const { contextId } = await store.native.open(host, tab, request)
+    expect(await store.native.open(host, tab, request)).toEqual({ contextId })
     await expect(store.native.read(peer, tab, contextId)).rejects.toMatchObject({ code: 'FORBIDDEN' })
     expect(await store.native.read(host, tab, contextId)).toMatchObject({ agentId: lead, machineId: 'test-host',
-      operator: { id: peer.sub, kind: 'person' }, lastEventId: null })
+      operator: { id: host.sub, kind: 'person' }, lastEventId: null })
     const prompt = { turnId: randomUUID(), kind: 'prompt' as const, previousEventId: null,
       text: 'A native intervention', truncated: false, interrupted: false }
     await expect(store.native.append(owner, tab, contextId, prompt)).rejects.toMatchObject({ code: 'FORBIDDEN' })
@@ -931,7 +943,7 @@ describe('Super Tabs on a real Mongo replica set', () => {
     const rows = (await store.messages(owner, tab, 'lead', {})).messages
     expect(rows).toHaveLength(2)
     expect(rows[0]).toMatchObject({ text: prompt.text, author: { kind: 'agent', id: lead },
-      source: { kind: 'native', phase: 'prompt', operator: { id: peer.sub, kind: 'person' } } })
+      source: { kind: 'native', phase: 'prompt', operator: { id: host.sub, kind: 'person' } } })
     expect(rows[1]).toMatchObject({ replyTo: first.eventId, text: answer.text, source: { interrupted: true, phase: 'answer' } })
     expect(rows[0]!.source).not.toHaveProperty('contextId')
     expect(rows[1]!.sequence).toBeGreaterThan(rows[0]!.sequence)
@@ -969,9 +981,13 @@ describe('Super Tabs on a real Mongo replica set', () => {
   })
 
   it('requires machine control as well as collaboration and fences removal, re-invitation and changed machine grants', async () => {
-    const { tab, lead } = await fixture()
+    const { tab } = await fixture()
     await invite(tab, 'viewer')
-    const request = { operationId: randomUUID(), conversationId: 'lead', agentId: lead }
+    // A member's terminal on a Builder: only its machine's owner drives a Lead (terminal.ts mayDrive).
+    const group = String((await run(tab, { type: 'conversation.create', title: 'Build', brief: '', checks: [] })).result.conversationId)
+    const worker = String((await run(tab, { type: 'agent.add', conversationId: group, machineId: 'test-host', harnessId: randomUUID(),
+      name: 'Builder', configuration: config, lead: false })).result.agentId)
+    const request = { operationId: randomUUID(), conversationId: group, agentId: worker }
     await expect(store.native.open(peer, tab, request)).rejects.toMatchObject({ code: 'READ_ONLY' })
     await run(tab, { type: 'member.remove', userId: peer.sub })
     await invite(tab)
@@ -979,7 +995,7 @@ describe('Super Tabs on a real Mongo replica set', () => {
     const event = { turnId: randomUUID(), kind: 'gap' as const, previousEventId: null,
       text: 'Caller text must not impersonate a gap explanation', truncated: false, interrupted: false }
     await store.native.append(host, tab, contextId, event)
-    expect((await store.messages(owner, tab, 'lead', {})).messages[0]!.text).toContain('Some terminal activity could not be recorded')
+    expect((await store.messages(owner, tab, group, {})).messages[0]!.text).toContain('Some terminal activity could not be recorded')
     const original = (await db.machineShare.findUnique({ where: { machineId: 'test-host' } }))!
     await db.machineShare.update({ where: { machineId: 'test-host' }, data: { emails: [owner.email],
       grantVersions: nextMachineShareGrants(original, [owner.email], null) } })
@@ -1122,6 +1138,31 @@ describe('Super Tabs on a real Mongo replica set', () => {
     const rest = await store.messages(owner, tab, 'lead', { before: page.next!.sequence, beforeId: page.next!.id })
     expect([...rest.messages, ...page.messages].map(m => m.id)).toEqual(ids)
     expect(rest.next).toBeNull()
+  })
+
+  it('reads each hidden row once on its way to a page, however many there are, even when they share a sequence', async () => {
+    const { tab, lead } = await fixture()
+    // 2,000 of the Lead's notices, as one command before the store by parts wrote them: on one sequence, between two posts.
+    const row = (id: string, sequence: number, hidden: boolean) => ({ id, tabId: tab, conversationId: 'lead', sequence,
+      author: { kind: 'person', id: owner.sub, name: owner.email }, text: id, replyTo: null, recipientIds: hidden ? [lead] : [],
+      ...(hidden ? { source: { kind: 'agent-only' } } : {}) })
+    await db.superTabMessage.createMany({ data: [row('a-first', 0, false),
+      ...Array.from({ length: 2_000 }, (_, i) => row(`b-notice-${String(i).padStart(4, '0')}`, 1, true)), row('c-last', 2, false)] })
+    // What MongoDB reads of the messages for one page: an offset is walked in the index (keys), rows are fetched (documents).
+    const examined = async (read: () => Promise<unknown>) => {
+      await db.$runCommandRaw({ profile: 2 })
+      try { await read() } finally { await db.$runCommandRaw({ profile: 0 }) }
+      const { cursor } = await db.$runCommandRaw({ find: 'system.profile', filter: {}, projection: { ns: 1, keysExamined: 1, docsExamined: 1 }, limit: 1000 }) as
+        { cursor: { firstBatch: Array<{ ns: string; keysExamined?: number; docsExamined?: number }> } }
+      await db.$runCommandRaw({ drop: 'system.profile' })
+      return cursor.firstBatch.filter(entry => entry.ns.endsWith('.SuperTabMessage'))
+        .reduce((sum, entry) => sum + (entry.keysExamined ?? 0) + (entry.docsExamined ?? 0), 0)
+    }
+    let opened!: Awaited<ReturnType<typeof store.messages>>
+    expect(await examined(async () => { opened = await store.messages(owner, tab, 'lead', {}) })).toBeLessThan(6_000)
+    expect(opened.messages.map(m => m.id)).toEqual(['a-first', 'c-last'])
+    expect(opened.next).toBeNull()
+    expect((await store.messages(owner, tab, 'lead', { after: 0 })).messages.map(m => m.id)).toEqual(['c-last'])
   })
 
   it('accepts an agent-only notice only from an agent to itself alone', async () => {
@@ -2461,6 +2502,90 @@ describe('the Lead reads and types in an agent terminal', () => {
       .rejects.toThrow('no longer waiting')
   })
 
+  /** A store whose terminal answers are told the way the routes tell them across instances (lib/bus.ts), here in process.
+   *  `heard: false` loses every notice, as a dropped publish would. It counts the Swarm loads a wait makes. */
+  function watched(options: { heard?: boolean; now?: () => number } = {}) {
+    const notices = new EventEmitter()
+    const at = new SuperTabStore(db, options.now ?? Date.now, null, {
+      terminalAnswered: requestId => { if (options.heard !== false) notices.emit(requestId) },
+      watchTerminal: async (requestId, onChange) => { notices.on(requestId, onChange); return () => { notices.off(requestId, onChange) } },
+    })
+    const load = vi.spyOn(at as unknown as { load: (...args: unknown[]) => unknown }, 'load')
+    return { at, loads: () => load.mock.calls.length, listeners: (requestId: string) => notices.listenerCount(requestId) }
+  }
+
+  it('waits for an answer without loading the Swarm again and again', async () => {
+    const { tab, lead, worker, claim } = await terminalFixture()
+    const requestId = (await run(tab, { type: 'agent.screen', agentId: worker }, host, lead)).result.requestId as string
+    expect(await claim()).toHaveLength(1)
+    const { at, loads, listeners } = watched()
+    expect(await at.terminalResult(host, tab, requestId, lead, 3_000)).toEqual({ requestId, pending: true })
+    expect(loads()).toBeLessThanOrEqual(2)
+    expect(listeners(requestId)).toBe(0)
+  })
+
+  it('returns the answer as soon as the host’s answer commits', async () => {
+    const { tab, lead, worker, claim } = await terminalFixture()
+    const requestId = (await run(tab, { type: 'agent.screen', agentId: worker }, host, lead)).result.requestId as string
+    expect(await claim()).toHaveLength(1)
+    const { at, loads } = watched()
+    const waiting = at.terminalResult(host, tab, requestId, lead, 20_000).then(answer => ({ answer, at: Date.now() }))
+    await new Promise(resolve => setTimeout(resolve, 300))
+    await at.execute(host, tab, { operationId: randomUUID(), command: { type: 'agent.screenResult', requestId, ok: true, text: 'screen' } }, worker)
+    const answeredAt = Date.now()
+    const { answer, at: returnedAt } = await waiting
+    expect(answer).toEqual({ requestId, ok: true, text: 'screen' })
+    expect(returnedAt - answeredAt).toBeLessThan(100)
+    expect(loads()).toBeLessThanOrEqual(4)
+  })
+
+  it('wakes a wait when the request turns late, and when the host refuses it', async () => {
+    const { tab, lead, worker, claim } = await terminalFixture()
+    const unseen = (await run(tab, { type: 'agent.screen', agentId: worker }, host, lead)).result.requestId as string
+    // The pickup window ends 300 ms into this store's clock.
+    const late = watched({ now: () => Date.now() + 9_700 })
+    const started = Date.now()
+    expect(await late.at.terminalResult(host, tab, unseen, lead, 20_000)).toEqual({ requestId: unseen, ok: false, error: expect.stringContaining('did not pick up') })
+    expect(Date.now() - started).toBeLessThan(2_000)
+    const replaced = (await run(tab, { type: 'agent.input', agentId: worker, keys: ['Enter'] }, host, lead)).result.requestId as string
+    await db.superTabTerminalRequest.update({ where: { id: replaced }, data: { harnessId: 'replaced-terminal' } })
+    const { at } = watched()
+    const waiting = at.terminalResult(host, tab, replaced, lead, 20_000)
+    await new Promise(resolve => setTimeout(resolve, 300))
+    const refusedAt = Date.now()
+    expect(await claim(at)).toEqual([])
+    expect(await waiting).toEqual({ requestId: replaced, ok: false, error: expect.stringContaining('changed') })
+    expect(Date.now() - refusedAt).toBeLessThan(1_000)
+  })
+
+  it('neither waits for nor fails on a notice channel that cannot subscribe, as while Redis is down', async () => {
+    const { tab, lead, worker, claim } = await terminalFixture()
+    for (const watching of [() => new Promise<() => void>(() => {}), () => Promise.reject(new Error('Redis is down'))]) {
+      const at = new SuperTabStore(db, Date.now, null, { watchTerminal: watching })
+      const requestId = (await run(tab, { type: 'agent.screen', agentId: worker }, host, lead)).result.requestId as string
+      expect(await claim()).toHaveLength(1)
+      const started = Date.now()
+      expect(await at.terminalResult(host, tab, requestId, lead, 1_000)).toEqual({ requestId, pending: true })
+      expect(Date.now() - started).toBeLessThan(2_000)
+      await run(tab, { type: 'agent.screenResult', requestId, ok: true, text: 'screen' }, host, worker)
+      expect(await at.terminalResult(host, tab, requestId, lead, 20_000)).toEqual({ requestId, ok: true, text: 'screen' })
+    }
+  })
+
+  it('still returns an answer whose notice was lost, at the next re-check', async () => {
+    const { tab, lead, worker, claim } = await terminalFixture()
+    const requestId = (await run(tab, { type: 'agent.screen', agentId: worker }, host, lead)).result.requestId as string
+    expect(await claim()).toHaveLength(1)
+    const { at, loads } = watched({ heard: false })
+    const waiting = at.terminalResult(host, tab, requestId, lead, 20_000)
+    await new Promise(resolve => setTimeout(resolve, 300))
+    await run(tab, { type: 'agent.screenResult', requestId, ok: true, text: 'screen' }, host, worker)
+    const answeredAt = Date.now()
+    expect(await waiting).toEqual({ requestId, ok: true, text: 'screen' })
+    expect(Date.now() - answeredAt).toBeLessThan(6_000)
+    expect(loads()).toBeLessThanOrEqual(3)
+  })
+
   it('expires an unread answer after two minutes, without waiting for another request', async () => {
     const { tab, lead, worker } = await terminalFixture()
     const requestId = await answered(tab, worker, host, lead)
@@ -2850,6 +2975,25 @@ describe('leaderboard credits written by the store (leaderboard/record.ts)', () 
     await run(tab, { type: 'decision.answer', decisionId, choice: 1 }, peer)
     expect(await unblocks(tab, 'lead')).toEqual([expect.objectContaining({ personId: peer.sub, kind: 'decision', item: decisionId })])
   })
+
+  it('credits a worker\'s question asked again after it moved on once, when its decision is answered', async () => {
+    const { tab } = await fixture()
+    await invite(tab)
+    const group = (await run(tab, { type: 'conversation.create', title: 'Release', brief: 'Ship it.', checks: [{ description: 'Shipped.', independent: false }] })).result.conversationId as string
+    const worker = (await run(tab, { type: 'agent.add', conversationId: group, machineId: 'test-host', harnessId: randomUUID(),
+      name: 'Builder', configuration: config, lead: false })).result.agentId as string
+    const assignmentId = (await run(tab, { type: 'work.assign', conversationId: group, agentId: worker })).result.assignmentId as string
+    const ask = { type: 'work.status', conversationId: group, assignmentId, status: 'needs_human', result: 'Ship how?',
+      ask: { personId: peer.sub, options: ['Behind a flag', 'To everyone'], recommended: 0, unblocks: 'The release' } } as Command
+    await run(tab, ask, host, worker)
+    await run(tab, { type: 'work.status', conversationId: group, assignmentId, status: 'working', result: null } as Command, host, worker)
+    await run(tab, ask, host, worker)
+    const [decision] = await db.superTabDecision.findMany({ where: { tabId: tab } })
+    await run(tab, { type: 'decision.answer', decisionId: decision!.id, choice: 0 }, peer)
+    // The requester's next post answers nothing more: the repeated question was that decision again.
+    await run(tab, { type: 'message.send', conversationId: group, text: 'Behind a flag, then.', replyTo: null, recipientIds: [] })
+    expect(await unblocks(tab, group)).toEqual([expect.objectContaining({ personId: peer.sub, kind: 'decision', item: decision!.id })])
+  })
 })
 
 describe('credentials in Swarm chat', () => {
@@ -3088,6 +3232,40 @@ describe('the PM\'s terminal after a private chat (final review, Critical 1)', (
   }
   const observers = async (agentId: string) => (await rosterRows(store, host, 'test-host')).find(t => t.agent?.id === agentId)!.observers.map(p => p.userId)
 
+  // A terminal drives its session and its answers land in the conversation. Driving another person's Lead needs its machine's
+  // owner (terminal.ts mayDrive), so a member's terminal on a Builder made a Lead is refused from then on, whether or not it
+  // was revoked with the change.
+  it('refuses a member\'s terminal on a Builder made its project\'s Lead, at use and at open, and keeps the machine owner\'s', async () => {
+    const { tab } = await fixture()
+    await invite(tab)
+    const asHost = await run(tab, { type: 'invite.create', email: host.email, role: 'collaborator', conversationId: 'lead' })
+    await run(tab, { type: 'invite.accept', inviteId: asHost.result.inviteId as string }, host)
+    const second = (await run(tab, { type: 'project.create', name: 'Second', visibility: 'public', brief: '' })).result as { projectId: string; conversationId: string }
+    const group = String((await run(tab, { type: 'conversation.create', projectId: second.projectId, title: 'Build', brief: 'Build it', checks: [] })).result.conversationId)
+    const worker = String((await run(tab, { type: 'agent.add', conversationId: group, machineId: 'test-host', harnessId: randomUUID(),
+      name: 'Builder', configuration: config, lead: false })).result.agentId)
+    const opened = (user: AuthUser) => store.native.open(user, tab, { operationId: randomUUID(), conversationId: group, agentId: worker })
+    const { contextId: peers } = await opened(peer)
+    const { contextId: hosts } = await opened(host)
+    const typed = (contextId: string, turnId: string) => store.native.append(host, tab, contextId, { turnId, kind: 'prompt', previousEventId: null,
+      text: 'Typed into the Builder', truncated: false, interrupted: false })
+    await typed(peers, 'before')
+
+    await run(tab, { type: 'conversation.agent', conversationId: second.conversationId, agentId: worker, present: true, lead: true })
+    await expect(typed(peers, 'after')).rejects.toMatchObject({ code: 'NATIVE_CONTEXT_REVOKED' })
+    // The refusal at use says why, as the refusal at open does (review of #1940).
+    await db.superTabNativeContext.update({ where: { id: peers }, data: { revoked: false } })
+    await expect(typed(peers, 'why')).rejects.toMatchObject({ code: 'NATIVE_CONTEXT_REVOKED', message: expect.stringContaining('a Product Manager’s terminal') })
+    await expect(store.native.read(host, tab, peers)).rejects.toMatchObject({ code: 'NATIVE_CONTEXT_REVOKED' })
+    await expect(opened(peer)).rejects.toMatchObject({ code: 'TERMINAL_PRIVATE' })
+    // Even a terminal the change left unrevoked is refused at use.
+    await db.superTabNativeContext.update({ where: { id: peers }, data: { revoked: false } })
+    await expect(typed(peers, 'unrevoked')).rejects.toMatchObject({ code: 'NATIVE_CONTEXT_REVOKED' })
+    expect((await db.superTabNativeContext.findUniqueOrThrow({ where: { id: hosts } })).revoked).toBe(false)
+    await expect(typed(hosts, 'owner')).resolves.toMatchObject({ eventId: expect.any(String) })
+    await expect(opened(host)).resolves.toMatchObject({ contextId: expect.any(String) })
+  })
+
   it('lets nobody but its machine\'s owner watch it: not a reader outside the chat, not the Swarm owner, not with an earlier share', async () => {
     const { tab, lead, harnessId } = await privateChat()
     expect(await observers(lead)).toEqual([])
@@ -3206,6 +3384,31 @@ describe('the PM\'s terminal after a private chat (final review, Critical 1)', (
       await expect(run(tab, { type: 'agent.input', agentId: lead, text: 'history' }, user)).rejects.toMatchObject({ code: 'TERMINAL_PRIVATE' })
     }
     expect((await run(tab, { type: 'agent.screen', agentId: lead }, host)).result.requestId).toBeTruthy()
+  })
+})
+
+// Prod, 2026-10-28 (Atlas, the hour to 14:30 VN): every command, message.send included, sent one terminal-context query of
+// 78 branches, 70 of them this project's archived groups, that returned nothing and spent 67% of its 0.6–3.8 s planning.
+describe('terminal-context revoke on an ordinary command', () => {
+  it('sends a message in a Swarm with many archived groups and a private project without touching terminal contexts', async () => {
+    const { tab } = await fixture()
+    await invite(tab)
+    await run(tab, { type: 'project.create', name: 'Owner only', visibility: 'private', brief: '' })
+    await run(tab, { type: 'conversation.create', title: 'Owner and PM', brief: '', checks: [], audience: { personIds: [owner.sub] } })
+    for (let i = 0; i < 30; i++) {
+      const group = String((await run(tab, { type: 'conversation.create', title: `Old ${i}`, brief: '', checks: [] })).result.conversationId)
+      await run(tab, { type: 'conversation.archive', conversationId: group, archived: true })
+    }
+    await db.$runCommandRaw({ profile: 2 })
+    try {
+      await run(tab, message('Status?'))
+    } finally {
+      await db.$runCommandRaw({ profile: 0 })
+    }
+    const profiled = await db.$runCommandRaw({ find: 'system.profile', filter: { 'command.profile': { $exists: false } }, batchSize: 10000 }) as
+      unknown as { cursor: { firstBatch: Array<{ ns: string; op: string }> } }
+    await db.$runCommandRaw({ drop: 'system.profile' })
+    expect(profiled.cursor.firstBatch.filter(row => row.ns.endsWith('.SuperTabNativeContext'))).toEqual([])
   })
 })
 

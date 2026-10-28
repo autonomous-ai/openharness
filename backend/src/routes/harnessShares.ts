@@ -40,9 +40,14 @@ async function tellRecipient(shareId: string): Promise<void> {
     const share = await prisma.harnessShare.findUnique({ where: { id: shareId } })
     if (!share) return
     const recipient = await prisma.user.findUnique({ where: { email: share.recipientEmail }, select: { id: true } })
-    if (!recipient) return
-    await publishDeviceMachineListChanged(recipient.id, { reason: 'harness_shares' })
-    logger.info('harness share: told the recipient it changed', { shareId, recipientId: recipient.id })
+    if (recipient) {
+      await publishDeviceMachineListChanged(recipient.id, { reason: 'harness_shares' })
+      logger.info('harness share: told the recipient it changed', { shareId, recipientId: recipient.id })
+    }
+    // A private link admits the recipient only through this invitation (harnessLinks.ts recipientLink): its viewers check again.
+    const links = await prisma.harnessLink.findMany({ where: { ownerId: share.ownerId, machineId: share.machineId, agentId: share.agentId,
+      autonomousEnv: share.autonomousEnv, revokedAt: null, visibility: { not: 'public' } }, select: { id: true } })
+    for (const link of links) await publishShareChanged(link.id)
   } catch { /* best effort */ }
 }
 

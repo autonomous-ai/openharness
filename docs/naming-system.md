@@ -61,6 +61,7 @@ and **Browser**. Technical documentation may still call the terminal interface a
 | **Engineer** | An agent carrying out project work. Use **Dev** in a compact role badge. System name: builder. | Atlas is an engineer on Lamp OS. |
 | **Reviewer** | An agent that reviews project work. Use **Rev** in a compact role badge. System name: reviewer. | Atlas is a reviewer on Lamp OS. |
 | **Workgroup** | A numbered conversation for an independently assignable outcome within a project. | Follow #12 Offline editing. |
+| **Points** | A person's or agent's score in a Swarm's rankings. Other measures are lowercase words after their number, joined by a spaced middle dot; a measure at zero is left out. Presentation follows [Numbers and rankings](../desktop/design/desktop-design-system.md#numbers-and-rankings). | 42 points; 3 shipped · 2 unblocked. |
 | **Pane** | A visible view of a harness, terminal, or viewer. | Split right; close pane. |
 | **Terminal** | A shell for entering commands. | New terminal. |
 | **Project** | The files and working context for the work, on a particular computer. | Choose the website project. |

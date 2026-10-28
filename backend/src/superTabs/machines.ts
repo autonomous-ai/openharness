@@ -1,7 +1,7 @@
 import { z } from 'zod'
-import { activeWork, fail, person, type Actor, type Agent, type AgentStart, type AgentStartRequest, type SuperTabState } from './model.js'
+import { activeWork, fail, person, stableId, type Actor, type Agent, type AgentStart, type AgentStartRequest, type MessageDraft, type SuperTabState } from './model.js'
 import { WORKSPACE_LABEL } from './workspaces.js'
-import { agentProjectId, groupProject, ledProject, projectsOf, type SwarmProject } from './projects.js'
+import { agentProjectId, canReadProject, groupProject, ledProject, projectsOf, type SwarmProject } from './projects.js'
 import { conversation } from './model.js'
 
 /** An explicit grant for this tab and project. It never creates a MachineShare. */
@@ -27,14 +27,17 @@ export interface ContributedMachine {
   hostMachineId?: string
   /** Set by machine.remove: an online machine stays listed, paused, while its host deletes the Swarm's folders there, until
    *  the host says it cleaned up (machine.cleaned) or REMOVAL_FALLBACK_MS passes. An offline one leaves the list at once and
-   *  its cleanup waits for its host (expireRemovals). */
+   *  its cleanup waits for its host (expireRemovals). Each project's chat hears how it ended (removalEnded). */
   removal?: { id: string; state: 'cleaning'; requestedAt: string }
   /** Agent-time Swarm agents here spent on other people's tasks, by leaderboard week, kept by its readings (leaderboard/lent.ts). */
   lent?: import('./leaderboard/lent.js').LentWeek[]
 }
 /** A removed machine whose host never acknowledged in time: its records are gone, its host still cleans up on its next poll. */
 export interface MachineCleanup { machineId: string; removalId: string; machineOwnerId: string }
-export const REMOVAL_FALLBACK_MS = 24 * 3_600_000
+/** Was a day, until a host that kept reporting but never confirmed held Diego's Mac 'Cleaning up' for it (2026-10-28). */
+export const REMOVAL_FALLBACK_MS = 30 * 60_000
+/** Why a removal ended: its host confirmed, it was offline, or it kept reporting without confirming for REMOVAL_FALLBACK_MS. */
+export type RemovalEnd = 'confirmed' | 'offline' | 'timedOut'
 /** Older contributions may name engines that Swarm no longer starts. Their fresh
  * observation lists the supported engines that are actually installed. */
 export function contributedEngines(pool: ContributedMachine, observation: MachineObservation | undefined = pool.observation): string[] {
@@ -263,6 +266,19 @@ export function teamPoolOf(state: SuperTabState, pool: ContributedMachine, live?
     .reduce<ContributedMachine | undefined>((best, m) => !best || (m.observation?.receivedAt ?? -1) >= (best.observation?.receivedAt ?? -1) ? m : best, undefined)
 }
 
+/**
+ * Whether [pool] takes teammates' work, as a Swarm's reads say it: a Mac whose Harness Team account is in this Swarm runs
+ * that work there (teamMachineFor), so it reads as its account does. Read as itself, every Mac read "has no Harness
+ * Team account yet" next to the very account that took the work, and a Lead took that to mean the Mac could not
+ * (2026-10-28). Any other machine, and a Mac without one, reads as itself.
+ */
+export function machineTeamWork(state: SuperTabState, pool: ContributedMachine, now: number, teamMachines: readonly string[],
+  otherWorkspaceMachines: readonly string[] = []): TeamWorkRefusal | null {
+  const team = !pool.hostMachineId && teamAccountSwarm(state) ? teamPoolOf(state, pool, teamMachines) : undefined
+  const subject = team ?? pool
+  return teamWorkRefusal(subject, now, teamMachines.includes(subject.machineId), teamAccountRequired(state), otherWorkspaceMachines.includes(subject.machineId))
+}
+
 /** Where a new agent for [project] runs when a start names [machineId]: the Mac's team account when the project is not
  *  its contributor's own and the Mac has one in this Swarm, else the machine named. */
 export function teamMachineFor(state: SuperTabState, machineId: string, project: SwarmProject, idle = false, live?: readonly string[]): string {
@@ -369,18 +385,36 @@ export function machineOffline(pool: ContributedMachine, now: number): boolean {
   return !pool.observation || now - pool.observation.receivedAt > MACHINE_FRESH_MS
 }
 
-/** A removal its host cannot acknowledge (offline) or has not acknowledged in a day: the machine's records go, and the
+/** A removal its host cannot acknowledge (offline) or has not acknowledged in REMOVAL_FALLBACK_MS: the machine's records go, and the
  *  cleanup waits for its host on its next connection. */
-export function expireRemoval(state: SuperTabState, pool: ContributedMachine): void {
+export function expireRemoval(state: SuperTabState, pool: ContributedMachine, now: number): RemovalEnd {
   (state.machineCleanups ??= []).push({ machineId: pool.machineId, removalId: pool.removal!.id, machineOwnerId: pool.contributorId })
   state.machines = state.machines!.filter(m => m !== pool)
+  return machineOffline(pool, now) ? 'offline' : 'timedOut'
 }
 
-export function expireRemovals(state: SuperTabState, now: number): void {
-  for (const pool of state.machines?.filter(m => m.removal
-    && (machineOffline(m, now) || now - Date.parse(m.removal.requestedAt) >= REMOVAL_FALLBACK_MS)) ?? []) {
-    expireRemoval(state, pool)
-  }
+/** The removals that ended, with the lines saying why. A read applies them without writing and drops the lines. */
+export function expireRemovals(state: SuperTabState, now: number): MessageDraft[] {
+  return (state.machines?.filter(m => m.removal
+    && (machineOffline(m, now) || now - Date.parse(m.removal.requestedAt) >= REMOVAL_FALLBACK_MS)) ?? [])
+    .flatMap(pool => removalEnded(state, pool, expireRemoval(state, pool, now)))
+}
+
+/** One line in each project's chat when a machine's removal ends, saying why (2026-10-28), so a machine that leaves the
+ *  Machines list without its host's confirmation does not go unexplained. Written as the machine's owner, or the Swarm's
+ *  owner once they left, only where that person can open the project. A Harness Team account follows its Mac and says
+ *  nothing of its own. */
+export function removalEnded(state: SuperTabState, pool: ContributedMachine, how: RemovalEnd): MessageDraft[] {
+  const writer = state.people.find(p => p.id === pool.contributorId) ?? state.people.find(p => p.id === state.ownerId)
+  if (pool.hostMachineId || !pool.removal || !writer) return []
+  const why = how === 'confirmed' ? 'its host confirmed its cleanup.'
+    : how === 'offline' ? 'it is offline. It cleans up when it next connects.'
+    : `its host did not confirm its cleanup within ${REMOVAL_FALLBACK_MS / 60_000} minutes. It finishes the cleanup when it next connects.`
+  const reader: Actor = { kind: 'person', userId: writer.id, email: writer.email }
+  return projectsOf(state).filter(p => canReadProject(state, reader, p) && state.conversations.some(c => c.id === p.leadConversationId)).map(p => ({
+    id: stableId('machine-removal-ended', pool.removal!.id, pool.machineId, p.leadConversationId), conversationId: p.leadConversationId,
+    author: { kind: 'person', id: writer.id, name: writer.email, membershipGeneration: writer.generation },
+    text: `${pool.name} left the Swarm: ${why}`, replyTo: null, recipients: [], source: { kind: 'system' } }))
 }
 
 /** Pending intents reserve slots too. Only an explicit host stop frees a launched slot. A Mac and its Harness Team account

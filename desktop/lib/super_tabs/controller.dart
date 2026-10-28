@@ -552,6 +552,26 @@ class SuperTabController extends ChangeNotifier {
       _changed();
     } catch (error) {
       appLog.debug('super-tabs', 'project GitHub access not read: $error');
+      // A server without the route (an older backend) shows nothing, as before. Any other failure says it could not
+      // check, and is asked again after 30 seconds, not 5 minutes: a Swarm read in its first seconds came back
+      // empty and Project details showed no GitHub access at all (2026-10-28).
+      final absent =
+          error is SuperTabFailure &&
+          (error.statusCode == 404 || error.code == 'NOT_FOUND');
+      if (absent || _github[projectId] == null) {
+        _github[projectId] = (
+          value: SuperTabProjectGitHub.fromJson({
+            'state': absent ? 'unavailable' : 'unread',
+          }),
+          at: clock.now(),
+        );
+      }
+      if (!absent) {
+        _githubAsked[projectId] = clock.now().subtract(
+          const Duration(minutes: 5) - const Duration(seconds: 30),
+        );
+      }
+      _changed();
     } finally {
       _githubReading.remove(projectId);
     }

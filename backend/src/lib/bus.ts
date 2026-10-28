@@ -227,6 +227,23 @@ export function publishAgentMessageShareChanged(id: string): Promise<number> {
   return safePublish(`amsg-share:${id}`, '{}')
 }
 
+/** Who may watch an agent's terminal in a Swarm may have narrowed (a member removed, a project's sharing changed): its
+ *  observer sockets, on any instance, check again at once. No content on this channel. */
+export function subscribeSwarmAccessChanged(tabId: string, cb: () => void): Promise<() => void> {
+  return addSub(`swarm-access:${tabId}`, cb)
+}
+export function publishSwarmAccessChanged(tabId: string): Promise<number> {
+  return safePublish(`swarm-access:${tabId}`, '{}')
+}
+
+/** A Swarm terminal request was answered or refused: its sender's wait, on any instance, reads it again. No content. */
+export function subscribeTerminalAnswered(requestId: string, cb: () => void): Promise<() => void> {
+  return addSub(`terminal-answer:${requestId}`, cb)
+}
+export function publishTerminalAnswered(requestId: string): Promise<number> {
+  return safePublish(`terminal-answer:${requestId}`, '{}')
+}
+
 /** Frames between daemons of a shared tab, by tab and machine: sealed, never read here. */
 export function subscribeTabRelay(share: string, machineId: string, cb: (msg: unknown) => void): Promise<() => void> {
   return addSub(`amsg:${share}:${machineId}`, cb as Cb)
