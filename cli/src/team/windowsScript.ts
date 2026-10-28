@@ -345,7 +345,7 @@ export function buildWindowsSetupScript(input: WindowsSetupScriptInput): string 
     "  if (-not $script:scheduler) { $script:scheduler = New-Object -ComObject Schedule.Service; $script:scheduler.Connect() }",
     '  $out = Join-Path $script:RT "$what.out"',
     "  [IO.File]::WriteAllText($out, '')",
-    '  & $ICACLS $out /grant "*$($teamSid):(R,W)" /q | Out-Null',
+    '  & $ICACLS $out /grant "*$($teamSid):(R,W)" /L /q | Out-Null',
     '  $arguments = [Security.SecurityElement]::Escape("/d /s /c `"$line >>`"$out`" 2>&1`"")',
     "  $runXml = '<?xml version=\"1.0\" encoding=\"UTF-16\"?><Task version=\"1.2\" xmlns=\"http://schemas.microsoft.com/windows/2004/02/mit/task\">' +",
     "    '<RegistrationInfo><Description>harness team setup, as the Harness Team account; removed when it ends</Description></RegistrationInfo>' +",
@@ -449,17 +449,25 @@ export function buildWindowsSetupScript(input: WindowsSetupScriptInput): string 
     '  }',
     '}',
     'if ($removed -gt 0) { $ownerItem.SetAccessControl($ownerAcl) }',
-    // Written new (CreateNew never opens what is there, so never a link the owner left), then given to the owner with
-    // only the ACEs it inherits. Not written as the owner: UAC may run this as another administrator, and nobody else
-    // has the owner's password.
+    // Written new (CreateNew never opens what is there, so never a link the owner left), then given to the owner and
+    // checked on the handle that made it, never again by its path. The owner may write the profile: between a close and
+    // a path-based icacls it could swap in a junction (no privilege needed), and icacls would follow it, to System32 say
+    // (review, 2026-10-28). Not written as the owner: UAC may run this as another administrator, and nobody else has the
+    // owner's password. Its ACL is the one it inherits from the profile, with no ACE of its own.
     '$old = Item-At $SENTINEL',
     'if ($old) { if ($old.PSIsContainer) { if ($old.Attributes -band $REPARSE) { [IO.Directory]::Delete($SENTINEL) } else { die "$SENTINEL is a folder" 6 } } else { [IO.File]::Delete($SENTINEL) } }',
-    '$file = [IO.File]::Open($SENTINEL, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::None)',
-    'try { $bytes = [Text.Encoding]::UTF8.GetBytes("$SENTINEL_TEXT`r`n"); $file.Write($bytes, 0, $bytes.Length) } finally { $file.Dispose() }',
-    '& $ICACLS $SENTINEL /setowner "*$OWNER_SID" /q | Out-Null',
-    'if ($LASTEXITCODE -ne 0) { die "could not give $SENTINEL to $OWNER" 6 }',
-    '& $ICACLS $SENTINEL /reset /q | Out-Null',
-    'if ($LASTEXITCODE -ne 0) { die "could not reset the ACL of $SENTINEL" 6 }',
+    "$SENTINEL_RIGHTS = [Security.AccessControl.FileSystemRights]'Write, ReadPermissions, ChangePermissions, TakeOwnership, Synchronize'",
+    '$sentinelFile = New-Object IO.FileStream($SENTINEL, [IO.FileMode]::CreateNew, $SENTINEL_RIGHTS, [IO.FileShare]::None, 4096, [IO.FileOptions]::None)',
+    'try {',
+    '  $bytes = [Text.Encoding]::UTF8.GetBytes("$SENTINEL_TEXT`r`n")',
+    '  $sentinelFile.Write($bytes, 0, $bytes.Length)',
+    '  $sentinelOwner = New-Object Security.AccessControl.FileSecurity',
+    '  $sentinelOwner.SetOwner((New-Object Security.Principal.SecurityIdentifier($OWNER_SID)))',
+    '  $sentinelFile.SetAccessControl($sentinelOwner)',
+    '  $sentinelAcl = $sentinelFile.GetAccessControl()',
+    '  if ($sentinelAcl.GetOwner([Security.Principal.SecurityIdentifier]).Value -ne $OWNER_SID) { die "could not give $SENTINEL to $OWNER" 6 }',
+    '  if (@($sentinelAcl.GetAccessRules($true, $false, [Security.Principal.SecurityIdentifier])).Count -ne 0) { die "$SENTINEL has ACEs of its own" 6 }',
+    '} finally { $sentinelFile.Dispose() }',
     '',
     '# 5. The team daemon stops while its files are replaced.',
     'if (Get-ScheduledTask -TaskPath $TASK_PATH -TaskName $TASK_NAME -ErrorAction SilentlyContinue) {',
@@ -500,7 +508,8 @@ export function buildWindowsSetupScript(input: WindowsSetupScriptInput): string 
     'if ($relay -and (-not $relay.PSIsContainer -or ($relay.Attributes -band $REPARSE) -or ((Owner-Of $RELAY_DIR) -notin @($OWNER_SID, $ADMINS)))) { die "$RELAY_DIR is not the owner\'s folder" 6 }',
     'if (-not $relay) { $made = New-Object Security.AccessControl.DirectorySecurity; $made.SetSecurityDescriptorSddlForm("O:BA" + ' + SDDL.relay + '); [void][IO.Directory]::CreateDirectory($RELAY_DIR, $made) }',
     `$relayAcl = New-Object Security.AccessControl.DirectorySecurity; $relayAcl.SetSecurityDescriptorSddlForm(${SDDL.relay}, 'Access'); (Item-At $RELAY_DIR).SetAccessControl($relayAcl)`,
-    '& $ICACLS $RELAY_DIR /setowner "*$OWNER_SID" /q | Out-Null',
+    // /L: on the folder itself, even if the owner (who may change it) has made it a junction since.
+    '& $ICACLS $RELAY_DIR /setowner "*$OWNER_SID" /L /q | Out-Null',
     'if ($LASTEXITCODE -ne 0) { die "could not give $RELAY_DIR to $OWNER" 6 }',
     '',
     '# 8. The sign-in handover folder. The owner\'s own process writes the single-use code here after this script, so its',

@@ -149,10 +149,16 @@ describe('the Windows setup script', () => {
 
   it('keeps the sentinel\'s inherited ACL and gives it to the owner, and takes broad access off the profile', () => {
     const script = buildWindowsSetupScript(input())
-    expect(script).toContain('[IO.FileMode]::CreateNew')
-    expect(script).toContain("& $ICACLS $SENTINEL /setowner \"*$OWNER_SID\" /q")
-    expect(script).toContain('& $ICACLS $SENTINEL /reset /q')
-    expect(script).not.toMatch(/SENTINEL[^\n]*\/grant/)
+    // Made new, and given to the owner on the handle that made it: a path the owner can write is never acted on twice, or
+    // the owner could swap a junction in between and send icacls through it (to System32, say).
+    expect(script).toContain('$sentinelFile = New-Object IO.FileStream($SENTINEL, [IO.FileMode]::CreateNew, $SENTINEL_RIGHTS, [IO.FileShare]::None, 4096, [IO.FileOptions]::None)')
+    expect(script).toContain('$sentinelFile.SetAccessControl($sentinelOwner)')
+    expect(script).toContain('$sentinelAcl = $sentinelFile.GetAccessControl()')
+    expect(script).toContain('if (@($sentinelAcl.GetAccessRules($true, $false, [Security.Principal.SecurityIdentifier])).Count -ne 0)')
+    expect(at(script, '$sentinelFile.SetAccessControl($sentinelOwner)')).toBeLessThan(at(script, '$sentinelFile.Dispose()'))
+    expect(script).not.toMatch(/ICACLS[^\n]*SENTINEL/)
+    // Any icacls left acts on the path itself, never through a link (/L).
+    for (const line of code(script).filter((l) => l.includes('& $ICACLS'))) expect(line, line).toContain(' /L')
     for (const sid of ['S-1-1-0', 'S-1-5-11', "$USERS"]) expect(script).toContain(sid)
     expect(script).toContain('GetAccessRules($true, $false, [Security.Principal.SecurityIdentifier])')
   })
@@ -165,7 +171,7 @@ describe('the Windows setup script', () => {
     expect(script).toContain("$copied = As-Team 'copy' (& $asScript (Join-Path $RT 'copy.ps1')) 15")
     expect(script).toContain("$installed = As-Team 'engines' (& $asScript (Join-Path $RT 'engines.ps1')) 30")
     // What it says goes to a file in the stage folder, which this script made and the team account may only write.
-    expect(script).toContain('& $ICACLS $out /grant "*$($teamSid):(R,W)" /q')
+    expect(script).toContain('& $ICACLS $out /grant "*$($teamSid):(R,W)" /L /q')
   })
 
   it('stages the runtime in a folder only Administrators can change, and never copies through a link', () => {
