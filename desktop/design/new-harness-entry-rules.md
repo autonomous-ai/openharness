@@ -142,7 +142,7 @@ Machine identifies where the agent, project and tools run. The model can be
 served from a different machine. Changing Machine or Agent preserves an explicit
 model, refreshes availability, and blocks Start with an explanation if the new
 combination is unavailable. It never substitutes a subscription. Refresh models
-updates the choices; Manage Models opens the existing Models panel for lifecycle
+updates the choices; Your models opens the existing Models panel for lifecycle
 management and preserves the launch draft. Choosing Terminal clears model routing;
 its Model row is omitted.
 

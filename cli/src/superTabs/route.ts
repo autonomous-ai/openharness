@@ -219,7 +219,7 @@ function runsNamed(p: Probe, named: string): boolean {
   const name = words([p.gridModel ?? p.model, p.gridLabel ?? '', ENGINE[p.engine]].join(' ')).join('')
   return words(named).every(w => name.includes(w))
 }
-const NAMED_NONE = (named: string) => `No candidate runs "${named}". Share it with the Swarm (Manage models), or check its name.`
+const NAMED_NONE = (named: string) => `No candidate runs "${named}". Share it with the Swarm (Your models), or check its name.`
 
 /** How many Builders may run on one API model a member shares: the share answers four requests at once
  * (cli/src/lib/swarmApiShares.ts CONCURRENCY), unlike a local engine, which answers one conversation at a time. */
@@ -231,7 +231,7 @@ export interface HeldModel { model: string; label: string; kind: 'local' | 'api'
 
 /** Why a held model is not offered, and what frees it: a model in use reads as unshared otherwise (owner, 2026-10-24). */
 function heldReason(m: HeldModel): string {
-  if (m.refused) return `"${m.label}" is shared with the Swarm, but Builders are not offered it: ${m.refused} Ask a member to run a larger model, or share an API (Manage models).`
+  if (m.refused) return `"${m.label}" is shared with the Swarm, but Builders are not offered it: ${m.refused} Ask a member to run a larger model, or share an API (Your models).`
   const who = m.holders.length === 1 ? `Builder ${m.holders[0]} is on it` : `Builders ${m.holders.slice(0, -1).join(', ')} and ${m.holders.at(-1)} are on it`
   const limit = m.kind === 'api' ? `an API model takes ${API_BUILDERS} Builders at a time` : 'a local model serves one Builder at a time'
   return `"${m.label}" is shared with the Swarm, but ${who}: ${limit}. Assign the work to ${m.holders.length === 1 ? 'that Builder once it is free, or stop it' : 'one of them once it is free, or stop one'} to free the model.`
@@ -335,7 +335,7 @@ function sizeUp(p: Probe, policy: Policy, a: Assessment, now: number, open: Comm
 const WAY = ['right away', 'about a quarter of the way in', 'about halfway', 'about three quarters of the way in', 'near the end']
 const runsOut = (w: Measured) => `The ${w.name} window is expected to run out ${WAY[Math.round(Math.max(0, w.usable / w.needed) * 4)]}${w.resetsIn === null ? '' : `; resets in ${span(w.resetsIn)}`}.`
 const UNREAD = 'Its quota could not be read in full, and another candidate\'s quota fits this task.'
-export const LOCAL_NONE = 'No local model is being served on this Swarm\'s grid. Ask a member to run one or share an API (Manage models, in the Swarm\'s sidebar).'
+export const LOCAL_NONE = 'No local model is being served on this Swarm\'s grid. Ask a member to run one or share an API (Your models, in the Swarm\'s sidebar).'
 
 /** The fixed order: the owner's preferred engine, a model on the Swarm's grid for simple work, an idle member before a new
  * agent and a less busy machine first when the owner prefers idle agents; then the policy order: cheaper in effect,
