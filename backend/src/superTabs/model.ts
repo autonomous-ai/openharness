@@ -74,6 +74,9 @@ export interface Agent {
   confidential?: true
   /** Set by its contributor or its project's Lead (profile.ts); absent shows the pattern Desktop draws from its name. */
   avatar?: import('./profile.js').Avatar
+  /** A Buddy (buddies.ts): the person it brainstorms with, at the membership they added it in. Its role stays a builder's
+   *  for older readers; this is what makes it a Buddy, and what refuses it every command but its own chat and proposals. */
+  buddyOf?: { personId: string; generation: string }
 }
 export type AgentRole = 'builder' | 'reviewer'
 export const agentRole = (agent: Pick<Agent, 'role'>): AgentRole => agent.role ?? 'builder'
@@ -176,8 +179,8 @@ export function renderWorkTask(task: WorkTask): string {
 
 export interface Conversation {
   id: string
-  /** The Swarm-wide Leads conversation (syncLeads); absent on every project conversation. */
-  kind?: 'leads'
+  /** The Swarm-wide Leads conversation (syncLeads), or a person's Buddy chat (buddies.ts); absent on every other conversation. */
+  kind?: 'leads' | 'buddy'
   projectId?: string
   /** Stable, tab-local workgroup reference. Lead has no number. */
   number?: number
@@ -401,7 +404,7 @@ export function conversation(state: SuperTabState, id: string): Conversation {
 
 export const isLeads = (group: Conversation): boolean => group.kind === 'leads'
 
-const KNOWN_KINDS: Record<NonNullable<Conversation['kind']>, true> = { leads: true }
+const KNOWN_KINDS: Record<NonNullable<Conversation['kind']>, true> = { leads: true, buddy: true }
 /** During a rolling deploy the previous release reads what the next one wrote. A conversation kind it does not know
  *  belongs to no project it can check, so it waits here unchanged, and the release that knows it puts it back. */
 export function parkLaterConversations(state: SuperTabState): void {
