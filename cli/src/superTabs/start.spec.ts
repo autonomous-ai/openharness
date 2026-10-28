@@ -897,8 +897,8 @@ describe('a Lead\'s start that fails before its agent exists', () => {
   const decision = (candidates: ReturnType<typeof candidate>[], override: unknown = null) => ({ id: 'decision-1', conversationId: 'group', outcome: 'failed', final: null, override,
     record: { assessment: { difficulty: 'medium', risk: 'low', why: 'Queued Lead routing.', size: 'medium' }, candidates, excluded: [],
       floor: 2, notes: false, pick: candidates[0]!.id, via: 'order', p: null, belowFloor: false, why: 'Policy order.' } })
-  const swarm = (rules: unknown[] = []) => ({
-    conversations: [{ id: 'group', projectId: 'project', leadId: 'lead', requesterId: 'person-1' }],
+  const swarm = (rules: unknown[] = [], requires?: unknown) => ({
+    conversations: [{ id: 'group', projectId: 'project', leadId: 'lead', requesterId: 'person-1', ...(requires ? { task: { goal: 'Check the round.', requires } } : {}) }],
     projects: [{ id: 'project', ownerId: 'owner-1', repository: { machineId: 'repo-mac', cwd: '/repo' } }],
     machines: [{ machineId: 'mac-one', name: 'Mac One', scope: 'swarm', cwd: '/one/swarm' }, { machineId: 'mac-two', name: 'Mac Two', scope: 'swarm', cwd: '/two/swarm/' }],
     rules,
@@ -906,6 +906,8 @@ describe('a Lead\'s start that fails before its agent exists', () => {
   const TOKEN = 'The Harness GitHub App token is not in the form GitHub gives.'
   /** A backend with contributed machines whose hosts fail a start in preparation, as the round-device group saw. */
   function backend(options: { candidates?: ReturnType<typeof candidate>[]; rules?: unknown[]; fails?: string[]; override?: unknown
+    /** The group's task requirement, as the Lead reads it (backend model.ts TaskRequirement). */
+    requires?: unknown
     /** What happens to the retry's start: the backend refuses it, or its reply is lost after or before the backend recorded it. */
     retry?: 'refused' | 'lost' | 'lostUnrecorded'
     /** Machines off the contributed list: the Lead's own start launches there, and this one refuses for its owner's sharing. */
@@ -924,7 +926,7 @@ describe('a Lead\'s start that fails before its agent exists', () => {
         return { ok: true, value: structuredClone(start) }
       }
       if (payload.action === 'routeDecision') return { ok: true, value: decision(options.candidates ?? [candidate('c0', 'mac-one'), candidate('c1', 'mac-one', 'member'), candidate('c2', 'mac-two')], options.override) }
-      if (payload.action === 'status') return { ok: true, value: { state: swarm(options.rules) } }
+      if (payload.action === 'status') return { ok: true, value: { state: swarm(options.rules, options.requires) } }
       const cmd = payload.command as Record<string, unknown>
       commands.push({ operationId: payload.operationId, ...cmd })
       if (cmd.type === 'agent.start') {
@@ -1074,6 +1076,41 @@ describe('a Lead\'s start that fails before its agent exists', () => {
     expect(await b.lead(b.first)).toMatchObject({ error: 'START_BLOCKED' })
     expect(b.of('route.record')).toEqual([])
     expect(b.of('agent.start')).toHaveLength(1)
+  })
+
+  const STAYS = 'Builder could not start on Mac One. This task needs a particular machine or device, so it was not moved to another machine. It has no worker until a machine that has what it needs can start it.'
+  it('keeps a task that requires its machine or device where it is, and tells the group and its requester', async () => {
+    // As each Lead reads it: a machine it sees, one it does not (only counted), a device.
+    for (const requires of [{ machines: ['mac-one'] }, { machines: [], unseenMachines: 1 }, { devices: ['/dev/cu.round'] }]) {
+      const b = backend({ requires })
+      expect(await b.lead(b.first)).toMatchObject({ error: 'START_BLOCKED', startId: 'first-start', detail: expect.stringContaining(TOKEN) })
+      expect(b.of('route.record')).toEqual([])
+      expect(b.of('agent.start')).toHaveLength(1)
+      expect(b.of('message.send')).toMatchObject([{ conversationId: 'group', mentions: ['person-1'], recipientIds: [], text: STAYS }])
+    }
+  })
+  it('reports the requirement when the backend refuses the new pick for it', async () => {
+    // The requirement was set after the Lead read the group: the backend holds the pick to it.
+    const b = backend()
+    const answer = b.scoped.getMockImplementation()!
+    b.scoped.mockImplementation(async payload => (payload.command as Record<string, unknown> | undefined)?.type === 'route.record'
+      ? { error: 'REQUIREMENT_UNMET', detail: 'This task runs only on the machine it requires, and this is another machine.' } : answer(payload))
+    expect(await b.lead(b.first)).toMatchObject({ error: 'START_BLOCKED', startId: 'first-start' })
+    expect(b.of('agent.start')).toHaveLength(1)
+    expect(b.of('message.send')).toMatchObject([{ text: STAYS }])
+  })
+  it('reports the requirement when the backend refuses the retry\'s start for it', async () => {
+    const b = backend()
+    const answer = b.scoped.getMockImplementation()!
+    b.scoped.mockImplementation(async payload => {
+      const command = payload.command as Record<string, unknown> | undefined
+      if (command?.type !== 'agent.start' || payload.operationId === 'first-start') return answer(payload)
+      b.commands.push({ operationId: payload.operationId, ...command })
+      return { error: 'REQUIREMENT_UNMET', detail: 'This task needs /dev/cu.round.' }
+    })
+    expect(await b.lead(b.first)).toMatchObject({ error: 'START_BLOCKED', startId: 'first-start' })
+    expect(b.of('agent.start')).toHaveLength(2)
+    expect(b.of('message.send')).toMatchObject([{ text: STAYS }])
   })
 
   it('a rule of another project does not hold the task back', async () => {

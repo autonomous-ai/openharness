@@ -74,7 +74,7 @@ describe('built-in Swarm skills', () => {
   const requestsLast = `\n${requests.trimEnd()}\n`
   const twoHours = '- A Builder or Reviewer that has been down for 2 hours (machine offline, session gone or stopped): cancel its task with the reason, route it, and assign it to another agent with what the first one left (branch, last revision, last report).\n'
   // A failed start is never left (the round-device group, 2026-10-27; superTabs/start.ts): the Lead's alone, in both modes.
-  const failedStart = '- A failed start is retried elsewhere or reported, never left: when one fails, resume it; it starts once on the route\'s next machine, or tells the group and its requester.\n'
+  const failedStart = '- A failed start is retried elsewhere or reported, never left: when one fails, resume it; it starts once on the route\'s next machine, or tells the group and its requester. A task that requires a machine or device never moves: when its route says it waits, keep it queued and route it again once that machine can take it.\n'
   it.each([
     ['lead', 'b9254e4bb5c633a73e1b87e6ca6690915e1c3a7bb55db0d3d093e6710dd719db'],
     ['dev', 'e78ce31a71f169d8956a2acd46e8bb43b79bd654b80b0fe3c33dbced9d2c3c75'],
