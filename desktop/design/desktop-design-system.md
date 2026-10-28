@@ -256,6 +256,35 @@ accessory columns align. Specialized harness names need no marketing second
 line. Machine menus align to the project popover's top edge with an 8-point gap,
 then flip or constrain when the window has insufficient room.
 
+## Numbers and rankings
+
+A ranking, a score or a count is read by comparing rows, so its figures line
+up and only one of them speaks. Leaderboards, team summaries, usage tables and
+any later list of people or numbers use this recipe and the existing roles;
+there is no number style, ranking palette or medal artwork of its own.
+
+| Part | Role | Rule |
+| --- | --- | --- |
+| Rank | `AppType.label`, `FontWeight.w700`, `AppPalette.textSecondary` | A bold numeral in a fixed leading column. First place differs from tenth only by its number. |
+| Emphasized number (points) | `AppType.label`, `FontWeight.w600`, `AppPalette.textPrimary` | One per row, at the trailing edge. Shown even when it is 0, so the column holds. |
+| Secondary metrics | `AppType.caption`, `AppPalette.textSecondary` | Plain words beneath the name, joined by a spaced middle dot: `3 shipped · 2 unblocked`. A metric at 0 is left out; a row with none has no second line. |
+| Trend | `AppIcons.arrowUp` / `AppIcons.arrowDown` at 14 points, with a caption-size number | Shape and color together: up in `AppPalette.online`, down in the theme's semantic error ink. No change shows nothing. |
+| Current person | `AppSurface.selectedFill` | The sidebar's selected-row fill, not the blue keyboard selection (`AppDesktop.selection`). Text stays in ordinary ink. |
+
+Every figure that sits in a column (rank, points, counts, percentages and
+trend values) passes `fontFeatures: [FontFeature.tabularFigures()]` to its
+existing `AppType` style, so digits keep one width and a column does not
+shimmer as values change. Numeric columns are right-aligned at a fixed width
+sized for the widest expected value; names take the remaining width and
+truncate first. Row anatomy is the list rule above: rank, identity, name with
+its metadata, then trend and the emphasized number at the right.
+
+Medals, cups, trophies, flames and emoji are not icons and not ranks. A place
+is its numeral. Color never carries a trend, a rank or a threshold on its own:
+the arrow's direction, the number and the accessible label ("up 3 from last
+week") say the same thing. Hover and keyboard focus keep their ordinary
+treatment over the current person's fill, so focus stays visible on that row.
+
 ## Surface families
 
 **Titlebar dropdowns** — the avatar's menu, the bell's inbox and the other
