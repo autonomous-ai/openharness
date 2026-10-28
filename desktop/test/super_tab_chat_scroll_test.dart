@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/super_tabs/controller.dart';
@@ -242,6 +243,70 @@ void main() {
     for (final id in shown) {
       expect(top(tester, id), moreOrLessEquals(tops[id]!, epsilon: .5));
     }
+    expect(tester.takeException(), isNull);
+    await close(tester, c);
+  });
+
+  testWidgets('paging with the keyboard across the dividing row moves rows '
+      'only by the page', (tester) async {
+    // Two pages: the one read first, and one read in above it.
+    final server = ConversationServer()..messagePage = 20;
+    agentUpdates(server, 60);
+    final c = await show(tester, server);
+    position(tester).jumpTo(position(tester).minScrollExtent);
+    await tester.pumpAndSettle();
+    expect(c.messages('lead').length, greaterThanOrEqualTo(40));
+    // Just below the first row drawn, where the two halves meet.
+    position(tester).jumpTo(100);
+    await tester.pumpAndSettle();
+    final start = position(tester).pixels;
+
+    Future<void> page(LogicalKeyboardKey key) async {
+      // The reader clicks a message, then pages; the row watched stays
+      // in view: the top one going up, the bottom one going down.
+      final shown = [
+        for (final m in c.messages('lead'))
+          if (row(m.id).hitTestable().evaluate().isNotEmpty) m.id,
+      ];
+      final id = key == LogicalKeyboardKey.pageUp ? shown.first : shown.last;
+      tester
+          .widget<Focus>(
+            find.descendant(of: row(id), matching: find.byType(Focus)).first,
+          )
+          .focusNode!
+          .requestFocus();
+      await tester.pump();
+      final before = position(tester).pixels, top = tester.getTopLeft(row(id));
+      await tester.sendKeyEvent(key);
+      await tester.pumpAndSettle();
+      final moved = position(tester).pixels - before;
+      expect(moved.abs(), greaterThan(100));
+      expect(
+        tester
+            .getTopLeft(
+              find.byKey(ValueKey('super-message-$id'), skipOffstage: false),
+            )
+            .dy,
+        moreOrLessEquals(top.dy - moved, epsilon: .5),
+      );
+    }
+
+    for (var i = 0; i < 3; i++) {
+      await page(LogicalKeyboardKey.pageUp);
+    }
+    expect(position(tester).pixels, lessThan(0), reason: 'above the divide');
+    // Above it, the rows read in still run oldest to newest down the view.
+    final above = [
+      for (final m in c.messages('lead'))
+        if (row(m.id).hitTestable().evaluate().isNotEmpty) m.id,
+    ];
+    expect(above.length, greaterThan(2));
+    final tops = [for (final id in above) tester.getTopLeft(row(id)).dy];
+    expect(tops, orderedEquals([...tops]..sort()));
+    for (var i = 0; i < 3; i++) {
+      await page(LogicalKeyboardKey.pageDown);
+    }
+    expect(position(tester).pixels, moreOrLessEquals(start, epsilon: .5));
     expect(tester.takeException(), isNull);
     await close(tester, c);
   });
