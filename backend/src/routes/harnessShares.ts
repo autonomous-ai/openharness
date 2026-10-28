@@ -1,5 +1,5 @@
 import type { FastifyInstance } from 'fastify'
-import type { PrismaClient } from '@prisma/client'
+import { Prisma, type PrismaClient } from '@prisma/client'
 import { z } from 'zod'
 import { SuperTabStore } from '../superTabs/store.js'
 import { prisma, machineAlive } from '../lib/prisma.js'
@@ -111,8 +111,18 @@ export async function harnessShareRoutes(app: FastifyInstance): Promise<void> {
       }
       const data = { ...input, superTabId: input.superTabId ?? null, expiresAt: new Date(input.expiresAt), revokedAt: null,
         ownerId: req.user!.sub, autonomousEnv: req.user!.autonomousEnv }
-      await prisma.harnessShare.upsert({ where: { id: req.params.id },
-        create: { id: req.params.id, ...data }, update: data })
+      try {
+        await prisma.harnessShare.upsert({ where: { id: req.params.id },
+          create: { id: req.params.id, ...data }, update: data })
+      } catch (error) {
+        if (!(error instanceof Prisma.PrismaClientKnownRequestError) || error.code !== 'P2002') throw error
+        // This machine, agent and recipient already have an invitation under another id: a daemon that lost its grants
+        // file sends a new one, and a 500 had it retry forever (Diego's issue file, 2026-10-27). It is named only to its owner.
+        const taken = await prisma.harnessShare.findFirst({ where: { machineId: input.machineId, agentId: input.agentId,
+          recipientEmail: input.recipientEmail }, select: { id: true, ownerId: true } })
+        return sendError(reply, 'This harness is already shared with that person.', 'SHARE_EXISTS', 409,
+          taken?.ownerId === req.user!.sub ? { id: taken.id } : undefined)
+      }
       // Told only when what the recipient sees changes. A renewal moves only the expiry, and an owner daemon that
       // renewed every few seconds (diego@'s 0.4.55 dev build, 2026-10-26) poked every member's every app to re-read
       // its machines and shares three times a second, with the backend pinned at its CPU limit.

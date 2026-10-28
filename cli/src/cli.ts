@@ -178,6 +178,7 @@ Machine:
   harness mcp                  the agent verbs as an MCP server on stdin/stdout, for agents that use MCP
   harness help agents          the agent commands, states, exit codes and rules on one screen
   harness settings [<name> on|off]  what agents may do (agents-start-agents, agents-tell-agents, pull-request-line, agent-messages): your account's experiments in Settings ▸ Experimental, each off by default
+  harness mcp-servers [add|remove]  local MCP servers (a paired lamp's lamp-mcp) for the agents Harness starts here: yours alone to change
   harness machines delete <id> remove ANOTHER machine (refuses this one; use \`harness logout\`)
   harness e2e plan             which coding tools have a new version out (the grid-switch e2e trigger)
   harness e2e grid-switch      move a fresh agent subscription -> grid -> back home with its tool + MCP; leaves a review bundle
@@ -2678,6 +2679,7 @@ import { agentsHelp, helpFor } from './agentClient/help.js'
 import { openUrlCommand } from './agentClient/openUrl.js'
 import { harnessRunner, mcpCommand } from './agentClient/mcp.js'
 import { settingsCommand } from './agentClient/settings.js'
+import { mcpServersCommand } from './agentClient/mcpServers.js'
 
 // ── arg parse ──────────────────────────────────────────────────────────────────────────────────
 // `hn` is the terminal client's short name (like tmux, fzf): the same CLI, entered at `tui`. A call
@@ -2731,6 +2733,9 @@ switch (cmd) {
     break
   case 'settings':
     settingsCommand(rest, { port: daemonPort() }).then(code => { process.exitCode = code }).catch(onError)
+    break
+  case 'mcp-servers':
+    process.exitCode = mcpServersCommand(rest)
     break
   case 'mcp': {
     const pane = process.env.TMUX_PANE
