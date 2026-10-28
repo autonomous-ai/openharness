@@ -35,7 +35,8 @@ PR CI is deliberately fast. Each changed component runs only its own Linux suite
 | `desktop/` | `desktop-tests` (VM suite, four Linux shards) | 5–7 min |
 | `tui/`, `term/` (the TUI builds on it) | `tui-test` (`cargo test`) | a few minutes |
 | `pty/`, `term/`, `tui/vendor/`, the CLI's ptyhost backend (`cli/src/lib/ptyHost/`, `ptyHostBackend*`, `terminalBackend.contract.ts`) | `pty-checks` (`cargo test` for `term` and `pty`, then the ptyhost terminal contract against the built host) | a few minutes |
-| `backend/`, `companions/`, `website/`, `os/`, `provider/`, `mobile/`, `daemons/` | that component's one check | 1–4 min |
+| `backend/` | `backend-desk` (the backend unit suite, `npm test` in `backend/`) | about 1–2 min |
+| `companions/`, `website/`, `os/`, `provider/`, `mobile/`, `daemons/` | that component's one check | 1–4 min |
 | `devices/` | `firmware-checks` | 1–2 min |
 | `devices/harness-pro/` | also `pro-firmware-build` (ESP-IDF v5.5.4 build of `harness_pro.bin`, which must fit `ota_0`) and `pro-golden` (`test/golden.sh --check` with Liberation Sans, on macOS arm64 where the baseline is recorded: float maths in the code-drawn shapes differs on Linux x86-64) | build ~4 min, golden ~1 min |
 | anything else (docs, workflows, scripts, store) | `process-checks` only | about 1.5 min |

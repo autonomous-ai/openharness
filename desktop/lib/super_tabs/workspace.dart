@@ -221,12 +221,20 @@ class _SuperTabWorkspaceState extends State<SuperTabWorkspace> {
       final tab = app.swarms.where((s) => s.id == swarmId).firstOrNull;
       if (tab == null) return;
       var machine = app.stateOf(agent.machineId);
-      if (machine?.agents.any((a) => a.id == agent.harnessId) != true) {
+      final snapshot = controller.snapshot;
+      // Another person's private session never arrives as an invitation: re-reading the machine list for one is wasted.
+      final private =
+          snapshot != null &&
+          agent.machineOwnerId != controller.accountId &&
+          superTabTerminalPrivate(snapshot, agent);
+      if (!private &&
+          machine?.agents.any((a) => a.id == agent.harnessId) != true) {
         await app.refreshMachines();
         if (!current() || !app.swarms.any((s) => s.id == swarmId)) return;
         machine = app.stateOf(agent.machineId);
       }
-      if (machine?.agents.any((a) => a.id == agent.harnessId) != true) {
+      if (private ||
+          machine?.agents.any((a) => a.id == agent.harnessId) != true) {
         throw SuperTabFailure(
           'TERMINAL_UNAVAILABLE',
           superTabTerminalUnavailable(

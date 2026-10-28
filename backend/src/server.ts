@@ -19,9 +19,10 @@ import { handleAdapterUpgrade } from './lib/adapterWs.js'
 import { logger } from './utils/logger.js'
 import { registerSecurityHeaders } from './middlewares/securityHeaders.js'
 import { startTurnCredentialRefresh } from './lib/turnCredentials.js'
-import { closeBus, pub, redisCount, redisSsoProfileStore } from './lib/bus.js'
+import { closeBus, pub, redisCount, redisSsoProfileStore, redisSwarmStamps } from './lib/bus.js'
 import { prisma } from './lib/prisma.js'
 import { backendReadinessChecks, createReadiness, drainBeforeClosing, processDrain } from './lib/readiness.js'
+import { configureSwarmStamps } from './superTabs/cache.js'
 import { useSharedSsoProfileStore } from './lib/ssoAuth.js'
 import { useSharedRateCounter } from './lib/rateLimit.js'
 import { createRouteRateLimit } from './middlewares/routeRateLimit.js'
@@ -148,6 +149,7 @@ async function start(): Promise<void> {
   useSharedSsoProfileStore(redisSsoProfileStore)
   // Rate limits count across every process and pod (lib/rateLimit.ts), not once per process.
   useSharedRateCounter(redisWindowCounter(pub))
+  configureSwarmStamps(redisSwarmStamps(), { reads: env.SWARM_READ_CACHE === 'on', maxBytes: env.SWARM_CACHE_MB * 2 ** 20 })
 
   // SSO access-token gate for the control API (data-plane auth happens before Fastify), inside the per-route limit
   // (Stability 3.2): a request counts for the person it signed in as, and a token already refused this window is

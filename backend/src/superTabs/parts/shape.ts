@@ -91,19 +91,24 @@ export function split(state: SuperTabState, opts: { tabId: string; version: numb
 
 const live = <T>(parts: Part<T>[]): T[] => parts.filter(p => !p.deleted && p.data).sort((a, b) => a.ordinal - b.ordinal).map(p => p.data!)
 
-/** The state commands run on: `SuperTab.state`'s shape, each list in part order, with the part-only group fields kept. */
-export function reassemble(parts: SwarmParts): SuperTabState {
+/**
+ * The state commands run on: `SuperTab.state`'s shape, each list in part order, with the part-only group fields kept. A
+ * command changes what it reassembled, so each record is a copy; a read (`share`) changes nothing and takes the parts'
+ * own records, which the read cache holds frozen (cache.ts).
+ */
+export function reassemble(parts: SwarmParts, { share = false }: { share?: boolean } = {}): SuperTabState {
+  const copy = share ? <T>(value: T): T => value : structuredClone
   const groups = live(parts.groups)
   const machines = live(parts.machines)
   const progress = new Map(parts.progress.filter(p => !p.deleted && p.data).map(p => [p.key, p.data!]))
   const flat = <T>(each: (machine: MachineData) => T[]) => machines.flatMap(each)
   const state: SuperTabState = {
-    ...structuredClone(parts.head.data!),
-    ...(parts.head.data!.projects ? { projects: parts.head.data!.projects.map(project => ({ ...structuredClone(project),
-      ...(progress.has(project.id) ? { progress: structuredClone(progress.get(project.id)!) as unknown as SwarmProject['progress'] } : {}) })) } : {}),
-    people: structuredClone(live(parts.members)),
-    agents: structuredClone(live(parts.agents)),
-    conversations: structuredClone(groups.filter(knownKind)),
+    ...copy(parts.head.data!),
+    ...(parts.head.data!.projects ? { projects: parts.head.data!.projects.map(project => ({ ...copy(project),
+      ...(progress.has(project.id) ? { progress: copy(progress.get(project.id)!) as unknown as SwarmProject['progress'] } : {}) })) } : {}),
+    people: copy(live(parts.members)),
+    agents: copy(live(parts.agents)),
+    conversations: copy(groups.filter(knownKind)),
     groupCounter: parts.groupCounter,
     sequenceBase: parts.sequenceBase,
   }
@@ -117,7 +122,7 @@ export function reassemble(parts: SwarmParts): SuperTabState {
   const closing = flat(m => m.closingSessions.map(c => ({ agentId: c.agentId, machineId: m.machineId, harnessId: c.harnessId, machineOwnerId: c.machineOwnerId })))
   const cleanups: MachineCleanup[] = flat(m => m.cleanups.map(c => ({ machineId: m.machineId, removalId: c.removalId, machineOwnerId: c.machineOwnerId })))
   const list = <K extends typeof LISTS[number]>(key: K, items: NonNullable<SuperTabState[K]>) => {
-    if (items.length || present.has(key)) state[key] = structuredClone(items)
+    if (items.length || present.has(key)) state[key] = copy(items)
   }
   list('parkedConversations', parked)
   list('starts', starts)

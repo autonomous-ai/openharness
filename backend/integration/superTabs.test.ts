@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto'
+import { EventEmitter } from 'node:events'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { join } from 'node:path'
@@ -19,6 +20,7 @@ import { stableId, type SuperTabState } from '../src/superTabs/model.js'
 import { ensureTerminalExpiry, TERMINAL_EXPIRY_MS } from '../src/superTabs/terminal.js'
 import { ensureMentionExpiry, MENTION_EXPIRY_MS } from '../src/superTabs/mentions.js'
 import * as parts from '../src/superTabs/parts/index.js'
+import { swarmTransaction } from '../src/superTabs/cache.js'
 import { guardedWrite, PartConflict } from '../src/superTabs/parts/write.js'
 import { ensurePartExpiry, sweepSwarms } from '../src/superTabs/sweeps.js'
 import { assignmentRows, poolRows, rosterRows } from './hostRows.test-support.js'
@@ -71,7 +73,7 @@ async function storedState(tab: string): Promise<SuperTabState> {
 }
 /** Replaces a Swarm's parts with `state`, as an older release or the migration would have left them. Versions keep rising. */
 async function saveState(tab: string, state: SuperTabState) {
-  await db.$transaction(async tx => {
+  await swarmTransaction(db, async tx => {
     const current = await parts.loadAll(tx, tab)
     const version = Math.max(current.head.version, ...[...current.members, ...current.agents, ...current.groups, ...current.machines,
       ...current.starts, ...current.progress].map(p => p.version)) + 1
@@ -1121,6 +1123,31 @@ describe('Super Tabs on a real Mongo replica set', () => {
     const rest = await store.messages(owner, tab, 'lead', { before: page.next!.sequence, beforeId: page.next!.id })
     expect([...rest.messages, ...page.messages].map(m => m.id)).toEqual(ids)
     expect(rest.next).toBeNull()
+  })
+
+  it('reads each hidden row once on its way to a page, however many there are, even when they share a sequence', async () => {
+    const { tab, lead } = await fixture()
+    // 2,000 of the Lead's notices, as one command before the store by parts wrote them: on one sequence, between two posts.
+    const row = (id: string, sequence: number, hidden: boolean) => ({ id, tabId: tab, conversationId: 'lead', sequence,
+      author: { kind: 'person', id: owner.sub, name: owner.email }, text: id, replyTo: null, recipientIds: hidden ? [lead] : [],
+      ...(hidden ? { source: { kind: 'agent-only' } } : {}) })
+    await db.superTabMessage.createMany({ data: [row('a-first', 0, false),
+      ...Array.from({ length: 2_000 }, (_, i) => row(`b-notice-${String(i).padStart(4, '0')}`, 1, true)), row('c-last', 2, false)] })
+    // What MongoDB reads of the messages for one page: an offset is walked in the index (keys), rows are fetched (documents).
+    const examined = async (read: () => Promise<unknown>) => {
+      await db.$runCommandRaw({ profile: 2 })
+      try { await read() } finally { await db.$runCommandRaw({ profile: 0 }) }
+      const { cursor } = await db.$runCommandRaw({ find: 'system.profile', filter: {}, projection: { ns: 1, keysExamined: 1, docsExamined: 1 }, limit: 1000 }) as
+        { cursor: { firstBatch: Array<{ ns: string; keysExamined?: number; docsExamined?: number }> } }
+      await db.$runCommandRaw({ drop: 'system.profile' })
+      return cursor.firstBatch.filter(entry => entry.ns.endsWith('.SuperTabMessage'))
+        .reduce((sum, entry) => sum + (entry.keysExamined ?? 0) + (entry.docsExamined ?? 0), 0)
+    }
+    let opened!: Awaited<ReturnType<typeof store.messages>>
+    expect(await examined(async () => { opened = await store.messages(owner, tab, 'lead', {}) })).toBeLessThan(6_000)
+    expect(opened.messages.map(m => m.id)).toEqual(['a-first', 'c-last'])
+    expect(opened.next).toBeNull()
+    expect((await store.messages(owner, tab, 'lead', { after: 0 })).messages.map(m => m.id)).toEqual(['c-last'])
   })
 
   it('accepts an agent-only notice only from an agent to itself alone', async () => {
@@ -2458,6 +2485,90 @@ describe('the Lead reads and types in an agent terminal', () => {
     expect(await claim()).toHaveLength(1)
     await expect(later(31_000).execute(host, tab, { operationId: randomUUID(), command: { type: 'agent.screenResult', requestId, ok: true, text: 'late' } }, worker))
       .rejects.toThrow('no longer waiting')
+  })
+
+  /** A store whose terminal answers are told the way the routes tell them across instances (lib/bus.ts), here in process.
+   *  `heard: false` loses every notice, as a dropped publish would. It counts the Swarm loads a wait makes. */
+  function watched(options: { heard?: boolean; now?: () => number } = {}) {
+    const notices = new EventEmitter()
+    const at = new SuperTabStore(db, options.now ?? Date.now, null, {
+      terminalAnswered: requestId => { if (options.heard !== false) notices.emit(requestId) },
+      watchTerminal: async (requestId, onChange) => { notices.on(requestId, onChange); return () => { notices.off(requestId, onChange) } },
+    })
+    const load = vi.spyOn(at as unknown as { load: (...args: unknown[]) => unknown }, 'load')
+    return { at, loads: () => load.mock.calls.length, listeners: (requestId: string) => notices.listenerCount(requestId) }
+  }
+
+  it('waits for an answer without loading the Swarm again and again', async () => {
+    const { tab, lead, worker, claim } = await terminalFixture()
+    const requestId = (await run(tab, { type: 'agent.screen', agentId: worker }, host, lead)).result.requestId as string
+    expect(await claim()).toHaveLength(1)
+    const { at, loads, listeners } = watched()
+    expect(await at.terminalResult(host, tab, requestId, lead, 3_000)).toEqual({ requestId, pending: true })
+    expect(loads()).toBeLessThanOrEqual(2)
+    expect(listeners(requestId)).toBe(0)
+  })
+
+  it('returns the answer as soon as the host’s answer commits', async () => {
+    const { tab, lead, worker, claim } = await terminalFixture()
+    const requestId = (await run(tab, { type: 'agent.screen', agentId: worker }, host, lead)).result.requestId as string
+    expect(await claim()).toHaveLength(1)
+    const { at, loads } = watched()
+    const waiting = at.terminalResult(host, tab, requestId, lead, 20_000).then(answer => ({ answer, at: Date.now() }))
+    await new Promise(resolve => setTimeout(resolve, 300))
+    await at.execute(host, tab, { operationId: randomUUID(), command: { type: 'agent.screenResult', requestId, ok: true, text: 'screen' } }, worker)
+    const answeredAt = Date.now()
+    const { answer, at: returnedAt } = await waiting
+    expect(answer).toEqual({ requestId, ok: true, text: 'screen' })
+    expect(returnedAt - answeredAt).toBeLessThan(100)
+    expect(loads()).toBeLessThanOrEqual(4)
+  })
+
+  it('wakes a wait when the request turns late, and when the host refuses it', async () => {
+    const { tab, lead, worker, claim } = await terminalFixture()
+    const unseen = (await run(tab, { type: 'agent.screen', agentId: worker }, host, lead)).result.requestId as string
+    // The pickup window ends 300 ms into this store's clock.
+    const late = watched({ now: () => Date.now() + 9_700 })
+    const started = Date.now()
+    expect(await late.at.terminalResult(host, tab, unseen, lead, 20_000)).toEqual({ requestId: unseen, ok: false, error: expect.stringContaining('did not pick up') })
+    expect(Date.now() - started).toBeLessThan(2_000)
+    const replaced = (await run(tab, { type: 'agent.input', agentId: worker, keys: ['Enter'] }, host, lead)).result.requestId as string
+    await db.superTabTerminalRequest.update({ where: { id: replaced }, data: { harnessId: 'replaced-terminal' } })
+    const { at } = watched()
+    const waiting = at.terminalResult(host, tab, replaced, lead, 20_000)
+    await new Promise(resolve => setTimeout(resolve, 300))
+    const refusedAt = Date.now()
+    expect(await claim(at)).toEqual([])
+    expect(await waiting).toEqual({ requestId: replaced, ok: false, error: expect.stringContaining('changed') })
+    expect(Date.now() - refusedAt).toBeLessThan(1_000)
+  })
+
+  it('neither waits for nor fails on a notice channel that cannot subscribe, as while Redis is down', async () => {
+    const { tab, lead, worker, claim } = await terminalFixture()
+    for (const watching of [() => new Promise<() => void>(() => {}), () => Promise.reject(new Error('Redis is down'))]) {
+      const at = new SuperTabStore(db, Date.now, null, { watchTerminal: watching })
+      const requestId = (await run(tab, { type: 'agent.screen', agentId: worker }, host, lead)).result.requestId as string
+      expect(await claim()).toHaveLength(1)
+      const started = Date.now()
+      expect(await at.terminalResult(host, tab, requestId, lead, 1_000)).toEqual({ requestId, pending: true })
+      expect(Date.now() - started).toBeLessThan(2_000)
+      await run(tab, { type: 'agent.screenResult', requestId, ok: true, text: 'screen' }, host, worker)
+      expect(await at.terminalResult(host, tab, requestId, lead, 20_000)).toEqual({ requestId, ok: true, text: 'screen' })
+    }
+  })
+
+  it('still returns an answer whose notice was lost, at the next re-check', async () => {
+    const { tab, lead, worker, claim } = await terminalFixture()
+    const requestId = (await run(tab, { type: 'agent.screen', agentId: worker }, host, lead)).result.requestId as string
+    expect(await claim()).toHaveLength(1)
+    const { at, loads } = watched({ heard: false })
+    const waiting = at.terminalResult(host, tab, requestId, lead, 20_000)
+    await new Promise(resolve => setTimeout(resolve, 300))
+    await run(tab, { type: 'agent.screenResult', requestId, ok: true, text: 'screen' }, host, worker)
+    const answeredAt = Date.now()
+    expect(await waiting).toEqual({ requestId, ok: true, text: 'screen' })
+    expect(Date.now() - answeredAt).toBeLessThan(6_000)
+    expect(loads()).toBeLessThanOrEqual(3)
   })
 
   it('expires an unread answer after two minutes, without waiting for another request', async () => {

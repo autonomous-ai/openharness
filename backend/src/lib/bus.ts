@@ -21,6 +21,7 @@ import { logger } from '../utils/logger.js'
 import { createCircuitBreaker } from './circuitBreaker.js'
 import { guardRedisCommands, isRedisFailure, wasNotSent } from './redisGuard.js'
 import type { Frame, UpBusMsg, DownBusMsg } from './tunnel.js'
+import { redisStamps, type SwarmStamps } from '../superTabs/cache.js'
 
 // A connection in subscriber mode must never fail its (re)SUBSCRIBE commands, so the sub side keeps
 // ioredis' "retry forever" setting.
@@ -294,12 +295,52 @@ export function publishAgentMessageShareChanged(id: string): Promise<number> {
   return safePublish(`amsg-share:${id}`, '{}')
 }
 
+/** Who may watch an agent's terminal in a Swarm may have narrowed (a member removed, a project's sharing changed): its
+ *  observer sockets, on any instance, check again at once. No content on this channel. */
+export function subscribeSwarmAccessChanged(tabId: string, cb: () => void): Promise<() => void> {
+  return addSub(`swarm-access:${tabId}`, cb)
+}
+export function publishSwarmAccessChanged(tabId: string): Promise<number> {
+  return safePublish(`swarm-access:${tabId}`, '{}')
+}
+
+/** A Swarm terminal request was answered or refused: its sender's wait, on any instance, reads it again. No content. */
+export function subscribeTerminalAnswered(requestId: string, cb: () => void): Promise<() => void> {
+  return addSub(`terminal-answer:${requestId}`, cb)
+}
+export function publishTerminalAnswered(requestId: string): Promise<number> {
+  return safePublish(`terminal-answer:${requestId}`, '{}')
+}
+
 /** Frames between daemons of a shared tab, by tab and machine: sealed, never read here. */
 export function subscribeTabRelay(share: string, machineId: string, cb: (msg: unknown) => void): Promise<() => void> {
   return addSub(`amsg:${share}:${machineId}`, cb as Cb)
 }
 export function publishTabRelay(share: string, machineId: string, msg: unknown): Promise<number> {
   return safePublish(`amsg:${share}:${machineId}`, JSON.stringify(msg))
+}
+
+/** A Swarm's stamp moved (superTabs/cache.ts): every instance frees what it holds of the Swarm at the old stamp. One
+ *  channel for every Swarm; a broadcast lost while Redis is down costs nothing, since each read checks the stamp itself. */
+const SWARM_STAMP = 'swarm-stamp'
+type StampScopes = Array<'main' | 'machine'>
+export function publishSwarmStamp(tabId: string, scopes: readonly ('main' | 'machine')[]): Promise<number> {
+  return safePublish(SWARM_STAMP, JSON.stringify({ tabId, scopes }))
+}
+export function subscribeSwarmStamps(cb: (tabId: string, scopes: StampScopes) => void): Promise<() => void> {
+  return addSub(SWARM_STAMP, (msg: unknown) => {
+    const { tabId, scopes } = (msg ?? {}) as { tabId?: unknown; scopes?: unknown }
+    if (typeof tabId !== 'string' || !Array.isArray(scopes) || !scopes.every(s => s === 'main' || s === 'machine')) return
+    cb(tabId, scopes as StampScopes)
+  })
+}
+
+/** The Swarm stamps on this Redis (superTabs/cache.ts), their bumps broadcast on the bus. */
+export function redisSwarmStamps(): SwarmStamps {
+  return redisStamps(pub, { publish: publishSwarmStamp, subscribe: listener => {
+    const subscribed = subscribeSwarmStamps(listener).catch((err: unknown) => { logger.error('[bus] Swarm stamp subscribe failed', err); return () => {} })
+    return () => { void subscribed.then(stop => stop()) }
+  } })
 }
 
 /** A machine's sharing changed (routes/machineShares.ts): a session another account holds to it on any

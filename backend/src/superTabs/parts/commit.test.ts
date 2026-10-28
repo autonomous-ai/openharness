@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { createSuperTab } from '../model.js'
-import { capReleased, departedAgents, hostMarker, visibilityChanged } from './commit.js'
+import { capReleased, departedAgents, hostMarker, sameData, visibilityChanged } from './commit.js'
 
 describe('writing a Swarm\'s parts', () => {
   it('keeps the newest 200 released harnesses of each machine and drops the oldest', () => {
@@ -84,5 +84,52 @@ describe('agents a group write lets go (review round 2)', () => {
     expect(departedAgents(group(['lead', 'worker'], 'worker'), group(['lead', 'worker']))).toEqual([])
     expect(departedAgents(group(['lead']), group(['lead', 'new']))).toEqual([])
     expect(departedAgents(undefined, group(['lead']))).toEqual([])
+  })
+})
+
+describe('whether a part\'s data changed', () => {
+  /** What a stored record says, as JSON with sorted keys: the comparison commits made before (the oracle). */
+  const sorted = (value: unknown) => JSON.stringify(value, (_key, item: unknown) => item && typeof item === 'object' && !Array.isArray(item)
+    ? Object.fromEntries(Object.entries(item as Record<string, unknown>).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0)) : item)
+
+  it('ignores the order keys were built in, and fields left undefined', () => {
+    expect(sameData({ a: 1, b: { c: [1, 2], d: 'x' } }, { b: { d: 'x', c: [1, 2] }, a: 1 })).toBe(true)
+    expect(sameData({ a: 1, gone: undefined }, { a: 1 })).toBe(true)
+    expect(sameData({ when: new Date(5) }, { when: new Date(5).toISOString() })).toBe(true)
+  })
+
+  it('sees a changed value, a null where nothing was, a reordered list, and a longer one', () => {
+    expect(sameData({ a: { b: 1 } }, { a: { b: 2 } })).toBe(false)
+    expect(sameData({ a: null }, {})).toBe(false)
+    expect(sameData({ list: [1, 2] }, { list: [2, 1] })).toBe(false)
+    expect(sameData({ list: [1] }, { list: [1, undefined] })).toBe(false)
+    expect(sameData({ n: 1 }, { n: '1' })).toBe(false)
+    expect(sameData([], {})).toBe(false)
+  })
+
+  it('agrees with comparing sorted JSON on many random records', () => {
+    let seed = 1726
+    const next = () => (seed = (seed * 1103515245 + 12345) % 2 ** 31) / 2 ** 31
+    const leaf = () => [null, undefined, 0, 1, 'a', 'b', true, false, Number.NaN][Math.floor(next() * 9)]
+    const make = (depth: number): unknown => {
+      const r = next()
+      if (depth > 3 || r < 0.4) return leaf()
+      if (r < 0.7) return Array.from({ length: Math.floor(next() * 3) }, () => make(depth + 1))
+      return Object.fromEntries(Array.from({ length: Math.floor(next() * 4) }, () => [['x', 'y', 'z', 'w'][Math.floor(next() * 4)]!, make(depth + 1)]))
+    }
+    const mutate = (value: unknown): unknown => {
+      if (next() < 0.3) return make(2)
+      if (Array.isArray(value)) return value.map(mutate)
+      if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).reverse().map(([k, v]) => [k, mutate(v)]))
+      return value
+    }
+    let differ = 0
+    for (let i = 0; i < 5_000; i++) {
+      const a = make(0), b = next() < 0.5 ? structuredClone(a) : mutate(a)
+      const expected = sorted(a) === sorted(b)
+      if (!expected) differ++
+      expect(sameData(a, b), `${sorted(a)} vs ${sorted(b)}`).toBe(expected)
+    }
+    expect(differ).toBeGreaterThan(500)
   })
 })
