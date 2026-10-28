@@ -961,15 +961,23 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
             (observedAt == null || sample.$2.isAfter(observedAt)));
     final readingAt = direct ? sample?.$2 : observedAt;
     final age = readingAt == null ? null : now.difference(readingAt);
-    final status = superTabMachineStatus(
-      age: age,
-      // The Swarm cannot be read: a machine's silence is not known to be its own, so it is not offline.
-      unreachable: !direct && c.backendUnreachable,
-      refreshing: direct
-          ? _awaiting.contains(readId)
-          : _swarmReadsAtReturn != null && c.stateReads <= _swarmReadsAtReturn!,
-      connected: direct ? connected : null,
-    );
+    // A computer only running someone's agents, never added to the Swarm and not one this Desktop reads (a teammate's
+    // Lead computer): nothing reports it but its agents, so it is up while one of them is (group #646, item 5).
+    final agentsOnly = shared == null && team == null && state == null;
+    final status = agentsOnly
+        ? (agents.any((a) => a.downSince == null)
+              ? SuperTabMachineStatus.live
+              : SuperTabMachineStatus.offline)
+        : superTabMachineStatus(
+            age: age,
+            // The Swarm cannot be read: a machine's silence is not known to be its own, so it is not offline.
+            unreachable: !direct && c.backendUnreachable,
+            refreshing: direct
+                ? _awaiting.contains(readId)
+                : _swarmReadsAtReturn != null &&
+                      c.stateReads <= _swarmReadsAtReturn!,
+            connected: direct ? connected : null,
+          );
     // Cached samples remain available to the refresh logic, but stale numbers are not presented as current.
     final dim =
         status == SuperTabMachineStatus.offline ||
@@ -999,7 +1007,10 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
         (given == null || given.isEmpty ? null : given) ??
         shared?['name'] as String? ??
         app?.stateOf(id)?.machine.displayName ??
-        'Unavailable machine';
+        // The Swarm knows no name for it, and sharing its own would be new data: it is named by its owner.
+        (agentsOnly && person != null
+            ? "${superTabPersonName(person.email)}'s computer"
+            : 'Unavailable machine');
     final configured = (reading?['engines'] as List?)
         ?.whereType<String>()
         .toList();
