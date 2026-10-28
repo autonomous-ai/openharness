@@ -17,13 +17,6 @@
     "edge-insets": 5,
     "border-radius": 1
   },
-  "mobile/lib/swarm/swarm_leaderboard.dart": {
-    "hex-color": 2,
-    "material-color": 3,
-    "font-size": 15,
-    "edge-insets": 14,
-    "border-radius": 6
-  },
   "mobile/lib/swarm/swarm_mark.dart": {
     "edge-insets": 1
   },
