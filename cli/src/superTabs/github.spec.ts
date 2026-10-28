@@ -1,6 +1,6 @@
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { afterAll, describe, expect, it, vi } from 'vitest'
 import { fakeCore } from '../testing/fakeCore.js'
 import type { RegisteredSession } from '../lib/registry.js'
@@ -143,6 +143,37 @@ describe('keeping gh\'s token fresh', () => {
     writeSessionGitHub(swarmGitHubSessionDir(dataDir, 'harness-codex-old')!, 'ghs_fixtureToken0000008')
     await new GitHubTokenRefresher(core, sourcesOf(core)).tick()
     expect(hosts('old')).toBe('{}\n')
+  })
+
+  // Security review of #1978: a token fetch still in flight as its session stopped wrote the token after the folder was
+  // emptied, and the folder was not looked at again until the daemon restarted.
+  it('empties a stopped session\'s gh login again when a late write puts a token back', async () => {
+    const { core, hosts, live, dataDir } = setup(() => ok(hostForm([])))
+    live.length = 0
+    const dir = swarmGitHubSessionDir(dataDir, 'harness-codex-harness-1')!
+    writeSessionGitHub(dir, 'ghs_fixtureToken0000005')
+    const refresher = new GitHubTokenRefresher(core, sourcesOf(core))
+    await refresher.tick()
+    expect(hosts()).toBe('{}\n')
+    writeSessionGitHub(dir, 'ghs_fixtureToken0000006')
+    await refresher.tick()
+    expect(hosts()).toBe('{}\n')
+  })
+
+  // Security review of #1978: a file with a session's name in the sessions folder failed every look, and no token was renewed.
+  it('skips anything in the sessions folder that is not a session\'s folder, and renews as before', async () => {
+    const { core, hosts, dataDir } = setup(method => method === 'GET'
+      ? ok(hostForm([row('tab-1', 'agent-1')], { assignments: [{ tabId: 'tab-1', assignmentId: 'attempt-1', harnessId: 'harness-1' }] }))
+      : issued('ghs_fixtureToken0000004'))
+    const sessions = dirname(swarmGitHubSessionDir(dataDir, 'harness-codex-stray')!)
+    mkdirSync(sessions, { recursive: true })
+    writeFileSync(join(sessions, 'harness-codex-stray'), 'not a folder')
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      await new GitHubTokenRefresher(core, sourcesOf(core)).tick()
+      expect(warn).not.toHaveBeenCalled()
+    } finally { warn.mockRestore() }
+    expect(hosts()).toContain('ghs_fixtureToken0000004')
   })
 
   it('reads nothing from the backend while no session uses the app, and leaves tokens be while it is away', async () => {

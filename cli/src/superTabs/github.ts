@@ -6,7 +6,7 @@
  * The token goes to git through `harness git-credential` (superTabs/gitCredential.ts), which asks here over the local
  * socket, and to gh through the session's own `hosts.yml`. Nothing here logs a token.
  */
-import { readdirSync } from 'node:fs'
+import { readdirSync, readFileSync, type Dirent } from 'node:fs'
 import { join } from 'node:path'
 import type { CoreApi } from '../core/api.js'
 import { swarmGitHubRoot, swarmGitHubSessionDir, writeSessionGitHub } from '../lib/swarmGitHub.js'
@@ -87,8 +87,6 @@ export class GitHubTokenRefresher {
   private timer: NodeJS.Timeout | null = null
   private running: Promise<void> | null = null
   private readonly primed = new Map<string, { assignmentId: string; expiresAt: number }>()
-  /** Session folders whose gh login was emptied after their session stopped: each is looked at once per daemon run. */
-  private readonly emptied = new Set<string>()
   private readonly now: () => number
   private readonly intervalMs: number
 
@@ -121,19 +119,27 @@ export class GitHubTokenRefresher {
   /**
    * A session that stopped takes its token with it: its folder's gh login is emptied. A task ended as its agent stopped left
    * the last token there, since only running sessions are looked at (local Team account run, 2026-10-28); so did a session
-   * that stopped while no daemon ran. The backend revokes the token when the task ends; this keeps none on disk.
+   * that stopped while no daemon ran. Looked at on every pass, not once: a token fetch still in flight as its session stopped
+   * writes the token after the folder was emptied (security review of #1978). One small read per stopped session's folder a
+   * minute, while the refresher runs. Anything that is not a session's folder is skipped, and one that cannot be read or
+   * written is logged and passed over, so no folder stops the renewals below.
    */
   private emptyStopped(running: ReadonlySet<string>): void {
     const sessions = join(swarmGitHubRoot(this.core.dataDir), 'sessions')
-    let names: string[]
-    try { names = readdirSync(sessions) } catch { return }
-    for (const name of names) {
-      const dir = swarmGitHubSessionDir(this.core.dataDir, name)
-      if (!dir || running.has(dir) || this.emptied.has(dir)) continue
-      writeSessionGitHub(dir, null)
-      this.emptied.add(dir)
+    let entries: Dirent[]
+    try { entries = readdirSync(sessions, { withFileTypes: true }) } catch { return }
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue
+      const dir = swarmGitHubSessionDir(this.core.dataDir, entry.name)
+      if (!dir || running.has(dir)) continue
+      try {
+        let hosts: string
+        try { hosts = readFileSync(join(dir, 'gh', 'hosts.yml'), 'utf8') } catch { continue }
+        if (hosts !== '{}\n') writeSessionGitHub(dir, null)
+      } catch (error) {
+        console.warn(`[super-tab] could not empty a stopped session's gh login · ${error instanceof Error ? error.message : String(error)}`)
+      }
     }
-    for (const dir of running) this.emptied.delete(dir)
   }
 
   private async look(): Promise<void> {
