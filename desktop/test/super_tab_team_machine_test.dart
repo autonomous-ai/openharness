@@ -248,7 +248,7 @@ void main() {
   testWidgets(
     'on this Mac\'s own row, its person can set the Harness Team account up there; nobody else, nowhere else',
     (tester) async {
-      final app = createApp(connected: true)..macOSForTest = true;
+      final app = createApp(connected: true)..teamAccountHereForTest = true;
       app.machineStates['m']!.localOnly = true;
       Future<bool> button({
         String account = 'owner',
@@ -290,7 +290,7 @@ void main() {
       expect(await button(account: 'peer'), isFalse);
       expect(await button(id: 'other'), isFalse);
       expect(await button(code: 'PRIVACY_CHECK_FAILED'), isFalse);
-      app.macOSForTest = false;
+      app.teamAccountHereForTest = false;
       expect(await button(), isFalse);
       app.dispose();
     },
