@@ -88,13 +88,14 @@ void main() {
   });
 
   group('Harness out of sight under Swarm Home', () {
-    /// Harness from the drawer, then back to Swarm Home: the terminal home
+    /// Harness from an agent notice, then back to Swarm Home: the terminal home
     /// is built, and kept out of sight.
     Future<void> hideHarness(WidgetTester tester) async {
       await open(tester);
-      await tester.tap(find.byKey(const ValueKey('swarm-menu')));
-      await frames(tester);
-      await tester.tap(find.byKey(const ValueKey('swarm-drawer-harness')));
+      app.agentNotices.system.opened.value = (
+        machineId: 'mac-1',
+        agentId: 'agent-1',
+      );
       await frames(tester);
       await tester.binding.handlePopRoute();
       await frames(tester);
