@@ -34,6 +34,50 @@ describe('preparation tokens', () => {
   })
 })
 
+// A repository renamed on GitHub (2026-10-27: autonomous-harness → openharness): the project keeps the old name, which
+// GitHub still answers for git, and the app is installed on the repository under its new one.
+describe('a repository renamed on GitHub', () => {
+  const renamedSetup = () => {
+    const f = setup()
+    f.github.installed.clear()
+    f.github.installed.set('acme/app-next', 77)
+    f.github.owners.set('acme', 77)
+    f.github.renamed.set('acme/app', 'acme/app-next')
+    return f
+  }
+
+  it('gets its tokens under its name now, and the read-only token used to find that name is revoked at once', async () => {
+    const { tokens, github } = renamedSetup()
+    expect(await tokens.prepare(repository)).toMatchObject({ repository: 'acme/app' })
+    const minted = github.calls.filter(c => c.path.endsWith('/access_tokens')).map(c => c.body)
+    expect(minted).toEqual([{ permissions: { metadata: 'read' } }, { repositories: ['app-next'], permissions: { contents: 'read', metadata: 'read' } }])
+    expect(github.revoked).toEqual(['ghs_fixture_1'])
+    expect((await tokens.issue(request())).repository).toBe('acme/app')
+    expect(github.calls.filter(c => c.path.endsWith('/access_tokens')).at(-1)!.body).toMatchObject({ repositories: ['app-next'] })
+    // Its name now is remembered: GitHub is not asked again for it.
+    expect(github.calls.filter(c => c.path === '/orgs/acme/installation')).toHaveLength(1)
+  })
+
+  it('is not installed when its owner has no installation, or the repository was never renamed', async () => {
+    const none = renamedSetup()
+    none.github.owners.clear()
+    await expect(none.tokens.prepare(repository)).rejects.toMatchObject({ code: 'GITHUB_APP_NOT_INSTALLED' })
+    expect(none.github.calls.map(c => c.path)).toContain('/users/acme/installation')
+    const same = renamedSetup()
+    same.github.renamed.clear()
+    await expect(same.tokens.prepare(repository)).rejects.toMatchObject({ code: 'GITHUB_APP_NOT_INSTALLED' })
+    expect(same.github.revoked).toEqual(['ghs_fixture_1'])
+  })
+
+  it('reads as not installed when GitHub cannot say, and wrong credentials still say so', async () => {
+    const down = renamedSetup()
+    down.github.control.tokenStatus = 500
+    await expect(down.tokens.prepare(repository)).rejects.toMatchObject({ code: 'GITHUB_APP_NOT_INSTALLED' })
+    const app = fakeApp(throwawayKey().privateKey, down.github, { now: () => Date.parse('2026-10-24T12:00:00Z') })
+    await expect(app.resolve(repository)).rejects.toMatchObject({ code: 'GITHUB_APP_MISCONFIGURED' })
+  })
+})
+
 describe('agent tokens', () => {
   it('mints one for the task and gives the same token again until ten minutes before it expires', async () => {
     const { tokens, github, advance } = setup()

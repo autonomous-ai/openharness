@@ -4,8 +4,12 @@ import '../core/open_in_browser.dart';
 import '../shared/theme/file_type_icon.dart';
 import '../shared/widgets/app_dialog.dart';
 import '../widgets/desktop_chrome.dart';
+import '../widgets/finger_target.dart';
 import '../widgets/update_notice.dart' show formatDownloadSize;
 import 'attachment_upload.dart';
+// A browser leaves the text viewer, and the Finder editor under it, out of main.dart.js.
+import 'attachment_text_viewer.dart'
+    if (dart.library.js_interop) '../web/parts/attachment_text_viewer.dart';
 import 'attachment_viewer.dart';
 import 'model.dart';
 
@@ -70,7 +74,11 @@ class _AttachmentChip extends StatelessWidget {
         child: Container(
           constraints: const BoxConstraints(maxWidth: 280),
           padding: const EdgeInsets.symmetric(horizontal: 10),
-          height: DesktopChrome.compactControlHeight,
+          // A phone's chip is a finger tall.
+          height: fingerHeight(
+            DesktopChrome.compactControlHeight,
+            enabled: workspaceIsCompact(context),
+          ),
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [

@@ -3,6 +3,7 @@ import 'package:harness/finder/finder_availability.dart';
 import 'package:harness/state/app_state.dart';
 import 'package:harness/state/new_harness.dart';
 import 'package:harness/state/pane_arrangement.dart';
+import 'package:harness/state/terminal_pane.dart';
 import 'package:harness/ws/ws_conn.dart';
 
 import '../swarm_state_test.dart' show createApp;
@@ -153,6 +154,21 @@ void main() {
     expect(picker.isFinder, isFalse);
   });
 
+  test('picking Finder after a shell gives it an agent as its chat', () {
+    final picker = NewHarnessController(
+      app,
+      machineId: 'm',
+      engine: 'terminal',
+      folder: '/work/repo',
+    );
+    addTearDown(picker.dispose);
+    expect(picker.engine, 'terminal');
+    picker.focusField(NewHarnessField.harness);
+    picker.applyOption(picker.options.firstWhere((o) => o.id == 'finder'));
+    expect(picker.isFinder, isTrue);
+    expect(picker.engine, 'opencode', reason: 'nothing remembered, no account');
+  });
+
   test('a shell cannot be a Finder\'s chat', () {
     expect(box(engine: 'terminal').engine, isNot('terminal'));
   });
@@ -179,6 +195,23 @@ void main() {
 
     await app.closePane(tab.panes.first.id);
     await synced();
+    expect(tab.panes.where((p) => p.isFinder), isEmpty);
+  });
+
+  test('a full tab starts the chat and says the Finder did not open', () async {
+    final tab = app.activeSwarm;
+    for (var i = 1; i < AppNotifier.maxPanes; i++) {
+      tab.panes.add(TerminalPane(id: 100 + i, machineId: 'm', agentId: 'b$i'));
+    }
+    final finder = box();
+    expect(await finder.create(), NewHarnessOutcome.failed);
+    expect(
+      finder.error,
+      'Chat started. This tab is full, so the Finder could not open beside '
+      'the chat.',
+    );
+    expect(connection.creates, hasLength(1));
+    expect(tab.panes.last.agentId, 'chat');
     expect(tab.panes.where((p) => p.isFinder), isEmpty);
   });
 

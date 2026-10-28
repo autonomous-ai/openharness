@@ -7,6 +7,7 @@ import '../shared/theme/app_theme.dart' as grid;
 import '../shared/theme/appearance_prefs_store.dart';
 import '../shared/widgets/app_dialog.dart';
 import '../shared/widgets/app_icon_button.dart';
+import '../shared/widgets/app_select_field.dart';
 import '../state/app_state.dart';
 import '../state/harness_activity.dart';
 import '../terminal/terminal_theme.dart';
@@ -18,12 +19,21 @@ import 'agent_details.dart';
 import 'controller.dart';
 import 'dialog_scope.dart';
 import 'identity.dart';
+import 'leaderboard/format.dart';
+import 'leaderboard/goal_line.dart';
+import 'leaderboard/model.dart';
+import 'leaderboard/person_row.dart';
+import 'leaderboard/reader.dart';
+import 'leaderboard/waiting_line.dart';
 import 'model.dart';
+import 'profile_sheet.dart';
 import 'section_heading.dart';
 import 'team_glance.dart';
 import 'team_glance_panel.dart';
 
-/// The current Swarm's authorized people, with agents from the selected project.
+/// The current Swarm's authorized people, each with their week on the
+/// leaderboard of the open conversation's project, and agents from the
+/// selected project.
 class SuperTabRoster extends StatefulWidget {
   const SuperTabRoster({
     super.key,
@@ -31,21 +41,58 @@ class SuperTabRoster extends StatefulWidget {
     required this.onInvite,
     required this.onOpenAgent,
     required this.onAddAgent,
+    required this.onAnswer,
     this.app,
+    this.now = DateTime.now,
   });
   final SuperTabController controller;
   final AppNotifier? app;
   final VoidCallback onInvite;
   final ValueChanged<SuperTabAgent> onOpenAgent;
   final ValueChanged<SuperTabConversation> onAddAgent;
+
+  /// Opens a conversation where an agent waits on a person.
+  final ValueChanged<String> onAnswer;
+  final DateTime Function() now;
   @override
   State<SuperTabRoster> createState() => _SuperTabRosterState();
 }
 
 class _SuperTabRosterState extends State<SuperTabRoster> {
-  static const _peopleShown = 5;
-  bool _allPeople = false;
   SuperTabController get c => widget.controller;
+
+  /// The board moves only as work ships, is answered or runs: every five
+  /// minutes is fresh enough, and keeps every open roster's reads rare.
+  late final _board = SuperTabLeaderboardReader(
+    tabId: c.tabId,
+    request: c.request,
+    every: const Duration(minutes: 5),
+  );
+  String? _boardProject;
+
+  /// The project of the open conversation, whose board Humans show.
+  String get _projectId => c.snapshot?.projectFor(c.selectedId)?.id ?? 'lead';
+
+  void _followProject() {
+    final projectId = _projectId;
+    if (projectId == _boardProject) return;
+    _boardProject = projectId;
+    unawaited(_board.show(projectId));
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    c.addListener(_followProject);
+    _followProject();
+  }
+
+  @override
+  void dispose() {
+    c.removeListener(_followProject);
+    _board.dispose();
+    super.dispose();
+  }
 
   String? _agentProjectId(SuperTabAgent agent) => agent.hasProjectId
       ? agent.projectId
@@ -193,6 +240,49 @@ class _SuperTabRosterState extends State<SuperTabRoster> {
     }
     return native ?? HarnessActivity.unknown;
   }
+
+  /// A person's email and role, and their week when the board has them. One's
+  /// own also opens the profile sheet, where one's avatar and status change.
+  Future<void> _person(SuperTabPerson person, SuperTabPersonScore? score) =>
+      showAppDialog<void>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: Text(superTabPersonName(person.email)),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text('${person.email}\n${person.role}'),
+              if (score != null) ...[
+                const SizedBox(height: 12),
+                LeaderboardPersonWeek(score: score),
+              ],
+            ],
+          ),
+          actions: [
+            if (person.id == c.accountId && c.canWrite)
+              TextButton(
+                key: const ValueKey('super-profile-edit'),
+                onPressed: () {
+                  Navigator.pop(context);
+                  showSuperTabProfile(this.context, c);
+                },
+                child: const Text('Edit profile'),
+              ),
+            TextButton(
+              onPressed: () {
+                Navigator.pop(context);
+                widget.onInvite();
+              },
+              child: const Text('Manage people'),
+            ),
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Close'),
+            ),
+          ],
+        ),
+      );
 
   Future<void> _details(SuperTabAgent agent) => showSuperTabAgentDetails(
     context,
@@ -345,10 +435,11 @@ class _SuperTabRosterState extends State<SuperTabRoster> {
           contentPadding: const EdgeInsets.symmetric(horizontal: 16),
           title: Row(
             children: [
-              SuperTabAvatar(
-                identity: 'agent:${agent.id}',
+              SuperTabAvatar.agent(
+                agent,
                 name: name,
                 size: 24,
+                engineBadge: false,
               ),
               const SizedBox(width: 8),
               Expanded(child: _agentIdentity(name, role, badge)),
@@ -418,69 +509,74 @@ class _SuperTabRosterState extends State<SuperTabRoster> {
             .where((p) => audience == null || audience.contains(p.id))
             .toList() ??
         const <SuperTabPerson>[];
-    final shownPeople = _allPeople ? people : people.take(_peopleShown);
+    final board = _board.board;
+    final scores = {
+      for (final score in board?.people ?? const []) score.personId: score,
+    };
+    // Most points first, as the board ranks them; anyone it has no score for after.
+    final ranked = [
+      ...?board?.people
+          .map(
+            (score) => people.where((p) => p.id == score.personId).firstOrNull,
+          )
+          .nonNulls,
+      ...people.where((p) => !scores.containsKey(p.id)),
+    ];
+    final current = leaderboardWeekOf(widget.now());
     return [
       SuperTabSectionHeading(
         'Humans',
         onAdd: c.isOwner ? widget.onInvite : null,
         addTooltip: 'Invite people',
-      ),
-      for (final person in shownPeople)
-        ListTile(
-          key: ValueKey('super-person-${person.id}'),
-          dense: true,
-          minTileHeight: 36,
-          minVerticalPadding: 6,
-          minLeadingWidth: 24,
-          contentPadding: const EdgeInsets.symmetric(horizontal: 16),
-          horizontalTitleGap: 8,
-          leading: SuperTabAvatar(
-            identity: 'person:${person.id}',
-            name: superTabPersonName(person.email),
-            size: 24,
-          ),
-          title: Tooltip(
-            message: person.email,
-            child: Text(
-              superTabPersonName(person.email),
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: DesktopChrome.control(),
-            ),
-          ),
-          onTap: () => showAppDialog<void>(
-            context: context,
-            builder: (context) => AlertDialog(
-              title: Text(superTabPersonName(person.email)),
-              content: Text('${person.email}\n${person.role}'),
-              actions: [
-                TextButton(
-                  onPressed: () {
-                    Navigator.pop(context);
-                    widget.onInvite();
-                  },
-                  child: const Text('Manage people'),
-                ),
-                TextButton(
-                  onPressed: () => Navigator.pop(context),
-                  child: const Text('Close'),
-                ),
+        actions: [
+          if (board != null || _board.week != null)
+            AppSelectField<int>(
+              key: const ValueKey('leaderboard-week'),
+              value: _board.week ?? current,
+              width: 112,
+              height: DesktopChrome.compactControlHeight,
+              semanticLabel: 'Week',
+              options: [
+                for (var back = 0; back < 4; back++)
+                  SelectOption(
+                    value: current - back * weekMs,
+                    label: capitalized(
+                      weekName(current - back * weekMs, current),
+                    ),
+                  ),
               ],
+              onChanged: (week) =>
+                  unawaited(_board.showWeek(week == current ? null : week)),
             ),
-          ),
+        ],
+      ),
+      if (board != null)
+        LeaderboardGoalLine(
+          goal: board.goal,
+          weekName: weekName(_board.week, current),
         ),
-      if (people.length > _peopleShown)
-        ListTile(
-          dense: true,
-          minTileHeight: 36,
-          contentPadding: const EdgeInsets.symmetric(horizontal: 16),
-          title: Text(
-            _allPeople
-                ? 'Show less'
-                : 'Show ${people.length - _peopleShown} more',
-            style: DesktopChrome.metadata(),
-          ),
-          onTap: () => setState(() => _allPeople = !_allPeople),
+      if (_board.error case final error?)
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 0, 16, 4),
+          child: Text(error, style: DesktopChrome.metadata()),
+        ),
+      for (final person in ranked)
+        LeaderboardPersonRow(
+          person: person,
+          score: scores[person.id],
+          onTap: () => _person(person, scores[person.id]),
+        ),
+      if (board != null && board.waiting.total > 0)
+        LeaderboardWaitingLine(
+          waiting: board.waiting,
+          viewerId: c.accountId,
+          nameOf: (id) {
+            final person = state?.people.where((p) => p.id == id).firstOrNull;
+            return person == null
+                ? 'Former member'
+                : superTabPersonName(person.email);
+          },
+          onAnswer: widget.onAnswer,
         ),
       const SizedBox(height: 16),
       SuperTabSectionHeading(
@@ -516,6 +612,7 @@ class _SuperTabRosterState extends State<SuperTabRoster> {
       child: ListenableBuilder(
         listenable: Listenable.merge([
           c,
+          _board,
           if (widget.app != null) ...[widget.app!, widget.app!.agentUnread],
           terminalThemeStore,
           appearancePrefsStore,

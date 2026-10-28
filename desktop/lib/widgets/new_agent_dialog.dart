@@ -1,4 +1,9 @@
 import 'dart:async';
+
+import 'key_hints.dart';
+import 'finger_target.dart';
+import '../state/workspace_chrome.dart';
+
 import 'dart:math' as math;
 
 import 'package:harness/shared/theme/app_icons.dart';
@@ -74,6 +79,10 @@ Future<NewAgentDialogResult?> showNewAgentDialog(
 
   /// The harness's first message, sent as it starts — the store's "Try this prompt".
   String? initialPrompt,
+
+  /// The workspace's chrome, for a caller above its [WorkspaceChromeScope]
+  /// (the workspace itself); others' is read from [context].
+  WorkspaceChrome? chrome,
 }) {
   if (initialDraft != null) {
     machineId = initialDraft.machineId;
@@ -98,6 +107,9 @@ Future<NewAgentDialogResult?> showNewAgentDialog(
   // This dialog uses a separate route. Carry the live picker bindings with
   // it; showGeneralDialog does not capture inherited themes for us.
   final activeKeymap = keymap ?? KeymapTheme.of(context, listen: false);
+  // The workspace's chrome too: the web's hidden key hints and its phone
+  // width ([WorkspaceChrome.compactBelow]) hold in this route as well.
+  chrome ??= WorkspaceChromeScope.maybeOf(context);
   return showAppDialog<NewAgentDialogResult>(
     context: context,
     transitionDuration: Duration.zero,
@@ -121,9 +133,15 @@ Future<NewAgentDialogResult?> showNewAgentDialog(
         offerFindExisting: offerFindExisting,
         offerBackToSearch: offerBackToSearch,
       );
-      return activeKeymap == null
+      final scoped = chrome == null
           ? dialog
-          : KeymapProvider(keymap: activeKeymap, child: dialog);
+          : WorkspaceChromeScope(
+              chrome: chrome,
+              child: KeyHints(visible: chrome.showsKeyHints, child: dialog),
+            );
+      return activeKeymap == null
+          ? scoped
+          : KeymapProvider(keymap: activeKeymap, child: scoped);
     },
   );
 }
@@ -996,6 +1014,7 @@ class _NewAgentDialogState extends State<_NewAgentDialog> {
                               minHeight: _tileHeight(
                                 MediaQuery.textScalerOf(context),
                                 compactHeight: compactHeight,
+                                finger: _finger,
                               ),
                             ),
                           ],
@@ -1065,13 +1084,14 @@ class _NewAgentDialogState extends State<_NewAgentDialog> {
                             : () => Navigator.of(context).pop(),
                         style: TextButton.styleFrom(
                           foregroundColor: grid.AppPalette.textSecondary,
-                        ),
+                        ).merge(_fingerButton),
                         child: Text(widget.onBack == null ? 'Close' : 'Back'),
                       ),
                     if (widget.offerFindExisting &&
                         _confirmationPending &&
                         (!_submitting || _checkingCreation))
                       TextButton.icon(
+                        style: _fingerButton,
                         onPressed: _submitting
                             ? null
                             : () =>
@@ -1083,6 +1103,7 @@ class _NewAgentDialogState extends State<_NewAgentDialog> {
                     if (_creation?.canCancelPending == true)
                       TextButton(
                         key: const ValueKey('cancel-pending-creation'),
+                        style: _fingerButton,
                         onPressed: _submitting ? null : _cancelPending,
                         child: const Text('Cancel request'),
                       ),
@@ -1091,7 +1112,7 @@ class _NewAgentDialogState extends State<_NewAgentDialog> {
                       focusNode: _actionFocus,
                       onPressed: canCreate ? _submit : null,
                       style: FilledButton.styleFrom(
-                        minimumSize: const Size(0, 32),
+                        minimumSize: Size(0, _finger ? kFingerTarget : 32),
                         maximumSize: const Size(420, double.infinity),
                         padding: const EdgeInsets.symmetric(
                           horizontal: 12,
@@ -1181,29 +1202,33 @@ class _NewAgentDialogState extends State<_NewAgentDialog> {
                   mainAxisSize: MainAxisSize.min,
                   children: [
                     controls,
-                    const SizedBox(height: 8),
-                    DefaultTextStyle(
-                      style: boxMonoStyle(),
-                      child: BoxHintStrip(
-                        hints: [
-                          BoxHint(
-                            Theme.of(context).platform == TargetPlatform.macOS
-                                ? 'cmd-enter'
-                                : 'ctrl-enter',
-                            _confirmationPending ? 'check status' : 'create',
-                            onTap: canCreate ? _submit : null,
-                          ),
-                          const BoxHint('tab / shift-tab', 'fields'),
-                          BoxHint(
-                            'esc',
-                            widget.onBack == null ? 'close' : 'back',
-                            onTap: _submitting
-                                ? null
-                                : () => Navigator.of(context).maybePop(),
-                          ),
-                        ],
+                    // Keys where the host shows them; the web's buttons say
+                    // the same with a click (audit S8).
+                    if (KeyHints.visibleOf(context)) ...[
+                      const SizedBox(height: 8),
+                      DefaultTextStyle(
+                        style: boxMonoStyle(),
+                        child: BoxHintStrip(
+                          hints: [
+                            BoxHint(
+                              Theme.of(context).platform == TargetPlatform.macOS
+                                  ? 'cmd-enter'
+                                  : 'ctrl-enter',
+                              _confirmationPending ? 'check status' : 'create',
+                              onTap: canCreate ? _submit : null,
+                            ),
+                            const BoxHint('tab / shift-tab', 'fields'),
+                            BoxHint(
+                              'esc',
+                              widget.onBack == null ? 'close' : 'back',
+                              onTap: _submitting
+                                  ? null
+                                  : () => Navigator.of(context).maybePop(),
+                            ),
+                          ],
+                        ),
                       ),
-                    ),
+                    ],
                   ],
                 );
               },
@@ -1256,9 +1281,26 @@ class _NewAgentDialogState extends State<_NewAgentDialog> {
   /// A tile's height, which depends on the text size and the window's height
   /// but never on its width — so the task field, laid out outside the tiles'
   /// LayoutBuilder, can be the same height as they are.
-  static double _tileHeight(TextScaler scaler, {required bool compactHeight}) {
-    return math.max(32, scaler.scale(grid.AppType.monoSize) * 1.35 + 14);
+  static double _tileHeight(
+    TextScaler scaler, {
+    required bool compactHeight,
+    bool finger = false,
+  }) {
+    return math.max(
+      finger ? kFingerTarget : 32,
+      scaler.scale(grid.AppType.monoSize) * 1.35 + 14,
+    );
   }
+
+  /// On a phone every control here is a finger's size ([kFingerTarget]).
+  bool get _finger => workspaceIsCompact(context);
+
+  /// A text button's style on a phone: a finger's size; null elsewhere.
+  ButtonStyle? get _fingerButton => _finger
+      ? TextButton.styleFrom(
+          minimumSize: const Size(kFingerTarget, kFingerTarget),
+        )
+      : null;
 
   Widget _choices() => LayoutBuilder(
     builder: (context, constraints) {
@@ -1269,7 +1311,7 @@ class _NewAgentDialogState extends State<_NewAgentDialog> {
       // Their shared full width also makes keyboard focus easy to follow.
       final tileSize = Size(
         constraints.maxWidth,
-        _tileHeight(scaler, compactHeight: compactHeight),
+        _tileHeight(scaler, compactHeight: compactHeight, finger: _finger),
       );
       return Column(
         mainAxisSize: MainAxisSize.min,
@@ -1328,6 +1370,7 @@ class _NewAgentDialogState extends State<_NewAgentDialog> {
             onChanged: _chooseHarness,
           ),
           TextButton(
+            style: _fingerButton,
             onPressed: _choicesLocked
                 ? null
                 : () {
@@ -1438,6 +1481,7 @@ class _NewAgentDialogState extends State<_NewAgentDialog> {
                 const SizedBox(width: 12),
                 TextButton(
                   key: const Key('new-agent-retry-check'),
+                  style: _fingerButton,
                   onPressed: _checkingEngines ? null : _retryEngineCheck,
                   child: Text(_checkingEngines ? 'Checking…' : 'Retry'),
                 ),
@@ -1667,7 +1711,9 @@ class _NewAgentDialogState extends State<_NewAgentDialog> {
           style: TextButton.styleFrom(
             foregroundColor: grid.AppPalette.textSecondary,
             textStyle: boxMonoStyle(),
-            minimumSize: const Size(28, 28),
+            minimumSize: _finger
+                ? const Size(kFingerTarget, kFingerTarget)
+                : const Size(28, 28),
             padding: const EdgeInsets.all(6),
           ),
           child: Text(_advancedOpen ? '[-] Advanced' : '[+] Advanced'),

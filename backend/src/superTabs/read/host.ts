@@ -57,9 +57,11 @@ export class HostReads {
         orderBy: { updatedAt: 'desc' }, take: FULL_TABS, select: { id: true } })).map(r => r.id)
       const teams = isTeamSession(user) || this.options.teamAccountsIdle ? [] : await tx.machine.findMany({ where: { userId: user.sub,
         hostMachineId: machineId, sessionKind: 'team', autonomousEnv: user.autonomousEnv, ...machineAlive }, select: { machineId: true } })
-      const newest = await parts.lastChangedAt(tx, ids)
       const full = 'reload' in from
       const woken = full ? null : await this.woken(tx, ids, machineId, from.since)
+      // Only for the Swarms answered for: this runs every second on every host, and seven groupBy over all of a Swarm's parts
+      // are no use for one that has nothing to say (a production backend at 5 pods, 2026-10-27).
+      const newest = await parts.lastChangedAt(tx, woken ? ids.filter(id => woken.has(id)) : ids)
       const tabs = []
       for (const tabId of ids) {
         if (woken && !woken.has(tabId)) continue

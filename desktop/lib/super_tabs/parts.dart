@@ -234,13 +234,24 @@ class SuperTabParts {
   Map<String, dynamic> get state {
     final agentsDerived = _derivedMap('agents');
     final machinesDerived = _derivedMap('machines');
+    final avatars = _derivedMap('avatars');
     final state = <String, dynamic>{
       ...superTabMap(_head['data']),
       'format': superTabReadFormat,
-      'people': [for (final p in _data('members')) p],
+      'people': [
+        for (final p in _data('members'))
+          _avatarLink(p, avatars['person:${p['id']}']),
+      ],
       'agents': [
         for (final agent in _data('agents'))
-          _overlay(agent, agentsDerived[agent['id']], keepNull: 'workDecision'),
+          _avatarLink(
+            _overlay(
+              agent,
+              agentsDerived[agent['id']],
+              keepNull: 'workDecision',
+            ),
+            avatars['agent:${agent['id']}'],
+          ),
       ],
       'conversations': [
         ..._data('groups'),
@@ -261,6 +272,9 @@ class SuperTabParts {
     }
     if (_derived['decisionsWaiting'] case final num waiting) {
       state['decisionsWaiting'] = waiting.toInt();
+    }
+    if (_derived['decisionsDigest'] case final String digest) {
+      state['decisionsDigest'] = digest;
     }
     return state;
   }
@@ -308,6 +322,21 @@ class SuperTabParts {
 
   Map<String, dynamic> _derivedMap(String name) =>
       _derived[name] is Map ? superTabMap(_derived[name]) : const {};
+
+  /// [record] with its uploaded avatar's signed link from this read (backend avatarLinks.ts), which never stays in a part.
+  static Map<String, dynamic> _avatarLink(
+    Map<String, dynamic> record,
+    Object? link,
+  ) {
+    final avatar = record['avatar'];
+    final uploaded =
+        link is String && avatar is Map && avatar['kind'] == 'upload';
+    if (!uploaded) return record;
+    return {
+      ...record,
+      'avatar': {...avatar, 'url': link},
+    };
+  }
 
   /// [record] with the derived values over it. A null [keepNull] value means the stored one stands.
   static Map<String, dynamic> _overlay(

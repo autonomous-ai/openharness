@@ -11,6 +11,8 @@ import { DSH_SESSION_ENV } from '../dsh/launch.js'
 import { GRID_CONFLICTING_ENV_VARS, type GridLaunchOverride } from './gridLaunch.js'
 import { gridLaunchInProcess } from '../testing/gridLaunchInProcess.js'
 import { AGENT_ATTRIBUTION_LINE, HARNESS_INSTRUCTIONS } from './agentAttribution.js'
+import { prepareSwarmSkill } from './swarmSkills.js'
+import { swarmGitHubLaunch } from './swarmGitHub.js'
 
 const GRID: GridLaunchOverride = {
   networkId: 'grid-abc',
@@ -36,6 +38,8 @@ function deps(overrides: Partial<LaunchOverridesDeps> = {}) {
     // No Codex configuration unless a test says so — otherwise every relaunch built here would
     // consult the config.toml of whoever is running the suite.
     readCodexConfig: () => null,
+    // The Swarm on, as by default (`HARNESS_SWARM`); a test of it off leaves it out.
+    swarm: { prepare: prepareSwarmSkill, github: (key) => swarmGitHubLaunch(key) },
     ...overrides,
   }
   return { d, calls }
@@ -207,6 +211,23 @@ describe('buildLaunchOverrides — a relaunch comes back where the agent was', (
     expect(await buildLaunchOverrides(d, 'claude', {}, 'a')).toEqual({ ok: true, overrides: { env: {}, extraArgs: [], clearEnv: [...DSH_SESSION_ENV] } })
     expect(await buildLaunchOverrides(d, 'claude', { gridLaunch: null, codexHome: null }, 'a')).toMatchObject({ ok: true })
     expect(calls).toEqual([])
+  })
+
+  it('in the Harness Team account, spends the owner\'s subscription through the relay on every relaunch', async () => {
+    const relay = { env: { HARNESS_RELAY_TOKEN: 't' }, args: ['-c', 'model_provider="harness_owner"'] }
+    const ownerRelay = vi.fn(async (engine: string) => engine === 'codex' ? relay
+      : engine === 'claude' ? { env: { ANTHROPIC_BASE_URL: 'http://127.0.0.1:9/claude', ANTHROPIC_AUTH_TOKEN: 't' }, args: [] } : null)
+    // Codex is told the relay's provider in place of its own login's: two `-c model_provider` would leave it to pick.
+    expect(await buildLaunchOverrides(deps({ ownerRelay }).d, 'codex', { subscriptionModel: 'gpt-5-codex' }, 'a'))
+      .toMatchObject({ ok: true, overrides: { env: { HARNESS_RELAY_TOKEN: 't' }, extraArgs: ['-c', 'model_provider="harness_owner"', '-m', 'gpt-5-codex'] } })
+    expect(await buildLaunchOverrides(deps({ ownerRelay }).d, 'claude', {}, 'a'))
+      .toMatchObject({ ok: true, overrides: { env: { ANTHROPIC_BASE_URL: 'http://127.0.0.1:9/claude', ANTHROPIC_AUTH_TOKEN: 't' }, extraArgs: [] } })
+    expect(await buildLaunchOverrides(deps({ ownerRelay }).d, 'codex', { gridLaunch: null, codexHome: '/home/u/.codex-work' }, 'a'))
+      .toMatchObject({ ok: true, overrides: { env: { CODEX_HOME: '/home/u/.codex-work', HARNESS_RELAY_TOKEN: 't' }, extraArgs: relay.args } })
+    // A grid is its own provider: the relay is not asked.
+    ownerRelay.mockClear()
+    await buildLaunchOverrides(deps({ ownerRelay }).d, 'codex', { gridLaunch: GRID }, 'a')
+    expect(ownerRelay).not.toHaveBeenCalled()
   })
 
   it('builds OpenCode overrides without optional code and uses the requested engine facts', async () => {
@@ -462,6 +483,21 @@ describe('buildLaunchOverrides — a Swarm session on the Harness GitHub App', (
     if (!result.ok) throw new Error(result.error)
     expect(result.overrides.env).not.toHaveProperty('GIT_CONFIG_PARAMETERS')
     expect(result.overrides.clearEnv).not.toContain('GH_TOKEN')
+  })
+
+  // HARNESS_SWARM=off: the core hands in no Swarm, and a session the Swarm started is not relaunched without its role.
+  it('refuses a Swarm session with the Swarm off, before it asks or writes anything', async () => {
+    const native = vi.fn(), dshLaunch = vi.fn()
+    const { d, calls } = deps({ swarm: undefined, native, dshLaunch })
+    for (const swarmSkill of [skill, { role: 'lead' as const, key: 'harness-claude-plain' }]) {
+      expect(await buildLaunchOverrides(d, 'claude', { cwd: workspace(), dsh: 'fixture/blender', swarmSkill }, 'agent-1', () => true))
+        .toEqual({ ok: false, error: 'SWARM_SKILL_FAILED', detail: 'The Swarm is off on this computer (HARNESS_SWARM).' })
+    }
+    expect(native).not.toHaveBeenCalled()
+    expect(dshLaunch).not.toHaveBeenCalled()
+    expect(calls).toEqual([])
+    // A session the Swarm never started relaunches as it always did.
+    expect(await buildLaunchOverrides(d, 'claude', { cwd: workspace() }, 'agent-1', () => true)).toMatchObject({ ok: true })
   })
 
   it('refuses the relaunch when the app\'s files cannot be written', async () => {

@@ -66,6 +66,10 @@ HOME = Path('/home') / USER
 SESSION = HOME / '.harness/auth/session.json'
 COMPUTER_ID = HOME / '.harness/computer-id'
 HOTSPOT = 'harness-setup'
+HOSTNAME = Path('/etc/hostname')
+HOSTS = Path('/etc/hosts')
+# What the installer calls every computer (installer.py), until name_computer gives it its hotspot's name.
+INSTALLED_NAME = 'harness'
 ADDRESS = '10.42.0.1'
 PORT = 80
 PROTOCOL = 1
@@ -157,6 +161,32 @@ def hotspot_name(device=None):
         source = computer_id()
     tail = ''.join(character for character in source if character.isalnum())[-4:].upper()
     return 'Harness-' + (tail or 'Setup')
+
+
+def name_computer(device=None):
+    """Call the computer what its hotspot is called (`Harness-BD19`) instead of the installer's
+    `harness`: every Harness OS was `harness`, so two in one account, on one router or in one Swarm
+    could not be told apart. Once, and only over that name: one somebody chose stays."""
+    try:
+        if HOSTNAME.read_text().strip() != INSTALLED_NAME:
+            return
+    except OSError:
+        return
+    name = hotspot_name(device)
+    try:
+        renamed = subprocess.run(['hostnamectl', 'set-hostname', name], capture_output=True, text=True, timeout=30)
+    except (OSError, subprocess.TimeoutExpired) as error:
+        log(f'could not name the computer {name}: {error}')
+        return
+    if renamed.returncode:
+        log(f'could not name the computer {name}: {renamed.stderr.strip()}')
+        return
+    try:
+        hosts = HOSTS.read_text()
+        HOSTS.write_text(re.sub(rf'^(127\.0\.1\.1\s+){INSTALLED_NAME}$', rf'\g<1>{name}', hosts, flags=re.M))
+    except OSError:
+        pass
+    log(f'named the computer {name}')
 
 
 def signed_in():
@@ -721,9 +751,15 @@ def set_up_as_unlocked():
 
 
 def watch():
-    started, waiting_since = time.monotonic(), None
+    started, waiting_since, named = time.monotonic(), None, False
     while True:
         now = time.monotonic()
+        if not named:
+            # By the Wi-Fi card, as the hotspot is: once it is there, or once it would have been.
+            device = wifi_device()
+            if device or now - started >= DEVICE_WAIT:
+                name_computer(device)
+                named = True
         forced = asked_now()
         wait = 0 if forced else hotspot_wait(now, started)
         if wait is None:
@@ -786,6 +822,11 @@ SIGN_OUT_UNIT = 'harness-sign-out'
 INITIAL_ACCOUNT = STATE / 'initial-account.json'
 CMDLINE = Path('/proc/cmdline')
 SSHD = 'sshd.service'
+# The GitHub CLI and its package (packages.x86_64), put back by install-gh: a download of some 15 MB, each
+# of its two tries bounded so both fit the daemon's wait (cli services/osDevice.ts GH_INSTALL_TIMEOUT_MS).
+GH = Path('/usr/bin/gh')
+GH_PACKAGE = 'github-cli'
+GH_INSTALL_TIMEOUT = 120
 # A phone sets this computer up next (network.py UNLOCKED_BY_PHONE): the screen's Wi-Fi page keeps
 # off the radio the hotspot needs, until a key there.
 PHONE_SETS_UP = Path('/run/harness-os/unlocked-by-phone')
@@ -1023,6 +1064,26 @@ def ssh(action='status'):
             'user': USER, 'addresses': addresses}
 
 
+def install_gh():
+    """The GitHub CLI put back where it is gone: the package the image installs (packages.x86_64), from this
+    computer's own pinned repositories, for the phone's Sign in to GitHub (cli services/osDevice.ts).
+    Nothing else: no package named by the caller, no upgrade of anything installed."""
+    if GH.exists():
+        return {'installed': True}
+    log('installing the GitHub CLI')
+    # Its package databases first as they are, then refreshed: the repositories are one dated snapshot
+    # (/etc/pacman.conf), so a refresh reads the same packages the computer was installed from.
+    for refresh in ([], ['-y']):
+        done = subprocess.run(['pacman', '-S', *refresh, '--needed', '--noconfirm', GH_PACKAGE],
+                              capture_output=True, text=True, timeout=GH_INSTALL_TIMEOUT)
+        if done.returncode == 0 and GH.exists():
+            log('installed the GitHub CLI')
+            return {'installed': True}
+    reason = (done.stderr.strip() or done.stdout.strip()).splitlines()[-1:] or ['pacman failed']
+    log(f'the GitHub CLI did not install: {reason[0]}')
+    return {'installed': False, 'message': 'The GitHub CLI could not be installed: ' + reason[0][:200]}
+
+
 def factory_reset(keep_wifi=False, keep_ssh=False):
     """This computer as just installed: off its account and a new computer to it (a new computer id and
     device key), everything of the person gone — /home/me as the installer made it, so its projects,
@@ -1065,7 +1126,7 @@ def factory_reset(keep_wifi=False, keep_ssh=False):
 def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument('command', nargs='?', choices=['watch', 'now', 'name', 'join', 'reset', 'sign-out',
-                                                       'password', 'ssh'], default='watch')
+                                                       'password', 'ssh', 'install-gh'], default='watch')
     parser.add_argument('action', nargs='?', choices=['status', 'on', 'off'], help='ssh: status, on or off')
     parser.add_argument('--keep-wifi', action='store_true', help='reset, sign-out: keep the saved Wi-Fi')
     parser.add_argument('--keep-ssh', action='store_true', help='reset: leave SSH as it is')
@@ -1113,6 +1174,13 @@ def main():
         return
     if arguments.command == 'ssh':
         print(json.dumps(ssh(arguments.action or 'status')))
+        return
+    if arguments.command == 'install-gh':
+        try:
+            print(json.dumps(install_gh()))
+        except (OSError, subprocess.SubprocessError) as error:
+            log(f'the GitHub CLI did not install: {error}')
+            print(json.dumps({'installed': False, 'message': 'The GitHub CLI could not be installed. Try again.'}))
         return
     if arguments.command == 'join':
         # From the daemon, through sudo: the Wi-Fi as JSON on stdin, never in argv.

@@ -4,6 +4,10 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/core/local_key_value_store.dart';
 import 'package:harness/core/phone_app_links.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:harness/auth/auth_session.dart';
+import 'package:harness/core/config.dart';
+import 'package:harness/state/app_state.dart';
 import 'package:harness/web/shell/web_store_banner.dart';
 
 class _MemoryStore implements LocalKeyValueStore {
@@ -124,6 +128,72 @@ void main() {
     tester.view.resetViewInsets();
     await tester.pump();
     expect(find.byKey(_banner), findsOneWidget);
+    expect(_CountedApp.mounts, mounted);
+    debugDefaultTargetPlatformOverride = null;
+  });
+
+  // Trust: on a first visit the sign-in buttons are the page's only filled
+  // actions; the bar stays where a phone's app banner is, quieter.
+  Finder getTheApp<T>() => find.descendant(
+    of: find.byKey(const ValueKey('web-store-banner-open')),
+    matching: find.text('Get the app'),
+  );
+
+  Finder button<T extends ButtonStyleButton>() =>
+      find.ancestor(of: find.text('Get the app'), matching: find.byType(T));
+
+  Future<AppNotifier> mountApp(WidgetTester tester, AppStatus status) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
+    final app = AppNotifier(
+      config: AppConfig.dev,
+      authSession: AuthSession(),
+      configStore: null,
+    )..status = status;
+    addTearDown(app.dispose);
+    tester.view.devicePixelRatio = 1;
+    tester.view.physicalSize = const Size(390, 844);
+    addTearDown(tester.view.reset);
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [appStateProvider.overrideWithValue(app)],
+        child: MaterialApp(
+          theme: grid.buildAppTheme(brightness: Brightness.dark),
+          builder: (context, child) =>
+              WebAppStoreFrame(storage: _MemoryStore(), child: child!),
+          home: const _CountedApp(key: _app),
+        ),
+      ),
+    );
+    await tester.pump();
+    return app;
+  }
+
+  testWidgets('before sign-in, Get the app is quiet beside the sign-in', (
+    tester,
+  ) async {
+    await mountApp(tester, AppStatus.unauthenticated);
+    expect(getTheApp(), findsOneWidget);
+    expect(button<FilledButton>(), findsNothing);
+    expect(button<OutlinedButton>(), findsOneWidget);
+    // Still a thumb's target.
+    expect(
+      tester.getSize(button<OutlinedButton>()).height,
+      greaterThanOrEqualTo(44),
+    );
+    debugDefaultTargetPlatformOverride = null;
+  });
+
+  testWidgets('signed in, Get the app is filled, and the app stays mounted', (
+    tester,
+  ) async {
+    final app = await mountApp(tester, AppStatus.unauthenticated);
+    final mounted = _CountedApp.mounts;
+    app
+      ..status = AppStatus.authenticated
+      ..notifyListeners();
+    await tester.pump();
+    expect(button<FilledButton>(), findsOneWidget);
+    expect(button<OutlinedButton>(), findsNothing);
     expect(_CountedApp.mounts, mounted);
     debugDefaultTargetPlatformOverride = null;
   });

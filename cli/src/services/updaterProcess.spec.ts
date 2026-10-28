@@ -7,7 +7,8 @@ import type { startSelfUpdater } from '../lib/selfUpdate.js'
 import type { startPtyUpdater } from '../lib/windows/ptyUpdate.js'
 import type { startTuiUpdater } from '../tui/update.js'
 import { VERSION } from '../version.js'
-import { processUpdaterDeps, runUpdaterService, type UpdaterServiceDeps } from './updaterProcess.js'
+import { inTeamAccount, processUpdaterDeps, runUpdaterService, type UpdaterServiceDeps } from './updaterProcess.js'
+import type { readTeamConfig } from '../team/config.js'
 
 // A lock someone else holds a moment: what the updater says while it waits for it.
 const locked = vi.hoisted(() => [] as string[])
@@ -106,6 +107,21 @@ describe('the updater in its own process', () => {
     }
     return { deps, windows, calls, told, ready, cli: () => cli!, hn: () => hn!, pty: () => pty, sent: () => sent! }
   }
+
+  it('follows releases in the Harness Team account, and only there', () => {
+    const team = make()
+    runUpdaterService(undefined, { ...team.deps, inTeamAccount: () => true }).stop()
+    expect(team.cli()).toMatchObject({ followReleases: true })
+    const owner = make()
+    runUpdaterService(undefined, { ...owner.deps, inTeamAccount: () => false }).stop()
+    expect(owner.cli()).not.toHaveProperty('followReleases')
+    // The account the root-owned team config names, and no other; an account whose name cannot be read is not it.
+    const named = { user: 'harnessteam' } as ReturnType<typeof readTeamConfig>
+    expect(inTeamAccount(() => named, () => 'harnessteam')).toBe(true)
+    expect(inTeamAccount(() => named, () => 'owner')).toBe(false)
+    expect(inTeamAccount(() => null, () => 'harnessteam')).toBe(false)
+    expect(inTeamAccount(() => named, () => { throw new Error('no passwd entry') })).toBe(false)
+  })
 
   it('checks for this build\'s successor, and hn\'s, on the installed copy, and stops both', () => {
     const m = make()

@@ -89,6 +89,9 @@ export const machineObservationSchema = z.object({ generation: z.string().max(16
   /** When each running agent's screen or transcript last changed (epoch ms); its lease renews on recent progress
    *  (liveness.ts). Absent from hosts before it, whose agents renew by running alone. */
   harnessProgress: z.record(z.string().max(160), z.number().int().nonnegative()).refine(v => Object.keys(v).length <= 1000).optional(),
+  /** Whether each running Swarm session's folder has uncommitted changes (git status), for those its host could read.
+   *  Only a session reported clean is ever stopped for being idle (tidy.ts). Absent from hosts before it. */
+  harnessUncommitted: z.record(z.string().max(160), z.boolean()).refine(v => Object.keys(v).length <= 1000).optional(),
   /** The Local models add-on (docs/plans/2026-10-23-swarm-local-models.md); absent from hosts before it. On the Swarm's
    *  grid: what this machine serves there (`local` an engine of its own, `api` a saved API it shares), usable by agents on
    *  any machine. On any other grid: a model its owner may use there (`shared`, shared with them), usable only by agents
@@ -153,19 +156,28 @@ const PRIVACY_ITEMS: Record<string, string> = {
 const ONLY_OWN = 'so it runs only its owner\'s projects'
 
 /**
- * Whether a teammate's work needs a Harness Team account on every machine (`SWARM_TEAM_ACCOUNT_REQUIRED=1`). Until the
- * CLI that makes team accounts is released, it does not: a machine without one takes a teammate's work as it did before
- * team accounts, while a machine with one already follows the rule. Read on every call, so a test can set it.
+ * Whether a teammate's work needs a Harness Team account on every machine of [state]'s Swarm
+ * (`SWARM_TEAM_ACCOUNT_REQUIRED=1`). Until the CLI that makes team accounts is released, it does not: a machine without
+ * one takes a teammate's work as it did before team accounts, while a machine with one already follows the rule.
+ *
+ * `SWARM_TEAM_ACCOUNT_OWNERS`, comma-separated emails, holds the switch to the Swarms those people own, so it can be tried
+ * on production with one's own Swarm first and no other Swarm changes (2026-10-27). Empty, it is every Swarm's. Both are
+ * read on every call, so a test can set them.
  */
-export function teamAccountRequired(): boolean {
-  return process.env.SWARM_TEAM_ACCOUNT_REQUIRED === '1'
+export function teamAccountRequired(state?: Pick<SuperTabState, 'ownerId' | 'people'>): boolean {
+  if (process.env.SWARM_TEAM_ACCOUNT_REQUIRED !== '1') return false
+  const owners = (process.env.SWARM_TEAM_ACCOUNT_OWNERS ?? '').split(',').map(email => email.trim().toLowerCase()).filter(Boolean)
+  if (!owners.length) return true
+  const owner = state?.people.find(person => person.id === state.ownerId)?.email.toLowerCase()
+  return !!owner && owners.includes(owner)
 }
 
 /** Why this contributed machine may not run a teammate's project now, or null when it may. `teamRow`: its account row
- *  says it is signed in as a team account (`Machine.sessionKind`), read by the store. */
-export function teamWorkRefusal(pool: ContributedMachine, now: number, teamRow = false): TeamWorkRefusal | null {
+ *  says it is signed in as a team account (`Machine.sessionKind`), read by the store. `required`: whether the Swarm it is
+ *  in needs a team account on every machine ([teamAccountRequired] of that Swarm). */
+export function teamWorkRefusal(pool: ContributedMachine, now: number, teamRow = false, required = teamAccountRequired()): TeamWorkRefusal | null {
   const reading = pool.observation, name = pool.name
-  if (!teamRow && reading?.sessionKind !== 'team' && !teamAccountRequired()) return null
+  if (!teamRow && reading?.sessionKind !== 'team' && !required) return null
   if (!reading || now - reading.receivedAt > MACHINE_FRESH_MS) {
     // A Mac's team account goes by its Mac's name ("One machine"), and the Mac itself may well be online.
     return { code: 'MACHINE_OFFLINE', reason: pool.hostMachineId
@@ -200,10 +212,10 @@ export function teamWorkCheck(state: SuperTabState, machineId: string, contribut
   const pool = state.machines?.find(m => m.machineId === machineId)
   if (!pool) {
     // Off the Machines list nothing reports a team account (store.ts teamMachines), so this is the switch alone.
-    if (!teamAccountRequired()) return null
+    if (!teamAccountRequired(state)) return null
     return { code: 'TEAM_ACCOUNT_REQUIRED', reason: `This machine is not a Team machine of this Swarm, ${ONLY_OWN}.` }
   }
-  return teamWorkRefusal(pool, now, teamMachines.includes(machineId))
+  return teamWorkRefusal(pool, now, teamMachines.includes(machineId), teamAccountRequired(state))
 }
 
 // ── One machine: a Mac and its Harness Team account ─────────────────────────────────────────────────────────────────

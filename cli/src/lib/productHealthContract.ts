@@ -45,10 +45,15 @@ export type CliReportFailure = typeof CLI_REPORT_FAILURES[number]
 export const RESUME_REASONS = ['runtime_unavailable', 'saved_state_missing', 'project_missing', 'harness_missing',
   'credentials_missing', 'busy', 'changed', 'unconfirmed', 'preparation_failed', 'launch_failed', 'invalid', 'other'] as const
 export type ResumeReason = typeof RESUME_REASONS[number]
+/** Which check refused a resume's history preparation (cli/src/engines/kit/resumeRepair.ts): on 2026-10-26, 10 of
+ *  17 failed resumes were `preparation_failed` and nothing said why. Counted beside `resume_reason_preparation_failed`. */
+export const RESUME_PREPARATION_KINDS = ['invalid_json', 'foreign_session', 'not_owned_file', 'changed_during', 'other'] as const
+export type ResumePreparationKind = typeof RESUME_PREPARATION_KINDS[number]
 export const PRODUCT_HEALTH_METRICS = [
   ...CLI_REPORT_FAILURES.map(reason => `health_cli_report_failure_${reason}` as const),
   ...CLI_REPORT_FAILURES.map(reason => `health_desktop_report_failure_${reason}` as const),
   ...HEALTH_SOURCES.flatMap(source => RESUME_REASONS.map(reason => `request_${source}_resume_reason_${reason}` as const)),
+  ...HEALTH_SOURCES.flatMap(source => RESUME_PREPARATION_KINDS.map(kind => `request_${source}_resume_preparation_${kind}` as const)),
   // hn's (`tui`) come through its daemon's queue, under that daemon's context, never one of their own.
   ...(['cli', 'desktop', 'tui'] as const).flatMap(surface => HEALTH_MEASURES.map(m => `health_${surface}_${m}` as const)),
   // The phone reports only its coverage (the threshold its breakdowns need) and late deliveries.

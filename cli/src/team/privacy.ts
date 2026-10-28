@@ -108,7 +108,7 @@ export function enginesOf(value: unknown): TeamEngines | undefined {
   for (const engine of ['claude', 'codex'] as const) {
     const e = v[engine] as Record<string, unknown> | undefined
     if (!e || typeof e !== 'object' || typeof e.installed !== 'boolean' || (typeof e.signedIn !== 'boolean' && e.signedIn !== null)) return undefined
-    result[engine] = { installed: e.installed, signedIn: e.signedIn as boolean | null }
+    result[engine] = { installed: e.installed, signedIn: e.signedIn as boolean | null, ...(e.relayed === true ? { relayed: true } : {}) }
   }
   return result
 }

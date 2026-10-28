@@ -13,6 +13,7 @@ import 'package:flutter_test/flutter_test.dart';
 const _copies = {
   'lib/swarm/model.dart': 'lib/super_tabs/model.dart',
   'lib/swarm/parts.dart': 'lib/super_tabs/parts.dart',
+  'lib/swarm/profile_model.dart': 'lib/super_tabs/profile_model.dart',
 };
 
 void main() {

@@ -55,6 +55,14 @@
       "description": "A harness's state and its last turn: what it was asked and what it answered."
     },
     {
+      "name": "harness_tell",
+      "description": "Give more work to a harness you started, on any machine, in the conversation it already has. Only while the person allows it."
+    },
+    {
+      "name": "harness_settings",
+      "description": "What agents may do here, the person's settings: each one and whether it is on, or turn one on (once the person says yes) or off."
+    },
+    {
       "name": "harness_close",
       "description": "Close a harness you started, once it is done. Its conversation is kept: the person can resume it."
     }

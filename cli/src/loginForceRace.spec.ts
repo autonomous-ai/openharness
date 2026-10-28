@@ -78,7 +78,7 @@ function seedSession(root: string, account: { accessToken: string; machineId: st
 /** A daemon as `login --force` and `start` see one: a live process named by the pid file. It idles
  *  until it is stopped, which is all a stand-in has to do — the stop needs something to kill. */
 function idleDaemon(root: string): { pid: number; exited: Promise<void> } {
-  const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' })
+  const child = spawn(process.execPath, ['-e', "process.on('SIGTERM', () => process.exit(0)); setInterval(() => {}, 1000)"], { stdio: 'ignore' })
   children.push(child)
   mkdirSync(join(root, 'data'), { recursive: true })
   writeFileSync(join(root, 'data', 'adapter.pid'), `${child.pid}\n`)
@@ -87,27 +87,34 @@ function idleDaemon(root: string): { pid: number; exited: Promise<void> } {
 
 interface CliRun {
   stdout: () => string
+  respond: (line: string) => void
+  closeInput: () => void
   /** Exit status, once every stdio pipe has drained. */
   exit: Promise<number | null>
   /** Resolves once stdout satisfies `test`; rejects if the process ends without it ever doing so. */
   until: (test: (stdout: string) => boolean) => Promise<void>
 }
 
-function runCli(root: string, args: string[], backendBase: string): CliRun {
+function runCli(root: string, args: string[], backendBase: string, acceptsInput = false): CliRun {
   const child = spawn(process.execPath, [TSX, CLI_SOURCE, ...args], {
-    cwd: CLI_ROOT, env: envFor(root, backendBase), stdio: ['ignore', 'pipe', 'pipe'],
+    cwd: CLI_ROOT, env: envFor(root, backendBase), stdio: [acceptsInput ? 'pipe' : 'ignore', 'pipe', 'pipe'],
   })
   children.push(child)
   let stdout = ''
   const watchers = new Set<() => void>()
-  child.stdout.on('data', (chunk: Buffer) => {
+  child.stdout?.on('data', (chunk: Buffer) => {
     stdout += chunk.toString()
     for (const watch of [...watchers]) watch()
   })
-  child.stderr.on('data', () => { /* drained: a full pipe would stall the child */ })
+  child.stderr?.on('data', () => { /* drained: a full pipe would stall the child */ })
   const exit = new Promise<number | null>((resolve) => child.once('close', (code) => resolve(code)))
   return {
     stdout: () => stdout,
+    respond: (line) => {
+      if (!child.stdin) throw new Error('this CLI run does not accept input')
+      child.stdin.write(line)
+    },
+    closeInput: () => child.stdin?.end(),
     exit,
     until: (test) => new Promise((resolve, reject) => {
       const watch = (): void => {
@@ -217,5 +224,50 @@ describe('login --force beside a start that lands mid-sign-in', () => {
     expect(results).toEqual([expect.objectContaining({ type: 'result', status: 'success' })])
     expect(JSON.parse(readFileSync(join(root, 'auth', 'session.json'), 'utf8')))
       .toMatchObject({ accessToken: 'tok_new', machineId: 'm_new', signInEpoch: expect.stringMatching(/^[0-9a-f]{32}@\d+$/), signInAcct: 'acct_new' })
+  }, 30_000)
+})
+
+describe('login after a running daemon exits cleanly during sign-in', () => {
+  it('harness login --code starts it again after the new session is saved', async () => {
+    const root = tempRoot()
+    const daemon = idleDaemon(root)
+    let approve = false
+    const backend = await fakeBackend((req, body) => {
+      switch (req.url) {
+        case '/api/auth/qr/start':
+          return { data: { code: 'hnq_code', pollToken: 'poll_1', expiresIn: 300, spokenCode: '123456' } }
+        case '/api/auth/qr/poll':
+          return { data: approve ? { status: 'approved', email: 'new@example.test' } : { status: 'pending' } }
+        case '/api/auth/qr/claim':
+          return { data: { token: 'tok_new', refreshToken: 'refresh_new', expiresIn: 3600, autonomousEnv: 'prod', email: 'new@example.test' } }
+        case '/api/auth/me':
+          return { data: { user: { id: 'acct_new' } } }
+        case '/api/machines/resolve-computer':
+          return { data: { machine: { machineId: 'm_new' } } }
+        default:
+          return { status: 404, error: 'not stubbed' }
+      }
+    })
+
+    const login = runCli(root, ['login', '--code', '--json'], backend.base, true)
+    await login.until((out) => out.includes('"type":"code"'))
+
+    // The daemon exits cleanly after the account changes; a successful exit keeps the unit stopped.
+    process.kill(daemon.pid, 'SIGTERM')
+    await daemon.exited
+    approve = true
+    await login.until((out) => out.includes('"type":"confirm"'))
+    login.respond('yes\n')
+    await login.until((out) => out.includes('"type":"result","status":"success"'))
+    login.closeInput()
+    await login.exit
+
+    expect(login.stdout()).toContain('starting the daemon again on this account')
+    const results = login.stdout().trim().split('\n').filter((line) => line.startsWith('{'))
+      .map((line) => JSON.parse(line) as { type: string; status?: string })
+      .filter((line) => line.type === 'result')
+    expect(results).toEqual([expect.objectContaining({ type: 'result', status: 'success' })])
+    expect(JSON.parse(readFileSync(join(root, 'auth', 'session.json'), 'utf8')))
+      .toMatchObject({ accessToken: 'tok_new', machineId: 'm_new', signInAcct: 'acct_new' })
   }, 30_000)
 })

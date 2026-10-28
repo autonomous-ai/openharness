@@ -6,6 +6,7 @@ import '../core/crash_log.dart';
 import '../core/guest_folders.dart';
 import '../measurement/desktop_setup_report.dart';
 import 'attached_task_delivery.dart';
+import 'browser_copies.dart';
 import 'harness_attachments.dart';
 import 'task_route.dart';
 import '../core/permission_modes.dart';
@@ -95,8 +96,10 @@ import '../settings/experimental_features.dart';
 import '../core/local_key_value_store.dart';
 import '../core/harness_file_store.dart';
 import '../super_tabs/attachment_upload.dart';
+import '../super_tabs/avatar_upload.dart';
 import '../super_tabs/client.dart';
 import '../super_tabs/controller.dart';
+import '../super_tabs/view_store.dart';
 import '../super_tabs/notifications.dart' show superTabMentionNotice;
 import '../measurement/setup_preference_store.dart';
 import '../devices/device_hosts.dart';
@@ -112,6 +115,7 @@ import '../widgets/engine_identity.dart'
     show allEngines, engineIdentity, isCloudAgentId, isTerminalEngine;
 import '../store/store_screen.dart' show openStoreAgent;
 import 'dial_status.dart';
+import 'machine_list_watch.dart';
 import 'grid_pictures.dart';
 import 'model_start_watch.dart';
 import 'harness_placement.dart';
@@ -328,6 +332,15 @@ class AgentCreationAttempt {
   bool _codexHomeTrusted = false;
 
   bool get awaitingConfirmation => _awaitingConfirmation;
+
+  /// What the machine answered a create, for a test's fake `createAgent`: the harness it made, or that the
+  /// start is still being confirmed.
+  @visibleForTesting
+  void answeredForTest({String? agentId, bool awaitingConfirmation = false}) {
+    _agentId = agentId;
+    _awaitingConfirmation = awaitingConfirmation;
+  }
+
   bool get canCancelPending => _awaitingConfirmation && _holdReason != null;
   bool get canFollowPending =>
       _awaitingConfirmation && (_starting || _holdReason != null);
@@ -960,11 +973,19 @@ class AppNotifier extends ChangeNotifier {
 
   bool get inForeground => foreground.value;
 
+  /// Whether the window can be seen at all: in front, or in sight behind the window that has focus
+  /// (`inactive`). A browser tab behind others, or a minimised window, cannot.
+  bool _inSight = true;
+
   /// Fed by the workspace's [AppLifecycleListener]. A null state is unknown, read as foreground.
   void appLifecycleChanged(AppLifecycleState? state) {
     if (_disposed) return;
     final wasForeground = foreground.value;
     foreground.value = state == null || state == AppLifecycleState.resumed;
+    _inSight =
+        state == null ||
+        state == AppLifecycleState.resumed ||
+        state == AppLifecycleState.inactive;
     // Every transition, not only the three the listener has callbacks for: hidden -> inactive fires
     // onShow, and a window shown again without focus must not keep telling the daemon it shows nothing.
     _announceVisibleAgents();
@@ -989,8 +1010,9 @@ class AppNotifier extends ChangeNotifier {
       }
       _refreshDeviceLogAfterReconnect();
       // ...and, hearing no machine at all, looks again for one: the person most likely just went to
-      // their computer to sign it in.
-      _rereadMachinesWhileDeaf();
+      // their computer to sign it in. The wait for the next read starts over too.
+      _deafMachineListWatch.reset();
+      unawaited(_rereadMachinesWhileDeaf());
     }
   }
 
@@ -1102,7 +1124,17 @@ class AppNotifier extends ChangeNotifier {
   Timer? _sharingDiscoveryTimer;
   // A viewer with no machine socket open hears no push at all — a machine that joins the account is
   // only found by this. See [_rereadMachinesWhileDeaf].
-  Timer? _deafMachineListTimer;
+  late final _deafMachineListWatch = MachineListWatch(
+    wanted: () => _deafReadWanted,
+    read: _rereadMachinesWhileDeaf,
+    pace: () =>
+        deafMachineListPaceForTest ??
+        (waitsForFirstComputer
+            ? firstComputerMachineListPace
+            : asleepComputers.isNotEmpty
+            ? asleepComputersMachineListPace
+            : deafMachineListPace),
+  );
   bool _sharingDiscoveryBusy = false;
   bool _sharingDiscoveryAgain = false;
   int _machineRecoveryAttempts = 0;
@@ -1715,9 +1747,15 @@ class AppNotifier extends ChangeNotifier {
     return best;
   }
 
+  /// What a host keeps of the account on this device beside the Super Tab
+  /// views; Settings ▸ Account's Clear now clears it with them.
+  final browserCopies = BrowserCopies();
+
   late final superTabs = SuperTabClient(
     storage: localStore ?? HarnessFileStore.shared,
+    viewStorage: localStore ?? swarmViewStore(),
     upload: uploadWith(() => api),
+    avatarUpload: uploadAvatarWith(() => api),
     onMention: superTabMentionNotice(systemNotifications),
     onTagCounts: notifyListeners,
     discoveryInterval: kUnderTest ? Duration.zero : const Duration(seconds: 15),
@@ -1901,32 +1939,182 @@ class AppNotifier extends ChangeNotifier {
   /// under test, on a Mac too, unless a test sets it.
   @visibleForTesting
   bool? macOSForTest;
-  bool _teamOfferedAtStart = false;
+
+  /// How long before asking again a daemon that could not answer the start
+  /// offer; each further try waits one more step.
+  @visibleForTesting
+  Duration teamOfferRetryForTest = const Duration(seconds: 30);
+  static const _teamOfferTries = 5;
+
+  /// Which daemon process answers this Mac, for a spec; the daemon's own
+  /// status otherwise.
+  @visibleForTesting
+  Future<String?> Function()? daemonIdentityForTest;
+  bool _teamOfferBusy = false;
+  Timer? _teamOfferRetry;
+
+  /// The daemon process the start offer's budget is for, its tries, and
+  /// whether it answered. A socket reconnect to the same process keeps them;
+  /// only a new process starts over (review of #1790).
+  bool _teamOfferStarted = false;
+  String? _teamOfferDaemon;
+  int _teamOfferTried = 0;
+  bool _teamOfferAnswered = false;
+  bool _teamStartExplained = false;
+
+  /// This Mac's daemon process as its own status says it: its pid and
+  /// version, so a restart or an update reads as a new one. Null when it
+  /// cannot say.
+  Future<String?> _daemonIdentity() async {
+    if (daemonIdentityForTest case final read?) return read();
+    try {
+      final probe = await _discovery.probe();
+      return probe.pid == null ? null : '${probe.pid}:${probe.version ?? ''}';
+    } catch (_) {
+      return null;
+    }
+  }
 
   /// The Harness Team account on this Mac (cli/src/team/autoSetup.ts),
   /// offered while the person is here: as they join a Swarm ([reason]
   /// `join`), add this Mac to one (`contribute`), or open the app
-  /// (`startup`). This Mac's own daemon decides whether to ask: no account
-  /// yet, not declined before, and at start only while this Mac is in a
-  /// Swarm with other people in it. macOS's administrator prompt is all the
-  /// person sees. Nothing on Windows or Linux, and never for another machine,
-  /// where nobody may be at it.
-  Future<void> offerTeamAccount(String reason) async {
+  /// (`startup`). This Mac's own daemon decides whether it is wanted: no
+  /// account yet, not declined before, and at start only while this Mac is in
+  /// a Swarm with other people in it. It is then explained before macOS asks
+  /// ([teamSetupAsks]): macOS's prompt is titled "osascript", which nobody
+  /// recognised as Harness (2026-10-27). Nothing on Windows or Linux, and never
+  /// for another machine, where nobody may be at it.
+  ///
+  /// True when the daemon answered, whatever it decided; false when it was not
+  /// asked or could not say.
+  Future<bool> offerTeamAccount(String reason) async {
+    final here = _teamAccountHere();
+    if (here == null) return false;
+    try {
+      final answer = await superTabMachineRequest(here, {
+        'action': 'teamSetupCheck',
+        'reason': reason,
+      });
+      appLog.info('super-tabs', 'team account offer ($reason): ${answer['state']}');
+      if (answer['state'] == 'wanted') {
+        // The start check runs once for each daemon process, so a restart
+        // with the explanation still open must not show it again: once a
+        // launch at start. A join, a contribution or the machine row's Set up
+        // is the person asking, and always explains.
+        if (reason != 'startup' || !_teamStartExplained) _teamSetupAsks.add(reason);
+        if (reason == 'startup') _teamStartExplained = true;
+      }
+      return true;
+    } catch (error) {
+      // An older daemon, or one that cannot say: nothing is asked.
+      appLog.info('super-tabs', 'team account not offered ($reason): $error');
+      return false;
+    }
+  }
+
+  /// The start offer, once for each process of this Mac's daemon: Macs
+  /// already in a Swarm meet no join or contribute moment, and one ask a
+  /// launch went to whichever daemon answered first, one still starting or the
+  /// version from before an update, so nobody saw the prompt (2026-10-27).
+  /// The daemon decides, and remembers a cancel. One ask at a time; a daemon
+  /// that could not say is asked again a few times, with a growing wait, and
+  /// a reconnect to it neither restarts the count nor cuts the wait short.
+  Future<void> _offerTeamAccountAtStart() async {
+    if (_disposed || _teamOfferBusy) return;
     if (!(macOSForTest ?? (Platform.isMacOS && !kUnderTest))) return;
-    final here = machineStates.values
+    _teamOfferBusy = true;
+    try {
+      final daemon = await _daemonIdentity();
+      if (_disposed) return;
+      // Only a confirmed process other than the last confirmed one starts
+      // over. A status read that could not say (a timeout) is no evidence of
+      // a restart, and counting it as one asked without end (re-check of
+      // #1790); the first identity read after an unknown one is taken as the
+      // same process.
+      final restarted = daemon != null && _teamOfferDaemon != null && daemon != _teamOfferDaemon;
+      if (!_teamOfferStarted || restarted) {
+        _teamOfferRetry?.cancel();
+        _teamOfferRetry = null;
+        _teamOfferStarted = true;
+        _teamOfferTried = 0;
+        _teamOfferAnswered = false;
+      }
+      _teamOfferDaemon = daemon ?? _teamOfferDaemon;
+      if (_teamOfferAnswered ||
+          _teamOfferTried >= _teamOfferTries ||
+          _teamOfferRetry != null) {
+        return;
+      }
+      final answered = await offerTeamAccount('startup');
+      // A request still out at dispose must not schedule another.
+      if (_disposed) return;
+      if (answered) {
+        _teamOfferAnswered = true;
+        return;
+      }
+      _teamOfferTried++;
+      if (_teamOfferTried >= _teamOfferTries) return;
+      _teamOfferRetry = Timer(teamOfferRetryForTest * _teamOfferTried, () {
+        _teamOfferRetry = null;
+        if (!_disposed) unawaited(_offerTeamAccountAtStart());
+      });
+    } finally {
+      _teamOfferBusy = false;
+    }
+  }
+
+  /// This Mac's own machine, when the Harness Team account can be made here.
+  String? _teamAccountHere() {
+    if (!(macOSForTest ?? (Platform.isMacOS && !kUnderTest))) return null;
+    return machineStates.values
         .where(
           (state) => state.isLocalMachine && !state.machine.isSharedMachine,
         )
-        .firstOrNull;
+        .firstOrNull
+        ?.machine
+        .machineId;
+  }
+
+  /// Whether this Mac can make its Harness Team account: the machine row's
+  /// Set up button shows only then.
+  bool get canSetUpTeamAccount => _teamAccountHere() != null;
+
+  final StreamController<String> _teamSetupAsks =
+      StreamController<String>.broadcast();
+
+  /// Each moment the Harness Team account is wanted on this Mac, by its
+  /// reason: the screen explains it, then [setUpTeamAccount] or
+  /// [declineTeamAccount].
+  Stream<String> get teamSetupAsks => _teamSetupAsks.stream;
+
+  /// Starts the Harness Team account's setup on this Mac, the person having
+  /// asked: macOS's administrator prompt follows. Answers the daemon's state
+  /// (`started`, `exists`, `running`, ...), or `update` from a daemon too old
+  /// to set it up from here.
+  Future<String> setUpTeamAccount() async {
+    final here = _teamAccountHere();
+    if (here == null) return 'unsupported';
+    try {
+      final answer = await superTabMachineRequest(here, {
+        'action': 'teamSetup',
+        'reason': 'manual',
+      });
+      return answer['state']?.toString() ?? 'started';
+    } on SuperTabFailure catch (failure) {
+      if (failure.code == 'INVALID_REQUEST') return 'update';
+      rethrow;
+    }
+  }
+
+  /// "Not now": not offered again on its own. The machine row keeps its Set
+  /// up button.
+  Future<void> declineTeamAccount() async {
+    final here = _teamAccountHere();
     if (here == null) return;
     try {
-      await superTabMachineRequest(here.machine.machineId, {
-        'action': 'teamSetup',
-        'reason': reason,
-      });
+      await superTabMachineRequest(here, {'action': 'teamSetupDecline'});
     } catch (error) {
-      // An older daemon, or one that cannot say: nothing is asked.
-      appLog.debug('super-tabs', 'team account not offered: $error');
+      appLog.debug('super-tabs', 'team account decline not saved: $error');
     }
   }
 
@@ -4667,8 +4855,27 @@ class AppNotifier extends ChangeNotifier {
   /// running `harness login` on their computer — nothing tells it that computer has joined, and the
   /// safety net above would leave the person staring at an empty list for five minutes. Only while
   /// it is deaf, so the traffic note above holds for every window that has a machine.
+  ///
+  /// Every 20 s, except under the browser's connect page and asleep band: there it backs off, soon
+  /// at first and then less often while nothing changes, and soon again on a push, a return to the
+  /// tab or the person's Retry ([MachineListWatch]). An account waiting for its first computer
+  /// ([waitsForFirstComputer]) has a person at the connect page while it installs, which can take
+  /// minutes, so it never waits long; one whose computers are all asleep ([asleepComputers]) can
+  /// wait longer.
+  static const deafMachineListPace = <Duration>[Duration(seconds: 20)];
+  static const firstComputerMachineListPace = <Duration>[
+    Duration(seconds: 4),
+    Duration(seconds: 8),
+    Duration(seconds: 10),
+  ];
+  static const asleepComputersMachineListPace = <Duration>[
+    Duration(seconds: 4),
+    Duration(seconds: 8),
+    Duration(seconds: 15),
+    Duration(seconds: 30),
+  ];
   @visibleForTesting
-  Duration deafMachineListInterval = const Duration(seconds: 20);
+  List<Duration>? deafMachineListPaceForTest;
 
   MachineState? stateOf(String machineId) => machineStates[machineId];
 
@@ -5163,12 +5370,11 @@ class AppNotifier extends ChangeNotifier {
       // the offline poll (the one thing that would have re-probed) stopped, and the tiles sat on
       // "Offline" over a live terminal with nothing left to restore them. Measured 2026-09-18 21:50.
       machine.localEndpoint ??= _cliEndpoint;
-      // Once a launch, with the person here: a Mac that joined a Swarm before
-      // teammates' work went only to Team machines never met the join or
-      // contribute moment.
-      if (!_teamOfferedAtStart && !machine.machine.isSharedMachine) {
-        _teamOfferedAtStart = true;
-        unawaited(offerTeamAccount('startup'));
+      // With the person here, at each start of this Mac's daemon: a Mac that
+      // joined a Swarm before teammates' work went only to Team machines never
+      // met the join or contribute moment.
+      if (!machine.machine.isSharedMachine) {
+        unawaited(_offerTeamAccountAtStart());
       }
     } else {
       machine.transportMode = MachineTransportMode.cloudE2ee;
@@ -7258,8 +7464,7 @@ class AppNotifier extends ChangeNotifier {
     _daemonSupervisionTimer = null;
     _sharingDiscoveryTimer?.cancel();
     _sharingDiscoveryTimer = null;
-    _deafMachineListTimer?.cancel();
-    _deafMachineListTimer = null;
+    _deafMachineListWatch.stop();
     _groupSyncedAt.clear();
     _sharingDiscoveryBusy = false;
     _sharingDiscoveryAgain = false;
@@ -7279,6 +7484,8 @@ class AppNotifier extends ChangeNotifier {
     sessionTails.clear();
     shareStatus.clear();
     gridPictures.clear();
+    // Pickers keep listening to this menu; only the old account's rows go.
+    _modelsMenu?.reset();
     _stopWakeFollowers();
     expandedMachines.clear();
     selectedMachineId = null;
@@ -9001,6 +9208,8 @@ class AppNotifier extends ChangeNotifier {
     final revision = _authRevision;
     if (!_authWorkCurrent(revision)) return null;
     final request = ++_machineInventoryRevision;
+    // From the first read on, answered or not: a list that failed is looked for again too.
+    if (viewer != null) _deafMachineListWatch.start();
     if (localManualFixture != null) {
       _machineInventoryLoaded = true;
       notifyListeners();
@@ -9396,16 +9605,54 @@ class AppNotifier extends ChangeNotifier {
       }
       unawaited(_rereadMachinesInBackground(pushed: false));
     });
-    if (viewer != null) {
-      // Only while the tab is in front: a tab left open behind others, its machines all off,
-      // would otherwise ask every 20s for as long as the browser runs. Coming back to it asks at once.
-      _deafMachineListTimer ??= Timer.periodic(deafMachineListInterval, (_) {
-        if (foreground.value) _rereadMachinesWhileDeaf();
-      });
-    }
     notifyListeners();
     // A grant that has just arrived places what waited for it (R2).
     _placeSharedPanesSoon();
+  }
+
+  /// The inventory has answered, and answered for now: loaded, not loading,
+  /// not stale, no error. What the account HAS, independent of what is open.
+  bool get machineInventorySettled =>
+      machineInventoryLoaded &&
+      !machinesLoading &&
+      !machinesAreStale &&
+      machineListError == null;
+
+  /// A computer of the account's is connected, or on its way.
+  bool get computerConnectedOrComing => machineStates.values.any(
+    (machine) =>
+        !machine.machine.isShared &&
+        !machine.needsLink &&
+        machine.nodeOnline != false &&
+        (machine.connectionStatus == ConnectionStatus.connected ||
+            machine.connectionStatus == ConnectionStatus.connecting ||
+            machine.connectionStatus == ConnectionStatus.reconnecting),
+  );
+
+  /// What a host's connect page is for: before the machine list first
+  /// answers, and once it has, while no computer of the account's is
+  /// connected or on its way and none is only asleep ([asleepComputers]) —
+  /// every one is missing, offline or waiting to be linked.
+  bool get waitsForFirstComputer =>
+      !computerConnectedOrComing &&
+      (!machineInventoryLoaded ||
+          (machineInventorySettled && asleepComputers.isEmpty));
+
+  /// The account's own computers, all of them offline and none waiting on this
+  /// one to be linked: set up before, asleep now. Empty for an account with
+  /// none (a computer taken out of it does not count) — that one needs setting
+  /// up — and while any is connected, on its way, or waiting to be linked.
+  List<MachineState> get asleepComputers {
+    final own = [
+      for (final machine in machineStates.values)
+        if (!machine.machine.isShared &&
+            !removedMachines.containsKey(machine.machine.machineId))
+          machine,
+    ];
+    if (own.any((machine) => machine.needsLink || !machine.isOffline)) {
+      return const [];
+    }
+    return own;
   }
 
   /// Whether this viewer has no machine socket open, so no push can reach it.
@@ -9417,13 +9664,24 @@ class AppNotifier extends ChangeNotifier {
             m.connectionStatus == ConnectionStatus.connected,
       );
 
+  /// Whether the deaf watch's next tick reads: a viewer that hears nothing, in sight — a tab left
+  /// open behind others, its machines all off, would otherwise ask for as long as the browser runs;
+  /// the 5-minute safety net ([machineListSafetyNetInterval]) is the one read it still makes —
+  /// and not while recovery is the one asking (a failed or stale list, see
+  /// [_scheduleMachineRecovery]) or a reload is open, so two never read side by side.
+  bool get _deafReadWanted =>
+      _inSight &&
+      _viewerIsDeaf &&
+      _machineRecoveryTimer == null &&
+      _retryInFlight == null;
+
   /// A viewer that hears nothing re-reads the machine list: the computer the person is signing in
   /// on right now appears, and the dial that follows reads the device log for its key first.
-  void _rereadMachinesWhileDeaf() {
+  Future<void> _rereadMachinesWhileDeaf() async {
     if (_disposed || status != AppStatus.authenticated || !_viewerIsDeaf) {
       return;
     }
-    unawaited(_rereadMachinesInBackground(pushed: false));
+    await _rereadMachinesInBackground(pushed: false);
   }
 
   /// Re-read the machine list because something other than the person asked:
@@ -9434,14 +9692,9 @@ class AppNotifier extends ChangeNotifier {
   /// exactly one more follows it. A bulk rename pushes once per machine;
   /// without this each push would be its own pair of requests. A timer tick
   /// that finds a read open has nothing to add and is dropped.
-  /// Read the machine list again quietly — no loading state, the rows on
-  /// screen stay — as a missed `machines_changed` push would. For a screen
-  /// waiting on a computer this window has no connection to hear that push
-  /// through: an account with none connected yet (the browser's connect page).
-  Future<void> rereadMachines() => _rereadMachinesInBackground(pushed: false);
-
   Future<void> _rereadMachinesInBackground({required bool pushed}) async {
     if (_disposed || status != AppStatus.authenticated) return;
+    if (pushed) _deafMachineListWatch.reset();
     if (_sharingDiscoveryBusy) {
       if (pushed) _sharingDiscoveryAgain = true;
       return;
@@ -10996,7 +11249,10 @@ class AppNotifier extends ChangeNotifier {
   /// the error strip's own retry.
   Future<void>? _retryInFlight;
 
-  Future<void> retryMachines() => _retryMachines(automatic: false);
+  Future<void> retryMachines() {
+    _deafMachineListWatch.reset();
+    return _retryMachines(automatic: false);
+  }
 
   Future<void> _retryMachines({required bool automatic}) {
     if (_disposed) return Future<void>.value();
@@ -21407,6 +21663,7 @@ class AppNotifier extends ChangeNotifier {
 
   @override
   void dispose() {
+    _teamOfferRetry?.cancel();
     if (identical(CrashLog.healthError, _measurementError)) {
       CrashLog.healthError = null;
     }
@@ -21458,7 +21715,7 @@ class AppNotifier extends ChangeNotifier {
     _disposed = true;
     _closeAttachmentSessions();
     _sharingDiscoveryTimer?.cancel();
-    _deafMachineListTimer?.cancel();
+    _deafMachineListWatch.stop();
     _stopMachineRecovery();
     if (signingIn) cliLogin.cancel();
     _closedHistory.clear();
@@ -21485,6 +21742,7 @@ class AppNotifier extends ChangeNotifier {
     unawaited(_daemonFrames.close());
     unawaited(_modelsRequests.close());
     unawaited(_superTabClosures.close());
+    unawaited(_teamSetupAsks.close());
     super.dispose();
   }
 }

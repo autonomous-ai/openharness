@@ -1,5 +1,6 @@
 import '../core/models.dart';
 import '../notify/alert_sounds.dart';
+import '../super_tabs/pm_chat.dart' show pmUnreadLabel;
 import '../widgets/engine_identity.dart' show isTerminalEngine;
 import 'app_state.dart';
 import 'swarm.dart';
@@ -101,6 +102,25 @@ int tabMentionsWaiting(AppNotifier app, Swarm tab) =>
 /// What a Swarm tab's tag count says: "Tagged in 2 messages".
 String tabMentionsLabel(int count) =>
     'Tagged in $count ${count == 1 ? 'message' : 'messages'}';
+
+/// The unread messages in this account's own PM chats in a Swarm tab.
+int tabPmWaiting(AppNotifier app, Swarm tab) =>
+    tab.superTabId == null ? 0 : app.superTabs.waitingPm(tab.superTabId!);
+
+/// What a Swarm tab's badge counts: its tags and its unread PM messages.
+int tabWaiting(AppNotifier app, Swarm tab) =>
+    tabMentionsWaiting(app, tab) + tabPmWaiting(app, tab);
+
+/// What a Swarm tab's badge says, or null when it counts nothing:
+/// "Tagged in 1 message · 2 new in Chat with PM".
+String? tabWaitingLabel(AppNotifier app, Swarm tab) {
+  final tags = tabMentionsWaiting(app, tab), pm = tabPmWaiting(app, tab);
+  final parts = [
+    if (tags > 0) tabMentionsLabel(tags),
+    if (pm > 0) pmUnreadLabel(pm),
+  ];
+  return parts.isEmpty ? null : parts.join(' · ');
+}
 
 /// A viewer refers to its owner; showing the same harness twice adds no vote.
 /// A Lead's tag waiting in a Swarm tab needs the person, like a question.

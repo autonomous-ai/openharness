@@ -1,5 +1,7 @@
-// The saved view on screen (#180 fix 4): a quiet "Updating…" beside the
-// Super Tab's title until the first read lands; the send box stays usable.
+// The saved view on screen (#180 fix 4): a quiet "Saved in this browser ·
+// Updating…" beside the Super Tab's title until the first read lands; the
+// send box stays usable. It says where the copy is, and the tooltip how long
+// it stays and where it is cleared.
 import 'dart:async';
 import 'dart:convert';
 
@@ -11,6 +13,8 @@ import 'package:harness/super_tabs/reading.dart';
 import 'package:harness/super_tabs/view.dart';
 
 import 'support/super_tab_fixture.dart';
+
+const _label = 'Saved in this browser · Updating…';
 
 const _web = SuperTabReading(
   quietPoll: Duration(seconds: 15),
@@ -63,7 +67,14 @@ void main() {
     addTearDown(c.dispose);
     await _mount(tester, c);
     expect(find.text('Hello'), findsOneWidget);
-    expect(find.text('Updating…'), findsOneWidget);
+    expect(find.text(_label), findsOneWidget);
+    expect(
+      find.byTooltip(
+        'This browser keeps a copy of the Super Tabs you open until you sign '
+        'out. Settings ▸ Account clears it now.',
+      ),
+      findsOneWidget,
+    );
     // The send box takes a draft meanwhile.
     await tester.enterText(find.byType(TextField).last, 'Go ahead.');
     expect(c.draft('lead'), 'Go ahead.');
@@ -74,7 +85,7 @@ void main() {
     server.holdReads = null;
     await tester.pump();
     await tester.pump();
-    expect(find.text('Updating…'), findsNothing);
+    expect(find.text(_label), findsNothing);
     expect(find.text('Hello'), findsOneWidget);
     // Reading the transcript saves where it was read to, a moment later.
     await tester.pump(const Duration(seconds: 1));
@@ -86,7 +97,7 @@ void main() {
     addTearDown(c.dispose);
     await c.refresh();
     await _mount(tester, c);
-    expect(find.text('Updating…'), findsNothing);
+    expect(find.text(_label), findsNothing);
     await tester.pump(const Duration(seconds: 1));
   });
 }

@@ -1777,6 +1777,12 @@ impl App {
                 let flag = |k: &str| payload.get(k).and_then(Value::as_bool).unwrap_or(false);
                 let (replay, subagent) = (flag("replay"), flag("subagent"));
                 let aborted = payload.get("aborted").and_then(Value::as_bool).unwrap_or(false);
+                // Harness OS: hn is the screen and always focused, so no notification reaches anyone.
+                // Its bell, which the OS's terminal plays as a sound (foot.ini [bell]), says a harness
+                // out of sight is done — rung as a window's is: not with bell-action none, nor visual-bell on.
+                let ring = self.os_session
+                    && self.options.get("bell-action", "", None).as_deref() != Some("none")
+                    && self.options.get("visual-bell", "", None).as_deref() != Some("on");
                 if let Some(agent) = self.fleet.event_agent(machine_id, &payload) {
                     agent.working = false; agent.activity.unknown = false; agent.activity.until = None;
                     if !subagent { agent.subagents.clear() }
@@ -1805,6 +1811,7 @@ impl App {
                         if mine && failed && !visible.contains(&key) { self.say(what.clone(), theme::DANGER) }
                     } else if looking.as_ref() == Some(&key) { self.mark_seen_key(key) }
                     if mine && !self.terminal_focused && !replay && !subagent { crate::notify("Harness", &what) }
+                    if ring && mine && !replay && !subagent && !aborted && !visible.contains(&hook_key) { crate::bell() }
                     if !replay && !subagent && !failed { crate::commands::notify_harness(self, "harness-done", &hook_key) }
                 }
             }

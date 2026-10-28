@@ -1,6 +1,6 @@
 import { encodeRuntimeProfile } from '../engines/kit/runtime.js'
 import { parseRuntimeProfile } from '../lib/runtimeProfileWire.js'
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { openDaemon, type Daemon, type Where } from '../agentClient/daemon.js'
 import { admission, quotaOf, type Requirements } from './capacity.js'
 import { groupSkillMode, identifier, object } from './host.js'
@@ -28,7 +28,9 @@ const MODEL_SWITCH_WAIT_MS = 60_000
 const MODEL_SWITCH_RETRY_MS = 1_000
 const CANCELLED_START = 'The machine cancelled this request before starting an agent. Review its settings and create a new start request.'
 function requireSuccess(reply: Json): Json {
-  if (reply.error || reply.ok !== true) throw new Error(String(reply.detail ?? reply.error ?? 'This Super Tab request did not succeed.'))
+  // The code says whether the backend answered (a refusal) or the reply was lost on the way (a transport code, or none).
+  if (reply.error || reply.ok !== true) throw Object.assign(new Error(String(reply.detail ?? reply.error ?? 'This Super Tab request did not succeed.')),
+    { code: typeof reply.error === 'string' ? reply.error : null })
   return object(reply.value)
 }
 export async function inspectCapacity(target: Daemon, request: Json) {
@@ -86,8 +88,144 @@ const launchesWithModel = (capacity: Json, engine: unknown) => Array.isArray(cap
 
 /** Starts through the ordinary native launch protocol, with its durable receipt.
  * This CLI owns no machine credential and does not change legacy spawn settings.
- * Every invocation resumes the backend intent before it may open a native pane. */
-export async function startAgent(input: Json, scoped: ScopedRequest, where: Where, open: typeof openDaemon = openDaemon): Promise<Json> {
+ * Every invocation resumes the backend intent before it may open a native pane.
+ *
+ * A Lead's routed start that fails before its agent exists is never left there (the round-device group, 2026-10-27: a
+ * contributed host failed it in preparation, the Lead had been told only "queued", and the group sat without a worker).
+ * A queued start is watched for a short while; a failed one starts once on the route's next machine, or the group and its
+ * requester are told it has no worker. Resuming the failed start later does the same, under the same operations. */
+export async function startAgent(input: Json, scoped: ScopedRequest, where: Where, open: typeof openDaemon = openDaemon,
+  pause: (ms: number) => Promise<void> = ms => new Promise(resolve => setTimeout(resolve, ms))): Promise<Json> {
+  let result = await startOnce(input, scoped, where, open)
+  // The host settles its own queued starts; the Lead's route and retry are the Lead's alone.
+  if (input.hostDispatch === true) return result
+  if (result.queued === true && input.action === 'start') result = await watchQueued(result, scoped, pause)
+  if (result.error !== 'START_FAILED' || !identifier(result.startId)) return result
+  const failed = requireSuccess(await scoped({ action: 'startStatus', startId: result.startId }))
+  // An agent that joined is the group's worker, and a start nobody routed has no route to try again.
+  if (failed.harnessId || !failed.error || !identifier(failed.routeDecisionId)) return result
+  return startElsewhere(input, failed, scoped, where, open, pause)
+}
+
+const WATCH_READS = 10, WATCH_EVERY_MS = 2_000
+/** A contributed machine's host readies a queued start on its next pass (5 s apart, machines.ts): the Lead reads its
+ *  receipt for about 20 s, so a start its host fails in preparation is known before the Lead moves on. Later failures
+ *  are delivered to the Lead (backend agent.startFailed), which resumes the start. */
+async function watchQueued(queued: Json, scoped: ScopedRequest, pause: (ms: number) => Promise<void>): Promise<Json> {
+  for (let read = 0; read < WATCH_READS; read++) {
+    await pause(WATCH_EVERY_MS)
+    const start = requireSuccess(await scoped({ action: 'startStatus', startId: queued.startId }))
+    if (start.error && !start.harnessId) return { error: 'START_FAILED', startId: queued.startId, detail: start.error }
+    if (start.dispatched || start.harnessId) break
+  }
+  return queued
+}
+
+/** Hard rules this client reads before it moves a task. A rule of any other kind may bind the task to its machine, so the
+ *  task then stays where it is and is reported instead. */
+const KNOWN_RULES = new Set(['forbidModel', 'machines', 'minEffort', 'preferEngine', 'preferIdle'])
+const RETRY = /^retry-[0-9a-f]{24}$/
+/** Answers that are not the request's own (routeCommand.ts): the backend may still have recorded it. */
+const TRANSPORT = new Set(['AGENT_UNAVAILABLE', 'SUPER_TAB_UNAVAILABLE', 'BACKEND_UNAVAILABLE', 'BACKEND_TIMEOUT', 'BACKEND_UNREACHABLE'])
+/** A start in these states may still launch, or has already been settled by the start itself (superTabs/machines.ts). */
+const UNSETTLED = new Set(['START_UNCERTAIN', 'START_PENDING', 'START_REFUSED'])
+const derived = (prefix: string, startId: string) => `${prefix}-${createHash('sha256').update(startId).digest('hex').slice(0, 24)}`
+
+/** One more start for a routed start that failed before its agent existed: the stored route without the failed machine,
+ *  recorded again so the backend checks the new pick against the owner's hard rules, then started there. A retry is never
+ *  retried; with no machine left, the group is told. Every operation is named after the failed start, so a Lead that
+ *  resumes it again replays the same ones. */
+async function startElsewhere(input: Json, failed: Json, scoped: ScopedRequest, where: Where, open: typeof openDaemon,
+  pause: (ms: number) => Promise<void>): Promise<Json> {
+  const startId = String(failed.id ?? input.startId ?? input.operationId), request = object(failed.request)
+  const state = object(object(requireSuccess(await scoped({ action: 'status' }))).state)
+  const group = (Array.isArray(state.conversations) ? state.conversations.map(object) : []).find(g => g.id === request.conversationId)
+  const machines = Array.isArray(state.machines) ? state.machines.map(object) : []
+  const project = (Array.isArray(state.projects) ? state.projects.map(object) : []).find(p => p.id === group?.projectId)
+  const machineName = (id: unknown) => text(machines.find(m => m.machineId === id)?.name) ?? 'its machine'
+  const blocked = async (on: Json, required = false): Promise<Json> => {
+    const requester = identifier(group?.requesterId) ? [group.requesterId] : []
+    // People read why in the failure row the backend wrote; this one says only what it means, never the raw error. A task's
+    // requirement names no machine at all: the one it failed on is a required one, which a reader may not see (backend
+    // model.ts TaskRequirement; review of #1847).
+    requireSuccess(await scoped({ action: 'command', operationId: derived('start-blocked', String(on.id)), command: { type: 'message.send',
+      conversationId: request.conversationId, replyTo: null, recipientIds: [], ...(requester.length ? { mentions: requester } : {}),
+      text: required
+        ? `${String(request.name)} could not start. This task needs a particular machine or device, so it was not moved to another machine. `
+          + 'It has no worker until a machine that has what it needs can start it.'
+        : `${String(request.name)} could not start on ${machineName(object(on.request).machineId)}, and no other machine allowed for this task could take it. `
+          + 'This task has no worker until that machine is fixed or another one is added.' } }))
+    return { error: 'START_BLOCKED', startId: on.id, detail: `${String(on.error)} ${required
+      ? 'This task requires its machine or device, so it was not moved; the group was told.'
+      : 'No other machine allowed for this task could start it; the group was told.'}` }
+  }
+  if (RETRY.test(startId)) return blocked(failed)
+  // A task that requires its machines or devices waits for them (#1829): a Lead who cannot see a required machine reads only
+  // how many there are, and no machine reports its devices, so nothing tells this client another machine could do it.
+  const requires = object(object(group?.task).requires)
+  if (Array.isArray(requires.machines) || (number(requires.unseenMachines) ?? 0) > 0 || (Array.isArray(requires.devices) && requires.devices.length)) return blocked(failed, true)
+  const rules = (Array.isArray(state.rules) ? state.rules.map(object) : []).filter(r => !r.projectId || r.projectId === group?.projectId)
+  if (rules.some(r => !KNOWN_RULES.has(String(object(r.rule).kind)))) return blocked(failed)
+  const decision = object(requireSuccess(await scoped({ action: 'routeDecision', decisionId: failed.routeDecisionId })))
+  const record = object(decision.record), repository = object(project?.repository)
+  /** Where the project's folder is on a machine: as the route says it (routeCommand.ts); unknown elsewhere. */
+  const folder = (machineId: unknown) => {
+    if (repository.machineId === machineId && text(repository.cwd)) return text(repository.cwd)
+    const pool = machines.find(m => m.machineId === machineId)
+    return pool?.scope === 'swarm' && text(pool.cwd) && identifier(project?.id) ? `${String(pool.cwd).replace(/\/+$/, '')}/${project.id}` : null
+  }
+  // A Mac's Harness Team account is that Mac (backend machines.ts teamStartRequest): neither runs the retry.
+  const failedOn = new Set([request.machineId, machines.find(m => m.machineId === request.machineId)?.hostMachineId].filter(identifier))
+  const all = Array.isArray(record.candidates) ? record.candidates.map(object) : []
+  const others = all.filter(c => !failedOn.has(String(c.machineId)))
+  // A person who chose the machine chooses another; a Lead's override keeps holding: never the pick it moved the task away
+  // from, and the engine and model it chose to run.
+  const override = object(decision.override)
+  if (override.by === 'person') return blocked(failed)
+  const avoided = override.by === 'lead' ? all.find(c => c.id === record.pick) : undefined
+  const chosen = (c: Json) => !avoided || (c.machineId !== avoided.machineId && c.engine === request.engine
+    && (c.gridModel ?? null) === (request.gridModel ?? null) && (c.gridName ?? null) === (request.gridName ?? null)
+    && (c.gridModel !== undefined || (c.model === (request.model ?? 'default') && c.effort === (request.effort ?? 'default'))))
+  const pick = others.find(c => c.kind === 'new' && folder(c.machineId) && chosen(c))
+  if (!pick) return blocked(failed)
+  const reason = 'Its machine could not start this task.'
+  const why = `Retry: ${String(request.name)} could not start on ${machineName(request.machineId)}.`.slice(0, 300)
+  const rerouted = await scoped({ action: 'command', operationId: derived('reroute', startId), command: { type: 'route.record',
+    conversationId: request.conversationId, decision: { ...record, assessment: { ...object(record.assessment), why }, candidates: others,
+      excluded: [...all.filter(c => failedOn.has(String(c.machineId))).map(c => ({ title: c.title, reason })),
+        ...(Array.isArray(record.excluded) ? record.excluded : [])].slice(0, 200),
+      pick: pick.id, via: 'order', fallback: undefined, p: null, belowFloor: false, why } } })
+  // The backend refuses a pick that breaks a hard rule, the task's requirement set since it was read, or cannot take a
+  // teammate's work: then nothing else may run it.
+  const routeDecisionId = rerouted.ok === true ? object(object(rerouted.value).result).routeDecisionId : null
+  if (!identifier(routeDecisionId)) return blocked(failed, rerouted.error === 'REQUIREMENT_UNMET')
+  // What named the failed machine's own setup stays with it; the pick says what runs on the new one.
+  const { permissionMode: _mode, model: _model, effort: _effort, gridModel: _grid, gridName: _name, codexHome: _home, ...kept } = request
+  const retryId = derived('retry', startId), retryRequest = { ...kept, machineId: pick.machineId, engine: pick.engine, cwd: folder(pick.machineId),
+    ...(pick.gridModel ? { gridModel: pick.gridModel, gridName: pick.gridName } : { model: pick.model, effort: pick.effort }), routeDecisionId }
+  const refused = (error: unknown) => blocked({ id: retryId, request: retryRequest, error })
+  const uncertain = { error: 'START_UNCERTAIN', startId: retryId, retriedFrom: startId,
+    detail: 'The retry was sent but not confirmed. Resume the failed start to finish it; it sends the same retry again, never another.' }
+  let retry: Json
+  try { retry = await startOnce({ action: 'start', tabId: input.tabId, operationId: retryId, request: retryRequest }, scoped, where, open) } catch (error) {
+    // A lost reply may follow a recorded start: its own receipt, read again, says which. Only a backend that answered with
+    // a refusal and holds no such start refused it.
+    const code = object(error).code, receipt = await scoped({ action: 'startStatus', startId: retryId }).catch((): Json => ({}))
+    if (receipt.ok !== true && receipt.error === 'NOT_FOUND' && code === 'REQUIREMENT_UNMET') return blocked(failed, true)
+    if (receipt.ok !== true) return receipt.error === 'NOT_FOUND' && typeof code === 'string' && !TRANSPORT.has(code) ? refused((error as Error).message) : uncertain
+    try { retry = await startOnce({ action: 'resume', tabId: input.tabId, startId: retryId }, scoped, where, open) } catch { return uncertain }
+  }
+  const settled = retry.queued === true ? await watchQueued(retry, scoped, pause) : retry
+  if (settled.error === undefined || UNSETTLED.has(String(settled.error))) return { ...settled, retriedFrom: startId }
+  const receipt = requireSuccess(await scoped({ action: 'startStatus', startId: retryId }))
+  if (receipt.harnessId) return { ...settled, retriedFrom: startId }
+  // Refused before it was dispatched (capacity, the machine's sharing): fail it, so it holds no slot and its notice is written.
+  if (!receipt.error) requireSuccess(await scoped({ action: 'command', operationId: derived('retry-refused', retryId),
+    command: { type: 'agent.startFailed', startId: retryId, error: String(settled.detail ?? settled.error) } }))
+  return refused(receipt.error ?? settled.detail ?? settled.error)
+}
+
+async function startOnce(input: Json, scoped: ScopedRequest, where: Where, open: typeof openDaemon): Promise<Json> {
   let startId = input.startId
   let routed: unknown
   let permissionWarning: string | undefined
