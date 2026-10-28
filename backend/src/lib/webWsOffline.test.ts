@@ -7,8 +7,10 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 // already out there) is refused at once, with how long to wait; a phone or the web viewer still waits attached.
 const m = vi.hoisted(() => ({
   auth: vi.fn(), upgrade: vi.fn(), presence: vi.fn(), online: vi.fn(), attach: vi.fn(),
-  machineFindUnique: vi.fn(),
+  machineFindUnique: vi.fn(), shared: vi.fn(), warn: vi.fn(),
 }))
+vi.mock('../utils/logger.js', () => ({ logger: { warn: m.warn, info: vi.fn(), error: vi.fn(), debug: vi.fn() } }))
+vi.mock('./machineAccess.js', async original => ({ ...await original<typeof import('./machineAccess.js')>(), sharedMachineAccess: m.shared }))
 vi.mock('./ssoAuth.js', async original => ({ ...await original<typeof import('./ssoAuth.js')>(), authenticateAccessToken: m.auth }))
 vi.mock('./wsServer.js', async original => ({ ...await original<typeof import('./wsServer.js')>(), createWss: () => ({ handleUpgrade: m.upgrade }) }))
 vi.mock('./prisma.js', () => ({
@@ -84,4 +86,21 @@ it.each(['mobile', 'web'])('a %s client still attaches to an offline machine and
   const ws = await selects({}, `&client=${client}`)
   expect(m.attach).toHaveBeenCalledOnce()
   expect(ws.sent()).toContainEqual(expect.objectContaining({ type: 'connected', payload: expect.objectContaining({ machineId: 'owner-mac' }) }))
+})
+
+// Prod logs 2026-10-28: about 45 refused selects an hour, and the log did not say why.
+describe('a refused machine select', () => {
+  it.each([
+    ['unknown', null, null],
+    ['deleted', { ...mac, deletedAt: new Date('2026-10-01T00:00:00Z') }, null],
+    ['not_shared', { ...mac, userId: 'someone-else' }, null],
+    ['share_check_failed', { ...mac, userId: 'someone-else' }, new Error('database down')],
+  ])('logs why: %s', async (reason, binding, failure) => {
+    m.machineFindUnique.mockResolvedValue(binding)
+    if (failure) m.shared.mockRejectedValue(failure)
+    else m.shared.mockResolvedValue(null)
+    const ws = await selects({}, '&client=web')
+    expect(ws.sent()).toContainEqual({ type: 'machine_select_error', payload: { machineId: 'owner-mac', error: 'NOT_YOUR_MACHINE' } })
+    expect(m.warn).toHaveBeenCalledWith('machine_select rejected', { userId: 'owner', machineId: 'owner-mac', reason })
+  })
 })

@@ -191,6 +191,9 @@ describe('shared machines', () => {
       expect(live().map((t) => t.ms)).toEqual([15 * 60_000])
       notices[0]({ type: 'desk_changed', revision: 1 } as BackendNotice)
       expect(live().map((t) => t.ms)).toEqual([15 * 60_000])
+      // A harness shared or taken back changes no machine's sharing: every member's daemon read it again a second after each.
+      notices[0]({ type: 'machines_changed', reason: 'harness_shares' })
+      expect(live().map((t) => t.ms)).toEqual([15 * 60_000])
       notices[0]({ type: 'machines_changed', reason: 'updated' })
       expect(live().map((t) => t.ms)).toEqual([1_000])
       port.shared.mockResolvedValue([studio])

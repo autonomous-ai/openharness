@@ -40,6 +40,7 @@ export function runtimeState(value: unknown): value is RuntimeState {
   return record(value) && nullable(value.model) && nullable(value.effort) && nullable(value.cliVersion)
     && ['unknown', 'default', 'plan'].includes(value.mode as string)
     && (value.observedAt === null || (typeof value.observedAt === 'number' && Number.isFinite(value.observedAt) && Math.abs(value.observedAt) <= 8.64e15))
+    && (value.settingsEffort === undefined || label(value.settingsEffort))
 }
 
 function controlOf(value: unknown, session: RuntimeSession): RuntimeControl | undefined | null {
@@ -66,8 +67,9 @@ export function runtimeContext(value: unknown, engine: ReaderEngine): RuntimeCon
     cwd: s.cwd, transcriptPath: s.transcriptPath, ...(s.codexHome === undefined ? {} : { codexHome: s.codexHome }) }
   const control = controlOf(value.control, session)
   if (control === null) return null
-  const { model, effort, mode, cliVersion, observedAt } = value.state
-  return { session, state: { model, effort, mode, cliVersion, observedAt }, ...(control ? { control } : {}) }
+  const { model, effort, mode, cliVersion, observedAt, settingsEffort } = value.state
+  return { session, state: { model, effort, mode, cliVersion, observedAt, ...(settingsEffort === undefined ? {} : { settingsEffort }) },
+    ...(control ? { control } : {}) }
 }
 
 export function runtimeRecord(value: unknown): value is RuntimeRecord {

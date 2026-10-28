@@ -185,7 +185,7 @@ function attachUserClient(ws: WebSocket, user: AuthUser, surface: 'mobile' | 'we
   // registry-driven sweep can't see it — it would be killed by LB idle timeouts, or never reaped when
   // dead. This used to be a second heartbeat loop here, carefully disabled while attached so the two
   // sweeps couldn't race; the hub now tracks the socket itself, which is one sweep for both states.
-  const releaseLiveness = trackSocketLiveness(ws)
+  const releaseLiveness = trackSocketLiveness(ws, 'web')
 
   // ── Live Machines-list feed ──────────────────────────────────────────────────────────────────
   // Subscribe node_status for EVERY agent the user owns and forward it tagged with the machineId (the
@@ -354,11 +354,15 @@ function attachUserClient(ws: WebSocket, user: AuthUser, surface: 'mobile' | 'we
     if (closed || gen !== selectGen) return // superseded by a newer select
     // Another account's machine is selected only while it is shared with this one (lib/machineAccess.ts),
     // with the same rights as the owner's own; its daemon decides again whether to trust this account.
+    let shareCheckFailed = false
     const shared = binding && !binding.deletedAt && binding.userId !== user.sub
-      ? await sharedMachineAccess(user, binding).catch(() => null) : null
+      ? await sharedMachineAccess(user, binding).catch(() => { shareCheckFailed = true; return null }) : null
     if (closed || gen !== selectGen) return
     if (!binding || binding.deletedAt || (binding.userId !== user.sub && !shared)) {
-      logger.warn('machine_select rejected', { userId: user.sub, machineId })
+      // About 45 an hour in prod said nothing more (2026-10-28): a machine removed since, or one no longer shared, is the
+      // client's stale list; a failed share check is ours.
+      const reason = !binding ? 'unknown' : binding.deletedAt ? 'deleted' : shareCheckFailed ? 'share_check_failed' : 'not_shared'
+      logger.warn('machine_select rejected', { userId: user.sub, machineId, reason })
       send({ type: 'machine_select_error', payload: { machineId: machineId, error: 'NOT_YOUR_MACHINE' } })
       return
     }
