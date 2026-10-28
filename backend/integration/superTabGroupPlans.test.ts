@@ -13,6 +13,7 @@ import { HostReads } from '../src/superTabs/read/host.js'
 import { OVERLAP_MS } from '../src/superTabs/read/cursor.js'
 import * as parts from '../src/superTabs/parts/index.js'
 import { recentDormantGroups } from '../src/superTabs/leaderboard/read.js'
+import { decisionsWaiting, listDecisions } from '../src/superTabs/decisions.js'
 import { GROUP_INDEX, groupsBy, listGroupIndexes } from '../src/superTabs/parts/indexed.js'
 import { logger } from '../src/utils/logger.js'
 import type { SuperTabState } from '../src/superTabs/model.js'
@@ -68,7 +69,12 @@ async function scene() {
   const worker = s.add('worker-harness', web, false, ownerActor, machineId, owner.sub)
   s.run({ type: 'work.assign', conversationId: web, agentId: worker })
   const done = s.group('Done work')
-  s.edit(state => { state.projects![0]!.digest = { time: '00:00', timeZone: 'UTC' } })
+  // A Reviewer kept for more work, in the conversations that go quiet below: the Lead's poll reads those (store.ts fullDeliveries).
+  const reviewer = s.add('reviewer-harness', done, false, ownerActor, machineId, owner.sub)
+  s.edit(state => {
+    state.projects![0]!.digest = { time: '00:00', timeZone: 'UTC' }
+    Object.assign(state.agents.find(a => a.id === reviewer)!, { role: 'reviewer', workDecision: 'keep' })
+  })
   const tabId = `tab-${randomUUID()}`
   const state = { ...structuredClone(s.state), id: tabId } as SuperTabState
   await writeLegacySwarm(db, { state, revision: 700, messages: [] })
@@ -85,7 +91,7 @@ async function scene() {
   // Every project's Lead conversation and the Leads' one: a host's light load always reads them (parts/light.ts).
   const leadConversations = [...state.projects!.map(p => p.leadConversationId), ...state.leadsConversationId ? [state.leadsConversationId] : []]
   const active = [...leadConversations, web, done, ...open.map(r => r.key)]
-  return { tabId, machineId, lead, worker, web, done, other, empty, quietLead, quietOther, leadConversations, active }
+  return { tabId, machineId, lead, worker, reviewer, web, done, other, empty, quietLead, quietOther, leadConversations, active }
 }
 
 /** One read as the profiler saw it: its command and every getMore (they share a query hash). */
@@ -191,6 +197,37 @@ describe('hot SwarmGroup reads name their index and read only what they return (
     expectOnlyReturned(reads)
   })
 
+  it('the mentions panel reads a tagged quiet conversation by id, never every quiet conversation', async () => {
+    const tagged = s.quietLead[3]!.key
+    await db.superTabMention.create({ data: { id: `${s.tabId}-tag`, tabId: s.tabId, personId: owner.sub, projectId: 'lead', conversationId: tagged,
+      messageId: `${s.tabId}-tagged`, authorAgentId: s.lead, createdAt: new Date(Date.now() - 60_000) } })
+    let listed: Array<{ conversationId: string }> = []
+    const reads = await profiled(async () => { listed = (await store.mentions(owner, s.tabId, 'waiting')).mentions })
+    expect(listed.map(m => m.conversationId)).toEqual([tagged])
+    expectIndexed(reads)
+    expectOnlyReturned(reads)
+    // The open conversations and the tagged one, at most: never the Swarm's QUIET_LEAD + QUIET_OTHER quiet ones.
+    expect(reads.reduce((n, r) => n + r.docsExamined, 0), JSON.stringify(reads)).toBeLessThanOrEqual(s.active.length + 1)
+  })
+
+  it('a person\'s decisions read the quiet conversations they wait in by id', async () => {
+    const quiet = s.quietLead[4]!.key
+    await db.superTabDecision.create({ data: { id: `${s.tabId}-ask`, tabId: s.tabId, batchId: 'b', projectId: 'lead', conversationId: quiet, personId: owner.sub,
+      askerAgentId: s.lead, question: 'Which?', options: ['A', 'B'], recommended: 0, unblocks: 'Work', createdAt: new Date(MIGRATED) } })
+    const state = parts.reassemble(await db.$transaction(tx => parts.loadActive(tx, s.tabId)))
+    const actor = { kind: 'person' as const, userId: owner.sub, email: owner.email }
+    let count = 0, listed: Array<{ conversationId: string }> = []
+    const reads = await profiled(async () => {
+      count = (await db.$transaction(tx => decisionsWaiting(tx, s.tabId, state, actor))).count
+      listed = await db.$transaction(tx => listDecisions(tx, s.tabId, state, actor, true)) as Array<{ conversationId: string }>
+    })
+    expect(count).toBe(1)
+    expect(listed.map(d => d.conversationId)).toEqual([quiet])
+    expect(reads.length).toBeGreaterThan(0)
+    expectIndexed(reads)
+    expectOnlyReturned(reads)
+  })
+
   it('the leaderboard reads a project\'s quiet conversations of the weeks it sums, and only those', async () => {
     const since = MIGRATED - 13 * DAY
     const recent = (rows: typeof s.quietLead) => rows.filter(r => r.lastActivityAt.getTime() >= since).map(r => r.key).sort()
@@ -204,14 +241,23 @@ describe('hot SwarmGroup reads name their index and read only what they return (
     }
   })
 
-  it('a due digest reads the quiet conversations its project finished since the last one, and only those', async () => {
+  it('a Lead\'s poll with a digest due reads the quiet conversations its project finished since the last one, and those its Reviewers are in, by index', async () => {
     clock = MIGRATED + 60_000
     const expected = s.quietLead.filter(r => r.lastActivityAt.getTime() >= clock - DAY).length
-    const reads = where(await profiled(() => store.deliveries(owner, s.tabId, s.lead)), ['tabId', 'dormant', 'lastActivityAt'])
+    const all = await profiled(() => store.deliveries(owner, s.tabId, s.lead))
+    const reads = where(all, ['tabId', 'dormant', 'lastActivityAt'])
     expect(reads).toHaveLength(1)
     expectIndexed(reads)
     expect(reads[0]!.returned).toBe(expected)
     expect(reads[0]!.docsExamined, JSON.stringify(reads)).toBeLessThanOrEqual(expected)
+    // The same poll reads the quiet conversations its project's kept Reviewer is in (every quiet one here), through the
+    // Reviewer's conversations: no index has both.
+    const asleep = where(all, ['tabId', 'dormant', 'agentIds'])
+    expect(asleep).toHaveLength(1)
+    expectIndexed(asleep)
+    expect(asleep[0]!.returned).toBe(s.quietLead.length + s.quietOther.length)
+    const its = await db.swarmGroup.count({ where: { tabId: s.tabId, agentIds: { has: s.reviewer } } })
+    expect(asleep[0]!.docsExamined, JSON.stringify(asleep)).toBeLessThanOrEqual(its)
   })
 
   it('the host\'s wake check finds a change that concerns its machine, reading only the conversations changed since the cursor', async () => {

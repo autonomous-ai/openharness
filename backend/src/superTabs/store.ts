@@ -1658,7 +1658,8 @@ export class SuperTabStore {
   /** The caller's own tags in this Swarm, newest first: still waiting, or answered and marked done. */
   async mentions(user: AuthUser, tabId: string, state: 'waiting' | 'earlier') {
     this.personOnly(user)
-    const { state: tab } = await this.readLoad(user, tabId, { allGroups: true })
+    // Not every quiet conversation: listMentions reads the quiet ones its tags are in by id (mentions.ts readable).
+    const { state: tab } = await this.readLoad(user, tabId)
     await this.actor(this.db, user, tab)
     return { mentions: await listMentions(this.db, tabId, tab, { kind: 'person', userId: user.sub, email: user.email }, this.now(), state === 'waiting') }
   }
@@ -1951,8 +1952,8 @@ export class SuperTabStore {
       const written = ledProject(state, agentId) ? sweepLiveness(state, this.now()) : []
       // The Lead's poll stops its project's idle workers too (tidy.ts): it is where what waits for each agent is known.
       const reviewers = led ? state.agents.filter(a => agentRole(a) === 'reviewer' && a.workDecision !== 'stop' && agentProjectId(state, a) === led.id).map(a => a.id) : []
-      const asleep = reviewers.length ? (await tx.swarmGroup.findMany({ where: { tabId, deleted: false, dormant: true, agentIds: { hasSome: reviewers } },
-        select: { data: true } })).map(row => row.data as unknown as Conversation) : []
+      const asleep = reviewers.length ? (await groupsBy(tx, 'agents', [{ $match: { tabId, deleted: false, dormant: true, agentIds: { $in: reviewers } } },
+        { $project: { _id: 0, data: 1 } }])).map(row => row.data as unknown as Conversation) : []
       const idle = led ? stopIdleWorkers(state, led.id, this.now(), new Set((await tx.superTabDelivery.findMany({
         where: { tabId, status: { in: [...OPEN_DELIVERY] } }, select: { agentId: true }, distinct: ['agentId'] })).map(d => d.agentId)), asleep) : []
       written.push(...idle)
