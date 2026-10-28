@@ -400,6 +400,22 @@ it.each(['pending', 'unconfirmed', 'created'])('preserves native %s evidence whe
   expect(f.request.mock.calls.filter(c => c[0] === 'agent_create')).toHaveLength(1)
 })
 
+// Diego's Mac, 2026-10-28: a Team account's creation sat held for the whole 15 minutes, and the start said only "pending".
+it('says what a pending native creation is held on, and nothing of a hold for one under way', async () => {
+  const f = fixture(), request = f.request.getMockImplementation()!
+  f.start.dispatched = true
+  const held = { service: 'native', detail: 'Waiting to confirm access to the selected engine executable.' }
+  let answer: Record<string, unknown> = { creationId: f.start.creationId, state: 'pending', held }
+  f.request.mockImplementation(async (type, payload) => type === 'agent_create_status' ? answer : request(type, payload))
+  const input = { action: 'resume', tabId: 'tab', startId: 'start', hostDispatch: true }
+  expect(await startAgent(input, f.scoped, where, f.open)).toMatchObject({ error: 'START_PENDING', state: 'pending', held,
+    detail: 'Waiting to confirm access to the selected engine executable. Keep this start ID. Run resume with it to check the same native creation; do not make another start request.' })
+  answer = { creationId: f.start.creationId, state: 'pending' }
+  const underWay = await startAgent(input, f.scoped, where, f.open)
+  expect(underWay).toMatchObject({ error: 'START_PENDING', state: 'pending' })
+  expect(underWay).not.toHaveProperty('held')
+})
+
 it.each([
   { error: 'CAPACITY_UNAVAILABLE', detail: 'Memory was reserved by another start.' },
   { error: 'UNSUPPORTED' },
