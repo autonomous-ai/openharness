@@ -252,8 +252,10 @@ export async function superTabRoutes(app: FastifyInstance, options: { store?: Su
       return page(`You can't push to ${named.fullName}`, 'So you can\'t approve it for this Swarm. Someone who can push to it can.', 403)
     }
     await approvals.approve(request, seen.login)
-    return page(`${named.fullName} approved`, request.scope === 'swarm'
-      ? 'Every project in this Swarm can now use it. You can go back to Harness.' : 'This project can now use it. You can go back to Harness.')
+    // Named, so the person knows which project it was for (local Team account run, 2026-10-28: 'This project can now use it').
+    const where = request.scope === 'swarm' ? 'every project in this Swarm'
+      : await store.projectNameFor(request.userId, request.autonomousEnv as AuthUser['autonomousEnv'], request.tabId, request.projectId).catch(() => null) ?? 'this project'
+    return page(`${named.fullName} approved`, `Teammates' agents in ${where} can now push to it. You can go back to Harness.`)
   })
   app.get<{ Params: z.infer<typeof machineParams> }>('/api/super-tabs/:tabId/machines/:machineId/removal', { preHandler: validateParams(machineParams) },
     (req, reply) => respond(reply, () => store.machineRemoval(req.user!, req.params.tabId, req.params.machineId)))

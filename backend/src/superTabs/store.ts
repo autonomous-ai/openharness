@@ -1757,14 +1757,23 @@ export class SuperTabStore {
    *  a private project's members only. Null when it has none yet. [approvalRequired]: whether this Swarm's projects need a
    *  repository approved before the app gives them tokens, rolled out with the team account (machines.ts
    *  `teamAccountRequired`). */
-  async projectRepository(user: AuthUser, tabId: string, projectId: string): Promise<{ repositoryUrl: string | null; approvalRequired: boolean }> {
+  async projectRepository(user: AuthUser, tabId: string, projectId: string): Promise<{ repositoryUrl: string | null; approvalRequired: boolean; name: string }> {
     return transaction(this.db, async tx => {
       const { state } = await this.load(tx, user, tabId)
       const actor = await this.actor(tx, user, state)
       const project = visibleState(state, actor, this.now()).projects?.find(p => p.id === projectId)
         ?? fail('NOT_FOUND', 'This project is unavailable.', 404)
-      return { repositoryUrl: project.repository?.repositoryUrl ?? null, approvalRequired: teamAccountRequired(state) }
+      return { repositoryUrl: project.repository?.repositoryUrl ?? null, approvalRequired: teamAccountRequired(state), name: project.name }
     })
+  }
+
+  /** A project's name as [userId] may see it now, for the page GitHub sends them back to after approving its repository
+   *  (routes/superTabs.ts). Read here, not carried in the sign-in's state, which GitHub's addresses expose (privacy review of
+   *  #1980). Null when they may not see it any more, or it is gone. */
+  async projectNameFor(userId: string, autonomousEnv: AuthUser['autonomousEnv'], tabId: string, projectId: string): Promise<string | null> {
+    const person = await this.db.user.findUnique({ where: { id: userId }, select: { email: true } })
+    if (!person) return null
+    try { return (await this.projectRepository({ sub: userId, email: person.email, role: 'user', autonomousEnv }, tabId, projectId)).name } catch { return null }
   }
 
   async machineRemoval(user: AuthUser, tabId: string, machineId: string) {
