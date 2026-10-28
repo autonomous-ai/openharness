@@ -21,7 +21,7 @@ import { readDshManifest, viewerUse, type DshManifest } from './manifest.js'
 import { PACKAGE_PATH_RE, type DshRegistryEntry } from './registry.js'
 import { catalogEntry, refreshDshRegistry } from './catalog.js'
 import { resolveDshCommand } from './materialize.js'
-import { runDshCommand } from './shell.js'
+import { dshShellAvailable, NO_GIT_BASH, runDshCommand } from './shell.js'
 import { lockDsh, dshBusy } from './lock.js'
 import { insideGitCheckout } from '../lib/gitProject.js'
 import { INSTALL_GIT_FOR_WINDOWS } from '../lib/windows/gitBash.js'
@@ -189,7 +189,7 @@ async function cloneOnce(
     // `--progress` because stderr is not a tty here and git would otherwise stay silent until the end;
     // streamed, not collected, so "Receiving objects: 39%" reaches the dialog while it is true.
     const clone = await cloneRepo(source, ref, tmpDir, false, onLine)
-    if (!clone.ok) return fail('CLONE_FAILED', clone.detail)
+    if (!clone.ok) return fail(clone.noGit ? 'GIT_UNAVAILABLE' : 'CLONE_FAILED', clone.detail)
     commit = await gitHead(tmpDir)
     revision = await gitHead(tmpDir, 'HEAD^{tree}')
   } else {
@@ -200,7 +200,7 @@ async function cloneOnce(
     // whole-repo one (the manifest at its root) and nothing else of the monorepo lands on the machine.
     const repoDir = join(root, `.tmp-${randomUUID()}`)
     const clone = await cloneRepo(source, ref, repoDir, true, onLine)
-    if (!clone.ok) return fail('CLONE_FAILED', clone.detail, repoDir)
+    if (!clone.ok) return fail(clone.noGit ? 'GIT_UNAVAILABLE' : 'CLONE_FAILED', clone.detail, repoDir)
     const sparse = await streamGit(['-C', repoDir, 'sparse-checkout', 'set', '--', path], onLine)
     if (!sparse.ok) return fail('CLONE_FAILED', sparse.detail, repoDir)
     const folder = join(repoDir, ...path.split('/'))
@@ -232,8 +232,14 @@ const GIT_ENV: NodeJS.ProcessEnv = {
   GIT_TERMINAL_PROMPT: '0',
 }
 
+/**
+ * A computer with no git at all. The Windows installer does not install Git, and 7 of the 11 Windows installs of
+ * 2026-10-28 failed in under a second as `spawn git ENOENT` under a clone failure: said as what it is instead.
+ */
+const NO_GIT = 'Git is not installed on this computer, and installing a harness needs it. Install Git, then try again.'
+
 /** Catalogs pin built-ins to the commit they describe; `git clone --branch` cannot take a SHA. */
-async function cloneRepo(source: string, ref: string | undefined, dir: string, sparse: boolean, onLine: DshInstallOptions['onLine']): Promise<{ ok: true } | { ok: false; detail: string }> {
+async function cloneRepo(source: string, ref: string | undefined, dir: string, sparse: boolean, onLine: DshInstallOptions['onLine']): Promise<GitResult> {
   if (!ref || !/^[a-f0-9]{40}$/i.test(ref)) {
     return streamGit(['clone', '--depth', '1', ...(sparse ? ['--filter=blob:none', '--sparse'] : []), '--progress', ...(ref ? ['--branch', ref] : []), '--', source, dir], onLine)
   }
@@ -252,7 +258,9 @@ async function cloneRepo(source: string, ref: string | undefined, dir: string, s
 }
 
 /** Run git, handing each stderr line (and each carriage-return progress segment) to `onLine` as it lands. */
-function streamGit(args: string[], onLine: ((line: string) => void) | undefined): Promise<{ ok: true } | { ok: false; detail: string }> {
+type GitResult = { ok: true } | { ok: false; detail: string; noGit?: true }
+
+function streamGit(args: string[], onLine: ((line: string) => void) | undefined): Promise<GitResult> {
   return new Promise((resolve) => {
     const child = spawn('git', args, { stdio: ['ignore', 'ignore', 'pipe'], env: { ...process.env, ...GIT_ENV } })
     const tail: string[] = []
@@ -271,7 +279,10 @@ function streamGit(args: string[], onLine: ((line: string) => void) | undefined)
         if (tail.length > 20) tail.shift()
       }
     })
-    child.on('error', (error) => { clearTimeout(timer); resolve({ ok: false, detail: gitStartFailure(error) }) })
+    child.on('error', (error: NodeJS.ErrnoException) => {
+      clearTimeout(timer)
+      resolve({ ok: false, detail: gitStartFailure(error), ...(error.code === 'ENOENT' ? { noGit: true as const } : {}) })
+    })
     // Exit may precede the last stderr data. Classify the failure only once
     // the pipe closes, so a retryable Git error cannot become an empty one.
     child.on('close', (code, signal) => {
@@ -287,14 +298,14 @@ function streamGit(args: string[], onLine: ((line: string) => void) | undefined)
 }
 
 /**
- * What a git that could not start is reported as. On Windows, git is not part of the system and the installer does
- * not bring it, so a missing git is the usual case there, and `spawn git ENOENT` was all a person saw (0 of 25 Windows
- * Store installs succeeded, 2026-10-28). A Mac offers its own git and Linux has a package for it: what Node said, as
- * before.
+ * What a git that could not start is reported as. A missing one is said in words (NO_GIT); on Windows, where git is
+ * not part of the system and the installer does not bring it, with where to get Git for Windows, since a person there
+ * has no package manager that offers it by name (0 of 25 Windows Store installs succeeded, 2026-10-28). Any other
+ * failure to start: what Node said.
  */
 export function gitStartFailure(error: NodeJS.ErrnoException, platform: NodeJS.Platform = process.platform): string {
-  if (platform === 'win32' && error.code === 'ENOENT') return `Git is not installed on this computer, and harnesses are installed with it. ${INSTALL_GIT_FOR_WINDOWS}`
-  return error.message
+  if (error.code !== 'ENOENT') return error.message
+  return platform === 'win32' ? `Git is not installed on this computer, and harnesses are installed with it. ${INSTALL_GIT_FOR_WINDOWS}` : NO_GIT
 }
 
 /** Put the clone (or the link) at its final path, replacing whatever an earlier install left there. */
@@ -406,6 +417,13 @@ export async function installDsh(opts: DshInstallOptions): Promise<DshInstallRes
 export async function finishInstall(resolved: InstalledDsh, opts: DshInstallOptions, recordDoctorFailure: boolean): Promise<DshInstallResult> {
   const { manifest, realDir } = resolved
   const progress = (p: DshInstallProgress): void => opts.onProgress?.(p)
+
+  // Refused before anything runs, rather than as a setup or doctor that could not start (`spawn /bin/sh ENOENT`).
+  if ((manifest.toolchain?.setup || manifest.toolchain?.doctor) && !dshShellAvailable()) {
+    const detail = NO_GIT_BASH
+    progress({ id: manifest.id, phase: 'failed', detail, error: 'SHELL_UNAVAILABLE' })
+    return { ok: false, error: 'SHELL_UNAVAILABLE', detail }
+  }
 
   const setupLines: string[] = []
   if (manifest.toolchain?.setup) {

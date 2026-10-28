@@ -113,6 +113,8 @@ export function githubSignIn(env: { GITHUB_APP_CLIENT_ID: string; GITHUB_APP_CLI
 export interface Approvals {
   approved(autonomousEnv: string, tabId: string, projectId: string, repository: string): Promise<boolean>
   approve(request: ApprovalRequest, githubLogin: string): Promise<void>
+  /** The projects of [tabId] [repository] is approved for one by one (not those approved for the whole Swarm). */
+  approvedProjects(autonomousEnv: string, tabId: string, repository: string): Promise<string[]>
 }
 
 export class PrismaApprovals implements Approvals {
@@ -121,6 +123,12 @@ export class PrismaApprovals implements Approvals {
   async approved(autonomousEnv: string, tabId: string, projectId: string, repository: string): Promise<boolean> {
     return !!await this.db.gitHubRepositoryApproval.findFirst({ where: { autonomousEnv, tabId, repository: repository.toLowerCase(),
       projectId: { in: [projectId, WHOLE_SWARM] } }, select: { id: true } })
+  }
+
+  async approvedProjects(autonomousEnv: string, tabId: string, repository: string): Promise<string[]> {
+    const rows = await this.db.gitHubRepositoryApproval.findMany({ where: { autonomousEnv, tabId, repository: repository.toLowerCase(),
+      projectId: { not: WHOLE_SWARM } }, select: { projectId: true } })
+    return rows.map(r => r.projectId)
   }
 
   async approve(request: ApprovalRequest, githubLogin: string): Promise<void> {

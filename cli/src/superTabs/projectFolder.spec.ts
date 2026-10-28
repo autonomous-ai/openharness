@@ -117,8 +117,9 @@ function hosted(answer: unknown = { github: true, token: TOKEN, repository: 'exa
     return answer
   })
   const fetch = vi.fn(async (_cwd: string, _env: NodeJS.ProcessEnv) => true)
-  return { ...f, row, start, backend, fetch,
-    ready: (team = false) => prepareSwarmStart(f.core, row, start, { backend, team, prepare: f.prepare, fetch }) }
+  const revoke = vi.fn(async (_token: string) => {})
+  return { ...f, row, start, backend, fetch, revoke,
+    ready: (team = false) => prepareSwarmStart(f.core, row, start, { backend, team, prepare: f.prepare, fetch, revoke }) }
 }
 
 describe('preparing another person\'s start with the Harness GitHub App', () => {
@@ -175,6 +176,26 @@ describe('preparing another person\'s start with the Harness GitHub App', () => 
     expect(f.prepare).toHaveBeenCalledTimes(1)
     f.prepare.mockRejectedValueOnce(new ProjectFolderError('PROJECT_EXISTS', 'taken'))
     await expect(f.ready()).rejects.toThrow('taken')
+  })
+
+  // Local Team account run, 2026-10-28: the read-only token for the clone was never revoked and stayed good for its hour.
+  it('revokes the read-only token once the clone and the fetch are done, and when they fail', async () => {
+    const f = hosted()
+    f.fetch.mockImplementationOnce(async () => { expect(f.revoke).not.toHaveBeenCalled(); return true })
+    await f.ready(true)
+    expect(f.revoke.mock.calls).toEqual([[TOKEN]])
+    const failed = hosted()
+    failed.prepare.mockRejectedValueOnce(new RepositoryAccessError('CLONE_FAILED', 'Could not access this repository.'))
+    await expect(failed.ready(true)).rejects.toThrow('could not clone')
+    expect(failed.revoke.mock.calls).toEqual([[TOKEN]])
+    // A revocation GitHub refuses fails nothing: the token still expires within the hour.
+    const refused = hosted()
+    refused.revoke.mockRejectedValueOnce(new Error('GitHub did not answer'))
+    expect(await refused.ready(true)).toEqual({ requester: 'olive@example.com' })
+    // The owner's own login prepares the owner's own project: there is no token to revoke.
+    const own = hosted({ github: false })
+    await own.ready()
+    expect(own.revoke).not.toHaveBeenCalled()
   })
 
   it('fetches into a project already on this host, and into a contribution that is not a Swarm folder, with the token', async () => {

@@ -19,7 +19,7 @@ vi.mock('node:child_process', async (importOriginal) => {
 })
 
 const { managedNodePath } = await import('../lib/nodeRuntime.js')
-const { dshNodeFallback, dshShellArgv, isKilledJobReport, isShellNoise, killProcessGroup, runDshCommand, spawnDshCommand } = await import('./shell.js')
+const { dshNodeFallback, dshShellArgv, dshShellAvailable, isKilledJobReport, isShellNoise, killProcessGroup, runDshCommand, spawnDshCommand } = await import('./shell.js')
 
 describe('dshShellArgv', () => {
   const original = process.env.SHELL
@@ -58,7 +58,7 @@ describe('dshShellArgv on Windows', () => {
 
   it('says to install Git for Windows when there is no Git Bash, instead of trying a shell that is not there', () => {
     expect(() => dshShellArgv('./doctor.sh', { platform: 'win32', gitBash: () => null }))
-      .toThrow('Setup and doctor scripts need Git Bash on Windows, and it was not found. Install Git for Windows from https://git-scm.com/download/win (or run: winget install --id Git.Git -e), then try again.')
+      .toThrow('This harness runs a setup or check script, which needs Git Bash on Windows, and it was not found. Install Git for Windows from https://git-scm.com/download/win (or run: winget install --id Git.Git -e), then try again.')
   })
 
   describe('the script it runs, in a real bash', () => {
@@ -90,6 +90,15 @@ describe('dshShellArgv on Windows', () => {
       const result = await runDshCommand('pwd', { cwd: harness, env: { HOME: home, PATH: stubs }, host: { platform: 'win32', gitBash: () => '/bin/bash' } })
       expect(result.lines).toEqual([harness])
     })
+  })
+})
+
+describe('dshShellAvailable', () => {
+  it('is on wherever there is a shell for setup and doctor: a POSIX system, or Windows with Git Bash', () => {
+    expect(dshShellAvailable({ platform: 'darwin' })).toBe(true)
+    expect(dshShellAvailable({ platform: 'linux', gitBash: () => null })).toBe(true)
+    expect(dshShellAvailable({ platform: 'win32', gitBash: () => 'C:\\Program Files\\Git\\bin\\bash.exe' })).toBe(true)
+    expect(dshShellAvailable({ platform: 'win32', gitBash: () => null })).toBe(false)
   })
 })
 

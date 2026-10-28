@@ -370,14 +370,28 @@ class _SuperTabViewState extends State<SuperTabView>
         scroll.position.extentAfter >= 40) {
       return;
     }
-    _following[id] = true;
+    _follow(id, true);
     if (_newAfter.containsKey(id)) setState(() => _newAfter.remove(id));
     c.markRead(id, through: sequence);
   }
 
+  /// Whether [id]'s list follows its end; the controller keeps a reader's
+  /// rows while they read back.
+  void _follow(String id, bool following) {
+    _following[id] = following;
+    c.readingBack(id, !following);
+  }
+
   void _jumpToLatest() {
-    _followEnd(c.selectedId);
+    final id = c.selectedId;
     _focus.requestFocus();
+    if (!c.hasNewer(id)) return _followEnd(id);
+    // More are waiting than were read: the latest page first, then its end.
+    unawaited(
+      c.showLatest(id).then((_) {
+        if (mounted && c.selectedId == id) _followEnd(id);
+      }),
+    );
   }
 
   @override
@@ -1132,22 +1146,27 @@ class _SuperTabViewState extends State<SuperTabView>
   bool get _notificationsVisible =>
       _showNotifications && !_devicesVisible && !c.accessRevoked;
 
-  /// Opens the conversation a tag is in, at its message, replying to it. Older
-  /// pages are read first, until the message is among them; one that is not
-  /// found says so, and the list stays.
+  /// Opens the conversation a tag is in, at its message, replying to it. What
+  /// is held is looked in first, then what arrived after it, then older pages,
+  /// until the message is among them; one that is not found says so, and the
+  /// list stays.
   Future<void> _openMention(SuperTabMention mention) async {
     final id = mention.conversationId;
     if (c.snapshot?.conversation(id) == null) return;
-    SuperTabMessage? message;
-    // Up to 50 pages (5,000 messages) back.
-    for (var page = 0; page < 50; page++) {
-      await c.loadMessages(id, older: c.messages(id).isNotEmpty);
+    SuperTabMessage? held() =>
+        c.messages(id).where((m) => m.id == mention.messageId).firstOrNull;
+    var message = held();
+    // The tag is what to see, not the rows read back: the first read goes up
+    // to the latest, never only a few pages below them.
+    if (message == null) c.readingBack(id, false);
+    // Up to 50 pages (5,000 messages). A tag newer than what was read earlier
+    // is after it, so the first read is up to the latest; the rest go back.
+    for (var page = 0; message == null && page < 50; page++) {
+      final older = page > 0;
+      if (older && !c.hasOlder(id)) break;
+      await c.loadMessages(id, older: older);
       if (!mounted) return;
-      message = c
-          .messages(id)
-          .where((m) => m.id == mention.messageId)
-          .firstOrNull;
-      if (message != null || !c.hasOlder(id)) break;
+      message = held();
     }
     if (message == null) {
       ScaffoldMessenger.maybeOf(context)?.showSnackBar(
@@ -1170,7 +1189,7 @@ class _SuperTabViewState extends State<SuperTabView>
       // Stop following the end: the tagged message is what to see.
       _scrollRequest++;
       _jumpingToEnd = false;
-      _following[id] = false;
+      _follow(id, false);
     });
     _revealTarget(id, 0);
     _focus.requestFocus();
@@ -1287,7 +1306,7 @@ class _SuperTabViewState extends State<SuperTabView>
       // Stop following the end: the original is what to see.
       _scrollRequest++;
       _jumpingToEnd = false;
-      _following[id] = false;
+      _follow(id, false);
     });
     _revealTarget(
       id,
@@ -2168,6 +2187,8 @@ class _SuperTabViewState extends State<SuperTabView>
     final newCount = newAfter == null
         ? 0
         : messages.where((message) => message.sequence > newAfter).length;
+    // More came than were read: the count is a floor.
+    final moreNew = c.hasNewer(c.selectedId);
     final reply = _replies[c.selectedId];
     final outgoing = c.outgoing(c.selectedId);
     // A failed message says so in its own row, with what can be done.
@@ -2242,7 +2263,7 @@ class _SuperTabViewState extends State<SuperTabView>
                         if (_jumpingToEnd) return false;
                         final id = c.selectedId;
                         final atEnd = event.metrics.extentAfter < 40;
-                        _following[id] = atEnd;
+                        _follow(id, atEnd);
                         // Once the scroll ends, so keeping the place never
                         // cuts a drag short.
                         if (event is ScrollEndNotification) {
@@ -2406,7 +2427,9 @@ class _SuperTabViewState extends State<SuperTabView>
                                     size: 16,
                                   ),
                                   label: Text(
-                                    '$newCount new ${newCount == 1 ? 'message' : 'messages'}',
+                                    moreNew
+                                        ? '$newCount+ new messages'
+                                        : '$newCount new ${newCount == 1 ? 'message' : 'messages'}',
                                   ),
                                 ),
                             ],

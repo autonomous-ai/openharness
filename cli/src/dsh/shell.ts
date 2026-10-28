@@ -96,7 +96,7 @@ export interface DshShellHost {
  * runs in the harness's folder (review of #2025).
  */
 function gitBashArgv(script: string, bash: string | null): { path: string; args: string[]; env: Record<string, string> } {
-  if (!bash) throw new Error(`Setup and doctor scripts need Git Bash on Windows, and it was not found. ${INSTALL_GIT_FOR_WINDOWS}`)
+  if (!bash) throw new Error(NO_GIT_BASH)
   const runtimeDir = shellSingleQuote(win32.dirname(managedNodePath()))
   const body = [
     'unalias node 2>/dev/null || true',
@@ -105,6 +105,19 @@ function gitBashArgv(script: string, bash: string | null): { path: string; args:
   ].join('\n')
   return { path: bash, args: ['-lic', body], env: { CHERE_INVOKING: '1' } }
 }
+
+/**
+ * Whether this computer has a shell for a DSH's commands. Every Store install on Windows failed in its setup or doctor
+ * (2026-10-28: 0 of 25 since 10-26): there was no shell there, and the `/bin/sh` fallback is not there. They run in
+ * Git Bash now (`gitBashArgv`), so Windows has one when Git for Windows is installed; without it, an install is refused
+ * before anything runs, with NO_GIT_BASH as its words.
+ */
+export function dshShellAvailable(host: DshShellHost = {}): boolean {
+  return (host.platform ?? process.platform) !== 'win32' || (host.gitBash ?? findGitBash)() !== null
+}
+
+/** What a Windows computer without Git Bash is told, as an install's refusal or as a command's one line. */
+export const NO_GIT_BASH = `This harness runs a setup or check script, which needs Git Bash on Windows, and it was not found. ${INSTALL_GIT_FOR_WINDOWS}`
 
 /**
  * The line run before a DSH's command: when the login shell's PATH has no `node`, the Node this
