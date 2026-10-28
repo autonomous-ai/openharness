@@ -1,5 +1,6 @@
 import type { BenchConfig } from './config.js'
 import type { Row, WriterRow } from './metrics.js'
+import type { Kpis, LoadKpis } from './kpi.js'
 import type { IsolatedPoll } from './probe.js'
 
 export interface Size { bytes: number; documents: number }
@@ -18,6 +19,8 @@ export interface BenchReport {
   load: { plannedMs: number; actualMs: number; skipped: Record<string, number>; ops: Row[]; writerKinds: Row[]; writers: WriterRow[]; readers: Row[] }
   state: { afterSetup: Size; afterLoad: Size }
   isolatedPolls: IsolatedPoll[]
+  /** The Stability Roadmap's numbers (kpi.ts); absent from reports made before they were measured. */
+  kpis?: { load: LoadKpis; isolated: Kpis['isolated'] | null }
 }
 
 const ms = (value: number | null) => value === null ? '–' : value.toFixed(1)
@@ -64,7 +67,19 @@ export function renderMarkdown(report: BenchReport): string {
       return [row.key, String(row.count), ms(row.p50Ms), ms(row.p95Ms), row.bytes ? kb(row.bytes.mean) : '–', row.bytes ? kb(row.bytes.p95) : '–',
         alone ? kb(alone.responseBytes) : '–', alone ? kb(alone.databaseBytesOut) : '–']
     })), '',
+    ...(report.kpis ? kpiSection(report.kpis) : []),
     '## State', '', table(['When', 'Documents', 'KB'], [
       ['After setup', String(state.afterSetup.documents), kb(state.afterSetup.bytes)], ['After the load', String(state.afterLoad.documents), kb(state.afterLoad.bytes)]]), '',
   ].join('\n')
+}
+
+function kpiSection(kpis: NonNullable<BenchReport['kpis']>): string[] {
+  const { load, isolated } = kpis
+  const rows = [['Mongo operations per second, during the load', load.mongoOpsPerSecond.toFixed(1)],
+    ['Backend CPU during the load (% of one core)', load.cpuPercent.toFixed(1)], ['Transaction retries per minute, during the load', load.retriesPerMinute.toFixed(2)],
+    ...isolated ? [['CPU per write, alone (ms)', isolated.cpuMsPerWrite.toFixed(2)], ['Mongo operations per write, alone', isolated.mongoOpsPerWrite.toFixed(1)],
+      ['Up-to-date Desktop poll, alone: p50 / p95 ms', `${ms(isolated.pollP50Ms)} / ${ms(isolated.pollP95Ms)}`],
+      ['Mongo operations per Desktop poll, alone', isolated.mongoOpsPerPoll.toFixed(1)]] : []]
+  return ['## Stability KPIs', '', `Load figures cover the whole load; the isolated ones run ${isolated?.writes ?? 0} writes (a worker's post) and ${isolated?.polls ?? 0} up-to-date Desktop polls one at a time after it.`, '',
+    table(['', ''], rows), '']
 }
