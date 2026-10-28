@@ -309,6 +309,20 @@ describe('late optional profile observations', () => {
     expect(manager.getState(agent.sessionId).effort).toBe('high')
   })
 
+  // A confirmed switch is the session's effort, even one equal to what the settings filled (#1966 delta review).
+  it.each(['effort', 'profile'] as const)('keeps a confirmed %s equal to the settings when they change', async confirmed => {
+    let configured = 'high'
+    const manager = new RuntimeProfileState(() => ({ ...claudeRuntime, configuredEffort: async () => configured })), agent = session('claude')
+    manager.hydrate(agent, [])
+    await manager.ingestConfig(agent, true)
+    expect(manager.getState(agent.sessionId).effort).toBe('high')
+    if (confirmed === 'effort') manager.confirmEffort(agent.sessionId, 'high')
+    else manager.confirmControlProfile({ id: 'target', sessionId: agent.sessionId, engine: agent.engine, model: 'opus', effort: 'high' })
+    configured = 'medium'
+    await manager.ingestConfig(agent, true)
+    expect(manager.getState(agent.sessionId).effort).toBe('high')
+  })
+
   it('does not notify for a read completed after the session was forgotten', async () => {
     vi.useFakeTimers()
     let finish!: (effort: string) => void

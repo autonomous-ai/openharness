@@ -460,9 +460,12 @@ export class ContributedMachines {
           if (this.stopped) return
           if (!identifier(start.id) || ((row.paused || pool.paused) && !start.dispatched)) continue
           const path = `/api/super-tabs/hosts/${this.machineId}/starts/${row.tabId}/${start.id}`
-          const scoped: ScopedRequest = async input => ({ ok: true, value: await this.deps.backend(this.core,
-            input.action === 'startStatus' ? 'GET' : 'POST', path,
-            input.action === 'startStatus' ? undefined : { operationId: input.operationId, command: input.command }) })
+          // The start endpoint reads this start and takes its commands, nothing else. Any other read went out as an empty
+          // command, which the backend refused with a 400 at every start (prod logs 2026-10-28).
+          const scoped: ScopedRequest = async input => input.action !== 'startStatus' && input.action !== 'command'
+            ? { error: 'HOST_UNSUPPORTED', detail: 'A contributed machine reads only its own starts.' }
+            : { ok: true, value: await this.deps.backend(this.core, input.action === 'startStatus' ? 'GET' : 'POST', path,
+              input.action === 'startStatus' ? undefined : { operationId: input.operationId, command: input.command }) }
           try {
             // The Harness Team account is not private (its owner's home folder opened again, say): a new start is refused
             // here as well as by routing, and never moved to the owner's account instead.

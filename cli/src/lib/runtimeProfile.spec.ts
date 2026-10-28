@@ -389,6 +389,47 @@ describe('RuntimeProfileManager', () => {
     expect(parseRuntimeProfile(manager.selectedModel(value))).toMatchObject({ model: 'opus', effort: 'low' })
   })
 
+  // The settings name only the effort a session starts with. Read after the transcript on attach, they replaced the
+  // effort a reply recorded with their default, so an adopted agent or a restarted daemon reported it wrong (#1966 review).
+  it.each([['another effort', 'low'], ['none', null]])('keeps the effort a reply recorded over the settings default (%s), on both attach paths', async (_, configured) => {
+    const cwd = await mkdtemp(join(tmpdir(), 'machine-runtime-'))
+    cleanup.push(cwd)
+    await mkdir(join(cwd, '.claude'))
+    if (configured) await writeFile(join(cwd, '.claude', 'settings.local.json'), JSON.stringify({ effortLevel: configured }))
+    const reply = JSON.stringify({ type: 'assistant', effort: 'medium', message: { model: 'claude-opus-5-5' } })
+
+    const read = new RuntimeProfileManager(), whole = { ...session('claude'), cwd }
+    read.hydrate(whole, [reply])
+    await read.ingestConfig(whole, true)
+    expect(parseRuntimeProfile(read.selectedModel(whole))).toMatchObject({ model: 'opus', effort: 'medium' })
+
+    const staged = new RuntimeProfileManager(), fromEnd = { ...session('claude'), cwd }
+    const stage = staged.beginHydrate(fromEnd)
+    stage.ingest(reply)
+    await stage.config!()
+    stage.commit()
+    expect(parseRuntimeProfile(staged.selectedModel(fromEnd))).toMatchObject({ model: 'opus', effort: 'medium' })
+  })
+
+  // Settings fill high, a reply (or the screen) shows high, then the settings change to medium: the session still runs
+  // high, and the row said medium (#1966 delta review). Showing an effort makes it the session's, even an equal one.
+  it.each(['a reply', 'the screen'])('keeps an effort %s showed that equals the settings when they change', async by => {
+    const cwd = await mkdtemp(join(tmpdir(), 'machine-runtime-'))
+    cleanup.push(cwd)
+    await mkdir(join(cwd, '.claude'))
+    const settings = (effortLevel: string) => writeFile(join(cwd, '.claude', 'settings.local.json'), JSON.stringify({ effortLevel }))
+    await settings('high')
+    const manager = new RuntimeProfileManager(), value = { ...session('claude'), cwd }
+    manager.hydrate(value, [JSON.stringify({ type: 'assistant', message: { model: 'claude-opus-5-5' } })])
+    await manager.ingestConfig(value, true)
+    expect(parseRuntimeProfile(manager.selectedModel(value))).toMatchObject({ effort: 'high' })
+    if (by === 'a reply') manager.ingest(value, JSON.stringify({ type: 'assistant', effort: 'high', message: { model: 'claude-opus-5-5' } }))
+    else manager.ingestPane(value, 'Opus 5.5 with high effort\n❯ ', true)
+    await settings('medium')
+    await manager.ingestConfig(value, true)
+    expect(parseRuntimeProfile(manager.selectedModel(value))).toMatchObject({ effort: 'high' })
+  })
+
   it('keeps supported Claude effort on a local model change and falls back to auto otherwise', () => {
     const manager = new RuntimeProfileManager()
     const value = session('claude')
@@ -466,6 +507,26 @@ describe('RuntimeProfileManager', () => {
     expect(parseRuntimeProfile(manager.selectedModel(value))).toMatchObject({ model: 'opus', effort: 'ultracode' })
   })
 
+  // A session launched with --effort, or adopted, never prints "Set effort level", and its banner names no effort:
+  // its Lead read as "opus unknown" in the Swarm sidebar (2026-10-28). Claude Code records the effort on each reply.
+  it('observes the effort Claude Code records on each assistant reply', () => {
+    const manager = new RuntimeProfileManager()
+    const value = session('claude')
+    const reply = (effort: unknown) => JSON.stringify({
+      type: 'assistant', effort, perTurnEffort: effort, message: { model: 'claude-opus-5-5' },
+    })
+    manager.hydrate(value, [reply('medium')])
+    expect(parseRuntimeProfile(manager.selectedModel(value))).toMatchObject({ model: 'opus', effort: 'medium' })
+
+    manager.ingest(value, reply('high'))
+    expect(parseRuntimeProfile(manager.selectedModel(value))).toMatchObject({ model: 'opus', effort: 'high' })
+
+    // A word Claude Code does not offer is not an effort: the last real one stays.
+    manager.ingest(value, reply('turbo'))
+    manager.ingest(value, reply(7))
+    expect(parseRuntimeProfile(manager.selectedModel(value))).toMatchObject({ effort: 'high' })
+  })
+
   it('observes Codex model, effort, and plan mode from rollout settings', () => {
     const manager = new RuntimeProfileManager()
     const value = session('codex')
@@ -520,6 +581,8 @@ describe('RuntimeProfileManager.transcriptFields', () => {
     expect(manager.transcriptFields(claude, assistant('<synthetic>'))).toEqual([])
     const local = (text: string) => JSON.stringify({ type: 'user', message: { role: 'user', content: `<local-command-stdout>${text}</local-command-stdout>` } })
     expect(manager.transcriptFields(claude, local('Set effort level to high'))).toEqual(['effort'])
+    expect(manager.transcriptFields(claude, JSON.stringify({ type: 'assistant', effort: 'high', message: { model: 'claude-opus-5-5' } })))
+      .toEqual(['model', 'effort'])
     expect(manager.transcriptFields(claude, JSON.stringify({ type: 'user', message: { role: 'user', content: 'plain' } }))).toEqual([])
   })
 
