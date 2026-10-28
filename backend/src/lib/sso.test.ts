@@ -7,7 +7,7 @@ const state = vi.hoisted(() => ({
 
 vi.mock('./bus.js', () => ({ pub: state }))
 
-import { consumeTx, createTx, exchangeCode, refreshAccessToken, SsoTokenError, type SsoTx } from './sso.js'
+import { consumeTx, createTx, exchangeCode, refreshAccessToken, resetSsoTokenBreakers, SsoTokenError, type SsoTx } from './sso.js'
 
 const tx: SsoTx = {
   verifier: 'verifier',
@@ -26,6 +26,7 @@ describe('SSO PKCE transaction store', () => {
 
   afterEach(() => {
     vi.unstubAllGlobals()
+    resetSsoTokenBreakers()
   })
 
   it('stores an opaque one-time id in Redis for ten minutes', async () => {
@@ -115,5 +116,24 @@ describe('SSO PKCE transaction store', () => {
     await expect(refreshAccessToken('valid', 'prod')).rejects.toMatchObject({
       code: 'TOKEN_SERVICE_UNAVAILABLE',
     } satisfies Partial<SsoTokenError>)
+  })
+
+  it('stops asking a token service that keeps failing, and answers at once that it is unavailable', async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockRejectedValue(new Error('connect ETIMEDOUT'))
+    vi.stubGlobal('fetch', fetchMock)
+    for (let i = 0; i < 5; i++) await expect(refreshAccessToken(`refresh-${i}`, 'prod')).rejects.toMatchObject({ code: 'TOKEN_SERVICE_UNAVAILABLE' })
+    const asked = fetchMock.mock.calls.length
+
+    await expect(exchangeCode('code', 'verifier', 'http://127.0.0.1:5000/callback', 'prod')).rejects.toMatchObject({ code: 'TOKEN_SERVICE_UNAVAILABLE' })
+
+    expect(fetchMock.mock.calls.length).toBe(asked)
+  })
+
+  it('does not take refused refresh tokens for an outage', async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockImplementation(async () => new Response(JSON.stringify({ error: 'invalid_grant' }), { status: 400 }))
+    vi.stubGlobal('fetch', fetchMock)
+    for (let i = 0; i < 10; i++) await expect(refreshAccessToken(`expired-${i}`, 'prod')).rejects.toMatchObject({ code: 'INVALID_GRANT' })
+
+    expect(fetchMock).toHaveBeenCalledTimes(10)
   })
 })

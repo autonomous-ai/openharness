@@ -1079,10 +1079,12 @@ describe('Super Tabs on a real Mongo replica set', () => {
     }
     expect((await store.read(owner, tab)).state.conversations.find(c => c.id === 'lead')!.lastMessageSequence).toBe(before)
     expect((await store.messages(host, tab, 'lead', {}, lead)).messages.map(m => m.text)).toEqual(['Harness updated your built-in swarm-lead skill.'])
-    // Typed through the normal claim; a hold while the input box is busy writes no row people would see.
+    // Typed through the normal claim; a hold while the input box is busy is recorded on the delivery, so the delivery pass
+    // knows its host still holds it (deliverySettle.ts), and writes no row people would see.
     const claimed = await store.delivery(host, tab, lead, deliveries[0]!.id, { type: 'claim', claimId: 'claim' })
     expect(claimed.message).toMatchObject({ text: 'Harness updated your built-in swarm-lead skill.', source: { kind: 'agent-only' } })
-    expect(await store.delivery(host, tab, lead, deliveries[0]!.id, { type: 'hold', claimId: 'claim', reason: 'team_waiting_draft' })).toEqual({ held: false })
+    expect(await store.delivery(host, tab, lead, deliveries[0]!.id, { type: 'hold', claimId: 'claim', reason: 'team_waiting_draft' })).toEqual({ held: true })
+    expect(await db.superTabDelivery.findUniqueOrThrow({ where: { id: deliveries[0]!.id } })).toMatchObject({ holdReason: 'team_waiting_draft' })
     expect((await store.messages(owner, tab, 'lead', {})).messages).toEqual([])
   })
 
@@ -3266,11 +3268,28 @@ describe('the PM\'s terminal after a private chat (final review, Critical 1)', (
     await expect(opened(host)).resolves.toMatchObject({ contextId: expect.any(String) })
   })
 
-  it('lets nobody but its machine\'s owner watch it: not a reader outside the chat, not the Swarm owner, not with an earlier share', async () => {
-    const { tab, lead, harnessId } = await privateChat()
+  it('lets every reader watch it while it is the Lead, view only: not through an ordinary share, and not once it is no longer the Lead', async () => {
+    const { tab, lead, harnessId, swarmShare, ordinaryShare } = await privateChat()
+    // Ken, 2026-10-28: a member watching the Product Manager reads the private chats it is in, and every member may.
+    expect(await observers(lead)).toEqual(expect.arrayContaining([bob.sub, owner.sub, peer.sub]))
+    const row = (await rosterRows(store, host, 'test-host')).find(t => t.tabId === tab && t.agent?.id === lead)!
+    expect(row).toMatchObject({ confidential: true, membersWatch: true })
+    for (const user of [bob, owner, peer]) expect(await store.mayObserve(user, tab, 'test-host', harnessId, host.sub)).toBe(true)
+    expect(await recipientShare(swarmShare, bob, db)).not.toBeNull()
+    // Outside the Swarm it is still its machine's person's alone.
+    expect(await recipientShare(ordinaryShare, carol, db)).toBeNull()
+    // A Lead leaves only with its project, but a state from before that rule can hold a former Lead still in the private chat.
+    const state = await storedState(tab)
+    state.conversations.find(c => c.id === 'lead')!.leadId = null
+    await saveState(tab, state)
     expect(await observers(lead)).toEqual([])
     for (const user of [bob, owner, peer]) expect(await store.mayObserve(user, tab, 'test-host', harnessId, host.sub)).toBe(false)
-    // A Builder's terminal stays watchable by the project's readers.
+    expect(await recipientShare(swarmShare, bob, db)).toBeNull()
+    expect(await store.mayObserve(host, tab, 'test-host', harnessId, host.sub)).toBe(true)
+  })
+
+  it('leaves a Builder\'s terminal to the project\'s readers', async () => {
+    const { tab } = await privateChat()
     const workerHarness = randomUUID()
     const worker = String((await run(tab, { type: 'agent.add', conversationId: 'lead', machineId: 'test-host', harnessId: workerHarness,
       name: 'Worker', configuration: config, lead: false })).result.agentId)
@@ -3366,8 +3385,9 @@ describe('the PM\'s terminal after a private chat (final review, Critical 1)', (
     // Swarm B's Lead cannot read or type into its Builder alias of Swarm A's PM.
     await expect(run(other, { type: 'agent.screen', agentId: lead }, host, otherLead)).rejects.toMatchObject({ code: 'TERMINAL_PRIVATE' })
     await expect(run(other, { type: 'agent.input', agentId: lead, keys: ['Enter'] }, host, otherLead)).rejects.toMatchObject({ code: 'TERMINAL_PRIVATE' })
-    // Shares made before the chat, opened as the observer relay opens them.
-    expect(await recipientShare(swarmShare, bob, db)).toBeNull()
+    // Shares made before the chat, opened as the observer relay opens them: Swarm A's opens for its member while the session
+    // is A's Lead (Ken, 2026-10-28); Swarm B's and the ordinary one stay closed.
+    expect(await recipientShare(swarmShare, bob, db)).not.toBeNull()
     expect(await recipientShare(ordinaryShare, carol, db)).toBeNull()
     await db.harnessShare.update({ where: { id: swarmShare }, data: { superTabId: other } })
     expect(await recipientShare(swarmShare, bob, db)).toBeNull()
@@ -3734,7 +3754,7 @@ describe('Swarm parts under concurrent writes', () => {
     expect((await db.superTabDelivery.findUniqueOrThrow({ where: { id: delivery.id } })).status).toBe('cancelled')
   })
 
-  it('writes the waiting delivery rows of a conversation archived or left by their receiver, so a claim in flight conflicts', async () => {
+  it('ends the waiting delivery rows of a conversation archived or left by their receiver, so a claim in flight conflicts', async () => {
     const { tab, lead } = await fixture()
     const { group, worker } = await workGroup(tab, 'Rows')
     const assignmentId = (await store.read(owner, tab)).state.conversations.find(c => c.id === group)!.assignment!.id
@@ -3746,13 +3766,17 @@ describe('Swarm parts under concurrent writes', () => {
     await run(tab, { type: 'conversation.agent', conversationId: group, agentId: worker, present: false, lead: false })
     const left = await row()
     expect(left.updatedAt.getTime()).toBeGreaterThan(before.updatedAt.getTime())
-    expect(left.status).toBe(before.status)
+    // Its receiver can no longer read it there: it ends now, rather than waiting unseen for good (prod watch, 2026-10-28).
+    expect(left.status).toBe('cancelled')
+    const kept = await run(tab, { type: 'message.send', conversationId: group, text: 'For the Lead.', replyTo: null, recipientIds: [] })
+    const toLead = async () => db.superTabDelivery.findFirstOrThrow({ where: { tabId: tab, messageId: kept.result.messageId as string } })
+    const open = await toLead()
     await new Promise(resolve => setTimeout(resolve, 5))
     await run(tab, { type: 'conversation.archive', conversationId: group, archived: true })
-    const archived = await row()
-    expect(archived.updatedAt.getTime()).toBeGreaterThan(left.updatedAt.getTime())
-    // Archiving keeps them for when the conversation reopens, as before.
-    expect(archived.status).toBe(before.status)
+    const archived = await toLead()
+    expect(archived.updatedAt.getTime()).toBeGreaterThan(open.updatedAt.getTime())
+    // Archiving ends them too: 6 of 9 deliveries stuck for days in prod were in archived groups.
+    expect(archived.status).toBe('cancelled')
   })
 
   it('assigns the routed agent through its finished start, without an override reason', async () => {

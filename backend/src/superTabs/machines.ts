@@ -211,6 +211,10 @@ export function teamAccountSwarm(state?: Pick<SuperTabState, 'ownerId' | 'people
  *  runs every teammate's work as one macOS user, so it serves one Workspace's teammates at a time (swarm-workspaces design). */
 export function teamWorkRefusal(pool: ContributedMachine, now: number, teamRow = false, required = teamAccountRequired(), otherWorkspace = false): TeamWorkRefusal | null {
   const reading = pool.observation, name = pool.name
+  // A Mac's Harness Team account whose machine is no longer a Team machine was removed (`harness team remove` deletes it).
+  // Its last reading stays fresh for a minute, and in that minute it read as taking teammates' work and a Lead's route
+  // named it (local Team account run, 2026-10-28).
+  if (pool.hostMachineId && !teamRow) return { code: 'TEAM_ACCOUNT_REQUIRED', reason: `The Harness Team account on ${name} was removed, ${ONLY_OWN}.` }
   if (!teamRow && reading?.sessionKind !== 'team' && !required) return null
   if (otherWorkspace) return { code: 'MACHINE_IN_OTHER_WORKSPACE', reason: `The Harness Team account on ${name} also serves another ${WORKSPACE_LABEL}'s Swarms, ${ONLY_OWN} here.` }
   if (!reading || now - reading.receivedAt > MACHINE_FRESH_MS) {

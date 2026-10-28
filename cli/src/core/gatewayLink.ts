@@ -214,7 +214,11 @@ export function createGatewayLink(deps: GatewayLinkDeps) {
 
   const http = async (type: string, payload: Record<string, unknown> = {}, waitMs?: number): Promise<HttpAnswer> => {
     const answer = await deps.call(type, payload, waitMs)
-    return typeof answer.status === 'number' ? { status: answer.status, body: record(answer.body) } : UNAVAILABLE
+    if (typeof answer.status !== 'number') return UNAVAILABLE
+    // A busy answer's Retry-After (gateway/accountHttp.ts), which the daemon passes on to the Desktop's reports.
+    const retry = answer.retryAfterMs
+    return { status: answer.status, body: record(answer.body),
+      ...(typeof retry === 'number' && Number.isFinite(retry) && retry >= 0 ? { retryAfterMs: retry } : {}) }
   }
 
   /**

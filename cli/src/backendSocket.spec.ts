@@ -4082,6 +4082,36 @@ describe('machines_changed relay', () => {
     await socket.stop()
   })
 
+  it('hands a shares notice on at a random moment within 10 s, and a burst of them once', async () => {
+    // Prod 2026-10-28: one invitation told every computer of its recipient at once, and each window read the shares list
+    // in the same second; across a Swarm's members those reads came in waves that held the backend at its pod limit.
+    vi.useFakeTimers()
+    vi.spyOn(Math, 'random').mockReturnValue(0.5)
+    const socket = relaySocket('token')
+    const frames: Array<Record<string, unknown>> = []
+    socket.registerLocalClient('local:machines', { sendFrame: (frame) => { frames.push(frame); return true }, sendBinary: () => true })
+    socket.connect()
+    const ws = wsMock.instances[0]
+    ws.open()
+    const shares = () => frames.filter((f) => f.type === 'machines_changed')
+    for (let i = 0; i < 3; i++) ws.message({ t: 'down', connId: '', frame: { type: 'machines_changed', payload: { reason: 'harness_shares' } } })
+    await vi.advanceTimersByTimeAsync(4_900)
+    expect(shares()).toEqual([])
+    await vi.advanceTimersByTimeAsync(200)
+    expect(shares()).toEqual([{ type: 'machines_changed', payload: { reason: 'harness_shares' } }])
+    // A notice after that one was handed on is handed on again: its read must come after the change it tells.
+    ws.message({ t: 'down', connId: '', frame: { type: 'machines_changed', payload: { reason: 'harness_shares' } } })
+    await vi.advanceTimersByTimeAsync(5_100)
+    expect(shares()).toHaveLength(2)
+    // Another reason is not held back.
+    ws.message({ t: 'down', connId: '', frame: { type: 'machines_changed', payload: { reason: 'renamed' } } })
+    await vi.advanceTimersByTimeAsync(0)
+    expect(shares()).toHaveLength(3)
+    await socket.unregisterLocalClient('local:machines')
+    await socket.stop()
+    vi.useRealTimers()
+  })
+
   it('relays a reason it can show and nothing else from the payload', async () => {
     const socket = relaySocket('token')
     const frames: Array<Record<string, unknown>> = []

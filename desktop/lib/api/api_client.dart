@@ -136,6 +136,15 @@ class ApiClient {
     return value != null && value > 1 ? value : 1;
   }
 
+  /// An answer's Retry-After in delta-seconds (the backend's busy answers and
+  /// the local CLI passing them on); null when absent or unreadable.
+  static Duration? retryAfter(Headers headers) {
+    final values = headers['retry-after'];
+    final value = values == null || values.isEmpty ? null : values.first.trim();
+    if (value == null || !RegExp(r'^\d{1,9}$').hasMatch(value)) return null;
+    return Duration(seconds: int.parse(value));
+  }
+
   // -- auth (proxied by the local CLI — no credential on this leg) --
   /// [onVocabulary] hears [usageVocabulary] from every answer, a refusal
   /// included; a request that got no answer says nothing.
@@ -164,11 +173,12 @@ class ApiClient {
           body is Map && body['error'] is Map
               ? (body['error'] as Map)['code']
               : null,
+          retryAfter: retryAfter(response.headers),
         );
       }
       return Map<String, dynamic>.from(body['data'] as Map);
     } on DioException catch (error) {
-      throw ProductReportFailure(switch (error.type) {
+      final measure = switch (error.type) {
         DioExceptionType.connectionTimeout ||
         DioExceptionType.sendTimeout ||
         DioExceptionType.receiveTimeout =>
@@ -176,7 +186,12 @@ class ApiClient {
         DioExceptionType.connectionError =>
           ProductHealthMeasure.reportFailureUnreachable,
         _ => ProductHealthMeasure.reportFailureOther,
-      });
+      };
+      // No answer in time, or none at all: waited out like a busy one.
+      throw ProductReportFailure(
+        measure,
+        backOff: measure != ProductHealthMeasure.reportFailureOther,
+      );
     }
   }
 
@@ -316,7 +331,10 @@ class ApiClient {
       '/api/agent-messages/tabs/${Uri.encodeComponent(tabId)}',
       data: {
         'enabled': ?enabled,
-        if (leader != null) 'leader': leader.toJson() else if (clearLeader) 'leader': null,
+        if (leader != null)
+          'leader': leader.toJson()
+        else if (clearLeader)
+          'leader': null,
       },
       options: Options(headers: {'x-adapter-local': '1'}),
     );
