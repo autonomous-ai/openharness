@@ -729,7 +729,8 @@ export class ContributedMachines {
     for (const agent of this.core.agents.live()) {
       if (agent.startedBy === 'agent' && (swarm.has(agent.agentId) || inside(agent.cwd))) {
         const answer = await (this.core.agents.closeMember?.(agent.agentId, receipts.get(agent.agentId)) ?? Promise.resolve({ error: 'UNSUPPORTED' }))
-          .catch((error: unknown) => ({ error: error instanceof Error ? error.message : String(error) }))
+          // A fixed code, not the error's own text, which can carry a full path (re-check of #2070).
+          .catch(() => ({ error: 'CLOSE_FAILED' }))
         if (typeof answer.error === 'string' && agent.cwd) refused.set(agent.cwd, answer.error)
       }
     }

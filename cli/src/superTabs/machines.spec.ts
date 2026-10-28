@@ -1769,7 +1769,8 @@ describe('removed machine cleanup', () => {
   // Review of #2070: the close's answer was thrown away, so a removal that never confirmed said nothing of why.
   it.each([
     ['refuses', (m: ReturnType<typeof machine>) => vi.mocked(m.core.agents.closeMember!).mockResolvedValue({ error: 'SERVICE_UNAVAILABLE' } as never), 'SERVICE_UNAVAILABLE'],
-    ['fails', (m: ReturnType<typeof machine>) => vi.mocked(m.core.agents.closeMember!).mockRejectedValue(new Error('core link down')), 'core link down'],
+    // Re-check of #2070: an error's own text can carry a full path, so a failed close is logged by a fixed code.
+    ['fails', (m: ReturnType<typeof machine>) => vi.mocked(m.core.agents.closeMember!).mockRejectedValue(new Error(`EACCES: ${m.recorded}`)), 'CLOSE_FAILED'],
   ])('confirms nothing, keeps the records and logs why while a Swarm agent in the clone %s to close', async (_how, fail, reason) => {
     const m = machine()
     fail(m)
