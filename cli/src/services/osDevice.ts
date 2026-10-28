@@ -15,6 +15,8 @@ import { existsSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 import { basename } from 'node:path'
 import type { CoreApi, ServiceRequests } from '../core/api.js'
+import { setTestTools, testToolsAvailable, testToolsOn } from '../agentClient/testTools.js'
+import { readMachineMcp } from '../lib/machineMcp.js'
 
 /** The requests this service answers for the apps, declared in core/api.ts for the core to route. */
 export { OS_DEVICE_REQUESTS } from '../core/api.js'
@@ -49,7 +51,7 @@ export const GH_TIMEOUT_MS = 15_000
 export const GH_INSTALL_TIMEOUT_MS = 300_000
 /** How long a GitHub sign-in waits for its code to be entered: GitHub's device codes last 15 minutes. */
 export const GITHUB_SIGN_IN_MS = 15 * 60_000
-const ACTIONS = ['update', 'check_update', 'wifi_scan','wifi_join', 'wifi_result', 'sign_out', 'password', 'ssh', 'github']
+const ACTIONS = ['update', 'check_update', 'wifi_scan','wifi_join', 'wifi_result', 'sign_out', 'password', 'ssh', 'github', 'test_tools']
 /** The most output a command run here may print before it is stopped. */
 export const MAX_OUTPUT = 1024 * 1024
 
@@ -67,7 +69,22 @@ export interface OsDeviceDeps {
   spawnDetached?: (file: string, args: readonly string[], input?: string) => void
   /** Start `gh auth login`'s device flow (a code to enter at github.com/login/device). */
   githubSignIn?: () => GithubSignIn
+  /** The test tools (agentClient/testTools.ts): whether this computer has them, whether they are on, turning them. */
+  testTools?: TestTools
   now?: () => number
+}
+
+export interface TestTools {
+  available: () => boolean
+  on: () => boolean
+  set: (on: boolean) => { on: boolean; note?: string } | { error: string }
+}
+
+/** This machine's mcp-servers.json, where `harness test-tools` turns them on and off too. */
+const machineTestTools: TestTools = {
+  available: () => testToolsAvailable(),
+  on: () => testToolsOn(readMachineMcp().servers),
+  set: (on) => setTestTools(on),
 }
 
 /** A `gh auth login` under way: the code it shows, and it ending once the code was entered (or refused). */
@@ -239,6 +256,7 @@ export function startOsDevice(_core: CoreApi, deps: OsDeviceDeps = {}): ServiceR
   const detached = deps.spawnDetached ?? spawnDetached
   const startSignIn = deps.githubSignIn ?? githubDeviceSignIn
   const now = deps.now ?? Date.now
+  const testTools = deps.testTools ?? machineTestTools
   let updateStartedAt: number | null = null
   /** The GitHub sign-in waiting for its code, and why the last one ended without signing in. */
   let signingIn: { run: GithubSignIn; code: string; url: string } | null = null
@@ -275,8 +293,18 @@ export function startOsDevice(_core: CoreApi, deps: OsDeviceDeps = {}): ServiceR
     // features: what this daemon does for a phone beyond the update and the Wi-Fi.
     return {
       harnessOs: true, update, wifi: { ssid }, hotspot, encrypted: /(^|\s)rd\.luks\.name=/.test(cmdline),
-      features: ['sign_out', 'password', 'ssh', 'github', 'check_update'],
+      // test_tools on a computer that carries them (Harness OS from the release that bundles them).
+      features: ['sign_out', 'password', 'ssh', 'github', 'check_update', ...(testTools.available() ? ['test_tools'] : [])],
     }
+  }
+
+  /** The test tools, on, off or how they are: `{ on }`, for the phone to say a running harness gets them on restart. */
+  const setTools = (payload: Payload): Payload => {
+    if (!testTools.available()) return { error: 'UNSUPPORTED_OS' }
+    if (payload.state !== 'on' && payload.state !== 'off') return { on: testTools.on() }
+    console.log(`[os-device] test tools ${payload.state}`)
+    const done = testTools.set(payload.state === 'on')
+    return 'error' in done ? { error: 'FAILED', message: done.error } : done
   }
 
   /** Check for updates now, as the timer does every 15 minutes, the OS release too: answered at once,
@@ -449,6 +477,7 @@ export function startOsDevice(_core: CoreApi, deps: OsDeviceDeps = {}): ServiceR
       try {
         if (action === 'update') return update(payload)
         if (action === 'check_update') return checkUpdate()
+        if (action === 'test_tools') return setTools(payload)
         if (action === 'wifi_scan') return await scan()
         if (action === 'wifi_join') return join(payload)
         if (action === 'sign_out') return signOut()

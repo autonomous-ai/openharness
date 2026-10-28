@@ -51,7 +51,16 @@ data['files'] = {path.name: {'sha256': hashlib.sha256(path.read_bytes()).hexdige
                  for path in sorted(folder.iterdir())}
 (folder / 'source.json').write_text(json.dumps(data, indent=2) + '\n')
 PY
+# Playwright's MCP server, from its lock and without install scripts, for `harness test-tools` (cli
+# agentClient/testTools.ts): in the package only, never in a fast runtime update.
+playwright_stage=$(mktemp -d "${TMPDIR:-/tmp}/harness-playwright-mcp.XXXXXX")
+trap 'rm -rf -- "$runtime_stage" "$playwright_stage"' EXIT
+cp os/packaging/playwright-mcp/package.json os/packaging/playwright-mcp/package-lock.json "$playwright_stage/"
+npm ci --prefix "$playwright_stage" --omit=dev --ignore-scripts --no-audit --no-fund
+node "$playwright_stage/node_modules/@playwright/mcp/cli.js" --version >/dev/null
 mkdir -p -- "$(dirname -- "$runtime_output")"
 mkdir -- "$runtime_output"
 cp "$runtime_stage/harness-tui" "$runtime_stage/cli.js" "$runtime_stage/notify.mjs" "$runtime_output/"
 cp "$runtime_stage/source.json" "$runtime_output/"
+mkdir -- "$runtime_output/playwright-mcp"
+cp -R "$playwright_stage/package.json" "$playwright_stage/node_modules" "$runtime_output/playwright-mcp/"

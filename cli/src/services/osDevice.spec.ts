@@ -191,6 +191,41 @@ describe('the Harness OS computer, managed from the phone', () => {
     expect(await ask({ action: 'update' })).toEqual({ started: true })
   })
 
+  describe('the test tools, turned on and off from the phone', () => {
+    function tools(available = true) {
+      const state = { on: false }
+      const testTools = {
+        available: () => available,
+        on: () => state.on,
+        set: vi.fn((on: boolean) => { state.on = on; return { on } }),
+      }
+      return { ...service({ testTools }), testTools }
+    }
+
+    it('names them among its features only on a computer that carries them', async () => {
+      expect(await tools().ask({ action: 'status' })).toMatchObject({ features: expect.arrayContaining(['test_tools']) })
+      expect((await tools(false).ask({ action: 'status' }) as { features: string[] }).features).not.toContain('test_tools')
+    })
+
+    it('says how they are, and turns them on and off', async () => {
+      vi.spyOn(console, 'log').mockImplementation(() => {})
+      const { ask, testTools } = tools()
+      expect(await ask({ action: 'test_tools' })).toEqual({ on: false })
+      expect(await ask({ action: 'test_tools', state: 'on' })).toEqual({ on: true })
+      expect(await ask({ action: 'test_tools' })).toEqual({ on: true })
+      expect(await ask({ action: 'test_tools', state: 'off' })).toEqual({ on: false })
+      expect(testTools.set.mock.calls).toEqual([[true], [false]])
+    })
+
+    it('answers why it could not, and nothing on a computer without them', async () => {
+      const { ask, testTools } = tools()
+      testTools.set.mockReturnValueOnce({ error: 'Fix or remove it first: not JSON' } as never)
+      expect(await ask({ action: 'test_tools', state: 'on' })).toEqual({ error: 'FAILED', message: 'Fix or remove it first: not JSON' })
+      expect(await tools(false).ask({ action: 'test_tools', state: 'on' })).toEqual({ error: 'UNSUPPORTED_OS' })
+      expect(await tools().ask({ action: 'test_tools', state: 'on' }, { local: false, owner: false })).toEqual({ error: 'OWNER_REQUIRED' })
+    })
+  })
+
   describe('checking for updates now, from the phone', () => {
     /** A computer whose check is held until [done] settles it. */
     function holding() {
