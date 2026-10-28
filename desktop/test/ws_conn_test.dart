@@ -562,6 +562,30 @@ void main() {
     expect(hub.declaredVersions, [null]);
   });
 
+  // Review of #2044: a read that never ends costs the first dial its second, not every dial after it.
+  test('after a version read times out once, later dials do not wait', () async {
+    hub = await FakeHub.start();
+    appVersionRead = Completer<void>().future;
+    addTearDown(() => appVersionRead = null);
+    WsConn dialer() => WsConn(
+      wsBaseUrl: 'ws://127.0.0.1:${hub.port}',
+      autonomousEnv: 'prod',
+      machineId: 'm1',
+      accessTokenProvider: (_, _) async => 'access-token',
+      onAuthFailure: (_) {},
+      onEvent: (_) {},
+      onStatus: (_) {},
+    );
+    final first = dialer();
+    addTearDown(first.close);
+    await first.connect();
+    conn = dialer();
+    final started = DateTime.now();
+    await conn!.connect();
+    await conn!.request('agents_list');
+    expect(DateTime.now().difference(started), lessThan(const Duration(milliseconds: 500)));
+  });
+
   test(
     'a fixed reconnect delay retries at that pace instead of backing off',
     () async {

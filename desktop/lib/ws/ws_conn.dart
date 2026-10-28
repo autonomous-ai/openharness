@@ -412,7 +412,13 @@ class WsConn {
       } else {
         final versionRead = appVersionRead;
         if (versionRead != null && declaredAppVersion == null) {
-          await versionRead.timeout(_appVersionWait, onTimeout: () {});
+          await versionRead.timeout(
+            _appVersionWait,
+            // Waited out once: a read that never ends must not hold every later dial too.
+            onTimeout: () {
+              if (identical(appVersionRead, versionRead)) appVersionRead = null;
+            },
+          );
           if (_closing) return;
         }
         final base = Uri.parse(
