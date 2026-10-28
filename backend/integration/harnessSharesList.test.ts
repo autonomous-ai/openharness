@@ -199,14 +199,15 @@ describe('the harness shares list as permissions change', () => {
     const agents: Record<string, string> = {}
     const shares: Record<string, { name: string; to: AuthUser }> = {}
     /** Adds agent `name` to `conversationId` on the host's machine through the owner's grant, and shares it with both members. */
-    const shared = async (name: string, conversationId = 'lead', lead = false, [machine, machineOwner] = ['grant-host', host] as const) => {
+    const shared = async (name: string, conversationId = 'lead', lead = false, [machine, machineOwner] = ['grant-host', host] as const,
+      claimedOwner: AuthUser = machineOwner) => {
       const harnessId = `perm-${n}-${name}`
       agents[name] = (await run({ type: 'agent.add', conversationId, machineId: machine, harnessId, name: `Builder ${name}`,
         configuration: AGENT_CONFIGURATION, lead })).result.agentId as string
       for (const to of [a, b]) {
         const id = randomUUID()
         shares[id] = { name, to }
-        await db.harnessShare.create({ data: { id, superTabId: tab, ownerId: machineOwner.sub, machineId: machine, agentId: harnessId,
+        await db.harnessShare.create({ data: { id, superTabId: tab, ownerId: claimedOwner.sub, machineId: machine, agentId: harnessId,
           recipientEmail: to.email, autonomousEnv: 'prod', name, ownerPublicKey: 'fixture-key', expiresAt: new Date(Date.now() + 86_400_000), revokedAt: null } })
       }
     }
@@ -272,6 +273,28 @@ describe('the harness shares list as permissions change', () => {
     await database.db.machineShare.update({ where: { machineId: 'grant-host' }, data: { emails: [] } })
     expect([await sees(b), await sees(a)]).toEqual(['Z', 'Z'])
     await database.db.machineShare.update({ where: { machineId: 'grant-host' }, data: { emails: [owner.email] } })
+    expect([await sees(a), await sees(b)]).toEqual(['XYZ', 'XYZ'])
+  })
+
+  it('hides the Swarm from a member taken out of its Workspace, and only from them', async () => {
+    const { tab, sees } = await swarmWithShares()
+    expect([await sees(a), await sees(b)]).toEqual(['XYZ', 'XYZ'])
+    const { workspaceId } = await database.db.superTab.findUniqueOrThrow({ where: { id: tab }, select: { workspaceId: true } })
+    await database.db.swarmWorkspaceMember.update({ where: { id: `${workspaceId}:${b.sub}` }, data: { removedAt: new Date(), removedBy: owner.sub } })
+    expect([await sees(b), await sees(a)]).toEqual(['', 'XYZ'])
+  })
+
+  it('hides an agent its contributor must share again, as when they left and came back', async () => {
+    const { tab, agents, sees } = await swarmWithShares()
+    // Written before any list of this Swarm, so no read holds the agent as it was.
+    const part = await database.db.swarmAgent.findFirstOrThrow({ where: { tabId: tab, key: agents.X! } })
+    await database.db.swarmAgent.update({ where: { id: part.id }, data: { data: { ...part.data as object, membershipGeneration: 'an-earlier-membership' } } })
+    expect([await sees(a), await sees(b)]).toEqual(['YZ', 'YZ'])
+  })
+
+  it('hides a share whose owner is not the machine\'s owner, though it names a session of the Swarm', async () => {
+    const { shared, sees } = await swarmWithShares()
+    await shared('V', 'lead', false, ['grant-host', host], owner)
     expect([await sees(a), await sees(b)]).toEqual(['XYZ', 'XYZ'])
   })
 })
