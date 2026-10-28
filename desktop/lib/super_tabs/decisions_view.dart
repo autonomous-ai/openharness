@@ -214,7 +214,7 @@ class SuperTabDecisionCard extends StatelessWidget {
   /// Its answer did not reach the backend: said on the card it was sent
   /// from, with Retry, wherever the card is shown.
   Widget _failed() => Padding(
-    padding: const EdgeInsets.only(top: 6),
+    padding: EdgeInsets.only(top: grid.AppControl.menuGap),
     child: Wrap(
       crossAxisAlignment: WrapCrossAlignment.center,
       spacing: 4,
