@@ -4,6 +4,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import Fastify, { type FastifyInstance } from 'fastify'
 import type { PrismaClient } from '@prisma/client'
 import type { AuthUser } from '../src/lib/ssoAuth.js'
+import type { Command } from '../src/superTabs/commands.js'
 import { localDatabase, type LocalDatabase } from './bench/mongo.js'
 import { DEFAULT_CONFIG } from './bench/config.js'
 import { DRIVERS } from './bench/bench.js'
@@ -29,12 +30,15 @@ let database: LocalDatabase
 let app: FastifyInstance
 let swarm: Swarm
 let recipient: AuthUser
+/** Who the next list call is made as. */
+let viewer: AuthUser
 /** The shares the recipient must be listed, by hand: each worker not on its own machine, and the ordinary share. */
 let expected: string[]
 /** Every share addressed to the recipient that the list must leave out, by why. */
 let hidden: Record<string, string>
 
-const list = async () => {
+const list = async (as: AuthUser = recipient) => {
+  viewer = as
   const res = await app.inject({ method: 'GET', url: '/api/harness-shares' })
   expect(res.statusCode).toBe(200)
   return (res.json().data.machines as Array<{ machineId: string; shares: Array<{ id: string }> }>)
@@ -108,7 +112,7 @@ beforeAll(async () => {
   await share(randomUUID(), { superTabId: swarm.tabId, owner: 2, agentId: swarm.workers.find(w => w.machine === 2)!.harnessId, recipientEmail: 'someone-else@example.com' })
   app = Fastify()
   app.decorateRequest('user', null)
-  app.addHook('onRequest', async req => { req.user = recipient })
+  app.addHook('onRequest', async req => { req.user = viewer })
   await app.register(harnessShareRoutes)
   await app.ready()
 }, 300_000)
@@ -155,5 +159,119 @@ describe('the harness shares list on a Swarm-sized database', () => {
       expect(read.plans.filter(p => p.includes('}, IXSCAN')), read.collection).toEqual([])
       expect(read.docsExamined, read.collection).toBeLessThanOrEqual(read.returned + 2)
     }
+  })
+})
+
+/**
+ * The list against each share asked alone (mayOpenShare), and against what each person must see by hand, as people and
+ * permissions change under a warm read cache (review of #1973): a private conversation, a private project, a Lead and its
+ * replacement, a removed member, and a machine grant taken back. Two members ask in turn, each after the other's change.
+ */
+describe('the harness shares list as permissions change', () => {
+  const fixture = (n: number): AuthUser => ({ sub: (0x200000000000000000000001n + BigInt(n)).toString(16).padStart(24, '0'),
+    email: `perm-${n}@example.com`, autonomousEnv: 'prod', role: 'user' })
+  /** The Swarm's owner, who adds every agent; the host whose machine is shared with the owner; and two members. */
+  const owner = fixture(0), host = fixture(1), a = fixture(2), b = fixture(3)
+  let store: InstanceType<typeof SuperTabStore>
+  let cases = 0
+
+  beforeAll(async () => {
+    const db = database.db
+    store = new SuperTabStore(db)
+    for (const user of [owner, host, a, b]) await db.user.create({ data: { id: user.sub, externalId: `perm-${user.sub}`, email: user.email, autonomousEnv: 'prod' } })
+    for (const [machine, user] of [['grant-host', host], ['own-host', owner]] as const) {
+      await db.machine.create({ data: { machineId: machine, userId: user.sub, apiKey: 'fixture-only', managerId: 'fixture', autonomousEnv: 'prod', authMode: 'remote' } })
+    }
+  })
+
+  /** A Swarm of the owner with both members, and three Builders shared with each member: X and Y on the host's machine
+   *  (the owner's through its grant), Z on the owner's own machine. */
+  async function swarmWithShares() {
+    const db = database.db, n = ++cases
+    await db.machineShare.upsert({ where: { machineId: 'grant-host' }, create: { machineId: 'grant-host', ownerId: host.sub, autonomousEnv: 'prod', emails: [owner.email] },
+      update: { emails: [owner.email] } })
+    const tab = (await store.create(owner, randomUUID(), `Permissions ${n}`)).id
+    const run = (command: Command, as = owner) => store.execute(as, tab, { operationId: randomUUID(), command })
+    for (const person of [a, b]) {
+      const invitation = await run({ type: 'invite.create', email: person.email, role: 'collaborator', conversationId: 'lead' })
+      await run({ type: 'invite.accept', inviteId: invitation.result.inviteId as string }, person)
+    }
+    const agents: Record<string, string> = {}
+    const shares: Record<string, { name: string; to: AuthUser }> = {}
+    /** Adds agent `name` to `conversationId` on the host's machine through the owner's grant, and shares it with both members. */
+    const shared = async (name: string, conversationId = 'lead', lead = false, [machine, machineOwner] = ['grant-host', host] as const) => {
+      const harnessId = `perm-${n}-${name}`
+      agents[name] = (await run({ type: 'agent.add', conversationId, machineId: machine, harnessId, name: `Builder ${name}`,
+        configuration: AGENT_CONFIGURATION, lead })).result.agentId as string
+      for (const to of [a, b]) {
+        const id = randomUUID()
+        shares[id] = { name, to }
+        await db.harnessShare.create({ data: { id, superTabId: tab, ownerId: machineOwner.sub, machineId: machine, agentId: harnessId,
+          recipientEmail: to.email, autonomousEnv: 'prod', name, ownerPublicKey: 'fixture-key', expiresAt: new Date(Date.now() + 86_400_000), revokedAt: null } })
+      }
+    }
+    await shared('X')
+    await shared('Y')
+    await shared('Z', 'lead', false, ['own-host', owner])
+    /** What `as` is listed of this Swarm, by agent name; first checked against each share asked alone. */
+    const sees = async (as: AuthUser) => {
+      const listed = new Set(listedIds(await list(as)))
+      const mine = Object.keys(shares).filter(id => shares[id]!.to === as)
+      const rows = await db.harnessShare.findMany({ where: { id: { in: mine } } })
+      const alone = new Set<string>()
+      for (const share of rows) if (await store.mayOpenShare(as, share)) alone.add(share.id)
+      expect(mine.filter(id => listed.has(id)).sort(), `${as.email}: the list and each share alone`).toEqual([...alone].sort())
+      return mine.filter(id => listed.has(id)).map(id => shares[id]!.name).sort().join('')
+    }
+    return { tab, run, agents, sees, shared }
+  }
+
+  it('hides the Lead from everyone, and still once it is in a private conversation that one member reads', async () => {
+    const { run, agents, sees } = await swarmWithShares()
+    expect([await sees(a), await sees(b)]).toEqual(['XYZ', 'XYZ'])
+    await run({ type: 'conversation.agent', conversationId: 'lead', agentId: agents.X!, present: true, lead: true })
+    expect([await sees(b), await sees(a)]).toEqual(['YZ', 'YZ'])
+    const chat = (await run({ type: 'conversation.create', title: 'Private', brief: 'Owner and A only.', checks: [], audience: { personIds: [owner.sub, a.sub] } }))
+      .result.conversationId as string
+    await run({ type: 'conversation.agent', conversationId: chat, agentId: agents.X!, present: true, lead: false })
+    expect([await sees(a), await sees(b)]).toEqual(['YZ', 'YZ'])
+  })
+
+  it('hides a project\'s Lead, and the next project\'s Lead once the first project is deleted', async () => {
+    // A Lead leaves only with its project (commands.ts protectLead): replacing one is a new project with a new Lead.
+    const { run, sees, shared } = await swarmWithShares()
+    const first = (await run({ type: 'project.create', name: 'First', visibility: 'public', brief: '' })).result as { projectId: string; conversationId: string }
+    await shared('L', first.conversationId, true)
+    expect([await sees(a), await sees(b)]).toEqual(['XYZ', 'XYZ'])
+    await run({ type: 'project.delete', projectId: first.projectId })
+    const next = (await run({ type: 'project.create', name: 'Next', visibility: 'public', brief: '' })).result as { projectId: string; conversationId: string }
+    await shared('M', next.conversationId, true)
+    await shared('W', next.conversationId)
+    expect([await sees(b), await sees(a)]).toEqual(['WXYZ', 'WXYZ'])
+  })
+
+  it('shows a private project only to its members, and again to everyone once it is shared', async () => {
+    const { run, sees } = await swarmWithShares()
+    expect([await sees(b), await sees(a)]).toEqual(['XYZ', 'XYZ'])
+    await run({ type: 'project.sharing', projectId: 'lead', visibility: 'private', memberIds: [owner.sub, a.sub] })
+    expect([await sees(b), await sees(a)]).toEqual(['', 'XYZ'])
+    await run({ type: 'project.sharing', projectId: 'lead', visibility: 'public', memberIds: [] })
+    expect([await sees(a), await sees(b)]).toEqual(['XYZ', 'XYZ'])
+  })
+
+  it('lists nothing of the Swarm to a removed member, and the same to the member who stays', async () => {
+    const { run, sees } = await swarmWithShares()
+    expect([await sees(a), await sees(b)]).toEqual(['XYZ', 'XYZ'])
+    await run({ type: 'member.remove', userId: b.sub })
+    expect([await sees(b), await sees(a)]).toEqual(['', 'XYZ'])
+  })
+
+  it('hides the agents a machine grant ran once the host takes it back, and only those', async () => {
+    const { sees } = await swarmWithShares()
+    expect([await sees(a), await sees(b)]).toEqual(['XYZ', 'XYZ'])
+    await database.db.machineShare.update({ where: { machineId: 'grant-host' }, data: { emails: [] } })
+    expect([await sees(b), await sees(a)]).toEqual(['Z', 'Z'])
+    await database.db.machineShare.update({ where: { machineId: 'grant-host' }, data: { emails: [owner.email] } })
+    expect([await sees(a), await sees(b)]).toEqual(['XYZ', 'XYZ'])
   })
 })
