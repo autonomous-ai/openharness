@@ -63,7 +63,12 @@ class SwarmScore {
       medianAnswerMs = _optional(_map(json['unblocked'])['medianAnswerMs']),
       lentMachines = _int(_map(json['lent'])['machines']),
       lentMs = _int(_map(json['lent'])['agentMs']),
-      streakDays = _int(json['streakDays']);
+      streakDays = _int(json['streakDays']),
+      displayName = switch (json['displayName']) {
+        final String name when name.isNotEmpty => name,
+        _ => null,
+      },
+      prevWeekPoints = _optional(json['prevWeekPoints']);
 
   final String personId;
 
@@ -76,13 +81,13 @@ class SwarmScore {
   /// machines.
   final int unblockedMs, lentMs;
   final int? medianAskToShipMs, medianAnswerMs;
-}
 
-String swarmCup(SwarmMedal medal) => switch (medal) {
-  SwarmMedal.gold => '🥇',
-  SwarmMedal.silver => '🥈',
-  SwarmMedal.bronze => '🥉',
-};
+  /// The profile name; null from a server before names.
+  final String? displayName;
+
+  /// The same scoring for the week before; null from a server before it.
+  final int? prevWeekPoints;
+}
 
 /// "6 min" under an hour, then hours with one decimal unless whole: "3 h",
 /// "3.1 h" (the desktop's `leaderboardDuration`).
@@ -97,8 +102,25 @@ String swarmDuration(int ms) {
 /// Whole agent-hours, as the points count them.
 int swarmHours(int ms) => (ms / _hour).round();
 
-/// Lent time as the board writes it: "40h".
-String swarmLentHours(int ms) => '${swarmHours(ms)}h';
+/// "8 shipped", "1 unblocked", "40 h lent": each number that would not read
+/// zero, in words (the desktop's `leaderboardNumbers`).
+List<String> swarmNumbers(SwarmScore score) {
+  final hours = swarmHours(score.lentMs);
+  return [
+    if (score.shipped > 0) '${score.shipped} shipped',
+    if (score.unblocked > 0) '${score.unblocked} unblocked',
+    if (hours > 0) '$hours h lent',
+  ];
+}
+
+/// "up 8 from last week", "down 4 …"; null when level, or from a server
+/// without last week (the desktop's `leaderboardTrend`).
+String? swarmTrend(SwarmScore score) {
+  final before = score.prevWeekPoints;
+  if (before == null || before == score.points) return null;
+  final change = score.points - before;
+  return '${change > 0 ? 'up' : 'down'} ${change.abs()} from last week';
+}
 
 String _plural(int count, String one) =>
     '$count ${count == 1 ? one : '${one}s'}';

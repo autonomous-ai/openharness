@@ -4,6 +4,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness_mobile/notify/system_notices.dart';
 import 'package:harness_mobile/settings/experimental_features.dart';
+import 'package:harness_mobile/shared/theme/app_theme.dart';
+import 'package:harness_mobile/shared/theme/app_type.dart';
+import 'package:harness_mobile/shared/widgets/touch_target.dart';
 import 'package:harness_mobile/swarm/swarm_leaderboard.dart';
 import 'package:harness_mobile/swarm/swarm_leaderboard_reader.dart';
 import 'package:harness_mobile/swarm/swarm_request.dart';
@@ -13,15 +16,33 @@ import '../theme/sheet_shape.dart';
 import '../voice_fakes.dart';
 import 'swarm_fixture.dart';
 
-/// The leaderboard page over a scripted backend: skeleton rows while it
-/// reads, each person in place with their cup or place, a week picker and a
-/// person's week in bottom sheets, and a sparkle on first place as it opens.
+/// The leaderboard page over a scripted backend, built to the design system's
+/// Numbers and rankings at phone sizes: skeleton rows while it reads, the
+/// team's total as quiet text with the week picker, then each person as a row
+/// of rank, avatar, name over their non-zero numbers, change against last
+/// week and points; a week picker and a person's week in bottom sheets.
 void main() {
   const path = '/api/super-tabs/$tab/leaderboard?projectId=$project';
   // Wednesday 28 October 2026; this week's Monday is the 26th.
   final now = DateTime.utc(2026, 10, 28, 2);
   final monday = DateTime.utc(2026, 10, 26).millisecondsSinceEpoch;
   final lastWeek = monday - swarmWeekMs;
+
+  /// This week's board: diego up from 20, ken down from 25, the viewer level,
+  /// and dee, who has left, on 0.
+  Map<String, dynamic> board() {
+    final data = leaderboardData(week: monday);
+    final people = (data['people'] as List).cast<Map<String, dynamic>>();
+    people[0]['prevWeekPoints'] = 20;
+    people[1]['prevWeekPoints'] = 25;
+    people.insert(
+      2,
+      scoreData(me, points: 5, rank: 3, medal: 'bronze', unblocked: 2)
+        ..['prevWeekPoints'] = 5,
+    );
+    people.last['rank'] = 4;
+    return data;
+  }
 
   /// One Swarm whose members are the viewer, diego and ken; dee scores on
   /// the board but has left.
@@ -37,12 +58,15 @@ void main() {
       ...firstLoad(),
       'members': [
         part(me, 1, person(me)),
-        part('diego', 1, person('diego', role: 'collaborator')),
+        part('diego', 1, {
+          ...person('diego', role: 'collaborator'),
+          'avatar': {'kind': 'preset', 'key': 'owl'},
+        }),
         part('ken', 1, person('ken', role: 'collaborator')),
       ],
     };
     fake.routes['/api/super-tabs/$tab/changes'] = (_) => changes(cursor: 'c2');
-    fake.routes[path] = (_) => leaderboardData(week: monday);
+    fake.routes[path] = (_) => board();
     fake.routes['$path&week=$lastWeek'] = (_) => leaderboardData(
       week: lastWeek,
       shipped: 11,
@@ -99,7 +123,7 @@ void main() {
     final gate = Completer<void>();
     fake.routes[path] = (_) async {
       await gate.future;
-      return leaderboardData(week: monday);
+      return board();
     };
     await pump(tester, fake);
     await tester.pump();
@@ -112,68 +136,179 @@ void main() {
 
     expect(key('swarm-leaderboard-loading'), findsNothing);
     expect(find.text('Leaderboard'), findsOneWidget);
-    // Team first: the team's week leads, the week picker in it.
+    // The team's total leads, as quiet text, with the week picker beside it.
     const team = 'swarm-leaderboard-team';
-    expect(inside(team, find.text('Team this week')), findsOneWidget);
-    expect(inside(team, find.text('🚀')), findsOneWidget);
-    expect(inside(team, find.text('19')), findsOneWidget);
-    expect(inside(team, find.text('shipped')), findsOneWidget);
-    expect(inside(team, find.text('11 shipped last week')), findsOneWidget);
+    final total = inside(
+      team,
+      find.text('19 shipped this week · 11 last week'),
+    );
+    expect(total, findsOneWidget);
+    expect(tester.widget<Text>(total).style!.fontSize, AppType.captionSize);
+    expect(tester.widget<Text>(total).style!.color, AppPalette.textSecondary);
     expect(
       inside(team, inside('swarm-leaderboard-week', find.text('This week'))),
       findsOneWidget,
     );
-    expect(find.text('Who moved it'), findsOneWidget);
     expect(
       y(tester, team),
       lessThan(y(tester, 'swarm-leaderboard-person-diego')),
     );
 
     const diego = 'swarm-leaderboard-person-diego';
-    expect(inside(diego, find.text('🥇')), findsOneWidget);
     expect(inside(diego, find.text('diego')), findsOneWidget);
-    expect(inside(diego, find.text('D')), findsOneWidget, reason: 'initial');
-    expect(inside(diego, find.text('28 pts')), findsOneWidget);
-    expect(
-      inside(diego, find.text('8 shipped · 1 unblocked · 40h lent')),
-      findsOneWidget,
-      reason: 'the stats in words',
-    );
-    expect(
-      inside('swarm-leaderboard-person-ken', find.text('🥈')),
-      findsOneWidget,
-    );
-    const dee = 'swarm-leaderboard-person-dee';
-    expect(inside(dee, find.text('Former member')), findsOneWidget);
-    expect(inside(dee, find.text('0 pts')), findsOneWidget);
-    for (final cup in ['🥇', '🥈', '🥉', '4']) {
-      expect(inside(dee, find.text(cup)), findsNothing, reason: 'no cup');
-    }
-    expect(
-      inside(dee, find.text('0 shipped · 0 unblocked · 0h lent')),
-      findsOneWidget,
-    );
-
-    expect(
-      y(tester, diego),
-      lessThan(y(tester, 'swarm-leaderboard-person-ken')),
-    );
-    expect(y(tester, 'swarm-leaderboard-person-ken'), lessThan(y(tester, dee)));
+    // The face diego chose, not the initial.
+    expect(inside(diego, find.text('🦉')), findsOneWidget);
+    expect(inside(diego, find.text('D')), findsNothing);
     expect(
       tester.getSemantics(key(diego)),
       isSemantics(
         label:
             'diego, place 1, 28 points, 8 shipped, 1 unblocked, '
-            '40 hours lent',
+            '40 hours lent, up 8 from last week',
         isButton: true,
       ),
     );
     expect(
       tester.getSize(key(diego)).height,
-      greaterThanOrEqualTo(44),
+      greaterThanOrEqualTo(minTouchTarget),
       reason: 'a thumb',
     );
+    expect(
+      y(tester, diego),
+      lessThan(y(tester, 'swarm-leaderboard-person-ken')),
+    );
+    const dee = 'swarm-leaderboard-person-dee';
+    expect(inside(dee, find.text('Former member')), findsOneWidget);
+    expect(y(tester, 'swarm-leaderboard-person-ken'), lessThan(y(tester, dee)));
     expect(fake.paths.where((p) => p.contains('/leaderboard')), [path]);
+  });
+
+  testWidgets('a bold rank in its own column and the points as the one '
+      'emphasized number, each right-aligned', (tester) async {
+    await pump(tester, backend());
+    await tester.pumpAndSettle();
+    final ids = ['diego', 'ken', me, 'dee'];
+    for (final (i, id) in ids.indexed) {
+      expect(
+        inside('swarm-leaderboard-rank-$id', find.text('${i + 1}')),
+        findsOneWidget,
+        reason: id,
+      );
+    }
+    double right(String value) => tester.getTopRight(key(value)).dx;
+    for (final id in ids) {
+      expect(
+        right('swarm-leaderboard-rank-$id'),
+        right('swarm-leaderboard-rank-diego'),
+      );
+      expect(
+        right('swarm-leaderboard-points-$id'),
+        right('swarm-leaderboard-points-diego'),
+      );
+    }
+    TextStyle style(String value, String text) =>
+        tester.widget<Text>(inside(value, find.text(text))).style!;
+    final rank = style('swarm-leaderboard-rank-diego', '1');
+    expect(rank.fontWeight, FontWeight.w700);
+    expect(rank.color, AppPalette.textSecondary);
+    expect(rank.fontFeatures, const [FontFeature.tabularFigures()]);
+    final points = style('swarm-leaderboard-points-diego', '28');
+    expect(points.fontWeight, FontWeight.w600);
+    expect(points.color, AppPalette.textPrimary);
+    expect(points.fontFeatures, const [FontFeature.tabularFigures()]);
+    expect(find.textContaining('pts'), findsNothing);
+    // No points yet: the 0 holds the column in quiet ink.
+    final zero = style('swarm-leaderboard-points-dee', '0');
+    expect(zero.color, AppPalette.textSecondary);
+    expect(zero.fontWeight, isNot(FontWeight.w600));
+  });
+
+  testWidgets('the numbers in words under the name: zeros left out, whole '
+      'items only', (tester) async {
+    await pump(tester, backend());
+    await tester.pumpAndSettle();
+    String? shown(String id) {
+      final line = key('swarm-leaderboard-meta-$id');
+      if (line.evaluate().isEmpty) return null;
+      return tester
+          .widget<Text>(find.descendant(of: line, matching: find.byType(Text)))
+          .data;
+    }
+
+    const diego = '8 shipped · 1 unblocked · 40 h lent';
+    final text = shown('diego')!;
+    expect(diego.startsWith(text), isTrue, reason: text);
+    expect(
+      text == diego || diego.substring(text.length).startsWith(' · '),
+      isTrue,
+      reason: text,
+    );
+    expect(shown('ken'), '3 shipped');
+    expect(shown(me), '2 unblocked');
+    expect(shown('dee'), isNull, reason: 'nothing to say, no line');
+    final style = tester
+        .widget<Text>(
+          find.descendant(
+            of: key('swarm-leaderboard-meta-ken'),
+            matching: find.byType(Text),
+          ),
+        )
+        .style!;
+    expect(style.fontSize, AppType.captionSize);
+    expect(style.color, AppPalette.textSecondary);
+  });
+
+  testWidgets('an arrow against last week, by shape and colour, and none '
+      'when level', (tester) async {
+    await pump(tester, backend());
+    await tester.pumpAndSettle();
+    Icon arrow(String id) => tester.widget<Icon>(
+      inside('swarm-leaderboard-trend-$id', find.byType(Icon)),
+    );
+    expect(
+      inside('swarm-leaderboard-trend-diego', find.text('8')),
+      findsOneWidget,
+    );
+    expect(arrow('diego').color, AppPalette.online);
+    expect(
+      inside('swarm-leaderboard-trend-ken', find.text('4')),
+      findsOneWidget,
+    );
+    expect(arrow('ken').icon, isNot(arrow('diego').icon));
+    final context = tester.element(key('swarm-leaderboard-trend-ken'));
+    expect(arrow('ken').color, Theme.of(context).colorScheme.error);
+    expect(key('swarm-leaderboard-trend-$me'), findsNothing);
+    expect(key('swarm-leaderboard-trend-dee'), findsNothing);
+  });
+
+  testWidgets("the viewer's own row has the selected fill, no other", (
+    tester,
+  ) async {
+    await pump(tester, backend());
+    await tester.pumpAndSettle();
+    Color? fill(String id) => tester
+        .widget<Material>(
+          find
+              .ancestor(
+                of: key('swarm-leaderboard-person-$id'),
+                matching: find.byType(Material),
+              )
+              .first,
+        )
+        .color;
+    expect(fill(me), AppSurface.selectedFill);
+    expect(fill('diego'), Colors.transparent);
+  });
+
+  testWidgets('no cups, medals, sparkles or emoji of its own', (tester) async {
+    await pump(tester, backend());
+    await tester.pump();
+    await tester.pump();
+    for (final mark in ['🥇', '🥈', '🥉', '🚀', '✨']) {
+      expect(find.textContaining(mark), findsNothing, reason: mark);
+    }
+    expect(key('swarm-leaderboard-sparkle'), findsNothing);
+    await tester.pumpAndSettle();
   });
 
   testWidgets('the week picker shows another week', (tester) async {
@@ -201,15 +336,13 @@ void main() {
       findsOneWidget,
     );
     const team = 'swarm-leaderboard-team';
-    expect(inside(team, find.text('Team last week')), findsOneWidget);
-    expect(inside(team, find.text('11')), findsOneWidget);
     expect(
-      inside(team, find.text('11 shipped the week before')),
+      inside(team, find.text('11 shipped last week · 11 the week before')),
       findsOneWidget,
     );
     expect(key('swarm-leaderboard-person-diego'), findsNothing);
     expect(
-      inside('swarm-leaderboard-person-ken', find.text('9 pts')),
+      inside('swarm-leaderboard-points-ken', find.text('9')),
       findsOneWidget,
     );
 
@@ -255,43 +388,6 @@ void main() {
     ]) {
       expect(inside(sheet, find.text(line)), findsOneWidget, reason: line);
     }
-  });
-
-  testWidgets('first place sparkles as the page opens, once', (tester) async {
-    await pump(tester, backend());
-    await tester.pump();
-    await tester.pump();
-
-    expect(
-      inside(
-        'swarm-leaderboard-person-diego',
-        key('swarm-leaderboard-sparkle'),
-      ),
-      findsOneWidget,
-    );
-
-    await tester.pumpAndSettle();
-    expect(key('swarm-leaderboard-sparkle'), findsNothing, reason: 'it ends');
-
-    await tester.tap(key('swarm-leaderboard-week'));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('Last week'));
-    await tester.pump();
-    await tester.pump();
-    expect(
-      key('swarm-leaderboard-sparkle'),
-      findsNothing,
-      reason: 'only as the page opens',
-    );
-  });
-
-  testWidgets('with Reduce Motion on, nothing sparkles', (tester) async {
-    await pump(tester, backend(), still: true);
-    await tester.pump();
-    await tester.pump();
-
-    expect(key('swarm-leaderboard-person-diego'), findsOneWidget);
-    expect(key('swarm-leaderboard-sparkle'), findsNothing);
   });
 
   testWidgets('a read that fails with nothing shown offers Try again', (
@@ -377,15 +473,21 @@ void main() {
         findsNothing,
         reason: 'the old account\'s board is gone at once',
       );
-      expect(key('swarm-leaderboard-team'), findsNothing);
+      expect(find.textContaining('shipped this week'), findsNothing);
 
       await tester.pumpAndSettle();
       expect(key('swarm-leaderboard-person-diego'), findsNothing);
       expect(
-        inside('swarm-leaderboard-person-ken', find.text('9 pts')),
+        inside('swarm-leaderboard-points-ken', find.text('9')),
         findsOneWidget,
       );
-      expect(inside('swarm-leaderboard-team', find.text('2')), findsOneWidget);
+      expect(
+        inside(
+          'swarm-leaderboard-team',
+          find.text('2 shipped this week · 11 last week'),
+        ),
+        findsOneWidget,
+      );
       expect(
         fake.paths.where((p) => p.startsWith(path)).length,
         before + 1,
