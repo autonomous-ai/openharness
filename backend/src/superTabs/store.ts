@@ -48,6 +48,7 @@ import { closeAssignment, closeUnassignedStart, readDecision, recentDecisions, t
 import { listMentions, markDone, mentionsWaiting, openTags, readMention, resolveByReply, writeMentions } from './mentions.js'
 import { answerable, fullFor, listDecisions, type DecisionList, readAskedDecision, recordAnswer, repeatOf, waitingIn, waitingInProject, writeDecisions } from './decisions.js'
 import { DEFAULT_ROUTING_POLICY, effectivePolicy, routingPolicySchema, type RoutingPolicy } from './routingPolicy.js'
+import { invitedSwarms } from './invitedSwarms.js'
 import { authenticatedEmail, authorizeSwarmJoin, configureSharing, joinSwarmSchema, requireSharingOwner,
   saveSharingSchema, sharingDetails, type JoinSwarm, type SaveSharing } from './sharing.js'
 
@@ -571,7 +572,7 @@ export class SuperTabStore {
   /** `reads`: one request's reads, shared by every agent it checks (GrantReads). */
   async agentGrant(tx: Transaction, state: SuperTabState, target: Agent, reads?: GrantReads): Promise<void> {
     const once = <T>(key: string, read: () => Promise<T>) => reads ? reads.once(key, read) : read()
-    await requireWorkspaceAccess(tx, state, target.contributorId, reads)
+    await once(`workspace:${state.workspaceId}:${target.contributorId}`, () => requireWorkspaceAccess(tx, state, target.contributorId))
     const machine = await once(machineKey(state.environment, target.machineId, target.machineOwnerId), () => tx.machine.findFirst({
       where: { machineId: target.machineId, userId: target.machineOwnerId, autonomousEnv: state.environment, ...machineAlive } }))
     if (!machine || !machineBillingAllowsDataPlane(machine)) fail('HOST_UNAVAILABLE', 'This execution host is unavailable.', 403)
@@ -687,7 +688,7 @@ export class SuperTabStore {
   async invitations(user: AuthUser) {
     this.personOnly(user)
     const email = user.email.trim().toLowerCase()
-    const rows = await this.db.superTab.findMany({ where: { autonomousEnv: user.autonomousEnv, invitedEmails: { has: email } }, take: 100, select: SWARM_ROW })
+    const rows = await invitedSwarms(this.db, user.autonomousEnv, email, 100)
     const heads = await this.heads(rows)
     return rows.flatMap(row => {
       const state = heads.get(row.id)
@@ -698,7 +699,7 @@ export class SuperTabStore {
   }
 
   /** The heads of Swarms already split into parts, by id. */
-  private async heads(rows: SwarmRow[]): Promise<Map<string, HeadData>> {
+  private async heads(rows: Array<Pick<SwarmRow, 'id' | 'format'>>): Promise<Map<string, HeadData>> {
     const heads = await this.db.swarmHead.findMany({ where: { id: { in: rows.filter(r => r.format === 2).map(r => `${r.id}:head`) } } })
     return new Map(heads.map(head => [head.tabId, head.data as unknown as HeadData]))
   }

@@ -9,7 +9,8 @@ import { MongoMemoryReplSet } from 'mongodb-memory-server-core'
 import { PrismaClient } from '@prisma/client'
 import Fastify, { type FastifyInstance } from 'fastify'
 import type { AuthUser } from '../src/lib/ssoAuth.js'
-import { ABANDONED_START_MS, SuperTabStore } from '../src/superTabs/store.js'
+import { ABANDONED_START_MS, GrantReads, SuperTabStore } from '../src/superTabs/store.js'
+import { HostReads } from '../src/superTabs/read/host.js'
 import { MemoryAttachmentStore } from '../src/superTabs/attachments.js'
 import { superTabRoutes } from '../src/routes/superTabs.js'
 import { errorHandler } from '../src/middlewares/errorHandler.js'
@@ -2574,6 +2575,29 @@ describe('grant checks of the host roster', () => {
     // Eight agents of two contributors on one machine: the read's own machine check, one share, two people, two memberships.
     expect({ machines: count('Machine.findFirst'), shares: count('MachineShare.findUnique'), contributors: count('User.findUnique'),
       memberships: count('SwarmWorkspaceMember.findUnique') }).toEqual({ machines: 1, shares: 1, contributors: 2, memberships: 2 })
+  })
+
+  it('checks agents of one contributor checked at once with one read of each lookup', async () => {
+    const { tab, add } = await sharedMachine()
+    const agents = [await add(tab, 'Peer worker 1', peer), await add(tab, 'Peer worker 2', peer), await add(tab, 'Peer worker 3', peer)]
+    const { state } = await store.read(owner, tab)
+    const { store: counting, count } = counted()
+    const reads = new GrantReads()
+    await Promise.all(agents.map(id => counting.agentGrant(counting.db, state, state.agents.find(a => a.id === id)!, reads)))
+    expect({ machines: count('Machine.findFirst'), shares: count('MachineShare.findUnique'), contributors: count('User.findUnique'),
+      memberships: count('SwarmWorkspaceMember.findUnique') }).toEqual({ machines: 1, shares: 1, contributors: 1, memberships: 1 })
+  })
+
+  it('keeps nothing between two host reads of one store: a share revoked between them drops the rows on the next', async () => {
+    const { machineId, tab, add } = await sharedMachine()
+    const mine = [await add(tab, 'Lead', owner, true), await add(tab, 'Owner worker', owner)]
+    const theirs = [await add(tab, 'Peer worker 1', peer), await add(tab, 'Peer worker 2', peer)]
+    const hosts = new HostReads(counted().store)
+    const roster = async () => agentIds((await hosts.changes(host, machineId, { full: true })).tabs.flatMap(t => 'roster' in t ? t.roster : []), tab)
+    expect(await roster()).toEqual([...mine, ...theirs].sort())
+    const before = await db.machineShare.findUniqueOrThrow({ where: { machineId } })
+    await db.machineShare.update({ where: { machineId }, data: { emails: [owner.email], grantVersions: nextMachineShareGrants(before, [owner.email], null) } })
+    expect(await roster()).toEqual(mine.sort())
   })
 
   it('still drops only the rows of a contributor whose share was revoked', async () => {
