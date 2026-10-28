@@ -1228,6 +1228,9 @@ describe('Reviewer role', () => {
       expect(toReviewer.text).toBe(`${review.brief}\n\nAcceptance checks:\n- Verdict with the reviewed revision`)
       const toLead = effects.messages.filter(m => m.conversationId === review.id && m.recipients.includes(lead))
       expect(toLead.map(m => m.text)).toEqual(['Review opened by itself for #1: Second reviewer reviews it. Cancel it here if it is not needed.'])
+      // Every row of it is the Swarm's own, written as the project's Lead as its other notices are, never as the Engineer.
+      expect(effects.messages.filter(m => m.conversationId === review.id).map(m => [m.author.kind, m.author.id, m.source?.kind]))
+        .toEqual([['agent', lead, 'auto-review'], ['agent', lead, 'auto-review'], ['agent', lead, 'auto-review']])
     })
 
     it('prefers a free Reviewer on another engine than the Engineer\'s', () => {
@@ -1255,6 +1258,19 @@ describe('Reviewer role', () => {
       const again = markReady(`Ready, head 2. ${pr}`)
       expect(reviews()).toHaveLength(1)
       expect(again.messages.map(m => m.recipients)).toEqual([[lead, reviewer]])
+    })
+
+    it('refuses a second review by hand while the open one has no verdict, naming it, and allows one once it is cancelled', () => {
+      const { f, leadActor, group, markReady, reviews } = ready()
+      markReady(`Ready. ${pr}`)
+      const open = reviews()[0]!
+      const create = () => f.run({ type: 'conversation.create', title: 'Review: Offline editing again', brief: 'Review it.', reviewOf: group,
+        checks: [{ description: 'Verdict', independent: false }] }, leadActor)
+      expect(create).toThrow(`#${open.number} Review: Offline editing already reviews this work and has no verdict yet.`)
+      expect(reviews()).toHaveLength(1)
+      f.run({ type: 'work.cancel', conversationId: open.id, assignmentId: open.assignment!.id, reason: 'Wrong Reviewer' }, leadActor)
+      create()
+      expect(reviews()).toHaveLength(2)
     })
 
     it('puts privacy first when the task or the handoff touches sharing, access or confidentiality', () => {

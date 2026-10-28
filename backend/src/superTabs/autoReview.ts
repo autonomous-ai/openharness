@@ -1,4 +1,5 @@
 import { githubRepository } from '../github/repository.js'
+import { agentDisplayName } from './agentNames.js'
 import { activeWork, agentRole, nextConversationNumber, renderWorkTask, stableId, type Agent, type Author, type Conversation, type MessageDraft, type SuperTabState } from './model.js'
 import { agentProjectId, groupProject, skillSetOf } from './projects.js'
 import { recordAsked, recordRun } from './leaderboard/record.js'
@@ -30,7 +31,8 @@ export function projectPullRequest(state: SuperTabState, group: Conversation, te
 const verdictMissing = (group: Conversation): boolean =>
   !!group.reviewOf && group.assignment?.status !== 'cancelled' && !group.checks.some(c => c.evidence)
 
-/** A review of [group] that is still open: not archived, not cancelled and with no verdict yet. */
+/** A review of [group] that is still open: not archived, not cancelled and with no verdict yet. A second review, by itself
+ *  or by hand, waits until it closes (commands.ts conversation.create). */
 export const openReviewOf = (state: SuperTabState, group: Conversation): Conversation | undefined =>
   state.conversations.find(c => c.reviewOf === group.id && !c.archived && verdictMissing(c))
 
@@ -81,10 +83,11 @@ export interface OpenedReview { review: Conversation; reviewer: Agent | null; me
  * Opens [group]'s review after its Engineer marked it ready with [handoff], which links [pullRequest]: a "Review: <title>"
  * group reviewing it, assigned to a free Reviewer that also joins [group] so it can pass the independent check, and one
  * line to the Lead, who can cancel it. With no free Reviewer the review waits, and the line asks the Lead to start one.
- * Rows are written by [author], the Engineer, as system rows.
+ * Its rows are the Swarm's own: written as the project's Lead with an auto-review source, as its lost-task and failed-start
+ * notices are (liveness.ts), never as the Engineer (#610 review); [engineer] writes them only in a group with no Lead.
  */
 export function openReview(state: SuperTabState, group: Conversation, handoff: string, pullRequest: string,
-  context: { operationId: string; now: number; author: Author; mayWork: (agent: Agent) => boolean }): OpenedReview | null {
+  context: { operationId: string; now: number; engineer: Author; mayWork: (agent: Agent) => boolean }): OpenedReview | null {
   const project = groupProject(state, group)
   // On Custom skills without a reviewer role there are no review groups (commands.ts requireCustomRole).
   if (state.paused || (skillSetOf(project) === 'custom' && !project.roles?.some(r => r.kind === 'reviewer'))) return null
@@ -96,13 +99,16 @@ export function openReview(state: SuperTabState, group: Conversation, handoff: s
   state.groupCounter = number
   const brief = briefOf(group, handoff, pullRequest, earlier)
   const leadId = group.leadId
+  const lead = state.agents.find(a => a.id === leadId)
+  const author: Author = lead ? { kind: 'agent', id: lead.id, name: lead.name, displayName: agentDisplayName(state.agents, lead.id),
+    membershipGeneration: lead.membershipGeneration } : context.engineer
   const review: Conversation = { id, ...(group.projectId ? { projectId: group.projectId } : {}), number, title: `Review: ${group.title}`.slice(0, 160),
     leadId, agentIds: leadId ? [leadId] : [], archived: false, brief, reviewOf: group.id, assignment: null, lastMessageSequence: 0,
     checks: [{ description: VERDICT_CHECK, independent: false, id: stableId(id, '0'), evidence: null, passedBy: null }] }
   state.conversations.push(review)
   recordAsked(review, group.requesterId, context.now)
   const row = (key: string, text: string, recipients: string[]): MessageDraft => ({ id: stableId(context.operationId, 'auto-review', key),
-    conversationId: id, author: context.author, text, replyTo: null, recipients, source: { kind: 'auto-review', reviewOf: group.id } })
+    conversationId: id, author, text, replyTo: null, recipients, source: { kind: 'auto-review', reviewOf: group.id } })
   const messages = [row('brief', brief, [])]
   if (reviewer) {
     review.agentIds.push(reviewer.id)

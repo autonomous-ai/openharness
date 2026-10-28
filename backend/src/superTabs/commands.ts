@@ -1078,6 +1078,9 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
           fail('REVIEW_TARGET', 'A review group reviews one build group of the same project.', 400)
         }
         requireCustomRole(project, 'reviewer')
+        // One open review at a time: a Lead on the skill text from before #610 would otherwise open one beside the Swarm's.
+        const pending = openReviewOf(state, reviewed)
+        if (pending) fail('REVIEW_OPEN', `#${pending.number} ${pending.title} already reviews this work and has no verdict yet. Cancel it first, or wait for its verdict.`)
       }
       const requesterId = command.requesterId ? requester(state, project, command.requesterId) : actor.kind === 'person' ? actor.userId : undefined
       const number = nextConversationNumber(state)
@@ -1790,7 +1793,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
         // The Engineer's own Ready for review with a pull request of the project opens its review (autoReview.ts).
         const pullRequest = command.status === 'review' && actor.kind === 'agent' && actor.agentId === assignment.agentId && !group.reviewOf
           && !group.audience && !openReviewOf(state, group) ? projectPullRequest(state, group, command.result) : null
-        const opened = pullRequest && openReview(state, group, command.result!, pullRequest, { operationId, now: context.now, author: sender,
+        const opened = pullRequest && openReview(state, group, command.result!, pullRequest, { operationId, now: context.now, engineer: sender,
           mayWork: a => !teamWorkCheck(state, a.machineId, a.contributorId, groupProject(state, group), context.now, context.teamMachines, context.otherWorkspaceMachines) })
         if (opened) effects.messages.push(...opened.messages)
         // Shipped before this command: the leaderboard marks this Done as shipped just above (recordStatus).
