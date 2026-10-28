@@ -19,7 +19,7 @@ import { join } from 'node:path'
 import { notificationReadToken, type UnreadNotification } from '../lib/notificationRead.js'
 
 import type { RegisteredSession } from '../lib/registry.js'
-import { fetchRelease, loadImage, shouldOffer } from './fwPush.js'
+import { fetchRelease, loadImage, shouldOffer, type FirmwareRelease } from './fwPush.js'
 import { routeVoiceTask, type RouterAgent, type RouterContinuity } from '../lib/voiceRouter.js'
 import { env } from '../config/env.js'
 import { FleetRouter } from '../services/fleetRouter.js'
@@ -145,6 +145,9 @@ function isPlaceholder(id: string): boolean {
   return id.startsWith('cable:')
 }
 
+/** How long a keepalive may be answered from the last manifest read — see firmwareFor. */
+const RELEASE_KEEP_MS = 30 * 60_000
+
 export class DaemonCableHost implements CableHost {
   /**
    * This host's own router: over the bare fleet it is given (its tests), or over none, for this computer
@@ -161,6 +164,9 @@ export class DaemonCableHost implements CableHost {
    * remember across a daemon restart either — that is when the registry reloads anyway.
    */
   private selected = ''
+
+  /** The last good manifest read per OTA key, for keepalives — see firmwareFor. */
+  private readonly releases = new Map<string, { release: FirmwareRelease; at: number }>()
 
   /**
    * `fleet` is a bare lane to the other machines for this host's own router — its tests give it one. A
@@ -731,9 +737,19 @@ export class DaemonCableHost implements CableHost {
    * only thing that could plug in, and a brick the moment a Pro could: its ESP32-P4 cannot run an
    * ESP32-S3 image, and the cable that would let us put it right is the firmware that just stopped.
    */
-  async firmwareFor(runningVersion: string, key: string): Promise<{ version: string; image: Buffer; sha256: string } | null> {
+  async firmwareFor(runningVersion: string, key: string, keepalive = false): Promise<{ version: string; image: Buffer; sha256: string } | null> {
     if (env.CABLE_FW_DISABLE) return null
-    const release = await fetchRelease(env.CABLE_FW_MANIFEST_URL, key)
+    // A plugged-in dial greets every fifteen seconds, and each greeting read the manifest from GCS: 240 GETs
+    // an hour per device, with the pets' sync waiting behind each one (2026-10-29). A keepalive is answered
+    // from the last good read for half an hour, so a new image reaches a dial already plugged in within that;
+    // a new dial, image or connection reads at once. A failed read is not kept, so the next greeting retries.
+    const kept = this.releases.get(key)
+    let release = keepalive && kept && Date.now() - kept.at < RELEASE_KEEP_MS ? kept.release : null
+    if (!release) {
+      release = await fetchRelease(env.CABLE_FW_MANIFEST_URL, key)
+      if (release) this.releases.set(key, { release, at: Date.now() })
+      else this.releases.delete(key)
+    }
     if (!release || !shouldOffer(runningVersion, release.version)) return null
     const image = await loadImage(release, join(env.ADAPTER_DATA_DIR, 'firmware'), key)
     if (!image) return null
