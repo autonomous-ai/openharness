@@ -1690,6 +1690,11 @@ describe('a failed start\'s reason', () => {
     // A start its machine never ran reads as that; the server's own reasons name nothing and read as they are.
     f.state.starts![0]!.error = 'Studio did not start it within 3 minutes'
     expect(read(owner)).toBe('Its machine did not start it within 3 minutes.')
+    f.state.starts![0]!.error = 'Studio was still preparing it after 15 minutes'
+    expect(read(owner)).toBe('Its machine was still preparing it after 15 minutes.')
+    f.state.starts![0]!.error = 'Studio stopped reporting while preparing it'
+    expect(read(owner)).toBe('Its machine stopped reporting while preparing it.')
+    expect(read(peer)).toBe('Studio stopped reporting while preparing it')
     f.state.starts![0]!.error = 'Its machine was removed from the Swarm.'
     expect(read(owner)).toBe('Its machine was removed from the Swarm.')
   })
