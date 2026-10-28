@@ -11,6 +11,7 @@ import 'package:harness_mobile/settings/experimental_features.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart' as grid;
 import 'package:harness_mobile/swarm/swarm_attachment_store.dart';
 import 'package:harness_mobile/swarm/swarm_conversation_page.dart';
+import 'package:harness_mobile/swarm/swarm_message_row.dart';
 import 'package:harness_mobile/swarm/swarm_session.dart';
 
 import '../test/swarm/swarm_fixture.dart';
