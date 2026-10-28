@@ -58,6 +58,9 @@ interface Entry { token: string; expiresAt: string; repository: string; assignme
 /** A token is handed out again until this long before it expires, so whoever holds it has at least that long. */
 export const REUSE_MARGIN_MS = 10 * 60_000
 const KEY_PREFIX = 'harness:github-token:v1'
+/** How long a task's end is remembered: longer than any token GitHub gives (an hour), so no mint outlives it unseen. */
+const RELEASED_MS = 70 * 60_000
+const RELEASED = 'released'
 
 export interface GitHubTokensOptions {
   now?: () => number
@@ -80,6 +83,14 @@ export class GitHubTokens {
   }
 
   private key(tabId: string, agentId: string) { return `${KEY_PREFIX}:${tabId}:${agentId}` }
+  private releasedKey(tabId: string, agentId: string, assignmentId: string) { return `${KEY_PREFIX}:released:${tabId}:${agentId}:${assignmentId}` }
+
+  /** Whether the task's end was recorded (release). A cache that cannot say is read as not ended, as before. */
+  private async released(request: TokenRequest): Promise<boolean> {
+    try { return await this.cache.get(this.releasedKey(request.tabId, request.agentId, request.assignmentId)) === RELEASED } catch { return false }
+  }
+
+  private ended(): GitHubAppError { return new GitHubAppError('NO_ASSIGNMENT', 'This agent has no task in progress.', 409) }
 
   private seal(entry: Entry): string {
     const iv = randomBytes(12)
@@ -121,6 +132,7 @@ export class GitHubTokens {
 
   private async mint(key: string, request: TokenRequest): Promise<IssuedToken> {
     const repository = request.repository.fullName
+    if (await this.released(request)) throw this.ended()
     let actual = request.repository
     const cached = await this.read(key)
     let entry: Entry | null = null
@@ -149,6 +161,14 @@ export class GitHubTokens {
           this.log.warn('[github] token not cached', { tabId: request.tabId, agentId: request.agentId, repository,
             error: error instanceof Error ? error.message : String(error) })
         }
+      }
+      // Stored first, then checked: a task ended on another instance meanwhile (release marks it, then revokes what is
+      // stored) either finds this token there or is seen here, so a token minted for an ended task never stays valid
+      // (security review of #1976: a renewal in flight across that end kept a token good for an hour).
+      if (await this.released(request)) {
+        await this.revoke(request.tabId, request.agentId, entry, 'task ended while minting')
+        if ((await this.read(key))?.token === entry.token) await this.forget(key)
+        throw this.ended()
       }
     }
     const branch = await this.app.defaultBranch(actual, entry.token)
@@ -190,6 +210,10 @@ export class GitHubTokens {
   async release(tabId: string, ended: readonly WorkHold[]): Promise<void> {
     for (const hold of ended) {
       const key = this.key(tabId, hold.agentId)
+      // Marked before the stored token is read: a mint finishing on another instance after this sees it (mint).
+      try { await this.cache.set(this.releasedKey(tabId, hold.agentId, hold.assignmentId), RELEASED, RELEASED_MS) } catch (error) {
+        this.log.warn('[github] task end not recorded', { tabId, agentId: hold.agentId, error: error instanceof Error ? error.message : String(error) })
+      }
       const entry = await this.read(key)
       if (!entry || entry.assignmentId !== hold.assignmentId) continue
       await this.revoke(tabId, hold.agentId, entry, 'task ended')

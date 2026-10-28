@@ -164,8 +164,8 @@ describe('revoking when a task ends', () => {
     await tokens.release('tab-1', [{ agentId: 'agent-1', assignmentId: 'attempt-1' }, { agentId: 'agent-2', assignmentId: 'older-attempt' },
       { agentId: 'agent-3', assignmentId: 'attempt-3' }])
     expect(github.revoked).toEqual([one.token])
-    // Forgotten: the next request for the same task mints a fresh token, and agent-2 keeps its own.
-    expect((await tokens.issue(request('attempt-1', 'agent-1'))).token).not.toBe(one.token)
+    // Forgotten, and the ended task gets no token again; agent-2 keeps its own.
+    await expect(tokens.issue(request('attempt-1', 'agent-1'))).rejects.toMatchObject({ code: 'NO_ASSIGNMENT' })
     expect((await tokens.issue(request('attempt-2', 'agent-2'))).token).toBe(two.token)
   })
 
@@ -194,6 +194,35 @@ describe('revoking when a task ends', () => {
     expect(github.revoked.sort()).toEqual([first.token, second.token].sort())
   })
 
+  // Security review of #1976: two backend instances share the cache. One ended the task and revoked the old token while the
+  // other was renewing it; the renewal then stored a new token, good for an hour, that nothing would revoke.
+  it('revokes and keeps no token minted for a task that another instance ended meanwhile', async () => {
+    let t = Date.parse('2026-10-24T12:00:00Z')
+    const now = () => t
+    const github = fakeGitHub({ publicKey: key.publicKey, appId: '424242', now })
+    github.installed.set('acme/app', 77)
+    const cache = new MemoryTokenCache(now), secret = randomBytes(32)
+    const instance = () => new GitHubTokens(fakeApp(key.privateKey, github, { now }), cache, { now, log: { warn: vi.fn() }, secret })
+    const ending = instance(), renewing = instance()
+    await renewing.issue(request())
+    t += 60 * 60_000 - REUSE_MARGIN_MS + 1000
+    // GitHub's answer to the renewal is held until the other instance has ended the task.
+    let answer!: () => void
+    const held = new Promise<void>(resolve => { answer = resolve })
+    const create = renewing.app.createToken.bind(renewing.app)
+    const minting = vi.spyOn(renewing.app, 'createToken').mockImplementation(async (...args) => { await held; return create(...args) })
+    const renewal = renewing.issue(request())
+    await vi.waitFor(() => expect(minting).toHaveBeenCalled())
+    await ending.release('tab-1', [{ agentId: 'agent-1', assignmentId: 'attempt-1' }])
+    answer()
+    await expect(renewal).rejects.toMatchObject({ code: 'NO_ASSIGNMENT' })
+    // Both tokens revoked, none kept: the ended task gets no token again on either instance.
+    expect(github.issued.size).toBe(0)
+    expect(github.revoked).toHaveLength(2)
+    await expect(ending.issue(request())).rejects.toMatchObject({ code: 'NO_ASSIGNMENT' })
+    await expect(renewing.issue(request())).rejects.toMatchObject({ code: 'NO_ASSIGNMENT' })
+  })
+
   it('logs a failed revoke without the token, drops it anyway and never throws', async () => {
     const { tokens, github, log } = setup()
     const issued = await tokens.issue(request())
@@ -203,7 +232,8 @@ describe('revoking when a task ends', () => {
       why: 'task ended', code: 'GITHUB_UNAVAILABLE' })
     expect(JSON.stringify(log.warn.mock.calls)).not.toContain(issued.token)
     github.control.revokeStatus = 204
-    expect((await tokens.issue(request())).token).not.toBe(issued.token)
+    // Dropped: the agent's next task gets a token of its own, not this one.
+    expect((await tokens.issue(request('attempt-2'))).token).not.toBe(issued.token)
   })
 
   it('refuses a sealing key of the wrong size', () => {
