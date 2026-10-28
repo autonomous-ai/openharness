@@ -17,7 +17,7 @@ export const TEAM_REAL_NAME = 'Harness Team'
  *  daemon runs as its own OS user and would find another port anyway, but a fixed one is easier to audit. */
 export const TEAM_PORT = 18493
 
-export type TeamPlatform = 'darwin' | 'linux'
+export type TeamPlatform = 'darwin' | 'linux' | 'win32'
 
 /** Where the team account and what setup makes live on one platform. Every caller reads its paths from here. */
 export interface TeamLayout {
@@ -34,7 +34,7 @@ export interface TeamLayout {
   statusDir: string
   statusFile: string
   /** What runs the team daemon as the team account from boot, and the root-owned file that defines it. */
-  service: { kind: 'launchd' | 'systemd'; label: string; file: string }
+  service: { kind: 'launchd' | 'systemd' | 'taskscheduler'; label: string; file: string }
   /** The owner's folder for the subscription relay's hand-off (./relay.ts), per owner. */
   relayDir(owner: string): string
   /** The team account's primary group. */
@@ -73,6 +73,22 @@ const LAYOUTS: Record<TeamPlatform, TeamLayout> = {
     relayDir: (owner) => `/var/lib/harness/team-relay-${owner}`,
     // Its own group, as useradd makes one: no other account shares it.
     group: TEAM_USER,
+  },
+  // docs/superpowers/plans/2026-10-28-harness-team-account-windows.md. Paths there pass checkWindowsPath, not checkPath.
+  win32: {
+    platform: 'win32',
+    // The profile Windows makes for the account.
+    home: `C:\\Users\\${TEAM_USER}`,
+    sharedDir: 'C:\\ProgramData\\Harness',
+    sharedMark: 'C:\\ProgramData\\Harness\\.made-by-harness-team-setup',
+    configFile: 'C:\\ProgramData\\Harness\\team.json',
+    statusDir: 'C:\\ProgramData\\Harness\\Team',
+    statusFile: 'C:\\ProgramData\\Harness\\Team\\status.json',
+    // A scheduled task at startup, as the team account: Task Scheduler keeps its definition in System32\Tasks.
+    service: { kind: 'taskscheduler', label: '\\Harness\\Harness Team', file: 'C:\\Windows\\System32\\Tasks\\Harness\\Harness Team' },
+    relayDir: (owner) => `C:\\ProgramData\\Harness\\team-relay-${owner}`,
+    // A member of Users only, never Administrators.
+    group: 'Users',
   },
 }
 
@@ -121,6 +137,8 @@ export function teamPaths(home: string = TEAM_HOME) {
 
 const USER = /^[a-z_][a-z0-9_.-]{0,31}$/
 const SAFE_PATH = /^\/[A-Za-z0-9._@+ /-]{0,1023}$/
+/** SAFE_PATH's characters, after a drive and with Windows' separator. */
+const WINDOWS_PATH = /^[A-Za-z]:\\[A-Za-z0-9._@+ \\-]{0,1023}$/
 const NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/
 const WS_URL = /^wss?:\/\/[A-Za-z0-9.-]{1,253}(:\d{1,5})?(\/[A-Za-z0-9._~/-]{0,200})?$/
 const HTTP_URL = /^https?:\/\/[A-Za-z0-9.-]{1,253}(:\d{1,5})?(\/[A-Za-z0-9._~/-]{0,200})?$/
@@ -143,6 +161,19 @@ export function checkPath(path: string, what = 'path'): string {
   if (!isAbsolute(path) || !SAFE_PATH.test(path) || normalize(path) !== path || path.split('/').includes('..')
     || (path.length > 1 && path.endsWith('/'))) {
     throw new TeamInputError(`the ${what} must be a plain absolute path: ${JSON.stringify(path)}`)
+  }
+  return path
+}
+
+/**
+ * A Windows absolute path of plain characters (`X:\…`), for a script run elevated: no UNC share, no `\\?\` or `\\.\`
+ * form, no forward slash, no quote, and no segment that is empty, `.` or `..`. A segment may not end in a dot or a space
+ * either: Windows drops them, so the name would mean another one.
+ */
+export function checkWindowsPath(path: string, what = 'path'): string {
+  const segments = path.slice(3).split('\\')
+  if (!WINDOWS_PATH.test(path) || (path.length > 3 && segments.some((s) => s === '' || s.endsWith('.') || s.endsWith(' ')))) {
+    throw new TeamInputError(`the ${what} must be a plain absolute Windows path: ${JSON.stringify(path)}`)
   }
   return path
 }

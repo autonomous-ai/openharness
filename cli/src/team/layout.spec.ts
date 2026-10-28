@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   TEAM_CONFIG_FILE, TEAM_HOME, TEAM_LABEL, TEAM_PLIST, TEAM_SHARED_DIR, TEAM_SHARED_MARK, TEAM_STATUS_DIR, TEAM_STATUS_FILE,
-  checkPath, teamLayout,
+  TeamInputError, checkPath, checkWindowsPath, teamLayout,
 } from './layout.js'
 
 describe('teamLayout', () => {
@@ -36,6 +36,25 @@ describe('teamLayout', () => {
     expect(teamLayout('linux')!.relayDir('owner-placeholder')).toBe('/var/lib/harness/team-relay-owner-placeholder')
   })
 
+  it('holds the Windows places on win32', () => {
+    expect({ ...teamLayout('win32')!, relayDir: undefined }).toEqual({
+      platform: 'win32',
+      home: 'C:\\Users\\harnessteam',
+      sharedDir: 'C:\\ProgramData\\Harness',
+      sharedMark: 'C:\\ProgramData\\Harness\\.made-by-harness-team-setup',
+      configFile: 'C:\\ProgramData\\Harness\\team.json',
+      statusDir: 'C:\\ProgramData\\Harness\\Team',
+      statusFile: 'C:\\ProgramData\\Harness\\Team\\status.json',
+      service: { kind: 'taskscheduler', label: '\\Harness\\Harness Team', file: 'C:\\Windows\\System32\\Tasks\\Harness\\Harness Team' },
+      relayDir: undefined,
+      group: 'Users',
+    })
+    expect(teamLayout('win32')!.relayDir('owner-placeholder')).toBe('C:\\ProgramData\\Harness\\team-relay-owner-placeholder')
+    const layout = teamLayout('win32')!
+    for (const path of [layout.home, layout.sharedDir, layout.sharedMark, layout.configFile, layout.statusDir, layout.statusFile,
+      layout.service.file, layout.relayDir('owner-placeholder')]) expect(checkWindowsPath(path)).toBe(path)
+  })
+
   it('is null on a platform with no Harness Team account', () => {
     expect(teamLayout('freebsd')).toBeNull()
     expect(teamLayout('aix')).toBeNull()
@@ -47,5 +66,23 @@ describe('teamLayout', () => {
       for (const path of [layout.home, layout.sharedDir, layout.sharedMark, layout.configFile, layout.statusDir, layout.statusFile,
         layout.service.file, layout.relayDir('owner-placeholder')]) expect(checkPath(path)).toBe(path)
     }
+  })
+})
+
+describe('checkWindowsPath', () => {
+  it('takes a plain absolute drive path', () => {
+    for (const path of ['C:\\', 'C:\\Users\\owner-placeholder', 'D:\\Work Folder\\a_b.c@d+e', 'c:\\ProgramData\\Harness\\team.json']) {
+      expect(checkWindowsPath(path)).toBe(path)
+    }
+  })
+
+  it('refuses relative, UNC, .., quoted and \\\\?\\ paths', () => {
+    const bad = [
+      'Users\\owner', 'C:Users\\owner', '\\Users\\owner', 'C:/Users/owner', // relative, drive-relative, rooted without a drive, slashes
+      '\\\\server\\share\\x', '\\\\?\\C:\\Users\\owner', '\\\\.\\C:\\x', // UNC, the long-path and device forms
+      'C:\\Users\\..\\Windows', 'C:\\Users\\.\\owner', 'C:\\Users\\\\owner', 'C:\\Users\\owner\\', // .., ., an empty segment, a trailing \
+      "C:\\Users\\o'brien", 'C:\\Users\\a"b', 'C:\\Users\\a$(x)', 'C:\\Users\\a`b', 'C:\\Users\\a\nb', 'C:\\Users\\a;b',
+    ]
+    for (const path of bad) expect(() => checkWindowsPath(path, 'home'), JSON.stringify(path)).toThrow(TeamInputError)
   })
 })
