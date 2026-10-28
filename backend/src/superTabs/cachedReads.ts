@@ -75,6 +75,19 @@ export async function readLastChangedAt(db: Db, view: CacheView, tabId: string):
   return view.get(tabId, 'lastChangedAt', 'main', async () => (await store.lastChangedAt(db, [tabId])).get(tabId) ?? null)
 }
 
+/** The same per-Swarm entries, with this read's misses collected into one seven-kind query (also without a cache). */
+export async function readLastChangedAts(db: Db, view: CacheView, tabIds: string[]): Promise<Map<string, number | null>> {
+  const missing: string[] = []
+  let batch: Promise<Map<string, number>> | undefined
+  return new Map(await Promise.all(tabIds.map(async tabId => [tabId, await view.get(tabId, 'lastChangedAt', 'main', () => {
+    missing.push(tabId)
+    // get starts miss loaders synchronously. Defer the query one microtask so every miss joins before it starts;
+    // hits and entries already loading at this stamp never enter the batch.
+    batch ??= Promise.resolve().then(() => store.lastChangedAt(db, missing))
+    return batch.then(newest => newest.get(tabId) ?? null)
+  })] as const)))
+}
+
 /** The Swarm's parts changed after `since` (parts/load.ts loadChanged): from the held feed when it reaches back that far, else read. */
 export async function readChanged(db: Db, view: CacheView, tabId: string, since: number): Promise<Part[]> {
   const direct = async () => (await store.loadChanged(db, [tabId], new Date(since))).get(tabId) ?? []
