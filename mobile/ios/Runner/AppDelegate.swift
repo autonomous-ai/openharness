@@ -42,8 +42,11 @@ enum AppBadgeChannel {
         return
       }
       if #available(iOS 16.0, *) {
+        // The completion can run off the main thread; Flutter is answered on it.
         UNUserNotificationCenter.current().setBadgeCount(count) { error in
-          result(error.map { FlutterError(code: "badge", message: $0.localizedDescription, details: nil) })
+          DispatchQueue.main.async {
+            result(error.map { FlutterError(code: "badge", message: $0.localizedDescription, details: nil) })
+          }
         }
       } else {
         UIApplication.shared.applicationIconBadgeNumber = count

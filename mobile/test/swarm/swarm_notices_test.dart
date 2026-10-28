@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness_mobile/notify/system_notices.dart';
 import 'package:harness_mobile/swarm/model.dart';
@@ -196,6 +197,42 @@ void main() {
       announcer.clear();
 
       expect(notices.badges, [1, 0]);
+    });
+  });
+
+  group("the app icon's count while nobody is signed in", () {
+    test('goes as the app finds itself signed out, once each time', () {
+      final notices = _Recording();
+      final app = ValueNotifier('booting');
+      swarmBadgeOffWhileSignedOut(
+        app,
+        signedOut: () => app.value == 'signed out',
+        notices: notices,
+      );
+      expect(notices.badges, isEmpty, reason: 'not known yet');
+
+      // A launch that starts signed out never makes a Swarm session, whose
+      // end would have taken the last account's count off.
+      app.value = 'signed out';
+      expect(notices.badges, [0]);
+      app.notifyListeners();
+      expect(notices.badges, [0], reason: 'still signed out: once');
+
+      app.value = 'signed in';
+      expect(notices.badges, [0], reason: 'the session counts from here');
+
+      app.value = 'signed out';
+      expect(notices.badges, [0, 0]);
+    });
+
+    test('a launch already known to be signed out takes it off at once', () {
+      final notices = _Recording();
+      swarmBadgeOffWhileSignedOut(
+        ValueNotifier(0),
+        signedOut: () => true,
+        notices: notices,
+      );
+      expect(notices.badges, [0]);
     });
   });
 

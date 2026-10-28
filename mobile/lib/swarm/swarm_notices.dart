@@ -1,5 +1,7 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
+
 import '../notify/system_notices.dart';
 import 'swarm_inbox.dart';
 
@@ -89,4 +91,24 @@ class SwarmAnnouncer {
   /// Takes every notice and the icon's count down: the account that saw them
   /// signed out, or Swarm was turned off.
   void clear() => settle(const []);
+}
+
+/// Takes the app icon's count off each time [app] finds nobody signed in
+/// ([signedOut]), and at once if it already knows. A launch that starts
+/// signed out never makes a Swarm session, whose end ([SwarmAnnouncer.clear])
+/// would have taken the last account's count off. Lives as long as [app].
+void swarmBadgeOffWhileSignedOut(
+  Listenable app, {
+  required bool Function() signedOut,
+  required SwarmNotices notices,
+}) {
+  var off = false;
+  void check() {
+    final now = signedOut();
+    if (now && !off) unawaited(notices.setSwarmBadge(0));
+    off = now;
+  }
+
+  app.addListener(check);
+  check();
 }
