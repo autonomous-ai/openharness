@@ -122,6 +122,9 @@ class _SuperTabViewState extends State<SuperTabView>
   // Rows to keep in place once their conversation is on screen again.
   final _anchors = <String, ({String messageId, double top})>{};
   int _mentionIndex = 0;
+  late final _tagBackspace = _TagBackspace(
+    () => c.mentions(c.selectedId).values,
+  );
   String? _dismissedMention;
   String? _completionPrefix;
 
@@ -2362,6 +2365,12 @@ class _SuperTabViewState extends State<SuperTabView>
           )
         else
           Padding(
+            // Keyed: the lines that come and go above it (a reply, mention
+            // choices, an error) are Paddings too, and would otherwise take
+            // over this element and remount the field. A remounted field
+            // keeps focus but loses its text input connection, so typing,
+            // Backspace included, would go nowhere.
+            key: const ValueKey('super-message-composer-row'),
             padding: EdgeInsets.fromLTRB(
               24,
               12,
@@ -2489,6 +2498,7 @@ class _SuperTabViewState extends State<SuperTabView>
                                           ? 3
                                           : 8,
                                       maxLength: 32000,
+                                      inputFormatters: [_tagBackspace],
                                       keyboardType: TextInputType.multiline,
                                       textAlignVertical:
                                           TextAlignVertical.center,
@@ -2763,6 +2773,51 @@ class _SuperTabViewState extends State<SuperTabView>
       );
     },
   );
+}
+
+/// Backspace right after a tag takes the whole tag, as in Slack: deleting the
+/// character before the caret, where one of [tags] ends, removes that tag.
+/// The draft then no longer holds it, so its agent is no longer addressed.
+class _TagBackspace extends TextInputFormatter {
+  _TagBackspace(this.tags);
+
+  final Iterable<String> Function() tags;
+
+  @override
+  TextEditingValue formatEditUpdate(
+    TextEditingValue oldValue,
+    TextEditingValue newValue,
+  ) {
+    final caret = oldValue.selection;
+    if (!caret.isValid ||
+        !caret.isCollapsed ||
+        caret.baseOffset == 0 ||
+        (newValue.composing.isValid && !newValue.composing.isCollapsed)) {
+      return newValue;
+    }
+    final end = caret.baseOffset;
+    if (newValue.selection != TextSelection.collapsed(offset: end - 1) ||
+        newValue.text != oldValue.text.replaceRange(end - 1, end, '')) {
+      return newValue;
+    }
+    final before = oldValue.text.substring(0, end);
+    final after = oldValue.text.substring(end);
+    if (after.isNotEmpty && !after.startsWith(RegExp(r'[\s.,!?;:]'))) {
+      return newValue;
+    }
+    for (final tag in tags()) {
+      final start = end - tag.length;
+      if (!before.endsWith(tag) ||
+          (start > 0 && !before[start - 1].contains(RegExp(r'\s')))) {
+        continue;
+      }
+      return TextEditingValue(
+        text: oldValue.text.replaceRange(start, end, ''),
+        selection: TextSelection.collapsed(offset: start),
+      );
+    }
+    return newValue;
+  }
 }
 
 /// Records its row's context while built, so [_SuperTabViewState] can find
