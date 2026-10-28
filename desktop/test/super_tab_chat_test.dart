@@ -576,7 +576,7 @@ void main() {
       }
       final c = await show(tester, server);
       ScrollController scroll() => tester
-          .widget<ListView>(
+          .widget<ScrollView>(
             find.byKey(const PageStorageKey('super-messages-tab-lead')),
           )
           .controller!;

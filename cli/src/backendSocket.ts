@@ -45,6 +45,7 @@ import type { TerminalStreamManager } from './lib/terminalStreamManager.js'
 import { encodeTerminalLocal, TerminalBinaryKind, type TerminalBinaryClear } from './lib/terminalBinary.js'
 import { BACKEND_ONLY_DOWN_TYPES, GATEWAY_REQUEST_TYPES, isLocalClientId, logSafeType, PAIR_REQUESTS, PLATE_REQUEST, rpcResultType, type DownTransport } from './lib/relayFrames.js'
 import { sid, logFrame } from './lib/log.js'
+import { spreadNotice } from './lib/spreadNotice.js'
 import { eventAgentId, GUEST_REFUSALS, guestVerdict } from './core/guestPolicy.js'
 
 export { isLocalClientId, type DownTransport }
@@ -52,6 +53,9 @@ export { isLocalClientId, type DownTransport }
 /** Requests one local connection may queue before the daemon is ready (see `openRequests`). The app
  *  sends a handful on connect; hundreds is a client looping, not a person. */
 const MAX_REQUESTS_BEFORE_READY = 256
+/** Within how long this computer's windows hear an invitation given or taken back: the backend now answers the shares list in
+ *  tens of milliseconds, and 10 s spreads every member's read of it over a hundred times that. */
+const SHARES_NOTICE_SPREAD_MS = 10_000
 /** A terminal stream's bookkeeping, handled as it arrives rather than in its connection's line — see `enqueueDown`. */
 const TERMINAL_BOOKKEEPING_TYPES: ReadonlySet<string> = new Set(['terminal_ack', 'terminal_alive'])
 /** An upload's control frames, which go in line with its chunks — see `enqueueDown`. */
@@ -222,6 +226,8 @@ export class BackendSocket {
   /** The account's notices the backend announces (`desk_changed`, …), for the experiments that hear them
    *  (Agent Messages reads its tabs again), as well as the windows here. */
   onAccountNotice: ((notice: BackendNotice) => void) | null = null
+  /** An invitation given or taken back, which has the windows read the shares list (lib/spreadNotice.ts). */
+  private readonly sharesNotice = spreadNotice(() => this.sendLocal({ type: 'machines_changed', payload: { reason: 'harness_shares' } }), SHARES_NOTICE_SPREAD_MS)
   /** What a shared tab's relay said (gateway/tabRelay.ts), for Agent Messages. */
   onTabFrame: ((event: TabFrame) => void) | null = null
   /**
@@ -445,6 +451,7 @@ export class BackendSocket {
       this.onAccountNotice?.(notice)
       // Only the Swarm host acts on it (superTabs/host.ts): the windows have nothing to re-read.
       if (notice.type === 'super_tab_deliveries') return
+      if (notice.type === 'machines_changed' && notice.reason === 'harness_shares') { this.sharesNotice.tell(); return }
       this.sendLocal(notice.type === 'machines_changed' ? { type: notice.type, payload: { reason: notice.reason } }
         : notice.type === 'device_keys_changed' ? { type: notice.type, payload: {} }
           : { type: notice.type, payload: { revision: notice.revision } })
@@ -516,6 +523,7 @@ export class BackendSocket {
 
   async stop(): Promise<void> {
     this.closed = true
+    this.sharesNotice.stop()
     this.closeAgentService?.dispose()
     this.viewerStreams?.closedAll(); this.ownerCommands.closeAll()
     await this.terminalStreams?.stop()

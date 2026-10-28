@@ -176,21 +176,69 @@ static void lookups_and_recap(void)
     // Recap: only the open Lead's text lands.
     ht_supertabs_recap_open(&model, "s1", "L0", 100);
     assert(model.recap.state == HT_RECAP_LOADING && model.recap.asked_ms == 100 && !model.recap.text[0]);
-    assert(!ht_supertabs_recap_put(&model, "s1", "L1", "other", 1, false));
+    assert(!ht_supertabs_recap_put(&model, "s1", "L1", "", "other", 1, false));
     assert(model.recap.state == HT_RECAP_LOADING && !model.recap.text[0]);
     char *big = malloc(1601); memset(big, 'r', 1599); strcpy(big + 1499, "\xe2\x80\xa6"); memset(big + 1502, 'r', 98); big[1600] = 0;
-    assert(ht_supertabs_recap_put(&model, "s1", "L0", big, 1792560000u, false));
+    assert(ht_supertabs_recap_put(&model, "s1", "L0", "", big, 1792560000u, false));
     assert(model.recap.state == HT_RECAP_LOADED && strlen(model.recap.text) == 1499 && model.recap.at == 1792560000u);
     free(big);
     ht_supertabs_recap_open(&model, "s1", "L1", 200);
     assert(model.recap.state == HT_RECAP_LOADING && !model.recap.text[0]);
-    assert(ht_supertabs_recap_put(&model, "s1", "L1", "", 0, true) && model.recap.state == HT_RECAP_EMPTY);
+    assert(ht_supertabs_recap_put(&model, "s1", "L1", "", "", 0, true) && model.recap.state == HT_RECAP_EMPTY);
     ht_supertabs_recap_open(&model, "", "", 300);
-    assert(model.recap.state == HT_RECAP_NONE && !ht_supertabs_recap_put(&model, "", "", "x", 0, false));
+    assert(model.recap.state == HT_RECAP_NONE && !ht_supertabs_recap_put(&model, "", "", "", "x", 0, false));
     ht_supertabs_recap_open(&model, "s1", "L0", 400);
     ht_supertabs_reset(&model);
     assert(model.n == 0 && model.id_n == 0 && model.recap.state == HT_RECAP_NONE && !model.recap.lead[0]);
     puts("supertab: desk link, local Lead, list order, recap slot (one Lead, UTF-8 cut, none), reset PASS");
+}
+
+// The round dial's face follows the chat the desktop has open (design 2026-10-28-round-dial-swarm-chat).
+static void chats(void)
+{
+    static ht_supertab_t t;
+    ht_supertabs_reset(&model);
+    const char ids[1][ID_MAX] = {"s1"};
+    ht_supertabs_ids(&model, ids, 1, NULL, 0);
+    assert(ht_supertab_init(&t, "s1", "", "openharness", 3));
+    // lead keeps chat, chat_id, chat_name
+    ht_lead_in_t g = lead("L0", "work", 0); g.chat = "group"; g.chat_id = "g1"; g.chat_name = "Fix login";
+    ht_lead_in_t pm = lead("L1", "done", 1); pm.chat = "pm"; pm.chat_id = "pm1"; pm.chat_name = "PM";
+    // a lead without chat fields reads as the Lead chat
+    ht_lead_in_t old = lead("L2", "ask", 2);
+    assert(ht_supertab_lead_add(&t, &g) && ht_supertab_lead_add(&t, &pm) && ht_supertab_lead_add(&t, &old));
+    assert(t.leads[0].chat == HT_CHAT_GROUP && !strcmp(t.leads[0].chat_id, "g1") && !strcmp(t.leads[0].chat_name, "Fix login"));
+    assert(t.leads[1].chat == HT_CHAT_PM && !strcmp(t.leads[1].chat_id, "pm1") && !strcmp(t.leads[1].chat_name, "PM"));
+    assert(t.leads[2].chat == HT_CHAT_LEAD && !t.leads[2].chat_id[0] && !t.leads[2].chat_name[0]);
+    // A long group name is cut to 48 bytes on a UTF-8 boundary; an unknown kind, or a chat id that cannot be held, is the
+    // Lead chat with no id, and the Lead is kept.
+    static ht_supertab_t u;
+    assert(ht_supertab_init(&u, "s1", "", "openharness", 3));
+    char name[64]; memset(name, 'n', 47); strcpy(name + 47, "\xc3\xa9tail");
+    char longer[ID_MAX + 1]; memset(longer, 'x', ID_MAX); longer[ID_MAX] = 0;
+    ht_lead_in_t cut = lead("L0", "work", 0); cut.chat = "group"; cut.chat_id = "g2"; cut.chat_name = name;
+    ht_lead_in_t odd = lead("L1", "work", 1); odd.chat = "dm"; odd.chat_id = "c1"; odd.chat_name = "x";
+    ht_lead_in_t wide = lead("L2", "work", 2); wide.chat = "group"; wide.chat_id = longer; wide.chat_name = "x";
+    assert(ht_supertab_lead_add(&u, &cut) && ht_supertab_lead_add(&u, &odd) && ht_supertab_lead_add(&u, &wide));
+    assert(strlen(u.leads[0].chat_name) == 47 && u.leads[0].chat == HT_CHAT_GROUP);
+    assert(u.leads[1].chat == HT_CHAT_LEAD && !u.leads[1].chat_id[0] && !u.leads[1].chat_name[0]);
+    assert(u.leads[2].chat == HT_CHAT_LEAD && !u.leads[2].chat_id[0]);
+    ht_supertabs_put(&model, &t, 0, NULL, 0);
+
+    // drops a recap for another chat: the face is the group's, so the Lead chat's recap (or none named) is not its.
+    ht_supertabs_recap_open(&model, "s1", "L0", 100);
+    assert(!ht_supertabs_recap_put(&model, "s1", "L0", "lead-web", "the Lead", 1, false));
+    assert(!ht_supertabs_recap_put(&model, "s1", "L0", "", "no chat named", 1, false));
+    assert(model.recap.state == HT_RECAP_LOADING && !model.recap.text[0]);
+    assert(ht_supertabs_recap_put(&model, "s1", "L0", "g1", "Tests green.", 2, false));
+    assert(model.recap.state == HT_RECAP_LOADED && !strcmp(model.recap.chat_id, "g1") && !strcmp(model.recap.text, "Tests green."));
+    // An old daemon's Lead (no chat) takes the recap that names none, as before.
+    ht_supertabs_recap_open(&model, "s1", "L2", 200);
+    assert(ht_supertabs_recap_put(&model, "s1", "L2", "", "Shipped.", 3, false) && !model.recap.chat_id[0]);
+    // Opening another Lead forgets the chat the last recap was for.
+    ht_supertabs_recap_open(&model, "s1", "L1", 300);
+    assert(!model.recap.chat_id[0]);
+    puts("supertab: chat kind/id/name, old Leads as the Lead chat, recap only for the face's chat PASS");
 }
 
 int main(void)
@@ -198,5 +246,6 @@ int main(void)
     order_and_limits();
     transitions();
     lookups_and_recap();
+    chats();
     return 0;
 }

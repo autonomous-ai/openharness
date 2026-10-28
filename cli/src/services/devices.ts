@@ -80,6 +80,8 @@ export interface DevicesDeps {
 
 /** ⌘K's answer while the fleet is not running: it never started, so there is no list to weigh. */
 const NO_AGENT_LIST = 'no agent list yet'
+/** A Super Tab conversation id as the dials hold one (48 bytes with its NUL). */
+const CHAT_ID = /^[A-Za-z0-9_-]{1,47}$/
 const unrouted = (reason: string): RouteAnswer => ({ agentId: '', machineId: '', name: '', confidence: 0, reason, candidates: [], weighed: 0, machines: 0, via: '' })
 const sid = (id: string): string => id.slice(0, 8)
 
@@ -167,7 +169,13 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   // whether they are wanted (superTabs/inCore/cards.ts); this says it on a change and again when the core connects anew.
   let cardDevices = 0
   let cardInclude: string[] = []
-  const tellCards = (): void => { void askCards({ action: 'cardsWanted', on: cardDevices > 0, include: cardDevices > 0 ? cardInclude : [] }) }
+  // The conversation the window has open in its active Swarm tab, which the round dial's face follows (design
+  // 2026-10-28-round-dial-swarm-chat): said with the wish, and left out when there is none, as before.
+  let cardFocus: { tabId: string; conversationId: string } | null = null
+  const tellCards = (): void => {
+    const on = cardDevices > 0
+    void askCards({ action: 'cardsWanted', on, include: on ? cardInclude : [], ...(on && cardFocus ? { focus: cardFocus } : {}) })
+  }
   deps.onCoreConnected?.(() => { if (cardDevices > 0) tellCards() })
   const cableHost = new DaemonCableHost({
     // The cloud harnesses too, where the core offers them: tiles on the desk the dial walks like any other.
@@ -223,14 +231,17 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
       if ((before === 0) !== (cardDevices === 0)) tellCards()
     },
     // The text is the service's to read and not validated by the core: cut here, on a character, to what the Pro takes.
-    swarmCardRecap: async (tabId, leadId) => {
-      const r = await askCards({ action: 'cardRecap', tabId, leadId })
+    // With `chat` (a round dial that speaks swarmChat), the chat on the face's, which must name that chat by an id: a dial
+    // never shows it for another one.
+    swarmCardRecap: async (tabId, leadId, chat) => {
+      const r = await askCards({ action: 'cardRecap', tabId, leadId, ...(chat ? { chat: true } : {}) })
       if (r.ok !== true || typeof r.text !== 'string' || typeof r.at !== 'number' || !Number.isInteger(r.at) || r.at < 0 || typeof r.none !== 'boolean') return null
-      return { tabId, leadId, text: truncateUtf8(r.text, 1500), at: r.at, none: r.none }
+      if (chat && !(typeof r.chatId === 'string' && CHAT_ID.test(r.chatId))) return null
+      return { tabId, leadId, text: truncateUtf8(r.text, 1500), at: r.at, none: r.none, ...(chat ? { chatId: r.chatId as string } : {}) }
     },
-    swarmCardOpen: (session, tabId, leadId) => { void askCards({ action: 'cardOpen', session, tabId, leadId }) },
+    swarmCardOpen: (session, tabId, leadId, chat) => { void askCards({ action: 'cardOpen', session, tabId, leadId, ...(chat ? { chat: true } : {}) }) },
     // An error (no service, a refused post) is not `said`: the words go to the harness instead, never lost.
-    swarmSay: async (harnessId, text) => (await askCards({ action: 'cardSay', harnessId, text })).said === true,
+    swarmSay: async (harnessId, text, chat) => (await askCards({ action: 'cardSay', harnessId, text, ...(chat ? { chat: true } : {}) })).said === true,
     // The Pro picked a Lead: the window opens that Swarm tab and project. Harmless with no window.
     superTabSelected: (superTabId, projectId) => core.clients.sendLocal({ type: 'dial_super_tab', payload: { superTabId, projectId } }),
     scrolled: (phase, dy, velocity, superTabId) => core.clients.sendLocal({ type: 'dial_scroll', payload: { phase, dy, velocity, ...(superTabId ? { superTabId } : {}) } }),
@@ -491,7 +502,10 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
       cableHost.setSwarms(swarms)
       // The Swarms the window has tabs for are read first; said again to the core only when they change.
       const include = [...new Set((swarms?.swarms ?? []).map((s) => s.superTabId).filter((id): id is string => !!id))].slice(0, 16)
-      if (include.join(',') !== cardInclude.join(',')) { cardInclude = include; if (cardDevices > 0) tellCards() }
+      const open = cableHost.activeSwarmProject()
+      const focus = open?.conversationId ? { tabId: open.superTabId, conversationId: open.conversationId } : null
+      const refocused = `${focus?.tabId}/${focus?.conversationId}` !== `${cardFocus?.tabId}/${cardFocus?.conversationId}`
+      if (include.join(',') !== cardInclude.join(',') || refocused) { cardInclude = include; cardFocus = focus; if (cardDevices > 0) tellCards() }
       void cable.syncSwarms()
       void cable.syncAgents()
       // The Swarm cards link to their desk tab and follow its open project.

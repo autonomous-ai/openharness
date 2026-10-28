@@ -974,15 +974,16 @@ class AppNotifier extends ChangeNotifier {
   bool get inForeground => foreground.value;
 
   /// Whether the window can be seen at all: in front, or in sight behind the window that has focus
-  /// (`inactive`). A browser tab behind others, or a minimised window, cannot.
-  bool _inSight = true;
+  /// (`inactive`). A browser tab behind others, or a minimised window, cannot. Harness Monitor's
+  /// page reads every machine while it is seen, and stops when this turns false.
+  final ValueNotifier<bool> inSight = ValueNotifier(true);
 
   /// Fed by the workspace's [AppLifecycleListener]. A null state is unknown, read as foreground.
   void appLifecycleChanged(AppLifecycleState? state) {
     if (_disposed) return;
     final wasForeground = foreground.value;
     foreground.value = state == null || state == AppLifecycleState.resumed;
-    _inSight =
+    inSight.value =
         state == null ||
         state == AppLifecycleState.resumed ||
         state == AppLifecycleState.inactive;
@@ -5648,6 +5649,18 @@ class AppNotifier extends ChangeNotifier {
         null => null,
       };
 
+  /// The conversation open in this Swarm tab (its Lead's, Chat with PM or a
+  /// group), which the round dial's face follows (design
+  /// 2026-10-28-round-dial-swarm-chat). Left out on the machines view and
+  /// before the Swarm has loaded: the dial then shows each project's Lead.
+  /// A change of it re-announces through `onSelection`, as a project's does.
+  String? _dialConversation(String tabId) {
+    final controller = superTabs.peek(tabId);
+    if (controller == null || controller.devicesSelected) return null;
+    final id = controller.selectedId;
+    return controller.snapshot?.conversation(id) == null ? null : id;
+  }
+
   /// The tile roster and the tabs, to every daemon this window reaches over
   /// its loopback ([_deskConnection]) — never a relayed machine's.
   void _announceOpenPanesToDial() {
@@ -5715,6 +5728,7 @@ class AppNotifier extends ChangeNotifier {
           if (swarm.superTabId case final tabId?) ...{
             'superTabId': tabId,
             'projectId': ?_rememberDialProject(tabId),
+            'conversationId': ?_dialConversation(tabId),
           },
           'agentIds': [
             for (final pane in swarm.panes)
@@ -9741,7 +9755,7 @@ class AppNotifier extends ChangeNotifier {
   /// and not while recovery is the one asking (a failed or stale list, see
   /// [_scheduleMachineRecovery]) or a reload is open, so two never read side by side.
   bool get _deafReadWanted =>
-      _inSight &&
+      inSight.value &&
       _viewerIsDeaf &&
       _machineRecoveryTimer == null &&
       _retryInFlight == null;
@@ -21786,6 +21800,7 @@ class AppNotifier extends ChangeNotifier {
     _stopWakeFollowers();
     modelStarts.dispose();
     foreground.dispose();
+    inSight.dispose();
     // Its sweep timer would otherwise outlive the window it was drawing into.
     agentAlerts.dispose();
     agentUnread.dispose();

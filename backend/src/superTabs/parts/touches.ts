@@ -146,6 +146,17 @@ export function touchesFor(command: Command, actor: Actor, before: SuperTabState
       // Finished work puts its worker's decision before the Lead (finishWorker): the Lead's next start, assignment or
       // route touches the same part, so it cannot pass over that decision on a stale read (design ruling R5).
       if (command.status === 'done' || command.status === 'stopped') progress(projectOfGroup(command.conversationId)?.id)
+      if (command.status === 'review') {
+        // A review the Swarm opened by itself (autoReview.ts) reads whether its Reviewer is free and numbers the new group,
+        // as conversation.create and work.assign do: two opened at once meet on that Reviewer and on the head.
+        const opened = effects.state.conversations.find(c => c.reviewOf === command.conversationId && !before.conversations.some(b => b.id === c.id))
+        if (opened) {
+          head()
+          group(leadGroupOf(projectOfGroup(command.conversationId)?.id))
+          agent(opened.assignment?.agentId)
+          progress(projectOfGroup(command.conversationId)?.id)
+        }
+      }
       break
     case 'work.define':
       if (before.conversations.find(c => c.id === command.conversationId)?.assignment) progress(projectOfGroup(command.conversationId)?.id)

@@ -3,7 +3,7 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, st
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, describe, expect, it } from 'vitest'
-import { GIT_HOOK_NAMES, gitConfigParameters, shellWord, swarmGitHubLaunch, swarmGitHubSessionDir, swarmGitPrepareEnv, writeSessionGitHub, writeSwarmGitHubTools } from './swarmGitHub.js'
+import { GIT_HOOK_NAMES, gitConfigParameters, revokeGitHubToken, shellWord, swarmGitHubLaunch, swarmGitHubSessionDir, swarmGitPrepareEnv, writeSessionGitHub, writeSwarmGitHubTools } from './swarmGitHub.js'
 
 // Real git against folders made here, with a home of its own and no system config: never this machine's git settings,
 // and nothing reaches github.com (only `git credential fill` and `git ls-remote --get-url`, which make no connection).
@@ -254,5 +254,23 @@ describe('a session\'s GitHub folder at launch', () => {
       swarmGitHubLaunch('harness-codex-held', tools, 'darwin')
       expect(Date.now() - statSync(dir).mtimeMs).toBeLessThan(60_000)
     } finally { rmSync(dataDir, { recursive: true, force: true }) }
+  })
+})
+
+describe('revoking a Harness GitHub App token', () => {
+  const token = `ghs_${'a'.repeat(36)}`
+  it('asks GitHub to revoke it with the token itself, and takes a token already gone as revoked', async () => {
+    const sent: Array<[string, RequestInit]> = []
+    const answer = (status: number) => (async (url: string | URL | Request, init?: RequestInit) => {
+      sent.push([String(url), init!]); return new Response(null, { status })
+    }) as typeof fetch
+    await revokeGitHubToken(token, answer(204))
+    expect(sent[0]![0]).toBe('https://api.github.com/installation/token')
+    expect(sent[0]![1]).toMatchObject({ method: 'DELETE', headers: expect.objectContaining({ Authorization: `Bearer ${token}` }) })
+    await revokeGitHubToken(token, answer(401))
+    await expect(revokeGitHubToken(token, answer(500))).rejects.toThrow('GitHub answered 500')
+    // Nothing that is not a token is sent anywhere.
+    await revokeGitHubToken('not a token', answer(204))
+    expect(sent).toHaveLength(3)
   })
 })

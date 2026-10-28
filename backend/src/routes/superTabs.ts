@@ -75,7 +75,7 @@ const projectParams = tabParams.extend({ projectId: id })
 const refreshQuery = z.object({ refresh: z.literal('1').optional() })
 const approveBody = z.object({ scope: z.enum(['project', 'swarm']) }).strict()
 // What GitHub sends back: a sign-in's code and our state, and after an installation its id and action.
-const callbackQuery = z.object({ code: z.string().max(512).optional(), state: z.string().max(4096).optional(),
+const callbackQuery = z.object({ code: z.string().max(512).optional(), state: z.string().max(4096).optional(), error: z.string().max(128).optional(),
   installation_id: z.string().max(32).optional(), setup_action: z.string().max(32).optional() })
 
 const escapeHtml = (text: string) => text.replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!)
@@ -94,7 +94,7 @@ const deliveryAction = z.discriminatedUnion('type', [
   z.object({ type: z.literal('hold'), claimId: id, reason: holdReason }).strict(),
 ])
 const mentionQuery = z.object({ state: z.enum(['waiting', 'earlier']) }).strict()
-const personDecisionQuery = agentQuery.extend({ state: z.enum(['open', 'answered']) }).strict()
+const personDecisionQuery = agentQuery.extend({ state: z.enum(['open', 'answered', 'settled']) }).strict()
 const savePolicy = z.object({ revision: z.number().int().nonnegative().safe(), policy: routingPolicySchema }).strict()
 const stop = z.object({ assignmentId: id, receipt: z.string().min(1).max(2000) }).strict()
 const githubToken = z.object({ machineId: id }).strict()
@@ -138,6 +138,7 @@ async function productionStore(github: GitHubTokens | null): Promise<SuperTabSto
   return new SuperTabStore(prisma, Date.now, attachmentsFromEnv(env),
     // A task that ends revokes the token it was given; a revoke that fails is logged inside and never blocks the write.
     { workEnded: (tabId, ended) => { void github?.release(tabId, ended).catch(error => logger.warn('[github] release failed', { tabId, error: String(error) })) },
+      workStarted: (tabId, started) => { void github?.resume(tabId, started).catch(error => logger.warn('[github] resume failed', { tabId, error: String(error) })) },
       // A team account has no git login of its own: without the app it takes no teammates' work.
       teamAccountsIdle: !github,
       // Every server answers the quiet delivery poll from any server's full one, and tells the agent's machine of new work
@@ -239,6 +240,9 @@ export async function superTabRoutes(app: FastifyInstance, options: { store?: Su
     const request = approvalSecret && req.query.state ? readState(approvalSecret, req.query.state, Date.now()) : null
     if (!request) return page('This link has expired', 'Go back to Harness and choose Approve again.', 400)
     const named = githubRepository(`https://github.com/${request.repository}`)
+    // Cancel on GitHub's sign-in sends the person back with `error` and no code: they were told Harness was installed
+    // (local Team account run, 2026-10-28).
+    if (req.query.error) return page('Sign-in was cancelled', 'Nothing was approved. Go back to Harness and choose Approve to try again.')
     if (!req.query.code || !signIn || !named) {
       return page('Harness is installed', 'Go back to Harness and choose Approve, so this project can use it.')
     }
@@ -248,8 +252,10 @@ export async function superTabRoutes(app: FastifyInstance, options: { store?: Su
       return page(`You can't push to ${named.fullName}`, 'So you can\'t approve it for this Swarm. Someone who can push to it can.', 403)
     }
     await approvals.approve(request, seen.login)
-    return page(`${named.fullName} approved`, request.scope === 'swarm'
-      ? 'Every project in this Swarm can now use it. You can go back to Harness.' : 'This project can now use it. You can go back to Harness.')
+    // Named, so the person knows which project it was for (local Team account run, 2026-10-28: 'This project can now use it').
+    const where = request.scope === 'swarm' ? 'every project in this Swarm'
+      : await store.projectNameFor(request.userId, request.autonomousEnv as AuthUser['autonomousEnv'], request.tabId, request.projectId).catch(() => null) ?? 'this project'
+    return page(`${named.fullName} approved`, `Teammates' agents in ${where} can now push to it. You can go back to Harness.`)
   })
   app.get<{ Params: z.infer<typeof machineParams> }>('/api/super-tabs/:tabId/machines/:machineId/removal', { preHandler: validateParams(machineParams) },
     (req, reply) => respond(reply, () => store.machineRemoval(req.user!, req.params.tabId, req.params.machineId)))
