@@ -818,6 +818,7 @@ describe('decisions asked of one person (v2)', () => {
     const waiting = await counted.$transaction(async tx => {
       const state = parts.reassemble(await parts.loadActive(tx, s.tabId))
       whole.length = 0
+      quiet.length = 0
       return decisionsWaiting(tx, s.tabId, state, { kind: 'person', userId: peer.sub, email: peer.email })
     })
     expect(waiting.count).toBe(150)

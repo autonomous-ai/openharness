@@ -1484,10 +1484,13 @@ model SwarmGroup {
   @@index([tabId, changedAt])
   @@index([tabId, dormant, changedAt])
   @@index([tabId, agentIds])
-  @@index([tabId, projectId, dormant, lastActivityAt])
+  /// A project's quiet conversations by activity (leaderboard, digest), and their pages newest first, then by key (parts/load.ts loadDormant).
+  @@index([tabId, projectId, dormant, lastActivityAt, key])
   @@index([tabId, projectId, dormant, reportSeq])
   @@index([dormant, lastActivityAt])
   @@index([workFinished, archived, lastActivityAt])
+  /// A host's wake check (read/host.ts woken): the conversations its last writes concerned, by Swarm, since its cursor.
+  @@index([hostMachineIds, tabId, changedAt])
   /// A Swarm's running work (parts/light.ts, the host's light load).
   @@index([tabId, executionMachineId])
   /// The host signature (read/host.ts inputs) reads every conversation's digest and dormancy from this index alone.
