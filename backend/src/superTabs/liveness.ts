@@ -1,6 +1,7 @@
 import { activeWork, stableId, type Agent, type Assignment, type Author, type Conversation, type MessageDraft,
   type SuperTabState } from './model.js'
 import { agentDisplayName } from './agentNames.js'
+import { failureNotice, TIMED_OUT_SUFFIX } from './startFailure.js'
 import { leadOf, toLead } from './terminal.js'
 
 // Work never sits with a dead owner (design: "A Swarm that never stops", 2026-10-26). A worker's active assignment is held
@@ -163,13 +164,13 @@ export function sweepLiveness(state: SuperTabState, now: number): MessageDraft[]
 function failStalledStarts(state: SuperTabState, now: number): MessageDraft[] {
   return (state.starts ?? []).flatMap(start => {
     if (!start.dispatched || start.harnessId || start.error || start.dispatchedAt === undefined || now - start.dispatchedAt <= START_RUN_MS) return []
-    start.error = `${machineName(state, start.request.machineId)} did not start it within 3 minutes`
+    start.error = `${machineName(state, start.request.machineId)}${TIMED_OUT_SUFFIX}`
     // Never a lookup that throws: these checks run inside every machine's report.
     const group = state.conversations.find(c => c.id === start.request.conversationId)
     const lead = group?.leadId ? state.agents.find(a => a.id === group.leadId) : undefined
     if (!group || !lead) return []
     return [reachable(state, { id: stableId('start-timeout', start.id), conversationId: group.id, replyTo: null,
       recipients: group.agentIds.includes(lead.id) ? [lead.id] : [], author: writtenBy(state, lead),
-      text: `Could not start ${start.request.name}: ${start.error}.`, source: { kind: 'start-timeout', startId: start.id } })]
+      text: failureNotice(start.request.name, start.error), source: { kind: 'start-timeout', startId: start.id } })]
   })
 }
