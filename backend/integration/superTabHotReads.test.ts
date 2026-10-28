@@ -139,6 +139,28 @@ it('reuses the host timestamp at the same stamp, including a repeated wake with 
   expect((await direct.changes(owner, s.machineId, { full: true })).tabs).toEqual(changed.tabs)
 })
 
+describe('delivery authority reads', () => {
+  it.each(['person', 'agent'] as const)('claim, hold and ack from a %s leave unrelated conversations and machine parts unread', async sender => {
+    const s = await scene()
+    // Keep unrelated conversations active: dormant rows already escape loadActive.
+    await db.swarmGroup.updateMany({ where: { tabId: s.tabId }, data: { dormant: false } })
+    await store.execute(owner, s.tabId, { operationId: randomUUID(), command: { type: 'message.send',
+      conversationId: s.web, text: 'Please continue.', recipientIds: [s.worker], replyTo: null } }, sender === 'agent' ? s.lead : undefined)
+    const delivery = await db.superTabDelivery.findFirstOrThrow({ where: { tabId: s.tabId, agentId: s.worker, status: 'queued' } })
+    for (const action of [{ type: 'claim', claimId: 'bounded' },
+      { type: 'hold', claimId: 'bounded', reason: 'team_waiting_idle' },
+      { type: 'ack', claimId: 'bounded', receipt: 'typed', uncertain: false }] as const) {
+      const entries = await profiled(() => store.delivery(owner, s.tabId, s.worker, delivery.id, action))
+      const groups = entries.filter(e => e.ns.endsWith('.SwarmGroup') && e.op !== 'update')
+      const returned = groups.reduce((sum, e) => sum + (e.nreturned ?? 0), 0)
+      console.log(`delivery ${action.type}: groups=${returned}, docs=${entries.reduce((sum, e) => sum + (e.docsExamined ?? 0), 0)}`)
+      // The project and Swarm Lead conversations plus the receiver's group; no quiet groups or finished work.
+      expect(returned, `${action.type}: ${JSON.stringify(plan(groups))}`).toBe(3)
+      expect(entries.filter(e => e.ns.endsWith('.SwarmMachine'))).toEqual([])
+    }
+  })
+})
+
 describe('hot reads read only what they return (roadmap 2.7)', () => {
   let entries: ProfileEntry[]
   let s: Awaited<ReturnType<typeof scene>>

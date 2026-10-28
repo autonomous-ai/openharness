@@ -72,6 +72,30 @@ async function undecidedWork(agents: Part<Agent>[], groups: Part<GroupData>[], l
 const toPart = <T>(kind: PartKind, row: PartRow): Part<T> => ({ kind, key: row.key, version: row.version, changedAt: row.changedAt.getTime(),
   ordinal: row.ordinal, data: row.data as T })
 
+/** Delivery authority only: no machine reports, starts, progress, or unrelated work. Keep the Lead conversations for
+ * ledProject, and the named agents' groups for legacy project identity and native-context privacy checks. These projected
+ * groups must never be committed as state; a delivery only touches its authority parts and updates its own row. */
+export async function loadDeliveryParts(tx: Transaction, tabId: string, groupIds: string[], agentIds: string[], nativeAgentId?: string): Promise<SwarmParts> {
+  const head = await tx.swarmHead.findUnique({ where: { id: partId(tabId, 'head') } })
+  if (!head) throw Object.assign(new Error(`Swarm ${tabId} has no parts`), { code: 'PARTS_MISSING' })
+  const { projects, leadsConversationId } = head.data as unknown as HeadData
+  const keys = [...projects ? projects.map(p => p.leadConversationId) : ['lead'], leadsConversationId ?? '']
+  const [members, agents] = await Promise.all([
+    tx.swarmMember.findMany({ where: { tabId, deleted: false } }),
+    tx.swarmAgent.findMany({ where: { tabId, deleted: false } }),
+  ])
+  // Modern agents carry their project. Older agents derive it from their first loaded group. Native privacy checks
+  // additionally inspect every group of the terminal's agent, which need not be the delivery's receiver.
+  const related = [...agents.filter(a => agentIds.includes(a.key) && !(a.data as unknown as Agent).projectId).map(a => a.key),
+    ...nativeAgentId ? [nativeAgentId] : []]
+  const rows = await tx.swarmGroup.aggregateRaw({ pipeline: [{ $match: { tabId, deleted: false,
+    $or: [{ key: { $in: groupIds } }, { dormant: false, $or: [{ key: { $in: keys } }, { agentIds: { $in: related } }] }] } }, { $project: LIGHT_GROUP }] })
+  return { tabId, head: toPart<HeadData>('head', head as unknown as PartRow),
+    members: members.map(row => toPart('member', row)), agents: agents.map(row => toPart('agent', row)),
+    groups: (rows as unknown as Array<Record<string, unknown>>).map(lightGroup), machines: [], starts: [], progress: [],
+    sequenceBase: head.sequenceBase, visibilityEpoch: head.visibilityEpoch, groupCounter: head.groupCounter } as SwarmParts
+}
+
 /**
  * The live parts of one Swarm with conversations light. Conversations: every active one (`groups: 'active'`, as
  * `loadActive`), or only the Lead conversations and those with running work (`'working'`: what visibility and derived

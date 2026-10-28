@@ -26,6 +26,8 @@ import { archivable, archiveLine, stopIdleWorkers, stoppedMachines } from './tid
 import { clock, insertParts, loadActive, reassemble, split, type HeadData, type SwarmParts } from './parts/index.js'
 import { groupsBy, listingDrops, quietSince, withoutHints } from './parts/indexed.js'
 import { commitParts, indexesOf, numberMessages, type Touch, type Written } from './parts/commit.js'
+import { loadDeliveryParts } from './parts/light.js'
+import { guardedWrite } from './parts/write.js'
 import { touchesFor } from './parts/touches.js'
 import { freeze, swarmReadCache, swarmTransaction, type CacheView, type SwarmCache } from './cache.js'
 import { DIRECT, readLastChangedAt, readParts, type ReadNamed } from './cachedReads.js'
@@ -2075,10 +2077,17 @@ export class SuperTabStore {
     action: { type: 'claim'; claimId: string } | { type: 'ack'; claimId: string; receipt: string; uncertain: boolean }
       | { type: 'hold'; claimId: string; reason: HoldReason }) {
     return transaction(this.db, async tx => {
-      const named = await tx.superTabDelivery.findFirst({ where: { id: deliveryId, tabId, agentId }, select: { conversationId: true } })
-      const loaded = await this.load(tx, user, tabId, { groupIds: named ? [named.conversationId] : [] }), state = loaded.state
-      author(state, await this.actor(tx, user, state, agentId), true)
       const delivery = await tx.superTabDelivery.findFirst({ where: { id: deliveryId, tabId, agentId } })
+      await this.row(tx, user, tabId)
+      // A native message may be delivered to its Lead in a different conversation from the terminal it came from.
+      const context = delivery?.nativeContextId ? await tx.superTabNativeContext.findFirst({
+        where: { id: delivery.nativeContextId, tabId }, select: { agentId: true } }) : null
+      const parts = await loadDeliveryParts(tx, tabId, delivery ? [delivery.conversationId] : [],
+        [agentId, ...delivery?.authorKind === 'agent' ? [delivery.authorId] : [], ...context ? [context.agentId] : []], context?.agentId)
+      const state = reassemble(parts, { share: true })
+      parkLaterConversations(state)
+      syncLeads(state)
+      author(state, await this.actor(tx, user, state, agentId), true)
       // The delivery pass ended a hold (it keeps the hold's reason) as its host, its terminal free again, typed it: the
       // host's own confirmation counts, or the agent has it while its sender sees Not sent and sends it again (review of
       // #1941). Nothing else brings an ended delivery back.
@@ -2098,7 +2107,11 @@ export class SuperTabStore {
       }
       // No Swarm-wide write: revocation and group changes write this delivery row, and the claim relies on its receiver and
       // its sender, whose parts it touches (spec ruling 9, design section 3.5).
-      await this.save(tx, loaded, state, clock.next(), deliveryTouches(delivery))
+      const stamp = clock.next()
+      for (const touch of deliveryTouches(delivery)) {
+        const part = parts.members.find(p => p.key === touch.key)
+        if (part) await guardedWrite(tx, tabId, { op: 'touch', ...touch, seen: part.version }, stamp)
+      }
       const updated = await tx.superTabDelivery.update({ where: { id: delivery.id }, data: { status, claimId: action.claimId,
         ...(action.type === 'ack' ? { receipt: action.receipt, holdReason: null, holdSince: null,
           ...(!action.uncertain ? { deliveredAt: delivery.deliveredAt ?? new Date(this.now()) } : {}) } : {}) } })
