@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { ensureGridInstalled, GRID_INSTALL_URL, type GridInstallDeps } from './gridInstall.js'
+import { ensureGridInstalled, GRID_INSTALL_PS1_URL, GRID_INSTALL_URL, installerCommand, type GridInstallDeps } from './gridInstall.js'
 
 function deps(overrides: Partial<GridInstallDeps> = {}): GridInstallDeps & { runs: string[] } {
   const runs: string[] = []
@@ -8,6 +8,8 @@ function deps(overrides: Partial<GridInstallDeps> = {}): GridInstallDeps & { run
     available: () => false,
     curlOnPath: () => true,
     enabled: true,
+    // The curl-and-bash path, whatever machine runs the test; the Windows tests say 'win32'.
+    platform: 'linux',
     run: async (script) => { runs.push(script); return { exitCode: 0, output: '✓ grid installed' } },
     ...overrides,
   }
@@ -67,5 +69,32 @@ describe('ensureGridInstalled', () => {
     expect(a.status).toBe('installed')
     expect(b.status).toBe('installed')
     expect(run).toHaveBeenCalledTimes(1)
+  })
+
+  it("on Windows runs grid's PowerShell installer, and does not need curl", async () => {
+    let installed = false
+    const runs: string[] = []
+    const d = deps({
+      platform: 'win32',
+      curlOnPath: () => false,
+      available: () => installed,
+      run: async (script) => { runs.push(script); installed = true; return { exitCode: 0, output: 'ok' } },
+    })
+    expect((await ensureGridInstalled(d)).status).toBe('installed')
+    expect(runs).toEqual([`irm ${GRID_INSTALL_PS1_URL} | iex`])
+  })
+})
+
+describe('installerCommand', () => {
+  it('runs the installer script with bash off Windows', () => {
+    expect(installerCommand('darwin', 'S')).toEqual({ file: 'bash', args: ['-c', 'S'] })
+    expect(installerCommand('linux', 'S')).toEqual({ file: 'bash', args: ['-c', 'S'] })
+  })
+
+  it("runs it with Windows PowerShell by absolute path on Windows — a bare name is searched in the current folder", () => {
+    expect(installerCommand('win32', 'S', { SystemRoot: 'C:\\Windows' })).toEqual({
+      file: 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe',
+      args: ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', 'S'],
+    })
   })
 })
