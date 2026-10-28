@@ -1756,7 +1756,7 @@ class AppNotifier extends ChangeNotifier {
 
   late final superTabs = SuperTabClient(
     storage: localStore ?? HarnessFileStore.shared,
-    viewStorage: localStore ?? swarmViewStore(),
+    viewStorage: swarmViewStore(beside: localStore),
     upload: uploadWith(() => api),
     avatarUpload: uploadAvatarWith(() => api),
     onMention: superTabMentionNotice(systemNotifications),

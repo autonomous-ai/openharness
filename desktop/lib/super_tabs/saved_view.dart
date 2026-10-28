@@ -18,12 +18,19 @@ class SuperTabSavedViews {
   /// How many Swarms an account keeps a view of, most recently used first.
   static const maxTabs = 3;
 
-  String _key(String account, String tabId) => 'super_tab.view.$account.$tabId';
-  String _index(String account) => 'super_tab.views.$account';
+  /// What a view's key starts with; the account and the Swarm follow.
+  static const viewPrefix = 'super_tab.view.';
+
+  /// The Swarms an account keeps a view of, most recently used first.
+  static String indexKey(String account) => 'super_tab.views.$account';
+
+  String _key(String account, String tabId) => '$viewPrefix$account.$tabId';
+  String _index(String account) => indexKey(account);
 
   /// The account whose views this device keeps: the one to forget when
   /// another signs in, in this page or after a reload.
-  static const _owner = 'super_tab.saved_by';
+  static const ownerKey = 'super_tab.saved_by';
+  static const _owner = ownerKey;
 
   Future<void> _tail = Future.value();
 
