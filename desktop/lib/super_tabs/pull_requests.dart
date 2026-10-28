@@ -270,6 +270,7 @@ class _SuperTabPullRequestsState extends State<SuperTabPullRequests> {
           }
         }
         _unsupported = unsupported;
+        if (!unsupported) _localUnavailable = false;
         if (error == 'GH_MISSING' || error == 'GH_SIGNED_OUT') {
           // A changed login must not leave yesterday's private titles under today's account.
           _entries.clear();
