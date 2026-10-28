@@ -337,4 +337,27 @@ void main() {
     final (state, _) = await _show(tester, _ken(), tabId: 's4');
     expect(state.shownTabId, 's4');
   });
+
+  testWidgets('a failed refresh says so quietly, keeps the list, and retries', (
+    tester,
+  ) async {
+    final backend = _ken();
+    final (state, _) = await _show(tester, backend);
+    backend.failures['/api/super-tabs/workspaces'] = const SuperTabFailure(
+      'MACHINE_UNAVAILABLE',
+      'Connect one of your machines to open Swarm.',
+    );
+    await _open(tester);
+    expect(find.text('Workspaces could not be refreshed'), findsOneWidget);
+    expect(
+      find.text('Connect one of your machines to open Swarm.'),
+      findsOneWidget,
+    );
+    expect(find.text('openharness'), findsOneWidget);
+    backend.failures.clear();
+    await _tap(tester, find.text('Retry'));
+    expect(state.error, isNull);
+    await _open(tester);
+    expect(find.text('Workspaces could not be refreshed'), findsNothing);
+  });
 }

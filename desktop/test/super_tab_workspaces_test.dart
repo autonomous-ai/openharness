@@ -349,6 +349,10 @@ void main() {
           [for (final r in SwarmWorkspaceRole.values) r.createsSwarms],
           [true, true, true, false],
         );
+        expect(
+          [for (final r in SwarmWorkspaceRole.values) r.seesPeople],
+          [true, true, true, false],
+        );
       });
 
       test(

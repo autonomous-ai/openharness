@@ -35,6 +35,9 @@ enum SwarmWorkspaceRole {
 
   /// Workspace settings: people, invitations and Swarm visibility.
   bool get managesPeople => this == owner || this == admin;
+
+  /// The Workspace's people list; a guest sees only their own Swarms' people.
+  bool get seesPeople => this != guest;
   bool get renames => this == owner;
   bool get createsSwarms => this != guest;
 }

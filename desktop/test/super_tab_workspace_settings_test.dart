@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
@@ -13,10 +15,16 @@ import 'swarm_state_test.dart' show MemoryStore;
 /// are at each read.
 class _Backend {
   _Backend(this.role);
-  final String role;
+  String role;
   final requests = <(String, String, Map<String, dynamic>?)>[];
   final failures = <String, SuperTabFailure>{};
   String name = 'Autonomous';
+
+  /// Holds the people read until it completes.
+  Future<void>? hold;
+
+  /// Holds an invitation's answer until it completes.
+  Future<void>? holdInvite;
   final answers = <String, Map<String, dynamic>>{};
   List<Map<String, dynamic>> members = [
     {'userId': 'ken', 'email': 'ken@example.com', 'role': 'owner'},
@@ -60,6 +68,8 @@ class _Backend {
     Map<String, dynamic>? body,
   }) async {
     requests.add((method, path, body));
+    if (path.endsWith('/members') && hold != null) await hold;
+    if (path.endsWith('/invitations') && holdInvite != null) await holdInvite;
     final failure = failures[path];
     if (failure != null) throw failure;
     if (answers[path] case final answer?) return answer;
@@ -418,5 +428,76 @@ void main() {
     await _show(tester, _Backend('owner'), size: const Size(360, 900));
     expect(tester.takeException(), isNull);
     expect(find.byKey(const ValueKey('workspace-invite-send')), findsOneWidget);
+  });
+
+  group('a role lost while settings are open', () {
+    testWidgets('an admin made a member no longer sees invitations', (
+      tester,
+    ) async {
+      final backend = _Backend('admin');
+      final state = await _show(tester, backend);
+      expect(find.text('new@acme.com'), findsOneWidget);
+      backend.role = 'member';
+      // As the backend: a member's people list carries no invitations.
+      final invitations = backend.invitations;
+      backend.invitations = [];
+      await state.refresh();
+      await tester.pumpAndSettle();
+      expect(find.text('new@acme.com'), findsNothing);
+      expect(
+        find.byKey(const ValueKey('workspace-invite-email')),
+        findsNothing,
+      );
+      expect(find.byKey(const ValueKey('workspace-role')), findsNothing);
+      backend.invitations = invitations;
+    });
+
+    testWidgets('shown nothing cached before the people are read again', (
+      tester,
+    ) async {
+      final backend = _Backend('admin');
+      final state = await _show(tester, backend);
+      backend.role = 'member';
+      final read = Completer<void>();
+      backend.hold = read.future;
+      await state.refresh();
+      await tester.pump();
+      expect(find.text('new@acme.com'), findsNothing);
+      read.complete();
+      await tester.pumpAndSettle();
+    });
+
+    testWidgets('a guest no longer sees the people', (tester) async {
+      final backend = _Backend('admin');
+      final state = await _show(tester, backend);
+      backend.role = 'guest';
+      backend.failures['/api/super-tabs/workspaces/w1/members'] =
+          const SuperTabFailure(
+            'WORKSPACE_ROLE_REQUIRED',
+            'Your role in this Workspace cannot see its people.',
+            statusCode: 403,
+          );
+      await state.refresh();
+      await tester.pumpAndSettle();
+      expect(_row('tony@example.com'), findsNothing);
+      expect(find.text('new@acme.com'), findsNothing);
+    });
+  });
+
+  testWidgets('an invitation answered after settings closed changes nothing '
+      'and throws nothing', (tester) async {
+    final backend = _Backend('owner');
+    final answer = Completer<void>();
+    backend.holdInvite = answer.future;
+    await _show(tester, backend);
+    await tester.enterText(
+      find.byKey(const ValueKey('workspace-invite-email')),
+      'sam@acme.com',
+    );
+    await _tap(tester, find.byKey(const ValueKey('workspace-invite-send')));
+    await tester.pumpWidget(const SizedBox());
+    answer.complete();
+    await tester.pumpAndSettle();
+    expect(tester.takeException(), isNull);
   });
 }

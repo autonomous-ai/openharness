@@ -64,6 +64,9 @@ class _SwarmWorkspaceSettingsDialogState
   final _email = TextEditingController();
   SwarmWorkspaceRole? _inviteRole;
   SwarmWorkspacePeople? _people;
+
+  /// The role [_people] was read with: what that role may see, and no more.
+  SwarmWorkspaceRole? _peopleRole;
   String? _error;
   bool _busy = false;
 
@@ -81,22 +84,46 @@ class _SwarmWorkspaceSettingsDialogState
     super.initState();
     _name.text = _workspace?.name ?? '';
     _email.addListener(() => setState(() {}));
+    _peopleRole = _workspace?.role;
+    widget.workspaces.addListener(_roleChanged);
+    unawaited(_load());
+  }
+
+  /// A role lost (or gained) while open: what was read for the old role is
+  /// dropped at once, and read again for the new one.
+  void _roleChanged() {
+    final role = _workspace?.role;
+    if (role == _peopleRole) return;
+    setState(() {
+      _people = null;
+      _peopleRole = role;
+      _leaving.clear();
+      _error = null;
+    });
     unawaited(_load());
   }
 
   @override
   void dispose() {
+    widget.workspaces.removeListener(_roleChanged);
     _name.dispose();
     _email.dispose();
     super.dispose();
   }
 
   Future<void> _load() async {
+    final role = _workspace?.role;
+    // A guest sees no Workspace's people (the backend refuses it too).
+    if (role == null || !role.seesPeople) return;
     try {
       final people = await _api.members(widget.workspaceId);
-      if (mounted) setState(() => _people = people);
+      // Read for a role the person no longer has: dropped.
+      if (!mounted || _workspace?.role != role) return;
+      setState(() => _people = people);
     } on SuperTabFailure catch (failure) {
-      if (mounted) setState(() => _error = failure.message);
+      if (mounted && _workspace?.role == role) {
+        setState(() => _error = failure.message);
+      }
     }
   }
 
@@ -109,6 +136,11 @@ class _SwarmWorkspaceSettingsDialogState
     });
     try {
       await change();
+      if (!mounted) {
+        // Closed meanwhile: the menu still shows the change.
+        unawaited(widget.workspaces.refresh());
+        return;
+      }
       await Future.wait([_load(), widget.workspaces.refresh()]);
     } on SuperTabFailure catch (failure) {
       if (mounted) setState(() => _error = failure.message);
@@ -170,7 +202,8 @@ class _SwarmWorkspaceSettingsDialogState
           email: email,
           role: _inviteRole ?? role,
         );
-        _email.clear();
+        // Settings may have closed while the invitation was sent.
+        if (mounted) _email.clear();
       }),
     );
   }
@@ -439,6 +472,7 @@ class _SwarmWorkspaceSettingsDialogState
   ];
 
   List<Widget> _peopleList(SwarmWorkspace workspace) {
+    if (!workspace.role.seesPeople) return const [];
     final people = _people;
     if (people == null) {
       return [
@@ -458,7 +492,7 @@ class _SwarmWorkspaceSettingsDialogState
               style: DesktopChrome.metadata(),
             ),
           ),
-      if (people.invitations.isNotEmpty) ...[
+      if (workspace.role.managesPeople && people.invitations.isNotEmpty) ...[
         _heading('Invited'),
         // The address, and under it the role and the last day, as the
         // Share Swarm dialog lists its invitations.

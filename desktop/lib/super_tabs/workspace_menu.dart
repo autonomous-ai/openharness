@@ -180,7 +180,23 @@ class _SwarmWorkspaceMenuState extends State<SwarmWorkspaceMenu> {
   List<Widget> _menuChildren(SwarmWorkspace current, double width) {
     final all = widget.workspaces.workspaces ?? const <SwarmWorkspace>[];
     final invitations = widget.workspaces.invitations;
+    final error = widget.workspaces.error;
     return [
+      // A failed refresh keeps the list read last, and says so quietly.
+      if (error != null) ...[
+        SizedBox(
+          width: width,
+          child: AppMenuItem(
+            icon: AppIcons.circleAlert,
+            label: 'Workspaces could not be refreshed',
+            detail: error,
+            expandLabel: true,
+            trailing: _action('Retry'),
+            onPressed: () => unawaited(widget.workspaces.refresh()),
+          ),
+        ),
+        const AppMenuDivider(),
+      ],
       for (final workspace in all) ...[
         SizedBox(
           width: width,
