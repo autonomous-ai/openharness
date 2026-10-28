@@ -11,6 +11,7 @@ import 'package:harness_mobile/shared/theme/app_theme.dart';
 
 import 'model.dart';
 import 'swarm_attachment.dart';
+import 'swarm_face.dart';
 
 /// The host the backend serves message files from: a link anywhere else is
 /// not opened (the desktop's `attachmentLink`).
@@ -343,7 +344,8 @@ class SwarmRoleBadge extends StatelessWidget {
 
 /// Who wrote a message, in a circle: an agent's initial on its own deep
 /// colour — blue for a Product Manager, as the prototype has River — the
-/// person's on theirs, white on each.
+/// person's on theirs, white on each — or the picture they chose, and a
+/// person's status emoji while it lasts.
 class SwarmChatAvatar extends StatelessWidget {
   const SwarmChatAvatar({
     super.key,
@@ -351,6 +353,8 @@ class SwarmChatAvatar extends StatelessWidget {
     required this.id,
     required this.agent,
     this.pm = false,
+    this.picture,
+    this.status,
   });
 
   static const double size = 32;
@@ -373,6 +377,12 @@ class SwarmChatAvatar extends StatelessWidget {
   /// A project's Product Manager: the prototype's blue, kept for them alone.
   final bool pm;
 
+  /// What they chose to wear; null wears the initial.
+  final SuperTabAvatarPicture? picture;
+
+  /// A person's status; null for an agent.
+  final SuperTabPersonStatus? status;
+
   @override
   Widget build(BuildContext context) {
     final fill = !agent
@@ -384,17 +394,27 @@ class SwarmChatAvatar extends StatelessWidget {
     final initial = name.trim().isEmpty
         ? '?'
         : name.trim().characters.first.toUpperCase();
-    return Container(
-      width: size,
-      height: size,
-      alignment: Alignment.center,
-      decoration: BoxDecoration(color: fill, shape: BoxShape.circle),
-      child: Text(
-        initial,
-        style: swarmChatText(
-          13.5,
-          color: Colors.white,
-          weight: FontWeight.w600,
+    return SwarmStatusFace(
+      name: name,
+      size: size,
+      status: status,
+      face: SwarmFace(
+        picture: picture,
+        size: size,
+        tint: fill,
+        fallback: Container(
+          width: size,
+          height: size,
+          alignment: Alignment.center,
+          decoration: BoxDecoration(color: fill, shape: BoxShape.circle),
+          child: Text(
+            initial,
+            style: swarmChatText(
+              13.5,
+              color: Colors.white,
+              weight: FontWeight.w600,
+            ),
+          ),
         ),
       ),
     );
