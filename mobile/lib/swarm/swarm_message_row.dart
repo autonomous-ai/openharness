@@ -143,6 +143,7 @@ class SwarmMessageRow extends StatelessWidget {
     super.key,
     required this.message,
     required this.name,
+    required this.look,
     required this.role,
     required this.mentions,
     required this.grouped,
@@ -156,6 +157,9 @@ class SwarmMessageRow extends StatelessWidget {
 
   final SuperTabMessage message;
   final String name;
+
+  /// What its author wears.
+  final SwarmLook look;
   final String? role;
 
   final SwarmMentions mentions;
@@ -187,6 +191,8 @@ class SwarmMessageRow extends StatelessWidget {
         id: message.authorId,
         agent: message.fromAgent,
         pm: role == 'PM',
+        picture: look.picture,
+        status: look.status,
       ),
       header: SwarmMessageHeader(
         name: name,

@@ -240,7 +240,11 @@ class _SwarmPageState extends State<SwarmPage> {
             SwarmRow(
               key: ValueKey('swarm-home-pm-${swarm.id}-${project.id}'),
               leading: switch (swarmPmId(snapshot, project)) {
-                final id? => SwarmAvatar(id: id, name: snapshot.agentName(id)),
+                final id? => SwarmAvatar(
+                  id: id,
+                  name: snapshot.agentName(id),
+                  picture: snapshot.agent(id)?.avatar,
+                ),
                 null => SwarmProjectTile(project.name),
               },
               title: project.name,

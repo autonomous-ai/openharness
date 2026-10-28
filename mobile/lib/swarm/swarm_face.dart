@@ -5,7 +5,7 @@ import 'package:flutter/material.dart';
 
 import 'package:harness_mobile/shared/theme/app_theme.dart';
 
-import 'profile_model.dart';
+import 'model.dart';
 
 /// What a person or an agent wears inside their round mark, as the desktop
 /// draws it (`desktop/lib/super_tabs/avatar_art.dart`): the picture they
@@ -34,6 +34,8 @@ class SwarmFace extends StatelessWidget {
         width: size,
         height: size,
         fit: BoxFit.cover,
+        // A link signed anew keeps the picture shown while it loads.
+        gaplessPlayback: true,
         frameBuilder: (context, child, frame, synchronous) =>
             frame == null && !synchronous ? fallback : child,
         errorBuilder: (context, _, _) => fallback,
@@ -190,3 +192,44 @@ class _SwarmUntilState extends State<SwarmUntil> {
   @override
   Widget build(BuildContext context) => widget.builder(context);
 }
+
+/// What a person or an agent wears: the picture they chose and, for a
+/// person, their status.
+typedef SwarmLook = ({
+  SuperTabAvatarPicture? picture,
+  SuperTabPersonStatus? status,
+});
+
+final _peopleById = Expando<Map<String, SuperTabPerson>>();
+
+/// Who wears what in a Swarm as last read.
+extension SwarmLooks on SuperTabSnapshot {
+  /// The member [id]; looked up per row on every build, so kept by id once
+  /// per read, as the snapshot's own lookups are.
+  SuperTabPerson? person(String id) =>
+      (_peopleById[this] ??= {for (final p in people.reversed) p.id: p})[id];
+
+  SwarmLook agentLook(String id) => (picture: agent(id)?.avatar, status: null);
+
+  SwarmLook personLook(String id) {
+    final found = person(id);
+    return (picture: found?.avatar, status: found?.status);
+  }
+
+  SwarmLook authorLook(SuperTabMessage message) => message.fromAgent
+      ? agentLook(message.authorId)
+      : personLook(message.authorId);
+}
+
+/// The same for two looks drawn alike, though each read makes new ones: what
+/// a row kept as it was compares.
+Object swarmLookKey(SwarmLook look) => (
+  switch (look.picture) {
+    SuperTabUploadedAvatar(:final url) => url,
+    SuperTabPresetAvatar(:final key) => key,
+    null => null,
+  },
+  look.status?.text,
+  look.status?.emoji,
+  look.status?.until,
+);
