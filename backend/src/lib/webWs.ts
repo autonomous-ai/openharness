@@ -162,6 +162,15 @@ function attachUserClient(ws: WebSocket, user: AuthUser, surface: 'mobile' | 'we
   const p2pSignalRate = new P2pSignalRateGuard()
 
   const send = (obj: unknown): boolean => guardedSendJson(ws, obj, 'must', { userId: user.sub })
+  // What the disconnect line reports (cleanup below): prod, 2026-10-28, 2,304 of 2,308 opens in 15 minutes declared no
+  // client and lived a median 0.4 s, and that line named only the user, so nothing told a relay's churn apart.
+  const openedAt = Date.now()
+  let selects = 0
+  let refused: string | null = null
+  const refuse = (payload: { machineId: string; error: string; retryAfterMs?: number }): void => {
+    refused = payload.error
+    send({ type: 'machine_select_error', payload })
+  }
   logger.info('web user connected', { userId: user.sub })
   send({ type: 'connected', payload: { userId: user.sub } })
 
@@ -363,20 +372,20 @@ function attachUserClient(ws: WebSocket, user: AuthUser, surface: 'mobile' | 'we
       // client's stale list; a failed share check is ours.
       const reason = !binding ? 'unknown' : binding.deletedAt ? 'deleted' : shareCheckFailed ? 'share_check_failed' : 'not_shared'
       logger.warn('machine_select rejected', { userId: user.sub, machineId, reason })
-      send({ type: 'machine_select_error', payload: { machineId: machineId, error: 'NOT_YOUR_MACHINE' } })
+      refuse({ machineId: machineId, error: 'NOT_YOUR_MACHINE' })
       return
     }
     if (storedAutonomousEnvironment(binding.autonomousEnv) !== user.autonomousEnv) {
       logger.warn('machine_select environment rejected', { userId: user.sub, machineId, autonomousEnv: user.autonomousEnv })
-      send({ type: 'machine_select_error', payload: { machineId: machineId, error: 'MACHINE_ENV_MISMATCH' } })
+      refuse({ machineId: machineId, error: 'MACHINE_ENV_MISMATCH' })
       return
     }
     if (binding.billingStatus === 'pending') {
-      send({ type: 'machine_select_error', payload: { machineId: machineId, error: 'MACHINE_PAYMENT_PENDING' } })
+      refuse({ machineId: machineId, error: 'MACHINE_PAYMENT_PENDING' })
       return
     }
     if (binding.billingStatus === 'suspended') {
-      send({ type: 'machine_select_error', payload: { machineId: machineId, error: 'MACHINE_SUBSCRIPTION_REQUIRED' } })
+      refuse({ machineId: machineId, error: 'MACHINE_SUBSCRIPTION_REQUIRED' })
       return
     }
     try {
@@ -384,7 +393,7 @@ function attachUserClient(ws: WebSocket, user: AuthUser, surface: 'mobile' | 'we
     } catch (err) {
       if (!closed && gen === selectGen) {
         const code = err instanceof Error && 'code' in err ? String((err as { code?: unknown }).code) : 'MACHINE_START_FAILED'
-        send({ type: 'machine_select_error', payload: { machineId: machineId, error: code } })
+        refuse({ machineId: machineId, error: code })
       }
       return
     }
@@ -398,7 +407,7 @@ function attachUserClient(ws: WebSocket, user: AuthUser, surface: 'mobile' | 'we
     // the web viewer waits attached for the machine to come back, as before.
     if ((refuseOffline || !surface) && !await machineOnline(machineId, !!await getAgentPresence(machineId))) {
       if (!closed && gen === selectGen) {
-        send({ type: 'machine_select_error', payload: { machineId, error: 'MACHINE_OFFLINE', retryAfterMs: OFFLINE_RETRY_AFTER_MS } })
+        refuse({ machineId, error: 'MACHINE_OFFLINE', retryAfterMs: OFFLINE_RETRY_AFTER_MS })
       }
       return
     }
@@ -433,7 +442,7 @@ function attachUserClient(ws: WebSocket, user: AuthUser, surface: 'mobile' | 'we
       client = null
       currentAgentId = null
       currentBinding = null
-      send({ type: 'machine_select_error', payload: { machineId, error: 'NOT_YOUR_MACHINE' } })
+      refuse({ machineId, error: 'NOT_YOUR_MACHINE' })
       ws.close(4403, 'Sharing ended')
     }
     void subscribeMachineShareChanged(machineId, () => { void recheck().catch(() => { /* the next change asks again */ }) })
@@ -515,6 +524,7 @@ function attachUserClient(ws: WebSocket, user: AuthUser, surface: 'mobile' | 'we
       }
     }
     if (type === 'machine_select') {
+      selects++
       const payload = frame.payload as { machineId?: unknown; offline?: unknown } | undefined
       await bindAgent(payload?.machineId, payload?.offline === 'refuse')
       return
@@ -608,7 +618,7 @@ function attachUserClient(ws: WebSocket, user: AuthUser, surface: 'mobile' | 'we
     inbox.enqueue(frame)
   })
 
-  const cleanup = (): void => {
+  const cleanup = (code?: number, reason?: Buffer): void => {
     if (closed) return
     closed = true
     releaseLiveness()
@@ -625,10 +635,15 @@ function attachUserClient(ws: WebSocket, user: AuthUser, surface: 'mobile' | 'we
     if (machineListUnsub) { machineListUnsub(); machineListUnsub = null }
     if (deviceE2eePairUnsub) { deviceE2eePairUnsub(); deviceE2eePairUnsub = null }
     if (documentsUnsub) { documentsUnsub(); documentsUnsub = null }
-    logger.info('web user disconnected', { userId: user.sub, machineId: currentAgentId ?? undefined })
+    const why = reason?.toString()
+    logger.info('web user disconnected', {
+      userId: user.sub, client: surface ?? 'relay', ...(build.release ? { release: build.release } : {}),
+      ...(currentAgentId ? { machineId: currentAgentId } : {}), ...(code !== undefined ? { code } : {}), ...(why ? { reason: why } : {}),
+      aliveMs: Date.now() - openedAt, selects, ...(refused ? { refused } : {}),
+    })
   }
-  ws.on('close', cleanup)
-  ws.on('error', cleanup)
+  ws.on('close', (code: number, reason: Buffer) => cleanup(code, reason))
+  ws.on('error', () => cleanup())
 }
 
 /** LEGACY per-agent socket (old bundle during rolling deploys): bound to one agent for life. */
