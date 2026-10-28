@@ -95,7 +95,8 @@ const repeatKey = (d: Pick<DecisionDraft, 'askerAgentId' | 'assignmentId' | 'per
 /** Writes the questions asked and returns the decision each one is: an open decision that this ask exactly repeats is that
  *  decision again, not a second one. New ones beyond MAX_OPEN_DECISIONS from this asker to this person are refused, and
  *  writing them removes the tab's decisions answered before the leaderboard's weeks. Read and written in the command's
- *  transaction; two asks committing at the same moment can still both be written, past the cap by one batch at most. */
+ *  transaction; asks committing at the same moment each pass the check, so together they can still be written twice or
+ *  go past the cap by what they add. */
 export async function writeDecisions(tx: Tx, tabId: string, drafts: DecisionDraft[], now: number): Promise<string[]> {
   if (!drafts.length) return []
   const { personId, askerAgentId } = drafts[0]!
