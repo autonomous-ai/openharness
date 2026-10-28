@@ -1202,8 +1202,6 @@ model SuperTabDelivery {
 
   @@index([tabId, agentId, status, createdAt])
   @@index([machineId, status])
-  /// A page of messages' deliveries (store.ts messages).
-  @@index([tabId, messageId])
   /// A Swarm's open deliveries, whoever they are for (the Lead's poll, store.ts fullDeliveries).
   @@index([tabId, status])
 }

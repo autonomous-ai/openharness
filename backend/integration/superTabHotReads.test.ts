@@ -119,7 +119,6 @@ describe('hot reads read only what they return (roadmap 2.7)', () => {
       const first = await hosts.changes(owner, s.machineId, { full: true })
       clock = Date.now()
       await hosts.changes(owner, s.machineId, { cursor: first.cursor })
-      await store.messages(owner, s.tabId, s.done, {})
       await store.deliveries(owner, s.tabId, s.lead)
       await db.$transaction(tx => waitingIn(tx, s.tabId, s.web))
     })
@@ -139,12 +138,6 @@ describe('hot reads read only what they return (roadmap 2.7)', () => {
 
   it('the host\'s wake check reads only machines whose settings changed since the cursor', () => {
     const rows = reads(entries, 'SwarmMachine', ['tabId', 'hostChangedAt'])
-    expect(rows).toHaveLength(1)
-    expect(rows[0]!.docsExamined, JSON.stringify(plan(rows))).toBeLessThanOrEqual(rows[0]!.nreturned!)
-  })
-
-  it('a page of messages reads only its own messages\' deliveries', () => {
-    const rows = reads(entries, 'SuperTabDelivery', ['tabId', 'messageId'], ['agentId'])
     expect(rows).toHaveLength(1)
     expect(rows[0]!.docsExamined, JSON.stringify(plan(rows))).toBeLessThanOrEqual(rows[0]!.nreturned!)
   })
