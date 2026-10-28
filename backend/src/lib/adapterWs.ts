@@ -40,6 +40,7 @@ import { machineBillingAllowsDataPlane } from './billingState.js'
 import { normalizeComputerId } from './deviceAuth.js'
 import { authenticateAccessToken, SsoAuthError } from './ssoAuth.js'
 import { relayAccountPushes } from './adapterAccountPushes.js'
+import { relaySwarmDeliveries } from './swarmDeliveryPushes.js'
 import { DAEMONS } from '../config/env.js'
 import { parseAutonomousEnvironment } from './autonomousEnvironment.js'
 import { machineService } from '../services/MachineService.js'
@@ -234,6 +235,8 @@ async function attachAdapter(ws: WebSocket, machineId: string, userId: string, c
   // re-reads through its daemon rather than polling for it. See adapterAccountPushes.ts.
   // A team machine reads none of the account's desk, zoo, machines or connections: it hears only the device-key pushes.
   const accountPushesUnsub = await relayAccountPushes(userId, send, { zoo: DAEMONS.on, team })
+  // Work waiting for this machine's Swarm agents, team machine or not: its host reads it at once (swarmDeliveryPushes.ts).
+  const swarmPushesUnsub = await relaySwarmDeliveries(machineId, send)
 
   // Last desktop-app state THIS socket asserted. Socket-scoped on purpose: a new adapter connection
   // starts with no claim and must re-assert, so a fresh value can never renew a stale one.
@@ -559,6 +562,7 @@ async function attachAdapter(ws: WebSocket, machineId: string, userId: string, c
     releaseLiveness()
     terminalDownUnsub()
     accountPushesUnsub()
+    swarmPushesUnsub()
     // Only the CURRENT owner tears the role down — a superseded socket must not mark the fresh
     // connection offline. A superseded socket still releases its own liveness tracking above.
     if (owners.get(machineId) === ws) {

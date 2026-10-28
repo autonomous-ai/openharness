@@ -8,7 +8,7 @@ import { attachedFiles, attachmentsOf } from './attachments.js'
 import { randomUUID } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
-import type { CoreApi, TurnDelivery } from '../core/api.js'
+import type { BackendNotice, CoreApi, TurnDelivery } from '../core/api.js'
 import { shellQuote } from '../orchestrator/prompts.js'
 import { agentCommandPrefix, fullCommandPrefix } from './shortCommand.js'
 import { readAuthSession } from '../lib/authSession.js'
@@ -137,6 +137,14 @@ const JOIN_FINAL = new Set(['MACHINES_FULL', 'OWNER_REQUIRED'])
  *  added to an overloaded backend (production at 5 pods, 2026-10-27). */
 const DELIVERY_RETRY_MS = 1_000
 const DELIVERY_RETRY_MAX_MS = 30_000
+/** Stability roadmap 2.4 (2026-10-28): every host read each running agent's delivery list each second, almost always to find
+ *  nothing. A server that says it pushes (a `super_tab_deliveries` notice over the daemon socket, backend lib/adapterWs.ts)
+ *  names the agent when work waits; an idle agent's list is then read only this often, as the safety net for a lost push.
+ *  It matches the backend's quiet poll (liveness.ts SWEEP_EVERY_MS), so each read still runs a Lead's time checks. */
+const DELIVERY_FALLBACK_MS = 30_000
+/** The server repeats that it pushes every 4 minutes on each socket: without it for this long (an older server, a rollback,
+ *  this process started after the last one), every list is read each second again. */
+const PUSH_LEASE_MS = 10 * 60_000
 const LEAD_RETRY_MS = 5_000
 const LEAD_RETRY_MAX_MS = 30 * 60_000
 const LEAD_REOPEN_WAIT_MS = 60_000
@@ -195,6 +203,15 @@ export class SuperTabHost {
   private readonly authorized = new Map<string, number>()
   private readonly withheld = new WithheldDeliveries()
   private readonly stopHearing: () => void
+  private readonly stopNotices: () => void
+  /** Until when the server is known to push deliveries (PUSH_LEASE_MS). */
+  private pushUntil = 0
+  /** The agents' lists the server said have work since the last poll took them, by list key; `pushAll` reads every one. */
+  private readonly pushes = new Set<string>()
+  private pushAll = false
+  /** Per agent's list, when it was last read, what it held, and whether any of it is still in this host's hands: input in
+   *  flight needs a fresh read each second for its 2.5 s lease (accept), so only a list with nothing to do may wait. */
+  private readonly lists = new Map<string, { readAt: number; ids: string[]; busy: boolean }>()
   private stopped = false
   private running: Promise<void> | null = null
   private stopsRunning: Promise<void> | null = null
@@ -295,6 +312,7 @@ export class SuperTabHost {
     }
     this.persist()
     this.stopHearing = core.turns.onDelivery(event => this.heard(event))
+    this.stopNotices = core.account.onNotice(notice => this.pushed(notice))
     if (existsSync(nativeJournalFile(core.dataDir, machineId))) {
       try { this.native = new NativeRecorder(core, machineId) } catch (error) { this.log(String(error)) }
     }
@@ -316,6 +334,7 @@ export class SuperTabHost {
     if (this.timer) clearInterval(this.timer)
     this.timer = null
     this.stopHearing()
+    this.stopNotices()
     this.native?.stop()
     this.machines?.stop()
     this.authorized.clear()
@@ -356,7 +375,25 @@ export class SuperTabHost {
   }
   tick(): Promise<void> {
     if (this.stopped || this.now() < this.updateUntil) return Promise.resolve()
-    return this.running ??= this.poll().catch(error => this.failed(error)).finally(() => { this.running = null })
+    return this.running ??= this.poll().catch(error => this.failed(error)).finally(() => {
+      this.running = null
+      // Work the server announced during that poll is read now, not at the next second.
+      if (!this.stopped && (this.pushAll || this.pushes.size)) void this.tick()
+    })
+  }
+  /** The server said work waits for one agent here, or (naming none) that it pushes: read at once. */
+  private pushed(notice: BackendNotice): void {
+    if (notice.type !== 'super_tab_deliveries' || this.stopped) return
+    this.pushUntil = this.now() + PUSH_LEASE_MS
+    if (identifier(notice.tabId) && identifier(notice.agentId)) this.pushes.add(`list:${notice.tabId}:${notice.agentId}`)
+    else this.pushAll = true
+    void this.tick()
+  }
+  /** A delivery this host has nothing more to do for until someone acts: withheld from an agent that may not read it, or
+   *  reported uncertain and waiting for a person. Any other keeps its agent's list read each second. */
+  private settled(delivery: Json): boolean {
+    const id = delivery.id as string, entry = this.journal.entries[id]
+    return this.unreadable.has(id) || (!!entry && entry.stage === 'uncertain' && delivery.status === 'uncertain' && delivery.receipt === entry.receipt)
   }
   /** Logged, except that an update-required answer is said once and then waits a minute, rather than every second. */
   private failed(error: unknown): void {
@@ -558,6 +595,10 @@ export class SuperTabHost {
   private async poll(): Promise<void> {
     const data = (await this.sources.feed.refresh()).roster
     if (this.stopped) return
+    // Taken once the roster is in: a push heard from here on is read by the next poll, which follows this one at once.
+    const pushes = new Set(this.pushes), pushAll = this.pushAll || this.now() >= this.pushUntil
+    this.pushes.clear()
+    this.pushAll = false
     // Multiply was closed by the ordinary 30-minute idle cleanup while still a
     // shared member. Membership outlives its task, terminal view and host process.
     // Retention only pauses cleanup when it fails; it must never hold up delivery.
@@ -637,6 +678,12 @@ export class SuperTabHost {
       const path = `/api/super-tabs/${target.tabId}/agents/${target.agent.id}/deliveries`
       const listKey = `list:${target.tabId}:${target.agent.id}`
       if (this.backedOff(listKey)) continue
+      const last = this.lists.get(listKey)
+      if (last && !pushAll && !last.busy && !pushes.has(listKey) && this.now() - last.readAt < DELIVERY_FALLBACK_MS) {
+        // Unread this time, its deliveries are as the last read left them: none is taken as gone.
+        for (const id of last.ids) seen.add(id)
+        continue
+      }
       let listRead = false
       try {
         const deliveries = await backend(this.core, 'GET', path)
@@ -645,6 +692,8 @@ export class SuperTabHost {
         listRead = true
         listsRead.add(listKey)
         for (const item of deliveries) { const id = object(item).id; if (identifier(id)) listed.add(id) }
+        const read = { readAt: this.now(), ids: deliveries.map(item => object(item).id).filter(identifier), busy: true }
+        this.lists.set(listKey, read)
         this.deliveryRetries.delete(listKey)
         for (const item of deliveries) {
           const delivery = object(item)
@@ -664,6 +713,7 @@ export class SuperTabHost {
             this.retire(delivery.id as string)
           }
         }
+        read.busy = deliveries.some(item => !this.settled(object(item)))
       } catch (error) {
         if (!listRead) this.retryLater(listKey)
         // Authority checks and network failures both withhold input. A later fresh read may grant it again.
@@ -675,6 +725,7 @@ export class SuperTabHost {
     for (const [harnessId, state] of this.keepAlives) if (!leads.has(harnessId) && !state.running) this.keepAlives.delete(harnessId)
     for (const [key, state] of this.endings) if (!ended.has(key) && !state.running) this.endings.delete(key)
     for (const deliveryId of this.unreadable) if (!seen.has(deliveryId)) this.unreadable.delete(deliveryId)
+    for (const key of this.lists.keys()) if (!running.some(r => `list:${r.tabId}:${r.agent.id}` === key)) this.lists.delete(key)
     // Diego's issue, 2026-10-27: kept for every session ever seen, a daemon running for weeks held each Custom role's text.
     for (const skills of [this.skillChecks, this.skillModes, this.roleTexts]) {
       for (const harnessId of skills.keys()) if (!this.rosterSkills.has(harnessId)) skills.delete(harnessId)

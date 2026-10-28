@@ -704,6 +704,20 @@ export function subscribeDeviceMachineListChanged(userId: string, cb: (msg: Devi
   return addSub(deviceMachineListChannel(userId), cb as Cb)
 }
 
+// Per-MACHINE Swarm deliveries: a delivery committed for one of this machine's agents (superTabs/store.ts deliveriesWaiting),
+// on some REST worker; the worker holding that machine's adapter socket tells its host (lib/swarmDeliveryPushes.ts).
+export interface SwarmDeliveriesMsg { tabId: string; agentId: string }
+
+const swarmDeliveriesChannel = (machineId: string): string => `swarm-deliveries:${machineId}`
+
+export function publishSwarmDeliveries(machineId: string, msg: SwarmDeliveriesMsg): Promise<number> {
+  return safePublish(swarmDeliveriesChannel(machineId), JSON.stringify(msg))
+}
+
+export function subscribeSwarmDeliveries(machineId: string, cb: (msg: unknown) => void): Promise<() => void> {
+  return addSub(swarmDeliveriesChannel(machineId), cb)
+}
+
 // Per-USER desk invalidation: the account's tabs changed (routes/desk.ts) on some REST worker; every
 // adapter socket of that user — one per computer, possibly on other workers — is told to re-fetch.
 export interface DeskChangedMsg { revision: number }

@@ -692,6 +692,15 @@ export class RelayGateway implements GatewayPort {
       return
     }
 
+    // Work waits for an agent of this machine's (backend lib/adapterWs.ts): the Swarm host reads its deliveries now. Naming
+    // none, the server says it pushes them. Backend-only like desk_changed: a client could only make the host read early.
+    if (type === 'super_tab_deliveries') {
+      const p = (typeof frame.payload === 'object' && frame.payload !== null ? frame.payload : {}) as Record<string, unknown>
+      this.core.notice(typeof p.tabId === 'string' && typeof p.agentId === 'string'
+        ? { type, tabId: p.tabId, agentId: p.agentId } : { type })
+      return
+    }
+
     // The account's device key log grew: this daemon re-reads and verifies it (deviceLogSyncer.ts), and
     // the window re-reads its Devices list. Backend-only for the same reason as desk_changed.
     if (type === 'device_keys_changed') {
