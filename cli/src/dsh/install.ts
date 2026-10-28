@@ -231,13 +231,13 @@ const GIT_ENV: NodeJS.ProcessEnv = {
   GIT_TERMINAL_PROMPT: '0',
 }
 
-/** Catalogs pin built-ins to the commit they describe; `git clone --branch` cannot take a SHA. */
 /**
  * A computer with no git at all. The Windows installer does not install Git, and 7 of the 11 Windows installs of
  * 2026-10-28 failed in under a second as `spawn git ENOENT` under a clone failure: said as what it is instead.
  */
 const NO_GIT = 'Git is not installed on this computer, and installing a harness needs it. Install Git, then try again.'
 
+/** Catalogs pin built-ins to the commit they describe; `git clone --branch` cannot take a SHA. */
 async function cloneRepo(source: string, ref: string | undefined, dir: string, sparse: boolean, onLine: DshInstallOptions['onLine']): Promise<GitResult> {
   if (!ref || !/^[a-f0-9]{40}$/i.test(ref)) {
     return streamGit(['clone', '--depth', '1', ...(sparse ? ['--filter=blob:none', '--sparse'] : []), '--progress', ...(ref ? ['--branch', ref] : []), '--', source, dir], onLine)
@@ -408,7 +408,7 @@ export async function finishInstall(resolved: InstalledDsh, opts: DshInstallOpti
 
   // Refused before anything runs, rather than as a setup or doctor that could not start (`spawn /bin/sh ENOENT`).
   if ((manifest.toolchain?.setup || manifest.toolchain?.doctor) && !dshShellAvailable()) {
-    const detail = `This harness runs a setup or check script, and Harness cannot run those on Windows yet.`
+    const detail = 'This harness runs a setup or check script, and Harness cannot run those on Windows yet.'
     progress({ id: manifest.id, phase: 'failed', detail, error: 'SHELL_UNAVAILABLE' })
     return { ok: false, error: 'SHELL_UNAVAILABLE', detail }
   }

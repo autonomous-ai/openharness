@@ -197,9 +197,6 @@ export function productUsageRequest(type: string, emit: (metric: ProductUsageMet
       }
       // A delete's or a restart's, whatever its kind: the phone's 3 delete refusals were `other` and its 2 restart
       // refusals `setup` on 2026-10-19, a kind of nine codes, with nothing to say which.
-      // A Store install's or update's, whatever its kind: the 11 Windows installs of 2026-10-28 were `other`, and
-      // nothing said which refusal. Its family adds up to `store_install_failed` (or `store_update_failed`).
-      if (store) count(`error_code_${launchErrorCode(error)}`)
       if (action === 'delete' || action === 'restart') {
         count(`error_code_${launchErrorCode(error)}`)
         // The phone's again, apart: the family above mixes every client of this daemon.
@@ -207,6 +204,9 @@ export function productUsageRequest(type: string, emit: (metric: ProductUsageMet
           try { emit(`phone_${action}_error_code_${launchErrorCode(error)}` as ProductUsageMetric) } catch { /* Optional measurement. */ }
         }
       }
+      // A Store install's or update's, whatever its kind: the 11 Windows installs of 2026-10-28 were `other`, and
+      // nothing said which refusal. Its family adds up to `store_install_failed` (or `store_update_failed`).
+      if (store) count(`error_code_${launchErrorCode(error)}`)
       detail(`error_${failure ? failure : error === 'TIMEOUT' ? 'timeout' : typeof error === 'string' && ['AGENT_NOT_FOUND', 'SESSION_NOT_FOUND', 'NOT_FOUND', 'NOT_INSTALLED'].includes(error) ? 'not_found' : typeof error === 'string' && ['DELETE_IN_PROGRESS', 'WORKTREE_BUSY', 'BUSY', 'DSH_BUSY'].includes(error) ? 'conflict' : kind}`)
     } else if (state === 'pending' || state === 'preparing' || state === 'starting') { count('pending'); detail('pending') }
     else if (state === 'unconfirmed' || state === 'unavailable' || state === 'cancelled') { count('unknown'); detail(state === 'cancelled' ? 'cancelled' : 'unknown') }
