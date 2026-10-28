@@ -592,7 +592,7 @@ export function teamSystemdUnit(input: TeamPlistInput): string {
   const paths = teamPaths(home)
   const environment = {
     HOME: home, USER: user, LOGNAME: user, SHELL: '/bin/bash', LANG: 'C.UTF-8',
-    PATH: `${paths.bin}:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin`,
+    PATH: `${paths.bin}:${TEAM_SYSTEM_PATH}`,
     ADAPTER_DATA_DIR: paths.data, PORT: String(port),
     ...checkEnv(input.env),
   }
@@ -629,8 +629,12 @@ WantedBy=multi-user.target
 `
 }
 
-/** A folder root relies on must be root's alone, and not a link: another account could swap what it holds. GNU stat. */
-const LINUX_OWNED_BY_ROOT = [
+/**
+ * A folder root relies on must be root's alone, and not a link: another account could swap what it holds. GNU stat.
+ * `owned_by_root_through` takes a link that root owns, and checks where it leads and that folder's parent instead: Fedora
+ * Silverblue and its kin have /home -> /var/home, and setup refused them for good (exit 6, "run setup again" never helped).
+ */
+export const LINUX_ROOT_CHECKS = [
   'owned_by_root() {',
   '  [ -e "$1" ] || return 0',
   '  [ ! -L "$1" ] || die "$1 is a symbolic link" 6',
@@ -638,7 +642,21 @@ const LINUX_OWNED_BY_ROOT = [
   '  mode=$(stat -c %a "$1")',
   '  [ $((0$mode & 022)) -eq 0 ] || die "$1 can be written by others" 6',
   '}',
-]
+  'owned_by_root_through() {',
+  '  if [ -L "$1" ]; then',
+  // The link itself, as stat answers without -L: only root can have made it, so only root can point it elsewhere.
+  '    [ "$(stat -c %u "$1")" = 0 ] || die "$1 is a symbolic link another account owns" 6',
+  '    real=$(readlink -f "$1") || die "$1 is a symbolic link that leads nowhere" 6',
+  '    owned_by_root "$(dirname "$real")"',
+  '    owned_by_root "$real"',
+  '  else',
+  '    owned_by_root "$1"',
+  '  fi',
+  '}',
+].join('\n')
+
+/** The system's part of the team daemon's PATH (its unit's), and where setup looks for the tmux it will run. */
+export const TEAM_SYSTEM_PATH = '/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin'
 
 export function buildLinuxSetupScript(input: SetupScriptInput): string {
   const { user, owner, home, ownerHome, stage, nodeDir, nodeName, cliDir, ownerNode, ownerCli, mintEnv, paths } = checkedSetup(input)
@@ -657,6 +675,7 @@ export function buildLinuxSetupScript(input: SetupScriptInput): string {
     `TEAM_GROUP=${sh(LINUX.group)}`,
     `TEAM_NAME=${sh(input.realName)}`,
     `TEAM_HOME=${sh(home)}`,
+    `TEAM_PARENT=${sh(home.slice(0, home.lastIndexOf('/')) || '/')}`,
     `OWNER=${sh(owner)}`,
     `OWNER_HOME=${sh(ownerHome)}`,
     `STAGE=${sh(stage)}`,
@@ -681,7 +700,7 @@ export function buildLinuxSetupScript(input: SetupScriptInput): string {
     // util-linux's, wherever systemd runs; sudo may not be installed (pkexec asked for root).
     'as_team() { runuser -u "$TEAM" -- "$@"; }',
     'as_owner() { runuser -u "$OWNER" -- "$@"; }',
-    ...LINUX_OWNED_BY_ROOT,
+    LINUX_ROOT_CHECKS,
     '',
     '[ "$(id -u)" = 0 ] || die "run as root"',
     '[ "$(uname -s)" = Linux ] || die "this Harness Team account setup is for Linux"',
@@ -691,8 +710,9 @@ export function buildLinuxSetupScript(input: SetupScriptInput): string {
     '  command -v "$tool" >/dev/null 2>&1 || die "$tool is missing on this computer: the Harness Team account needs it" 3',
     'done',
     // The system's tmux, run as an account with nothing of its own, as the team account will run it.
-    `runuser -u nobody -- tmux -V >/dev/null 2>&1 || die ${sh(LINUX_NO_TMUX)} 3`,
-    'for dir in / /home /etc /var/lib /etc/systemd/system; do owned_by_root "$dir"; done',
+    `runuser -u nobody -- env PATH=${TEAM_SYSTEM_PATH} tmux -V >/dev/null 2>&1 || die ${sh(LINUX_NO_TMUX)} 3`,
+    'for dir in / /etc /var/lib /etc/systemd/system; do owned_by_root "$dir"; done',
+    'owned_by_root_through "$TEAM_PARENT"',
     'owner_uid=$(id -u "$OWNER") || die "no such account: $OWNER"',
     'owner_gid=$(id -g "$OWNER")',
     '[ "$owner_uid" != 0 ] || die "the owner cannot be root"',

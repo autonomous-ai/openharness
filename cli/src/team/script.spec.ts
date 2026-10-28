@@ -10,7 +10,7 @@ import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import {
   REMOVE_REFUSED, SENTINEL_TEXT, TEAM_COMPUTER_LINE, TEAM_COPY, TEAM_ENGINES_INSTALL, TEAM_JOB_WRAPPER, TEAM_PASSWORD, WRITE_PRIVATE, WRITE_PUBLIC,
-  LINUX_NO_SYSTEMD, LINUX_NO_TMUX, buildLinuxRemoveScript, buildLinuxSetupScript, buildRemoveScript, buildSetupScript, sh, teamLaunchdPlist,
+  LINUX_NO_SYSTEMD, LINUX_NO_TMUX, LINUX_ROOT_CHECKS, TEAM_SYSTEM_PATH, buildLinuxRemoveScript, buildLinuxSetupScript, buildRemoveScript, buildSetupScript, sh, teamLaunchdPlist,
   teamSystemdUnit, type SetupScriptInput,
 } from './script.js'
 
@@ -648,7 +648,7 @@ describe('Linux', () => {
       expect(at(script, '[ -d /run/systemd/system ]')).toBeLessThan(at(script, 'useradd -m'))
       expect(at(script, '[ -d /run/systemd/system ]')).toBeLessThan(at(script, 'groupadd'))
       expect(script).toContain('for tool in setfacl useradd userdel groupadd gpasswd runuser systemctl; do')
-      expect(script).toContain('for dir in / /home /etc /var/lib /etc/systemd/system; do owned_by_root "$dir"; done')
+      expect(script).toContain('for dir in / /etc /var/lib /etc/systemd/system; do owned_by_root "$dir"; done')
       expect(script).toContain('[ "$(stat -c %u "$1")" = 0 ]')
       expect(script).toContain('mode=$(stat -c %a "$1")')
     })
@@ -656,8 +656,59 @@ describe('Linux', () => {
     it('refuses without a tmux every account can run (exit 3), before it changes anything', () => {
       const script = buildLinuxSetupScript(linuxInput())
       expect(LINUX_NO_TMUX).toBe('no tmux every account can run: install it (apt install tmux / dnf install tmux)')
-      expect(script).toContain(`runuser -u nobody -- tmux -V >/dev/null 2>&1 || die ${sh(LINUX_NO_TMUX)} 3`)
-      expect(at(script, 'runuser -u nobody -- tmux -V')).toBeLessThan(at(script, 'useradd -m'))
+      expect(script).toContain(`runuser -u nobody -- env PATH=${TEAM_SYSTEM_PATH} tmux -V >/dev/null 2>&1 || die ${sh(LINUX_NO_TMUX)} 3`)
+      expect(at(script, 'runuser -u nobody -- env PATH=')).toBeLessThan(at(script, 'useradd -m'))
+    })
+
+    it('follows a root-owned link above the team home (Fedora Silverblue: /home -> /var/home) and checks where it leads', () => {
+      const script = buildLinuxSetupScript(linuxInput())
+      expect(script).toContain("TEAM_PARENT='/home'")
+      expect(script).toContain('for dir in / /etc /var/lib /etc/systemd/system; do owned_by_root "$dir"; done')
+      expect(script).toContain('owned_by_root_through "$TEAM_PARENT"')
+      expect(at(script, 'owned_by_root_through "$TEAM_PARENT"')).toBeLessThan(at(script, 'useradd -m'))
+      parses(script)
+    })
+
+    /** The Linux root checks run for real on a temporary tree, with GNU stat's two answers stood in for (the uid by a
+     *  file listing the paths root owns, the mode as the file's own), since the spec runs neither as root nor with GNU stat. */
+    function rootChecks(rootOwned: string[], target: string): { status: number | null; stderr: string } {
+      const dir = temp()
+      const owned = join(dir, 'root-owned')
+      writeFileSync(owned, rootOwned.map((p) => `${p}\n`).join(''))
+      const prelude = [
+        `die() { printf 'harness: %s\\n' "$1" >&2; exit "\${2:-1}"; }`,
+        // `stat -c %u` and `-c %a` of a path itself, never through a link, as GNU stat answers without -L.
+        `stat() { if [ "$2" = %u ]; then if grep -qxF "$3" ${sh(owned)}; then echo 0; else echo 501; fi; else echo 755; fi; }`,
+        LINUX_ROOT_CHECKS,
+        `owned_by_root_through ${sh(target)}`,
+        'echo ok',
+      ].join('\n')
+      const result = spawnSync('/bin/sh', ['-c', prelude], { encoding: 'utf8' })
+      return { status: result.status, stderr: result.stderr }
+    }
+
+    it('accepts a link root owns to a folder root owns, and refuses one another account owns or that leads to one', () => {
+      const dir = temp()
+      const real = join(dir, 'var', 'home')
+      mkdirSync(real, { recursive: true })
+      const link = join(dir, 'home')
+      execFileSync('ln', ['-s', real, link])
+      // readlink -f answers the real path, which on macOS's temporary folder starts /private.
+      const resolved = execFileSync('readlink', ['-f', link], { encoding: 'utf8' }).trim()
+      const parent = resolved.slice(0, resolved.lastIndexOf('/'))
+      expect(rootChecks([link, resolved, parent], link)).toEqual({ status: 0, stderr: '' })
+      expect(rootChecks([resolved, parent], link)).toMatchObject({ status: 6, stderr: expect.stringContaining('a symbolic link another account owns') })
+      expect(rootChecks([link, parent], link)).toMatchObject({ status: 6, stderr: expect.stringContaining('is not owned by root') })
+      // A plain folder is checked as before.
+      expect(rootChecks([real], real)).toEqual({ status: 0, stderr: '' })
+      expect(rootChecks([], real)).toMatchObject({ status: 6 })
+    })
+
+    it('looks for tmux on the PATH the team daemon will have, /usr/local/bin included', () => {
+      const script = buildLinuxSetupScript(linuxInput())
+      expect(script).toContain(`runuser -u nobody -- env PATH=${TEAM_SYSTEM_PATH} tmux -V >/dev/null 2>&1 || die ${sh(LINUX_NO_TMUX)} 3`)
+      expect(TEAM_SYSTEM_PATH).toBe('/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin')
+      expect(teamSystemdUnit(unitInput)).toContain(`\nEnvironment="PATH=/home/harnessteam/.local/bin:${TEAM_SYSTEM_PATH}"\n`)
     })
 
     it('runs its steps in order: account, homes, stop, runtime, config, relay folder, sign-in, daemon', () => {
