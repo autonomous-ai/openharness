@@ -14172,9 +14172,27 @@ class AppNotifier extends ChangeNotifier {
     int? beforeTurn,
     int? maxChars,
   }) async {
+    final reply = await readSessionTailReply(
+      machineId,
+      sessionId,
+      beforeTurn: beforeTurn,
+      maxChars: maxChars,
+    );
+    return reply == null || reply['error'] != null ? null : reply;
+  }
+
+  /// [readSessionTail]'s reply with its refusal kept (`NOT_INDEXED`: the
+  /// machine's index no longer holds the session). Null when the machine did
+  /// not answer.
+  Future<Map<String, dynamic>?> readSessionTailReply(
+    String machineId,
+    String sessionId, {
+    int? beforeTurn,
+    int? maxChars,
+  }) async {
     if (!searchableMachineIds.contains(machineId)) return null;
     try {
-      final reply = await _conn(machineId).request(
+      return await _conn(machineId).request(
         'session_tail',
         payload: {
           'sessionId': sessionId,
@@ -14183,8 +14201,6 @@ class AppNotifier extends ChangeNotifier {
         },
         timeout: const Duration(seconds: 4),
       );
-      if (reply['error'] != null) return null;
-      return reply;
     } catch (_) {
       return null;
     }
