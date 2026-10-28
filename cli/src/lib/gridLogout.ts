@@ -17,7 +17,7 @@
  */
 import { spawn } from 'node:child_process'
 import { binaryOnPath } from './binaryOnPath.js'
-import { GRID_BINARY, gridBinaryPath, gridChildEnv } from './gridExec.js'
+import { GRID_BINARY, gridBinaryPath, gridChildEnv, gridCommand } from './gridExec.js'
 
 /** The verb, on the same binary the hand-off spawns. Deliberately NOT a cross-repo pin: rename it in
  *  autonomous-grid and argparse refuses it loudly, in the child's own words, on the child's own
@@ -59,7 +59,8 @@ export async function passThroughToGridLogout(args: string[]): Promise<GridLogou
     // this a passthrough rather than a re-narration of one.
     // Inherited stderr is a terminal, where grid would offer `grid update` for a binary the harness
     // pins — off, as for every child of this daemon (GRID_NO_UPDATE_CHECK_VAR in gridExec.ts).
-    const child = spawn(binary, [GRID_LOGOUT_VERB, ...args], { stdio: 'inherit', env: gridChildEnv() })
+    const command = gridCommand(binary, [GRID_LOGOUT_VERB, ...args])
+    const child = spawn(command.file, command.args, { stdio: 'inherit', env: gridChildEnv() })
     let settled = false
     const settle = (outcome: GridLogoutOutcome): void => { if (!settled) { settled = true; resolve(outcome) } }
 

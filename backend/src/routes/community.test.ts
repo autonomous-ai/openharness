@@ -92,6 +92,8 @@ import { communityNotificationRoutes } from './communityNotifications.js'
 import { communityReportRoutes, resetReportRateLimits } from './communityReports.js'
 import { communityEditRoutes, resetEditRateLimits } from './communityEdit.js'
 import { registerAuthMiddleware } from '../middlewares/authMiddleware.js'
+import { registerSecurityHeaders } from '../middlewares/securityHeaders.js'
+import { logger } from '../utils/logger.js'
 import { errorHandler } from '../middlewares/errorHandler.js'
 import { communityStarters, isPublicCommunityRead } from '../lib/communityAccess.js'
 
@@ -109,7 +111,8 @@ async function publish(token = 'alice', payload = sample, env = 'prod') {
 beforeEach(async () => {
   for (const model of [db.communityHarness, db.communityLike, db.communityComment, db.communityFollow, db.communityReport, db.communityHidden, db.communityNotification]) model.rows.splice(0)
   vi.clearAllMocks(); resetEditRateLimits(); resetReportRateLimits()
-  app = Fastify(); app.setErrorHandler(errorHandler)
+  // The server's own headers too (server.ts): with them, every answer here runs two onSend hooks, as in production.
+  app = Fastify(); app.setErrorHandler(errorHandler); registerSecurityHeaders(app)
   registerAuthMiddleware(app, async (token, autonomousEnv = 'prod') => {
     if (!['alice', 'bob', 'carol', 'dave', 'admin'].includes(token)) throw new Error('Invalid token')
     return { sub: token, email: `${token}@example.com`, role: token === 'admin' ? 'admin' : 'user', autonomousEnv }
@@ -119,6 +122,21 @@ beforeEach(async () => {
 afterEach(async () => app.close())
 
 describe('publications and access', () => {
+  // 2026-10-28 prod, twice: "Cannot write headers after they are sent to the client" on the feed. An async handler that
+  // sends without returning its reply, while two async onSend hooks still run, is sent a second time by Fastify.
+  it('answers the feed and a publication once, with no second send reaching the error handler', async () => {
+    const failed = vi.spyOn(logger, 'error').mockImplementation(() => {})
+    const id = await publish()
+    for (const path of ['harnesses', `harnesses/${id}`, 'harnesses?sort=popular']) {
+      const response = await call('GET', path)
+      expect(response.statusCode).toBe(200)
+      expect(response.headers['cache-control']).toBe('no-store')
+      expect(response.headers['x-content-type-options']).toBe('nosniff')
+    }
+    expect(failed.mock.calls.map(c => c[1] instanceof Error ? c[1].message : c[1])).toEqual([])
+    failed.mockRestore()
+  })
+
   it('shows feed engagement and gives the creator a place to find and reply to comments', async () => {
     const id = await publish()
     await call('PUT', `harnesses/${id}/like`, 'bob', { liked: true })

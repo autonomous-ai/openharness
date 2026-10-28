@@ -5,6 +5,9 @@ import { engineLabel } from '../../lib/agentNames.js'
 import { externalSessionRequest, externalUnavailable, type ExternalSessionAnswer, type ExternalSessionRequest } from '../../lib/externalSessionWire.js'
 import type { SessionOwner } from '../../lib/sessionSearch/external.js'
 
+/** Said for every SESSION_IN_HARNESS, with what to do: 15 refusals on Oct 22 and 26 only said what was wrong. */
+const IN_HARNESS = 'This conversation is already open in a harness on this machine. Open that harness instead.'
+
 export interface AdoptDeps {
   inspect(request: ExternalSessionRequest): Promise<ExternalSessionAnswer>
   held(id: string): boolean
@@ -12,12 +15,12 @@ export interface AdoptDeps {
 
 export function adoptionDecision(sessionId: string, engine: AgentEngine, takeOver: 'idle' | 'now' | 'wait' | null, answer: ExternalSessionAnswer, held: (id: string) => boolean): { ok: true; cwd: string; title: string; owner: SessionOwner | null; busy: boolean; launchArgs: readonly string[] } | { ok: false; error: string; detail: string } {
     if (held(sessionId)) {
-      return { ok: false, error: 'SESSION_IN_HARNESS', detail: 'This conversation is already a harness here.' }
+      return { ok: false, error: 'SESSION_IN_HARNESS', detail: IN_HARNESS }
     }
     if (!answer.ok) return answer
     const found = answer.session
     if (found && [found.sessionId, ...found.aliases ?? []].some(held)) {
-      return { ok: false, error: 'SESSION_IN_HARNESS', detail: 'This conversation is already a harness here.' }
+      return { ok: false, error: 'SESSION_IN_HARNESS', detail: IN_HARNESS }
     }
     if (!found) return { ok: false, error: 'SESSION_NOT_FOUND', detail: 'This conversation is no longer on this machine.' }
     if (found.engine !== engine) return { ok: false, error: 'INVALID_ENGINE', detail: `This is a ${found.engine} conversation.` }
@@ -38,7 +41,7 @@ export function adoptionDecision(sessionId: string, engine: AgentEngine, takeOve
     if (!owner) return { ok: true, cwd: found.cwd, title, owner: null, busy: false, launchArgs }
     const engineName = engineLabel(engine)
     // A process in one of Harness's own panes is an agent the daemon is still binding: never stopped.
-    if (owner.harness) return { ok: false, error: 'SESSION_IN_HARNESS', detail: 'This conversation is already a harness here.' }
+    if (owner.harness) return { ok: false, error: 'SESSION_IN_HARNESS', detail: IN_HARNESS }
     // Started on it, as its arguments say, and perhaps moved on since — or in a pane nobody could check
     // was not Harness's own: not opened twice, never stopped.
     if (owner.fromArgs || owner.unverified) {

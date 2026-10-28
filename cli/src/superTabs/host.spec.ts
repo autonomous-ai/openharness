@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { prepareSwarmSkill } from '../lib/swarmSkills.js'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import type { CoreApi, TurnDelivery } from '../core/api.js'
+import type { BackendNotice, CoreApi, TurnDelivery } from '../core/api.js'
 import { fakeCore } from '../testing/fakeCore.js'
 import { backend, swarmRoleFor, hostJournalFile, SuperTabHost, type SuperTabHostOptions } from './host.js'
 import { hostForm, swarmReply } from './fixtures/read/index.js'
@@ -24,6 +24,7 @@ afterEach(() => { for (const host of hosts.splice(0)) host.stop(); for (const ro
 function setup(messageFields: Record<string, unknown> = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'super-tab-host-')); roots.push(dir)
   const listeners = new Set<(e: TurnDelivery) => void>()
+  const notices = new Set<(notice: BackendNotice) => void>()
   const row: { tabId: string; agent: { id: string; harnessId: string; machineId: string }; lead?: boolean; leadsConversationId: string } =
     { tabId: 'tab', agent: { id: 'agent', harnessId: 'harness', machineId: 'machine-1' }, leadsConversationId: 'leads' }
   /** The conversation the delivery comes from. */
@@ -49,7 +50,7 @@ function setup(messageFields: Record<string, unknown> = {}) {
   })
   const core = fakeCore({ dataDir: dir,
     agents: { creationStatus: vi.fn(async creationId => ({ creationId, state: 'created' as const, agentId: 'harness' })), byAgent: vi.fn(() => ({ agentId: 'harness' }) as never), terminalAvailable: vi.fn(() => true) },
-    account: { backend: call },
+    account: { backend: call, onNotice: vi.fn(fn => { notices.add(fn); return () => { notices.delete(fn) } }) },
     turns: { onDelivery: vi.fn(fn => { listeners.add(fn); return () => { listeners.delete(fn) } }) },
   })
   const log = vi.fn()
@@ -58,7 +59,12 @@ function setup(messageFields: Record<string, unknown> = {}) {
     for (const fn of listeners) fn({ deliveryId: 'team:service:superTabs:delivery', sessionId: 'harness', state, reason })
   }
   const saved = () => JSON.parse(readFileSync(hostJournalFile(dir, 'machine-1'), 'utf8'))
-  return { core, call, open, event, receipts, holds, log, row, wait: (ms: number) => { clock += ms }, saved, dir, remove: () => { removed = true }, revoke: (value = true) => { revoked = value }, foreignClaim: () => { claimId = 'another-process' }, from: (id: string) => { from = id } }
+  return { core, call, open, event, receipts, holds, log, row, wait: (ms: number) => { clock += ms }, saved, dir, remove: () => { removed = true },
+    /** What the server's daemon socket tells this machine (backend lib/adapterWs.ts). */
+    push: (notice: BackendNotice) => { for (const fn of notices) fn(notice) },
+    /** Nothing waits for the agent until `send`, which queues a new delivery. */
+    idle: () => { status = 'delivered' }, send: () => { status = 'queued'; claimId = null },
+    revoke: (value = true) => { revoked = value }, foreignClaim: () => { claimId = 'another-process' }, from: (id: string) => { from = id } }
 }
 
 describe('current Swarm role lookup', () => {
@@ -1560,12 +1566,15 @@ describe('the members a host lets watch its agents', () => {
     clock += 1_000; await read(); clock += 201
     expect(source.allows(peer)).toBe(false)
     expect(source.known()).toEqual([])
-    // A host that stops publishes nobody, in force: Share withdraws the invitations rather than keeping them.
+    // A host that stops (its backend link dropped, or the daemon restarting for an update) pauses viewing at once, but no
+    // roster is in force: Share keeps the invitations. Withdrawing them took the computer out of every member's machine
+    // list until their app next read it, up to 5 minutes later (Ken, 2026-10-28).
     rows = [member]
     clock += 1_000; await read(); clock += 201
     expect(source.known()).toHaveLength(1)
     host.stop(); clock += 201
-    expect(source.known()).toEqual([])
+    expect(source.known()).toBeNull()
+    expect(source.allows(peer)).toBe(false)
     expect(superTabs.shareObservers).toHaveBeenCalledOnce()
   })
 })
@@ -2217,5 +2226,114 @@ describe('a machine its owner removed from a Swarm', () => {
     await host.tick()
     await new Promise(resolve => setTimeout(resolve, 50))
     expect(sent).toHaveLength(1)
+  })
+})
+
+// Stability roadmap 2.4 (2026-10-28): every running agent's host read its delivery list each second, which kept a 5-pod
+// backend busy with almost nothing waiting. The server now says over the daemon socket when an agent has work; the read
+// every 30 s stays as the safety net, and the read each second comes back whenever the server has not said it pushes.
+describe('deliveries the server pushes', () => {
+  const reads = (t: ReturnType<typeof setup>) => vi.mocked(t.call).mock.calls
+    .filter(([method, path]) => method === 'GET' && path.endsWith('/deliveries')).length
+  const announced: BackendNotice = { type: 'super_tab_deliveries' }
+  const waiting: BackendNotice = { type: 'super_tab_deliveries', tabId: 'tab', agentId: 'agent' }
+  async function seconds(t: ReturnType<typeof setup>, host: SuperTabHost, count: number) {
+    for (let i = 0; i < count; i++) { t.wait(1_000); await host.tick() }
+  }
+
+  it('reads an idle agent\'s list each second while the server has not said it pushes', async () => {
+    const t = setup(), host = t.open()
+    t.idle()
+    t.push({ type: 'desk_changed', revision: 1 })
+    await host.tick()
+    await seconds(t, host, 10)
+    expect(reads(t)).toBe(11)
+  })
+
+  it('reads an idle agent\'s list every 30 s once the server pushes', async () => {
+    const t = setup(), host = t.open()
+    t.idle()
+    t.push(announced)
+    await host.tick()
+    await seconds(t, host, 29)
+    expect(reads(t)).toBe(1)
+    await seconds(t, host, 1)
+    expect(reads(t)).toBe(2)
+  })
+
+  it('reads the agent\'s list at once when the server says work waits, and types it', async () => {
+    const t = setup(), host = t.open()
+    t.idle()
+    t.push(announced)
+    await host.tick()
+    await seconds(t, host, 5)
+    t.send()
+    t.push(waiting)
+    await host.tick()
+    expect(reads(t)).toBe(2)
+    expect(t.core.turns.deliver).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not wait for the next second when the push arrives during a read', async () => {
+    const t = setup(), host = t.open()
+    t.idle()
+    t.push(announced)
+    const first = host.tick()
+    t.send()
+    t.push(waiting)
+    await first
+    await vi.waitFor(() => expect(t.core.turns.deliver).toHaveBeenCalledTimes(1))
+  })
+
+  // The Lead's rule for this change: a lost push never loses work.
+  it('still types work whose push was lost, within 30 s', async () => {
+    const t = setup(), host = t.open()
+    t.idle()
+    t.push(announced)
+    await host.tick()
+    t.wait(500)
+    t.send()
+    await seconds(t, host, 29)
+    expect(t.core.turns.deliver).not.toHaveBeenCalled()
+    await seconds(t, host, 1)
+    expect(t.core.turns.deliver).toHaveBeenCalledTimes(1)
+  })
+
+  // The core lets input be written only for 2.5 s after a fresh authority read (accept); a slower read would expire it.
+  it('reads each second while the agent has input in flight, then goes quiet', async () => {
+    const t = setup(), host = t.open()
+    t.push(announced)
+    await host.tick()
+    expect(t.core.turns.deliver).toHaveBeenCalledTimes(1)
+    await seconds(t, host, 3)
+    expect(reads(t)).toBe(4)
+    t.event('delivered')
+    await seconds(t, host, 2)
+    expect(t.receipts).toHaveLength(1)
+    const settled = reads(t)
+    await seconds(t, host, 10)
+    expect(reads(t)).toBe(settled)
+  })
+
+  it('goes back to reading each second once the server has not said it pushes for 10 minutes', async () => {
+    const t = setup(), host = t.open()
+    t.idle()
+    t.push(announced)
+    await host.tick()
+    t.wait(10 * 60_000)
+    await host.tick()
+    await seconds(t, host, 2)
+    expect(reads(t)).toBe(4)
+  })
+
+  it('reads nothing more for a push naming an agent that does not run here', async () => {
+    const t = setup(), host = t.open()
+    t.idle()
+    t.push(announced)
+    await host.tick()
+    t.push({ type: 'super_tab_deliveries', tabId: 'tab', agentId: 'other' })
+    await host.tick()
+    await seconds(t, host, 1)
+    expect(reads(t)).toBe(1)
   })
 })

@@ -21,6 +21,8 @@ export function shouldSkipAuth(url: string): boolean {
   const path = url.split('?')[0]
   return (
     path === '/api/health' ||
+    // Readiness probe: the orchestrator carries no token, and the answer names only dependencies and their state.
+    path === '/api/ready' ||
     // Explicitly enabled, credential-free setup totals; its own schema and workload budget apply.
     path === '/api/product-usage/setup' ||
     // Hub totals the website's server forwards with cookies and auth stripped; same rules as setup.
@@ -70,6 +72,11 @@ export function shouldSkipAuth(url: string): boolean {
     // `start` returns codes it just minted, and `poll` needs the 32-byte device code and answers once.
     // The approve/deny/lookup half is NOT listed and stays SSO-gated — that is where the user's identity
     // and their machine list are involved. Listed one by one, like the cursor pair above.
+    // GitHub sends a person back here after they signed in to the Harness GitHub App (or installed it), with no Harness
+    // token: the `state` the backend signed for that person, project and scope, ten minutes long, is what it trusts
+    // (routes/superTabs.ts, github/approvals.ts). It only records that someone GitHub says can push to a repository
+    // approved it.
+    path === '/api/github/callback' ||
     path === '/api/device-auth/start' ||
     path === '/api/device-auth/poll' ||
     // The connector gateway's callback (routes/connectors.ts), posted by the Autonomous web callback

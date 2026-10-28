@@ -92,6 +92,16 @@ export function declaredClient(query: URLSearchParams): { surface: 'mobile' | 'w
   return { surface, build: surface === 'mobile' ? { release: query.get('release'), debug: query.get('debug') === '1' } : {} }
 }
 
+/** Sends `frame` down once `wake` has made sure its machine runs, to the client still selected then. A deselect, another
+ *  machine's select or the socket's close during the wait leaves no client for it, and the frame is dropped: it was meant
+ *  for that machine (2026-10-28 prod: "Cannot read properties of null (reading 'sendDown')"). A failed wake sends nothing. */
+export async function sendWhenAwake(selected: () => HubClient | null, wake: () => Promise<void>, frame: Frame): Promise<void> {
+  const target = selected()
+  if (!target) return
+  await wake()
+  if (selected() === target) target.sendDown(frame)
+}
+
 /** HTTP upgrade hook for `/api/web-ws`. Subprotocol = SSO access token or legacy agent apiKey. */
 export function handleWebUpgrade(req: IncomingMessage, socket: Duplex, head: Buffer): void {
   const cred = extractKey(req)
@@ -523,18 +533,19 @@ function attachUserClient(ws: WebSocket, user: AuthUser, surface: 'mobile' | 'we
       return
     }
     if (client && currentBinding) {
+      const binding = currentBinding
       // A selected machine can idle-stop while the tab remains open. Turn-producing messages always
       // refresh the wake lease; other frames wake only when presence says the node is down.
       try {
-        if ((isTerminal && terminalFrameNeedsWake(type!)) || (!isTerminal && (type === 'message' || !(await presentRecently(currentBinding.machineId))))) {
-          await ensureMachineReady(currentBinding)
-        }
+        await sendWhenAwake(() => client, async () => {
+          if ((isTerminal && terminalFrameNeedsWake(type!)) || (!isTerminal && (type === 'message' || !(await presentRecently(binding.machineId))))) {
+            await ensureMachineReady(binding)
+          }
+        }, frame)
       } catch (err) {
         const message = err instanceof Error ? err.message : 'Machine could not be started'
         send({ type: 'error', payload: { message } })
-        return
       }
-      client.sendDown(frame)
       return
     }
     // No agent selected: fast-fail RPCs (echo the requestId) so wsClient.request doesn't burn its

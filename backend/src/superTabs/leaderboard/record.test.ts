@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import { applyCommand, commandSchema, type Command, type CommandContext } from '../commands.js'
 import { createSuperTab, type Actor, type AgentConfiguration, type Conversation } from '../model.js'
+import type { DecisionTarget } from '../decisions.js'
+import { MAX_UNBLOCKS } from './record.js'
 import { leaderboard } from './stats.js'
 import { DAY_MS, WEEK_MS, weekStart } from './week.js'
 
@@ -285,7 +287,8 @@ describe('who unblocks waiting work', () => {
     expect(f.group(id).ledger?.waiting).toEqual({ assignmentId, since: 10_000, messageId: expect.any(String) })
     f.at(10_000 + 3 * 3_600_000)
     f.say(id, owner)
-    expect(f.group(id).ledger?.unblocks).toEqual([{ personId: 'owner', at: 10_000 + 3 * 3_600_000, waitedMs: 3 * 3_600_000 }])
+    expect(f.group(id).ledger?.unblocks).toEqual([{ personId: 'owner', at: 10_000 + 3 * 3_600_000, waitedMs: 3 * 3_600_000, kind: 'needs_human',
+      item: f.group(id).ledger!.waiting!.messageId }])
     expect(f.group(id).ledger?.waiting).toEqual({ assignmentId, since: 10_000, messageId: expect.any(String), answeredAt: 10_000 + 3 * 3_600_000 })
   })
 
@@ -323,7 +326,7 @@ describe('who unblocks waiting work', () => {
     f.invitePeer()
     const id = f.create(), { worker, assignmentId } = f.assign(id)
     const asked = f.status(id, assignmentId, worker, 'needs_human', 'Flag?').messages[0]!
-    f.say(id, peer, 'Flag.', asked.id, { id: asked.id, conversationId: id, author: asked.author })
+    f.say(id, peer, 'Flag.', asked.id, { id: asked.id, conversationId: id, author: asked.author, createdAt: 1_000 })
     expect(f.group(id).ledger?.unblocks).toEqual([expect.objectContaining({ personId: 'peer' })])
   })
 
@@ -379,6 +382,124 @@ describe('who unblocks waiting work', () => {
       f.status(id, assignmentId, worker, 'working')
     }
     expect(f.group(id).ledger?.unblocks?.map(u => u.at)).toEqual([4 * week + 2_000, 6 * week + 2_000])
+  })
+})
+
+describe('other ways a person unblocks work: decisions, approvals and tags', () => {
+  const HOUR = 3_600_000
+  const decision = (conversationId: string, extra: Partial<DecisionTarget> = {}): DecisionTarget => ({ id: 'decision-1', personId: 'owner', conversationId,
+    askerAgentId: 'gone', question: 'Ship how?', options: ['Behind a flag', 'To everyone'], answeredAt: null, createdAt: 2 * HOUR, assignmentId: null, ...extra })
+  /** The project's Lead asks in its own conversation at [askedAt], returning what a reply to it carries. */
+  const leadAsk = (f: ReturnType<typeof fixture>, askedAt = HOUR) => {
+    const lead = f.add('lead', 'lead', true)
+    f.at(askedAt)
+    const asked = f.say('lead', f.asAgent(lead), 'Plan: three steps. Reply GO to start.').messages[0]!
+    return { lead, reply: { id: asked.id, conversationId: 'lead', author: asked.author, createdAt: askedAt } }
+  }
+  const tagged = (f: ReturnType<typeof fixture>, id: string, text: string, openTags: CommandContext['openTags']) =>
+    f.run({ type: 'message.send', conversationId: id, text, replyTo: null, recipientIds: [] }, owner, { openTags })
+
+  it('credits a decision answer to the person asked, with how long it waited', () => {
+    const f = fixture(), id = f.create()
+    f.at(5 * HOUR)
+    f.run({ type: 'decision.answer', decisionId: 'decision-1', choice: 0 }, owner, { decision: decision(id) })
+    expect(f.group(id).ledger?.unblocks).toEqual([{ personId: 'owner', at: 5 * HOUR, waitedMs: 3 * HOUR, kind: 'decision', item: 'decision-1' }])
+  })
+
+  it('closes the wait a worker\'s needs-human decision belongs to, so a post after the answer counts nothing more', () => {
+    const f = fixture(), id = f.create(), { worker, assignmentId } = f.assign(id)
+    f.at(HOUR)
+    f.status(id, assignmentId, worker, 'needs_human', 'Flag?')
+    f.at(2 * HOUR)
+    f.run({ type: 'decision.answer', decisionId: 'decision-1', choice: 0 }, owner, { decision: decision(id, { createdAt: HOUR, assignmentId }) })
+    f.say(id, owner, 'Picked the flag.')
+    expect(f.group(id).ledger?.unblocks).toEqual([expect.objectContaining({ kind: 'decision', waitedMs: HOUR })])
+    expect(f.group(id).ledger?.waiting?.answeredAt).toBe(2 * HOUR)
+  })
+
+  it('counts a needs-human ask once when its person posts an answer before answering its decision', () => {
+    const f = fixture(), id = f.create(), { worker, assignmentId } = f.assign(id)
+    f.at(HOUR)
+    f.status(id, assignmentId, worker, 'needs_human', 'Flag?')
+    f.at(2 * HOUR)
+    f.say(id, owner, 'Flag.')
+    f.run({ type: 'decision.answer', decisionId: 'decision-1', choice: 0 }, owner, { decision: decision(id, { createdAt: HOUR, assignmentId }) })
+    expect(f.group(id).ledger?.unblocks).toEqual([expect.objectContaining({ kind: 'needs_human' })])
+  })
+
+  it('leaves a wait open when the decision answered belongs to another attempt', () => {
+    const f = fixture(), id = f.create(), { worker, assignmentId } = f.assign(id)
+    f.status(id, assignmentId, worker, 'needs_human', 'Flag?')
+    f.run({ type: 'decision.answer', decisionId: 'decision-1', choice: 0 }, owner, { decision: decision(id, { createdAt: 0, assignmentId: 'earlier' }) })
+    expect(f.group(id).ledger?.waiting?.answeredAt).toBeUndefined()
+  })
+
+  for (const word of ['GO', 'go ahead', 'Approve', 'approved, thanks', 'Duyệt', 'duyet nhe', 'DUYỆT nhé', '  Go!']) {
+    it(`counts "${word}" in reply to the Lead's ask as an approval, with how long the ask waited`, () => {
+      const f = fixture(), { reply } = leadAsk(f, HOUR)
+      f.at(4 * HOUR)
+      f.say('lead', owner, word, reply.id, reply)
+      expect(f.group('lead').ledger?.unblocks).toEqual([{ personId: 'owner', at: 4 * HOUR, waitedMs: 3 * HOUR, kind: 'approval', item: reply.id }])
+    })
+  }
+
+  for (const word of ['ok', 'OK, go', 'goal: ship Friday', 'approves nothing yet', 'no, not GO']) {
+    it(`does not count "${word}" as an approval`, () => {
+      const f = fixture(), { reply } = leadAsk(f)
+      f.say('lead', owner, word, reply.id, reply)
+      expect(f.group('lead').ledger?.unblocks).toBeUndefined()
+    })
+  }
+
+  it('counts an approval only in reply to the project\'s Lead, never to another agent', () => {
+    const f = fixture(), id = f.create(), { worker } = f.assign(id)
+    const said = f.say(id, f.asAgent(worker), 'Shall I start?').messages[0]!
+    f.say(id, owner, 'GO', said.id, { id: said.id, conversationId: id, author: said.author, createdAt: 1_000 })
+    expect(f.group(id).ledger?.unblocks).toBeUndefined()
+  })
+
+  it('counts one approval per ask, however many people or times reply GO', () => {
+    const f = fixture()
+    f.invitePeer()
+    const { reply } = leadAsk(f)
+    f.say('lead', owner, 'GO', reply.id, reply)
+    f.say('lead', owner, 'GO again', reply.id, reply)
+    f.say('lead', peer, 'Approved', reply.id, reply)
+    expect(f.group('lead').ledger?.unblocks).toEqual([expect.objectContaining({ personId: 'owner', kind: 'approval' })])
+  })
+
+  it('credits a reply to the tags waiting on the person once, timed from the oldest', () => {
+    const f = fixture(), id = f.create()
+    f.at(5 * HOUR)
+    tagged(f, id, 'Here you go.', [{ messageId: 'tag-new', createdAt: 3 * HOUR }, { messageId: 'tag-old', createdAt: HOUR }])
+    expect(f.group(id).ledger?.unblocks).toEqual([{ personId: 'owner', at: 5 * HOUR, waitedMs: 4 * HOUR, kind: 'tag_reply', item: 'tag-old' }])
+    tagged(f, id, 'And again.', [{ messageId: 'tag-old', createdAt: HOUR }])
+    expect(f.group(id).ledger?.unblocks).toHaveLength(1)
+  })
+
+  it('gives one post one credit: an answer to waiting work that also replies to a tag counts as the answer', () => {
+    const f = fixture(), id = f.create(), { worker, assignmentId } = f.assign(id)
+    f.status(id, assignmentId, worker, 'needs_human', 'Flag?')
+    tagged(f, id, 'Flag.', [{ messageId: 'tag', createdAt: 0 }])
+    expect(f.group(id).ledger?.unblocks).toEqual([expect.objectContaining({ kind: 'needs_human' })])
+  })
+
+  it('never credits a private conversation', () => {
+    const f = fixture()
+    const chat = f.run({ type: 'conversation.create', title: 'Me and PM', brief: '', checks: [], audience: { personIds: ['owner'] } }).result.conversationId as string
+    tagged(f, chat, 'Hi.', [{ messageId: 'tag', createdAt: 0 }])
+    expect(f.group(chat).ledger?.unblocks).toBeUndefined()
+  })
+
+  it(`keeps at most ${MAX_UNBLOCKS} credits on one conversation, the newest`, () => {
+    const f = fixture(), id = f.create()
+    for (let i = 0; i <= MAX_UNBLOCKS; i++) {
+      f.at(10_000 + i)
+      tagged(f, id, `Reply ${i}`, [{ messageId: `tag-${i}`, createdAt: 0 }])
+    }
+    const kept = f.group(id).ledger!.unblocks!
+    expect(kept).toHaveLength(MAX_UNBLOCKS)
+    expect(kept[0]!.item).toBe('tag-1')
   })
 })
 

@@ -41,7 +41,10 @@ answering or posting to a Lead on another machine; answering a Super Tab wait on
 
 1. **The Swarm tab looks like any tab.** Same font and colour in TABS. No badge, capsule or colour of its own; people
    tell it apart by its name (1a–1c).
-2. **Swarms not open on the desktop are listed too**, after the desktop's tabs (1d).
+2. **TABS mirrors the desktop's tabs exactly.** A Swarm with no desk tab is never listed, with or without a desktop
+   window. Changed 2026-10-27 (Diego), replacing "Swarms not open on the desktop are listed too" (1d): the desktop
+   opens a tab for every Super Tab its owner has not closed, so a Swarm with no desk tab is a closed one, and the dial
+   kept showing closed tabs ("PR merge"; 2 app tabs gave about 5 dial tabs). Screen 1d is dropped.
 3. **Projects keep a fixed order**: the Swarm's project order, the same as in the app, never sorted by state. Swiping
    never jumps (2a–2h, 3a–3c).
 4. **A Lead on another machine that needs you, or is stuck, also beeps** (2e′, 4e).
@@ -101,7 +104,6 @@ under the 512-token guard on both dials. The Pro reads Lead fields by name (`pro
 | Screen | Data | On the wire today? |
 | --- | --- | --- |
 | 1a–1c Swarm in TABS | `swarms` rows (desk tabs) + `supertab.tab` linking a Swarm to its desk tab | Yes |
-| 1d Swarm not open | `supertabs.ids` + `supertab.tab:""` | Yes; firmware rule (§3) |
 | 2a–2h Swarm pane | `supertab.leads[i]` {project, engine, owner, local, state, since} | Yes |
 | 2, 3 Fixed order | `leads[i].order` | **New** (daemon) |
 | 2 Recap card | `supertab.recap` ← `supertab.recap.get`, pushed for the Lead named by `supertab.open` | Yes |
@@ -127,17 +129,23 @@ It lives in PSRAM (`EXT_RAM_BSS_ATTR`, like the UI state `s`). The worst case is
 about 54 KB, plus one 1.5 KB recap. A `supertab` frame for an id not in the last `supertabs` list is dropped. A
 `supertabs` list drops the records whose ids left it.
 
-### 3. TABS (screens 1a–1d)
+### 3. TABS (screens 1a–1c)
 
 The TABS carousel lists, in order:
 
 1. The desk tabs, as today, from `swarms`. A desk tab linked to a Swarm (some Swarm's `tab` equals its id) stays at its
    desk position and keeps its name. It is listed even when its `agents` is 0 (today `ui_swarms_replace` hides such a
    tab; a Swarm tab whose selected project's Lead runs elsewhere may report 0).
-2. Then every Swarm whose `tab` is empty, in `supertabs.ids` order (1d), drawn with the Swarm's `name`.
+2. Nothing else (decision 2). A Swarm whose `tab` is empty or names no listed desk tab is not listed; with no desktop
+   window (an empty `swarms` list) TABS is empty. The `supertabs` and `supertab` frames are unchanged: the dial still
+   needs the cards to enter a Swarm from its desk tab and to follow the desktop.
+
+When the desktop closes the desk tab of the Swarm on the dial's face, the dial leaves that Swarm (`supertab.open` with
+no Lead) for TABS, on the app's current tab, or onto the empty list with no window. A Swarm entered from the inbox (§5)
+that has no desk tab is not one the desktop closed, and stays on the face.
 
 Every entry uses the same `tab_name`/`tab_split` drawing, the same ink and the same fade (decision 1). The list can
-hold 24 desk tabs + 16 Swarms; the carousel takes the count and needs no paging.
+hold 24 desk tabs; the carousel takes the count and needs no paging.
 
 Opening a tab (tap on its name, or ✓):
 
@@ -298,7 +306,6 @@ is no reply path in v1 (decision 5).
 | Mockup | Section |
 | --- | --- |
 | 1a, 1b, 1c | §3 TABS, decision 1 |
-| 1d | §3 item 2, decision 2 |
 | 2a | §4 face (work, local) |
 | 2b, 2g | §4 face (done, recap), §2 recap slot |
 | 2c | §4 face (ask, local), §5 wait text |

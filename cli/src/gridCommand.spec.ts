@@ -142,6 +142,7 @@ function envFor(root: string, backendUrl?: string, extra: NodeJS.ProcessEnv = {}
   return {
     ...inherited,
     HOME: root,
+    USERPROFILE: root, // Windows' HOME: the resolver's last stop is `%USERPROFILE%\.local\bin`
     HARNESS_AUTH_DIR: join(root, 'auth'),
     ADAPTER_DATA_DIR: join(root, 'data'),
     ADAPTER_CLI_DIR: join(root, 'cli'),

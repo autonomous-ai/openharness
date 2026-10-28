@@ -30,6 +30,13 @@ String superTabTerminalUnavailable({
   final computer =
       machine?.machine.displayName ?? row?['name'] as String? ?? 'a computer';
   final name = snapshot.agentName(agent.id);
+  // A private session is never shared, so no update or Retry brings it here. River, Ken's Product Manager, read
+  // "update and restart Harness" to every member while that Mac ran the latest Harness (2026-10-28).
+  if (superTabTerminalPrivate(snapshot, agent)) {
+    return snapshot.isLead(agent.id)
+        ? '$name is the Product Manager and reads private chats, so only $owner can watch its terminal.'
+        : '$name reads private chats, so only $owner can watch its terminal.';
+  }
   final where = '$name runs on $computer, $owner’s computer';
   if (_swarmOffline(row, now ?? DateTime.now())) {
     return '$where, which is offline. Its terminal shows here once that computer is back.';
@@ -37,6 +44,10 @@ String superTabTerminalUnavailable({
   return '$where. Its terminal is not shared with you yet: Harness there shares it with Swarm members '
       'once it is up to date and running. Ask $owner to update and restart Harness, then Retry.';
 }
+
+/// Whether an agent's terminal is private to the person whose computer runs it: it reads private chats.
+bool superTabTerminalPrivate(SuperTabSnapshot snapshot, SuperTabAgent agent) =>
+    agent.confidential || snapshot.isLead(agent.id);
 
 /// Whether the Swarm last heard from this machine long enough ago to call it offline. A machine the Swarm does not
 /// list is not called offline: what is known of it then is only that this account cannot see it.

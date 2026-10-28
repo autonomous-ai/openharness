@@ -80,6 +80,9 @@ void main() {
     await tester.tap(find.byKey(const ValueKey('super-group-lead')));
     await tester.pumpAndSettle();
     expect(c.selectedId, 'lead');
+    expect(find.text('12  Offline editing'), findsNothing);
+    await tester.tap(find.byKey(const ValueKey('super-project-toggle-lead')));
+    await tester.pumpAndSettle();
     expect(find.text('12  Offline editing'), findsOneWidget);
     await tester.tap(find.byKey(const ValueKey('super-group-offline')));
     await tester.pumpAndSettle();
@@ -87,7 +90,7 @@ void main() {
     await tester.tap(find.byKey(const ValueKey('super-group-design-lead')));
     await tester.pumpAndSettle();
     expect(c.selectedId, 'design-lead');
-    expect(c.expandedProjects, {'lead', 'design'});
+    expect(c.expandedProjects, {'lead'});
     await tester.tap(find.byKey(const ValueKey('super-group-lead')));
     await tester.pumpAndSettle();
     expect(c.selectedId, 'lead');
@@ -108,19 +111,29 @@ void main() {
         of: project,
         matching: find.text('Lamp OS'),
       );
-      // Enter on the open project shows its workgroups.
+      // Enter on the project opens its chat; → shows its workgroups.
       Focus.of(tester.element(projectName)).requestFocus();
       await tester.pump();
       await tester.sendKeyEvent(LogicalKeyboardKey.enter);
       await tester.pumpAndSettle();
-      expect(c.expandedProjects, {'lead'});
+      expect(c.expandedProjects, isEmpty);
       expect(c.selectedId, 'lead');
+      Focus.of(tester.element(projectName)).requestFocus();
+      await tester.pump();
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
+      await tester.pumpAndSettle();
+      expect(c.expandedProjects, {'lead'});
 
       final workgroup = find.byKey(const ValueKey('super-group-offline'));
       final projectBounds = tester.getRect(project);
       final workgroupBounds = tester.getRect(workgroup);
       expect(workgroupBounds.left, projectBounds.left);
-      expect(workgroupBounds.right, projectBounds.right);
+      expect(
+        workgroupBounds.right,
+        tester
+            .getRect(find.byKey(const ValueKey('super-project-toggle-lead')))
+            .right,
+      );
       // Workgroups share the project name column in the compact sidebar.
       expect(
         tester.getTopLeft(find.text('12  Offline editing')).dx,
@@ -132,7 +145,7 @@ void main() {
       await tester.pumpAndSettle();
       expect(c.selectedId, 'offline');
       // From a workgroup, the project row opens the project's chat and keeps
-      // its workgroups shown; once more, Space hides them.
+      // its workgroups shown; ← hides them.
       Focus.of(tester.element(projectName)).requestFocus();
       await tester.pump();
       await tester.sendKeyEvent(LogicalKeyboardKey.enter);
@@ -141,7 +154,7 @@ void main() {
       expect(c.expandedProjects, {'lead'});
       Focus.of(tester.element(projectName)).requestFocus();
       await tester.pump();
-      await tester.sendKeyEvent(LogicalKeyboardKey.space);
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowLeft);
       await tester.pumpAndSettle();
       expect(c.selectedId, 'lead');
       expect(c.expandedProjects, isEmpty);

@@ -150,6 +150,33 @@ describe('installation tokens', () => {
     expect(app.notInstalled(repo).message).toBe('The Harness GitHub App is not installed on acme/app. Ask an owner of acme to install it.')
   })
 
+  // A Harness Team account's commits are the app's (PR #1934): its bot account, as GitHub names it.
+  it('names the app\'s bot account as its commit identity, reading the bot\'s id once', async () => {
+    const { app, github } = setup()
+    expect(await app.commitIdentity()).toEqual({ name: 'harness-fixture[bot]', email: '4242+harness-fixture[bot]@users.noreply.github.com' })
+    expect(await app.commitIdentity()).toEqual({ name: 'harness-fixture[bot]', email: '4242+harness-fixture[bot]@users.noreply.github.com' })
+    const asked = github.calls.filter(c => c.path.startsWith('/users/'))
+    expect(asked).toEqual([expect.objectContaining({ method: 'GET', path: '/users/harness-fixture%5Bbot%5D', auth: '' })])
+    // With no app name configured, the app's own answer names it.
+    const unnamed = setup({ slug: null })
+    expect(await unnamed.app.commitIdentity()).toMatchObject({ name: 'harness-fixture[bot]' })
+    expect(unnamed.github.calls.map(c => c.path)).toEqual(['/app', '/users/harness-fixture%5Bbot%5D'])
+  })
+
+  it('has no commit identity while GitHub cannot say, and asks again ten minutes later', async () => {
+    const { app, github, time } = setup()
+    github.control.botId = null
+    expect(await app.commitIdentity()).toBeNull()
+    github.control.botId = 4242
+    expect(await app.commitIdentity()).toBeNull()
+    time.advance(10 * 60_000)
+    github.control.down = true
+    expect(await app.commitIdentity()).toBeNull()
+    github.control.down = false
+    time.advance(10 * 60_000)
+    expect(await app.commitIdentity()).toMatchObject({ email: '4242+harness-fixture[bot]@users.noreply.github.com' })
+  })
+
   it('revokes a token with the token itself, takes one already ended as done, and reports any other failure', async () => {
     const { app, github } = setup()
     const { token } = await app.createToken(77, repo)

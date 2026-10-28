@@ -354,6 +354,14 @@ describe('harness new: the daemon', () => {
     expect(refused.err[0]).toBe('Install it first: harness dsh install acme/typst')
   })
 
+  // prompt_unsupported, 4 in the Oct 21–27 report, came from `harness new <engine> --task`: say which flag to drop.
+  it('tells a first message the engine cannot take to leave out --task', async () => {
+    const refused = deps(['cursor', '--task', 'fix it'], new FakeSocket((frame) => frame.type === 'agent_create'
+      ? { creationId: 'c1', state: 'failed', failure: { code: 'PROMPT_UNSUPPORTED' } } : null))
+    expect(await newCommand(refused)).toBe(1)
+    expect(refused.err[0]).toBe('That agent cannot be started with a first message. Run it again without --task.')
+  })
+
   it('says a launch the machine refused or could not confirm failed, never "Created"', async () => {
     const failed = deps(['codex'], new FakeSocket((frame) => frame.type === 'agent_create'
       ? { creationId: 'c1', state: 'failed', failure: { code: 'SPAWN_FAILED', detail: 'no codex' } } : null))

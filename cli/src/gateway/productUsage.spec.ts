@@ -746,6 +746,27 @@ describe('when reports go', () => {
     expect(posts).toEqual([at(10_000), at(640_000), at(2_440_000)])
   })
 
+  it('holds a report the busy backend refused with Retry-After, then sends that same report, counting the cause', async () => {
+    start(() => 0)
+    await usage.sync(false); usage.counter('search_requests')
+    answers = [{ status: 429, body: { success: false, error: { code: 'USAGE_WRITE_CONFLICT' } }, retryAfterMs: 90_000 }]
+    await vi.advanceTimersByTimeAsync(10_000)
+    expect(posts).toEqual([at(10_000)])
+    // Ticks every 45 s here; the one at 55 s is inside the 90 s asked, the one at 100 s is not.
+    await vi.advanceTimersByTimeAsync(90_000 - 1)
+    expect(posts).toHaveLength(1)
+    await vi.advanceTimersByTimeAsync(1)
+    expect(posts).toEqual([at(10_000), at(100_000)])
+    // Not lost: the same receipt and counts again, which the backend's receipt makes count once.
+    expect(sent[1]).toEqual(sent[0])
+    expect(JSON.parse(readFileSync(file, 'utf8')).pending).toBeNull()
+    // The refusal's own counts go in the next report.
+    await vi.advanceTimersByTimeAsync(45_000)
+    expect(posts).toHaveLength(3)
+    expect(totals().health_cli_report_failure_write_conflict).toBe(1)
+    expect(totals().health_cli_report_failure_rate_limited).toBeUndefined()
+  })
+
   it('stops ticking once stopped', async () => {
     start(() => 0)
     await usage.sync(false); usage.counter('search_requests')

@@ -122,7 +122,9 @@ async function ingestCounters(report: SetupUsageReport & { revision?: number; co
         if (code === 'P2002'
             && await prisma.productUsageReceipt.findUnique({ where: { id: report.id }, select: { id: true } })) return { accepted: true }
         const pause = 25 * 2 ** attempt + Math.floor(Math.random() * 50)
-        if ((code !== 'P2034' && code !== 'P2002') || attempt >= 3
+        // A Mongo lock wait comes without a Prisma code, labelled transient, as Swarm's do (superTabs/store.ts).
+        const transient = error instanceof Error && error.message.includes('TransientTransactionError')
+        if ((code !== 'P2034' && code !== 'P2002' && !transient) || attempt >= 3
             || performance.now() - started + pause >= 1000) throw error
         await delay(pause)
         if (performance.now() - started >= 1000) throw error

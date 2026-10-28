@@ -79,6 +79,9 @@ export interface TeamCommandDeps {
 
   session(): AuthSession | null
   writeSession(session: AuthSession): void
+  /** Rewrites the newest sign-in under the refresh lock, leaving a signed-out mark alone (lib/authSession.ts
+   *  `updateAuthSession`): [change] gives the new one, or null to leave it. */
+  updateSession(change: (latest: AuthSession) => AuthSession | null): Promise<AuthSession | null>
   /** How a person asked for this computer's sign-in to go, or null when nothing says one did (lib/signOut.ts). */
   signOutAsked(flags: readonly string[]): SignOutAsked | null
   /** Takes the sign-in away, logged with who asked (lib/signOut.ts `removeSignIn`). */
@@ -516,9 +519,9 @@ async function recordTeamMachine(deps: TeamCommandDeps, label: string, log: (lin
     const machineId = answer?.machine?.machineId
     if (typeof machineId !== 'string' || !machineId) throw new Error('Harness answered without a machine id')
     // A refresh may have rewritten the session meanwhile: the machine id goes into the newest one.
-    const latest = deps.session()
-    if (latest?.kind !== 'team' || latest.computerId !== session.computerId) return
-    if (latest.machineId !== machineId) deps.writeSession({ ...latest, machineId, updatedAt: deps.now() })
+    const kept = await deps.updateSession((latest) => latest.kind !== 'team' || latest.computerId !== session.computerId
+      || latest.machineId === machineId ? null : { ...latest, machineId, updatedAt: deps.now() })
+    if (kept?.kind !== 'team' || kept.computerId !== session.computerId) return
     log(`runs as machine ${machineId}`)
   } catch (error) {
     log(`could not look up this account's machine yet (${(error as Error).message}); the next start tries again`)

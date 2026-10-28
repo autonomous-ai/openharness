@@ -29,7 +29,7 @@ export interface ContributedMachine {
    *  the host says it cleaned up (machine.cleaned) or REMOVAL_FALLBACK_MS passes. An offline one leaves the list at once and
    *  its cleanup waits for its host (expireRemovals). */
   removal?: { id: string; state: 'cleaning'; requestedAt: string }
-  /** Agent-time Swarm agents ran here, by leaderboard week, kept by its readings (leaderboard/lent.ts). */
+  /** Agent-time Swarm agents here spent on other people's tasks, by leaderboard week, kept by its readings (leaderboard/lent.ts). */
   lent?: import('./leaderboard/lent.js').LentWeek[]
 }
 /** A removed machine whose host never acknowledged in time: its records are gone, its host still cleans up on its next poll. */
@@ -110,11 +110,23 @@ export const machineObservationSchema = z.object({ generation: z.string().max(16
    *  it only when a team session reported it (observedPrivacy). */
   privacy: machinePrivacySchema.optional(),
   readiness: readiness.optional(),
+  /** The starts this machine launched and is still preparing (fetching the project, checking its worktree out, starting
+   *  the engine), as of this report. Such a start waits past the 3 minutes while reports keep naming it (liveness.ts);
+   *  the store keeps only this machine's own launched starts. Absent from hosts before it, whose starts get 3 minutes. */
+  preparingStartIds: z.array(z.string().min(1).max(160)).max(100).optional(),
 }).strict()
 export type MachineObservation = z.infer<typeof machineObservationSchema>
 
 /** A machine reports every 15 seconds (cli/src/superTabs/machines.ts); three missed beats is offline. */
 export const MACHINE_FRESH_MS = 45_000
+
+/** Whether [start] is preparing now: launched, neither running nor failed, and named by a fresh report of its own machine.
+ *  Read from that report, never written into the start, so a report a minute per start writes nothing more. */
+export function startPreparing(state: SuperTabState, start: AgentStart, now: number): boolean {
+  if (!start.dispatched || start.harnessId || start.error || start.dispatchedAt === undefined) return false
+  const report = state.machines?.find(m => m.machineId === start.request.machineId)?.observation
+  return !!report?.preparingStartIds?.includes(start.id) && now - report.receivedAt <= MACHINE_FRESH_MS
+}
 
 // ── Teammates' work runs only on Team machines (docs/plans/2026-10-24-swarm-team-account.md, Task 3) ──────────────
 // A start or an assignment for a project whose owner is not the person whose grant runs the machine is a teammate's
@@ -167,7 +179,16 @@ const ONLY_OWN = 'so it runs only its owner\'s projects'
  * read on every call, so a test can set them.
  */
 export function teamAccountRequired(state?: Pick<SuperTabState, 'ownerId' | 'people'>): boolean {
-  if (process.env.SWARM_TEAM_ACCOUNT_REQUIRED !== '1') return false
+  return process.env.SWARM_TEAM_ACCOUNT_REQUIRED === '1' && teamAccountSwarm(state)
+}
+
+/**
+ * Whether Harness Team accounts take part in [state]'s Swarm at all: they join it where their Mac was added (hostRows.ts)
+ * and teammates' work goes to them (teamMachineFor). With `SWARM_TEAM_ACCOUNT_OWNERS` set, only the Swarms those people
+ * own, so a bug in the team account cannot reach anyone else's Swarm while it is tried out (2026-10-28): elsewhere a Mac
+ * runs teammates' work itself, as before team accounts. Empty, every Swarm.
+ */
+export function teamAccountSwarm(state?: Pick<SuperTabState, 'ownerId' | 'people'>): boolean {
   const owners = (process.env.SWARM_TEAM_ACCOUNT_OWNERS ?? '').split(',').map(email => email.trim().toLowerCase()).filter(Boolean)
   if (!owners.length) return true
   const owner = state?.people.find(person => person.id === state.ownerId)?.email.toLowerCase()
@@ -246,7 +267,7 @@ export function teamPoolOf(state: SuperTabState, pool: ContributedMachine, live?
  *  its contributor's own and the Mac has one in this Swarm, else the machine named. */
 export function teamMachineFor(state: SuperTabState, machineId: string, project: SwarmProject, idle = false, live?: readonly string[]): string {
   // With no GitHub App on this server a team account cannot fetch or push, so the work stays on the Mac, as before.
-  if (idle) return machineId
+  if (idle || !teamAccountSwarm(state)) return machineId
   const pool = state.machines?.find(m => m.machineId === machineId)
   if (!pool || project.ownerId === pool.contributorId) return machineId
   return teamPoolOf(state, pool, live)?.machineId ?? machineId

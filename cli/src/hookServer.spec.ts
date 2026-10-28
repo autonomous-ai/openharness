@@ -477,6 +477,25 @@ describe('Super Tab attachment pass-through', () => {
     expect(await person.json()).toEqual({ path: '/api/super-tabs/tab-1/attachments', bytes: 1 })
   })
 
+  // A profile picture goes the same way (Desktop's Upload picture…); before this, the daemon answered 404 and Desktop
+  // showed only "Could not upload the file".
+  it('hands an avatar picture to the pass-through, guarded the same way', async () => {
+    const forward = vi.fn(async (req: import('node:http').IncomingMessage, res: import('node:http').ServerResponse, path: string) => {
+      let bytes = 0
+      for await (const chunk of req) bytes += (chunk as Buffer).byteLength
+      res.writeHead(200, { 'Content-Type': 'application/json' })
+      res.end(JSON.stringify({ path, bytes }))
+    })
+    const { base } = await start({ onSuperTabAttachment: forward })
+    const headers = { 'x-adapter-local': '1', 'content-type': 'multipart/form-data; boundary=x' }
+    expect((await fetch(`${base}/api/super-tabs/tab-1/avatars`, { method: 'POST',
+      headers: { ...headers, origin: 'https://untrusted.example' }, body: 'x' })).status).toBe(403)
+    expect(forward).not.toHaveBeenCalled()
+    const r = await fetch(`${base}/api/super-tabs/tab-1/avatars`, { method: 'POST', headers, body: 'picture' })
+    expect(r.status).toBe(200)
+    expect(await r.json()).toEqual({ path: '/api/super-tabs/tab-1/avatars', bytes: 7 })
+  })
+
   it('is unavailable on a daemon without it', async () => {
     const { base } = await start({})
     expect((await fetch(`${base}/api/super-tabs/tab-1/attachments`, { method: 'POST',

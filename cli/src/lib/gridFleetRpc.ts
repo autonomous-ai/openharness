@@ -1,6 +1,6 @@
 /** Grid's complete argv API, carried over the existing paired-machine connection. No shell. */
 import { spawn } from 'node:child_process'
-import { gridBinaryPath, gridChildEnv } from './gridExec.js'
+import { gridBinaryPath, gridChildEnv, gridCommand } from './gridExec.js'
 import { GRID_FLEET_MAX_TIMEOUT_MS } from './gridFleetProtocol.js'
 
 // The handshake's own module, which the socket answers it from (gridFleetProtocol.ts).
@@ -61,7 +61,8 @@ export class GridFleetRpc {
         const output = { stdout: new GridOutputCapture(), stderr: new GridOutputCapture() }
         let stopped: string | null = null, done = false
         let timeout: ReturnType<typeof setTimeout>, kill: ReturnType<typeof setTimeout> | undefined
-        const child = spawn(gridBinaryPath(this.processEnv), request.args, {
+        const command = gridCommand(gridBinaryPath(this.processEnv), request.args)
+        const child = spawn(command.file, command.args, {
           env: { ...gridChildEnv(this.processEnv), ...(request.thinking === undefined ? {} : {
             LLAMA_ARG_CHAT_TEMPLATE_KWARGS: JSON.stringify({ enable_thinking: request.thinking }),
           }) }, stdio: ['ignore', 'pipe', 'pipe'],

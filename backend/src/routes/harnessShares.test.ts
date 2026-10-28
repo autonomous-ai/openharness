@@ -3,7 +3,7 @@ import Fastify, { type FastifyInstance } from 'fastify'
 import { randomUUID } from 'node:crypto'
 const mocks = vi.hoisted(() => ({
   prisma: { harnessShare: { findFirst: vi.fn(), findMany: vi.fn(), findUnique: vi.fn(), upsert: vi.fn(), updateMany: vi.fn() },
-    machine: { findFirst: vi.fn(), findMany: vi.fn() }, user: { findMany: vi.fn(), findUnique: vi.fn() } },
+    machine: { findFirst: vi.fn(), findMany: vi.fn() }, user: { findMany: vi.fn(), findUnique: vi.fn() }, harnessLink: { findMany: vi.fn() } },
   mayOpenShare: vi.fn(), presence: vi.fn(), changed: vi.fn(), listChanged: vi.fn(), auth: vi.fn(),
 }))
 vi.mock('../superTabs/store.js', () => ({ SuperTabStore: class { mayOpenShare = mocks.mayOpenShare } }))
@@ -14,6 +14,7 @@ vi.mock('../lib/ssoAuth.js', async original => ({ ...await original<typeof impor
 import { harnessShareRoutes, recipientShare } from './harnessShares.js'
 import { registerAuthMiddleware } from '../middlewares/authMiddleware.js'
 import { errorHandler } from '../middlewares/errorHandler.js'
+import { logger } from '../utils/logger.js'
 
 const owner = { sub: 'owner', email: 'owner@example.com', role: 'user', autonomousEnv: 'prod' as const }
 const ken = { sub: 'ken', email: ' Ken@Example.com ', role: 'user', autonomousEnv: 'prod' as const }
@@ -31,12 +32,13 @@ describe('account-bound harness invitations', () => {
     mocks.prisma.machine.findMany.mockResolvedValue([machine])
     mocks.prisma.user.findMany.mockResolvedValue([{ id: owner.sub, name: 'D', email: owner.email }])
     mocks.prisma.harnessShare.findMany.mockResolvedValue([])
+    mocks.prisma.harnessLink.findMany.mockResolvedValue([])
     mocks.prisma.harnessShare.updateMany.mockResolvedValue({ count: 1 })
     mocks.presence.mockResolvedValue(new Map([['m1', true]]))
     app = Fastify(); app.setErrorHandler(errorHandler); registerAuthMiddleware(app, mocks.auth)
     await app.register(harnessShareRoutes); await app.ready()
   })
-  afterEach(async () => { await app.close() })
+  afterEach(async () => { await app.close(); vi.restoreAllMocks() })
   const auth = { authorization: 'Bearer fixture' }
   function put(payload: unknown = input(), id: string = randomUUID()) {
     return app.inject({ method: 'PUT', url: `/api/harness-shares/${id}`, headers: auth, payload: payload as any })
@@ -102,6 +104,12 @@ describe('account-bound harness invitations', () => {
     const earlier = await put()
     expect(earlier.statusCode).toBe(409)
     expect(earlier.json().error).not.toHaveProperty('id')
+    // Any other failure to save is not a conflict: it stays a 500, and nobody is told of an invitation not saved.
+    mocks.prisma.harnessShare.upsert.mockRejectedValue(new Prisma.PrismaClientKnownRequestError('Transaction conflict', { code: 'P2034', clientVersion: 'test' }))
+    expect((await put()).statusCode).toBe(500)
+    mocks.prisma.harnessShare.upsert.mockRejectedValue(new Error('db down'))
+    expect((await put()).statusCode).toBe(500)
+    expect(mocks.changed).not.toHaveBeenCalled()
   })
   it('discovers only active invitations for the signed-in email and environment, without machine secrets', async () => {
     mocks.auth.mockResolvedValue(ken)
@@ -164,20 +172,33 @@ describe('account-bound harness invitations', () => {
     expect(mocks.changed).toHaveBeenCalledTimes(4)
   })
   it('tells the invited account that its list changed, so its apps need not poll for invitations', async () => {
+    const info = vi.spyOn(logger, 'info').mockImplementation(() => logger)
     const id = randomUUID()
     // First read is the "may this grant be changed" check (no row yet); the second is the saved invitation.
     mocks.prisma.harnessShare.findUnique.mockResolvedValueOnce(null).mockResolvedValue({ id, recipientEmail: 'ken@example.com' })
     mocks.prisma.user.findUnique.mockResolvedValue({ id: 'ken' })
     expect((await put(input(), id)).statusCode).toBe(200)
     expect(mocks.prisma.user.findUnique).toHaveBeenCalledWith({ where: { email: 'ken@example.com' }, select: { id: true } })
-    expect(mocks.listChanged).toHaveBeenCalledWith('ken', { reason: 'updated' })
+    expect(mocks.listChanged).toHaveBeenCalledWith('ken', { reason: 'harness_shares' })
+    // Named in the log, so a burst of `machines_changed` on someone's app can be traced to the invitation behind it.
+    expect(info).toHaveBeenCalledWith('harness share: told the recipient it changed', { shareId: id, recipientId: 'ken' })
   })
   it('tells the invited account when the owner takes the invitation back', async () => {
     const id = randomUUID()
     mocks.prisma.harnessShare.findUnique.mockResolvedValue({ id, recipientEmail: 'ken@example.com' })
     mocks.prisma.user.findUnique.mockResolvedValue({ id: 'ken' })
     expect((await app.inject({ method: 'DELETE', url: `/api/harness-shares/${id}`, headers: auth })).statusCode).toBe(200)
-    expect(mocks.listChanged).toHaveBeenCalledWith('ken', { reason: 'updated' })
+    expect(mocks.listChanged).toHaveBeenCalledWith('ken', { reason: 'harness_shares' })
+  })
+  it('makes the viewers of the agent’s private links check again when the invitation behind them changes', async () => {
+    const id = randomUUID()
+    mocks.prisma.harnessShare.findUnique.mockResolvedValue({ id, ...input(), ownerId: 'owner', autonomousEnv: 'prod', superTabId: null,
+      revokedAt: new Date(), expiresAt: new Date(input().expiresAt) })
+    mocks.prisma.harnessLink.findMany.mockResolvedValue([{ id: 'link-1' }, { id: 'link-2' }])
+    expect((await app.inject({ method: 'DELETE', url: `/api/harness-shares/${id}`, headers: auth })).statusCode).toBe(200)
+    expect(mocks.prisma.harnessLink.findMany).toHaveBeenCalledWith({ where: { ownerId: 'owner', machineId: 'm1', agentId: 'agent-1',
+      autonomousEnv: 'prod', revokedAt: null, visibility: { not: 'public' } }, select: { id: true } })
+    expect(mocks.changed.mock.calls).toEqual([[id], ['link-1'], ['link-2']])
   })
   it('invites an address with no account yet, and survives the lookup failing, without telling anyone', async () => {
     const id = randomUUID(), remove = () => app.inject({ method: 'DELETE', url: `/api/harness-shares/${id}`, headers: auth })

@@ -66,6 +66,7 @@ class SuperTabAgent {
       limitedUntil = DateTime.tryParse(row['limitedUntil'] as String? ?? ''),
       avatar = SuperTabAvatarPicture.fromJson(row['avatar']),
       downSince = DateTime.tryParse(row['downSince'] as String? ?? ''),
+      confidential = row['confidential'] == true,
       configuration = Map.unmodifiable(superTabMap(row['configuration']));
   final String id, projectId, name, machineId, harnessId, contributorId;
 
@@ -82,6 +83,10 @@ class SuperTabAgent {
 
   /// The account whose computer runs it; a contributor may run agents on a computer another account shared with them.
   final String machineOwnerId;
+
+  /// Its session read private chats: a Product Manager, now or before, or an agent in a private chat. Only the person
+  /// whose computer runs it may watch it; its computer refuses every share (backend projects.ts `canWatchAgent`).
+  final bool confidential;
   // Keep the legacy default for callers while allowing group-based roster ownership.
   final bool hasProjectId;
   final String? displayName;

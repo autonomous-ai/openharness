@@ -7,7 +7,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { MongoMemoryReplSet } from 'mongodb-memory-server-core'
 import { PrismaClient } from '@prisma/client'
 import type { AuthUser } from '../src/lib/ssoAuth.js'
-import { SuperTabStore } from '../src/superTabs/store.js'
+import { SuperTabStore, type SuperTabStoreHooks } from '../src/superTabs/store.js'
 import type { Command } from '../src/superTabs/commands.js'
 import type { MachineObservation } from '../src/superTabs/machines.js'
 import * as parts from '../src/superTabs/parts/index.js'
@@ -44,9 +44,9 @@ afterAll(async () => {
 })
 
 /** A Swarm whose Lead runs on one of host's machines and whose worker runs on another, assigned "Ship the parser". */
-async function swarm({ legacy = false, client = db }: { legacy?: boolean; client?: PrismaClient } = {}) {
+async function swarm({ legacy = false, client = db, hooks }: { legacy?: boolean; client?: PrismaClient; hooks?: SuperTabStoreHooks } = {}) {
   let now = 10_000_000
-  const timed = new SuperTabStore(client, () => now)
+  const timed = new SuperTabStore(client, () => now, null, hooks)
   const tab = (await timed.create(owner, randomUUID(), 'Liveness', legacy ? undefined : 'public')).id
   if (legacy) await dropProjects(tab)
   const execute = (command: Command, user = owner, asAgentId?: string) => timed.execute(user, tab, { operationId: randomUUID(), command }, asAgentId)
@@ -65,7 +65,7 @@ async function swarm({ legacy = false, client = db }: { legacy?: boolean; client
     checks: [{ description: 'Verified', independent: false }] })).result.conversationId)
   const worker = await add(group, 'test-host', harness.worker, 'Worker')
   const assignmentId = String((await execute({ type: 'work.assign', conversationId: group, agentId: worker })).result.assignmentId)
-  const observe = (machineId: string, running: string[], extra: Partial<MachineObservation> = {}) => timed.observeMachine(host, tab, machineId, {
+  const observe = (machineId: string, running: string[], extra: Partial<MachineObservation> = {}, store = timed) => store.observeMachine(host, tab, machineId, {
     generation: generations.get(machineId)!, resources: { cpuPercent: 10, memoryTotalBytes: 32e9, memoryUsedBytes: 4e9, diskFreeBytes: 120e9,
       diskTotalBytes: 500e9, projectDiskFreeBytes: 120e9, deviceType: 'Laptop', chip: 'Fixture', os: 'macOS', gpuPercent: null },
     quotas: [], tools: {}, runningHarnessIds: running, stoppedHarnessIds: [], ...extra })
@@ -481,9 +481,8 @@ describe('an agent whose task was lost', () => {
 })
 
 describe('a start that never runs', () => {
-  it('fails 3 minutes after dispatch, naming its machine to its Lead only, and tells the Lead in its group', async () => {
-    const f = await swarm()
-    await f.beat(f.clock.now)
+  /** The Lead starts "Builder" on Worker Mac, and Worker Mac launches it. */
+  const launch = async (f: Awaited<ReturnType<typeof swarm>>) => {
     const decision = { assessment: { difficulty: 'low', risk: 'low', why: 'Small task.' },
       candidates: [{ id: 'c0', kind: 'new', machineId: 'test-host', engine: 'codex', model: 'fixture-model', effort: 'high',
         quality: 2, cost: 2, title: 'New agent', label: 'New agent' }],
@@ -495,6 +494,13 @@ describe('a start that never runs', () => {
     // The start's own machine dispatches and confirms it.
     const onMachine = (command: Command) => f.timed.execute(host, f.tab, { operationId: randomUUID(), command }, undefined, 'test-host')
     await onMachine({ type: 'agent.startDispatch', startId })
+    return { startId, onMachine }
+  }
+
+  it('fails 3 minutes after dispatch, naming its machine to its Lead only, and tells the Lead in its group', async () => {
+    const f = await swarm()
+    await f.beat(f.clock.now)
+    const { startId, onMachine } = await launch(f)
     const dispatched = f.clock.now
     f.clock.now = dispatched + 3 * MINUTE
     await f.leadInbox()
@@ -506,6 +512,62 @@ describe('a start that never runs', () => {
     expect((await f.timed.start(host, f.tab, startId, f.lead)).error).toBe('Worker Mac did not start it within 3 minutes')
     await expect(onMachine({ type: 'agent.started', startId, harnessId: randomUUID(), configuration: config }))
       .rejects.toMatchObject({ code: 'START_FAILED' })
+  })
+
+  it('waits while its own machine reports it preparing, shows the Lead it is preparing, and fails it after 15 minutes', async () => {
+    const f = await swarm()
+    await f.beat(f.clock.now)
+    const { startId } = await launch(f)
+    const dispatched = f.clock.now
+    const ownerState = async () => (await f.timed.read(owner, f.tab)).state
+    // Another machine cannot keep it waiting, and a machine keeps only its own launched starts in its report.
+    await f.observe('lead-host', [f.harness.lead], { preparingStartIds: [startId] })
+    await f.observe('test-host', [f.harness.worker], { preparingStartIds: [startId, 'someone-elses-start'] })
+    const machines = (await ownerState()).machines!
+    expect(machines.find(m => m.machineId === 'lead-host')!.observation!.preparingStartIds).toEqual([])
+    expect(machines.find(m => m.machineId === 'test-host')!.observation!.preparingStartIds).toEqual([startId])
+    for (const minutes of [3, 8, 14]) {
+      f.clock.now = dispatched + minutes * MINUTE + 1
+      // Its machine reports first: this jump spans many of its 15-second beats.
+      await f.observe('test-host', [f.harness.worker], { preparingStartIds: [startId] })
+      await f.observe('lead-host', [f.harness.lead])
+      expect((await f.leadInbox()).filter(m => (m.source as { kind?: string }).kind === 'start-timeout')).toEqual([])
+      expect(await f.timed.start(host, f.tab, startId, f.lead)).toMatchObject({ error: null, preparing: true })
+      expect((await ownerState()).starts!.find(s => s.id === startId)).toMatchObject({ error: null, preparing: true })
+    }
+    f.clock.now = dispatched + 15 * MINUTE + 1
+    await f.observe('test-host', [f.harness.worker], { preparingStartIds: [startId] })
+    await f.observe('lead-host', [f.harness.lead])
+    const told = (await f.leadInbox()).find(m => (m.source as { kind?: string }).kind === 'start-timeout')!
+    expect(told).toMatchObject({ conversationId: 'lead', text: 'Could not start Builder: its machine was still preparing it after 15 minutes.' })
+    expect((await f.timed.start(host, f.tab, startId, f.lead)).error).toBe('Worker Mac was still preparing it after 15 minutes')
+    expect((await ownerState()).starts!.find(s => s.id === startId)!.error).toBe('Its machine was still preparing it after 15 minutes.')
+    expect((await ownerState()).starts!.find(s => s.id === startId)).not.toHaveProperty('preparing')
+  })
+
+  // The time checks run on the Lead's poll and on any other machine's report (store.ts).
+  it.each([
+    ['the Lead\'s poll', (racing: SuperTabStore, f: Awaited<ReturnType<typeof swarm>>) => racing.deliveries(host, f.tab, f.lead)],
+    ['another machine\'s report', (racing: SuperTabStore, f: Awaited<ReturnType<typeof swarm>>) => f.observe('lead-host', [f.harness.lead], {}, racing)],
+  ])('is not failed by %s that read its machine silent while that machine reported it preparing', async (_, sweep) => {
+    const f = await swarm()
+    await f.beat(f.clock.now)
+    const { startId } = await launch(f)
+    f.clock.now += 4 * MINUTE
+    await f.observe('test-host', [f.harness.worker], { preparingStartIds: [startId] })
+    await f.observe('lead-host', [f.harness.lead])
+    // Past MACHINE_FRESH_MS: the time checks read Worker Mac as silent; just before they write, it reports again.
+    f.clock.now += 46_000
+    let raced = false
+    const racing = new SuperTabStore(beforeFirstWrite(db, async () => {
+      if (raced) return
+      raced = true
+      await f.observe('test-host', [f.harness.worker], { preparingStartIds: [startId] })
+    }), () => f.clock.now)
+    await sweep(racing, f)
+    expect(raced).toBe(true)
+    expect((await f.timed.read(owner, f.tab)).state.starts!.find(s => s.id === startId)).toMatchObject({ error: null, preparing: true })
+    expect((await db.superTabMessage.findMany({ where: { tabId: f.tab } })).filter(m => (m.source as { kind?: string } | null)?.kind === 'start-timeout')).toEqual([])
   })
 })
 
@@ -555,6 +617,34 @@ describe('the delivery poll of an agent with nothing waiting', () => {
     expect(rows.map(d => d.messageId)).toEqual([sent.result.messageId])
   })
 
+  // Behind a load balancer each poll may land on another pod: a memory of the last full poll per pod made every pod run its
+  // own full polls, so the one-row answer held only as often as a host met the same pod twice (stability roadmap 2.4).
+  it('answers from one indexed read on another server once any server ran the full poll, when they share the memory', async () => {
+    const counted = counting()
+    const shared = new Map<string, number>()
+    const polls = { get: async (key: string) => shared.get(key), set: async (key: string, at: number) => { shared.set(key, at) } }
+    const f = await swarm({ client: counted.client, hooks: { polls } })
+    const other = new SuperTabStore(counted.client, () => f.clock.now, null, { polls })
+    expect(await f.timed.deliveries(host, f.tab, f.lead)).toEqual([])
+    counted.ops.length = 0
+    f.clock.now += 1_000
+    expect(await other.deliveries(host, f.tab, f.lead)).toEqual([])
+    expect(counted.ops).toEqual(['SuperTabDelivery.findFirst'])
+  })
+
+  it('runs the full checked poll each time while the shared memory cannot be read or written, and still answers', async () => {
+    const counted = counting()
+    const down = async () => { throw new Error('Redis unreachable') }
+    const f = await swarm({ client: counted.client, hooks: { polls: { get: down, set: down } } })
+    expect(await f.timed.deliveries(host, f.tab, f.lead)).toEqual([])
+    counted.ops.length = 0
+    f.clock.now += 1_000
+    expect(await f.timed.deliveries(host, f.tab, f.lead)).toEqual([])
+    expect(counted.ops).toContain('SwarmGroup.findMany')
+    // A stranger still meets the authority checks, never a remembered answer.
+    await expect(f.timed.deliveries(owner, f.tab, f.lead)).rejects.toMatchObject({ code: 'FORBIDDEN' })
+  })
+
   it('never answers a caller who is not the agent\'s host from another caller\'s quiet poll, before or after it fails', async () => {
     const f = await swarm()
     await f.timed.deliveries(host, f.tab, f.lead)
@@ -562,6 +652,60 @@ describe('the delivery poll of an agent with nothing waiting', () => {
     for (let attempt = 0; attempt < 2; attempt++) {
       await expect(f.timed.deliveries(owner, f.tab, f.lead)).rejects.toMatchObject({ code: 'FORBIDDEN' })
     }
+  })
+})
+
+// Hosts read an idle agent's deliveries only every 30 s once the server pushes (stability roadmap 2.4): each new one is
+// announced to the machine its agent runs on, once its write commits, so the host reads it at once.
+describe('the push for a new delivery', () => {
+  const announcing = () => {
+    const waiting: Array<{ machineId: string; tabId: string; agentId: string }> = []
+    return { waiting, hooks: { deliveriesWaiting: (w: { machineId: string; tabId: string; agentId: string }) => { waiting.push(w) } } }
+  }
+
+  it('names the machine, Swarm and agent of a message\'s recipient once it is written', async () => {
+    const { waiting, hooks } = announcing()
+    const f = await swarm({ hooks })
+    waiting.length = 0
+    await f.execute({ type: 'message.send', conversationId: f.group, text: 'Status?', replyTo: null, recipientIds: [f.worker] })
+    expect(waiting).toEqual([{ machineId: 'test-host', tabId: f.tab, agentId: f.worker }])
+  })
+
+  // The host reads as soon as it hears: a push heard before the commit would find nothing and wait 30 s for the next read.
+  it('is heard only once its write has committed', async () => {
+    let open = 0
+    const client = new Proxy(db, { get(target, key, receiver) {
+      if (key !== '$transaction') return Reflect.get(target, key, receiver)
+      return async (body: unknown, options: unknown) => {
+        open++
+        try { return await (target.$transaction as (b: unknown, o: unknown) => Promise<unknown>)(body, options) } finally { open-- }
+      }
+    } }) as PrismaClient
+    const heard: number[] = []
+    const f = await swarm({ client, hooks: { deliveriesWaiting: () => { heard.push(open) } } })
+    heard.length = 0
+    await f.execute({ type: 'message.send', conversationId: f.group, text: 'Status?', replyTo: null, recipientIds: [f.worker] })
+    expect(heard).toEqual([0])
+  })
+
+  it('names the Lead\'s machine for a turn typed into a worker\'s terminal', async () => {
+    const { waiting, hooks } = announcing()
+    const f = await swarm({ hooks })
+    const { contextId } = await f.timed.native.open(owner, f.tab, { operationId: randomUUID(), conversationId: f.group, agentId: f.worker })
+    waiting.length = 0
+    await f.timed.native.append(host, f.tab, contextId, { turnId: 'turn_1', kind: 'prompt', previousEventId: null, text: 'Typed by hand',
+      truncated: false, interrupted: false })
+    expect(waiting).toEqual([{ machineId: 'lead-host', tabId: f.tab, agentId: f.lead }])
+  })
+
+  it('announces the update request the Lead\'s own poll writes for it', async () => {
+    const { waiting, hooks } = announcing()
+    const f = await swarm({ hooks })
+    await f.leadInbox()
+    waiting.length = 0
+    f.clock.now += 5 * MINUTE
+    await f.timed.deliveries(host, f.tab, f.lead)
+    expect(waiting).toContainEqual({ machineId: 'lead-host', tabId: f.tab, agentId: f.lead })
   })
 })
 

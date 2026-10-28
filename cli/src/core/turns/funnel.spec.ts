@@ -3,6 +3,7 @@ import { deviceErrorText } from '../cardText.js'
 import { inlineSubmission } from '../../testing/inlineSubmission.js'
 import type { RegisteredSession } from '../../lib/registry.js'
 import { createEventFunnel, funnelFor, outsideConsumers, type FunnelDeps } from './funnel.js'
+import { createShortTurnGuard } from './shortTurnGuard.js'
 
 type Event = Parameters<ReturnType<typeof funnelFor>>[1][number]
 const started = (userMessage = 'go'): Event => ({ type: 'turn_started', payload: { userMessage } }) as Event
@@ -52,6 +53,17 @@ describe('the event funnel', () => {
     funnel('s1', [started(), text(), ended()], { replay: true })
     funnel('s1', [started(), text(), ended()], { resumed: true })
     expect(working).not.toHaveBeenCalled()
+  })
+
+  it('tells the short-turn guard of each live turn start and end, never of a re-read', () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+    let at = 0
+    const shortTurns = createShortTurnGuard({ now: () => at, log: () => {} })
+    const { funnel } = setup('claude', { shortTurns })
+    for (let i = 0; i < 10; i++) { funnel('s1', [started(), ended()], { replay: true }); funnel('s1', [started(), ended()], { resumed: true }); at += 1_000 }
+    expect(shortTurns.holding('s1')).toBe(0)
+    for (let i = 0; i < 10; i++) { funnel('s1', [started()]); at += 1_000; funnel('s1', [ended()]) }
+    expect(shortTurns.holding('s1')).toBe(30_000)
   })
 
   it('offers native observation after client dispatch without letting an observer break the turn', () => {

@@ -832,6 +832,19 @@ describe('creating an agent', () => {
       expect(deps.watchNewPane).toHaveBeenCalledWith('claude', pending, expect.anything(), ['claude'], undefined, undefined)
     })
 
+    it('carries the person\'s machine MCP servers before what Harness tells the agent (#1872)', async () => {
+      const { writeMachineMcp } = await import('../../lib/machineMcp.js')
+      const { rmSync } = await import('node:fs')
+      const { env } = await import('../../config/env.js')
+      writeMachineMcp({ lamp: { command: 'lamp-mcp', args: [], engines: ['claude'], projects: [] } })
+      try {
+        const { create } = setup()
+        await create(request({ agent: 'reviewer', startedBy: 'agent' }))
+        expect((vi.mocked(buildEngineLaunchArgv).mock.calls[0][1] as Record<string, unknown>).extraArgs).toEqual([
+          '--agent', 'reviewer', `--mcp-config=${JSON.stringify({ mcpServers: { lamp: { type: 'stdio', command: 'lamp-mcp', args: [] } } })}`, '--settings', '{"attribution":{}}'])
+      } finally { rmSync(join(env.ADAPTER_DATA_DIR, 'mcp-servers.json'), { force: true }) }
+    })
+
     it('started by another agent: its pull request line after every other argument, and who started it on the row', async () => {
       const { create } = setup()
       const cwd = folder()

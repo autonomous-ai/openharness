@@ -12,6 +12,7 @@ import 'avatar_upload.dart';
 import 'identity.dart';
 import 'model.dart';
 import 'pm_chat.dart';
+import 'project_github.dart';
 import 'parts.dart';
 import 'reading.dart';
 import 'review_verdict.dart';
@@ -430,6 +431,67 @@ class SuperTabController extends ChangeNotifier {
       scheduleMicrotask(() => _readQuoted(id, messageId));
     }
     return null;
+  }
+
+  /// What the backend last said of each project's GitHub access (backend github/projectAccess.ts), and when.
+  final Map<String, ({SuperTabProjectGitHub value, DateTime at})> _github = {};
+  final Set<String> _githubReading = {};
+
+  /// When each project's GitHub access was last asked for, answered or not: a failed read is not asked again on every
+  /// rebuild either.
+  final Map<String, DateTime> _githubAsked = {};
+
+  /// Whether teammates' agents can push to [projectId]'s repository, as last read; null before a read, or from a
+  /// server too old to say.
+  SuperTabProjectGitHub? githubAccessOf(String projectId) =>
+      _github[projectId]?.value;
+
+  /// Reads [projectId]'s GitHub access, at most every 5 minutes; [refresh]: a person checks again (the server asks
+  /// GitHub at once, at most every 15 seconds per repository). An older server has no such read: nothing is shown.
+  Future<void> readGitHubAccess(String projectId, {bool refresh = false}) async {
+    final asked = _githubAsked[projectId];
+    if (_disposed ||
+        accessRevoked ||
+        (!refresh &&
+            asked != null &&
+            clock.now().difference(asked) < const Duration(minutes: 5))) {
+      return;
+    }
+    if (!_githubReading.add(projectId)) return;
+    _githubAsked[projectId] = clock.now();
+    try {
+      final answer = await request(
+        'GET',
+        '$_path/projects/${Uri.encodeComponent(projectId)}/github${refresh ? '?refresh=1' : ''}',
+      );
+      _github[projectId] = (
+        value: SuperTabProjectGitHub.fromJson(answer),
+        at: clock.now(),
+      );
+      _changed();
+    } catch (error) {
+      appLog.debug('super-tabs', 'project GitHub access not read: $error');
+    } finally {
+      _githubReading.remove(projectId);
+    }
+  }
+
+  /// Starts approving [projectId]'s repository for teammates' agents ([scope] `project`, or `swarm` for every project):
+  /// the links that sign the person in to GitHub through the Harness GitHub App, or install it there first. GitHub sends
+  /// them back to the backend, which checks they can push to the repository (backend github/approvals.ts).
+  Future<({String authorizeUrl, String? installUrl})> approveGitHub(
+    String projectId,
+    String scope,
+  ) async {
+    final answer = await request(
+      'POST',
+      '$_path/projects/${Uri.encodeComponent(projectId)}/github/approve',
+      body: {'scope': scope},
+    );
+    return (
+      authorizeUrl: answer['authorizeUrl'] as String,
+      installUrl: answer['installUrl'] as String?,
+    );
   }
 
   /// Reads one message of [id] only: the backend checks the reader may read
