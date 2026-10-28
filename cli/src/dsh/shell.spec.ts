@@ -7,14 +7,20 @@ import { spawnSync, type ChildProcess } from 'node:child_process'
 
 // Two switches, both off by default: `sh` makes commands run under plain `/bin/sh -c` (as when no user
 // shell is known) so output is exactly the command's; `fakeChild` hands runDshCommand a scripted child.
-const seams = vi.hoisted(() => ({ sh: false, fakeChild: null as null | (() => ChildProcess) }))
+// `started` collects the pid of each real process spawned, for a test that needs the shell's own.
+const seams = vi.hoisted(() => ({ sh: false, fakeChild: null as null | (() => ChildProcess), started: [] as Array<number | undefined> }))
 vi.mock('../lib/engineLaunch.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../lib/engineLaunch.js')>()
   return { ...actual, interactiveEngineShell: (shell?: string) => (seams.sh ? null : actual.interactiveEngineShell(shell)) }
 })
 vi.mock('node:child_process', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:child_process')>()
-  const spawn = ((...args: Parameters<typeof actual.spawn>) => (seams.fakeChild ? seams.fakeChild() : actual.spawn(...args))) as typeof actual.spawn
+  const spawn = ((...args: Parameters<typeof actual.spawn>) => {
+    if (seams.fakeChild) return seams.fakeChild()
+    const child = actual.spawn(...args)
+    seams.started.push(child.pid)
+    return child
+  }) as typeof actual.spawn
   return { ...actual, spawn, default: { ...actual, spawn } }
 })
 
@@ -214,13 +220,18 @@ describe('runDshCommand', () => {
     // Bash, and the stand-in for the tree killer ends its group, as TerminateProcess down the tree does there.
     const ended: number[] = []
     const endTree = async (pid: number): Promise<void> => { ended.push(pid); process.kill(-pid, 'SIGKILL') }
-    const result = await runDshCommand('echo "shell $$"; sleep 30 & wait', {
+    // The shell's pid is taken from the spawn, not from what the shell prints: a login bash reads the host's profile
+    // first, and on the Linux runner that outlived the timeout, so the script never printed it (#2069 in CI). This
+    // home's profile is as slow, so every host takes the same path.
+    writeFileSync(join(dir, '.bash_profile'), 'sleep 5\n')
+    seams.started = []
+    const result = await runDshCommand('sleep 30 & wait', {
       cwd: dir, timeoutMs: 300, env: { HOME: dir, PATH: '/usr/bin:/bin' },
       host: { platform: 'win32', gitBash: () => '/bin/bash', endTree },
     })
     expect(result.timedOut).toBe(true)
-    const shell = result.lines.find((line) => line.startsWith('shell '))
-    expect(ended).toEqual([Number(shell?.slice('shell '.length))])
+    expect(seams.started).toHaveLength(1)
+    expect(ended).toEqual(seams.started)
   })
 
   it('does not take the shell\'s report of the job its stop ended for the command\'s output', async () => {
