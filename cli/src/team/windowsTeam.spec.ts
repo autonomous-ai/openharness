@@ -97,12 +97,12 @@ describe('windowsRelayAclCommand', () => {
 describe('the gh builds for Windows', () => {
   it('are GitHub\'s zips of 2.103.3, pinned by sha256 and size', () => {
     expect(WINDOWS_GH_BUILDS.x64).toEqual({
-      version: '2.103.3', archiveRoot: 'gh_2.103.3_windows_amd64', binary: 'bin\\gh.exe', size: 15_197_187,
+      version: '2.103.3', archiveRoot: 'gh_2.103.3_windows_amd64', binary: 'bin\\gh.exe', format: 'zip', size: 15_197_187,
       sha256: '98d0cfa794721665d7973dd728c78aff7bd836d58f10f6d7a03568eccb0a22e0',
       url: 'https://github.com/cli/cli/releases/download/v2.103.3/gh_2.103.3_windows_amd64.zip',
     })
     expect(WINDOWS_GH_BUILDS.arm64).toEqual({
-      version: '2.103.3', archiveRoot: 'gh_2.103.3_windows_arm64', binary: 'bin\\gh.exe', size: 13_637_549,
+      version: '2.103.3', archiveRoot: 'gh_2.103.3_windows_arm64', binary: 'bin\\gh.exe', format: 'zip', size: 13_637_549,
       sha256: '197211c98687d7770ac331fe8a3b6c198c389108c1536cdbedf659fe4703e484',
       url: 'https://github.com/cli/cli/releases/download/v2.103.3/gh_2.103.3_windows_arm64.zip',
     })

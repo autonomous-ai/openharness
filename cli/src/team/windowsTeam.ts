@@ -165,7 +165,7 @@ export type WindowsGhBuild = GhBuild & { binary: string }
 
 const GH_VERSION = '2.103.3'
 const windowsRelease = (arch: string, sha256: string, size: number): WindowsGhBuild => ({
-  version: GH_VERSION, sha256, size, archiveRoot: `gh_${GH_VERSION}_windows_${arch}`, binary: 'bin\\gh.exe',
+  version: GH_VERSION, sha256, size, archiveRoot: `gh_${GH_VERSION}_windows_${arch}`, binary: 'bin\\gh.exe', format: 'zip',
   url: `https://github.com/cli/cli/releases/download/v${GH_VERSION}/gh_${GH_VERSION}_windows_${arch}.zip`,
 })
 /** GitHub's Windows builds of gh, by `process.arch`, from the release's gh_2.103.3_checksums.txt and its asset sizes. */
