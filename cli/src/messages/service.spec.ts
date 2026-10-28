@@ -38,6 +38,8 @@ interface Setup {
   rpc?: Rpc
   backendStatus?: number
   signedIn?: () => boolean
+  /** What each harness is doing, as `core.agents.activity` says: idle when not named. Not given, it knows none. */
+  activity?: Record<string, 'working' | 'idle' | 'unknown'>
 }
 
 function setup(over: Setup = {}) {
@@ -67,6 +69,7 @@ function setup(over: Setup = {}) {
       live: () => agents,
       displayName: (s) => (s as unknown as { title: string }).title,
       terminalAvailable: () => true,
+      ...(over.activity ? { activity: async (ids: string[]) => Object.fromEntries(ids.map((id) => [id, over.activity?.[id] ?? 'idle'])) } : {}),
     },
     turns: {
       deliver: (agentId, text, id) => { delivered.push([agentId, text, id]) },
@@ -626,6 +629,66 @@ describe('harness tell: more work from the harness that started it', () => {
     allow(t)
     const answer = await t.ask({ action: 'deliver', message: { id: 'm00000dd', tabId: 'told', text: 'hi', at: 5,
       from: { machineId: 'm2', agentId: 'phone', name: 'phone', engine: 'claude', machine: 'laptop' }, to: [{ machineId: 'm1', agentId: 'web', name: 'web' }] } }, OWNER_REMOTE)
+    expect(answer.statuses).toEqual([expect.objectContaining({ agentId: 'web', state: 'failed' })])
+    expect(t.delivered).toEqual([])
+  })
+})
+
+describe('harness reply to a harness here: a program acting for the person', () => {
+  // The person's words, behind `programs-reply` (replyLocal.ts), for an idle harness only: not agents' `tell`.
+  const allow = (t: ReturnType<typeof setup>, on = true) => { t.setting(false); setAgentSettingsForTest(root, { programsReply: on }) }
+
+  it('types the person\'s words into an idle harness, with no header, from here or another of the owner\'s machines', async () => {
+    const t = setup({ tabs: [], activity: {} })
+    allow(t)
+    const reply = await t.ask({ action: 'reply_local', machine: 'lamp-75c9', agentId: 'web', text: 'The lamp\'s check refused skill.toml: name is missing.' })
+    expect(reply).toMatchObject({ state: 'queued' })
+    expect(t.delivered).toHaveLength(1)
+    const [agentId, text, deliveryId] = t.delivered[0]
+    expect(agentId).toBe('web')
+    expect(text).toBe('The lamp\'s check refused skill.toml: name is missing.')
+    t.deliveryEvent({ deliveryId, sessionId: 'web', state: 'started' })
+    const history = await t.ask({ action: 'history', tabId: 'replied' })
+    expect(history.messages).toEqual([expect.objectContaining({ id: reply.id, from: expect.objectContaining({ agentId: 'person', machine: 'lamp-75c9' }),
+      statuses: [expect.objectContaining({ agentId: 'web', state: 'delivered' })] })])
+    expect(await t.ask({ action: 'reply_local', machine: 'lamp-75c9', agentId: 'api', text: 'Fix it.' }, OWNER_REMOTE)).toMatchObject({ state: 'queued' })
+    expect(t.delivered).toHaveLength(2)
+  })
+
+  it('is refused until the person turns it on, and for a harness that works, may wait for the person, or is gone', async () => {
+    const t = setup({ tabs: [], activity: { api: 'working', lead: 'unknown' } })
+    t.setting(false)
+    expect(await t.ask({ action: 'reply_local', agentId: 'web', text: 'x' })).toMatchObject({ error: 'REPLY_OFF', detail: expect.stringContaining('programs-reply') })
+    allow(t)
+    expect(await t.ask({ action: 'reply_local', agentId: 'api', text: 'x' })).toMatchObject({ error: 'NOT_IDLE', detail: expect.stringContaining('is working') })
+    expect(await t.ask({ action: 'reply_local', agentId: 'lead', text: 'x' })).toMatchObject({ error: 'NOT_IDLE', detail: expect.stringContaining('Only they answer that') })
+    expect(await t.ask({ action: 'reply_local', agentId: 'gone', text: 'x' })).toMatchObject({ error: 'NOT_RUNNING' })
+    expect(await t.ask({ action: 'reply_local', agentId: 'web', text: '  ' })).toMatchObject({ error: 'USAGE' })
+    expect(await t.ask({ action: 'reply_local', text: 'x' })).toMatchObject({ error: 'USAGE' })
+    expect(await t.ask({ action: 'reply_local', agentId: 'web', text: 'x'.repeat(LIMITS.text + 1) })).toMatchObject({ error: 'TOO_LONG' })
+    // Not the owner: nothing at all.
+    expect(await t.ask({ action: 'reply_local', agentId: 'web', text: 'x' }, { local: true, owner: false })).toMatchObject({ error: 'OWNER_REQUIRED' })
+    expect(t.delivered).toEqual([])
+  })
+
+  it('keeps tell\'s rate: 30 in 10 minutes', async () => {
+    const t = setup({ tabs: [], activity: {} })
+    allow(t)
+    for (let i = 0; i < LIMITS.perSender; i++) {
+      const r = await t.ask({ action: 'reply_local', agentId: 'web', text: `x${i}` })
+      t.deliveryEvent({ deliveryId: t.delivered.at(-1)![2], sessionId: 'web', state: 'started' })
+      expect(r).toMatchObject({ state: expect.any(String) })
+    }
+    expect(await t.ask({ action: 'reply_local', agentId: 'web', text: 'one more' })).toMatchObject({ error: 'RATE_LIMITED' })
+    t.tick(LIMITS.window)
+    expect(await t.ask({ action: 'reply_local', agentId: 'web', text: 'later' })).not.toHaveProperty('error')
+  })
+
+  it('a hand-over under `replied` from another machine is no way around the idle check or the tabs', async () => {
+    const t = setup({ tabs: [], activity: {} })
+    allow(t)
+    const answer = await t.ask({ action: 'deliver', message: { id: 'm00000ee', tabId: 'replied', text: 'hi', at: 5,
+      from: { machineId: 'm2', agentId: 'person', name: 'the person', engine: 'claude', machine: 'laptop' }, to: [{ machineId: 'm1', agentId: 'web', name: 'web' }] } }, OWNER_REMOTE)
     expect(answer.statuses).toEqual([expect.objectContaining({ agentId: 'web', state: 'failed' })])
     expect(t.delivered).toEqual([])
   })
