@@ -125,12 +125,13 @@ export function createDevicesLink(deps: DevicesLinkDeps) {
     // The Swarm cards' requests (core/main.ts `superTabRequest` allows those and no other action of the Super Tab service).
     super_tabs: async (payload) => {
       if (!core.superTabRequest) return { error: 'SERVICE_UNAVAILABLE' }
-      const { action, tabId, leadId, on, include, session, harnessId, text, focus } = payload
+      const { action, tabId, leadId, on, include, session, harnessId, machineId, text, focus } = payload
       // A round dial that speaks swarmChat asks for the chat on the face, and the window's open conversation rides with the
       // wish (superTabs/inCore/cards.ts checks both); absent, the request is today's.
       const chat = payload.chat === true ? { chat: true } : {}
       return core.superTabRequest(action === 'cardsWanted' ? { action, on: on === true, include, ...(focus !== undefined ? { focus } : {}) }
-        : action === 'cardSay' ? { action, harnessId, text, ...chat } : { action, tabId, leadId, session, ...chat })
+        : action === 'cardSay' ? { action, harnessId, text, ...chat } : action === 'cardWorker' ? { action, machineId, harnessId }
+        : { action, tabId, leadId, session, ...chat })
     },
     // The transcriber's and the fleet's lane's sign-in, and the lane's sealing, asked of the core at every
     // use as every service in its own process asks them (core/accountQueries.ts): the devices hold no

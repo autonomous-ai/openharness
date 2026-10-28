@@ -231,3 +231,16 @@ Initial contract. Lifted from the `.board.json` (Circuit) and `.episode.json` (T
 - **Mechanism:** the selected daemon validates compatibility, refreshes availability, and resolves
   credentials after reserving the creation receipt and before preparing a project. Receipt identity
   contains the model/grid pair, never a rotating credential. Unavailable models refuse launch.
+
+## 2026-10-28 — `runsScripts` in the catalog
+
+- **Change:** registry entries may include `runsScripts: true`. Built-in entries derive it from
+  `harness.json`'s `toolchain.setup` or `toolchain.doctor`; an outside entry states it. Any other value
+  is refused at publication.
+- **Why:** Harness cannot run a setup or doctor script on Windows yet. 25 of 25 Windows Store installs
+  failed between 10-26 and 10-28, and once the CLI named the reason it still refused only after the
+  download, leaving the files on disk. With the flag, the CLI refuses before downloading anything.
+- **Backward compatible:** yes. Older CLIs drop unknown entry fields; an outside entry without the flag
+  is still checked after its download, before it is moved into place.
+- **Mechanism:** `cli/src/dsh/registry.ts` (`storeEntry`, `DshRegistryEntrySchema`),
+  `cli/scripts/lib/dshRegistry.mjs`, `store/tools/catalog.mjs`, `cli/src/dsh/service.ts`.

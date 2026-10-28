@@ -501,8 +501,9 @@ export function admitMachineStart(state: SuperTabState, request: AgentStartReque
   if (pool.paused) fail('MACHINE_PAUSED', 'New work is paused on this machine.')
   const project = groupProject(state, conversation(state, request.conversationId))
   if (!pool.scope && project.id !== 'lead') fail('PROJECT_CONTRIBUTION', 'Ask its owner to add this machine to the swarm again to support other projects.')
-  // Before the request's own fields: a machine that takes none of this project's work says so first.
-  requireTeamWork(state, pool.machineId, pool.contributorId, project, now, teamMachines, otherWorkspaceMachines)
+  // Before the request's own fields: a machine that takes none of this project's work says so first. A Buddy is its owner's
+  // own agent on their own machine (commands.ts buddy.create), as a Lead is: teammates' work rules do not apply to it.
+  if (!request.buddyOf) requireTeamWork(state, pool.machineId, pool.contributorId, project, now, teamMachines, otherWorkspaceMachines)
   const cwd = projectFolder(pool, project)
   // Every refused field is named, with what the machine does accept. Values the caller sent are not echoed: an account
   // setting can be a path or a name of the caller's own.

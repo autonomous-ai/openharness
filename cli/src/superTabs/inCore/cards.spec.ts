@@ -179,7 +179,7 @@ describe('whether the Swarm cards are wanted, which the core owns', () => {
     cards.replay()
     expect(swarmCards).not.toHaveBeenCalled()
   })
-  it('lets the devices ask three things of the service and nothing else, whatever the path', async () => {
+  it('lets the devices ask four things of the service and nothing else, whatever the path', async () => {
     const { cards, request } = wanting()
     expect(await cards.ask({ action: 'cardsWanted', on: true, include: ['t1'] })).toEqual({ ok: true })
     expect(request.mock.calls).toEqual([[{ action: 'cardsWanted', on: true, include: ['t1'] }]])
@@ -187,8 +187,9 @@ describe('whether the Swarm cards are wanted, which the core owns', () => {
     await cards.ask({ action: 'cardRecap', tabId: 't1', leadId: 'l1', extra: 1 })
     await cards.ask({ action: 'cardOpen', session: 's1', tabId: 't1', leadId: null, extra: 1 })
     await cards.ask({ action: 'cardSay', harnessId: 'h1', text: 'ship it', extra: 1 })
+    await cards.ask({ action: 'cardWorker', machineId: 'm2', harnessId: 'h1', text: 'x', extra: 1 })
     expect(request.mock.calls).toEqual([[{ action: 'cardRecap', tabId: 't1', leadId: 'l1' }], [{ action: 'cardOpen', session: 's1', tabId: 't1', leadId: null }],
-      [{ action: 'cardSay', harnessId: 'h1', text: 'ship it' }]])
+      [{ action: 'cardSay', harnessId: 'h1', text: 'ship it' }], [{ action: 'cardWorker', machineId: 'm2', harnessId: 'h1' }]])
     request.mockClear()
     for (const action of ['backend', 'command', 'wake', 'prepareContribution', undefined]) expect(await cards.ask({ action, path: '/api/super-tabs' })).toEqual({ error: 'INVALID_REQUEST' })
     expect(request).not.toHaveBeenCalled()

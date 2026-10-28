@@ -53,11 +53,11 @@ export async function errorHandler(
   // A unique key still taken after the retries (P2002) is a genuine duplicate: a conflict, never a 500.
   const prisma = prismaCode(error)
   if (prisma === 'P2028') {
-    logger.warn('Database transaction expired or could not start', { path: request.url, method: request.method, message: error.message })
+    logger.warn('Database transaction expired or could not start', { path: request.url, method: request.method, error: error.message })
     return sendBusy(reply, 'The server is busy. Try again in a moment.', 'BUSY')
   }
   if (prisma === 'P2002') {
-    logger.warn('Duplicate key', { path: request.url, method: request.method, message: error.message })
+    logger.warn('Duplicate key', { path: request.url, method: request.method, error: error.message })
     return sendError(reply, 'This already exists, so nothing new was saved.', 'DUPLICATE', 409)
   }
 

@@ -1,4 +1,6 @@
+import { isBuddy, isBuddyChat } from './buddies.js'
 import type { PrismaClient } from '@prisma/client'
+import { ensureIndex } from '../lib/db/indexes.js'
 import { activeWork, actorKey, agent, author, conversation, fail, isLeads, stableId, type Actor, type Agent, type Author, type Conversation, type MessageDraft,
   type SuperTabState } from './model.js'
 import { downSince } from './machines.js'
@@ -17,8 +19,7 @@ export const TERMINAL_RECHECK_MS = 5_000
 export const TERMINAL_EXPIRY_MS = 120_000
 /** Run by the singleton worker at startup, like the product-usage expiry indexes. */
 export async function ensureTerminalExpiry(db: PrismaClient): Promise<void> {
-  await db.$runCommandRaw({ createIndexes: 'SuperTabTerminalRequest', indexes: [{ key: { createdAt: 1 }, name: 'terminal_request_expiry',
-    expireAfterSeconds: TERMINAL_EXPIRY_MS / 1000 }] })
+  await ensureIndex(db, 'SuperTabTerminalRequest', { key: { createdAt: 1 }, name: 'terminal_request_expiry', expireAfterSeconds: TERMINAL_EXPIRY_MS / 1000 })
 }
 /** A limited agent without a shown reset time is skipped by routing for this long. */
 export const LIMIT_FALLBACK_MS = 3_600_000
@@ -122,6 +123,9 @@ export function terminalAlert(state: SuperTabState, actor: Actor, sender: Author
   // Its engine has been retrying its model for 10 minutes (2026-10-24: a Builder on a small local model retried for an
   // hour while its Lead waited on it).
   if (command.alert === 'model') text = `${nameOf(target)} can't get answers from its model: its requests keep failing. Stop it, or give the work to another model.`
+  // A Buddy's alert is its owner's alone, in their chat: the PM neither reads that chat nor runs the Buddy (buddies.ts).
+  const chat = isBuddy(target) ? state.conversations.find(c => isBuddyChat(c) && c.agentIds.includes(target.id)) : undefined
+  if (chat) return [{ id, conversationId: chat.id, author: sender, replyTo: null, recipients: [], text, source }]
   return toLead(state, target, { id, conversationId: group.id, author: sender, replyTo: null, recipients: [], text, source })
 }
 

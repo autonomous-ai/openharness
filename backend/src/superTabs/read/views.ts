@@ -3,6 +3,7 @@
  * plus the private-conversation check, each record sent in its part's envelope. Time-based and cross-part values go only
  * in `derived`, so a part never changes without a new version (Lead's ruling).
  */
+import { isBuddyChat } from '../buddies.js'
 import { isLeads, seenMachineIds, visibleState, withSeenRequirement, type Actor, type Agent, type Conversation, type SuperTabState } from '../model.js'
 import { machineSlots, machineTeamWork, teamAccountSwarm, type ContributedMachine } from '../machines.js'
 import * as store from '../parts/index.js'
@@ -40,7 +41,7 @@ export interface ReadExtras {
 }
 
 const HEAD_FIELDS = ['version', 'id', 'name', 'project', 'projects', 'leadsConversationId', 'ownerId', 'environment',
-  'routingPolicy', 'rules', 'paused', 'invitations', 'localModels', 'workspaceId', 'workspaceVisibility'] as const
+  'routingPolicy', 'rules', 'paused', 'invitations', 'localModels', 'workspaceId', 'workspaceVisibility', 'buddies'] as const
 
 export const envelope = <T>(part: Pick<Part, 'key' | 'version' | 'changedAt'>, data: T): LivePart<T> =>
   ({ key: part.key, version: part.version, changedAt: part.changedAt, data })
@@ -48,8 +49,11 @@ export const envelope = <T>(part: Pick<Part, 'key' | 'version' | 'changedAt'>, d
 /** A group as readers get it: its message counter, a dormant flag only when dormant, never the store's bookkeeping or the
  *  leaderboard's (the leaderboard read sums it). */
 export function groupView(group: Conversation, seenMachines: ReadonlySet<string>): GroupView {
-  const { messageSeq, reportSeq: _report, lastActivityAt: _activity, ledger: _ledger, dormant, audience, ...rest } = withSeenRequirement(group, seenMachines)
-  return { ...rest, messageSeq: messageSeq ?? 0, ...(dormant ? { dormant: true as const } : {}), ...(audience ? { audience } : {}) }
+  const { messageSeq, reportSeq: _report, lastActivityAt: _activity, ledger: _ledger, proposals: _proposals, dormant, audience, ...rest } = withSeenRequirement(group, seenMachines)
+  // A Buddy chat names its owner instead of an audience: an app from before Buddies takes a private chat of the reader
+  // alone for their Chat with PM, and would send what they write for the PM to their Buddy instead (buddies.ts).
+  const readers = isBuddyChat(group) ? { buddyOwnerId: audience!.people[0]!.id } : audience ? { audience } : {}
+  return { ...rest, messageSeq: messageSeq ?? 0, ...(dormant ? { dormant: true as const } : {}), ...readers }
 }
 
 /** A conversation's whole data as the reader may see it: the Leads conversation lists only the agents the reader can see, and a
