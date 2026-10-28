@@ -600,6 +600,8 @@ static EXT_RAM_BSS_ATTR struct {
     char pending[ID_MAX];             // a Swarm the desktop opened before its `swarms` frame said so (ui_supertab_focus)
     // Super Tab waits from this machine's harnesses, shown only through the Lead whose `local` names the harness.
     struct { char agent[ID_MAX], request[80], swarm[HT_SUPERTAB_NAME], text[240]; bool stuck, shown; } waits[SWARM_WAITS];
+    // The chat each Lead's message entry (`swarm` 3) came from, so `supertab.notice.read` removes only that one.
+    struct { char lead[ID_MAX], chat[ID_MAX]; } said[NOTICES];
 } sw;
 static bool swarm_mode(void)
 {
@@ -1294,8 +1296,10 @@ static void render_swarm_face(ht_scene_t *f)
     const char *wait = swarm_wait_text(l);
     bool asking = l->state == HT_LEAD_ASK || l->state == HT_LEAD_STUCK || wait;
     bool working = l->state == HT_LEAD_WORK && !wait;
+    // A swarmChat daemon's recap is that of the chat on the face: one read for a chat the desktop has since left is not
+    // shown (design 2026-10-28-round-dial-swarm-chat §3). An older daemon names no chat on either side.
     const char *recap = wait ? wait : !working && swarm.recap.state == HT_RECAP_LOADED &&
-        !strcmp(swarm.recap.lead, l->id) && !s.nap ? swarm.recap.text : NULL;
+        !strcmp(swarm.recap.lead, l->id) && !strcmp(swarm.recap.chat_id, l->chat_id) && !s.nap ? swarm.recap.text : NULL;
     uint32_t since_ms = working && l->since_s >= 0 ? (uint32_t)l->since_s * 1000u + (ms() - l->since_at_ms) : 0;
     uint32_t since = since_ms / 1000;
     s.timer_at = 0;
@@ -4646,7 +4650,8 @@ void ui_notif_replace(const cable_notif_t *rows, int count)
         if (!present) s.notice_reads[i].pending = false;
     }
     for (int i = own_count - 1; i >= 0; i--) {
-        notice_add(own[i].agent_id, own[i].name, own[i].machine, own[i].summary, true, false);
+        // A wait stays pinned as a question; a Lead's message stays news (it would otherwise never expire).
+        notice_add(own[i].agent_id, own[i].name, own[i].machine, own[i].summary, own[i].question, false);
         for (int j = 0; j < s.notice_count; j++) if (!strcmp(s.notice[j].agent_id, own[i].agent_id)) {
             s.notice[j].swarm = own[i].swarm; s.notice[j].read_on_dial = own[i].read_on_dial;
             s.notice[j].received_ms = own[i].received_ms;
@@ -5025,6 +5030,55 @@ void ui_supertab_focus(const char *tab, const char *lead)
         }
     }
     change();
+    display_unlock();
+}
+/*
+ * A LEAD'S NEW MESSAGE (design 2026-10-28-round-dial-swarm-chat §3), in its Lead conversation or Chat with PM: the one
+ * alert a swarmChat daemon raises. It is that Lead's single entry, news rather than a question, the message as its text
+ * and the Swarm's name (with " · PM" for Chat with PM) as its grey line. Each notice counts as unread again; it is read at
+ * once only when that Lead's face shows that very chat. True when the caller should beep (the coalescing is the audio's).
+ */
+static int swarm_said_of(const char *lead)
+{
+    for (int i = 0; lead && i < NOTICES; i++) if (!strcmp(sw.said[i].lead, lead)) return i;
+    return -1;
+}
+bool ui_supertab_notice(const char *tab, const char *lead, ht_chat_kind_t chat, const char *chat_id, const char *text, uint32_t at)
+{
+    (void)at;
+    if (!tab || !lead || !chat_id || !text) return false;
+    display_lock();
+    const ht_supertab_t *t = ht_supertabs_find(&swarm, tab);
+    int i = swarm_lead_index(t, lead);
+    if (i < 0) { display_unlock(); return false; }
+    const ht_lead_t *l = &t->leads[i];
+    char grey[HT_SUPERTAB_NAME + 8];
+    snprintf(grey, sizeof grey, "%s%s", t->name, chat == HT_CHAT_PM ? " \xc2\xb7 PM" : "");
+    notice_forget_read(l->id);
+    notice_add(l->id, l->project[0] ? l->project : "Untitled", grey, text, false, false);
+    swarm_notice_mark(l->id, 3);
+    int slot = swarm_said_of(l->id);
+    for (int k = 0; k < NOTICES && slot < 0; k++) if (!sw.said[k].lead[0] || swarm_notice(sw.said[k].lead) < 0) slot = k;
+    if (slot < 0) slot = 0;
+    COPY(sw.said[slot].lead, l->id); COPY(sw.said[slot].chat, chat_id);
+    s.notice_sequence++;
+    bool face = on_face(l->id) && !strcmp(l->chat_id, chat_id);
+    if (face) notice_read_now(l->id);
+    else display_wake();
+    change();
+    display_unlock();
+    return !face;
+}
+// The desktop opened that chat: its message entry is read there, and goes from the dial.
+void ui_supertab_notice_read(const char *tab, const char *lead, const char *chat_id)
+{
+    if (!tab || !lead || !chat_id) return;
+    display_lock();
+    int e = swarm_notice(lead), k = swarm_said_of(lead);
+    if (e >= 0 && s.notice[e].swarm == 3 && k >= 0 && !strcmp(sw.said[k].chat, chat_id)) {
+        sw.said[k].lead[0] = 0;
+        swarm_notice_drop(lead);
+    }
     display_unlock();
 }
 bool ui_supertab_wait(const char *agent_id, const char *request, const char *swarm_name, bool stuck, const char *text)

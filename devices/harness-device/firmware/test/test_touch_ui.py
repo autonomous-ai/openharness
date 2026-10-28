@@ -236,7 +236,7 @@ code += function('focus_centred') + function('focus_header') + function('focus_c
 for name in ['notice_remove', 'notice_sync_view', 'notice_selection', 'notice_restore_selection', 'notice_add', 'notice_expire', 'on_face', 'notice_read_now', 'ui_notify_summary', 'ui_turn_error', 'ui_notif_seen', 'ui_notif_read', 'ui_notif_replace', 'ui_notif_open', 'ui_question_close', 'ui_answer_receipt',
              'utf8_trim', 'swarm_notice', 'swarm_notice_mark', 'swarm_notice_raise', 'swarm_notice_drop', 'swarm_events',
              'swarm_tabs_changed', 'ui_supertabs_ids', 'ui_supertab', 'ui_supertab_recap', 'ui_supertab_focus',
-             'ui_supertab_wait', 'ui_supertab_wait_close', 'ui_supertabs_clear']:
+             'ui_supertab_wait', 'ui_supertab_wait_close', 'ui_supertabs_clear', 'swarm_said_of', 'ui_supertab_notice', 'ui_supertab_notice_read']:
     code += function(name)
 code += '#define ui_notify_task_done(a,b,c,d) ui_notify_summary(a,b,c,d,"alert",false,false)\n'
 for name in ['event', 'ui_project_emit', 'ui_project_restore_event', 'ui_project_clear_event', 'ui_project_set_name', 'ui_project_remove', 'ui_project_clear_all', 'ui_project_apply_order']:
@@ -1802,6 +1802,99 @@ static void swarm_voice_checks(const char *dir) {
     dispatch((action_t){.kind = A_VOICE_ABORT});
     puts("Swarm voice: a local Lead's face talks to its harness with its engine's scene or the seven bars, and returns to the Swarm's face PASS");
 }
+/*
+ * A DAEMON THAT SPEAKS swarmChat (docs/superpowers/specs/2026-10-28-round-dial-swarm-chat-design.md §3): each Lead's face
+ * is the chat the desktop has open, `work` only for a working group, never ask or stuck, and the alerts are the Lead's
+ * new messages (`supertab.notice`).
+ */
+static void chat_lead(const char *id, const char *project, const char *local, const char *state, int order, long since,
+                      const char *chat, const char *chat_id, const char *chat_name) {
+    ht_lead_in_t in = {.id = id, .project = project, .engine = "claude", .local = local, .state = state, .order = order, .since = since,
+                       .chat = chat, .chat_id = chat_id, .chat_name = chat_name};
+    assert(ht_supertab_lead_add(&card, &in));
+}
+// C0 on a working group, C1 on its Chat with PM, C2 on its Lead chat.
+static bool chat_card(const char *group_state, const char *c1_chat, const char *c1_id) {
+    card_begin("s1", "t1", "openharness");
+    chat_lead("C0", "mobile", "h0", group_state, 0, !strcmp(group_state, "work") ? 9 : -1, "group", "g1", "Fix login");
+    chat_lead("C1", "docs", "h1", "done", 1, -1, c1_chat, c1_id, !strcmp(c1_chat, "pm") ? "PM" : "Lead");
+    chat_lead("C2", "web", "", "done", 2, -1, "lead", "lead-web", "Lead");
+    return card_send();
+}
+static void chat_setup(void) {
+    reset(); ht_character_select(&character, HT_CHARACTER_FOCUS); fake_ms = 100000;
+    desk_open();
+    const char ids[1][ID_MAX] = {"s1"};
+    ui_supertabs_ids(ids, 1);
+    assert(!chat_card("work", "pm", "pm1"));
+    scene_take();
+}
+static void swarm_chat_checks(const char *dir) {
+    (void)dir;
+    // No entry from a Lead's state when chats are on: the daemon sends no ask or stuck, and a group's work is no alert.
+    chat_setup();
+    assert(s.notice_count == 0);
+    assert(!chat_card("done", "pm", "pm1") && !chat_card("work", "pm", "pm1") && s.notice_count == 0);
+
+    // A working group shows the working pet and its clock, and no recap.
+    enter_at("s1", "C0");
+    assert(title_is("mobile") && scene_says("0:09"));
+    ui_supertab_recap("s1", "C0", "g1", "Tests green on both dials.", 1792560000u, false); scene_take();
+    assert(!scene_says("Tests green"));
+    // A done group shows its recap.
+    assert(!chat_card("done", "pm", "pm1")); scene_take();
+    assert(scene_says("Tests green") && !scene_says("0:09"));
+
+    // The PM chat: its recap, never working.
+    enter_at("s1", "C1");
+    ui_supertab_recap("s1", "C1", "pm1", "The release notes are ready.", 1792560000u, false); scene_take();
+    assert(scene_says("release notes") && !scene_says("Working"));
+    // The desktop moved that project to its Lead chat: the PM chat's recap is no longer this face's.
+    assert(!chat_card("done", "lead", "lead-docs")); scene_take();
+    assert(!scene_says("release notes"));
+    assert(!chat_card("done", "pm", "pm1")); scene_take();
+
+    // A notice for the face's chat is read at once and does not beep.
+    enter_at("s1", "C1");
+    assert(!ui_supertab_notice("s1", "C1", HT_CHAT_PM, "pm1", "Shall I cut the release?", 1792560000u));
+    int e = swarm_entry("C1");
+    assert(e >= 0 && s.notice[e].read_on_dial && !s.notice[e].question && s.notice[e].swarm == 3);
+    assert(!strcmp(s.notice[e].summary, "Shall I cut the release?") && !strcmp(s.notice[e].name, "docs"));
+    assert(!strcmp(s.notice[e].machine, "openharness \xc2\xb7 PM"));
+    // A notice for another chat stays unread and beeps once: the Lead chat, while the face shows the PM chat.
+    assert(ui_supertab_notice("s1", "C1", HT_CHAT_LEAD, "lead-docs", "Docs are merged.", 1792560001u));
+    e = swarm_entry("C1");
+    assert(e >= 0 && !s.notice[e].read_on_dial && !strcmp(s.notice[e].summary, "Docs are merged."));
+    assert(!strcmp(s.notice[e].machine, "openharness"));
+    // Off the face: unread, and it beeps.
+    assert(ui_supertab_notice("s1", "C2", HT_CHAT_LEAD, "lead-web", "Web is deployed.", 1792560002u));
+    assert(swarm_entry("C2") >= 0 && !s.notice[swarm_entry("C2")].read_on_dial);
+    // One entry per Lead: a second notice replaces the text and is unread again.
+    notice_mark_read(&s.notice[swarm_entry("C2")]);
+    assert(ui_supertab_notice("s1", "C2", HT_CHAT_LEAD, "lead-web", "Web is rolled back.", 1792560003u));
+    { int count = 0; for (int i = 0; i < s.notice_count; i++) count += !strcmp(s.notice[i].agent_id, "C2"); assert(count == 1); }
+    e = swarm_entry("C2");
+    assert(!strcmp(s.notice[e].summary, "Web is rolled back.") && !s.notice[e].read_on_dial);
+    // A notice for a Lead the dial does not know is nothing.
+    { int before = s.notice_count; assert(!ui_supertab_notice("s1", "nobody", HT_CHAT_LEAD, "x", "?", 1)); assert(s.notice_count == before); }
+
+    // It stays news across the desktop's inbox snapshot: kept, and not turned into a question.
+    { cable_notif_t desk = {.agent_id = "a", .name = "Payments refactor", .summary = "Shipped."}; ui_notif_replace(&desk, 1); }
+    e = swarm_entry("C2"); assert(e >= 0 && !s.notice[e].question && s.notice[e].swarm == 3 && !s.notice[e].read_on_dial);
+
+    // notice.read removes the entry, only for its own chat.
+    ui_supertab_notice_read("s1", "C2", "other-chat"); assert(swarm_entry("C2") >= 0);
+    ui_supertab_notice_read("s1", "C2", "lead-web"); assert(swarm_entry("C2") < 0);
+    ui_supertab_notice_read("s1", "C1", "lead-docs"); assert(swarm_entry("C1") < 0);
+
+    // A Lead wait still raises its entry, and beeps off the face; its close removes it (the Lead never reads ask here).
+    enter_at("s1", "C0");
+    assert(ui_supertab_wait("h2-none", "supertab:x", "openharness", false, "Not a Lead's") == false);
+    assert(ui_supertab_wait("h1", "supertab:w1", "openharness", false, "Publish the docs today?"));
+    e = swarm_entry("C1"); assert(e >= 0 && !strcmp(s.notice[e].summary, "Publish the docs today?") && s.notice[e].question);
+    ui_supertab_wait_close("h1", "supertab:w1"); assert(swarm_entry("C1") < 0);
+    puts("Swarm chats: work only for a working group, the face chat's recap, Lead/PM notices read on their face or unread with a beep, one entry per Lead, news across a snapshot, notice.read, Lead waits still alert PASS");
+}
 int main(int argc, char **argv) {
     test_character = getenv("HABITAT_TEST_TUX") ? HT_CHARACTER_TUX : HT_CHARACTER_TIM;
     notification_read_checks(argc>1 ? argv[1] : NULL);
@@ -1810,6 +1903,7 @@ int main(int argc, char **argv) {
     swarm_pane_checks(argc>1 ? argv[1] : NULL);
     swarm_inbox_checks(argc>1 ? argv[1] : NULL);
     swarm_voice_checks(argc>1 ? argv[1] : NULL);
+    swarm_chat_checks(argc>1 ? argv[1] : NULL);
     // The companion screen is gone: character, edge text and still-character are the app's now
     // (Settings > Autonomous robots). What the glass kept is actions, and Nap is the one that moved
     // off that screen into the controls list.
