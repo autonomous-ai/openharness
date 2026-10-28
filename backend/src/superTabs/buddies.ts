@@ -2,7 +2,7 @@
  *  read. When they ask, it posts one proposal in the project chat on their behalf; the PM assigns the work as usual. A Buddy
  *  reads only its project's chat and its own chat, and does nothing but post in its chat and propose. Behind the Swarm's
  *  `buddies` setting, off by default. */
-import { stableId, type Agent, type AgentStartRequest, type Conversation, type Person } from './model.js'
+import { fail, stableId, type Agent, type AgentStartRequest, type Conversation, type Person } from './model.js'
 
 export const isBuddy = (target: Pick<Agent, 'buddyOf'>): boolean => !!target.buddyOf
 export const isBuddyChat = (group: Pick<Conversation, 'kind'>): boolean => group.kind === 'buddy'
@@ -23,3 +23,20 @@ export const BUDDY_REQUIREMENTS: AgentStartRequest['requirements'] = { memoryByt
 
 /** The line a Buddy's chat shows once its session joined. */
 export const buddyReady = (name: string): string => `${name} is ready. Tell it what you have in mind.`
+
+/** What a Buddy may send: posts in its own chat, its owner's proposals, and what its machine reports for every agent (its
+ *  model, a terminal alert, its own stop). Every other command is refused, so it can never assign, start, route, ask
+ *  decisions or change anything for its owner (spec constraint: PRIVACY-CRITICAL). */
+const BUDDY_COMMANDS: ReadonlySet<string> = new Set(['message.send', 'message.react', 'buddy.propose', 'agent.configuration', 'agent.alert',
+  'agent.stopLease', 'agent.stopRefused', 'agent.remove'])
+
+export function requireBuddyCommand(buddy: Agent, command: { type: string; conversationId?: unknown; agentId?: unknown }, groups: readonly Conversation[]): void {
+  if (!BUDDY_COMMANDS.has(command.type)) fail('BUDDY_FORBIDDEN', 'A Buddy only talks with its owner and sends the proposals they ask for.', 403)
+  if ('agentId' in command && command.agentId !== buddy.id) fail('BUDDY_FORBIDDEN', 'A Buddy acts only for itself.', 403)
+  if (command.type === 'message.send' || command.type === 'message.react') {
+    const group = groups.find(g => g.id === command.conversationId)
+    if (!group || !isBuddyChat(group) || !group.agentIds.includes(buddy.id)) {
+      fail('BUDDY_FORBIDDEN', 'A Buddy posts only in its own chat. Send a proposal to reach the PM.', 403)
+    }
+  }
+}

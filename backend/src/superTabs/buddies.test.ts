@@ -240,3 +240,52 @@ describe('a Buddy\'s start on its machine', () => {
     expect(f.state.starts!.find(s => s.id === added.result.startId)!.error).toBeNull()
   })
 })
+
+describe('what a Buddy may do', () => {
+  /** setup()'s Buddy, with Buddies on. */
+  const on = () => { const f = setup(); f.run({ type: 'tab.buddies', enabled: true }); return f }
+  const buddy = agentActor('buddy')
+
+  it('is post in its own chat; its owner\'s message there reaches it, and nobody else posts there', () => {
+    const f = on()
+    expect(f.run({ type: 'message.send', conversationId: f.chat, text: 'What outcome do you want?', replyTo: null, recipientIds: [] }, buddy).messages[0])
+      .toMatchObject({ conversationId: f.chat, recipients: [] })
+    expect(f.run({ type: 'message.send', conversationId: f.chat, text: 'Faster sync.', replyTo: null, recipientIds: [] }, peer).messages[0])
+      .toMatchObject({ recipients: ['buddy'] })
+    expect(() => f.run({ type: 'message.send', conversationId: f.chat, text: 'Hi', replyTo: null, recipientIds: [] })).toThrow('unavailable')
+    expect(() => f.run({ type: 'message.send', conversationId: f.chat, text: 'Hi', replyTo: null, recipientIds: [] }, agentActor(f.pm))).toThrow('unavailable')
+  })
+
+  it('never posts in the project chat or anywhere else but its chat: proposals go through the proposal command', () => {
+    const f = on()
+    for (const conversationId of [f.app.conversationId, f.group, f.pmChat, f.web.conversationId, f.state.leadsConversationId!]) {
+      expect(() => f.run({ type: 'message.send', conversationId, text: 'Hello PM', replyTo: null, recipientIds: [] }, buddy)).toThrow()
+    }
+    expect(() => f.run({ type: 'message.send', conversationId: f.app.conversationId, text: 'Hello PM', replyTo: null, recipientIds: [] }, buddy))
+      .toThrow('A Buddy posts only in its own chat')
+  })
+
+  it('never assigns, starts agents, opens groups, asks decisions, sets rules or reacts outside its chat', () => {
+    const f = on()
+    const refused: Command[] = [
+      { type: 'work.assign', conversationId: f.group, agentId: 'buddy' },
+      { type: 'work.define', conversationId: f.group, brief: 'Do it', checks: [{ description: 'Done', independent: false }] },
+      { type: 'conversation.create', projectId: f.app.projectId, title: 'New', brief: 'Brief', checks: [{ description: 'Done', independent: false }] },
+      { type: 'agent.start', request: { conversationId: f.group, machineId: 'machine', engine: 'claude', name: 'Helper', cwd: '/repo', worktree: true,
+        requirements: { memoryBytes: 0, diskBytes: 0, maxCpuPercent: 100, tools: [], devices: [], quotaRequired: false } }, routeDecisionId: 'route' },
+      { type: 'decision.ask', conversationId: f.chat, personId: 'peer', questions: [{ question: 'Which?', options: ['A', 'B'], recommended: 0, unblocks: 'Work' }] },
+      { type: 'rule.set', rule: { kind: 'preferIdle' }, text: 'Idle first.' },
+      { type: 'conversation.agent', conversationId: f.app.conversationId, agentId: 'buddy', present: true, lead: false },
+      { type: 'message.react', conversationId: f.app.conversationId, messageId: 'm', emoji: 'thumbs_up', on: true },
+      { type: 'agent.remove', agentId: f.pm },
+      { type: 'tab.buddies', enabled: false },
+    ]
+    for (const command of refused) expect(() => f.run(command, buddy), command.type).toThrow('A Buddy')
+  })
+
+  it('reports its own configuration and its own stop, as its machine does for every agent', () => {
+    const f = on()
+    f.run({ type: 'agent.configuration', previousVersion: null, configuration: { ...configuration, model: 'opus' } }, buddy)
+    expect(f.state.agents.find(a => a.id === 'buddy')!.configuration.model).toBe('opus')
+  })
+})
