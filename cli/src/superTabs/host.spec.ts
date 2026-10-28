@@ -414,6 +414,20 @@ describe('Super Tab native delivery handoff', () => {
     expect(t.core.turns.deliver).toHaveBeenCalledTimes(1)
     expect(t.saved().entries).toEqual({})
   })
+  it('never types a held delivery the backend ended, and retires its journal entry', async () => {
+    const t = setup(), host = t.open()
+    await host.tick(); t.event('rejected', 'team_waiting_user')
+    // Held past its limit, or its group archived: the backend's delivery pass ended it and lists it no more.
+    const original = vi.mocked(t.core.account.backend).getMockImplementation()!
+    vi.mocked(t.core.account.backend).mockImplementation(async (method, path, body) => {
+      if (path.endsWith('/deliveries/delivery')) return { status: 200, body: { success: true, data: { id: 'delivery', status: 'cancelled' } } }
+      if (path.endsWith('/deliveries')) return { status: 200, body: { success: true, data: [] } }
+      return original(method, path, body)
+    })
+    await host.tick(); await host.reconcileReceipts()
+    expect(t.core.turns.deliver).toHaveBeenCalledTimes(1)
+    expect(t.saved().entries).toEqual({})
+  })
   it('drops the lease of a held delivery answered while its lease was being granted', async () => {
     const t = setup(), host = t.open()
     await host.tick(); t.event('rejected', 'team_waiting_busy')

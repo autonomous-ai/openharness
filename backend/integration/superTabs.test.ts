@@ -1079,10 +1079,12 @@ describe('Super Tabs on a real Mongo replica set', () => {
     }
     expect((await store.read(owner, tab)).state.conversations.find(c => c.id === 'lead')!.lastMessageSequence).toBe(before)
     expect((await store.messages(host, tab, 'lead', {}, lead)).messages.map(m => m.text)).toEqual(['Harness updated your built-in swarm-lead skill.'])
-    // Typed through the normal claim; a hold while the input box is busy writes no row people would see.
+    // Typed through the normal claim; a hold while the input box is busy is recorded on the delivery, so the delivery pass
+    // knows its host still holds it (deliverySettle.ts), and writes no row people would see.
     const claimed = await store.delivery(host, tab, lead, deliveries[0]!.id, { type: 'claim', claimId: 'claim' })
     expect(claimed.message).toMatchObject({ text: 'Harness updated your built-in swarm-lead skill.', source: { kind: 'agent-only' } })
-    expect(await store.delivery(host, tab, lead, deliveries[0]!.id, { type: 'hold', claimId: 'claim', reason: 'team_waiting_draft' })).toEqual({ held: false })
+    expect(await store.delivery(host, tab, lead, deliveries[0]!.id, { type: 'hold', claimId: 'claim', reason: 'team_waiting_draft' })).toEqual({ held: true })
+    expect(await db.superTabDelivery.findUniqueOrThrow({ where: { id: deliveries[0]!.id } })).toMatchObject({ holdReason: 'team_waiting_draft' })
     expect((await store.messages(owner, tab, 'lead', {})).messages).toEqual([])
   })
 
@@ -3734,7 +3736,7 @@ describe('Swarm parts under concurrent writes', () => {
     expect((await db.superTabDelivery.findUniqueOrThrow({ where: { id: delivery.id } })).status).toBe('cancelled')
   })
 
-  it('writes the waiting delivery rows of a conversation archived or left by their receiver, so a claim in flight conflicts', async () => {
+  it('ends the waiting delivery rows of a conversation archived or left by their receiver, so a claim in flight conflicts', async () => {
     const { tab, lead } = await fixture()
     const { group, worker } = await workGroup(tab, 'Rows')
     const assignmentId = (await store.read(owner, tab)).state.conversations.find(c => c.id === group)!.assignment!.id
@@ -3746,13 +3748,17 @@ describe('Swarm parts under concurrent writes', () => {
     await run(tab, { type: 'conversation.agent', conversationId: group, agentId: worker, present: false, lead: false })
     const left = await row()
     expect(left.updatedAt.getTime()).toBeGreaterThan(before.updatedAt.getTime())
-    expect(left.status).toBe(before.status)
+    // Its receiver can no longer read it there: it ends now, rather than waiting unseen for good (prod watch, 2026-10-28).
+    expect(left.status).toBe('cancelled')
+    const kept = await run(tab, { type: 'message.send', conversationId: group, text: 'For the Lead.', replyTo: null, recipientIds: [] })
+    const toLead = async () => db.superTabDelivery.findFirstOrThrow({ where: { tabId: tab, messageId: kept.result.messageId as string } })
+    const open = await toLead()
     await new Promise(resolve => setTimeout(resolve, 5))
     await run(tab, { type: 'conversation.archive', conversationId: group, archived: true })
-    const archived = await row()
-    expect(archived.updatedAt.getTime()).toBeGreaterThan(left.updatedAt.getTime())
-    // Archiving keeps them for when the conversation reopens, as before.
-    expect(archived.status).toBe(before.status)
+    const archived = await toLead()
+    expect(archived.updatedAt.getTime()).toBeGreaterThan(open.updatedAt.getTime())
+    // Archiving ends them too: 6 of 9 deliveries stuck for days in prod were in archived groups.
+    expect(archived.status).toBe('cancelled')
   })
 
   it('assigns the routed agent through its finished start, without an override reason', async () => {

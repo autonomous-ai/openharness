@@ -572,8 +572,10 @@ export class SuperTabHost {
       try {
         const result = object(await backend(this.core, 'GET', `/api/super-tabs/${entry.tabId}/agents/${entry.agentId}/deliveries/${entry.deliveryId}`))
         if (this.stopped) return
-        // Held input is retired only by an answer. A cancelled one leaves the roster, so the claim path never sees it again; it stays in the journal.
-        const terminal = entry.stage === 'prepared' ? ['answered'] : ['delivered', 'confirmed', 'superseded', 'cancelled', 'answered']
+        // Held input is retired by an answer, or once the backend ended it: it leaves the list, so the claim path never sees it
+        // again. Kept, every hold the backend's delivery pass ends (backend superTabs/deliverySettle.ts) would stay here, and
+        // at 1,000 entries this host accepts no more deliveries.
+        const terminal = entry.stage === 'prepared' ? ['answered', 'cancelled'] : ['delivered', 'confirmed', 'superseded', 'cancelled', 'answered']
         if (result.id !== entry.deliveryId || !terminal.includes(String(result.status))) continue
         if (this.journal.entries[entry.deliveryId] !== entry || this.active.has(typedId(entry))) continue
         delete this.journal.entries[entry.deliveryId]
