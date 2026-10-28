@@ -2,7 +2,7 @@ import { readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { expect, it, vi } from 'vitest'
-import { failureKind, launchErrorCode, messageReceipt, productObservation, productUsageIntent, productUsageLaunch, productUsageRequest, productUsageSource } from './productUsageSignals.js'
+import { failureKind, launchErrorCode, messageReceipt, storeErrorCode, productObservation, productUsageIntent, productUsageLaunch, productUsageRequest, productUsageSource } from './productUsageSignals.js'
 import type { MessageOutcome } from './sessionInput.js'
 import { LAUNCH_ERROR_CODES, PRODUCT_USAGE_AUTOMATIC_ACTIONS, PRODUCT_USAGE_FLOWS, PRODUCT_USAGE_METRICS, PRODUCT_USAGE_SETUP_METRICS } from './productUsageContract.js'
 import { AUTOMATIC_POLL_ACTIONS, HEALTH_MEASURES } from './productHealthContract.js'
@@ -370,8 +370,12 @@ it('keeps every refusal a Store install or update can answer in the code list', 
     for (const match of source.matchAll(/(?:error: |fail\(|code: )'([A-Z][A-Z0-9_]*)'/g)) codes.add(match[1])
   }
   expect(codes.size).toBeGreaterThan(12)
-  expect([...codes].filter(code => launchErrorCode(code) === 'unlisted'),
-    'add each to LAUNCH_ERROR_CODES (lib/productUsageContract.ts and its backend copy)').toEqual([])
+  expect([...codes].filter(code => storeErrorCode(code) === 'unlisted'),
+    'add each to STORE_ERROR_CODES (lib/productUsageContract.ts and its backend copy)').toEqual([])
+  // A list of its own: in the launch code list, each would have joined all twelve launch families, where it never
+  // occurs (+504 names, which pushed the whole-vocabulary report past its test's time).
+  expect(PRODUCT_USAGE_METRICS).toContain('store_install_error_code_shell_unavailable')
+  expect(PRODUCT_USAGE_METRICS).not.toContain('create_error_code_shell_unavailable')
 })
 
 it('counts every Store install or update refusal by its code, so the family adds up to `_failed`', () => {

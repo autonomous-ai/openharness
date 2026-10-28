@@ -176,12 +176,6 @@ export const LAUNCH_ERROR_CODES = [
   // The `setup` kind's own codes, named for a delete or restart refusal (cli/src/lib/productUsageSignals.ts).
   'tmux_unavailable', 'pty_host_unavailable', 'tmux_too_old_for_dsh', 'tmux_too_old_for_grid', 'engine_unavailable', 'native_launch_held',
   'dsh_materialize_failed', 'spawn_failed', 'registration_failed', 'grid_config_failed',
-  // A Store install's or update's refusal (dsh/install.ts, dsh/update.ts, dsh/lock.ts, services/store.ts) and the
-  // core's answers for a service (core/serviceLinks.ts): the 11 Windows installs of 2026-10-28 were all `other`.
-  'invalid_dsh', 'dsh_busy', 'setup_failed', 'doctor_failed', 'shell_unavailable', 'invalid_manifest', 'invalid_source',
-  'source_not_found', 'package_id_mismatch', 'package_kind_mismatch', 'viewer_unavailable', 'linked_install',
-  'not_installed', 'update_failed', 'bundled_package', 'remove_failed', 'service_failed', 'service_unavailable', 'owner_required', 'unsupported',
-  'unsupported_on_remote',
   'unlisted', 'none',
 ] as const
 export type LaunchErrorCode = typeof LAUNCH_ERROR_CODES[number]
@@ -190,19 +184,29 @@ export type LaunchErrorCode = typeof LAUNCH_ERROR_CODES[number]
  * apart, those the phone asked for (`phone_`), which a daemon's report otherwise carries mixed with the
  * Desktop's, the TUI's and tools'. Setup reasons have their own families, adding up to `launch_failed_setup`,
  * `create_error_setup` and `request_phone_create_error_setup`; existing `other` families keep their meaning.
- * `launch_refused_code` names which correct refusal a `launch_refused` was (cli/src/lib/productUsageSignals.ts).
- * Every Store install or update refusal is counted by its code too, so each of those families adds up to its `_failed`. */
+ * `launch_refused_code` names which correct refusal a `launch_refused` was (cli/src/lib/productUsageSignals.ts). */
 export const LAUNCH_ERROR_FAMILIES = ['launch_failed_code', 'launch_late_failed_code', 'create_error_code', 'resume_error_code',
   'delete_error_code', 'restart_error_code', 'phone_delete_error_code', 'phone_restart_error_code',
-  'launch_failed_setup_code', 'create_error_setup_code', 'phone_create_error_setup_code', 'launch_refused_code',
-  'store_install_error_code', 'store_update_error_code'] as const
+  'launch_failed_setup_code', 'create_error_setup_code', 'phone_create_error_setup_code', 'launch_refused_code'] as const
 /** The engine an installation's first launch asked for; any other engine is `other`. */
 export const PRODUCT_USAGE_LAUNCH_ENGINES = ['opencode', 'claude', 'codex', 'other'] as const
 export type ProductUsageLaunchEngine = typeof PRODUCT_USAGE_LAUNCH_ENGINES[number]
 /** Whether that engine had a credential on this computer, by presence only (cli/src/lib/engineAccount.ts). */
 export const PRODUCT_USAGE_ENGINE_ACCOUNTS = ['signed_in', 'signed_out', 'unknown'] as const
+/** A Store install's or update's refusal by its code (dsh/install.ts, dsh/update.ts, dsh/lock.ts, services/store.ts, and
+ * the core's answers for a service, core/serviceLinks.ts): the 11 Windows installs of 2026-10-28 were all `other`, with
+ * nothing to say which. Every refusal is counted, so each family adds up to its `_failed`. A list of its own: these
+ * never answer a launch, and in the launch list each would have joined all twelve launch families. Codes only. */
+export const STORE_ERROR_CODES = ['invalid_dsh', 'dsh_busy', 'setup_failed', 'doctor_failed', 'git_unavailable',
+  'shell_unavailable', 'clone_failed', 'invalid_manifest', 'invalid_source', 'source_not_found', 'package_id_mismatch',
+  'package_kind_mismatch', 'viewer_unavailable', 'linked_install', 'not_installed', 'update_failed', 'bundled_package',
+  'remove_failed', 'internal', 'service_failed', 'service_unavailable', 'owner_required', 'unsupported',
+  'unsupported_on_remote', 'unlisted', 'none'] as const
+export type StoreErrorCode = typeof STORE_ERROR_CODES[number]
+export const STORE_ERROR_FAMILIES = ['store_install_error_code', 'store_update_error_code'] as const
 export const PRODUCT_USAGE_LAUNCH_METRICS = [
   ...LAUNCH_ERROR_FAMILIES.flatMap(family => LAUNCH_ERROR_CODES.map(code => `${family}_${code}` as const)),
+  ...STORE_ERROR_FAMILIES.flatMap(family => STORE_ERROR_CODES.map(code => `${family}_${code}` as const)),
   ...PRODUCT_USAGE_LAUNCH_ENGINES.map(engine => `first_launch_engine_${engine}` as const),
   ...(['claude', 'codex'] as const).flatMap(engine => PRODUCT_USAGE_ENGINE_ACCOUNTS.map(account => `first_launch_${engine}_${account}` as const)),
 ] as const

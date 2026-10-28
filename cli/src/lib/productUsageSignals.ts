@@ -1,7 +1,7 @@
 import { AUTOMATIC_POLL_ACTIONS, HEALTH_FAILURES, HEALTH_MEASURES, RESUME_PREPARATION_KINDS, type HealthSource, type ResumeReason } from './productHealthContract.js'
 import type { MessageOutcome, MessageReceipt } from './sessionInput.js'
-import { LAUNCH_ERROR_CODES, PRODUCT_USAGE_FLOWS, PRODUCT_USAGE_LAUNCH_ENGINES, PRODUCT_USAGE_USER_OPENED_ACTIONS,
-  type LaunchErrorCode, type ProductUsageLaunchEngine, type ProductUsageMetric } from './productUsageContract.js'
+import { LAUNCH_ERROR_CODES, PRODUCT_USAGE_FLOWS, PRODUCT_USAGE_LAUNCH_ENGINES, PRODUCT_USAGE_USER_OPENED_ACTIONS, STORE_ERROR_CODES,
+  type LaunchErrorCode, type ProductUsageLaunchEngine, type ProductUsageMetric, type StoreErrorCode } from './productUsageContract.js'
 
 const actions = { agent_create: 'create', agent_resume: 'resume', agent_restart: 'restart',
   agent_retarget: 'model_change', agent_recent: 'history',
@@ -60,6 +60,14 @@ export function launchErrorCode(error: unknown): LaunchErrorCode {
   if (typeof error !== 'string') return 'none'
   const code = error.length <= 64 ? error.toLowerCase() : ''
   return listedCodes.has(code) ? code as LaunchErrorCode : 'unlisted'
+}
+const storeCodes = new Set<string>(STORE_ERROR_CODES.filter(code => code !== 'unlisted' && code !== 'none'))
+/** Which listed code a Store install's or update's refusal had (`STORE_ERROR_CODES`), as `launchErrorCode` names a
+ * launch's: the code lower-cased, `unlisted` for any other string and `none` for no code. Nothing else leaves here. */
+export function storeErrorCode(error: unknown): StoreErrorCode {
+  if (typeof error !== 'string') return 'none'
+  const code = error.length <= 64 ? error.toLowerCase() : ''
+  return storeCodes.has(code) ? code as StoreErrorCode : 'unlisted'
 }
 /** The engine a launch asked for, as one of the fixed names. */
 export function launchEngine(engine: unknown): ProductUsageLaunchEngine {
@@ -206,7 +214,7 @@ export function productUsageRequest(type: string, emit: (metric: ProductUsageMet
       }
       // A Store install's or update's, whatever its kind: the 11 Windows installs of 2026-10-28 were `other`, and
       // nothing said which refusal. Its family adds up to `store_install_failed` (or `store_update_failed`).
-      if (store) count(`error_code_${launchErrorCode(error)}`)
+      if (store) count(`error_code_${storeErrorCode(error)}`)
       detail(`error_${failure ? failure : error === 'TIMEOUT' ? 'timeout' : typeof error === 'string' && ['AGENT_NOT_FOUND', 'SESSION_NOT_FOUND', 'NOT_FOUND', 'NOT_INSTALLED'].includes(error) ? 'not_found' : typeof error === 'string' && ['DELETE_IN_PROGRESS', 'WORKTREE_BUSY', 'BUSY', 'DSH_BUSY'].includes(error) ? 'conflict' : kind}`)
     } else if (state === 'pending' || state === 'preparing' || state === 'starting') { count('pending'); detail('pending') }
     else if (state === 'unconfirmed' || state === 'unavailable' || state === 'cancelled') { count('unknown'); detail(state === 'cancelled' ? 'cancelled' : 'unknown') }
