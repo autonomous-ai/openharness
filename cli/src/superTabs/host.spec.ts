@@ -1544,6 +1544,30 @@ describe('the progress a host reports', () => {
   })
 })
 
+describe('the beat a host keeps', () => {
+  // 2026-10-28: the Mac Studio's reading waited behind git and launches in its pass, and its agents showed as Down.
+  it('sends its machine\'s reading again every second\'s check while a launch holds its pass up', async () => {
+    const t = setup()
+    const pool = { tabId: 'tab', machine: { machineId: 'machine-1', generation: 'grant', cwd: '/repo', engines: ['claude'] }, harnessIds: [],
+      starts: [{ id: 'start', dispatched: false }] }
+    const roster = vi.mocked(t.call).getMockImplementation()!
+    vi.mocked(t.call).mockImplementation(async (method, path, body) => path.includes('/hosts/machine-1/changes')
+      ? { status: 200, body: { success: true, data: hostForm([t.row], { pools: [pool] }) } } : roster(method, path, body))
+    const local = { machineId: 'machine-1', request: vi.fn(async () => ({})), close: vi.fn() }
+    const start = vi.fn(() => new Promise(() => {}))
+    let clock = 0
+    const host = t.open({ machines: { open: async () => local, capabilities: async () => ({ ok: true, resources: {}, tools: {} }) as never,
+      prepare: async () => null, start: start as never, now: () => clock } })
+    const readings = () => vi.mocked(t.call).mock.calls.filter(([method, path]) => method === 'POST' && path === '/api/super-tabs/tab/machines/machine-1')
+    host.start()
+    await vi.waitFor(() => expect(start).toHaveBeenCalledOnce())
+    expect(readings()).toHaveLength(1)
+    clock += 15_000
+    await vi.waitFor(() => expect(readings()).toHaveLength(2), { timeout: 3_000 })
+    expect(readings()[1]![2]).toEqual(readings()[0]![2])
+  })
+})
+
 describe('the members a host lets watch its agents', () => {
   it('keeps them watching through a 3 s roster read, wakes Share once, and lets a removed member go at once', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'super-tab-host-')); roots.push(dir)

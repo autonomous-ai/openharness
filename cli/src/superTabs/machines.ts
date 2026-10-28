@@ -36,6 +36,16 @@ const UNVERIFIED_TOOL_TTL_MS = 60_000
 /** How long a session's folder stands as clean or not before git is asked again: a minute bounds the work to one
  *  `git status` per running session a minute, and the backend stops an idle worker only on a report under 2 minutes old. */
 const UNCOMMITTED_TTL_MS = 60_000
+/** How long a folder whose session's screen has not changed stands before git reads it again: an agent changes its files
+ *  while it works, and its screen changes with them. git status one folder after another took 20 s a pass for the Mac
+ *  Studio's 29 worktrees (2026-10-28), most of them idle. Ten minutes still re-reads well inside the 15 idle minutes after
+ *  which the backend stops a clean worker (backend superTabs/tidy.ts), for a folder changed by someone else. */
+const UNCOMMITTED_IDLE_TTL_MS = 10 * 60_000
+/** How many session folders git reads at once. */
+const UNCOMMITTED_PARALLEL = 4
+/** How long into one pass the last reading is still sent again on the beat. Past it the daemon is taken as stuck, and the
+ *  machine is left to show as offline rather than kept healthy by a loop that no longer reads anything. */
+const BEAT_LIMIT_MS = 3 * 60_000
 /** How long this machine refuses a start before failing it with its reason, so the Lead starts it elsewhere: a minute of
  *  busy CPU or memory may pass, and routing saw this machine able a moment ago. A refusal no one reported left starts
  *  "Queued" for hours (DESKTOP-0TFH0OJ, 2026-10-23). */
@@ -129,6 +139,15 @@ export class ContributedMachines {
    *  running and stopped, whether new work is paused, and which starts are waiting. A change in any of them is
    *  sent at once; otherwise the heartbeat keeps the reading fresh. */
   private readonly published = new Map<string, { at: number; signature: string; starting?: boolean }>()
+  /** Per tab, the reading the backend last took and when it or a re-send of it last went: what [beat] sends again. */
+  private readonly lastSent = new Map<string, { path: string; body: Record<string, unknown>; at: number }>()
+  /** When the pass in flight began, or null between passes. */
+  private passBegan: number | null = null
+  /** The re-sends in flight, which a pass waits for before it sends a newer reading: a re-send that landed after it would
+   *  put the older one back. */
+  private beating: Promise<void> | null = null
+  /** The tabs whose new reading the pass is sending: no re-send of the older one starts meanwhile. */
+  private readonly sending = new Set<string>()
   /** Shell tool availability belongs to this machine, not a tab. Resource readings still refresh every heartbeat. */
   private readonly toolCache = new Map<string, { value: boolean | null; detail?: string; until: number }>()
   /** Per waiting start, why it was last not started, so the log says it once per reason, not every pass. */
@@ -150,7 +169,9 @@ export class ContributedMachines {
   private progressRefusedUntil = 0
   private uncommittedRefusedUntil = 0
   /** Per running session, whether its folder had uncommitted changes when last read, and until when that stands. */
-  private readonly uncommittedCache = new Map<string, { cwd: string; dirty: boolean; until: number }>()
+  private readonly uncommittedCache = new Map<string, { cwd: string; dirty: boolean; until: number; readAt: number; shown?: number }>()
+  /** Whether git is reading session folders beside the pass now. */
+  private uncommittedReading = false
   /** Until when the reading leaves out its readiness field, which the backend refused. */
   private readinessRefusedUntil = 0
   /** Until when the reading leaves out the starts it is preparing, which the backend refused. */
@@ -232,22 +253,49 @@ export class ContributedMachines {
   tick(): Promise<void> {
     if (this.stopped || this.deps.now() < this.next) return Promise.resolve()
     const began = this.deps.now()
+    if (!this.running) this.passBegan = began
     return this.running ??= this.poll(began).catch(error => { this.failed = true; throw error }).finally(() => {
       this.running = null
+      this.passBegan = null
       const done = this.deps.now()
       this.next = this.failed ? done + MACHINE_HEARTBEAT_MS : Math.max(began + MACHINE_POLL_MS, done + 1_000)
       this.failed = false
     })
   }
+  /**
+   * Called every second beside [tick]: while a pass is slow (git, a launch, a slow backend), each tab's last reading is
+   * sent again once nothing has gone for a heartbeat, so the machine never reads as offline, and its agents as Down, only
+   * because its pass is busy (the Mac Studio, 2026-10-28). It reads nothing itself, and sends what the backend already
+   * holds: no extra report, only a late one filled in. Never past [BEAT_LIMIT_MS] into a pass, so a stuck daemon still
+   * shows as offline. Whether a folder has uncommitted changes is left out: only a fresh read vouches for stopping a
+   * worker (backend superTabs/tidy.ts).
+   */
+  beat(): void {
+    const began = this.passBegan
+    if (this.stopped || this.beating || began === null) return
+    const now = this.deps.now()
+    if (now - began >= BEAT_LIMIT_MS) return
+    const due = [...this.lastSent].filter(([tab, sent]) => !this.sending.has(tab) && now - sent.at >= MACHINE_HEARTBEAT_MS)
+    if (!due.length) return
+    this.beating = (async () => {
+      for (const [, sent] of due) {
+        // A failed one waits a whole beat too, rather than being asked again every second.
+        sent.at = now
+        try { await this.deps.backend(this.core, 'POST', sent.path, sent.body) }
+        catch (error) { this.log(`Could not send this machine's reading again: ${error instanceof Error ? error.message : String(error)}`) }
+      }
+    })().finally(() => { this.beating = null })
+  }
   private async poll(began: number) {
     const where = { dataDir: this.core.dataDir, port: this.core.daemon.port, machineId: this.machineId }
     const pools = list((await this.sources.feed.current(POOLS_FRESH_MS)).pools).filter(row => identifier(row.tabId) && object(row.machine).machineId === this.machineId && identifier(object(row.machine).generation))
-    if (this.stopped || pools.length === 0) { this.published.clear(); this.waiting.clear(); return }
+    if (this.stopped || pools.length === 0) { this.published.clear(); this.lastSent.clear(); this.waiting.clear(); return }
     const pendingIds = new Set(pools.flatMap(row => list(row.starts).map(start => start.id)))
     for (const id of this.waiting.keys()) if (!pendingIds.has(id)) this.waiting.delete(id)
     for (const id of this.refusedSince.keys()) if (!pendingIds.has(id)) this.refusedSince.delete(id)
     for (const id of this.preparing) if (!pendingIds.has(id)) this.preparing.delete(id)
     for (const tab of this.published.keys()) if (!pools.some(row => row.tabId === tab)) this.published.delete(tab)
+    for (const tab of this.lastSent.keys()) if (!pools.some(row => row.tabId === tab)) this.lastSent.delete(tab)
     const privacy = this.privacy()
     // A model run or stopped for a Swarm, or an API shared with it, is sent on this pass, not on the next beat: the
     // machine's panel waited up to 15 s more for it (2026-10-26). Files only, so a pass with nothing new asks nobody.
@@ -339,7 +387,7 @@ export class ContributedMachines {
         const readiness = { ...(readyEngines ? { engines: readyEngines } : {}), ...(checkouts ? { checkouts } : {}) }
         const shown = began >= this.progressRefusedUntil ? this.deps.progress?.(running) ?? {} : {}
         const progress = Object.fromEntries(running.flatMap(id => typeof shown[id] === 'number' ? [[id, shown[id]]] : []))
-        const uncommitted = began >= this.uncommittedRefusedUntil ? await this.uncommitted(running, began) : {}
+        const uncommitted = began >= this.uncommittedRefusedUntil ? this.uncommitted(running, began, shown) : {}
         const observation = { generation: pool.generation, tools: reportedTools, ...(preparing.length ? { preparingStartIds: preparing } : {}),
           ...(Object.keys(uncommitted).length ? { harnessUncommitted: uncommitted } : {}),
           ...(Object.keys(progress).length ? { harnessProgress: progress } : {}), ...(localModels ? { localModels } : {}),
@@ -359,7 +407,9 @@ export class ContributedMachines {
           }), runningHarnessIds: running, stoppedHarnessIds: stopped,
           ...(Array.isArray(row.reservations) ? { stoppedReservations: list(row.reservations).filter(r => stopped.includes(String(r.harnessId))
             && identifier(r.harnessId) && identifier(r.generation)).map(r => ({ harnessId: r.harnessId, generation: r.generation })) } : {}) }
+        this.sending.add(String(row.tabId))
         try {
+          await this.beating
           const path = `/api/super-tabs/${row.tabId}/machines/${this.machineId}`
           const refused = (error: unknown) => error instanceof SuperTabHostError && error.status === 400 && error.code === 'VALIDATION_ERROR'
           // Older backends reject the additive fields. The newest go alone first (the starts it is preparing, uncommitted work,
@@ -382,6 +432,8 @@ export class ContributedMachines {
           for (const [index, attempt] of attempts.entries()) {
             try {
               await this.deps.backend(this.core, 'POST', path, attempt)
+              const { harnessUncommitted: _fresh, ...taken } = attempt as Record<string, unknown>
+              this.lastSent.set(String(row.tabId), { path, body: taken, at: this.deps.now() })
               break
             } catch (error) {
               if (!refused(error) || index === attempts.length - 1) throw error
@@ -394,6 +446,7 @@ export class ContributedMachines {
           }
           this.published.set(String(row.tabId), { at: began, signature, starting: !!localModels?.some(m => m.starting) })
         } catch (error) { this.failed = true; throw error }
+        finally { this.sending.delete(String(row.tabId)) }
         }
         this.repairTrust ??= createSwarmCloneTrustRepair(this.core, this.deps.now)
         try { await this.repairTrust(row) }
@@ -462,25 +515,39 @@ export class ContributedMachines {
       }
     } finally { local?.close() }
   }
-  /** Whether each running session's folder has uncommitted changes (git status), for the sessions git could read: the
-   *  backend stops a worker idle for 15 minutes only when its host says it is clean (backend superTabs/tidy.ts). */
-  private async uncommitted(running: readonly string[], now: number): Promise<Record<string, boolean>> {
-    const read: Record<string, boolean> = {}
+  /** Whether each running session's folder has uncommitted changes (git status), as last read, for the sessions git could
+   *  read: the backend stops a worker idle for 15 minutes only when its host says it is clean (backend superTabs/tidy.ts).
+   *  The folders due are read beside the pass, never holding the reading up; what they say goes with a later one. A folder
+   *  is due a minute after its last read once its session's screen ([shown]) has changed since, and after
+   *  [UNCOMMITTED_IDLE_TTL_MS] whatever it shows. */
+  private uncommitted(running: readonly string[], now: number, shown: Record<string, number>): Record<string, boolean> {
+    const read: Record<string, boolean> = {}, due: Array<{ id: string; cwd: string; shown?: number }> = []
     for (const id of running) {
       const cwd = this.core.agents.byAgent(id)?.cwd
       if (!cwd) continue
-      let known = this.uncommittedCache.get(id)
-      if (!known || known.cwd !== cwd || known.until <= now) {
-        const dirty = await uncommittedIn(cwd, this.deps.git)
-        known = dirty === null ? undefined : { cwd, dirty, until: now + UNCOMMITTED_TTL_MS }
-        if (known) this.uncommittedCache.set(id, known)
-        else this.uncommittedCache.delete(id)
-      }
-      if (known) read[id] = known.dirty
+      const known = this.uncommittedCache.get(id)
+      const same = known?.cwd === cwd
+      if (same) read[id] = known.dirty
+      const idle = same && shown[id] !== undefined && known.shown === shown[id]
+      if (!same || (now >= known.until && (!idle || now >= known.readAt + UNCOMMITTED_IDLE_TTL_MS))) due.push({ id, cwd, shown: shown[id] })
     }
-    // Sessions of every tab share it, so only what expired goes: a session that left is never read again.
-    for (const [id, entry] of this.uncommittedCache) if (entry.until <= now) this.uncommittedCache.delete(id)
+    // Sessions of every tab share it, so only what no session has kept current goes: a session that left is never read again.
+    for (const [id, entry] of this.uncommittedCache) if (now >= entry.readAt + 2 * UNCOMMITTED_IDLE_TTL_MS) this.uncommittedCache.delete(id)
+    if (due.length && !this.uncommittedReading) this.readFolders(due)
     return read
+  }
+  /** Reads [due] folders with git, [UNCOMMITTED_PARALLEL] at a time, into the cache. */
+  private readFolders(due: Array<{ id: string; cwd: string; shown?: number }>): void {
+    this.uncommittedReading = true
+    const next = async (): Promise<void> => {
+      for (let folder = due.shift(); folder; folder = due.shift()) {
+        const dirty = await uncommittedIn(folder.cwd, this.deps.git).catch(() => null)
+        const at = this.deps.now()
+        if (dirty === null) this.uncommittedCache.delete(folder.id)
+        else this.uncommittedCache.set(folder.id, { cwd: folder.cwd, dirty, until: at + UNCOMMITTED_TTL_MS, readAt: at, shown: folder.shown })
+      }
+    }
+    void Promise.all(Array.from({ length: Math.min(UNCOMMITTED_PARALLEL, due.length) }, next)).finally(() => { this.uncommittedReading = false })
   }
 
   /** Once its host confirmed a worker stopped (host.ts releaseWorker), the worktree its start made goes at once instead of
