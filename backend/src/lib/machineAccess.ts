@@ -14,7 +14,7 @@ import type { Machine, MachineShare } from '@prisma/client'
 import { prisma, machineAlive } from './prisma.js'
 import { getAgentPresenceMany } from './bus.js'
 import { machineBillingAllowsDataPlane } from './billingState.js'
-import { activeMachineKeys } from './deviceKeyLog.js'
+import { activeMachineKeys, activeMachineKeysOf } from './deviceKeyLog.js'
 import { emailDomain, isPublicEmailDomain } from './publicEmailDomains.js'
 import { storedAutonomousEnvironment } from './autonomousEnvironment.js'
 import type { AuthUser } from './ssoAuth.js'
@@ -120,8 +120,10 @@ export async function shareMembers(share: MachineShare): Promise<ShareMember[]> 
     const via = sharedVia(share, user.email)
     return via ? [{ user, via }] : []
   })
-  return Promise.all(members.map(async ({ user, via }) => ({
+  // Every member's keys in one read (deviceKeyLog.ts activeMachineKeysOf), not one log replay each.
+  const keys = await activeMachineKeysOf(members.map(({ user }) => user.id))
+  return members.map(({ user, via }) => ({
     email: normalized(user.email), name: user.name ?? null, via,
-    machines: (await activeMachineKeys(user.id)).map(k => ({ machineId: k.machineId, name: k.label, pub: k.pub })),
-  })))
+    machines: (keys.get(user.id) ?? []).map(k => ({ machineId: k.machineId, name: k.label, pub: k.pub })),
+  }))
 }
