@@ -2874,3 +2874,41 @@ describe('archiving unfinished work', () => {
     expect(t.f.state.conversations.find(c => c.id === t.group)!.archived).toBe(true)
   })
 })
+
+describe('linking an open pull request', () => {
+  const PR = 'https://github.com/acme/app/pull/1875'
+  const as = (agentId: string): Actor => ({ kind: 'agent', agentId, machineOwnerId: 'host-owner' })
+  /** A group with a Lead and its own builder at work, and a builder from another group. */
+  function setup() {
+    const f = fixture()
+    const lead = f.add('lead', 'owner', 'lead', true)
+    const group = f.group(), builder = f.add('builder', 'owner', group)
+    f.run({ type: 'work.assign', conversationId: group, agentId: builder })
+    const other = f.group(), stranger = f.add('stranger', 'owner', other)
+    const link = (actor: Actor, pullRequestUrl = PR) => f.run({ type: 'conversation.link', conversationId: group, pullRequestUrl }, actor)
+    const links = () => f.state.conversations.find(c => c.id === group)!.pullRequestUrls
+    return { f, lead, group, builder, stranger, link, links }
+  }
+
+  it('lets the Lead link a PR to the group and says so there once', () => {
+    const s = setup()
+    expect(s.link(as(s.lead)).messages.map(m => [m.conversationId, m.text])).toEqual([[s.group, `Linked ${PR}`]])
+    expect(s.links()).toEqual([PR])
+    expect(s.link(as(s.lead)).messages).toEqual([])
+    expect(s.links()).toEqual([PR])
+  })
+
+  it('lets the group\'s own builder link a PR', () => {
+    const s = setup()
+    s.link(as(s.builder))
+    expect(s.links()).toEqual([PR])
+  })
+
+  it('refuses anyone else, and anything but a pull request link', () => {
+    const s = setup()
+    expect(() => s.link(as(s.stranger))).toThrow('Only the Lead or the group\'s own builder')
+    expect(() => s.link(owner)).toThrow('Only the Lead or the group\'s own builder')
+    expect(commandSchema.safeParse({ type: 'conversation.link', conversationId: s.group, pullRequestUrl: 'https://github.com/acme/app/issues/3' }).success).toBe(false)
+    expect(s.links() ?? []).toEqual([])
+  })
+})

@@ -10,6 +10,7 @@ import type { AuthUser } from '../src/lib/ssoAuth.js'
 import { SuperTabStore } from '../src/superTabs/store.js'
 import type { Command } from '../src/superTabs/commands.js'
 import type { Conversation } from '../src/superTabs/model.js'
+import type { HeadData } from '../src/superTabs/parts/index.js'
 import type { MachineObservation } from '../src/superTabs/machines.js'
 import { poolRows, rosterRows } from './hostRows.test-support.js'
 import { archiveFinishedGroups, markFinishedGroups, type PullRequestState } from '../src/superTabs/archive.js'
@@ -224,6 +225,39 @@ describe('a finished group', () => {
     f.clock.now += 40 * MINUTE
     await archiveFinishedGroups(db, f.timed, github({}), f.clock.now)
     expect(await archived(f)).toBe(false)
+  })
+
+  it('waits for a pull request its cancel names only as "PR #N", read in the project\'s repository, until it is merged or closed', async () => {
+    const f = await swarm()
+    // As a Lead started in its repository records it (tab.project).
+    const head = await db.swarmHead.findUniqueOrThrow({ where: { id: `${f.tab}:head` } }), data = head.data as unknown as HeadData
+    const repository = { machineId: 'lead-host', cwd: '/repo', repositoryUrl: 'https://github.com/acme/app' }
+    await db.swarmHead.update({ where: { id: head.id }, data: { data: (data.projects
+      ? { ...data, projects: data.projects.map(p => p.id === 'lead' ? { ...p, repository } : p) } : { ...data, project: repository }) as object } })
+    const handed = String((await f.execute({ type: 'conversation.create', title: 'Phone leaderboard', brief: 'Ship it', checks: [{ description: 'Verified', independent: false }] })).result.conversationId)
+    const worker = await f.add(handed, 'test-host', randomUUID(), 'Phone')
+    const work = String((await f.execute({ type: 'work.assign', conversationId: handed, agentId: worker })).result.assignmentId)
+    await f.execute({ type: 'work.cancel', conversationId: handed, assignmentId: work, reason: 'Handed off as PR #1875' })
+    const open = async () => !(await db.swarmGroup.findFirstOrThrow({ where: { tabId: f.tab, key: handed } })).archived
+    f.clock.now += 40 * MINUTE
+    const prs = github({ 'https://github.com/acme/app/pull/1875': 'open' })
+    await archiveFinishedGroups(db, f.timed, prs, f.clock.now)
+    expect(prs.read).toContain('https://github.com/acme/app/pull/1875')
+    expect(await open()).toBe(true)
+    await archiveFinishedGroups(db, f.timed, github({ 'https://github.com/acme/app/pull/1875': 'merged' }), f.clock.now)
+    expect(await open()).toBe(false)
+  })
+
+  it('stays open when its work names "PR #N" and the project has no repository to read it in', async () => {
+    const f = await swarm()
+    const handed = String((await f.execute({ type: 'conversation.create', title: 'Sidebar', brief: 'Ship it', checks: [{ description: 'Verified', independent: false }] })).result.conversationId)
+    const worker = await f.add(handed, 'test-host', randomUUID(), 'Sidebar')
+    const work = String((await f.execute({ type: 'work.assign', conversationId: handed, agentId: worker })).result.assignmentId)
+    await f.execute({ type: 'work.cancel', conversationId: handed, assignmentId: work, reason: 'PR #1868 is in the merge queue' })
+    f.clock.now += 40 * MINUTE
+    await archiveFinishedGroups(db, f.timed, github({}), f.clock.now)
+    expect((await db.swarmGroup.findFirstOrThrow({ where: { tabId: f.tab, key: handed } })).archived).toBe(false)
+    expect(await archived(f)).toBe(true)
   })
 
   it('stays open while its task is lost, even marked finished, so unfinished work never closes silently', async () => {

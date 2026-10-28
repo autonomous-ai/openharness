@@ -118,6 +118,7 @@ export const commandSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('conversation.audience'), conversationId: id, personIds: z.array(id).max(200) }).strict(),
   z.object({ type: z.literal('conversation.requester'), conversationId: id, personId: id.nullable() }).strict(),
   // The Lead's record that a request's pull request merged (leaderboard/record.ts recordMerged); `mergedAt` for a backfill.
+  z.object({ type: z.literal('conversation.link'), conversationId: id, pullRequestUrl: z.string().max(400).regex(PULL_REQUEST_URL) }).strict(),
   z.object({ type: z.literal('conversation.merged'), conversationId: id, pullRequestUrl: z.string().max(400).regex(PULL_REQUEST_URL),
     mergedAt: z.iso.datetime().optional() }).strict(),
   z.object({ type: z.literal('agent.add'), conversationId: id, machineId: id, harnessId: id, name: title, configuration, lead: z.boolean(), project: project.optional(), roleId: roleId.optional(), initialMessage: text.optional() }).strict(),
@@ -1135,6 +1136,18 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       appendPullRequestUrls(group, [command.pullRequestUrl])
       recordMerged(group, mergedAt)
       if (!linked || group.ledger!.shippedAt !== shippedAt) message(group.id, `Merged ${command.pullRequestUrl}`, [], null, SYSTEM_ROW)
+      break
+    }
+    case 'conversation.link': {
+      // An open pull request shows on its group before it merges, so the cleanup waits for it (#558). Only its Lead or its
+      // own builder links one: a message only naming a PR never does.
+      const group = conversation(state, command.conversationId)
+      if (actor.kind !== 'agent' || (group.leadId !== actor.agentId && group.assignment?.agentId !== actor.agentId)) {
+        fail('LINK_FORBIDDEN', 'Only the Lead or the group\'s own builder links a pull request.', 403)
+      }
+      if (group.pullRequestUrls?.includes(command.pullRequestUrl)) break
+      appendPullRequestUrls(group, [command.pullRequestUrl])
+      message(group.id, `Linked ${command.pullRequestUrl}`, [], null, SYSTEM_ROW)
       break
     }
     case 'conversation.audience': {

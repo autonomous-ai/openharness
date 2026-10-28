@@ -1,5 +1,6 @@
 import { agentDisplayName } from './agentNames.js'
-import { activeWork, agentRole, stableId, type Actor, type Agent, type Conversation, type MessageDraft, type SuperTabState } from './model.js'
+import { githubRepository } from '../github/repository.js'
+import { activeWork, agentRole, appendPullRequestUrls, stableId, type Actor, type Agent, type Conversation, type MessageDraft, type SuperTabState } from './model.js'
 import { agentProjectId, canReadGroup, groupProject, projectsOf } from './projects.js'
 
 // Nobody has to tidy a Swarm by hand (roadmap, December). A Builder left with nothing to do for 15 minutes is stopped, as
@@ -120,6 +121,23 @@ export function cancelledTags(state: SuperTabState, group: Conversation, actor?:
 
 /** Why a cancelled task ended, as its cancel recorded it, without the final full stop. */
 export const cancelReason = (group: Conversation): string => (group.assignment?.result ?? '').replace(/[.\s]+$/, '')
+
+/** "PR #1875", as a Lead's cancel or a builder's result names a pull request without its link. */
+const PR_NUMBER = /\bPR #([1-9][0-9]{0,8})\b/gi
+
+/** The pull requests a group's archive waits on: those it links, and those its result and check evidence name, a "PR #N"
+ *  read in its project's repository. A cancel saying "Handed off as PR #1875" linked nothing, so the group archived while
+ *  that PR was open (#558). Null when it names a number with no GitHub repository to read it in: it stays open. */
+export function archiveWaitsFor(group: Conversation, repositoryUrl: string | null | undefined): string[] | null {
+  const texts = [group.assignment?.result, ...group.checks.map(check => check.evidence)]
+  const named = { pullRequestUrls: [...group.pullRequestUrls ?? []] } as Conversation
+  appendPullRequestUrls(named, texts)
+  const numbers = texts.flatMap(text => [...(text ?? '').matchAll(PR_NUMBER)].map(match => match[1]!))
+  if (!numbers.length) return named.pullRequestUrls!
+  const repository = githubRepository(repositoryUrl)
+  if (!repository) return null
+  return [...new Set([...named.pullRequestUrls!, ...numbers.map(n => `https://github.com/${repository.fullName}/pull/${n}`)])]
+}
 
 /** The one quiet line an archived group gets, to nobody, written as its project's Lead; none when the project has no Lead.
  *  A cancelled task's requester is tagged in it (cancelledTags). */
