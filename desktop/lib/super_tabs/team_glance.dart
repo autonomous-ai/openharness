@@ -25,7 +25,7 @@ enum SuperTabAgentState {
   paused,
 }
 
-/// One agent in one line: "Working · Mac Studio · opus high".
+/// One agent in one line: "Working · Mac Studio · Opus 5.5 · high".
 class SuperTabAgentGlance {
   const SuperTabAgentGlance({
     required this.state,
@@ -44,8 +44,9 @@ class SuperTabAgentGlance {
   final String label;
   final String? machine, model;
 
-  /// The effort to show: the recorded one, else its start's, else "unknown".
-  final String effort;
+  /// The effort to show: the recorded one, else its start's; null when neither names one. A row says only what is
+  /// known: the PM's row read "opus unknown" (2026-10-28).
+  final String? effort;
 
   /// Holding a task: what the Swarm counts as this agent's load.
   final bool busy;
@@ -53,8 +54,10 @@ class SuperTabAgentGlance {
   /// The effort the agent's configuration records, and the one its start asked for; null when not known.
   final String? recordedEffort, requestedEffort;
 
-  /// "opus high"; null when the model is not known (an agent read before it reported one).
-  String? get modelEffort => model == null ? null : '$model $effort';
+  /// "Opus 5.5 · high", or "Opus 5.5" when no effort is known; null when the model is not known (an agent read
+  /// before it reported one).
+  String? get modelEffort =>
+      model == null ? null : [model, ?effort].join(' · ');
 
   String get line => [label, ?machine, ?modelEffort].join(' · ');
 }
@@ -139,7 +142,7 @@ SuperTabAgentGlance superTabAgentGlance(
     label: label,
     machine: info.machine,
     model: info.model,
-    effort: recorded ?? requested ?? 'unknown',
+    effort: recorded ?? requested,
     busy: _activeWork.contains(work),
     recordedEffort: recorded,
     requestedEffort: requested,
