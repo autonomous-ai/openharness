@@ -10,6 +10,7 @@ import { CacheView } from './cache.js'
 import * as store from './parts/index.js'
 import type { GroupData, Part, SwarmParts } from './parts/index.js'
 import { startFinished } from './parts/write.js'
+import { retryStaleIndex } from './parts/indexed.js'
 
 type Db = Pick<PrismaClient, '$transaction'> & Prisma.TransactionClient
 type LightOptions = NonNullable<Parameters<typeof store.loadLight>[2]>
@@ -30,7 +31,7 @@ export const readMachines = (db: Prisma.TransactionClient, view: CacheView, tabI
 
 /** The active parts, then the machines: one read of the base in a transaction, so its parts are one snapshot. */
 const base = (db: Db, view: CacheView, tabId: string) => Promise.all([
-  view.get(tabId, 'parts', 'main', () => db.$transaction(tx => store.loadReadBase(tx, tabId))),
+  view.get(tabId, 'parts', 'main', () => retryStaleIndex(() => db.$transaction(tx => store.loadReadBase(tx, tabId)))),
   readMachines(db, view, tabId),
 ])
 
@@ -61,7 +62,7 @@ export async function readLight(db: Db, view: CacheView, tabId: string, opts: Om
   const name = `light:${JSON.stringify([opts.groups ?? 'active', !!opts.includeRecentStarts, ...(['groupIds', 'agentIds', 'projectIds'] as const)
     .map(key => [...opts[key] ?? []].sort())])}`
   const [light, machines] = await Promise.all([
-    view.get(tabId, name, 'main', () => db.$transaction(tx => store.loadLight(tx, tabId, { ...opts, machines: false }))),
+    view.get(tabId, name, 'main', () => retryStaleIndex(() => db.$transaction(tx => store.loadLight(tx, tabId, { ...opts, machines: false })))),
     readMachines(db, view, tabId),
   ])
   return { ...light, machines }

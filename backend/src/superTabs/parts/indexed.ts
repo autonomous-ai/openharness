@@ -18,6 +18,8 @@ export const GROUP_INDEX = {
   project: { tabId: 1, projectId: 1, dormant: 1, lastActivityAt: 1, key: 1 },
   dormancy: { tabId: 1, dormant: 1, changedAt: 1 },
   changes: { tabId: 1, changedAt: 1 },
+  /** A host's changed conversations: led by the host, so the wake check reads no other host's. */
+  wake: { hostMachineIds: 1, tabId: 1, changedAt: 1 },
   /** Every live group: the host signature's index. */
   live: { tabId: 1, deleted: 1, key: 1, hostDigest: 1, dormant: 1 },
 } as const
@@ -45,10 +47,44 @@ export function watchGroupIndexes(db: PrismaClient): void {
   setInterval(list, 5 * 60_000).unref()
 }
 
-/** The rows of an `aggregateRaw` pipeline on SwarmGroup, through `index` once the database is known to have it. */
+/** How many times a read dropped the listing. A transaction a dropped index aborted fails in whichever of its reads Mongo
+ *  answers first, often not the one that named it: its runner reruns it when this moved during the attempt. */
+let drops = 0
+export const listingDrops = (): number => drops
+
+/** Runs a transaction opened directly (outside store.ts `transaction`) once more when a read in it dropped the listing:
+ *  the second attempt names no index. */
+export async function retryStaleIndex<T>(run: () => Promise<T>): Promise<T> {
+  const before = drops
+  try {
+    return await run()
+  } catch (error) {
+    if (drops === before) throw error
+    return run()
+  }
+}
+
+/**
+ * The rows of an `aggregateRaw` pipeline on SwarmGroup, through `index` once the database is known to have it. An index
+ * removed since the last listing (a rollback, an index replaced) fails the read: the listing is dropped, said, and the read
+ * runs without it at once outside a transaction. In one, the failed command aborted it, and Prisma may report only that:
+ * its runner runs it again (`listingDrops`).
+ */
 export async function groupsBy(tx: Transaction, index: GroupIndex, pipeline: Prisma.InputJsonValue[]): Promise<Array<Record<string, unknown>>> {
-  return await tx.swarmGroup.aggregateRaw({ pipeline, ...present.has(index) ? { options: { hint: GROUP_INDEX[index] } } : {} }) as unknown as
+  const run = async (hint?: Record<string, number>) => await tx.swarmGroup.aggregateRaw({ pipeline, ...hint ? { options: { hint } } : {} }) as unknown as
     Array<Record<string, unknown>>
+  if (!present.has(index)) return run()
+  try {
+    return await run(GROUP_INDEX[index])
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    if (!/hint provided does not correspond to an existing index|has been aborted/.test(message)) throw error
+    present = new Set()
+    drops++
+    logger.error('[swarm-reads] SwarmGroup lacks an index a hot read names; reads name none until the next listing', { index: GROUP_INDEX[index] })
+    if (typeof (tx as { $transaction?: unknown }).$transaction === 'function') return run()
+    throw error
+  }
 }
 
 /** A project's quiet conversations last active since `since`, as the project index serves them. A conversation stored with no

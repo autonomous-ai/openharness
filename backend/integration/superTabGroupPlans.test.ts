@@ -7,10 +7,10 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import { MongoMemoryReplSet } from 'mongodb-memory-server-core'
 import { PrismaClient } from '@prisma/client'
 import type { AuthUser } from '../src/lib/ssoAuth.js'
-import { SuperTabStore } from '../src/superTabs/store.js'
+import { SuperTabStore, transaction } from '../src/superTabs/store.js'
 import { migrateSwarm } from '../src/superTabs/migration/migrate.js'
 import { HostReads } from '../src/superTabs/read/host.js'
-import { OVERLAP_MS } from '../src/superTabs/read/cursor.js'
+import { DIRECT, readLight } from '../src/superTabs/cachedReads.js'
 import * as parts from '../src/superTabs/parts/index.js'
 import { recentDormantGroups } from '../src/superTabs/leaderboard/read.js'
 import { decisionsWaiting, listDecisions } from '../src/superTabs/decisions.js'
@@ -279,19 +279,18 @@ describe('hot SwarmGroup reads name their index and read only what they return (
   it('the host\'s wake check finds a change that concerns its machine, reading only the conversations changed since the cursor', async () => {
     const hosts = new HostReads(store, { now: () => clock })
     clock = Date.now()
-    const since = clock
     const first = await hosts.changes(owner, s.machineId, { full: true })
+    // Ten conversations another machine's host was told about since: this host's wake check reads none of them (review of #1994).
+    await db.swarmGroup.updateMany({ where: { tabId: s.tabId, key: { in: s.quietOther.slice(0, 10).map(r => r.key) } },
+      data: { changedAt: new Date(Date.now() + 500), hostMachineIds: ['other-host'] } })
     clock = Date.now()
-    const quietSince = clock
     let quiet: Awaited<ReturnType<HostReads['changes']>> | undefined
     const idle = where(await profiled(async () => { quiet = await hosts.changes(owner, s.machineId, { cursor: first.cursor }) }), ['tabId', 'changedAt', 'hostMachineIds'])
     expect(idle).toHaveLength(1)
     expectIndexed(idle)
-    // None of its conversations changed for this machine since the cursor (its read start less the overlap): it reads only
-    // those that changed at all, never the rest of the Swarm.
-    const changed = await db.swarmGroup.count({ where: { tabId: s.tabId, changedAt: { gt: new Date(since - OVERLAP_MS) } } })
+    // None of its conversations changed for this machine since the cursor: it reads none, not even those changed for others.
     expect(idle[0]!.returned).toBe(0)
-    expect(idle[0]!.docsExamined, JSON.stringify(idle)).toBeLessThanOrEqual(changed)
+    expectOnlyReturned(idle)
     // A write that concerns this machine's host, as parts/commit.ts marks it.
     clock = Date.now() + 1000
     await db.swarmGroup.updateMany({ where: { tabId: s.tabId, key: s.web }, data: { changedAt: new Date(clock), hostMachineIds: [s.machineId] } })
@@ -301,8 +300,7 @@ describe('hot SwarmGroup reads name their index and read only what they return (
     expect(reads).toHaveLength(1)
     expectIndexed(reads)
     expect(reads[0]!.returned).toBe(1)
-    const changedSinceQuiet = await db.swarmGroup.count({ where: { tabId: s.tabId, changedAt: { gt: new Date(quietSince - OVERLAP_MS) } } })
-    expect(reads[0]!.docsExamined, JSON.stringify(reads)).toBeLessThanOrEqual(changedSinceQuiet)
+    expectOnlyReturned(reads)
   })
 })
 
@@ -326,5 +324,36 @@ describe('a hot read whose index the database lacks', () => {
     const reads = await profiled(async () => expect(await read()).toEqual([{ key: s.web }]))
     expect(reads).toHaveLength(1)
     expectIndexed(reads)
+  })
+
+  // Review of #1994: listed first, then removed (a rollback, an index replaced). The listing still names it until the next one.
+  describe('removed after the last listing', () => {
+    const match = () => [{ $match: { tabId: s.tabId, agentIds: s.worker } }, { $project: { _id: 0, key: 1 } }]
+    async function removed<T>(run: () => Promise<T>): Promise<T> {
+      await listGroupIndexes(db)
+      await db.$runCommandRaw({ dropIndexes: 'SwarmGroup', index: GROUP_INDEX.agents })
+      try {
+        return await run()
+      } finally {
+        await db.$runCommandRaw({ createIndexes: 'SwarmGroup', indexes: [{ key: GROUP_INDEX.agents, name: 'SwarmGroup_tabId_agentIds_idx' }] })
+        await listGroupIndexes(db)
+      }
+    }
+
+    it('a read outside a transaction says so and answers without it at once', async () => {
+      const said = vi.spyOn(logger, 'error')
+      expect(await removed(() => groupsBy(db, 'agents', match()))).toEqual([{ key: s.web }])
+      expect(said).toHaveBeenCalledWith(expect.stringContaining('lacks an index'), expect.anything())
+      said.mockRestore()
+    })
+
+    it('a store transaction runs again without it and answers', async () => {
+      expect(await removed(() => transaction(db, tx => groupsBy(tx, 'agents', match())))).toEqual([{ key: s.web }])
+    })
+
+    it('the read cache\'s own transaction runs again without it and answers', async () => {
+      const loaded = await removed(() => readLight(db, DIRECT, s.tabId, { groups: 'working', agentIds: [s.worker] }))
+      expect(loaded.groups.map(g => g.key).sort()).toEqual([...s.leadConversations, s.web].sort())
+    })
   })
 })
