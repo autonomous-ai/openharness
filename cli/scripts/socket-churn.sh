@@ -4,14 +4,16 @@
 # (per endpoint: connects a minute, lifetimes, close codes, selects and their answers; HTTP requests per route).
 #
 #   HARNESS_E2E_SERVICES_DIR=<dir with mongodb-memory-server and redis-memory-server> \
-#     scripts/socket-churn.sh [minutes, default 3] [report.json, default socket-report.json]
+#     scripts/socket-churn.sh [minutes, default 3] [report.json, default a new file in the temp folder]
 #
+# A report path is read from where the script was called, never from cli/, so no report lands in the checkout.
 # HARNESS_E2E_MONGOD / HARNESS_E2E_REDIS_SERVER point at system binaries instead of downloaded ones.
 set -euo pipefail
-cd "$(dirname "$0")/.."
 : "${HARNESS_E2E_SERVICES_DIR:?must name a folder with mongodb-memory-server and redis-memory-server}"
 export SOCKET_SCENARIO_MINUTES="${1:-3}"
-export SOCKET_REPORT_FILE="$(cd "$(dirname "${2:-socket-report.json}")" && pwd)/$(basename "${2:-socket-report.json}")"
+report="${2:-$(mktemp "${TMPDIR:-/tmp}/socket-report.XXXXXX")}"
+export SOCKET_REPORT_FILE="$(cd "$(dirname "$report")" && pwd)/$(basename "$report")"
+cd "$(dirname "$0")/.."
 status=0
 npx vitest run --config vitest.e2e.config.ts e2e/socketChurn.e2e.ts || status=$?
 echo "report: $SOCKET_REPORT_FILE"

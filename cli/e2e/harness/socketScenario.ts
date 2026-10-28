@@ -48,6 +48,8 @@ const STABLE_AFTER_MS = 60_000
  */
 export class DesktopWindow {
   dials = 0
+  /** The close codes the daemon ended this window's sockets with, in order. */
+  readonly closes: number[] = []
   private attempt = 0
   private ws: WebSocket | null = null
   private retry: NodeJS.Timeout | null = null
@@ -77,6 +79,7 @@ export class DesktopWindow {
       if (this.stable) clearTimeout(this.stable)
       this.stable = null
       if (this.closing) return
+      this.closes.push(code)
       if (code === 4404) { this.stoppedBy = code; return }
       this.attempt++
       this.retry = setTimeout(() => this.open(), reconnectDelay(this.attempt))
@@ -149,8 +152,32 @@ export interface ScenarioResult {
   /** Every socket the meter saw, for checks the report does not sum up. */
   sockets: SocketRecord[]
   machines: { a: string; b: string; deleted: string; offline: string }
+  /** What the scenario's own clients saw: each Desktop window's dials and the close codes it was sent, the tab's sessions. */
+  clients: {
+    windows: Record<'b' | 'deleted' | 'offline', { dials: number; closes: number[] }>
+    web: { dials: number; sessions: number }
+  }
   /** The backend's own log, for a failing test to point at. */
   backendLog: string
+}
+
+/**
+ * What a run is missing to prove anything; empty when it did everything it should. Each check on the run also
+ * passes when nothing happened (no deleted-machine select, no quick redial), so a run that never reached a machine
+ * through A's relay, never opened the tab's session, was never refused X or selected Y once must fail, loudly.
+ */
+export function shortfalls(result: ScenarioResult): string[] {
+  const missing: string[] = []
+  const webWs = result.sockets.filter((s) => s.endpoint === '/api/web-ws')
+  if (!(result.report.endpoints['/api/web-ws']?.connects > 0)) missing.push('no web-ws connects')
+  const relayed = webWs.some((s) => s.client !== 'web'
+    && s.selects.some((select) => select.machineId === result.machines.b && select.outcome === 'accepted'))
+  if (!relayed) missing.push('machine B was never accepted through a daemon relay')
+  if (result.clients.web.sessions < 1) missing.push('the browser tab never opened a session')
+  if (result.clients.windows.deleted.closes.length < 1) missing.push('the window to the deleted machine was never refused')
+  const offline = webWs.reduce((n, s) => n + s.selects.filter((select) => select.machineId === result.machines.offline).length, 0)
+  if (offline < 2) missing.push(`the offline machine was selected ${offline} times, not at least twice`)
+  return missing
 }
 
 async function resolveMachine(backend: RealBackend, who: Account, label: string): Promise<{ machineId: string; computerId: string }> {
@@ -162,16 +189,20 @@ async function resolveMachine(backend: RealBackend, who: Account, label: string)
 
 /** A daemon signed in as `who` on machine `machine`, dialling the backend through the meter. */
 async function machineDaemon(meter: SocketMeter, who: Account, machine: { machineId: string; computerId: string },
-  e2ee: Record<string, unknown>): Promise<IsolatedDaemon> {
+  e2ee: Record<string, unknown>, stops: Array<() => unknown>): Promise<IsolatedDaemon> {
   const daemon = await IsolatedDaemon.create({ env: {
     ADAPTER_COMPUTER_ID: machine.computerId, BACKEND_WS_URL: meter.wsUrl, WEB_URL: meter.url,
     HARNESSD_SERVICE_INITIAL_BACKOFF_MS: '200' } })
+  // Before anything else can throw: the daemon's tmux server and folders exist from here on.
+  stops.push(() => daemon.close())
   writeFileSync(join(daemon.root, 'auth/session.json'), JSON.stringify({ version: 1, accessToken: who.token,
     refreshToken: 'x', autonomousEnv: 'prod', computerId: machine.computerId, machineId: machine.machineId,
     expiresAt: Date.now() + 3_600_000, updatedAt: Date.now() }), { mode: 0o600 })
   await writeE2ee(daemon, e2ee)
   return daemon
 }
+
+const seen = (window: DesktopWindow) => ({ dials: window.dials, closes: [...window.closes] })
 
 /** Run the scenario for `durationMs` once every client is up, and report what the meter saw over the whole run. */
 export async function runSocketScenario(options: { durationMs: number; log?: (line: string) => void }): Promise<ScenarioResult> {
@@ -199,16 +230,14 @@ export async function runSocketScenario(options: { durationMs: number; log?: (li
         { machineId: deleted.machineId, pub: b64e(newIdentity().pub), label: 'machine-x', linkedAt },
         { machineId: offline.machineId, pub: b64e(newIdentity().pub), label: 'machine-y', linkedAt },
       ],
-    })
-    stops.push(() => daemonA.close())
+    }, stops)
     const daemonB = await machineDaemon(meter, alice, b, {
       'identity.json': { priv: b64e(idB.priv), pub: b64e(idB.pub) },
       'paired.json': [
         { identityPub: b64e(idA.pub), label: 'machine-a', pairedAt: linkedAt, role: 'web', machineId: a.machineId, kind: 'machine' },
         { identityPub: b64e(tab.pub), label: 'browser', pairedAt: linkedAt, role: 'web' },
       ],
-    })
-    stops.push(() => daemonB.close())
+    }, stops)
     await Promise.all([daemonA.start(), daemonB.start()])
     for (const daemon of [daemonA, daemonB]) {
       await until('daemon connected', async () => (await (await fetch(`http://127.0.0.1:${daemon.port}/api/status`,
@@ -218,6 +247,8 @@ export async function runSocketScenario(options: { durationMs: number; log?: (li
 
     const windows = [b, deleted, offline].map((m) => new DesktopWindow(daemonA, m.machineId))
     const web = new WebTab({ wsUrl: meter.wsUrl, token: alice.token, machineId: b.machineId, identity: tab, machinePub: idB.pub })
+    // The rates are the clients' from here; the daemons' own start (their adapter sockets) is before the window.
+    meter.startClock()
     for (const client of [...windows, web]) {
       client.open()
       stops.push(() => client.close())
@@ -227,6 +258,10 @@ export async function runSocketScenario(options: { durationMs: number; log?: (li
     return {
       report: meter.report({ deletedMachineIds: [deleted.machineId] }),
       sockets: meter.sockets,
+      clients: {
+        windows: { b: seen(windows[0]), deleted: seen(windows[1]), offline: seen(windows[2]) },
+        web: { dials: web.dials, sessions: web.sessions },
+      },
       machines: { a: a.machineId, b: b.machineId, deleted: deleted.machineId, offline: offline.machineId },
       backendLog: backend.logPath,
     }
