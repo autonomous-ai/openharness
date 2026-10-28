@@ -475,7 +475,7 @@ class SuperTabClient {
     loaded?.dispose();
     if (loaded != null) unawaited(loaded.flush().catchError((Object _) {}));
     if (future == null || loaded != null) return;
-    // Still opening: it is stopped once it lands, unless opened again.
+    // Still opening: it is stopped once it lands. An open since has its own.
     unawaited(
       future
           .then((c) async {
