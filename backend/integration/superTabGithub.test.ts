@@ -75,6 +75,8 @@ async function fresh(options: { github?: boolean; approveAll?: boolean; signIn?:
     approved: async (_env, tabId, projectId, repository) => options.approveAll !== false
       || approved.some(a => a.tabId === tabId && a.repository === repository.toLowerCase() && (a.scope === 'swarm' || a.projectId === projectId)),
     approve: async (request, login) => { approved.push({ ...request, login }) },
+    approvedProjects: async (_env, tabId, repository) => approved
+      .filter(a => a.tabId === tabId && a.repository === repository.toLowerCase() && a.scope === 'project').map(a => a.projectId),
   }
   await app.register(superTabRoutes, { store, github: options.github === false ? null : tokens, approvals, signIn: options.signIn ?? null })
   await app.ready()
@@ -353,6 +355,39 @@ describe('a queued start\'s preparation token', () => {
     expect(cancelled.body).toContain('Nothing was approved. Go back to Harness and choose Approve to try again.')
     expect(cancelled.body).not.toContain('Harness is installed')
     expect(env.approved).toEqual([])
+  })
+
+  // Local Team account run, 2026-10-28: a second project on a repository already approved for another asked again with no hint.
+  it('names the reader\'s other projects the repository is approved for, when it is not approved for this one', async () => {
+    const signIn = { authorizeUrl: (state: string) => `https://github.test/login/oauth/authorize?state=${state}`,
+      permission: async () => ({ login: 'olive', push: true }) } as unknown as GitHubSignIn
+    teamAccounts()
+    const env = await fresh({ approveAll: false, signIn })
+    const { tab } = await working(env)
+    const invited = await env.run(tab, { type: 'invite.create', email: host.email, role: 'collaborator', conversationId: 'lead' } as Command)
+    await env.run(tab, { type: 'invite.accept', inviteId: invited.result.inviteId as string } as Command, host)
+    const project = async (name: string, visibility: 'public' | 'private') => {
+      const made = (await env.run(tab, { type: 'project.create', name, visibility, brief: '' } as Command)).result
+      await env.run(tab, { type: 'agent.add', conversationId: made.conversationId, machineId: 'owner-mac', harnessId: randomUUID(), name: 'Lead',
+        configuration: config, lead: true, project: { cwd: `/work/${name}`, repositoryUrl: 'https://github.com/example/app.git' } } as Command)
+      return String(made.projectId)
+    }
+    const docs = await project('Docs', 'public'), secret = await project('Secret', 'private')
+    const approve = async (projectId: string) => {
+      const asked = await env.app.inject({ method: 'POST', url: `/api/super-tabs/${tab}/projects/${projectId}/github/approve`,
+        headers: { authorization: `Bearer ${owner.sub}` }, payload: { scope: 'project' } })
+      const state = new URL((asked.json().data as { authorizeUrl: string }).authorizeUrl).searchParams.get('state')!
+      expect((await env.app.inject({ method: 'GET', url: `/api/github/callback?code=c&state=${encodeURIComponent(state)}` })).statusCode).toBe(200)
+    }
+    await approve('lead')
+    await approve(secret)
+    const read = async (user: AuthUser, projectId: string) => (await env.app.inject({ method: 'GET', url: `/api/super-tabs/${tab}/projects/${projectId}/github`,
+      headers: { authorization: `Bearer ${user.sub}` } })).json().data
+    expect(await read(owner, docs)).toMatchObject({ state: 'not-approved', repository: 'example/app', approvedFor: ['Pilot', 'Secret'] })
+    // A teammate who cannot open Secret reads only Pilot.
+    expect(await read(host, docs)).toMatchObject({ state: 'not-approved', approvedFor: ['Pilot'] })
+    // An approved project says nothing of the others.
+    expect(await read(owner, 'lead')).not.toHaveProperty('approvedFor')
   })
 
   // Security re-check of #1976: a task lost to a usage limit keeps its id when it resumes, and its loss marked it ended,
