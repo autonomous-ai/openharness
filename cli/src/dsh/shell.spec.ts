@@ -87,8 +87,10 @@ describe('dshShellArgv on Windows', () => {
       for (const folder of [home, stubs, harness]) mkdirSync(folder)
       writeFileSync(join(home, '.bash_profile'), '[ -n "$CHERE_INVOKING" ] || cd "$HOME"\n')
       writeFileSync(join(stubs, 'cygpath'), `#!/bin/sh\nprintf '%s\\n' '${stubs}'\n`, { mode: 0o755 })
-      const result = await runDshCommand('pwd', { cwd: harness, env: { HOME: home, PATH: stubs }, host: { platform: 'win32', gitBash: () => '/bin/bash' } })
-      expect(result.lines).toEqual([harness])
+      const result = await runDshCommand('echo "ran in $(pwd)"', { cwd: harness, env: { HOME: home, PATH: stubs }, host: { platform: 'win32', gitBash: () => '/bin/bash' } })
+      // Only the script's own line: this is a real login bash, and the host's /etc/profile says what it likes (Ubuntu's
+      // CI runner: 'run-parts: command not found', with the PATH the test gives it).
+      expect(result.lines.filter((line) => line.startsWith('ran in '))).toEqual([`ran in ${harness}`])
     })
   })
 })
