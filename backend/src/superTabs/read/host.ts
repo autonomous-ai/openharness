@@ -12,9 +12,10 @@ import { machineBillingAllowsDataPlane } from '../../lib/billingState.js'
 import { fail, type AgentStart, type SuperTabState } from '../model.js'
 import type { SuperTabStore } from '../store.js'
 import type { CacheView } from '../cache.js'
-import { readMachines } from '../cachedReads.js'
+import { readLastChangedAt, readMachines } from '../cachedReads.js'
 import * as parts from '../parts/index.js'
 import type { MachineData, Part } from '../parts/index.js'
+import { groupsBy, retryStaleIndex } from '../parts/indexed.js'
 import { READ_FORMAT, type HostChanges, type HostChangesRequest } from './contract.js'
 import { cursorFor, readCursor } from './cursor.js'
 import { hostTab, type HostLookups } from './hostRows.js'
@@ -62,14 +63,13 @@ export class HostReads {
       hostMachineId: machineId, sessionKind: 'team', autonomousEnv: user.autonomousEnv, ...machineAlive }, select: { machineId: true } })
     const full = 'reload' in from
     const woken = full ? null : await this.woken(tx, ids, machineId, from.since)
-    // Only for the Swarms answered for: this runs every second on every host, and seven groupBy over all of a Swarm's parts
-    // are no use for one that has nothing to say (a production backend at 5 pods, 2026-10-27).
-    const newest = await parts.lastChangedAt(tx, woken ? ids.filter(id => woken.has(id)) : ids)
     const tabs = []
     const cached = await this.store.view(woken ? ids.filter(id => woken.has(id)) : ids)
     for (const tabId of ids) {
       if (woken && !woken.has(tabId)) continue
-      const lastChangedAt = newest.get(tabId) ?? null, held = request.held?.[tabId]
+      // A wake can repeat while the cursor overlaps the same change. Share the timestamp at the read's stamp instead
+      // of scanning every part kind again before the unchanged-etag shortcut.
+      const lastChangedAt = await readLastChangedAt(tx, cached, tabId), held = request.held?.[tabId]
       // The etag is the rows' hash and then the signature of what they were built from. A matching signature answers
       // 'unchanged' from version columns alone. Never on a full read: grants and billing live outside the parts.
       const inputs = await cached.get(tabId, 'host:inputs', 'main', () => this.inputs(tx, tabId))
@@ -94,7 +94,9 @@ export class HostReads {
     const after = new Date(since)
     const [changed, groups, machines] = await Promise.all([
       parts.loadChanged(tx, ids, after, PLAIN_KINDS),
-      tx.swarmGroup.findMany({ where: { tabId: { in: ids }, changedAt: { gt: after }, hostMachineIds: { has: machineId } }, select: { tabId: true } }),
+      // Through the host's own index by name (parts/indexed.ts): every host runs this every second, and reads no other host's.
+      groupsBy(tx, 'wake', [{ $match: { tabId: { $in: ids }, changedAt: { $gt: { $date: after.toISOString() } }, hostMachineIds: machineId } },
+        { $project: { _id: 0, tabId: 1 } }]) as Promise<unknown> as Promise<Array<{ tabId: string }>>,
       tx.swarmMachine.findMany({ where: { tabId: { in: ids }, hostChangedAt: { gt: after } }, select: { tabId: true, key: true, data: true } }),
     ])
     const woken = new Set([...ids.filter(id => changed.get(id)?.some(p => plainlyRelevant(p, machineId))), ...groups.map(g => g.tabId)])
@@ -114,7 +116,7 @@ export class HostReads {
   private async tabState(tx: Transaction, cached: CacheView, tabId: string, machineId: string): Promise<SuperTabState> {
     const [light, machines] = await Promise.all([cached.get(tabId, `host:state:${machineId}`, 'main',
       // On a miss, one snapshot of what the host's rows are built from.
-      () => this.db.$transaction(t => this.hostParts(t, tabId, machineId))),
+      () => retryStaleIndex(() => this.db.$transaction(t => this.hostParts(t, tabId, machineId)))),
       readMachines(tx, cached, tabId)])
     return parts.reassemble({ ...light, machines }, { share: true })
   }

@@ -596,7 +596,8 @@ describe('the delivery poll of an agent with nothing waiting', () => {
     counted.ops.length = 0
     f.clock.now += 1
     expect(await f.timed.deliveries(host, f.tab, f.lead)).toEqual([])
-    expect(counted.ops).toContain('SwarmGroup.findMany')
+    // The Swarm's groups load through their indexes (parts/load.ts).
+    expect(counted.ops).toContain('SwarmGroup.aggregateRaw')
   })
 
   it('still runs the Lead\'s time checks: the five-minute update request arrives once 30 seconds have passed', async () => {
@@ -686,7 +687,8 @@ describe('the delivery poll of an agent with nothing waiting', () => {
     counted.ops.length = 0
     f.clock.now += 1_000
     expect(await f.timed.deliveries(host, f.tab, f.lead)).toEqual([])
-    expect(counted.ops).toContain('SwarmGroup.findMany')
+    // The Swarm's groups load through their indexes (parts/load.ts).
+    expect(counted.ops).toContain('SwarmGroup.aggregateRaw')
     // A stranger still meets the authority checks, never a remembered answer.
     await expect(f.timed.deliveries(owner, f.tab, f.lead)).rejects.toMatchObject({ code: 'FORBIDDEN' })
   })

@@ -16,7 +16,7 @@ import { pin, readLog, readState, record, savePolicyValues, writeState, writeVer
 const PACKAGE = dirname(fileURLToPath(import.meta.url))
 const VERBS = new Set(['stop', 'open', 'pin', 'unpin', 'delete-review', 'delete', 'worktree-review', 'worktree-delete', 'workspace-inspect'])
 
-export function createViewer({ workspace, port = 0, intervalMs = 4000, remoteIntervalMs = 15_000, now = () => Date.now(), collect = collectFleet, verbs = { stop, open, previewDelete, deleteHarness, worktreeAction, inspectWorkspace }, cleanup = cleanupReviews() }) {
+export function createViewer({ workspace, port = 0, intervalMs = 4000, remoteIntervalMs = 15_000, now = () => Date.now(), collect = collectFleet, verbs = { stop, open, previewDelete, deleteHarness, worktreeAction, inspectWorkspace }, cleanup = cleanupReviews(), releaseBridges = closeBridges }) {
   const token = randomBytes(24).toString('base64url')
   const clients = new Set()
   const cache = new Map()
@@ -24,7 +24,7 @@ export function createViewer({ workspace, port = 0, intervalMs = 4000, remoteInt
   // `remoteIntervalMs`, the local machine every `intervalMs`, and only while a pane is connected.
   const remote = { at: 0, answers: new Map(), problems: [] }
   let snapshot = { spec: 1, status: 'starting', rows: [], summary: null, policy: DEFAULT_POLICY, plan: [], totals: null, problems: [], log: [], observedAt: null, intervalMs }
-  let stopped = false, timer, heartbeat, polling = null
+  let stopped = false, timer, heartbeat, polling = null, using = 0
   // Resolves after the first observation lands. The server starts listening before it, so the pane draws
   // its shell immediately; anything that needs the first real snapshot (a test, a caller) awaits this.
   let observed
@@ -83,6 +83,13 @@ export function createViewer({ workspace, port = 0, intervalMs = 4000, remoteInt
     if (stopped || clients.size === 0) return
     timer = setTimeout(() => { void poll() }, intervalMs)
   }
+  // Nobody is looking and nothing is under way (a read, a write, a cleanup preview): let go of the kept
+  // machine connections as well. Each one is a bridge socket here and, behind it, a relay session the
+  // daemon holds open to that machine; a closed or frozen Monitor kept all of them open for as long as its
+  // viewer ran (2026-10-28). The next pane opens them again on its first read.
+  const release = () => {
+    if (!stopped && clients.size === 0 && !polling && using === 0) releaseBridges()
+  }
   // Someone wants the observation now: read again if the one we have is older than a tick.
   const wake = () => {
     if (stopped || polling || now() - lastPollAt < intervalMs) return
@@ -101,15 +108,23 @@ export function createViewer({ workspace, port = 0, intervalMs = 4000, remoteInt
     })()
     try { await polling } finally { polling = null; lastPollAt = now() }
     if (!stopped && !immediate) schedule()
+    release()
   }
 
   /** The write surface. One verb, up to 64 rows, and a receipt per row — the same library call the CLI
    *  makes, so a click and a typed command cannot behave differently. */
   let writes = Promise.resolve()
   function write(operation) {
+    using += 1
     const result = writes.then(operation)
-    writes = result.catch(() => {})
+    writes = result.catch(() => {}).finally(() => { using -= 1; release() })
     return result
+  }
+  /** Anything else that talks to the machines over the kept connections, such as a cleanup preview: they stay open
+   *  while it runs and are let go after it if nobody is looking. */
+  async function use(operation) {
+    using += 1
+    try { return await operation() } finally { using -= 1; release() }
   }
   const act = payload => write(() => actOnce(payload))
   async function actOnce({ verb, ids, manual = false, expected, reviewId, path, discardChanges, choices }) {
@@ -196,7 +211,7 @@ export function createViewer({ workspace, port = 0, intervalMs = 4000, remoteInt
         for await (const chunk of req) { body += chunk; if (body.length > 64 * 1024) { json(res, 413, { error: 'Too large.' }); return } }
         let payload; try { payload = JSON.parse(body || '{}') } catch { json(res, 400, { error: 'Send JSON.' }); return }
         if (url.pathname === '/api/act') { json(res, 200, await act(payload)); return }
-        if (url.pathname === '/api/cleanup/preview') { json(res, 200, await cleanup.preview()); return }
+        if (url.pathname === '/api/cleanup/preview') { json(res, 200, await use(() => cleanup.preview())); return }
         if (url.pathname === '/api/cleanup/close') {
           let result
           try { result = await write(() => cleanup.close(payload.reviewId, payload.id)) }
@@ -222,7 +237,7 @@ export function createViewer({ workspace, port = 0, intervalMs = 4000, remoteInt
         res.writeHead(200, { ...headers, 'content-type': 'text/event-stream', connection: 'keep-alive', 'x-accel-buffering': 'no' })
         res.write(`event: snapshot\ndata: ${JSON.stringify(snapshot)}\n\n`)
         clients.add(res)
-        res.on('close', () => { clients.delete(res); if (clients.size === 0) { clearTimeout(timer); timer = null } })
+        res.on('close', () => { clients.delete(res); if (clients.size === 0) { clearTimeout(timer); timer = null; release() } })
         // A pane just opened: catch up if the observation is stale, and start ticking either way.
         wake()
         if (!timer && !polling) schedule()
@@ -243,6 +258,7 @@ export function createViewer({ workspace, port = 0, intervalMs = 4000, remoteInt
         '/app.css': ['app.css', 'text/css; charset=utf-8'],
         '/scale.js': ['scale.js', 'text/javascript; charset=utf-8'],
         '/table.js': ['table.js', 'text/javascript; charset=utf-8'],
+        '/live.js': ['live.js', 'text/javascript; charset=utf-8'],
       }
       if (!assets[url.pathname]) { json(res, 404, { error: 'Not found' }); return }
       const [file, contentType] = assets[url.pathname]

@@ -30,6 +30,7 @@ import { beforeFirstWrite } from './interleave.test-support.js'
 // A fresh loopback replica set, created here. This suite never reads DATABASE_URL or an existing database.
 let replica: MongoMemoryReplSet
 let db: PrismaClient
+let recordQuery = (_query: string) => {}
 let store: SuperTabStore
 let app: FastifyInstance
 const owner: AuthUser = { sub: '100000000000000000000001', email: 'owner@example.com', autonomousEnv: 'prod', role: 'user' }
@@ -100,7 +101,9 @@ beforeAll(async () => {
   await promisify(execFile)(join(process.cwd(), 'node_modules/.bin/prisma'), ['db', 'push', '--skip-generate'], {
     env: { ...process.env, DATABASE_URL: uri }, timeout: 60000,
   })
-  db = new PrismaClient({ datasources: { db: { url: uri } } })
+  const client = new PrismaClient({ datasources: { db: { url: uri } }, log: [{ emit: 'event', level: 'query' }] })
+  client.$on('query', event => recordQuery(event.query))
+  db = client
   store = new SuperTabStore(db)
   for (const user of [owner, peer, host]) await db.user.create({ data: { id: user.sub, externalId: `fixture-${user.sub}`,
     email: user.email, autonomousEnv: user.autonomousEnv } })
@@ -842,6 +845,34 @@ describe('Super Tabs on a real Mongo replica set', () => {
     expect(await runs()).toEqual([['moonshotai/kimi-k3', true], ['moonshotai/kimi-k3', true]])
   })
 
+  it('tells a contributed machine its start\'s project skills, which its host cannot read from the Swarm', async () => {
+    // Prod logs 2026-10-28: the host asked for a Swarm status read it may not make (a 400 at every start), then launched
+    // every agent on Harness orchestration, whatever its project ran.
+    const tab = (await store.create(owner, randomUUID(), 'Skills pool')).id
+    const invitation = await run(tab, { type: 'invite.create', email: host.email, role: 'collaborator', conversationId: 'lead' })
+    await run(tab, { type: 'invite.accept', inviteId: invitation.result.inviteId as string }, host)
+    await db.machine.create({ data: { machineId: 'skills-host', userId: host.sub, apiKey: 'fixture-skills-host', managerId: 'fixture', autonomousEnv: 'prod', authMode: 'remote' } })
+    const team = await teamMachine('skills-host')
+    await run(tab, { type: 'machine.contribute', machineId: 'skills-host', name: 'Skills laptop', cwd: '/project', engines: ['claude'], maxAgents: 4 }, host)
+    const generation = (await poolRows(store, host, 'skills-host'))[0]!.machine.generation
+    await store.observeMachine(team.session, tab, 'skills-host', { generation, resources: { cpuPercent: 10, memoryTotalBytes: 32e9, memoryUsedBytes: 4e9,
+      diskFreeBytes: 120e9, diskTotalBytes: 500e9, projectDiskFreeBytes: 120e9, deviceType: 'Laptop', chip: 'Fixture CPU', os: 'macOS', gpuPercent: null },
+      quotas: [], tools: { git: true }, runningHarnessIds: [], stoppedHarnessIds: [], privacy: team.privacy })
+    const start = async () => String((await run(tab, { type: 'agent.start', request: { conversationId: 'lead', machineId: 'skills-host', engine: 'claude',
+      name: 'Builder', cwd: '/project', worktree: true,
+      requirements: { memoryBytes: 0, diskBytes: 0, maxCpuPercent: 100, tools: [], devices: [], quotaRequired: false } } })).result.startId)
+    const skillMode = async (startId: string) => (await store.start(host, tab, startId, undefined, 'skills-host')).skillMode
+
+    expect(await skillMode(await start())).toBe('default')
+    await run(tab, { type: 'project.skills', projectId: 'lead', mode: 'orchestration' })
+    expect(await skillMode(await start())).toBe('orchestration')
+    await run(tab, { type: 'project.roles.create', projectId: 'lead', roles: [{ id: 'lead', name: 'Product Manager', kind: 'lead', text: 'LEAD' },
+      { id: 'dev', name: 'Engineer', kind: 'builder', text: 'DEV' }, { id: 'review', name: 'Reviewer', kind: 'reviewer', text: 'REVIEW' }] })
+    await run(tab, { type: 'project.skills', projectId: 'lead', mode: 'custom' })
+    // A Custom set is the Default skills with the owner's role text, which the agent reads after it joins.
+    expect(await skillMode(await start())).toBe('default')
+  })
+
   it('contributes project capacity without sharing the computer and fences host execution', async () => {
     const tab = (await store.create(owner, randomUUID(), 'Machine pool')).id
     const invitation = await run(tab, { type: 'invite.create', email: host.email, role: 'collaborator', conversationId: 'lead' })
@@ -1497,6 +1528,32 @@ describe('Super Tabs on a real Mongo replica set', () => {
       }
     } finally { await db.swarmWorkspaceMember.update({ where: { id: `${row.workspaceId}:${owner.sub}` }, data: { removedAt: null } }) }
   })
+  it('writes a message to several recipients in two insert commands, preserving each delivery', async () => {
+    const { tab, lead } = await fixture()
+    const recipients = [lead]
+    for (const name of ['Parser', 'Renderer', 'Exporter']) recipients.push(String((await run(tab, {
+      type: 'agent.add', conversationId: 'lead', machineId: 'test-host', harnessId: randomUUID(), name, configuration: config, lead: false,
+    })).result.agentId))
+    const queries: string[] = []
+    recordQuery = query => { if (/SuperTab(Message|Delivery).*insert/i.test(query)) queries.push(query) }
+    let sent: Awaited<ReturnType<typeof run>>
+    try {
+      sent = await run(tab, { ...message('Batch to all four.'), recipientIds: recipients } as Command)
+    } finally { recordQuery = () => {} }
+    const messageId = String(sent.result.messageId)
+    const stored = await db.superTabMessage.findUniqueOrThrow({ where: { id: messageId } })
+    expect(stored).toMatchObject({ tabId: tab, conversationId: 'lead', text: 'Batch to all four.', recipientIds: recipients,
+      author: { kind: 'person', id: owner.sub }, replyTo: null, mentions: [] })
+    const deliveries = await db.superTabDelivery.findMany({ where: { tabId: tab, messageId } })
+    expect(deliveries).toHaveLength(4)
+    for (const recipient of recipients) expect(deliveries.find(row => row.agentId === recipient)).toMatchObject({
+      id: stableId(messageId, recipient), tabId: tab, conversationId: 'lead', messageId, machineId: 'test-host',
+      machineOwnerId: host.sub, membershipGeneration: tab, authorKind: 'person', authorId: owner.sub,
+      authorGeneration: tab, assignmentId: null, status: 'queued',
+    })
+    expect(queries).toHaveLength(2)
+  })
+
   it('closes the replying agent\'s own deliveries of a message as answered, and nobody else\'s', async () => {
     const { tab, lead } = await fixture()
     const helper = (await run(tab, { type: 'agent.add', conversationId: 'lead', machineId: 'test-host', harnessId: randomUUID(),
@@ -2813,7 +2870,7 @@ describe('machine removal', () => {
     expect((await later.read(owner, tab)).state.machines).toEqual([])
     await later.execute(owner, tab, { operationId: randomUUID(), command: { type: 'tab.rename', name: 'A day later' } })
     const stored = await storedState(tab)
-    expect([stored.machines ?? [], stored.machineCleanups]).toEqual([[], [{ machineId: 'test-host', removalId, machineOwnerId: host.sub }]])
+    expect([stored.machines ?? [], stored.machineCleanups]).toEqual([[], [{ machineId: 'test-host', removalId, machineOwnerId: host.sub, requestedAt: expect.any(String) }]])
     expect(await cleanups(tab, later)).toEqual([{ tabId: tab, cleanup: { machineId: 'test-host', removalId } }])
     await later.execute(host, tab, { operationId: randomUUID(), command: { type: 'machine.cleaned', machineId: 'test-host', removalId } })
     expect(await cleanups(tab, later)).toEqual([])

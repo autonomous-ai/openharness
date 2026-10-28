@@ -41,7 +41,9 @@ export class SsoAuthError extends Error {
   constructor(
     message: string,
     readonly code: 'INVALID_TOKEN' | 'AUTH_SERVICE_UNAVAILABLE' | 'AUTONOMOUS_ENV_MISMATCH' | 'AUTONOMOUS_ENV_NOT_ALLOWED'
-      | 'TEAM_SESSION_LIMITED',
+      | 'TEAM_SESSION_LIMITED'
+      /** A Harness session SSO has not confirmed for longer than its grace (lib/ssoSession.ts): sign in again. */
+      | 'SIGN_IN_AGAIN',
     readonly requiredEnv?: AutonomousEnvironment,
   ) {
     super(message)
