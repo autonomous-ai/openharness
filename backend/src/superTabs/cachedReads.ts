@@ -21,8 +21,8 @@ export interface ReadNamed { groupIds?: string[]; agentIds?: string[]; projectId
 /** A view with no stamps: every read goes to Mongo, nothing is kept. */
 export const DIRECT = new CacheView(null, null)
 
-/** A changed part comes from the held feed while the read's cursor is this recent (the cursor overlap is 30 s). */
-const FEED_WINDOW_MS = 120_000
+/** A miss loads the feed from this long before its reader's cursor, so readers polling a few seconds apart share it. */
+const FEED_SLACK_MS = 15_000
 
 /** A Swarm's live machine parts, held at both stamps: a machine's reading moves only the machine stamp. */
 export const readMachines = (db: Prisma.TransactionClient, view: CacheView, tabId: string) =>
@@ -72,12 +72,12 @@ export async function readLastChangedAt(db: Db, view: CacheView, tabId: string):
   return view.get(tabId, 'lastChangedAt', 'all', async () => (await store.lastChangedAt(db, [tabId])).get(tabId) ?? null)
 }
 
-/** The Swarm's parts changed after `since` (parts/load.ts loadChanged): from the held feed of the last two minutes, or read. */
+/** The Swarm's parts changed after `since` (parts/load.ts loadChanged): from the held feed when it reaches back that far, else read. */
 export async function readChanged(db: Db, view: CacheView, tabId: string, since: number): Promise<Part[]> {
   const direct = async () => (await store.loadChanged(db, [tabId], new Date(since))).get(tabId) ?? []
   if (!view.available) return direct()
   const feed = await view.get(tabId, 'feed', 'all', async () => {
-    const from = Date.now() - FEED_WINDOW_MS
+    const from = since - FEED_SLACK_MS
     return { from, parts: (await store.loadChanged(db, [tabId], new Date(from))).get(tabId) ?? [] }
   })
   return since >= feed.from ? feed.parts.filter(p => p.changedAt > since) : direct()

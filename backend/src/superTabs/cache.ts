@@ -43,7 +43,7 @@ export const STAMP_TIMEOUT_MS = 200
 const key = (tabId: string, name: string) => `${tabId}\u0000${name}`
 
 /** Freezes a loaded value all through and tells its size as JSON, in one pass. */
-function freeze(value: unknown): number {
+export function freeze(value: unknown): number {
   if (value === null || value === undefined) return 4
   switch (typeof value) {
     case 'string': return value.length + 2

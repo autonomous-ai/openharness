@@ -7,7 +7,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { MongoMemoryReplSet } from 'mongodb-memory-server-core'
 import { PrismaClient } from '@prisma/client'
 import type { AuthUser } from '../src/lib/ssoAuth.js'
-import { SuperTabStore } from '../src/superTabs/store.js'
+import { loadRow, SuperTabStore } from '../src/superTabs/store.js'
 import { configureSwarmStamps, swarmReadCache, swarmTransaction } from '../src/superTabs/cache.js'
 import { MemoryStamps } from '../src/superTabs/cache.test-support.js'
 import * as parts from '../src/superTabs/parts/index.js'
@@ -15,7 +15,7 @@ import { guardedWrite } from '../src/superTabs/parts/write.js'
 import type { HeadData, MachineData } from '../src/superTabs/parts/index.js'
 import { sweepSwarms } from '../src/superTabs/sweeps.js'
 import { SwarmCache } from '../src/superTabs/cache.js'
-import { readParts } from '../src/superTabs/cachedReads.js'
+import { readChanged, readParts } from '../src/superTabs/cachedReads.js'
 import { SwarmReads } from '../src/superTabs/read/service.js'
 import { migrateSwarm } from '../src/superTabs/migration/migrate.js'
 import type { SuperTabState } from '../src/superTabs/model.js'
@@ -246,5 +246,37 @@ describe('composing a read from what the cache holds', () => {
       const view = await cache.at([tabId])
       expect(asLoaded(await readParts(db, view, tabId, named)), JSON.stringify(named)).toEqual(asLoaded(direct))
     }
+  })
+})
+
+describe('the change feed', () => {
+  it('gives what loadChanged gives for any cursor, and serves a later cursor at the same stamp from memory', async () => {
+    const { tabId, web } = await privateScene()
+    const t = Date.now()
+    await swarmTransaction(db, async tx => {
+      const group = (await parts.loadActive(tx, tabId, { groupIds: [web] })).groups.find(g => g.key === web)!
+      await guardedWrite(tx, tabId, { op: 'update', kind: 'group', key: web, seen: group.version, data: { ...group.data!, title: 'Web 2' } }, t)
+    })
+    const direct = async (since: number) => (await db.$transaction(tx => parts.loadChanged(tx, [tabId], new Date(since)))).get(tabId)!
+    const keys = (list: parts.Part[]) => list.map(p => `${p.kind}:${p.key}:${p.version}`).sort()
+    const cache = new SwarmCache(stamps)
+    const read = async (since: number) => readChanged(db, await cache.at([tabId]), tabId, since)
+    expect(keys(await read(t - 30_000))).toEqual(keys(await direct(t - 30_000)))
+    const later = await partReads(() => read(t - 10_000))
+    expect(later.reads).toBe(0)
+    expect(keys(later.value)).toEqual(keys(await direct(t - 10_000)))
+    expect(keys(await read(t))).toEqual([])
+    expect(keys(await read(t - 3_600_000))).toEqual(keys(await direct(t - 3_600_000)))
+  })
+})
+
+describe('a command\'s load', () => {
+  it('reassembles once: its state shares the loaded records, which are frozen so nothing changes them in place', async () => {
+    const { tabId, web } = await privateScene()
+    const loaded = await db.$transaction(async tx => loadRow(tx, await tx.superTab.findFirstOrThrow({ where: { id: tabId } })))
+    const group = loaded.parts.groups.find(g => g.key === web)!
+    expect(Object.isFrozen(group.data)).toBe(true)
+    expect(loaded.state.conversations.find(c => c.id === web)).toBe(group.data)
+    expect(() => { loaded.state.conversations.find(c => c.id === web)!.title = 'changed in place' }).toThrow(TypeError)
   })
 })

@@ -25,7 +25,7 @@ import { archivable, archiveLine, stopIdleWorkers, stoppedMachines } from './tid
 import { clock, insertParts, loadActive, reassemble, split, type HeadData, type SwarmParts } from './parts/index.js'
 import { commitParts, indexesOf, numberMessages, type Touch, type Written } from './parts/commit.js'
 import { touchesFor } from './parts/touches.js'
-import { swarmReadCache, swarmTransaction, type CacheView, type SwarmCache } from './cache.js'
+import { freeze, swarmReadCache, swarmTransaction, type CacheView, type SwarmCache } from './cache.js'
 import { DIRECT, readLastChangedAt, readParts, type ReadNamed } from './cachedReads.js'
 import { revokeNativeContexts, SuperTabNativeStore } from './native.js'
 import {
@@ -110,10 +110,12 @@ function deliveryTouches(delivery: SuperTabDelivery): Touch[] {
 }
 
 /** Loads one Swarm's parts and the state commands run on. Reads never write (design ruling R8); the migration rebuilt
- *  every group's link list from its history. */
+ *  every group's link list from its history. The state shares the loaded records, frozen: a command changes its own copy
+ *  (commands.ts applyCommand), and the parts stay what the write is compared with (parts/commit.ts). */
 export async function loadRow(tx: Transaction, row: SuperTab, named: Named = {}): Promise<Loaded> {
   const parts = await loadActive(tx, row.id, named)
-  const state = reassemble(parts)
+  freeze(parts)
+  const state = reassemble(parts, { share: true })
   parkLaterConversations(state)
   syncLeads(state)
   return { row, parts, state }
