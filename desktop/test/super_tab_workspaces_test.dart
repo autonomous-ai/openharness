@@ -493,6 +493,46 @@ void main() {
       expect(state.current('s1'), isNull);
     });
 
+    test('a new Swarm goes to the Workspace chosen for it, once', () async {
+      _lists(backend, [
+        _workspace('w1', 'guest', swarms: ['s1']),
+        _workspace('w2', 'owner', swarms: ['s2']),
+        _workspace('w3', 'member'),
+      ]);
+      await state.refresh();
+      state.shownTabId = 's2';
+      state.chooseForNewSwarm('w3');
+      expect(state.takeNewSwarmWorkspace(), 'w3');
+      expect(state.takeNewSwarmWorkspace(), 'w2');
+    });
+
+    test('otherwise to the Workspace on screen, if the person may create '
+        'Swarms there', () async {
+      _lists(backend, [
+        _workspace('w1', 'guest', swarms: ['s1']),
+        _workspace('w2', 'owner', swarms: ['s2']),
+        _workspace('w3', 'member', swarms: ['s3']),
+      ]);
+      await state.refresh();
+      state.shownTabId = 's3';
+      expect(state.takeNewSwarmWorkspace(), 'w3');
+      // A guest creates no Swarm: the first Workspace that lets them.
+      state.shownTabId = 's1';
+      expect(state.takeNewSwarmWorkspace(), 'w2');
+      expect([for (final w in state.swarmHomes) w.id], ['w2', 'w3']);
+    });
+
+    test('no Workspace is named for a new Swarm by an older backend', () async {
+      backend.failures['/api/super-tabs/workspaces'] = const SuperTabFailure(
+        'NOT_FOUND',
+        'Not found',
+        statusCode: 404,
+      );
+      await state.refresh();
+      state.chooseForNewSwarm('w1');
+      expect(state.takeNewSwarmWorkspace(), isNull);
+    });
+
     test('a read that answers after the account changed is dropped', () async {
       _lists(backend, [_workspace('w1', 'owner')]);
       final read = state.refresh();

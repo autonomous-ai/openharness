@@ -261,10 +261,18 @@ void main() {
   });
 
   testWidgets('New Swarm goes into the current Workspace', (tester) async {
-    final (_, calls) = await _show(tester, _ken());
+    final backend = _ken()
+      ..workspaces = [
+        ..._ken().workspaces,
+        _workspace('w3', 'Acme', 'member', [_swarm('s5', 'acme')]),
+      ];
+    final (state, calls) = await _show(tester, backend);
     await _open(tester);
     await _tap(tester, find.text('New Swarm in Autonomous'));
     expect(calls.newSwarm, ['w1']);
+    // Chosen for the next new Swarm, whatever is on screen when it starts.
+    state.shownTabId = 's5';
+    expect(state.takeNewSwarmWorkspace(), 'w1');
   });
 
   testWidgets('New Workspace asks the host to create one', (tester) async {
@@ -321,5 +329,12 @@ void main() {
     ];
     await _open(tester);
     expect(find.text('Acme'), findsOneWidget);
+  });
+
+  testWidgets('the menu tells the Workspaces which Swarm is on screen', (
+    tester,
+  ) async {
+    final (state, _) = await _show(tester, _ken(), tabId: 's4');
+    expect(state.shownTabId, 's4');
   });
 }

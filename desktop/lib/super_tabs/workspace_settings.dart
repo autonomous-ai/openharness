@@ -570,3 +570,159 @@ class _SwarmWorkspaceSettingsDialogState
     },
   );
 }
+
+Future<void> showNewSwarmWorkspace(
+  BuildContext context,
+  SwarmWorkspaces workspaces, {
+  ValueChanged<SwarmWorkspace>? onNewSwarm,
+}) => showAppDialog<void>(
+  context: context,
+  builder: (_) =>
+      SwarmNewWorkspaceDialog(workspaces: workspaces, onNewSwarm: onNewSwarm),
+);
+
+/// New Workspace: a name, then the Workspace exists with its creator as its
+/// owner, and its first Swarm is a click away.
+class SwarmNewWorkspaceDialog extends StatefulWidget {
+  const SwarmNewWorkspaceDialog({
+    super.key,
+    required this.workspaces,
+    this.onNewSwarm,
+    this.operationId = superTabOperationId,
+  });
+  final SwarmWorkspaces workspaces;
+  final ValueChanged<SwarmWorkspace>? onNewSwarm;
+  final String Function() operationId;
+
+  @override
+  State<SwarmNewWorkspaceDialog> createState() =>
+      _SwarmNewWorkspaceDialogState();
+}
+
+class _SwarmNewWorkspaceDialogState extends State<SwarmNewWorkspaceDialog> {
+  final _name = TextEditingController();
+
+  /// One request: a retry after a refusal or a lost answer repeats it.
+  late final _operationId = widget.operationId();
+  bool _busy = false;
+  String? _error;
+  SwarmWorkspace? _created;
+
+  @override
+  void initState() {
+    super.initState();
+    _name.addListener(() => setState(() {}));
+  }
+
+  @override
+  void dispose() {
+    _name.dispose();
+    super.dispose();
+  }
+
+  Future<void> _create() async {
+    final name = _name.text.trim();
+    if (name.isEmpty || _busy) return;
+    setState(() {
+      _busy = true;
+      _error = null;
+    });
+    try {
+      final id = await widget.workspaces.api.create(
+        operationId: _operationId,
+        name: name,
+      );
+      await widget.workspaces.refresh();
+      if (!mounted) return;
+      setState(
+        () => _created = widget.workspaces.workspaces
+            ?.where((w) => w.id == id)
+            .firstOrNull,
+      );
+    } on SuperTabFailure catch (failure) {
+      if (mounted) setState(() => _error = failure.message);
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  void _newSwarm(SwarmWorkspace workspace) {
+    widget.workspaces.chooseForNewSwarm(workspace.id);
+    Navigator.maybePop(context);
+    widget.onNewSwarm?.call(workspace);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final created = _created;
+    return Dialog(
+      backgroundColor: Colors.transparent,
+      elevation: 0,
+      shape: DesktopChrome.bareDialogShape,
+      child: DesktopDialogSurface(
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 420),
+          child: Padding(
+            padding: const EdgeInsets.all(24),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                DesktopDialogHeader(
+                  title: 'New Workspace',
+                  padding: EdgeInsets.zero,
+                  onClose: () => Navigator.maybePop(context),
+                ),
+                const SizedBox(height: 16),
+                if (created == null)
+                  TextField(
+                    controller: _name,
+                    autofocus: true,
+                    enabled: !_busy,
+                    decoration: const InputDecoration(
+                      hintText: 'Workspace name',
+                    ),
+                    onSubmitted: (_) => _create(),
+                  )
+                else
+                  Text(
+                    '${created.name} is ready. It has no Swarms yet.',
+                    style: DesktopChrome.text(),
+                  ),
+                if (_error != null)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 8),
+                    child: Text(_error!, style: DesktopChrome.metadata()),
+                  ),
+                const SizedBox(height: 24),
+                Wrap(
+                  alignment: WrapAlignment.end,
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: [
+                    TextButton(
+                      onPressed: () => Navigator.maybePop(context),
+                      child: Text(created == null ? 'Cancel' : 'Done'),
+                    ),
+                    if (created == null)
+                      FilledButton(
+                        onPressed: _busy || _name.text.trim().isEmpty
+                            ? null
+                            : _create,
+                        child: Text(_busy ? 'Creating…' : 'Create'),
+                      )
+                    else if (widget.onNewSwarm != null)
+                      FilledButton(
+                        onPressed: () => _newSwarm(created),
+                        child: Text('New Swarm in ${created.name}'),
+                      ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}

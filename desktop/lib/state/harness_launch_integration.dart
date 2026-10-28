@@ -26,6 +26,8 @@ class HarnessLaunchIntegration {
     this.actionLabel = 'New Harness',
     this.projectVisibility,
     this.projectVisibilityLocked = false,
+    this.workspaces,
+    this.workspaceId,
     this.initialTask,
     this.engines,
     this.forcedPermissionMode,
@@ -55,6 +57,10 @@ class HarnessLaunchIntegration {
   final String? forcedPermissionMode;
   String? projectVisibility;
   bool projectVisibilityLocked;
+  // A new Swarm's Workspaces to choose from (more than one), and the chosen
+  // one; fixed with [projectVisibilityLocked] once creation has started.
+  final List<({String id, String name})>? workspaces;
+  String? workspaceId;
   final Future<String> Function(String machineId, String task) prepare;
   final Future<void> Function(String machineId, String harnessId) complete;
   final Future<void> Function(String machineId, String creationId) beforeSubmit;

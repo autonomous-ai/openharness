@@ -281,6 +281,37 @@ class SwarmWorkspaces extends ChangeNotifier {
         all.first;
   }
 
+  /// The Swarm on screen, as the Workspace menu last saw it: a new Swarm
+  /// goes to its Workspace (docs/plans/2026-10-27-swarm-workspaces.md: Cmd-S
+  /// creates the new Swarm in the current Workspace).
+  String? shownTabId;
+  String? _chosenForNewSwarm;
+
+  /// Workspaces the person may create a Swarm in.
+  List<SwarmWorkspace> get swarmHomes => [
+    for (final w in workspaces ?? const <SwarmWorkspace>[])
+      if (w.role.createsSwarms) w,
+  ];
+
+  /// The next new Swarm goes to [workspaceId] ("New Swarm in …").
+  void chooseForNewSwarm(String workspaceId) =>
+      _chosenForNewSwarm = workspaceId;
+
+  /// Where a new Swarm is created: the Workspace chosen for it (used once),
+  /// else the current one, else the first the person may create Swarms in.
+  /// Null when the backend has no Workspaces: it then creates the Swarm in
+  /// the person's own Workspace, as before.
+  String? takeNewSwarmWorkspace() {
+    final chosen = _chosenForNewSwarm;
+    _chosenForNewSwarm = null;
+    final homes = swarmHomes;
+    if (homes.isEmpty) return null;
+    final shown = shownTabId == null ? null : current(shownTabId!);
+    return homes.where((w) => w.id == chosen).firstOrNull?.id ??
+        homes.where((w) => w.id == shown?.id).firstOrNull?.id ??
+        homes.first.id;
+  }
+
   Future<void> refresh() =>
       _reading ??= _read().whenComplete(() => _reading = null);
 

@@ -19,6 +19,7 @@ import '../terminal/terminal_theme_store.dart';
 import '../state/new_harness.dart';
 import '../state/device_form.dart';
 import '../super_tabs/project_visibility.dart';
+import '../super_tabs/workspace_pill.dart';
 import 'box_chrome.dart' show kTerminalCornerRadius, terminalPaneBorder;
 import 'dsh_install_panel.dart' show describeInstallFailure;
 import 'desktop_chrome.dart';
@@ -2353,6 +2354,23 @@ class NewHarnessFormState extends State<NewHarnessForm> {
                   ),
                 ),
               ),
+      if (includeProjectVisibility && box.integration?.workspaces != null)
+        FocusTraversalOrder(
+          order: const NumericFocusOrder(9.9),
+          child: NewSwarmWorkspace(
+            key: const ValueKey('new-harness-workspace'),
+            value: box.integration!.workspaceId,
+            workspaces: box.integration!.workspaces!,
+            disabledReason: box.integration!.projectVisibilityLocked
+                ? 'Swarm creation has started. Its Workspace is fixed for this request.'
+                : box.locked
+                ? 'Finish the current request before changing the Workspace.'
+                : null,
+            onChanged: box.locked || box.integration!.projectVisibilityLocked
+                ? null
+                : (id) => setState(() => box.integration!.workspaceId = id),
+          ),
+        ),
       if (includeProjectVisibility &&
           box.integration?.projectVisibility != null)
         FocusTraversalOrder(

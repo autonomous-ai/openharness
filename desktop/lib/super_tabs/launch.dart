@@ -8,10 +8,19 @@ import '../state/harness_launch_integration.dart';
 import '../state/swarm.dart';
 import 'controller.dart';
 import 'model.dart';
+import 'workspaces.dart';
 import 'launch_prompt.dart';
 
 /// Captures a conversation before opening New Harness. Its journal survives a
 /// closed form or process; a recovered launch only reads the native receipt.
+/// The Workspaces the person may create a Swarm in, read now if the menu
+/// has not read them yet; none when they cannot be read.
+Future<List<SwarmWorkspace>> _swarmHomes(AppNotifier app) async {
+  final workspaces = SwarmWorkspaces.of(app.superTabs);
+  if (workspaces.workspaces == null) await workspaces.refresh();
+  return workspaces.swarmHomes;
+}
+
 class SuperTabLaunch {
   SuperTabLaunch._(
     this.app,
@@ -52,6 +61,19 @@ class SuperTabLaunch {
             if (!newProject) 'projectId': 'lead',
           }
         : superTabMap(jsonDecode(raw));
+    // A new Swarm goes to a Workspace (docs/plans/2026-10-27-swarm-workspaces.md);
+    // a backend from before them names none and creates it as before.
+    List<({String id, String name})>? workspaces;
+    if (saved['newSwarm'] == true && saved['newProject'] != true) {
+      final homes = await _swarmHomes(app);
+      if (raw == null) {
+        saved['workspaceId'] = SwarmWorkspaces.of(app.superTabs)
+            .takeNewSwarmWorkspace();
+      }
+      if (homes.length > 1) {
+        workspaces = [for (final w in homes) (id: w.id, name: w.name)];
+      }
+    }
     final launch = SuperTabLaunch._(app, tab.id, account, key, saved);
     final recovering =
         saved['phase'] == 'starting' || saved['phase'] == 'joining';
@@ -96,6 +118,8 @@ class SuperTabLaunch {
           : null,
       projectVisibilityLocked:
           saved['projectPrepared'] == true || saved['creationRequest'] != null,
+      workspaces: workspaces,
+      workspaceId: saved['workspaceId'] as String?,
       prepare: (machine, task) async {
         if (integration.roles != null) {
           final chosen = integration.roles!
@@ -113,6 +137,9 @@ class SuperTabLaunch {
         if (saved['projectPrepared'] != true &&
             saved['creationRequest'] == null) {
           saved['visibility'] = integration.projectVisibility ?? 'public';
+          if (integration.workspaceId case final String id) {
+            saved['workspaceId'] = id;
+          }
         }
         try {
           final prompt = await launch.prepare(machine, task);
@@ -252,6 +279,7 @@ class SuperTabLaunch {
         'operationId': saved['operationId'],
         'name': 'Swarm',
         'projectVisibility': saved['visibility'] ?? 'public',
+        if (saved['workspaceId'] case final String id) 'workspaceId': id,
       };
       await persist();
       final created = await app.superTabs.map(

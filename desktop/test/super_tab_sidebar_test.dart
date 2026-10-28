@@ -559,6 +559,15 @@ void main() {
     expect(find.text('Workspace settings'), findsOneWidget);
     await tester.tap(find.text('Done'));
     await tester.pumpAndSettle();
+    await tester.tap(menu);
+    await tester.pumpAndSettle();
+    await tester.ensureVisible(find.text('New Workspace…'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('New Workspace…'));
+    await tester.pumpAndSettle();
+    expect(find.text('New Workspace'), findsOneWidget);
+    await tester.tap(find.text('Cancel'));
+    await tester.pumpAndSettle();
     await disposeSidebar(tester, controller);
   });
 

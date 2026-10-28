@@ -59,6 +59,7 @@ class SuperTabView extends StatefulWidget {
     this.terminalsVisible = false,
     this.app,
     this.onNewProject,
+    this.onNewSwarm,
     this.onChooseAgentTerminal,
   });
   final SuperTabController controller;
@@ -75,6 +76,7 @@ class SuperTabView extends StatefulWidget {
   final bool terminalsVisible;
   final AppNotifier? app;
   final VoidCallback? onNewProject;
+  final VoidCallback? onNewSwarm;
   final ValueChanged<SuperTabAgent>? onChooseAgentTerminal;
 
   @override
@@ -1071,6 +1073,9 @@ class _SuperTabViewState extends State<SuperTabView>
       _closeSidebar();
     },
     onOpenPmChat: (projectId) => unawaited(_openPmChat(projectId)),
+    onNewSwarmIn: widget.onNewSwarm == null
+        ? null
+        : (_) => widget.onNewSwarm!(),
   );
 
   /// Opens [projectId]'s PM chat in front of Notifications, pull requests and

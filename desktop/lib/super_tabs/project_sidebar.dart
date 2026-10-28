@@ -686,7 +686,15 @@ class ProjectSidebar extends StatelessWidget {
                   (workspace) => unawaited(
                     showSwarmWorkspaceSettings(context, workspaces, workspace),
                   ),
-              onNewWorkspace: onNewWorkspace,
+              onNewWorkspace:
+                  onNewWorkspace ??
+                  () => unawaited(
+                    showNewSwarmWorkspace(
+                      context,
+                      workspaces,
+                      onNewSwarm: onNewSwarmIn,
+                    ),
+                  ),
               onNewSwarm: onNewSwarmIn,
             ),
           if (onNewProject != null)

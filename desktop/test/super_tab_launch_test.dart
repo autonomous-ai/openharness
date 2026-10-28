@@ -12,6 +12,7 @@ import 'package:harness/state/new_harness.dart';
 import 'package:harness/state/harness_attachments.dart';
 import 'package:harness/terminal/terminal_binary.dart';
 import 'package:harness/super_tabs/launch.dart';
+import 'package:harness/super_tabs/workspaces.dart';
 import 'package:harness/super_tabs/client.dart';
 import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/widgets/new_harness_form.dart';
@@ -58,6 +59,9 @@ class SuperTabFixtureConnection extends WsConn {
   bool nativeSurface = false;
   bool failFiles = false, failCreation = false, changeAccountOnUpload = false;
   bool changeAccountOnProjectRead = false;
+
+  /// The account's Workspaces; null is a backend from before them.
+  List<Map<String, dynamic>>? workspaces;
   late AppNotifier app;
   final sentFiles = <Uint8List>[];
   final terminalCalls = <(String, Map<String, dynamic>)>[];
@@ -194,6 +198,25 @@ class SuperTabFixtureConnection extends WsConn {
         return {
           'ok': true,
           'value': {'contextId': (payload['body'] as Map)['operationId']},
+        };
+      }
+      if (payload['path'] == '/api/super-tabs/workspaces') {
+        if (workspaces == null) {
+          throw const SuperTabFailure(
+            'NOT_FOUND',
+            'Not found.',
+            statusCode: 404,
+          );
+        }
+        return {
+          'ok': true,
+          'value': {'workspaces': workspaces},
+        };
+      }
+      if (payload['path'] == '/api/super-tabs/workspace-invitations') {
+        return {
+          'ok': true,
+          'value': {'invitations': []},
         };
       }
       if (payload['path'] == '/api/super-tabs' && payload['method'] == 'POST') {
@@ -569,6 +592,78 @@ void main() {
       expect(rename['name'], 'Swarm');
     },
   );
+  group('the Workspace a new Swarm is created in', () {
+    List<Map<String, dynamic>> twoHomes() => [
+      {
+        'id': 'w1',
+        'name': 'Autonomous',
+        'role': 'owner',
+        'revision': 1,
+        'swarms': [],
+      },
+      {
+        'id': 'w2',
+        'name': 'Acme',
+        'role': 'member',
+        'revision': 1,
+        'swarms': [],
+      },
+      {
+        'id': 'w3',
+        'name': 'Customer X',
+        'role': 'guest',
+        'revision': 1,
+        'swarms': [],
+      },
+    ];
+    Map<String, dynamic> created(SuperTabLaunchFixture f) =>
+        f.connection.calls
+                .firstWhere(
+                  (c) =>
+                      c.$2['path'] == '/api/super-tabs' &&
+                      c.$2['method'] == 'POST',
+                )
+                .$2['body']
+            as Map<String, dynamic>;
+
+    test('is the one chosen in the Workspace menu', () async {
+      final f = SuperTabLaunchFixture()..connection.workspaces = twoHomes();
+      SwarmWorkspaces.of(f.app.superTabs).chooseForNewSwarm('w2');
+      final box = await f.box();
+      expect(
+        [for (final w in box.integration!.workspaces!) w.name],
+        ['Autonomous', 'Acme'],
+        reason: 'a guest creates no Swarm in Customer X',
+      );
+      expect(box.integration!.workspaceId, 'w2');
+      expect(await box.create(), NewHarnessOutcome.created, reason: box.error);
+      expect(created(f)['workspaceId'], 'w2');
+    });
+
+    test('follows the Workspace picked in the New Swarm box', () async {
+      final f = SuperTabLaunchFixture()..connection.workspaces = twoHomes();
+      final box = await f.box();
+      box.integration!.workspaceId = 'w2';
+      expect(await box.create(), NewHarnessOutcome.created, reason: box.error);
+      expect(created(f)['workspaceId'], 'w2');
+    });
+
+    test('is not named to a backend from before Workspaces', () async {
+      final f = SuperTabLaunchFixture();
+      final box = await f.box();
+      expect(box.integration!.workspaces, isNull);
+      expect(await box.create(), NewHarnessOutcome.created, reason: box.error);
+      expect(created(f).containsKey('workspaceId'), isFalse);
+    });
+
+    test('is not offered for a project in an existing Swarm', () async {
+      final f = SuperTabLaunchFixture()..connection.workspaces = twoHomes();
+      f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Company');
+      final box = await f.box(newProject: true);
+      expect(box.integration!.workspaces, isNull);
+    });
+  });
+
   test(
     'a new private project keeps the swarm and its other conversations',
     () async {
@@ -974,6 +1069,60 @@ void main() {
       expect(f.connection.joins.single['command']['roleId'], 'dev');
     },
   );
+
+  testWidgets('the New Swarm box lets the person pick its Workspace', (
+    tester,
+  ) async {
+    final f = SuperTabLaunchFixture()
+      ..connection.workspaces = [
+        {
+          'id': 'w1',
+          'name': 'Autonomous',
+          'role': 'owner',
+          'revision': 1,
+          'swarms': [],
+        },
+        {
+          'id': 'w2',
+          'name': 'Acme',
+          'role': 'member',
+          'revision': 1,
+          'swarms': [],
+        },
+      ];
+    final box = (await tester.runAsync(() => f.box()))!;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: SizedBox(
+            width: 1200,
+            height: 800,
+            child: NewHarnessForm(
+              controller: box,
+              desktop: true,
+              onClose: () {},
+              onCreated: () {},
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+    final pill = find.byKey(const ValueKey('new-harness-workspace'));
+    expect(
+      find.descendant(of: pill, matching: find.text('Autonomous')),
+      findsOneWidget,
+    );
+    await tester.tap(pill);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Acme').last);
+    await tester.pumpAndSettle();
+    expect(box.integration!.workspaceId, 'w2');
+    expect(
+      find.descendant(of: pill, matching: find.text('Acme')),
+      findsOneWidget,
+    );
+  });
 
   testWidgets('new agent form lets a custom project choose a reviewer role', (
     tester,

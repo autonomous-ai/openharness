@@ -51,7 +51,14 @@ class _SwarmWorkspaceMenuState extends State<SwarmWorkspaceMenu> {
   @override
   void initState() {
     super.initState();
+    widget.workspaces.shownTabId = widget.tabId;
     unawaited(widget.workspaces.refresh());
+  }
+
+  @override
+  void didUpdateWidget(SwarmWorkspaceMenu old) {
+    super.didUpdateWidget(old);
+    widget.workspaces.shownTabId = widget.tabId;
   }
 
   @override
@@ -210,7 +217,10 @@ class _SwarmWorkspaceMenuState extends State<SwarmWorkspaceMenu> {
             icon: AppIcons.plus,
             label: 'New Swarm in ${current.name}',
             expandLabel: true,
-            onPressed: () => _run(() => widget.onNewSwarm!(current)),
+            onPressed: () => _run(() {
+              widget.workspaces.chooseForNewSwarm(current.id);
+              widget.onNewSwarm!(current);
+            }),
           ),
         ),
       if (widget.onSettings != null && current.role.managesPeople)
