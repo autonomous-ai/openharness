@@ -40,7 +40,7 @@ describe('the Harness Team account, set up on its own', () => {
 
   it('says in its log why it asked nothing, one line per answer, so a Mac that never saw the prompt can tell why', async () => {
     const cases: Array<[Partial<AutoSetupDeps>, string]> = [
-      [{ platform: 'linux' }, 'unsupported'], [{ session: () => null }, 'signed-out'], [{ session: () => ({ ...session, kind: 'team' }) }, 'dedicated'],
+      [{ platform: 'freebsd' }, 'unsupported'], [{ session: () => null }, 'signed-out'], [{ session: () => ({ ...session, kind: 'team' }) }, 'dedicated'],
       [{ accountExists: vi.fn(async () => true) }, 'exists'],
     ]
     for (const [over, state] of cases) {
@@ -59,7 +59,7 @@ describe('the Harness Team account, set up on its own', () => {
 
   it('asks nothing off a Mac, signed out, on a computer that runs team work only, or where the account exists', async () => {
     const cases: Array<[Partial<AutoSetupDeps>, string]> = [
-      [{ platform: 'linux' }, 'unsupported'], [{ platform: 'win32' }, 'unsupported'], [{ session: () => null }, 'signed-out'],
+      [{ platform: 'freebsd' }, 'unsupported'], [{ platform: 'win32' }, 'unsupported'], [{ session: () => null }, 'signed-out'],
       [{ session: () => ({ ...session, kind: 'team' }) }, 'dedicated'], [{ readConfig: () => ({ user: 'harnessteam' }) as TeamConfig }, 'exists'],
       [{ accountExists: vi.fn(async () => true) }, 'exists'],
     ]
@@ -100,6 +100,18 @@ describe('the Harness Team account, set up on its own', () => {
       writeDecision: vi.fn(() => { throw new Error('read-only') }) })
     await unreadable.auto.offer('join'); await unreadable.auto.settled()
     expect(unreadable.log.join('\n')).toContain('could not remember')
+  })
+
+  it('on Linux, offers it as on a Mac: wanted at a join, then started; an account there answers exists', async () => {
+    const linux = fake({ platform: 'linux' })
+    expect(await linux.auto.offer('join', undefined, true)).toEqual({ state: 'wanted' })
+    expect(linux.deps.setup).not.toHaveBeenCalled()
+    expect(await linux.auto.offer('manual')).toEqual({ state: 'started' })
+    await linux.auto.settled()
+    expect(linux.deps.setup).toHaveBeenCalledTimes(1)
+    expect(await fake({ platform: 'linux', accountExists: vi.fn(async () => true) }).auto.offer('join')).toEqual({ state: 'exists' })
+    // Windows has its own plan, and nothing yet.
+    expect(await fake({ platform: 'win32' }).auto.offer('join', undefined, true)).toEqual({ state: 'unsupported' })
   })
 
   it('remembers a setup Linux refused before it made anything as failed: no systemd, no tmux, no prompt to show', async () => {

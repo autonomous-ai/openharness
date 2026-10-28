@@ -3,7 +3,8 @@
  * (docs/plans/2026-10-24-swarm-team-account.md, Task 3). The owner chose "no button, no setup screen": the only thing a
  * person sees is macOS's own administrator prompt, and it appears while they are at this Mac doing that. Desktop asks this
  * Mac's own daemon (super_tabs `teamSetup`, from the local owner only) right after a join or a contribution succeeds;
- * nothing asks from a background event, with nobody there, and nothing asks on Windows or Linux.
+ * nothing asks from a background event, with nobody there, and nothing asks on Windows yet. On Linux the prompt is
+ * polkit's, and with no desktop session to show it in the answer is NO_PROMPT: run `harness team setup` in a terminal.
  *
  * Macs that joined and were added before this release never pass through either moment, and routing now sends
  * teammates' work only to Team machines. So Desktop also asks once as it starts on a Mac (`startup`), with the person
@@ -22,7 +23,7 @@ import { readFileSync, renameSync, writeFileSync, mkdirSync, rmSync } from 'node
 import { dirname, join } from 'node:path'
 import type { AuthSession } from '../lib/authSession.js'
 import type { TeamConfig } from './config.js'
-import { TEAM_USER } from './layout.js'
+import { TEAM_USER, teamLayout } from './layout.js'
 
 export interface TeamSetupDecision {
   /** `declined`: the person cancelled the prompt or removed the account. `failed`: setup could not make it. */
@@ -97,7 +98,8 @@ export class TeamAutoSetup {
 
   private async decide(reason: AutoSetupReason, sharedSwarm: () => Promise<boolean>, check: boolean): Promise<AutoSetupState> {
     const { deps } = this
-    if (deps.platform !== 'darwin') return 'unsupported'
+    // A Mac and a Linux computer; Windows waits for its own plan (docs/superpowers/plans/2026-10-28-harness-team-account-windows.md).
+    if (!teamLayout(deps.platform) || deps.platform === 'win32') return 'unsupported'
     const session = deps.session()
     if (!session) return 'signed-out'
     if (session.kind === 'team') return 'dedicated'
@@ -152,14 +154,15 @@ export class TeamAutoSetup {
 
 /** The owner's daemon's own: this account's sign-in and data folder, and `harness team setup --json` run in this process. */
 export async function realTeamAutoSetup(dataDir: string, log: (line: string) => void): Promise<TeamAutoSetup> {
-  const [{ readAuthSession }, { readTeamConfig }, { runGuestCommand }] = await Promise.all([
-    import('../lib/authSession.js'), import('./config.js'), import('../lib/guestAccounts.js')])
+  const [{ readAuthSession }, { readTeamConfig }, { runGuestCommand }, { teamAccountExists }] = await Promise.all([
+    import('../lib/authSession.js'), import('./config.js'), import('../lib/guestAccounts.js'), import('./deps.js')])
   const file = teamSetupDecisionFile(dataDir)
   return new TeamAutoSetup({
     platform: process.platform,
     session: readAuthSession,
     readConfig: () => readTeamConfig(),
-    accountExists: async (user) => (await runGuestCommand('id', ['-u', user], { timeoutMs: 10_000 })).code === 0,
+    // The platform's own account database: getent on Linux, id on a Mac.
+    accountExists: teamAccountExists(runGuestCommand),
     readDecision: () => readTeamSetupDecision(file),
     writeDecision: (decision) => writeTeamSetupDecision(file, decision),
     setup: async () => {
