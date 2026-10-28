@@ -117,13 +117,15 @@ void main() {
     },
   );
 
-  // Linux and Windows make the same account a Mac does (plans of 2026-10-28);
-  // a phone, a tablet and a browser never do.
-  test('the account is offered on a Mac, Linux and Windows, nowhere else', () {
-    for (final os in ['macos', 'linux', 'windows']) {
+  // Linux makes the same account a Mac does (plans of 2026-10-28). Windows
+  // waits for its daemon's setup (the Windows plan's Task 4), which needs the
+  // Windows launchers signed: until then its Set up would only answer that it
+  // cannot. A phone, a tablet and a browser never do.
+  test('the account is offered on a Mac and Linux, not yet on Windows, nowhere else', () {
+    for (final os in ['macos', 'linux']) {
       expect(AppNotifier.teamAccountOn(os), isTrue, reason: os);
     }
-    for (final os in ['web', 'ios', 'android', 'fuchsia']) {
+    for (final os in ['windows', 'web', 'ios', 'android', 'fuchsia']) {
       expect(AppNotifier.teamAccountOn(os), isFalse, reason: os);
     }
   });
