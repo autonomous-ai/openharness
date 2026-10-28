@@ -250,6 +250,16 @@ export class SwarmCards {
     this.openBy.set(session, key)
   }
 
+  /** Whether a Swarm read last lists this harness on that machine as one of its workers (a Builder or Reviewer): any member
+   *  that leads no conversation. A Swarm Reviewer on another computer failing every turn took over the round dial (2026-10-28),
+   *  so the devices ask before they show a card's failure. Nothing is read for it: before the first poll, nobody is one. */
+  worker(machineId: string, harnessId: string): boolean {
+    return [...this.tabs.values()].some(({ state }) => {
+      const member = list(state.agents).find(a => a.machineId === machineId && a.harnessId === harnessId)
+      return !!member && !list(state.conversations).some(c => c.leadId === member.id)
+    })
+  }
+
   async tick(): Promise<void> {
     if (this.busy) return
     this.busy = true

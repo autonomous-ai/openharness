@@ -785,3 +785,28 @@ describe('SwarmCards chats', () => {
     t.cards.want(false)
   })
 })
+
+// A Swarm Reviewer on another computer failing every turn took over the round dial with the engine's raw error (2026-10-28):
+// the devices ask whether the agent a card names is one of a Swarm's workers, and are answered from the Swarms read last.
+describe('SwarmCards.worker', () => {
+  const roster = () => swarm({
+    agents: [agent('a1'), agent('b1', { machineId: 'm2' }), agent('r1', { machineId: 'm2', role: 'reviewer' }), agent('b2', { machineId: 'm1' })],
+    conversations: [conv('lead-web', 'a1', { projectId: 'web' }), conv('w-web', null, { projectId: 'web', agentIds: ['b1', 'r1'] })],
+  })
+
+  it('says yes for a Builder or Reviewer on the machine the card came from, and no for its Lead', async () => {
+    const t = setup({ t1: { lastChangedAt: 1, state: roster() } })
+    await t.cards.tick()
+    expect(t.cards.worker('m2', 'h-b1')).toBe(true)
+    expect(t.cards.worker('m2', 'h-r1')).toBe(true)
+    expect(t.cards.worker('m1', 'h-a1')).toBe(false)
+  })
+
+  it('matches the machine as well as the harness, and knows nothing before a read or of an agent no Swarm lists', async () => {
+    const t = setup({ t1: { lastChangedAt: 1, state: roster() } })
+    expect(t.cards.worker('m2', 'h-b1')).toBe(false)
+    await t.cards.tick()
+    expect(t.cards.worker('m1', 'h-b1')).toBe(false)
+    expect(t.cards.worker('m2', 'h-nobody')).toBe(false)
+  })
+})
