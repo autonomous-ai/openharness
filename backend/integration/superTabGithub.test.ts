@@ -10,6 +10,7 @@ import Fastify, { type FastifyInstance } from 'fastify'
 import type { AuthUser } from '../src/lib/ssoAuth.js'
 import { SuperTabStore } from '../src/superTabs/store.js'
 import { superTabRoutes } from '../src/routes/superTabs.js'
+import type { Approvals, GitHubSignIn } from '../src/github/approvals.js'
 import { errorHandler } from '../src/middlewares/errorHandler.js'
 import type { Command } from '../src/superTabs/commands.js'
 import { GitHubTokens, MemoryTokenCache } from '../src/github/tokens.js'
@@ -49,7 +50,7 @@ afterAll(async () => {
 })
 
 /** One control API with the app configured against a fresh fake GitHub, its store revoking as tasks end. */
-async function fresh(options: { github?: boolean } = {}) {
+async function fresh(options: { github?: boolean; approveAll?: boolean; signIn?: GitHubSignIn | null } = {}) {
   const github = fakeGitHub({ publicKey: key.publicKey, appId: '424242' })
   github.installed.set('example/app', 91)
   const log = { warn: vi.fn() }
@@ -59,19 +60,34 @@ async function fresh(options: { github?: boolean } = {}) {
   const app: FastifyInstance = Fastify()
   app.setErrorHandler(errorHandler)
   app.addHook('onRequest', async (request, reply) => {
+    // GitHub sends a person back here without a Harness token, as the server's own gate lets it (authMiddleware.ts).
+    if (request.url.startsWith('/api/github/callback')) return
     const user = users.find(u => `Bearer ${u.sub}` === request.headers.authorization)
     if (!user) return reply.code(401).send({ success: false })
     request.user = user
   })
-  await app.register(superTabRoutes, { store, github: options.github === false ? null : tokens })
+  // Every project approved unless a test says otherwise (github/approvals.ts); what was approved, kept here.
+  const approved: Array<{ tabId: string; projectId: string; repository: string; scope: string; login: string }> = []
+  const approvals: Approvals = {
+    approved: async (_env, tabId, projectId, repository) => options.approveAll !== false
+      || approved.some(a => a.tabId === tabId && a.repository === repository.toLowerCase() && (a.scope === 'swarm' || a.projectId === projectId)),
+    approve: async (request, login) => { approved.push({ ...request, login }) },
+  }
+  await app.register(superTabRoutes, { store, github: options.github === false ? null : tokens, approvals, signIn: options.signIn ?? null })
   await app.ready()
   const run = (tab: string, command: Command, user = owner, asAgentId?: string) =>
     store.execute(user, tab, { operationId: randomUUID(), command }, asAgentId)
   const settled = async () => { await Promise.all(releases.splice(0)) }
-  return { github, log, tokens, store, app, run, settled }
+  return { github, log, tokens, store, app, run, settled, approved }
 }
 
 type Env = Awaited<ReturnType<typeof fresh>>
+/** The team account switched on for this test, in the Swarms of [owners] or everyone's. */
+function teamAccounts(owners = '') {
+  vi.stubEnv('SWARM_TEAM_ACCOUNT_REQUIRED', '1')
+  vi.stubEnv('SWARM_TEAM_ACCOUNT_OWNERS', owners)
+  onTestFinished(() => { vi.unstubAllEnvs() })
+}
 /** A tab whose project is on [repositoryUrl], with a Builder on the host's machine working on a task. */
 async function working(env: Env, repositoryUrl: string | null = 'https://github.com/example/app.git') {
   const tab = (await env.store.create(owner, randomUUID(), 'Pilot')).id
@@ -225,6 +241,71 @@ describe('a queued start\'s preparation token', () => {
     expect(response.json().data).toMatchObject({ github: true, token: 'ghs_fixture_1', repository: 'example/app', requestedBy: { name: 'Olive Owner', email: owner.email } })
     const minted = env.github.calls.find(c => c.path === '/app/installations/91/access_tokens')!
     expect(minted.body).toEqual({ repositories: ['app'], permissions: { contents: 'read', metadata: 'read' } })
+  })
+
+  it('gives no token for a repository nobody who can push to it approved for the project', async () => {
+    teamAccounts()
+    const env = await fresh({ approveAll: false })
+    const { tab, startId } = await queued(env)
+    const status = await env.app.inject({ method: 'GET', url: `/api/super-tabs/${tab}/projects/lead/github`, headers: { authorization: `Bearer ${owner.sub}` } })
+    expect(status.json().data).toMatchObject({ state: 'not-approved', repository: 'example/app' })
+    const response = await prepare(env, tab, startId)
+    expect(response.statusCode).toBe(403)
+    expect(response.json().error).toMatchObject({ code: 'GITHUB_REPOSITORY_NOT_APPROVED' })
+    expect(env.github.calls.some(c => c.path.endsWith('/access_tokens'))).toBe(false)
+  })
+
+  // Rolled out with the team account (machines.ts teamAccountRequired), so a bug in it cannot stop anyone else's Swarm.
+  it('asks no approval in a Swarm the team account is not tried in, or with the switch off', async () => {
+    teamAccounts('someone@example.com')
+    const env = await fresh({ approveAll: false })
+    const { tab, startId } = await queued(env)
+    const status = await env.app.inject({ method: 'GET', url: `/api/super-tabs/${tab}/projects/lead/github`, headers: { authorization: `Bearer ${owner.sub}` } })
+    expect(status.json().data).toMatchObject({ state: 'covered', repository: 'example/app' })
+    expect((await prepare(env, tab, startId)).json().data).toMatchObject({ github: true, token: 'ghs_fixture_1' })
+    vi.unstubAllEnvs()
+    const off = await queued(env)
+    expect((await prepare(env, off.tab, off.startId)).json().data).toMatchObject({ github: true })
+  })
+
+  it('approves a repository through the app\'s sign-in, for someone who can push to it, and gives the token after', async () => {
+    let push = true
+    const signIn = { authorizeUrl: (state: string) => `https://github.test/login/oauth/authorize?state=${state}`,
+      permission: async () => ({ login: 'olive', push }) } as unknown as GitHubSignIn
+    teamAccounts()
+    const env = await fresh({ approveAll: false, signIn })
+    const { tab, startId } = await queued(env)
+    expect((await prepare(env, tab, startId)).statusCode).toBe(403)
+    const asked = await env.app.inject({ method: 'POST', url: `/api/super-tabs/${tab}/projects/lead/github/approve`,
+      headers: { authorization: `Bearer ${owner.sub}` }, payload: { scope: 'project' } })
+    expect(asked.statusCode, asked.body).toBe(200)
+    const { authorizeUrl, installUrl } = asked.json().data as { authorizeUrl: string; installUrl: string }
+    expect(installUrl).toMatch(/\/installations\/new\?state=/)
+    const state = new URL(authorizeUrl).searchParams.get('state')!
+    // Someone who cannot push is told so, and nothing is approved.
+    push = false
+    const refused = await env.app.inject({ method: 'GET', url: `/api/github/callback?code=c&state=${encodeURIComponent(state)}` })
+    expect(refused.statusCode).toBe(403)
+    expect(refused.body).toContain('can&#39;t push to example/app')
+    push = true
+    const done = await env.app.inject({ method: 'GET', url: `/api/github/callback?code=c&state=${encodeURIComponent(state)}` })
+    expect(done.statusCode).toBe(200)
+    expect(done.body).toContain('example/app approved')
+    expect(env.approved).toEqual([expect.objectContaining({ tabId: tab, projectId: 'lead', repository: 'example/app', scope: 'project', login: 'olive' })])
+    expect((await prepare(env, tab, startId)).statusCode).toBe(200)
+    // A forged or missing state, or an installation without a sign-in, approves nothing.
+    expect((await env.app.inject({ method: 'GET', url: '/api/github/callback?code=c&state=forged.state' })).statusCode).toBe(400)
+    const installed = await env.app.inject({ method: 'GET', url: `/api/github/callback?installation_id=9&setup_action=install&state=${encodeURIComponent(state)}` })
+    expect(installed.body).toContain('Harness is installed')
+    expect(env.approved).toHaveLength(1)
+  })
+
+  it('says when the server cannot approve, and refuses a project not on GitHub', async () => {
+    const env = await fresh({ approveAll: false })
+    const { tab } = await queued(env)
+    const none = await env.app.inject({ method: 'POST', url: `/api/super-tabs/${tab}/projects/lead/github/approve`,
+      headers: { authorization: `Bearer ${owner.sub}` }, payload: { scope: 'swarm' } })
+    expect(none.json().error).toMatchObject({ code: 'GITHUB_APPROVAL_NOT_CONFIGURED' })
   })
 
   it('answers no token for the machine owner\'s own project, unless its host asks for one anyway', async () => {

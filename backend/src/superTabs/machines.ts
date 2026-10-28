@@ -179,7 +179,16 @@ const ONLY_OWN = 'so it runs only its owner\'s projects'
  * read on every call, so a test can set them.
  */
 export function teamAccountRequired(state?: Pick<SuperTabState, 'ownerId' | 'people'>): boolean {
-  if (process.env.SWARM_TEAM_ACCOUNT_REQUIRED !== '1') return false
+  return process.env.SWARM_TEAM_ACCOUNT_REQUIRED === '1' && teamAccountSwarm(state)
+}
+
+/**
+ * Whether Harness Team accounts take part in [state]'s Swarm at all: they join it where their Mac was added (hostRows.ts)
+ * and teammates' work goes to them (teamMachineFor). With `SWARM_TEAM_ACCOUNT_OWNERS` set, only the Swarms those people
+ * own, so a bug in the team account cannot reach anyone else's Swarm while it is tried out (2026-10-28): elsewhere a Mac
+ * runs teammates' work itself, as before team accounts. Empty, every Swarm.
+ */
+export function teamAccountSwarm(state?: Pick<SuperTabState, 'ownerId' | 'people'>): boolean {
   const owners = (process.env.SWARM_TEAM_ACCOUNT_OWNERS ?? '').split(',').map(email => email.trim().toLowerCase()).filter(Boolean)
   if (!owners.length) return true
   const owner = state?.people.find(person => person.id === state.ownerId)?.email.toLowerCase()
@@ -258,7 +267,7 @@ export function teamPoolOf(state: SuperTabState, pool: ContributedMachine, live?
  *  its contributor's own and the Mac has one in this Swarm, else the machine named. */
 export function teamMachineFor(state: SuperTabState, machineId: string, project: SwarmProject, idle = false, live?: readonly string[]): string {
   // With no GitHub App on this server a team account cannot fetch or push, so the work stays on the Mac, as before.
-  if (idle) return machineId
+  if (idle || !teamAccountSwarm(state)) return machineId
   const pool = state.machines?.find(m => m.machineId === machineId)
   if (!pool || project.ownerId === pool.contributorId) return machineId
   return teamPoolOf(state, pool, live)?.machineId ?? machineId

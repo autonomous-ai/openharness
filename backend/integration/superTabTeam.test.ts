@@ -3,11 +3,12 @@ import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, describe, expect, it, onTestFinished, vi } from 'vitest'
 import { MongoMemoryReplSet } from 'mongodb-memory-server-core'
 import { PrismaClient } from '@prisma/client'
 import type { AuthUser } from '../src/lib/ssoAuth.js'
 import { SuperTabStore } from '../src/superTabs/store.js'
+import { SwarmReads } from '../src/superTabs/read/service.js'
 import type { Command } from '../src/superTabs/commands.js'
 import type { ContributedMachine } from '../src/superTabs/machines.js'
 import * as parts from '../src/superTabs/parts/index.js'
@@ -457,6 +458,19 @@ describe('a teammate\'s work and the machines that take it', () => {
 // One machine (docs/plans/2026-10-24-swarm-team-account.md): the person's Mac and its Harness Team account are one
 // machine. Its team account joins where the Mac is added, through the Mac's own daemon, and takes the teammates' work
 // started on the Mac.
+describe('a project\'s repository, for its GitHub access', () => {
+  it('is read by those who may open the project, and by nobody else', async () => {
+    const f = await fixture()
+    expect(await store.projectRepository(owner, f.tab, 'lead')).toEqual({ repositoryUrl: null, approvalRequired: false })
+    await run(f.tab, { type: 'tab.project', machineId: 'owner-host', project: { cwd: '/work', repositoryUrl: 'https://github.com/acme/app' } })
+    expect(await store.projectRepository(owner, f.tab, 'lead')).toMatchObject({ repositoryUrl: 'https://github.com/acme/app' })
+    expect(await store.projectRepository(person, f.tab, 'lead')).toMatchObject({ repositoryUrl: 'https://github.com/acme/app' })
+    const secret = String((await run(f.tab, { type: 'project.create', name: 'Secret', visibility: 'private', brief: '' })).result.projectId)
+    await expect(store.projectRepository(person, f.tab, secret)).rejects.toMatchObject({ code: 'NOT_FOUND' })
+    await expect(store.projectRepository(owner, f.tab, 'nope')).rejects.toMatchObject({ code: 'NOT_FOUND' })
+  })
+})
+
 describe('one machine: a Mac and its Harness Team account', () => {
   it('with no GitHub App on the server, the team account is never asked to join', async () => {
     await db.machine.update({ where: { machineId: 'team-mac' }, data: { hostMachineId: 'personal-mac' } })
@@ -473,6 +487,28 @@ describe('one machine: a Mac and its Harness Team account', () => {
     } finally {
       await db.machine.update({ where: { machineId: 'team-mac' }, data: { hostMachineId: null } })
     }
+  })
+
+  // Tried in listed owners' Swarms only (machines.ts teamAccountSwarm, 2026-10-28): anyone else's Swarm never gets a team
+  // account, and says so, so neither the Mac's daemon nor Desktop offers to set one up for it.
+  it('joins only a Swarm the team account is tried in, and tells the others they use none', async () => {
+    await db.machine.update({ where: { machineId: 'team-mac' }, data: { hostMachineId: 'personal-mac' } })
+    onTestFinished(async () => {
+      vi.unstubAllEnvs()
+      await db.machine.update({ where: { machineId: 'team-mac' }, data: { hostMachineId: null } })
+    })
+    const tab = (await store.create(owner, randomUUID(), 'Elsewhere')).id
+    const invitation = await run(tab, { type: 'invite.create', email: person.email, role: 'collaborator', conversationId: 'lead' })
+    await run(tab, { type: 'invite.accept', inviteId: invitation.result.inviteId as string }, person)
+    await run(tab, { type: 'machine.contribute', machineId: 'personal-mac', name: 'MacBook Pro', cwd: '/work', scope: 'swarm', engines: ['codex'], maxAgents: 3 }, person)
+    const joins = async () => (await rosterRows(store, person, 'personal-mac')).some(r => r.tabId === tab && 'joinTeam' in r)
+    const derived = async () => (await new SwarmReads(store).firstLoad(person, tab)).derived
+    vi.stubEnv('SWARM_TEAM_ACCOUNT_OWNERS', 'someone@example.com')
+    expect(await joins()).toBe(false)
+    expect(await derived()).toMatchObject({ teamAccounts: false })
+    vi.stubEnv('SWARM_TEAM_ACCOUNT_OWNERS', `someone@example.com,${owner.email.toUpperCase()}`)
+    expect(await joins()).toBe(true)
+    expect(await derived()).not.toHaveProperty('teamAccounts')
   })
 
   it('the Mac\'s host adds its team account, which then takes the owner\'s project started on the Mac', async () => {

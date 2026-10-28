@@ -2672,7 +2672,7 @@ async function logsExportCommand(json: boolean): Promise<void> {
 }
 
 import { orchestratorCommand } from './orchestrator/command.js'
-import { paneOwner, sendCommand } from './messages/command.js'
+import { paneOwner, sendCommand, sendPane } from './messages/command.js'
 import { agentOrigin, closeCommand, psCommand, replyCommand, showCommand, tellCommand, waitCommand, watchCommand, whoamiCommand } from './agentClient/commands.js'
 import { agentsHelp, helpFor } from './agentClient/help.js'
 import { openUrlCommand } from './agentClient/openUrl.js'
@@ -2733,9 +2733,13 @@ switch (cmd) {
   case 'settings':
     settingsCommand(rest, { port: daemonPort() }).then(code => { process.exitCode = code }).catch(onError)
     break
-  case 'mcp-servers':
-    process.exitCode = mcpServersCommand(rest)
+  case 'mcp-servers': {
+    // Refused in a pane a Harness daemon made, as `harness mcp` tells one (#1881's P3): an engine there may set none of
+    // the variables `outsideCaller` reads. A pty host pane (Windows) is always Harness's.
+    const pane = sendPane(process.env)
+    process.exitCode = mcpServersCommand(rest, { inPane: !!pane && (!pane.startsWith('%') || !!paneOwner(pane)) })
     break
+  }
   case 'mcp': {
     const pane = process.env.TMUX_PANE
     mcpCommand({ run: harnessRunner(SCRIPT_PATH), inPane: !!pane && !!paneOwner(pane) }).then(code => { process.exitCode = code }).catch(onError)

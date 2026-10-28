@@ -15,6 +15,9 @@ import { machineObservationSchema } from '../superTabs/machines.js'
 import { joinSwarmSchema, previewJoinSchema, saveSharingSchema } from '../superTabs/sharing.js'
 import { holdReason } from '../superTabs/holdReason.js'
 import { GitHubAppError } from '../github/app.js'
+import { projectGitHubAccess } from '../github/projectAccess.js'
+import { githubSignIn, PrismaApprovals, readState, signState, stateSecret, type Approvals, type GitHubSignIn } from '../github/approvals.js'
+import type { GitHubRepository } from '../github/repository.js'
 import { githubRepository } from '../github/repository.js'
 import { attribution } from '../github/attribution.js'
 import { githubTokensFromEnv, type GitHubTokens } from '../github/tokens.js'
@@ -67,6 +70,21 @@ const terminalParams = tabParams.extend({ requestId: id })
 const hostParams = z.object({ machineId: id })
 const hostStartParams = hostParams.extend({ tabId: id, startId: id })
 const machineParams = hostParams.extend({ tabId: id })
+const projectParams = tabParams.extend({ projectId: id })
+const refreshQuery = z.object({ refresh: z.literal('1').optional() })
+const approveBody = z.object({ scope: z.enum(['project', 'swarm']) }).strict()
+// What GitHub sends back: a sign-in's code and our state, and after an installation its id and action.
+const callbackQuery = z.object({ code: z.string().max(512).optional(), state: z.string().max(4096).optional(),
+  installation_id: z.string().max(32).optional(), setup_action: z.string().max(32).optional() })
+
+const escapeHtml = (text: string) => text.replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!)
+/** The page a person sees in their browser after GitHub sends them back. */
+function githubPage(title: string, text: string): string {
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">`
+    + `<title>${escapeHtml(title)}</title><style>body{font:16px/1.5 -apple-system,system-ui,sans-serif;max-width:32rem;margin:15vh auto;padding:0 1rem;`
+    + `color:#1f2328;background:#fff}@media(prefers-color-scheme:dark){body{color:#e6edf3;background:#0d1117}}h1{font-size:1.4rem}</style></head>`
+    + `<body><h1>${escapeHtml(title)}</h1><p>${escapeHtml(text)}</p></body></html>`
+}
 const deliveryParams = tabParams.extend({ agentId: id })
 const deliveryActionParams = deliveryParams.extend({ deliveryId: id })
 const deliveryAction = z.discriminatedUnion('type', [
@@ -104,8 +122,25 @@ function busyOnDuplicate(error: unknown): never {
  *  before or right after any action, so it meets this at once. */
 const updateRequired = (_req: unknown, reply: FastifyReply) => sendError(reply, UPDATE_REQUIRED.message, UPDATE_REQUIRED.code, UPDATE_REQUIRED.status)
 
-export async function superTabRoutes(app: FastifyInstance, options: { store?: SuperTabStore; github?: GitHubTokens | null; reads?: SwarmReads; hosts?: HostReads } = {}) {
+export async function superTabRoutes(app: FastifyInstance, options: { store?: SuperTabStore; github?: GitHubTokens | null; reads?: SwarmReads; hosts?: HostReads;
+  approvals?: Approvals; signIn?: GitHubSignIn | null } = {}) {
   const github = options.github !== undefined ? options.github : await githubTokensFromEnv(env)
+  // Which repositories each Swarm may use the app on, and the app's sign-in that approves one (github/approvals.ts).
+  const approvals = options.approvals ?? new PrismaApprovals(prisma)
+  const signIn = options.signIn !== undefined ? options.signIn : githubSignIn(env)
+  const approvalSecret = github ? stateSecret(github.app.config) : null
+  // No token for a repository nobody who can push to it approved for this project: a project names its repository as
+  // text, and the app is on other people's repositories too.
+  // Rolled out with the team account (machines.ts `teamAccountRequired`): a Swarm outside it gets tokens as before, so a
+  // bug here cannot stop other people's Swarms.
+  const requireApproval = async (user: { autonomousEnv: string }, grant: { tabId: string; projectId: string; approvalRequired: boolean },
+    repository: GitHubRepository) => {
+    if (!grant.approvalRequired) return
+    const { tabId, projectId } = grant
+    if (await approvals.approved(user.autonomousEnv, tabId, projectId, repository.fullName)) return
+    throw new SuperTabError('GITHUB_REPOSITORY_NOT_APPROVED', `Nobody who can push to ${repository.fullName} has approved it for this project yet, `
+      + 'so teammates\' agents get no access to it. Someone who can push to it approves it in Harness: Project details, GitHub access.', 403)
+  }
   // A task that ends revokes the token it was given; a revoke that fails is logged inside and never blocks the write.
   const store = options.store ?? new SuperTabStore(prisma, Date.now, attachmentsFromEnv(env),
     { workEnded: (tabId, ended) => { void github?.release(tabId, ended).catch(error => logger.warn('[github] release failed', { tabId, error: String(error) })) },
@@ -140,6 +175,7 @@ export async function superTabRoutes(app: FastifyInstance, options: { store?: Su
           ? 'This project\'s repository is not on github.com, so the Harness GitHub App cannot give a token for it.'
           : 'This project has no repository address yet. Its owner or Lead can share it (project.repository).', 409)
       }
+      await requireApproval(req.user!, grant, repository)
       return { github: true, ...await github.prepare(repository), requestedBy: grant.requester }
     }))
   app.get<{ Params: z.infer<typeof hostStartParams> }>('/api/super-tabs/hosts/:machineId/starts/:tabId/:startId', { preHandler: validateParams(hostStartParams) },
@@ -149,6 +185,46 @@ export async function superTabRoutes(app: FastifyInstance, options: { store?: Su
       if (!('startId' in req.body.command) || req.body.command.startId !== req.params.startId) throw new SuperTabError('FORBIDDEN', 'The host request must name this start.', 403)
       return store.execute(req.user!, req.params.tabId, req.body, undefined, req.params.machineId)
     }))
+  // Whether teammates' agents can push to a project's repository: the Harness GitHub App installed there
+  // (github/projectAccess.ts). `refresh=1`: a person installed it just now and checks again.
+  app.get<{ Params: z.infer<typeof projectParams>; Querystring: z.infer<typeof refreshQuery> }>('/api/super-tabs/:tabId/projects/:projectId/github',
+    { preHandler: [validateParams(projectParams), validateQuery(refreshQuery)] },
+    (req, reply) => respond(reply, async () => {
+      const project = await store.projectRepository(req.user!, req.params.tabId, req.params.projectId)
+      return projectGitHubAccess(github?.app ?? null, project.repositoryUrl, { canApprove: !!signIn,
+        approved: async repository => !project.approvalRequired || approvals.approved(req.user!.autonomousEnv, req.params.tabId, req.params.projectId, repository) },
+        req.query.refresh === '1')
+    }))
+  // Approving a project's repository: the person signs in to GitHub through the app (or installs it, which signs them in
+  // too), and GitHub sends them back to /api/github/callback with the state signed here for them, this project and scope.
+  app.post<{ Params: z.infer<typeof projectParams>; Body: z.infer<typeof approveBody> }>('/api/super-tabs/:tabId/projects/:projectId/github/approve',
+    { preHandler: [validateParams(projectParams), validateBody(approveBody)] }, (req, reply) => respond(reply, async () => {
+      if (!github || !approvalSecret) throw new GitHubAppError('GITHUB_APP_NOT_CONFIGURED', 'This Harness server has no GitHub App configured.', 503)
+      if (!signIn) throw new GitHubAppError('GITHUB_APPROVAL_NOT_CONFIGURED', 'This Harness server cannot approve repositories yet: its administrator sets GITHUB_APP_CLIENT_ID and GITHUB_APP_CLIENT_SECRET.', 503)
+      const { repositoryUrl } = await store.projectRepository(req.user!, req.params.tabId, req.params.projectId)
+      const repository = githubRepository(repositoryUrl) ?? fail('REPOSITORY_NOT_GITHUB', 'This project\'s repository is not on github.com.', 409)
+      const state = signState(approvalSecret, { userId: req.user!.sub, autonomousEnv: req.user!.autonomousEnv, tabId: req.params.tabId,
+        projectId: req.params.projectId, repository: repository.fullName.toLowerCase(), scope: req.body.scope }, Date.now())
+      const install = github.app.installUrl()
+      return { authorizeUrl: signIn.authorizeUrl(state), installUrl: install ? `${install}?state=${encodeURIComponent(state)}` : null }
+    }))
+  app.get<{ Querystring: z.infer<typeof callbackQuery> }>('/api/github/callback', { preHandler: validateQuery(callbackQuery) }, async (req, reply) => {
+    const page = (title: string, text: string, status = 200) => reply.status(status).type('text/html; charset=utf-8').send(githubPage(title, text))
+    const request = approvalSecret && req.query.state ? readState(approvalSecret, req.query.state, Date.now()) : null
+    if (!request) return page('This link has expired', 'Go back to Harness and choose Approve again.', 400)
+    const named = githubRepository(`https://github.com/${request.repository}`)
+    if (!req.query.code || !signIn || !named) {
+      return page('Harness is installed', 'Go back to Harness and choose Approve, so this project can use it.')
+    }
+    const seen = await signIn.permission(req.query.code, named).catch(() => null)
+    if (!seen) return page('GitHub could not confirm your access', 'Go back to Harness and choose Approve again.', 502)
+    if (!seen.push) {
+      return page(`You can't push to ${named.fullName}`, 'So you can\'t approve it for this Swarm. Someone who can push to it can.', 403)
+    }
+    await approvals.approve(request, seen.login)
+    return page(`${named.fullName} approved`, request.scope === 'swarm'
+      ? 'Every project in this Swarm can now use it. You can go back to Harness.' : 'This project can now use it. You can go back to Harness.')
+  })
   app.get<{ Params: z.infer<typeof machineParams> }>('/api/super-tabs/:tabId/machines/:machineId/removal', { preHandler: validateParams(machineParams) },
     (req, reply) => respond(reply, () => store.machineRemoval(req.user!, req.params.tabId, req.params.machineId)))
   app.post<{ Params: z.infer<typeof machineParams>; Body: z.infer<typeof machineObservationSchema> }>('/api/super-tabs/:tabId/machines/:machineId',
@@ -257,6 +333,7 @@ export async function superTabRoutes(app: FastifyInstance, options: { store?: Su
           ? 'This project\'s repository is not on github.com, so the Harness GitHub App cannot give a token for it.'
           : 'This project has no repository address yet. Its owner or Lead can share it (project.repository).', 409)
       }
+      await requireApproval(req.user!, grant, repository)
       const issued = await github.issue({ tabId: grant.tabId, agentId: grant.agentId, assignmentId: grant.assignmentId, repository })
       return { ...issued, ...attribution(grant) }
     }))

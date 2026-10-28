@@ -1997,15 +1997,19 @@ class AppNotifier extends ChangeNotifier {
   /// recognised as Harness (2026-10-27). Nothing on Windows or Linux, and never
   /// for another machine, where nobody may be at it.
   ///
+  /// [tabId]: the Swarm joined or added to, so a Swarm its server does not
+  /// try team accounts in yet asks nothing (the daemon reads it).
+  ///
   /// True when the daemon answered, whatever it decided; false when it was not
   /// asked or could not say.
-  Future<bool> offerTeamAccount(String reason) async {
+  Future<bool> offerTeamAccount(String reason, {String? tabId}) async {
     final here = _teamAccountHere();
     if (here == null) return false;
     try {
       final answer = await superTabMachineRequest(here, {
         'action': 'teamSetupCheck',
         'reason': reason,
+        'tabId': ?tabId,
       });
       appLog.info('super-tabs', 'team account offer ($reason): ${answer['state']}');
       if (answer['state'] == 'wanted') {

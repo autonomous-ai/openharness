@@ -1123,7 +1123,8 @@ export class SuperTabStore {
       const contributed = state.machines?.find(m => m.machineId === target.machineId)?.name
       const machineName = contributed ?? await tx.machine.findFirst({ where: { machineId: target.machineId, userId: target.machineOwnerId },
         select: { name: true, hostname: true } }).then(m => m?.name ?? m?.hostname ?? null)
-      return { tabId, agentId: target.id, assignmentId: group.assignment!.id, repositoryUrl: project.repository?.repositoryUrl ?? null,
+      return { tabId, projectId: project.id, approvalRequired: teamAccountRequired(state), agentId: target.id, assignmentId: group.assignment!.id,
+        repositoryUrl: project.repository?.repositoryUrl ?? null,
         requester: { name: requester.name?.trim() || null, email: requester.email },
         agentName: agentDisplayName(state.agents, target.id) ?? target.displayName ?? target.name, machineName: machineName?.trim() || null }
     })
@@ -1151,7 +1152,8 @@ export class SuperTabStore {
       const project = groupProject(state, group)
       const owner = await tx.user.findUnique({ where: { id: project.ownerId }, select: { name: true, email: true } })
       const email = owner?.email ?? state.people.find(p => p.id === project.ownerId)?.email ?? ''
-      return { tabId, startId, repositoryUrl: project.repository?.repositoryUrl ?? null, own: project.ownerId === start.machineOwnerId,
+      return { tabId, projectId: project.id, repositoryUrl: project.repository?.repositoryUrl ?? null, approvalRequired: teamAccountRequired(state),
+        startId, own: project.ownerId === start.machineOwnerId,
         requester: { name: owner?.name?.trim() || null, email } }
     })
   }
@@ -1598,6 +1600,20 @@ export class SuperTabStore {
   }
 
   /** What removing a machine would do, for its owner's confirmation (machines.ts removalPreview). */
+  /** A project's repository address, for a person who may open the project (routes/superTabs.ts, its GitHub access):
+   *  a private project's members only. Null when it has none yet. [approvalRequired]: whether this Swarm's projects need a
+   *  repository approved before the app gives them tokens, rolled out with the team account (machines.ts
+   *  `teamAccountRequired`). */
+  async projectRepository(user: AuthUser, tabId: string, projectId: string): Promise<{ repositoryUrl: string | null; approvalRequired: boolean }> {
+    return transaction(this.db, async tx => {
+      const { state } = await this.load(tx, user, tabId)
+      const actor = await this.actor(tx, user, state)
+      const project = visibleState(state, actor, this.now()).projects?.find(p => p.id === projectId)
+        ?? fail('NOT_FOUND', 'This project is unavailable.', 404)
+      return { repositoryUrl: project.repository?.repositoryUrl ?? null, approvalRequired: teamAccountRequired(state) }
+    })
+  }
+
   async machineRemoval(user: AuthUser, tabId: string, machineId: string) {
     return transaction(this.db, async tx => {
       const { state } = await this.load(tx, user, tabId)

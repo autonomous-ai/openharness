@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { applyCommand, type Command, type CommandContext } from './commands.js'
-import { admitMachineStart, machineObservationSchema, machineSlots, observedPrivacy, PRIVACY_FRESH_MS, removalPreview, teamAccountRequired, teamWorkRefusal, type ContributedMachine, type MachinePrivacy } from './machines.js'
+import { admitMachineStart, machineObservationSchema, machineSlots, observedPrivacy, PRIVACY_FRESH_MS, removalPreview, teamAccountRequired, teamAccountSwarm, teamWorkRefusal, type ContributedMachine, type MachinePrivacy } from './machines.js'
 import { createSuperTab, SuperTabError, visibleState, type Actor, type AgentConfiguration, type AgentStart, type SuperTabState } from './model.js'
 import type { RouteDecision } from './routeRecord.js'
 
@@ -391,6 +391,20 @@ describe('the switch held to the Swarms of listed owners', () => {
     // A Team machine follows the rule in every Swarm, as it does with the switch off.
     f.machine('mate-team').observation = reading('team', FAILED)
     expect(refusal(() => f.run({ type: 'agent.start', request: f.request(group, 'mate-team') }, owner, f.pooled('mate-team')))?.code).toBe('PRIVACY_CHECK_FAILED')
+  })
+
+  it('leaves a teammate\'s work on the Mac, not its team account, in a Swarm the team account is not tried in', () => {
+    const f = swarm(), group = f.group()
+    Object.assign(f.machine('mate-team'), { hostMachineId: 'mate-mac', name: 'MacBook Pro', cwd: '/team-swarm' })
+    delete process.env.SWARM_TEAM_ACCOUNT_REQUIRED
+    process.env.SWARM_TEAM_ACCOUNT_OWNERS = 'someone@example.com'
+    expect(teamAccountSwarm(f.state)).toBe(false)
+    f.run({ type: 'agent.start', request: f.request(group, 'mate-mac') }, owner, f.pooled('mate-mac'))
+    expect(f.state.starts![0]!.request).toMatchObject({ machineId: 'mate-mac', cwd: '/swarm/lead' })
+    process.env.SWARM_TEAM_ACCOUNT_OWNERS = 'owner@example.com'
+    expect(teamAccountSwarm(f.state)).toBe(true)
+    f.run({ type: 'agent.start', request: f.request(group, 'mate-mac') }, owner, f.pooled('mate-mac'))
+    expect(f.state.starts![1]!.request).toMatchObject({ machineId: 'mate-team', cwd: '/team-swarm/lead' })
   })
 
   it('is every Swarm\'s with no list, and none with the switch off, list or not', () => {
