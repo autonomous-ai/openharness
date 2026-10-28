@@ -212,7 +212,10 @@ class SuperTabController extends ChangeNotifier {
   void _moveView({String? to, bool devices = false}) {
     _selectRequest++;
     devicesSelected = devices;
-    if (to != null) selectedId = to;
+    if (to != null && to != selectedId) {
+      _leftAt[selectedId] = clock.now();
+      selectedId = to;
+    }
   }
 
   /// The newest change of the Swarm this tab has read, in epoch milliseconds: what tells the app and the tag list
@@ -350,6 +353,29 @@ class SuperTabController extends ChangeNotifier {
   /// read, as the backend's page cursor names it (section 4.6). Null at the
   /// start of the conversation.
   final _before = <String, SuperTabPage?>{};
+
+  /// At most this many messages are held of a conversation whose reader is at
+  /// its end: a busy one left open all day reads, sorts and folds no more
+  /// each poll. The rows cut are read again by scrolling up.
+  static const _heldMessages = 500;
+
+  /// Per conversation, the message its view lays its list out from (its
+  /// dividing row): from it on, no row is cut, since cutting them moves the
+  /// rows on screen. Rows before it may be cut.
+  final _cutBefore = <String, SuperTabMessage>{};
+
+  /// The view of [id] lays its list out from [message] on ([_cutBefore]).
+  void keepFrom(String id, SuperTabMessage message) => _cutBefore[id] = message;
+
+  /// When the reader left each conversation they opened, until it is open
+  /// again or its messages are dropped ([_dropLeft]).
+  final _leftAt = <String, DateTime>{};
+
+  /// A conversation left this long holds no messages: opening it again reads
+  /// its latest page, as the first open did. Longer than going back and forth
+  /// between a few groups; short enough that a day of browsing holds only the
+  /// ones read lately.
+  static const _keepLeft = Duration(minutes: 15);
 
   /// Each conversation's reads under way, newest and older apart: an older
   /// page asked for during a poll's read is a read of its own.
@@ -796,6 +822,31 @@ class SuperTabController extends ChangeNotifier {
   }
 
   void _acted() => _lastActivity = clock.now();
+
+  /// Drops the messages held of each conversation left [_keepLeft] ago.
+  /// Kept for now: one being read, which would land on nothing and lose where
+  /// earlier history continues, and one whose unread count its held messages
+  /// give, which would read "1" until read again.
+  void _dropLeft() {
+    final now = clock.now();
+    _leftAt.removeWhere((id, left) {
+      if (id == selectedId) return true;
+      final group = snapshot?.conversation(id);
+      if (now.difference(left) < _keepLeft ||
+          _reading.keys.any((read) => read.$1 == id) ||
+          (group != null && unreadCount(group) > 1)) {
+        return false;
+      }
+      _messages.remove(id);
+      _rows.remove(id);
+      _before.remove(id);
+      _quoted.remove(id);
+      _quoting.remove(id);
+      _reactionSeq.remove(id);
+      _forgetNewer(id);
+      return true;
+    });
+  }
 
   void _keepRows(String id, List rows) {
     if (!_policy.drawsSaved) return;
@@ -1554,6 +1605,7 @@ class SuperTabController extends ChangeNotifier {
       lastChangedAt = parts.lastChangedAt;
       // Every state read, a quiet one too: a count a failed read left open is
       // finished; one that is known reads nothing.
+      _dropLeft();
       _readUnreadPmChats();
       _partsReadAt = clock.now();
       error = null;
@@ -2079,7 +2131,24 @@ class SuperTabController extends ChangeNotifier {
           combined.putIfAbsent(m.id, () => m);
         }
       }
-      final next = combined.values.toList()..sort(superTabMessageOrder);
+      final sorted = combined.values.toList()..sort(superTabMessageOrder);
+      // Past the cap the oldest rows go, where earlier history continues;
+      // never under a reader scrolled up, nor from an older page they asked
+      // for, nor from where the view lays its list out.
+      final floor = _cutBefore[id];
+      final below = floor == null
+          ? -1
+          : sorted.indexWhere((m) => superTabMessageOrder(m, floor) >= 0);
+      final cut = older || _readingBack.contains(id)
+          ? 0
+          : max(
+              0,
+              min(
+                sorted.length - _heldMessages,
+                below < 0 ? sorted.length : below,
+              ),
+            );
+      final next = cut > 0 ? sorted.sublist(cut) : sorted;
       // An adapting read that found nothing new changes nothing on screen.
       final same = _policy.adapts && _sameMessages(_messages[id], next);
       _messages[id] = next;
@@ -2094,6 +2163,11 @@ class SuperTabController extends ChangeNotifier {
       if (reactionSeq is int) _reactionSeq[id] = reactionSeq;
       if (older || replacing || !_before.containsKey(id)) {
         _before[id] = SuperTabPage.read(answer['next']);
+      }
+      if (cut > 0) {
+        _before[id] = SuperTabPage.of(next.first);
+        final kept = {for (final m in next) m.id};
+        _rows[id]?.removeWhere((messageId, _) => !kept.contains(messageId));
       }
       // Something new in the conversation on screen keeps the full poll.
       if (arrived && id == selectedId) _acted();

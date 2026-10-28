@@ -2,6 +2,8 @@ import 'dart:async';
 
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart'
+    show RenderSliverMultiBoxAdaptor, SliverMultiBoxAdaptorParentData;
 import 'package:flutter/services.dart';
 
 import '../shared/theme/app_icons.dart';
@@ -254,6 +256,9 @@ class _SuperTabViewState extends State<SuperTabView>
     final grew = latest > previous && !_loadingOlder.contains(id);
     _latest[id] = latest;
     if (grew && !atEnd) _newAfter.putIfAbsent(id, () => previous);
+    if (atEnd && _selected == id && scroll.hasClients && !_jumpingToEnd) {
+      _moveSplitToView(id, scroll);
+    }
     final draft = c.accessRevoked ? '' : c.draft(id);
     if (_selected != id) {
       _scrollRequest++;
@@ -2057,7 +2062,68 @@ class _SuperTabViewState extends State<SuperTabView>
           );
     if (at >= 0) return at;
     _split[id] = entries.first.message;
+    c.keepFrom(id, entries.first.message);
     return 0;
+  }
+
+  /// Rows below the dividing row before a reader at the end has it moved to
+  /// the rows on screen ([_moveSplitToView]).
+  static const _rowsBelowSplit = 200;
+
+  /// For a reader at the end of [id]: moves the dividing row down to the
+  /// first row of the group at the top edge of the view, its place
+  /// unchanged, so the controller may cut the rows above (it never cuts below
+  /// it). From a group's first row the groups below stay as they were; only
+  /// rows above the view can regroup.
+  void _moveSplitToView(String id, SuperTabChatScroll scroll) {
+    final split = _split[id];
+    if (split == null) return;
+    final messages = _shownMessages(id);
+    final at = messages.indexWhere((m) => superTabMessageOrder(m, split) >= 0);
+    final top = _rowAtTop();
+    if (at < 0 || messages.length - at <= _rowsBelowSplit || top == null) {
+      return;
+    }
+    final joined = _joined(messages, split);
+    var index = messages.indexWhere((m) => m.id == top);
+    while (index > at && joined.contains(messages[index].id)) {
+      index--;
+    }
+    if (index <= at) return;
+    final first = messages[index];
+    final offset = _offsetInList(_built[first.id]);
+    if (offset == null) return;
+    // Its row starts the newer rows now: the rows are measured from it.
+    scroll.moveContent(-offset);
+    _split[id] = first;
+    c.keepFrom(id, first);
+  }
+
+  /// The built row at the top edge of the view: the one it cuts through,
+  /// else the highest one below it.
+  String? _rowAtTop() {
+    ({String messageId, double top})? at;
+    for (final MapEntry(key: messageId, value: row) in _built.entries) {
+      final top = row.mounted ? _topInList(row) : null;
+      if (top == null) continue;
+      final better =
+          at == null ||
+          (top <= 0 ? at.top > 0 || top > at.top : at.top > 0 && top < at.top);
+      if (better) at = (messageId: messageId, top: top);
+    }
+    return at?.messageId;
+  }
+
+  /// Where [row] is laid out in the newer rows' list, from its start; null
+  /// when it is not laid out there.
+  static double? _offsetInList(BuildContext? row) {
+    if (row == null || !row.mounted) return null;
+    RenderObject? child = row.findRenderObject();
+    while (child != null && child.parent is! RenderSliverMultiBoxAdaptor) {
+      child = child.parent;
+    }
+    final data = child?.parentData;
+    return data is SliverMultiBoxAdaptorParentData ? data.layoutOffset : null;
   }
 
   /// The rows that join the one above them, without their name: runs of

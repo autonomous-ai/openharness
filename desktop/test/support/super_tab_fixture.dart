@@ -6,6 +6,7 @@ import 'dart:typed_data';
 import 'package:dio/dio.dart' show CancelToken;
 import 'package:harness/super_tabs/attachment_upload.dart';
 import 'package:harness/super_tabs/controller.dart';
+import 'package:harness/super_tabs/reading.dart';
 
 /// A signed link as the backend's private avatar bucket hands it out (avatarLinks.ts).
 String superTabSignedAvatar(String id) =>
@@ -1117,8 +1118,10 @@ class ConversationServer {
     Map<String, dynamic>? initial,
     String account = 'owner',
     SuperTabUpload? upload,
+    SuperTabReading reading = const SuperTabReading(),
   }) => SuperTabController(
     avatarUpload: uploadAvatar,
+    reading: reading,
     tabId: 'tab',
     accountId: account,
     request: (method, path, {body}) => runZoned(
