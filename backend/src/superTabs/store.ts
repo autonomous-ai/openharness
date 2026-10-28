@@ -170,6 +170,10 @@ export function afterCommit(tx: Transaction, callback: () => void): void {
   if (!pending) throw new Error('afterCommit needs a client from a Swarm transaction (store.ts transaction).')
   pending.push(callback)
 }
+/** Logged, never thrown: without the memory the delivery poll just runs in full. */
+const pollMemoryFailed = (error: unknown): void => {
+  logger.warn('[super-tab] delivery poll memory unavailable', { error: error instanceof Error ? error.message : String(error) })
+}
 /** The deliveries a host is still told about (the rest are answered, cancelled or confirmed). */
 const OPEN_DELIVERY = ['queued', 'claimed', 'uncertain'] as const
 /** Callers kept for the quiet delivery poll before the stale ones are dropped. */
@@ -208,6 +212,28 @@ export interface SuperTabStoreHooks {
   /** No Harness GitHub App on this server: a Mac's Harness Team account joins no Swarm and takes no teammates' work, since
    *  it has no git login to fetch or push with (commands.ts `teamAccountsIdle`). */
   teamAccountsIdle?: boolean
+  /** When each caller's full delivery poll last succeeded, shared by every server (Redis in production, pollMemory.ts). Left
+   *  out, this server remembers alone. */
+  polls?: PollMemory
+}
+
+/** Where `deliveries` remembers each caller's last full poll. Either call may throw: the poll then runs in full. */
+export interface PollMemory {
+  get(key: string): Promise<number | undefined>
+  /** Remembered for SWEEP_EVERY_MS at least; an older entry is never read. */
+  set(key: string, at: number): Promise<void>
+}
+
+/** One server's own memory: with several servers behind a load balancer, each runs its own full polls. */
+export function localPollMemory(now: () => number): PollMemory {
+  const polled = new Map<string, number>()
+  return {
+    get: async key => polled.get(key),
+    set: async (key, at) => {
+      polled.set(key, at)
+      if (polled.size > POLLED_CAP) for (const [k, last] of polled) if (now() - last >= SWEEP_EVERY_MS) polled.delete(k)
+    },
+  }
 }
 
 /** Persistent coordination. Host adapters own execution and must confirm their local session grants. */
@@ -222,6 +248,7 @@ export class SuperTabStore {
   get avatars(): AvatarStore | null { return this.attachments?.avatars ?? null }
   constructor(readonly db: PrismaClient, readonly now: () => number = Date.now,
     private readonly attachments: Attachments | null = null, private readonly hooks: SuperTabStoreHooks = {}) {
+    this.polls = hooks.polls ?? localPollMemory(now)
     this.native = new SuperTabNativeStore({
       transaction: body => transaction(db, body),
       load: (tx, user, tabId, groupIds) => this.load(tx, user, tabId, { groupIds }),
@@ -1763,8 +1790,8 @@ export class SuperTabStore {
     catch (error) { if (error instanceof SuperTabError) return false; throw error }
   }
 
-  /** When each caller's full delivery poll last succeeded for an agent, on this server: key is tab, agent and caller. */
-  private readonly polled = new Map<string, number>()
+  /** When each caller's full delivery poll last succeeded for an agent: key is tab, agent and caller. */
+  private readonly polls: PollMemory
 
   /**
    * Every running agent's host polls this each second. With nothing waiting and the full poll (which loads the Swarm and
@@ -1773,12 +1800,12 @@ export class SuperTabStore {
    * succeeded is ever answered this way, so a stranger or a revoked host meets the authority checks every time.
    */
   async deliveries(user: AuthUser, tabId: string, agentId: string) {
-    const key = `${tabId}:${agentId}:${user.sub}`, last = this.polled.get(key)
+    const key = `${tabId}:${agentId}:${user.sub}`
+    const last = await this.polls.get(key).catch(error => { pollMemoryFailed(error); return undefined })
     if (last !== undefined && this.now() - last < SWEEP_EVERY_MS
       && !await this.db.superTabDelivery.findFirst({ where: { tabId, agentId, status: { in: [...OPEN_DELIVERY] } }, select: { id: true } })) return []
     const rows = await this.fullDeliveries(user, tabId, agentId)
-    this.polled.set(key, this.now())
-    if (this.polled.size > POLLED_CAP) for (const [k, at] of this.polled) if (this.now() - at >= SWEEP_EVERY_MS) this.polled.delete(k)
+    await this.polls.set(key, this.now()).catch(pollMemoryFailed)
     return rows
   }
 

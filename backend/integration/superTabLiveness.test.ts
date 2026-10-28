@@ -7,7 +7,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { MongoMemoryReplSet } from 'mongodb-memory-server-core'
 import { PrismaClient } from '@prisma/client'
 import type { AuthUser } from '../src/lib/ssoAuth.js'
-import { SuperTabStore } from '../src/superTabs/store.js'
+import { SuperTabStore, type SuperTabStoreHooks } from '../src/superTabs/store.js'
 import type { Command } from '../src/superTabs/commands.js'
 import type { MachineObservation } from '../src/superTabs/machines.js'
 import * as parts from '../src/superTabs/parts/index.js'
@@ -44,9 +44,9 @@ afterAll(async () => {
 })
 
 /** A Swarm whose Lead runs on one of host's machines and whose worker runs on another, assigned "Ship the parser". */
-async function swarm({ legacy = false, client = db }: { legacy?: boolean; client?: PrismaClient } = {}) {
+async function swarm({ legacy = false, client = db, hooks }: { legacy?: boolean; client?: PrismaClient; hooks?: SuperTabStoreHooks } = {}) {
   let now = 10_000_000
-  const timed = new SuperTabStore(client, () => now)
+  const timed = new SuperTabStore(client, () => now, null, hooks)
   const tab = (await timed.create(owner, randomUUID(), 'Liveness', legacy ? undefined : 'public')).id
   if (legacy) await dropProjects(tab)
   const execute = (command: Command, user = owner, asAgentId?: string) => timed.execute(user, tab, { operationId: randomUUID(), command }, asAgentId)
@@ -615,6 +615,34 @@ describe('the delivery poll of an agent with nothing waiting', () => {
     f.clock.now += 1_000
     const rows = await f.timed.deliveries(host, f.tab, f.lead)
     expect(rows.map(d => d.messageId)).toEqual([sent.result.messageId])
+  })
+
+  // Behind a load balancer each poll may land on another pod: a memory of the last full poll per pod made every pod run its
+  // own full polls, so the one-row answer held only as often as a host met the same pod twice (stability roadmap 2.4).
+  it('answers from one indexed read on another server once any server ran the full poll, when they share the memory', async () => {
+    const counted = counting()
+    const shared = new Map<string, number>()
+    const polls = { get: async (key: string) => shared.get(key), set: async (key: string, at: number) => { shared.set(key, at) } }
+    const f = await swarm({ client: counted.client, hooks: { polls } })
+    const other = new SuperTabStore(counted.client, () => f.clock.now, null, { polls })
+    expect(await f.timed.deliveries(host, f.tab, f.lead)).toEqual([])
+    counted.ops.length = 0
+    f.clock.now += 1_000
+    expect(await other.deliveries(host, f.tab, f.lead)).toEqual([])
+    expect(counted.ops).toEqual(['SuperTabDelivery.findFirst'])
+  })
+
+  it('runs the full checked poll each time while the shared memory cannot be read or written, and still answers', async () => {
+    const counted = counting()
+    const down = async () => { throw new Error('Redis unreachable') }
+    const f = await swarm({ client: counted.client, hooks: { polls: { get: down, set: down } } })
+    expect(await f.timed.deliveries(host, f.tab, f.lead)).toEqual([])
+    counted.ops.length = 0
+    f.clock.now += 1_000
+    expect(await f.timed.deliveries(host, f.tab, f.lead)).toEqual([])
+    expect(counted.ops).toContain('SwarmGroup.findMany')
+    // A stranger still meets the authority checks, never a remembered answer.
+    await expect(f.timed.deliveries(owner, f.tab, f.lead)).rejects.toMatchObject({ code: 'FORBIDDEN' })
   })
 
   it('never answers a caller who is not the agent\'s host from another caller\'s quiet poll, before or after it fails', async () => {
