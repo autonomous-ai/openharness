@@ -226,7 +226,7 @@ class _AddBuddyDialogState extends State<_AddBuddyDialog> {
                       child: Text(
                         'Runs on ${chosen.name}, which belongs to '
                         '${buddyPersonName(c, chosen.ownerId)}. '
-                        '${buddyPersonName(c, chosen.ownerId)} can see its terminal.',
+                        'They can see its terminal.',
                         style: DesktopChrome.metadata(),
                       ),
                     ),
@@ -395,9 +395,16 @@ class SuperTabBuddyBar extends StatelessWidget {
     if (agent == null) return _starting(c);
     final name = c.snapshot!.agentName(agent.id, fallback: agent.name);
     final machine = buddyMachineName(c, agent.machineId);
-    final where =
-        '${buddyEngineName(agent.engine)} on $machine · '
-        '${agent.machineOwnerId == c.accountId ? 'only you can read this chat' : '${buddyPersonName(c, agent.machineOwnerId)} can see its terminal'}';
+    final project = c.snapshot!.projects
+        .where((p) => p.id == chat.projectId)
+        .firstOrNull;
+    final where = [
+      '${buddyEngineName(agent.engine)} on $machine',
+      if (project != null) '#${project.name}',
+      agent.machineOwnerId == c.accountId
+          ? 'only you can read this chat'
+          : '${buddyPersonName(c, agent.machineOwnerId)} can see its terminal',
+    ].join(' · ');
     final busy = !c.canWrite || c.saving || c.hasPendingAction;
     return Padding(
       key: const ValueKey('super-buddy-bar'),

@@ -366,7 +366,7 @@ void main() {
             find.descendant(
               of: notice,
               matching: find.text(
-                'Runs on Studio, which belongs to owner. owner can see its terminal.',
+                'Runs on Studio, which belongs to owner. They can see its terminal.',
               ),
             ),
             findsOneWidget,
@@ -468,7 +468,9 @@ void main() {
 
         expect(find.text('Wren · Your Buddy'), findsOneWidget);
         expect(
-          find.text('Claude on Kens-MacBook · only you can read this chat'),
+          find.text(
+            'Claude on Kens-MacBook · #Pilot · only you can read this chat',
+          ),
           findsOneWidget,
         );
         expect(find.text('Message Wren'), findsOneWidget);
@@ -485,7 +487,7 @@ void main() {
           await tester.pumpAndSettle();
 
           expect(
-            find.text('Claude on Studio · owner can see its terminal'),
+            find.text('Claude on Studio · #Pilot · owner can see its terminal'),
             findsOneWidget,
           );
           await close(tester, c);
