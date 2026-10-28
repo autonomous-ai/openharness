@@ -176,7 +176,8 @@ export class UpstreamLink {
       // Anything but a rejected refresh token (the backend down, another process refreshing) re-enters
       // the backoff: a flat second had every signed-in machine asking /api/auth/refresh once a second
       // for as long as the backend was away.
-      const delay = err instanceof AuthSessionError && err.code === 'INVALID_REFRESH' ? MAX_DELAY_MS : reconnectDelay(this.attempts++)
+      // Nor does one SSO has stopped confirming ("sign in again"): it waits the longest, until the person signs in.
+      const delay = err instanceof AuthSessionError && (err.code === 'INVALID_REFRESH' || err.code === 'SIGN_IN_AGAIN') ? MAX_DELAY_MS : reconnectDelay(this.attempts++)
       if (!this.closed) this.redialIn(delay)
       return
     }

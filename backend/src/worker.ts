@@ -16,6 +16,7 @@ import {
 import { ensurePlans } from './lib/db/seed.js'
 import { prisma } from './lib/prisma.js'
 import { ensureProductUsageExpiry } from './lib/productUsage.js'
+import { ensureHarnessSessionExpiry } from './lib/ssoSession.js'
 import { ensureTerminalExpiry } from './superTabs/terminal.js'
 import { ensureMentionExpiry } from './superTabs/mentions.js'
 import { ensurePartExpiry, startSwarmSweeps } from './superTabs/sweeps.js'
@@ -40,6 +41,7 @@ async function start(): Promise<void> {
   await migrateUserPresencePerMachine()
   ensureSchema()
   await ensureProductUsageExpiry()
+  await ensureHarnessSessionExpiry(prisma)
   await ensureTerminalExpiry(prisma)
   await ensureMentionExpiry(prisma)
   await ensurePartExpiry(prisma)
