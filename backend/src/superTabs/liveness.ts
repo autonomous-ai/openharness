@@ -1,6 +1,7 @@
 import { activeWork, stableId, type Agent, type Assignment, type Author, type Conversation, type MessageDraft,
   type SuperTabState } from './model.js'
 import { agentDisplayName } from './agentNames.js'
+import { failureNotice, STILL_PREPARING_SUFFIX, STOPPED_REPORTING_SUFFIX, TIMED_OUT_SUFFIX } from './startFailure.js'
 import { leadOf, toLead } from './terminal.js'
 import { MACHINE_FRESH_MS } from './machines.js'
 
@@ -176,14 +177,13 @@ function failStalledStarts(state: SuperTabState, now: number): MessageDraft[] {
     const silent = !!report && now - report.receivedAt > MACHINE_FRESH_MS
     if (named && !silent && now - start.dispatchedAt <= START_PREPARE_MS) return []
     const machine = machineName(state, start.request.machineId)
-    start.error = !named ? `${machine} did not start it within 3 minutes`
-      : silent ? `${machine} stopped reporting while preparing it` : `${machine} was still preparing it after 15 minutes`
+    start.error = `${machine}${!named ? TIMED_OUT_SUFFIX : silent ? STOPPED_REPORTING_SUFFIX : STILL_PREPARING_SUFFIX}`
     // Never a lookup that throws: these checks run inside every machine's report.
     const group = state.conversations.find(c => c.id === start.request.conversationId)
     const lead = group?.leadId ? state.agents.find(a => a.id === group.leadId) : undefined
     if (!group || !lead) return []
     return [reachable(state, { id: stableId('start-timeout', start.id), conversationId: group.id, replyTo: null,
       recipients: group.agentIds.includes(lead.id) ? [lead.id] : [], author: writtenBy(state, lead),
-      text: `Could not start ${start.request.name}: ${start.error}.`, source: { kind: 'start-timeout', startId: start.id } })]
+      text: failureNotice(start.request.name, start.error), source: { kind: 'start-timeout', startId: start.id } })]
   })
 }

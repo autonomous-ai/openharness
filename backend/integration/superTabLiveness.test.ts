@@ -497,7 +497,7 @@ describe('a start that never runs', () => {
     return { startId, onMachine }
   }
 
-  it('fails 3 minutes after dispatch, naming its machine, and tells the Lead in its group', async () => {
+  it('fails 3 minutes after dispatch, naming its machine to its Lead only, and tells the Lead in its group', async () => {
     const f = await swarm()
     await f.beat(f.clock.now)
     const { startId, onMachine } = await launch(f)
@@ -507,7 +507,9 @@ describe('a start that never runs', () => {
     expect((await f.timed.read(owner, f.tab)).state.starts!.find(s => s.id === startId)!.error).toBeNull()
     f.clock.now = dispatched + 3 * MINUTE + 1
     const told = (await f.leadInbox()).find(m => (m.source as { kind?: string }).kind === 'start-timeout')!
-    expect(told).toMatchObject({ conversationId: 'lead', text: 'Could not start Builder: Worker Mac did not start it within 3 minutes.' })
+    // Every group member reads the notice, so it names no machine (review of #1847); the start's Lead reads which one.
+    expect(told).toMatchObject({ conversationId: 'lead', text: 'Could not start Builder: its machine did not start it within 3 minutes.' })
+    expect((await f.timed.start(host, f.tab, startId, f.lead)).error).toBe('Worker Mac did not start it within 3 minutes')
     await expect(onMachine({ type: 'agent.started', startId, harnessId: randomUUID(), configuration: config }))
       .rejects.toMatchObject({ code: 'START_FAILED' })
   })
@@ -537,7 +539,9 @@ describe('a start that never runs', () => {
     await f.observe('test-host', [f.harness.worker], { preparingStartIds: [startId] })
     await f.observe('lead-host', [f.harness.lead])
     const told = (await f.leadInbox()).find(m => (m.source as { kind?: string }).kind === 'start-timeout')!
-    expect(told).toMatchObject({ conversationId: 'lead', text: 'Could not start Builder: Worker Mac was still preparing it after 15 minutes.' })
+    expect(told).toMatchObject({ conversationId: 'lead', text: 'Could not start Builder: its machine was still preparing it after 15 minutes.' })
+    expect((await f.timed.start(host, f.tab, startId, f.lead)).error).toBe('Worker Mac was still preparing it after 15 minutes')
+    expect((await ownerState()).starts!.find(s => s.id === startId)!.error).toBe('Its machine was still preparing it after 15 minutes.')
     expect((await ownerState()).starts!.find(s => s.id === startId)).not.toHaveProperty('preparing')
   })
 

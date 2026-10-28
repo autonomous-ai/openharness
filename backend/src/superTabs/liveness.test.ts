@@ -83,7 +83,7 @@ describe('a start its machine has launched', () => {
     const at = LAUNCHED + 3 * MINUTE
     expect(sweep(launched([{ receivedAt: at }]), at)).toEqual({ error: null, told: [] })
     expect(sweep(launched([{ receivedAt: at }]), at + 1)).toEqual({ error: 'Worker Mac did not start it within 3 minutes',
-      told: ['Could not start Builder: Worker Mac did not start it within 3 minutes.'] })
+      told: ['Could not start Builder: its machine did not start it within 3 minutes.'] })
     expect(sweep(launched(), at + 1).error).toBe('Worker Mac did not start it within 3 minutes')
   })
 
@@ -92,14 +92,14 @@ describe('a start its machine has launched', () => {
     expect(sweep(launched([{ receivedAt: LAUNCHED + 5 * MINUTE, preparingStartIds: ['s1'] }]), LAUNCHED + 5 * MINUTE).error).toBeNull()
     expect(sweep(launched([{ receivedAt: at - 10_000, preparingStartIds: ['s1'] }]), at)).toEqual({ error: null, told: [] })
     expect(sweep(launched([{ receivedAt: at, preparingStartIds: ['s1'] }]), at + 1)).toEqual({ error: 'Worker Mac was still preparing it after 15 minutes',
-      told: ['Could not start Builder: Worker Mac was still preparing it after 15 minutes.'] })
+      told: ['Could not start Builder: its machine was still preparing it after 15 minutes.'] })
   })
 
   it('fails once its machine\'s reports saying it is preparing have stopped for three beats', () => {
     const now = LAUNCHED + 6 * MINUTE
     expect(sweep(launched([{ receivedAt: now - MACHINE_FRESH_MS, preparingStartIds: ['s1'] }]), now).error).toBeNull()
     expect(sweep(launched([{ receivedAt: now - MACHINE_FRESH_MS - 1, preparingStartIds: ['s1'] }]), now)).toEqual({
-      error: 'Worker Mac stopped reporting while preparing it', told: ['Could not start Builder: Worker Mac stopped reporting while preparing it.'] })
+      error: 'Worker Mac stopped reporting while preparing it', told: ['Could not start Builder: its machine stopped reporting while preparing it.'] })
     // The latest report no longer lists it: preparing is over without a start, so the 3 minutes apply.
     expect(sweep(launched([{ receivedAt: now, preparingStartIds: [] }]), now).error).toBe('Worker Mac did not start it within 3 minutes')
   })
