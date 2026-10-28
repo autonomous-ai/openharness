@@ -27,6 +27,13 @@ meaning: a warning triangle remains a triangle, a chevron remains a chevron.
 - AppKit controls use `HarnessControlSymbols`: regular monochrome SF Symbols
   at the shared 16-point size. Native menu items and the title bar share this
   factory. Native tab close is the optically matched 8-point regular `xmark`.
+- One exception draws SF Symbols inside Flutter: a Swarm's machine rows lead
+  with each Mac's own shape (`laptopcomputer`, `macstudio`, `macmini`,
+  `desktopcomputer`, else `display`; `super_tabs/machine_icon.dart`). AppKit
+  draws the symbol as a one-ink PNG over `harness/system_symbols`, and Flutter
+  tints it with the row's ink. Off a Mac, for a symbol this macOS lacks, and
+  when the call fails, the row draws `AppIcons.laptop` or `AppIcons.monitor`,
+  never nothing. No Apple artwork ships with the app.
 
 Add a missing semantic symbol to the catalogue, then reuse it. Do not create
 a local font alias or duplicate a drawing. A new optical variant belongs in

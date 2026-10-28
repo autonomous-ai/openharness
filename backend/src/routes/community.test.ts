@@ -545,6 +545,21 @@ describe('persistent social actions', () => {
     expect((await call('GET', 'harnesses?mine=true', 'alice')).json().data.harnesses).toHaveLength(1)
     expect((await report('bob', 'starter-orbit')).statusCode).toBe(404)
   })
+  // #1026: a harness hidden by reports (a sexual or violent cover) was 404 everywhere but its cover, served for a day.
+  it('cover of a report-hidden harness is 404', async () => {
+    const bytes = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10, 0, 0])
+    const id = await publish('alice', { ...sample, cover: `data:image/png;base64,${bytes.toString('base64')}` } as typeof sample)
+    expect((await call('GET', `harnesses/${id}/cover`)).statusCode).toBe(200)
+    for (const token of ['bob', 'carol', 'dave']) await call('POST', 'reports', token, { targetType: 'harness', targetId: id, reason: 'other' })
+    expect((await call('GET', `harnesses/${id}`)).statusCode).toBe(404)
+    // An <img> sends no environment header: the hidden row is found in the publication's own environment.
+    expect((await call('GET', `harnesses/${id}/cover`, undefined, undefined, 'stag')).statusCode).toBe(404)
+    expect((await call('GET', `harnesses/${id}/cover`, 'bob')).statusCode).toBe(404)
+    // Its author still has it, as they still have its page; a reviewer's restore brings it back for everyone.
+    expect((await call('GET', `harnesses/${id}/cover`, 'alice')).statusCode).toBe(200)
+    await call('POST', 'reports/review', 'admin', { targetType: 'harness', targetId: id, decision: 'restore' })
+    expect((await call('GET', `harnesses/${id}/cover`)).statusCode).toBe(200)
+  })
   it('lets a reviewer see reports and restore or remove what they hid', async () => {
     const id = await publish('alice', { ...sample, title: 'Reported' })
     const comment = (await call('POST', `harnesses/${id}/comments`, 'bob', { body: 'Buy now', clientId: crypto.randomUUID() })).json().data.comment

@@ -45,6 +45,9 @@ class ModelsMenuController extends ChangeNotifier {
   bool _failed = false;
   bool _disposed = false;
 
+  /// Advanced by [reset], so a read the previous account started is told apart from the next's.
+  int _account = 0;
+
   List<Map<String, Object?>> get rows => [
     for (final account in _usage.accounts)
       _row(account, _now(), failed: _failed, refreshing: _pending != null),
@@ -98,16 +101,28 @@ class ModelsMenuController extends ChangeNotifier {
   }
 
   Future<void> _refresh() async {
+    final account = _account;
     try {
       await _usage.refresh();
     } catch (_) {
       // A credential/source failure must never escape into a menu callback.
       // Never include a raw exception: it could contain authentication data.
-      _failed = true;
+      if (account == _account) _failed = true;
     } finally {
-      _pending = null;
+      // A signed-out account's read neither ends nor fails the next one's.
+      if (account == _account) _pending = null;
       _changed();
     }
+  }
+
+  /// Forgets the signed-out account: its other computers' rows go, and the next account reads at
+  /// once instead of waiting out the old one's minute, or joining its read still on the way.
+  void reset() {
+    if (_disposed) return;
+    _account++;
+    _pending = null;
+    _lastAttempt = null;
+    _usage.forgetRemote();
   }
 
   void _changed() {
