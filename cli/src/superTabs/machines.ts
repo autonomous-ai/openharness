@@ -116,6 +116,8 @@ export interface MachineDeps {
   sources?: SwarmSources
   /** git for the readiness of the Swarm folder's checkouts ([quietGit]). */
   git?: GitRun
+  /** How long a cleanup waits for the agent starts already running in its Swarm ([CLEANUP_WAIT_MS]). */
+  cleanupWaitMs?: number
   /** When each of these harnesses' screens last changed, epoch ms (superTabs/terminal.ts `progressOf`): the backend
    *  renews a task's lease from it, so work never sits with a dead owner (docs: swarm-never-stops). */
   progress?: (harnessIds: readonly string[]) => Record<string, number>
@@ -124,6 +126,9 @@ export interface MachineDeps {
   relayed?: () => boolean
 }
 const MACHINE_DEPS = { backend, open: openDaemon, capabilities: readCapabilities, start: startAgent, now: Date.now }
+/** A start's folder preparation can clone a whole repository; past this, its cleanup gives up and tries again later. */
+const CLEANUP_WAIT_MS = 10 * 60_000
+const CLEANING_WAIT = 'Waiting for this machine to finish cleaning up this Swarm.'
 
 /** Separate from chat delivery: slow resource readers and agent launches never
  * hold up a delivery lease. Only a tab's explicit owner grant wakes this queue. */
@@ -165,6 +170,13 @@ export class ContributedMachines {
   /** Removals cleaned and acknowledged by this host, and the one in progress per removal. */
   private readonly cleaned = new Set<string>()
   private readonly cleaning = new Map<string, Promise<void>>()
+  /** One lock per Swarm between its cleanups and its starts (second review of #1991: a start wrote into a clone the
+   *  cleanup then deleted; review of #2004: a start that passed the check launched after a cleanup began). A cleanup
+   *  marks its Swarm for its whole run, then waits for the starts already in flight there; a start checks the mark and
+   *  joins the starts in flight in one step, with no wait between, and stays until its launch is done. A start that finds
+   *  the mark waits for a later pass, so a pass is never held up and this machine keeps reporting. */
+  private readonly cleaningTabs = new Map<string, number>()
+  private readonly startsInFlight = new Map<string, Set<Promise<void>>>()
   /** Per removal whose cleanup or acknowledgement failed, how often and when it may run again. */
   private readonly cleanupRetries = new Map<string, { failures: number; at: number }>()
   /** Until when the reading leaves out its privacy field, which the backend refused. */
@@ -463,60 +475,64 @@ export class ContributedMachines {
         for (const start of round) {
           if (this.stopped) return
           if (!identifier(start.id) || ((row.paused || pool.paused) && !start.dispatched)) continue
-          const path = `/api/super-tabs/hosts/${this.machineId}/starts/${row.tabId}/${start.id}`
-          // The start endpoint reads this start and takes its commands, nothing else. Any other read went out as an empty
-          // command, which the backend refused with a 400 at every start (prod logs 2026-10-28).
-          const scoped: ScopedRequest = async input => input.action !== 'startStatus' && input.action !== 'command'
-            ? { error: 'HOST_UNSUPPORTED', detail: 'A contributed machine reads only its own starts.' }
-            : { ok: true, value: await this.deps.backend(this.core, input.action === 'startStatus' ? 'GET' : 'POST', path,
-              input.action === 'startStatus' ? undefined : { operationId: input.operationId, command: input.command }) }
+          if (this.cleaningTabs.has(String(row.tabId))) { this.noteWaiting(start.id, CLEANING_WAIT); continue }
+          const launched = this.startInFlight(String(row.tabId))
           try {
-            // The Harness Team account is not private (its owner's home folder opened again, say): a new start is refused
-            // here as well as by routing, and never moved to the owner's account instead.
-            if (privacy?.mode === 'account' && !privacy.passed && !start.dispatched) {
-              await scoped({ action: 'command', operationId: `privacy-failed-${start.id}`,
-                command: { type: 'agent.startFailed', startId: start.id,
-                  error: `This computer's Harness Team account is not private (${privacy.item}): ${privacy.detail} Its owner can run \`harness team setup\` to repair it.` } })
-              continue
-            }
-            // Another person's project is cloned and fetched with the Harness GitHub App's token, never this machine's own
-            // git login; a token that cannot be had fails the start (superTabs/projectFolder.ts).
-            let github: { requester: string } | null = null
-            if (!start.dispatched) {
-              try {
-                github = (await (this.deps.prepare ?? ((core, pooled, queued) => prepareSwarmStart(core, pooled, queued,
-                  { backend: this.deps.backend, team: (this.deps.team ?? (() => readAuthSession()?.kind === 'team'))() })))(this.core, row, start)) ?? null
-              } catch (error) {
-                await scoped({ action: 'command', operationId: `prepare-failed-${start.id}`,
+            const path = `/api/super-tabs/hosts/${this.machineId}/starts/${row.tabId}/${start.id}`
+            // The start endpoint reads this start and takes its commands, nothing else. Any other read went out as an empty
+            // command, which the backend refused with a 400 at every start (prod logs 2026-10-28).
+            const scoped: ScopedRequest = async input => input.action !== 'startStatus' && input.action !== 'command'
+              ? { error: 'HOST_UNSUPPORTED', detail: 'A contributed machine reads only its own starts.' }
+              : { ok: true, value: await this.deps.backend(this.core, input.action === 'startStatus' ? 'GET' : 'POST', path,
+                input.action === 'startStatus' ? undefined : { operationId: input.operationId, command: input.command }) }
+            try {
+              // The Harness Team account is not private (its owner's home folder opened again, say): a new start is refused
+              // here as well as by routing, and never moved to the owner's account instead.
+              if (privacy?.mode === 'account' && !privacy.passed && !start.dispatched) {
+                await scoped({ action: 'command', operationId: `privacy-failed-${start.id}`,
                   command: { type: 'agent.startFailed', startId: start.id,
-                    error: error instanceof Error ? error.message : 'Could not prepare this project on the machine.' } })
+                    error: `This computer's Harness Team account is not private (${privacy.item}): ${privacy.detail} Its owner can run \`harness team setup\` to repair it.` } })
                 continue
               }
-            }
-            const result = await this.deps.start({ tabId: row.tabId, startId: start.id, hostDispatch: true, ...(github ? { github } : {}) }, scoped, where, this.deps.open)
-            const refused = result.ok !== true && !start.dispatched && !NOT_REFUSED.has(String(result.error))
-            // Launched, and its creation still under way on the daemon: anything else is not preparing.
-            if (result.error === 'START_PENDING' && result.state === 'pending') this.preparing.add(String(start.id))
-            else this.preparing.delete(String(start.id))
-            if (!refused) this.refusedSince.delete(start.id)
-            if (result.ok === true && identifier(result.harnessId)) {
-              this.waiting.delete(start.id)
-              // Before the start settles: a settled start is no longer listed, so a missed record would never be made.
-              this.recordWorktree(String(row.tabId), start.id, result.harnessId, object(start.request))
-              await scoped({ action: 'command', operationId: `settled-${start.id}`,
-                command: { type: 'agent.startSettled', startId: start.id, warning: result.modelWarning ?? null } })
-            } else if (result.ok !== true) {
-              const reason = String(result.detail ?? (Array.isArray(result.reasons) ? result.reasons.join(' ') : result.error))
-              this.noteWaiting(start.id, reason)
-              const since = this.refusedSince.get(start.id) ?? began
-              if (refused) this.refusedSince.set(start.id, since)
-              if (refused && began - since >= START_REFUSED_MS) {
-                await scoped({ action: 'command', operationId: `refused-${start.id}`, command: { type: 'agent.startFailed', startId: start.id, error: reason } })
+              // Another person's project is cloned and fetched with the Harness GitHub App's token, never this machine's own
+              // git login; a token that cannot be had fails the start (superTabs/projectFolder.ts).
+              let github: { requester: string } | null = null
+              if (!start.dispatched) {
+                try {
+                  github = (await (this.deps.prepare ?? ((core, pooled, queued) => prepareSwarmStart(core, pooled, queued,
+                    { backend: this.deps.backend, team: (this.deps.team ?? (() => readAuthSession()?.kind === 'team'))() })))(this.core, row, start)) ?? null
+                } catch (error) {
+                  await scoped({ action: 'command', operationId: `prepare-failed-${start.id}`,
+                    command: { type: 'agent.startFailed', startId: start.id,
+                      error: error instanceof Error ? error.message : 'Could not prepare this project on the machine.' } })
+                  continue
+                }
+              }
+              const result = await this.deps.start({ tabId: row.tabId, startId: start.id, hostDispatch: true, ...(github ? { github } : {}) }, scoped, where, this.deps.open)
+              const refused = result.ok !== true && !start.dispatched && !NOT_REFUSED.has(String(result.error))
+              // Launched, and its creation still under way on the daemon: anything else is not preparing.
+              if (result.error === 'START_PENDING' && result.state === 'pending') this.preparing.add(String(start.id))
+              else this.preparing.delete(String(start.id))
+              if (!refused) this.refusedSince.delete(start.id)
+              if (result.ok === true && identifier(result.harnessId)) {
+                this.waiting.delete(start.id)
+                // Before the start settles: a settled start is no longer listed, so a missed record would never be made.
+                this.recordWorktree(String(row.tabId), start.id, result.harnessId, object(start.request))
+                await scoped({ action: 'command', operationId: `settled-${start.id}`,
+                  command: { type: 'agent.startSettled', startId: start.id, warning: result.modelWarning ?? null } })
+              } else if (result.ok !== true) {
+                const reason = String(result.detail ?? (Array.isArray(result.reasons) ? result.reasons.join(' ') : result.error))
+                this.noteWaiting(start.id, reason)
+                const since = this.refusedSince.get(start.id) ?? began
+                if (refused) this.refusedSince.set(start.id, since)
+                if (refused && began - since >= START_REFUSED_MS) {
+                  await scoped({ action: 'command', operationId: `refused-${start.id}`, command: { type: 'agent.startFailed', startId: start.id, error: reason } })
+                }
               }
             }
-          }
-          // Keep its durable receipt; another start must not be starved by this failure.
-          catch (error) { this.refusedSince.delete(start.id); this.noteWaiting(start.id, error instanceof Error ? error.message : String(error)) }
+            // Keep its durable receipt; another start must not be starved by this failure.
+            catch (error) { this.refusedSince.delete(start.id); this.noteWaiting(start.id, error instanceof Error ? error.message : String(error)) }
+          } finally { launched() }
         }
         } catch { /* Revocation or one unavailable project cannot block another contribution. */ }
       }
@@ -589,7 +605,7 @@ export class ContributedMachines {
     // Both name folders and an operation: nothing else may reach a path.
     if (!identifier(tabId) || !identifier(removalId)) return Promise.reject(new Error('Invalid machine removal.'))
     if (this.cleaned.has(removalId) || this.deps.now() < (this.cleanupRetries.get(removalId)?.at ?? 0)) return Promise.resolve()
-    const running = this.cleaning.get(removalId) ?? this.runCleanup(tabId, removalId)
+    const running = this.cleaning.get(removalId) ?? this.cleanTab(tabId, removalId)
       .then(() => { this.cleaned.add(removalId); this.cleanupRetries.delete(removalId) }, error => {
         // The row asks again every poll; a backend that keeps failing is asked a minute later, doubling up to half an hour.
         const retry = this.cleanupRetries.get(removalId) ?? { failures: 0, at: 0 }
@@ -600,6 +616,36 @@ export class ContributedMachines {
     this.cleaning.set(removalId, running)
     return running
   }
+  /** A start in flight in this Swarm until the returned call. */
+  private startInFlight(tabId: string): () => void {
+    let done!: () => void
+    const flight = new Promise<void>(resolve => { done = resolve })
+    const flights = this.startsInFlight.get(tabId) ?? new Set()
+    this.startsInFlight.set(tabId, flights.add(flight))
+    return () => {
+      done()
+      flights.delete(flight)
+      if (!flights.size && this.startsInFlight.get(tabId) === flights) this.startsInFlight.delete(tabId)
+    }
+  }
+  /** Runs one cleanup with its Swarm marked as cleaning for its whole run, once the starts already in flight there are done. */
+  private async cleanTab(tabId: string, removalId: string) {
+    this.cleaningTabs.set(tabId, (this.cleaningTabs.get(tabId) ?? 0) + 1)
+    try {
+      const flights = [...this.startsInFlight.get(tabId) ?? []]
+      if (flights.length) {
+        const waitMs = this.deps.cleanupWaitMs ?? CLEANUP_WAIT_MS
+        let timer: NodeJS.Timeout | undefined
+        const done = await Promise.race([Promise.all(flights).then(() => true),
+          new Promise<false>(resolve => { timer = setTimeout(resolve, waitMs, false) })]).finally(() => clearTimeout(timer))
+        if (!done) throw new Error(`Did not clean up Swarm ${tabId} yet: an agent start there is still running after ${Math.round(waitMs / 1000)} s. It tries again later.`)
+      }
+      await this.runCleanup(tabId, removalId)
+    } finally {
+      const left = this.cleaningTabs.get(tabId)! - 1
+      if (left) this.cleaningTabs.set(tabId, left); else this.cleaningTabs.delete(tabId)
+    }
+  }
   private async runCleanup(tabId: string, removalId: string) {
     const file = swarmWorktreesFile(this.core.dataDir, this.machineId)
     const recorded = readWorktrees(file).filter(w => w.tabId === tabId)
@@ -609,8 +655,9 @@ export class ContributedMachines {
     // A cleanup that waited past the backend's fallback gives way to its owner adding this machine again (backend machines.ts
     // cleanupOverdue, 2026-10-28). The Swarm listing this machine other than under this very removal means a newer add owns
     // the folders now: delete nothing, and confirm nothing, since the backend dropped this cleanup with that add. Read at
-    // the start, again before anything is closed or deleted, and again before the worktree records change (review of
-    // #1986), so an add that lands while this runs keeps what it made.
+    // the start, again before anything is closed, again before each deletion (closing a session waits, and an add can land
+    // meanwhile: second review of #1991), and again before the worktree records change, so an add that lands while this
+    // runs keeps what it made.
     const read = async () => {
       try { return (await this.sources.reads.read(tabId)).state }
       catch (error) { if (!(error instanceof SuperTabHostError) || ![403, 404].includes(error.status)) throw error; return {} }
@@ -653,6 +700,7 @@ export class ContributedMachines {
     const open = this.core.agents.live().map(a => a.cwd).filter((cwd): cwd is string => !!cwd)
     for (const target of targets) {
       if (open.some(cwd => within(target, cwd))) { this.log(`Kept ${target}: a session still runs in it.`); continue }
+      if (addedAgain(await read())) return
       const source = candidates.find(c => c.path === target)?.source
       // git forgets the worktree in its repository too; a folder it refuses (a submodule, a lock) is deleted as a folder.
       if (source) await git(source, ['worktree', 'remove', '--force', target]).catch(() => null)

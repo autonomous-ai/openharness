@@ -339,24 +339,27 @@ void main() {
     expect(controller.outgoing('lead'), isEmpty);
   });
 
-  test(
-    'reconnecting after more than a page of messages fills the gap in order',
-    () async {
-      final server = ConversationServer()..append('First');
-      final controller = await open(server);
-      for (var i = 0; i < 250; i++) {
-        server.append('Message $i');
-      }
-      for (var i = 0; i < 3; i++) {
-        await controller.refresh();
-      }
-      expect(controller.messages('lead'), hasLength(251));
-      expect(
-        controller.messages('lead').map((m) => m.sequence),
-        List.generate(251, (i) => i + 1),
-      );
-    },
-  );
+  test('reconnecting after more than a page of messages shows the latest, '
+      'then fills the gap in order', () async {
+    final server = ConversationServer()..append('First');
+    final controller = await open(server);
+    for (var i = 0; i < 250; i++) {
+      server.append('Message $i');
+    }
+    await controller.refresh();
+    expect(
+      controller.messages('lead').map((m) => m.sequence),
+      List.generate(100, (i) => i + 152),
+    );
+    while (controller.hasOlder('lead')) {
+      await controller.loadMessages('lead', older: true);
+    }
+    expect(controller.messages('lead'), hasLength(251));
+    expect(
+      controller.messages('lead').map((m) => m.sequence),
+      List.generate(251, (i) => i + 1),
+    );
+  });
 
   test('drafts and pending sends cannot cross accounts', () async {
     final server = ConversationServer()..loseReply = true;
