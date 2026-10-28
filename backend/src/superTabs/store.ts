@@ -40,6 +40,8 @@ import { authenticatedEmail, authorizeSwarmJoin, configureSharing, joinSwarmSche
   saveSharingSchema, sharingDetails, type JoinSwarm, type SaveSharing } from './sharing.js'
 
 type Transaction = Prisma.TransactionClient
+/** What a terminal share names for the Swarm checks (routes/harnessShares.ts). */
+type OpenableShare = { superTabId: string | null; machineId: string; agentId: string; ownerId: string }
 const json = (value: unknown): Prisma.InputJsonValue => JSON.parse(JSON.stringify(value)) as Prisma.InputJsonValue
 type SendCommand = Extract<Command, { type: 'message.send' }>
 // Prisma on MongoDB: `usedBy: null` alone misses rows that never had the field.
@@ -1502,20 +1504,38 @@ export class SuperTabStore {
   }
 
   async mayObserve(user: AuthUser, tabId: string, machineId: string, harnessId: string, machineOwnerId: string): Promise<boolean> {
+    const session = { machineId, harnessId, machineOwnerId }
+    return (await this.observable(user, tabId, [session])).has(session)
+  }
+
+  /** Which of one Swarm's sessions `user` may watch, with that Swarm loaded once however many are asked about. */
+  private async observable<T extends { machineId: string; harnessId: string; machineOwnerId: string }>(user: AuthUser, tabId: string,
+    sessions: T[]): Promise<Set<T>> {
     // Watching is a person's: a team session has no person to watch as.
-    if (isTeamSession(user)) return false
+    if (isTeamSession(user)) return new Set()
     try {
       return await transaction(this.db, async tx => {
+        // Each attempt decides afresh: an aborted attempt's allowance must not outlive a revocation before the retry.
+        const watchable = new Set<T>()
         const { state } = await this.load(tx, user, tabId)
         person(state, user.sub)
-        const target = state.agents.find(a => a.machineId === machineId && a.harnessId === harnessId && a.machineOwnerId === machineOwnerId)
-        if (!target) return false
-        agent(state, target.id)
-        if (!canWatchAgent(state, { kind: 'person', userId: user.sub, email: user.email }, target, await this.confidential(tx, target.id))) return false
-        await this.agentGrant(tx, state, target)
-        return true
+        const targets = new Map(sessions.flatMap(s => {
+          const target = state.agents.find(a => a.machineId === s.machineId && a.harnessId === s.harnessId && a.machineOwnerId === s.machineOwnerId)
+          return target ? [[s, target] as const] : []
+        }))
+        const confidential = await confidentialSessions(tx, [...targets.values()].map(t => t.id))
+        for (const [session, target] of targets) {
+          // One session's refusal leaves the others to their own checks.
+          try {
+            agent(state, target.id)
+            if (!canWatchAgent(state, { kind: 'person', userId: user.sub, email: user.email }, target, confidential.has(target.id))) continue
+            await this.agentGrant(tx, state, target)
+            watchable.add(session)
+          } catch (error) { if (!(error instanceof SuperTabError)) throw error }
+        }
+        return watchable
       })
-    } catch (error) { if (error instanceof SuperTabError) return false; throw error }
+    } catch (error) { if (error instanceof SuperTabError) return new Set(); throw error }
   }
 
   /** Whether an agent's session is confidential in any Swarm (confidential.ts). */
@@ -1525,9 +1545,24 @@ export class SuperTabStore {
 
   /** Whether a terminal share may open, wherever it came from (routes/harnessShares.ts): a confidential session's only for
    *  its machine's person, even an ordinary share made outside any Swarm; a Swarm's share only while that Swarm allows it. */
-  async mayOpenShare(user: AuthUser, share: { superTabId: string | null; machineId: string; agentId: string; ownerId: string }): Promise<boolean> {
-    if (user.sub !== share.ownerId && await transaction(this.db, tx => this.confidential(tx, stableId(share.machineId, share.agentId)))) return false
-    return !share.superTabId || this.mayObserve(user, share.superTabId, share.machineId, share.agentId, share.ownerId)
+  async mayOpenShare(user: AuthUser, share: OpenableShare): Promise<boolean> {
+    return (await this.visibleShares(user, [share])).length === 1
+  }
+
+  /** The shares of `shares` that may open, as mayOpenShare decides each: one confidentiality read for all of them and one
+   *  load per Swarm, so a machine list of many shares from one Swarm does not load that Swarm once per share. */
+  async visibleShares<T extends OpenableShare>(user: AuthUser, shares: T[]): Promise<T[]> {
+    const others = shares.filter(s => s.ownerId !== user.sub).map(s => stableId(s.machineId, s.agentId))
+    const confidential = others.length ? await transaction(this.db, tx => confidentialSessions(tx, others)) : new Set<string>()
+    const open = shares.filter(s => s.ownerId === user.sub || !confidential.has(stableId(s.machineId, s.agentId)))
+    const bySwarm = new Map<string, Array<T & { superTabId: string }>>()
+    for (const share of open) if (share.superTabId) bySwarm.set(share.superTabId, [...bySwarm.get(share.superTabId) ?? [], share as T & { superTabId: string }])
+    const watchable = new Set<OpenableShare>()
+    for (const [tabId, inSwarm] of bySwarm) {
+      const sessions = new Map(inSwarm.map(share => [{ machineId: share.machineId, harnessId: share.agentId, machineOwnerId: share.ownerId }, share]))
+      for (const session of await this.observable(user, tabId, [...sessions.keys()])) watchable.add(sessions.get(session)!)
+    }
+    return open.filter(s => !s.superTabId || watchable.has(s))
   }
 
   private deliveryAllowed(state: SuperTabState, delivery: SuperTabDelivery): boolean {
