@@ -39,7 +39,13 @@ export 'machine_status.dart';
 
 /// The backend's upper bound. A machine's own total RAM may set a lower one.
 const _agentSlotsMin = 1;
-const _agentSlotsMax = 16;
+const _agentSlotsMax = 1024;
+
+/// Every machine may offer this many, whatever its RAM, and the suggestion
+/// never starts above [_suggestedSlotsMax]: the CLI's own figures
+/// (`prepareContribution`, `cli/src/superTabs/contribution.ts`).
+const _agentSlotsFloor = 4;
+const _suggestedSlotsMax = 16;
 
 /// What one more agent needs to start, the CLI's own figure
 /// (`START_REQUIREMENTS.memoryBytes`, `cli/src/superTabs/capacity.ts`).
@@ -49,17 +55,25 @@ int _clampAgentSlots(num value) =>
     value.toInt().clamp(_agentSlotsMin, _agentSlotsMax);
 
 /// The machine's total-RAM limit and its half-sized starting suggestion.
-/// The suggestion is capped separately, so 64 GiB suggests 16 of 16 slots.
+/// Every 2 GiB may run an agent and every machine may offer four, with no cap
+/// of 16 (Ken, 2026-10-28: it held a 192 GiB Mac Studio to a sixth of its
+/// room). The suggestion keeps its 16, so 192 GiB suggests 16 of 96 slots.
 int? _maxAgentSlots(MachineResources? resources) {
   final total = resources?.memoryTotalBytes;
   if (total == null) return null;
-  return _clampAgentSlots((total / _agentMemoryBytes).floor());
+  final byMemory = (total / _agentMemoryBytes).floor();
+  return _clampAgentSlots(
+    byMemory < _agentSlotsFloor ? _agentSlotsFloor : byMemory,
+  );
 }
 
 int? _suggestedAgentSlots(MachineResources? resources) {
   final total = resources?.memoryTotalBytes;
   if (total == null) return null;
-  return _clampAgentSlots((total / (2 * _agentMemoryBytes)).floor());
+  return (total / (2 * _agentMemoryBytes)).floor().clamp(
+    _agentSlotsMin,
+    _suggestedSlotsMax,
+  );
 }
 
 class SuperTabMachines extends StatefulWidget {
