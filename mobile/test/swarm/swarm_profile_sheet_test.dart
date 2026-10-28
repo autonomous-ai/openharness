@@ -1,9 +1,11 @@
+import 'dart:io';
 import 'dart:typed_data';
 import 'dart:ui' as ui;
 
 import 'package:clock/clock.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:image_picker/image_picker.dart';
 import 'package:harness_mobile/notify/system_notices.dart';
 import 'package:harness_mobile/settings/experimental_features.dart';
 import 'package:harness_mobile/swarm/swarm_profile_sheet.dart';
@@ -340,5 +342,18 @@ void main() {
     await tap(tester, key('swarm-status-save'));
     final status = swarm.commands.single['status'] as Map<String, dynamic>;
     expect(DateTime.parse(status['until'] as String), until);
+  });
+
+  test('a picked photo is read, and its copy on the phone deleted', () async {
+    final dir = await Directory.systemTemp.createTemp('swarm-photo');
+    addTearDown(() => dir.delete(recursive: true));
+    final copy = File('${dir.path}/image_picker_1.jpg');
+    await copy.writeAsBytes([1, 2, 3]);
+
+    final bytes = await readPickedSwarmPhoto(XFile(copy.path));
+
+    expect(bytes, [1, 2, 3]);
+    expect(copy.existsSync(), isFalse);
+    expect(await readPickedSwarmPhoto(null), isNull);
   });
 }

@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:clock/clock.dart';
 import 'package:flutter/material.dart';
@@ -26,7 +27,23 @@ Future<Uint8List?> pickSwarmPhoto() async {
     maxWidth: 1024,
     maxHeight: 1024,
   );
-  return picked?.readAsBytes();
+  return readPickedSwarmPhoto(picked);
+}
+
+/// The bytes of a [picked] photo, or null when they backed out. The picker's
+/// copy of it in the app's temporary folder is deleted as soon as it is read,
+/// so a private photo does not stay on the phone.
+Future<Uint8List?> readPickedSwarmPhoto(XFile? picked) async {
+  if (picked == null) return null;
+  try {
+    return await picked.readAsBytes();
+  } finally {
+    try {
+      await File(picked.path).delete();
+    } on FileSystemException {
+      // Already gone: nothing is left to delete.
+    }
+  }
 }
 
 /// The person's own profile in the Swarm [swarmId], in a sheet over the
