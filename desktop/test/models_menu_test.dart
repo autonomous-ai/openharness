@@ -278,6 +278,54 @@ void main() {
       await next;
     });
 
+    test('the next account reads while the old one\'s read is held', () async {
+      final locals = <Completer<ProviderUsage>>[];
+      final remotes = <Completer<List<MachineUsage>>>[];
+      final source = _Source(UsageProvider.claude, () {
+        locals.add(Completer());
+        return locals.last.future;
+      });
+      final usage = UsageController(
+        sources: [source],
+        autoStart: false,
+        remote: () {
+          remotes.add(Completer());
+          return remotes.last.future;
+        },
+      );
+      var clock = instant;
+      final menu = ModelsMenuController(usage: usage, now: () => clock);
+      addTearDown(usage.dispose);
+      addTearDown(menu.dispose);
+      final old = menu.refresh();
+
+      menu.reset();
+      final next = menu.refresh();
+      expect(source.calls, 2);
+
+      // The old account's read lands late, and fails: it must neither end
+      // nor fail the next account's read.
+      locals.first.completeError(StateError('old account'));
+      remotes.first.complete(otherAccount());
+      await old;
+      clock = instant.add(const Duration(minutes: 2));
+      final reopened = menu.refresh();
+      expect(source.calls, 2);
+
+      locals.last.complete(reading());
+      remotes.last.complete([
+        MachineUsage(
+          machineName: 'Studio',
+          readings: [reading(account: '99aa', email: 'b@example.com')],
+        ),
+      ]);
+      await Future.wait([next, reopened]);
+
+      final remote = menu.rows.where(remoteRow).single;
+      expect(remote['account'], 'b@example.com');
+      expect(remote['status'], '15% remaining');
+    });
+
     for (final expires in [false, true]) {
       test('${expires ? 'expiry' : 'sign-out'} resets the window\'s Models '
           'menu', () async {
