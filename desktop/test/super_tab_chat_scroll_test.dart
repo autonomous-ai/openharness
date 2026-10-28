@@ -310,4 +310,27 @@ void main() {
     expect(tester.takeException(), isNull);
     await close(tester, c);
   });
+
+  testWidgets('sending while reading older messages shows the message at the '
+      'end', (tester) async {
+    final server = ConversationServer();
+    agentUpdates(server, 30);
+    final c = await show(tester, server);
+    position(tester).jumpTo(200);
+    await tester.pumpAndSettle();
+
+    await tester.enterText(
+      find.byKey(const ValueKey('super-message-composer')),
+      'Please check the arm64 build',
+    );
+    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+    await tester.pumpAndSettle();
+
+    expect(server.messages.last['text'], 'Please check the arm64 build');
+    expect(row('message-31').hitTestable(), findsOneWidget);
+    expect(position(tester).extentAfter, lessThan(1));
+    expect(find.text('1 new message'), findsNothing);
+    expect(tester.takeException(), isNull);
+    await close(tester, c);
+  });
 }

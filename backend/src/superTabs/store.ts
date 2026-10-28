@@ -20,7 +20,7 @@ import { canReadAgent, canReadGroup, canWatchAgent, groupProject, ledProject, pr
 import { bindSession, makeProjectPrivate } from './sessionScope.js'
 import { confidentialSessions, otherRegistrations, recordConfidential } from './confidential.js'
 import { answersRequest, dirtyGroups, noteProjectReports, projectUpdateRequest } from './projectUpdates.js'
-import { digestDue, digestRequest, digestSince } from './digest.js'
+import { digestDue, digestMessageId, digestRequest, digestSince } from './digest.js'
 import { judgedMachines, loseTasks, sweepLiveness, SWEEP_EVERY_MS } from './liveness.js'
 import { archivable, archiveLine, stopIdleWorkers, stoppedMachines } from './tidy.js'
 import { clock, insertParts, loadActive, reassemble, split, type HeadData, type SwarmParts } from './parts/index.js'
@@ -225,6 +225,9 @@ export interface SuperTabStoreHooks {
   /** Who may watch an agent's terminal in this Swarm may have narrowed, after the commit: its observer sockets check again
    *  at once (lib/observerWs.ts). It must not throw. */
   accessChanged?: (tabId: string) => void
+  /** These native sessions just turned confidential, after the commit: their shares and links, which follow no Swarm of
+   *  theirs, check again at once (routes/harnessLinks.ts tellSessionViewers). It must not throw. */
+  sessionsConfidential?: (sessions: Array<{ machineId: string; harnessId: string; machineOwnerId: string }>) => void
   /** The read cache this store reads through (cache.ts): the process's by default, none when null. */
   readCache?: SwarmCache | null
   /** When each caller's full delivery poll last succeeded, shared by every server (Redis in production, pollMemory.ts). Left
@@ -834,7 +837,10 @@ export class SuperTabStore {
         : hostMachineId && 'startId' in command
           ? await this.poolHostActor(tx, user, original, hostMachineId, command.startId)
           : await this.actor(tx, user, original, asAgentId, workspaceLeave && command.type === 'member.remove' && command.userId === user.sub && !asAgentId)
-      const receiptId = stableId(tabId, actorKey(actor), operationId)
+      // A Mac and its Harness Team account leave under one removal, and each host confirms its cleanup as the same person
+      // with the same operation (cli/src/superTabs/machines.ts runCleanup): each machine's confirmation is its own receipt.
+      const receiptId = command.type === 'machine.cleaned' ? stableId(tabId, actorKey(actor), operationId, command.machineId)
+        : stableId(tabId, actorKey(actor), operationId)
       const requestHash = hash(command)
       const prior = await tx.superTabOperation.findUnique({ where: { id: receiptId } })
       if (prior) {
@@ -995,8 +1001,12 @@ export class SuperTabStore {
         await bindSession(tx, effects.state, target, context.now)
       }
       // A session that just became confidential writes the record its registrations write (confidential.ts).
-      for (const target of effects.state.agents) {
-        if (target.confidential && !original.agents.find(a => a.id === target.id)?.confidential) await recordConfidential(tx, effects.state, target, context.now)
+      const turned = effects.state.agents.filter(target => target.confidential && !original.agents.find(a => a.id === target.id)?.confidential)
+      for (const target of turned) await recordConfidential(tx, effects.state, target, context.now)
+      const tell = this.hooks.sessionsConfidential
+      if (tell && turned.length) {
+        const sessions = turned.map(({ machineId, harnessId, machineOwnerId }) => ({ machineId, harnessId, machineOwnerId }))
+        afterCommit(tx, () => tell(sessions))
       }
       if (command.type === 'project.sharing' && command.visibility === 'private') {
         await makeProjectPrivate(tx, effects.state, command.projectId)
@@ -1782,16 +1792,17 @@ export class SuperTabStore {
       const now = this.now()
       // A machine that went silent while cleaning takes the fallback before this fresh reading can bring it back: its records
       // go, its cleanup waits for this host, as the next sweep would have done (machines.ts expireRemovals).
-      expireRemovals(state, now)
+      const ended = expireRemovals(state, now)
       const stamp = clock.next()
       // A reading writes only its machine's part, and an agent's part only when its presence changes (spec); a group's only
-      // when a task there is lost.
+      // when a task there is lost or a removal ends.
       const saved = async (lost: MessageDraft[] = []) => {
-        const sequences = numberMessages(state, lost, now)
-        const touches = judgedMachines(loaded.state, state, lost).filter(t => t.key !== machineId)
+        const rows = [...ended, ...lost]
+        const sequences = numberMessages(state, rows, now)
+        const touches = judgedMachines(loaded.state, state, rows).filter(t => t.key !== machineId)
         await this.endRuns(tx, tabId, loaded.state, state)
         const version = (await this.save(tx, loaded, state, stamp, touches)).versions.get(`machine:${machineId}`) ?? 0
-        await this.writeMessages(tx, tabId, state, lost, sequences)
+        await this.writeMessages(tx, tabId, state, rows, sequences)
         return { version }
       }
       if (!state.machines?.includes(pool)) return saved()
@@ -1909,7 +1920,11 @@ export class SuperTabStore {
       // due: it loads nothing for it, or every poll repeats the loads over a growing window (Diego's issue file, 2026-10-27).
       const led = ledProject(loaded.state, agentId)
       let asked: Array<{ conversationId: string; personId: string; count: number }> = []
-      if (led && !loaded.state.paused && digestDue(led, this.now())) {
+      const due = led && !loaded.state.paused ? digestDue(led, this.now()) : null
+      // A day's digest stored while its project was not marked sent (its time moved later that day, on an older server) went
+      // out: it only gets marked, or every poll would read for it again and fail on the duplicate (prod slow log, 2026-10-28).
+      const sentAlready = !!due && !!await tx.superTabMessage.findUnique({ where: { id: digestMessageId(tabId, led!.id, due) }, select: { id: true } })
+      if (led && due && !sentAlready) {
         const finished = await tx.swarmGroup.findMany({ where: { tabId, deleted: false, dormant: true, lastActivityAt: { gte: new Date(digestSince(led, this.now())) },
           OR: [{ projectId: led.id }, ...led.id === 'lead' ? [{ projectId: null }] : []] }, select: { key: true } })
         // A decision waits in its conversation even once that conversation went quiet.
@@ -1918,6 +1933,10 @@ export class SuperTabStore {
         if (groupIds.length) loaded = await this.ensure(tx, loaded, { groupIds })
       }
       const state = structuredClone(loaded.state)
+      if (sentAlready) {
+        const project = projectOf(state, led!.id)
+        project.digest = { ...project.digest!, lastOn: due! }
+      }
       author(state, await this.actor(tx, user, state, agentId), true)
       const target = agent(state, agentId)
       // A Lead's poll runs the time checks (liveness.ts): lost work wakes it in this same poll.

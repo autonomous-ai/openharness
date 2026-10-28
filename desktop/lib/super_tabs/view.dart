@@ -126,6 +126,9 @@ class _SuperTabViewState extends State<SuperTabView>
   final _split = <String, SuperTabMessage>{};
   final _newerRows = UniqueKey();
   int _mentionIndex = 0;
+  late final _tagBackspace = _TagBackspace(
+    () => c.mentions(c.selectedId).values,
+  );
   String? _dismissedMention;
   String? _completionPrefix;
 
@@ -415,12 +418,18 @@ class _SuperTabViewState extends State<SuperTabView>
     // From here a zip still running belongs to neither this message, which
     // took its files already, nor the next.
     final dropped = _droppedFolders.remove(id);
-    final result = await c.send(replyTo: _replies[id]?.id);
+    final result = await c.send(
+      replyTo: _replies[id]?.id,
+      // The reply goes with the message, which shows at the end at once.
+      onSending: () {
+        if (!mounted) return;
+        setState(() => _replies.remove(id));
+        _followEnd(id);
+      },
+    );
     if (!mounted) return;
     setState(() {
-      if (result != null) {
-        _replies.remove(id);
-      } else if (dropped != null) {
+      if (result == null && dropped != null) {
         // Not sent: its paths are still offered as zips, in a new record
         // so the zip that was running is still let go.
         final now = _droppedFolders.putIfAbsent(id, () => []);
@@ -1736,6 +1745,68 @@ class _SuperTabViewState extends State<SuperTabView>
         ?.showSnackBar(SnackBar(content: Text(failure)));
   }
 
+  /// [sent], drawn as the reader's own message will be once the transcript
+  /// holds it, with where it stands under it.
+  Widget _outgoingRow(
+    SuperTabOutgoing sent,
+    List<SuperTabMessage> messages,
+    Map<String, SuperTabMessage> byId,
+  ) {
+    final id = sent.conversationId;
+    final person = c.snapshot?.people
+        .where((p) => p.id == c.accountId)
+        .firstOrNull;
+    final message = SuperTabMessage.fromJson({
+      'id': 'outgoing',
+      'conversationId': id,
+      'text': sent.text,
+      'replyTo': sent.replyTo,
+      'sequence': 0,
+      'createdAt': DateTime.now().toUtc().toIso8601String(),
+      'author': {
+        'kind': 'person',
+        'id': c.accountId,
+        'name': person?.email ?? '',
+      },
+    });
+    final reply = byId[sent.replyTo];
+    return KeyedSubtree(
+      key: const ValueKey('super-outgoing'),
+      child: SuperTabMessageRow(
+        message: message,
+        author: _shownAuthor(c, message),
+        person: person,
+        grouped: SuperTabMessageRow.groupsWith(message, messages.lastOrNull),
+        reply: reply,
+        replyAuthor: reply == null ? null : _shownAuthor(c, reply),
+        onReturnToComposer: _focus.requestFocus,
+        readerId: c.accountId,
+        receipts: [
+          SuperTabOutgoingReceipt(
+            message: sent,
+            // A refused message goes again only when nothing else is on
+            // its way.
+            onRetry:
+                c.saving ||
+                    (sent.state == SuperTabOutgoingState.refused &&
+                        c.hasPendingAction)
+                ? null
+                : () {
+                    unawaited(c.retryOutgoing(sent));
+                    _focus.requestFocus();
+                  },
+            // The click lands in the transcript; typing goes on in the
+            // composer, as after Reply.
+            onDelete: () {
+              c.discardOutgoing(sent);
+              _focus.requestFocus();
+            },
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _message(
     SuperTabMessage message,
     bool grouped,
@@ -2098,6 +2169,15 @@ class _SuperTabViewState extends State<SuperTabView>
         ? 0
         : messages.where((message) => message.sequence > newAfter).length;
     final reply = _replies[c.selectedId];
+    final outgoing = c.outgoing(c.selectedId);
+    // A failed message says so in its own row, with what can be done.
+    final errorInRow = outgoing.any(
+      (sent) => switch (sent.state) {
+        SuperTabOutgoingState.sending => false,
+        SuperTabOutgoingState.unconfirmed => c.hasPendingAction,
+        SuperTabOutgoingState.refused => sent.error == c.operationError,
+      },
+    );
     final finding = _finding?.conversationId == c.selectedId ? _finding : null;
     final back = finding == null && _back?.conversationId == c.selectedId;
     final choices = _completionChoices;
@@ -2134,7 +2214,7 @@ class _SuperTabViewState extends State<SuperTabView>
               ? const Center(child: CircularProgressIndicator())
               : unread && c.error != null
               ? _firstReadFailed(c.error!)
-              : messages.isEmpty
+              : messages.isEmpty && outgoing.isEmpty
               ? Center(
                   child: Text(
                     c.accessRevoked
@@ -2194,7 +2274,9 @@ class _SuperTabViewState extends State<SuperTabView>
                               builder: (context, constraints) =>
                                   SliverToBoxAdapter(
                                     child: Padding(
-                                      padding: const EdgeInsets.only(top: 8),
+                                      padding: EdgeInsets.only(
+                                        top: grid.AppDesktop.controlGap,
+                                      ),
                                       child: _earlierRow(
                                         near:
                                             constraints.remainingCacheExtent >
@@ -2216,11 +2298,23 @@ class _SuperTabViewState extends State<SuperTabView>
                             ),
                             SliverPadding(
                               key: _newerRows,
-                              padding: const EdgeInsets.only(bottom: 8),
+                              padding: EdgeInsets.only(
+                                bottom: grid.AppDesktop.controlGap,
+                              ),
                               sliver: SliverList(
                                 delegate: SliverChildBuilderDelegate(
-                                  (context, index) => row(split + index),
-                                  childCount: entries.length - split,
+                                  // Messages on their way end the list.
+                                  (context, index) =>
+                                      index < entries.length - split
+                                      ? row(split + index)
+                                      : _outgoingRow(
+                                          outgoing[index -
+                                              (entries.length - split)],
+                                          messages,
+                                          byId,
+                                        ),
+                                  childCount:
+                                      entries.length - split + outgoing.length,
                                   findChildIndexCallback: (key) =>
                                       switch (rowOf(key)) {
                                         final i? when i >= split => i - split,
@@ -2322,7 +2416,7 @@ class _SuperTabViewState extends State<SuperTabView>
                   ],
                 ),
         ),
-        if (c.operationError != null)
+        if (c.operationError != null && !errorInRow)
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 24),
             child: Row(
@@ -2474,6 +2568,12 @@ class _SuperTabViewState extends State<SuperTabView>
           )
         else
           Padding(
+            // Keyed: the lines that come and go above it (a reply, mention
+            // choices, an error) are Paddings too, and would otherwise take
+            // over this element and remount the field. A remounted field
+            // keeps focus but loses its text input connection, so typing,
+            // Backspace included, would go nowhere.
+            key: const ValueKey('super-message-composer-row'),
             padding: EdgeInsets.fromLTRB(
               24,
               12,
@@ -2601,6 +2701,7 @@ class _SuperTabViewState extends State<SuperTabView>
                                           ? 3
                                           : 8,
                                       maxLength: 32000,
+                                      inputFormatters: [_tagBackspace],
                                       keyboardType: TextInputType.multiline,
                                       textAlignVertical:
                                           TextAlignVertical.center,
@@ -2875,6 +2976,51 @@ class _SuperTabViewState extends State<SuperTabView>
       );
     },
   );
+}
+
+/// Backspace right after a tag takes the whole tag, as in Slack: deleting the
+/// character before the caret, where one of [tags] ends, removes that tag.
+/// The draft then no longer holds it, so its agent is no longer addressed.
+class _TagBackspace extends TextInputFormatter {
+  _TagBackspace(this.tags);
+
+  final Iterable<String> Function() tags;
+
+  @override
+  TextEditingValue formatEditUpdate(
+    TextEditingValue oldValue,
+    TextEditingValue newValue,
+  ) {
+    final caret = oldValue.selection;
+    if (!caret.isValid ||
+        !caret.isCollapsed ||
+        caret.baseOffset == 0 ||
+        (newValue.composing.isValid && !newValue.composing.isCollapsed)) {
+      return newValue;
+    }
+    final end = caret.baseOffset;
+    if (newValue.selection != TextSelection.collapsed(offset: end - 1) ||
+        newValue.text != oldValue.text.replaceRange(end - 1, end, '')) {
+      return newValue;
+    }
+    final before = oldValue.text.substring(0, end);
+    final after = oldValue.text.substring(end);
+    if (after.isNotEmpty && !after.startsWith(RegExp(r'[\s.,!?;:]'))) {
+      return newValue;
+    }
+    for (final tag in tags()) {
+      final start = end - tag.length;
+      if (!before.endsWith(tag) ||
+          (start > 0 && !before[start - 1].contains(RegExp(r'\s')))) {
+        continue;
+      }
+      return TextEditingValue(
+        text: oldValue.text.replaceRange(start, end, ''),
+        selection: TextSelection.collapsed(offset: start),
+      );
+    }
+    return newValue;
+  }
 }
 
 /// Records its row's context while built, so [_SuperTabViewState] can find
