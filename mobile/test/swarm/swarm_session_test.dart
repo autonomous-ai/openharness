@@ -144,6 +144,49 @@ void main() {
       );
     });
 
+    group('the Home kept, at a cold start', () {
+      /// Nothing of it on the phone: no view, and no key that opens one.
+      Future<void> expectGone() async {
+        expect(await home.read(me), isNull);
+        expect(home.file.existsSync(), isFalse);
+        expect((home.key as MemorySwarmHomeKey).value, isNull);
+      }
+
+      test('goes when Swarm is already off, with no session to end', () async {
+        await keep(me);
+
+        host();
+
+        await expectGone();
+      });
+
+      test('stays while the account is still being read', () async {
+        await features.set(PhoneExperiment.swarm, true);
+        account.value = null;
+        await keep(me);
+
+        final h = host();
+        account.value = me;
+
+        expect(h.session?.accountId, me);
+        expect(await home.read(me), isNotNull);
+      });
+
+      test(
+        'goes when Swarm is turned off before the account is read',
+        () async {
+          await features.set(PhoneExperiment.swarm, true);
+          account.value = null;
+          await keep(me);
+          host();
+
+          await features.set(PhoneExperiment.swarm, false);
+
+          await expectGone();
+        },
+      );
+    });
+
     test(
       'has a session only while Swarm is on and someone is signed in',
       () async {
