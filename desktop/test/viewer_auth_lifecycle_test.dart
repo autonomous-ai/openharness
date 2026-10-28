@@ -38,6 +38,20 @@ class _Api extends DirectAuthApi {
   /// The client each refresh named.
   final refreshClients = <String?>[];
 
+  /// The refresh token each refresh presented.
+  final refreshTokens = <String>[];
+
+  /// The refresh tokens sign-outs asked the server to revoke.
+  final revoked = <String>[];
+  bool revokeFails = false;
+
+  @override
+  Future<bool> revoke(String refreshToken) async {
+    if (revokeFails) throw const DirectAuthException('unreachable');
+    revoked.add(refreshToken);
+    return true;
+  }
+
   @override
   Future<IssuedTokens> refresh(
     String refreshToken, {
@@ -47,6 +61,7 @@ class _Api extends DirectAuthApi {
     final result = Completer<IssuedTokens>();
     refreshes.add(result);
     refreshClients.add(clientId);
+    refreshTokens.add(refreshToken);
     return result.future;
   }
 
@@ -191,6 +206,51 @@ void main() {
       expect(storage.values, isEmpty);
     },
   );
+
+  test('a sign-in from before the upgrade stays signed in when its renewal '
+      'turns it into a Harness session, which renews as one', () async {
+    // What today's app keeps after an SSO sign-in.
+    await auth.signIn(_old);
+    final first = auth.accessToken(force: true);
+    await _until(() => api.refreshes.isNotEmpty);
+    api.refreshes.single.complete(
+      const IssuedTokens(
+        token: 'hna_1',
+        refreshToken: 'hnr_1',
+        expiresIn: 3600,
+      ),
+    );
+    expect(await first, 'hna_1');
+    expect(await session.refreshToken(), 'hnr_1');
+    expect(await auth.hasSession(), isTrue);
+
+    final second = auth.accessToken(force: true);
+    await _until(() => api.refreshes.length == 2);
+    api.refreshes.last.complete(const IssuedTokens(token: 'hna_2'));
+    expect(await second, 'hna_2');
+    expect(api.refreshTokens, ['old-refresh', 'hnr_1']);
+  });
+
+  test('signing out ends a Harness session on the server; an SSO one asks '
+      'nothing, and an unreachable server still signs out', () async {
+    await auth.signIn(
+      const IssuedTokens(token: 'hna_1', refreshToken: 'hnr_1'),
+    );
+    await auth.signOut();
+    expect(api.revoked, ['hnr_1']);
+    expect(await auth.hasSession(), isFalse);
+
+    await auth.signIn(_old);
+    await auth.signOut();
+    expect(api.revoked, ['hnr_1']);
+
+    api.revokeFails = true;
+    await auth.signIn(
+      const IssuedTokens(token: 'hna_2', refreshToken: 'hnr_2'),
+    );
+    await auth.signOut();
+    expect(await auth.hasSession(), isFalse);
+  });
 
   test('refreshes coalesce and retain unrotated refresh tokens', () async {
     await auth.signIn(_old);

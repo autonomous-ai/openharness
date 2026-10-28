@@ -49,7 +49,8 @@ import { infoBlockFooter } from './lib/infoBlockFooter.js'
 import { flashCommand } from './lib/flash.js'
 import { awaitLoginCallback, extractCallbackParams, LOGIN_TIMEOUT_MESSAGE, type LoginCallbackParams } from './lib/loginCallback.js'
 import { ancestorsOnce, removeSignIn, SIGN_OUT_BUTTON_FLAG, signOutAsked, type Asker, type SignOutAsked } from './lib/signOut.js'
-import { AUTH_DIR, AuthSessionError, AuthSessionManager, knownSsoClientId, newSignInEpoch, readAuthSession, readSignedOut, ssoClientIdFor, updateAuthSession, writeAuthSession, type AuthSession } from './lib/authSession.js'
+import { AUTH_DIR, AuthSessionError, AuthSessionManager, harnessSessionRequest, knownSsoClientId, newSignInEpoch, readAuthSession, readSignedOut, ssoClientIdFor, updateAuthSession, writeAuthSession, type AuthSession } from './lib/authSession.js'
+import { revokeHarnessRefresh } from './team/handoff.js'
 import { handOffToGrid } from './lib/gridHandoff.js'
 import { claimTicket, qrSignIn, type QrSignInTokens } from './lib/qrSignIn.js'
 import { pickSignInMethod, signInMethodFlag, signInProviderName, withSignInProvider, type SignInMethod, type SignInProvider } from './lib/signInMethodPicker.js'
@@ -350,9 +351,13 @@ async function authStatusCommand(json: boolean): Promise<void> {
   }
   let loggedIn = true
   let offline = false
+  let signInAgain = false
   try {
     await auth.accessToken()
   } catch (err) {
+    // SSO has not confirmed this sign-in for its whole grace (backend lib/ssoSession.ts): kept, and the person asked to
+    // sign in again.
+    if (err instanceof AuthSessionError && err.code === 'SIGN_IN_AGAIN') signInAgain = true
     // Only a session the SSO service will never renew (or none at all) is "not signed in". A refresh
     // that could not be SERVED right now — no network, service down — is a signed-in computer that is
     // offline, and says so; it used to read as signed out and send the desktop app to a login screen
@@ -363,7 +368,7 @@ async function authStatusCommand(json: boolean): Promise<void> {
   const latest = readAuthSession()
   const signedIn = loggedIn && latest !== null
   const fingerprintNow = thisDeviceFingerprint(false)
-  const waiting = signedIn ? null : signedOutWaiting()
+  const waiting = signedIn ? null : signInAgain ? 'sign-in-again' : signedOutWaiting()
   const payload = {
     loggedIn: signedIn,
     ...(waiting ? { signedOut: waiting } : {}),
@@ -379,7 +384,9 @@ async function authStatusCommand(json: boolean): Promise<void> {
     ...(fingerprintNow ? { fingerprint: fingerprintNow } : {}),
   }
   if (json) console.log(JSON.stringify(payload))
-  else {
+  else if (signInAgain) {
+    console.log('\n  ✗ Sign in again: this computer\'s sign-in could not be confirmed with your Autonomous account for 7 days. Run: harness login\n')
+  } else {
     console.log(`\n  ${payload.loggedIn ? '✓ Signed in' : '✗ Not signed in'}${payload.machineId ? ` (machine ${payload.machineId})` : ''}${payload.loggedIn && payload.kind === 'team' ? ' — for team work only (harness team off undoes it)' : payload.loggedIn && payload.method === 'qr' ? ' — by your phone' : ''}\n`)
     // A session a phone approved is Harness's own, and billing's Autonomous service does not take it.
     // Say so where the person looks, not only when billing refuses. Grid is not named: it learns who
@@ -538,20 +545,28 @@ async function loginCommand(
     // `/api/machines/resolve-computer` reached `onError`, which is JSON-unaware — so the ONE mode a
     // client drives answered a stack trace and NO result line at all, on the commonest path there
     // is (a computer that is already signed in).
+    let stuck = false
     try {
       await resolveComputerMachine()
     } catch (err) {
-      // An `AuthSessionError` is passed on rather than coded here: it is not the backend failing, it
-      // is THIS computer's harness session, and only the caller knows which of the two sign-ins the
-      // person should be sent to. `harness login` is unaffected — it never caught this before either.
-      if (json && !(err instanceof AuthSessionError)) {
-        emit({ type: 'result', status: 'error', code: 'BACKEND_ERROR', message: (err as Error).message })
-        process.exitCode = 1
-        return { signedIn: false }
+      // A sign-in SSO has not confirmed for 7 days ("sign in again", backend lib/ssoSession.ts) is kept, but cannot be
+      // renewed: signing in is what that message asks for, so this goes on to a fresh sign-in that replaces it, as
+      // --force would. Without this, `harness login` retried the same refused renewal and never opened a sign-in.
+      if (!(err instanceof AuthSessionError && err.code === 'SIGN_IN_AGAIN')) {
+        // An `AuthSessionError` is passed on rather than coded here: it is not the backend failing, it
+        // is THIS computer's harness session, and only the caller knows which of the two sign-ins the
+        // person should be sent to. `harness login` is unaffected — it never caught this before either.
+        if (json && !(err instanceof AuthSessionError)) {
+          emit({ type: 'result', status: 'error', code: 'BACKEND_ERROR', message: (err as Error).message })
+          process.exitCode = 1
+          return { signedIn: false }
+        }
+        throw err
       }
-      throw err
+      stuck = true
     }
-    return await succeed(true)
+    if (!stuck) return await succeed(true)
+    force = true
   }
   if (opts.method === 'ask') {
     const picked = await askSignInMethod()
@@ -590,7 +605,10 @@ async function loginCommand(
         return { signedIn: false }
       }
       const stopped = stop !== null && stop.pid !== null
+      const replaced = readAuthSession()?.refreshToken
       const outcome = await signIn()
+      // The sign-in this one replaced ends on the server too, as `harness team on` ends the one it replaces.
+      if (outcome.signedIn && replaced && readAuthSession()?.refreshToken !== replaced) await endSignInOnServer(replaced, 'the previous sign-in')
       // The daemon stopped for the switch comes back once it is made (`restartDaemonForIdentity`).
       return outcome.signedIn && stopped ? { ...outcome, stoppedDaemon: true } : outcome
     }, {
@@ -834,6 +852,8 @@ async function browserSignIn(
         tx: start.tx,
         // The utm_* and rid auth.autonomous.ai carried back: how the account came (PR #785).
         ...(callbackResult.attribution ? { attribution: callbackResult.attribution } : {}),
+        // A Harness session in place of the SSO tokens (backend lib/ssoSession.ts); an older backend sends those.
+        harnessSession: harnessSessionRequest(),
       })
       if (!exchanged.token) throw new Error('SSO exchange returned no access token')
     } catch (err) {
@@ -1327,6 +1347,20 @@ async function updateCommand(force: boolean): Promise<void> {
  * It runs BEFORE the harness session is cleared, because `grid logout` tears down every serve child
  * on this box first, while the token that makes their deregistration authoritative still exists.
  */
+/** How long signing out waits for the server to end a Harness session. */
+const SIGN_OUT_REVOKE_TIMEOUT_MS = 5_000
+
+/**
+ * End a Harness session ([refreshToken]) on the server: signing out, `reset`, and a `login --force` that replaced it.
+ * An SSO sign-in is not ours to end. Best effort and bounded — never waits on, or fails over, the network — and says
+ * so when the server could not be reached.
+ */
+async function endSignInOnServer(refreshToken: string | undefined, which = 'this sign-in'): Promise<void> {
+  if (!/^(hnr|htr)_/.test(refreshToken ?? '')) return
+  const ended = await revokeHarnessRefresh((path, body) => postJson(path, body, {}, AbortSignal.timeout(SIGN_OUT_REVOKE_TIMEOUT_MS)), refreshToken)
+  if (!ended) console.log(`Could not end ${which} on the server; it can no longer be used from here, and ends on its own after 90 days unused.`)
+}
+
 async function logout(): Promise<void> {
   const chain = ancestorsOnce()
   const asked = personAsked('logout', chain)
@@ -1336,7 +1370,10 @@ async function logout(): Promise<void> {
   // Before removeSignIn: see the note above on serve children. Its exit code is deliberately
   // dropped — this command cannot fail — and its own words have already reached the terminal.
   const gridOut = await passThroughToGridLogout([])
+  const refreshToken = readAuthSession()?.refreshToken
+  const endOnServer = endSignInOnServer(refreshToken)
   removeSignIn('logout', asked, chain)
+  await endOnServer
   rmSync(MACHINE_NAME_FILE, { force: true })
   // Same reason as the name above: the cached machine list describes the account that just left, and the
   // local `/api/machines` fallback would otherwise hand it to whoever signs in next on this computer.
@@ -1773,10 +1810,12 @@ async function resetCommand(): Promise<void> {
   const asked = personAsked('reset', chain)
   // Before anything is cleared: a pid file removed under a Harness still running leaves nothing able to stop it.
   const r = await stopDaemonOrExit()
+  const refreshToken = readAuthSession()?.refreshToken
   clearAdapterState()
   console.log(`\n  ✓ Cleared local machine CLI state at ${tildify(env.ADAPTER_DATA_DIR)}.`)
   if (r.pid) console.log(`    Stopped adapter process ${r.pid}.`)
   removeSignIn('reset', asked, chain)
+  await endSignInOnServer(refreshToken)
   console.log('\n  Start again with: harness login, then harness start\n')
   // The SECOND door onto the sign-out `logout` performs, and it clears MORE, so somebody running it
   // is if anything likelier to believe nothing is left. Same call, so the two cannot drift.
